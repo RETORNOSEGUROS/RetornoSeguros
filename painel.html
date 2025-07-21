@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel do Cliente - Retorno Seguros</title>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
+      storageBucket: "retorno-seguros.appspot.com",
+      messagingSenderId: "495712392972",
+      appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+      measurementId: "G-C6E44WXLPW"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+  </script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f8f9fa;
+    }
+    h2, h3 {
+      color: #1b2c5c;
+    }
+    .painel {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .painel p {
+      margin: 8px 0;
+    }
+    input[type="file"] {
+      margin-top: 10px;
+    }
+    button {
+      background: #1b2c5c;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 5px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2d4378;
+    }
+    .arquivo-lista {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="painel">
+    <h2>Bem-vindo(a)</h2>
+    <div id="dados-usuario">
+      <p><strong>Nome:</strong> <span id="nome"></span></p>
+      <p><strong>Email:</strong> <span id="email"></span></p>
+      <p><strong>Telefone:</strong> <span id="telefone"></span></p>
+      <p><strong>Cidade:</strong> <span id="cidade"></span> - <span id="estado"></span></p>
+    </div>
+
+    <h3>Anexar Apólice</h3>
+    <input type="file" id="arquivo" accept="application/pdf">
+    <button onclick="enviarArquivo()">Enviar Apólice</button>
+
+    <div class="arquivo-lista" id="lista-arquivos"></div>
+
+    <button onclick="logout()">Sair</button>
+  </div>
+
+  <script>
+    let usuarioId = null;
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        usuarioId = user.uid;
+        db.collection('usuarios').doc(user.uid).get().then(doc => {
+          const dados = doc.data();
+          document.getElementById('nome').textContent = dados.nome;
+          document.getElementById('email').textContent = dados.email;
+          document.getElementById('telefone').textContent = dados.telefone;
+          document.getElementById('cidade').textContent = dados.cidade;
+          document.getElementById('estado').textContent = dados.estado;
+        });
+        carregarArquivos();
+      } else {
+        window.location.href = 'login.html';
+      }
+    });
+
+    function enviarArquivo() {
+      const fileInput = document.getElementById('arquivo');
+      const file = fileInput.files[0];
+      if (!file || !usuarioId) return alert('Selecione um arquivo válido.');
+
+      const storageRef = storage.ref(`apolices/${usuarioId}/${file.name}`);
+      storageRef.put(file)
+        .then(snapshot => snapshot.ref.getDownloadURL())
+        .then(url => {
+          return db.collection('apolices').add({
+            usuarioId: usuarioId,
+            nomeArquivo: file.name,
+            urlArquivo: url,
+            dataEnvio: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        })
+        .then(() => {
+          alert('Apólice enviada com sucesso!');
+          document.getElementById('arquivo').value = '';
+          carregarArquivos();
+        })
+        .catch(err => alert(err.message));
+    }
+
+    function carregarArquivos() {
+      const lista = document.getElementById('lista-arquivos');
+      lista.innerHTML = '<p>Apólices enviadas:</p>';
+      db.collection('apolices').where('usuarioId', '==', usuarioId).get()
+        .then(snapshot => {
+          snapshot.forEach(doc => {
+            const dado = doc.data();
+            const link = document.createElement('a');
+            link.href = dado.urlArquivo;
+            link.target = '_blank';
+            link.textContent = dado.nomeArquivo;
+            lista.appendChild(link);
+            lista.appendChild(document.createElement('br'));
+          });
+        });
+    }
+
+    function logout() {
+      auth.signOut().then(() => window.location.href = 'index.html');
+    }
+  </script>
+</body>
+</html>
