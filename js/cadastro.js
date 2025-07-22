@@ -1,54 +1,46 @@
-const db = firebase.firestore();
 
-document.getElementById("form-cadastro").addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const nome = document.getElementById("nome").value;
-  const cpf = document.getElementById("cpf").value;
-  const dataNascimento = document.getElementById("dataNascimento").value;
-  const cidade = document.getElementById("cidade").value;
-  const celular = document.getElementById("celular").value;
-  const email = document.getElementById("email").value;
-  const senha = document.getElementById("senha").value;
-
-  const urlParams = new URLSearchParams(window.location.search);
-  const indicadorId = urlParams.get("indicador") || null;
-
-  try {
-    const userCredential = await firebase.auth().createUserWithEmailAndPassword(email, senha);
+firebase.auth().createUserWithEmailAndPassword(email, senha)
+  .then((userCredential) => {
     const user = userCredential.user;
+    const uid = user.uid;
 
-    await db.collection("usuarios").doc(user.uid).set({
-      nome,
-      cpf,
-      dataNascimento,
-      cidade,
-      celular,
-      email,
-      indicadorId: indicadorId || "",
+    const usuarioData = {
+      nome: nome,
+      email: email,
+      telefone: telefone,
+      cidade: cidade,
+      estado: estado,
+      dataCadastro: new Date(),
       creditos: 30,
-      indicacoes: 0,
-      criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+      pontos: 0,
+      isCliente: false,
+      usuarioIndicadorId: usuarioIndicadorId || null
+    };
 
-    // Se o usuário foi indicado, atualiza quem indicou
-    if (indicadorId) {
-      const indicadorRef = db.collection("usuarios").doc(indicadorId);
+    db.collection("usuarios").doc(uid).set(usuarioData)
+      .then(() => {
+        // Se houver indicação, somar créditos ao indicador
+        if (usuarioIndicadorId) {
+          const indicadorRef = db.collection("usuarios").doc(usuarioIndicadorId);
+          indicadorRef.get().then((doc) => {
+            if (doc.exists) {
+              const creditosAtuais = doc.data().creditos || 0;
+              indicadorRef.update({
+                creditos: creditosAtuais + 10
+              });
+            }
+          });
+        }
 
-      await indicadorRef.update({
-        creditos: firebase.firestore.FieldValue.increment(10),
-        indicacoes: firebase.firestore.FieldValue.increment(1),
-      }).catch(() => {
-        // Caso o usuário que indicou ainda não esteja na coleção
-        console.warn("Usuário indicador não encontrado.");
+        alert("Cadastro realizado com sucesso!");
+        window.location.href = "/usuarios/painel.html";
+      })
+      .catch((error) => {
+        console.error("Erro ao salvar usuário:", error);
+        alert("Erro ao salvar usuário.");
       });
-    }
-
-    alert("Cadastro realizado com sucesso!");
-    window.location.href = "painel.html";
-
-  } catch (error) {
+  })
+  .catch((error) => {
     console.error("Erro no cadastro:", error);
-    alert("Erro: " + error.message);
-  }
-});
+    alert(error.message);
+  });
