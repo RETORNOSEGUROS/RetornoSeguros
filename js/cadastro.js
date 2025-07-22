@@ -1,12 +1,13 @@
-// Inicializa o Firebase
+// Inicializa Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-// Verifica se veio com parâmetro de indicação
+// Verifica se veio com código de indicação
 const urlParams = new URLSearchParams(window.location.search);
 const usuarioIndicadorId = urlParams.get("indicador");
 
+// Lógica do formulário
 document.getElementById("cadastroForm").addEventListener("submit", function (e) {
   e.preventDefault();
 
@@ -45,10 +46,11 @@ document.getElementById("cadastroForm").addEventListener("submit", function (e) 
         indicacoesFeitas: 0
       };
 
-      // Se tiver indicação, salva e premia o usuário que indicou
+      // Se veio com indicador, salva e premia
       if (usuarioIndicadorId) {
         dadosUsuario.usuarioIndicadorId = usuarioIndicadorId;
 
+        // Somar créditos e contagem de indicações
         db.collection("usuarios").doc(usuarioIndicadorId).get().then(doc => {
           if (doc.exists) {
             const dadosIndicador = doc.data();
@@ -63,19 +65,19 @@ document.getElementById("cadastroForm").addEventListener("submit", function (e) 
         });
       }
 
-      // Salvar o novo usuário no Firestore
+      // Salva os dados do novo usuário
       db.collection("usuarios").doc(user.uid).set(dadosUsuario)
         .then(() => {
           alert("Cadastro realizado com sucesso!");
           window.location.href = "painel.html";
         })
         .catch((error) => {
-          console.error("Erro ao salvar dados:", error);
-          alert("Erro ao salvar seus dados. Tente novamente.");
+          console.error("Erro ao salvar dados no Firestore:", error);
+          alert("Erro ao salvar dados. Tente novamente.");
         });
     })
     .catch((error) => {
-      console.error("Erro ao cadastrar:", error);
-      alert("Erro no cadastro: " + error.message);
+      console.error("Erro ao criar usuário:", error);
+      alert("Erro ao cadastrar: " + error.message);
     });
 });
