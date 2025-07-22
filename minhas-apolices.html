@@ -1,65 +1,82 @@
-<style>
-  body {
-    font-family: 'Open Sans', sans-serif;
-    background-color: #f4f4f4;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    min-height: 100vh;
-  }
-
-  .container {
-    width: 100%;
-    max-width: 500px;
-    background: white;
-    margin-top: 40px;
-    padding: 30px 25px;
-    border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  }
-
-  h2 {
-    color: #1b2c5c;
-    text-align: center;
-    margin-bottom: 30px;
-  }
-
-  label {
-    font-weight: bold;
-    margin-top: 15px;
-    display: block;
-    color: #333;
-  }
-
-  input, select {
-    width: 100%;
-    padding: 12px;
-    margin-top: 6px;
-    border: 1px solid #ccc;
-    border-radius: 6px;
-    box-sizing: border-box;
-  }
-
-  button {
-    width: 100%;
-    margin-top: 25px;
-    padding: 14px;
-    background-color: #1b2c5c;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-weight: bold;
-    cursor: pointer;
-    font-size: 16px;
-  }
-
-  button:hover {
-    background-color: #2e3f76;
-  }
-</style>
-
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Minhas Apólices</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="js/firebase-config.js"></script>
+  <style>
+    body {
+      font-family: 'Open Sans', sans-serif;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .container {
+      width: 100%;
+      max-width: 600px;
+      background: white;
+      margin-top: 40px;
+      padding: 30px 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    h2 {
+      color: #1b2c5c;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    label {
+      font-weight: bold;
+      margin-top: 15px;
+      display: block;
+      color: #333;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin-top: 6px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+    button {
+      width: 100%;
+      margin-top: 25px;
+      padding: 14px;
+      background-color: #1b2c5c;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background-color: #2e3f76;
+    }
+    table {
+      width: 100%;
+      margin-top: 40px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 12px;
+      border: 1px solid #ddd;
+      text-align: left;
+    }
+    th {
+      background-color: #f1f1f1;
+    }
+  </style>
+</head>
 <body>
   <div class="container">
     <h2>Cadastrar Apólice</h2>
@@ -105,5 +122,112 @@
 
       <button type="submit">Cadastrar Apólice</button>
     </form>
+
+    <h3 style="margin-top: 50px;">Minhas Apólices</h3>
+    <table id="tabelaApolices">
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Seguradora</th>
+          <th>Valor</th>
+          <th>Renovação</th>
+          <th>PDF Enviado</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
+
+  <script>
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    document.getElementById("valorPago").addEventListener("input", function () {
+      let valor = this.value.replace(/\D/g, "");
+      valor = (parseInt(valor) / 100).toFixed(2) + "";
+      valor = valor.replace(".", ",");
+      valor = valor.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+      this.value = "R$ " + valor;
+    });
+
+    auth.onAuthStateChanged(user => {
+      if (!user) {
+        window.location.href = "login.html";
+        return;
+      }
+
+      const uid = user.uid;
+      const form = document.getElementById("formApoliceSimples");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const tipo = document.getElementById("tipo").value;
+        const seguradora = document.getElementById("seguradora").value;
+        const valorPago = document.getElementById("valorPago").value;
+        const dataRenovacao = document.getElementById("dataRenovacao").value;
+
+        const apoliceData = {
+          tipo,
+          seguradora,
+          valorPago,
+          dataRenovacao: firebase.firestore.Timestamp.fromDate(new Date(dataRenovacao)),
+          dataCadastro: firebase.firestore.Timestamp.now(),
+          usuarioId: uid,
+          pdfEnviado: false
+        };
+
+        try {
+          await db.collection("apolices").add(apoliceData);
+
+          const userRef = db.collection("usuarios").doc(uid);
+          const userDoc = await userRef.get();
+          const creditosAtual = (userDoc.data().creditos || 0) + 30;
+          await userRef.update({ creditos: creditosAtual });
+
+          const indicadorId = userDoc.data().usuarioIndicadorId;
+          if (indicadorId) {
+            const indRef = db.collection("usuarios").doc(indicadorId);
+            const indDoc = await indRef.get();
+            const novosCreditos = (indDoc.data().creditos || 0) + 20;
+            await indRef.update({ creditos: novosCreditos });
+          }
+
+          alert("Apólice cadastrada com sucesso!");
+          form.reset();
+        } catch (erro) {
+          console.error("Erro ao salvar apólice:", erro);
+          alert("Erro ao salvar. Tente novamente.");
+        }
+      });
+
+      // Exibir apólices do usuário
+      db.collection("apolices")
+        .where("usuarioId", "==", uid)
+        .orderBy("dataCadastro", "desc")
+        .onSnapshot(snapshot => {
+          const tbody = document.querySelector("#tabelaApolices tbody");
+          tbody.innerHTML = "";
+          snapshot.forEach(doc => {
+            const ap = doc.data();
+            const tipo = ap.tipo || "—";
+            const seg = ap.seguradora || "—";
+            const valor = ap.valorPago || "—";
+            const renov = ap.dataRenovacao?.toDate().toLocaleDateString() || "—";
+            const enviado = ap.pdfEnviado ? "✔ Enviado" : "❌ Não enviado";
+
+            tbody.innerHTML += `
+              <tr>
+                <td>${tipo}</td>
+                <td>${seg}</td>
+                <td>${valor}</td>
+                <td>${renov}</td>
+                <td>${enviado}</td>
+              </tr>`;
+          });
+        });
+    });
+  </script>
 </body>
+</html>
