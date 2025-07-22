@@ -15,7 +15,7 @@ function loginGerente() {
           erroLogin.textContent = "Acesso não autorizado.";
           auth.signOut();
         } else {
-          window.location.href = "painel.html";
+          window.location.href = "gerentes.html"; // 🔄 AJUSTADO para o nome correto
         }
       });
     })
