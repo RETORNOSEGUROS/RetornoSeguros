@@ -22,6 +22,7 @@ document.getElementById("cadastroForm").addEventListener("submit", function (e) 
   const usuarioUnico = document.getElementById("usuarioUnico").value.trim();
   const timeId = document.getElementById("timeId").value;
   const avatarUrl = ""; // reservado para futuro
+  const dataCadastro = new Date();
 
   auth.createUserWithEmailAndPassword(email, senha)
     .then((userCredential) => {
@@ -39,41 +40,42 @@ document.getElementById("cadastroForm").addEventListener("submit", function (e) 
         usuarioUnico,
         timeId,
         avatarUrl,
+        dataCadastro: firebase.firestore.Timestamp.fromDate(dataCadastro),
         creditos: 30,
-        status: "ativo",
-        dataCadastro: new Date()
+        indicacoesFeitas: 0
       };
 
-      // Se veio com indicação, adiciona o vínculo
+      // Se tiver indicação, salva e premia o usuário que indicou
       if (usuarioIndicadorId) {
-        dadosUsuario.indicadorId = usuarioIndicadorId;
-      }
+        dadosUsuario.usuarioIndicadorId = usuarioIndicadorId;
 
-      return db.collection("usuarios").doc(user.uid).set(dadosUsuario)
-        .then(() => {
-          // Se veio com indicação, atualiza os pontos e contagem do indicador
-          if (usuarioIndicadorId) {
-            const indicadorRef = db.collection("usuarios").doc(usuarioIndicadorId);
-            indicadorRef.get().then(doc => {
-              if (doc.exists) {
-                const indicadorData = doc.data();
-                const novosCreditos = (indicadorData.creditos || 0) + 10;
-                const novaQtd = (indicadorData.qtdIndicacoes || 0) + 1;
+        db.collection("usuarios").doc(usuarioIndicadorId).get().then(doc => {
+          if (doc.exists) {
+            const dadosIndicador = doc.data();
+            const novosCreditos = (dadosIndicador.creditos || 0) + 10;
+            const novasIndicacoes = (dadosIndicador.indicacoesFeitas || 0) + 1;
 
-                indicadorRef.update({
-                  creditos: novosCreditos,
-                  qtdIndicacoes: novaQtd
-                });
-              }
+            db.collection("usuarios").doc(usuarioIndicadorId).update({
+              creditos: novosCreditos,
+              indicacoesFeitas: novasIndicacoes
             });
           }
+        });
+      }
 
+      // Salvar o novo usuário no Firestore
+      db.collection("usuarios").doc(user.uid).set(dadosUsuario)
+        .then(() => {
           alert("Cadastro realizado com sucesso!");
           window.location.href = "painel.html";
+        })
+        .catch((error) => {
+          console.error("Erro ao salvar dados:", error);
+          alert("Erro ao salvar seus dados. Tente novamente.");
         });
     })
     .catch((error) => {
-      console.error(error);
+      console.error("Erro ao cadastrar:", error);
       alert("Erro no cadastro: " + error.message);
     });
 });
