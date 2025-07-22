@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-br">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -7,60 +7,93 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans&display=swap">
   <style>
     body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-      background-color: #f4f6fa;
-      color: #222;
+      margin: 0;
+      font-family: 'Open Sans', sans-serif;
+      display: flex;
     }
-    .container {
-      max-width: 800px;
-      margin: auto;
-      background-color: #fff;
-      padding: 30px;
-      border-radius: 10px;
-      box-shadow: 0 0 10px #ccc;
-    }
-    h2 {
-      color: #1b2c5c;
-    }
-    input {
-      width: 100%;
-      padding: 10px;
-      margin: 10px 0;
-    }
-    button {
+
+    .sidebar {
+      width: 220px;
       background-color: #1b2c5c;
       color: white;
-      border: none;
-      padding: 10px 20px;
-      cursor: pointer;
+      height: 100vh;
+      padding: 20px;
+      box-sizing: border-box;
     }
+
+    .sidebar h2 {
+      font-size: 20px;
+      margin-bottom: 30px;
+    }
+
+    .sidebar a {
+      display: block;
+      color: white;
+      text-decoration: none;
+      margin-bottom: 15px;
+      font-weight: bold;
+    }
+
+    .main {
+      flex: 1;
+      padding: 20px;
+    }
+
+    .main h1 {
+      color: #1b2c5c;
+    }
+
+    .info {
+      margin-top: 10px;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 15px;
+      margin-top: 20px;
     }
+
     th, td {
-      padding: 10px;
+      padding: 12px;
+      border-bottom: 1px solid #ccc;
       text-align: left;
     }
+
     th {
-      background-color: #f2f2f2;
+      background-color: #f1f1f1;
     }
-    .highlight {
-      font-weight: bold;
+
+    @media (max-width: 768px) {
+      body {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        height: auto;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h2>Indique e Ganhe</h2>
-    <p id="status">Carregando...</p>
-    <p>Seu link de indicação:</p>
-    <input type="text" id="linkIndicacao" readonly />
-    <button onclick="copiarLink()">Copiar link</button>
+
+  <div class="sidebar">
+    <h2>Menu</h2>
+    <a href="painel.html">🏠 Painel</a>
+    <a href="indique.html">🎯 Indique e Ganhe</a>
+    <a href="apolices.html">📄 Minhas Apólices</a>
+  </div>
+
+  <div class="main">
+    <h1>Indique e Ganhe</h1>
+    <p class="info">Você possui <span id="qtdIndicacoes">0</span> indicação(ões) e <span id="creditos">0</span> créditos.</p>
+    <h3>Seu link de indicação:</h3>
+    <p id="linkIndicacao" style="word-wrap: break-word;"></p>
+
     <h3>Lista de indicados:</h3>
     <table>
       <thead>
@@ -69,18 +102,15 @@
           <th>Data de Cadastro</th>
         </tr>
       </thead>
-      <tbody id="tabelaIndicados"></tbody>
+      <tbody id="listaIndicados"></tbody>
     </table>
   </div>
 
   <script>
     const firebaseConfig = {
-      apiKey: "SUA_API_KEY",
-      authDomain: "SEU_DOMINIO.firebaseapp.com",
-      projectId: "SEU_PROJETO",
-      storageBucket: "SEU_BUCKET",
-      messagingSenderId: "SEU_SENDER",
-      appId: "SEU_APP_ID"
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
     };
 
     firebase.initializeApp(firebaseConfig);
@@ -90,56 +120,33 @@
     auth.onAuthStateChanged(async (user) => {
       if (user) {
         const uid = user.uid;
-        const usuarioRef = db.collection("usuarios").doc(uid);
-        const usuarioDoc = await usuarioRef.get();
+        const doc = await db.collection("usuarios").doc(uid).get();
+        const data = doc.data();
 
-        if (!usuarioDoc.exists) {
-          document.getElementById("status").innerText = "Usuário não encontrado.";
-          return;
-        }
+        document.getElementById("qtdIndicacoes").textContent = data.qtdIndicacoes || 0;
+        document.getElementById("creditos").textContent = data.creditos || 0;
 
-        const dadosUsuario = usuarioDoc.data();
-        const meuId = usuarioDoc.id;
-        const link = `${window.location.origin}/cadastro.html?indicador=${meuId}`;
-        document.getElementById("linkIndicacao").value = link;
+        const link = `${window.location.origin}/cadastro.html?indicador=${uid}`;
+        document.getElementById("linkIndicacao").textContent = link;
 
-        // Buscar quem cadastrou com meu ID
-        const querySnapshot = await db.collection("usuarios")
-          .where("usuarioIndicadorId", "==", meuId)
-          .orderBy("dataCadastro", "desc")
-          .get();
+        // Buscar os usuários indicados por este
+        const snapshot = await db.collection("usuarios").where("indicadorId", "==", uid).get();
+        const tbody = document.getElementById("listaIndicados");
+        snapshot.forEach(doc => {
+          const u = doc.data();
+          const nome = u.nome || "(Sem nome)";
+          const data = u.dataCadastro?.toDate();
+          const formatada = data ? new Intl.DateTimeFormat('pt-BR').format(data) : "-";
 
-        const tabela = document.getElementById("tabelaIndicados");
-        let totalIndicacoes = 0;
-
-        querySnapshot.forEach(doc => {
-          const data = doc.data();
-          const nome = data.nome || "Sem nome";
-          const dataCadastro = data.dataCadastro?.toDate?.() || new Date();
-          const linha = `<tr><td>${nome}</td><td>${formatarData(dataCadastro)}</td></tr>`;
-          tabela.innerHTML += linha;
-          totalIndicacoes++;
+          const row = document.createElement("tr");
+          row.innerHTML = `<td>${nome}</td><td>${formatada}</td>`;
+          tbody.appendChild(row);
         });
 
-        const creditos = totalIndicacoes * 10;
-        document.getElementById("status").innerHTML = 
-          `Você possui <span class="highlight">${totalIndicacoes}</span> indicação(ões) e <span class="highlight">${creditos}</span> créditos.`;
-
       } else {
-        window.location.href = "/usuarios/index.html";
+        window.location.href = "index.html";
       }
     });
-
-    function formatarData(data) {
-      return data.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    }
-
-    function copiarLink() {
-      const input = document.getElementById("linkIndicacao");
-      input.select();
-      document.execCommand("copy");
-      alert("Link copiado!");
-    }
   </script>
 </body>
 </html>
