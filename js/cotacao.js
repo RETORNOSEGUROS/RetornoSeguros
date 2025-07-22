@@ -1,12 +1,14 @@
-
-// Firebase Configuração (substitua com seu firebaseConfig real)
+# Atualizar o cotacao.js com firebaseConfig real
+cotacao_js_final = """
+// Firebase Configuração
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY",
-  authDomain: "SEU_AUTH_DOMAIN",
-  projectId: "SEU_PROJECT_ID",
-  storageBucket: "SEU_STORAGE_BUCKET",
-  messagingSenderId: "SEU_SENDER_ID",
-  appId: "SEU_APP_ID"
+  apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+  authDomain: "retorno-seguros.firebaseapp.com",
+  projectId: "retorno-seguros",
+  storageBucket: "retorno-seguros.appspot.com",
+  messagingSenderId: "495712392972",
+  appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+  measurementId: "G-C6E44WXLPW"
 };
 
 // Inicializar Firebase
@@ -46,3 +48,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 });
+"""
+
+# Salvar como novo cotacao.js com Firebase configurado
+cotacao_js_path = Path("/mnt/data/cotacao-configurado.js")
+cotacao_js_path.write_text(cotacao_js_final, encoding="utf-8")
+
+cotacao_js_path.name
