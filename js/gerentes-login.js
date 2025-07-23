@@ -10,16 +10,23 @@ function loginGerente() {
   auth.signInWithEmailAndPassword(email, senha)
     .then(userCredential => {
       const uid = userCredential.user.uid;
+
       db.collection("gerentes").doc(uid).get().then(doc => {
         if (!doc.exists || doc.data().ativo === false) {
           erroLogin.textContent = "Acesso não autorizado.";
           auth.signOut();
         } else {
-          window.location.href = "gerentes.html"; // 🔄 AJUSTADO para o nome correto
+          // Redireciona após validação
+          window.location.href = "gerentes.html";
         }
+      }).catch(error => {
+        console.error("Erro ao buscar gerente:", error);
+        erroLogin.textContent = "Erro de verificação no sistema.";
       });
+
     })
     .catch(error => {
+      console.error("Erro no login:", error);
       erroLogin.textContent = "E-mail ou senha inválidos.";
     });
 }
