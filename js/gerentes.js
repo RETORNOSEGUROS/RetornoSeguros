@@ -24,8 +24,8 @@ auth.onAuthStateChanged(user => {
       nome: doc.data().nome,
       cargo: doc.data().cargo || "gerente"
     };
-    document.getElementById("tituloGerente").innerText = 
-  `Painel — ${doc.data().nome} (${doc.data().cargo})`;
+    document.getElementById("tituloGerente").innerText =
+      `Painel — ${doc.data().nome} (${doc.data().cargo})`;
 
     exibirSecao('visao');
   });
@@ -109,7 +109,7 @@ function exibirFormularioEmpresa() {
   };
 }
 
-// Visita
+// NOVA FUNÇÃO DE VISITA
 function exibirFormularioVisita() {
   const container = document.getElementById('conteudo');
   container.innerHTML = "<h3>Registrar Visita</h3><p>Carregando empresas...</p>";
@@ -117,151 +117,39 @@ function exibirFormularioVisita() {
   db.collection("empresas").where("cadastradoPor", "==", window.gerenteLogado.id).get().then(snapshot => {
     let html = `
       <form id="formVisita">
-        <label>Empresa:</label>
-        <select id="empresaId" required>
+        <label>Empresa:</label><br>
+        <select id="empresaId" required style="width:100%; padding:8px;">
           ${snapshot.docs.map(doc => `<option value="${doc.id}">${doc.data().nomeFantasia}</option>`).join('')}
         </select><br><br>
-        <input type="datetime-local" id="dataVisita" required><br><br>
-        <textarea id="observacoes" placeholder="Observações" rows="4" style="width:100%;"></textarea><br><br>
-        <button type="submit">Registrar</button>
-      </form>
-    `;
-    container.innerHTML = html;
 
-    document.getElementById("formVisita").onsubmit = (e) => {
-      e.preventDefault();
-      const dados = {
-        empresaId: document.getElementById("empresaId").value,
-        dataVisita: new Date(document.getElementById("dataVisita").value).toISOString(),
-        observacoes: document.getElementById("observacoes").value,
-        gerenteId: window.gerenteLogado.id,
-        status: "realizada"
-      };
-      db.collection("visitas").add(dados).then(() => {
-        alert("Visita registrada.");
-        exibirSecao("empresas");
-      });
-    };
-  });
-}
+        <label>Data da Visita:</label><br>
+        <input type="datetime-local" id="dataVisita" required style="width:100%; padding:8px;"><br><br>
 
-// Listagem de empresas
-function listarEmpresasDetalhadas() {
-  const container = document.getElementById("conteudo");
-  container.innerHTML = "<h3>Empresas Detalhadas</h3><p>Carregando...</p>";
+        <label>Número Atualizado de Funcionários:</label><br>
+        <input type="number" id="numeroFuncionarios" placeholder="Ex: 45" style="width:100%; padding:8px;"><br><br>
 
-  const nome = window.gerenteLogado?.nome || "";
-  const cargo = (window.gerenteLogado?.cargo || "").toLowerCase();
+        <label><strong>Assuntos de Seguros Abordados:</strong></label><br>
+        <div id="checklistSeguros" style="margin-left:10px;">
+          <label><input type="checkbox" value="Plano de saúde empresarial"> Plano de saúde empresarial</label><br>
+          <label><input type="checkbox" value="Plano dental empresarial"> Plano dental empresarial</label><br>
+          <label><input type="checkbox" value="Seguro de vida em grupo"> Seguro de vida em grupo</label><br>
+          <label><input type="checkbox" value="Seguro frotas"> Seguro frotas</label><br>
+          <label><input type="checkbox" value="Seguro de bens"> Seguro de bens (máquinas, estrutura)</label><br>
+          <label><input type="checkbox" value="Seguro responsabilidade civil / D&O"> Seguro responsabilidade civil / D&O</label><br>
+          <label><input type="checkbox" value="Previdência empresarial"> Previdência empresarial</label><br>
+        </div><br>
 
-  let query = db.collection("empresas");
+        <label>Comentário Plano de Saúde:</label><br>
+        <textarea id="comentarioSaude" rows="2" style="width:100%;"></textarea><br><br>
 
-  if (cargo !== "master") {
-    query = query.where("gerenteResponsavel", "==", nome);
-  }
+        <label>Comentário Plano Dental:</label><br>
+        <textarea id="comentarioDental" rows="2" style="width:100%;"></textarea><br><br>
 
-  query.get().then(snapshot => {
-    container.innerHTML = "<h3>Empresas Detalhadas</h3>";
+        <label>Comentário Seguro de Vida:</label><br>
+        <textarea id="comentarioVida" rows="2" style="width:100%;"></textarea><br><br>
 
-    if (snapshot.empty) {
-      container.innerHTML += "<p>Nenhuma empresa cadastrada.</p>";
-      return;
-    }
+        <label>Comentário Outros Seguros:</label><br>
+        <textarea id="comentarioOutros" rows="2" style="width:100%;"></textarea><br><br>
 
-    snapshot.forEach(doc => {
-      const empresa = doc.data();
-      const div = document.createElement("div");
-      div.className = "card";
-      div.innerHTML = `
-        <h3>${empresa.nomeFantasia || empresa.nome}</h3>
-        <p><strong>CNPJ:</strong> ${empresa.cnpj || "-"}</p>
-        <p><strong>Cidade:</strong> ${empresa.cidade || "-"} - ${empresa.estado || "-"}</p>
-        <p><strong>Funcionários:</strong> ${empresa.qtdFuncionarios || empresa.funcionarios || "-"}</p>
-        <p><strong>Gerente:</strong> ${empresa.gerenteResponsavel || "-"}</p>
-      `;
-      container.appendChild(div);
-    });
-  });
-}
-
-// Relatório de visitas
-function listarVisitasDetalhadas() {
-  const uid = window.gerenteLogado.id;
-  const container = document.getElementById("conteudo");
-  container.innerHTML = "<h3>Relatório de Visitas</h3><p>Carregando visitas...</p>";
-
-  db.collection("visitas").where("gerenteId", "==", uid).orderBy("dataVisita", "desc").get().then(snapshot => {
-    if (snapshot.empty) {
-      container.innerHTML = "<p>Nenhuma visita registrada.</p>";
-      return;
-    }
-
-    container.innerHTML = "<h3>Relatório de Visitas</h3>";
-    snapshot.forEach(doc => {
-      const visita = doc.data();
-      const card = document.createElement("div");
-      card.className = "card";
-      const dataFormatada = new Date(visita.dataVisita).toLocaleString("pt-BR");
-      card.innerHTML = `
-        <p><strong>Data:</strong> ${dataFormatada}</p>
-        <p><strong>Empresa ID:</strong> ${visita.empresaId}</p>
-        <p><strong>Observações:</strong><br>${visita.observacoes}</p>
-      `;
-      container.appendChild(card);
-    });
-  });
-}
-
-// Cadastro de usuário (gestor ou RM)
-function exibirFormularioCadastroUsuario() {
-  const container = document.getElementById("conteudo");
-  container.innerHTML = `
-    <h3>Cadastrar Gestor ou RM</h3>
-    <form id="formCadastroInterno">
-      <input type="text" id="nomeNovo" placeholder="Nome completo" required><br><br>
-      <input type="email" id="emailNovo" placeholder="E-mail" required><br><br>
-      <input type="password" id="senhaNovo" placeholder="Senha" required><br><br>
-      <select id="cargoNovo" required>
-        <option value="">Selecione o cargo</option>
-        <option value="gestor">Gestor (chefe)</option>
-        <option value="rm">RM (gerente)</option>
-      </select><br><br>
-      <input type="text" id="agenciaNova" placeholder="Número da agência (ex: 3495)" required><br><br>
-      <button type="submit">Cadastrar</button>
-    </form>
-    <p id="mensagemCadastro" style="color: green; font-weight: bold;"></p>
-  `;
-
-  document.getElementById("formCadastroInterno").onsubmit = (e) => {
-    e.preventDefault();
-    const nome = document.getElementById("nomeNovo").value.trim();
-    const email = document.getElementById("emailNovo").value.trim();
-    const senha = document.getElementById("senhaNovo").value;
-    const cargo = document.getElementById("cargoNovo").value;
-    const agencia = document.getElementById("agenciaNova").value.trim();
-    const msg = document.getElementById("mensagemCadastro");
-
-    msg.textContent = "Criando usuário...";
-
-    firebase.auth().createUserWithEmailAndPassword(email, senha)
-      .then(userCredential => {
-        const uid = userCredential.user.uid;
-        return db.collection("gerentes").doc(uid).set({
-          nome,
-          email,
-          cargo,
-          agencia,
-          ativo: true,
-          uid
-        });
-      })
-      .then(() => {
-        msg.textContent = "✅ Usuário cadastrado com sucesso!";
-        document.getElementById("formCadastroInterno").reset();
-      })
-      .catch(error => {
-        console.error("Erro ao cadastrar:", error);
-        msg.style.color = "red";
-        msg.textContent = "❌ Erro: " + error.message;
-      });
-  };
-}
+        <label>Observações Gerais:</label><br>
+        <textarea id="observacoes" rows="4" style="width:100%;"></textarea><
