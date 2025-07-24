@@ -24,6 +24,8 @@ auth.onAuthStateChanged(user => {
       nome: doc.data().nome,
       cargo: doc.data().cargo || "gerente"
     };
+    document.getElementById("tituloGerente").innerText = 
+  `Painel — ${doc.data().nome} (${doc.data().cargo})`;
 
     exibirSecao('visao');
   });
