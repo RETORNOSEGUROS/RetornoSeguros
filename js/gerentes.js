@@ -20,8 +20,6 @@ auth.onAuthStateChanged(user => {
     }
 
     window.gerenteLogado = {
-    document.getElementById("tituloGerente").innerText = 
-      `Painel — ${doc.data().nome} (${doc.data().cargo})`;
       id: uid,
       nome: doc.data().nome,
       cargo: doc.data().cargo || "gerente"
