@@ -7,7 +7,7 @@ firebase.auth().onAuthStateChanged(async (user) => {
     const db = firebase.firestore();
 
     try {
-      const doc = await db.collection("usuarios").doc(uid).get();
+      const doc = await db.collection("admins").doc(uid).get();
       if (doc.exists && doc.data().perfil === "admin") {
         const nome = doc.data().nome || "Administrador";
         const perfil = doc.data().perfil || "admin";
