@@ -3,6 +3,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// Verifica login
 auth.onAuthStateChanged(user => {
   if (!user) {
     window.location.href = "gerentes-login.html";
@@ -28,12 +29,14 @@ auth.onAuthStateChanged(user => {
   });
 });
 
+// Logout
 function logout() {
   auth.signOut().then(() => {
     window.location.href = "gerentes-login.html";
   });
 }
 
+// Troca de seção
 function exibirSecao(secao) {
   const container = document.getElementById('conteudo');
   container.innerHTML = "<p>Carregando...</p>";
@@ -43,11 +46,12 @@ function exibirSecao(secao) {
     case 'cadastrar': exibirFormularioEmpresa(); break;
     case 'visita': exibirFormularioVisita(); break;
     case 'empresas': listarEmpresasDetalhadas(); break;
-    case 'cadastrar-usuario': exibirFormularioCadastroUsuario(); break;
     case 'visitas-relatorio': listarVisitasDetalhadas(); break;
+    case 'cadastrar-usuario': exibirFormularioCadastroUsuario(); break;
   }
 }
 
+// Indicadores
 function carregarIndicadores() {
   const uid = window.gerenteLogado.id;
   const container = document.getElementById('conteudo');
@@ -68,9 +72,10 @@ function carregarIndicadores() {
   });
 }
 
+// Formulário de empresa
 function exibirFormularioEmpresa() {
   const container = document.getElementById('conteudo');
-  container.innerHTML = \`
+  container.innerHTML = `
     <h3>Cadastrar Empresa</h3>
     <form id="formEmpresa">
       <input placeholder="Nome Fantasia" id="nomeFantasia" required><br><br>
@@ -81,7 +86,7 @@ function exibirFormularioEmpresa() {
       <input placeholder="Qtd Funcionários" id="qtd" type="number"><br><br>
       <button type="submit">Salvar</button>
     </form>
-  \`;
+  `;
 
   document.getElementById("formEmpresa").onsubmit = (e) => {
     e.preventDefault();
@@ -102,22 +107,23 @@ function exibirFormularioEmpresa() {
   };
 }
 
+// Visita
 function exibirFormularioVisita() {
   const container = document.getElementById('conteudo');
   container.innerHTML = "<h3>Registrar Visita</h3><p>Carregando empresas...</p>";
 
   db.collection("empresas").where("cadastradoPor", "==", window.gerenteLogado.id).get().then(snapshot => {
-    let html = \`
+    let html = `
       <form id="formVisita">
         <label>Empresa:</label>
         <select id="empresaId" required>
-          \${snapshot.docs.map(doc => \`<option value="\${doc.id}">\${doc.data().nomeFantasia}</option>\`).join('')}
+          ${snapshot.docs.map(doc => `<option value="${doc.id}">${doc.data().nomeFantasia}</option>`).join('')}
         </select><br><br>
         <input type="datetime-local" id="dataVisita" required><br><br>
         <textarea id="observacoes" placeholder="Observações" rows="4" style="width:100%;"></textarea><br><br>
         <button type="submit">Registrar</button>
       </form>
-    \`;
+    `;
     container.innerHTML = html;
 
     document.getElementById("formVisita").onsubmit = (e) => {
@@ -137,6 +143,7 @@ function exibirFormularioVisita() {
   });
 }
 
+// Listagem de empresas
 function listarEmpresasDetalhadas() {
   const uid = window.gerenteLogado.id;
   const container = document.getElementById("conteudo");
@@ -153,17 +160,18 @@ function listarEmpresasDetalhadas() {
       const empresa = doc.data();
       const div = document.createElement("div");
       div.className = "card";
-      div.innerHTML = \`
-        <h3>\${empresa.nomeFantasia}</h3>
-        <p><strong>CNPJ:</strong> \${empresa.cnpj}</p>
-        <p><strong>Cidade:</strong> \${empresa.cidade} - \${empresa.estado}</p>
-        <p><strong>Funcionários:</strong> \${empresa.qtdFuncionarios}</p>
-      \`;
+      div.innerHTML = `
+        <h3>${empresa.nomeFantasia}</h3>
+        <p><strong>CNPJ:</strong> ${empresa.cnpj}</p>
+        <p><strong>Cidade:</strong> ${empresa.cidade} - ${empresa.estado}</p>
+        <p><strong>Funcionários:</strong> ${empresa.qtdFuncionarios}</p>
+      `;
       container.appendChild(div);
     });
   });
 }
 
+// Relatório de visitas
 function listarVisitasDetalhadas() {
   const uid = window.gerenteLogado.id;
   const container = document.getElementById("conteudo");
@@ -176,25 +184,25 @@ function listarVisitasDetalhadas() {
     }
 
     container.innerHTML = "<h3>Relatório de Visitas</h3>";
-
     snapshot.forEach(doc => {
       const visita = doc.data();
       const card = document.createElement("div");
       card.className = "card";
       const dataFormatada = new Date(visita.dataVisita).toLocaleString("pt-BR");
-      card.innerHTML = \`
-        <p><strong>Data:</strong> \${dataFormatada}</p>
-        <p><strong>Empresa ID:</strong> \${visita.empresaId}</p>
-        <p><strong>Observações:</strong><br>\${visita.observacoes}</p>
-      \`;
+      card.innerHTML = `
+        <p><strong>Data:</strong> ${dataFormatada}</p>
+        <p><strong>Empresa ID:</strong> ${visita.empresaId}</p>
+        <p><strong>Observações:</strong><br>${visita.observacoes}</p>
+      `;
       container.appendChild(card);
     });
   });
 }
 
+// Cadastro de usuário (gestor ou RM)
 function exibirFormularioCadastroUsuario() {
   const container = document.getElementById("conteudo");
-  container.innerHTML = \`
+  container.innerHTML = `
     <h3>Cadastrar Gestor ou RM</h3>
     <form id="formCadastroInterno">
       <input type="text" id="nomeNovo" placeholder="Nome completo" required><br><br>
@@ -209,7 +217,7 @@ function exibirFormularioCadastroUsuario() {
       <button type="submit">Cadastrar</button>
     </form>
     <p id="mensagemCadastro" style="color: green; font-weight: bold;"></p>
-  \`;
+  `;
 
   document.getElementById("formCadastroInterno").onsubmit = (e) => {
     e.preventDefault();
