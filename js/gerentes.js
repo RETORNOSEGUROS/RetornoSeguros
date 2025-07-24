@@ -1,8 +1,8 @@
+// Inicializa Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-// Verifica se o gerente está logado
 auth.onAuthStateChanged(user => {
   if (!user) {
     window.location.href = "gerentes-login.html";
@@ -24,7 +24,7 @@ auth.onAuthStateChanged(user => {
       cargo: doc.data().cargo || "gerente"
     };
 
-    exibirSecao('visao'); // carrega a visão geral inicial
+    exibirSecao('visao');
   });
 });
 
@@ -39,30 +39,17 @@ function exibirSecao(secao) {
   container.innerHTML = "<p>Carregando...</p>";
 
   switch (secao) {
-    case 'visao':
-      carregarIndicadores();
-      break;
-    case 'cadastrar':
-      exibirFormularioEmpresa();
-      break;
-    case 'visita':
-      exibirFormularioVisita();
-      break;
-    case 'visita-detalhada':
-      exibirFormularioVisitaDetalhada();
-      break;
-    case 'empresas':
-      listarEmpresasDetalhadas();
-      break;
-    case 'visitas-relatorio':
-      listarVisitasDetalhadas();
-      break;
+    case 'visao': carregarIndicadores(); break;
+    case 'cadastrar': exibirFormularioEmpresa(); break;
+    case 'visita': exibirFormularioVisita(); break;
+    case 'empresas': listarEmpresasDetalhadas(); break;
+    case 'cadastrar-usuario': exibirFormularioCadastroUsuario(); break;
+    case 'visitas-relatorio': listarVisitasDetalhadas(); break;
   }
 }
 
 function carregarIndicadores() {
   const uid = window.gerenteLogado.id;
-  const isChefe = window.gerenteLogado.cargo === "chefe";
   const container = document.getElementById('conteudo');
   container.innerHTML = "<h3>Visão Geral</h3>";
 
@@ -70,10 +57,8 @@ function carregarIndicadores() {
   const textos = ["Empresas", "Visitas", "Cotações", "Seguros"];
 
   colecoes.forEach((col, i) => {
-    const ref = db.collection(col);
-    const query = isChefe ? ref : ref.where("gerenteId", "==", uid);
-
-    query.get().then(snapshot => {
+    const ref = db.collection(col).where("gerenteId", "==", uid);
+    ref.get().then(snapshot => {
       const qtd = snapshot.size;
       const bloco = document.createElement("div");
       bloco.className = "card";
@@ -85,7 +70,7 @@ function carregarIndicadores() {
 
 function exibirFormularioEmpresa() {
   const container = document.getElementById('conteudo');
-  container.innerHTML = `
+  container.innerHTML = \`
     <h3>Cadastrar Empresa</h3>
     <form id="formEmpresa">
       <input placeholder="Nome Fantasia" id="nomeFantasia" required><br><br>
@@ -96,7 +81,7 @@ function exibirFormularioEmpresa() {
       <input placeholder="Qtd Funcionários" id="qtd" type="number"><br><br>
       <button type="submit">Salvar</button>
     </form>
-  `;
+  \`;
 
   document.getElementById("formEmpresa").onsubmit = (e) => {
     e.preventDefault();
@@ -119,20 +104,20 @@ function exibirFormularioEmpresa() {
 
 function exibirFormularioVisita() {
   const container = document.getElementById('conteudo');
-  container.innerHTML = `<h3>Registrar Visita Simples</h3><p>Carregando empresas...</p>`;
+  container.innerHTML = "<h3>Registrar Visita</h3><p>Carregando empresas...</p>";
 
   db.collection("empresas").where("cadastradoPor", "==", window.gerenteLogado.id).get().then(snapshot => {
-    let html = `
+    let html = \`
       <form id="formVisita">
         <label>Empresa:</label>
         <select id="empresaId" required>
-          ${snapshot.docs.map(doc => `<option value="${doc.id}">${doc.data().nomeFantasia}</option>`).join('')}
+          \${snapshot.docs.map(doc => \`<option value="\${doc.id}">\${doc.data().nomeFantasia}</option>\`).join('')}
         </select><br><br>
         <input type="datetime-local" id="dataVisita" required><br><br>
         <textarea id="observacoes" placeholder="Observações" rows="4" style="width:100%;"></textarea><br><br>
         <button type="submit">Registrar</button>
       </form>
-    `;
+    \`;
     container.innerHTML = html;
 
     document.getElementById("formVisita").onsubmit = (e) => {
@@ -154,15 +139,11 @@ function exibirFormularioVisita() {
 
 function listarEmpresasDetalhadas() {
   const uid = window.gerenteLogado.id;
-  const isChefe = window.gerenteLogado.cargo === "chefe";
   const container = document.getElementById("conteudo");
   container.innerHTML = "<h3>Empresas Detalhadas</h3><p>Carregando...</p>";
 
-  let query = db.collection("empresas");
-  if (!isChefe) query = query.where("cadastradoPor", "==", uid);
-
-  query.get().then(snapshot => {
-    container.innerHTML = `<h3>Empresas Detalhadas</h3>`;
+  db.collection("empresas").where("cadastradoPor", "==", uid).get().then(snapshot => {
+    container.innerHTML = "<h3>Empresas Detalhadas</h3>";
     if (snapshot.empty) {
       container.innerHTML += "<p>Nenhuma empresa cadastrada.</p>";
       return;
@@ -172,12 +153,12 @@ function listarEmpresasDetalhadas() {
       const empresa = doc.data();
       const div = document.createElement("div");
       div.className = "card";
-      div.innerHTML = `
-        <h3>${empresa.nomeFantasia}</h3>
-        <p><strong>CNPJ:</strong> ${empresa.cnpj}</p>
-        <p><strong>Cidade:</strong> ${empresa.cidade} - ${empresa.estado}</p>
-        <p><strong>Funcionários:</strong> ${empresa.qtdFuncionarios}</p>
-      `;
+      div.innerHTML = \`
+        <h3>\${empresa.nomeFantasia}</h3>
+        <p><strong>CNPJ:</strong> \${empresa.cnpj}</p>
+        <p><strong>Cidade:</strong> \${empresa.cidade} - \${empresa.estado}</p>
+        <p><strong>Funcionários:</strong> \${empresa.qtdFuncionarios}</p>
+      \`;
       container.appendChild(div);
     });
   });
@@ -185,15 +166,10 @@ function listarEmpresasDetalhadas() {
 
 function listarVisitasDetalhadas() {
   const uid = window.gerenteLogado.id;
-  const isChefe = window.gerenteLogado.cargo === "chefe";
   const container = document.getElementById("conteudo");
-
   container.innerHTML = "<h3>Relatório de Visitas</h3><p>Carregando visitas...</p>";
 
-  let query = db.collection("visitas").orderBy("dataVisita", "desc");
-  if (!isChefe) query = query.where("gerenteId", "==", uid);
-
-  query.get().then(snapshot => {
+  db.collection("visitas").where("gerenteId", "==", uid).orderBy("dataVisita", "desc").get().then(snapshot => {
     if (snapshot.empty) {
       container.innerHTML = "<p>Nenhuma visita registrada.</p>";
       return;
@@ -206,12 +182,66 @@ function listarVisitasDetalhadas() {
       const card = document.createElement("div");
       card.className = "card";
       const dataFormatada = new Date(visita.dataVisita).toLocaleString("pt-BR");
-      card.innerHTML = `
-        <p><strong>Data:</strong> ${dataFormatada}</p>
-        <p><strong>Empresa ID:</strong> ${visita.empresaId}</p>
-        <p><strong>Observações:</strong><br>${visita.observacoes}</p>
-      `;
+      card.innerHTML = \`
+        <p><strong>Data:</strong> \${dataFormatada}</p>
+        <p><strong>Empresa ID:</strong> \${visita.empresaId}</p>
+        <p><strong>Observações:</strong><br>\${visita.observacoes}</p>
+      \`;
       container.appendChild(card);
     });
   });
+}
+
+function exibirFormularioCadastroUsuario() {
+  const container = document.getElementById("conteudo");
+  container.innerHTML = \`
+    <h3>Cadastrar Gestor ou RM</h3>
+    <form id="formCadastroInterno">
+      <input type="text" id="nomeNovo" placeholder="Nome completo" required><br><br>
+      <input type="email" id="emailNovo" placeholder="E-mail" required><br><br>
+      <input type="password" id="senhaNovo" placeholder="Senha" required><br><br>
+      <select id="cargoNovo" required>
+        <option value="">Selecione o cargo</option>
+        <option value="gestor">Gestor (chefe)</option>
+        <option value="rm">RM (gerente)</option>
+      </select><br><br>
+      <input type="text" id="agenciaNova" placeholder="Número da agência (ex: 3495)" required><br><br>
+      <button type="submit">Cadastrar</button>
+    </form>
+    <p id="mensagemCadastro" style="color: green; font-weight: bold;"></p>
+  \`;
+
+  document.getElementById("formCadastroInterno").onsubmit = (e) => {
+    e.preventDefault();
+    const nome = document.getElementById("nomeNovo").value.trim();
+    const email = document.getElementById("emailNovo").value.trim();
+    const senha = document.getElementById("senhaNovo").value;
+    const cargo = document.getElementById("cargoNovo").value;
+    const agencia = document.getElementById("agenciaNova").value.trim();
+    const msg = document.getElementById("mensagemCadastro");
+
+    msg.textContent = "Criando usuário...";
+
+    firebase.auth().createUserWithEmailAndPassword(email, senha)
+      .then(userCredential => {
+        const uid = userCredential.user.uid;
+        return db.collection("gerentes").doc(uid).set({
+          nome,
+          email,
+          cargo,
+          agencia,
+          ativo: true,
+          uid
+        });
+      })
+      .then(() => {
+        msg.textContent = "✅ Usuário cadastrado com sucesso!";
+        document.getElementById("formCadastroInterno").reset();
+      })
+      .catch(error => {
+        console.error("Erro ao cadastrar:", error);
+        msg.style.color = "red";
+        msg.textContent = "❌ Erro: " + error.message;
+      });
+  };
 }
