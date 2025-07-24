@@ -1,78 +1,58 @@
-// Visita com checklist de seguros e comentários
-function exibirFormularioVisita() {
-  const container = document.getElementById('conteudo');
-  container.innerHTML = "<h3>Registrar Visita</h3><p>Carregando empresas...</p>";
+// js/admin-visitas.js
 
-  db.collection("empresas").where("cadastradoPor", "==", window.gerenteLogado.id).get().then(snapshot => {
-    let html = `
-      <form id="formVisita">
-        <label>Empresa:</label><br>
-        <select id="empresaId" required style="width:100%; padding:8px;">
-          ${snapshot.docs.map(doc => `<option value="${doc.id}">${doc.data().nomeFantasia}</option>`).join('')}
-        </select><br><br>
+(async () => {
+  const db = firebase.firestore();
+  const container = document.getElementById("conteudo-pagina");
 
-        <label>Data da Visita:</label><br>
-        <input type="datetime-local" id="dataVisita" required style="width:100%; padding:8px;"><br><br>
+  container.innerHTML = `
+    <h2>📋 Relatórios de Visitas</h2>
+    <div id="listaVisitas">Carregando registros...</div>
+  `;
 
-        <label>Número Atualizado de Funcionários:</label><br>
-        <input type="number" id="numeroFuncionarios" placeholder="Ex: 45" style="width:100%; padding:8px;"><br><br>
+  const visitasSnap = await db.collection("visitas").orderBy("dataVisita", "desc").get();
+  const lista = document.getElementById("listaVisitas");
 
-        <label><strong>Assuntos de Seguros Abordados:</strong></label><br>
-        <div id="checklistSeguros" style="margin-left:10px;">
-          <label><input type="checkbox" value="Plano de saúde empresarial"> Plano de saúde empresarial</label><br>
-          <label><input type="checkbox" value="Plano dental empresarial"> Plano dental empresarial</label><br>
-          <label><input type="checkbox" value="Seguro de vida em grupo"> Seguro de vida em grupo</label><br>
-          <label><input type="checkbox" value="Seguro frotas"> Seguro frotas</label><br>
-          <label><input type="checkbox" value="Seguro de bens"> Seguro de bens (máquinas, estrutura)</label><br>
-          <label><input type="checkbox" value="Seguro responsabilidade civil / D&O"> Seguro responsabilidade civil / D&O</label><br>
-          <label><input type="checkbox" value="Previdência empresarial"> Previdência empresarial</label><br>
-        </div><br>
+  if (visitasSnap.empty) {
+    lista.innerHTML = "<p>Nenhuma visita registrada ainda.</p>";
+    return;
+  }
 
-        <label>Comentário Plano de Saúde:</label><br>
-        <textarea id="comentarioSaude" rows="2" style="width:100%;"></textarea><br><br>
+  for (const doc of visitasSnap.docs) {
+    const visita = doc.data();
+    const data = visita.dataVisita 
+      ? new Date(visita.dataVisita).toLocaleString("pt-BR") 
+      : "-";
+    const empresaId = visita.empresaId || "N/I";
+    const gerente = visita.gerenteNome || "Desconhecido";
+    const gerenteId = visita.gerenteId || "-";
+    const funcionarios = visita.numeroFuncionarios || "-";
+    const checklist = visita.checklist || [];
+    const obs = visita.observacoes || "-";
+    const com = visita.comentarios || {};
 
-        <label>Comentário Plano Dental:</label><br>
-        <textarea id="comentarioDental" rows="2" style="width:100%;"></textarea><br><br>
+    lista.innerHTML += `
+      <div style="background: #fff; padding: 15px; border-radius: 6px; margin-bottom: 12px; box-shadow: 0 0 5px rgba(0,0,0,0.08);">
+        <strong>📁 Empresa ID:</strong> ${empresaId}<br/>
+        📆 <strong>Data:</strong> ${data}<br/>
+        👔 <strong>Gerente:</strong> ${gerente} (ID: ${gerenteId})<br/>
+        🧑‍🤝‍🧑 <strong>Funcionários:</strong> ${funcionarios}<br/>
+        ✅ <strong>Assuntos de Seguro Abordados:</strong>
+        <ul style="margin-top: 4px;">
+          ${checklist.map(item => `<li>${item}</li>`).join("") || "<li>Não informado</li>"}
+        </ul>
 
-        <label>Comentário Seguro de Vida:</label><br>
-        <textarea id="comentarioVida" rows="2" style="width:100%;"></textarea><br><br>
+        <details>
+          <summary><strong>📝 Comentários Específicos</strong></summary>
+          <ul style="margin-top: 8px;">
+            <li><strong>Plano de Saúde:</strong> ${com.planoSaude || "-"}</li>
+            <li><strong>Plano Dental:</strong> ${com.planoDental || "-"}</li>
+            <li><strong>Seguro de Vida:</strong> ${com.vida || "-"}</li>
+            <li><strong>Outros Seguros:</strong> ${com.outros || "-"}</li>
+          </ul>
+        </details>
 
-        <label>Comentário Outros Seguros:</label><br>
-        <textarea id="comentarioOutros" rows="2" style="width:100%;"></textarea><br><br>
-
-        <label>Observações Gerais:</label><br>
-        <textarea id="observacoes" rows="4" style="width:100%;"></textarea><br><br>
-
-        <button type="submit">Registrar Visita</button>
-      </form>
+        <p style="margin-top:10px;"><strong>🗒️ Observações:</strong><br>${obs}</p>
+      </div>
     `;
-
-    container.innerHTML = html;
-
-    document.getElementById("formVisita").onsubmit = (e) => {
-      e.preventDefault();
-
-      const checklist = [];
-      document.querySelectorAll('#checklistSeguros input[type=checkbox]').forEach(cb => {
-        if (cb.checked) checklist.push(cb.value);
-      });
-
-      const dados = {
-        empresaId: document.getElementById("empresaId").value,
-        dataVisita: new Date(document.getElementById("dataVisita").value).toISOString(),
-        numeroFuncionarios: parseInt(document.getElementById("numeroFuncionarios").value || 0),
-        checklist,
-        comentarios: {
-          planoSaude: document.getElementById("comentarioSaude").value.trim(),
-          planoDental: document.getElementById("comentarioDental").value.trim(),
-          vida: document.getElementById("comentarioVida").value.trim(),
-          outros: document.getElementById("comentarioOutros").value.trim()
-        },
-        observacoes: document.getElementById("observacoes").value.trim(),
-        gerenteId: window.gerenteLogado.id,
-        gerenteNome: window.gerenteLogado.nome,
-        status: "realizada"
-      };
-
-      db.collection("visitas").add(dados).then(() => {
-        alert("✅ Visita registrada com sucesso.");
+  }
+})();
