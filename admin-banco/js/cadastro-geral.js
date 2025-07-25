@@ -74,25 +74,33 @@ function cadastrarUsuario() {
   if (!senha) return alert("Informe a senha para novo usuário.");
 
   auth.createUserWithEmailAndPassword(email, senha)
-    .then(cred => {
-      const uid = cred.user.uid;
-      return db.collection("usuarios_banco").doc(uid).set({
-        nome,
-        email,
-        perfil,
-        agenciaId,
-        ativo: true,
-        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
-      }).then(() => {
-        alert("Usuário criado com sucesso!");
-        limparFormulario();
-        listarUsuarios();
-        carregarGerentesChefes();
-      }).catch(err => {
-        cred.user.delete();
-        console.error("Erro ao salvar no Firestore:", err);
+  .then(cred => {
+    const uid = cred.user.uid;
+
+    return db.collection("usuarios_banco").doc(uid).set({
+      nome,
+      email,
+      perfil,
+      agenciaId,
+      ativo: true,
+      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+    }).then(() => {
+      alert("Usuário criado com sucesso!");
+      limparFormulario();
+      listarUsuarios();
+      carregarGerentesChefes();
+    }).catch(err => {
+      console.error("Erro Firestore:", err);
+      // ⚠️ Remove o usuário do Authentication se falhar no Firestore
+      cred.user.delete().then(() => {
         alert("Erro ao salvar no banco. Cadastro cancelado.");
       });
+    });
+  })
+  .catch(err => {
+    console.error("Erro Auth:", err);
+    alert("Erro ao cadastrar: " + err.message);
+  });
     })
     .catch(err => {
       console.error("Erro Auth:", err);
