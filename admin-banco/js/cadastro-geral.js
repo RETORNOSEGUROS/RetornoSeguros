@@ -9,8 +9,29 @@ auth.onAuthStateChanged(user => {
     window.location.href = "login.html";
   } else {
     listarUsuarios();
+    carregarGerentesChefes();
   }
 });
+
+function toggleGerenteChefeSelect() {
+  const perfil = document.getElementById("perfil").value;
+  const box = document.getElementById("gerenteChefeBox");
+  box.style.display = (perfil === "rm" || perfil === "assistente") ? "block" : "none";
+}
+
+function carregarGerentesChefes() {
+  const select = document.getElementById("gerenteChefeId");
+  db.collection("usuarios_banco").where("perfil", "==", "gerente_chefe").get()
+    .then(snapshot => {
+      snapshot.forEach(doc => {
+        const u = doc.data();
+        const option = document.createElement("option");
+        option.value = doc.id;
+        option.textContent = `${u.nome} (${u.agenciaId})`;
+        select.appendChild(option);
+      });
+    });
+}
 
 function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
@@ -18,6 +39,7 @@ function cadastrarUsuario() {
   const senha = document.getElementById("senha").value.trim();
   const perfil = document.getElementById("perfil").value;
   const agenciaId = document.getElementById("agenciaId").value.trim();
+  const gerenteChefeId = document.getElementById("gerenteChefeId").value;
 
   if (!nome || !email || !perfil || !agenciaId) {
     return alert("Preencha todos os campos.");
@@ -25,7 +47,10 @@ function cadastrarUsuario() {
 
   // Se estiver editando
   if (editandoUsuarioId) {
-    const atualizacao = { nome, perfil, agenciaId };
+    const atualizacao = {
+      nome, perfil, agenciaId,
+      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeId : ""
+    };
     db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
       .then(() => {
         alert("Usuário atualizado com sucesso.");
@@ -35,34 +60,30 @@ function cadastrarUsuario() {
     return;
   }
 
-  // Novo cadastro
   if (!senha) return alert("Informe a senha para novo usuário.");
 
   auth.createUserWithEmailAndPassword(email, senha)
     .then(cred => {
       const uid = cred.user.uid;
-
       return db.collection("usuarios_banco").doc(uid).set({
         nome,
         email,
         perfil,
         agenciaId,
         ativo: true,
-        gerenteChefeId: ""
+        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeId : ""
       }).then(() => {
         alert("Usuário criado com sucesso!");
         limparFormulario();
         listarUsuarios();
       }).catch(err => {
-        console.error("Erro ao salvar no Firestore:", err);
-        // Se erro no Firestore, excluir o usuário do Auth
-        cred.user.delete().then(() => {
-          alert("Erro ao salvar no banco. Cadastro cancelado.");
-        });
+        cred.user.delete();
+        console.error("Erro Firestore:", err);
+        alert("Erro ao salvar no banco. Cadastro cancelado.");
       });
     })
     .catch(err => {
-      console.error("Erro no Auth:", err);
+      console.error("Erro Auth:", err);
       alert("Erro ao cadastrar: " + err.message);
     });
 }
@@ -82,14 +103,14 @@ function listarUsuarios() {
           <td>${u.email}</td>
           <td>${u.perfil}</td>
           <td>${u.agenciaId || "-"}</td>
-          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}')">Editar</button></td>
+          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button></td>
         `;
         lista.appendChild(tr);
       });
     });
 }
 
-function editarUsuario(id, nome, email, perfil, agenciaId) {
+function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   editandoUsuarioId = id;
   document.getElementById("nome").value = nome;
   document.getElementById("email").value = email;
@@ -97,6 +118,10 @@ function editarUsuario(id, nome, email, perfil, agenciaId) {
   document.getElementById("senha").value = "";
   document.getElementById("perfil").value = perfil;
   document.getElementById("agenciaId").value = agenciaId;
+  toggleGerenteChefeSelect();
+  if (perfil === "rm" || perfil === "assistente") {
+    document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
+  }
   document.querySelector("button").textContent = "Atualizar";
 }
 
@@ -107,6 +132,4 @@ function limparFormulario() {
   document.getElementById("email").disabled = false;
   document.getElementById("senha").value = "";
   document.getElementById("perfil").value = "";
-  document.getElementById("agenciaId").value = "";
-  document.querySelector("button").textContent = "Cadastrar";
-}
+  document.getElementById("agenciaId").va
