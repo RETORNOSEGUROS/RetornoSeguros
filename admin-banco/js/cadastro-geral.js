@@ -10,17 +10,14 @@ auth.onAuthStateChanged(user => {
   } else {
     listarUsuarios();
     carregarGerentesChefes();
-    carregarRMs();
   }
 });
 
 function toggleCamposVinculo() {
   const perfil = document.getElementById("perfil").value;
   const gerenteBox = document.getElementById("gerenteChefeBox");
-  const rmBox = document.getElementById("rmBox");
 
-  gerenteBox.style.display = perfil === "rm" ? "block" : "none";
-  rmBox.style.display = perfil === "assistente" ? "block" : "none";
+  gerenteBox.style.display = (perfil === "rm" || perfil === "assistente") ? "block" : "none";
 }
 
 function carregarGerentesChefes() {
@@ -39,22 +36,6 @@ function carregarGerentesChefes() {
     });
 }
 
-function carregarRMs() {
-  const select = document.getElementById("rmResponsavelId");
-  select.innerHTML = '<option value="">Selecionar</option>';
-
-  db.collection("usuarios_banco").where("perfil", "==", "rm").get()
-    .then(snapshot => {
-      snapshot.forEach(doc => {
-        const u = doc.data();
-        const option = document.createElement("option");
-        option.value = doc.id;
-        option.textContent = `${u.nome} (${u.agenciaId || "-"})`;
-        select.appendChild(option);
-      });
-    });
-}
-
 function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
   const email = document.getElementById("email").value.trim();
@@ -62,7 +43,6 @@ function cadastrarUsuario() {
   const perfil = document.getElementById("perfil").value;
   const agenciaId = document.getElementById("agenciaId").value.trim();
   const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
-  const rmResponsavelIdSelecionado = document.getElementById("rmResponsavelId").value;
 
   if (!nome || !email || !perfil || !agenciaId) {
     return alert("Preencha todos os campos.");
@@ -73,8 +53,7 @@ function cadastrarUsuario() {
       nome,
       perfil,
       agenciaId,
-      gerenteChefeId: perfil === "rm" ? gerenteChefeIdSelecionado : "",
-      rmResponsavelId: perfil === "assistente" ? rmResponsavelIdSelecionado : ""
+      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
     };
 
     return db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
@@ -83,7 +62,6 @@ function cadastrarUsuario() {
         limparFormulario();
         listarUsuarios();
         carregarGerentesChefes();
-        carregarRMs();
       })
       .catch(err => {
         console.error("Erro ao atualizar:", err.message);
@@ -103,14 +81,12 @@ function cadastrarUsuario() {
         perfil,
         agenciaId,
         ativo: true,
-        gerenteChefeId: perfil === "rm" ? gerenteChefeIdSelecionado : "",
-        rmResponsavelId: perfil === "assistente" ? rmResponsavelIdSelecionado : ""
+        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
       }).then(() => {
         alert("✅ Usuário criado com sucesso!");
         limparFormulario();
         listarUsuarios();
         carregarGerentesChefes();
-        carregarRMs();
       }).catch(err => {
         console.error("Erro Firestore:", err.message);
         cred.user.delete().then(() => {
@@ -142,14 +118,14 @@ function listarUsuarios() {
           <td>${u.email}</td>
           <td>${u.perfil}</td>
           <td>${u.agenciaId || "-"}</td>
-          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}', '${u.rmResponsavelId || ""}')">Editar</button></td>
+          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button></td>
         `;
         lista.appendChild(tr);
       });
     });
 }
 
-function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId, rmResponsavelId) {
+function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   editandoUsuarioId = id;
   document.getElementById("nome").value = nome;
   document.getElementById("email").value = email;
@@ -160,7 +136,6 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId, rmRes
   toggleCamposVinculo();
   setTimeout(() => {
     document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
-    document.getElementById("rmResponsavelId").value = rmResponsavelId || "";
   }, 150);
   document.querySelector("button").textContent = "Atualizar";
 }
@@ -174,8 +149,6 @@ function limparFormulario() {
   document.getElementById("perfil").value = "";
   document.getElementById("agenciaId").value = "";
   document.getElementById("gerenteChefeId").value = "";
-  document.getElementById("rmResponsavelId").value = "";
   document.getElementById("gerenteChefeBox").style.display = "none";
-  document.getElementById("rmBox").style.display = "none";
   document.querySelector("button").textContent = "Cadastrar";
 }
