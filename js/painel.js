@@ -2,7 +2,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-auth.onAuthStateChanged(user => {
+auth.onAuthStateChanged(async (user) => {
   if (!user) {
     window.location.href = "login.html";
     return;
@@ -10,21 +10,16 @@ auth.onAuthStateChanged(user => {
 
   const uid = user.uid;
 
-  db.collection("gerentes").doc(uid).get().then(doc => {
-    if (!doc.exists || doc.data().ativo === false) {
-      alert("Acesso negado.");
-      auth.signOut();
-      return;
-    }
+  // Buscar dados do usuário
+  const userDoc = await db.collection("usuarios").doc(uid).get();
+  const dados = userDoc.data();
+  window.usuarioAtual = dados;
 
-    window.gerenteLogado = {
-      id: uid,
-      nome: doc.data().nome,
-      cargo: doc.data().cargo || "gerente"
-    };
-
-    exibirSecao('visao');
-  });
+  carregarDados(dados);
+  carregarMinhasApolices(uid);
+  carregarApolicesNaRetorno();
+  calcularMeusPontos(uid);
+  prepararFormularioEdicao(dados, uid);
 });
 
 function logout() {
@@ -33,175 +28,123 @@ function logout() {
   });
 }
 
-// -------- Navegação
-function exibirSecao(secao) {
-  const container = document.getElementById('conteudo');
-  container.innerHTML = "<p>Carregando...</p>";
-
-  switch (secao) {
-    case 'visao':
-      carregarIndicadores();
-      break;
-    case 'cadastrar':
-      exibirFormularioEmpresa();
-      break;
-    case 'visita':
-      exibirFormularioVisita();
-      break;
-    case 'empresas':
-      listarEmpresasDetalhadas();
-      break;
-  }
+function mostrarSecao(secao) {
+  document.querySelectorAll(".box").forEach(div => div.classList.remove("active"));
+  document.getElementById(`secao-${secao}`).classList.add("active");
 }
 
-// -------- Indicadores
-function carregarIndicadores() {
-  const uid = window.gerenteLogado.id;
-  const isChefe = window.gerenteLogado.cargo === "chefe";
-  const container = document.getElementById('conteudo');
-  container.innerHTML = "<h3>Visão Geral</h3>";
-
-  const colecoes = ["empresas", "visitas", "cotacoes", "seguros"];
-  const textos = ["Empresas", "Visitas", "Cotações", "Seguros"];
-
-  colecoes.forEach((col, i) => {
-    const ref = db.collection(col);
-    const query = isChefe ? ref : ref.where("gerenteId", "==", uid);
-
-    query.get().then(snapshot => {
-      const qtd = snapshot.size;
-      const bloco = document.createElement("div");
-      bloco.className = "card";
-      bloco.innerHTML = `<h3>${textos[i]}</h3><p>Total: <strong>${qtd}</strong></p>`;
-      container.appendChild(bloco);
-    });
-  });
-}
-
-// -------- Cadastrar Empresa
-function exibirFormularioEmpresa() {
-  const container = document.getElementById('conteudo');
-  container.innerHTML = `
-    <h3>Cadastrar Empresa</h3>
-    <form id="formEmpresa">
-      <input placeholder="Nome Fantasia" id="nomeFantasia" required><br><br>
-      <input placeholder="CNPJ" id="cnpj" required><br><br>
-      <input placeholder="Cidade" id="cidade"><br><br>
-      <input placeholder="Estado" id="estado"><br><br>
-      <input placeholder="Ramo de Atividade" id="ramo"><br><br>
-      <input placeholder="Qtd Funcionários" id="qtd" type="number"><br><br>
-      <button type="submit">Salvar</button>
-    </form>
+// --------- DADOS
+function carregarDados(dados) {
+  document.getElementById("dadosUsuario").innerHTML = `
+    <p><strong>Nome:</strong> ${dados.nome}</p>
+    <p><strong>Email:</strong> ${dados.email}</p>
+    <p><strong>Celular:</strong> ${dados.celular}</p>
+    <p><strong>Cidade:</strong> ${dados.cidade} - ${dados.estado}</p>
   `;
+}
 
-  document.getElementById("formEmpresa").onsubmit = (e) => {
+// --------- EDITAR
+function prepararFormularioEdicao(dados, uid) {
+  document.getElementById("novoNome").value = dados.nome;
+  document.getElementById("novoEmail").value = dados.email;
+  document.getElementById("novoCelular").value = dados.celular;
+  document.getElementById("novaCidade").value = dados.cidade;
+  document.getElementById("novoEstado").value = dados.estado;
+
+  document.getElementById("formEditar").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const dados = {
-      nomeFantasia: document.getElementById("nomeFantasia").value,
-      cnpj: document.getElementById("cnpj").value,
-      cidade: document.getElementById("cidade").value,
-      estado: document.getElementById("estado").value,
-      ramoAtividade: document.getElementById("ramo").value,
-      qtdFuncionarios: parseInt(document.getElementById("qtd").value || 0),
-      cadastradoPor: window.gerenteLogado.id,
-      dataCadastro: new Date().toISOString()
+
+    const updates = {
+      nome: document.getElementById("novoNome").value,
+      email: document.getElementById("novoEmail").value,
+      celular: document.getElementById("novoCelular").value,
+      cidade: document.getElementById("novaCidade").value,
+      estado: document.getElementById("novoEstado").value,
     };
-    db.collection("empresas").add(dados).then(() => {
-      alert("Empresa cadastrada!");
-      exibirSecao("empresas");
-    });
-  };
-}
 
-// -------- Registrar Visita
-function exibirFormularioVisita() {
-  const container = document.getElementById('conteudo');
-  container.innerHTML = `<h3>Registrar Visita</h3><p>Carregando empresas...</p>`;
-
-  db.collection("empresas").where("cadastradoPor", "==", window.gerenteLogado.id).get().then(snapshot => {
-    let html = `
-      <form id="formVisita">
-        <label>Empresa:</label>
-        <select id="empresaId" required>
-          ${snapshot.docs.map(doc => `<option value="${doc.id}">${doc.data().nomeFantasia}</option>`).join('')}
-        </select><br><br>
-        <input type="datetime-local" id="dataVisita" required><br><br>
-        <textarea id="observacoes" placeholder="Observações" rows="4" style="width:100%;"></textarea><br><br>
-        <button type="submit">Registrar</button>
-      </form>
-    `;
-    container.innerHTML = html;
-
-    document.getElementById("formVisita").onsubmit = (e) => {
-      e.preventDefault();
-      const dados = {
-        empresaId: document.getElementById("empresaId").value,
-        dataVisita: new Date(document.getElementById("dataVisita").value).toISOString(),
-        observacoes: document.getElementById("observacoes").value,
-        gerenteId: window.gerenteLogado.id,
-        status: "realizada"
-      };
-      db.collection("visitas").add(dados).then(() => {
-        alert("Visita registrada.");
-        exibirSecao("empresas");
-      });
-    };
-  });
-}
-
-// -------- Empresas Detalhadas
-function listarEmpresasDetalhadas() {
-  const uid = window.gerenteLogado.id;
-  const isChefe = window.gerenteLogado.cargo === "chefe";
-  const container = document.getElementById("conteudo");
-  container.innerHTML = "<h3>Empresas Detalhadas</h3><p>Carregando...</p>";
-
-  let query = db.collection("empresas");
-  if (!isChefe) query = query.where("cadastradoPor", "==", uid);
-
-  query.get().then(snapshot => {
-    container.innerHTML = `<h3>Empresas Detalhadas</h3>`;
-    if (snapshot.empty) {
-      container.innerHTML += "<p>Nenhuma empresa cadastrada.</p>";
-      return;
+    const novaSenha = document.getElementById("novaSenha").value;
+    if (novaSenha) {
+      await auth.currentUser.updatePassword(novaSenha).catch(err => alert("Erro ao atualizar senha: " + err.message));
     }
 
-    snapshot.forEach(doc => {
-      const empresa = doc.data();
-      const div = document.createElement("div");
-      div.className = "card";
-      div.innerHTML = `
-        <h3>${empresa.nomeFantasia}</h3>
-        <p><strong>CNPJ:</strong> ${empresa.cnpj}</p>
-        <p><strong>Cidade:</strong> ${empresa.cidade} - ${empresa.estado}</p>
-        <p><strong>Funcionários:</strong> ${empresa.qtdFuncionarios}</p>
-        <div id="extras-${doc.id}">Carregando visitas e cotações...</div>
-      `;
-      container.appendChild(div);
+    await db.collection("usuarios").doc(uid).update(updates);
+    alert("Dados atualizados!");
+    location.reload();
+  });
+}
 
-      carregarExtrasEmpresa(doc.id);
+// --------- MINHAS APÓLICES
+function carregarMinhasApolices(uid) {
+  db.collection("apolices").where("usuarioId", "==", uid).get().then(snapshot => {
+    const tbody = document.getElementById("tabelaApolices");
+    tbody.innerHTML = "";
+
+    snapshot.forEach(doc => {
+      const a = doc.data();
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${a.tipo}</td>
+        <td>${a.seguradora}</td>
+        <td>R$ ${parseFloat(a.valorPago || 0).toFixed(2)}</td>
+        <td>${a.dataRenovacao || ""}</td>
+        <td>${a.pdfEnviado ? "✅" : "❌"}</td>
+      `;
+      tbody.appendChild(tr);
     });
   });
 }
 
-function carregarExtrasEmpresa(empresaId) {
-  const destino = document.getElementById("extras-" + empresaId);
+// --------- APÓLICES NA RETORNO
+function carregarApolicesNaRetorno() {
+  db.collection("apolices")
+    .where("pdfEnviado", "==", true)
+    .get().then(snapshot => {
+      const tbody = document.getElementById("tabelaRetorno");
+      tbody.innerHTML = "";
 
-  Promise.all([
-    db.collection("visitas").where("empresaId", "==", empresaId).get(),
-    db.collection("cotacoes").where("empresaId", "==", empresaId).get()
-  ]).then(([visitas, cotacoes]) => {
-    let html = "<h4>Visitas:</h4><ul>";
-    visitas.forEach(v => {
-      const d = v.data();
-      html += `<li>${new Date(d.dataVisita).toLocaleString()} - ${d.observacoes}</li>`;
+      snapshot.forEach(async doc => {
+        const a = doc.data();
+        const userSnap = await db.collection("usuarios").doc(a.usuarioId).get();
+        const nomeUsuario = userSnap.exists ? userSnap.data().nome : "Desconhecido";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${nomeUsuario}</td>
+          <td>${a.tipo}</td>
+          <td>${a.seguradora}</td>
+          <td>R$ ${parseFloat(a.valorPago || 0).toFixed(2)}</td>
+          <td>${a.dataRenovacao || ""}</td>
+        `;
+        tbody.appendChild(tr);
+      });
     });
-    html += "</ul><h4>Cotações:</h4><ul>";
-    cotacoes.forEach(c => {
-      const d = c.data();
-      html += `<li>${d.produto} - R$ ${d.valorEstimado} (${d.status})</li>`;
-    });
-    html += "</ul>";
-    destino.innerHTML = html;
-  });
+}
+
+// --------- PONTOS
+async function calcularMeusPontos(uid) {
+  let pontos = 0;
+
+  // +30 se anexou apólice
+  const minhas = await db.collection("apolices").where("usuarioId", "==", uid).get();
+  if (!minhas.empty) pontos += 30;
+
+  // +10 por indicação
+  const indicados = await db.collection("usuarios").where("usuarioIndicadorId", "==", uid).get();
+  pontos += indicados.size * 10;
+
+  // +20 por cada indicado que anexou apólice
+  let indicadosComApolice = 0;
+  for (let doc of indicados.docs) {
+    const id = doc.id;
+    const apolices = await db.collection("apolices").where("usuarioId", "==", id).get();
+    if (!apolices.empty) indicadosComApolice++;
+  }
+  pontos += indicadosComApolice * 20;
+
+  document.getElementById("pontuacao").innerHTML = `
+    <p><strong>Pontos acumulados:</strong> ${pontos}</p>
+    <p>• Indicações: ${indicados.size} pessoas</p>
+    <p>• Indicações com apólice: ${indicadosComApolice}</p>
+    <p>• Apólice sua cadastrada: ${minhas.empty ? "Não" : "Sim"}</p>
+  `;
 }
