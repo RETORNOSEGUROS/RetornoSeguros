@@ -98,14 +98,34 @@ function listarUsuarios() {
       snapshot.forEach(doc => {
         const u = doc.data();
         const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${u.nome}</td>
-          <td>${u.email}</td>
-          <td>${u.perfil}</td>
-          <td>${u.agenciaId || "-"}</td>
-          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button></td>
-        `;
-        lista.appendChild(tr);
+const tr = document.createElement("tr");
+
+const tdNome = document.createElement("td");
+tdNome.textContent = u.nome;
+
+const tdEmail = document.createElement("td");
+tdEmail.textContent = u.email;
+
+const tdPerfil = document.createElement("td");
+tdPerfil.textContent = u.perfil;
+
+const tdAgencia = document.createElement("td");
+tdAgencia.textContent = u.agenciaId || "-";
+
+const tdAcoes = document.createElement("td");
+const btn = document.createElement("button");
+btn.textContent = "Editar";
+btn.onclick = () => editarUsuario(doc.id, u.nome, u.email, u.perfil, u.agenciaId || "", u.gerenteChefeId || "");
+tdAcoes.appendChild(btn);
+
+tr.appendChild(tdNome);
+tr.appendChild(tdEmail);
+tr.appendChild(tdPerfil);
+tr.appendChild(tdAgencia);
+tr.appendChild(tdAcoes);
+
+lista.appendChild(tr);
+
       });
     });
 }
