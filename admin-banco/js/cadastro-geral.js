@@ -19,16 +19,8 @@ function toggleCamposVinculo() {
   const gerenteBox = document.getElementById("gerenteChefeBox");
   const rmBox = document.getElementById("rmBox");
 
-  if (perfil === "rm") {
-    gerenteBox.style.display = "block";
-    rmBox.style.display = "none";
-  } else if (perfil === "assistente") {
-    gerenteBox.style.display = "none"; // pode deixar true se quiser manter ambos
-    rmBox.style.display = "block";
-  } else {
-    gerenteBox.style.display = "none";
-    rmBox.style.display = "none";
-  }
+  gerenteBox.style.display = perfil === "rm" ? "block" : "none";
+  rmBox.style.display = perfil === "assistente" ? "block" : "none";
 }
 
 function carregarGerentesChefes() {
@@ -85,7 +77,7 @@ function cadastrarUsuario() {
       rmResponsavelId: perfil === "assistente" ? rmResponsavelIdSelecionado : ""
     };
 
-    db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
+    return db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
       .then(() => {
         alert("✅ Usuário atualizado com sucesso.");
         limparFormulario();
@@ -97,8 +89,6 @@ function cadastrarUsuario() {
         console.error("Erro ao atualizar:", err.message);
         alert("Erro ao atualizar o usuário: " + err.message);
       });
-
-    return;
   }
 
   if (!senha) return alert("Informe a senha para novo usuário.");
@@ -106,6 +96,7 @@ function cadastrarUsuario() {
   auth.createUserWithEmailAndPassword(email, senha)
     .then(cred => {
       const uid = cred.user.uid;
+
       return db.collection("usuarios_banco").doc(uid).set({
         nome,
         email,
@@ -120,15 +111,15 @@ function cadastrarUsuario() {
         listarUsuarios();
         carregarGerentesChefes();
         carregarRMs();
-}).catch(err => {
-  cred.user.delete().then(() => {
-    console.error("❌ Falha ao gravar no Firestore:", err.message);
-    alert("❌ Erro ao salvar no banco. Cadastro cancelado.\nUsuário foi removido do sistema.");
-  }).catch(errDel => {
-    console.error("⚠️ Erro ao tentar deletar usuário do Auth:", errDel.message);
-    alert("Erro ao salvar no banco e não foi possível remover o usuário do Auth.");
-  });
-});
+      }).catch(err => {
+        console.error("Erro Firestore:", err.message);
+        cred.user.delete().then(() => {
+          alert("❌ Erro ao salvar no banco. Cadastro cancelado. Usuário removido.");
+        }).catch(errDel => {
+          console.error("Erro ao deletar do Auth:", errDel.message);
+          alert("Erro ao salvar no banco e falha ao remover do Auth.");
+        });
+      });
     })
     .catch(err => {
       console.error("Erro Auth:", err.message);
@@ -146,38 +137,13 @@ function listarUsuarios() {
         const u = doc.data();
         const tr = document.createElement("tr");
 
-        const tdNome = document.createElement("td");
-        tdNome.textContent = u.nome;
-
-        const tdEmail = document.createElement("td");
-        tdEmail.textContent = u.email;
-
-        const tdPerfil = document.createElement("td");
-        tdPerfil.textContent = u.perfil;
-
-        const tdAgencia = document.createElement("td");
-        tdAgencia.textContent = u.agenciaId || "-";
-
-        const tdAcoes = document.createElement("td");
-        const btn = document.createElement("button");
-        btn.textContent = "Editar";
-        btn.onclick = () => editarUsuario(
-          doc.id,
-          u.nome,
-          u.email,
-          u.perfil,
-          u.agenciaId || "",
-          u.gerenteChefeId || "",
-          u.rmResponsavelId || ""
-        );
-        tdAcoes.appendChild(btn);
-
-        tr.appendChild(tdNome);
-        tr.appendChild(tdEmail);
-        tr.appendChild(tdPerfil);
-        tr.appendChild(tdAgencia);
-        tr.appendChild(tdAcoes);
-
+        tr.innerHTML = `
+          <td>${u.nome}</td>
+          <td>${u.email}</td>
+          <td>${u.perfil}</td>
+          <td>${u.agenciaId || "-"}</td>
+          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}', '${u.rmResponsavelId || ""}')">Editar</button></td>
+        `;
         lista.appendChild(tr);
       });
     });
