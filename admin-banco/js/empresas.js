@@ -30,7 +30,7 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarEmpresas() {
-  db.collection("empresas").get().then(snapshot => {
+  db.collection("empresas").onSnapshot(snapshot => {
     let html = `
       <table>
         <thead>
@@ -49,16 +49,14 @@ function carregarEmpresas() {
       const empresa = doc.data();
       const empresaId = doc.id;
 
-      // Buscar os produtos dessa empresa
       const p = db.collection("produtos_empresa")
         .where("empresaId", "==", empresaId)
         .get()
         .then(prodSnap => {
           const statusMap = {};
-
           prodSnap.forEach(prodDoc => {
             const prod = prodDoc.data();
-            statusMap[prod.tipo] = prod.status;
+            statusMap[prod.ramo] = prod.status; // campo 'ramo' corrigido
           });
 
           html += `
@@ -71,7 +69,7 @@ function carregarEmpresas() {
                 const simbolo = s === "fechado" ? "🟢" : s === "recusado" ? "🔴" : "⚪️";
                 return `<td class="${classe}">${simbolo}</td>`;
               }).join("")}
-             <td><a class="btn" href="cotacoes.html?empresa=${encodeURIComponent(empresa.nome)}">Negociar</a></td>
+              <td><a class="btn" href="cotacoes.html?empresa=${encodeURIComponent(empresa.nome)}">Negociar</a></td>
             </tr>
           `;
         });
