@@ -120,12 +120,15 @@ function cadastrarUsuario() {
         listarUsuarios();
         carregarGerentesChefes();
         carregarRMs();
-      }).catch(err => {
-        cred.user.delete().then(() => {
-          console.error("Erro ao salvar no Firestore:", err.message);
-          alert("❌ Erro ao salvar no banco. Cadastro cancelado.");
-        });
-      });
+}).catch(err => {
+  cred.user.delete().then(() => {
+    console.error("❌ Falha ao gravar no Firestore:", err.message);
+    alert("❌ Erro ao salvar no banco. Cadastro cancelado.\nUsuário foi removido do sistema.");
+  }).catch(errDel => {
+    console.error("⚠️ Erro ao tentar deletar usuário do Auth:", errDel.message);
+    alert("Erro ao salvar no banco e não foi possível remover o usuário do Auth.");
+  });
+});
     })
     .catch(err => {
       console.error("Erro Auth:", err.message);
