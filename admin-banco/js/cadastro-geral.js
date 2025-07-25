@@ -47,22 +47,30 @@ function cadastrarUsuario() {
     return alert("Preencha todos os campos.");
   }
 
-  if (editandoUsuarioId) {
-    const atualizacao = {
-      nome,
-      perfil,
-      agenciaId,
-      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeId : ""
-    };
-    db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
-      .then(() => {
-        alert("Usuário atualizado com sucesso.");
-        limparFormulario();
-        listarUsuarios();
-      });
-    return;
-  }
+ if (editandoUsuarioId) {
+  const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
 
+  const atualizacao = {
+    nome,
+    perfil,
+    agenciaId,
+    gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+  };
+
+  db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
+    .then(() => {
+      alert("Usuário atualizado com sucesso.");
+      limparFormulario();
+      listarUsuarios();
+      carregarGerentesChefes(); // garante atualização da lista
+    })
+    .catch(err => {
+      console.error("Erro ao atualizar:", err);
+      alert("Erro ao atualizar o usuário.");
+    });
+
+  return;
+}
   if (!senha) return alert("Informe a senha para novo usuário.");
 
   auth.createUserWithEmailAndPassword(email, senha)
