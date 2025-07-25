@@ -9,6 +9,14 @@ auth.onAuthStateChanged(async user => {
     return;
   }
   usuarioAtual = user;
+
+  // NOVO TRECHO PARA PREENCHER EMPRESA AUTOMATICAMENTE
+  const urlParams = new URLSearchParams(window.location.search);
+  const empresaParam = urlParams.get("empresa");
+  if (empresaParam) {
+    document.getElementById("empresa").value = empresaParam;
+  }
+
   listarCotacoes();
 });
 
