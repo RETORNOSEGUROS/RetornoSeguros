@@ -11,12 +11,12 @@ auth.onAuthStateChanged(async (user) => {
   window.usuarioAtual = { ...dados, uid };
 
   carregarDados(dados);
+  prepararFormularioEdicao(dados, uid);
   carregarMinhasApolices(uid);
   carregarApolicesNaRetorno(uid);
   calcularMeusPontos(uid);
   carregarMinhasIndicacoes(uid);
   carregarApolicesIndicadas(uid);
-  prepararFormularioEdicao(dados, uid);
   carregarResgates(uid);
   prepararFormularioResgate(uid);
 });
@@ -30,7 +30,7 @@ function mostrarSecao(secao) {
   document.getElementById(`secao-${secao}`).classList.add("active");
 }
 
-// --- Dados Pessoais
+// --- DADOS
 function carregarDados(dados) {
   document.getElementById("dadosUsuario").innerHTML = `
     <p><strong>Nome:</strong> ${dados.nome}</p>
@@ -40,6 +40,7 @@ function carregarDados(dados) {
   `;
 }
 
+// --- EDITAR
 function prepararFormularioEdicao(dados, uid) {
   document.getElementById("novoNome").value = dados.nome || "";
   document.getElementById("novoEmail").value = dados.email || "";
@@ -64,7 +65,7 @@ function prepararFormularioEdicao(dados, uid) {
   });
 }
 
-// --- Minhas Apólices
+// --- MINHAS APÓLICES
 function carregarMinhasApolices(uid) {
   db.collection("apolices").where("usuarioId", "==", uid).get().then(snapshot => {
     const tbody = document.getElementById("tabelaApolices");
@@ -74,7 +75,7 @@ function carregarMinhasApolices(uid) {
       tbody.innerHTML += `
         <tr>
           <td>${a.tipo}</td>
-          <td>${a.seguradora}</td>
+          <td>${a.seguradora || "-"}</td>
           <td>R$ ${parseFloat(a.valorPago || 0).toFixed(2)}</td>
           <td>${a.dataRenovacao || ""}</td>
           <td>${a.pdfEnviado ? "✅" : "❌"}</td>
@@ -83,7 +84,7 @@ function carregarMinhasApolices(uid) {
   });
 }
 
-// --- Apólices Confirmadas (na Retorno)
+// --- APÓLICES NA RETORNO (2.5%)
 function carregarApolicesNaRetorno(uid) {
   db.collection("apolices").where("usuarioId", "==", uid).where("pdfEnviado", "==", true).get().then(snapshot => {
     const tbody = document.getElementById("tabelaRetorno");
@@ -95,7 +96,7 @@ function carregarApolicesNaRetorno(uid) {
       tbody.innerHTML += `
         <tr>
           <td>${data.tipo}</td>
-          <td>${data.seguradora}</td>
+          <td>${data.seguradora || "-"}</td>
           <td>R$ ${valor.toFixed(2)}</td>
           <td>${data.dataRenovacao || ""}</td>
           <td>${pontos.toFixed(2)}</td>
@@ -104,21 +105,21 @@ function carregarApolicesNaRetorno(uid) {
   });
 }
 
-// --- Minhas Indicações
+// --- MINHAS INDICAÇÕES (+10)
 function carregarMinhasIndicacoes(uid) {
   db.collection("usuarios").where("usuarioIndicadorId", "==", uid).get().then(snapshot => {
     const tbody = document.getElementById("tabelaIndicacoes");
     tbody.innerHTML = "";
     snapshot.forEach(doc => {
       const u = doc.data();
-      const nome = u.nome || "Sem nome";
+      const nome = u.nome || "Indicado";
       const data = new Date(u.dataCadastro || u.timestamp || Date.now()).toLocaleDateString();
       tbody.innerHTML += `<tr><td>${nome}</td><td>${data}</td><td>+10</td></tr>`;
     });
   });
 }
 
-// --- Apólices Indicadas (2%)
+// --- APÓLICES DOS INDICADOS (2%)
 async function carregarApolicesIndicadas(uid) {
   const indicados = await db.collection("usuarios").where("usuarioIndicadorId", "==", uid).get();
   const tbody = document.getElementById("tabelaApolicesIndicadas");
@@ -137,7 +138,7 @@ async function carregarApolicesIndicadas(uid) {
         <tr>
           <td>${nome}</td>
           <td>${data.tipo}</td>
-          <td>${data.seguradora}</td>
+          <td>${data.seguradora || "-"}</td>
           <td>R$ ${valor.toFixed(2)}</td>
           <td>${pontos.toFixed(2)}</td>
         </tr>`;
@@ -145,26 +146,21 @@ async function carregarApolicesIndicadas(uid) {
   }
 }
 
-// --- Pontuação total
+// --- PONTUAÇÃO TOTAL
 async function calcularMeusPontos(uid) {
   let total = 0;
 
   const minhas = await db.collection("apolices").where("usuarioId", "==", uid).where("pdfEnviado", "==", true).get();
-  minhas.forEach(doc => {
-    total += parseFloat(doc.data().valorPago || 0) * 0.025;
-  });
+  minhas.forEach(doc => total += parseFloat(doc.data().valorPago || 0) * 0.025);
 
   const indicados = await db.collection("usuarios").where("usuarioIndicadorId", "==", uid).get();
   total += indicados.size * 10;
 
   for (let doc of indicados.docs) {
     const apolices = await db.collection("apolices").where("usuarioId", "==", doc.id).where("pdfEnviado", "==", true).get();
-    apolices.forEach(a => {
-      total += parseFloat(a.data().valorPago || 0) * 0.02;
-    });
+    apolices.forEach(a => total += parseFloat(a.data().valorPago || 0) * 0.02);
   }
 
-  // Buscar valor já resgatado
   const resgates = await db.collection("resgates").where("usuarioId", "==", uid).get();
   let jaResgatado = 0;
   resgates.forEach(r => jaResgatado += parseFloat(r.data().valor || 0));
@@ -178,15 +174,14 @@ async function calcularMeusPontos(uid) {
   window.saldoDisponivel = saldo;
 }
 
-// --- Resgate
+// --- FORM DE RESGATE
 function prepararFormularioResgate(uid) {
   document.getElementById("formResgate").addEventListener("submit", async (e) => {
     e.preventDefault();
-
     const valor = parseFloat(document.getElementById("valorResgate").value);
     const pix = document.getElementById("chavePix").value.trim();
 
-    if (isNaN(valor) || valor < 20) return alert("Valor mínimo para resgate é R$20");
+    if (isNaN(valor) || valor < 20) return alert("Valor mínimo é R$20");
     if (valor > window.saldoDisponivel) return alert("Saldo insuficiente.");
     if (!pix) return alert("Informe sua chave Pix ou dados bancários.");
 
@@ -198,11 +193,67 @@ function prepararFormularioResgate(uid) {
       dataSolicitacao: new Date().toISOString()
     });
 
-    alert("Solicitação enviada! Em breve a equipe entrará em contato.");
+    alert("Solicitação enviada!");
     location.reload();
   });
 }
 
 function carregarResgates(uid) {
-  // Futuro: mostrar histórico de resgates se desejar
+  // opcional: histórico
 }
+
+// --- FORM COTAÇÃO
+document.getElementById("formCotacao").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const tipo = document.getElementById("tipoCotacao").value;
+  const detalhes = document.getElementById("detalhesCotacao").value;
+
+  if (!tipo) return alert("Selecione o tipo de seguro.");
+
+  await db.collection("cotacoes").add({
+    usuarioId: window.usuarioAtual.uid,
+    nome: window.usuarioAtual.nome || "",
+    email: window.usuarioAtual.email || "",
+    tipo,
+    detalhes,
+    dataSolicitacao: new Date().toISOString()
+  });
+
+  alert("Cotação enviada!");
+  document.getElementById("formCotacao").reset();
+});
+
+// --- FORM NOVA APÓLICE
+document.getElementById("formNovaApolice").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const tipo = document.getElementById("ramoApolice").value;
+  const vencimento = document.getElementById("dataRenovacao").value;
+  const valor = parseFloat(document.getElementById("valorPago").value);
+
+  if (!tipo || !vencimento || isNaN(valor)) return alert("Preencha todos os campos.");
+
+  await db.collection("apolices").add({
+    usuarioId: window.usuarioAtual.uid,
+    tipo,
+    valorPago: valor,
+    dataRenovacao: vencimento,
+    pdfEnviado: false,
+    cadastradaManualmente: true,
+    dataCadastro: new Date().toISOString()
+  });
+
+  await db.collection("usuarios").doc(window.usuarioAtual.uid).update({
+    pontosBonus: firebase.firestore.FieldValue.increment(50)
+  });
+
+  if (window.usuarioAtual.usuarioIndicadorId) {
+    await db.collection("usuarios").doc(window.usuarioAtual.usuarioIndicadorId).update({
+      pontosBonus: firebase.firestore.FieldValue.increment(25)
+    });
+  }
+
+  alert("Apólice cadastrada com sucesso!");
+  document.getElementById("formNovaApolice").reset();
+  carregarMinhasApolices(window.usuarioAtual.uid);
+});
