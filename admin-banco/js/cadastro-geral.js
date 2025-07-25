@@ -21,7 +21,7 @@ function toggleGerenteChefeSelect() {
 
 function carregarGerentesChefes() {
   const select = document.getElementById("gerenteChefeId");
-  select.innerHTML = '<option value="">Selecionar</option>'; // limpa e reinicia
+  select.innerHTML = '<option value="">Selecionar</option>';
 
   db.collection("usuarios_banco").where("perfil", "==", "gerente_chefe").get()
     .then(snapshot => {
@@ -62,11 +62,10 @@ function cadastrarUsuario() {
         listarUsuarios();
         carregarGerentesChefes();
       })
-.catch(err => {
-  console.error("Erro ao atualizar usuário:", err.message, err);
-  alert("Erro ao atualizar o usuário: " + err.message);
-});
-
+      .catch(err => {
+        console.error("Erro ao atualizar:", err.message);
+        alert("Erro ao atualizar o usuário: " + err.message);
+      });
 
     return;
   }
@@ -74,36 +73,28 @@ function cadastrarUsuario() {
   if (!senha) return alert("Informe a senha para novo usuário.");
 
   auth.createUserWithEmailAndPassword(email, senha)
-  .then(cred => {
-    const uid = cred.user.uid;
-
-    return db.collection("usuarios_banco").doc(uid).set({
-      nome,
-      email,
-      perfil,
-      agenciaId,
-      ativo: true,
-      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
-    }).then(() => {
-      alert("Usuário criado com sucesso!");
-      limparFormulario();
-      listarUsuarios();
-      carregarGerentesChefes();
-    }).catch(err => {
-      console.error("Erro Firestore:", err);
-      // ⚠️ Remove o usuário do Authentication se falhar no Firestore
-      cred.user.delete().then(() => {
-        alert("Erro ao salvar no banco. Cadastro cancelado.");
+    .then(cred => {
+      const uid = cred.user.uid;
+      return db.collection("usuarios_banco").doc(uid).set({
+        nome,
+        email,
+        perfil,
+        agenciaId,
+        ativo: true,
+        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+      }).then(() => {
+        alert("Usuário criado com sucesso!");
+        limparFormulario();
+        listarUsuarios();
+        carregarGerentesChefes();
+      }).catch(err => {
+        cred.user.delete();
+        console.error("Erro Firestore:", err.message);
+        alert("Erro ao salvar no banco. Cadastro cancelado: " + err.message);
       });
-    });
-  })
-  .catch(err => {
-    console.error("Erro Auth:", err);
-    alert("Erro ao cadastrar: " + err.message);
-  });
     })
     .catch(err => {
-      console.error("Erro Auth:", err);
+      console.error("Erro Auth:", err.message);
       alert("Erro ao cadastrar: " + err.message);
     });
 }
@@ -114,7 +105,6 @@ function listarUsuarios() {
 
   db.collection("usuarios_banco").orderBy("nome").get()
     .then(snapshot => {
-      lista.innerHTML = "";
       snapshot.forEach(doc => {
         const u = doc.data();
         const tr = document.createElement("tr");
@@ -152,6 +142,10 @@ function listarUsuarios() {
 
         lista.appendChild(tr);
       });
+    })
+    .catch(err => {
+      console.error("Erro ao listar usuários:", err.message);
+      alert("Erro ao listar usuários: " + err.message);
     });
 }
 
@@ -164,11 +158,11 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   document.getElementById("perfil").value = perfil;
   document.getElementById("agenciaId").value = agenciaId;
   toggleGerenteChefeSelect();
-  if (perfil === "rm" || perfil === "assistente") {
-    setTimeout(() => {
+  setTimeout(() => {
+    if (perfil === "rm" || perfil === "assistente") {
       document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
-    }, 100); // aguarda carregamento
-  }
+    }
+  }, 150);
   document.querySelector("button").textContent = "Atualizar";
 }
 
