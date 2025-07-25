@@ -71,7 +71,7 @@ function carregarEmpresas() {
                 const simbolo = s === "fechado" ? "🟢" : s === "recusado" ? "🔴" : "⚪️";
                 return `<td class="${classe}">${simbolo}</td>`;
               }).join("")}
-              <td><a class="btn" href="cotacoes.html?empresa=${empresaId}">Negociar</a></td>
+             <td><a class="btn" href="cotacoes.html?empresa=${encodeURIComponent(empresa.nome)}">Negociar</a></td>
             </tr>
           `;
         });
