@@ -43,22 +43,26 @@ function cadastrarUsuario() {
   // Novo cadastro
   if (!senha) return alert("Informe a senha para novo usuário.");
 
-  auth.createUserWithEmailAndPassword(email, senha)
-    .then(cred => {
-      const uid = cred.user.uid;
-      return db.collection("usuarios_banco").doc(uid).set({
-        nome, email, perfil, agenciaId, ativo: true, gerenteChefeId: ""
-      });
-    })
-    .then(() => {
+auth.createUserWithEmailAndPassword(email, senha)
+  .then(cred => {
+    const uid = cred.user.uid;
+    return db.collection("usuarios_banco").doc(uid).set({
+      nome, email, perfil, agenciaId, ativo: true, gerenteChefeId: ""
+    }).then(() => {
       alert("Usuário criado com sucesso!");
       limparFormulario();
       listarUsuarios();
-    })
-    .catch(err => {
-      console.error("Erro:", err);
-      alert("Erro ao cadastrar: " + err.message);
+    }).catch(err => {
+      // Se falhar ao gravar no Firestore, remove o usuário do Auth
+      cred.user.delete();
+      alert("Erro ao salvar no banco. Cadastro cancelado.");
+      console.error("Erro Firestore:", err);
     });
+  })
+  .catch(err => {
+    console.error("Erro Auth:", err);
+    alert("Erro ao cadastrar: " + err.message);
+  });
 }
 
 function listarUsuarios() {
