@@ -21,13 +21,15 @@ function toggleGerenteChefeSelect() {
 
 function carregarGerentesChefes() {
   const select = document.getElementById("gerenteChefeId");
+  select.innerHTML = '<option value="">Selecionar</option>'; // limpa e reinicia
+
   db.collection("usuarios_banco").where("perfil", "==", "gerente_chefe").get()
     .then(snapshot => {
       snapshot.forEach(doc => {
         const u = doc.data();
         const option = document.createElement("option");
         option.value = doc.id;
-        option.textContent = `${u.nome} (${u.agenciaId})`;
+        option.textContent = `${u.nome} (${u.agenciaId || "-"})`;
         select.appendChild(option);
       });
     });
@@ -45,10 +47,11 @@ function cadastrarUsuario() {
     return alert("Preencha todos os campos.");
   }
 
-  // Se estiver editando
   if (editandoUsuarioId) {
     const atualizacao = {
-      nome, perfil, agenciaId,
+      nome,
+      perfil,
+      agenciaId,
       gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeId : ""
     };
     db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
@@ -76,56 +79,54 @@ function cadastrarUsuario() {
         alert("Usuário criado com sucesso!");
         limparFormulario();
         listarUsuarios();
+        carregarGerentesChefes(); // atualiza lista após cadastro
       }).catch(err => {
         cred.user.delete();
-        console.error("Erro Firestore:", err);
         alert("Erro ao salvar no banco. Cadastro cancelado.");
+        console.error("Erro Firestore:", err);
       });
     })
     .catch(err => {
-      console.error("Erro Auth:", err);
       alert("Erro ao cadastrar: " + err.message);
+      console.error("Erro Auth:", err);
     });
 }
 
 function listarUsuarios() {
   const lista = document.getElementById("listaUsuarios");
-  lista.innerHTML = "Carregando...";
+  lista.innerHTML = "";
 
   db.collection("usuarios_banco").orderBy("nome").get()
     .then(snapshot => {
-      lista.innerHTML = "";
       snapshot.forEach(doc => {
         const u = doc.data();
         const tr = document.createElement("tr");
-const tr = document.createElement("tr");
 
-const tdNome = document.createElement("td");
-tdNome.textContent = u.nome;
+        const tdNome = document.createElement("td");
+        tdNome.textContent = u.nome;
 
-const tdEmail = document.createElement("td");
-tdEmail.textContent = u.email;
+        const tdEmail = document.createElement("td");
+        tdEmail.textContent = u.email;
 
-const tdPerfil = document.createElement("td");
-tdPerfil.textContent = u.perfil;
+        const tdPerfil = document.createElement("td");
+        tdPerfil.textContent = u.perfil;
 
-const tdAgencia = document.createElement("td");
-tdAgencia.textContent = u.agenciaId || "-";
+        const tdAgencia = document.createElement("td");
+        tdAgencia.textContent = u.agenciaId || "-";
 
-const tdAcoes = document.createElement("td");
-const btn = document.createElement("button");
-btn.textContent = "Editar";
-btn.onclick = () => editarUsuario(doc.id, u.nome, u.email, u.perfil, u.agenciaId || "", u.gerenteChefeId || "");
-tdAcoes.appendChild(btn);
+        const tdAcoes = document.createElement("td");
+        const btn = document.createElement("button");
+        btn.textContent = "Editar";
+        btn.onclick = () => editarUsuario(doc.id, u.nome, u.email, u.perfil, u.agenciaId || "", u.gerenteChefeId || "");
+        tdAcoes.appendChild(btn);
 
-tr.appendChild(tdNome);
-tr.appendChild(tdEmail);
-tr.appendChild(tdPerfil);
-tr.appendChild(tdAgencia);
-tr.appendChild(tdAcoes);
+        tr.appendChild(tdNome);
+        tr.appendChild(tdEmail);
+        tr.appendChild(tdPerfil);
+        tr.appendChild(tdAgencia);
+        tr.appendChild(tdAcoes);
 
-lista.appendChild(tr);
-
+        lista.appendChild(tr);
       });
     });
 }
@@ -152,4 +153,8 @@ function limparFormulario() {
   document.getElementById("email").disabled = false;
   document.getElementById("senha").value = "";
   document.getElementById("perfil").value = "";
-  document.getElementById("agenciaId").va
+  document.getElementById("agenciaId").value = "";
+  document.getElementById("gerenteChefeId").value = "";
+  document.getElementById("gerenteChefeBox").style.display = "none";
+  document.querySelector("button").textContent = "Cadastrar";
+}
