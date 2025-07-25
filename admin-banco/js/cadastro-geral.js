@@ -10,13 +10,25 @@ auth.onAuthStateChanged(user => {
   } else {
     listarUsuarios();
     carregarGerentesChefes();
+    carregarRMs();
   }
 });
 
-function toggleGerenteChefeSelect() {
+function toggleCamposVinculo() {
   const perfil = document.getElementById("perfil").value;
-  const box = document.getElementById("gerenteChefeBox");
-  box.style.display = (perfil === "rm" || perfil === "assistente") ? "block" : "none";
+  const gerenteBox = document.getElementById("gerenteChefeBox");
+  const rmBox = document.getElementById("rmBox");
+
+  if (perfil === "rm") {
+    gerenteBox.style.display = "block";
+    rmBox.style.display = "none";
+  } else if (perfil === "assistente") {
+    gerenteBox.style.display = "none"; // pode deixar true se quiser manter ambos
+    rmBox.style.display = "block";
+  } else {
+    gerenteBox.style.display = "none";
+    rmBox.style.display = "none";
+  }
 }
 
 function carregarGerentesChefes() {
@@ -35,6 +47,22 @@ function carregarGerentesChefes() {
     });
 }
 
+function carregarRMs() {
+  const select = document.getElementById("rmResponsavelId");
+  select.innerHTML = '<option value="">Selecionar</option>';
+
+  db.collection("usuarios_banco").where("perfil", "==", "rm").get()
+    .then(snapshot => {
+      snapshot.forEach(doc => {
+        const u = doc.data();
+        const option = document.createElement("option");
+        option.value = doc.id;
+        option.textContent = `${u.nome} (${u.agenciaId || "-"})`;
+        select.appendChild(option);
+      });
+    });
+}
+
 function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
   const email = document.getElementById("email").value.trim();
@@ -42,6 +70,7 @@ function cadastrarUsuario() {
   const perfil = document.getElementById("perfil").value;
   const agenciaId = document.getElementById("agenciaId").value.trim();
   const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
+  const rmResponsavelIdSelecionado = document.getElementById("rmResponsavelId").value;
 
   if (!nome || !email || !perfil || !agenciaId) {
     return alert("Preencha todos os campos.");
@@ -52,15 +81,17 @@ function cadastrarUsuario() {
       nome,
       perfil,
       agenciaId,
-      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+      gerenteChefeId: perfil === "rm" ? gerenteChefeIdSelecionado : "",
+      rmResponsavelId: perfil === "assistente" ? rmResponsavelIdSelecionado : ""
     };
 
     db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
       .then(() => {
-        alert("Usuário atualizado com sucesso.");
+        alert("✅ Usuário atualizado com sucesso.");
         limparFormulario();
         listarUsuarios();
         carregarGerentesChefes();
+        carregarRMs();
       })
       .catch(err => {
         console.error("Erro ao atualizar:", err.message);
@@ -81,21 +112,24 @@ function cadastrarUsuario() {
         perfil,
         agenciaId,
         ativo: true,
-        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+        gerenteChefeId: perfil === "rm" ? gerenteChefeIdSelecionado : "",
+        rmResponsavelId: perfil === "assistente" ? rmResponsavelIdSelecionado : ""
       }).then(() => {
-        alert("Usuário criado com sucesso!");
+        alert("✅ Usuário criado com sucesso!");
         limparFormulario();
         listarUsuarios();
         carregarGerentesChefes();
+        carregarRMs();
       }).catch(err => {
-        cred.user.delete();
-        console.error("Erro Firestore:", err.message);
-        alert("Erro ao salvar no banco. Cadastro cancelado: " + err.message);
+        cred.user.delete().then(() => {
+          console.error("Erro ao salvar no Firestore:", err.message);
+          alert("❌ Erro ao salvar no banco. Cadastro cancelado.");
+        });
       });
     })
     .catch(err => {
       console.error("Erro Auth:", err.message);
-      alert("Erro ao cadastrar: " + err.message);
+      alert("❌ Erro ao cadastrar: " + err.message);
     });
 }
 
@@ -130,7 +164,8 @@ function listarUsuarios() {
           u.email,
           u.perfil,
           u.agenciaId || "",
-          u.gerenteChefeId || ""
+          u.gerenteChefeId || "",
+          u.rmResponsavelId || ""
         );
         tdAcoes.appendChild(btn);
 
@@ -142,14 +177,10 @@ function listarUsuarios() {
 
         lista.appendChild(tr);
       });
-    })
-    .catch(err => {
-      console.error("Erro ao listar usuários:", err.message);
-      alert("Erro ao listar usuários: " + err.message);
     });
 }
 
-function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
+function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId, rmResponsavelId) {
   editandoUsuarioId = id;
   document.getElementById("nome").value = nome;
   document.getElementById("email").value = email;
@@ -157,11 +188,10 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   document.getElementById("senha").value = "";
   document.getElementById("perfil").value = perfil;
   document.getElementById("agenciaId").value = agenciaId;
-  toggleGerenteChefeSelect();
+  toggleCamposVinculo();
   setTimeout(() => {
-    if (perfil === "rm" || perfil === "assistente") {
-      document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
-    }
+    document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
+    document.getElementById("rmResponsavelId").value = rmResponsavelId || "";
   }, 150);
   document.querySelector("button").textContent = "Atualizar";
 }
@@ -175,6 +205,8 @@ function limparFormulario() {
   document.getElementById("perfil").value = "";
   document.getElementById("agenciaId").value = "";
   document.getElementById("gerenteChefeId").value = "";
+  document.getElementById("rmResponsavelId").value = "";
   document.getElementById("gerenteChefeBox").style.display = "none";
+  document.getElementById("rmBox").style.display = "none";
   document.querySelector("button").textContent = "Cadastrar";
 }
