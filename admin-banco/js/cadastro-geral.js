@@ -41,36 +41,35 @@ function cadastrarUsuario() {
   const senha = document.getElementById("senha").value.trim();
   const perfil = document.getElementById("perfil").value;
   const agenciaId = document.getElementById("agenciaId").value.trim();
-  const gerenteChefeId = document.getElementById("gerenteChefeId").value;
+  const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
 
   if (!nome || !email || !perfil || !agenciaId) {
     return alert("Preencha todos os campos.");
   }
 
- if (editandoUsuarioId) {
-  const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
+  if (editandoUsuarioId) {
+    const atualizacao = {
+      nome,
+      perfil,
+      agenciaId,
+      gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+    };
 
-  const atualizacao = {
-    nome,
-    perfil,
-    agenciaId,
-    gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
-  };
+    db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
+      .then(() => {
+        alert("Usuário atualizado com sucesso.");
+        limparFormulario();
+        listarUsuarios();
+        carregarGerentesChefes();
+      })
+      .catch(err => {
+        console.error("Erro ao atualizar usuário:", err);
+        alert("Erro ao atualizar o usuário.");
+      });
 
-  db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
-    .then(() => {
-      alert("Usuário atualizado com sucesso.");
-      limparFormulario();
-      listarUsuarios();
-      carregarGerentesChefes(); // garante atualização da lista
-    })
-    .catch(err => {
-      console.error("Erro ao atualizar:", err);
-      alert("Erro ao atualizar o usuário.");
-    });
+    return;
+  }
 
-  return;
-}
   if (!senha) return alert("Informe a senha para novo usuário.");
 
   auth.createUserWithEmailAndPassword(email, senha)
@@ -82,21 +81,21 @@ function cadastrarUsuario() {
         perfil,
         agenciaId,
         ativo: true,
-        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeId : ""
+        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
       }).then(() => {
         alert("Usuário criado com sucesso!");
         limparFormulario();
         listarUsuarios();
-        carregarGerentesChefes(); // atualiza lista após cadastro
+        carregarGerentesChefes();
       }).catch(err => {
         cred.user.delete();
+        console.error("Erro ao salvar no Firestore:", err);
         alert("Erro ao salvar no banco. Cadastro cancelado.");
-        console.error("Erro Firestore:", err);
       });
     })
     .catch(err => {
-      alert("Erro ao cadastrar: " + err.message);
       console.error("Erro Auth:", err);
+      alert("Erro ao cadastrar: " + err.message);
     });
 }
 
@@ -106,6 +105,7 @@ function listarUsuarios() {
 
   db.collection("usuarios_banco").orderBy("nome").get()
     .then(snapshot => {
+      lista.innerHTML = "";
       snapshot.forEach(doc => {
         const u = doc.data();
         const tr = document.createElement("tr");
@@ -125,7 +125,14 @@ function listarUsuarios() {
         const tdAcoes = document.createElement("td");
         const btn = document.createElement("button");
         btn.textContent = "Editar";
-        btn.onclick = () => editarUsuario(doc.id, u.nome, u.email, u.perfil, u.agenciaId || "", u.gerenteChefeId || "");
+        btn.onclick = () => editarUsuario(
+          doc.id,
+          u.nome,
+          u.email,
+          u.perfil,
+          u.agenciaId || "",
+          u.gerenteChefeId || ""
+        );
         tdAcoes.appendChild(btn);
 
         tr.appendChild(tdNome);
@@ -149,7 +156,9 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   document.getElementById("agenciaId").value = agenciaId;
   toggleGerenteChefeSelect();
   if (perfil === "rm" || perfil === "assistente") {
-    document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
+    setTimeout(() => {
+      document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
+    }, 100); // aguarda carregamento
   }
   document.querySelector("button").textContent = "Atualizar";
 }
