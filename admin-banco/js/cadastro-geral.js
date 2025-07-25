@@ -62,10 +62,11 @@ function cadastrarUsuario() {
         listarUsuarios();
         carregarGerentesChefes();
       })
-      .catch(err => {
-        console.error("Erro ao atualizar usuário:", err);
-        alert("Erro ao atualizar o usuário.");
-      });
+.catch(err => {
+  console.error("Erro ao atualizar usuário:", err.message, err);
+  alert("Erro ao atualizar o usuário: " + err.message);
+});
+
 
     return;
   }
