@@ -16,14 +16,12 @@ auth.onAuthStateChanged(user => {
 function toggleCamposVinculo() {
   const perfil = document.getElementById("perfil").value;
   const gerenteBox = document.getElementById("gerenteChefeBox");
-
   gerenteBox.style.display = (perfil === "rm" || perfil === "assistente") ? "block" : "none";
 }
 
 function carregarGerentesChefes() {
   const select = document.getElementById("gerenteChefeId");
   select.innerHTML = '<option value="">Selecionar</option>';
-
   db.collection("usuarios_banco").where("perfil", "==", "gerente_chefe").get()
     .then(snapshot => {
       snapshot.forEach(doc => {
@@ -74,7 +72,6 @@ function cadastrarUsuario() {
   auth.createUserWithEmailAndPassword(email, senha)
     .then(cred => {
       const uid = cred.user.uid;
-
       return db.collection("usuarios_banco").doc(uid).set({
         nome,
         email,
@@ -113,13 +110,37 @@ function listarUsuarios() {
         const u = doc.data();
         const tr = document.createElement("tr");
 
-        tr.innerHTML = `
-          <td>${u.nome}</td>
-          <td>${u.email}</td>
-          <td>${u.perfil}</td>
-          <td>${u.agenciaId || "-"}</td>
-          <td><button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button></td>
-        `;
+        const tdNome = document.createElement("td");
+        tdNome.textContent = u.nome;
+
+        const tdEmail = document.createElement("td");
+        tdEmail.textContent = u.email;
+
+        const tdPerfil = document.createElement("td");
+        tdPerfil.textContent = u.perfil;
+
+        const tdAgencia = document.createElement("td");
+        tdAgencia.textContent = u.agenciaId || "-";
+
+        const tdAcoes = document.createElement("td");
+        const btnEditar = document.createElement("button");
+        btnEditar.textContent = "Editar";
+        btnEditar.onclick = () => editarUsuario(
+          doc.id,
+          u.nome,
+          u.email,
+          u.perfil,
+          u.agenciaId || "",
+          u.gerenteChefeId || ""
+        );
+        tdAcoes.appendChild(btnEditar);
+
+        tr.appendChild(tdNome);
+        tr.appendChild(tdEmail);
+        tr.appendChild(tdPerfil);
+        tr.appendChild(tdAgencia);
+        tr.appendChild(tdAcoes);
+
         lista.appendChild(tr);
       });
     });
