@@ -23,17 +23,12 @@ function cadastrarUsuario() {
     return alert("Preencha todos os campos.");
   }
 
-  // 🔁 Se estiver editando
+  // Se estiver editando
   if (editandoUsuarioId) {
     const atualizacao = { nome, perfil, agenciaId };
     db.collection("usuarios_banco").doc(editandoUsuarioId).update(atualizacao)
       .then(() => {
-        if (senha) {
-          // Redefinir senha: o admin deverá fazer via painel Authentication ou outra ferramenta
-          alert("Dados atualizados. Redefina a senha manualmente via painel se necessário.");
-        } else {
-          alert("Usuário atualizado com sucesso.");
-        }
+        alert("Usuário atualizado com sucesso.");
         limparFormulario();
         listarUsuarios();
       });
@@ -43,26 +38,33 @@ function cadastrarUsuario() {
   // Novo cadastro
   if (!senha) return alert("Informe a senha para novo usuário.");
 
-auth.createUserWithEmailAndPassword(email, senha)
-  .then(cred => {
-    const uid = cred.user.uid;
-    return db.collection("usuarios_banco").doc(uid).set({
-      nome, email, perfil, agenciaId, ativo: true, gerenteChefeId: ""
-    }).then(() => {
-      alert("Usuário criado com sucesso!");
-      limparFormulario();
-      listarUsuarios();
-    }).catch(err => {
-      // Se falhar ao gravar no Firestore, remove o usuário do Auth
-      cred.user.delete();
-      alert("Erro ao salvar no banco. Cadastro cancelado.");
-      console.error("Erro Firestore:", err);
+  auth.createUserWithEmailAndPassword(email, senha)
+    .then(cred => {
+      const uid = cred.user.uid;
+
+      return db.collection("usuarios_banco").doc(uid).set({
+        nome,
+        email,
+        perfil,
+        agenciaId,
+        ativo: true,
+        gerenteChefeId: ""
+      }).then(() => {
+        alert("Usuário criado com sucesso!");
+        limparFormulario();
+        listarUsuarios();
+      }).catch(err => {
+        console.error("Erro ao salvar no Firestore:", err);
+        // Se erro no Firestore, excluir o usuário do Auth
+        cred.user.delete().then(() => {
+          alert("Erro ao salvar no banco. Cadastro cancelado.");
+        });
+      });
+    })
+    .catch(err => {
+      console.error("Erro no Auth:", err);
+      alert("Erro ao cadastrar: " + err.message);
     });
-  })
-  .catch(err => {
-    console.error("Erro Auth:", err);
-    alert("Erro ao cadastrar: " + err.message);
-  });
 }
 
 function listarUsuarios() {
@@ -91,7 +93,7 @@ function editarUsuario(id, nome, email, perfil, agenciaId) {
   editandoUsuarioId = id;
   document.getElementById("nome").value = nome;
   document.getElementById("email").value = email;
-  document.getElementById("email").disabled = true; // email não pode ser alterado
+  document.getElementById("email").disabled = true;
   document.getElementById("senha").value = "";
   document.getElementById("perfil").value = perfil;
   document.getElementById("agenciaId").value = agenciaId;
