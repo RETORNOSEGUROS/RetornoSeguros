@@ -4,11 +4,21 @@ const db = firebase.firestore();
 
 function carregarRMs() {
   const selectRM = document.getElementById("rm");
+
   db.collection("usuarios_banco")
     .where("perfil", "==", "rm")
     .orderBy("nome")
     .get()
     .then(snapshot => {
+      if (snapshot.empty) {
+        console.warn("Nenhum RM encontrado.");
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Nenhum RM disponível";
+        selectRM.appendChild(opt);
+        return;
+      }
+
       snapshot.forEach(doc => {
         const dados = doc.data();
         const option = document.createElement("option");
@@ -19,6 +29,7 @@ function carregarRMs() {
     })
     .catch(error => {
       console.error("Erro ao carregar RMs:", error);
+      alert("Erro ao carregar lista de RMs.");
     });
 }
 
@@ -60,4 +71,4 @@ function salvarEmpresa() {
   });
 }
 
-window.onload = carregarRMs;
+window.addEventListener("DOMContentLoaded", carregarRMs);
