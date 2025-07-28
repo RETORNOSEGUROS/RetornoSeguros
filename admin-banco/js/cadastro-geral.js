@@ -110,36 +110,16 @@ function listarUsuarios() {
         const u = doc.data();
         const tr = document.createElement("tr");
 
-        const tdNome = document.createElement("td");
-        tdNome.textContent = u.nome;
-
-        const tdEmail = document.createElement("td");
-        tdEmail.textContent = u.email;
-
-        const tdPerfil = document.createElement("td");
-        tdPerfil.textContent = u.perfil;
-
-        const tdAgencia = document.createElement("td");
-        tdAgencia.textContent = u.agenciaId || "-";
-
-        const tdAcoes = document.createElement("td");
-        const btnEditar = document.createElement("button");
-        btnEditar.textContent = "Editar";
-        btnEditar.onclick = () => editarUsuario(
-          doc.id,
-          u.nome,
-          u.email,
-          u.perfil,
-          u.agenciaId || "",
-          u.gerenteChefeId || ""
-        );
-        tdAcoes.appendChild(btnEditar);
-
-        tr.appendChild(tdNome);
-        tr.appendChild(tdEmail);
-        tr.appendChild(tdPerfil);
-        tr.appendChild(tdAgencia);
-        tr.appendChild(tdAcoes);
+        tr.innerHTML = `
+          <td>${u.nome}</td>
+          <td>${u.email}</td>
+          <td>${u.perfil}</td>
+          <td>${u.agenciaId || "-"}</td>
+          <td>
+            <button onclick="editarUsuario('${doc.id}', '${u.nome}', '${u.email}', '${u.perfil}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button>
+            <button onclick="excluirUsuario('${doc.id}', '${u.email}')">🗑 Excluir</button>
+          </td>
+        `;
 
         lista.appendChild(tr);
       });
@@ -159,6 +139,20 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
     document.getElementById("gerenteChefeId").value = gerenteChefeId || "";
   }, 150);
   document.querySelector("button").textContent = "Atualizar";
+}
+
+function excluirUsuario(usuarioId, email) {
+  if (!confirm(`Deseja mesmo excluir o usuário ${email}?`)) return;
+
+  db.collection("usuarios_banco").doc(usuarioId).delete()
+    .then(() => {
+      alert("Usuário excluído com sucesso.");
+      listarUsuarios();
+    })
+    .catch(err => {
+      console.error("Erro ao excluir:", err.message);
+      alert("Erro ao excluir: " + err.message);
+    });
 }
 
 function limparFormulario() {
