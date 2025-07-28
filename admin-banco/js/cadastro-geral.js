@@ -1,6 +1,7 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const functions = firebase.app().functions('southamerica-east1'); // substitua pela sua região se necessário
 
 let editandoUsuarioId = null;
 
@@ -42,7 +43,7 @@ function cadastrarUsuario() {
   const agenciaId = document.getElementById("agenciaId").value.trim();
   const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
 
-  if (!nome || !email || !perfil || !agenciaId) {
+  if (!nome || !email || !senha || !perfil || !agenciaId) {
     return alert("Preencha todos os campos.");
   }
 
@@ -67,37 +68,23 @@ function cadastrarUsuario() {
       });
   }
 
-  if (!senha) return alert("Informe a senha para novo usuário.");
-
-  auth.createUserWithEmailAndPassword(email, senha)
-    .then(cred => {
-      const uid = cred.user.uid;
-      return db.collection("usuarios_banco").doc(uid).set({
-        nome,
-        email,
-        perfil,
-        agenciaId,
-        ativo: true,
-        gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
-      }).then(() => {
-        alert("✅ Usuário criado com sucesso!");
-        limparFormulario();
-        listarUsuarios();
-        carregarGerentesChefes();
-      }).catch(err => {
-        console.error("Erro Firestore:", err.message);
-        cred.user.delete().then(() => {
-          alert("❌ Erro ao salvar no banco. Cadastro cancelado. Usuário removido.");
-        }).catch(errDel => {
-          console.error("Erro ao deletar do Auth:", errDel.message);
-          alert("Erro ao salvar no banco e falha ao remover do Auth.");
-        });
-      });
-    })
-    .catch(err => {
-      console.error("Erro Auth:", err.message);
-      alert("❌ Erro ao cadastrar: " + err.message);
-    });
+  // 🔥 CHAMANDO A CLOUD FUNCTION
+  functions.httpsCallable("criarUsuarioBanco")({
+    nome,
+    email,
+    senha,
+    perfil,
+    agenciaId,
+    gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
+  }).then(result => {
+    alert("✅ Usuário criado com sucesso!");
+    limparFormulario();
+    listarUsuarios();
+    carregarGerentesChefes();
+  }).catch(err => {
+    console.error("Erro ao criar via função:", err.message);
+    alert("❌ Erro: " + err.message);
+  });
 }
 
 function listarUsuarios() {
