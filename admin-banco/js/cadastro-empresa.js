@@ -7,9 +7,11 @@ function salvarEmpresa() {
   const cnpj = document.getElementById("cnpj").value.trim();
   const cidade = document.getElementById("cidade").value.trim();
   const estado = document.getElementById("estado").value.trim();
+  const agencia = document.getElementById("agencia").value.trim();
+  const rm = document.getElementById("rm").value.trim();
 
-  if (!nome) {
-    alert("Informe o nome da empresa.");
+  if (!nome || !cidade || !estado || !agencia || !rm) {
+    alert("Preencha todos os campos obrigatórios.");
     return;
   }
 
@@ -21,6 +23,8 @@ function salvarEmpresa() {
       cnpj,
       cidade,
       estado,
+      agencia,
+      rm,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     };
 
