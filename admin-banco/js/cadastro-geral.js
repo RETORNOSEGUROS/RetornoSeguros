@@ -1,7 +1,6 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
-const functions = firebase.app().functions('southamerica-east1'); // substitua pela sua região se necessário
 
 let editandoUsuarioId = null;
 
@@ -38,13 +37,13 @@ function carregarGerentesChefes() {
 function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
   const email = document.getElementById("email").value.trim();
-  const senha = document.getElementById("senha").value.trim();
+  const senha = document.getElementById("senha").value.trim(); // campo visual, mas não usado
   const perfil = document.getElementById("perfil").value;
   const agenciaId = document.getElementById("agenciaId").value.trim();
   const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
 
-  if (!nome || !email || !senha || !perfil || !agenciaId) {
-    return alert("Preencha todos os campos.");
+  if (!nome || !email || !perfil || !agenciaId) {
+    return alert("Preencha todos os campos obrigatórios.");
   }
 
   if (editandoUsuarioId) {
@@ -68,22 +67,25 @@ function cadastrarUsuario() {
       });
   }
 
-  // 🔥 CHAMANDO A CLOUD FUNCTION
-  functions.httpsCallable("criarUsuarioBanco")({
+  // ✅ Cadastrar apenas no Firestore (sem Auth, sem logout)
+  const novoId = db.collection("usuarios_banco").doc().id;
+  db.collection("usuarios_banco").doc(novoId).set({
     nome,
     email,
-    senha,
     perfil,
     agenciaId,
+    ativo: true,
     gerenteChefeId: (perfil === "rm" || perfil === "assistente") ? gerenteChefeIdSelecionado : ""
-  }).then(result => {
-    alert("✅ Usuário criado com sucesso!");
+  })
+  .then(() => {
+    alert("✅ Usuário cadastrado com sucesso!");
     limparFormulario();
     listarUsuarios();
     carregarGerentesChefes();
-  }).catch(err => {
-    console.error("Erro ao criar via função:", err.message);
-    alert("❌ Erro: " + err.message);
+  })
+  .catch(err => {
+    console.error("Erro ao salvar:", err.message);
+    alert("❌ Erro ao salvar no banco: " + err.message);
   });
 }
 
