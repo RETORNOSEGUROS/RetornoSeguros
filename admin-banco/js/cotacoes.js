@@ -103,20 +103,17 @@ function enviarCotacao() {
 
   if (!usuarioAtual) {
     alert("Usuário não autenticado corretamente.");
-    console.log("❌ usuarioAtual null");
     return;
   }
 
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
-    console.log("❌ Campos obrigatórios vazios");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
     alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
-    console.log("❌ Empresa não localizada no cache");
     return;
   }
 
@@ -144,6 +141,26 @@ function enviarCotacao() {
         }]
       : []
   };
+
+  db.collection("cotacoes-gerentes").add(novaCotacao)
+    .then(() => {
+      alert("✅ Cotação cadastrada com sucesso!");
+
+      // Limpar formulário
+      document.getElementById("empresa").value = "";
+      document.getElementById("ramo").value = "";
+      document.getElementById("valorEstimado").value = "";
+      document.getElementById("observacoes").value = "";
+      document.getElementById("info-cnpj").textContent = "";
+      document.getElementById("info-rm").textContent = "";
+
+      carregarCotacoes(); // Atualiza lista sem reload
+    })
+    .catch(err => {
+      console.error("🔥 Erro ao salvar cotação:", err);
+      alert("Erro ao criar cotação.");
+    });
+}
 
   console.log("📦 Objeto da cotação:", novaCotacao);
 
