@@ -22,7 +22,7 @@ function carregarRMs() {
         const dados = doc.data();
         const option = document.createElement("option");
         option.value = dados.nome;
-        option.textContent = `${dados.nome} (${dados.agencia || "sem agência"})`;
+        option.textContent = `${dados.nome} (${dados.agenciaId || "sem agência"})`;
         selectRM.appendChild(option);
       });
     })
