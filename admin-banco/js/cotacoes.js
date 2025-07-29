@@ -1,3 +1,4 @@
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -67,12 +68,22 @@ function enviarCotacao() {
   const valor = parseFloat(document.getElementById("valorEstimado").value || 0);
   const observacoes = document.getElementById("observacoes").value.trim();
 
+  if (!usuarioAtual) {
+    alert("Usuário não autenticado corretamente.");
+    return;
+  }
+
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
+  if (!empresa) {
+    alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
+    return;
+  }
+
   const novaCotacao = {
     empresaId,
     empresaNome: empresa?.nome || "",
@@ -95,6 +106,8 @@ function enviarCotacao() {
         }]
       : []
   };
+
+  console.log("🟡 Criando cotação com dados:", novaCotacao);
 
   db.collection("cotacoes-gerentes").add(novaCotacao)
     .then(() => {
