@@ -2,81 +2,78 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-const cotacaoId = new URLSearchParams(window.location.search).get("id");
-let isAdmin = false;
+let usuarioAtual = null;
+let cotacaoId = null;
+let cotacaoRef = null;
+let cotacaoData = null;
 
 auth.onAuthStateChanged(async user => {
-  if (!user) return window.location.href = "login.html";
+  if (!user) return (window.location.href = "login.html");
+  usuarioAtual = user;
 
-  const email = user.email;
-  isAdmin = email === "patrick@retornoseguros.com.br";
-
-  const cotRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
-  const cotDoc = await cotRef.get();
-
-  if (!cotDoc.exists) {
-    document.getElementById("infoCotacao").innerHTML = "<p>Cotação não encontrada.</p>";
+  const params = new URLSearchParams(window.location.search);
+  cotacaoId = params.get("id");
+  if (!cotacaoId) {
+    alert("ID de cotação não informado.");
     return;
   }
 
-  const cot = cotDoc.data();
-  document.getElementById("infoCotacao").innerHTML = `
-    <strong>${cot.empresa}</strong> - ${cot.ramo}<br>
-    Status: <b>${cot.status}</b><br>
-    Valor: R$ ${cot.valor || "-"}<br>
-    Vigência Final: ${cot.vigenciaFinal ? new Date(cot.vigenciaFinal.seconds * 1000).toLocaleDateString() : "-"}
-  `;
-
-  if (isAdmin) {
-    document.getElementById("adminControls").style.display = "block";
-    document.getElementById("statusCotacao").value = cot.status || "nova";
-    document.getElementById("valorCotacao").value = cot.valor || "";
-    if (cot.vigenciaFinal) {
-      document.getElementById("vigenciaFinal").value = new Date(cot.vigenciaFinal.seconds * 1000).toISOString().substr(0,10);
-    }
+  cotacaoRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
+  const doc = await cotacaoRef.get();
+  if (!doc.exists) {
+    alert("Cotação não encontrada.");
+    return;
   }
 
-  db.collection("mensagens_cotacoes")
-    .where("cotacaoId", "==", cotacaoId)
-    .orderBy("timestamp")
-    .onSnapshot(snapshot => {
-      const chat = document.getElementById("chatMensagens");
-      chat.innerHTML = "";
-      snapshot.forEach(doc => {
-        const msg = doc.data();
-        const div = document.createElement("div");
-        div.className = "msg " + (msg.autor === "admin" ? "admin" : "gerente");
-        div.textContent = `[${new Date(msg.timestamp?.seconds * 1000).toLocaleString()}] ${msg.autor}: ${msg.texto}`;
-        chat.appendChild(div);
-      });
-    });
+  cotacaoData = doc.data();
+  preencherCabecalho();
+  exibirHistorico();
 });
 
-function enviarMensagem() {
-  const texto = document.getElementById("mensagem").value.trim();
-  if (!texto) return;
+function preencherCabecalho() {
+  document.getElementById("empresaNome").textContent = cotacaoData.empresaNome;
+  document.getElementById("empresaCNPJ").textContent = cotacaoData.empresaCNPJ;
+  document.getElementById("ramo").textContent = cotacaoData.ramo;
+  document.getElementById("valorDesejado").textContent = (cotacaoData.valorDesejado || 0).toLocaleString("pt-BR");
+  document.getElementById("status").textContent = cotacaoData.status;
+}
 
-  db.collection("mensagens_cotacoes").add({
-    cotacaoId: cotacaoId,
-    autor: isAdmin ? "admin" : "gerente",
-    texto,
-    timestamp: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(() => {
-    document.getElementById("mensagem").value = "";
+function exibirHistorico() {
+  const div = document.getElementById("historico");
+  div.innerHTML = "";
+
+  if (!cotacaoData.interacoes || cotacaoData.interacoes.length === 0) {
+    div.innerHTML = "<p>Nenhuma interação registrada ainda.</p>";
+    return;
+  }
+
+  cotacaoData.interacoes.forEach(msg => {
+    const item = document.createElement("div");
+    item.className = "mensagem";
+    const data = msg.dataHora?.toDate?.().toLocaleString("pt-BR") || "-";
+    const tipo = msg.tipo === "mudanca_status" ? "[Status]" : "";
+    item.innerHTML = `<strong>${msg.autorNome}</strong> (${data}) ${tipo}<br>${msg.mensagem}`;
+    div.appendChild(item);
   });
 }
 
-function atualizarCotacao() {
-  const status = document.getElementById("statusCotacao").value;
-  const valor = parseFloat(document.getElementById("valorCotacao").value);
-  const vigencia = document.getElementById("vigenciaFinal").value;
+function enviarMensagem() {
+  const texto = document.getElementById("novaMensagem").value.trim();
+  if (!texto) return alert("Digite a mensagem.");
 
-  const atualizacoes = {
-    status,
-    valor: isNaN(valor) ? null : valor,
-    vigenciaFinal: vigencia ? firebase.firestore.Timestamp.fromDate(new Date(vigencia)) : null
+  const novaInteracao = {
+    autorNome: usuarioAtual.email,
+    autorUid: usuarioAtual.uid,
+    mensagem: texto,
+    dataHora: firebase.firestore.FieldValue.serverTimestamp(),
+    tipo: "observacao"
   };
 
-  db.collection("cotacoes-gerentes").doc(cotacaoId).update(atualizacoes)
-    .then(() => alert("Cotação atualizada com sucesso."));
+  cotacaoRef.update({
+    interacoes: firebase.firestore.FieldValue.arrayUnion(novaInteracao)
+  }).then(() => {
+    document.getElementById("novaMensagem").value = "";
+    alert("Mensagem registrada.");
+    window.location.reload();
+  });
 }
