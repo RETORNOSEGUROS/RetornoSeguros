@@ -1,169 +1,121 @@
-
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
-
-let usuarioAtual = null;
-let empresasCache = [];
-
-auth.onAuthStateChanged(async user => {
+firebase.auth().onAuthStateChanged(async user => {
   if (!user) {
-    window.location.href = "login.html";
+    alert("Você precisa estar logado para acessar essa página.");
+    window.location.href = "/gerentes-login.html";
     return;
   }
 
-  usuarioAtual = user;
-  await carregarEmpresas();
-
-  const lista = document.getElementById("listaCotacoes");
-  lista.innerHTML = "Carregando...";
-
-  db.collection("cotacoes-gerentes")
-    .where("criadoPorUid", "==", user.uid)
-    .limit(10)
-    .get()
-    .then(snapshot => {
-      lista.innerHTML = "";
-      if (snapshot.empty) {
-        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
-        return;
-      }
-
-      snapshot.forEach(doc => {
-        const cot = doc.data();
-        const div = document.createElement("div");
-        div.style.marginBottom = "20px";
-        div.innerHTML = `
-          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-          Status: <b>${cot.status}</b><br>
-          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-        `;
-        lista.appendChild(div);
-      });
-    })
-    .catch(err => {
-      console.error("Erro ao buscar cotações:", err);
-      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
-    });
+  window.usuarioLogado = user;
+  carregarEmpresas(user);
+  carregarCotacoes(user.uid);
 });
 
-async function carregarEmpresas() {
-  const select = document.getElementById("empresa");
-  select.innerHTML = `<option value="">Carregando...</option>`;
+async function carregarEmpresas(user) {
+  const empresaSelect = document.getElementById("empresa");
+  empresaSelect.innerHTML = "<option value=''>Selecione a empresa</option>";
 
   try {
-    const snapshot = await db.collection("empresas").get();
-    empresasCache = [];
+    const snapshot = await firebase.firestore()
+      .collection("empresas")
+      .where("agencia", "==", "3495") // ajuste se quiser filtrar por agência
+      .get();
+
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const option = document.createElement("option");
+      option.value = doc.id;
+      option.textContent = data.nome || "Empresa sem nome";
+      option.dataset.cnpj = data.cnpj || "";
+      option.dataset.rmId = data.rmId || "";
+      empresaSelect.appendChild(option);
+    });
+  } catch (error) {
+    console.error("Erro ao carregar empresas:", error);
+  }
+}
+
+window.preencherEmpresa = () => {
+  const select = document.getElementById("empresa");
+  const cnpj = select.options[select.selectedIndex].dataset.cnpj;
+  const rmId = select.options[select.selectedIndex].dataset.rmId;
+
+  document.getElementById("info-cnpj").textContent = cnpj ? `CNPJ: ${cnpj}` : "";
+  document.getElementById("info-rm").textContent = rmId ? `RM: ${rmId}` : "";
+};
+
+window.enviarCotacao = async () => {
+  const empresaId = document.getElementById("empresa").value;
+  const empresaSelect = document.getElementById("empresa");
+  const nomeEmpresa = empresaSelect.options[empresaSelect.selectedIndex]?.textContent || "";
+  const cnpj = empresaSelect.options[empresaSelect.selectedIndex]?.dataset?.cnpj || "";
+  const rmId = empresaSelect.options[empresaSelect.selectedIndex]?.dataset?.rmId || "";
+
+  const ramo = document.getElementById("ramo").value;
+  const valorEstimado = parseFloat(document.getElementById("valorEstimado").value || 0);
+  const observacoes = document.getElementById("observacoes").value.trim();
+
+  if (!empresaId || !ramo || !valorEstimado) {
+    alert("Preencha todos os campos obrigatórios.");
+    return;
+  }
+
+  const cotacao = {
+    empresaId,
+    nomeEmpresa,
+    cnpj,
+    rmId,
+    ramo,
+    valorEstimado,
+    observacoes,
+    status: "Negócio iniciado",
+    criadoPorUid: window.usuarioLogado.uid,
+    autorUid: rmId || null,
+    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
+    historico: [{
+      texto: "Negócio iniciado",
+      criadoPorUid: window.usuarioLogado.uid,
+      data: firebase.firestore.FieldValue.serverTimestamp()
+    }]
+  };
+
+  try {
+    await firebase.firestore().collection("cotacoes").add(cotacao);
+    alert("Cotação criada com sucesso!");
+    document.getElementById("ramo").value = "";
+    document.getElementById("valorEstimado").value = "";
+    document.getElementById("observacoes").value = "";
+    carregarCotacoes(window.usuarioLogado.uid);
+  } catch (error) {
+    console.error("Erro ao enviar cotação:", error);
+    alert("Erro ao criar cotação.");
+  }
+};
+
+async function carregarCotacoes(uid) {
+  const container = document.getElementById("listaCotacoes");
+  container.innerHTML = "Carregando...";
+
+  try {
+    const snapshot = await firebase.firestore()
+      .collection("cotacoes")
+      .where("criadoPorUid", "==", uid)
+      .orderBy("dataCriacao", "desc")
+      .get();
 
     if (snapshot.empty) {
-      select.innerHTML = `<option value="">Nenhuma empresa encontrada</option>`;
+      container.innerHTML = "<p>Nenhuma cotação cadastrada ainda.</p>";
       return;
     }
 
-    select.innerHTML = `<option value="">Selecione uma empresa</option>`;
+    let html = "<ul>";
     snapshot.forEach(doc => {
-      const dados = doc.data();
-      const nome = dados.nome || "(sem nome)";
-      empresasCache.push({ id: doc.id, ...dados });
-
-      const opt = document.createElement("option");
-      opt.value = doc.id;
-      opt.textContent = nome;
-      select.appendChild(opt);
+      const c = doc.data();
+      html += `<li><strong>${c.nomeEmpresa}</strong> - ${c.ramo} - R$ ${c.valorEstimado?.toLocaleString("pt-BR")} (${c.status})</li>`;
     });
-  } catch (err) {
-    console.error("Erro ao carregar empresas:", err);
-    select.innerHTML = `<option value="">Erro ao carregar empresas</option>`;
+    html += "</ul>";
+    container.innerHTML = html;
+  } catch (error) {
+    console.error("Erro ao carregar cotações:", error);
+    container.innerHTML = "<p>Erro ao carregar cotações.</p>";
   }
 }
-
-function preencherEmpresa() {
-  const empresaId = document.getElementById("empresa").value;
-  const infoCNPJ = document.getElementById("info-cnpj");
-  const infoRM = document.getElementById("info-rm");
-
-  const empresa = empresasCache.find(e => e.id === empresaId);
-  if (empresa) {
-    infoCNPJ.textContent = `CNPJ: ${empresa.cnpj || "Não informado"}`;
-    infoRM.textContent = `RM responsável: ${empresa.rm || "Não vinculado"}`;
-  } else {
-    infoCNPJ.textContent = "";
-    infoRM.textContent = "";
-  }
-}
-
-function enviarCotacao() {
-  console.log("🟢 Função enviarCotacao iniciada");
-
-  const empresaId = document.getElementById("empresa").value;
-  const ramo = document.getElementById("ramo").value;
-  const valor = parseFloat(document.getElementById("valorEstimado").value || 0);
-  const observacoes = document.getElementById("observacoes").value.trim();
-
-  if (!usuarioAtual) {
-    alert("Usuário não autenticado corretamente.");
-    console.log("❌ usuarioAtual null");
-    return;
-  }
-
-  if (!empresaId || !ramo) {
-    alert("Preencha todos os campos obrigatórios.");
-    console.log("❌ Campos obrigatórios vazios");
-    return;
-  }
-
-  const empresa = empresasCache.find(e => e.id === empresaId);
-  if (!empresa) {
-    alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
-    console.log("❌ Empresa não localizada no cache");
-    return;
-  }
-
-  const novaCotacao = {
-    empresaId,
-    empresaNome: empresa?.nome || "",
-    empresaCNPJ: empresa?.cnpj || "",
-    rmId: empresa?.rmId || "",
-    rmNome: empresa?.rm || "",
-    ramo,
-    valorDesejado: valor,
-    valorFechado: null,
-    status: "Negócio iniciado",
-    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
-    criadoPorUid: usuarioAtual.uid,
-    autorUid: empresa?.rmId || usuarioAtual.uid,
-    autorNome: empresa?.rm || usuarioAtual.email,
-    interacoes: observacoes
-      ? [{
-          autorNome: usuarioAtual.email,
-          autorUid: usuarioAtual.uid,
-          mensagem: observacoes,
-          dataHora: firebase.firestore.FieldValue.serverTimestamp(),
-          tipo: "observacao"
-        }]
-      : []
-  };
-
-  console.log("📦 Objeto da cotação:", novaCotacao);
-
-  db.collection("cotacoes-gerentes").add(novaCotacao)
-    .then(() => {
-      console.log("✅ Cotação registrada com sucesso.");
-      alert("Negócio registrado com sucesso.");
-      document.getElementById("empresa").value = "";
-      document.getElementById("ramo").value = "";
-      document.getElementById("valorEstimado").value = "";
-      document.getElementById("observacoes").value = "";
-      document.getElementById("info-cnpj").textContent = "";
-      document.getElementById("info-rm").textContent = "";
-      location.reload();
-    })
-    .catch(err => {
-      console.error("🔥 Erro ao salvar cotação:", err);
-      alert("Erro ao criar cotação.");
-    });
-}
-
-window.enviarCotacao = enviarCotacao;
-window.preencherEmpresa = preencherEmpresa;
