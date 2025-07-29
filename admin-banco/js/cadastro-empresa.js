@@ -7,7 +7,6 @@ function carregarRMs() {
 
   db.collection("usuarios_banco")
     .where("perfil", "==", "rm")
-    .orderBy("nome")
     .get()
     .then(snapshot => {
       if (snapshot.empty) {
