@@ -14,7 +14,39 @@ auth.onAuthStateChanged(async user => {
 
   usuarioAtual = user;
   await carregarEmpresas();
-  listarCotacoes();
+
+  const lista = document.getElementById("listaCotacoes");
+  lista.innerHTML = "Carregando...";
+
+  db.collection("cotacoes-gerentes")
+    .where("autorUid", "==", user.uid)
+    .orderBy("dataCriacao", "desc")
+    .limit(10)
+    .get()
+    .then(snapshot => {
+      lista.innerHTML = "";
+      if (snapshot.empty) {
+        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
+        return;
+      }
+
+      snapshot.forEach(doc => {
+        const cot = doc.data();
+        const div = document.createElement("div");
+        div.style.marginBottom = "20px";
+        div.innerHTML = `
+          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+          Status: <b>${cot.status}</b><br>
+          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+        `;
+        lista.appendChild(div);
+      });
+    })
+    .catch(err => {
+      console.error("Erro ao carregar cotações:", err);
+      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
+    });
 });
 
 async function carregarEmpresas() {
@@ -120,7 +152,7 @@ function enviarCotacao() {
       document.getElementById("observacoes").value = "";
       document.getElementById("info-cnpj").textContent = "";
       document.getElementById("info-rm").textContent = "";
-      listarCotacoes();
+      location.reload(); // forçar recarregamento e mostrar cotação recém-criada
     })
     .catch(err => {
       console.error("Erro ao salvar cotação:", err);
@@ -128,37 +160,6 @@ function enviarCotacao() {
     });
 }
 
-function listarCotacoes() {
-  const lista = document.getElementById("listaCotacoes");
-  lista.innerHTML = "Carregando...";
-
-  db.collection("cotacoes-gerentes")
-    .where("autorUid", "==", usuarioAtual.uid)
-    .orderBy("dataCriacao", "desc")
-    .limit(10)
-    .get()
-    .then(snapshot => {
-      lista.innerHTML = "";
-      if (snapshot.empty) {
-        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
-        return;
-      }
-
-      snapshot.forEach(doc => {
-        const cot = doc.data();
-        const div = document.createElement("div");
-        div.style.marginBottom = "20px";
-        div.innerHTML = `
-          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-          Status: <b>${cot.status}</b><br>
-          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-        `;
-        lista.appendChild(div);
-      });
-    });
-}
-
-// Torna as funções visíveis no escopo global
+// Tornar funções visíveis globalmente
 window.enviarCotacao = enviarCotacao;
 window.preencherEmpresa = preencherEmpresa;
