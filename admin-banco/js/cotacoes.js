@@ -96,6 +96,8 @@ function enviarCotacao() {
     status: "Negócio iniciado",
     dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
     criadoPorUid: usuarioAtual.uid,
+    autorUid: usuarioAtual.uid,
+    autorNome: usuarioAtual.email,
     interacoes: observacoes
       ? [{
           autorNome: usuarioAtual.email,
@@ -131,7 +133,7 @@ function listarCotacoes() {
   lista.innerHTML = "Carregando...";
 
   db.collection("cotacoes-gerentes")
-    .where("criadoPorUid", "==", usuarioAtual.uid)
+    .where("autorUid", "==", usuarioAtual.uid)
     .orderBy("dataCriacao", "desc")
     .limit(10)
     .get()
@@ -156,3 +158,7 @@ function listarCotacoes() {
       });
     });
 }
+
+// Torna as funções visíveis no escopo global
+window.enviarCotacao = enviarCotacao;
+window.preencherEmpresa = preencherEmpresa;
