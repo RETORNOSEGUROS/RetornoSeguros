@@ -19,8 +19,7 @@ auth.onAuthStateChanged(async user => {
   lista.innerHTML = "Carregando...";
 
   db.collection("cotacoes-gerentes")
-    .where("autorUid", "==", user.uid)
-    // .orderBy("dataCriacao", "desc") // desativado temporariamente para teste sem índice
+    .where("criadoPorUid", "==", user.uid)
     .limit(10)
     .get()
     .then(snapshot => {
@@ -128,8 +127,8 @@ function enviarCotacao() {
     status: "Negócio iniciado",
     dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
     criadoPorUid: usuarioAtual.uid,
-    autorUid: usuarioAtual.uid,
-    autorNome: usuarioAtual.email,
+    autorUid: empresa?.rmId || usuarioAtual.uid,
+    autorNome: empresa?.rm || usuarioAtual.email,
     interacoes: observacoes
       ? [{
           autorNome: usuarioAtual.email,
@@ -141,7 +140,7 @@ function enviarCotacao() {
       : []
   };
 
-  console.log("🟡 Criando cotação com dados:", novaCotacao);
+  console.log("🟢 Criando cotação vinculada a gerente:", novaCotacao);
 
   db.collection("cotacoes-gerentes").add(novaCotacao)
     .then(() => {
