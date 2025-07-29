@@ -1,3 +1,4 @@
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -18,15 +19,21 @@ auth.onAuthStateChanged(async user => {
 
 async function carregarEmpresas() {
   const select = document.getElementById("empresa");
+  select.innerHTML = `<option value="">Carregando...</option>`;
+
   try {
     const snapshot = await db.collection("empresas").get();
-
     empresasCache = [];
+
+    if (snapshot.empty) {
+      select.innerHTML = `<option value="">Nenhuma empresa encontrada</option>`;
+      return;
+    }
 
     select.innerHTML = `<option value="">Selecione uma empresa</option>`;
     snapshot.forEach(doc => {
       const dados = doc.data();
-      const nome = dados.nome || "Empresa sem nome";
+      const nome = dados.nome || "(sem nome)";
       empresasCache.push({ id: doc.id, ...dados });
 
       const opt = document.createElement("option");
@@ -34,10 +41,6 @@ async function carregarEmpresas() {
       opt.textContent = nome;
       select.appendChild(opt);
     });
-
-    if (snapshot.empty) {
-      select.innerHTML = `<option value="">Nenhuma empresa cadastrada</option>`;
-    }
   } catch (err) {
     console.error("Erro ao carregar empresas:", err);
     select.innerHTML = `<option value="">Erro ao carregar empresas</option>`;
@@ -128,4 +131,16 @@ function listarCotacoes() {
       }
 
       snapshot.forEach(doc => {
-        const cot = doc.data
+        const cot = doc.data();
+        const div = document.createElement("div");
+        div.style.marginBottom = "20px";
+        div.innerHTML = `
+          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+          Status: <b>${cot.status}</b><br>
+          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+        `;
+        lista.appendChild(div);
+      });
+    });
+}
