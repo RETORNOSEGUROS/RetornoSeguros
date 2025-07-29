@@ -1,7 +1,6 @@
-firebase.auth().onAuthStateChanged(async function(user) {
+firebase.auth().onAuthStateChanged(function(user) {
   if (!user) {
-    alert("Você precisa estar logado para acessar essa página.");
-    window.location.href = "../gerentes-login.html";
+    window.location.href = "gerentes-login.html";
     return;
   }
 
@@ -9,101 +8,104 @@ firebase.auth().onAuthStateChanged(async function(user) {
   const infoCNPJ = document.getElementById("info-cnpj");
   const infoRM = document.getElementById("info-rm");
 
-  let empresasMap = {}; // usado depois na função preencherEmpresa()
+  let empresasMap = {};
 
-  // Carregar empresas
-  const snapshot = await firebase.firestore()
-    .collection("empresas")
-    .where("agencia", "==", "3495") // ajuste conforme sua lógica
-    .get();
+  firebase.firestore().collection("empresas")
+    .where("agencia", "==", "3495") // ajuste conforme necessário
+    .get()
+    .then(snapshot => {
+      selectEmpresa.innerHTML = '<option value="">Selecione a empresa</option>';
+      snapshot.forEach(doc => {
+        const empresa = doc.data();
+        empresasMap[doc.id] = empresa;
 
-  selectEmpresa.innerHTML = '<option value="">Selecione a empresa</option>';
-  snapshot.forEach(doc => {
-    const dados = doc.data();
-    empresasMap[doc.id] = dados;
-    const opt = document.createElement("option");
-    opt.value = doc.id;
-    opt.textContent = dados.nome;
-    selectEmpresa.appendChild(opt);
-  });
+        const option = document.createElement("option");
+        option.value = doc.id;
+        option.textContent = empresa.nome;
+        selectEmpresa.appendChild(option);
+      });
+    });
 
   window.preencherEmpresa = function() {
-    const empresaSelecionada = empresasMap[selectEmpresa.value];
-    if (empresaSelecionada) {
-      infoCNPJ.innerText = `CNPJ: ${empresaSelecionada.cnpj || "Não informado"}`;
-      infoRM.innerText = `RM responsável: ${empresaSelecionada.rm || "Não informado"}`;
+    const empresaId = selectEmpresa.value;
+    const empresa = empresasMap[empresaId];
+    if (empresa) {
+      infoCNPJ.textContent = "CNPJ: " + (empresa.cnpj || "Não informado");
+      infoRM.textContent = "RM responsável: " + (empresa.rm || "Não informado");
     } else {
-      infoCNPJ.innerText = "";
-      infoRM.innerText = "";
+      infoCNPJ.textContent = "";
+      infoRM.textContent = "";
     }
   };
 
-  // Função para criar cotação
-  window.enviarCotacao = async function () {
+  window.enviarCotacao = function() {
     const empresaId = document.getElementById("empresa").value;
-    const empresaNome = empresasMap[empresaId]?.nome || "";
     const ramo = document.getElementById("ramo").value;
     const valorEstimado = parseFloat(document.getElementById("valorEstimado").value);
     const observacoes = document.getElementById("observacoes").value;
+    const empresa = empresasMap[empresaId];
 
-    if (!empresaId || !ramo || !valorEstimado) {
+    if (!empresaId || !ramo || isNaN(valorEstimado)) {
       alert("Preencha todos os campos obrigatórios.");
       return;
     }
 
     const cotacao = {
-      empresaId,
-      empresaNome,
-      ramo,
+      empresaId: empresaId,
+      empresaNome: empresa.nome || "",
+      ramo: ramo,
       valor: valorEstimado,
-      observacoes,
+      observacoes: observacoes,
       autorUid: user.uid,
-      autorNome: user.displayName || "Sem nome",
+      autorNome: user.displayName || "Usuário",
       dataCriacao: new Date(),
       status: "Negócio iniciado"
     };
 
-    try {
-      await firebase.firestore().collection("cotacoes-gerentes").add(cotacao);
-      alert("Cotação criada com sucesso!");
-      document.getElementById("empresa").value = "";
-      document.getElementById("ramo").value = "";
-      document.getElementById("valorEstimado").value = "";
-      document.getElementById("observacoes").value = "";
-      infoCNPJ.innerText = "";
-      infoRM.innerText = "";
-      carregarCotacoes(); // atualiza lista
-    } catch (erro) {
-      console.error("Erro ao criar cotação:", erro);
-      alert("Erro ao criar cotação. Tente novamente.");
-    }
+    firebase.firestore().collection("cotacoes-gerentes").add(cotacao)
+      .then(() => {
+        alert("Cotação criada com sucesso!");
+        document.getElementById("empresa").value = "";
+        document.getElementById("ramo").value = "";
+        document.getElementById("valorEstimado").value = "";
+        document.getElementById("observacoes").value = "";
+        infoCNPJ.textContent = "";
+        infoRM.textContent = "";
+        carregarCotacoes();
+      })
+      .catch(error => {
+        console.error("Erro ao salvar cotação:", error);
+        alert("Erro ao salvar. Tente novamente.");
+      });
   };
 
-  // Função para listar cotações
-  async function carregarCotacoes() {
+  function carregarCotacoes() {
     const lista = document.getElementById("listaCotacoes");
     lista.innerHTML = "Carregando...";
 
-    const snap = await firebase.firestore()
-      .collection("cotacoes-gerentes")
+    firebase.firestore().collection("cotacoes-gerentes")
       .where("autorUid", "==", user.uid)
       .orderBy("dataCriacao", "desc")
-      .get();
+      .get()
+      .then(snapshot => {
+        if (snapshot.empty) {
+          lista.innerHTML = "<p>Nenhuma cotação criada ainda.</p>";
+          return;
+        }
 
-    if (snap.empty) {
-      lista.innerHTML = "<p>Nenhuma cotação criada ainda.</p>";
-      return;
-    }
-
-    let html = "<ul>";
-    snap.forEach(doc => {
-      const dados = doc.data();
-      html += `<li><strong>${dados.empresaNome}</strong> - ${dados.ramo} - R$ ${dados.valor.toLocaleString('pt-BR')}<br>Status: ${dados.status}</li><hr>`;
-    });
-    html += "</ul>";
-    lista.innerHTML = html;
+        let html = "<ul>";
+        snapshot.forEach(doc => {
+          const dados = doc.data();
+          html += `<li><strong>${dados.empresaNome}</strong> - ${dados.ramo} - R$ ${dados.valor.toLocaleString('pt-BR')}<br>Status: ${dados.status}</li><hr>`;
+        });
+        html += "</ul>";
+        lista.innerHTML = html;
+      })
+      .catch(error => {
+        console.error("Erro ao carregar cotações:", error);
+        lista.innerHTML = "<p>Erro ao carregar cotações.</p>";
+      });
   }
 
-  // Carrega inicialmente
   carregarCotacoes();
 });
