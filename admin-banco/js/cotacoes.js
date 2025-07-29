@@ -18,7 +18,7 @@ auth.onAuthStateChanged(async user => {
 
 async function carregarEmpresas() {
   const select = document.getElementById("empresa");
-  const snapshot = await db.collection("empresas").orderBy("nome").get();
+  const snapshot = await db.collection("empresas").get();
 
   empresasCache = [];
 
