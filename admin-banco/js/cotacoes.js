@@ -20,7 +20,7 @@ auth.onAuthStateChanged(async user => {
 
   db.collection("cotacoes-gerentes")
     .where("autorUid", "==", user.uid)
-    .orderBy("dataCriacao", "desc")
+    // .orderBy("dataCriacao", "desc") // desativado temporariamente para teste sem índice
     .limit(10)
     .get()
     .then(snapshot => {
@@ -44,7 +44,7 @@ auth.onAuthStateChanged(async user => {
       });
     })
     .catch(err => {
-      console.error("Erro ao carregar cotações:", err);
+      console.error("Erro ao buscar cotações:", err);
       lista.innerHTML = "<p>Erro ao buscar dados.</p>";
     });
 });
@@ -152,7 +152,7 @@ function enviarCotacao() {
       document.getElementById("observacoes").value = "";
       document.getElementById("info-cnpj").textContent = "";
       document.getElementById("info-rm").textContent = "";
-      location.reload(); // forçar recarregamento e mostrar cotação recém-criada
+      location.reload();
     })
     .catch(err => {
       console.error("Erro ao salvar cotação:", err);
@@ -160,6 +160,5 @@ function enviarCotacao() {
     });
 }
 
-// Tornar funções visíveis globalmente
 window.enviarCotacao = enviarCotacao;
 window.preencherEmpresa = preencherEmpresa;
