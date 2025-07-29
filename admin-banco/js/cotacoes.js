@@ -115,7 +115,7 @@ function enviarCotacao() {
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
-    alert("Empresa não encontrada.");
+    alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
     console.log("❌ Empresa não localizada no cache");
     return;
   }
@@ -161,25 +161,6 @@ function enviarCotacao() {
     })
     .catch(err => {
       console.error("🔥 Erro ao salvar cotação:", err);
-      alert("Erro ao criar cotação.");
-    });
-}
-
-  console.log("🟢 Criando cotação vinculada a gerente:", novaCotacao);
-
-  db.collection("cotacoes-gerentes").add(novaCotacao)
-    .then(() => {
-      alert("Negócio registrado com sucesso.");
-      document.getElementById("empresa").value = "";
-      document.getElementById("ramo").value = "";
-      document.getElementById("valorEstimado").value = "";
-      document.getElementById("observacoes").value = "";
-      document.getElementById("info-cnpj").textContent = "";
-      document.getElementById("info-rm").textContent = "";
-      location.reload();
-    })
-    .catch(err => {
-      console.error("Erro ao salvar cotação:", err);
       alert("Erro ao criar cotação.");
     });
 }
