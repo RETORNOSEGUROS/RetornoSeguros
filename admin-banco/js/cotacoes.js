@@ -18,20 +18,30 @@ auth.onAuthStateChanged(async user => {
 
 async function carregarEmpresas() {
   const select = document.getElementById("empresa");
-  const snapshot = await db.collection("empresas").get();
+  try {
+    const snapshot = await db.collection("empresas").get();
 
-  empresasCache = [];
+    empresasCache = [];
 
-  select.innerHTML = `<option value="">Selecione uma empresa</option>`;
-  snapshot.forEach(doc => {
-    const dados = doc.data();
-    empresasCache.push({ id: doc.id, ...dados });
+    select.innerHTML = `<option value="">Selecione uma empresa</option>`;
+    snapshot.forEach(doc => {
+      const dados = doc.data();
+      const nome = dados.nome || "Empresa sem nome";
+      empresasCache.push({ id: doc.id, ...dados });
 
-    const opt = document.createElement("option");
-    opt.value = doc.id;
-    opt.textContent = dados.nome;
-    select.appendChild(opt);
-  });
+      const opt = document.createElement("option");
+      opt.value = doc.id;
+      opt.textContent = nome;
+      select.appendChild(opt);
+    });
+
+    if (snapshot.empty) {
+      select.innerHTML = `<option value="">Nenhuma empresa cadastrada</option>`;
+    }
+  } catch (err) {
+    console.error("Erro ao carregar empresas:", err);
+    select.innerHTML = `<option value="">Erro ao carregar empresas</option>`;
+  }
 }
 
 function preencherEmpresa() {
