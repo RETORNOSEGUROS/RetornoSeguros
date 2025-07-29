@@ -1,3 +1,7 @@
+from pathlib import Path
+
+# Conteúdo final do JS corrigido, conforme solicitado (com carregamento de empresas e função enviarCotacao funcional)
+js_code = """
 firebase.auth().onAuthStateChanged(function(user) {
   if (user) {
     const uid = user.uid;
@@ -10,15 +14,26 @@ firebase.auth().onAuthStateChanged(function(user) {
     firebase.firestore().collection("empresas")
       .get()
       .then(snapshot => {
+        if (snapshot.empty) {
+          empresaSelect.innerHTML = '<option value="">Nenhuma empresa encontrada</option>';
+          return;
+        }
+
         empresaSelect.innerHTML = '<option value="">Selecione a empresa</option>';
         snapshot.forEach(doc => {
           const dados = doc.data();
-          empresas[doc.id] = dados;
-          const option = document.createElement("option");
-          option.value = doc.id;
-          option.textContent = dados.nome;
-          empresaSelect.appendChild(option);
+          if (dados.nome) {
+            empresas[doc.id] = dados;
+            const option = document.createElement("option");
+            option.value = doc.id;
+            option.textContent = dados.nome;
+            empresaSelect.appendChild(option);
+          }
         });
+      })
+      .catch(error => {
+        console.error("Erro ao carregar empresas:", error);
+        empresaSelect.innerHTML = '<option value="">Erro ao carregar empresas</option>';
       });
 
     window.preencherEmpresa = function () {
@@ -109,3 +124,10 @@ firebase.auth().onAuthStateChanged(function(user) {
     window.location.href = "gerentes-login.html";
   }
 });
+"""
+
+# Salvar como arquivo .js
+file_path = Path("/mnt/data/cotacoes.js")
+file_path.write_text(js_code)
+
+file_path.name
