@@ -94,6 +94,8 @@ function preencherEmpresa() {
 }
 
 function enviarCotacao() {
+  console.log("🟢 Função enviarCotacao iniciada");
+
   const empresaId = document.getElementById("empresa").value;
   const ramo = document.getElementById("ramo").value;
   const valor = parseFloat(document.getElementById("valorEstimado").value || 0);
@@ -101,17 +103,20 @@ function enviarCotacao() {
 
   if (!usuarioAtual) {
     alert("Usuário não autenticado corretamente.");
+    console.log("❌ usuarioAtual null");
     return;
   }
 
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
+    console.log("❌ Campos obrigatórios vazios");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
-    alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
+    alert("Empresa não encontrada.");
+    console.log("❌ Empresa não localizada no cache");
     return;
   }
 
@@ -139,6 +144,26 @@ function enviarCotacao() {
         }]
       : []
   };
+
+  console.log("📦 Objeto da cotação:", novaCotacao);
+
+  db.collection("cotacoes-gerentes").add(novaCotacao)
+    .then(() => {
+      console.log("✅ Cotação registrada com sucesso.");
+      alert("Negócio registrado com sucesso.");
+      document.getElementById("empresa").value = "";
+      document.getElementById("ramo").value = "";
+      document.getElementById("valorEstimado").value = "";
+      document.getElementById("observacoes").value = "";
+      document.getElementById("info-cnpj").textContent = "";
+      document.getElementById("info-rm").textContent = "";
+      location.reload();
+    })
+    .catch(err => {
+      console.error("🔥 Erro ao salvar cotação:", err);
+      alert("Erro ao criar cotação.");
+    });
+}
 
   console.log("🟢 Criando cotação vinculada a gerente:", novaCotacao);
 
