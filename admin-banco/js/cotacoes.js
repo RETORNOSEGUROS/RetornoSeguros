@@ -1,4 +1,3 @@
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -14,38 +13,7 @@ auth.onAuthStateChanged(async user => {
 
   usuarioAtual = user;
   await carregarEmpresas();
-
-  const lista = document.getElementById("listaCotacoes");
-  lista.innerHTML = "Carregando...";
-
-  db.collection("cotacoes-gerentes")
-    .where("criadoPorUid", "==", user.uid)
-    .limit(10)
-    .get()
-    .then(snapshot => {
-      lista.innerHTML = "";
-      if (snapshot.empty) {
-        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
-        return;
-      }
-
-      snapshot.forEach(doc => {
-        const cot = doc.data();
-        const div = document.createElement("div");
-        div.style.marginBottom = "20px";
-        div.innerHTML = `
-          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-          Status: <b>${cot.status}</b><br>
-          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-        `;
-        lista.appendChild(div);
-      });
-    })
-    .catch(err => {
-      console.error("Erro ao buscar cotações:", err);
-      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
-    });
+  carregarCotacoes();
 });
 
 async function carregarEmpresas() {
@@ -103,20 +71,17 @@ function enviarCotacao() {
 
   if (!usuarioAtual) {
     alert("Usuário não autenticado corretamente.");
-    console.log("❌ usuarioAtual null");
     return;
   }
 
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
-    console.log("❌ Campos obrigatórios vazios");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
     alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
-    console.log("❌ Empresa não localizada no cache");
     return;
   }
 
@@ -145,19 +110,16 @@ function enviarCotacao() {
       : []
   };
 
-  console.log("📦 Objeto da cotação:", novaCotacao);
-
   db.collection("cotacoes-gerentes").add(novaCotacao)
     .then(() => {
-      console.log("✅ Cotação registrada com sucesso.");
-      alert("Negócio registrado com sucesso.");
+      alert("✅ Cotação cadastrada com sucesso!");
       document.getElementById("empresa").value = "";
       document.getElementById("ramo").value = "";
       document.getElementById("valorEstimado").value = "";
       document.getElementById("observacoes").value = "";
       document.getElementById("info-cnpj").textContent = "";
       document.getElementById("info-rm").textContent = "";
-      location.reload();
+      carregarCotacoes();
     })
     .catch(err => {
       console.error("🔥 Erro ao salvar cotação:", err);
@@ -165,5 +127,47 @@ function enviarCotacao() {
     });
 }
 
-window.enviarCotacao = enviarCotacao;
+function carregarCotacoes() {
+  const lista = document.getElementById("listaCotacoes");
+  lista.innerHTML = "Carregando...";
+
+  db.collection("cotacoes-gerentes")
+    .where("criadoPorUid", "==", usuarioAtual.uid)
+    .orderBy("dataCriacao", "desc")
+    .limit(10)
+    .get()
+    .then(snapshot => {
+      lista.innerHTML = "";
+      if (snapshot.empty) {
+        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
+        return;
+      }
+
+      snapshot.forEach(doc => {
+        const cot = doc.data();
+        const div = document.createElement("div");
+        div.style.marginBottom = "20px";
+        div.innerHTML = `
+          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+          Status: <b>${cot.status}</b><br>
+          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+        `;
+        lista.appendChild(div);
+      });
+    })
+    .catch(err => {
+      console.error("Erro ao buscar cotações:", err);
+      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
+    });
+}
+
+// Eventos seguros
+document.addEventListener("DOMContentLoaded", () => {
+  const botao = document.getElementById("botaoCriarCotacao");
+  if (botao) {
+    botao.addEventListener("click", enviarCotacao);
+  }
+});
+
 window.preencherEmpresa = preencherEmpresa;
