@@ -73,7 +73,8 @@ function carregarCotacoesDoUsuario() {
   const lista = document.getElementById("listaCotacoes");
   lista.innerHTML = "Carregando...";
 
-  db.collection("cotacoes-gerentes")
+  const cotacaoId = db.collection("cotacoes-gerentes").doc().id;
+db.collection("cotacoes-gerentes").doc(cotacaoId).set(novaCotacao)
     .where("criadoPorUid", "==", usuarioAtual.uid)
     .limit(10)
     .get()
