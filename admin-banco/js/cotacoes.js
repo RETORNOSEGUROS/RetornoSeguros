@@ -94,8 +94,6 @@ function preencherEmpresa() {
 }
 
 function enviarCotacao() {
-  console.log("🟢 Função enviarCotacao iniciada");
-
   const empresaId = document.getElementById("empresa").value;
   const ramo = document.getElementById("ramo").value;
   const valor = parseFloat(document.getElementById("valorEstimado").value || 0);
@@ -103,22 +101,22 @@ function enviarCotacao() {
 
   if (!usuarioAtual) {
     alert("Usuário não autenticado corretamente.");
-    console.log("❌ usuarioAtual null");
     return;
   }
 
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
-    console.log("❌ Campos obrigatórios vazios");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
     alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
-    console.log("❌ Empresa não localizada no cache");
     return;
   }
+
+  const autorUid = usuarioAtual.uid;
+  const autorNome = usuarioAtual.email;
 
   const novaCotacao = {
     empresaId,
@@ -132,24 +130,19 @@ function enviarCotacao() {
     status: "Negócio iniciado",
     dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
     criadoPorUid: usuarioAtual.uid,
-    autorUid: empresa?.rmId || usuarioAtual.uid,
-    autorNome: empresa?.rm || usuarioAtual.email,
-    interacoes: observacoes
-      ? [{
-          autorNome: usuarioAtual.email,
-          autorUid: usuarioAtual.uid,
-          mensagem: observacoes,
-          dataHora: firebase.firestore.FieldValue.serverTimestamp(),
-          tipo: "observacao"
-        }]
-      : []
+    autorUid,
+    autorNome,
+    interacoes: observacoes ? [{
+      autorNome,
+      autorUid,
+      mensagem: observacoes,
+      dataHora: firebase.firestore.FieldValue.serverTimestamp(),
+      tipo: "observacao"
+    }] : []
   };
-
-  console.log("📦 Objeto da cotação:", novaCotacao);
 
   db.collection("cotacoes-gerentes").add(novaCotacao)
     .then(() => {
-      console.log("✅ Cotação registrada com sucesso.");
       alert("Negócio registrado com sucesso.");
       document.getElementById("empresa").value = "";
       document.getElementById("ramo").value = "";
@@ -161,14 +154,9 @@ function enviarCotacao() {
     })
     .catch(err => {
       console.error("🔥 Erro ao salvar cotação:", err);
-      alert("Erro ao criar cotação.");
+      alert("Erro ao criar cotação: " + err.message);
     });
 }
 
 window.enviarCotacao = enviarCotacao;
 window.preencherEmpresa = preencherEmpresa;
-
-window.addEventListener("DOMContentLoaded", () => {
-  document.querySelector("button").addEventListener("click", enviarCotacao);
-});
-
