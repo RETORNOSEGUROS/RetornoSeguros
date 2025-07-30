@@ -73,8 +73,7 @@ function carregarCotacoesDoUsuario() {
   const lista = document.getElementById("listaCotacoes");
   lista.innerHTML = "Carregando...";
 
-  const cotacaoId = db.collection("cotacoes-gerentes").doc().id;
-db.collection("cotacoes-gerentes").doc(cotacaoId).set(novaCotacao)
+  db.collection("cotacoes-gerentes")
     .where("criadoPorUid", "==", usuarioAtual.uid)
     .limit(10)
     .get()
@@ -152,7 +151,10 @@ function enviarCotacao() {
     }] : []
   };
 
-  db.collection("cotacoes-gerentes").add(novaCotacao)
+  console.log("🧠 novaCotacao:", novaCotacao);
+
+  const cotacaoId = db.collection("cotacoes-gerentes").doc().id;
+  db.collection("cotacoes-gerentes").doc(cotacaoId).set(novaCotacao)
     .then(() => {
       alert("Negócio registrado com sucesso.");
       document.getElementById("empresa").value = "";
@@ -161,7 +163,7 @@ function enviarCotacao() {
       document.getElementById("observacoes").value = "";
       document.getElementById("info-cnpj").textContent = "";
       document.getElementById("info-rm").textContent = "";
-      carregarCotacoesDoUsuario(); // atualiza a listagem sem reload
+      carregarCotacoesDoUsuario();
     })
     .catch(err => {
       console.error("🔥 Erro ao salvar cotação:", err);
