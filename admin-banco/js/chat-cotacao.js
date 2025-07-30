@@ -1,3 +1,4 @@
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -7,6 +8,7 @@ let cotacaoId = null;
 let cotacaoRef = null;
 let cotacaoData = null;
 let configStatus = null;
+let isAdmin = false;
 
 auth.onAuthStateChanged(async user => {
   if (!user) return (window.location.href = "login.html");
@@ -18,6 +20,8 @@ auth.onAuthStateChanged(async user => {
     alert("ID de cotação não informado.");
     return;
   }
+
+  isAdmin = usuarioAtual.email === "patrick@retornoseguros.com.br";
 
   cotacaoRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
   const doc = await cotacaoRef.get();
@@ -36,8 +40,38 @@ function preencherCabecalho() {
   document.getElementById("empresaNome").textContent = cotacaoData.empresaNome;
   document.getElementById("empresaCNPJ").textContent = cotacaoData.empresaCNPJ;
   document.getElementById("ramo").textContent = cotacaoData.ramo;
-  document.getElementById("valorDesejado").textContent = (cotacaoData.valorDesejado || 0).toLocaleString("pt-BR");
+
+  const spanTexto = document.getElementById("valorDesejadoTexto");
+  const input = document.getElementById("valorDesejadoInput");
+  const btnSalvar = document.getElementById("btnSalvarValor");
+
+  const valor = cotacaoData.valorDesejado || 0;
+  spanTexto.textContent = valor.toLocaleString("pt-BR");
+
+  if (isAdmin) {
+    spanTexto.style.display = "none";
+    input.style.display = "inline-block";
+    btnSalvar.style.display = "inline-block";
+    input.value = valor;
+  } else {
+    spanTexto.style.display = "inline";
+    input.style.display = "none";
+    btnSalvar.style.display = "none";
+  }
+
   document.getElementById("status").textContent = cotacaoData.status;
+}
+
+function salvarNovoValor() {
+  const novoValor = parseFloat(document.getElementById("valorDesejadoInput").value);
+  if (isNaN(novoValor) || novoValor <= 0) return alert("Valor inválido.");
+  cotacaoRef.update({ valorDesejado: novoValor }).then(() => {
+    alert("Valor desejado atualizado.");
+    window.location.reload();
+  }).catch(err => {
+    console.error("Erro ao salvar valor:", err);
+    alert("Erro ao atualizar valor.");
+  });
 }
 
 function exibirHistorico() {
@@ -62,7 +96,6 @@ function exibirHistorico() {
 function enviarMensagem() {
   const texto = document.getElementById("novaMensagem").value.trim();
   if (!texto) return alert("Digite a mensagem.");
-
   const novaInteracao = {
     autorNome: usuarioAtual.email,
     autorUid: usuarioAtual.uid,
@@ -70,7 +103,6 @@ function enviarMensagem() {
     dataHora: new Date(),
     tipo: "observacao"
   };
-
   cotacaoRef.update({
     interacoes: firebase.firestore.FieldValue.arrayUnion(novaInteracao)
   }).then(() => {
@@ -84,7 +116,6 @@ function carregarStatus() {
   const select = document.getElementById("novoStatus");
   db.collection("status-negociacao").doc("config").get().then(doc => {
     configStatus = doc.data();
-
     const lista = configStatus?.statusFinais || [];
     select.innerHTML = '<option value="">Selecione o novo status</option>';
     lista.forEach(status => {
@@ -93,7 +124,6 @@ function carregarStatus() {
       opt.textContent = status;
       select.appendChild(opt);
     });
-
     select.addEventListener("change", exibirMotivos);
   });
 }
@@ -107,16 +137,13 @@ function exibirMotivos() {
   container.style.display = "none";
 
   let motivos = [];
-
   if (valor === "Recusado Cliente") {
-    motivos = configStatus?.motivosRecusaCliente;
-    if (!motivos) console.warn("motivosRecusaCliente não encontrado na config.");
+    motivos = configStatus?.["motivosRecusaCliente "] || [];
   } else if (valor === "Recusado Seguradora") {
-    motivos = configStatus?.motivosRecusaSeguradora;
-    if (!motivos) console.warn("motivosRecusaSeguradora não encontrado na config.");
+    motivos = configStatus?.motivosRecusaSeguradora || [];
   }
 
-  if (motivos && motivos.length > 0) {
+  if (motivos.length > 0) {
     motivos.forEach(m => {
       const opt = document.createElement("option");
       opt.value = m;
@@ -130,16 +157,12 @@ function exibirMotivos() {
 function atualizarStatus() {
   const novo = document.getElementById("novoStatus").value;
   const motivo = document.getElementById("motivoRecusa").value;
-
   if (!novo) return alert("Selecione o novo status.");
-
   if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora") && !motivo) {
     return alert("Selecione o motivo da recusa.");
   }
-
   let mensagem = `Status alterado para "${novo}".`;
   if (motivo) mensagem += ` Motivo: ${motivo}`;
-
   const interacao = {
     autorNome: usuarioAtual.email,
     autorUid: usuarioAtual.uid,
@@ -147,7 +170,6 @@ function atualizarStatus() {
     dataHora: new Date(),
     tipo: "mudanca_status"
   };
-
   cotacaoRef.update({
     status: novo,
     interacoes: firebase.firestore.FieldValue.arrayUnion(interacao)
