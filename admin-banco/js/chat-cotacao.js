@@ -28,6 +28,7 @@ auth.onAuthStateChanged(async user => {
   cotacaoData = doc.data();
   preencherCabecalho();
   exibirHistorico();
+  carregarStatus();
 });
 
 function preencherCabecalho() {
@@ -65,7 +66,7 @@ function enviarMensagem() {
     autorNome: usuarioAtual.email,
     autorUid: usuarioAtual.uid,
     mensagem: texto,
-    dataHora: firebase.firestore.FieldValue.serverTimestamp(),
+    dataHora: new Date(),
     tipo: "observacao"
   };
 
@@ -75,5 +76,44 @@ function enviarMensagem() {
     document.getElementById("novaMensagem").value = "";
     alert("Mensagem registrada.");
     window.location.reload();
+  });
+}
+
+function carregarStatus() {
+  const select = document.getElementById("novoStatus");
+  db.collection("status-negociacao").doc("config").get().then(doc => {
+    const dados = doc.data();
+    const lista = dados?.lista || [];
+    select.innerHTML = '<option value="">Selecione o novo status</option>';
+    lista.forEach(status => {
+      const opt = document.createElement("option");
+      opt.value = status;
+      opt.textContent = status;
+      select.appendChild(opt);
+    });
+  });
+}
+
+function atualizarStatus() {
+  const novo = document.getElementById("novoStatus").value;
+  if (!novo) return alert("Selecione o novo status.");
+
+  const interacao = {
+    autorNome: usuarioAtual.email,
+    autorUid: usuarioAtual.uid,
+    mensagem: `Status alterado para "${novo}".`,
+    dataHora: new Date(),
+    tipo: "mudanca_status"
+  };
+
+  cotacaoRef.update({
+    status: novo,
+    interacoes: firebase.firestore.FieldValue.arrayUnion(interacao)
+  }).then(() => {
+    alert("Status atualizado com sucesso.");
+    window.location.reload();
+  }).catch(err => {
+    console.error("Erro ao atualizar status:", err);
+    alert("Erro ao atualizar status.");
   });
 }
