@@ -1,13 +1,4 @@
 
-function definirDatasPadrao() {
-  const now = new Date();
-  const inicio = new Date(now.getFullYear(), now.getMonth(), 1);
-  const fim = new Date();
-  document.getElementById("dataInicio").valueAsDate = inicio;
-  document.getElementById("dataFim").valueAsDate = fim;
-}
-
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -19,74 +10,57 @@ auth.onAuthStateChanged(async user => {
   if (!user) return (window.location.href = "login.html");
   await carregarStatus();
   await carregarRMs();
-  await carregarClientes();
-  definirDatasPadrao();
-  setTimeout(() => gerarRelatorio(), 1000);
-  if (!user) return (window.location.href = "login.html");
-  await carregarStatus();
-  await carregarRMs();
-  await carregarClientes();
 });
 
 async function carregarStatus() {
+  const filtro = document.getElementById("filtroStatus");
   const snap = await db.collection("status-negociacao").doc("config").get();
   const lista = snap.data()?.statusFinais || [];
-  const container = document.getElementById("filtroStatus");
-  container.innerHTML = "";
+  filtro.innerHTML = "";
   lista.forEach(s => {
-    const chk = document.createElement("label");
-    chk.innerHTML = `<input type="checkbox" value="${s}"> ${s}`;
-    container.appendChild(chk);
+    const opt = document.createElement("option");
+    opt.value = s;
+    opt.textContent = s;
+    filtro.appendChild(opt);
   });
 }
 
 async function carregarRMs() {
-  const container = document.getElementById("filtroRM");
-  container.innerHTML = "";
-  const snapshot = await db.collection("usuarios").where("perfil", "==", "rm").get();
-  snapshot.forEach(doc => {
-    const nome = doc.data().nome || doc.data().email;
-    const chk = document.createElement("label");
-    chk.innerHTML = `<input type="checkbox" value="${nome}"> ${nome}`;
-    container.appendChild(chk);
-  });
-}
-
-async function carregarClientes() {
-  const select = document.getElementById("filtroCliente");
-  const snap = await db.collection("empresas").get();
-  snap.forEach(doc => {
-    const nome = doc.data().nome || "(sem nome)";
-    const opt = document.createElement("option");
-    opt.value = nome;
-    opt.textContent = nome;
-    select.appendChild(opt);
-  });
-}
-
-function getCheckedValues(containerId) {
-  return Array.from(document.querySelectorAll(`#${containerId} input:checked`)).map(e => e.value);
+  const filtroRM = document.getElementById("filtroRM");
+  try {
+    const snapshot = await db.collection("usuarios").where("perfil", "==", "rm").get();
+    filtroRM.innerHTML = "";
+    snapshot.forEach(doc => {
+      const nome = doc.data().nome || doc.data().email || "(sem nome)";
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      filtroRM.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn("Erro ao carregar RMs:", e);
+  }
 }
 
 async function gerarRelatorio() {
-  const clienteSelecionado = document.getElementById("filtroCliente").value;
-  const statusSel = getCheckedValues("filtroStatus");
-  const ramosSel = getCheckedValues("filtroRamo");
-  const rmsSel = getCheckedValues("filtroRM");
+  const cliente = document.getElementById("filtroCliente").value.toLowerCase();
+  const status = Array.from(document.getElementById("filtroStatus").selectedOptions).map(e => e.value);
+  const ramo = Array.from(document.getElementById("filtroRamo").selectedOptions).map(e => e.value);
+  const rms = Array.from(document.getElementById("filtroRM").selectedOptions).map(e => e.value);
   const dataInicio = document.getElementById("dataInicio").valueAsDate;
   const dataFim = document.getElementById("dataFim").valueAsDate;
 
-  const snap = await db.collection("cotacoes-gerentes").get();
+  const snapshot = await db.collection("cotacoes-gerentes").get();
   todasCotacoes = [];
   let total = 0;
 
-  snap.forEach(doc => {
+  snapshot.forEach(doc => {
     const c = doc.data();
     const data = c.dataCriacao?.toDate?.();
-    if (clienteSelecionado && c.empresaNome !== clienteSelecionado) return;
-    if (statusSel.length && !statusSel.includes(c.status)) return;
-    if (ramosSel.length && !ramosSel.includes(c.ramo)) return;
-    if (rmsSel.length && !rmsSel.includes(c.rmNome)) return;
+    if (cliente && !c.empresaNome?.toLowerCase().includes(cliente)) return;
+    if (status.length && !status.includes(c.status)) return;
+    if (ramo.length && !ramo.includes(c.ramo)) return;
+    if (rms.length && !rms.includes(c.rmNome)) return;
     if (dataInicio && (!data || data < dataInicio)) return;
     if (dataFim && (!data || data > dataFim)) return;
 
@@ -96,7 +70,6 @@ async function gerarRelatorio() {
 
   document.getElementById("valorTotal").innerHTML = `<h4>Total Geral: R$ ${total.toLocaleString("pt-BR")}</h4>`;
   gerarTabela(todasCotacoes);
-  gerarTotalizadores(todasCotacoes);
   gerarGrafico(todasCotacoes);
 }
 
@@ -121,29 +94,6 @@ function gerarTabela(lista) {
       </tbody>
     </table>`;
   document.getElementById("resultadoTabela").innerHTML = html;
-}
-
-function gerarTotalizadores(lista) {
-  const contagem = {};
-  lista.forEach(c => {
-    const key = c.status || "Indefinido";
-    if (!contagem[key]) contagem[key] = { qtd: 0, total: 0 };
-    contagem[key].qtd += 1;
-    contagem[key].total += c.valorDesejado || 0;
-  });
-
-  const html = `
-    <table>
-      <thead>
-        <tr><th>Status</th><th>Qtde</th><th>Valor Total</th></tr>
-      </thead>
-      <tbody>
-        ${Object.entries(contagem).map(([s, v]) => `
-          <tr><td>${s}</td><td>${v.qtd}</td><td>R$ ${v.total.toLocaleString("pt-BR")}</td></tr>
-        `).join("")}
-      </tbody>
-    </table>`;
-  document.getElementById("resumoStatus").innerHTML = html;
 }
 
 function gerarGrafico(lista) {
@@ -186,6 +136,12 @@ function exportarExcel() {
 }
 
 function exportarPDF() {
-  const element = document.body;
-  html2pdf().from(element).save("relatorio-cotacoes.pdf");
+  const element = document.getElementById("relatorioWrapper");
+  const opt = {
+    filename: "relatorio-cotacoes.pdf",
+    margin: 0.5,
+    html2canvas: { scale: 1.5 },
+    jsPDF: { unit: "in", format: "a4", orientation: "portrait" }
+  };
+  html2pdf().set(opt).from(element).save();
 }
