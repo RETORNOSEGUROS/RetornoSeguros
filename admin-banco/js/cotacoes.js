@@ -6,46 +6,22 @@ const db = firebase.firestore();
 let usuarioAtual = null;
 let empresasCache = [];
 
-auth.onAuthStateChanged(async user => {
-  if (!user) {
-    window.location.href = "login.html";
-    return;
-  }
+window.addEventListener("DOMContentLoaded", () => {
+  auth.onAuthStateChanged(async user => {
+    if (!user) {
+      window.location.href = "login.html";
+      return;
+    }
 
-  usuarioAtual = user;
-  await carregarEmpresas();
+    usuarioAtual = user;
 
-  const lista = document.getElementById("listaCotacoes");
-  lista.innerHTML = "Carregando...";
-
-  db.collection("cotacoes-gerentes")
-    .where("criadoPorUid", "==", user.uid)
-    .limit(10)
-    .get()
-    .then(snapshot => {
-      lista.innerHTML = "";
-      if (snapshot.empty) {
-        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
-        return;
-      }
-
-      snapshot.forEach(doc => {
-        const cot = doc.data();
-        const div = document.createElement("div");
-        div.style.marginBottom = "20px";
-        div.innerHTML = `
-          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-          Status: <b>${cot.status}</b><br>
-          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-        `;
-        lista.appendChild(div);
-      });
-    })
-    .catch(err => {
-      console.error("Erro ao buscar cotações:", err);
-      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
-    });
+    try {
+      await carregarEmpresas();
+      carregarCotacoesDoUsuario();
+    } catch (err) {
+      console.error("Erro ao carregar dados iniciais:", err);
+    }
+  });
 });
 
 async function carregarEmpresas() {
@@ -91,6 +67,40 @@ function preencherEmpresa() {
     infoCNPJ.textContent = "";
     infoRM.textContent = "";
   }
+}
+
+function carregarCotacoesDoUsuario() {
+  const lista = document.getElementById("listaCotacoes");
+  lista.innerHTML = "Carregando...";
+
+  db.collection("cotacoes-gerentes")
+    .where("criadoPorUid", "==", usuarioAtual.uid)
+    .limit(10)
+    .get()
+    .then(snapshot => {
+      lista.innerHTML = "";
+      if (snapshot.empty) {
+        lista.innerHTML = "<p>Nenhum negócio encontrado.</p>";
+        return;
+      }
+
+      snapshot.forEach(doc => {
+        const cot = doc.data();
+        const div = document.createElement("div");
+        div.style.marginBottom = "20px";
+        div.innerHTML = `
+          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+          Status: <b>${cot.status}</b><br>
+          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+        `;
+        lista.appendChild(div);
+      });
+    })
+    .catch(err => {
+      console.error("Erro ao buscar cotações:", err);
+      lista.innerHTML = "<p>Erro ao buscar dados.</p>";
+    });
 }
 
 function enviarCotacao() {
@@ -150,7 +160,7 @@ function enviarCotacao() {
       document.getElementById("observacoes").value = "";
       document.getElementById("info-cnpj").textContent = "";
       document.getElementById("info-rm").textContent = "";
-      location.reload();
+      carregarCotacoesDoUsuario(); // atualiza a listagem sem reload
     })
     .catch(err => {
       console.error("🔥 Erro ao salvar cotação:", err);
