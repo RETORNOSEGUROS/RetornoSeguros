@@ -1,4 +1,13 @@
 
+function definirDatasPadrao() {
+  const now = new Date();
+  const inicio = new Date(now.getFullYear(), now.getMonth(), 1);
+  const fim = new Date();
+  document.getElementById("dataInicio").valueAsDate = inicio;
+  document.getElementById("dataFim").valueAsDate = fim;
+}
+
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -7,6 +16,12 @@ let todasCotacoes = [];
 let grafico = null;
 
 auth.onAuthStateChanged(async user => {
+  if (!user) return (window.location.href = "login.html");
+  await carregarStatus();
+  await carregarRMs();
+  await carregarClientes();
+  definirDatasPadrao();
+  setTimeout(() => gerarRelatorio(), 1000);
   if (!user) return (window.location.href = "login.html");
   await carregarStatus();
   await carregarRMs();
