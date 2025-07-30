@@ -91,12 +91,14 @@ function carregarCotacoesDoUsuario() {
         const cot = doc.data();
         const div = document.createElement("div");
         div.style.marginBottom = "20px";
-        div.innerHTML = `
-          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-          Status: <b>${cot.status}</b><br>
-          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-        `;
+       const dataCriacao = cot.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+div.innerHTML = `
+  <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+  Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+  Criado em: ${dataCriacao}<br>
+  Status: <b>${cot.status}</b><br>
+  <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+`;
         lista.appendChild(div);
       });
     })
