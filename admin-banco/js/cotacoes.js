@@ -167,3 +167,8 @@ function enviarCotacao() {
 
 window.enviarCotacao = enviarCotacao;
 window.preencherEmpresa = preencherEmpresa;
+
+window.addEventListener("DOMContentLoaded", () => {
+  document.querySelector("button").addEventListener("click", enviarCotacao);
+});
+
