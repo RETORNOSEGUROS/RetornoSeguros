@@ -84,6 +84,7 @@ function carregarStatus() {
   const select = document.getElementById("novoStatus");
   db.collection("status-negociacao").doc("config").get().then(doc => {
     configStatus = doc.data();
+
     const lista = configStatus?.statusFinais || [];
     select.innerHTML = '<option value="">Selecione o novo status</option>';
     lista.forEach(status => {
@@ -93,7 +94,6 @@ function carregarStatus() {
       select.appendChild(opt);
     });
 
-    // adiciona evento de mudança para mostrar motivos
     select.addEventListener("change", exibirMotivos);
   });
 }
@@ -107,13 +107,16 @@ function exibirMotivos() {
   container.style.display = "none";
 
   let motivos = [];
+
   if (valor === "Recusado Cliente") {
-    motivos = configStatus?.motivosRecusacliente || [];
+    motivos = configStatus?.motivosRecusaCliente;
+    if (!motivos) console.warn("motivosRecusaCliente não encontrado na config.");
   } else if (valor === "Recusado Seguradora") {
-    motivos = configStatus?.motivosRecusaSeguradora || [];
+    motivos = configStatus?.motivosRecusaSeguradora;
+    if (!motivos) console.warn("motivosRecusaSeguradora não encontrado na config.");
   }
 
-  if (motivos.length > 0) {
+  if (motivos && motivos.length > 0) {
     motivos.forEach(m => {
       const opt = document.createElement("option");
       opt.value = m;
