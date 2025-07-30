@@ -109,7 +109,7 @@ function exibirMotivos() {
   let motivos = [];
 
   if (valor === "Recusado Cliente") {
-    motivos = configStatus?.motivosRecusaCliente;
+    motivos = configStatus?.motivosRecusaCliente ;
     if (!motivos) console.warn("motivosRecusaCliente não encontrado na config.");
   } else if (valor === "Recusado Seguradora") {
     motivos = configStatus?.motivosRecusaSeguradora;
