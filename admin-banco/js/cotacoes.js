@@ -133,34 +133,32 @@ async function enviarCotacao() {
     return;
   }
 
+  let interacoes = [];
+  if (observacoes) {
+    interacoes.push({
+      autorNome: usuarioAtual.email,
+      autorUid: usuarioAtual.uid,
+      mensagem: observacoes,
+      dataHora: new Date(),
+      tipo: "observacao"
+    });
+  }
+
   const novaCotacao = {
-  empresaId,
-  empresaNome: empresa?.nome || "",
-  empresaCNPJ: empresa?.cnpj || "",
-  rmId: empresa?.rmId || "",
-  rmNome: empresa?.rm || "",
-  ramo,
-  valorDesejado: valor,
-  valorFechado: null,
-  status: "Negócio iniciado",
-  dataCriacao: firebase.firestore.FieldValue.serverTimestamp(), // aqui pode
-  criadoPorUid: usuarioAtual.uid,
-  autorUid: usuarioAtual.uid,
-  autorNome: usuarioAtual.email,
-  interacoes // ✅ corrigido
-};
-
-
-if (observacoes) {
-  interacoes.push({
-    autorNome: usuarioAtual.email,
+    empresaId,
+    empresaNome: empresa?.nome || "",
+    empresaCNPJ: empresa?.cnpj || "",
+    rmId: empresa?.rmId || "",
+    rmNome: empresa?.rm || "",
+    ramo,
+    valorDesejado: valor,
+    valorFechado: null,
+    status: "Negócio iniciado",
+    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
+    criadoPorUid: usuarioAtual.uid,
     autorUid: usuarioAtual.uid,
-    mensagem: observacoes,
-    dataHora: new Date(), // ou use Date.now() ou timestamp manual
-    tipo: "observacao"
-  });
-}
-]
+    autorNome: usuarioAtual.email,
+    interacoes
   };
 
   console.log("🧠 novaCotacao:", novaCotacao);
