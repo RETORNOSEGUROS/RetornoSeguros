@@ -83,7 +83,7 @@ function carregarStatus() {
   const select = document.getElementById("novoStatus");
   db.collection("status-negociacao").doc("config").get().then(doc => {
     const dados = doc.data();
-    const lista = dados?.lista || [];
+    const lista = dados?.statusFinais || [];
     select.innerHTML = '<option value="">Selecione o novo status</option>';
     lista.forEach(status => {
       const opt = document.createElement("option");
