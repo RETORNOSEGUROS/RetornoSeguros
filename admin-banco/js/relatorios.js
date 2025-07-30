@@ -4,6 +4,7 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let todasCotacoes = [];
+let grafico = null;
 
 auth.onAuthStateChanged(async user => {
   if (!user) return (window.location.href = "login.html");
@@ -26,15 +27,19 @@ async function carregarStatus() {
 
 async function carregarRMs() {
   const filtroRM = document.getElementById("filtroRM");
-  const snapshot = await db.collection("usuarios").where("perfil", "==", "rm").get();
-  filtroRM.innerHTML = "";
-  snapshot.forEach(doc => {
-    const nome = doc.data().nome || "(sem nome)";
-    const opt = document.createElement("option");
-    opt.value = nome;
-    opt.textContent = nome;
-    filtroRM.appendChild(opt);
-  });
+  try {
+    const snapshot = await db.collection("usuarios").where("perfil", "==", "rm").get();
+    filtroRM.innerHTML = "";
+    snapshot.forEach(doc => {
+      const nome = doc.data().nome || doc.data().email || "(sem nome)";
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      filtroRM.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn("Erro ao carregar RMs:", e);
+  }
 }
 
 async function gerarRelatorio() {
@@ -63,7 +68,7 @@ async function gerarRelatorio() {
     total += c.valorDesejado || 0;
   });
 
-  document.getElementById("valorTotal").innerHTML = `Total Geral: R$ ${total.toLocaleString("pt-BR")}`;
+  document.getElementById("valorTotal").innerHTML = `<h4>Total Geral: R$ ${total.toLocaleString("pt-BR")}</h4>`;
   gerarTabela(todasCotacoes);
   gerarGrafico(todasCotacoes);
 }
@@ -97,14 +102,16 @@ function gerarGrafico(lista) {
     contagem[c.status] = (contagem[c.status] || 0) + (c.valorDesejado || 0);
   });
 
+  if (grafico) grafico.destroy();
+
   const ctx = document.getElementById("graficoStatus").getContext("2d");
-  new Chart(ctx, {
+  grafico = new Chart(ctx, {
     type: "pie",
     data: {
       labels: Object.keys(contagem),
       datasets: [{
         data: Object.values(contagem),
-        backgroundColor: ["#4CAF50", "#2196F3", "#FFC107", "#F44336", "#9C27B0"]
+        backgroundColor: ["#4CAF50", "#2196F3", "#FFC107", "#F44336", "#9C27B0", "#FF9800", "#3F51B5", "#009688"]
       }]
     }
   });
@@ -129,6 +136,12 @@ function exportarExcel() {
 }
 
 function exportarPDF() {
-  const element = document.body;
-  html2pdf().from(element).save("relatorio-cotacoes.pdf");
+  const element = document.getElementById("relatorioWrapper");
+  const opt = {
+    filename: "relatorio-cotacoes.pdf",
+    margin: 0.5,
+    html2canvas: { scale: 1.5 },
+    jsPDF: { unit: "in", format: "a4", orientation: "portrait" }
+  };
+  html2pdf().set(opt).from(element).save();
 }
