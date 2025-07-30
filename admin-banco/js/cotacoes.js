@@ -147,13 +147,18 @@ async function enviarCotacao() {
     criadoPorUid: usuarioAtual.uid,
     autorUid: usuarioAtual.uid,
     autorNome: usuarioAtual.email,
-    interacoes: observacoes ? [{
-      autorNome: usuarioAtual.email,
-      autorUid: usuarioAtual.uid,
-      mensagem: observacoes,
-      dataHora: firebase.firestore.FieldValue.serverTimestamp(),
-      tipo: "observacao"
-    }] : []
+   let interacoes = [];
+
+if (observacoes) {
+  interacoes.push({
+    autorNome: usuarioAtual.email,
+    autorUid: usuarioAtual.uid,
+    mensagem: observacoes,
+    dataHora: new Date(), // ou use Date.now() ou timestamp manual
+    tipo: "observacao"
+  });
+}
+]
   };
 
   console.log("🧠 novaCotacao:", novaCotacao);
