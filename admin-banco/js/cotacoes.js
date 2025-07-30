@@ -14,6 +14,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     usuarioAtual = user;
+    console.log("✅ Autenticado como:", user.email);
 
     try {
       await carregarEmpresas();
@@ -48,6 +49,8 @@ async function carregarEmpresas() {
       opt.textContent = nome;
       select.appendChild(opt);
     });
+
+    console.log("✅ Empresas carregadas:", empresasCache.length);
   } catch (err) {
     console.error("Erro ao carregar empresas:", err);
     select.innerHTML = `<option value="">Erro ao carregar empresas</option>`;
@@ -103,7 +106,9 @@ function carregarCotacoesDoUsuario() {
     });
 }
 
-function enviarCotacao() {
+async function enviarCotacao() {
+  console.log("🟢 Iniciando envio de cotação");
+
   const empresaId = document.getElementById("empresa").value;
   const ramo = document.getElementById("ramo").value;
   const valor = parseFloat(document.getElementById("valorEstimado").value || 0);
@@ -111,22 +116,22 @@ function enviarCotacao() {
 
   if (!usuarioAtual) {
     alert("Usuário não autenticado corretamente.");
+    console.log("❌ usuárioAtual null");
     return;
   }
 
   if (!empresaId || !ramo) {
     alert("Preencha todos os campos obrigatórios.");
+    console.log("❌ Campos obrigatórios vazios");
     return;
   }
 
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) {
     alert("Empresa não encontrada. Aguarde o carregamento ou selecione novamente.");
+    console.log("❌ Empresa não localizada no cache");
     return;
   }
-
-  const autorUid = usuarioAtual.uid;
-  const autorNome = usuarioAtual.email;
 
   const novaCotacao = {
     empresaId,
@@ -140,11 +145,11 @@ function enviarCotacao() {
     status: "Negócio iniciado",
     dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
     criadoPorUid: usuarioAtual.uid,
-    autorUid,
-    autorNome,
+    autorUid: usuarioAtual.uid,
+    autorNome: usuarioAtual.email,
     interacoes: observacoes ? [{
-      autorNome,
-      autorUid,
+      autorNome: usuarioAtual.email,
+      autorUid: usuarioAtual.uid,
       mensagem: observacoes,
       dataHora: firebase.firestore.FieldValue.serverTimestamp(),
       tipo: "observacao"
@@ -153,22 +158,15 @@ function enviarCotacao() {
 
   console.log("🧠 novaCotacao:", novaCotacao);
 
-  const cotacaoId = db.collection("cotacoes-gerentes").doc().id;
-  db.collection("cotacoes-gerentes").doc(cotacaoId).set(novaCotacao)
-    .then(() => {
-      alert("Negócio registrado com sucesso.");
-      document.getElementById("empresa").value = "";
-      document.getElementById("ramo").value = "";
-      document.getElementById("valorEstimado").value = "";
-      document.getElementById("observacoes").value = "";
-      document.getElementById("info-cnpj").textContent = "";
-      document.getElementById("info-rm").textContent = "";
-      carregarCotacoesDoUsuario();
-    })
-    .catch(err => {
-      console.error("🔥 Erro ao salvar cotação:", err);
-      alert("Erro ao criar cotação: " + err.message);
-    });
+  try {
+    const cotacaoId = db.collection("cotacoes-gerentes").doc().id;
+    await db.collection("cotacoes-gerentes").doc(cotacaoId).set(novaCotacao);
+    alert("✅ Cotação criada com sucesso.");
+    carregarCotacoesDoUsuario();
+  } catch (err) {
+    console.error("🔥 Erro ao salvar cotação:", err);
+    alert("Erro ao criar cotação: " + err.message);
+  }
 }
 
 window.enviarCotacao = enviarCotacao;
