@@ -6,6 +6,7 @@ let usuarioAtual = null;
 let cotacaoId = null;
 let cotacaoRef = null;
 let cotacaoData = null;
+let configStatus = null;
 
 auth.onAuthStateChanged(async user => {
   if (!user) return (window.location.href = "login.html");
@@ -82,8 +83,8 @@ function enviarMensagem() {
 function carregarStatus() {
   const select = document.getElementById("novoStatus");
   db.collection("status-negociacao").doc("config").get().then(doc => {
-    const dados = doc.data();
-    const lista = dados?.statusFinais || [];
+    configStatus = doc.data();
+    const lista = configStatus?.statusFinais || [];
     select.innerHTML = '<option value="">Selecione o novo status</option>';
     lista.forEach(status => {
       const opt = document.createElement("option");
@@ -91,17 +92,55 @@ function carregarStatus() {
       opt.textContent = status;
       select.appendChild(opt);
     });
+
+    // adiciona evento de mudança para mostrar motivos
+    select.addEventListener("change", exibirMotivos);
   });
+}
+
+function exibirMotivos() {
+  const valor = document.getElementById("novoStatus").value;
+  const container = document.getElementById("motivoContainer");
+  const selectMotivo = document.getElementById("motivoRecusa");
+
+  selectMotivo.innerHTML = '<option value="">Selecione o motivo</option>';
+  container.style.display = "none";
+
+  let motivos = [];
+  if (valor === "Recusado Cliente") {
+    motivos = configStatus?.motivosRecusaCliente || [];
+  } else if (valor === "Recusado Seguradora") {
+    motivos = configStatus?.motivosRecusaSeguradora || [];
+  }
+
+  if (motivos.length > 0) {
+    motivos.forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      selectMotivo.appendChild(opt);
+    });
+    container.style.display = "block";
+  }
 }
 
 function atualizarStatus() {
   const novo = document.getElementById("novoStatus").value;
+  const motivo = document.getElementById("motivoRecusa").value;
+
   if (!novo) return alert("Selecione o novo status.");
+
+  if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora") && !motivo) {
+    return alert("Selecione o motivo da recusa.");
+  }
+
+  let mensagem = `Status alterado para "${novo}".`;
+  if (motivo) mensagem += ` Motivo: ${motivo}`;
 
   const interacao = {
     autorNome: usuarioAtual.email,
     autorUid: usuarioAtual.uid,
-    mensagem: `Status alterado para "${novo}".`,
+    mensagem,
     dataHora: new Date(),
     tipo: "mudanca_status"
   };
