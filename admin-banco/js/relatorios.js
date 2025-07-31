@@ -150,6 +150,11 @@ function renderizarGraficosPizza(lista) {
 
   const ctx1 = document.getElementById("graficoStatus")?.getContext("2d");
   const ctx2 = document.getElementById("graficoRM")?.getContext("2d");
+  const avisoStatus = document.getElementById("avisoStatus");
+  const avisoRM = document.getElementById("avisoRM");
+
+  avisoStatus.textContent = "";
+  avisoRM.textContent = "";
 
   if (!ctx1 || !ctx2) return;
 
@@ -177,6 +182,8 @@ function renderizarGraficosPizza(lista) {
         }
       }
     });
+  } else {
+    avisoStatus.textContent = "Gráfico não gerado: valores ausentes ou insuficientes.";
   }
 
   if (Object.keys(porRM).length > 1) {
@@ -200,5 +207,7 @@ function renderizarGraficosPizza(lista) {
         }
       }
     });
+  } else {
+    avisoRM.textContent = "Gráfico não gerado: valores ausentes ou insuficientes.";
   }
 }
