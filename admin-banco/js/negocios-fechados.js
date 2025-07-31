@@ -1,11 +1,11 @@
 // negocios-fechados.js
 const agenciaLogada = '3495'; // Substitua por valor dinâmico se necessário
-const negociosRef = firebase.firestore().collection('status-negociacao');
+const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
 
 document.addEventListener('DOMContentLoaded', carregarNegociosFechados);
 
 function carregarNegociosFechados() {
-  negociosRef.where('status', '==', 'Negócio Emitido')
+  negociosRef.where('status', '==', 'Negócio Emitido').where('agencia', '==', agenciaLogada)
     .get()
     .then(snapshot => {
       const container = document.getElementById('listaNegociosFechados');
