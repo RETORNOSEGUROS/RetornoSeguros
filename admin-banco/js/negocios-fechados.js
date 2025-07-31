@@ -5,7 +5,7 @@ const negociosRef = firebase.firestore().collection('status-negociacao');
 document.addEventListener('DOMContentLoaded', carregarNegociosFechados);
 
 function carregarNegociosFechados() {
-  negociosRef.where('status', '==', 'Negócio Emitido').where('agencia', '==', agenciaLogada)
+  negociosRef.where('status', '==', 'Negócio Emitido')
     .get()
     .then(snapshot => {
       const container = document.getElementById('listaNegociosFechados');
