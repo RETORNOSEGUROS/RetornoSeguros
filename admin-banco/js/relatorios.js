@@ -32,7 +32,7 @@ async function carregarStatus() {
   selectStatus.innerHTML = '';
   const snap = await db.doc("status-negociacao/config").get();
   statusDisponiveis = snap.data()?.statusFinais || [];
-  
+
   const optTodos = document.createElement("option");
   optTodos.value = "TODOS";
   optTodos.textContent = "[Selecionar Todos]";
@@ -141,55 +141,64 @@ function renderizarGraficosPizza(lista) {
   const porRM = {};
 
   lista.forEach(c => {
-    porStatus[c.status] = (porStatus[c.status] || 0) + (c.valorDesejado || 0);
-    porRM[c.rmNome || "(Sem RM)"] = (porRM[c.rmNome || "(Sem RM)"] || 0) + (c.valorDesejado || 0);
+    const valor = c.valorDesejado || 0;
+    if (valor > 0) {
+      porStatus[c.status] = (porStatus[c.status] || 0) + valor;
+      porRM[c.rmNome || "(Sem RM)"] = (porRM[c.rmNome || "(Sem RM)"] || 0) + valor;
+    }
   });
 
-  const ctx1 = document.getElementById("graficoStatus").getContext("2d");
-  const ctx2 = document.getElementById("graficoRM").getContext("2d");
+  const ctx1 = document.getElementById("graficoStatus")?.getContext("2d");
+  const ctx2 = document.getElementById("graficoRM")?.getContext("2d");
+
+  if (!ctx1 || !ctx2) return;
 
   if (window.graficoStatus) window.graficoStatus.destroy();
   if (window.graficoRM) window.graficoRM.destroy();
 
-  window.graficoStatus = new Chart(ctx1, {
-    type: 'pie',
-    data: {
-      labels: Object.keys(porStatus),
-      datasets: [{
-        data: Object.values(porStatus),
-        backgroundColor: ['#0074D9', '#FF4136', '#2ECC40', '#FF851B', '#B10DC9', '#FFDC00']
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `R$ ${ctx.raw.toLocaleString("pt-BR")}`
+  if (Object.keys(porStatus).length > 1) {
+    window.graficoStatus = new Chart(ctx1, {
+      type: 'pie',
+      data: {
+        labels: Object.keys(porStatus),
+        datasets: [{
+          data: Object.values(porStatus),
+          backgroundColor: ['#0074D9', '#FF4136', '#2ECC40', '#FF851B', '#B10DC9', '#FFDC00']
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.label}: R$ ${ctx.raw.toLocaleString("pt-BR")}`
+            }
           }
         }
       }
-    }
-  });
+    });
+  }
 
-  window.graficoRM = new Chart(ctx2, {
-    type: 'pie',
-    data: {
-      labels: Object.keys(porRM),
-      datasets: [{
-        data: Object.values(porRM),
-        backgroundColor: ['#39CCCC', '#FF4136', '#B10DC9', '#FFDC00', '#0074D9', '#2ECC40']
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `R$ ${ctx.raw.toLocaleString("pt-BR")}`
+  if (Object.keys(porRM).length > 1) {
+    window.graficoRM = new Chart(ctx2, {
+      type: 'pie',
+      data: {
+        labels: Object.keys(porRM),
+        datasets: [{
+          data: Object.values(porRM),
+          backgroundColor: ['#39CCCC', '#FF4136', '#B10DC9', '#FFDC00', '#0074D9', '#2ECC40']
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.label}: R$ ${ctx.raw.toLocaleString("pt-BR")}`
+            }
           }
         }
       }
-    }
-  });
+    });
+  }
 }
