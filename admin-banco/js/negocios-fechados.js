@@ -1,25 +1,31 @@
 // negocios-fechados.js
-const agenciaLogada = '3495'; // Substitua por valor dinâmico se necessário
-const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
+const negociosRef = firebase.firestore().collection('cotacoes-gerentes'); // Corrigido
 
 document.addEventListener('DOMContentLoaded', carregarNegociosFechados);
 
 function carregarNegociosFechados() {
-  negociosRef.where('status', '==', 'Negócio Emitido').where('agencia', '==', agenciaLogada)
+  negociosRef.where('status', '==', 'Negócio Emitido')
     .get()
     .then(snapshot => {
+      console.log("Total de negócios emitidos encontrados:", snapshot.size);
       const container = document.getElementById('listaNegociosFechados');
       container.innerHTML = '';
+
+      if (snapshot.empty) {
+        container.innerHTML = '<p>Nenhum negócio emitido encontrado.</p>';
+        return;
+      }
 
       snapshot.forEach(doc => {
         const data = doc.data();
         const id = doc.id;
+        console.log("Documento:", id, data);
 
         const div = document.createElement('div');
         div.classList.add('negocio');
         div.innerHTML = `
           <div style="border:1px solid #ccc; padding:15px; margin-bottom:20px; border-radius:8px">
-            <p><b>Empresa:</b> ${data.empresa?.nome || '-'} | <b>Ramo:</b> ${data.ramo || '-'} | <b>RM:</b> ${data.rm?.nome || '-'} | <b>Agência:</b> ${data.agencia}</p>
+            <p><b>Empresa:</b> ${data.empresa || '-'} | <b>Ramo:</b> ${data.ramo || '-'} | <b>RM:</b> ${data.rmNome || '-'} | <b>Autor:</b> ${data.autorNome || '-'}</p>
 
             <label>Prêmio Líquido (R$): <input type="number" id="premio-${id}" value="${data.premioLiquido || ''}" /></label><br>
             <label>Comissão (%): <input type="number" id="comissao-${id}" value="${data.comissaoPercentual || ''}" /></label><br>
