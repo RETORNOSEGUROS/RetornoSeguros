@@ -114,6 +114,9 @@ function renderizarTabela(visitas) {
   });
 
   html += `</tbody></table>`;
+  html += `<p><strong>Total de visitas listadas:</strong> ${visitas.length}</p>`;
+  let totalRamos = visitas.reduce((acc, v) => acc + Object.keys(v.ramos || {}).length, 0);
+  html += `<p><strong>Total de seguros mapeados:</strong> ${totalRamos}</p>`;
   listaDiv.innerHTML = html;
 }
 
