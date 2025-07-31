@@ -79,12 +79,13 @@ function aplicarFiltros() {
 
   exibirResultados(filtradas);
   exibirTotalizadores(filtradas);
+  renderizarGraficosPizza(filtradas);
 }
 
 function exibirResultados(lista) {
   const div = document.getElementById("tabelaResultados");
   if (!lista.length) return div.innerHTML = "<p>Nenhuma cotação encontrada.</p>";
-  let html = `<table><thead><tr>
+  let html = `<table id="tabelaExportar"><thead><tr>
     <th>Empresa</th><th>CNPJ</th><th>RM</th><th>Ramo</th><th>Valor</th>
     <th>Status</th><th>Data</th><th>Ações</th>
   </tr></thead><tbody>`;
@@ -120,5 +121,75 @@ function exibirTotalizadores(lista) {
 }
 
 function exportarParaExcel() {
-  alert("Função de exportação para Excel será implementada com SheetJS ou backend");
+  const table = document.getElementById("tabelaExportar");
+  let csv = [];
+  for (let row of table.rows) {
+    let rowData = [];
+    for (let cell of row.cells) rowData.push(cell.innerText);
+    csv.push(rowData.join(";"));
+  }
+  const blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "relatorio-cotacoes.csv";
+  a.click();
+}
+
+function renderizarGraficosPizza(lista) {
+  const porStatus = {};
+  const porRM = {};
+
+  lista.forEach(c => {
+    porStatus[c.status] = (porStatus[c.status] || 0) + (c.valorDesejado || 0);
+    porRM[c.rmNome || "(Sem RM)"] = (porRM[c.rmNome || "(Sem RM)"] || 0) + (c.valorDesejado || 0);
+  });
+
+  const ctx1 = document.getElementById("graficoStatus").getContext("2d");
+  const ctx2 = document.getElementById("graficoRM").getContext("2d");
+
+  if (window.graficoStatus) window.graficoStatus.destroy();
+  if (window.graficoRM) window.graficoRM.destroy();
+
+  window.graficoStatus = new Chart(ctx1, {
+    type: 'pie',
+    data: {
+      labels: Object.keys(porStatus),
+      datasets: [{
+        data: Object.values(porStatus),
+        backgroundColor: ['#0074D9', '#FF4136', '#2ECC40', '#FF851B', '#B10DC9', '#FFDC00']
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `R$ ${ctx.raw.toLocaleString("pt-BR")}`
+          }
+        }
+      }
+    }
+  });
+
+  window.graficoRM = new Chart(ctx2, {
+    type: 'pie',
+    data: {
+      labels: Object.keys(porRM),
+      datasets: [{
+        data: Object.values(porRM),
+        backgroundColor: ['#39CCCC', '#FF4136', '#B10DC9', '#FFDC00', '#0074D9', '#2ECC40']
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `R$ ${ctx.raw.toLocaleString("pt-BR")}`
+          }
+        }
+      }
+    }
+  });
 }
