@@ -3,6 +3,20 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 const listaDiv = document.getElementById("lista-visitas");
+const container = document.createElement("div");
+container.innerHTML = `
+  <div style="margin-bottom: 15px;">
+    <label>Filtrar por Empresa:</label>
+    <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome">
+    <label>Filtrar por Usuário:</label>
+    <input type="text" id="filtroUsuario" placeholder="Digite parte do nome">
+    <button onclick="aplicarFiltro()">Aplicar Filtros</button>
+    <button onclick="exportarCSV()">Exportar Excel</button>
+  </div>
+`;
+document.body.insertBefore(container, listaDiv);
+
+let dadosVisitas = [];
 
 async function carregarRelatorio() {
   try {
@@ -20,10 +34,10 @@ async function carregarRelatorio() {
       try {
         if (!empresas[v.empresaId]) {
           const emp = await db.collection("empresas").doc(v.empresaId).get();
-          empresas[v.empresaId] = emp.exists ? emp.data().nome : `[empresa removida: ${v.empresaId}]`;
+          empresas[v.empresaId] = emp.exists ? emp.data() : { nome: `[empresa removida: ${v.empresaId}]` };
         }
       } catch (e) {
-        empresas[v.empresaId] = `[erro empresa: ${v.empresaId}]`;
+        empresas[v.empresaId] = { nome: `[erro empresa: ${v.empresaId}]` };
       }
 
       try {
@@ -35,42 +49,91 @@ async function carregarRelatorio() {
         usuarios[v.usuarioId] = `[erro usuario: ${v.usuarioId}]`;
       }
 
+      v.usuarioNome = usuarios[v.usuarioId];
+      v.empresaNome = empresas[v.empresaId]?.nome || '-';
+      v.empresaRM = empresas[v.empresaId]?.rm || '-';
       return v;
     }));
 
-    let html = `<table><thead><tr>
-      <th>Data</th>
-      <th>Usuário</th>
-      <th>Empresa</th>
-      <th>Ramos / Seguros Mapeados</th>
-    </tr></thead><tbody>`;
-
-    for (const v of visitas) {
-      html += `<tr>
-        <td>${v.dataObj.toLocaleDateString("pt-BR")}</td>
-        <td>${usuarios[v.usuarioId]}</td>
-        <td>${empresas[v.empresaId]}</td>
-        <td>`;
-
-      for (const [ramo, info] of Object.entries(v.ramos || {})) {
-        html += `<div class="subdados">
-          <strong>${ramo.toUpperCase()}</strong><br>
-          Vencimento: ${info.vencimento || '-'} | Prêmio: R$ ${info.premio?.toLocaleString("pt-BR") || '0,00'}<br>
-          Seguradora: ${info.seguradora || '-'}<br>
-          ${info.observacoes ? `<div class='obs-box'>${info.observacoes}</div>` : ''}
-        </div>`;
-      }
-
-      html += `</td></tr>`;
-    }
-
-    html += `</tbody></table>`;
-    listaDiv.innerHTML = html;
-
+    dadosVisitas = visitas;
+    renderizarTabela(visitas);
   } catch (err) {
     console.error("Erro ao carregar visitas:", err);
     listaDiv.innerHTML = "Erro ao carregar visitas.";
   }
+}
+
+function aplicarFiltro() {
+  const emp = document.getElementById("filtroEmpresa").value.toLowerCase();
+  const usr = document.getElementById("filtroUsuario").value.toLowerCase();
+
+  const filtradas = dadosVisitas.filter(v => {
+    const empNome = v.empresaNome?.toLowerCase() || "";
+    const usrNome = v.usuarioNome?.toLowerCase() || "";
+    return empNome.includes(emp) && usrNome.includes(usr);
+  });
+  renderizarTabela(filtradas);
+}
+
+function renderizarTabela(visitas) {
+  let html = `<table><thead><tr>
+    <th>Data</th>
+    <th>Usuário</th>
+    <th>Empresa</th>
+    <th>RM da Empresa</th>
+    <th>Ramo</th>
+    <th>Vencimento</th>
+    <th>Prêmio</th>
+    <th>Seguradora</th>
+    <th>Observações</th>
+  </tr></thead><tbody>`;
+
+  visitas.forEach(v => {
+    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+    for (const [ramo, info] of Object.entries(v.ramos || {})) {
+      html += `<tr>
+        <td>${dataVisita}</td>
+        <td>${v.usuarioNome}</td>
+        <td>${v.empresaNome}</td>
+        <td>${v.empresaRM}</td>
+        <td>${ramo.toUpperCase()}</td>
+        <td>${info.vencimento || '-'}</td>
+        <td>R$ ${info.premio?.toLocaleString("pt-BR") || '0,00'}</td>
+        <td>${info.seguradora || '-'}</td>
+        <td>${info.observacoes || '-'}</td>
+      </tr>`;
+    }
+  });
+
+  html += `</tbody></table>`;
+  listaDiv.innerHTML = html;
+}
+
+function exportarCSV() {
+  let csv = ["Data;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
+  dadosVisitas.forEach(v => {
+    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+    for (const [ramo, info] of Object.entries(v.ramos || {})) {
+      const linha = [
+        dataVisita,
+        v.usuarioNome,
+        v.empresaNome,
+        v.empresaRM,
+        ramo.toUpperCase(),
+        info.vencimento || '-',
+        info.premio || 0,
+        info.seguradora || '-',
+        info.observacoes || '-'
+      ].join(";");
+      csv.push(linha);
+    }
+  });
+  const blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "relatorio-visitas.csv";
+  a.click();
 }
 
 auth.onAuthStateChanged(user => {
