@@ -61,8 +61,6 @@ function aplicarFiltros() {
     const nomeEmpresa = (visita.empresaNome || "").toLowerCase();
     const nomeUsuario = (visita.usuarioNome || "").toLowerCase();
 
-    let passaFiltro = true;
-
     if (empresaFiltro && !nomeEmpresa.includes(empresaFiltro)) return false;
     if (usuarioFiltro && !nomeUsuario.includes(usuarioFiltro)) return false;
 
@@ -76,7 +74,7 @@ function aplicarFiltros() {
       if (visita.data?.toDate() > fim) return false;
     }
 
-    return passaFiltro;
+    return true;
   });
 
   renderizarTabela(filtradas);
@@ -139,9 +137,8 @@ function renderizarTabela(visitas) {
     </tbody>
   </table>
   <p><strong>Total de seguros mapeados:</strong> ${totalRamos}</p>
+  <button onclick="exportarCSV()">📥 Exportar Excel</button>
   `;
-
-  html += `<button onclick="exportarCSV()">📥 Exportar Excel</button>`;
 
   lista.innerHTML = html;
 }
@@ -181,6 +178,5 @@ function exportarCSV() {
 
 window.addEventListener("DOMContentLoaded", () => {
   carregarVisitas();
-
   document.getElementById("btnAplicarFiltros").addEventListener("click", aplicarFiltros);
 });
