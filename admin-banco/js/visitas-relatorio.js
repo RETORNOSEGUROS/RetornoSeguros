@@ -1,153 +1,186 @@
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-const listaDiv = document.getElementById("lista-visitas");
-const container = document.createElement("div");
-container.innerHTML = `
-  <div style="margin-bottom: 15px;">
-    <label>Data Início:</label>
-    <input type="date" id="filtroDataInicio">
-    <label>Data Fim:</label>
-    <input type="date" id="filtroDataFim">
-    <label>Filtrar por Empresa:</label>
-    <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome">
-    <label>Filtrar por Usuário:</label>
-    <input type="text" id="filtroUsuario" placeholder="Digite parte do nome">
-    <button onclick="aplicarFiltro()">Aplicar Filtros</button>
-    <button onclick="exportarCSV()">Exportar Excel</button>
-  </div>
-`;
-document.body.insertBefore(container, listaDiv);
+const lista = document.getElementById("lista-visitas");
 
-let dadosVisitas = [];
+let visitasFiltradas = [];
 
-async function carregarRelatorio() {
+async function carregarVisitas() {
   try {
-    const visitasSnap = await db.collection("visitas").orderBy("data", "desc").get();
-    if (visitasSnap.empty) return listaDiv.innerHTML = "Nenhuma visita registrada.";
-
+    const snapshot = await db.collection("visitas").orderBy("data", "desc").get();
     const empresas = {};
     const usuarios = {};
 
-    const visitas = await Promise.all(visitasSnap.docs.map(async doc => {
-      const v = doc.data();
-      v.id = doc.id;
-      v.dataObj = v.data?.toDate?.() || new Date();
+    visitasFiltradas = [];
 
-      try {
-        if (!empresas[v.empresaId]) {
-          const emp = await db.collection("empresas").doc(v.empresaId).get();
-          empresas[v.empresaId] = emp.exists ? emp.data() : { nome: `[empresa removida: ${v.empresaId}]` };
-        }
-      } catch (e) {
-        empresas[v.empresaId] = { nome: `[erro empresa: ${v.empresaId}]` };
+    for (const doc of snapshot.docs) {
+      const visita = doc.data();
+      visita.id = doc.id;
+
+      // Buscar nome da empresa
+      let nomeEmpresa = empresas[visita.empresaId];
+      if (!nomeEmpresa) {
+        const empresaDoc = await db.collection("empresas").doc(visita.empresaId).get();
+        nomeEmpresa = empresaDoc.exists ? empresaDoc.data().nome : `[empresa removida: ${visita.empresaId}]`;
+        empresas[visita.empresaId] = nomeEmpresa;
+        visita.rmEmpresa = empresaDoc.exists ? empresaDoc.data().rm || "-" : "-";
       }
 
-      try {
-        if (!usuarios[v.usuarioId]) {
-          const user = await db.collection("usuarios_banco").doc(v.usuarioId).get();
-          usuarios[v.usuarioId] = user.exists ? user.data().nome || user.data().email : `[usuário removido: ${v.usuarioId}]`;
-        }
-      } catch (e) {
-        usuarios[v.usuarioId] = `[erro usuario: ${v.usuarioId}]`;
+      visita.empresaNome = nomeEmpresa;
+
+      // Buscar nome do usuário
+      let nomeUsuario = usuarios[visita.usuarioId];
+      if (!nomeUsuario) {
+        const usuarioDoc = await db.collection("usuarios_banco").doc(visita.usuarioId).get();
+        nomeUsuario = usuarioDoc.exists ? usuarioDoc.data().nome : `[usuário removido: ${visita.usuarioId}]`;
+        usuarios[visita.usuarioId] = nomeUsuario;
       }
 
-      v.usuarioNome = usuarios[v.usuarioId];
-      v.empresaNome = empresas[v.empresaId]?.nome || '-';
-      v.empresaRM = empresas[v.empresaId]?.rm || '-';
-      return v;
-    }));
+      visita.usuarioNome = nomeUsuario;
 
-    dadosVisitas = visitas;
-    renderizarTabela(visitas);
+      visitasFiltradas.push(visita);
+    }
+
+    aplicarFiltros(); // Mostra tudo inicialmente
+
   } catch (err) {
     console.error("Erro ao carregar visitas:", err);
-    listaDiv.innerHTML = "Erro ao carregar visitas.";
+    lista.innerHTML = "<p>Erro ao carregar visitas.</p>";
   }
 }
 
-function aplicarFiltro() {
-  const emp = document.getElementById("filtroEmpresa").value.toLowerCase();
-  const usr = document.getElementById("filtroUsuario").value.toLowerCase();
-  const dataIni = document.getElementById("filtroDataInicio").value;
+function aplicarFiltros() {
+  const empresaFiltro = document.getElementById("filtroEmpresa").value.toLowerCase();
+  const usuarioFiltro = document.getElementById("filtroUsuario").value.toLowerCase();
+  const dataInicio = document.getElementById("filtroDataInicio").value;
   const dataFim = document.getElementById("filtroDataFim").value;
 
-  const filtradas = dadosVisitas.filter(v => {
-    const empNome = v.empresaNome?.toLowerCase() || "";
-    const usrNome = v.usuarioNome?.toLowerCase() || "";
-    const dataVisita = v.dataObj;
-    const dentroPeriodo = (!dataIni || dataVisita >= new Date(dataIni)) && (!dataFim || dataVisita <= new Date(dataFim + 'T23:59:59'));
-    return empNome.includes(emp) && usrNome.includes(usr) && dentroPeriodo;
+  const filtradas = visitasFiltradas.filter(visita => {
+    const nomeEmpresa = (visita.empresaNome || "").toLowerCase();
+    const nomeUsuario = (visita.usuarioNome || "").toLowerCase();
+
+    let passaFiltro = true;
+
+    if (empresaFiltro && !nomeEmpresa.includes(empresaFiltro)) return false;
+    if (usuarioFiltro && !nomeUsuario.includes(usuarioFiltro)) return false;
+
+    if (dataInicio) {
+      const inicio = new Date(dataInicio + "T00:00:00");
+      if (visita.data?.toDate() < inicio) return false;
+    }
+
+    if (dataFim) {
+      const fim = new Date(dataFim + "T23:59:59");
+      if (visita.data?.toDate() > fim) return false;
+    }
+
+    return passaFiltro;
   });
+
   renderizarTabela(filtradas);
 }
 
 function renderizarTabela(visitas) {
-  let html = `<table><thead><tr>
-    <th>Data</th>
-    <th>Usuário</th>
-    <th>Empresa</th>
-    <th>RM da Empresa</th>
-    <th>Ramo</th>
-    <th>Vencimento</th>
-    <th>Prêmio</th>
-    <th>Seguradora</th>
-    <th>Observações</th>
-  </tr></thead><tbody>`;
+  if (visitas.length === 0) {
+    lista.innerHTML = "<p>Nenhuma visita encontrada.</p>";
+    return;
+  }
 
-  visitas.forEach(v => {
-    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
-    for (const [ramo, info] of Object.entries(v.ramos || {})) {
-      html += `<tr>
-        <td>${dataVisita}</td>
-        <td>${v.usuarioNome}</td>
-        <td>${v.empresaNome}</td>
-        <td>${v.empresaRM}</td>
-        <td>${ramo.toUpperCase()}</td>
-        <td>${info.vencimento || '-'}</td>
-        <td>R$ ${info.premio?.toLocaleString("pt-BR") || '0,00'}</td>
-        <td>${info.seguradora || '-'}</td>
-        <td>${info.observacoes || '-'}</td>
-      </tr>`;
+  let html = `
+    <p><strong>Total de visitas:</strong> ${visitas.length}</p>
+  `;
+
+  let totalRamos = 0;
+
+  html += `<table>
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th>Empresa</th>
+        <th>RM da Empresa</th>
+        <th>Usuário</th>
+        <th>Ramo</th>
+        <th>Vencimento</th>
+        <th>Prêmio (R$)</th>
+        <th>Seguradora</th>
+        <th>Observações</th>
+      </tr>
+    </thead>
+    <tbody>
+  `;
+
+  visitas.forEach(visita => {
+    const dataVisita = visita.data?.toDate().toLocaleDateString("pt-BR") || "-";
+    const empresa = visita.empresaNome || "-";
+    const usuario = visita.usuarioNome || "-";
+    const rm = visita.rmEmpresa || "-";
+
+    for (const [ramoKey, info] of Object.entries(visita.ramos || {})) {
+      totalRamos++;
+      html += `
+        <tr>
+          <td>${dataVisita}</td>
+          <td>${empresa}</td>
+          <td>${rm}</td>
+          <td>${usuario}</td>
+          <td>${ramoKey}</td>
+          <td>${info.vencimento || "-"}</td>
+          <td>${(info.premio || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</td>
+          <td>${info.seguradora || "-"}</td>
+          <td>${info.observacoes || "-"}</td>
+        </tr>
+      `;
     }
   });
 
-  html += `</tbody></table>`;
-  listaDiv.innerHTML = html;
+  html += `
+    </tbody>
+  </table>
+  <p><strong>Total de seguros mapeados:</strong> ${totalRamos}</p>
+  `;
+
+  html += `<button onclick="exportarCSV()">📥 Exportar Excel</button>`;
+
+  lista.innerHTML = html;
 }
 
 function exportarCSV() {
-  let csv = ["Data;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
-  dadosVisitas.forEach(v => {
-    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
-    for (const [ramo, info] of Object.entries(v.ramos || {})) {
-      const linha = [
+  const rows = [["Data", "Empresa", "RM", "Usuário", "Ramo", "Vencimento", "Prêmio", "Seguradora", "Observações"]];
+  visitasFiltradas.forEach(visita => {
+    const dataVisita = visita.data?.toDate().toLocaleDateString("pt-BR") || "-";
+    const empresa = visita.empresaNome || "-";
+    const usuario = visita.usuarioNome || "-";
+    const rm = visita.rmEmpresa || "-";
+
+    for (const [ramoKey, info] of Object.entries(visita.ramos || {})) {
+      rows.push([
         dataVisita,
-        v.usuarioNome,
-        v.empresaNome,
-        v.empresaRM,
-        ramo.toUpperCase(),
-        info.vencimento || '-',
+        empresa,
+        rm,
+        usuario,
+        ramoKey,
+        info.vencimento || "-",
         info.premio || 0,
-        info.seguradora || '-',
-        info.observacoes || '-'
-      ].join(";");
-      csv.push(linha);
+        info.seguradora || "-",
+        info.observacoes || "-"
+      ]);
     }
   });
-  const blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "relatorio-visitas.csv";
-  a.click();
+
+  let csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(";")).join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", "relatorio-visitas.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
-auth.onAuthStateChanged(user => {
-  if (!user) {
-    window.location.href = "login.html";
-    return;
-  }
-  carregarRelatorio();
+window.addEventListener("DOMContentLoaded", () => {
+  carregarVisitas();
+
+  document.getElementById("btnAplicarFiltros").addEventListener("click", aplicarFiltros);
 });
