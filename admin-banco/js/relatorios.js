@@ -1,9 +1,11 @@
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 let cotacoes = [];
+let statusDisponiveis = [];
 
 window.onload = async () => {
   await carregarRMs();
+  await carregarStatus();
   await carregarCotacoes();
   aplicarFiltros();
 };
@@ -11,13 +13,43 @@ window.onload = async () => {
 async function carregarRMs() {
   const selectRM = document.getElementById("filtroRM");
   selectRM.innerHTML = `<option value="">Todos</option>`;
-  const snapshot = await db.collection("gerentes").get();
+  const snapshot = await db.collection("cotacoes-gerentes").get();
+  const nomesUnicos = new Set();
   snapshot.forEach(doc => {
-    const dados = doc.data();
+    const nome = doc.data().rmNome;
+    if (nome && !nomesUnicos.has(nome)) {
+      nomesUnicos.add(nome);
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      selectRM.appendChild(opt);
+    }
+  });
+}
+
+async function carregarStatus() {
+  const selectStatus = document.getElementById("filtroStatus");
+  selectStatus.innerHTML = '';
+  const snap = await db.doc("status-negociacao/config").get();
+  statusDisponiveis = snap.data()?.statusFinais || [];
+  
+  const optTodos = document.createElement("option");
+  optTodos.value = "TODOS";
+  optTodos.textContent = "[Selecionar Todos]";
+  selectStatus.appendChild(optTodos);
+
+  statusDisponiveis.forEach(status => {
     const opt = document.createElement("option");
-    opt.value = dados.nome;
-    opt.textContent = dados.nome;
-    selectRM.appendChild(opt);
+    opt.value = status;
+    opt.textContent = status;
+    selectStatus.appendChild(opt);
+  });
+
+  selectStatus.addEventListener("change", () => {
+    const values = Array.from(selectStatus.selectedOptions).map(o => o.value);
+    if (values.includes("TODOS")) {
+      for (const opt of selectStatus.options) opt.selected = true;
+    }
   });
 }
 
@@ -30,7 +62,7 @@ function aplicarFiltros() {
   const inicio = document.getElementById("filtroDataInicio").value;
   const fim = document.getElementById("filtroDataFim").value;
   const rm = document.getElementById("filtroRM").value;
-  const status = Array.from(document.getElementById("filtroStatus").selectedOptions).map(o => o.value);
+  const status = Array.from(document.getElementById("filtroStatus").selectedOptions).map(o => o.value).filter(v => v !== "TODOS");
   const ramo = document.getElementById("filtroRamo").value;
   const empresaBusca = document.getElementById("filtroEmpresa").value.toLowerCase();
 
