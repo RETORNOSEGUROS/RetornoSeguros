@@ -29,23 +29,24 @@ auth.onAuthStateChanged(user => {
         ["Cadastrar Gerentes", "cadastro-geral.html"],
         ["Agências", "agencias.html"],
         ["Visitas", "visitas.html"],
+        ["Empresas", "empresas.html"],
         ["Solicitações de Cotação", "cotacoes.html"],
         ["Negociações", "negociacoes.html"],
-        ["Empresas", "empresas.html"],
+        ["Vencimentos", "vencimentos.html"],
         ["Relatórios", "relatorios.html"]
       ];
     } else if (perfil === "gerente_chefe") {
       links = [
         ["Visitas", "visitas.html"],
-        ["Solicitações", "cotacoes.html"],
         ["Empresas", "empresas.html"],
+        ["Solicitações", "cotacoes.html"],
         ["Relatórios", "relatorios.html"]
       ];
     } else if (perfil === "rm") {
       links = [
         ["Registrar Visita", "visitas.html"],
-        ["Solicitar Cotação", "cotacoes.html"],
-        ["Empresas", "empresas.html"]
+        ["Empresas", "empresas.html"],
+        ["Solicitar Cotação", "cotacoes.html"]
       ];
     } else if (perfil === "assistente") {
       links = [
@@ -60,5 +61,8 @@ auth.onAuthStateChanged(user => {
       a.textContent = label;
       menu.appendChild(a);
     });
+  }).catch(error => {
+    console.error("Erro ao carregar perfil:", error);
+    document.getElementById("perfilUsuario").textContent = "Erro ao carregar perfil.";
   });
 });
