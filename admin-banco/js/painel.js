@@ -27,7 +27,6 @@ auth.onAuthStateChanged(user => {
     if (perfil === "admin") {
       links = [
         ["Cadastrar Gerentes", "cadastro-geral.html"],
-        ["Cadastrar Empresa", "cadastro-empresa.html"], // ✅ novo link só para admin
         ["Agências", "agencias.html"],
         ["Visitas", "visitas.html"],
         ["Solicitações de Cotação", "cotacoes.html"],
