@@ -42,15 +42,7 @@ function carregarNegociosFechados(emailLogado) {
         const isAdmin = emailLogado === adminEmail;
 
         // Buscar nome da empresa se houver ID
-        let nomeEmpresa = data.empresa || '-';
-        if (!nomeEmpresa && data.empresaId) {
-          try {
-            const empresaSnap = await empresasRef.doc(data.empresaId).get();
-            if (empresaSnap.exists) nomeEmpresa = empresaSnap.data().nome || '-';
-          } catch (e) {
-            console.log('Erro ao buscar empresa:', e);
-          }
-        }
+        const nomeEmpresa = data.empresaNome || '-';
 
         const linha = document.createElement('tr');
         linha.style.borderBottom = '1px solid #ccc';
