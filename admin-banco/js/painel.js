@@ -27,6 +27,7 @@ auth.onAuthStateChanged(user => {
     if (perfil === "admin") {
       links = [
         ["Cadastrar Gerentes", "cadastro-geral.html"],
+        ["Cadastrar Empresa", "cadastro-empresa.html"],
         ["Agências", "agencias.html"],
         ["Visitas", "visitas.html"],
         ["Empresas", "empresas.html"],
@@ -58,7 +59,7 @@ auth.onAuthStateChanged(user => {
     links.forEach(([label, href]) => {
       const a = document.createElement("a");
       a.href = href;
-      a.textContent = label;
+      a.innerHTML = `🔹 ${label}`;
       menu.appendChild(a);
     });
   }).catch(error => {
