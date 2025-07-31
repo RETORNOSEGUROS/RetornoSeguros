@@ -1,20 +1,31 @@
 const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
 const adminEmail = 'patrick@retornoseguros.com.br';
 
+console.log('✅ JS carregado - negócios-fechados');
+
 document.addEventListener('DOMContentLoaded', () => {
+  console.log('📌 DOM carregado');
+  if (!firebase || !firebase.auth) {
+    console.error('❌ Firebase não está disponível');
+    return;
+  }
   firebase.auth().onAuthStateChanged(user => {
     if (user) {
+      console.log('🔐 Usuário logado:', user.email);
       carregarNegociosFechados(user.email);
     } else {
+      console.warn('⚠️ Usuário não está logado');
       alert('Você precisa estar logado para visualizar os dados.');
     }
   });
 });
 
 function carregarNegociosFechados(emailLogado) {
+  console.log('📥 Buscando negócios com status "Negócio Emitido"...');
   negociosRef.where('status', '==', 'Negócio Emitido')
     .get()
     .then(snapshot => {
+      console.log(`🔎 Total encontrado: ${snapshot.size}`);
       const container = document.getElementById('listaNegociosFechados');
       container.innerHTML = '';
 
@@ -42,6 +53,7 @@ function carregarNegociosFechados(emailLogado) {
         const data = doc.data();
         const id = doc.id;
         const isAdmin = emailLogado === adminEmail;
+        console.log('📄 Documento carregado:', id, data);
 
         const linha = document.createElement('tr');
         linha.style.borderBottom = '1px solid #ccc';
@@ -61,7 +73,6 @@ function carregarNegociosFechados(emailLogado) {
 
         tbody.appendChild(linha);
 
-        // Atualiza comissão ao alterar
         if (isAdmin) {
           document.getElementById(`premio-${id}`).addEventListener('input', () => calcularComissao(id));
           document.getElementById(`comissao-${id}`).addEventListener('input', () => calcularComissao(id));
@@ -71,7 +82,7 @@ function carregarNegociosFechados(emailLogado) {
       container.appendChild(tabela);
     })
     .catch(err => {
-      console.error('Erro ao carregar negócios:', err);
+      console.error('❌ Erro ao carregar negócios:', err);
     });
 }
 
@@ -83,6 +94,7 @@ function calcularComissao(id) {
 }
 
 function salvarNegocio(id, botao) {
+  console.log('💾 Salvando negócio:', id);
   const premio = parseFloat(document.getElementById(`premio-${id}`).value || 0);
   const comissaoPercentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
   const comissaoValor = parseFloat((premio * comissaoPercentual / 100).toFixed(2));
@@ -98,16 +110,16 @@ function salvarNegocio(id, botao) {
     fimVigencia: fim,
     observacoes: obs
   }).then(() => {
+    console.log('✅ Dados salvos');
     alert('✅ Salvo com sucesso!');
-    // Travar campos após salvar
     document.getElementById(`premio-${id}`).setAttribute('readonly', true);
     document.getElementById(`comissao-${id}`).setAttribute('readonly', true);
     document.getElementById(`inicio-${id}`).setAttribute('readonly', true);
     document.getElementById(`fim-${id}`).setAttribute('readonly', true);
     document.getElementById(`obs-${id}`).setAttribute('readonly', true);
-    botao.remove(); // Remove botão Salvar
+    botao.remove();
   }).catch(err => {
-    alert('❌ Erro ao salvar.');
-    console.error(err);
+    console.error('❌ Erro ao salvar:', err);
+    alert('❌ Erro ao salvar dados.');
   });
 }
