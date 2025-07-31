@@ -6,6 +6,10 @@ const listaDiv = document.getElementById("lista-visitas");
 const container = document.createElement("div");
 container.innerHTML = `
   <div style="margin-bottom: 15px;">
+    <label>Data Início:</label>
+    <input type="date" id="filtroDataInicio">
+    <label>Data Fim:</label>
+    <input type="date" id="filtroDataFim">
     <label>Filtrar por Empresa:</label>
     <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome">
     <label>Filtrar por Usuário:</label>
@@ -66,11 +70,15 @@ async function carregarRelatorio() {
 function aplicarFiltro() {
   const emp = document.getElementById("filtroEmpresa").value.toLowerCase();
   const usr = document.getElementById("filtroUsuario").value.toLowerCase();
+  const dataIni = document.getElementById("filtroDataInicio").value;
+  const dataFim = document.getElementById("filtroDataFim").value;
 
   const filtradas = dadosVisitas.filter(v => {
     const empNome = v.empresaNome?.toLowerCase() || "";
     const usrNome = v.usuarioNome?.toLowerCase() || "";
-    return empNome.includes(emp) && usrNome.includes(usr);
+    const dataVisita = v.dataObj;
+    const dentroPeriodo = (!dataIni || dataVisita >= new Date(dataIni)) && (!dataFim || dataVisita <= new Date(dataFim + 'T23:59:59'));
+    return empNome.includes(emp) && usrNome.includes(usr) && dentroPeriodo;
   });
   renderizarTabela(filtradas);
 }
