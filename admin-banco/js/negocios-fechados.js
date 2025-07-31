@@ -1,13 +1,20 @@
-// negocios-fechados.js
-const negociosRef = firebase.firestore().collection('cotacoes-gerentes'); // Corrigido
+const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
+const adminEmail = 'patrick@retornoseguros.com.br';
 
-document.addEventListener('DOMContentLoaded', carregarNegociosFechados);
+document.addEventListener('DOMContentLoaded', () => {
+  firebase.auth().onAuthStateChanged(user => {
+    if (user) {
+      carregarNegociosFechados(user.email);
+    } else {
+      alert('Você precisa estar logado para visualizar os dados.');
+    }
+  });
+});
 
-function carregarNegociosFechados() {
+function carregarNegociosFechados(emailLogado) {
   negociosRef.where('status', '==', 'Negócio Emitido')
     .get()
     .then(snapshot => {
-      console.log("Total de negócios emitidos encontrados:", snapshot.size);
       const container = document.getElementById('listaNegociosFechados');
       container.innerHTML = '';
 
@@ -16,34 +23,52 @@ function carregarNegociosFechados() {
         return;
       }
 
+      const tabela = document.createElement('table');
+      tabela.style.width = '100%';
+      tabela.style.borderCollapse = 'collapse';
+      tabela.innerHTML = `
+        <thead>
+          <tr style='background:#eee'>
+            <th>Empresa</th><th>Ramo</th><th>RM</th><th>Prêmio</th><th>%</th>
+            <th>Comissão R$</th><th>Início</th><th>Fim</th><th>Observações</th><th>Ações</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      `;
+
+      const tbody = tabela.querySelector('tbody');
+
       snapshot.forEach(doc => {
         const data = doc.data();
         const id = doc.id;
-        console.log("Documento:", id, data);
+        const isAdmin = emailLogado === adminEmail;
 
-        const div = document.createElement('div');
-        div.classList.add('negocio');
-        div.innerHTML = `
-          <div style="border:1px solid #ccc; padding:15px; margin-bottom:20px; border-radius:8px">
-            <p><b>Empresa:</b> ${data.empresa || '-'} | <b>Ramo:</b> ${data.ramo || '-'} | <b>RM:</b> ${data.rmNome || '-'} | <b>Autor:</b> ${data.autorNome || '-'}</p>
+        const linha = document.createElement('tr');
+        linha.style.borderBottom = '1px solid #ccc';
 
-            <label>Prêmio Líquido (R$): <input type="number" id="premio-${id}" value="${data.premioLiquido || ''}" /></label><br>
-            <label>Comissão (%): <input type="number" id="comissao-${id}" value="${data.comissaoPercentual || ''}" /></label><br>
-            <p><b>Valor Comissão (R$):</b> <span id="comissaoValor-${id}">${data.comissaoValor || '0,00'}</span></p>
-
-            <label>Início Vigência: <input type="date" id="inicio-${id}" value="${data.inicioVigencia || ''}"/></label><br>
-            <label>Fim Vigência: <input type="date" id="fim-${id}" value="${data.fimVigencia || ''}"/></label><br>
-
-            <label>Observações:<br/><textarea id="obs-${id}" rows="3" style="width:100%">${data.observacoes || ''}</textarea></label><br>
-            <button onclick="salvarNegocio('${id}')">💾 Salvar</button>
-          </div>
+        linha.innerHTML = `
+          <td>${data.empresa || '-'}</td>
+          <td>${data.ramo || '-'}</td>
+          <td>${data.rmNome || '-'}</td>
+          <td><input type='number' id='premio-${id}' value='${data.premioLiquido || ''}' ${!isAdmin ? 'readonly' : ''}></td>
+          <td><input type='number' id='comissao-${id}' value='${data.comissaoPercentual || ''}' ${!isAdmin ? 'readonly' : ''}></td>
+          <td><span id='comissaoValor-${id}'>${data.comissaoValor ? 'R$ ' + data.comissaoValor.toFixed(2) : 'R$ 0,00'}</span></td>
+          <td><input type='date' id='inicio-${id}' value='${data.inicioVigencia || ''}' ${!isAdmin ? 'readonly' : ''}></td>
+          <td><input type='date' id='fim-${id}' value='${data.fimVigencia || ''}' ${!isAdmin ? 'readonly' : ''}></td>
+          <td><textarea id='obs-${id}' rows='2' style='width:180px' ${!isAdmin ? 'readonly' : ''}>${data.observacoes || ''}</textarea></td>
+          <td>${isAdmin ? `<button onclick="salvarNegocio('${id}', this)">💾</button>` : '-'}</td>
         `;
 
-        container.appendChild(div);
+        tbody.appendChild(linha);
 
-        document.getElementById(`premio-${id}`).addEventListener('input', () => calcularComissao(id));
-        document.getElementById(`comissao-${id}`).addEventListener('input', () => calcularComissao(id));
+        // Atualiza comissão ao alterar
+        if (isAdmin) {
+          document.getElementById(`premio-${id}`).addEventListener('input', () => calcularComissao(id));
+          document.getElementById(`comissao-${id}`).addEventListener('input', () => calcularComissao(id));
+        }
       });
+
+      container.appendChild(tabela);
     })
     .catch(err => {
       console.error('Erro ao carregar negócios:', err);
@@ -57,7 +82,7 @@ function calcularComissao(id) {
   document.getElementById(`comissaoValor-${id}`).innerText = `R$ ${valor}`;
 }
 
-function salvarNegocio(id) {
+function salvarNegocio(id, botao) {
   const premio = parseFloat(document.getElementById(`premio-${id}`).value || 0);
   const comissaoPercentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
   const comissaoValor = parseFloat((premio * comissaoPercentual / 100).toFixed(2));
@@ -73,9 +98,16 @@ function salvarNegocio(id) {
     fimVigencia: fim,
     observacoes: obs
   }).then(() => {
-    alert('✅ Dados salvos com sucesso!');
+    alert('✅ Salvo com sucesso!');
+    // Travar campos após salvar
+    document.getElementById(`premio-${id}`).setAttribute('readonly', true);
+    document.getElementById(`comissao-${id}`).setAttribute('readonly', true);
+    document.getElementById(`inicio-${id}`).setAttribute('readonly', true);
+    document.getElementById(`fim-${id}`).setAttribute('readonly', true);
+    document.getElementById(`obs-${id}`).setAttribute('readonly', true);
+    botao.remove(); // Remove botão Salvar
   }).catch(err => {
-    alert('❌ Erro ao salvar dados. Veja o console.');
+    alert('❌ Erro ao salvar.');
     console.error(err);
   });
 }
