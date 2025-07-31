@@ -1,80 +1,124 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Relatório Gerencial de Cotações</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-  <script src="js/firebase-config.js"></script>
-  <script src="js/relatorios.js" defer></script>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; background: #f4f7fa; }
-    h1 { color: #003366; }
-    .filtros, .resultados, .totalizadores { margin-bottom: 30px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.05); }
-    label { display: block; margin-top: 10px; font-weight: bold; }
-    select, input { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; margin-top: 5px; }
-    button { margin-top: 15px; padding: 10px 20px; background: #004080; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background: #0055a5; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
-    th { background-color: #004080; color: white; }
-    .exportar { float: right; }
-  </style>
-</head>
-<body>
-  <h1>Relatório de Cotações</h1>
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+let cotacoes = [];
+let statusDisponiveis = [];
 
-  <div class="filtros">
-    <h3>Filtros Avançados</h3>
-    <label for="filtroDataInicio">Data de Início:</label>
-    <input type="date" id="filtroDataInicio">
+window.onload = async () => {
+  await carregarRMs();
+  await carregarStatus();
+  await carregarCotacoes();
+  aplicarFiltros();
+};
 
-    <label for="filtroDataFim">Data de Fim:</label>
-    <input type="date" id="filtroDataFim">
+async function carregarRMs() {
+  const selectRM = document.getElementById("filtroRM");
+  selectRM.innerHTML = `<option value="">Todos</option>`;
+  const snapshot = await db.collection("cotacoes-gerentes").get();
+  const nomesUnicos = new Set();
+  snapshot.forEach(doc => {
+    const nome = doc.data().rmNome;
+    if (nome && !nomesUnicos.has(nome)) {
+      nomesUnicos.add(nome);
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      selectRM.appendChild(opt);
+    }
+  });
+}
 
-    <label for="filtroRM">RM Responsável:</label>
-    <select id="filtroRM"></select>
+async function carregarStatus() {
+  const selectStatus = document.getElementById("filtroStatus");
+  selectStatus.innerHTML = '';
+  const snap = await db.doc("status-negociacao/config").get();
+  statusDisponiveis = snap.data()?.statusFinais || [];
+  
+  const optTodos = document.createElement("option");
+  optTodos.value = "TODOS";
+  optTodos.textContent = "[Selecionar Todos]";
+  selectStatus.appendChild(optTodos);
 
-    <label for="filtroStatus">Status:</label>
-    <select id="filtroStatus" multiple>
-      <option value="Negócio iniciado">Negócio iniciado</option>
-      <option value="Em negociação">Em negociação</option>
-      <option value="Recusado">Recusado</option>
-      <option value="Emitido">Emitido</option>
-    </select>
+  statusDisponiveis.forEach(status => {
+    const opt = document.createElement("option");
+    opt.value = status;
+    opt.textContent = status;
+    selectStatus.appendChild(opt);
+  });
 
-    <label for="filtroRamo">Ramo:</label>
-    <select id="filtroRamo">
-      <option value="">Todos</option>
-      <option>Vida</option>
-      <option>Saúde</option>
-      <option>Dental</option>
-      <option>Frota</option>
-      <option>Empresarial</option>
-      <option>Previdência</option>
-      <option>D&O</option>
-      <option>Equipamentos</option>
-      <option>Outros</option>
-    </select>
+  selectStatus.addEventListener("change", () => {
+    const values = Array.from(selectStatus.selectedOptions).map(o => o.value);
+    if (values.includes("TODOS")) {
+      for (const opt of selectStatus.options) opt.selected = true;
+    }
+  });
+}
 
-    <label for="filtroEmpresa">Empresa (nome):</label>
-    <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome da empresa">
+async function carregarCotacoes() {
+  const snapshot = await db.collection("cotacoes-gerentes").orderBy("dataCriacao", "desc").get();
+  cotacoes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
 
-    <button onclick="aplicarFiltros()">Aplicar Filtros</button>
-    <button class="exportar" onclick="exportarParaExcel()">Exportar Excel</button>
-  </div>
+function aplicarFiltros() {
+  const inicio = document.getElementById("filtroDataInicio").value;
+  const fim = document.getElementById("filtroDataFim").value;
+  const rm = document.getElementById("filtroRM").value;
+  const status = Array.from(document.getElementById("filtroStatus").selectedOptions).map(o => o.value).filter(v => v !== "TODOS");
+  const ramo = document.getElementById("filtroRamo").value;
+  const empresaBusca = document.getElementById("filtroEmpresa").value.toLowerCase();
 
-  <div class="resultados">
-    <h3>Resultados</h3>
-    <div id="tabelaResultados">Carregando...</div>
-  </div>
+  let filtradas = cotacoes.filter(c => {
+    const data = c.dataCriacao?.toDate?.() || new Date(0);
+    if (inicio && data < new Date(inicio)) return false;
+    if (fim && data > new Date(fim + 'T23:59:59')) return false;
+    if (rm && c.rmNome !== rm) return false;
+    if (status.length > 0 && !status.includes(c.status)) return false;
+    if (ramo && c.ramo !== ramo) return false;
+    if (empresaBusca && !c.empresaNome?.toLowerCase().includes(empresaBusca)) return false;
+    return true;
+  });
 
-  <div class="totalizadores">
-    <h3>Totalizadores por Status</h3>
-    <div id="resumoStatus">...</div>
-  </div>
+  exibirResultados(filtradas);
+  exibirTotalizadores(filtradas);
+}
 
-</body>
-</html>
+function exibirResultados(lista) {
+  const div = document.getElementById("tabelaResultados");
+  if (!lista.length) return div.innerHTML = "<p>Nenhuma cotação encontrada.</p>";
+  let html = `<table><thead><tr>
+    <th>Empresa</th><th>CNPJ</th><th>RM</th><th>Ramo</th><th>Valor</th>
+    <th>Status</th><th>Data</th><th>Ações</th>
+  </tr></thead><tbody>`;
+  for (let c of lista) {
+    const data = c.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+    const valor = c.valorDesejado?.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) || "-";
+    html += `<tr>
+      <td>${c.empresaNome}</td>
+      <td>${c.empresaCNPJ || "-"}</td>
+      <td>${c.rmNome || "-"}</td>
+      <td>${c.ramo}</td>
+      <td>${valor}</td>
+      <td>${c.status}</td>
+      <td>${data}</td>
+      <td><a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a></td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+  div.innerHTML = html;
+}
+
+function exibirTotalizadores(lista) {
+  const total = {};
+  lista.forEach(c => {
+    if (!total[c.status]) total[c.status] = 0;
+    total[c.status] += c.valorDesejado || 0;
+  });
+  const div = document.getElementById("resumoStatus");
+  if (Object.keys(total).length === 0) return div.innerHTML = "Nenhum valor apurado.";
+  div.innerHTML = Object.entries(total).map(([status, valor]) => {
+    return `<p><strong>${status}:</strong> R$ ${valor.toLocaleString("pt-BR")}</p>`;
+  }).join("");
+}
+
+function exportarParaExcel() {
+  alert("Função de exportação para Excel será implementada com SheetJS ou backend");
+}
