@@ -1,3 +1,4 @@
+// js/painel.js
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -33,6 +34,8 @@ auth.onAuthStateChanged(user => {
         ["Empresas", "empresas.html"],
         ["Solicitações de Cotação", "cotacoes.html"],
         ["Negociações", "negociacoes.html"],
+        ["Produção", "negocios-fechados.html"],           // ✅ Novo item
+        ["Relatório Visitas", "visitas-relatorio.html"],  // ✅ Novo item
         ["Vencimentos", "vencimentos.html"],
         ["Relatórios", "relatorios.html"]
       ];
