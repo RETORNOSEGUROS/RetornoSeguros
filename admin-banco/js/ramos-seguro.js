@@ -37,8 +37,8 @@ function carregarRamos() {
 }
 
 function salvarRamo() {
-  const idManual = document.getElementById("ramoId").value.trim(); // usado na edição
-  const campo = document.getElementById("campo").value.trim();
+  const idEdicao = document.getElementById("ramoId").value.trim();
+  const campo = document.getElementById("campo").value.trim().toLowerCase().replace(/\s/g, "-");
   const nomeExibicao = document.getElementById("nomeExibicao").value.trim();
   const ordem = parseInt(document.getElementById("ordem").value);
 
@@ -48,10 +48,9 @@ function salvarRamo() {
   }
 
   const dados = { nomeExibicao, campo, ordem };
-  const id = campo; // usar campo como ID no Firestore
 
-  db.collection("ramos-seguro").doc(id).set(dados).then(() => {
-    alert(idManual ? "Ramo atualizado com sucesso." : "Ramo criado com sucesso.");
+  db.collection("ramos-seguro").doc(campo).set(dados).then(() => {
+    alert(idEdicao ? "Ramo atualizado com sucesso." : "Ramo criado com sucesso.");
     limparFormulario();
     carregarRamos();
   });
@@ -62,7 +61,7 @@ function editarRamo(id) {
     if (!doc.exists) return;
     const d = doc.data();
     document.getElementById("ramoId").value = id;
-    document.getElementById("campo").value = d.campo;
+    document.getElementById("campo").value = id;
     document.getElementById("nomeExibicao").value = d.nomeExibicao;
     document.getElementById("ordem").value = d.ordem;
   });
