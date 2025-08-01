@@ -34,8 +34,8 @@ auth.onAuthStateChanged(user => {
         ["Empresas", "empresas.html"],
         ["Solicitações de Cotação", "cotacoes.html"],
         ["Negociações", "negociacoes.html"],
-        ["Produção", "negocios-fechados.html"],           // ✅ Novo item
-        ["Relatório Visitas", "visitas-relatorio.html"],  // ✅ Novo item
+        ["Produção", "negocios-fechados.html"],
+        ["Relatório Visitas", "visitas-relatorio.html"],
         ["Vencimentos", "vencimentos.html"],
         ["Relatórios", "relatorios.html"]
       ];
@@ -61,8 +61,12 @@ auth.onAuthStateChanged(user => {
 
     links.forEach(([label, href]) => {
       const a = document.createElement("a");
-      a.href = href;
+      a.href = "#";
       a.innerHTML = `🔹 ${label}`;
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        carregarConteudoPainel(href);
+      });
       menu.appendChild(a);
     });
   }).catch(error => {
@@ -70,3 +74,21 @@ auth.onAuthStateChanged(user => {
     document.getElementById("perfilUsuario").textContent = "Erro ao carregar perfil.";
   });
 });
+
+function carregarConteudoPainel(pagina) {
+  const conteudo = document.getElementById("conteudoPainel");
+  conteudo.innerHTML = "<p>Carregando...</p>";
+
+  fetch(pagina)
+    .then(res => res.text())
+    .then(html => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const bodyContent = doc.body.innerHTML;
+      conteudo.innerHTML = bodyContent;
+    })
+    .catch(err => {
+      conteudo.innerHTML = "<p>Erro ao carregar conteúdo.</p>";
+      console.error("Erro ao carregar página:", err);
+    });
+}
