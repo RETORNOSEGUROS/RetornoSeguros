@@ -1,94 +1,59 @@
-// js/painel.js
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
+// js/negocios-fechados.js
 
-auth.onAuthStateChanged(user => {
-  if (!user) {
-    window.location.href = "login.html";
-    return;
-  }
+// Verifica se o Firebase já está inicializado (caso tenha sido carregado fora da ordem)
+if (typeof firebase === "undefined") {
+  console.error("Firebase não está carregado.");
+} else {
+  const db = firebase.firestore();
+  const container = document.getElementById("tabelaNegocios");
 
-  const uid = user.uid;
-  db.collection("usuarios_banco").doc(uid).get().then(doc => {
-    if (!doc.exists) {
-      document.getElementById("perfilUsuario").textContent = "Usuário não encontrado.";
-      return;
-    }
+  if (!container) {
+    console.warn("Elemento #tabelaNegocios não encontrado.");
+  } else {
+    container.innerHTML = "🔄 Buscando negócios fechados...";
 
-    const dados = doc.data();
-    const perfil = dados.perfil || "sem perfil";
-    const nome = dados.nome || user.email;
+    db.collection("cotacoes-gerentes")
+      .where("status", "==", "Negócio emitido") // ou ajuste o filtro conforme desejar
+      .get()
+      .then((snapshot) => {
+        if (snapshot.empty) {
+          container.innerHTML = "<p>❗ Nenhum negócio fechado encontrado.</p>";
+          return;
+        }
 
-    document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
+        let html = `
+          <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse:collapse;">
+            <thead style="background:#004080; color:white;">
+              <tr>
+                <th>Empresa</th>
+                <th>Produto</th>
+                <th>Valor Estimado</th>
+                <th>RM</th>
+                <th>Data</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
 
-    const menu = document.getElementById("menuNav");
-    let links = [];
+        snapshot.forEach((doc) => {
+          const d = doc.data();
+          html += `
+            <tr>
+              <td>${d.empresaNome || "-"}</td>
+              <td>${d.ramo || "-"}</td>
+              <td>R$ ${parseFloat(d.valorEstimado || 0).toLocaleString("pt-BR")}</td>
+              <td>${d.nomeRm || "-"}</td>
+              <td>${(d.criadoEm?.toDate?.() || "-").toLocaleDateString?.("pt-BR") || "-"}</td>
+            </tr>
+          `;
+        });
 
-    if (perfil === "admin") {
-      links = [
-        ["Cadastrar Gerentes", "cadastro-geral.html"],
-        ["Cadastrar Empresa", "cadastro-empresa.html"],
-        ["Agências", "agencias.html"],
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitações de Cotação", "cotacoes.html"],
-        ["Negociações", "negociacoes.html"],
-        ["Produção", "negocios-fechados.html"],
-        ["Relatório Visitas", "visitas-relatorio.html"],
-        ["Vencimentos", "vencimentos.html"],
-        ["Relatórios", "relatorios.html"]
-      ];
-    } else if (perfil === "gerente_chefe") {
-      links = [
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitações", "cotacoes.html"],
-        ["Relatórios", "relatorios.html"]
-      ];
-    } else if (perfil === "rm") {
-      links = [
-        ["Registrar Visita", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitar Cotação", "cotacoes.html"]
-      ];
-    } else if (perfil === "assistente") {
-      links = [
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"]
-      ];
-    }
-
-    links.forEach(([label, href]) => {
-      const a = document.createElement("a");
-      a.href = "#";
-      a.innerHTML = `🔹 ${label}`;
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        carregarConteudoPainel(href);
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+      })
+      .catch((err) => {
+        console.error("Erro ao buscar negócios:", err);
+        container.innerHTML = "<p>❌ Erro ao buscar dados do Firestore.</p>";
       });
-      menu.appendChild(a);
-    });
-  }).catch(error => {
-    console.error("Erro ao carregar perfil:", error);
-    document.getElementById("perfilUsuario").textContent = "Erro ao carregar perfil.";
-  });
-});
-
-function carregarConteudoPainel(pagina) {
-  const conteudo = document.getElementById("conteudoPainel");
-  conteudo.innerHTML = "<p>Carregando...</p>";
-
-  fetch(pagina)
-    .then(res => res.text())
-    .then(html => {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const bodyContent = doc.body.innerHTML;
-      conteudo.innerHTML = bodyContent;
-    })
-    .catch(err => {
-      conteudo.innerHTML = "<p>Erro ao carregar conteúdo.</p>";
-      console.error("Erro ao carregar página:", err);
-    });
+  }
 }
