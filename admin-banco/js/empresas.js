@@ -3,25 +3,23 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 const produtos = [
-  "vida_funcionarios",
-  "saude",
-  "saude_socios",
-  "frota",
-  "empresarial",
-  "do",
-  "dental",
-  "pessoa_chave"
+  "vida_funcionarios", "saude", "dental", "previdencia",
+  "saude_socios", "vida_socios", "frota", "empresarial",
+  "do", "equipamentos", "outros"
 ];
 
 const nomesProdutos = {
   vida_funcionarios: "Vida Func.",
   saude: "Saúde",
-  saude_socios: "Saúde Sócios",
-  frota: "Frota",
-  empresarial: "Empresarial",
-  do: "D&O",
   dental: "Dental",
-  pessoa_chave: "Pessoa-Chave"
+  previdencia: "Previdência",
+  saude_socios: "Saúde Sócios",
+  vida_socios: "Vida Sócios",
+  frota: "Frota",
+  empresarial: "Patrimonial",
+  do: "D&O",
+  equipamentos: "Equip.",
+  outros: "Outros"
 };
 
 auth.onAuthStateChanged(user => {
@@ -30,55 +28,75 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarEmpresas() {
-  db.collection("empresas").onSnapshot(snapshot => {
-    let html = `
-      <table>
-        <thead>
-          <tr>
-            <th>Empresa</th>
-            ${produtos.map(p => `<th>${nomesProdutos[p]}</th>`).join("")}
-            <th>Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    const promises = [];
-
+  db.collection("empresas").get().then(snapshot => {
+    const empresas = [];
     snapshot.forEach(doc => {
-      const empresa = doc.data();
-      const empresaId = doc.id;
-
-      const p = db.collection("produtos_empresa")
-        .where("empresaId", "==", empresaId)
-        .get()
-        .then(prodSnap => {
-          const statusMap = {};
-          prodSnap.forEach(prodDoc => {
-            const prod = prodDoc.data();
-            statusMap[prod.ramo] = prod.status; // campo 'ramo' corrigido
-          });
-
-          html += `
-            <tr>
-              <td>${empresa.nome}</td>
-              ${produtos.map(p => {
-                const s = statusMap[p] || "nao";
-                const classe = s === "fechado" ? "status-fechado" :
-                               s === "recusado" ? "status-recusado" : "status-nao";
-                const simbolo = s === "fechado" ? "🟢" : s === "recusado" ? "🔴" : "⚪️";
-                return `<td class="${classe}">${simbolo}</td>`;
-              }).join("")}
-              <td><a class="btn" href="cotacoes.html?empresa=${encodeURIComponent(empresa.nome)}">Negociar</a></td>
-            </tr>
-          `;
-        });
-
-      promises.push(p);
+      empresas.push({ id: doc.id, ...doc.data() });
     });
 
-    Promise.all(promises).then(() => {
-      html += "</tbody></table>";
+    Promise.all(empresas.map(async (empresa) => {
+      const cotacoesSnap = await db.collection("cotacoes-gerentes")
+        .where("empresaId", "==", empresa.id).get();
+
+      const statusPorProduto = {};
+      produtos.forEach(p => statusPorProduto[p] = "nenhum");
+
+      cotacoesSnap.forEach(doc => {
+        const c = doc.data();
+        const ramo = c.ramo;
+        if (!produtos.includes(ramo)) return;
+
+        const status = c.status.toLowerCase();
+        if (status.includes("pendente")) {
+          statusPorProduto[ramo] = "amarelo";
+        } else if (
+          status.includes("recusado") ||
+          status === "negócio emitido declinado"
+        ) {
+          statusPorProduto[ramo] = "vermelho";
+        } else if (status === "negócio emitido") {
+          statusPorProduto[ramo] = "verde";
+        } else if (status === "negócio fechado" || status === "em emissão") {
+          statusPorProduto[ramo] = "azul";
+        }
+      });
+
+      return {
+        nome: empresa.nome,
+        status: statusPorProduto
+      };
+    })).then(linhas => {
+      let html = `<table><thead><tr><th>Empresa</th>`;
+      produtos.forEach(p => {
+        html += `<th>${nomesProdutos[p]}</th>`;
+      });
+      html += `</tr></thead><tbody>`;
+
+      linhas.forEach(linha => {
+        html += `<tr><td>${linha.nome}</td>`;
+        produtos.forEach(p => {
+          const cor = linha.status[p];
+          const classe = {
+            verde: "status-verde",
+            vermelho: "status-vermelho",
+            amarelo: "status-amarelo",
+            azul: "status-azul",
+            nenhum: "status-cinza"
+          }[cor] || "status-cinza";
+          const simbolo = {
+            verde: "🟢",
+            vermelho: "🔴",
+            amarelo: "🟡",
+            azul: "🔵",
+            nenhum: "⚪️"
+          }[cor] || "⚪️";
+
+          html += `<td class="${classe}">${simbolo}</td>`;
+        });
+        html += `</tr>`;
+      });
+
+      html += `</tbody></table>`;
       document.getElementById("tabelaEmpresas").innerHTML = html;
     });
   });
