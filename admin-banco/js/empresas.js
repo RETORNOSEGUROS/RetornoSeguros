@@ -2,30 +2,25 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-const produtos = [
-  "vida_funcionarios", "saude", "dental", "previdencia",
-  "saude_socios", "vida_socios", "frota", "empresarial",
-  "do", "equipamentos", "outros"
-];
-
-const nomesProdutos = {
-  vida_funcionarios: "Vida Func.",
-  saude: "Saúde",
-  dental: "Dental",
-  previdencia: "Previdência",
-  saude_socios: "Saúde Sócios",
-  vida_socios: "Vida Sócios",
-  frota: "Frota",
-  empresarial: "Patrimonial",
-  do: "D&O",
-  equipamentos: "Equip.",
-  outros: "Outros"
-};
+let produtos = [];
+let nomesProdutos = {};
 
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
-  carregarEmpresas();
+  carregarProdutos().then(carregarEmpresas);
 });
+
+async function carregarProdutos() {
+  const snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  produtos = [];
+  nomesProdutos = {};
+  snap.forEach(doc => {
+    const id = doc.id;
+    const nome = doc.data().nomeExibicao || id;
+    produtos.push(id);
+    nomesProdutos[id] = nome;
+  });
+}
 
 function carregarEmpresas() {
   db.collection("empresas").get().then(snapshot => {
@@ -46,17 +41,27 @@ function carregarEmpresas() {
         const ramo = c.ramo;
         if (!produtos.includes(ramo)) return;
 
-        const status = c.status.toLowerCase();
-        if (status.includes("pendente")) {
+        const status = c.status?.toLowerCase() || "";
+
+        if (status === "negócio emitido") {
+          statusPorProduto[ramo] = "verde";
+        } else if (
+          status === "pendente agência" ||
+          status === "pendente corretor" ||
+          status === "pendente seguradora" ||
+          status === "pendente cliente"
+        ) {
           statusPorProduto[ramo] = "amarelo";
         } else if (
-          status.includes("recusado") ||
+          status === "recusado cliente" ||
+          status === "recusado seguradora" ||
           status === "negócio emitido declinado"
         ) {
           statusPorProduto[ramo] = "vermelho";
-        } else if (status === "negócio emitido") {
-          statusPorProduto[ramo] = "verde";
-        } else if (status === "negócio fechado" || status === "em emissão") {
+        } else if (
+          status === "negócio fechado" ||
+          status === "em emissão"
+        ) {
           statusPorProduto[ramo] = "azul";
         }
       });
