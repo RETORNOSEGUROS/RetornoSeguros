@@ -1,116 +1,125 @@
-// Inicializa Firebase (garanta que o firebase-config.js está carregado antes)
-firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
-// Elementos
-const mesSelect = document.getElementById("filtroMes");
-const rmSelect = document.getElementById("filtroRm");
-const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
+document.addEventListener("DOMContentLoaded", () => {
+  carregarRMs().then(() => carregarVencimentos());
+});
 
-// Mês atual ao abrir
-const hoje = new Date();
-const mesAtual = (hoje.getMonth() + 1).toString().padStart(2, "0");
-mesSelect.value = mesAtual;
-
-// Buscar RMs disponíveis
 async function carregarRMs() {
-  const rmsSnapshot = await db.collection("gerentes").get();
-  rmSelect.innerHTML = '<option value="Todos">Todos</option>';
-  rmsSnapshot.forEach(doc => {
-    const nome = doc.data().nome || "Sem nome";
-    rmSelect.innerHTML += `<option value="${nome}">${nome}</option>`;
+  const rmSelect = document.getElementById("rmFiltro");
+  rmSelect.innerHTML = `<option value="">Todos</option>`;
+
+  const rmsSet = new Set();
+
+  const visitasSnap = await db.collection("visitas").get();
+  visitasSnap.forEach(doc => {
+    const data = doc.data();
+    if (data.rmNome) rmsSet.add(data.rmNome);
+    if (data.rm) rmsSet.add(data.rm);
+  });
+
+  const negociosSnap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
+  negociosSnap.forEach(doc => {
+    const data = doc.data();
+    if (data.rmNome) rmsSet.add(data.rmNome);
+  });
+
+  const lista = Array.from(rmsSet).filter(Boolean).sort();
+  lista.forEach(rm => {
+    const opt = document.createElement("option");
+    opt.value = rm;
+    opt.textContent = rm;
+    rmSelect.appendChild(opt);
   });
 }
 
-// Formata valores
-function formatarValor(valor) {
-  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
+async function carregarVencimentos() {
+  const mes = document.getElementById("mesFiltro").value;
+  const rmFiltro = document.getElementById("rmFiltro").value;
+  const tbody = document.getElementById("tabelaVencimentos");
+  tbody.innerHTML = '';
 
-// Formata data
-function formatarData(data) {
-  const d = new Date(data);
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-}
-
-// Busca dados e preenche tabela
-async function buscarVencimentos() {
-  const mesSelecionado = mesSelect.value;
-  const rmSelecionado = rmSelect.value;
-  tabela.innerHTML = '<tr><td colspan="6">Carregando...</td></tr>';
-
-  const resultados = [];
+  const vencimentos = [];
 
   // VISITAS
-  const visitas = await db.collection("visitas").get();
-  visitas.forEach(doc => {
-    const visita = doc.data();
-    const empresa = visita.empresa || "Empresa não informada";
-    const rm = visita.rm || "";
-    const ramos = visita.ramos || {};
+  const visitasSnap = await db.collection("visitas").get();
+  visitasSnap.forEach(doc => {
+    const data = doc.data();
+    const empresa = data.empresaNome || data.empresa || 'Empresa';
+    const rm = data.rmNome || data.rm || '';
+    const ramos = data.ramos || {};
 
-    Object.entries(ramos).forEach(([ramoNome, ramoDados]) => {
-      if (!ramoDados.vencimento || !ramoDados.valor) return;
+    Object.entries(ramos).forEach(([ramo, info]) => {
+      if (!info.vencimento) return;
 
-      const data = new Date(ramoDados.vencimento + "/2024"); // Ex: "15/08" → "15/08/2024"
-      const mesDoc = (data.getMonth() + 1).toString().padStart(2, "0");
+      const [dia, mesDoc] = info.vencimento.split('/');
+      if (mes && mes !== mesDoc) return;
+      if (rmFiltro && rm !== rmFiltro) return;
 
-      if ((mesSelecionado === "Todos" || mesSelecionado === mesDoc) &&
-          (rmSelecionado === "Todos" || rmSelecionado === rm)) {
-        resultados.push({
-          empresa,
-          ramo: ramoNome,
-          rm,
-          valor: ramoDados.valor,
-          dataRenovacao: data,
-          origem: "Mapeado em visita"
-        });
-      }
-    });
-  });
-
-  // COTAÇÕES GERENTES
-  const cotacoes = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
-  cotacoes.forEach(doc => {
-    const c = doc.data();
-    if (!c.fimVigencia || !c.valorFinal) return;
-
-    const data = new Date(c.fimVigencia);
-    const mesDoc = (data.getMonth() + 1).toString().padStart(2, "0");
-
-    if ((mesSelecionado === "Todos" || mesSelecionado === mesDoc) &&
-        (rmSelecionado === "Todos" || rmSelecionado === c.rmNome)) {
-      resultados.push({
-        empresa: c.empresa || "Empresa",
-        ramo: c.ramo || "Ramo",
-        rm: c.rmNome || "",
-        valor: c.valorFinal,
-        dataRenovacao: data,
-        origem: "Fechado conosco"
+      vencimentos.push({
+        empresa,
+        ramo: capitalizar(ramo),
+        rm,
+        valor: info.premio || 0,
+        vencimento: info.vencimento,
+        origem: 'Mapeado em visita',
+        estilo: 'mapeado'
       });
-    }
+    });
   });
 
-  // Atualiza tabela
-  if (resultados.length === 0) {
-    tabela.innerHTML = '<tr><td colspan="6">Nenhum vencimento encontrado.</td></tr>';
-  } else {
-    tabela.innerHTML = "";
-    resultados.sort((a, b) => a.dataRenovacao - b.dataRenovacao);
-    resultados.forEach(r => {
-      const linha = tabela.insertRow();
-      linha.insertCell(0).innerText = r.empresa;
-      linha.insertCell(1).innerText = r.ramo;
-      linha.insertCell(2).innerText = r.rm;
-      linha.insertCell(3).innerText = formatarValor(r.valor);
-      linha.insertCell(4).innerText = formatarData(r.dataRenovacao);
-      linha.insertCell(5).innerText = r.origem;
+  // NEGÓCIOS FECHADOS
+  const negociosSnap = await db.collection("cotacoes-gerentes")
+    .where("status", "==", "Negócio Emitido")
+    .get();
+
+  negociosSnap.forEach(doc => {
+    const data = doc.data();
+    const rm = data.rmNome || '';
+    const fim = data.fimVigencia || '';
+    if (!fim.includes('-')) return;
+
+    const [ano, mesDoc, dia] = fim.split('-');
+    if (mes && mes !== mesDoc) return;
+    if (rmFiltro && rm !== rmFiltro) return;
+
+    vencimentos.push({
+      empresa: data.empresaNome || 'Empresa',
+      ramo: data.ramo || 'Ramo',
+      rm,
+      valor: data.premioLiquido || 0,
+      vencimento: `${dia}/${mesDoc}/${ano}`,
+      origem: 'Fechado conosco',
+      estilo: 'fechado'
     });
+  });
+
+  // Exibir
+  if (vencimentos.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Nenhum vencimento encontrado.</td></tr>';
+    return;
   }
+
+  vencimentos.sort((a, b) => {
+    const [da, ma] = a.vencimento.split('/');
+    const [db, mb] = b.vencimento.split('/');
+    return parseInt(ma + da) - parseInt(mb + db);
+  });
+
+  vencimentos.forEach(v => {
+    const tr = document.createElement("tr");
+    tr.className = v.estilo;
+    tr.innerHTML = `
+      <td>${v.empresa}</td>
+      <td>${v.ramo}</td>
+      <td>${v.rm}</td>
+      <td>R$ ${parseFloat(v.valor).toLocaleString('pt-BR')}</td>
+      <td>${v.vencimento}</td>
+      <td>${v.origem}</td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
-// Eventos
-document.getElementById("btnFiltrar").addEventListener("click", buscarVencimentos);
-
-// Ao carregar
-carregarRMs().then(buscarVencimentos);
+function capitalizar(texto) {
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
