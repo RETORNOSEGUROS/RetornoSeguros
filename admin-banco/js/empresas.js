@@ -38,31 +38,32 @@ function carregarEmpresas() {
 
       cotacoesSnap.forEach(doc => {
         const c = doc.data();
-        const ramo = c.ramo;
-        if (!produtos.includes(ramo)) return;
+        const ramoCotado = c.ramo;
+        const produtoId = produtos.find(id => nomesProdutos[id] === ramoCotado);
+        if (!produtoId) return;
 
         const status = c.status?.toLowerCase() || "";
 
         if (status === "negócio emitido") {
-          statusPorProduto[ramo] = "verde";
+          statusPorProduto[produtoId] = "verde";
         } else if (
           status === "pendente agência" ||
           status === "pendente corretor" ||
           status === "pendente seguradora" ||
           status === "pendente cliente"
         ) {
-          statusPorProduto[ramo] = "amarelo";
+          statusPorProduto[produtoId] = "amarelo";
         } else if (
           status === "recusado cliente" ||
           status === "recusado seguradora" ||
           status === "negócio emitido declinado"
         ) {
-          statusPorProduto[ramo] = "vermelho";
+          statusPorProduto[produtoId] = "vermelho";
         } else if (
           status === "negócio fechado" ||
           status === "em emissão"
         ) {
-          statusPorProduto[ramo] = "azul";
+          statusPorProduto[produtoId] = "azul";
         }
       });
 
