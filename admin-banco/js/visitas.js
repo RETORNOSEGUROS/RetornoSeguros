@@ -2,20 +2,6 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-const ramos = [
-  { id: "vida", nome: "Seguro de Vida Funcionários" },
-  { id: "saude", nome: "Plano de Saúde" },
-  { id: "dental", nome: "Plano Dental" },
-  { id: "previdencia", nome: "Previdência" },
-  { id: "saude_socios", nome: "Saúde dos Sócios" },
-  { id: "vida_socios", nome: "Vida dos Sócios" },
-  { id: "frota", nome: "Frota" },
-  { id: "empresarial", nome: "Empresarial (Patrimonial)" },
-  { id: "do", nome: "D&O" },
-  { id: "equipamentos", nome: "Equipamentos" },
-  { id: "outros", nome: "Outros" }
-];
-
 function carregarEmpresas() {
   const select = document.getElementById("empresa");
   db.collection("empresas").orderBy("nome").get().then(snapshot => {
@@ -39,8 +25,20 @@ function carregarSeguradoras() {
   });
 }
 
-function gerarCamposRamos(seguradoras) {
+async function carregarRamosSeguro() {
+  const snapshot = await db.collection("ramos-seguro").orderBy("ordem").get();
+  const ramos = [];
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    ramos.push({ id: doc.id, nome: data.nomeExibicao });
+  });
+  return ramos;
+}
+
+async function gerarCamposRamos(seguradoras) {
+  const ramos = await carregarRamosSeguro();
   const container = document.getElementById("ramos-container");
+
   ramos.forEach(ramo => {
     const box = document.createElement("div");
     box.className = "ramo-box";
@@ -130,5 +128,5 @@ function registrarVisita() {
 window.addEventListener("DOMContentLoaded", async () => {
   carregarEmpresas();
   const seguradoras = await carregarSeguradoras();
-  gerarCamposRamos(seguradoras);
+  await gerarCamposRamos(seguradoras);
 });
