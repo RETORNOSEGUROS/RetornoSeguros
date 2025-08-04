@@ -74,10 +74,12 @@ function carregarVencimentos() {
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
       const renovacao = data.fimVigencia || "-";
-      const valor = data.valorFinal || 0;
+      const valor = data.valorFinal || data.premioLiquido || 0;
 
-      if (renovacao && renovacao.includes("/")) {
-        const [dia, mes] = renovacao.split("/");
+     if (renovacao && renovacao.includes("-")) {
+  const [ano, mes, dia] = renovacao.split("-");
+  const dataFormatada = `${dia}/${mes}/${ano}`;
+        
 
         if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
@@ -125,3 +127,4 @@ function formatarReais(valor) {
   if (isNaN(numero)) return "R$ 0,00";
   return numero.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
+
