@@ -38,8 +38,8 @@ function carregarVencimentos() {
     return;
   }
 
-  const inicio = dataParaNumero(dataInicio); // ex: 0108
-  const fim = dataParaNumero(dataFim);       // ex: 1508
+  const inicio = dataParaNumero(dataInicio);
+  const fim = dataParaNumero(dataFim);
 
   // VISITAS
   firebase.firestore().collection("visitas").get().then(snapshot => {
@@ -77,11 +77,22 @@ function carregarVencimentos() {
       const empresa = data.empresa || "-";
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
-      const renovacao = data.fimVigencia || "-";
       const valor = data.valorFinal || 0;
 
-      if (validarData(renovacao)) {
-        const venc = dataParaNumero(renovacao);
+      let fimVigenciaStr = "";
+
+      if (data.fimVigencia && typeof data.fimVigencia.toDate === "function") {
+        const d = data.fimVigencia.toDate();
+        const dia = String(d.getDate()).padStart(2, '0');
+        const mes = String(d.getMonth() + 1).padStart(2, '0');
+        fimVigenciaStr = `${dia}/${mes}`;
+      } else if (typeof data.fimVigencia === "string" && data.fimVigencia.includes("/")) {
+        const partes = data.fimVigencia.split("/");
+        fimVigenciaStr = `${partes[0]}/${partes[1]}`;
+      }
+
+      if (validarData(fimVigenciaStr)) {
+        const venc = dataParaNumero(fimVigenciaStr);
         if ((inicio <= venc && venc <= fim) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
           vencimentos.push({
@@ -89,7 +100,7 @@ function carregarVencimentos() {
             ramo,
             rm,
             valor,
-            renovacao,
+            renovacao: fimVigenciaStr,
             origem: "Fechado conosco"
           });
         }
