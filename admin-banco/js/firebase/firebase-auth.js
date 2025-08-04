@@ -1,0 +1,1 @@
+// FAKE FILE - substitua pelo real se necessário
