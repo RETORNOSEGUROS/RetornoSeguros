@@ -135,7 +135,9 @@ async function carregarVencimentos() {
     }
 
   } catch (error) {
-    console.error("Erro ao carregar vencimentos:", error);
-    tabela.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">Erro ao carregar dados.</td></tr>';
-  }
+  console.error("🔥 Erro ao carregar vencimentos:", error.message, error.stack);
+  alert("Erro ao buscar dados do Firestore:\n" + error.message);
+  tabela.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">Erro ao carregar dados.</td></tr>';
 }
+}
+
