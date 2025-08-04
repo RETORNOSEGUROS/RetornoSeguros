@@ -74,21 +74,31 @@ function carregarVencimentos() {
   }).then(snapshot => {
     snapshot.forEach(doc => {
       const data = doc.data();
-      const empresa = data.empresa || "-";
+      const empresa = data.empresa || data.empresaNome || "-";
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
       const valor = data.valorFinal || 0;
 
       let fimVigenciaStr = "";
 
-      if (data.fimVigencia && typeof data.fimVigencia.toDate === "function") {
-        const d = data.fimVigencia.toDate();
-        const dia = String(d.getDate()).padStart(2, '0');
-        const mes = String(d.getMonth() + 1).padStart(2, '0');
-        fimVigenciaStr = `${dia}/${mes}`;
-      } else if (typeof data.fimVigencia === "string" && data.fimVigencia.includes("/")) {
-        const partes = data.fimVigencia.split("/");
-        fimVigenciaStr = `${partes[0]}/${partes[1]}`;
+      if (data.fimVigencia) {
+        if (typeof data.fimVigencia.toDate === "function") {
+          // Firestore Timestamp
+          const d = data.fimVigencia.toDate();
+          const dia = String(d.getDate()).padStart(2, '0');
+          const mes = String(d.getMonth() + 1).padStart(2, '0');
+          fimVigenciaStr = `${dia}/${mes}`;
+        } else if (typeof data.fimVigencia === "string") {
+          if (data.fimVigencia.includes("/")) {
+            // dd/mm/yyyy
+            const partes = data.fimVigencia.split("/");
+            fimVigenciaStr = `${partes[0]}/${partes[1]}`;
+          } else if (data.fimVigencia.includes("-")) {
+            // yyyy-mm-dd
+            const partes = data.fimVigencia.split("-");
+            fimVigenciaStr = `${partes[2]}/${partes[1]}`;
+          }
+        }
       }
 
       if (validarData(fimVigenciaStr)) {
