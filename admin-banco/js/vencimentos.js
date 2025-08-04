@@ -1,16 +1,46 @@
 const db = firebase.firestore();
 
+document.addEventListener('DOMContentLoaded', () => {
+  preencherRMs();
+  carregarVencimentos();
+});
+
+async function preencherRMs() {
+  const select = document.getElementById("rmFiltro");
+  const rmsSet = new Set();
+
+  const visitasSnap = await db.collection("visitas").get();
+  visitasSnap.forEach(doc => {
+    const data = doc.data();
+    if (data.rm) rmsSet.add(data.rm);
+  });
+
+  const negociosSnap = await db.collection("negocios-fechados").get();
+  negociosSnap.forEach(doc => {
+    const data = doc.data();
+    if (data.rm) rmsSet.add(data.rm);
+  });
+
+  const rms = Array.from(rmsSet).sort();
+  rms.forEach(rm => {
+    const option = document.createElement("option");
+    option.value = rm;
+    option.textContent = rm;
+    select.appendChild(option);
+  });
+}
+
 async function carregarVencimentos() {
   const mesFiltro = document.getElementById('mesFiltro').value;
-  const rmFiltro = document.getElementById('rmFiltro').value.toLowerCase();
+  const rmFiltro = document.getElementById('rmFiltro').value;
   const tabela = document.getElementById('tabelaVencimentos');
   tabela.innerHTML = '';
 
   const vencimentos = [];
 
-  // --- COLEÇÃO VENCIMENTOS ---
-  const vencimentosSnap = await db.collection('vencimentos').get();
-  vencimentosSnap.forEach(doc => {
+  // --- VISITAS ---
+  const visitasSnap = await db.collection('visitas').get();
+  visitasSnap.forEach(doc => {
     const data = doc.data();
     const empresa = data.empresaNome || 'Empresa';
     const rm = data.rm || '';
@@ -20,7 +50,7 @@ async function carregarVencimentos() {
       if (!seg.vencimento) return;
       const [dia, mes] = seg.vencimento.split('/');
       if (mesFiltro && mesFiltro !== mes) return;
-      if (rmFiltro && !rm.toLowerCase().includes(rmFiltro)) return;
+      if (rmFiltro && rmFiltro !== '' && rm !== rmFiltro) return;
 
       vencimentos.push({
         empresa,
@@ -34,7 +64,7 @@ async function carregarVencimentos() {
     });
   });
 
-  // --- COLEÇÃO NEGÓCIOS-FECHADOS ---
+  // --- NEGÓCIOS FECHADOS ---
   const negociosSnap = await db.collection('negocios-fechados').get();
   negociosSnap.forEach(doc => {
     const data = doc.data();
@@ -44,7 +74,7 @@ async function carregarVencimentos() {
     if (!fim.includes('/')) return;
     const [dia, mes] = fim.split('/');
     if (mesFiltro && mesFiltro !== mes) return;
-    if (rmFiltro && !rm.toLowerCase().includes(rmFiltro)) return;
+    if (rmFiltro && rmFiltro !== '' && rm !== rmFiltro) return;
 
     vencimentos.push({
       empresa,
@@ -55,6 +85,13 @@ async function carregarVencimentos() {
       origem: 'Fechado conosco',
       estilo: 'fechado'
     });
+  });
+
+  // Ordenar por data
+  vencimentos.sort((a, b) => {
+    const [da, ma] = a.vencimento.split('/');
+    const [db, mb] = b.vencimento.split('/');
+    return parseInt(ma + da) - parseInt(mb + db);
   });
 
   // Exibir na tabela
