@@ -1,77 +1,75 @@
-console.log("🚀 Script carregado");
+function formatarData(data) {
+  if (!data || !data.seconds) return '';
+  const d = new Date(data.seconds * 1000);
+  return `${('0' + d.getDate()).slice(-2)}/${('0' + (d.getMonth() + 1)).slice(-2)}`;
+}
 
-firebase.auth().onAuthStateChanged(user => {
-  console.log("🔐 Firebase Auth detectado");
-
-  if (user) {
-    console.log("✅ Usuário logado:", user.email);
-    carregarRMs();
-    carregarVencimentos();
-    document.getElementById("btnFiltrar").addEventListener("click", carregarVencimentos);
-  } else {
-    console.warn("⚠️ Usuário não autenticado. Redirecionando...");
-    window.location.href = "./gerentes-login.html";
-  }
-});
+function formatarValor(valor) {
+  if (!valor) return 'R$ 0,00';
+  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
 
 function carregarRMs() {
-  console.log("📥 Carregando RMs...");
-  const selectRM = document.getElementById("filtroRM");
-  selectRM.innerHTML = `<option value="Todos">Todos</option>`;
-  firebase.firestore().collection("gerentes").get().then(snapshot => {
+  const filtroRm = document.getElementById("filtroRm");
+  filtroRm.innerHTML = `<option value="todos">Todos</option>`;
+  
+  db.collection("usuarios").where("perfil", "==", "gerente").get().then(snapshot => {
     snapshot.forEach(doc => {
-      const gerente = doc.data();
-      if (gerente.nome) {
-        const option = document.createElement("option");
-        option.value = gerente.nome;
-        option.textContent = gerente.nome;
-        selectRM.appendChild(option);
-      }
+      const data = doc.data();
+      const opt = document.createElement("option");
+      opt.value = data.nome;
+      opt.textContent = data.nome;
+      filtroRm.appendChild(opt);
     });
-    console.log("✅ RMs carregados.");
-  }).catch(err => {
-    console.error("❌ Erro ao carregar RMs:", err);
+    console.log("✅ RMs carregados com sucesso");
+  }).catch(error => {
+    console.error("Erro ao carregar RMs:", error);
   });
 }
 
-function carregarVencimentos() {
-  console.log("📊 Iniciando carregamento de vencimentos...");
+function filtrarDados() {
+  const dataInicioInput = document.getElementById("dataInicio").value.trim();
+  const dataFimInput = document.getElementById("dataFim").value.trim();
+  const filtroRm = document.getElementById("filtroRm").value;
 
-  const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
-  tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Carregando...</td></tr>`;
+  const tabela = document.getElementById("tabelaVencimentos");
+  tabela.innerHTML = `<tr><td colspan="6" id="carregando">Carregando...</td></tr>`;
 
-  const dataInicio = document.getElementById("dataInicio").value.trim();
-  const dataFim = document.getElementById("dataFim").value.trim();
-  const rmSelecionado = document.getElementById("filtroRM").value;
-  const vencimentos = [];
+  const [diaInicio, mesInicio] = dataInicioInput.split("/");
+  const [diaFim, mesFim] = dataFimInput.split("/");
+  const dataInicio = { dia: parseInt(diaInicio), mes: parseInt(mesInicio) };
+  const dataFim = { dia: parseInt(diaFim), mes: parseInt(mesFim) };
 
-  if (!validarData(dataInicio) || !validarData(dataFim)) {
-    tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Informe datas válidas (dd/mm).</td></tr>`;
-    return;
-  }
+  console.log("🔍 Filtros aplicados:", { dataInicio, dataFim, filtroRm });
 
-  const inicio = dataParaNumero(dataInicio);
-  const fim = dataParaNumero(dataFim);
+  const resultados = [];
 
-  firebase.firestore().collection("visitas").get().then(snapshot => {
+  // 1. VISITAS
+  db.collection("visitas").get().then(snapshot => {
+    console.log("📋 Total de visitas:", snapshot.size);
+    
     snapshot.forEach(doc => {
-      const data = doc.data();
-      const empresa = data.empresaNome || "-";
-      const rm = data.rmNome || "-";
-      const ramos = data.ramos || {};
+      const visita = doc.data();
+      const empresa = visita.empresa || "";
+      const rm = visita.rmNome || "";
+      const ramos = visita.ramos || {};
 
-      Object.keys(ramos).forEach(ramo => {
-        const info = ramos[ramo];
-        if (info && info.vencimento && validarData(info.vencimento)) {
-          const venc = dataParaNumero(info.vencimento);
-          if ((inicio <= venc && venc <= fim) &&
-              (rmSelecionado === "Todos" || rmSelecionado === rm)) {
-            vencimentos.push({
+      Object.entries(ramos).forEach(([ramoNome, dados]) => {
+        if (dados.vencimento) {
+          const [dia, mes] = dados.vencimento.split("/").map(Number);
+
+          const dentroPeriodo = (
+            (mes > dataInicio.mes || (mes === dataInicio.mes && dia >= dataInicio.dia)) &&
+            (mes < dataFim.mes || (mes === dataFim.mes && dia <= dataFim.dia))
+          );
+
+          if (dentroPeriodo && (filtroRm === "todos" || filtroRm === rm)) {
+            resultados.push({
               empresa,
-              ramo: ramo.toUpperCase(),
+              ramo: ramoNome,
               rm,
-              valor: info.premio || 0,
-              renovacao: info.vencimento,
+              valor: dados.premioAnual || 0,
+              dataRenovacao: dados.vencimento,
               origem: "Mapeado em visita"
             });
           }
@@ -79,90 +77,77 @@ function carregarVencimentos() {
       });
     });
 
-    return firebase.firestore().collection("cotacoes-gerentes")
+    console.log("🟢 Visitados válidos:", resultados.length);
+
+    // 2. COTAÇÕES GERADAS E FECHADAS
+    return db.collection("cotacoes-gerentes")
       .where("status", "==", "Negócio Emitido").get();
+
   }).then(snapshot => {
-    console.log("📦 Cotações encontradas:", snapshot.size);
+    console.log("📦 Negócios emitidos:", snapshot.size);
 
     snapshot.forEach(doc => {
-      const data = doc.data();
-      const empresa = data.empresa || data.empresaNome || "-";
-      const rm = data.rmNome || "-";
-      const ramo = data.ramo || "-";
-      const valor = data.valorFinal || 0;
+      const cotacao = doc.data();
+      const data = cotacao.fimVigencia?.toDate();
+      if (!data) return;
 
-      let fimVigenciaStr = "";
+      const dia = data.getDate();
+      const mes = data.getMonth() + 1;
 
-      if (data.fimVigencia) {
-        if (typeof data.fimVigencia.toDate === "function") {
-          const d = data.fimVigencia.toDate();
-          fimVigenciaStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
-        } else if (typeof data.fimVigencia === "string") {
-          if (data.fimVigencia.includes("/")) {
-            const partes = data.fimVigencia.split("/");
-            fimVigenciaStr = `${partes[0]}/${partes[1]}`;
-          } else if (data.fimVigencia.includes("-")) {
-            const partes = data.fimVigencia.split("-");
-            fimVigenciaStr = `${partes[2]}/${partes[1]}`;
-          }
-        }
-      }
+      const dentroPeriodo = (
+        (mes > dataInicio.mes || (mes === dataInicio.mes && dia >= dataInicio.dia)) &&
+        (mes < dataFim.mes || (mes === dataFim.mes && dia <= dataFim.dia))
+      );
 
-      if (validarData(fimVigenciaStr)) {
-        const venc = dataParaNumero(fimVigenciaStr);
-        if ((inicio <= venc && venc <= fim) &&
-            (rmSelecionado === "Todos" || rmSelecionado === rm)) {
-          vencimentos.push({
-            empresa,
-            ramo,
-            rm,
-            valor,
-            renovacao: fimVigenciaStr,
-            origem: "Fechado conosco"
-          });
-        }
+      if (dentroPeriodo && (filtroRm === "todos" || filtroRm === cotacao.rmNome)) {
+        resultados.push({
+          empresa: cotacao.nomeEmpresa,
+          ramo: cotacao.ramo,
+          rm: cotacao.rmNome,
+          valor: cotacao.valorFinal || 0,
+          dataRenovacao: `${('0' + dia).slice(-2)}/${('0' + mes).slice(-2)}`,
+          origem: "Fechado conosco"
+        });
       }
     });
 
-    exibirVencimentos(vencimentos);
-  }).catch(erro => {
-    console.error("❌ Erro ao carregar vencimentos:", erro);
+    console.log("🟢 Total geral de resultados:", resultados.length);
+
+    if (resultados.length === 0) {
+      tabela.innerHTML = `<tr><td colspan="6">Nenhum resultado encontrado.</td></tr>`;
+      return;
+    }
+
+    // Preencher a tabela
+    tabela.innerHTML = "";
+    resultados.sort((a, b) => a.dataRenovacao.localeCompare(b.dataRenovacao));
+
+    resultados.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${r.empresa}</td>
+        <td>${r.ramo}</td>
+        <td>${r.rm}</td>
+        <td>${formatarValor(r.valor)}</td>
+        <td>${r.dataRenovacao}</td>
+        <td>${r.origem}</td>
+      `;
+      tabela.appendChild(tr);
+    });
+
+  }).catch(error => {
+    console.error("❌ Erro na busca de vencimentos:", error);
+    tabela.innerHTML = `<tr><td colspan="6">Erro ao carregar os dados.</td></tr>`;
   });
 }
 
-function dataParaNumero(data) {
-  const [dia, mes] = data.split("/");
-  return parseInt(dia.padStart(2, '0') + mes.padStart(2, '0'));
-}
+// Inicia ao carregar a página
+window.addEventListener("load", () => {
+  carregarRMs();
 
-function validarData(data) {
-  return /^\d{2}\/\d{2}$/.test(data);
-}
-
-function exibirVencimentos(lista) {
-  const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
-  tabela.innerHTML = "";
-
-  if (lista.length === 0) {
-    tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Nenhum vencimento encontrado.</td></tr>`;
-    return;
-  }
-
-  lista.sort((a, b) => dataParaNumero(a.renovacao) - dataParaNumero(b.renovacao));
-
-  lista.forEach(item => {
-    const linha = tabela.insertRow();
-    linha.insertCell(0).textContent = item.empresa;
-    linha.insertCell(1).textContent = item.ramo;
-    linha.insertCell(2).textContent = item.rm;
-    linha.insertCell(3).textContent = formatarReais(item.valor);
-    linha.insertCell(4).textContent = item.renovacao;
-    linha.insertCell(5).textContent = item.origem;
-  });
-}
-
-function formatarReais(valor) {
-  const numero = parseFloat(valor);
-  if (isNaN(numero)) return "R$ 0,00";
-  return numero.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+  // Datas padrão: mês atual
+  const hoje = new Date();
+  document.getElementById("dataInicio").value = `01/${('0' + (hoje.getMonth() + 1)).slice(-2)}`;
+  document.getElementById("dataFim").value = `31/${('0' + (hoje.getMonth() + 1)).slice(-2)}`;
+  filtrarDados();
+});
