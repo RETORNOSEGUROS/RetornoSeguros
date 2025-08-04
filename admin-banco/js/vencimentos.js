@@ -1,125 +1,127 @@
-const db = firebase.firestore();
-
-document.addEventListener("DOMContentLoaded", () => {
-  carregarRMs().then(() => carregarVencimentos());
+// js/vencimentos.js
+firebase.auth().onAuthStateChanged(user => {
+  if (user) {
+    carregarRMs();
+    carregarVencimentos();
+    document.getElementById("btnFiltrar").addEventListener("click", carregarVencimentos);
+  } else {
+    window.location.href = "../gerentes-login.html";
+  }
 });
 
-async function carregarRMs() {
-  const rmSelect = document.getElementById("rmFiltro");
-  rmSelect.innerHTML = `<option value="">Todos</option>`;
+function carregarRMs() {
+  const selectRM = document.getElementById("filtroRM");
+  selectRM.innerHTML = `<option value="Todos">Todos</option>`;
 
-  const rmsSet = new Set();
-
-  const visitasSnap = await db.collection("visitas").get();
-  visitasSnap.forEach(doc => {
-    const data = doc.data();
-    if (data.rmNome) rmsSet.add(data.rmNome);
-    if (data.rm) rmsSet.add(data.rm);
-  });
-
-  const negociosSnap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
-  negociosSnap.forEach(doc => {
-    const data = doc.data();
-    if (data.rmNome) rmsSet.add(data.rmNome);
-  });
-
-  const lista = Array.from(rmsSet).filter(Boolean).sort();
-  lista.forEach(rm => {
-    const opt = document.createElement("option");
-    opt.value = rm;
-    opt.textContent = rm;
-    rmSelect.appendChild(opt);
+  firebase.firestore().collection("gerentes").get().then(snapshot => {
+    snapshot.forEach(doc => {
+      const gerente = doc.data();
+      if (gerente.nome) {
+        const option = document.createElement("option");
+        option.value = gerente.nome;
+        option.textContent = gerente.nome;
+        selectRM.appendChild(option);
+      }
+    });
   });
 }
 
-async function carregarVencimentos() {
-  const mes = document.getElementById("mesFiltro").value;
-  const rmFiltro = document.getElementById("rmFiltro").value;
-  const tbody = document.getElementById("tabelaVencimentos");
-  tbody.innerHTML = '';
+function carregarVencimentos() {
+  const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
+  tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Carregando...</td></tr>`;
+
+  const mesSelecionado = document.getElementById("filtroMes").value;
+  const rmSelecionado = document.getElementById("filtroRM").value;
 
   const vencimentos = [];
 
   // VISITAS
-  const visitasSnap = await db.collection("visitas").get();
-  visitasSnap.forEach(doc => {
-    const data = doc.data();
-    const empresa = data.empresaNome || data.empresa || 'Empresa';
-    const rm = data.rmNome || data.rm || '';
-    const ramos = data.ramos || {};
+  firebase.firestore().collection("visitas").get().then(snapshot => {
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const empresa = data.empresaNome || "-";
+      const rm = data.rmNome || "-";
+      const ramos = data.ramos || {};
 
-    Object.entries(ramos).forEach(([ramo, info]) => {
-      if (!info.vencimento) return;
+      Object.keys(ramos).forEach(ramo => {
+        const info = ramos[ramo];
+        if (info && info.vencimento) {
+          const [dia, mes] = info.vencimento.split("/");
 
-      const [dia, mesDoc] = info.vencimento.split('/');
-      if (mes && mes !== mesDoc) return;
-      if (rmFiltro && rm !== rmFiltro) return;
-
-      vencimentos.push({
-        empresa,
-        ramo: capitalizar(ramo),
-        rm,
-        valor: info.premio || 0,
-        vencimento: info.vencimento,
-        origem: 'Mapeado em visita',
-        estilo: 'mapeado'
+          if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
+              (rmSelecionado === "Todos" || rmSelecionado === rm)) {
+            vencimentos.push({
+              empresa,
+              ramo: ramo.toUpperCase(),
+              rm,
+              valor: info.premio || 0,
+              renovacao: info.vencimento,
+              origem: "Mapeado em visita"
+            });
+          }
+        }
       });
     });
-  });
 
-  // NEGÓCIOS FECHADOS
-  const negociosSnap = await db.collection("cotacoes-gerentes")
-    .where("status", "==", "Negócio Emitido")
-    .get();
+    // NEGÓCIOS FECHADOS
+    return firebase.firestore().collection("cotacoes-gerentes")
+      .where("status", "==", "Negócio Emitido")
+      .get();
+  }).then(snapshot => {
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const empresa = data.empresa || "-";
+      const rm = data.rmNome || "-";
+      const ramo = data.ramo || "-";
+      const renovacao = data.fimVigencia || "-";
+      const valor = data.valorFinal || 0;
 
-  negociosSnap.forEach(doc => {
-    const data = doc.data();
-    const rm = data.rmNome || '';
-    const fim = data.fimVigencia || '';
-    if (!fim.includes('-')) return;
+      if (renovacao && renovacao.includes("/")) {
+        const [dia, mes] = renovacao.split("/");
 
-    const [ano, mesDoc, dia] = fim.split('-');
-    if (mes && mes !== mesDoc) return;
-    if (rmFiltro && rm !== rmFiltro) return;
-
-    vencimentos.push({
-      empresa: data.empresaNome || 'Empresa',
-      ramo: data.ramo || 'Ramo',
-      rm,
-      valor: data.premioLiquido || 0,
-      vencimento: `${dia}/${mesDoc}/${ano}`,
-      origem: 'Fechado conosco',
-      estilo: 'fechado'
+        if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
+            (rmSelecionado === "Todos" || rmSelecionado === rm)) {
+          vencimentos.push({
+            empresa,
+            ramo,
+            rm,
+            valor,
+            renovacao,
+            origem: "Fechado conosco"
+          });
+        }
+      }
     });
-  });
 
-  // Exibir
-  if (vencimentos.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Nenhum vencimento encontrado.</td></tr>';
-    return;
-  }
-
-  vencimentos.sort((a, b) => {
-    const [da, ma] = a.vencimento.split('/');
-    const [db, mb] = b.vencimento.split('/');
-    return parseInt(ma + da) - parseInt(mb + db);
-  });
-
-  vencimentos.forEach(v => {
-    const tr = document.createElement("tr");
-    tr.className = v.estilo;
-    tr.innerHTML = `
-      <td>${v.empresa}</td>
-      <td>${v.ramo}</td>
-      <td>${v.rm}</td>
-      <td>R$ ${parseFloat(v.valor).toLocaleString('pt-BR')}</td>
-      <td>${v.vencimento}</td>
-      <td>${v.origem}</td>
-    `;
-    tbody.appendChild(tr);
+    exibirVencimentos(vencimentos);
   });
 }
 
-function capitalizar(texto) {
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+function exibirVencimentos(lista) {
+  const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
+  tabela.innerHTML = "";
+
+  if (lista.length === 0) {
+    tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Nenhum vencimento encontrado.</td></tr>`;
+    return;
+  }
+
+  lista.sort((a, b) => a.renovacao.localeCompare(b.renovacao));
+
+  lista.forEach(item => {
+    const linha = tabela.insertRow();
+
+    linha.insertCell(0).textContent = item.empresa;
+    linha.insertCell(1).textContent = item.ramo;
+    linha.insertCell(2).textContent = item.rm;
+    linha.insertCell(3).textContent = formatarReais(item.valor);
+    linha.insertCell(4).textContent = item.renovacao;
+    linha.insertCell(5).textContent = item.origem;
+  });
+}
+
+function formatarReais(valor) {
+  const numero = parseFloat(valor);
+  if (isNaN(numero)) return "R$ 0,00";
+  return numero.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
