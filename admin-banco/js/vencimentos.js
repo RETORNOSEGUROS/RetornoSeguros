@@ -1,4 +1,3 @@
-// js/vencimentos.js
 firebase.auth().onAuthStateChanged(user => {
   if (user) {
     carregarRMs();
@@ -12,7 +11,6 @@ firebase.auth().onAuthStateChanged(user => {
 function carregarRMs() {
   const selectRM = document.getElementById("filtroRM");
   selectRM.innerHTML = `<option value="Todos">Todos</option>`;
-
   firebase.firestore().collection("gerentes").get().then(snapshot => {
     snapshot.forEach(doc => {
       const gerente = doc.data();
@@ -30,9 +28,18 @@ function carregarVencimentos() {
   const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
   tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Carregando...</td></tr>`;
 
-  const mesSelecionado = document.getElementById("filtroMes").value;
+  const dataInicio = document.getElementById("dataInicio").value.trim();
+  const dataFim = document.getElementById("dataFim").value.trim();
   const rmSelecionado = document.getElementById("filtroRM").value;
   const vencimentos = [];
+
+  if (!validarData(dataInicio) || !validarData(dataFim)) {
+    tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Informe datas válidas (dd/mm).</td></tr>`;
+    return;
+  }
+
+  const inicio = dataParaNumero(dataInicio); // ex: 0108
+  const fim = dataParaNumero(dataFim);       // ex: 1508
 
   // VISITAS
   firebase.firestore().collection("visitas").get().then(snapshot => {
@@ -44,11 +51,9 @@ function carregarVencimentos() {
 
       Object.keys(ramos).forEach(ramo => {
         const info = ramos[ramo];
-        if (info && info.vencimento) {
-          const partes = info.vencimento.split("/");
-          const mes = partes[1];
-
-          if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
+        if (info && info.vencimento && validarData(info.vencimento)) {
+          const venc = dataParaNumero(info.vencimento);
+          if ((inicio <= venc && venc <= fim) &&
               (rmSelecionado === "Todos" || rmSelecionado === rm)) {
             vencimentos.push({
               empresa,
@@ -65,8 +70,7 @@ function carregarVencimentos() {
 
     // NEGÓCIOS FECHADOS
     return firebase.firestore().collection("cotacoes-gerentes")
-      .where("status", "==", "Negócio Emitido")
-      .get();
+      .where("status", "==", "Negócio Emitido").get();
   }).then(snapshot => {
     snapshot.forEach(doc => {
       const data = doc.data();
@@ -76,11 +80,9 @@ function carregarVencimentos() {
       const renovacao = data.fimVigencia || "-";
       const valor = data.valorFinal || 0;
 
-      if (renovacao && renovacao.includes("/")) {
-        const partes = renovacao.split("/");
-        const mes = partes[1];
-
-        if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
+      if (validarData(renovacao)) {
+        const venc = dataParaNumero(renovacao);
+        if ((inicio <= venc && venc <= fim) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
           vencimentos.push({
             empresa,
@@ -98,6 +100,15 @@ function carregarVencimentos() {
   });
 }
 
+function dataParaNumero(data) {
+  const [dia, mes] = data.split("/");
+  return parseInt(dia.padStart(2, '0') + mes.padStart(2, '0'));
+}
+
+function validarData(data) {
+  return /^\d{2}\/\d{2}$/.test(data);
+}
+
 function exibirVencimentos(lista) {
   const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
   tabela.innerHTML = "";
@@ -107,7 +118,7 @@ function exibirVencimentos(lista) {
     return;
   }
 
-  lista.sort((a, b) => a.renovacao.localeCompare(b.renovacao));
+  lista.sort((a, b) => dataParaNumero(a.renovacao) - dataParaNumero(b.renovacao));
 
   lista.forEach(item => {
     const linha = tabela.insertRow();
