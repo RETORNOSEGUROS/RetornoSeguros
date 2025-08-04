@@ -6,6 +6,7 @@ let statusDisponiveis = [];
 window.onload = async () => {
   await carregarRMs();
   await carregarStatus();
+  await carregarRamos();
   await carregarCotacoes();
   aplicarFiltros();
 };
@@ -51,6 +52,31 @@ async function carregarStatus() {
       for (const opt of selectStatus.options) opt.selected = true;
     }
   });
+}
+
+async function carregarRamos() {
+  const selectRamo = document.getElementById("filtroRamo");
+  try {
+    const snapshot = await db.collection("ramos-seguro").orderBy("ordem").get();
+    if (snapshot.empty) {
+      selectRamo.innerHTML = `<option value="">Nenhum ramo cadastrado</option>`;
+      return;
+    }
+
+    selectRamo.innerHTML = `<option value="">Todos</option>`;
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const opt = document.createElement("option");
+      opt.value = data.nomeExibicao || doc.id;
+      opt.textContent = data.nomeExibicao || doc.id;
+      selectRamo.appendChild(opt);
+    });
+
+    console.log("✅ Ramos carregados no filtro");
+  } catch (err) {
+    console.error("Erro ao carregar ramos de seguro:", err);
+    selectRamo.innerHTML = `<option value="">Erro ao carregar</option>`;
+  }
 }
 
 async function carregarCotacoes() {
