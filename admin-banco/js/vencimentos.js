@@ -1,4 +1,3 @@
-// js/vencimentos.js
 firebase.auth().onAuthStateChanged(user => {
   if (user) {
     carregarRMs();
@@ -46,7 +45,9 @@ function carregarVencimentos() {
       Object.keys(ramos).forEach(ramo => {
         const info = ramos[ramo];
         if (info && info.vencimento) {
-          const [dia, mes] = info.vencimento.split("/");
+          const partes = info.vencimento.split('/');
+          const mes = partes[1];
+          const dataFormatada = info.vencimento;
 
           if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
               (rmSelecionado === "Todos" || rmSelecionado === rm)) {
@@ -55,7 +56,7 @@ function carregarVencimentos() {
               ramo: ramo.toUpperCase(),
               rm,
               valor: info.premio || 0,
-              renovacao: info.vencimento,
+              renovacao: dataFormatada,
               origem: "Mapeado em visita"
             });
           }
@@ -73,13 +74,12 @@ function carregarVencimentos() {
       const empresa = data.empresa || "-";
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
-      const renovacao = data.fimVigencia || "-";
+      const fim = data.fimVigencia || "";
       const valor = data.valorFinal || data.premioLiquido || 0;
 
-     if (renovacao && renovacao.includes("-")) {
-  const [ano, mes, dia] = renovacao.split("-");
-  const dataFormatada = `${dia}/${mes}/${ano}`;
-        
+      if (fim && fim.includes("-")) {
+        const [ano, mes, dia] = fim.split("-");
+        const dataFormatada = `${dia}/${mes}/${ano}`;
 
         if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
@@ -88,7 +88,7 @@ function carregarVencimentos() {
             ramo,
             rm,
             valor,
-            renovacao,
+            renovacao: dataFormatada,
             origem: "Fechado conosco"
           });
         }
@@ -108,11 +108,14 @@ function exibirVencimentos(lista) {
     return;
   }
 
-  lista.sort((a, b) => a.renovacao.localeCompare(b.renovacao));
+  lista.sort((a, b) => {
+    const [da, ma] = a.renovacao.split('/');
+    const [db, mb] = b.renovacao.split('/');
+    return parseInt(ma + da) - parseInt(mb + db);
+  });
 
   lista.forEach(item => {
     const linha = tabela.insertRow();
-
     linha.insertCell(0).textContent = item.empresa;
     linha.insertCell(1).textContent = item.ramo;
     linha.insertCell(2).textContent = item.rm;
@@ -127,4 +130,3 @@ function formatarReais(valor) {
   if (isNaN(numero)) return "R$ 0,00";
   return numero.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
-
