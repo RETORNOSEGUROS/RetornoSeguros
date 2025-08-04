@@ -1,3 +1,4 @@
+
 firebase.auth().onAuthStateChanged(user => {
   if (user) {
     carregarRMs();
@@ -41,7 +42,6 @@ function carregarVencimentos() {
   const inicio = dataParaNumero(dataInicio);
   const fim = dataParaNumero(dataFim);
 
-  // VISITAS
   firebase.firestore().collection("visitas").get().then(snapshot => {
     snapshot.forEach(doc => {
       const data = doc.data();
@@ -68,12 +68,16 @@ function carregarVencimentos() {
       });
     });
 
-    // NEGÓCIOS FECHADOS
     return firebase.firestore().collection("cotacoes-gerentes")
-      .where("status", "==", "Negócio Emitido").get();
+      // .where("status", "==", "Negócio Emitido") // desativado temporariamente para debug
+      .get();
   }).then(snapshot => {
+    console.log("COTAÇÕES ENCONTRADAS:", snapshot.size);
+
     snapshot.forEach(doc => {
       const data = doc.data();
+      console.log("Cotação:", data);
+
       const empresa = data.empresa || data.empresaNome || "-";
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
@@ -83,18 +87,13 @@ function carregarVencimentos() {
 
       if (data.fimVigencia) {
         if (typeof data.fimVigencia.toDate === "function") {
-          // Firestore Timestamp
           const d = data.fimVigencia.toDate();
-          const dia = String(d.getDate()).padStart(2, '0');
-          const mes = String(d.getMonth() + 1).padStart(2, '0');
-          fimVigenciaStr = `${dia}/${mes}`;
+          fimVigenciaStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
         } else if (typeof data.fimVigencia === "string") {
           if (data.fimVigencia.includes("/")) {
-            // dd/mm/yyyy
             const partes = data.fimVigencia.split("/");
             fimVigenciaStr = `${partes[0]}/${partes[1]}`;
           } else if (data.fimVigencia.includes("-")) {
-            // yyyy-mm-dd
             const partes = data.fimVigencia.split("-");
             fimVigenciaStr = `${partes[2]}/${partes[1]}`;
           }
@@ -102,6 +101,7 @@ function carregarVencimentos() {
       }
 
       if (validarData(fimVigenciaStr)) {
+        console.log("Data válida:", fimVigenciaStr);
         const venc = dataParaNumero(fimVigenciaStr);
         if ((inicio <= venc && venc <= fim) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
@@ -118,6 +118,8 @@ function carregarVencimentos() {
     });
 
     exibirVencimentos(vencimentos);
+  }).catch(erro => {
+    console.error("Erro ao carregar cotações:", erro);
   });
 }
 
