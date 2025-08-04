@@ -28,3 +28,71 @@
   Object.defineProperty(exports, '__esModule', { value: true });
 
   var _firebase_app = {};
+  // Initialize Firebase app object
+var apps = {};
+var appHooks = {};
+
+function initializeApp(config, name) {
+  if (typeof config !== 'object' || config === null) {
+    throw new Error("Firebase: Invalid FirebaseApp configuration object.");
+  }
+
+  var appName = name || '[DEFAULT]';
+
+  if (apps[appName]) {
+    throw new Error("Firebase: Firebase App named '" + appName + "' already exists.");
+  }
+
+  var app = {
+    name: appName,
+    options: config,
+    automaticDataCollectionEnabled: false,
+    _deleted: false,
+    _addComponent: function() {},
+    _addOrOverwriteComponent: function() {},
+    _removeServiceInstance: function() {},
+    _getService: function() {},
+    _getProvider: function() {}
+  };
+
+  apps[appName] = app;
+
+  return app;
+}
+
+function getApp(name) {
+  name = name || '[DEFAULT]';
+  var app = apps[name];
+
+  if (!app) {
+    throw new Error("Firebase: No Firebase App '" + name + "' has been created - call initializeApp()");
+  }
+
+  return app;
+}
+
+function getApps() {
+  return Object.keys(apps).map(function(name) {
+    return apps[name];
+  });
+}
+function deleteApp(app) {
+  var name = app.name;
+  if (!apps[name]) {
+    throw new Error("Firebase: Firebase App named '" + name + "' does not exist.");
+  }
+
+  delete apps[name];
+  app._deleted = true;
+}
+
+exports.initializeApp = initializeApp;
+exports.getApp = getApp;
+exports.getApps = getApps;
+exports.deleteApp = deleteApp;
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
+}));
+//# sourceMappingURL=firebase-app.js.map
+
