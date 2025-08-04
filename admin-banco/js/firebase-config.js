@@ -1,4 +1,4 @@
-// firebase-config.js (Firebase 8 - namespace global)
+// js/firebase-config.js
 const firebaseConfig = {
   apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
   authDomain: "retorno-seguros.firebaseapp.com",
@@ -9,7 +9,7 @@ const firebaseConfig = {
   measurementId: "G-C6E44WXLPW"
 };
 
-// ✅ Essa linha é essencial e segura — só roda uma vez
+// EVITA ERRO DE REINICIALIZAÇÃO
 if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
