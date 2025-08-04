@@ -3,11 +3,15 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let produtos = [];
-let nomesProdutos = {};
+let nomesProdutos = [];
+let empresasCache = [];
 
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
-  carregarProdutos().then(carregarEmpresas);
+  carregarProdutos().then(() => {
+    carregarRM();
+    carregarEmpresas();
+  });
 });
 
 async function carregarProdutos() {
@@ -22,14 +26,38 @@ async function carregarProdutos() {
   });
 }
 
+async function carregarRM() {
+  const select = document.getElementById("filtroRM");
+  const snapshot = await db.collection("empresas").get();
+  const rms = new Set();
+
+  snapshot.forEach(doc => {
+    const dados = doc.data();
+    if (dados.rm) rms.add(dados.rm);
+  });
+
+  select.innerHTML = `<option value="">Todos</option>`;
+  Array.from(rms).sort().forEach(rm => {
+    const opt = document.createElement("option");
+    opt.value = rm;
+    opt.textContent = rm;
+    select.appendChild(opt);
+  });
+}
+
 function carregarEmpresas() {
+  const filtroRM = document.getElementById("filtroRM").value;
+
   db.collection("empresas").get().then(snapshot => {
-    const empresas = [];
+    empresasCache = [];
     snapshot.forEach(doc => {
-      empresas.push({ id: doc.id, ...doc.data() });
+      const empresa = { id: doc.id, ...doc.data() };
+      if (!filtroRM || empresa.rm === filtroRM) {
+        empresasCache.push(empresa);
+      }
     });
 
-    Promise.all(empresas.map(async (empresa) => {
+    Promise.all(empresasCache.map(async (empresa) => {
       const cotacoesSnap = await db.collection("cotacoes-gerentes")
         .where("empresaId", "==", empresa.id).get();
 
