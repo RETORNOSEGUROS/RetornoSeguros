@@ -49,8 +49,8 @@ function carregarVencimentos() {
           const mes = partes[1];
           const dataFormatada = info.vencimento;
 
-          if ((mesSelecionado === "Todos" || parseInt(mes) === parseInt(mesSelecionado)) &&
-              (rmSelecionado === "Todos" || rmSelecionado === rm)) {
+          if (true) {
+
             vencimentos.push({
               empresa,
               ramo: ramo.toUpperCase(),
@@ -130,3 +130,4 @@ function formatarReais(valor) {
   if (isNaN(numero)) return "R$ 0,00";
   return numero.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
+
