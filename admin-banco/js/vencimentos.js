@@ -1,15 +1,21 @@
+console.log("🚀 Script carregado");
 
 firebase.auth().onAuthStateChanged(user => {
+  console.log("🔐 Firebase Auth detectado");
+
   if (user) {
+    console.log("✅ Usuário logado:", user.email);
     carregarRMs();
     carregarVencimentos();
     document.getElementById("btnFiltrar").addEventListener("click", carregarVencimentos);
   } else {
+    console.warn("⚠️ Usuário não autenticado. Redirecionando...");
     window.location.href = "./gerentes-login.html";
   }
 });
 
 function carregarRMs() {
+  console.log("📥 Carregando RMs...");
   const selectRM = document.getElementById("filtroRM");
   selectRM.innerHTML = `<option value="Todos">Todos</option>`;
   firebase.firestore().collection("gerentes").get().then(snapshot => {
@@ -22,10 +28,15 @@ function carregarRMs() {
         selectRM.appendChild(option);
       }
     });
+    console.log("✅ RMs carregados.");
+  }).catch(err => {
+    console.error("❌ Erro ao carregar RMs:", err);
   });
 }
 
 function carregarVencimentos() {
+  console.log("📊 Iniciando carregamento de vencimentos...");
+
   const tabela = document.getElementById("tabelaVencimentos").getElementsByTagName("tbody")[0];
   tabela.innerHTML = `<tr><td colspan="6" style="text-align:center;">Carregando...</td></tr>`;
 
@@ -69,15 +80,12 @@ function carregarVencimentos() {
     });
 
     return firebase.firestore().collection("cotacoes-gerentes")
-      // .where("status", "==", "Negócio Emitido") // desativado temporariamente para debug
-      .get();
+      .where("status", "==", "Negócio Emitido").get();
   }).then(snapshot => {
-    console.log("COTAÇÕES ENCONTRADAS:", snapshot.size);
+    console.log("📦 Cotações encontradas:", snapshot.size);
 
     snapshot.forEach(doc => {
       const data = doc.data();
-      console.log("Cotação:", data);
-
       const empresa = data.empresa || data.empresaNome || "-";
       const rm = data.rmNome || "-";
       const ramo = data.ramo || "-";
@@ -101,7 +109,6 @@ function carregarVencimentos() {
       }
 
       if (validarData(fimVigenciaStr)) {
-        console.log("Data válida:", fimVigenciaStr);
         const venc = dataParaNumero(fimVigenciaStr);
         if ((inicio <= venc && venc <= fim) &&
             (rmSelecionado === "Todos" || rmSelecionado === rm)) {
@@ -119,7 +126,7 @@ function carregarVencimentos() {
 
     exibirVencimentos(vencimentos);
   }).catch(erro => {
-    console.error("Erro ao carregar cotações:", erro);
+    console.error("❌ Erro ao carregar vencimentos:", erro);
   });
 }
 
