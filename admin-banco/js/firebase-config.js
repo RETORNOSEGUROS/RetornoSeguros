@@ -7,9 +7,10 @@ const firebaseConfig = {
   messagingSenderId: "495712392972",
   appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
   measurementId: "G-C6E44WXLPW"
+};
 
-  // ✅ Adiciona somente se ainda não foi inicializado
+// ✅ Inicializar o Firebase apenas se ainda não foi inicializado
 if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
-};
+}
 
