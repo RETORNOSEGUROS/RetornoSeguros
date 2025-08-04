@@ -1,5 +1,3 @@
-// cotacoes.js COMPLETO E FUNCIONAL PARA ADMIN E RM
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -127,7 +125,13 @@ async function criarNovaCotacao() {
     criadoPorUid: usuarioAtual.uid,
     autorUid: usuarioAtual.uid,
     autorNome: usuarioAtual.email,
-    interacoes: obs ? [{ autorUid: usuarioAtual.uid, autorNome: usuarioAtual.email, mensagem: obs, dataHora: new Date(), tipo: "observacao" }] : []
+    interacoes: obs ? [{
+      autorUid: usuarioAtual.uid,
+      autorNome: usuarioAtual.email,
+      mensagem: obs,
+      dataHora: new Date(),
+      tipo: "observacao"
+    }] : []
   };
 
   await db.collection("cotacoes-gerentes").add(cotacao);
@@ -169,7 +173,13 @@ function carregarCotacoesComFiltros() {
         <td>${valor}</td>
         <td>${c.status}</td>
         <td>${data}</td>
-        <td><a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a> ${isAdmin ? `| <a href="#" onclick="editarCotacao('${c.id}')">Editar</a>` : ""}</td>
+        <td>
+          <a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a>
+          ${isAdmin ? `
+            | <a href="#" onclick="editarCotacao('${c.id}')">Editar</a>
+            | <a href="#" onclick="excluirCotacao('${c.id}')" style="color:red;" title="Excluir cotação">🗑️</a>
+          ` : ""}
+        </td>
       </tr>`;
     });
     html += `</tbody></table>`;
@@ -212,7 +222,13 @@ async function salvarAlteracoesCotacao() {
   };
 
   if (obs) {
-    update.interacoes = [{ autorUid: usuarioAtual.uid, autorNome: usuarioAtual.email, dataHora: new Date(), mensagem: obs, tipo: "observacao" }];
+    update.interacoes = [{
+      autorUid: usuarioAtual.uid,
+      autorNome: usuarioAtual.email,
+      dataHora: new Date(),
+      mensagem: obs,
+      tipo: "observacao"
+    }];
   }
 
   await db.collection("cotacoes-gerentes").doc(id).update(update);
@@ -221,9 +237,23 @@ async function salvarAlteracoesCotacao() {
   carregarCotacoesComFiltros();
 }
 
+function excluirCotacao(id) {
+  if (!confirm("Tem certeza que deseja excluir esta cotação? Essa ação não poderá ser desfeita.")) return;
+  db.collection("cotacoes-gerentes").doc(id).delete()
+    .then(() => {
+      alert("Cotação excluída com sucesso.");
+      carregarCotacoesComFiltros();
+    })
+    .catch(err => {
+      console.error("Erro ao excluir cotação:", err);
+      alert("Erro ao excluir cotação.");
+    });
+}
+
 window.preencherEmpresa = preencherEmpresa;
 window.preencherEmpresaNova = preencherEmpresaNova;
 window.criarNovaCotacao = criarNovaCotacao;
 window.carregarCotacoesComFiltros = carregarCotacoesComFiltros;
 window.editarCotacao = editarCotacao;
 window.salvarAlteracoesCotacao = salvarAlteracoesCotacao;
+window.excluirCotacao = excluirCotacao;
