@@ -1,4 +1,3 @@
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -17,7 +16,10 @@ window.addEventListener("DOMContentLoaded", () => {
     console.log("✅ Autenticado como:", user.email);
 
     try {
-      await carregarEmpresas();
+      await Promise.all([
+        carregarEmpresas(),
+        carregarRamosSeguro()
+      ]);
       carregarCotacoesDoUsuario();
     } catch (err) {
       console.error("Erro ao carregar dados iniciais:", err);
@@ -57,6 +59,31 @@ async function carregarEmpresas() {
   }
 }
 
+async function carregarRamosSeguro() {
+  const select = document.getElementById("ramo");
+  try {
+    const snapshot = await db.collection("ramos-seguro").orderBy("ordem").get();
+    if (snapshot.empty) {
+      select.innerHTML = `<option value="">Nenhum ramo cadastrado</option>`;
+      return;
+    }
+
+    select.innerHTML = `<option value="">Selecione o ramo</option>`;
+    snapshot.forEach(doc => {
+      const d = doc.data();
+      const opt = document.createElement("option");
+      opt.value = d.nomeExibicao || doc.id;
+      opt.textContent = d.nomeExibicao || doc.id;
+      select.appendChild(opt);
+    });
+
+    console.log("✅ Ramos de seguro carregados");
+  } catch (err) {
+    console.error("Erro ao carregar ramos de seguro:", err);
+    select.innerHTML = `<option value="">Erro ao carregar ramos</option>`;
+  }
+}
+
 function preencherEmpresa() {
   const empresaId = document.getElementById("empresa").value;
   const infoCNPJ = document.getElementById("info-cnpj");
@@ -91,14 +118,14 @@ function carregarCotacoesDoUsuario() {
         const cot = doc.data();
         const div = document.createElement("div");
         div.style.marginBottom = "20px";
-       const dataCriacao = cot.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
-div.innerHTML = `
-  <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
-  Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
-  Criado em: ${dataCriacao}<br>
-  Status: <b>${cot.status}</b><br>
-  <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
-`;
+        const dataCriacao = cot.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+        div.innerHTML = `
+          <strong>${cot.empresaNome}</strong> (${cot.ramo})<br>
+          Valor Desejado: R$ ${cot.valorDesejado?.toLocaleString("pt-BR") || "0,00"}<br>
+          Criado em: ${dataCriacao}<br>
+          Status: <b>${cot.status}</b><br>
+          <a href="chat-cotacao.html?id=${doc.id}">Abrir conversa</a>
+        `;
         lista.appendChild(div);
       });
     })
