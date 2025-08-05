@@ -1,60 +1,95 @@
-const dicasProdutos = [
-  {
-    campo: "dental-funcionarios",
-    nome: "Dental Funcionários",
-    descricao: "Plano odontológico voltado a funcionários, com rede nacional.",
-    oQuePedir: "Quantidade de vidas, CNPJ, cobertura desejada, plano atual se houver.",
-    dicas: "Planos odontológicos aumentam a satisfação dos colaboradores com custo reduzido.",
-    gatilhos: "Economia, valorização, retenção, convenção coletiva."
-  },
-  {
-    campo: "frota",
-    nome: "Frota",
-    descricao: "Seguro para veículos de empresas com condições especiais.",
-    oQuePedir: "Placas, renavam, perfil de uso, tipo de cobertura desejada.",
-    dicas: "Você pode economizar até 30% com um seguro de frota estruturado.",
-    gatilhos: "Redução de custos, proteção patrimonial, previsibilidade."
-  },
-  {
-    campo: "vida-resgatável",
-    nome: "Vida Resgatável",
-    descricao: "Seguro de vida com possibilidade de resgate e blindagem patrimonial.",
-    oQuePedir: "Idade dos sócios, valor de cobertura desejado, estrutura societária.",
-    dicas: "Ideal para blindagem de patrimônio e planejamento sucessório.",
-    gatilhos: "Blindagem, sucessão, rentabilidade, proteção."
-  },
-  {
-    campo: "saude-funcionarios",
-    nome: "Saúde Funcionários",
-    descricao: "Plano de saúde empresarial com redes e coberturas flexíveis.",
-    oQuePedir: "Quantidade de vidas, operadora atual, carências, região de cobertura.",
-    dicas: "Reduz turnover e melhora a produtividade com benefícios reais.",
-    gatilhos: "Retenção, benefício valorizado, saúde preventiva."
-  },
-  {
-    campo: "empresarial-patrimonial",
-    nome: "Empresarial Patrimonial",
-    descricao: "Proteção contra incêndios, roubo, danos elétricos e mais.",
-    oQuePedir: "Valor do imóvel, tipo de atividade, endereço, proteções existentes.",
-    dicas: "Proteja seu negócio contra imprevistos com custo acessível.",
-    gatilhos: "Segurança, continuidade, proteção do patrimônio."
+const ADMIN_EMAIL = "patrick@retornoseguros.com.br";
+let db, userEmail;
+
+firebase.auth().onAuthStateChanged(user => {
+  if (!user) {
+    alert("Você precisa estar logado para acessar.");
+    window.location.href = "../index.html";
+    return;
   }
-];
 
-function renderizarDicasProdutos(containerId = 'produtosContainer') {
-  const container = document.getElementById(containerId);
-  if (!container) return;
+  userEmail = user.email;
+  db = firebase.firestore();
+  carregarDicas();
+});
 
-  dicasProdutos.forEach(produto => {
-    const card = document.createElement('div');
-    card.className = 'produto';
-    card.innerHTML = `
-      <h2>${produto.nome}</h2>
-      <div class="campo"><strong>O que é:</strong> ${produto.descricao}</div>
-      <div class="campo"><strong>O que pedir para cotar:</strong> ${produto.oQuePedir}</div>
-      <div class="campo"><strong>Dicas comerciais:</strong> ${produto.dicas}</div>
-      <div class="campo"><strong>Gatilhos mentais:</strong> ${produto.gatilhos}</div>
-    `;
-    container.appendChild(card);
+function carregarDicas() {
+  db.collection("dicas_produtos").orderBy("nomeProduto").get().then(snapshot => {
+    const container = document.getElementById("container");
+    container.innerHTML = "";
+
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const id = doc.id;
+
+      if (userEmail === ADMIN_EMAIL) {
+        container.appendChild(criarCardEdicao(id, data));
+      } else {
+        container.appendChild(criarTextoCorrido(data));
+      }
+    });
+  });
+}
+
+function criarCardEdicao(id, data) {
+  const div = document.createElement("div");
+  div.className = "card";
+
+  div.innerHTML = `
+    <h2>${data.nomeProduto}</h2>
+    <label>O que é:</label>
+    <textarea id="desc-${id}">${data.descricao || ''}</textarea>
+
+    <label>O que pedir para cotar:</label>
+    <textarea id="pedir-${id}">${data.oQuePedir || ''}</textarea>
+
+    <label>Dicas comerciais:</label>
+    <textarea id="dicas-${id}">${data.dicas || ''}</textarea>
+
+    <label>Gatilhos mentais:</label>
+    <textarea id="gatilhos-${id}">${data.gatilhos || ''}</textarea>
+
+    <button onclick="salvar('${id}')">Salvar</button>
+  `;
+
+  return div;
+}
+
+function criarTextoCorrido(data) {
+  const div = document.createElement("div");
+  div.className = "card";
+
+  div.innerHTML = `
+    <h2>${data.nomeProduto}</h2>
+    <div class="texto-corrido">
+      <strong>O que é:</strong> ${data.descricao || ''}
+
+      <strong>O que pedir para cotar:</strong> ${data.oQuePedir || ''}
+
+      <strong>Dicas comerciais:</strong> ${data.dicas || ''}
+
+      <strong>Gatilhos mentais:</strong> ${data.gatilhos || ''}
+    </div>
+  `;
+  return div;
+}
+
+function salvar(id) {
+  const docRef = db.collection("dicas_produtos").doc(id);
+  const descricao = document.getElementById(`desc-${id}`).value.trim();
+  const oQuePedir = document.getElementById(`pedir-${id}`).value.trim();
+  const dicas = document.getElementById(`dicas-${id}`).value.trim();
+  const gatilhos = document.getElementById(`gatilhos-${id}`).value.trim();
+
+  docRef.update({
+    descricao,
+    oQuePedir,
+    dicas,
+    gatilhos
+  }).then(() => {
+    alert("Dica atualizada com sucesso!");
+  }).catch(err => {
+    console.error("Erro ao salvar:", err);
+    alert("Erro ao salvar.");
   });
 }
