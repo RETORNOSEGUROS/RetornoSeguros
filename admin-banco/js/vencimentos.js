@@ -51,20 +51,27 @@ async function getUsuarioNome(uid) {
     console.error("Erro ao buscar usuário:", e);
     return "-";
   }
+}
 
 async function getEmpresaInfo(empId) {
-  if (!empId || typeof empId !== "string" || empId.trim() === "") return { nome: "-", rmNome: "-", rmId: "", id: "" };
+  if (typeof empId !== "string" || empId.trim() === "") return { nome: "-", rmNome: "-", rmId: "", id: "" };
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
-  const snap = await db.collection("empresas").doc(empId).get();
-  const data = snap.data();
-  const info = {
-    nome: data?.nome || empId,
-    rmNome: data?.rm || "-",
-    rmId: data?.rmId || "",
-    id: empId
-  };
-  cacheEmpresas[empId] = info;
-  return info;
+
+  try {
+    const snap = await db.collection("empresas").doc(empId).get();
+    const data = snap.data();
+    const info = {
+      nome: data?.nome || empId,
+      rmNome: data?.rm || "-",
+      rmId: data?.rmId || "",
+      id: empId
+    };
+    cacheEmpresas[empId] = info;
+    return info;
+  } catch (e) {
+    console.error("Erro ao buscar empresa:", e);
+    return { nome: "-", rmNome: "-", rmId: "", id: "" };
+  }
 }
 
 function dentroDoIntervalo(diaMes, inicio, fim) {
@@ -198,4 +205,3 @@ async function carregarRMs() {
 }
 
 carregarRMs().then(() => carregarRelatorio());
-
