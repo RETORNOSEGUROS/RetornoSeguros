@@ -82,21 +82,15 @@ async function carregarRelatorio() {
     }
   }
 
-  // NEGÓCIOS
-  const cotacoesSnap = await db.collection("cotacoes-gerentes").get();
-  for (const doc of cotacoesSnap.docs) {
+  // NEGÓCIOS FECHADOS
+  const negociosSnap = await db.collection("negocios-fechados").get();
+  for (const doc of negociosSnap.docs) {
     const data = doc.data();
     const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
-    const usuarioNome = await getUsuarioNome(data.autorUid);
+    const usuarioNome = await getUsuarioNome(data.usuarioUid || data.autorUid || "-");
     const empresaInfo = await getEmpresaInfo(data.empresaId);
-    const premio = Number(data.premioLiquido || 0).toLocaleString("pt-BR");
-
-    let vencimento = "-";
-    if (data.fimVigencia && data.fimVigencia.length === 10) {
-      // Formato esperado: yyyy-mm-dd
-      const partes = data.fimVigencia.split("-");
-      vencimento = `${partes[2]}/${partes[1]}`;
-    }
+    const premio = Number(data.premio || 0).toLocaleString("pt-BR");
+    const vencimento = formatarDataDiaMes(data.vencimento || "-");
 
     tbody.innerHTML += `
       <tr>
@@ -106,13 +100,4 @@ async function carregarRelatorio() {
         <td>${empresaInfo.nome}</td>
         <td>${empresaInfo.rmNome}</td>
         <td>${data.ramo || "-"}</td>
-        <td>${vencimento}</td>
-        <td>R$ ${premio}</td>
-        <td>-</td>
-        <td>${data.observacoes || "-"}</td>
-      </tr>
-    `;
-  }
-}
-
-carregarRelatorio();
+        <
