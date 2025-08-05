@@ -1,3 +1,4 @@
+
 if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
@@ -38,6 +39,7 @@ async function getEmpresaInfo(empId) {
   }
 }
 
+
 function formatarDataDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return "-";
 
@@ -55,10 +57,16 @@ function formatarDataDiaMes(dataStr) {
 
   // Se já estiver como dd/mm
   return dataStr;
+
+  }
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2]}/${partes[1]}`; // yyyy-mm-dd
+  }
+  return dataStr;
 }
 
 async function carregarRelatorio() {
-  // VISITAS
   const visitasSnap = await db.collection("visitas").get();
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
@@ -88,18 +96,25 @@ async function carregarRelatorio() {
     }
   }
 
-  // NEGÓCIOS FECHADOS
+  
+  console.log("⏳ Buscando negocios-fechados...");
   const negociosSnap = await db.collection("negocios-fechados").get();
+  console.log("📦 Total de negócios encontrados:", negociosSnap.size);
   for (const doc of negociosSnap.docs) {
     const data = doc.data();
+    console.log("🔍 Documento:", doc.id, data);
+  }
 
+  for (const doc of negociosSnap.docs) {
+    const data = doc.data();
+    
     let dataCriacao = "-";
     if (data.dataCriacao?.toDate) {
       dataCriacao = data.dataCriacao.toDate().toLocaleDateString("pt-BR");
     } else if (typeof data.dataCriacao === "string") {
       dataCriacao = data.dataCriacao;
     }
-
+    
     const usuarioNome = await getUsuarioNome(data.usuarioUid || data.autorUid || "-");
     const empresaInfo = await getEmpresaInfo(data.empresaId);
     const premio = Number(data.premio || 0).toLocaleString("pt-BR");
