@@ -22,6 +22,11 @@ function formatarDataDiaMes(dataStr) {
 
 function extrairDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return null;
+  if (dataStr instanceof Date) {
+    const dia = String(dataStr.getDate()).padStart(2, '0');
+    const mes = String(dataStr.getMonth() + 1).padStart(2, '0');
+    return `${dia}/${mes}`;
+  }
   if (dataStr.includes("/")) {
     const [dia, mes] = dataStr.split("/");
     return `${dia.padStart(2, '0')}/${mes.padStart(2, '0')}`;
@@ -107,27 +112,38 @@ async function carregarRelatorio() {
   // NEGÓCIOS
   const negociosSnap = await db.collection("cotacoes-gerentes").get();
   for (const doc of negociosSnap.docs) {
-    const data = doc.data();
-    const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
-    const usuarioNome = await getUsuarioNome(data.autorUid);
-    const empresa = await getEmpresaInfo(data.empresaId);
-    if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
-    const venc = extrairDiaMes(data.fimVigencia);
-    if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
+    try {
+      const data = doc.data();
+      const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+      const usuarioNome = await getUsuarioNome(data.autorUid);
+      const empresa = await getEmpresaInfo(data.empresaId);
+      if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
 
-    todosRegistros.push({
-      origem: "Negócio",
-      data: dataStr,
-      usuario: usuarioNome,
-      empresaNome: empresa.nome,
-      rm: empresa.rmNome,
-      ramo: data.ramo || "-",
-      vencimento: venc || "-",
-      premio: data.premioLiquido || 0,
-      seguradora: "-",
-      observacoes: data.observacoes || "-",
-      empresaId: empresa.id
-    });
+      let venc = "-";
+      if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
+        venc = extrairDiaMes(data.fimVigencia.toDate());
+      } else if (typeof data.fimVigencia === "string") {
+        venc = extrairDiaMes(data.fimVigencia);
+      }
+
+      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
+
+      todosRegistros.push({
+        origem: "Negócio",
+        data: dataStr,
+        usuario: usuarioNome,
+        empresaNome: empresa.nome,
+        rm: empresa.rmNome,
+        ramo: data.ramo || "-",
+        vencimento: venc || "-",
+        premio: data.premioLiquido || 0,
+        seguradora: "-",
+        observacoes: data.observacoes || "-",
+        empresaId: empresa.id
+      });
+    } catch (e) {
+      console.error("Erro ao processar negocio:", e);
+    }
   }
 
   // Ordenar por vencimento (dia/mês)
