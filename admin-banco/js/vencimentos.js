@@ -39,6 +39,7 @@ function extrairDiaMes(dataStr) {
 }
 
 async function getUsuarioNome(uid) {
+  if (!uid) return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
   const snap = await db.collection("usuarios").doc(uid).get();
   const nome = snap.data()?.nome || uid;
