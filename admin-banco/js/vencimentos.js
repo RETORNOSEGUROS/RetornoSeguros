@@ -39,11 +39,25 @@ async function getEmpresaInfo(empId) {
   }
 }
 
+
 function formatarDataDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return "-";
-  if (dataStr.includes("/")) {
-    const partes = dataStr.split("/");
-    return `${partes[0]}/${partes[1]}`;
+
+  // Se vier como dd/mm/aaaa
+  if (dataStr.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+    const [dia, mes] = dataStr.split("/");
+    return `${dia}/${mes}`;
+  }
+
+  // Se vier como yyyy-mm-dd
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2]}/${partes[1]}`;
+  }
+
+  // Se já estiver como dd/mm
+  return dataStr;
+
   }
   if (dataStr.includes("-")) {
     const partes = dataStr.split("-");
