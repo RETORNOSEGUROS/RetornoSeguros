@@ -1,73 +1,110 @@
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.firestore();
+const tbody = document.getElementById("relatorioBody");
 
-document.addEventListener("DOMContentLoaded", async () => {
-  const db = firebase.firestore();
-  const tabela = document.querySelector("#relatorioTable tbody");
+// caches para evitar buscas repetidas
+const cacheUsuarios = {};
+const cacheEmpresas = {};
 
-  function formatarData(data) {
-    if (!data) return "";
-    const dia = String(data.getDate()).padStart(2, "0");
-    const mes = String(data.getMonth() + 1).padStart(2, "0");
-    return `${dia}/${mes}`;
-  }
-
-  function formatarValor(valor) {
-    return valor ? `R$ ${valor.toFixed(2).replace(".", ",")}` : "";
-  }
-
-  function criarLinha(dado, origem) {
-    const tr = document.createElement("tr");
-    const docId = dado.id;
-    const d = dado.data();
-    const dataRef = d.data || d.criadoEm || d.dataVencimento;
-    const data = dataRef?.toDate?.() || new Date();
-    const vencimentoRef = d.vencimento || d.dataVencimento || null;
-    const vencimento = vencimentoRef?.toDate?.() || null;
-
-    tr.innerHTML = `
-      <td>${origem}</td>
-      <td>${formatarData(data)}</td>
-      <td>${d.usuarioNome || ""}</td>
-      <td>${d.empresaNome || ""}</td>
-      <td>${d.rmNome || ""}</td>
-      <td>${d.ramo || d.tipo || ""}</td>
-      <td>${formatarData(vencimento)}</td>
-      <td>${formatarValor(d.premio || d.valorEstimado)}</td>
-      <td>${d.seguradora || ""}</td>
-      <td>${d.observacoes || ""}</td>
-      <td></td>
-    `;
-    tabela.appendChild(tr);
-  }
-
+async function getUsuarioNome(uid) {
+  if (cacheUsuarios[uid]) return cacheUsuarios[uid];
+  if (!uid) return "-";
   try {
-    const visitasSnap = await db.collection("visitas").get();
-    visitasSnap.forEach(doc => {
-      const dados = doc.data();
-      const ramos = dados.ramos || {};
-      Object.keys(ramos).forEach(ramo => {
-        const info = ramos[ramo];
-        if (info && info.vencimento) {
-          criarLinha({
-            id: doc.id + "-" + ramo,
-            data: () => ({
-              ...dados,
-              ramo,
-              data: dados.data,
-              vencimento: { toDate: () => new Date(info.vencimento + "/2025") },
-              premio: info.premioAnual,
-              seguradora: info.seguradora
-            })
-          }, "Mapeado");
-        }
-      });
-    });
-
-    const negociosSnap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
-    negociosSnap.forEach(doc => {
-      criarLinha(doc, "Fechado conosco");
-    });
-
-  } catch (erro) {
-    console.error("Erro ao carregar vencimentos:", erro);
+    const snap = await db.collection("usuarios").doc(uid).get();
+    const data = snap.data();
+    const nome = data?.nome || uid;
+    cacheUsuarios[uid] = nome;
+    return nome;
+  } catch (e) {
+    return uid;
   }
-});
+}
+
+async function getEmpresaInfo(empId) {
+  if (cacheEmpresas[empId]) return cacheEmpresas[empId];
+  if (!empId) return { nome: empId, rmNome: "-" };
+  try {
+    const snap = await db.collection("empresas").doc(empId).get();
+    const data = snap.data();
+    const empresaInfo = {
+      nome: data?.nome || empId,
+      rmNome: data?.rm || "-" // <- campo "rm" é o nome do gerente
+    };
+    cacheEmpresas[empId] = empresaInfo;
+    return empresaInfo;
+  } catch (e) {
+    return { nome: empId, rmNome: "-" };
+  }
+}
+
+async function carregarRelatorio() {
+  // VISITAS
+  const visitasSnap = await db.collection("visitas").get();
+  for (const doc of visitasSnap.docs) {
+    const data = doc.data();
+    const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
+    const usuarioNome = await getUsuarioNome(data.usuarioId);
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
+    const ramos = data.ramos || {};
+
+    for (const ramoKey of Object.keys(ramos)) {
+      const ramo = ramos[ramoKey];
+      tbody.innerHTML += `
+        <tr>
+          <td>Visita</td>
+          <td>${dataStr}</td>
+          <td>${usuarioNome}</td>
+          <td>${empresaInfo.nome}</td>
+          <td>${empresaInfo.rmNome}</td>
+          <td>${ramoKey.toUpperCase()}</td>
+          <td>${ramo.vencimento || "-"}</td>
+          <td>R$ ${ramo.premio?.toLocaleString("pt-BR") || "0"}</td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+          <td>${ramo.seguradora || "-"}</td>
+          <td>${ramo.observacoes || "-"}</td>
+        </tr>
+      `;
+    }
+  }
+
+  // NEGÓCIOS FECHADOS
+  const cotacoesSnap = await db.collection("cotacoes-gerentes").get();
+  for (const doc of cotacoesSnap.docs) {
+    const data = doc.data();
+    const inicio = data.inicioVigencia || "-";
+    const fim = data.fimVigencia || "-";
+    const premio = Number(data.premioLiquido || 0).toLocaleString("pt-BR");
+    const comissao = Number(data.comissaoValor || 0).toLocaleString("pt-BR");
+    const percentual = data.comissaoPercentual || "-";
+    const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+
+    const usuarioNome = await getUsuarioNome(data.autorUid);
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
+
+    tbody.innerHTML += `
+      <tr>
+        <td>Negócio</td>
+        <td>${dataCriacao}</td>
+        <td>${usuarioNome}</td>
+        <td>${empresaInfo.nome}</td>
+        <td>${empresaInfo.rmNome}</td>
+        <td>${data.ramo || "-"}</td>
+        <td>-</td>
+        <td>R$ ${premio}</td>
+        <td>R$ ${comissao}</td>
+        <td>${percentual}%</td>
+        <td>${inicio}</td>
+        <td>${fim}</td>
+        <td>-</td>
+        <td>${data.observacoes || "-"}</td>
+      </tr>
+    `;
+  }
+}
+
+carregarRelatorio();
