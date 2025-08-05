@@ -51,14 +51,7 @@ function formatarDataDiaMes(dataStr) {
   return dataStr;
 }
 
-function abrirCotacao(empresaId, rm, ramo, valor) {
-  const url = `cotacoes.html?empresaId=${empresaId}&rm=${encodeURIComponent(rm)}&ramo=${encodeURIComponent(ramo)}&valor=${valor}`;
-  window.open(url, '_blank');
-}
-
 async function carregarRelatorio() {
-  const todosRegistros = [];
-
   // VISITAS
   const visitasSnap = await db.collection("visitas").get();
   for (const doc of visitasSnap.docs) {
@@ -72,19 +65,20 @@ async function carregarRelatorio() {
       const ramo = ramos[ramoKey];
       const vencimento = formatarDataDiaMes(ramo.vencimento || "-");
 
-      todosRegistros.push({
-        origem: "Visita",
-        data: dataStr,
-        usuario: usuarioNome,
-        empresaNome: empresaInfo.nome,
-        rm: empresaInfo.rmNome,
-        ramo: ramoKey.toUpperCase(),
-        vencimento,
-        premio: ramo.premio || 0,
-        seguradora: ramo.seguradora || "-",
-        observacoes: ramo.observacoes || "-",
-        empresaId: doc.data().empresaId
-      });
+      tbody.innerHTML += `
+        <tr>
+          <td>Visita</td>
+          <td>${dataStr}</td>
+          <td>${usuarioNome}</td>
+          <td>${empresaInfo.nome}</td>
+          <td>${empresaInfo.rmNome}</td>
+          <td>${ramoKey.toUpperCase()}</td>
+          <td>${vencimento}</td>
+          <td>R$ ${ramo.premio?.toLocaleString("pt-BR") || "0"}</td>
+          <td>${ramo.seguradora || "-"}</td>
+          <td>${ramo.observacoes || "-"}</td>
+        </tr>
+      `;
     }
   }
 
@@ -95,52 +89,27 @@ async function carregarRelatorio() {
     const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
     const usuarioNome = await getUsuarioNome(data.autorUid);
     const empresaInfo = await getEmpresaInfo(data.empresaId);
-    const premio = Number(data.premioLiquido || 0);
+    const premio = Number(data.premioLiquido || 0).toLocaleString("pt-BR");
 
     let vencimento = "-";
     if (data.fimVigencia && data.fimVigencia.length === 10) {
+      // Formato esperado: yyyy-mm-dd
       const partes = data.fimVigencia.split("-");
       vencimento = `${partes[2]}/${partes[1]}`;
     }
 
-    todosRegistros.push({
-      origem: "Negócio",
-      data: dataCriacao,
-      usuario: usuarioNome,
-      empresaNome: empresaInfo.nome,
-      rm: empresaInfo.rmNome,
-      ramo: data.ramo || "-",
-      vencimento,
-      premio,
-      seguradora: "-",
-      observacoes: data.observacoes || "-",
-      empresaId: data.empresaId
-    });
-  }
-
-  // Ordenação por vencimento
-  todosRegistros.sort((a, b) => {
-    if (a.vencimento === "-" || b.vencimento === "-") return 0;
-    const [diaA, mesA] = a.vencimento.split("/").map(Number);
-    const [diaB, mesB] = b.vencimento.split("/").map(Number);
-    return mesA === mesB ? diaA - diaB : mesA - mesB;
-  });
-
-  // Renderiza
-  for (const reg of todosRegistros) {
     tbody.innerHTML += `
       <tr>
-        <td>${reg.origem}</td>
-        <td>${reg.data}</td>
-        <td>${reg.usuario}</td>
-        <td>${reg.empresaNome}</td>
-        <td>${reg.rm}</td>
-        <td>${reg.ramo}</td>
-        <td>${reg.vencimento}</td>
-        <td>R$ ${Number(reg.premio).toLocaleString("pt-BR")}</td>
-        <td>${reg.seguradora}</td>
-        <td>${reg.observacoes}</td>
-        <td><button onclick="abrirCotacao('${reg.empresaId}', '${reg.rm}', '${reg.ramo}', '${reg.premio}')">Iniciar Cotação</button></td>
+        <td>Negócio</td>
+        <td>${dataCriacao}</td>
+        <td>${usuarioNome}</td>
+        <td>${empresaInfo.nome}</td>
+        <td>${empresaInfo.rmNome}</td>
+        <td>${data.ramo || "-"}</td>
+        <td>${vencimento}</td>
+        <td>R$ ${premio}</td>
+        <td>-</td>
+        <td>${data.observacoes || "-"}</td>
       </tr>
     `;
   }
