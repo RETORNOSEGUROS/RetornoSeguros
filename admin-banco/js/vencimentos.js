@@ -4,25 +4,51 @@ if (!firebase.apps.length) {
 const db = firebase.firestore();
 const tbody = document.getElementById("relatorioBody");
 
+// cache para nomes
+const cacheUsuarios = {};
+const cacheEmpresas = {};
+
+async function getUsuarioNome(uid) {
+  if (cacheUsuarios[uid]) return cacheUsuarios[uid];
+  if (!uid) return "-";
+  const snap = await db.collection("usuarios").doc(uid).get();
+  const data = snap.data();
+  cacheUsuarios[uid] = data?.nome || uid;
+  return cacheUsuarios[uid];
+}
+
+async function getEmpresaInfo(empId) {
+  if (cacheEmpresas[empId]) return cacheEmpresas[empId];
+  if (!empId) return { nome: empId, rmNome: "-" };
+  const snap = await db.collection("empresas").doc(empId).get();
+  const data = snap.data();
+  const empresaInfo = {
+    nome: data?.nome || empId,
+    rmNome: data?.rmNome || "-"
+  };
+  cacheEmpresas[empId] = empresaInfo;
+  return empresaInfo;
+}
+
 async function carregarRelatorio() {
   // 🔹 VISITAS
   const visitasSnap = await db.collection("visitas").get();
-  visitasSnap.forEach((doc) => {
+  for (const doc of visitasSnap.docs) {
     const data = doc.data();
     const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
-    const usuario = data.usuarioId || "-";
-    const empresaId = data.empresaId || "-";
+    const usuarioNome = await getUsuarioNome(data.usuarioId);
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
     const ramos = data.ramos || {};
 
-    Object.keys(ramos).forEach((ramoKey) => {
+    for (const ramoKey of Object.keys(ramos)) {
       const ramo = ramos[ramoKey];
       tbody.innerHTML += `
         <tr>
           <td>Visita</td>
           <td>${dataStr}</td>
-          <td>${usuario}</td>
-          <td>${empresaId}</td>
-          <td>-</td>
+          <td>${usuarioNome}</td>
+          <td>${empresaInfo.nome}</td>
+          <td>${empresaInfo.rmNome}</td>
           <td>${ramoKey.toUpperCase()}</td>
           <td>${ramo.vencimento || "-"}</td>
           <td>R$ ${ramo.premio?.toLocaleString("pt-BR") || "0"}</td>
@@ -34,12 +60,12 @@ async function carregarRelatorio() {
           <td>${ramo.observacoes || "-"}</td>
         </tr>
       `;
-    });
-  });
+    }
+  }
 
   // 🔹 NEGÓCIOS FECHADOS
   const cotacoesSnap = await db.collection("cotacoes-gerentes").get();
-  cotacoesSnap.forEach((doc) => {
+  for (const doc of cotacoesSnap.docs) {
     const data = doc.data();
     const inicio = data.inicioVigencia || "-";
     const fim = data.fimVigencia || "-";
@@ -48,13 +74,16 @@ async function carregarRelatorio() {
     const percentual = data.comissaoPercentual || "-";
     const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
 
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
+    const usuarioNome = await getUsuarioNome(data.autorUid);
+
     tbody.innerHTML += `
       <tr>
         <td>Negócio</td>
         <td>${dataCriacao}</td>
-        <td>${data.autorName || "-"}</td>
-        <td>${data.empresaNome || "-"}</td>
-        <td>${data.rmNome || "-"}</td>
+        <td>${usuarioNome}</td>
+        <td>${empresaInfo.nome}</td>
+        <td>${empresaInfo.rmNome}</td>
         <td>${data.ramo || "-"}</td>
         <td>-</td>
         <td>R$ ${premio}</td>
@@ -66,7 +95,7 @@ async function carregarRelatorio() {
         <td>${data.observacoes || "-"}</td>
       </tr>
     `;
-  });
+  }
 }
 
 carregarRelatorio();
