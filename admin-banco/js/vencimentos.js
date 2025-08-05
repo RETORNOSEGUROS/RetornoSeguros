@@ -39,13 +39,18 @@ function extrairDiaMes(dataStr) {
 }
 
 async function getUsuarioNome(uid) {
-  if (!uid || typeof uid !== "string" || uid.trim() === "") return "-";
+  if (typeof uid !== "string" || uid.trim() === "") return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
-  const snap = await db.collection("usuarios").doc(uid).get();
-  const nome = snap.data()?.nome || uid;
-  cacheUsuarios[uid] = nome;
-  return nome;
-}
+
+  try {
+    const snap = await db.collection("usuarios").doc(uid).get();
+    const nome = snap.data()?.nome || uid;
+    cacheUsuarios[uid] = nome;
+    return nome;
+  } catch (e) {
+    console.error("Erro ao buscar usuário:", e);
+    return "-";
+  }
 
 async function getEmpresaInfo(empId) {
   if (!empId || typeof empId !== "string" || empId.trim() === "") return { nome: "-", rmNome: "-", rmId: "", id: "" };
@@ -193,3 +198,4 @@ async function carregarRMs() {
 }
 
 carregarRMs().then(() => carregarRelatorio());
+
