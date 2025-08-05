@@ -74,9 +74,9 @@ function criarTextoCorrido(data) {
   div.innerHTML = `
     <h2>${data.nomeProduto}</h2>
     <div class="texto-corrido">
-      <strong>O que é:</strong> ${data.descricao || ''}<br><br>
-      <strong>O que pedir para cotar:</strong> ${data.oQuePedir || ''}<br><br>
-      <strong>Dicas comerciais:</strong> ${data.dicas || ''}<br><br>
+      <strong>O que é:</strong> ${data.descricao || ''}
+      <strong>O que pedir para cotar:</strong> ${data.oQuePedir || ''}
+      <strong>Dicas comerciais:</strong> ${data.dicas || ''}
       <strong>Gatilhos mentais:</strong> ${data.gatilhos || ''}
     </div>
     <button onclick="copiarParaWhatsapp(\`${textoFormatado}\`)">📲 Copiar texto para WhatsApp</button>
@@ -87,7 +87,7 @@ function criarTextoCorrido(data) {
 
 function copiarParaWhatsapp(texto) {
   navigator.clipboard.writeText(texto).then(() => {
-    alert("Texto copiado! Cole no WhatsApp.");
+    alert("Texto copiado! Agora é só colar no WhatsApp.");
   }).catch(err => {
     console.error("Erro ao copiar:", err);
     alert("Erro ao copiar o texto.");
