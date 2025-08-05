@@ -13,14 +13,27 @@ const cacheEmpresas = {};
 function formatarDataDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return "-";
   if (dataStr.includes("/")) return dataStr.slice(0, 5);
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2]}/${partes[1]}`;
+  }
   return dataStr;
 }
 
 function extrairDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return null;
+  if (dataStr instanceof Date) {
+    const dia = String(dataStr.getDate()).padStart(2, '0');
+    const mes = String(dataStr.getMonth() + 1).padStart(2, '0');
+    return `${dia}/${mes}`;
+  }
   if (dataStr.includes("/")) {
     const [dia, mes] = dataStr.split("/");
     return `${dia.padStart(2, '0')}/${mes.padStart(2, '0')}`;
+  }
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2].padStart(2, '0')}/${partes[1].padStart(2, '0')}`;
   }
   return null;
 }
@@ -106,7 +119,13 @@ async function carregarRelatorio() {
       const empresa = await getEmpresaInfo(data.empresaId);
       if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
 
-      const venc = extrairDiaMes(data.fimVigencia);
+      let venc = "-";
+      if (typeof data.fimVigencia === "string") {
+        venc = extrairDiaMes(data.fimVigencia);
+      } else if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
+        venc = extrairDiaMes(data.fimVigencia.toDate());
+      }
+
       if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
 
       todosRegistros.push({
