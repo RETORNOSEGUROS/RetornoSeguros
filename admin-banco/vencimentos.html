@@ -6,24 +6,24 @@
   <title>Relatório de Vencimentos</title>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
   <script>
     const firebaseConfig = {
-      apiKey: "SUA_API_KEY",
-      authDomain: "SEU_AUTH_DOMAIN",
-      projectId: "SEU_PROJECT_ID",
-      storageBucket: "SEU_STORAGE",
-      messagingSenderId: "SEU_SENDER",
-      appId: "SEU_APP_ID"
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
+      storageBucket: "retorno-seguros.appspot.com",
+      messagingSenderId: "495712392972",
+      appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+      measurementId: "G-C6E44WXLPW"
     };
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
   </script>
   <style>
-    body { font-family: Arial, sans-serif; background: #f4f6fa; margin: 20px; }
+    body { font-family: Arial, sans-serif; background: #f6f8fc; padding: 20px; }
     h1 { color: #004080; }
     table { width: 100%; border-collapse: collapse; background: white; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
     th { background: #eee; }
   </style>
 </head>
@@ -32,6 +32,7 @@
   <label>De: <input id="dataInicio" type="text" placeholder="dd/mm" /></label>
   <label>Até: <input id="dataFim" type="text" placeholder="dd/mm" /></label>
   <button onclick="buscarVencimentos()">Filtrar</button>
+
   <br/><br/>
   <table>
     <thead>
@@ -50,57 +51,86 @@
   </table>
 
   <script>
+    function formatarDataDM(date) {
+      const dia = ("0" + date.getDate()).slice(-2);
+      const mes = ("0" + (date.getMonth() + 1)).slice(-2);
+      return `${dia}/${mes}`;
+    }
+
+    function estaNoIntervalo(dataStr, deStr, ateStr) {
+      if (!deStr || !ateStr) return true;
+      const [dia, mes] = dataStr.split("/").map(Number);
+      const dataInt = mes * 100 + dia;
+      const [diaDe, mesDe] = deStr.split("/").map(Number);
+      const [diaAte, mesAte] = ateStr.split("/").map(Number);
+      const deInt = mesDe * 100 + diaDe;
+      const ateInt = mesAte * 100 + diaAte;
+      return dataInt >= deInt && dataInt <= ateInt;
+    }
+
     async function buscarVencimentos() {
-      const inicio = document.getElementById("dataInicio").value;
-      const fim = document.getElementById("dataFim").value;
       const tabela = document.getElementById("tabelaVencimentos");
       tabela.innerHTML = "<tr><td colspan='6'>Carregando...</td></tr>";
 
-      try {
-        const snapshot = await db.collection("cotacoes-gerentes")
-          .where("status", "==", "Negócio Emitido")
-          .get();
+      const dataInicio = document.getElementById("dataInicio").value;
+      const dataFim = document.getElementById("dataFim").value;
 
-        console.log("Documentos encontrados:", snapshot.size);
-        if (snapshot.empty) {
-          tabela.innerHTML = "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
-          return;
+      let html = "";
+
+      // 🔍 VISITAS
+      const visitasSnap = await db.collection("visitas").get();
+      visitasSnap.forEach(doc => {
+        const dados = doc.data();
+        if (dados.ramos) {
+          Object.entries(dados.ramos).forEach(([ramo, info]) => {
+            if (info.vencimento) {
+              const [dia, mes] = info.vencimento.split("/");
+              const dataOk = estaNoIntervalo(`${dia}/${mes}`, dataInicio, dataFim);
+              if (dataOk) {
+                html += `
+                  <tr>
+                    <td>${dados.nomeEmpresa || "-"}</td>
+                    <td>${ramo}</td>
+                    <td>${dados.rmNome || "-"}</td>
+                    <td>${info.valor ? "R$ " + Number(info.valor).toLocaleString("pt-BR") : "-"}</td>
+                    <td>${info.vencimento}</td>
+                    <td>Mapeado em visita</td>
+                  </tr>
+                `;
+              }
+            }
+          });
         }
+      });
 
-        let html = "";
-        snapshot.forEach(doc => {
-          const d = doc.data();
-          console.log("DOC:", d);
-
-          let empresa = d.nomeEmpresa || "-";
-          let ramo = d.ramo || "-";
-          let rm = d.rmNome || "-";
-          let valor = d.valorEstimado ? `R$ ${Number(d.valorEstimado).toLocaleString("pt-BR", {minimumFractionDigits: 2})}` : "-";
-          let fim = "-";
-
-          if (d.fimVigencia && d.fimVigencia.toDate) {
-            const data = d.fimVigencia.toDate();
-            fim = ("0" + data.getDate()).slice(-2) + "/" + ("0" + (data.getMonth()+1)).slice(-2);
+      // 🔍 NEGÓCIOS FECHADOS
+      const negociosSnap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
+      negociosSnap.forEach(doc => {
+        const d = doc.data();
+        if (d.fimVigencia && d.fimVigencia.toDate) {
+          const data = d.fimVigencia.toDate();
+          const dataFormatada = formatarDataDM(data);
+          const dataOk = estaNoIntervalo(dataFormatada, dataInicio, dataFim);
+          if (dataOk) {
+            html += `
+              <tr>
+                <td>${d.nomeEmpresa || "-"}</td>
+                <td>${d.ramo || "-"}</td>
+                <td>${d.rmNome || "-"}</td>
+                <td>${d.valorEstimado ? "R$ " + Number(d.valorEstimado).toLocaleString("pt-BR") : "-"}</td>
+                <td>${dataFormatada}</td>
+                <td>Negócio Fechado</td>
+              </tr>
+            `;
           }
+        }
+      });
 
-          html += `
-            <tr>
-              <td>${empresa}</td>
-              <td>${ramo}</td>
-              <td>${rm}</td>
-              <td>${valor}</td>
-              <td>${fim}</td>
-              <td>Negócio Fechado</td>
-            </tr>
-          `;
-        });
-
-        tabela.innerHTML = html || "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
-      } catch (e) {
-        console.error("Erro ao buscar dados:", e);
-        tabela.innerHTML = "<tr><td colspan='6'>Erro ao buscar dados.</td></tr>";
-      }
+      tabela.innerHTML = html || "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
     }
+
+    // auto buscar ao carregar
+    window.onload = buscarVencimentos;
   </script>
 </body>
 </html>
