@@ -3,46 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <title>Relatório de Vencimentos</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
-  <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
-      authDomain: "retorno-seguros.firebaseapp.com",
-      projectId: "retorno-seguros",
-      storageBucket: "retorno-seguros.appspot.com",
-      messagingSenderId: "495712392972",
-      appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: Arial; background: #f6f7fb; padding: 30px; }
-    h2 { color: #003366; display: flex; align-items: center; gap: 10px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+    body { font-family: Arial, sans-serif; background: #f9f9f9; padding: 20px; }
+    h2 { color: #004080; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
     th, td { padding: 10px; border: 1px solid #ccc; text-align: left; }
-    th { background: #f0f0f0; }
-    select, input { padding: 6px; }
-    button { padding: 6px 12px; background: #003366; color: white; border: none; cursor: pointer; }
-    button:hover { background: #00509e; }
+    th { background-color: #eee; }
   </style>
 </head>
 <body>
-  <h2>📅 Relatório de Vencimentos</h2>
 
-  <div>
-    <label>De: <input type="text" id="dataInicio" placeholder="dd/mm"></label>
-    <label>Até: <input type="text" id="dataFim" placeholder="dd/mm"></label>
-    <label>RM: 
-      <select id="filtroRm">
-        <option value="todos">Todos</option>
-      </select>
-    </label>
-    <button onclick="carregarVencimentos()">Filtrar</button>
-  </div>
+  <h2>📅 Relatório de Vencimentos</h2>
 
   <table>
     <thead>
@@ -55,109 +27,96 @@
         <th>Origem</th>
       </tr>
     </thead>
-    <tbody id="tabelaVencimentos">
+    <tbody id="tabela-vencimentos">
       <tr><td colspan="6">Carregando...</td></tr>
     </tbody>
   </table>
 
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+
   <script>
-    const tabela = document.getElementById("tabelaVencimentos");
+    const firebaseConfig = {
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-    function formatarDataDM(data) {
-      const dia = data.getDate().toString().padStart(2, "0");
-      const mes = (data.getMonth() + 1).toString().padStart(2, "0");
-      return `${dia}/${mes}`;
-    }
-
-    function estaNoIntervalo(dataStr, de, ate) {
-      const [dia, mes] = dataStr.split("/");
-      const valor = parseInt(mes.padStart(2, "0") + dia.padStart(2, "0"));
-      const valDe = parseInt(de.split("/").reverse().join(""));
-      const valAte = parseInt(ate.split("/").reverse().join(""));
-      return valor >= valDe && valor <= valAte;
-    }
+    const tabela = document.getElementById("tabela-vencimentos");
+    tabela.innerHTML = "<tr><td colspan='6'>Carregando dados...</td></tr>";
 
     async function carregarVencimentos() {
-      const de = document.getElementById("dataInicio").value.trim();
-      const ate = document.getElementById("dataFim").value.trim();
-      const rm = document.getElementById("filtroRm").value;
-      tabela.innerHTML = "";
+      try {
+        const visitasSnap = await db.collection("visitas").get();
+        const negociosSnap = await db.collection("cotacoes-gerentes")
+          .where("status", "==", "Negócio Emitido").get();
 
-      if (!de || !ate) {
-        alert("Preencha as datas no formato dd/mm.");
-        return;
-      }
+        let linhas = [];
 
-      let html = "";
-
-      // VISITAS
-      const visitas = await db.collection("visitas").get();
-      visitas.forEach(doc => {
-        const dados = doc.data();
-        if (dados.ramos) {
-          Object.entries(dados.ramos).forEach(([ramo, info]) => {
-            if (info.vencimento) {
-              const [dia, mes] = info.vencimento.split("/");
-              const dataOk = estaNoIntervalo(`${dia}/${mes}`, de, ate);
-              const filtroOk = (rm === "todos" || rm === dados.rmNome);
-              if (dataOk && filtroOk) {
-                html += `
-                  <tr>
-                    <td>${dados.nomeEmpresa || "-"}</td>
-                    <td>${ramo}</td>
-                    <td>${dados.rmNome || "-"}</td>
-                    <td>${info.valor ? "R$ " + Number(info.valor).toLocaleString("pt-BR") : "-"}</td>
-                    <td>${info.vencimento}</td>
-                    <td>Mapeado em visita</td>
-                  </tr>
-                `;
+        // VISITAS
+        visitasSnap.forEach(doc => {
+          const dados = doc.data();
+          if (dados.ramos) {
+            for (const chave in dados.ramos) {
+              const ramo = dados.ramos[chave];
+              if (ramo.vencimento) {
+                linhas.push({
+                  empresa: dados.empresaNome || "-",
+                  ramo: chave,
+                  rm: dados.rmNome || "-",
+                  valor: "-",
+                  renovacao: ramo.vencimento || "-",
+                  origem: "Mapeado em visita"
+                });
               }
             }
-          });
-        }
-      });
-
-      // NEGÓCIOS FECHADOS
-      const negocios = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
-      negocios.forEach(doc => {
-        const d = doc.data();
-        if (d.fimVigencia?.toDate) {
-          const data = d.fimVigencia.toDate();
-          const dataFormatada = formatarDataDM(data);
-          const dataOk = estaNoIntervalo(dataFormatada, de, ate);
-          const filtroOk = (rm === "todos" || rm === d.rmNome);
-          if (dataOk && filtroOk) {
-            html += `
-              <tr>
-                <td>${d.nomeEmpresa || "-"}</td>
-                <td>${d.ramo || "-"}</td>
-                <td>${d.rmNome || "-"}</td>
-                <td>${d.valorEstimado ? "R$ " + Number(d.valorEstimado).toLocaleString("pt-BR") : "-"}</td>
-                <td>${dataFormatada}</td>
-                <td>Negócio Fechado</td>
-              </tr>
-            `;
           }
+        });
+
+        // NEGÓCIOS FECHADOS
+        negociosSnap.forEach(doc => {
+          const d = doc.data();
+          if (d.fimVigencia) {
+            linhas.push({
+              empresa: d.empresaNome || "-",
+              ramo: d.ramo || "-",
+              rm: d.rmNome || "-",
+              valor: d.premio ? "R$ " + parseFloat(d.premio).toLocaleString("pt-BR") : "-",
+              renovacao: new Date(d.fimVigencia.toDate()).toLocaleDateString("pt-BR", { day: '2-digit', month: '2-digit' }),
+              origem: "Fechado conosco"
+            });
+          }
+        });
+
+        if (linhas.length === 0) {
+          tabela.innerHTML = "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
+          return;
         }
-      });
 
-      tabela.innerHTML = html || "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
+        tabela.innerHTML = "";
+        linhas.forEach(l => {
+          tabela.innerHTML += `
+            <tr>
+              <td>${l.empresa}</td>
+              <td>${l.ramo}</td>
+              <td>${l.rm}</td>
+              <td>${l.valor}</td>
+              <td>${l.renovacao}</td>
+              <td>${l.origem}</td>
+            </tr>`;
+        });
+
+      } catch (e) {
+        console.error("Erro ao carregar vencimentos:", e);
+        tabela.innerHTML = "<tr><td colspan='6'>Erro ao carregar dados.</td></tr>";
+      }
     }
 
-    async function carregarRMs() {
-      const select = document.getElementById("filtroRm");
-      const gerentes = await db.collection("gerentes").get();
-      gerentes.forEach(doc => {
-        const nome = doc.data().nome;
-        const opt = document.createElement("option");
-        opt.value = nome;
-        opt.textContent = nome;
-        select.appendChild(opt);
-      });
-    }
-
-    carregarRMs();
     carregarVencimentos();
   </script>
+
 </body>
 </html>
