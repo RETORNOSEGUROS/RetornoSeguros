@@ -3,120 +3,96 @@
 <head>
   <meta charset="UTF-8">
   <title>Relatório de Vencimentos</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; background: #f9f9f9; padding: 20px; }
+    body { font-family: Arial; background: #f4f4f8; padding: 20px; }
     h2 { color: #004080; }
-    table { width: 100%; border-collapse: collapse; background: #fff; }
-    th, td { padding: 10px; border: 1px solid #ccc; text-align: left; }
-    th { background-color: #eee; }
+    table { width: 100%; border-collapse: collapse; background: white; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #eaeaea; }
   </style>
 </head>
 <body>
 
-  <h2>📅 Relatório de Vencimentos</h2>
+<h2>📅 Relatório de Vencimentos</h2>
+<table id="tabela-vencimentos">
+  <thead>
+    <tr>
+      <th>Empresa</th>
+      <th>Ramo</th>
+      <th>RM</th>
+      <th>Valor</th>
+      <th>Data Renovação</th>
+      <th>Origem</th>
+    </tr>
+  </thead>
+  <tbody id="corpo-tabela">
+    <tr><td colspan="6">Carregando...</td></tr>
+  </tbody>
+</table>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Empresa</th>
-        <th>Ramo</th>
-        <th>RM</th>
-        <th>Valor</th>
-        <th>Data Renovação</th>
-        <th>Origem</th>
-      </tr>
-    </thead>
-    <tbody id="tabela-vencimentos">
-      <tr><td colspan="6">Carregando...</td></tr>
-    </tbody>
-  </table>
-
-  <!-- Firebase SDKs -->
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-
-  <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
-      authDomain: "retorno-seguros.firebaseapp.com",
-      projectId: "retorno-seguros",
-    };
+<script>
+  // CONFIG FIREBASE RETORNO
+  const firebaseConfig = {
+    apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+    authDomain: "retorno-seguros.firebaseapp.com",
+    projectId: "retorno-seguros",
+    storageBucket: "retorno-seguros.appspot.com",
+    messagingSenderId: "495712392972",
+    appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
+  };
+  if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
+  }
+  const db = firebase.firestore();
 
-    const tabela = document.getElementById("tabela-vencimentos");
-    tabela.innerHTML = "<tr><td colspan='6'>Carregando dados...</td></tr>";
+  async function carregarVencimentos() {
+    const tabela = document.getElementById("corpo-tabela");
+    tabela.innerHTML = "<tr><td colspan='6'>Carregando...</td></tr>";
+    let linhas = "";
 
-    async function carregarVencimentos() {
-      try {
-        const visitasSnap = await db.collection("visitas").get();
-        const negociosSnap = await db.collection("cotacoes-gerentes")
-          .where("status", "==", "Negócio Emitido").get();
+    try {
+      const snapshot = await db.collection("visitas").get();
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const empresa = data.empresaNome || "-";
+        const rm = data.rmNome || "-";
 
-        let linhas = [];
+        const ramos = data.ramos || {};
+        for (const ramo in ramos) {
+          const info = ramos[ramo];
+          if (info && info.vencimento) {
+            const venc = info.vencimento;
+            const dia = venc.day || "00";
+            const mes = venc.month || "00";
+            const dataRenovacao = `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}`;
+            const valor = info.valor || "-";
 
-        // VISITAS
-        visitasSnap.forEach(doc => {
-          const dados = doc.data();
-          if (dados.ramos) {
-            for (const chave in dados.ramos) {
-              const ramo = dados.ramos[chave];
-              if (ramo.vencimento) {
-                linhas.push({
-                  empresa: dados.empresaNome || "-",
-                  ramo: chave,
-                  rm: dados.rmNome || "-",
-                  valor: "-",
-                  renovacao: ramo.vencimento || "-",
-                  origem: "Mapeado em visita"
-                });
-              }
-            }
+            linhas += `
+              <tr>
+                <td>${empresa}</td>
+                <td>${ramo}</td>
+                <td>${rm}</td>
+                <td>${valor}</td>
+                <td>${dataRenovacao}</td>
+                <td>Mapeado em visita</td>
+              </tr>
+            `;
           }
-        });
-
-        // NEGÓCIOS FECHADOS
-        negociosSnap.forEach(doc => {
-          const d = doc.data();
-          if (d.fimVigencia) {
-            linhas.push({
-              empresa: d.empresaNome || "-",
-              ramo: d.ramo || "-",
-              rm: d.rmNome || "-",
-              valor: d.premio ? "R$ " + parseFloat(d.premio).toLocaleString("pt-BR") : "-",
-              renovacao: new Date(d.fimVigencia.toDate()).toLocaleDateString("pt-BR", { day: '2-digit', month: '2-digit' }),
-              origem: "Fechado conosco"
-            });
-          }
-        });
-
-        if (linhas.length === 0) {
-          tabela.innerHTML = "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
-          return;
         }
+      });
 
-        tabela.innerHTML = "";
-        linhas.forEach(l => {
-          tabela.innerHTML += `
-            <tr>
-              <td>${l.empresa}</td>
-              <td>${l.ramo}</td>
-              <td>${l.rm}</td>
-              <td>${l.valor}</td>
-              <td>${l.renovacao}</td>
-              <td>${l.origem}</td>
-            </tr>`;
-        });
-
-      } catch (e) {
-        console.error("Erro ao carregar vencimentos:", e);
-        tabela.innerHTML = "<tr><td colspan='6'>Erro ao carregar dados.</td></tr>";
-      }
+      tabela.innerHTML = linhas || "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
+    } catch (e) {
+      console.error("Erro:", e);
+      tabela.innerHTML = `<tr><td colspan='6'>Erro ao carregar dados: ${e.message}</td></tr>`;
     }
+  }
 
-    carregarVencimentos();
-  </script>
+  window.onload = carregarVencimentos;
+</script>
 
 </body>
 </html>
