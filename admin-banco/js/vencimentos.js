@@ -40,9 +40,14 @@ async function getEmpresaInfo(empId) {
 
 function formatarDataDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return "-";
-  const partes = dataStr.split("-");
-  if (partes.length === 3) return `${partes[2]}/${partes[1]}`; // yyyy-mm-dd
-  if (partes.length === 2) return dataStr; // já está dd/mm
+  if (dataStr.includes("/")) {
+    const partes = dataStr.split("/");
+    return `${partes[0]}/${partes[1]}`;
+  }
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2]}/${partes[1]}`; // yyyy-mm-dd
+  }
   return dataStr;
 }
 
@@ -85,7 +90,13 @@ async function carregarRelatorio() {
     const usuarioNome = await getUsuarioNome(data.autorUid);
     const empresaInfo = await getEmpresaInfo(data.empresaId);
     const premio = Number(data.premioLiquido || 0).toLocaleString("pt-BR");
-    const fim = formatarDataDiaMes(data.fimVigencia || "-");
+
+    let vencimento = "-";
+    if (data.fimVigencia && data.fimVigencia.length === 10) {
+      // Formato esperado: yyyy-mm-dd
+      const partes = data.fimVigencia.split("-");
+      vencimento = `${partes[2]}/${partes[1]}`;
+    }
 
     tbody.innerHTML += `
       <tr>
@@ -95,7 +106,7 @@ async function carregarRelatorio() {
         <td>${empresaInfo.nome}</td>
         <td>${empresaInfo.rmNome}</td>
         <td>${data.ramo || "-"}</td>
-        <td>${fim}</td>
+        <td>${vencimento}</td>
         <td>R$ ${premio}</td>
         <td>-</td>
         <td>${data.observacoes || "-"}</td>
