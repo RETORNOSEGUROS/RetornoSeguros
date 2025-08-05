@@ -1,3 +1,4 @@
+
 if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
@@ -52,7 +53,6 @@ function formatarDataDiaMes(dataStr) {
 }
 
 async function carregarRelatorio() {
-  // VISITAS
   const visitasSnap = await db.collection("visitas").get();
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
@@ -82,7 +82,6 @@ async function carregarRelatorio() {
     }
   }
 
-  // NEGÓCIOS FECHADOS
   const negociosSnap = await db.collection("negocios-fechados").get();
   for (const doc of negociosSnap.docs) {
     const data = doc.data();
@@ -100,4 +99,13 @@ async function carregarRelatorio() {
         <td>${empresaInfo.nome}</td>
         <td>${empresaInfo.rmNome}</td>
         <td>${data.ramo || "-"}</td>
-        <
+        <td>${vencimento}</td>
+        <td>R$ ${premio}</td>
+        <td>${data.seguradora || "-"}</td>
+        <td>${data.observacoes || "-"}</td>
+      </tr>
+    `;
+  }
+}
+
+carregarRelatorio();
