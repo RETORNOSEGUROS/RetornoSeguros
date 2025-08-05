@@ -39,7 +39,7 @@ function extrairDiaMes(dataStr) {
 }
 
 async function getUsuarioNome(uid) {
-  if (!uid) return "-";
+  if (!uid || typeof uid !== "string" || uid.trim() === "") return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
   const snap = await db.collection("usuarios").doc(uid).get();
   const nome = snap.data()?.nome || uid;
@@ -48,7 +48,7 @@ async function getUsuarioNome(uid) {
 }
 
 async function getEmpresaInfo(empId) {
-  if (!empId) return { nome: "-", rmNome: "-", rmId: "", id: "" };
+  if (!empId || typeof empId !== "string" || empId.trim() === "") return { nome: "-", rmNome: "-", rmId: "", id: "" };
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
   const snap = await db.collection("empresas").doc(empId).get();
   const data = snap.data();
@@ -84,6 +84,7 @@ async function carregarRelatorio() {
   const visitasSnap = await db.collection("visitas").get();
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
+    if (!data.empresaId || !data.usuarioId) continue;
     const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
     const usuarioNome = await getUsuarioNome(data.usuarioId);
     const empresa = await getEmpresaInfo(data.empresaId);
@@ -116,6 +117,7 @@ async function carregarRelatorio() {
   for (const doc of negociosSnap.docs) {
     try {
       const data = doc.data();
+      if (!data.autorUid || !data.empresaId) continue;
       const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
       const usuarioNome = await getUsuarioNome(data.autorUid);
       const empresa = await getEmpresaInfo(data.empresaId);
