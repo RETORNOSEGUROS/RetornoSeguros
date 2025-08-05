@@ -59,19 +59,39 @@ function criarTextoCorrido(data) {
   const div = document.createElement("div");
   div.className = "card";
 
+  const textoFormatado = `
+📌 *${data.nomeProduto}*
+
+📝 *O que é:* ${data.descricao || ''}
+
+📋 *O que pedir para cotar:* ${data.oQuePedir || ''}
+
+💡 *Dicas comerciais:* ${data.dicas || ''}
+
+🎯 *Gatilhos mentais:* ${data.gatilhos || ''}
+`.trim();
+
   div.innerHTML = `
     <h2>${data.nomeProduto}</h2>
     <div class="texto-corrido">
-      <strong>O que é:</strong> ${data.descricao || ''}
-
-      <strong>O que pedir para cotar:</strong> ${data.oQuePedir || ''}
-
-      <strong>Dicas comerciais:</strong> ${data.dicas || ''}
-
+      <strong>O que é:</strong> ${data.descricao || ''}<br><br>
+      <strong>O que pedir para cotar:</strong> ${data.oQuePedir || ''}<br><br>
+      <strong>Dicas comerciais:</strong> ${data.dicas || ''}<br><br>
       <strong>Gatilhos mentais:</strong> ${data.gatilhos || ''}
     </div>
+    <button onclick="copiarParaWhatsapp(\`${textoFormatado}\`)">📲 Copiar texto para WhatsApp</button>
   `;
+
   return div;
+}
+
+function copiarParaWhatsapp(texto) {
+  navigator.clipboard.writeText(texto).then(() => {
+    alert("Texto copiado! Cole no WhatsApp.");
+  }).catch(err => {
+    console.error("Erro ao copiar:", err);
+    alert("Erro ao copiar o texto.");
+  });
 }
 
 function salvar(id) {
