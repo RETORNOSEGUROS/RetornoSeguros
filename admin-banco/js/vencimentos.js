@@ -4,34 +4,43 @@ if (!firebase.apps.length) {
 const db = firebase.firestore();
 const tbody = document.getElementById("relatorioBody");
 
-// cache para nomes
+// caches para evitar buscas repetidas
 const cacheUsuarios = {};
 const cacheEmpresas = {};
 
 async function getUsuarioNome(uid) {
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
   if (!uid) return "-";
-  const snap = await db.collection("usuarios").doc(uid).get();
-  const data = snap.data();
-  cacheUsuarios[uid] = data?.nome || uid;
-  return cacheUsuarios[uid];
+  try {
+    const snap = await db.collection("usuarios").doc(uid).get();
+    const data = snap.data();
+    const nome = data?.nome || uid;
+    cacheUsuarios[uid] = nome;
+    return nome;
+  } catch (e) {
+    return uid;
+  }
 }
 
 async function getEmpresaInfo(empId) {
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
   if (!empId) return { nome: empId, rmNome: "-" };
-  const snap = await db.collection("empresas").doc(empId).get();
-  const data = snap.data();
-  const empresaInfo = {
-    nome: data?.nome || empId,
-    rmNome: data?.rmNome || "-"
-  };
-  cacheEmpresas[empId] = empresaInfo;
-  return empresaInfo;
+  try {
+    const snap = await db.collection("empresas").doc(empId).get();
+    const data = snap.data();
+    const empresaInfo = {
+      nome: data?.nome || empId,
+      rmNome: data?.rm || "-" // <- campo "rm" é o nome do gerente
+    };
+    cacheEmpresas[empId] = empresaInfo;
+    return empresaInfo;
+  } catch (e) {
+    return { nome: empId, rmNome: "-" };
+  }
 }
 
 async function carregarRelatorio() {
-  // 🔹 VISITAS
+  // VISITAS
   const visitasSnap = await db.collection("visitas").get();
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
@@ -63,7 +72,7 @@ async function carregarRelatorio() {
     }
   }
 
-  // 🔹 NEGÓCIOS FECHADOS
+  // NEGÓCIOS FECHADOS
   const cotacoesSnap = await db.collection("cotacoes-gerentes").get();
   for (const doc of cotacoesSnap.docs) {
     const data = doc.data();
@@ -74,8 +83,8 @@ async function carregarRelatorio() {
     const percentual = data.comissaoPercentual || "-";
     const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
 
-    const empresaInfo = await getEmpresaInfo(data.empresaId);
     const usuarioNome = await getUsuarioNome(data.autorUid);
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
 
     tbody.innerHTML += `
       <tr>
