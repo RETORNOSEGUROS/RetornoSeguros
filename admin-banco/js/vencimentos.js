@@ -85,7 +85,12 @@ async function carregarRelatorio() {
   const negociosSnap = await db.collection("negocios-fechados").get();
   for (const doc of negociosSnap.docs) {
     const data = doc.data();
-    const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+    let dataCriacao = "-";
+if (data.dataCriacao?.toDate) {
+  dataCriacao = data.dataCriacao.toDate().toLocaleDateString("pt-BR");
+} else if (typeof data.dataCriacao === "string") {
+  dataCriacao = data.dataCriacao;
+}
     const usuarioNome = await getUsuarioNome(data.usuarioUid || data.autorUid || "-");
     const empresaInfo = await getEmpresaInfo(data.empresaId);
     const premio = Number(data.premio || 0).toLocaleString("pt-BR");
@@ -109,3 +114,4 @@ async function carregarRelatorio() {
 }
 
 carregarRelatorio();
+
