@@ -98,14 +98,25 @@ function renderizarTabela(visitas) {
 
   visitas.forEach(v => {
     const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+
     for (const [ramo, info] of Object.entries(v.ramos || {})) {
+      let vencimentoFormatado = "-";
+
+      if (info.vencimento?.toDate) {
+        vencimentoFormatado = info.vencimento.toDate().toLocaleDateString("pt-BR");
+      } else if (typeof info.vencimento === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(info.vencimento)) {
+        vencimentoFormatado = info.vencimento;
+      } else if (typeof info.vencimento === 'string' && /^\d{2}\/\d{2}$/.test(info.vencimento)) {
+        vencimentoFormatado = info.vencimento + "/2025";
+      }
+
       html += `<tr>
         <td>${dataVisita}</td>
         <td>${v.usuarioNome}</td>
         <td>${v.empresaNome}</td>
         <td>${v.empresaRM}</td>
         <td>${ramo.toUpperCase()}</td>
-        <td>${info.vencimento || '-'}</td>
+        <td>${vencimentoFormatado}</td>
         <td>R$ ${info.premio?.toLocaleString("pt-BR") || '0,00'}</td>
         <td>${info.seguradora || '-'}</td>
         <td>${info.observacoes || '-'}</td>
@@ -124,14 +135,23 @@ function exportarCSV() {
   let csv = ["Data;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
   dadosVisitas.forEach(v => {
     const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+
     for (const [ramo, info] of Object.entries(v.ramos || {})) {
+      let vencimentoCSV = "-";
+
+      if (info.vencimento?.toDate) {
+        vencimentoCSV = info.vencimento.toDate().toLocaleDateString("pt-BR");
+      } else if (typeof info.vencimento === 'string') {
+        vencimentoCSV = info.vencimento;
+      }
+
       const linha = [
         dataVisita,
         v.usuarioNome,
         v.empresaNome,
         v.empresaRM,
         ramo.toUpperCase(),
-        info.vencimento || '-',
+        vencimentoCSV,
         info.premio || 0,
         info.seguradora || '-',
         info.observacoes || '-'
@@ -139,6 +159,7 @@ function exportarCSV() {
       csv.push(linha);
     }
   });
+
   const blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
