@@ -82,6 +82,7 @@ async function carregarRelatorio() {
 
   // VISITAS
   const visitasSnap = await db.collection("visitas").get();
+  console.log("VISITAS total:", visitasSnap.docs.length);
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
     const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
@@ -113,6 +114,7 @@ async function carregarRelatorio() {
 
   // NEGÓCIOS
   const negociosSnap = await db.collection("cotacoes-gerentes").get();
+  console.log("NEGOCIOS total:", negociosSnap.docs.length);
   for (const doc of negociosSnap.docs) {
     try {
       const data = doc.data();
