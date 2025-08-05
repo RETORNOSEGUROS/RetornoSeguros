@@ -62,8 +62,8 @@ async function gerarCamposRamos(seguradoras) {
     sub.id = `campos-${ramo.id}`;
 
     sub.innerHTML = `
-      <label>Vencimento (dia/mês):</label>
-      <input type="text" id="${ramo.id}-vencimento" placeholder="dd/mm">
+      <label>Vencimento:</label>
+      <input type="date" id="${ramo.id}-vencimento">
 
       <label>Prêmio anual (R$):</label>
       <input type="number" id="${ramo.id}-premio" placeholder="Valor">
@@ -106,8 +106,16 @@ function registrarVisita() {
     document.querySelectorAll(".ramo").forEach(input => {
       if (input.checked) {
         const id = input.value;
+
+        const vencimentoInput = document.getElementById(`${id}-vencimento`).value;
+        let vencimentoTimestamp = null;
+        if (vencimentoInput) {
+          const dataVenc = new Date(vencimentoInput + "T12:00:00"); // evita fuso incorreto
+          vencimentoTimestamp = firebase.firestore.Timestamp.fromDate(dataVenc);
+        }
+
         visita.ramos[id] = {
-          vencimento: document.getElementById(`${id}-vencimento`).value,
+          vencimento: vencimentoTimestamp,
           premio: parseFloat(document.getElementById(`${id}-premio`).value) || 0,
           seguradora: document.getElementById(`${id}-seguradora`).value,
           observacoes: document.getElementById(`${id}-observacoes`).value
