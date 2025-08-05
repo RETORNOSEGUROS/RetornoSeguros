@@ -2,52 +2,27 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Relatório de Vencimentos</title>
+  <title>Vencimentos - Teste</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
       font-family: Arial, sans-serif;
       background: #f4f5fb;
-      margin: 0;
       padding: 20px;
     }
-
-    h2 {
-      color: #004080;
+    h2 { color: #004080; }
+    label { font-weight: bold; }
+    select, input, button {
+      padding: 6px; margin: 5px 8px 10px 0;
     }
-
-    label {
-      font-weight: bold;
-    }
-
-    select, input[type="text"], button {
-      padding: 5px;
-      margin-right: 10px;
-    }
-
     table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 15px;
-      background: white;
+      width: 100%; border-collapse: collapse; background: white;
     }
-
     th, td {
-      border: 1px solid #ddd;
-      padding: 10px;
-      text-align: left;
+      border: 1px solid #ddd; padding: 8px; text-align: left;
     }
-
-    th {
-      background-color: #eee;
-      font-weight: bold;
-    }
-
-    .carregando {
-      padding: 15px;
-      font-weight: bold;
-      color: #666;
-    }
+    th { background-color: #eee; }
+    .carregando { padding: 15px; font-weight: bold; color: #666; }
   </style>
 </head>
 <body>
@@ -61,9 +36,7 @@
     <input type="text" id="dataAte" placeholder="dd/mm" />
 
     <label for="filtroRm">RM:</label>
-    <select id="filtroRm">
-      <option value="Todos">Todos</option>
-    </select>
+    <select id="filtroRm"><option value="Todos">Todos</option></select>
 
     <button id="btnFiltrar">Filtrar</button>
   </div>
@@ -84,14 +57,125 @@
     </tbody>
   </table>
 
-  <!-- Firebase SDKs -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
 
-  <!-- Firebase Config -->
-  <script src="/js/firebase-config.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
+      storageBucket: "retorno-seguros.appspot.com",
+      messagingSenderId: "495712392972",
+      appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+      measurementId: "G-C6E44WXLPW"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-  <!-- Script Vencimentos -->
-  <script src="/js/vencimentos.js"></script>
+    const tabela = document.getElementById("tabelaVencimentos");
+    const filtroRm = document.getElementById("filtroRm");
+    const dataDe = document.getElementById("dataDe");
+    const dataAte = document.getElementById("dataAte");
+    const btnFiltrar = document.getElementById("btnFiltrar");
+
+    const formatarReais = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const formatarData = d => d ? d.toDate().toLocaleDateString('pt-BR').slice(0, 5) : '-';
+
+    async function carregarRMs() {
+      const set = new Set();
+      const visitas = await db.collection("visitas").get();
+      visitas.forEach(d => set.add(d.data().rmNome));
+      const negocios = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
+      negocios.forEach(d => set.add(d.data().rmNome));
+      [...set].filter(Boolean).sort().forEach(rm => {
+        const o = document.createElement("option");
+        o.value = rm; o.textContent = rm;
+        filtroRm.appendChild(o);
+      });
+    }
+
+    async function buscarVencimentos() {
+      tabela.innerHTML = "<tr><td colspan='6'>Carregando...</td></tr>";
+      const [di, mi] = dataDe.value.split("/").map(Number);
+      const [df, mf] = dataAte.value.split("/").map(Number);
+      const rmFiltro = filtroRm.value;
+      const vencs = [];
+
+      // VISITAS
+      const visitas = await db.collection("visitas").get();
+      visitas.forEach(doc => {
+        const d = doc.data();
+        const ramos = d.ramos || {};
+        Object.entries(ramos).forEach(([ramo, info]) => {
+          if (info.vencimento) {
+            const [dia, mes] = info.vencimento.split("/").map(Number);
+            if (
+              (!mi || mes >= mi) && (!mf || mes <= mf) &&
+              (rmFiltro === "Todos" || d.rmNome === rmFiltro)
+            ) {
+              vencs.push({
+                empresa: d.nomeEmpresa || "-",
+                ramo, rm: d.rmNome || "-",
+                valor: info.premio || 0,
+                data: info.vencimento,
+                origem: "Mapeado em visita"
+              });
+            }
+          }
+        });
+      });
+
+      // NEGÓCIOS
+      const negocios = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
+      negocios.forEach(doc => {
+        const d = doc.data();
+        const data = d.fimVigencia;
+        if (data && data.toDate) {
+          const mes = data.toDate().getMonth() + 1;
+          if (
+            (!mi || mes >= mi) && (!mf || mes <= mf) &&
+            (rmFiltro === "Todos" || d.rmNome === rmFiltro)
+          ) {
+            vencs.push({
+              empresa: d.nomeEmpresa || "-",
+              ramo: d.ramo || "-",
+              rm: d.rmNome || "-",
+              valor: d.valorEstimado || 0,
+              data: formatarData(data),
+              origem: "Fechado conosco"
+            });
+          }
+        }
+      });
+
+      if (vencs.length === 0) {
+        tabela.innerHTML = "<tr><td colspan='6'>Nenhum dado encontrado.</td></tr>";
+        return;
+      }
+
+      vencs.sort((a, b) => (a.data > b.data ? 1 : -1));
+      tabela.innerHTML = vencs.map(v => `
+        <tr>
+          <td>${v.empresa}</td>
+          <td>${v.ramo}</td>
+          <td>${v.rm}</td>
+          <td>${formatarReais(v.valor)}</td>
+          <td>${v.data}</td>
+          <td>${v.origem}</td>
+        </tr>
+      `).join("");
+    }
+
+    btnFiltrar.addEventListener("click", buscarVencimentos);
+    window.onload = () => {
+      const hoje = new Date();
+      const pad = n => n.toString().padStart(2, "0");
+      dataDe.value = `01/${pad(hoje.getMonth() + 1)}`;
+      dataAte.value = `31/${pad(hoje.getMonth() + 1)}`;
+      carregarRMs().then(buscarVencimentos);
+    };
+  </script>
 </body>
 </html>
