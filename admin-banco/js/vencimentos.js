@@ -41,33 +41,25 @@ function extrairDiaMes(dataStr) {
 async function getUsuarioNome(uid) {
   if (!uid) return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
-  try {
-    const snap = await db.collection("usuarios").doc(uid).get();
-    const nome = snap.data()?.nome || uid;
-    cacheUsuarios[uid] = nome;
-    return nome;
-  } catch (e) {
-    return uid;
-  }
+  const snap = await db.collection("usuarios").doc(uid).get();
+  const nome = snap.data()?.nome || uid;
+  cacheUsuarios[uid] = nome;
+  return nome;
 }
 
 async function getEmpresaInfo(empId) {
   if (!empId) return { nome: "-", rmNome: "-", rmId: "", id: "" };
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
-  try {
-    const snap = await db.collection("empresas").doc(empId).get();
-    const data = snap.data();
-    const info = {
-      nome: data?.nome || empId,
-      rmNome: data?.rm || "-",
-      rmId: data?.rmId || "",
-      id: empId
-    };
-    cacheEmpresas[empId] = info;
-    return info;
-  } catch (e) {
-    return { nome: empId, rmNome: "-", rmId: "", id: empId };
-  }
+  const snap = await db.collection("empresas").doc(empId).get();
+  const data = snap.data();
+  const info = {
+    nome: data?.nome || empId,
+    rmNome: data?.rm || "-",
+    rmId: data?.rmId || "",
+    id: empId
+  };
+  cacheEmpresas[empId] = info;
+  return info;
 }
 
 function dentroDoIntervalo(diaMes, inicio, fim) {
@@ -122,38 +114,41 @@ async function carregarRelatorio() {
   // NEGÓCIOS
   const negociosSnap = await db.collection("cotacoes-gerentes").get();
   for (const doc of negociosSnap.docs) {
-    const data = doc.data();
-    if (!data.empresaId || !data.autorUid) continue;
+    try {
+      const data = doc.data();
+      const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+      const usuarioNome = await getUsuarioNome(data.autorUid);
+      const empresa = await getEmpresaInfo(data.empresaId);
+      if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
 
-    const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
-    const usuarioNome = await getUsuarioNome(data.autorUid);
-    const empresa = await getEmpresaInfo(data.empresaId);
-    if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
+      let venc = "-";
+      if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
+        venc = extrairDiaMes(data.fimVigencia.toDate());
+      } else if (typeof data.fimVigencia === "string") {
+        venc = extrairDiaMes(data.fimVigencia);
+      }
 
-    let venc = "-";
-    if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
-      venc = extrairDiaMes(data.fimVigencia.toDate());
-    } else if (typeof data.fimVigencia === "string") {
-      venc = extrairDiaMes(data.fimVigencia);
+      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
+
+      todosRegistros.push({
+        origem: "Negócio",
+        data: dataStr,
+        usuario: usuarioNome,
+        empresaNome: empresa.nome,
+        rm: empresa.rmNome,
+        ramo: data.ramo || "-",
+        vencimento: venc || "-",
+        premio: data.premioLiquido || 0,
+        seguradora: "-",
+        observacoes: data.observacoes || "-",
+        empresaId: empresa.id
+      });
+    } catch (e) {
+      console.error("Erro ao processar negocio:", e);
     }
-
-    if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
-
-    todosRegistros.push({
-      origem: "Negócio",
-      data: dataStr,
-      usuario: usuarioNome,
-      empresaNome: empresa.nome,
-      rm: empresa.rmNome,
-      ramo: data.ramo || "-",
-      vencimento: venc || "-",
-      premio: data.premioLiquido || 0,
-      seguradora: "-",
-      observacoes: data.observacoes || "-",
-      empresaId: empresa.id
-    });
   }
 
+  // Ordenar por vencimento (dia/mês)
   todosRegistros.sort((a, b) => {
     if (a.vencimento === "-" || b.vencimento === "-") return 0;
     const [diaA, mesA] = a.vencimento.split("/").map(Number);
@@ -161,6 +156,7 @@ async function carregarRelatorio() {
     return mesA === mesB ? diaA - diaB : mesA - mesB;
   });
 
+  // Renderizar
   for (const reg of todosRegistros) {
     tbody.innerHTML += `
       <tr>
@@ -180,6 +176,7 @@ async function carregarRelatorio() {
   }
 }
 
+// Carregar RMs no select
 async function carregarRMs() {
   const snap = await db.collection("empresas").get();
   const rmsSet = new Set();
