@@ -3,22 +3,9 @@ if (!firebase.apps.length) {
 }
 const db = firebase.firestore();
 const tbody = document.getElementById("relatorioBody");
-const filtroRM = document.getElementById("filtroRM");
-const dataInicio = document.getElementById("dataInicio");
-const dataFim = document.getElementById("dataFim");
 
 const cacheUsuarios = {};
 const cacheEmpresas = {};
-
-function formatarDataDiaMes(dataStr) {
-  if (!dataStr || dataStr === "-") return "-";
-  if (dataStr.includes("/")) return dataStr.slice(0, 5);
-  if (dataStr.includes("-")) {
-    const partes = dataStr.split("-");
-    return `${partes[2]}/${partes[1]}`;
-  }
-  return dataStr;
-}
 
 function extrairDiaMes(dataStr) {
   if (!dataStr || dataStr === "-") return null;
@@ -41,7 +28,6 @@ function extrairDiaMes(dataStr) {
 async function getUsuarioNome(uid) {
   if (typeof uid !== "string" || uid.trim() === "") return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
-
   try {
     const snap = await db.collection("usuarios").doc(uid).get();
     const nome = snap.data()?.nome || uid;
@@ -56,7 +42,6 @@ async function getUsuarioNome(uid) {
 async function getEmpresaInfo(empId) {
   if (typeof empId !== "string" || empId.trim() === "") return { nome: "-", rmNome: "-", rmId: "", id: "" };
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
-
   try {
     const snap = await db.collection("empresas").doc(empId).get();
     const data = snap.data();
@@ -74,11 +59,6 @@ async function getEmpresaInfo(empId) {
   }
 }
 
-function dentroDoIntervalo(diaMes, inicio, fim) {
-  if (!inicio || !fim) return true;
-  return diaMes >= inicio && diaMes <= fim;
-}
-
 function abrirCotacao(empresaId, rm, ramo, valor) {
   const url = `cotacoes.html?empresaId=${empresaId}&rm=${encodeURIComponent(rm)}&ramo=${encodeURIComponent(ramo)}&valor=${valor}`;
   window.open(url, '_blank');
@@ -86,10 +66,6 @@ function abrirCotacao(empresaId, rm, ramo, valor) {
 
 async function carregarRelatorio() {
   tbody.innerHTML = "";
-  const inicioFiltro = extrairDiaMes(dataInicio.value);
-  const fimFiltro = extrairDiaMes(dataFim.value);
-  const rmSelecionado = filtroRM.value;
-
   const todosRegistros = [];
 
   // VISITAS
@@ -100,13 +76,11 @@ async function carregarRelatorio() {
     const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
     const usuarioNome = await getUsuarioNome(data.usuarioId);
     const empresa = await getEmpresaInfo(data.empresaId);
-    if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
     const ramos = data.ramos || {};
 
     for (const ramoKey of Object.keys(ramos)) {
       const ramo = ramos[ramoKey];
       const venc = extrairDiaMes(ramo.vencimento);
-      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
 
       todosRegistros.push({
         origem: "Visita",
@@ -133,7 +107,6 @@ async function carregarRelatorio() {
       const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
       const usuarioNome = await getUsuarioNome(data.autorUid);
       const empresa = await getEmpresaInfo(data.empresaId);
-      if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
 
       let venc = "-";
       if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
@@ -141,8 +114,6 @@ async function carregarRelatorio() {
       } else if (typeof data.fimVigencia === "string") {
         venc = extrairDiaMes(data.fimVigencia);
       }
-
-      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
 
       todosRegistros.push({
         origem: "Negócio",
@@ -158,7 +129,7 @@ async function carregarRelatorio() {
         empresaId: empresa.id
       });
     } catch (e) {
-      console.error("Erro ao processar negocio:", e);
+      console.error("Erro ao processar negócio:", e);
     }
   }
 
@@ -170,7 +141,6 @@ async function carregarRelatorio() {
     return mesA === mesB ? diaA - diaB : mesA - mesB;
   });
 
-  // Renderizar
   for (const reg of todosRegistros) {
     tbody.innerHTML += `
       <tr>
@@ -190,18 +160,4 @@ async function carregarRelatorio() {
   }
 }
 
-// Carregar RMs no select
-async function carregarRMs() {
-  const snap = await db.collection("empresas").get();
-  const rmsSet = new Set();
-  snap.forEach(doc => {
-    const rm = doc.data().rm;
-    if (rm) rmsSet.add(rm);
-  });
-  filtroRM.innerHTML = '<option value="">Todos os RMs</option>';
-  [...rmsSet].sort().forEach(rm => {
-    filtroRM.innerHTML += `<option value="${rm}">${rm}</option>`;
-  });
-}
-
-carregarRMs().then(() => carregarRelatorio());
+carregarRelatorio();
