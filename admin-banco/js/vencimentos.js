@@ -3,68 +3,52 @@ if (!firebase.apps.length) {
 }
 const db = firebase.firestore();
 const tbody = document.getElementById("relatorioBody");
-const filtroRM = document.getElementById("filtroRM");
-const dataInicio = document.getElementById("dataInicio");
-const dataFim = document.getElementById("dataFim");
 
 const cacheUsuarios = {};
 const cacheEmpresas = {};
 
-function formatarDataDiaMes(dataStr) {
-  if (!dataStr || dataStr === "-") return "-";
-  if (dataStr.includes("/")) return dataStr.slice(0, 5);
-  if (dataStr.includes("-")) {
-    const partes = dataStr.split("-");
-    return `${partes[2]}/${partes[1]}`;
-  }
-  return dataStr;
-}
-
-function extrairDiaMes(dataStr) {
-  if (!dataStr || dataStr === "-") return null;
-  if (dataStr instanceof Date) {
-    const dia = String(dataStr.getDate()).padStart(2, '0');
-    const mes = String(dataStr.getMonth() + 1).padStart(2, '0');
-    return `${dia}/${mes}`;
-  }
-  if (dataStr.includes("/")) {
-    const [dia, mes] = dataStr.split("/");
-    return `${dia.padStart(2, '0')}/${mes.padStart(2, '0')}`;
-  }
-  if (dataStr.includes("-")) {
-    const partes = dataStr.split("-");
-    return `${partes[2].padStart(2, '0')}/${partes[1].padStart(2, '0')}`;
-  }
-  return null;
-}
-
 async function getUsuarioNome(uid) {
-  if (!uid) return "-";
   if (cacheUsuarios[uid]) return cacheUsuarios[uid];
-  const snap = await db.collection("usuarios").doc(uid).get();
-  const nome = snap.data()?.nome || uid;
-  cacheUsuarios[uid] = nome;
-  return nome;
+  if (!uid) return "-";
+  try {
+    const snap = await db.collection("usuarios").doc(uid).get();
+    const data = snap.data();
+    const nome = data?.nome || uid;
+    cacheUsuarios[uid] = nome;
+    return nome;
+  } catch (e) {
+    return uid;
+  }
 }
 
 async function getEmpresaInfo(empId) {
-  if (!empId) return { nome: "-", rmNome: "-", rmId: "", id: "" };
   if (cacheEmpresas[empId]) return cacheEmpresas[empId];
-  const snap = await db.collection("empresas").doc(empId).get();
-  const data = snap.data();
-  const info = {
-    nome: data?.nome || empId,
-    rmNome: data?.rm || "-",
-    rmId: data?.rmId || "",
-    id: empId
-  };
-  cacheEmpresas[empId] = info;
-  return info;
+  if (!empId) return { nome: empId, rmNome: "-" };
+  try {
+    const snap = await db.collection("empresas").doc(empId).get();
+    const data = snap.data();
+    const empresaInfo = {
+      nome: data?.nome || empId,
+      rmNome: data?.rm || "-"
+    };
+    cacheEmpresas[empId] = empresaInfo;
+    return empresaInfo;
+  } catch (e) {
+    return { nome: empId, rmNome: "-" };
+  }
 }
 
-function dentroDoIntervalo(diaMes, inicio, fim) {
-  if (!inicio || !fim) return true;
-  return diaMes >= inicio && diaMes <= fim;
+function formatarDataDiaMes(dataStr) {
+  if (!dataStr || dataStr === "-") return "-";
+  if (dataStr.includes("/")) {
+    const partes = dataStr.split("/");
+    return `${partes[0]}/${partes[1]}`;
+  }
+  if (dataStr.includes("-")) {
+    const partes = dataStr.split("-");
+    return `${partes[2]}/${partes[1]}`; // yyyy-mm-dd
+  }
+  return dataStr;
 }
 
 function abrirCotacao(empresaId, rm, ramo, valor) {
@@ -73,84 +57,68 @@ function abrirCotacao(empresaId, rm, ramo, valor) {
 }
 
 async function carregarRelatorio() {
-  tbody.innerHTML = "";
-  const inicioFiltro = extrairDiaMes(dataInicio.value);
-  const fimFiltro = extrairDiaMes(dataFim.value);
-  const rmSelecionado = filtroRM.value;
-
   const todosRegistros = [];
 
   // VISITAS
   const visitasSnap = await db.collection("visitas").get();
-  console.log("VISITAS total:", visitasSnap.docs.length);
   for (const doc of visitasSnap.docs) {
     const data = doc.data();
     const dataStr = new Date(data.data?.seconds * 1000).toLocaleDateString("pt-BR");
     const usuarioNome = await getUsuarioNome(data.usuarioId);
-    const empresa = await getEmpresaInfo(data.empresaId);
-    if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
     const ramos = data.ramos || {};
 
     for (const ramoKey of Object.keys(ramos)) {
       const ramo = ramos[ramoKey];
-      const venc = extrairDiaMes(ramo.vencimento);
-      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
+      const vencimento = formatarDataDiaMes(ramo.vencimento || "-");
 
       todosRegistros.push({
         origem: "Visita",
         data: dataStr,
         usuario: usuarioNome,
-        empresaNome: empresa.nome,
-        rm: empresa.rmNome,
+        empresaNome: empresaInfo.nome,
+        rm: empresaInfo.rmNome,
         ramo: ramoKey.toUpperCase(),
-        vencimento: venc || "-",
+        vencimento,
         premio: ramo.premio || 0,
         seguradora: ramo.seguradora || "-",
         observacoes: ramo.observacoes || "-",
-        empresaId: empresa.id
+        empresaId: doc.data().empresaId
       });
     }
   }
 
   // NEGÓCIOS
-  const negociosSnap = await db.collection("cotacoes-gerentes").get();
-  console.log("NEGOCIOS total:", negociosSnap.docs.length);
-  for (const doc of negociosSnap.docs) {
-    try {
-      const data = doc.data();
-      const dataStr = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
-      const usuarioNome = await getUsuarioNome(data.autorUid);
-      const empresa = await getEmpresaInfo(data.empresaId);
-      if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
+  const cotacoesSnap = await db.collection("cotacoes-gerentes").get();
+  for (const doc of cotacoesSnap.docs) {
+    const data = doc.data();
+    const dataCriacao = data.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+    const usuarioNome = await getUsuarioNome(data.autorUid);
+    const empresaInfo = await getEmpresaInfo(data.empresaId);
+    const premio = Number(data.premioLiquido || 0);
 
-      let venc = "-";
-      if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
-        venc = extrairDiaMes(data.fimVigencia.toDate());
-      } else if (typeof data.fimVigencia === "string") {
-        venc = extrairDiaMes(data.fimVigencia);
-      }
-
-      if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
-
-      todosRegistros.push({
-        origem: "Negócio",
-        data: dataStr,
-        usuario: usuarioNome,
-        empresaNome: empresa.nome,
-        rm: empresa.rmNome,
-        ramo: data.ramo || "-",
-        vencimento: venc || "-",
-        premio: data.premioLiquido || 0,
-        seguradora: "-",
-        observacoes: data.observacoes || "-",
-        empresaId: empresa.id
-      });
-    } catch (e) {
-      console.error("Erro ao processar negocio:", e);
+    let vencimento = "-";
+    if (data.fimVigencia && data.fimVigencia.length === 10) {
+      const partes = data.fimVigencia.split("-");
+      vencimento = `${partes[2]}/${partes[1]}`;
     }
+
+    todosRegistros.push({
+      origem: "Negócio",
+      data: dataCriacao,
+      usuario: usuarioNome,
+      empresaNome: empresaInfo.nome,
+      rm: empresaInfo.rmNome,
+      ramo: data.ramo || "-",
+      vencimento,
+      premio,
+      seguradora: "-",
+      observacoes: data.observacoes || "-",
+      empresaId: data.empresaId
+    });
   }
 
-  // Ordenar por vencimento (dia/mês)
+  // Ordenação por vencimento
   todosRegistros.sort((a, b) => {
     if (a.vencimento === "-" || b.vencimento === "-") return 0;
     const [diaA, mesA] = a.vencimento.split("/").map(Number);
@@ -158,7 +126,7 @@ async function carregarRelatorio() {
     return mesA === mesB ? diaA - diaB : mesA - mesB;
   });
 
-  // Renderizar
+  // Renderiza
   for (const reg of todosRegistros) {
     tbody.innerHTML += `
       <tr>
@@ -178,18 +146,4 @@ async function carregarRelatorio() {
   }
 }
 
-// Carregar RMs no select
-async function carregarRMs() {
-  const snap = await db.collection("empresas").get();
-  const rmsSet = new Set();
-  snap.forEach(doc => {
-    const rm = doc.data().rm;
-    if (rm) rmsSet.add(rm);
-  });
-  filtroRM.innerHTML = '<option value="">Todos os RMs</option>';
-  [...rmsSet].sort().forEach(rm => {
-    filtroRM.innerHTML += `<option value="${rm}">${rm}</option>`;
-  });
-}
-
-carregarRMs().then(() => carregarRelatorio());
+carregarRelatorio();
