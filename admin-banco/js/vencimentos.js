@@ -120,11 +120,16 @@ async function carregarRelatorio() {
       if (rmSelecionado && empresa.rmNome !== rmSelecionado) continue;
 
       let venc = "-";
-      if (data.fimVigencia instanceof firebase.firestore.Timestamp) {
-        venc = extrairDiaMes(data.fimVigencia.toDate());
-      } else if (typeof data.fimVigencia === "string") {
-        venc = extrairDiaMes(data.fimVigencia);
-      }
+      try {
+  if (data.fimVigencia?.toDate) {
+    venc = extrairDiaMes(data.fimVigencia.toDate());
+  } else if (typeof data.fimVigencia === "string") {
+    venc = extrairDiaMes(data.fimVigencia);
+  }
+} catch (err) {
+  console.warn("Vencimento inválido:", data.fimVigencia);
+}
+
 
       if (!dentroDoIntervalo(venc, inicioFiltro, fimFiltro)) continue;
 
@@ -189,3 +194,4 @@ async function carregarRMs() {
 }
 
 carregarRMs().then(() => carregarRelatorio());
+
