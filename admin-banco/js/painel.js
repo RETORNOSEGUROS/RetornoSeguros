@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Conteúdo completo do painel.js atualizado com base na estrutura original do backup, com ajustes aplicados
-painel_js_code = """
 // js/painel.js
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -87,7 +83,7 @@ function carregarResumoPainel() {
       console.error("Erro Produção:", err);
     });
 
-  // ✅ Minhas Visitas
+  // ✅ Minhas Visitas (corrigido)
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -107,7 +103,7 @@ function carregarResumoPainel() {
       console.error("Erro Minhas Visitas:", err);
     });
 
-  // ✅ Últimas Conversas
+  // ✅ Últimas Conversas (corrigido: usa dataHora)
   const ul = document.getElementById("listaConversas");
   ul.innerHTML = "";
 
@@ -126,7 +122,7 @@ function carregarResumoPainel() {
         const cotacaoData = doc.data();
         db.collection("cotacoes-gerentes").doc(cotacaoId)
           .collection("interacoes")
-          .orderBy("dataHora", "desc")
+          .orderBy("dataHora", "desc") // ⚠️ CAMPO REAL DO FIRESTORE
           .limit(1)
           .get()
           .then(subSnap => {
@@ -143,6 +139,3 @@ function carregarResumoPainel() {
       console.error("Erro Últimas Conversas:", err);
     });
 }
-
-
-
