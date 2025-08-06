@@ -48,39 +48,59 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel(uid) {
-  // Conversas - últimas interações
-  db.collection("interacoes_cotacao").orderBy("data", "desc").limit(5).get().then(snapshot => {
-    const ul = document.getElementById("listaConversas");
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      ul.innerHTML += `<li><strong>${data.empresaNome || 'Empresa'}</strong>: ${data.mensagem.slice(0, 60)}...</li>`;
+  // ✅ MINHAS COTAÇÕES
+  db.collection("cotacoes-gerentes")
+    .orderBy("dataCriacao", "desc").limit(5).get().then(snapshot => {
+      const ul = document.getElementById("listaCotacoes");
+      ul.innerHTML = "";
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        ul.innerHTML += `<li>${d.empresaNome} - ${d.ramo} - R$ ${parseFloat(d.valorFinal || 0).toLocaleString("pt-BR")}</li>`;
+      });
     });
-  });
 
-  // Visitas
-  db.collection("visitas").orderBy("dataCadastro", "desc").limit(5).get().then(snapshot => {
-    const ul = document.getElementById("listaVisitas");
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      ul.innerHTML += `<li>${data.empresa || 'Empresa'} - ${data.data}</li>`;
+  // ✅ PRODUÇÃO
+  db.collection("cotacoes-gerentes")
+    .where("status", "==", "Negócio Emitido")
+    .orderBy("dataCriacao", "desc")
+    .limit(5)
+    .get().then(snapshot => {
+      const ul = document.getElementById("listaProducao");
+      ul.innerHTML = "";
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        ul.innerHTML += `<li>${d.empresaNome} - ${d.ramo} - R$ ${parseFloat(d.valorFinal || 0).toLocaleString("pt-BR")}</li>`;
+      });
     });
-  });
 
-  // Produção
-  db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").orderBy("fimVigencia", "desc").limit(5).get().then(snapshot => {
-    const ul = document.getElementById("listaProducao");
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      ul.innerHTML += `<li>${data.empresaNome || 'Empresa'} - R$ ${data.valorFinal?.toLocaleString("pt-BR")}</li>`;
+  // ✅ MINHAS VISITAS
+  db.collection("visitas")
+    .orderBy("data", "desc").limit(5).get().then(snapshot => {
+      const ul = document.getElementById("listaVisitas");
+      ul.innerHTML = "";
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        ul.innerHTML += `<li>${d.empresa} - ${d.ramo} - ${d.data}</li>`;
+      });
     });
-  });
 
-  // Cotações
-  db.collection("cotacoes-gerentes").orderBy("dataCriacao", "desc").limit(5).get().then(snapshot => {
-    const ul = document.getElementById("listaCotacoes");
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      ul.innerHTML += `<li>${data.empresaNome || 'Empresa'} - ${data.ramo}</li>`;
+  // ✅ ÚLTIMAS CONVERSAS (via subcoleção "interacoes" dentro de cotacoes-gerentes)
+  const ul = document.getElementById("listaConversas");
+  ul.innerHTML = "";
+
+  db.collection("cotacoes-gerentes")
+    .orderBy("dataCriacao", "desc").limit(5).get().then(snapshot => {
+      snapshot.forEach(doc => {
+        const cotacaoId = doc.id;
+        const cotacaoData = doc.data();
+
+        db.collection("cotacoes-gerentes").doc(cotacaoId)
+          .collection("interacoes").orderBy("data", "desc").limit(1).get().then(subSnap => {
+            subSnap.forEach(subDoc => {
+              const interacao = subDoc.data();
+              ul.innerHTML += `<li><strong>${cotacaoData.empresaNome}</strong>: ${interacao.mensagem?.slice(0, 70)}...</li>`;
+            });
+          });
+      });
     });
-  });
 }
