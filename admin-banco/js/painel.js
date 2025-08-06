@@ -1,3 +1,55 @@
+from pathlib import Path
+
+# Conteúdo completo do painel.js atualizado com base na estrutura original do backup, com ajustes aplicados
+painel_js_code = """
+// js/painel.js
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+auth.onAuthStateChanged(user => {
+  if (!user) return window.location.href = "login.html";
+
+  const uid = user.uid;
+  db.collection("usuarios_banco").doc(uid).get().then(doc => {
+    if (!doc.exists) {
+      document.getElementById("perfilUsuario").textContent = "Usuário não encontrado.";
+      return;
+    }
+
+    const dados = doc.data();
+    const perfil = dados.perfil || "sem perfil";
+    const nome = dados.nome || user.email;
+    document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
+
+    const menu = document.getElementById("menuNav");
+    const links = [
+      ["Cadastrar Gerentes", "cadastro-geral.html"],
+      ["Cadastrar Empresa", "cadastro-empresa.html"],
+      ["Agências", "agencias.html"],
+      ["Visitas", "visitas.html"],
+      ["Empresas", "empresas.html"],
+      ["Solicitações de Cotação", "cotacoes.html"],
+      ["Produção", "negocios-fechados.html"],
+      ["Consultar Dicas", "consultar-dicas.html"],
+      ["Dicas Produtos", "dicas-produtos.html"],
+      ["Ramos Seguro", "ramos-seguro.html"],
+      ["Relatório Visitas", "visitas-relatorio.html"],
+      ["Vencimentos", "vencimentos.html"],
+      ["Relatórios", "relatorios.html"]
+    ];
+
+    links.forEach(([label, href]) => {
+      const a = document.createElement("a");
+      a.href = href;
+      a.innerHTML = `🔹 ${label}`;
+      menu.appendChild(a);
+    });
+
+    carregarResumoPainel();
+  });
+});
+
 function carregarResumoPainel() {
   // ✅ Minhas Cotações
   db.collection("cotacoes-gerentes")
@@ -35,7 +87,7 @@ function carregarResumoPainel() {
       console.error("Erro Produção:", err);
     });
 
-  // ✅ Minhas Visitas (ajustado)
+  // ✅ Minhas Visitas
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -55,7 +107,7 @@ function carregarResumoPainel() {
       console.error("Erro Minhas Visitas:", err);
     });
 
-  // ✅ Últimas Conversas (ajustado)
+  // ✅ Últimas Conversas
   const ul = document.getElementById("listaConversas");
   ul.innerHTML = "";
 
@@ -74,7 +126,7 @@ function carregarResumoPainel() {
         const cotacaoData = doc.data();
         db.collection("cotacoes-gerentes").doc(cotacaoId)
           .collection("interacoes")
-          .orderBy("dataHora", "desc") // AJUSTE AQUI
+          .orderBy("dataHora", "desc")
           .limit(1)
           .get()
           .then(subSnap => {
@@ -91,3 +143,6 @@ function carregarResumoPainel() {
       console.error("Erro Últimas Conversas:", err);
     });
 }
+
+
+
