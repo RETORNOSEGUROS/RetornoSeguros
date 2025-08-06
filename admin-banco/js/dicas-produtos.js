@@ -111,7 +111,7 @@ function copiarParaWhatsapp(texto) {
 }
 
 function salvar(id, nomeProduto) {
-  const docRef = db.collection("dicas_produtos").doc(id);
+  const docRef = db.collection("dicas_produtos").doc(id.trim());
   const descricao = document.getElementById(`desc-${id}`).value.trim();
   const oQuePedir = document.getElementById(`pedir-${id}`).value.trim();
   const dicas = document.getElementById(`dicas-${id}`).value.trim();
