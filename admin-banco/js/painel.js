@@ -35,7 +35,7 @@ function carregarResumoPainel() {
       console.error("Erro Produção:", err);
     });
 
-  // ✅ Minhas Visitas (ajuste para campos reais)
+  // ✅ Minhas Visitas (ajustado)
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -55,7 +55,7 @@ function carregarResumoPainel() {
       console.error("Erro Minhas Visitas:", err);
     });
 
-  // ✅ Últimas Conversas (usa dataHora correta)
+  // ✅ Últimas Conversas (ajustado)
   const ul = document.getElementById("listaConversas");
   ul.innerHTML = "";
 
@@ -74,7 +74,7 @@ function carregarResumoPainel() {
         const cotacaoData = doc.data();
         db.collection("cotacoes-gerentes").doc(cotacaoId)
           .collection("interacoes")
-          .orderBy("dataHora", "desc") // CORRIGIDO AQUI
+          .orderBy("dataHora", "desc") // AJUSTE AQUI
           .limit(1)
           .get()
           .then(subSnap => {
