@@ -1,51 +1,3 @@
-// js/painel.js
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
-
-auth.onAuthStateChanged(user => {
-  if (!user) return window.location.href = "login.html";
-
-  const uid = user.uid;
-  db.collection("usuarios_banco").doc(uid).get().then(doc => {
-    if (!doc.exists) {
-      document.getElementById("perfilUsuario").textContent = "Usuário não encontrado.";
-      return;
-    }
-
-    const dados = doc.data();
-    const perfil = dados.perfil || "sem perfil";
-    const nome = dados.nome || user.email;
-    document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
-
-    const menu = document.getElementById("menuNav");
-    const links = [
-      ["Cadastrar Gerentes", "cadastro-geral.html"],
-      ["Cadastrar Empresa", "cadastro-empresa.html"],
-      ["Agências", "agencias.html"],
-      ["Visitas", "visitas.html"],
-      ["Empresas", "empresas.html"],
-      ["Solicitações de Cotação", "cotacoes.html"],
-      ["Produção", "negocios-fechados.html"],
-      ["Consultar Dicas", "consultar-dicas.html"],
-      ["Dicas Produtos", "dicas-produtos.html"],
-      ["Ramos Seguro", "ramos-seguro.html"],
-      ["Relatório Visitas", "visitas-relatorio.html"],
-      ["Vencimentos", "vencimentos.html"],
-      ["Relatórios", "relatorios.html"]
-    ];
-
-    links.forEach(([label, href]) => {
-      const a = document.createElement("a");
-      a.href = href;
-      a.innerHTML = `🔹 ${label}`;
-      menu.appendChild(a);
-    });
-
-    carregarResumoPainel();
-  });
-});
-
 function carregarResumoPainel() {
   // ✅ Minhas Cotações
   db.collection("cotacoes-gerentes")
@@ -83,7 +35,7 @@ function carregarResumoPainel() {
       console.error("Erro Produção:", err);
     });
 
-  // ✅ Minhas Visitas
+  // ✅ Minhas Visitas (ajuste para campos reais)
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -92,16 +44,18 @@ function carregarResumoPainel() {
       if (snapshot.empty) ul.innerHTML = "<li>Nenhuma visita encontrada.</li>";
       snapshot.forEach(doc => {
         const d = doc.data();
-        const empresa = d.empresa || "Empresa";
-        const ramo = d.ramo || "Ramo";
+        const empresa = d.empresaId || "Empresa";
         const dataFormatada = d.data?.toDate?.().toLocaleDateString("pt-BR") || "Sem data";
+        let ramo = "-";
+        if (d.ramos?.vida) ramo = "VIDA";
+        else if (d.ramos?.frota) ramo = "FROTA";
         ul.innerHTML += `<li>${empresa} - ${ramo} - ${dataFormatada}</li>`;
       });
     }).catch(err => {
       console.error("Erro Minhas Visitas:", err);
     });
 
-  // ✅ Últimas Conversas
+  // ✅ Últimas Conversas (usa dataHora correta)
   const ul = document.getElementById("listaConversas");
   ul.innerHTML = "";
 
@@ -120,7 +74,7 @@ function carregarResumoPainel() {
         const cotacaoData = doc.data();
         db.collection("cotacoes-gerentes").doc(cotacaoId)
           .collection("interacoes")
-          .orderBy("data", "desc")
+          .orderBy("dataHora", "desc") // CORRIGIDO AQUI
           .limit(1)
           .get()
           .then(subSnap => {
