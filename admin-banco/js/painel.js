@@ -4,10 +4,7 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 auth.onAuthStateChanged(user => {
-  if (!user) {
-    window.location.href = "login.html";
-    return;
-  }
+  if (!user) return window.location.href = "login.html";
 
   const uid = user.uid;
   db.collection("usuarios_banco").doc(uid).get().then(doc => {
@@ -23,41 +20,21 @@ auth.onAuthStateChanged(user => {
     document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
 
     const menu = document.getElementById("menuNav");
-    let links = [];
-
-    if (perfil === "admin") {
-      links = [
-        ["Cadastrar Gerentes", "cadastro-geral.html"],
-        ["Cadastrar Empresa", "cadastro-empresa.html"],
-        ["Agências", "agencias.html"],
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitações de Cotação", "cotacoes.html"],
-        ["Negociações", "negociacoes.html"],
-        ["Produção", "negocios-fechados.html"],           // ✅ Novo item
-        ["Relatório Visitas", "visitas-relatorio.html"],  // ✅ Novo item
-        ["Vencimentos", "vencimentos.html"],
-        ["Relatórios", "relatorios.html"]
-      ];
-    } else if (perfil === "gerente_chefe") {
-      links = [
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitações", "cotacoes.html"],
-        ["Relatórios", "relatorios.html"]
-      ];
-    } else if (perfil === "rm") {
-      links = [
-        ["Registrar Visita", "visitas.html"],
-        ["Empresas", "empresas.html"],
-        ["Solicitar Cotação", "cotacoes.html"]
-      ];
-    } else if (perfil === "assistente") {
-      links = [
-        ["Visitas", "visitas.html"],
-        ["Empresas", "empresas.html"]
-      ];
-    }
+    const links = [
+      ["Cadastrar Gerentes", "cadastro-geral.html"],
+      ["Cadastrar Empresa", "cadastro-empresa.html"],
+      ["Agências", "agencias.html"],
+      ["Visitas", "visitas.html"],
+      ["Empresas", "empresas.html"],
+      ["Solicitações de Cotação", "cotacoes.html"],
+      ["Produção", "negocios-fechados.html"],
+      ["Consultar Dicas", "consultar-dicas.html"],
+      ["Dicas Produtos", "dicas-produtos.html"],
+      ["Ramos Seguro", "ramos-seguro.html"],
+      ["Relatório Visitas", "visitas-relatorio.html"],
+      ["Vencimentos", "vencimentos.html"],
+      ["Relatórios", "relatorios.html"]
+    ];
 
     links.forEach(([label, href]) => {
       const a = document.createElement("a");
@@ -65,8 +42,45 @@ auth.onAuthStateChanged(user => {
       a.innerHTML = `🔹 ${label}`;
       menu.appendChild(a);
     });
-  }).catch(error => {
-    console.error("Erro ao carregar perfil:", error);
-    document.getElementById("perfilUsuario").textContent = "Erro ao carregar perfil.";
+
+    carregarResumoPainel(uid);
   });
 });
+
+function carregarResumoPainel(uid) {
+  // Conversas - últimas interações
+  db.collection("interacoes_cotacao").orderBy("data", "desc").limit(5).get().then(snapshot => {
+    const ul = document.getElementById("listaConversas");
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      ul.innerHTML += `<li><strong>${data.empresaNome || 'Empresa'}</strong>: ${data.mensagem.slice(0, 60)}...</li>`;
+    });
+  });
+
+  // Visitas
+  db.collection("visitas").orderBy("dataCadastro", "desc").limit(5).get().then(snapshot => {
+    const ul = document.getElementById("listaVisitas");
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      ul.innerHTML += `<li>${data.empresa || 'Empresa'} - ${data.data}</li>`;
+    });
+  });
+
+  // Produção
+  db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").orderBy("fimVigencia", "desc").limit(5).get().then(snapshot => {
+    const ul = document.getElementById("listaProducao");
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      ul.innerHTML += `<li>${data.empresaNome || 'Empresa'} - R$ ${data.valorFinal?.toLocaleString("pt-BR")}</li>`;
+    });
+  });
+
+  // Cotações
+  db.collection("cotacoes-gerentes").orderBy("dataCriacao", "desc").limit(5).get().then(snapshot => {
+    const ul = document.getElementById("listaCotacoes");
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      ul.innerHTML += `<li>${data.empresaNome || 'Empresa'} - ${data.ramo}</li>`;
+    });
+  });
+}
