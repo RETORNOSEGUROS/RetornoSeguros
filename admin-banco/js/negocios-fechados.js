@@ -1,3 +1,4 @@
+
 const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
 const empresasRef = firebase.firestore().collection('empresas');
 const adminEmail = 'patrick@retornoseguros.com.br';
@@ -13,6 +14,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 });
+
+function aplicarMascaraMoeda(input) {
+  let valor = input.value.replace(/\D/g, '');
+  valor = (parseInt(valor, 10) / 100).toFixed(2);
+  valor = valor.replace('.', ',');
+  valor = valor.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  input.value = 'R$ ' + valor;
+}
 
 function carregarNegociosFechados(emailLogado) {
   negociosRef.where('status', '==', 'Negócio Emitido')
@@ -40,9 +49,8 @@ function carregarNegociosFechados(emailLogado) {
         const data = doc.data();
         const id = doc.id;
         const isAdmin = emailLogado === adminEmail;
-
-        // Buscar nome da empresa se houver ID
         const nomeEmpresa = data.empresaNome || '-';
+        const premioFormatado = formatarValor(data.premioLiquido);
 
         const linha = document.createElement('tr');
         linha.style.borderBottom = '1px solid #ccc';
@@ -50,7 +58,7 @@ function carregarNegociosFechados(emailLogado) {
           <td>${nomeEmpresa}</td>
           <td>${data.ramo || '-'}</td>
           <td>${data.rmNome || '-'}</td>
-          <td><input type='number' id='premio-${id}' value='${data.premioLiquido || ''}' ${!isAdmin ? 'readonly' : ''} style='width:100px'></td>
+          <td><input type='text' id='premio-${id}' value='${premioFormatado}' ${!isAdmin ? 'readonly' : ''} style='width:120px'></td>
           <td><input type='number' id='comissao-${id}' value='${data.comissaoPercentual || ''}' ${!isAdmin ? 'readonly' : ''} style='width:60px'></td>
           <td><span id='comissaoValor-${id}'>${formatarValor(data.comissaoValor)}</span></td>
           <td><input type='date' id='inicio-${id}' value='${data.inicioVigencia || ''}' ${!isAdmin ? 'readonly' : ''}></td>
@@ -62,7 +70,11 @@ function carregarNegociosFechados(emailLogado) {
         tbody.appendChild(linha);
 
         if (isAdmin) {
-          document.getElementById(`premio-${id}`).addEventListener('input', () => calcularComissao(id));
+          const inputPremio = document.getElementById(`premio-${id}`);
+          inputPremio.addEventListener('input', () => {
+            aplicarMascaraMoeda(inputPremio);
+            calcularComissao(id);
+          });
           document.getElementById(`comissao-${id}`).addEventListener('input', () => calcularComissao(id));
         }
       });
@@ -80,14 +92,16 @@ function formatarValor(valor) {
 }
 
 function calcularComissao(id) {
-  const premio = parseFloat(document.getElementById(`premio-${id}`).value || 0);
+  const premioBruto = document.getElementById(`premio-${id}`).value;
+  const premio = parseFloat(premioBruto.replace(/[^\d,]/g, '').replace(',', '.') || 0);
   const percentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
   const valor = (premio * percentual / 100).toFixed(2);
   document.getElementById(`comissaoValor-${id}`).innerText = formatarValor(parseFloat(valor));
 }
 
 function salvarNegocio(id, botao) {
-  const premio = parseFloat(document.getElementById(`premio-${id}`).value || 0);
+  const premioBruto = document.getElementById(`premio-${id}`).value;
+  const premio = parseFloat(premioBruto.replace(/[^\d,]/g, '').replace(',', '.') || 0);
   const comissaoPercentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
   const comissaoValor = parseFloat((premio * comissaoPercentual / 100).toFixed(2));
   const inicio = document.getElementById(`inicio-${id}`).value;
