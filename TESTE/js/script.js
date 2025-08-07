@@ -1,6 +1,6 @@
 
 const produtos = {
-  "Nacional II Compuls\u00f3rio": {
+  "1. Nacional II Compuls\u00f3rio": {
     "0-18": 256.84,
     "19-23": 303.07,
     "24-28": 366.72,
@@ -12,7 +12,7 @@ const produtos = {
     "54-58": 880.59,
     "59+": 1540.94
   },
-  "Nacional II Opcional": {
+  "2. Nacional II Opcional": {
     "0-18": 324.3,
     "19-23": 382.67,
     "24-28": 463.03,
@@ -24,7 +24,7 @@ const produtos = {
     "54-58": 1111.86,
     "59+": 1945.65
   },
-  "Hospitalar Compuls\u00f3rio": {
+  "3. Hospitalar Compuls\u00f3rio": {
     "0-18": 200.14,
     "19-23": 236.16,
     "24-28": 285.76,
@@ -36,7 +36,19 @@ const produtos = {
     "54-58": 686.2,
     "59+": 1200.78
   },
-  "Nacional Plus S\u00f3cios v1": {
+  "4. Nacional II Efetivo": {
+    "0-18": 211.44,
+    "19-23": 249.5,
+    "24-28": 301.89,
+    "29-33": 362.27,
+    "34-38": 412.98,
+    "39-43": 425.38,
+    "44-48": 517.92,
+    "49-53": 609.17,
+    "54-58": 724.91,
+    "59+": 1268.52
+  },
+  "5. Nacional Plus S\u00f3cios (4x tabela)": {
     "0-18": 857.32,
     "19-23": 1011.64,
     "24-28": 1224.07,
@@ -48,7 +60,7 @@ const produtos = {
     "54-58": 2939.33,
     "59+": 5143.53
   },
-  "Nacional III S\u00f3cios v1": {
+  "6. Nacional III S\u00f3cios (3x tabela)": {
     "0-18": 449.83,
     "19-23": 530.8,
     "24-28": 642.27,
@@ -60,7 +72,7 @@ const produtos = {
     "54-58": 1542.95,
     "59+": 2698.79
   },
-  "Nacional III S\u00f3cios v2": {
+  "7. Nacional III S\u00f3cios (2x tabela)": {
     "0-18": 416.51,
     "19-23": 491.48,
     "24-28": 594.68,
@@ -72,7 +84,7 @@ const produtos = {
     "54-58": 1351.4,
     "59+": 2498.86
   },
-  "Premium S\u00f3cios v1": {
+  "8. Premium S\u00f3cios (8x tabela)": {
     "0-18": 1365.02,
     "19-23": 1610.72,
     "24-28": 1948.96,
@@ -84,7 +96,7 @@ const produtos = {
     "54-58": 4679.97,
     "59+": 8189.49
   },
-  "Premium S\u00f3cios v2": {
+  "9. Premium S\u00f3cios (6x tabela)": {
     "0-18": 1183.99,
     "19-23": 1397.11,
     "24-28": 1690.49,
@@ -96,7 +108,7 @@ const produtos = {
     "54-58": 3854.2,
     "59+": 7103.41
   },
-  "Nacional Plus S\u00f3cios v2": {
+  "10. Nacional Plus S\u00f3cios (8x tabela)": {
     "0-18": 1218.77,
     "19-23": 1438.15,
     "24-28": 1740.14,
@@ -109,8 +121,8 @@ const produtos = {
     "59+": 7312.06
   }
 };
-
 const faixas = ["0-18", "19-23", "24-28", "29-33", "34-38", "39-43", "44-48", "49-53", "54-58", "59+"];
+let dadosExcel = [];
 
 window.onload = () => {
   const select = document.getElementById("produto");
@@ -120,13 +132,12 @@ window.onload = () => {
     option.textContent = nome;
     select.appendChild(option);
   }
+  select.addEventListener('change', () => calcular());
 };
 
 document.getElementById('file-input').addEventListener('change', handleFile, false);
 
 function handleFile(e) {
-  const produtoSelecionado = document.getElementById("produto").value;
-  const valores = produtos[produtoSelecionado];
   const file = e.target.files[0];
   const reader = new FileReader();
 
@@ -134,41 +145,47 @@ function handleFile(e) {
     const data = new Uint8Array(event.target.result);
     const workbook = XLSX.read(data, {type: 'array'});
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(sheet);
-
-    const contagem = {};
-    faixas.forEach(f => contagem[f] = 0);
-
-    json.forEach(row => {
-      const nascimento = row.dataNascimento;
-      if (!nascimento) return;
-
-      const [dia, mes, ano] = nascimento.split('/');
-      const nascimentoDate = new Date(ano, mes - 1, dia);
-      const hoje = new Date();
-      let idade = hoje.getFullYear() - nascimentoDate.getFullYear();
-      const m = hoje.getMonth() - nascimentoDate.getMonth();
-      if (m < 0 || (m === 0 && hoje.getDate() < nascimentoDate.getDate())) idade--;
-
-      const faixa = faixas.find(f => {
-        const [min, max] = f.includes("+") ? [parseInt(f), 200] : f.split("-").map(Number);
-        return idade >= min && idade <= max;
-      });
-      if (faixa) contagem[faixa]++;
-    });
-
-    let total = 0;
-    let html = "<table><tr><th>Faixa</th><th>Qtd</th><th>Valor</th><th>Subtotal</th></tr>";
-    faixas.forEach(f => {
-      const qtd = contagem[f];
-      const valor = valores[f];
-      const subtotal = qtd * valor;
-      total += subtotal;
-      html += `<tr><td>${f}</td><td>${qtd}</td><td>R$ ${valor.toFixed(2)}</td><td>R$ ${subtotal.toFixed(2)}</td></tr>`;
-    });
-    html += `<tr><th colspan="3">Total</th><th>R$ ${total.toFixed(2)}</th></tr></table>`;
-    document.getElementById("resultado").innerHTML = html;
+    dadosExcel = XLSX.utils.sheet_to_json(sheet);
+    calcular();
   };
-
   reader.readAsArrayBuffer(file);
+}
+
+function calcular() {
+  const produtoSelecionado = document.getElementById("produto").value;
+  const valores = produtos[produtoSelecionado];
+  if (!valores || dadosExcel.length === 0) return;
+
+  const contagem = {};
+  faixas.forEach(f => contagem[f] = 0);
+
+  dadosExcel.forEach(row => {
+    const nascimento = row.dataNascimento;
+    if (!nascimento) return;
+
+    const [dia, mes, ano] = nascimento.split('/');
+    const nascimentoDate = new Date(ano, mes - 1, dia);
+    const hoje = new Date();
+    let idade = hoje.getFullYear() - nascimentoDate.getFullYear();
+    const m = hoje.getMonth() - nascimentoDate.getMonth();
+    if (m < 0 || (m === 0 && hoje.getDate() < nascimentoDate.getDate())) idade--;
+
+    const faixa = faixas.find(f => {
+      const [min, max] = f.includes("+") ? [parseInt(f), 200] : f.split("-").map(Number);
+      return idade >= min && idade <= max;
+    });
+    if (faixa) contagem[faixa]++;
+  });
+
+  let total = 0;
+  let html = "<table><tr><th>Faixa</th><th>Qtd</th><th>Valor</th><th>Subtotal</th></tr>";
+  faixas.forEach(f => {
+    const qtd = contagem[f];
+    const valor = valores[f];
+    const subtotal = qtd * valor;
+    total += subtotal;
+    html += `<tr><td>${f}</td><td>${qtd}</td><td>R$ ${valor.toFixed(2)}</td><td>R$ ${subtotal.toFixed(2)}</td></tr>`;
+  });
+  html += `<tr><th colspan="3">Total</th><th>R$ ${total.toFixed(2)}</th></tr></table>`;
+  document.getElementById("resultado").innerHTML = html;
 }
