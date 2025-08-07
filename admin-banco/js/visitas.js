@@ -14,7 +14,7 @@ function carregarEmpresas() {
       const option = document.createElement("option");
       option.value = doc.id;
       option.textContent = data.nome;
-      option.setAttribute("data-rm", data.rmNome || "Não informado");
+      option.setAttribute("data-rm", data.rm || "Não informado");
       select.appendChild(option);
     });
 
