@@ -22,12 +22,8 @@ function carregarEmpresas() {
     select.addEventListener("change", () => {
       const selectedOption = select.options[select.selectedIndex];
       const rmNome = selectedOption.getAttribute("data-rm");
-      if (rmNome && selectedOption.value) {
-        rmNomeSpan.textContent = rmNome;
-        infoEmpresa.style.display = "block";
-      } else {
-        infoEmpresa.style.display = "none";
-      }
+      rmNomeSpan.textContent = rmNome;
+      infoEmpresa.style.display = selectedOption.value ? "block" : "none";
     });
   });
 }
@@ -103,7 +99,8 @@ async function gerarCamposRamos(seguradoras) {
 function registrarVisita() {
   const empresaSelect = document.getElementById("empresa");
   const empresaId = empresaSelect.value;
-  const tipoVisita = document.getElementById("tipoVisita").value;
+  const tipoVisitaSelect = document.getElementById("tipoVisita");
+  const tipoVisita = tipoVisitaSelect ? tipoVisitaSelect.value : "";
   const rmNome = empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "";
 
   if (!empresaId) {
