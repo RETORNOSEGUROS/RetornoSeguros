@@ -1,17 +1,33 @@
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
 function carregarEmpresas() {
   const select = document.getElementById("empresa");
+  const infoEmpresa = document.getElementById("infoEmpresa");
+  const rmNomeSpan = document.getElementById("rmNome");
+
   db.collection("empresas").orderBy("nome").get().then(snapshot => {
     select.innerHTML = `<option value="">Selecione uma empresa</option>`;
     snapshot.forEach(doc => {
+      const data = doc.data();
       const option = document.createElement("option");
       option.value = doc.id;
-      option.textContent = doc.data().nome;
+      option.textContent = data.nome;
+      option.setAttribute("data-rm", data.rmNome || "Não informado");
       select.appendChild(option);
+    });
+
+    // Atualiza RM ao selecionar empresa
+    select.addEventListener("change", () => {
+      const selectedOption = select.options[select.selectedIndex];
+      const rmNome = selectedOption.getAttribute("data-rm");
+      if (rmNome && selectedOption.value) {
+        rmNomeSpan.textContent = rmNome;
+        infoEmpresa.style.display = "block";
+      } else {
+        infoEmpresa.style.display = "none";
+      }
     });
   });
 }
@@ -85,9 +101,18 @@ async function gerarCamposRamos(seguradoras) {
 }
 
 function registrarVisita() {
-  const empresaId = document.getElementById("empresa").value;
+  const empresaSelect = document.getElementById("empresa");
+  const empresaId = empresaSelect.value;
+  const tipoVisita = document.getElementById("tipoVisita").value;
+  const rmNome = empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "";
+
   if (!empresaId) {
     alert("Selecione a empresa.");
+    return;
+  }
+
+  if (!tipoVisita) {
+    alert("Selecione o tipo da visita.");
     return;
   }
 
@@ -99,6 +124,8 @@ function registrarVisita() {
 
     const visita = {
       empresaId,
+      tipoVisita,
+      rmNome,
       usuarioId: user.uid,
       data: firebase.firestore.FieldValue.serverTimestamp(),
       ramos: {}
