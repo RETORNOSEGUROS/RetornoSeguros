@@ -86,6 +86,7 @@ function aplicarFiltro() {
 function renderizarTabela(visitas) {
   let html = `<table><thead><tr>
     <th>Data</th>
+    <th>Tipo</th>
     <th>Usuário</th>
     <th>Empresa</th>
     <th>RM da Empresa</th>
@@ -98,6 +99,7 @@ function renderizarTabela(visitas) {
 
   visitas.forEach(v => {
     const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+    const tipo = v.tipoVisita || "-";
 
     for (const [ramo, info] of Object.entries(v.ramos || {})) {
       let vencimentoFormatado = "-";
@@ -112,6 +114,7 @@ function renderizarTabela(visitas) {
 
       html += `<tr>
         <td>${dataVisita}</td>
+        <td>${tipo}</td>
         <td>${v.usuarioNome}</td>
         <td>${v.empresaNome}</td>
         <td>${v.empresaRM}</td>
@@ -132,7 +135,7 @@ function renderizarTabela(visitas) {
 }
 
 function exportarCSV() {
-  let csv = ["Data;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
+  let csv = ["Data;Tipo;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
   dadosVisitas.forEach(v => {
     const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
 
@@ -147,6 +150,7 @@ function exportarCSV() {
 
       const linha = [
         dataVisita,
+        v.tipoVisita || "-",
         v.usuarioNome,
         v.empresaNome,
         v.empresaRM,
