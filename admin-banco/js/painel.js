@@ -1,6 +1,7 @@
+// admin-banco/js/painel.js
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db = firebase.firestore();
+const db   = firebase.firestore();
 
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
@@ -17,13 +18,13 @@ auth.onAuthStateChanged(user => {
     const nome   = dados.nome || user.email;
     document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
 
-    // Menu lateral com Agenda Visitas
+    // 🔗 Menu lateral (inclui Agenda Visitas)
     const menu  = document.getElementById("menuNav");
     const links = [
       ["Cadastrar Gerentes", "cadastro-geral.html"],
       ["Cadastrar Empresa", "cadastro-empresa.html"],
       ["Agências", "agencias.html"],
-      ["Agenda Visitas", "agenda-visitas.html"],
+      ["Agenda Visitas", "agenda-visitas.html"], // 👈 novo
       ["Visitas", "visitas.html"],
       ["Empresas", "empresas.html"],
       ["Solicitações de Cotação", "cotacoes.html"],
@@ -47,35 +48,49 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel() {
-  const agora = firebase.firestore.Timestamp.fromDate(new Date());
-
-  // 🔹 Visitas Agendadas
+  // ============== VISITAS AGENDADAS (PRÓXIMAS 10) ==============
   db.collection("agenda_visitas")
-    .where("dataHoraTs", ">=", agora)
-    .orderBy("dataHoraTs", "asc")
-    .limit(10)
     .get()
     .then(snapshot => {
+      const todos = [];
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        let dt = null;
+
+        if (d.dataHoraTs?.toDate) {
+          dt = d.dataHoraTs.toDate();
+        } else if (d.dataHoraStr) {
+          dt = new Date(d.dataHoraStr);
+        }
+
+        if (dt && !isNaN(dt) && dt >= new Date()) {
+          todos.push({ id: doc.id, ...d, dt });
+        }
+      });
+
+      todos.sort((a, b) => a.dt - b.dt);
+      const proximos = todos.slice(0, 10);
+
       const ul = document.getElementById("listaVisitasAgendadas");
       ul.innerHTML = "";
-      if (snapshot.empty) {
+
+      if (proximos.length === 0) {
         ul.innerHTML = "<li>Nenhuma visita agendada.</li>";
         return;
       }
-      snapshot.forEach(doc => {
-        const d  = doc.data();
-        const dt = d.dataHoraTs?.toDate?.() || (d.dataHoraStr ? new Date(d.dataHoraStr) : null);
-        const dataFmt = dt ? dt.toLocaleDateString("pt-BR") : "-";
-        const horaFmt = dt ? dt.toLocaleTimeString("pt-BR",{hour:'2-digit',minute:'2-digit'}) : "-";
-        const empresa = d.empresaNome || "Empresa";
-        const rm      = d.rm || "-";
-        const tipo    = d.tipo || "-";
+
+      proximos.forEach(v => {
+        const dataFmt = v.dt.toLocaleDateString("pt-BR");
+        const horaFmt = v.dt.toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' });
+        const empresa = v.empresaNome || "Empresa";
+        const rm      = v.rm || "-";
+        const tipo    = v.tipo || "-";
         ul.innerHTML += `<li>${dataFmt} ${horaFmt} — <strong>${empresa}</strong> — ${rm} (${tipo})</li>`;
       });
     })
     .catch(err => console.error("Erro Visitas Agendadas:", err));
 
-  // 🔹 Minhas Cotações
+  // ============== MINHAS COTAÇÕES (ÚLTIMAS 5) ==============
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc").limit(5).get()
     .then(snapshot => {
@@ -91,7 +106,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Minhas Cotações:", err));
 
-  // 🔹 Produção
+  // ============== PRODUÇÃO (NEGÓCIOS FECHADOS) ==============
   db.collection("cotacoes-gerentes")
     .where("status", "==", "Negócio Emitido")
     .orderBy("dataCriacao", "desc")
@@ -110,7 +125,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Produção:", err));
 
-  // 🔹 Minhas Visitas
+  // ============== MINHAS VISITAS (HISTÓRICO ANTIGO) ==============
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -129,7 +144,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Minhas Visitas:", err));
 
-  // 🔹 Últimas Conversas
+  // ============== ÚLTIMAS CONVERSAS (INTERAÇÕES) ==============
   const ulConversas = document.getElementById("listaConversas");
   ulConversas.innerHTML = "";
   db.collection("cotacoes-gerentes")
