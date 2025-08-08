@@ -1,3 +1,4 @@
+// js/agenda-visitas.js
 const auth = firebase.auth();
 const db = firebase.firestore();
 
@@ -10,45 +11,64 @@ const vazio = document.getElementById("vazio");
 
 const fmt = new Intl.DateTimeFormat("pt-BR",{dateStyle:"short",timeStyle:"short"});
 
+/* ========= EMPRESAS NO SELECT ========= */
 function carregarEmpresas(){
   empresaSelect.innerHTML = "<option value=''>Selecione...</option>";
   db.collection("empresas").orderBy("nome").get().then(snap=>{
     snap.forEach(doc=>{
       const o=document.createElement("option");
-      o.value=doc.id; o.textContent=doc.data().nome||doc.id;
+      o.value=doc.id; 
+      o.textContent=doc.data().nome || doc.id;
       empresaSelect.appendChild(o);
     });
   }).catch(console.error);
 }
 
+/* ========= SALVAR VISITA (com RM da EMPRESA) ========= */
 function salvar(){
-  const empId = empresaSelect.value;
-  if(!empId) return alert("Selecione a empresa.");
-  if(!dataHora.value) return alert("Informe data e hora.");
+  const empresaId = empresaSelect.value;
+  if(!empresaId){ alert("Selecione a empresa."); return; }
+  if(!dataHora.value){ alert("Informe data e hora."); return; }
 
-  const empNome = empresaSelect.selectedOptions[0].text;
   const tipo = tipoVisita.value;
   const dhLocal = new Date(dataHora.value);
-  const rmNome = (auth.currentUser && (auth.currentUser.displayName||auth.currentUser.email))||"";
+  const obs = (observacoes.value || "").trim();
+  const criadoPorUid = auth.currentUser ? auth.currentUser.uid : null;
 
-  const payload = {
-    empresaId: empId,
-    empresaNome: empNome,
-    rm: rmNome,
-    tipo,
-    observacoes: (observacoes.value||"").trim(),
-    dataHoraTs: firebase.firestore.Timestamp.fromDate(dhLocal),
-    dataHoraStr: dhLocal.toISOString(),
-    criadoPorUid: auth.currentUser? auth.currentUser.uid : null,
-    criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-  };
+  // 1) Buscamos a empresa para pegar nome + RM corretos
+  db.collection("empresas").doc(empresaId).get().then(empDoc=>{
+    if(!empDoc.exists){ alert("Empresa não encontrada."); return Promise.reject("empresa_nao_encontrada"); }
+    const emp = empDoc.data();
 
-  db.collection("agenda_visitas").add(payload).then(()=>{
-    dataHora.value=""; observacoes.value="";
-    listarProximas(); alert("Visita agendada!");
-  }).catch(err=>{ console.error(err); alert("Erro ao salvar. Veja o console."); });
+    // 2) Monta payload usando RM e nome da empresa
+    const payload = {
+      empresaId,
+      empresaNome: emp.nome || "",
+      rm: emp.rm || "",                       // ✅ RM vindo da EMPRESA
+      tipo,
+      observacoes: obs,
+      dataHoraTs: firebase.firestore.Timestamp.fromDate(dhLocal),
+      dataHoraStr: dhLocal.toISOString(),
+      criadoPorUid,
+      criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    // 3) Grava
+    return db.collection("agenda_visitas").add(payload);
+  }).then(()=>{
+    dataHora.value = "";
+    observacoes.value = "";
+    listarProximas();
+    alert("Visita agendada!");
+  }).catch(err=>{
+    if(err !== "empresa_nao_encontrada"){
+      console.error("Erro ao salvar agendamento:", err);
+      alert("Erro ao salvar. Veja o console.");
+    }
+  });
 }
 
+/* ========= RENDER ========= */
 function td(label, value, extra=""){
   const el = document.createElement("td");
   el.setAttribute("data-label", label);
@@ -64,10 +84,10 @@ function linhaTabela(id, v, isAdmin){
   const tr=document.createElement("tr");
   tr.appendChild(td("Data", dataFmt));
   tr.appendChild(td("Hora", horaFmt));
-  tr.appendChild(td("Empresa", v.empresaNome||"-"));
-  tr.appendChild(td("RM", `<span class="rm-chip">${v.rm||"-"}</span>`));
-  tr.appendChild(td("Tipo", `<span class="badge">${v.tipo||"-"}</span>`));
-  tr.appendChild(td("Observações", v.observacoes||"-"));
+  tr.appendChild(td("Empresa", v.empresaNome || "-"));
+  tr.appendChild(td("RM", `<span class="rm-chip">${v.rm || "-"}</span>`));     // ✅ agora preenche
+  tr.appendChild(td("Tipo", `<span class="badge">${v.tipo || "-"}</span>`));
+  tr.appendChild(td("Observações", v.observacoes || "-"));
 
   const tdActions = td("Ações", "");
   tdActions.className = "actions-col";
@@ -85,40 +105,34 @@ function linhaTabela(id, v, isAdmin){
   return tr;
 }
 
+/* ========= LISTAR PRÓXIMAS ========= */
 function listarProximas(){
   lista.innerHTML="";
   const agora = firebase.firestore.Timestamp.fromDate(new Date());
+
+  const user = auth.currentUser;
+  const isAdmin = !!(user && user.email === "patrick@retornoseguros.com.br");
 
   db.collection("agenda_visitas")
     .where("dataHoraTs", ">=", agora)
     .orderBy("dataHoraTs","asc")
     .get()
-    .then(()=>{
-      // usar onAuth pra pegar admin corretamente
-      const user = auth.currentUser;
-      const isAdmin = !!(user && user.email === "patrick@retornoseguros.com.br");
-
-      return db.collection("agenda_visitas")
-        .where("dataHoraTs", ">=", agora)
-        .orderBy("dataHoraTs","asc")
-        .get()
-        .then(snap=>{
-          if(snap.empty){ vazio.style.display="block"; return; }
-          vazio.style.display="none";
-          snap.forEach(doc=>{
-            lista.appendChild(linhaTabela(doc.id, doc.data(), isAdmin));
-          });
-        });
+    .then(snap=>{
+      if(snap.empty){ vazio.style.display="block"; return; }
+      vazio.style.display="none";
+      snap.forEach(doc=>{
+        lista.appendChild(linhaTabela(doc.id, doc.data(), isAdmin));
+      });
     })
     .catch(err=>console.error("Erro ao listar visitas:",err));
 }
 
-// Eventos
+/* ========= EVENTOS ========= */
 document.getElementById("salvarVisita").addEventListener("click", ()=>{
   if(!auth.currentUser){ alert("Faça login novamente."); return; }
   salvar();
 });
 document.getElementById("recarregar").addEventListener("click", listarProximas);
 
-// Init
+/* ========= INIT ========= */
 auth.onAuthStateChanged(()=>{ carregarEmpresas(); listarProximas(); });
