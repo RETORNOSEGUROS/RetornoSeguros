@@ -2,7 +2,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-// 🔹 App secundário para criar usuários no Auth sem perder a sessão do admin
+// 🔹 App secundária para criar usuários no Auth sem perder a sessão do admin
 let secondaryApp = null;
 function getSecondaryAuth() {
   if (!secondaryApp) {
@@ -12,16 +12,13 @@ function getSecondaryAuth() {
 }
 
 let editandoUsuarioId = null;
-let agenciasMap = {};
 
 auth.onAuthStateChanged(user => {
   if (!user || user.email !== "patrick@retornoseguros.com.br") {
     window.location.href = "login.html";
   } else {
-    loadAgencias().then(() => {
-      listarUsuarios();
-      carregarGerentesChefes();
-    });
+    listarUsuarios();
+    carregarGerentesChefes();
   }
 });
 
@@ -29,23 +26,6 @@ function toggleCamposVinculo() {
   const perfil = document.getElementById("perfil").value;
   const gerenteBox = document.getElementById("gerenteChefeBox");
   gerenteBox.style.display = (perfil === "rm" || perfil === "assistente") ? "block" : "none";
-}
-
-async function loadAgencias() {
-  // carrega agencias para o select e também monta um map para exibir nome na lista
-  const sel = document.getElementById("agenciaId");
-  sel.innerHTML = '<option value="">Selecione a agência</option>';
-  agenciasMap = {};
-
-  const snap = await db.collection("agencias_banco").orderBy(firebase.firestore.FieldPath.documentId()).get();
-  snap.forEach(doc => {
-    const data = doc.data() || {};
-    agenciasMap[doc.id] = data.nome || doc.id;
-    const opt = document.createElement("option");
-    opt.value = doc.id;
-    opt.textContent = `${doc.id} - ${data.nome || "-"}`;
-    sel.appendChild(opt);
-  });
 }
 
 function carregarGerentesChefes() {
@@ -66,16 +46,13 @@ function carregarGerentesChefes() {
 async function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
   const email = document.getElementById("email").value.trim();
-  const senha = document.getElementById("senha").value.trim();
+  const senha = document.getElementById("senha").value.trim(); // usada na criação do Auth
   const perfil = document.getElementById("perfil").value;
-  const agenciaId = document.getElementById("agenciaId").value;
+  const agenciaId = document.getElementById("agenciaId").value.trim();
   const gerenteChefeIdSelecionado = document.getElementById("gerenteChefeId").value;
 
   if (!nome || !email || !perfil || !agenciaId) {
     return alert("Preencha todos os campos obrigatórios.");
-  }
-  if (!agenciasMap[agenciaId]) {
-    return alert("Agência inválida. Selecione uma agência existente.");
   }
 
   // 🔁 Edição (somente Firestore)
@@ -149,14 +126,13 @@ function listarUsuarios() {
     .then(snapshot => {
       snapshot.forEach(doc => {
         const u = doc.data();
-        const agNome = agenciasMap[u.agenciaId] ? `${u.agenciaId} - ${agenciasMap[u.agenciaId]}` : (u.agenciaId || "-");
         const tr = document.createElement("tr");
 
         tr.innerHTML = `
           <td>${u.nome || "-"}</td>
           <td>${u.email || "-"}</td>
           <td>${u.perfil || "-"}</td>
-          <td>${agNome}</td>
+          <td>${u.agenciaId || "-"}</td>
           <td>
             <button onclick="editarUsuario('${doc.id}', '${u.nome || ""}', '${u.email || ""}', '${u.perfil || ""}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button>
             <button onclick="excluirUsuario('${doc.id}', '${u.email || ""}')">🗑 Excluir</button>
@@ -186,8 +162,7 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
 async function excluirUsuario(usuarioId, email) {
   if (!confirm(`Deseja mesmo excluir o usuário ${email}? Isso removerá APENAS o perfil (Firestore).`)) return;
 
-  // Observação: excluir o usuário do Auth exigirá login desse usuário ou uma Cloud Function Admin.
-  // Aqui vamos excluir somente o doc do Firestore.
+  // Observação: excluir do Auth exigiria função Admin; aqui apagamos só o perfil.
   try {
     await db.collection("usuarios_banco").doc(usuarioId).delete();
     alert("Perfil excluído do banco. (O login no Auth permanece.)");
