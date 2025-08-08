@@ -1,7 +1,7 @@
 // js/painel.js
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db = firebase.firestore();
+const db   = firebase.firestore();
 
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
@@ -13,16 +13,18 @@ auth.onAuthStateChanged(user => {
       return;
     }
 
-    const dados = doc.data();
+    const dados  = doc.data();
     const perfil = dados.perfil || "sem perfil";
-    const nome = dados.nome || user.email;
+    const nome   = dados.nome || user.email;
     document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
 
-    const menu = document.getElementById("menuNav");
+    // 🔗 Menu lateral — inclui Agenda Visitas
+    const menu  = document.getElementById("menuNav");
     const links = [
       ["Cadastrar Gerentes", "cadastro-geral.html"],
       ["Cadastrar Empresa", "cadastro-empresa.html"],
       ["Agências", "agencias.html"],
+      ["Agenda Visitas", "agenda-visitas.html"],       // 👈 novo
       ["Visitas", "visitas.html"],
       ["Empresas", "empresas.html"],
       ["Solicitações de Cotação", "cotacoes.html"],
@@ -34,7 +36,6 @@ auth.onAuthStateChanged(user => {
       ["Vencimentos", "vencimentos.html"],
       ["Relatórios", "relatorios.html"]
     ];
-
     links.forEach(([label, href]) => {
       const a = document.createElement("a");
       a.href = href;
@@ -47,7 +48,34 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel() {
-  // ✅ Minhas Cotações
+  // ✅ Visitas Agendadas - próximas 10 (ordena por data/hora futura)
+  const agora = firebase.firestore.Timestamp.fromDate(new Date());
+  db.collection("agenda_visitas")
+    .where("dataHoraTs", ">=", agora)
+    .orderBy("dataHoraTs", "asc")
+    .limit(10)
+    .get()
+    .then(snapshot => {
+      const ul = document.getElementById("listaVisitasAgendadas");
+      ul.innerHTML = "";
+      if (snapshot.empty) {
+        ul.innerHTML = "<li>Nenhuma visita agendada.</li>";
+        return;
+      }
+      snapshot.forEach(doc => {
+        const d  = doc.data();
+        const dt = d.dataHoraTs?.toDate?.() || (d.dataHoraStr ? new Date(d.dataHoraStr) : null);
+        const dataFmt = dt ? dt.toLocaleDateString("pt-BR") : "-";
+        const horaFmt = dt ? dt.toLocaleTimeString("pt-BR",{hour:'2-digit',minute:'2-digit'}) : "-";
+        const tipo    = d.tipo || "-";
+        const empresa = d.empresaNome || "Empresa";
+        const rm      = d.rm || "-";
+        ul.innerHTML += `<li>${dataFmt} ${horaFmt} — <strong>${empresa}</strong> — ${rm} (${tipo})</li>`;
+      });
+    })
+    .catch(err => console.error("Erro Visitas Agendadas:", err));
+
+  // ✅ Minhas Cotações (últimas 5)
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc").limit(5).get()
     .then(snapshot => {
@@ -57,33 +85,32 @@ function carregarResumoPainel() {
       snapshot.forEach(doc => {
         const d = doc.data();
         const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = valor > 0 ? `R$ ${valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "R$ 0";
+        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
         ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
       });
-    }).catch(err => {
-      console.error("Erro Minhas Cotações:", err);
-    });
+    })
+    .catch(err => console.error("Erro Minhas Cotações:", err));
 
-  // ✅ Produção
+  // ✅ Produção (negócio emitido) últimas 5
   db.collection("cotacoes-gerentes")
     .where("status", "==", "Negócio Emitido")
     .orderBy("dataCriacao", "desc")
     .limit(5)
-    .get().then(snapshot => {
+    .get()
+    .then(snapshot => {
       const ul = document.getElementById("listaProducao");
       ul.innerHTML = "";
       if (snapshot.empty) ul.innerHTML = "<li>Nenhum negócio fechado.</li>";
       snapshot.forEach(doc => {
         const d = doc.data();
         const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = valor > 0 ? `R$ ${valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "R$ 0";
+        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
         ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
       });
-    }).catch(err => {
-      console.error("Erro Produção:", err);
-    });
+    })
+    .catch(err => console.error("Erro Produção:", err));
 
-  // ✅ Minhas Visitas (corrigido)
+  // ✅ Minhas Visitas (histórico antigo) últimas 5
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -99,43 +126,35 @@ function carregarResumoPainel() {
         else if (d.ramos?.frota) ramo = "FROTA";
         ul.innerHTML += `<li>${empresa} - ${ramo} - ${dataFormatada}</li>`;
       });
-    }).catch(err => {
-      console.error("Erro Minhas Visitas:", err);
-    });
+    })
+    .catch(err => console.error("Erro Minhas Visitas:", err));
 
-  // ✅ Últimas Conversas (corrigido: usa dataHora)
+  // ✅ Últimas Conversas (por cotação)
   const ul = document.getElementById("listaConversas");
   ul.innerHTML = "";
-
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc")
     .limit(5)
     .get()
     .then(snapshot => {
-      if (snapshot.empty) {
-        ul.innerHTML = "<li>Nenhuma conversa recente.</li>";
-        return;
-      }
-
+      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
       snapshot.forEach(doc => {
-        const cotacaoId = doc.id;
+        const cotacaoId   = doc.id;
         const cotacaoData = doc.data();
         db.collection("cotacoes-gerentes").doc(cotacaoId)
           .collection("interacoes")
-          .orderBy("dataHora", "desc") // ⚠️ CAMPO REAL DO FIRESTORE
+          .orderBy("dataHora", "desc")
           .limit(1)
           .get()
           .then(subSnap => {
             if (subSnap.empty) return;
             subSnap.forEach(subDoc => {
               const i = subDoc.data();
-              ul.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0, 70) || "Sem mensagem"}</li>`;
+              ul.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
             });
-          }).catch(err => {
-            console.error("Erro nas interações:", err);
-          });
+          })
+          .catch(err => console.error("Erro nas interações:", err));
       });
-    }).catch(err => {
-      console.error("Erro Últimas Conversas:", err);
-    });
+    })
+    .catch(err => console.error("Erro Últimas Conversas:", err));
 }
