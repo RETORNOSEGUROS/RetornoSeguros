@@ -18,13 +18,13 @@ auth.onAuthStateChanged(user => {
     const nome   = dados.nome || user.email;
     document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
 
-    // 🔗 Menu lateral (inclui Agenda Visitas)
+    // Menu lateral (inclui Agenda Visitas)
     const menu  = document.getElementById("menuNav");
     const links = [
       ["Cadastrar Gerentes", "cadastro-geral.html"],
       ["Cadastrar Empresa", "cadastro-empresa.html"],
       ["Agências", "agencias.html"],
-      ["Agenda Visitas", "agenda-visitas.html"], // 👈 novo
+      ["Agenda Visitas", "agenda-visitas.html"],
       ["Visitas", "visitas.html"],
       ["Empresas", "empresas.html"],
       ["Solicitações de Cotação", "cotacoes.html"],
@@ -48,40 +48,36 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel() {
-  // ============== VISITAS AGENDADAS (PRÓXIMAS 10) — tolerante ==============
-  db.collection("agenda_visitas")
-    .get()
-    .then(snapshot => {
+  // ========= VISITAS AGENDADAS (PRÓXIMAS 10) — lê as duas coleções e junta =========
+  const colNames = ["agenda_visitas", "agenda-visitas"]; // cobre underscore e hífen
+  Promise.all(colNames.map(name => db.collection(name).get()))
+    .then(results => {
       const todos = [];
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        let dt = null;
+      results.forEach(snap => {
+        snap.forEach(doc => {
+          const d = doc.data();
+          let dt = null;
+          if (d.dataHoraTs?.toDate) dt = d.dataHoraTs.toDate();
+          else if (d.dataHoraStr)   dt = new Date(d.dataHoraStr);
 
-        if (d.dataHoraTs?.toDate) {
-          dt = d.dataHoraTs.toDate();
-        } else if (d.dataHoraStr) {
-          dt = new Date(d.dataHoraStr);
-        }
-
-        if (dt && !isNaN(dt) && dt >= new Date()) {
-          todos.push({ id: doc.id, ...d, dt });
-        }
+          if (dt && !isNaN(dt) && dt >= new Date()) {
+            todos.push({ ...d, dt });
+          }
+        });
       });
 
-      todos.sort((a, b) => a.dt - b.dt);
+      todos.sort((a,b) => a.dt - b.dt);
       const proximos = todos.slice(0, 10);
 
       const ul = document.getElementById("listaVisitasAgendadas");
       ul.innerHTML = "";
-
       if (proximos.length === 0) {
         ul.innerHTML = "<li>Nenhuma visita agendada.</li>";
         return;
       }
-
       proximos.forEach(v => {
         const dataFmt = v.dt.toLocaleDateString("pt-BR");
-        const horaFmt = v.dt.toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' });
+        const horaFmt = v.dt.toLocaleTimeString("pt-BR", {hour:'2-digit',minute:'2-digit'});
         const empresa = v.empresaNome || "Empresa";
         const rm      = v.rm || "-";
         const tipo    = v.tipo || "-";
@@ -90,7 +86,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Visitas Agendadas:", err));
 
-  // ============== MINHAS COTAÇÕES (ÚLTIMAS 5) ==============
+  // ========= MINHAS COTAÇÕES (últimas 5) =========
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc").limit(5).get()
     .then(snapshot => {
@@ -100,14 +96,13 @@ function carregarResumoPainel() {
       snapshot.forEach(doc => {
         const d = doc.data();
         const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
-        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
+        const valorFmt = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
+        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFmt}</li>`;
       });
     })
     .catch(err => console.error("Erro Minhas Cotações:", err));
 
-  // ============== PRODUÇÃO (NEGÓCIOS FECHADOS) — sem índice ==============
-  // Busca as últimas 50 cotações e filtra em memória por "Negócio Emitido" (pega 5)
+  // ========= PRODUÇÃO (Negócios Fechados) — sem índice composto =========
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc")
     .limit(50)
@@ -120,22 +115,19 @@ function carregarResumoPainel() {
       const emitidos = [];
       snapshot.forEach(doc => {
         const d = doc.data();
-        if ((d.status || "").toLowerCase() === "negócio emitido".toLowerCase()) {
-          emitidos.push(d);
-        }
+        if ((d.status || "").toLowerCase() === "negócio emitido".toLowerCase()) emitidos.push(d);
       });
 
       if (emitidos.length === 0) { ul.innerHTML = "<li>Nenhum negócio fechado.</li>"; return; }
-
       emitidos.slice(0,5).forEach(d => {
         const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
-        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
+        const valorFmt = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
+        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFmt}</li>`;
       });
     })
     .catch(err => console.error("Erro Produção:", err));
 
-  // ============== MINHAS VISITAS (HISTÓRICO ANTIGO) ==============
+  // ========= MINHAS VISITAS (histórico antigo) =========
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -145,24 +137,24 @@ function carregarResumoPainel() {
       snapshot.forEach(doc => {
         const d = doc.data();
         const empresa = d.empresaId || "Empresa";
-        const dataFormatada = d.data?.toDate?.().toLocaleDateString("pt-BR") || "Sem data";
+        const dataFmt = d.data?.toDate?.().toLocaleDateString("pt-BR") || "Sem data";
         let ramo = "-";
         if (d.ramos?.vida) ramo = "VIDA";
         else if (d.ramos?.frota) ramo = "FROTA";
-        ul.innerHTML += `<li>${empresa} - ${ramo} - ${dataFormatada}</li>`;
+        ul.innerHTML += `<li>${empresa} - ${ramo} - ${dataFmt}</li>`;
       });
     })
     .catch(err => console.error("Erro Minhas Visitas:", err));
 
-  // ============== ÚLTIMAS CONVERSAS (INTERAÇÕES) ==============
-  const ulConversas = document.getElementById("listaConversas");
-  ulConversas.innerHTML = "";
+  // ========= Últimas Conversas =========
+  const ulConv = document.getElementById("listaConversas");
+  ulConv.innerHTML = "";
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc")
     .limit(5)
     .get()
     .then(snapshot => {
-      if (snapshot.empty) { ulConversas.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
+      if (snapshot.empty) { ulConv.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
       snapshot.forEach(doc => {
         const cotacaoId   = doc.id;
         const cotacaoData = doc.data();
@@ -175,7 +167,7 @@ function carregarResumoPainel() {
             if (subSnap.empty) return;
             subSnap.forEach(subDoc => {
               const i = subDoc.data();
-              ulConversas.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
+              ulConv.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
             });
           })
           .catch(err => console.error("Erro nas interações:", err));
