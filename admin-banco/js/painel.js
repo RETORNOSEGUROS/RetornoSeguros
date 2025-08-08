@@ -48,7 +48,7 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel() {
-  // ============== VISITAS AGENDADAS (PRÓXIMAS 10) ==============
+  // ============== VISITAS AGENDADAS (PRÓXIMAS 10) — tolerante ==============
   db.collection("agenda_visitas")
     .get()
     .then(snapshot => {
@@ -96,7 +96,7 @@ function carregarResumoPainel() {
     .then(snapshot => {
       const ul = document.getElementById("listaCotacoes");
       ul.innerHTML = "";
-      if (snapshot.empty) ul.innerHTML = "<li>Nenhuma cotação encontrada.</li>";
+      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma cotação encontrada.</li>"; return; }
       snapshot.forEach(doc => {
         const d = doc.data();
         const valor = parseFloat(d.valorFinal || 0);
@@ -106,18 +106,28 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Minhas Cotações:", err));
 
-  // ============== PRODUÇÃO (NEGÓCIOS FECHADOS) ==============
+  // ============== PRODUÇÃO (NEGÓCIOS FECHADOS) — sem índice ==============
+  // Busca as últimas 50 cotações e filtra em memória por "Negócio Emitido" (pega 5)
   db.collection("cotacoes-gerentes")
-    .where("status", "==", "Negócio Emitido")
     .orderBy("dataCriacao", "desc")
-    .limit(5)
+    .limit(50)
     .get()
     .then(snapshot => {
       const ul = document.getElementById("listaProducao");
       ul.innerHTML = "";
-      if (snapshot.empty) ul.innerHTML = "<li>Nenhum negócio fechado.</li>";
+      if (snapshot.empty) { ul.innerHTML = "<li>Nenhum negócio fechado.</li>"; return; }
+
+      const emitidos = [];
       snapshot.forEach(doc => {
         const d = doc.data();
+        if ((d.status || "").toLowerCase() === "negócio emitido".toLowerCase()) {
+          emitidos.push(d);
+        }
+      });
+
+      if (emitidos.length === 0) { ul.innerHTML = "<li>Nenhum negócio fechado.</li>"; return; }
+
+      emitidos.slice(0,5).forEach(d => {
         const valor = parseFloat(d.valorFinal || 0);
         const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
         ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
@@ -131,7 +141,7 @@ function carregarResumoPainel() {
     .then(snapshot => {
       const ul = document.getElementById("listaVisitas");
       ul.innerHTML = "";
-      if (snapshot.empty) ul.innerHTML = "<li>Nenhuma visita encontrada.</li>";
+      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma visita encontrada.</li>"; return; }
       snapshot.forEach(doc => {
         const d = doc.data();
         const empresa = d.empresaId || "Empresa";
@@ -152,10 +162,7 @@ function carregarResumoPainel() {
     .limit(5)
     .get()
     .then(snapshot => {
-      if (snapshot.empty) {
-        ulConversas.innerHTML = "<li>Nenhuma conversa recente.</li>";
-        return;
-      }
+      if (snapshot.empty) { ulConversas.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
       snapshot.forEach(doc => {
         const cotacaoId   = doc.id;
         const cotacaoData = doc.data();
