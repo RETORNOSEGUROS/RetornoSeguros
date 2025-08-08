@@ -1,7 +1,6 @@
-// js/painel.js
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db   = firebase.firestore();
+const db = firebase.firestore();
 
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
@@ -18,13 +17,13 @@ auth.onAuthStateChanged(user => {
     const nome   = dados.nome || user.email;
     document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
 
-    // 🔗 Menu lateral — inclui Agenda Visitas
+    // Menu lateral com Agenda Visitas
     const menu  = document.getElementById("menuNav");
     const links = [
       ["Cadastrar Gerentes", "cadastro-geral.html"],
       ["Cadastrar Empresa", "cadastro-empresa.html"],
       ["Agências", "agencias.html"],
-      ["Agenda Visitas", "agenda-visitas.html"],       // 👈 novo
+      ["Agenda Visitas", "agenda-visitas.html"],
       ["Visitas", "visitas.html"],
       ["Empresas", "empresas.html"],
       ["Solicitações de Cotação", "cotacoes.html"],
@@ -48,8 +47,9 @@ auth.onAuthStateChanged(user => {
 });
 
 function carregarResumoPainel() {
-  // ✅ Visitas Agendadas - próximas 10 (ordena por data/hora futura)
   const agora = firebase.firestore.Timestamp.fromDate(new Date());
+
+  // 🔹 Visitas Agendadas
   db.collection("agenda_visitas")
     .where("dataHoraTs", ">=", agora)
     .orderBy("dataHoraTs", "asc")
@@ -67,15 +67,15 @@ function carregarResumoPainel() {
         const dt = d.dataHoraTs?.toDate?.() || (d.dataHoraStr ? new Date(d.dataHoraStr) : null);
         const dataFmt = dt ? dt.toLocaleDateString("pt-BR") : "-";
         const horaFmt = dt ? dt.toLocaleTimeString("pt-BR",{hour:'2-digit',minute:'2-digit'}) : "-";
-        const tipo    = d.tipo || "-";
         const empresa = d.empresaNome || "Empresa";
         const rm      = d.rm || "-";
+        const tipo    = d.tipo || "-";
         ul.innerHTML += `<li>${dataFmt} ${horaFmt} — <strong>${empresa}</strong> — ${rm} (${tipo})</li>`;
       });
     })
     .catch(err => console.error("Erro Visitas Agendadas:", err));
 
-  // ✅ Minhas Cotações (últimas 5)
+  // 🔹 Minhas Cotações
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc").limit(5).get()
     .then(snapshot => {
@@ -91,7 +91,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Minhas Cotações:", err));
 
-  // ✅ Produção (negócio emitido) últimas 5
+  // 🔹 Produção
   db.collection("cotacoes-gerentes")
     .where("status", "==", "Negócio Emitido")
     .orderBy("dataCriacao", "desc")
@@ -110,7 +110,7 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Produção:", err));
 
-  // ✅ Minhas Visitas (histórico antigo) últimas 5
+  // 🔹 Minhas Visitas
   db.collection("visitas")
     .orderBy("data", "desc").limit(5).get()
     .then(snapshot => {
@@ -129,15 +129,18 @@ function carregarResumoPainel() {
     })
     .catch(err => console.error("Erro Minhas Visitas:", err));
 
-  // ✅ Últimas Conversas (por cotação)
-  const ul = document.getElementById("listaConversas");
-  ul.innerHTML = "";
+  // 🔹 Últimas Conversas
+  const ulConversas = document.getElementById("listaConversas");
+  ulConversas.innerHTML = "";
   db.collection("cotacoes-gerentes")
     .orderBy("dataCriacao", "desc")
     .limit(5)
     .get()
     .then(snapshot => {
-      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
+      if (snapshot.empty) {
+        ulConversas.innerHTML = "<li>Nenhuma conversa recente.</li>";
+        return;
+      }
       snapshot.forEach(doc => {
         const cotacaoId   = doc.id;
         const cotacaoData = doc.data();
@@ -150,7 +153,7 @@ function carregarResumoPainel() {
             if (subSnap.empty) return;
             subSnap.forEach(subDoc => {
               const i = subDoc.data();
-              ul.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
+              ulConversas.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
             });
           })
           .catch(err => console.error("Erro nas interações:", err));
