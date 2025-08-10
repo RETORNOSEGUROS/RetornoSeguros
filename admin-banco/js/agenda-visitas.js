@@ -1,35 +1,36 @@
 // js/agenda-visitas.js
 const auth = firebase.auth();
-const db = firebase.firestore();
+const db   = firebase.firestore();
 
-/* ===== DOM ===== */
+/* ========== DOM ========== */
 const empresaSelect = document.getElementById("empresaSelect");
-const tipoVisita    = document.getElementById("tipoVisita");
-const dataHora      = document.getElementById("dataHora");
-const observacoes   = document.getElementById("observacoes");
-const lista         = document.getElementById("listaVisitas");
-const vazio         = document.getElementById("vazio");
+const rmForm       = document.getElementById("rmForm");
+const tipoVisita   = document.getElementById("tipoVisita");
+const dataHora     = document.getElementById("dataHora");
+const observacoes  = document.getElementById("observacoes");
+const lista        = document.getElementById("listaVisitas");
+const vazio        = document.getElementById("vazio");
 
-// campos opcionais (existem no HTML mais novo)
+// filtros
 const filtroRm   = document.getElementById("filtroRm");
 const filtroTipo = document.getElementById("filtroTipo");
 const filtroDe   = document.getElementById("filtroDe");
 const filtroAte  = document.getElementById("filtroAte");
 const btnFiltrar = document.getElementById("btnFiltrar");
 const btnLimpar  = document.getElementById("btnLimpar");
-const rmForm     = document.getElementById("rmForm"); // readonly opcional
+const btnReload  = document.getElementById("recarregar");
+const btnSalvar  = document.getElementById("salvarVisita");
 
 const fmt = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short", timeStyle:"short" });
 
-/* ===== Helpers ===== */
+/* ========== HELPERS ========== */
 function pickEmpresaNome(emp){
-  if (!emp) return "";
-  return emp.nome || emp.NOME || emp.razaoSocial || emp.razao_social || emp.fantasia || emp.nomeFantasia || "";
+  return (emp?.nome || emp?.razaoSocial || emp?.razao_social || emp?.fantasia || emp?.nomeFantasia || "").toString();
 }
 function getDateFromDoc(v){
-  if (v.dataHoraTs && v.dataHoraTs.toDate) return v.dataHoraTs.toDate();
+  if (v.dataHoraTs?.toDate) return v.dataHoraTs.toDate();
   if (v.dataHoraStr) return new Date(v.dataHoraStr);
-  if (v.dataHora)    return new Date(v.dataHora); // legado
+  if (v.dataHora)    return new Date(v.dataHora);
   return null;
 }
 function td(label, value){
@@ -39,32 +40,10 @@ function td(label, value){
   return el;
 }
 
-/* ===== Roles ===== */
-async function getUserRole(uid, email){
-  if (!uid) return "desconhecido";
-  if (email === "patrick@retornoseguros.com.br") return "admin";
-
-  const places = [["usuarios", uid], ["gerentes", uid]];
-  for (const [col, id] of places){
-    try{
-      const snap = await db.collection(col).doc(id).get();
-      if (snap.exists){
-        const d = snap.data();
-        const r = (d.role || d.perfil || d.tipoUsuario || d.cargo || "").toString().toLowerCase();
-        if (r.includes("admin")) return "admin";
-        if (r.includes("gerente chefe") || r.includes("gerente-chefe")) return "gerente-chefe";
-        if (r.includes("assistente")) return "assistente";
-        if (r.includes("rm")) return "rm";
-      }
-    }catch(_){}
-  }
-  return "rm";
-}
-
-/* ===== Empresas / RMs (para selects) ===== */
+/* ========== CARREGAR EMPRESAS ========== */
 async function carregarEmpresas(){
   if (!empresaSelect) return;
-  empresaSelect.innerHTML = "<option value=''>Selecione...</option>";
+  empresaSelect.innerHTML = `<option value=''>Selecione...</option>`;
   const snap = await db.collection("empresas").orderBy("nome").get();
   snap.forEach(doc=>{
     const d = doc.data();
@@ -75,79 +54,103 @@ async function carregarEmpresas(){
   });
 }
 
-async function carregarRMsFiltro(){
-  if (!filtroRm) return; // página sem filtros
-  filtroRm.innerHTML = "<option value=''>Todos</option>";
-  const snap = await db.collection("gerentes").orderBy("nome").get().catch(()=>null);
-  if (!snap) return;
-  snap.forEach(doc=>{
-    const d = doc.data();
-    const opt = document.createElement("option");
-    opt.value = doc.id; // assumindo doc.id = uid do gerente
-    opt.textContent = d.nome || d.displayName || doc.id;
-    filtroRm.appendChild(opt);
-  });
-}
-
-/* ===== Preencher RM do formulário ao selecionar empresa (opcional) ===== */
+/* ========== MOSTRAR RM AO ESCOLHER EMPRESA ========== */
 empresaSelect?.addEventListener("change", async ()=>{
   if (!rmForm) return;
   const id = empresaSelect.value;
   if (!id){ rmForm.value = ""; return; }
-  const empDoc = await db.collection("empresas").doc(id).get();
-  if (!empDoc.exists){ rmForm.value = ""; return; }
-  const emp = empDoc.data();
-  const nome = emp.rmNome || emp.rm || "";
-  rmForm.value = nome || "(não cadastrado)";
+  try{
+    const empDoc = await db.collection("empresas").doc(id).get();
+    const emp = empDoc.exists ? empDoc.data() : null;
+    const nome = emp?.rmNome || emp?.rm || "";
+    rmForm.value = nome || "(não cadastrado)";
+  }catch(e){
+    console.error("Erro lendo empresa:", e);
+    rmForm.value = "";
+  }
 });
 
-/* ===== Salvar ===== */
+/* ========== CARREGAR RMs PARA FILTRO ========== */
+async function carregarRMsFiltro(){
+  if (!filtroRm) return;
+
+  const add = (id, nome) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = nome || id;
+    filtroRm.appendChild(opt);
+  };
+
+  filtroRm.innerHTML = `<option value="">Todos</option>`;
+
+  // 1) tenta a coleção gerentes (ideal)
+  try{
+    const snapG = await db.collection("gerentes").orderBy("nome").get();
+    if (!snapG.empty){
+      snapG.forEach(doc => add(doc.id, doc.data().nome || doc.data().displayName || doc.id));
+      return;
+    }
+  }catch(e){ /* pode falhar por regra; caímos no plano B */ }
+
+  // 2) plano B: monta a lista a partir de empresas
+  try{
+    const set = new Map();
+    const snapE = await db.collection("empresas").get();
+    snapE.forEach(doc=>{
+      const d = doc.data();
+      const id  = d.rmUid || d.rmuid || d.rmId;
+      const nom = d.rmNome || d.rm;
+      if (id) set.set(id, nom || id);
+    });
+    [...set.entries()].sort((a,b)=> (a[1]||"").localeCompare(b[1]||""))
+      .forEach(([id, nome])=> add(id, nome));
+  }catch(e){
+    console.error("Erro carregando RMs para filtro:", e);
+  }
+}
+
+/* ========== SALVAR AGENDAMENTO ========== */
 async function salvar(){
   const empresaId = empresaSelect?.value;
   if (!empresaId){ alert("Selecione a empresa."); return; }
   if (!dataHora?.value){ alert("Informe data e hora."); return; }
 
   const user = auth.currentUser;
-  const uid  = user ? user.uid : null;
-
-  const tipo = tipoVisita?.value || "";
-  const dh   = new Date(dataHora.value);
-  const obs  = (observacoes?.value || "").trim();
+  const uid  = user?.uid || null;
 
   try{
     const empDoc = await db.collection("empresas").doc(empresaId).get();
-    if (!empDoc.exists) { alert("Empresa não encontrada."); return; }
+    if (!empDoc.exists){ alert("Empresa não encontrada."); return; }
     const emp = empDoc.data();
 
-    // >>>> do print: rmUid, rmNome, rm
     const rmUid  = emp.rmUid || emp.rmuid || emp.rmId || null;
     const rmNome = emp.rmNome || emp.rm || "";
 
     const payload = {
       empresaId,
       empresaNome: pickEmpresaNome(emp),
-      rm: rmNome,
+      rm: rmNome || null,
       rmUid: rmUid || null,
-      tipo,
-      observacoes: obs,
-      dataHoraTs:  firebase.firestore.Timestamp.fromDate(dh),
-      dataHoraStr: dh.toISOString(),
+      tipo: tipoVisita?.value || "",
+      observacoes: (observacoes?.value || "").trim(),
+      dataHoraTs:  firebase.firestore.Timestamp.fromDate(new Date(dataHora.value)),
+      dataHoraStr: new Date(dataHora.value).toISOString(),
       criadoPorUid: uid,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     };
 
     await db.collection("agenda_visitas").add(payload);
-    if (dataHora) dataHora.value = "";
     if (observacoes) observacoes.value = "";
+    if (dataHora) dataHora.value = "";
     await listarProximas();
     alert("Visita agendada!");
   }catch(e){
-    console.error(e);
+    console.error("Erro ao salvar:", e);
     alert("Erro ao salvar. Veja o console.");
   }
 }
 
-/* ===== Render linha ===== */
+/* ========== RENDER LINHA ========== */
 function linhaTabela(id, v, isAdmin){
   const dt = getDateFromDoc(v);
   const formatted = dt ? fmt.format(dt) : "-";
@@ -177,28 +180,29 @@ function linhaTabela(id, v, isAdmin){
   return tr;
 }
 
-/* ===== Listagem com papéis + filtros ===== */
+/* ========== LISTAGEM + FILTROS ========== */
 async function listarProximas(){
   if (!lista) return;
   lista.innerHTML = "";
 
-  const user = auth.currentUser;
-  const email = user?.email || "";
-  const uid   = user?.uid || "";
-  const role  = await getUserRole(uid, email);
-  const isAdmin = role === "admin";
-
-  // janela ampla (também cobre registros antigos sem índices por data)
+  // Busca ampla e filtra no cliente (mantém compatibilidade com legados)
   const snap = await db.collection("agenda_visitas")
     .orderBy("criadoEm", "desc")
-    .limit(600)
+    .limit(800)
     .get();
 
-  // preparar filtros (se não houver campos, ficam nulos)
-  const de   = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
-  const ate  = filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
-  const rmId = filtroRm?.value || "";
-  const tSel = filtroTipo?.value || "";
+  const user  = auth.currentUser;
+  const email = user?.email || "";
+  const uid   = user?.uid || "";
+
+  // Papel (simples): admin por email
+  const isAdmin = (email === "patrick@retornoseguros.com.br");
+
+  // filtros da UI
+  const rmSel   = filtroRm?.value || "";
+  const tipoSel = filtroTipo?.value || "";
+  const de      = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
+  const ate     = filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
 
   const agora = new Date();
   const rows = [];
@@ -208,21 +212,26 @@ async function listarProximas(){
     const dt = getDateFromDoc(v);
     if (!dt) return;
 
-    // Mostrar somente visitas futuras (como seu layout indica)
+    // Mostra só futuras (igual ao seu layout atual)
     if (dt < agora) return;
 
-    // restrição por papel
-    if (role === "rm" && v.rmUid && v.rmUid !== uid) return;
+    // Restrições de RM (se quiser travar RM só nas suas, descomente a linha abaixo)
+    // if (!isAdmin && v.rmUid && uid && v.rmUid !== uid) return;
 
-    // filtros
+    // Filtros
     if (de && dt < de) return;
     if (ate && dt > ate) return;
-    if (rmId && (v.rmUid !== rmId)) return;
-    if (tSel && v.tipo !== tSel) return;
+    if (rmSel){
+      // preferimos comparar por rmUid; se vazio no doc, tentamos por nome
+      if (v.rmUid) { if (v.rmUid !== rmSel) return; }
+      else if ((v.rm || "").toLowerCase() !== (filtroRm.options[filtroRm.selectedIndex]?.text || "").toLowerCase()) return;
+    }
+    if (tipoSel && v.tipo !== tipoSel) return;
 
     rows.push({ id: doc.id, v, dt });
   });
 
+  // ordena por data/hora real
   rows.sort((a,b)=> a.dt - b.dt);
 
   if (!rows.length){ if (vazio) vazio.style.display="block"; return; }
@@ -230,12 +239,12 @@ async function listarProximas(){
   rows.forEach(({id, v})=> lista.appendChild(linhaTabela(id, v, isAdmin)));
 }
 
-/* ===== Eventos ===== */
-document.getElementById("salvarVisita")?.addEventListener("click", ()=>{
+/* ========== EVENTOS ========== */
+btnSalvar?.addEventListener("click", ()=>{
   if (!auth.currentUser){ alert("Faça login novamente."); return; }
   salvar();
 });
-document.getElementById("recarregar")?.addEventListener("click", listarProximas);
+btnReload?.addEventListener("click", listarProximas);
 btnFiltrar?.addEventListener("click", listarProximas);
 btnLimpar?.addEventListener("click", ()=>{
   if (filtroRm)   filtroRm.value = "";
@@ -245,7 +254,7 @@ btnLimpar?.addEventListener("click", ()=>{
   listarProximas();
 });
 
-/* ===== Init ===== */
+/* ========== INIT ========== */
 auth.onAuthStateChanged(async ()=>{
   await carregarEmpresas();
   await carregarRMsFiltro();
