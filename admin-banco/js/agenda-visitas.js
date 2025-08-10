@@ -2,7 +2,7 @@
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-/* ====== DOM ====== */
+/* ===== DOM ===== */
 const empresaSelect = document.getElementById("empresaSelect");
 const tipoVisita    = document.getElementById("tipoVisita");
 const dataHora      = document.getElementById("dataHora");
@@ -10,25 +10,21 @@ const observacoes   = document.getElementById("observacoes");
 const lista         = document.getElementById("listaVisitas");
 const vazio         = document.getElementById("vazio");
 
-// filtros
+// campos opcionais (existem no HTML mais novo)
 const filtroRm   = document.getElementById("filtroRm");
 const filtroTipo = document.getElementById("filtroTipo");
 const filtroDe   = document.getElementById("filtroDe");
 const filtroAte  = document.getElementById("filtroAte");
+const btnFiltrar = document.getElementById("btnFiltrar");
+const btnLimpar  = document.getElementById("btnLimpar");
+const rmForm     = document.getElementById("rmForm"); // readonly opcional
 
 const fmt = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short", timeStyle:"short" });
 
-/* ====== Helpers ====== */
+/* ===== Helpers ===== */
 function pickEmpresaNome(emp){
   if (!emp) return "";
   return emp.nome || emp.NOME || emp.razaoSocial || emp.razao_social || emp.fantasia || emp.nomeFantasia || "";
-}
-function pickRMNomeDireto(emp){
-  if (!emp) return "";
-  const direct = emp.rm || emp.RM || emp.responsavel || emp["responsável"] || emp.rm_nome || emp.nomeRM || emp.gerente || emp.rmBanco;
-  if (direct) return direct;
-  const k = Object.keys(emp).find(key => /^(rm|responsavel|responsável|gerente|nome_rm|rm_nome|nomeRM)$/i.test(key));
-  return k ? emp[k] : "";
 }
 function getDateFromDoc(v){
   if (v.dataHoraTs && v.dataHoraTs.toDate) return v.dataHoraTs.toDate();
@@ -43,38 +39,31 @@ function td(label, value){
   return el;
 }
 
-/* ====== Roles ======
-   Espera encontrar um dos formatos:
-   - usuarios/<uid> com campo role | perfil | tipoUsuario
-   - gerentes/<uid> com campo cargo | perfil | role
-*/
+/* ===== Roles ===== */
 async function getUserRole(uid, email){
   if (!uid) return "desconhecido";
-  // Admin por email (rápido)
   if (email === "patrick@retornoseguros.com.br") return "admin";
 
-  const tryPaths = [
-    ["usuarios", uid],
-    ["gerentes", uid]
-  ];
-  for (const [col, id] of tryPaths){
+  const places = [["usuarios", uid], ["gerentes", uid]];
+  for (const [col, id] of places){
     try{
       const snap = await db.collection(col).doc(id).get();
       if (snap.exists){
         const d = snap.data();
         const r = (d.role || d.perfil || d.tipoUsuario || d.cargo || "").toString().toLowerCase();
         if (r.includes("admin")) return "admin";
-        if (r.includes("gerente chefe") || r.includes("gerente-chefe") || r.includes("gerente_chefe")) return "gerente-chefe";
+        if (r.includes("gerente chefe") || r.includes("gerente-chefe")) return "gerente-chefe";
         if (r.includes("assistente")) return "assistente";
         if (r.includes("rm")) return "rm";
       }
     }catch(_){}
   }
-  return "rm"; // default conservador
+  return "rm";
 }
 
-/* ====== Empresas e RMs (para selects) ====== */
+/* ===== Empresas / RMs (para selects) ===== */
 async function carregarEmpresas(){
+  if (!empresaSelect) return;
   empresaSelect.innerHTML = "<option value=''>Selecione...</option>";
   const snap = await db.collection("empresas").orderBy("nome").get();
   snap.forEach(doc=>{
@@ -85,58 +74,54 @@ async function carregarEmpresas(){
     empresaSelect.appendChild(opt);
   });
 }
+
 async function carregarRMsFiltro(){
+  if (!filtroRm) return; // página sem filtros
   filtroRm.innerHTML = "<option value=''>Todos</option>";
   const snap = await db.collection("gerentes").orderBy("nome").get().catch(()=>null);
   if (!snap) return;
   snap.forEach(doc=>{
     const d = doc.data();
     const opt = document.createElement("option");
-    opt.value = doc.id;
+    opt.value = doc.id; // assumindo doc.id = uid do gerente
     opt.textContent = d.nome || d.displayName || doc.id;
     filtroRm.appendChild(opt);
   });
 }
 
-/* ====== Resolver RM (nome + uid) a partir da empresa ====== */
-const rmCache = new Map();
-async function resolveRMFromEmpresa(emp){
-  const nomeDireto = pickRMNomeDireto(emp);
-  const rmUid = emp.rmuid || emp.rmUid || emp.rmId || emp.RMUID || emp.RMId || emp.rm_uid || null;
+/* ===== Preencher RM do formulário ao selecionar empresa (opcional) ===== */
+empresaSelect?.addEventListener("change", async ()=>{
+  if (!rmForm) return;
+  const id = empresaSelect.value;
+  if (!id){ rmForm.value = ""; return; }
+  const empDoc = await db.collection("empresas").doc(id).get();
+  if (!empDoc.exists){ rmForm.value = ""; return; }
+  const emp = empDoc.data();
+  const nome = emp.rmNome || emp.rm || "";
+  rmForm.value = nome || "(não cadastrado)";
+});
 
-  if (nomeDireto && rmUid) return { rmNome: nomeDireto, rmUid };
-
-  if (rmUid){
-    if (rmCache.has(rmUid)) return { rmNome: rmCache.get(rmUid), rmUid };
-    try{
-      const g = await db.collection("gerentes").doc(rmUid).get();
-      const nome = g.exists ? (g.data().nome || g.data().displayName || "") : "";
-      rmCache.set(rmUid, nome);
-      return { rmNome: nome || nomeDireto || "", rmUid };
-    }catch{
-      return { rmNome: nomeDireto || "", rmUid };
-    }
-  }
-  return { rmNome: nomeDireto || "", rmUid: null };
-}
-
-/* ====== Salvar ====== */
+/* ===== Salvar ===== */
 async function salvar(){
-  const empresaId = empresaSelect.value;
+  const empresaId = empresaSelect?.value;
   if (!empresaId){ alert("Selecione a empresa."); return; }
-  if (!dataHora.value){ alert("Informe data e hora."); return; }
+  if (!dataHora?.value){ alert("Informe data e hora."); return; }
 
-  const tipo = tipoVisita.value;
-  const dh   = new Date(dataHora.value);
-  const obs  = (observacoes.value || "").trim();
   const user = auth.currentUser;
   const uid  = user ? user.uid : null;
+
+  const tipo = tipoVisita?.value || "";
+  const dh   = new Date(dataHora.value);
+  const obs  = (observacoes?.value || "").trim();
 
   try{
     const empDoc = await db.collection("empresas").doc(empresaId).get();
     if (!empDoc.exists) { alert("Empresa não encontrada."); return; }
     const emp = empDoc.data();
-    const { rmNome, rmUid } = await resolveRMFromEmpresa(emp);
+
+    // >>>> do print: rmUid, rmNome, rm
+    const rmUid  = emp.rmUid || emp.rmuid || emp.rmId || null;
+    const rmNome = emp.rmNome || emp.rm || "";
 
     const payload = {
       empresaId,
@@ -150,10 +135,11 @@ async function salvar(){
       criadoPorUid: uid,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     };
-    await db.collection("agenda_visitas").add(payload);
 
-    dataHora.value=""; observacoes.value="";
-    await listarProximas(); // refresh
+    await db.collection("agenda_visitas").add(payload);
+    if (dataHora) dataHora.value = "";
+    if (observacoes) observacoes.value = "";
+    await listarProximas();
     alert("Visita agendada!");
   }catch(e){
     console.error(e);
@@ -161,7 +147,7 @@ async function salvar(){
   }
 }
 
-/* ====== Render linha ====== */
+/* ===== Render linha ===== */
 function linhaTabela(id, v, isAdmin){
   const dt = getDateFromDoc(v);
   const formatted = dt ? fmt.format(dt) : "-";
@@ -191,33 +177,39 @@ function linhaTabela(id, v, isAdmin){
   return tr;
 }
 
-/* ====== Listagem com papéis + filtros ======
-   Observação: para suportar legados e evitar índices, buscamos por 'criadoEm' e filtramos em memória.
-*/
+/* ===== Listagem com papéis + filtros ===== */
 async function listarProximas(){
+  if (!lista) return;
   lista.innerHTML = "";
+
   const user = auth.currentUser;
   const email = user?.email || "";
   const uid   = user?.uid || "";
   const role  = await getUserRole(uid, email);
   const isAdmin = role === "admin";
 
-  // janela de busca ampla
+  // janela ampla (também cobre registros antigos sem índices por data)
   const snap = await db.collection("agenda_visitas")
     .orderBy("criadoEm", "desc")
-    .limit(500)
+    .limit(600)
     .get();
 
-  const de = filtroDe.value ? new Date(filtroDe.value + "T00:00:00") : null;
-  const ate = filtroAte.value ? new Date(filtroAte.value + "T23:59:59") : null;
-  const rmSel = filtroRm.value || "";
-  const tipoSel = filtroTipo.value || "";
+  // preparar filtros (se não houver campos, ficam nulos)
+  const de   = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
+  const ate  = filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
+  const rmId = filtroRm?.value || "";
+  const tSel = filtroTipo?.value || "";
 
+  const agora = new Date();
   const rows = [];
+
   snap.forEach(doc=>{
     const v = doc.data();
     const dt = getDateFromDoc(v);
     if (!dt) return;
+
+    // Mostrar somente visitas futuras (como seu layout indica)
+    if (dt < agora) return;
 
     // restrição por papel
     if (role === "rm" && v.rmUid && v.rmUid !== uid) return;
@@ -225,33 +217,36 @@ async function listarProximas(){
     // filtros
     if (de && dt < de) return;
     if (ate && dt > ate) return;
-    if (rmSel && (v.rmUid !== rmSel)) return;
-    if (tipoSel && v.tipo !== tipoSel) return;
+    if (rmId && (v.rmUid !== rmId)) return;
+    if (tSel && v.tipo !== tSel) return;
 
     rows.push({ id: doc.id, v, dt });
   });
 
   rows.sort((a,b)=> a.dt - b.dt);
 
-  if (!rows.length){ vazio.style.display="block"; return; }
-  vazio.style.display="none";
+  if (!rows.length){ if (vazio) vazio.style.display="block"; return; }
+  if (vazio) vazio.style.display="none";
   rows.forEach(({id, v})=> lista.appendChild(linhaTabela(id, v, isAdmin)));
 }
 
-/* ====== Eventos ====== */
-document.getElementById("salvarVisita").addEventListener("click", ()=>{
+/* ===== Eventos ===== */
+document.getElementById("salvarVisita")?.addEventListener("click", ()=>{
   if (!auth.currentUser){ alert("Faça login novamente."); return; }
   salvar();
 });
-document.getElementById("recarregar").addEventListener("click", listarProximas);
-document.getElementById("btnFiltrar").addEventListener("click", listarProximas);
-document.getElementById("btnLimpar").addEventListener("click", ()=>{
-  filtroRm.value = ""; filtroTipo.value=""; filtroDe.value=""; filtroAte.value="";
+document.getElementById("recarregar")?.addEventListener("click", listarProximas);
+btnFiltrar?.addEventListener("click", listarProximas);
+btnLimpar?.addEventListener("click", ()=>{
+  if (filtroRm)   filtroRm.value = "";
+  if (filtroTipo) filtroTipo.value = "";
+  if (filtroDe)   filtroDe.value = "";
+  if (filtroAte)  filtroAte.value = "";
   listarProximas();
 });
 
-/* ====== Init ====== */
-auth.onAuthStateChanged(async (u)=>{
+/* ===== Init ===== */
+auth.onAuthStateChanged(async ()=>{
   await carregarEmpresas();
   await carregarRMsFiltro();
   await listarProximas();
