@@ -31,14 +31,12 @@ const empresaRMMap = new Map(); // empresaId -> { rmUid, rmNome }
 const pickEmpresaNome = (emp)=>(emp?.nome||emp?.razaoSocial||emp?.razao_social||emp?.fantasia||emp?.nomeFantasia||"")+""; 
 
 function getDateFromDoc(v){
-  // cobre todos os legados vistos nos seus prints
   if (v?.dataHoraTs?.toDate) return v.dataHoraTs.toDate();
   if (v?.dataHoraStr)        return new Date(v.dataHoraStr);
   if (v?.dataHora)           return new Date(v.dataHora);
-  if (v?.datahora)           return new Date(v.datahora); // minúsculo
+  if (v?.datahora)           return new Date(v.datahora); // legado minúsculo
   return null;
 }
-
 function td(label, value){
   const el = document.createElement("td");
   el.setAttribute("data-label", label);
@@ -46,7 +44,7 @@ function td(label, value){
   return el;
 }
 
-/* Carregar empresas (com data-* e map para fallback do RM) */
+/* Empresas (carrega rmUid/rmNome em data-*, e preenche map para fallback) */
 async function carregarEmpresas(){
   empresaSelect.innerHTML = `<option value=''>Selecione...</option>`;
   const snap = await db.collection("empresas").orderBy("nome").get();
@@ -58,21 +56,17 @@ async function carregarEmpresas(){
     opt.dataset.rmUid  = d.rmUid || d.rmuid || d.rmId || "";
     opt.dataset.rmNome = d.rmNome || d.rm || "";
     empresaSelect.appendChild(opt);
-
-    empresaRMMap.set(doc.id, {
-      rmUid:  opt.dataset.rmUid || null,
-      rmNome: opt.dataset.rmNome || ""
-    });
+    empresaRMMap.set(doc.id, { rmUid: opt.dataset.rmUid || null, rmNome: opt.dataset.rmNome || "" });
   });
 }
 
-/* Mostra RM ao escolher empresa (sem query) */
+/* Mostrar RM ao escolher a empresa (sem query adicional) */
 empresaSelect?.addEventListener("change", ()=>{
   const nome = empresaSelect.selectedOptions[0]?.dataset?.rmNome || "";
   rmInfo.textContent = `(RM: ${nome || "não cadastrado"})`;
 });
 
-/* Filtro de RM (tenta gerentes; se não, usa empresas) */
+/* Filtro RM (tenta 'gerentes', senão usa empresas) */
 async function carregarRMsFiltro(){
   try{
     const snapG = await db.collection("gerentes").orderBy("nome").get();
@@ -87,7 +81,6 @@ async function carregarRMsFiltro(){
       return;
     }
   }catch(e){}
-  // fallback via empresas já carregadas
   filtroRm.innerHTML = `<option value="">Todos</option>`;
   [...empresaRMMap.entries()]
     .filter(([,v])=> !!v.rmUid)
@@ -100,7 +93,7 @@ async function carregarRMsFiltro(){
     });
 }
 
-/* Salvar (mostra erro real se ocorrer) */
+/* Salvar (erro real no alert) */
 async function salvar(){
   const empresaId = empresaSelect?.value;
   if (!empresaId){ alert("Selecione a empresa."); return; }
@@ -114,7 +107,7 @@ async function salvar(){
   const rmNom = opt?.dataset.rmNome || "";
   const empresaNome = opt?.textContent || "";
 
-  const dt = new Date(dataHora.value); // de <input type="datetime-local">
+  const dt = new Date(dataHora.value);
   if (isNaN(+dt)){ alert("Data/hora inválida."); return; }
 
   const payload = {
@@ -137,13 +130,12 @@ async function salvar(){
   alert("Visita agendada!");
 }
 
-/* Render (ordem ok + conserta legado tipo/obs) */
+/* Render (ordem correta + conserta legado tipo/obs) */
 function linhaTabela(id, v){
   const dt = getDateFromDoc(v);
   const dataFmt = dt ? fmtDate.format(dt) : "-";
   const horaFmt = dt ? fmtTime.format(dt) : "-";
 
-  // “desinverte” se tipo não é Presencial/Online e obs está vazia
   let tipo = v.tipo || "";
   let obs  = v.observacoes || "";
   if (tipo && !["Presencial","Online"].includes(tipo) && !obs){
@@ -160,11 +152,11 @@ function linhaTabela(id, v){
   tr.appendChild(td("RM", `<span class="rm-chip">${rmNomeDisplay}</span>`));
   tr.appendChild(td("Tipo", `<span class="badge">${tipo || "-"}</span>`));
   tr.appendChild(td("Observações", obs || "-"));
-  tr.appendChild(td("Ações", "")); // reservado para excluir/editar futuramente
+  tr.appendChild(td("Ações", ""));
   return tr;
 }
 
-/* Listar TODAS (sem cortar passadas). Filtros por data/Tipo/RM. */
+/* Listar TODAS (sem corte de “só futuras”), com filtros */
 async function listarTodas(){
   lista.innerHTML = "";
 
@@ -192,8 +184,7 @@ async function listarTodas(){
     rows.push({ id: doc.id, v, dt });
   });
 
-  // ordena pela data da visita (não por criadoEm)
-  rows.sort((a,b)=> a.dt - b.dt);
+  rows.sort((a,b)=> a.dt - b.dt); // por data da visita
 
   if (!rows.length){ vazio.style.display="block"; return; }
   vazio.style.display="none";
