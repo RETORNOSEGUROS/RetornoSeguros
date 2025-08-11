@@ -6,13 +6,11 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let usuarioAtual = null;
-let usuarioNomeAtual = null;
-let cotacaoId = null;
-let cotacaoRef = null;
-let cotacaoData = null;
-let configStatus = null; // lido do Firestore (se existir)
+let empresasCache = [];
+let isAdmin = false;
+let configStatus = null;
 
-// ====== STATUS FIXOS SOLICITADOS ======
+// ====== STATUS FIXOS (mesmo conjunto do chat-cotacao) ======
 const STATUS_FIXOS = [
   "Negócio Emitido",
   "Pendente Agência",
@@ -26,251 +24,376 @@ const STATUS_FIXOS = [
   "Negócio Fechado"
 ];
 
-// Onde a "informação adicional" é obrigatória
-const STATUS_EXIGE_EXTRA = new Set([
-  "Pendente Agência",
-  "Pendente Corretor",
-  "Pendente Seguradora",
-  "Pendente Cliente",
-  "Emitido Declinado",
-  "Em Emissão",
-  "Negócio Fechado"
-]);
-
-// Motivos padrão caso não existam no config
-const FALLBACK_MOTIVOS_CLIENTE = [
-  "Preço acima do esperado",
-  "Coberturas não atendem",
-  "Cliente adiou decisão",
-  "Fechou com o banco"
-];
-const FALLBACK_MOTIVOS_SEGURADORA = [
-  "Risco não aceito",
-  "Sinistralidade elevada",
-  "Documentação insuficiente"
-];
-
-auth.onAuthStateChanged(async user => {
-  try {
+window.addEventListener("DOMContentLoaded", () => {
+  auth.onAuthStateChanged(async user => {
     if (!user) return (window.location.href = "login.html");
     usuarioAtual = user;
-    usuarioNomeAtual = await obterNome(user.uid, user.email);
+    isAdmin = user.email === "patrick@retornoseguros.com.br";
 
-    const params = new URLSearchParams(window.location.search);
-    cotacaoId = params.get("id");
-    if (!cotacaoId) return alert("ID de cotação não informado.");
+    try {
+      await Promise.all([
+        carregarEmpresas(),
+        carregarRamos(),
+        carregarRM(),
+        carregarStatus(), // <<< popula o filtroStatus com fixos + firestore
+      ]);
+    } catch (e) {
+      console.error("Erro inicial:", e);
+    }
 
-    cotacaoRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
-    const doc = await cotacaoRef.get();
-    if (!doc.exists) return alert("Cotação não encontrada.");
+    carregarCotacoesComFiltros();
 
-    cotacaoData = doc.data();
-    preencherCabecalho();
-    exibirHistorico();
-
-    await carregarStatus(); // resiliente com fallback
-  } catch (e) {
-    console.error("Falha ao inicializar chat-cotacao:", e);
-    alert("Erro ao carregar a cotação.");
-  }
+    // botão de salvar no editor só para admin
+    const btn = document.getElementById("btnSalvarAlteracoes");
+    if (btn && !isAdmin) btn.style.display = "none";
+  });
 });
 
-async function obterNome(uid, fallback) {
-  try {
-    const snap = await db.collection("usuarios_banco").doc(uid).get();
-    return snap.exists ? (snap.data().nome || snap.data().email || fallback) : fallback;
-  } catch {
-    return fallback;
-  }
-}
+/* ---------- Loaders ---------- */
 
-/* ===================== Cabeçalho ===================== */
-function preencherCabecalho() {
-  setText("empresaNome", cotacaoData.empresaNome || "-");
-  setText("empresaCNPJ", cotacaoData.empresaCNPJ || "-");
-  setText("ramo", cotacaoData.ramo || "-");
+async function carregarEmpresas() {
+  const campos = ["empresa", "novaEmpresa"];
+  empresasCache = [];
 
-  const valor = Number(cotacaoData.valorDesejado) || 0;
-  setText("valorDesejadoTexto", valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
-  setText("status", cotacaoData.status || "-");
+  const snap = await db.collection("empresas").get();
 
-  const ini = cotacaoData.inicioVigencia, fim = cotacaoData.fimVigencia;
-  if (ini || fim) {
-    const txt =
-      (toDate(ini)?.toLocaleDateString("pt-BR") || "—") +
-      " até " +
-      (toDate(fim)?.toLocaleDateString("pt-BR") || "—");
-    setText("vigenciaAtual", "Vigência: " + txt);
-  } else {
-    setText("vigenciaAtual", "");
-  }
-}
+  campos.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<option value="">Selecione a empresa</option>`;
+  });
 
-/* ===================== Interações ===================== */
-function exibirHistorico() {
-  const div = $("historico");
-  div.innerHTML = "";
-
-  const items = cotacaoData.interacoes || [];
-  if (!items.length) {
-    div.innerHTML = "<p class='muted'>Nenhuma interação registrada.</p>";
-    return;
-  }
-
-  items
-    .sort((a,b)=> (toDate(a.dataHora)?.getTime()||0) - (toDate(b.dataHora)?.getTime()||0))
-    .forEach(msg => {
-      const data = toDate(msg.dataHora)?.toLocaleString("pt-BR") || "-";
-      const tipo = msg.tipo === "mudanca_status" ? "<span class='muted'>[Status]</span> " : "";
-      const autor = msg.autorNome || msg.autorEmail || "Usuário";
-
-      const el = document.createElement("div");
-      el.className = "mensagem";
-      el.innerHTML = `<strong>${autor}</strong> <span class="muted">(${data})</span><br>${tipo}${msg.mensagem || ""}`;
-      div.appendChild(el);
+  snap.forEach(doc => {
+    const dados = doc.data();
+    empresasCache.push({ id: doc.id, ...dados });
+    campos.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const opt = document.createElement("option");
+      opt.value = doc.id;
+      opt.textContent = dados.nome;
+      el.appendChild(opt);
     });
+  });
 }
 
-function enviarMensagem() {
-  const texto = $("novaMensagem").value.trim();
-  if (!texto) return alert("Digite uma mensagem.");
-  const nova = {
-    autorNome: usuarioNomeAtual,
-    autorUid: usuarioAtual.uid,
-    mensagem: texto,
-    dataHora: new Date(),
-    tipo: "observacao"
-  };
-  cotacaoRef.update({ interacoes: firebase.firestore.FieldValue.arrayUnion(nova) })
-    .then(() => { $("novaMensagem").value = ""; exibirHistorico(); alert("Mensagem registrada."); })
-    .catch(err => { console.error(err); alert("Erro ao enviar mensagem."); });
+async function carregarRamos() {
+  const campos = ["ramo", "novaRamo"];
+  let snap;
+  try {
+    snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  } catch {
+    snap = await db.collection("ramos-seguro").get();
+  }
+
+  campos.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<option value="">Selecione o ramo</option>`;
+  });
+
+  snap.forEach(doc => {
+    const nome = doc.data().nomeExibicao || doc.id;
+    campos.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      el.appendChild(opt);
+    });
+  });
 }
 
-/* ===================== Status / Motivos / Vigência / Extra ===================== */
+async function carregarRM() {
+  const select = document.getElementById("filtroRM");
+  if (!select) return;
+  select.innerHTML = `<option value="">Todos</option>`;
+
+  try {
+    let q = db.collection("cotacoes-gerentes");
+    if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
+
+    const snap = await q.get();
+    const nomes = new Set();
+
+    snap.forEach(doc => {
+      const nome = doc.data().rmNome;
+      if (nome && !nomes.has(nome)) {
+        nomes.add(nome);
+        const opt = document.createElement("option");
+        opt.value = nome;
+        opt.textContent = nome;
+        select.appendChild(opt);
+      }
+    });
+  } catch (err) {
+    console.error("Erro ao carregar RM:", err);
+  }
+}
+
 async function carregarStatus() {
-  const select = $("novoStatus");
+  const select = document.getElementById("filtroStatus");
+  if (!select) return;
+
   try {
     const snap = await db.collection("status-negociacao").doc("config").get();
     configStatus = snap.exists ? (snap.data() || {}) : {};
   } catch (err) {
-    console.warn("Não foi possível ler 'status-negociacao/config'. Prosseguindo apenas com os fixos.", err);
+    console.warn("Falha ao ler status-negociacao/config. Usando apenas os fixos.", err);
     configStatus = {};
   }
 
-  // Une config do Firestore com os fixos solicitados e remove duplicatas
   const fromCfg = Array.isArray(configStatus.statusFinais) ? configStatus.statusFinais : [];
   const set = new Set([...STATUS_FIXOS, ...fromCfg]);
-  const listaFinal = Array.from(set);
+  const lista = Array.from(set);
 
-  select.innerHTML = '<option value="">Selecione o novo status</option>';
-  listaFinal.forEach(s => {
+  select.innerHTML = `<option value="">Todos</option>`;
+  lista.forEach(s => {
     const opt = document.createElement("option");
-    opt.value = s; opt.textContent = s;
+    opt.value = s;
+    opt.textContent = s;
     select.appendChild(opt);
   });
+}
 
-  // Listener para exibir campos adicionais por status
-  select.addEventListener("change", () => {
-    const valor = select.value;
+/* ---------- Helpers de preenchimento ---------- */
 
-    // Reset containers
-    const motivoBox = $("motivoContainer");
-    const motivoSel = $("motivoRecusa");
-    const vigBox = $("vigenciaContainer");
-    const extraBox = $("extraInfoContainer");
+function preencherEmpresaNova() {
+  const id = document.getElementById("novaEmpresa").value;
+  const empresa = empresasCache.find(e => e.id === id);
+  setText("nova-info-cnpj", empresa ? `CNPJ: ${empresa.cnpj || "-"}` : "");
+  setText("nova-info-rm", empresa ? `RM responsável: ${empresa.rm || "-"}` : "");
+}
 
-    if (motivoSel) motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
-    if (motivoBox) motivoBox.style.display = "none";
-    if (vigBox) vigBox.style.display = "none";
-    if (extraBox) extraBox.style.display = "none";
+function preencherEmpresa() {
+  const id = document.getElementById("empresa").value;
+  const empresa = empresasCache.find(e => e.id === id);
+  setText("info-cnpj", empresa ? `CNPJ: ${empresa.cnpj || "-"}` : "");
+  setText("info-rm", empresa ? `RM responsável: ${empresa.rm || "-"}` : "");
+}
 
-    // Recusas → motivo obrigatório
-    const motivosCliente = configStatus.motivosRecusaCliente || FALLBACK_MOTIVOS_CLIENTE;
-    const motivosSeg = configStatus.motivosRecusaSeguradora || FALLBACK_MOTIVOS_SEGURADORA;
+/* ---------- CRUD ---------- */
 
-    if (valor === "Recusado Cliente" && motivoSel && motivoBox) {
-      motivosCliente.forEach(m => {
-        const op = document.createElement("option");
-        op.value = m; op.textContent = m;
-        motivoSel.appendChild(op);
+async function criarNovaCotacao() {
+  const empresaId = document.getElementById("novaEmpresa").value;
+  const ramo = document.getElementById("novaRamo").value;
+  const valorFmt = document.getElementById("novaValor").value;
+  const valor = desformatarMoeda(valorFmt);
+  const obs = document.getElementById("novaObservacoes").value.trim();
+  const empresa = empresasCache.find(e => e.id === empresaId);
+
+  if (!empresaId || !ramo || !empresa) return alert("Preencha todos os campos.");
+
+  const cotacao = {
+    empresaId,
+    empresaNome: empresa.nome,
+    empresaCNPJ: empresa.cnpj || "",
+    rmId: empresa.rmId || "",
+    rmNome: empresa.rm || "",
+    ramo,
+    valorDesejado: valor,
+    status: "Pendente Corretor", // status inicial (ajuste se preferir)
+    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
+    criadoPorUid: usuarioAtual.uid,
+    autorUid: usuarioAtual.uid,
+    autorNome: usuarioAtual.email,
+    interacoes: obs
+      ? [{
+          autorUid: usuarioAtual.uid,
+          autorNome: usuarioAtual.email,
+          mensagem: obs,
+          dataHora: new Date(),
+          tipo: "observacao",
+        }]
+      : [],
+  };
+
+  await db.collection("cotacoes-gerentes").add(cotacao);
+  alert("Cotação criada com sucesso.");
+  carregarCotacoesComFiltros();
+
+  // limpa
+  document.getElementById("novaEmpresa").value = "";
+  document.getElementById("novaRamo").value = "";
+  document.getElementById("novaValor").value = "R$ 0,00";
+  document.getElementById("novaObservacoes").value = "";
+  preencherEmpresaNova();
+}
+
+function carregarCotacoesComFiltros() {
+  const lista = document.getElementById("listaCotacoes");
+  if (!lista) return;
+  lista.innerHTML = "Carregando...";
+
+  let query = db.collection("cotacoes-gerentes");
+  if (!isAdmin) query = query.where("criadoPorUid", "==", usuarioAtual.uid);
+
+  query.get()
+    .then(snapshot => {
+      let cotacoes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      const ini = document.getElementById("filtroDataInicio").value;
+      const fim = document.getElementById("filtroDataFim").value;
+      const rm = document.getElementById("filtroRM").value;
+      const status = document.getElementById("filtroStatus").value;
+
+      cotacoes = cotacoes.filter(c => {
+        const d = c.dataCriacao?.toDate?.() ||
+                  (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
+        if (ini && d && d < new Date(ini)) return false;
+        if (fim && d && d > new Date(fim + "T23:59:59")) return false;
+        if (rm && c.rmNome !== rm) return false;
+        if (status && c.status !== status) return false;
+        return true;
       });
-      motivoBox.style.display = "block";
-    }
 
-    if (valor === "Recusado Seguradora" && motivoSel && motivoBox) {
-      motivosSeg.forEach(m => {
-        const op = document.createElement("option");
-        op.value = m; op.textContent = m;
-        motivoSel.appendChild(op);
+      if (!cotacoes.length) {
+        lista.innerHTML = `<p class="muted">Nenhuma cotação encontrada.</p>`;
+        return;
+      }
+
+      let html = `<table><thead><tr>
+        <th>Empresa</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Vigência</th><th>Criada em</th><th>Ações</th>
+      </tr></thead><tbody>`;
+
+      cotacoes.forEach(c => {
+        const valor = typeof c.valorDesejado === "number"
+          ? c.valorDesejado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+          : "-";
+
+        const dataCriacao = (c.dataCriacao?.toDate?.()?.toLocaleDateString("pt-BR"))
+          || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao).toLocaleDateString("pt-BR") : "-");
+
+        // Vigência: se status Negócio Emitido e houverem os campos
+        const vigIni = c.inicioVigencia?.toDate?.();
+        const vigFim = c.fimVigencia?.toDate?.();
+        const vigencia = (vigIni && vigFim)
+          ? `${vigIni.toLocaleDateString("pt-BR")} a ${vigFim.toLocaleDateString("pt-BR")}`
+          : "-";
+
+        html += `<tr>
+          <td data-label="Empresa">${c.empresaNome || "-"}</td>
+          <td data-label="Ramo">${c.ramo || "-"}</td>
+          <td data-label="Valor">${valor}</td>
+          <td data-label="Status">${c.status || "-"}</td>
+          <td data-label="Vigência">${c.status === "Negócio Emitido" ? vigencia : "-"}</td>
+          <td data-label="Criada em">${dataCriacao}</td>
+          <td data-label="Ações">
+            <a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a>
+            ${isAdmin ? ` | <a href="#" onclick="editarCotacao('${c.id}')">Editar</a>
+            | <a href="#" onclick="excluirCotacao('${c.id}')" style="color:#c00">Excluir</a>` : ""}
+          </td>
+        </tr>`;
       });
-      motivoBox.style.display = "block";
-    }
 
-    // Negócio Emitido → vigência obrigatória
-    if (valor === "Negócio Emitido" && vigBox) {
-      vigBox.style.display = "grid";
-    }
+      html += `</tbody></table>`;
+      lista.innerHTML = html;
+    })
+    .catch(err => {
+      console.error("Erro ao carregar cotações:", err);
+      lista.innerHTML = `<p class="muted">Sem permissão para carregar as cotações ou erro de rede. Verifique as regras e o login.</p>`;
+    });
+}
 
-    // Status que exigem informação adicional
-    if (STATUS_EXIGE_EXTRA.has(valor) && extraBox) {
-      extraBox.style.display = "block";
-    }
+function editarCotacao(id) {
+  db.collection("cotacoes-gerentes").doc(id).get().then(doc => {
+    if (!doc.exists) return alert("Cotação não encontrada");
+    const c = doc.data();
+
+    document.getElementById("cotacaoId").value = id;
+    document.getElementById("empresa").value = c.empresaId || "";
+    document.getElementById("ramo").value = c.ramo || "";
+
+    const inputValor = document.getElementById("valorEstimado");
+    const num = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
+    inputValor.value = "R$ " + num.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+    document.getElementById("observacoes").value = c.interacoes?.[0]?.mensagem || "";
+
+    preencherEmpresa();
+    document.getElementById("bloco-edicao").style.display = "block";
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   });
 }
 
-function atualizarStatus() {
-  const novo = $("novoStatus").value;
-  if (!novo) return alert("Selecione o novo status.");
+async function salvarAlteracoesCotacao() {
+  const id = document.getElementById("cotacaoId").value;
+  const empresaId = document.getElementById("empresa").value;
+  const ramo = document.getElementById("ramo").value;
+  const valorFmt = document.getElementById("valorEstimado").value;
+  const valor = desformatarMoeda(valorFmt);
+  const obs = document.getElementById("observacoes").value.trim();
 
-  const motivoSel = $("motivoRecusa");
-  const extra = ($("extraInfo")?.value || "").trim();
+  const empresa = empresasCache.find(e => e.id === empresaId);
+  if (!empresa) return alert("Empresa inválida.");
 
-  // Vigência (quando negócio emitido)
-  let inicioVig = null, fimVig = null;
-  if (novo === "Negócio Emitido") {
-    const ini = $("inicioVigencia")?.value;
-    const fim = $("fimVigencia")?.value;
-    if (!ini || !fim) return alert("Informe o período de vigência.");
-    inicioVig = firebase.firestore.Timestamp.fromDate(new Date(ini+"T12:00:00"));
-    fimVig = firebase.firestore.Timestamp.fromDate(new Date(fim+"T12:00:00"));
-  }
-
-  // Motivo obrigatório nas recusas
-  if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora")) {
-    const motivo = (motivoSel && motivoSel.value) ? motivoSel.value : "";
-    if (!motivo) return alert("Selecione o motivo da recusa.");
-  }
-
-  // Extra obrigatório nos pendentes / emitido declinado / em emissão / negócio fechado
-  if (STATUS_EXIGE_EXTRA.has(novo) && !extra) {
-    return alert("Descreva a informação adicional (pendência, detalhe do status, etc.).");
-  }
-
-  // Monta mensagem da interação
-  let mensagem = `Status alterado para "${novo}".`;
-  if (motivoSel && motivoSel.value) mensagem += ` Motivo: ${motivoSel.value}`;
-  if (inicioVig && fimVig) {
-    mensagem += ` Vigência: ${toDate(inicioVig).toLocaleDateString("pt-BR")} até ${toDate(fimVig).toLocaleDateString("pt-BR")}.`;
-  }
-  if (extra) mensagem += ` Obs.: ${extra}`;
-
-  const interacao = {
-    autorNome: usuarioNomeAtual,
-    autorUid: usuarioAtual.uid,
-    mensagem,
-    dataHora: new Date(),
-    tipo: "mudanca_status"
+  const update = {
+    empresaId,
+    empresaNome: empresa.nome,
+    empresaCNPJ: empresa.cnpj || "",
+    rmId: empresa.rmId || "",
+    rmNome: empresa.rm || "",
+    ramo,
+    valorDesejado: valor,
   };
 
-  const update = { status: novo, interacoes: firebase.firestore.FieldValue.arrayUnion(interacao) };
-  if (inicioVig && fimVig) { update.inicioVigencia = inicioVig; update.fimVigencia = fimVig; }
+  if (obs) {
+    update.interacoes = [{
+      autorUid: usuarioAtual.uid,
+      autorNome: usuarioAtual.email,
+      dataHora: new Date(),
+      mensagem: obs,
+      tipo: "observacao",
+    }];
+  }
 
-  cotacaoRef.update(update)
-    .then(() => { alert("Status atualizado com sucesso."); location.reload(); })
-    .catch(err => { console.error(err); alert("Erro ao atualizar status."); });
+  await db.collection("cotacoes-gerentes").doc(id).update(update);
+  alert("Alterações salvas.");
+  document.getElementById("bloco-edicao").style.display = "none";
+  carregarCotacoesComFiltros();
 }
 
-/* ===================== Utils ===================== */
-function $(id){ return document.getElementById(id); }
-function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
-function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
+function excluirCotacao(id) {
+  if (!confirm("Tem certeza que deseja excluir esta cotação? Essa ação não poderá ser desfeita.")) return;
+  db.collection("cotacoes-gerentes").doc(id).delete()
+    .then(() => {
+      alert("Cotação excluída com sucesso.");
+      carregarCotacoesComFiltros();
+    })
+    .catch(err => {
+      console.error("Erro ao excluir cotação:", err);
+      alert("Erro ao excluir cotação.");
+    });
+}
+
+/* ---------- Utilidades ---------- */
+function setText(id, txt){ const el=document.getElementById(id); if(el) el.textContent = txt ?? ""; }
+
+function limparFiltros(){
+  ["filtroDataInicio","filtroDataFim","filtroRM","filtroStatus"].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value="";
+  });
+  carregarCotacoesComFiltros();
+}
+
+// máscara de moeda
+function formatarMoeda(input){
+  let v = (input.value || '').replace(/\D/g,'');
+  if(!v) { input.value = 'R$ 0,00'; return; }
+  v = (parseInt(v,10)/100).toFixed(2).replace('.',',');
+  v = v.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  input.value = 'R$ ' + v;
+}
+function desformatarMoeda(str){
+  if(!str) return 0;
+  return parseFloat(str.replace(/[^\d]/g,'')/100);
+}
+
+/* ---------- Exports p/ onclick no HTML ---------- */
+window.preencherEmpresa = preencherEmpresa;
+window.preencherEmpresaNova = preencherEmpresaNova;
+window.criarNovaCotacao = criarNovaCotacao;
+window.carregarCotacoesComFiltros = carregarCotacoesComFiltros;
+window.editarCotacao = editarCotacao;
+window.salvarAlteracoesCotacao = salvarAlteracoesCotacao;
+window.excluirCotacao = excluirCotacao;
+window.limparFiltros = limparFiltros;
