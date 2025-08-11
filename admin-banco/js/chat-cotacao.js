@@ -10,8 +10,45 @@ let usuarioNomeAtual = null;
 let cotacaoId = null;
 let cotacaoRef = null;
 let cotacaoData = null;
-let configStatus = null;
-let isAdmin = false;
+let configStatus = null; // lido do Firestore (se existir)
+
+// ====== STATUS FIXOS SOLICITADOS ======
+const STATUS_FIXOS = [
+  "Negócio Emitido",
+  "Pendente Agência",
+  "Pendente Corretor",
+  "Pendente Seguradora",
+  "Pendente Cliente",
+  "Recusado Cliente",
+  "Recusado Seguradora",
+  "Emitido Declinado",
+  "Em Emissão",
+  "Negócio Fechado"
+];
+
+// Onde a "informação adicional" é obrigatória
+const STATUS_EXIGE_EXTRA = new Set([
+  "Pendente Agência",
+  "Pendente Corretor",
+  "Pendente Seguradora",
+  "Pendente Cliente",
+  "Emitido Declinado",
+  "Em Emissão",
+  "Negócio Fechado"
+]);
+
+// Motivos padrão caso não existam no config
+const FALLBACK_MOTIVOS_CLIENTE = [
+  "Preço acima do esperado",
+  "Coberturas não atendem",
+  "Cliente adiou decisão",
+  "Fechou com o banco"
+];
+const FALLBACK_MOTIVOS_SEGURADORA = [
+  "Risco não aceito",
+  "Sinistralidade elevada",
+  "Documentação insuficiente"
+];
 
 auth.onAuthStateChanged(async user => {
   try {
@@ -23,8 +60,6 @@ auth.onAuthStateChanged(async user => {
     cotacaoId = params.get("id");
     if (!cotacaoId) return alert("ID de cotação não informado.");
 
-    isAdmin = user.email === "patrick@retornoseguros.com.br";
-
     cotacaoRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
     const doc = await cotacaoRef.get();
     if (!doc.exists) return alert("Cotação não encontrada.");
@@ -32,7 +67,8 @@ auth.onAuthStateChanged(async user => {
     cotacaoData = doc.data();
     preencherCabecalho();
     exibirHistorico();
-    await carregarStatus();
+
+    await carregarStatus(); // resiliente com fallback
   } catch (e) {
     console.error("Falha ao inicializar chat-cotacao:", e);
     alert("Erro ao carregar a cotação.");
@@ -48,34 +84,16 @@ async function obterNome(uid, fallback) {
   }
 }
 
-/* ============ Cabeçalho ============ */
+/* ===================== Cabeçalho ===================== */
 function preencherCabecalho() {
   setText("empresaNome", cotacaoData.empresaNome || "-");
   setText("empresaCNPJ", cotacaoData.empresaCNPJ || "-");
   setText("ramo", cotacaoData.ramo || "-");
 
-  const spanTexto = $("valorDesejadoTexto");
-  const input = $("valorDesejadoInput");
-  const btnSalvar = $("btnSalvarValor");
-
   const valor = Number(cotacaoData.valorDesejado) || 0;
-  spanTexto.textContent = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-  if (isAdmin) {
-    spanTexto.style.display = "none";
-    input.style.display = "inline-block";
-    btnSalvar.style.display = "inline-block";
-    input.value = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    input.addEventListener("input", () => formatarMoeda(input));
-  } else {
-    spanTexto.style.display = "inline";
-    input.style.display = "none";
-    btnSalvar.style.display = "none";
-  }
-
+  setText("valorDesejadoTexto", valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
   setText("status", cotacaoData.status || "-");
 
-  // Vigência atual (se existir)
   const ini = cotacaoData.inicioVigencia, fim = cotacaoData.fimVigencia;
   if (ini || fim) {
     const txt =
@@ -88,16 +106,7 @@ function preencherCabecalho() {
   }
 }
 
-function salvarNovoValor() {
-  const input = $("valorDesejadoInput");
-  const novoValor = desformatarMoeda(input.value);
-  if (!novoValor || isNaN(novoValor) || novoValor <= 0) return alert("Valor inválido.");
-  cotacaoRef.update({ valorDesejado: novoValor })
-    .then(() => { alert("Valor desejado atualizado."); location.reload(); })
-    .catch(err => { console.error(err); alert("Erro ao atualizar valor."); });
-}
-
-/* ============ Interações ============ */
+/* ===================== Interações ===================== */
 function exibirHistorico() {
   const div = $("historico");
   div.innerHTML = "";
@@ -109,7 +118,7 @@ function exibirHistorico() {
   }
 
   items
-    .sort((a,b)=> (a.dataHora?.seconds||0)-(b.dataHora?.seconds||0))
+    .sort((a,b)=> (toDate(a.dataHora)?.getTime()||0) - (toDate(b.dataHora)?.getTime()||0))
     .forEach(msg => {
       const data = toDate(msg.dataHora)?.toLocaleString("pt-BR") || "-";
       const tipo = msg.tipo === "mudanca_status" ? "<span class='muted'>[Status]</span> " : "";
@@ -137,69 +146,113 @@ function enviarMensagem() {
     .catch(err => { console.error(err); alert("Erro ao enviar mensagem."); });
 }
 
-/* ============ Status / Motivos / Vigência ============ */
+/* ===================== Status / Motivos / Vigência / Extra ===================== */
 async function carregarStatus() {
   const select = $("novoStatus");
-  const snap = await db.collection("status-negociacao").doc("config").get();
-  configStatus = snap.data() || {};
-  const lista = configStatus.statusFinais || [];
+  try {
+    const snap = await db.collection("status-negociacao").doc("config").get();
+    configStatus = snap.exists ? (snap.data() || {}) : {};
+  } catch (err) {
+    console.warn("Não foi possível ler 'status-negociacao/config'. Prosseguindo apenas com os fixos.", err);
+    configStatus = {};
+  }
+
+  // Une config do Firestore com os fixos solicitados e remove duplicatas
+  const fromCfg = Array.isArray(configStatus.statusFinais) ? configStatus.statusFinais : [];
+  const set = new Set([...STATUS_FIXOS, ...fromCfg]);
+  const listaFinal = Array.from(set);
 
   select.innerHTML = '<option value="">Selecione o novo status</option>';
-  lista.forEach(s => {
+  listaFinal.forEach(s => {
     const opt = document.createElement("option");
     opt.value = s; opt.textContent = s;
     select.appendChild(opt);
   });
 
+  // Listener para exibir campos adicionais por status
   select.addEventListener("change", () => {
     const valor = select.value;
-    // motivos
+
+    // Reset containers
     const motivoBox = $("motivoContainer");
     const motivoSel = $("motivoRecusa");
-    motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
-    motivoBox.style.display = "none";
+    const vigBox = $("vigenciaContainer");
+    const extraBox = $("extraInfoContainer");
 
-    let motivos = [];
-    if (valor === "Recusado Cliente") motivos = configStatus.motivosRecusaCliente || [];
-    if (valor === "Recusado Seguradora") motivos = configStatus.motivosRecusaSeguradora || [];
-    if (motivos.length) {
-      motivos.forEach(m => {
-        const opt = document.createElement("option");
-        opt.value = m; opt.textContent = m; motivoSel.appendChild(opt);
+    if (motivoSel) motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
+    if (motivoBox) motivoBox.style.display = "none";
+    if (vigBox) vigBox.style.display = "none";
+    if (extraBox) extraBox.style.display = "none";
+
+    // Recusas → motivo obrigatório
+    const motivosCliente = configStatus.motivosRecusaCliente || FALLBACK_MOTIVOS_CLIENTE;
+    const motivosSeg = configStatus.motivosRecusaSeguradora || FALLBACK_MOTIVOS_SEGURADORA;
+
+    if (valor === "Recusado Cliente" && motivoSel && motivoBox) {
+      motivosCliente.forEach(m => {
+        const op = document.createElement("option");
+        op.value = m; op.textContent = m;
+        motivoSel.appendChild(op);
       });
       motivoBox.style.display = "block";
     }
 
-    // vigência quando Negócio Emitido
-    $("vigenciaContainer").style.display = (valor === "Negócio Emitido") ? "grid" : "none";
+    if (valor === "Recusado Seguradora" && motivoSel && motivoBox) {
+      motivosSeg.forEach(m => {
+        const op = document.createElement("option");
+        op.value = m; op.textContent = m;
+        motivoSel.appendChild(op);
+      });
+      motivoBox.style.display = "block";
+    }
+
+    // Negócio Emitido → vigência obrigatória
+    if (valor === "Negócio Emitido" && vigBox) {
+      vigBox.style.display = "grid";
+    }
+
+    // Status que exigem informação adicional
+    if (STATUS_EXIGE_EXTRA.has(valor) && extraBox) {
+      extraBox.style.display = "block";
+    }
   });
 }
 
 function atualizarStatus() {
   const novo = $("novoStatus").value;
-  const motivo = $("motivoRecusa").value;
-
   if (!novo) return alert("Selecione o novo status.");
 
-  // vigência obrigatória quando negócio emitido
+  const motivoSel = $("motivoRecusa");
+  const extra = ($("extraInfo")?.value || "").trim();
+
+  // Vigência (quando negócio emitido)
   let inicioVig = null, fimVig = null;
   if (novo === "Negócio Emitido") {
-    const ini = $("inicioVigencia").value;
-    const fim = $("fimVigencia").value;
+    const ini = $("inicioVigencia")?.value;
+    const fim = $("fimVigencia")?.value;
     if (!ini || !fim) return alert("Informe o período de vigência.");
     inicioVig = firebase.firestore.Timestamp.fromDate(new Date(ini+"T12:00:00"));
     fimVig = firebase.firestore.Timestamp.fromDate(new Date(fim+"T12:00:00"));
   }
 
-  if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora") && !motivo) {
-    return alert("Selecione o motivo da recusa.");
+  // Motivo obrigatório nas recusas
+  if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora")) {
+    const motivo = (motivoSel && motivoSel.value) ? motivoSel.value : "";
+    if (!motivo) return alert("Selecione o motivo da recusa.");
   }
 
+  // Extra obrigatório nos pendentes / emitido declinado / em emissão / negócio fechado
+  if (STATUS_EXIGE_EXTRA.has(novo) && !extra) {
+    return alert("Descreva a informação adicional (pendência, detalhe do status, etc.).");
+  }
+
+  // Monta mensagem da interação
   let mensagem = `Status alterado para "${novo}".`;
-  if (motivo) mensagem += ` Motivo: ${motivo}`;
+  if (motivoSel && motivoSel.value) mensagem += ` Motivo: ${motivoSel.value}`;
   if (inicioVig && fimVig) {
     mensagem += ` Vigência: ${toDate(inicioVig).toLocaleDateString("pt-BR")} até ${toDate(fimVig).toLocaleDateString("pt-BR")}.`;
   }
+  if (extra) mensagem += ` Obs.: ${extra}`;
 
   const interacao = {
     autorNome: usuarioNomeAtual,
@@ -217,22 +270,7 @@ function atualizarStatus() {
     .catch(err => { console.error(err); alert("Erro ao atualizar status."); });
 }
 
-/* ============ Utils ============ */
+/* ===================== Utils ===================== */
 function $(id){ return document.getElementById(id); }
 function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
 function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
-
-// Mesma máscara da tela de cotações (definida no HTML)
-function formatarMoeda(input){
-  let v=(input.value||'').replace(/\D/g,'');
-  if(!v){ input.value='R$ 0,00'; return; }
-  v=(parseInt(v,10)/100).toFixed(2).replace('.',',');
-  v=v.replace(/\B((?=(\d{3})+(?!\d)))/g,'.');
-  input.value='R$ '+v;
-}
-function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
-
-// Export para onclick inline do HTML (se usar)
-window.enviarMensagem = enviarMensagem;
-window.atualizarStatus = atualizarStatus;
-window.salvarNovoValor = salvarNovoValor;
