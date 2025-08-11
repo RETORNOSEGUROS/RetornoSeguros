@@ -32,6 +32,8 @@ auth.onAuthStateChanged(async user => {
     cotacaoData = doc.data();
     preencherCabecalho();
     exibirHistorico();
+
+    // 🔧 Mesmo que falhe a leitura dos status, a página continua
     await carregarStatus();
   } catch (e) {
     console.error("Falha ao inicializar chat-cotacao:", e);
@@ -109,7 +111,7 @@ function exibirHistorico() {
   }
 
   items
-    .sort((a,b)=> (a.dataHora?.seconds||0)-(b.dataHora?.seconds||0))
+    .sort((a,b)=> (toDate(a.dataHora)?.getTime()||0) - (toDate(b.dataHora)?.getTime()||0))
     .forEach(msg => {
       const data = toDate(msg.dataHora)?.toLocaleString("pt-BR") || "-";
       const tipo = msg.tipo === "mudanca_status" ? "<span class='muted'>[Status]</span> " : "";
@@ -140,10 +142,24 @@ function enviarMensagem() {
 /* ============ Status / Motivos / Vigência ============ */
 async function carregarStatus() {
   const select = $("novoStatus");
-  const snap = await db.collection("status-negociacao").doc("config").get();
-  configStatus = snap.data() || {};
-  const lista = configStatus.statusFinais || [];
 
+  try {
+    const snap = await db.collection("status-negociacao").doc("config").get();
+    configStatus = snap.exists ? (snap.data() || {}) : {};
+    const lista = Array.isArray(configStatus.statusFinais) && configStatus.statusFinais.length
+      ? configStatus.statusFinais
+      : ["Negócio iniciado","Em Cotação","Proposta Enviada","Recusado Cliente","Recusado Seguradora","Negócio Emitido"];
+
+    montarSelectStatus(select, lista);
+  } catch (err) {
+    console.warn("Falha ao carregar 'status-negociacao/config'. Usando fallback local.", err);
+    configStatus = {};
+    const fallback = ["Negócio iniciado","Em Cotação","Proposta Enviada","Recusado Cliente","Recusado Seguradora","Negócio Emitido"];
+    montarSelectStatus(select, fallback);
+  }
+}
+
+function montarSelectStatus(select, lista) {
   select.innerHTML = '<option value="">Selecione o novo status</option>';
   lista.forEach(s => {
     const opt = document.createElement("option");
@@ -151,26 +167,29 @@ async function carregarStatus() {
     select.appendChild(opt);
   });
 
+  // Listener de UI (motivos / vigência)
   select.addEventListener("change", () => {
     const valor = select.value;
-    // motivos
+
+    // Motivos
     const motivoBox = $("motivoContainer");
     const motivoSel = $("motivoRecusa");
     motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
     motivoBox.style.display = "none";
 
     let motivos = [];
-    if (valor === "Recusado Cliente") motivos = configStatus.motivosRecusaCliente || [];
-    if (valor === "Recusado Seguradora") motivos = configStatus.motivosRecusaSeguradora || [];
+    if (valor === "Recusado Cliente")  motivos = (configStatus?.motivosRecusaCliente || []);
+    if (valor === "Recusado Seguradora") motivos = (configStatus?.motivosRecusaSeguradora || []);
     if (motivos.length) {
       motivos.forEach(m => {
-        const opt = document.createElement("option");
-        opt.value = m; opt.textContent = m; motivoSel.appendChild(opt);
+        const op = document.createElement("option");
+        op.value = m; op.textContent = m;
+        motivoSel.appendChild(op);
       });
       motivoBox.style.display = "block";
     }
 
-    // vigência quando Negócio Emitido
+    // Vigência quando Negócio Emitido
     $("vigenciaContainer").style.display = (valor === "Negócio Emitido") ? "grid" : "none";
   });
 }
@@ -227,7 +246,7 @@ function formatarMoeda(input){
   let v=(input.value||'').replace(/\D/g,'');
   if(!v){ input.value='R$ 0,00'; return; }
   v=(parseInt(v,10)/100).toFixed(2).replace('.',',');
-  v=v.replace(/\B((?=(\d{3})+(?!\d)))/g,'.');
+  v=v.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
   input.value='R$ '+v;
 }
 function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
