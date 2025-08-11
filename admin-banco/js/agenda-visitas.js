@@ -31,10 +31,14 @@ const empresaRMMap = new Map(); // empresaId -> { rmUid, rmNome }
 const pickEmpresaNome = (emp)=>(emp?.nome||emp?.razaoSocial||emp?.razao_social||emp?.fantasia||emp?.nomeFantasia||"")+""; 
 
 function getDateFromDoc(v){
+  const toDateSafe = (val) => {
+    const d = new Date(val);
+    return isNaN(+d) ? null : d;
+  };
   if (v?.dataHoraTs?.toDate) return v.dataHoraTs.toDate();
-  if (v?.dataHoraStr)        return new Date(v.dataHoraStr);
-  if (v?.dataHora)           return new Date(v.dataHora);
-  if (v?.datahora)           return new Date(v.datahora); // legado minúsculo
+  if (v?.dataHoraStr)        { const d = toDateSafe(v.dataHoraStr); if (d) return d; }
+  if (v?.dataHora)           { const d = toDateSafe(v.dataHora);    if (d) return d; }
+  if (v?.datahora)           { const d = toDateSafe(v.datahora);    if (d) return d; } // legado minúsculo
   return null;
 }
 function td(label, value){
