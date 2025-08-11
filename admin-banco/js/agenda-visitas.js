@@ -26,9 +26,9 @@ function pickEmpresaNome(emp){
   return (emp?.nome || emp?.razaoSocial || emp?.razao_social || emp?.fantasia || emp?.nomeFantasia || "").toString();
 }
 function getDateFromDoc(v){
-  if (v.dataHoraTs?.toDate) return v.dataHoraTs.toDate();            // Timestamp
-  if (v.dataHoraStr)        return new Date(v.dataHoraStr);           // ISO string
-  if (v.dataHora)           return new Date(v.dataHora);              // campo antigo
+  if (v.dataHoraTs?.toDate) return v.dataHoraTs.toDate(); // Timestamp
+  if (v.dataHoraStr)        return new Date(v.dataHoraStr); // ISO
+  if (v.dataHora)           return new Date(v.dataHora);    // legado
   return null;
 }
 function td(label, value){
@@ -38,7 +38,7 @@ function td(label, value){
   return el;
 }
 
-/* Carregar empresas */
+/* Carregar empresas (com rmUid/rmNome em data-*) */
 async function carregarEmpresas(){
   empresaSelect.innerHTML = `<option value=''>Selecione...</option>`;
   const snap = await db.collection("empresas").orderBy("nome").get();
@@ -47,26 +47,19 @@ async function carregarEmpresas(){
     const opt = document.createElement("option");
     opt.value = doc.id;
     opt.textContent = pickEmpresaNome(d) || doc.id;
+    opt.dataset.rmUid  = d.rmUid || d.rmuid || d.rmId || "";
+    opt.dataset.rmNome = d.rmNome || d.rm || "";
     empresaSelect.appendChild(opt);
   });
 }
 
-/* Exibir RM automaticamente ao selecionar empresa */
-empresaSelect?.addEventListener("change", async ()=>{
-  const id = empresaSelect.value;
-  if (!id){ rmInfo.textContent = "(RM: não cadastrado)"; return; }
-  try{
-    const empDoc = await db.collection("empresas").doc(id).get();
-    const emp = empDoc.exists ? empDoc.data() : null;
-    const nome = emp?.rmNome || emp?.rm || "";
-    rmInfo.textContent = `(RM: ${nome || "não cadastrado"})`;
-  }catch(e){
-    console.error("Erro lendo empresa:", e);
-    rmInfo.textContent = "(RM: não cadastrado)";
-  }
+/* Exibir RM com base no option selecionado (sem nova query) */
+empresaSelect?.addEventListener("change", ()=>{
+  const nome = empresaSelect.selectedOptions[0]?.dataset?.rmNome || "";
+  rmInfo.textContent = `(RM: ${nome || "não cadastrado"})`;
 });
 
-/* Carregar RMs para filtro (1º gerentes; fallback empresas) */
+/* Carregar RMs para filtro (gerentes -> fallback empresas) */
 async function carregarRMsFiltro(){
   filtroRm.innerHTML = `<option value="">Todos</option>`;
   const add = (id, nome) => {
@@ -100,7 +93,7 @@ async function carregarRMsFiltro(){
   }
 }
 
-/* Salvar */
+/* Salvar (usa rm do option selecionado) */
 async function salvar(){
   const empresaId = empresaSelect?.value;
   if (!empresaId){ alert("Selecione a empresa."); return; }
@@ -109,17 +102,18 @@ async function salvar(){
   const user = auth.currentUser;
   const uid  = user?.uid || null;
 
-  const empDoc = await db.collection("empresas").doc(empresaId).get();
-  if (!empDoc.exists){ alert("Empresa não encontrada."); return; }
-  const emp = empDoc.data();
+  // dados do option
+  const opt   = empresaSelect.selectedOptions[0];
+  const rmUid = opt?.dataset.rmUid || null;
+  const rmNom = opt?.dataset.rmNome || "";
 
-  const rmUid  = emp.rmUid || emp.rmuid || emp.rmId || null;
-  const rmNome = emp.rmNome || emp.rm || "";
+  // nome da empresa diretamente do option
+  const empresaNome = opt?.textContent || "";
 
   const payload = {
     empresaId,
-    empresaNome: pickEmpresaNome(emp),
-    rm: rmNome || null,
+    empresaNome,
+    rm: rmNom || null,
     rmUid: rmUid || null,
     tipo: (tipoVisita?.value || "").toString(),
     observacoes: (observacoes?.value || "").trim(),
@@ -137,7 +131,7 @@ async function salvar(){
   alert("Visita agendada!");
 }
 
-/* Render linha */
+/* Render linha (ORDEM CORRETA das colunas) */
 function linhaTabela(id, v, isAdmin){
   const dt = getDateFromDoc(v);
   const formatted = dt ? fmt.format(dt) : "-";
@@ -148,8 +142,8 @@ function linhaTabela(id, v, isAdmin){
   tr.appendChild(td("Hora", horaFmt));
   tr.appendChild(td("Empresa", v.empresaNome || "-"));
   tr.appendChild(td("RM", `<span class="rm-chip">${v.rm || "-"}</span>`));
-  tr.appendChild(td("Tipo", `<span class="badge">${v.tipo || "-"}</span>`));
-  tr.appendChild(td("Observações", v.observacoes || "-"));
+  tr.appendChild(td("Tipo", `<span class="badge">${v.tipo || "-"}</span>`));   // <<< Tipo certo
+  tr.appendChild(td("Observações", v.observacoes || "-"));                     // <<< Obs certo
 
   const act = td("Ações", "");
   act.className = "actions-col";
@@ -167,11 +161,10 @@ function linhaTabela(id, v, isAdmin){
   return tr;
 }
 
-/* Listar + filtros */
+/* Listar + filtros (data em pt-BR) */
 async function listarProximas(){
   lista.innerHTML = "";
 
-  // busca ampla e filtra no cliente (evita criar índice composto agora)
   const snap = await db.collection("agenda_visitas")
     .orderBy("criadoEm", "desc")
     .limit(800)
@@ -190,10 +183,7 @@ async function listarProximas(){
     const dt = getDateFromDoc(v);
     if (!dt) return;
 
-    // apenas futuras (conforme seu layout)
-    if (dt < agora) return;
-
-    // filtros
+    if (dt < agora) return;            // só futuras
     if (de && dt < de) return;
     if (ate && dt > ate) return;
     if (rmSel && v.rmUid !== rmSel) return;
