@@ -16,10 +16,16 @@ window.addEventListener("DOMContentLoaded", () => {
     usuarioAtual = user;
     isAdmin = user.email === "patrick@retornoseguros.com.br";
 
-    await carregarEmpresas();
-    await carregarRamos();
-    await carregarRM();
-    await carregarStatus();
+    try {
+      await Promise.all([
+        carregarEmpresas(),
+        carregarRamos(),
+        carregarRM(),
+        carregarStatus(),
+      ]);
+    } catch (e) {
+      console.error("Erro inicial:", e);
+    }
 
     carregarCotacoesComFiltros();
 
@@ -58,7 +64,13 @@ async function carregarEmpresas() {
 
 async function carregarRamos() {
   const campos = ["ramo", "novaRamo"];
-  const snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  let snap;
+  try {
+    snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  } catch {
+    // fallback sem orderBy (se faltar o campo)
+    snap = await db.collection("ramos-seguro").get();
+  }
 
   campos.forEach(id => {
     const el = document.getElementById(id);
@@ -82,32 +94,48 @@ async function carregarRM() {
   const select = document.getElementById("filtroRM");
   if (!select) return;
   select.innerHTML = `<option value="">Todos</option>`;
-  const snap = await db.collection("cotacoes-gerentes").get();
-  const nomes = new Set();
-  snap.forEach(doc => {
-    const nome = doc.data().rmNome;
-    if (nome && !nomes.has(nome)) {
-      nomes.add(nome);
-      const opt = document.createElement("option");
-      opt.value = nome;
-      opt.textContent = nome;
-      select.appendChild(opt);
-    }
-  });
+
+  try {
+    // Respeita as regras: admin vê tudo; demais, só cotações do próprio usuário.
+    let q = db.collection("cotacoes-gerentes");
+    if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
+
+    const snap = await q.get();
+    const nomes = new Set();
+
+    snap.forEach(doc => {
+      const nome = doc.data().rmNome;
+      if (nome && !nomes.has(nome)) {
+        nomes.add(nome);
+        const opt = document.createElement("option");
+        opt.value = nome;
+        opt.textContent = nome;
+        select.appendChild(opt);
+      }
+    });
+  } catch (err) {
+    console.error("Erro ao carregar RM:", err);
+    // não bloqueia a página
+  }
 }
 
 async function carregarStatus() {
   const select = document.getElementById("filtroStatus");
   if (!select) return;
   select.innerHTML = `<option value="">Todos</option>`;
-  const snap = await db.doc("status-negociacao/config").get();
-  const status = snap.data()?.statusFinais || [];
-  status.forEach(s => {
-    const opt = document.createElement("option");
-    opt.value = s;
-    opt.textContent = s;
-    select.appendChild(opt);
-  });
+
+  try {
+    const snap = await db.doc("status-negociacao/config").get();
+    const status = snap.data()?.statusFinais || [];
+    status.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    console.error("Erro ao carregar status:", err);
+  }
 }
 
 /* ---------- Helpers de preenchimento ---------- */
@@ -132,7 +160,7 @@ async function criarNovaCotacao() {
   const empresaId = document.getElementById("novaEmpresa").value;
   const ramo = document.getElementById("novaRamo").value;
   const valorFmt = document.getElementById("novaValor").value;
-  const valor = desformatarMoeda(valorFmt); // <<< importante
+  const valor = desformatarMoeda(valorFmt);
   const obs = document.getElementById("novaObservacoes").value.trim();
   const empresa = empresasCache.find(e => e.id === empresaId);
 
@@ -152,15 +180,13 @@ async function criarNovaCotacao() {
     autorUid: usuarioAtual.uid,
     autorNome: usuarioAtual.email,
     interacoes: obs
-      ? [
-          {
-            autorUid: usuarioAtual.uid,
-            autorNome: usuarioAtual.email,
-            mensagem: obs,
-            dataHora: new Date(),
-            tipo: "observacao",
-          },
-        ]
+      ? [{
+          autorUid: usuarioAtual.uid,
+          autorNome: usuarioAtual.email,
+          mensagem: obs,
+          dataHora: new Date(),
+          tipo: "observacao",
+        }]
       : [],
   };
 
@@ -184,56 +210,62 @@ function carregarCotacoesComFiltros() {
   let query = db.collection("cotacoes-gerentes");
   if (!isAdmin) query = query.where("criadoPorUid", "==", usuarioAtual.uid);
 
-  query.get().then(snapshot => {
-    let cotacoes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const ini = document.getElementById("filtroDataInicio").value;
-    const fim = document.getElementById("filtroDataFim").value;
-    const rm = document.getElementById("filtroRM").value;
-    const status = document.getElementById("filtroStatus").value;
+  query.get()
+    .then(snapshot => {
+      let cotacoes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-    cotacoes = cotacoes.filter(c => {
-      const d = c.dataCriacao?.toDate?.();
-      if (ini && d && d < new Date(ini)) return false;
-      if (fim && d && d > new Date(fim + "T23:59:59")) return false;
-      if (rm && c.rmNome !== rm) return false;
-      if (status && c.status !== status) return false;
-      return true;
-    });
+      const ini = document.getElementById("filtroDataInicio").value;
+      const fim = document.getElementById("filtroDataFim").value;
+      const rm = document.getElementById("filtroRM").value;
+      const status = document.getElementById("filtroStatus").value;
 
-    if (!cotacoes.length) {
-      lista.innerHTML = `<p class="muted">Nenhuma cotação encontrada.</p>`;
-      return;
-    }
+      cotacoes = cotacoes.filter(c => {
+        // suporta Timestamp (toDate) e string
+        const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
+        if (ini && d && d < new Date(ini)) return false;
+        if (fim && d && d > new Date(fim + "T23:59:59")) return false;
+        if (rm && c.rmNome !== rm) return false;
+        if (status && c.status !== status) return false;
+        return true;
+      });
 
-    let html =
-      `<table><thead><tr>
+      if (!cotacoes.length) {
+        lista.innerHTML = `<p class="muted">Nenhuma cotação encontrada.</p>`;
+        return;
+      }
+
+      let html = `<table><thead><tr>
         <th>Empresa</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
       </tr></thead><tbody>`;
 
-    cotacoes.forEach(c => {
-      const valor =
-        typeof c.valorDesejado === "number"
+      cotacoes.forEach(c => {
+        const valor = typeof c.valorDesejado === "number"
           ? c.valorDesejado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
           : "-";
-      const data = c.dataCriacao?.toDate?.().toLocaleDateString("pt-BR") || "-";
+        const data = (c.dataCriacao?.toDate?.()?.toLocaleDateString("pt-BR"))
+          || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao).toLocaleDateString("pt-BR") : "-");
 
-      html += `<tr>
-        <td data-label="Empresa">${c.empresaNome || "-"}</td>
-        <td data-label="Ramo">${c.ramo || "-"}</td>
-        <td data-label="Valor">${valor}</td>
-        <td data-label="Status">${c.status || "-"}</td>
-        <td data-label="Data">${data}</td>
-        <td data-label="Ações">
-          <a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a>
-          ${isAdmin ? ` | <a href="#" onclick="editarCotacao('${c.id}')">Editar</a>
-          | <a href="#" onclick="excluirCotacao('${c.id}')" style="color:#c00">Excluir</a>` : ""}
-        </td>
-      </tr>`;
+        html += `<tr>
+          <td data-label="Empresa">${c.empresaNome || "-"}</td>
+          <td data-label="Ramo">${c.ramo || "-"}</td>
+          <td data-label="Valor">${valor}</td>
+          <td data-label="Status">${c.status || "-"}</td>
+          <td data-label="Data">${data}</td>
+          <td data-label="Ações">
+            <a href="chat-cotacao.html?id=${c.id}" target="_blank">Abrir</a>
+            ${isAdmin ? ` | <a href="#" onclick="editarCotacao('${c.id}')">Editar</a>
+            | <a href="#" onclick="excluirCotacao('${c.id}')" style="color:#c00">Excluir</a>` : ""}
+          </td>
+        </tr>`;
+      });
+
+      html += `</tbody></table>`;
+      lista.innerHTML = html;
+    })
+    .catch(err => {
+      console.error("Erro ao carregar cotações:", err);
+      lista.innerHTML = `<p class="muted">Sem permissão para carregar as cotações ou erro de rede. Verifique as regras e o login.</p>`;
     });
-
-    html += `</tbody></table>`;
-    lista.innerHTML = html;
-  });
 }
 
 function editarCotacao(id) {
@@ -245,7 +277,7 @@ function editarCotacao(id) {
     document.getElementById("empresa").value = c.empresaId || "";
     document.getElementById("ramo").value = c.ramo || "";
 
-    // exibe formatado
+    // exibe valor formatado
     const inputValor = document.getElementById("valorEstimado");
     const num = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
     inputValor.value = "R$ " + num.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -263,7 +295,7 @@ async function salvarAlteracoesCotacao() {
   const empresaId = document.getElementById("empresa").value;
   const ramo = document.getElementById("ramo").value;
   const valorFmt = document.getElementById("valorEstimado").value;
-  const valor = desformatarMoeda(valorFmt); // <<< importante
+  const valor = desformatarMoeda(valorFmt);
   const obs = document.getElementById("observacoes").value.trim();
 
   const empresa = empresasCache.find(e => e.id === empresaId);
@@ -280,15 +312,13 @@ async function salvarAlteracoesCotacao() {
   };
 
   if (obs) {
-    update.interacoes = [
-      {
-        autorUid: usuarioAtual.uid,
-        autorNome: usuarioAtual.email,
-        dataHora: new Date(),
-        mensagem: obs,
-        tipo: "observacao",
-      },
-    ];
+    update.interacoes = [{
+      autorUid: usuarioAtual.uid,
+      autorNome: usuarioAtual.email,
+      dataHora: new Date(),
+      mensagem: obs,
+      tipo: "observacao",
+    }];
   }
 
   await db.collection("cotacoes-gerentes").doc(id).update(update);
