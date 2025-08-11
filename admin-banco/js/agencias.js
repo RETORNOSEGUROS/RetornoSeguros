@@ -1,17 +1,17 @@
 // ====== CONFIG ======
-const COLLECTION = "agencias_banco"; // nome da coleção (igual ao do Firestore)
-const ONLY_ADMIN_CAN_EDIT = true;     // coloque false se quiser liberar edição a todos logados
+const COLLECTION = "agencias_banco";
+const ONLY_ADMIN_CAN_EDIT = true; // mude para false se quiser liberar
 const ADMIN_EMAIL = "patrick@retornoseguros.com.br";
 
-// ====== BOOT ======
+// ====== BOOT FIREBASE ======
 if (!firebase.apps.length) {
-  // firebase.initializeApp(...) já é feito no firebase-config.js
+  // precisa do firebaseConfig vindo de ../js/firebase-config.js
+  firebase.initializeApp(firebaseConfig);
 }
-
 const db = firebase.firestore();
 const auth = firebase.auth();
 
-// Elements
+// ====== ELEMENTOS ======
 const el = (id) => document.getElementById(id);
 const tbody = el("tbodyAgencias");
 const form = el("formAgencia");
@@ -24,37 +24,35 @@ const fEstado = el("fEstado");
 const fAtivo = el("fAtivo");
 const authInfo = el("authInfo");
 
-let agencias = [];   // cache das agências
+let agencias = [];
 let userIsAdmin = false;
 
-// ====== AUTH (mostra usuário e trava edição se não admin) ======
+// ====== AUTH ======
 auth.onAuthStateChanged(async (user) => {
   if (!user) {
     authInfo.textContent = "Não autenticado";
     if (ONLY_ADMIN_CAN_EDIT) bloquearEdicao();
-    // Se quiser, redirecione para login aqui.
+    // se quiser, redirecione:
+    // window.location.href = "./login.html";
     return;
   }
   authInfo.textContent = `Logado: ${user.email}`;
   userIsAdmin = (!ONLY_ADMIN_CAN_EDIT) || (user.email === ADMIN_EMAIL);
   if (ONLY_ADMIN_CAN_EDIT && !userIsAdmin) bloquearEdicao();
 
-  // iniciar listeners após auth
   listenAgencias();
 });
 
 function bloquearEdicao() {
-  // Desabilita botões de editar/excluir e submit
   btnSalvar.disabled = true;
   btnExcluir.disabled = true;
   el("formHint").textContent = "Somente o administrador pode criar/editar/excluir.";
 }
 
-// ====== LISTEN REALTIME ======
+// ====== SNAPSHOT ======
 let unsubscribe = null;
 function listenAgencias() {
   if (unsubscribe) unsubscribe();
-
   unsubscribe = db.collection(COLLECTION)
     .orderBy("nome")
     .onSnapshot((snap) => {
@@ -103,7 +101,7 @@ function renderLista() {
 
 function safe(v){ return (v === undefined || v === null) ? "" : String(v).replace(/[<>&]/g, s=>({ "<":"&lt;","&": "&amp;",">":"&gt;"}[s])); }
 
-// ====== INTERAÇÕES TABELA ======
+// ====== TABELA: EDIT/DEL ======
 tbody.addEventListener("click", async (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
