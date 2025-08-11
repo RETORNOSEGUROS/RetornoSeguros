@@ -10,8 +10,7 @@ let usuarioNomeAtual = null;
 let cotacaoId = null;
 let cotacaoRef = null;
 let cotacaoData = null;
-let configStatus = null;
-let isAdmin = false;
+let configStatus = null; // lido do Firestore (se existir)
 
 auth.onAuthStateChanged(async user => {
   try {
@@ -23,8 +22,6 @@ auth.onAuthStateChanged(async user => {
     cotacaoId = params.get("id");
     if (!cotacaoId) return alert("ID de cotação não informado.");
 
-    isAdmin = user.email === "patrick@retornoseguros.com.br";
-
     cotacaoRef = db.collection("cotacoes-gerentes").doc(cotacaoId);
     const doc = await cotacaoRef.get();
     if (!doc.exists) return alert("Cotação não encontrada.");
@@ -33,8 +30,7 @@ auth.onAuthStateChanged(async user => {
     preencherCabecalho();
     exibirHistorico();
 
-    // 🔧 Mesmo que falhe a leitura dos status, a página continua
-    await carregarStatus();
+    await carregarStatus(); // resiliente com fallback
   } catch (e) {
     console.error("Falha ao inicializar chat-cotacao:", e);
     alert("Erro ao carregar a cotação.");
@@ -50,7 +46,7 @@ async function obterNome(uid, fallback) {
   }
 }
 
-/* ============ Cabeçalho ============ */
+/* ===================== Cabeçalho ===================== */
 function preencherCabecalho() {
   setText("empresaNome", cotacaoData.empresaNome || "-");
   setText("empresaCNPJ", cotacaoData.empresaCNPJ || "-");
@@ -63,17 +59,10 @@ function preencherCabecalho() {
   const valor = Number(cotacaoData.valorDesejado) || 0;
   spanTexto.textContent = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-  if (isAdmin) {
-    spanTexto.style.display = "none";
-    input.style.display = "inline-block";
-    btnSalvar.style.display = "inline-block";
-    input.value = valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    input.addEventListener("input", () => formatarMoeda(input));
-  } else {
-    spanTexto.style.display = "inline";
-    input.style.display = "none";
-    btnSalvar.style.display = "none";
-  }
+  // Todos podem ver; salvar valor deixei restrito ao botão (se quiser liberar, é só manter visível pra todos)
+  spanTexto.style.display = "inline";
+  input.style.display = "none";
+  btnSalvar.style.display = "none";
 
   setText("status", cotacaoData.status || "-");
 
@@ -99,7 +88,7 @@ function salvarNovoValor() {
     .catch(err => { console.error(err); alert("Erro ao atualizar valor."); });
 }
 
-/* ============ Interações ============ */
+/* ===================== Interações ===================== */
 function exibirHistorico() {
   const div = $("historico");
   div.innerHTML = "";
@@ -111,7 +100,7 @@ function exibirHistorico() {
   }
 
   items
-    .sort((a,b)=> (toDate(a.dataHora)?.getTime()||0) - (toDate(b.dataHora)?.getTime()||0))
+    .sort((a,b)=> (a.dataHora?.seconds||0)-(b.dataHora?.seconds||0))
     .forEach(msg => {
       const data = toDate(msg.dataHora)?.toLocaleString("pt-BR") || "-";
       const tipo = msg.tipo === "mudanca_status" ? "<span class='muted'>[Status]</span> " : "";
@@ -139,29 +128,52 @@ function enviarMensagem() {
     .catch(err => { console.error(err); alert("Erro ao enviar mensagem."); });
 }
 
-/* ============ Status / Motivos / Vigência ============ */
+/* ===================== Status / Motivos / Vigência ===================== */
+// Fallback estendido (inclui os antigos + alguns intermediários comuns)
+const FALLBACK_STATUS = [
+  "Negócio iniciado",
+  "Em Cotação",
+  "Aguardando Documentos",
+  "Em Análise Seguradora",
+  "Proposta Enviada",
+  "Aguardando Cliente",
+  "Recusado Cliente",
+  "Recusado Seguradora",
+  "Negócio Emitido",
+  "Renovação Agendada"
+];
+
+// Motivos padrão caso não exista no config
+const FALLBACK_MOTIVOS_CLIENTE = [
+  "Preço acima do esperado",
+  "Coberturas não atendem",
+  "Cliente adiou decisão",
+  "Fechou com o banco"
+];
+const FALLBACK_MOTIVOS_SEGURADORA = [
+  "Risco não aceito",
+  "Sinistralidade elevada",
+  "Documentação insuficiente"
+];
+
 async function carregarStatus() {
   const select = $("novoStatus");
 
   try {
     const snap = await db.collection("status-negociacao").doc("config").get();
     configStatus = snap.exists ? (snap.data() || {}) : {};
-    const lista = Array.isArray(configStatus.statusFinais) && configStatus.statusFinais.length
-      ? configStatus.statusFinais
-      : ["Negócio iniciado","Em Cotação","Proposta Enviada","Recusado Cliente","Recusado Seguradora","Negócio Emitido"];
-
-    montarSelectStatus(select, lista);
   } catch (err) {
-    console.warn("Falha ao carregar 'status-negociacao/config'. Usando fallback local.", err);
+    console.warn("Não foi possível ler 'status-negociacao/config'. Usando somente fallback.", err);
     configStatus = {};
-    const fallback = ["Negócio iniciado","Em Cotação","Proposta Enviada","Recusado Cliente","Recusado Seguradora","Negócio Emitido"];
-    montarSelectStatus(select, fallback);
   }
-}
 
-function montarSelectStatus(select, lista) {
+  // União entre o que vier do Firestore e o fallback
+  const listaConfig = Array.isArray(configStatus.statusFinais) ? configStatus.statusFinais : [];
+  const set = new Set([...listaConfig, ...FALLBACK_STATUS]); // garante os antigos
+  const listaFinal = Array.from(set);
+
   select.innerHTML = '<option value="">Selecione o novo status</option>';
-  lista.forEach(s => {
+  listaFinal.forEach(s => {
     const opt = document.createElement("option");
     opt.value = s; opt.textContent = s;
     select.appendChild(opt);
@@ -177,9 +189,13 @@ function montarSelectStatus(select, lista) {
     motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
     motivoBox.style.display = "none";
 
+    const motivosCliente = configStatus.motivosRecusaCliente || FALLBACK_MOTIVOS_CLIENTE;
+    const motivosSeg = configStatus.motivosRecusaSeguradora || FALLBACK_MOTIVOS_SEGURADORA;
+
     let motivos = [];
-    if (valor === "Recusado Cliente")  motivos = (configStatus?.motivosRecusaCliente || []);
-    if (valor === "Recusado Seguradora") motivos = (configStatus?.motivosRecusaSeguradora || []);
+    if (valor === "Recusado Cliente")  motivos = motivosCliente;
+    if (valor === "Recusado Seguradora") motivos = motivosSeg;
+
     if (motivos.length) {
       motivos.forEach(m => {
         const op = document.createElement("option");
@@ -200,7 +216,7 @@ function atualizarStatus() {
 
   if (!novo) return alert("Selecione o novo status.");
 
-  // vigência obrigatória quando negócio emitido
+  // Vigência obrigatória quando negócio emitido
   let inicioVig = null, fimVig = null;
   if (novo === "Negócio Emitido") {
     const ini = $("inicioVigencia").value;
@@ -210,6 +226,7 @@ function atualizarStatus() {
     fimVig = firebase.firestore.Timestamp.fromDate(new Date(fim+"T12:00:00"));
   }
 
+  // Motivo obrigatório quando recusado
   if ((novo === "Recusado Cliente" || novo === "Recusado Seguradora") && !motivo) {
     return alert("Selecione o motivo da recusa.");
   }
@@ -236,12 +253,12 @@ function atualizarStatus() {
     .catch(err => { console.error(err); alert("Erro ao atualizar status."); });
 }
 
-/* ============ Utils ============ */
+/* ===================== Utils ===================== */
 function $(id){ return document.getElementById(id); }
 function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
 function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
 
-// Mesma máscara da tela de cotações (definida no HTML)
+// Mesma máscara da tela de cotações (se desejar liberar edição do valor por aqui)
 function formatarMoeda(input){
   let v=(input.value||'').replace(/\D/g,'');
   if(!v){ input.value='R$ 0,00'; return; }
@@ -251,7 +268,7 @@ function formatarMoeda(input){
 }
 function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
 
-// Export para onclick inline do HTML (se usar)
+// Export para onclick inline do HTML
 window.enviarMensagem = enviarMensagem;
 window.atualizarStatus = atualizarStatus;
 window.salvarNovoValor = salvarNovoValor;
