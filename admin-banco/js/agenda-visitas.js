@@ -1,5 +1,5 @@
-// agenda-visitas.js (v10)
-const VERSION = "agenda-visitas.v10";
+// agenda-visitas.js (v11)
+const VERSION = "agenda-visitas.v11";
 console.log(VERSION);
 
 const auth = firebase.auth();
@@ -22,17 +22,23 @@ const filtroAte  = document.getElementById("filtroAte");
 const btnFiltrar = document.getElementById("btnFiltrar");
 const btnLimpar  = document.getElementById("btnLimpar");
 
-// data em pt-BR
-const fmt = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short", timeStyle:"short" });
+// formatadores BR sem vírgula
+const fmtDate = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short" });
+const fmtTime = new Intl.DateTimeFormat("pt-BR",{ timeStyle:"short" });
 
 /* Helpers */
+const empresaRMMap = new Map(); // empresaId -> { rmUid, rmNome }
 const pickEmpresaNome = (emp)=>(emp?.nome||emp?.razaoSocial||emp?.razao_social||emp?.fantasia||emp?.nomeFantasia||"")+""; 
+
 function getDateFromDoc(v){
+  // cobre todos os legados vistos nos seus prints
   if (v?.dataHoraTs?.toDate) return v.dataHoraTs.toDate();
   if (v?.dataHoraStr)        return new Date(v.dataHoraStr);
   if (v?.dataHora)           return new Date(v.dataHora);
+  if (v?.datahora)           return new Date(v.datahora); // minúsculo
   return null;
 }
+
 function td(label, value){
   const el = document.createElement("td");
   el.setAttribute("data-label", label);
@@ -40,7 +46,7 @@ function td(label, value){
   return el;
 }
 
-/* Carregar empresas (com rmUid/rmNome em data-*) */
+/* Carregar empresas (com data-* e map para fallback do RM) */
 async function carregarEmpresas(){
   empresaSelect.innerHTML = `<option value=''>Selecione...</option>`;
   const snap = await db.collection("empresas").orderBy("nome").get();
@@ -52,34 +58,21 @@ async function carregarEmpresas(){
     opt.dataset.rmUid  = d.rmUid || d.rmuid || d.rmId || "";
     opt.dataset.rmNome = d.rmNome || d.rm || "";
     empresaSelect.appendChild(opt);
+
+    empresaRMMap.set(doc.id, {
+      rmUid:  opt.dataset.rmUid || null,
+      rmNome: opt.dataset.rmNome || ""
+    });
   });
 }
 
-/* Exibir RM imediatamente (sem segunda query) */
+/* Mostra RM ao escolher empresa (sem query) */
 empresaSelect?.addEventListener("change", ()=>{
   const nome = empresaSelect.selectedOptions[0]?.dataset?.rmNome || "";
   rmInfo.textContent = `(RM: ${nome || "não cadastrado"})`;
 });
 
-/* Montar filtro RM a partir das empresas carregadas (à prova de regras) */
-function montarFiltroRMFromEmpresas(){
-  const set = new Map();
-  [...empresaSelect.options].forEach(opt=>{
-    const id = opt.dataset?.rmUid;
-    const nm = opt.dataset?.rmNome;
-    if (id) set.set(id, nm || id);
-  });
-  filtroRm.innerHTML = `<option value="">Todos</option>`;
-  [...set.entries()]
-    .sort((a,b)=> (a[1]||"").localeCompare(b[1]||""))
-    .forEach(([id,nm])=>{
-      const o = document.createElement("option");
-      o.value = id; o.textContent = nm || id;
-      filtroRm.appendChild(o);
-    });
-}
-
-/* (Opcional) tentar pela coleção gerentes; se falhar, usa fromEmpresas */
+/* Filtro de RM (tenta gerentes; se não, usa empresas) */
 async function carregarRMsFiltro(){
   try{
     const snapG = await db.collection("gerentes").orderBy("nome").get();
@@ -93,11 +86,21 @@ async function carregarRMsFiltro(){
       });
       return;
     }
-  }catch(e){ /* ignore e usa fallback */ }
-  montarFiltroRMFromEmpresas();
+  }catch(e){}
+  // fallback via empresas já carregadas
+  filtroRm.innerHTML = `<option value="">Todos</option>`;
+  [...empresaRMMap.entries()]
+    .filter(([,v])=> !!v.rmUid)
+    .sort((a,b)=> (a[1].rmNome||"").localeCompare(b[1].rmNome||""))
+    .forEach(([_,v])=>{
+      const o = document.createElement("option");
+      o.value = v.rmUid;
+      o.textContent = v.rmNome || v.rmUid;
+      filtroRm.appendChild(o);
+    });
 }
 
-/* Salvar (usa rm do option selecionado) */
+/* Salvar (mostra erro real se ocorrer) */
 async function salvar(){
   const empresaId = empresaSelect?.value;
   if (!empresaId){ alert("Selecione a empresa."); return; }
@@ -111,6 +114,9 @@ async function salvar(){
   const rmNom = opt?.dataset.rmNome || "";
   const empresaNome = opt?.textContent || "";
 
+  const dt = new Date(dataHora.value); // de <input type="datetime-local">
+  if (isNaN(+dt)){ alert("Data/hora inválida."); return; }
+
   const payload = {
     empresaId,
     empresaNome,
@@ -118,8 +124,8 @@ async function salvar(){
     rmUid: rmUid || null,
     tipo: (tipoVisita?.value || "").toString(),
     observacoes: (observacoes?.value || "").trim(),
-    dataHoraTs:  firebase.firestore.Timestamp.fromDate(new Date(dataHora.value)),
-    dataHoraStr: new Date(dataHora.value).toISOString(),
+    dataHoraTs:  firebase.firestore.Timestamp.fromDate(dt),
+    dataHoraStr: dt.toISOString(),
     criadoPorUid: uid,
     criadoEm: firebase.firestore.FieldValue.serverTimestamp()
   };
@@ -127,44 +133,44 @@ async function salvar(){
   await db.collection("agenda_visitas").add(payload);
   if (observacoes) observacoes.value = "";
   if (dataHora) dataHora.value = "";
-  await listarProximas();
+  await listarTodas();
   alert("Visita agendada!");
 }
 
-/* Render (ordem correta + correção de registros antigos) */
-function linhaTabela(id, v, isAdmin){
+/* Render (ordem ok + conserta legado tipo/obs) */
+function linhaTabela(id, v){
   const dt = getDateFromDoc(v);
-  const formatted = dt ? fmt.format(dt) : "-";
-  const [dataFmt, horaFmt] = dt ? [formatted.split(" ")[0], formatted.split(" ")[1]] : ["-","-"];
+  const dataFmt = dt ? fmtDate.format(dt) : "-";
+  const horaFmt = dt ? fmtTime.format(dt) : "-";
 
-  // conserta legado: se tipo não for Presencial/Online e obs estiver vazia, invertemos para exibição
+  // “desinverte” se tipo não é Presencial/Online e obs está vazia
   let tipo = v.tipo || "";
   let obs  = v.observacoes || "";
   if (tipo && !["Presencial","Online"].includes(tipo) && !obs){
-    obs = tipo; tipo = ""; // só para display
+    obs = tipo; tipo = "";
   }
+
+  const info = empresaRMMap.get(v.empresaId) || {};
+  const rmNomeDisplay = v.rm || info.rmNome || "-";
 
   const tr = document.createElement("tr");
   tr.appendChild(td("Data", dataFmt));
   tr.appendChild(td("Hora", horaFmt));
   tr.appendChild(td("Empresa", v.empresaNome || "-"));
-  tr.appendChild(td("RM", `<span class="rm-chip">${v.rm || "-"}</span>`));
+  tr.appendChild(td("RM", `<span class="rm-chip">${rmNomeDisplay}</span>`));
   tr.appendChild(td("Tipo", `<span class="badge">${tipo || "-"}</span>`));
   tr.appendChild(td("Observações", obs || "-"));
-
-  const act = td("Ações", "");
-  act.className = "actions-col";
-  tr.appendChild(act);
+  tr.appendChild(td("Ações", "")); // reservado para excluir/editar futuramente
   return tr;
 }
 
-/* Listar + filtros (data em pt-BR) */
-async function listarProximas(){
+/* Listar TODAS (sem cortar passadas). Filtros por data/Tipo/RM. */
+async function listarTodas(){
   lista.innerHTML = "";
 
   const snap = await db.collection("agenda_visitas")
     .orderBy("criadoEm", "desc")
-    .limit(800)
+    .limit(1000)
     .get();
 
   const rmSel   = filtroRm?.value || "";
@@ -172,43 +178,46 @@ async function listarProximas(){
   const de      = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
   const ate     = filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
 
-  const agora = new Date();
   const rows = [];
-
   snap.forEach(doc=>{
     const v = doc.data();
     const dt = getDateFromDoc(v);
     if (!dt) return;
-    if (dt < agora) return;           // só futuras
+
     if (de && dt < de) return;
     if (ate && dt > ate) return;
     if (rmSel && v.rmUid !== rmSel) return;
     if (tipoSel && v.tipo !== tipoSel) return;
+
     rows.push({ id: doc.id, v, dt });
   });
 
+  // ordena pela data da visita (não por criadoEm)
   rows.sort((a,b)=> a.dt - b.dt);
+
   if (!rows.length){ vazio.style.display="block"; return; }
   vazio.style.display="none";
-  rows.forEach(({id, v})=> lista.appendChild(linhaTabela(id, v, false)));
+  rows.forEach(({id, v})=> lista.appendChild(linhaTabela(id, v)));
 }
 
 /* Eventos */
 document.getElementById("salvarVisita")?.addEventListener("click", ()=>{
   if (!auth.currentUser){ alert("Faça login novamente."); return; }
-  salvar().catch(e=>{ console.error(e); alert("Erro ao salvar"); });
+  salvar().catch(e=>{
+    console.error(e);
+    alert("Erro ao salvar: " + (e?.message || e));
+  });
 });
-document.getElementById("recarregar")?.addEventListener("click", listarProximas);
-btnFiltrar?.addEventListener("click", listarProximas);
+document.getElementById("recarregar")?.addEventListener("click", listarTodas);
+btnFiltrar?.addEventListener("click", listarTodas);
 btnLimpar?.addEventListener("click", ()=>{
   filtroRm.value = ""; filtroTipo.value = ""; filtroDe.value = ""; filtroAte.value = "";
-  listarProximas();
+  listarTodas();
 });
 
 /* Init */
 auth.onAuthStateChanged(async ()=>{
   await carregarEmpresas();
-  await carregarRMsFiltro();          // tenta gerentes
-  montarFiltroRMFromEmpresas();       // garante via empresas
-  await listarProximas();
+  await carregarRMsFiltro();
+  await listarTodas();
 });
