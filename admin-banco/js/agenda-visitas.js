@@ -26,9 +26,9 @@ function pickEmpresaNome(emp){
   return (emp?.nome || emp?.razaoSocial || emp?.razao_social || emp?.fantasia || emp?.nomeFantasia || "").toString();
 }
 function getDateFromDoc(v){
-  if (v.dataHoraTs?.toDate) return v.dataHoraTs.toDate();
-  if (v.dataHoraStr) return new Date(v.dataHoraStr);
-  if (v.dataHora)    return new Date(v.dataHora);
+  if (v.dataHoraTs?.toDate) return v.dataHoraTs.toDate();            // Timestamp
+  if (v.dataHoraStr)        return new Date(v.dataHoraStr);           // ISO string
+  if (v.dataHora)           return new Date(v.dataHora);              // campo antigo
   return null;
 }
 function td(label, value){
@@ -66,7 +66,7 @@ empresaSelect?.addEventListener("change", async ()=>{
   }
 });
 
-/* Carregar RMs para filtro (gerentes -> fallback empresas) */
+/* Carregar RMs para filtro (1º gerentes; fallback empresas) */
 async function carregarRMsFiltro(){
   filtroRm.innerHTML = `<option value="">Todos</option>`;
   const add = (id, nome) => {
@@ -129,7 +129,6 @@ async function salvar(){
     criadoEm: firebase.firestore.FieldValue.serverTimestamp()
   };
 
-  console.debug("Salvando agenda:", payload);
   await db.collection("agenda_visitas").add(payload);
 
   if (observacoes) observacoes.value = "";
@@ -172,7 +171,7 @@ function linhaTabela(id, v, isAdmin){
 async function listarProximas(){
   lista.innerHTML = "";
 
-  // busca ampla e filtra no cliente (sem exigir índices novos)
+  // busca ampla e filtra no cliente (evita criar índice composto agora)
   const snap = await db.collection("agenda_visitas")
     .orderBy("criadoEm", "desc")
     .limit(800)
@@ -191,7 +190,7 @@ async function listarProximas(){
     const dt = getDateFromDoc(v);
     if (!dt) return;
 
-    // apenas futuras (igual sua UI)
+    // apenas futuras (conforme seu layout)
     if (dt < agora) return;
 
     // filtros
