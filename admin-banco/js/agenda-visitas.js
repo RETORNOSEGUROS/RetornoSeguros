@@ -86,15 +86,18 @@ async function carregarRMsFiltro(){
     }
   }catch(e){}
   filtroRm.innerHTML = `<option value="">Todos</option>`;
-  [...empresaRMMap.entries()]
-    .filter(([,v])=> !!v.rmUid)
-    .sort((a,b)=> (a[1].rmNome||"").localeCompare(b[1].rmNome||""))
-    .forEach(([_,v])=>{
-      const o = document.createElement("option");
-      o.value = v.rmUid;
-      o.textContent = v.rmNome || v.rmUid;
-      filtroRm.appendChild(o);
-    });
+const rmMap = new Map(); // rmUid -> rmNome
+empresaRMMap.forEach(({ rmUid, rmNome }) => {
+  if (rmUid && !rmMap.has(rmUid)) rmMap.set(rmUid, rmNome || rmUid);
+});
+[...rmMap.entries()]
+  .sort((a,b)=> (a[1]||"").localeCompare(b[1]||""))
+  .forEach(([id, nome]) => {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = nome;
+    filtroRm.appendChild(o);
+  });
 }
 
 /* Salvar (erro real no alert) */
