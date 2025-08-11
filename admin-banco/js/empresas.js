@@ -3,9 +3,52 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let produtos = [];
-let nomesProdutos = [];
+let nomesProdutos = {};
 let empresasCache = [];
 
+// ---------- Helpers ----------
+const normalize = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase().trim();
+
+function classFromStatus(statusRaw) {
+  const s = normalize(statusRaw);
+
+  // Verde
+  if (["negocio emitido"].includes(s)) return "verde";
+
+  // Amarelo (pendências + proposta enviada)
+  if ([
+    "pendente agencia",
+    "pendente corretor",
+    "pendente seguradora",
+    "pendente cliente",
+    "proposta enviada",
+    "proposta reenviada",
+    "cotacao iniciada",
+    "pedido de cotacao"
+  ].includes(s)) return "amarelo";
+
+  // Vermelho
+  if ([
+    "recusado cliente",
+    "recusado seguradora",
+    "emitido declinado",
+    "negocio emitido declinado"
+  ].includes(s)) return "vermelho";
+
+  // Azul
+  if ([
+    "negocio fechado",
+    "em emissao"
+  ].includes(s)) return "azul";
+
+  return "nenhum";
+}
+
+// ---------- Fluxo ----------
 auth.onAuthStateChanged(user => {
   if (!user) return window.location.href = "login.html";
   carregarProdutos().then(() => {
@@ -66,33 +109,17 @@ function carregarEmpresas() {
 
       cotacoesSnap.forEach(doc => {
         const c = doc.data();
+
+        // Match do ramo por nome exibido, com normalização
         const ramoCotado = c.ramo;
-        const produtoId = produtos.find(id => nomesProdutos[id] === ramoCotado);
+        const produtoId = produtos.find(id =>
+          normalize(nomesProdutos[id]) === normalize(ramoCotado)
+        );
         if (!produtoId) return;
 
-        const status = c.status?.toLowerCase() || "";
-
-        if (status === "negócio emitido") {
-          statusPorProduto[produtoId] = "verde";
-        } else if (
-          status === "pendente agência" ||
-          status === "pendente corretor" ||
-          status === "pendente seguradora" ||
-          status === "pendente cliente"
-        ) {
-          statusPorProduto[produtoId] = "amarelo";
-        } else if (
-          status === "recusado cliente" ||
-          status === "recusado seguradora" ||
-          status === "negócio emitido declinado"
-        ) {
-          statusPorProduto[produtoId] = "vermelho";
-        } else if (
-          status === "negócio fechado" ||
-          status === "em emissão"
-        ) {
-          statusPorProduto[produtoId] = "azul";
-        }
+        // Mapeia status -> cor (com sinônimos)
+        const classe = classFromStatus(c.status);
+        statusPorProduto[produtoId] = classe;
       });
 
       return {
