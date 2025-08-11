@@ -68,6 +68,9 @@ auth.onAuthStateChanged(async user => {
     preencherCabecalho();
     exibirHistorico();
 
+    // 👉 habilita edição de valor para admin (e já mascara)
+    prepararEdicaoValorParaAdmin(user.email);
+
     await carregarStatus(); // resiliente com fallback
   } catch (e) {
     console.error("Falha ao inicializar chat-cotacao:", e);
@@ -106,9 +109,55 @@ function preencherCabecalho() {
   }
 }
 
+/* ===== Admin: editar Valor desejado ===== */
+function prepararEdicaoValorParaAdmin(email) {
+  const isAdmin = email === "patrick@retornoseguros.com.br";
+  const span = $("valorDesejadoTexto");
+  const input = $("valorDesejadoInput");
+  const btn = $("btnSalvarValor");
+  if (!span || !input || !btn) return; // HTML sem controles
+
+  if (!isAdmin) {
+    // mantém somente leitura
+    span.style.display = "inline";
+    input.style.display = "none";
+    btn.style.display = "none";
+    return;
+  }
+
+  // Admin enxerga input e botão
+  span.style.display = "none";
+  input.style.display = "inline-block";
+  btn.style.display = "inline-block";
+
+  // valor atual mascarado
+  const atual = Number(cotacaoData?.valorDesejado) || 0;
+  input.value = atual.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  // máscara ao digitar
+  input.addEventListener("input", () => formatarMoeda(input));
+
+  // expõe função global para o botão
+  window.salvarNovoValor = async function () {
+    const novoValor = desformatarMoeda(input.value);
+    if (!novoValor || isNaN(novoValor) || novoValor <= 0) {
+      alert("Valor inválido."); return;
+    }
+    try {
+      await cotacaoRef.update({ valorDesejado: novoValor });
+      alert("Valor desejado atualizado.");
+      location.reload();
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao atualizar valor.");
+    }
+  };
+}
+
 /* ===================== Interações ===================== */
 function exibirHistorico() {
   const div = $("historico");
+  if (!div) return;
   div.innerHTML = "";
 
   const items = cotacaoData.interacoes || [];
@@ -132,7 +181,7 @@ function exibirHistorico() {
 }
 
 function enviarMensagem() {
-  const texto = $("novaMensagem").value.trim();
+  const texto = $("novaMensagem")?.value.trim();
   if (!texto) return alert("Digite uma mensagem.");
   const nova = {
     autorNome: usuarioNomeAtual,
@@ -149,6 +198,16 @@ function enviarMensagem() {
 /* ===================== Status / Motivos / Vigência / Extra ===================== */
 async function carregarStatus() {
   const select = $("novoStatus");
+  if (select) {
+    // pré-carrega com fixos para não ficar "Carregando..."
+    select.innerHTML = '<option value="">Selecione o novo status</option>';
+    STATUS_FIXOS.forEach(s => {
+      const op = document.createElement("option");
+      op.value = s; op.textContent = s;
+      select.appendChild(op);
+    });
+  }
+
   try {
     const snap = await db.collection("status-negociacao").doc("config").get();
     configStatus = snap.exists ? (snap.data() || {}) : {};
@@ -157,69 +216,70 @@ async function carregarStatus() {
     configStatus = {};
   }
 
-  // Une config do Firestore com os fixos solicitados e remove duplicatas
-  const fromCfg = Array.isArray(configStatus.statusFinais) ? configStatus.statusFinais : [];
-  const set = new Set([...STATUS_FIXOS, ...fromCfg]);
-  const listaFinal = Array.from(set);
+  if (select) {
+    const fromCfg = Array.isArray(configStatus.statusFinais) ? configStatus.statusFinais : [];
+    const set = new Set([...STATUS_FIXOS, ...fromCfg]);
+    const listaFinal = Array.from(set);
 
-  select.innerHTML = '<option value="">Selecione o novo status</option>';
-  listaFinal.forEach(s => {
-    const opt = document.createElement("option");
-    opt.value = s; opt.textContent = s;
-    select.appendChild(opt);
-  });
+    select.innerHTML = '<option value="">Selecione o novo status</option>';
+    listaFinal.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s; opt.textContent = s;
+      select.appendChild(opt);
+    });
 
-  // Listener para exibir campos adicionais por status
-  select.addEventListener("change", () => {
-    const valor = select.value;
+    // Listener para exibir campos adicionais por status
+    select.addEventListener("change", () => {
+      const valor = select.value;
 
-    // Reset containers
-    const motivoBox = $("motivoContainer");
-    const motivoSel = $("motivoRecusa");
-    const vigBox = $("vigenciaContainer");
-    const extraBox = $("extraInfoContainer");
+      // Reset containers
+      const motivoBox = $("motivoContainer");
+      const motivoSel = $("motivoRecusa");
+      const vigBox = $("vigenciaContainer");
+      const extraBox = $("extraInfoContainer");
 
-    if (motivoSel) motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
-    if (motivoBox) motivoBox.style.display = "none";
-    if (vigBox) vigBox.style.display = "none";
-    if (extraBox) extraBox.style.display = "none";
+      if (motivoSel) motivoSel.innerHTML = '<option value="">Selecione o motivo</option>';
+      if (motivoBox) motivoBox.style.display = "none";
+      if (vigBox) vigBox.style.display = "none";
+      if (extraBox) extraBox.style.display = "none";
 
-    // Recusas → motivo obrigatório
-    const motivosCliente = configStatus.motivosRecusaCliente || FALLBACK_MOTIVOS_CLIENTE;
-    const motivosSeg = configStatus.motivosRecusaSeguradora || FALLBACK_MOTIVOS_SEGURADORA;
+      // Recusas → motivo obrigatório
+      const motivosCliente = configStatus.motivosRecusaCliente || FALLBACK_MOTIVOS_CLIENTE;
+      const motivosSeg = configStatus.motivosRecusaSeguradora || FALLBACK_MOTIVOS_SEGURADORA;
 
-    if (valor === "Recusado Cliente" && motivoSel && motivoBox) {
-      motivosCliente.forEach(m => {
-        const op = document.createElement("option");
-        op.value = m; op.textContent = m;
-        motivoSel.appendChild(op);
-      });
-      motivoBox.style.display = "block";
-    }
+      if (valor === "Recusado Cliente" && motivoSel && motivoBox) {
+        motivosCliente.forEach(m => {
+          const op = document.createElement("option");
+          op.value = m; op.textContent = m;
+          motivoSel.appendChild(op);
+        });
+        motivoBox.style.display = "block";
+      }
 
-    if (valor === "Recusado Seguradora" && motivoSel && motivoBox) {
-      motivosSeg.forEach(m => {
-        const op = document.createElement("option");
-        op.value = m; op.textContent = m;
-        motivoSel.appendChild(op);
-      });
-      motivoBox.style.display = "block";
-    }
+      if (valor === "Recusado Seguradora" && motivoSel && motivoBox) {
+        motivosSeg.forEach(m => {
+          const op = document.createElement("option");
+          op.value = m; op.textContent = m;
+          motivoSel.appendChild(op);
+        });
+        motivoBox.style.display = "block";
+      }
 
-    // Negócio Emitido → vigência obrigatória
-    if (valor === "Negócio Emitido" && vigBox) {
-      vigBox.style.display = "grid";
-    }
+      // Negócio Emitido → vigência obrigatória
+      if (valor === "Negócio Emitido" && vigBox) {
+        vigBox.style.display = "grid";
+      }
 
-    // Status que exigem informação adicional
-    if (STATUS_EXIGE_EXTRA.has(valor) && extraBox) {
-      extraBox.style.display = "block";
-    }
-  });
+      // Status que exigem informação adicional
+      if (STATUS_EXIGE_EXTRA.has(valor) && extraBox) {
+        extraBox.style.display = "block";
+      }
+    });
+  }
 }
 
 function atualizarStatus() {
-  const novo = $("novoStatus").value;
+  const novo = $("novoStatus")?.value;
   if (!novo) return alert("Selecione o novo status.");
 
   const motivoSel = $("motivoRecusa");
@@ -274,3 +334,17 @@ function atualizarStatus() {
 function $(id){ return document.getElementById(id); }
 function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
 function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
+
+// máscara moeda
+function formatarMoeda(input){
+  let v=(input.value||'').replace(/\D/g,'');
+  if(!v){ input.value='R$ 0,00'; return; }
+  v=(parseInt(v,10)/100).toFixed(2).replace('.',',');
+  v=v.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  input.value='R$ '+v;
+}
+function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
+
+// Exports para onclick no HTML
+window.enviarMensagem = enviarMensagem;
+window.atualizarStatus = atualizarStatus;
