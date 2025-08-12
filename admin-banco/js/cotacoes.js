@@ -114,7 +114,6 @@ async function carregarRM() {
     });
   } catch (err) {
     console.error("Erro ao carregar RM:", err);
-    // não bloqueia a página
   }
 }
 
@@ -170,15 +169,17 @@ async function carregarStatus() {
 function preencherEmpresaNova() {
   const id = document.getElementById("novaEmpresa").value;
   const empresa = empresasCache.find(e => e.id === id);
+  const rmNome = empresa ? (empresa.rmNome || empresa.rm || "") : "";
   document.getElementById("nova-info-cnpj").textContent = empresa ? `CNPJ: ${empresa.cnpj || "-"}` : "";
-  document.getElementById("nova-info-rm").textContent = empresa ? `RM responsável: ${empresa.rm || "-"}` : "";
+  document.getElementById("nova-info-rm").textContent   = empresa ? `RM responsável: ${rmNome || "-"}` : "";
 }
 
 function preencherEmpresa() {
   const id = document.getElementById("empresa").value;
   const empresa = empresasCache.find(e => e.id === id);
+  const rmNome = empresa ? (empresa.rmNome || empresa.rm || "") : "";
   document.getElementById("info-cnpj").textContent = empresa ? `CNPJ: ${empresa.cnpj || "-"}` : "";
-  document.getElementById("info-rm").textContent = empresa ? `RM responsável: ${empresa.rm || "-"}` : "";
+  document.getElementById("info-rm").textContent   = empresa ? `RM responsável: ${rmNome || "-"}` : "";
 }
 
 /* ---------- CRUD ---------- */
@@ -193,12 +194,16 @@ async function criarNovaCotacao() {
 
   if (!empresaId || !ramo || !empresa) return alert("Preencha todos os campos.");
 
+  // Compatível com novo e legado
+  const rmNome = empresa.rmNome || empresa.rm || "";
+  const rmId   = empresa.rmUid  || empresa.rmId || "";
+
   const cotacao = {
     empresaId,
     empresaNome: empresa.nome,
     empresaCNPJ: empresa.cnpj || "",
-    rmId: empresa.rmId || "",
-    rmNome: empresa.rm || "",
+    rmId,
+    rmNome,
     ramo,
     valorDesejado: valor,
     status: "Negócio iniciado",
@@ -330,12 +335,16 @@ async function salvarAlteracoesCotacao() {
   const empresa = empresasCache.find(e => e.id === empresaId);
   if (!empresa) return alert("Empresa inválida.");
 
+  // Compatível com novo e legado
+  const rmNome = empresa.rmNome || empresa.rm || "";
+  const rmId   = empresa.rmUid  || empresa.rmId || "";
+
   const update = {
     empresaId,
     empresaNome: empresa.nome,
     empresaCNPJ: empresa.cnpj || "",
-    rmId: empresa.rmId || "",
-    rmNome: empresa.rm || "",
+    rmId,
+    rmNome,
     ramo,
     valorDesejado: valor,
   };
