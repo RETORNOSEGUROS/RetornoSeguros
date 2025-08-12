@@ -56,13 +56,28 @@ async function getEmpresaInfo(empId) {
   }
 }
 
-// ======== Helpers de data e moeda
-function brMoney(n) {
-  const val = Number(String(n).replace(/\./g, "").replace(",", ".")) || 0;
-  return val;
+// ======== Helpers (datas e moeda)
+function parseCurrency(input) {
+  if (input == null) return 0;
+  if (typeof input === "number") return input;
+  // remove tudo que não for dígito, ponto ou vírgula (ex.: tira "R$")
+  let s = String(input).trim().replace(/[^\d.,-]/g, "");
+  const hasComma = s.includes(","), hasDot = s.includes(".");
+  // pt-BR típico: milhar "." e decimal ","
+  if (hasComma && hasDot) return Number(s.replace(/\./g, "").replace(",", ".")) || 0;
+  // só vírgula = decimal
+  if (hasComma && !hasDot) return Number(s.replace(",", ".")) || 0;
+  // só ponto: se o último bloco tiver 2 dígitos, trate como decimal; senão, milhares
+  if (!hasComma && hasDot) {
+    const last = s.split(".").pop();
+    return (last.length === 2 ? Number(s) : Number(s.replace(/\./g, ""))) || 0;
+  }
+  // apenas dígitos
+  return Number(s) || 0;
 }
+
 function fmtMoney(n) {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 // tenta parsear várias formas de fim de vigência
@@ -131,7 +146,7 @@ async function carregarDados() {
     for (const key of Object.keys(ramos)) {
       const item = ramos[key] || {};
       const fim = parseFimVigencia(item.vencimento || item.vencimentoStr || item.fimVigencia || v.vencimento);
-      const premioNum = brMoney(item.premio);
+      const premioNum = parseCurrency(item.premio);
 
       REGISTROS.push({
         origem: "Visita",
@@ -159,7 +174,17 @@ async function carregarDados() {
       c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal || c.vigencia_final || c.fimVigenciaTs
     );
 
-    const premioNum = brMoney(c.premioLiquido ?? c.premio_liquido ?? c.valorNegocio ?? c.premio);
+    // cobre diferentes nomes de campo que você já tem em outras telas
+    const premioNum = parseCurrency(
+      c.premioLiquido ??
+      c.premio_liquido ??
+      c.valorNegocio ??
+      c.premio ??
+      c.valorDesejado ??
+      c.valor_desejado ??
+      c.valorAnualDesejado ??
+      c.valor_anual_desejado
+    );
 
     // tenta RM por campos do documento; cai pra empresa ou autor
     let rmNome = c.rmNome || c.rm || emp.rmNome;
@@ -254,7 +279,6 @@ function aplicarFiltros(){
 
 function atualizarKPIs(data){
   kpiQtd.textContent = data.length.toString();
-
   const total = data.reduce((sum, r)=> sum + (Number(r.premio) || 0), 0);
   kpiTotal.textContent = fmtMoney(total);
 }
@@ -277,7 +301,7 @@ function renderTabela(data){
           <td>${escapeHtml(r.agenciaId || "-")}</td>
           <td>${escapeHtml(r.rmNome || "-")}</td>
           <td>${escapeHtml(r.ramo || "-")}</td>
-          <td class="money nowrap">${fmtMoney(Number(r.premio)||0)}</td>
+          <td class="money nowrap">${fmtMoney(r.premio)}</td>
           <td>${escapeHtml(r.seguradora || "-")}</td>
           <td class="muted">${escapeHtml(r.observacoes || "-")}</td>
         </tr>
@@ -294,6 +318,5 @@ function escapeHtml(s){
 
 // ======== Boot
 (async function init(){
-  // Preenche meses logo de cara; demais selects serão populados depois do load
   await carregarDados();
 })();
