@@ -21,7 +21,7 @@ window.addEventListener("DOMContentLoaded", () => {
         carregarEmpresas(),
         carregarRamos(),
         carregarRM(),
-        carregarStatus(),
+        carregarStatus(), // versão robusta
       ]);
     } catch (e) {
       console.error("Erro inicial:", e);
@@ -122,19 +122,67 @@ async function carregarRM() {
 async function carregarStatus() {
   const select = document.getElementById("filtroStatus");
   if (!select) return;
+
+  // sempre recria o select
   select.innerHTML = `<option value="">Todos</option>`;
 
   try {
-    const snap = await db.doc("status-negociacao/config").get();
-    const status = snap.data()?.statusFinais || [];
-    status.forEach(s => {
-      const opt = document.createElement("option");
-      opt.value = s;
-      opt.textContent = s;
-      select.appendChild(opt);
-    });
+    // 1) Tenta ler do doc de configuração
+    const cfg = await db.doc("status-negociacao/config").get();
+    let lista = [];
+
+    if (cfg.exists) {
+      const arr = cfg.data()?.statusFinais;
+      if (Array.isArray(arr) && arr.length) {
+        lista = arr;
+      }
+    }
+
+    // 2) Se não veio da config, coleta dos próprios registros
+    if (!lista.length) {
+      let q = db.collection("cotacoes-gerentes");
+      if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
+      const snap = await q.get();
+      const uniq = new Set();
+      snap.forEach(doc => { const s = doc.data().status; if (s) uniq.add(s); });
+      lista = Array.from(uniq);
+    }
+
+    // 3) Se ainda vazio, aplica fallback padrão
+    if (!lista.length) {
+      lista = [
+        "Negócio Emitido",
+        "Pendente Agência",
+        "Pendente Corretor",
+        "Pendente Seguradora",
+        "Pendente Cliente",
+        "Recusado Cliente",
+        "Recusado Seguradora",
+        "Emitido Declinado",
+        "Em Emissão",
+        "Negócio Fechado",
+        "Negócio iniciado"
+      ];
+    }
+
+    // popula o select (ordenado)
+    lista
+      .filter(Boolean)
+      .sort((a,b)=>a.localeCompare(b,'pt-BR'))
+      .forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        select.appendChild(opt);
+      });
+
   } catch (err) {
     console.error("Erro ao carregar status:", err);
+    // fallback mínimo para não quebrar a UI
+    ["Negócio iniciado","Em Emissão","Negócio Emitido","Negócio Fechado"].forEach(s=>{
+      const opt = document.createElement("option");
+      opt.value = s; opt.textContent = s; select.appendChild(opt);
+    });
   }
 }
 
@@ -234,7 +282,7 @@ function carregarCotacoesComFiltros() {
         return;
       }
 
-      // ⬇⬇⬇ ADICIONADO "RM" ENTRE EMPRESA E RAMO
+      // ADICIONADO "RM" ENTRE EMPRESA E RAMO
       let html = `<table><thead><tr>
         <th>Empresa</th><th>RM</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
       </tr></thead><tbody>`;
