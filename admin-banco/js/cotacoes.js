@@ -21,7 +21,7 @@ window.addEventListener("DOMContentLoaded", () => {
         carregarEmpresas(),
         carregarRamos(),
         carregarRM(),
-        carregarStatus(), // versão robusta
+        carregarStatus(), // lê status-negociacao/config.statusFinais
       ]);
     } catch (e) {
       console.error("Erro inicial:", e);
@@ -68,7 +68,6 @@ async function carregarRamos() {
   try {
     snap = await db.collection("ramos-seguro").orderBy("ordem").get();
   } catch {
-    // fallback sem orderBy (se faltar o campo)
     snap = await db.collection("ramos-seguro").get();
   }
 
@@ -96,7 +95,6 @@ async function carregarRM() {
   select.innerHTML = `<option value="">Todos</option>`;
 
   try {
-    // Respeita as regras: admin vê tudo; demais, só cotações do próprio usuário.
     let q = db.collection("cotacoes-gerentes");
     if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
 
@@ -115,74 +113,32 @@ async function carregarRM() {
     });
   } catch (err) {
     console.error("Erro ao carregar RM:", err);
-    // não bloqueia a página
   }
 }
 
+// === STATUS direto de status-negociacao/config.statusFinais ===
 async function carregarStatus() {
   const select = document.getElementById("filtroStatus");
   if (!select) return;
 
-  // sempre recria o select
   select.innerHTML = `<option value="">Todos</option>`;
 
   try {
-    // 1) Tenta ler do doc de configuração
-    const cfg = await db.doc("status-negociacao/config").get();
-    let lista = [];
-
-    if (cfg.exists) {
-      const arr = cfg.data()?.statusFinais;
-      if (Array.isArray(arr) && arr.length) {
-        lista = arr;
-      }
+    const snap = await db.collection("status-negociacao").doc("config").get();
+    if (snap.exists) {
+      const lista = snap.data()?.statusFinais || [];
+      lista
+        .filter(s => typeof s === "string" && s.trim())
+        .sort((a,b) => a.localeCompare(b, 'pt-BR'))
+        .forEach(s => {
+          const opt = document.createElement("option");
+          opt.value = s;
+          opt.textContent = s;
+          select.appendChild(opt);
+        });
     }
-
-    // 2) Se não veio da config, coleta dos próprios registros
-    if (!lista.length) {
-      let q = db.collection("cotacoes-gerentes");
-      if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
-      const snap = await q.get();
-      const uniq = new Set();
-      snap.forEach(doc => { const s = doc.data().status; if (s) uniq.add(s); });
-      lista = Array.from(uniq);
-    }
-
-    // 3) Se ainda vazio, aplica fallback padrão
-    if (!lista.length) {
-      lista = [
-        "Negócio Emitido",
-        "Pendente Agência",
-        "Pendente Corretor",
-        "Pendente Seguradora",
-        "Pendente Cliente",
-        "Recusado Cliente",
-        "Recusado Seguradora",
-        "Emitido Declinado",
-        "Em Emissão",
-        "Negócio Fechado",
-        "Negócio iniciado"
-      ];
-    }
-
-    // popula o select (ordenado)
-    lista
-      .filter(Boolean)
-      .sort((a,b)=>a.localeCompare(b,'pt-BR'))
-      .forEach(s => {
-        const opt = document.createElement("option");
-        opt.value = s;
-        opt.textContent = s;
-        select.appendChild(opt);
-      });
-
   } catch (err) {
     console.error("Erro ao carregar status:", err);
-    // fallback mínimo para não quebrar a UI
-    ["Negócio iniciado","Em Emissão","Negócio Emitido","Negócio Fechado"].forEach(s=>{
-      const opt = document.createElement("option");
-      opt.value = s; opt.textContent = s; select.appendChild(opt);
-    });
   }
 }
 
@@ -208,7 +164,7 @@ async function criarNovaCotacao() {
   const empresaId = document.getElementById("novaEmpresa").value;
   const ramo = document.getElementById("novaRamo").value;
   const valorFmt = document.getElementById("novaValor").value;
-  const valor = desformatarMoeda(valorFmt);
+  const valor = desformatarMoeda(valorFmt); // definido no HTML
   const obs = document.getElementById("novaObservacoes").value.trim();
   const empresa = empresasCache.find(e => e.id === empresaId);
 
@@ -268,7 +224,6 @@ function carregarCotacoesComFiltros() {
       const status = document.getElementById("filtroStatus").value;
 
       cotacoes = cotacoes.filter(c => {
-        // suporta Timestamp (toDate) e string
         const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
         if (ini && d && d < new Date(ini)) return false;
         if (fim && d && d > new Date(fim + "T23:59:59")) return false;
@@ -282,7 +237,6 @@ function carregarCotacoesComFiltros() {
         return;
       }
 
-      // ADICIONADO "RM" ENTRE EMPRESA E RAMO
       let html = `<table><thead><tr>
         <th>Empresa</th><th>RM</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
       </tr></thead><tbody>`;
@@ -327,7 +281,6 @@ function editarCotacao(id) {
     document.getElementById("empresa").value = c.empresaId || "";
     document.getElementById("ramo").value = c.ramo || "";
 
-    // exibe valor formatado
     const inputValor = document.getElementById("valorEstimado");
     const num = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
     inputValor.value = "R$ " + num.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
