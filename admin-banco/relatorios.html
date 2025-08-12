@@ -15,16 +15,6 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 
-  <!-- Firebase app (preencha a config se necessário) -->
-  <script type="module">
-    import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-    const firebaseConfig = {
-      /* TODO: se esta página for standalone, cole aqui sua config Firebase */
-      // apiKey: "...", authDomain: "...", projectId: "...", appId: "..."
-    };
-    if (!getApps().length && firebaseConfig.projectId) { initializeApp(firebaseConfig); }
-  </script>
-
   <style>
     .card { background:#fff; border-radius:1rem; box-shadow:0 10px 30px rgba(0,0,0,.06); padding:1.25rem; }
     .kpi .label{ font-size:.85rem; color:#64748b }
@@ -46,9 +36,19 @@
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
+
+  <!-- Banner de erro/diagnóstico -->
+  <div id="banner" class="hidden px-4 py-3 bg-rose-50 text-rose-700 border border-rose-200"></div>
+
+  <!-- Header -->
   <header class="sticky top-0 z-20 backdrop-blur bg-white/70 border-b border-slate-100">
     <div class="max-w-7xl mx-auto px-3 py-3 flex flex-col md:flex-row md:items-center gap-3">
-      <h1 class="text-xl font-semibold">Relatórios & Insights</h1>
+      <div class="flex items-center gap-3">
+        <h1 class="text-xl font-semibold">Relatórios & Insights</h1>
+        <span id="diag-app" class="badge">app: —</span>
+        <span id="diag-user" class="badge">user: —</span>
+        <span id="diag-col" class="badge">col: —</span>
+      </div>
       <div class="md:ml-auto flex items-center gap-2">
         <button id="btn-save-view" class="btn-ghost">Salvar filtros</button>
         <button id="btn-load-view" class="btn-ghost">Carregar filtros</button>
@@ -57,6 +57,7 @@
     </div>
   </header>
 
+  <!-- Filtros -->
   <section class="max-w-7xl mx-auto px-3 mt-4">
     <div class="card">
       <div class="grid md:grid-cols-6 sm:grid-cols-2 gap-3">
@@ -77,6 +78,7 @@
     </div>
   </section>
 
+  <!-- KPIs -->
   <section class="max-w-7xl mx-auto px-3 mt-4">
     <div class="grid-auto-fit">
       <div class="card kpi"><div class="label">Prêmio total</div><div id="kpi-premio" class="value">—</div><div id="kpi-premio-delta" class="delta"></div></div>
@@ -87,6 +89,7 @@
     </div>
   </section>
 
+  <!-- Charts -->
   <section class="max-w-7xl mx-auto px-3 mt-4 grid grid-cols-1 lg:grid-cols-6 gap-4">
     <div class="chart-wrap lg:col-span-2">
       <div class="flex items-center justify-between mb-2"><h3 class="font-semibold">Distribuição por Status</h3><span id="legend-status" class="badge">—</span></div>
@@ -110,9 +113,13 @@
     </div>
   </section>
 
+  <!-- Tabela -->
   <section class="max-w-7xl mx-auto px-3 my-6">
     <div class="card">
-      <div class="flex items-center justify-between mb-3"><h3 class="font-semibold">Resultados do filtro</h3><div class="text-xs text-slate-500">Mostrando <span id="lbl-count">0</span> registros</div></div>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold">Resultados do filtro</h3>
+        <div class="text-xs text-slate-500">Mostrando <span id="lbl-count">0</span> registros</div>
+      </div>
       <div class="overflow-x-auto">
         <table class="table" id="tabela">
           <thead><tr>
@@ -125,16 +132,54 @@
     </div>
   </section>
 
-  <!-- === JS INLINE (era o relatorios.js) === -->
+  <!-- === JS INLINE === -->
   <script type="module">
-    // -------- CONFIG --------
+    // 1) Firebase init robusto
+    import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+    import { getFirestore, collection, query, where, orderBy, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+    const banner = document.getElementById('banner');
+    const showBanner = (msg) => { banner.textContent = msg; banner.classList.remove('hidden'); };
+
+    // Preencha se esta página não tiver init global:
+    const firebaseConfig = window.FIREBASE_CONFIG || {
+      // apiKey: "...",
+      // authDomain: "...",
+      // projectId: "...",
+      // appId: "..."
+    };
+
+    let app;
+    try{
+      if(!getApps().length){
+        if(firebaseConfig && firebaseConfig.projectId){
+          app = initializeApp(firebaseConfig);
+        } else {
+          // Sem config e sem app existente
+          showBanner("Firebase não inicializado nesta página. Preencha a firebaseConfig ou inclua o script global que já inicializa o app.");
+        }
+      } else {
+        app = getApp();
+      }
+    }catch(e){
+      console.error("Erro ao inicializar Firebase:", e);
+      showBanner("Erro ao inicializar Firebase: " + e.message);
+    }
+
+    const auth = app ? getAuth(app) : null;
+    const db   = app ? getFirestore(app) : null;
+
+    // badges de diagnóstico
+    const setDiag = (id, txt) => document.getElementById(id).textContent = txt;
+
+    // 2) Config & helpers
+    const url = new URL(location.href);
+    const colOverride = url.searchParams.get("col"); // ?col=cotacoes para forçar
     const CFG = {
-      collections: {
-        cotacoes: "cotacoes-gerentes",
-        agencias:  "agencias",
-        usuarios:  "usuarios_banco",
-        empresas:  "empresas",
-      },
+      collectionsTry: colOverride ? [colOverride] : ["cotacoes-gerentes", "cotacoes"],
+      agencias: "agencias",
+      usuarios: "usuarios_banco",
       fields: {
         createdAt: ["createdAt","dataCriacao","criadoEm","data"],
         updatedAt: ["updatedAt","atualizadoEm"],
@@ -161,18 +206,11 @@
       dateFmt(d){ const dd=String(d.getDate()).padStart(2,"0"); const mm=String(d.getMonth()+1).padStart(2,"0"); return `${dd}/${mm}/${d.getFullYear()}`; }
     };
 
-    // Firebase imports
-    import { getFirestore, collection, query, where, orderBy, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
-    import { getApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-    const db = getFirestore(getApp());
-
-    // Utils
     const $ = s=>document.querySelector(s);
     const $$= s=>Array.from(document.querySelectorAll(s));
     function pick(o,keys,f=null){ for(const k of keys){ if(o&&o[k]!=null) return o[k]; } return f; }
     function parseMaybeDate(v){ if(!v) return null; if(v instanceof Timestamp) return v.toDate(); if(v.toDate) return v.toDate(); if(v instanceof Date) return v;
-      if(typeof v==="string"){ const m=v.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(m){ return new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),12,0,0); }
-        const d=new Date(v); if(!isNaN(d)) return d; } return null; }
+      if(typeof v==="string"){ const m=v.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(m){ return new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),12,0,0); } const d=new Date(v); if(!isNaN(d)) return d; } return null; }
     function normalizeStatus(s){ if(!s) return "Sem status"; return CFG.statusAliases[s] || s; }
     function isEmitido(s){ return CFG.fields.statusEmitidoMatch.includes(normalizeStatus(s)); }
     function toNumberPremio(v){ if(typeof v==="number") return v; if(typeof v==="string"){ const n=parseFloat(v.replace(/[R$\s\.]/g,"").replace(",","."));
@@ -188,16 +226,24 @@
       const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 
     // Estado
-    let state={ raw:[], filtered:[], yoy:false, agenciaMap:new Map(), rmMap:new Map(), statusSet:new Set(), ramoSet:new Set(), seguradoraSet:new Set() };
+    let state={ raw:[], filtered:[], yoy:false, agenciaMap:new Map(), rmMap:new Map(), statusSet:new Set(), ramoSet:new Set(), seguradoraSet:new Set(), colUsada:"—" };
 
     // Init
-    init().catch(console.error);
+    if(app && db){
+      setDiag("diag-app", "app: "+(app.options.projectId||"sem-id"));
+      onAuthStateChanged(auth,(user)=>{
+        setDiag("diag-user", user ? ("user: "+(user.email||user.uid)) : "user: anon");
+      });
+      init().catch(e=>{ console.error(e); showBanner("Falha ao iniciar relatórios: "+e.message); });
+    }
+
     async function init(){
       initEvents();
       await carregarLookups();
       setDefaultDates();
       await aplicarFiltros();
     }
+
     function initEvents(){
       $("#btn-aplicar").addEventListener("click", aplicarFiltros);
       $("#btn-limpar").addEventListener("click", ()=>{ $$("select").forEach(s=>s.value=""); $("#f-empresa").value=""; $("#f-tipo").value=""; setDefaultDates(true); });
@@ -207,69 +253,109 @@
       $("#chk-yoy").addEventListener("change", e=>{ state.yoy=e.target.checked; desenhar(); });
       $("#f-agencia").addEventListener("change", filtrarRMsPorAgencia);
     }
-    function setDefaultDates(keep=false){ const hoje=new Date(); const inicio=new Date(hoje.getFullYear(),hoje.getMonth(),1);
-      if(!keep){ $("#f-data-inicio").value=inicio.toISOString().substring(0,10); $("#f-data-fim").value=hoje.toISOString().substring(0,10); } }
+
+    function setDefaultDates(keep=false){
+      const hoje=new Date();
+      const inicio=new Date(hoje.getFullYear(),hoje.getMonth(),1);
+      if(!keep){
+        $("#f-data-inicio").value=inicio.toISOString().substring(0,10);
+        $("#f-data-fim").value=hoje.toISOString().substring(0,10);
+      }
+    }
 
     async function carregarLookups(){
       try{
-        const snapAg = await getDocs(collection(db, CFG.collections.agencias));
+        const snapAg = await getDocs(collection(db, CFG.agencias));
         const selAg = $("#f-agencia"); selAg.innerHTML = `<option value="">Todas</option>`;
         snapAg.forEach(doc=>{ const d=doc.data(); const nome=d.nome||d.descricao||d.titulo||doc.id; state.agenciaMap.set(doc.id,nome);
           const opt=document.createElement("option"); opt.value=doc.id; opt.textContent=nome; selAg.appendChild(opt); });
       }catch(e){ console.warn("Agencias lookup:",e); }
       try{
-        const snapU = await getDocs(collection(db, CFG.collections.usuarios));
+        const snapU = await getDocs(collection(db, CFG.usuarios));
         const selRM = $("#f-rm"); selRM.innerHTML=`<option value="">Todos</option>`;
         snapU.forEach(doc=>{ const d=doc.data(); const nome=d.nome||d.displayName||d.email||doc.id; state.rmMap.set(doc.id,nome);
           const opt=document.createElement("option"); opt.value=doc.id; opt.textContent=`${nome}${d.agenciaId?` — ${state.agenciaMap.get(d.agenciaId)||d.agenciaId}`:""}`; opt.dataset.agenciaId=d.agenciaId||""; selRM.appendChild(opt); });
       }catch(e){ console.warn("Usuarios lookup:",e); }
     }
-    function filtrarRMsPorAgencia(){ const ag=$("#f-agencia").value; const selRM=$("#f-rm"); const all=Array.from(selRM.querySelectorAll("option"));
+
+    function filtrarRMsPorAgencia(){
+      const ag=$("#f-agencia").value;
+      const selRM=$("#f-rm");
+      const all=Array.from(selRM.querySelectorAll("option"));
       all.forEach(o=>{ if(!o.value){ o.hidden=false; return; } const a=o.dataset.agenciaId||""; o.hidden = ag && a && a!==ag; });
-      if(ag){ const curr=selRM.value; const currOpt=selRM.querySelector(`option[value="${curr}"]`); if(curr && currOpt && currOpt.hidden) selRM.value=""; } }
+      if(ag){ const curr=selRM.value; const currOpt=selRM.querySelector(`option[value="${curr}"]`); if(curr && currOpt && currOpt.hidden) selRM.value=""; }
+    }
+
+    async function tryLoadFromCollection(colName, di, df){
+      // tenta query por timestamp; fallback getDocs
+      let snap=null; const colRef=collection(db, colName);
+      for(const key of CFG.fields.createdAt){
+        try{
+          if(di&&df){
+            const qRef=query(colRef, where(key,">=",Timestamp.fromDate(di)), where(key,"<=",Timestamp.fromDate(df)), orderBy(key,"asc"));
+            snap=await getDocs(qRef);
+            console.log(`[${colName}] query por campo de data "${key}" => ${snap.size} docs`);
+            return {snap, dateField:key};
+          }
+        }catch(e){ /* campo pode ser string, ignora */ }
+      }
+      snap = await getDocs(colRef);
+      console.log(`[${colName}] fallback getDocs => ${snap.size} docs`);
+      return {snap, dateField:null};
+    }
 
     async function aplicarFiltros(){
       const diStr=$("#f-data-inicio").value, dfStr=$("#f-data-fim").value;
       const di=diStr?new Date(diStr+"T00:00:00"):null, df=dfStr?new Date(dfStr+"T23:59:59"):null;
 
-      let snap=null; const colRef=collection(db, CFG.collections.cotacoes);
-      for(const key of CFG.fields.createdAt){
-        try{
-          if(di&&df){
-            const qRef=query(colRef, where(key,">=",Timestamp.fromDate(di)), where(key,"<=",Timestamp.fromDate(df)), orderBy(key,"asc"));
-            snap=await getDocs(qRef); break;
-          }
-        }catch(e){ /* ignora, pode ser string */ }
+      let dados = [];
+      let colUsada = null;
+      let tentativas = [];
+
+      for(const colName of CFG.collectionsTry){
+        const {snap, dateField} = await tryLoadFromCollection(colName, di, df);
+        tentativas.push({col:colName, size:snap.size, dateField});
+        if(snap.size>0){ // monta dados dessa coleção e encerra
+          colUsada = colName;
+          snap.forEach(doc=>{
+            const d=doc.data();
+            const createdRaw=pick(d,CFG.fields.createdAt)||pick(d,CFG.fields.updatedAt);
+            const dt=parseMaybeDate(createdRaw);
+            if(di&&df&&dt&&(dt<di || dt>df)) return;
+            const row={
+              id:doc.id,
+              data:dt,
+              empresa: pick(d,CFG.fields.empresaNome)||"",
+              empresaId: pick(d,CFG.fields.empresaId)||"",
+              agenciaId: pick(d,CFG.fields.agenciaId)||"",
+              agenciaNome: pick(d,CFG.fields.agenciaNome) || (d.agenciaId ? (state.agenciaMap.get(d.agenciaId)||d.agenciaId):""),
+              rmUid: pick(d,CFG.fields.rmUid)||"",
+              rmNome: pick(d,CFG.fields.rmNome) || "",
+              status: normalizeStatus(pick(d,CFG.fields.status)||""),
+              ramo: pick(d,CFG.fields.ramo)||"",
+              seguradora: pick(d,CFG.fields.seguradora)||"",
+              tipo: pick(d,CFG.fields.tipo)||"",
+              premio: toNumberPremio(pick(d,CFG.fields.premio)||0)
+            };
+            if(!row.rmNome && row.rmUid) row.rmNome = state.rmMap.get(row.rmUid)||"";
+            dados.push(row);
+          });
+          break;
+        }
       }
-      if(!snap){ snap=await getDocs(colRef); }
 
-      const dados=[];
-      snap.forEach(doc=>{
-        const d=doc.data();
-        const createdRaw=pick(d,CFG.fields.createdAt)||pick(d,CFG.fields.updatedAt);
-        const dt=parseMaybeDate(createdRaw);
-        if(di&&df&&dt&&(dt<di || dt>df)) return;
-        const row={
-          id:doc.id,
-          data:dt,
-          empresa: pick(d,CFG.fields.empresaNome)||"",
-          empresaId: pick(d,CFG.fields.empresaId)||"",
-          agenciaId: pick(d,CFG.fields.agenciaId)||"",
-          agenciaNome: pick(d,CFG.fields.agenciaNome) || (d.agenciaId ? (state.agenciaMap.get(d.agenciaId)||d.agenciaId):""),
-          rmUid: pick(d,CFG.fields.rmUid)||"",
-          rmNome: pick(d,CFG.fields.rmNome) || "",
-          status: normalizeStatus(pick(d,CFG.fields.status)||""),
-          ramo: pick(d,CFG.fields.ramo)||"",
-          seguradora: pick(d,CFG.fields.seguradora)||"",
-          tipo: pick(d,CFG.fields.tipo)||"",
-          premio: toNumberPremio(pick(d,CFG.fields.premio)||0)
-        };
-        // se não veio rmNome, tenta mapear
-        if(!row.rmNome && row.rmUid) row.rmNome = state.rmMap.get(row.rmUid)||"";
-        dados.push(row);
-      });
+      state.colUsada = colUsada || "—";
+      setDiag("diag-col", "col: "+state.colUsada);
 
-      state.raw=dados;
+      if(!dados.length){
+        const resumo = tentativas.map(t=> `${t.col}: ${t.size} docs${t.dateField?` (data=${t.dateField})`:""}`).join(" | ");
+        showBanner("Nenhum registro encontrado no intervalo. Tentativas: "+resumo+" — Dicas: verifique o nome da coleção (?col=...), autenticação e o campo de data.");
+        console.warn("Diagnóstico tentativas:", tentativas);
+      } else {
+        banner.classList.add('hidden');
+      }
+
+      state.raw = dados;
       popularFacetas(dados);
       state.filtered = filtrarMemoria(dados);
       state.yoy = $("#chk-yoy").checked;
@@ -285,6 +371,7 @@
       if(!state.ramoSet.size){ rSel.innerHTML = ramos.map(s=>`<option value="${s}">${s}</option>`).join(""); state.ramoSet=new Set(ramos); }
       if(!state.seguradoraSet.size){ sgSel.innerHTML = segs.map(s=>`<option value="${s}">${s}</option>`).join(""); state.seguradoraSet=new Set(segs); }
     }
+
     function filtrarMemoria(arr){
       const ag=$("#f-agencia").value, rm=$("#f-rm").value;
       const status=new Set(multiSelectValues($("#f-status")));
@@ -303,7 +390,7 @@
       });
     }
 
-    // Desenho
+    // ===== Desenho (igual à versão anterior) =====
     let charts={};
     function destroyCharts(){ Object.values(charts).forEach(ch=>{ try{ ch.destroy(); }catch{} }); charts={}; }
     function desenhar(){ desenharKPIs(); desenharTabela(); destroyCharts(); desenharChartStatus(); desenharChartLinhasYoY(); desenharChartRamo(); desenharChartRM(); desenharChartSeguradora(); }
@@ -313,8 +400,8 @@
       const totalPremio=sum(data,d=>d.premio); const qtd=data.length; const emitidos=data.filter(d=>isEmitido(d.status)).length;
       const conv=qtd?(emitidos/qtd):0; const ticket=qtd?(totalPremio/qtd):0;
       $("#kpi-premio").textContent=CFG.currency.format(totalPremio);
-      $("#kpi-qtd").textContent=new Intl.NumberFormat("pt-BR").format(qtd);
-      $("#kpi-emitidos").textContent=new Intl.NumberFormat("pt-BR").format(emitidos);
+      $("#kpi-qtd").textContent=CFG.number.format(qtd);
+      $("#kpi-emitidos").textContent=CFG.number.format(emitidos);
       $("#kpi-conversao").textContent=(conv*100).toFixed(1)+"%";
       $("#kpi-ticket").textContent=CFG.currency.format(ticket);
 
@@ -334,6 +421,7 @@
         ["premio","qtd","emitidos","conversao","ticket"].forEach(k=>{ document.querySelector(`#kpi-${k}-delta`).textContent=""; });
       }
     }
+
     function desenharTabela(){
       const tb=$("#tbody"); tb.innerHTML="";
       const data=state.filtered.slice().sort((a,b)=>(b.data?.getTime()||0)-(a.data?.getTime()||0));
@@ -355,13 +443,14 @@
       }
       tb.appendChild(frag);
     }
+
     function baseChartCfg(){
       return {
         plugins:[ChartDataLabels],
         options:{ responsive:true, maintainAspectRatio:false,
           plugins:{ legend:{position:'bottom'},
             datalabels:{ formatter:(v)=> typeof v==="number"?Math.round(v):"", anchor:'end', align:'top', offset:4, clamp:true },
-            tooltip:{ callbacks:{ label:(ctx)=>{ const y=ctx.parsed?.y ?? ctx.parsed; return typeof y==="number"?` ${new Intl.NumberFormat('pt-BR', {style:'currency',currency:'BRL'}).format(y)}`:` ${y}`; } } }
+            tooltip:{ callbacks:{ label:(ctx)=>{ const y=ctx.parsed?.y ?? ctx.parsed; return typeof y==="number"?` ${new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(y)}`:` ${y}`; } } }
           },
           scales:{ x:{ ticks:{maxRotation:0,autoSkip:true} }, y:{ beginAtZero:true } }
         }
@@ -374,47 +463,45 @@
       const cfg=baseChartCfg(); cfg.data={ labels, datasets:[{ type:'doughnut', data:counts }] };
       cfg.options.plugins.datalabels.formatter=(v)=> new Intl.NumberFormat("pt-BR").format(v);
       cfg.options.plugins.tooltip.callbacks.label=(ctx)=>` ${ctx.label}: ${new Intl.NumberFormat("pt-BR").format(ctx.parsed)}`;
-      window.chartStatus = new Chart(document.getElementById("chartStatus"), cfg);
+      new Chart(document.getElementById("chartStatus"), cfg);
     }
     function desenharChartLinhasYoY(){
-      const diStr=$("#f-data-inicio").value, dfStr=$("#f-data-fim").value; if(!diStr||!dfStr) return;
-      const di=new Date(diStr); const year=di.getFullYear();
+      const diStr=$("#f-data-inicio").value; if(!diStr) return;
+      const year=new Date(diStr).getFullYear();
       const months=rangeMonths(year);
       const dataCurr=state.filtered.filter(d=>d.data && d.data.getFullYear()===year);
       const gCurr=new Map(months.map(m=>[m,0])); dataCurr.forEach(d=>{ const k=monthKey(d.data); gCurr.set(k,(gCurr.get(k)||0)+(d.premio||0)); });
 
       const monthsPrev=rangeMonths(year-1);
-      const dataPrevRaw=state.raw.filter(d=>d.data && d.data.getFullYear()===(year-1));
-      const dataPrev=filtrarMemoria(dataPrevRaw);
+      const dataPrev=filtrarMemoria(state.raw.filter(d=>d.data && d.data.getFullYear()===(year-1)));
       const gPrev=new Map(monthsPrev.map(m=>[m,0])); dataPrev.forEach(d=>{ const k=monthKey(d.data); gPrev.set(k,(gPrev.get(k)||0)+(d.premio||0)); });
 
       $("#legend-linhas").textContent=`Ano ${year}${$("#chk-yoy").checked?` vs ${year-1}`:""}`;
-
       const cfg=baseChartCfg();
       cfg.data={ labels:months.map(m=> m.split("-")[1]+"/"+m.split("-")[0].slice(-2)),
         datasets:[{ label:String(year), type:'line', data:months.map(m=>gCurr.get(m)||0), tension:.3 }] };
       if($("#chk-yoy").checked){ cfg.data.datasets.push({ label:String(year-1), type:'line', data:monthsPrev.map(m=>gPrev.get(m)||0), tension:.3 }); }
       cfg.options.plugins.datalabels.display=false;
-      window.chartLinhas=new Chart(document.getElementById("chartLinhas"), cfg);
+      new Chart(document.getElementById("chartLinhas"), cfg);
     }
     function topEntries(obj,limit=10){ const arr=Object.entries(obj); return arr.sort((a,b)=>b[1]-a[1]).slice(0,limit); }
     function desenharChartRamo(){
       const grp={}; state.filtered.forEach(d=>{ const k=d.ramo||"—"; grp[k]=(grp[k]||0)+(d.premio||0); });
       const top=topEntries(grp,10); $("#legend-ramo").textContent=`${top.length} ramos (Top 10)`;
       const cfg=baseChartCfg(); cfg.data={ labels:top.map(t=>t[0]), datasets:[{ type:'bar', data:top.map(t=>t[1]) }] };
-      window.chartRamo=new Chart(document.getElementById("chartRamo"), cfg);
+      new Chart(document.getElementById("chartRamo"), cfg);
     }
     function desenharChartRM(){
       const grp={}; state.filtered.forEach(d=>{ const k=d.rmNome||"—"; grp[k]=(grp[k]||0)+(d.premio||0); });
       const top=topEntries(grp,10); $("#legend-rm").textContent=`${top.length} RMs (Top 10)`;
       const cfg=baseChartCfg(); cfg.data={ labels:top.map(t=>t[0]), datasets:[{ type:'bar', data:top.map(t=>t[1]) }] };
-      cfg.options.indexAxis='y'; window.chartRM=new Chart(document.getElementById("chartRM"), cfg);
+      cfg.options.indexAxis='y'; new Chart(document.getElementById("chartRM"), cfg);
     }
     function desenharChartSeguradora(){
       const grp={}; state.filtered.forEach(d=>{ const k=d.seguradora||"—"; grp[k]=(grp[k]||0)+(d.premio||0); });
       const arr=Object.entries(grp); $("#legend-seguradora").textContent=`${arr.length} seguradoras`;
       const cfg=baseChartCfg(); cfg.data={ labels:arr.map(t=>t[0]), datasets:[{ type:'bar', data:arr.map(t=>t[1]) }] };
-      window.chartSeguradora=new Chart(document.getElementById("chartSeguradora"), cfg);
+      new Chart(document.getElementById("chartSeguradora"), cfg);
     }
 
     // Exportar CSV
@@ -449,4 +536,12 @@
       $("#f-tipo").value=f.tipo||""; $("#f-empresa").value=f.empresa||""; $("#chk-yoy").checked=!!f.yoy;
     }
     function saveView(){ const name=prompt("Nome para salvar esta combinação de filtros:"); if(!name) return;
-      const key=`relatorios:view:${name}`; localStorage.setItem(key, J
+      const key=`relatorios:view:${name}`; localStorage.setItem(key, JSON.stringify(getFilters())); alert("Vista salva!"); }
+    function loadView(){ const keys=Object.keys(localStorage).filter(k=>k.startsWith("relatorios:view:")); if(!keys.length){ alert("Nenhuma vista salva."); return; }
+      const name=prompt(`Qual vista carregar?\n\n${keys.map(k=>"- "+k.replace("relatorios:view:","")).join("\n")}`); if(!name) return;
+      const key=`relatorios:view:${name}`; const v=localStorage.getItem(key); if(!v){ alert("Vista não encontrada."); return; }
+      setFilters(JSON.parse(v)); aplicarFiltros();
+    }
+  </script>
+</body>
+</html>
