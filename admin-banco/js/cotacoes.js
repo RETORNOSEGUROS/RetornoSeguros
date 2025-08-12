@@ -21,7 +21,7 @@ window.addEventListener("DOMContentLoaded", () => {
         carregarEmpresas(),
         carregarRamos(),
         carregarRM(),
-        carregarStatus(), // lê status-negociacao/config.statusFinais
+        carregarStatus(), // robusto com fallback
       ]);
     } catch (e) {
       console.error("Erro inicial:", e);
@@ -95,6 +95,7 @@ async function carregarRM() {
   select.innerHTML = `<option value="">Todos</option>`;
 
   try {
+    // Respeita as regras: admin vê tudo; demais, só cotações do próprio usuário.
     let q = db.collection("cotacoes-gerentes");
     if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
 
@@ -113,32 +114,54 @@ async function carregarRM() {
     });
   } catch (err) {
     console.error("Erro ao carregar RM:", err);
+    // não bloqueia a página
   }
 }
 
-// === STATUS direto de status-negociacao/config.statusFinais ===
+// === STATUS com fallback (config -> cotacoes-gerentes) ===
 async function carregarStatus() {
   const select = document.getElementById("filtroStatus");
   if (!select) return;
 
+  // Base do select
   select.innerHTML = `<option value="">Todos</option>`;
 
+  // Helper para preencher
+  const preencher = (lista = []) => {
+    Array.from(new Set(lista))
+      .filter(s => typeof s === "string" && s.trim())
+      .sort((a, b) => a.localeCompare(b, "pt-BR"))
+      .forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        select.appendChild(opt);
+      });
+  };
+
   try {
+    // 1) Tenta ler a config
     const snap = await db.collection("status-negociacao").doc("config").get();
-    if (snap.exists) {
-      const lista = snap.data()?.statusFinais || [];
-      lista
-        .filter(s => typeof s === "string" && s.trim())
-        .sort((a,b) => a.localeCompare(b, 'pt-BR'))
-        .forEach(s => {
-          const opt = document.createElement("option");
-          opt.value = s;
-          opt.textContent = s;
-          select.appendChild(opt);
-        });
+    const lista = snap.exists ? (snap.data()?.statusFinais || []) : [];
+    if (lista.length) {
+      preencher(lista);
+      return;
     }
+    // Se veio vazio, força fallback
+    throw new Error("config-vazia");
   } catch (err) {
-    console.error("Erro ao carregar status:", err);
+    console.warn("Status via config indisponível, usando fallback:", err?.message || err);
+    // 2) Fallback: deduz dos registros (respeitando permissão)
+    try {
+      let q = db.collection("cotacoes-gerentes");
+      if (!isAdmin) q = q.where("criadoPorUid", "==", usuarioAtual.uid);
+      const snap = await q.get();
+      const uniq = new Set();
+      snap.forEach(doc => { const s = doc.data()?.status; if (s) uniq.add(s); });
+      preencher(Array.from(uniq));
+    } catch (e2) {
+      console.error("Erro no fallback de status:", e2);
+    }
   }
 }
 
@@ -164,7 +187,7 @@ async function criarNovaCotacao() {
   const empresaId = document.getElementById("novaEmpresa").value;
   const ramo = document.getElementById("novaRamo").value;
   const valorFmt = document.getElementById("novaValor").value;
-  const valor = desformatarMoeda(valorFmt); // definido no HTML
+  const valor = desformatarMoeda(valorFmt); // função está no HTML
   const obs = document.getElementById("novaObservacoes").value.trim();
   const empresa = empresasCache.find(e => e.id === empresaId);
 
@@ -224,6 +247,7 @@ function carregarCotacoesComFiltros() {
       const status = document.getElementById("filtroStatus").value;
 
       cotacoes = cotacoes.filter(c => {
+        // suporta Timestamp (toDate) e string
         const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
         if (ini && d && d < new Date(ini)) return false;
         if (fim && d && d > new Date(fim + "T23:59:59")) return false;
@@ -237,6 +261,7 @@ function carregarCotacoesComFiltros() {
         return;
       }
 
+      // Coluna RM adicionada
       let html = `<table><thead><tr>
         <th>Empresa</th><th>RM</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
       </tr></thead><tbody>`;
@@ -281,6 +306,7 @@ function editarCotacao(id) {
     document.getElementById("empresa").value = c.empresaId || "";
     document.getElementById("ramo").value = c.ramo || "";
 
+    // exibe valor formatado
     const inputValor = document.getElementById("valorEstimado");
     const num = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
     inputValor.value = "R$ " + num.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
