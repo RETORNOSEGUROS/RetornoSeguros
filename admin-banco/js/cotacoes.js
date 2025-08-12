@@ -234,8 +234,9 @@ function carregarCotacoesComFiltros() {
         return;
       }
 
+      // ⬇⬇⬇ ADICIONADO "RM" ENTRE EMPRESA E RAMO
       let html = `<table><thead><tr>
-        <th>Empresa</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
+        <th>Empresa</th><th>RM</th><th>Ramo</th><th>Valor</th><th>Status</th><th>Data</th><th>Ações</th>
       </tr></thead><tbody>`;
 
       cotacoes.forEach(c => {
@@ -247,6 +248,7 @@ function carregarCotacoesComFiltros() {
 
         html += `<tr>
           <td data-label="Empresa">${c.empresaNome || "-"}</td>
+          <td data-label="RM">${c.rmNome || "-"}</td>
           <td data-label="Ramo">${c.ramo || "-"}</td>
           <td data-label="Valor">${valor}</td>
           <td data-label="Status">${c.status || "-"}</td>
