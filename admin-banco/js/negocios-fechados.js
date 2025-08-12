@@ -11,8 +11,8 @@ let mapaAgencia = new Map();    // agenciaId -> nome
 let ramosUnicos = new Set();    // para filtro
 let agenciasUnicas = new Set(); // nomes prontos para filtro
 
-// Utils ------------------------------------------------------------
-const fmtBRL = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
+// ===== Utils ======================================================
+const fmtBRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 function money(n){
   if (n === undefined || n === null || isNaN(n)) return 'R$ 0,00';
@@ -41,7 +41,7 @@ function toISODate(val){
   return '';
 }
 
-// exibe DD/MM/AAAA
+// exibe DD/MM/AAAA na tabela
 function formatDateBR(iso){
   if (!iso) return '-';
   const [y,m,d] = iso.split('-');
@@ -51,7 +51,19 @@ function formatDateBR(iso){
 
 function norm(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
 
-// Boot -------------------------------------------------------------
+// parser seguro p/ "R$ 121.271,78" ou número
+function parsePremio(val){
+  if (val == null) return 0;
+  if (typeof val === 'number') return val;
+  const n = String(val)
+    .replace(/[^\d,.-]/g,'') // remove tudo que não é dígito/virgula/ponto/sinal
+    .replace(/\.(?=\d{3}(?:\D|$))/g,'') // remove pontos de milhar
+    .replace(',','.'); // vírgula decimal -> ponto
+  const f = parseFloat(n);
+  return isNaN(f) ? 0 : f;
+}
+
+// ===== Boot =======================================================
 firebase.auth().onAuthStateChanged(async user => {
   if (!user){ alert('Você precisa estar logado.'); return; }
   await carregarNegocios();
@@ -62,16 +74,17 @@ firebase.auth().onAuthStateChanged(async user => {
   document.getElementById('btnLimpar').addEventListener('click', () => {
     ['fDataIni','fDataFim','fRm','fAgencia','fRamo','fEmpresa'].forEach(id => {
       const el = document.getElementById(id);
-      if (el.tagName === 'SELECT') el.value = '';
-      else el.value = '';
+      if (el) el.value = '';
     });
     aplicarFiltros();
   });
 });
 
-// Dados ------------------------------------------------------------
+// ===== Dados ======================================================
 async function carregarNegocios(){
+  // Apenas "Negócio Emitido"
   const snap = await negociosRef.where('status','==','Negócio Emitido').get();
+
   docsBrutos = [];
   mapaRM.clear(); ramosUnicos.clear(); agenciasUnicas.clear();
 
@@ -85,7 +98,10 @@ async function carregarNegocios(){
       ramo: d.ramo || '-',
       rmNome: d.rmNome || '-',
       rmUid: d.rmUid || d.rmUID || d.rmId || null,
-      premioLiquido: Number(d.premioLiquido) || 0,
+      // >>> NOVO: coalesce + parse
+      premioLiquido: parsePremio(
+        d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? d.valor
+      ),
       inicioVigencia: toISODate(d.inicioVigencia),
       fimVigencia: toISODate(d.fimVigencia)
     };
@@ -99,7 +115,7 @@ async function carregarNegocios(){
   const idsAg = [...new Set([...mapaRM.values()].map(x=>x.agenciaId).filter(Boolean))];
   await carregarAgencias(idsAg);
 
-  // montar set de nomes de agência a partir dos docs
+  // set de nomes de agência para o filtro
   docsBrutos.forEach(d=>{
     const nomeAg = nomeAgenciaPorRmUid(d.rmUid);
     if (nomeAg && nomeAg !== '-') agenciasUnicas.add(nomeAg);
@@ -108,7 +124,7 @@ async function carregarNegocios(){
 
 async function carregarPerfisRM(uids){
   if (!uids.length) return;
-  const reqs = uids.map(uid =>
+  await Promise.all(uids.map(uid =>
     usuariosRef.doc(uid).get().then(ds=>{
       if (ds.exists){
         const u = ds.data();
@@ -121,19 +137,17 @@ async function carregarPerfisRM(uids){
         mapaRM.set(uid, {nome:'',agenciaId:'',agenciaNome:''});
       }
     }).catch(()=> mapaRM.set(uid,{nome:'',agenciaId:'',agenciaNome:''}))
-  );
-  await Promise.all(reqs);
+  ));
 }
 
 async function carregarAgencias(ids){
   if (!ids || !ids.length) return;
-  const reqs = ids.map(id=>{
-    if (!id || mapaAgencia.has(id)) return Promise.resolve();
+  await Promise.all(ids.map(id=>{
+    if (!id || mapaAgencia.has(id)) return;
     return agenciasRef.doc(id).get().then(ds=>{
       mapaAgencia.set(id, ds.exists ? (ds.data().nome || ds.data().descricao || id) : id);
     }).catch(()=> mapaAgencia.set(id, id));
-  });
-  await Promise.all(reqs);
+  }));
 }
 
 function nomeAgenciaPorRmUid(rmUid){
@@ -144,42 +158,48 @@ function nomeAgenciaPorRmUid(rmUid){
   return info.agenciaId || '-';
 }
 
-// Filtros ----------------------------------------------------------
+// ===== Filtros ====================================================
 async function montarFiltros(){
   // RM
   const fRm = document.getElementById('fRm');
-  fRm.innerHTML = `<option value="">Todos</option>`;
-  const vistos = new Set();
-  docsBrutos.forEach(d=>{
-    const chave = d.rmUid || d.rmNome;
-    if (!chave || vistos.has(chave)) return;
-    vistos.add(chave);
-    const rLabel = d.rmNome || (mapaRM.get(d.rmUid)?.nome) || d.rmUid || 'RM';
-    fRm.insertAdjacentHTML('beforeend', `<option value="${chave}">${rLabel}</option>`);
-  });
+  if (fRm){
+    fRm.innerHTML = `<option value="">Todos</option>`;
+    const vistos = new Set();
+    docsBrutos.forEach(d=>{
+      const chave = d.rmUid || d.rmNome;
+      if (!chave || vistos.has(chave)) return;
+      vistos.add(chave);
+      const rLabel = d.rmNome || (mapaRM.get(d.rmUid)?.nome) || d.rmUid || 'RM';
+      fRm.insertAdjacentHTML('beforeend', `<option value="${chave}">${rLabel}</option>`);
+    });
+  }
 
   // Agência
   const fAg = document.getElementById('fAgencia');
-  fAg.innerHTML = `<option value="">Todas</option>`;
-  [...agenciasUnicas].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(nome=>{
-    fAg.insertAdjacentHTML('beforeend', `<option value="${nome}">${nome}</option>`);
-  });
+  if (fAg){
+    fAg.innerHTML = `<option value="">Todas</option>`;
+    [...agenciasUnicas].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(nome=>{
+      fAg.insertAdjacentHTML('beforeend', `<option value="${nome}">${nome}</option>`);
+    });
+  }
 
   // Ramo
   const fRamo = document.getElementById('fRamo');
-  fRamo.innerHTML = `<option value="">Todos</option>`;
-  [...ramosUnicos].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(r=>{
-    fRamo.insertAdjacentHTML('beforeend', `<option value="${r}">${r}</option>`);
-  });
+  if (fRamo){
+    fRamo.innerHTML = `<option value="">Todos</option>`;
+    [...ramosUnicos].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(r=>{
+      fRamo.insertAdjacentHTML('beforeend', `<option value="${r}">${r}</option>`);
+    });
+  }
 }
 
 function aplicarFiltros(){
-  const ini = document.getElementById('fDataIni').value;
-  const fim = document.getElementById('fDataFim').value;
-  const rmSel = document.getElementById('fRm').value;
-  const agSel = document.getElementById('fAgencia').value;
-  const ramoSel = document.getElementById('fRamo').value;
-  const empTxt = norm(document.getElementById('fEmpresa').value);
+  const ini = document.getElementById('fDataIni')?.value || '';
+  const fim = document.getElementById('fDataFim')?.value || '';
+  const rmSel = document.getElementById('fRm')?.value || '';
+  const agSel = document.getElementById('fAgencia')?.value || '';
+  const ramoSel = document.getElementById('fRamo')?.value || '';
+  const empTxt = norm(document.getElementById('fEmpresa')?.value || '');
 
   const lista = docsBrutos.filter(d=>{
     // datas (comparam pelo início de vigência)
@@ -218,13 +238,14 @@ function atualizarResumo(lista){
   const infoQtd = document.getElementById('infoQtd');
   const totalPremio = document.getElementById('totalPremio');
   const soma = lista.reduce((acc,cur)=> acc + (Number(cur.premioLiquido)||0), 0);
-  infoQtd.textContent = `${lista.length} negócio(s)`;
-  totalPremio.textContent = `Total prêmio: ${money(soma)}`;
+  if (infoQtd) infoQtd.textContent = `${lista.length} negócio(s)`;
+  if (totalPremio) totalPremio.textContent = `Total prêmio: ${money(soma)}`;
 }
 
-// Render -----------------------------------------------------------
+// ===== Render =====================================================
 function renderTabela(lista){
   const tbody = document.getElementById('listaNegociosFechados');
+  if (!tbody) return;
   tbody.innerHTML = '';
 
   if (!lista.length){
