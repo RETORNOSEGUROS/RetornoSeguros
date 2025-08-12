@@ -1,181 +1,226 @@
+// --- Firebase ---
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db = firebase.firestore();
+const db   = firebase.firestore();
 
-const listaDiv = document.getElementById("lista-visitas");
-const container = document.createElement("div");
-container.innerHTML = `
-  <div style="margin-bottom: 15px;">
-    <label>Data Início:</label>
-    <input type="date" id="filtroDataInicio">
-    <label>Data Fim:</label>
-    <input type="date" id="filtroDataFim">
-    <label>Filtrar por Empresa:</label>
-    <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome">
-    <label>Filtrar por Usuário:</label>
-    <input type="text" id="filtroUsuario" placeholder="Digite parte do nome">
-    <button onclick="aplicarFiltro()">Aplicar Filtros</button>
-    <button onclick="exportarCSV()">Exportar Excel</button>
-  </div>
-`;
-document.body.insertBefore(container, listaDiv);
+// --- DOM ---
+const tbody = document.getElementById("tbodyRelatorio");
+const kpiVisitas = document.getElementById("kpiVisitas");
+const kpiPremio  = document.getElementById("kpiPremio");
 
-let dadosVisitas = [];
+// filtros
+const el = id => document.getElementById(id);
+const F = {
+  agencia: el("filtroAgencia"),
+  rm:      el("filtroRM"),
+  tipo:    el("filtroTipo"),
+  mes:     el("filtroMesVenc"),
+  segur:   el("filtroSeguradora"),
+  ramo:    el("filtroRamo"),
+  empresa: el("filtroEmpresa"),
+  di:      el("filtroDataInicio"),
+  df:      el("filtroDataFim"),
+};
+el("btnAplicar").onclick = () => aplicar();
+el("btnLimpar").onclick  = () => { Object.values(F).forEach(x=>{
+  if (x.tagName==='SELECT') x.value = ''; else x.value='';
+}); aplicar(); };
+el("btnExportar").onclick = () => exportarCSV();
 
-async function carregarRelatorio() {
-  try {
-    const visitasSnap = await db.collection("visitas").orderBy("data", "desc").get();
-    if (visitasSnap.empty) return listaDiv.innerHTML = "Nenhuma visita registrada.";
+// --- Data holders ---
+let visitasRaw = [];     // documentos de visitas
+let linhas = [];         // linhas flatten por ramo (para filtrar/renderizar)
 
-    const empresas = {};
-    const usuarios = {};
+// Util: formata número BRL
+const fmtBRL = v => (isFinite(v) ? v : 0).toLocaleString("pt-BR", {minimumFractionDigits:2, maximumFractionDigits:2});
 
-    const visitas = await Promise.all(visitasSnap.docs.map(async doc => {
-      const v = doc.data();
-      v.id = doc.id;
-      v.dataObj = v.data?.toDate?.() || new Date();
+// Util: extrai {dd,mm} de vários formatos
+function extrairDiaMes(venc) {
+  // String "dd/mm"
+  if (typeof venc === "string" && /^\d{2}\/\d{2}$/.test(venc)) {
+    const [dd, mm] = venc.split("/").map(n=>parseInt(n,10));
+    return {dd, mm};
+  }
+  // String "dd/mm/aaaa"
+  if (typeof venc === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(venc)) {
+    const [dd, mm] = venc.split("/").map(n=>parseInt(n,10));
+    return {dd, mm};
+  }
+  // Timestamp
+  if (venc && typeof venc.toDate === "function") {
+    const d = venc.toDate();
+    return {dd: d.getDate(), mm: d.getMonth()+1};
+  }
+  // vazio
+  return {dd:null, mm:null};
+}
+const ddmmToString = ({dd,mm}) => (dd && mm) ? String(dd).padStart(2,'0') + "/" + String(mm).padStart(2,'0') : "-";
 
-      try {
-        if (!empresas[v.empresaId]) {
-          const emp = await db.collection("empresas").doc(v.empresaId).get();
-          empresas[v.empresaId] = emp.exists ? emp.data() : { nome: `[empresa removida: ${v.empresaId}]` };
-        }
-      } catch (e) {
-        empresas[v.empresaId] = { nome: `[erro empresa: ${v.empresaId}]` };
+// Carrega tudo
+auth.onAuthStateChanged(async user=>{
+  if (!user){ location.href="login.html"; return; }
+  await carregar();
+  popularCombos();
+  aplicar(); // primeira render
+});
+
+async function carregar(){
+  // Visitas
+  const snap = await db.collection("visitas").orderBy("data","desc").get();
+  if (snap.empty){ tbody.innerHTML = `<tr><td colspan="11">Nenhuma visita registrada.</td></tr>`; return; }
+
+  // caches
+  const cacheEmpresas = {};
+  const cacheUsuarios = {};
+
+  visitasRaw = await Promise.all(snap.docs.map(async d=>{
+    const v = {id: d.id, ...d.data()};
+    v.dataObj = v.data?.toDate?.() || new Date();
+
+    // Empresa
+    if (v.empresaId){
+      if (!cacheEmpresas[v.empresaId]){
+        try{
+          const e = await db.collection("empresas").doc(v.empresaId).get();
+          cacheEmpresas[v.empresaId] = e.exists ? e.data() : {};
+        }catch(_){ cacheEmpresas[v.empresaId] = {}; }
       }
+      v._empresa = cacheEmpresas[v.empresaId];
+      v.empresaNome = v._empresa.nome || "-";
+      v.agencia     = v._empresa.agencia || v._empresa.agenciaId || "-";
+      // RM: prefere o rmNome da visita; senão, da empresa (rmNome ou rm)
+      v.rmNome      = v.rmNome || v._empresa.rmNome || v._empresa.rm || "-";
+    }
 
-      try {
-        if (!usuarios[v.usuarioId]) {
-          const user = await db.collection("usuarios_banco").doc(v.usuarioId).get();
-          usuarios[v.usuarioId] = user.exists ? user.data().nome || user.data().email : `[usuário removido: ${v.usuarioId}]`;
-        }
-      } catch (e) {
-        usuarios[v.usuarioId] = `[erro usuario: ${v.usuarioId}]`;
+    // Usuário (quem registrou)
+    if (v.usuarioId){
+      if (!cacheUsuarios[v.usuarioId]){
+        try{
+          const u = await db.collection("usuarios_banco").doc(v.usuarioId).get();
+          cacheUsuarios[v.usuarioId] = u.exists ? (u.data().nome || u.data().email) : "-";
+        }catch(_){ cacheUsuarios[v.usuarioId] = "-"; }
       }
+      v.usuarioNome = cacheUsuarios[v.usuarioId];
+    }
 
-      v.usuarioNome = usuarios[v.usuarioId];
-      v.empresaNome = empresas[v.empresaId]?.nome || '-';
-      v.empresaRM = empresas[v.empresaId]?.rm || '-';
-      return v;
-    }));
+    return v;
+  }));
 
-    dadosVisitas = visitas;
-    renderizarTabela(visitas);
-  } catch (err) {
-    console.error("Erro ao carregar visitas:", err);
-    listaDiv.innerHTML = "Erro ao carregar visitas.";
+  // Flatten por ramo
+  linhas = [];
+  for (const v of visitasRaw){
+    const ramos = v.ramos || {};
+    for (const [ramo, info] of Object.entries(ramos)){
+      const {dd, mm} = extrairDiaMes(info.vencimento);
+      const premioNum = Number(info.premio) || 0;
+
+      linhas.push({
+        visitaId: v.id,
+        dataObj: v.dataObj,
+        dataStr: v.dataObj.toLocaleDateString("pt-BR"),
+        tipoVisita: v.tipoVisita || "-",
+        usuarioNome: v.usuarioNome || "-",
+        empresaNome: v.empresaNome || "-",
+        agencia: v.agencia || "-",
+        rmNome: v.rmNome || "-",
+        ramo: ramo.toUpperCase(),
+        vencDD: dd, vencMM: mm,
+        vencStr: ddmmToString({dd,mm}),
+        premio: premioNum,
+        seguradora: info.seguradora || "-",
+        observacoes: info.observacoes || info.observacoes === "" ? info.observacoes : (info.observacoes || "-"),
+      });
+    }
   }
 }
 
-function aplicarFiltro() {
-  const emp = document.getElementById("filtroEmpresa").value.toLowerCase();
-  const usr = document.getElementById("filtroUsuario").value.toLowerCase();
-  const dataIni = document.getElementById("filtroDataInicio").value;
-  const dataFim = document.getElementById("filtroDataFim").value;
+function popularCombos(){
+  // Monta listas únicas a partir de 'linhas'
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a,b)=> (""+a).localeCompare(""+b,'pt-BR'));
+  const agencias = uniq(linhas.map(x=>x.agencia));
+  const rms      = uniq(linhas.map(x=>x.rmNome));
+  const segs     = uniq(linhas.map(x=>x.seguradora).filter(s=>s!=="-"));
+  const ramos    = uniq(linhas.map(x=>x.ramo));
 
-  const filtradas = dadosVisitas.filter(v => {
-    const empNome = v.empresaNome?.toLowerCase() || "";
-    const usrNome = v.usuarioNome?.toLowerCase() || "";
-    const dataVisita = v.dataObj;
-    const dentroPeriodo = (!dataIni || dataVisita >= new Date(dataIni)) && (!dataFim || dataVisita <= new Date(dataFim + 'T23:59:59'));
-    return empNome.includes(emp) && usrNome.includes(usr) && dentroPeriodo;
-  });
-  renderizarTabela(filtradas);
+  // helper para popular SELECT
+  function fill(select, values){
+    const cur = select.value;
+    select.innerHTML = `<option value="">${select===F.agencia?'Todas':'Todos'}</option>` + values.map(v=>`<option>${v}</option>`).join("");
+    if (values.includes(cur)) select.value = cur; // mantém se ainda existir
+  }
+
+  fill(F.agencia, agencias);
+  fill(F.rm,      rms);
+  fill(F.segur,   segs);
+  fill(F.ramo,    ramos);
 }
 
-function renderizarTabela(visitas) {
-  let html = `<table><thead><tr>
-    <th>Data</th>
-    <th>Tipo</th>
-    <th>Usuário</th>
-    <th>Empresa</th>
-    <th>RM da Empresa</th>
-    <th>Ramo</th>
-    <th>Vencimento</th>
-    <th>Prêmio</th>
-    <th>Seguradora</th>
-    <th>Observações</th>
-  </tr></thead><tbody>`;
+function aplicar(){
+  const txtEmp = (F.empresa.value||"").toLowerCase().trim();
+  const selAg  = F.agencia.value;
+  const selRM  = F.rm.value;
+  const selTp  = F.tipo.value;
+  const selMes = F.mes.value ? parseInt(F.mes.value,10) : null;
+  const selSeg = F.segur.value;
+  const selRmo = F.ramo.value;
 
-  visitas.forEach(v => {
-    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
-    const tipo = v.tipoVisita || "-";
+  const di = F.di.value ? new Date(F.di.value) : null;
+  const df = F.df.value ? new Date(F.df.value + "T23:59:59") : null;
 
-    for (const [ramo, info] of Object.entries(v.ramos || {})) {
-      let vencimentoFormatado = "-";
-
-      if (info.vencimento?.toDate) {
-        vencimentoFormatado = info.vencimento.toDate().toLocaleDateString("pt-BR");
-      } else if (typeof info.vencimento === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(info.vencimento)) {
-        vencimentoFormatado = info.vencimento;
-      } else if (typeof info.vencimento === 'string' && /^\d{2}\/\d{2}$/.test(info.vencimento)) {
-        vencimentoFormatado = info.vencimento + "/2025";
-      }
-
-      html += `<tr>
-        <td>${dataVisita}</td>
-        <td>${tipo}</td>
-        <td>${v.usuarioNome}</td>
-        <td>${v.empresaNome}</td>
-        <td>${v.empresaRM}</td>
-        <td>${ramo.toUpperCase()}</td>
-        <td>${vencimentoFormatado}</td>
-        <td>R$ ${info.premio?.toLocaleString("pt-BR") || '0,00'}</td>
-        <td>${info.seguradora || '-'}</td>
-        <td>${info.observacoes || '-'}</td>
-      </tr>`;
-    }
+  const rows = linhas.filter(l=>{
+    if (txtEmp && !l.empresaNome.toLowerCase().includes(txtEmp)) return false;
+    if (selAg  && l.agencia !== selAg) return false;
+    if (selRM  && l.rmNome !== selRM) return false;
+    if (selTp  && l.tipoVisita !== selTp) return false;
+    if (selMes && l.vencMM !== selMes) return false;  // filtro por mês de vencimento
+    if (selSeg && l.seguradora !== selSeg) return false;
+    if (selRmo && l.ramo !== selRmo) return false;
+    if (di && l.dataObj < di) return false;
+    if (df && l.dataObj > df) return false;
+    return true;
   });
 
-  html += `</tbody></table>`;
-  html += `<p><strong>Total de visitas listadas:</strong> ${visitas.length}</p>`;
-  let totalRamos = visitas.reduce((acc, v) => acc + Object.keys(v.ramos || {}).length, 0);
-  html += `<p><strong>Total de seguros mapeados:</strong> ${totalRamos}</p>`;
-  listaDiv.innerHTML = html;
+  render(rows);
 }
 
-function exportarCSV() {
-  let csv = ["Data;Tipo;Usuário;Empresa;RM;Ramo;Vencimento;Prêmio;Seguradora;Observações"];
-  dadosVisitas.forEach(v => {
-    const dataVisita = v.dataObj.toLocaleDateString("pt-BR");
+function render(rows){
+  // KPIs
+  const visitasUnicas = new Set(rows.map(r=>r.visitaId)).size;
+  const totalPremio   = rows.reduce((s,r)=> s + (Number(r.premio)||0), 0);
+  kpiVisitas.textContent = visitasUnicas.toString();
+  kpiPremio.textContent  = "R$ " + fmtBRL(totalPremio);
 
-    for (const [ramo, info] of Object.entries(v.ramos || {})) {
-      let vencimentoCSV = "-";
-
-      if (info.vencimento?.toDate) {
-        vencimentoCSV = info.vencimento.toDate().toLocaleDateString("pt-BR");
-      } else if (typeof info.vencimento === 'string') {
-        vencimentoCSV = info.vencimento;
-      }
-
-      const linha = [
-        dataVisita,
-        v.tipoVisita || "-",
-        v.usuarioNome,
-        v.empresaNome,
-        v.empresaRM,
-        ramo.toUpperCase(),
-        vencimentoCSV,
-        info.premio || 0,
-        info.seguradora || '-',
-        info.observacoes || '-'
-      ].join(";");
-      csv.push(linha);
-    }
-  });
-
-  const blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "relatorio-visitas.csv";
-  a.click();
-}
-
-auth.onAuthStateChanged(user => {
-  if (!user) {
-    window.location.href = "login.html";
+  // Tabela
+  if (!rows.length){
+    tbody.innerHTML = `<tr><td colspan="11">Nenhum registro encontrado para os filtros selecionados.</td></tr>`;
     return;
   }
-  carregarRelatorio();
-});
+
+  const html = rows.map(r=>`
+    <tr>
+      <td>${r.dataStr}</td>
+      <td>${r.tipoVisita}</td>
+      <td>${r.usuarioNome}</td>
+      <td>${r.empresaNome}</td>
+      <td>${r.agencia}</td>
+      <td>${r.rmNome}</td>
+      <td>${r.ramo}</td>
+      <td>${r.vencStr}</td>
+      <td>R$ ${fmtBRL(r.premio)}</td>
+      <td>${r.seguradora}</td>
+      <td>${r.observacoes || '-'}</td>
+    </tr>
+  `).join("");
+  tbody.innerHTML = html;
+}
+
+function exportarCSV(){
+  const rows = [...tbody.querySelectorAll("tr")].map(tr=>[...tr.children].map(td=>td.innerText));
+  if (!rows.length) return;
+  const header = ["Data","Tipo","Usuário","Empresa","Agência","RM","Produto","Vencimento (dia/mês)","Prêmio","Seguradora","Observações"];
+  const csv = [header].concat(rows).map(cols=>cols.map(v=>`"${(v||"").replace(/"/g,'""')}"`).join(";")).join("\n");
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = "relatorio-visitas.csv"; a.click();
+}
