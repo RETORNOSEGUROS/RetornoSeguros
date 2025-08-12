@@ -1,130 +1,231 @@
+// Coleções
+const db = firebase.firestore();
+const negociosRef = db.collection('cotacoes-gerentes'); // origem oficial
+const usuariosRef = db.collection('usuarios_banco');    // perfis (contém agenciaId / agenciaNome)
+const agenciasRef = db.collection('agencias');          // opcional: mapear agencyId -> nome
 
-const negociosRef = firebase.firestore().collection('cotacoes-gerentes');
-const empresasRef = firebase.firestore().collection('empresas');
-const adminEmail = 'patrick@retornoseguros.com.br';
+// Estado em memória
+let docsBrutos = [];     // todos emitidos
+let mapaRM = new Map();  // rmUid -> {nome, agenciaId, agenciaNome}
+let mapaAgencia = new Map(); // agenciaId -> nome (fallback)
 
-console.log('✅ JS carregado com layout e formatação');
+// Utils ------------------------------------------------------------
+const ptBR = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
 
-document.addEventListener('DOMContentLoaded', () => {
-  firebase.auth().onAuthStateChanged(user => {
-    if (user) {
-      carregarNegociosFechados(user.email);
-    } else {
-      alert('Você precisa estar logado.');
+function formatMoney(n){
+  if (n === undefined || n === null || isNaN(n)) return 'R$ 0,00';
+  return ptBR.format(Number(n));
+}
+
+// aceita string 'YYYY-MM-DD' OU Timestamp Firestore OU Date
+function toISODate(val){
+  if (!val) return '';
+  try{
+    if (typeof val === 'string'){
+      // já vem como 'YYYY-MM-DD' na maioria dos seus docs
+      return /^\d{4}-\d{2}-\d{2}$/.test(val) ? val : '';
     }
+    // Firestore Timestamp (v8)
+    if (val.toDate) {
+      const d = val.toDate();
+      const m = (d.getMonth()+1).toString().padStart(2,'0');
+      const day = d.getDate().toString().padStart(2,'0');
+      return `${d.getFullYear()}-${m}-${day}`;
+    }
+    if (val instanceof Date){
+      const m = (val.getMonth()+1).toString().padStart(2,'0');
+      const day = val.getDate().toString().padStart(2,'0');
+      return `${val.getFullYear()}-${m}-${day}`;
+    }
+  }catch(_e){}
+  return '';
+}
+
+function normalizarTexto(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
+
+// Carregamento ------------------------------------------------------
+firebase.auth().onAuthStateChanged(async user => {
+  if (!user){ alert('Você precisa estar logado.'); return; }
+  await carregarNegocios();
+  await montarFiltroRM();
+  aplicarFiltros(); // exibe já filtrado (sem restrições)
+  // Eventos dos filtros
+  document.getElementById('btnAplicar').addEventListener('click', aplicarFiltros);
+  document.getElementById('btnLimpar').addEventListener('click', () => {
+    document.getElementById('fDataIni').value = '';
+    document.getElementById('fDataFim').value = '';
+    document.getElementById('fRm').value = '';
+    document.getElementById('fEmpresa').value = '';
+    aplicarFiltros();
   });
 });
 
-function aplicarMascaraMoeda(input) {
-  let valor = input.value.replace(/\D/g, '');
-  valor = (parseInt(valor, 10) / 100).toFixed(2);
-  valor = valor.replace('.', ',');
-  valor = valor.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  input.value = 'R$ ' + valor;
-}
+async function carregarNegocios(){
+  // Busca apenas "Negócio Emitido"
+  const snap = await negociosRef.where('status','==','Negócio Emitido').get();
 
-function carregarNegociosFechados(emailLogado) {
-  negociosRef.where('status', '==', 'Negócio Emitido')
-    .get()
-    .then(snapshot => {
-      const container = document.getElementById('listaNegociosFechados');
-      container.innerHTML = '';
+  docsBrutos = [];
+  const rmUids = new Set();
 
-      const tabela = document.createElement('table');
-      tabela.style.width = '100%';
-      tabela.style.borderCollapse = 'collapse';
-      tabela.style.fontSize = '14px';
-      tabela.innerHTML = `
-        <thead>
-          <tr style='background:#f0f0f0; font-weight:bold; text-align:left'>
-            <th>Empresa</th><th>Ramo</th><th>RM</th><th>Prêmio</th><th>%</th>
-            <th>Comissão R$</th><th>Início</th><th>Fim</th><th>Observações</th><th>Ações</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      `;
-      const tbody = tabela.querySelector('tbody');
-
-      snapshot.forEach(async doc => {
-        const data = doc.data();
-        const id = doc.id;
-        const isAdmin = emailLogado === adminEmail;
-        const nomeEmpresa = data.empresaNome || '-';
-        const premioFormatado = formatarValor(data.premioLiquido);
-
-        const linha = document.createElement('tr');
-        linha.style.borderBottom = '1px solid #ccc';
-        linha.innerHTML = `
-          <td>${nomeEmpresa}</td>
-          <td>${data.ramo || '-'}</td>
-          <td>${data.rmNome || '-'}</td>
-          <td><input type='text' id='premio-${id}' value='${premioFormatado}' ${!isAdmin ? 'readonly' : ''} style='width:120px'></td>
-          <td><input type='number' id='comissao-${id}' value='${data.comissaoPercentual || ''}' ${!isAdmin ? 'readonly' : ''} style='width:60px'></td>
-          <td><span id='comissaoValor-${id}'>${formatarValor(data.comissaoValor)}</span></td>
-          <td><input type='date' id='inicio-${id}' value='${data.inicioVigencia || ''}' ${!isAdmin ? 'readonly' : ''}></td>
-          <td><input type='date' id='fim-${id}' value='${data.fimVigencia || ''}' ${!isAdmin ? 'readonly' : ''}></td>
-          <td><textarea id='obs-${id}' rows='2' style='width:180px' ${!isAdmin ? 'readonly' : ''}>${data.observacoes || ''}</textarea></td>
-          <td>${isAdmin ? `<button onclick="salvarNegocio('${id}', this)">💾</button>` : '-'}</td>
-        `;
-
-        tbody.appendChild(linha);
-
-        if (isAdmin) {
-          const inputPremio = document.getElementById(`premio-${id}`);
-          inputPremio.addEventListener('input', () => {
-            aplicarMascaraMoeda(inputPremio);
-            calcularComissao(id);
-          });
-          document.getElementById(`comissao-${id}`).addEventListener('input', () => calcularComissao(id));
-        }
-      });
-
-      container.appendChild(tabela);
-    })
-    .catch(err => {
-      console.error('Erro ao carregar:', err);
-    });
-}
-
-function formatarValor(valor) {
-  if (!valor || isNaN(valor)) return 'R$ 0,00';
-  return 'R$ ' + valor.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-}
-
-function calcularComissao(id) {
-  const premioBruto = document.getElementById(`premio-${id}`).value;
-  const premio = parseFloat(premioBruto.replace(/[^\d,]/g, '').replace(',', '.') || 0);
-  const percentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
-  const valor = (premio * percentual / 100).toFixed(2);
-  document.getElementById(`comissaoValor-${id}`).innerText = formatarValor(parseFloat(valor));
-}
-
-function salvarNegocio(id, botao) {
-  const premioBruto = document.getElementById(`premio-${id}`).value;
-  const premio = parseFloat(premioBruto.replace(/[^\d,]/g, '').replace(',', '.') || 0);
-  const comissaoPercentual = parseFloat(document.getElementById(`comissao-${id}`).value || 0);
-  const comissaoValor = parseFloat((premio * comissaoPercentual / 100).toFixed(2));
-  const inicio = document.getElementById(`inicio-${id}`).value;
-  const fim = document.getElementById(`fim-${id}`).value;
-  const obs = document.getElementById(`obs-${id}`).value;
-
-  negociosRef.doc(id).update({
-    premioLiquido: premio,
-    comissaoPercentual,
-    comissaoValor,
-    inicioVigencia: inicio,
-    fimVigencia: fim,
-    observacoes: obs
-  }).then(() => {
-    alert('✅ Dados salvos!');
-    document.getElementById(`premio-${id}`).setAttribute('readonly', true);
-    document.getElementById(`comissao-${id}`).setAttribute('readonly', true);
-    document.getElementById(`inicio-${id}`).setAttribute('readonly', true);
-    document.getElementById(`fim-${id}`).setAttribute('readonly', true);
-    document.getElementById(`obs-${id}`).setAttribute('readonly', true);
-    botao.remove();
-  }).catch(err => {
-    console.error('Erro ao salvar:', err);
-    alert('❌ Erro ao salvar.');
+  snap.forEach(doc=>{
+    const d = doc.data();
+    const item = {
+      id: doc.id,
+      empresaNome: d.empresaNome || '-',
+      ramo: d.ramo || '-',
+      rmNome: d.rmNome || '-',
+      rmUid: d.rmUid || d.rmUID || d.rmId || null, // cobrir variações
+      premioLiquido: Number(d.premioLiquido) || 0,
+      inicioVigencia: toISODate(d.inicioVigencia),
+      fimVigencia: toISODate(d.fimVigencia),
+      observacoes: d.observacoes || ''
+    };
+    if (item.rmUid) rmUids.add(item.rmUid);
+    docsBrutos.push(item);
   });
+
+  // Carregar perfis dos RMs usados (agência)
+  await carregarPerfisRM([...rmUids]);
+
+  // Opcional: se houver docs com agenciaId sem nome, tentar popular mapa de agências
+  const idsAg = [...new Set([...mapaRM.values()].map(x=>x.agenciaId).filter(Boolean))];
+  await carregarAgencias(idsAg);
+}
+
+async function carregarPerfisRM(uids){
+  if (uids.length === 0) return;
+  const lotes = [];
+  // Firestore não tem "in" para documentId direto aqui sem compor query; fazemos gets individuais
+  for (const uid of uids){
+    lotes.push(usuariosRef.doc(uid).get().then(ds=>{
+      if (ds.exists){
+        const u = ds.data();
+        mapaRM.set(uid, {
+          nome: u.nome || u.displayName || '',
+          agenciaId: u.agenciaId || u.agencia || '',
+          agenciaNome: u.agenciaNome || ''
+        });
+      } else {
+        mapaRM.set(uid, {nome:'',agenciaId:'',agenciaNome:''});
+      }
+    }).catch(()=> mapaRM.set(uid,{nome:'',agenciaId:'',agenciaNome:''})));
+  }
+  await Promise.all(lotes);
+}
+
+async function carregarAgencias(ids){
+  if (!ids || !ids.length) return;
+  const gets = [];
+  ids.forEach(id=>{
+    if (id && !mapaAgencia.has(id)){
+      gets.push(agenciasRef.doc(id).get().then(ds=>{
+        mapaAgencia.set(id, ds.exists ? (ds.data().nome || ds.data().descricao || id) : id);
+      }).catch(()=> mapaAgencia.set(id, id)));
+    }
+  });
+  await Promise.all(gets);
+}
+
+function nomeAgenciaPorRmUid(rmUid){
+  const info = mapaRM.get(rmUid);
+  if (!info) return '-';
+  if (info.agenciaNome) return info.agenciaNome;
+  if (info.agenciaId && mapaAgencia.has(info.agenciaId)) return mapaAgencia.get(info.agenciaId);
+  return info.agenciaId || '-';
+}
+
+// Filtros -----------------------------------------------------------
+async function montarFiltroRM(){
+  const sel = document.getElementById('fRm');
+  sel.innerHTML = `<option value="">Todos</option>`;
+
+  // Montar a partir dos dados carregados (garante apenas RMs presentes nos negócios)
+  const vistos = new Set();
+  docsBrutos.forEach(d=>{
+    const chave = d.rmUid || d.rmNome;
+    if (!chave || vistos.has(chave)) return;
+    vistos.add(chave);
+    const rLabel = d.rmNome || (mapaRM.get(d.rmUid)?.nome) || d.rmUid || 'RM';
+    sel.insertAdjacentHTML('beforeend', `<option value="${chave}">${rLabel}</option>`);
+  });
+}
+
+function aplicarFiltros(){
+  const ini = document.getElementById('fDataIni').value; // 'YYYY-MM-DD' ou ''
+  const fim = document.getElementById('fDataFim').value;
+  const rmSel = document.getElementById('fRm').value;    // rmUid (preferível) ou nome
+  const empTxt = normalizarTexto(document.getElementById('fEmpresa').value);
+
+  const filtrados = docsBrutos.filter(d=>{
+    // filtro por data de início de vigência
+    if (ini && (!d.inicioVigencia || d.inicioVigencia < ini)) return false;
+    if (fim && (!d.inicioVigencia || d.inicioVigencia > fim)) return false;
+
+    // filtro por RM (rmUid prioritário; se não existir, cai no nome)
+    if (rmSel){
+      if (d.rmUid){
+        if (d.rmUid !== rmSel) return false;
+      } else {
+        if (normalizarTexto(d.rmNome) !== normalizarTexto(rmSel)) return false;
+      }
+    }
+
+    // filtro por empresa (contém)
+    if (empTxt){
+      if (!normalizarTexto(d.empresaNome).includes(empTxt)) return false;
+    }
+
+    return true;
+  });
+
+  renderTabela(filtrados);
+  atualizarResumo(filtrados);
+}
+
+function atualizarResumo(lista){
+  const infoQtd = document.getElementById('infoQtd');
+  const totalPremio = document.getElementById('totalPremio');
+  const soma = lista.reduce((acc,cur)=> acc + (Number(cur.premioLiquido)||0), 0);
+  infoQtd.textContent = `${lista.length} negócio(s)`;
+  totalPremio.textContent = `Total prêmio: ${formatMoney(soma)}`;
+}
+
+// Render ------------------------------------------------------------
+function renderTabela(lista){
+  const tbody = document.getElementById('listaNegociosFechados');
+  tbody.innerHTML = '';
+
+  if (!lista.length){
+    tbody.innerHTML = `<tr><td colspan="8" class="muted">Sem resultados para os filtros atuais.</td></tr>`;
+    return;
+  }
+
+  for (const d of lista){
+    const agencia = nomeAgenciaPorRmUid(d.rmUid);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.empresaNome}</td>
+      <td>${d.ramo}</td>
+      <td>${d.rmNome || '-'}</td>
+      <td>${agencia || '-'}</td>
+      <td>${formatMoney(d.premioLiquido)}</td>
+      <td>${d.inicioVigencia || '-'}</td>
+      <td>${d.fimVigencia || '-'}</td>
+      <td>${d.observacoes ? `<span title="${escapeHtml(d.observacoes)}">${truncate(d.observacoes, 120)}</span>` : '-'}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function truncate(s, n){
+  s = (s||'').toString();
+  return s.length > n ? s.slice(0,n-1) + '…' : s;
+}
+function escapeHtml(s){
+  return (s||'').toString()
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
 }
