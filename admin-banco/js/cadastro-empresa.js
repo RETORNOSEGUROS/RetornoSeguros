@@ -5,7 +5,7 @@ const db   = firebase.firestore();
 
 /* Estado */
 let agenciasMap  = {};    // { "3495": "Corporate One", ... }
-let rmsMap       = {};    // { uid: {nome, agenciaId} } cache p/ nome do RM
+let rmsMap       = {};    // { uid: {nome, agenciaId} }
 let perfilAtual  = null;
 let minhaAgencia = null;
 let meuUid       = null;
@@ -34,15 +34,21 @@ auth.onAuthStateChanged(async (user) => {
   // Perfil do usuário
   const snap = await db.collection("usuarios_banco").doc(user.uid).get();
   const p = snap.exists ? (snap.data()||{}) : {};
-  perfilAtual  = p.perfil || "";
+  perfilAtual  = (p.perfil || "").toLowerCase();
   minhaAgencia = p.agenciaId || "";
   meuNome      = p.nome || "";
 
+  // Assistente NÃO acessa cadastro de empresas (visual); segurança real fica nas Rules
+  if (perfilAtual === "assistente" && !isAdmin) {
+    alert("Seu perfil não tem acesso à página de cadastro de empresas.");
+    return (window.location.href = "painel.html");
+  }
+
   await carregarAgencias();
   await carregarRMsFormulario();     // RMs para o formulário (da agência escolhida)
-  await prepararFiltrosRM();         // RMs para filtro (gerente chefe/admin)
+  await prepararFiltrosRM();         // RMs para filtro (gerente-chefe/admin)
 
-  // Regras de filtro por agência:
+  // Regras de filtro por agência na LISTA:
   const filtroSel = $('filtroAgencia');
   if (!isAdmin && minhaAgencia) {
     filtroSel.value = minhaAgencia;
@@ -50,8 +56,22 @@ auth.onAuthStateChanged(async (user) => {
   }
 
   // Mostrar filtro por RM para gerente_chefe e admin
-  if (perfilAtual === "gerente_chefe" || isAdmin) {
-    $('boxFiltroRm').style.display = "block";
+  if (perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe" || isAdmin) {
+    $('boxFiltroRm')?.style?.setProperty("display","block");
+  } else {
+    $('boxFiltroRm')?.style?.setProperty("display","none");
+  }
+
+  // Travar campos do FORM para RM (ele só cria/edita o que é dele e na sua agência)
+  if (!isAdmin && perfilAtual === "rm") {
+    if ($('agenciaId')) {
+      $('agenciaId').value = minhaAgencia || "";
+      $('agenciaId').disabled = true;
+    }
+    if ($('rmUid')) {
+      $('rmUid').innerHTML = `<option value="${meuUid}">${meuNome || "Eu"}</option>`;
+      $('rmUid').disabled = true;
+    }
   }
 
   instalarOrdenacaoCabecalhos();
@@ -64,8 +84,8 @@ async function carregarAgencias() {
   const selForm   = $('agenciaId');
   const selFiltro = $('filtroAgencia');
 
-  selForm.innerHTML   = '<option value="">Selecione uma agência</option>';
-  selFiltro.innerHTML = '<option value="">Minha agência</option>';
+  if (selForm)   selForm.innerHTML   = '<option value="">Selecione uma agência</option>';
+  if (selFiltro) selFiltro.innerHTML = '<option value="">Minha agência</option>';
 
   const snap = await db.collection("agencias_banco")
                        .orderBy(firebase.firestore.FieldPath.documentId())
@@ -76,19 +96,22 @@ async function carregarAgencias() {
     const id = doc.id;
     agenciasMap[id] = ag.nome || id;
 
-    const opt1 = document.createElement("option");
-    opt1.value = id;
-    opt1.textContent = `${id} - ( ${agenciasMap[id]} )`;
-    selForm.appendChild(opt1);
-
-    const opt2 = document.createElement("option");
-    opt2.value = id;
-    opt2.textContent = `${id} - ( ${agenciasMap[id]} )`;
-    selFiltro.appendChild(opt2);
+    if (selForm) {
+      const opt1 = document.createElement("option");
+      opt1.value = id;
+      opt1.textContent = `${id} - ( ${agenciasMap[id]} )`;
+      selForm.appendChild(opt1);
+    }
+    if (selFiltro) {
+      const opt2 = document.createElement("option");
+      opt2.value = id;
+      opt2.textContent = `${id} - ( ${agenciasMap[id]} )`;
+      selFiltro.appendChild(opt2);
+    }
   });
 
   // default no formulário
-  if (minhaAgencia && selForm.querySelector(`option[value="${minhaAgencia}"]`)) {
+  if (selForm && minhaAgencia && selForm.querySelector(`option[value="${minhaAgencia}"]`)) {
     selForm.value = minhaAgencia;
   }
 }
@@ -97,9 +120,13 @@ async function carregarAgencias() {
 async function carregarRMsFormulario() {
   const selectRM = $('rmUid');
   if (!selectRM) return;
+
+  // Se RM (não admin), já travamos no onAuthStateChanged — aqui só refaz se admin/chefe
+  if (!isAdmin && perfilAtual === "rm") return;
+
   selectRM.innerHTML = '<option value="">Selecione um RM</option>';
 
-  const agenciaEscolhida = $('agenciaId').value || minhaAgencia;
+  const agenciaEscolhida = $('agenciaId')?.value || minhaAgencia;
   let q = db.collection("usuarios_banco").where("perfil", "==", "rm");
   if (agenciaEscolhida) q = q.where("agenciaId", "==", agenciaEscolhida);
 
@@ -121,7 +148,7 @@ async function prepararFiltrosRM() {
   if (!box) return;
 
   // só popula se o box estiver visível
-  if (!(perfilAtual === "gerente_chefe" || isAdmin)) return;
+  if (!((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin)) return;
 
   await carregarRMsFiltro();
 }
@@ -129,7 +156,9 @@ async function prepararFiltrosRM() {
 /* Carrega o combo de filtro de RM conforme agência do filtro */
 async function carregarRMsFiltro() {
   const filtroRm = $('filtroRm');
-  const agencia = $('filtroAgencia').value || minhaAgencia;
+  const agencia = $('filtroAgencia')?.value || minhaAgencia;
+
+  if (!filtroRm) return;
 
   filtroRm.innerHTML = '<option value="">Todos os RMs</option>';
 
@@ -154,29 +183,47 @@ function onAgenciaChangeForm() {
 
 /* onChange do filtro de Agência (LISTA) */
 async function onFiltroAgenciaChange() {
-  if (perfilAtual === "gerente_chefe" || isAdmin) {
+  if ((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) {
     // quando troca agência no filtro, recarrega lista de RMs do filtro
     await carregarRMsFiltro();
   }
   carregarEmpresas();
 }
 
-/* Salvar empresa (agora grava rmUid e rmNome) */
+/* Salvar empresa (grava rmUid e rmNome; força escopo por perfil) */
 async function salvarEmpresa() {
   const nome      = $('nome').value.trim();
   const cnpj      = $('cnpj').value.trim();
   const cidade    = $('cidade').value.trim();
   const estado    = $('estado').value.trim();
-  const agenciaId = $('agenciaId').value.trim();
-  const rmUid     = $('rmUid').value;
+  let   agenciaId = $('agenciaId').value.trim();
+  let   rmUid     = $('rmUid').value;
   const empresaId = $('empresaIdEditando').value;
 
-  if (!nome || !cidade || !estado || !agenciaId || !rmUid) {
+  if (!nome || !cidade || !estado) {
     alert("Preencha todos os campos obrigatórios.");
     return;
   }
 
-  const rmNome = (rmsMap[rmUid]?.nome) || ""; // redundância útil para listagem/ordenação
+  // Regras de perfil no formulário:
+  if (!isAdmin && perfilAtual === "rm") {
+    agenciaId = minhaAgencia || "";     // RM sempre na própria agência
+    rmUid     = meuUid;                  // RM sempre ele mesmo
+  }
+  if (!isAdmin && (perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe")) {
+    // Gerente-chefe só pode criar na própria agência
+    if (agenciaId && minhaAgencia && agenciaId !== minhaAgencia) {
+      alert("Gerente Chefe só pode criar/editar empresas da própria agência.");
+      return;
+    }
+  }
+
+  if (!agenciaId || !rmUid) {
+    alert("Selecione agência e RM.");
+    return;
+  }
+
+  const rmNome = (rmsMap[rmUid]?.nome) || (rmUid === meuUid ? (meuNome || "") : "");
 
   const dados = { nome, cnpj, cidade, estado, agenciaId, rmUid, rmNome };
 
@@ -187,8 +234,10 @@ async function salvarEmpresa() {
     } else {
       const user = auth.currentUser;
       if (!user) return alert("Usuário não autenticado.");
+
       dados.criadoEm     = firebase.firestore.Timestamp.now();
       dados.criadoPorUid = user.uid;
+
       await db.collection("empresas").add(dados);
       alert("Empresa cadastrada com sucesso.");
     }
@@ -202,15 +251,15 @@ async function salvarEmpresa() {
 
 /* Carregar empresas com regras de visibilidade + filtros + ordenação */
 async function carregarEmpresas() {
-  const filtroAg = isAdmin ? ($('filtroAgencia').value || "") : (minhaAgencia || "");
-  const filtroRm = (perfilAtual === "gerente_chefe" || isAdmin) ? ($('filtroRm').value || "") : "";
+  const filtroAg = isAdmin ? ($('filtroAgencia')?.value || "") : (minhaAgencia || "");
+  const filtroRm = ((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) ? ($('filtroRm')?.value || "") : "";
 
   setStatus("Carregando...");
 
   try {
     let q = db.collection("empresas");
 
-    // Escopo por agência (RM/Assistente/GerenteChefe ficam restritos; admin opcional)
+    // Escopo por agência (Admin opcional; Chefe/RM ficam na própria; Assistente não usa esta página)
     if (filtroAg) q = q.where("agenciaId", "==", filtroAg);
 
     // RM vê somente as suas empresas
@@ -219,13 +268,12 @@ async function carregarEmpresas() {
     }
 
     // Gerente Chefe (ou Admin) pode filtrar por RM específico
-    if ((perfilAtual === "gerente_chefe" || isAdmin) && filtroRm) {
+    if (((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) && filtroRm) {
       q = q.where("rmUid", "==", filtroRm);
     }
 
     let snapshot;
     try {
-      // orderBy('nome') serve para a maioria; se faltar índice, caímos no fallback
       snapshot = await q.orderBy("nome").get();
     } catch (err) {
       console.warn("Possível índice ausente; buscando sem orderBy. Detalhe:", err);
@@ -297,6 +345,7 @@ function ordenarRows(rows){
 /* Render */
 function renderTabela(items){
   const tbody = $('listaEmpresas');
+  if (!tbody) return;
   tbody.innerHTML = "";
   items.forEach(e=>{
     const tr = document.createElement("tr");
@@ -306,7 +355,11 @@ function renderTabela(items){
       <td>${e.estado}</td>
       <td>${e.agencia}</td>
       <td>${e.rmNome}</td>
-      <td><div class="row-actions"><button class="btn btn-sm" onclick="editarEmpresa('${e.id}')">Editar</button></div></td>
+      <td>
+        <div class="row-actions">
+          <button class="btn btn-sm" onclick="editarEmpresa('${e.id}')">Editar</button>
+        </div>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -328,6 +381,14 @@ async function editarEmpresa(id) {
   await carregarRMsFormulario();
   $('rmUid').value = e.rmUid || "";
 
+  // Se RM, mantém travado em sua agência e ele mesmo como RM
+  if (!isAdmin && perfilAtual === "rm") {
+    $('agenciaId').value = minhaAgencia || "";
+    $('agenciaId').disabled = true;
+    $('rmUid').innerHTML = `<option value="${meuUid}">${meuNome || "Eu"}</option>`;
+    $('rmUid').disabled = true;
+  }
+
   $('tituloFormulario').textContent = "Editar Empresa";
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -339,8 +400,8 @@ function limparFormulario() {
   $('cnpj').value   = "";
   $('cidade').value = "";
   $('estado').value = "";
-  $('agenciaId').value = minhaAgencia || "";
-  $('rmUid').value  = "";
+  if ($('agenciaId')) $('agenciaId').value = minhaAgencia || "";
+  if ($('rmUid')) $('rmUid').value  = "";
   $('tituloFormulario').textContent = "Cadastrar Nova Empresa";
 }
 function limparFiltro() {
@@ -348,7 +409,7 @@ function limparFiltro() {
   const selRm = $('filtroRm');
   if (!isAdmin && minhaAgencia) {
     selAg.value = minhaAgencia;
-  } else {
+  } else if (selAg) {
     selAg.value = "";
   }
   if (selRm) selRm.value = "";
@@ -356,8 +417,8 @@ function limparFiltro() {
 }
 
 /* Expor para HTML */
-window.onAgenciaChangeForm  = onAgenciaChangeForm;
-window.onFiltroAgenciaChange= onFiltroAgenciaChange;
-window.salvarEmpresa        = salvarEmpresa;
-window.editarEmpresa        = editarEmpresa;
-window.limparFiltro         = limparFiltro;
+window.onAgenciaChangeForm   = onAgenciaChangeForm;
+window.onFiltroAgenciaChange = onFiltroAgenciaChange;
+window.salvarEmpresa         = salvarEmpresa;
+window.editarEmpresa         = editarEmpresa;
+window.limparFiltro          = limparFiltro;
