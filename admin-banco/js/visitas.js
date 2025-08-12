@@ -25,9 +25,7 @@ function validaDDMMYYYY(v) {
   const mo = parseInt(m[2], 10);
   const y = parseInt(m[3], 10);
   if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900) return false;
-
-  // valida calendário (evita 31/02/2025 etc.)
-  const dt = new Date(y, mo - 1, d);
+  const dt = new Date(y, mo - 1, d); // checagem de calendário
   return dt.getFullYear() === y && dt.getMonth() === (mo - 1) && dt.getDate() === d;
 }
 
@@ -35,14 +33,12 @@ function validaDDMMYYYY(v) {
 function maskMoedaBR(v) {
   v = (v || "").toString().replace(/\D/g, "");
   if (!v) return "R$ 0,00";
-  v = (parseInt(v, 10) / 100).toFixed(2); // duas casas
-  // 1234.56 -> "1.234,56"
+  v = (parseInt(v, 10) / 100).toFixed(2);
   let [int, dec] = v.split(".");
   int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   return "R$ " + int + "," + dec;
 }
-
-// parse "R$ 50.100,15" -> 50100.15 (Number)
+// parse "R$ 50.100,15" -> 50100.15
 function parseMoedaBRToNumber(str) {
   if (!str) return 0;
   return parseFloat(str.replace(/[R$\s\.]/g, "").replace(",", ".")) || 0;
@@ -64,7 +60,6 @@ function carregarEmpresas() {
       const option = document.createElement("option");
       option.value = doc.id;
       option.textContent = data.nome || "(Sem nome)";
-      // tenta vários campos para o RM
       option.setAttribute("data-rm", data.rmNome || data.rm || data.rm_nome || "Não informado");
       select.appendChild(option);
     });
@@ -81,7 +76,7 @@ function carregarEmpresas() {
   });
 }
 
-// Busca TODAS as seguradoras existentes, sem depender de orderBy/indice
+// Busca todas as seguradoras
 function carregarSeguradoras() {
   return db.collection("seguradoras").get()
     .then(snapshot => {
@@ -90,7 +85,6 @@ function carregarSeguradoras() {
         const n = (doc.data() && doc.data().nome) ? String(doc.data().nome).trim() : null;
         if (n) arr.push(n);
       });
-      // ordena no cliente
       return arr.sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
     })
     .catch(err => {
@@ -202,7 +196,6 @@ async function gerarCamposRamos(seguradoras) {
     premioInput.addEventListener("input", (e) => {
       e.target.value = maskMoedaBR(e.target.value);
     });
-    // inicia com R$ 0,00 ao focar se estiver vazio (opcional)
     premioInput.addEventListener("focus", (e) => {
       if (!e.target.value) e.target.value = "R$ 0,00";
     });
@@ -229,28 +222,24 @@ function registrarVisita() {
   const rmNome = empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "";
   const empresaNome = empresaSelect.options[empresaSelect.selectedIndex]?.textContent || "";
 
-  if (!empresaId) {
-    alert("Selecione a empresa.");
-    return;
-  }
-  if (!tipoVisita) {
-    alert("Selecione o tipo da visita.");
-    return;
-  }
+  // NOVO: número de funcionários
+  const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
+  const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
+
+  if (!empresaId) { alert("Selecione a empresa."); return; }
+  if (!tipoVisita) { alert("Selecione o tipo da visita."); return; }
 
   auth.onAuthStateChanged(user => {
-    if (!user) {
-      alert("Usuário não autenticado.");
-      return;
-    }
+    if (!user) { alert("Usuário não autenticado."); return; }
 
     const visita = {
       empresaId,
       empresaNome,
       tipoVisita,
       rmNome,
-      usuarioId: user.uid,
+      numeroFuncionarios, // <-- novo campo top-level
       criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      usuarioId: user.uid,
       ramos: {}
     };
 
@@ -273,22 +262,16 @@ function registrarVisita() {
         }
 
         visita.ramos[id] = {
-          vencimento: vencimentoStr, // agora dd/mm/aaaa
-          premio: premioNum,         // número (ex.: 50100.15)
+          vencimento: vencimentoStr,  // dd/mm/aaaa
+          premio: premioNum,          // número (ex.: 50100.15)
           seguradora: seguradoraSel,
           observacoes: obs
         };
       }
     });
 
-    if (erroVenc) {
-      alert(erroVenc);
-      return;
-    }
-    if (!algumRamo) {
-      alert("Marque pelo menos um ramo e preencha os campos.");
-      return;
-    }
+    if (erroVenc) { alert(erroVenc); return; }
+    if (!algumRamo) { alert("Marque pelo menos um ramo e preencha os campos."); return; }
 
     db.collection("visitas").add(visita).then(() => {
       alert("Visita registrada com sucesso.");
@@ -304,10 +287,21 @@ function registrarVisita() {
    Bootstrap
    ======================= */
 
-window.addEventListener("DOMContentLoaded", async () => {
-  carregarEmpresas();
-  const seguradoras = await carregarSeguradoras();
-  await gerarCamposRamos(seguradoras);
+window.addEventListener("DOMContentLoaded", () => {
+  auth.onAuthStateChanged(async () => {
+    carregarEmpresas();
+
+    let seguradoras = await carregarSeguradoras();
+    if (!seguradoras || seguradoras.length === 0) {
+      // fallback para nunca ficar vazio
+      seguradoras = [
+        "Porto", "Bradesco", "SulAmérica", "Allianz", "HDI", "Tokio Marine", "Sompo",
+        "Zurich", "Mapfre", "Liberty", "Chubb", "AXA", "Icatu", "Prudential",
+        "MetLife", "Brasilseg", "Suhai", "Azul", "Youse", "Pottencial", "Outras"
+      ].sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
+    }
+    await gerarCamposRamos(seguradoras);
+  });
 });
 
 window.registrarVisita = registrarVisita;
