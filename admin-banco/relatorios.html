@@ -1,87 +1,230 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-br">
 <head>
-  <meta charset="UTF-8">
-  <title>Relatório Gerencial de Cotações</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="js/firebase-config.js"></script>
-  <script src="js/relatorios.js" defer></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Relatórios • Painel</title>
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          boxShadow: {
+            soft: '0 10px 30px rgba(0,0,0,0.06)'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Chart.js + plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+  <!-- Firebase v9 (modular) -->
+  <script type="module">
+    // 👉 Se já houver um app Firebase na página, remova esta seção e deixe apenas o relatorios.js
+    import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    const firebaseConfig = {
+      // TODO: Cole aqui tua config (se esta página for standalone).
+      // apiKey: "...",
+      // authDomain: "...",
+      // projectId: "...",
+      // storageBucket: "...",
+      // messagingSenderId: "...",
+      // appId: "..."
+    };
+    if (!getApps().length && firebaseConfig.projectId) {
+      initializeApp(firebaseConfig);
+    }
+  </script>
+
   <style>
-    body { font-family: Arial, sans-serif; padding: 20px; background: #f4f7fa; }
-    h1 { color: #003366; }
-    .filtros, .resultados, .totalizadores, .graficos { margin-bottom: 30px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.05); }
-    label { display: block; margin-top: 10px; font-weight: bold; }
-    select, input { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; margin-top: 5px; }
-    button { margin-top: 15px; padding: 10px 20px; background: #004080; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background: #0055a5; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
-    th { background-color: #004080; color: white; }
-    .exportar { float: right; }
-    canvas { max-width: 600px; height: 300px; display: block; margin: 30px auto; }
-    .grafico-vazio { color: #888; text-align: center; font-style: italic; }
+    /* micro ajustes */
+    .card { @apply bg-white rounded-2xl shadow-soft p-5; }
+    .kpi { @apply text-slate-700; }
+    .kpi .label { @apply text-sm text-slate-500; }
+    .kpi .value { @apply text-2xl font-semibold; }
+    .kpi .delta { @apply text-xs font-medium; }
+    .grid-auto-fit { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+    .chart-wrap { @apply bg-white rounded-2xl shadow-soft p-4; }
+    .btn { @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-medium bg-slate-900 text-white hover:bg-slate-700 transition; }
+    .btn-ghost { @apply inline-flex items-center rounded-xl px-3 py-2 text-slate-600 hover:bg-slate-100; }
+    .input, select, input[type="date"] { @apply w-full rounded-xl border border-slate-200 px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300; }
+    .badge { @apply text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600; }
+    .table { @apply w-full text-sm; }
+    .table th { @apply text-left text-slate-500 font-medium border-b border-slate-200 py-2; }
+    .table td { @apply border-b border-slate-100 py-2; }
+    @media (max-width: 768px){
+      .hide-sm { display:none; }
+    }
   </style>
 </head>
-<body>
-  <h1>Relatório de Cotações</h1>
+<body class="bg-slate-50 text-slate-800">
 
-  <div class="filtros">
-    <h3>Filtros Avançados</h3>
-    <label for="filtroDataInicio">Data de Início:</label>
-    <input type="date" id="filtroDataInicio">
+  <!-- Header -->
+  <header class="sticky top-0 z-20 backdrop-blur bg-white/70 border-b border-slate-100">
+    <div class="max-w-7xl mx-auto px-3 py-3 flex flex-col md:flex-row md:items-center gap-3">
+      <h1 class="text-xl font-semibold">Relatórios & Insights</h1>
+      <div class="md:ml-auto flex items-center gap-2">
+        <button id="btn-save-view" class="btn-ghost">Salvar filtros</button>
+        <button id="btn-load-view" class="btn-ghost">Carregar filtros</button>
+        <button id="btn-export" class="btn">Exportar CSV</button>
+      </div>
+    </div>
+  </header>
 
-    <label for="filtroDataFim">Data de Fim:</label>
-    <input type="date" id="filtroDataFim">
+  <!-- Filtros -->
+  <section class="max-w-7xl mx-auto px-3 mt-4">
+    <div class="card">
+      <div class="grid md:grid-cols-6 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm text-slate-500">Data inicial</label>
+          <input type="date" id="f-data-inicio" class="input" />
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Data final</label>
+          <input type="date" id="f-data-fim" class="input" />
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Agência</label>
+          <select id="f-agencia" class="input"></select>
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">RM</label>
+          <select id="f-rm" class="input"></select>
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Status</label>
+          <select id="f-status" class="input" multiple></select>
+          <small class="text-xs text-slate-400">Ctrl/Cmd+clique para múltiplos</small>
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Ramo</label>
+          <select id="f-ramo" class="input" multiple></select>
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Seguradora</label>
+          <select id="f-seguradora" class="input" multiple></select>
+        </div>
+        <div>
+          <label class="text-sm text-slate-500">Tipo</label>
+          <select id="f-tipo" class="input">
+            <option value="">Todos</option>
+            <option value="presencial">Presencial</option>
+            <option value="online">Online</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-sm text-slate-500">Empresa (texto)</label>
+          <input type="text" id="f-empresa" class="input" placeholder="Digite parte do nome..." />
+        </div>
+        <div class="flex items-end gap-2">
+          <button id="btn-aplicar" class="btn w-full">Aplicar filtros</button>
+        </div>
+        <div class="flex items-end">
+          <button id="btn-limpar" class="btn-ghost w-full">Limpar</button>
+        </div>
+        <div class="flex items-end">
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" id="chk-yoy" />
+            Comparar com ano anterior
+          </label>
+        </div>
+      </div>
+      <div class="mt-3 text-xs text-slate-500">
+        Dica: salve combinações de filtros frequentes em <span class="badge">Salvar filtros</span>.
+      </div>
+    </div>
+  </section>
 
-    <label for="filtroRM">RM Responsável:</label>
-    <select id="filtroRM"></select>
+  <!-- KPIs -->
+  <section class="max-w-7xl mx-auto px-3 mt-4">
+    <div class="grid-auto-fit">
+      <div class="card kpi"><div class="label">Prêmio total</div><div id="kpi-premio" class="value">—</div><div id="kpi-premio-delta" class="delta"></div></div>
+      <div class="card kpi"><div class="label">Cotações</div><div id="kpi-qtd" class="value">—</div><div id="kpi-qtd-delta" class="delta"></div></div>
+      <div class="card kpi"><div class="label">Negócios emitidos</div><div id="kpi-emitidos" class="value">—</div><div id="kpi-emitidos-delta" class="delta"></div></div>
+      <div class="card kpi"><div class="label">Conversão</div><div id="kpi-conversao" class="value">—</div><div id="kpi-conversao-delta" class="delta"></div></div>
+      <div class="card kpi"><div class="label">Ticket médio</div><div id="kpi-ticket" class="value">—</div><div id="kpi-ticket-delta" class="delta"></div></div>
+    </div>
+  </section>
 
-    <label for="filtroStatus">Status:</label>
-    <select id="filtroStatus" multiple></select>
+  <!-- Charts -->
+  <section class="max-w-7xl mx-auto px-3 mt-4 grid grid-cols-1 lg:grid-cols-6 gap-4">
+    <div class="chart-wrap lg:col-span-2">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Distribuição por Status</h3>
+        <span id="legend-status" class="badge">—</span>
+      </div>
+      <canvas id="chartStatus" height="240"></canvas>
+    </div>
 
-    <label for="filtroRamo">Ramo:</label>
-    <select id="filtroRamo">
-      <option value="">Todos</option>
-      <option>Vida</option>
-      <option>Saúde</option>
-      <option>Dental</option>
-      <option>Frota</option>
-      <option>Empresarial</option>
-      <option>Previdência</option>
-      <option>D&O</option>
-      <option>Equipamentos</option>
-      <option>Outros</option>
-    </select>
+    <div class="chart-wrap lg:col-span-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Prêmio por mês — Ano atual vs anterior</h3>
+        <span id="legend-linhas" class="badge">—</span>
+      </div>
+      <canvas id="chartLinhas" height="240"></canvas>
+    </div>
 
-    <label for="filtroEmpresa">Empresa (nome):</label>
-    <input type="text" id="filtroEmpresa" placeholder="Digite parte do nome da empresa">
+    <div class="chart-wrap lg:col-span-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Top Ramos (Prêmio)</h3>
+        <span id="legend-ramo" class="badge">—</span>
+      </div>
+      <canvas id="chartRamo" height="240"></canvas>
+    </div>
 
-    <button onclick="aplicarFiltros()">Aplicar Filtros</button>
-    <button class="exportar" onclick="exportarParaExcel()">Exportar Excel</button>
-  </div>
+    <div class="chart-wrap lg:col-span-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Top RMs (Prêmio)</h3>
+        <span id="legend-rm" class="badge">—</span>
+      </div>
+      <canvas id="chartRM" height="240"></canvas>
+    </div>
 
-  <div class="resultados">
-    <h3>Resultados</h3>
-    <div id="tabelaResultados">Carregando...</div>
-  </div>
+    <div class="chart-wrap lg:col-span-6">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Mix por Seguradora (Prêmio)</h3>
+        <span id="legend-seguradora" class="badge">—</span>
+      </div>
+      <canvas id="chartSeguradora" height="240"></canvas>
+    </div>
+  </section>
 
-  <div class="totalizadores">
-    <h3>Totalizadores por Status</h3>
-    <div id="resumoStatus">...</div>
-  </div>
+  <!-- Tabela -->
+  <section class="max-w-7xl mx-auto px-3 my-6">
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold">Resultados do filtro</h3>
+        <div class="text-xs text-slate-500">
+          Mostrando <span id="lbl-count">0</span> registros
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="table" id="tabela">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Empresa</th>
+              <th class="hide-sm">Agência</th>
+              <th>RM</th>
+              <th>Status</th>
+              <th class="hide-sm">Ramo</th>
+              <th class="hide-sm">Seguradora</th>
+              <th>Prêmio</th>
+              <th class="hide-sm">Tipo</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 
-  <div class="graficos">
-    <h3>Distribuição por Status</h3>
-    <canvas id="graficoStatus"></canvas>
-    <div id="avisoStatus" class="grafico-vazio"></div>
-
-    <h3>Distribuição por RM</h3>
-    <canvas id="graficoRM"></canvas>
-    <div id="avisoRM" class="grafico-vazio"></div>
-  </div>
+  <!-- LÓGICA -->
+  <script type="module" src="./relatorios.js"></script>
 </body>
 </html>
