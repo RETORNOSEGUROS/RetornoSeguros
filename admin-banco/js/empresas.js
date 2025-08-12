@@ -50,39 +50,13 @@ function classFromStatus(statusRaw) {
   return "nenhum";
 }
 
-// ===== Helpers de perfil/escopo =====
-async function getPerfilAgencia() {
-  const user = auth.currentUser;
-  const snap = await db.collection("usuarios_banco").doc(user.uid).get();
-  const data = snap.data() || {};
-  const perfil = (data.perfil || data.roleId || "").toString().toLowerCase();
-  return {
-    uid: user.uid,
-    agenciaId: data.agenciaId || null,
-    perfil,
-    isAdmin:     perfil === "admin" || (user.email === "patrick@retornoseguros.com.br"),
-    isRM:        perfil === "rm" || perfil === "rm (gerente de conta)" || perfil === "gerente",
-    isGerente:   perfil === "gerente", // tratamos como RM em escopo "próprio"
-    isChefe:     perfil === "gerente-chefe" || perfil === "gerente chefe",
-    isAssist:    perfil === "assistente"
-  };
-}
-
 // --- Boot ---
-auth.onAuthStateChanged(async (user) => {
+auth.onAuthStateChanged(user => {
   if (!user) return (window.location.href = "login.html");
-
-  const ctx = await getPerfilAgencia();
-
-  // Assistente não acessa EMPRESAS (visual); segurança real fica nas Rules
-  if (ctx.isAssist && !ctx.isAdmin) {
-    alert("Seu perfil não tem acesso à página de Empresas.");
-    return (window.location.href = "painel.html");
-  }
-
-  await carregarProdutos();
-  await carregarRM(ctx);
-  await carregarEmpresas(ctx);
+  carregarProdutos().then(() => {
+    carregarRM();
+    carregarEmpresas();
+  });
 });
 
 // --- Dados base (produtos/colunas) ---
@@ -98,35 +72,19 @@ async function carregarProdutos() {
   });
 }
 
-// --- Combo de RM (por perfil) ---
-async function carregarRM(ctx) {
+// --- Combo de RM (usa rmNome ou rm; cobre cadastros novos e antigos) ---
+async function carregarRM() {
   const select = document.getElementById("filtroRM");
-  select.innerHTML = `<option value="">Todos</option>`;
-
-  // Admin: tudo | Chefe: só da agência | RM/Gerente: só ele
-  let query = db.collection("empresas");
-
-  if (ctx.isChefe && ctx.agenciaId) {
-    query = query.where("agenciaId", "==", ctx.agenciaId);
-  } else if ((ctx.isRM || ctx.isGerente) && !ctx.isAdmin) {
-    // Para RM/Gerente, mostra só o próprio nome no filtro
-    const opt = document.createElement("option");
-    opt.value = "__self__";
-    opt.textContent = "Minhas empresas";
-    select.appendChild(opt);
-    select.value = "__self__";
-    return; // não precisa montar lista de todos os RMs
-  }
-
-  const snapshot = await query.get();
+  const snapshot = await db.collection("empresas").get();
   const rms = new Set();
 
   snapshot.forEach(doc => {
     const dados = doc.data();
-    const nome = dados.rmNome || dados.rm;
+    const nome = dados.rmNome || dados.rm; // << chave da correção
     if (nome) rms.add(nome);
   });
 
+  select.innerHTML = `<option value="">Todos</option>`;
   Array.from(rms).sort().forEach(nome => {
     const opt = document.createElement("option");
     opt.value = nome;
@@ -135,107 +93,79 @@ async function carregarRM(ctx) {
   });
 }
 
-// --- Consulta de empresas por perfil ---
-// Retorna um array de docs (já mesclando quando precisa)
-async function fetchEmpresasPorPerfil(ctx) {
-  // Admin: tudo
-  if (ctx.isAdmin) {
-    const snap = await db.collection("empresas").get();
-    return snap.docs;
-  }
-
-  // Gerente-chefe: tudo da própria agência
-  if (ctx.isChefe && ctx.agenciaId) {
-    const snap = await db.collection("empresas")
-      .where("agenciaId", "==", ctx.agenciaId)
-      .get();
-    return snap.docs;
-  }
-
-  // RM / Gerente: somente as próprias (aceita rmUid, rmId, usuarioId, gerenteId)
-  const col = db.collection("empresas");
-  const buckets = [];
-
-  try { buckets.push(await col.where("rmUid",    "==", ctx.uid).get()); } catch(e){}
-  try { buckets.push(await col.where("rmId",     "==", ctx.uid).get()); } catch(e){}
-  try { buckets.push(await col.where("usuarioId","==", ctx.uid).get()); } catch(e){}
-  try { buckets.push(await col.where("gerenteId","==", ctx.uid).get()); } catch(e){}
-
-  // Mescla por ID para evitar duplicados
-  const map = new Map();
-  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d)));
-  return Array.from(map.values());
-}
-
 // --- Tabela ---
-async function carregarEmpresas(ctx) {
-  const filtroRM = (document.getElementById("filtroRM")?.value || ""); // nome ou "__self__"
+function carregarEmpresas() {
+  const filtroRM = document.getElementById("filtroRM").value; // é o NOME
 
-  const docs = await fetchEmpresasPorPerfil(ctx);
+  db.collection("empresas").get().then(snapshot => {
+    empresasCache = [];
+    snapshot.forEach(doc => {
+      const empresa = { id: doc.id, ...doc.data() };
+      const nomeRM  = empresa.rmNome || empresa.rm; // << chave da correção
+      if (!filtroRM || nomeRM === filtroRM) {
+        empresasCache.push(empresa);
+      }
+    });
 
-  empresasCache = [];
-  docs.forEach(doc => {
-    const empresa = { id: doc.id, ...doc.data() };
-    const nomeRM  = empresa.rmNome || empresa.rm;
+    Promise.all(
+      empresasCache.map(async (empresa) => {
+        // Busca cotações da empresa
+        const cotacoesSnap = await db.collection("cotacoes-gerentes")
+          .where("empresaId", "==", empresa.id).get();
 
-    // Filtro por RM (para admin/chefe). Para RM, usamos "__self__"
-    if (!filtroRM || filtroRM === "__self__" || nomeRM === filtroRM) {
-      empresasCache.push(empresa);
-    }
-  });
+        // Inicializa todos produtos como "sem cotação"
+        const statusPorProduto = {};
+        produtos.forEach(p => statusPorProduto[p] = "nenhum");
 
-  // Monta estrutura com status por produto
-  const linhas = await Promise.all(
-    empresasCache.map(async (empresa) => {
-      // Busca cotações da empresa
-      // (As rules garantem escopo; não precisa filtrar mais aqui)
-      const cotacoesSnap = await db.collection("cotacoes-gerentes")
-        .where("empresaId", "==", empresa.id)
-        .get();
+        cotacoesSnap.forEach(doc => {
+          const c = doc.data();
 
-      // Inicializa todos produtos como "sem cotação"
-      const statusPorProduto = {};
-      produtos.forEach(p => statusPorProduto[p] = "nenhum");
+          // Match de ramo robusto (normaliza nomeExibicao x c.ramo)
+          const ramoCotado = c.ramo;
+          const produtoId = produtos.find(id =>
+            normalize(nomesProdutos[id]) === normalize(ramoCotado)
+          );
+          if (!produtoId) return;
 
-      cotacoesSnap.forEach(doc => {
-        const c = doc.data();
+          // Status -> cor
+          statusPorProduto[produtoId] = classFromStatus(c.status);
+        });
 
-        // Match de ramo robusto (normaliza nomeExibicao x c.ramo)
-        const ramoCotado = c.ramo;
-        const produtoId = produtos.find(id =>
-          normalize(nomesProdutos[id]) === normalize(ramoCotado)
-        );
-        if (!produtoId) return;
+        return {
+          nome: empresa.nome,
+          status: statusPorProduto
+        };
+      })
+    ).then(linhas => {
+      let html = `<table><thead><tr><th>Empresa</th>`;
+      produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
+      html += `</tr></thead><tbody>`;
 
-        // Status -> cor
-        statusPorProduto[produtoId] = classFromStatus(c.status);
+      linhas.forEach(linha => {
+        html += `<tr><td>${linha.nome}</td>`;
+        produtos.forEach(p => {
+          const cor = linha.status[p];
+          const classe = {
+            verde: "status-verde",
+            vermelho: "status-vermelho",
+            amarelo: "status-amarelo",
+            azul: "status-azul",
+            nenhum: "status-cinza"
+          }[cor] || "status-cinza";
+          const simbolo = {
+            verde: "🟢",
+            vermelho: "🔴",
+            amarelo: "🟡",
+            azul: "🔵",
+            nenhum: "⚪️"
+          }[cor] || "⚪️";
+          html += `<td class="${classe}">${simbolo}</td>`;
+        });
+        html += `</tr>`;
       });
 
-      return {
-        nome: empresa.nome,
-        status: statusPorProduto
-      };
-    })
-  );
-
-  // Render
-  let html = `<table><thead><tr><th>Empresa</th>`;
-  produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
-  html += `</tr></thead><tbody>`;
-
-  linhas.forEach(linha => {
-    html += `<tr><td>${linha.nome || "-"}</td>`;
-    produtos.forEach(p => {
-      const cor = linha.status[p];
-      const classe = {
-        verde: "status-verde",
-        vermelho: "status-vermelho",
-        amarelo: "status-amarelo",
-        azul: "status-azul",
-        nenhum: "status-cinza"
-      }[cor] || "status-cinza";
-      const simbolo = {
-        verde: "🟢",
-        vermelho: "🔴",
-        amarelo: "🟡",
-        azu
+      html += `</tbody></table>`;
+      document.getElementById("tabelaEmpresas").innerHTML = html;
+    });
+  });
+}
