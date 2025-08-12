@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Relatórios & Insights</title>
 
-  <!-- Tailwind (CDN para agilizar) -->
+  <!-- Tailwind (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config={theme:{extend:{boxShadow:{soft:'0 10px 30px rgba(0,0,0,0.06)'}}}}</script>
+  <script>tailwind.config={theme:{extend:{boxShadow:{soft:'0 10px 30px rgba(0,0,0,.06)'}}}}</script>
 
-  <!-- Chart.js + plugin de rótulos -->
+  <!-- Chart.js + datalabels -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 
-  <!-- Firebase v8 (igual suas outras páginas) -->
+  <!-- Firebase v8 (igual ao resto do seu sistema) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-  <!-- Sua config (já enviada): js/firebase-config.js -->
+  <!-- SUA CONFIG (ajuste o caminho se preciso) -->
   <script src="js/firebase-config.js"></script>
 
   <style>
@@ -32,11 +32,11 @@
     .input:focus,select:focus{box-shadow:0 0 0 2px #cbd5e1}
     .badge{font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#f1f5f9;color:#475569}
     .table{width:100%;font-size:.9rem}.table th{text-align:left;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0;padding:.5rem 0}
-    .table td{border-bottom:1px solid #f1f5f9;padding:.5rem 0}@media (max-width:768px){.hide-sm{display:none}}
+    .table td{border-bottom:1px solid #f1f5f9;padding:.5rem 0}
+    @media (max-width:768px){.hide-sm{display:none}}
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
-
   <!-- Banner -->
   <div id="banner" class="hidden px-4 py-3 bg-rose-50 text-rose-700 border border-rose-200"></div>
 
@@ -132,7 +132,7 @@
 
   <!-- ==== JS (Firebase v8) ==== -->
   <script>
-    // Inicializa Firebase v8 usando seu js/firebase-config.js
+    // Inicializa (v8) com seu js/firebase-config.js
     if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
       firebase.initializeApp(firebaseConfig);
     }
@@ -149,8 +149,6 @@
     const colOverride = url.searchParams.get("col");
     const CFG = {
       collectionsTry: colOverride ? [colOverride] : ["cotacoes-gerentes","cotacoes"],
-      agencias: "agencias",
-      usuarios: "usuarios_banco",
       fields: {
         createdAt: ["createdAt","dataCriacao","criadoEm","data"],
         updatedAt: ["updatedAt","atualizadoEm"],
@@ -208,7 +206,79 @@
     // Estado
     let state={ raw:[], filtered:[], yoy:false, agenciaMap:new Map(), rmMap:new Map(), statusSet:new Set(), ramoSet:new Set(), seguradoraSet:new Set(), colUsada:"—" };
 
-    // Start
+    // ====== LOOKUPS (FALLBACK) ======
+    // Deriva Agências, RMs, Status, Ramos e Seguradoras a partir da coleção de cotações permitida
+    async function carregarLookups() {
+      const selAg = $("#f-agencia");
+      const selRM = $("#f-rm");
+      const selStatus = $("#f-status");
+      const selRamo = $("#f-ramo");
+      const selSegur = $("#f-seguradora");
+
+      selAg.innerHTML = `<option value="">Todas</option>`;
+      selRM.innerHTML = `<option value="">Todos</option>`;
+      selStatus.innerHTML = "";
+      selRamo.innerHTML = "";
+      selSegur.innerHTML = "";
+
+      const user = auth.currentUser;
+      if (!user) return;
+
+      let colBase = (CFG.collectionsTry && CFG.collectionsTry[0]) || "cotacoes-gerentes";
+      let q = db.collection(colBase);
+
+      // mesmo critério que você já usa: admin vê tudo; não-admin vê apenas o que criou
+      const isAdmin = user.email === "patrick@retornoseguros.com.br";
+      if (!isAdmin) q = q.where("criadoPorUid","==",user.uid);
+
+      const snap = await q.get();
+      if (snap.empty) return;
+
+      const agenciasMap = new Map();
+      const rmsMap = new Map();
+      const statusSet = new Set();
+      const ramosSet = new Set();
+      const segurSet = new Set();
+
+      snap.forEach(doc=>{
+        const d=doc.data();
+        if (d.agenciaId) agenciasMap.set(d.agenciaId, d.agenciaNome || d.agenciaId);
+        if (d.rmUid)     rmsMap.set(d.rmUid, d.rmNome || d.rmUid);
+        if (d.status)    statusSet.add(d.status);
+        if (d.ramo)      ramosSet.add(d.ramo);
+        if (d.seguradora)segurSet.add(d.seguradora);
+      });
+
+      // Agências
+      [...agenciasMap.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),"pt-BR")).forEach(([id,nome])=>{
+        const opt=document.createElement("option"); opt.value=id; opt.textContent=nome; selAg.appendChild(opt);
+      });
+      // RMs
+      [...rmsMap.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),"pt-BR")).forEach(([id,nome])=>{
+        const opt=document.createElement("option"); opt.value=id; opt.textContent=nome; selRM.appendChild(opt);
+      });
+      // Status
+      [...statusSet].sort().forEach(st=>{ const opt=document.createElement("option"); opt.value=st; opt.textContent=st; selStatus.appendChild(opt); });
+      // Ramos
+      [...ramosSet].sort().forEach(rm=>{ const opt=document.createElement("option"); opt.value=rm; opt.textContent=rm; selRamo.appendChild(opt); });
+      // Seguradoras
+      [...segurSet].sort().forEach(sg=>{ const opt=document.createElement("option"); opt.value=sg; opt.textContent=sg; selSegur.appendChild(opt); });
+
+      // guarda para uso em tabela/legendas
+      state.agenciaMap = new Map(agenciasMap);
+      state.rmMap = new Map(rmsMap);
+      state.statusSet = new Set(statusSet);
+      state.ramoSet = new Set(ramosSet);
+      state.seguradoraSet = new Set(segurSet);
+    }
+
+    function filtrarRMsPorAgencia(){
+      const ag=$("#f-agencia").value, selRM=$("#f-rm"); const all=Array.from(selRM.querySelectorAll("option"));
+      all.forEach(o=>{ if(!o.value){ o.hidden=false; return; } const a=(o.textContent||"").includes(" — ")?o.dataset?.agenciaId||"":""; /* mantido simples */ o.hidden=false; });
+      // (sem vínculo estrito RM->Agência, pois estamos derivando de cotações agregadas)
+    }
+
+    // ====== CARGA DE DADOS ======
     auth.onAuthStateChanged(async (user)=>{
       setDiag("diag-app","app: "+(firebase.app().options.projectId||"sem-id"));
       setDiag("diag-user", user ? ("user: "+(user.email||user.uid)) : "user: anon");
@@ -233,32 +303,11 @@
       $("#btn-save-view").addEventListener("click", saveView);
       $("#btn-load-view").addEventListener("click", loadView);
       $("#chk-yoy").addEventListener("change", e=>{ state.yoy=e.target.checked; desenhar(); });
-      $("#f-agencia").addEventListener("change", filtrarRMsPorAgencia);
     }
 
     function setDefaultDates(keep=false){
       const hoje=new Date(), inicio=new Date(hoje.getFullYear(),hoje.getMonth(),1);
       if(!keep){ $("#f-data-inicio").value=inicio.toISOString().substring(0,10); $("#f-data-fim").value=hoje.toISOString().substring(0,10); }
-    }
-
-    async function carregarLookups(){
-      try{
-        const snapAg=await db.collection(CFG.agencias).get();
-        const selAg=$("#f-agencia"); selAg.innerHTML=`<option value="">Todas</option>`;
-        snapAg.forEach(doc=>{ const d=doc.data(); const nome=d.nome||d.descricao||d.titulo||doc.id; state.agenciaMap.set(doc.id,nome);
-          const opt=document.createElement("option"); opt.value=doc.id; opt.textContent=nome; selAg.appendChild(opt); });
-      }catch(e){ console.warn("Agencias lookup:",e); }
-      try{
-        const snapU=await db.collection(CFG.usuarios).get();
-        const selRM=$("#f-rm"); selRM.innerHTML=`<option value="">Todos</option>`;
-        snapU.forEach(doc=>{ const d=doc.data(); const nome=d.nome||d.displayName||d.email||doc.id; state.rmMap.set(doc.id,nome);
-          const opt=document.createElement("option"); opt.value=doc.id; opt.textContent=`${nome}${d.agenciaId?` — ${state.agenciaMap.get(d.agenciaId)||d.agenciaId}`:""}`; opt.dataset.agenciaId=d.agenciaId||""; selRM.appendChild(opt); });
-      }catch(e){ console.warn("Usuarios lookup:",e); }
-    }
-    function filtrarRMsPorAgencia(){
-      const ag=$("#f-agencia").value, selRM=$("#f-rm"); const all=Array.from(selRM.querySelectorAll("option"));
-      all.forEach(o=>{ if(!o.value){ o.hidden=false; return; } const a=o.dataset.agenciaId||""; o.hidden = ag && a && a!==ag; });
-      if(ag){ const curr=selRM.value; const currOpt=selRM.querySelector(`option[value="${curr}"]`); if(curr && currOpt && currOpt.hidden) selRM.value=""; }
     }
 
     async function tryLoadFromCollection(colName, di, df){
@@ -274,7 +323,7 @@
             dateField=key;
             return {snap, dateField};
           }
-        }catch(e){ /* campo pode ser string, ignora e tenta próximo */ }
+        }catch(e){ /* pode ser string; ignora e tenta próximo campo */ }
       }
       snap = await db.collection(colName).get();
       return {snap, dateField:null};
@@ -303,14 +352,13 @@
               agenciaId: pick(d,CFG.fields.agenciaId)||"",
               agenciaNome: pick(d,CFG.fields.agenciaNome) || (d.agenciaId ? (state.agenciaMap.get(d.agenciaId)||d.agenciaId):""),
               rmUid: pick(d,CFG.fields.rmUid)||"",
-              rmNome: pick(d,CFG.fields.rmNome) || "",
+              rmNome: pick(d,CFG.fields.rmNome) || (d.rmUid ? (state.rmMap.get(d.rmUid)||"") : ""),
               status: normalizeStatus(pick(d,CFG.fields.status)||""),
               ramo: pick(d,CFG.fields.ramo)||"",
               seguradora: pick(d,CFG.fields.seguradora)||"",
               tipo: pick(d,CFG.fields.tipo)||"",
               premio: toNumberPremio(pick(d,CFG.fields.premio)||0)
             };
-            if(!row.rmNome && row.rmUid) row.rmNome = state.rmMap.get(row.rmUid)||"";
             dados.push(row);
           });
           break;
@@ -322,26 +370,15 @@
 
       if(!dados.length){
         const resumo = tentativas.map(t=> `${t.col}: ${t.size} docs${t.dateField?` (data=${t.dateField})`:""}`).join(" | ");
-        showBanner("Nenhum registro encontrado no intervalo. Tentativas: "+resumo+" — Dicas: verifique nome da coleção (?col=...), login e campo de data.");
+        showBanner("Nenhum registro encontrado no intervalo. Tentativas: "+resumo);
       } else {
         banner.classList.add('hidden');
       }
 
       state.raw=dados;
-      popularFacetas(dados);
       state.filtered=filtrarMemoria(dados);
       state.yoy=$("#chk-yoy").checked;
       desenhar();
-    }
-
-    function popularFacetas(dados){
-      const sSel=$("#f-status"), rSel=$("#f-ramo"), sgSel=$("#f-seguradora");
-      const sts=[...new Set(dados.map(d=>d.status).filter(Boolean))].sort();
-      const ramos=[...new Set(dados.map(d=>d.ramo).filter(Boolean))].sort();
-      const segs=[...new Set(dados.map(d=>d.seguradora).filter(Boolean))].sort();
-      if(!state.statusSet.size){ sSel.innerHTML=sts.map(s=>`<option value="${s}">${s}</option>`).join(""); state.statusSet=new Set(sts); }
-      if(!state.ramoSet.size){ rSel.innerHTML=ramos.map(s=>`<option value="${s}">${s}</option>`).join(""); state.ramoSet=new Set(ramos); }
-      if(!state.seguradoraSet.size){ sgSel.innerHTML=segs.map(s=>`<option value="${s}">${s}</option>`).join(""); state.seguradoraSet=new Set(segs); }
     }
 
     function filtrarMemoria(arr){
@@ -362,7 +399,7 @@
       });
     }
 
-    // Desenho
+    // ===== Desenho =====
     function desenhar(){ desenharKPIs(); desenharTabela(); desenharCharts(); }
     function desenharKPIs(){
       const data=state.filtered;
@@ -402,7 +439,7 @@
           <td>${d.data?CFG.dateFmt(d.data):"—"}</td>
           <td>${d.empresa||"—"}</td>
           <td class="hide-sm">${d.agenciaNome || d.agenciaId || "—"}</td>
-          <td>${d.rmNome || "—"}</td>
+          <td>${d.rmNome || d.rmUid || "—"}</td>
           <td><span class="badge">${d.status||"—"}</span></td>
           <td class="hide-sm">${d.ramo||"—"}</td>
           <td class="hide-sm">${d.seguradora||"—"}</td>
@@ -453,7 +490,7 @@
       new Chart(document.getElementById("chartRamo"), cfg3);
 
       // Top RM
-      const grpRM={}; state.filtered.forEach(d=>{const k=d.rmNome||"—"; grpRM[k]=(grpRM[k]||0)+(d.premio||0);});
+      const grpRM={}; state.filtered.forEach(d=>{const k=d.rmNome||d.rmUid||"—"; grpRM[k]=(grpRM[k]||0)+(d.premio||0);});
       const topRM=Object.entries(grpRM).sort((a,b)=>b[1]-a[1]).slice(0,10);
       $("#legend-rm").textContent=`${topRM.length} RMs (Top 10)`;
       const cfg4=baseChartCfg(); cfg4.data={labels:topRM.map(t=>t[0]),datasets:[{type:'bar',data:topRM.map(t=>t[1])}]}; cfg4.options.indexAxis='y';
@@ -470,7 +507,7 @@
     function exportarCSV(){
       const rows=[["Data","Empresa","Agência","RM","Status","Ramo","Seguradora","Prêmio","Tipo"]];
       for(const d of state.filtered){
-        rows.push([ d.data?CFG.dateFmt(d.data):"", d.empresa||"", d.agenciaNome||d.agenciaId||"", d.rmNome||"", d.status||"", d.ramo||"", d.seguradora||"", String(d.premio||0).replace(".",","), d.tipo||"" ]);
+        rows.push([ d.data?CFG.dateFmt(d.data):"", d.empresa||"", d.agenciaNome||d.agenciaId||"", d.rmNome||d.rmUid||"", d.status||"", d.ramo||"", d.seguradora||"", String(d.premio||0).replace(".",","), d.tipo||"" ]);
       }
       downloadCSV(`relatorio_${Date.now()}.csv`, rows);
     }
@@ -482,7 +519,7 @@
       tipo: $("#f-tipo").value, empresa: $("#f-empresa").value, yoy: $("#chk-yoy").checked
     }; }
     function setFilters(f){ if(!f) return;
-      $("#f-data-inicio").value=f.di||""; $("#f-data-fim").value=f.df||""; $("#f-agencia").value=f.agencia||""; filtrarRMsPorAgencia(); $("#f-rm").value=f.rm||"";
+      $("#f-data-inicio").value=f.di||""; $("#f-data-fim").value=f.df||""; $("#f-agencia").value=f.agencia||""; $("#f-rm").value=f.rm||"";
       function setMulti(sel,vals){ const set=new Set(vals||[]); Array.from(sel.options).forEach(o=>o.selected=set.has(o.value)); }
       setMulti($("#f-status"), f.status); setMulti($("#f-ramo"), f.ramo); setMulti($("#f-seguradora"), f.seguradora);
       $("#f-tipo").value=f.tipo||""; $("#f-empresa").value=f.empresa||""; $("#chk-yoy").checked=!!f.yoy;
@@ -494,9 +531,6 @@
       const v=localStorage.getItem(`relatorios:view:${name}`); if(!v){ alert("Vista não encontrada."); return; }
       setFilters(JSON.parse(v)); aplicarFiltros();
     }
-
-    // Botões
-    document.getElementById("btn-export").addEventListener("click", exportarCSV);
   </script>
 </body>
 </html>
