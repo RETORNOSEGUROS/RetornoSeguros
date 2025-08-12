@@ -7,6 +7,7 @@
 
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
 
   <!-- Inicialização Firebase -->
@@ -20,67 +21,23 @@
       appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
       measurementId: "G-C6E44WXLPW"
     };
-    firebase.initializeApp(firebaseConfig);
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
   </script>
 
-  <!-- Estilos -->
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f4f7fa;
-      padding: 20px;
-    }
-
-    h1 {
-      text-align: center;
-      color: #004080;
-      margin-bottom: 20px;
-    }
-
-    .busca {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-
-    .busca input {
-      width: 80%;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      font-size: 16px;
-    }
-
-    .card {
-      background: white;
-      border-radius: 10px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-
-    .card h2 {
-      margin-top: 0;
-      color: #004080;
-    }
-
-    .card p {
-      margin: 6px 0;
-    }
-
-    button {
-      background-color: #004080;
-      color: white;
-      padding: 8px 12px;
-      border: none;
-      border-radius: 5px;
-      margin-top: 10px;
-      cursor: pointer;
-    }
+    body{font-family:Arial,sans-serif;background:#f4f7fa;padding:20px}
+    h1{color:#004080;text-align:center;margin-bottom:20px}
+    .busca{text-align:center;margin-bottom:20px}
+    .busca input{width:80%;max-width:900px;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:16px}
+    .card{background:#fff;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.1);padding:20px;margin-bottom:20px}
+    .card h2{margin-top:0;color:#004080}
+    .card p{margin:6px 0}
+    button{background:#004080;color:#fff;padding:8px 12px;border:none;border-radius:6px;margin-top:10px;cursor:pointer}
+    .info{color:#666;text-align:center;margin-top:10px}
   </style>
 </head>
 <body>
-
   <h1>Consultar Dicas de Produtos</h1>
 
   <div class="busca">
@@ -88,12 +45,14 @@
   </div>
 
   <div id="container"></div>
+  <div id="status" class="info"></div>
 
   <script>
     const container = document.getElementById("container");
     const buscaInput = document.getElementById("busca");
+    const statusEl = document.getElementById("status");
 
-    function criarCard(data) {
+    function criarCard(data){
       const textoFormatado = `
 📌 *${data.nomeProduto}*
 
@@ -108,45 +67,64 @@
 
       const card = document.createElement("div");
       card.className = "card";
-      card.setAttribute("data-nome", data.nomeProduto.toLowerCase());
+      card.setAttribute("data-nome", (data.nomeProduto || '').toLowerCase());
 
       card.innerHTML = `
-        <h2>${data.nomeProduto}</h2>
+        <h2>${data.nomeProduto || '-'}</h2>
         <p><strong>O que é:</strong> ${data.descricao || '-'}</p>
         <p><strong>O que pedir para cotar:</strong> ${data.oQuePedir || '-'}</p>
         <p><strong>Dicas comerciais:</strong> ${data.dicas || '-'}</p>
         <p><strong>Gatilhos mentais:</strong> ${data.gatilhos || '-'}</p>
         <button onclick="copiarTexto(\`${textoFormatado}\`)">📲 Copiar para WhatsApp</button>
       `;
-
       return card;
     }
 
-    function copiarTexto(texto) {
-      navigator.clipboard.writeText(texto).then(() => {
-        alert("Texto copiado! Agora é só colar no WhatsApp.");
-      }).catch(err => {
-        alert("Erro ao copiar.");
-      });
+    function copiarTexto(texto){
+      navigator.clipboard.writeText(texto)
+        .then(()=>alert("Texto copiado! Agora é só colar no WhatsApp."))
+        .catch(()=>alert("Erro ao copiar."));
     }
 
-    function aplicarBusca() {
-      const termo = buscaInput.value.trim().toLowerCase();
-      const cards = document.querySelectorAll(".card");
-      cards.forEach(card => {
-        const nome = card.getAttribute("data-nome");
+    function aplicarBusca(){
+      const termo = (buscaInput.value || '').trim().toLowerCase();
+      document.querySelectorAll(".card").forEach(card=>{
+        const nome = card.getAttribute("data-nome") || '';
         card.style.display = nome.includes(termo) ? "block" : "none";
       });
     }
-
     buscaInput.addEventListener("input", aplicarBusca);
 
-    db.collection("dicas_produtos").orderBy("nomeProduto").get().then(snapshot => {
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        const card = criarCard(data);
-        container.appendChild(card);
-      });
+    function carregar(){
+      statusEl.textContent = "Carregando...";
+      db.collection("dicas_produtos").orderBy("nomeProduto").get()
+        .then(snapshot=>{
+          container.innerHTML = "";
+          if (snapshot.empty){
+            statusEl.textContent = "Sem registros em dicas_produtos.";
+            return;
+          }
+          snapshot.forEach(doc=>{
+            container.appendChild(criarCard(doc.data()));
+          });
+          statusEl.textContent = "";
+          aplicarBusca();
+        })
+        .catch(err=>{
+          console.error(err);
+          statusEl.textContent = "Falha ao carregar (verifique login/regras do Firestore).";
+          alert("Erro: " + (err && err.message ? err.message : err));
+        });
+    }
+
+    // Exigir login
+    firebase.auth().onAuthStateChanged(user=>{
+      if (!user){
+        // redirecione para sua página de login
+        window.location.href = "../index.html";
+        return;
+      }
+      carregar();
     });
   </script>
 </body>
