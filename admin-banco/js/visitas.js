@@ -5,25 +5,53 @@ if (!firebase.apps.length) {
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-// ---------- Helpers ----------
-function maskDDMM(value) {
-  // mantém só números
-  let v = (value || "").replace(/\D/g, "").slice(0, 4);
-  if (v.length >= 3) v = v.slice(0, 2) + "/" + v.slice(2);
+/* =======================
+   Helpers de máscara/validação
+   ======================= */
+
+// dd/mm/aaaa enquanto digita (aceita só números)
+function maskDDMMYYYY(value) {
+  let v = (value || "").replace(/\D/g, "").slice(0, 8); // até 8 dígitos
+  if (v.length >= 5) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
+  else if (v.length >= 3) v = v.slice(0, 2) + "/" + v.slice(2);
   return v;
 }
 
-function validaDDMM(v) {
-  // aceita vazio (campo opcional), ou dd/mm válido
-  if (!v) return true;
-  const m = /^(\d{2})\/(\d{2})$/.exec(v);
+function validaDDMMYYYY(v) {
+  if (!v) return true; // opcional
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
   if (!m) return false;
   const d = parseInt(m[1], 10);
-  const mth = parseInt(m[2], 10);
-  return d >= 1 && d <= 31 && mth >= 1 && mth <= 12;
+  const mo = parseInt(m[2], 10);
+  const y = parseInt(m[3], 10);
+  if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900) return false;
+
+  // valida calendário (evita 31/02/2025 etc.)
+  const dt = new Date(y, mo - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === (mo - 1) && dt.getDate() === d;
 }
 
-// ---------- Carregamentos ----------
+// moeda BR em tempo real
+function maskMoedaBR(v) {
+  v = (v || "").toString().replace(/\D/g, "");
+  if (!v) return "R$ 0,00";
+  v = (parseInt(v, 10) / 100).toFixed(2); // duas casas
+  // 1234.56 -> "1.234,56"
+  let [int, dec] = v.split(".");
+  int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return "R$ " + int + "," + dec;
+}
+
+// parse "R$ 50.100,15" -> 50100.15 (Number)
+function parseMoedaBRToNumber(str) {
+  if (!str) return 0;
+  return parseFloat(str.replace(/[R$\s\.]/g, "").replace(",", ".")) || 0;
+}
+
+/* =======================
+   Carregamentos
+   ======================= */
+
 function carregarEmpresas() {
   const select = document.getElementById("empresa");
   const infoEmpresa = document.getElementById("infoEmpresa");
@@ -36,7 +64,7 @@ function carregarEmpresas() {
       const option = document.createElement("option");
       option.value = doc.id;
       option.textContent = data.nome || "(Sem nome)";
-      // tenta vários campos comuns p/ RM
+      // tenta vários campos para o RM
       option.setAttribute("data-rm", data.rmNome || data.rm || data.rm_nome || "Não informado");
       select.appendChild(option);
     });
@@ -53,15 +81,22 @@ function carregarEmpresas() {
   });
 }
 
+// Busca TODAS as seguradoras existentes, sem depender de orderBy/indice
 function carregarSeguradoras() {
-  return db.collection("seguradoras").orderBy("nome").get()
+  return db.collection("seguradoras").get()
     .then(snapshot => {
       const arr = [];
-      snapshot.forEach(doc => arr.push(doc.data().nome));
-      // fallback básico se a coleção estiver vazia
-      return arr.length ? arr : ["Porto", "Bradesco", "SulAmérica", "Allianz", "HDI", "Tokio Marine", "Sompo"];
+      snapshot.forEach(doc => {
+        const n = (doc.data() && doc.data().nome) ? String(doc.data().nome).trim() : null;
+        if (n) arr.push(n);
+      });
+      // ordena no cliente
+      return arr.sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
     })
-    .catch(() => ["Porto", "Bradesco", "SulAmérica", "Allianz", "HDI", "Tokio Marine", "Sompo"]);
+    .catch(err => {
+      console.error("Erro ao carregar seguradoras:", err);
+      return [];
+    });
 }
 
 async function carregarRamosSeguro() {
@@ -74,7 +109,7 @@ async function carregarRamosSeguro() {
     });
     if (ramos.length) return ramos;
 
-    // fallback caso a coleção não exista ou esteja vazia
+    // fallback
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -98,6 +133,10 @@ async function carregarRamosSeguro() {
     ];
   }
 }
+
+/* =======================
+   UI dinâmica dos ramos
+   ======================= */
 
 async function gerarCamposRamos(seguradoras) {
   const ramos = await carregarRamosSeguro();
@@ -135,13 +174,12 @@ async function gerarCamposRamos(seguradoras) {
     sub.className = "subcampos";
     sub.id = `campos-${ramo.id}`;
 
-    // vencimento dd/mm (texto)
     sub.innerHTML = `
-      <label>Vencimento (dd/mm):</label>
-      <input type="text" id="${ramo.id}-vencimento" inputmode="numeric" placeholder="dd/mm" maxlength="5">
+      <label>Vencimento (dd/mm/aaaa):</label>
+      <input type="text" id="${ramo.id}-vencimento" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10">
 
       <label>Prêmio anual (R$):</label>
-      <input type="number" id="${ramo.id}-premio" placeholder="0,00" step="0.01">
+      <input type="text" id="${ramo.id}-premio" placeholder="R$ 0,00">
 
       <label>Seguradora:</label>
       <select id="${ramo.id}-seguradora">
@@ -153,9 +191,20 @@ async function gerarCamposRamos(seguradoras) {
       <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
     `;
 
-    // máscara simples dd/mm
-    sub.querySelector(`#${ramo.id}-vencimento`).addEventListener("input", (e) => {
-      e.target.value = maskDDMM(e.target.value);
+    // máscara vencimento dd/mm/aaaa
+    const vencInput = sub.querySelector(`#${ramo.id}-vencimento`);
+    vencInput.addEventListener("input", (e) => {
+      e.target.value = maskDDMMYYYY(e.target.value);
+    });
+
+    // máscara moeda BR
+    const premioInput = sub.querySelector(`#${ramo.id}-premio`);
+    premioInput.addEventListener("input", (e) => {
+      e.target.value = maskMoedaBR(e.target.value);
+    });
+    // inicia com R$ 0,00 ao focar se estiver vazio (opcional)
+    premioInput.addEventListener("focus", (e) => {
+      if (!e.target.value) e.target.value = "R$ 0,00";
     });
 
     // toggle subcampos
@@ -168,7 +217,10 @@ async function gerarCamposRamos(seguradoras) {
   });
 }
 
-// ---------- Salvar ----------
+/* =======================
+   Salvar
+   ======================= */
+
 function registrarVisita() {
   const empresaSelect = document.getElementById("empresa");
   const empresaId = empresaSelect.value;
@@ -211,17 +263,18 @@ function registrarVisita() {
         const id = input.value;
 
         const vencimentoStr = (document.getElementById(`${id}-vencimento`).value || "").trim();
-        const premioNum = parseFloat(document.getElementById(`${id}-premio`).value.replace(",", ".")) || 0;
+        const premioStr = document.getElementById(`${id}-premio`).value || "";
+        const premioNum = parseMoedaBRToNumber(premioStr);
         const seguradoraSel = document.getElementById(`${id}-seguradora`).value || "";
         const obs = document.getElementById(`${id}-observacoes`).value || "";
 
-        if (!validaDDMM(vencimentoStr)) {
-          erroVenc = `Vencimento inválido em ${id}. Use dd/mm.`;
+        if (!validaDDMMYYYY(vencimentoStr)) {
+          erroVenc = `Vencimento inválido em ${id}. Use dd/mm/aaaa.`;
         }
 
         visita.ramos[id] = {
-          vencimento: vencimentoStr, // mantém dd/mm (igual ao backup)
-          premio: premioNum,
+          vencimento: vencimentoStr, // agora dd/mm/aaaa
+          premio: premioNum,         // número (ex.: 50100.15)
           seguradora: seguradoraSel,
           observacoes: obs
         };
@@ -232,9 +285,7 @@ function registrarVisita() {
       alert(erroVenc);
       return;
     }
-
     if (!algumRamo) {
-      // permite salvar a visita sem ramos? Mantive exigindo ao menos 1
       alert("Marque pelo menos um ramo e preencha os campos.");
       return;
     }
@@ -249,12 +300,14 @@ function registrarVisita() {
   });
 }
 
-// ---------- Bootstrap ----------
+/* =======================
+   Bootstrap
+   ======================= */
+
 window.addEventListener("DOMContentLoaded", async () => {
   carregarEmpresas();
   const seguradoras = await carregarSeguradoras();
   await gerarCamposRamos(seguradoras);
 });
 
-// torna a função global (usada no onclick do HTML)
 window.registrarVisita = registrarVisita;
