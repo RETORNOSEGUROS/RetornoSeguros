@@ -3,10 +3,21 @@ if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
-const db = firebase.firestore();
+const db   = firebase.firestore();
 
 /* =======================
-   Helpers de máscara/validação
+   Estado/Perfil
+   ======================= */
+let usuarioAtual = null;
+let perfilAtual  = "";          // "admin" | "gerente-chefe" | "assistente" | "rm" | ...
+let minhaAgencia = "";
+let isAdmin      = false;
+
+// Mapa auxiliar das empresas carregadas (para obter agenciaId/rm na hora de salvar)
+const empresaMetaMap = new Map(); // empresaId -> { nome, agenciaId, rmUid, rmNome }
+
+/* =======================
+   Helpers de máscara/validação (mantidos)
    ======================= */
 
 // dd/mm/aaaa enquanto digita (aceita só números)
@@ -46,34 +57,92 @@ function parseMoedaBRToNumber(str) {
 }
 
 /* =======================
+   Perfil do usuário
+   ======================= */
+async function getPerfilAgencia() {
+  const user = auth.currentUser;
+  if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
+  const udoc = await db.collection("usuarios_banco").doc(user.uid).get();
+  const d = udoc.exists ? (udoc.data() || {}) : {};
+  const perfil = (d.perfil || d.roleId || "").toLowerCase();
+  const agenciaId = d.agenciaId || "";
+  const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
+  return { perfil, agenciaId, isAdmin: admin, nome: d.nome || user.email || "" };
+}
+
+/* =======================
    Carregamentos
    ======================= */
 
-function carregarEmpresas() {
+async function carregarEmpresas() {
   const select = document.getElementById("empresa");
   const infoEmpresa = document.getElementById("infoEmpresa");
   const rmNomeSpan = document.getElementById("rmNome");
 
-  db.collection("empresas").orderBy("nome").get().then(snapshot => {
-    select.innerHTML = `<option value="">Selecione uma empresa</option>`;
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      const option = document.createElement("option");
-      option.value = doc.id;
-      option.textContent = data.nome || "(Sem nome)";
-      option.setAttribute("data-rm", data.rmNome || data.rm || data.rm_nome || "Não informado");
-      select.appendChild(option);
+  if (!select) return;
+
+  select.innerHTML = `<option value="">Carregando empresas...</option>`;
+  empresaMetaMap.clear();
+
+  // monta queries por perfil
+  const colEmp = db.collection("empresas");
+  const buckets = [];
+
+  if (isAdmin) {
+    // Admin: todas
+    try { buckets.push(await colEmp.orderBy("nome").get()); }
+    catch { buckets.push(await colEmp.get()); }
+  } else if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
+    // Chefe/Assistente: por agência
+    if (minhaAgencia) {
+      try { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).orderBy("nome").get()); }
+      catch { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).get()); }
+    }
+  } else {
+    // RM: apenas próprias (aceita vários campos de dono)
+    try { buckets.push(await colEmp.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
+    try { buckets.push(await colEmp.where("rmId","==", usuarioAtual.uid).get()); } catch(e){}
+    try { buckets.push(await colEmp.where("usuarioId","==",usuarioAtual.uid).get()); } catch(e){}
+    try { buckets.push(await colEmp.where("gerenteId","==",usuarioAtual.uid).get()); } catch(e){}
+  }
+
+  // mescla por ID
+  const map = new Map();
+  buckets.forEach(snap => {
+    snap?.forEach?.(doc => map.set(doc.id, doc));
+    if (snap?.docs) snap.docs.forEach(doc => map.set(doc.id, doc));
+  });
+
+  const docs = Array.from(map.values()).map(d => ({ id: d.id, ...d.data() }))
+    .sort((a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR"));
+
+  // render
+  select.innerHTML = `<option value="">Selecione uma empresa</option>`;
+  docs.forEach(data => {
+    const option = document.createElement("option");
+    option.value = data.id;
+    option.textContent = data.nome || "(Sem nome)";
+
+    const rmNome = data.rmNome || data.rm || data.rm_nome || "Não informado";
+    option.setAttribute("data-rm", rmNome);
+
+    // guarda meta para uso no salvar()
+    empresaMetaMap.set(data.id, {
+      nome: data.nome || "(Sem nome)",
+      agenciaId: data.agenciaId || "",
+      rmUid: data.rmUid || data.rmId || null,
+      rmNome: rmNome
     });
 
-    select.addEventListener("change", () => {
-      const selectedOption = select.options[select.selectedIndex];
-      const rmNome = selectedOption.getAttribute("data-rm") || "Não informado";
-      rmNomeSpan.textContent = rmNome;
-      infoEmpresa.style.display = selectedOption.value ? "block" : "none";
-    });
-  }).catch(err => {
-    console.error("Erro ao carregar empresas:", err);
-    select.innerHTML = `<option value="">Erro ao carregar empresas</option>`;
+    select.appendChild(option);
+  });
+
+  // listener de mudança para mostrar info do RM
+  select.addEventListener("change", () => {
+    const selectedOption = select.options[select.selectedIndex];
+    const rmNome = selectedOption.getAttribute("data-rm") || "Não informado";
+    rmNomeSpan.textContent = rmNome;
+    infoEmpresa.style.display = selectedOption.value ? "block" : "none";
   });
 }
 
@@ -128,7 +197,7 @@ async function carregarRamosSeguro() {
 }
 
 /* =======================
-   UI dinâmica dos ramos
+   UI dinâmica dos ramos (mantida)
    ======================= */
 
 async function gerarCamposRamos(seguradoras) {
@@ -207,33 +276,34 @@ async function gerarCamposRamos(seguradoras) {
 }
 
 /* =======================
-   Salvar
+   Salvar (agora grava agenciaId/rmUid/rmNome)
    ======================= */
 
 function registrarVisita() {
   const empresaSelect = document.getElementById("empresa");
-  const empresaId = empresaSelect.value;
+  const empresaId = empresaSelect?.value || "";
   const tipoVisitaSelect = document.getElementById("tipoVisita");
   const tipoVisita = tipoVisitaSelect ? tipoVisitaSelect.value : "";
-  const rmNome = empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "";
-  const empresaNome = empresaSelect.options[empresaSelect.selectedIndex]?.textContent || "";
+  const empresaNome = empresaSelect?.options?.[empresaSelect.selectedIndex]?.textContent || "";
 
-  // NOVO: número de funcionários
+  // número de funcionários (mantido)
   const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
   const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
 
-  if (!empresaId) {
-    alert("Selecione a empresa.");
-    return;
-  }
-  if (!tipoVisita) {
-    alert("Selecione o tipo da visita.");
-    return;
-  }
+  if (!empresaId)  return alert("Selecione a empresa.");
+  if (!tipoVisita) return alert("Selecione o tipo da visita.");
 
-  auth.onAuthStateChanged(user => {
-    if (!user) {
-      alert("Usuário não autenticado.");
+  const meta = empresaMetaMap.get(empresaId) || {};
+  const agenciaDaEmpresa = meta.agenciaId || "";
+  const rmUidEmpresa     = meta.rmUid || null;
+  const rmNomeEmpresa    = meta.rmNome || (empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "");
+
+  auth.onAuthStateChanged(async (user) => {
+    if (!user) { alert("Usuário não autenticado."); return; }
+
+    // RM só pode criar na própria agência (se a empresa tiver agência)
+    if (perfilAtual === "rm" && agenciaDaEmpresa && minhaAgencia && agenciaDaEmpresa !== minhaAgencia) {
+      alert("Você só pode registrar visitas de empresas da sua agência.");
       return;
     }
 
@@ -241,8 +311,9 @@ function registrarVisita() {
       empresaId,
       empresaNome,
       tipoVisita,
-      rmNome,
-      numeroFuncionarios, // <-- novo campo
+      rmNome: rmNomeEmpresa || "Não informado",
+      rmUid:  rmUidEmpresa || null,
+      agenciaId: agenciaDaEmpresa || minhaAgencia || "", // <<< grava agência
       usuarioId: user.uid,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
       ramos: {}
@@ -275,33 +346,37 @@ function registrarVisita() {
       }
     });
 
-    if (erroVenc) {
-      alert(erroVenc);
-      return;
-    }
-    if (!algumRamo) {
-      alert("Marque pelo menos um ramo e preencha os campos.");
-      return;
-    }
+    if (erroVenc) return alert(erroVenc);
+    if (!algumRamo) return alert("Marque pelo menos um ramo e preencha os campos.");
 
-    db.collection("visitas").add(visita).then(() => {
+    try {
+      await db.collection("visitas").add(visita);
       alert("Visita registrada com sucesso.");
       location.reload();
-    }).catch(err => {
+    } catch (err) {
       console.error("Erro ao registrar visita:", err);
       alert("Erro ao salvar visita.");
-    });
+    }
   });
 }
 
 /* =======================
    Bootstrap
    ======================= */
-
 window.addEventListener("DOMContentLoaded", async () => {
-  carregarEmpresas();
-  const seguradoras = await carregarSeguradoras();
-  await gerarCamposRamos(seguradoras);
+  auth.onAuthStateChanged(async (user) => {
+    if (!user) return (window.location.href = "login.html");
+    usuarioAtual = user;
+
+    const ctx = await getPerfilAgencia();
+    perfilAtual  = ctx.perfil;
+    minhaAgencia = ctx.agenciaId;
+    isAdmin      = ctx.isAdmin;
+
+    await carregarEmpresas();
+    const seguradoras = await carregarSeguradoras();
+    await gerarCamposRamos(seguradoras);
+  });
 });
 
 window.registrarVisita = registrarVisita;
