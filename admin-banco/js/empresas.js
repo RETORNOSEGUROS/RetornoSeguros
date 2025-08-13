@@ -67,7 +67,7 @@ auth.onAuthStateChanged(async user => {
     await carregarRM();        // preenche o combo (admin/chefe)
     await carregarEmpresas();  // monta a tabela
   } catch (e) {
-    console.error(e);
+    console.error("[empresas] erro inesperado no boot:", e);
     erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
   }
 });
@@ -121,7 +121,7 @@ async function carregarRM() {
         select.appendChild(opt);
       });
   } catch (e) {
-    console.warn("Erro ao carregar RMs do filtro:", e);
+    console.warn("[empresas] carregarRM falhou:", e);
   }
 }
 
@@ -129,103 +129,119 @@ async function carregarRM() {
 async function carregarEmpresas() {
   const filtroRMNome = document.getElementById("filtroRM")?.value || ""; // nome do RM (só admin/chefe usa)
 
-  // Monta query respeitando regras e evitando “OR” de campos legados
-  let q = db.collection("empresas");
-
-  if (!isAdmin) {
-    if (perfilAtual === "rm") {
-      // Busca por agência (permitido nas rules) e filtra no cliente para SOMENTE as do RM logado
-      if (minhaAgencia) q = q.where("agenciaId", "==", minhaAgencia);
-    } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-      q = q.where("agenciaId", "==", minhaAgencia);
-    }
-  }
-
-  let snapshot;
   try {
-    snapshot = await q.get();
-  } catch (err) {
-    console.error("Falha na query de empresas:", err);
-    erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
-    return;
-  }
+    let docs = [];
 
-  empresasCache = [];
-  snapshot.forEach(doc => {
-    const e = { id: doc.id, ...doc.data() };
+    if (isAdmin) {
+      // Admin: tudo
+      const snap = await db.collection("empresas").get();
+      docs = snap.docs;
+    } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+      // Chefe: por agência
+      const snap = await db.collection("empresas")
+        .where("agenciaId","==",minhaAgencia).get();
+      docs = snap.docs;
+    } else if (perfilAtual === "rm") {
+      // RM: precisa bater com as rules de "dono"
+      const buckets = [];
 
-    // Filtra por RM logado (somente no perfil rm)
-    if (!isAdmin && perfilAtual === "rm") {
-      const dono = e.rmUid || e.rmId || e.criadoPorUid || null;
-      if (dono !== meuUid) return; // mostra só as dele
+      try { buckets.push(await db.collection("empresas").where("rmUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] where rmUid== falhou:", e); }
+      try { buckets.push(await db.collection("empresas").where("rmId","==",meuUid).get()); } catch(e){ console.warn("[empresas] where rmId== falhou:", e); }
+      try { buckets.push(await db.collection("empresas").where("criadoPorUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] where criadoPorUid== falhou:", e); }
+
+      // mescla resultados (sem duplicates)
+      const map = new Map();
+      buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
+      docs = Array.from(map.values());
+
+      // fallback: se ainda vazio e você grava agência certinha, tenta por agência e filtra no cliente
+      if (docs.length === 0 && minhaAgencia) {
+        try {
+          const snapAg = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
+          docs = snapAg.docs.filter(d => {
+            const e = d.data() || {};
+            const dono = e.rmUid || e.rmId || e.criadoPorUid || null;
+            return dono === meuUid;
+          });
+        } catch(e){ console.warn("[empresas] fallback por agência falhou:", e); }
+      }
     }
 
-    // Filtro de RM por NOME (apenas admin/chefe)
-    const nomeRM = e.rmNome || e.rm || "";
-    if (filtroRMNome && nomeRM !== filtroRMNome) return;
+    empresasCache = [];
+    docs.forEach(doc => {
+      const e = { id: doc.id, ...doc.data() };
 
-    empresasCache.push(e);
-  });
+      // Filtro por RM (nome) – apenas admin/chefe
+      const nomeRM = e.rmNome || e.rm || "";
+      if (filtroRMNome && nomeRM !== filtroRMNome) return;
 
-  if (!empresasCache.length) {
-    const cont = document.getElementById("tabelaEmpresas");
-    if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
-    return;
-  }
-
-  // Para cada empresa, mapeia status por produto a partir das cotações
-  const linhas = await Promise.all(
-    empresasCache.map(async (empresa) => {
-      let cotacoesSnap;
-      try {
-        cotacoesSnap = await db.collection("cotacoes-gerentes")
-          .where("empresaId", "==", empresa.id).get();
-      } catch (e) {
-        console.warn("Erro ao ler cotações da empresa", empresa.id, e);
-        cotacoesSnap = { forEach: () => {} };
-      }
-
-      const statusPorProduto = {};
-      produtos.forEach(p => statusPorProduto[p] = "nenhum");
-
-      cotacoesSnap.forEach(doc => {
-        const c = doc.data() || {};
-        const ramoCotado = c.ramo;
-        const produtoId = produtos.find(id =>
-          normalize(nomesProdutos[id]) === normalize(ramoCotado)
-        );
-        if (!produtoId) return;
-        statusPorProduto[produtoId] = classFromStatus(c.status);
-      });
-
-      return { nome: empresa.nome, status: statusPorProduto };
-    })
-  );
-
-  // Render
-  let html = `<table><thead><tr><th>Empresa</th>`;
-  produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
-  html += `</tr></thead><tbody>`;
-
-  linhas.forEach(linha => {
-    html += `<tr><td>${linha.nome}</td>`;
-    produtos.forEach(p => {
-      const cor = linha.status[p];
-      const classe = {
-        verde: "status-verde",
-        vermelho: "status-vermelho",
-        amarelo: "status-amarelo",
-        azul: "status-azul",
-        nenhum: "status-cinza"
-      }[cor] || "status-cinza";
-      const simbolo = {
-        verde: "🟢", vermelho: "🔴", amarelo: "🟡", azul: "🔵", nenhum: "⚪️"
-      }[cor] || "⚪️";
-      html += `<td class="${classe}">${simbolo}</td>`;
+      empresasCache.push(e);
     });
-    html += `</tr>`;
-  });
 
-  html += `</tbody></table>`;
-  document.getElementById("tabelaEmpresas").innerHTML = html;
+    if (!empresasCache.length) {
+      const cont = document.getElementById("tabelaEmpresas");
+      if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
+      return;
+    }
+
+    // Para cada empresa, mapeia status por produto a partir das cotações
+    const linhas = await Promise.all(
+      empresasCache.map(async (empresa) => {
+        let cotacoesSnap;
+        try {
+          cotacoesSnap = await db.collection("cotacoes-gerentes")
+            .where("empresaId", "==", empresa.id).get();
+        } catch (e) {
+          console.warn("Erro ao ler cotações da empresa", empresa.id, e);
+          cotacoesSnap = { forEach: () => {} };
+        }
+
+        const statusPorProduto = {};
+        produtos.forEach(p => statusPorProduto[p] = "nenhum");
+
+        cotacoesSnap.forEach(doc => {
+          const c = doc.data() || {};
+          const ramoCotado = c.ramo;
+          const produtoId = produtos.find(id =>
+            normalize(nomesProdutos[id]) === normalize(ramoCotado)
+          );
+          if (!produtoId) return;
+          statusPorProduto[produtoId] = classFromStatus(c.status);
+        });
+
+        return { nome: empresa.nome, status: statusPorProduto };
+      })
+    );
+
+    // Render
+    let html = `<table><thead><tr><th>Empresa</th>`;
+    produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
+    html += `</tr></thead><tbody>`;
+
+    linhas.forEach(linha => {
+      html += `<tr><td>${linha.nome}</td>`;
+      produtos.forEach(p => {
+        const cor = linha.status[p];
+        const classe = {
+          verde: "status-verde",
+          vermelho: "status-vermelho",
+          amarelo: "status-amarelo",
+          azul: "status-azul",
+          nenhum: "status-cinza"
+        }[cor] || "status-cinza";
+        const simbolo = {
+          verde: "🟢", vermelho: "🔴", amarelo: "🟡", azul: "🔵", nenhum: "⚪️"
+        }[cor] || "⚪️";
+        html += `<td class="${classe}">${simbolo}</td>`;
+      });
+      html += `</tr>`;
+    });
+
+    html += `</tbody></table>`;
+    document.getElementById("tabelaEmpresas").innerHTML = html;
+
+  } catch (err) {
+    console.error("[empresas] carregarEmpresas erro:", err);
+    erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
+  }
 }
