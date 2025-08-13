@@ -172,6 +172,7 @@ async function carregarRamosSeguro() {
     });
     if (ramos.length) return ramos;
 
+    // fallback só se a coleção estiver vazia
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -186,7 +187,7 @@ async function carregarRamosSeguro() {
     ];
   } catch (e) {
     console.error("Erro ao carregar ramos-seguro:", e);
-    // Se cair aqui (por permissão), o RM verá a lista básica:
+    // se der permissão negada, o RM verá lista básica
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -198,7 +199,7 @@ async function carregarRamosSeguro() {
 }
 
 /* =======================
-   UI dinâmica dos ramos (mantida)
+   UI dinâmica dos ramos
    ======================= */
 
 async function gerarCamposRamos(seguradoras) {
@@ -237,6 +238,7 @@ async function gerarCamposRamos(seguradoras) {
     sub.className = "subcampos";
     sub.id = `campos-${ramo.id}`;
 
+    // ATENÇÃO: abre e fecha com crase `
     sub.innerHTML = `
       <label>Vencimento (dd/mm/aaaa):</label>
       <input type="text" id="${ramo.id}-vencimento" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10">
@@ -252,7 +254,7 @@ async function gerarCamposRamos(seguradoras) {
 
       <label>Observações:</label>
       <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
-    ";
+    `;
 
     const vencInput = sub.querySelector(`#${ramo.id}-vencimento`);
     vencInput.addEventListener("input", (e) => {
@@ -277,7 +279,7 @@ async function gerarCamposRamos(seguradoras) {
 }
 
 /* =======================
-   Salvar (agora grava agenciaId/rmUid/rmNome e numeroFuncionarios)
+   Salvar (grava agenciaId/rm e numeroFuncionarios)
    ======================= */
 
 function registrarVisita() {
@@ -303,84 +305,4 @@ function registrarVisita() {
     if (!user) { alert("Usuário não autenticado."); return; }
 
     // RM só pode criar na própria agência (se a empresa tiver agência)
-    if (perfilAtual === "rm" && agenciaDaEmpresa && minhaAgencia && agenciaDaEmpresa !== minhaAgencia) {
-      alert("Você só pode registrar visitas de empresas da sua agência.");
-      return;
-    }
-
-    const visita = {
-      empresaId,
-      empresaNome,
-      tipoVisita,
-      rmNome: rmNomeEmpresa || "Não informado",
-      rmUid:  rmUidEmpresa || null,
-      agenciaId: agenciaDaEmpresa || minhaAgencia || "",
-      usuarioId: user.uid,
-      criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-      // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-      numeroFuncionarios: numeroFuncionarios, // << grava o campo
-      // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-      ramos: {}
-    };
-
-    let algumRamo = false;
-    let erroVenc = null;
-
-    document.querySelectorAll(".ramo").forEach(input => {
-      if (input.checked) {
-        algumRamo = true;
-        const id = input.value;
-
-        const vencimentoStr = (document.getElementById(`${id}-vencimento`).value || "").trim();
-        const premioStr = document.getElementById(`${id}-premio`).value || "";
-        const premioNum = parseMoedaBRToNumber(premioStr);
-        const seguradoraSel = document.getElementById(`${id}-seguradora`).value || "";
-        const obs = document.getElementById(`${id}-observacoes`).value || "";
-
-        if (!validaDDMMYYYY(vencimentoStr)) {
-          erroVenc = `Vencimento inválido em ${id}. Use dd/mm/aaaa.`;
-        }
-
-        visita.ramos[id] = {
-          vencimento: vencimentoStr,
-          premio: premioNum,
-          seguradora: seguradoraSel,
-          observacoes: obs
-        };
-      }
-    });
-
-    if (erroVenc) return alert(erroVenc);
-    if (!algumRamo) return alert("Marque pelo menos um ramo e preencha os campos.");
-
-    try {
-      await db.collection("visitas").add(visita);
-      alert("Visita registrada com sucesso.");
-      location.reload();
-    } catch (err) {
-      console.error("Erro ao registrar visita:", err);
-      alert("Erro ao salvar visita.");
-    }
-  });
-}
-
-/* =======================
-   Bootstrap
-   ======================= */
-window.addEventListener("DOMContentLoaded", async () => {
-  auth.onAuthStateChanged(async (user) => {
-    if (!user) return (window.location.href = "login.html");
-    usuarioAtual = user;
-
-    const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;
-    minhaAgencia = ctx.agenciaId;
-    isAdmin      = ctx.isAdmin;
-
-    await carregarEmpresas();
-    const seguradoras = await carregarSeguradoras();
-    await gerarCamposRamos(seguradoras);
-  });
-});
-
-window.registrarVisita = registrarVisita;
+    if (perfilAtual === "rm" && agenciaDaEmpresa && minhaAgencia && agenciaDaEmpresa !== minhaAg
