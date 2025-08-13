@@ -3,283 +3,243 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-auth.onAuthStateChanged(user => {
-  if (!user) return window.location.href = "login.html";
+let CTX = { uid: null, perfil: null, agenciaId: null, nome: null };
 
-  const uid = user.uid;
-  db.collection("usuarios_banco").doc(uid).get().then(doc => {
-    if (!doc.exists) {
-      document.getElementById("perfilUsuario").textContent = "Usuário não encontrado.";
-      return;
-    }
+// ========= Helpers =========
+const normalizarPerfil = (p) => String(p||"")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase().trim();
 
-    const dados   = doc.data();
-    const perfil  = (dados.perfil || "sem perfil");
-    const nome    = dados.nome || user.email;
-    document.getElementById("perfilUsuario").textContent = `${nome} (${perfil})`;
+const parseValor = (v) => {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v;
+  // remove R$, espaços e pontos de milhar; troca vírgula por ponto
+  const limp = String(v).replace(/[^0-9,.-]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+  const n = parseFloat(limp);
+  return Number.isFinite(n) ? n : 0;
+};
 
-    montarMenuLateral(perfil);   // ⬅️ novo: menu por perfil
-    carregarResumoPainel();
-  });
+const fmtBRL = (n) => `R$ ${parseValor(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const toDate = (x) => (x?.toDate ? x.toDate() : (x ? new Date(x) : null));
+const fmtData = (d) => d ? d.toLocaleDateString('pt-BR') : '-';
+const fmtHora = (d) => d ? d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}) : '';
+
+// ========= Auth =========
+auth.onAuthStateChanged(async (user) => {
+  if (!user) return window.location.href = 'login.html';
+  CTX.uid = user.uid;
+
+  const profSnap = await db.collection('usuarios_banco').doc(user.uid).get();
+  if (!profSnap.exists) {
+    document.getElementById('perfilUsuario').textContent = 'Usuário não encontrado';
+    return;
+  }
+  const dados = profSnap.data();
+  CTX.perfil    = normalizarPerfil(dados.perfil || '');
+  CTX.agenciaId = dados.agenciaId || null;
+  CTX.nome      = dados.nome || user.email;
+
+  document.getElementById('perfilUsuario').textContent = `${CTX.nome} (${dados.perfil || 'sem perfil'})`;
+  montarMenuLateral(CTX.perfil);
+  carregarResumoPainel();
 });
 
-/** ===================== MENU POR PERFIL =====================
- * Regras solicitadas:
- *  - Admin: tudo
- *  - RM: cadastro-empresa, agenda-visitas, visitas, empresas, cotacoes,
- *        negocios-fechados, consultar-dicas, visitas-relatorio, vencimentos
- *  - Gerente Chefe: mesmas páginas do RM
- *  - Assistentes: agenda-visitas, visitas, cotacoes, consultar-dicas
- *    (chat-cotacao.htm é acessado dentro de cotações e **não** aparece no menu)
- *  - Demais perfis: nenhum item extra (fallback seguro)
- */
-function montarMenuLateral(perfilBruto) {
-  const menu = document.getElementById("menuNav");
+// ========= Menu por perfil =========
+function montarMenuLateral(perfil) {
+  const menu = document.getElementById('menuNav');
   if (!menu) return;
+  menu.innerHTML = '';
 
-  // Limpa o menu antes de montar
-  menu.innerHTML = "";
-
-  // Normaliza o texto do perfil (acentos/caixa)
-  const perfil = normalizarPerfil(perfilBruto);
-
-  // Catálogo completo (rótulo, href)
-  const CATALOGO = {
-    "Cadastrar Gerentes":      "cadastro-geral.html",
-    "Cadastrar Empresa":       "cadastro-empresa.html",
-    "Agências":                "agencias.html",
-    "Agenda Visitas":          "agenda-visitas.html",
-    "Visitas":                 "visitas.html",
-    "Empresas":                "empresas.html",
-    "Solicitações de Cotação": "cotacoes.html",
-    "Produção":                "negocios-fechados.html",
-    "Consultar Dicas":         "consultar-dicas.html",
-    "Dicas Produtos":          "dicas-produtos.html",
-    "Ramos Seguro":            "ramos-seguro.html",
-    "Relatório Visitas":       "visitas-relatorio.html",
-    "Vencimentos":             "vencimentos.html",
-    "Relatórios":              "relatorios.html"
+  const items = {
+    'Cadastrar Gerentes':      'cadastro-geral.html',
+    'Cadastrar Empresa':       'cadastro-empresa.html',
+    'Agências':                'agencias.html',
+    'Agenda Visitas':          'agenda-visitas.html',
+    'Visitas':                 'visitas.html',
+    'Empresas':                'empresas.html',
+    'Solicitações de Cotação': 'cotacoes.html',
+    'Produção':                'negocios-fechados.html',
+    'Consultar Dicas':         'consultar-dicas.html',
+    'Dicas Produtos':          'dicas-produtos.html',
+    'Ramos Seguro':            'ramos-seguro.html',
+    'Relatório Visitas':       'visitas-relatorio.html',
+    'Vencimentos':             'vencimentos.html',
+    'Relatórios':              'relatorios.html',
   };
 
-  // Listas por papel (definidas pelos HREFs)
-  const MENU_ADMIN = [
-    "cadastro-geral.html",
-    "cadastro-empresa.html",
-    "agencias.html",
-    "agenda-visitas.html",
-    "visitas.html",
-    "empresas.html",
-    "cotacoes.html",
-    "negocios-fechados.html",
-    "consultar-dicas.html",
-    "dicas-produtos.html",
-    "ramos-seguro.html",
-    "visitas-relatorio.html",
-    "vencimentos.html",
-    "relatorios.html"
-  ];
+  const byRole = {
+    'admin': Object.values(items),
+    'rm': [ items['Cadastrar Empresa'], items['Agenda Visitas'], items['Visitas'], items['Empresas'], items['Solicitações de Cotação'], items['Produção'], items['Consultar Dicas'], items['Relatório Visitas'], items['Vencimentos'] ],
+    'gerente chefe': [ items['Cadastrar Empresa'], items['Agenda Visitas'], items['Visitas'], items['Empresas'], items['Solicitações de Cotação'], items['Produção'], items['Consultar Dicas'], items['Relatório Visitas'], items['Vencimentos'] ],
+    'assistente': [ items['Agenda Visitas'], items['Visitas'], items['Solicitações de Cotação'], items['Consultar Dicas'] ],
+  };
 
-  const MENU_RM = [
-    "cadastro-empresa.html",
-    "agenda-visitas.html",
-    "visitas.html",
-    "empresas.html",
-    "cotacoes.html",
-    "negocios-fechados.html",
-    "consultar-dicas.html",
-    "visitas-relatorio.html",
-    "vencimentos.html"
-  ];
-
-  const MENU_GERENTE_CHEFE = [...MENU_RM]; // mesmas coisas dos RMs
-
-  const MENU_ASSISTENTE = [
-    "agenda-visitas.html",
-    "visitas.html",
-    "cotacoes.html",
-    "consultar-dicas.html"
-    // chat-cotacao.htm NÃO aparece no menu (acessado dentro de cotações)
-  ];
-
-  // Seleciona a lista final conforme perfil
-  let listaFinalHrefs = [];
-  switch (perfil) {
-    case "admin":
-      listaFinalHrefs = MENU_ADMIN;
-      break;
-    case "rm":
-      listaFinalHrefs = MENU_RM;
-      break;
-    case "gerente chefe":
-    case "gerente_chefe":
-    case "gerente-chefe":
-      listaFinalHrefs = MENU_GERENTE_CHEFE;
-      break;
-    case "assistente":
-    case "assistentes":
-      listaFinalHrefs = MENU_ASSISTENTE;
-      break;
-    default:
-      // fallback seguro: nada (ou ajuste aqui se quiser algo mínimo)
-      listaFinalHrefs = [];
-  }
-
-  // Monta os itens do menu na ordem definida pela lista final
-  const labelPorHref = inverterCatalogo(CATALOGO); // href -> label
-  listaFinalHrefs.forEach(href => {
-    const label = labelPorHref[href] || href;
-    const a = document.createElement("a");
-    a.href = href;
-    a.innerHTML = `🔹 ${label}`;
-    menu.appendChild(a);
+  const hrefs = byRole[perfil] || [];
+  const labels = Object.fromEntries(Object.entries(items).map(([k,v]) => [v,k]));
+  hrefs.forEach((href) => {
+    const a = document.createElement('a');
+    a.href = href; a.textContent = labels[href] || href; menu.appendChild(a);
   });
 }
 
-function normalizarPerfil(p) {
-  return String(p || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove acentos
-    .toLowerCase().trim();
+// ========= Painel =========
+async function carregarResumoPainel() {
+  skeleton('listaVisitasAgendadas', 5);
+  skeleton('listaConversas', 5);
+  skeleton('listaVisitas', 5);
+  skeleton('listaProducao', 5);
+  skeleton('listaCotacoes', 5);
+
+  await Promise.all([
+    blocoVisitasAgendadas(),
+    blocoUltimasConversas(),
+    blocoMinhasVisitas(),
+    blocoProducao(),
+    blocoMinhasCotacoes(),
+  ]);
 }
 
-function inverterCatalogo(cat) {
-  const inv = {};
-  Object.entries(cat).forEach(([label, href]) => inv[href] = label);
-  return inv;
+function skeleton(id, n=4){
+  const ul = document.getElementById(id); if(!ul) return; ul.innerHTML='';
+  for(let i=0;i<n;i++){ const li = document.createElement('li'); li.className='row'; li.innerHTML='<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:20%"></div>'; ul.appendChild(li); }
 }
 
-/** ===================== RESUMO DO PAINEL (mantido) ===================== */
-function carregarResumoPainel() {
-  // ============== VISITAS AGENDADAS (PRÓXIMAS 10) — aceita dataHoraTs | dataHoraStr | dataHora ==============
-  db.collection("agenda_visitas")
-    .get()
-    .then(snapshot => {
-      const todos = [];
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        let dt = null;
+// ---------- 1) Visitas Agendadas (próximas 10) ----------
+async function blocoVisitasAgendadas(){
+  let q = db.collection('agenda_visitas');
+  // Escopo por perfil
+  if (CTX.perfil === 'rm') q = q.where('rmUid', '==', CTX.uid);
+  else if (CTX.perfil === 'assistente' || CTX.perfil === 'gerente chefe') q = q.where('agenciaId', '==', CTX.agenciaId);
 
-        // ✅ qualquer um dos três formatos funciona
-        if (d.dataHoraTs?.toDate) {
-          dt = d.dataHoraTs.toDate();
-        } else if (d.dataHoraStr) {
-          dt = new Date(d.dataHoraStr);
-        } else if (d.dataHora) {
-          dt = new Date(d.dataHora);
-        }
+  const snap = await q.get();
+  const now = new Date();
+  const todos = [];
+  snap.forEach(doc=>{
+    const d = doc.data();
+    const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
+    if (dt && !isNaN(dt) && dt >= now) {
+      todos.push({ ...d, dt, id: doc.id });
+    }
+  });
+  todos.sort((a,b)=> a.dt - b.dt);
+  const arr = todos.slice(0,10);
 
-        if (dt && !isNaN(dt) && dt >= new Date()) {
-          todos.push({ id: doc.id, ...d, dt });
-        }
-      });
+  const ul = document.getElementById('listaVisitasAgendadas');
+  const badge = document.getElementById('qtdVA');
+  ul.innerHTML = arr.length ? '' : '<li class="row"><span class="meta">Nenhuma visita futura.</span></li>';
+  badge.textContent = arr.length;
 
-      todos.sort((a, b) => a.dt - b.dt);
-      const proximos = todos.slice(0, 10);
+  for(const v of arr){
+    const li = document.createElement('li');
+    const empresa = v.empresaNome || v.empresa || '-';
+    const rm = v.rmNome || v.rm || '-';
+    li.className='row';
+    li.innerHTML = `<div class="title">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${empresa}</strong></div><div class="meta">${rm} • ${v.tipo||'-'}</div>`;
+    ul.appendChild(li);
+  }
+}
 
-      const ul = document.getElementById("listaVisitasAgendadas");
-      ul.innerHTML = "";
+// ---------- 2) Últimas Conversas (chat-cotacao.htm) ----------
+async function blocoUltimasConversas(){
+  let q = db.collection('cotacoes-gerentes').orderBy('dataCriacao', 'desc').limit(20);
+  if (CTX.perfil === 'rm') q = q.where('rmUid','==',CTX.uid).orderBy('dataCriacao','desc').limit(20);
+  else if (CTX.perfil === 'assistente' || CTX.perfil === 'gerente chefe') q = q.where('agenciaId','==',CTX.agenciaId).orderBy('dataCriacao','desc').limit(20);
 
-      if (proximos.length === 0) {
-        ul.innerHTML = "<li>Nenhuma visita agendada.</li>";
-        return;
-      }
+  const snap = await q.get();
+  const ul = document.getElementById('listaConversas'); ul.innerHTML='';
+  if (snap.empty) { ul.innerHTML = '<li class="row"><span class="meta">Nenhuma conversa recente.</span></li>'; return; }
 
-      proximos.forEach(v => {
-        const dataFmt = v.dt.toLocaleDateString("pt-BR");
-        const horaFmt = v.dt.toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' });
-        const empresa = v.empresaNome || "Empresa";
-        const rm      = v.rm || "-";
-        const tipo    = v.tipo || "-";
-        ul.innerHTML += `<li>${dataFmt} ${horaFmt} — <strong>${empresa}</strong> — ${rm} (${tipo})</li>`;
-      });
-    })
-    .catch(err => console.error("Erro Visitas Agendadas:", err));
+  const itens = [];
+  for (const doc of snap.docs.slice(0,10)){
+    const c = doc.data();
+    const sub = await db.collection('cotacoes-gerentes').doc(doc.id).collection('interacoes')
+                  .orderBy('dataHora','desc').limit(1).get();
+    if (!sub.empty){
+      const i = sub.docs[0].data();
+      itens.push({ empresa: c.empresaNome || 'Empresa', msg: i.mensagem || '(sem texto)', quem: i.usuarioNome || i.usuarioEmail || '—', quando: toDate(i.dataHora) });
+    }
+  }
+  if (!itens.length){ ul.innerHTML = '<li class="row"><span class="meta">Sem interações recentes.</span></li>'; return; }
 
-  // ============== MINHAS COTAÇÕES (ÚLTIMAS 5) ==============
-  db.collection("cotacoes-gerentes")
-    .orderBy("dataCriacao", "desc").limit(5).get()
-    .then(snapshot => {
-      const ul = document.getElementById("listaCotacoes");
-      ul.innerHTML = "";
-      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma cotação encontrada.</li>"; return; }
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
-        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
-      });
-    })
-    .catch(err => console.error("Erro Minhas Cotações:", err));
+  itens.slice(0,5).forEach(it=>{
+    const li = document.createElement('li'); li.className='row';
+    li.innerHTML = `<div class="title"><strong>${it.empresa}</strong> — ${it.msg.slice(0,80)}</div><div class="meta">${it.quem} • ${fmtData(it.quando)} ${fmtHora(it.quando)}</div>`;
+    ul.appendChild(li);
+  });
+}
 
-  // ============== PRODUÇÃO (NEGÓCIOS FECHADOS) — sem índice composto ==============
-  db.collection("cotacoes-gerentes")
-    .orderBy("dataCriacao", "desc")
-    .limit(50)
-    .get()
-    .then(snapshot => {
-      const ul = document.getElementById("listaProducao");
-      ul.innerHTML = "";
-      if (snapshot.empty) { ul.innerHTML = "<li>Nenhum negócio fechado.</li>"; return; }
+// ---------- 3) Minhas Visitas (coleção visitas) ----------
+async function blocoMinhasVisitas(){
+  let q = db.collection('visitas').orderBy('data','desc').limit(20);
+  if (CTX.perfil === 'rm') q = q.where('rmUid','==',CTX.uid).orderBy('data','desc').limit(20);
+  else if (CTX.perfil === 'assistente' || CTX.perfil === 'gerente chefe') q = q.where('agenciaId','==',CTX.agenciaId).orderBy('data','desc').limit(20);
 
-      const emitidos = [];
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        if ((d.status || "").toLowerCase() === "negócio emitido".toLowerCase()) emitidos.push(d);
-      });
+  const snap = await q.get();
+  const ul = document.getElementById('listaVisitas'); ul.innerHTML='';
+  if (snap.empty){ ul.innerHTML = '<li class="row"><span class="meta">Nenhuma visita.</span></li>'; return; }
 
-      if (emitidos.length === 0) { ul.innerHTML = "<li>Nenhum negócio fechado.</li>"; return; }
-      emitidos.slice(0,5).forEach(d => {
-        const valor = parseFloat(d.valorFinal || 0);
-        const valorFormatado = `R$ ${valor.toLocaleString("pt-BR",{minimumFractionDigits:2})}`;
-        ul.innerHTML += `<li>${d.empresaNome || "Empresa"} - ${d.ramo || "Ramo"} - ${valorFormatado}</li>`;
-      });
-    })
-    .catch(err => console.error("Erro Produção:", err));
+  const cacheEmp = new Map();
+  const getEmpresaNome = async (empresaId, fallbackNome) => {
+    if (fallbackNome) return fallbackNome;
+    if (!empresaId) return '-';
+    if (cacheEmp.has(empresaId)) return cacheEmp.get(empresaId);
+    const d = await db.collection('empresas').doc(empresaId).get();
+    const nome = d.exists ? (d.data().nome||d.data().razaoSocial||'-') : '-';
+    cacheEmp.set(empresaId, nome);
+    return nome;
+  };
 
-  // ============== MINHAS VISITAS (HISTÓRICO ANTIGO) ==============
-  db.collection("visitas")
-    .orderBy("data", "desc").limit(5).get()
-    .then(snapshot => {
-      const ul = document.getElementById("listaVisitas");
-      ul.innerHTML = "";
-      if (snapshot.empty) { ul.innerHTML = "<li>Nenhuma visita encontrado.</li>"; return; }
-      snapshot.forEach(doc => {
-        const d = doc.data();
-        const empresa = d.empresaId || "Empresa";
-        const dataFormatada = d.data?.toDate?.().toLocaleDateString("pt-BR") || "Sem data";
-        let ramo = "-";
-        if (d.ramos?.vida) ramo = "VIDA";
-        else if (d.ramos?.frota) ramo = "FROTA";
-        ul.innerHTML += `<li>${empresa} - ${ramo} - ${dataFormatada}</li>`;
-      });
-    })
-    .catch(err => console.error("Erro Minhas Visitas:", err));
+  const docs = snap.docs.slice(0,5);
+  for (const doc of docs){
+    const v = doc.data();
+    const dataV = toDate(v.data);
+    const nomeEmp = await getEmpresaNome(v.empresaId, v.empresaNome);
+    const li = document.createElement('li'); li.className='row';
+    li.innerHTML = `<div class="title"><strong>${nomeEmp}</strong></div><div class="meta">${fmtData(dataV)}${v.tipo? ' • '+v.tipo : ''}</div>`;
+    ul.appendChild(li);
+  }
+}
 
-  // ============== ÚLTIMAS CONVERSAS (INTERAÇÕES) ==============
-  const ulConversas = document.getElementById("listaConversas");
-  ulConversas.innerHTML = "";
-  db.collection("cotacoes-gerentes")
-    .orderBy("dataCriacao", "desc")
-    .limit(5)
-    .get()
-    .then(snapshot => {
-      if (snapshot.empty) { ulConversas.innerHTML = "<li>Nenhuma conversa recente.</li>"; return; }
-      snapshot.forEach(doc => {
-        const cotacaoId   = doc.id;
-        const cotacaoData = doc.data();
-        db.collection("cotacoes-gerentes").doc(cotacaoId)
-          .collection("interacoes")
-          .orderBy("dataHora", "desc")
-          .limit(1)
-          .get()
-          .then(subSnap => {
-            if (subSnap.empty) return;
-            subSnap.forEach(subDoc => {
-              const i = subDoc.data();
-              ulConversas.innerHTML += `<li><strong>${cotacaoData.empresaNome || "Empresa"}</strong>: ${i.mensagem?.slice(0,70) || "Sem mensagem"}</li>`;
-            });
-          })
-          .catch(err => console.error("Erro nas interações:", err));
-      });
-    })
-    .catch(err => console.error("Erro Últimas Conversas:", err));
+// ---------- 4) Produção (Negócios Fechados) ----------
+async function blocoProducao(){
+  let q = db.collection('cotacoes-gerentes');
+  if (CTX.perfil === 'rm') q = q.where('rmUid','==',CTX.uid);
+  else if (CTX.perfil === 'assistente' || CTX.perfil === 'gerente chefe') q = q.where('agenciaId','==',CTX.agenciaId);
+  q = q.orderBy('dataCriacao','desc').limit(50);
+
+  const snap = await q.get();
+  const ul = document.getElementById('listaProducao'); ul.innerHTML='';
+  if (snap.empty){ ul.innerHTML = '<li class="row"><span class="meta">Nenhum negócio.</span></li>'; return; }
+
+  const emitidos = [];
+  snap.forEach(doc=>{ const d = doc.data(); if (String(d.status||'').toLowerCase() === 'negócio emitido') emitidos.push(d); });
+  if (!emitidos.length){ ul.innerHTML = '<li class="row"><span class="meta">Nenhum negócio emitido.</span></li>'; return; }
+
+  emitidos.slice(0,5).forEach(d=>{
+    const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
+    const vIni = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
+    const li = document.createElement('li'); li.className='row';
+    li.innerHTML = `<div class="title"><strong>${d.empresaNome || 'Empresa'}</strong> — ${d.ramo || 'Ramo'}</div><div class="meta">${fmtBRL(valor)} • início ${fmtData(vIni)}</div>`;
+    ul.appendChild(li);
+  });
+}
+
+// ---------- 5) Minhas Cotações ----------
+async function blocoMinhasCotacoes(){
+  let q = db.collection('cotacoes-gerentes');
+  if (CTX.perfil === 'rm') q = q.where('rmUid','==',CTX.uid);
+  else if (CTX.perfil === 'assistente' || CTX.perfil === 'gerente chefe') q = q.where('agenciaId','==',CTX.agenciaId);
+  q = q.orderBy('dataCriacao','desc').limit(10);
+
+  const snap = await q.get();
+  const ul = document.getElementById('listaCotacoes'); ul.innerHTML='';
+  if (snap.empty){ ul.innerHTML = '<li class="row"><span class="meta">Sem cotações.</span></li>'; return; }
+
+  snap.docs.slice(0,5).forEach(doc=>{
+    const d = doc.data();
+    const valor = d.valorFinal ?? d.valorDesejado ?? 0;
+    const li = document.createElement('li'); li.className='row';
+    li.innerHTML = `<div class="title"><strong>${d.empresaNome || 'Empresa'}</strong> — ${d.ramo || 'Ramo'}</div><div class="meta">${fmtBRL(valor)}</div>`;
+    ul.appendChild(li);
+  });
 }
