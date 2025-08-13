@@ -1,226 +1,232 @@
-// --- Firebase ---
-firebase.initializeApp(firebaseConfig);
+// visitas-relatorio.js (RBAC)
+// Compatível com Firebase v8 compat (window.firebase / firebaseConfig já no HTML).
+
+if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
+  firebase.initializeApp(firebaseConfig);
+}
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// --- DOM ---
-const tbody = document.getElementById("tbodyRelatorio");
-const kpiVisitas = document.getElementById("kpiVisitas");
-const kpiPremio  = document.getElementById("kpiPremio");
+/* ===== DOM ===== */
+const tbody        = document.getElementById("tabela-visitas");
+const vazio        = document.getElementById("vazio");
+const filtroRm     = document.getElementById("filtroRm");     // value = rmUid
+const filtroTipo   = document.getElementById("filtroTipo");   // "Presencial"|"Online"|"" 
+const filtroDe     = document.getElementById("filtroDe");     // "YYYY-MM-DD"
+const filtroAte    = document.getElementById("filtroAte");    // "YYYY-MM-DD"
+const btnFiltrar   = document.getElementById("btnFiltrar");
+const btnLimpar    = document.getElementById("btnLimpar");
 
-// filtros
-const el = id => document.getElementById(id);
-const F = {
-  agencia: el("filtroAgencia"),
-  rm:      el("filtroRM"),
-  tipo:    el("filtroTipo"),
-  mes:     el("filtroMesVenc"),
-  ano:     el("filtroAnoVenc"),
-  segur:   el("filtroSeguradora"),
-  ramo:    el("filtroRamo"),
-  empresa: el("filtroEmpresa"),
-  di:      el("filtroDataInicio"),
-  df:      el("filtroDataFim"),
-};
-el("btnAplicar").onclick = () => aplicar();
-el("btnLimpar").onclick  = () => { Object.values(F).forEach(x=>{ if (x.tagName==='SELECT') x.value=''; else x.value=''; }); aplicar(); };
-el("btnExportar").onclick = () => exportarCSV();
+const fmtDate = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short" });
+const fmtTime = new Intl.DateTimeFormat("pt-BR",{ timeStyle:"short" });
 
-// --- Data holders ---
-let visitasRaw = []; // docs de visitas
-let linhas = [];     // linhas flatten por ramo
+/* ===== Estado/Perfil ===== */
+let usuarioAtual = null;
+let perfilAtual  = "";        // "admin" | "gerente-chefe" | "assistente" | "rm" | ...
+let minhaAgencia = "";
+let isAdmin      = false;
 
-// Util: formata número BRL
-const fmtBRL = v => (isFinite(v) ? v : 0).toLocaleString("pt-BR", {minimumFractionDigits:2, maximumFractionDigits:2});
-
-// Extrai {dd, mm, yyyy} aceitando "dd/mm", "dd/mm/aaaa" e Timestamp
-function extrairDMY(venc) {
-  if (typeof venc === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(venc)) {
-    const [dd, mm, yyyy] = venc.split("/").map(n=>parseInt(n,10));
-    return {dd, mm, yyyy};
+/* ===== Utils ===== */
+function $(id){ return document.getElementById(id); }
+function toDate(val){
+  if (!val) return null;
+  if (val.toDate) return val.toDate();         // Firestore Timestamp
+  if (typeof val === "string") {
+    const d = new Date(val);
+    return isNaN(+d) ? null : d;
   }
-  if (typeof venc === "string" && /^\d{2}\/\d{2}$/.test(venc)) {
-    const [dd, mm] = venc.split("/").map(n=>parseInt(n,10));
-    return {dd, mm, yyyy: null};
-  }
-  if (venc && typeof venc.toDate === "function") {
-    const d = venc.toDate();
-    return {dd: d.getDate(), mm: d.getMonth()+1, yyyy: d.getFullYear()};
-  }
-  return {dd:null, mm:null, yyyy:null};
+  if (val instanceof Date) return val;
+  return null;
 }
-const dmyToString = ({dd,mm,yyyy}) => (dd && mm) ?
-  `${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}${yyyy?"/"+yyyy:""}` : "-";
+async function getPerfilAgencia() {
+  const user = auth.currentUser;
+  if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
+  const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+  const d = snap.exists ? (snap.data() || {}) : {};
+  const perfil = (d.perfil || d.roleId || "").toLowerCase();
+  const agenciaId = d.agenciaId || "";
+  const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
+  return { perfil, agenciaId, isAdmin: admin, nome: d.nome || user.email || "" };
+}
 
-// Carrega tudo
-auth.onAuthStateChanged(async user=>{
-  if (!user){ location.href="login.html"; return; }
-  await carregar();
-  popularCombos();
-  aplicar();
+/* ===== Boot ===== */
+auth.onAuthStateChanged(async (user) => {
+  if (!user) return (window.location.href = "login.html");
+  usuarioAtual = user;
+
+  const ctx = await getPerfilAgencia();
+  perfilAtual  = ctx.perfil;
+  minhaAgencia = ctx.agenciaId;
+  isAdmin      = ctx.isAdmin;
+
+  await prepararFiltroRM();   // mostra/alimenta filtro de RM conforme escopo
+  await carregarRelatorio();  // primeira carga
 });
 
-async function carregar(){
-  // ATENÇÃO: agora ordena por 'criadoEm' (era 'data')
-  const snap = await db.collection("visitas").orderBy("criadoEm","desc").get();
-  if (snap.empty){ tbody.innerHTML = `<tr><td colspan="12">Nenhuma visita registrada.</td></tr>`; return; }
+/* ===== Filtro de RM (Admin/Chefe/Assistente) ===== */
+async function prepararFiltroRM(){
+  if (!filtroRm) return;
 
-  const cacheEmpresas = {};
-  const cacheUsuarios = {};
-
-  visitasRaw = await Promise.all(snap.docs.map(async d=>{
-    const v = {id: d.id, ...d.data()};
-    // data da criação da visita (fallback para Date local)
-    v.dataObj = v.criadoEm?.toDate?.() || new Date();
-
-    // Empresa
-    if (v.empresaId){
-      if (!cacheEmpresas[v.empresaId]){
-        try{
-          const e = await db.collection("empresas").doc(v.empresaId).get();
-          cacheEmpresas[v.empresaId] = e.exists ? e.data() : {};
-        }catch(_){ cacheEmpresas[v.empresaId] = {}; }
-      }
-      v._empresa = cacheEmpresas[v.empresaId];
-      v.empresaNome = v.empresaNome || v._empresa.nome || "-";
-      v.agencia     = v._empresa.agencia || v._empresa.agenciaId || "-";
-      v.rmNome      = v.rmNome || v._empresa.rmNome || v._empresa.rm || "-";
-    }
-
-    // Usuário (quem registrou)
-    if (v.usuarioId){
-      if (!cacheUsuarios[v.usuarioId]){
-        try{
-          const u = await db.collection("usuarios_banco").doc(v.usuarioId).get();
-          cacheUsuarios[v.usuarioId] = u.exists ? (u.data().nome || u.data().email) : "-";
-        }catch(_){ cacheUsuarios[v.usuarioId] = "-"; }
-      }
-      v.usuarioNome = cacheUsuarios[v.usuarioId];
-    }
-
-    return v;
-  }));
-
-  // Flatten por ramo
-  linhas = [];
-  for (const v of visitasRaw){
-    const ramos = v.ramos || {};
-    for (const [ramo, info] of Object.entries(ramos)){
-      const {dd, mm, yyyy} = extrairDMY(info.vencimento);
-      const premioNum = Number(info.premio) || 0;
-
-      linhas.push({
-        visitaId: v.id,
-        dataObj: v.dataObj,
-        dataStr: v.dataObj.toLocaleDateString("pt-BR"),
-        tipoVisita: v.tipoVisita || "-",
-        usuarioNome: v.usuarioNome || "-",
-        empresaNome: v.empresaNome || "-",
-        agencia: v.agencia || "-",
-        rmNome: v.rmNome || "-",
-        numeroFuncionarios: (v.numeroFuncionarios ?? "-"),
-        ramo: (ramo||"").toUpperCase(),
-        vencDD: dd, vencMM: mm, vencYYYY: yyyy,
-        vencStr: dmyToString({dd,mm,yyyy}),
-        premio: premioNum,
-        seguradora: info.seguradora || "-",
-        observacoes: info.observacoes ?? "-"
-      });
-    }
-  }
-}
-
-function popularCombos(){
-  const uniq = (arr) => [...new Set(arr.filter(v=>v!==undefined && v!==null && v!=="" && v!=="-"))]
-                       .sort((a,b)=> (""+a).localeCompare(""+b,'pt-BR'));
-
-  const agencias = uniq(linhas.map(x=>x.agencia));
-  const rms      = uniq(linhas.map(x=>x.rmNome));
-  const segs     = uniq(linhas.map(x=>x.seguradora));
-  const ramos    = uniq(linhas.map(x=>x.ramo));
-  const anos     = uniq(linhas.map(x=>x.vencYYYY).filter(Boolean));
-
-  function fill(select, values, firstLabel){
-    const cur = select.value;
-    select.innerHTML = `<option value="">${firstLabel}</option>` + values.map(v=>`<option>${v}</option>`).join("");
-    if (values.includes(cur)) select.value = cur;
-  }
-
-  fill(F.agencia, agencias, "Todas");
-  fill(F.rm,      rms,      "Todos");
-  fill(F.segur,   segs,     "Todas");
-  fill(F.ramo,    ramos,    "Todos");
-  fill(F.ano,     anos,     "Todos");
-}
-
-function aplicar(){
-  const txtEmp = (F.empresa.value||"").toLowerCase().trim();
-  const selAg  = F.agencia.value;
-  const selRM  = F.rm.value;
-  const selTp  = F.tipo.value;
-  const selMes = F.mes.value ? parseInt(F.mes.value,10) : null;
-  const selAno = F.ano.value ? parseInt(F.ano.value,10) : null;
-  const selSeg = F.segur.value;
-  const selRmo = F.ramo.value;
-
-  const di = F.di.value ? new Date(F.di.value) : null;
-  const df = F.df.value ? new Date(F.df.value + "T23:59:59") : null;
-
-  const rows = linhas.filter(l=>{
-    if (txtEmp && !l.empresaNome.toLowerCase().includes(txtEmp)) return false;
-    if (selAg  && l.agencia !== selAg) return false;
-    if (selRM  && l.rmNome !== selRM) return false;
-    if (selTp  && l.tipoVisita !== selTp) return false;
-    if (selMes && l.vencMM !== selMes) return false;
-    if (selAno && l.vencYYYY !== selAno) return false; // >>> ANO aplicado aqui
-    if (selSeg && l.seguradora !== selSeg) return false;
-    if (selRmo && l.ramo !== selRmo) return false;
-    if (di && l.dataObj < di) return false;
-    if (df && l.dataObj > df) return false;
-    return true;
-  });
-
-  render(rows);
-}
-
-function render(rows){
-  // KPIs
-  const visitasUnicas = new Set(rows.map(r=>r.visitaId)).size;
-  const totalPremio   = rows.reduce((s,r)=> s + (Number(r.premio)||0), 0);
-  kpiVisitas.textContent = visitasUnicas.toString();
-  kpiPremio.textContent  = "R$ " + fmtBRL(totalPremio);
-
-  if (!rows.length){
-    tbody.innerHTML = `<tr><td colspan="12">Nenhum registro encontrado para os filtros selecionados.</td></tr>`;
+  // RM não precisa filtro (ele já vê só o que é dele)
+  const podeVerRM = isAdmin || ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual);
+  if (!podeVerRM) {
+    filtroRm.style.display = "none";
     return;
   }
 
-  const html = rows.map(r=>`
-    <tr>
-      <td>${r.dataStr}</td>
-      <td>${r.tipoVisita}</td>
-      <td>${r.usuarioNome}</td>
-      <td>${r.empresaNome}</td>
-      <td>${r.agencia}</td>
-      <td>${r.rmNome}</td>
-      <td>${r.numeroFuncionarios}</td>
-      <td>${r.ramo}</td>
-      <td>${r.vencStr}</td>
-      <td>R$ ${fmtBRL(r.premio)}</td>
-      <td>${r.seguradora}</td>
-      <td>${r.observacoes || '-'}</td>
-    </tr>
-  `).join("");
-  tbody.innerHTML = html;
+  filtroRm.innerHTML = `<option value="">Todos os RMs</option>`;
+
+  try {
+    let q = db.collection("usuarios_banco").where("perfil","==","rm");
+    if (!isAdmin && minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
+
+    const snap = await q.get();
+    const items = [];
+    snap.forEach(doc=>{
+      const u = doc.data() || {};
+      items.push({ uid: doc.id, nome: u.nome || doc.id });
+    });
+    items
+      .sort((a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR"))
+      .forEach(({uid,nome})=>{
+        const opt = document.createElement("option");
+        opt.value = uid;
+        opt.textContent = nome;
+        filtroRm.appendChild(opt);
+      });
+  } catch (e) {
+    console.warn("Erro ao carregar RMs do filtro:", e);
+    // Fallback: deixa só "Todos"
+  }
 }
 
-function exportarCSV(){
-  const rows = [...tbody.querySelectorAll("tr")].map(tr=>[...tr.children].map(td=>td.innerText));
-  if (!rows.length) return;
-  const header = ["Data","Tipo","Usuário","Empresa","Agência","RM","Nº Funcionários","Produto","Vencimento (dia/mês/ano)","Prêmio","Seguradora","Observações"];
-  const csv = [header].concat(rows).map(cols=>cols.map(v=>`"${(v||"").replace(/"/g,'""')}"`).join(";")).join("\n");
-  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href = url; a.download = "relatorio-visitas.csv"; a.click();
+/* ===== Coleta de visitas respeitando RBAC ===== */
+async function coletarVisitasPorPerfil() {
+  const col = db.collection("visitas");
+
+  // Admin → tudo
+  if (isAdmin) {
+    try { return (await col.orderBy("criadoEm","desc").limit(2000).get()).docs; }
+    catch { return (await col.limit(2000).get()).docs; }
+  }
+
+  // Gerente-chefe / Assistente → por agência
+  if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+    try { return (await col.where("agenciaId","==",minhaAgencia).orderBy("criadoEm","desc").limit(2000).get()).docs; }
+    catch { return (await col.where("agenciaId","==",minhaAgencia).limit(2000).get()).docs; }
+  }
+
+  // RM → somente próprias (mescla várias queries por segurança de legado)
+  const buckets = [];
+  try { buckets.push(await col.where("usuarioId","==",usuarioAtual.uid).limit(2000).get()); } catch(e){}
+  try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).limit(2000).get()); } catch(e){}
+  try { buckets.push(await col.where("rmId","==",usuarioAtual.uid).limit(2000).get()); } catch(e){}
+  try { buckets.push(await col.where("gerenteId","==",usuarioAtual.uid).limit(2000).get()); } catch(e){}
+  try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).limit(2000).get()); } catch(e){}
+
+  const map = new Map();
+  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d)));
+  return Array.from(map.values());
 }
+
+/* ===== Carrega e renderiza ===== */
+async function carregarRelatorio(){
+  if (tbody) tbody.innerHTML = "";
+  if (vazio) vazio.style.display = "none";
+
+  let docs = [];
+  try {
+    docs = await coletarVisitasPorPerfil();
+  } catch (e) {
+    console.error("Erro ao buscar visitas:", e);
+    if (vazio) vazio.style.display = "block";
+    return;
+  }
+
+  // Filtros de UI
+  const rmFilter   = filtroRm?.value || "";     // rmUid
+  const tipoFilter = filtroTipo?.value || "";
+  const de         = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
+  const ate        = filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
+
+  const rows = [];
+  docs.forEach(doc=>{
+    const v = doc.data() || {};
+    // Data/hora (compat de campos)
+    const dt = toDate(v.dataHoraTs) || toDate(v.dataHora) || toDate(v.dataHoraStr) || toDate(v.criadoEm);
+    if (!dt) return;
+
+    // Filtros de período
+    if (de && dt < de) return;
+    if (ate && dt > ate) return;
+
+    // Filtro de tipo
+    if (tipoFilter && (v.tipoVisita || "") !== tipoFilter) return;
+
+    // Filtro de RM (apenas quando filtro visível)
+    if (rmFilter) {
+      const uidMatch = v.rmUid || v.rmId || v.gerenteId || null;
+      if (uidMatch !== rmFilter) return;
+    }
+
+    // Segurança visual extra (as Rules já garantem o bloqueio):
+    if (!isAdmin) {
+      if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
+        if (minhaAgencia && v.agenciaId && v.agenciaId !== minhaAgencia) return;
+      } else {
+        const donos = [v.usuarioId, v.rmUid, v.rmId, v.gerenteId, v.criadoPorUid].filter(Boolean);
+        if (!donos.includes(usuarioAtual.uid)) return;
+      }
+    }
+
+    rows.push({ id: doc.id, v, dt });
+  });
+
+  // Ordena por data/hora (mais recentes primeiro)
+  rows.sort((a,b)=> b.dt - a.dt);
+
+  if (!rows.length) {
+    if (vazio) vazio.style.display = "block";
+    return;
+  }
+  if (vazio) vazio.style.display = "none";
+
+  const frag = document.createDocumentFragment();
+  rows.forEach(({id, v, dt})=>{
+    const tr = document.createElement("tr");
+
+    const dataFmt = fmtDate.format(dt);
+    const horaFmt = fmtTime.format(dt);
+
+    const empresa  = v.empresaNome || "-";
+    const tipo     = v.tipoVisita || "-";
+    const rmNome   = v.rm || v.rmNome || "-";
+    const agencia  = v.agenciaId || "-";
+
+    // Se quiser exibir contagem de ramos preenchidos
+    const ramosObj = v.ramos || {};
+    const totalRamos = (typeof ramosObj === "object") ? Object.keys(ramosObj).length : 0;
+
+    tr.innerHTML = `
+      <td data-label="Data">${dataFmt}</td>
+      <td data-label="Hora">${horaFmt}</td>
+      <td data-label="Empresa">${empresa}</td>
+      <td data-label="RM">${rmNome}</td>
+      <td data-label="Tipo"><span class="badge">${tipo}</span></td>
+      <td data-label="Ramos">${totalRamos}</td>
+      <td data-label="Agência">${agencia}</td>
+    `;
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+}
+
+/* ===== Eventos ===== */
+btnFiltrar?.addEventListener("click", carregarRelatorio);
+btnLimpar?.addEventListener("click", ()=>{
+  if (filtroRm)   filtroRm.value = "";
+  if (filtroTipo) filtroTipo.value = "";
+  if (filtroDe)   filtroDe.value   = "";
+  if (filtroAte)  filtroAte.value  = "";
+  carregarRelatorio();
+});
