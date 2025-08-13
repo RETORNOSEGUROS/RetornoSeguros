@@ -186,6 +186,7 @@ async function carregarRamosSeguro() {
     ];
   } catch (e) {
     console.error("Erro ao carregar ramos-seguro:", e);
+    // Se cair aqui (por permissão), o RM verá a lista básica:
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -251,7 +252,7 @@ async function gerarCamposRamos(seguradoras) {
 
       <label>Observações:</label>
       <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
-    `;
+    ";
 
     const vencInput = sub.querySelector(`#${ramo.id}-vencimento`);
     vencInput.addEventListener("input", (e) => {
@@ -276,7 +277,7 @@ async function gerarCamposRamos(seguradoras) {
 }
 
 /* =======================
-   Salvar (agora grava agenciaId/rmUid/rmNome)
+   Salvar (agora grava agenciaId/rmUid/rmNome e numeroFuncionarios)
    ======================= */
 
 function registrarVisita() {
@@ -286,7 +287,7 @@ function registrarVisita() {
   const tipoVisita = tipoVisitaSelect ? tipoVisitaSelect.value : "";
   const empresaNome = empresaSelect?.options?.[empresaSelect.selectedIndex]?.textContent || "";
 
-  // número de funcionários (mantido)
+  // número de funcionários
   const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
   const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
 
@@ -313,9 +314,12 @@ function registrarVisita() {
       tipoVisita,
       rmNome: rmNomeEmpresa || "Não informado",
       rmUid:  rmUidEmpresa || null,
-      agenciaId: agenciaDaEmpresa || minhaAgencia || "", // <<< grava agência
+      agenciaId: agenciaDaEmpresa || minhaAgencia || "",
       usuarioId: user.uid,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+      numeroFuncionarios: numeroFuncionarios, // << grava o campo
+      // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
       ramos: {}
     };
 
