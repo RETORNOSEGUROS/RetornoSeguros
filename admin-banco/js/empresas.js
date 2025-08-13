@@ -125,6 +125,41 @@ async function carregarRM() {
   }
 }
 
+/**
+ * Busca cotações para uma empresa respeitando RBAC:
+ * - Admin / Gerente-chefe: por empresaId (simples)
+ * - RM: busca pelos campos de “dono” (rmUid, rmId, usuarioId, gerenteId) e depois filtra por empresaId
+ */
+async function buscarCotacoesParaEmpresa(empresaId) {
+  // Admin e gerente-chefe: podem ler por empresaId direto
+  if (isAdmin || ["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
+    try {
+      return (await db.collection("cotacoes-gerentes")
+        .where("empresaId","==",empresaId).get()).docs;
+    } catch (e) {
+      console.warn("[empresas] cotacoes empresaId== falhou:", e);
+      return [];
+    }
+  }
+
+  // RM: consulta por “dono” e filtra por empresa
+  if (perfilAtual === "rm") {
+    const buckets = [];
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot rmUid== falhou:", e); }
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot rmId== falhou:", e); }
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("usuarioId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot usuarioId== falhou:", e); }
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("gerenteId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot gerenteId== falhou:", e); }
+
+    // mescla e filtra por empresa
+    const map = new Map();
+    buckets.forEach(s => s?.docs?.forEach(d => { if (d?.id) map.set(d.id, d); }));
+    return Array.from(map.values()).filter(d => (d.data() || {}).empresaId === empresaId);
+  }
+
+  // Assistente não usa esta página (mas retorna vazio por segurança)
+  return [];
+}
+
 // --- Tabela (RBAC + compat campos legados) ---
 async function carregarEmpresas() {
   const filtroRMNome = document.getElementById("filtroRM")?.value || ""; // nome do RM (só admin/chefe usa)
@@ -187,19 +222,13 @@ async function carregarEmpresas() {
     // Para cada empresa, mapeia status por produto a partir das cotações
     const linhas = await Promise.all(
       empresasCache.map(async (empresa) => {
-        let cotacoesSnap;
-        try {
-          cotacoesSnap = await db.collection("cotacoes-gerentes")
-            .where("empresaId", "==", empresa.id).get();
-        } catch (e) {
-          console.warn("Erro ao ler cotações da empresa", empresa.id, e);
-          cotacoesSnap = { forEach: () => {} };
-        }
+        // <<< AJUSTE CRÍTICO: respeita RBAC ao buscar cotações >>>
+        const cotacoesDocs = await buscarCotacoesParaEmpresa(empresa.id);
 
         const statusPorProduto = {};
         produtos.forEach(p => statusPorProduto[p] = "nenhum");
 
-        cotacoesSnap.forEach(doc => {
+        cotacoesDocs.forEach(doc => {
           const c = doc.data() || {};
           const ramoCotado = c.ramo;
           const produtoId = produtos.find(id =>
