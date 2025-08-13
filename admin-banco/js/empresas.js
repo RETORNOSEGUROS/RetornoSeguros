@@ -1,5 +1,7 @@
 // --- Firebase ---
-firebase.initializeApp(firebaseConfig);
+if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
+  firebase.initializeApp(firebaseConfig);
+}
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
@@ -7,6 +9,12 @@ const db   = firebase.firestore();
 let produtos = [];
 let nomesProdutos = {};
 let empresasCache = [];
+
+// RBAC
+let isAdmin = false;
+let perfilAtual = "";
+let minhaAgencia = "";
+let meuUid = "";
 
 // --- Utils ---
 const normalize = (s) =>
@@ -50,18 +58,50 @@ function classFromStatus(statusRaw) {
   return "nenhum";
 }
 
+function bloquearAssistente() {
+  const cont = document.getElementById("tabelaEmpresas");
+  if (cont) cont.innerHTML = `
+    <div style="padding:14px;border:1px solid #e5e7eb;border-radius:10px;background:#fff7ed;color:#7c2d12;">
+      Seu perfil não possui acesso a <strong>Empresas</strong>.
+    </div>`;
+}
+
 // --- Boot ---
-auth.onAuthStateChanged(user => {
+auth.onAuthStateChanged(async user => {
   if (!user) return (window.location.href = "login.html");
-  carregarProdutos().then(() => {
-    carregarRM();
-    carregarEmpresas();
-  });
+
+  // Perfil
+  meuUid = user.uid;
+  try {
+    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+    const d = snap.exists ? (snap.data() || {}) : {};
+    perfilAtual = (d.perfil || d.roleId || "").toLowerCase();
+    minhaAgencia = d.agenciaId || "";
+  } catch (_) {
+    perfilAtual = "";
+    minhaAgencia = "";
+  }
+  isAdmin = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
+
+  // Assistente não usa essa tela
+  if (perfilAtual === "assistente" && !isAdmin) {
+    bloquearAssistente();
+    return;
+  }
+
+  await carregarProdutos();
+  await carregarRM();        // combo de filtro RM, já respeitando RBAC
+  await carregarEmpresas();  // tabela
 });
 
 // --- Dados base (produtos/colunas) ---
 async function carregarProdutos() {
-  const snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  let snap;
+  try {
+    snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+  } catch {
+    snap = await db.collection("ramos-seguro").get();
+  }
   produtos = [];
   nomesProdutos = {};
   snap.forEach(doc => {
@@ -72,42 +112,69 @@ async function carregarProdutos() {
   });
 }
 
-// --- Combo de RM (usa rmNome ou rm; cobre cadastros novos e antigos) ---
+// --- Combo de RM (usa rmNome ou rm) ---
+// Agora busca empresas já filtradas por RBAC para extrair os RMs corretos
 async function carregarRM() {
   const select = document.getElementById("filtroRM");
-  const snapshot = await db.collection("empresas").get();
-  const rms = new Set();
-
-  snapshot.forEach(doc => {
-    const dados = doc.data();
-    const nome = dados.rmNome || dados.rm; // << chave da correção
-    if (nome) rms.add(nome);
-  });
-
+  if (!select) return;
   select.innerHTML = `<option value="">Todos</option>`;
-  Array.from(rms).sort().forEach(nome => {
-    const opt = document.createElement("option");
-    opt.value = nome;
-    opt.textContent = nome;
-    select.appendChild(opt);
-  });
+
+  let q = db.collection("empresas");
+  if (!isAdmin) {
+    if (perfilAtual === "rm") {
+      q = q.where("rmUid", "==", meuUid);
+    } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+      q = q.where("agenciaId", "==", minhaAgencia);
+    }
+  }
+
+  try {
+    const snapshot = await q.get();
+    const rms = new Set();
+    snapshot.forEach(doc => {
+      const dados = doc.data() || {};
+      const nome = dados.rmNome || dados.rm;
+      if (nome) rms.add(nome);
+    });
+
+    Array.from(rms).sort((a,b)=> (a||"").localeCompare(b||"", "pt-BR")).forEach(nome => {
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error("Erro ao carregar RMs do filtro:", e);
+  }
 }
 
 // --- Tabela ---
-function carregarEmpresas() {
-  const filtroRM = document.getElementById("filtroRM").value; // é o NOME
+// Respeita RBAC + mantém seu filtro por RM (nome) já existente
+async function carregarEmpresas() {
+  const filtroRM = document.getElementById("filtroRM")?.value || ""; // é o NOME
 
-  db.collection("empresas").get().then(snapshot => {
+  let q = db.collection("empresas");
+  if (!isAdmin) {
+    if (perfilAtual === "rm") {
+      q = q.where("rmUid", "==", meuUid);
+    } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+      q = q.where("agenciaId", "==", minhaAgencia);
+    }
+  }
+
+  try {
+    const snapshot = await q.get();
     empresasCache = [];
     snapshot.forEach(doc => {
       const empresa = { id: doc.id, ...doc.data() };
-      const nomeRM  = empresa.rmNome || empresa.rm; // << chave da correção
+      const nomeRM  = empresa.rmNome || empresa.rm;
       if (!filtroRM || nomeRM === filtroRM) {
         empresasCache.push(empresa);
       }
     });
 
-    Promise.all(
+    // Monta linhas: para cada empresa -> ler cotações e pintar status por produto
+    const linhas = await Promise.all(
       empresasCache.map(async (empresa) => {
         // Busca cotações da empresa
         const cotacoesSnap = await db.collection("cotacoes-gerentes")
@@ -118,16 +185,13 @@ function carregarEmpresas() {
         produtos.forEach(p => statusPorProduto[p] = "nenhum");
 
         cotacoesSnap.forEach(doc => {
-          const c = doc.data();
-
-          // Match de ramo robusto (normaliza nomeExibicao x c.ramo)
+          const c = doc.data() || {};
           const ramoCotado = c.ramo;
           const produtoId = produtos.find(id =>
             normalize(nomesProdutos[id]) === normalize(ramoCotado)
           );
           if (!produtoId) return;
 
-          // Status -> cor
           statusPorProduto[produtoId] = classFromStatus(c.status);
         });
 
@@ -136,36 +200,42 @@ function carregarEmpresas() {
           status: statusPorProduto
         };
       })
-    ).then(linhas => {
-      let html = `<table><thead><tr><th>Empresa</th>`;
-      produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
-      html += `</tr></thead><tbody>`;
+    );
 
-      linhas.forEach(linha => {
-        html += `<tr><td>${linha.nome}</td>`;
-        produtos.forEach(p => {
-          const cor = linha.status[p];
-          const classe = {
-            verde: "status-verde",
-            vermelho: "status-vermelho",
-            amarelo: "status-amarelo",
-            azul: "status-azul",
-            nenhum: "status-cinza"
-          }[cor] || "status-cinza";
-          const simbolo = {
-            verde: "🟢",
-            vermelho: "🔴",
-            amarelo: "🟡",
-            azul: "🔵",
-            nenhum: "⚪️"
-          }[cor] || "⚪️";
-          html += `<td class="${classe}">${simbolo}</td>`;
-        });
-        html += `</tr>`;
+    let html = `<table><thead><tr><th>Empresa</th>`;
+    produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
+    html += `</tr></thead><tbody>`;
+
+    linhas.forEach(linha => {
+      html += `<tr><td>${linha.nome}</td>`;
+      produtos.forEach(p => {
+        const cor = linha.status[p];
+        const classe = {
+          verde: "status-verde",
+          vermelho: "status-vermelho",
+          amarelo: "status-amarelo",
+          azul: "status-azul",
+          nenhum: "status-cinza"
+        }[cor] || "status-cinza";
+        const simbolo = {
+          verde: "🟢",
+          vermelho: "🔴",
+          amarelo: "🟡",
+          azul: "🔵",
+          nenhum: "⚪️"
+        }[cor] || "⚪️";
+        html += `<td class="${classe}">${simbolo}</td>`;
       });
-
-      html += `</tbody></table>`;
-      document.getElementById("tabelaEmpresas").innerHTML = html;
+      html += `</tr>`;
     });
-  });
+
+    html += `</tbody></table>`;
+    const cont = document.getElementById("tabelaEmpresas");
+    if (cont) cont.innerHTML = html;
+
+  } catch (err) {
+    console.error("Erro ao carregar empresas:", err);
+    const cont = document.getElementById("tabelaEmpresas");
+    if (cont) cont.innerHTML = `<div class="muted">Erro ao carregar empresas. Verifique as permissões e tente novamente.</div>`;
+  }
 }
