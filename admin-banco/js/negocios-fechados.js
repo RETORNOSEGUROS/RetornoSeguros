@@ -1,107 +1,113 @@
-// Firestore
-const db = firebase.firestore();
-const negociosRef = db.collection('cotacoes-gerentes'); // origem
-const usuariosRef = db.collection('usuarios_banco');    // RMs (agência)
-const agenciasRef = db.collection('agencias');          // opcional
+// --- Firebase ---
+if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
+  firebase.initializeApp(firebaseConfig);
+}
+const auth = firebase.auth();
+const db   = firebase.firestore();
 
-// Estado
-let docsBrutos = [];            // emitidos
-let mapaRM = new Map();         // rmUid -> {nome, agenciaId, agenciaNome}
+// Coleções
+const colCotacoes = db.collection("cotacoes-gerentes");
+const colUsuarios = db.collection("usuarios_banco");
+const colAgencias = db.collection("agencias_banco"); // seu nome correto
+
+// Estado / RBAC
+let usuarioAtual=null, perfilAtual="", minhaAgencia="", isAdmin=false;
+let docsBrutos = [];            // cotações emitidas (flatten)
+let mapaRM = new Map();         // rmUid -> { nome, agenciaId, agenciaNome }
 let mapaAgencia = new Map();    // agenciaId -> nome
-let ramosUnicos = new Set();    // para filtro
-let agenciasUnicas = new Set(); // nomes prontos para filtro
+let ramosUnicos = new Set();
+let agenciasUnicas = new Set();
 
-// ===== Utils ======================================================
-const fmtBRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+// Utils
+const fmtBRL = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
+const money  = n => fmtBRL.format(Number(n||0));
+const norm   = s => (s||"").toString().normalize("NFD").replace(/\p{Diacritic}/gu,"").toLowerCase();
 
-function money(n){
-  if (n === undefined || n === null || isNaN(n)) return 'R$ 0,00';
-  return fmtBRL.format(Number(n));
-}
-
-// normaliza para YYYY-MM-DD
-function toISODate(val){
-  if (!val) return '';
+function toISODate(v){
   try{
-    if (typeof val === 'string'){
-      return /^\d{4}-\d{2}-\d{2}$/.test(val) ? val : '';
-    }
-    if (val.toDate) {
-      const d = val.toDate();
-      const m = (d.getMonth()+1).toString().padStart(2,'0');
-      const day = d.getDate().toString().padStart(2,'0');
-      return `${d.getFullYear()}-${m}-${day}`;
-    }
-    if (val instanceof Date){
-      const m = (val.getMonth()+1).toString().padStart(2,'0');
-      const day = val.getDate().toString().padStart(2,'0');
-      return `${val.getFullYear()}-${m}-${day}`;
-    }
-  }catch(_e){}
-  return '';
+    if (!v) return "";
+    if (typeof v==="string") { if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; const d=new Date(v); if(!isNaN(+d)) return d.toISOString().slice(0,10); return ""; }
+    if (v.toDate) { const d=v.toDate(); return d.toISOString().slice(0,10); }
+    if (v instanceof Date) return v.toISOString().slice(0,10);
+  }catch(_){}
+  return "";
 }
-
-// exibe DD/MM/AAAA na tabela
-function formatDateBR(iso){
-  if (!iso) return '-';
-  const [y,m,d] = iso.split('-');
-  if (!y || !m || !d) return '-';
-  return `${d}/${m}/${y}`;
-}
-
-function norm(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
-
-// parser seguro p/ "R$ 121.271,78" ou número
+const formatDateBR = iso => iso && iso.includes("-") ? iso.split("-").reverse().join("/") : "-";
 function parsePremio(val){
   if (val == null) return 0;
-  if (typeof val === 'number') return val;
-  const n = String(val)
-    .replace(/[^\d,.-]/g,'') // remove tudo que não é dígito/virgula/ponto/sinal
-    .replace(/\.(?=\d{3}(?:\D|$))/g,'') // remove pontos de milhar
-    .replace(',','.'); // vírgula decimal -> ponto
-  const f = parseFloat(n);
-  return isNaN(f) ? 0 : f;
+  if (typeof val === "number") return val;
+  const n = String(val).replace(/[^\d,.-]/g,"").replace(/\.(?=\d{3}(?:\D|$))/g,"").replace(",",".");
+  const f = parseFloat(n); return isNaN(f) ? 0 : f;
 }
 
-// ===== Boot =======================================================
-firebase.auth().onAuthStateChanged(async user => {
-  if (!user){ alert('Você precisa estar logado.'); return; }
-  await carregarNegocios();
+async function getPerfilAgencia(){
+  const u = auth.currentUser;
+  if (!u) return {perfil:"",agenciaId:"",isAdmin:false};
+  const doc = await colUsuarios.doc(u.uid).get();
+  const d = doc.exists ? (doc.data()||{}) : {};
+  const perfil = (d.perfil || d.roleId || "").toLowerCase();
+  const admin = (perfil === "admin") || (u.email === "patrick@retornoseguros.com.br");
+  return {perfil, agenciaId: d.agenciaId || "", isAdmin: admin, nome: d.nome || u.email};
+}
+
+auth.onAuthStateChanged(async (user)=>{
+  if (!user) { location.href="login.html"; return; }
+  usuarioAtual = user;
+  const ctx = await getPerfilAgencia();
+  perfilAtual  = ctx.perfil;
+  minhaAgencia = ctx.agenciaId;
+  isAdmin      = ctx.isAdmin;
+
+  // Assistente não tem acesso a esta página
+  if (perfilAtual === "assistente") {
+    const tbody = document.getElementById("listaNegociosFechados");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="muted">Seu perfil não possui acesso a Negócios Fechados.</td></tr>`;
+    return;
+  }
+
+  await carregarNegociosRBAC();
   await montarFiltros();
   aplicarFiltros();
 
-  document.getElementById('btnAplicar').addEventListener('click', aplicarFiltros);
-  document.getElementById('btnLimpar').addEventListener('click', () => {
-    ['fDataIni','fDataFim','fRm','fAgencia','fRamo','fEmpresa'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
+  document.getElementById('btnAplicar')?.addEventListener('click', aplicarFiltros);
+  document.getElementById('btnLimpar')?.addEventListener('click', ()=>{
+    ['fDataIni','fDataFim','fRm','fAgencia','fRamo','fEmpresa'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; });
     aplicarFiltros();
   });
 });
 
-// ===== Dados ======================================================
-async function carregarNegocios(){
-  // Apenas "Negócio Emitido"
-  const snap = await negociosRef.where('status','==','Negócio Emitido').get();
+/* ===== Coleta: somente o que o perfil pode ver ===== */
+async function carregarNegociosRBAC(){
+  docsBrutos = []; mapaRM.clear(); ramosUnicos.clear(); agenciasUnicas.clear();
 
-  docsBrutos = [];
-  mapaRM.clear(); ramosUnicos.clear(); agenciasUnicas.clear();
+  // 1) Buscar cotações com status "Negócio Emitido"
+  let docs = [];
+  if (isAdmin) {
+    docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
+  } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+    // Muitas não têm agenciaId (legado). Pegamos emitidas e filtramos depois pela agência do RM.
+    docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
+  } else {
+    // RM: só dele (vários campos por compat)
+    const buckets = [];
+    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmUid","==",usuarioAtual.uid).get()); } catch(_){}
+    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmId","==",usuarioAtual.uid).get()); } catch(_){}
+    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(_){}
+    const map = new Map(); buckets.forEach(s=> s?.docs.forEach(d=> map.set(d.id,d)));
+    docs = Array.from(map.values());
+  }
 
+  // 2) Montar base + coletar rmUids para resolver agência
   const rmUids = new Set();
-
-  snap.forEach(doc=>{
-    const d = doc.data();
+  docs.forEach(doc=>{
+    const d = doc.data()||{};
     const item = {
       id: doc.id,
-      empresaNome: d.empresaNome || '-',
-      ramo: d.ramo || '-',
-      rmNome: d.rmNome || '-',
+      empresaNome: d.empresaNome || "-",
+      ramo: d.ramo || "-",
+      rmNome: d.rmNome || "-",
       rmUid: d.rmUid || d.rmUID || d.rmId || null,
-      // >>> NOVO: coalesce + parse
-      premioLiquido: parsePremio(
-        d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? d.valor
-      ),
+      premioLiquido: parsePremio(d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? d.valor),
       inicioVigencia: toISODate(d.inicioVigencia),
       fimVigencia: toISODate(d.fimVigencia)
     };
@@ -110,57 +116,54 @@ async function carregarNegocios(){
     if (item.rmUid) rmUids.add(item.rmUid);
   });
 
-  await carregarPerfisRM([...rmUids]);
+  // 3) Resolver RM -> agência
+  await Promise.all(Array.from(rmUids).map(async uid=>{
+    try{
+      const us = await colUsuarios.doc(uid).get();
+      if (us.exists){
+        const u = us.data()||{};
+        mapaRM.set(uid, { nome: u.nome || "", agenciaId: u.agenciaId || "", agenciaNome: u.agenciaNome || "" });
+      } else {
+        mapaRM.set(uid, { nome: "", agenciaId: "", agenciaNome: "" });
+      }
+    }catch(_){ mapaRM.set(uid,{nome:"",agenciaId:"",agenciaNome:""}); }
+  }));
 
-  const idsAg = [...new Set([...mapaRM.values()].map(x=>x.agenciaId).filter(Boolean))];
-  await carregarAgencias(idsAg);
+  // 4) Agências (nome)
+  const idsAg = Array.from(new Set(Array.from(mapaRM.values()).map(x=>x.agenciaId).filter(Boolean)));
+  await Promise.all(idsAg.map(async id=>{
+    if (!id || mapaAgencia.has(id)) return;
+    try{
+      const ag = await colAgencias.doc(id).get();
+      mapaAgencia.set(id, ag.exists ? (ag.data().nome || ag.data().descricao || id) : id);
+    }catch(_){ mapaAgencia.set(id,id); }
+  }));
+
+  // 5) Filtro RBAC por agência para gerente-chefe
+  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+    docsBrutos = docsBrutos.filter(d => {
+      const info = mapaRM.get(d.rmUid) || {};
+      return (info.agenciaId || "") === minhaAgencia;
+    });
+  }
 
   // set de nomes de agência para o filtro
   docsBrutos.forEach(d=>{
     const nomeAg = nomeAgenciaPorRmUid(d.rmUid);
-    if (nomeAg && nomeAg !== '-') agenciasUnicas.add(nomeAg);
+    if (nomeAg && nomeAg !== "-") agenciasUnicas.add(nomeAg);
   });
-}
-
-async function carregarPerfisRM(uids){
-  if (!uids.length) return;
-  await Promise.all(uids.map(uid =>
-    usuariosRef.doc(uid).get().then(ds=>{
-      if (ds.exists){
-        const u = ds.data();
-        mapaRM.set(uid, {
-          nome: u.nome || u.displayName || '',
-          agenciaId: u.agenciaId || u.agencia || '',
-          agenciaNome: u.agenciaNome || ''
-        });
-      } else {
-        mapaRM.set(uid, {nome:'',agenciaId:'',agenciaNome:''});
-      }
-    }).catch(()=> mapaRM.set(uid,{nome:'',agenciaId:'',agenciaNome:''}))
-  ));
-}
-
-async function carregarAgencias(ids){
-  if (!ids || !ids.length) return;
-  await Promise.all(ids.map(id=>{
-    if (!id || mapaAgencia.has(id)) return;
-    return agenciasRef.doc(id).get().then(ds=>{
-      mapaAgencia.set(id, ds.exists ? (ds.data().nome || ds.data().descricao || id) : id);
-    }).catch(()=> mapaAgencia.set(id, id));
-  }));
 }
 
 function nomeAgenciaPorRmUid(rmUid){
   const info = mapaRM.get(rmUid);
-  if (!info) return '-';
+  if (!info) return "-";
   if (info.agenciaNome) return info.agenciaNome;
   if (info.agenciaId && mapaAgencia.has(info.agenciaId)) return mapaAgencia.get(info.agenciaId);
-  return info.agenciaId || '-';
+  return info.agenciaId || "-";
 }
 
-// ===== Filtros ====================================================
+/* ===== Filtros ===== */
 async function montarFiltros(){
-  // RM
   const fRm = document.getElementById('fRm');
   if (fRm){
     fRm.innerHTML = `<option value="">Todos</option>`;
@@ -174,22 +177,18 @@ async function montarFiltros(){
     });
   }
 
-  // Agência
   const fAg = document.getElementById('fAgencia');
   if (fAg){
     fAg.innerHTML = `<option value="">Todas</option>`;
-    [...agenciasUnicas].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(nome=>{
-      fAg.insertAdjacentHTML('beforeend', `<option value="${nome}">${nome}</option>`);
-    });
+    Array.from(agenciasUnicas).sort((a,b)=>a.localeCompare(b,'pt-BR'))
+      .forEach(nome => fAg.insertAdjacentHTML('beforeend', `<option value="${nome}">${nome}</option>`));
   }
 
-  // Ramo
   const fRamo = document.getElementById('fRamo');
   if (fRamo){
     fRamo.innerHTML = `<option value="">Todos</option>`;
-    [...ramosUnicos].sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(r=>{
-      fRamo.insertAdjacentHTML('beforeend', `<option value="${r}">${r}</option>`);
-    });
+    Array.from(ramosUnicos).sort((a,b)=>a.localeCompare(b,'pt-BR'))
+      .forEach(r => fRamo.insertAdjacentHTML('beforeend', `<option value="${r}">${r}</option>`));
   }
 }
 
@@ -202,29 +201,20 @@ function aplicarFiltros(){
   const empTxt = norm(document.getElementById('fEmpresa')?.value || '');
 
   const lista = docsBrutos.filter(d=>{
-    // datas (comparam pelo início de vigência)
     if (ini && (!d.inicioVigencia || d.inicioVigencia < ini)) return false;
     if (fim && (!d.inicioVigencia || d.inicioVigencia > fim)) return false;
 
-    // RM
     if (rmSel){
-      if (d.rmUid){
-        if (d.rmUid !== rmSel) return false;
-      } else {
-        if (norm(d.rmNome) !== norm(rmSel)) return false;
-      }
+      if (d.rmUid){ if (d.rmUid !== rmSel) return false; }
+      else if (norm(d.rmNome) !== norm(rmSel)) return false;
     }
 
-    // Agência (compara pelo nome resolvido)
     if (agSel){
       const agNome = nomeAgenciaPorRmUid(d.rmUid);
       if (agNome !== agSel) return false;
     }
 
-    // Ramo
     if (ramoSel && d.ramo !== ramoSel) return false;
-
-    // Empresa (contém)
     if (empTxt && !norm(d.empresaNome).includes(empTxt)) return false;
 
     return true;
@@ -242,7 +232,6 @@ function atualizarResumo(lista){
   if (totalPremio) totalPremio.textContent = `Total prêmio: ${money(soma)}`;
 }
 
-// ===== Render =====================================================
 function renderTabela(lista){
   const tbody = document.getElementById('listaNegociosFechados');
   if (!tbody) return;
