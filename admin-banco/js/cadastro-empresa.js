@@ -4,7 +4,7 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 /* Estado */
-let agenciasMap  = {};    // { "3495": "Corporate One", ... }
+let agenciasMap  = {};    // { "<id>": "Nome — Banco / Cidade - UF" }
 let rmsMap       = {};    // { uid: {nome, agenciaId} }
 let perfilAtual  = null;
 let minhaAgencia = null;
@@ -78,7 +78,7 @@ auth.onAuthStateChanged(async (user) => {
   await carregarEmpresas();
 });
 
-/* Carrega agências para formulário e filtro */
+/* ---------- Agências (SEM UID visível) ---------- */
 async function carregarAgencias() {
   agenciasMap = {};
   const selForm   = $('agenciaId');
@@ -87,25 +87,43 @@ async function carregarAgencias() {
   if (selForm)   selForm.innerHTML   = '<option value="">Selecione uma agência</option>';
   if (selFiltro) selFiltro.innerHTML = '<option value="">Minha agência</option>';
 
-  const snap = await db.collection("agencias_banco")
-                       .orderBy(firebase.firestore.FieldPath.documentId())
-                       .get();
+  let snap;
+  try {
+    // tenta ordenar por nome; se houver docs sem “nome”, faz fallback
+    snap = await db.collection("agencias_banco").orderBy("nome").get();
+    if (snap.empty) snap = await db.collection("agencias_banco").get();
+  } catch {
+    snap = await db.collection("agencias_banco").get();
+  }
 
   snap.forEach((doc) => {
     const ag = doc.data() || {};
     const id = doc.id;
-    agenciasMap[id] = ag.nome || id;
 
+    const nome   = (ag.nome || "(Sem nome)").toString();
+    const banco  = ag.banco ? ` — ${ag.banco}` : "";
+    const cidade = (ag.Cidade || ag.cidade || "").toString();
+    const cidadeFmt = cidade ? ` / ${cidade}` : "";
+    const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const ufFmt = uf ? ` - ${uf}` : "";
+
+    // 🔹 Rótulo amigável SEM UID
+    const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
+
+    // guarda no cache para listagem/tabela
+    agenciasMap[id] = label;
+
+    // options: value = id (para salvar), text = label (sem UID)
     if (selForm) {
       const opt1 = document.createElement("option");
       opt1.value = id;
-      opt1.textContent = `${id} - ( ${agenciasMap[id]} )`;
+      opt1.textContent = label;
       selForm.appendChild(opt1);
     }
     if (selFiltro) {
       const opt2 = document.createElement("option");
       opt2.value = id;
-      opt2.textContent = `${id} - ( ${agenciasMap[id]} )`;
+      opt2.textContent = label;
       selFiltro.appendChild(opt2);
     }
   });
@@ -137,7 +155,9 @@ async function carregarRMsFormulario() {
 
     const opt = document.createElement("option");
     opt.value = doc.id; // rmUid
-    opt.textContent = `${u.nome} (${u.agenciaId || "-"})`;
+    // mostra rótulo da agência se existir no cache
+    const agRot = agenciasMap[u.agenciaId] ? ` (${agenciasMap[u.agenciaId]})` : "";
+    opt.textContent = `${u.nome}${agRot}`;
     selectRM.appendChild(opt);
   });
 }
@@ -146,10 +166,7 @@ async function carregarRMsFormulario() {
 async function prepararFiltrosRM() {
   const box = $('boxFiltroRm');
   if (!box) return;
-
-  // só popula se o box estiver visível
   if (!((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin)) return;
-
   await carregarRMsFiltro();
 }
 
@@ -157,7 +174,6 @@ async function prepararFiltrosRM() {
 async function carregarRMsFiltro() {
   const filtroRm = $('filtroRm');
   const agencia = $('filtroAgencia')?.value || minhaAgencia;
-
   if (!filtroRm) return;
 
   filtroRm.innerHTML = '<option value="">Todos os RMs</option>';
@@ -184,7 +200,6 @@ function onAgenciaChangeForm() {
 /* onChange do filtro de Agência (LISTA) */
 async function onFiltroAgenciaChange() {
   if ((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) {
-    // quando troca agência no filtro, recarrega lista de RMs do filtro
     await carregarRMsFiltro();
   }
   carregarEmpresas();
@@ -205,13 +220,11 @@ async function salvarEmpresa() {
     return;
   }
 
-  // Regras de perfil no formulário:
   if (!isAdmin && perfilAtual === "rm") {
-    agenciaId = minhaAgencia || "";     // RM sempre na própria agência
-    rmUid     = meuUid;                  // RM sempre ele mesmo
+    agenciaId = minhaAgencia || "";
+    rmUid     = meuUid;
   }
   if (!isAdmin && (perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe")) {
-    // Gerente-chefe só pode criar na própria agência
     if (agenciaId && minhaAgencia && agenciaId !== minhaAgencia) {
       alert("Gerente Chefe só pode criar/editar empresas da própria agência.");
       return;
@@ -234,10 +247,8 @@ async function salvarEmpresa() {
     } else {
       const user = auth.currentUser;
       if (!user) return alert("Usuário não autenticado.");
-
       dados.criadoEm     = firebase.firestore.Timestamp.now();
       dados.criadoPorUid = user.uid;
-
       await db.collection("empresas").add(dados);
       alert("Empresa cadastrada com sucesso.");
     }
@@ -259,15 +270,12 @@ async function carregarEmpresas() {
   try {
     let q = db.collection("empresas");
 
-    // Escopo por agência (Admin opcional; Chefe/RM ficam na própria; Assistente não usa esta página)
     if (filtroAg) q = q.where("agenciaId", "==", filtroAg);
 
-    // RM vê somente as suas empresas
     if (!isAdmin && perfilAtual === "rm") {
       q = q.where("rmUid", "==", meuUid);
     }
 
-    // Gerente Chefe (ou Admin) pode filtrar por RM específico
     if (((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) && filtroRm) {
       q = q.where("rmUid", "==", filtroRm);
     }
@@ -288,16 +296,15 @@ async function carregarEmpresas() {
         nome: e.nome || "-",
         cidade: e.cidade || "-",
         estado: e.estado || "-",
-        agencia: e.agenciaId ? `${e.agenciaId} - ${agenciasMap[e.agenciaId] || ""}` : "-",
+        // 🔹 usa rótulo amigável SEM UID
+        agencia: e.agenciaId ? (agenciasMap[e.agenciaId] || "") : "-",
         agenciaSort: e.agenciaId || "",
         rmUid: e.rmUid || "",
         rmNome: e.rmNome || "-"
       });
     });
 
-    // Ordenação client-side
     ordenarRows(rows);
-
     renderTabela(rows);
     setStatus(`${rows.length} empresa(s) listada(s).`);
   } catch (e) {
@@ -381,7 +388,6 @@ async function editarEmpresa(id) {
   await carregarRMsFormulario();
   $('rmUid').value = e.rmUid || "";
 
-  // Se RM, mantém travado em sua agência e ele mesmo como RM
   if (!isAdmin && perfilAtual === "rm") {
     $('agenciaId').value = minhaAgencia || "";
     $('agenciaId').disabled = true;
