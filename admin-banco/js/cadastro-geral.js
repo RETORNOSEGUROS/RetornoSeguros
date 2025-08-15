@@ -14,14 +14,17 @@ function getSecondaryAuth() {
 
 let editandoUsuarioId = null;
 
+// 🔹 Cache de agências (id -> label amigável)
+const agenciasCache = {}; // ex.: { "KhUKYf98tB8Y0Lo58pgq": "Large Corporate — Bradesco / Blumenau - SC" }
+
 // ✅ Ao logar como admin, carrega tudo
-auth.onAuthStateChanged(user => {
+auth.onAuthStateChanged(async (user) => {
   if (!user || user.email !== "patrick@retornoseguros.com.br") {
     window.location.href = "login.html";
   } else {
-    listarUsuarios();
+    await carregarAgencias();     // garante cache preenchido e select pronto
     carregarGerentesChefes();
-    carregarAgencias();           // <<=== carrega as agências
+    listarUsuarios();             // agora a coluna “Agência” já consegue usar o rótulo
   }
 });
 
@@ -51,39 +54,45 @@ function carregarGerentesChefes() {
     .catch(err => console.error("Erro ao carregar gerentes-chefe:", err));
 }
 
-// ✅ Popula select de Agências
-function carregarAgencias() {
+// ✅ Popula select de Agências (sem exibir UID) e preenche o cache de rótulos
+async function carregarAgencias() {
   const select = document.getElementById("agenciaId");
   if (!select) return;
 
   select.innerHTML = '<option value="">Selecione</option>';
 
-  // Busca todas as agências e ordena por nome (se não tiver nome, usa o ID)
-  db.collection("agencias_banco").orderBy("nome").get()
-    .then(snapshot => {
-      if (snapshot.empty) {
-        // fallback: tenta sem orderBy, caso alguns docs não tenham "nome"
-        return db.collection("agencias_banco").get();
-      }
-      return snapshot;
-    })
-    .then(snapshot => {
-      snapshot.forEach(doc => {
-        const ag = doc.data() || {};
-        const nome = ag.nome || "(Sem nome)";
-        const banco = ag.banco ? ` - ${ag.banco}` : "";
-        const cidade = ag.Cidade || ag.cidade || ""; // em alguns lugares está "Cidade"
-        const cidadeFmt = cidade ? ` / ${cidade}` : "";
-        const option = document.createElement("option");
-        option.value = doc.id; // Ex.: "3495"
-        option.textContent = `${doc.id} - ${nome}${banco}${cidadeFmt}`;
-        select.appendChild(option);
-      });
-    })
-    .catch(err => {
-      console.error("Erro ao carregar agências:", err);
-      alert("Não foi possível carregar as agências. Verifique a coleção 'agencias_banco'.");
-    });
+  // Tenta ordenar por nome; se falhar (docs sem nome), faz sem orderBy como fallback
+  let snapshot;
+  try {
+    snapshot = await db.collection("agencias_banco").orderBy("nome").get();
+    if (snapshot.empty) snapshot = await db.collection("agencias_banco").get();
+  } catch (e) {
+    snapshot = await db.collection("agencias_banco").get();
+  }
+
+  snapshot.forEach(doc => {
+    const ag = doc.data() || {};
+    const id = doc.id;
+
+    const nome = (ag.nome || "(Sem nome)").toString();
+    const banco = ag.banco ? ` — ${ag.banco}` : "";
+    const cidade = ag.Cidade || ag.cidade || "";
+    const cidadeFmt = cidade ? ` / ${cidade}` : "";
+    const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const ufFmt = uf ? ` - ${uf}` : "";
+
+    // 🔹 Rótulo amigável SEM UID
+    const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
+
+    // guarda no cache para usar na listagem de usuários
+    agenciasCache[id] = label;
+
+    // option: value = id (para salvar), text = label (sem UID)
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = label;
+    select.appendChild(option);
+  });
 }
 
 // ✅ Criar/atualizar usuário
@@ -113,9 +122,8 @@ async function cadastrarUsuario() {
       .then(() => {
         alert("✅ Usuário atualizado com sucesso.");
         limparFormulario();
-        listarUsuarios();
         carregarGerentesChefes();
-        carregarAgencias(); // mantém o select sincronizado
+        listarUsuarios();
       })
       .catch(err => {
         console.error("Erro ao atualizar:", err);
@@ -152,9 +160,8 @@ async function cadastrarUsuario() {
 
     alert("✅ Usuário criado no Auth e cadastrado no banco!");
     limparFormulario();
-    listarUsuarios();
     carregarGerentesChefes();
-    carregarAgencias();
+    listarUsuarios();
   } catch (err) {
     console.error("Erro ao criar login:", err);
     if (err && err.code === "auth/email-already-in-use") {
@@ -179,11 +186,14 @@ function listarUsuarios() {
         const u = doc.data() || {};
         const tr = document.createElement("tr");
 
+        // usa rótulo amigável da agência; se não houver no cache, mostra o id mesmo
+        const agenciaRotulo = u.agenciaId ? (agenciasCache[u.agenciaId] || u.agenciaId) : "-";
+
         tr.innerHTML = `
           <td>${u.nome || "-"}</td>
           <td>${u.email || "-"}</td>
           <td>${u.perfil || "-"}</td>
-          <td>${u.agenciaId || "-"}</td>
+          <td>${agenciaRotulo}</td>
           <td>
             <button onclick="editarUsuario('${doc.id}', '${(u.nome || "").replace(/'/g,"&#39;")}', '${(u.email || "").replace(/'/g,"&#39;")}', '${u.perfil || ""}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button>
             <button onclick="excluirUsuario('${doc.id}', '${(u.email || "").replace(/'/g,"&#39;")}')">🗑 Excluir</button>
