@@ -7,11 +7,11 @@ const db   = firebase.firestore();
 
 const COL_USERS     = db.collection("usuarios_banco");
 const COL_COMISSOES = db.collection("comissoes_negocios");
-const COL_RESGATES  = db.collection("resgates_carteira"); // NOVA COLEÇÃO
+const COL_RESGATES  = db.collection("resgates_carteira");
 
 // ===== Estado =====
 let me = null;              // {uid, email, nome, perfil, agenciaId, isAdmin}
-let viewUid = null;         // qual usuário está sendo visualizado (admin pode trocar)
+let viewUid = null;         // usuário “em visualização” (admin pode simular)
 let entradas = [];          // [{empresa, competenciaISO, valor}]
 let saidas  = [];           // [{dataISO, metodo, valor, status}]
 let totais  = { ganho:0, resgatado:0, pendente:0, saldo:0 };
@@ -38,7 +38,9 @@ window.addEventListener("DOMContentLoaded", () => {
       isAdmin: user.email === "patrick@retornoseguros.com.br" || (p.perfil||"").toLowerCase()==="admin",
     };
 
-    // admin pode escolher outro usuário para visualizar
+    $("labelPerfil").textContent = `Perfil: ${me.perfil || "-"}${me.isAdmin ? " (admin)" : ""}`;
+
+    // Admin pode “ver como”
     if (me.isAdmin) {
       $("boxAdminSwitch").style.display = "block";
       await carregarListaUsuariosParaAdmin();
@@ -49,6 +51,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     viewUid = me.uid;
+
     $("btnAplicar").onclick = aplicarFiltros;
     $("btnLimpar").onclick = () => {
       ["fIni","fFim","fEmpresa","fStatusSaida"].forEach(id => { const el=$(id); if(el) el.value=""; });
@@ -57,8 +60,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
     $("btnNovoResgate").onclick   = abrirDrawer;
     $("btnSalvarResgate").onclick = salvarResgate;
-
-    $("labelPerfil").textContent = `Perfil: ${me.perfil || "-"}${me.isAdmin ? " (admin)" : ""}`;
 
     await atualizarTudo();
   });
@@ -71,7 +72,7 @@ async function carregarListaUsuariosParaAdmin(){
   snap.forEach(doc=>{
     const u = doc.data()||{};
     sel.insertAdjacentHTML("beforeend",
-      `<option value="${doc.id}">${u.nome||doc.id} — ${u.perfil||"-"}</option>`);
+      `<option value="${doc.id}">${u.nome||doc.id} — ${(u.perfil||"-").toLowerCase()}</option>`);
   });
 }
 
@@ -79,19 +80,17 @@ async function carregarListaUsuariosParaAdmin(){
 async function atualizarTudo(){
   await carregarEntradas();
   await carregarSaidas();
-  calcularTotais();
+  calcularTotais();  // agora garante métricas > 0 quando houver dados
   renderMetrica();
-  aplicarFiltros(); // também renderiza as tabelas
+  aplicarFiltros();  // também atualiza os contadores com soma dos filtrados
 }
 
-// =========== Carregar ENTRADAS (comissões disponíveis) ===========
-// RM: somar parcelas.rm onde rmUid == uid e competencia <= hoje
-// Gerente-chefe: somar parcelas.gf onde agenciaId == minha e competencia <= hoje
+// =========== Carregar ENTRADAS ===========
 async function carregarEntradas(){
   entradas = [];
   const hoje = todayISO();
 
-  // Descobrir perfil do usuário visualizado
+  // perfil/ agência do usuário em visualização
   let perfilView = me.perfil;
   let agenciaView = me.agenciaId;
 
@@ -105,8 +104,16 @@ async function carregarEntradas(){
   }
 
   if (perfilView === "rm") {
-    // pegar docs onde rmUid == viewUid
-    const snap = await COL_COMISSOES.where("rmUid","==",viewUid).get();
+    // ⚠️ precisa das rules liberando leitura para RM
+    let snap = await COL_COMISSOES.where("rmUid","==",viewUid).get();
+
+    // fallback: se nada voltar (docs antigos sem rmUid), tenta por rmNome
+    if (snap.empty) {
+      const myDoc = await COL_USERS.doc(viewUid).get();
+      const nome  = myDoc.exists ? (myDoc.data()?.nome || "") : "";
+      if (nome) snap = await COL_COMISSOES.where("rmNome","==",nome).get();
+    }
+
     snap.forEach(doc=>{
       const c = doc.data()||{};
       const nome = c.empresaNome || "-";
@@ -118,6 +125,7 @@ async function carregarEntradas(){
         if (valor > 0) entradas.push({ empresa:nome, competenciaISO:comp, valor });
       });
     });
+
   } else if (perfilView === "gerente_chefe" || perfilView === "gerente chefe") {
     if (!agenciaView) { entradas = []; return; }
     const snap = await COL_COMISSOES.where("agenciaId","==",agenciaView).get();
@@ -132,16 +140,16 @@ async function carregarEntradas(){
         if (valor > 0) entradas.push({ empresa:nome, competenciaISO:comp, valor });
       });
     });
+
   } else {
-    // outros perfis não têm carteira própria
-    entradas = [];
+    entradas = []; // outros perfis não têm carteira
   }
 
-  // ordena mais recente primeiro
+  // mais recentes primeiro
   entradas.sort((a,b)=> (a.competenciaISO < b.competenciaISO) ? 1 : -1);
 }
 
-// =========== Carregar SAÍDAS (solicitações de resgate) ===========
+// =========== Carregar SAÍDAS ===========
 async function carregarSaidas(){
   saidas = [];
   const snap = await COL_RESGATES.where("userId","==",viewUid).get();
@@ -154,7 +162,6 @@ async function carregarSaidas(){
       status:    (r.status || "pendente").toLowerCase()
     });
   });
-  // mais recentes primeiro
   saidas.sort((a,b)=> (a.dataISO < b.dataISO) ? 1 : -1);
 }
 
@@ -163,8 +170,7 @@ function calcularTotais(){
   const ganho = entradas.reduce((s,e)=> s + Number(e.valor||0), 0);
   const resgatado = saidas.filter(s=>s.status==="pago").reduce((s,e)=> s + Number(e.valor||0), 0);
   const pendente  = saidas.filter(s=>s.status==="pendente").reduce((s,e)=> s + Number(e.valor||0), 0);
-  const saldo = ganho - resgatado; // pendente NÃO reduz o disponível
-
+  const saldo = ganho - resgatado; // pendente não reduz disponível
   totais = { ganho, resgatado, pendente, saldo };
 }
 
@@ -182,7 +188,7 @@ function aplicarFiltros(){
   const ini = $("fIni")?.value || "";
   const fim = $("fFim")?.value || "";
   const emp = norm($("fEmpresa")?.value || "");
-  const filtradas = entradas.filter(e=>{
+  const entradasFiltradas = entradas.filter(e=>{
     if (ini && e.competenciaISO < ini) return false;
     if (fim && e.competenciaISO > fim) return false;
     if (emp && !norm(e.empresa).includes(emp)) return false;
@@ -191,33 +197,36 @@ function aplicarFiltros(){
 
   const tbE = $("tbEntradas");
   tbE.innerHTML = "";
-  if (!filtradas.length){
+  if (!entradasFiltradas.length){
     tbE.innerHTML = `<tr><td colspan="3" class="muted">Sem entradas neste período.</td></tr>`;
   } else {
-    filtradas.forEach(e=>{
+    entradasFiltradas.forEach(e=>{
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${e.empresa}</td><td>${e.competenciaISO.split("-").reverse().join("/")}</td><td>${money(e.valor)}</td>`;
       tbE.appendChild(tr);
     });
   }
-  $("qtdEntradas").textContent = `${filtradas.length} item(ns)`;
+  // contador com soma
+  const somaEntradas = entradasFiltradas.reduce((s,e)=> s + Number(e.valor||0), 0);
+  $("qtdEntradas").textContent = `${entradasFiltradas.length} item(ns) — ${money(somaEntradas)}`;
 
   // Saídas
   const st = $("fStatusSaida")?.value || "";
-  const out = saidas.filter(s=>{
+  const saidasFiltradas = saidas.filter(s=>{
     if (st && s.status !== st) return false;
     return true;
   });
 
   const tbS = $("tbSaidas");
   tbS.innerHTML = "";
-  if (!out.length){
+  if (!saidasFiltradas.length){
     tbS.innerHTML = `<tr><td colspan="4" class="muted">Sem solicitações.</td></tr>`;
   } else {
-    out.forEach(s=>{
+    saidasFiltradas.forEach(s=>{
       const tr = document.createElement("tr");
-      const stLabel = s.status==="pago" ? `<span class="tag" style="background:#ecfdf5;border-color:#a7f3d0;color:#065f46">Pago</span>`
-                                        : `<span class="tag">Pendente</span>`;
+      const stLabel = s.status==="pago"
+        ? `<span class="tag" style="background:#ecfdf5;border-color:#a7f3d0;color:#065f46">Pago</span>`
+        : `<span class="tag">Pendente</span>`;
       tr.innerHTML = `<td>${s.dataISO ? s.dataISO.split("-").reverse().join("/") : "-"}</td>
                       <td>${s.metodo}</td>
                       <td>${money(s.valor)}</td>
@@ -225,7 +234,12 @@ function aplicarFiltros(){
       tbS.appendChild(tr);
     });
   }
-  $("qtdSaidas").textContent = `${out.length} item(ns)`;
+  const somaSaidas = saidasFiltradas.reduce((s,e)=> s + Number(e.valor||0), 0);
+  $("qtdSaidas").textContent = `${saidasFiltradas.length} item(ns) — ${money(somaSaidas)}`;
+
+  // sempre manter métricas atualizadas (caso mude período, etc.)
+  calcularTotais();
+  renderMetrica();
 }
 
 // ============== Drawer (Solicitar Resgate) ==============
@@ -240,7 +254,7 @@ async function salvarResgate(){
   if (!valorNum || valorNum <= 0) return alert("Informe um valor válido.");
   if (valorNum > totais.saldo) {
     return alert(`Valor acima do saldo disponível (${money(totais.saldo)}).`);
-  }
+    }
 
   const payload = {
     userId: viewUid,
@@ -267,7 +281,7 @@ async function salvarResgate(){
   aplicarFiltros();
 }
 
-// ====== EXPORTS (se precisar chamar no HTML) ======
+// ====== Exports ======
 window.abrirDrawer   = abrirDrawer;
 window.fecharDrawer  = fecharDrawer;
 window.aplicarFiltros= aplicarFiltros;
