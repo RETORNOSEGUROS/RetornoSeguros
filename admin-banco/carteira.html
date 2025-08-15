@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Carteira de Comissões</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Firebase v8 -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <!-- Seu config -->
+  <script src="js/firebase-config.js"></script>
+
+  <style>
+    :root { --azul:#004080; --azul2:#002e5a; --bg:#f4f7fa; --b:#e6e9ef; --muted:#667085 }
+    *{ box-sizing:border-box }
+    body{ margin:0; padding:20px; background:var(--bg); font-family:"Segoe UI",system-ui,Arial }
+    h2{ color:var(--azul); margin:0 0 14px }
+    .card{ background:#fff; border-radius:12px; box-shadow:0 6px 16px rgba(0,0,0,.06); padding:16px; margin-bottom:16px }
+    .grid{ display:grid; gap:12px }
+    .grid-4{ grid-template-columns:repeat(4,minmax(180px,1fr)) }
+    .metric{ background:#fafbff; border:1px solid #eef2ff; border-radius:12px; padding:14px }
+    .metric b{ display:block; font-size:12px; color:#475467; margin-bottom:6px }
+    .metric .v{ font-weight:800; font-size:20px; color:#111827 }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+    .btn{ background:var(--azul); color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:600; cursor:pointer }
+    .btn:hover{ background:var(--azul2) }
+    .btn.outline{ background:#fff; color:var(--azul); border:1px solid var(--azul) }
+    label{ font-size:12px; color:#475467; display:block; margin-bottom:6px }
+    input, select, textarea{ width:100%; padding:10px 12px; border:1px solid var(--b); border-radius:8px; font-size:14px; background:#fff }
+    .filters{ display:grid; grid-template-columns: repeat(5, minmax(160px,1fr)); gap:10px }
+    .table-wrap{ overflow:auto }
+    table{ width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden; min-width:720px }
+    th, td{ padding:12px 14px; border-bottom:1px solid #f0f2f6; text-align:left; font-size:14px }
+    th{ background:var(--azul); color:#fff; letter-spacing:.02em; font-size:12px; text-transform:uppercase }
+    tr:hover td{ background:#f8fafc }
+    .muted{ color:var(--muted) }
+    .tag{ background:#eef2ff; color:#1e3a8a; border:1px solid #c7d2fe; padding:4px 8px; border-radius:999px; font-size:12px }
+    .right{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px }
+    /* Drawer */
+    .drawer{ position:fixed; right:-520px; top:0; width:520px; height:100%; background:#fff; box-shadow:-8px 0 24px rgba(0,0,0,.12); transition:right .25s; z-index:50; overflow:auto }
+    .drawer.open{ right:0 }
+    .drawer-header{ display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid #eef2f6 }
+    .drawer-body{ padding:16px }
+    @media (max-width:980px){
+      .grid-4{ grid-template-columns:1fr 1fr }
+      .filters{ grid-template-columns:1fr 1fr }
+      .drawer{ width:100% }
+    }
+  </style>
+</head>
+<body>
+  <h2>💳 Carteira de Comissões</h2>
+
+  <!-- Seletor de usuário (somente admin para testar/visualizar) -->
+  <div class="card" id="boxAdminSwitch" style="display:none">
+    <div class="row" style="align-items:flex-end">
+      <div style="min-width:260px">
+        <label>Visualizar como (admin)</label>
+        <select id="adminUserView"><option value="">Selecione um usuário</option></select>
+      </div>
+      <button class="btn" id="btnAdminAplicar">Aplicar</button>
+    </div>
+  </div>
+
+  <!-- Métricas -->
+  <div class="card">
+    <div class="grid grid-4">
+      <div class="metric"><b>Total ganho</b><span class="v" id="mTotalGanho">R$ 0,00</span></div>
+      <div class="metric"><b>Total resgatado (pagos)</b><span class="v" id="mResgatado">R$ 0,00</span></div>
+      <div class="metric"><b>Em solicitação (pendente)</b><span class="v" id="mPendente">R$ 0,00</span></div>
+      <div class="metric"><b>Saldo disponível</b><span class="v" id="mSaldo">R$ 0,00</span></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="btnNovoResgate">Solicitar resgate</button>
+      <span class="muted" id="labelPerfil"></span>
+    </div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="card">
+    <div class="filters">
+      <div>
+        <label>Competência (de)</label>
+        <input type="date" id="fIni">
+      </div>
+      <div>
+        <label>Competência (até)</label>
+        <input type="date" id="fFim">
+      </div>
+      <div>
+        <label>Empresa</label>
+        <input type="text" id="fEmpresa" placeholder="Digite parte do nome">
+      </div>
+      <div>
+        <label>Status Saídas</label>
+        <select id="fStatusSaida">
+          <option value="">Todos</option>
+          <option value="pendente">Pendentes</option>
+          <option value="pago">Pagos</option>
+        </select>
+      </div>
+      <div style="display:flex; align-items:end; gap:8px">
+        <button class="btn" id="btnAplicar">Aplicar</button>
+        <button class="btn outline" id="btnLimpar">Limpar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entradas -->
+  <div class="card">
+    <div class="right">
+      <h3 style="margin:0">Entradas (comissões disponíveis)</h3>
+      <span class="tag" id="qtdEntradas">0 itens</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Empresa</th><th>Competência</th><th>Valor</th></tr></thead>
+        <tbody id="tbEntradas"><tr><td colspan="3" class="muted">Carregando…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Saídas -->
+  <div class="card">
+    <div class="right">
+      <h3 style="margin:0">Saídas (solicitações)</h3>
+      <span class="tag" id="qtdSaidas">0 itens</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Data</th><th>Método</th><th>Valor</th><th>Status</th></tr></thead>
+        <tbody id="tbSaidas"><tr><td colspan="4" class="muted">Carregando…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Drawer de solicitar resgate -->
+  <div class="drawer" id="drawer">
+    <div class="drawer-header">
+      <strong>Solicitar resgate</strong>
+      <button class="btn outline" onclick="fecharDrawer()">Fechar</button>
+    </div>
+    <div class="drawer-body">
+      <div class="grid">
+        <div>
+          <label>Forma de pagamento</label>
+          <select id="rMetodo">
+            <option value="PIX">PIX</option>
+            <option value="BOLETO">Boleto</option>
+            <option value="DOC/TED">DOC/TED</option>
+          </select>
+        </div>
+        <div>
+          <label>Valor</label>
+          <input type="number" id="rValor" min="0" step="0.01" placeholder="0,00">
+          <div class="muted" id="hintSaldo"></div>
+        </div>
+        <div>
+          <label>Detalhes do pagamento (chave PIX, banco, titular…)</label>
+          <textarea id="rDetalhes" placeholder="Ex.: chave PIX 55 99999-0000, Banco X, agência/conta..."></textarea>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="btnSalvarResgate">Enviar solicitação</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/carteira.js" defer></script>
+</body>
+</html>
