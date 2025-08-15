@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Comissões</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Firebase v8 -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <!-- seu config -->
+  <script src="js/firebase-config.js"></script>
+
+  <style>
+    :root{ --azul:#004080; --azul2:#002e5a; --bg:#f4f7fa; --card:#fff; --muted:#667085; --b:#e6e9ef }
+    *{box-sizing:border-box}
+    body{font-family:"Segoe UI",system-ui,-apple-system,Arial; margin:0; background:var(--bg); color:#111827; padding:20px}
+    h2{margin:0 0 16px; color:var(--azul)}
+    .card{background:var(--card); border-radius:12px; box-shadow:0 6px 16px rgba(0,0,0,.06); padding:18px; margin-bottom:18px}
+    .filters{display:grid; grid-template-columns:repeat(6,minmax(150px,1fr)); gap:10px}
+    .filters label{display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:6px}
+    .filters input,.filters select{padding:10px 12px; border:1px solid var(--b); border-radius:8px; font-size:14px; background:#fff}
+    .actions{display:flex; align-items:end; gap:8px}
+    .btn{background:var(--azul); color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:600; cursor:pointer}
+    .btn.secondary{background:#eef2ff; color:#1e3a8a}
+    .table-wrap{overflow:auto}
+    table{width:100%; border-collapse:collapse; min-width:980px; background:#fff; border-radius:10px; overflow:hidden}
+    thead th{background:var(--azul); color:#fff; text-transform:uppercase; font-size:12px; letter-spacing:.03em; text-align:left; padding:12px 14px}
+    tbody td{border-top:1px solid #f0f2f6; padding:12px 14px}
+    tr:hover td{background:#f8fafc}
+    .chip{background:#eaf1ff; color:#163f8f; border:1px solid #c9dbff; padding:6px 10px; border-radius:999px; font-size:13px}
+    .muted{color:var(--muted)}
+    .right{display:flex; justify-content:space-between; align-items:center; margin:8px 0 12px}
+    .pill{background:#eef2f7; padding:2px 8px; border-radius:999px; font-size:12px}
+    .link{color:#0b69c6; text-decoration:none}
+    /* Painel lateral */
+    .drawer{position:fixed; top:0; right:-520px; width:520px; height:100%; background:#fff; box-shadow:-8px 0 24px rgba(0,0,0,.12); transition:right .25s; z-index:50; overflow:auto}
+    .drawer.open{right:0}
+    .drawer-header{display:flex; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid #eef2f6}
+    .drawer-body{padding:16px}
+    .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+    .subtle{font-size:12px; color:#475467}
+    .row{display:flex; gap:10px; flex-wrap:wrap}
+    .totais{background:#f8fafc; border:1px dashed #dce3f0; border-radius:10px; padding:10px; margin-top:8px}
+    .tbl-mini{width:100%; border-collapse:collapse; margin-top:10px}
+    .tbl-mini th,.tbl-mini td{border-bottom:1px solid #eef2f6; padding:8px 10px; text-align:left; font-size:13px}
+    .tbl-mini th{background:#f5f7fb}
+    .badge{display:inline-block; font-size:12px; background:#f0f9f0; color:#166534; border:1px solid #b7e4b7; border-radius:999px; padding:2px 8px}
+    @media (max-width: 980px){ .filters{grid-template-columns:1fr 1fr} .drawer{width:100%} }
+  </style>
+</head>
+<body>
+  <h2>💼 Comissões</h2>
+
+  <!-- FILTROS -->
+  <div class="card">
+    <div class="filters">
+      <label>Início da Vigência (de)
+        <input type="date" id="fDataIni">
+      </label>
+      <label>Início da Vigência (até)
+        <input type="date" id="fDataFim">
+      </label>
+      <label>RM
+        <select id="fRm"><option value="">Todos</option></select>
+      </label>
+      <label>Agência
+        <select id="fAgencia"><option value="">Todas</option></select>
+      </label>
+      <label>Ramo
+        <select id="fRamo"><option value="">Todos</option></select>
+      </label>
+      <label>Empresa
+        <input type="text" id="fEmpresa" placeholder="Digite parte do nome">
+      </label>
+      <div class="actions">
+        <button class="btn" id="btnAplicar">Aplicar</button>
+        <button class="btn secondary" id="btnLimpar">Limpar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LISTA -->
+  <div class="card">
+    <div class="right">
+      <div id="infoQtd" class="muted">Carregando…</div>
+      <div class="row">
+        <div id="totalPremio" class="chip">Prêmio: R$ 0,00</div>
+        <div id="totalComissao" class="chip">Comissão Base: R$ 0,00</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Empresa</th>
+            <th>Ramo</th>
+            <th>RM</th>
+            <th>Agência</th>
+            <th>Prêmio</th>
+            <th>Comissão (base)</th>
+            <th>Vigência</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="listaComissoes">
+          <tr><td colspan="8" class="muted">Carregando…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- DRAWER CONFIG -->
+  <div id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <div id="dw-empresa" style="font-weight:700">Empresa</div>
+        <div id="dw-meta" class="subtle"></div>
+      </div>
+      <button class="btn secondary" onclick="fecharDrawer()">Fechar</button>
+    </div>
+    <div class="drawer-body">
+      <input type="hidden" id="dw-cotacaoId">
+      <div class="grid2">
+        <div>
+          <label>% Comissão
+            <input id="dw-comissaoPct" type="number" min="0" step="0.01" oninput="atualizarCalculos()">
+          </label>
+        </div>
+        <div>
+          <label>% Imposto
+            <input id="dw-impostoPct" type="number" min="0" step="0.01" oninput="atualizarCalculos()">
+          </label>
+        </div>
+        <div>
+          <label>% RM
+            <input id="dw-rmPct" type="number" min="0" step="0.01" oninput="atualizarCalculos()">
+          </label>
+        </div>
+        <div>
+          <label>% GF (Gerente Chefe)
+            <input id="dw-gfPct" type="number" min="0" step="0.01" oninput="atualizarCalculos()">
+          </label>
+        </div>
+        <div>
+          <label>Frequência
+            <select id="dw-frequencia" onchange="atualizarCalculos()">
+              <option value="A">A — Anual (1x)</option>
+              <option value="M">M — Mensal (12x)</option>
+            </select>
+          </label>
+        </div>
+        <div>
+          <label>Observações
+            <input id="dw-obs" type="text" placeholder="Opcional">
+          </label>
+        </div>
+      </div>
+
+      <div class="totais" id="boxTotais">
+        <!-- calculado via JS -->
+      </div>
+
+      <h4 style="margin:14px 0 6px">Cronograma de Pagamentos</h4>
+      <table class="tbl-mini">
+        <thead>
+          <tr><th>#</th><th>Competência</th><th>Base</th><th>Imp.</th><th>RM</th><th>GF</th><th>Corretora</th><th>Pago</th></tr>
+        </thead>
+        <tbody id="dw-parcelas"><tr><td colspan="8" class="muted">Defina os percentuais para gerar as parcelas.</td></tr></tbody>
+      </table>
+
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="salvarComissao()">💾 Salvar</button>
+        <span class="subtle">Somente Admin pode salvar.</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/comissoes.js" defer></script>
+</body>
+</html>
