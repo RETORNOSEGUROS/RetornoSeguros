@@ -2,6 +2,7 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const functions = firebase.functions();
 
 // 🔹 App secundária para criar usuários no Auth sem perder a sessão do admin
 let secondaryApp = null;
@@ -15,16 +16,31 @@ function getSecondaryAuth() {
 let editandoUsuarioId = null;
 
 // 🔹 Cache de agências (id -> label amigável)
-const agenciasCache = {}; // ex.: { "KhUKYf98tB8Y0Lo58pgq": "Large Corporate — Bradesco / Blumenau - SC" }
+const agenciasCache = {}; // ex.: { "KhU...": "Large Corporate — Bradesco / Blumenau - SC" }
+let usuariosCache = [];   // para filtrar sem refazer query sempre
+
+function fmtDataBR(ts) {
+  try {
+    if (!ts) return "-";
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  } catch (_) {
+    return "-";
+  }
+}
 
 // ✅ Ao logar como admin, carrega tudo
 auth.onAuthStateChanged(async (user) => {
   if (!user || user.email !== "patrick@retornoseguros.com.br") {
     window.location.href = "login.html";
   } else {
-    await carregarAgencias();     // garante cache preenchido e select pronto
+    await carregarAgencias();     // garante cache preenchido e selects prontos
     carregarGerentesChefes();
-    listarUsuarios();             // agora a coluna “Agência” já consegue usar o rótulo
+    prepararFiltros();
+    listarUsuarios();             // agora a coluna “Agência” já usa o rótulo
   }
 });
 
@@ -54,14 +70,14 @@ function carregarGerentesChefes() {
     .catch(err => console.error("Erro ao carregar gerentes-chefe:", err));
 }
 
-// ✅ Popula select de Agências (sem exibir UID) e preenche o cache de rótulos
+// ✅ Popula selects de Agências e o cache
 async function carregarAgencias() {
-  const select = document.getElementById("agenciaId");
-  if (!select) return;
+  const selectCad = document.getElementById("agenciaId");
+  const selectFiltro = document.getElementById("filtroAgencia");
 
-  select.innerHTML = '<option value="">Selecione</option>';
+  if (selectCad) selectCad.innerHTML = '<option value="">Selecione</option>';
+  if (selectFiltro) selectFiltro.innerHTML = '<option value="">Todas</option>';
 
-  // Tenta ordenar por nome; se falhar (docs sem nome), faz sem orderBy como fallback
   let snapshot;
   try {
     snapshot = await db.collection("agencias_banco").orderBy("nome").get();
@@ -81,21 +97,26 @@ async function carregarAgencias() {
     const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
     const ufFmt = uf ? ` - ${uf}` : "";
 
-    // 🔹 Rótulo amigável SEM UID
     const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
-
-    // guarda no cache para usar na listagem de usuários
     agenciasCache[id] = label;
 
-    // option: value = id (para salvar), text = label (sem UID)
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = label;
-    select.appendChild(option);
+    if (selectCad) {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = label;
+      selectCad.appendChild(o);
+    }
+    if (selectFiltro) {
+      const o2 = document.createElement("option");
+      o2.value = id;
+      o2.textContent = label;
+      selectFiltro.appendChild(o2);
+    }
   });
 }
 
-// ✅ Criar/atualizar usuário
+// ✅ Criar/atualizar usuário (perfil/Firestore)
+//    (Senha só é usada na CRIAÇÃO; para alterar depois use o botão "Alterar Senha")
 async function cadastrarUsuario() {
   const nome = document.getElementById("nome").value.trim();
   const email = document.getElementById("email").value.trim();
@@ -155,7 +176,6 @@ async function cadastrarUsuario() {
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     });
 
-    // encerra a sessão da app secundária (sua sessão principal continua intacta)
     await secondaryAuth.signOut();
 
     alert("✅ Usuário criado no Auth e cadastrado no banco!");
@@ -165,7 +185,7 @@ async function cadastrarUsuario() {
   } catch (err) {
     console.error("Erro ao criar login:", err);
     if (err && err.code === "auth/email-already-in-use") {
-      alert("Este e-mail já existe no Auth. Use 'Redefinir senha' ou escolha outro e-mail.");
+      alert("Este e-mail já existe no Auth. Use 'Alterar Senha' ou escolha outro e-mail.");
     } else {
       alert("Erro ao criar login: " + (err?.message || err));
     }
@@ -173,40 +193,83 @@ async function cadastrarUsuario() {
   }
 }
 
-// ✅ Listagem
-function listarUsuarios() {
+// ✅ Listagem com cache local para filtros
+async function listarUsuarios() {
   const lista = document.getElementById("listaUsuarios");
   if (!lista) return;
 
   lista.innerHTML = "";
+  usuariosCache = []; // reset
 
-  db.collection("usuarios_banco").orderBy("nome").get()
-    .then(snapshot => {
-      snapshot.forEach(doc => {
-        const u = doc.data() || {};
-        const tr = document.createElement("tr");
-
-        // usa rótulo amigável da agência; se não houver no cache, mostra o id mesmo
-        const agenciaRotulo = u.agenciaId ? (agenciasCache[u.agenciaId] || u.agenciaId) : "-";
-
-        tr.innerHTML = `
-          <td>${u.nome || "-"}</td>
-          <td>${u.email || "-"}</td>
-          <td>${u.perfil || "-"}</td>
-          <td>${agenciaRotulo}</td>
-          <td>
-            <button onclick="editarUsuario('${doc.id}', '${(u.nome || "").replace(/'/g,"&#39;")}', '${(u.email || "").replace(/'/g,"&#39;")}', '${u.perfil || ""}', '${u.agenciaId || ""}', '${u.gerenteChefeId || ""}')">Editar</button>
-            <button onclick="excluirUsuario('${doc.id}', '${(u.email || "").replace(/'/g,"&#39;")}')">🗑 Excluir</button>
-          </td>
-        `;
-
-        lista.appendChild(tr);
-      });
-    })
-    .catch(err => console.error("Erro ao listar usuários:", err));
+  try {
+    const snapshot = await db.collection("usuarios_banco").orderBy("nome").get();
+    snapshot.forEach(doc => {
+      const u = { id: doc.id, ...(doc.data() || {}) };
+      usuariosCache.push(u);
+    });
+    renderLista(usuariosCache);
+  } catch (err) {
+    console.error("Erro ao listar usuários:", err);
+  }
 }
 
-// ✅ Preenche formulário para edição
+function renderLista(array) {
+  const tbody = document.getElementById("listaUsuarios");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  array.forEach(u => {
+    const tr = document.createElement("tr");
+    const agenciaRotulo = u.agenciaId ? (agenciasCache[u.agenciaId] || u.agenciaId) : "-";
+    const criadoEmFmt = fmtDataBR(u.criadoEm);
+
+    tr.innerHTML = `
+      <td>${u.nome || "-"}</td>
+      <td>${u.email || "-"}</td>
+      <td>${u.perfil || "-"}</td>
+      <td>${agenciaRotulo}</td>
+      <td>${criadoEmFmt}</td>
+      <td class="actions">
+        <button onclick="editarUsuario('${u.id}', '${(u.nome||"").replace(/'/g,"&#39;")}', '${(u.email||"").replace(/'/g,"&#39;")}', '${u.perfil||""}', '${u.agenciaId||""}', '${u.gerenteChefeId||""}')">Editar</button>
+        <button onclick="abrirAlterarSenha('${u.id}', '${(u.email||"").replace(/'/g,"&#39;")}')">Alterar Senha</button>
+        <button class="danger" onclick="excluirUsuario('${u.id}', '${(u.email||"").replace(/'/g,"&#39;")}')">🗑 Excluir</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ✅ Filtros
+function prepararFiltros() {
+  const nome = document.getElementById("filtroNome");
+  if (nome) nome.addEventListener("keyup", aplicarFiltros);
+}
+
+function aplicarFiltros() {
+  const ag = (document.getElementById("filtroAgencia")?.value || "").trim();
+  const pf = (document.getElementById("filtroPerfil")?.value || "").trim();
+  const nm = (document.getElementById("filtroNome")?.value || "").toLowerCase().trim();
+
+  const filtrados = usuariosCache.filter(u => {
+    const byAg = ag ? u.agenciaId === ag : true;
+    const byPf = pf ? u.perfil === pf : true;
+    const byNm = nm ? (u.nome || "").toLowerCase().includes(nm) : true;
+    return byAg && byPf && byNm;
+  });
+  renderLista(filtrados);
+}
+
+function limparFiltros() {
+  const fAg = document.getElementById("filtroAgencia");
+  const fPf = document.getElementById("filtroPerfil");
+  const fNm = document.getElementById("filtroNome");
+  if (fAg) fAg.value = "";
+  if (fPf) fPf.value = "";
+  if (fNm) fNm.value = "";
+  renderLista(usuariosCache);
+}
+
+// ✅ Preenche formulário para edição (perfil/Firestore)
 function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
   editandoUsuarioId = id;
   document.getElementById("nome").value = nome;
@@ -220,9 +283,6 @@ function editarUsuario(id, nome, email, perfil, agenciaId, gerenteChefeId) {
     const sel = document.getElementById("gerenteChefeId");
     if (sel) sel.value = gerenteChefeId || "";
   }, 150);
-  // Troca rótulo do primeiro botão do formulário
-  const btn = document.querySelector("button");
-  if (btn) btn.textContent = "Atualizar";
 }
 
 // ✅ Excluir (apenas Firestore)
@@ -251,6 +311,27 @@ function limparFormulario() {
   const sel = document.getElementById("gerenteChefeId");
   if (sel) sel.value = "";
   document.getElementById("gerenteChefeBox").style.display = "none";
-  const btn = document.querySelector("button");
-  if (btn) btn.textContent = "Cadastrar";
+}
+
+// ✅ Alterar senha via Cloud Function (Admin SDK)
+async function abrirAlterarSenha(uid, email) {
+  const nova = prompt(`Informe a nova senha para:\n${email}\n(Mínimo 6 caracteres)`);
+  if (nova === null) return; // cancelou
+  const senha = (nova || "").trim();
+  if (senha.length < 6) {
+    alert("A senha deve ter pelo menos 6 caracteres.");
+    return;
+  }
+  try {
+    const callable = functions.httpsCallable("adminUpdatePassword");
+    const res = await callable({ uid, newPassword: senha });
+    if (res && res.data && res.data.ok) {
+      alert("✅ Senha atualizada no Auth. O usuário já pode logar com a nova senha.");
+    } else {
+      alert("Não foi possível confirmar a alteração de senha.");
+    }
+  } catch (err) {
+    console.error("Erro ao alterar senha:", err);
+    alert("Erro ao alterar senha: " + (err?.message || err));
+  }
 }
