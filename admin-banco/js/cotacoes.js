@@ -7,7 +7,7 @@ const db   = firebase.firestore();
 
 // ===== Estado global =====
 let usuarioAtual = null;
-let perfilAtual  = "";        // "admin" | "gerente-chefe" | "rm" | ...
+let perfilAtual  = "";        // "admin" | "gerente chefe" | "rm" | "assistente"
 let minhaAgencia = "";
 let isAdmin      = false;
 
@@ -21,6 +21,23 @@ let sortDir = "desc";         // padrão: Data desc (mais recente primeiro)
 // ===== Helpers =====
 const $ = (id) => document.getElementById(id);
 
+// normaliza textos/roles (remove acento, troca _ e - por espaço e deixa minúsculo)
+const normalize = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase().trim();
+
+const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
+
+// moeda "R$ 1.234,56" -> 1234.56
+function desformatarMoeda(v) {
+  if (typeof v !== "string") return Number(v || 0) || 0;
+  const n = v.replace(/\s|R\$/g, "").replace(/\./g, "").replace(",", ".");
+  const num = parseFloat(n);
+  return isNaN(num) ? 0 : num;
+}
+
 // ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged(async (user) => {
@@ -28,7 +45,7 @@ window.addEventListener("DOMContentLoaded", () => {
     usuarioAtual = user;
 
     const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;
+    perfilAtual  = ctx.perfil;           // já vem normalizado
     minhaAgencia = ctx.agenciaId;
     isAdmin      = ctx.isAdmin;
 
@@ -59,7 +76,7 @@ async function getPerfilAgencia() {
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
   const udoc = await db.collection("usuarios_banco").doc(user.uid).get();
   const u = udoc.exists ? (udoc.data() || {}) : {};
-  const perfil = (u.perfil || u.roleId || "").toString().toLowerCase();
+  const perfil = roleNorm(u.perfil || u.roleId || "");
   const agenciaId = u.agenciaId || "";
   const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
   return { perfil, agenciaId, isAdmin: admin };
@@ -72,12 +89,13 @@ async function carregarAgencias() {
   const sel = $("filtroAgencia");
   if (sel) sel.innerHTML = "";
 
-  // Admin vê "Todas"; outros vêm fixos na própria
+  // Admin vê "Todas"; demais fixam na própria
   if (isAdmin) {
     sel?.insertAdjacentHTML("beforeend", `<option value="">Todas as agências</option>`);
   } else {
-    sel?.insertAdjacentHTML("beforeend", `<option value="${minhaAgencia}">Minha agência</option>`);
-    sel && (sel.disabled = true);
+    const minha = minhaAgencia || "";
+    sel?.insertAdjacentHTML("beforeend", `<option value="${minha}">Minha agência</option>`);
+    if (sel) { sel.value = minha; sel.disabled = true; }
   }
 
   let snap;
@@ -102,7 +120,6 @@ async function carregarAgencias() {
     const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
     agenciasMap[id] = label;
 
-    // Preenche opções só para admin (outros já ficam travados)
     if (isAdmin && sel) {
       const opt = document.createElement("option");
       opt.value = id;
@@ -110,9 +127,6 @@ async function carregarAgencias() {
       sel.appendChild(opt);
     }
   });
-
-  // Seleciona minhaAgencia por padrão (se não admin)
-  if (!isAdmin && sel) sel.value = minhaAgencia || "";
 }
 
 // ======================================================
@@ -126,7 +140,7 @@ async function carregarEmpresas() {
   let qs = [];
   if (isAdmin) {
     qs.push(db.collection("empresas").get());
-  } else if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
+  } else if (["gerente chefe","assistente"].includes(perfilAtual)) {
     if (minhaAgencia) qs.push(db.collection("empresas").where("agenciaId","==",minhaAgencia).get());
   } else {
     const col = db.collection("empresas");
@@ -157,7 +171,7 @@ async function carregarEmpresas() {
 }
 
 // ======================================================
-// Ramos / Status / Filtro RM (mesmos do seu arquivo)
+// Ramos / Status / Filtro RM
 // ======================================================
 async function carregarRamos() {
   const campos = ["ramo", "novaRamo"];
@@ -183,7 +197,7 @@ async function carregarFiltroRM() {
   if (!select) return;
 
   // RM não precisa filtro de RM
-  if (!isAdmin && !["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
+  if (!isAdmin && !["gerente chefe","assistente"].includes(perfilAtual)) {
     select.innerHTML = "";
     select.style.display = "none";
     return;
@@ -230,7 +244,7 @@ async function carregarStatus() {
     throw new Error("config-vazia");
   } catch {
     try {
-      let docs = await listarCotacoesPorPerfil({apenasCampos:["status"]});
+      let docs = await listarCotacoesPorPerfil();
       const uniq = new Set(); docs.forEach(c => c.status && uniq.add(c.status));
       preencher(Array.from(uniq));
     } catch(e2){ console.error("fallback status:", e2); }
@@ -238,7 +252,7 @@ async function carregarStatus() {
 }
 
 // ======================================================
-// CRUD de cotações (mantém igual ao seu com agência gravada)
+// CRUD de cotações
 // ======================================================
 function preencherEmpresaNova() {
   const id = $("novaEmpresa").value;
@@ -360,6 +374,18 @@ async function salvarAlteracoesCotacao() {
   carregarCotacoesComFiltros();
 }
 
+async function excluirCotacao(id){
+  if (!isAdmin) return alert("Apenas administradores podem excluir.");
+  if (!confirm("Excluir esta cotação?")) return;
+  try {
+    await db.collection("cotacoes-gerentes").doc(id).delete();
+    carregarCotacoesComFiltros();
+  } catch (e) {
+    console.error("Erro ao excluir:", e);
+    alert("Falha ao excluir a cotação.");
+  }
+}
+
 // ======================================================
 // Listagem + filtros + ordenação
 // ======================================================
@@ -371,16 +397,18 @@ async function listarCotacoesPorPerfil() {
     return snap.docs.map(d => ({ id: d.id, ...(d.data()) }));
   }
 
-  if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+  if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
     try {
       const snap = await col.where("agenciaId","==",minhaAgencia).get();
       return snap.docs.map(d => ({ id:d.id, ...(d.data()) }));
     } catch (e) {
+      // fallback: filtra no cliente
       const snap = await col.get();
       return snap.docs.map(d=>({id:d.id,...(d.data())})).filter(c => (c.agenciaId || minhaAgencia) === minhaAgencia);
     }
   }
 
+  // RM: une múltiplas possibilidades de autoria/posse
   const buckets = [];
   try { buckets.push(await col.where("rmId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
