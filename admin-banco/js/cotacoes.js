@@ -66,6 +66,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (btn && !isAdmin) btn.style.display = "none";
 
     instalarOrdenacaoCabecalhos();
+    montarBotaoVoltar();
     carregarCotacoesComFiltros();
   });
 });
@@ -192,6 +193,22 @@ async function carregarRamos() {
   });
 }
 
+/* ========= NOVO: constrói a lista de RMs visíveis sem ler usuarios_banco ========= */
+async function coletarRMsVisiveis() {
+  // 1) tenta pelas cotações visíveis
+  try {
+    const cotas = await listarCotacoesPorPerfil();
+    const set = new Set();
+    cotas.forEach(c => c?.rmNome && set.add(c.rmNome));
+    if (set.size) return Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  } catch (_) {}
+
+  // 2) fallback: pelas empresas já carregadas
+  const set2 = new Set();
+  (empresasCache || []).forEach(e => e?.rmNome && set2.add(e.rmNome));
+  return Array.from(set2).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}
+
 async function carregarFiltroRM() {
   const select = $("filtroRM");
   if (!select) return;
@@ -205,23 +222,37 @@ async function carregarFiltroRM() {
 
   select.innerHTML = `<option value="">Todos</option>`;
 
-  try {
-    let q = db.collection("usuarios_banco").where("perfil","==","rm");
-    if (!isAdmin && minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
-
-    const snap = await q.get();
-    const nomes = new Set();
-    snap.forEach(doc => {
-      const nome = doc.data()?.nome;
-      if (nome && !nomes.has(nome)) {
-        nomes.add(nome);
-        const opt=document.createElement("option");
+  if (isAdmin) {
+    // Admin pode ler usuarios_banco
+    try {
+      let q = db.collection("usuarios_banco").where("perfil","==","rm");
+      const snap = await q.get();
+      const nomes = new Set();
+      snap.forEach(doc => {
+        const nome = doc.data()?.nome;
+        if (nome) nomes.add(nome);
+      });
+      Array.from(nomes).sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(nome => {
+        const opt = document.createElement("option");
         opt.value = nome; opt.textContent = nome;
         select.appendChild(opt);
-      }
+      });
+    } catch (err) {
+      console.warn("Falha ao ler usuarios_banco (admin):", err);
+    }
+    return;
+  }
+
+  // Gerente‑chefe/Assistente: monta sem ler usuarios_banco
+  try {
+    const nomes = await coletarRMsVisiveis();
+    nomes.forEach(nome => {
+      const opt = document.createElement("option");
+      opt.value = nome; opt.textContent = nome;
+      select.appendChild(opt);
     });
-  } catch (err) {
-    console.error("Erro ao carregar filtro de RM:", err);
+  } catch (e) {
+    console.warn("Falha ao montar filtro de RM a partir do escopo visível:", e);
   }
 }
 
@@ -400,7 +431,7 @@ async function listarCotacoesPorPerfil() {
   if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
     try {
       const snap = await col.where("agenciaId","==",minhaAgencia).get();
-      return snap.docs.map(d => ({ id:d.id, ...(d.data()) }));
+      return snap.docs.map(d => ({ id:d.id, ...(d.data()) })); 
     } catch (e) {
       // fallback: filtra no cliente
       const snap = await col.get();
@@ -551,6 +582,31 @@ function limparFiltros(){
   });
   if (isAdmin) { const a=$("filtroAgencia"); if (a) a.value=""; }
   carregarCotacoesComFiltros();
+}
+
+// Botão de voltar para o painel
+function montarBotaoVoltar() {
+  const host = document.getElementById("toolbar-cotacoes") || document.querySelector(".toolbar");
+  const a = document.createElement("a");
+  a.href = "painel.html";
+  a.textContent = "← Voltar ao Painel";
+  a.style.display = "inline-block";
+  a.style.padding = "8px 12px";
+  a.style.margin = "8px 0";
+  a.style.borderRadius = "8px";
+  a.style.background = "#0b4a88";
+  a.style.color = "#fff";
+  a.style.textDecoration = "none";
+  a.style.fontWeight = "600";
+  if (host) {
+    host.prepend(a);
+  } else {
+    a.style.position = "fixed";
+    a.style.top = "10px";
+    a.style.left = "10px";
+    a.style.zIndex = "9999";
+    document.body.appendChild(a);
+  }
 }
 
 // ===== Exports p/ onclick =====
