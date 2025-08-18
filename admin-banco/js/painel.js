@@ -39,39 +39,59 @@ auth.onAuthStateChanged(async (user)=>{
   carregarResumoPainel();
 });
 
-// ===== Menu por perfil (mesmo catálogo do seu arquivo)
+// ===== Menu por perfil (inclui páginas sigilosas só para ADMIN no menu)
 function montarMenuLateral(perfilBruto){
   const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
   const perfil=normalizarPerfil(perfilBruto);
-  const CAT={
+
+  const CAT_BASE={
     "Cadastrar Gerentes":"cadastro-geral.html","Cadastrar Empresa":"cadastro-empresa.html","Agências":"agencias.html",
     "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
     "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
     "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
     "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html"
   };
-  const LABEL=Object.fromEntries(Object.entries(CAT).map(([k,v])=>[v,k]));
-  const ADMIN=Object.values(CAT);
+  // Itens sigilosos — só ADMIN vê no menu
+  const CAT_ADMIN_ONLY={
+    "Carteira":"carteira.html",
+    "Comissões":"comissoes.html",
+    "Resgates (Admin)":"resgates-admin.html"
+  };
+
+  const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
+  const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
   const RM=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html"];
   const GER=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html"];
   const AST=["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html"];
 
-  let hrefs=[]; switch(perfil){ case "admin": hrefs=ADMIN; break; case "rm": hrefs=RM; break;
-    case "gerente chefe": case "gerente-chefe": case "gerente_chefe": hrefs=GER; break;
-    case "assistente": case "assistentes": hrefs=AST; break; default: hrefs=[]; }
-  hrefs.forEach(h=>{ const a=document.createElement("a"); a.href=h; a.innerHTML=`🔹 ${LABEL[h]||h}`; menu.appendChild(a); });
+  let hrefs=[];
+  switch(perfil){
+    case "admin": hrefs=ADMIN; break;
+    case "rm": hrefs=RM; break;
+    case "gerente chefe":
+    case "gerente-chefe":
+    case "gerente_chefe": hrefs=GER; break;
+    case "assistente":
+    case "assistentes": hrefs=AST; break;
+    default: hrefs=[];
+  }
+
+  hrefs.forEach(h=>{
+    const a=document.createElement("a"); a.href=h;
+    const emoji = "🔹"; // discreto no tema claro
+    a.innerHTML=`${emoji} ${LABEL[h]||h}`;
+    menu.appendChild(a);
+  });
 }
 
-// ===== Painel
+// ===== Painel (sem “Últimas Conversas”)
 async function carregarResumoPainel(){
   skeleton("listaVisitasAgendadas",5);
-  skeleton("listaConversas",5);
   skeleton("listaVisitas",5);
   skeleton("listaProducao",5);
   skeleton("listaCotacoes",5);
   await Promise.all([
     blocoVisitasAgendadas(),
-    blocoUltimasConversas(),
     blocoMinhasVisitas(),
     blocoProducao(),
     blocoMinhasCotacoes()
@@ -94,51 +114,14 @@ async function blocoVisitasAgendadas(){
   todos.sort((a,b)=>a.dt-b.dt);
   const arr=todos.slice(0,10);
   document.getElementById("qtdVA").textContent = arr.length;
-  const ul=document.getElementById("listaVisitasAgendadas"); ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
+  const ul=document.getElementById("listaVisitasAgendadas");
+  ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
   arr.forEach(v=>{
     ul.innerHTML += `<li class="row"><div class="title">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${v.empresaNome||v.empresa||"-"}</strong></div><div class="meta">${v.rmNome||v.rm||"-"} • ${v.tipo||"-"}</div></li>`;
   });
 }
 
-// --- 2) Últimas Conversas (pega a última interação) ---
-async function blocoUltimasConversas(){
-  let q = db.collection("cotacoes-gerentes");
-  if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-  else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-
-  // sem orderBy para não exigir índice composto; ordeno no cliente
-  const cotSnap = await q.limit(25).get();
-  const ul = document.getElementById("listaConversas"); ul.innerHTML="";
-
-  if(cotSnap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma conversa recente.</span></li>"; return; }
-
-  const itens=[];
-  for(const doc of cotSnap.docs){
-    const c = doc.data();
-    const sub = await db.collection("cotacoes-gerentes").doc(doc.id).collection("interacoes")
-                  .orderBy("dataHora","desc").limit(1).get();
-    if(!sub.empty){
-      const i=sub.docs[0].data();
-      itens.push({
-        empresa: c.empresaNome || "Empresa",
-        status:  c.status || "-",
-        produto: c.ramo || c.produto || "-",
-        quando:  toDate(i.dataHora) || null,
-        autor:   i.usuarioNome || i.usuarioEmail || "-",
-        msg:     i.mensagem || ""
-      });
-    }
-  }
-  if(!itens.length){ ul.innerHTML="<li class='row'><span class='meta'>Sem interações recentes.</span></li>"; return; }
-
-  itens.sort((a,b)=> (b.quando||0) - (a.quando||0));
-  itens.slice(0,5).forEach(it=>{
-    const texto = it.msg.length>100 ? it.msg.slice(0,100)+"…" : it.msg;
-    ul.innerHTML += `<li class="row"><div class="title"><strong>${it.empresa}</strong> · ${it.status} · ${it.produto}</div><div class="meta">${fmtData(it.quando)} ${fmtHora(it.quando)} • ${it.autor}</div></li><li class="row"><div class="meta">${texto}</div></li>`;
-  });
-}
-
-// --- 3) Minhas Visitas (últimas 5 com nome da empresa) ---
+// --- 2) Minhas Visitas (últimas 5) ---
 async function blocoMinhasVisitas(){
   let q = db.collection("visitas");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
@@ -163,7 +146,7 @@ async function blocoMinhasVisitas(){
   }
 }
 
-// --- 4) Produção (Negócios Fechados) ---
+// --- 3) Produção (Negócios Fechados) ---
 async function blocoProducao(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
@@ -185,7 +168,7 @@ async function blocoProducao(){
   });
 }
 
-// --- 5) Minhas Cotações ---
+// --- 4) Minhas Cotações ---
 async function blocoMinhasCotacoes(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
