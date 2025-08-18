@@ -97,7 +97,7 @@ async function carregarRM() {
   select.innerHTML = `<option value="">Todos</option>`;
 
   // base no mesmo escopo de visibilidade
-  let q = db.collection("empresas");
+  let q = byScope(db.collection("empresas"), CTX);
   if (!isAdmin) {
     if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
       q = q.where("agenciaId", "==", minhaAgencia);
@@ -274,3 +274,4 @@ async function carregarEmpresas() {
     erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
   }
 }
+
