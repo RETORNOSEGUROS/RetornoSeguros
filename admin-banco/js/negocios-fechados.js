@@ -1,259 +1,226 @@
-// --- Firebase ---
+<!-- certifique-se de ter estes ids no HTML (ou adapte os nomes no JS):
+     filtroRM, filtroAno, filtroMes, btnAplicar, btnLimpar,
+     numNegocios, premioTotal, listaNegocios, btnVoltarPainel
+-->
+<script>
+/* ==================== Firebase ==================== */
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// Coleções
-const colCotacoes = db.collection("cotacoes-gerentes");
-const colUsuarios = db.collection("usuarios_banco");
-const colAgencias = db.collection("agencias_banco"); // seu nome correto
+/* ==================== Estado ==================== */
+let usuarioAtual = null;
+let perfilAtual  = "";        // "admin" | "gerente chefe" | "rm" | "assistente"
+let minhaAgencia = "";
+let isAdmin      = false;
 
-// Estado / RBAC
-let usuarioAtual=null, perfilAtual="", minhaAgencia="", isAdmin=false;
-let docsBrutos = [];            // cotações emitidas (flatten)
-let mapaRM = new Map();         // rmUid -> { nome, agenciaId, agenciaNome }
-let mapaAgencia = new Map();    // agenciaId -> nome
-let ramosUnicos = new Set();
-let agenciasUnicas = new Set();
+/* ==================== Helpers ==================== */
+const $ = (id) => document.getElementById(id);
+const roleNorm = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .trim();
 
-// Utils
-const fmtBRL = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
-const money  = n => fmtBRL.format(Number(n||0));
-const norm   = s => (s||"").toString().normalize("NFD").replace(/\p{Diacritic}/gu,"").toLowerCase();
-
-function toISODate(v){
-  try{
-    if (!v) return "";
-    if (typeof v==="string") { if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; const d=new Date(v); if(!isNaN(+d)) return d.toISOString().slice(0,10); return ""; }
-    if (v.toDate) { const d=v.toDate(); return d.toISOString().slice(0,10); }
-    if (v instanceof Date) return v.toISOString().slice(0,10);
-  }catch(_){}
-  return "";
+function fmtMoeda(v){
+  const n = Number(v || 0);
+  return n ? n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : "R$ 0,00";
 }
-const formatDateBR = iso => iso && iso.includes("-") ? iso.split("-").reverse().join("/") : "-";
-function parsePremio(val){
-  if (val == null) return 0;
-  if (typeof val === "number") return val;
-  const n = String(val).replace(/[^\d,.-]/g,"").replace(/\.(?=\d{3}(?:\D|$))/g,"").replace(",",".");
-  const f = parseFloat(n); return isNaN(f) ? 0 : f;
+function toDate(ts){
+  return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
 }
 
-async function getPerfilAgencia(){
-  const u = auth.currentUser;
-  if (!u) return {perfil:"",agenciaId:"",isAdmin:false};
-  const doc = await colUsuarios.doc(u.uid).get();
-  const d = doc.exists ? (doc.data()||{}) : {};
-  const perfil = (d.perfil || d.roleId || "").toLowerCase();
-  const admin = (perfil === "admin") || (u.email === "patrick@retornoseguros.com.br");
-  return {perfil, agenciaId: d.agenciaId || "", isAdmin: admin, nome: d.nome || u.email};
-}
+/* ==================== Boot ==================== */
+window.addEventListener("DOMContentLoaded", () => {
+  // voltar p/ painel se existir botão
+  const voltar = $("btnVoltarPainel");
+  if (voltar) voltar.addEventListener("click", () => (window.location.href="painel.html"));
 
-auth.onAuthStateChanged(async (user)=>{
-  if (!user) { location.href="login.html"; return; }
-  usuarioAtual = user;
-  const ctx = await getPerfilAgencia();
-  perfilAtual  = ctx.perfil;
-  minhaAgencia = ctx.agenciaId;
-  isAdmin      = ctx.isAdmin;
+  auth.onAuthStateChanged(async (user) => {
+    if (!user) return (window.location.href = "login.html");
+    usuarioAtual = user;
 
-  // Assistente não tem acesso a esta página
-  if (perfilAtual === "assistente") {
-    const tbody = document.getElementById("listaNegociosFechados");
-    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="muted">Seu perfil não possui acesso a Negócios Fechados.</td></tr>`;
-    return;
-  }
+    const ctx = await getPerfilAgencia();
+    perfilAtual  = ctx.perfil;           // já normalizado
+    minhaAgencia = ctx.agenciaId;
+    isAdmin      = ctx.isAdmin;
 
-  await carregarNegociosRBAC();
-  await montarFiltros();
-  aplicarFiltros();
+    await carregarFiltroRM();
 
-  document.getElementById('btnAplicar')?.addEventListener('click', aplicarFiltros);
-  document.getElementById('btnLimpar')?.addEventListener('click', ()=>{
-    ['fDataIni','fDataFim','fRm','fAgencia','fRamo','fEmpresa'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; });
-    aplicarFiltros();
+    // listeners de filtros
+    $("btnAplicar")?.addEventListener("click", carregarNegocios);
+    $("btnLimpar")?.addEventListener("click", () => {
+      if ($("filtroRM")) $("filtroRM").value = "";
+      if ($("filtroAno")) $("filtroAno").value = "";
+      if ($("filtroMes")) $("filtroMes").value = "";
+      carregarNegocios();
+    });
+
+    await carregarNegocios();
   });
 });
 
-/* ===== Coleta: somente o que o perfil pode ver ===== */
-async function carregarNegociosRBAC(){
-  docsBrutos = []; mapaRM.clear(); ramosUnicos.clear(); agenciasUnicas.clear();
-
-  // 1) Buscar cotações com status "Negócio Emitido"
-  let docs = [];
-  if (isAdmin) {
-    docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
-  } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-    // Muitas não têm agenciaId (legado). Pegamos emitidas e filtramos depois pela agência do RM.
-    docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
-  } else {
-    // RM: só dele (vários campos por compat)
-    const buckets = [];
-    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmUid","==",usuarioAtual.uid).get()); } catch(_){}
-    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmId","==",usuarioAtual.uid).get()); } catch(_){}
-    try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(_){}
-    const map = new Map(); buckets.forEach(s=> s?.docs.forEach(d=> map.set(d.id,d)));
-    docs = Array.from(map.values());
-  }
-
-  // 2) Montar base + coletar rmUids para resolver agência
-  const rmUids = new Set();
-  docs.forEach(doc=>{
-    const d = doc.data()||{};
-    const item = {
-      id: doc.id,
-      empresaNome: d.empresaNome || "-",
-      ramo: d.ramo || "-",
-      rmNome: d.rmNome || "-",
-      rmUid: d.rmUid || d.rmUID || d.rmId || null,
-      premioLiquido: parsePremio(d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? d.valor),
-      inicioVigencia: toISODate(d.inicioVigencia),
-      fimVigencia: toISODate(d.fimVigencia)
-    };
-    docsBrutos.push(item);
-    ramosUnicos.add(item.ramo);
-    if (item.rmUid) rmUids.add(item.rmUid);
-  });
-
-  // 3) Resolver RM -> agência
-  await Promise.all(Array.from(rmUids).map(async uid=>{
-    try{
-      const us = await colUsuarios.doc(uid).get();
-      if (us.exists){
-        const u = us.data()||{};
-        mapaRM.set(uid, { nome: u.nome || "", agenciaId: u.agenciaId || "", agenciaNome: u.agenciaNome || "" });
-      } else {
-        mapaRM.set(uid, { nome: "", agenciaId: "", agenciaNome: "" });
-      }
-    }catch(_){ mapaRM.set(uid,{nome:"",agenciaId:"",agenciaNome:""}); }
-  }));
-
-  // 4) Agências (nome)
-  const idsAg = Array.from(new Set(Array.from(mapaRM.values()).map(x=>x.agenciaId).filter(Boolean)));
-  await Promise.all(idsAg.map(async id=>{
-    if (!id || mapaAgencia.has(id)) return;
-    try{
-      const ag = await colAgencias.doc(id).get();
-      mapaAgencia.set(id, ag.exists ? (ag.data().nome || ag.data().descricao || id) : id);
-    }catch(_){ mapaAgencia.set(id,id); }
-  }));
-
-  // 5) Filtro RBAC por agência para gerente-chefe
-  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-    docsBrutos = docsBrutos.filter(d => {
-      const info = mapaRM.get(d.rmUid) || {};
-      return (info.agenciaId || "") === minhaAgencia;
-    });
-  }
-
-  // set de nomes de agência para o filtro
-  docsBrutos.forEach(d=>{
-    const nomeAg = nomeAgenciaPorRmUid(d.rmUid);
-    if (nomeAg && nomeAg !== "-") agenciasUnicas.add(nomeAg);
-  });
+/* perfil + agência */
+async function getPerfilAgencia(){
+  const user = auth.currentUser;
+  if (!user) return {perfil:"", agenciaId:"", isAdmin:false};
+  const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+  const u = snap.exists ? (snap.data()||{}) : {};
+  const perfil = roleNorm(u.perfil || u.roleId || "");
+  const agenciaId = u.agenciaId || "";
+  const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
+  return { perfil, agenciaId, isAdmin: admin };
 }
 
-function nomeAgenciaPorRmUid(rmUid){
-  const info = mapaRM.get(rmUid);
-  if (!info) return "-";
-  if (info.agenciaNome) return info.agenciaNome;
-  if (info.agenciaId && mapaAgencia.has(info.agenciaId)) return mapaAgencia.get(info.agenciaId);
-  return info.agenciaId || "-";
-}
+/* ==================== Filtro de RM ==================== */
+async function carregarFiltroRM(){
+  const sel = $("filtroRM");
+  if (!sel) return;
 
-/* ===== Filtros ===== */
-async function montarFiltros(){
-  const fRm = document.getElementById('fRm');
-  if (fRm){
-    fRm.innerHTML = `<option value="">Todos</option>`;
-    const vistos = new Set();
-    docsBrutos.forEach(d=>{
-      const chave = d.rmUid || d.rmNome;
-      if (!chave || vistos.has(chave)) return;
-      vistos.add(chave);
-      const rLabel = d.rmNome || (mapaRM.get(d.rmUid)?.nome) || d.rmUid || 'RM';
-      fRm.insertAdjacentHTML('beforeend', `<option value="${chave}">${rLabel}</option>`);
-    });
-  }
-
-  const fAg = document.getElementById('fAgencia');
-  if (fAg){
-    fAg.innerHTML = `<option value="">Todas</option>`;
-    Array.from(agenciasUnicas).sort((a,b)=>a.localeCompare(b,'pt-BR'))
-      .forEach(nome => fAg.insertAdjacentHTML('beforeend', `<option value="${nome}">${nome}</option>`));
-  }
-
-  const fRamo = document.getElementById('fRamo');
-  if (fRamo){
-    fRamo.innerHTML = `<option value="">Todos</option>`;
-    Array.from(ramosUnicos).sort((a,b)=>a.localeCompare(b,'pt-BR'))
-      .forEach(r => fRamo.insertAdjacentHTML('beforeend', `<option value="${r}">${r}</option>`));
-  }
-}
-
-function aplicarFiltros(){
-  const ini = document.getElementById('fDataIni')?.value || '';
-  const fim = document.getElementById('fDataFim')?.value || '';
-  const rmSel = document.getElementById('fRm')?.value || '';
-  const agSel = document.getElementById('fAgencia')?.value || '';
-  const ramoSel = document.getElementById('fRamo')?.value || '';
-  const empTxt = norm(document.getElementById('fEmpresa')?.value || '');
-
-  const lista = docsBrutos.filter(d=>{
-    if (ini && (!d.inicioVigencia || d.inicioVigencia < ini)) return false;
-    if (fim && (!d.inicioVigencia || d.inicioVigencia > fim)) return false;
-
-    if (rmSel){
-      if (d.rmUid){ if (d.rmUid !== rmSel) return false; }
-      else if (norm(d.rmNome) !== norm(rmSel)) return false;
-    }
-
-    if (agSel){
-      const agNome = nomeAgenciaPorRmUid(d.rmUid);
-      if (agNome !== agSel) return false;
-    }
-
-    if (ramoSel && d.ramo !== ramoSel) return false;
-    if (empTxt && !norm(d.empresaNome).includes(empTxt)) return false;
-
-    return true;
-  });
-
-  renderTabela(lista);
-  atualizarResumo(lista);
-}
-
-function atualizarResumo(lista){
-  const infoQtd = document.getElementById('infoQtd');
-  const totalPremio = document.getElementById('totalPremio');
-  const soma = lista.reduce((acc,cur)=> acc + (Number(cur.premioLiquido)||0), 0);
-  if (infoQtd) infoQtd.textContent = `${lista.length} negócio(s)`;
-  if (totalPremio) totalPremio.textContent = `Total prêmio: ${money(soma)}`;
-}
-
-function renderTabela(lista){
-  const tbody = document.getElementById('listaNegociosFechados');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
-  if (!lista.length){
-    tbody.innerHTML = `<tr><td colspan="7" class="muted">Sem resultados para os filtros atuais.</td></tr>`;
+  // só mostra para admin/gerente-chefe
+  if (!isAdmin && perfilAtual !== "gerente chefe") {
+    sel.innerHTML = "";
+    sel.style.display = "none";
     return;
   }
 
-  for (const d of lista){
-    const agencia = nomeAgenciaPorRmUid(d.rmUid);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${d.empresaNome}</td>
-      <td>${d.ramo}</td>
-      <td>${d.rmNome || '-'}</td>
-      <td>${agencia || '-'}</td>
-      <td>${money(d.premioLiquido)}</td>
-      <td>${formatDateBR(d.inicioVigencia)}</td>
-      <td>${formatDateBR(d.fimVigencia)}</td>
-    `;
-    tbody.appendChild(tr);
+  sel.innerHTML = `<option value="">Todos</option>`;
+  try {
+    let q = db.collection("usuarios_banco").where("perfil","==","rm");
+    if (!isAdmin && minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
+    const snap = await q.get();
+    const nomes = new Set();
+    snap.forEach(doc => {
+      const nome = doc.data()?.nome;
+      if (nome && !nomes.has(nome)) {
+        nomes.add(nome);
+        const opt = document.createElement("option");
+        opt.value = nome;
+        opt.textContent = nome;
+        sel.appendChild(opt);
+      }
+    });
+  } catch (e) {
+    console.warn("Falha ao carregar RMs p/ filtro:", e);
   }
 }
+
+/* ==================== Consulta ==================== */
+// reúne os docs respeitando o escopo do perfil
+async function listarNegociosPorPerfil(){
+  const col = db.collection("negocios-fechados");
+
+  if (isAdmin) {
+    const snap = await col.get();
+    return snap.docs.map(d => ({ id:d.id, ...(d.data()) }));
+  }
+
+  if (perfilAtual === "gerente chefe" || perfilAtual === "assistente") {
+    // gerente‑chefe/assistente: somente a própria agência
+    if (!minhaAgencia) return [];
+    try {
+      const snap = await col.where("agenciaId","==",minhaAgencia).get();
+      return snap.docs.map(d => ({ id:d.id, ...(d.data()) }));
+    } catch (e) {
+      // fallback sem índice: filtra no cliente
+      const snap = await col.get();
+      return snap.docs
+        .map(d => ({ id:d.id, ...(d.data()) }))
+        .filter(n => (n.agenciaId || "") === minhaAgencia);
+    }
+  }
+
+  // RM: somente os seus (cobre campos mais comuns)
+  const buckets = [];
+  try { buckets.push(await col.where("rmId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("usuarioId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("gerenteId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch {}
+
+  const map = new Map();
+  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data())));
+  return Array.from(map.entries()).map(([id,data]) => ({ id, ...data }));
+}
+
+/* aplica filtros UI sobre o conjunto obtido por perfil */
+async function carregarNegocios(){
+  const tbody = $("listaNegocios");
+  const outQtd = $("numNegocios");
+  const outPremio = $("premioTotal");
+
+  if (tbody) tbody.innerHTML = `<tr><td colspan="99">Carregando...</td></tr>`;
+  if (outQtd) outQtd.textContent = "0";
+  if (outPremio) outPremio.textContent = "R$ 0,00";
+
+  try {
+    const lista = await listarNegociosPorPerfil();
+
+    // filtros
+    const filtroRM  = $("filtroRM")?.value || "";     // rmNome
+    const filtroAno = $("filtroAno")?.value || "";
+    const filtroMes = $("filtroMes")?.value || "";     // 1..12
+
+    const itens = lista.filter(n => {
+      if (filtroRM && (n.rmNome || "-") !== filtroRM) return false;
+
+      // datas (usa fimVigencia ou dataFechamento; se não tiver, passa)
+      const d = toDate(n.fimVigencia) || toDate(n.dataFechamento) || null;
+      if (filtroAno && d && d.getFullYear().toString() !== filtroAno) return false;
+      if (filtroMes && d && (d.getMonth()+1).toString().padStart(2,"0") !== filtroMes.padStart(2,"0")) return false;
+
+      return true;
+    });
+
+    // totais
+    const totalPremio = itens.reduce((acc, n) => acc + (Number(n.premio) || 0), 0);
+    if (outQtd) outQtd.textContent = String(itens.length);
+    if (outPremio) outPremio.textContent = fmtMoeda(totalPremio);
+
+    // render
+    if (!tbody) return;
+    if (!itens.length) {
+      tbody.innerHTML = `<tr><td colspan="99">Nenhum registro no filtro atual.</td></tr>`;
+      return;
+    }
+
+    // ordena por data desc
+    itens.sort((a,b) => {
+      const da = (toDate(a.fimVigencia) || toDate(a.dataFechamento) || new Date(0)).getTime();
+      const dbb= (toDate(b.fimVigencia) || toDate(b.dataFechamento) || new Date(0)).getTime();
+      return dbb - da;
+    });
+
+    tbody.innerHTML = itens.map(n => {
+      const dataObj = toDate(n.fimVigencia) || toDate(n.dataFechamento) || null;
+      const dataFmt = dataObj ? dataObj.toLocaleDateString("pt-BR") : "-";
+      const empresa = n.empresaNome || n.empresa || "-";
+      const rm      = n.rmNome || "-";
+      const ramo    = n.ramo || "-";
+      const segur   = n.seguradora || "-";
+      const premio  = fmtMoeda(n.premio);
+      const obs     = n.observacoes || n.obs || "";
+
+      return `<tr>
+        <td>${dataFmt}</td>
+        <td>${empresa}</td>
+        <td>${rm}</td>
+        <td>${ramo}</td>
+        <td>${segur}</td>
+        <td>${premio}</td>
+        <td>${obs}</td>
+      </tr>`;
+    }).join("");
+  } catch (e) {
+    console.error("Erro ao carregar negócios fechados:", e);
+    if (tbody) tbody.innerHTML = `<tr><td colspan="99">Erro ou sem permissão.</td></tr>`;
+  }
+}
+
+/* exports se precisar chamar direto no HTML */
+window.carregarNegocios = carregarNegocios;
+</script>
