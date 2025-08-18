@@ -1,4 +1,5 @@
 // admin-banco/js/painel.js
+
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
@@ -6,11 +7,13 @@ const db   = firebase.firestore();
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 
 // ===== Utils
-const normalizarPerfil = (p) => String(p || "")
-  .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove acentos
+// (corrigido) agora também troca hífen/underscore por espaço
+const normalizarPerfil = (p)=>String(p||"")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
   .toLowerCase()
-  .replace(/[-_]+/g, " ")                            // << adiciona isto
+  .replace(/[-_]+/g," ")
   .trim();
+
 const toDate  = (x)=> x?.toDate ? x.toDate() : (x ? new Date(x) : null);
 const fmtData = (d)=> d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtHora = (d)=> d ? d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}) : "";
@@ -102,21 +105,39 @@ async function carregarResumoPainel(){
   ]);
 }
 
-// --- 1) Visitas Agendadas (próximas 10) ---
+// --- 1) Visitas Agendadas (próximas; com fallback p/ últimos 20 dias) ---
 async function blocoVisitasAgendadas(){
+  const now = Date.now();
+
+  // base + escopo
   let q = db.collection("agenda_visitas");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
+  // pega tudo e filtra client-side por compatibilidade com legado (data salva de jeitos diferentes)
   const snap = await q.get();
-  const now=new Date(); const todos=[];
+  const futuros=[];
   snap.forEach(doc=>{
     const d=doc.data();
     const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
-    if(dt && !isNaN(dt) && dt>=now) todos.push({...d,dt});
+    if(dt && !isNaN(dt) && dt.getTime()>=now) futuros.push({...d,dt});
   });
-  todos.sort((a,b)=>a.dt-b.dt);
-  const arr=todos.slice(0,10);
+  futuros.sort((a,b)=>a.dt-b.dt);
+
+  let arr=futuros.slice(0,10);
+  // fallback: últimos 20 dias caso não haja futuras
+  if(arr.length===0){
+    const limite = now - 20*24*60*60*1000;
+    const recentes=[];
+    snap.forEach(doc=>{
+      const d=doc.data();
+      const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
+      if(dt && !isNaN(dt) && dt.getTime()>=limite) recentes.push({...d,dt});
+    });
+    recentes.sort((a,b)=>a.dt-b.dt);
+    arr=recentes.slice(0,10);
+  }
+
   document.getElementById("qtdVA").textContent = arr.length;
   const ul=document.getElementById("listaVisitasAgendadas");
   ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
@@ -131,7 +152,7 @@ async function blocoMinhasVisitas(){
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
-  const snap = await q.limit(20).get();
+  const snap = await q.limit(50).get();
   const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
 
@@ -150,18 +171,25 @@ async function blocoMinhasVisitas(){
   }
 }
 
-// --- 3) Produção (Negócios Fechados) ---
+// --- 3) Produção (Negócios Fechados via cotacoes-gerentes com status emitido) ---
 async function blocoProducao(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
-  const snap = await q.limit(50).get();
+  const snap = await q.limit(100).get();
   const ul = document.getElementById("listaProducao"); ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
 
   const emitidos=[];
-  snap.forEach(doc=>{ const d=doc.data(); if(String(d.status||"").toLowerCase()==="negócio emitido") emitidos.push(d);});
+  snap.forEach(doc=>{
+    const d=doc.data();
+    const st = String(d.status||"")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+      .toLowerCase().trim(); // cobre “negócio emitido”, “negocio emitido”, etc.
+    if(st==="negocio emitido") emitidos.push(d);
+  });
+
   if(!emitidos.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio emitido.</span></li>"; return; }
 
   emitidos.sort((a,b)=> (toDate(b.dataCriacao)||0)-(toDate(a.dataCriacao)||0));
@@ -189,4 +217,3 @@ async function blocoMinhasCotacoes(){
     ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)}</div></li>`;
   });
 }
-
