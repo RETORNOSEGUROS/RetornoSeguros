@@ -1,27 +1,29 @@
-// --- Firebase ---
+// === Mapa de Produtos por Empresa (RBAC + sem índices) ===
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// --- Estado ---
+// ---- Estado / RBAC ----
+let meuUid = "";
+let perfilRaw = "";
+let perfil = "";           // normalizado
+let minhaAgencia = "";
+let isAdmin = false;
+
 let produtos = [];
 let nomesProdutos = {};
 let empresasCache = [];
 
-// RBAC
-let isAdmin = false;
-let perfilAtual = "";
-let minhaAgencia = "";
-let meuUid = "";
-
-// --- Utils ---
+// ---- Utils ----
 const normalize = (s) =>
   (s || "")
     .toString()
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .toLowerCase().trim();
+
+const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " "); // <- trata _, -, acentos
 
 function classFromStatus(statusRaw) {
   const s = normalize(statusRaw);
@@ -40,39 +42,39 @@ function erroUI(msg){
   if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">${msg}</div>`;
 }
 
-// --- Boot ---
-auth.onAuthStateChanged(async user => {
+// ---- Boot ----
+auth.onAuthStateChanged(async (user) => {
   if (!user) return (window.location.href = "login.html");
-
   meuUid = user.uid;
-  try {
-    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
-    const d = snap.exists ? (snap.data() || {}) : {};
-    perfilAtual = (d.perfil || d.roleId || "").toLowerCase();
-    minhaAgencia = d.agenciaId || "";
-  } catch (_) {
-    perfilAtual = "";
-    minhaAgencia = "";
-  }
-  isAdmin = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
-  // RM não precisa do filtro por RM
-  if (perfilAtual === "rm" && !isAdmin) {
+  try {
+    const up = await db.collection("usuarios_banco").doc(user.uid).get();
+    const d  = up.exists ? (up.data()||{}) : {};
+    perfilRaw     = d.perfil || d.roleId || "";
+    perfil        = roleNorm(perfilRaw);        // <<<<<<<<<<<<<< fix
+    minhaAgencia  = d.agenciaId || "";
+  } catch {
+    perfilRaw = ""; perfil = ""; minhaAgencia = "";
+  }
+  isAdmin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
+
+  if (perfil === "rm" && !isAdmin) {
+    // RM não precisa de filtro de RM
     const sel = document.getElementById("filtroRM");
     if (sel) sel.style.display = "none";
   }
 
   try {
     await carregarProdutos();
-    await carregarRM();        // preenche o combo (admin/chefe)
-    await carregarEmpresas();  // monta a tabela
+    await carregarRM();       // preenche combo RM (admin/chefe)
+    await carregarEmpresas(); // monta tabela
   } catch (e) {
-    console.error("[empresas] erro inesperado no boot:", e);
-    erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
+    console.error("[empresas] boot:", e);
+    erroUI("Erro ao carregar dados.");
   }
 });
 
-// --- Dados base (produtos/colunas) ---
+// ---- Produtos (colunas) ----
 async function carregarProdutos() {
   let snap;
   try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
@@ -86,34 +88,30 @@ async function carregarProdutos() {
   });
 }
 
-// --- Combo de RM (usa empresas já no escopo do usuário) ---
+// ---- Combo RM (usa empresas no mesmo escopo) ----
 async function carregarRM() {
   const select = document.getElementById("filtroRM");
   if (!select) return;
-
-  // RM não usa filtro
-  if (!isAdmin && perfilAtual === "rm") return;
+  if (!isAdmin && perfil === "rm") return;
 
   select.innerHTML = `<option value="">Todos</option>`;
 
-  // base no mesmo escopo de visibilidade
   let q = db.collection("empresas");
   if (!isAdmin) {
-    if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-      q = q.where("agenciaId", "==", minhaAgencia);
+    if (perfil === "gerente chefe" && minhaAgencia) {
+      q = q.where("agenciaId","==",minhaAgencia);
     }
   }
-
   try {
     const snapshot = await q.get();
     const rms = new Set();
     snapshot.forEach(doc => {
-      const dados = doc.data() || {};
-      const nome = dados.rmNome || dados.rm;
+      const e = doc.data() || {};
+      const nome = e.rmNome || e.rm;
       if (nome) rms.add(nome);
     });
     Array.from(rms)
-      .sort((a,b)=> (a||"").localeCompare(b||"", "pt-BR"))
+      .sort((a,b)=>(a||"").localeCompare(b||"","pt-BR"))
       .forEach(nome => {
         const opt = document.createElement("option");
         opt.value = nome;
@@ -121,75 +119,49 @@ async function carregarRM() {
         select.appendChild(opt);
       });
   } catch (e) {
-    console.warn("[empresas] carregarRM falhou:", e);
+    console.warn("[empresas] carregarRM:", e);
   }
 }
 
-/**
- * Busca cotações para uma empresa respeitando RBAC:
- * - Admin / Gerente-chefe: por empresaId (simples)
- * - RM: busca pelos campos de “dono” (rmUid, rmId, usuarioId, gerenteId) e depois filtra por empresaId
- */
+// ---- Busca de cotações por empresa (RBAC) ----
 async function buscarCotacoesParaEmpresa(empresaId) {
-  // Admin e gerente-chefe: podem ler por empresaId direto
-  if (isAdmin || ["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
-    try {
-      return (await db.collection("cotacoes-gerentes")
-        .where("empresaId","==",empresaId).get()).docs;
-    } catch (e) {
-      console.warn("[empresas] cotacoes empresaId== falhou:", e);
-      return [];
-    }
+  if (isAdmin || perfil === "gerente chefe") {
+    try { return (await db.collection("cotacoes-gerentes").where("empresaId","==",empresaId).get()).docs; }
+    catch(e){ console.warn("[empresas] cotacoes empresaId:", e); return []; }
   }
-
-  // RM: consulta por “dono” e filtra por empresa
-  if (perfilAtual === "rm") {
+  if (perfil === "rm") {
     const buckets = [];
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot rmUid== falhou:", e); }
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot rmId== falhou:", e); }
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("usuarioId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot usuarioId== falhou:", e); }
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("gerenteId","==",meuUid).get()); } catch(e){ console.warn("[empresas] cot gerenteId== falhou:", e); }
-
-    // mescla e filtra por empresa
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmUid","==",meuUid).get()); } catch(e){}
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmId","==",meuUid).get()); } catch(e){}
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("usuarioId","==",meuUid).get()); } catch(e){}
+    try { buckets.push(await db.collection("cotacoes-gerentes").where("gerenteId","==",meuUid).get()); } catch(e){}
     const map = new Map();
-    buckets.forEach(s => s?.docs?.forEach(d => { if (d?.id) map.set(d.id, d); }));
-    return Array.from(map.values()).filter(d => (d.data() || {}).empresaId === empresaId);
+    buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
+    return Array.from(map.values()).filter(d => (d.data()||{}).empresaId === empresaId);
   }
-
-  // Assistente não usa esta página (mas retorna vazio por segurança)
   return [];
 }
 
-// --- Tabela (RBAC + compat campos legados) ---
+// ---- Carregar Empresas (RBAC + sem índices) ----
 async function carregarEmpresas() {
-  const filtroRMNome = document.getElementById("filtroRM")?.value || ""; // nome do RM (só admin/chefe usa)
+  const filtroRMNome = document.getElementById("filtroRM")?.value || "";
 
   try {
     let docs = [];
 
     if (isAdmin) {
-      // Admin: tudo
-      const snap = await db.collection("empresas").get();
-      docs = snap.docs;
-    } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-      // Chefe: por agência
-      const snap = await db.collection("empresas")
-        .where("agenciaId","==",minhaAgencia).get();
-      docs = snap.docs;
-    } else if (perfilAtual === "rm") {
-      // RM: precisa bater com as rules de "dono"
+      docs = (await db.collection("empresas").get()).docs;
+    } else if (perfil === "gerente chefe" && minhaAgencia) {
+      docs = (await db.collection("empresas").where("agenciaId","==",minhaAgencia).get()).docs;
+    } else if (perfil === "rm") {
       const buckets = [];
-
-      try { buckets.push(await db.collection("empresas").where("rmUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] where rmUid== falhou:", e); }
-      try { buckets.push(await db.collection("empresas").where("rmId","==",meuUid).get()); } catch(e){ console.warn("[empresas] where rmId== falhou:", e); }
-      try { buckets.push(await db.collection("empresas").where("criadoPorUid","==",meuUid).get()); } catch(e){ console.warn("[empresas] where criadoPorUid== falhou:", e); }
-
-      // mescla resultados (sem duplicates)
+      try { buckets.push(await db.collection("empresas").where("rmUid","==",meuUid).get()); } catch(e){}
+      try { buckets.push(await db.collection("empresas").where("rmId","==",meuUid).get()); } catch(e){}
+      try { buckets.push(await db.collection("empresas").where("criadoPorUid","==",meuUid).get()); } catch(e){}
       const map = new Map();
       buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
       docs = Array.from(map.values());
-
-      // fallback: se ainda vazio e você grava agência certinha, tenta por agência e filtra no cliente
+      // fallback: agência + filtra no cliente
       if (docs.length === 0 && minhaAgencia) {
         try {
           const snapAg = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
@@ -198,41 +170,36 @@ async function carregarEmpresas() {
             const dono = e.rmUid || e.rmId || e.criadoPorUid || null;
             return dono === meuUid;
           });
-        } catch(e){ console.warn("[empresas] fallback por agência falhou:", e); }
+        } catch(e){}
       }
     }
 
     empresasCache = [];
     docs.forEach(doc => {
       const e = { id: doc.id, ...doc.data() };
-
-      // Filtro por RM (nome) – apenas admin/chefe
       const nomeRM = e.rmNome || e.rm || "";
       if (filtroRMNome && nomeRM !== filtroRMNome) return;
-
       empresasCache.push(e);
     });
 
     if (!empresasCache.length) {
-      const cont = document.getElementById("tabelaEmpresas");
-      if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
+      document.getElementById("tabelaEmpresas").innerHTML =
+        `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
       return;
     }
 
-    // Para cada empresa, mapeia status por produto a partir das cotações
+    // Monta linhas com status por produto
     const linhas = await Promise.all(
       empresasCache.map(async (empresa) => {
-        // <<< AJUSTE CRÍTICO: respeita RBAC ao buscar cotações >>>
-        const cotacoesDocs = await buscarCotacoesParaEmpresa(empresa.id);
-
+        const cotDocs = await buscarCotacoesParaEmpresa(empresa.id);
         const statusPorProduto = {};
         produtos.forEach(p => statusPorProduto[p] = "nenhum");
 
-        cotacoesDocs.forEach(doc => {
+        cotDocs.forEach(doc => {
           const c = doc.data() || {};
-          const ramoCotado = c.ramo;
+          const ramo = c.ramo;
           const produtoId = produtos.find(id =>
-            normalize(nomesProdutos[id]) === normalize(ramoCotado)
+            normalize(nomesProdutos[id]) === normalize(ramo)
           );
           if (!produtoId) return;
           statusPorProduto[produtoId] = classFromStatus(c.status);
@@ -270,7 +237,7 @@ async function carregarEmpresas() {
     document.getElementById("tabelaEmpresas").innerHTML = html;
 
   } catch (err) {
-    console.error("[empresas] carregarEmpresas erro:", err);
-    erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
+    console.error("[empresas] carregarEmpresas:", err);
+    erroUI("Erro ao carregar empresas.");
   }
 }
