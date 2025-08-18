@@ -1,8 +1,4 @@
-/* ===========================
-   Negócios Fechados (escopos)
-   =========================== */
-
-/* Firebase */
+/* ===== Firebase init ===== */
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
@@ -10,312 +6,275 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 /* ===== Estado ===== */
-let usuarioAtual  = null;
-let perfilAtual   = "";     // "admin" | "gerente chefe" | "assistente" | "rm"
-let minhaAgencia  = "";
-let isAdmin       = false;
+let usuarioAtual = null;
+let perfilAtual  = "";        // "admin" | "gerente chefe" | "assistente" | "rm"
+let minhaAgencia = "";
+let isAdmin      = false;
 
-let agenciasMap   = {};     // { agenciaId: "Nome — Banco / Cidade - UF" }
-let rmsDisponiveis = [];    // [{uid, nome, agenciaId}, ...]
+let agenciasMap = {};         // {agenciaId: "Nome — Banco / Cidade - UF"}
+let rmsCache    = [];         // [{uid, nome, agenciaId}]
+let ramosCache  = [];         // ["Ramo A", "Ramo B", ...]
 
-// Status que consideramos “produção/fechado”
-const STATUS_PRODUCAO = new Set([
-  "Negócio Fechado",
-  "Negócio Emitido",
-  "Em Emissão"
-]);
+/* ===== Helpers DOM (tolerante a IDs diferentes) ===== */
+const first = (...ids) => ids.map(id => document.getElementById(id)).find(Boolean);
+const $ = id => document.getElementById(id);
 
-/* ===== Helpers DOM resilientes (aceitam múltiplos ids) ===== */
-const $id = (id) => document.getElementById(id);
-function getEl(ids) {
-  for (const i of ids) {
-    const el = $id(i);
-    if (el) return el;
-  }
-  return null;
-}
-function getVal(ids) {
-  const el = getEl(ids);
-  return el ? (el.value || "").trim() : "";
-}
-function setText(ids, txt) {
-  const el = getEl(ids);
-  if (el) el.textContent = txt ?? "";
-}
-function setHTML(ids, html) {
-  const el = getEl(ids);
-  if (el) el.innerHTML = html ?? "";
-}
+// tenta encontrar elementos por variações de id usadas no projeto
+const els = {
+  dtIni : () => first("dataInicioDe","iniVigenciaDe","vigenciaDe","dataDe"),
+  dtFim : () => first("dataInicioAte","iniVigenciaAte","vigenciaAte","dataAte"),
+  selRM : () => first("filtroRM","rm","selectRM"),
+  selAg : () => first("filtroAgencia","agencia","selectAgencia"),
+  selR  : () => first("filtroRamo","ramo","selectRamo"),
+  inpEmp: () => first("filtroEmpresa","empresaBusca","empresaNome","empresa"),
+  tbody : () => first("listaNegocios","tbodyLista","lista"),
+  total : () => first("totalPremio","badgeTotalPremio"),
+  status: () => first("statusLista","status"),
+  btnAplicar: () => first("btnAplicar","aplicar","btnFiltrar"),
+  btnLimpar : () => first("btnLimpar","limpar"),
+  voltar   : () => first("voltarPainel","btnVoltar","voltar")
+};
+
+/* ===== Utils ===== */
+const roleNorm = s => (s||"").toString().normalize("NFD").replace(/\p{Diacritic}/gu,"").toLowerCase().replace(/[-_]+/g," ").trim();
+const toDate   = ts => ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : (ts ? new Date(ts) : null));
+const moneyBR  = v => Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
 /* ===== Boot ===== */
-window.addEventListener("DOMContentLoaded", () => {
-  // Botão “Voltar ao painel” caso não exista
-  if (!getEl(["btnVoltarPainel"])) {
-    const place = document.querySelector(".page-actions, .header-actions, body");
-    if (place) {
-      const a = document.createElement("a");
-      a.id = "btnVoltarPainel";
-      a.href = "painel.html";
-      a.textContent = "⟵ Voltar ao Painel";
-      a.style.cssText = "display:inline-block;margin:10px 0 0 10px;";
-      place.prepend(a);
-    }
-  }
+auth.onAuthStateChanged(async (user) => {
+  if (!user) return (window.location.href = "login.html");
+  usuarioAtual = user;
 
-  auth.onAuthStateChanged(async (user) => {
-    if (!user) return (window.location.href = "login.html");
-    usuarioAtual = user;
+  // perfil + agência
+  const up = await db.collection("usuarios_banco").doc(user.uid).get();
+  const u  = up.exists ? (up.data()||{}) : {};
+  perfilAtual  = roleNorm(u.perfil || u.roleId || "");
+  minhaAgencia = u.agenciaId || "";
+  isAdmin      = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
-    // Perfil + agência
-    const up = await db.collection("usuarios_banco").doc(user.uid).get();
-    const u  = up.exists ? (up.data() || {}) : {};
-    perfilAtual  = ((u.perfil || u.roleId || "") + "").toLowerCase().replace(/[-_]+/g, " ");
-    minhaAgencia = u.agenciaId || "";
-    isAdmin      = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
+  // botão voltar (opcional)
+  const v = els.voltar();
+  if (v) v.addEventListener("click", (e) => { e.preventDefault(); window.location.href = "painel.html"; });
 
-    await carregarAgenciasFiltro();
-    await carregarRMsFiltro();
-    await carregarRamosFiltro();
+  await Promise.all([
+    carregarAgencias(),
+    carregarRMs(),
+    carregarRamos()
+  ]);
 
-    instalarHandlers();
-    carregarNegocios(); // 1ª carga
-  });
+  instalarUI();
+  carregarLista();
 });
 
-/* ===== Carregadores de filtros ===== */
-async function carregarAgenciasFiltro() {
-  const sel = getEl(["filtroAgencia", "agenciaFiltro"]);
-  if (!sel) return;
+/* ===== Carregadores de catálogos ===== */
+async function carregarAgencias() {
+  const sel = els.selAg();
+  if (sel) sel.innerHTML = "";
 
-  sel.innerHTML = "";
+  // opção inicial
   if (isAdmin) {
-    sel.insertAdjacentHTML("beforeend", `<option value="">Todas as agências</option>`);
-  } else {
-    // gerente-chefe/assistente/RM: trava na própria
+    sel?.insertAdjacentHTML("beforeend", `<option value="">Todas as agências</option>`);
+  } else if (sel) {
     const minha = minhaAgencia || "";
     sel.insertAdjacentHTML("beforeend", `<option value="${minha}">Minha agência</option>`);
     sel.value = minha;
     sel.disabled = true;
   }
 
-  // Monta rótulos amigáveis SEM UID
   let snap;
-  try { snap = await db.collection("agencias_banco").orderBy("nome").get(); }
-  catch { snap = await db.collection("agencias_banco").get(); }
+  try {
+    snap = await db.collection("agencias_banco").orderBy("nome").get();
+    if (snap.empty) snap = await db.collection("agencias_banco").get();
+  } catch {
+    snap = await db.collection("agencias_banco").get();
+  }
 
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
-
     const nome   = (a.nome || "(Sem nome)").toString();
     const banco  = a.banco ? ` — ${a.banco}` : "";
     const cidade = (a.Cidade || a.cidade || "").toString();
-    const uf     = (a.estado || a.UF || "").toString().toUpperCase();
+    const cidadeFmt = cidade ? ` / ${cidade}` : "";
+    const uf = (a.estado || a.UF || "").toString().toUpperCase();
+    const ufFmt = uf ? ` - ${uf}` : "";
+    const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
 
-    const label = `${nome}${banco}${cidade ? ` / ${cidade}` : ""}${uf ? ` - ${uf}` : ""}`;
     agenciasMap[id] = label;
 
-    if (isAdmin) {
+    if (isAdmin && sel) {
       const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = label;
+      opt.value = id; opt.textContent = label;
       sel.appendChild(opt);
     }
   });
 }
 
-async function carregarRMsFiltro() {
-  const sel = getEl(["filtroRM", "rmFiltro"]);
+async function carregarRMs() {
+  const sel = els.selRM();
   if (!sel) return;
 
-  // RM não precisa de filtro RM
-  if (!isAdmin && !["gerente chefe", "assistente"].includes(perfilAtual)) {
-    sel.innerHTML = "";
-    sel.style.display = "none";
-    return;
-  }
+  sel.innerHTML = `<option value="">Todos os RMs</option>`;
 
-  sel.innerHTML = `<option value="">Todos</option>`;
-  let q = db.collection("usuarios_banco").where("perfil", "==", "rm");
-  if (!isAdmin && minhaAgencia) q = q.where("agenciaId", "==", minhaAgencia);
-
-  const nomes = new Set();
+  let q = db.collection("usuarios_banco").where("perfil","==","rm");
+  if (!isAdmin && minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
   const snap = await q.get();
-  snap.forEach(doc => {
-    const d = doc.data() || {};
-    const nome = d.nome || "";
-    const uid  = doc.id;
-    rmsDisponiveis.push({ uid, nome, agenciaId: d.agenciaId || "" });
-    if (nome && !nomes.has(nome)) {
-      nomes.add(nome);
-      const opt = document.createElement("option");
-      opt.value = nome;
-      opt.textContent = nome;
-      sel.appendChild(opt);
-    }
+
+  rmsCache = [];
+  snap.forEach(d => {
+    const u = d.data()||{};
+    rmsCache.push({ uid:d.id, nome:u.nome||"(sem nome)", agenciaId:u.agenciaId||"" });
   });
+  rmsCache
+    .sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"))
+    .forEach(rm=>{
+      const opt=document.createElement("option");
+      opt.value = rm.uid;  // filtraremos por UID, mais preciso
+      opt.textContent = rm.nome;
+      sel.appendChild(opt);
+    });
 }
 
-async function carregarRamosFiltro() {
-  const sel = getEl(["filtroRamo", "ramoFiltro"]);
+async function carregarRamos() {
+  const sel = els.selR();
   if (!sel) return;
-  sel.innerHTML = `<option value="">Todos</option>`;
+  sel.innerHTML = `<option value="">Todos os ramos</option>`;
   let snap;
   try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
   catch { snap = await db.collection("ramos-seguro").get(); }
-  snap.forEach(doc => {
-    const nome = doc.data()?.nomeExibicao || doc.id;
-    const opt  = document.createElement("option");
-    opt.value = nome;
-    opt.textContent = nome;
-    sel.appendChild(opt);
+  ramosCache = [];
+  snap.forEach(d=>{
+    const nome = d.data()?.nomeExibicao || d.id;
+    ramosCache.push(nome);
+  });
+  ramosCache.sort((a,b)=>a.localeCompare(b,"pt-BR"))
+            .forEach(n => sel.insertAdjacentHTML("beforeend", `<option value="${n}">${n}</option>`));
+}
+
+/* ===== UI ===== */
+function instalarUI() {
+  els.btnAplicar()?.addEventListener("click", (e)=>{ e.preventDefault(); carregarLista(); });
+  els.btnLimpar()?.addEventListener("click", (e)=>{ 
+    e.preventDefault();
+    if (isAdmin) { const a=els.selAg(); if (a) a.value=""; }
+    const r=els.selRM(); if (r) r.value="";
+    const rm=els.selR(); if (rm) rm.value="";
+    const t=els.inpEmp(); if (t) t.value="";
+    const di=els.dtIni(); if (di) di.value="";
+    const df=els.dtFim(); if (df) df.value="";
+    carregarLista();
   });
 }
 
-/* ===== Handlers ===== */
-function instalarHandlers() {
-  const btnAplicar = getEl(["btnAplicar", "aplicar", "btnFiltrar"]);
-  const btnLimpar  = getEl(["btnLimpar", "limpar", "btnClear"]);
-  btnAplicar && btnAplicar.addEventListener("click", carregarNegocios);
-  btnLimpar  && btnLimpar.addEventListener("click", () => {
-    const campos = [
-      ["filtroEmpresa", "empresaFiltro"],
-      ["filtroRM", "rmFiltro"],
-      ["filtroRamo", "ramoFiltro"],
-      ["filtroAgencia", "agenciaFiltro"],
-      ["filtroInicioDe", "dataInicioDe", "inicioDe"],
-      ["filtroInicioAte", "dataInicioAte", "inicioAte"]
-    ];
-    campos.forEach(ids => {
-      const el = getEl(ids);
-      if (!el) return;
-      if (el.disabled) return; // “Minha agência” travado
-      if (el.tagName === "SELECT" || el.tagName === "INPUT") el.value = "";
-    });
-    carregarNegocios();
-  });
-}
+/* ===== Listagem =====
+   Estrutura esperada em cada doc da coleção "negocios-fechados":
+   {
+     empresaNome, ramo, premio, inicioVigencia (Timestamp), fimVigencia (Timestamp),
+     agenciaId, rmUid, rmNome
+   }
+   Se algum campo estiver com outro nome no seu banco, o render continua
+   funcionando (usa defaults), e os filtros extras serão aplicados em memória.
+*/
+async function listarBasePorPerfil() {
+  const col = db.collection("negocios-fechados");
 
-/* ===== Query + render ===== */
-async function listarPorPerfil() {
-  const col = db.collection("cotacoes-gerentes");
-
-  // admin vê tudo
+  // Escopo por perfil
   if (isAdmin) {
     const snap = await col.get();
-    return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+    return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // gerente-chefe/assistente: por agência
-  if (["gerente chefe", "assistente"].includes(perfilAtual) && minhaAgencia) {
-    try {
-      const snap = await col.where("agenciaId", "==", minhaAgencia).get();
-      return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-    } catch {
-      // fallback: client filter
-      const snap = await col.get();
-      return snap.docs
-        .map(d => ({ id: d.id, ...(d.data() || {}) }))
-        .filter(c => (c.agenciaId || minhaAgencia) === minhaAgencia);
+  if (["gerente chefe","assistente"].includes(perfilAtual)) {
+    if (minhaAgencia) {
+      try {
+        const snap = await col.where("agenciaId","==",minhaAgencia).get();
+        return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
+      } catch(e) {
+        // fallback: filtra cliente
+        const snap = await col.get();
+        return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}))
+                        .filter(n => (n.agenciaId||minhaAgencia)===minhaAgencia);
+      }
     }
+    const snap = await col.get();
+    return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // RM: apenas seus
+  // RM: pega por rmUid (e mais alguns possíveis nomes de campos)
   const buckets = [];
-  try { buckets.push(await col.where("rmId", "==", usuarioAtual.uid).get()); } catch {}
-  try { buckets.push(await col.where("rmUid", "==", usuarioAtual.uid).get()); } catch {}
-  try { buckets.push(await col.where("usuarioId", "==", usuarioAtual.uid).get()); } catch {}
-  try { buckets.push(await col.where("gerenteId", "==", usuarioAtual.uid).get()); } catch {}
-  try { buckets.push(await col.where("criadoPorUid", "==", usuarioAtual.uid).get()); } catch {}
-
+  try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("rmId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await col.where("usuarioId","==",usuarioAtual.uid).get()); } catch {}
   const map = new Map();
-  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data() || {})));
-  return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
+  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data())));
+  return Array.from(map.entries()).map(([id,data])=>({id,...data}));
 }
 
-async function carregarNegocios() {
-  setText(["statusLista", "lblStatus", "statusMsg"], "Carregando...");
-  setText(["totalPremio", "totalPremioSpan"], "R$ 0,00");
-  setHTML(["listaNegocios", "tbodyNegocios"], "");
-
-  const filtroAg   = getVal(["filtroAgencia", "agenciaFiltro"]);
-  const filtroRM   = getVal(["filtroRM", "rmFiltro"]);       // rmNome
-  const filtroRamo = getVal(["filtroRamo", "ramoFiltro"]);
-  const filtroEmp  = getVal(["filtroEmpresa", "empresaFiltro"]).toLowerCase();
-  const deStr      = getVal(["filtroInicioDe", "dataInicioDe", "inicioDe"]);
-  const ateStr     = getVal(["filtroInicioAte", "dataInicioAte", "inicioAte"]);
-
-  let de  = deStr  ? new Date(deStr  + "T00:00:00") : null;
-  let ate = ateStr ? new Date(ateStr + "T23:59:59") : null;
+async function carregarLista() {
+  const tbody = els.tbody();
+  const badge = els.total();
+  const status= els.status();
+  if (tbody) tbody.innerHTML = `<tr><td colspan="8">Carregando...</td></tr>`;
+  if (status) status.textContent = "Carregando...";
 
   try {
-    let docs = await listarPorPerfil();
+    // base por perfil
+    let rows = await listarBasePorPerfil();
 
-    // Admin pode trocar agência no filtro
-    if (isAdmin && filtroAg) {
-      docs = docs.filter(c => (c.agenciaId || "") === filtroAg);
-    }
+    // filtros UI
+    const agUI = els.selAg(); const filtroAg = agUI && !agUI.disabled ? (agUI.value||"") : (isAdmin ? "" : (minhaAgencia||""));
+    const rmUI = els.selRM(); const filtroRM = rmUI ? (rmUI.value||"") : "";
+    const rrUI = els.selR();  const filtroR  = rrUI ? (rrUI.value||"")  : "";
+    const txUI = els.inpEmp();const busca    = (txUI ? txUI.value : "").toLowerCase().trim();
+    const diUI = els.dtIni(); const diVal    = diUI && diUI.value ? new Date(diUI.value) : null;
+    const dfUI = els.dtFim(); const dfVal    = dfUI && dfUI.value ? new Date(dfUI.value+"T23:59:59") : null;
 
-    // Apenas status de produção
-    docs = docs.filter(c => STATUS_PRODUCAO.has(String(c.status || "")));
-
-    // Aplicar filtros
-    docs = docs.filter(c => {
-      if (filtroRM && (c.rmNome || "") !== filtroRM) return false;
-      if (filtroRamo && (c.ramo || "") !== filtroRamo) return false;
-      if (filtroEmp) {
-        const nome = (c.empresaNome || "").toLowerCase();
-        if (!nome.includes(filtroEmp)) return false;
+    // aplica filtros em memória (evita problemas de índice)
+    rows = rows.filter(n => {
+      if (filtroAg && (n.agenciaId||"") !== filtroAg) return false;
+      if (filtroRM && (n.rmUid||n.rmId||"") !== filtroRM) return false;
+      if (filtroR  && (n.ramo||"") !== filtroR) return false;
+      if (busca) {
+        const nome = (n.empresaNome || "").toString().toLowerCase();
+        if (!nome.includes(busca)) return false;
       }
-      if (de || ate) {
-        // usamos inicioVigencia quando existir; se não, ignora datas
-        const ini = c.inicioVigencia?.toDate?.() ||
-                    (typeof c.inicioVigencia === "string" ? new Date(c.inicioVigencia) : null);
-        if (ini) {
-          if (de  && ini < de)  return false;
-          if (ate && ini > ate) return false;
-        }
-      }
+      const ini = toDate(n.inicioVigencia);
+      if (diVal && ini && ini < diVal) return false;
+      if (dfVal && ini && ini > dfVal) return false;
       return true;
     });
 
-    // Monta linhas
-    let totalPremio = 0;
-    const rowsHTML = [];
-    docs.forEach(c => {
-      const agenciaLabel = c.agenciaId ? (agenciasMap[c.agenciaId] || c.agenciaId) : "-";
-      const ini = c.inicioVigencia?.toDate?.() ||
-                  (typeof c.inicioVigencia === "string" ? new Date(c.inicioVigencia) : null);
-      const fim = c.fimVigencia?.toDate?.() ||
-                  (typeof c.fimVigencia === "string" ? new Date(c.fimVigencia) : null);
+    // render
+    let total = 0;
+    const html = rows.map(n => {
+      const empresa = n.empresaNome || "-";
+      const ramo    = n.ramo || "-";
+      const rmNome  = n.rmNome || "-";
+      const agLabel = n.agenciaId ? (agenciasMap[n.agenciaId] || n.agenciaId) : "-";
+      const premioN = Number(n.premio || n.premioTotal || 0) || 0;
+      total += premioN;
+      const ini = toDate(n.inicioVigencia)?.toLocaleDateString("pt-BR") || "-";
+      const fim = toDate(n.fimVigencia)?.toLocaleDateString("pt-BR")    || "-";
+      return `<tr>
+        <td data-label="Empresa">${empresa}</td>
+        <td data-label="Ramo">${ramo}</td>
+        <td data-label="RM">${rmNome}</td>
+        <td data-label="Agência">${agLabel}</td>
+        <td data-label="Prêmio">${moneyBR(premioN)}</td>
+        <td data-label="Início">${ini}</td>
+        <td data-label="Fim">${fim}</td>
+      </tr>`;
+    }).join("");
 
-      const premio = typeof c.premio === "number" ? c.premio :
-                     typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
-      totalPremio += premio || 0;
-
-      rowsHTML.push(`
-        <tr>
-          <td>${c.empresaNome || "-"}</td>
-          <td>${c.ramo || "-"}</td>
-          <td>${c.rmNome || "-"}</td>
-          <td>${agenciaLabel}</td>
-          <td>${premio ? premio.toLocaleString("pt-BR", {style:"currency",currency:"BRL"}) : "-"}</td>
-          <td>${ini ? ini.toLocaleDateString("pt-BR") : "-"}</td>
-          <td>${fim ? fim.toLocaleDateString("pt-BR") : "-"}</td>
-        </tr>
-      `);
-    });
-
-    setHTML(["listaNegocios", "tbodyNegocios"], rowsHTML.join("") || `
-      <tr><td colspan="7" style="text-align:center;color:#666">Nenhum registro no escopo atual.</td></tr>
-    `);
-    setText(["totalPremio", "totalPremioSpan"], totalPremio.toLocaleString("pt-BR", {style:"currency",currency:"BRL"}));
-    setText(["statusLista", "lblStatus", "statusMsg"], `${docs.length} negócio(s) no período.`);
+    if (tbody) {
+      tbody.innerHTML = html || `<tr><td colspan="8">Nenhum registro no escopo atual.</td></tr>`;
+    }
+    if (badge) badge.textContent = moneyBR(total);
+    if (status) status.textContent = `${rows.length} negócio(s) listado(s).`;
   } catch (e) {
     console.error("Erro ao carregar negócios fechados:", e);
-    setText(["statusLista", "lblStatus", "statusMsg"], "Erro ao carregar. Verifique as regras e o login.");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8">Erro ao carregar. Verifique as permissões/regras.</td></tr>`;
+    if (els.total()) els.total().textContent = moneyBR(0);
+    if (status) status.textContent = `Erro ao carregar.`;
   }
 }
-
-/* ===== Exports para HTML (botões) ===== */
-window.carregarNegocios = carregarNegocios;
