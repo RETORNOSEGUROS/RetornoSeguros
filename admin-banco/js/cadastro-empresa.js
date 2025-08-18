@@ -20,6 +20,12 @@ let sortDir = "asc";      // asc | desc
 const $ = (id) => document.getElementById(id);
 const setStatus = (msg) => { const el=$('statusLista'); if(el) el.textContent = msg || ''; };
 
+/* === Normalização de perfil (unifica hífen/underscore e acentos) === */
+const roleNorm = (p) => String(p||"")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+  .toLowerCase().replace(/[-_]+/g," ")
+  .trim();
+
 /* Auth */
 auth.onAuthStateChanged(async (user) => {
   if (!user) {
@@ -28,13 +34,13 @@ auth.onAuthStateChanged(async (user) => {
   }
   meuUid = user.uid;
 
-  // Admin por e‑mail
+  // Admin por e-mail
   isAdmin = (user.email === "patrick@retornoseguros.com.br");
 
   // Perfil do usuário
   const snap = await db.collection("usuarios_banco").doc(user.uid).get();
   const p = snap.exists ? (snap.data()||{}) : {};
-  perfilAtual  = (p.perfil || "").toLowerCase();
+  perfilAtual  = roleNorm(p.perfil || "");   // << normalizado
   minhaAgencia = p.agenciaId || "";
   meuNome      = p.nome || "";
 
@@ -50,13 +56,13 @@ auth.onAuthStateChanged(async (user) => {
 
   // Regras de filtro por agência na LISTA:
   const filtroSel = $('filtroAgencia');
-  if (!isAdmin && minhaAgencia) {
+  if (!isAdmin && minhaAgencia && filtroSel) {
     filtroSel.value = minhaAgencia;
     filtroSel.disabled = true;
   }
 
-  // Mostrar filtro por RM para gerente_chefe e admin
-  if (perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe" || isAdmin) {
+  // Mostrar filtro por RM para gerente chefe e admin
+  if (perfilAtual === "gerente chefe" || isAdmin) {
     $('boxFiltroRm')?.style?.setProperty("display","block");
   } else {
     $('boxFiltroRm')?.style?.setProperty("display","none");
@@ -104,8 +110,8 @@ async function carregarAgencias() {
     const banco  = ag.banco ? ` — ${ag.banco}` : "";
     const cidade = (ag.Cidade || ag.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
-    const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
-    const ufFmt = uf ? ` - ${uf}` : "";
+    theUF = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const ufFmt = theUF ? ` - ${theUF}` : "";
 
     // 🔹 Rótulo amigável SEM UID
     const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
@@ -145,10 +151,13 @@ async function carregarRMsFormulario() {
   selectRM.innerHTML = '<option value="">Selecione um RM</option>';
 
   const agenciaEscolhida = $('agenciaId')?.value || minhaAgencia;
-  let q = db.collection("usuarios_banco").where("perfil", "==", "rm");
+
+  // aceita variações de perfil no banco
+  let q = db.collection("usuarios_banco")
+            .where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
   if (agenciaEscolhida) q = q.where("agenciaId", "==", agenciaEscolhida);
 
-  const snapshot = await q.get();
+  const snapshot = await q.orderBy("nome").get().catch(async () => await q.get());
   snapshot.forEach((doc) => {
     const u = doc.data() || {};
     rmsMap[doc.id] = { nome: u.nome || "(sem nome)", agenciaId: u.agenciaId || "" };
@@ -166,7 +175,7 @@ async function carregarRMsFormulario() {
 async function prepararFiltrosRM() {
   const box = $('boxFiltroRm');
   if (!box) return;
-  if (!((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin)) return;
+  if (!(perfilAtual === "gerente chefe" || isAdmin)) return;
   await carregarRMsFiltro();
 }
 
@@ -178,10 +187,11 @@ async function carregarRMsFiltro() {
 
   filtroRm.innerHTML = '<option value="">Todos os RMs</option>';
 
-  let q = db.collection("usuarios_banco").where("perfil", "==", "rm");
+  let q = db.collection("usuarios_banco")
+            .where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
   if (agencia) q = q.where("agenciaId", "==", agencia);
 
-  const snap = await q.get();
+  const snap = await q.orderBy("nome").get().catch(async ()=> await q.get());
   snap.forEach((doc) => {
     const u = doc.data() || {};
     rmsMap[doc.id] = { nome: u.nome || "(sem nome)", agenciaId: u.agenciaId || "" };
@@ -199,7 +209,7 @@ function onAgenciaChangeForm() {
 
 /* onChange do filtro de Agência (LISTA) */
 async function onFiltroAgenciaChange() {
-  if ((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) {
+  if ((perfilAtual === "gerente chefe") || isAdmin) {
     await carregarRMsFiltro();
   }
   carregarEmpresas();
@@ -224,7 +234,7 @@ async function salvarEmpresa() {
     agenciaId = minhaAgencia || "";
     rmUid     = meuUid;
   }
-  if (!isAdmin && (perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe")) {
+  if (!isAdmin && (perfilAtual === "gerente chefe")) {
     if (agenciaId && minhaAgencia && agenciaId !== minhaAgencia) {
       alert("Gerente Chefe só pode criar/editar empresas da própria agência.");
       return;
@@ -263,7 +273,7 @@ async function salvarEmpresa() {
 /* Carregar empresas com regras de visibilidade + filtros + ordenação */
 async function carregarEmpresas() {
   const filtroAg = isAdmin ? ($('filtroAgencia')?.value || "") : (minhaAgencia || "");
-  const filtroRm = ((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) ? ($('filtroRm')?.value || "") : "";
+  const filtroRm = ((perfilAtual === "gerente chefe") || isAdmin) ? ($('filtroRm')?.value || "") : "";
 
   setStatus("Carregando...");
 
@@ -276,7 +286,7 @@ async function carregarEmpresas() {
       q = q.where("rmUid", "==", meuUid);
     }
 
-    if (((perfilAtual === "gerente_chefe" || perfilAtual === "gerente chefe") || isAdmin) && filtroRm) {
+    if (((perfilAtual === "gerente chefe") || isAdmin) && filtroRm) {
       q = q.where("rmUid", "==", filtroRm);
     }
 
@@ -414,9 +424,10 @@ function limparFiltro() {
   const selAg = $('filtroAgencia');
   const selRm = $('filtroRm');
   if (!isAdmin && minhaAgencia) {
-    selAg.value = minhaAgencia;
+    if (selAg) { selAg.value = minhaAgencia; selAg.disabled = true; }
   } else if (selAg) {
     selAg.value = "";
+    selAg.disabled = false;
   }
   if (selRm) selRm.value = "";
   carregarEmpresas();
