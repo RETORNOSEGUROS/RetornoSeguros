@@ -1,4 +1,4 @@
-/* === Agenda de Visitas (RBAC + legado) === */
+/* === Agenda de Visitas (RBAC + legado, sem índices) === */
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
@@ -48,10 +48,11 @@ function toDate(v){
   const d = new Date(v);
   return isNaN(+d) ? null : d;
 }
-function getVisitaDate(docData){
-  return toDate(docData.dataHoraTs || docData.dataHoraStr || docData.dataHora || docData.datahora);
+function getVisitaDate(d){
+  return toDate(d.dataHoraTs || d.dataHoraStr || d.dataHora || d.datahora);
 }
 function roleNorm(p){ return String(p||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[-_]+/g," ").trim(); }
+function chunk(arr, size){ const r=[]; for(let i=0;i<arr.length;i+=size) r.push(arr.slice(i,i+size)); return r; }
 
 /* ---- Boot ---- */
 auth.onAuthStateChanged(async (user) => {
@@ -65,11 +66,11 @@ auth.onAuthStateChanged(async (user) => {
   isAdmin      = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
   await carregarEmpresasPorPerfil();  // popula select empresa
-  await carregarRMsFiltro();          // popula filtro RM (admin/chefe: ok; fallback p/ chefe)
+  await carregarRMsFiltro();          // popula filtro RM
   await listarTodas();                // carrega lista
 });
 
-/* ---- Empresas por escopo ---- */
+/* ---- Empresas por escopo (sem orderBy) ---- */
 async function carregarEmpresasPorPerfil(){
   empresaRMMap.clear();
   if (empresaSelect) empresaSelect.innerHTML = `<option value="">Selecione...</option>`;
@@ -79,21 +80,16 @@ async function carregarEmpresasPorPerfil(){
 
   try {
     if (isAdmin) {
-      buckets.push(colEmp.orderBy("nome").get());
+      buckets.push(colEmp.get()); // admin pode ordenar depois em memória
     } else if (["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual)) {
-      if (minhaAgencia) {
-        try { buckets.push(colEmp.where("agenciaId","==",minhaAgencia).orderBy("nome").get()); }
-        catch { buckets.push(colEmp.where("agenciaId","==",minhaAgencia).get()); }
-      }
+      if (minhaAgencia) buckets.push(colEmp.where("agenciaId","==",minhaAgencia).get());
     } else { // RM
       try { buckets.push(colEmp.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
       try { buckets.push(colEmp.where("rmId","==",usuarioAtual.uid).get()); } catch(e){}
       try { buckets.push(colEmp.where("usuarioId","==",usuarioAtual.uid).get()); } catch(e){}
       try { buckets.push(colEmp.where("gerenteId","==",usuarioAtual.uid).get()); } catch(e){}
     }
-  } catch(e) {
-    console.warn("Falha ao consultar empresas:", e);
-  }
+  } catch(e) { /* segue */ }
 
   const seen = new Set();
   for (const p of buckets) {
@@ -113,15 +109,16 @@ async function carregarEmpresasPorPerfil(){
     });
   }
 
-  // Render select
-  const arr = [...empresaRMMap.entries()].map(([id,o])=>({id,...o})).sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"));
+  // Ordena em memória e renderiza
+  const arr = [...empresaRMMap.entries()].map(([id,o])=>({id,...o}))
+    .sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"));
   arr.forEach(emp=>{
     const opt = document.createElement("option");
     opt.value = emp.id;
     opt.textContent = emp.nome;
-    opt.dataset.rmUid = emp.rmUid || "";
-    opt.dataset.rmNome = emp.rmNome || "";
-    opt.dataset.agenciaId = emp.agenciaId || "";
+    opt.dataset.rmUid    = emp.rmUid || "";
+    opt.dataset.rmNome   = emp.rmNome || "";
+    opt.dataset.agenciaId= emp.agenciaId || "";
     empresaSelect?.appendChild(opt);
   });
 }
@@ -132,7 +129,7 @@ empresaSelect?.addEventListener("change", ()=>{
   if (rmInfo) rmInfo.textContent = nome ? `(RM: ${nome})` : "";
 });
 
-/* ---- Filtro de RMs ---- */
+/* ---- Filtro de RMs (sem orderBy na query) ---- */
 async function carregarRMsFiltro(){
   if (!filtroRm) return;
   // RM não precisa filtrar por RM (já é dele)
@@ -143,26 +140,27 @@ async function carregarRMsFiltro(){
 
   filtroRm.innerHTML = `<option value="">Todos os RMs</option>`;
 
-  // Tenta via usuarios_banco (admin pode; chefe não tem permissão nas Rules)
+  // Admin: pode ler usuarios_banco, mas sem orderBy direto.
   let viaUsuarios = false;
   if (isAdmin) {
     try {
       let q = db.collection("usuarios_banco").where("perfil","==","rm");
       if (minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
-      const snap = await q.orderBy("nome").get().catch(()=>q.get());
-      snap.forEach(doc=>{
-        const u = doc.data() || {};
-        const opt = document.createElement("option");
-        opt.value = doc.id;
-        opt.textContent = u.nome || doc.id;
-        filtroRm.appendChild(opt);
-      });
+      const snap = await q.get();
+      const arr = [];
+      snap.forEach(doc=>{ const u=doc.data()||{}; arr.push({id:doc.id, nome:u.nome||doc.id}); });
+      arr.sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"))
+        .forEach(({id,nome})=>{
+          const opt = document.createElement("option");
+          opt.value = id; opt.textContent = nome;
+          filtroRm.appendChild(opt);
+        });
       viaUsuarios = true;
     } catch(e){ /* cai para fallback */ }
   }
 
   if (!viaUsuarios) {
-    // Fallback: únicos RM das empresas no escopo
+    // Chefe/assistente: usa as empresas do escopo para descobrir RMs (sem tocar usuarios_banco)
     const m = new Map();
     empresaRMMap.forEach(({rmUid, rmNome})=>{
       if (rmUid && !m.has(rmUid)) m.set(rmUid, rmNome || rmUid);
@@ -176,7 +174,7 @@ async function carregarRMsFiltro(){
   }
 }
 
-/* ---- Salvar visita ---- */
+/* ---- Salvar visita (grava agenciaId) ---- */
 async function salvar(){
   const empresaId = empresaSelect?.value;
   if (!empresaId) return alert("Selecione a empresa.");
@@ -187,7 +185,6 @@ async function salvar(){
   const rmUid   = meta.rmUid || null;
   const rmNome  = meta.rmNome || "";
 
-  // RM só na própria agência
   if (!isAdmin && perfilAtual === "rm" && agenciaId && minhaAgencia && agenciaId !== minhaAgencia) {
     return alert("Você só pode agendar visitas da sua agência.");
   }
@@ -198,7 +195,7 @@ async function salvar(){
   const payload = {
     empresaId,
     empresaNome: meta.nome || empresaSelect.selectedOptions[0]?.textContent || "",
-    agenciaId: agenciaId || "",            // <-- importante: grava agência
+    agenciaId: agenciaId || "",
     rmUid: rmUid || null,
     rm: rmNome || "",
     tipo: (tipoVisita?.value || "").toString(),
@@ -216,7 +213,7 @@ async function salvar(){
   alert("Visita agendada!");
 }
 
-/* ---- Helpers de busca por agência (fallback legado) ---- */
+/* ---- Helpers: empresas da agência (para fallback legado) ---- */
 async function getEmpresaIdsDaMinhaAgencia(){
   if (!minhaAgencia) return [];
   const ids = [];
@@ -224,7 +221,6 @@ async function getEmpresaIdsDaMinhaAgencia(){
     const snap = await db.collection("empresas").where("agenciaId","==",minhaAgencia).select().get();
     snap.forEach(d=>ids.push(d.id));
   } catch(e) {
-    // sem índice: busca sem where
     const snap = await db.collection("empresas").get();
     snap.forEach(d=>{
       const x = d.data()||{};
@@ -233,9 +229,8 @@ async function getEmpresaIdsDaMinhaAgencia(){
   }
   return ids;
 }
-function chunk(arr, size){ const r=[]; for(let i=0;i<arr.length;i+=size) r.push(arr.slice(i,i+size)); return r; }
 
-/* ---- Listagem (com fallback p/ legado) ---- */
+/* ---- Listagem (sem orderBy na query; ordena em memória) ---- */
 async function listarTodas(){
   if (lista) lista.innerHTML = "";
   if (vazio) vazio.style.display = "none";
@@ -252,38 +247,33 @@ async function listarTodas(){
 
   try {
     if (isAdmin) {
-      const s = await col.orderBy("criadoEm","desc").limit(1000).get().catch(()=>col.limit(1000).get());
+      const s = await col.get(); // sem orderBy para evitar índice
       docs = s.docs;
     } else if (["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-      // 1) Caminho preferencial: agenciaId gravado no doc
+      // Preferência: docs já com agenciaId
       let prefer = [];
-      try {
-        const s1 = await col.where("agenciaId","==",minhaAgencia).limit(1000).get();
-        prefer = s1.docs || [];
-      } catch(e){ prefer = []; }
+      try { prefer = (await col.where("agenciaId","==",minhaAgencia).get()).docs || []; } catch(e){}
 
-      // 2) Fallback legado: empresaId pertencente à agência
+      // Fallback: visitas antigas sem agenciaId, via empresaId in [...]
       let legacy = [];
       try {
         const empIds = await getEmpresaIdsDaMinhaAgencia();
-        if (empIds.length){
-          for (const pack of chunk(empIds, 10)) {
-            const s2 = await col.where("empresaId","in", pack).limit(1000).get();
-            legacy = legacy.concat(s2.docs || []);
-          }
+        for (let i=0;i<empIds.length;i+=10) {
+          const pack = empIds.slice(i,i+10);
+          const s2 = await col.where("empresaId","in", pack).get();
+          legacy = legacy.concat(s2.docs || []);
         }
-      } catch(e){ /* ignora */ }
+      } catch(e){}
 
-      // merge (sem duplicar)
       const map = new Map();
       prefer.forEach(d=>map.set(d.id,d));
       legacy.forEach(d=>map.set(d.id,d));
       docs = [...map.values()];
     } else {
-      // RM: por rmUid e, como fallback, criadoPorUid
+      // RM: rmUid ou criadoPorUid
       const buckets = [];
-      try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).limit(1000).get()); } catch(e){}
-      try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).limit(1000).get()); } catch(e){}
+      try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
+      try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(e){}
       const map = new Map();
       buckets.forEach(s=>s && s.docs.forEach(d=>map.set(d.id,d)));
       docs = [...map.values()];
@@ -292,7 +282,7 @@ async function listarTodas(){
     console.error("Erro na consulta de visitas:", e);
   }
 
-  // Filtra por formulário (em memória)
+  // Filtros (memória)
   docs.forEach(doc=>{
     const v = doc.data() || {};
     const dt = getVisitaDate(v);
@@ -304,7 +294,8 @@ async function listarTodas(){
     rows.push({ id: doc.id, v, dt });
   });
 
-  rows.sort((a,b)=> (a.dt - b.dt));
+  // Ordena por data
+  rows.sort((a,b)=> a.dt - b.dt);
 
   if (!rows.length){
     if (vazio) vazio.style.display = "block";
