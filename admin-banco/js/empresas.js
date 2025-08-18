@@ -274,5 +274,3 @@ async function carregarEmpresas() {
     erroUI("Erro ao carregar empresas. Verifique as permissões e tente novamente.");
   }
 }
-
-
