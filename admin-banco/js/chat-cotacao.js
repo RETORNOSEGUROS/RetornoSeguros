@@ -1,3 +1,4 @@
+// ===== Firebase init =====
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
@@ -13,9 +14,9 @@ let isAdmin = false;
 let cotacaoId = null;
 let cotacaoRef = null;
 let cotacaoData = null;
-let configStatus = null; 
+let configStatus = null;
 
-// ====== STATUS FIXOS SOLICITADOS ======
+// ====== STATUS FIXOS ======
 const STATUS_FIXOS = [
   "Negócio Emitido",
   "Pendente Agência",
@@ -49,6 +50,51 @@ const FALLBACK_MOTIVOS_SEGURADORA = [
   "Documentação insuficiente"
 ];
 
+// --- helpers DOM / datas / moeda ---
+function $(id){ return document.getElementById(id); }
+function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
+function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
+function formatarMoeda(input){
+  let v=(input.value||'').replace(/\D/g,'');
+  if(!v){ input.value='R$ 0,00'; return; }
+  v=(parseInt(v,10)/100).toFixed(2).replace('.',',');
+  v=v.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  input.value='R$ '+v;
+}
+function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
+
+// --- dados do usuário logado ---
+async function obterNome(uid, fallback) {
+  try {
+    const snap = await db.collection("usuarios_banco").doc(uid).get();
+    return snap.exists ? (snap.data().nome || snap.data().email || fallback) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// --- checagem de permissão para gerente-chefe/assistente (com fallback por empresa) ---
+async function gerentePodeVerCotacao(dataCotacao, minhaAgencia) {
+  // 1) Se a cotação já tem agenciaId, compara direto
+  if (dataCotacao?.agenciaId) {
+    return dataCotacao.agenciaId === minhaAgencia;
+  }
+
+  // 2) Sem agenciaId (legado): tenta via empresa vinculada
+  const empresaId = dataCotacao?.empresaId;
+  if (!empresaId) return true; // sem nada para verificar — não bloqueia
+
+  try {
+    const emp = await db.collection("empresas").doc(empresaId).get();
+    if (!emp.exists) return true; // sem empresa, não bloqueia
+    const ag = emp.data()?.agenciaId || "";
+    if (!ag) return true;         // empresa sem agência — não bloqueia
+    return ag === minhaAgencia;   // compara
+  } catch {
+    return true;                  // em erro de leitura, não bloqueia
+  }
+}
+
 // ==== Boot ====
 auth.onAuthStateChanged(async user => {
   try {
@@ -72,18 +118,27 @@ auth.onAuthStateChanged(async user => {
     if (!doc.exists) return alert("Cotação não encontrada.");
     cotacaoData = doc.data();
 
-    // Valida permissão visual
+    // Validação de permissão
     if (!isAdmin) {
-      if (["gerente-chefe", "gerente chefe", "assistente"].includes(perfilAtual)) {
-        if (minhaAgencia && cotacaoData.agenciaId && cotacaoData.agenciaId !== minhaAgencia) {
+      const role = (pdata.perfil || "").toLowerCase().replace(/[-_]+/g," ");
+      if (["gerente chefe","gerente-chefe","assistente"].includes(role)) {
+        const ok = await gerentePodeVerCotacao(cotacaoData, minhaAgencia);
+        if (!ok) {
           alert("Sem permissão para acessar esta cotação.");
-          return window.location.href = "cotacoes.html";
+          return (window.location.href = "cotacoes.html");
         }
-      } else { // RM
-        const dono = [cotacaoData.rmId, cotacaoData.rmUid, cotacaoData.usuarioId, cotacaoData.gerenteId, cotacaoData.criadoPorUid];
+      } else {
+        // RM precisa ser dono (qualquer um dos campos de posse)
+        const dono = [
+          cotacaoData.rmId,
+          cotacaoData.rmUid,
+          cotacaoData.usuarioId,
+          cotacaoData.gerenteId,
+          cotacaoData.criadoPorUid
+        ].filter(Boolean);
         if (!dono.includes(usuarioAtual.uid)) {
           alert("Sem permissão para acessar esta cotação.");
-          return window.location.href = "cotacoes.html";
+          return (window.location.href = "cotacoes.html");
         }
       }
     }
@@ -98,15 +153,6 @@ auth.onAuthStateChanged(async user => {
     alert("Erro ao carregar a cotação.");
   }
 });
-
-async function obterNome(uid, fallback) {
-  try {
-    const snap = await db.collection("usuarios_banco").doc(uid).get();
-    return snap.exists ? (snap.data().nome || snap.data().email || fallback) : fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 /* Cabeçalho */
 function preencherCabecalho() {
@@ -130,7 +176,7 @@ function preencherCabecalho() {
   }
 }
 
-function prepararEdicaoValorParaAdmin(email) {
+function prepararEdicaoValorParaAdmin() {
   const span = $("valorDesejadoTexto");
   const input = $("valorDesejadoInput");
   const btn = $("btnSalvarValor");
@@ -172,7 +218,7 @@ function exibirHistorico() {
 
   const items = cotacaoData.interacoes || [];
   if (!items.length) {
-    div.innerHTML = "<p class='muted'>Nenhuma interação registrada.</p>";
+    div.innerHTML = "<p class='muted'>Nenhuma interação registrado.</p>";
     return;
   }
   items
@@ -304,7 +350,7 @@ function atualizarStatus() {
     dataHora: new Date(),
     tipo: "mudanca_status"
   };
-  const update = { 
+  const update = {
     status: novo,
     interacoes: firebase.firestore.FieldValue.arrayUnion(interacao),
     agenciaId: cotacaoData.agenciaId || minhaAgencia || ""
@@ -315,18 +361,6 @@ function atualizarStatus() {
     .catch(err => { console.error(err); alert("Erro ao atualizar status."); });
 }
 
-/* Utils */
-function $(id){ return document.getElementById(id); }
-function setText(id, txt){ const el=$(id); if(el) el.textContent = txt ?? ""; }
-function toDate(ts){ return ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null); }
-function formatarMoeda(input){
-  let v=(input.value||'').replace(/\D/g,'');
-  if(!v){ input.value='R$ 0,00'; return; }
-  v=(parseInt(v,10)/100).toFixed(2).replace('.',',');
-  v=v.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
-  input.value='R$ '+v;
-}
-function desformatarMoeda(str){ if(!str) return 0; return parseFloat(str.replace(/[^\d]/g,'')/100); }
-
+// Exports
 window.enviarMensagem = enviarMensagem;
 window.atualizarStatus = atualizarStatus;
