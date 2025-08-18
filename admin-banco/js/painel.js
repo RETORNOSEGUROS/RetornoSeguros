@@ -6,7 +6,11 @@ const db   = firebase.firestore();
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 
 // ===== Utils
-const normalizarPerfil = (p)=>String(p||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+const normalizarPerfil = (p) => String(p || "")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove acentos
+  .toLowerCase()
+  .replace(/[-_]+/g, " ")                            // << adiciona isto
+  .trim();
 const toDate  = (x)=> x?.toDate ? x.toDate() : (x ? new Date(x) : null);
 const fmtData = (d)=> d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtHora = (d)=> d ? d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}) : "";
@@ -185,3 +189,4 @@ async function blocoMinhasCotacoes(){
     ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)}</div></li>`;
   });
 }
+
