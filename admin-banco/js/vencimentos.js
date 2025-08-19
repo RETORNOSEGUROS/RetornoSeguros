@@ -9,6 +9,13 @@ let perfilAtual  = "";
 let minhaAgencia = "";
 let isAdmin      = false;
 
+// normaliza variações de "gerente chefe"
+function isGC(perfil = perfilAtual) {
+  if (!perfil) return false;
+  const p = String(perfil).toLowerCase().trim();
+  return p === "gerente-chefe" || p === "gerente chefe" || p === "gerente_chefe";
+}
+
 async function getPerfilAtual() {
   const u = auth.currentUser;
   if (!u) return { perfil:"", agenciaId:"", isAdmin:false };
@@ -39,7 +46,7 @@ const btnLimpar  = document.getElementById("btnLimpar");
 
 /* ================= Caches ================= */
 const cacheEmpresas = {};
-const cacheUsuarios = {}; // usamos só com try/catch
+const cacheUsuarios = {}; // usado com try/catch
 
 /* Empresas da minha agência (pra filtrar legado) */
 let empresasDaMinhaAgencia = new Set();
@@ -138,8 +145,8 @@ async function listarVisitasRBAC(){
     catch { return (await col.get()).docs; }
   }
 
-  // Gerente‑chefe / Assistente
-  if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+  // Gerente‑chefe
+  if (isGC() && minhaAgencia) {
     const map = new Map();
 
     // 1) docs já com agenciaId
@@ -190,18 +197,18 @@ async function listarNegociosEmitidosRBAC(){
 
   if (isAdmin) return (await base.get()).docs;
 
-  // RM: somente próprios
-  if (!["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
-    const buckets = [];
-    try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch(_){}
-    try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch(_){}
-    try { buckets.push(await base.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(_){}
-    const map = new Map(); buckets.forEach(s=> s?.docs.forEach(d=> map.set(d.id,d)));
-    return Array.from(map.values());
+  // Gerente‑chefe: lê o que a regra permitir e depois a gente garante agência pelo doc/empresa
+  if (isGC() && minhaAgencia) {
+    return (await base.get()).docs;
   }
 
-  // Gerente‑chefe/Assistente: lê emitidos e filtra por agência (agenciaId do doc ou da empresa)
-  return (await base.get()).docs;
+  // RM: somente próprios
+  const buckets = [];
+  try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch(_){}
+  try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch(_){}
+  try { buckets.push(await base.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(_){}
+  const map = new Map(); buckets.forEach(s=> s?.docs.forEach(d=> map.set(d.id,d)));
+  return Array.from(map.values());
 }
 
 /* ================= Montagem do dataset ================= */
@@ -217,13 +224,13 @@ async function carregarDados(){
     const empresaId = v.empresaId;
     const emp = await getEmpresaInfo(empresaId);
 
-    // segurança extra para GC/assistente
-    if (!isAdmin && ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+    // segurança extra para GC
+    if (!isAdmin && isGC() && minhaAgencia) {
       const ag = v.agenciaId || emp.agenciaId || "-";
-      if (ag !== minhaAgencia) continue;
+      if (`${ag}` !== `${minhaAgencia}`) continue; // normaliza string/number
     }
     // segurança extra para RM
-    if (!isAdmin && !["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
+    if (!isAdmin && !isGC()) {
       const donos = [v.usuarioId, v.rmUid, v.rmId, v.gerenteId, v.criadoPorUid].filter(Boolean);
       if (!donos.includes(usuarioAtual.uid)) continue;
     }
@@ -254,9 +261,9 @@ async function carregarDados(){
     const emp = await getEmpresaInfo(c.empresaId);
 
     // GC/assistente: filtra por agência (doc ou empresa)
-    if (!isAdmin && ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+    if (!isAdmin && isGC() && minhaAgencia) {
       const ag = c.agencia || c.agenciaId || emp.agenciaId || "-";
-      if (ag !== minhaAgencia) continue;
+      if (`${ag}` !== `${minhaAgencia}`) continue;
     }
 
     const fim = parseFimVigencia(
@@ -274,7 +281,10 @@ async function carregarDados(){
       rmNome: rmNome || "-",
       ramo: (c.ramo || "-").toString(),
       fim,
-      premio: parseCurrency(c.premioLiquido ?? c.premio_liquido ?? c.valorNegocio ?? c.premio ?? c.valorDesejado ?? c.valor_desejado ?? c.valorAnualDesejado ?? c.valor_anual_desejado),
+      premio: parseCurrency(
+        c.premioLiquido ?? c.premio_liquido ?? c.valorNegocio ?? c.premio ??
+        c.valorDesejado ?? c.valor_desejado ?? c.valorAnualDesejado ?? c.valor_anual_desejado
+      ),
       seguradora: c.seguradora || "Bradesco Seguros",
       observacoes: c.observacoes || "-"
     });
@@ -381,7 +391,7 @@ auth.onAuthStateChanged(async (user)=>{
   minhaAgencia = ctx.agenciaId;
   isAdmin      = ctx.isAdmin;
 
-  if (!isAdmin && ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+  if (!isAdmin && isGC() && minhaAgencia) {
     await carregarEmpresasDaMinhaAgencia();
   }
 
