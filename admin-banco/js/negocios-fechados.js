@@ -14,7 +14,6 @@ let isAdmin      = false;
 let linhas = [];              // linhas normalizadas p/ render
 let agenciasMap = {};         // {agenciaId: "Nome — Banco / Cidade - UF"}
 let ramosSet    = new Set();
-let meusRmsSet  = new Set();  // UIDs dos RMs do gerente-chefe
 
 const $ = (id) => document.getElementById(id);
 
@@ -63,10 +62,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await carregarAgencias();
-      if (["gerente chefe","assistente"].includes(perfilAtual)) {
-        await carregarMeusRms(); // para filtrar por equipe
-      }
-      await carregarNegociosFechados();  // resolve agência e aplica filtro de gerente-chefe em memória
+      await carregarNegociosFechados();  // <- resolve agência e aplica filtro de gerente chefe em memória
       montarFiltros();
       aplicarFiltros();
     } catch (e) {
@@ -117,21 +113,6 @@ async function carregarAgencias() {
   });
 }
 
-// ===== RMs do gerente-chefe =====
-async function carregarMeusRms(){
-  meusRmsSet = new Set();
-  const uid = usuarioAtual.uid;
-  try {
-    const q = await db.collection("usuarios_banco")
-      .where("gerenteChefeId","==",uid)
-      .where("ativo","==",true)
-      .get();
-    q.forEach(doc => meusRmsSet.add(doc.id));
-  } catch (e) {
-    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos):", e);
-  }
-}
-
 // ===== Escopo =====
 async function listarNegociosFechadosPorPerfil() {
   const base = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
@@ -141,7 +122,7 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // Gerente chefe: BUSCA TODOS emitidos (sem where por agência). Depois filtramos em memória.
+  // 🔑 Gerente chefe: BUSCA TODOS emitidos (sem where por agência). Depois filtramos em memória.
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
@@ -215,21 +196,13 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // agenciaId efetivo do documento
+    // resolve agência: doc.agenciaId -> rmUid -> (se ainda vazio e for gerente-chefe, mantém vazio para filtrar depois)
     let agenciaId = d.agenciaId || "";
     if (!agenciaId){
       const uid = d.rmUid || d.rmUID || d.rmId || "";
       if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
     }
-
-    // label de exibição (fallback textual quando não temos id)
-    let agenciaLabel = "-";
-    if (agenciaId) {
-      agenciaLabel = agenciasMap[agenciaId] || agenciaId;
-    } else {
-      const txt = d.agencia || d.agenciaNome || d.nomeAgencia || "";
-      if (txt) agenciaLabel = String(txt);
-    }
+    const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
 
     ramosSet.add(d.ramo || "-");
 
@@ -238,8 +211,6 @@ async function carregarNegociosFechados(){
       empresaNome: d.empresaNome || "-",
       ramo: d.ramo || "-",
       rmNome: d.rmNome || "-",
-      rmUid: d.rmUid || d.rmUID || d.rmId || "",
-      gerenteId: d.gerenteId || "",
       agenciaId,
       agenciaLabel,
       premioNum,
@@ -248,14 +219,9 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // 🔒 Gerente chefe: escopo por equipe/agência
-  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
-    const meuUid = usuarioAtual.uid;
-    normalizados = normalizados.filter(l =>
-      (l.agenciaId && l.agenciaId === minhaAgencia) ||
-      (l.rmUid && meusRmsSet.has(l.rmUid)) ||
-      (l.gerenteId && l.gerenteId === meuUid)
-    );
+  // 🔒 Gerente chefe: filtra em memória para a própria agência (depois de resolver por rmUid)
+  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia){
+    normalizados = normalizados.filter(l => l.agenciaId === minhaAgencia);
   }
 
   linhas = normalizados;
@@ -274,21 +240,21 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; demais: manter “Todas”
+  // Agência — admin: todas; demais: manter “Todas” (o filtro por agência é ignorado fora do admin)
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
     if (isAdmin){
       const labels = Object.values(agenciasMap).sort((a,b)=>a.localeCompare(b,'pt-BR'));
       labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
-      // docs sem agenciaId continuam visíveis; só não filtram por agência
       if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
+      // mostra só a agência do usuário como opção extra (cosmético), mas mantemos em "Todas"
       if (minhaAgencia) {
         const label = agenciasMap[minhaAgencia] || minhaAgencia;
         selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
       }
-      selAg.value = ""; // mantém "Todas"
+      selAg.value = ""; // garante “Todas”
     }
   }
 
@@ -314,7 +280,7 @@ function aplicarFiltros(){
     if (ini && (!l.inicioIso || l.inicioIso < ini)) return false;
     if (fim && (!l.inicioIso || l.inicioIso > fim)) return false;
     if (rm   && l.rmNome !== rm) return false;
-    if (ag   && l.agenciaLabel !== ag) return false; // atenção: filtra pelo label exibido
+    if (ag   && l.agenciaLabel !== ag) return false;
     if (ramo && l.ramo !== ramo) return false;
     if (emp  && !normalize(l.empresaNome).includes(emp)) return false;
     return true;
