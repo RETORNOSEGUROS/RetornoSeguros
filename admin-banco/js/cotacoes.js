@@ -17,12 +17,13 @@ let ramosSet    = new Set();
 
 const $ = (id) => document.getElementById(id);
 
-// ===== Helpers (iguais ao cotacoes.js) =====
+// ===== Helpers (idênticos ao cotacoes.js) =====
 const normalize = (s) =>
   (s || "")
     .toString()
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .toLowerCase().trim();
+
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
@@ -52,18 +53,20 @@ window.addEventListener("DOMContentLoaded", () => {
     minhaAgencia = ctx.agenciaId;
     isAdmin      = ctx.isAdmin;
 
-    // Assistente não tem acesso (mantive igual às versões anteriores)
+    // Botão Voltar ao painel
+    adicionarBotaoVoltar();
+
+    // Assistente não tem acesso
     if (perfilAtual === "assistente") {
-      const tbody = $("listaNegociosFechados");
-      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="muted">Seu perfil não possui acesso a Negócios Fechados.</td></tr>`;
+      renderVazio("Seu perfil não possui acesso a Negócios Fechados.");
       return;
     }
 
     try {
-      await carregarAgencias();    // rótulos p/ coluna/filtro
-      await carregarEmitidos();    // busca “Negócio Emitido” com mesma regra das cotações
-      montarFiltros();             // popula selects
-      aplicarFiltros();            // render inicial
+      await carregarAgencias();        // rótulos p/ coluna/filtro
+      await carregarNegociosFechados(); // busca “Negócio Emitido” com mesma regra das cotações
+      montarFiltros();                 // popula selects
+      aplicarFiltros();                // render inicial
     } catch (e) {
       console.error(e);
       renderVazio("Sem permissão ou erro ao carregar os dados.");
@@ -71,13 +74,13 @@ window.addEventListener("DOMContentLoaded", () => {
 
     $("btnAplicar")?.addEventListener("click", aplicarFiltros);
     $("btnLimpar")?.addEventListener("click", ()=>{
-      ["fDataIni","fDataFim","fRm","fAgencia","fRamo","fEmpresa"].forEach(id=>{ const el=$(id); if (el) el.value=""; });
+      ["fDataIni","fDataFim","fRm","fAgencia","fRamo","fEmpresa"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
       aplicarFiltros();
     });
   });
 });
 
-// ===== Perfil + agência (igual ao cotacoes.js) =====
+// ===== Perfil + agência (mesma base do cotacoes.js) =====
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -114,7 +117,7 @@ async function carregarAgencias() {
 }
 
 // ===== MESMA regra de escopo do cotacoes.js (por agenciaId) =====
-async function listarEmitidosPorPerfil() {
+async function listarNegociosFechadosPorPerfil() {
   const col = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
 
   if (isAdmin) {
@@ -146,23 +149,24 @@ async function listarEmitidosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-async function carregarEmitidos(){
+async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
-  const docs = await listarEmitidosPorPerfil();
+  const docs = await listarNegociosFechadosPorPerfil();
 
   // Normaliza em "linhas" para render/filtro
   linhas = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
     const fimIso    = toISODate(d.fimVigencia);
-    const premio    = (
-      typeof d.premioLiquido === "number" ? d.premioLiquido :
-      typeof d.valorNegocio  === "number" ? d.valorNegocio  :
-      typeof d.valorDesejado === "number" ? d.valorDesejado :
-      typeof d.valorProposta === "number" ? d.valorProposta :
-      Number(String(d.premioLiquido||d.valorNegocio||d.valorDesejado||d.valorProposta||0).toString().replace(/[^\d,.-]/g,"").replace(/\.(?=\d{3}(?:\D|$))/g,"").replace(",","."))
-    ) || 0;
+
+    // número robusto (aceita string pt-BR)
+    const premioNum = (() => {
+      const raw = d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? 0;
+      if (typeof raw === "number") return raw;
+      const n = String(raw).replace(/[^\d,.-]/g,"").replace(/\.(?=\d{3}(?:\D|$))/g,"").replace(",",".");
+      const f = parseFloat(n); return isNaN(f) ? 0 : f;
+    })();
 
     const agenciaId = d.agenciaId || "";
     const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
@@ -176,7 +180,7 @@ async function carregarEmitidos(){
       rmNome: d.rmNome || "-",
       agenciaId,
       agenciaLabel,
-      premioNum: premio,
+      premioNum,
       inicioIso,
       fimIso
     };
@@ -274,4 +278,25 @@ function atualizarResumo(rows){
   const soma = rows.reduce((acc,cur)=> acc + (Number(cur.premioNum)||0), 0);
   if (info) info.textContent = `${rows.length} negócio(s)`;
   if (span) span.textContent = `Total prêmio: ${moneyBR(soma)}`;
+}
+
+// ===== Botão Voltar =====
+function adicionarBotaoVoltar(){
+  // tenta inserir ao lado do título principal
+  const h1 = document.querySelector("h1, .page-title, .titulo-pagina");
+  const container = h1?.parentElement || document.querySelector(".toolbar, .topbar, .header-actions") || document.body;
+
+  const btn = document.createElement("a");
+  btn.href = "painel.html";
+  btn.textContent = "Voltar";
+  btn.className = "btn btn-secondary"; // usa suas classes; se não tiver, aplica estilo básico
+  btn.style.marginLeft = "12px";
+  btn.style.display = "inline-block";
+  btn.style.padding = "8px 14px";
+  btn.style.borderRadius = "8px";
+  btn.style.textDecoration = "none";
+
+  // se existir um wrapper de ações próximo ao título, adiciona lá
+  if (h1) h1.insertAdjacentElement("afterend", btn);
+  else container.prepend(btn);
 }
