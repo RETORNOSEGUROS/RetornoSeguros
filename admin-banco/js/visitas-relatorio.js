@@ -6,7 +6,7 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // --- DOM (mantendo os IDs do seu HTML) ---
-const tbody = document.getElementById("tbodyRelatorio");
+const tbody      = document.getElementById("tbodyRelatorio");
 const kpiVisitas = document.getElementById("kpiVisitas");
 const kpiPremio  = document.getElementById("kpiPremio");
 
@@ -14,7 +14,7 @@ const kpiPremio  = document.getElementById("kpiPremio");
 const el = id => document.getElementById(id);
 const F = {
   agencia: el("filtroAgencia"),
-  rm:      el("filtroRM"),          // aqui é NOME do RM (como no seu original)
+  rm:      el("filtroRM"),          // NOME do RM
   tipo:    el("filtroTipo"),
   mes:     el("filtroMesVenc"),
   ano:     el("filtroAnoVenc"),
@@ -24,9 +24,9 @@ const F = {
   di:      el("filtroDataInicio"),
   df:      el("filtroDataFim"),
 };
-el("btnAplicar").onclick = () => aplicar();
-el("btnLimpar").onclick  = () => { Object.values(F).forEach(x=>{ if (x) x.value=''; }); aplicar(); };
-el("btnExportar").onclick = () => exportarCSV();
+el("btnAplicar").onclick   = () => aplicar();
+el("btnLimpar").onclick    = () => { Object.values(F).forEach(x=>{ if (x) x.value=''; }); aplicar(); };
+el("btnExportar").onclick  = () => exportarCSV();
 
 // --- Estado / RBAC ---
 let usuarioAtual = null;
@@ -37,9 +37,19 @@ let isAdmin      = false;
 // --- Data holders ---
 let visitasRaw = []; // docs de visitas (já RBAC)
 let linhas = [];     // linhas flatten por ramo
-let empresasDaMinhaAgencia = new Set(); // << NOVO
+let empresasDaMinhaAgencia = new Set(); // cache p/ GC/assistente
 
-/* ===== Utils ===== */
+/* ===== Helpers ===== */
+// normaliza texto: remove acentos, minúsculo
+const normalize = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase().trim();
+
+// troca "_" e "-" por espaço e normaliza
+const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
+
 const fmtBRL = v => (isFinite(v) ? v : 0).toLocaleString("pt-BR", {minimumFractionDigits:2, maximumFractionDigits:2});
 
 // Extrai {dd, mm, yyyy} aceitando "dd/mm", "dd/mm/aaaa" e Timestamp
@@ -58,8 +68,9 @@ function extrairDMY(venc) {
   }
   return {dd:null, mm:null, yyyy:null};
 }
-const dmyToString = ({dd,mm,yyyy}) => (dd && mm) ?
-  `${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}${yyyy?"/"+yyyy:""}` : "-";
+const dmyToString = ({dd,mm,yyyy}) => (dd && mm)
+  ? `${String(dd).padStart(2,'0')}/${String(mm).padStart(2,'0')}${yyyy?"/"+yyyy:""}`
+  : "-";
 
 function toDate(val){
   if (!val) return null;
@@ -77,7 +88,7 @@ async function getPerfilAgencia() {
   if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
   const snap = await db.collection("usuarios_banco").doc(user.uid).get();
   const d = snap.exists ? (snap.data() || {}) : {};
-  const perfil = (d.perfil || d.roleId || "").toLowerCase();
+  const perfil = roleNorm(d.perfil || d.roleId || "");
   const agenciaId = d.agenciaId || "";
   const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
   return { perfil, agenciaId, isAdmin: admin, nome: d.nome || user.email || "" };
@@ -89,21 +100,21 @@ auth.onAuthStateChanged(async user=>{
   usuarioAtual = user;
 
   const ctx = await getPerfilAgencia();
-  perfilAtual  = ctx.perfil;
+  perfilAtual  = ctx.perfil;          // "admin" | "gerente chefe" | "assistente" | "rm"
   minhaAgencia = ctx.agenciaId;
   isAdmin      = ctx.isAdmin;
 
   // Pré-carrega empresas da própria agência (para GC/assistente)
-  if (!isAdmin && ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
     await carregarEmpresasDaMinhaAgencia();
   }
 
-  await carregar();       // carrega e monta linhas (flatten) já com RBAC
-  popularCombos();        // preenche os selects
-  aplicar();              // aplica filtros atuais
+  await carregar();       // coleta + flatten
+  popularCombos();        // combos
+  aplicar();              // render inicial
 });
 
-/* ===== NOVO: cache de empresas da minha agência ===== */
+/* ===== Cache de empresas da minha agência (p/ docs legados sem agenciaId) ===== */
 async function carregarEmpresasDaMinhaAgencia(){
   empresasDaMinhaAgencia = new Set();
   try{
@@ -124,11 +135,11 @@ async function coletarVisitasPorPerfil() {
     catch { return (await col.get()).docs; }
   }
 
-  // Gerente-chefe / Assistente → por agência, incluindo docs legados via empresaId
-  if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+  // Gerente-chefe / Assistente → por agência + complemento por empresaId (legado)
+  if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
     const map = new Map();
 
-    // 1) com agenciaId no doc
+    // 1) docs com agenciaId
     try {
       const snapA = await col.where("agenciaId","==",minhaAgencia).get();
       snapA.forEach(d => map.set(d.id, d));
@@ -136,7 +147,7 @@ async function coletarVisitasPorPerfil() {
       console.warn("Query visitas.agenciaId falhou:", e);
     }
 
-    // 2) complemento: visitas das EMPRESAS da minha agência (docs legados sem agenciaId)
+    // 2) complemento por empresaId ∈ empresas da minha agência (em lotes de 10 por limitação do IN)
     if (empresasDaMinhaAgencia.size) {
       const ids = Array.from(empresasDaMinhaAgencia);
       for (let i=0;i<ids.length;i+=10){
@@ -152,7 +163,7 @@ async function coletarVisitasPorPerfil() {
               const empId = (d.data()||{}).empresaId;
               if (empId && empresasDaMinhaAgencia.has(empId)) map.set(d.id, d);
             });
-            break; // já resolvemos pelo fallback
+            break; // já resolveu via fallback
           }catch(_){}
         }
       }
@@ -174,9 +185,8 @@ async function coletarVisitasPorPerfil() {
   return Array.from(map.values());
 }
 
-/* ===== Carregamento completo (com join de empresa/usuário + flatten por ramo) ===== */
+/* ===== Carregamento (join empresa/usuário + flatten por ramo) ===== */
 async function carregar(){
-  // Busca visitas conforme RBAC
   const snapDocs = await coletarVisitasPorPerfil();
   if (!snapDocs.length) {
     tbody.innerHTML = `<tr><td colspan="12">Nenhuma visita registrada.</td></tr>`;
@@ -187,11 +197,10 @@ async function carregar(){
   const cacheEmpresas = {};
   const cacheUsuarios = {};
 
-  // Enriquecimento (empresa/usuário) mantendo seus campos/nomes
   visitasRaw = await Promise.all(snapDocs.map(async d=>{
     const v = {id: d.id, ...(d.data()||{})};
 
-    // Data de criação (fallback: Date local)
+    // Data de criação (fallback)
     v.dataObj = toDate(v.criadoEm) || new Date();
 
     // Empresa
@@ -203,17 +212,16 @@ async function carregar(){
         }catch(_){ cacheEmpresas[v.empresaId] = {}; }
       }
       const emp = cacheEmpresas[v.empresaId];
-      v._empresa = emp;
+      v._empresa    = emp;
       v.empresaNome = v.empresaNome || emp.nome || "-";
-      // >>> rótulo/ID da agência (suporta legado)
-      v.agencia     = v.agenciaId || emp.agencia || emp.agenciaId || "-";
+      v.agencia     = v.agenciaId || emp.agencia || emp.agenciaId || "-"; // rótulo/id da agência
       v.rmNome      = v.rmNome || emp.rmNome || emp.rm || "-";
     } else {
       // sem empresaId: ainda tenta trazer agenciaId do próprio doc
       v.agencia = v.agenciaId || "-";
     }
 
-    // Usuário (pode falhar p/ GC; não quebra)
+    // Usuário
     if (v.usuarioId && !cacheUsuarios[v.usuarioId]){
       try{
         const u = await db.collection("usuarios_banco").doc(v.usuarioId).get();
@@ -225,7 +233,7 @@ async function carregar(){
     return v;
   }));
 
-  // Flatten por ramo (mesma estrutura do seu original)
+  // Flatten por ramo
   linhas = [];
   for (const v of visitasRaw){
     const ramos = v.ramos || {};
@@ -240,7 +248,7 @@ async function carregar(){
         tipoVisita: v.tipoVisita || "-",
         usuarioNome: v.usuarioNome || "-",
         empresaNome: v.empresaNome || "-",
-        agencia: v.agencia || "-",        // string que você usa no filtro "Agência"
+        agencia: v.agencia || "-",        // string no filtro "Agência"
         rmNome: v.rmNome || "-",
         numeroFuncionarios: (v.numeroFuncionarios ?? "-"),
         ramo: (ramo||"").toUpperCase(),
@@ -254,7 +262,7 @@ async function carregar(){
   }
 }
 
-/* ===== Popular combos (mantendo seus IDs e rótulos) ===== */
+/* ===== Popular combos ===== */
 function popularCombos(){
   const uniq = (arr) => [...new Set(arr.filter(v=>v!==undefined && v!==null && v!=="" && v!=="-"))]
                        .sort((a,b)=> (""+a).localeCompare(""+b,'pt-BR'));
@@ -295,8 +303,8 @@ function aplicar(){
 
   const rows = linhas.filter(l=>{
     if (txtEmp && !l.empresaNome.toLowerCase().includes(txtEmp)) return false;
-    if (selAg  && l.agencia !== selAg) return false;        // Agência é string (como no seu original)
-    if (selRM  && l.rmNome !== selRM) return false;         // RM por NOME (igual seu select)
+    if (selAg  && l.agencia !== selAg) return false;
+    if (selRM  && l.rmNome !== selRM) return false;
     if (selTp  && l.tipoVisita !== selTp) return false;
     if (selMes && l.vencMM !== selMes) return false;
     if (selAno && l.vencYYYY !== selAno) return false;
@@ -317,7 +325,7 @@ function render(rows){
   if (kpiVisitas) kpiVisitas.textContent = visitasUnicas.toString();
   if (kpiPremio)  kpiPremio.textContent  = "R$ " + fmtBRL(totalPremio);
 
-  if (!tbody) return; // segurança
+  if (!tbody) return;
   if (!rows.length){
     tbody.innerHTML = `<tr><td colspan="12">Nenhum registro encontrado para os filtros selecionados.</td></tr>`;
     return;
