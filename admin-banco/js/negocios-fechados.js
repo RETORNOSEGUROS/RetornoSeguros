@@ -63,8 +63,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await carregarAgencias();
-      if (perfilAtual === "gerente chefe") {
-        await carregarMeusRms(); // 🔑 só RM’s do chefe
+      if (["gerente chefe","assistente"].includes(perfilAtual)) {
+        await carregarMeusRms(); // lista de RMs do gerente-chefe
       }
       await carregarNegociosFechados();  // resolve agência e aplica escopo
       montarFiltros();
@@ -120,19 +120,20 @@ async function carregarAgencias() {
 // ====================== Meus RMs (gerente-chefe) ======================
 async function carregarMeusRms(){
   meusRmsSet = new Set();
+  const uid = usuarioAtual.uid;
   try {
     const q = await db.collection("usuarios_banco")
-      .where("gerenteChefeId","==",usuarioAtual.uid)
+      .where("gerenteChefeId","==",uid)
       .where("ativo","==",true)
       .get();
     q.forEach(doc => meusRmsSet.add(doc.id));
   } catch (e) {
-    console.warn("Não consegui ler usuarios_banco p/ meus RMs (ok, seguimos):", e);
+    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos):", e);
   }
 }
 
-// ====================== Escopo/consulta ======================
-async function listarNegociosFechados() {
+// ====================== Escopo (igual cotações) ======================
+async function listarNegociosFechadosPorPerfil() {
   const base = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
 
   if (isAdmin) {
@@ -140,17 +141,19 @@ async function listarNegociosFechados() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  if (perfilAtual === "gerente chefe") {
-    // busca todos e filtra depois pelo conjunto de RMs (sem usar agência)
+  // Gerente chefe: busca TODOS os emitidos (sem where por agência); filtraremos em memória
+  if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // RM padrão
+  // RM: une múltiplos campos de autoria/posse
   const buckets = [];
-  try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await base.where("usuarioId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await base.where("gerenteId","==",usuarioAtual.uid).get()); } catch {}
+  try { buckets.push(await base.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch {}
   const map = new Map();
   buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data())));
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
@@ -172,7 +175,7 @@ async function resolverAgenciasPorRmUid(rmUidSet){
         resultado[doc.id] = u.agenciaId || "";
       });
     }catch(_){
-      // fallback 1 a 1 (quotas/permissão)
+      // sem where-in (quota/permissão): tenta 1 a 1
       for (const id of group){
         try{
           const d = await db.collection("usuarios_banco").doc(id).get();
@@ -192,7 +195,7 @@ async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
-  const docs = await listarNegociosFechados();
+  let docs = await listarNegociosFechadosPorPerfil();
 
   // mapear agenciaId via rmUid quando o doc não tem
   const rmUids = new Set();
@@ -215,17 +218,15 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // resolve agenciaId real do documento (sem forçar minhaAgencia)
+    // resolve agenciaId do documento:
     let agenciaId = d.agenciaId || "";
     if (!agenciaId){
       const uid = d.rmUid || d.rmUID || d.rmId || "";
       if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
     }
 
-    // rótulo para exibir: id -> nome; se não tiver id, usa texto gravado
-    const agenciaLabel = agenciaId
-      ? (agenciasMap[agenciaId] || agenciaId)
-      : (d.agencia || d.agenciaNome || "-");
+    // rótulo para exibir
+    const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : (d.agencia || d.agenciaNome || "-");
 
     ramosSet.add(d.ramo || "-");
 
@@ -244,10 +245,11 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // 🔒 Escopo do gerente-chefe: SOMENTE docs dos seus RMs ou lançados por ele
-  if (!isAdmin && perfilAtual === "gerente chefe") {
+  // Gerente-chefe: filtra em memória (sem "inventar" agenciaId)
+  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
     const meuUid = usuarioAtual.uid;
     normalizados = normalizados.filter(l =>
+      (l.agenciaId && l.agenciaId === minhaAgencia) ||
       (l.rmUid && meusRmsSet.has(l.rmUid)) ||
       (l.gerenteId && l.gerenteId === meuUid)
     );
@@ -269,7 +271,7 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; gerente-chefe: manter “Todas” (ignorado no filtro)
+  // Agência — admin: todas; demais: manter “Todas” (o filtro por agência é ignorado fora do admin)
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
@@ -278,7 +280,11 @@ function montarFiltros(){
       labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
       if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
-      selAg.value = ""; // gerente-chefe não filtra por agência
+      if (minhaAgencia) {
+        const label = agenciasMap[minhaAgencia] || minhaAgencia;
+        selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
+      }
+      selAg.value = ""; // garante “Todas”
     }
   }
 
@@ -304,7 +310,7 @@ function aplicarFiltros(){
     if (ini && (!l.inicioIso || l.inicioIso < ini)) return false;
     if (fim && (!l.inicioIso || l.inicioIso > fim)) return false;
     if (rm   && l.rmNome !== rm) return false;
-    if (ag   && l.agenciaLabel !== ag) return false; // admin filtra por label exibido
+    if (ag   && l.agenciaLabel !== ag) return false;
     if (ramo && l.ramo !== ramo) return false;
     if (emp  && !normalize(l.empresaNome).includes(emp)) return false;
     return true;
