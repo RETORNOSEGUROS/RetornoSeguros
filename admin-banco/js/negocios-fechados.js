@@ -63,10 +63,10 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      await carregarAgencias();        // rótulos p/ coluna/filtro
-      await carregarNegociosFechados(); // busca “Negócio Emitido” com mesma regra das cotações
-      montarFiltros();                 // popula selects
-      aplicarFiltros();                // render inicial
+      await carregarAgencias();          // mapa id->label para dropdown/coluna
+      await carregarNegociosFechados();  // busca “Negócio Emitido” com mesma regra das cotações
+      montarFiltros();                   // popula selects (agora com agencias_banco)
+      aplicarFiltros();                  // render inicial
     } catch (e) {
       console.error(e);
       renderVazio("Sem permissão ou erro ao carregar os dados.");
@@ -101,6 +101,7 @@ async function carregarAgencias() {
   } catch {
     snap = await db.collection("agencias_banco").get();
   }
+  agenciasMap = {};
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
@@ -149,18 +150,58 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
+// ===== Resolve RM->agência (fallback por UID) =====
+async function resolverAgenciasPorRmUid(rmUidSet){
+  if (!rmUidSet.size) return {};
+  const resultado = {};
+  // lê em lotes de até 10 (limite de where in). Se não quiser, pode iterar doc a doc.
+  const uids = Array.from(rmUidSet);
+  const chunks = [];
+  for (let i=0;i<uids.length;i+=10) chunks.push(uids.slice(i,i+10));
+  for (const group of chunks){
+    try{
+      const snap = await db.collection("usuarios_banco")
+        .where(firebase.firestore.FieldPath.documentId(), "in", group)
+        .get();
+      snap.forEach(doc=>{
+        const u = doc.data() || {};
+        resultado[doc.id] = u.agenciaId || "";
+      });
+    }catch(_){
+      // fallback lê individual (caso where in bloqueado por regras)
+      for (const id of group){
+        try{
+          const d = await db.collection("usuarios_banco").doc(id).get();
+          if (d.exists){
+            const u = d.data() || {};
+            resultado[id] = u.agenciaId || "";
+          }
+        }catch(_){}
+      }
+    }
+  }
+  return resultado;
+}
+
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   const docs = await listarNegociosFechadosPorPerfil();
 
+  // coletar rmUids para eventual fallback de agência
+  const rmUids = new Set();
+  docs.forEach(d=>{
+    const uid = d.rmUid || d.rmUID || d.rmId || "";
+    if (uid) rmUids.add(uid);
+  });
+  const agenciaPorUid = await resolverAgenciasPorRmUid(rmUids);
+
   // Normaliza em "linhas" para render/filtro
   linhas = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
     const fimIso    = toISODate(d.fimVigencia);
 
-    // número robusto (aceita string pt-BR)
     const premioNum = (() => {
       const raw = d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? 0;
       if (typeof raw === "number") return raw;
@@ -168,7 +209,12 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    const agenciaId = d.agenciaId || "";
+    // agência: doc.agenciaId -> (fallback) pela agência do RM
+    let agenciaId = d.agenciaId || "";
+    if (!agenciaId){
+      const uid = d.rmUid || d.rmUID || d.rmId || "";
+      if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
+    }
     const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
 
     ramosSet.add(d.ramo || "-");
@@ -199,14 +245,31 @@ function montarFiltros(){
       .forEach(nome => selRm.insertAdjacentHTML("beforeend", `<option value="${nome}">${nome}</option>`));
   }
 
-  // Agência
+  // Agência — agora vem do cadastro (admin: todas; gerente chefe: só a dele)
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
-    const set = new Set();
-    linhas.forEach(l => l.agenciaLabel && set.add(l.agenciaLabel));
-    Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'))
-      .forEach(nome => selAg.insertAdjacentHTML("beforeend", `<option value="${nome}">${nome}</option>`));
+
+    if (isAdmin){
+      // todas do cadastro
+      const pares = Object.entries(agenciasMap)
+        .map(([id, label])=>label)
+        .sort((a,b)=>a.localeCompare(b,'pt-BR'));
+      pares.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
+      // se existir linha sem agência, deixa opção "-" também
+      if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
+    } else if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+      const label = agenciasMap[minhaAgencia] || minhaAgencia;
+      selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
+      // mantém "-" se houver emitidos legados sem agência
+      if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
+    } else {
+      // RM: limita ao que existe nas linhas (compat)
+      const set = new Set();
+      linhas.forEach(l => l.agenciaLabel && set.add(l.agenciaLabel));
+      Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'))
+        .forEach(nome => selAg.insertAdjacentHTML("beforeend", `<option value="${nome}">${nome}</option>`));
+    }
   }
 
   // Ramo
@@ -282,21 +345,15 @@ function atualizarResumo(rows){
 
 // ===== Botão Voltar =====
 function adicionarBotaoVoltar(){
-  // tenta inserir ao lado do título principal
-  const h1 = document.querySelector("h1, .page-title, .titulo-pagina");
-  const container = h1?.parentElement || document.querySelector(".toolbar, .topbar, .header-actions") || document.body;
-
+  const container = document.querySelector(".toolbar, .topbar, .header-actions") || document.querySelector("h1")?.parentElement || document.body;
   const btn = document.createElement("a");
   btn.href = "painel.html";
   btn.textContent = "Voltar";
-  btn.className = "btn btn-secondary"; // usa suas classes; se não tiver, aplica estilo básico
-  btn.style.marginLeft = "12px";
+  btn.className = "btn btn-secondary";
+  btn.style.marginRight = "12px";
   btn.style.display = "inline-block";
   btn.style.padding = "8px 14px";
   btn.style.borderRadius = "8px";
   btn.style.textDecoration = "none";
-
-  // se existir um wrapper de ações próximo ao título, adiciona lá
-  if (h1) h1.insertAdjacentElement("afterend", btn);
-  else container.prepend(btn);
+  container.prepend(btn);
 }
