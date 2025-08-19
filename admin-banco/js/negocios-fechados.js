@@ -8,7 +8,7 @@ const db   = firebase.firestore();
 // Coleções
 const colCotacoes = db.collection("cotacoes-gerentes");
 const colUsuarios = db.collection("usuarios_banco");
-const colAgencias = db.collection("agencias_banco"); // seu nome correto
+const colAgencias = db.collection("agencias_banco");
 
 // Estado / RBAC
 let usuarioAtual=null, perfilAtual="", minhaAgencia="", isAdmin=false;
@@ -17,6 +17,9 @@ let mapaRM = new Map();         // rmUid -> { nome, agenciaId, agenciaNome }
 let mapaAgencia = new Map();    // agenciaId -> nome
 let ramosUnicos = new Set();
 let agenciasUnicas = new Set();
+
+// Índice extra só para gerente-chefe (nome->bool) com RMs da sua agência
+let nomesRMsDaMinhaAgencia = new Set();
 
 // Utils
 const fmtBRL = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
@@ -79,12 +82,29 @@ auth.onAuthStateChanged(async (user)=>{
 /* ===== Coleta: somente o que o perfil pode ver ===== */
 async function carregarNegociosRBAC(){
   docsBrutos = []; mapaRM.clear(); ramosUnicos.clear(); agenciasUnicas.clear();
+  nomesRMsDaMinhaAgencia.clear();
+
+  // 0) Se for gerente-chefe e tiver agência, pré-carrega os RMs da sua agência (para casar por nome quando faltar rmUid)
+  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia){
+    const snap = await colUsuarios
+      .where("agenciaId","==",minhaAgencia)
+      .get();
+    snap.forEach(doc=>{
+      const u = doc.data()||{};
+      const perfil = (u.perfil||u.roleId||"").toLowerCase();
+      const ehRM = perfil === "rm" || perfil.includes("rm");
+      if (ehRM && u.nome){
+        nomesRMsDaMinhaAgencia.add(norm(u.nome));
+      }
+    });
+  }
 
   // 1) Buscar cotações com status "Negócio Emitido"
   let docs = [];
   if (isAdmin) {
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
-  } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
+  } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
+    // pega todas emitidas e filtra depois (por uid OU por nome)
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
   } else {
     // RM: só dele (vários campos por compat)
@@ -115,7 +135,7 @@ async function carregarNegociosRBAC(){
     if (item.rmUid) rmUids.add(item.rmUid);
   });
 
-  // 3) Resolver RM -> agência
+  // 3) Resolver RM -> agência (por uid)
   await Promise.all(Array.from(rmUids).map(async uid=>{
     try{
       const us = await colUsuarios.doc(uid).get();
@@ -139,14 +159,29 @@ async function carregarNegociosRBAC(){
   }));
 
   // 5) Filtro RBAC para gerente-chefe -> somente negócios dos RMs da sua própria agência
-  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-    docsBrutos = docsBrutos.filter(d => {
-      const info = mapaRM.get(d.rmUid) || {};
-      // Só mantém negócios cujo RM pertence à mesma agência do gerente-chefe
-      // Se o RM não tiver agenciaId definido, usa a agência do gerente-chefe como fallback
-      const agenciaRm = info.agenciaId || minhaAgencia;
-      return agenciaRm === minhaAgencia;
-    });
+  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
+    if (minhaAgencia) {
+      docsBrutos = docsBrutos.filter(d => {
+        const info = d.rmUid ? (mapaRM.get(d.rmUid) || {}) : null;
+
+        // Caso 1: tem rmUid -> valida agência pelo uid
+        if (info && info.agenciaId) {
+          return info.agenciaId === minhaAgencia;
+        }
+
+        // Caso 2: não tem rmUid -> tenta casar por nome com o índice de RMs da minha agência
+        if (!d.rmUid && d.rmNome) {
+          return nomesRMsDaMinhaAgencia.has(norm(d.rmNome));
+        }
+
+        // Sem rmUid e sem rmNome confiável -> não exibe
+        return false;
+      });
+    } else {
+      // Gerente-chefe sem agenciaId cadastrado: não restringe por RM para evitar lista vazia
+      // (opcional: você pode trocar para docsBrutos = [] se preferir bloquear)
+      docsBrutos = [];
+    }
   }
 
   // set de nomes de agência para o filtro
