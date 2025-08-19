@@ -53,6 +53,12 @@ async function getPerfilAgencia(){
   return {perfil, agenciaId: d.agenciaId || "", isAdmin: admin, nome: d.nome || u.email};
 }
 
+// Helper para perfis
+function isGerenteChefe(perfil){
+  const p = (perfil||"").toLowerCase();
+  return p === "gerente-chefe" || p === "gerente chefe" || p === "gerente_chefe";
+}
+
 auth.onAuthStateChanged(async (user)=>{
   if (!user) { location.href="login.html"; return; }
   usuarioAtual = user;
@@ -85,10 +91,8 @@ async function carregarNegociosRBAC(){
   nomesRMsDaMinhaAgencia.clear();
 
   // 0) Se for gerente-chefe e tiver agência, pré-carrega os RMs da sua agência (para casar por nome quando faltar rmUid)
-  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia){
-    const snap = await colUsuarios
-      .where("agenciaId","==",minhaAgencia)
-      .get();
+  if (!isAdmin && isGerenteChefe(perfilAtual) && minhaAgencia){
+    const snap = await colUsuarios.where("agenciaId","==",minhaAgencia).get();
     snap.forEach(doc=>{
       const u = doc.data()||{};
       const perfil = (u.perfil||u.roleId||"").toLowerCase();
@@ -103,7 +107,7 @@ async function carregarNegociosRBAC(){
   let docs = [];
   if (isAdmin) {
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
-  } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
+  } else if (isGerenteChefe(perfilAtual)) {
     // pega todas emitidas e filtra depois (por uid OU por nome)
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
   } else {
@@ -159,7 +163,7 @@ async function carregarNegociosRBAC(){
   }));
 
   // 5) Filtro RBAC para gerente-chefe -> somente negócios dos RMs da sua própria agência
-  if (!isAdmin && ["gerente-chefe","gerente chefe"].includes(perfilAtual)) {
+  if (!isAdmin && isGerenteChefe(perfilAtual)) {
     if (minhaAgencia) {
       docsBrutos = docsBrutos.filter(d => {
         const info = d.rmUid ? (mapaRM.get(d.rmUid) || {}) : null;
@@ -178,8 +182,7 @@ async function carregarNegociosRBAC(){
         return false;
       });
     } else {
-      // Gerente-chefe sem agenciaId cadastrado: não restringe por RM para evitar lista vazia
-      // (opcional: você pode trocar para docsBrutos = [] se preferir bloquear)
+      // se o gerente-chefe não tiver agenciaId cadastrado, mantém vazio mesmo
       docsBrutos = [];
     }
   }
