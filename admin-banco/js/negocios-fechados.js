@@ -132,6 +132,7 @@ async function listarNegociosFechadosPorPerfil() {
       return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
     } catch {
       const snap = await col.get();
+      // fallback: documentos legados sem agenciaId entram como se fossem da minha agência
       return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}))
         .filter(c => (c.agenciaId || minhaAgencia) === minhaAgencia);
     }
@@ -150,52 +151,11 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// ===== Resolve RM->agência (fallback por UID) =====
-async function resolverAgenciasPorRmUid(rmUidSet){
-  if (!rmUidSet.size) return {};
-  const resultado = {};
-  // lê em lotes de até 10 (limite de where in). Se não quiser, pode iterar doc a doc.
-  const uids = Array.from(rmUidSet);
-  const chunks = [];
-  for (let i=0;i<uids.length;i+=10) chunks.push(uids.slice(i,i+10));
-  for (const group of chunks){
-    try{
-      const snap = await db.collection("usuarios_banco")
-        .where(firebase.firestore.FieldPath.documentId(), "in", group)
-        .get();
-      snap.forEach(doc=>{
-        const u = doc.data() || {};
-        resultado[doc.id] = u.agenciaId || "";
-      });
-    }catch(_){
-      // fallback lê individual (caso where in bloqueado por regras)
-      for (const id of group){
-        try{
-          const d = await db.collection("usuarios_banco").doc(id).get();
-          if (d.exists){
-            const u = d.data() || {};
-            resultado[id] = u.agenciaId || "";
-          }
-        }catch(_){}
-      }
-    }
-  }
-  return resultado;
-}
-
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   const docs = await listarNegociosFechadosPorPerfil();
-
-  // coletar rmUids para eventual fallback de agência
-  const rmUids = new Set();
-  docs.forEach(d=>{
-    const uid = d.rmUid || d.rmUID || d.rmId || "";
-    if (uid) rmUids.add(uid);
-  });
-  const agenciaPorUid = await resolverAgenciasPorRmUid(rmUids);
 
   // Normaliza em "linhas" para render/filtro
   linhas = docs.map(d => {
@@ -209,12 +169,8 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // agência: doc.agenciaId -> (fallback) pela agência do RM
-    let agenciaId = d.agenciaId || "";
-    if (!agenciaId){
-      const uid = d.rmUid || d.rmUID || d.rmId || "";
-      if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
-    }
+    // 🔑 Ajuste: se for gerente-chefe e o doc não tiver agenciaId, assume minhaAgencia
+    let agenciaId = d.agenciaId || (["gerente chefe","assistente"].includes(perfilAtual) ? minhaAgencia : "");
     const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
 
     ramosSet.add(d.ramo || "-");
@@ -243,33 +199,30 @@ function montarFiltros(){
     linhas.forEach(l => l.rmNome && set.add(l.rmNome));
     Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'))
       .forEach(nome => selRm.insertAdjacentHTML("beforeend", `<option value="${nome}">${nome}</option>`));
+    selRm.value = ""; // garante "Todos"
   }
 
-  // Agência — agora vem do cadastro (admin: todas; gerente chefe: só a dele)
+  // Agência — admin: todas; gerente chefe: dele + "-" se existir
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
 
     if (isAdmin){
-      // todas do cadastro
-      const pares = Object.entries(agenciasMap)
-        .map(([id, label])=>label)
-        .sort((a,b)=>a.localeCompare(b,'pt-BR'));
-      pares.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
-      // se existir linha sem agência, deixa opção "-" também
+      const labels = Object.values(agenciasMap).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+      labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
       if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
       const label = agenciasMap[minhaAgencia] || minhaAgencia;
       selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
-      // mantém "-" se houver emitidos legados sem agência
       if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
-      // RM: limita ao que existe nas linhas (compat)
       const set = new Set();
       linhas.forEach(l => l.agenciaLabel && set.add(l.agenciaLabel));
       Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'))
         .forEach(nome => selAg.insertAdjacentHTML("beforeend", `<option value="${nome}">${nome}</option>`));
     }
+
+    selAg.value = ""; // 🔑 garante que fique em "Todas" e não filtre nada por padrão
   }
 
   // Ramo
@@ -278,6 +231,7 @@ function montarFiltros(){
     selRamo.innerHTML = `<option value="">Todos</option>`;
     Array.from(ramosSet).sort((a,b)=>a.localeCompare(b,'pt-BR'))
       .forEach(r => selRamo.insertAdjacentHTML("beforeend", `<option value="${r}">${r}</option>`));
+    selRamo.value = "";
   }
 }
 
