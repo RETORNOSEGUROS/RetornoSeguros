@@ -1,33 +1,37 @@
-// =============== Firebase init ===============
+// ===== Firebase init =====
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// =============== Estado global ===============
+// ===== Estado global =====
 let usuarioAtual = null;
-let perfilAtual  = "";   // "admin" | "gerente chefe" | "rm" | "assistente"
+let perfilAtual  = "";        // "admin" | "gerente chefe" | "rm" | "assistente"
 let minhaAgencia = "";
 let isAdmin      = false;
 
-let linhas = [];
-let agenciasMap = {};    // {agenciaId: "Nome — Banco / Cidade - UF"}
-let ramosSet = new Set();
-let meusRmsSet = new Set(); // UIDs dos RMs do gerente-chefe
+let linhas = [];              // linhas normalizadas p/ render
+let agenciasMap = {};         // {agenciaId: "Nome — Banco / Cidade - UF"}
+let ramosSet    = new Set();
+let meusRmsSet  = new Set();  // UIDs dos RMs do gerente-chefe
 
 const $ = (id) => document.getElementById(id);
 
-// =============== Helpers ===============
+// ===== Helpers =====
 const normalize = (s) =>
-  (s || "").toString().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase().trim();
+
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
 function toISODate(v){
   try{
     if (!v) return "";
-    if (typeof v === "string"){
+    if (typeof v==="string"){
       if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
       const d=new Date(v); if(!isNaN(+d)) return d.toISOString().slice(0,10);
       return "";
@@ -39,7 +43,7 @@ function toISODate(v){
 }
 const formatBR = iso => (iso && iso.includes("-")) ? iso.split("-").reverse().join("/") : "-";
 
-// =============== Boot ===============
+// ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged(async (user) => {
     if (!user) return (window.location.href = "login.html");
@@ -60,9 +64,9 @@ window.addEventListener("DOMContentLoaded", () => {
     try {
       await carregarAgencias();
       if (["gerente chefe","assistente"].includes(perfilAtual)) {
-        await carregarMeusRms(); // RMs do gerente-chefe (se regras permitirem)
+        await carregarMeusRms(); // para filtrar por equipe
       }
-      await carregarNegociosFechados();
+      await carregarNegociosFechados();  // resolve agência e aplica filtro de gerente-chefe em memória
       montarFiltros();
       aplicarFiltros();
     } catch (e) {
@@ -78,7 +82,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// =============== Perfil + agência ===============
+// ===== Perfil + agência =====
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -90,7 +94,7 @@ async function getPerfilAgencia() {
   return { perfil, agenciaId, isAdmin: admin };
 }
 
-// =============== Agências (id -> label) ===============
+// ===== Agências (id -> label) =====
 async function carregarAgencias() {
   let snap;
   try {
@@ -113,7 +117,7 @@ async function carregarAgencias() {
   });
 }
 
-// =============== Meus RMs (gerente-chefe) ===============
+// ===== RMs do gerente-chefe =====
 async function carregarMeusRms(){
   meusRmsSet = new Set();
   const uid = usuarioAtual.uid;
@@ -124,11 +128,11 @@ async function carregarMeusRms(){
       .get();
     q.forEach(doc => meusRmsSet.add(doc.id));
   } catch (e) {
-    console.warn("Não consegui ler usuarios_banco p/ meus RMs (ok, seguimos):", e);
+    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos):", e);
   }
 }
 
-// =============== Escopo (igual cotações) ===============
+// ===== Escopo =====
 async function listarNegociosFechadosPorPerfil() {
   const base = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
 
@@ -137,13 +141,13 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // Gerente-chefe/assistente: busca todos; filtra depois
+  // Gerente chefe: BUSCA TODOS emitidos (sem where por agência). Depois filtramos em memória.
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // RM
+  // RM: une múltiplos campos
   const buckets = [];
   try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
@@ -155,10 +159,10 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// =============== Tentar resolver agência via rmUid (admin e quando possível) ===============
-async function mapAgenciaPorRmUid(rmUidSet){
+// ===== Resolve agência via rmUid (fallback p/ preencher/filtrar) =====
+async function resolverAgenciasPorRmUid(rmUidSet){
+  if (!rmUidSet.size) return {};
   const resultado = {};
-  if (!rmUidSet.size) return resultado;
   const uids = Array.from(rmUidSet);
   for (let i=0;i<uids.length;i+=10){
     const group = uids.slice(i,i+10);
@@ -170,31 +174,36 @@ async function mapAgenciaPorRmUid(rmUidSet){
         const u = doc.data() || {};
         resultado[doc.id] = u.agenciaId || "";
       });
-    }catch(e){
-      // Sem permissão -> tudo bem, seguimos sem esse mapeamento
-      console.warn("Sem acesso para resolver agencias por rmUid (ok):", e);
+    }catch(_){
+      for (const id of group){
+        try{
+          const d = await db.collection("usuarios_banco").doc(id).get();
+          if (d.exists){
+            const u = d.data() || {};
+            resultado[id] = u.agenciaId || "";
+          }
+        }catch(_){}
+      }
     }
   }
   return resultado;
 }
 
-// =============== Carregar e normalizar ===============
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   let docs = await listarNegociosFechadosPorPerfil();
 
-  // Coleta rmUids para tentar resolver agência quando faltar
+  // coleta rmUids p/ mapear agência
   const rmUids = new Set();
   docs.forEach(d=>{
     const uid = d.rmUid || d.rmUID || d.rmId || "";
     if (uid) rmUids.add(uid);
   });
-  // Admin (ou quando regras permitirem) resolve via usuarios_banco
-  const agenciaPorRm = await mapAgenciaPorRmUid(rmUids);
+  const agenciaPorUid = await resolverAgenciasPorRmUid(rmUids);
 
-  // Normaliza
+  // normaliza + resolve agenciaId
   let normalizados = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
     const fimIso    = toISODate(d.fimVigencia);
@@ -206,19 +215,21 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    const rmUid = d.rmUid || d.rmUID || d.rmId || "";
-    // agenciaId efetivo do doc (para filtro de escopo)
-    let agenciaIdRaw = d.agenciaId || "";
-    if (!agenciaIdRaw && agenciaPorRm[rmUid]) {
-      agenciaIdRaw = agenciaPorRm[rmUid]; // só para corrigir dados legados (admin e quando possível)
+    // agenciaId efetivo do documento
+    let agenciaId = d.agenciaId || "";
+    if (!agenciaId){
+      const uid = d.rmUid || d.rmUID || d.rmId || "";
+      if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
     }
 
-    // Label para exibir (fallback apenas VISUAL p/ gerente-chefe)
-    const agenciaLabel = (agenciaIdRaw
-      ? (agenciasMap[agenciaIdRaw] || agenciaIdRaw)
-      : (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia
-          ? (agenciasMap[minhaAgencia] || minhaAgencia)
-          : "-"));
+    // label de exibição (fallback textual quando não temos id)
+    let agenciaLabel = "-";
+    if (agenciaId) {
+      agenciaLabel = agenciasMap[agenciaId] || agenciaId;
+    } else {
+      const txt = d.agencia || d.agenciaNome || d.nomeAgencia || "";
+      if (txt) agenciaLabel = String(txt);
+    }
 
     ramosSet.add(d.ramo || "-");
 
@@ -227,9 +238,9 @@ async function carregarNegociosFechados(){
       empresaNome: d.empresaNome || "-",
       ramo: d.ramo || "-",
       rmNome: d.rmNome || "-",
-      rmUid,
+      rmUid: d.rmUid || d.rmUID || d.rmId || "",
       gerenteId: d.gerenteId || "",
-      agenciaIdRaw,
+      agenciaId,
       agenciaLabel,
       premioNum,
       inicioIso,
@@ -237,11 +248,11 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // Escopo gerente-chefe
+  // 🔒 Gerente chefe: escopo por equipe/agência
   if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
     const meuUid = usuarioAtual.uid;
     normalizados = normalizados.filter(l =>
-      (l.agenciaIdRaw && l.agenciaIdRaw === minhaAgencia) ||
+      (l.agenciaId && l.agenciaId === minhaAgencia) ||
       (l.rmUid && meusRmsSet.has(l.rmUid)) ||
       (l.gerenteId && l.gerenteId === meuUid)
     );
@@ -250,7 +261,7 @@ async function carregarNegociosFechados(){
   linhas = normalizados;
 }
 
-// =============== Filtros/UI ===============
+// ===== Filtros/UI =====
 function montarFiltros(){
   // RM
   const selRm = $("fRm");
@@ -263,20 +274,21 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; demais: mantém "Todas" (filtro por agência é ignorado fora do admin)
+  // Agência — admin: todas; demais: manter “Todas”
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
     if (isAdmin){
       const labels = Object.values(agenciasMap).sort((a,b)=>a.localeCompare(b,'pt-BR'));
       labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
-      if (linhas.some(l=>!l.agenciaIdRaw)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
+      // docs sem agenciaId continuam visíveis; só não filtram por agência
+      if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
       if (minhaAgencia) {
         const label = agenciasMap[minhaAgencia] || minhaAgencia;
         selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
       }
-      selAg.value = "";
+      selAg.value = ""; // mantém "Todas"
     }
   }
 
@@ -302,7 +314,7 @@ function aplicarFiltros(){
     if (ini && (!l.inicioIso || l.inicioIso < ini)) return false;
     if (fim && (!l.inicioIso || l.inicioIso > fim)) return false;
     if (rm   && l.rmNome !== rm) return false;
-    if (ag   && l.agenciaLabel !== ag) return false;
+    if (ag   && l.agenciaLabel !== ag) return false; // atenção: filtra pelo label exibido
     if (ramo && l.ramo !== ramo) return false;
     if (emp  && !normalize(l.empresaNome).includes(emp)) return false;
     return true;
@@ -312,7 +324,7 @@ function aplicarFiltros(){
   atualizarResumo(filtrados);
 }
 
-// =============== Render ===============
+// ===== Render =====
 function renderVazio(msg){
   const tbody = $("listaNegociosFechados");
   if (!tbody) return;
@@ -348,7 +360,7 @@ function atualizarResumo(rows){
   if (span) span.textContent = `Total prêmio: ${moneyBR(soma)}`;
 }
 
-// =============== Botão Voltar ===============
+// ===== Botão Voltar =====
 function adicionarBotaoVoltar(){
   const container = document.querySelector(".toolbar, .topbar, .header-actions") || document.querySelector("h1")?.parentElement || document.body;
   const btn = document.createElement("a");
