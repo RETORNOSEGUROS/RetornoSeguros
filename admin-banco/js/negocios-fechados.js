@@ -85,7 +85,6 @@ async function carregarNegociosRBAC(){
   if (isAdmin) {
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
   } else if (["gerente-chefe","gerente chefe"].includes(perfilAtual) && minhaAgencia) {
-    // Muitas não têm agenciaId (legado). Pegamos emitidas e filtramos depois pela agência do RM.
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
   } else {
     // RM: só dele (vários campos por compat)
@@ -144,7 +143,9 @@ async function carregarNegociosRBAC(){
     docsBrutos = docsBrutos.filter(d => {
       const info = mapaRM.get(d.rmUid) || {};
       // Só mantém negócios cujo RM pertence à mesma agência do gerente-chefe
-      return info.agenciaId && info.agenciaId === minhaAgencia;
+      // Se o RM não tiver agenciaId definido, usa a agência do gerente-chefe como fallback
+      const agenciaRm = info.agenciaId || minhaAgencia;
+      return agenciaRm === minhaAgencia;
     });
   }
 
