@@ -1,23 +1,23 @@
-// ===== Firebase init =====
+// ====================== Firebase init ======================
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// ===== Estado global =====
+// ====================== Estado global ======================
 let usuarioAtual = null;
-let perfilAtual  = "";        // "admin" | "gerente chefe" | "rm" | "assistente"
+let perfilAtual  = "";      // "admin" | "gerente chefe" | "rm" | "assistente"
 let minhaAgencia = "";
 let isAdmin      = false;
 
-let linhas = [];              // linhas normalizadas p/ render
-let agenciasMap = {};         // {agenciaId: "Nome — Banco / Cidade - UF"}
+let linhas = [];            // linhas normalizadas para render
+let agenciasMap = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
 let ramosSet    = new Set();
 
 const $ = (id) => document.getElementById(id);
 
-// ===== Helpers =====
+// ====================== Helpers ======================
 const normalize = (s) =>
   (s || "")
     .toString()
@@ -25,12 +25,12 @@ const normalize = (s) =>
     .toLowerCase().trim();
 
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
-const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 function toISODate(v){
   try{
     if (!v) return "";
-    if (typeof v==="string"){
+    if (typeof v === "string"){
       if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
       const d=new Date(v); if(!isNaN(+d)) return d.toISOString().slice(0,10);
       return "";
@@ -42,7 +42,7 @@ function toISODate(v){
 }
 const formatBR = iso => (iso && iso.includes("-")) ? iso.split("-").reverse().join("/") : "-";
 
-// ===== Boot =====
+// ====================== Boot ======================
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged(async (user) => {
     if (!user) return (window.location.href = "login.html");
@@ -62,7 +62,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await carregarAgencias();
-      await carregarNegociosFechados();  // <- resolve agência e aplica filtro de gerente chefe em memória
+      await carregarNegociosFechados();  // resolve agência e aplica escopo
       montarFiltros();
       aplicarFiltros();
     } catch (e) {
@@ -78,7 +78,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// ===== Perfil + agência =====
+// ====================== Perfil + agência ======================
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -90,7 +90,7 @@ async function getPerfilAgencia() {
   return { perfil, agenciaId, isAdmin: admin };
 }
 
-// ===== Agências (id -> label) =====
+// ====================== Agências (id -> label) ======================
 async function carregarAgencias() {
   let snap;
   try {
@@ -103,17 +103,19 @@ async function carregarAgencias() {
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
+
     const nome   = (a.nome || "(Sem nome)").toString();
     const banco  = a.banco ? ` — ${a.banco}` : "";
     const cidade = (a.Cidade || a.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
     const uf = (a.estado || a.UF || "").toString().toUpperCase();
     const ufFmt = uf ? ` - ${uf}` : "";
+
     agenciasMap[id] = `${nome}${banco}${cidadeFmt}${ufFmt}`;
   });
 }
 
-// ===== Escopo =====
+// ====================== Escopo (igual cotações) ======================
 async function listarNegociosFechadosPorPerfil() {
   const base = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
 
@@ -122,13 +124,13 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // 🔑 Gerente chefe: BUSCA TODOS emitidos (sem where por agência). Depois filtramos em memória.
+  // Gerente chefe: busca TODOS os emitidos (sem where por agência); filtraremos em memória
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // RM: une múltiplos campos
+  // RM: une múltiplos campos de autoria/posse
   const buckets = [];
   try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
@@ -140,55 +142,19 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// ===== Resolve agência via rmUid (fallback p/ preencher/filtrar) =====
-async function resolverAgenciasPorRmUid(rmUidSet){
-  if (!rmUidSet.size) return {};
-  const resultado = {};
-  const uids = Array.from(rmUidSet);
-  for (let i=0;i<uids.length;i+=10){
-    const group = uids.slice(i,i+10);
-    try{
-      const snap = await db.collection("usuarios_banco")
-        .where(firebase.firestore.FieldPath.documentId(), "in", group)
-        .get();
-      snap.forEach(doc=>{
-        const u = doc.data() || {};
-        resultado[doc.id] = u.agenciaId || "";
-      });
-    }catch(_){
-      for (const id of group){
-        try{
-          const d = await db.collection("usuarios_banco").doc(id).get();
-          if (d.exists){
-            const u = d.data() || {};
-            resultado[id] = u.agenciaId || "";
-          }
-        }catch(_){}
-      }
-    }
-  }
-  return resultado;
-}
-
+// ====================== Carregar e normalizar ======================
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   let docs = await listarNegociosFechadosPorPerfil();
 
-  // coleta rmUids p/ mapear agência
-  const rmUids = new Set();
-  docs.forEach(d=>{
-    const uid = d.rmUid || d.rmUID || d.rmId || "";
-    if (uid) rmUids.add(uid);
-  });
-  const agenciaPorUid = await resolverAgenciasPorRmUid(rmUids);
-
-  // normaliza + resolve agenciaId
+  // Normaliza linhas
   let normalizados = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
     const fimIso    = toISODate(d.fimVigencia);
 
+    // valor robusto (aceita string pt-BR)
     const premioNum = (() => {
       const raw = d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? 0;
       if (typeof raw === "number") return raw;
@@ -196,11 +162,12 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // resolve agência: doc.agenciaId -> rmUid -> (se ainda vazio e for gerente-chefe, mantém vazio para filtrar depois)
+    // ===== Fallback decisivo para gerente-chefe =====
+    // Se o doc não tiver agenciaId e o perfil for gerente-chefe/assistente,
+    // assumimos a agência do usuário (sem depender de usuarios_banco).
     let agenciaId = d.agenciaId || "";
-    if (!agenciaId){
-      const uid = d.rmUid || d.rmUID || d.rmId || "";
-      if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
+    if (!agenciaId && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+      agenciaId = minhaAgencia;
     }
     const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
 
@@ -219,7 +186,7 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // 🔒 Gerente chefe: filtra em memória para a própria agência (depois de resolver por rmUid)
+  // Gerente-chefe: agora sim, filtra em memória para a própria agência
   if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia){
     normalizados = normalizados.filter(l => l.agenciaId === minhaAgencia);
   }
@@ -227,7 +194,7 @@ async function carregarNegociosFechados(){
   linhas = normalizados;
 }
 
-// ===== Filtros/UI =====
+// ====================== Filtros/UI ======================
 function montarFiltros(){
   // RM
   const selRm = $("fRm");
@@ -249,7 +216,6 @@ function montarFiltros(){
       labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
       if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
-      // mostra só a agência do usuário como opção extra (cosmético), mas mantemos em "Todas"
       if (minhaAgencia) {
         const label = agenciasMap[minhaAgencia] || minhaAgencia;
         selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
@@ -290,7 +256,7 @@ function aplicarFiltros(){
   atualizarResumo(filtrados);
 }
 
-// ===== Render =====
+// ====================== Render ======================
 function renderVazio(msg){
   const tbody = $("listaNegociosFechados");
   if (!tbody) return;
@@ -326,7 +292,7 @@ function atualizarResumo(rows){
   if (span) span.textContent = `Total prêmio: ${moneyBR(soma)}`;
 }
 
-// ===== Botão Voltar =====
+// ====================== Botão Voltar ======================
 function adicionarBotaoVoltar(){
   const container = document.querySelector(".toolbar, .topbar, .header-actions") || document.querySelector("h1")?.parentElement || document.body;
   const btn = document.createElement("a");
