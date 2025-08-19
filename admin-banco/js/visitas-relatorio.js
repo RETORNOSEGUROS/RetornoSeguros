@@ -37,6 +37,7 @@ let isAdmin      = false;
 // --- Data holders ---
 let visitasRaw = []; // docs de visitas (já RBAC)
 let linhas = [];     // linhas flatten por ramo
+let empresasDaMinhaAgencia = new Set(); // << NOVO
 
 /* ===== Utils ===== */
 const fmtBRL = v => (isFinite(v) ? v : 0).toLocaleString("pt-BR", {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -92,10 +93,26 @@ auth.onAuthStateChanged(async user=>{
   minhaAgencia = ctx.agenciaId;
   isAdmin      = ctx.isAdmin;
 
+  // Pré-carrega empresas da própria agência (para GC/assistente)
+  if (!isAdmin && ["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
+    await carregarEmpresasDaMinhaAgencia();
+  }
+
   await carregar();       // carrega e monta linhas (flatten) já com RBAC
   popularCombos();        // preenche os selects
   aplicar();              // aplica filtros atuais
 });
+
+/* ===== NOVO: cache de empresas da minha agência ===== */
+async function carregarEmpresasDaMinhaAgencia(){
+  empresasDaMinhaAgencia = new Set();
+  try{
+    const snap = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
+    snap.forEach(doc => empresasDaMinhaAgencia.add(doc.id));
+  }catch(e){
+    console.warn("Falha ao ler empresas da minha agência:", e);
+  }
+}
 
 /* ===== Coleta de VISITAS respeitando RBAC ===== */
 async function coletarVisitasPorPerfil() {
@@ -107,10 +124,41 @@ async function coletarVisitasPorPerfil() {
     catch { return (await col.get()).docs; }
   }
 
-  // Gerente-chefe / Assistente → por agência
+  // Gerente-chefe / Assistente → por agência, incluindo docs legados via empresaId
   if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-    try { return (await col.where("agenciaId","==",minhaAgencia).orderBy("criadoEm","desc").get()).docs; }
-    catch { return (await col.where("agenciaId","==",minhaAgencia).get()).docs; }
+    const map = new Map();
+
+    // 1) com agenciaId no doc
+    try {
+      const snapA = await col.where("agenciaId","==",minhaAgencia).get();
+      snapA.forEach(d => map.set(d.id, d));
+    } catch(e) {
+      console.warn("Query visitas.agenciaId falhou:", e);
+    }
+
+    // 2) complemento: visitas das EMPRESAS da minha agência (docs legados sem agenciaId)
+    if (empresasDaMinhaAgencia.size) {
+      const ids = Array.from(empresasDaMinhaAgencia);
+      for (let i=0;i<ids.length;i+=10){
+        const slice = ids.slice(i,i+10);
+        try{
+          const snapB = await col.where("empresaId","in", slice).get();
+          snapB.forEach(d => map.set(d.id, d));
+        }catch(e2){
+          // fallback (custo maior): busca tudo e filtra em memória pela empresaId
+          try{
+            const snapAll = await col.get();
+            snapAll.forEach(d => {
+              const empId = (d.data()||{}).empresaId;
+              if (empId && empresasDaMinhaAgencia.has(empId)) map.set(d.id, d);
+            });
+            break; // já resolvemos pelo fallback
+          }catch(_){}
+        }
+      }
+    }
+
+    return Array.from(map.values());
   }
 
   // RM → somente próprias (vários campos por compatibilidade)
@@ -141,7 +189,7 @@ async function carregar(){
 
   // Enriquecimento (empresa/usuário) mantendo seus campos/nomes
   visitasRaw = await Promise.all(snapDocs.map(async d=>{
-    const v = {id: d.id, ...d.data()};
+    const v = {id: d.id, ...(d.data()||{})};
 
     // Data de criação (fallback: Date local)
     v.dataObj = toDate(v.criadoEm) || new Date();
@@ -157,20 +205,22 @@ async function carregar(){
       const emp = cacheEmpresas[v.empresaId];
       v._empresa = emp;
       v.empresaNome = v.empresaNome || emp.nome || "-";
-      v.agencia     = v.agenciaId || emp.agencia || emp.agenciaId || "-"; // mantém 'agencia' como no seu render
+      // >>> rótulo/ID da agência (suporta legado)
+      v.agencia     = v.agenciaId || emp.agencia || emp.agenciaId || "-";
       v.rmNome      = v.rmNome || emp.rmNome || emp.rm || "-";
+    } else {
+      // sem empresaId: ainda tenta trazer agenciaId do próprio doc
+      v.agencia = v.agenciaId || "-";
     }
 
-    // Usuário
-    if (v.usuarioId){
-      if (!cacheUsuarios[v.usuarioId]){
-        try{
-          const u = await db.collection("usuarios_banco").doc(v.usuarioId).get();
-          cacheUsuarios[v.usuarioId] = u.exists ? (u.data().nome || u.data().email) : "-";
-        }catch(_){ cacheUsuarios[v.usuarioId] = "-"; }
-      }
-      v.usuarioNome = cacheUsuarios[v.usuarioId];
+    // Usuário (pode falhar p/ GC; não quebra)
+    if (v.usuarioId && !cacheUsuarios[v.usuarioId]){
+      try{
+        const u = await db.collection("usuarios_banco").doc(v.usuarioId).get();
+        cacheUsuarios[v.usuarioId] = u.exists ? (u.data().nome || u.data().email) : "-";
+      }catch(_){ cacheUsuarios[v.usuarioId] = "-"; }
     }
+    v.usuarioNome = v.usuarioNome || cacheUsuarios[v.usuarioId] || "-";
 
     return v;
   }));
