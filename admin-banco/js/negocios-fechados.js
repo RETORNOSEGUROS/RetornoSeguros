@@ -141,7 +141,7 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // Gerente chefe: busca TODOS os emitidos (sem where por agência); filtraremos em memória
+  // Gerente chefe: busca TODOS e filtra depois (evita depender de campos ausentes)
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
@@ -245,14 +245,19 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // Gerente-chefe: filtra em memória (sem "inventar" agenciaId)
-  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
+  // === AJUSTE: escopo do GERENTE-CHEFE ===
+  // Somente negócios dos seus RMs (meusRmsSet) OU do próprio gerente-chefe.
+  if (!isAdmin && perfilAtual === "gerente chefe") {
     const meuUid = usuarioAtual.uid;
     normalizados = normalizados.filter(l =>
-      (l.agenciaId && l.agenciaId === minhaAgencia) ||
       (l.rmUid && meusRmsSet.has(l.rmUid)) ||
       (l.gerenteId && l.gerenteId === meuUid)
     );
+  }
+
+  // (Assistente mantém comportamento anterior, se aplicável)
+  if (!isAdmin && perfilAtual === "assistente") {
+    normalizados = normalizados.filter(l => l.agenciaId && l.agenciaId === minhaAgencia);
   }
 
   linhas = normalizados;
