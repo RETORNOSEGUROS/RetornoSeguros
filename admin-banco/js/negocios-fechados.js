@@ -14,7 +14,7 @@ let isAdmin      = false;
 let linhas = [];            // linhas normalizadas para render
 let agenciasMap = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
 let ramosSet    = new Set();
-let empresasDaMinhaAgencia = new Set(); // << NOVO: ids de empresas visíveis p/ gerente-chefe
+let empresasDaMinhaAgencia = new Set(); // usado no gerente-chefe p/ docs legados
 
 const $ = (id) => document.getElementById(id);
 
@@ -64,7 +64,7 @@ window.addEventListener("DOMContentLoaded", () => {
     try {
       await carregarAgencias();
       if (!isAdmin && perfilAtual === "gerente chefe" && minhaAgencia) {
-        await carregarEmpresasDaMinhaAgencia(); // << NOVO (sem usuarios_banco)
+        await carregarEmpresasDaMinhaAgencia(); // NOVO
       }
       await carregarNegociosFechados();
       montarFiltros();
@@ -117,14 +117,14 @@ async function carregarAgencias() {
   });
 }
 
-// ====================== Empresas da minha agência (p/ GC) ======================
+// ====================== Empresas da minha agência (GC) ======================
 async function carregarEmpresasDaMinhaAgencia(){
   empresasDaMinhaAgencia = new Set();
   try{
     const snap = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
     snap.forEach(doc => empresasDaMinhaAgencia.add(doc.id));
   }catch(e){
-    console.warn("Falha ao ler empresas da minha agência (fallback segue):", e);
+    console.warn("Falha ao ler empresas da minha agência:", e);
   }
 }
 
@@ -138,14 +138,13 @@ async function listarNegociosFechadosPorPerfil() {
   }
 
   if (perfilAtual === "gerente chefe") {
-    // Caminho principal: tenta por agenciaId no servidor
     try {
       const snap = await col.where("agenciaId","==",minhaAgencia).get();
       let arr = snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
-      // Complemento por empresaId (docs antigos sem agenciaId)
+      // Complementa via empresaId (docs antigos sem agenciaId)
       if (empresasDaMinhaAgencia.size) {
-        const snapAll = await col.get();
-        const viaEmpresa = snapAll.docs
+        const all = await col.get();
+        const viaEmpresa = all.docs
           .map(d=>({id:d.id, ...(d.data()||{})}))
           .filter(c => c.empresaId && empresasDaMinhaAgencia.has(c.empresaId));
         const map = new Map(arr.map(x=>[x.id,x]));
@@ -174,12 +173,43 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
+/* ===== NOVO: resolver agenciaId via empresaId p/ docs legados ===== */
+async function resolverAgenciaPorEmpresaIds(empresaIds){
+  const res = {};
+  if (!empresaIds.length) return res;
+
+  // tenta where-in em lotes de 10
+  for (let i=0; i<empresaIds.length; i+=10){
+    const slice = empresaIds.slice(i, i+10);
+    try{
+      const snap = await db.collection("empresas")
+        .where(firebase.firestore.FieldPath.documentId(), "in", slice).get();
+      snap.forEach(doc => { res[doc.id] = (doc.data()||{}).agenciaId || ""; });
+    }catch{
+      // fallback 1 a 1
+      for (const id of slice){
+        try{
+          const d = await db.collection("empresas").doc(id).get();
+          if (d.exists) res[id] = (d.data()||{}).agenciaId || "";
+        }catch(_){}
+      }
+    }
+  }
+  return res;
+}
+
 // ====================== Carregar e normalizar ======================
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   const docs = await listarNegociosFechadosPorPerfil();
+
+  // NOVO: para docs sem agenciaId, tenta deduzir via empresaId
+  const faltantes = Array.from(
+    new Set(docs.filter(d => !d.agenciaId && d.empresaId).map(d => d.empresaId))
+  );
+  const agenciaPorEmpresa = await resolverAgenciaPorEmpresaIds(faltantes);
 
   linhas = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
@@ -192,7 +222,16 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    const agenciaId    = d.agenciaId || "";
+    // ATUALIZADO: resolve agenciaId
+    let agenciaId = d.agenciaId || "";
+    if (!agenciaId && d.empresaId && agenciaPorEmpresa[d.empresaId]) {
+      agenciaId = agenciaPorEmpresa[d.empresaId];
+    }
+    // Se for gerente-chefe e ainda assim faltar, assume a própria (listagem já é limitada)
+    if (!isAdmin && perfilAtual === "gerente chefe" && !agenciaId) {
+      agenciaId = minhaAgencia || "";
+    }
+
     const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId)
                                    : (d.agencia || d.agenciaNome || "-");
 
@@ -225,18 +264,34 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; demais: mostra rótulo da própria
+  // Agência
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
+
     if (isAdmin){
-      const labels = Object.values(agenciasMap).sort((a,b)=>a.localeCompare(b,'pt-BR'));
-      labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
-      if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
-    } else if (minhaAgencia) {
-      const label = agenciasMap[minhaAgencia] || minhaAgencia;
-      selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
-      selAg.value = ""; // mantém "Todas" como label visual
+      // Admin: lista TODAS as agências cadastradas (sem depender das linhas)
+      const labels = Object.entries(agenciasMap)  // [id,label]
+        .sort((a,b)=>a[1].localeCompare(b[1],'pt-BR'));
+      labels.forEach(([id,label]) => {
+        const opt = document.createElement("option");
+        opt.value = label;  // usamos o label como valor para o filtro atual
+        opt.textContent = label;
+        selAg.appendChild(opt);
+      });
+      // Se houver linhas com agência “-”, oferece essa opção também
+      if (linhas.some(l=>!l.agenciaId)) {
+        const opt = document.createElement("option");
+        opt.value = "-"; opt.textContent = "-";
+        selAg.appendChild(opt);
+      }
+    } else {
+      // Gerente-chefe: mostra a própria agência no dropdown
+      if (minhaAgencia) {
+        const label = agenciasMap[minhaAgencia] || minhaAgencia;
+        selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
+      }
+      selAg.value = ""; // mantém "Todas" visualmente
     }
   }
 
@@ -262,7 +317,7 @@ function aplicarFiltros(){
     if (ini && (!l.inicioIso || l.inicioIso < ini)) return false;
     if (fim && (!l.inicioIso || l.inicioIso > fim)) return false;
     if (rm   && l.rmNome !== rm) return false;
-    if (ag   && l.agenciaLabel !== ag) return false;
+    if (ag   && l.agenciaLabel !== ag) return false;  // compara pelo label exibido
     if (ramo && l.ramo !== ramo) return false;
     if (emp  && !normalize(l.empresaNome).includes(emp)) return false;
     return true;
