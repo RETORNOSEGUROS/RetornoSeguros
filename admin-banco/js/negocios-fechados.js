@@ -37,7 +37,7 @@ function toISODate(v){
       return "";
     }
     if (v?.toDate){ const d=v.toDate(); return d.toISOString().slice(0,10); }
-    if (v instanceof Date) return d.toISOString().slice(0,10);
+    if (v instanceof Date) return v.toISOString().slice(0,10);
   }catch(_){}
   return "";
 }
@@ -64,7 +64,7 @@ window.addEventListener("DOMContentLoaded", () => {
     try {
       await carregarAgencias();
       if (["gerente chefe","assistente"].includes(perfilAtual)) {
-        await carregarMeusRms(); // lista de RMs do gerente-chefe
+        await carregarMeusRms(); // tenta montar a lista de RMs do gerente
       }
       await carregarNegociosFechados();  // resolve agência e aplica escopo
       montarFiltros();
@@ -128,7 +128,7 @@ async function carregarMeusRms(){
       .get();
     q.forEach(doc => meusRmsSet.add(doc.id));
   } catch (e) {
-    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos):", e);
+    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos com fallback):", e);
   }
 }
 
@@ -141,7 +141,7 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // Gerente chefe: busca TODOS e filtra depois (evita depender de campos ausentes)
+  // Gerente chefe/assistente: busca tudo e filtra em memória (evita depender de campos ausentes)
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
@@ -245,17 +245,22 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // === AJUSTE: escopo do GERENTE-CHEFE ===
-  // Somente negócios dos seus RMs (meusRmsSet) OU do próprio gerente-chefe.
+  // === Escopo (robusto) do GERENTE‑CHEFE ===
   if (!isAdmin && perfilAtual === "gerente chefe") {
     const meuUid = usuarioAtual.uid;
-    normalizados = normalizados.filter(l =>
-      (l.rmUid && meusRmsSet.has(l.rmUid)) ||
-      (l.gerenteId && l.gerenteId === meuUid)
-    );
+    if (meusRmsSet.size > 0) {
+      // caminho principal: só negócios dos seus RMs OU do próprio gerente
+      normalizados = normalizados.filter(l =>
+        (l.rmUid && meusRmsSet.has(l.rmUid)) ||
+        (l.gerenteId && l.gerenteId === meuUid)
+      );
+    } else {
+      // fallback seguro: filtra por agência (como em cotações)
+      normalizados = normalizados.filter(l => l.agenciaId && l.agenciaId === minhaAgencia);
+    }
   }
 
-  // (Assistente mantém comportamento anterior, se aplicável)
+  // Assistente mantém por agência
   if (!isAdmin && perfilAtual === "assistente") {
     normalizados = normalizados.filter(l => l.agenciaId && l.agenciaId === minhaAgencia);
   }
@@ -276,7 +281,7 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; demais: manter “Todas” (o filtro por agência é ignorado fora do admin)
+  // Agência — admin: todas; demais: mantém “Todas” (controle visual)
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
