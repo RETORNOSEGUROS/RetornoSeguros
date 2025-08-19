@@ -1,31 +1,28 @@
-// ====================== Firebase init ======================
+// =============== Firebase init ===============
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// ====================== Estado global ======================
+// =============== Estado global ===============
 let usuarioAtual = null;
-let perfilAtual  = "";      // "admin" | "gerente chefe" | "rm" | "assistente"
+let perfilAtual  = "";   // "admin" | "gerente chefe" | "rm" | "assistente"
 let minhaAgencia = "";
 let isAdmin      = false;
 
-let linhas = [];            // linhas normalizadas para render
-let agenciasMap = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
-let ramosSet    = new Set();
+let linhas = [];
+let agenciasMap = {};    // {agenciaId: "Nome — Banco / Cidade - UF"}
+let ramosSet = new Set();
+let meusRmsSet = new Set(); // UIDs dos RMs do gerente-chefe
 
 const $ = (id) => document.getElementById(id);
 
-// ====================== Helpers ======================
+// =============== Helpers ===============
 const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .toLowerCase().trim();
-
+  (s || "").toString().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
-const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const moneyBR  = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
 function toISODate(v){
   try{
@@ -42,7 +39,7 @@ function toISODate(v){
 }
 const formatBR = iso => (iso && iso.includes("-")) ? iso.split("-").reverse().join("/") : "-";
 
-// ====================== Boot ======================
+// =============== Boot ===============
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged(async (user) => {
     if (!user) return (window.location.href = "login.html");
@@ -62,7 +59,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await carregarAgencias();
-      await carregarNegociosFechados();  // resolve agência e aplica escopo
+      if (["gerente chefe","assistente"].includes(perfilAtual)) {
+        await carregarMeusRms(); // 🔑 pega a lista de RMs do gerente-chefe
+      }
+      await carregarNegociosFechados();
       montarFiltros();
       aplicarFiltros();
     } catch (e) {
@@ -78,7 +78,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// ====================== Perfil + agência ======================
+// =============== Perfil + agência ===============
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -90,7 +90,7 @@ async function getPerfilAgencia() {
   return { perfil, agenciaId, isAdmin: admin };
 }
 
-// ====================== Agências (id -> label) ======================
+// =============== Agências (id -> label) ===============
 async function carregarAgencias() {
   let snap;
   try {
@@ -103,19 +103,33 @@ async function carregarAgencias() {
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
-
     const nome   = (a.nome || "(Sem nome)").toString();
     const banco  = a.banco ? ` — ${a.banco}` : "";
     const cidade = (a.Cidade || a.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
     const uf = (a.estado || a.UF || "").toString().toUpperCase();
     const ufFmt = uf ? ` - ${uf}` : "";
-
     agenciasMap[id] = `${nome}${banco}${cidadeFmt}${ufFmt}`;
   });
 }
 
-// ====================== Escopo (igual cotações) ======================
+// =============== Meus RMs (gerente-chefe) ===============
+async function carregarMeusRms(){
+  meusRmsSet = new Set();
+  const uid = usuarioAtual.uid;
+  try {
+    // pega RMs ativos vinculados ao gerente-chefe
+    const q = await db.collection("usuarios_banco")
+      .where("gerenteChefeId","==",uid)
+      .where("ativo","==",true)
+      .get();
+    q.forEach(doc => meusRmsSet.add(doc.id));
+  } catch (e) {
+    console.warn("Falha ao carregar RMs do gerente-chefe (seguimos sem eles):", e);
+  }
+}
+
+// =============== Escopo (igual cotações) ===============
 async function listarNegociosFechadosPorPerfil() {
   const base = db.collection("cotacoes-gerentes").where("status","==","Negócio Emitido");
 
@@ -124,13 +138,13 @@ async function listarNegociosFechadosPorPerfil() {
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // Gerente chefe: busca TODOS os emitidos (sem where por agência); filtraremos em memória
+  // Gerente-chefe/assistente: busca TODOS (sem where por agência). Filtramos depois.
   if (["gerente chefe","assistente"].includes(perfilAtual)) {
     const snap = await base.get();
     return snap.docs.map(d=>({id:d.id, ...(d.data()||{})}));
   }
 
-  // RM: une múltiplos campos de autoria/posse
+  // RM: une múltiplos campos
   const buckets = [];
   try { buckets.push(await base.where("rmId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await base.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
@@ -142,19 +156,18 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// ====================== Carregar e normalizar ======================
+// =============== Carregar e normalizar ===============
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   let docs = await listarNegociosFechadosPorPerfil();
 
-  // Normaliza linhas
+  // Normaliza
   let normalizados = docs.map(d => {
     const inicioIso = toISODate(d.inicioVigencia);
     const fimIso    = toISODate(d.fimVigencia);
 
-    // valor robusto (aceita string pt-BR)
     const premioNum = (() => {
       const raw = d.premioLiquido ?? d.valorNegocio ?? d.valorDesejado ?? d.valorProposta ?? 0;
       if (typeof raw === "number") return raw;
@@ -162,14 +175,15 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // ===== Fallback decisivo para gerente-chefe =====
-    // Se o doc não tiver agenciaId e o perfil for gerente-chefe/assistente,
-    // assumimos a agência do usuário (sem depender de usuarios_banco).
-    let agenciaId = d.agenciaId || "";
-    if (!agenciaId && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-      agenciaId = minhaAgencia;
-    }
-    const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
+    const agenciaIdRaw = d.agenciaId || "";              // usado p/ filtro real
+    const rmUid = d.rmUid || d.rmUID || d.rmId || "";    // para checar se é meu RM
+
+    // Label para exibir: se faltar agenciaId, mostra minha agência (somente visual)
+    const agenciaLabel = (agenciaIdRaw
+      ? (agenciasMap[agenciaIdRaw] || agenciaIdRaw)
+      : (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia
+          ? (agenciasMap[minhaAgencia] || minhaAgencia)
+          : "-"));
 
     ramosSet.add(d.ramo || "-");
 
@@ -178,7 +192,9 @@ async function carregarNegociosFechados(){
       empresaNome: d.empresaNome || "-",
       ramo: d.ramo || "-",
       rmNome: d.rmNome || "-",
-      agenciaId,
+      agenciaIdRaw,
+      rmUid,
+      gerenteId: d.gerenteId || "",
       agenciaLabel,
       premioNum,
       inicioIso,
@@ -186,15 +202,23 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // Gerente-chefe: agora sim, filtra em memória para a própria agência
-  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia){
-    normalizados = normalizados.filter(l => l.agenciaId === minhaAgencia);
+  // 🔒 Filtro de escopo para gerente-chefe: mantém somente
+  //  - docs com agenciaId === minhaAgencia
+  //  - OU rmUid pertencendo ao meu conjunto de RMs
+  //  - OU gerenteId === meu UID
+  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
+    const meuUid = usuarioAtual.uid;
+    normalizados = normalizados.filter(l =>
+      (l.agenciaIdRaw && l.agenciaIdRaw === minhaAgencia) ||
+      (l.rmUid && meusRmsSet.has(l.rmUid)) ||
+      (l.gerenteId && l.gerenteId === meuUid)
+    );
   }
 
   linhas = normalizados;
 }
 
-// ====================== Filtros/UI ======================
+// =============== Filtros/UI ===============
 function montarFiltros(){
   // RM
   const selRm = $("fRm");
@@ -207,20 +231,20 @@ function montarFiltros(){
     selRm.value = "";
   }
 
-  // Agência — admin: todas; demais: manter “Todas” (o filtro por agência é ignorado fora do admin)
+  // Agência — admin: todas; demais: mantém "Todas" (filtro por agência é ignorado fora do admin)
   const selAg = $("fAgencia");
   if (selAg){
     selAg.innerHTML = `<option value="">Todas</option>`;
     if (isAdmin){
       const labels = Object.values(agenciasMap).sort((a,b)=>a.localeCompare(b,'pt-BR'));
       labels.forEach(label => selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`));
-      if (linhas.some(l=>!l.agenciaId)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
+      if (linhas.some(l=>!l.agenciaIdRaw)) selAg.insertAdjacentHTML("beforeend", `<option value="-">-</option>`);
     } else {
       if (minhaAgencia) {
         const label = agenciasMap[minhaAgencia] || minhaAgencia;
         selAg.insertAdjacentHTML("beforeend", `<option value="${label}">${label}</option>`);
       }
-      selAg.value = ""; // garante “Todas”
+      selAg.value = "";
     }
   }
 
@@ -256,7 +280,7 @@ function aplicarFiltros(){
   atualizarResumo(filtrados);
 }
 
-// ====================== Render ======================
+// =============== Render ===============
 function renderVazio(msg){
   const tbody = $("listaNegociosFechados");
   if (!tbody) return;
@@ -292,7 +316,7 @@ function atualizarResumo(rows){
   if (span) span.textContent = `Total prêmio: ${moneyBR(soma)}`;
 }
 
-// ====================== Botão Voltar ======================
+// =============== Botão Voltar ===============
 function adicionarBotaoVoltar(){
   const container = document.querySelector(".toolbar, .topbar, .header-actions") || document.querySelector("h1")?.parentElement || document.body;
   const btn = document.createElement("a");
