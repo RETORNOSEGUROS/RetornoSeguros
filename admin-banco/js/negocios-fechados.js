@@ -18,7 +18,7 @@ let mapaAgencia = new Map();    // agenciaId -> nome
 let ramosUnicos = new Set();
 let agenciasUnicas = new Set();
 
-// Índice extra só para gerente-chefe (nome->bool) com RMs da sua agência
+// Índice extra só para gerente-chefe (nome normalizado dos RMs da sua agência)
 let nomesRMsDaMinhaAgencia = new Set();
 
 // Utils
@@ -111,7 +111,7 @@ async function carregarNegociosRBAC(){
     // pega todas emitidas e filtra depois (por uid OU por nome)
     docs = (await colCotacoes.where("status","==","Negócio Emitido").get()).docs;
   } else {
-    // RM: só dele (vários campos por compat)
+    // RM: só dele (compatibilidade com rmUid, rmId, criadoPorUid)
     const buckets = [];
     try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmUid","==",usuarioAtual.uid).get()); } catch(_){}
     try { buckets.push(await colCotacoes.where("status","==","Negócio Emitido").where("rmId","==",usuarioAtual.uid).get()); } catch(_){}
@@ -162,27 +162,21 @@ async function carregarNegociosRBAC(){
     }catch(_){ mapaAgencia.set(id,id); }
   }));
 
-  // 5) Filtro RBAC para gerente-chefe -> somente negócios dos RMs da sua própria agência
+  // 5) Filtro RBAC p/ gerente-chefe -> somente negócios dos RMs da sua própria agência
   if (!isAdmin && isGerenteChefe(perfilAtual)) {
     if (minhaAgencia) {
       docsBrutos = docsBrutos.filter(d => {
-        const info = d.rmUid ? (mapaRM.get(d.rmUid) || {}) : null;
-
-        // Caso 1: tem rmUid -> valida agência pelo uid
-        if (info && info.agenciaId) {
-          return info.agenciaId === minhaAgencia;
+        if (d.rmUid) {
+          const info = mapaRM.get(d.rmUid);
+          return info && info.agenciaId === minhaAgencia;
         }
-
-        // Caso 2: não tem rmUid -> tenta casar por nome com o índice de RMs da minha agência
-        if (!d.rmUid && d.rmNome) {
+        if (d.rmNome) {
           return nomesRMsDaMinhaAgencia.has(norm(d.rmNome));
         }
-
-        // Sem rmUid e sem rmNome confiável -> não exibe
         return false;
       });
     } else {
-      // se o gerente-chefe não tiver agenciaId cadastrado, mantém vazio mesmo
+      // gerente-chefe sem agenciaId cadastrado -> mantém vazio
       docsBrutos = [];
     }
   }
