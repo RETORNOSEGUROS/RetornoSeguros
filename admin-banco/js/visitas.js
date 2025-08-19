@@ -9,12 +9,25 @@ const db   = firebase.firestore();
    Estado/Perfil
    ======================= */
 let usuarioAtual = null;
-let perfilAtual  = "";          // "admin" | "gerente-chefe" | "assistente" | "rm" | ...
+let perfilAtual  = "";          // "admin" | "gerente chefe" | "assistente" | "rm" | ...
 let minhaAgencia = "";
 let isAdmin      = false;
 
 // Mapa auxiliar das empresas carregadas (para obter agenciaId/rm na hora de salvar)
 const empresaMetaMap = new Map(); // empresaId -> { nome, agenciaId, rmUid, rmNome }
+
+/* =======================
+   Helpers de texto/perfil
+   ======================= */
+// normaliza textos (remove acento, minúsculo)
+const normalize = (s) =>
+  (s || "")
+    .toString()
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .toLowerCase().trim();
+
+// troca "_" e "-" por espaço e normaliza
+const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 
 /* =======================
    Helpers de máscara/validação (mantidos)
@@ -64,7 +77,8 @@ async function getPerfilAgencia() {
   if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
   const udoc = await db.collection("usuarios_banco").doc(user.uid).get();
   const d = udoc.exists ? (udoc.data() || {}) : {};
-  const perfil = (d.perfil || d.roleId || "").toLowerCase();
+  // <<< normalização robusta do perfil
+  const perfil = roleNorm(d.perfil || d.roleId || "");
   const agenciaId = d.agenciaId || "";
   const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
   return { perfil, agenciaId, isAdmin: admin, nome: d.nome || user.email || "" };
@@ -92,8 +106,8 @@ async function carregarEmpresas() {
     // Admin: todas
     try { buckets.push(await colEmp.orderBy("nome").get()); }
     catch { buckets.push(await colEmp.get()); }
-  } else if (["gerente-chefe","gerente chefe","assistente"].includes(perfilAtual)) {
-    // Chefe/Assistente: por agência
+  } else if (["gerente chefe","assistente"].includes(perfilAtual)) {
+    // Chefe/Assistente: por agência (perfil já normalizado)
     if (minhaAgencia) {
       try { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).orderBy("nome").get()); }
       catch { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).get()); }
@@ -373,7 +387,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     usuarioAtual = user;
 
     const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;
+    perfilAtual  = ctx.perfil;        // já normalizado (ex.: "gerente chefe")
     minhaAgencia = ctx.agenciaId;
     isAdmin      = ctx.isAdmin;
 
