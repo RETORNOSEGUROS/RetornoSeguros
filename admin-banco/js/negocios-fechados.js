@@ -14,6 +14,7 @@ let isAdmin      = false;
 let linhas = [];            // linhas normalizadas para render
 let agenciasMap = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
 let ramosSet    = new Set();
+let meusRmsSet  = new Set(); // UIDs dos RMs do gerente-chefe
 
 const $ = (id) => document.getElementById(id);
 
@@ -36,7 +37,7 @@ function toISODate(v){
       return "";
     }
     if (v?.toDate){ const d=v.toDate(); return d.toISOString().slice(0,10); }
-    if (v instanceof Date) return v.toISOString().slice(0,10);
+    if (v instanceof Date) return d.toISOString().slice(0,10);
   }catch(_){}
   return "";
 }
@@ -62,6 +63,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await carregarAgencias();
+      if (["gerente chefe","assistente"].includes(perfilAtual)) {
+        await carregarMeusRms(); // lista de RMs do gerente-chefe
+      }
       await carregarNegociosFechados();  // resolve agência e aplica escopo
       montarFiltros();
       aplicarFiltros();
@@ -103,16 +107,29 @@ async function carregarAgencias() {
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
-
     const nome   = (a.nome || "(Sem nome)").toString();
     const banco  = a.banco ? ` — ${a.banco}` : "";
     const cidade = (a.Cidade || a.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
     const uf = (a.estado || a.UF || "").toString().toUpperCase();
     const ufFmt = uf ? ` - ${uf}` : "";
-
     agenciasMap[id] = `${nome}${banco}${cidadeFmt}${ufFmt}`;
   });
+}
+
+// ====================== Meus RMs (gerente-chefe) ======================
+async function carregarMeusRms(){
+  meusRmsSet = new Set();
+  const uid = usuarioAtual.uid;
+  try {
+    const q = await db.collection("usuarios_banco")
+      .where("gerenteChefeId","==",uid)
+      .where("ativo","==",true)
+      .get();
+    q.forEach(doc => meusRmsSet.add(doc.id));
+  } catch (e) {
+    console.warn("Não consegui ler usuarios_banco p/ meus RMs (seguimos):", e);
+  }
 }
 
 // ====================== Escopo (igual cotações) ======================
@@ -142,12 +159,51 @@ async function listarNegociosFechadosPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
+// ====================== Resolve agência via rmUid ======================
+async function resolverAgenciasPorRmUid(rmUidSet){
+  if (!rmUidSet.size) return {};
+  const resultado = {};
+  const uids = Array.from(rmUidSet);
+  for (let i=0;i<uids.length;i+=10){
+    const group = uids.slice(i,i+10);
+    try{
+      const snap = await db.collection("usuarios_banco")
+        .where(firebase.firestore.FieldPath.documentId(), "in", group)
+        .get();
+      snap.forEach(doc=>{
+        const u = doc.data() || {};
+        resultado[doc.id] = u.agenciaId || "";
+      });
+    }catch(_){
+      // sem where-in (quota/permissão): tenta 1 a 1
+      for (const id of group){
+        try{
+          const d = await db.collection("usuarios_banco").doc(id).get();
+          if (d.exists){
+            const u = d.data() || {};
+            resultado[id] = u.agenciaId || "";
+          }
+        }catch(_){}
+      }
+    }
+  }
+  return resultado;
+}
+
 // ====================== Carregar e normalizar ======================
 async function carregarNegociosFechados(){
   const tbody = $("listaNegociosFechados");
   if (tbody) tbody.innerHTML = `<tr><td colspan="7">Carregando...</td></tr>`;
 
   let docs = await listarNegociosFechadosPorPerfil();
+
+  // mapear agenciaId via rmUid quando o doc não tem
+  const rmUids = new Set();
+  docs.forEach(d=>{
+    const uid = d.rmUid || d.rmUID || d.rmId || "";
+    if (uid) rmUids.add(uid);
+  });
+  const agenciaPorUid = await resolverAgenciasPorRmUid(rmUids);
 
   // Normaliza linhas
   let normalizados = docs.map(d => {
@@ -162,14 +218,15 @@ async function carregarNegociosFechados(){
       const f = parseFloat(n); return isNaN(f) ? 0 : f;
     })();
 
-    // ===== Fallback decisivo para gerente-chefe =====
-    // Se o doc não tiver agenciaId e o perfil for gerente-chefe/assistente,
-    // assumimos a agência do usuário (sem depender de usuarios_banco).
+    // resolve agenciaId do documento:
     let agenciaId = d.agenciaId || "";
-    if (!agenciaId && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-      agenciaId = minhaAgencia;
+    if (!agenciaId){
+      const uid = d.rmUid || d.rmUID || d.rmId || "";
+      if (uid && agenciaPorUid[uid]) agenciaId = agenciaPorUid[uid];
     }
-    const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : "-";
+
+    // rótulo para exibir
+    const agenciaLabel = agenciaId ? (agenciasMap[agenciaId] || agenciaId) : (d.agencia || d.agenciaNome || "-");
 
     ramosSet.add(d.ramo || "-");
 
@@ -178,6 +235,8 @@ async function carregarNegociosFechados(){
       empresaNome: d.empresaNome || "-",
       ramo: d.ramo || "-",
       rmNome: d.rmNome || "-",
+      rmUid: d.rmUid || d.rmUID || d.rmId || "",
+      gerenteId: d.gerenteId || "",
       agenciaId,
       agenciaLabel,
       premioNum,
@@ -186,9 +245,14 @@ async function carregarNegociosFechados(){
     };
   });
 
-  // Gerente-chefe: agora sim, filtra em memória para a própria agência
-  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia){
-    normalizados = normalizados.filter(l => l.agenciaId === minhaAgencia);
+  // Gerente-chefe: filtra em memória (sem "inventar" agenciaId)
+  if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual)) {
+    const meuUid = usuarioAtual.uid;
+    normalizados = normalizados.filter(l =>
+      (l.agenciaId && l.agenciaId === minhaAgencia) ||
+      (l.rmUid && meusRmsSet.has(l.rmUid)) ||
+      (l.gerenteId && l.gerenteId === meuUid)
+    );
   }
 
   linhas = normalizados;
