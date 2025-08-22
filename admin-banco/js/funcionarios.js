@@ -26,16 +26,16 @@ auth.onAuthStateChanged(async (user)=>{
 
   const d = prof.data();
   CTX.perfil    = normalizarPerfil(d.perfil || "");
-  CTX.agenciaId = d.agenciaId || null;
+  CTX.agenciaId = d.agenciaId || d.agenciaid || null; // <- aceita legado no perfil também
   CTX.nome      = d.nome || user.email;
 
   document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
   montarMenuLateral(CTX.perfil);
-  carregarEmpresas();
   wireUi();
+  carregarEmpresas();
 });
 
-// ====== Menu igual ao do painel (inclui esta página)
+// ====== Menu igual ao do painel (com Funcionários)
 function montarMenuLateral(perfilBruto){
   const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
   const perfil=normalizarPerfil(perfilBruto);
@@ -46,20 +46,17 @@ function montarMenuLateral(perfilBruto){
     "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
     "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
     "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html",
-    // NOVO:
     "Funcionários":"funcionarios.html"
   };
   const CAT_ADMIN_ONLY={
-    "Carteira":"carteira.html",
-    "Comissões":"comissoes.html",
-    "Resgates (Admin)":"resgates-admin.html"
+    "Carteira":"carteira.html","Comissões":"comissoes.html","Resgates (Admin)":"resgates-admin.html"
   };
 
   const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
   const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
-  const RM=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const GER=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const AST=["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
+  const RM = ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const GER= ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const AST= ["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
 
   let hrefs=[];
   switch(perfil){
@@ -72,16 +69,14 @@ function montarMenuLateral(perfilBruto){
     case "assistentes": hrefs=AST; break;
     default: hrefs=[];
   }
-
   hrefs.forEach(h=>{
     const a=document.createElement("a"); a.href=h;
-    const emoji = "🔹";
-    a.innerHTML=`${emoji} ${LABEL[h]||h}`;
+    a.innerHTML=`🔹 ${LABEL[h]||h}`;
     menu.appendChild(a);
   });
 }
 
-// ====== UI handlers (busca, recarregar, modal)
+// ====== UI handlers
 function wireUi(){
   document.getElementById("atualizarLista")?.addEventListener("click", carregarEmpresas);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
@@ -93,9 +88,9 @@ function wireUi(){
   document.getElementById("salvarEditar")?.addEventListener("click", salvarEdicao);
 }
 
-// ====== Data cache para nomes
+// ====== Data cache
 const cacheUsuarios = new Map(); // uid -> nome
-const cacheAgencias = new Map(); // agenciaId -> nome
+const cacheAgencias = new Map(); // agenciaId/agenciaid -> nome
 
 async function getUsuarioNome(uid, fallback){
   if(fallback) return fallback;
@@ -105,18 +100,20 @@ async function getUsuarioNome(uid, fallback){
   const nome = snap.exists ? (snap.data().nome || snap.data().apelido || snap.data().email || "-") : "-";
   cacheUsuarios.set(uid, nome); return nome;
 }
-
 async function getAgenciaNome(id, fallback){
   if(fallback) return fallback;
   if(!id) return "-";
   if(cacheAgencias.has(id)) return cacheAgencias.get(id);
-  const snap = await db.collection("agencias").doc(id).get();
-  const nome = snap.exists ? (snap.data().nome || snap.data().descricao || "-") : "-";
+  // sua coleção de agências no rules é "agencias_banco" — mas muitos projetos têm "agencias"
+  // tentamos primeiro "agencias", depois "agencias_banco"
+  let snap = await db.collection("agencias").doc(id).get().catch(()=>null);
+  if(!snap || !snap.exists) snap = await db.collection("agencias_banco").doc(id).get().catch(()=>null);
+  const nome = (snap && snap.exists) ? (snap.data().nome || snap.data().descricao || "-") : "-";
   cacheAgencias.set(id, nome); return nome;
 }
 
 // ====== Carregar e renderizar empresas
-let LISTA = []; // [{id, nome, rmUid, rmNome, agenciaId, agenciaNome, funcionariosQtd, funcionariosAtualizadoEm, ...}]
+let LISTA = [];
 
 async function carregarEmpresas(){
   const status = document.getElementById("statusLista");
@@ -125,21 +122,39 @@ async function carregarEmpresas(){
   tbody.innerHTML = "";
 
   try{
-    let q = db.collection("empresas");
-    // Escopo por perfil (seguindo lógica parecida com painel)
-    if(CTX.perfil==="rm"){
-      q = q.where("rmUid","==",CTX.uid);
-    } else if(CTX.perfil==="assistente" || CTX.perfil==="gerente chefe"){
-      q = q.where("agenciaId","==",CTX.agenciaId);
+    const col = db.collection("empresas");
+
+    // monta a query respeitando perfil; só aplica filtro se houver valor
+    let q = col;
+    // RM → filtra por rmUid (se existir) senão deixamos sem filtro (rules já restringem por owner)
+    if (CTX.perfil === "rm" && CTX.uid) {
+      q = q.where("rmUid", "==", CTX.uid);
     }
-    const snap = await q.limit(1000).get();
-    if(snap.empty){
-      status.textContent = "Nenhuma empresa encontrada.";
+    // Assistente / Gerente-chefe → tentar ambos os nomes de campo: agenciaId e agenciaid
+    else if ((CTX.perfil === "assistente" || CTX.perfil === "gerente chefe") && CTX.agenciaId){
+      try {
+        q = q.where("agenciaId", "==", CTX.agenciaId);
+      } catch(e) {
+        // no v8 não lança aqui, mas deixo a estrutura caso precise
+      }
+    }
+
+    let snap = await q.limit(1000).get();
+
+    // se vier vazio E for assistente/gerente-chefe com agenciaId conhecido,
+    // tenta novamente usando o campo legado "agenciaid"
+    if (snap.empty && (CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
+      snap = await col.where("agenciaid", "==", CTX.agenciaId).limit(1000).get();
+    }
+
+    console.log("[funcionarios] docs:", snap.size, "perfil:", CTX.perfil, "agenciaId:", CTX.agenciaId, "uid:", CTX.uid);
+
+    if (snap.empty){
+      status.textContent = "Nenhuma empresa encontrada para seu perfil/regra.";
       LISTA = [];
       return;
     }
 
-    // Monta lista crua
     const arr = [];
     snap.forEach(doc=>{
       const d = doc.data() || {};
@@ -148,28 +163,29 @@ async function carregarEmpresas(){
         nome: d.nome || d.razaoSocial || d.fantasia || "Empresa",
         rmUid: d.rmUid || d.rm || null,
         rmNome: d.rmNome || null,
-        agenciaId: d.agenciaId || null,
+        agenciaId: d.agenciaId || d.agenciaid || null, // aceita os dois
         agenciaNome: d.agenciaNome || null,
-        funcionariosQtd: typeof d.funcionariosQtd === "number" ? d.funcionariosQtd : (d.funcionarios || null),
+        funcionariosQtd: (typeof d.funcionariosQtd === "number") ? d.funcionariosQtd : (d.funcionarios ?? null),
         funcionariosAtualizadoEm: d.funcionariosAtualizadoEm || d.atualizadoFuncionariosEm || null
       });
     });
 
-    // Enriquecer com nomes (lookup assíncrono)
-    for(const it of arr){
+    // enriquecer nomes
+    for (const it of arr){
       it.rmNome = await getUsuarioNome(it.rmUid, it.rmNome);
       it.agenciaNome = await getAgenciaNome(it.agenciaId, it.agenciaNome);
     }
 
-    // Ordena alfabeticamente por empresa
     arr.sort((a,b)=> String(a.nome).localeCompare(String(b.nome), 'pt', {sensitivity:'base'}));
-
     LISTA = arr;
     status.textContent = `${LISTA.length} empresa(s) carregada(s).`;
     renderTabela(LISTA);
-  }catch(err){
-    console.error(err);
-    status.textContent = "Erro ao carregar empresas.";
+
+  } catch (err) {
+    console.error("[funcionarios] erro carregarEmpresas:", err);
+    const code = err?.code || "erro-desconhecido";
+    const msg  = err?.message || String(err);
+    document.getElementById("statusLista").textContent = `Erro ao carregar empresas. (${code}) ${msg}`;
   }
 }
 
@@ -203,7 +219,6 @@ function renderTabela(lista){
     tbody.appendChild(tr);
   }
 
-  // liga os botões Editar
   tbody.querySelectorAll("[data-edit]").forEach(btn=>{
     btn.addEventListener("click", ()=> abrirEditar(btn.getAttribute("data-edit")));
   });
@@ -221,7 +236,7 @@ function filtrarTabela(e){
   renderTabela(filtrada);
 }
 
-// ====== Permissão de edição (UI) — a regra final deve estar no Firestore Rules
+// ====== Permissão de edição (UI) — valide nas RULES de verdade
 function podeEditarEmpresa(it){
   if(CTX.perfil === "admin") return true;
   if(CTX.perfil === "rm" && it.rmUid === CTX.uid) return true;
@@ -230,7 +245,7 @@ function podeEditarEmpresa(it){
 }
 
 // ====== Modal Editar
-let alvoAtual = null; // objeto LISTA do alvo
+let alvoAtual = null;
 
 function abrirEditar(empId){
   alvoAtual = LISTA.find(x=>x.id === empId) || null;
@@ -256,7 +271,6 @@ async function salvarEdicao(){
   const numero = parseInt(raw, 10);
   if(!Number.isFinite(numero) || numero < 0){ erroEl.textContent = "Número inválido."; return; }
 
-  // segurança na UI (as Regras do Firestore devem validar isso de verdade)
   if(!podeEditarEmpresa(alvoAtual)){ erroEl.textContent = "Sem permissão para editar."; return; }
 
   try{
@@ -267,9 +281,8 @@ async function salvarEdicao(){
     });
 
     infoEl.textContent = "Atualizado com sucesso!";
-    // reflete na LISTA e re-renderiza
     alvoAtual.funcionariosQtd = numero;
-    alvoAtual.funcionariosAtualizadoEm = new Date(); // visual
+    alvoAtual.funcionariosAtualizadoEm = new Date();
     renderTabela(LISTA);
     setTimeout(()=> document.getElementById("modalEditar").style.display = "none", 800);
   }catch(err){
@@ -281,9 +294,9 @@ async function salvarEdicao(){
 // ====== Helpers
 function escapeHtml(s){
   return String(s==null?"":s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
 }
