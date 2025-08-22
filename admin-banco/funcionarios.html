@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Funcionários — Retorno Seguros</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Firebase v8 (igual ao restante do projeto) -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+  <script src="js/firebase-config.js"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#f5f7fa; --text:#1b2430; --muted:#506480;
+      --card:#ffffff; --card-2:#f0f4fa;
+      --brand:#0a3c7d; --brand-2:#2563eb;
+      --border:#dde4ef; --radius:16px; --shadow:0 6px 20px rgba(21, 39, 78, .08);
+    }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}
+
+    header{
+      position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:12px;
+      padding:16px 20px;border-bottom:1px solid var(--border);
+      background:linear-gradient(180deg, var(--brand) 0%, #174a9a 70%, #ffffff 100%);
+      color:#fff;
+    }
+    .brand{font-weight:700;letter-spacing:.2px;color:#fff}
+    .brand .dot{width:10px;height:10px;border-radius:999px;background:linear-gradient(135deg,var(--brand-2),var(--brand))}
+    .whoami{font-size:13px;color:#e0e6f3}
+    .menu-btn{display:none; border:1px solid var(--border); background:#fff; color:var(--brand); border-radius:12px; padding:8px 10px; cursor:pointer; font-size:18px; box-shadow:var(--shadow)}
+
+    .shell{display:grid;grid-template-columns:260px 1fr;gap:22px;padding:18px}
+    nav#menuNav{
+      display:flex;flex-direction:column;gap:10px; background:var(--card); border:1px solid var(--border); border-radius:16px; padding:12px; box-shadow:var(--shadow)
+    }
+    nav#menuNav a{
+      text-decoration:none; color:var(--text); padding:12px 12px; border-radius:12px; border:1px solid transparent; font-size:14px; transition:.12s;
+      display:flex; align-items:center; gap:8px;
+    }
+    nav#menuNav a:hover{background:var(--card-2); border-color:var(--border)}
+    @media(max-width:720px){
+      .menu-btn{display:inline-block}
+      .shell{padding:14px}
+      nav#menuNav{
+        position:fixed; inset:auto 12px 12px 12px; transform:translateY(12px); opacity:0; pointer-events:none;
+        max-height:60vh; overflow:auto; background:#fff; border-radius:18px; padding:12px; gap:8px;
+      }
+      nav#menuNav.open{opacity:1; transform:translateY(0); pointer-events:auto}
+    }
+
+    .card{background:linear-gradient(180deg,#ffffff 0%, #f5f7fb 100%); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); padding:18px}
+    .card h3{margin:0 0 12px; font-size:18px; color:var(--brand)}
+
+    .toolbar{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px}
+    .toolbar input[type="text"]{
+      flex:1 1 280px; border:1px solid var(--border); border-radius:12px; padding:10px 12px; outline:none;
+      background:#fff;
+    }
+    .btn{background:var(--brand); color:#fff; font-weight:600; border:none; padding:10px 16px; border-radius:12px; cursor:pointer; box-shadow:var(--shadow)}
+    .btn:hover{background:#174a9a}
+    .btn.outline{background:#fff;color:var(--brand); border:1px solid var(--border)}
+    .muted{color:var(--muted)}
+
+    table{width:100%; border-collapse:separate; border-spacing:0 10px}
+    thead th{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#3b4a61; text-align:left; padding:0 10px}
+    tbody tr{background:#fff; box-shadow:var(--shadow)}
+    tbody td{padding:12px 10px; border-top:1px solid var(--border); border-bottom:1px solid var(--border)}
+    tbody td:first-child{border-left:1px solid var(--border); border-top-left-radius:12px; border-bottom-left-radius:12px}
+    tbody td:last-child{border-right:1px solid var(--border); border-top-right-radius:12px; border-bottom-right-radius:12px}
+    .tag{font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#f0f4fa; color:#0a3c7d}
+
+    /* Modal */
+    #modalEditar{display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999}
+    #modalEditar .box{max-width:420px; margin:10vh auto; background:#fff; border-radius:16px; padding:18px; box-shadow:var(--shadow)}
+    #modalEditar h4{margin:0 0 10px}
+    #modalEditar input{width:100%; margin:6px 0 10px; padding:10px; border-radius:12px; border:1px solid var(--border)}
+    #editErro{color:#c00; font-size:13px}
+    #editInfo{color:#060; font-size:13px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="dot"></span> Funcionários — Empresas</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="whoami" id="perfilUsuario">Carregando…</div>
+      <button class="menu-btn" id="menuToggle" title="Abrir menu">⋯</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <nav id="menuNav"></nav>
+
+    <section class="card">
+      <h3>📋 Controle de Funcionários por Empresa</h3>
+      <div class="toolbar">
+        <input type="text" id="busca" placeholder="Buscar por empresa, RM ou agência..." />
+        <button class="btn outline" id="atualizarLista">Recarregar</button>
+      </div>
+      <div class="muted" id="statusLista">Carregando…</div>
+
+      <div style="overflow:auto; margin-top:10px;">
+        <table id="tabela">
+          <thead>
+            <tr>
+              <th style="min-width:260px">Empresa</th>
+              <th style="min-width:160px">RM</th>
+              <th style="min-width:160px">Agência</th>
+              <th style="min-width:120px">Funcionários</th>
+              <th style="min-width:160px">Atualizado em</th>
+              <th style="min-width:120px">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tbodyEmpresas">
+            <!-- linhas renderizadas via JS -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal Editar -->
+  <div id="modalEditar">
+    <div class="box">
+      <h4>Atualizar nº de Funcionários</h4>
+      <div class="muted" id="empresaAlvo"></div>
+      <label for="novoNumero">Número de funcionários</label>
+      <input type="number" id="novoNumero" min="0" step="1" placeholder="Ex.: 120" />
+      <div id="editInfo"></div>
+      <div id="editErro"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px">
+        <button class="btn outline" id="fecharEditar">Cancelar</button>
+        <button class="btn" id="salvarEditar">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Toggle menu responsivo
+    document.addEventListener('DOMContentLoaded', ()=>{
+      const btn = document.getElementById('menuToggle');
+      const nav = document.getElementById('menuNav');
+      if(btn && nav){
+        btn.addEventListener('click', ()=> nav.classList.toggle('open'));
+        document.addEventListener('click', (e)=>{
+          if(!nav.contains(e.target) && !btn.contains(e.target)) nav.classList.remove('open');
+        });
+      }
+    });
+  </script>
+
+  <script src="js/funcionarios.js" defer></script>
+</body>
+</html>
