@@ -217,3 +217,65 @@ async function blocoMinhasCotacoes(){
     ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)}</div></li>`;
   });
 }
+
+// ====== Troca de Senha (usuário logado) ======
+(function initTrocaSenha(){
+  const abrir   = document.getElementById("abrirTrocaSenha");
+  const fechar  = document.getElementById("fecharTrocaSenha");
+  const modal   = document.getElementById("modalTrocaSenha");
+  const form    = document.getElementById("formTrocarSenha");
+  const erroEl  = document.getElementById("trocaErro");
+  const infoEl  = document.getElementById("trocaInfo");
+
+  if(!abrir || !fechar || !modal || !form) return; // página sem UI de troca
+
+  const abrirModal  = ()=>{ erroEl.textContent=""; infoEl.textContent=""; form.reset(); modal.style.display="block"; };
+  const fecharModal = ()=>{ modal.style.display="none"; };
+
+  abrir.addEventListener("click", abrirModal);
+  fechar.addEventListener("click", fecharModal);
+  modal.addEventListener("click", (e)=>{ if(e.target===modal) fecharModal(); });
+
+  form.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    erroEl.textContent=""; infoEl.textContent="";
+
+    const senhaAtual = document.getElementById("senhaAtual").value.trim();
+    const novaSenha  = document.getElementById("novaSenha").value.trim();
+    const novaSenha2 = document.getElementById("novaSenha2").value.trim();
+
+    if(novaSenha !== novaSenha2){
+      erroEl.textContent = "As senhas novas não conferem.";
+      return;
+    }
+    if(novaSenha.length < 6){
+      erroEl.textContent = "A nova senha deve ter pelo menos 6 caracteres.";
+      return;
+    }
+
+    const user = auth.currentUser;
+    if(!user || !user.email){
+      erroEl.textContent = "Você precisa estar logado.";
+      return;
+    }
+
+    try {
+      // Reautenticar (obrigatório para operações sensíveis)
+      const cred = firebase.auth.EmailAuthProvider.credential(user.email, senhaAtual);
+      await user.reauthenticateWithCredential(cred);
+
+      // Atualizar a senha
+      await user.updatePassword(novaSenha);
+
+      // BÔNUS: deslogar e redirecionar ao login
+      infoEl.textContent = "Senha atualizada com sucesso! Saindo...";
+      setTimeout(()=>{
+        auth.signOut().then(()=> location.href="login.html");
+      }, 1200);
+
+    } catch(err){
+      console.error(err);
+      erroEl.textContent = err?.message || "Erro ao trocar senha.";
+    }
+  });
+})();
