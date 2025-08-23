@@ -7,7 +7,6 @@ const db   = firebase.firestore();
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 
 // ===== Utils
-// (corrigido) agora também troca hífen/underscore por espaço
 const normalizarPerfil = (p)=>String(p||"")
   .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
   .toLowerCase()
@@ -24,8 +23,11 @@ const fmtBRL = (n)=>`R$ ${parseValor(n).toLocaleString("pt-BR",{minimumFractionD
 
 function skeleton(id, n=4){
   const ul = document.getElementById(id); if(!ul) return; ul.innerHTML="";
-  for(let i=0;i<n;i++){ const li=document.createElement("li"); li.className="row";
-    li.innerHTML='<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:20%"></div>'; ul.appendChild(li);}
+  for(let i=0;i<n;i++){ const li=document.createElement("li");
+    li.className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3";
+    li.innerHTML='<div class="h-3 w-2/3 bg-slate-100 rounded"></div><div class="h-3 w-1/5 bg-slate-100 rounded"></div>';
+    ul.appendChild(li);
+  }
 }
 
 // ===== Auth + contexto
@@ -38,7 +40,7 @@ auth.onAuthStateChanged(async (user)=>{
 
   const d = prof.data();
   CTX.perfil    = normalizarPerfil(d.perfil || "");
-  CTX.agenciaId = d.agenciaId || null;
+  CTX.agenciaId = d.agenciaId || d.agenciaid || null;
   CTX.nome      = d.nome || user.email;
 
   document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
@@ -46,7 +48,7 @@ auth.onAuthStateChanged(async (user)=>{
   carregarResumoPainel();
 });
 
-// ===== Menu por perfil (inclui páginas sigilosas só para ADMIN no menu)
+// ===== Menu por perfil (com “Funcionários” incluído)
 function montarMenuLateral(perfilBruto){
   const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
   const perfil=normalizarPerfil(perfilBruto);
@@ -56,7 +58,8 @@ function montarMenuLateral(perfilBruto){
     "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
     "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
     "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
-    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html"
+    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html",
+    "Funcionários":"funcionarios.html" // <— ADICIONADO
   };
   // Itens sigilosos — só ADMIN vê no menu
   const CAT_ADMIN_ONLY={
@@ -67,9 +70,9 @@ function montarMenuLateral(perfilBruto){
 
   const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
   const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
-  const RM=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html"];
-  const GER=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html"];
-  const AST=["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html"];
+  const RM=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const GER=["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const AST=["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
 
   let hrefs=[];
   switch(perfil){
@@ -85,13 +88,16 @@ function montarMenuLateral(perfilBruto){
 
   hrefs.forEach(h=>{
     const a=document.createElement("a"); a.href=h;
-    const emoji = "🔹"; // discreto no tema claro
-    a.innerHTML=`${emoji} ${LABEL[h]||h}`;
+    a.className = "flex items-center gap-2 rounded-xl px-3 py-2 hover:bg-slate-100";
+    a.innerHTML=`<span class="text-sm">🔹</span><span class="text-[15px]">${LABEL[h]||h}</span>`;
     menu.appendChild(a);
   });
-}
 
-// ===== Painel (sem “Últimas Conversas”)
+  // garante que o nav apareça no mobile ao montar pela primeira vez
+  if (window.innerWidth >= 1024) menu.classList.remove('hidden');
+});
+
+// ===== Painel
 async function carregarResumoPainel(){
   skeleton("listaVisitasAgendadas",5);
   skeleton("listaVisitas",5);
@@ -114,7 +120,6 @@ async function blocoVisitasAgendadas(){
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
-  // pega tudo e filtra client-side por compatibilidade com legado (data salva de jeitos diferentes)
   const snap = await q.get();
   const futuros=[];
   snap.forEach(doc=>{
@@ -125,7 +130,6 @@ async function blocoVisitasAgendadas(){
   futuros.sort((a,b)=>a.dt-b.dt);
 
   let arr=futuros.slice(0,10);
-  // fallback: últimos 20 dias caso não haja futuras
   if(arr.length===0){
     const limite = now - 20*24*60*60*1000;
     const recentes=[];
@@ -140,9 +144,14 @@ async function blocoVisitasAgendadas(){
 
   document.getElementById("qtdVA").textContent = arr.length;
   const ul=document.getElementById("listaVisitasAgendadas");
-  ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
+  ul.innerHTML = arr.length?"":"<li class='text-slate-500 text-sm'>Nenhuma visita futura.</li>";
   arr.forEach(v=>{
-    ul.innerHTML += `<li class="row"><div class="title">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${v.empresaNome||v.empresa||"-"}</strong></div><div class="meta">${v.rmNome||v.rm||"-"} • ${v.tipo||"-"}</div></li>`;
+    const li = document.createElement('li');
+    li.className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3";
+    li.innerHTML = `
+      <div class="font-medium">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${v.empresaNome||v.empresa||"-"}</strong></div>
+      <div class="text-slate-500 text-sm">${v.rmNome||v.rm||"-"} • ${v.tipo||"-"}</div>`;
+    ul.appendChild(li);
   });
 }
 
@@ -154,7 +163,7 @@ async function blocoMinhasVisitas(){
 
   const snap = await q.limit(50).get();
   const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
+  if(snap.empty){ ul.innerHTML="<li class='text-slate-500 text-sm'>Nenhuma visita.</li>"; return; }
 
   const cacheEmp=new Map();
   const getEmpresaNome=async(id,fb)=>{ if(fb) return fb; if(!id) return "-";
@@ -167,7 +176,10 @@ async function blocoMinhasVisitas(){
   for(const doc of docs){
     const v=doc.data(); const dt=toDate(v.data);
     const nomeEmp = await getEmpresaNome(v.empresaId, v.empresaNome);
-    ul.innerHTML += `<li class="row"><div class="title"><strong>${nomeEmp}</strong></div><div class="meta">${fmtData(dt)}${v.tipo? " • "+v.tipo:""}</div></li>`;
+    const li = document.createElement('li');
+    li.className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3";
+    li.innerHTML = `<div class="font-medium"><strong>${nomeEmp}</strong></div><div class="text-slate-500 text-sm">${fmtData(dt)}${v.tipo? " • "+v.tipo:""}</div>`;
+    ul.appendChild(li);
   }
 }
 
@@ -179,24 +191,27 @@ async function blocoProducao(){
 
   const snap = await q.limit(100).get();
   const ul = document.getElementById("listaProducao"); ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
+  if(snap.empty){ ul.innerHTML="<li class='text-slate-500 text-sm'>Nenhum negócio.</li>"; return; }
 
   const emitidos=[];
   snap.forEach(doc=>{
     const d=doc.data();
     const st = String(d.status||"")
       .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
-      .toLowerCase().trim(); // cobre “negócio emitido”, “negocio emitido”, etc.
+      .toLowerCase().trim();
     if(st==="negocio emitido") emitidos.push(d);
   });
 
-  if(!emitidos.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio emitido.</span></li>"; return; }
+  if(!emitidos.length){ ul.innerHTML="<li class='text-slate-500 text-sm'>Nenhum negócio emitido.</li>"; return; }
 
   emitidos.sort((a,b)=> (toDate(b.dataCriacao)||0)-(toDate(a.dataCriacao)||0));
   emitidos.slice(0,5).forEach(d=>{
     const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
     const vIni  = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
-    ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)} • início ${fmtData(vIni)}</div></li>`;
+    const li = document.createElement('li');
+    li.className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3";
+    li.innerHTML = `<div class="font-medium"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="text-slate-500 text-sm">${fmtBRL(valor)} • início ${fmtData(vIni)}</div>`;
+    ul.appendChild(li);
   });
 }
 
@@ -208,17 +223,20 @@ async function blocoMinhasCotacoes(){
 
   const snap = await q.limit(10).get();
   const ul = document.getElementById("listaCotacoes"); ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
+  if(snap.empty){ ul.innerHTML="<li class='text-slate-500 text-sm'>Sem cotações.</li>"; return; }
 
   const docs=snap.docs.sort((a,b)=> (toDate(b.data().dataCriacao)||0)-(toDate(a.data().dataCriacao)||0)).slice(0,5);
   docs.forEach(doc=>{
     const d=doc.data();
     const valor = d.valorFinal ?? d.valorDesejado ?? 0;
-    ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)}</div></li>`;
+    const li = document.createElement('li');
+    li.className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3";
+    li.innerHTML = `<div class="font-medium"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="text-slate-500 text-sm">${fmtBRL(valor)}</div>`;
+    ul.appendChild(li);
   });
 }
 
-// ====== Troca de Senha (usuário logado) ======
+// ====== Troca de Senha (usuário logado)
 (function initTrocaSenha(){
   const abrir   = document.getElementById("abrirTrocaSenha");
   const fechar  = document.getElementById("fecharTrocaSenha");
@@ -227,10 +245,10 @@ async function blocoMinhasCotacoes(){
   const erroEl  = document.getElementById("trocaErro");
   const infoEl  = document.getElementById("trocaInfo");
 
-  if(!abrir || !fechar || !modal || !form) return; // página sem UI de troca
+  if(!abrir || !fechar || !modal || !form) return;
 
-  const abrirModal  = ()=>{ erroEl.textContent=""; infoEl.textContent=""; form.reset(); modal.style.display="block"; };
-  const fecharModal = ()=>{ modal.style.display="none"; };
+  const abrirModal  = ()=>{ erroEl.textContent=""; infoEl.textContent=""; form.reset(); modal.classList.remove('hidden'); };
+  const fecharModal = ()=>{ modal.classList.add('hidden'); };
 
   abrir.addEventListener("click", abrirModal);
   fechar.addEventListener("click", fecharModal);
@@ -260,14 +278,10 @@ async function blocoMinhasCotacoes(){
     }
 
     try {
-      // Reautenticar (obrigatório para operações sensíveis)
       const cred = firebase.auth.EmailAuthProvider.credential(user.email, senhaAtual);
       await user.reauthenticateWithCredential(cred);
-
-      // Atualizar a senha
       await user.updatePassword(novaSenha);
 
-      // BÔNUS: deslogar e redirecionar ao login
       infoEl.textContent = "Senha atualizada com sucesso! Saindo...";
       setTimeout(()=>{
         auth.signOut().then(()=> location.href="login.html");
