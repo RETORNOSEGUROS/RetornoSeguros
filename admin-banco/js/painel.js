@@ -1,4 +1,4 @@
-// admin-banco/js/painel.js — revisão sintaxe + menu "Funcionários"
+// admin-banco/js/painel.js — versão revisada com persistência mobile e menu Funcionários
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -15,85 +15,84 @@ const toDate  = (x)=> x?.toDate ? x.toDate() : (x ? new Date(x) : null);
 const fmtData = (d)=> d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtHora = (d)=> d ? d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}) : "";
 
-const parseValor = (v)=>{
-  if(v==null) return 0;
-  if(typeof v==="number") return v;
+const parseValor = (v)=>{ if(v==null) return 0; if(typeof v==="number") return v;
   const limp = String(v).replace(/[^0-9,.-]/g,"").replace(/\.(?=\d{3}(\D|$))/g,"").replace(",",".");
-  const n = parseFloat(limp);
-  return Number.isFinite(n) ? n : 0;
-};
+  const n = parseFloat(limp); return Number.isFinite(n) ? n : 0; };
 const fmtBRL = (n)=>`R$ ${parseValor(n).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
 function skeleton(id, n=4){
   const ul = document.getElementById(id); if(!ul) return; ul.innerHTML="";
-  for(let i=0;i<n;i++){
-    const li=document.createElement("li");
-    li.className="row";
+  for(let i=0;i<n;i++){ const li=document.createElement("li"); li.className="row";
     li.innerHTML='<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:20%"></div>';
     ul.appendChild(li);
   }
 }
 
-// ===== Auth + contexto
-auth.onAuthStateChanged(async (user)=>{
-  if(!user) { location.href="login.html"; return; }
-  CTX.uid = user.uid;
-
-  const prof = await db.collection("usuarios_banco").doc(user.uid).get();
-  if(!prof.exists){
-    document.getElementById("perfilUsuario").textContent="Usuário não encontrado";
-    return;
+// ===== Persistência no mobile =====
+async function ensurePersistence() {
+  try {
+    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  } catch (e1) {
+    console.warn("LOCAL persistence indisponível, tentando SESSION...", e1?.message);
+    try {
+      await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
+    } catch (e2) {
+      console.warn("SESSION indisponível, usando NONE (somente memória).", e2?.message);
+      await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+    }
   }
+}
 
-  const d = prof.data();
-  CTX.perfil    = normalizarPerfil(d.perfil || "");
-  CTX.agenciaId = d.agenciaId || d.agenciaid || null; // aceita legado
-  CTX.nome      = d.nome || user.email;
+// ===== Inicialização com fallback =====
+async function initAuth() {
+  await ensurePersistence();
 
-  const elPerfil = document.getElementById("perfilUsuario");
-  if (elPerfil) elPerfil.textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
+  const failback = setTimeout(() => {
+    if (!auth.currentUser) location.href = "login.html";
+  }, 5000);
 
-  montarMenuLateral(CTX.perfil);
-  carregarResumoPainel();
-});
+  auth.onAuthStateChanged(async (user)=>{
+    if(!user){ clearTimeout(failback); location.href="login.html"; return; }
+    clearTimeout(failback);
 
-// ===== Menu por perfil (inclui “Funcionários”)
+    CTX.uid = user.uid;
+
+    const prof = await db.collection("usuarios_banco").doc(user.uid).get();
+    if(!prof.exists){ document.getElementById("perfilUsuario").textContent="Usuário não encontrado"; return; }
+
+    const d = prof.data();
+    CTX.perfil    = normalizarPerfil(d.perfil || "");
+    CTX.agenciaId = d.agenciaId || d.agenciaid || null;
+    CTX.nome      = d.nome || user.email;
+
+    document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
+
+    montarMenuLateral(CTX.perfil);
+    carregarResumoPainel();
+  });
+}
+
+// ===== Menu lateral (com Funcionários)
 function montarMenuLateral(perfilBruto){
   const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
   const perfil=normalizarPerfil(perfilBruto);
 
   const CAT_BASE={
-    "Cadastrar Gerentes":"cadastro-geral.html",
-    "Cadastrar Empresa":"cadastro-empresa.html",
-    "Agências":"agencias.html",
-    "Agenda Visitas":"agenda-visitas.html",
-    "Visitas":"visitas.html",
-    "Empresas":"empresas.html",
-    "Solicitações de Cotação":"cotacoes.html",
-    "Produção":"negocios-fechados.html",
-    "Consultar Dicas":"consultar-dicas.html",
-    "Dicas Produtos":"dicas-produtos.html",
-    "Ramos Seguro":"ramos-seguro.html",
-    "Relatório Visitas":"visitas-relatorio.html",
-    "Vencimentos":"vencimentos.html",
-    "Relatórios":"relatorios.html",
-    "Funcionários":"funcionarios.html" // ← novo item
+    "Cadastrar Gerentes":"cadastro-geral.html","Cadastrar Empresa":"cadastro-empresa.html","Agências":"agencias.html",
+    "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
+    "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
+    "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
+    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html","Funcionários":"funcionarios.html"
   };
-
   const CAT_ADMIN_ONLY={
-    "Carteira":"carteira.html",
-    "Comissões":"comissoes.html",
-    "Resgates (Admin)":"resgates-admin.html"
+    "Carteira":"carteira.html","Comissões":"comissoes.html","Resgates (Admin)":"resgates-admin.html"
   };
 
-  const LABEL=Object.fromEntries(
-    Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k])
-  );
-
+  const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
   const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
-  const RM   =["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const GER  =["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const AST  =["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
+  const RM = ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const GER= ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
+  const AST= ["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
 
   let hrefs=[];
   switch(perfil){
@@ -101,7 +100,6 @@ function montarMenuLateral(perfilBruto){
     case "rm": hrefs=RM; break;
     case "gerente chefe":
     case "gerente-chefe":
-    case "gerente chefe": // redundância intencional
     case "gerente_chefe": hrefs=GER; break;
     case "assistente":
     case "assistentes": hrefs=AST; break;
@@ -109,8 +107,7 @@ function montarMenuLateral(perfilBruto){
   }
 
   hrefs.forEach(h=>{
-    const a=document.createElement("a");
-    a.href=h;
+    const a=document.createElement("a"); a.href=h;
     a.innerHTML=`🔹 ${LABEL[h]||h}`;
     menu.appendChild(a);
   });
@@ -122,7 +119,6 @@ async function carregarResumoPainel(){
   skeleton("listaVisitas",5);
   skeleton("listaProducao",5);
   skeleton("listaCotacoes",5);
-
   await Promise.all([
     blocoVisitasAgendadas(),
     blocoMinhasVisitas(),
@@ -134,7 +130,6 @@ async function carregarResumoPainel(){
 // --- 1) Visitas Agendadas ---
 async function blocoVisitasAgendadas(){
   const now = Date.now();
-
   let q = db.collection("agenda_visitas");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
@@ -161,18 +156,11 @@ async function blocoVisitasAgendadas(){
     arr=recentes.slice(0,10);
   }
 
-  const elQtd=document.getElementById("qtdVA");
-  if (elQtd) elQtd.textContent = String(arr.length);
-
+  document.getElementById("qtdVA").textContent = arr.length;
   const ul=document.getElementById("listaVisitasAgendadas");
-  if (!ul) return;
   ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
   arr.forEach(v=>{
-    ul.innerHTML += `
-      <li class="row">
-        <div class="title">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${v.empresaNome||v.empresa||"-"}</strong></div>
-        <div class="meta">${v.rmNome||v.rm||"-"} • ${v.tipo||"-"}</div>
-      </li>`;
+    ul.innerHTML += `<li class="row"><div class="title">${fmtData(v.dt)} ${fmtHora(v.dt)} — <strong>${v.empresaNome||v.empresa||"-"}</strong></div><div class="meta">${v.rmNome||v.rm||"-"} • ${v.tipo||"-"}</div></li>`;
   });
 }
 
@@ -183,41 +171,32 @@ async function blocoMinhasVisitas(){
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
   const snap = await q.limit(50).get();
-  const ul = document.getElementById("listaVisitas"); if(!ul){return;} ul.innerHTML="";
+  const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
 
   const cacheEmp=new Map();
-  const getEmpresaNome=async(id,fb)=>{
-    if(fb) return fb;
-    if(!id) return "-";
+  const getEmpresaNome=async(id,fb)=>{ if(fb) return fb; if(!id) return "-";
     if(cacheEmp.has(id)) return cacheEmp.get(id);
     const d=await db.collection("empresas").doc(id).get();
     const nome=d.exists ? (d.data().nome||d.data().razaoSocial||"-") : "-";
-    cacheEmp.set(id,nome);
-    return nome;
-  };
+    cacheEmp.set(id,nome); return nome; };
 
   const docs=snap.docs.sort((a,b)=>(toDate(b.data().data)||0)-(toDate(a.data().data)||0)).slice(0,5);
   for(const doc of docs){
-    const v=doc.data();
-    const dt=toDate(v.data);
+    const v=doc.data(); const dt=toDate(v.data);
     const nomeEmp = await getEmpresaNome(v.empresaId, v.empresaNome);
-    ul.innerHTML += `
-      <li class="row">
-        <div class="title"><strong>${nomeEmp}</strong></div>
-        <div class="meta">${fmtData(dt)}${v.tipo? " • "+v.tipo:""}</div>
-      </li>`;
+    ul.innerHTML += `<li class="row"><div class="title"><strong>${nomeEmp}</strong></div><div class="meta">${fmtData(dt)}${v.tipo? " • "+v.tipo:""}</div></li>`;
   }
 }
 
-// --- 3) Produção (Negócio emitido) ---
+// --- 3) Produção ---
 async function blocoProducao(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
   const snap = await q.limit(100).get();
-  const ul = document.getElementById("listaProducao"); if(!ul){return;} ul.innerHTML="";
+  const ul = document.getElementById("listaProducao"); ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
 
   const emitidos=[];
@@ -233,11 +212,7 @@ async function blocoProducao(){
   emitidos.slice(0,5).forEach(d=>{
     const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
     const vIni  = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
-    ul.innerHTML += `
-      <li class="row">
-        <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
-        <div class="meta">${fmtBRL(valor)} • início ${fmtData(vIni)}</div>
-      </li>`;
+    ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)} • início ${fmtData(vIni)}</div></li>`;
   });
 }
 
@@ -248,18 +223,14 @@ async function blocoMinhasCotacoes(){
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
   const snap = await q.limit(10).get();
-  const ul = document.getElementById("listaCotacoes"); if(!ul){return;} ul.innerHTML="";
+  const ul = document.getElementById("listaCotacoes"); ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
 
-  const docs=snap.docs.sort((a,b)=> (toDate(b.data().dataCriacao)||0)-(toDate(a.data().dataCriacao)||0)).slice(0,5);
+  const docs=snap.docs.sort((a,b)=> (toDate(b.data().dataCriacao)||0)-(toDate(a.data().data)||0)).slice(0,5);
   docs.forEach(doc=>{
     const d=doc.data();
     const valor = d.valorFinal ?? d.valorDesejado ?? 0;
-    ul.innerHTML += `
-      <li class="row">
-        <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
-        <div class="meta">${fmtBRL(valor)}</div>
-      </li>`;
+    ul.innerHTML += `<li class="row"><div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div><div class="meta">${fmtBRL(valor)}</div></li>`;
   });
 }
 
@@ -274,12 +245,7 @@ async function blocoMinhasCotacoes(){
 
   if(!abrir || !fechar || !modal || !form) return;
 
-  const abrirModal  = ()=>{
-    if(erroEl) erroEl.textContent="";
-    if(infoEl) infoEl.textContent="";
-    form.reset();
-    modal.style.display="block";
-  };
+  const abrirModal  = ()=>{ erroEl.textContent=""; infoEl.textContent=""; form.reset(); modal.style.display="block"; };
   const fecharModal = ()=>{ modal.style.display="none"; };
 
   abrir.addEventListener("click", abrirModal);
@@ -288,8 +254,7 @@ async function blocoMinhasCotacoes(){
 
   form.addEventListener("submit", async (e)=>{
     e.preventDefault();
-    if(erroEl) erroEl.textContent="";
-    if(infoEl) infoEl.textContent="";
+    erroEl.textContent=""; infoEl.textContent="";
 
     const senhaAtual = document.getElementById("senhaAtual").value.trim();
     const novaSenha  = document.getElementById("novaSenha").value.trim();
@@ -314,3 +279,6 @@ async function blocoMinhasCotacoes(){
     }
   });
 })();
+
+// ==== Start ====
+initAuth();
