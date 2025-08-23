@@ -13,7 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 
-  <!-- Firebase v8 (igual ao resto do seu sistema) -->
+  <!-- Firebase v8 (compatível com seu projeto) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
@@ -147,10 +147,11 @@
     // Config
     const url = new URL(location.href);
     const colOverride = url.searchParams.get("col");
+    const dateOverride = url.searchParams.get("date"); // ex.: ?date=dataCriacao
     const CFG = {
       collectionsTry: colOverride ? [colOverride] : ["cotacoes-gerentes","cotacoes"],
       fields: {
-        createdAt: ["createdAt","dataCriacao","criadoEm","data"],
+        createdAt: ["createdAt","dataCriacao","criadoEm","data","created_at","dt","dtCotacao","dataCotacao"],
         updatedAt: ["updatedAt","atualizadoEm"],
         empresaNome: ["empresaNome","empresa","razaoSocial","nomeEmpresa"],
         empresaId: ["empresaId","empresaID"],
@@ -207,7 +208,6 @@
     let state={ raw:[], filtered:[], yoy:false, agenciaMap:new Map(), rmMap:new Map(), statusSet:new Set(), ramoSet:new Set(), seguradoraSet:new Set(), colUsada:"—" };
 
     // ====== LOOKUPS (FALLBACK) ======
-    // Deriva Agências, RMs, Status, Ramos e Seguradoras a partir da coleção de cotações permitida
     async function carregarLookups() {
       const selAg = $("#f-agencia");
       const selRM = $("#f-rm");
@@ -227,7 +227,6 @@
       let colBase = (CFG.collectionsTry && CFG.collectionsTry[0]) || "cotacoes-gerentes";
       let q = db.collection(colBase);
 
-      // mesmo critério que você já usa: admin vê tudo; não-admin vê apenas o que criou
       const isAdmin = user.email === "patrick@retornoseguros.com.br";
       if (!isAdmin) q = q.where("criadoPorUid","==",user.uid);
 
@@ -249,22 +248,16 @@
         if (d.seguradora)segurSet.add(d.seguradora);
       });
 
-      // Agências
       [...agenciasMap.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),"pt-BR")).forEach(([id,nome])=>{
         const opt=document.createElement("option"); opt.value=id; opt.textContent=nome; selAg.appendChild(opt);
       });
-      // RMs
       [...rmsMap.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),"pt-BR")).forEach(([id,nome])=>{
         const opt=document.createElement("option"); opt.value=id; opt.textContent=nome; selRM.appendChild(opt);
       });
-      // Status
       [...statusSet].sort().forEach(st=>{ const opt=document.createElement("option"); opt.value=st; opt.textContent=st; selStatus.appendChild(opt); });
-      // Ramos
       [...ramosSet].sort().forEach(rm=>{ const opt=document.createElement("option"); opt.value=rm; opt.textContent=rm; selRamo.appendChild(opt); });
-      // Seguradoras
       [...segurSet].sort().forEach(sg=>{ const opt=document.createElement("option"); opt.value=sg; opt.textContent=sg; selSegur.appendChild(opt); });
 
-      // guarda para uso em tabela/legendas
       state.agenciaMap = new Map(agenciasMap);
       state.rmMap = new Map(rmsMap);
       state.statusSet = new Set(statusSet);
@@ -273,9 +266,8 @@
     }
 
     function filtrarRMsPorAgencia(){
-      const ag=$("#f-agencia").value, selRM=$("#f-rm"); const all=Array.from(selRM.querySelectorAll("option"));
-      all.forEach(o=>{ if(!o.value){ o.hidden=false; return; } const a=(o.textContent||"").includes(" — ")?o.dataset?.agenciaId||"":""; /* mantido simples */ o.hidden=false; });
-      // (sem vínculo estrito RM->Agência, pois estamos derivando de cotações agregadas)
+      const selRM=$("#f-rm"); const all=Array.from(selRM.querySelectorAll("option"));
+      all.forEach(o=>{ if(!o.value){ o.hidden=false; return; } o.hidden=false; });
     }
 
     // ====== CARGA DE DADOS ======
@@ -310,22 +302,27 @@
       if(!keep){ $("#f-data-inicio").value=inicio.toISOString().substring(0,10); $("#f-data-fim").value=hoje.toISOString().substring(0,10); }
     }
 
+    // Tenta por vários campos de data; aceita override via ?date=campo; se tudo vazio, fallback sem filtro e filtra no cliente.
     async function tryLoadFromCollection(colName, di, df){
-      let snap=null, dateField=null;
-      for(const key of CFG.fields.createdAt){
+      let candidates = CFG.fields.createdAt.slice();
+      if (dateOverride) {
+        candidates = [dateOverride].concat(candidates.filter(k=>k!==dateOverride));
+      }
+      // 1) tenta por chave de data (>=, <=, orderBy)
+      for(const key of candidates){
         try{
           if(di&&df){
-            snap = await db.collection(colName)
+            const snap = await db.collection(colName)
               .where(key, ">=", Timestamp.fromDate(di))
               .where(key, "<=", Timestamp.fromDate(df))
               .orderBy(key, "asc")
               .get();
-            dateField=key;
-            return {snap, dateField};
+            if (!snap.empty) return {snap, dateField:key};
           }
-        }catch(e){ /* pode ser string; ignora e tenta próximo campo */ }
+        }catch(e){ /* se o campo não é timestamp (string), ignora e tenta o próximo */ }
       }
-      snap = await db.collection(colName).get();
+      // 2) fallback: pega tudo e deixa o filtro no cliente
+      const snap = await db.collection(colName).get();
       return {snap, dateField:null};
     }
 
