@@ -1,10 +1,16 @@
-// admin-banco/js/painel.js — versão revisada com persistência mobile e menu Funcionários
+// admin-banco/js/painel.js — persistência mobile + fallback admin por e‑mail + menu Funcionários
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
+
+// ===== Config: Admins por e‑mail (fallback quando não há usuarios_banco/{uid})
+const ADMIN_EMAILS = [
+  "patrick@retornoseguros.com.br"
+  // adicione outros aqui, ex: "adm@retornoseguros.com.br"
+];
 
 // ===== Utils
 const normalizarPerfil = (p)=>String(p||"")
@@ -28,25 +34,26 @@ function skeleton(id, n=4){
   }
 }
 
-// ===== Persistência no mobile =====
+// ===== Persistência (resolve sessão no mobile/Safari)
 async function ensurePersistence() {
   try {
     await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   } catch (e1) {
-    console.warn("LOCAL persistence indisponível, tentando SESSION...", e1?.message);
+    console.warn("LOCAL indisponível, tentando SESSION...", e1?.message);
     try {
       await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     } catch (e2) {
-      console.warn("SESSION indisponível, usando NONE (somente memória).", e2?.message);
+      console.warn("SESSION indisponível, usando NONE (memória).", e2?.message);
       await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
     }
   }
 }
 
-// ===== Inicialização com fallback =====
+// ===== Init Auth com failback + fallback admin por e‑mail
 async function initAuth() {
   await ensurePersistence();
 
+  // Se em 5s não autenticou, volta pro login (evita “tela travada”)
   const failback = setTimeout(() => {
     if (!auth.currentUser) location.href = "login.html";
   }, 5000);
@@ -57,22 +64,45 @@ async function initAuth() {
 
     CTX.uid = user.uid;
 
-    const prof = await db.collection("usuarios_banco").doc(user.uid).get();
-    if(!prof.exists){ document.getElementById("perfilUsuario").textContent="Usuário não encontrado"; return; }
+    // tenta carregar perfil em usuarios_banco
+    let perfilSnap = null;
+    try { perfilSnap = await db.collection("usuarios_banco").doc(user.uid).get(); }
+    catch (e) { console.warn("Erro lendo usuarios_banco:", e?.message); }
 
-    const d = prof.data();
+    if (!perfilSnap || !perfilSnap.exists) {
+      // Fallback: se o e‑mail for de admin conhecido, seguimos como admin
+      if (ADMIN_EMAILS.includes((user.email||"").toLowerCase())) {
+        CTX.perfil    = "admin";
+        CTX.agenciaId = null;
+        CTX.nome      = user.email || "admin";
+        const elPerfil = document.getElementById("perfilUsuario");
+        if (elPerfil) elPerfil.textContent = `${CTX.nome} (admin — fallback)`;
+        montarMenuLateral(CTX.perfil);
+        carregarResumoPainel();
+        return;
+      } else {
+        const elPerfil = document.getElementById("perfilUsuario");
+        if (elPerfil) elPerfil.textContent = "Usuário sem perfil cadastrado";
+        console.error("Perfil não encontrado e e‑mail não é admin de fallback.");
+        return;
+      }
+    }
+
+    // Perfil encontrado normalmente
+    const d = perfilSnap.data();
     CTX.perfil    = normalizarPerfil(d.perfil || "");
     CTX.agenciaId = d.agenciaId || d.agenciaid || null;
     CTX.nome      = d.nome || user.email;
 
-    document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
+    const elPerfil = document.getElementById("perfilUsuario");
+    if (elPerfil) elPerfil.textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
 
     montarMenuLateral(CTX.perfil);
     carregarResumoPainel();
   });
 }
 
-// ===== Menu lateral (com Funcionários)
+// ===== Menu lateral (inclui “Funcionários”)
 function montarMenuLateral(perfilBruto){
   const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
   const perfil=normalizarPerfil(perfilBruto);
