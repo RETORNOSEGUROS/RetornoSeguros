@@ -1,79 +1,189 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Empresas Atendidas</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <title>Empresas — Retorno</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- TailwindCSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { brand: '#1b2c5c' },
+          boxShadow: { soft: '0 8px 24px rgba(2, 6, 23, .06)' },
+          borderRadius: { '2xl': '1rem' }
+        }
+      }
+    }
+  </script>
+
+  <!-- Firebase v8 -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
   <script src="js/firebase-config.js"></script>
-  <script src="js/empresas.js" defer></script>
-  <style>
-    body { font-family: Arial; padding: 20px; background: #f4f4f4; }
-    h2 { color: #004080; margin-bottom: 10px; }
-    label { font-weight: bold; display: block; margin-top: 10px; }
-    select {
-      padding: 6px; font-size: 14px;
-      margin-bottom: 20px; width: 100%;
-      max-width: 300px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: white;
-      margin-top: 10px;
-      font-size: 13px;
-    }
-    th, td {
-      padding: 6px;
-      border: 1px solid #ccc;
-      text-align: center;
-    }
-    th {
-      background: #004080;
-      color: white;
-    }
-    .status-verde { background: #d4edda; }
-    .status-vermelho { background: #f8d7da; }
-    .status-amarelo { background: #fff3cd; }
-    .status-azul { background: #cfe2ff; }
-    .status-cinza { background: #f1f1f1; color: #ccc; }
 
-    .legenda {
-      margin-top: 20px;
-      font-size: 13px;
-      background: #fff;
-      padding: 10px;
-      border-radius: 6px;
-      box-shadow: 0 0 5px rgba(0,0,0,0.1);
-    }
-    .legenda span {
-      display: inline-block;
-      margin-right: 15px;
-      line-height: 1.8;
-    }
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    .chip{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .5rem;border:1px solid #e5e7eb;border-radius:999px;background:#f8fafc}
+    .status-dot{font-size:18px;line-height:1}
+    .table-wrap{overflow:auto}
+    .btn{display:inline-flex;align-items:center;gap:.5rem;border-radius:.75rem;padding:.5rem .75rem}
+    .btn-outline{border:1px solid #e5e7eb;background:white}
+    .btn-danger{background:#ef4444;color:white}
+    .muted{color:#64748b}
+    .badge{display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;border-radius:999px;padding:.125rem .5rem;border:1px solid #e5e7eb;background:#f1f5f9}
+    .skeleton{height:12px;background:#eef2f7;border-radius:8px}
   </style>
 </head>
-<body>
+<body class="min-h-screen bg-slate-50 text-slate-800">
 
-  <h2>Mapa de Produtos por Empresa</h2>
+  <!-- HEADER -->
+  <header class="sticky top-0 z-40 bg-brand text-white shadow-soft">
+    <div class="max-w-7xl mx-auto flex items-center justify-between px-4 py-3">
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-white/80"></span>
+        <div class="text-lg font-bold">Empresas</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <div id="perfilUsuario" class="text-slate-200 text-sm">Carregando…</div>
+        <button id="menuToggle" class="lg:hidden rounded-lg bg-white text-brand px-2.5 py-1.5 text-base shadow-soft" title="Abrir menu">☰</button>
+      </div>
+    </div>
+  </header>
 
-  <label for="filtroRM"><strong>Filtrar por RM:</strong></label>
-  <select id="filtroRM" onchange="carregarEmpresas()">
-    <option value="">Todos</option>
-  </select>
+  <!-- OVERLAY para o drawer no mobile -->
+  <div id="sidebarOverlay" class="fixed inset-0 bg-black/40 z-30 hidden"></div>
 
-  <div id="tabelaEmpresas"></div>
+  <!-- WRAPPER -->
+  <div class="max-w-7xl mx-auto grid grid-cols-12 gap-4 px-4 py-6">
 
-  <div class="legenda">
-    <strong>Legenda:</strong><br>
-    <span>🟢 Negócio Emitido</span>
-    <span>🟡 Pendente (Agência, Corretor, Seguradora, Cliente)</span>
-    <span>🔴 Recusado (Cliente, Seguradora) ou Emitido Declinado</span>
-    <span>🔵 Negócio Fechado ou Em Emissão</span>
-    <span>⚪️ Sem cotação</span>
+    <!-- SIDEBAR (drawer mobile rolável + fixa no desktop) -->
+    <aside class="col-span-12 lg:col-span-3">
+      <nav id="menuNav"
+           class="hidden lg:block z-40
+                  lg:static lg:max-h-none
+                  fixed top-16 left-0 right-0
+                  max-h-[70vh] overflow-y-auto
+                  w-full lg:w-auto
+                  rounded-2xl bg-white border border-slate-200 shadow p-3 space-y-3">
+        <!-- itens via JS -->
+      </nav>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="col-span-12 lg:col-span-9 space-y-6">
+
+      <!-- FILTROS -->
+      <section class="rounded-2xl bg-white border border-slate-200 shadow-soft p-4">
+        <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 w-full">
+            <div>
+              <label class="text-sm text-slate-600">Filtrar por RM</label>
+              <select id="filtroRM" class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:ring focus:ring-slate-200">
+                <option value="">Todos</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm text-slate-600">Buscar por nome da empresa</label>
+              <input id="buscaEmpresa" type="text" placeholder="Digite para filtrar…"
+                     class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:ring focus:ring-slate-200">
+            </div>
+            <div>
+              <label class="text-sm text-slate-600">CNPJ (máscara ao digitar)</label>
+              <input id="cnpjDummy" type="text" placeholder="00.000.000/0000-00"
+                     class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:ring focus:ring-slate-200 cnpj-mask">
+              <div class="text-xs text-slate-500 mt-1">Use este campo quando precisar digitar/validar CNPJ (a máscara já está aplicada).</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="badge"><span class="status-dot">🟢</span> Negócio Emitido</span>
+            <span class="badge"><span class="status-dot">🟡</span> Pendente</span>
+            <span class="badge"><span class="status-dot">🔴</span> Recusado/Declinado</span>
+            <span class="badge"><span class="status-dot">🔵</span> Fechado/Em Emissão</span>
+            <span class="badge"><span class="status-dot">⚪️</span> Sem cotação</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TABELA -->
+      <section class="rounded-2xl bg-white border border-slate-200 shadow-soft p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-brand font-semibold">Mapa de Produtos por Empresa</h3>
+          <div class="chip"><span class="muted">Total:</span> <strong id="totalEmpresas">—</strong></div>
+        </div>
+
+        <div id="wrapTabela" class="table-wrap border border-slate-200 rounded-2xl">
+          <div id="tabelaEmpresas">
+            <div class="p-4 grid grid-cols-12 gap-3">
+              <div class="col-span-6"><div class="skeleton" style="width:70%"></div></div>
+              <div class="col-span-2"><div class="skeleton"></div></div>
+              <div class="col-span-2"><div class="skeleton"></div></div>
+              <div class="col-span-2"><div class="skeleton"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mt-2">Arraste lateralmente no celular para ver todas as colunas.</div>
+      </section>
+
+    </main>
   </div>
 
+  <!-- MODAL: confirmar exclusão -->
+  <div id="modalExcluir" class="hidden fixed inset-0 bg-black/50 z-50">
+    <div class="max-w-md mx-auto mt-24 bg-white rounded-2xl p-5 shadow-soft">
+      <h3 class="text-lg font-semibold mb-2">Excluir empresa</h3>
+      <p class="text-sm text-slate-600">
+        Confirme a exclusão digitando o nome da empresa abaixo. Esta ação não pode ser desfeita.
+      </p>
+      <div class="mt-3">
+        <label class="text-sm text-slate-600">Nome da empresa</label>
+        <input id="confirmNomeEmpresa" class="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:ring focus:ring-slate-200" />
+      </div>
+      <div id="excluirErro" class="text-red-700 text-sm mt-2"></div>
+      <div class="flex items-center justify-end gap-2 pt-4">
+        <button id="cancelarExcluir" class="btn btn-outline">Cancelar</button>
+        <button id="confirmarExcluir" class="btn btn-danger">Excluir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JS principal desta página -->
+  <script src="js/empresas.js" defer></script>
+
+  <!-- Drawer mobile utilitário (igual do painel) -->
+  <script>
+    document.addEventListener('DOMContentLoaded', ()=>{
+      const nav   = document.getElementById('menuNav');
+      const btn   = document.getElementById('menuToggle');
+      const body  = document.body;
+      const ovl   = document.getElementById('sidebarOverlay');
+
+      function openNav(){
+        nav.classList.remove('hidden');
+        ovl.classList.remove('hidden');
+        body.classList.add('overflow-hidden');
+      }
+      function closeNav(){
+        if (window.innerWidth < 1024) nav.classList.add('hidden');
+        ovl.classList.add('hidden');
+        body.classList.remove('overflow-hidden');
+      }
+
+      btn?.addEventListener('click', (e)=>{ e.stopPropagation(); openNav(); });
+      ovl?.addEventListener('click', closeNav);
+      document.addEventListener('click', (e)=>{
+        if(window.innerWidth >= 1024) return;
+        if(!nav.contains(e.target) && !btn.contains(e.target)) closeNav();
+      });
+      window.addEventListener('resize', ()=>{
+        if(window.innerWidth >= 1024){ ovl.classList.add('hidden'); body.classList.remove('overflow-hidden'); nav.classList.remove('hidden'); }
+        else { nav.classList.add('hidden'); }
+      });
+    });
+  </script>
 </body>
 </html>
