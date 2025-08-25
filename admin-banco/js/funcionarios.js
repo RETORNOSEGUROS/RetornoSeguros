@@ -1,4 +1,4 @@
-// funcionarios.js — v8 compatível com seu projeto
+// funcionarios.js — v8 compatível com seu projeto (mobile + contadores dinâmicos)
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -26,7 +26,7 @@ auth.onAuthStateChanged(async (user)=>{
 
   const d = prof.data();
   CTX.perfil    = normalizarPerfil(d.perfil || "");
-  CTX.agenciaId = d.agenciaId || d.agenciaid || null; // <- aceita legado no perfil também
+  CTX.agenciaId = d.agenciaId || d.agenciaid || null;
   CTX.nome      = d.nome || user.email;
 
   document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
@@ -104,8 +104,6 @@ async function getAgenciaNome(id, fallback){
   if(fallback) return fallback;
   if(!id) return "-";
   if(cacheAgencias.has(id)) return cacheAgencias.get(id);
-  // sua coleção de agências no rules é "agencias_banco" — mas muitos projetos têm "agencias"
-  // tentamos primeiro "agencias", depois "agencias_banco"
   let snap = await db.collection("agencias").doc(id).get().catch(()=>null);
   if(!snap || !snap.exists) snap = await db.collection("agencias_banco").doc(id).get().catch(()=>null);
   const nome = (snap && snap.exists) ? (snap.data().nome || snap.data().descricao || "-") : "-";
@@ -124,34 +122,22 @@ async function carregarEmpresas(){
   try{
     const col = db.collection("empresas");
 
-    // monta a query respeitando perfil; só aplica filtro se houver valor
     let q = col;
-    // RM → filtra por rmUid (se existir) senão deixamos sem filtro (rules já restringem por owner)
     if (CTX.perfil === "rm" && CTX.uid) {
       q = q.where("rmUid", "==", CTX.uid);
-    }
-    // Assistente / Gerente-chefe → tentar ambos os nomes de campo: agenciaId e agenciaid
-    else if ((CTX.perfil === "assistente" || CTX.perfil === "gerente chefe") && CTX.agenciaId){
-      try {
-        q = q.where("agenciaId", "==", CTX.agenciaId);
-      } catch(e) {
-        // no v8 não lança aqui, mas deixo a estrutura caso precise
-      }
+    } else if ((CTX.perfil === "assistente" || CTX.perfil === "gerente chefe") && CTX.agenciaId){
+      q = q.where("agenciaId", "==", CTX.agenciaId);
     }
 
     let snap = await q.limit(1000).get();
-
-    // se vier vazio E for assistente/gerente-chefe com agenciaId conhecido,
-    // tenta novamente usando o campo legado "agenciaid"
     if (snap.empty && (CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
       snap = await col.where("agenciaid", "==", CTX.agenciaId).limit(1000).get();
     }
 
-    console.log("[funcionarios] docs:", snap.size, "perfil:", CTX.perfil, "agenciaId:", CTX.agenciaId, "uid:", CTX.uid);
-
     if (snap.empty){
-      status.textContent = "Nenhuma empresa encontrada para seu perfil/regra.";
       LISTA = [];
+      updateStatus([], 0);
+      tbody.innerHTML = `<tr><td colspan="6" class="muted" style="padding:18px">Nenhuma empresa encontrada para seu perfil/regra.</td></tr>`;
       return;
     }
 
@@ -163,7 +149,7 @@ async function carregarEmpresas(){
         nome: d.nome || d.razaoSocial || d.fantasia || "Empresa",
         rmUid: d.rmUid || d.rm || null,
         rmNome: d.rmNome || null,
-        agenciaId: d.agenciaId || d.agenciaid || null, // aceita os dois
+        agenciaId: d.agenciaId || d.agenciaid || null,
         agenciaNome: d.agenciaNome || null,
         funcionariosQtd: (typeof d.funcionariosQtd === "number") ? d.funcionariosQtd : (d.funcionarios ?? null),
         funcionariosAtualizadoEm: d.funcionariosAtualizadoEm || d.atualizadoFuncionariosEm || null
@@ -178,8 +164,9 @@ async function carregarEmpresas(){
 
     arr.sort((a,b)=> String(a.nome).localeCompare(String(b.nome), 'pt', {sensitivity:'base'}));
     LISTA = arr;
-    status.textContent = `${LISTA.length} empresa(s) carregada(s).`;
+
     renderTabela(LISTA);
+    updateStatus(LISTA, LISTA.length);
 
   } catch (err) {
     console.error("[funcionarios] erro carregarEmpresas:", err);
@@ -204,12 +191,12 @@ function renderTabela(lista){
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><strong>${escapeHtml(it.nome)}</strong></td>
-      <td>${escapeHtml(it.rmNome || "-")}</td>
-      <td>${escapeHtml(it.agenciaNome || "-")}</td>
-      <td>${it.funcionariosQtd != null ? `<span class="tag">${it.funcionariosQtd}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${fmtDataHora(dt)}</td>
-      <td>
+      <td class="sticky-left col-empresa"><strong>${escapeHtml(it.nome)}</strong></td>
+      <td class="hide-sm">${escapeHtml(it.rmNome || "-")}</td>
+      <td class="hide-sm">${escapeHtml(it.agenciaNome || "-")}</td>
+      <td class="sticky-right col-func">${it.funcionariosQtd != null ? `<span class="tag">${it.funcionariosQtd.toLocaleString("pt-BR")}</span>` : '<span class="muted">—</span>'}</td>
+      <td class="hide-sm">${fmtDataHora(dt)}</td>
+      <td class="hide-sm">
         ${podeEditar
           ? `<button class="btn" data-edit="${it.id}">Editar</button>`
           : `<span class="muted">Sem permissão</span>`
@@ -226,14 +213,35 @@ function renderTabela(lista){
 
 function filtrarTabela(e){
   const termo = (e?.target?.value || document.getElementById("busca").value || "").trim().toLowerCase();
-  if(!termo){ renderTabela(LISTA); return; }
+
+  if(!termo){
+    renderTabela(LISTA);
+    updateStatus(LISTA, LISTA.length);
+    return;
+  }
 
   const filtrada = LISTA.filter(it=>{
     return String(it.nome).toLowerCase().includes(termo) ||
            String(it.rmNome||"").toLowerCase().includes(termo) ||
            String(it.agenciaNome||"").toLowerCase().includes(termo);
   });
+
   renderTabela(filtrada);
+  updateStatus(filtrada, LISTA.length);
+}
+
+// ====== Status/contadores
+function updateStatus(listaAtual, totalBaseEmpresas){
+  const totalEmpresas = Number.isFinite(totalBaseEmpresas) ? totalBaseEmpresas : LISTA.length;
+  const qtdEmpresasFiltro = listaAtual.length;
+  const totalFuncionariosFiltro = listaAtual.reduce((acc, it)=>{
+    const v = Number(it.funcionariosQtd);
+    return acc + (Number.isFinite(v) ? v : 0);
+  }, 0);
+
+  const status = document.getElementById("statusLista");
+  // Ex.: "25 empresa(s) carregada(s) · Total de funcionários no filtro: 25.000 · (Base total: 140 empresas)"
+  status.textContent = `${qtdEmpresasFiltro} empresa(s) carregada(s) · Total de funcionários no filtro: ${totalFuncionariosFiltro.toLocaleString("pt-BR")} · (Base total: ${totalEmpresas} empresas)`;
 }
 
 // ====== Permissão de edição (UI) — valide nas RULES de verdade
@@ -283,7 +291,16 @@ async function salvarEdicao(){
     infoEl.textContent = "Atualizado com sucesso!";
     alvoAtual.funcionariosQtd = numero;
     alvoAtual.funcionariosAtualizadoEm = new Date();
-    renderTabela(LISTA);
+
+    // Re-render e reconta mantendo o filtro atual digitado
+    const termoAtual = (document.getElementById("busca").value || "").trim();
+    if(termoAtual){
+      filtrarTabela();
+    }else{
+      renderTabela(LISTA);
+      updateStatus(LISTA, LISTA.length);
+    }
+
     setTimeout(()=> document.getElementById("modalEditar").style.display = "none", 800);
   }catch(err){
     console.error(err);
