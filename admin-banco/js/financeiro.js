@@ -1,4 +1,4 @@
-// financeiro.js — Painel + Lançamento + Relatório (Firebase v8)
+// financeiro.js — Painel + Lançamento + Relatório com Gráficos (Firebase v8 + Chart.js)
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -416,7 +416,7 @@ async function salvarFinanceiro(){
     const empresaRef = db.collection("empresas").doc(EMPRESA_ALVO.id);
     const finRef = empresaRef.collection("financeiro").doc(String(ano));
 
-    // upsert no doc anual (com denormalizados p/ collectionGroup)
+    // upsert no doc anual
     await finRef.set({
       ano,
       receitaLiquida: receita,
@@ -492,13 +492,18 @@ function consolidarSelo(s){
   return "verde";
 }
 
-// ====== Relatório Ano a Ano ======
+// ====== Relatório Ano a Ano + GRÁFICOS ======
+let chart1=null, chart2=null, chart3=null;
+
 async function abrirRelatorio(empresaId){
   const base = EMPRESAS_CACHE.get(empresaId) || { id:empresaId, nome:"Empresa" };
   document.getElementById("detEmpresaAlvo").textContent = `${base.nome} (ID: ${base.id})`;
   const tbody = document.getElementById("detTbody");
   tbody.innerHTML = `<tr><td colspan="13" class="muted">Carregando…</td></tr>`;
   document.getElementById("detResumo").innerHTML = "";
+
+  // destrói gráficos antigos para evitar overlay/memória
+  destroyCharts();
 
   try{
     const snap = await db.collection("empresas").doc(base.id).collection("financeiro").orderBy("ano","desc").limit(12).get();
@@ -516,9 +521,86 @@ async function abrirRelatorio(empresaId){
         selo: d.selo || null
       });
     });
-    rows.sort((a,b)=> b.ano - a.ano); // desc
+    rows.sort((a,b)=> a.ano - b.ano); // ascendente para desenhar da esquerda->direita
 
-    // monta linhas com deltas YoY (comparando com próximo da lista)
+    // ====== GRÁFICOS ======
+    const labels = rows.map(r=> String(r.ano));
+    const receita = rows.map(r=> r.receita ?? null);
+    const ebitda  = rows.map(r=> r.ebitda ?? null);
+    const margem  = rows.map(r=> (r.margem!=null ? (r.margem*100) : null)); // %
+    const alav    = rows.map(r=> r.alav ?? null);
+    const liq     = rows.map(r=> r.liq ?? null);
+
+    chart1 = new Chart(document.getElementById("chartReceitaEbitda").getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label:"Receita", data: receita, tension:.3, borderWidth:2, pointRadius:3 },
+          { label:"EBITDA",  data: ebitda,  tension:.3, borderWidth:2, pointRadius:3 }
+        ]
+      },
+      options: {
+        plugins:{ legend:{display:true} , tooltip:{mode:"index", intersect:false, callbacks:{
+          label:(ctx)=> `${ctx.dataset.label}: ${toBRL(ctx.parsed.y)}`
+        }}},
+        scales:{
+          y:{ ticks:{ callback:(v)=> toBRL(v) } }
+        },
+        responsive:true,
+        maintainAspectRatio:false,
+        elements:{ line:{ spanGaps:true } }
+      }
+    });
+
+    chart2 = new Chart(document.getElementById("chartMargem").getContext("2d"), {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label:"Margem EBITDA (%)", data: margem, borderWidth:1 }
+        ]
+      },
+      options: {
+        plugins:{ legend:{display:false}, tooltip:{callbacks:{
+          label:(ctx)=> `Margem: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:1})}%`
+        }}},
+        scales:{
+          y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } }
+        },
+        responsive:true,
+        maintainAspectRatio:false
+      }
+    });
+
+    chart3 = new Chart(document.getElementById("chartAlavancagemLiquidez").getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label:"DL/EBITDA (x)", data: alav, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:3 },
+          { label:"Liquidez",      data: liq,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:3 }
+        ]
+      },
+      options: {
+        plugins:{ legend:{display:true}, tooltip:{mode:"index", intersect:false, callbacks:{
+          label:(ctx)=> {
+            const v = Number(ctx.parsed.y);
+            return `${ctx.dataset.label}: ${Number.isFinite(v)? v.toLocaleString("pt-BR",{maximumFractionDigits:2}) : "—"}`;
+          }
+        } }},
+        scales:{
+          y1:{ position:"left",  title:{display:true, text:"DL/EBITDA (x)"}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } },
+          y2:{ position:"right", title:{display:true, text:"Liquidez"}, grid:{drawOnChartArea:false}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } }
+        },
+        responsive:true,
+        maintainAspectRatio:false,
+        elements:{ line:{ spanGaps:true } }
+      }
+    });
+
+    // ====== TABELA COMPARATIVA ======
+    rows.sort((a,b)=> b.ano - a.ano); // para a tabela desc
     tbody.innerHTML="";
     for(let i=0;i<rows.length;i++){
       const r = rows[i];
@@ -549,7 +631,8 @@ async function abrirRelatorio(empresaId){
       tbody.appendChild(tr);
     }
 
-    // resumo executivo (último ano vs anterior)
+    // RESUMO EXECUTIVO (último ano vs anterior)
+    rows.sort((a,b)=> b.ano - a.ano);
     if(rows.length>=2){
       const a = rows[0], b = rows[1];
       const mk = (label, val, fmt)=> `<div><strong>${label}:</strong> ${fmt(val)}</div>`;
@@ -583,11 +666,18 @@ function renderDeltaPct(v){
 }
 function renderDeltaNum(v, invert=false){
   if(v==null) return `<span class="delta neu">—</span>`;
-  // em alavancagem, queda é bom => invert=true (↓ = positivo)
+  // em alavancagem, queda é bom => invert=true
   const good = invert ? (v<0) : (v>0);
   const bad  = invert ? (v>0) : (v<0);
   const cls = good ? "pos" : (bad ? "neg" : "neu");
   const arrow = v>0 ? "↑" : (v<0 ? "↓" : "•");
   const val = Number.isFinite(v)? clamp2(Math.abs(v)) : "—";
   return `<span class="delta ${cls}">${arrow} ${val}</span>`;
+}
+
+function destroyCharts(){
+  try{ chart1 && chart1.destroy(); }catch(e){}
+  try{ chart2 && chart2.destroy(); }catch(e){}
+  try{ chart3 && chart3.destroy(); }catch(e){}
+  chart1=chart2=chart3=null;
 }
