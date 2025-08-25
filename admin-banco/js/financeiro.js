@@ -137,7 +137,7 @@ function wireUi(){
   m2?.addEventListener("click", (e)=>{ if(e.target===m2) m2.style.display="none"; });
 }
 
-// Preenche select de anos (ultimos 8 anos + Mais recente)
+// Preenche select de anos (últimos 8 anos + Mais recente)
 function preencherAnosSelect(){
   const sel = document.getElementById("filtroAno");
   if(!sel) return;
@@ -439,21 +439,8 @@ async function salvarFinanceiro(){
       agenciaId: EMPRESA_ALVO.agenciaId || null
     }, { merge:true });
 
-    // Atualiza denormalizados na raiz **apenas se for o mais recente**
-    const snap = await empresaRef.get();
-    const ultimo = snap.exists ? (snap.data().ultimoAnoFinanceiro || null) : null;
-    const ehMaisRecente = (ultimo == null) || (ano >= Number(ultimo));
-    if (ehMaisRecente) {
-      await empresaRef.set({
-        ultimoAnoFinanceiro: ano,
-        ultimoEbitda: ebitda,
-        ultimaReceita: receita,
-        ultimaDividaLiquida: dividaLiquida,
-        ultimaAlavancagem: Number.isFinite(alavancagem) ? alavancagem : null,
-        ultimaLiquidez: Number.isFinite(liquidez) ? liquidez : null,
-        ultimoSeloRisco: selo
-      }, { merge:true });
-    }
+    // -> recalcula "Mais recente" olhando a subcoleção
+    await recomputarMaisRecente(empresaRef);
 
     info.textContent = "Lançamento salvo com sucesso!";
     await carregarGrid();
@@ -462,6 +449,32 @@ async function salvarFinanceiro(){
     console.error(e);
     err.textContent = e?.message || "Erro ao salvar.";
   }
+}
+
+// Recalcula os campos denormalizados de "mais recente" na raiz
+async function recomputarMaisRecente(empresaRef){
+  const snap = await empresaRef.collection("financeiro").orderBy("ano","desc").limit(1).get();
+  if (snap.empty) return;
+  const d = snap.docs[0].data() || {};
+  const receita = d.receitaLiquida ?? null;
+  const ebitda  = d.ebitda ?? null;
+  const dividaLiquida = (d.dividaLiquida != null)
+    ? d.dividaLiquida
+    : (Number.isFinite(d.dividaBruta) && Number.isFinite(d.caixa) ? Math.max(d.dividaBruta - d.caixa, 0) : null);
+  const alav   = (d.alavancagemDivLiqEbitda != null) ? d.alavancagemDivLiqEbitda
+    : (Number.isFinite(dividaLiquida) && Number.isFinite(ebitda) && ebitda !== 0 ? dividaLiquida/ebitda : null);
+  const liq    = (d.liquidezCorrente != null) ? d.liquidezCorrente : null;
+  const selo   = d.selo || null;
+
+  await empresaRef.set({
+    ultimoAnoFinanceiro: d.ano,
+    ultimaReceita: receita,
+    ultimoEbitda: ebitda,
+    ultimaDividaLiquida: dividaLiquida,
+    ultimaAlavancagem: Number.isFinite(alav) ? alav : null,
+    ultimaLiquidez: Number.isFinite(liq) ? liq : null,
+    ultimoSeloRisco: selo
+  }, { merge:true });
 }
 
 // ===== Regras de avaliação (sinais + selo) =====
@@ -499,10 +512,8 @@ async function abrirRelatorio(empresaId){
   const base = EMPRESAS_CACHE.get(empresaId) || { id:empresaId, nome:"Empresa" };
   document.getElementById("detEmpresaAlvo").textContent = `${base.nome} (ID: ${base.id})`;
   const tbody = document.getElementById("detTbody");
-  tbody.innerHTML = `<tr><td colspan="13" class="muted">Carregando…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="14" class="muted">Carregando…</td></tr>`;
   document.getElementById("detResumo").innerHTML = "";
-
-  // destrói gráficos antigos para evitar overlay/memória
   destroyCharts();
 
   try{
@@ -521,9 +532,10 @@ async function abrirRelatorio(empresaId){
         selo: d.selo || null
       });
     });
-    rows.sort((a,b)=> a.ano - b.ano); // ascendente para desenhar da esquerda->direita
+    // para gráficos: ascendente
+    rows.sort((a,b)=> a.ano - b.ano);
 
-    // ====== GRÁFICOS ======
+    // ===== GRÁFICOS =====
     const labels = rows.map(r=> String(r.ano));
     const receita = rows.map(r=> r.receita ?? null);
     const ebitda  = rows.map(r=> r.ebitda ?? null);
@@ -533,55 +545,37 @@ async function abrirRelatorio(empresaId){
 
     chart1 = new Chart(document.getElementById("chartReceitaEbitda").getContext("2d"), {
       type: "line",
-      data: {
-        labels,
-        datasets: [
-          { label:"Receita", data: receita, tension:.3, borderWidth:2, pointRadius:3 },
-          { label:"EBITDA",  data: ebitda,  tension:.3, borderWidth:2, pointRadius:3 }
-        ]
-      },
+      data: { labels, datasets: [
+        { label:"Receita", data: receita, tension:.3, borderWidth:2, pointRadius:3 },
+        { label:"EBITDA",  data: ebitda,  tension:.3, borderWidth:2, pointRadius:3 }
+      ]},
       options: {
         plugins:{ legend:{display:true} , tooltip:{mode:"index", intersect:false, callbacks:{
           label:(ctx)=> `${ctx.dataset.label}: ${toBRL(ctx.parsed.y)}`
         }}},
-        scales:{
-          y:{ ticks:{ callback:(v)=> toBRL(v) } }
-        },
-        responsive:true,
-        maintainAspectRatio:false,
-        elements:{ line:{ spanGaps:true } }
+        scales:{ y:{ ticks:{ callback:(v)=> toBRL(v) } } },
+        responsive:true, maintainAspectRatio:false, elements:{ line:{ spanGaps:true } }
       }
     });
 
     chart2 = new Chart(document.getElementById("chartMargem").getContext("2d"), {
       type: "bar",
-      data: {
-        labels,
-        datasets: [
-          { label:"Margem EBITDA (%)", data: margem, borderWidth:1 }
-        ]
-      },
+      data: { labels, datasets: [{ label:"Margem EBITDA (%)", data: margem, borderWidth:1 }] },
       options: {
         plugins:{ legend:{display:false}, tooltip:{callbacks:{
           label:(ctx)=> `Margem: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:1})}%`
         }}},
-        scales:{
-          y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } }
-        },
-        responsive:true,
-        maintainAspectRatio:false
+        scales:{ y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } } },
+        responsive:true, maintainAspectRatio:false
       }
     });
 
     chart3 = new Chart(document.getElementById("chartAlavancagemLiquidez").getContext("2d"), {
       type: "line",
-      data: {
-        labels,
-        datasets: [
-          { label:"DL/EBITDA (x)", data: alav, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:3 },
-          { label:"Liquidez",      data: liq,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:3 }
-        ]
-      },
+      data: { labels, datasets: [
+        { label:"DL/EBITDA (x)", data: alav, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:3 },
+        { label:"Liquidez",      data: liq,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:3 }
+      ]},
       options: {
         plugins:{ legend:{display:true}, tooltip:{mode:"index", intersect:false, callbacks:{
           label:(ctx)=> {
@@ -593,14 +587,13 @@ async function abrirRelatorio(empresaId){
           y1:{ position:"left",  title:{display:true, text:"DL/EBITDA (x)"}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } },
           y2:{ position:"right", title:{display:true, text:"Liquidez"}, grid:{drawOnChartArea:false}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } }
         },
-        responsive:true,
-        maintainAspectRatio:false,
+        responsive:true, maintainAspectRatio:false,
         elements:{ line:{ spanGaps:true } }
       }
     });
 
-    // ====== TABELA COMPARATIVA ======
-    rows.sort((a,b)=> b.ano - a.ano); // para a tabela desc
+    // ===== TABELA (desc) + botão Editar por ano =====
+    rows.sort((a,b)=> b.ano - a.ano);
     tbody.innerHTML="";
     for(let i=0;i<rows.length;i++){
       const r = rows[i];
@@ -627,9 +620,20 @@ async function abrirRelatorio(empresaId){
         <td>${renderDeltaPct(dMar)}</td>
         <td>${renderDeltaNum(dAlv, true)}</td>
         <td>${renderDeltaNum(dLiq)}</td>
+        <td><button class="btn outline" data-editano="${r.ano}" data-editempresa="${base.id}">Editar</button></td>
       `;
       tbody.appendChild(tr);
     }
+
+    // listeners dos botões "Editar" por ano
+    tbody.querySelectorAll("[data-editano]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const ano = btn.getAttribute("data-editano");
+        const emp = btn.getAttribute("data-editempresa");
+        document.getElementById("modalDet").style.display="none";
+        abrirModalFin(emp, ano);
+      });
+    });
 
     // RESUMO EXECUTIVO (último ano vs anterior)
     rows.sort((a,b)=> b.ano - a.ano);
@@ -646,7 +650,7 @@ async function abrirRelatorio(empresaId){
     }
   }catch(e){
     console.error(e);
-    tbody.innerHTML = `<tr><td colspan="13" class="muted">Erro ao carregar (${e.message}).</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" class="muted">Erro ao carregar (${e.message}).</td></tr>`;
   }
 
   document.getElementById("modalDet").style.display = "block";
