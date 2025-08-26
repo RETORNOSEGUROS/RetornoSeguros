@@ -1,5 +1,4 @@
 // empresa.js
-
 (async function init(){
   const sess = await ensureAuthOrRedirect('empresa');
   const user = sess.user;
@@ -9,33 +8,29 @@
 
   if(!vinculos.length){
     alert('Seu usuário ainda não está vinculado a nenhuma empresa.');
-    window.location.replace('./login.html');
+    window.location.replace('/empresas/login.html');
     return;
   }
 
-  // Se vier empresaId pela URL (?empresaId=xxx), respeita. Senão pega a primeira.
   const params = new URLSearchParams(location.search);
   const urlEmpresaId = params.get('empresaId');
   const atualEmpresaId = urlEmpresaId || vinculos[0].empresaId;
   const meuVinculo = vinculos.find(v => v.empresaId === atualEmpresaId) || vinculos[0];
 
-  // Render menu
   renderMenu('menuList', (id)=> loadSection(id, atualEmpresaId, meuVinculo.role));
 
-  // Header empresa
-  const empresaSnap = await db.collection('empresas').doc(atualEmpresaId).get();
+  const empresaSnap = await db.collection(COL.EMPRESAS).doc(atualEmpresaId).get();
   const empresa = { id: atualEmpresaId, ...empresaSnap.data() };
   document.getElementById('empresaNome').textContent = empresa.nome || 'Minha Empresa';
   renderUserBox('usuarioBox', user, `acesso: ${meuVinculo.role}`);
 
-  // Seção inicial
   await loadOverview(atualEmpresaId);
   await loadSeguros(atualEmpresaId);
 
   async function loadSection(sectionId, empresaId, role){
     const content = document.getElementById('content');
     if(sectionId === 'overview'){
-      content.querySelector('#cards').innerHTML = ''; // recalculará
+      content.querySelector('#cards').innerHTML = '';
       await loadOverview(empresaId);
       await loadSeguros(empresaId);
     }
@@ -45,16 +40,13 @@
       await loadSeguros(empresaId);
       document.getElementById('btnNovoSeguro').onclick = () => {
         if(role === 'colaborador') return alert('Somente Gestor/Owner pode adicionar.');
-        // aqui abriremos um modal simples numa próxima iteração
         alert('Em breve: modal para adicionar seguro.');
       };
     }
-    // as demais seções vamos plugando depois...
   }
 
   async function loadOverview(empresaId){
-    // KPIs simples: total seguros, prêmio total, próximos a vencer (<=30d)
-    const snap = await db.collection('empresas').doc(empresaId).collection('seguros').get();
+    const snap = await db.collection(COL.EMPRESAS).doc(empresaId).collection(COL.APOLICES).get();
     const items = snap.docs.map(d => ({ id:d.id, ...d.data() }));
     const total = items.length;
     const premioTotal = items.reduce((sum, s)=> sum + Number(s.premio||0), 0);
@@ -80,7 +72,10 @@
     if(!box.innerHTML.trim()) box.innerHTML = tableSegurosHeader();
 
     const tbody = document.getElementById('tbodySeguros');
-    const snap = await db.collection('empresas').doc(empresaId).collection('seguros').orderBy('fimVigencia','asc').get();
+    const snap = await db.collection(COL.EMPRESAS).doc(empresaId)
+      .collection(COL.APOLICES)
+      .orderBy('fimVigencia','asc').get();
+
     const rows = snap.docs.map(d => rowSeguro({ id:d.id, ...d.data() })).join('');
     tbody.innerHTML = rows || `<tr><td colspan="6" class="px-4 py-6 text-center text-slate-500">Nenhuma apólice cadastrada ainda.</td></tr>`;
   }
