@@ -1,53 +1,52 @@
-// js/admin.js
+// admin.js
 
-// Verifica login no Firebase e carrega dados do admin
-firebase.auth().onAuthStateChanged(async (user) => {
-  if (user) {
-    const uid = user.uid;
-    const db = firebase.firestore();
+(async function init(){
+  const sess = await ensureAuthOrRedirect('admin');
+  // opcional: checar se user é admin geral do seu ecossistema, senão bloquear.
 
-    try {
-      const doc = await db.collection("admins").doc(uid).get();
-      if (doc.exists && doc.data().perfil === "admin") {
-        const nome = doc.data().nome || "Administrador";
-        const perfil = doc.data().perfil || "admin";
-        document.getElementById("user-info").innerHTML = `${nome} (${perfil})`;
-        carregarPagina("visao"); // carrega visão geral por padrão
-      } else {
-        alert("Acesso restrito. Você não tem permissão de administrador.");
-        window.location.href = "../login.html";
-      }
-    } catch (err) {
-      console.error("Erro ao buscar dados do usuário:", err);
+  const form = document.getElementById('formEmpresa');
+  const msg  = document.getElementById('msgAdmin');
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const nome = document.getElementById('nomeEmpresa').value.trim();
+    const cnpj = document.getElementById('cnpjEmpresa').value.trim();
+    if(!nome){ alert('Informe o nome da empresa.'); return; }
+
+    try{
+      const ref = await db.collection('empresas').add({
+        nome, cnpj, status:'ativo',
+        ownerUid: auth.currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Vincula o criador como owner
+      await db.collection('usuarios_empresa').doc(auth.currentUser.uid)
+        .collection('vinculos').doc(ref.id).set({ role:'owner' });
+
+      msg.textContent = `Empresa criada com ID ${ref.id}`;
+      msg.classList.remove('hidden');
+      (document.getElementById('empresaIdConvite')).value = ref.id;
+    }catch(err){
+      alert(err.message);
     }
-  } else {
-    // não logado
-    window.location.href = "../login.html";
-  }
-});
-
-// Função para carregar conteúdo dinâmico
-function carregarPagina(pagina) {
-  const url = `../js/admin-${pagina}.js`;
-  const container = document.getElementById("conteudo-pagina");
-
-  // Limpa conteúdo atual
-  container.innerHTML = `<p>Carregando ${pagina}...</p>`;
-
-  // Remove scripts anteriores se necessário
-  const scripts = document.querySelectorAll("script[data-dynamic]");
-  scripts.forEach((el) => el.remove());
-
-  // Cria novo script e carrega módulo
-  const script = document.createElement("script");
-  script.src = url;
-  script.setAttribute("data-dynamic", "true");
-  document.body.appendChild(script);
-}
-
-// Logout
-function logout() {
-  firebase.auth().signOut().then(() => {
-    window.location.href = "../login.html";
   });
-}
+
+  // Gera link de convite
+  document.getElementById('btnGerarConvite').onclick = async ()=>{
+    const empresaId = document.getElementById('empresaIdConvite').value.trim();
+    const role = document.getElementById('roleConvite').value;
+    if(!empresaId){ alert('Informe o empresaId.'); return; }
+
+    // Link simples: o usuário abre, faz login e a gente cria o vínculo na primeira carga
+    // Exemplo: login.html?join=EMPRESAID&role=gestor_rh
+    const url = new URL(window.location.origin + window.location.pathname);
+    // Substitui admin.html por login.html
+    const base = url.toString().replace('admin.html','login.html');
+    const link = `${base}?join=${encodeURIComponent(empresaId)}&role=${encodeURIComponent(role)}`;
+    document.getElementById('linkConvite').value = link;
+  };
+
+  // Tratativa no login: se houver join=, após logar cria o vínculo automaticamente
+  // —> adicionar a lógica no login.html (vamos aproveitar auth.onAuthStateChanged lá):
+})();
