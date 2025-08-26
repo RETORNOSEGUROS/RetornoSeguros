@@ -2,28 +2,79 @@
 (async function init(){
   const sess = await ensureAuthOrRedirect('empresa');
   const user = sess.user;
-  const vinculos = sess.vinculos;
+  const vinculos = sess.vinculos || [];
+  const isAdminGlobal = !!sess.isAdminGlobal;
 
   document.getElementById('btnLogout').onclick = doLogout;
 
-  if(!vinculos.length){
+  const params = new URLSearchParams(location.search);
+  let atualEmpresaId = params.get('empresaId');
+
+  // --- Decisão de acesso ---
+  if (!vinculos.length && !isAdminGlobal) {
     alert('Seu usuário ainda não está vinculado a nenhuma empresa.');
     window.location.replace('/empresas/login.html');
     return;
   }
 
-  const params = new URLSearchParams(location.search);
-  const urlEmpresaId = params.get('empresaId');
-  const atualEmpresaId = urlEmpresaId || vinculos[0].empresaId;
-  const meuVinculo = vinculos.find(v => v.empresaId === atualEmpresaId) || vinculos[0];
+  // Se tem vínculo e não veio empresaId, usa o primeiro vínculo
+  if (vinculos.length && !atualEmpresaId) {
+    atualEmpresaId = vinculos[0].empresaId;
+  }
 
+  // Se é admin global e não tem empresaId nem vínculos, lista empresas e escolhe a primeira
+  if (isAdminGlobal && !atualEmpresaId) {
+    const lista = await db.collection(COL.EMPRESAS).limit(20).get();
+    if (lista.empty) {
+      document.getElementById('empresaNome').textContent = 'Sem empresas cadastradas';
+      document.getElementById('usuarioBox').textContent = `${user.email} • admin`;
+      // Nada para carregar
+      return;
+    }
+    // monta seletor rápido
+    const nav = document.getElementById('menuList');
+    const wrap = document.createElement('div');
+    wrap.className = 'p-3';
+    const sel = document.createElement('select');
+    sel.className = 'w-full border rounded-lg px-3 py-2 mb-3';
+    lista.docs.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id; opt.textContent = `${d.data().nome || '(sem nome)'} — ${d.id}`;
+      sel.appendChild(opt);
+    });
+    const go = document.createElement('button');
+    go.className = 'w-full px-3 py-2 rounded-lg bg-indigo-600 text-white';
+    go.textContent = 'Abrir empresa selecionada';
+    go.onclick = () => {
+      const id = sel.value;
+      window.location.replace('/empresas/empresa.html?empresaId='+encodeURIComponent(id));
+    };
+    wrap.appendChild(sel); wrap.appendChild(go);
+    nav.appendChild(wrap);
+
+    document.getElementById('empresaNome').textContent = 'Selecione uma empresa';
+    document.getElementById('usuarioBox').textContent = `${user.email} • admin`;
+    // Para aqui; aguarda escolha
+    return;
+  }
+
+  // Neste ponto, já temos um empresaId válido
+  const meuVinculo = vinculos.find(v => v.empresaId === atualEmpresaId) || { role: (isAdminGlobal ? 'admin' : 'colaborador') };
+
+  // Render menu
   renderMenu('menuList', (id)=> loadSection(id, atualEmpresaId, meuVinculo.role));
 
+  // Header
   const empresaSnap = await db.collection(COL.EMPRESAS).doc(atualEmpresaId).get();
+  if (!empresaSnap.exists) {
+    alert('Empresa não encontrada.');
+    return;
+  }
   const empresa = { id: atualEmpresaId, ...empresaSnap.data() };
   document.getElementById('empresaNome').textContent = empresa.nome || 'Minha Empresa';
-  renderUserBox('usuarioBox', user, `acesso: ${meuVinculo.role}`);
+  document.getElementById('usuarioBox').textContent = `${user.email} • ${meuVinculo.role}`;
 
+  // Seção inicial
   await loadOverview(atualEmpresaId);
   await loadSeguros(atualEmpresaId);
 
