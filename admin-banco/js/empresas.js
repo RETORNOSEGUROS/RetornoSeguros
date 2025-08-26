@@ -1,4 +1,4 @@
-// === Mapa de Produtos por Empresa (RBAC + sem índices) ===
+// === Mapa de Produtos por Empresa (RBAC + Filtros Agência → RM + % por Ramo) ===
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
@@ -16,6 +16,10 @@ let produtos = [];
 let nomesProdutos = {};
 let empresasCache = [];
 
+let agencias = [];         // [{id, nome}]
+let agenciaSel = "";       // agência selecionada (id)
+let rmSel = "";            // RM selecionado (nome)
+
 // ---- Utils ----
 const normalize = (s) =>
   (s || "")
@@ -23,7 +27,7 @@ const normalize = (s) =>
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .toLowerCase().trim();
 
-const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " "); // <- trata _, -, acentos
+const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 
 function classFromStatus(statusRaw) {
   const s = normalize(statusRaw);
@@ -37,10 +41,14 @@ function classFromStatus(statusRaw) {
   return "nenhum";
 }
 
+function byTxt(a,b){ return (a||"").localeCompare(b||"","pt-BR"); }
+
 function erroUI(msg){
   const cont = document.getElementById("tabelaEmpresas");
   if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">${msg}</div>`;
 }
+
+function percent(n, d){ return d > 0 ? Math.round((n * 100) / d) : 0; }
 
 // ---- Boot ----
 auth.onAuthStateChanged(async (user) => {
@@ -51,27 +59,41 @@ auth.onAuthStateChanged(async (user) => {
     const up = await db.collection("usuarios_banco").doc(user.uid).get();
     const d  = up.exists ? (up.data()||{}) : {};
     perfilRaw     = d.perfil || d.roleId || "";
-    perfil        = roleNorm(perfilRaw);        // <<<<<<<<<<<<<< fix
+    perfil        = roleNorm(perfilRaw);
     minhaAgencia  = d.agenciaId || "";
   } catch {
     perfilRaw = ""; perfil = ""; minhaAgencia = "";
   }
   isAdmin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
+  // Esconde RM se for RM (ele já está “filtrado” por si só)
   if (perfil === "rm" && !isAdmin) {
-    // RM não precisa de filtro de RM
     const sel = document.getElementById("filtroRM");
     if (sel) sel.style.display = "none";
   }
 
   try {
     await carregarProdutos();
-    await carregarRM();       // preenche combo RM (admin/chefe)
+    await carregarAgencias(); // preenche combo Agência (admin/chefe)
+    await carregarRM();       // preenche combo RM (dependente da agência)
     await carregarEmpresas(); // monta tabela
   } catch (e) {
     console.error("[empresas] boot:", e);
     erroUI("Erro ao carregar dados.");
   }
+
+  // Handlers de filtro
+  const ag = document.getElementById("filtroAgencia");
+  const rm = document.getElementById("filtroRM");
+  if (ag) ag.onchange = async () => {
+    agenciaSel = ag.value || "";
+    await carregarRM();      // RM depende da agência
+    await carregarEmpresas();
+  };
+  if (rm) rm.onchange = async () => {
+    rmSel = rm.value || "";
+    await carregarEmpresas();
+  };
 });
 
 // ---- Produtos (colunas) ----
@@ -88,20 +110,75 @@ async function carregarProdutos() {
   });
 }
 
-// ---- Combo RM (usa empresas no mesmo escopo) ----
+// ---- Agências (combo 1) ----
+async function carregarAgencias() {
+  const select = document.getElementById("filtroAgencia");
+  if (!select) return;
+
+  // RM “puro”: oculta filtro de agência (ele só vê dele mesmo)
+  if (!isAdmin && perfil === "rm") {
+    select.style.display = "none";
+    agenciaSel = minhaAgencia || "";
+    return;
+  }
+
+  select.innerHTML = `<option value="">Todas</option>`;
+
+  // Fonte: usar as próprias empresas para extrair agências visíveis ao usuário
+  let q = db.collection("empresas");
+  if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
+    q = q.where("agenciaId","==",minhaAgencia);
+  }
+
+  try {
+    const snapshot = await q.get();
+    const mapAg = new Map();
+    snapshot.forEach(doc => {
+      const e = doc.data() || {};
+      const id   = e.agenciaId || "";
+      const nome = e.agenciaNome || e.agencia || id || "";
+      if (id) mapAg.set(id, nome);
+    });
+
+    agencias = Array.from(mapAg.entries())
+      .map(([id, nome]) => ({id, nome}))
+      .sort((a,b)=>byTxt(a.nome,b.nome));
+
+    agencias.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value = a.id;
+      opt.textContent = a.nome || a.id;
+      select.appendChild(opt);
+    });
+
+    // Default: se gerente-chefe tem uma agência, pré-seleciona
+    if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
+      select.value = minhaAgencia;
+      agenciaSel = minhaAgencia;
+    }
+  } catch (e) {
+    console.warn("[empresas] carregarAgencias:", e);
+  }
+}
+
+// ---- Combo RM (depende da agência) ----
 async function carregarRM() {
   const select = document.getElementById("filtroRM");
   if (!select) return;
-  if (!isAdmin && perfil === "rm") return;
+  if (!isAdmin && perfil === "rm") return; // RM não usa combo RM
 
   select.innerHTML = `<option value="">Todos</option>`;
 
+  // Base de empresas visíveis ao papel / agência selecionada
   let q = db.collection("empresas");
   if (!isAdmin) {
-    if (perfil === "gerente chefe" && minhaAgencia) {
-      q = q.where("agenciaId","==",minhaAgencia);
+    if (perfil === "gerente chefe" && (agenciaSel || minhaAgencia)) {
+      q = q.where("agenciaId","==",agenciaSel || minhaAgencia);
     }
+  } else {
+    if (agenciaSel) q = q.where("agenciaId","==",agenciaSel);
   }
+
   try {
     const snapshot = await q.get();
     const rms = new Set();
@@ -111,7 +188,7 @@ async function carregarRM() {
       if (nome) rms.add(nome);
     });
     Array.from(rms)
-      .sort((a,b)=>(a||"").localeCompare(b||"","pt-BR"))
+      .sort(byTxt)
       .forEach(nome => {
         const opt = document.createElement("option");
         opt.value = nome;
@@ -142,17 +219,22 @@ async function buscarCotacoesParaEmpresa(empresaId) {
   return [];
 }
 
-// ---- Carregar Empresas (RBAC + sem índices) ----
+// ---- Carregar Empresas (aplica filtros de Agência e RM) ----
 async function carregarEmpresas() {
-  const filtroRMNome = document.getElementById("filtroRM")?.value || "";
+  const filtroRMNome = (rmSel || document.getElementById("filtroRM")?.value || "").trim();
 
   try {
     let docs = [];
 
     if (isAdmin) {
-      docs = (await db.collection("empresas").get()).docs;
-    } else if (perfil === "gerente chefe" && minhaAgencia) {
-      docs = (await db.collection("empresas").where("agenciaId","==",minhaAgencia).get()).docs;
+      let q = db.collection("empresas");
+      if (agenciaSel) q = q.where("agenciaId","==",agenciaSel);
+      docs = (await q.get()).docs;
+    } else if (perfil === "gerente chefe") {
+      const ag = agenciaSel || minhaAgencia;
+      let q = db.collection("empresas");
+      if (ag) q = q.where("agenciaId","==",ag);
+      docs = (await q.get()).docs;
     } else if (perfil === "rm") {
       const buckets = [];
       try { buckets.push(await db.collection("empresas").where("rmUid","==",meuUid).get()); } catch(e){}
@@ -209,13 +291,28 @@ async function carregarEmpresas() {
       })
     );
 
+    // Calcula % por ramo que saiu do zero
+    const totalEmpresas = linhas.length;
+    const contagemPorRamo = {};
+    produtos.forEach(p => contagemPorRamo[p] = 0);
+    linhas.forEach(linha => {
+      produtos.forEach(p => {
+        if (linha.status[p] !== "nenhum") contagemPorRamo[p] += 1;
+      });
+    });
+    const pctPorRamo = {};
+    produtos.forEach(p => pctPorRamo[p] = percent(contagemPorRamo[p], totalEmpresas));
+
     // Render
     let html = `<table><thead><tr><th>Empresa</th>`;
-    produtos.forEach(p => { html += `<th>${nomesProdutos[p]}</th>`; });
+    produtos.forEach(p => {
+      const pct = pctPorRamo[p];
+      html += `<th title="% de empresas com movimento neste ramo">${nomesProdutos[p]} <span class="badge">${pct}%</span></th>`;
+    });
     html += `</tr></thead><tbody>`;
 
     linhas.forEach(linha => {
-      html += `<tr><td>${linha.nome}</td>`;
+      html += `<tr><td>${linha.nome || "-"}</td>`;
       produtos.forEach(p => {
         const cor = linha.status[p];
         const classe = {
