@@ -1,8 +1,6 @@
 // admin.js
-
 (async function init(){
   const sess = await ensureAuthOrRedirect('admin');
-  // opcional: checar se user é admin geral do seu ecossistema, senão bloquear.
 
   const form = document.getElementById('formEmpresa');
   const msg  = document.getElementById('msgAdmin');
@@ -14,39 +12,29 @@
     if(!nome){ alert('Informe o nome da empresa.'); return; }
 
     try{
-      const ref = await db.collection('empresas').add({
+      const ref = await db.collection(COL.EMPRESAS).add({
         nome, cnpj, status:'ativo',
         ownerUid: auth.currentUser.uid,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      // Vincula o criador como owner
-      await db.collection('usuarios_empresa').doc(auth.currentUser.uid)
+      await db.collection(COL.USU_EMPRESA).doc(auth.currentUser.uid)
         .collection('vinculos').doc(ref.id).set({ role:'owner' });
 
       msg.textContent = `Empresa criada com ID ${ref.id}`;
       msg.classList.remove('hidden');
       (document.getElementById('empresaIdConvite')).value = ref.id;
     }catch(err){
-      alert(err.message);
+      alert(err.message || String(err));
     }
   });
 
-  // Gera link de convite
   document.getElementById('btnGerarConvite').onclick = async ()=>{
     const empresaId = document.getElementById('empresaIdConvite').value.trim();
     const role = document.getElementById('roleConvite').value;
     if(!empresaId){ alert('Informe o empresaId.'); return; }
 
-    // Link simples: o usuário abre, faz login e a gente cria o vínculo na primeira carga
-    // Exemplo: login.html?join=EMPRESAID&role=gestor_rh
-    const url = new URL(window.location.origin + window.location.pathname);
-    // Substitui admin.html por login.html
-    const base = url.toString().replace('admin.html','login.html');
-    const link = `${base}?join=${encodeURIComponent(empresaId)}&role=${encodeURIComponent(role)}`;
+    const link = `/empresas/login.html?join=${encodeURIComponent(empresaId)}&role=${encodeURIComponent(role)}`;
     document.getElementById('linkConvite').value = link;
   };
-
-  // Tratativa no login: se houver join=, após logar cria o vínculo automaticamente
-  // —> adicionar a lógica no login.html (vamos aproveitar auth.onAuthStateChanged lá):
 })();
