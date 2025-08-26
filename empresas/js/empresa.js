@@ -1,4 +1,4 @@
-// empresa.js
+// /empresas/js/empresa.js
 (async function init(){
   const sess = await ensureAuthOrRedirect('empresa');
   const user = sess.user;
@@ -22,43 +22,77 @@
     atualEmpresaId = vinculos[0].empresaId;
   }
 
-  // Se é admin global e não tem empresaId nem vínculos, lista empresas e escolhe a primeira
+  // Se é admin global e não tem empresaId nem vínculos
   if (isAdminGlobal && !atualEmpresaId) {
-    const lista = await db.collection(COL.EMPRESAS).limit(20).get();
+    const lista = await db.collection(COL.EMPRESAS).limit(50).get();
+
+    const content = document.getElementById('content');
+    const nav = document.getElementById('menuList');
+    document.getElementById('usuarioBox').textContent = `${user.email} • admin`;
+
+    // Botão cadastrar
+    const btnCadastrarHtml = `
+      <a href="/empresas/admin.html"
+         class="inline-flex items-center justify-center px-4 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">
+        + Cadastrar empresa
+      </a>
+    `;
+
     if (lista.empty) {
+      // Estado vazio
       document.getElementById('empresaNome').textContent = 'Sem empresas cadastradas';
-      document.getElementById('usuarioBox').textContent = `${user.email} • admin`;
-      // Nada para carregar
+
+      nav.innerHTML = `
+        <div class="p-3">
+          <div class="text-sm text-slate-500 mb-2">Ações do admin</div>
+          ${btnCadastrarHtml}
+        </div>
+      `;
+
+      content.innerHTML = `
+        <div class="bg-white rounded-2xl shadow p-8 text-center">
+          <h2 class="text-xl font-semibold text-slate-800">Nenhuma empresa encontrada</h2>
+          <p class="text-slate-500 mt-2">Crie a primeira empresa para começar.</p>
+          <div class="mt-5">${btnCadastrarHtml}</div>
+        </div>
+      `;
       return;
     }
-    // monta seletor rápido
-    const nav = document.getElementById('menuList');
+
+    // Há empresas: mostra seletor + botão cadastrar
+    document.getElementById('empresaNome').textContent = 'Selecione uma empresa';
+
     const wrap = document.createElement('div');
     wrap.className = 'p-3';
-    const sel = document.createElement('select');
-    sel.className = 'w-full border rounded-lg px-3 py-2 mb-3';
-    lista.docs.forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = d.id; opt.textContent = `${d.data().nome || '(sem nome)'} — ${d.id}`;
-      sel.appendChild(opt);
-    });
-    const go = document.createElement('button');
-    go.className = 'w-full px-3 py-2 rounded-lg bg-indigo-600 text-white';
-    go.textContent = 'Abrir empresa selecionada';
-    go.onclick = () => {
-      const id = sel.value;
-      window.location.replace('/empresas/empresa.html?empresaId='+encodeURIComponent(id));
-    };
-    wrap.appendChild(sel); wrap.appendChild(go);
+    wrap.innerHTML = `
+      <div class="text-sm text-slate-500 mb-2">Empresas</div>
+      <select id="selectorEmpresas" class="w-full border rounded-lg px-3 py-2 mb-3"></select>
+      <button id="btnAbrirEmpresa" class="w-full px-3 py-2 rounded-lg bg-indigo-600 text-white mb-3">
+        Abrir empresa selecionada
+      </button>
+      <div class="pt-2 border-t">${btnCadastrarHtml}</div>
+    `;
     nav.appendChild(wrap);
 
-    document.getElementById('empresaNome').textContent = 'Selecione uma empresa';
-    document.getElementById('usuarioBox').textContent = `${user.email} • admin`;
-    // Para aqui; aguarda escolha
-    return;
+    const sel = wrap.querySelector('#selectorEmpresas');
+    lista.docs.forEach(d => {
+      const opt = document.createElement('option');
+      const data = d.data() || {};
+      opt.value = d.id;
+      opt.textContent = `${data.nome || '(sem nome)'} — ${d.id}`;
+      sel.appendChild(opt);
+    });
+
+    wrap.querySelector('#btnAbrirEmpresa').onclick = () => {
+      const id = sel.value;
+      if (!id) return;
+      window.location.replace('/empresas/empresa.html?empresaId='+encodeURIComponent(id));
+    };
+
+    return; // aguarda escolha
   }
 
-  // Neste ponto, já temos um empresaId válido
+  // Neste ponto já temos um empresaId válido
   const meuVinculo = vinculos.find(v => v.empresaId === atualEmpresaId) || { role: (isAdminGlobal ? 'admin' : 'colaborador') };
 
   // Render menu
