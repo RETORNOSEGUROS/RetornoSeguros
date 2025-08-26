@@ -1,4 +1,4 @@
-// === Mapa de Produtos por Empresa (RBAC + Filtros Agência → RM + % por Ramo) ===
+// === Mapa de Produtos por Empresa (Agência → RM → Ano + % por Ramo) ===
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
@@ -19,6 +19,7 @@ let empresasCache = [];
 let agencias = [];         // [{id, nome}]
 let agenciaSel = "";       // agência selecionada (id)
 let rmSel = "";            // RM selecionado (nome)
+let anoSel = new Date().getFullYear(); // ano selecionado (padrão: corrente)
 
 // ---- Utils ----
 const normalize = (s) =>
@@ -39,6 +40,32 @@ function classFromStatus(statusRaw) {
   if (["recusado cliente","recusado seguradora","emitido declinado","negocio emitido declinado"].includes(s)) return "vermelho";
   if (["negocio fechado","em emissao"].includes(s)) return "azul";
   return "nenhum";
+}
+
+// Tenta deduzir o ano da cotação a partir de vários campos comuns
+function getCotacaoAno(c) {
+  // prioridades: campo explícito de ano, depois timestamps
+  const candidatos = [
+    c.ano, c.anoVigencia, c.anoReferencia, c.vigenciaAno,
+    c.vigencia?.ano
+  ].filter(Boolean);
+  if (candidatos.length) {
+    const n = parseInt(candidatos[0], 10);
+    if (!isNaN(n)) return n;
+  }
+  // timestamps ou datas string
+  const ts = c.createdAt || c.criadoEm || c.atualizadoEm || c.data || c.dataReferencia || c.updatedAt;
+  try {
+    if (ts && typeof ts.toDate === "function") {
+      return ts.toDate().getFullYear();
+    }
+    if (typeof ts === "string") {
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) return d.getFullYear();
+    }
+  } catch(_) {}
+  // fallback: ano corrente
+  return new Date().getFullYear();
 }
 
 function byTxt(a,b){ return (a||"").localeCompare(b||"","pt-BR"); }
@@ -66,17 +93,20 @@ auth.onAuthStateChanged(async (user) => {
   }
   isAdmin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
-  // Esconde RM se for RM (ele já está “filtrado” por si só)
+  // UI: RM escondido para papel RM
   if (perfil === "rm" && !isAdmin) {
     const sel = document.getElementById("filtroRM");
     if (sel) sel.style.display = "none";
   }
 
+  // Preenche seletor de Ano (corrente + 3 anteriores + "Todos")
+  montarComboAno();
+
   try {
     await carregarProdutos();
-    await carregarAgencias(); // preenche combo Agência (admin/chefe)
-    await carregarRM();       // preenche combo RM (dependente da agência)
-    await carregarEmpresas(); // monta tabela
+    await carregarAgencias();
+    await carregarRM();
+    await carregarEmpresas();
   } catch (e) {
     console.error("[empresas] boot:", e);
     erroUI("Erro ao carregar dados.");
@@ -85,16 +115,44 @@ auth.onAuthStateChanged(async (user) => {
   // Handlers de filtro
   const ag = document.getElementById("filtroAgencia");
   const rm = document.getElementById("filtroRM");
+  const an = document.getElementById("filtroAno");
   if (ag) ag.onchange = async () => {
     agenciaSel = ag.value || "";
-    await carregarRM();      // RM depende da agência
+    await carregarRM();
     await carregarEmpresas();
   };
   if (rm) rm.onchange = async () => {
     rmSel = rm.value || "";
     await carregarEmpresas();
   };
+  if (an) an.onchange = async () => {
+    const v = an.value;
+    anoSel = v === "todos" ? "todos" : parseInt(v, 10);
+    await carregarEmpresas();
+  };
 });
+
+// ---- Monta combo de Ano ----
+function montarComboAno() {
+  const sel = document.getElementById("filtroAno");
+  if (!sel) return;
+  const anoAtual = new Date().getFullYear();
+  const anos = [anoAtual, anoAtual - 1, anoAtual - 2, anoAtual - 3];
+  sel.innerHTML = "";
+  // padrão: ano corrente
+  anos.forEach(a => {
+    const opt = document.createElement("option");
+    opt.value = String(a);
+    opt.textContent = String(a);
+    sel.appendChild(opt);
+  });
+  const optTodos = document.createElement("option");
+  optTodos.value = "todos";
+  optTodos.textContent = "Todos os anos";
+  sel.appendChild(optTodos);
+  sel.value = String(anoAtual);
+  anoSel = anoAtual;
+}
 
 // ---- Produtos (colunas) ----
 async function carregarProdutos() {
@@ -115,7 +173,6 @@ async function carregarAgencias() {
   const select = document.getElementById("filtroAgencia");
   if (!select) return;
 
-  // RM “puro”: oculta filtro de agência (ele só vê dele mesmo)
   if (!isAdmin && perfil === "rm") {
     select.style.display = "none";
     agenciaSel = minhaAgencia || "";
@@ -124,7 +181,6 @@ async function carregarAgencias() {
 
   select.innerHTML = `<option value="">Todas</option>`;
 
-  // Fonte: usar as próprias empresas para extrair agências visíveis ao usuário
   let q = db.collection("empresas");
   if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
     q = q.where("agenciaId","==",minhaAgencia);
@@ -151,7 +207,6 @@ async function carregarAgencias() {
       select.appendChild(opt);
     });
 
-    // Default: se gerente-chefe tem uma agência, pré-seleciona
     if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
       select.value = minhaAgencia;
       agenciaSel = minhaAgencia;
@@ -165,11 +220,10 @@ async function carregarAgencias() {
 async function carregarRM() {
   const select = document.getElementById("filtroRM");
   if (!select) return;
-  if (!isAdmin && perfil === "rm") return; // RM não usa combo RM
+  if (!isAdmin && perfil === "rm") return;
 
   select.innerHTML = `<option value="">Todos</option>`;
 
-  // Base de empresas visíveis ao papel / agência selecionada
   let q = db.collection("empresas");
   if (!isAdmin) {
     if (perfil === "gerente chefe" && (agenciaSel || minhaAgencia)) {
@@ -219,7 +273,7 @@ async function buscarCotacoesParaEmpresa(empresaId) {
   return [];
 }
 
-// ---- Carregar Empresas (aplica filtros de Agência e RM) ----
+// ---- Carregar Empresas (aplica filtros de Agência, RM e Ano) ----
 async function carregarEmpresas() {
   const filtroRMNome = (rmSel || document.getElementById("filtroRM")?.value || "").trim();
 
@@ -243,7 +297,6 @@ async function carregarEmpresas() {
       const map = new Map();
       buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
       docs = Array.from(map.values());
-      // fallback: agência + filtra no cliente
       if (docs.length === 0 && minhaAgencia) {
         try {
           const snapAg = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
@@ -279,11 +332,16 @@ async function carregarEmpresas() {
 
         cotDocs.forEach(doc => {
           const c = doc.data() || {};
+          const ano = getCotacaoAno(c);
+          // aplica filtro de ano (se "todos", ignora filtro)
+          if (anoSel !== "todos" && ano !== anoSel) return;
+
           const ramo = c.ramo;
           const produtoId = produtos.find(id =>
             normalize(nomesProdutos[id]) === normalize(ramo)
           );
           if (!produtoId) return;
+          // último status visto no ano selecionado vence (não fazemos rank por prioridade aqui)
           statusPorProduto[produtoId] = classFromStatus(c.status);
         });
 
@@ -291,7 +349,7 @@ async function carregarEmpresas() {
       })
     );
 
-    // Calcula % por ramo que saiu do zero
+    // Calcula % por ramo que saiu do zero (considerando o ano selecionado)
     const totalEmpresas = linhas.length;
     const contagemPorRamo = {};
     produtos.forEach(p => contagemPorRamo[p] = 0);
@@ -304,10 +362,11 @@ async function carregarEmpresas() {
     produtos.forEach(p => pctPorRamo[p] = percent(contagemPorRamo[p], totalEmpresas));
 
     // Render
-    let html = `<table><thead><tr><th>Empresa</th>`;
+    let tituloAno = (anoSel === "todos") ? "Todos os anos" : String(anoSel);
+    let html = `<table><thead><tr><th>Empresa <span class="badge">${tituloAno}</span></th>`;
     produtos.forEach(p => {
       const pct = pctPorRamo[p];
-      html += `<th title="% de empresas com movimento neste ramo">${nomesProdutos[p]} <span class="badge">${pct}%</span></th>`;
+      html += `<th title="% de empresas com movimento neste ramo no período">${nomesProdutos[p]} <span class="badge">${pct}%</span></th>`;
     });
     html += `</tr></thead><tbody>`;
 
