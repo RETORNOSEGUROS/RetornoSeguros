@@ -7,18 +7,18 @@ const db   = firebase.firestore();
 
 // ===== Estado global =====
 let usuarioAtual = null;
-let perfilAtual  = "";        // "admin" | "gerente chefe" | "rm" | "assistente"
+let perfilAtual  = "";
 let minhaAgencia = "";
 let isAdmin      = false;
 
-let empresasCache = [];       // [{id, nome, cnpj, agenciaId, rmUid, rmNome}, ...]
-let agenciasMap   = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
+let empresasCache = [];
+let agenciasMap   = {};
 
-let sortKey = "lastUpdateMs"; // ordenação por última atualização
+let sortKey = "lastUpdateMs";
 let sortDir = "desc";
 let pagTamanho = 10;
-let pagMostrando = 0;         // qtd atual renderizada
-let rowsCache = [];           // cache após filtros para paginação
+let pagMostrando = 0;
+let rowsCache = [];     // linhas filtradas (para paginação/export)
 let selecionados = new Set();
 
 // ===== Helpers =====
@@ -54,7 +54,8 @@ window.addEventListener("DOMContentLoaded", () => {
         carregarFiltroRM(),
         carregarStatus(),
       ]);
-      popularDatalistEmpresas();
+      popularDatalistEmpresas();          // filtro
+      popularDatalistEmpresasNova();      // nova cotação
     } catch (e) { console.error("Erro inicial:", e); }
 
     const btn = $("btnSalvarAlteracoes");
@@ -66,8 +67,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-// ===== Perfil / Agências / Empresas / Ramos / RM / Status (sem mudanças estruturais) =====
-// (mesmo bloco do seu arquivo original, com pequenas adições)
+// ===== Perfil / Agências / Empesas / Ramos / RM / Status =====
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -113,7 +113,7 @@ async function carregarAgencias() {
 }
 
 async function carregarEmpresas() {
-  const campos = ["empresa", "novaEmpresa"];
+  const campos = ["empresa"]; // (edição permanece select)
   empresasCache = [];
   campos.forEach(id => { const el = $(id); if (el) el.innerHTML = `<option value="">Selecione a empresa</option>`; });
 
@@ -136,13 +136,14 @@ async function carregarEmpresas() {
   }
   empresasCache = Array.from(map.values()).sort((a,b) => (a.nome||"").localeCompare(b.nome||"", "pt-BR"));
 
-  campos.forEach(id => {
-    const el = $(id); if (!el) return;
+  // popular select da edição
+  const el = $("empresa");
+  if (el) {
     empresasCache.forEach(emp => {
       const opt = document.createElement("option");
       opt.value = emp.id; opt.textContent = emp.nome; el.appendChild(opt);
     });
-  });
+  }
 }
 function popularDatalistEmpresas(){
   const dl = $("empresasList"); if (!dl) return;
@@ -152,7 +153,14 @@ function popularDatalistEmpresas(){
     o.value = e.nome || ""; dl.appendChild(o);
   });
 }
-
+function popularDatalistEmpresasNova(){
+  const dl = $("empresasListNova"); if (!dl) return;
+  dl.innerHTML = "";
+  empresasCache.forEach(e=>{
+    const o=document.createElement("option");
+    o.value = e.nome || ""; dl.appendChild(o);
+  });
+}
 async function carregarRamos() {
   const campos = ["ramo", "novaRamo"];
   let snap;
@@ -218,13 +226,18 @@ async function carregarStatus() {
   }
 }
 
-// ===== CRUD (sem mudanças além do original) =====
-function preencherEmpresaNova() {
-  const id = $("novaEmpresa").value;
-  const empresa = empresasCache.find(e => e.id === id);
-  const rmNome = empresa ? (empresa.rmNome || empresa.rm || "") : "";
-  $("nova-info-cnpj").textContent = empresa ? `CNPJ: ${empresa.cnpj || "-"}` : "";
-  $("nova-info-rm").textContent   = empresa ? `RM responsável: ${rmNome || "-"}` : "";
+// ===== CRUD =====
+function resolverEmpresaNova(){
+  const nome = $("novaEmpresaNome").value || "";
+  const emp = empresasCache.find(e => (e.nome||"") === nome);
+  $("novaEmpresaId").value = emp ? emp.id : "";
+  if (emp){
+    $("nova-info-cnpj").textContent = `CNPJ: ${emp.cnpj || "-"}`;
+    $("nova-info-rm").textContent   = `RM responsável: ${(emp.rmNome || emp.rm || "-")}`;
+  } else {
+    $("nova-info-cnpj").textContent = "";
+    $("nova-info-rm").textContent = "";
+  }
 }
 function preencherEmpresa() {
   const id = $("empresa").value;
@@ -235,19 +248,18 @@ function preencherEmpresa() {
 }
 
 async function criarNovaCotacao() {
-  const empresaId = $("novaEmpresa").value;
+  const empresaId = $("novaEmpresaId").value;     // vem do datalist
   const ramo      = $("novaRamo").value;
   const valorFmt  = $("novaValor").value;
   const valor     = desformatarMoeda(valorFmt);
   const obs       = $("novaObservacoes").value.trim();
   const empresa   = empresasCache.find(e => e.id === empresaId);
 
-  if (!empresaId || !ramo || !empresa) return alert("Preencha todos os campos.");
+  if (!empresaId || !ramo || !empresa) return alert("Selecione uma empresa válida e o ramo.");
 
   const rmNome = empresa.rmNome || empresa.rm || "";
   const rmId   = empresa.rmUid  || empresa.rmId || "";
-
-  const agora = firebase.firestore.FieldValue.serverTimestamp();
+  const agora  = firebase.firestore.FieldValue.serverTimestamp();
 
   const cotacao = {
     empresaId,
@@ -271,8 +283,9 @@ async function criarNovaCotacao() {
 
   await db.collection("cotacoes-gerentes").add(cotacao);
   alert("Cotação criada com sucesso.");
-  $("novaEmpresa").value = ""; $("novaRamo").value = ""; $("novaValor").value = "R$ 0,00"; $("novaObservacoes").value = "";
-  preencherEmpresaNova();
+  $("novaEmpresaNome").value = ""; $("novaEmpresaId").value = "";
+  $("novaRamo").value = ""; $("novaValor").value = "R$ 0,00"; $("novaObservacoes").value = "";
+  $("nova-info-cnpj").textContent = ""; $("nova-info-rm").textContent = "";
   carregarCotacoesComFiltros();
 }
 
@@ -364,7 +377,6 @@ function getFiltroAgenciaSelecionada() {
   return sel.disabled ? (minhaAgencia || "") : (sel.value || "");
 }
 function computeLastUpdate(c){
-  // Preferir campo dedicado; senão, maior entre dataCriacao e interacoes[].dataHora
   const ts = c.dataAtualizacao?.toDate?.() || c.dataAtualizacao
           || c.dataCriacao?.toDate?.() || c.dataCriacao || null;
   let max = ts ? new Date(ts) : null;
@@ -387,7 +399,7 @@ async function carregarCotacoesComFiltros() {
     const filtroAgencia = getFiltroAgenciaSelecionada();
     const ini    = $("filtroDataInicio")?.value || "";
     const fim    = $("filtroDataFim")?.value || "";
-    const rm     = $("filtroRM")?.value || "";      // rmNome
+    const rm     = $("filtroRM")?.value || "";
     const status = $("filtroStatus")?.value || "";
     const empTxt = normalize($("filtroEmpresa")?.value || "");
 
@@ -396,7 +408,6 @@ async function carregarCotacoesComFiltros() {
     if (filtroAgencia) cotacoes = cotacoes.filter(c => (c.agenciaId || "") === filtroAgencia);
 
     cotacoes = cotacoes.filter(c => {
-      // Filtro por data de criação
       const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       if (ini && d && d < new Date(ini)) return false;
       if (fim && d && d > new Date(fim + "T23:59:59")) return false;
@@ -474,7 +485,7 @@ function statusClass(s){
   const ehAzul = ["em emissão","em emissao","negócio fechado","negocio fechado"].some(k=>txt.includes(k));
   if (ehAzul) return "st-azulesc";
   if (txt === "negócio emitido" || txt === "negocio emitido") return "st-verde";
-  return ""; // default chip
+  return "";
 }
 
 // --------- Render + Paginação + Seleção ---------
@@ -527,7 +538,6 @@ function renderTabelaPaginada(reuseSort=false){
   html += `</tbody></table>`;
   container.innerHTML = html;
 
-  // eventos seleção
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
       const id = e.target.dataset.id;
@@ -546,7 +556,6 @@ function renderTabelaPaginada(reuseSort=false){
     atualizarSelCount();
   });
 
-  // botão carregar mais
   const btnMore = $("btnLoadMore");
   if (btnMore) btnMore.style.display = (pagMostrando < rowsCache.length) ? "inline-flex" : "none";
 }
@@ -562,21 +571,63 @@ function atualizarSelCount(){
   if (el) el.textContent = `${selecionados.size} selecionadas`;
 }
 
-// --------- Utilidades UI ---------
-function limparFiltros(){
-  ["filtroEmpresa","filtroDataInicio","filtroDataFim","filtroRM","filtroStatus"].forEach(id=>{
-    const el=$(id); if(el) el.value="";
+// ===== Exportações =====
+function getLinhasParaExport(){
+  if (selecionados.size === 0) return rowsCache; // exporta todas as filtradas
+  const set = new Set(Array.from(selecionados));
+  return rowsCache.filter(r => set.has(r.id));
+}
+function exportarExcel(){
+  const dados = getLinhasParaExport().map(r => ({
+    "Cliente": r.empresaNome,
+    "Agência": r.agenciaLabel,
+    "RM": r.rmNome,
+    "Ramo": r.ramo,
+    "Valor": r.valor,
+    "Status": r.status,
+    "Última atualização": r.lastUpdateFmt,
+    "Criado em": r.dataFmt,
+  }));
+  if (!dados.length) return alert("Nada para exportar.");
+  const ws = XLSX.utils.json_to_sheet(dados);
+  // formata valor em moeda
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  for (let R = 1; R <= range.e.r; R++) {
+    const cell = ws[XLSX.utils.encode_cell({r:R, c:4})];
+    if (cell && typeof cell.v === "number") { cell.t = "n"; }
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Cotações");
+  XLSX.writeFile(wb, "cotacoes.xlsx");
+}
+function exportarPDF(){
+  const dados = getLinhasParaExport();
+  if (!dados.length) return alert("Nada para exportar.");
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+  doc.setFontSize(12);
+  doc.text("Cotações - Retorno Seguros", 14, 14);
+  const body = dados.map(r => [
+    r.empresaNome, r.agenciaLabel, r.rmNome, r.ramo, r.valorFmt, r.status, r.lastUpdateFmt, r.dataFmt
+  ]);
+  doc.autoTable({
+    head: [["Cliente","Agência","RM","Ramo","Valor","Status","Última atualização","Criado em"]],
+    body,
+    startY: 18,
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [0,64,128] }
   });
-  if (isAdmin) { const a=$("filtroAgencia"); if (a) a.value=""; }
-  carregarCotacoesComFiltros();
+  doc.save("cotacoes.pdf");
 }
 
-// ===== Exports para onclick =====
-window.preencherEmpresa         = preencherEmpresa;
-window.preencherEmpresaNova     = preencherEmpresaNova;
-window.criarNovaCotacao         = criarNovaCotacao;
-window.carregarCotacoesComFiltros = carregarCotacoesComFiltros;
-window.editarCotacao            = editarCotacao;
-window.salvarAlteracoesCotacao  = salvarAlteracoesCotacao;
-window.excluirCotacao           = excluirCotacao;
-window.limparFiltros            = limparFiltros;
+// ===== Exports p/ onclick =====
+window.resolverEmpresaNova       = resolverEmpresaNova;
+window.preencherEmpresa          = preencherEmpresa;
+window.criarNovaCotacao          = criarNovaCotacao;
+window.carregarCotacoesComFiltros= carregarCotacoesComFiltros;
+window.editarCotacao             = editarCotacao;
+window.salvarAlteracoesCotacao   = salvarAlteracoesCotacao;
+window.excluirCotacao            = excluirCotacao;
+window.limparFiltros             = limparFiltros;
+window.exportarExcel             = exportarExcel;
+window.exportarPDF               = exportarPDF;
