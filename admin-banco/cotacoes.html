@@ -13,6 +13,11 @@
   <!-- Seu config -->
   <script src="js/firebase-config.js"></script>
 
+  <!-- libs p/ export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.20.0/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
   <style>
     :root{
       --azul:#004080; --azul-esc:#002e5a; --bg:#f4f7fa; --b:#e6e9ef; --muted:#667085;
@@ -23,10 +28,7 @@
     body{ font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif; background:var(--bg); margin:0; padding:20px }
     .wrap{ max-width:1100px; margin:0 auto }
     h2{ color:var(--azul); margin:0 0 16px; display:flex; gap:.75rem; align-items:center; justify-content:space-between }
-    .toolbar a.back{
-      display:inline-flex; gap:.4rem; align-items:center;
-      background:var(--azul); color:#fff; padding:10px 14px; border-radius:10px; text-decoration:none; font-weight:600;
-    }
+    .toolbar a.back{ display:inline-flex; gap:.4rem; align-items:center; background:var(--azul); color:#fff; padding:10px 14px; border-radius:10px; text-decoration:none; font-weight:600 }
     .card{ background:#fff; border-radius:14px; box-shadow:0 6px 16px rgba(0,0,0,.06); padding:18px; margin:0 auto 18px }
     label{ font-weight:600; margin-top:10px; display:block }
     input,select,textarea{ width:100%; padding:10px 12px; border:1px solid var(--b); border-radius:10px; font-size:15px; margin-top:6px; background:#fff }
@@ -38,7 +40,7 @@
     .btn{ background:var(--azul); border:none; color:#fff; padding:12px 16px; border-radius:10px; cursor:pointer; font-weight:600 }
     .btn:hover{ background:var(--azul-esc) }
     .btn.outline{ background:#fff; color:var(--azul); border:1px solid var(--azul) }
-
+    .btn.ghost{ background:#fff; border:1px dashed var(--b); color:#344054 }
     .table-wrap{ overflow:auto }
     table{ width:100%; border-collapse:collapse; margin-top:12px; background:#fff; border-radius:12px; overflow:hidden; min-width:980px }
     th,td{ padding:12px 14px; border-bottom:1px solid #f0f2f6; text-align:left; font-size:14px }
@@ -46,7 +48,6 @@
     th.sortable{ cursor:pointer }
     th .arrow{ margin-left:6px; font-size:.85em; opacity:.9 }
     tr:hover td{ background:#f8fafc }
-
     .empresa-strong{ font-weight:800; font-size:15px; color:#111827 }
     .sub{ color:#6b7280; font-size:12.5px; margin-top:2px }
     .status-badge{ display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px; font-weight:700; font-size:12px; background:var(--chip) }
@@ -55,10 +56,8 @@
     .st-vermelho{ color:#fff; background:var(--vermelho) }
     .st-azulesc{ color:#fff; background:var(--azul-escuro) }
     .st-verde{ color:#fff; background:var(--verde) }
-
-    .list-actions{ display:flex; align-items:center; gap:10px; margin-top:10px }
+    .list-actions{ display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap }
     .sel-count{ font-size:13px; color:#374151 }
-
     @media (max-width:900px){
       .grid-2{ grid-template-columns:1fr }
       table, thead, tbody, th, td, tr{ display:block }
@@ -81,10 +80,11 @@
       <h3 style="margin:0 0 8px">➕ Nova Cotação</h3>
       <div class="grid grid-2">
         <div>
-          <label for="novaEmpresa">Empresa</label>
-          <select id="novaEmpresa" onchange="preencherEmpresaNova()">
-            <option value="">Selecione a empresa</option>
-          </select>
+          <label for="novaEmpresaNome">Empresa</label>
+          <!-- AUTOCOMPLETE por nome -->
+          <input id="novaEmpresaNome" list="empresasListNova" placeholder="Digite o nome da empresa" oninput="resolverEmpresaNova()">
+          <datalist id="empresasListNova"></datalist>
+          <input type="hidden" id="novaEmpresaId">
           <div class="row muted" style="gap:16px;margin-top:6px">
             <span id="nova-info-cnpj"></span>
             <span id="nova-info-rm"></span>
@@ -122,22 +122,18 @@
           <input id="filtroEmpresa" list="empresasList" placeholder="Ex.: Cooperativa São Luiz" />
           <datalist id="empresasList"></datalist>
         </div>
-
         <div>
           <label for="filtroStatus">Status</label>
           <select id="filtroStatus"><option value="">Todos</option></select>
         </div>
-
         <div>
           <label for="filtroAgencia">Agência</label>
           <select id="filtroAgencia"></select>
         </div>
-
         <div>
           <label for="filtroRM">RM</label>
           <select id="filtroRM"><option value="">Todos</option></select>
         </div>
-
         <div class="row" style="align-items:flex-end">
           <div style="flex:1">
             <label for="filtroDataInicio">Data início</label>
@@ -160,7 +156,11 @@
       <h3 style="margin:0 0 8px">📄 Cotações</h3>
       <div class="list-actions">
         <div class="sel-count" id="selCount">0 selecionadas</div>
-        <button class="btn outline" id="btnLoadMore" style="margin-left:auto; display:none">Carregar mais</button>
+        <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap">
+          <button class="btn ghost" onclick="exportarExcel()">Exportar Excel</button>
+          <button class="btn ghost" onclick="exportarPDF()">Exportar PDF</button>
+          <button class="btn outline" id="btnLoadMore" style="display:none">Carregar mais</button>
+        </div>
       </div>
       <div class="table-wrap" id="listaCotacoes">Carregando...</div>
     </div>
