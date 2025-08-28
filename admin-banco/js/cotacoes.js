@@ -14,23 +14,20 @@ let isAdmin      = false;
 let empresasCache = [];       // [{id, nome, cnpj, agenciaId, rmUid, rmNome}, ...]
 let agenciasMap   = {};       // {agenciaId: "Nome — Banco / Cidade - UF"}
 
-// Ordenação
-let sortKey = "empresaNome";  // empresaNome | agenciaLabel | rmNome | ramo | valor | status | dataMs
-let sortDir = "desc";         // padrão: Data desc (mais recente primeiro)
+let sortKey = "lastUpdateMs"; // ordenação por última atualização
+let sortDir = "desc";
+let pagTamanho = 10;
+let pagMostrando = 0;         // qtd atual renderizada
+let rowsCache = [];           // cache após filtros para paginação
+let selecionados = new Set();
 
 // ===== Helpers =====
 const $ = (id) => document.getElementById(id);
-
-// normaliza textos/roles (remove acento, troca _ e - por espaço e deixa minúsculo)
 const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+  (s || "").toString().normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .toLowerCase().trim();
-
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 
-// moeda "R$ 1.234,56" -> 1234.56
 function desformatarMoeda(v) {
   if (typeof v !== "string") return Number(v || 0) || 0;
   const n = v.replace(/\s|R\$/g, "").replace(/\./g, "").replace(",", ".");
@@ -45,33 +42,32 @@ window.addEventListener("DOMContentLoaded", () => {
     usuarioAtual = user;
 
     const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;           // já vem normalizado
+    perfilAtual  = ctx.perfil;
     minhaAgencia = ctx.agenciaId;
     isAdmin      = ctx.isAdmin;
 
     try {
       await Promise.all([
-        carregarAgencias(),      // << para filtro e rótulos
-        carregarEmpresas(),      // para combos de empresa
+        carregarAgencias(),
+        carregarEmpresas(),
         carregarRamos(),
         carregarFiltroRM(),
         carregarStatus(),
       ]);
-    } catch (e) {
-      console.error("Erro inicial:", e);
-    }
+      popularDatalistEmpresas();
+    } catch (e) { console.error("Erro inicial:", e); }
 
-    // botão salvar somente admin
-    const btn = document.getElementById("btnSalvarAlteracoes");
+    const btn = $("btnSalvarAlteracoes");
     if (btn && !isAdmin) btn.style.display = "none";
 
     instalarOrdenacaoCabecalhos();
-    montarBotaoVoltar();
+    instalarLoadMore();
     carregarCotacoesComFiltros();
   });
 });
 
-// ===== Perfil + agência do usuário =====
+// ===== Perfil / Agências / Empresas / Ramos / RM / Status (sem mudanças estruturais) =====
+// (mesmo bloco do seu arquivo original, com pequenas adições)
 async function getPerfilAgencia() {
   const user = auth.currentUser;
   if (!user) return { perfil: "", agenciaId: "", isAdmin: false };
@@ -83,65 +79,47 @@ async function getPerfilAgencia() {
   return { perfil, agenciaId, isAdmin: admin };
 }
 
-// ======================================================
-// Agências (preenche filtro e map de rótulos SEM UID)
-// ======================================================
 async function carregarAgencias() {
   const sel = $("filtroAgencia");
   if (sel) sel.innerHTML = "";
 
-  // Admin vê "Todas"; demais fixam na própria
-  if (isAdmin) {
-    sel?.insertAdjacentHTML("beforeend", `<option value="">Todas as agências</option>`);
-  } else {
+  if (isAdmin) sel?.insertAdjacentHTML("beforeend", `<option value="">Todas as agências</option>`);
+  else {
     const minha = minhaAgencia || "";
     sel?.insertAdjacentHTML("beforeend", `<option value="${minha}">Minha agência</option>`);
     if (sel) { sel.value = minha; sel.disabled = true; }
   }
 
   let snap;
-  try {
-    snap = await db.collection("agencias_banco").orderBy("nome").get();
-    if (snap.empty) snap = await db.collection("agencias_banco").get();
-  } catch {
-    snap = await db.collection("agencias_banco").get();
-  }
+  try { snap = await db.collection("agencias_banco").orderBy("nome").get(); }
+  catch { snap = await db.collection("agencias_banco").get(); }
 
   snap.forEach(doc => {
     const a = doc.data() || {};
     const id = doc.id;
-
     const nome   = (a.nome || "(Sem nome)").toString();
     const banco  = a.banco ? ` — ${a.banco}` : "";
     const cidade = (a.Cidade || a.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
     const uf = (a.estado || a.UF || "").toString().toUpperCase();
     const ufFmt = uf ? ` - ${uf}` : "";
-
     const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
     agenciasMap[id] = label;
-
     if (isAdmin && sel) {
       const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = label;
-      sel.appendChild(opt);
+      opt.value = id; opt.textContent = label; sel.appendChild(opt);
     }
   });
 }
 
-// ======================================================
-// Empesas para combos
-// ======================================================
 async function carregarEmpresas() {
   const campos = ["empresa", "novaEmpresa"];
   empresasCache = [];
   campos.forEach(id => { const el = $(id); if (el) el.innerHTML = `<option value="">Selecione a empresa</option>`; });
 
   let qs = [];
-  if (isAdmin) {
-    qs.push(db.collection("empresas").get());
-  } else if (["gerente chefe","assistente"].includes(perfilAtual)) {
+  if (isAdmin) qs.push(db.collection("empresas").get());
+  else if (["gerente chefe","assistente"].includes(perfilAtual)) {
     if (minhaAgencia) qs.push(db.collection("empresas").where("agenciaId","==",minhaAgencia).get());
   } else {
     const col = db.collection("empresas");
@@ -153,10 +131,8 @@ async function carregarEmpresas() {
 
   const map = new Map();
   for (const p of qs) {
-    try {
-      const snap = await p;
-      snap.forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() }));
-    } catch(e) { console.warn("Query empresas falhou:", e); }
+    try { (await p).forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() })); }
+    catch(e) { console.warn("Query empresas falhou:", e); }
   }
   empresasCache = Array.from(map.values()).sort((a,b) => (a.nome||"").localeCompare(b.nome||"", "pt-BR"));
 
@@ -164,110 +140,70 @@ async function carregarEmpresas() {
     const el = $(id); if (!el) return;
     empresasCache.forEach(emp => {
       const opt = document.createElement("option");
-      opt.value = emp.id;
-      opt.textContent = emp.nome;
-      el.appendChild(opt);
+      opt.value = emp.id; opt.textContent = emp.nome; el.appendChild(opt);
     });
   });
 }
+function popularDatalistEmpresas(){
+  const dl = $("empresasList"); if (!dl) return;
+  dl.innerHTML = "";
+  empresasCache.forEach(e=>{
+    const o=document.createElement("option");
+    o.value = e.nome || ""; dl.appendChild(o);
+  });
+}
 
-// ======================================================
-// Ramos / Status / Filtro RM
-// ======================================================
 async function carregarRamos() {
   const campos = ["ramo", "novaRamo"];
   let snap;
   try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
   catch { snap = await db.collection("ramos-seguro").get(); }
-
   campos.forEach(id => { const el=$(id); if (el) el.innerHTML = `<option value="">Selecione o ramo</option>`; });
-
   snap.forEach(doc => {
     const nome = doc.data().nomeExibicao || doc.id;
-    campos.forEach(id => {
-      const el=$(id); if (!el) return;
-      const opt=document.createElement("option");
-      opt.value = nome; opt.textContent = nome;
-      el.appendChild(opt);
-    });
+    campos.forEach(id => { const el=$(id); if (!el) return; const opt=document.createElement("option");
+      opt.value = nome; opt.textContent = nome; el.appendChild(opt); });
   });
 }
 
-/* ========= NOVO: constrói a lista de RMs visíveis sem ler usuarios_banco ========= */
 async function coletarRMsVisiveis() {
-  // 1) tenta pelas cotações visíveis
   try {
     const cotas = await listarCotacoesPorPerfil();
-    const set = new Set();
-    cotas.forEach(c => c?.rmNome && set.add(c.rmNome));
+    const set = new Set(); cotas.forEach(c => c?.rmNome && set.add(c.rmNome));
     if (set.size) return Array.from(set).sort((a,b)=>a.localeCompare(b,'pt-BR'));
   } catch (_) {}
-
-  // 2) fallback: pelas empresas já carregadas
-  const set2 = new Set();
-  (empresasCache || []).forEach(e => e?.rmNome && set2.add(e.rmNome));
+  const set2 = new Set(); (empresasCache || []).forEach(e => e?.rmNome && set2.add(e.rmNome));
   return Array.from(set2).sort((a,b)=>a.localeCompare(b,'pt-BR'));
 }
-
 async function carregarFiltroRM() {
-  const select = $("filtroRM");
-  if (!select) return;
-
-  // RM não precisa filtro de RM
+  const select = $("filtroRM"); if (!select) return;
   if (!isAdmin && !["gerente chefe","assistente"].includes(perfilAtual)) {
-    select.innerHTML = "";
-    select.style.display = "none";
-    return;
+    select.innerHTML = ""; select.style.display = "none"; return;
   }
-
   select.innerHTML = `<option value="">Todos</option>`;
-
   if (isAdmin) {
-    // Admin pode ler usuarios_banco
     try {
-      let q = db.collection("usuarios_banco").where("perfil","==","rm");
-      const snap = await q.get();
-      const nomes = new Set();
-      snap.forEach(doc => {
-        const nome = doc.data()?.nome;
-        if (nome) nomes.add(nome);
+      const snap = await db.collection("usuarios_banco").where("perfil","==","rm").get();
+      const nomes = new Set(); snap.forEach(doc => { const n=doc.data()?.nome; if (n) nomes.add(n); });
+      Array.from(nomes).sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(n => {
+        const opt = document.createElement("option"); opt.value=n; opt.textContent=n; select.appendChild(opt);
       });
-      Array.from(nomes).sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(nome => {
-        const opt = document.createElement("option");
-        opt.value = nome; opt.textContent = nome;
-        select.appendChild(opt);
-      });
-    } catch (err) {
-      console.warn("Falha ao ler usuarios_banco (admin):", err);
-    }
+    } catch (err) { console.warn("Falha ao ler usuarios_banco (admin):", err); }
     return;
   }
-
-  // Gerente‑chefe/Assistente: monta sem ler usuarios_banco
   try {
     const nomes = await coletarRMsVisiveis();
-    nomes.forEach(nome => {
-      const opt = document.createElement("option");
-      opt.value = nome; opt.textContent = nome;
-      select.appendChild(opt);
-    });
-  } catch (e) {
-    console.warn("Falha ao montar filtro de RM a partir do escopo visível:", e);
-  }
+    nomes.forEach(n => { const o=document.createElement("option"); o.value=n; o.textContent=n; select.appendChild(o); });
+  } catch (e) { console.warn("Filtro RM via escopo:", e); }
 }
-
 async function carregarStatus() {
-  const select = $("filtroStatus");
-  if (!select) return;
+  const select = $("filtroStatus"); if (!select) return;
   select.innerHTML = `<option value="">Todos</option>`;
-
   const preencher = (lista=[]) => {
-    Array.from(new Set(lista))
-      .filter(s => typeof s === "string" && s.trim())
+    Array.from(new Set(lista)).filter(s => typeof s === "string" && s.trim())
       .sort((a,b)=>a.localeCompare(b,"pt-BR"))
       .forEach(s => { const o=document.createElement("option"); o.value=s; o.textContent=s; select.appendChild(o); });
   };
-
   try {
     const snap = await db.collection("status-negociacao").doc("config").get();
     const lista = snap.exists ? (snap.data()?.statusFinais || []) : [];
@@ -282,9 +218,7 @@ async function carregarStatus() {
   }
 }
 
-// ======================================================
-// CRUD de cotações
-// ======================================================
+// ===== CRUD (sem mudanças além do original) =====
 function preencherEmpresaNova() {
   const id = $("novaEmpresa").value;
   const empresa = empresasCache.find(e => e.id === id);
@@ -313,26 +247,25 @@ async function criarNovaCotacao() {
   const rmNome = empresa.rmNome || empresa.rm || "";
   const rmId   = empresa.rmUid  || empresa.rmId || "";
 
+  const agora = firebase.firestore.FieldValue.serverTimestamp();
+
   const cotacao = {
     empresaId,
     empresaNome:  empresa.nome,
     empresaCNPJ:  empresa.cnpj || "",
     agenciaId:    empresa.agenciaId || minhaAgencia || "",
-    rmId,
-    rmNome,
+    rmId, rmNome,
     ramo,
     valorDesejado: valor,
     status: "Negócio iniciado",
-    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
+    dataCriacao: agora,
+    dataAtualizacao: agora,
     criadoPorUid: usuarioAtual.uid,
     autorUid:     usuarioAtual.uid,
     autorNome:    usuarioAtual.email,
     interacoes: obs ? [{
-      autorUid: usuarioAtual.uid,
-      autorNome: usuarioAtual.email,
-      mensagem: obs,
-      dataHora: new Date(),
-      tipo: "observacao",
+      autorUid: usuarioAtual.uid, autorNome: usuarioAtual.email,
+      mensagem: obs, dataHora: new Date(), tipo: "observacao",
     }] : [],
   };
 
@@ -347,17 +280,13 @@ function editarCotacao(id) {
   db.collection("cotacoes-gerentes").doc(id).get().then(doc => {
     if (!doc.exists) return alert("Cotação não encontrada");
     const c = doc.data();
-
     $("cotacaoId").value = id;
     $("empresa").value   = c.empresaId || "";
     $("ramo").value      = c.ramo || "";
-
     const inputValor = $("valorEstimado");
     const num = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
     inputValor.value = "R$ " + num.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-
     $("observacoes").value = c.interacoes?.[0]?.mensagem || "";
-
     preencherEmpresa();
     $("bloco-edicao").style.display = "block";
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
@@ -383,10 +312,10 @@ async function salvarAlteracoesCotacao() {
     empresaNome:  empresa.nome,
     empresaCNPJ:  empresa.cnpj || "",
     agenciaId:    empresa.agenciaId || minhaAgencia || "",
-    rmId,
-    rmNome,
+    rmId, rmNome,
     ramo,
     valorDesejado: valor,
+    dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
   };
 
   if (obs) {
@@ -408,60 +337,51 @@ async function salvarAlteracoesCotacao() {
 async function excluirCotacao(id){
   if (!isAdmin) return alert("Apenas administradores podem excluir.");
   if (!confirm("Excluir esta cotação?")) return;
-  try {
-    await db.collection("cotacoes-gerentes").doc(id).delete();
-    carregarCotacoesComFiltros();
-  } catch (e) {
-    console.error("Erro ao excluir:", e);
-    alert("Falha ao excluir a cotação.");
-  }
+  try { await db.collection("cotacoes-gerentes").doc(id).delete(); carregarCotacoesComFiltros(); }
+  catch (e) { console.error("Erro ao excluir:", e); alert("Falha ao excluir a cotação."); }
 }
 
-// ======================================================
-// Listagem + filtros + ordenação
-// ======================================================
+// ===== Listagem + filtros + ordenação + paginação =====
 async function listarCotacoesPorPerfil() {
   const col = db.collection("cotacoes-gerentes");
-
-  if (isAdmin) {
-    const snap = await col.get();
-    return snap.docs.map(d => ({ id: d.id, ...(d.data()) }));
-  }
-
+  if (isAdmin) { const snap = await col.get(); return snap.docs.map(d => ({ id: d.id, ...(d.data()) })); }
   if (["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-    try {
-      const snap = await col.where("agenciaId","==",minhaAgencia).get();
-      return snap.docs.map(d => ({ id:d.id, ...(d.data()) })); 
-    } catch (e) {
-      // fallback: filtra no cliente
-      const snap = await col.get();
-      return snap.docs.map(d=>({id:d.id,...(d.data())})).filter(c => (c.agenciaId || minhaAgencia) === minhaAgencia);
-    }
+    try { const snap = await col.where("agenciaId","==",minhaAgencia).get(); return snap.docs.map(d => ({ id:d.id, ...(d.data()) })); }
+    catch { const snap = await col.get(); return snap.docs.map(d=>({id:d.id,...(d.data())})).filter(c => (c.agenciaId || minhaAgencia) === minhaAgencia); }
   }
-
-  // RM: une múltiplas possibilidades de autoria/posse
   const buckets = [];
   try { buckets.push(await col.where("rmId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await col.where("usuarioId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await col.where("gerenteId","==",usuarioAtual.uid).get()); } catch {}
   try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch {}
-
-  const map = new Map();
-  buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data())));
+  const map = new Map(); buckets.forEach(s => s && s.docs.forEach(d => map.set(d.id, d.data())));
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
 function getFiltroAgenciaSelecionada() {
-  const sel = $("filtroAgencia");
-  if (!sel) return "";
+  const sel = $("filtroAgencia"); if (!sel) return "";
   return sel.disabled ? (minhaAgencia || "") : (sel.value || "");
+}
+function computeLastUpdate(c){
+  // Preferir campo dedicado; senão, maior entre dataCriacao e interacoes[].dataHora
+  const ts = c.dataAtualizacao?.toDate?.() || c.dataAtualizacao
+          || c.dataCriacao?.toDate?.() || c.dataCriacao || null;
+  let max = ts ? new Date(ts) : null;
+  if (Array.isArray(c.interacoes)){
+    c.interacoes.forEach(i=>{
+      const d = i?.dataHora ? new Date(i.dataHora) : null;
+      if (d && (!max || d > max)) max = d;
+    });
+  }
+  return max;
 }
 
 async function carregarCotacoesComFiltros() {
   const container = $("listaCotacoes");
   if (!container) return;
   container.innerHTML = "Carregando...";
+  selecionados.clear(); atualizarSelCount();
 
   try {
     const filtroAgencia = getFiltroAgenciaSelecionada();
@@ -469,26 +389,28 @@ async function carregarCotacoesComFiltros() {
     const fim    = $("filtroDataFim")?.value || "";
     const rm     = $("filtroRM")?.value || "";      // rmNome
     const status = $("filtroStatus")?.value || "";
+    const empTxt = normalize($("filtroEmpresa")?.value || "");
 
     let cotacoes = await listarCotacoesPorPerfil();
 
-    // Filtro por agência (admin pode trocar)
     if (filtroAgencia) cotacoes = cotacoes.filter(c => (c.agenciaId || "") === filtroAgencia);
 
-    // Demais filtros
     cotacoes = cotacoes.filter(c => {
+      // Filtro por data de criação
       const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       if (ini && d && d < new Date(ini)) return false;
       if (fim && d && d > new Date(fim + "T23:59:59")) return false;
       if (rm && c.rmNome !== rm) return false;
       if (status && c.status !== status) return false;
+      if (empTxt && !normalize(c.empresaNome||"").includes(empTxt)) return false;
       return true;
     });
 
-    // Normaliza p/ render + ordenação
-    const rows = cotacoes.map(c => {
+    rowsCache = cotacoes.map(c => {
       const dataObj = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       const dataMs  = dataObj ? dataObj.getTime() : 0;
+      const last    = computeLastUpdate(c);
+      const lastMs  = last ? last.getTime() : dataMs;
       const valorNum = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
       const agenciaLabel = c.agenciaId ? (agenciasMap[c.agenciaId] || c.agenciaId) : "-";
       return {
@@ -501,12 +423,15 @@ async function carregarCotacoesComFiltros() {
         status: c.status || "-",
         dataMs,
         dataFmt: dataObj ? dataObj.toLocaleDateString("pt-BR") : "-",
+        lastUpdateMs: lastMs,
+        lastUpdateFmt: last ? last.toLocaleString("pt-BR") : "-",
         agenciaLabel,
       };
     });
 
-    ordenarRows(rows);
-    renderTabela(rows, container);
+    ordenarRows(rowsCache);
+    pagMostrando = 0;
+    renderTabelaPaginada();
   } catch (err) {
     console.error("Erro ao carregar cotações:", err);
     container.innerHTML = `<p class="muted">Sem permissão ou erro de rede. Verifique as regras e o login.</p>`;
@@ -517,12 +442,11 @@ async function carregarCotacoesComFiltros() {
 function instalarOrdenacaoCabecalhos() {
   const container = $("listaCotacoes");
   container.addEventListener("click", (e) => {
-    const th = e.target.closest("th.sortable");
-    if (!th) return;
+    const th = e.target.closest("th.sortable"); if (!th) return;
     const key = th.dataset.sort;
     if (sortKey === key) sortDir = (sortDir === "asc" ? "desc" : "asc");
-    else { sortKey = key; sortDir = (key === "dataMs" ? "desc" : "asc"); }
-    carregarCotacoesComFiltros();
+    else { sortKey = key; sortDir = (key === "lastUpdateMs" || key === "dataMs" || key === "valor") ? "desc" : "asc"; }
+    renderTabelaPaginada(true);
   });
 }
 function ordenarRows(rows){
@@ -539,30 +463,59 @@ function ordenarRows(rows){
   });
 }
 
-// --------- Render ----------
-function renderTabela(rows, container){
+// --------- Status -> classe ---------
+function statusClass(s){
+  const txt = (s||"").toLowerCase();
+  if (txt === "negócio iniciado" || txt === "negocio iniciado") return "st-roxo";
+  const ehPendente = ["pendente agência","pendente corretor","pendente seguradora","pendente cliente","pendente agencia"].some(k=>txt.includes(k));
+  if (ehPendente) return "st-amarelo";
+  const ehRecusado = ["recusado cliente","recusado seguradora","emitido declinado"].some(k=>txt.includes(k));
+  if (ehRecusado) return "st-vermelho";
+  const ehAzul = ["em emissão","em emissao","negócio fechado","negocio fechado"].some(k=>txt.includes(k));
+  if (ehAzul) return "st-azulesc";
+  if (txt === "negócio emitido" || txt === "negocio emitido") return "st-verde";
+  return ""; // default chip
+}
+
+// --------- Render + Paginação + Seleção ---------
+function renderTabelaPaginada(reuseSort=false){
+  if (!reuseSort) ordenarRows(rowsCache);
+  const container = $("listaCotacoes");
+  const total = rowsCache.length;
+  const ate = Math.min(total, pagMostrando + pagTamanho);
+  const rows = rowsCache.slice(0, ate);
+  pagMostrando = rows.length;
+
   const arrow = (k) => sortKey===k ? (sortDir==="asc"?"↑":"↓") : "↕";
 
   let html = `<table><thead><tr>
-    <th class="sortable" data-sort="empresaNome">Empresa <span class="arrow">${arrow("empresaNome")}</span></th>
+    <th style="width:36px"><input type="checkbox" id="selAll" ${rows.every(r=>selecionados.has(r.id)) && rows.length? "checked":""}></th>
+    <th class="sortable" data-sort="empresaNome">Cliente <span class="arrow">${arrow("empresaNome")}</span></th>
     <th class="sortable" data-sort="agenciaLabel">Agência <span class="arrow">${arrow("agenciaLabel")}</span></th>
     <th class="sortable" data-sort="rmNome">RM <span class="arrow">${arrow("rmNome")}</span></th>
     <th class="sortable" data-sort="ramo">Ramo <span class="arrow">${arrow("ramo")}</span></th>
     <th class="sortable" data-sort="valor">Valor <span class="arrow">${arrow("valor")}</span></th>
     <th class="sortable" data-sort="status">Status <span class="arrow">${arrow("status")}</span></th>
-    <th class="sortable" data-sort="dataMs">Data <span class="arrow">${arrow("dataMs")}</span></th>
+    <th class="sortable" data-sort="lastUpdateMs">Última atualização <span class="arrow">${arrow("lastUpdateMs")}</span></th>
+    <th class="sortable" data-sort="dataMs">Criado em <span class="arrow">${arrow("dataMs")}</span></th>
     <th>Ações</th>
   </tr></thead><tbody>`;
 
   rows.forEach(r => {
+    const checked = selecionados.has(r.id) ? "checked" : "";
     html += `<tr>
-      <td data-label="Empresa">${r.empresaNome}</td>
+      <td data-label="Selecionar"><input type="checkbox" class="selrow" data-id="${r.id}" ${checked}></td>
+      <td data-label="Cliente">
+        <div class="empresa-strong">${r.empresaNome}</div>
+        <div class="sub">${r.ramo} • ${r.rmNome}</div>
+      </td>
       <td data-label="Agência">${r.agenciaLabel}</td>
       <td data-label="RM">${r.rmNome}</td>
       <td data-label="Ramo">${r.ramo}</td>
       <td data-label="Valor">${r.valorFmt}</td>
-      <td data-label="Status">${r.status}</td>
-      <td data-label="Data">${r.dataFmt}</td>
+      <td data-label="Status"><span class="status-badge ${statusClass(r.status)}">${r.status}</span></td>
+      <td data-label="Última atualização">${r.lastUpdateFmt}</td>
+      <td data-label="Criado em">${r.dataFmt}</td>
       <td data-label="Ações">
         <a href="chat-cotacao.html?id=${r.id}" target="_blank">Abrir</a>
         ${isAdmin ? ` | <a href="#" onclick="editarCotacao('${r.id}')">Editar</a>
@@ -573,48 +526,57 @@ function renderTabela(rows, container){
 
   html += `</tbody></table>`;
   container.innerHTML = html;
+
+  // eventos seleção
+  container.querySelectorAll(".selrow").forEach(chk=>{
+    chk.addEventListener("change", (e)=>{
+      const id = e.target.dataset.id;
+      if (e.target.checked) selecionados.add(id); else selecionados.delete(id);
+      atualizarSelCount();
+    });
+  });
+  const selAll = $("#selAll");
+  if (selAll) selAll.addEventListener("change", (e)=>{
+    const marcar = e.target.checked;
+    container.querySelectorAll(".selrow").forEach(c=>{
+      c.checked = marcar;
+      const id = c.dataset.id;
+      if (marcar) selecionados.add(id); else selecionados.delete(id);
+    });
+    atualizarSelCount();
+  });
+
+  // botão carregar mais
+  const btnMore = $("btnLoadMore");
+  if (btnMore) btnMore.style.display = (pagMostrando < rowsCache.length) ? "inline-flex" : "none";
+}
+function instalarLoadMore(){
+  const btn = $("btnLoadMore");
+  if (!btn) return;
+  btn.addEventListener("click", ()=>{
+    renderTabelaPaginada(true);
+  });
+}
+function atualizarSelCount(){
+  const el = $("selCount");
+  if (el) el.textContent = `${selecionados.size} selecionadas`;
 }
 
-// --------- Utilidades da UI ----------
+// --------- Utilidades UI ---------
 function limparFiltros(){
-  ["filtroDataInicio","filtroDataFim","filtroRM","filtroStatus"].forEach(id=>{
+  ["filtroEmpresa","filtroDataInicio","filtroDataFim","filtroRM","filtroStatus"].forEach(id=>{
     const el=$(id); if(el) el.value="";
   });
   if (isAdmin) { const a=$("filtroAgencia"); if (a) a.value=""; }
   carregarCotacoesComFiltros();
 }
 
-// Botão de voltar para o painel
-function montarBotaoVoltar() {
-  const host = document.getElementById("toolbar-cotacoes") || document.querySelector(".toolbar");
-  const a = document.createElement("a");
-  a.href = "painel.html";
-  a.textContent = "← Voltar ao Painel";
-  a.style.display = "inline-block";
-  a.style.padding = "8px 12px";
-  a.style.margin = "8px 0";
-  a.style.borderRadius = "8px";
-  a.style.background = "#0b4a88";
-  a.style.color = "#fff";
-  a.style.textDecoration = "none";
-  a.style.fontWeight = "600";
-  if (host) {
-    host.prepend(a);
-  } else {
-    a.style.position = "fixed";
-    a.style.top = "10px";
-    a.style.left = "10px";
-    a.style.zIndex = "9999";
-    document.body.appendChild(a);
-  }
-}
-
-// ===== Exports p/ onclick =====
-window.preencherEmpresa       = preencherEmpresa;
-window.preencherEmpresaNova   = preencherEmpresaNova;
-window.criarNovaCotacao       = criarNovaCotacao;
+// ===== Exports para onclick =====
+window.preencherEmpresa         = preencherEmpresa;
+window.preencherEmpresaNova     = preencherEmpresaNova;
+window.criarNovaCotacao         = criarNovaCotacao;
 window.carregarCotacoesComFiltros = carregarCotacoesComFiltros;
-window.editarCotacao          = editarCotacao;
-window.salvarAlteracoesCotacao= salvarAlteracoesCotacao;
-window.excluirCotacao         = excluirCotacao;
-window.limparFiltros          = limparFiltros;
+window.editarCotacao            = editarCotacao;
+window.salvarAlteracoesCotacao  = salvarAlteracoesCotacao;
+window.excluirCotacao           = excluirCotacao;
+window.limparFiltros            = limparFiltros;
