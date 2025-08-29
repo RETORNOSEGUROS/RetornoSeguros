@@ -30,11 +30,10 @@ const normalize = (s) =>
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const toBRL = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
-// fallback caso a máscara não esteja no HTML
-if (typeof window.desformatarMoeda !== "function") {
-  window.desformatarMoeda = (str)=> !str ? 0 : parseFloat(String(str).replace(/[^\d]/g,'')/100);
-}
-const desformatarMoeda = window.desformatarMoeda;
+// ⚠️ Alias para evitar conflito com a função global do HTML
+const parseMoeda = (typeof window.desformatarMoeda === "function")
+  ? window.desformatarMoeda
+  : (str)=>{ if(!str) return 0; return parseFloat(String(str).replace(/[^\d]/g,'')/100); };
 
 // ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
@@ -248,7 +247,7 @@ function preencherEmpresa() {
 async function criarNovaCotacao() {
   const empresaId = $("novaEmpresaId").value;
   const ramo      = $("novaRamo").value;
-  const valor     = desformatarMoeda($("novaValor").value);
+  const valor     = parseMoeda($("novaValor").value);
   const obs       = $("novaObservacoes").value.trim();
   const empresa   = empresasCache.find(e => e.id === empresaId);
 
@@ -306,7 +305,7 @@ async function salvarAlteracoesCotacao() {
   const id        = $("cotacaoId").value;
   const empresaId = $("empresa").value;
   const ramo      = $("ramo").value;
-  const valor     = desformatarMoeda($("valorEstimado").value);
+  const valor     = parseMoeda($("valorEstimado").value);
   const obs       = $("observacoes").value.trim();
 
   const empresa = empresasCache.find(e => e.id === empresaId);
@@ -471,10 +470,8 @@ async function carregarCotacoesComFiltros() {
       return true;
     });
 
-    // Enriquecimento: última atualização (doc, vetor interacoes, subcoleções do chat)
+    // Enriquecimento: última atualização (doc, vetor interacoes)
     rowsCache = [];
-    let idx = 0;
-
     for (const c of cotacoes) {
       const dataCriacao = pickFirstDate(c.dataCriacao);
       let last = pickFirstDate(c.dataAtualizacao, c.ultimaAtualizacao, c.updatedAt, c.statusMudadoEm);
@@ -514,7 +511,6 @@ async function carregarCotacoesComFiltros() {
         diasSemAtual: dias,
         agenciaLabel,
       });
-      idx++;
     }
 
     // Ordena e renderiza
@@ -596,7 +592,6 @@ function renderTabelaPaginada(reuseSort=false){
 
   rows.forEach(r => {
     const checked = selecionados.has(r.id) ? "checked" : "";
-    // badge para dias sem atualização: 0–6 neutro | 7–14 amarelo | 15+ vermelho
     const diasBadgeClass = r.diasSemAtual >= 15 ? "status-badge st-vermelho"
                          : r.diasSemAtual >= 7 ? "status-badge st-amarelo"
                          : "status-badge";
@@ -637,8 +632,8 @@ function renderTabelaPaginada(reuseSort=false){
   html += `</tbody></table>`;
   container.innerHTML = html;
 
-  // hidrata ícones
-  if (window.lucide) { lucide.createIcons(container); }
+  // hidrata ícones (escopo global)
+  if (window.lucide && typeof lucide.createIcons === "function") { lucide.createIcons(); }
 
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
@@ -773,13 +768,11 @@ function montarRelatorioDeRows(rows){
     <div class="kpi"><div class="label">Emitidos / Fechados</div><div class="value">${emitidos}</div></div>
   `;
 
-  // Status
   const byStatus = groupBy(rows, r => (r.status||"-"));
   const stLabels = Array.from(byStatus.keys());
   const stQtd = stLabels.map(l => byStatus.get(l).length);
   const stVal = stLabels.map(l => byStatus.get(l).reduce((s,x)=>s+(x.valor||0),0));
 
-  // RM tops (mês corrente)
   const agora = new Date(); const y = agora.getFullYear(), m = agora.getMonth();
   const inicioMes = new Date(y, m, 1).getTime(), fimMes = new Date(y, m+1, 0, 23,59,59).getTime();
   const rowsMes = rows.filter(r => r.dataMs >= inicioMes && r.dataMs <= fimMes);
@@ -791,13 +784,11 @@ function montarRelatorioDeRows(rows){
   const rmEmitLabels = Array.from(byRMEmit.keys());
   const rmEmitVal = rmEmitLabels.map(l => byRMEmit.get(l).reduce((s,x)=>s+(x.valor||0),0));
 
-  // Ramos
   const byRamo = groupBy(rows, r => (r.ramo||"-"));
   const ramoLabels = Array.from(byRamo.keys());
   const ramoQtd = ramoLabels.map(l => byRamo.get(l).length);
   const ramoVal = ramoLabels.map(l => byRamo.get(l).reduce((s,x)=>s+(x.valor||0),0));
 
-  // Charts compactos
   const mk = (id, type, data, options={}) => {
     const ctx = document.getElementById(id).getContext("2d");
     const ch = new Chart(ctx, { type, data, options: { responsive:true, maintainAspectRatio:false, ...options } });
@@ -811,7 +802,6 @@ function montarRelatorioDeRows(rows){
   mk("chartRamoQtd","bar",{ labels: ramoLabels, datasets:[{label:"Qtd por ramo", data: ramoQtd}] });
   mk("chartRamoValor","bar",{ labels: ramoLabels, datasets:[{label:"Valor por ramo", data: ramoVal}] }, { scales:{ y:{ ticks:{ callback:v=>toBRL(v) }}} });
 
-  // Tabelas simples
   const tabelaRank = (titulo, labels, vals, fmtVal=(x)=>x) => {
     const zipped = labels.map((l,i)=>({l, v: vals[i]})).sort((a,b)=>b.v-a.v).slice(0, 10);
     const rows = zipped.map((z,i)=>`<tr><td>${i+1}º</td><td>${z.l}</td><td style="text-align:right">${fmtVal(z.v)}</td></tr>`).join("");
