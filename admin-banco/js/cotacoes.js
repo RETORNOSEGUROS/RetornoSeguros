@@ -18,8 +18,10 @@ let sortKey = "lastUpdateMs";
 let sortDir = "desc";
 let pagTamanho = 10;
 let pagMostrando = 0;
-let rowsCache = [];     // linhas filtradas (para paginação/export)
+let rowsCache = [];     // linhas filtradas (para paginação/export/relatórios)
 let selecionados = new Set();
+
+let chartRefs = [];     // guarda instâncias Chart.js do relatório
 
 // ===== Helpers =====
 const $ = (id) => document.getElementById(id);
@@ -34,6 +36,7 @@ function desformatarMoeda(v) {
   const num = parseFloat(n);
   return isNaN(num) ? 0 : num;
 }
+const toBRL = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
 // ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
@@ -329,6 +332,8 @@ async function salvarAlteracoesCotacao() {
     ramo,
     valorDesejado: valor,
     dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+    atualizadoPorUid: usuarioAtual.uid,
+    atualizadoPorNome: usuarioAtual.email,
   };
 
   if (obs) {
@@ -372,21 +377,85 @@ async function listarCotacoesPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
+// Lê subcoleção de interações (se existir) e retorna a mais recente (data + autor)
+async function buscarUltimaInteracaoDoc(cotId){
+  try {
+    // nomes possíveis de subcoleções
+    const possiveis = ["interacoes", "mensagens", "chat", "chat-cotacao"];
+    for (const nome of possiveis){
+      const q = await db.collection("cotacoes-gerentes").doc(cotId).collection(nome)
+        .orderBy("dataHora","desc").limit(1).get();
+      if (!q.empty){
+        const x = q.docs[0].data() || {};
+        const when = x.dataHora?.toDate?.() || (x.dataHora ? new Date(x.dataHora) : null);
+        const who  = x.autorNome || x.usuarioNome || x.autor || "";
+        if (when) return { when, who };
+      }
+    }
+  } catch(e){ /* silencioso */ }
+  return null;
+}
+
+function pickFirstDate(...vals){
+  for (const v of vals){
+    if (!v) continue;
+    const d = v?.toDate?.() || (typeof v==="string"||v instanceof Date ? new Date(v) : null);
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+function incluiEmitido(txt=""){
+  const t = txt.toLowerCase();
+  return t.includes("emitido") || t.includes("negócio fechado") || t.includes("negocio fechado");
+}
+function statusClass(s){
+  const txt = (s||"").toLowerCase();
+  if (txt === "negócio iniciado" || txt === "negocio iniciado") return "st-roxo";
+  const ehPendente = ["pendente agência","pendente corretor","pendente seguradora","pendente cliente","pendente agencia"].some(k=>txt.includes(k));
+  if (ehPendente) return "st-amarelo";
+  const ehRecusado = ["recusado cliente","recusado seguradora","emitido declinado"].some(k=>txt.includes(k));
+  if (ehRecusado) return "st-vermelho";
+  const ehAzul = ["em emissão","em emissao","negócio fechado","negocio fechado"].some(k=>txt.includes(k));
+  if (ehAzul) return "st-azulesc";
+  if (txt === "negócio emitido" || txt === "negocio emitido") return "st-verde";
+  return "";
+}
+
+// Calcula “última atualização” (robusto) + último autor
+async function computeLastUpdateRich(c){
+  // campos comuns onde outras telas/funcs gravam atualização:
+  const aliases = [
+    c.dataAtualizacao, c.ultimaAtualizacao, c.updatedAt, c.lastUpdate,
+    c.statusMudadoEm, c.ultimaInteracao
+  ];
+  let last = pickFirstDate(...aliases);
+  let lastWho = c.atualizadoPorNome || c.autorNome || "";
+
+  // também verifica vetor embutido interacoes
+  if (Array.isArray(c.interacoes) && c.interacoes.length){
+    const ult = [...c.interacoes]
+      .map(i => ({ when: i?.dataHora ? new Date(i.dataHora) : null, who: i?.autorNome || "" }))
+      .filter(x => x.when && !isNaN(x.when))
+      .sort((a,b)=>b.when - a.when)[0];
+    if (ult && (!last || ult.when > last)){ last = ult.when; lastWho = ult.who || lastWho; }
+  }
+
+  // se ainda não for confiável, tenta subcoleções (1 read por cotação, só nos top 30 para não pesar)
+  if (!last || isNaN(last)) {
+    const sub = await buscarUltimaInteracaoDoc(c.id);
+    if (sub && (!last || sub.when > last)){ last = sub.when; lastWho = sub.who || lastWho; }
+  }
+
+  // fallback para criação
+  const created = pickFirstDate(c.dataCriacao);
+  if (!last) last = created;
+
+  return { last, lastWho };
+}
+
 function getFiltroAgenciaSelecionada() {
   const sel = $("filtroAgencia"); if (!sel) return "";
   return sel.disabled ? (minhaAgencia || "") : (sel.value || "");
-}
-function computeLastUpdate(c){
-  const ts = c.dataAtualizacao?.toDate?.() || c.dataAtualizacao
-          || c.dataCriacao?.toDate?.() || c.dataCriacao || null;
-  let max = ts ? new Date(ts) : null;
-  if (Array.isArray(c.interacoes)){
-    c.interacoes.forEach(i=>{
-      const d = i?.dataHora ? new Date(i.dataHora) : null;
-      if (d && (!max || d > max)) max = d;
-    });
-  }
-  return max;
 }
 
 async function carregarCotacoesComFiltros() {
@@ -407,6 +476,7 @@ async function carregarCotacoesComFiltros() {
 
     if (filtroAgencia) cotacoes = cotacoes.filter(c => (c.agenciaId || "") === filtroAgencia);
 
+    // filtro por período usa a data de CRIAÇÃO (pedido), como já estava — relatório respeita isso também
     cotacoes = cotacoes.filter(c => {
       const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       if (ini && d && d < new Date(ini)) return false;
@@ -417,28 +487,46 @@ async function carregarCotacoesComFiltros() {
       return true;
     });
 
-    rowsCache = cotacoes.map(c => {
+    // Monta linhas (com enriquecimento de última atualização/autor)
+    rowsCache = [];
+    const limiteEnriquecer = 30; // evita muitas leituras
+    let idx = 0;
+
+    for (const c of cotacoes) {
       const dataObj = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       const dataMs  = dataObj ? dataObj.getTime() : 0;
-      const last    = computeLastUpdate(c);
-      const lastMs  = last ? last.getTime() : dataMs;
+      let last = c.dataAtualizacao?.toDate?.() || c.dataAtualizacao || dataObj;
+      let lastWho = c.atualizadoPorNome || c.autorNome || "";
+
+      if (idx < limiteEnriquecer) {
+        const rich = await computeLastUpdateRich({ ...c, id: c.id });
+        if (rich.last){ last = rich.last; lastWho = rich.lastWho || lastWho; }
+      }
+      idx++;
+
+      const lastMs  = last ? new Date(last).getTime() : dataMs;
+      const diasSemAtual = last ? Math.max(0, Math.floor((Date.now() - new Date(last)) / (1000*60*60*24))) : 0;
+
       const valorNum = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
       const agenciaLabel = c.agenciaId ? (agenciasMap[c.agenciaId] || c.agenciaId) : "-";
-      return {
+
+      rowsCache.push({
         id: c.id,
         empresaNome: c.empresaNome || "-",
         rmNome: c.rmNome || "-",
         ramo: c.ramo || "-",
         valor: valorNum,
-        valorFmt: valorNum ? valorNum.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : "-",
+        valorFmt: valorNum ? toBRL(valorNum) : "-",
         status: c.status || "-",
         dataMs,
         dataFmt: dataObj ? dataObj.toLocaleDateString("pt-BR") : "-",
         lastUpdateMs: lastMs,
-        lastUpdateFmt: last ? last.toLocaleString("pt-BR") : "-",
+        lastUpdateFmt: last ? new Date(last).toLocaleString("pt-BR") : "-",
+        lastUser: lastWho || "-",
+        diasSemAtual,
         agenciaLabel,
-      };
-    });
+      });
+    }
 
     ordenarRows(rowsCache);
     pagMostrando = 0;
@@ -456,7 +544,7 @@ function instalarOrdenacaoCabecalhos() {
     const th = e.target.closest("th.sortable"); if (!th) return;
     const key = th.dataset.sort;
     if (sortKey === key) sortDir = (sortDir === "asc" ? "desc" : "asc");
-    else { sortKey = key; sortDir = (key === "lastUpdateMs" || key === "dataMs" || key === "valor") ? "desc" : "asc"; }
+    else { sortKey = key; sortDir = (key === "lastUpdateMs" || key === "dataMs" || key === "valor" || key==="diasSemAtual") ? "desc" : "asc"; }
     renderTabelaPaginada(true);
   });
 }
@@ -472,20 +560,6 @@ function ordenarRows(rows){
     if (sa > sb) return  1 * dir;
     return 0;
   });
-}
-
-// --------- Status -> classe ---------
-function statusClass(s){
-  const txt = (s||"").toLowerCase();
-  if (txt === "negócio iniciado" || txt === "negocio iniciado") return "st-roxo";
-  const ehPendente = ["pendente agência","pendente corretor","pendente seguradora","pendente cliente","pendente agencia"].some(k=>txt.includes(k));
-  if (ehPendente) return "st-amarelo";
-  const ehRecusado = ["recusado cliente","recusado seguradora","emitido declinado"].some(k=>txt.includes(k));
-  if (ehRecusado) return "st-vermelho";
-  const ehAzul = ["em emissão","em emissao","negócio fechado","negocio fechado"].some(k=>txt.includes(k));
-  if (ehAzul) return "st-azulesc";
-  if (txt === "negócio emitido" || txt === "negocio emitido") return "st-verde";
-  return "";
 }
 
 // --------- Render + Paginação + Seleção ---------
@@ -507,6 +581,7 @@ function renderTabelaPaginada(reuseSort=false){
     <th class="sortable" data-sort="ramo">Ramo <span class="arrow">${arrow("ramo")}</span></th>
     <th class="sortable" data-sort="valor">Valor <span class="arrow">${arrow("valor")}</span></th>
     <th class="sortable" data-sort="status">Status <span class="arrow">${arrow("status")}</span></th>
+    <th class="sortable" data-sort="diasSemAtual">Dias sem atualização <span class="arrow">${arrow("diasSemAtual")}</span></th>
     <th class="sortable" data-sort="lastUpdateMs">Última atualização <span class="arrow">${arrow("lastUpdateMs")}</span></th>
     <th class="sortable" data-sort="dataMs">Criado em <span class="arrow">${arrow("dataMs")}</span></th>
     <th>Ações</th>
@@ -525,18 +600,25 @@ function renderTabelaPaginada(reuseSort=false){
       <td data-label="Ramo">${r.ramo}</td>
       <td data-label="Valor">${r.valorFmt}</td>
       <td data-label="Status"><span class="status-badge ${statusClass(r.status)}">${r.status}</span></td>
-      <td data-label="Última atualização">${r.lastUpdateFmt}</td>
+      <td data-label="Dias sem atualização">${r.diasSemAtual}</td>
+      <td data-label="Última atualização">${r.lastUpdateFmt}${r.lastUser ? ` • ${r.lastUser}` : ""}</td>
       <td data-label="Criado em">${r.dataFmt}</td>
       <td data-label="Ações">
-        <a href="chat-cotacao.html?id=${r.id}" target="_blank">Abrir</a>
-        ${isAdmin ? ` | <a href="#" onclick="editarCotacao('${r.id}')">Editar</a>
-        | <a href="#" onclick="excluirCotacao('${r.id}')" style="color:#c00">Excluir</a>` : ""}
+        <div class="actions">
+          <a class="icon-btn" href="chat-cotacao.html?id=${r.id}" title="Abrir chat c/ cotação" target="_blank"><span class="lucide" data-lucide="message-square"></span></a>
+          ${isAdmin ? `
+            <button class="icon-btn" onclick="editarCotacao('${r.id}')" title="Editar"><span class="lucide" data-lucide="pencil"></span></button>
+            <button class="icon-btn" onclick="excluirCotacao('${r.id}')" title="Excluir"><span class="lucide" data-lucide="trash-2"></span></button>
+          ` : ``}
+        </div>
       </td>
     </tr>`;
   });
 
   html += `</tbody></table>`;
   container.innerHTML = html;
+
+  if (window.lucide) lucide.createIcons(container); // reidrata ícones após render
 
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
@@ -585,12 +667,12 @@ function exportarExcel(){
     "Ramo": r.ramo,
     "Valor": r.valor,
     "Status": r.status,
-    "Última atualização": r.lastUpdateFmt,
+    "Dias sem atualização": r.diasSemAtual,
+    "Última atualização": r.lastUpdateFmt + (r.lastUser? ` • ${r.lastUser}`:""),
     "Criado em": r.dataFmt,
   }));
   if (!dados.length) return alert("Nada para exportar.");
   const ws = XLSX.utils.json_to_sheet(dados);
-  // formata valor em moeda
   const range = XLSX.utils.decode_range(ws['!ref']);
   for (let R = 1; R <= range.e.r; R++) {
     const cell = ws[XLSX.utils.encode_cell({r:R, c:4})];
@@ -608,16 +690,152 @@ function exportarPDF(){
   doc.setFontSize(12);
   doc.text("Cotações - Retorno Seguros", 14, 14);
   const body = dados.map(r => [
-    r.empresaNome, r.agenciaLabel, r.rmNome, r.ramo, r.valorFmt, r.status, r.lastUpdateFmt, r.dataFmt
+    r.empresaNome, r.agenciaLabel, r.rmNome, r.ramo, r.valorFmt, r.status, r.diasSemAtual, (r.lastUpdateFmt + (r.lastUser? ` • ${r.lastUser}`:"")), r.dataFmt
   ]);
   doc.autoTable({
-    head: [["Cliente","Agência","RM","Ramo","Valor","Status","Última atualização","Criado em"]],
+    head: [["Cliente","Agência","RM","Ramo","Valor","Status","Dias sem atualização","Última atualização","Criado em"]],
     body,
     startY: 18,
     styles: { fontSize: 9 },
     headStyles: { fillColor: [0,64,128] }
   });
   doc.save("cotacoes.pdf");
+}
+
+// ===== Relatório (Modal) =====
+function abrirRelatorio(){
+  const m = $("modalRel"); if (!m) return;
+  montarRelatorioDeRows(rowsCache);
+  m.style.display = "flex";
+}
+function fecharRelatorio(){
+  const m = $("modalRel"); if (!m) return;
+  m.style.display = "none";
+  // destrói charts
+  chartRefs.forEach(ch => { try { ch.destroy(); } catch(_){} });
+  chartRefs = [];
+}
+
+function groupBy(arr, key){
+  const map = new Map();
+  arr.forEach(o => {
+    const k = (typeof key==="function") ? key(o) : (o[key] ?? "");
+    map.set(k, (map.get(k)||[]).concat([o]));
+  });
+  return map;
+}
+
+function montarRelatorioDeRows(rows){
+  // KPIs
+  const total = rows.length;
+  const totalValor = rows.reduce((s,r)=>s+(Number(r.valor)||0),0);
+  const pendentes = rows.filter(r=> (r.status||"").toLowerCase().includes("pendente")).length;
+  const emitidos = rows.filter(r=> incluiEmitido(r.status)).length;
+
+  const kpis = $("kpisRel");
+  kpis.innerHTML = `
+    <div class="kpi"><div class="label">Qtde de cotações</div><div class="value">${total}</div></div>
+    <div class="kpi"><div class="label">Valor total</div><div class="value">${toBRL(totalValor)}</div></div>
+    <div class="kpi"><div class="label">Pendentes</div><div class="value">${pendentes}</div></div>
+    <div class="kpi"><div class="label">Emitidos / Fechados</div><div class="value">${emitidos}</div></div>
+  `;
+
+  // Status -> quantidade/valor
+  const byStatus = groupBy(rows, r => (r.status||"-"));
+  const stLabels = Array.from(byStatus.keys());
+  const stQtd = stLabels.map(l => byStatus.get(l).length);
+  const stVal = stLabels.map(l => byStatus.get(l).reduce((s,x)=>s+(x.valor||0),0));
+
+  // RM tops: por solicitações (mês corrente) e por emitidos (valor)
+  const agora = new Date();
+  const y = agora.getFullYear(), m = agora.getMonth();
+  const inicioMes = new Date(y, m, 1).getTime(), fimMes = new Date(y, m+1, 0, 23,59,59).getTime();
+
+  const rowsMes = rows.filter(r => r.dataMs >= inicioMes && r.dataMs <= fimMes);
+  const byRM = groupBy(rowsMes, r => (r.rmNome||"-"));
+  const rmLabels = Array.from(byRM.keys());
+  const rmQtdMes = rmLabels.map(l => byRM.get(l).length);
+
+  const byRMEmit = groupBy(rows.filter(r=>incluiEmitido(r.status)), r => (r.rmNome||"-"));
+  const rmEmitLabels = Array.from(byRMEmit.keys());
+  const rmEmitVal = rmEmitLabels.map(l => byRMEmit.get(l).reduce((s,x)=>s+(x.valor||0),0));
+
+  // Ramo
+  const byRamo = groupBy(rows, r => (r.ramo||"-"));
+  const ramoLabels = Array.from(byRamo.keys());
+  const ramoQtd = ramoLabels.map(l => byRamo.get(l).length);
+  const ramoVal = ramoLabels.map(l => byRamo.get(l).reduce((s,x)=>s+(x.valor||0),0));
+
+  // Desenha charts
+  const mk = (id, type, data, options={}) => {
+    const ctx = document.getElementById(id).getContext("2d");
+    const ch = new Chart(ctx, { type, data, options: { responsive:true, maintainAspectRatio:false, ...options } });
+    chartRefs.push(ch);
+    return ch;
+  };
+
+  mk("chartStatusQtd","bar",{
+    labels: stLabels,
+    datasets: [{ label:"Qtd por status", data: stQtd }]
+  });
+  mk("chartStatusValor","bar",{
+    labels: stLabels,
+    datasets: [{ label:"Valor por status", data: stVal }]
+  }, { scales:{ y:{ ticks:{ callback:v=>toBRL(v) }}} });
+
+  mk("chartRMTopCotas","bar",{
+    labels: rmLabels,
+    datasets: [{ label:"RMs com mais solicitações (mês)", data: rmQtdMes }]
+  });
+  mk("chartRMEmitidos","bar",{
+    labels: rmEmitLabels,
+    datasets: [{ label:"Valor emitido por RM", data: rmEmitVal }]
+  }, { scales:{ y:{ ticks:{ callback:v=>toBRL(v) }}} });
+
+  mk("chartRamoQtd","bar",{
+    labels: ramoLabels,
+    datasets: [{ label:"Qtd por ramo", data: ramoQtd }]
+  });
+  mk("chartRamoValor","bar",{
+    labels: ramoLabels,
+    datasets: [{ label:"Valor por ramo", data: ramoVal }]
+  }, { scales:{ y:{ ticks:{ callback:v=>toBRL(v) }}} });
+
+  // Tabelas de apoio
+  const tabelaRank = (titulo, labels, vals, fmtVal=(x)=>x) => {
+    const zipped = labels.map((l,i)=>({l, v: vals[i]})).sort((a,b)=>b.v-a.v).slice(0, 10);
+    const rows = zipped.map((z,i)=>`<tr><td>${i+1}º</td><td>${z.l}</td><td style="text-align:right">${fmtVal(z.v)}</td></tr>`).join("");
+    return `
+      <div class="card" style="margin-top:10px">
+        <h4 style="margin:0 0 8px">${titulo}</h4>
+        <table style="width:100%; border-collapse:collapse">
+          <thead><tr><th>#</th><th>Item</th><th style="text-align:right">Valor</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="3" class="muted">Sem dados</td></tr>`}</tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  $("tabelasRel").innerHTML =
+    tabelaRank("Top RMs (Qtde no mês)", rmLabels, rmQtdMes, x=>x) +
+    tabelaRank("Top RMs (Valor emitido)", rmEmitLabels, rmEmitVal, v=>toBRL(v)) +
+    tabelaRank("Ramos (Qtde)", ramoLabels, ramoQtd, x=>x) +
+    tabelaRank("Ramos (Valor)", ramoLabels, ramoVal, v=>toBRL(v));
+}
+
+function exportarRelatorioPDF(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+  doc.setFontSize(12);
+  doc.text("Relatório - Cotações (Filtros aplicados)", 14, 14);
+  // Apenas um resumo textual + KPIs principais
+  const total = rowsCache.length;
+  const totalValor = rowsCache.reduce((s,r)=>s+(Number(r.valor)||0),0);
+  const pendentes = rowsCache.filter(r=> (r.status||"").toLowerCase().includes("pendente")).length;
+  const emitidos = rowsCache.filter(r=> incluiEmitido(r.status)).length;
+
+  doc.text(`Qtde: ${total}  |  Valor: ${toBRL(totalValor)}  |  Pendentes: ${pendentes}  |  Emitidos/Fechados: ${emitidos}`, 14, 24);
+  doc.save("relatorio-cotacoes.pdf");
 }
 
 // ===== Exports p/ onclick =====
@@ -628,6 +846,9 @@ window.carregarCotacoesComFiltros= carregarCotacoesComFiltros;
 window.editarCotacao             = editarCotacao;
 window.salvarAlteracoesCotacao   = salvarAlteracoesCotacao;
 window.excluirCotacao            = excluirCotacao;
-window.limparFiltros             = limparFiltros;
 window.exportarExcel             = exportarExcel;
 window.exportarPDF               = exportarPDF;
+
+window.abrirRelatorio            = abrirRelatorio;
+window.fecharRelatorio           = fecharRelatorio;
+window.exportarRelatorioPDF      = exportarRelatorioPDF;
