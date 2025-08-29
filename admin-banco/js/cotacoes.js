@@ -442,6 +442,19 @@ async function enrichSubcollectionsParallel(rows, limit=30){
   return alterou;
 }
 
+// >>> NOVO: processa TODAS as linhas em lotes e re-renderiza quando houver mudanças
+async function enrichAllInBatches(fullRows, batchSize = 40){
+  for (let i = 0; i < fullRows.length; i += batchSize){
+    const slice = fullRows.slice(i, i + batchSize);
+    const mudou = await enrichSubcollectionsParallel(slice, slice.length);
+    if (mudou){
+      ordenarRows(rowsCache);
+      renderTabelaPaginada(true);
+      atualizarResumoFiltro();
+    }
+  }
+}
+
 async function carregarCotacoesComFiltros() {
   const container = $("listaCotacoes");
   if (!container) return;
@@ -519,14 +532,8 @@ async function carregarCotacoesComFiltros() {
     renderTabelaPaginada();
     atualizarResumoFiltro();
 
-    // Enriquecimento paralelo nas subcoleções do chat (ajusta ordem sem travar)
-    enrichSubcollectionsParallel(rowsCache, 30).then((mudou)=>{
-      if (mudou){
-        ordenarRows(rowsCache);
-        renderTabelaPaginada(true);
-        atualizarResumoFiltro();
-      }
-    });
+    // >>> NOVO: enriquecer TODA a lista em lotes (corrige itens que estavam fora do top inicial)
+    enrichAllInBatches(rowsCache, 40);
   } catch (err) {
     console.error("Erro ao carregar cotações:", err);
     container.innerHTML = `<p class="muted">Sem permissão ou erro de rede.</p>`;
@@ -658,6 +665,8 @@ function setPaginacao(n){
   pagTamanho = (n === 'all') ? 'all' : Number(n||10);
   pagMostrando = 0;
   renderTabelaPaginada(true);
+  // garante enriquecimento mesmo ao trocar para "Todos"
+  enrichAllInBatches(rowsCache, 40);
 }
 function atualizarSelCount(){
   const el = $("selCount");
