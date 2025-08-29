@@ -30,6 +30,12 @@ const normalize = (s) =>
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const toBRL = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
+// fallback caso a máscara não esteja no HTML
+if (typeof window.desformatarMoeda !== "function") {
+  window.desformatarMoeda = (str)=> !str ? 0 : parseFloat(String(str).replace(/[^\d]/g,'')/100);
+}
+const desformatarMoeda = window.desformatarMoeda;
+
 // ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
   auth.onAuthStateChanged(async (user) => {
@@ -281,7 +287,7 @@ async function criarNovaCotacao() {
 
 function editarCotacao(id) {
   db.collection("cotacoes-gerentes").doc(id).get().then(doc => {
-    if (!doc.exists) return alert("Cotação não encontrada");
+    if (!doc.exists) return alert("Cotação não encontrado");
     const c = doc.data();
     $("cotacaoId").value = id;
     $("empresa").value   = c.empresaId || "";
@@ -408,6 +414,35 @@ function pickFirstDate(...vals){
   return null;
 }
 
+// Enriquecimento paralelo nas subcoleções do chat
+async function enrichSubcollectionsParallel(rows, limit=30){
+  const alvo = rows.slice(0, limit).map(r => ({ id:r.id, lastMs:r.lastUpdateMs }));
+  const tasks = alvo.map(async (r) => {
+    try{
+      const sub = await buscarUltimaInteracaoDoc(r.id);
+      if (!sub) return null;
+      return { id:r.id, when: sub.when, who: sub.who || "" };
+    }catch{ return null; }
+  });
+  const res = await Promise.allSettled(tasks);
+  let alterou = false;
+  res.forEach(out => {
+    if (out.status !== "fulfilled" || !out.value) return;
+    const { id, when, who } = out.value;
+    const row = rows.find(x => x.id === id);
+    if (!row) return;
+    const ms = when ? new Date(when).getTime() : 0;
+    if (ms && ms > (row.lastUpdateMs||0)){
+      row.lastUpdateMs = ms;
+      row.lastUpdateFmt = new Date(ms).toLocaleString("pt-BR");
+      if (who) row.lastUser = who;
+      row.diasSemAtual = Math.max(0, Math.floor((Date.now() - ms)/86400000));
+      alterou = true;
+    }
+  });
+  return alterou;
+}
+
 async function carregarCotacoesComFiltros() {
   const container = $("listaCotacoes");
   if (!container) return;
@@ -438,7 +473,6 @@ async function carregarCotacoesComFiltros() {
 
     // Enriquecimento: última atualização (doc, vetor interacoes, subcoleções do chat)
     rowsCache = [];
-    const limiteSub = 30; // para não pesar
     let idx = 0;
 
     for (const c of cotacoes) {
@@ -453,17 +487,16 @@ async function carregarCotacoesComFiltros() {
         if (ult && (!last || ult.when > last)){ last = ult.when; lastWho = ult.who || lastWho; }
       }
 
-      if ((!last || isNaN(last)) && idx < limiteSub){
-        const sub = await buscarUltimaInteracaoDoc(c.id);
-        if (sub && (!last || sub.when > last)){ last = sub.when; lastWho = sub.who || lastWho; }
-      }
       if (!last) last = dataCriacao;
 
       const valorNum = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
       const agenciaLabel = c.agenciaId ? (agenciasMap[c.agenciaId] || c.agenciaId) : "-";
-      const lastMs = last ? new Date(last).getTime() : 0;
+
+      const lastMs = (last instanceof Date) ? last.getTime()
+                    : (typeof last === "number" ? last
+                    : (last ? new Date(last).getTime() : 0));
       const dataMs = dataCriacao ? new Date(dataCriacao).getTime() : 0;
-      const dias = last ? Math.max(0, Math.floor((Date.now() - new Date(last))/86400000)) : 0;
+      const dias = lastMs ? Math.max(0, Math.floor((Date.now() - lastMs)/86400000)) : 0;
 
       rowsCache.push({
         id: c.id,
@@ -476,7 +509,7 @@ async function carregarCotacoesComFiltros() {
         dataMs,
         dataFmt: dataCriacao ? new Date(dataCriacao).toLocaleDateString("pt-BR") : "-",
         lastUpdateMs: lastMs,
-        lastUpdateFmt: last ? new Date(last).toLocaleString("pt-BR") : "-",
+        lastUpdateFmt: lastMs ? new Date(lastMs).toLocaleString("pt-BR") : "-",
         lastUser: lastWho || "",
         diasSemAtual: dias,
         agenciaLabel,
@@ -484,11 +517,20 @@ async function carregarCotacoesComFiltros() {
       idx++;
     }
 
-    // ordena e renderiza
+    // Ordena e renderiza
     ordenarRows(rowsCache);
     pagMostrando = 0;
     renderTabelaPaginada();
     atualizarResumoFiltro();
+
+    // Enriquecimento paralelo nas subcoleções do chat (ajusta ordem sem travar)
+    enrichSubcollectionsParallel(rowsCache, 30).then((mudou)=>{
+      if (mudou){
+        ordenarRows(rowsCache);
+        renderTabelaPaginada(true);
+        atualizarResumoFiltro();
+      }
+    });
   } catch (err) {
     console.error("Erro ao carregar cotações:", err);
     container.innerHTML = `<p class="muted">Sem permissão ou erro de rede.</p>`;
@@ -554,6 +596,12 @@ function renderTabelaPaginada(reuseSort=false){
 
   rows.forEach(r => {
     const checked = selecionados.has(r.id) ? "checked" : "";
+    // badge para dias sem atualização: 0–6 neutro | 7–14 amarelo | 15+ vermelho
+    const diasBadgeClass = r.diasSemAtual >= 15 ? "status-badge st-vermelho"
+                         : r.diasSemAtual >= 7 ? "status-badge st-amarelo"
+                         : "status-badge";
+    const diasBadge = `<span class="${diasBadgeClass}">${r.diasSemAtual}</span>`;
+
     html += `<tr>
       <td data-label="Selecionar"><input type="checkbox" class="selrow" data-id="${r.id}" ${checked}></td>
       <td data-label="Cliente">
@@ -565,19 +613,32 @@ function renderTabelaPaginada(reuseSort=false){
       <td data-label="Ramo">${r.ramo}</td>
       <td data-label="Valor">${r.valorFmt}</td>
       <td data-label="Status"><span class="status-badge ${statusClass(r.status)}">${r.status}</span></td>
-      <td data-label="Dias sem atualização">${r.diasSemAtual}</td>
+      <td data-label="Dias sem atualização">${diasBadge}</td>
       <td data-label="Última atualização">${r.lastUpdateFmt}${r.lastUser ? ` • ${r.lastUser}` : ""}</td>
       <td data-label="Criado em">${r.dataFmt}</td>
-      <td data-label="Ações">
-        <a class="btn ghost" href="chat-cotacao.html?id=${r.id}" target="_blank">Abrir</a>
-        ${isAdmin ? ` <a class="btn outline" href="#" onclick="editarCotacao('${r.id}')">Editar</a>
-        <a class="btn outline" href="#" onclick="excluirCotacao('${r.id}')" style="margin-left:6px">Excluir</a>` : ""}
+      <td data-label="Ações" class="td-actions">
+        <div class="actions">
+          <a class="icon-btn" href="chat-cotacao.html?id=${r.id}" title="Abrir chat" target="_blank">
+            <i data-lucide="message-square"></i>
+          </a>
+          ${isAdmin ? `
+            <button class="icon-btn" title="Editar" onclick="editarCotacao('${r.id}')">
+              <i data-lucide="pencil"></i>
+            </button>
+            <button class="icon-btn" title="Excluir" onclick="excluirCotacao('${r.id}')">
+              <i data-lucide="trash-2"></i>
+            </button>
+          ` : ``}
+        </div>
       </td>
     </tr>`;
   });
 
   html += `</tbody></table>`;
   container.innerHTML = html;
+
+  // hidrata ícones
+  if (window.lucide) { lucide.createIcons(container); }
 
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
@@ -677,7 +738,7 @@ function exportarPDF(){
 // ===== Relatório (seleção > filtro) =====
 function abrirRelatorio(){
   const m = $("modalRel"); if (!m) return;
-  const base = getLinhasParaExport(); // <— selecionados, se houver; senão filtrados
+  const base = getLinhasParaExport(); // selecionados, se houver; senão filtrados
   montarRelatorioDeRows(base);
   m.style.display = "flex";
 }
@@ -736,7 +797,7 @@ function montarRelatorioDeRows(rows){
   const ramoQtd = ramoLabels.map(l => byRamo.get(l).length);
   const ramoVal = ramoLabels.map(l => byRamo.get(l).reduce((s,x)=>s+(x.valor||0),0));
 
-  // Desenha charts (altura fixa, compactos)
+  // Charts compactos
   const mk = (id, type, data, options={}) => {
     const ctx = document.getElementById(id).getContext("2d");
     const ch = new Chart(ctx, { type, data, options: { responsive:true, maintainAspectRatio:false, ...options } });
@@ -790,6 +851,8 @@ function limparFiltros(){
   ["filtroDataInicio","filtroDataFim"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
   carregarCotacoesComFiltros();
 }
+
+// ===== Exports p/ onclick =====
 window.resolverEmpresaNova       = resolverEmpresaNova;
 window.preencherEmpresa          = preencherEmpresa;
 window.criarNovaCotacao          = criarNovaCotacao;
