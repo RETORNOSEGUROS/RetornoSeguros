@@ -507,7 +507,13 @@ async function carregarCotacoesComFiltros() {
     rowsCache = [];
     for (const c of cotacoes) {
       const dataCriacao = pickFirstDate(c.dataCriacao);
-      let last = pickFirstDate(c.dataAtualizacao, c.ultimaAtualizacao, c.updatedAt, c.statusMudadoEm);
+      let last = pickFirstDate(
+  c.dataAtualizacao,
+  c.ultimaAtualizacao,
+  c.updatedAt,
+  c.statusMudadoEm,
+  c.dataHora      // ✅ passa a contar como última atualização
+);
       let lastWho = c.atualizadoPorNome || c.autorNome || "";
 
       if (Array.isArray(c.interacoes) && c.interacoes.length){
@@ -896,3 +902,4 @@ window.abrirRelatorio            = abrirRelatorio;
 window.fecharRelatorio           = fecharRelatorio;
 window.exportarRelatorioPDF      = exportarRelatorioPDF;
 window.limparFiltros             = limparFiltros;
+
