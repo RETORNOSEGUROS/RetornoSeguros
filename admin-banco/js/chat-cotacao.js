@@ -79,20 +79,33 @@ async function gerentePodeVerCotacao(dataCotacao, minhaAgencia) {
   if (dataCotacao?.agenciaId) {
     return dataCotacao.agenciaId === minhaAgencia;
   }
-
   // 2) Sem agenciaId (legado): tenta via empresa vinculada
   const empresaId = dataCotacao?.empresaId;
   if (!empresaId) return true; // sem nada para verificar — não bloqueia
-
   try {
     const emp = await db.collection("empresas").doc(empresaId).get();
-    if (!emp.exists) return true; // sem empresa, não bloqueia
+    if (!emp.exists) return true;
     const ag = emp.data()?.agenciaId || "";
-    if (!ag) return true;         // empresa sem agência — não bloqueia
-    return ag === minhaAgencia;   // compara
+    if (!ag) return true;
+    return ag === minhaAgencia;
   } catch {
-    return true;                  // em erro de leitura, não bloqueia
+    return true;
   }
+}
+
+// ======= carimbo oficial de última atualização =======
+async function bumpLastUpdate(extra = {}) {
+  if (!cotacaoRef) return;
+  const user = firebase.auth().currentUser || {};
+  const now  = firebase.firestore.FieldValue.serverTimestamp();
+  const payload = {
+    dataAtualizacao: now,            // lido na listagem
+    dataHora:        now,            // compatível com seu padrão
+    atualizadoPorNome: user.email || '',
+    atualizadoPorUid:  user.uid   || '',
+    ...extra
+  };
+  try { await cotacaoRef.update(payload); } catch (_) {}
 }
 
 // ==== Boot ====
@@ -201,6 +214,7 @@ function prepararEdicaoValorParaAdmin() {
     }
     try {
       await cotacaoRef.update({ valorDesejado: novoValor, agenciaId: cotacaoData.agenciaId || minhaAgencia || "" });
+      await bumpLastUpdate(); // <<< carimbo p/ listagem
       alert("Valor desejado atualizado.");
       location.reload();
     } catch (err) {
@@ -248,7 +262,14 @@ function enviarMensagem() {
     interacoes: firebase.firestore.FieldValue.arrayUnion(nova),
     agenciaId: cotacaoData.agenciaId || minhaAgencia || ""
   })
-    .then(() => { $("novaMensagem").value = ""; exibirHistorico(); alert("Mensagem registrada."); })
+    .then(async () => {
+      await bumpLastUpdate(); // <<< carimbo p/ listagem
+      $("novaMensagem").value = "";
+      // atualiza em memória p/ refletir no histórico
+      cotacaoData.interacoes = (cotacaoData.interacoes || []).concat([nova]);
+      exibirHistorico();
+      alert("Mensagem registrada.");
+    })
     .catch(err => { console.error(err); alert("Erro ao enviar mensagem."); });
 }
 
@@ -356,8 +377,13 @@ function atualizarStatus() {
     agenciaId: cotacaoData.agenciaId || minhaAgencia || ""
   };
   if (inicioVig && fimVig) { update.inicioVigencia = inicioVig; update.fimVigencia = fimVig; }
+
   cotacaoRef.update(update)
-    .then(() => { alert("Status atualizado com sucesso."); location.reload(); })
+    .then(async () => {
+      await bumpLastUpdate({ statusMudadoEm: firebase.firestore.FieldValue.serverTimestamp() }); // <<< carimbo p/ listagem
+      alert("Status atualizado com sucesso.");
+      location.reload();
+    })
     .catch(err => { console.error(err); alert("Erro ao atualizar status."); });
 }
 
