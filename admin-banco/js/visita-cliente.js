@@ -1,235 +1,146 @@
 /**************************************************************
- * visita-cliente.js
- * Página pública para o cliente preencher os ramos/seguradoras
- * Salva em /visitas com source: "cliente_link"
- *
- * Requisitos:
- *  - Firebase v8 (app, auth, firestore) carregados no HTML
- *  - Auth "Anonymous" habilitada no Firebase Console
- *  - Regras Firestore com permissão de create p/ anônimo quando
- *    request.resource.data.source == "cliente_link"
+ * visita-cliente.js — formulário público
+ * - Lê empresa via querystring
+ * - Faz login anônimo
+ * - Carrega ramos/seguradoras do Firestore (após auth)
+ * - Salva em /visitas com source: "cliente_link"
  **************************************************************/
 
-/* ============================================================
-   0) BOOT DO FIREBASE
-   ============================================================ */
-if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
+// 0) Firebase
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db   = firebase.firestore();
 const auth = firebase.auth();
 
-/* ============================================================
-   1) PARÂMETROS DO LINK (tolerantes)
-      Aceita empresaId / empresa / idEmpresa / empresal
-      Aceita empresaNome / empresa_nome / nomeEmpresa
-      Aceita rmNome / rm / rm_nome
-   ============================================================ */
-
-/** Lê parâmetros tolerando grafias e caixa */
+// 1) Parâmetros do link (tolerantes)
 const qp = new URLSearchParams(location.search);
-function getQP(...keys) {
-  for (const k of keys) {
-    const val =
-      qp.get(k) ||
-      qp.get(k.toLowerCase()) ||
-      qp.get(k.toUpperCase());
-    if (val) return decodeURIComponent(val);
+function getQP(...keys){
+  for (const k of keys){
+    const v = qp.get(k) || qp.get(k.toLowerCase()) || qp.get(k.toUpperCase());
+    if (v) return decodeURIComponent(v);
   }
   return "";
 }
+// aceita variações
+const empresaId   = getQP("empresaId","empresa","idEmpresa","empresal");
+const empresaNome = getQP("empresaNome","empresa_nome","nomeEmpresa");
+const rmNomeURL   = getQP("rmNome","rm","rm_nome");
 
-// IDs e nomes vindos do link
-const empresaId   = getQP("empresaId", "empresa", "idEmpresa", "empresal");
-const empresaNome = getQP("empresaNome", "empresa_nome", "nomeEmpresa");
-const rmNomeURL   = getQP("rmNome", "rm", "rm_nome");
+// pinta cabeçalho logo
+document.getElementById("empresaNome").textContent = empresaNome || "(Empresa)";
+document.getElementById("empresaInfo").textContent = empresaNome ? `Empresa: ${empresaNome}` : "";
 
-// Preenche cabeçalho imediatamente (UX)
-const $empresaNome = document.getElementById("empresaNome");
-const $empresaInfo = document.getElementById("empresaInfo");
-if ($empresaNome) $empresaNome.textContent = empresaNome || "(Empresa)";
-if ($empresaInfo) $empresaInfo.textContent = empresaNome ? `Empresa: ${empresaNome}` : "";
+// 2) Login anônimo
+auth.signInAnonymously().catch(err => console.error("[auth anon]", err));
 
-/* ============================================================
-   2) LOGIN ANÔNIMO
-   - Cliente entra como anônimo
-   - Regras: permitir read em ramos/seguradoras (ou fallback)
-             permitir create em /visitas se source == "cliente_link"
-   ============================================================ */
-auth.signInAnonymously().catch((err) => {
-  // Erro de login anônimo geralmente indica que o método
-  // não está habilitado no Firebase Auth.
-  console.error("[Auth] Falha no anônimo:", err);
-});
-
-/* ============================================================
-   3) HELPERS (máscaras e validações)
-   ============================================================ */
-
-/** dd/mm/aaaa em tempo real (aceita apenas números) */
-function maskDDMMYYYY(value) {
-  let v = (value || "").replace(/\D/g, "").slice(0, 8);
-  if (v.length >= 5) {
-    v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
-  } else if (v.length >= 3) {
-    v = v.slice(0, 2) + "/" + v.slice(2);
-  }
+// 3) Helpers (máscaras/formatos)
+function maskDDMMYYYY(value){
+  let v=(value||"").replace(/\D/g,"").slice(0,8);
+  if (v.length>=5) v=v.slice(0,2)+"/"+v.slice(2,4)+"/"+v.slice(4);
+  else if (v.length>=3) v=v.slice(0,2)+"/"+v.slice(2);
   return v;
 }
-
-/** Valida dd/mm/aaaa (datas reais) */
-function validaDDMMYYYY(v) {
+function validaDDMMYYYY(v){
   if (!v) return false;
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
-  if (!m) return false;
-
-  const d  = parseInt(m[1], 10);
-  const mo = parseInt(m[2], 10);
-  const y  = parseInt(m[3], 10);
-
-  if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900) return false;
-
-  const dt = new Date(y, mo - 1, d);
-  return (
-    dt.getFullYear() === y &&
-    dt.getMonth() === (mo - 1) &&
-    dt.getDate() === d
-  );
+  const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
+  if(!m) return false;
+  const d=+m[1], mo=+m[2], y=+m[3];
+  if (d<1||d>31||mo<1||mo>12||y<1900) return false;
+  const dt=new Date(y,mo-1,d);
+  return dt.getFullYear()===y && (dt.getMonth()+1)===mo && dt.getDate()===d;
+}
+function maskMoedaBR(v){
+  v=(v||"").toString().replace(/\D/g,"");
+  if(!v) return "R$ 0,00";
+  v=(parseInt(v,10)/100).toFixed(2);
+  let [i,d]=v.split(".");
+  i=i.replace(/\B(?=(\d{3})+(?!\d))/g,".");
+  return "R$ "+i+","+d;
+}
+function parseMoedaBRToNumber(str){
+  if(!str) return 0;
+  return parseFloat(str.replace(/[R$\s\.]/g,"").replace(",", ".")) || 0;
 }
 
-/** Moeda BR em tempo real (R$ 0,00) */
-function maskMoedaBR(v) {
-  v = (v || "").toString().replace(/\D/g, "");
-  if (!v) return "R$ 0,00";
-  v = (parseInt(v, 10) / 100).toFixed(2);
-  let [inteiro, dec] = v.split(".");
-  inteiro = inteiro.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return "R$ " + inteiro + "," + dec;
-}
-
-/** Converte "R$ 50.100,15" -> 50100.15 (Number) */
-function parseMoedaBRToNumber(str) {
-  if (!str) return 0;
-  return parseFloat(
-    str.replace(/[R$\s\.]/g, "").replace(",", ".")
-  ) || 0;
-}
-
-/* ============================================================
-   4) CARREGAMENTO DE DADOS (seguradoras // ramos)
-   ============================================================ */
-
-/**
- * Carrega seguradoras de /seguradoras (nome).
- * Se as rules bloquearem o read (permission-denied),
- * retorna lista vazia para não travar a UI.
- */
-function carregarSeguradoras() {
-  return db
-    .collection("seguradoras")
-    .get()
-    .then((snap) => {
-      const arr = [];
-      snap.forEach((doc) => {
-        const d = doc.data() || {};
-        const n = (d.nome || "").toString().trim();
+// 4) Carregamento Firestore (seguradoras / ramos)
+function carregarSeguradoras(){
+  return db.collection("seguradoras").get()
+    .then(snap=>{
+      const arr=[];
+      snap.forEach(doc=>{
+        const n=(doc.data()?.nome||"").toString().trim();
         if (n) arr.push(n);
       });
-      return arr.sort((a, b) =>
-        a.localeCompare(b, "pt-BR", { sensitivity: "base" })
-      );
+      return arr.sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
     })
-    .catch((err) => {
-      console.warn("[Firestore] seguradoras read negada/erro:", err?.code || err);
+    .catch(err=>{
+      console.warn("[seguradoras] read negado/erro:", err?.code||err);
       return [];
     });
 }
 
-/**
- * Carrega ramos de /ramos-seguro, ordenando por "ordem".
- * Se falhar por permission-denied, devolve um fallback
- * básico para o cliente nunca ver a tela vazia.
- */
-async function carregarRamosSeguro() {
-  try {
-    const snap = await db
-      .collection("ramos-seguro")
-      .orderBy("ordem")
-      .get();
-
-    const ramos = [];
-    snap.forEach((doc) => {
-      const data = doc.data() || {};
-      ramos.push({
-        id: doc.id,
-        nome: data.nomeExibicao || data.nome || doc.id,
-      });
+async function carregarRamosSeguro(){
+  // 1ª tentativa: orderBy("ordem")
+  try{
+    const snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+    const r=[]; snap.forEach(doc=>{
+      const d=doc.data()||{};
+      r.push({ id:doc.id, nome: d.nomeExibicao || d.nome || doc.id });
     });
-
-    if (ramos.length) return ramos;
-  } catch (e) {
-    console.warn("[Firestore] ramos-seguro read negada/erro:", e?.code || e);
+    if (r.length) return r;
+  }catch(e){
+    // 2ª tentativa: sem orderBy (coleção sem campo "ordem")
+    try{
+      const snap = await db.collection("ramos-seguro").get();
+      const r=[]; snap.forEach(doc=>{
+        const d=doc.data()||{};
+        r.push({ id:doc.id, nome: d.nomeExibicao || d.nome || doc.id });
+      });
+      if (r.length) return r;
+    }catch(e2){
+      console.warn("[ramos-seguro] read negado/erro:", e2?.code||e2);
+    }
   }
 
-  // Fallback padrão (mantém experiência)
+  // fallback (para não quebrar UX em caso de bloqueio nas rules)
   return [
-    { id: "auto",        nome: "Automóvel"     },
-    { id: "vida",        nome: "Vida"          },
-    { id: "saude",       nome: "Saúde"         },
-    { id: "empresarial", nome: "Empresarial"   },
-    { id: "residencial", nome: "Residencial"   },
+    { id:"auto",        nome:"Automóvel"     },
+    { id:"vida",        nome:"Vida"          },
+    { id:"saude",       nome:"Saúde"         },
+    { id:"empresarial", nome:"Empresarial"   },
+    { id:"residencial", nome:"Residencial"   },
   ];
 }
 
-/* ============================================================
-   5) GERAÇÃO DA UI (mesma lógica do gerente)
-   - Checkbox por ramo
-   - Subcampos: vencimento, prêmio, seguradora, observações
-   ============================================================ */
-async function gerarCamposRamos() {
-  // Busca dados em paralelo
+// 5) Montagem da UI
+async function gerarCamposRamos(){
   const [seguradoras, ramos] = await Promise.all([
     carregarSeguradoras(),
-    carregarRamosSeguro(),
+    carregarRamosSeguro()
   ]);
 
-  // Container na DOM
   const container = document.getElementById("ramos-container");
-  if (!container) return;
-
-  // Limpa
   container.innerHTML = "";
 
-  // Para cada ramo, renderiza bloco com checkbox + subcampos
-  ramos.forEach((ramo) => {
-    // Caixa do ramo
+  ramos.forEach(ramo=>{
     const box = document.createElement("div");
     box.className = "ramo-box";
 
-    // Cabeçalho (checkbox + label)
     const head = document.createElement("div");
     head.className = "head";
 
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.className = "ramo";
-    checkbox.value = ramo.id;
-    checkbox.setAttribute("aria-label", `Selecionar ramo ${ramo.nome}`);
+    const chk = document.createElement("input");
+    chk.type="checkbox"; chk.className="ramo"; chk.value=ramo.id;
 
-    const labelCheck = document.createElement("label");
-    labelCheck.style.margin = "0";
-    labelCheck.append(` ${ramo.nome}`);
+    const lbl = document.createElement("label");
+    lbl.style.margin="0"; lbl.append(" "+ramo.nome);
 
-    head.appendChild(checkbox);
-    head.appendChild(labelCheck);
+    head.appendChild(chk);
+    head.appendChild(lbl);
     box.appendChild(head);
 
-    // Subcampos (escondidos até o usuário marcar o checkbox)
     const sub = document.createElement("div");
     sub.className = "subcampos";
     sub.id = `campos-${ramo.id}`;
-
-    // Build innerHTML dos subcampos
     sub.innerHTML = `
       <label>Vencimento (dd/mm/aaaa):</label>
       <input type="text" id="${ramo.id}-vencimento" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10">
@@ -240,141 +151,93 @@ async function gerarCamposRamos() {
       <label>Seguradora:</label>
       <select id="${ramo.id}-seguradora">
         <option value="">Selecione</option>
-        ${seguradoras.map((s) => `<option value="${s}">${s}</option>`).join("")}
+        ${seguradoras.map(s=>`<option value="${s}">${s}</option>`).join("")}
       </select>
 
       <label>Observações:</label>
       <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
     `;
 
-    // Máscara de data
-    const vencInput = sub.querySelector(`#${ramo.id}-vencimento`);
-    vencInput.addEventListener("input", (e) => {
+    sub.querySelector(`#${ramo.id}-vencimento`).addEventListener("input", e=>{
       e.target.value = maskDDMMYYYY(e.target.value);
     });
-
-    // Máscara de moeda
     const premioInput = sub.querySelector(`#${ramo.id}-premio`);
-    premioInput.addEventListener("input", (e) => {
+    premioInput.addEventListener("input", e=>{
       e.target.value = maskMoedaBR(e.target.value);
     });
-    premioInput.addEventListener("focus", (e) => {
+    premioInput.addEventListener("focus", e=>{
       if (!e.target.value) e.target.value = "R$ 0,00";
     });
 
-    // Toggle de exibição dos subcampos
-    checkbox.addEventListener("change", () => {
-      sub.style.display = checkbox.checked ? "block" : "none";
+    chk.addEventListener("change", ()=>{
+      sub.style.display = chk.checked ? "block" : "none";
     });
 
-    // Anexa subcampos ao box
     box.appendChild(sub);
-
-    // Anexa box ao container
     container.appendChild(box);
   });
 }
 
-/* ============================================================
-   6) ENVIO (grava em /visitas como cliente_link)
-   - Valida ao menos 1 ramo
-   - Valida datas dd/mm/aaaa
-   - Converte prêmio para número (float)
-   ============================================================ */
-async function enviar() {
-  // Conferir empresaId
-  if (!empresaId) {
-    alert("Link inválido (sem empresa).");
-    return;
-  }
+// 6) Envio
+async function enviar(){
+  if (!empresaId){ alert("Link inválido (sem empresa)."); return; }
 
-  // Tipo de visita fixo para o público
-  const tipoVisita = "Cliente";
-
-  // Nº de funcionários é opcional
-  const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
-  const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
-
-  // Usuário anônimo atual (pode ser null nos primeiros ms)
   const user = auth.currentUser;
+  const tipoVisita = "Cliente";
+  const nfStr = (document.getElementById("numFuncionarios")?.value || "").trim();
+  const numeroFuncionarios = nfStr==="" ? null : Math.max(0, parseInt(nfStr,10) || 0);
 
-  // Monta payload
   const visita = {
-    source: "cliente_link",                          // <- sinalizador das rules
-    empresaId: empresaId,
-    empresaNome: empresaNome || "",
-    tipoVisita: tipoVisita,
-    rmNome: rmNomeURL || "",                         // opcional no link
-    rmUid: null,                                     // não temos rmUid no público
-    agenciaId: "",                                   // se quiser, preenche via CF depois
+    source: "cliente_link",
+    empresaId, empresaNome,
+    tipoVisita,
+    rmNome: rmNomeURL || "",
+    rmUid: null,
+    agenciaId: "",
     usuarioId: user?.uid || null,
     criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-    numeroFuncionarios: numeroFuncionarios,
+    numeroFuncionarios,
     ramos: {}
   };
 
-  // Loop nos ramos marcados
-  let marcouAlgum = false;
-  let erroVencimento = null;
+  let algum=false, erro=null;
+  document.querySelectorAll(".ramo").forEach(chk=>{
+    if (!chk.checked) return;
+    algum=true;
+    const id=chk.value;
 
-  document.querySelectorAll(".ramo").forEach((input) => {
-    if (!input.checked) return;
-
-    marcouAlgum = true;
-
-    const id = input.value;
-
-    const vencStr = (document.getElementById(`${id}-vencimento`)?.value || "").trim();
+    const venc = (document.getElementById(`${id}-vencimento`)?.value || "").trim();
     const premioStr = (document.getElementById(`${id}-premio`)?.value || "");
-    const seguradoraSel = (document.getElementById(`${id}-seguradora`)?.value || "");
+    const seg = (document.getElementById(`${id}-seguradora`)?.value || "");
     const obs = (document.getElementById(`${id}-observacoes`)?.value || "");
 
-    if (!validaDDMMYYYY(vencStr)) {
-      erroVencimento = `Vencimento inválido em ${id}. Use dd/mm/aaaa.`;
-    }
+    if (!validaDDMMYYYY(venc)) erro = `Vencimento inválido em ${id}. Use dd/mm/aaaa.`;
 
     visita.ramos[id] = {
-      vencimento: vencStr,
+      vencimento: venc,
       premio: parseMoedaBRToNumber(premioStr),
-      seguradora: seguradoraSel,
+      seguradora: seg,
       observacoes: obs
     };
   });
 
-  // Regras básicas
-  if (erroVencimento) {
-    alert(erroVencimento);
-    return;
-  }
-  if (!marcouAlgum) {
-    alert("Marque pelo menos um ramo e preencha os campos.");
-    return;
-  }
+  if (erro) return alert(erro);
+  if (!algum) return alert("Marque pelo menos um ramo e preencha os campos.");
 
-  // Persistência
-  try {
+  try{
     await db.collection("visitas").add(visita);
-
-    // Feedback simples na tela
-    const ok = document.getElementById("ok");
-    if (ok) ok.style.display = "block";
-
-    // Se quiser redirecionar:
-    // location.href = "obrigado.html";
-  } catch (e) {
-    console.error("[Firestore] erro ao salvar visita:", e);
-    alert("Erro ao enviar. Tente novamente mais tarde.");
+    document.getElementById("ok").style.display = "block";
+  }catch(e){
+    console.error("[visitas.add]", e);
+    alert("Erro ao enviar. Tente novamente.");
   }
 }
-
-// Exponho no escopo global para o botão do HTML
 window.enviar = enviar;
 
-/* ============================================================
-   7) BOOTSTRAP DA PÁGINA
-   ============================================================ */
-document.addEventListener("DOMContentLoaded", () => {
-  // Gera os ramos/inputs assim que a DOM estiver pronta
-  gerarCamposRamos()
-    .catch((e) => console.error("Falha ao gerar ramos:", e));
+// 7) Bootstrap — **só carrega ramos após auth anônima**
+document.addEventListener("DOMContentLoaded", ()=>{
+  auth.onAuthStateChanged(user=>{
+    if (!user) return; // espera logar anonimamente
+    gerarCamposRamos().catch(e=>console.error("Falha ao montar ramos:", e));
+  });
 });
