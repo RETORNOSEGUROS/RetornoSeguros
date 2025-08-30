@@ -332,7 +332,7 @@ function registrarVisita() {
       agenciaId: agenciaDaEmpresa || minhaAgencia || "",
       usuarioId: user.uid,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-      numeroFuncionarios, // <<<
+      numeroFuncionarios,
       ramos: {}
     };
 
@@ -399,8 +399,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 window.registrarVisita = registrarVisita;
 
 /* ============================================================
-   🔽 ADIÇÕES: snapshot do formulário, PDF 1 página e link WhatsApp
-   (não altera sua lógica de buscar empresas/ramos do Firestore)
+   🔽 ADIÇÕES pedidas: snapshot, PDF 1 página e GERAR LINK (copiar)
    ============================================================ */
 
 // Snapshot leve do formulário
@@ -414,48 +413,36 @@ function coletarDadosFormulario() {
 
   const ramos = [];
   document.querySelectorAll(".ramo").forEach(input => {
-    if (input.checked) {
-      const id = input.value;
-      ramos.push({
-        id,
-        vencimento: (document.getElementById(`${id}-vencimento`)?.value || "").trim(),
-        premio: (document.getElementById(`${id}-premio`)?.value || "").trim(),
-        seguradora: (document.getElementById(`${id}-seguradora`)?.value || "").trim(),
-        observacoes: (document.getElementById(`${id}-observacoes`)?.value || "").trim(),
-      });
-    }
+    const id = input.value;
+    const label = input.parentElement?.textContent?.trim() || id.toUpperCase();
+    ramos.push({ id, nome: label });
   });
 
   return { empresaId, empresaNome, tipoVisita, rmNome, numFuncionarios, ramos };
 }
 
-// PDF COMPACTO — sempre 1 página A4 (editável)
+// PDF 1 página (Data no cabeçalho; todos os ramos listados com campos vazios)
 async function gerarPDF() {
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const dados = coletarDadosFormulario();
   if (!dados.empresaId) { alert("Selecione a empresa para gerar o PDF."); return; }
 
-  const trunc = (s, n) => {
-    s = (s || "").toString().replace(/\s+/g, " ").trim();
-    return s.length > n ? s.slice(0, n - 1) + "…" : s;
-  };
-  const moedaSlim = (s) => (s || "").toString()
-    .replace(/\s/g, "")
-    .replace(/^R\$\s*/i, "R$")
-    .replace(/(\d)\.(?=\d{3}\b)/g, "$1.");
-
-  const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage([595.28, 841.89]); // A4 retrato
-  const form = pdfDoc.getForm();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([595.28, 841.89]); // A4 retrato
+  const form = pdf.getForm();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
 
   const M = 28, W = page.getWidth(), H = page.getHeight();
   const innerW = W - M*2;
   let y = H - M;
 
-  page.drawText('Relatório de Visita — Retorno Seguros', { x:M, y, size:12, font, color:rgb(0,0.25,0.5) });
+  // Cabeçalho com Data
+  const now = new Date();
+  const dataStr = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
+  page.drawText(`Data: ${dataStr}`, { x:M, y, size:12, font, color:rgb(0,0.25,0.5) });
   y -= 14;
 
+  // Linhas do cabeçalho
   const headerLine = (label, value, key) => {
     page.drawText(label, { x:M, y, size:9, font, color:rgb(0.2,0.2,0.2) });
     const tf = form.createTextField(key);
@@ -463,80 +450,74 @@ async function gerarPDF() {
     tf.addToPage(page, { x:M+140, y:y-2, width:innerW-140, height:14 });
     y -= 20;
   };
-
   headerLine("Empresa", dados.empresaNome, "hdr_empresa");
   headerLine("Tipo de visita", dados.tipoVisita || "Presencial", "hdr_tipo");
   headerLine("RM responsável", dados.rmNome || "", "hdr_rm");
   headerLine("Nº de funcionários", dados.numFuncionarios || "", "hdr_func");
 
+  // divisor
   y -= 2;
   page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
   y -= 12;
 
-  page.drawText('Mapeamento de Seguros (compacto e editável)', { x:M, y, size:11, font, color:rgb(0,0.25,0.5) });
+  // Título da tabela
+  page.drawText('Mapeamento de Seguros (linhas em branco para anotar)', { x:M, y, size:11, font, color:rgb(0,0.25,0.5) });
   y -= 12;
 
+  // colunas (Obs maior)
   const cols = [
-    { key:"ramo", label:"Ramo", w:90 },
-    { key:"venc", label:"Venc.", w:70 },
-    { key:"premio", label:"Prêmio", w:90 },
-    { key:"seguradora", label:"Seguradora", w:120 },
-    { key:"obs", label:"Obs.", w: innerW - (90+70+90+120) }
+    { key:"ramo",       label:"Ramo",        w:100 },
+    { key:"venc",       label:"Vencimento",  w:80  },
+    { key:"premio",     label:"Prêmio anual (R$)", w:110 },
+    { key:"seguradora", label:"Seguradora",  w:120 },
+    { key:"obs",        label:"Observações", w: innerW - (100+80+110+120) }
   ];
   let x = M;
   cols.forEach(c => { page.drawText(c.label, {x, y, size:9, font, color:rgb(0.2,0.2,0.2)}); x += c.w; });
   y -= 8;
   page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
-  y -= 8;
+  y -= 6;
 
-  const rowH = 16, footerReserved = 80;
+  const rowH = 16, footerReserved = 64;
   const maxRows = Math.max(0, Math.floor((y - M - footerReserved) / rowH));
-  const lista = (dados.ramos||[]).map(r=>({
-    ramo:(r.id||"").toUpperCase(),
-    venc:trunc(r.vencimento||"",10),
-    premio:trunc(moedaSlim(r.premio||""),16),
-    seguradora:trunc(r.seguradora||"",18),
-    obs:trunc(r.observacoes||"",64)
-  }));
-  const visiveis = lista.slice(0, maxRows);
-  const extras = Math.max(0, lista.length - visiveis.length);
+  const visiveis = (dados.ramos || []).slice(0, maxRows);
+  const extras = Math.max(0, (dados.ramos || []).length - visiveis.length);
 
-  const drawField = (fx,fy,w,h,name,text)=>{
+  const addField = (fx,fy,w,h,name,text="")=>{
     const f = form.createTextField(name);
-    f.setText(text||"");
+    f.setText(text);
     f.addToPage(page,{x:fx,y:fy,width:w,height:h});
   };
 
+  // desenha linhas vazias, mas com o nome do ramo preenchido
   for (let i=0;i<visiveis.length;i++){
-    const r = visiveis[i]; let cx = M; const cy = y - rowH + 2;
-    drawField(cx,cy,cols[0].w-2,rowH-2,`row_${i}_ramo`,r.ramo);        cx+=cols[0].w;
-    drawField(cx,cy,cols[1].w-2,rowH-2,`row_${i}_venc`,r.venc);        cx+=cols[1].w;
-    drawField(cx,cy,cols[2].w-2,rowH-2,`row_${i}_premio`,r.premio);    cx+=cols[2].w;
-    drawField(cx,cy,cols[3].w-2,rowH-2,`row_${i}_seg`,r.seguradora);   cx+=cols[3].w;
-    drawField(cx,cy,cols[4].w-2,rowH-2,`row_${i}_obs`,r.obs);
+    const r = visiveis[i];
+    let cx = M; const cy = y - rowH + 2;
+    addField(cx,cy,cols[0].w-2,rowH-2,`row_${i}_ramo`, r.nome);       cx+=cols[0].w;
+    addField(cx,cy,cols[1].w-2,rowH-2,`row_${i}_venc`, "");           cx+=cols[1].w;
+    addField(cx,cy,cols[2].w-2,rowH-2,`row_${i}_premio`, "");         cx+=cols[2].w;
+    addField(cx,cy,cols[3].w-2,rowH-2,`row_${i}_seg`, "");            cx+=cols[3].w;
+    addField(cx,cy,cols[4].w-2,rowH-2,`row_${i}_obs`, "");            // Obs maior
     y -= rowH;
   }
   if (extras>0){
-    page.drawText(`+${extras} ramos adicionais registrados no sistema`, { x:M, y:y-2, size:9, font, color:rgb(0.4,0.1,0.1) });
+    page.drawText(`+${extras} ramos adicionais (ver sistema)`, { x:M, y:y-2, size:9, font, color:rgb(0.4,0.1,0.1) });
     y -= 12;
   }
 
+  // Notas
   y -= 2;
   page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
   y -= 10;
-
   page.drawText('Anotações (editável):', { x:M, y, size:10, font, color:rgb(0.2,0.2,0.2) });
   const notas = form.createTextField('anotacoes_visita');
-  const notasH = 44;
+  const notasH = Math.max(34, (y - M) - 16);
   notas.setText('');
   notas.addToPage(page,{ x:M, y:y-notasH, width:innerW, height:notasH });
-  y -= (notasH + 8);
-
-  const now = new Date();
-  page.drawText(`Gerado em ${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`, { x:M, y, size:8, font, color:rgb(0.45,0.45,0.45) });
+  y -= (notasH + 6);
 
   form.updateFieldAppearances(font);
-  const pdfBytes = await pdfDoc.save();
+  const pdfBytes = await pdf.save();
 
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
@@ -547,48 +528,20 @@ async function gerarPDF() {
   URL.revokeObjectURL(url);
 }
 
-// Gera link para enviar ao cliente (usa a MESMA página, em modo Cliente)
-function gerarLinkWhatsApp() {
+// Gerar link (apenas copiar; cliente abre sem login e empresa já vem no link)
+function gerarLink() {
   const empresaSel = document.getElementById("empresa");
   const empresaId = empresaSel?.value || "";
   const empresaNome = empresaSel?.options?.[empresaSel.selectedIndex]?.textContent || "";
   if (!empresaId) { alert("Selecione a empresa antes de gerar o link."); return; }
 
-  const base = location.origin + location.pathname; // visitas.html
-  const url  = `${base}?tipoVisita=Cliente&empresaId=${encodeURIComponent(empresaId)}&empresaNome=${encodeURIComponent(empresaNome)}`;
+  const baseDir = location.origin + location.pathname.replace(/[^\/]+$/, ''); // mesma pasta do visitas.html
+  const url = `${baseDir}visita-cliente.html?empresaId=${encodeURIComponent(empresaId)}&empresaNome=${encodeURIComponent(empresaNome)}`;
 
-  const msg = `Olá! Poderia preencher seus dados para atualizarmos seu seguro?\n\nEmpresa: ${empresaNome}\nFormulário: ${url}\n\nLeva 2 min e agiliza nossa proposta. Obrigado!`;
-  const wa  = `https://wa.me/?text=${encodeURIComponent(msg)}`;
-
-  window.open(wa, "_blank");
-  try { navigator.clipboard.writeText(msg); } catch(e) {}
-  alert("Link gerado! Abri o WhatsApp com a mensagem pronta e copiei o texto para sua área de transferência.");
+  try { navigator.clipboard.writeText(url); } catch(e) {}
+  alert("Link copiado!\n\n" + url + "\n\nCole onde preferir (e-mail, WhatsApp, SMS).");
+  console.log("Link do cliente:", url);
 }
 
-// Se abrir com ?tipoVisita=Cliente, pré-seleciona e trava o campo tipo
-(function aplicarModoClienteSeNecessario(){
-  const params = new URLSearchParams(location.search);
-  const tipo = params.get("tipoVisita");
-  const empresaId = params.get("empresaId");
-  const empresaNome = params.get("empresaNome");
-
-  if (tipo === "Cliente") {
-    const tipoSel = document.getElementById("tipoVisita");
-    if (tipoSel) { tipoSel.value = "Cliente"; tipoSel.setAttribute("disabled","disabled"); }
-
-    const tentarSelecionar = () => {
-      const sel = document.getElementById("empresa");
-      if (!sel) return;
-      if (empresaId) {
-        const opt = [...sel.options].find(o => o.value === empresaId || o.textContent === empresaNome);
-        if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event("change")); }
-      }
-    };
-    document.addEventListener("DOMContentLoaded", () => setTimeout(tentarSelecionar, 600));
-    setTimeout(tentarSelecionar, 1200);
-  }
-})();
-
-// expõe no escopo global
-window.gerarPDF = gerarPDF;
-window.gerarLinkWhatsApp = gerarLinkWhatsApp;
+window.gerarPDF  = gerarPDF;
+window.gerarLink = gerarLink;
