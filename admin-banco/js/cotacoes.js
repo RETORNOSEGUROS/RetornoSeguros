@@ -30,10 +30,30 @@ const normalize = (s) =>
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const toBRL = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
-// ⚠️ Alias p/ evitar conflito com a função global do HTML
+// ⚠️ Alias p/ evitar conflito com função global do HTML
 const parseMoeda = (typeof window.desformatarMoeda === "function")
   ? window.desformatarMoeda
   : (str)=>{ if(!str) return 0; return parseFloat(String(str).replace(/[^\d]/g,'')/100); };
+
+/** devolve o primeiro carimbo de data válido (para "dataCriacao" etc.) */
+function coalesceDate(...vals){
+  for (const v of vals){
+    if (!v) continue;
+    const d = v?.toDate?.() || (v instanceof Date ? v : (typeof v==="string" || typeof v==="number" ? new Date(v):null));
+    if (d && !isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+/** devolve o **mais recente** entre vários carimbos */
+function newestDate(...vals){
+  let best = null;
+  for (const v of vals){
+    if (!v) continue;
+    const d = v?.toDate?.() || (v instanceof Date ? v : (typeof v==="string" || typeof v==="number" ? new Date(v):null));
+    if (d && !isNaN(d.getTime()) && (!best || d > best)) best = d;
+  }
+  return best;
+}
 
 // ===== Boot =====
 window.addEventListener("DOMContentLoaded", () => {
@@ -325,6 +345,7 @@ async function salvarAlteracoesCotacao() {
     dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
     atualizadoPorUid: usuarioAtual.uid,
     atualizadoPorNome: usuarioAtual.email,
+    dataHora: firebase.firestore.FieldValue.serverTimestamp()
   };
 
   if (obs) {
@@ -368,7 +389,7 @@ async function listarCotacoesPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// ===== Última atualização ROBUSTA =====
+// ===== Última atualização ROBUSTA (subcoleções) =====
 const SUBS_POSSIVEIS = [
   "interacoes","mensagens","chat","chat-cotacao",
   "historico","logs","timeline","atualizacoes","updates","observacoes"
@@ -377,7 +398,6 @@ const CAMPOS_DATA = ["dataHora","timestamp","criadoEm","createdAt","data","when"
 const CAMPOS_AUTOR = ["autorNome","usuarioNome","autor","user","quem"];
 
 function parseDateFromText(txt=""){
-  // ex.: 30/08/2025, 10:01:05
   const m = String(txt).match(/(\d{2}\/\d{2}\/\d{4}),\s*(\d{2}:\d{2}:\d{2})/);
   if(!m) return null;
   const [_, d, t] = m;
@@ -390,7 +410,6 @@ function parseDateFromText(txt=""){
 async function buscarUltimaInteracaoDoc(cotId){
   for (const base of SUBS_POSSIVEIS){
     try {
-      // 1) tentar ordenar por campos comuns
       for (const f of CAMPOS_DATA){
         try{
           const q = await db.collection("cotacoes-gerentes").doc(cotId).collection(base)
@@ -403,7 +422,6 @@ async function buscarUltimaInteracaoDoc(cotId){
           }
         }catch(_){}
       }
-      // 2) fallback: ler tudo e calcular manualmente (inclui data no texto)
       const all = await db.collection("cotacoes-gerentes").doc(cotId).collection(base).get();
       if (!all.empty){
         let best = null, who = "";
@@ -424,16 +442,6 @@ async function buscarUltimaInteracaoDoc(cotId){
   return null;
 }
 
-function pickFirstDate(...vals){
-  for (const v of vals){
-    if (!v) continue;
-    const d = v?.toDate?.() || (typeof v==="string"||v instanceof Date ? new Date(v) : null);
-    if (d && !isNaN(d.getTime())) return d;
-  }
-  return null;
-}
-
-// Enriquecimento paralelo nas subcoleções do chat
 async function enrichSubcollectionsParallel(rows, limit=30){
   const alvo = rows.slice(0, limit).map(r => ({ id:r.id, lastMs:r.lastUpdateMs }));
   const tasks = alvo.map(async (r) => {
@@ -462,7 +470,6 @@ async function enrichSubcollectionsParallel(rows, limit=30){
   return alterou;
 }
 
-// Processa TODAS as linhas em lotes e re-renderiza quando houver mudanças
 async function enrichAllInBatches(fullRows, batchSize = 40){
   for (let i = 0; i < fullRows.length; i += batchSize){
     const slice = fullRows.slice(i, i + batchSize);
@@ -492,7 +499,6 @@ async function carregarCotacoesComFiltros() {
     let cotacoes = await listarCotacoesPorPerfil();
     if (filtroAgencia) cotacoes = cotacoes.filter(c => (c.agenciaId || "") === filtroAgencia);
 
-    // período com base na criação (pedido)
     cotacoes = cotacoes.filter(c => {
       const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       if (ini && d && d < new Date(ini)) return false;
@@ -503,17 +509,11 @@ async function carregarCotacoesComFiltros() {
       return true;
     });
 
-    // Enriquecimento: última atualização (doc, vetor interacoes)
     rowsCache = [];
     for (const c of cotacoes) {
-      const dataCriacao = pickFirstDate(c.dataCriacao);
-      let last = pickFirstDate(
-  c.dataAtualizacao,
-  c.ultimaAtualizacao,
-  c.updatedAt,
-  c.statusMudadoEm,
-  c.dataHora      // ✅ passa a contar como última atualização
-);
+      const dataCriacao = coalesceDate(c.dataCriacao);
+      // >>> usa o MAIS RECENTE entre todas as opções do doc principal
+      let last = newestDate(c.dataAtualizacao, c.ultimaAtualizacao, c.updatedAt, c.statusMudadoEm, c.dataHora);
       let lastWho = c.atualizadoPorNome || c.autorNome || "";
 
       if (Array.isArray(c.interacoes) && c.interacoes.length){
@@ -531,9 +531,7 @@ async function carregarCotacoesComFiltros() {
       const valorNum = typeof c.valorDesejado === "number" ? c.valorDesejado : 0;
       const agenciaLabel = c.agenciaId ? (agenciasMap[c.agenciaId] || c.agenciaId) : "-";
 
-      const lastMs = (last instanceof Date) ? last.getTime()
-                    : (typeof last === "number" ? last
-                    : (last ? new Date(last).getTime() : 0));
+      const lastMs = last ? new Date(last).getTime() : 0;
       const dataMs = dataCriacao ? new Date(dataCriacao).getTime() : 0;
       const dias = lastMs ? Math.max(0, Math.floor((Date.now() - lastMs)/86400000)) : 0;
 
@@ -555,13 +553,11 @@ async function carregarCotacoesComFiltros() {
       });
     }
 
-    // Ordena e renderiza
     ordenarRows(rowsCache);
     pagMostrando = 0;
     renderTabelaPaginada();
     atualizarResumoFiltro();
 
-    // Enriquecer TODA a lista em lotes (corrige itens que estavam fora do top inicial)
     enrichAllInBatches(rowsCache, 40);
   } catch (err) {
     console.error("Erro ao carregar cotações:", err);
@@ -582,8 +578,8 @@ function instalarOrdenacaoCabecalhos() {
     const key = th.dataset.sort;
     if (sortKey === key) sortDir = (sortDir === "asc" ? "desc" : "asc");
     else { sortKey = key; sortDir = (["lastUpdateMs","dataMs","valor","diasSemAtual"].includes(key)) ? "desc" : "asc"; }
-    ordenarRows(rowsCache);        // ✅ reordena o dataset completo
-    renderTabelaPaginada(true);    // reaproveita paginação atual
+    ordenarRows(rowsCache);
+    renderTabelaPaginada(true);
   });
 }
 function ordenarRows(rows){
@@ -669,10 +665,8 @@ function renderTabelaPaginada(reuseSort=false){
   html += `</tbody></table>`;
   container.innerHTML = html;
 
-  // hidrata ícones (escopo global)
   if (window.lucide && typeof lucide.createIcons === "function") { lucide.createIcons(); }
 
-  // seleção linha a linha
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
       const id = e.target.dataset.id;
@@ -680,8 +674,6 @@ function renderTabelaPaginada(reuseSort=false){
       atualizarSelCount();
     });
   });
-
-  // selecionar todos
   const selAll = $("#selAll");
   if (selAll){
     const toggle = (marcar)=>{
@@ -700,7 +692,7 @@ function renderTabelaPaginada(reuseSort=false){
 function setPaginacao(n){
   pagTamanho = (n === 'all') ? 'all' : Number(n||10);
   pagMostrando = 0;
-  ordenarRows(rowsCache);       // mantém ordenação aplicada
+  ordenarRows(rowsCache);
   renderTabelaPaginada(true);
   enrichAllInBatches(rowsCache, 40);
 }
@@ -902,4 +894,3 @@ window.abrirRelatorio            = abrirRelatorio;
 window.fecharRelatorio           = fecharRelatorio;
 window.exportarRelatorioPDF      = exportarRelatorioPDF;
 window.limparFiltros             = limparFiltros;
-
