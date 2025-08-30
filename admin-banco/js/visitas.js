@@ -77,7 +77,6 @@ async function getPerfilAgencia() {
   if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
   const udoc = await db.collection("usuarios_banco").doc(user.uid).get();
   const d = udoc.exists ? (udoc.data() || {}) : {};
-  // normalização robusta do perfil
   const perfil = roleNorm(d.perfil || d.roleId || "");
   const agenciaId = d.agenciaId || "";
   const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
@@ -103,17 +102,14 @@ async function carregarEmpresas() {
   const buckets = [];
 
   if (isAdmin) {
-    // Admin: todas
     try { buckets.push(await colEmp.orderBy("nome").get()); }
     catch { buckets.push(await colEmp.get()); }
   } else if (["gerente chefe","assistente"].includes(perfilAtual)) {
-    // Chefe/Assistente: por agência
     if (minhaAgencia) {
       try { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).orderBy("nome").get()); }
       catch { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).get()); }
     }
   } else {
-    // RM: próprias
     try { buckets.push(await colEmp.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
     try { buckets.push(await colEmp.where("rmId","==", usuarioAtual.uid).get()); } catch(e){}
     try { buckets.push(await colEmp.where("usuarioId","==",usuarioAtual.uid).get()); } catch(e){}
@@ -140,7 +136,6 @@ async function carregarEmpresas() {
     const rmNome = data.rmNome || data.rm || data.rm_nome || "Não informado";
     option.setAttribute("data-rm", rmNome);
 
-    // guarda meta para uso no salvar()
     empresaMetaMap.set(data.id, {
       nome: data.nome || "(Sem nome)",
       agenciaId: data.agenciaId || "",
@@ -151,7 +146,7 @@ async function carregarEmpresas() {
     select.appendChild(option);
   });
 
-  // listener de mudança para mostrar info do RM
+  // mostra RM quando trocar a empresa
   select.addEventListener("change", () => {
     const selectedOption = select.options[select.selectedIndex];
     const rmNome = selectedOption.getAttribute("data-rm") || "Não informado";
@@ -186,7 +181,6 @@ async function carregarRamosSeguro() {
     });
     if (ramos.length) return ramos;
 
-    // fallback se coleção vazia
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -201,7 +195,6 @@ async function carregarRamosSeguro() {
     ];
   } catch (e) {
     console.error("Erro ao carregar ramos-seguro:", e);
-    // permissão negada → lista básica
     return [
       { id: "auto", nome: "Automóvel" },
       { id: "vida", nome: "Vida" },
@@ -302,7 +295,6 @@ function registrarVisita() {
   const tipoVisita = tipoVisitaSelect ? tipoVisitaSelect.value : "";
   const empresaNome = empresaSelect?.options?.[empresaSelect.selectedIndex]?.textContent || "";
 
-  // número de funcionários
   const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
   const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
 
@@ -317,7 +309,6 @@ function registrarVisita() {
   auth.onAuthStateChanged(async (user) => {
     if (!user) { alert("Usuário não autenticado."); return; }
 
-    // RM só pode criar na própria agência (se a empresa tiver agência)
     if (perfilAtual === "rm" && agenciaDaEmpresa && minhaAgencia && agenciaDaEmpresa !== minhaAgencia) {
       alert("Você só pode registrar visitas de empresas da sua agência.");
       return;
@@ -386,7 +377,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     usuarioAtual = user;
 
     const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;        // já normalizado
+    perfilAtual  = ctx.perfil;
     minhaAgencia = ctx.agenciaId;
     isAdmin      = ctx.isAdmin;
 
@@ -399,10 +390,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 window.registrarVisita = registrarVisita;
 
 /* ============================================================
-   🔽 ADIÇÕES pedidas: snapshot, PDF 1 página e GERAR LINK (copiar)
+   ADIÇÕES: PDF 1 página e GERAR LINK (com rmNome no URL)
    ============================================================ */
 
-// Snapshot leve do formulário
 function coletarDadosFormulario() {
   const empresaSelect = document.getElementById("empresa");
   const tipoVisita = (document.getElementById("tipoVisita")?.value || "").trim();
@@ -421,14 +411,13 @@ function coletarDadosFormulario() {
   return { empresaId, empresaNome, tipoVisita, rmNome, numFuncionarios, ramos };
 }
 
-// PDF 1 página (Data no cabeçalho; todos os ramos listados com campos vazios)
 async function gerarPDF() {
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const dados = coletarDadosFormulario();
   if (!dados.empresaId) { alert("Selecione a empresa para gerar o PDF."); return; }
 
   const pdf = await PDFDocument.create();
-  const page = pdf.addPage([595.28, 841.89]); // A4 retrato
+  const page = pdf.addPage([595.28, 841.89]); // A4
   const form = pdf.getForm();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
 
@@ -436,13 +425,11 @@ async function gerarPDF() {
   const innerW = W - M*2;
   let y = H - M;
 
-  // Cabeçalho com Data
   const now = new Date();
   const dataStr = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
   page.drawText(`Data: ${dataStr}`, { x:M, y, size:12, font, color:rgb(0,0.25,0.5) });
   y -= 14;
 
-  // Linhas do cabeçalho
   const headerLine = (label, value, key) => {
     page.drawText(label, { x:M, y, size:9, font, color:rgb(0.2,0.2,0.2) });
     const tf = form.createTextField(key);
@@ -455,16 +442,13 @@ async function gerarPDF() {
   headerLine("RM responsável", dados.rmNome || "", "hdr_rm");
   headerLine("Nº de funcionários", dados.numFuncionarios || "", "hdr_func");
 
-  // divisor
   y -= 2;
   page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
   y -= 12;
 
-  // Título da tabela
   page.drawText('Mapeamento de Seguros (linhas em branco para anotar)', { x:M, y, size:11, font, color:rgb(0,0.25,0.5) });
   y -= 12;
 
-  // colunas (Obs maior)
   const cols = [
     { key:"ramo",       label:"Ramo",        w:100 },
     { key:"venc",       label:"Vencimento",  w:80  },
@@ -489,7 +473,6 @@ async function gerarPDF() {
     f.addToPage(page,{x:fx,y:fy,width:w,height:h});
   };
 
-  // desenha linhas vazias, mas com o nome do ramo preenchido
   for (let i=0;i<visiveis.length;i++){
     const r = visiveis[i];
     let cx = M; const cy = y - rowH + 2;
@@ -497,7 +480,7 @@ async function gerarPDF() {
     addField(cx,cy,cols[1].w-2,rowH-2,`row_${i}_venc`, "");           cx+=cols[1].w;
     addField(cx,cy,cols[2].w-2,rowH-2,`row_${i}_premio`, "");         cx+=cols[2].w;
     addField(cx,cy,cols[3].w-2,rowH-2,`row_${i}_seg`, "");            cx+=cols[3].w;
-    addField(cx,cy,cols[4].w-2,rowH-2,`row_${i}_obs`, "");            // Obs maior
+    addField(cx,cy,cols[4].w-2,rowH-2,`row_${i}_obs`, "");
     y -= rowH;
   }
   if (extras>0){
@@ -505,7 +488,6 @@ async function gerarPDF() {
     y -= 12;
   }
 
-  // Notas
   y -= 2;
   page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
   y -= 10;
@@ -514,7 +496,6 @@ async function gerarPDF() {
   const notasH = Math.max(34, (y - M) - 16);
   notas.setText('');
   notas.addToPage(page,{ x:M, y:y-notasH, width:innerW, height:notasH });
-  y -= (notasH + 6);
 
   form.updateFieldAppearances(font);
   const pdfBytes = await pdf.save();
@@ -528,15 +509,16 @@ async function gerarPDF() {
   URL.revokeObjectURL(url);
 }
 
-// Gerar link (apenas copiar; cliente abre sem login e empresa já vem no link)
 function gerarLink() {
-  const empresaSel = document.getElementById("empresa");
-  const empresaId = empresaSel?.value || "";
+  const empresaSel  = document.getElementById("empresa");
+  const empresaId   = empresaSel?.value || "";
   const empresaNome = empresaSel?.options?.[empresaSel.selectedIndex]?.textContent || "";
+  const rmNome      = empresaSel?.options?.[empresaSel.selectedIndex]?.getAttribute("data-rm") || "";
+
   if (!empresaId) { alert("Selecione a empresa antes de gerar o link."); return; }
 
   const baseDir = location.origin + location.pathname.replace(/[^\/]+$/, ''); // mesma pasta do visitas.html
-  const url = `${baseDir}visita-cliente.html?empresaId=${encodeURIComponent(empresaId)}&empresaNome=${encodeURIComponent(empresaNome)}`;
+  const url = `${baseDir}visita-cliente.html?empresaId=${encodeURIComponent(empresaId)}&empresaNome=${encodeURIComponent(empresaNome)}&rmNome=${encodeURIComponent(rmNome)}`;
 
   try { navigator.clipboard.writeText(url); } catch(e) {}
   alert("Link copiado!\n\n" + url + "\n\nCole onde preferir (e-mail, WhatsApp, SMS).");
