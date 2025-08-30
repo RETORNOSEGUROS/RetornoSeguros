@@ -14,8 +14,10 @@ let isAdmin = false;
 
 let produtos = [];
 let nomesProdutos = {};
-let empresasCache = [];
+let empresasCache = []; // cache das empresas (dados básicos)
+let linhasRenderizadas = []; // cache da última matriz renderizada (para PDF)
 
+// filtros atuais
 let agencias = [];         // [{id, nome}]
 let agenciaSel = "";       // agência selecionada (id)
 let rmSel = "";            // RM selecionado (nome)
@@ -44,7 +46,6 @@ function classFromStatus(statusRaw) {
 
 // Tenta deduzir o ano da cotação a partir de vários campos comuns
 function getCotacaoAno(c) {
-  // prioridades: campo explícito de ano, depois timestamps
   const candidatos = [
     c.ano, c.anoVigencia, c.anoReferencia, c.vigenciaAno,
     c.vigencia?.ano
@@ -53,7 +54,6 @@ function getCotacaoAno(c) {
     const n = parseInt(candidatos[0], 10);
     if (!isNaN(n)) return n;
   }
-  // timestamps ou datas string
   const ts = c.createdAt || c.criadoEm || c.atualizadoEm || c.data || c.dataReferencia || c.updatedAt;
   try {
     if (ts && typeof ts.toDate === "function") {
@@ -64,7 +64,6 @@ function getCotacaoAno(c) {
       if (!isNaN(d.getTime())) return d.getFullYear();
     }
   } catch(_) {}
-  // fallback: ano corrente
   return new Date().getFullYear();
 }
 
@@ -139,7 +138,6 @@ function montarComboAno() {
   const anoAtual = new Date().getFullYear();
   const anos = [anoAtual, anoAtual - 1, anoAtual - 2, anoAtual - 3];
   sel.innerHTML = "";
-  // padrão: ano corrente
   anos.forEach(a => {
     const opt = document.createElement("option");
     opt.value = String(a);
@@ -169,6 +167,7 @@ async function carregarProdutos() {
 }
 
 // ---- Agências (combo 1) ----
+// Mostra NOME da agência no <select> (value continua sendo o ID)
 async function carregarAgencias() {
   const select = document.getElementById("filtroAgencia");
   if (!select) return;
@@ -203,7 +202,7 @@ async function carregarAgencias() {
     agencias.forEach(a => {
       const opt = document.createElement("option");
       opt.value = a.id;
-      opt.textContent = a.nome || a.id;
+      opt.textContent = a.nome || a.id; // exibe NOME
       select.appendChild(opt);
     });
 
@@ -320,6 +319,7 @@ async function carregarEmpresas() {
     if (!empresasCache.length) {
       document.getElementById("tabelaEmpresas").innerHTML =
         `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
+      linhasRenderizadas = [];
       return;
     }
 
@@ -333,7 +333,6 @@ async function carregarEmpresas() {
         cotDocs.forEach(doc => {
           const c = doc.data() || {};
           const ano = getCotacaoAno(c);
-          // aplica filtro de ano (se "todos", ignora filtro)
           if (anoSel !== "todos" && ano !== anoSel) return;
 
           const ramo = c.ramo;
@@ -341,7 +340,6 @@ async function carregarEmpresas() {
             normalize(nomesProdutos[id]) === normalize(ramo)
           );
           if (!produtoId) return;
-          // último status visto no ano selecionado vence (não fazemos rank por prioridade aqui)
           statusPorProduto[produtoId] = classFromStatus(c.status);
         });
 
@@ -392,8 +390,66 @@ async function carregarEmpresas() {
     html += `</tbody></table>`;
     document.getElementById("tabelaEmpresas").innerHTML = html;
 
+    // guarda para PDF
+    linhasRenderizadas = linhas;
+
   } catch (err) {
     console.error("[empresas] carregarEmpresas:", err);
     erroUI("Erro ao carregar empresas.");
   }
+}
+
+// === Abrir Painel CRM em nova página com os filtros atuais ===
+function abrirPainelCRM(){
+  const ag = document.getElementById("filtroAgencia")?.value || "";
+  const rm = document.getElementById("filtroRM")?.value || "";
+  const an = document.getElementById("filtroAno")?.value || new Date().getFullYear();
+  const url = `crm.html?agencia=${encodeURIComponent(ag)}&rm=${encodeURIComponent(rm)}&ano=${encodeURIComponent(an)}`;
+  window.open(url, "_blank");
+}
+
+// === Exportar para PDF (tabela renderizada + legenda) ===
+async function gerarPDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    alert("Biblioteca jsPDF não carregada. Inclua os scripts do jsPDF e do AutoTable no HTML.");
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF("l", "pt", "a4");
+
+  // Título
+  doc.setFontSize(14);
+  doc.setTextColor(0,64,128);
+  doc.text("Mapa de Produtos por Empresa", 40, 40);
+
+  // Legenda
+  doc.setFontSize(10);
+  doc.setTextColor(0,0,0);
+  doc.text("Legenda:", 40, 60);
+  const legendas = ["🟢 Emitido","🟡 Pendente","🔴 Recusado","🔵 Fechado/Emissão","⚪️ Sem cotação"];
+  legendas.forEach((l,i)=> doc.text(l, 100 + i*100, 60));
+
+  // Tabela
+  const tabela = document.querySelector("#tabelaEmpresas table");
+  if (tabela && doc.autoTable) {
+    doc.autoTable({
+      html: tabela,
+      startY: 80,
+      styles: { fontSize: 7, halign: "center", valign: "middle" },
+      headStyles: { fillColor: [0,64,128], textColor: 255 },
+      didParseCell: (data) => {
+        // reforça o fundo nas células coloridas (mantém similar à tela)
+        const cls = data.cell.raw?.getAttribute?.("class") || "";
+        if (cls.includes("status-verde"))   data.cell.styles.fillColor = [212,237,218];
+        if (cls.includes("status-amarelo")) data.cell.styles.fillColor = [255,243,205];
+        if (cls.includes("status-vermelho"))data.cell.styles.fillColor = [248,215,218];
+        if (cls.includes("status-azul"))    data.cell.styles.fillColor = [207,226,255];
+        if (cls.includes("status-cinza"))   data.cell.styles.fillColor = [246,246,246];
+      }
+    });
+  } else {
+    doc.text("Tabela não encontrada para exportação.", 40, 90);
+  }
+
+  doc.save("Mapa-Produtos.pdf");
 }
