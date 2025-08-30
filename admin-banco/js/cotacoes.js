@@ -30,7 +30,7 @@ const normalize = (s) =>
 const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
 const toBRL = (n) => (Number(n||0)).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
-// ⚠️ Alias para evitar conflito com a função global do HTML
+// ⚠️ Alias p/ evitar conflito com a função global do HTML
 const parseMoeda = (typeof window.desformatarMoeda === "function")
   ? window.desformatarMoeda
   : (str)=>{ if(!str) return 0; return parseFloat(String(str).replace(/[^\d]/g,'')/100); };
@@ -368,34 +368,54 @@ async function listarCotacoesPorPerfil() {
   return Array.from(map.entries()).map(([id, data]) => ({ id, ...data }));
 }
 
-// ===== Ultima atualização ROBUSTA (busca subcoleções do chat) =====
+// ===== Última atualização ROBUSTA =====
+const SUBS_POSSIVEIS = [
+  "interacoes","mensagens","chat","chat-cotacao",
+  "historico","logs","timeline","atualizacoes","updates","observacoes"
+];
+const CAMPOS_DATA = ["dataHora","timestamp","criadoEm","createdAt","data","when"];
+const CAMPOS_AUTOR = ["autorNome","usuarioNome","autor","user","quem"];
+
+function parseDateFromText(txt=""){
+  // ex.: 30/08/2025, 10:01:05
+  const m = String(txt).match(/(\d{2}\/\d{2}\/\d{4}),\s*(\d{2}:\d{2}:\d{2})/);
+  if(!m) return null;
+  const [_, d, t] = m;
+  const [dd,mm,yy] = d.split("/").map(Number);
+  const [HH,MM,SS] = t.split(":").map(Number);
+  const dt = new Date(yy, mm-1, dd, HH, MM, SS);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+
 async function buscarUltimaInteracaoDoc(cotId){
-  const bases = ["interacoes","mensagens","chat","chat-cotacao"];
-  const campos = ["dataHora","timestamp","criadoEm","createdAt"]; // nomes comuns
-  for (const base of bases){
+  for (const base of SUBS_POSSIVEIS){
     try {
-      // tenta ordenar por campos conhecidos
-      for (const f of campos){
+      // 1) tentar ordenar por campos comuns
+      for (const f of CAMPOS_DATA){
         try{
           const q = await db.collection("cotacoes-gerentes").doc(cotId).collection(base)
             .orderBy(f,"desc").limit(1).get();
           if (!q.empty){
             const d = q.docs[0].data() || {};
-            const when = d[f]?.toDate?.() || (d[f] ? new Date(d[f]) : null);
-            const who  = d.autorNome || d.usuarioNome || d.autor || d.user || "";
+            const when = d[f]?.toDate?.() || (d[f] ? new Date(d[f]) : null) || parseDateFromText(d.mensagem||d.texto||d.descricao||"");
+            const who  = CAMPOS_AUTOR.map(k=>d[k]).find(Boolean) || "";
             if (when) return { when, who };
           }
         }catch(_){}
       }
-      // fallback: lê e calcula manualmente
+      // 2) fallback: ler tudo e calcular manualmente (inclui data no texto)
       const all = await db.collection("cotacoes-gerentes").doc(cotId).collection(base).get();
       if (!all.empty){
         let best = null, who = "";
         all.forEach(doc=>{
           const x = doc.data() || {};
-          const list = campos.map(k=>x[k]);
-          const w = list.map(v=> v?.toDate?.() || (v? new Date(v):null)).filter(Boolean).sort((a,b)=>b-a)[0];
-          if (w && (!best || w>best)){ best = w; who = x.autorNome || x.usuarioNome || x.autor || x.user || who; }
+          const datas = [
+            ...CAMPOS_DATA.map(k=>x[k]),
+            parseDateFromText(x.mensagem||x.texto||x.descricao||"")
+          ];
+          const w = datas.map(v=> v?.toDate?.() || (v? new Date(v):null))
+                         .filter(Boolean).sort((a,b)=>b-a)[0];
+          if (w && (!best || w>best)){ best = w; who = CAMPOS_AUTOR.map(k=>x[k]).find(Boolean) || who; }
         });
         if (best) return { when: best, who };
       }
@@ -442,7 +462,7 @@ async function enrichSubcollectionsParallel(rows, limit=30){
   return alterou;
 }
 
-// >>> NOVO: processa TODAS as linhas em lotes e re-renderiza quando houver mudanças
+// Processa TODAS as linhas em lotes e re-renderiza quando houver mudanças
 async function enrichAllInBatches(fullRows, batchSize = 40){
   for (let i = 0; i < fullRows.length; i += batchSize){
     const slice = fullRows.slice(i, i + batchSize);
@@ -492,7 +512,10 @@ async function carregarCotacoesComFiltros() {
 
       if (Array.isArray(c.interacoes) && c.interacoes.length){
         const ult = [...c.interacoes]
-          .map(i => ({ when: i?.dataHora ? new Date(i.dataHora) : null, who: i?.autorNome || "" }))
+          .map(i => ({
+            when: i?.dataHora ? new Date(i.dataHora) : parseDateFromText(i?.mensagem||i?.texto||""),
+            who:  i?.autorNome || ""
+          }))
           .filter(x => x.when && !isNaN(x.when)).sort((a,b)=>b.when-a.when)[0];
         if (ult && (!last || ult.when > last)){ last = ult.when; lastWho = ult.who || lastWho; }
       }
@@ -532,7 +555,7 @@ async function carregarCotacoesComFiltros() {
     renderTabelaPaginada();
     atualizarResumoFiltro();
 
-    // >>> NOVO: enriquecer TODA a lista em lotes (corrige itens que estavam fora do top inicial)
+    // Enriquecer TODA a lista em lotes (corrige itens que estavam fora do top inicial)
     enrichAllInBatches(rowsCache, 40);
   } catch (err) {
     console.error("Erro ao carregar cotações:", err);
@@ -553,7 +576,8 @@ function instalarOrdenacaoCabecalhos() {
     const key = th.dataset.sort;
     if (sortKey === key) sortDir = (sortDir === "asc" ? "desc" : "asc");
     else { sortKey = key; sortDir = (["lastUpdateMs","dataMs","valor","diasSemAtual"].includes(key)) ? "desc" : "asc"; }
-    renderTabelaPaginada(true);
+    ordenarRows(rowsCache);        // ✅ reordena o dataset completo
+    renderTabelaPaginada(true);    // reaproveita paginação atual
   });
 }
 function ordenarRows(rows){
@@ -642,6 +666,7 @@ function renderTabelaPaginada(reuseSort=false){
   // hidrata ícones (escopo global)
   if (window.lucide && typeof lucide.createIcons === "function") { lucide.createIcons(); }
 
+  // seleção linha a linha
   container.querySelectorAll(".selrow").forEach(chk=>{
     chk.addEventListener("change", (e)=>{
       const id = e.target.dataset.id;
@@ -649,23 +674,28 @@ function renderTabelaPaginada(reuseSort=false){
       atualizarSelCount();
     });
   });
+
+  // selecionar todos
   const selAll = $("#selAll");
-  if (selAll) selAll.addEventListener("change", (e)=>{
-    const marcar = e.target.checked;
-    container.querySelectorAll(".selrow").forEach(c=>{
-      c.checked = marcar;
-      const id = c.dataset.id;
-      if (marcar) selecionados.add(id); else selecionados.delete(id);
-    });
-    atualizarSelCount();
-  });
+  if (selAll){
+    const toggle = (marcar)=>{
+      container.querySelectorAll(".selrow").forEach(c=>{
+        c.checked = marcar;
+        const id = c.dataset.id;
+        if (marcar) selecionados.add(id); else selecionados.delete(id);
+      });
+      atualizarSelCount();
+    };
+    selAll.addEventListener("change", e => toggle(e.target.checked));
+    selAll.addEventListener("click",  e => toggle(e.target.checked));
+  }
 }
 
 function setPaginacao(n){
   pagTamanho = (n === 'all') ? 'all' : Number(n||10);
   pagMostrando = 0;
+  ordenarRows(rowsCache);       // mantém ordenação aplicada
   renderTabelaPaginada(true);
-  // garante enriquecimento mesmo ao trocar para "Todos"
   enrichAllInBatches(rowsCache, 40);
 }
 function atualizarSelCount(){
