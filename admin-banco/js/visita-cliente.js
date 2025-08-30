@@ -3,22 +3,28 @@ if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 
-// --- Parâmetros do link ---
-const params = new URLSearchParams(location.search);
-const empresaId   = params.get("empresaId")   || "";
-const empresaNome = decodeURIComponent(params.get("empresaNome") || "");
-const rmNomeURL   = decodeURIComponent(params.get("rmNome") || ""); // opcional
+/* ========= 1) PARÂMETROS DO LINK (TOLERANTES) ========= */
+const qp = new URLSearchParams(location.search);
+const getQP = (...keys) => {
+  for (const k of keys) {
+    const v = qp.get(k) || qp.get(k.toLowerCase()) || qp.get(k.toUpperCase());
+    if (v) return decodeURIComponent(v);
+  }
+  return "";
+};
+// aceita variações (inclui "empresal")
+const empresaId   = getQP("empresaId","empresa","idEmpresa","empresal");
+const empresaNome = getQP("empresaNome","empresa_nome","nomeEmpresa");
+const rmNomeURL   = getQP("rmNome","rm","rm_nome");
 
-// --- Cabeçalho fixo (sem escolha de empresa) ---
+// pinta cabeçalho imediatamente (sem Firestore)
 document.getElementById("empresaNome").textContent = empresaNome || "(Empresa)";
 document.getElementById("empresaInfo").textContent = empresaNome ? `Empresa: ${empresaNome}` : "";
 
-// --- Login anônimo (cliente não vê nada) ---
+/* ========= 2) LOGIN ANÔNIMO (cliente) ========= */
 auth.signInAnonymously().catch(console.error);
 
-/* =======================
-   Helpers (mesmos do admin)
-   ======================= */
+/* ========= 3) HELPERS ========= */
 function maskDDMMYYYY(value) {
   let v = (value || "").replace(/\D/g, "").slice(0, 8);
   if (v.length >= 5) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
@@ -46,9 +52,7 @@ function parseMoedaBRToNumber(str) {
   return parseFloat(str.replace(/[R$\s\.]/g, "").replace(",", ".")) || 0;
 }
 
-/* =======================
-   Carregamentos (mesmo visual do gerente)
-   ======================= */
+/* ========= 4) CARREGAR SEGURADORAS/RAMOS ========= */
 function carregarSeguradoras() {
   return db.collection("seguradoras").get()
     .then(snap => {
@@ -59,7 +63,7 @@ function carregarSeguradoras() {
       });
       return arr.sort((a,b)=>a.localeCompare(b,"pt-BR",{sensitivity:"base"}));
     })
-    .catch(()=>[]);
+    .catch(()=>[]); // se negar permissão, segue vazio
 }
 
 async function carregarRamosSeguro() {
@@ -71,14 +75,15 @@ async function carregarRamosSeguro() {
       ramos.push({ id: doc.id, nome: d.nomeExibicao || d.nome || doc.id });
     });
     if (ramos.length) return ramos;
-  } catch(e) {}
-  // fallback simples
+  } catch(e) { /* permission denied -> fallback */ }
+
+  // fallback básico para nunca ficar vazio
   return [
     { id:"auto", nome:"Automóvel" },
     { id:"vida", nome:"Vida" },
     { id:"saude", nome:"Saúde" },
     { id:"empresarial", nome:"Empresarial" },
-    { id:"residencial", nome:"Residencial" },
+    { id:"residencial", nome:"Residencial" }
   ];
 }
 
@@ -127,7 +132,6 @@ async function gerarCamposRamos() {
       <label>Observações:</label>
       <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
     `;
-
     sub.querySelector(`#${ramo.id}-vencimento`).addEventListener("input", e => e.target.value = maskDDMMYYYY(e.target.value));
     const premioInput = sub.querySelector(`#${ramo.id}-premio`);
     premioInput.addEventListener("input", e => e.target.value = maskMoedaBR(e.target.value));
@@ -140,9 +144,7 @@ async function gerarCamposRamos() {
   });
 }
 
-/* =======================
-   Envio (salva em 'visitas' igual ao gerente)
-   ======================= */
+/* ========= 5) ENVIAR ========= */
 window.enviar = async function enviar() {
   if (!empresaId) return alert("Link inválido (sem empresa).");
 
@@ -153,15 +155,15 @@ window.enviar = async function enviar() {
   const user = auth.currentUser;
 
   const visita = {
+    source: "cliente_link",
     empresaId,
     empresaNome,
     tipoVisita,
     rmNome,
     rmUid: null,
-    agenciaId: "", // você pode preencher via Cloud Function se quiser
+    agenciaId: "", // opcional: pode preencher via CF se quiser
     usuarioId: user?.uid || null,
     criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-    source: "cliente_link",
     numeroFuncionarios: numeroFuncionarios === "" ? null : Math.max(0, parseInt(numeroFuncionarios,10) || 0),
     ramos: {}
   };
@@ -195,15 +197,11 @@ window.enviar = async function enviar() {
   try {
     await db.collection("visitas").add(visita);
     document.getElementById("ok").style.display = "block";
-    // opcional: limpar marcações após enviar
-    // location.href = "obrigado.html";
   } catch (e) {
     console.error(e);
     alert("Erro ao enviar. Tente novamente mais tarde.");
   }
 };
 
-/* =======================
-   Bootstrap
-   ======================= */
+/* ========= 6) BOOTSTRAP ========= */
 document.addEventListener("DOMContentLoaded", gerarCamposRamos);
