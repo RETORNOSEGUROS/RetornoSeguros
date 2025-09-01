@@ -1,62 +1,37 @@
-// financeiro.js — Painel + Lançamento + Relatório com Gráficos (Firebase v8 + Chart.js)
-
+// js/financeiro.js — Painel + Lançamento + Relatório (Firebase v8 + Chart.js)
+// =============== BOOT ===============
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
-let LISTA = []; // linhas renderizadas
+let LISTA = [];
 let EMPRESAS_CACHE = new Map(); // empresaId -> {id,nome,rmUid,agenciaId}
 
-// ===== Helpers comuns =====
+// =============== HELPERS ===============
 const normalizarPerfil = (p)=>String(p||"")
   .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
   .toLowerCase().replace(/[-_]+/g," ").trim();
-
 const toBRL = (n)=> (Number.isFinite(n) ? n.toLocaleString("pt-BR", {style:"currency", currency:"BRL"}) : "—");
 const toPct = (n)=> (Number.isFinite(n) ? (n*100).toLocaleString("pt-BR", {maximumFractionDigits:1})+"%" : "—");
 const safeDiv = (a,b)=> (b && Math.abs(b)>0 ? a/b : null);
 const clamp2 = (n)=> Number.isFinite(n) ? Math.round(n*100)/100 : null;
+function escapeHtml(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"); }
 
-function escapeHtml(s){
-  return String(s==null?"":s)
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
-}
-
-// ===== Moeda BRL (máscara + parse) =====
-function parseBRL(str){
-  const onlyDigits = String(str||"").replace(/\D+/g, "");
-  if (!onlyDigits) return 0;
-  return Number(onlyDigits) / 100; // sempre em centavos
-}
-function formatBRL(n){
-  return Number.isFinite(n) ? n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : "";
-}
+// Moeda BRL (máscara + parse)
+function parseBRL(str){ const only=String(str||"").replace(/\D+/g,""); return only? Number(only)/100 : 0; }
+function formatBRL(n){ return Number.isFinite(n) ? n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}) : ""; }
 function moneyBindInputs(scope=document){
   scope.querySelectorAll("input.money").forEach(el=>{
-    el.addEventListener("focus", ()=>{
-      const val = parseBRL(el.value);
-      el.value = val ? String(val.toFixed(2)).replace(".",",") : "";
-    });
-    el.addEventListener("input", ()=>{
-      const raw = el.value;
-      el.value = raw.replace(/[^\d,]/g,"");
-    });
-    el.addEventListener("blur", ()=>{
-      const val = parseBRL(el.value);
-      el.value = val ? formatBRL(val) : "";
-    });
+    el.addEventListener("focus", ()=>{ const v=parseBRL(el.value); el.value=v? String(v.toFixed(2)).replace(".",","):""; });
+    el.addEventListener("input", ()=> el.value = el.value.replace(/[^\d,]/g,""));
+    el.addEventListener("blur", ()=>{ const v=parseBRL(el.value); el.value=v? formatBRL(v):""; });
   });
 }
-function getMoney(id){ return parseBRL(document.getElementById(id)?.value || ""); }
-function setMoney(id, v){
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.value = (v==null) ? "" : formatBRL(Number(v));
-}
+const getMoney = (id)=> parseBRL(document.getElementById(id)?.value || "");
+function setMoney(id,v){ const el=document.getElementById(id); if(el) el.value = (v==null? "" : formatBRL(Number(v))); }
 
-// ===== Perfil / Menu =====
+// =============== AUTH / MENU ===============
 auth.onAuthStateChanged(async (user)=>{
   if(!user) return location.href="login.html";
   CTX.uid = user.uid;
@@ -84,12 +59,9 @@ function montarMenuLateral(perfilBruto){
     "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
     "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
     "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
-    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html",
-    "Funcionários":"funcionarios.html","Financeiro":"financeiro.html"
+    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html","Funcionários":"funcionarios.html","Financeiro":"financeiro.html"
   };
-  const CAT_ADMIN_ONLY={
-    "Carteira":"carteira.html","Comissões":"comissoes.html","Resgates (Admin)":"resgates-admin.html"
-  };
+  const CAT_ADMIN_ONLY={ "Carteira":"carteira.html","Comissões":"comissoes.html","Resgates (Admin)":"resgates-admin.html" };
   const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
   const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
   const RM = ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html","financeiro.html"];
@@ -107,14 +79,10 @@ function montarMenuLateral(perfilBruto){
     case "assistentes": hrefs=AST; break;
     default: hrefs=[];
   }
-  hrefs.forEach(h=>{
-    const a=document.createElement("a"); a.href=h;
-    a.innerHTML=`🔹 ${LABEL[h]||h}`;
-    menu.appendChild(a);
-  });
+  hrefs.forEach(h=>{ const a=document.createElement("a"); a.href=h; a.innerHTML=`🔹 ${LABEL[h]||h}`; menu.appendChild(a); });
 }
 
-// ===== UI handlers =====
+// =============== UI ===============
 function wireUi(){
   document.getElementById("btnRecarregar")?.addEventListener("click", carregarGrid);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
@@ -131,8 +99,10 @@ function wireUi(){
   });
   document.getElementById("finSalvar")?.addEventListener("click", salvarFinanceiro);
 
-  // Modal Detalhes
+  // Modal Detalhes/Relatório
   const m2 = document.getElementById("modalDet");
+  const detBtn = document.getElementById("detFechar");
+  if(detBtn){ detBtn.textContent = "Voltar ao painel"; }
   document.getElementById("detFechar")?.addEventListener("click", ()=> m2.style.display="none");
   m2?.addEventListener("click", (e)=>{ if(e.target===m2) m2.style.display="none"; });
 }
@@ -150,25 +120,36 @@ function preencherAnosSelect(){
   }
 }
 
-// ===== Carregamento principal =====
+// =============== CARREGAMENTO PRINCIPAL ===============
 async function carregarGrid(){
-  const anoSel = document.getElementById("filtroAno").value;
-  document.getElementById("statusLista").textContent = "Carregando…";
-  document.getElementById("tbodyFin").innerHTML = "";
+  const status = document.getElementById("statusLista");
+  const tbody = document.getElementById("tbodyFin");
+  status.textContent = "Carregando…";
+  tbody.innerHTML = "";
   LISTA = [];
 
-  if(anoSel === "latest"){
-    await carregarMaisRecenteViaEmpresas();
-  }else{
-    const ano = parseInt(anoSel,10);
-    await carregarPorAnoViaCollectionGroup(ano);
+  try{
+    const anoSel = document.getElementById("filtroAno").value;
+    if(anoSel === "latest"){
+      await carregarMaisRecenteViaEmpresas();
+    }else{
+      const ano = parseInt(anoSel,10);
+      await carregarPorAnoViaCollectionGroup(ano);
+    }
+    renderTabela(LISTA);
+    updateStatus(LISTA);
+  }catch(e){
+    console.error(e);
+    status.textContent = "Erro ao carregar lista.";
+    renderTabela([]);
+  }finally{
+    if(!LISTA.length){
+      status.textContent = "Nenhum registro para este filtro.";
+    }
   }
-
-  renderTabela(LISTA);
-  updateStatus(LISTA);
 }
 
-// Visão rápida — usa denormalizados na raiz de empresas
+// Visão rápida — usa denormalizados na raiz de empresas (+ fallback)
 async function carregarMaisRecenteViaEmpresas(){
   let q = db.collection("empresas");
   if (CTX.perfil === "rm" && CTX.uid){
@@ -194,7 +175,7 @@ async function montarLinhasMaisRecente(snap){
     arr.push({
       empresaId: doc.id,
       empresaNome: d.nome || d.razaoSocial || d.fantasia || "Empresa",
-      ano: d.ultimoAnoFinanceiro || null,
+      ano: d.ultimoAnoFinanceiro ?? null,
       receita: d.ultimaReceita ?? null,
       ebitda: d.ultimoEbitda ?? null,
       margemEbitda: (Number.isFinite(d.ultimoEbitda) && Number.isFinite(d.ultimaReceita) && d.ultimaReceita>0) ? (d.ultimoEbitda/d.ultimaReceita) : null,
@@ -205,11 +186,32 @@ async function montarLinhasMaisRecente(snap){
       origem: "denormalizado"
     });
   });
+
+  // Fallback: se a empresa não tiver “último ano” ou valores faltando, consulta a subcoleção e corrige
+  const NEED_FIX = arr.filter(x => !x.ano || x.receita==null || x.ebitda==null);
+  const LIMIT_FIX = 100; // evita excesso de leituras
+  await Promise.all(NEED_FIX.slice(0, LIMIT_FIX).map(async (it)=>{
+    try{
+      const sub = await db.collection("empresas").doc(it.empresaId).collection("financeiro").orderBy("ano","desc").limit(1).get();
+      if(!sub.empty){
+        const d = sub.docs[0].data()||{};
+        it.ano     = d.ano ?? it.ano ?? null;
+        it.receita = d.receitaLiquida ?? it.receita ?? null;
+        it.ebitda  = d.ebitda ?? it.ebitda ?? null;
+        it.margemEbitda = (Number.isFinite(it.ebitda) && Number.isFinite(it.receita) && it.receita>0) ? (it.ebitda/it.receita) : (d.margemEbitda ?? it.margemEbitda ?? null);
+        it.dividaLiquida = (d.dividaLiquida!=null) ? d.dividaLiquida : (Number.isFinite(d.dividaBruta)&&Number.isFinite(d.caixa)? Math.max(d.dividaBruta-d.caixa,0) : it.dividaLiquida);
+        it.alavancagem = d.alavancagemDivLiqEbitda ?? it.alavancagem ?? null;
+        it.liquidez = d.liquidezCorrente ?? it.liquidez ?? null;
+        it.selo = d.selo || it.selo || null;
+      }
+    }catch(e){ console.warn("fix latest fail", it.empresaId, e.message); }
+  }));
+
   arr.sort((a,b)=> String(a.empresaNome).localeCompare(String(b.empresaNome),'pt',{sensitivity:'base'}));
   LISTA = arr;
 }
 
-// Visão por ano — usa collectionGroup('financeiro')
+// Visão por ano — collectionGroup('financeiro')
 async function carregarPorAnoViaCollectionGroup(ano){
   let q = db.collectionGroup("financeiro").where("ano","==",ano);
   if (CTX.perfil === "rm" && CTX.uid){
@@ -217,11 +219,10 @@ async function carregarPorAnoViaCollectionGroup(ano){
   } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
     q = q.where("agenciaId","==",CTX.agenciaId);
   }
+
   const snap = await q.limit(2000).get();
-  if (snap.empty){
-    document.getElementById("statusLista").textContent = "Nenhum lançamento encontrado para o ano.";
-    return;
-  }
+  if (snap.empty){ LISTA = []; return; }
+
   const arr=[];
   snap.forEach(doc=>{
     const d = doc.data()||{};
@@ -234,7 +235,7 @@ async function carregarPorAnoViaCollectionGroup(ano){
       ano: d.ano || ano,
       receita: d.receitaLiquida ?? null,
       ebitda: d.ebitda ?? null,
-      margemEbitda: (Number.isFinite(d.ebitda) && Number.isFinite(d.receitaLiquida) && d.receitaLiquida>0) ? (d.ebitda/d.receitaLiquida) : (d.margemEbitda ?? null),
+      margemEbitda: (Number.isFinite(d.ebitda) && Number.isFinite(d.receitaLiquida) && d.receitaLiquida>0) ? d.ebitda/d.receitaLiquida : (d.margemEbitda ?? null),
       dividaLiquida: d.dividaLiquida ?? (Number.isFinite(d.dividaBruta) && Number.isFinite(d.caixa) ? Math.max(d.dividaBruta - d.caixa,0) : null),
       alavancagem: d.alavancagemDivLiqEbitda ?? null,
       liquidez: d.liquidezCorrente ?? null,
@@ -246,7 +247,7 @@ async function carregarPorAnoViaCollectionGroup(ano){
   LISTA = arr;
 }
 
-// ===== Render / Filtro / Status =====
+// =============== RENDER / FILTRO / STATUS ===============
 function renderTabela(lista){
   const tbody = document.getElementById("tbodyFin");
   tbody.innerHTML = "";
@@ -310,7 +311,7 @@ function updateStatus(lista){
   status.textContent = `${totalEmpresas} empresa(s) no filtro · Receita total: ${toBRL(somaReceita)} · EBITDA total: ${toBRL(somaEbitda)} · % EBITDA média: ${toPct(mediaMargem)}`;
 }
 
-// ===== Permissão simples (UI) =====
+// =============== PERMISSÃO UI ===============
 function podeEditarEmpresa(empresaId){
   if(CTX.perfil === "admin") return true;
   const base = EMPRESAS_CACHE.get(empresaId);
@@ -320,32 +321,26 @@ function podeEditarEmpresa(empresaId){
   return false;
 }
 
-// ===== Modal Lançar/Editar =====
-let EMPRESA_ALVO = null; // {id, nome,...}
-let ANO_ALVO = null;     // number | null
+// =============== MODAL LANÇAR/EDITAR ===============
+let EMPRESA_ALVO = null;
+let ANO_ALVO = null;
 
 function abrirModalFin(empresaId, anoStr){
   EMPRESA_ALVO = EMPRESAS_CACHE.get(empresaId) || { id:empresaId, nome:"Empresa" };
   ANO_ALVO = anoStr ? parseInt(anoStr,10) : null;
 
-  if(!podeEditarEmpresa(empresaId)){
-    alert("Sem permissão para editar esta empresa.");
-    return;
-  }
+  if(!podeEditarEmpresa(empresaId)){ alert("Sem permissão para editar esta empresa."); return; }
 
   document.getElementById("finEmpresaAlvo").textContent = `${EMPRESA_ALVO.nome} (ID: ${EMPRESA_ALVO.id})`;
   document.getElementById("finErro").textContent = "";
   document.getElementById("finInfo").textContent = "";
 
-  // limpa campos
   ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa","finEstoques","finCR","finCP","finDespesaFin","finDistribLucro","finProLabore","finQtdSocios"].forEach(id=>{
     const el = document.getElementById(id); if(el) el.value = "";
   });
 
-  // Máscara BRL ativa
   moneyBindInputs(document.getElementById("modalFin"));
 
-  // se ano conhecido, pré‑preencher
   if(Number.isFinite(ANO_ALVO)){
     document.getElementById("finAno").value = ANO_ALVO;
     db.collection("empresas").doc(EMPRESA_ALVO.id).collection("financeiro").doc(String(ANO_ALVO)).get().then(doc=>{
@@ -367,7 +362,6 @@ function abrirModalFin(empresaId, anoStr){
       }
     });
   }
-
   document.getElementById("modalFin").style.display = "block";
 }
 
@@ -399,14 +393,23 @@ async function salvarFinanceiro(){
   const proLabore= getMoney("finProLabore");
   const qtdSocios= +document.getElementById("finQtdSocios").value || 0;
 
-  // Derivados
-  const margemBruta = safeDiv(lucroBruto, receita);
-  const margemEbitda= safeDiv(ebitda, receita);
-  const margemLiquida= safeDiv(lucroLiq, receita);
+  // Derivados principais
+  const margemBruta   = safeDiv(lucroBruto, receita);
+  const margemEbitda  = safeDiv(ebitda, receita);
+  const margemLiquida = safeDiv(lucroLiq, receita);
   const dividaLiquida = Math.max(dividaBruta - caixa, 0);
-  const alavancagem = safeDiv(dividaLiquida, ebitda);
-  const liquidez = safeDiv((caixa + cr + estoques), cp);
-  const coberturaJuros = safeDiv(ebitda, despFin);
+  const alavancagem   = safeDiv(dividaLiquida, ebitda);
+  const liquidez      = safeDiv((caixa + cr + estoques), cp);
+  const coberturaJuros= safeDiv(ebitda, despFin);
+
+  // NOVOS INDICADORES (com o que já temos)
+  const custoVendas    = (Number.isFinite(receita) && Number.isFinite(lucroBruto)) ? (receita - lucroBruto) : null;
+  const giroEstoque    = safeDiv(custoVendas, estoques);             // vezes/ano
+  const diasEstoque    = (giroEstoque ? (365 / giroEstoque) : null); // dias
+  const pmrDias        = (safeDiv(cr, receita) ? (safeDiv(cr, receita) * 365) : null); // Prazo Médio Recebimento
+  const pmpDias        = (safeDiv(cp, custoVendas) ? (safeDiv(cp, custoVendas) * 365) : null); // Prazo Médio Pagamento
+  const cicloFinanceiro= (Number.isFinite(pmrDias) || Number.isFinite(diasEstoque) || Number.isFinite(pmpDias))
+                          ? ( (pmrDias||0) + (diasEstoque||0) - (pmpDias||0) ) : null;
 
   // Sinais & selo
   const sinais = avaliarSinais({ margemEbitda, alavancagem, liquidez });
@@ -416,7 +419,6 @@ async function salvarFinanceiro(){
     const empresaRef = db.collection("empresas").doc(EMPRESA_ALVO.id);
     const finRef = empresaRef.collection("financeiro").doc(String(ano));
 
-    // upsert no doc anual
     await finRef.set({
       ano,
       receitaLiquida: receita,
@@ -427,9 +429,13 @@ async function salvarFinanceiro(){
       distribuicaoLucros: distrLuc,
       proLaboreTotalAnual: proLabore,
       qtdSocios: qtdSocios,
+      // derivados
       margemBruta, margemEbitda, margemLiquida,
       dividaLiquida, alavancagemDivLiqEbitda: alavancagem,
       liquidezCorrente: liquidez, coberturaJuros,
+      // novos indicadores
+      custoVendas, giroEstoque, diasEstoque, pmrDias, pmpDias, cicloFinanceiro,
+      // meta/dados
       sinais, selo,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
       atualizadoPor: CTX.uid,
@@ -439,7 +445,7 @@ async function salvarFinanceiro(){
       agenciaId: EMPRESA_ALVO.agenciaId || null
     }, { merge:true });
 
-    // -> recalcula "Mais recente" olhando a subcoleção
+    // -> recalcula "Mais recente" olhando a subcoleção (garante 2023 > 2022 etc)
     await recomputarMaisRecente(empresaRef);
 
     info.textContent = "Lançamento salvo com sucesso!";
@@ -451,7 +457,7 @@ async function salvarFinanceiro(){
   }
 }
 
-// Recalcula os campos denormalizados de "mais recente" na raiz
+// Recalcula denormalizados “mais recente” na raiz
 async function recomputarMaisRecente(empresaRef){
   const snap = await empresaRef.collection("financeiro").orderBy("ano","desc").limit(1).get();
   if (snap.empty) return;
@@ -461,10 +467,10 @@ async function recomputarMaisRecente(empresaRef){
   const dividaLiquida = (d.dividaLiquida != null)
     ? d.dividaLiquida
     : (Number.isFinite(d.dividaBruta) && Number.isFinite(d.caixa) ? Math.max(d.dividaBruta - d.caixa, 0) : null);
-  const alav   = (d.alavancagemDivLiqEbitda != null) ? d.alavancagemDivLiqEbitda
+  const alav = (d.alavancagemDivLiqEbitda != null) ? d.alavancagemDivLiqEbitda
     : (Number.isFinite(dividaLiquida) && Number.isFinite(ebitda) && ebitda !== 0 ? dividaLiquida/ebitda : null);
-  const liq    = (d.liquidezCorrente != null) ? d.liquidezCorrente : null;
-  const selo   = d.selo || null;
+  const liq  = (d.liquidezCorrente != null) ? d.liquidezCorrente : null;
+  const selo = d.selo || null;
 
   await empresaRef.set({
     ultimoAnoFinanceiro: d.ano,
@@ -477,23 +483,11 @@ async function recomputarMaisRecente(empresaRef){
   }, { merge:true });
 }
 
-// ===== Regras de avaliação (sinais + selo) =====
+// =============== REGRAS (sinais + selo) ===============
 function avaliarSinais({ margemEbitda, alavancagem, liquidez }){
-  // Saúde Operacional
-  const op = (margemEbitda==null) ? "amarelo" :
-             (margemEbitda < 0.04 ? "vermelho" :
-              (margemEbitda < 0.08 ? "amarelo" : "verde"));
-
-  // Solvência
-  const sol = (alavancagem==null) ? "amarelo" :
-              (alavancagem > 3.5 ? "vermelho" :
-               (alavancagem >= 1.5 ? "amarelo" : "verde"));
-
-  // Liquidez
-  const liq = (liquidez==null) ? "amarelo" :
-              (liquidez < 1.0 ? "vermelho" :
-               (liquidez < 1.2 ? "amarelo" : "verde"));
-
+  const op  = (margemEbitda==null) ? "amarelo" : (margemEbitda < 0.04 ? "vermelho" : (margemEbitda < 0.08 ? "amarelo" : "verde"));
+  const sol = (alavancagem==null) ? "amarelo" : (alavancagem > 3.5 ? "vermelho" : (alavancagem >= 1.5 ? "amarelo" : "verde"));
+  const liq = (liquidez==null) ? "amarelo" : (liquidez < 1.0 ? "vermelho" : (liquidez < 1.2 ? "amarelo" : "verde"));
   return { saudeOperacional:op, solvencia:sol, liquidez:liq };
 }
 function consolidarSelo(s){
@@ -505,7 +499,7 @@ function consolidarSelo(s){
   return "verde";
 }
 
-// ====== Relatório Ano a Ano + GRÁFICOS ======
+// =============== RELATÓRIO (Modal) ===============
 let chart1=null, chart2=null, chart3=null;
 
 async function abrirRelatorio(empresaId){
@@ -529,32 +523,38 @@ async function abrirRelatorio(empresaId){
         dl: d.dividaLiquida ?? (Number.isFinite(d.dividaBruta) && Number.isFinite(d.caixa) ? Math.max(d.dividaBruta-d.caixa,0) : null),
         alav: d.alavancagemDivLiqEbitda ?? null,
         liq: d.liquidezCorrente ?? null,
+        juros: d.coberturaJuros ?? null,
+        giro: d.giroEstoque ?? null,
+        diasEst: d.diasEstoque ?? null,
+        pmr: d.pmrDias ?? null,
+        pmp: d.pmpDias ?? null,
+        ciclo: d.cicloFinanceiro ?? null,
         selo: d.selo || null
       });
     });
-    // para gráficos: ascendente
-    rows.sort((a,b)=> a.ano - b.ano);
 
-    // ===== GRÁFICOS =====
+    // ------ GRÁFICOS COMPACTOS ------
+    rows.sort((a,b)=> a.ano - b.ano);
     const labels = rows.map(r=> String(r.ano));
     const receita = rows.map(r=> r.receita ?? null);
     const ebitda  = rows.map(r=> r.ebitda ?? null);
-    const margem  = rows.map(r=> (r.margem!=null ? (r.margem*100) : null)); // %
+    const margem  = rows.map(r=> (r.margem!=null ? (r.margem*100) : null));
     const alav    = rows.map(r=> r.alav ?? null);
     const liq     = rows.map(r=> r.liq ?? null);
+
+    const commonOpts = { responsive:true, maintainAspectRatio:true, aspectRatio: 2 };
 
     chart1 = new Chart(document.getElementById("chartReceitaEbitda").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
-        { label:"Receita", data: receita, tension:.3, borderWidth:2, pointRadius:3 },
-        { label:"EBITDA",  data: ebitda,  tension:.3, borderWidth:2, pointRadius:3 }
+        { label:"Receita", data: receita, tension:.3, borderWidth:2, pointRadius:2 },
+        { label:"EBITDA",  data: ebitda,  tension:.3, borderWidth:2, pointRadius:2 }
       ]},
       options: {
-        plugins:{ legend:{display:true} , tooltip:{mode:"index", intersect:false, callbacks:{
-          label:(ctx)=> `${ctx.dataset.label}: ${toBRL(ctx.parsed.y)}`
-        }}},
+        ...commonOpts,
+        plugins:{ legend:{display:true} , tooltip:{mode:"index", intersect:false, callbacks:{ label:(ctx)=> `${ctx.dataset.label}: ${toBRL(ctx.parsed.y)}` }}},
         scales:{ y:{ ticks:{ callback:(v)=> toBRL(v) } } },
-        responsive:true, maintainAspectRatio:false, elements:{ line:{ spanGaps:true } }
+        elements:{ line:{ spanGaps:true } }
       }
     });
 
@@ -562,37 +562,35 @@ async function abrirRelatorio(empresaId){
       type: "bar",
       data: { labels, datasets: [{ label:"Margem EBITDA (%)", data: margem, borderWidth:1 }] },
       options: {
-        plugins:{ legend:{display:false}, tooltip:{callbacks:{
-          label:(ctx)=> `Margem: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:1})}%`
-        }}},
-        scales:{ y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } } },
-        responsive:true, maintainAspectRatio:false
+        ...commonOpts,
+        plugins:{ legend:{display:false}, tooltip:{callbacks:{ label:(ctx)=> `Margem: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:1})}%` }}},
+        scales:{ y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } } }
       }
     });
 
     chart3 = new Chart(document.getElementById("chartAlavancagemLiquidez").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
-        { label:"DL/EBITDA (x)", data: alav, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:3 },
-        { label:"Liquidez",      data: liq,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:3 }
+        { label:"DL/EBITDA (x)", data: alav, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:2 },
+        { label:"Liquidez",      data: liq,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:2 }
       ]},
       options: {
+        ...commonOpts,
         plugins:{ legend:{display:true}, tooltip:{mode:"index", intersect:false, callbacks:{
           label:(ctx)=> {
             const v = Number(ctx.parsed.y);
             return `${ctx.dataset.label}: ${Number.isFinite(v)? v.toLocaleString("pt-BR",{maximumFractionDigits:2}) : "—"}`;
           }
-        } }},
+        }}},
         scales:{
           y1:{ position:"left",  title:{display:true, text:"DL/EBITDA (x)"}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } },
           y2:{ position:"right", title:{display:true, text:"Liquidez"}, grid:{drawOnChartArea:false}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } }
         },
-        responsive:true, maintainAspectRatio:false,
         elements:{ line:{ spanGaps:true } }
       }
     });
 
-    // ===== TABELA (desc) + botão Editar por ano =====
+    // ------ TABELA DETALHADA (linhas por ano) ------
     rows.sort((a,b)=> b.ano - a.ano);
     tbody.innerHTML="";
     for(let i=0;i<rows.length;i++){
@@ -624,8 +622,6 @@ async function abrirRelatorio(empresaId){
       `;
       tbody.appendChild(tr);
     }
-
-    // listeners dos botões "Editar" por ano
     tbody.querySelectorAll("[data-editano]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const ano = btn.getAttribute("data-editano");
@@ -635,19 +631,11 @@ async function abrirRelatorio(empresaId){
       });
     });
 
-    // RESUMO EXECUTIVO (último ano vs anterior)
-    rows.sort((a,b)=> b.ano - a.ano);
-    if(rows.length>=2){
-      const a = rows[0], b = rows[1];
-      const mk = (label, val, fmt)=> `<div><strong>${label}:</strong> ${fmt(val)}</div>`;
-      const bloco = `
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-          ${mk("Receita", a.receita, toBRL)} ${mk("EBITDA", a.ebitda, toBRL)} ${mk("Margem EBITDA", a.margem, toPct)}
-          ${mk("Dívida Líquida", a.dl, toBRL)} ${mk("DL/EBITDA", a.alav, (x)=>Number.isFinite(x)?clamp2(x):"—")} ${mk("Liquidez Corrente", a.liq, (x)=>Number.isFinite(x)?clamp2(x):"—")}
-        </div>
-      `;
-      document.getElementById("detResumo").innerHTML = bloco;
-    }
+    // ------ ANÁLISE AUTOMÁTICA + VISÃO TRANSPOSTA ------
+    const analise = gerarAnalise(rows);
+    const transposta = montarTransposta(rows);
+    document.getElementById("detResumo").innerHTML = analise + transposta;
+
   }catch(e){
     console.error(e);
     tbody.innerHTML = `<tr><td colspan="14" class="muted">Erro ao carregar (${e.message}).</td></tr>`;
@@ -656,21 +644,74 @@ async function abrirRelatorio(empresaId){
   document.getElementById("modalDet").style.display = "block";
 }
 
-function renderDeltaMoeda(v){
-  if(v==null) return `<span class="delta neu">—</span>`;
-  const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu");
-  return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${toBRL(Math.abs(v))}</span>`;
+function gerarAnalise(rowsDesc){
+  // rowsDesc deve estar DESC (já está)
+  if(rowsDesc.length<1) return "";
+  const a = rowsDesc[0], b = rowsDesc[1] || null;
+  const pp = (x)=> Number.isFinite(x)? x.toLocaleString("pt-BR",{maximumFractionDigits:1}) : "—";
+  const deltaPct = (n1,n0)=> (Number.isFinite(n1)&&Number.isFinite(n0)&&n0!==0)? ((n1-n0)/Math.abs(n0))*100 : null;
+
+  let bullets=[];
+  if(b){
+    const recYoY = deltaPct(a.receita,b.receita);
+    const ebtYoY = deltaPct(a.ebitda,b.ebitda);
+    const marYoY = (Number.isFinite(a.margem) && Number.isFinite(b.margem)) ? ((a.margem-b.margem)*100) : null;
+
+    if(recYoY!=null) bullets.push(`Receita ${recYoY>=0? "↑":"↓"} ${pp(Math.abs(recYoY))}% vs ${b.ano}.`);
+    if(ebtYoY!=null) bullets.push(`EBITDA ${ebtYoY>=0? "↑":"↓"} ${pp(Math.abs(ebtYoY))}% vs ${b.ano}.`);
+    if(marYoY!=null) bullets.push(`Margem EBITDA ${marYoY>=0? "↑":"↓"} ${pp(Math.abs(marYoY))} p.p.`);
+  }
+  if(Number.isFinite(a.alav)) bullets.push(`Alavancagem DL/EBITDA: ${pp(a.alav)}x (${a.alav>3.5?"alto risco":a.alav>=1.5?"atenção":"confortável"}).`);
+  if(Number.isFinite(a.liq))  bullets.push(`Liquidez Corrente: ${pp(a.liq)} (${a.liq<1?"abaixo de 1,0 — risco":a.liq<1.2?"zona de atenção":"ok"}).`);
+  if(Number.isFinite(a.juros)) bullets.push(`Cobertura de Juros: ${pp(a.juros)}x.`);
+
+  if(Number.isFinite(a.ciclo)){
+    bullets.push(`Ciclo Financeiro: ${pp(a.ciclo)} dias ${a.ciclo>60?"(longo — trava caixa)":a.ciclo<0?"(negativo — ótimo)":"."}`);
+  }
+
+  return `
+    <div class="card" style="padding:10px; border:1px solid #dde4ef; border-radius:12px; background:#fff; margin:6px 0">
+      <div style="font-weight:600; margin-bottom:6px">Resumo executivo — ${a.ano}${b?` vs ${b.ano}`:""}</div>
+      <ul style="margin:6px 0 0 16px; padding:0; color:#334155">
+        ${bullets.map(li=>`<li>${li}</li>`).join("")}
+      </ul>
+    </div>`;
 }
-function renderDeltaPct(v){
-  if(v==null) return `<span class="delta neu">—</span>`;
-  const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu");
-  const pct = (v*100);
-  const str = (Number.isFinite(pct)? pct.toLocaleString("pt-BR",{maximumFractionDigits:1})+" p.p." : "—");
-  return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${str}</span>`;
+
+function montarTransposta(rowsDesc){
+  const anos = rowsDesc.map(r=> r.ano);
+  const linhas = [
+    ["Receita (R$)", ...rowsDesc.map(r=> toBRL(r.receita))],
+    ["EBITDA (R$)", ...rowsDesc.map(r=> toBRL(r.ebitda))],
+    ["Margem EBITDA", ...rowsDesc.map(r=> toPct(r.margem))],
+    ["Dívida Líquida (R$)", ...rowsDesc.map(r=> toBRL(r.dl))],
+    ["DL/EBITDA (x)", ...rowsDesc.map(r=> Number.isFinite(r.alav)? clamp2(r.alav):"—")],
+    ["Liquidez", ...rowsDesc.map(r=> Number.isFinite(r.liq)? clamp2(r.liq):"—")],
+    ["Cobertura de Juros (x)", ...rowsDesc.map(r=> Number.isFinite(r.juros)? clamp2(r.juros):"—")],
+    ["Giro Estoques (x)", ...rowsDesc.map(r=> Number.isFinite(r.giro)? clamp2(r.giro):"—")],
+    ["Dias de Estoque", ...rowsDesc.map(r=> Number.isFinite(r.diasEst)? clamp2(r.diasEst):"—")],
+    ["PMR (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmr)? clamp2(r.pmr):"—")],
+    ["PMP (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmp)? clamp2(r.pmp):"—")],
+    ["Ciclo Financeiro (dias)", ...rowsDesc.map(r=> Number.isFinite(r.ciclo)? clamp2(r.ciclo):"—")],
+  ];
+
+  const head = `<tr><th style="text-align:left">Indicador</th>${anos.map(a=>`<th>${a}</th>`).join("")}</tr>`;
+  const body = linhas.map(l=> `<tr>${l.map((c,i)=> i? `<td style="white-space:nowrap">${c}</td>` : `<td><strong>${c}</strong></td>`).join("")}</tr>`).join("");
+  return `
+    <div class="table-wrap" style="border-radius:12px; margin-top:8px">
+      <div style="font-weight:600; margin:6px 0">Visão geral — todos os anos em colunas</div>
+      <table>
+        <thead>${head}</thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`;
 }
+
+// Deltas visuais
+function renderDeltaMoeda(v){ if(v==null) return `<span class="delta neu">—</span>`; const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu"); return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${toBRL(Math.abs(v))}</span>`; }
+function renderDeltaPct(v){ if(v==null) return `<span class="delta neu">—</span>`; const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu"); const pct = (v*100); const str = (Number.isFinite(pct)? pct.toLocaleString("pt-BR",{maximumFractionDigits:1})+" p.p." : "—"); return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${str}</span>`; }
 function renderDeltaNum(v, invert=false){
   if(v==null) return `<span class="delta neu">—</span>`;
-  // em alavancagem, queda é bom => invert=true
   const good = invert ? (v<0) : (v>0);
   const bad  = invert ? (v>0) : (v<0);
   const cls = good ? "pos" : (bad ? "neg" : "neu");
@@ -679,9 +720,4 @@ function renderDeltaNum(v, invert=false){
   return `<span class="delta ${cls}">${arrow} ${val}</span>`;
 }
 
-function destroyCharts(){
-  try{ chart1 && chart1.destroy(); }catch(e){}
-  try{ chart2 && chart2.destroy(); }catch(e){}
-  try{ chart3 && chart3.destroy(); }catch(e){}
-  chart1=chart2=chart3=null;
-}
+function destroyCharts(){ try{ chart1 && chart1.destroy(); }catch{} try{ chart2 && chart2.destroy(); }catch{} try{ chart3 && chart3.destroy(); }catch{} chart1=chart2=chart3=null; }
