@@ -1,5 +1,7 @@
+perfeito! aqui está o js/financeiro.js completo, já com os mini-gráficos (ROE/ROA e DL/PL + Alav. Financeira), todos os indicadores e os ajustes anteriores:
+
 // js/financeiro.js — Painel + Lançamento + Relatório (Firebase v8 + Chart.js)
-// =============== BOOT ===============
+// ================== BOOT ==================
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
@@ -8,7 +10,7 @@ let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 let LISTA = [];
 let EMPRESAS_CACHE = new Map(); // empresaId -> {id,nome,rmUid,agenciaId}
 
-// =============== HELPERS ===============
+// ================== HELPERS ==================
 const normalizarPerfil = (p)=>String(p||"")
   .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
   .toLowerCase().replace(/[-_]+/g," ").trim();
@@ -31,7 +33,7 @@ function moneyBindInputs(scope=document){
 const getMoney = (id)=> parseBRL(document.getElementById(id)?.value || "");
 function setMoney(id,v){ const el=document.getElementById(id); if(el) el.value = (v==null? "" : formatBRL(Number(v))); }
 
-// =============== AUTH / MENU ===============
+// ================== AUTH / MENU ==================
 auth.onAuthStateChanged(async (user)=>{
   if(!user) return location.href="login.html";
   CTX.uid = user.uid;
@@ -82,7 +84,7 @@ function montarMenuLateral(perfilBruto){
   hrefs.forEach(h=>{ const a=document.createElement("a"); a.href=h; a.innerHTML=`🔹 ${LABEL[h]||h}`; menu.appendChild(a); });
 }
 
-// =============== UI ===============
+// ================== UI ==================
 function wireUi(){
   document.getElementById("btnRecarregar")?.addEventListener("click", carregarGrid);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
@@ -120,7 +122,7 @@ function preencherAnosSelect(){
   }
 }
 
-// =============== CARREGAMENTO PRINCIPAL ===============
+// ================== CARREGAMENTO PRINCIPAL ==================
 async function carregarGrid(){
   const status = document.getElementById("statusLista");
   const tbody = document.getElementById("tbodyFin");
@@ -187,9 +189,9 @@ async function montarLinhasMaisRecente(snap){
     });
   });
 
-  // Fallback: se a empresa não tiver “último ano” ou valores faltando, consulta a subcoleção e corrige
+  // Fallback: se faltou “último ano”/valores, consulta subcoleção e corrige
   const NEED_FIX = arr.filter(x => !x.ano || x.receita==null || x.ebitda==null);
-  const LIMIT_FIX = 100; // evita excesso de leituras
+  const LIMIT_FIX = 100;
   await Promise.all(NEED_FIX.slice(0, LIMIT_FIX).map(async (it)=>{
     try{
       const sub = await db.collection("empresas").doc(it.empresaId).collection("financeiro").orderBy("ano","desc").limit(1).get();
@@ -247,7 +249,7 @@ async function carregarPorAnoViaCollectionGroup(ano){
   LISTA = arr;
 }
 
-// =============== RENDER / FILTRO / STATUS ===============
+// ================== RENDER / FILTRO / STATUS ==================
 function renderTabela(lista){
   const tbody = document.getElementById("tbodyFin");
   tbody.innerHTML = "";
@@ -311,7 +313,7 @@ function updateStatus(lista){
   status.textContent = `${totalEmpresas} empresa(s) no filtro · Receita total: ${toBRL(somaReceita)} · EBITDA total: ${toBRL(somaEbitda)} · % EBITDA média: ${toPct(mediaMargem)}`;
 }
 
-// =============== PERMISSÃO UI ===============
+// ================== PERMISSÃO UI ==================
 function podeEditarEmpresa(empresaId){
   if(CTX.perfil === "admin") return true;
   const base = EMPRESAS_CACHE.get(empresaId);
@@ -321,7 +323,7 @@ function podeEditarEmpresa(empresaId){
   return false;
 }
 
-// =============== MODAL LANÇAR/EDITAR ===============
+// ================== MODAL LANÇAR/EDITAR ==================
 let EMPRESA_ALVO = null;
 let ANO_ALVO = null;
 
@@ -335,7 +337,7 @@ function abrirModalFin(empresaId, anoStr){
   document.getElementById("finErro").textContent = "";
   document.getElementById("finInfo").textContent = "";
 
-  ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa","finEstoques","finCR","finCP","finDespesaFin","finDistribLucro","finProLabore","finQtdSocios"].forEach(id=>{
+  ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa","finEstoques","finCR","finCP","finDespesaFin","finDistribLucro","finProLabore","finQtdSocios","finPL","finAtivo"].forEach(id=>{
     const el = document.getElementById(id); if(el) el.value = "";
   });
 
@@ -359,6 +361,8 @@ function abrirModalFin(empresaId, anoStr){
         setMoney("finDistribLucro", d.distribuicaoLucros);
         setMoney("finProLabore", d.proLaboreTotalAnual);
         const qs = document.getElementById("finQtdSocios"); if(qs) qs.value = d.qtdSocios || 0;
+        setMoney("finPL", d.patrimonioLiquido);
+        setMoney("finAtivo", d.ativoTotal);
       }
     });
   }
@@ -392,6 +396,8 @@ async function salvarFinanceiro(){
   const distrLuc = getMoney("finDistribLucro");
   const proLabore= getMoney("finProLabore");
   const qtdSocios= +document.getElementById("finQtdSocios").value || 0;
+  const pl    = getMoney("finPL");     // Patrimônio Líquido
+  const ativo = getMoney("finAtivo");  // Ativo Total
 
   // Derivados principais
   const margemBruta   = safeDiv(lucroBruto, receita);
@@ -402,7 +408,7 @@ async function salvarFinanceiro(){
   const liquidez      = safeDiv((caixa + cr + estoques), cp);
   const coberturaJuros= safeDiv(ebitda, despFin);
 
-  // NOVOS INDICADORES (com o que já temos)
+  // Indicadores adicionais
   const custoVendas    = (Number.isFinite(receita) && Number.isFinite(lucroBruto)) ? (receita - lucroBruto) : null;
   const giroEstoque    = safeDiv(custoVendas, estoques);             // vezes/ano
   const diasEstoque    = (giroEstoque ? (365 / giroEstoque) : null); // dias
@@ -410,6 +416,17 @@ async function salvarFinanceiro(){
   const pmpDias        = (safeDiv(cp, custoVendas) ? (safeDiv(cp, custoVendas) * 365) : null); // Prazo Médio Pagamento
   const cicloFinanceiro= (Number.isFinite(pmrDias) || Number.isFinite(diasEstoque) || Number.isFinite(pmpDias))
                           ? ( (pmrDias||0) + (diasEstoque||0) - (pmpDias||0) ) : null;
+
+  const margemBrutaPct   = margemBruta;
+  const margemLiquidaPct = margemLiquida;
+  const roe              = safeDiv(lucroLiq, pl);
+  const roa              = safeDiv(lucroLiq, ativo);
+  const giroAtivos       = safeDiv(receita, ativo);
+  const alavFinanceira   = safeDiv(ativo, pl); // Ativo/PL
+  const endividLiqSobrePL= safeDiv(dividaLiquida, pl);
+  const capitalDeGiro    = (Number.isFinite(caixa) && Number.isFinite(cr) && Number.isFinite(estoques) && Number.isFinite(cp))
+                            ? (caixa + cr + estoques - cp) : null;
+  const ncgSobreReceita  = safeDiv(capitalDeGiro, receita);
 
   // Sinais & selo
   const sinais = avaliarSinais({ margemEbitda, alavancagem, liquidez });
@@ -429,12 +446,24 @@ async function salvarFinanceiro(){
       distribuicaoLucros: distrLuc,
       proLaboreTotalAnual: proLabore,
       qtdSocios: qtdSocios,
+
+      // novos campos base
+      patrimonioLiquido: pl,
+      ativoTotal: ativo,
+
       // derivados
       margemBruta, margemEbitda, margemLiquida,
       dividaLiquida, alavancagemDivLiqEbitda: alavancagem,
       liquidezCorrente: liquidez, coberturaJuros,
-      // novos indicadores
+
+      // adicionais
       custoVendas, giroEstoque, diasEstoque, pmrDias, pmpDias, cicloFinanceiro,
+
+      margemBrutaPct: margemBrutaPct,
+      margemLiquidaPct: margemLiquidaPct,
+      roe, roa, giroAtivos, alavFinanceira, endividLiqSobrePL,
+      capitalDeGiro, ncgSobreReceita,
+
       // meta/dados
       sinais, selo,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
@@ -483,7 +512,7 @@ async function recomputarMaisRecente(empresaRef){
   }, { merge:true });
 }
 
-// =============== REGRAS (sinais + selo) ===============
+// ================== REGRAS (sinais + selo) ==================
 function avaliarSinais({ margemEbitda, alavancagem, liquidez }){
   const op  = (margemEbitda==null) ? "amarelo" : (margemEbitda < 0.04 ? "vermelho" : (margemEbitda < 0.08 ? "amarelo" : "verde"));
   const sol = (alavancagem==null) ? "amarelo" : (alavancagem > 3.5 ? "vermelho" : (alavancagem >= 1.5 ? "amarelo" : "verde"));
@@ -499,8 +528,8 @@ function consolidarSelo(s){
   return "verde";
 }
 
-// =============== RELATÓRIO (Modal) ===============
-let chart1=null, chart2=null, chart3=null;
+// ================== RELATÓRIO (Modal) ==================
+let chart1=null, chart2=null, chart3=null, chart4=null, chart5=null;
 
 async function abrirRelatorio(empresaId){
   const base = EMPRESAS_CACHE.get(empresaId) || { id:empresaId, nome:"Empresa" };
@@ -529,6 +558,16 @@ async function abrirRelatorio(empresaId){
         pmr: d.pmrDias ?? null,
         pmp: d.pmpDias ?? null,
         ciclo: d.cicloFinanceiro ?? null,
+
+        // novos:
+        roe: d.roe ?? null,
+        roa: d.roa ?? null,
+        giroAtv: d.giroAtivos ?? null,
+        alavFin: d.alavFinanceira ?? null,
+        dlSobrePL: d.endividLiqSobrePL ?? null,
+        capGiro: d.capitalDeGiro ?? null,
+        ncgRec: d.ncgSobreReceita ?? null,
+
         selo: d.selo || null
       });
     });
@@ -542,8 +581,14 @@ async function abrirRelatorio(empresaId){
     const alav    = rows.map(r=> r.alav ?? null);
     const liq     = rows.map(r=> r.liq ?? null);
 
+    const roePct  = rows.map(r=> r.roe!=null ? r.roe*100 : null);
+    const roaPct  = rows.map(r=> r.roa!=null ? r.roa*100 : null);
+    const dlpl    = rows.map(r=> r.dlSobrePL ?? null);
+    const alavFin = rows.map(r=> r.alavFin ?? null);
+
     const commonOpts = { responsive:true, maintainAspectRatio:true, aspectRatio: 2 };
 
+    // Receita x EBITDA
     chart1 = new Chart(document.getElementById("chartReceitaEbitda").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -558,6 +603,7 @@ async function abrirRelatorio(empresaId){
       }
     });
 
+    // Margem EBITDA
     chart2 = new Chart(document.getElementById("chartMargem").getContext("2d"), {
       type: "bar",
       data: { labels, datasets: [{ label:"Margem EBITDA (%)", data: margem, borderWidth:1 }] },
@@ -568,6 +614,7 @@ async function abrirRelatorio(empresaId){
       }
     });
 
+    // DL/EBITDA x Liquidez
     chart3 = new Chart(document.getElementById("chartAlavancagemLiquidez").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -586,6 +633,40 @@ async function abrirRelatorio(empresaId){
           y1:{ position:"left",  title:{display:true, text:"DL/EBITDA (x)"}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } },
           y2:{ position:"right", title:{display:true, text:"Liquidez"}, grid:{drawOnChartArea:false}, ticks:{ callback:(v)=> Number(v).toLocaleString("pt-BR") } }
         },
+        elements:{ line:{ spanGaps:true } }
+      }
+    });
+
+    // NOVO: ROE (%) e ROA (%)
+    chart4 = new Chart(document.getElementById("chartRentab").getContext("2d"), {
+      type: "line",
+      data: { labels, datasets: [
+        { label:"ROE (%)", data: roePct, tension:.3, borderWidth:2, pointRadius:2 },
+        { label:"ROA (%)", data: roaPct, tension:.3, borderWidth:2, pointRadius:2 }
+      ]},
+      options: {
+        ...commonOpts,
+        plugins:{ legend:{display:true}, tooltip:{mode:"index", intersect:false, callbacks:{
+          label:(ctx)=> `${ctx.dataset.label}: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:1})}%`
+        }}},
+        scales:{ y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")} %` } } },
+        elements:{ line:{ spanGaps:true } }
+      }
+    });
+
+    // NOVO: DL/PL (x) e Alav. (Ativo/PL) (x)
+    chart5 = new Chart(document.getElementById("chartEstrutura").getContext("2d"), {
+      type: "line",
+      data: { labels, datasets: [
+        { label:"DL/PL (x)", data: dlpl, tension:.3, borderWidth:2, pointRadius:2 },
+        { label:"Alav. (Ativo/PL) (x)", data: alavFin, tension:.3, borderWidth:2, pointRadius:2 }
+      ]},
+      options: {
+        ...commonOpts,
+        plugins:{ legend:{display:true}, tooltip:{mode:"index", intersect:false, callbacks:{
+          label:(ctx)=> `${ctx.dataset.label}: ${Number(ctx.parsed.y).toLocaleString("pt-BR",{maximumFractionDigits:2})}x`
+        }}},
+        scales:{ y:{ ticks:{ callback:(v)=> `${Number(v).toLocaleString("pt-BR")}x` } } },
         elements:{ line:{ spanGaps:true } }
       }
     });
@@ -664,10 +745,17 @@ function gerarAnalise(rowsDesc){
   if(Number.isFinite(a.alav)) bullets.push(`Alavancagem DL/EBITDA: ${pp(a.alav)}x (${a.alav>3.5?"alto risco":a.alav>=1.5?"atenção":"confortável"}).`);
   if(Number.isFinite(a.liq))  bullets.push(`Liquidez Corrente: ${pp(a.liq)} (${a.liq<1?"abaixo de 1,0 — risco":a.liq<1.2?"zona de atenção":"ok"}).`);
   if(Number.isFinite(a.juros)) bullets.push(`Cobertura de Juros: ${pp(a.juros)}x.`);
-
   if(Number.isFinite(a.ciclo)){
     bullets.push(`Ciclo Financeiro: ${pp(a.ciclo)} dias ${a.ciclo>60?"(longo — trava caixa)":a.ciclo<0?"(negativo — ótimo)":"."}`);
   }
+
+  // Novos indicadores
+  if(Number.isFinite(a.roe)) bullets.push(`ROE: ${pp(a.roe*100)}% ${a.roe<0.10?"(baixo)":a.roe>0.20?"(excelente)":"(ok)"}.`);
+  if(Number.isFinite(a.roa)) bullets.push(`ROA: ${pp(a.roa*100)}%.`);
+  if(Number.isFinite(a.giroAtv)) bullets.push(`Giro de Ativos: ${pp(a.giroAtv)}x.`);
+  if(Number.isFinite(a.alavFin)) bullets.push(`Alavancagem financeira (Ativo/PL): ${pp(a.alavFin)}x.`);
+  if(Number.isFinite(a.dlSobrePL)) bullets.push(`Endividamento líquido/PL: ${pp(a.dlSobrePL)}x.`);
+  if(Number.isFinite(a.capGiro)) bullets.push(`Capital de Giro: ${toBRL(a.capGiro)}${Number.isFinite(a.ncgRec)?` · NCG/Receita: ${pp(a.ncgRec*100)}%`:""}.`);
 
   return `
     <div class="card" style="padding:10px; border:1px solid #dde4ef; border-radius:12px; background:#fff; margin:6px 0">
@@ -693,6 +781,15 @@ function montarTransposta(rowsDesc){
     ["PMR (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmr)? clamp2(r.pmr):"—")],
     ["PMP (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmp)? clamp2(r.pmp):"—")],
     ["Ciclo Financeiro (dias)", ...rowsDesc.map(r=> Number.isFinite(r.ciclo)? clamp2(r.ciclo):"—")],
+
+    // novos indicadores:
+    ["ROE (Lucro/PL)", ...rowsDesc.map(r=> Number.isFinite(r.roe)? toPct(r.roe):"—")],
+    ["ROA (Lucro/Ativo)", ...rowsDesc.map(r=> Number.isFinite(r.roa)? toPct(r.roa):"—")],
+    ["Giro de Ativos (x)", ...rowsDesc.map(r=> Number.isFinite(r.giroAtv)? clamp2(r.giroAtv):"—")],
+    ["Alav. Financeira (Ativo/PL)", ...rowsDesc.map(r=> Number.isFinite(r.alavFin)? clamp2(r.alavFin):"—")],
+    ["DL/PL (x)", ...rowsDesc.map(r=> Number.isFinite(r.dlSobrePL)? clamp2(r.dlSobrePL):"—")],
+    ["Capital de Giro (R$)", ...rowsDesc.map(r=> Number.isFinite(r.capGiro)? toBRL(r.capGiro):"—")],
+    ["NCG/Receita", ...rowsDesc.map(r=> Number.isFinite(r.ncgRec)? toPct(r.ncgRec):"—")],
   ];
 
   const head = `<tr><th style="text-align:left">Indicador</th>${anos.map(a=>`<th>${a}</th>`).join("")}</tr>`;
@@ -720,4 +817,11 @@ function renderDeltaNum(v, invert=false){
   return `<span class="delta ${cls}">${arrow} ${val}</span>`;
 }
 
-function destroyCharts(){ try{ chart1 && chart1.destroy(); }catch{} try{ chart2 && chart2.destroy(); }catch{} try{ chart3 && chart3.destroy(); }catch{} chart1=chart2=chart3=null; }
+function destroyCharts(){
+  try{ chart1 && chart1.destroy(); }catch{}
+  try{ chart2 && chart2.destroy(); }catch{}
+  try{ chart3 && chart3.destroy(); }catch{}
+  try{ chart4 && chart4.destroy(); }catch{}
+  try{ chart5 && chart5.destroy(); }catch{}
+  chart1=chart2=chart3=chart4=chart5=null;
+}
