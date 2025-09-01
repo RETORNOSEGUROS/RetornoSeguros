@@ -30,7 +30,7 @@ function moneyBindInputs(scope=document){
 const getMoney = (id)=> parseBRL(document.getElementById(id)?.value || "");
 function setMoney(id,v){ const el=document.getElementById(id); if(el) el.value = (v==null? "" : formatBRL(Number(v))); }
 
-// ================== AUTH / MENU ==================
+// ================== AUTH ==================
 auth.onAuthStateChanged(async (user)=>{
   if(!user) return location.href="login.html";
   CTX.uid = user.uid;
@@ -44,29 +44,29 @@ auth.onAuthStateChanged(async (user)=>{
       CTX.nome      = d.nome || user.email;
       document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"admin"})`;
     } else {
-      // Fallback: assume admin
       CTX.perfil = "admin";
       CTX.nome   = user.email || "Usuário";
       document.getElementById("perfilUsuario").textContent = `${CTX.nome} (admin)`;
-      console.warn("usuarios_banco não encontrado; usando perfil=admin (fallback).");
     }
   } catch (e) {
     CTX.perfil = "admin";
     CTX.nome   = user.email || "Usuário";
     document.getElementById("perfilUsuario").textContent = `${CTX.nome} (admin)`;
-    console.error("Falha ao ler usuarios_banco; usando perfil=admin (fallback).", e);
   }
 
-  montarMenuLateral(CTX.perfil);
+  montarMenuLateral(CTX.perfil);   // mantém compatibilidade (caso o HTML ainda tenha menu)
   wireUi();
   preencherAnosSelect();
   carregarGrid();
 });
 
+// ================== MENU (compat) ==================
 function montarMenuLateral(perfilBruto){
-  const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
+  const menu=document.getElementById("menuNav"); 
+  if(!menu) return;
+  // se quiser esconder o menu nesta página:
+  // menu.style.display = "none";
   const perfil=normalizarPerfil(perfilBruto);
-
   const CAT_BASE={
     "Cadastrar Gerentes":"cadastro-geral.html","Cadastrar Empresa":"cadastro-empresa.html","Agências":"agencias.html",
     "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
@@ -92,13 +92,21 @@ function montarMenuLateral(perfilBruto){
     case "assistentes": hrefs=AST; break;
     default: hrefs=[];
   }
+  menu.innerHTML = "";
   hrefs.forEach(h=>{ const a=document.createElement("a"); a.href=h; a.innerHTML=`🔹 ${LABEL[h]||h}`; menu.appendChild(a); });
 }
-// ================== UI (bindings básicos) ==================
+
+// ================== UI (bindings básicos + voltar/painel) ==================
 function wireUi(){
   document.getElementById("btnRecarregar")?.addEventListener("click", carregarGrid);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
   document.getElementById("filtroAno")?.addEventListener("change", carregarGrid);
+
+  // Botão Voltar ao painel (se existir no HTML)
+  document.getElementById("btnVoltarPainel")?.addEventListener("click", ()=>{
+    if (document.referrer) history.back();
+    else location.href = "empresas.html"; // ajuste se quiser outro destino
+  });
 
   // Modal Lançar/Editar
   const modal = document.getElementById("modalFin");
@@ -113,12 +121,9 @@ function wireUi(){
 
   // Modal Detalhes/Relatório
   const m2 = document.getElementById("modalDet");
-  const detBtn = document.getElementById("detFechar");
-  if(detBtn){ detBtn.textContent = "Voltar ao painel"; }
   document.getElementById("detFechar")?.addEventListener("click", ()=> m2.style.display="none");
   m2?.addEventListener("click", (e)=>{ if(e.target===m2) m2.style.display="none"; });
 }
-
 // Preenche select de anos (últimos 8 anos + Mais recente)
 function preencherAnosSelect(){
   const sel = document.getElementById("filtroAno");
@@ -146,7 +151,7 @@ async function carregarGrid(){
       await carregarMaisRecenteViaEmpresas();
     }else{
       const ano = parseInt(anoSel,10);
-      await carregarPorAnoViaCollectionGroup(ano);
+      await carregarPorAnoViaCollectionGroup(ano); // versão reforçada (busca nome quando faltar)
     }
     renderTabela(LISTA);
     updateStatus(LISTA);
@@ -199,10 +204,9 @@ async function montarLinhasMaisRecente(snap){
     });
   });
 
-  // Fallback: se faltou “último ano”/valores, consulta subcoleção e corrige
+  // Fallback: se faltou “último ano”/valores, consulta subcoleção e corrige (limita leituras)
   const NEED_FIX = arr.filter(x => !x.ano || x.receita==null || x.ebitda==null);
-  const LIMIT_FIX = 100; // evita excesso de leituras
-  await Promise.all(NEED_FIX.slice(0, LIMIT_FIX).map(async (it)=>{
+  await Promise.all(NEED_FIX.slice(0, 100).map(async (it)=>{
     try{
       const sub = await db.collection("empresas").doc(it.empresaId).collection("financeiro").orderBy("ano","desc").limit(1).get();
       if(!sub.empty){
@@ -223,9 +227,9 @@ async function montarLinhasMaisRecente(snap){
   LISTA = arr;
 }
 
-// Visão por ano — collectionGroup('financeiro')
+// Visão por ano — collectionGroup('financeiro') COM FALLBACKS DE NOME/ID (CORRIGE "ficar em branco")
 async function carregarPorAnoViaCollectionGroup(ano){
-  let q = db.collectionGroup("financeiro").where("ano","==",ano);
+  let q = db.collectionGroup("financeiro").where("ano","==",Number(ano));
   if (CTX.perfil === "rm" && CTX.uid){
     q = q.where("rmUid","==",CTX.uid);
   } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
@@ -235,16 +239,23 @@ async function carregarPorAnoViaCollectionGroup(ano){
   const snap = await q.limit(2000).get();
   if (snap.empty){ LISTA = []; return; }
 
-  const arr=[];
+  const arr=[]; const pendentesFetchNome=[];
   snap.forEach(doc=>{
     const d = doc.data()||{};
-    if(d.empresaId && d.empresaNome) {
-      EMPRESAS_CACHE.set(d.empresaId, { id:d.empresaId, nome:d.empresaNome, rmUid:d.rmUid||null, agenciaId:d.agenciaId||null });
+    const empresaRef = doc.ref.parent.parent;
+    const empresaId = d.empresaId || (empresaRef ? empresaRef.id : null);
+    let empresaNome = d.empresaNome || null;
+
+    if (empresaId && !empresaNome) pendentesFetchNome.push(empresaId);
+
+    if (empresaId && !EMPRESAS_CACHE.has(empresaId)){
+      EMPRESAS_CACHE.set(empresaId, { id:empresaId, nome:empresaNome||"Empresa", rmUid:(d.rmUid||null), agenciaId:(d.agenciaId||null) });
     }
+
     arr.push({
-      empresaId: d.empresaId || doc.ref.parent.parent?.id || null,
-      empresaNome: d.empresaNome || "Empresa",
-      ano: d.ano || ano,
+      empresaId,
+      empresaNome: empresaNome || "Empresa",
+      ano: d.ano ?? Number(ano),
       receita: d.receitaLiquida ?? null,
       ebitda: d.ebitda ?? null,
       margemEbitda: (Number.isFinite(d.ebitda) && Number.isFinite(d.receitaLiquida) && d.receitaLiquida>0) ? d.ebitda/d.receitaLiquida : (d.margemEbitda ?? null),
@@ -255,8 +266,34 @@ async function carregarPorAnoViaCollectionGroup(ano){
       origem: "anual"
     });
   });
+
+  // Busca nomes faltantes (até 100 para não estourar leituras)
+  const uniq = [...new Set(pendentesFetchNome)].slice(0,100);
+  await Promise.all(uniq.map(async (id)=>{
+    try{
+      const ds = await db.collection("empresas").doc(id).get();
+      if(ds.exists){
+        const de = ds.data()||{};
+        const nome = de.nome || de.razaoSocial || de.fantasia || "Empresa";
+        EMPRESAS_CACHE.set(id, { id, nome, rmUid:(de.rmUid||de.rm||null), agenciaId:(de.agenciaId||de.agenciaid||null) });
+        arr.filter(x=>x.empresaId===id).forEach(x=> x.empresaNome = nome);
+      }
+    }catch(e){ console.warn("Falhou buscar nome da empresa", id, e); }
+  }));
+
   arr.sort((a,b)=> String(a.empresaNome).localeCompare(String(b.empresaNome),'pt',{sensitivity:'base'}));
   LISTA = arr;
+}
+
+// ================== SEMÁFORO (verde/amarelo/vermelho) ==================
+function clsByIndicador(tipo, v){
+  if(!Number.isFinite(v)) return 'chip amarelo'; // desconhecido -> atenção
+  switch(tipo){
+    case 'margem':   return (v < 0.04) ? 'chip vermelho' : (v < 0.08 ? 'chip amarelo' : 'chip verde');
+    case 'alav':     return (v > 3.5)  ? 'chip vermelho' : (v >= 1.5 ? 'chip amarelo' : 'chip verde');
+    case 'liq':      return (v < 1.0)  ? 'chip vermelho' : (v < 1.2 ? 'chip amarelo' : 'chip verde');
+    default:         return 'chip amarelo';
+  }
 }
 
 // ================== RENDER / FILTRO / STATUS ==================
@@ -276,10 +313,10 @@ function renderTabela(lista){
       <td class="hide-sm">${it.ano ?? "—"}</td>
       <td class="hide-sm">${toBRL(it.receita)}</td>
       <td>${toBRL(it.ebitda)}</td>
-      <td class="hide-sm">${toPct(it.margemEbitda)}</td>
+      <td class="hide-sm"><span class="${clsByIndicador('margem', it.margemEbitda)}">${toPct(it.margemEbitda)}</span></td>
       <td class="hide-sm">${toBRL(it.dividaLiquida)}</td>
-      <td class="hide-sm">${Number.isFinite(it.alavancagem) ? clamp2(it.alavancagem) : "—"}</td>
-      <td class="hide-sm">${Number.isFinite(it.liquidez) ? clamp2(it.liquidez) : "—"}</td>
+      <td class="hide-sm"><span class="${clsByIndicador('alav', it.alavancagem)}">${Number.isFinite(it.alavancagem) ? clamp2(it.alavancagem) : "—"}</span></td>
+      <td class="hide-sm"><span class="${clsByIndicador('liq', it.liquidez)}">${Number.isFinite(it.liquidez) ? clamp2(it.liquidez) : "—"}</span></td>
       <td class="sticky-right">${renderSelo(it.selo)}</td>
       <td class="hide-sm">
         <button class="btn" data-edit="${it.empresaId}" data-ano="${it.ano ?? ""}">Lançar/Editar</button>
@@ -353,7 +390,7 @@ function abrirModalFin(empresaId, anoStr){
 
   moneyBindInputs(document.getElementById("modalFin"));
 
-  // carrega dados se já existir para o ano
+  // carrega dados do ano (se houver)
   if(Number.isFinite(ANO_ALVO)){
     document.getElementById("finAno").value = ANO_ALVO;
     db.collection("empresas").doc(EMPRESA_ALVO.id).collection("financeiro").doc(String(ANO_ALVO)).get().then(doc=>{
@@ -421,15 +458,13 @@ async function salvarFinanceiro(){
 
   // Indicadores adicionais
   const custoVendas    = (Number.isFinite(receita) && Number.isFinite(lucroBruto)) ? (receita - lucroBruto) : null;
-  const giroEstoque    = safeDiv(custoVendas, estoques);             // vezes/ano
-  const diasEstoque    = (giroEstoque ? (365 / giroEstoque) : null); // dias
-  const pmrDias        = (safeDiv(cr, receita) ? (safeDiv(cr, receita) * 365) : null); // Prazo Médio Recebimento
-  const pmpDias        = (safeDiv(cp, custoVendas) ? (safeDiv(cp, custoVendas) * 365) : null); // Prazo Médio Pagamento
+  const giroEstoque    = safeDiv(custoVendas, estoques);
+  const diasEstoque    = (giroEstoque ? (365 / giroEstoque) : null);
+  const pmrDias        = (safeDiv(cr, receita) ? (safeDiv(cr, receita) * 365) : null);
+  const pmpDias        = (safeDiv(cp, custoVendas) ? (safeDiv(cp, custoVendas) * 365) : null);
   const cicloFinanceiro= (Number.isFinite(pmrDias) || Number.isFinite(diasEstoque) || Number.isFinite(pmpDias))
                           ? ( (pmrDias||0) + (diasEstoque||0) - (pmpDias||0) ) : null;
 
-  const margemBrutaPct   = margemBruta;
-  const margemLiquidaPct = margemLiquida;
   const roe              = safeDiv(lucroLiq, pl);
   const roa              = safeDiv(lucroLiq, ativo);
   const giroAtivos       = safeDiv(receita, ativo);
@@ -458,7 +493,7 @@ async function salvarFinanceiro(){
       proLaboreTotalAnual: proLabore,
       qtdSocios: qtdSocios,
 
-      // novos campos base
+      // base p/ indicadores
       patrimonioLiquido: pl,
       ativoTotal: ativo,
 
@@ -469,9 +504,6 @@ async function salvarFinanceiro(){
 
       // adicionais
       custoVendas, giroEstoque, diasEstoque, pmrDias, pmpDias, cicloFinanceiro,
-
-      margemBrutaPct: margemBrutaPct,
-      margemLiquidaPct: margemLiquidaPct,
       roe, roa, giroAtivos, alavFinanceira, endividLiqSobrePL,
       capitalDeGiro, ncgSobreReceita,
 
@@ -522,6 +554,7 @@ async function recomputarMaisRecente(empresaRef){
     ultimoSeloRisco: selo
   }, { merge:true });
 }
+
 // ================== REGRAS (sinais + selo) ==================
 function avaliarSinais({ margemEbitda, alavancagem, liquidez }){
   const op  = (margemEbitda==null) ? "amarelo" : (margemEbitda < 0.04 ? "vermelho" : (margemEbitda < 0.08 ? "amarelo" : "verde"));
@@ -538,7 +571,7 @@ function consolidarSelo(s){
   return "verde";
 }
 
-// ================== RELATÓRIO (Modal + Gráficos) ==================
+// ================== RELATÓRIO (Modal + Gráficos + Exportar PDF) ==================
 let chart1=null, chart2=null, chart3=null, chart4=null, chart5=null;
 
 async function abrirRelatorio(empresaId){
@@ -582,7 +615,7 @@ async function abrirRelatorio(empresaId){
       });
     });
 
-    // ------ GRÁFICOS COMPACTOS ------
+    // ------ GRÁFICOS ------
     rows.sort((a,b)=> a.ano - b.ano);
     const labels = rows.map(r=> String(r.ano));
     const receita = rows.map(r=> r.receita ?? null);
@@ -598,7 +631,6 @@ async function abrirRelatorio(empresaId){
 
     const commonOpts = { responsive:true, maintainAspectRatio:true, aspectRatio: 2 };
 
-    // Receita x EBITDA
     chart1 = new Chart(document.getElementById("chartReceitaEbitda").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -613,7 +645,6 @@ async function abrirRelatorio(empresaId){
       }
     });
 
-    // Margem EBITDA
     chart2 = new Chart(document.getElementById("chartMargem").getContext("2d"), {
       type: "bar",
       data: { labels, datasets: [{ label:"Margem EBITDA (%)", data: margem, borderWidth:1 }] },
@@ -624,7 +655,6 @@ async function abrirRelatorio(empresaId){
       }
     });
 
-    // DL/EBITDA x Liquidez
     chart3 = new Chart(document.getElementById("chartAlavancagemLiquidez").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -647,7 +677,6 @@ async function abrirRelatorio(empresaId){
       }
     });
 
-    // NOVO: ROE (%) e ROA (%)
     chart4 = new Chart(document.getElementById("chartRentab").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -664,7 +693,6 @@ async function abrirRelatorio(empresaId){
       }
     });
 
-    // NOVO: DL/PL (x) e Alav. (Ativo/PL) (x)
     chart5 = new Chart(document.getElementById("chartEstrutura").getContext("2d"), {
       type: "line",
       data: { labels, datasets: [
@@ -681,9 +709,10 @@ async function abrirRelatorio(empresaId){
       }
     });
 
-    // ------ TABELA DETALHADA (linhas por ano) ------
+    // Tabela detalhada (linhas por ano)
     rows.sort((a,b)=> b.ano - a.ano);
-    tbody.innerHTML="";
+    const tbody2 = document.getElementById("detTbody");
+    tbody2.innerHTML="";
     for(let i=0;i<rows.length;i++){
       const r = rows[i];
       const nxt = rows[i+1] || null;
@@ -711,9 +740,9 @@ async function abrirRelatorio(empresaId){
         <td>${renderDeltaNum(dLiq)}</td>
         <td><button class="btn outline" data-editano="${r.ano}" data-editempresa="${base.id}">Editar</button></td>
       `;
-      tbody.appendChild(tr);
+      tbody2.appendChild(tr);
     }
-    tbody.querySelectorAll("[data-editano]").forEach(btn=>{
+    tbody2.querySelectorAll("[data-editano]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const ano = btn.getAttribute("data-editano");
         const emp = btn.getAttribute("data-editempresa");
@@ -722,20 +751,40 @@ async function abrirRelatorio(empresaId){
       });
     });
 
-    // ------ ANÁLISE AUTOMÁTICA + VISÃO TRANSPOSTA ------
+    // Resumo + visão transposta
     const analise = gerarAnalise(rows);
     const transposta = montarTransposta(rows);
     document.getElementById("detResumo").innerHTML = analise + transposta;
 
+    // Exportar PDF (se o botão existir no HTML)
+    const btnPDF = document.getElementById("detPDF");
+    if(btnPDF){
+      btnPDF.onclick = ()=>{
+        if (window.html2pdf){
+          const box = document.querySelector("#modalDet .box");
+          const nome = (document.getElementById("detEmpresaAlvo")?.textContent || "relatorio").replace(/\s+/g,'_');
+          const opt = {
+            margin:8, filename:`${nome}.pdf`,
+            image:{ type:'jpeg', quality:0.98 },
+            html2canvas:{ scale:2, useCORS:true },
+            jsPDF:{ unit:'mm', format:'a4', orientation:'portrait' }
+          };
+          html2pdf().set(opt).from(box).save();
+        }else{
+          alert("Biblioteca html2pdf não encontrada. Inclua o bundle no HTML.");
+        }
+      };
+    }
+
   }catch(e){
     console.error(e);
-    tbody.innerHTML = `<tr><td colspan="14" class="muted">Erro ao carregar (${e.message}).</td></tr>`;
+    document.getElementById("detTbody").innerHTML = `<tr><td colspan="14" class="muted">Erro ao carregar (${e.message}).</td></tr>`;
   }
 
   document.getElementById("modalDet").style.display = "block";
 }
 
-// Resumo executivo (bullets)
+// Resumo executivo
 function gerarAnalise(rowsDesc){
   if(rowsDesc.length<1) return "";
   const a = rowsDesc[0], b = rowsDesc[1] || null;
@@ -759,7 +808,6 @@ function gerarAnalise(rowsDesc){
     bullets.push(`Ciclo Financeiro: ${pp(a.ciclo)} dias ${a.ciclo>60?"(longo — trava caixa)":a.ciclo<0?"(negativo — ótimo)":"."}`);
   }
 
-  // Novos indicadores
   if(Number.isFinite(a.roe)) bullets.push(`ROE: ${pp(a.roe*100)}% ${a.roe<0.10?"(baixo)":a.roe>0.20?"(excelente)":"(ok)"}.`);
   if(Number.isFinite(a.roa)) bullets.push(`ROA: ${pp(a.roa*100)}%.`);
   if(Number.isFinite(a.giroAtv)) bullets.push(`Giro de Ativos: ${pp(a.giroAtv)}x.`);
@@ -792,8 +840,6 @@ function montarTransposta(rowsDesc){
     ["PMR (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmr)? clamp2(r.pmr):"—")],
     ["PMP (dias)", ...rowsDesc.map(r=> Number.isFinite(r.pmp)? clamp2(r.pmp):"—")],
     ["Ciclo Financeiro (dias)", ...rowsDesc.map(r=> Number.isFinite(r.ciclo)? clamp2(r.ciclo):"—")],
-
-    // novos indicadores:
     ["ROE (Lucro/PL)", ...rowsDesc.map(r=> Number.isFinite(r.roe)? toPct(r.roe):"—")],
     ["ROA (Lucro/Ativo)", ...rowsDesc.map(r=> Number.isFinite(r.roa)? toPct(r.roa):"—")],
     ["Giro de Ativos (x)", ...rowsDesc.map(r=> Number.isFinite(r.giroAtv)? clamp2(r.giroAtv):"—")],
@@ -845,3 +891,36 @@ function destroyCharts(){
   try{ chart5 && chart5.destroy(); }catch{}
   chart1=chart2=chart3=chart4=chart5=null;
 }
+
+// ================== TOOLTIPS "i" (balão custom) ==================
+let _tipEl=null, _tipTimer=null;
+function showTip(e, text){
+  hideTip();
+  _tipEl = document.createElement('div');
+  _tipEl.className='tooltip';
+  _tipEl.textContent = text;
+  document.body.appendChild(_tipEl);
+  const r = e.target.getBoundingClientRect();
+  const x = r.left + (r.width/2);
+  const y = r.bottom + 8;
+  // centraliza e evita sair da tela
+  _tipEl.style.left = Math.max(8, Math.min(window.innerWidth-8-_tipEl.offsetWidth, x - _tipEl.offsetWidth/2)) + 'px';
+  _tipEl.style.top  = y + 'px';
+}
+function hideTip(){
+  if(_tipEl){ _tipEl.remove(); _tipEl=null; }
+}
+document.addEventListener('mouseover', (ev)=>{
+  const t = ev.target.closest('.pill');
+  if(!t) return;
+  const txt = t.getAttribute('title') || '';
+  if(!txt) return;
+  _tipTimer = setTimeout(()=> showTip(ev, txt), 120);
+});
+document.addEventListener('mouseout', (ev)=>{
+  if(_tipTimer){ clearTimeout(_tipTimer); _tipTimer=null; }
+  if(!ev.relatedTarget || !ev.relatedTarget.closest('.tooltip')) hideTip();
+});
+document.addEventListener('click', (ev)=>{
+  if(!ev.target.closest('.tooltip') && !ev.target.closest('.pill')) hideTip();
+});
