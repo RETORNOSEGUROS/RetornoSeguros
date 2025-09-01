@@ -1,6 +1,3 @@
-perfeito! aqui está o js/financeiro.js completo, já com os mini-gráficos (ROE/ROA e DL/PL + Alav. Financeira), todos os indicadores e os ajustes anteriores:
-
-// js/financeiro.js — Painel + Lançamento + Relatório (Firebase v8 + Chart.js)
 // ================== BOOT ==================
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -38,13 +35,27 @@ auth.onAuthStateChanged(async (user)=>{
   if(!user) return location.href="login.html";
   CTX.uid = user.uid;
 
-  const prof = await db.collection("usuarios_banco").doc(user.uid).get();
-  if(!prof.exists){ document.getElementById("perfilUsuario").textContent="Usuário não encontrado"; return; }
-  const d = prof.data();
-  CTX.perfil    = normalizarPerfil(d.perfil || "");
-  CTX.agenciaId = d.agenciaId || d.agenciaid || null;
-  CTX.nome      = d.nome || user.email;
-  document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
+  try {
+    const prof = await db.collection("usuarios_banco").doc(user.uid).get();
+    if (prof.exists) {
+      const d = prof.data() || {};
+      CTX.perfil    = normalizarPerfil(d.perfil || "admin");
+      CTX.agenciaId = d.agenciaId || d.agenciaid || null;
+      CTX.nome      = d.nome || user.email;
+      document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"admin"})`;
+    } else {
+      // Fallback: assume admin
+      CTX.perfil = "admin";
+      CTX.nome   = user.email || "Usuário";
+      document.getElementById("perfilUsuario").textContent = `${CTX.nome} (admin)`;
+      console.warn("usuarios_banco não encontrado; usando perfil=admin (fallback).");
+    }
+  } catch (e) {
+    CTX.perfil = "admin";
+    CTX.nome   = user.email || "Usuário";
+    document.getElementById("perfilUsuario").textContent = `${CTX.nome} (admin)`;
+    console.error("Falha ao ler usuarios_banco; usando perfil=admin (fallback).", e);
+  }
 
   montarMenuLateral(CTX.perfil);
   wireUi();
@@ -83,8 +94,7 @@ function montarMenuLateral(perfilBruto){
   }
   hrefs.forEach(h=>{ const a=document.createElement("a"); a.href=h; a.innerHTML=`🔹 ${LABEL[h]||h}`; menu.appendChild(a); });
 }
-
-// ================== UI ==================
+// ================== UI (bindings básicos) ==================
 function wireUi(){
   document.getElementById("btnRecarregar")?.addEventListener("click", carregarGrid);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
@@ -122,7 +132,7 @@ function preencherAnosSelect(){
   }
 }
 
-// ================== CARREGAMENTO PRINCIPAL ==================
+// ================== CARREGAMENTO PRINCIPAL (GRID) ==================
 async function carregarGrid(){
   const status = document.getElementById("statusLista");
   const tbody = document.getElementById("tbodyFin");
@@ -141,7 +151,7 @@ async function carregarGrid(){
     renderTabela(LISTA);
     updateStatus(LISTA);
   }catch(e){
-    console.error(e);
+    console.error("[carregarGrid] erro:", e);
     status.textContent = "Erro ao carregar lista.";
     renderTabela([]);
   }finally{
@@ -151,7 +161,7 @@ async function carregarGrid(){
   }
 }
 
-// Visão rápida — usa denormalizados na raiz de empresas (+ fallback)
+// Visão rápida — usa denormalizados na raiz de empresas (+ fallback na subcoleção)
 async function carregarMaisRecenteViaEmpresas(){
   let q = db.collection("empresas");
   if (CTX.perfil === "rm" && CTX.uid){
@@ -191,7 +201,7 @@ async function montarLinhasMaisRecente(snap){
 
   // Fallback: se faltou “último ano”/valores, consulta subcoleção e corrige
   const NEED_FIX = arr.filter(x => !x.ano || x.receita==null || x.ebitda==null);
-  const LIMIT_FIX = 100;
+  const LIMIT_FIX = 100; // evita excesso de leituras
   await Promise.all(NEED_FIX.slice(0, LIMIT_FIX).map(async (it)=>{
     try{
       const sub = await db.collection("empresas").doc(it.empresaId).collection("financeiro").orderBy("ano","desc").limit(1).get();
@@ -312,7 +322,6 @@ function updateStatus(lista){
   const status = document.getElementById("statusLista");
   status.textContent = `${totalEmpresas} empresa(s) no filtro · Receita total: ${toBRL(somaReceita)} · EBITDA total: ${toBRL(somaEbitda)} · % EBITDA média: ${toPct(mediaMargem)}`;
 }
-
 // ================== PERMISSÃO UI ==================
 function podeEditarEmpresa(empresaId){
   if(CTX.perfil === "admin") return true;
@@ -337,12 +346,14 @@ function abrirModalFin(empresaId, anoStr){
   document.getElementById("finErro").textContent = "";
   document.getElementById("finInfo").textContent = "";
 
+  // limpa inputs
   ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa","finEstoques","finCR","finCP","finDespesaFin","finDistribLucro","finProLabore","finQtdSocios","finPL","finAtivo"].forEach(id=>{
     const el = document.getElementById(id); if(el) el.value = "";
   });
 
   moneyBindInputs(document.getElementById("modalFin"));
 
+  // carrega dados se já existir para o ano
   if(Number.isFinite(ANO_ALVO)){
     document.getElementById("finAno").value = ANO_ALVO;
     db.collection("empresas").doc(EMPRESA_ALVO.id).collection("financeiro").doc(String(ANO_ALVO)).get().then(doc=>{
@@ -474,7 +485,7 @@ async function salvarFinanceiro(){
       agenciaId: EMPRESA_ALVO.agenciaId || null
     }, { merge:true });
 
-    // -> recalcula "Mais recente" olhando a subcoleção (garante 2023 > 2022 etc)
+    // garante “mais recente” baseado no MAIOR ano existente
     await recomputarMaisRecente(empresaRef);
 
     info.textContent = "Lançamento salvo com sucesso!";
@@ -511,7 +522,6 @@ async function recomputarMaisRecente(empresaRef){
     ultimoSeloRisco: selo
   }, { merge:true });
 }
-
 // ================== REGRAS (sinais + selo) ==================
 function avaliarSinais({ margemEbitda, alavancagem, liquidez }){
   const op  = (margemEbitda==null) ? "amarelo" : (margemEbitda < 0.04 ? "vermelho" : (margemEbitda < 0.08 ? "amarelo" : "verde"));
@@ -528,7 +538,7 @@ function consolidarSelo(s){
   return "verde";
 }
 
-// ================== RELATÓRIO (Modal) ==================
+// ================== RELATÓRIO (Modal + Gráficos) ==================
 let chart1=null, chart2=null, chart3=null, chart4=null, chart5=null;
 
 async function abrirRelatorio(empresaId){
@@ -725,8 +735,8 @@ async function abrirRelatorio(empresaId){
   document.getElementById("modalDet").style.display = "block";
 }
 
+// Resumo executivo (bullets)
 function gerarAnalise(rowsDesc){
-  // rowsDesc deve estar DESC (já está)
   if(rowsDesc.length<1) return "";
   const a = rowsDesc[0], b = rowsDesc[1] || null;
   const pp = (x)=> Number.isFinite(x)? x.toLocaleString("pt-BR",{maximumFractionDigits:1}) : "—";
@@ -766,6 +776,7 @@ function gerarAnalise(rowsDesc){
     </div>`;
 }
 
+// Visão transposta — todos os anos lado a lado
 function montarTransposta(rowsDesc){
   const anos = rowsDesc.map(r=> r.ano);
   const linhas = [
@@ -804,9 +815,19 @@ function montarTransposta(rowsDesc){
     </div>`;
 }
 
-// Deltas visuais
-function renderDeltaMoeda(v){ if(v==null) return `<span class="delta neu">—</span>`; const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu"); return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${toBRL(Math.abs(v))}</span>`; }
-function renderDeltaPct(v){ if(v==null) return `<span class="delta neu">—</span>`; const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu"); const pct = (v*100); const str = (Number.isFinite(pct)? pct.toLocaleString("pt-BR",{maximumFractionDigits:1})+" p.p." : "—"); return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${str}</span>`; }
+// ================== HELPERS DE DELTAS E CHART ==================
+function renderDeltaMoeda(v){
+  if(v==null) return `<span class="delta neu">—</span>`;
+  const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu");
+  return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${toBRL(Math.abs(v))}</span>`;
+}
+function renderDeltaPct(v){
+  if(v==null) return `<span class="delta neu">—</span>`;
+  const cls = v>0 ? "pos" : (v<0 ? "neg" : "neu");
+  const pct = (v*100);
+  const str = (Number.isFinite(pct)? pct.toLocaleString("pt-BR",{maximumFractionDigits:1})+" p.p." : "—");
+  return `<span class="delta ${cls}">${v>0? "↑":"↓"} ${str}</span>`;
+}
 function renderDeltaNum(v, invert=false){
   if(v==null) return `<span class="delta neu">—</span>`;
   const good = invert ? (v<0) : (v>0);
@@ -816,7 +837,6 @@ function renderDeltaNum(v, invert=false){
   const val = Number.isFinite(v)? clamp2(Math.abs(v)) : "—";
   return `<span class="delta ${cls}">${arrow} ${val}</span>`;
 }
-
 function destroyCharts(){
   try{ chart1 && chart1.destroy(); }catch{}
   try{ chart2 && chart2.destroy(); }catch{}
