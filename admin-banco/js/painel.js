@@ -1,4 +1,4 @@
-// admin-banco/js/painel.js — SaaS + KPIs + persistência mobile
+// admin-banco/js/painel.js — Painel (menu + KPIs + listas) — Retorno Seguros
 
 // ==== Firebase base ====
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
@@ -93,7 +93,7 @@ async function initAuth() {
       } else {
         const elPerfil = document.getElementById("perfilUsuario");
         if (elPerfil) elPerfil.textContent = "Usuário sem perfil cadastrado";
-        console.error("Perfil não encontrado e e‑mail não é admin fallback.");
+        console.error("Perfil não encontrado e e-mail não é admin fallback.");
         return;
       }
     }
@@ -113,7 +113,8 @@ async function initAuth() {
   });
 }
 
-// ==== Menu lateral (SaaS: grupos + ícones + perfis) ====
+// ==== Menu lateral (grupos + ícones emoji + perfis) ====
+// Solicitação: usar o estilo minimalista com emojis e incluir "Financeiro" para TODOS os perfis
 function montarMenuLateral(perfilBruto){
   const nav = document.getElementById("menuNav");
   if(!nav) return;
@@ -121,23 +122,24 @@ function montarMenuLateral(perfilBruto){
 
   const perfil = normalizarPerfil(perfilBruto);
 
-  // Ícones (Heroicons outline simplificados)
+  // Ícones no estilo solicitado (emojis + text-slate-400)
   const ICON = {
-    gerentes:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 12a3 3 0 10-6 0 3 3 0 006 0Zm6 8a6 6 0 10-12 0h12ZM4 6h16M4 10h8"/></svg>`,
-    empresa:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l7-7 7 7-7 7-7-7z"/></svg>`,
-    agencia:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/></svg>`,
-    agenda:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12z"/></svg>`,
-    visitas:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 20h9M3 12l7-7 7 7"/></svg>`,
-    cotacao:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h8M8 16h5M7 3h10l4 4v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>`,
-    producao:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>`,
-    dicas:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9V3m0 18v-6m-7-3h14"/></svg>`,
-    ramos:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg>`,
-    rel:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM7 13l3 3 7-7"/></svg>`,
-    venc:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
-    func:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 20h5V4H2v16h5m5 0v-6h4v6"/></svg>`,
-    carteira:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18v10H3zM16 12h5"/></svg>`,
-    comissoes:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 11V3h2v8h8v2h-8v8h-2v-8H3v-2z"/></svg>`,
-    resgates:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 9V7a5 5 0 00-10 0v2H5v12h14V9h-2z"/></svg>`
+    gerentes:`<span class="text-slate-400">👤</span>`,
+    empresa:`<span class="text-slate-400">🏢</span>`,
+    agencia:`<span class="text-slate-400">🏦</span>`,
+    agenda:`<span class="text-slate-400">📅</span>`,
+    visitas:`<span class="text-slate-400">📌</span>`,
+    cotacao:`<span class="text-slate-400">📄</span>`,
+    producao:`<span class="text-slate-400">📈</span>`,
+    dicas:`<span class="text-slate-400">💡</span>`,
+    ramos:`<span class="text-slate-400">🧩</span>`,
+    rel:`<span class="text-slate-400">📊</span>`,
+    venc:`<span class="text-slate-400">⏰</span>`,
+    func:`<span class="text-slate-400">🧍</span>`,
+    carteira:`<span class="text-slate-400">👛</span>`,
+    comissoes:`<span class="text-slate-400">💵</span>`,
+    resgates:`<span class="text-slate-400">🔐</span>`,
+    financeiro:`<span class="text-slate-400">💳</span>`
   };
 
   const GRUPOS = [
@@ -153,6 +155,7 @@ function montarMenuLateral(perfilBruto){
       ["Visitas","visitas.html",ICON.visitas],
       ["Solicitações de Cotação","cotacoes.html",ICON.cotacao],
       ["Produção","negocios-fechados.html",ICON.producao],
+      ["Financeiro","financeiro.html",ICON.financeiro], // <= NOVO para todos
       ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
       ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
     ]},
@@ -170,9 +173,20 @@ function montarMenuLateral(perfilBruto){
 
   const ROTAS_POR_PERFIL = {
     "admin": new Set([...GRUPOS.flatMap(g=>g.itens.map(i=>i[1]))]),
-    "rm": new Set(["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"]),
-    "gerente chefe": new Set(["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"]),
-    "assistente": new Set(["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"])
+    "rm": new Set([
+      "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
+      "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
+      "vencimentos.html","funcionarios.html","financeiro.html"
+    ]),
+    "gerente chefe": new Set([
+      "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
+      "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
+      "vencimentos.html","funcionarios.html","financeiro.html"
+    ]),
+    "assistente": new Set([
+      "agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html",
+      "funcionarios.html","financeiro.html"
+    ])
   };
   const perfilKey = ["gerente chefe","gerente-chefe","gerente_chefe"].includes(perfil) ? "gerente chefe" : perfil;
   const pode = ROTAS_POR_PERFIL[perfilKey] || new Set();
@@ -205,6 +219,7 @@ function montarMenuLateral(perfilBruto){
 }
 
 // ==== KPIs (topo) ====
+// Alterado: Produção (emissão) agora soma o prêmio do ANO CORRENTE (status "Negócio Emitido")
 async function carregarKPIs(){
   // Empresas
   try{
@@ -234,18 +249,32 @@ async function carregarKPIs(){
     const el = document.getElementById("kpiCotacoes"); if(el) el.textContent = String(s.size);
   }catch(e){}
 
-  // Produção (status "negocio emitido")
+  // Produção (emissão) — soma do prêmio no ano atual
   try{
-    let q = db.collection("cotacoes-gerentes");
+    const ano = new Date().getFullYear();
+    const ini = new Date(ano,0,1);
+    const fim = new Date(ano+1,0,1);
+
+    // usa data de criação ou vigência inicial como proxy de ano
+    let q = db.collection("cotacoes-gerentes")
+      .where("dataCriacao", ">=", ini)
+      .where("dataCriacao", "<",  fim);
+
     if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
     else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
+
     const s = await q.get();
-    let tot = 0;
+    let total = 0;
     s.forEach(doc=>{
-      const st = String(doc.data().status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
-      if(st==="negocio emitido") tot++;
+      const d = doc.data();
+      const st = String(d.status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+      if(st === "negocio emitido"){
+        const v = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
+        total += parseValor(v);
+      }
     });
-    const el = document.getElementById("kpiProducao"); if(el) el.textContent = String(tot);
+    const el = document.getElementById("kpiProducao");
+    if(el) el.textContent = fmtBRL(total);
   }catch(e){}
 }
 
@@ -340,7 +369,7 @@ async function blocoMinhasVisitas(){
   }
 }
 
-// 3) Produção (emitidos)
+// 3) Produção (emitidos) — inclui “vigência inicial”
 async function blocoProducao(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
@@ -371,20 +400,26 @@ async function blocoProducao(){
   });
 }
 
-// 4) Minhas Cotações
+// 4) Minhas Cotações — últimas 5 com fallback de datas
 async function blocoMinhasCotacoes(){
   let q = db.collection("cotacoes-gerentes");
   if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
   else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
 
-  const snap = await q.limit(10).get();
+  const snap = await q.limit(100).get();
   const ul = document.getElementById("listaCotacoes"); if(!ul) return; ul.innerHTML="";
   if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
 
-  const docs=snap.docs.sort((a,b)=> (toDate(b.data().dataCriacao)||0)-(toDate(a.data().data)||0)).slice(0,5);
+  const ord = (d)=>{
+    const x=d.data();
+    return toDate(x.ultimaAtualizacao) || toDate(x.atualizadoEm) ||
+           toDate(x.dataCriacao) || toDate(x.data) || new Date(0);
+  };
+  const docs = snap.docs.sort((a,b)=> ord(b)-ord(a)).slice(0,5);
+
   docs.forEach(doc=>{
     const d=doc.data();
-    const valor = d.valorFinal ?? d.valorDesejado ?? 0;
+    const valor = d.valorFinal ?? d.valorDesejado ?? d.premio ?? 0;
     ul.innerHTML += `
       <li class="row">
         <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
