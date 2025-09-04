@@ -8,9 +8,7 @@ const db   = firebase.firestore();
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 
 // Admins por e-mail (fallback quando não há usuarios_banco/{uid})
-const ADMIN_EMAILS = [
-  "patrick@retornoseguros.com.br"
-];
+const ADMIN_EMAILS = [ "patrick@retornoseguros.com.br" ];
 
 // ==== Utils ====
 const normalizarPerfil = (p)=>String(p||"")
@@ -28,6 +26,7 @@ const parseValor = (v)=>{
     .replace(/[^0-9,.-]/g,"")
     .replace(/\.(?=\d{3}(\D|$))/g,"")
     .replace(",",".");
+
   const n = parseFloat(limp);
   return Number.isFinite(n) ? n : 0;
 };
@@ -43,7 +42,7 @@ function skeleton(id, n=4){
   }
 }
 
-// ==== Persistência (resolve sessão no mobile/Safari) ====
+// ==== Persistência ====
 async function ensurePersistence() {
   try {
     await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
@@ -58,11 +57,10 @@ async function ensurePersistence() {
   }
 }
 
-// ==== Auth + contexto (com failback e fallback admin) ====
+// ==== Auth + contexto ====
 async function initAuth() {
   await ensurePersistence();
 
-  // Evita “tela travada” caso o navegador bloqueie storage
   const failback = setTimeout(() => {
     if (!auth.currentUser) location.href = "login.html";
   }, 5000);
@@ -73,48 +71,78 @@ async function initAuth() {
 
     CTX.uid = user.uid;
 
-    // tenta carregar perfil normal
     let snap = null;
     try { snap = await db.collection("usuarios_banco").doc(user.uid).get(); }
     catch(e){ console.warn("Erro lendo usuarios_banco:", e?.message); }
 
     if (!snap || !snap.exists) {
-      // fallback admin por e-mail
       if (ADMIN_EMAILS.includes((user.email||"").toLowerCase())) {
         CTX.perfil    = "admin";
         CTX.agenciaId = null;
         CTX.nome      = user.email || "admin";
-        const elPerfil = document.getElementById("perfilUsuario");
-        if (elPerfil) elPerfil.textContent = `${CTX.nome} (admin — fallback)`;
+        atualizarTopo();
         montarMenuLateral(CTX.perfil);
-        carregarKPIs();          // KPIs
-        carregarResumoPainel();  // listas
+        carregarKPIs();
+        carregarResumoPainel();
         return;
       } else {
         const elPerfil = document.getElementById("perfilUsuario");
         if (elPerfil) elPerfil.textContent = "Usuário sem perfil cadastrado";
-        console.error("Perfil não encontrado e e-mail não é admin fallback.");
         return;
       }
     }
 
-    // perfil encontrado
     const d = snap.data();
     CTX.perfil    = normalizarPerfil(d.perfil || "");
     CTX.agenciaId = d.agenciaId || d.agenciaid || null;
     CTX.nome      = d.nome || user.email;
 
-    const elPerfil = document.getElementById("perfilUsuario");
-    if (elPerfil) elPerfil.textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
-
+    atualizarTopo();
     montarMenuLateral(CTX.perfil);
     carregarKPIs();
     carregarResumoPainel();
   });
 }
 
+function atualizarTopo(){
+  const elPerfil = document.getElementById("perfilUsuario");
+  if (elPerfil) elPerfil.textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
+  const titulo = document.getElementById("tituloSaudacao");
+  if (titulo) titulo.textContent = `Olá, ${CTX.nome}`;
+}
+
+// ==== Ajuda para buscar por perfil (inclui casos de gerente_chefe) ====
+async function getDocsPerfil(colName, limitN=0){
+  const col = db.collection(colName);
+  const perfil = CTX.perfil;
+  let snaps = [];
+
+  if(perfil==="admin"){
+    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  } else if(perfil==="rm"){
+    snaps = [ await (limitN? col.where("rmUid","==",CTX.uid).limit(limitN).get()
+                     : col.where("rmUid","==",CTX.uid).get()) ];
+  } else if(perfil==="assistente" || perfil==="gerente chefe"){
+    // ampliar para cobrir bases onde gravam por agenciaId OU gerenteChefeUid
+    const s1 = await (limitN? col.where("agenciaId","==",CTX.agenciaId).limit(limitN).get()
+                            : col.where("agenciaId","==",CTX.agenciaId).get());
+    let s2 = { forEach:()=>{}, empty:true, docs:[] };
+    try {
+      s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
+                        : col.where("gerenteChefeUid","==",CTX.uid).get());
+    } catch(e){ /* campo pode não existir em todos */ }
+    snaps = [s1,s2];
+  } else {
+    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  }
+
+  // merge simples por id
+  const map = new Map();
+  snaps.forEach(s=> s.forEach(d=> map.set(d.id,d)));
+  return Array.from(map.values());
+}
+
 // ==== Menu lateral (grupos + ícones emoji + perfis) ====
-// Solicitação: usar o estilo minimalista com emojis e incluir "Financeiro" para TODOS os perfis
 function montarMenuLateral(perfilBruto){
   const nav = document.getElementById("menuNav");
   if(!nav) return;
@@ -122,7 +150,6 @@ function montarMenuLateral(perfilBruto){
 
   const perfil = normalizarPerfil(perfilBruto);
 
-  // Ícones no estilo solicitado (emojis + text-slate-400)
   const ICON = {
     gerentes:`<span class="text-slate-400">👤</span>`,
     empresa:`<span class="text-slate-400">🏢</span>`,
@@ -132,6 +159,7 @@ function montarMenuLateral(perfilBruto){
     cotacao:`<span class="text-slate-400">📄</span>`,
     producao:`<span class="text-slate-400">📈</span>`,
     dicas:`<span class="text-slate-400">💡</span>`,
+    consultar:`<span class="text-slate-400">🔎</span>`,
     ramos:`<span class="text-slate-400">🧩</span>`,
     rel:`<span class="text-slate-400">📊</span>`,
     venc:`<span class="text-slate-400">⏰</span>`,
@@ -155,8 +183,9 @@ function montarMenuLateral(perfilBruto){
       ["Visitas","visitas.html",ICON.visitas],
       ["Solicitações de Cotação","cotacoes.html",ICON.cotacao],
       ["Produção","negocios-fechados.html",ICON.producao],
-      ["Financeiro","financeiro.html",ICON.financeiro], // <= NOVO para todos
+      ["Financeiro","financeiro.html",ICON.financeiro],
       ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
+      ["Consultar Dicas","consultar-dicas.html",ICON.consultar],   // <= NOVO
       ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
     ]},
     { titulo:"Relatórios", itens:[
@@ -176,16 +205,16 @@ function montarMenuLateral(perfilBruto){
     "rm": new Set([
       "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
       "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
-      "vencimentos.html","funcionarios.html","financeiro.html"
+      "vencimentos.html","funcionarios.html","financeiro.html","dicas-produtos.html","ramos-seguro.html"
     ]),
     "gerente chefe": new Set([
       "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
       "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
-      "vencimentos.html","funcionarios.html","financeiro.html"
+      "vencimentos.html","funcionarios.html","financeiro.html","dicas-produtos.html","ramos-seguro.html"
     ]),
     "assistente": new Set([
       "agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html",
-      "funcionarios.html","financeiro.html"
+      "funcionarios.html","financeiro.html","dicas-produtos.html"
     ])
   };
   const perfilKey = ["gerente chefe","gerente-chefe","gerente_chefe"].includes(perfil) ? "gerente chefe" : perfil;
@@ -213,68 +242,65 @@ function montarMenuLateral(perfilBruto){
   });
 
   nav.appendChild(frag);
-
-  // mostra no desktop; no mobile fica como drawer (controlado pelo HTML)
   if(window.innerWidth>=1024) nav.classList.remove("hidden");
 }
 
 // ==== KPIs (topo) ====
-// Alterado: Produção (emissão) agora soma o prêmio do ANO CORRENTE (status "Negócio Emitido")
+// Para gerente_chefe: visitas e cotações do ANO; produção já soma o ano.
 async function carregarKPIs(){
+  const perfil = CTX.perfil;
+  const ano = new Date().getFullYear();
+  const iniAno = new Date(ano,0,1);
+  const fimAno = new Date(ano+1,0,1);
+
+  // rótulos
+  const lblV = document.getElementById("lblVisitas");
+  const lblC = document.getElementById("lblCotacoes");
+  if(lblV) lblV.textContent = (perfil==="gerente chefe" ? "Visitas (ano)" : "Visitas (últ. 30d)");
+  if(lblC) lblC.textContent = (perfil==="gerente chefe" ? "Cotações (ano)" : "Cotações");
+
   // Empresas
   try{
-    let q = db.collection("empresas");
-    if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-    else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-    const s = await q.get();
-    const el = document.getElementById("kpiEmpresas"); if(el) el.textContent = String(s.size);
+    let docs = await getDocsPerfil("empresas");
+    document.getElementById("kpiEmpresas").textContent = String(docs.length);
   }catch(e){}
 
-  // Visitas últimos 30 dias
+  // Visitas
   try{
-    const d30 = new Date(); d30.setDate(d30.getDate()-30);
-    let q = db.collection("visitas").where("data",">=", d30);
-    if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-    else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-    const s = await q.get();
-    const el = document.getElementById("kpiVisitas"); if(el) el.textContent = String(s.size);
+    let docs = await getDocsPerfil("visitas");
+    if(perfil==="gerente chefe"){
+      docs = docs.filter(d=> (toDate(d.data)||new Date(0)) >= iniAno && (toDate(d.data)||new Date(0)) < fimAno);
+    } else {
+      const d30 = new Date(); d30.setDate(d30.getDate()-30);
+      docs = docs.filter(d=> (toDate(d.data)||new Date(0)) >= d30);
+    }
+    document.getElementById("kpiVisitas").textContent = String(docs.length);
   }catch(e){}
 
   // Cotações
   try{
-    let q = db.collection("cotacoes-gerentes");
-    if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-    else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-    const s = await q.get();
-    const el = document.getElementById("kpiCotacoes"); if(el) el.textContent = String(s.size);
+    let docs = await getDocsPerfil("cotacoes-gerentes");
+    if(perfil==="gerente chefe"){
+      docs = docs.filter(d=> (toDate(d.dataCriacao)||toDate(d.data)||new Date(0)) >= iniAno &&
+                              (toDate(d.dataCriacao)||toDate(d.data)||new Date(0)) <  fimAno);
+    }
+    document.getElementById("kpiCotacoes").textContent = String(docs.length);
   }catch(e){}
 
   // Produção (emissão) — soma do prêmio no ano atual
   try{
-    const ano = new Date().getFullYear();
-    const ini = new Date(ano,0,1);
-    const fim = new Date(ano+1,0,1);
-
-    // usa data de criação ou vigência inicial como proxy de ano
-    let q = db.collection("cotacoes-gerentes")
-      .where("dataCriacao", ">=", ini)
-      .where("dataCriacao", "<",  fim);
-
-    if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-    else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-
-    const s = await q.get();
+    let docs = await getDocsPerfil("cotacoes-gerentes");
     let total = 0;
-    s.forEach(doc=>{
-      const d = doc.data();
+    docs.forEach(doc=>{
+      const d = doc.data ? doc.data() : doc; // compatibilidade
       const st = String(d.status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
-      if(st === "negocio emitido"){
+      const dt = toDate(d.dataCriacao) || toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || new Date(0);
+      if(st === "negocio emitido" && dt >= iniAno && dt < fimAno){
         const v = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
         total += parseValor(v);
       }
     });
-    const el = document.getElementById("kpiProducao");
-    if(el) el.textContent = fmtBRL(total);
+    document.getElementById("kpiProducao").textContent = fmtBRL(total);
   }catch(e){}
 }
 
@@ -293,17 +319,14 @@ async function carregarResumoPainel(){
   ]);
 }
 
-// 1) Visitas Agendadas
+// 1) Visitas Agendadas (futuras; fallback 20 dias passados)
 async function blocoVisitasAgendadas(){
   const now = Date.now();
-  let q = db.collection("agenda_visitas");
-  if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-  else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
+  const docs = await getDocsPerfil("agenda_visitas");
+  const futuros = [];
 
-  const snap = await q.get();
-  const futuros=[];
-  snap.forEach(doc=>{
-    const d=doc.data();
+  docs.forEach(doc=>{
+    const d = doc.data ? doc.data() : doc;
     const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
     if(dt && !isNaN(dt) && dt.getTime()>=now) futuros.push({...d,dt});
   });
@@ -313,8 +336,8 @@ async function blocoVisitasAgendadas(){
   if(arr.length===0){
     const limite = now - 20*24*60*60*1000;
     const recentes=[];
-    snap.forEach(doc=>{
-      const d=doc.data();
+    docs.forEach(doc=>{
+      const d = doc.data ? doc.data() : doc;
       const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
       if(dt && !isNaN(dt) && dt.getTime()>=limite) recentes.push({...d,dt});
     });
@@ -322,11 +345,9 @@ async function blocoVisitasAgendadas(){
     arr=recentes.slice(0,10);
   }
 
-  const elQtd = document.getElementById("qtdVA");
-  if(elQtd) elQtd.textContent = String(arr.length);
+  document.getElementById("qtdVA").textContent = String(arr.length);
 
   const ul=document.getElementById("listaVisitasAgendadas");
-  if(!ul) return;
   ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
   arr.forEach(v=>{
     ul.innerHTML += `
@@ -337,16 +358,13 @@ async function blocoVisitasAgendadas(){
   });
 }
 
-// 2) Minhas Visitas
+// 2) Minhas Visitas (últimas 5)
 async function blocoMinhasVisitas(){
-  let q = db.collection("visitas");
-  if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-  else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
+  const docs = await getDocsPerfil("visitas");
+  const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
+  if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
 
-  const snap = await q.limit(50).get();
-  const ul = document.getElementById("listaVisitas"); if(!ul) return; ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
-
+  // resolver nome da empresa
   const cacheEmp=new Map();
   const getEmpresaNome=async(id,fb)=>{
     if(fb) return fb;
@@ -357,9 +375,11 @@ async function blocoMinhasVisitas(){
     cacheEmp.set(id,nome); return nome;
   };
 
-  const docs=snap.docs.sort((a,b)=>(toDate(b.data().data)||0)-(toDate(a.data().data)||0)).slice(0,5);
-  for(const doc of docs){
-    const v=doc.data(); const dt=toDate(v.data);
+  const ord = (x)=> toDate((x.data?x.data().data:x.data) ) || new Date(0);
+  const last5 = docs.sort((a,b)=> ord(b)-ord(a)).slice(0,5);
+
+  for(const doc of last5){
+    const v=doc.data ? doc.data() : doc; const dt=toDate(v.data);
     const nomeEmp = await getEmpresaNome(v.empresaId, v.empresaNome);
     ul.innerHTML += `
       <li class="row">
@@ -369,19 +389,15 @@ async function blocoMinhasVisitas(){
   }
 }
 
-// 3) Produção (emitidos) — inclui “vigência inicial”
+// 3) Produção (emitidos) — mostra "início" só se existir
 async function blocoProducao(){
-  let q = db.collection("cotacoes-gerentes");
-  if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-  else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
-
-  const snap = await q.limit(100).get();
-  const ul = document.getElementById("listaProducao"); if(!ul) return; ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
+  const docs = await getDocsPerfil("cotacoes-gerentes");
+  const ul = document.getElementById("listaProducao"); ul.innerHTML="";
+  if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
 
   const emitidos=[];
-  snap.forEach(doc=>{
-    const d=doc.data();
+  docs.forEach(doc=>{
+    const d=doc.data ? doc.data() : doc;
     const st = String(d.status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
     if(st==="negocio emitido") emitidos.push(d);
   });
@@ -392,33 +408,30 @@ async function blocoProducao(){
   emitidos.slice(0,5).forEach(d=>{
     const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
     const vIni  = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
+    const inicio = vIni ? ` • início ${fmtData(vIni)}` : ""; // só se existir
     ul.innerHTML += `
       <li class="row">
         <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
-        <div class="meta">${fmtBRL(valor)} • início ${fmtData(vIni)}</div>
+        <div class="meta">${fmtBRL(valor)}${inicio}</div>
       </li>`;
   });
 }
 
-// 4) Minhas Cotações — últimas 5 com fallback de datas
+// 4) Minhas Cotações — últimas 5
 async function blocoMinhasCotacoes(){
-  let q = db.collection("cotacoes-gerentes");
-  if(CTX.perfil==="rm") q=q.where("rmUid","==",CTX.uid);
-  else if(CTX.perfil==="assistente"||CTX.perfil==="gerente chefe") q=q.where("agenciaId","==",CTX.agenciaId);
+  let docs = await getDocsPerfil("cotacoes-gerentes");
+  const ul = document.getElementById("listaCotacoes"); ul.innerHTML="";
+  if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
 
-  const snap = await q.limit(100).get();
-  const ul = document.getElementById("listaCotacoes"); if(!ul) return; ul.innerHTML="";
-  if(snap.empty){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
-
-  const ord = (d)=>{
-    const x=d.data();
-    return toDate(x.ultimaAtualizacao) || toDate(x.atualizadoEm) ||
-           toDate(x.dataCriacao) || toDate(x.data) || new Date(0);
+  const ord = (x)=>{
+    const d = x.data ? x.data() : x;
+    return toDate(d.ultimaAtualizacao) || toDate(d.atualizadoEm) ||
+           toDate(d.dataCriacao) || toDate(d.data) || new Date(0);
   };
-  const docs = snap.docs.sort((a,b)=> ord(b)-ord(a)).slice(0,5);
+  docs = docs.sort((a,b)=> ord(b)-ord(a)).slice(0,5);
 
-  docs.forEach(doc=>{
-    const d=doc.data();
+  docs.forEach(x=>{
+    const d = x.data ? x.data() : x;
     const valor = d.valorFinal ?? d.valorDesejado ?? d.premio ?? 0;
     ul.innerHTML += `
       <li class="row">
