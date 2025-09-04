@@ -42,7 +42,7 @@ function skeleton(id, n=4){
   }
 }
 
-// ==== Persistência ====
+// ==== Persistência (resolve sessão no mobile/Safari) ====
 async function ensurePersistence() {
   try {
     await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
@@ -57,10 +57,11 @@ async function ensurePersistence() {
   }
 }
 
-// ==== Auth + contexto ====
+// ==== Auth + contexto (com failback e fallback admin) ====
 async function initAuth() {
   await ensurePersistence();
 
+  // Evita “tela travada” caso o navegador bloqueie storage
   const failback = setTimeout(() => {
     if (!auth.currentUser) location.href = "login.html";
   }, 5000);
@@ -84,6 +85,7 @@ async function initAuth() {
         montarMenuLateral(CTX.perfil);
         carregarKPIs();
         carregarResumoPainel();
+        initDrawerMobile(); // garante drawer ativo mesmo sem perfil no doc
         return;
       } else {
         const elPerfil = document.getElementById("perfilUsuario");
@@ -101,45 +103,25 @@ async function initAuth() {
     montarMenuLateral(CTX.perfil);
     carregarKPIs();
     carregarResumoPainel();
+    initDrawerMobile();
   });
 }
 
+// ==== Header (saudação + perfil enxuto) ====
 function atualizarTopo(){
-  const elPerfil = document.getElementById("perfilUsuario");
-  if (elPerfil) elPerfil.textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
   const titulo = document.getElementById("tituloSaudacao");
   if (titulo) titulo.textContent = `Olá, ${CTX.nome}`;
-}
 
-// ==== Ajuda para buscar por perfil (inclui casos de gerente_chefe) ====
-async function getDocsPerfil(colName, limitN=0){
-  const col = db.collection(colName);
-  const perfil = CTX.perfil;
-  let snaps = [];
-
-  if(perfil==="admin"){
-    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
-  } else if(perfil==="rm"){
-    snaps = [ await (limitN? col.where("rmUid","==",CTX.uid).limit(limitN).get()
-                     : col.where("rmUid","==",CTX.uid).get()) ];
-  } else if(perfil==="assistente" || perfil==="gerente chefe"){
-    // ampliar para cobrir bases onde gravam por agenciaId OU gerenteChefeUid
-    const s1 = await (limitN? col.where("agenciaId","==",CTX.agenciaId).limit(limitN).get()
-                            : col.where("agenciaId","==",CTX.agenciaId).get());
-    let s2 = { forEach:()=>{}, empty:true, docs:[] };
-    try {
-      s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
-                        : col.where("gerenteChefeUid","==",CTX.uid).get());
-    } catch(e){ /* campo pode não existir em todos */ }
-    snaps = [s1,s2];
-  } else {
-    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  const elPerfil = document.getElementById("perfilUsuario");
+  if (elPerfil) {
+    const p = (CTX.perfil||"").toLowerCase();
+    const label =
+      p==="rm" ? "RM" :
+      p==="admin" ? "ADMIN" :
+      p==="assistente" ? "ASSISTENTE" :
+      (p.includes("gerente") ? "GERENTE CHEFE" : (CTX.perfil||"").toUpperCase());
+    elPerfil.textContent = label;
   }
-
-  // merge simples por id
-  const map = new Map();
-  snaps.forEach(s=> s.forEach(d=> map.set(d.id,d)));
-  return Array.from(map.values());
 }
 
 // ==== Menu lateral (grupos + ícones emoji + perfis) ====
@@ -185,7 +167,7 @@ function montarMenuLateral(perfilBruto){
       ["Produção","negocios-fechados.html",ICON.producao],
       ["Financeiro","financeiro.html",ICON.financeiro],
       ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
-      ["Consultar Dicas","consultar-dicas.html",ICON.consultar],   // <= NOVO
+      ["Consultar Dicas","consultar-dicas.html",ICON.consultar], // <= incluído
       ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
     ]},
     { titulo:"Relatórios", itens:[
@@ -246,7 +228,7 @@ function montarMenuLateral(perfilBruto){
 }
 
 // ==== KPIs (topo) ====
-// Para gerente_chefe: visitas e cotações do ANO; produção já soma o ano.
+// Para gerente_chefe: visitas e cotações do ANO; produção soma do ano.
 async function carregarKPIs(){
   const perfil = CTX.perfil;
   const ano = new Date().getFullYear();
@@ -292,7 +274,7 @@ async function carregarKPIs(){
     let docs = await getDocsPerfil("cotacoes-gerentes");
     let total = 0;
     docs.forEach(doc=>{
-      const d = doc.data ? doc.data() : doc; // compatibilidade
+      const d = doc.data ? doc.data() : doc;
       const st = String(d.status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
       const dt = toDate(d.dataCriacao) || toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || new Date(0);
       if(st === "negocio emitido" && dt >= iniAno && dt < fimAno){
@@ -302,6 +284,36 @@ async function carregarKPIs(){
     });
     document.getElementById("kpiProducao").textContent = fmtBRL(total);
   }catch(e){}
+}
+
+// ==== Helper para queries por perfil (usado nos blocos e KPIs) ====
+async function getDocsPerfil(colName, limitN=0){
+  const col = db.collection(colName);
+  const perfil = CTX.perfil;
+  let snaps = [];
+
+  if(perfil==="admin"){
+    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  } else if(perfil==="rm"){
+    snaps = [ await (limitN? col.where("rmUid","==",CTX.uid).limit(limitN).get()
+                     : col.where("rmUid","==",CTX.uid).get()) ];
+  } else if(perfil==="assistente" || perfil==="gerente chefe"){
+    const s1 = await (limitN? col.where("agenciaId","==",CTX.agenciaId).limit(limitN).get()
+                            : col.where("agenciaId","==",CTX.agenciaId).get());
+    let s2 = { forEach:()=>{}, empty:true, docs:[] };
+    try {
+      s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
+                        : col.where("gerenteChefeUid","==",CTX.uid).get());
+    } catch(e){ /* campo opcional */ }
+    snaps = [s1,s2];
+  } else {
+    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  }
+
+  // merge simples por id
+  const map = new Map();
+  snaps.forEach(s=> s.forEach(d=> map.set(d.id,d)));
+  return Array.from(map.values());
 }
 
 // ==== Painel: listas ====
@@ -364,7 +376,6 @@ async function blocoMinhasVisitas(){
   const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
   if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
 
-  // resolver nome da empresa
   const cacheEmp=new Map();
   const getEmpresaNome=async(id,fb)=>{
     if(fb) return fb;
@@ -408,7 +419,7 @@ async function blocoProducao(){
   emitidos.slice(0,5).forEach(d=>{
     const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
     const vIni  = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
-    const inicio = vIni ? ` • início ${fmtData(vIni)}` : ""; // só se existir
+    const inicio = vIni ? ` • início ${fmtData(vIni)}` : "";
     ul.innerHTML += `
       <li class="row">
         <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
@@ -438,6 +449,71 @@ async function blocoMinhasCotacoes(){
         <div class="title"><strong>${d.empresaNome||"Empresa"}</strong> — ${d.ramo||"Ramo"}</div>
         <div class="meta">${fmtBRL(valor)}</div>
       </li>`;
+  });
+}
+
+// ==== Drawer Mobile (animação e controles) ====
+function initDrawerMobile(){
+  const nav      = document.getElementById('menuNav');
+  const body     = document.body;
+  const overlay  = document.getElementById('sidebarOverlay');
+  const topBtn   = document.getElementById('menuToggle'); // se existir no header
+  const fabMenu  = document.getElementById('fabMenu');    // botão do rodapé
+
+  if(!nav || !overlay) return;
+
+  // estado inicial (escondido no mobile)
+  if (window.innerWidth < 1024) {
+    nav.classList.add('hidden');
+    nav.style.transform  = 'translateY(-16px)';
+    nav.style.opacity    = '0';
+    nav.style.transition = 'transform .18s ease, opacity .18s ease';
+  }
+
+  const openNav = ()=>{
+    if (window.innerWidth >= 1024) return; // no desktop já está aberto
+    nav.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+    overlay.classList.add('block');
+    body.classList.add('overflow-hidden');
+    // anima
+    requestAnimationFrame(()=>{
+      nav.style.transform = 'translateY(0)';
+      nav.style.opacity   = '1';
+    });
+  };
+
+  const closeNav = ()=>{
+    if (window.innerWidth >= 1024) return;
+    nav.style.transform = 'translateY(-16px)';
+    nav.style.opacity   = '0';
+    setTimeout(()=>{
+      nav.classList.add('hidden');
+      overlay.classList.add('hidden');
+      overlay.classList.remove('block');
+      body.classList.remove('overflow-hidden');
+    }, 180);
+  };
+
+  topBtn?.addEventListener('click', (e)=>{ e.preventDefault(); openNav(); });
+  fabMenu?.addEventListener('click', (e)=>{ e.preventDefault(); openNav(); });
+  overlay.addEventListener('click', closeNav);
+  document.addEventListener('click', (e)=>{
+    if(window.innerWidth >= 1024) return;
+    if(!nav.contains(e.target) && !topBtn?.contains(e.target) && !fabMenu?.contains(e.target)) closeNav();
+  });
+  window.addEventListener('resize', ()=>{
+    if(window.innerWidth >= 1024){
+      overlay.classList.add('hidden');
+      body.classList.remove('overflow-hidden');
+      nav.classList.remove('hidden');
+      nav.style.transform='';
+      nav.style.opacity='';
+    } else {
+      nav.classList.add('hidden');
+      nav.style.transform  = 'translateY(-16px)';
+      nav.style.opacity    = '0';
+    }
   });
 }
 
