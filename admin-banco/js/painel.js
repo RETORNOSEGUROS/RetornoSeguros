@@ -42,26 +42,23 @@ function skeleton(id, n=4){
   }
 }
 
-// ==== Persistência (resolve sessão no mobile/Safari) ====
+// ==== Persistência ====
 async function ensurePersistence() {
   try {
     await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   } catch (e1) {
-    console.warn("LOCAL indisponível, tentando SESSION...", e1?.message);
     try {
       await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     } catch (e2) {
-      console.warn("SESSION indisponível, usando NONE.", e2?.message);
       await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
     }
   }
 }
 
-// ==== Auth + contexto (com failback e fallback admin) ====
+// ==== Auth + contexto ====
 async function initAuth() {
   await ensurePersistence();
 
-  // Evita “tela travada” caso o navegador bloqueie storage
   const failback = setTimeout(() => {
     if (!auth.currentUser) location.href = "login.html";
   }, 5000);
@@ -85,7 +82,7 @@ async function initAuth() {
         montarMenuLateral(CTX.perfil);
         carregarKPIs();
         carregarResumoPainel();
-        initDrawerMobile(); // garante drawer ativo mesmo sem perfil no doc
+        initDrawerMobile();
         return;
       } else {
         const elPerfil = document.getElementById("perfilUsuario");
@@ -124,7 +121,7 @@ function atualizarTopo(){
   }
 }
 
-// ==== Menu lateral (grupos + ícones emoji + perfis) ====
+// ==== Menu lateral ====
 function montarMenuLateral(perfilBruto){
   const nav = document.getElementById("menuNav");
   if(!nav) return;
@@ -166,9 +163,9 @@ function montarMenuLateral(perfilBruto){
       ["Solicitações de Cotação","cotacoes.html",ICON.cotacao],
       ["Produção","negocios-fechados.html",ICON.producao],
       ["Financeiro","financeiro.html",ICON.financeiro],
-      ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
-      ["Consultar Dicas","consultar-dicas.html",ICON.consultar], // <= incluído
-      ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
+      ["Dicas Produtos","dicas-produtos.html",ICON.dicas],          // <— só admin (filtrado abaixo)
+      ["Consultar Dicas","consultar-dicas.html",ICON.consultar],    // <— todos
+      ["Ramos Seguro","ramos-seguro.html",ICON.ramos]               // <— só admin (filtrado abaixo)
     ]},
     { titulo:"Relatórios", itens:[
       ["Relatório Visitas","visitas-relatorio.html",ICON.rel],
@@ -182,21 +179,22 @@ function montarMenuLateral(perfilBruto){
     ]}
   ];
 
+  // Perfis permitidos por rota (removido "Dicas Produtos" e "Ramos Seguro" para RM/GC/Assistente)
   const ROTAS_POR_PERFIL = {
     "admin": new Set([...GRUPOS.flatMap(g=>g.itens.map(i=>i[1]))]),
     "rm": new Set([
       "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
       "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
-      "vencimentos.html","funcionarios.html","financeiro.html","dicas-produtos.html","ramos-seguro.html"
+      "vencimentos.html","funcionarios.html","financeiro.html"
     ]),
     "gerente chefe": new Set([
       "cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html",
       "cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html",
-      "vencimentos.html","funcionarios.html","financeiro.html","dicas-produtos.html","ramos-seguro.html"
+      "vencimentos.html","funcionarios.html","financeiro.html"
     ]),
     "assistente": new Set([
       "agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html",
-      "funcionarios.html","financeiro.html","dicas-produtos.html"
+      "funcionarios.html","financeiro.html"
     ])
   };
   const perfilKey = ["gerente chefe","gerente-chefe","gerente_chefe"].includes(perfil) ? "gerente chefe" : perfil;
@@ -206,7 +204,15 @@ function montarMenuLateral(perfilBruto){
 
   GRUPOS.forEach(grupo=>{
     if(grupo.adminOnly && perfilKey!=="admin") return;
-    const permitidos = grupo.itens.filter(([_,href])=> perfilKey==="admin" || pode.has(href));
+
+    // itens permitidos por perfil
+    let permitidos = grupo.itens.filter(([_,href])=> perfilKey==="admin" || pode.has(href));
+
+    // guarda extra: se NÃO for admin, nunca mostrar "dicas-produtos" e "ramos-seguro"
+    if (perfilKey !== "admin") {
+      permitidos = permitidos.filter(([_,href])=> href!=="dicas-produtos.html" && href!=="ramos-seguro.html");
+    }
+
     if(!permitidos.length) return;
 
     const h=document.createElement("div");
@@ -228,7 +234,6 @@ function montarMenuLateral(perfilBruto){
 }
 
 // ==== KPIs (topo) ====
-// Para gerente_chefe: visitas e cotações do ANO; produção soma do ano.
 async function carregarKPIs(){
   const perfil = CTX.perfil;
   const ano = new Date().getFullYear();
@@ -286,7 +291,7 @@ async function carregarKPIs(){
   }catch(e){}
 }
 
-// ==== Helper para queries por perfil (usado nos blocos e KPIs) ====
+// ==== Helper para queries por perfil ====
 async function getDocsPerfil(colName, limitN=0){
   const col = db.collection(colName);
   const perfil = CTX.perfil;
@@ -304,13 +309,12 @@ async function getDocsPerfil(colName, limitN=0){
     try {
       s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
                         : col.where("gerenteChefeUid","==",CTX.uid).get());
-    } catch(e){ /* campo opcional */ }
+    } catch(e){ /* opcional */ }
     snaps = [s1,s2];
   } else {
     snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
   }
 
-  // merge simples por id
   const map = new Map();
   snaps.forEach(s=> s.forEach(d=> map.set(d.id,d)));
   return Array.from(map.values());
@@ -331,7 +335,7 @@ async function carregarResumoPainel(){
   ]);
 }
 
-// 1) Visitas Agendadas (futuras; fallback 20 dias passados)
+// 1) Visitas Agendadas
 async function blocoVisitasAgendadas(){
   const now = Date.now();
   const docs = await getDocsPerfil("agenda_visitas");
@@ -452,17 +456,16 @@ async function blocoMinhasCotacoes(){
   });
 }
 
-// ==== Drawer Mobile (animação e controles) ====
+// ==== Drawer Mobile (animação) ====
 function initDrawerMobile(){
   const nav      = document.getElementById('menuNav');
   const body     = document.body;
   const overlay  = document.getElementById('sidebarOverlay');
-  const topBtn   = document.getElementById('menuToggle'); // se existir no header
-  const fabMenu  = document.getElementById('fabMenu');    // botão do rodapé
+  const topBtn   = document.getElementById('menuToggle'); // (se existir no header)
+  const fabMenu  = document.getElementById('fabMenu');    // botão "Menu" do rodapé
 
   if(!nav || !overlay) return;
 
-  // estado inicial (escondido no mobile)
   if (window.innerWidth < 1024) {
     nav.classList.add('hidden');
     nav.style.transform  = 'translateY(-16px)';
@@ -471,12 +474,11 @@ function initDrawerMobile(){
   }
 
   const openNav = ()=>{
-    if (window.innerWidth >= 1024) return; // no desktop já está aberto
+    if (window.innerWidth >= 1024) return;
     nav.classList.remove('hidden');
     overlay.classList.remove('hidden');
     overlay.classList.add('block');
     body.classList.add('overflow-hidden');
-    // anima
     requestAnimationFrame(()=>{
       nav.style.transform = 'translateY(0)';
       nav.style.opacity   = '1';
@@ -558,7 +560,6 @@ function initDrawerMobile(){
       if(infoEl) infoEl.textContent = "Senha atualizada com sucesso! Saindo...";
       setTimeout(()=>{ auth.signOut().then(()=> location.href="login.html"); }, 1200);
     } catch(err){
-      console.error(err);
       if(erroEl) erroEl.textContent = err?.message || "Erro ao trocar senha.";
     }
   });
