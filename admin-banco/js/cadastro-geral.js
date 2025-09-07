@@ -30,12 +30,12 @@ async function initAuth(){
 
     // Admin pelo perfil OU fallback por email
     CTX.isAdmin = (CTX.perfil==="admin") || ADMIN_EMAILS.includes((user.email||"").toLowerCase());
-    document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
+    document.getElementById("perfilUsuario")?.textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
 
     // Só admin acessa esta tela
     if (!CTX.isAdmin) { alert("Acesso restrito ao admin."); location.href="painel.html"; return; }
 
-    montarMenuLateral(CTX.perfil||"admin");
+    // 🚫 Removido: montarMenuLateral
     await carregarAgencias();
     carregarGerentesChefes();
     prepararFiltros();
@@ -45,82 +45,6 @@ async function initAuth(){
     const w = document.getElementById("whatsapp");
     if (w) w.addEventListener("input", onMaskWhatsapp);
   });
-}
-
-// ==== Menu lateral (mesma ideia do painel) ====
-function montarMenuLateral(perfilBruto){
-  const nav = document.getElementById("menuNav");
-  if(!nav) return;
-  nav.innerHTML = "";
-
-  const perfil = normalizar(perfilBruto);
-  const ICON = {
-    gerentes:`<span class="text-slate-400">👤</span>`,
-    empresa:`<span class="text-slate-400">🏢</span>`,
-    agencia:`<span class="text-slate-400">🏦</span>`,
-    agenda:`<span class="text-slate-400">📅</span>`,
-    visitas:`<span class="text-slate-400">📌</span>`,
-    cotacao:`<span class="text-slate-400">📄</span>`,
-    producao:`<span class="text-slate-400">📈</span>`,
-    dicas:`<span class="text-slate-400">💡</span>`,
-    ramos:`<span class="text-slate-400">🧩</span>`,
-    rel:`<span class="text-slate-400">📊</span>`,
-    venc:`<span class="text-slate-400">⏰</span>`,
-    func:`<span class="text-slate-400">🧍</span>`,
-    carteira:`<span class="text-slate-400">👛</span>`,
-    comissoes:`<span class="text-slate-400">💵</span>`,
-    resgates:`<span class="text-slate-400">🔐</span>`
-  };
-
-  const GRUPOS = [
-    { titulo:"Cadastros", itens:[
-      ["Cadastrar Gerentes","cadastro-geral.html",ICON.gerentes],
-      ["Cadastrar Empresa","cadastro-empresa.html",ICON.empresa],
-      ["Agências","agencias.html",ICON.agencia],
-      ["Empresas","empresas.html",ICON.empresa],
-      ["Funcionários","funcionarios.html",ICON.func]
-    ]},
-    { titulo:"Operações", itens:[
-      ["Agenda Visitas","agenda-visitas.html",ICON.agenda],
-      ["Visitas","visitas.html",ICON.visitas],
-      ["Solicitações de Cotação","cotacoes.html",ICON.cotacao],
-      ["Produção","negocios-fechados.html",ICON.producao],
-      ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
-      ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
-    ]},
-    { titulo:"Relatórios", itens:[
-      ["Relatório Visitas","visitas-relatorio.html",ICON.rel],
-      ["Vencimentos","vencimentos.html",ICON.venc],
-      ["Relatórios","relatorios.html",ICON.rel]
-    ]},
-    { titulo:"Admin", adminOnly:true, itens:[
-      ["Carteira","carteira.html",ICON.carteira],
-      ["Comissões","comissoes.html",ICON.comissoes],
-      ["Resgates (Admin)","resgates-admin.html",ICON.resgates]
-    ]}
-  ];
-
-  const pode = new Set(GRUPOS.flatMap(g=>g.itens.map(i=>i[1]))); // admin vê tudo aqui
-
-  const frag = document.createDocumentFragment();
-  GRUPOS.forEach(grupo=>{
-    const permitidos = grupo.itens.filter(([_,href])=> grupo.adminOnly ? true : pode.has(href));
-    if(!permitidos.length) return;
-
-    const h=document.createElement("div");
-    h.className="text-xs uppercase text-slate-400 font-semibold px-2 mt-2 mb-1";
-    h.textContent=grupo.titulo;
-    frag.appendChild(h);
-
-    permitidos.forEach(([label,href,icon])=>{
-      const a=document.createElement("a");
-      a.href=href;
-      a.className="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-700 hover:bg-slate-100";
-      a.innerHTML=`${icon}<span>${label}</span>`;
-      frag.appendChild(a);
-    });
-  });
-  nav.appendChild(frag);
 }
 
 // ==== Estado da página ====
@@ -146,12 +70,10 @@ function onMaskWhatsapp(e){
   const el = e.target;
   const digits = (el.value||"").replace(/\D/g,"").slice(0,11);
   if (digits.length <= 10) {
-    // (99) 9999-9999
     el.value = digits
       .replace(/^(\d{2})(\d)/, "($1) $2")
       .replace(/(\d{4})(\d)/, "$1-$2");
   } else {
-    // (99) 99999-9999
     el.value = digits
       .replace(/^(\d{2})(\d)/, "($1) $2")
       .replace(/(\d{5})(\d)/, "$1-$2");
@@ -227,7 +149,7 @@ async function cadastrarUsuario(){
     return;
   }
 
-  // Edição: apenas Firestore
+  // Edição
   if (editandoUsuarioId){
     const atualizacao = {
       nome, perfil, agenciaId, whatsapp,
@@ -243,7 +165,7 @@ async function cadastrarUsuario(){
     return;
   }
 
-  // Criação: Auth (app secundária) -> Firestore
+  // Criação
   if (!senha || senha.length<6){
     alert("Defina uma senha (mínimo 6 caracteres) para criar o login.");
     return;
@@ -321,7 +243,7 @@ function renderLista(arr){
 
 function prepararFiltros(){
   const nome = document.getElementById("filtroNome");
-  if (nome) nome.addEventListener("input", aplicarFiltros); // live-search
+  if (nome) nome.addEventListener("input", aplicarFiltros);
   const pf = document.getElementById("filtroPerfil");
   const ag = document.getElementById("filtroAgencia");
   pf?.addEventListener("change", aplicarFiltros);
@@ -395,7 +317,7 @@ function limparFormulario(){
   document.getElementById("gerenteChefeBox").style.display = "none";
 }
 
-// ==== Reset de senha (boa prática) ====
+// ==== Reset de senha ====
 async function resetarSenha(email){
   if(!email){ alert("E-mail inválido."); return; }
   try{
