@@ -13,7 +13,7 @@ let meuNome      = null;
 let isAdmin      = false;
 
 /* Ordenação + busca */
-let sortKey = "nome";     // nome | cidade | estado | agencia | rmNome
+let sortKey = "nome";     // nome | cnpj | cidade | estado | agencia | rmNome
 let sortDir = "asc";      // asc | desc
 let buscaNomeAtual   = ""; // filtro digitando (nome)
 let buscaCidadeAtual = ""; // filtro digitando (cidade)
@@ -136,8 +136,8 @@ async function carregarAgencias() {
     const banco  = ag.banco ? ` — ${ag.banco}` : "";
     const cidade = (ag.Cidade || ag.cidade || "").toString();
     const cidadeFmt = cidade ? ` / ${cidade}` : "";
-    const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
-    const ufFmt = uf ? ` - ${uf}` : "";
+    theUF = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const ufFmt = theUF ? ` - ${theUF}` : "";
     const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
 
     agenciasMap[minhaAgencia] = label;
@@ -330,11 +330,11 @@ async function carregarEmpresas() {
       rows.push({
         id: doc.id,
         nome: e.nome || "-",
+        cnpj: e.cnpj || "-",
         cidade: e.cidade || "-",
         estado: e.estado || "-",
         agencia: e.agenciaId ? (agenciasMap[e.agenciaId] || "") : "-",
         agenciaId: e.agenciaId || "",
-        agenciaSort: e.agenciaId || "",
         rmUid: e.rmUid || "",
         criadoPorUid: e.criadoPorUid || "",
         rmNome: e.rmNome || "-"
@@ -365,7 +365,7 @@ function instalarOrdenacaoCabecalhos() {
   atualizarSetas();
 }
 function atualizarSetas() {
-  ["nome","cidade","estado","agencia","rmNome"].forEach(k=>{
+  ["nome","cnpj","cidade","estado","agencia","rmNome"].forEach(k=>{
     const el = document.getElementById("arrow-"+k);
     if (!el) return;
     el.textContent = (sortKey===k ? (sortDir==="asc"?"↑":"↓") : "↕");
@@ -399,7 +399,7 @@ function renderTabela(items){
 
   tbody.innerHTML = "";
   if (!filtrados.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-3 text-center muted">Nenhuma empresa encontrada.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-3 text-center muted">Nenhuma empresa encontrada.</td></tr>`;
     return;
   }
 
@@ -407,6 +407,7 @@ function renderTabela(items){
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="px-3 py-2">${e.nome}</td>
+      <td class="px-3 py-2 text-xs">${e.cnpj}</td>
       <td class="px-3 py-2">${e.cidade}</td>
       <td class="px-3 py-2">${e.estado}</td>
       <td class="px-3 py-2">${e.agencia}</td>
@@ -431,7 +432,7 @@ async function editarEmpresa(id) {
   $('empresaIdEditando').value = id;
   $('nome').value   = e.nome   || "";
   $('cnpj').value   = e.cnpj   || "";
-  $('cidade').value = e.cidade || "";
+  $('cidade').value = e.cidade || ""
   $('estado').value = e.estado || "";
 
   $('agenciaId').value = e.agenciaId || "";
@@ -502,28 +503,45 @@ function limparFiltro() {
 
 /* ------- PDF ------- */
 function gerarPDF(){
-  const alvo = document.getElementById("tabela-wrapper");
-  if (!alvo) return alert("Nada para gerar em PDF.");
+  try{
+    const wrapperTabela = document.getElementById("tabela-wrapper");
+    if (!wrapperTabela) return alert("Tabela não encontrada para gerar o PDF.");
 
-  // Cabeçalho simples
-  const wrapper = document.createElement("div");
-  wrapper.style.padding = "16px";
-  wrapper.innerHTML = `
-    <div style="font-family: Inter, Arial; margin-bottom: 12px;">
-      <div style="font-size:18px; font-weight:700; color:#1b2c5c;">Relatório de Empresas</div>
-      <div style="font-size:12px; color:#334155;">Gerado em ${new Date().toLocaleString("pt-BR")}</div>
-    </div>
-  `;
-  wrapper.appendChild(alvo.cloneNode(true));
+    // verifica se há linhas atualmente visíveis (já filtradas)
+    const linhasVisiveis = wrapperTabela.querySelectorAll("tbody tr");
+    if (!linhasVisiveis.length || (linhasVisiveis.length===1 && linhasVisiveis[0].innerText.includes("Nenhuma empresa encontrada")))
+      return alert("Sem dados na listagem para gerar o PDF.");
 
-  const opt = {
-    margin:       10,
-    filename:     `empresas_${Date.now()}.pdf`,
-    image:        { type: 'jpeg', quality: 0.98 },
-    html2canvas:  { scale: 2, useCORS: true },
-    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-  };
-  html2pdf().from(wrapper).set(opt).save();
+    // cabeçalho + clone do estado atual (com filtros aplicados)
+    const container = document.createElement("div");
+    container.style.padding = "16px";
+    container.innerHTML = `
+      <div style="font-family: Inter, Arial; margin-bottom: 12px;">
+        <div style="font-size:18px; font-weight:700; color:#1b2c5c;">Relatório de Empresas</div>
+        <div style="font-size:12px; color:#334155;">Gerado em ${new Date().toLocaleString("pt-BR")}</div>
+      </div>
+    `;
+    container.appendChild(wrapperTabela.cloneNode(true));
+
+    const opt = {
+      margin:       10,
+      filename:     `empresas_${Date.now()}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    if (typeof html2pdf === "undefined") {
+      console.error("html2pdf não carregado.");
+      alert("Não foi possível gerar o PDF (biblioteca não carregada). Atualize a página (Ctrl+F5).");
+      return;
+    }
+
+    html2pdf().from(container).set(opt).save();
+  } catch (e) {
+    console.error("Gerar PDF — erro:", e);
+    alert("Falha ao gerar PDF. Veja o console para detalhes.");
+  }
 }
 
 /* Expor para HTML */
