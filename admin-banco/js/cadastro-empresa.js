@@ -15,7 +15,8 @@ let isAdmin      = false;
 /* Ordenação + busca */
 let sortKey = "nome";     // nome | cidade | estado | agencia | rmNome
 let sortDir = "asc";      // asc | desc
-let buscaNomeAtual = "";  // filtro digitando
+let buscaNomeAtual   = ""; // filtro digitando (nome)
+let buscaCidadeAtual = ""; // filtro digitando (cidade)
 let rowsCache = [];       // cache pra filtrar sem reconsultar
 
 /* Helpers DOM */
@@ -40,7 +41,7 @@ auth.onAuthStateChanged(async (user) => {
     return (window.location.href = "login.html");
   }
   meuUid  = user.uid;
-  isAdmin = (user.email?.toLowerCase() === "patrick@retornoseguros.com.br"); // fallback admin por e-mail
+  isAdmin = (user.email && user.email.toLowerCase() === "patrick@retornoseguros.com.br"); // fallback admin por e-mail
 
   // Perfil do usuário
   const snap = await db.collection("usuarios_banco").doc(user.uid).get().catch(()=>null);
@@ -55,16 +56,13 @@ auth.onAuthStateChanged(async (user) => {
     return (window.location.href = "painel.html");
   }
 
-  // header
+  // header (se existir elemento)
   const elPerfil = $('perfilUsuario');
   if (elPerfil) elPerfil.textContent = `${meuNome} (${p.perfil || "sem perfil"})`;
 
-  // Menu lateral igual ao painel
-  montarMenuLateral(perfilAtual);
-
   // Inputs: máscara CNPJ
   const cnpjEl = $('cnpj');
-  cnpjEl?.addEventListener("input", ()=> cnpjEl.value = maskCNPJ(cnpjEl.value));
+  if (cnpjEl) cnpjEl.addEventListener("input", ()=> cnpjEl.value = maskCNPJ(cnpjEl.value));
 
   // Carregamentos
   await carregarAgencias();
@@ -97,100 +95,19 @@ auth.onAuthStateChanged(async (user) => {
     }
   }
 
-  // Ordenação + busca
+  // Ordenação + buscas (nome e cidade)
   instalarOrdenacaoCabecalhos();
-  $('buscaNome')?.addEventListener("input", (e)=>{ buscaNomeAtual = (e.target.value||"").toLowerCase(); renderTabela(rowsCache); });
+  $('buscaNome')?.addEventListener("input", (e)=>{
+    buscaNomeAtual = (e.target.value||"").toLowerCase().trim();
+    renderTabela(rowsCache);
+  });
+  $('buscaCidade')?.addEventListener("input", (e)=>{
+    buscaCidadeAtual = (e.target.value||"").toLowerCase().trim();
+    renderTabela(rowsCache);
+  });
 
   await carregarEmpresas();
 });
-
-/* ---------- Menu lateral (mesma matriz do painel) ---------- */
-function montarMenuLateral(perfilBruto){
-  const nav = document.getElementById("menuNav");
-  if(!nav) return;
-  nav.innerHTML = "";
-
-  const perfil = roleNorm(perfilBruto);
-
-  const ICON = {
-    gerentes:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 12a3 3 0 10-6 0 3 3 0 006 0Zm6 8a6 6 0 10-12 0h12ZM4 6h16M4 10h8"/></svg>`,
-    empresa:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l7-7 7 7-7 7-7-7z"/></svg>`,
-    agencia:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/></svg>`,
-    agenda:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 01-2 2v12z"/></svg>`,
-    visitas:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 20h9M3 12l7-7 7 7"/></svg>`,
-    cotacao:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 12h8M8 16h5M7 3h10l4 4v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>`,
-    producao:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>`,
-    dicas:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 9V3m0 18v-6m-7-3h14"/></svg>`,
-    ramos:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></svg>`,
-    rel:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM7 13l3 3 7-7"/></svg>`,
-    venc:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
-    func:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 20h5V4H2v16h5m5 0v-6h4v6"/></svg>`,
-    carteira:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 7h18v10H3zM16 12h5"/></svg>`,
-    comissoes:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 11V3h2v8h8v2h-8v8h-2v-8H3v-2z"/></svg>`,
-    resgates:`<svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 9V7a5 5 0 00-10 0v2H5v12h14V9h-2z"/></svg>`
-  };
-
-  const GRUPOS = [
-    { titulo:"Cadastros", itens:[
-      ["Cadastrar Gerentes","cadastro-geral.html",ICON.gerentes],
-      ["Cadastrar Empresa","cadastro-empresa.html",ICON.empresa],
-      ["Agências","agencias.html",ICON.agencia],
-      ["Empresas","empresas.html",ICON.empresa],
-      ["Funcionários","funcionarios.html",ICON.func]
-    ]},
-    { titulo:"Operações", itens:[
-      ["Agenda Visitas","agenda-visitas.html",ICON.agenda],
-      ["Visitas","visitas.html",ICON.visitas],
-      ["Solicitações de Cotação","cotacoes.html",ICON.cotacao],
-      ["Produção","negocios-fechados.html",ICON.producao],
-      ["Dicas Produtos","dicas-produtos.html",ICON.dicas],
-      ["Ramos Seguro","ramos-seguro.html",ICON.ramos]
-    ]},
-    { titulo:"Relatórios", itens:[
-      ["Relatório Visitas","visitas-relatorio.html",ICON.rel],
-      ["Vencimentos","vencimentos.html",ICON.venc],
-      ["Relatórios","relatorios.html",ICON.rel]
-    ]},
-    { titulo:"Admin", adminOnly:true, itens:[
-      ["Carteira","carteira.html",ICON.carteira],
-      ["Comissões","comissoes.html",ICON.comissoes],
-      ["Resgates (Admin)","resgates-admin.html",ICON.resgates]
-    ]}
-  ];
-
-  const ROTAS_POR_PERFIL = {
-    "admin": new Set([...GRUPOS.flatMap(g=>g.itens.map(i=>i[1]))]),
-    "rm": new Set(["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"]),
-    "gerente chefe": new Set(["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"]),
-    "assistente": new Set(["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"])
-  };
-  const perfilKey = ["gerente chefe","gerente-chefe","gerente_chefe"].includes(perfil) ? "gerente chefe" : perfil;
-  const pode = ROTAS_POR_PERFIL[perfilKey] || new Set();
-
-  const frag = document.createDocumentFragment();
-
-  GRUPOS.forEach(grupo=>{
-    if(grupo.adminOnly && perfilKey!=="admin") return;
-    const permitidos = grupo.itens.filter(([_,href])=> perfilKey==="admin" || pode.has(href));
-    if(!permitidos.length) return;
-
-    const h=document.createElement("div");
-    h.className="text-xs uppercase text-slate-400 font-semibold px-2 mt-2 mb-1";
-    h.textContent=grupo.titulo;
-    frag.appendChild(h);
-
-    permitidos.forEach(([label,href,icon])=>{
-      const a=document.createElement("a");
-      a.href=href;
-      a.className="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-700 hover:bg-slate-100";
-      a.innerHTML=`${icon}<span>${label}</span>`;
-      frag.appendChild(a);
-    });
-  });
-
-  nav.appendChild(frag);
-  if(window.innerWidth>=1024) nav.classList.remove("hidden");
-}
 
 /* ---------- Agências ---------- */
 async function carregarAgencias() {
@@ -295,7 +212,7 @@ async function carregarRMsFormulario() {
     return;
   }
 
-  // Gerente-chefe/Assistente (sem quebrar Rules)
+  // Gerente-chefe/Assistente
   const rms = await rmlistFromEmpresas(agenciaEscolhida);
   rms.forEach(({uid,nome})=>{
     rmsMap[uid] = { nome, agenciaId: agenciaEscolhida };
@@ -308,7 +225,6 @@ async function prepararFiltrosRM() {
   if (!(perfilAtual === "gerente chefe" || isAdmin)) return;
   await carregarRMsFiltro();
 }
-
 async function carregarRMsFiltro() {
   const filtroRm = $('filtroRm');
   if (!filtroRm) return;
@@ -467,13 +383,19 @@ function ordenarRows(rows){
   });
 }
 
-/* Render (com busca por nome em tempo real) */
+/* Render (com busca por nome e cidade em tempo real) */
 function renderTabela(items){
   const tbody = $('listaEmpresas');
   if (!tbody) return;
 
-  const busca = (buscaNomeAtual||"").trim();
-  const filtrados = !busca ? items : items.filter(e => (e.nome||"").toLowerCase().includes(busca));
+  const bn = (buscaNomeAtual||"").trim();
+  const bc = (buscaCidadeAtual||"").trim();
+
+  const filtrados = items.filter(e=>{
+    const okNome   = !bn || (e.nome||"").toLowerCase().includes(bn);
+    const okCidade = !bc || (e.cidade||"").toLowerCase().includes(bc);
+    return okNome && okCidade;
+  });
 
   tbody.innerHTML = "";
   if (!filtrados.length) {
@@ -574,7 +496,34 @@ function limparFiltro() {
   }
   if (selRm) selRm.value = "";
   $('buscaNome').value = ""; buscaNomeAtual = "";
+  $('buscaCidade').value = ""; buscaCidadeAtual = "";
   carregarEmpresas();
+}
+
+/* ------- PDF ------- */
+function gerarPDF(){
+  const alvo = document.getElementById("tabela-wrapper");
+  if (!alvo) return alert("Nada para gerar em PDF.");
+
+  // Cabeçalho simples
+  const wrapper = document.createElement("div");
+  wrapper.style.padding = "16px";
+  wrapper.innerHTML = `
+    <div style="font-family: Inter, Arial; margin-bottom: 12px;">
+      <div style="font-size:18px; font-weight:700; color:#1b2c5c;">Relatório de Empresas</div>
+      <div style="font-size:12px; color:#334155;">Gerado em ${new Date().toLocaleString("pt-BR")}</div>
+    </div>
+  `;
+  wrapper.appendChild(alvo.cloneNode(true));
+
+  const opt = {
+    margin:       10,
+    filename:     `empresas_${Date.now()}.pdf`,
+    image:        { type: 'jpeg', quality: 0.98 },
+    html2canvas:  { scale: 2, useCORS: true },
+    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+  };
+  html2pdf().from(wrapper).set(opt).save();
 }
 
 /* Expor para HTML */
@@ -584,3 +533,4 @@ window.salvarEmpresa         = salvarEmpresa;
 window.editarEmpresa         = editarEmpresa;
 window.excluirEmpresa        = excluirEmpresa;
 window.limparFormulario      = limparFormulario;
+window.gerarPDF              = gerarPDF;
