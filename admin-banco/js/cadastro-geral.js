@@ -30,12 +30,15 @@ async function initAuth(){
 
     // Admin pelo perfil OU fallback por email
     CTX.isAdmin = (CTX.perfil==="admin") || ADMIN_EMAILS.includes((user.email||"").toLowerCase());
-    document.getElementById("perfilUsuario")?.textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
+
+    // ✅ CORREÇÃO: nada de optional chaining no LHS
+    const elPerfil = document.getElementById("perfilUsuario");
+    if (elPerfil) elPerfil.textContent = `${CTX.nome} (${CTX.perfil||"sem perfil"})`;
 
     // Só admin acessa esta tela
     if (!CTX.isAdmin) { alert("Acesso restrito ao admin."); location.href="painel.html"; return; }
 
-    // 🚫 Removido: montarMenuLateral
+    // (menu removido)
     await carregarAgencias();
     carregarGerentesChefes();
     prepararFiltros();
