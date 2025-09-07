@@ -1,10 +1,15 @@
-// funcionarios.js — v8 compatível com seu projeto (mobile + contadores dinâmicos)
+// funcionarios.js — v8 compatível com seu projeto (mobile + contadores + PDF)
+// Mantém a mesma base anterior e adiciona: % mapeadas, Exportar PDF e botão Voltar no HTML.
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
+
+// lista atual renderizada (respeita busca/filtro)
+let LISTA = [];
+let LISTA_RENDERIZADA = []; // última lista passada ao render
 
 const normalizarPerfil = (p)=>String(p||"")
   .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
@@ -30,56 +35,16 @@ auth.onAuthStateChanged(async (user)=>{
   CTX.nome      = d.nome || user.email;
 
   document.getElementById("perfilUsuario").textContent = `${CTX.nome} (${d.perfil||"sem perfil"})`;
-  montarMenuLateral(CTX.perfil);
+
   wireUi();
   carregarEmpresas();
 });
-
-// ====== Menu igual ao do painel (com Funcionários)
-function montarMenuLateral(perfilBruto){
-  const menu=document.getElementById("menuNav"); if(!menu) return; menu.innerHTML="";
-  const perfil=normalizarPerfil(perfilBruto);
-
-  const CAT_BASE={
-    "Cadastrar Gerentes":"cadastro-geral.html","Cadastrar Empresa":"cadastro-empresa.html","Agências":"agencias.html",
-    "Agenda Visitas":"agenda-visitas.html","Visitas":"visitas.html","Empresas":"empresas.html",
-    "Solicitações de Cotação":"cotacoes.html","Produção":"negocios-fechados.html","Consultar Dicas":"consultar-dicas.html",
-    "Dicas Produtos":"dicas-produtos.html","Ramos Seguro":"ramos-seguro.html","Relatório Visitas":"visitas-relatorio.html",
-    "Vencimentos":"vencimentos.html","Relatórios":"relatorios.html",
-    "Funcionários":"funcionarios.html"
-  };
-  const CAT_ADMIN_ONLY={
-    "Carteira":"carteira.html","Comissões":"comissoes.html","Resgates (Admin)":"resgates-admin.html"
-  };
-
-  const LABEL=Object.fromEntries(Object.entries({...CAT_BASE, ...CAT_ADMIN_ONLY}).map(([k,v])=>[v,k]));
-  const ADMIN=[...Object.values(CAT_BASE), ...Object.values(CAT_ADMIN_ONLY)];
-  const RM = ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const GER= ["cadastro-empresa.html","agenda-visitas.html","visitas.html","empresas.html","cotacoes.html","negocios-fechados.html","consultar-dicas.html","visitas-relatorio.html","vencimentos.html","funcionarios.html"];
-  const AST= ["agenda-visitas.html","visitas.html","cotacoes.html","consultar-dicas.html","funcionarios.html"];
-
-  let hrefs=[];
-  switch(perfil){
-    case "admin": hrefs=ADMIN; break;
-    case "rm": hrefs=RM; break;
-    case "gerente chefe":
-    case "gerente-chefe":
-    case "gerente_chefe": hrefs=GER; break;
-    case "assistente":
-    case "assistentes": hrefs=AST; break;
-    default: hrefs=[];
-  }
-  hrefs.forEach(h=>{
-    const a=document.createElement("a"); a.href=h;
-    a.innerHTML=`🔹 ${LABEL[h]||h}`;
-    menu.appendChild(a);
-  });
-}
 
 // ====== UI handlers
 function wireUi(){
   document.getElementById("atualizarLista")?.addEventListener("click", carregarEmpresas);
   document.getElementById("busca")?.addEventListener("input", filtrarTabela);
+  document.getElementById("exportPdf")?.addEventListener("click", exportarPDF);
 
   const modal = document.getElementById("modalEditar");
   const fechar= document.getElementById("fecharEditar");
@@ -111,8 +76,6 @@ async function getAgenciaNome(id, fallback){
 }
 
 // ====== Carregar e renderizar empresas
-let LISTA = [];
-
 async function carregarEmpresas(){
   const status = document.getElementById("statusLista");
   const tbody  = document.getElementById("tbodyEmpresas");
@@ -121,23 +84,25 @@ async function carregarEmpresas(){
 
   try{
     const col = db.collection("empresas");
-
     let q = col;
+
     if (CTX.perfil === "rm" && CTX.uid) {
       q = q.where("rmUid", "==", CTX.uid);
     } else if ((CTX.perfil === "assistente" || CTX.perfil === "gerente chefe") && CTX.agenciaId){
       q = q.where("agenciaId", "==", CTX.agenciaId);
     }
 
-    let snap = await q.limit(1000).get();
+    let snap = await q.limit(2000).get();
     if (snap.empty && (CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
-      snap = await col.where("agenciaid", "==", CTX.agenciaId).limit(1000).get();
+      snap = await col.where("agenciaid", "==", CTX.agenciaId).limit(2000).get();
     }
 
     if (snap.empty){
       LISTA = [];
       updateStatus([], 0);
       tbody.innerHTML = `<tr><td colspan="6" class="muted" style="padding:18px">Nenhuma empresa encontrada para seu perfil/regra.</td></tr>`;
+      LISTA_RENDERIZADA = [];
+      atualizarBadgePercentual([]);
       return;
     }
 
@@ -167,6 +132,7 @@ async function carregarEmpresas(){
 
     renderTabela(LISTA);
     updateStatus(LISTA, LISTA.length);
+    atualizarBadgePercentual(LISTA);
 
   } catch (err) {
     console.error("[funcionarios] erro carregarEmpresas:", err);
@@ -179,6 +145,8 @@ async function carregarEmpresas(){
 function renderTabela(lista){
   const tbody  = document.getElementById("tbodyEmpresas");
   tbody.innerHTML = "";
+
+  LISTA_RENDERIZADA = [...lista];
 
   if(!lista.length){
     tbody.innerHTML = `<tr><td colspan="6" class="muted" style="padding:18px">Nenhum registro.</td></tr>`;
@@ -217,6 +185,7 @@ function filtrarTabela(e){
   if(!termo){
     renderTabela(LISTA);
     updateStatus(LISTA, LISTA.length);
+    atualizarBadgePercentual(LISTA);
     return;
   }
 
@@ -228,20 +197,36 @@ function filtrarTabela(e){
 
   renderTabela(filtrada);
   updateStatus(filtrada, LISTA.length);
+  atualizarBadgePercentual(filtrada, LISTA.length);
 }
 
-// ====== Status/contadores
+// ====== Status/contadores + % mapeadas
 function updateStatus(listaAtual, totalBaseEmpresas){
   const totalEmpresas = Number.isFinite(totalBaseEmpresas) ? totalBaseEmpresas : LISTA.length;
   const qtdEmpresasFiltro = listaAtual.length;
+
   const totalFuncionariosFiltro = listaAtual.reduce((acc, it)=>{
     const v = Number(it.funcionariosQtd);
     return acc + (Number.isFinite(v) ? v : 0);
   }, 0);
 
+  const mapeadas = listaAtual.filter(it => it.funcionariosQtd != null).length;
+  const perc = totalEmpresas > 0 ? (mapeadas / totalEmpresas * 100) : 0;
+
   const status = document.getElementById("statusLista");
-  // Ex.: "25 empresa(s) carregada(s) · Total de funcionários no filtro: 25.000 · (Base total: 140 empresas)"
-  status.textContent = `${qtdEmpresasFiltro} empresa(s) carregada(s) · Total de funcionários no filtro: ${totalFuncionariosFiltro.toLocaleString("pt-BR")} · (Base total: ${totalEmpresas} empresas)`;
+  status.textContent =
+    `${qtdEmpresasFiltro} empresa(s) carregada(s) · Total de funcionários no filtro: ${totalFuncionariosFiltro.toLocaleString("pt-BR")} · ` +
+    `Empresas mapeadas: ${mapeadas}/${totalEmpresas} (${perc.toFixed(1)}%)`;
+}
+
+function atualizarBadgePercentual(listaAtual, totalBase=LISTA.length){
+  const mapeadas = listaAtual.filter(it => it.funcionariosQtd != null).length;
+  const total = totalBase || 0;
+  const perc = total > 0 ? (mapeadas / total * 100) : 0;
+  const el = document.getElementById("percentualMapeadas");
+  if(el){
+    el.textContent = `Mapeadas: ${mapeadas}/${total} (${perc.toFixed(1)}%)`;
+  }
 }
 
 // ====== Permissão de edição (UI) — valide nas RULES de verdade
@@ -259,8 +244,10 @@ function abrirEditar(empId){
   alvoAtual = LISTA.find(x=>x.id === empId) || null;
   if(!alvoAtual) return;
 
-  document.getElementById("empresaAlvo").textContent = `${alvoAtual.nome} • RM: ${alvoAtual.rmNome || "-"} • Agência: ${alvoAtual.agenciaNome || "-"}`;
-  document.getElementById("novoNumero").value = (alvoAtual.funcionariosQtd != null ? alvoAtual.funcionariosQtd : "");
+  document.getElementById("empresaAlvo").textContent =
+    `${alvoAtual.nome} • RM: ${alvoAtual.rmNome || "-"} • Agência: ${alvoAtual.agenciaNome || "-"}`;
+  document.getElementById("novoNumero").value =
+    (alvoAtual.funcionariosQtd != null ? alvoAtual.funcionariosQtd : "");
   document.getElementById("editErro").textContent = "";
   document.getElementById("editInfo").textContent = "";
 
@@ -292,13 +279,13 @@ async function salvarEdicao(){
     alvoAtual.funcionariosQtd = numero;
     alvoAtual.funcionariosAtualizadoEm = new Date();
 
-    // Re-render e reconta mantendo o filtro atual digitado
     const termoAtual = (document.getElementById("busca").value || "").trim();
     if(termoAtual){
       filtrarTabela();
     }else{
       renderTabela(LISTA);
       updateStatus(LISTA, LISTA.length);
+      atualizarBadgePercentual(LISTA);
     }
 
     setTimeout(()=> document.getElementById("modalEditar").style.display = "none", 800);
@@ -306,6 +293,77 @@ async function salvarEdicao(){
     console.error(err);
     erroEl.textContent = err?.message || "Erro ao salvar.";
   }
+}
+
+// ====== Exportar PDF (layout dedicado para garantir beleza e integridade)
+function exportarPDF(){
+  const dados = LISTA_RENDERIZADA.length ? LISTA_RENDERIZADA : LISTA;
+  const agora = new Date();
+  const total = LISTA.length;
+  const mapeadas = LISTA.filter(it => it.funcionariosQtd != null).length;
+  const perc = total>0 ? (mapeadas/total*100).toFixed(1) : "0.0";
+  const totalFuncionariosFiltro = dados.reduce((acc, it)=>{
+    const v = Number(it.funcionariosQtd);
+    return acc + (Number.isFinite(v) ? v : 0);
+  }, 0);
+
+  // Monta um HTML limpo para o PDF
+  const wrap = document.getElementById("pdfArea");
+  wrap.innerHTML = ""; // limpa
+  const box = document.createElement("div");
+  box.className = "pdf-card";
+  box.innerHTML = `
+    <h1>Funcionários por Empresa — Retorno Seguros</h1>
+    <div class="sub">
+      Emitido em ${agora.toLocaleDateString("pt-BR")} ${agora.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} ·
+      Usuário: ${escapeHtml(CTX.nome||"-")} ·
+      Empresas mapeadas: ${mapeadas}/${total} (${perc}%)
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:28%">Empresa</th>
+          <th style="width:18%">RM</th>
+          <th style="width:18%">Agência</th>
+          <th style="width:14%; text-align:right">Funcionários</th>
+          <th style="width:22%">Atualizado em</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${dados.map(it=>{
+          const dt = toDate(it.funcionariosAtualizadoEm);
+          return `
+            <tr>
+              <td>${escapeHtml(it.nome)}</td>
+              <td>${escapeHtml(it.rmNome || "-")}</td>
+              <td>${escapeHtml(it.agenciaNome || "-")}</td>
+              <td style="text-align:right">${it.funcionariosQtd != null ? it.funcionariosQtd.toLocaleString("pt-BR") : "—"}</td>
+              <td>${fmtDataHora(dt)}</td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">Total (filtro atual)</td>
+          <td style="text-align:right">${totalFuncionariosFiltro.toLocaleString("pt-BR")}</td>
+          <td>Empresas no filtro: ${dados.length}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+  wrap.appendChild(box);
+
+  const opt = {
+    margin:       [8, 8, 10, 8],
+    filename:     `funcionarios-empresas-${agora.toISOString().slice(0,10)}.pdf`,
+    image:        { type: 'jpeg', quality: 0.98 },
+    html2canvas:  { scale: 2, useCORS: true, letterRendering: true, dpi: 192 },
+    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
+  };
+
+  html2pdf().set(opt).from(wrap).save();
 }
 
 // ====== Helpers
