@@ -167,7 +167,7 @@ async function carregarAgencias() {
   select.innerHTML = `<option value="">Todas</option>`;
   const mapAg = new Map();
 
-  // 1) fonte preferencial
+  // 1) preferencial
   try {
     const snapAg = await db.collection("agencias_banco").get();
     snapAg.forEach(doc => {
@@ -407,7 +407,7 @@ function abrirPainelCRM(){
   window.open(url, "_blank");
 }
 
-// === Exportar para PDF (sem emojis; cores sólidas p/ evitar caracteres estranhos) ===
+// === Exportar para PDF (pinta colunas > 0 e remove emoji nelas; mantém nome da empresa) ===
 async function gerarPDF() {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert("Biblioteca jsPDF não carregada. Inclua os scripts do jsPDF e do AutoTable no HTML.");
@@ -421,7 +421,7 @@ async function gerarPDF() {
   doc.setTextColor(0,64,128);
   doc.text("Mapa de Produtos por Empresa", 40, 40);
 
-  // Legenda em quadradinhos (sem emoji para não estourar codificação)
+  // Legenda com quadradinhos (evita emoji no PDF)
   doc.setFontSize(10);
   doc.setTextColor(0,0,0);
   doc.text("Legenda:", 40, 60);
@@ -441,7 +441,7 @@ async function gerarPDF() {
     lx += 120;
   });
 
-  // Tabela (usa as classes para pintar, ignorando os emojis)
+  // Tabela
   const tabela = document.querySelector("#tabelaEmpresas table");
   if (tabela && doc.autoTable) {
     doc.autoTable({
@@ -451,13 +451,18 @@ async function gerarPDF() {
       headStyles: { fillColor: [0,64,128], textColor: 255 },
       didParseCell: (data) => {
         const cls = data.cell.raw?.getAttribute?.("class") || "";
+
+        // pinta as células conforme a classe
         if (cls.includes("status-verde"))   data.cell.styles.fillColor = [212,237,218];
         if (cls.includes("status-amarelo")) data.cell.styles.fillColor = [255,243,205];
         if (cls.includes("status-vermelho"))data.cell.styles.fillColor = [248,215,218];
         if (cls.includes("status-azul"))    data.cell.styles.fillColor = [207,226,255];
         if (cls.includes("status-cinza"))   data.cell.styles.fillColor = [246,246,246];
-        // limpa texto do PDF para não imprimir emoji (mantém só a cor)
-        if (data.section === 'body') data.cell.text = [' '];
+
+        // mantém texto da 1ª coluna (nome da empresa + %). Limpa somente colunas de status.
+        if (data.section === 'body' && data.column.index > 0) {
+          data.cell.text = [' '];
+        }
       }
     });
   } else {
