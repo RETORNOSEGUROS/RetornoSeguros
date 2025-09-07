@@ -4,8 +4,8 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 /* Estado */
-let agenciasMap  = {};    // { "<id>": "Nome — Banco / Cidade - UF" }
-let rmsMap       = {};    // { uid: {nome, agenciaId} }
+let agenciasMap  = {};
+let rmsMap       = {};
 let perfilAtual  = null;
 let minhaAgencia = null;
 let meuUid       = null;
@@ -13,11 +13,11 @@ let meuNome      = null;
 let isAdmin      = false;
 
 /* Ordenação + busca */
-let sortKey = "nome";     // nome | cnpj | cidade | estado | agencia | rmNome
-let sortDir = "asc";      // asc | desc
-let buscaNomeAtual   = ""; // filtro digitando (nome)
-let buscaCidadeAtual = ""; // filtro digitando (cidade)
-let rowsCache = [];       // cache pra filtrar sem reconsultar
+let sortKey = "nome";           // nome | cnpj | cidade | estado | agencia | rmNome
+let sortDir = "asc";
+let buscaNomeAtual   = "";
+let buscaCidadeAtual = "";
+let rowsCache = [];
 
 /* Helpers DOM */
 const $ = (id) => document.getElementById(id);
@@ -36,75 +36,39 @@ function maskCNPJ(str){
 
 /* Auth */
 auth.onAuthStateChanged(async (user) => {
-  if (!user) {
-    alert("Faça login para continuar.");
-    return (window.location.href = "login.html");
-  }
+  if (!user) { alert("Faça login para continuar."); return (window.location.href = "login.html"); }
   meuUid  = user.uid;
-  isAdmin = (user.email && user.email.toLowerCase() === "patrick@retornoseguros.com.br"); // fallback admin por e-mail
+  isAdmin = (user.email && user.email.toLowerCase() === "patrick@retornoseguros.com.br");
 
-  // Perfil do usuário
   const snap = await db.collection("usuarios_banco").doc(user.uid).get().catch(()=>null);
   const p = snap?.exists ? (snap.data()||{}) : {};
   perfilAtual  = roleNorm(p.perfil || "");
   minhaAgencia = p.agenciaId || "";
   meuNome      = p.nome || (user.email || "");
 
-  // Sem acesso?
-  if (perfilAtual === "assistente" && !isAdmin) {
-    alert("Seu perfil não tem acesso à página de cadastro de empresas.");
-    return (window.location.href = "painel.html");
-  }
+  if (perfilAtual === "assistente" && !isAdmin) { alert("Seu perfil não tem acesso."); return (window.location.href = "painel.html"); }
 
-  // header (se existir elemento)
-  const elPerfil = $('perfilUsuario');
-  if (elPerfil) elPerfil.textContent = `${meuNome} (${p.perfil || "sem perfil"})`;
+  const elPerfil = $('perfilUsuario'); if (elPerfil) elPerfil.textContent = `${meuNome} (${p.perfil || "sem perfil"})`;
 
-  // Inputs: máscara CNPJ
-  const cnpjEl = $('cnpj');
-  if (cnpjEl) cnpjEl.addEventListener("input", ()=> cnpjEl.value = maskCNPJ(cnpjEl.value));
+  const cnpjEl = $('cnpj'); if (cnpjEl) cnpjEl.addEventListener("input", ()=> cnpjEl.value = maskCNPJ(cnpjEl.value));
 
-  // Carregamentos
   await carregarAgencias();
   await carregarRMsFormulario();
   await prepararFiltrosRM();
 
-  // Regras de filtro por agência na LISTA
   const filtroSel = $('filtroAgencia');
-  if (filtroSel) {
-    if (!isAdmin && minhaAgencia) {
-      filtroSel.value = minhaAgencia;
-      filtroSel.disabled = true;
-    }
-  }
+  if (filtroSel && !isAdmin && minhaAgencia) { filtroSel.value = minhaAgencia; filtroSel.disabled = true; }
 
-  // Mostrar filtro por RM para chefe/admin
-  if (perfilAtual === "gerente chefe" || isAdmin) {
-    $('boxFiltroRm')?.classList?.remove("hidden");
-  }
+  if (perfilAtual === "gerente chefe" || isAdmin) $('boxFiltroRm')?.classList?.remove("hidden");
 
-  // Travar campos do FORM para RM
   if (!isAdmin && perfilAtual === "rm") {
-    if ($('agenciaId')) {
-      $('agenciaId').value = minhaAgencia || "";
-      $('agenciaId').disabled = true;
-    }
-    if ($('rmUid')) {
-      $('rmUid').innerHTML = `<option value="${meuUid}">${meuNome || "Eu"}</option>`;
-      $('rmUid').disabled = true;
-    }
+    $('agenciaId').value = minhaAgencia || "";  $('agenciaId').disabled = true;
+    $('rmUid').innerHTML = `<option value="${meuUid}">${meuNome || "Eu"}</option>`; $('rmUid').disabled = true;
   }
 
-  // Ordenação + buscas (nome e cidade)
   instalarOrdenacaoCabecalhos();
-  $('buscaNome')?.addEventListener("input", (e)=>{
-    buscaNomeAtual = (e.target.value||"").toLowerCase().trim();
-    renderTabela(rowsCache);
-  });
-  $('buscaCidade')?.addEventListener("input", (e)=>{
-    buscaCidadeAtual = (e.target.value||"").toLowerCase().trim();
-    renderTabela(rowsCache);
-  });
+  $('buscaNome')?.addEventListener("input", (e)=>{ buscaNomeAtual = (e.target.value||"").toLowerCase().trim(); renderTabela(rowsCache); });
+  $('buscaCidade')?.addEventListener("input", (e)=>{ buscaCidadeAtual = (e.target.value||"").toLowerCase().trim(); renderTabela(rowsCache); });
 
   await carregarEmpresas();
 });
@@ -115,19 +79,13 @@ async function carregarAgencias() {
   const selForm   = $('agenciaId');
   const selFiltro = $('filtroAgencia');
 
-  // defaults
   if (selForm)   selForm.innerHTML   = '<option value="">Selecione uma agência</option>';
   if (selFiltro) selFiltro.innerHTML = '<option value="">Minha agência</option>';
 
   let snap;
-  try {
-    snap = await db.collection("agencias_banco").orderBy("nome").get();
-    if (snap.empty) snap = await db.collection("agencias_banco").get();
-  } catch {
-    snap = await db.collection("agencias_banco").get();
-  }
+  try { snap = await db.collection("agencias_banco").orderBy("nome").get(); if (snap.empty) snap = await db.collection("agencias_banco").get(); }
+  catch { snap = await db.collection("agencias_banco").get(); }
 
-  // Se gerente-chefe/assistente: só a própria
   if (!isAdmin && (perfilAtual === "gerente chefe" || perfilAtual === "assistente")) {
     if (!minhaAgencia) return;
     const doc = await db.collection("agencias_banco").doc(minhaAgencia).get();
@@ -135,84 +93,62 @@ async function carregarAgencias() {
     const nome   = (ag.nome || "(Sem nome)").toString();
     const banco  = ag.banco ? ` — ${ag.banco}` : "";
     const cidade = (ag.Cidade || ag.cidade || "").toString();
-    const cidadeFmt = cidade ? ` / ${cidade}` : "";
-    theUF = (ag.estado || ag.UF || "").toString().toUpperCase();
-    const ufFmt = theUF ? ` - ${theUF}` : "";
-    const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
+    const uf     = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const label  = `${nome}${banco}${cidade?` / ${cidade}`:""}${uf?` - ${uf}`:""}`;
 
     agenciasMap[minhaAgencia] = label;
-
     if (selForm)   { selForm.innerHTML   = `<option value="${minhaAgencia}" selected>${label}</option>`; selForm.disabled   = true; }
     if (selFiltro) { selFiltro.innerHTML = `<option value="${minhaAgencia}" selected>${label}</option>`; selFiltro.disabled = true; }
     return;
   }
 
-  // Admin/RM: todas
   snap.forEach((doc) => {
     const ag = doc.data() || {};
     const id = doc.id;
     const nome   = (ag.nome || "(Sem nome)").toString();
     const banco  = ag.banco ? ` — ${ag.banco}` : "";
     const cidade = (ag.Cidade || ag.cidade || "").toString();
-    const cidadeFmt = cidade ? ` / ${cidade}` : "";
-    const uf = (ag.estado || ag.UF || "").toString().toUpperCase();
-    const ufFmt = uf ? ` - ${uf}` : "";
-    const label = `${nome}${banco}${cidadeFmt}${ufFmt}`;
+    const uf     = (ag.estado || ag.UF || "").toString().toUpperCase();
+    const label  = `${nome}${banco}${cidade?` / ${cidade}`:""}${uf?` - ${uf}`:""}`;
     agenciasMap[id] = label;
 
-    if (selForm) {
-      const opt1 = document.createElement("option");
-      opt1.value = id; opt1.textContent = label; selForm.appendChild(opt1);
-    }
-    if (selFiltro) {
-      const opt2 = document.createElement("option");
-      opt2.value = id; opt2.textContent = label; selFiltro.appendChild(opt2);
-    }
+    if (selForm)   selForm.insertAdjacentHTML("beforeend", `<option value="${id}">${label}</option>`);
+    if (selFiltro) selFiltro.insertAdjacentHTML("beforeend", `<option value="${id}">${label}</option>`);
   });
 
-  if (selForm && minhaAgencia && selForm.querySelector(`option[value="${minhaAgencia}"]`)) {
-    selForm.value = minhaAgencia;
-  }
+  if (selForm && minhaAgencia && selForm.querySelector(`option[value="${minhaAgencia}"]`)) selForm.value = minhaAgencia;
 }
 
-/* ===== Helpers para RMs a partir de EMPRESAS (quando não admin) ===== */
+/* ===== Helpers de RMs ===== */
 async function rmlistFromEmpresas(agenciaId){
-  const set = new Map(); // rmUid -> rmNome
+  const set = new Map();
   let q = db.collection("empresas");
   if (agenciaId) q = q.where("agenciaId","==",agenciaId);
   const snap = await q.limit(1000).get();
-  snap.forEach(d=>{
-    const e = d.data()||{};
-    if (e.rmUid) set.set(e.rmUid, e.rmNome || "(sem nome)");
-  });
+  snap.forEach(d=>{ const e=d.data()||{}; if(e.rmUid) set.set(e.rmUid, e.rmNome||"(sem nome)"); });
   return Array.from(set.entries()).map(([uid,nome])=>({uid,nome}));
 }
 
-/* RMs para o FORMULÁRIO */
 async function carregarRMsFormulario() {
-  const selectRM = $('rmUid');
-  if (!selectRM) return;
-  if (!isAdmin && perfilAtual === "rm") return; // já travado
+  const selectRM = $('rmUid'); if (!selectRM) return;
+  if (!isAdmin && perfilAtual === "rm") return;
 
   selectRM.innerHTML = '<option value="">Selecione um RM</option>';
   const agenciaEscolhida = $('agenciaId')?.value || minhaAgencia;
 
   if (isAdmin) {
-    let q = db.collection("usuarios_banco")
-              .where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
+    let q = db.collection("usuarios_banco").where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
     if (agenciaEscolhida) q = q.where("agenciaId","==",agenciaEscolhida);
     const snapshot = await q.orderBy("nome").get().catch(()=>q.get());
     snapshot.forEach((doc)=>{
       const u = doc.data()||{};
       rmsMap[doc.id] = { nome: u.nome || "(sem nome)", agenciaId: u.agenciaId || "" };
       const agRot = agenciasMap[u.agenciaId] ? ` (${agenciasMap[u.agenciaId]})` : "";
-      selectRM.insertAdjacentHTML("beforeend",
-        `<option value="${doc.id}">${u.nome||"(sem nome)"}${agRot}</option>`);
+      selectRM.insertAdjacentHTML("beforeend", `<option value="${doc.id}">${u.nome||"(sem nome)"}${agRot}</option>`);
     });
     return;
   }
 
-  // Gerente-chefe/Assistente
   const rms = await rmlistFromEmpresas(agenciaEscolhida);
   rms.forEach(({uid,nome})=>{
     rmsMap[uid] = { nome, agenciaId: agenciaEscolhida };
@@ -220,46 +156,31 @@ async function carregarRMsFormulario() {
   });
 }
 
-/* Filtro de RMs (LISTA) */
 async function prepararFiltrosRM() {
   if (!(perfilAtual === "gerente chefe" || isAdmin)) return;
   await carregarRMsFiltro();
 }
 async function carregarRMsFiltro() {
-  const filtroRm = $('filtroRm');
-  if (!filtroRm) return;
+  const filtroRm = $('filtroRm'); if (!filtroRm) return;
   const agencia = $('filtroAgencia')?.value || minhaAgencia;
   filtroRm.innerHTML = '<option value="">Todos os RMs</option>';
 
   if (isAdmin) {
-    let q = db.collection("usuarios_banco")
-              .where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
+    let q = db.collection("usuarios_banco").where("perfil", "in", ["rm","RM","Rm","RM (Gerente de Conta)"]);
     if (agencia) q = q.where("agenciaId","==",agencia);
     const snap = await q.orderBy("nome").get().catch(()=>q.get());
-    snap.forEach((doc)=>{
-      const u = doc.data()||{};
-      filtroRm.insertAdjacentHTML("beforeend",
-        `<option value="${doc.id}">${u.nome||"(sem nome)"}</option>`);
-    });
+    snap.forEach((doc)=>{ const u=doc.data()||{}; filtroRm.insertAdjacentHTML("beforeend", `<option value="${doc.id}">${u.nome||"(sem nome)"}</option>`); });
     return;
   }
-
   const rms = await rmlistFromEmpresas(agencia);
-  rms.forEach(({uid,nome})=>{
-    filtroRm.insertAdjacentHTML("beforeend", `<option value="${uid}">${nome}</option>`);
-  });
+  rms.forEach(({uid,nome})=>{ filtroRm.insertAdjacentHTML("beforeend", `<option value="${uid}">${nome}</option>`); });
 }
 
-/* onChange do select de Agência (FORM) */
+/* onChange selects */
 function onAgenciaChangeForm() { carregarRMsFormulario(); }
+async function onFiltroAgenciaChange() { if ((perfilAtual === "gerente chefe") || isAdmin) await carregarRMsFiltro(); carregarEmpresas(); }
 
-/* onChange do filtro de Agência (LISTA) */
-async function onFiltroAgenciaChange() {
-  if ((perfilAtual === "gerente chefe") || isAdmin) await carregarRMsFiltro();
-  carregarEmpresas();
-}
-
-/* Salvar empresa (criar/editar) */
+/* Salvar empresa */
 async function salvarEmpresa() {
   const nome      = $('nome').value.trim();
   const cnpj      = $('cnpj').value.trim();
@@ -271,62 +192,47 @@ async function salvarEmpresa() {
 
   if (!nome || !cidade || !estado) return alert("Preencha todos os campos obrigatórios.");
 
-  if (!isAdmin && perfilAtual === "rm") {
-    agenciaId = minhaAgencia || "";
-    rmUid     = meuUid;
-  }
-  if (!isAdmin && (perfilAtual === "gerente chefe")) {
-    if (agenciaId && minhaAgencia && agenciaId !== minhaAgencia) {
-      alert("Gerente Chefe só pode criar/editar empresas da própria agência.");
-      return;
-    }
-  }
+  if (!isAdmin && perfilAtual === "rm") { agenciaId = minhaAgencia || ""; rmUid = meuUid; }
+  if (!isAdmin && (perfilAtual === "gerente chefe") && agenciaId && minhaAgencia && agenciaId !== minhaAgencia)
+    return alert("Gerente Chefe só pode criar/editar empresas da própria agência.");
   if (!agenciaId || !rmUid) return alert("Selecione agência e RM.");
 
   const rmNome = (rmsMap[rmUid]?.nome) || (rmUid === meuUid ? (meuNome || "") : "");
   const dados = { nome, cnpj, cidade, estado, agenciaId, rmUid, rmNome };
 
   try {
-    if (empresaId) {
-      await db.collection("empresas").doc(empresaId).update(dados);
-      alert("Empresa atualizada com sucesso.");
-    } else {
-      const user = auth.currentUser;
-      if (!user) return alert("Usuário não autenticado.");
-      dados.criadoEm     = firebase.firestore.Timestamp.now();
+    if (empresaId) { await db.collection("empresas").doc(empresaId).update(dados); alert("Empresa atualizada com sucesso."); }
+    else {
+      const user = auth.currentUser; if (!user) return alert("Usuário não autenticado.");
+      dados.criadoEm = firebase.firestore.Timestamp.now();
       dados.criadoPorUid = user.uid;
       await db.collection("empresas").add(dados);
       alert("Empresa cadastrada com sucesso.");
     }
     limparFormulario();
     await carregarEmpresas();
-  } catch (e) {
-    console.error("Erro ao salvar empresa:", e);
-    alert("Erro ao salvar empresa.");
-  }
+  } catch (e) { console.error("Erro ao salvar empresa:", e); alert("Erro ao salvar empresa."); }
 }
 
-/* Carregar empresas com regras de visibilidade + filtros + ordenação */
+/* Carregar empresas */
 async function carregarEmpresas() {
   const filtroAg = isAdmin ? ($('filtroAgencia')?.value || "") : (minhaAgencia || "");
   const filtroRm = ((perfilAtual === "gerente chefe") || isAdmin) ? ($('filtroRm')?.value || "") : "";
 
   setStatus("Carregando...");
-
   try {
     let q = db.collection("empresas");
-
-    if (filtroAg) q = q.where("agenciaId", "==", filtroAg);
-    if (!isAdmin && perfilAtual === "rm") q = q.where("rmUid", "==", meuUid);
-    if (((perfilAtual === "gerente chefe") || isAdmin) && filtroRm) q = q.where("rmUid", "==", filtroRm);
+    if (filtroAg) q = q.where("agenciaId","==",filtroAg);
+    if (!isAdmin && perfilAtual === "rm") q = q.where("rmUid","==",meuUid);
+    if (((perfilAtual === "gerente chefe") || isAdmin) && filtroRm) q = q.where("rmUid","==",filtroRm);
 
     let snapshot;
     try { snapshot = await q.orderBy("nome").get(); }
-    catch (err) { console.warn("Sem índice p/ orderBy(nome); buscando sem ordenação:", err?.message); snapshot = await q.get(); }
+    catch { snapshot = await q.get(); }
 
     const rows = [];
-    snapshot.forEach((doc) => {
-      const e = doc.data() || {};
+    snapshot.forEach((doc)=>{
+      const e = doc.data()||{};
       rows.push({
         id: doc.id,
         nome: e.nome || "-",
@@ -344,10 +250,7 @@ async function carregarEmpresas() {
     rowsCache = ordenarRows(rows);
     renderTabela(rowsCache);
     setStatus(`${rows.length} empresa(s) listada(s).`);
-  } catch (e) {
-    console.error("Erro ao carregar empresas:", e);
-    setStatus("Erro ao carregar empresas. Verifique o console.");
-  }
+  } catch (e) { console.error("Erro ao carregar empresas:", e); setStatus("Erro ao carregar empresas."); }
 }
 
 /* Ordenação */
@@ -357,9 +260,7 @@ function instalarOrdenacaoCabecalhos() {
       const key = th.getAttribute("data-sort");
       if (sortKey === key) sortDir = (sortDir === "asc" ? "desc" : "asc");
       else { sortKey = key; sortDir = "asc"; }
-      atualizarSetas();
-      rowsCache = ordenarRows(rowsCache);
-      renderTabela(rowsCache);
+      atualizarSetas(); rowsCache = ordenarRows(rowsCache); renderTabela(rowsCache);
     });
   });
   atualizarSetas();
@@ -372,21 +273,17 @@ function atualizarSetas() {
   });
 }
 function ordenarRows(rows){
-  const key = sortKey;
-  const dir = sortDir === "asc" ? 1 : -1;
+  const key = sortKey, dir = (sortDir==="asc"?1:-1);
   return [...rows].sort((a,b)=>{
-    const va = (a[key] || "").toString().toLowerCase();
-    const vb = (b[key] || "").toString().toLowerCase();
-    if (va < vb) return -1*dir;
-    if (va > vb) return  1*dir;
-    return 0;
+    const va = (a[key]||"").toString().toLowerCase();
+    const vb = (b[key]||"").toString().toLowerCase();
+    if (va<vb) return -1*dir; if (va>vb) return 1*dir; return 0;
   });
 }
 
-/* Render (com busca por nome e cidade em tempo real) */
+/* Render com filtro nome + cidade */
 function renderTabela(items){
-  const tbody = $('listaEmpresas');
-  if (!tbody) return;
+  const tbody = $('listaEmpresas'); if (!tbody) return;
 
   const bn = (buscaNomeAtual||"").trim();
   const bc = (buscaCidadeAtual||"").trim();
@@ -432,7 +329,7 @@ async function editarEmpresa(id) {
   $('empresaIdEditando').value = id;
   $('nome').value   = e.nome   || "";
   $('cnpj').value   = e.cnpj   || "";
-  $('cidade').value = e.cidade || ""
+  $('cidade').value = e.cidade || "";
   $('estado').value = e.estado || "";
 
   $('agenciaId').value = e.agenciaId || "";
@@ -450,12 +347,8 @@ async function editarEmpresa(id) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-/* Excluir (com RBAC e confirmação) */
+/* Excluir (RBAC) */
 async function excluirEmpresa(id, nome, agenciaId, ownerUid, criadoPorUid){
-  // Permissões:
-  // - Admin: qualquer empresa
-  // - Gerente Chefe: empresa da mesma agência
-  // - RM: empresas onde rmUid == meuUid ou criadoPorUid == meuUid
   let pode = false;
   if (isAdmin) pode = true;
   else if (perfilAtual === "gerente chefe" && agenciaId && minhaAgencia && agenciaId === minhaAgencia) pode = true;
@@ -463,56 +356,31 @@ async function excluirEmpresa(id, nome, agenciaId, ownerUid, criadoPorUid){
 
   if(!pode) return alert("Você não tem permissão para excluir esta empresa.");
 
-  const ok = confirm(`Excluir a empresa "${nome}"? Esta ação não pode ser desfeita.`);
-  if(!ok) return;
+  if(!confirm(`Excluir a empresa "${nome}"? Esta ação não pode ser desfeita.`)) return;
 
-  try{
-    await db.collection("empresas").doc(id).delete();
-    rowsCache = rowsCache.filter(r => r.id !== id);
-    renderTabela(rowsCache);
-  }catch(e){
-    console.error("Excluir empresa:", e);
-    alert(e?.message || "Erro ao excluir.");
-  }
+  try{ await db.collection("empresas").doc(id).delete(); rowsCache = rowsCache.filter(r => r.id !== id); renderTabela(rowsCache); }
+  catch(e){ console.error("Excluir empresa:", e); alert(e?.message || "Erro ao excluir."); }
 }
 
 /* UI Helpers */
 function limparFormulario() {
   $('empresaIdEditando').value = "";
-  $('nome').value   = "";
-  $('cnpj').value   = "";
-  $('cidade').value = "";
-  $('estado').value = "";
+  $('nome').value = $('cnpj').value = $('cidade').value = $('estado').value = "";
   if ($('agenciaId')) $('agenciaId').value = minhaAgencia || "";
   if ($('rmUid')) $('rmUid').value  = "";
   $('tituloFormulario').textContent = "Cadastrar Nova Empresa";
 }
-function limparFiltro() {
-  const selAg = $('filtroAgencia');
-  const selRm = $('filtroRm');
-  if (!isAdmin && minhaAgencia) {
-    if (selAg) { selAg.value = minhaAgencia; selAg.disabled = true; }
-  } else if (selAg) {
-    selAg.value = ""; selAg.disabled = false;
-  }
-  if (selRm) selRm.value = "";
-  $('buscaNome').value = ""; buscaNomeAtual = "";
-  $('buscaCidade').value = ""; buscaCidadeAtual = "";
-  carregarEmpresas();
-}
 
-/* ------- PDF ------- */
+/* ------- PDF (com fallback) ------- */
 function gerarPDF(){
-  try{
-    const wrapperTabela = document.getElementById("tabela-wrapper");
-    if (!wrapperTabela) return alert("Tabela não encontrada para gerar o PDF.");
+  const wrapperTabela = document.getElementById("tabela-wrapper");
+  if (!wrapperTabela) return alert("Tabela não encontrada para gerar o PDF.");
 
-    // verifica se há linhas atualmente visíveis (já filtradas)
-    const linhasVisiveis = wrapperTabela.querySelectorAll("tbody tr");
-    if (!linhasVisiveis.length || (linhasVisiveis.length===1 && linhasVisiveis[0].innerText.includes("Nenhuma empresa encontrada")))
-      return alert("Sem dados na listagem para gerar o PDF.");
+  const linhas = wrapperTabela.querySelectorAll("tbody tr");
+  if (!linhas.length || (linhas.length===1 && linhas[0].innerText.includes("Nenhuma empresa encontrada")))
+    return alert("Sem dados na listagem para gerar o PDF.");
 
-    // cabeçalho + clone do estado atual (com filtros aplicados)
+  const run = ()=>{
     const container = document.createElement("div");
     container.style.padding = "16px";
     container.innerHTML = `
@@ -524,27 +392,27 @@ function gerarPDF(){
     container.appendChild(wrapperTabela.cloneNode(true));
 
     const opt = {
-      margin:       10,
-      filename:     `empresas_${Date.now()}.pdf`,
-      image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      margin: 10,
+      filename: `empresas_${Date.now()}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
+    window.html2pdf().from(container).set(opt).save();
+  };
 
-    if (typeof html2pdf === "undefined") {
-      console.error("html2pdf não carregado.");
-      alert("Não foi possível gerar o PDF (biblioteca não carregada). Atualize a página (Ctrl+F5).");
-      return;
+  if (typeof window.html2pdf === "undefined") {
+    if (typeof window.__ensureHtml2Pdf === "function") {
+      window.__ensureHtml2Pdf(run);
+    } else {
+      alert("Não foi possível carregar a biblioteca de PDF. Recarregue a página (Ctrl+F5).");
     }
-
-    html2pdf().from(container).set(opt).save();
-  } catch (e) {
-    console.error("Gerar PDF — erro:", e);
-    alert("Falha ao gerar PDF. Veja o console para detalhes.");
+    return;
   }
+  run();
 }
 
-/* Expor para HTML */
+/* Expor */
 window.onAgenciaChangeForm   = onAgenciaChangeForm;
 window.onFiltroAgenciaChange = onFiltroAgenciaChange;
 window.salvarEmpresa         = salvarEmpresa;
