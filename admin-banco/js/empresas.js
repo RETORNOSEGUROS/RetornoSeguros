@@ -15,7 +15,7 @@ let isAdmin = false;
 let produtos = [];
 let nomesProdutos = {};
 let empresasCache = []; // cache das empresas (dados básicos)
-let linhasRenderizadas = []; // cache da última matriz renderizada (para PDF)
+let linhasRenderizadas = []; // cache p/ PDF
 
 // filtros atuais
 let agencias = [];         // [{id, nome}]
@@ -44,6 +44,7 @@ function classFromStatus(statusRaw) {
   return "nenhum";
 }
 
+// tenta deduzir o ano da cotação
 function getCotacaoAno(c) {
   const candidatos = [
     c.ano, c.anoVigencia, c.anoReferencia, c.vigenciaAno,
@@ -95,7 +96,7 @@ auth.onAuthStateChanged(async (user) => {
 
   try {
     await carregarProdutos();
-    await carregarAgencias();
+    await carregarAgencias(); // mostra NOME, não UID
     await carregarRM();
     await carregarEmpresas();
   } catch (e) {
@@ -151,7 +152,7 @@ async function carregarProdutos() {
   });
 }
 
-// ---- Agências (combo) — agora usando agencias_banco para exibir NOME
+// ---- Agências (combo) — usa agencias_banco p/ nome; fallback empresas
 async function carregarAgencias() {
   const select = document.getElementById("filtroAgencia");
   if (!select) return;
@@ -164,10 +165,9 @@ async function carregarAgencias() {
   }
 
   select.innerHTML = `<option value="">Todas</option>`;
-
   const mapAg = new Map();
 
-  // 1) fonte preferencial: agencias_banco (id -> nome)
+  // 1) fonte preferencial
   try {
     const snapAg = await db.collection("agencias_banco").get();
     snapAg.forEach(doc => {
@@ -178,7 +178,7 @@ async function carregarAgencias() {
     });
   } catch (e) { console.warn("[empresas] agencias_banco:", e); }
 
-  // 2) fallback/complemento: empresas
+  // 2) fallback/complemento
   try {
     let q = db.collection("empresas");
     if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
@@ -320,7 +320,7 @@ async function carregarEmpresas() {
       return;
     }
 
-    // Monta linhas com status por produto
+    // Monta linhas com status por produto e % por empresa
     const linhas = await Promise.all(
       empresasCache.map(async (empresa) => {
         const cotDocs = await buscarCotacoesParaEmpresa(empresa.id);
@@ -340,7 +340,6 @@ async function carregarEmpresas() {
           statusPorProduto[produtoId] = classFromStatus(c.status);
         });
 
-        // % por empresa (qtd de ramos com movimento / total de ramos)
         const totalRamos = produtos.length;
         const ramosComMov = Object.values(statusPorProduto).filter(s => s !== "nenhum").length;
         const pctEmpresa = percent(ramosComMov, totalRamos);
@@ -361,7 +360,7 @@ async function carregarEmpresas() {
     const pctPorRamo = {};
     produtos.forEach(p => pctPorRamo[p] = percent(contagemPorRamo[p], totalEmpresas));
 
-    // Render — sem emojis nas células (só cor de fundo)
+    // Render — COM EMOJIS na tela, e badge % ao lado do nome da empresa
     let tituloAno = (anoSel === "todos") ? "Todos os anos" : String(anoSel);
     let html = `<table><thead><tr><th>Empresa <span class="badge">${tituloAno}</span></th>`;
     produtos.forEach(p => {
@@ -381,8 +380,8 @@ async function carregarEmpresas() {
           azul: "status-azul",
           nenhum: "status-cinza"
         }[cor] || "status-cinza";
-        // sem texto/emoji; espaço não-quebrável para manter altura
-        html += `<td class="${classe}">&nbsp;</td>`;
+        const simbolo = { verde:"🟢", amarelo:"🟡", vermelho:"🔴", azul:"🔵", nenhum:"⚪️" }[cor] || "⚪️";
+        html += `<td class="${classe}">${simbolo}</td>`;
       });
       html += `</tr>`;
     });
@@ -408,7 +407,7 @@ function abrirPainelCRM(){
   window.open(url, "_blank");
 }
 
-// === Exportar para PDF (tabela renderizada + legenda sem emojis) ===
+// === Exportar para PDF (sem emojis; cores sólidas p/ evitar caracteres estranhos) ===
 async function gerarPDF() {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert("Biblioteca jsPDF não carregada. Inclua os scripts do jsPDF e do AutoTable no HTML.");
@@ -422,20 +421,19 @@ async function gerarPDF() {
   doc.setTextColor(0,64,128);
   doc.text("Mapa de Produtos por Empresa", 40, 40);
 
-  // Legenda (quadradinhos coloridos)
+  // Legenda em quadradinhos (sem emoji para não estourar codificação)
   doc.setFontSize(10);
   doc.setTextColor(0,0,0);
   doc.text("Legenda:", 40, 60);
-
-  const legendItems = [
-    {label:"Emitido",   color:[212,237,218]}, // verde
-    {label:"Pendente",  color:[255,243,205]}, // amarelo
-    {label:"Recusado",  color:[248,215,218]}, // vermelho
-    {label:"Fechado/Emissão", color:[207,226,255]}, // azul
-    {label:"Sem cotação", color:[246,246,246]} // cinza
+  const legend = [
+    {label:"Emitido",   color:[212,237,218]},
+    {label:"Pendente",  color:[255,243,205]},
+    {label:"Recusado",  color:[248,215,218]},
+    {label:"Fechado/Emissão", color:[207,226,255]},
+    {label:"Sem cotação", color:[246,246,246]}
   ];
   let lx = 100;
-  legendItems.forEach(item => {
+  legend.forEach(item => {
     doc.setFillColor(item.color[0], item.color[1], item.color[2]);
     doc.rect(lx, 52, 14, 10, "F");
     doc.setTextColor(0,0,0);
@@ -443,7 +441,7 @@ async function gerarPDF() {
     lx += 120;
   });
 
-  // Tabela
+  // Tabela (usa as classes para pintar, ignorando os emojis)
   const tabela = document.querySelector("#tabelaEmpresas table");
   if (tabela && doc.autoTable) {
     doc.autoTable({
@@ -458,6 +456,8 @@ async function gerarPDF() {
         if (cls.includes("status-vermelho"))data.cell.styles.fillColor = [248,215,218];
         if (cls.includes("status-azul"))    data.cell.styles.fillColor = [207,226,255];
         if (cls.includes("status-cinza"))   data.cell.styles.fillColor = [246,246,246];
+        // limpa texto do PDF para não imprimir emoji (mantém só a cor)
+        if (data.section === 'body') data.cell.text = [' '];
       }
     });
   } else {
