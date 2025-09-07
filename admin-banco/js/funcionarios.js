@@ -1,15 +1,13 @@
-// funcionarios.js — v8 compatível com seu projeto (mobile + contadores + PDF)
-// Mantém a mesma base anterior e adiciona: % mapeadas, Exportar PDF e botão Voltar no HTML.
-
+// funcionarios.js — v8 compatível (menu removido nesta página, % mapeadas + PDF)
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 
-// lista atual renderizada (respeita busca/filtro)
+// lista atual e última lista renderizada (para PDF respeitar o filtro)
 let LISTA = [];
-let LISTA_RENDERIZADA = []; // última lista passada ao render
+let LISTA_RENDERIZADA = [];
 
 const normalizarPerfil = (p)=>String(p||"")
   .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
@@ -86,6 +84,7 @@ async function carregarEmpresas(){
     const col = db.collection("empresas");
     let q = col;
 
+    // escopo por perfil
     if (CTX.perfil === "rm" && CTX.uid) {
       q = q.where("rmUid", "==", CTX.uid);
     } else if ((CTX.perfil === "assistente" || CTX.perfil === "gerente chefe") && CTX.agenciaId){
@@ -100,9 +99,9 @@ async function carregarEmpresas(){
     if (snap.empty){
       LISTA = [];
       updateStatus([], 0);
+      atualizarBadgePercentual([]);
       tbody.innerHTML = `<tr><td colspan="6" class="muted" style="padding:18px">Nenhuma empresa encontrada para seu perfil/regra.</td></tr>`;
       LISTA_RENDERIZADA = [];
-      atualizarBadgePercentual([]);
       return;
     }
 
@@ -297,73 +296,83 @@ async function salvarEdicao(){
 
 // ====== Exportar PDF (layout dedicado para garantir beleza e integridade)
 function exportarPDF(){
-  const dados = LISTA_RENDERIZADA.length ? LISTA_RENDERIZADA : LISTA;
-  const agora = new Date();
-  const total = LISTA.length;
-  const mapeadas = LISTA.filter(it => it.funcionariosQtd != null).length;
-  const perc = total>0 ? (mapeadas/total*100).toFixed(1) : "0.0";
-  const totalFuncionariosFiltro = dados.reduce((acc, it)=>{
-    const v = Number(it.funcionariosQtd);
-    return acc + (Number.isFinite(v) ? v : 0);
-  }, 0);
+  try{
+    const dados = LISTA_RENDERIZADA.length ? LISTA_RENDERIZADA : LISTA;
+    if(!dados.length){
+      alert("Nada para exportar ainda. Aguarde o carregamento da lista.");
+      return;
+    }
 
-  // Monta um HTML limpo para o PDF
-  const wrap = document.getElementById("pdfArea");
-  wrap.innerHTML = ""; // limpa
-  const box = document.createElement("div");
-  box.className = "pdf-card";
-  box.innerHTML = `
-    <h1>Funcionários por Empresa — Retorno Seguros</h1>
-    <div class="sub">
-      Emitido em ${agora.toLocaleDateString("pt-BR")} ${agora.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} ·
-      Usuário: ${escapeHtml(CTX.nome||"-")} ·
-      Empresas mapeadas: ${mapeadas}/${total} (${perc}%)
-    </div>
+    const agora = new Date();
+    const total = LISTA.length || dados.length;
+    const mapeadas = (LISTA.length ? LISTA : dados).filter(it => it.funcionariosQtd != null).length;
+    const perc = total>0 ? (mapeadas/total*100).toFixed(1) : "0.0";
+    const totalFuncionariosFiltro = dados.reduce((acc, it)=>{
+      const v = Number(it.funcionariosQtd);
+      return acc + (Number.isFinite(v) ? v : 0);
+    }, 0);
 
-    <table>
-      <thead>
-        <tr>
-          <th style="width:28%">Empresa</th>
-          <th style="width:18%">RM</th>
-          <th style="width:18%">Agência</th>
-          <th style="width:14%; text-align:right">Funcionários</th>
-          <th style="width:22%">Atualizado em</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${dados.map(it=>{
-          const dt = toDate(it.funcionariosAtualizadoEm);
-          return `
-            <tr>
-              <td>${escapeHtml(it.nome)}</td>
-              <td>${escapeHtml(it.rmNome || "-")}</td>
-              <td>${escapeHtml(it.agenciaNome || "-")}</td>
-              <td style="text-align:right">${it.funcionariosQtd != null ? it.funcionariosQtd.toLocaleString("pt-BR") : "—"}</td>
-              <td>${fmtDataHora(dt)}</td>
-            </tr>
-          `;
-        }).join("")}
-      </tbody>
-      <tfoot>
-        <tr>
-          <td colspan="3">Total (filtro atual)</td>
-          <td style="text-align:right">${totalFuncionariosFiltro.toLocaleString("pt-BR")}</td>
-          <td>Empresas no filtro: ${dados.length}</td>
-        </tr>
-      </tfoot>
-    </table>
-  `;
-  wrap.appendChild(box);
+    const wrap = document.getElementById("pdfArea");
+    wrap.innerHTML = ""; // limpa
 
-  const opt = {
-    margin:       [8, 8, 10, 8],
-    filename:     `funcionarios-empresas-${agora.toISOString().slice(0,10)}.pdf`,
-    image:        { type: 'jpeg', quality: 0.98 },
-    html2canvas:  { scale: 2, useCORS: true, letterRendering: true, dpi: 192 },
-    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
-  };
+    const box = document.createElement("div");
+    box.className = "pdf-card";
+    box.innerHTML = `
+      <h1>Funcionários por Empresa — Retorno Seguros</h1>
+      <div class="sub">
+        Emitido em ${agora.toLocaleDateString("pt-BR")} ${agora.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} ·
+        Usuário: ${escapeHtml(CTX.nome||"-")} ·
+        Empresas mapeadas: ${mapeadas}/${total} (${perc}%)
+      </div>
 
-  html2pdf().set(opt).from(wrap).save();
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28%">Empresa</th>
+            <th style="width:18%">RM</th>
+            <th style="width:18%">Agência</th>
+            <th style="width:14%; text-align:right">Funcionários</th>
+            <th style="width:22%">Atualizado em</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${dados.map(it=>{
+            const dt = toDate(it.funcionariosAtualizadoEm);
+            return `
+              <tr>
+                <td>${escapeHtml(it.nome)}</td>
+                <td>${escapeHtml(it.rmNome || "-")}</td>
+                <td>${escapeHtml(it.agenciaNome || "-")}</td>
+                <td style="text-align:right">${it.funcionariosQtd != null ? it.funcionariosQtd.toLocaleString("pt-BR") : "—"}</td>
+                <td>${fmtDataHora(dt)}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3">Total (filtro atual)</td>
+            <td style="text-align:right">${totalFuncionariosFiltro.toLocaleString("pt-BR")}</td>
+            <td>Empresas no filtro: ${dados.length}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `;
+    wrap.appendChild(box);
+
+    const opt = {
+      margin:       [8, 8, 10, 8],
+      filename:     `funcionarios-empresas-${agora.toISOString().slice(0,10)}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, letterRendering: true, dpi: 192 },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
+    };
+
+    html2pdf().set(opt).from(box).save();
+  }catch(e){
+    console.error("Falha ao exportar PDF:", e);
+    alert("Não foi possível gerar o PDF. Verifique o console para detalhes.");
+  }
 }
 
 // ====== Helpers
