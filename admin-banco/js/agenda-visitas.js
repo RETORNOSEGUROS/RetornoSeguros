@@ -1,33 +1,44 @@
-/* === Agenda de Visitas (RBAC + legado, sem índices) === */
+/* === Agenda de Visitas (v12) — RBAC + melhorias de UX (autocomplete, filtros, ordenação, paginação) === */
+/* Compatível com Firebase v8, sem orderBy obrigatório (ordena em memória) */
+
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-/* ---- DOM ---- */
-const empresaSelect = document.getElementById("empresaSelect");
-const rmInfo       = document.getElementById("rmInfo");
-const tipoVisita   = document.getElementById("tipoVisita");
-const dataHora     = document.getElementById("dataHora");
-const observacoes  = document.getElementById("observacoes");
-const lista        = document.getElementById("listaVisitas");
-const vazio        = document.getElementById("vazio");
+/* ---- DOM (novo + legado) ---- */
+const empresaInput   = document.getElementById("empresaInput");
+const empresasDL     = document.getElementById("empresasDatalist");
+const empresaHidden  = document.getElementById("empresaHiddenId");
+const rmInfo         = document.getElementById("rmInfo");
+const tipoVisita     = document.getElementById("tipoVisita");
+const dataHora       = document.getElementById("dataHora");
+const observacoes    = document.getElementById("observacoes");
+const lista          = document.getElementById("listaVisitas");
+const vazio          = document.getElementById("vazio");
 
-const filtroRm   = document.getElementById("filtroRm");
-const filtroTipo = document.getElementById("filtroTipo");
-const filtroDe   = document.getElementById("filtroDe");
-const filtroAte  = document.getElementById("filtroAte");
+const filtroAgencia  = document.getElementById("filtroAgencia");
+const filtroRm       = document.getElementById("filtroRm");
+const filtroTipo     = document.getElementById("filtroTipo");
+const filtroEmpresa  = document.getElementById("filtroEmpresa");
+const filtroDe       = document.getElementById("filtroDe");
+const filtroAte      = document.getElementById("filtroAte");
 
-document.getElementById("salvarVisita")?.addEventListener("click", () => { if(auth.currentUser) salvar(); });
-document.getElementById("recarregar")?.addEventListener("click", listarTodas);
-document.getElementById("btnFiltrar")?.addEventListener("click", listarTodas);
-document.getElementById("btnLimpar")?.addEventListener("click", () => {
-  if (filtroRm)   filtroRm.value   = "";
-  if (filtroTipo) filtroTipo.value = "";
-  if (filtroDe)   filtroDe.value   = "";
-  if (filtroAte)  filtroAte.value  = "";
-  listarTodas();
+const btnFiltrar     = document.getElementById("btnFiltrar");
+const btnLimpar      = document.getElementById("btnLimpar");
+const btnMostrarMais = document.getElementById("btnMostrarMais");
+const btnAbrirTodos  = document.getElementById("btnAbrirTodos");
+const recarregarBtn  = document.getElementById("recarregar");
+const salvarBtn      = document.getElementById("salvarVisita");
+const contadorVisitas= document.getElementById("contadorVisitas");
+const paginacaoInfo  = document.getElementById("paginacaoInfo");
+
+document.querySelectorAll(".sortable").forEach(el=>{
+  el.addEventListener("click", ()=>{
+    const key = el.dataset.sort || "data";
+    toggleSort(key);
+  });
 });
 
 /* ---- Estado ---- */
@@ -36,10 +47,17 @@ let perfilAtual  = "";
 let minhaAgencia = "";
 let isAdmin      = false;
 
-const empresaRMMap = new Map(); // empresaId -> { rmUid, rmNome, agenciaId, nome }
+const empresaRMMap = new Map(); // empresaId -> { rmUid, rmNome, agenciaId, nome, cidade }
+const empresaNameToId = new Map(); // normalizado -> empresaId
 
 const fmtDate = new Intl.DateTimeFormat("pt-BR",{ dateStyle:"short" });
 const fmtTime = new Intl.DateTimeFormat("pt-BR",{ timeStyle:"short" });
+
+let rowsAll = [];     // dataset completo pós-filtro de escopo (antes dos filtros da UI)
+let rowsView = [];    // dataset pós-filtros da UI (Agência/RM/Tipo/Empresa/Período)
+let pageSize = 15;
+let pageShown = 0;
+let sortDir = "asc";  // padrão: próximas primeiro (mais antigas ao final)
 
 /* ---- Utils ---- */
 function toDate(v){
@@ -52,7 +70,7 @@ function getVisitaDate(d){
   return toDate(d.dataHoraTs || d.dataHoraStr || d.dataHora || d.datahora);
 }
 function roleNorm(p){ return String(p||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[-_]+/g," ").trim(); }
-function chunk(arr, size){ const r=[]; for(let i=0;i<arr.length;i+=size) r.push(arr.slice(i,i+size)); return r; }
+function norm(s){ return String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim(); }
 
 /* ---- Boot ---- */
 auth.onAuthStateChanged(async (user) => {
@@ -65,22 +83,24 @@ auth.onAuthStateChanged(async (user) => {
   minhaAgencia = pd.agenciaId || "";
   isAdmin      = (perfilAtual === "admin") || (user.email === "patrick@retornoseguros.com.br");
 
-  await carregarEmpresasPorPerfil();  // popula select empresa
-  await carregarRMsFiltro();          // popula filtro RM
-  await listarTodas();                // carrega lista
+  await carregarEmpresasPorPerfil();  // popula mapa de empresas (inclui cidade) e o autocomplete
+  await carregarAgenciasFiltro();     // popula filtro de agências (admin/chefe)
+  await carregarRMsFiltro();          // popula filtro de RM (dependente da agência selecionada)
+  await listarTodas();                // carrega dataset completo (escopo) e desenha
 });
 
-/* ---- Empresas por escopo (sem orderBy) ---- */
+/* ==== EMPRESAS (escopo + autocomplete) ==== */
 async function carregarEmpresasPorPerfil(){
   empresaRMMap.clear();
-  if (empresaSelect) empresaSelect.innerHTML = `<option value="">Selecione...</option>`;
+  empresaNameToId.clear();
+  if (empresasDL) empresasDL.innerHTML = "";
 
   const colEmp = db.collection("empresas");
   const buckets = [];
 
   try {
     if (isAdmin) {
-      buckets.push(colEmp.get()); // admin pode ordenar depois em memória
+      buckets.push(colEmp.get());
     } else if (["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual)) {
       if (minhaAgencia) buckets.push(colEmp.where("agenciaId","==",minhaAgencia).get());
     } else { // RM
@@ -100,84 +120,130 @@ async function carregarEmpresasPorPerfil(){
       seen.add(doc.id);
       const d = doc.data() || {};
       const nome = d.nome || d.razaoSocial || d.nomeFantasia || doc.id;
-      empresaRMMap.set(doc.id, {
-        rmUid: d.rmUid || d.rmId || null,
-        rmNome: d.rmNome || d.rm || "",
-        agenciaId: d.agenciaId || "",
-        nome
-      });
+      const cidade = d.cidade || d.municipio || d.cidadeNome || "";
+      const rmUid = d.rmUid || d.rmId || null;
+      const rmNome = d.rmNome || d.rm || "";
+      const agenciaId = d.agenciaId || "";
+      empresaRMMap.set(doc.id, { rmUid, rmNome, agenciaId, nome, cidade });
     });
   }
 
-  // Ordena em memória e renderiza
+  // Ordena e preenche datalist
   const arr = [...empresaRMMap.entries()].map(([id,o])=>({id,...o}))
     .sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"));
   arr.forEach(emp=>{
     const opt = document.createElement("option");
-    opt.value = emp.id;
-    opt.textContent = emp.nome;
-    opt.dataset.rmUid    = emp.rmUid || "";
-    opt.dataset.rmNome   = emp.rmNome || "";
-    opt.dataset.agenciaId= emp.agenciaId || "";
-    empresaSelect?.appendChild(opt);
+    opt.value = emp.nome;
+    opt.dataset.id = emp.id;
+    opt.dataset.rm = emp.rmNome || "";
+    empresasDL?.appendChild(opt);
+
+    empresaNameToId.set(norm(emp.nome), emp.id);
   });
 }
 
-/* RM label no formulário */
-empresaSelect?.addEventListener("change", ()=>{
-  const nome = empresaSelect.selectedOptions[0]?.dataset?.rmNome || "";
-  if (rmInfo) rmInfo.textContent = nome ? `(RM: ${nome})` : "";
+/* RM info quando escolhe empresa pelo autocomplete */
+empresaInput?.addEventListener("input", ()=>{
+  const val = empresaInput.value;
+  let chosenId = "";
+  let rmNome = "";
+  // tenta casar com option do datalist
+  const opts = empresasDL?.querySelectorAll("option") || [];
+  for (const o of opts) {
+    if (o.value === val) {
+      chosenId = o.dataset.id || "";
+      rmNome   = o.dataset.rm || "";
+      break;
+    }
+  }
+  // fallback: se usuário digitou parcial que coincide com um único nome
+  if (!chosenId) {
+    const key = norm(val);
+    if (empresaNameToId.has(key)) chosenId = empresaNameToId.get(key);
+  }
+  empresaHidden.value = chosenId || "";
+  if (rmInfo) rmInfo.textContent = rmNome ? `(RM: ${rmNome})` : "";
 });
 
-/* ---- Filtro de RMs (sem orderBy na query) ---- */
+/* ==== Filtros: Agências & RMs ==== */
+async function carregarAgenciasFiltro(){
+  if (!filtroAgencia) return;
+  // Só mostra para admin/chefe/assistente
+  if (!isAdmin && !["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual)) {
+    filtroAgencia.style.display = "none";
+    return;
+  }
+  // lista agências a partir das empresas do escopo (garante consistência)
+  const ids = new Map();
+  empresaRMMap.forEach(({agenciaId})=>{
+    if (agenciaId) ids.set(agenciaId, agenciaId);
+  });
+  // adiciona a agência do usuário, se existir e não estiver no mapa
+  if (minhaAgencia && !ids.has(minhaAgencia)) ids.set(minhaAgencia, minhaAgencia);
+
+  filtroAgencia.innerHTML = `<option value="">Todas</option>`;
+  [...ids.keys()].sort().forEach(a=>{
+    const opt = document.createElement("option");
+    opt.value = a;
+    opt.textContent = a; // se tiver nome legível em outro campo no futuro, trocar aqui
+    filtroAgencia.appendChild(opt);
+  });
+
+  filtroAgencia.addEventListener("change", ()=>carregarRMsFiltro());
+}
+
 async function carregarRMsFiltro(){
   if (!filtroRm) return;
-  // RM não precisa filtrar por RM (já é dele)
+  // RM não precisa ver filtro de RM
   if (!isAdmin && !["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual)) {
     filtroRm.style.display = "none";
     return;
   }
+  filtroRm.innerHTML = `<option value="">Todos</option>`;
 
-  filtroRm.innerHTML = `<option value="">Todos os RMs</option>`;
-
-  // Admin: pode ler usuarios_banco, mas sem orderBy direto.
-  let viaUsuarios = false;
-  if (isAdmin) {
-    try {
-      let q = db.collection("usuarios_banco").where("perfil","==","rm");
-      if (minhaAgencia) q = q.where("agenciaId","==",minhaAgencia);
-      const snap = await q.get();
-      const arr = [];
-      snap.forEach(doc=>{ const u=doc.data()||{}; arr.push({id:doc.id, nome:u.nome||doc.id}); });
-      arr.sort((a,b)=>(a.nome||"").localeCompare(b.nome||"","pt-BR"))
-        .forEach(({id,nome})=>{
-          const opt = document.createElement("option");
-          opt.value = id; opt.textContent = nome;
-          filtroRm.appendChild(opt);
-        });
-      viaUsuarios = true;
-    } catch(e){ /* cai para fallback */ }
-  }
-
-  if (!viaUsuarios) {
-    // Chefe/assistente: usa as empresas do escopo para descobrir RMs (sem tocar usuarios_banco)
-    const m = new Map();
-    empresaRMMap.forEach(({rmUid, rmNome})=>{
-      if (rmUid && !m.has(rmUid)) m.set(rmUid, rmNome || rmUid);
+  const agenciaSel = filtroAgencia?.value || "";
+  // monta lista de RMs a partir das empresas (mantém operação sem tocar em índices)
+  const m = new Map();
+  empresaRMMap.forEach(({rmUid, rmNome, agenciaId})=>{
+    if (agenciaSel && agenciaId !== agenciaSel) return;
+    if (rmUid && !m.has(rmUid)) m.set(rmUid, rmNome || rmUid);
+  });
+  [...m.entries()].sort((a,b)=>(a[1]||"").localeCompare(b[1]||"","pt-BR"))
+    .forEach(([uid,nome])=>{
+      const opt = document.createElement("option");
+      opt.value = uid; opt.textContent = nome;
+      filtroRm.appendChild(opt);
     });
-    [...m.entries()].sort((a,b)=>(a[1]||"").localeCompare(b[1]||"","pt-BR"))
-      .forEach(([uid,nome])=>{
-        const opt = document.createElement("option");
-        opt.value = uid; opt.textContent = nome;
-        filtroRm.appendChild(opt);
-      });
-  }
 }
 
-/* ---- Salvar visita (grava agenciaId) ---- */
+/* ==== Salvar visita ==== */
+salvarBtn?.addEventListener("click", async ()=>{
+  if(auth.currentUser) await salvar();
+});
+recarregarBtn?.addEventListener("click", listarTodas);
+btnFiltrar?.addEventListener("click", aplicarFiltrosUI);
+btnLimpar?.addEventListener("click", ()=>{
+  if (filtroAgencia) filtroAgencia.value = "";
+  if (filtroRm)      filtroRm.value = "";
+  if (filtroTipo)    filtroTipo.value = "";
+  if (filtroEmpresa) filtroEmpresa.value = "";
+  if (filtroDe)      filtroDe.value = "";
+  if (filtroAte)     filtroAte.value = "";
+  sortDir = "asc";
+  aplicarFiltrosUI();
+});
+btnMostrarMais?.addEventListener("click", ()=>{
+  pageShown = Math.min(rowsView.length, pageShown + pageSize);
+  desenharTabela();
+});
+btnAbrirTodos?.addEventListener("click", ()=>{
+  pageShown = rowsView.length;
+  desenharTabela();
+});
+
 async function salvar(){
-  const empresaId = empresaSelect?.value;
-  if (!empresaId) return alert("Selecione a empresa.");
+  const empresaId = empresaHidden?.value || "";
+  if (!empresaId) return alert("Escolha uma empresa válida no campo acima.");
   if (!dataHora?.value) return alert("Informe data e hora.");
 
   const meta = empresaRMMap.get(empresaId) || {};
@@ -194,7 +260,8 @@ async function salvar(){
 
   const payload = {
     empresaId,
-    empresaNome: meta.nome || empresaSelect.selectedOptions[0]?.textContent || "",
+    empresaNome: meta.nome || empresaInput.value || "",
+    empresaCidade: meta.cidade || "",
     agenciaId: agenciaId || "",
     rmUid: rmUid || null,
     rm: rmNome || "",
@@ -209,11 +276,14 @@ async function salvar(){
   await db.collection("agenda_visitas").add(payload);
   if (observacoes) observacoes.value = "";
   if (dataHora) dataHora.value = "";
+  empresaInput.value = "";
+  empresaHidden.value = "";
+  if (rmInfo) rmInfo.textContent = "(RM: não cadastrado)";
   await listarTodas();
   alert("Visita agendada!");
 }
 
-/* ---- Helpers: empresas da agência (para fallback legado) ---- */
+/* ==== Helpers ==== */
 async function getEmpresaIdsDaMinhaAgencia(){
   if (!minhaAgencia) return [];
   const ids = [];
@@ -230,31 +300,24 @@ async function getEmpresaIdsDaMinhaAgencia(){
   return ids;
 }
 
-/* ---- Listagem (sem orderBy na query; ordena em memória) ---- */
+/* ==== Listagem base (escopo por perfil) ==== */
 async function listarTodas(){
   if (lista) lista.innerHTML = "";
   if (vazio) vazio.style.display = "none";
+  rowsAll = [];
 
-  const rows = [];
   const col  = db.collection("agenda_visitas");
-
-  const filtroRmVal   = filtroRm?.value || "";
-  const filtroTipoVal = filtroTipo?.value || "";
-  const de = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
-  const ate= filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
 
   let docs = [];
 
   try {
     if (isAdmin) {
-      const s = await col.get(); // sem orderBy para evitar índice
+      const s = await col.get(); // sem orderBy
       docs = s.docs;
     } else if (["gerente chefe","gerente-chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
-      // Preferência: docs já com agenciaId
       let prefer = [];
       try { prefer = (await col.where("agenciaId","==",minhaAgencia).get()).docs || []; } catch(e){}
 
-      // Fallback: visitas antigas sem agenciaId, via empresaId in [...]
       let legacy = [];
       try {
         const empIds = await getEmpresaIdsDaMinhaAgencia();
@@ -270,7 +333,7 @@ async function listarTodas(){
       legacy.forEach(d=>map.set(d.id,d));
       docs = [...map.values()];
     } else {
-      // RM: rmUid ou criadoPorUid
+      // RM
       const buckets = [];
       try { buckets.push(await col.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
       try { buckets.push(await col.where("criadoPorUid","==",usuarioAtual.uid).get()); } catch(e){}
@@ -282,47 +345,122 @@ async function listarTodas(){
     console.error("Erro na consulta de visitas:", e);
   }
 
-  // Filtros (memória)
+  // Constrói rowsAll (pré-filtros de UI)
   docs.forEach(doc=>{
     const v = doc.data() || {};
     const dt = getVisitaDate(v);
     if (!dt) return;
-    if (de && dt < de) return;
-    if (ate && dt > ate) return;
-    if (filtroTipoVal && (v.tipo||"") !== filtroTipoVal) return;
-    if (filtroRmVal   && (v.rmUid||"") !== filtroRmVal) return;
-    rows.push({ id: doc.id, v, dt });
+
+    // adiciona cidade em memória se faltar no doc
+    if (!v.empresaCidade && v.empresaId && empresaRMMap.has(v.empresaId)) {
+      v.empresaCidade = empresaRMMap.get(v.empresaId).cidade || "";
+    }
+
+    rowsAll.push({ id: doc.id, v, dt });
   });
 
-  // Ordena por data
-  rows.sort((a,b)=> a.dt - b.dt);
+  // padrão: próximas primeiro (asc)
+  sortDir = "asc";
+  aplicarFiltrosUI(); // também desenha a tabela
+}
 
-  if (!rows.length){
+/* ==== Filtros da UI + paginação ==== */
+function aplicarFiltrosUI(){
+  const rmVal      = filtroRm?.value || "";
+  const tipoVal    = filtroTipo?.value || "";
+  const agVal      = filtroAgencia?.value || "";
+  const empresaTxt = norm(filtroEmpresa?.value || "");
+  const de = filtroDe?.value ? new Date(filtroDe.value + "T00:00:00") : null;
+  const ate= filtroAte?.value ? new Date(filtroAte.value + "T23:59:59") : null;
+
+  rowsView = rowsAll.filter(({v,dt})=>{
+    if (de && dt < de) return false;
+    if (ate && dt > ate) return false;
+    if (tipoVal && (v.tipo||"") !== tipoVal) return false;
+    if (rmVal   && (v.rmUid||"") !== rmVal) return false;
+    if (agVal){
+      // tenta pelo campo agencia no doc; se ausente, tenta pela empresa
+      const agDoc = v.agenciaId || (v.empresaId && empresaRMMap.get(v.empresaId)?.agenciaId) || "";
+      if (agDoc !== agVal) return false;
+    }
+    if (empresaTxt){
+      const nome = norm(v.empresaNome || "");
+      if (!nome.includes(empresaTxt)) return false;
+    }
+    return true;
+  });
+
+  ordenarAtual();
+  pageShown = Math.min(pageSize, rowsView.length);
+  desenharTabela();
+}
+
+/* ==== Ordenação ==== */
+function toggleSort(key){
+  // por ora, só data (key === 'data')
+  sortDir = (sortDir === "asc" ? "desc" : "asc");
+  ordenarAtual();
+  pageShown = Math.min(pageShown || pageSize, rowsView.length);
+  desenharTabela();
+}
+function ordenarAtual(){
+  rowsView.sort((a,b)=> sortDir === "asc" ? (a.dt - b.dt) : (b.dt - a.dt));
+}
+
+/* ==== Render ==== */
+function desenharTabela(){
+  if (!lista) return;
+  lista.innerHTML = "";
+
+  if (!rowsView.length){
     if (vazio) vazio.style.display = "block";
+    contadorVisitas.textContent = "0 visitas";
+    paginacaoInfo.textContent = "0 de 0";
     return;
+  } else {
+    if (vazio) vazio.style.display = "none";
   }
-  if (vazio) vazio.style.display = "none";
 
   const frag = document.createDocumentFragment();
-  rows.forEach(({v})=>{
-    const dt = getVisitaDate(v);
+  const limite = Math.min(rowsView.length, pageShown || pageSize);
+
+  for (let i=0; i<limite; i++){
+    const {v, dt} = rowsView[i];
     const dataFmt = dt ? fmtDate.format(dt) : "-";
     const horaFmt = dt ? fmtTime.format(dt) : "-";
     let tipo = v.tipo || "";
     let obs  = v.observacoes || "";
     if (tipo && !["Presencial","Online"].includes(tipo) && !obs){ obs = tipo; tipo = ""; }
 
+    const cidade = v.empresaCidade || (v.empresaId && empresaRMMap.get(v.empresaId)?.cidade) || "-";
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td data-label="DATA">${dataFmt}</td>
       <td data-label="HORA">${horaFmt}</td>
       <td data-label="EMPRESA">${v.empresaNome || "-"}</td>
+      <td data-label="CIDADE">${cidade || "-"}</td>
       <td data-label="RM"><span class="rm-chip">${v.rm || "-"}</span></td>
       <td data-label="TIPO"><span class="badge">${tipo || "-"}</span></td>
       <td data-label="OBSERVAÇÕES">${obs || "-"}</td>
-      <td data-label="AÇÕES"></td>
+      <td data-label="AÇÕES" class="actions-col"></td>
     `;
     frag.appendChild(tr);
-  });
+  }
   lista.appendChild(frag);
+
+  // contador e paginação
+  contadorVisitas.textContent = `${rowsView.length} visita${rowsView.length===1?"":"s"}`;
+  paginacaoInfo.textContent = `${Math.min(limite, rowsView.length)} de ${rowsView.length}`;
 }
+
+/* ==== Qualquer mudança em filtro que impacte RM (encadeado) ==== */
+filtroAgencia?.addEventListener("change", aplicarFiltrosUI);
+filtroRm?.addEventListener("change", aplicarFiltrosUI);
+filtroTipo?.addEventListener("change", aplicarFiltrosUI);
+filtroEmpresa?.addEventListener("input", ()=>{
+  // digitação livre, aplica em tempo real
+  aplicarFiltrosUI();
+});
+filtroDe?.addEventListener("change", aplicarFiltrosUI);
+filtroAte?.addEventListener("change", aplicarFiltrosUI);
