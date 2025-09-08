@@ -27,6 +27,8 @@ const F = {
 el("btnAplicar").onclick   = () => aplicar();
 el("btnLimpar").onclick    = () => { Object.values(F).forEach(x=>{ if (x) x.value=''; }); aplicar(); };
 el("btnExportar").onclick  = () => exportarCSV();
+const BTN_PDF = el("btnExportarPDF");
+if (BTN_PDF) BTN_PDF.onclick = () => exportarPDF();
 
 // --- Estado / RBAC ---
 let usuarioAtual = null;
@@ -38,6 +40,11 @@ let isAdmin      = false;
 let visitasRaw = []; // docs de visitas (já RBAC)
 let linhas = [];     // linhas flatten por ramo
 let empresasDaMinhaAgencia = new Set(); // cache p/ GC/assistente
+
+// --- Ordenação ---
+let sortKey = "dataObj";
+let sortDir = "desc"; // 'asc' | 'desc'
+let currentRows = [];
 
 /* ===== Helpers ===== */
 // normaliza texto: remove acentos, minúsculo
@@ -104,6 +111,10 @@ auth.onAuthStateChanged(async user=>{
   minhaAgencia = ctx.agenciaId;
   isAdmin      = ctx.isAdmin;
 
+  // Mostrar coluna de ações só para admin
+  const thAcoes = document.querySelector(".th-acoes");
+  if (thAcoes) thAcoes.style.display = isAdmin ? "" : "none";
+
   // Pré-carrega empresas da própria agência (para GC/assistente)
   if (!isAdmin && ["gerente chefe","assistente"].includes(perfilAtual) && minhaAgencia) {
     await carregarEmpresasDaMinhaAgencia();
@@ -111,6 +122,7 @@ auth.onAuthStateChanged(async user=>{
 
   await carregar();       // coleta + flatten
   popularCombos();        // combos
+  wireSorters();          // eventos de ordenação nos headers
   aplicar();              // render inicial
 });
 
@@ -189,7 +201,7 @@ async function coletarVisitasPorPerfil() {
 async function carregar(){
   const snapDocs = await coletarVisitasPorPerfil();
   if (!snapDocs.length) {
-    tbody.innerHTML = `<tr><td colspan="12">Nenhuma visita registrada.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13">Nenhuma visita registrada.</td></tr>`;
     visitasRaw = []; linhas = [];
     return;
   }
@@ -237,7 +249,10 @@ async function carregar(){
   linhas = [];
   for (const v of visitasRaw){
     const ramos = v.ramos || {};
-    for (const [ramo, info] of Object.entries(ramos)){
+    // caso não tenha ramos, cria uma linha "genérica" só para a visita
+    const base = Object.keys(ramos).length ? ramos : { "VISITA": { vencimento: null, premio: 0, seguradora: "-", observacoes: v.observacoes || "-" } };
+
+    for (const [ramo, info] of Object.entries(base)){
       const {dd, mm, yyyy} = extrairDMY(info.vencimento);
       const premioNum = Number(info.premio) || 0;
 
@@ -256,7 +271,7 @@ async function carregar(){
         vencStr: dmyToString({dd,mm,yyyy}),
         premio: premioNum,
         seguradora: info.seguradora || "-",
-        observacoes: info.observacoes ?? "-"
+        observacoes: (info.observacoes ?? v.observacoes ?? "-")
       });
     }
   }
@@ -315,7 +330,65 @@ function aplicar(){
     return true;
   });
 
-  render(rows);
+  currentRows = sortRows(rows);
+  render(currentRows);
+}
+
+function sortRows(rows){
+  const key = sortKey;
+  const dir = sortDir === "asc" ? 1 : -1;
+  return rows.slice().sort((a,b)=>{
+    let va = a[key], vb = b[key];
+
+    // normalizar strings
+    if (typeof va === "string") va = va.toLowerCase();
+    if (typeof vb === "string") vb = vb.toLowerCase();
+
+    // datas
+    if (key === "dataObj"){
+      return (a.dataObj - b.dataObj) * dir;
+    }
+
+    // vencimento completo quando ordenar por vencYYYY (considera mm e dd)
+    if (key === "vencYYYY"){
+      const da = new Date(a.vencYYYY||0, (a.vencMM||1)-1, a.vencDD||1).getTime();
+      const db = new Date(b.vencYYYY||0, (b.vencMM||1)-1, b.vencDD||1).getTime();
+      return (da - db) * dir;
+    }
+
+    // prêmio numérico
+    if (key === "premio"){
+      return ((Number(va)||0) - (Number(vb)||0)) * dir;
+    }
+
+    // padrão
+    if (va < vb) return -1*dir;
+    if (va > vb) return  1*dir;
+    return 0;
+  });
+}
+
+function wireSorters(){
+  document.querySelectorAll("th .sorter").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const key = btn.getAttribute("data-key");
+      if (sortKey === key){
+        sortDir = (sortDir === "asc") ? "desc" : "asc";
+      } else {
+        sortKey = key;
+        sortDir = (key === "dataObj") ? "desc" : "asc"; // padrão: datas desc, demais asc
+      }
+
+      // Atualiza setinhas
+      document.querySelectorAll("th .sorter .dir").forEach(d=>d.textContent="");
+      const dirSpan = btn.querySelector(".dir");
+      if (dirSpan) dirSpan.textContent = (sortDir === "asc" ? "▲" : "▼");
+
+      // Ordena e re-renderiza
+      currentRows = sortRows(currentRows.length ? currentRows : linhas);
+      render(currentRows);
+    });
+  });
 }
 
 function render(rows){
@@ -327,12 +400,13 @@ function render(rows){
 
   if (!tbody) return;
   if (!rows.length){
-    tbody.innerHTML = `<tr><td colspan="12">Nenhum registro encontrado para os filtros selecionados.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13">Nenhum registro encontrado para os filtros selecionados.</td></tr>`;
     return;
   }
 
+  const showActions = isAdmin;
   const html = rows.map(r=>`
-    <tr>
+    <tr data-id="${r.visitaId}">
       <td>${r.dataStr}</td>
       <td>${r.tipoVisita}</td>
       <td>${r.usuarioNome}</td>
@@ -345,19 +419,88 @@ function render(rows){
       <td>R$ ${fmtBRL(r.premio)}</td>
       <td>${r.seguradora}</td>
       <td>${r.observacoes || '-'}</td>
+      ${showActions ? `<td>
+          <button class="btn danger btn-excluir print-hide" title="Excluir visita (admin)">
+            Excluir
+          </button>
+        </td>` : ``}
     </tr>
   `).join("");
   tbody.innerHTML = html;
+
+  // Mostrar/ocultar header "Ações"
+  const thAcoes = document.querySelector(".th-acoes");
+  if (thAcoes) thAcoes.style.display = showActions ? "" : "none";
 }
 
+/* ===== Exportações ===== */
 function exportarCSV(){
   if (!tbody) return;
   const rows = [...tbody.querySelectorAll("tr")].map(tr=>[...tr.children].map(td=>td.innerText));
   if (!rows.length) return;
+  // remove coluna "Ações" do CSV (se existir)
+  const cleaned = rows.map(cols => (cols.length > 12 ? cols.slice(0,12) : cols));
   const header = ["Data","Tipo","Usuário","Empresa","Agência","RM","Nº Funcionários","Produto","Vencimento (dia/mês/ano)","Prêmio","Seguradora","Observações"];
-  const csv = [header].concat(rows).map(cols=>cols.map(v=>`"${(v||"").replace(/"/g,'""')}"`).join(";")).join("\n");
+  const csv = [header].concat(cleaned).map(cols=>cols.map(v=>`"${(v||"").replace(/"/g,'""')}"`).join(";")).join("\n");
   const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement("a");
   a.href = url; a.download = "relatorio-visitas.csv"; a.click();
 }
+
+function exportarPDF(){
+  // carimbo de data/hora
+  const stamp = document.getElementById("stampData");
+  if (stamp) stamp.textContent = new Date().toLocaleString("pt-BR");
+
+  // Clonamos o conteúdo principal para evitar efeitos colaterais visuais
+  const conteudo = document.getElementById("conteudoRelatorio");
+  if (!conteudo) return;
+  const clone = conteudo.cloneNode(true);
+
+  // Oculta elementos com .print-hide dentro do clone
+  clone.querySelectorAll(".print-hide").forEach(el => el.remove());
+
+  // Força tabelas a caberem no PDF
+  clone.style.maxWidth = "100%";
+  clone.querySelectorAll("table").forEach(t => {
+    t.style.tableLayout = "fixed";
+    t.style.wordBreak = "break-word";
+    t.style.fontSize = "12px";
+  });
+
+  const opt = {
+    margin:       [8, 8, 10, 8],     // mm
+    filename:     `relatorio-visitas-${new Date().toISOString().slice(0,10)}.pdf`,
+    image:        { type: 'jpeg', quality: 0.98 },
+    html2canvas:  { scale: 2, useCORS: true, scrollY: 0 },
+    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' } // landscape para tabela larga
+  };
+
+  html2pdf().from(clone).set(opt).save();
+}
+
+/* ===== Delegação: excluir (admin) ===== */
+document.addEventListener("click", async (ev)=>{
+  const btn = ev.target.closest(".btn-excluir");
+  if (!btn) return;
+
+  if (!isAdmin) { alert("Somente administradores podem excluir visitas."); return; }
+
+  const tr = btn.closest("tr");
+  const visitaId = tr?.getAttribute("data-id");
+  if (!visitaId) return;
+
+  const ok = confirm("Tem certeza que deseja excluir esta visita? Esta ação não pode ser desfeita.");
+  if (!ok) return;
+
+  try{
+    await db.collection("visitas").doc(visitaId).delete();
+    // remove todas as linhas com este visitaId do array e recarrega tabela
+    linhas = linhas.filter(l => l.visitaId !== visitaId);
+    aplicar();
+  }catch(e){
+    console.error(e);
+    alert("Não foi possível excluir. Verifique suas permissões ou tente novamente.");
+  }
+});
