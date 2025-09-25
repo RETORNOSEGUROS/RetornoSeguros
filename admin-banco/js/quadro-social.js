@@ -1,9 +1,7 @@
+// /admin-banco/js/quadro-social.js
+
 // ==== Firebase ====
-try {
-  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-} catch (e) {
-  showErr("Firebase não inicializou. Confira /js/firebase-config.js");
-}
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 
@@ -18,20 +16,25 @@ const elSoma    = document.getElementById("somaPerc");
 const elHint    = document.getElementById("sumHint");
 const elErr     = document.getElementById("err");
 
+// Debug banner
 function showErr(msg){ if(!elErr) return; elErr.textContent = msg; elErr.style.display = "block"; }
+function showDebug(obj){
+  const s = `[QuadroSocial] uid=${obj.uid||"-"} | role=${obj.role||"-"} | agenciaId=${obj.agenciaId??"-"} | admin=${obj.isAdmin}`;
+  console.log(s);
+  showErr(s);
+}
 
-// ==== State ====
 let empresaIdAtual = qs.get("empresaId") || "";
 let unsubSocios = null;
 let cacheAlteracoes = new Map();
 let cacheNovos = [];
-let perfil = { role: "user", agenciaId: null };
+let perfil = { role: "user", agenciaId: null, isAdmin: false };
 
 // ==== Utils ====
 const ddmmyyyyMask = v => { let s=(v||"").replace(/\D/g,'').slice(0,8); if(s.length>=5)s=s.slice(0,2)+"/"+s.slice(2,4)+"/"+s.slice(4); else if(s.length>=3)s=s.slice(0,2)+"/"+s.slice(2); return s; };
 const validaData   = v => { const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v||""); if(!m)return false; const d=+m[1],mo=+m[2],y=+m[3]; const dt=new Date(y,mo-1,d); return dt.getFullYear()===y&&dt.getMonth()+1===mo&&dt.getDate()===d; };
-const pct         = n => isNaN(+n)?0:+(+n).toFixed(2);
-const isAdminRole = r => { if(!r) return false; const s=(Array.isArray(r)?r.join(","):String(r)).toLowerCase(); return s.includes("admin"); };
+const pct          = n => isNaN(+n)?0:+(+n).toFixed(2);
+const looksAdmin   = r => { if(!r) return false; const s=(Array.isArray(r)?r.join(','):String(r)).toLowerCase(); return s.includes("admin"); };
 
 function setSomaPercentual(){
   let soma = 0;
@@ -107,31 +110,45 @@ function listenSocios(){
       setSomaPercentual();
     }, err=>{
       console.error("listenSocios error:", err);
-      showErr("Sem permissão para ler quadro_social ou regras bloqueando.");
+      showErr("Sem permissão para ler quadro_social ou rules bloqueando.");
       renderVazio("Erro ao carregar (permissão).");
     });
 }
 
-// Perfil do usuário (para filtrar por agência quando não for admin)
+// ==== PERFIL e EMPRESAS ====
 async function getPerfil(uid){
-  const tries = [
+  // tenta claims e coleções
+  let isAdminClaim = false;
+  try {
+    const token = await auth.currentUser.getIdTokenResult(true);
+    const c = token.claims || {};
+    isAdminClaim = !!(c.admin || c.isAdmin || (Array.isArray(c.roles)&&c.roles.includes('admin')) || c.role === 'admin');
+  } catch(e){ /* ignore */ }
+
+  let p = {};
+  for (const ref of [
     db.collection("usuarios_banco").doc(uid),
     db.collection("usuarios").doc(uid)
-  ];
-  for (const ref of tries){
-    try { const d = await ref.get(); if (d.exists) return d.data()||{}; } catch(_){}
+  ]) {
+    try { const d = await ref.get(); if (d.exists) { p = d.data()||{}; break; } }
+    catch(e){ /* ignore */ }
   }
-  return {};
+  const role = p.role || p.perfil || (isAdminClaim ? "admin" : "user");
+  const agenciaId = qs.get("agenciaId") || p.agenciaId || p.agencia || null; // permite forçar via ?agenciaId=3495
+  return { role, agenciaId, isAdmin: isAdminClaim || looksAdmin(role) };
 }
 
 async function carregarEmpresas(filtro=""){
   try {
     let ref = db.collection("empresas");
-    const isAdmin = isAdminRole(perfil.role);
-    if (!isAdmin && perfil.agenciaId) {
-      ref = ref.where("agenciaId","==", String(perfil.agenciaId));
+
+    // Filtragem por agência obrigatória para não-admin.
+    if (!perfil.isAdmin) {
+      const ag = (perfil.agenciaId ? String(perfil.agenciaId) : "__none__");
+      ref = ref.where("agenciaId","==", ag);
     }
 
+    // orderBy seguro
     let snap;
     try { snap = await ref.orderBy("nome").get(); }
     catch { try { snap = await ref.orderBy("razaoSocial").get(); } catch { snap = await ref.get(); } }
@@ -152,7 +169,7 @@ async function carregarEmpresas(filtro=""){
       elSelect.value = empresaIdAtual;
       listenSocios();
     } else if (itens.length === 0){
-      renderVazio("Nenhuma empresa encontrada para seu perfil.");
+      renderVazio(perfil.isAdmin ? "Nenhuma empresa encontrada." : "Nenhuma empresa para sua agência.");
     }
   } catch (e){
     console.error("carregarEmpresas error:", e);
@@ -201,18 +218,15 @@ elSalvar.addEventListener("click", async ()=>{
   catch (e){ console.error("commit error:", e); showErr("Falha ao salvar (rules)."); }
 });
 
-// ==== Boot com guard de login ====
+// ==== Boot com guard e debug ====
 auth.onAuthStateChanged(async (u)=>{
   if (!u) {
-    // Redireciona se não autenticado
     const next = encodeURIComponent(location.pathname.replace(/^\/+/,''));
     location.href = `/admin-banco/login.html?next=${next}`;
     return;
   }
-  try {
-    const p = await getPerfil(u.uid);
-    perfil = { role: p.role || p.perfil || "user", agenciaId: p.agenciaId || p.agencia || null };
-  } catch { /* segue com defaults */ }
+  perfil = await getPerfil(u.uid);
+  showDebug({ uid: u.uid, role: perfil.role, agenciaId: perfil.agenciaId, isAdmin: perfil.isAdmin });
   await carregarEmpresas("");
   if (!empresaIdAtual && elSelect.value) empresaIdAtual = elSelect.value;
   if (empresaIdAtual) listenSocios();
