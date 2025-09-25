@@ -1,10 +1,12 @@
-// Inicialização Firebase
+// /admin-banco/js/quadro-social.js
+
+// ==== Firebase ====
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 
-// Elements
-const qs = new URLSearchParams(location.search);
+// ==== Elements ====
+const qs        = new URLSearchParams(location.search);
 const elBusca   = document.getElementById("busca");
 const elSelect  = document.getElementById("empresaSelect");
 const elLista   = document.getElementById("listaSocios");
@@ -15,75 +17,51 @@ const elHint    = document.getElementById("sumHint");
 
 let empresaIdAtual = qs.get("empresaId") || "";
 let unsubSocios = null;
-let cacheAlteracoes = new Map(); // docId => {nome, dataNascimento, percentual}
-let cacheNovos = []; // itens ainda sem docId
+let cacheAlteracoes = new Map();
+let cacheNovos = [];
 
-function ddmmyyyyMask(v){
-  let s = (v || "").replace(/\D/g,'').slice(0,8);
-  if (s.length >= 5) s = s.slice(0,2)+"/"+s.slice(2,4)+"/"+s.slice(4);
-  else if (s.length >= 3) s = s.slice(0,2)+"/"+s.slice(2);
-  return s;
-}
-function validaData(v){
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v||"");
-  if (!m) return false;
-  const d=+m[1], mo=+m[2], y=+m[3];
-  const dt = new Date(y, mo-1, d);
-  return dt.getFullYear()===y && dt.getMonth()+1===mo && dt.getDate()===d;
-}
-function pct(n){ return isNaN(+n) ? 0 : +(+n).toFixed(2) }
+let user = null;
+let perfil = { role: "user", agenciaId: null }; // será preenchido
+
+// ==== Utils ====
+function ddmmyyyyMask(v){let s=(v||"").replace(/\D/g,'').slice(0,8);if(s.length>=5)s=s.slice(0,2)+"/"+s.slice(2,4)+"/"+s.slice(4);else if(s.length>=3)s=s.slice(0,2)+"/"+s.slice(2);return s;}
+function validaData(v){const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v||"");if(!m)return false;const d=+m[1],mo=+m[2],y=+m[3];const dt=new Date(y,mo-1,d);return dt.getFullYear()===y&&dt.getMonth()+1===mo&&dt.getDate()===d;}
+function pct(n){return isNaN(+n)?0:+(+n).toFixed(2)}
+function isAdminRole(r){ if(!r) return false; const s=(Array.isArray(r)?r.join(','):String(r)).toLowerCase(); return s.includes("admin"); }
 
 function setSomaPercentual(){
   let soma = 0;
-  // ler do DOM atual:
   elLista.querySelectorAll("tr[data-id], tr[data-new]").forEach(tr=>{
-    const perc = parseFloat(tr.querySelector(".inp-perc").value);
-    if (!isNaN(perc)) soma += perc;
+    const p = parseFloat(tr.querySelector(".inp-perc").value);
+    if(!isNaN(p)) soma += p;
   });
   soma = +soma.toFixed(2);
   elSoma.textContent = soma;
-
-  if (soma === 100) {
-    elHint.textContent = "Fechado em 100%.";
-    elHint.className = "help sum-ok";
-  } else if (soma < 100) {
-    elHint.textContent = `Faltam ${(100 - soma).toFixed(2)} p.p.`;
-    elHint.className = "help";
-  } else {
-    elHint.textContent = `Excedeu ${(soma - 100).toFixed(2)} p.p.`;
-    elHint.className = "help sum-warn";
-  }
+  if (soma === 100) { elHint.textContent = "Fechado em 100%."; elHint.className = "help sum-ok"; }
+  else if (soma < 100){ elHint.textContent = `Faltam ${(100-soma).toFixed(2)} p.p.`; elHint.className = "help"; }
+  else { elHint.textContent = `Excedeu ${(soma-100).toFixed(2)} p.p.`; elHint.className = "help sum-warn"; }
 }
 
 function rowSocio(docId, data){
   const tr = document.createElement("tr");
   if (docId) tr.dataset.id = docId; else tr.dataset.new = "1";
-
   tr.innerHTML = `
     <td><input class="inp-nome" type="text" value="${data.nome||""}" placeholder="Nome completo" /></td>
     <td><input class="inp-nasc" type="text" value="${data.dataNascimento||""}" placeholder="dd/mm/aaaa" maxlength="10"/></td>
     <td><input class="inp-perc" type="number" step="0.01" min="0" max="100" value="${data.percentual??""}" /></td>
-    <td class="td-upd">${data.atualizadoEm ? data.atualizadoEm.toDate?.().toLocaleString() : "-"}</td>
-    <td class="actions">
-      <button class="btn-sec bt-del">Excluir</button>
-    </td>
+    <td class="td-upd">${data.atualizadoEm ? (data.atualizadoEm.toDate?.().toLocaleString?.() || "-") : "-"}</td>
+    <td class="actions"><button class="btn-sec bt-del">Excluir</button></td>
   `;
-
-  tr.querySelector(".inp-nasc").addEventListener("input", e=>{
-    e.target.value = ddmmyyyyMask(e.target.value);
-  });
-
-  // marca alteração
+  tr.querySelector(".inp-nasc").addEventListener("input", e=> e.target.value = ddmmyyyyMask(e.target.value));
   tr.querySelectorAll(".inp-nome,.inp-nasc,.inp-perc").forEach(inp=>{
     inp.addEventListener("input", ()=>{
-      if (docId) {
+      if (docId){
         cacheAlteracoes.set(docId, {
           nome: tr.querySelector(".inp-nome").value.trim(),
           dataNascimento: tr.querySelector(".inp-nasc").value.trim(),
           percentual: pct(tr.querySelector(".inp-perc").value)
         });
       } else {
-        // novo
         const idx = [...elLista.querySelectorAll('tr[data-new]')].indexOf(tr);
         cacheNovos[idx] = {
           nome: tr.querySelector(".inp-nome").value.trim(),
@@ -94,85 +72,106 @@ function rowSocio(docId, data){
       setSomaPercentual();
     });
   });
-
   tr.querySelector(".bt-del").addEventListener("click", async ()=>{
-    if (docId) {
-      const ok = confirm("Excluir este sócio? Esta ação não pode ser desfeita.");
-      if (!ok) return;
-      await db.collection("empresas").doc(empresaIdAtual)
-              .collection("quadro_social").doc(docId).delete();
+    if (docId){
+      if (!confirm("Excluir este sócio?")) return;
+      await db.collection("empresas").doc(empresaIdAtual).collection("quadro_social").doc(docId).delete();
     } else {
-      tr.remove();
-      setSomaPercentual();
+      tr.remove(); setSomaPercentual();
     }
   });
-
   return tr;
 }
 
-function renderVazio(){
-  elLista.innerHTML = `<tr><td class="empty" colspan="5">Nenhum sócio cadastrado.</td></tr>`;
+function renderVazio(msg="Nenhum sócio cadastrado."){
+  elLista.innerHTML = `<tr><td class="empty" colspan="5">${msg}</td></tr>`;
   setSomaPercentual();
 }
 
 function listenSocios(){
-  if (!empresaIdAtual) { renderVazio(); return; }
+  if (!empresaIdAtual){ renderVazio("Selecione uma empresa para carregar o quadro social."); return; }
   if (unsubSocios) unsubSocios();
-
-  cacheAlteracoes.clear();
-  cacheNovos = [];
+  cacheAlteracoes.clear(); cacheNovos = [];
 
   unsubSocios = db.collection("empresas").doc(empresaIdAtual)
     .collection("quadro_social")
     .orderBy("nome")
     .onSnapshot(snap=>{
       elLista.innerHTML = "";
-      if (snap.empty) { renderVazio(); return; }
-      snap.forEach(doc=>{
-        const d = doc.data() || {};
-        elLista.appendChild(rowSocio(doc.id, d));
-      });
+      if (snap.empty){ renderVazio(); return; }
+      snap.forEach(doc=> elLista.appendChild(rowSocio(doc.id, doc.data()||{})) );
       setSomaPercentual();
     }, err=>{
-      console.error(err);
-      renderVazio();
-      alert("Erro ao carregar o quadro social. Verifique permissões.");
+      console.error("listenSocios PERMISSION/DATA error:", err);
+      renderVazio("Erro ao carregar. Verifique permissões.");
+      alert("Erro ao carregar o quadro social (permissão).");
     });
 }
 
-async function carregarEmpresas(filtro=""){
-  let ref = db.collection("empresas");
-  // Firestore v8 não tem where com OR aqui simples; filtra no client:
-  const snap = await ref.get();
-  const itens = [];
-  snap.forEach(doc=>{
-    const d = doc.data() || {};
-    const nome = d.nome || d.razaoSocial || d.fantasia || doc.id;
-    const cnpj = d.cnpj || "";
-    const agencia = d.agenciaId || d.agencia || "";
-    const txt = `${nome} ${cnpj} ${agencia}`.toLowerCase();
-    if (!filtro || txt.includes(filtro.toLowerCase())) {
-      itens.push({id: doc.id, nome});
-    }
-  });
-  itens.sort((a,b)=>a.nome.localeCompare(b.nome,'pt'));
-  elSelect.innerHTML = `<option value="">Selecione...</option>`+
-    itens.map(i=>`<option value="${i.id}">${i.nome}</option>`).join("");
+// ==== PERFIL e EMPRESAS ====
+async function getPerfil(uid){
+  // tenta usuarios_banco/{uid}, depois usuarios/{uid}
+  const paths = [
+    db.collection("usuarios_banco").doc(uid),
+    db.collection("usuarios").doc(uid)
+  ];
+  for (const ref of paths){
+    try {
+      const doc = await ref.get();
+      if (doc.exists){ return doc.data() || {}; }
+    } catch(e){ /* ignora */ }
+  }
+  return {};
+}
 
-  // pré-seleção se veio por querystring
-  if (empresaIdAtual) {
-    elSelect.value = empresaIdAtual;
-    listenSocios();
+async function carregarEmpresas(filtro=""){
+  try {
+    let ref = db.collection("empresas");
+
+    const role = perfil.role;
+    const isAdmin = isAdminRole(role);
+    if (!isAdmin && perfil.agenciaId){
+      // respeita suas rules de segmentação
+      ref = ref.where("agenciaId","==", String(perfil.agenciaId));
+    }
+
+    // orderBy seguro
+    let snap;
+    try { snap = await ref.orderBy("nome").get(); }
+    catch(_){ 
+      try { snap = await ref.orderBy("razaoSocial").get(); }
+      catch(__){ snap = await ref.get(); }
+    }
+
+    const itens = [];
+    snap.forEach(doc=>{
+      const d = doc.data() || {};
+      const nome = d.nome || d.razaoSocial || d.fantasia || doc.id;
+      const cnpj = d.cnpj || "";
+      const agencia = d.agenciaId || d.agencia || "";
+      const txt = `${nome} ${cnpj} ${agencia}`.toLowerCase();
+      if (!filtro || txt.includes(filtro.toLowerCase())) itens.push({id:doc.id, nome});
+    });
+    itens.sort((a,b)=> a.nome.localeCompare(b.nome,'pt'));
+    elSelect.innerHTML = `<option value="">Selecione...</option>` + itens.map(i=>`<option value="${i.id}">${i.nome}</option>`).join("");
+
+    if (empresaIdAtual){
+      elSelect.value = empresaIdAtual;
+      listenSocios();
+    } else if (itens.length === 0){
+      renderVazio("Nenhuma empresa encontrada para seu perfil/permissões.");
+    }
+  } catch (e){
+    console.error("carregarEmpresas error:", e);
+    elSelect.innerHTML = `<option value="">(erro ao carregar)</option>`;
+    renderVazio("Erro ao carregar empresas. Verifique regras/permissões.");
+    alert("Não foi possível listar empresas. Cheque as Firestore Rules e se o usuário está autenticado.");
   }
 }
 
-// Eventos UI
+// ==== Eventos UI ====
 elBusca.addEventListener("input", (e)=>carregarEmpresas(e.target.value));
-elSelect.addEventListener("change", ()=>{
-  empresaIdAtual = elSelect.value || "";
-  listenSocios();
-});
-
+elSelect.addEventListener("change", ()=>{ empresaIdAtual = elSelect.value || ""; listenSocios(); });
 elAdd.addEventListener("click", ()=>{
   if (!empresaIdAtual) return alert("Selecione uma empresa primeiro.");
   if (elLista.querySelector(".empty")) elLista.innerHTML = "";
@@ -181,59 +180,9 @@ elAdd.addEventListener("click", ()=>{
   setSomaPercentual();
   tr.querySelector(".inp-nome").focus();
 });
-
 elSalvar.addEventListener("click", async ()=>{
   if (!empresaIdAtual) return alert("Selecione uma empresa.");
-  // validações
-  for (const tr of elLista.querySelectorAll("tr[data-id], tr[data-new]")) {
+  for (const tr of elLista.querySelectorAll("tr[data-id], tr[data-new]")){
     const nome = tr.querySelector(".inp-nome").value.trim();
     const nasc = tr.querySelector(".inp-nasc").value.trim();
-    const perc = parseFloat(tr.querySelector(".inp-perc").value);
-    if (!nome) return alert("Há sócio sem nome.");
-    if (!validaData(nasc)) return alert(`Data inválida (${nasc}). Use dd/mm/aaaa.`);
-    if (isNaN(perc) || perc < 0 || perc > 100) return alert(`Percentual inválido (${perc}).`);
-  }
-
-  const batch = db.batch();
-  const col = db.collection("empresas").doc(empresaIdAtual).collection("quadro_social");
-  const now = firebase.firestore.FieldValue.serverTimestamp();
-
-  // updates
-  for (const [docId, payload] of cacheAlteracoes.entries()) {
-    batch.update(col.doc(docId), {...payload, atualizadoEm: now});
-  }
-  // creates
-  elLista.querySelectorAll("tr[data-new]").forEach(tr=>{
-    const nome = tr.querySelector(".inp-nome").value.trim();
-    const nasc = tr.querySelector(".inp-nasc").value.trim();
-    const perc = parseFloat(tr.querySelector(".inp-perc").value);
-    const ref = col.doc();
-    batch.set(ref, {
-      nome,
-      dataNascimento: nasc,
-      percentual: pct(perc),
-      origem: "admin",
-      criadoEm: now,
-      atualizadoEm: now
-    });
-  });
-
-  try {
-    await batch.commit();
-    cacheAlteracoes.clear();
-    cacheNovos = [];
-    alert("Quadro social salvo com sucesso.");
-  } catch (e){
-    console.error(e);
-    alert("Falha ao salvar. Verifique as rules e tente novamente.");
-  }
-});
-
-// Boot
-(async function init(){
-  try { await auth.signInAnonymously(); } catch(e){ /* seu admin já deve autenticar; anon fallback */ }
-  await carregarEmpresas("");
-  if (!empresaIdAtual && elSelect.value) empresaIdAtual = elSelect.value;
-  if (empresaIdAtual) listenSocios();
-})();
-
+    const perc = parseFloat(t
