@@ -180,11 +180,17 @@ function popularDatalistEmpresasNova(){
   });
 }
 async function carregarRamos() {
-  const campos = ["ramo", "novaRamo"];
+  const campos = ["ramo", "novaRamo", "filtroRamo"];
   let snap;
   try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
   catch { snap = await db.collection("ramos-seguro").get(); }
-  campos.forEach(id => { const el=$(id); if (el) el.innerHTML = `<option value="">Selecione o ramo</option>`; });
+  campos.forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.innerHTML = (id === "filtroRamo")
+    ? `<option value="">Todos</option>`
+    : `<option value="">Selecione o ramo</option>`;
+});
   snap.forEach(doc => {
     const nome = doc.data().nomeExibicao || doc.id;
     campos.forEach(id => { const el=$(id); if (!el) return; const opt=document.createElement("option");
@@ -494,6 +500,7 @@ async function carregarCotacoesComFiltros() {
     const fim    = $("filtroDataFim")?.value || "";
     const rm     = $("filtroRM")?.value || "";
     const status = $("filtroStatus")?.value || "";
+    const ramo   = $("filtroRamo")?.value || "";
     const empTxt = normalize($("filtroEmpresa")?.value || "");
 
     let cotacoes = await listarCotacoesPorPerfil();
@@ -503,6 +510,7 @@ async function carregarCotacoesComFiltros() {
       const d = c.dataCriacao?.toDate?.() || (typeof c.dataCriacao === "string" ? new Date(c.dataCriacao) : null);
       if (ini && d && d < new Date(ini)) return false;
       if (fim && d && d > new Date(fim + "T23:59:59")) return false;
+      if (ramo && c.ramo !== ramo) return false;
       if (rm && c.rmNome !== rm) return false;
       if (status && c.status !== status) return false;
       if (empTxt && !normalize(c.empresaNome||"").includes(empTxt)) return false;
@@ -873,12 +881,14 @@ function exportarRelatorioPDF(){
 
 // ===== Util =====
 function limparFiltros(){
-  ["filtroEmpresa","filtroStatus","filtroRM"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
+ ["filtroEmpresa","filtroStatus","filtroRM","filtroRamo"].forEach(id => {
+  const el = $(id);
+  if (el) el.value = "";
+});
   const a=$("filtroAgencia"); if (a && isAdmin) a.value="";
   ["filtroDataInicio","filtroDataFim"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
   carregarCotacoesComFiltros();
 }
-
 // ===== Exports p/ onclick =====
 window.resolverEmpresaNova       = resolverEmpresaNova;
 window.preencherEmpresa          = preencherEmpresa;
@@ -894,3 +904,4 @@ window.abrirRelatorio            = abrirRelatorio;
 window.fecharRelatorio           = fecharRelatorio;
 window.exportarRelatorioPDF      = exportarRelatorioPDF;
 window.limparFiltros             = limparFiltros;
+
