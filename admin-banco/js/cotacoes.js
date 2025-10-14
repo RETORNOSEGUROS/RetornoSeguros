@@ -73,6 +73,7 @@ window.addEventListener("DOMContentLoaded", () => {
         carregarRamos(),
         carregarFiltroRM(),
         carregarStatus(),
+        carregarFiltroRamo(), // 👈 novo: opções do filtro por Produto/Ramo
       ]);
       popularDatalistEmpresas();          // filtro
       popularDatalistEmpresasNova();      // nova cotação
@@ -191,6 +192,26 @@ async function carregarRamos() {
       opt.value = nome; opt.textContent = nome; el.appendChild(opt); });
   });
 }
+
+/** 🔹 NOVO: popula o filtro "Produto / Ramo" da seção de filtros */
+async function carregarFiltroRamo() {
+  const sel = $("filtroRamo");
+  if (!sel) return;
+  sel.innerHTML = `<option value="">Todos</option>`;
+  try {
+    const snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+    snap.forEach(doc => {
+      const nome = doc.data().nomeExibicao || doc.id;
+      const opt = document.createElement("option");
+      opt.value = nome;
+      opt.textContent = nome;
+      sel.appendChild(opt);
+    });
+  } catch (err) {
+    console.warn("Falha ao carregar ramos para filtro:", err);
+  }
+}
+
 async function coletarRMsVisiveis() {
   try {
     const cotas = await listarCotacoesPorPerfil();
@@ -494,6 +515,7 @@ async function carregarCotacoesComFiltros() {
     const fim    = $("filtroDataFim")?.value || "";
     const rm     = $("filtroRM")?.value || "";
     const status = $("filtroStatus")?.value || "";
+    const ramo   = $("filtroRamo")?.value || ""; // 👈 novo: valor do filtro de Produto/Ramo
     const empTxt = normalize($("filtroEmpresa")?.value || "");
 
     let cotacoes = await listarCotacoesPorPerfil();
@@ -505,6 +527,7 @@ async function carregarCotacoesComFiltros() {
       if (fim && d && d > new Date(fim + "T23:59:59")) return false;
       if (rm && c.rmNome !== rm) return false;
       if (status && c.status !== status) return false;
+      if (ramo && c.ramo !== ramo) return false; // 👈 novo: aplica filtro por ramo
       if (empTxt && !normalize(c.empresaNome||"").includes(empTxt)) return false;
       return true;
     });
@@ -607,7 +630,9 @@ function renderTabelaPaginada(reuseSort=false){
   const rows = rowsCache.slice(0, ate);
   pagMostrando = rows.length;
 
-  const arrow = (k) => sortKey===k ? (sortDir==="asc"?"↑":"↓") : "↕";
+  const arrow = (k) => sortKey===k ? (sortDir==="asc"?"↑":"↓") : "↕
+
+";
 
   let html = `<table><thead><tr>
     <th style="width:36px"><input type="checkbox" id="selAll" ${rows.every(r=>selecionados.has(r.id)) && rows.length? "checked":""}></th>
@@ -873,7 +898,7 @@ function exportarRelatorioPDF(){
 
 // ===== Util =====
 function limparFiltros(){
-  ["filtroEmpresa","filtroStatus","filtroRM"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
+  ["filtroEmpresa","filtroStatus","filtroRM","filtroRamo"].forEach(id=>{ const el=$(id); if(el) el.value=""; }); // inclui ramo
   const a=$("filtroAgencia"); if (a && isAdmin) a.value="";
   ["filtroDataInicio","filtroDataFim"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
   carregarCotacoesComFiltros();
