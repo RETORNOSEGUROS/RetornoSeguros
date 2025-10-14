@@ -151,9 +151,6 @@ async function carregarFiltroRamo() {
   } catch (err) {
     console.warn("⚠️ Falha ao carregar ramos para filtro:", err);
   }
-}
-
-// ... (restante igual ao arquivo anterior — todas as funções de cotação, filtros, relatórios e export continuam idênticas)
 
   empresasCache = Array.from(map.values()).sort((a,b) => (a.nome||"").localeCompare(b.nome||"", "pt-BR"));
 
@@ -920,4 +917,5 @@ window.abrirRelatorio            = abrirRelatorio;
 window.fecharRelatorio           = fecharRelatorio;
 window.exportarRelatorioPDF      = exportarRelatorioPDF;
 window.limparFiltros             = limparFiltros;
+
 
