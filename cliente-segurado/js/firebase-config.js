@@ -6,12 +6,13 @@ import { getStorage } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-s
 
 // Configuração do Firebase
 const firebaseConfig = {
-    apiKey: "SUA_API_KEY",
+    apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
     authDomain: "retorno-seguros.firebaseapp.com",
     projectId: "retorno-seguros",
-    storageBucket: "retorno-seguros.appspot.com",
-    messagingSenderId: "SEU_SENDER_ID",
-    appId: "SEU_APP_ID"
+    storageBucket: "retorno-seguros.firebasestorage.app",
+    messagingSenderId: "495712392972",
+    appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+    measurementId: "G-C6E44WXLPW"
 };
 
 // Inicializar Firebase
