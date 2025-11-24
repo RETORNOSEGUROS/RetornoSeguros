@@ -10,11 +10,27 @@ import {
     orderBy, 
     limit,
     getDocs,
-    onSnapshot
+    onSnapshot,
+    updateDoc
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 
 let currentUser = null;
 let userData = null;
+
+// ============================================================
+// NOMES DAS COLEÇÕES (Centralizados para fácil manutenção)
+// ============================================================
+const COLECOES = {
+    usuarios: 'usuarios',
+    indicacoes: 'indicacoes',
+    resgates: 'resgates',
+    apolices: 'apolices_cliente',           // ALTERADO
+    cotacoes: 'cotacoes_cliente',            // ALTERADO
+    empresas: 'empresas_gamificacao',        // ALTERADO
+    campanhas: 'campanhas',                  // Nova coleção
+    historico_pontos: 'historico_pontos',    // Nova coleção
+    notificacoes: 'notificacoes_sistema'     // ALTERADO
+};
 
 // Função para mostrar toast
 function showToast(message, type = 'info') {
@@ -41,7 +57,7 @@ onAuthStateChanged(auth, async (user) => {
 // Carregar dados do usuário
 async function carregarDadosUsuario(uid) {
     try {
-        const userDoc = await getDoc(doc(db, 'usuarios', uid));
+        const userDoc = await getDoc(doc(db, COLECOES.usuarios, uid));
         
         if (!userDoc.exists()) {
             showToast('Usuário não encontrado', 'error');
@@ -109,7 +125,7 @@ async function carregarDashboard() {
 async function carregarUltimasIndicacoes() {
     try {
         const q = query(
-            collection(db, 'indicacoes'),
+            collection(db, COLECOES.indicacoes),  // Usando constante
             where('indicadorId', '==', currentUser.uid),
             orderBy('dataCadastro', 'desc'),
             limit(5)
@@ -170,7 +186,7 @@ async function carregarCampanhasAtivas() {
         const hoje = new Date();
         
         const q = query(
-            collection(db, 'campanhas'),
+            collection(db, COLECOES.campanhas),  // Usando constante
             where('ativo', '==', true),
             where('dataFim', '>=', hoje),
             orderBy('dataFim', 'asc'),
@@ -229,7 +245,7 @@ async function carregarProgressoPontos() {
         const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
         
         const q = query(
-            collection(db, 'historico_pontos'),
+            collection(db, COLECOES.historico_pontos),  // Usando constante
             where('usuarioId', '==', currentUser.uid),
             where('data', '>=', inicioMes),
             orderBy('data', 'desc')
@@ -238,31 +254,15 @@ async function carregarProgressoPontos() {
         const querySnapshot = await getDocs(q);
         
         let pontosMes = 0;
-        let pontosIndicacoes = 0;
-        let pontosApolices = 0;
-        let pontosNegocios = 0;
-        
         querySnapshot.forEach((doc) => {
-            const historico = doc.data();
-            pontosMes += historico.pontos || 0;
-            
-            if (historico.tipo === 'indicacao') {
-                pontosIndicacoes += historico.pontos || 0;
-            } else if (historico.tipo === 'apolice') {
-                pontosApolices += historico.pontos || 0;
-            } else if (historico.tipo === 'negocio') {
-                pontosNegocios += historico.pontos || 0;
-            }
+            pontosMes += doc.data().pontos || 0;
         });
         
-        document.getElementById('pontosMes').textContent = pontosMes;
-        document.getElementById('pontosIndicacoes').textContent = pontosIndicacoes;
-        document.getElementById('pontosApolices').textContent = pontosApolices;
-        document.getElementById('pontosNegocios').textContent = pontosNegocios;
-        
-        // Atualizar barra de progresso (meta de 100 pontos por mês)
-        const progresso = Math.min((pontosMes / 100) * 100, 100);
-        document.getElementById('progressMes').style.width = `${progresso}%`;
+        // Atualizar UI se existir o elemento
+        const elementoPontosMes = document.getElementById('pontosMes');
+        if (elementoPontosMes) {
+            elementoPontosMes.textContent = pontosMes;
+        }
         
     } catch (error) {
         console.error('Erro ao carregar progresso:', error);
@@ -277,7 +277,7 @@ async function carregarProximosVencimentos() {
         daquiA30Dias.setDate(hoje.getDate() + 30);
         
         const q = query(
-            collection(db, 'apolices'),
+            collection(db, COLECOES.apolices),  // ALTERADO: usando apolices_cliente
             where('usuarioId', '==', currentUser.uid),
             where('dataVencimento', '>=', hoje),
             where('dataVencimento', '<=', daquiA30Dias),
@@ -340,7 +340,7 @@ async function carregarProximosVencimentos() {
 async function carregarNotificacoes() {
     try {
         const q = query(
-            collection(db, 'notificacoes'),
+            collection(db, COLECOES.notificacoes),  // ALTERADO: usando notificacoes_sistema
             where('usuarioId', '==', currentUser.uid),
             where('lida', '==', false),
             orderBy('data', 'desc'),
@@ -446,7 +446,7 @@ window.toggleUserMenu = function() {
 // Marcar notificação como lida
 window.marcarComoLida = async function(notifId) {
     try {
-        await updateDoc(doc(db, 'notificacoes', notifId), {
+        await updateDoc(doc(db, COLECOES.notificacoes, notifId), {  // ALTERADO
             lida: true
         });
     } catch (error) {
@@ -458,7 +458,7 @@ window.marcarComoLida = async function(notifId) {
 window.marcarTodasLidas = async function() {
     try {
         const q = query(
-            collection(db, 'notificacoes'),
+            collection(db, COLECOES.notificacoes),  // ALTERADO
             where('usuarioId', '==', currentUser.uid),
             where('lida', '==', false)
         );
@@ -476,6 +476,12 @@ window.marcarTodasLidas = async function() {
     } catch (error) {
         console.error('Erro ao marcar notificações:', error);
     }
+};
+
+// Renovar apólice
+window.renovarApolice = function(apoliceId) {
+    // Redirecionar para página de renovação ou abrir modal
+    window.location.href = `renovacao.html?id=${apoliceId}`;
 };
 
 // Logout
