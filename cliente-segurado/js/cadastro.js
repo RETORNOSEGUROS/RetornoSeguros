@@ -20,13 +20,63 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 
 // ============================================================
-// NOMES DAS COLEÇÕES (Centralizados para fácil manutenção)
+// NOMES DAS COLEÇÕES
 // ============================================================
 const COLECOES = {
     usuarios: 'usuarios',
     indicacoes: 'indicacoes',
-    notificacoes: 'notificacoes_sistema'  // ALTERADO
+    notificacoes: 'notificacoes_sistema'
 };
+
+// ============================================================
+// CAPTURAR CÓDIGO DE INDICAÇÃO DA URL (NOVO!)
+// ============================================================
+// Suporta: ?ref=CODIGO, ?codigo=CODIGO, ?indicacao=CODIGO
+function capturarCodigoDaURL() {
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    // Tenta diferentes parâmetros
+    const codigo = urlParams.get('ref') || 
+                   urlParams.get('codigo') || 
+                   urlParams.get('indicacao') ||
+                   urlParams.get('c');
+    
+    return codigo ? codigo.trim().toUpperCase() : null;
+}
+
+// Preencher e validar código ao carregar a página
+document.addEventListener('DOMContentLoaded', async () => {
+    const codigoDaURL = capturarCodigoDaURL();
+    
+    if (codigoDaURL) {
+        const campoCodigoIndicacao = document.getElementById('codigoIndicacao');
+        const indicadorNome = document.getElementById('indicadorNome');
+        
+        // Preencher o campo
+        campoCodigoIndicacao.value = codigoDaURL;
+        
+        // Validar o código automaticamente
+        try {
+            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoDaURL));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+                const indicador = querySnapshot.docs[0].data();
+                indicadorNome.textContent = `✓ Você foi indicado por ${indicador.nome}`;
+                indicadorNome.style.color = 'var(--success)';
+                
+                // Destacar visualmente que veio por indicação
+                campoCodigoIndicacao.style.borderColor = 'var(--success)';
+                campoCodigoIndicacao.style.backgroundColor = '#f0fff4';
+            } else {
+                indicadorNome.textContent = '✗ Código de indicação inválido';
+                indicadorNome.style.color = 'var(--danger)';
+            }
+        } catch (error) {
+            console.error('Erro ao verificar código da URL:', error);
+        }
+    }
+});
 
 // Função para mostrar toast
 function showToast(message, type = 'info') {
@@ -66,13 +116,18 @@ async function gerarCodigoIndicacao() {
     throw new Error('Não foi possível gerar um código único. Tente novamente.');
 }
 
-// Verificar código de indicação
+// Verificar código de indicação quando usuário digita/sai do campo
 document.getElementById('codigoIndicacao').addEventListener('blur', async function() {
     const codigo = this.value.trim().toUpperCase();
     const indicadorNome = document.getElementById('indicadorNome');
     
+    // Atualizar valor para maiúsculas
+    this.value = codigo;
+    
     if (!codigo) {
         indicadorNome.textContent = '';
+        this.style.borderColor = '';
+        this.style.backgroundColor = '';
         return;
     }
     
@@ -84,13 +139,22 @@ document.getElementById('codigoIndicacao').addEventListener('blur', async functi
             const indicador = querySnapshot.docs[0].data();
             indicadorNome.textContent = `✓ Você será indicado por ${indicador.nome}`;
             indicadorNome.style.color = 'var(--success)';
+            this.style.borderColor = 'var(--success)';
+            this.style.backgroundColor = '#f0fff4';
         } else {
             indicadorNome.textContent = '✗ Código de indicação inválido';
             indicadorNome.style.color = 'var(--danger)';
+            this.style.borderColor = 'var(--danger)';
+            this.style.backgroundColor = '#fff5f5';
         }
     } catch (error) {
         console.error('Erro ao verificar código:', error);
     }
+});
+
+// Converter para maiúsculas enquanto digita
+document.getElementById('codigoIndicacao').addEventListener('input', function() {
+    this.value = this.value.toUpperCase();
 });
 
 // Formatar telefone
@@ -146,6 +210,8 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
     try {
         // Verificar se o código de indicação é válido (se fornecido)
         let indicadoPorId = null;
+        let indicadorNome = null;
+        
         if (codigoIndicacao) {
             const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
             const querySnapshot = await getDocs(q);
@@ -155,6 +221,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
             }
             
             indicadoPorId = querySnapshot.docs[0].id;
+            indicadorNome = querySnapshot.docs[0].data().nome;
         }
         
         // Criar usuário no Firebase Auth
@@ -177,6 +244,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
             cidade: cidade,
             codigoIndicacao: codigoUnico,
             indicadoPor: indicadoPorId,
+            indicadoPorCodigo: codigoIndicacao || null,
             pontosTotais: 0,
             pontosResgataveis: 0,
             pontosResgatados: 0,
@@ -195,10 +263,12 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
             const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
             await setDoc(indicacaoRef, {
                 indicadorId: indicadoPorId,
+                indicadorNome: indicadorNome,
                 indicadoId: user.uid,
                 indicadoNome: nome,
                 indicadoEmail: email,
                 indicadoTelefone: telefone,
+                codigoUsado: codigoIndicacao,
                 status: 'cadastrado',
                 pontos: 0,
                 dataCadastro: serverTimestamp(),
@@ -208,15 +278,16 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
             // Atualizar contador de indicações do indicador
             await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
                 totalIndicacoes: increment(1),
-                pontosTotais: increment(1) // 1 ponto por indicação
+                pontosTotais: increment(1),
+                pontosResgataveis: increment(1)
             });
             
             // Criar notificação para o indicador
-            await setDoc(doc(collection(db, COLECOES.notificacoes)), {  // ALTERADO
+            await setDoc(doc(collection(db, COLECOES.notificacoes)), {
                 usuarioId: indicadoPorId,
                 tipo: 'nova_indicacao',
                 titulo: 'Nova Indicação!',
-                mensagem: `${nome} se cadastrou usando seu código de indicação`,
+                mensagem: `${nome} se cadastrou usando seu código de indicação. Você ganhou 1 ponto!`,
                 lida: false,
                 data: serverTimestamp()
             });
@@ -271,9 +342,14 @@ window.cadastroWithGoogle = async function() {
             return;
         }
         
-        // Pegar código de indicação se foi fornecido
-        const codigoIndicacao = document.getElementById('codigoIndicacao').value.trim().toUpperCase();
+        // Pegar código de indicação (do campo ou da URL)
+        let codigoIndicacao = document.getElementById('codigoIndicacao').value.trim().toUpperCase();
+        if (!codigoIndicacao) {
+            codigoIndicacao = capturarCodigoDaURL();
+        }
+        
         let indicadoPorId = null;
+        let indicadorNome = null;
         
         if (codigoIndicacao) {
             const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
@@ -281,6 +357,7 @@ window.cadastroWithGoogle = async function() {
             
             if (!querySnapshot.empty) {
                 indicadoPorId = querySnapshot.docs[0].id;
+                indicadorNome = querySnapshot.docs[0].data().nome;
             }
         }
         
@@ -295,6 +372,7 @@ window.cadastroWithGoogle = async function() {
             cidade: '',
             codigoIndicacao: codigoUnico,
             indicadoPor: indicadoPorId,
+            indicadoPorCodigo: codigoIndicacao || null,
             pontosTotais: 0,
             pontosResgataveis: 0,
             pontosResgatados: 0,
@@ -312,10 +390,12 @@ window.cadastroWithGoogle = async function() {
             const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
             await setDoc(indicacaoRef, {
                 indicadorId: indicadoPorId,
+                indicadorNome: indicadorNome,
                 indicadoId: user.uid,
                 indicadoNome: user.displayName || 'Usuário',
                 indicadoEmail: user.email,
                 indicadoTelefone: '',
+                codigoUsado: codigoIndicacao,
                 status: 'cadastrado',
                 pontos: 0,
                 dataCadastro: serverTimestamp(),
@@ -324,7 +404,18 @@ window.cadastroWithGoogle = async function() {
             
             await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
                 totalIndicacoes: increment(1),
-                pontosTotais: increment(1)
+                pontosTotais: increment(1),
+                pontosResgataveis: increment(1)
+            });
+            
+            // Notificação
+            await setDoc(doc(collection(db, COLECOES.notificacoes)), {
+                usuarioId: indicadoPorId,
+                tipo: 'nova_indicacao',
+                titulo: 'Nova Indicação!',
+                mensagem: `${user.displayName || 'Alguém'} se cadastrou usando seu código. Você ganhou 1 ponto!`,
+                lida: false,
+                data: serverTimestamp()
             });
         }
         
