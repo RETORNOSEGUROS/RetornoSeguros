@@ -29,52 +29,38 @@ const COLECOES = {
 };
 
 // ============================================================
-// CAPTURAR CÓDIGO DE INDICAÇÃO DA URL (NOVO!)
+// VARIÁVEL GLOBAL PARA ARMAZENAR CÓDIGO DA URL
 // ============================================================
-// Suporta: ?ref=CODIGO, ?codigo=CODIGO, ?indicacao=CODIGO
+let codigoDaURLGlobal = null;
+
+// ============================================================
+// CAPTURAR CÓDIGO DE INDICAÇÃO DA URL
+// ============================================================
 function capturarCodigoDaURL() {
     const urlParams = new URLSearchParams(window.location.search);
-    
-    // Tenta diferentes parâmetros
     const codigo = urlParams.get('ref') || 
                    urlParams.get('codigo') || 
                    urlParams.get('indicacao') ||
                    urlParams.get('c');
-    
     return codigo ? codigo.trim().toUpperCase() : null;
 }
 
-// Preencher e validar código ao carregar a página
-document.addEventListener('DOMContentLoaded', async () => {
-    const codigoDaURL = capturarCodigoDaURL();
+// Preencher código ao carregar a página (SEM validar ainda)
+document.addEventListener('DOMContentLoaded', () => {
+    codigoDaURLGlobal = capturarCodigoDaURL();
     
-    if (codigoDaURL) {
+    if (codigoDaURLGlobal) {
         const campoCodigoIndicacao = document.getElementById('codigoIndicacao');
+        campoCodigoIndicacao.value = codigoDaURLGlobal;
+        
+        // Destacar visualmente
+        campoCodigoIndicacao.style.borderColor = 'var(--primary)';
+        campoCodigoIndicacao.style.backgroundColor = '#f0f7ff';
+        
+        // Mostrar mensagem de que será validado
         const indicadorNome = document.getElementById('indicadorNome');
-        
-        // Preencher o campo
-        campoCodigoIndicacao.value = codigoDaURL;
-        
-        // Validar o código automaticamente
-        try {
-            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoDaURL));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-                const indicador = querySnapshot.docs[0].data();
-                indicadorNome.textContent = `✓ Você foi indicado por ${indicador.nome}`;
-                indicadorNome.style.color = 'var(--success)';
-                
-                // Destacar visualmente que veio por indicação
-                campoCodigoIndicacao.style.borderColor = 'var(--success)';
-                campoCodigoIndicacao.style.backgroundColor = '#f0fff4';
-            } else {
-                indicadorNome.textContent = '✗ Código de indicação inválido';
-                indicadorNome.style.color = 'var(--danger)';
-            }
-        } catch (error) {
-            console.error('Erro ao verificar código da URL:', error);
-        }
+        indicadorNome.textContent = '⏳ Código será validado ao criar conta...';
+        indicadorNome.style.color = 'var(--gray-600)';
     }
 });
 
@@ -102,7 +88,6 @@ async function gerarCodigoIndicacao() {
             codigo += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
         }
         
-        // Verificar se o código já existe
         const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigo));
         const querySnapshot = await getDocs(q);
         
@@ -116,12 +101,11 @@ async function gerarCodigoIndicacao() {
     throw new Error('Não foi possível gerar um código único. Tente novamente.');
 }
 
-// Verificar código de indicação quando usuário digita/sai do campo
+// Verificar código de indicação quando usuário sai do campo
 document.getElementById('codigoIndicacao').addEventListener('blur', async function() {
     const codigo = this.value.trim().toUpperCase();
     const indicadorNome = document.getElementById('indicadorNome');
     
-    // Atualizar valor para maiúsculas
     this.value = codigo;
     
     if (!codigo) {
@@ -130,6 +114,10 @@ document.getElementById('codigoIndicacao').addEventListener('blur', async functi
         this.style.backgroundColor = '';
         return;
     }
+    
+    // Mostrar que está verificando
+    indicadorNome.textContent = '⏳ Verificando código...';
+    indicadorNome.style.color = 'var(--gray-600)';
     
     try {
         const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigo));
@@ -148,7 +136,12 @@ document.getElementById('codigoIndicacao').addEventListener('blur', async functi
             this.style.backgroundColor = '#fff5f5';
         }
     } catch (error) {
-        console.error('Erro ao verificar código:', error);
+        // Se der erro de permissão, avisa que será validado no cadastro
+        console.log('Validação será feita no cadastro:', error.message);
+        indicadorNome.textContent = '⏳ Código será validado ao criar conta';
+        indicadorNome.style.color = 'var(--gray-600)';
+        this.style.borderColor = 'var(--primary)';
+        this.style.backgroundColor = '#f0f7ff';
     }
 });
 
@@ -208,23 +201,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
     btnCadastro.innerHTML = '<span>Criando conta...</span><i class="fas fa-spinner fa-spin"></i>';
     
     try {
-        // Verificar se o código de indicação é válido (se fornecido)
-        let indicadoPorId = null;
-        let indicadorNome = null;
-        
-        if (codigoIndicacao) {
-            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
-            const querySnapshot = await getDocs(q);
-            
-            if (querySnapshot.empty) {
-                throw new Error('Código de indicação inválido');
-            }
-            
-            indicadoPorId = querySnapshot.docs[0].id;
-            indicadorNome = querySnapshot.docs[0].data().nome;
-        }
-        
-        // Criar usuário no Firebase Auth
+        // PRIMEIRO: Criar usuário no Firebase Auth
         const userCredential = await createUserWithEmailAndPassword(auth, email, senha);
         const user = userCredential.user;
         
@@ -232,6 +209,24 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
         await updateProfile(user, {
             displayName: nome
         });
+        
+        // AGORA que está autenticado, verificar código de indicação
+        let indicadoPorId = null;
+        let indicadorNome = null;
+        
+        if (codigoIndicacao) {
+            try {
+                const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
+                const querySnapshot = await getDocs(q);
+                
+                if (!querySnapshot.empty) {
+                    indicadoPorId = querySnapshot.docs[0].id;
+                    indicadorNome = querySnapshot.docs[0].data().nome;
+                }
+            } catch (err) {
+                console.log('Erro ao buscar indicador:', err);
+            }
+        }
         
         // Gerar código de indicação único para este usuário
         const codigoUnico = await gerarCodigoIndicacao();
@@ -259,38 +254,46 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
         
         // Se foi indicado por alguém, registrar a indicação
         if (indicadoPorId) {
-            // Criar registro de indicação
-            const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
-            await setDoc(indicacaoRef, {
-                indicadorId: indicadoPorId,
-                indicadorNome: indicadorNome,
-                indicadoId: user.uid,
-                indicadoNome: nome,
-                indicadoEmail: email,
-                indicadoTelefone: telefone,
-                codigoUsado: codigoIndicacao,
-                status: 'cadastrado',
-                pontos: 0,
-                dataCadastro: serverTimestamp(),
-                dataConversao: null
-            });
-            
-            // Atualizar contador de indicações do indicador
-            await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
-                totalIndicacoes: increment(1),
-                pontosTotais: increment(1),
-                pontosResgataveis: increment(1)
-            });
-            
-            // Criar notificação para o indicador
-            await setDoc(doc(collection(db, COLECOES.notificacoes)), {
-                usuarioId: indicadoPorId,
-                tipo: 'nova_indicacao',
-                titulo: 'Nova Indicação!',
-                mensagem: `${nome} se cadastrou usando seu código de indicação. Você ganhou 1 ponto!`,
-                lida: false,
-                data: serverTimestamp()
-            });
+            try {
+                // Criar registro de indicação
+                const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
+                await setDoc(indicacaoRef, {
+                    indicadorId: indicadoPorId,
+                    indicadorNome: indicadorNome,
+                    indicadoId: user.uid,
+                    indicadoNome: nome,
+                    indicadoEmail: email,
+                    indicadoTelefone: telefone,
+                    codigoUsado: codigoIndicacao,
+                    status: 'cadastrado',
+                    pontos: 0,
+                    dataCadastro: serverTimestamp(),
+                    dataConversao: null
+                });
+                
+                // Atualizar contador de indicações do indicador
+                await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
+                    totalIndicacoes: increment(1),
+                    pontosTotais: increment(1),
+                    pontosResgataveis: increment(1)
+                });
+                
+                // Criar notificação para o indicador
+                try {
+                    await setDoc(doc(collection(db, COLECOES.notificacoes)), {
+                        usuarioId: indicadoPorId,
+                        tipo: 'nova_indicacao',
+                        titulo: 'Nova Indicação!',
+                        mensagem: `${nome} se cadastrou usando seu código de indicação. Você ganhou 1 ponto!`,
+                        lida: false,
+                        data: serverTimestamp()
+                    });
+                } catch (notifErr) {
+                    console.log('Notificação não enviada:', notifErr);
+                }
+            } catch (indErr) {
+                console.log('Erro ao registrar indicação:', indErr);
+            }
         }
         
         showToast('Cadastro realizado com sucesso!', 'success');
@@ -345,19 +348,23 @@ window.cadastroWithGoogle = async function() {
         // Pegar código de indicação (do campo ou da URL)
         let codigoIndicacao = document.getElementById('codigoIndicacao').value.trim().toUpperCase();
         if (!codigoIndicacao) {
-            codigoIndicacao = capturarCodigoDaURL();
+            codigoIndicacao = codigoDaURLGlobal;
         }
         
         let indicadoPorId = null;
-        let indicadorNome = null;
+        let indicadorNomeVal = null;
         
         if (codigoIndicacao) {
-            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-                indicadoPorId = querySnapshot.docs[0].id;
-                indicadorNome = querySnapshot.docs[0].data().nome;
+            try {
+                const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
+                const querySnapshot = await getDocs(q);
+                
+                if (!querySnapshot.empty) {
+                    indicadoPorId = querySnapshot.docs[0].id;
+                    indicadorNomeVal = querySnapshot.docs[0].data().nome;
+                }
+            } catch (err) {
+                console.log('Erro ao buscar indicador:', err);
             }
         }
         
@@ -387,36 +394,43 @@ window.cadastroWithGoogle = async function() {
         
         // Se foi indicado, registrar indicação
         if (indicadoPorId) {
-            const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
-            await setDoc(indicacaoRef, {
-                indicadorId: indicadoPorId,
-                indicadorNome: indicadorNome,
-                indicadoId: user.uid,
-                indicadoNome: user.displayName || 'Usuário',
-                indicadoEmail: user.email,
-                indicadoTelefone: '',
-                codigoUsado: codigoIndicacao,
-                status: 'cadastrado',
-                pontos: 0,
-                dataCadastro: serverTimestamp(),
-                dataConversao: null
-            });
-            
-            await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
-                totalIndicacoes: increment(1),
-                pontosTotais: increment(1),
-                pontosResgataveis: increment(1)
-            });
-            
-            // Notificação
-            await setDoc(doc(collection(db, COLECOES.notificacoes)), {
-                usuarioId: indicadoPorId,
-                tipo: 'nova_indicacao',
-                titulo: 'Nova Indicação!',
-                mensagem: `${user.displayName || 'Alguém'} se cadastrou usando seu código. Você ganhou 1 ponto!`,
-                lida: false,
-                data: serverTimestamp()
-            });
+            try {
+                const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
+                await setDoc(indicacaoRef, {
+                    indicadorId: indicadoPorId,
+                    indicadorNome: indicadorNomeVal,
+                    indicadoId: user.uid,
+                    indicadoNome: user.displayName || 'Usuário',
+                    indicadoEmail: user.email,
+                    indicadoTelefone: '',
+                    codigoUsado: codigoIndicacao,
+                    status: 'cadastrado',
+                    pontos: 0,
+                    dataCadastro: serverTimestamp(),
+                    dataConversao: null
+                });
+                
+                await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
+                    totalIndicacoes: increment(1),
+                    pontosTotais: increment(1),
+                    pontosResgataveis: increment(1)
+                });
+                
+                try {
+                    await setDoc(doc(collection(db, COLECOES.notificacoes)), {
+                        usuarioId: indicadoPorId,
+                        tipo: 'nova_indicacao',
+                        titulo: 'Nova Indicação!',
+                        mensagem: `${user.displayName || 'Alguém'} se cadastrou usando seu código. Você ganhou 1 ponto!`,
+                        lida: false,
+                        data: serverTimestamp()
+                    });
+                } catch (notifErr) {
+                    console.log('Notificação não enviada:', notifErr);
+                }
+            } catch (indErr) {
+                console.log('Erro ao registrar indicação:', indErr);
+            }
         }
         
         showToast('Cadastro realizado com sucesso!', 'success');
