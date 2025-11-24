@@ -947,18 +947,19 @@
                 <span class="close" onclick="closeModal('loginModal')">&times;</span>
             </div>
             <div class="modal-body">
-                <form onsubmit="handleLogin(event)">
+                <form id="loginForm" onsubmit="handleLogin(event)">
                     <div class="form-group">
-                        <label for="login-email">E-mail ou CPF</label>
-                        <input type="text" id="login-email" placeholder="seu@email.com" required>
+                        <label for="login-email">E-mail</label>
+                        <input type="email" id="login-email" placeholder="seu@email.com" required>
                     </div>
                     <div class="form-group">
                         <label for="login-password">Senha</label>
-                        <input type="password" id="login-password" placeholder="••••••••" required>
+                        <input type="password" id="login-password" placeholder="••••••••" required minlength="6">
                     </div>
-                    <button type="submit" class="form-button">Entrar</button>
+                    <div id="login-error" style="color: #dc3545; font-size: 0.9rem; margin-bottom: 1rem; display: none;"></div>
+                    <button type="submit" class="form-button" id="login-btn">Entrar</button>
                     <div class="form-footer">
-                        <a href="#" onclick="alert('Entre em contato conosco para recuperar sua senha!'); return false;">Esqueci minha senha</a>
+                        <a href="#" onclick="handleForgotPassword(); return false;">Esqueci minha senha</a>
                         <p style="margin-top: 1rem;">Ainda não tem conta? <a href="#" onclick="closeModal('loginModal'); openModal('createAccountModal'); return false;">Criar conta grátis</a></p>
                     </div>
                 </form>
@@ -974,7 +975,7 @@
                 <span class="close" onclick="closeModal('createAccountModal')">&times;</span>
             </div>
             <div class="modal-body">
-                <form onsubmit="handleCreateAccount(event)">
+                <form id="createAccountForm" onsubmit="handleCreateAccount(event)">
                     <div class="form-group">
                         <label for="create-name">Nome Completo</label>
                         <input type="text" id="create-name" placeholder="Seu nome completo" required>
@@ -992,10 +993,15 @@
                         <input type="tel" id="create-phone" placeholder="(00) 00000-0000" required>
                     </div>
                     <div class="form-group">
-                        <label for="create-password">Senha</label>
-                        <input type="password" id="create-password" placeholder="Mínimo 6 caracteres" required>
+                        <label for="create-password">Senha (mínimo 6 caracteres)</label>
+                        <input type="password" id="create-password" placeholder="Mínimo 6 caracteres" required minlength="6">
                     </div>
-                    <button type="submit" class="form-button">Criar Conta Grátis</button>
+                    <div class="form-group">
+                        <label for="create-codigo-indicacao">Código de quem te indicou (opcional)</label>
+                        <input type="text" id="create-codigo-indicacao" placeholder="Ex: JOAO2024">
+                    </div>
+                    <div id="create-error" style="color: #dc3545; font-size: 0.9rem; margin-bottom: 1rem; display: none;"></div>
+                    <button type="submit" class="form-button" id="create-btn">Criar Conta Grátis</button>
                     <div class="form-footer">
                         <p>Já tem conta? <a href="#" onclick="closeModal('createAccountModal'); openModal('loginModal'); return false;">Fazer login</a></p>
                     </div>
@@ -1004,16 +1010,44 @@
         </div>
     </div>
 
-    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <script>
+        // ============================================================
+        // CONFIGURAÇÃO DO FIREBASE
+        // ============================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+            authDomain: "retorno-seguros.firebaseapp.com",
+            projectId: "retorno-seguros",
+            storageBucket: "retorno-seguros.appspot.com",
+            messagingSenderId: "495712392972",
+            appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+            measurementId: "G-C6E44WXLPW"
+        };
+
+        // Inicializa Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // ============================================================
+        // FUNÇÕES DOS MODAIS
+        // ============================================================
         function toggleMenu() {
             const navLinks = document.getElementById('navLinks');
             navLinks.classList.toggle('active');
         }
 
-        // Funções dos Modais
         function openModal(modalId) {
             document.getElementById(modalId).style.display = 'block';
             document.body.style.overflow = 'hidden';
+            // Limpa erros anteriores
+            document.getElementById('login-error').style.display = 'none';
+            document.getElementById('create-error').style.display = 'none';
         }
 
         function closeModal(modalId) {
@@ -1029,7 +1063,236 @@
             }
         }
 
-        // Abrir modais pelos links
+        // ============================================================
+        // FUNÇÃO DE LOGIN COM FIREBASE
+        // ============================================================
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            const errorDiv = document.getElementById('login-error');
+            const loginBtn = document.getElementById('login-btn');
+            
+            // Limpa erro anterior
+            errorDiv.style.display = 'none';
+            
+            // Desabilita botão durante o processo
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Entrando...';
+            
+            try {
+                // Faz login com Firebase Auth
+                const userCredential = await auth.signInWithEmailAndPassword(email, password);
+                const user = userCredential.user;
+                
+                console.log('Login bem-sucedido:', user.uid);
+                
+                // Fecha o modal
+                closeModal('loginModal');
+                
+                // Redireciona para o dashboard
+                window.location.href = 'cliente-segurado/dashboard.html';
+                
+            } catch (error) {
+                console.error('Erro no login:', error);
+                
+                // Mostra mensagem de erro amigável
+                let errorMessage = 'Erro ao fazer login. Tente novamente.';
+                
+                switch (error.code) {
+                    case 'auth/user-not-found':
+                        errorMessage = 'E-mail não cadastrado. Crie uma conta primeiro.';
+                        break;
+                    case 'auth/wrong-password':
+                        errorMessage = 'Senha incorreta. Tente novamente.';
+                        break;
+                    case 'auth/invalid-email':
+                        errorMessage = 'E-mail inválido. Verifique e tente novamente.';
+                        break;
+                    case 'auth/too-many-requests':
+                        errorMessage = 'Muitas tentativas. Aguarde alguns minutos.';
+                        break;
+                    case 'auth/invalid-credential':
+                        errorMessage = 'E-mail ou senha incorretos.';
+                        break;
+                }
+                
+                errorDiv.textContent = errorMessage;
+                errorDiv.style.display = 'block';
+                
+                // Reabilita botão
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Entrar';
+            }
+            
+            return false;
+        }
+
+        // ============================================================
+        // FUNÇÃO DE CRIAR CONTA COM FIREBASE
+        // ============================================================
+        async function handleCreateAccount(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('create-name').value.trim();
+            const cpf = document.getElementById('create-cpf').value.trim();
+            const email = document.getElementById('create-email').value.trim();
+            const phone = document.getElementById('create-phone').value.trim();
+            const password = document.getElementById('create-password').value;
+            const codigoIndicacao = document.getElementById('create-codigo-indicacao').value.trim().toUpperCase();
+            const errorDiv = document.getElementById('create-error');
+            const createBtn = document.getElementById('create-btn');
+            
+            // Limpa erro anterior
+            errorDiv.style.display = 'none';
+            
+            // Validações básicas
+            if (password.length < 6) {
+                errorDiv.textContent = 'A senha deve ter no mínimo 6 caracteres.';
+                errorDiv.style.display = 'block';
+                return false;
+            }
+            
+            // Desabilita botão durante o processo
+            createBtn.disabled = true;
+            createBtn.textContent = 'Criando conta...';
+            
+            try {
+                // Cria usuário no Firebase Auth
+                const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+                const user = userCredential.user;
+                
+                console.log('Usuário criado no Auth:', user.uid);
+                
+                // Gera código de indicação único para o novo usuário
+                const primeiroNome = name.split(' ')[0].toUpperCase();
+                const codigoAleatorio = Math.random().toString(36).substring(2, 6).toUpperCase();
+                const meuCodigoIndicacao = primeiroNome + codigoAleatorio;
+                
+                // Salva dados adicionais no Firestore
+                await db.collection('usuarios').doc(user.uid).set({
+                    nome: name,
+                    email: email,
+                    cpf: cpf,
+                    telefone: phone,
+                    pontos: 0,
+                    nivel: 'bronze',
+                    codigoIndicacao: meuCodigoIndicacao,
+                    indicadoPor: codigoIndicacao || '',
+                    dataCadastro: firebase.firestore.FieldValue.serverTimestamp(),
+                    ativo: true,
+                    fotoPerfil: ''
+                });
+                
+                console.log('Dados salvos no Firestore');
+                
+                // Se foi indicado por alguém, registra a indicação
+                if (codigoIndicacao) {
+                    // Busca quem indicou pelo código
+                    const querySnapshot = await db.collection('usuarios')
+                        .where('codigoIndicacao', '==', codigoIndicacao)
+                        .limit(1)
+                        .get();
+                    
+                    if (!querySnapshot.empty) {
+                        const indicadorDoc = querySnapshot.docs[0];
+                        const indicadorId = indicadorDoc.id;
+                        
+                        // Cria registro de indicação
+                        await db.collection('indicacoes').add({
+                            usuarioId: indicadorId,
+                            nomeIndicado: name,
+                            emailIndicado: email,
+                            telefoneIndicado: phone,
+                            tipoSeguro: 'Cadastro',
+                            status: 'pendente',
+                            pontosGerados: 0,
+                            dataIndicacao: firebase.firestore.FieldValue.serverTimestamp(),
+                            observacoes: 'Cadastro via código de indicação'
+                        });
+                        
+                        console.log('Indicação registrada para:', indicadorId);
+                    }
+                }
+                
+                // Fecha o modal
+                closeModal('createAccountModal');
+                
+                // Mostra mensagem de sucesso
+                alert(`🎉 Parabéns, ${name.split(' ')[0]}!\n\nSua conta foi criada com sucesso!\n\nSeu código de indicação é: ${meuCodigoIndicacao}\n\nCompartilhe com amigos e ganhe pontos!`);
+                
+                // Redireciona para o dashboard
+                window.location.href = 'cliente-segurado/dashboard.html';
+                
+            } catch (error) {
+                console.error('Erro ao criar conta:', error);
+                
+                // Mostra mensagem de erro amigável
+                let errorMessage = 'Erro ao criar conta. Tente novamente.';
+                
+                switch (error.code) {
+                    case 'auth/email-already-in-use':
+                        errorMessage = 'Este e-mail já está cadastrado. Faça login ou use outro e-mail.';
+                        break;
+                    case 'auth/invalid-email':
+                        errorMessage = 'E-mail inválido. Verifique e tente novamente.';
+                        break;
+                    case 'auth/weak-password':
+                        errorMessage = 'Senha muito fraca. Use no mínimo 6 caracteres.';
+                        break;
+                }
+                
+                errorDiv.textContent = errorMessage;
+                errorDiv.style.display = 'block';
+                
+                // Reabilita botão
+                createBtn.disabled = false;
+                createBtn.textContent = 'Criar Conta Grátis';
+            }
+            
+            return false;
+        }
+
+        // ============================================================
+        // FUNÇÃO ESQUECI SENHA
+        // ============================================================
+        async function handleForgotPassword() {
+            const email = document.getElementById('login-email').value.trim();
+            
+            if (!email) {
+                alert('Digite seu e-mail no campo acima primeiro.');
+                return;
+            }
+            
+            try {
+                await auth.sendPasswordResetEmail(email);
+                alert(`📧 E-mail enviado!\n\nVerifique sua caixa de entrada (e spam) em:\n${email}\n\nClique no link para redefinir sua senha.`);
+            } catch (error) {
+                console.error('Erro ao enviar e-mail:', error);
+                
+                if (error.code === 'auth/user-not-found') {
+                    alert('E-mail não encontrado. Verifique se digitou corretamente ou crie uma conta.');
+                } else {
+                    alert('Erro ao enviar e-mail. Tente novamente ou entre em contato conosco.');
+                }
+            }
+        }
+
+        // ============================================================
+        // VERIFICA SE USUÁRIO JÁ ESTÁ LOGADO
+        // ============================================================
+        auth.onAuthStateChanged(function(user) {
+            if (user) {
+                console.log('Usuário já logado:', user.email);
+                // Se quiser redirecionar automaticamente, descomente:
+                // window.location.href = 'cliente-segurado/dashboard.html';
+            }
+        });
+
+        // ============================================================
+        // EVENT LISTENERS
+        // ============================================================
         document.addEventListener('DOMContentLoaded', function() {
             // Links de login
             document.querySelectorAll('a[href="#login"]').forEach(link => {
@@ -1048,27 +1311,47 @@
                     }
                 });
             });
+            
+            // Máscara para CPF
+            const cpfInput = document.getElementById('create-cpf');
+            if (cpfInput) {
+                cpfInput.addEventListener('input', function(e) {
+                    let value = e.target.value.replace(/\D/g, '');
+                    if (value.length > 11) value = value.slice(0, 11);
+                    
+                    if (value.length > 9) {
+                        value = value.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                    } else if (value.length > 6) {
+                        value = value.replace(/(\d{3})(\d{3})(\d{1,3})/, '$1.$2.$3');
+                    } else if (value.length > 3) {
+                        value = value.replace(/(\d{3})(\d{1,3})/, '$1.$2');
+                    }
+                    
+                    e.target.value = value;
+                });
+            }
+            
+            // Máscara para telefone
+            const phoneInput = document.getElementById('create-phone');
+            if (phoneInput) {
+                phoneInput.addEventListener('input', function(e) {
+                    let value = e.target.value.replace(/\D/g, '');
+                    if (value.length > 11) value = value.slice(0, 11);
+                    
+                    if (value.length > 10) {
+                        value = value.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+                    } else if (value.length > 6) {
+                        value = value.replace(/(\d{2})(\d{4,5})(\d{0,4})/, '($1) $2-$3');
+                    } else if (value.length > 2) {
+                        value = value.replace(/(\d{2})(\d{0,5})/, '($1) $2');
+                    }
+                    
+                    e.target.value = value;
+                });
+            }
         });
 
-        // Handle Login
-        function handleLogin(event) {
-            event.preventDefault();
-            alert('Funcionalidade em desenvolvimento! Em breve você terá acesso à área do cliente. Por enquanto, entre em contato conosco pelo WhatsApp.');
-            closeModal('loginModal');
-            return false;
-        }
-
-        // Handle Criar Conta
-        function handleCreateAccount(event) {
-            event.preventDefault();
-            const name = document.getElementById('create-name').value;
-            alert(`Olá ${name}! Sua solicitação de cadastro foi recebida. Nossa equipe entrará em contato em breve para ativar sua conta e fornecer seu código de indicação exclusivo!`);
-            closeModal('createAccountModal');
-            // Aqui você pode adicionar código para enviar os dados para um servidor
-            return false;
-        }
-
-        // Smooth scroll
+        // Smooth scroll para links internos
         document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             anchor.addEventListener('click', function (e) {
                 const href = this.getAttribute('href');
@@ -1076,10 +1359,15 @@
                 if (href === '#login' || href === '#criar-conta' || href === '#cotacao') {
                     return;
                 }
-                
-                e.preventDefault();
                 const target = document.querySelector(href);
                 if (target) {
+                    e.preventDefault();
                     target.scrollIntoView({
-                        behavior: 'smooth',
- 
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
