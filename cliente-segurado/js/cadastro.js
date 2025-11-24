@@ -19,6 +19,15 @@ import {
     updateDoc
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 
+// ============================================================
+// NOMES DAS COLEÇÕES (Centralizados para fácil manutenção)
+// ============================================================
+const COLECOES = {
+    usuarios: 'usuarios',
+    indicacoes: 'indicacoes',
+    notificacoes: 'notificacoes_sistema'  // ALTERADO
+};
+
 // Função para mostrar toast
 function showToast(message, type = 'info') {
     const toast = document.getElementById('toast');
@@ -44,7 +53,7 @@ async function gerarCodigoIndicacao() {
         }
         
         // Verificar se o código já existe
-        const q = query(collection(db, 'usuarios'), where('codigoIndicacao', '==', codigo));
+        const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigo));
         const querySnapshot = await getDocs(q);
         
         if (querySnapshot.empty) {
@@ -68,7 +77,7 @@ document.getElementById('codigoIndicacao').addEventListener('blur', async functi
     }
     
     try {
-        const q = query(collection(db, 'usuarios'), where('codigoIndicacao', '==', codigo));
+        const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigo));
         const querySnapshot = await getDocs(q);
         
         if (!querySnapshot.empty) {
@@ -138,7 +147,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
         // Verificar se o código de indicação é válido (se fornecido)
         let indicadoPorId = null;
         if (codigoIndicacao) {
-            const q = query(collection(db, 'usuarios'), where('codigoIndicacao', '==', codigoIndicacao));
+            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
             const querySnapshot = await getDocs(q);
             
             if (querySnapshot.empty) {
@@ -161,7 +170,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
         const codigoUnico = await gerarCodigoIndicacao();
         
         // Criar documento do usuário no Firestore
-        await setDoc(doc(db, 'usuarios', user.uid), {
+        await setDoc(doc(db, COLECOES.usuarios, user.uid), {
             nome: nome,
             email: email,
             telefone: telefone,
@@ -183,7 +192,7 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
         // Se foi indicado por alguém, registrar a indicação
         if (indicadoPorId) {
             // Criar registro de indicação
-            const indicacaoRef = doc(collection(db, 'indicacoes'));
+            const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
             await setDoc(indicacaoRef, {
                 indicadorId: indicadoPorId,
                 indicadoId: user.uid,
@@ -197,13 +206,13 @@ document.getElementById('cadastroForm').addEventListener('submit', async (e) => 
             });
             
             // Atualizar contador de indicações do indicador
-            await updateDoc(doc(db, 'usuarios', indicadoPorId), {
+            await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
                 totalIndicacoes: increment(1),
                 pontosTotais: increment(1) // 1 ponto por indicação
             });
             
             // Criar notificação para o indicador
-            await setDoc(doc(collection(db, 'notificacoes')), {
+            await setDoc(doc(collection(db, COLECOES.notificacoes)), {  // ALTERADO
                 usuarioId: indicadoPorId,
                 tipo: 'nova_indicacao',
                 titulo: 'Nova Indicação!',
@@ -252,7 +261,7 @@ window.cadastroWithGoogle = async function() {
         const user = result.user;
         
         // Verificar se o usuário já existe
-        const userDoc = await getDoc(doc(db, 'usuarios', user.uid));
+        const userDoc = await getDoc(doc(db, COLECOES.usuarios, user.uid));
         
         if (userDoc.exists()) {
             showToast('Você já tem uma conta. Faça login.', 'error');
@@ -267,7 +276,7 @@ window.cadastroWithGoogle = async function() {
         let indicadoPorId = null;
         
         if (codigoIndicacao) {
-            const q = query(collection(db, 'usuarios'), where('codigoIndicacao', '==', codigoIndicacao));
+            const q = query(collection(db, COLECOES.usuarios), where('codigoIndicacao', '==', codigoIndicacao));
             const querySnapshot = await getDocs(q);
             
             if (!querySnapshot.empty) {
@@ -279,7 +288,7 @@ window.cadastroWithGoogle = async function() {
         const codigoUnico = await gerarCodigoIndicacao();
         
         // Criar documento do usuário
-        await setDoc(doc(db, 'usuarios', user.uid), {
+        await setDoc(doc(db, COLECOES.usuarios, user.uid), {
             nome: user.displayName || 'Usuário',
             email: user.email,
             telefone: '',
@@ -300,7 +309,7 @@ window.cadastroWithGoogle = async function() {
         
         // Se foi indicado, registrar indicação
         if (indicadoPorId) {
-            const indicacaoRef = doc(collection(db, 'indicacoes'));
+            const indicacaoRef = doc(collection(db, COLECOES.indicacoes));
             await setDoc(indicacaoRef, {
                 indicadorId: indicadoPorId,
                 indicadoId: user.uid,
@@ -313,7 +322,7 @@ window.cadastroWithGoogle = async function() {
                 dataConversao: null
             });
             
-            await updateDoc(doc(db, 'usuarios', indicadoPorId), {
+            await updateDoc(doc(db, COLECOES.usuarios, indicadoPorId), {
                 totalIndicacoes: increment(1),
                 pontosTotais: increment(1)
             });
