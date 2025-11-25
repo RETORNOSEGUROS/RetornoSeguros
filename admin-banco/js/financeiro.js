@@ -238,10 +238,13 @@ async function carregarMaisRecenteViaEmpresas(){
     
     if(empSnap.empty){
       console.log("[carregarMaisRecenteViaEmpresas] Nenhuma empresa encontrada na coleção");
+      mostrarMensagemSemEmpresas();
       return;
     }
     
     const proms = [];
+    const empresasSemDados = [];
+    
     empSnap.forEach(empDoc=>{
       const empId = empDoc.id;
       const empData = empDoc.data();
@@ -265,10 +268,12 @@ async function carregarMaisRecenteViaEmpresas(){
               return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
             }
             console.log(`[INFO] ${nomeEmpresa} - Sem dados financeiros`);
+            empresasSemDados.push({id:empId, nome:nomeEmpresa});
             return null;
           })
           .catch(err=>{
             console.error(`[ERRO] ${nomeEmpresa}:`, err.message);
+            empresasSemDados.push({id:empId, nome:nomeEmpresa});
             return null;
           })
       );
@@ -277,9 +282,54 @@ async function carregarMaisRecenteViaEmpresas(){
     const arr = await Promise.all(proms);
     LISTA = arr.filter(x=>x!=null);
     console.log("[carregarMaisRecenteViaEmpresas] Registros válidos:", LISTA.length);
+    console.log("[carregarMaisRecenteViaEmpresas] Empresas sem dados:", empresasSemDados.length);
+    
+    // Mostrar empresas sem dados
+    mostrarEmpresasSemDados(empresasSemDados);
+    
   } catch(e) {
     console.error("[carregarMaisRecenteViaEmpresas] Erro geral:", e);
     throw e;
+  }
+}
+
+// Mostra empresas que não têm dados financeiros
+function mostrarEmpresasSemDados(empresas){
+  const container = document.getElementById("empresasSemDados");
+  const lista = document.getElementById("listaEmpresasSemDados");
+  
+  if(!container || !lista) return;
+  
+  if(empresas.length === 0){
+    container.style.display = "none";
+    return;
+  }
+  
+  container.style.display = "block";
+  lista.innerHTML = empresas.map(emp => `
+    <button class="btn btn-outline" style="padding:6px 12px; font-size:13px" 
+      onclick="abrirModalEdicao('${emp.id}', null, null)">
+      ➕ ${escapeHtml(emp.nome)}
+    </button>
+  `).join("");
+}
+
+// Mensagem quando não há empresas cadastradas
+function mostrarMensagemSemEmpresas(){
+  const status = document.getElementById("statusLista");
+  if(status){
+    status.innerHTML = `
+      <div style="padding:40px; text-align:center">
+        <div style="font-size:48px; margin-bottom:16px">🏢</div>
+        <div style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:8px">
+          Nenhuma empresa cadastrada
+        </div>
+        <div style="font-size:14px; color:var(--text-muted); margin-bottom:16px">
+          Cadastre empresas primeiro em "Empresas" para depois adicionar dados financeiros
+        </div>
+        <a href="empresas.html" class="btn btn-primary">Ir para Cadastro de Empresas</a>
+      </div>
+    `;
   }
 }
 
@@ -293,10 +343,13 @@ async function carregarPorAnoViaEmpresas(ano){
     
     if(empSnap.empty){
       console.log("[carregarPorAnoViaEmpresas] Nenhuma empresa encontrada na coleção");
+      mostrarMensagemSemEmpresas();
       return;
     }
     
     const proms = [];
+    const empresasSemDados = [];
+    
     empSnap.forEach(empDoc=>{
       const empId = empDoc.id;
       const empData = empDoc.data();
@@ -319,10 +372,12 @@ async function carregarPorAnoViaEmpresas(ano){
               console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
               return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
             }
+            empresasSemDados.push({id:empId, nome:nomeEmpresa});
             return null;
           })
           .catch(err=>{
             console.error(`[ERRO] ${nomeEmpresa}:`, err.message);
+            empresasSemDados.push({id:empId, nome:nomeEmpresa});
             return null;
           })
       );
@@ -331,6 +386,10 @@ async function carregarPorAnoViaEmpresas(ano){
     const arr = await Promise.all(proms);
     LISTA = arr.filter(x=>x!=null);
     console.log("[carregarPorAnoViaEmpresas] Registros válidos:", LISTA.length);
+    
+    // Mostrar empresas sem dados para este ano
+    mostrarEmpresasSemDados(empresasSemDados);
+    
   } catch(e) {
     console.error("[carregarPorAnoViaEmpresas] Erro geral:", e);
     throw e;
@@ -344,27 +403,47 @@ function updateStatus(arr){
     return;
   }
   
+  // Esconder container de empresas sem dados se tiver resultados
+  const containerSemDados = document.getElementById("empresasSemDados");
+  
   if(!arr || !arr.length){
-    st.innerHTML = `
-      <div style="padding:40px; text-align:center">
-        <div style="font-size:48px; margin-bottom:16px">📊</div>
-        <div style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:8px">
-          Nenhum dado financeiro encontrado
+    // Verificar se há empresas no cache
+    if(EMPRESAS_CACHE.size > 0){
+      st.innerHTML = `
+        <div style="padding:40px; text-align:center">
+          <div style="font-size:48px; margin-bottom:16px">📊</div>
+          <div style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:8px">
+            Nenhum dado financeiro encontrado
+          </div>
+          <div style="font-size:14px; color:var(--text-muted)">
+            Selecione outro ano ou clique nos botões acima para adicionar dados financeiros às empresas
+          </div>
         </div>
-        <div style="font-size:14px; color:var(--text-muted)">
-          Selecione outro ano ou adicione dados financeiros às empresas
+      `;
+    } else {
+      st.innerHTML = `
+        <div style="padding:40px; text-align:center">
+          <div style="font-size:48px; margin-bottom:16px">🏢</div>
+          <div style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:8px">
+            Nenhuma empresa cadastrada
+          </div>
+          <div style="font-size:14px; color:var(--text-muted); margin-bottom:16px">
+            Cadastre empresas primeiro para depois adicionar dados financeiros
+          </div>
+          <a href="empresas.html" class="btn btn-primary">Ir para Cadastro de Empresas</a>
         </div>
-      </div>
-    `;
+      `;
+      if(containerSemDados) containerSemDados.style.display = "none";
+    }
   }else{
     st.innerHTML = `
-      <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px">
+      <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#d1fae5; border:1px solid #10b981; border-radius:8px">
         <div style="font-size:24px">✅</div>
         <div>
-          <div style="font-weight:600; color:var(--text-primary)">
-            ${arr.length} ${arr.length===1? "empresa":"empresas"} encontrada(s)
+          <div style="font-weight:600; color:#065f46">
+            ${arr.length} ${arr.length===1? "empresa":"empresas"} com dados financeiros
           </div>
-          <div style="font-size:12px; color:var(--text-secondary)">
+          <div style="font-size:12px; color:#047857">
             Dados carregados com sucesso
           </div>
         </div>
@@ -699,8 +778,24 @@ let EDIT_CTX = null;
 
 async function abrirModalEdicao(empresaId, ano=null, docId=null){
   EDIT_CTX = {empresaId, ano, docId};
-  const info = EMPRESAS_CACHE.get(empresaId) || {nome:"(sem nome)"};
-  document.getElementById("finEmpresaAlvo").textContent = `Empresa: ${info.nome}`;
+  
+  // Buscar nome da empresa se não estiver no cache
+  let info = EMPRESAS_CACHE.get(empresaId);
+  if(!info){
+    try{
+      const empDoc = await db.collection("empresas_banco").doc(empresaId).get();
+      if(empDoc.exists){
+        const ed = empDoc.data();
+        info = {id:empresaId, nome:ed.nomeEmpresa || ed.nome || "(sem nome)"};
+        EMPRESAS_CACHE.set(empresaId, info);
+      }
+    }catch(e){
+      console.error("Erro ao buscar empresa:", e);
+    }
+  }
+  
+  const nomeEmpresa = info?.nome || "(Empresa)";
+  document.getElementById("finEmpresaAlvo").textContent = `Empresa: ${nomeEmpresa}`;
 
   // Limpar formulário
   ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa",
@@ -711,13 +806,17 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
      if(el) el.value="";
    });
 
-  // Se temos docId, carregar dados
-  if(docId){
+  // Definir ano atual como padrão se não houver ano
+  const anoAtual = new Date().getFullYear();
+  document.getElementById("finAno").value = ano || anoAtual;
+
+  // Se temos docId, carregar dados existentes
+  if(docId && docId !== 'null' && docId !== ''){
     try{
       const finDoc = await db.collection("empresas_banco").doc(empresaId).collection("fin_anual").doc(docId).get();
       if(finDoc.exists){
         const d = finDoc.data();
-        document.getElementById("finAno").value = d.ano || "";
+        document.getElementById("finAno").value = d.ano || anoAtual;
         setMoney("finReceita", d.receita);
         setMoney("finLucroBruto", d.lucroBruto);
         setMoney("finEbitda", d.ebitda);
@@ -740,24 +839,37 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
         document.getElementById("finQtdSocios").value = d.qtdSocios || "";
       }
     }catch(e){
-      console.error(e);
+      console.error("Erro ao carregar dados:", e);
     }
-  } else if(ano){
-    document.getElementById("finAno").value = ano;
   }
 
-  document.getElementById("finErro").style.display="none";
-  document.getElementById("finInfo").style.display="none";
+  // Esconder mensagens de erro/info
+  const erroEl = document.getElementById("finErro");
+  const infoEl = document.getElementById("finInfo");
+  if(erroEl) erroEl.style.display="none";
+  if(infoEl) infoEl.style.display="none";
+  
+  // Mostrar modal
   document.getElementById("modalFin").style.display="block";
+  
+  // Re-aplicar máscaras de moeda
+  moneyBindInputs(document.getElementById("modalFin"));
 }
 window.abrirModalEdicao = abrirModalEdicao;
 
 async function salvarFinanceiro(){
   const empresaId = EDIT_CTX?.empresaId;
-  if(!empresaId) return alert("Erro: empresa não identificada");
+  if(!empresaId) return mostrarErro("Erro: empresa não identificada");
 
   const ano = Number(document.getElementById("finAno").value);
-  if(!ano || ano<2000 || ano>2100) return mostrarErro("Ano inválido");
+  if(!ano || ano<2000 || ano>2100) return mostrarErro("Ano inválido (deve ser entre 2000 e 2100)");
+
+  // Desabilitar botão durante salvamento
+  const btnSalvar = document.getElementById("finSalvar");
+  if(btnSalvar){
+    btnSalvar.disabled = true;
+    btnSalvar.textContent = "💾 Salvando...";
+  }
 
   const dados = {
     ano,
@@ -781,22 +893,28 @@ async function salvarFinanceiro(){
     depreciacao: getMoney("finDepreciacao"),
     passivoCirc: getMoney("finPassivoCirc"),
     ativoCirc: getMoney("finAtivoCirc"),
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: CTX.uid
   };
 
   try{
     const ref = db.collection("empresas_banco").doc(empresaId).collection("fin_anual");
     
-    if(EDIT_CTX.docId){
+    if(EDIT_CTX.docId && EDIT_CTX.docId !== 'null' && EDIT_CTX.docId !== ''){
       await ref.doc(EDIT_CTX.docId).update(dados);
       mostrarInfo("✅ Dados atualizados com sucesso!");
     }else{
+      // Verificar se já existe registro para este ano
       const snap = await ref.where("ano","==",ano).limit(1).get();
       if(!snap.empty){
         await ref.doc(snap.docs[0].id).update(dados);
         mostrarInfo("✅ Dados do ano já existiam e foram atualizados!");
       }else{
-        await ref.add({...dados, createdAt: firebase.firestore.FieldValue.serverTimestamp()});
+        await ref.add({
+          ...dados, 
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          createdBy: CTX.uid
+        });
         mostrarInfo("✅ Dados salvos com sucesso!");
       }
     }
@@ -804,10 +922,17 @@ async function salvarFinanceiro(){
     setTimeout(()=>{
       document.getElementById("modalFin").style.display="none";
       carregarGrid();
-    }, 1500);
+    }, 1200);
+    
   }catch(e){
-    console.error(e);
+    console.error("Erro ao salvar:", e);
     mostrarErro("Erro ao salvar: " + e.message);
+  }finally{
+    // Reabilitar botão
+    if(btnSalvar){
+      btnSalvar.disabled = false;
+      btnSalvar.textContent = "💾 Salvar Dados";
+    }
   }
 }
 
