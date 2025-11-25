@@ -1,7 +1,24 @@
 // ================== BOOT ==================
-if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+console.log("=== Financeiro.js carregado ===");
+console.log("Firebase disponível:", typeof firebase !== 'undefined');
+console.log("firebaseConfig disponível:", typeof firebaseConfig !== 'undefined');
+
+if (!firebase.apps.length) {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    console.log("✅ Firebase inicializado com sucesso");
+  } catch(e) {
+    console.error("❌ Erro ao inicializar Firebase:", e);
+  }
+} else {
+  console.log("✅ Firebase já estava inicializado");
+}
+
 const auth = firebase.auth();
 const db   = firebase.firestore();
+
+console.log("Auth disponível:", !!auth);
+console.log("Firestore disponível:", !!db);
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 let LISTA = [];
@@ -45,57 +62,123 @@ auth.onAuthStateChanged(async (user)=>{
       CTX.perfil    = normalizarPerfil(d.perfil || "admin");
       CTX.agenciaId = d.agenciaId || d.agenciaid || null;
       CTX.nome      = d.nome || user.email;
-      document.getElementById("perfilUsuario").innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">${d.perfil||"admin"}</span>`;
+      const perfilEl = document.getElementById("perfilUsuario");
+      if(perfilEl) {
+        perfilEl.innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">${d.perfil||"admin"}</span>`;
+      }
     } else {
       CTX.perfil = "admin";
       CTX.nome   = user.email || "Usuário";
-      document.getElementById("perfilUsuario").innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">admin</span>`;
+      const perfilEl = document.getElementById("perfilUsuario");
+      if(perfilEl) {
+        perfilEl.innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">admin</span>`;
+      }
     }
   } catch (e) {
+    console.error("[AUTH] Erro ao carregar perfil:", e);
     CTX.perfil = "admin";
     CTX.nome   = user.email || "Usuário";
-    document.getElementById("perfilUsuario").innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">admin</span>`;
+    const perfilEl = document.getElementById("perfilUsuario");
+    if(perfilEl) {
+      perfilEl.innerHTML = `<span>${CTX.nome}</span><span style="opacity:.7">admin</span>`;
+    }
   }
 
+  console.log("[AUTH] Usuário autenticado:", CTX.nome, "Perfil:", CTX.perfil);
+  
   wireUi();
   preencherAnosSelect();
-  carregarGrid();
   moneyBindInputs();
+  
+  // Carrega os dados após um pequeno delay para garantir que o DOM está pronto
+  setTimeout(()=> {
+    carregarGrid();
+  }, 100);
 });
 
 // ================== UI BINDINGS ==================
 function wireUi(){
-  document.getElementById("btnRecarregar")?.addEventListener("click", carregarGrid);
-  document.getElementById("busca")?.addEventListener("input", filtrarTabela);
-  document.getElementById("filtroAno")?.addEventListener("change", carregarGrid);
-  document.getElementById("btnVoltarPainel")?.addEventListener("click", ()=>{
-    if (document.referrer) history.back();
-    else location.href = "empresas.html";
-  });
+  console.log("[wireUi] Configurando event listeners...");
+  
+  const btnRecarregar = document.getElementById("btnRecarregar");
+  if(btnRecarregar) btnRecarregar.addEventListener("click", carregarGrid);
+  
+  const busca = document.getElementById("busca");
+  if(busca) busca.addEventListener("input", filtrarTabela);
+  
+  const filtroAno = document.getElementById("filtroAno");
+  if(filtroAno) filtroAno.addEventListener("change", carregarGrid);
+  
+  const btnVoltarPainel = document.getElementById("btnVoltarPainel");
+  if(btnVoltarPainel) {
+    btnVoltarPainel.addEventListener("click", ()=>{
+      if (document.referrer) history.back();
+      else location.href = "empresas.html";
+    });
+  }
 
   // Modal Lançar/Editar
   const modal = document.getElementById("modalFin");
-  document.getElementById("finFechar")?.addEventListener("click", ()=> modal.style.display="none");
-  document.getElementById("finCancelar")?.addEventListener("click", ()=> modal.style.display="none");
-  modal?.addEventListener("click", (e)=>{ if(e.target===modal) modal.style.display="none"; });
-  document.getElementById("toggleAvancado")?.addEventListener("click", ()=>{
-    const adv = document.getElementById("avancado");
-    const isVisible = adv.style.display === "block";
-    adv.style.display = isVisible ? "none" : "block";
-    document.getElementById("toggleAvancado").textContent = isVisible ? "➕ Dados Complementares (Opcional)" : "➖ Dados Complementares (Opcional)";
+  const finFechar = document.getElementById("finFechar");
+  const finCancelar = document.getElementById("finCancelar");
+  
+  if(finFechar) finFechar.addEventListener("click", ()=> {
+    if(modal) modal.style.display="none";
   });
-  document.getElementById("finSalvar")?.addEventListener("click", salvarFinanceiro);
+  
+  if(finCancelar) finCancelar.addEventListener("click", ()=> {
+    if(modal) modal.style.display="none";
+  });
+  
+  if(modal) {
+    modal.addEventListener("click", (e)=>{ 
+      if(e.target===modal) modal.style.display="none"; 
+    });
+  }
+  
+  const toggleAvancado = document.getElementById("toggleAvancado");
+  if(toggleAvancado) {
+    toggleAvancado.addEventListener("click", ()=>{
+      const adv = document.getElementById("avancado");
+      if(!adv) return;
+      const isVisible = adv.style.display === "block";
+      adv.style.display = isVisible ? "none" : "block";
+      toggleAvancado.textContent = isVisible ? "➕ Dados Complementares (Opcional)" : "➖ Dados Complementares (Opcional)";
+    });
+  }
+  
+  const finSalvar = document.getElementById("finSalvar");
+  if(finSalvar) finSalvar.addEventListener("click", salvarFinanceiro);
 
   // Modal Detalhes
   const m2 = document.getElementById("modalDet");
-  document.getElementById("detFechar")?.addEventListener("click", ()=> m2.style.display="none");
-  document.getElementById("detVoltar")?.addEventListener("click", ()=> m2.style.display="none");
-  m2?.addEventListener("click", (e)=>{ if(e.target===m2) m2.style.display="none"; });
+  const detFechar = document.getElementById("detFechar");
+  const detVoltar = document.getElementById("detVoltar");
+  
+  if(detFechar) detFechar.addEventListener("click", ()=> {
+    if(m2) m2.style.display="none";
+  });
+  
+  if(detVoltar) detVoltar.addEventListener("click", ()=> {
+    if(m2) m2.style.display="none";
+  });
+  
+  if(m2) {
+    m2.addEventListener("click", (e)=>{ 
+      if(e.target===m2) m2.style.display="none"; 
+    });
+  }
+  
+  console.log("[wireUi] Event listeners configurados");
 }
 
 function preencherAnosSelect(){
   const sel = document.getElementById("filtroAno");
-  if(!sel) return;
+  if(!sel) {
+    console.error("[preencherAnosSelect] Elemento filtroAno não encontrado");
+    return;
+  }
+  
   const base = new Date().getFullYear();
   for(let y=base; y>=base-8; y--){
     const opt = document.createElement("option");
@@ -103,6 +186,8 @@ function preencherAnosSelect(){
     opt.textContent = y;
     sel.appendChild(opt);
   }
+  
+  console.log("[preencherAnosSelect] Anos adicionados ao select");
 }
 
 // ================== CARREGAMENTO PRINCIPAL ==================
@@ -115,144 +200,262 @@ async function carregarGrid(){
 
   try{
     const anoSel = document.getElementById("filtroAno").value;
+    console.log("[carregarGrid] Ano selecionado:", anoSel);
+    
+    // Sempre usa a abordagem via empresas (mais compatível com regras de segurança)
     if(anoSel === "latest"){
       await carregarMaisRecenteViaEmpresas();
     }else{
       const ano = parseInt(anoSel,10);
-      await carregarPorAnoViaCollectionGroup(ano);
+      await carregarPorAnoViaEmpresas(ano);
     }
+    
+    console.log("[carregarGrid] Total de registros carregados:", LISTA.length);
     renderTabela(LISTA);
     updateStatus(LISTA);
   }catch(e){
     console.error("[carregarGrid] erro:", e);
-    status.textContent = "Erro ao carregar lista.";
+    
+    let mensagemErro = e.message || "Erro desconhecido";
+    if(e.code === "permission-denied" || mensagemErro.includes("permission")){
+      mensagemErro = "Sem permissão para acessar os dados. Verifique seu login.";
+    }
+    
+    status.innerHTML = `<div style="color:#ef4444; padding:20px; text-align:center">
+      ❌ ${mensagemErro}<br>
+      <button class="btn btn-outline" onclick="carregarGrid()" style="margin-top:12px">Tentar novamente</button>
+    </div>`;
     renderTabela([]);
   }
 }
 
 async function carregarMaisRecenteViaEmpresas(){
-  const empSnap = await db.collection("empresas_banco").get();
-  const proms = [];
-  empSnap.forEach(empDoc=>{
-    const empId = empDoc.id;
-    const empData = empDoc.data();
-    EMPRESAS_CACHE.set(empId, {id:empId, nome:empData.nomeEmpresa, rmUid:empData.rmUid, agenciaId:empData.agenciaId});
-    proms.push(
-      db.collection("empresas_banco").doc(empId).collection("fin_anual")
-        .orderBy("ano","desc").limit(1).get()
-        .then(s=>{
-          if(!s.empty){
-            const finDoc = s.docs[0];
-            const fd = finDoc.data();
-            return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
-          }
-          return null;
-        })
-    );
-  });
-  const arr = await Promise.all(proms);
-  LISTA = arr.filter(x=>x!=null);
+  console.log("[carregarMaisRecenteViaEmpresas] Iniciando carregamento...");
+  
+  try {
+    const empSnap = await db.collection("empresas_banco").get();
+    console.log("[carregarMaisRecenteViaEmpresas] Empresas encontradas:", empSnap.size);
+    
+    if(empSnap.empty){
+      console.log("[carregarMaisRecenteViaEmpresas] Nenhuma empresa encontrada na coleção");
+      return;
+    }
+    
+    const proms = [];
+    empSnap.forEach(empDoc=>{
+      const empId = empDoc.id;
+      const empData = empDoc.data();
+      const nomeEmpresa = empData.nomeEmpresa || empData.nome || "(sem nome)";
+      
+      EMPRESAS_CACHE.set(empId, {
+        id:empId, 
+        nome:nomeEmpresa, 
+        rmUid:empData.rmUid, 
+        agenciaId:empData.agenciaId
+      });
+      
+      proms.push(
+        db.collection("empresas_banco").doc(empId).collection("fin_anual")
+          .orderBy("ano","desc").limit(1).get()
+          .then(s=>{
+            if(!s.empty){
+              const finDoc = s.docs[0];
+              const fd = finDoc.data();
+              console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
+              return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
+            }
+            console.log(`[INFO] ${nomeEmpresa} - Sem dados financeiros`);
+            return null;
+          })
+          .catch(err=>{
+            console.error(`[ERRO] ${nomeEmpresa}:`, err.message);
+            return null;
+          })
+      );
+    });
+    
+    const arr = await Promise.all(proms);
+    LISTA = arr.filter(x=>x!=null);
+    console.log("[carregarMaisRecenteViaEmpresas] Registros válidos:", LISTA.length);
+  } catch(e) {
+    console.error("[carregarMaisRecenteViaEmpresas] Erro geral:", e);
+    throw e;
+  }
 }
 
-async function carregarPorAnoViaCollectionGroup(ano){
-  const snap = await db.collectionGroup("fin_anual").where("ano","==",ano).get();
-  const proms = snap.docs.map(async finDoc=>{
-    const fd = finDoc.data();
-    const empresaId = finDoc.ref.parent.parent.id;
+// Carrega por ano específico iterando sobre empresas (não usa collectionGroup)
+async function carregarPorAnoViaEmpresas(ano){
+  console.log("[carregarPorAnoViaEmpresas] Carregando ano:", ano);
+  
+  try {
+    const empSnap = await db.collection("empresas_banco").get();
+    console.log("[carregarPorAnoViaEmpresas] Empresas encontradas:", empSnap.size);
     
-    let info = EMPRESAS_CACHE.get(empresaId);
-    if(!info){
-      try{
-        const eDoc = await db.collection("empresas_banco").doc(empresaId).get();
-        if(eDoc.exists){
-          const ed = eDoc.data();
-          info = {id:empresaId, nome:ed.nomeEmpresa, rmUid:ed.rmUid, agenciaId:ed.agenciaId};
-          EMPRESAS_CACHE.set(empresaId, info);
-        }
-      }catch{}
+    if(empSnap.empty){
+      console.log("[carregarPorAnoViaEmpresas] Nenhuma empresa encontrada na coleção");
+      return;
     }
-    return {empresaId, ano:fd.ano, docId:finDoc.id, ...fd};
-  });
-  LISTA = await Promise.all(proms);
+    
+    const proms = [];
+    empSnap.forEach(empDoc=>{
+      const empId = empDoc.id;
+      const empData = empDoc.data();
+      const nomeEmpresa = empData.nomeEmpresa || empData.nome || "(sem nome)";
+      
+      EMPRESAS_CACHE.set(empId, {
+        id:empId, 
+        nome:nomeEmpresa, 
+        rmUid:empData.rmUid, 
+        agenciaId:empData.agenciaId
+      });
+      
+      proms.push(
+        db.collection("empresas_banco").doc(empId).collection("fin_anual")
+          .where("ano","==",ano).limit(1).get()
+          .then(s=>{
+            if(!s.empty){
+              const finDoc = s.docs[0];
+              const fd = finDoc.data();
+              console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
+              return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
+            }
+            return null;
+          })
+          .catch(err=>{
+            console.error(`[ERRO] ${nomeEmpresa}:`, err.message);
+            return null;
+          })
+      );
+    });
+    
+    const arr = await Promise.all(proms);
+    LISTA = arr.filter(x=>x!=null);
+    console.log("[carregarPorAnoViaEmpresas] Registros válidos:", LISTA.length);
+  } catch(e) {
+    console.error("[carregarPorAnoViaEmpresas] Erro geral:", e);
+    throw e;
+  }
 }
 
 function updateStatus(arr){
   const st = document.getElementById("statusLista");
-  if(!arr.length){
-    st.innerHTML = '<div style="color:var(--text-muted); padding:20px; text-align:center">Nenhum dado financeiro encontrado</div>';
+  if(!st) {
+    console.error("[updateStatus] Elemento statusLista não encontrado");
+    return;
+  }
+  
+  if(!arr || !arr.length){
+    st.innerHTML = `
+      <div style="padding:40px; text-align:center">
+        <div style="font-size:48px; margin-bottom:16px">📊</div>
+        <div style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:8px">
+          Nenhum dado financeiro encontrado
+        </div>
+        <div style="font-size:14px; color:var(--text-muted)">
+          Selecione outro ano ou adicione dados financeiros às empresas
+        </div>
+      </div>
+    `;
   }else{
-    st.innerHTML = `<div style="color:var(--text-secondary); font-size:13px">
-      📊 ${arr.length} ${arr.length===1? "empresa":"empresas"} encontrada(s)
-    </div>`;
+    st.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px">
+        <div style="font-size:24px">✅</div>
+        <div>
+          <div style="font-weight:600; color:var(--text-primary)">
+            ${arr.length} ${arr.length===1? "empresa":"empresas"} encontrada(s)
+          </div>
+          <div style="font-size:12px; color:var(--text-secondary)">
+            Dados carregados com sucesso
+          </div>
+        </div>
+      </div>
+    `;
   }
 }
 
 // ================== RENDERIZAR TABELA ==================
 function renderTabela(arr){
   const tbody = document.getElementById("tbodyFin");
+  if(!tbody) {
+    console.error("[renderTabela] Elemento tbodyFin não encontrado");
+    return;
+  }
+  
   tbody.innerHTML = "";
-  if(!arr.length) return;
+  
+  if(!arr || !arr.length) {
+    console.log("[renderTabela] Nenhum dado para renderizar");
+    return;
+  }
 
-  arr.forEach(row=>{
-    const info = EMPRESAS_CACHE.get(row.empresaId) || {nome:"(sem nome)"};
-    const calc = calcularIndicadores(row);
-    const score = calcularScore(calc);
-    const status = getStatusFinanceiro(score);
+  console.log("[renderTabela] Renderizando", arr.length, "linhas");
 
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td style="font-weight:600">${escapeHtml(info.nome)}</td>
-      <td>${row.ano}</td>
-      <td>
-        <div style="display:flex; align-items:center; gap:8px">
-          <div class="score-badge ${status.classe}" style="width:50px; height:50px; font-size:16px">
-            ${score}
+  arr.forEach((row, index)=>{
+    try {
+      const info = EMPRESAS_CACHE.get(row.empresaId) || {nome:"(sem nome)"};
+      const calc = calcularIndicadores(row);
+      const score = calcularScore(calc);
+      const status = getStatusFinanceiro(score);
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-weight:600">${escapeHtml(info.nome)}</td>
+        <td>${row.ano || "—"}</td>
+        <td>
+          <div style="display:flex; align-items:center; gap:8px">
+            <div class="score-badge ${status.classe}" style="width:50px; height:50px; font-size:16px">
+              ${score}
+            </div>
+            <div style="font-size:11px; color:var(--text-muted)">${status.label}</div>
           </div>
-          <div style="font-size:11px; color:var(--text-muted)">${status.label}</div>
-        </div>
-      </td>
-      <td>${toBRL(calc.receita)}</td>
-      <td>${toBRL(calc.ebitda)}</td>
-      <td>
-        <span class="chip ${calc.margem>=0.15? "chip-success" : calc.margem>=0.08? "chip-warning" : "chip-danger"}">
-          ${toPct(calc.margem)}
-        </span>
-      </td>
-      <td>
-        <span class="chip ${calc.alav<=1.5? "chip-success" : calc.alav<=3? "chip-warning" : "chip-danger"}">
-          ${calc.alav!=null? clamp2(calc.alav)+"x" : "—"}
-        </span>
-      </td>
-      <td>
-        <span class="chip ${calc.liq>=1.5? "chip-success" : calc.liq>=1? "chip-warning" : "chip-danger"}">
-          ${calc.liq!=null? clamp2(calc.liq) : "—"}
-        </span>
-      </td>
-      <td>
-        <span class="chip ${calc.roe>=0.15? "chip-success" : calc.roe>=0.08? "chip-info" : "chip-neutral"}">
-          ${calc.roe!=null? toPct(calc.roe) : "—"}
-        </span>
-      </td>
-      <td>
-        <span class="chip chip-${status.classe}">
-          ${status.icon} ${status.label}
-        </span>
-      </td>
-      <td>
-        <div style="display:flex; gap:6px">
-          <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
-            onclick="abrirModalDetalhes('${row.empresaId}')">
-            📊 Análise
-          </button>
-          <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
-            onclick="abrirModalEdicao('${row.empresaId}',${row.ano},'${row.docId}')">
-            ✏️ Editar
-          </button>
-        </div>
-      </td>
-    `;
-    tbody.appendChild(tr);
+        </td>
+        <td>${toBRL(calc.receita)}</td>
+        <td>${toBRL(calc.ebitda)}</td>
+        <td>
+          <span class="chip ${calc.margem>=0.15? "chip-success" : calc.margem>=0.08? "chip-warning" : "chip-danger"}">
+            ${toPct(calc.margem)}
+          </span>
+        </td>
+        <td>
+          <span class="chip ${calc.alav<=1.5? "chip-success" : calc.alav<=3? "chip-warning" : "chip-danger"}">
+            ${calc.alav!=null? clamp2(calc.alav)+"x" : "—"}
+          </span>
+        </td>
+        <td>
+          <span class="chip ${calc.liq>=1.5? "chip-success" : calc.liq>=1? "chip-warning" : "chip-danger"}">
+            ${calc.liq!=null? clamp2(calc.liq) : "—"}
+          </span>
+        </td>
+        <td>
+          <span class="chip ${calc.roe>=0.15? "chip-success" : calc.roe>=0.08? "chip-info" : "chip-neutral"}">
+            ${calc.roe!=null? toPct(calc.roe) : "—"}
+          </span>
+        </td>
+        <td>
+          <span class="chip chip-${status.classe}">
+            ${status.icon} ${status.label}
+          </span>
+        </td>
+        <td>
+          <div style="display:flex; gap:6px">
+            <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
+              onclick="abrirModalDetalhes('${row.empresaId}')">
+              📊 Análise
+            </button>
+            <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
+              onclick="abrirModalEdicao('${row.empresaId}',${row.ano},'${row.docId || ''}')">
+              ✏️ Editar
+            </button>
+          </div>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    } catch(e) {
+      console.error(`[renderTabela] Erro ao renderizar linha ${index}:`, e, row);
+    }
   });
+  
+  console.log("[renderTabela] Renderização concluída");
 }
 
 function getStatusFinanceiro(score){
@@ -264,21 +467,32 @@ function getStatusFinanceiro(score){
 
 // ================== CALCULAR INDICADORES ==================
 function calcularIndicadores(d){
-  const receita = Number(d.receita) || 0;
-  const ebitda = Number(d.ebitda) || 0;
-  const lucroBruto = Number(d.lucroBruto) || 0;
-  const lucroLiq = Number(d.lucroLiq) || 0;
-  const dividaBruta = Number(d.dividaBruta) || 0;
-  const caixa = Number(d.caixa) || 0;
-  const estoques = Number(d.estoques) || 0;
-  const cr = Number(d.contasReceber) || 0;
-  const cp = Number(d.contasPagar) || 0;
-  const despFin = Number(d.despesaFin) || 0;
-  const pl = Number(d.pl) || 0;
-  const ativo = Number(d.ativo) || 0;
-  const cmv = Number(d.cmv) || 0;
-  const ativoCirc = Number(d.ativoCirc) || 0;
-  const passivoCirc = Number(d.passivoCirc) || 0;
+  if(!d) {
+    console.warn("[calcularIndicadores] Dados não fornecidos");
+    return criarIndicadoresVazios();
+  }
+  
+  // Garantir que todos os valores sejam números válidos
+  const getNum = (val) => {
+    const n = Number(val);
+    return (isNaN(n) || !isFinite(n)) ? 0 : n;
+  };
+  
+  const receita = getNum(d.receita);
+  const ebitda = getNum(d.ebitda);
+  const lucroBruto = getNum(d.lucroBruto);
+  const lucroLiq = getNum(d.lucroLiq);
+  const dividaBruta = getNum(d.dividaBruta);
+  const caixa = getNum(d.caixa);
+  const estoques = getNum(d.estoques);
+  const cr = getNum(d.contasReceber);
+  const cp = getNum(d.contasPagar);
+  const despFin = getNum(d.despesaFin);
+  const pl = getNum(d.pl);
+  const ativo = getNum(d.ativo);
+  const cmv = getNum(d.cmv);
+  const ativoCirc = getNum(d.ativoCirc);
+  const passivoCirc = getNum(d.passivoCirc);
 
   // Dívida Líquida
   const dl = dividaBruta - caixa;
@@ -338,6 +552,21 @@ function calcularIndicadores(d){
     juros, coberturaDiv,
     capGiro, ccl, ncg, ncgRec,
     estoques, cr, cp, pl, ativo, despFin, cmv
+  };
+}
+
+function criarIndicadoresVazios(){
+  return {
+    receita:0, ebitda:0, lucroBruto:0, lucroLiq:0, dividaBruta:0, caixa:0, dl:0,
+    margem:null, margemBruta:null, margemLiq:null,
+    alav:null, dlSobrePL:null, endividamento:null, composicaoEnd:null,
+    liq:null, liqSeca:null, liqImediata:null, liqCorrente:null,
+    roe:null, roa:null, roic:null,
+    giroAtv:null, alavFin:null,
+    giroEst:null, diasEst:null, pmr:null, pmp:null, cicloOp:null, ciclo:null,
+    juros:null, coberturaDiv:null,
+    capGiro:0, ccl:0, ncg:0, ncgRec:null,
+    estoques:0, cr:0, cp:0, pl:0, ativo:0, despFin:0, cmv:0
   };
 }
 
@@ -440,12 +669,29 @@ function calcularScore(calc){
 
 // ================== FILTRAR TABELA ==================
 function filtrarTabela(){
-  const busca = document.getElementById("busca").value.toLowerCase();
+  const buscaEl = document.getElementById("busca");
+  if(!buscaEl) return;
+  
+  const busca = buscaEl.value.toLowerCase().trim();
   const tbody = document.getElementById("tbodyFin");
+  if(!tbody) return;
+  
+  let visibleCount = 0;
   Array.from(tbody.rows).forEach(row=>{
-    const txt = row.cells[0].textContent.toLowerCase();
-    row.style.display = txt.includes(busca) ? "" : "none";
+    try {
+      const txt = row.cells[0].textContent.toLowerCase();
+      if(txt.includes(busca)) {
+        row.style.display = "";
+        visibleCount++;
+      } else {
+        row.style.display = "none";
+      }
+    } catch(e) {
+      console.error("[filtrarTabela] Erro ao filtrar linha:", e);
+    }
   });
+  
+  console.log(`[filtrarTabela] ${visibleCount} empresas visíveis de ${tbody.rows.length}`);
 }
 
 // ================== MODAL EDIÇÃO ==================
