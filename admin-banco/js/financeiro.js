@@ -233,7 +233,16 @@ async function carregarMaisRecenteViaEmpresas(){
   console.log("[carregarMaisRecenteViaEmpresas] Iniciando carregamento...");
   
   try {
-    const empSnap = await db.collection("empresas_banco").get();
+    // Monta query baseada no perfil do usuário
+    let q = db.collection("empresas");
+    
+    if (CTX.perfil === "rm" && CTX.uid){
+      q = q.where("rmUid","==",CTX.uid);
+    } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
+      q = q.where("agenciaId","==",CTX.agenciaId);
+    }
+    
+    const empSnap = await q.limit(1000).get();
     console.log("[carregarMaisRecenteViaEmpresas] Empresas encontradas:", empSnap.size);
     
     if(empSnap.empty){
@@ -247,25 +256,46 @@ async function carregarMaisRecenteViaEmpresas(){
     
     empSnap.forEach(empDoc=>{
       const empId = empDoc.id;
-      const empData = empDoc.data();
-      const nomeEmpresa = empData.nomeEmpresa || empData.nome || "(sem nome)";
+      const empData = empDoc.data() || {};
+      const nomeEmpresa = empData.nome || empData.razaoSocial || empData.fantasia || "(sem nome)";
       
       EMPRESAS_CACHE.set(empId, {
-        id:empId, 
-        nome:nomeEmpresa, 
-        rmUid:empData.rmUid, 
-        agenciaId:empData.agenciaId
+        id: empId, 
+        nome: nomeEmpresa, 
+        rmUid: empData.rmUid || empData.rm || null, 
+        agenciaId: empData.agenciaId || empData.agenciaid || null
       });
       
       proms.push(
-        db.collection("empresas_banco").doc(empId).collection("fin_anual")
+        db.collection("empresas").doc(empId).collection("financeiro")
           .orderBy("ano","desc").limit(1).get()
           .then(s=>{
             if(!s.empty){
               const finDoc = s.docs[0];
-              const fd = finDoc.data();
+              const fd = finDoc.data() || {};
               console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
-              return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
+              return {
+                empresaId: empId, 
+                ano: fd.ano, 
+                docId: finDoc.id,
+                // Mapear campos do formato original
+                receita: fd.receitaLiquida || fd.receita || 0,
+                ebitda: fd.ebitda || 0,
+                lucroBruto: fd.lucroBruto || 0,
+                lucroLiq: fd.lucroLiquido || fd.lucroLiq || 0,
+                dividaBruta: fd.dividaBruta || 0,
+                caixa: fd.caixa || fd.disponibilidades || 0,
+                estoques: fd.estoques || 0,
+                contasReceber: fd.contasReceber || fd.duplicatasReceber || 0,
+                contasPagar: fd.contasPagar || fd.fornecedores || 0,
+                despesaFin: fd.despesasFinanceiras || fd.despesaFin || 0,
+                pl: fd.patrimonioLiquido || fd.pl || 0,
+                ativo: fd.ativoTotal || fd.ativo || 0,
+                cmv: fd.cmv || fd.custoMercadorias || 0,
+                ativoCirc: fd.ativoCirculante || fd.ativoCirc || 0,
+                passivoCirc: fd.passivoCirculante || fd.passivoCirc || 0,
+                ...fd
+              };
             }
             console.log(`[INFO] ${nomeEmpresa} - Sem dados financeiros`);
             empresasSemDados.push({id:empId, nome:nomeEmpresa});
@@ -333,12 +363,21 @@ function mostrarMensagemSemEmpresas(){
   }
 }
 
-// Carrega por ano específico iterando sobre empresas (não usa collectionGroup)
+// Carrega por ano específico iterando sobre empresas
 async function carregarPorAnoViaEmpresas(ano){
   console.log("[carregarPorAnoViaEmpresas] Carregando ano:", ano);
   
   try {
-    const empSnap = await db.collection("empresas_banco").get();
+    // Monta query baseada no perfil do usuário
+    let q = db.collection("empresas");
+    
+    if (CTX.perfil === "rm" && CTX.uid){
+      q = q.where("rmUid","==",CTX.uid);
+    } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
+      q = q.where("agenciaId","==",CTX.agenciaId);
+    }
+    
+    const empSnap = await q.limit(1000).get();
     console.log("[carregarPorAnoViaEmpresas] Empresas encontradas:", empSnap.size);
     
     if(empSnap.empty){
@@ -352,25 +391,46 @@ async function carregarPorAnoViaEmpresas(ano){
     
     empSnap.forEach(empDoc=>{
       const empId = empDoc.id;
-      const empData = empDoc.data();
-      const nomeEmpresa = empData.nomeEmpresa || empData.nome || "(sem nome)";
+      const empData = empDoc.data() || {};
+      const nomeEmpresa = empData.nome || empData.razaoSocial || empData.fantasia || "(sem nome)";
       
       EMPRESAS_CACHE.set(empId, {
-        id:empId, 
-        nome:nomeEmpresa, 
-        rmUid:empData.rmUid, 
-        agenciaId:empData.agenciaId
+        id: empId, 
+        nome: nomeEmpresa, 
+        rmUid: empData.rmUid || empData.rm || null, 
+        agenciaId: empData.agenciaId || empData.agenciaid || null
       });
       
       proms.push(
-        db.collection("empresas_banco").doc(empId).collection("fin_anual")
+        db.collection("empresas").doc(empId).collection("financeiro")
           .where("ano","==",ano).limit(1).get()
           .then(s=>{
             if(!s.empty){
               const finDoc = s.docs[0];
-              const fd = finDoc.data();
+              const fd = finDoc.data() || {};
               console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
-              return {empresaId:empId, ano:fd.ano, docId:finDoc.id, ...fd};
+              return {
+                empresaId: empId, 
+                ano: fd.ano, 
+                docId: finDoc.id,
+                // Mapear campos do formato original
+                receita: fd.receitaLiquida || fd.receita || 0,
+                ebitda: fd.ebitda || 0,
+                lucroBruto: fd.lucroBruto || 0,
+                lucroLiq: fd.lucroLiquido || fd.lucroLiq || 0,
+                dividaBruta: fd.dividaBruta || 0,
+                caixa: fd.caixa || fd.disponibilidades || 0,
+                estoques: fd.estoques || 0,
+                contasReceber: fd.contasReceber || fd.duplicatasReceber || 0,
+                contasPagar: fd.contasPagar || fd.fornecedores || 0,
+                despesaFin: fd.despesasFinanceiras || fd.despesaFin || 0,
+                pl: fd.patrimonioLiquido || fd.pl || 0,
+                ativo: fd.ativoTotal || fd.ativo || 0,
+                cmv: fd.cmv || fd.custoMercadorias || 0,
+                ativoCirc: fd.ativoCirculante || fd.ativoCirc || 0,
+                passivoCirc: fd.passivoCirculante || fd.passivoCirc || 0,
+                ...fd
+              };
             }
             empresasSemDados.push({id:empId, nome:nomeEmpresa});
             return null;
@@ -783,10 +843,10 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
   let info = EMPRESAS_CACHE.get(empresaId);
   if(!info){
     try{
-      const empDoc = await db.collection("empresas_banco").doc(empresaId).get();
+      const empDoc = await db.collection("empresas").doc(empresaId).get();
       if(empDoc.exists){
-        const ed = empDoc.data();
-        info = {id:empresaId, nome:ed.nomeEmpresa || ed.nome || "(sem nome)"};
+        const ed = empDoc.data() || {};
+        info = {id:empresaId, nome: ed.nome || ed.razaoSocial || ed.fantasia || "(sem nome)"};
         EMPRESAS_CACHE.set(empresaId, info);
       }
     }catch(e){
@@ -813,29 +873,29 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
   // Se temos docId, carregar dados existentes
   if(docId && docId !== 'null' && docId !== ''){
     try{
-      const finDoc = await db.collection("empresas_banco").doc(empresaId).collection("fin_anual").doc(docId).get();
+      const finDoc = await db.collection("empresas").doc(empresaId).collection("financeiro").doc(docId).get();
       if(finDoc.exists){
-        const d = finDoc.data();
+        const d = finDoc.data() || {};
         document.getElementById("finAno").value = d.ano || anoAtual;
-        setMoney("finReceita", d.receita);
+        setMoney("finReceita", d.receitaLiquida || d.receita);
         setMoney("finLucroBruto", d.lucroBruto);
         setMoney("finEbitda", d.ebitda);
-        setMoney("finLucroLiq", d.lucroLiq);
+        setMoney("finLucroLiq", d.lucroLiquido || d.lucroLiq);
         setMoney("finDividaBruta", d.dividaBruta);
-        setMoney("finCaixa", d.caixa);
+        setMoney("finCaixa", d.caixa || d.disponibilidades);
         setMoney("finEstoques", d.estoques);
-        setMoney("finCR", d.contasReceber);
-        setMoney("finCP", d.contasPagar);
-        setMoney("finDespesaFin", d.despesaFin);
-        setMoney("finDistribLucro", d.distribLucro);
+        setMoney("finCR", d.contasReceber || d.duplicatasReceber);
+        setMoney("finCP", d.contasPagar || d.fornecedores);
+        setMoney("finDespesaFin", d.despesasFinanceiras || d.despesaFin);
+        setMoney("finDistribLucro", d.distribuicaoLucros || d.distribLucro);
         setMoney("finProLabore", d.proLabore);
-        setMoney("finPL", d.pl);
-        setMoney("finAtivo", d.ativo);
-        setMoney("finCMV", d.cmv);
+        setMoney("finPL", d.patrimonioLiquido || d.pl);
+        setMoney("finAtivo", d.ativoTotal || d.ativo);
+        setMoney("finCMV", d.cmv || d.custoMercadorias);
         setMoney("finImobilizado", d.imobilizado);
         setMoney("finDepreciacao", d.depreciacao);
-        setMoney("finPassivoCirc", d.passivoCirc);
-        setMoney("finAtivoCirc", d.ativoCirc);
+        setMoney("finPassivoCirc", d.passivoCirculante || d.passivoCirc);
+        setMoney("finAtivoCirc", d.ativoCirculante || d.ativoCirc);
         document.getElementById("finQtdSocios").value = d.qtdSocios || "";
       }
     }catch(e){
@@ -871,34 +931,48 @@ async function salvarFinanceiro(){
     btnSalvar.textContent = "💾 Salvando...";
   }
 
+  // Usar nomes de campos compatíveis com o formato original
   const dados = {
     ano,
-    receita: getMoney("finReceita"),
+    receitaLiquida: getMoney("finReceita"),
     lucroBruto: getMoney("finLucroBruto"),
     ebitda: getMoney("finEbitda"),
-    lucroLiq: getMoney("finLucroLiq"),
+    lucroLiquido: getMoney("finLucroLiq"),
     dividaBruta: getMoney("finDividaBruta"),
     caixa: getMoney("finCaixa"),
     estoques: getMoney("finEstoques"),
     contasReceber: getMoney("finCR"),
     contasPagar: getMoney("finCP"),
-    despesaFin: getMoney("finDespesaFin"),
-    distribLucro: getMoney("finDistribLucro"),
+    despesasFinanceiras: getMoney("finDespesaFin"),
+    distribuicaoLucros: getMoney("finDistribLucro"),
     proLabore: getMoney("finProLabore"),
     qtdSocios: Number(document.getElementById("finQtdSocios").value) || 0,
-    pl: getMoney("finPL"),
-    ativo: getMoney("finAtivo"),
+    patrimonioLiquido: getMoney("finPL"),
+    ativoTotal: getMoney("finAtivo"),
     cmv: getMoney("finCMV"),
     imobilizado: getMoney("finImobilizado"),
     depreciacao: getMoney("finDepreciacao"),
-    passivoCirc: getMoney("finPassivoCirc"),
-    ativoCirc: getMoney("finAtivoCirc"),
+    passivoCirculante: getMoney("finPassivoCirc"),
+    ativoCirculante: getMoney("finAtivoCirc"),
+    // Campos calculados
+    dividaLiquida: getMoney("finDividaBruta") - getMoney("finCaixa"),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: CTX.uid
   };
 
+  // Calcular indicadores automaticamente
+  if(dados.receitaLiquida > 0 && dados.ebitda > 0){
+    dados.margemEbitda = dados.ebitda / dados.receitaLiquida;
+  }
+  if(dados.ebitda > 0 && dados.dividaLiquida != null){
+    dados.alavancagemDivLiqEbitda = dados.dividaLiquida / dados.ebitda;
+  }
+  if(dados.contasPagar > 0){
+    dados.liquidezCorrente = (dados.caixa + dados.contasReceber + dados.estoques) / dados.contasPagar;
+  }
+
   try{
-    const ref = db.collection("empresas_banco").doc(empresaId).collection("fin_anual");
+    const ref = db.collection("empresas").doc(empresaId).collection("financeiro");
     
     if(EDIT_CTX.docId && EDIT_CTX.docId !== 'null' && EDIT_CTX.docId !== ''){
       await ref.doc(EDIT_CTX.docId).update(dados);
@@ -911,12 +985,28 @@ async function salvarFinanceiro(){
         mostrarInfo("✅ Dados do ano já existiam e foram atualizados!");
       }else{
         await ref.add({
-          ...dados, 
+          ...dados,
+          empresaId: empresaId,
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           createdBy: CTX.uid
         });
         mostrarInfo("✅ Dados salvos com sucesso!");
       }
+    }
+
+    // Atualizar dados denormalizados na empresa (para visão rápida)
+    try{
+      await db.collection("empresas").doc(empresaId).update({
+        ultimoAnoFinanceiro: ano,
+        ultimaReceita: dados.receitaLiquida,
+        ultimoEbitda: dados.ebitda,
+        ultimaDividaLiquida: dados.dividaLiquida,
+        ultimaAlavancagem: dados.alavancagemDivLiqEbitda || null,
+        ultimaLiquidez: dados.liquidezCorrente || null,
+        financeiroAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(e){
+      console.warn("Não foi possível atualizar dados denormalizados:", e);
     }
 
     setTimeout(()=>{
@@ -956,10 +1046,34 @@ async function abrirModalDetalhes(empresaId){
   document.getElementById("detEmpresaAlvo").textContent = `Empresa: ${info.nome}`;
 
   try{
-    const snap = await db.collection("empresas_banco").doc(empresaId)
-      .collection("fin_anual").orderBy("ano","desc").get();
+    const snap = await db.collection("empresas").doc(empresaId)
+      .collection("financeiro").orderBy("ano","desc").get();
     
-    const rows = snap.docs.map(doc=>({docId:doc.id, ...doc.data()}));
+    // Mapear dados para formato padronizado
+    const rows = snap.docs.map(doc=>{
+      const fd = doc.data() || {};
+      return {
+        docId: doc.id,
+        ano: fd.ano,
+        receita: fd.receitaLiquida || fd.receita || 0,
+        ebitda: fd.ebitda || 0,
+        lucroBruto: fd.lucroBruto || 0,
+        lucroLiq: fd.lucroLiquido || fd.lucroLiq || 0,
+        dividaBruta: fd.dividaBruta || 0,
+        caixa: fd.caixa || fd.disponibilidades || 0,
+        estoques: fd.estoques || 0,
+        contasReceber: fd.contasReceber || fd.duplicatasReceber || 0,
+        contasPagar: fd.contasPagar || fd.fornecedores || 0,
+        despesaFin: fd.despesasFinanceiras || fd.despesaFin || 0,
+        pl: fd.patrimonioLiquido || fd.pl || 0,
+        ativo: fd.ativoTotal || fd.ativo || 0,
+        cmv: fd.cmv || fd.custoMercadorias || 0,
+        ativoCirc: fd.ativoCirculante || fd.ativoCirc || 0,
+        passivoCirc: fd.passivoCirculante || fd.passivoCirc || 0,
+        ...fd
+      };
+    });
+    
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
 
     // Dashboard de Saúde
