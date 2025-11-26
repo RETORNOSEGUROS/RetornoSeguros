@@ -3698,6 +3698,19 @@ function renderDefesaCredito(data){
       </div>
     </div>
     
+    <!-- RECOMENDAÇÃO INTELIGENTE DE CRÉDITO -->
+    <div class="defense-section" style="background:linear-gradient(135deg, #059669, #047857); color:#fff; border:none">
+      <div class="defense-section-title" style="color:#fff">
+        <span style="font-size:20px">🎯</span>
+        Recomendação Inteligente de Crédito
+      </div>
+      <p style="font-size:13px; opacity:0.9; margin-bottom:20px">
+        Baseado na análise completa da empresa, esta é a recomendação personalizada de crédito.
+      </p>
+      
+      ${gerarRecomendacaoCredito(latest, rows, disponivel)}
+    </div>
+    
     <!-- SIMULADOR DE OPERAÇÕES -->
     <div class="defense-section" style="background:linear-gradient(135deg, #0f172a, #1e293b); color:#fff; border:none">
       <div class="defense-section-title" style="color:#fff">
@@ -3754,7 +3767,344 @@ function renderDefesaCredito(data){
   container.innerHTML = html;
 }
 
-// Função do Simulador de Operações
+// ================== RECOMENDAÇÃO INTELIGENTE DE CRÉDITO ==================
+function gerarRecomendacaoCredito(latest, rows, disponivelBase){
+  const previo = rows[1] || null;
+  
+  // Análise da situação da empresa
+  const receita = latest.receita || 0;
+  const ebitda = latest.ebitda || 0;
+  const dividaLiq = latest.dividaLiq || 0;
+  const liq = latest.liq || 1;
+  const alav = latest.alav || 0;
+  const margem = latest.margem || 0;
+  const caixa = latest.disponiveis || 0;
+  const estoques = latest.estoques || 0;
+  const receber = latest.contasReceber || 0;
+  const pl = latest.pl || receita * 0.3;
+  
+  // Calcular NCG (Necessidade de Capital de Giro)
+  const pmr = receber > 0 ? (receber / (receita / 360)) : 30;
+  const pme = estoques > 0 ? (estoques / ((receita * 0.7) / 360)) : 45;
+  const pmp = latest.contasPagar ? (latest.contasPagar / ((receita * 0.7) / 360)) : 30;
+  const cicloFinanceiro = pmr + pme - pmp;
+  const ncg = cicloFinanceiro > 0 ? (cicloFinanceiro * (receita / 360)) : 0;
+  
+  // Calcular gaps e necessidades
+  const caixaIdeal = receita * 0.08; // 1 mês de receita como caixa ideal
+  const gapCaixa = Math.max(0, caixaIdeal - caixa);
+  
+  // Crescimento histórico
+  let taxaCrescimento = 0;
+  if(previo && previo.receita > 0){
+    taxaCrescimento = (receita - previo.receita) / previo.receita;
+  }
+  
+  // Dívida cara (estimar custo)
+  const custoMedioDivida = dividaLiq > 0 ? 0.18 : 0; // 18% a.a. estimado
+  const potencialEconomia = dividaLiq * 0.05; // Economia de 5% ao refinanciar
+  
+  // ===== MONTAR RECOMENDAÇÕES =====
+  let recomendacoes = [];
+  let valorTotal = 0;
+  
+  // 1. CAPITAL DE GIRO - Se liquidez baixa ou ciclo financeiro longo
+  if(liq < 1.3 || cicloFinanceiro > 60 || gapCaixa > 0){
+    const valorGiro = Math.max(ncg * 0.5, gapCaixa, receita * 0.05);
+    if(valorGiro > 0){
+      recomendacoes.push({
+        tipo: 'Capital de Giro',
+        valor: valorGiro,
+        finalidade: 'Reforço de caixa e financiamento do ciclo operacional',
+        motivo: liq < 1.3 ? 
+          `Liquidez atual (${clamp2(liq)}x) está abaixo do ideal. Empresa precisa de folga no caixa.` :
+          `Ciclo financeiro de ${Math.round(cicloFinanceiro)} dias exige capital para financiar operação.`,
+        produto: 'Giro Rotativo ou CCB Giro',
+        prazo: '12-24 meses',
+        garantia: 'Aval dos sócios + Recebíveis',
+        prioridade: 1,
+        icon: '💵',
+        cor: '#3b82f6'
+      });
+      valorTotal += valorGiro;
+    }
+  }
+  
+  // 2. FINANCIAMENTO DE ESTOQUES - Se estoque alto
+  const estoqueIdeal = receita * 0.12; // 45 dias de venda
+  if(estoques > estoqueIdeal * 1.3){
+    const valorEstoque = Math.min(estoques * 0.4, receita * 0.08);
+    recomendacoes.push({
+      tipo: 'Financiamento de Estoque',
+      valor: valorEstoque,
+      finalidade: 'Liberar capital imobilizado em estoque',
+      motivo: `Estoque de ${toBRL(estoques)} representa ${Math.round(pme)} dias. Financiar para liberar caixa.`,
+      produto: 'Vendor Finance ou Floor Plan',
+      prazo: '6-12 meses',
+      garantia: 'Alienação do próprio estoque',
+      prioridade: 2,
+      icon: '📦',
+      cor: '#8b5cf6'
+    });
+    valorTotal += valorEstoque;
+  }
+  
+  // 3. ANTECIPAÇÃO DE RECEBÍVEIS - Se PMR alto
+  if(pmr > 45 && receber > receita * 0.10){
+    const valorAntecipacao = receber * 0.6;
+    recomendacoes.push({
+      tipo: 'Antecipação de Recebíveis',
+      valor: valorAntecipacao,
+      finalidade: 'Acelerar entrada de caixa',
+      motivo: `PMR de ${Math.round(pmr)} dias é elevado. Antecipar recebíveis reduz ciclo financeiro.`,
+      produto: 'Desconto de Duplicatas ou FIDC',
+      prazo: 'Conforme vencimento dos títulos',
+      garantia: 'Cessão dos próprios recebíveis',
+      prioridade: 2,
+      icon: '📄',
+      cor: '#06b6d4'
+    });
+    // Não soma no total pois é operação de curto prazo rotativa
+  }
+  
+  // 4. REFINANCIAMENTO - Se dívida cara e alavancagem alta
+  if(alav > 1.5 && dividaLiq > ebitda * 1.5){
+    const valorRefin = dividaLiq * 0.7;
+    recomendacoes.push({
+      tipo: 'Refinanciamento de Dívidas',
+      valor: valorRefin,
+      finalidade: 'Trocar dívida cara por mais barata e alongar prazo',
+      motivo: `DL/EBITDA de ${clamp2(alav)}x indica dívida relevante. Refinanciar pode economizar até ${toBRL(potencialEconomia)}/ano em juros.`,
+      produto: 'CCB Longo Prazo ou Debênture',
+      prazo: '36-60 meses',
+      garantia: 'Imóveis ou Fiança Bancária',
+      prioridade: 1,
+      icon: '🔄',
+      cor: '#f59e0b'
+    });
+    // Não soma pois substitui dívida existente
+  }
+  
+  // 5. INVESTIMENTO/CAPEX - Se empresa crescendo e margem boa
+  if(taxaCrescimento > 0.08 && margem > 0.10){
+    const valorInvest = Math.min(ebitda * 1.5, receita * 0.15);
+    recomendacoes.push({
+      tipo: 'Investimento / CAPEX',
+      valor: valorInvest,
+      finalidade: 'Expansão de capacidade produtiva ou modernização',
+      motivo: `Empresa crescendo ${toPct(taxaCrescimento)} a.a. com margem saudável de ${toPct(margem)}. Momento ideal para investir.`,
+      produto: 'BNDES Finame ou Leasing',
+      prazo: '48-84 meses',
+      garantia: 'Alienação fiduciária do bem',
+      prioridade: 3,
+      icon: '🏭',
+      cor: '#10b981'
+    });
+    valorTotal += valorInvest;
+  }
+  
+  // 6. EXPANSÃO - Se crescendo muito
+  if(taxaCrescimento > 0.15){
+    const valorExpansao = receita * 0.20;
+    recomendacoes.push({
+      tipo: 'Expansão de Negócios',
+      valor: valorExpansao,
+      finalidade: 'Abertura de filial, novo mercado ou aquisição',
+      motivo: `Crescimento acelerado de ${toPct(taxaCrescimento)} indica oportunidade de expansão agressiva.`,
+      produto: 'Project Finance ou FIP',
+      prazo: '60-120 meses',
+      garantia: 'Garantias reais + Fiança sócios',
+      prioridade: 3,
+      icon: '🚀',
+      cor: '#ec4899'
+    });
+    valorTotal += valorExpansao;
+  }
+  
+  // 7. INOVAÇÃO/TECNOLOGIA - Se margem baixa
+  if(margem < 0.12 && receita > 5000000){
+    const valorTech = receita * 0.03;
+    recomendacoes.push({
+      tipo: 'Inovação e Tecnologia',
+      valor: valorTech,
+      finalidade: 'Automação, ERP, digitalização para ganho de eficiência',
+      motivo: `Margem de ${toPct(margem)} abaixo do ideal. Investir em tecnologia pode melhorar eficiência operacional.`,
+      produto: 'BNDES Inovação ou Finep',
+      prazo: '36-60 meses',
+      garantia: 'Aval sócios',
+      prioridade: 3,
+      icon: '💻',
+      cor: '#6366f1'
+    });
+    valorTotal += valorTech;
+  }
+  
+  // Ordenar por prioridade
+  recomendacoes.sort((a, b) => a.prioridade - b.prioridade);
+  
+  // Calcular valor total recomendado (limitado pela capacidade)
+  const limiteSeguro = Math.min(disponivelBase * 2, ebitda * 2.5, pl * 0.6);
+  const valorRecomendado = Math.min(valorTotal, limiteSeguro);
+  
+  // Se não houver recomendações, criar uma genérica
+  if(recomendacoes.length === 0){
+    recomendacoes.push({
+      tipo: 'Linha de Crédito Preventiva',
+      valor: receita * 0.05,
+      finalidade: 'Manter linha aprovada para oportunidades',
+      motivo: 'Empresa com indicadores saudáveis. Manter linha aprovada para eventualidades.',
+      produto: 'Limite de Crédito Rotativo',
+      prazo: '12 meses (renovável)',
+      garantia: 'Aval dos sócios',
+      prioridade: 3,
+      icon: '🛡️',
+      cor: '#64748b'
+    });
+  }
+  
+  // ===== GERAR HTML =====
+  let html = `
+    <!-- Resumo da Recomendação -->
+    <div style="background:rgba(255,255,255,0.15); border-radius:12px; padding:20px; margin-bottom:20px">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px">
+        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
+          <div style="font-size:12px; opacity:0.8">💰 Valor Total Recomendado</div>
+          <div style="font-size:28px; font-weight:800; margin-top:8px">${toBRL(valorRecomendado)}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">Baseado na capacidade e necessidades</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
+          <div style="font-size:12px; opacity:0.8">📊 Quantidade de Operações</div>
+          <div style="font-size:28px; font-weight:800; margin-top:8px">${recomendacoes.length}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">Produtos recomendados</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
+          <div style="font-size:12px; opacity:0.8">⚡ Prioridade #1</div>
+          <div style="font-size:18px; font-weight:700; margin-top:8px">${recomendacoes[0]?.tipo || 'N/A'}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">${toBRL(recomendacoes[0]?.valor || 0)}</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Alocação Visual -->
+    <div style="margin-bottom:20px">
+      <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📊 Alocação Recomendada dos Recursos</div>
+      <div style="background:rgba(0,0,0,0.2); border-radius:8px; overflow:hidden; height:32px; display:flex">
+        ${recomendacoes.map((r, i) => {
+          const pct = valorRecomendado > 0 ? (r.valor / valorRecomendado * 100) : (100 / recomendacoes.length);
+          return `<div style="width:${Math.max(pct, 5)}%; background:${r.cor}; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600" title="${r.tipo}: ${toBRL(r.valor)}">${r.icon}</div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:8px">
+        ${recomendacoes.map(r => `
+          <div style="display:flex; align-items:center; gap:4px; font-size:11px">
+            <div style="width:12px; height:12px; background:${r.cor}; border-radius:2px"></div>
+            ${r.tipo}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Detalhamento por Operação -->
+    <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📋 Detalhamento por Operação</div>
+  `;
+  
+  // Cards de cada recomendação
+  recomendacoes.forEach((r, idx) => {
+    html += `
+      <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:12px; border-left:4px solid ${r.cor}">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px">
+          <div style="width:48px; height:48px; background:${r.cor}; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:24px">
+            ${r.icon}
+          </div>
+          <div style="flex:1">
+            <div style="display:flex; align-items:center; gap:8px">
+              <span style="font-size:15px; font-weight:700">${r.tipo}</span>
+              <span style="font-size:10px; padding:2px 8px; background:rgba(255,255,255,0.2); border-radius:4px">Prioridade ${r.prioridade}</span>
+            </div>
+            <div style="font-size:22px; font-weight:800; color:#fef08a">${toBRL(r.valor)}</div>
+          </div>
+        </div>
+        
+        <div style="font-size:12px; opacity:0.9; margin-bottom:12px; padding:10px; background:rgba(0,0,0,0.2); border-radius:6px">
+          <strong>📌 Finalidade:</strong> ${r.finalidade}
+        </div>
+        
+        <div style="font-size:11px; opacity:0.8; margin-bottom:12px; font-style:italic">
+          💡 ${r.motivo}
+        </div>
+        
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:11px">
+          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
+            <div style="opacity:0.7">Produto</div>
+            <div style="font-weight:600; margin-top:2px">${r.produto}</div>
+          </div>
+          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
+            <div style="opacity:0.7">Prazo</div>
+            <div style="font-weight:600; margin-top:2px">${r.prazo}</div>
+          </div>
+          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
+            <div style="opacity:0.7">Garantia</div>
+            <div style="font-weight:600; margin-top:2px">${r.garantia}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  
+  // Resumo final
+  html += `
+    <div style="background:rgba(255,255,255,0.15); border-radius:10px; padding:16px; margin-top:16px">
+      <div style="font-size:13px; font-weight:600; margin-bottom:12px">📝 Resumo Executivo para Proposta</div>
+      <div style="font-size:12px; line-height:1.6; opacity:0.9">
+        Recomendamos operação total de <strong>${toBRL(valorRecomendado)}</strong>, distribuída em ${recomendacoes.length} produto(s):
+        ${recomendacoes.map(r => `<strong>${r.tipo}</strong> (${toBRL(r.valor)})`).join(', ')}.
+        
+        ${recomendacoes[0] ? `A prioridade é <strong>${recomendacoes[0].tipo}</strong> no valor de ${toBRL(recomendacoes[0].valor)}, 
+        utilizando ${recomendacoes[0].produto} com prazo de ${recomendacoes[0].prazo}.` : ''}
+        
+        A empresa apresenta capacidade de pagamento de ${toBRL(disponivelBase)}/ano para novas operações,
+        com DL/EBITDA atual de ${clamp2(alav)}x${alav < 2.5 ? ' (dentro do limite prudencial)' : ' (acima do ideal, exigindo garantias adicionais)'}.
+      </div>
+      
+      <button onclick="copiarRecomendacao()" style="margin-top:12px; padding:10px 20px; background:#fff; color:#059669; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:12px">
+        📋 Copiar Resumo
+      </button>
+    </div>
+  `;
+  
+  // Armazenar para copiar
+  window.RECOMENDACAO_TEXTO = `RECOMENDAÇÃO DE CRÉDITO
+
+Valor Total Recomendado: ${toBRL(valorRecomendado)}
+
+DETALHAMENTO:
+${recomendacoes.map((r, i) => `
+${i+1}. ${r.tipo.toUpperCase()}
+   Valor: ${toBRL(r.valor)}
+   Finalidade: ${r.finalidade}
+   Produto: ${r.produto}
+   Prazo: ${r.prazo}
+   Garantia: ${r.garantia}
+   Motivo: ${r.motivo}
+`).join('')}
+CAPACIDADE DE PAGAMENTO: ${toBRL(disponivelBase)}/ano
+DL/EBITDA ATUAL: ${clamp2(alav)}x
+`;
+  
+  return html;
+}
+
+// Função para copiar recomendação
+function copiarRecomendacao(){
+  if(window.RECOMENDACAO_TEXTO){
+    navigator.clipboard.writeText(window.RECOMENDACAO_TEXTO)
+      .then(() => alert('Recomendação copiada!'))
+      .catch(() => alert('Erro ao copiar'));
+  }
+}
+window.copiarRecomendacao = copiarRecomendacao;
+
+// ================== SIMULADOR DE OPERAÇÕES ==================
 function simularOperacao(){
   const data = window.SIMULADOR_DATA;
   if(!data) return alert('Dados não disponíveis');
