@@ -3778,21 +3778,21 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
   const liq = latest.liq || 1;
   const alav = latest.alav || 0;
   const margem = latest.margem || 0;
+  const roe = latest.roe || 0;
   const caixa = latest.disponiveis || 0;
   const estoques = latest.estoques || 0;
   const receber = latest.contasReceber || 0;
+  const pagar = latest.contasPagar || 0;
   const pl = latest.pl || receita * 0.3;
+  const ativoCirc = latest.ativoCirc || 0;
+  const passivoCirc = latest.passivoCirc || 0;
   
-  // Calcular NCG (Necessidade de Capital de Giro)
+  // Calcular ciclo financeiro
   const pmr = receber > 0 ? (receber / (receita / 360)) : 30;
   const pme = estoques > 0 ? (estoques / ((receita * 0.7) / 360)) : 45;
-  const pmp = latest.contasPagar ? (latest.contasPagar / ((receita * 0.7) / 360)) : 30;
+  const pmp = pagar > 0 ? (pagar / ((receita * 0.7) / 360)) : 30;
   const cicloFinanceiro = pmr + pme - pmp;
   const ncg = cicloFinanceiro > 0 ? (cicloFinanceiro * (receita / 360)) : 0;
-  
-  // Calcular gaps e necessidades
-  const caixaIdeal = receita * 0.08; // 1 mês de receita como caixa ideal
-  const gapCaixa = Math.max(0, caixaIdeal - caixa);
   
   // Crescimento histórico
   let taxaCrescimento = 0;
@@ -3800,212 +3800,576 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
     taxaCrescimento = (receita - previo.receita) / previo.receita;
   }
   
-  // Dívida cara (estimar custo)
-  const custoMedioDivida = dividaLiq > 0 ? 0.18 : 0; // 18% a.a. estimado
-  const potencialEconomia = dividaLiq * 0.05; // Economia de 5% ao refinanciar
+  // Variação de margem
+  let varMargem = 0;
+  if(previo){
+    varMargem = (margem - previo.margem) * 100;
+  }
   
-  // ===== MONTAR RECOMENDAÇÕES =====
+  // ===== DIAGNÓSTICO COMPLETO =====
+  const diagnostico = {
+    liquidezBaixa: liq < 1.2,
+    liquidezCritica: liq < 1.0,
+    alavancagemAlta: alav > 2.5,
+    alavancagemCritica: alav > 3.5,
+    margemBaixa: margem < 0.10,
+    margemCritica: margem < 0.05,
+    roeBaixo: roe < 0.10,
+    cicloLongo: cicloFinanceiro > 60,
+    cicloCritico: cicloFinanceiro > 90,
+    pmrAlto: pmr > 45,
+    pmeAlto: pme > 60,
+    pmpCurto: pmp < 20,
+    crescimentoNegativo: taxaCrescimento < 0,
+    crescimentoBaixo: taxaCrescimento < 0.05 && taxaCrescimento >= 0,
+    crescimentoAlto: taxaCrescimento > 0.15,
+    estoqueAlto: estoques > receita * 0.15,
+    caixaBaixo: caixa < receita * 0.05,
+    margemCaindo: varMargem < -2,
+    empresaGrande: receita > 50000000,
+    empresaMedia: receita > 10000000 && receita <= 50000000,
+    empresaSaudavel: liq >= 1.3 && alav <= 2.0 && margem >= 0.12
+  };
+  
+  // ===== GERAR RECOMENDAÇÕES BASEADAS NO DIAGNÓSTICO =====
   let recomendacoes = [];
   let valorTotal = 0;
   
-  // 1. CAPITAL DE GIRO - Se liquidez baixa ou ciclo financeiro longo
-  if(liq < 1.3 || cicloFinanceiro > 60 || gapCaixa > 0){
-    const valorGiro = Math.max(ncg * 0.5, gapCaixa, receita * 0.05);
-    if(valorGiro > 0){
-      recomendacoes.push({
-        tipo: 'Capital de Giro',
-        valor: valorGiro,
-        finalidade: 'Reforço de caixa e financiamento do ciclo operacional',
-        motivo: liq < 1.3 ? 
-          `Liquidez atual (${clamp2(liq)}x) está abaixo do ideal. Empresa precisa de folga no caixa.` :
-          `Ciclo financeiro de ${Math.round(cicloFinanceiro)} dias exige capital para financiar operação.`,
-        produto: 'Giro Rotativo ou CCB Giro',
-        prazo: '12-24 meses',
-        garantia: 'Aval dos sócios + Recebíveis',
-        prioridade: 1,
-        icon: '💵',
-        cor: '#3b82f6'
-      });
-      valorTotal += valorGiro;
-    }
+  // ----- BLOCO 1: LIQUIDEZ -----
+  if(diagnostico.liquidezCritica){
+    // Emergencial: quitar passivo circulante
+    const valorQuitar = Math.min(passivoCirc * 0.3, receita * 0.08);
+    recomendacoes.push({
+      tipo: 'Quitação de Passivo Circulante',
+      valor: valorQuitar,
+      finalidade: 'Pagar obrigações vencidas e reduzir pressão de curto prazo',
+      motivo: `Liquidez crítica de ${clamp2(liq)}x. Passivo circulante pressionando caixa. Necessário quitar dívidas de curto prazo para estabilizar.`,
+      produto: 'CCB Curto Prazo ou Conta Garantida',
+      prazo: '6-12 meses',
+      garantia: 'Recebíveis + Aval sócios',
+      prioridade: 1,
+      impacto: `Liquidez deve subir para ~${clamp2(liq * 1.3)}x`,
+      icon: '🚨',
+      cor: '#dc2626',
+      categoria: 'Emergencial'
+    });
+    valorTotal += valorQuitar;
   }
   
-  // 2. FINANCIAMENTO DE ESTOQUES - Se estoque alto
-  const estoqueIdeal = receita * 0.12; // 45 dias de venda
-  if(estoques > estoqueIdeal * 1.3){
-    const valorEstoque = Math.min(estoques * 0.4, receita * 0.08);
+  if(diagnostico.liquidezBaixa && !diagnostico.liquidezCritica){
+    const valorCaixa = Math.max(receita * 0.05 - caixa, receita * 0.03);
+    recomendacoes.push({
+      tipo: 'Reforço de Caixa',
+      valor: valorCaixa,
+      finalidade: 'Aumentar disponibilidades para folga operacional',
+      motivo: `Liquidez de ${clamp2(liq)}x está abaixo do ideal (1.3x). Caixa atual de ${toBRL(caixa)} representa apenas ${Math.round(caixa/receita*100)}% da receita.`,
+      produto: 'Capital de Giro Rotativo',
+      prazo: '12-24 meses',
+      garantia: 'Aval dos sócios',
+      prioridade: 1,
+      impacto: `Liquidez deve subir para ~${clamp2((ativoCirc + valorCaixa) / passivoCirc)}x`,
+      icon: '💵',
+      cor: '#3b82f6',
+      categoria: 'Capital de Giro'
+    });
+    valorTotal += valorCaixa;
+  }
+  
+  // ----- BLOCO 2: CICLO FINANCEIRO -----
+  if(diagnostico.pmeAlto || diagnostico.estoqueAlto){
+    const valorEstoque = Math.min(estoques * 0.4, receita * 0.06);
     recomendacoes.push({
       tipo: 'Financiamento de Estoque',
       valor: valorEstoque,
-      finalidade: 'Liberar capital imobilizado em estoque',
-      motivo: `Estoque de ${toBRL(estoques)} representa ${Math.round(pme)} dias. Financiar para liberar caixa.`,
-      produto: 'Vendor Finance ou Floor Plan',
-      prazo: '6-12 meses',
-      garantia: 'Alienação do próprio estoque',
+      finalidade: 'Liberar capital imobilizado em mercadorias',
+      motivo: `PME de ${Math.round(pme)} dias indica estoque elevado (${toBRL(estoques)}). Capital parado que poderia gerar retorno.`,
+      produto: 'Vendor Finance / Floor Plan',
+      prazo: '6-12 meses (renovável)',
+      garantia: 'Alienação fiduciária do estoque',
       prioridade: 2,
+      impacto: `Libera ${toBRL(valorEstoque)} de caixa imediato`,
       icon: '📦',
-      cor: '#8b5cf6'
+      cor: '#8b5cf6',
+      categoria: 'Capital de Giro'
     });
     valorTotal += valorEstoque;
   }
   
-  // 3. ANTECIPAÇÃO DE RECEBÍVEIS - Se PMR alto
-  if(pmr > 45 && receber > receita * 0.10){
-    const valorAntecipacao = receber * 0.6;
+  if(diagnostico.pmrAlto){
+    const valorAntecipacao = receber * 0.5;
     recomendacoes.push({
       tipo: 'Antecipação de Recebíveis',
       valor: valorAntecipacao,
-      finalidade: 'Acelerar entrada de caixa',
-      motivo: `PMR de ${Math.round(pmr)} dias é elevado. Antecipar recebíveis reduz ciclo financeiro.`,
-      produto: 'Desconto de Duplicatas ou FIDC',
+      finalidade: 'Acelerar entrada de caixa e reduzir ciclo financeiro',
+      motivo: `PMR de ${Math.round(pmr)} dias é elevado. Antecipar ${toBRL(valorAntecipacao)} em recebíveis reduz ciclo em ~${Math.round(pmr * 0.5)} dias.`,
+      produto: 'Desconto de Duplicatas / FIDC',
       prazo: 'Conforme vencimento dos títulos',
-      garantia: 'Cessão dos próprios recebíveis',
+      garantia: 'Cessão fiduciária dos recebíveis',
       prioridade: 2,
+      impacto: `Ciclo financeiro cai de ${Math.round(cicloFinanceiro)} para ~${Math.round(cicloFinanceiro - pmr*0.5)} dias`,
       icon: '📄',
-      cor: '#06b6d4'
+      cor: '#06b6d4',
+      categoria: 'Capital de Giro'
     });
-    // Não soma no total pois é operação de curto prazo rotativa
+    // Não soma no total - operação rotativa
   }
   
-  // 4. REFINANCIAMENTO - Se dívida cara e alavancagem alta
-  if(alav > 1.5 && dividaLiq > ebitda * 1.5){
-    const valorRefin = dividaLiq * 0.7;
+  if(diagnostico.pmpCurto && pagar > 0){
+    const aumentoPMP = receita * 0.03;
+    recomendacoes.push({
+      tipo: 'Renegociação com Fornecedores',
+      valor: aumentoPMP,
+      finalidade: 'Aumentar prazo de pagamento a fornecedores',
+      motivo: `PMP de apenas ${Math.round(pmp)} dias indica pouco prazo com fornecedores. Negociar prazos maiores libera caixa.`,
+      produto: 'Confirming / Risco Sacado',
+      prazo: '30-60 dias adicionais',
+      garantia: 'Cessão de crédito ao fornecedor',
+      prioridade: 3,
+      impacto: `Aumentar PMP para ${Math.round(pmp + 15)} dias libera ${toBRL(aumentoPMP)}`,
+      icon: '🤝',
+      cor: '#14b8a6',
+      categoria: 'Capital de Giro'
+    });
+  }
+  
+  // ----- BLOCO 3: ALAVANCAGEM / DÍVIDA -----
+  if(diagnostico.alavancagemAlta){
+    const valorRefin = dividaLiq * 0.6;
+    const economiaEstimada = valorRefin * 0.04; // 4% economia em juros
     recomendacoes.push({
       tipo: 'Refinanciamento de Dívidas',
       valor: valorRefin,
       finalidade: 'Trocar dívida cara por mais barata e alongar prazo',
-      motivo: `DL/EBITDA de ${clamp2(alav)}x indica dívida relevante. Refinanciar pode economizar até ${toBRL(potencialEconomia)}/ano em juros.`,
-      produto: 'CCB Longo Prazo ou Debênture',
-      prazo: '36-60 meses',
-      garantia: 'Imóveis ou Fiança Bancária',
-      prioridade: 1,
+      motivo: `DL/EBITDA de ${clamp2(alav)}x está ${alav > 3 ? 'CRÍTICO' : 'elevado'}. Refinanciar pode reduzir custo financeiro em até ${toBRL(economiaEstimada)}/ano.`,
+      produto: 'CCB Longo Prazo / Debênture',
+      prazo: '48-72 meses',
+      garantia: 'Imóveis + Fiança bancária',
+      prioridade: diagnostico.alavancagemCritica ? 1 : 2,
+      impacto: `Reduz parcela mensal e melhora fluxo de caixa`,
       icon: '🔄',
-      cor: '#f59e0b'
+      cor: '#f59e0b',
+      categoria: 'Reestruturação'
     });
-    // Não soma pois substitui dívida existente
+    // Não soma - substitui dívida existente
   }
   
-  // 5. INVESTIMENTO/CAPEX - Se empresa crescendo e margem boa
-  if(taxaCrescimento > 0.08 && margem > 0.10){
-    const valorInvest = Math.min(ebitda * 1.5, receita * 0.15);
+  if(diagnostico.alavancagemCritica && pl > 0){
+    const aporteIdeal = dividaLiq * 0.2;
     recomendacoes.push({
-      tipo: 'Investimento / CAPEX',
-      valor: valorInvest,
-      finalidade: 'Expansão de capacidade produtiva ou modernização',
-      motivo: `Empresa crescendo ${toPct(taxaCrescimento)} a.a. com margem saudável de ${toPct(margem)}. Momento ideal para investir.`,
-      produto: 'BNDES Finame ou Leasing',
-      prazo: '48-84 meses',
-      garantia: 'Alienação fiduciária do bem',
-      prioridade: 3,
-      icon: '🏭',
-      cor: '#10b981'
+      tipo: 'Aporte de Capital dos Sócios',
+      valor: aporteIdeal,
+      finalidade: 'Reforçar patrimônio e reduzir alavancagem',
+      motivo: `DL/EBITDA de ${clamp2(alav)}x é insustentável. Sócios precisam aportar capital para reequilibrar estrutura.`,
+      produto: 'Aumento de capital social',
+      prazo: 'Imediato',
+      garantia: 'N/A - recursos próprios',
+      prioridade: 1,
+      impacto: `DL/EBITDA cairia para ~${clamp2((dividaLiq - aporteIdeal) / ebitda)}x`,
+      icon: '💼',
+      cor: '#64748b',
+      categoria: 'Reestruturação'
     });
-    valorTotal += valorInvest;
   }
   
-  // 6. EXPANSÃO - Se crescendo muito
-  if(taxaCrescimento > 0.15){
-    const valorExpansao = receita * 0.20;
+  // ----- BLOCO 4: MARGEM / EFICIÊNCIA -----
+  if(diagnostico.margemBaixa || diagnostico.margemCaindo){
+    // Automação
+    const valorAutomacao = receita * 0.02;
     recomendacoes.push({
-      tipo: 'Expansão de Negócios',
-      valor: valorExpansao,
-      finalidade: 'Abertura de filial, novo mercado ou aquisição',
-      motivo: `Crescimento acelerado de ${toPct(taxaCrescimento)} indica oportunidade de expansão agressiva.`,
-      produto: 'Project Finance ou FIP',
-      prazo: '60-120 meses',
-      garantia: 'Garantias reais + Fiança sócios',
-      prioridade: 3,
-      icon: '🚀',
-      cor: '#ec4899'
-    });
-    valorTotal += valorExpansao;
-  }
-  
-  // 7. INOVAÇÃO/TECNOLOGIA - Se margem baixa
-  if(margem < 0.12 && receita > 5000000){
-    const valorTech = receita * 0.03;
-    recomendacoes.push({
-      tipo: 'Inovação e Tecnologia',
-      valor: valorTech,
-      finalidade: 'Automação, ERP, digitalização para ganho de eficiência',
-      motivo: `Margem de ${toPct(margem)} abaixo do ideal. Investir em tecnologia pode melhorar eficiência operacional.`,
-      produto: 'BNDES Inovação ou Finep',
+      tipo: 'Automação e Tecnologia',
+      valor: valorAutomacao,
+      finalidade: 'Reduzir custos operacionais com sistemas e automação',
+      motivo: `Margem de ${toPct(margem)} ${diagnostico.margemCaindo ? 'em queda' : 'abaixo do ideal'}. Automação pode reduzir custos em 5-15%.`,
+      produto: 'BNDES Inovação / Finep',
       prazo: '36-60 meses',
       garantia: 'Aval sócios',
       prioridade: 3,
-      icon: '💻',
-      cor: '#6366f1'
+      impacto: `Potencial ganho de 2-3 p.p. na margem`,
+      icon: '🤖',
+      cor: '#6366f1',
+      categoria: 'Investimento'
     });
-    valorTotal += valorTech;
+    valorTotal += valorAutomacao;
+    
+    // Equipamentos mais eficientes
+    if(diagnostico.empresaMedia || diagnostico.empresaGrande){
+      const valorEquip = receita * 0.03;
+      recomendacoes.push({
+        tipo: 'Modernização de Equipamentos',
+        valor: valorEquip,
+        finalidade: 'Substituir máquinas antigas por mais eficientes',
+        motivo: `Equipamentos modernos consomem menos energia, têm menor custo de manutenção e maior produtividade.`,
+        produto: 'BNDES Finame / Leasing',
+        prazo: '48-84 meses',
+        garantia: 'Alienação fiduciária do equipamento',
+        prioridade: 3,
+        impacto: `Redução de 10-20% nos custos de produção`,
+        icon: '⚙️',
+        cor: '#0ea5e9',
+        categoria: 'Investimento'
+      });
+      valorTotal += valorEquip;
+    }
+    
+    // Consultoria de processos
+    const valorConsult = receita * 0.005;
+    recomendacoes.push({
+      tipo: 'Consultoria de Processos',
+      valor: valorConsult,
+      finalidade: 'Mapear e otimizar processos para ganho de eficiência',
+      motivo: `Diagnóstico profissional pode identificar gargalos e desperdícios que impactam a margem.`,
+      produto: 'Capital de giro (recursos próprios)',
+      prazo: '3-6 meses',
+      garantia: 'N/A',
+      prioridade: 4,
+      impacto: `Empresas reportam ganhos de 5-10% em eficiência`,
+      icon: '📋',
+      cor: '#84cc16',
+      categoria: 'Investimento'
+    });
+    valorTotal += valorConsult;
+  }
+  
+  // ----- BLOCO 5: ROE / RENTABILIDADE -----
+  if(diagnostico.roeBaixo && !diagnostico.margemBaixa){
+    const valorProdutivo = receita * 0.04;
+    recomendacoes.push({
+      tipo: 'Investimento em Ativos Produtivos',
+      valor: valorProdutivo,
+      finalidade: 'Aumentar capacidade de geração de lucro',
+      motivo: `ROE de ${toPct(roe)} está baixo. Investir em ativos que gerem retorno acima do custo de capital.`,
+      produto: 'BNDES / Linha de Investimento',
+      prazo: '48-72 meses',
+      garantia: 'Alienação dos ativos',
+      prioridade: 3,
+      impacto: `Potencial aumento de 3-5 p.p. no ROE`,
+      icon: '📈',
+      cor: '#10b981',
+      categoria: 'Investimento'
+    });
+    valorTotal += valorProdutivo;
+  }
+  
+  // ----- BLOCO 6: CRESCIMENTO -----
+  if(diagnostico.crescimentoNegativo){
+    // Marketing urgente
+    const valorMkt = receita * 0.03;
+    recomendacoes.push({
+      tipo: 'Marketing e Vendas',
+      valor: valorMkt,
+      finalidade: 'Reverter queda de receita com ações comerciais',
+      motivo: `Receita caiu ${toPct(Math.abs(taxaCrescimento))} no último ano. Investir em marketing para recuperar vendas.`,
+      produto: 'Capital de Giro',
+      prazo: '12-18 meses',
+      garantia: 'Aval sócios',
+      prioridade: 2,
+      impacto: `Cada R$ 1 em marketing pode gerar R$ 3-5 em vendas`,
+      icon: '📣',
+      cor: '#ec4899',
+      categoria: 'Comercial'
+    });
+    valorTotal += valorMkt;
+    
+    // E-commerce se não tiver
+    const valorEcomm = receita * 0.015;
+    recomendacoes.push({
+      tipo: 'Canal Digital / E-commerce',
+      valor: valorEcomm,
+      finalidade: 'Criar ou fortalecer canal de vendas online',
+      motivo: `Diversificar canais de venda reduz dependência e abre novos mercados.`,
+      produto: 'Capital de Giro / Finep',
+      prazo: '12-24 meses',
+      garantia: 'Aval sócios',
+      prioridade: 3,
+      impacto: `E-commerce pode representar 15-30% das vendas em 2 anos`,
+      icon: '🛒',
+      cor: '#a855f7',
+      categoria: 'Comercial'
+    });
+    valorTotal += valorEcomm;
+  }
+  
+  if(diagnostico.crescimentoBaixo && diagnostico.empresaSaudavel){
+    // Expansão geográfica
+    const valorExpGeo = receita * 0.08;
+    recomendacoes.push({
+      tipo: 'Expansão Geográfica',
+      valor: valorExpGeo,
+      finalidade: 'Abrir filial ou representação em nova região',
+      motivo: `Empresa saudável com crescimento baixo (${toPct(taxaCrescimento)}). Hora de expandir geograficamente.`,
+      produto: 'BNDES / Project Finance',
+      prazo: '48-72 meses',
+      garantia: 'Imóvel + Aval sócios',
+      prioridade: 3,
+      impacto: `Nova unidade pode adicionar 20-40% de receita em 3 anos`,
+      icon: '🗺️',
+      cor: '#0891b2',
+      categoria: 'Expansão'
+    });
+    valorTotal += valorExpGeo;
+    
+    // Nova linha de produtos
+    const valorNovaLinha = receita * 0.05;
+    recomendacoes.push({
+      tipo: 'Nova Linha de Produtos',
+      valor: valorNovaLinha,
+      finalidade: 'Diversificar portfólio com novos produtos/serviços',
+      motivo: `Diversificação reduz risco e abre novas fontes de receita.`,
+      produto: 'Capital de Giro / BNDES',
+      prazo: '24-48 meses',
+      garantia: 'Aval sócios + Estoque',
+      prioridade: 3,
+      impacto: `Nova linha pode representar 10-25% da receita`,
+      icon: '🆕',
+      cor: '#f97316',
+      categoria: 'Expansão'
+    });
+    valorTotal += valorNovaLinha;
+  }
+  
+  if(diagnostico.crescimentoAlto && diagnostico.empresaSaudavel){
+    // Aquisição de concorrente
+    const valorAquisicao = receita * 0.25;
+    recomendacoes.push({
+      tipo: 'Aquisição de Concorrente',
+      valor: valorAquisicao,
+      finalidade: 'Comprar concorrente para acelerar crescimento',
+      motivo: `Crescimento de ${toPct(taxaCrescimento)} com indicadores saudáveis. Momento ideal para consolidação de mercado.`,
+      produto: 'M&A Finance / FIP',
+      prazo: '60-120 meses',
+      garantia: 'Ações da empresa adquirida + Imóveis',
+      prioridade: 4,
+      impacto: `Pode dobrar market share rapidamente`,
+      icon: '🏢',
+      cor: '#7c3aed',
+      categoria: 'Expansão'
+    });
+    valorTotal += valorAquisicao;
+    
+    // Capacidade produtiva
+    const valorCapacidade = receita * 0.10;
+    recomendacoes.push({
+      tipo: 'Ampliação de Capacidade',
+      valor: valorCapacidade,
+      finalidade: 'Aumentar capacidade produtiva para atender demanda',
+      motivo: `Crescimento acelerado pode estar limitado pela capacidade atual. Investir antes de perder vendas.`,
+      produto: 'BNDES Finame / Leasing',
+      prazo: '48-84 meses',
+      garantia: 'Alienação do bem',
+      prioridade: 2,
+      impacto: `Aumentar capacidade em 30-50%`,
+      icon: '🏭',
+      cor: '#059669',
+      categoria: 'Investimento'
+    });
+    valorTotal += valorCapacidade;
+  }
+  
+  // ----- BLOCO 7: INOVAÇÃO / P&D -----
+  if(diagnostico.empresaMedia || diagnostico.empresaGrande){
+    if(margem > 0.08 && !diagnostico.crescimentoNegativo){
+      const valorPD = receita * 0.02;
+      recomendacoes.push({
+        tipo: 'Pesquisa e Desenvolvimento',
+        valor: valorPD,
+        finalidade: 'Desenvolver novos produtos e processos inovadores',
+        motivo: `Inovação é essencial para manter competitividade no longo prazo.`,
+        produto: 'Finep / BNDES Inovação / Lei do Bem',
+        prazo: '36-60 meses',
+        garantia: 'Aval sócios',
+        prioridade: 4,
+        impacto: `P&D gera diferenciação e margens maiores`,
+        icon: '🔬',
+        cor: '#4f46e5',
+        categoria: 'Investimento'
+      });
+      valorTotal += valorPD;
+    }
+  }
+  
+  // ----- BLOCO 8: REGULARIZAÇÃO / RISCOS -----
+  // Sempre sugerir reserva para contingências se empresa grande
+  if(diagnostico.empresaMedia || diagnostico.empresaGrande){
+    const valorContingencia = receita * 0.01;
+    recomendacoes.push({
+      tipo: 'Provisão para Contingências',
+      valor: valorContingencia,
+      finalidade: 'Reserva para passivos trabalhistas, fiscais ou cíveis',
+      motivo: `Empresas deste porte costumam ter contingências. Provisionar evita surpresas no caixa.`,
+      produto: 'Aplicação financeira reservada',
+      prazo: 'Manter em reserva',
+      garantia: 'N/A',
+      prioridade: 4,
+      impacto: `Proteção contra riscos judiciais`,
+      icon: '⚖️',
+      cor: '#78716c',
+      categoria: 'Proteção'
+    });
+    valorTotal += valorContingencia;
+  }
+  
+  // Certificações se margem baixa
+  if(diagnostico.margemBaixa && receita > 5000000){
+    const valorCert = receita * 0.005;
+    recomendacoes.push({
+      tipo: 'Certificações (ISO/Qualidade)',
+      valor: valorCert,
+      finalidade: 'Obter certificações que abrem portas comerciais',
+      motivo: `Certificações podem ser exigência de grandes clientes e melhoram processos internos.`,
+      produto: 'Capital de Giro',
+      prazo: '12-18 meses',
+      garantia: 'N/A',
+      prioridade: 4,
+      impacto: `Acesso a novos mercados e clientes`,
+      icon: '🏅',
+      cor: '#ca8a04',
+      categoria: 'Investimento'
+    });
+    valorTotal += valorCert;
+  }
+  
+  // ESG/Sustentabilidade para empresas grandes
+  if(diagnostico.empresaGrande){
+    const valorESG = receita * 0.01;
+    recomendacoes.push({
+      tipo: 'Investimento ESG/Sustentabilidade',
+      valor: valorESG,
+      finalidade: 'Adequação ambiental, social e governança',
+      motivo: `ESG é cada vez mais exigido por investidores e grandes compradores. Também abre acesso a linhas de crédito verdes.`,
+      produto: 'Green Bonds / BNDES Clima',
+      prazo: '36-60 meses',
+      garantia: 'Aval sócios',
+      prioridade: 4,
+      impacto: `Acesso a taxas menores e novos mercados`,
+      icon: '🌱',
+      cor: '#16a34a',
+      categoria: 'Investimento'
+    });
+    valorTotal += valorESG;
+  }
+  
+  // ----- BLOCO 9: EMPRESA SAUDÁVEL - OPORTUNIDADES -----
+  if(diagnostico.empresaSaudavel && recomendacoes.length < 3){
+    // Linha preventiva
+    const valorPreventivo = receita * 0.05;
+    recomendacoes.push({
+      tipo: 'Linha de Crédito Preventiva',
+      valor: valorPreventivo,
+      finalidade: 'Manter linha aprovada para oportunidades e emergências',
+      motivo: `Empresa com indicadores saudáveis. Ter linha aprovada permite agir rápido em oportunidades.`,
+      produto: 'Limite Rotativo / Conta Garantida',
+      prazo: '12 meses (renovável)',
+      garantia: 'Aval dos sócios',
+      prioridade: 3,
+      impacto: `Flexibilidade para aproveitar oportunidades`,
+      icon: '🛡️',
+      cor: '#64748b',
+      categoria: 'Proteção'
+    });
+    valorTotal += valorPreventivo;
+    
+    // Reserva de caixa estratégica
+    const valorReserva = receita * 0.03;
+    recomendacoes.push({
+      tipo: 'Reserva Estratégica de Caixa',
+      valor: valorReserva,
+      finalidade: 'Aumentar colchão de liquidez para 3 meses de operação',
+      motivo: `Empresa saudável deve manter reserva equivalente a 3 meses de custos fixos.`,
+      produto: 'Capital de Giro',
+      prazo: '24-36 meses',
+      garantia: 'Aval sócios',
+      prioridade: 4,
+      impacto: `Segurança para enfrentar imprevistos`,
+      icon: '💰',
+      cor: '#0284c7',
+      categoria: 'Proteção'
+    });
+    valorTotal += valorReserva;
   }
   
   // Ordenar por prioridade
   recomendacoes.sort((a, b) => a.prioridade - b.prioridade);
   
-  // Calcular valor total recomendado (limitado pela capacidade)
-  const limiteSeguro = Math.min(disponivelBase * 2, ebitda * 2.5, pl * 0.6);
-  const valorRecomendado = Math.min(valorTotal, limiteSeguro);
+  // Agrupar por categoria
+  const categorias = {};
+  recomendacoes.forEach(r => {
+    if(!categorias[r.categoria]) categorias[r.categoria] = [];
+    categorias[r.categoria].push(r);
+  });
   
-  // Se não houver recomendações, criar uma genérica
-  if(recomendacoes.length === 0){
-    recomendacoes.push({
-      tipo: 'Linha de Crédito Preventiva',
-      valor: receita * 0.05,
-      finalidade: 'Manter linha aprovada para oportunidades',
-      motivo: 'Empresa com indicadores saudáveis. Manter linha aprovada para eventualidades.',
-      produto: 'Limite de Crédito Rotativo',
-      prazo: '12 meses (renovável)',
-      garantia: 'Aval dos sócios',
-      prioridade: 3,
-      icon: '🛡️',
-      cor: '#64748b'
-    });
-  }
+  // Calcular valor total recomendado (limitado pela capacidade)
+  const limiteSeguro = Math.min(disponivelBase * 2.5, ebitda * 3, pl * 0.8);
+  const valorRecomendado = Math.min(valorTotal, limiteSeguro);
   
   // ===== GERAR HTML =====
   let html = `
+    <!-- Diagnóstico Visual -->
+    <div style="background:rgba(0,0,0,0.2); border-radius:12px; padding:16px; margin-bottom:20px">
+      <div style="font-size:13px; font-weight:600; margin-bottom:12px">🔍 Diagnóstico Identificado</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px">
+        ${diagnostico.liquidezCritica ? '<span style="padding:4px 10px; background:#dc2626; border-radius:20px; font-size:11px">🚨 Liquidez Crítica</span>' : ''}
+        ${diagnostico.liquidezBaixa && !diagnostico.liquidezCritica ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">⚠️ Liquidez Baixa</span>' : ''}
+        ${diagnostico.alavancagemCritica ? '<span style="padding:4px 10px; background:#dc2626; border-radius:20px; font-size:11px">🚨 Alavancagem Crítica</span>' : ''}
+        ${diagnostico.alavancagemAlta && !diagnostico.alavancagemCritica ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">⚠️ Alavancagem Alta</span>' : ''}
+        ${diagnostico.margemBaixa ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">⚠️ Margem Baixa</span>' : ''}
+        ${diagnostico.margemCaindo ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">📉 Margem Caindo</span>' : ''}
+        ${diagnostico.cicloLongo ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">⏱️ Ciclo Longo</span>' : ''}
+        ${diagnostico.crescimentoNegativo ? '<span style="padding:4px 10px; background:#dc2626; border-radius:20px; font-size:11px">📉 Receita Caindo</span>' : ''}
+        ${diagnostico.crescimentoBaixo ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">🐢 Crescimento Baixo</span>' : ''}
+        ${diagnostico.crescimentoAlto ? '<span style="padding:4px 10px; background:#10b981; border-radius:20px; font-size:11px">🚀 Alto Crescimento</span>' : ''}
+        ${diagnostico.empresaSaudavel ? '<span style="padding:4px 10px; background:#10b981; border-radius:20px; font-size:11px">✅ Empresa Saudável</span>' : ''}
+        ${diagnostico.roeBaixo ? '<span style="padding:4px 10px; background:#f59e0b; border-radius:20px; font-size:11px">📊 ROE Baixo</span>' : ''}
+      </div>
+    </div>
+    
     <!-- Resumo da Recomendação -->
     <div style="background:rgba(255,255,255,0.15); border-radius:12px; padding:20px; margin-bottom:20px">
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:16px">
         <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
           <div style="font-size:12px; opacity:0.8">💰 Valor Total Recomendado</div>
-          <div style="font-size:28px; font-weight:800; margin-top:8px">${toBRL(valorRecomendado)}</div>
-          <div style="font-size:11px; opacity:0.7; margin-top:4px">Baseado na capacidade e necessidades</div>
+          <div style="font-size:26px; font-weight:800; margin-top:8px">${toBRL(valorRecomendado)}</div>
         </div>
         <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
-          <div style="font-size:12px; opacity:0.8">📊 Quantidade de Operações</div>
-          <div style="font-size:28px; font-weight:800; margin-top:8px">${recomendacoes.length}</div>
-          <div style="font-size:11px; opacity:0.7; margin-top:4px">Produtos recomendados</div>
+          <div style="font-size:12px; opacity:0.8">📊 Operações Sugeridas</div>
+          <div style="font-size:26px; font-weight:800; margin-top:8px">${recomendacoes.length}</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
+          <div style="font-size:12px; opacity:0.8">🏷️ Categorias</div>
+          <div style="font-size:26px; font-weight:800; margin-top:8px">${Object.keys(categorias).length}</div>
         </div>
         <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
           <div style="font-size:12px; opacity:0.8">⚡ Prioridade #1</div>
-          <div style="font-size:18px; font-weight:700; margin-top:8px">${recomendacoes[0]?.tipo || 'N/A'}</div>
-          <div style="font-size:11px; opacity:0.7; margin-top:4px">${toBRL(recomendacoes[0]?.valor || 0)}</div>
+          <div style="font-size:14px; font-weight:700; margin-top:8px">${recomendacoes[0]?.tipo || 'N/A'}</div>
+          <div style="font-size:12px; opacity:0.7">${toBRL(recomendacoes[0]?.valor || 0)}</div>
         </div>
       </div>
     </div>
     
-    <!-- Alocação Visual -->
+    <!-- Alocação Visual por Categoria -->
     <div style="margin-bottom:20px">
-      <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📊 Alocação Recomendada dos Recursos</div>
-      <div style="background:rgba(0,0,0,0.2); border-radius:8px; overflow:hidden; height:32px; display:flex">
-        ${recomendacoes.map((r, i) => {
-          const pct = valorRecomendado > 0 ? (r.valor / valorRecomendado * 100) : (100 / recomendacoes.length);
-          return `<div style="width:${Math.max(pct, 5)}%; background:${r.cor}; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600" title="${r.tipo}: ${toBRL(r.valor)}">${r.icon}</div>`;
+      <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📊 Alocação por Categoria</div>
+      <div style="display:grid; gap:8px">
+        ${Object.entries(categorias).map(([cat, items]) => {
+          const totalCat = items.reduce((s, i) => s + i.valor, 0);
+          const pctCat = valorRecomendado > 0 ? (totalCat / valorRecomendado * 100) : 0;
+          const corCat = items[0].cor;
+          return `
+            <div style="display:flex; align-items:center; gap:12px">
+              <div style="width:120px; font-size:12px; font-weight:600">${cat}</div>
+              <div style="flex:1; height:24px; background:rgba(0,0,0,0.3); border-radius:4px; overflow:hidden">
+                <div style="height:100%; width:${Math.min(pctCat, 100)}%; background:${corCat}; display:flex; align-items:center; padding-left:8px">
+                  <span style="font-size:11px; font-weight:600">${toBRL(totalCat)}</span>
+                </div>
+              </div>
+              <div style="width:50px; text-align:right; font-size:11px; opacity:0.8">${pctCat.toFixed(0)}%</div>
+            </div>
+          `;
         }).join('')}
-      </div>
-      <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:8px">
-        ${recomendacoes.map(r => `
-          <div style="display:flex; align-items:center; gap:4px; font-size:11px">
-            <div style="width:12px; height:12px; background:${r.cor}; border-radius:2px"></div>
-            ${r.tipo}
-          </div>
-        `).join('')}
       </div>
     </div>
     
     <!-- Detalhamento por Operação -->
-    <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📋 Detalhamento por Operação</div>
+    <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📋 Detalhamento das ${recomendacoes.length} Operações Recomendadas</div>
   `;
   
   // Cards de cada recomendação
@@ -4017,20 +4381,25 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
             ${r.icon}
           </div>
           <div style="flex:1">
-            <div style="display:flex; align-items:center; gap:8px">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
               <span style="font-size:15px; font-weight:700">${r.tipo}</span>
-              <span style="font-size:10px; padding:2px 8px; background:rgba(255,255,255,0.2); border-radius:4px">Prioridade ${r.prioridade}</span>
+              <span style="font-size:10px; padding:2px 8px; background:rgba(255,255,255,0.2); border-radius:4px">P${r.prioridade}</span>
+              <span style="font-size:10px; padding:2px 8px; background:${r.cor}; border-radius:4px">${r.categoria}</span>
             </div>
             <div style="font-size:22px; font-weight:800; color:#fef08a">${toBRL(r.valor)}</div>
           </div>
         </div>
         
-        <div style="font-size:12px; opacity:0.9; margin-bottom:12px; padding:10px; background:rgba(0,0,0,0.2); border-radius:6px">
+        <div style="font-size:12px; opacity:0.9; margin-bottom:8px; padding:10px; background:rgba(0,0,0,0.2); border-radius:6px">
           <strong>📌 Finalidade:</strong> ${r.finalidade}
         </div>
         
-        <div style="font-size:11px; opacity:0.8; margin-bottom:12px; font-style:italic">
-          💡 ${r.motivo}
+        <div style="font-size:11px; opacity:0.8; margin-bottom:8px">
+          💡 <em>${r.motivo}</em>
+        </div>
+        
+        <div style="font-size:11px; opacity:0.9; margin-bottom:12px; padding:8px; background:rgba(16,185,129,0.2); border-radius:6px">
+          📈 <strong>Impacto Esperado:</strong> ${r.impacto}
         </div>
         
         <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:11px">
@@ -4056,39 +4425,63 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
     <div style="background:rgba(255,255,255,0.15); border-radius:10px; padding:16px; margin-top:16px">
       <div style="font-size:13px; font-weight:600; margin-bottom:12px">📝 Resumo Executivo para Proposta</div>
       <div style="font-size:12px; line-height:1.6; opacity:0.9">
-        Recomendamos operação total de <strong>${toBRL(valorRecomendado)}</strong>, distribuída em ${recomendacoes.length} produto(s):
-        ${recomendacoes.map(r => `<strong>${r.tipo}</strong> (${toBRL(r.valor)})`).join(', ')}.
+        <p>Baseado na análise financeira completa, recomendamos operação total de <strong>${toBRL(valorRecomendado)}</strong>, 
+        distribuída em <strong>${recomendacoes.length} operações</strong> nas seguintes categorias:</p>
         
-        ${recomendacoes[0] ? `A prioridade é <strong>${recomendacoes[0].tipo}</strong> no valor de ${toBRL(recomendacoes[0].valor)}, 
-        utilizando ${recomendacoes[0].produto} com prazo de ${recomendacoes[0].prazo}.` : ''}
+        <ul style="margin:12px 0; padding-left:20px">
+          ${Object.entries(categorias).map(([cat, items]) => {
+            const totalCat = items.reduce((s, i) => s + i.valor, 0);
+            return `<li><strong>${cat}:</strong> ${toBRL(totalCat)} (${items.map(i => i.tipo).join(', ')})</li>`;
+          }).join('')}
+        </ul>
         
-        A empresa apresenta capacidade de pagamento de ${toBRL(disponivelBase)}/ano para novas operações,
-        com DL/EBITDA atual de ${clamp2(alav)}x${alav < 2.5 ? ' (dentro do limite prudencial)' : ' (acima do ideal, exigindo garantias adicionais)'}.
+        <p><strong>Prioridade imediata:</strong> ${recomendacoes.filter(r => r.prioridade === 1).map(r => r.tipo).join(', ') || 'Nenhuma urgência'}</p>
+        
+        <p>A empresa apresenta capacidade de pagamento de ${toBRL(disponivelBase)}/ano para novas operações,
+        com DL/EBITDA atual de ${clamp2(alav)}x.</p>
       </div>
       
       <button onclick="copiarRecomendacao()" style="margin-top:12px; padding:10px 20px; background:#fff; color:#059669; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:12px">
-        📋 Copiar Resumo
+        📋 Copiar Resumo Completo
       </button>
     </div>
   `;
   
   // Armazenar para copiar
-  window.RECOMENDACAO_TEXTO = `RECOMENDAÇÃO DE CRÉDITO
+  window.RECOMENDACAO_TEXTO = `RECOMENDAÇÃO DE CRÉDITO - ANÁLISE COMPLETA
+${'='.repeat(50)}
 
-Valor Total Recomendado: ${toBRL(valorRecomendado)}
+VALOR TOTAL RECOMENDADO: ${toBRL(valorRecomendado)}
+QUANTIDADE DE OPERAÇÕES: ${recomendacoes.length}
 
-DETALHAMENTO:
+DIAGNÓSTICO:
+${diagnostico.liquidezCritica ? '🚨 Liquidez Crítica\n' : ''}${diagnostico.liquidezBaixa ? '⚠️ Liquidez Baixa\n' : ''}${diagnostico.alavancagemAlta ? '⚠️ Alavancagem Alta\n' : ''}${diagnostico.margemBaixa ? '⚠️ Margem Baixa\n' : ''}${diagnostico.crescimentoNegativo ? '📉 Receita Caindo\n' : ''}${diagnostico.empresaSaudavel ? '✅ Empresa Saudável\n' : ''}
+
+ALOCAÇÃO POR CATEGORIA:
+${Object.entries(categorias).map(([cat, items]) => {
+  const totalCat = items.reduce((s, i) => s + i.valor, 0);
+  return `- ${cat}: ${toBRL(totalCat)}`;
+}).join('\n')}
+
+DETALHAMENTO DAS OPERAÇÕES:
 ${recomendacoes.map((r, i) => `
-${i+1}. ${r.tipo.toUpperCase()}
+${i+1}. ${r.tipo.toUpperCase()} [Prioridade ${r.prioridade}]
    Valor: ${toBRL(r.valor)}
+   Categoria: ${r.categoria}
    Finalidade: ${r.finalidade}
+   Motivo: ${r.motivo}
    Produto: ${r.produto}
    Prazo: ${r.prazo}
    Garantia: ${r.garantia}
-   Motivo: ${r.motivo}
+   Impacto Esperado: ${r.impacto}
 `).join('')}
-CAPACIDADE DE PAGAMENTO: ${toBRL(disponivelBase)}/ano
-DL/EBITDA ATUAL: ${clamp2(alav)}x
+
+INDICADORES ATUAIS:
+- DL/EBITDA: ${clamp2(alav)}x
+- Liquidez: ${clamp2(liq)}x
+- Margem EBITDA: ${toPct(margem)}
+- ROE: ${toPct(roe)}
+- Capacidade de Pagamento: ${toBRL(disponivelBase)}/ano
 `;
   
   return html;
