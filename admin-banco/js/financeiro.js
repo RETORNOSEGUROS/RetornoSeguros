@@ -94,9 +94,11 @@ auth.onAuthStateChanged(async (user)=>{
   preencherAnosSelect();
   moneyBindInputs();
   
-  // Carregar filtros de agência/RM para admin
+  // Carregar filtros de agência/RM para admin e gerente_chefe
   if(CTX.perfil === "admin"){
     await carregarFiltrosAdmin();
+  } else if(CTX.perfil === "gerente_chefe" || CTX.perfil === "gerente chefe"){
+    await carregarFiltrosGerenteChefe();
   }
   
   // Carrega os dados após um pequeno delay para garantir que o DOM está pronto
@@ -124,7 +126,7 @@ async function carregarFiltrosAdmin(){
       selAgencia.appendChild(opt);
     });
     
-    // Carregar RMs
+    // Carregar todos os RMs
     const rmSnap = await db.collection("usuarios_banco").where("perfil","==","rm").get();
     const selRM = document.getElementById("filtroRM");
     rmSnap.forEach(doc=>{
@@ -139,6 +141,36 @@ async function carregarFiltrosAdmin(){
     console.log("[carregarFiltrosAdmin] Agências:", AGENCIAS_CACHE.size, "RMs:", RMS_CACHE.size);
   }catch(e){
     console.error("[carregarFiltrosAdmin] Erro:", e);
+  }
+}
+
+// Carregar filtros para Gerente Chefe (só RMs da sua agência)
+async function carregarFiltrosGerenteChefe(){
+  try{
+    // Mostrar apenas filtro de RM
+    document.getElementById("filtroRM").style.display = "block";
+    
+    // Carregar RMs da agência do gerente chefe
+    if(CTX.agenciaId){
+      const rmSnap = await db.collection("usuarios_banco")
+        .where("perfil","==","rm")
+        .where("agenciaId","==",CTX.agenciaId)
+        .get();
+      
+      const selRM = document.getElementById("filtroRM");
+      rmSnap.forEach(doc=>{
+        const d = doc.data() || {};
+        RMS_CACHE.set(doc.id, {nome: d.nome || d.email, agenciaId: d.agenciaId});
+        const opt = document.createElement("option");
+        opt.value = doc.id;
+        opt.textContent = d.nome || d.email;
+        selRM.appendChild(opt);
+      });
+      
+      console.log("[carregarFiltrosGerenteChefe] RMs da agência:", RMS_CACHE.size);
+    }
+  }catch(e){
+    console.error("[carregarFiltrosGerenteChefe] Erro:", e);
   }
 }
 
@@ -323,9 +355,12 @@ async function carregarMaisRecenteViaEmpresas(){
       // RM vê apenas suas empresas
       q = q.where("rmUid","==",CTX.uid);
     } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "gerente_chefe"){
-      // Gerente Chefe vê todas da sua agência
+      // Gerente Chefe vê todas da sua agência, pode filtrar por RM
       if(CTX.agenciaId){
         q = q.where("agenciaId","==",CTX.agenciaId);
+      }
+      if(filtroRM){
+        q = q.where("rmUid","==",filtroRM);
       }
     } else if (CTX.perfil === "assistente"){
       // Assistente vê da sua agência
@@ -489,9 +524,12 @@ async function carregarPorAnoViaEmpresas(ano){
       // RM vê apenas suas empresas
       q = q.where("rmUid","==",CTX.uid);
     } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "gerente_chefe"){
-      // Gerente Chefe vê todas da sua agência
+      // Gerente Chefe vê todas da sua agência, pode filtrar por RM
       if(CTX.agenciaId){
         q = q.where("agenciaId","==",CTX.agenciaId);
+      }
+      if(filtroRM){
+        q = q.where("rmUid","==",filtroRM);
       }
     } else if (CTX.perfil === "assistente"){
       // Assistente vê da sua agência
@@ -628,6 +666,8 @@ function updateStatus(arr){
       `;
       if(containerSemDados) containerSemDados.style.display = "none";
     }
+    // Esconder dashboard consolidado
+    document.getElementById("dashboardConsolidado").style.display = "none";
   }else{
     st.innerHTML = `
       <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#d1fae5; border:1px solid #10b981; border-radius:8px">
@@ -642,7 +682,114 @@ function updateStatus(arr){
         </div>
       </div>
     `;
+    
+    // Atualizar Dashboard Consolidado
+    atualizarDashboardConsolidado(arr);
   }
+}
+
+// ================== DASHBOARD CONSOLIDADO ==================
+function atualizarDashboardConsolidado(arr){
+  const dash = document.getElementById("dashboardConsolidado");
+  if(!dash || !arr || !arr.length) {
+    if(dash) dash.style.display = "none";
+    return;
+  }
+  
+  dash.style.display = "block";
+  
+  // Calcular métricas consolidadas
+  let totalReceita = 0;
+  let somaScore = 0;
+  let somaMargem = 0;
+  let somaAlav = 0;
+  let somaLiq = 0;
+  let countMargem = 0;
+  let countAlav = 0;
+  let countLiq = 0;
+  let excelentes = 0, bons = 0, regulares = 0, criticos = 0;
+  
+  arr.forEach(row => {
+    const calc = calcularIndicadores(row);
+    const score = calcularScore(calc);
+    
+    totalReceita += calc.receita || 0;
+    somaScore += score;
+    
+    if(calc.margem != null && isFinite(calc.margem)){
+      somaMargem += calc.margem;
+      countMargem++;
+    }
+    if(calc.alav != null && isFinite(calc.alav) && calc.alav > 0){
+      somaAlav += calc.alav;
+      countAlav++;
+    }
+    if(calc.liq != null && isFinite(calc.liq)){
+      somaLiq += calc.liq;
+      countLiq++;
+    }
+    
+    // Classificar por score
+    if(score >= 80) excelentes++;
+    else if(score >= 65) bons++;
+    else if(score >= 50) regulares++;
+    else criticos++;
+  });
+  
+  const scoreMedio = Math.round(somaScore / arr.length);
+  const margemMedia = countMargem > 0 ? (somaMargem / countMargem) : 0;
+  const alavMedia = countAlav > 0 ? (somaAlav / countAlav) : 0;
+  const liqMedia = countLiq > 0 ? (somaLiq / countLiq) : 0;
+  
+  // Atualizar título conforme perfil
+  const tituloEl = document.getElementById("dashTitulo");
+  const subtituloEl = document.getElementById("dashSubtitulo");
+  
+  if(CTX.perfil === "admin"){
+    const filtroAg = document.getElementById("filtroAgencia")?.value;
+    const filtroRm = document.getElementById("filtroRM")?.value;
+    if(filtroAg || filtroRm){
+      tituloEl.textContent = "Visão Consolidada - Filtro Aplicado";
+      let sub = [];
+      if(filtroAg) sub.push("Agência: " + (AGENCIAS_CACHE.get(filtroAg) || filtroAg));
+      if(filtroRm) sub.push("RM: " + (RMS_CACHE.get(filtroRm)?.nome || filtroRm));
+      subtituloEl.textContent = sub.join(" | ");
+    } else {
+      tituloEl.textContent = "Visão Consolidada - Todas as Empresas";
+      subtituloEl.textContent = "Panorama geral do banco";
+    }
+  } else if(CTX.perfil === "rm"){
+    tituloEl.textContent = "Visão Consolidada da Minha Carteira";
+    subtituloEl.textContent = CTX.nome || "";
+  } else if(CTX.perfil === "gerente chefe" || CTX.perfil === "gerente_chefe"){
+    tituloEl.textContent = "Visão Consolidada da Agência";
+    subtituloEl.textContent = AGENCIAS_CACHE.get(CTX.agenciaId) || CTX.agenciaId || "";
+  } else {
+    tituloEl.textContent = "Visão Consolidada";
+    subtituloEl.textContent = "";
+  }
+  
+  // Atualizar valores
+  document.getElementById("dashTotalEmpresas").textContent = arr.length;
+  document.getElementById("dashScoreMedio").textContent = scoreMedio;
+  document.getElementById("dashReceitaTotal").textContent = toBRL(totalReceita);
+  document.getElementById("dashMargemMedia").textContent = toPct(margemMedia);
+  document.getElementById("dashAlavMedia").textContent = alavMedia > 0 ? clamp2(alavMedia) + "x" : "—";
+  document.getElementById("dashLiqMedia").textContent = liqMedia > 0 ? clamp2(liqMedia) : "—";
+  
+  document.getElementById("dashExcelentes").textContent = excelentes;
+  document.getElementById("dashBons").textContent = bons;
+  document.getElementById("dashRegulares").textContent = regulares;
+  document.getElementById("dashCriticos").textContent = criticos;
+  
+  // Atualizar barra de score
+  const scoreBar = document.getElementById("dashScoreBar");
+  if(scoreBar){
+    scoreBar.style.setProperty('--score-width', scoreMedio + '%');
+    scoreBar.innerHTML = `<div style="width:${scoreMedio}%; height:100%; background:#fff; border-radius:2px"></div>`;
+  }
+  
+  console.log("[atualizarDashboardConsolidado] Score médio:", scoreMedio, "Empresas:", arr.length);
 }
 
 // ================== RENDERIZAR TABELA ==================
@@ -1873,202 +2020,65 @@ function renderTabelaDetalhes(rows, empresaId){
 // ================== EXPORTAR PDF ==================
 async function exportarPDF(nomeEmpresa){
   if(typeof html2pdf === "undefined"){
-    return alert("Biblioteca html2pdf não encontrada.");
+    return alert("Biblioteca html2pdf não encontrada. Verifique se o script está carregado.");
   }
 
-  // Criar container temporário para PDF
-  const pdfContainer = document.createElement('div');
-  pdfContainer.className = 'pdf-container';
-  pdfContainer.style.cssText = 'position:absolute; left:-9999px; top:0; width:210mm; background:#fff; padding:20px; font-family:Inter,Arial,sans-serif;';
-  
-  // Obter dados do modal
-  const healthDashboard = document.getElementById('healthDashboard').innerHTML;
-  const recommendations = document.getElementById('recommendations').innerHTML;
-  const detResumo = document.getElementById('detResumo').innerHTML;
-  const detTbody = document.getElementById('detTbody').innerHTML;
-  
-  // Gerar data atual
-  const dataAtual = new Date().toLocaleDateString('pt-BR', {day:'2-digit', month:'long', year:'numeric'});
-  
-  pdfContainer.innerHTML = `
-    <style>
-      * { box-sizing:border-box; margin:0; padding:0; }
-      body { font-family: 'Inter', Arial, sans-serif; }
-      .pdf-header { 
-        text-align:center; 
-        padding:30px 20px; 
-        background: linear-gradient(135deg, #0a3c7d 0%, #2563eb 100%);
-        color:#fff;
-        border-radius:12px;
-        margin-bottom:20px;
-      }
-      .pdf-header h1 { font-size:24px; margin-bottom:8px; }
-      .pdf-header p { font-size:14px; opacity:0.9; }
-      .pdf-section { margin-bottom:20px; page-break-inside:avoid; }
-      .pdf-section-title { 
-        font-size:16px; 
-        font-weight:700; 
-        color:#0a3c7d; 
-        margin-bottom:12px;
-        padding-bottom:8px;
-        border-bottom:2px solid #e2e8f0;
-      }
-      .health-dashboard { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
-      .health-card { 
-        flex:1; 
-        min-width:150px; 
-        background:#f8fafc; 
-        border:1px solid #e2e8f0; 
-        border-radius:8px; 
-        padding:16px; 
-        text-align:center;
-      }
-      .health-value { font-size:24px; font-weight:700; color:#0a3c7d; }
-      .health-label { font-size:11px; color:#64748b; text-transform:uppercase; }
-      .chip { 
-        display:inline-block; 
-        padding:4px 10px; 
-        border-radius:6px; 
-        font-size:11px; 
-        font-weight:600;
-      }
-      .chip-success { background:#d1fae5; color:#065f46; }
-      .chip-warning { background:#fef3c7; color:#92400e; }
-      .chip-danger { background:#fee2e2; color:#991b1b; }
-      .chip-info { background:#dbeafe; color:#1e40af; }
-      .score-badge {
-        display:inline-flex;
-        align-items:center;
-        justify-content:center;
-        width:60px;
-        height:60px;
-        border-radius:50%;
-        font-size:20px;
-        font-weight:700;
-        color:#fff;
-      }
-      .score-badge.success { background:linear-gradient(135deg, #10b981, #059669); }
-      .score-badge.info { background:linear-gradient(135deg, #3b82f6, #2563eb); }
-      .score-badge.warning { background:linear-gradient(135deg, #f59e0b, #d97706); }
-      .score-badge.danger { background:linear-gradient(135deg, #ef4444, #dc2626); }
-      .recommendations { 
-        background:#f0f9ff; 
-        border:1px solid #bae6fd; 
-        border-radius:8px; 
-        padding:16px; 
-        margin:16px 0;
-      }
-      .recommendation-item {
-        background:#fff;
-        border:1px solid #bae6fd;
-        border-radius:6px;
-        padding:12px;
-        margin-bottom:8px;
-      }
-      .recommendation-title { font-weight:600; color:#0c4a6e; margin-bottom:4px; }
-      .recommendation-desc { font-size:12px; color:#475569; }
-      table { 
-        width:100%; 
-        border-collapse:collapse; 
-        font-size:11px;
-        margin-top:12px;
-      }
-      th, td { 
-        border:1px solid #e2e8f0; 
-        padding:8px 6px; 
-        text-align:left;
-      }
-      th { 
-        background:#f8fafc; 
-        font-weight:600; 
-        color:#0a3c7d;
-      }
-      tr:nth-child(even) { background:#fafafa; }
-      .footer {
-        margin-top:30px;
-        padding-top:20px;
-        border-top:1px solid #e2e8f0;
-        text-align:center;
-        font-size:11px;
-        color:#94a3b8;
-      }
-    </style>
-    
-    <div class="pdf-header">
-      <h1>📊 Análise Financeira</h1>
-      <p style="font-size:18px; font-weight:600; margin-top:8px">${escapeHtml(nomeEmpresa)}</p>
-      <p style="margin-top:4px">Relatório gerado em ${dataAtual}</p>
-    </div>
-    
-    <div class="pdf-section">
-      <div class="pdf-section-title">🎯 Dashboard de Saúde Financeira</div>
-      ${healthDashboard}
-    </div>
-    
-    <div class="pdf-section">
-      <div class="pdf-section-title">💡 Recomendações e Análise</div>
-      ${recommendations}
-    </div>
-    
-    <div class="pdf-section">
-      <div class="pdf-section-title">📋 Resumo Executivo</div>
-      ${detResumo}
-    </div>
-    
-    <div class="pdf-section">
-      <div class="pdf-section-title">📈 Histórico de Indicadores</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Ano</th>
-            <th>Receita</th>
-            <th>EBITDA</th>
-            <th>Margem</th>
-            <th>DL/EBITDA</th>
-            <th>Liquidez</th>
-            <th>ROE</th>
-            <th>Score</th>
-          </tr>
-        </thead>
-        <tbody>${detTbody}</tbody>
-      </table>
-    </div>
-    
-    <div class="footer">
-      <p>Sistema de Análise Financeira Inteligente • Retorno Seguros</p>
-      <p>Este relatório foi gerado automaticamente e não substitui análise profissional.</p>
-    </div>
-  `;
-  
-  document.body.appendChild(pdfContainer);
-  
-  // Configurações do PDF
-  const opt = {
-    margin: [10, 10, 10, 10],
-    filename: `Analise_Financeira_${nomeEmpresa.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf`,
-    image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { 
-      scale: 2, 
-      useCORS: true,
-      logging: false,
-      letterRendering: true
-    },
-    jsPDF: { 
-      unit: 'mm', 
-      format: 'a4', 
-      orientation: 'portrait' 
-    },
-    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-  };
-  
+  const btnPDF = document.getElementById("detPDF");
+  const originalText = btnPDF ? btnPDF.textContent : "";
+  if(btnPDF) {
+    btnPDF.disabled = true;
+    btnPDF.textContent = "⏳ Gerando PDF...";
+  }
+
   try {
+    const healthDashboard = document.getElementById('healthDashboard')?.innerHTML || "";
+    const recommendations = document.getElementById('recommendations')?.innerHTML || "";
+    const detResumo = document.getElementById('detResumo')?.innerHTML || "";
+    const detTbody = document.getElementById('detTbody')?.innerHTML || "";
+    const dataAtual = new Date().toLocaleDateString('pt-BR', {day:'2-digit', month:'long', year:'numeric'});
+    
+    // Overlay de loading
+    const overlay = document.createElement('div');
+    overlay.id = 'pdf-overlay';
+    overlay.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(255,255,255,0.95); z-index:99998; display:flex; align-items:center; justify-content:center;';
+    overlay.innerHTML = '<div style="font-size:18px; color:#0a3c7d; font-weight:600;">📄 Gerando PDF...</div>';
+    document.body.appendChild(overlay);
+    
+    // Container do PDF
+    const pdfContainer = document.createElement('div');
+    pdfContainer.id = 'pdf-export-container';
+    pdfContainer.style.cssText = 'position:absolute; left:0; top:0; width:794px; background:#fff; padding:30px; font-family:Arial,sans-serif;';
+    
+    pdfContainer.innerHTML = '<div style="text-align:center; padding:25px; background:linear-gradient(135deg, #0a3c7d 0%, #2563eb 100%); color:#fff; border-radius:12px; margin-bottom:25px;"><div style="font-size:24px; font-weight:700; margin-bottom:8px;">📊 Análise Financeira</div><div style="font-size:18px; font-weight:600;">' + escapeHtml(nomeEmpresa) + '</div><div style="font-size:12px; margin-top:8px; opacity:0.9;">Relatório gerado em ' + dataAtual + '</div></div><div style="margin-bottom:25px;"><div style="font-size:16px; font-weight:700; color:#0a3c7d; margin-bottom:15px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">🎯 Dashboard de Saúde Financeira</div><div style="background:#f8fafc; padding:15px; border-radius:8px;">' + healthDashboard + '</div></div><div style="margin-bottom:25px;"><div style="font-size:16px; font-weight:700; color:#0a3c7d; margin-bottom:15px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">💡 Recomendações</div><div style="background:#f0f9ff; padding:15px; border-radius:8px;">' + recommendations + '</div></div><div style="margin-bottom:25px;"><div style="font-size:16px; font-weight:700; color:#0a3c7d; margin-bottom:15px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">📋 Resumo Executivo</div><div style="background:#f8fafc; padding:15px; border-radius:8px;">' + detResumo + '</div></div><div style="margin-bottom:25px;"><div style="font-size:16px; font-weight:700; color:#0a3c7d; margin-bottom:15px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">📈 Histórico de Indicadores</div><table style="width:100%; border-collapse:collapse; font-size:11px; background:#fff;"><thead><tr style="background:#f1f5f9;"><th style="border:1px solid #e2e8f0; padding:10px;">Ano</th><th style="border:1px solid #e2e8f0; padding:10px;">Receita</th><th style="border:1px solid #e2e8f0; padding:10px;">EBITDA</th><th style="border:1px solid #e2e8f0; padding:10px;">Margem</th><th style="border:1px solid #e2e8f0; padding:10px;">DL/EBITDA</th><th style="border:1px solid #e2e8f0; padding:10px;">Liquidez</th><th style="border:1px solid #e2e8f0; padding:10px;">ROE</th><th style="border:1px solid #e2e8f0; padding:10px;">Score</th></tr></thead><tbody>' + detTbody + '</tbody></table></div><div style="margin-top:30px; padding-top:20px; border-top:1px solid #e2e8f0; text-align:center; font-size:11px; color:#94a3b8;"><p>Sistema de Análise Financeira Inteligente • Retorno Seguros</p></div>';
+    
+    document.body.appendChild(pdfContainer);
+    await new Promise(r => setTimeout(r, 500));
+    
+    const opt = {
+      margin: 10,
+      filename: 'Analise_Financeira_' + nomeEmpresa.replace(/[^a-zA-Z0-9]/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.pdf',
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    
     await html2pdf().set(opt).from(pdfContainer).save();
+    document.body.removeChild(pdfContainer);
+    document.body.removeChild(overlay);
     console.log("[exportarPDF] PDF gerado com sucesso");
+    
   } catch(e) {
     console.error("[exportarPDF] Erro:", e);
     alert("Erro ao gerar PDF: " + e.message);
+    const ov = document.getElementById('pdf-overlay');
+    if(ov) ov.remove();
+    const pc = document.getElementById('pdf-export-container');
+    if(pc) pc.remove();
   } finally {
-    document.body.removeChild(pdfContainer);
+    if(btnPDF) {
+      btnPDF.disabled = false;
+      btnPDF.textContent = originalText || "📥 Exportar PDF";
+    }
   }
 }
 
