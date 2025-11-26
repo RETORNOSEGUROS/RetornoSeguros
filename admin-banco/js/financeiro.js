@@ -22,7 +22,11 @@ console.log("Firestore disponível:", !!db);
 
 let CTX = { uid:null, perfil:null, agenciaId:null, nome:null };
 let LISTA = [];
+let LISTA_CALCULADA = []; // Lista com indicadores calculados para ordenação
 let EMPRESAS_CACHE = new Map();
+let AGENCIAS_CACHE = new Map();
+let RMS_CACHE = new Map();
+let SORT_STATE = { field: 'nome', dir: 'asc' };
 
 // Charts
 let chart1, chart2, chart3, chart4, chart5;
@@ -84,17 +88,59 @@ auth.onAuthStateChanged(async (user)=>{
     }
   }
 
-  console.log("[AUTH] Usuário autenticado:", CTX.nome, "Perfil:", CTX.perfil);
+  console.log("[AUTH] Usuário autenticado:", CTX.nome, "Perfil:", CTX.perfil, "Agência:", CTX.agenciaId);
   
   wireUi();
   preencherAnosSelect();
   moneyBindInputs();
+  
+  // Carregar filtros de agência/RM para admin
+  if(CTX.perfil === "admin"){
+    await carregarFiltrosAdmin();
+  }
   
   // Carrega os dados após um pequeno delay para garantir que o DOM está pronto
   setTimeout(()=> {
     carregarGrid();
   }, 100);
 });
+
+// Carregar agências e RMs para filtros (apenas admin)
+async function carregarFiltrosAdmin(){
+  try{
+    // Mostrar selects de filtro
+    document.getElementById("filtroAgencia").style.display = "block";
+    document.getElementById("filtroRM").style.display = "block";
+    
+    // Carregar agências
+    const agSnap = await db.collection("agencias_banco").get();
+    const selAgencia = document.getElementById("filtroAgencia");
+    agSnap.forEach(doc=>{
+      const d = doc.data() || {};
+      AGENCIAS_CACHE.set(doc.id, d.nome || doc.id);
+      const opt = document.createElement("option");
+      opt.value = doc.id;
+      opt.textContent = d.nome || doc.id;
+      selAgencia.appendChild(opt);
+    });
+    
+    // Carregar RMs
+    const rmSnap = await db.collection("usuarios_banco").where("perfil","==","rm").get();
+    const selRM = document.getElementById("filtroRM");
+    rmSnap.forEach(doc=>{
+      const d = doc.data() || {};
+      RMS_CACHE.set(doc.id, {nome: d.nome || d.email, agenciaId: d.agenciaId});
+      const opt = document.createElement("option");
+      opt.value = doc.id;
+      opt.textContent = d.nome || d.email;
+      selRM.appendChild(opt);
+    });
+    
+    console.log("[carregarFiltrosAdmin] Agências:", AGENCIAS_CACHE.size, "RMs:", RMS_CACHE.size);
+  }catch(e){
+    console.error("[carregarFiltrosAdmin] Erro:", e);
+  }
+}
 
 // ================== UI BINDINGS ==================
 function wireUi(){
@@ -109,6 +155,13 @@ function wireUi(){
   const filtroAno = document.getElementById("filtroAno");
   if(filtroAno) filtroAno.addEventListener("change", carregarGrid);
   
+  // Filtros de agência e RM (para admin)
+  const filtroAgencia = document.getElementById("filtroAgencia");
+  if(filtroAgencia) filtroAgencia.addEventListener("change", carregarGrid);
+  
+  const filtroRM = document.getElementById("filtroRM");
+  if(filtroRM) filtroRM.addEventListener("change", carregarGrid);
+  
   const btnVoltarPainel = document.getElementById("btnVoltarPainel");
   if(btnVoltarPainel) {
     btnVoltarPainel.addEventListener("click", ()=>{
@@ -116,6 +169,24 @@ function wireUi(){
       else location.href = "empresas.html";
     });
   }
+
+  // Ordenação por colunas
+  document.querySelectorAll("th.sortable").forEach(th=>{
+    th.addEventListener("click", ()=>{
+      const field = th.dataset.sort;
+      if(SORT_STATE.field === field){
+        SORT_STATE.dir = SORT_STATE.dir === 'asc' ? 'desc' : 'asc';
+      }else{
+        SORT_STATE.field = field;
+        SORT_STATE.dir = 'asc';
+      }
+      // Atualizar visual
+      document.querySelectorAll("th.sortable").forEach(t=> t.classList.remove('asc','desc'));
+      th.classList.add(SORT_STATE.dir);
+      // Re-renderizar
+      renderTabela(LISTA_CALCULADA);
+    });
+  });
 
   // Modal Lançar/Editar
   const modal = document.getElementById("modalFin");
@@ -233,13 +304,34 @@ async function carregarMaisRecenteViaEmpresas(){
   console.log("[carregarMaisRecenteViaEmpresas] Iniciando carregamento...");
   
   try {
+    // Obter filtros selecionados
+    const filtroAgencia = document.getElementById("filtroAgencia")?.value || "";
+    const filtroRM = document.getElementById("filtroRM")?.value || "";
+    
     // Monta query baseada no perfil do usuário
     let q = db.collection("empresas");
     
-    if (CTX.perfil === "rm" && CTX.uid){
+    if (CTX.perfil === "admin"){
+      // Admin pode filtrar por agência e/ou RM
+      if(filtroAgencia){
+        q = q.where("agenciaId","==",filtroAgencia);
+      }
+      if(filtroRM){
+        q = q.where("rmUid","==",filtroRM);
+      }
+    } else if (CTX.perfil === "rm"){
+      // RM vê apenas suas empresas
       q = q.where("rmUid","==",CTX.uid);
-    } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
-      q = q.where("agenciaId","==",CTX.agenciaId);
+    } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "gerente_chefe"){
+      // Gerente Chefe vê todas da sua agência
+      if(CTX.agenciaId){
+        q = q.where("agenciaId","==",CTX.agenciaId);
+      }
+    } else if (CTX.perfil === "assistente"){
+      // Assistente vê da sua agência
+      if(CTX.agenciaId){
+        q = q.where("agenciaId","==",CTX.agenciaId);
+      }
     }
     
     const empSnap = await q.limit(1000).get();
@@ -258,12 +350,20 @@ async function carregarMaisRecenteViaEmpresas(){
       const empId = empDoc.id;
       const empData = empDoc.data() || {};
       const nomeEmpresa = empData.nome || empData.razaoSocial || empData.fantasia || "(sem nome)";
+      const rmUid = empData.rmUid || empData.rm || null;
+      const agenciaId = empData.agenciaId || empData.agenciaid || null;
+      
+      // Buscar nome do RM se disponível
+      const rmNome = RMS_CACHE.get(rmUid)?.nome || "";
+      const agenciaNome = AGENCIAS_CACHE.get(agenciaId) || "";
       
       EMPRESAS_CACHE.set(empId, {
         id: empId, 
         nome: nomeEmpresa, 
-        rmUid: empData.rmUid || empData.rm || null, 
-        agenciaId: empData.agenciaId || empData.agenciaid || null
+        rmUid: rmUid,
+        rmNome: rmNome,
+        agenciaId: agenciaId,
+        agenciaNome: agenciaNome
       });
       
       proms.push(
@@ -278,6 +378,8 @@ async function carregarMaisRecenteViaEmpresas(){
                 empresaId: empId, 
                 ano: fd.ano, 
                 docId: finDoc.id,
+                rmUid: rmUid,
+                agenciaId: agenciaId,
                 // Mapear campos do formato original
                 receita: fd.receitaLiquida || fd.receita || 0,
                 ebitda: fd.ebitda || 0,
@@ -368,13 +470,34 @@ async function carregarPorAnoViaEmpresas(ano){
   console.log("[carregarPorAnoViaEmpresas] Carregando ano:", ano);
   
   try {
+    // Obter filtros selecionados
+    const filtroAgencia = document.getElementById("filtroAgencia")?.value || "";
+    const filtroRM = document.getElementById("filtroRM")?.value || "";
+    
     // Monta query baseada no perfil do usuário
     let q = db.collection("empresas");
     
-    if (CTX.perfil === "rm" && CTX.uid){
+    if (CTX.perfil === "admin"){
+      // Admin pode filtrar por agência e/ou RM
+      if(filtroAgencia){
+        q = q.where("agenciaId","==",filtroAgencia);
+      }
+      if(filtroRM){
+        q = q.where("rmUid","==",filtroRM);
+      }
+    } else if (CTX.perfil === "rm"){
+      // RM vê apenas suas empresas
       q = q.where("rmUid","==",CTX.uid);
-    } else if ((CTX.perfil==="assistente" || CTX.perfil==="gerente chefe") && CTX.agenciaId){
-      q = q.where("agenciaId","==",CTX.agenciaId);
+    } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "gerente_chefe"){
+      // Gerente Chefe vê todas da sua agência
+      if(CTX.agenciaId){
+        q = q.where("agenciaId","==",CTX.agenciaId);
+      }
+    } else if (CTX.perfil === "assistente"){
+      // Assistente vê da sua agência
+      if(CTX.agenciaId){
+        q = q.where("agenciaId","==",CTX.agenciaId);
+      }
     }
     
     const empSnap = await q.limit(1000).get();
@@ -393,12 +516,20 @@ async function carregarPorAnoViaEmpresas(ano){
       const empId = empDoc.id;
       const empData = empDoc.data() || {};
       const nomeEmpresa = empData.nome || empData.razaoSocial || empData.fantasia || "(sem nome)";
+      const rmUid = empData.rmUid || empData.rm || null;
+      const agenciaId = empData.agenciaId || empData.agenciaid || null;
+      
+      // Buscar nome do RM se disponível
+      const rmNome = RMS_CACHE.get(rmUid)?.nome || "";
+      const agenciaNome = AGENCIAS_CACHE.get(agenciaId) || "";
       
       EMPRESAS_CACHE.set(empId, {
         id: empId, 
         nome: nomeEmpresa, 
-        rmUid: empData.rmUid || empData.rm || null, 
-        agenciaId: empData.agenciaId || empData.agenciaid || null
+        rmUid: rmUid,
+        rmNome: rmNome,
+        agenciaId: agenciaId,
+        agenciaNome: agenciaNome
       });
       
       proms.push(
@@ -413,6 +544,8 @@ async function carregarPorAnoViaEmpresas(ano){
                 empresaId: empId, 
                 ano: fd.ano, 
                 docId: finDoc.id,
+                rmUid: rmUid,
+                agenciaId: agenciaId,
                 // Mapear campos do formato original
                 receita: fd.receitaLiquida || fd.receita || 0,
                 ebitda: fd.ebitda || 0,
@@ -527,47 +660,86 @@ function renderTabela(arr){
     return;
   }
 
-  console.log("[renderTabela] Renderizando", arr.length, "linhas");
+  // Calcular indicadores e preparar para ordenação
+  const listaComCalc = arr.map(row => {
+    const info = EMPRESAS_CACHE.get(row.empresaId) || {nome:"(sem nome)"};
+    const calc = calcularIndicadores(row);
+    const score = calcularScore(calc);
+    return {
+      ...row,
+      ...calc,
+      nome: info.nome,
+      rmNome: info.rmNome || "",
+      agenciaNome: info.agenciaNome || "",
+      score: score
+    };
+  });
+  
+  // Salvar para uso na ordenação
+  LISTA_CALCULADA = listaComCalc;
+  
+  // Ordenar
+  listaComCalc.sort((a, b) => {
+    let valA = a[SORT_STATE.field];
+    let valB = b[SORT_STATE.field];
+    
+    // Tratar nulos
+    if(valA == null) valA = SORT_STATE.dir === 'asc' ? Infinity : -Infinity;
+    if(valB == null) valB = SORT_STATE.dir === 'asc' ? Infinity : -Infinity;
+    
+    // Ordenar strings
+    if(typeof valA === 'string'){
+      valA = valA.toLowerCase();
+      valB = (valB || '').toLowerCase();
+      return SORT_STATE.dir === 'asc' 
+        ? valA.localeCompare(valB, 'pt') 
+        : valB.localeCompare(valA, 'pt');
+    }
+    
+    // Ordenar números
+    return SORT_STATE.dir === 'asc' ? valA - valB : valB - valA;
+  });
 
-  arr.forEach((row, index)=>{
+  console.log("[renderTabela] Renderizando", listaComCalc.length, "linhas, ordenado por:", SORT_STATE.field, SORT_STATE.dir);
+
+  listaComCalc.forEach((row, index)=>{
     try {
-      const info = EMPRESAS_CACHE.get(row.empresaId) || {nome:"(sem nome)"};
-      const calc = calcularIndicadores(row);
-      const score = calcularScore(calc);
-      const status = getStatusFinanceiro(score);
+      const status = getStatusFinanceiro(row.score);
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="font-weight:600">${escapeHtml(info.nome)}</td>
+        <td>
+          <div style="font-weight:600">${escapeHtml(row.nome)}</div>
+          ${CTX.perfil === 'admin' && row.rmNome ? `<div style="font-size:11px; color:var(--text-muted)">👤 ${escapeHtml(row.rmNome)}</div>` : ''}
+        </td>
         <td>${row.ano || "—"}</td>
         <td>
           <div style="display:flex; align-items:center; gap:8px">
             <div class="score-badge ${status.classe}" style="width:50px; height:50px; font-size:16px">
-              ${score}
+              ${row.score}
             </div>
-            <div style="font-size:11px; color:var(--text-muted)">${status.label}</div>
           </div>
         </td>
-        <td>${toBRL(calc.receita)}</td>
-        <td>${toBRL(calc.ebitda)}</td>
+        <td>${toBRL(row.receita)}</td>
+        <td>${toBRL(row.ebitda)}</td>
         <td>
-          <span class="chip ${calc.margem>=0.15? "chip-success" : calc.margem>=0.08? "chip-warning" : "chip-danger"}">
-            ${toPct(calc.margem)}
+          <span class="chip ${row.margem>=0.15? "chip-success" : row.margem>=0.08? "chip-warning" : "chip-danger"}">
+            ${toPct(row.margem)}
           </span>
         </td>
         <td>
-          <span class="chip ${calc.alav<=1.5? "chip-success" : calc.alav<=3? "chip-warning" : "chip-danger"}">
-            ${calc.alav!=null? clamp2(calc.alav)+"x" : "—"}
+          <span class="chip ${row.alav<=1.5? "chip-success" : row.alav<=3? "chip-warning" : "chip-danger"}">
+            ${row.alav!=null? clamp2(row.alav)+"x" : "—"}
           </span>
         </td>
         <td>
-          <span class="chip ${calc.liq>=1.5? "chip-success" : calc.liq>=1? "chip-warning" : "chip-danger"}">
-            ${calc.liq!=null? clamp2(calc.liq) : "—"}
+          <span class="chip ${row.liq>=1.5? "chip-success" : row.liq>=1? "chip-warning" : "chip-danger"}">
+            ${row.liq!=null? clamp2(row.liq) : "—"}
           </span>
         </td>
         <td>
-          <span class="chip ${calc.roe>=0.15? "chip-success" : calc.roe>=0.08? "chip-info" : "chip-neutral"}">
-            ${calc.roe!=null? toPct(calc.roe) : "—"}
+          <span class="chip ${row.roe>=0.15? "chip-success" : row.roe>=0.08? "chip-info" : "chip-neutral"}">
+            ${row.roe!=null? toPct(row.roe) : "—"}
           </span>
         </td>
         <td>
@@ -1106,8 +1278,14 @@ window.abrirModalDetalhes = abrirModalDetalhes;
 function renderHealthDashboard(rows){
   if(!rows.length) return;
   const latest = rows[0];
+  const previo = rows[1] || null;
   const score = calcularScore(latest);
   const status = getStatusFinanceiro(score);
+
+  // Calcular variações
+  const varReceita = previo ? ((latest.receita - previo.receita) / previo.receita * 100) : null;
+  const varEbitda = previo ? ((latest.ebitda - previo.ebitda) / previo.ebitda * 100) : null;
+  const varMargem = previo ? ((latest.margem - previo.margem) * 100) : null;
 
   const html = `
     <div style="background:linear-gradient(135deg, #f8fafc, #e0f2fe); border:1px solid #bae6fd; border-radius:12px; padding:24px; margin-bottom:24px">
@@ -1123,29 +1301,95 @@ function renderHealthDashboard(rows){
         </div>
         
         <div class="health-card">
+          <div class="health-label">Receita</div>
+          <div class="health-value" style="font-size:18px">${toBRL(latest.receita)}</div>
+          ${varReceita !== null ? `<div class="health-trend ${varReceita >= 0 ? 'positive' : 'negative'}" style="color:${varReceita >= 0 ? '#10b981' : '#ef4444'}">
+            ${varReceita >= 0 ? '↑' : '↓'} ${Math.abs(varReceita).toFixed(1)}%
+          </div>` : ''}
+        </div>
+        
+        <div class="health-card">
           <div class="health-label">Margem EBITDA</div>
           <div class="health-value">${toPct(latest.margem)}</div>
-          <div class="health-trend ${getTrend(rows, 'margem')}">${getTrendText(rows, 'margem')}</div>
+          ${varMargem !== null ? `<div class="health-trend ${varMargem >= 0 ? 'positive' : 'negative'}" style="color:${varMargem >= 0 ? '#10b981' : '#ef4444'}">
+            ${varMargem >= 0 ? '↑' : '↓'} ${Math.abs(varMargem).toFixed(1)} p.p.
+          </div>` : ''}
         </div>
         
         <div class="health-card">
           <div class="health-label">DL/EBITDA</div>
           <div class="health-value">${latest.alav!=null? clamp2(latest.alav)+"x" : "—"}</div>
-          <div class="health-trend ${getTrend(rows, 'alav', true)}">${getTrendText(rows, 'alav', true)}</div>
+          <div class="health-trend" style="color:${latest.alav <= 2 ? '#10b981' : latest.alav <= 3.5 ? '#f59e0b' : '#ef4444'}">
+            ${latest.alav <= 2 ? '✓ Saudável' : latest.alav <= 3.5 ? '⚠ Atenção' : '⚠ Alto'}
+          </div>
         </div>
         
         <div class="health-card">
           <div class="health-label">Liquidez Corrente</div>
           <div class="health-value">${latest.liq!=null? clamp2(latest.liq) : "—"}</div>
-          <div class="health-trend ${getTrend(rows, 'liq')}">${getTrendText(rows, 'liq')}</div>
+          <div class="health-trend" style="color:${latest.liq >= 1.5 ? '#10b981' : latest.liq >= 1 ? '#f59e0b' : '#ef4444'}">
+            ${latest.liq >= 1.5 ? '✓ Adequada' : latest.liq >= 1 ? '⚠ Baixa' : '⚠ Crítica'}
+          </div>
         </div>
         
         <div class="health-card">
           <div class="health-label">ROE</div>
           <div class="health-value">${toPct(latest.roe)}</div>
-          <div class="health-trend ${getTrend(rows, 'roe')}">${getTrendText(rows, 'roe')}</div>
+          <div class="health-trend" style="color:${latest.roe >= 0.15 ? '#10b981' : latest.roe >= 0.08 ? '#3b82f6' : '#94a3b8'}">
+            ${latest.roe >= 0.15 ? '✓ Excelente' : latest.roe >= 0.08 ? '→ Bom' : '→ Abaixo'}
+          </div>
         </div>
       </div>
+      
+      ${rows.length > 1 ? `
+      <div style="margin-top:20px; padding-top:16px; border-top:1px solid #bae6fd">
+        <div style="font-weight:600; color:#0c4a6e; margin-bottom:12px">📊 Comparativo de Anos</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%; border-collapse:collapse; font-size:12px; background:#fff; border-radius:8px">
+            <thead>
+              <tr style="background:#f1f5f9">
+                <th style="padding:10px; text-align:left; border-bottom:1px solid #e2e8f0">Indicador</th>
+                ${rows.slice(0,4).map(r => `<th style="padding:10px; text-align:right; border-bottom:1px solid #e2e8f0">${r.ano}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Receita</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.receita)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>EBITDA</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.ebitda)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Margem EBITDA</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.margem)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>DL/EBITDA</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.alav != null ? clamp2(r.alav) + 'x' : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Liquidez</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.liq != null ? clamp2(r.liq) : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>ROE</strong></td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.roe)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px"><strong>Score</strong></td>
+                ${rows.slice(0,4).map(r => {
+                  const sc = calcularScore(r);
+                  const st = getStatusFinanceiro(sc);
+                  return `<td style="padding:8px; text-align:right"><span class="chip chip-${st.classe}">${sc}</span></td>`;
+                }).join('')}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ` : ''}
     </div>
   `;
   
@@ -1578,9 +1822,13 @@ function renderTabelaDetalhes(rows, empresaId){
 
     // Deltas
     let deltaRec = null, deltaEbt = null, deltaMar = null;
-    if(previo){
+    if(previo && previo.receita > 0){
       deltaRec = ((row.receita - previo.receita) / previo.receita) * 100;
+    }
+    if(previo && previo.ebitda > 0){
       deltaEbt = ((row.ebitda - previo.ebitda) / previo.ebitda) * 100;
+    }
+    if(previo && row.margem != null && previo.margem != null){
       deltaMar = (row.margem - previo.margem) * 100;
     }
 
@@ -1594,49 +1842,27 @@ function renderTabelaDetalhes(rows, empresaId){
           ${toPct(row.margem)}
         </span>
       </td>
-      <td>${toBRL(row.dl)}</td>
+      <td>${row.alav!=null? clamp2(row.alav)+"x" : "—"}</td>
+      <td>${row.liq!=null? clamp2(row.liq) : "—"}</td>
+      <td>${toPct(row.roe)}</td>
       <td>
-        <span class="chip ${row.alav<=1.5? "chip-success" : row.alav<=3? "chip-warning" : "chip-danger"}">
-          ${row.alav!=null? clamp2(row.alav)+"x" : "—"}
+        <span class="chip chip-${status.classe}">
+          ${score}
         </span>
       </td>
-      <td>
-        <span class="chip ${row.liq>=1.5? "chip-success" : row.liq>=1? "chip-warning" : "chip-danger"}">
-          ${row.liq!=null? clamp2(row.liq) : "—"}
-        </span>
+      <td style="color:${deltaRec==null? '#94a3b8' : deltaRec>=0? '#10b981' : '#ef4444'}">
+        ${deltaRec==null? "—" : (deltaRec>=0?"↑":"↓") + " " + Math.abs(deltaRec).toFixed(1)+"%"}
       </td>
-      <td>
-        <span class="chip ${row.roe>=0.15? "chip-success" : row.roe>=0.08? "chip-info" : "chip-neutral"}">
-          ${toPct(row.roe)}
-        </span>
+      <td style="color:${deltaEbt==null? '#94a3b8' : deltaEbt>=0? '#10b981' : '#ef4444'}">
+        ${deltaEbt==null? "—" : (deltaEbt>=0?"↑":"↓") + " " + Math.abs(deltaEbt).toFixed(1)+"%"}
       </td>
-      <td>
-        <div style="display:flex; align-items:center; gap:6px">
-          <div class="score-badge ${status.classe}" style="width:40px; height:40px; font-size:14px">
-            ${score}
-          </div>
-          <div style="font-size:10px; color:var(--text-muted)">${status.label}</div>
-        </div>
-      </td>
-      <td>
-        <span class="evolution-indicator ${deltaRec==null? "neutral" : deltaRec>=0? "positive" : "negative"}">
-          ${deltaRec==null? "—" : (deltaRec>=0?"↑":"↓") + " " + Math.abs(deltaRec).toFixed(1)+"%"}
-        </span>
-      </td>
-      <td>
-        <span class="evolution-indicator ${deltaEbt==null? "neutral" : deltaEbt>=0? "positive" : "negative"}">
-          ${deltaEbt==null? "—" : (deltaEbt>=0?"↑":"↓") + " " + Math.abs(deltaEbt).toFixed(1)+"%"}
-        </span>
-      </td>
-      <td>
-        <span class="evolution-indicator ${deltaMar==null? "neutral" : deltaMar>=0? "positive" : "negative"}">
-          ${deltaMar==null? "—" : (deltaMar>=0?"↑":"↓") + " " + Math.abs(deltaMar).toFixed(1)+" p.p."}
-        </span>
+      <td style="color:${deltaMar==null? '#94a3b8' : deltaMar>=0? '#10b981' : '#ef4444'}">
+        ${deltaMar==null? "—" : (deltaMar>=0?"↑":"↓") + " " + Math.abs(deltaMar).toFixed(1)+" p.p."}
       </td>
       <td>
         <button class="btn btn-outline" style="padding:4px 8px; font-size:11px"
           onclick="abrirModalEdicao('${empresaId}',${row.ano},'${row.docId}')">
-          ✏️ Editar
+          ✏️
         </button>
       </td>
     `;
@@ -1645,20 +1871,205 @@ function renderTabelaDetalhes(rows, empresaId){
 }
 
 // ================== EXPORTAR PDF ==================
-function exportarPDF(nomeEmpresa){
+async function exportarPDF(nomeEmpresa){
   if(typeof html2pdf === "undefined"){
     return alert("Biblioteca html2pdf não encontrada.");
   }
 
-  const box = document.getElementById("modalDetBox");
+  // Criar container temporário para PDF
+  const pdfContainer = document.createElement('div');
+  pdfContainer.className = 'pdf-container';
+  pdfContainer.style.cssText = 'position:absolute; left:-9999px; top:0; width:210mm; background:#fff; padding:20px; font-family:Inter,Arial,sans-serif;';
+  
+  // Obter dados do modal
+  const healthDashboard = document.getElementById('healthDashboard').innerHTML;
+  const recommendations = document.getElementById('recommendations').innerHTML;
+  const detResumo = document.getElementById('detResumo').innerHTML;
+  const detTbody = document.getElementById('detTbody').innerHTML;
+  
+  // Gerar data atual
+  const dataAtual = new Date().toLocaleDateString('pt-BR', {day:'2-digit', month:'long', year:'numeric'});
+  
+  pdfContainer.innerHTML = `
+    <style>
+      * { box-sizing:border-box; margin:0; padding:0; }
+      body { font-family: 'Inter', Arial, sans-serif; }
+      .pdf-header { 
+        text-align:center; 
+        padding:30px 20px; 
+        background: linear-gradient(135deg, #0a3c7d 0%, #2563eb 100%);
+        color:#fff;
+        border-radius:12px;
+        margin-bottom:20px;
+      }
+      .pdf-header h1 { font-size:24px; margin-bottom:8px; }
+      .pdf-header p { font-size:14px; opacity:0.9; }
+      .pdf-section { margin-bottom:20px; page-break-inside:avoid; }
+      .pdf-section-title { 
+        font-size:16px; 
+        font-weight:700; 
+        color:#0a3c7d; 
+        margin-bottom:12px;
+        padding-bottom:8px;
+        border-bottom:2px solid #e2e8f0;
+      }
+      .health-dashboard { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
+      .health-card { 
+        flex:1; 
+        min-width:150px; 
+        background:#f8fafc; 
+        border:1px solid #e2e8f0; 
+        border-radius:8px; 
+        padding:16px; 
+        text-align:center;
+      }
+      .health-value { font-size:24px; font-weight:700; color:#0a3c7d; }
+      .health-label { font-size:11px; color:#64748b; text-transform:uppercase; }
+      .chip { 
+        display:inline-block; 
+        padding:4px 10px; 
+        border-radius:6px; 
+        font-size:11px; 
+        font-weight:600;
+      }
+      .chip-success { background:#d1fae5; color:#065f46; }
+      .chip-warning { background:#fef3c7; color:#92400e; }
+      .chip-danger { background:#fee2e2; color:#991b1b; }
+      .chip-info { background:#dbeafe; color:#1e40af; }
+      .score-badge {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        width:60px;
+        height:60px;
+        border-radius:50%;
+        font-size:20px;
+        font-weight:700;
+        color:#fff;
+      }
+      .score-badge.success { background:linear-gradient(135deg, #10b981, #059669); }
+      .score-badge.info { background:linear-gradient(135deg, #3b82f6, #2563eb); }
+      .score-badge.warning { background:linear-gradient(135deg, #f59e0b, #d97706); }
+      .score-badge.danger { background:linear-gradient(135deg, #ef4444, #dc2626); }
+      .recommendations { 
+        background:#f0f9ff; 
+        border:1px solid #bae6fd; 
+        border-radius:8px; 
+        padding:16px; 
+        margin:16px 0;
+      }
+      .recommendation-item {
+        background:#fff;
+        border:1px solid #bae6fd;
+        border-radius:6px;
+        padding:12px;
+        margin-bottom:8px;
+      }
+      .recommendation-title { font-weight:600; color:#0c4a6e; margin-bottom:4px; }
+      .recommendation-desc { font-size:12px; color:#475569; }
+      table { 
+        width:100%; 
+        border-collapse:collapse; 
+        font-size:11px;
+        margin-top:12px;
+      }
+      th, td { 
+        border:1px solid #e2e8f0; 
+        padding:8px 6px; 
+        text-align:left;
+      }
+      th { 
+        background:#f8fafc; 
+        font-weight:600; 
+        color:#0a3c7d;
+      }
+      tr:nth-child(even) { background:#fafafa; }
+      .footer {
+        margin-top:30px;
+        padding-top:20px;
+        border-top:1px solid #e2e8f0;
+        text-align:center;
+        font-size:11px;
+        color:#94a3b8;
+      }
+    </style>
+    
+    <div class="pdf-header">
+      <h1>📊 Análise Financeira</h1>
+      <p style="font-size:18px; font-weight:600; margin-top:8px">${escapeHtml(nomeEmpresa)}</p>
+      <p style="margin-top:4px">Relatório gerado em ${dataAtual}</p>
+    </div>
+    
+    <div class="pdf-section">
+      <div class="pdf-section-title">🎯 Dashboard de Saúde Financeira</div>
+      ${healthDashboard}
+    </div>
+    
+    <div class="pdf-section">
+      <div class="pdf-section-title">💡 Recomendações e Análise</div>
+      ${recommendations}
+    </div>
+    
+    <div class="pdf-section">
+      <div class="pdf-section-title">📋 Resumo Executivo</div>
+      ${detResumo}
+    </div>
+    
+    <div class="pdf-section">
+      <div class="pdf-section-title">📈 Histórico de Indicadores</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Ano</th>
+            <th>Receita</th>
+            <th>EBITDA</th>
+            <th>Margem</th>
+            <th>DL/EBITDA</th>
+            <th>Liquidez</th>
+            <th>ROE</th>
+            <th>Score</th>
+          </tr>
+        </thead>
+        <tbody>${detTbody}</tbody>
+      </table>
+    </div>
+    
+    <div class="footer">
+      <p>Sistema de Análise Financeira Inteligente • Retorno Seguros</p>
+      <p>Este relatório foi gerado automaticamente e não substitui análise profissional.</p>
+    </div>
+  `;
+  
+  document.body.appendChild(pdfContainer);
+  
+  // Configurações do PDF
   const opt = {
-    margin:8,
-    filename:`Analise_Financeira_${nomeEmpresa.replace(/\s+/g,"_")}.pdf`,
-    image:{ type:'jpeg', quality:0.98 },
-    html2canvas:{ scale:2, useCORS:true },
-    jsPDF:{ unit:'mm', format:'a4', orientation:'portrait' }
+    margin: [10, 10, 10, 10],
+    filename: `Analise_Financeira_${nomeEmpresa.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf`,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { 
+      scale: 2, 
+      useCORS: true,
+      logging: false,
+      letterRendering: true
+    },
+    jsPDF: { 
+      unit: 'mm', 
+      format: 'a4', 
+      orientation: 'portrait' 
+    },
+    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
   };
-  html2pdf().set(opt).from(box).save();
+  
+  try {
+    await html2pdf().set(opt).from(pdfContainer).save();
+    console.log("[exportarPDF] PDF gerado com sucesso");
+  } catch(e) {
+    console.error("[exportarPDF] Erro:", e);
+    alert("Erro ao gerar PDF: " + e.message);
+  } finally {
+    document.body.removeChild(pdfContainer);
+  }
 }
 
 // ================== TOOLTIPS ==================
