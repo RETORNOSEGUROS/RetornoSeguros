@@ -2752,39 +2752,92 @@ function renderDefesaCredito(data){
 }
 
 // ================== ABA 5: CONTEXTO QUALITATIVO ==================
-function renderContexto(data){
+async function renderContexto(data){
   if(!data || !data.rows || !data.rows.length) return;
   
   const empresaId = data.empresaId;
   const latest = data.rows[0];
+  const docId = latest.docId; // ID do documento financeiro
   const container = document.getElementById("contextoContent");
   
-  // Formulário de contexto (será salvo no Firestore em versão futura)
+  // Mostrar loading enquanto carrega
+  container.innerHTML = `
+    <div style="text-align:center; padding:40px; color:var(--text-muted)">
+      <div class="loading">Carregando contexto...</div>
+    </div>
+  `;
+  
+  // Tentar carregar contexto salvo
+  let contextoSalvo = null;
+  try {
+    if(docId){
+      const docRef = await db.collection("empresas").doc(empresaId)
+        .collection("financeiro").doc(docId).get();
+      if(docRef.exists){
+        contextoSalvo = docRef.data().contexto || null;
+      }
+    }
+  } catch(e){
+    console.log("[renderContexto] Erro ao carregar contexto:", e);
+  }
+  
+  // Preparar valores salvos
+  const ctx = contextoSalvo || {};
+  const eventos = ctx.eventos || [];
+  const clientes = ctx.clientes || [{}, {}, {}];
+  const fornecedores = ctx.fornecedores || ['', ''];
+  const funcAtual = ctx.funcionariosAtual || '';
+  const funcAnterior = ctx.funcionariosAnterior || '';
+  const perspectiva = ctx.perspectiva || '';
+  const justificativa = ctx.justificativa || '';
+  const credito = ctx.necessidadeCredito || {};
+  const observacoes = ctx.observacoes || '';
+  const ultimaAtualizacao = ctx.atualizadoEm ? new Date(ctx.atualizadoEm.seconds * 1000).toLocaleString('pt-BR') : null;
+  
   const html = `
     <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:12px; padding:16px; margin-bottom:20px">
-      <div style="font-size:15px; font-weight:700; color:#0c4a6e; margin-bottom:8px">
-        📄 Informações Qualitativas - Exercício ${latest.ano}
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div>
+          <div style="font-size:15px; font-weight:700; color:#0c4a6e; margin-bottom:8px">
+            📄 Informações Qualitativas - Exercício ${latest.ano}
+          </div>
+          <p style="font-size:13px; color:#0369a1; margin:0">
+            Registre informações que contextualizam os números e ajudam na análise de crédito.
+          </p>
+        </div>
+        ${ultimaAtualizacao ? `
+          <div style="text-align:right">
+            <div style="font-size:11px; color:#10b981; font-weight:600">✓ Salvo</div>
+            <div style="font-size:10px; color:var(--text-muted)">${ultimaAtualizacao}</div>
+          </div>
+        ` : `
+          <div style="text-align:right">
+            <div style="font-size:11px; color:#f59e0b; font-weight:600">⚠ Não salvo</div>
+          </div>
+        `}
       </div>
-      <p style="font-size:13px; color:#0369a1">
-        Registre informações qualitativas que contextualizam os números. 
-        Estes dados ajudam na análise e na defesa de operações de crédito.
-      </p>
     </div>
+    
+    <input type="hidden" id="ctxEmpresaId" value="${empresaId}">
+    <input type="hidden" id="ctxDocId" value="${docId || ''}">
+    <input type="hidden" id="ctxAno" value="${latest.ano}">
     
     <div class="context-form">
       <div class="context-group">
         <div class="context-group-title">📌 Eventos Relevantes do Ano</div>
-        <div class="context-checkboxes">
-          <label class="context-check"><input type="checkbox" name="evento" value="filial_aberta"> Abertura de filial/unidade</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="filial_fechada"> Fechamento de filial</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="aquisicao"> Aquisição de empresa/carteira</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="venda_ativos"> Venda de ativos relevantes</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="capex"> Investimento em equipamentos</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="reestruturacao"> Reestruturação organizacional</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="troca_gestao"> Troca de gestão/sócios</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="contrato"> Ganho/perda contrato relevante</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="judicial"> Processo judicial relevante</label>
-          <label class="context-check"><input type="checkbox" name="evento" value="sinistro"> Evento climático/sinistro</label>
+        <div class="context-checkboxes" id="ctxEventos">
+          <label class="context-check"><input type="checkbox" name="evento" value="filial_aberta" ${eventos.includes('filial_aberta') ? 'checked' : ''}> Abertura de filial/unidade</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="filial_fechada" ${eventos.includes('filial_fechada') ? 'checked' : ''}> Fechamento de filial</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="aquisicao" ${eventos.includes('aquisicao') ? 'checked' : ''}> Aquisição de empresa/carteira</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="venda_ativos" ${eventos.includes('venda_ativos') ? 'checked' : ''}> Venda de ativos relevantes</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="capex" ${eventos.includes('capex') ? 'checked' : ''}> Investimento em equipamentos</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="reestruturacao" ${eventos.includes('reestruturacao') ? 'checked' : ''}> Reestruturação organizacional</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="troca_gestao" ${eventos.includes('troca_gestao') ? 'checked' : ''}> Troca de gestão/sócios</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="contrato_ganho" ${eventos.includes('contrato_ganho') ? 'checked' : ''}> Ganhou contrato relevante</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="contrato_perdido" ${eventos.includes('contrato_perdido') ? 'checked' : ''}> Perdeu contrato relevante</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="judicial" ${eventos.includes('judicial') ? 'checked' : ''}> Processo judicial relevante</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="sinistro" ${eventos.includes('sinistro') ? 'checked' : ''}> Evento climático/sinistro</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="pandemia" ${eventos.includes('pandemia') ? 'checked' : ''}> Impacto de pandemia/crise</label>
         </div>
       </div>
       
@@ -2793,27 +2846,30 @@ function renderContexto(data){
         <div style="display:grid; gap:12px">
           <div style="display:flex; gap:12px; align-items:center">
             <span style="width:20px; font-weight:600">1.</span>
-            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
-            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="text" id="ctxCliente1Nome" placeholder="Nome do cliente" value="${escapeHtml(clientes[0]?.nome || '')}" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" id="ctxCliente1Pct" placeholder="%" value="${clientes[0]?.percentual || ''}" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
           </div>
           <div style="display:flex; gap:12px; align-items:center">
             <span style="width:20px; font-weight:600">2.</span>
-            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
-            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="text" id="ctxCliente2Nome" placeholder="Nome do cliente" value="${escapeHtml(clientes[1]?.nome || '')}" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" id="ctxCliente2Pct" placeholder="%" value="${clientes[1]?.percentual || ''}" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
           </div>
           <div style="display:flex; gap:12px; align-items:center">
             <span style="width:20px; font-weight:600">3.</span>
-            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
-            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="text" id="ctxCliente3Nome" placeholder="Nome do cliente" value="${escapeHtml(clientes[2]?.nome || '')}" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" id="ctxCliente3Pct" placeholder="%" value="${clientes[2]?.percentual || ''}" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
           </div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:8px">
+          💡 Concentração >30% em um cliente é ponto de atenção para análise de risco.
         </div>
       </div>
       
       <div class="context-group">
         <div class="context-group-title">🏭 Principais Fornecedores</div>
         <div style="display:grid; gap:12px">
-          <input type="text" placeholder="Fornecedor 1" style="padding:10px; border:1px solid var(--border); border-radius:8px">
-          <input type="text" placeholder="Fornecedor 2" style="padding:10px; border:1px solid var(--border); border-radius:8px">
+          <input type="text" id="ctxFornecedor1" placeholder="Fornecedor 1" value="${escapeHtml(fornecedores[0] || '')}" style="padding:10px; border:1px solid var(--border); border-radius:8px">
+          <input type="text" id="ctxFornecedor2" placeholder="Fornecedor 2" value="${escapeHtml(fornecedores[1] || '')}" style="padding:10px; border:1px solid var(--border); border-radius:8px">
         </div>
       </div>
       
@@ -2821,29 +2877,29 @@ function renderContexto(data){
         <div class="context-group-title">👨‍💼 Quadro de Funcionários</div>
         <div style="display:flex; gap:16px">
           <div style="flex:1">
-            <label style="font-size:12px; color:var(--text-secondary)">Ano Atual</label>
-            <input type="number" placeholder="Nº funcionários" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+            <label style="font-size:12px; color:var(--text-secondary)">Ano Atual (${latest.ano})</label>
+            <input type="number" id="ctxFuncAtual" placeholder="Nº funcionários" value="${funcAtual}" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
           </div>
           <div style="flex:1">
-            <label style="font-size:12px; color:var(--text-secondary)">Ano Anterior</label>
-            <input type="number" placeholder="Nº funcionários" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+            <label style="font-size:12px; color:var(--text-secondary)">Ano Anterior (${latest.ano - 1})</label>
+            <input type="number" id="ctxFuncAnterior" placeholder="Nº funcionários" value="${funcAnterior}" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
           </div>
         </div>
       </div>
       
       <div class="context-group">
-        <div class="context-group-title">🔮 Perspectiva para Próximo Ano</div>
+        <div class="context-group-title">🔮 Perspectiva para ${latest.ano + 1}</div>
         <div style="display:flex; gap:12px; flex-wrap:wrap">
-          <label class="context-check" style="padding:12px 20px; background:#d1fae5; border-radius:8px; cursor:pointer">
-            <input type="radio" name="perspectiva" value="otimista"> 
+          <label class="context-check" style="padding:12px 20px; background:${perspectiva === 'otimista' ? '#10b981' : '#d1fae5'}; color:${perspectiva === 'otimista' ? '#fff' : 'inherit'}; border-radius:8px; cursor:pointer; transition:all .2s">
+            <input type="radio" name="perspectiva" value="otimista" ${perspectiva === 'otimista' ? 'checked' : ''} style="margin-right:6px"> 
             📈 Otimista (crescimento >10%)
           </label>
-          <label class="context-check" style="padding:12px 20px; background:#fef3c7; border-radius:8px; cursor:pointer">
-            <input type="radio" name="perspectiva" value="estavel"> 
+          <label class="context-check" style="padding:12px 20px; background:${perspectiva === 'estavel' ? '#f59e0b' : '#fef3c7'}; color:${perspectiva === 'estavel' ? '#fff' : 'inherit'}; border-radius:8px; cursor:pointer; transition:all .2s">
+            <input type="radio" name="perspectiva" value="estavel" ${perspectiva === 'estavel' ? 'checked' : ''} style="margin-right:6px"> 
             ➡️ Estável (±10%)
           </label>
-          <label class="context-check" style="padding:12px 20px; background:#fee2e2; border-radius:8px; cursor:pointer">
-            <input type="radio" name="perspectiva" value="pessimista"> 
+          <label class="context-check" style="padding:12px 20px; background:${perspectiva === 'pessimista' ? '#ef4444' : '#fee2e2'}; color:${perspectiva === 'pessimista' ? '#fff' : 'inherit'}; border-radius:8px; cursor:pointer; transition:all .2s">
+            <input type="radio" name="perspectiva" value="pessimista" ${perspectiva === 'pessimista' ? 'checked' : ''} style="margin-right:6px"> 
             📉 Pessimista (queda >10%)
           </label>
         </div>
@@ -2851,44 +2907,192 @@ function renderContexto(data){
       
       <div class="context-group">
         <div class="context-group-title">📝 Justificativa da Perspectiva</div>
-        <textarea placeholder="Descreva os motivos da perspectiva informada..." 
-          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:100px; font-family:inherit; resize:vertical"></textarea>
+        <textarea id="ctxJustificativa" placeholder="Descreva os motivos da perspectiva informada: novos contratos, expansão, perda de clientes, cenário econômico..." 
+          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:100px; font-family:inherit; resize:vertical">${escapeHtml(justificativa)}</textarea>
       </div>
       
       <div class="context-group">
-        <div class="context-group-title">💰 Necessidade de Crédito Prevista</div>
+        <div class="context-group-title">💰 Necessidade de Crédito Prevista (próximos 12 meses)</div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px">
           <div>
             <label style="font-size:12px; color:var(--text-secondary)">Capital de Giro</label>
-            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+            <input type="text" id="ctxCreditoGiro" placeholder="R$ 0,00" value="${credito.capitalGiro ? toBRL(credito.capitalGiro) : ''}" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
           </div>
           <div>
             <label style="font-size:12px; color:var(--text-secondary)">Investimento (CAPEX)</label>
-            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+            <input type="text" id="ctxCreditoInvest" placeholder="R$ 0,00" value="${credito.investimento ? toBRL(credito.investimento) : ''}" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
           </div>
           <div>
             <label style="font-size:12px; color:var(--text-secondary)">Refinanciamento</label>
-            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+            <input type="text" id="ctxCreditoRefin" placeholder="R$ 0,00" value="${credito.refinanciamento ? toBRL(credito.refinanciamento) : ''}" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
           </div>
         </div>
       </div>
       
       <div class="context-group">
         <div class="context-group-title">📋 Observações Adicionais</div>
-        <textarea placeholder="Informações adicionais relevantes para a análise..." 
-          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:80px; font-family:inherit; resize:vertical"></textarea>
+        <textarea id="ctxObservacoes" placeholder="Informações adicionais relevantes: histórico com o banco, garantias disponíveis, projetos em andamento..." 
+          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:80px; font-family:inherit; resize:vertical">${escapeHtml(observacoes)}</textarea>
       </div>
     </div>
     
-    <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:12px">
-      <button class="btn btn-outline" onclick="alert('Funcionalidade de salvar contexto será implementada em breve!')">
-        💾 Salvar Contexto
-      </button>
+    <div style="margin-top:20px; display:flex; justify-content:space-between; align-items:center">
+      <div id="ctxStatus" style="font-size:13px; color:var(--text-muted)"></div>
+      <div style="display:flex; gap:12px">
+        <button class="btn btn-outline" onclick="limparContexto()">
+          🗑️ Limpar
+        </button>
+        <button class="btn btn-primary" id="btnSalvarContexto" onclick="salvarContexto()">
+          💾 Salvar Contexto
+        </button>
+      </div>
     </div>
   `;
   
   container.innerHTML = html;
+  
+  // Aplicar máscaras de moeda nos campos de crédito
+  ['ctxCreditoGiro', 'ctxCreditoInvest', 'ctxCreditoRefin'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el){
+      el.addEventListener('input', function(){
+        let v = this.value.replace(/\D/g, '');
+        if(v){
+          v = (parseInt(v) / 100).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+          this.value = v;
+        }
+      });
+    }
+  });
 }
+
+// Função para salvar contexto no Firestore
+async function salvarContexto(){
+  const btn = document.getElementById("btnSalvarContexto");
+  const status = document.getElementById("ctxStatus");
+  
+  const empresaId = document.getElementById("ctxEmpresaId")?.value;
+  const docId = document.getElementById("ctxDocId")?.value;
+  const ano = document.getElementById("ctxAno")?.value;
+  
+  if(!empresaId || !docId){
+    status.innerHTML = '<span style="color:#ef4444">❌ Erro: documento não identificado</span>';
+    return;
+  }
+  
+  // Mostrar loading
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Salvando...';
+  status.innerHTML = '<span style="color:#3b82f6">Salvando contexto...</span>';
+  
+  try {
+    // Coletar eventos marcados
+    const eventos = [];
+    document.querySelectorAll('#ctxEventos input[type="checkbox"]:checked').forEach(cb => {
+      eventos.push(cb.value);
+    });
+    
+    // Coletar clientes
+    const clientes = [];
+    for(let i = 1; i <= 3; i++){
+      const nome = document.getElementById(`ctxCliente${i}Nome`)?.value?.trim() || '';
+      const pct = parseFloat(document.getElementById(`ctxCliente${i}Pct`)?.value) || 0;
+      if(nome || pct){
+        clientes.push({ nome, percentual: pct });
+      }
+    }
+    
+    // Coletar fornecedores
+    const fornecedores = [
+      document.getElementById("ctxFornecedor1")?.value?.trim() || '',
+      document.getElementById("ctxFornecedor2")?.value?.trim() || ''
+    ].filter(f => f);
+    
+    // Coletar perspectiva
+    const perspectiva = document.querySelector('input[name="perspectiva"]:checked')?.value || '';
+    
+    // Parsear valores de crédito
+    const parseCredito = (id) => {
+      const val = document.getElementById(id)?.value || '';
+      return parseFloat(val.replace(/[^\d,]/g, '').replace(',', '.')) || 0;
+    };
+    
+    // Montar objeto de contexto
+    const contexto = {
+      eventos,
+      clientes,
+      fornecedores,
+      funcionariosAtual: parseInt(document.getElementById("ctxFuncAtual")?.value) || null,
+      funcionariosAnterior: parseInt(document.getElementById("ctxFuncAnterior")?.value) || null,
+      perspectiva,
+      justificativa: document.getElementById("ctxJustificativa")?.value?.trim() || '',
+      necessidadeCredito: {
+        capitalGiro: parseCredito("ctxCreditoGiro"),
+        investimento: parseCredito("ctxCreditoInvest"),
+        refinanciamento: parseCredito("ctxCreditoRefin")
+      },
+      observacoes: document.getElementById("ctxObservacoes")?.value?.trim() || '',
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      atualizadoPor: CTX.uid,
+      atualizadoPorNome: CTX.nome
+    };
+    
+    // Salvar no Firestore (merge para não sobrescrever outros campos)
+    await db.collection("empresas").doc(empresaId)
+      .collection("financeiro").doc(docId)
+      .set({ contexto }, { merge: true });
+    
+    console.log("[salvarContexto] Contexto salvo com sucesso:", contexto);
+    
+    // Feedback de sucesso
+    status.innerHTML = '<span style="color:#10b981">✅ Contexto salvo com sucesso!</span>';
+    btn.innerHTML = '✓ Salvo!';
+    btn.style.background = '#10b981';
+    
+    // Restaurar botão após 2s
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.innerHTML = '💾 Salvar Contexto';
+      btn.style.background = '';
+    }, 2000);
+    
+  } catch(e) {
+    console.error("[salvarContexto] Erro:", e);
+    status.innerHTML = `<span style="color:#ef4444">❌ Erro ao salvar: ${e.message}</span>`;
+    btn.disabled = false;
+    btn.innerHTML = '💾 Salvar Contexto';
+  }
+}
+window.salvarContexto = salvarContexto;
+
+// Função para limpar formulário de contexto
+function limparContexto(){
+  if(!confirm('Tem certeza que deseja limpar todos os campos?')) return;
+  
+  // Limpar checkboxes
+  document.querySelectorAll('#ctxEventos input[type="checkbox"]').forEach(cb => cb.checked = false);
+  
+  // Limpar inputs de texto
+  ['ctxCliente1Nome', 'ctxCliente1Pct', 'ctxCliente2Nome', 'ctxCliente2Pct', 
+   'ctxCliente3Nome', 'ctxCliente3Pct', 'ctxFornecedor1', 'ctxFornecedor2',
+   'ctxFuncAtual', 'ctxFuncAnterior', 'ctxCreditoGiro', 'ctxCreditoInvest',
+   'ctxCreditoRefin'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+  
+  // Limpar radio buttons
+  document.querySelectorAll('input[name="perspectiva"]').forEach(rb => rb.checked = false);
+  
+  // Limpar textareas
+  ['ctxJustificativa', 'ctxObservacoes'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+  
+  document.getElementById("ctxStatus").innerHTML = '<span style="color:#f59e0b">⚠ Campos limpos - não esqueça de salvar</span>';
+}
+window.limparContexto = limparContexto;
 
 // ================== EXPORTAR PDF ==================
 async function exportarPDF(nomeEmpresa){
