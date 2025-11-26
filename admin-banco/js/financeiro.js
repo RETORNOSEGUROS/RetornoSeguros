@@ -293,6 +293,8 @@ function wireUi(){
         renderPlanoAcao(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "defesa" && CURRENT_ANALYSIS_DATA){
         renderDefesaCredito(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "roteiro" && CURRENT_ANALYSIS_DATA){
+        renderRoteiroVisita(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "contexto" && CURRENT_ANALYSIS_DATA){
         renderContexto(CURRENT_ANALYSIS_DATA);
       }
@@ -1580,7 +1582,92 @@ function renderHealthDashboard(rows){
     </div>
   `;
   
+  // Adicionar Benchmarking Setorial
+  const benchmarkHtml = gerarBenchmarkHtml(latest);
+  html += benchmarkHtml;
+  
   document.getElementById("healthDashboard").innerHTML = html;
+}
+
+// Função separada para gerar HTML do Benchmarking
+function gerarBenchmarkHtml(latest){
+  // Referências setoriais (médias de mercado)
+  const setorRef = {
+    margem: 0.12,      // 12% média
+    alav: 2.0,         // 2.0x média
+    liq: 1.3,          // 1.3 média
+    roe: 0.15          // 15% média
+  };
+  
+  const comparativos = [
+    { nome: 'Margem EBITDA', valor: latest.margem, setor: setorRef.margem, formato: 'pct', melhorMaior: true },
+    { nome: 'DL/EBITDA', valor: latest.alav, setor: setorRef.alav, formato: 'x', melhorMaior: false },
+    { nome: 'Liquidez', valor: latest.liq, setor: setorRef.liq, formato: 'num', melhorMaior: true },
+    { nome: 'ROE', valor: latest.roe, setor: setorRef.roe, formato: 'pct', melhorMaior: true }
+  ];
+  
+  let barrasHtml = '';
+  comparativos.forEach(c => {
+    const isMelhor = c.melhorMaior ? c.valor >= c.setor : c.valor <= c.setor;
+    const posicao = Math.min(Math.max((c.valor / (c.setor * 2)) * 100, 5), 95);
+    
+    const valorFmt = c.formato === 'pct' ? toPct(c.valor) : 
+                    c.formato === 'x' ? clamp2(c.valor) + 'x' : 
+                    clamp2(c.valor);
+    const setorFmt = c.formato === 'pct' ? toPct(c.setor) : 
+                    c.formato === 'x' ? clamp2(c.setor) + 'x' : 
+                    clamp2(c.setor);
+    
+    barrasHtml += `
+      <div style="background:#fff; border-radius:8px; padding:14px">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+          <span style="font-weight:600; font-size:13px">${c.nome}</span>
+          <span style="font-size:12px; color:${isMelhor ? '#10b981' : '#ef4444'}; font-weight:600">
+            ${isMelhor ? '✓ Acima' : '⚠ Abaixo'} do setor
+          </span>
+        </div>
+        <div style="position:relative; height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden">
+          <div style="position:absolute; left:50%; top:0; bottom:0; width:2px; background:#6366f1; z-index:1"></div>
+          <div style="position:absolute; left:calc(${posicao}% - 12px); top:2px; width:24px; height:20px; background:${isMelhor ? '#10b981' : '#f59e0b'}; border-radius:10px; display:flex; align-items:center; justify-content:center; z-index:2">
+            <span style="color:#fff; font-size:10px; font-weight:700">●</span>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:11px; color:#6b7280">
+          <span>Você: <strong>${valorFmt}</strong></span>
+          <span>Setor: <strong>${setorFmt}</strong></span>
+        </div>
+      </div>
+    `;
+  });
+  
+  // Gerar insight
+  const insights = [];
+  if(latest.margem > 0.12) insights.push('margem operacional acima da média');
+  else insights.push('margem operacional pode melhorar');
+  if(latest.alav < 2.0) insights.push('alavancagem conservadora');
+  else if(latest.alav > 2.5) insights.push('alavancagem requer atenção');
+  if(latest.liq > 1.3) insights.push('liquidez confortável');
+  else if(latest.liq < 1.0) insights.push('liquidez abaixo do ideal');
+  const insightTexto = 'Empresa apresenta ' + insights.slice(0,2).join(' e ') + '.';
+  
+  return `
+    <div style="margin-top:24px; background:linear-gradient(135deg, #f8fafc, #e0e7ff); border:1px solid #c7d2fe; border-radius:12px; padding:20px">
+      <h4 style="font-size:16px; font-weight:700; color:#3730a3; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        📊 Posicionamento vs Mercado
+        <span style="font-size:11px; font-weight:400; background:#e0e7ff; padding:2px 8px; border-radius:4px">Benchmarking</span>
+      </h4>
+      
+      <div style="display:grid; gap:16px">
+        ${barrasHtml}
+      </div>
+      
+      <div style="margin-top:16px; padding:12px; background:#fff; border-radius:8px; border-left:4px solid #6366f1">
+        <div style="font-size:13px; color:#3730a3">
+          <strong>💡 Insight:</strong> ${insightTexto}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function getTrend(rows, field, invert=false){
@@ -2310,6 +2397,268 @@ function renderDiagnostico(data){
     `;
   }
   
+  // ========== RED FLAGS (ALERTAS ANTECIPADOS) ==========
+  const redFlags = [];
+  
+  if(previo){
+    // Red Flag 1: Receita sobe mas caixa cai
+    if(latest.receita > previo.receita && latest.caixa < previo.caixa * 0.9){
+      redFlags.push({
+        titulo: 'Receita ↑ mas Caixa ↓',
+        descricao: 'Receita cresceu mas caixa diminuiu mais de 10%',
+        significado: 'Ciclo financeiro pode estar descontrolado. Empresa está vendendo mais mas não está recebendo ou está pagando antes de receber.',
+        acao: 'Verificar prazo médio de recebimento e política de crédito'
+      });
+    }
+    
+    // Red Flag 2: Estoque cresce mais que receita
+    if(latest.estoques && previo.estoques){
+      const varEstoque = (latest.estoques - previo.estoques) / previo.estoques;
+      const varRec = (latest.receita - previo.receita) / previo.receita;
+      if(varEstoque > varRec + 0.15){
+        redFlags.push({
+          titulo: 'Estoque ↑ mais que Receita',
+          descricao: `Estoque cresceu ${toPct(varEstoque)} vs Receita ${toPct(varRec)}`,
+          significado: 'Pode indicar produto encalhado, perda de vendas ou compras excessivas. Capital de giro está sendo consumido.',
+          acao: 'Analisar giro de estoque e identificar itens parados >90 dias'
+        });
+      }
+    }
+    
+    // Red Flag 3: Contas a receber cresce mais que receita
+    if(latest.contasReceber && previo.contasReceber){
+      const varCR = (latest.contasReceber - previo.contasReceber) / previo.contasReceber;
+      const varRec = (latest.receita - previo.receita) / previo.receita;
+      if(varCR > varRec + 0.20){
+        redFlags.push({
+          titulo: 'Recebíveis ↑ mais que Receita',
+          descricao: `Contas a receber cresceu ${toPct(varCR)} vs Receita ${toPct(varRec)}`,
+          significado: 'Inadimplência pode estar crescendo ou prazo de recebimento aumentou. Risco de provisão futura.',
+          acao: 'Solicitar aging de recebíveis e analisar concentração'
+        });
+      }
+    }
+    
+    // Red Flag 4: Margem sobe muito rápido (pode ser não-recorrente)
+    if(latest.margem > previo.margem * 1.5 && previo.margem > 0.03){
+      redFlags.push({
+        titulo: 'Margem subiu muito rápido (+50%)',
+        descricao: `Margem foi de ${toPct(previo.margem)} para ${toPct(latest.margem)}`,
+        significado: 'Melhoria muito rápida pode indicar eventos não-recorrentes (venda de ativo, crédito tributário, reversão de provisão).',
+        acao: 'Perguntar especificamente sobre eventos extraordinários no período'
+      });
+    }
+    
+    // Red Flag 5: EBITDA sobe mas Lucro Líquido cai
+    if(latest.ebitda > previo.ebitda && latest.lucroLiq < previo.lucroLiq * 0.85){
+      redFlags.push({
+        titulo: 'EBITDA ↑ mas Lucro ↓',
+        descricao: 'EBITDA cresceu mas lucro líquido caiu mais de 15%',
+        significado: 'Dívida cara está consumindo o resultado operacional. Despesas financeiras podem estar fora de controle.',
+        acao: 'Analisar estrutura de dívida e custo médio do endividamento'
+      });
+    }
+    
+    // Red Flag 6: Fornecedores cai com estoque estável (pagando à vista)
+    if(latest.contasPagar && previo.contasPagar && latest.estoques && previo.estoques){
+      const varForn = (latest.contasPagar - previo.contasPagar) / previo.contasPagar;
+      const varEst = (latest.estoques - previo.estoques) / previo.estoques;
+      if(varForn < -0.20 && Math.abs(varEst) < 0.10){
+        redFlags.push({
+          titulo: 'Fornecedores ↓ com Estoque estável',
+          descricao: `Fornecedores caiu ${toPct(Math.abs(varForn))} mas estoque manteve`,
+          significado: 'Empresa pode estar pagando à vista por pressão de fornecedores ou perda de crédito. Caixa pressionado.',
+          acao: 'Verificar se perdeu prazo com fornecedores e por quê'
+        });
+      }
+    }
+    
+    // Red Flag 7: Patrimônio Líquido caindo
+    if(latest.pl && previo.pl && latest.pl < previo.pl * 0.9){
+      redFlags.push({
+        titulo: 'Patrimônio Líquido ↓',
+        descricao: `PL caiu de ${toBRL(previo.pl)} para ${toBRL(latest.pl)}`,
+        significado: 'Prejuízos acumulados estão corroendo o patrimônio. Empresa está destruindo valor.',
+        acao: 'Analisar se há plano de recuperação ou necessidade de aporte'
+      });
+    }
+  }
+  
+  // Red Flag 8: Indicadores inconsistentes (EBITDA muito alto vs Lucro)
+  if(latest.ebitda > 0 && latest.lucroLiq < 0){
+    redFlags.push({
+      titulo: 'EBITDA positivo mas Prejuízo',
+      descricao: `EBITDA ${toBRL(latest.ebitda)} vs Prejuízo ${toBRL(latest.lucroLiq)}`,
+      significado: 'Operação gera caixa mas despesas financeiras/depreciação consomem tudo. Estrutura de capital problemática.',
+      acao: 'Avaliar viabilidade de longo prazo e necessidade de reestruturação'
+    });
+  }
+  
+  if(redFlags.length > 0){
+    html += `
+      <div class="diag-card danger" style="border-left-width:4px; border-left-color:#dc2626">
+        <div class="diag-title" style="color:#dc2626">
+          <span style="font-size:24px">🚨</span>
+          Red Flags Detectados - O que o banco não vê
+        </div>
+        <p style="font-size:12px; color:#991b1b; margin-bottom:16px">
+          Padrões que indicam problemas ANTES de aparecerem claramente nos indicadores tradicionais.
+        </p>
+        
+        ${redFlags.map((rf, idx) => `
+          <div style="background:#fff; border:1px solid #fecaca; border-radius:8px; padding:14px; margin-bottom:12px">
+            <div style="font-weight:700; color:#dc2626; margin-bottom:8px; display:flex; align-items:center; gap:8px">
+              <span style="background:#dc2626; color:#fff; padding:2px 8px; border-radius:4px; font-size:11px">#${idx+1}</span>
+              ${rf.titulo}
+            </div>
+            <div style="font-size:13px; color:#7f1d1d; margin-bottom:8px">${rf.descricao}</div>
+            <div style="font-size:12px; background:#fef2f2; padding:10px; border-radius:6px; margin-bottom:8px">
+              <strong>🔍 O que isso significa:</strong> ${rf.significado}
+            </div>
+            <div style="font-size:12px; color:#166534; background:#dcfce7; padding:8px 10px; border-radius:6px">
+              <strong>✅ Ação recomendada:</strong> ${rf.acao}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+  
+  // ========== CICLO FINANCEIRO (NCG) ==========
+  // Calcular PMR, PMP, PME e NCG
+  const diasAno = 360;
+  const receitaDia = latest.receita / diasAno;
+  const cmvDia = (latest.cmv || latest.receita * 0.6) / diasAno; // Estimar CMV se não tiver
+  
+  // PMR - Prazo Médio de Recebimento
+  const pmr = latest.contasReceber ? Math.round(latest.contasReceber / receitaDia) : null;
+  
+  // PME - Prazo Médio de Estocagem
+  const pme = latest.estoques ? Math.round(latest.estoques / cmvDia) : null;
+  
+  // PMP - Prazo Médio de Pagamento
+  const pmp = latest.contasPagar ? Math.round(latest.contasPagar / cmvDia) : null;
+  
+  // Ciclo Operacional e Financeiro
+  const cicloOperacional = (pmr || 0) + (pme || 0);
+  const cicloFinanceiro = cicloOperacional - (pmp || 0);
+  
+  // NCG - Necessidade de Capital de Giro
+  const ncg = cicloFinanceiro > 0 ? cicloFinanceiro * receitaDia : 0;
+  
+  // Capital de Giro disponível
+  const cdg = (latest.ativoCirc || 0) - (latest.passivoCirc || 0);
+  
+  // Saldo de Tesouraria
+  const saldoTesouraria = cdg - ncg;
+  
+  if(pmr !== null || pme !== null || pmp !== null){
+    html += `
+      <div class="diag-card info" style="background:linear-gradient(135deg, #eff6ff, #dbeafe)">
+        <div class="diag-title" style="color:#1e40af">
+          <span style="font-size:24px">⏱️</span>
+          Ciclo Financeiro e NCG
+        </div>
+        <p style="font-size:12px; color:#1e40af; margin-bottom:20px">
+          Análise do ciclo de conversão de caixa - quanto tempo o dinheiro fica "preso" na operação.
+        </p>
+        
+        <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px">
+          ${pmr !== null ? `
+            <div style="flex:1; min-width:120px; background:#fff; border-radius:8px; padding:16px; text-align:center">
+              <div style="font-size:11px; color:#6b7280; text-transform:uppercase; margin-bottom:4px">PMR</div>
+              <div style="font-size:28px; font-weight:800; color:#1e40af">${pmr}</div>
+              <div style="font-size:11px; color:#6b7280">dias p/ receber</div>
+            </div>
+          ` : ''}
+          ${pme !== null ? `
+            <div style="flex:1; min-width:120px; background:#fff; border-radius:8px; padding:16px; text-align:center">
+              <div style="font-size:11px; color:#6b7280; text-transform:uppercase; margin-bottom:4px">PME</div>
+              <div style="font-size:28px; font-weight:800; color:#f59e0b">${pme}</div>
+              <div style="font-size:11px; color:#6b7280">dias em estoque</div>
+            </div>
+          ` : ''}
+          ${pmp !== null ? `
+            <div style="flex:1; min-width:120px; background:#fff; border-radius:8px; padding:16px; text-align:center">
+              <div style="font-size:11px; color:#6b7280; text-transform:uppercase; margin-bottom:4px">PMP</div>
+              <div style="font-size:28px; font-weight:800; color:#10b981">${pmp}</div>
+              <div style="font-size:11px; color:#6b7280">dias p/ pagar</div>
+            </div>
+          ` : ''}
+          <div style="flex:1; min-width:120px; background:${cicloFinanceiro > 60 ? '#fef2f2' : cicloFinanceiro > 30 ? '#fffbeb' : '#ecfdf5'}; border-radius:8px; padding:16px; text-align:center">
+            <div style="font-size:11px; color:#6b7280; text-transform:uppercase; margin-bottom:4px">CICLO FINANCEIRO</div>
+            <div style="font-size:28px; font-weight:800; color:${cicloFinanceiro > 60 ? '#dc2626' : cicloFinanceiro > 30 ? '#f59e0b' : '#10b981'}">${cicloFinanceiro}</div>
+            <div style="font-size:11px; color:#6b7280">dias</div>
+          </div>
+        </div>
+        
+        <!-- Visualização do Ciclo -->
+        <div style="background:#fff; border-radius:8px; padding:16px; margin-bottom:16px">
+          <div style="font-size:12px; font-weight:600; margin-bottom:12px">📊 Visualização do Ciclo</div>
+          <div style="position:relative; height:80px; background:#f1f5f9; border-radius:8px; overflow:hidden">
+            ${pme !== null ? `
+              <div style="position:absolute; left:0; top:10px; height:25px; width:${Math.min(pme/2, 45)}%; background:#f59e0b; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:600">
+                Estoque ${pme}d
+              </div>
+            ` : ''}
+            ${pmr !== null ? `
+              <div style="position:absolute; left:${pme ? Math.min(pme/2, 45) : 0}%; top:10px; height:25px; width:${Math.min(pmr/2, 45)}%; background:#3b82f6; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:600">
+                Receber ${pmr}d
+              </div>
+            ` : ''}
+            ${pmp !== null ? `
+              <div style="position:absolute; left:0; top:45px; height:25px; width:${Math.min(pmp/2, 45)}%; background:#10b981; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:600">
+                Pagar ${pmp}d
+              </div>
+            ` : ''}
+          </div>
+          <div style="font-size:11px; color:#6b7280; margin-top:8px; text-align:center">
+            Ciclo Operacional: ${cicloOperacional} dias | Ciclo Financeiro: ${cicloFinanceiro} dias
+          </div>
+        </div>
+        
+        <!-- NCG -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px">
+          <div style="background:#fff; border-radius:8px; padding:14px">
+            <div style="font-size:11px; color:#6b7280; margin-bottom:4px">NCG (Necessidade de Capital de Giro)</div>
+            <div style="font-size:20px; font-weight:700; color:#1e40af">${toBRL(ncg)}</div>
+            <div style="font-size:11px; color:#6b7280">Quanto precisa para financiar o ciclo</div>
+          </div>
+          <div style="background:#fff; border-radius:8px; padding:14px">
+            <div style="font-size:11px; color:#6b7280; margin-bottom:4px">Capital de Giro Disponível</div>
+            <div style="font-size:20px; font-weight:700; color:${cdg >= 0 ? '#10b981' : '#dc2626'}">${toBRL(cdg)}</div>
+            <div style="font-size:11px; color:#6b7280">AC - PC</div>
+          </div>
+          <div style="background:${saldoTesouraria >= 0 ? '#ecfdf5' : '#fef2f2'}; border-radius:8px; padding:14px">
+            <div style="font-size:11px; color:#6b7280; margin-bottom:4px">Saldo de Tesouraria</div>
+            <div style="font-size:20px; font-weight:700; color:${saldoTesouraria >= 0 ? '#10b981' : '#dc2626'}">${toBRL(saldoTesouraria)}</div>
+            <div style="font-size:11px; color:${saldoTesouraria >= 0 ? '#166534' : '#991b1b'}">
+              ${saldoTesouraria >= 0 ? '✓ Folga financeira' : '⚠️ Precisa de financiamento'}
+            </div>
+          </div>
+        </div>
+        
+        ${saldoTesouraria < 0 ? `
+          <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px; margin-top:16px">
+            <div style="font-size:13px; color:#991b1b">
+              <strong>⚠️ Alerta:</strong> A NCG (${toBRL(ncg)}) é maior que o Capital de Giro disponível (${toBRL(cdg)}). 
+              A empresa precisa de <strong>${toBRL(Math.abs(saldoTesouraria))}</strong> de financiamento externo para fechar o ciclo.
+            </div>
+          </div>
+        ` : ''}
+        
+        ${cicloFinanceiro > 60 ? `
+          <div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:12px; margin-top:16px">
+            <div style="font-size:13px; color:#92400e">
+              <strong>💡 Oportunidade:</strong> Ciclo financeiro de ${cicloFinanceiro} dias é longo. 
+              Reduzir PMR em 10 dias liberaria aproximadamente <strong>${toBRL(receitaDia * 10)}</strong> de caixa.
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+  
   // Score geral
   html += `
     <div class="diag-card info">
@@ -2565,6 +2914,157 @@ function renderPlanoAcao(data){
     });
   }
   
+  // ========== STRESS TEST (CENÁRIOS ADVERSOS) ==========
+  html += `
+    <div style="background:linear-gradient(135deg, #1e293b, #334155); color:#fff; border-radius:12px; padding:20px; margin-top:24px">
+      <div style="font-size:18px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:10px">
+        🔥 Stress Test - Cenários Adversos
+      </div>
+      <p style="font-size:13px; opacity:0.8; margin-bottom:20px">
+        Simulação de cenários negativos para avaliar a resiliência da empresa.
+      </p>
+  `;
+  
+  // Cenário 1: Receita cai 20%
+  const receitaStress1 = latest.receita * 0.8;
+  const ebitdaStress1 = latest.ebitda - (latest.receita * 0.2 * 0.6); // 60% margem contribuição
+  const alavStress1 = ebitdaStress1 > 0 ? latest.dividaLiq / ebitdaStress1 : 99;
+  const liqStress1 = latest.liq * 0.85; // Reduz liquidez
+  
+  html += `
+    <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:16px">
+      <div style="font-size:14px; font-weight:700; margin-bottom:12px; color:#fbbf24">
+        📉 CENÁRIO 1: Receita cai 20%
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px">
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Receita</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toBRL(latest.receita)}</div>
+          <div style="font-size:16px; font-weight:700">${toBRL(receitaStress1)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toBRL(latest.ebitda)}</div>
+          <div style="font-size:16px; font-weight:700; color:${ebitdaStress1 < 0 ? '#f87171' : '#fff'}">${toBRL(ebitdaStress1)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">DL/EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${clamp2(latest.alav)}x</div>
+          <div style="font-size:16px; font-weight:700; color:${alavStress1 > 3 ? '#f87171' : alavStress1 > 2.5 ? '#fbbf24' : '#4ade80'}">${alavStress1 > 10 ? '>10x' : clamp2(alavStress1) + 'x'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Liquidez</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${clamp2(latest.liq)}</div>
+          <div style="font-size:16px; font-weight:700; color:${liqStress1 < 1 ? '#f87171' : '#fff'}">${clamp2(liqStress1)}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px; padding:10px; background:${alavStress1 > 3 || liqStress1 < 1 ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)'}; border-radius:6px; font-size:12px">
+        ${alavStress1 > 3 || liqStress1 < 1 ? '⚠️ Capacidade de pagamento COMPROMETIDA' : '✓ Empresa sobrevive com folga'}
+      </div>
+    </div>
+  `;
+  
+  // Cenário 2: Custos sobem 15%
+  const ebitdaStress2 = latest.ebitda - (latest.receita * (1 - latest.margem) * 0.15);
+  const margemStress2 = ebitdaStress2 / latest.receita;
+  const alavStress2 = ebitdaStress2 > 0 ? latest.dividaLiq / ebitdaStress2 : 99;
+  
+  html += `
+    <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:16px">
+      <div style="font-size:14px; font-weight:700; margin-bottom:12px; color:#fb923c">
+        📈 CENÁRIO 2: Custos sobem 15%
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px">
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toBRL(latest.ebitda)}</div>
+          <div style="font-size:16px; font-weight:700; color:${ebitdaStress2 < 0 ? '#f87171' : '#fff'}">${toBRL(ebitdaStress2)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Margem EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toPct(latest.margem)}</div>
+          <div style="font-size:16px; font-weight:700; color:${margemStress2 < 0.08 ? '#f87171' : '#fff'}">${toPct(margemStress2)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">DL/EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${clamp2(latest.alav)}x</div>
+          <div style="font-size:16px; font-weight:700; color:${alavStress2 > 3 ? '#f87171' : alavStress2 > 2.5 ? '#fbbf24' : '#4ade80'}">${alavStress2 > 10 ? '>10x' : clamp2(alavStress2) + 'x'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Variação EBITDA</div>
+          <div style="font-size:16px; font-weight:700; color:#f87171">${toPct((ebitdaStress2 - latest.ebitda) / latest.ebitda)}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px; padding:10px; background:${alavStress2 > 3 ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)'}; border-radius:6px; font-size:12px">
+        ${alavStress2 > 3 ? '⚠️ Alavancagem ultrapassa limite prudencial' : '✓ Impacto absorvível'}
+      </div>
+    </div>
+  `;
+  
+  // Cenário 3: Combinado (Receita -10% + Custos +10%)
+  const receitaStress3 = latest.receita * 0.9;
+  const custoBase = latest.receita * (1 - latest.margem);
+  const custoStress3 = custoBase * 1.10;
+  const ebitdaStress3 = receitaStress3 - custoStress3;
+  const alavStress3 = ebitdaStress3 > 0 ? latest.dividaLiq / ebitdaStress3 : 99;
+  
+  html += `
+    <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:16px">
+      <div style="font-size:14px; font-weight:700; margin-bottom:12px; color:#f87171">
+        💥 CENÁRIO 3: Combinado (Receita -10% E Custos +10%)
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px">
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Receita</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toBRL(latest.receita)}</div>
+          <div style="font-size:16px; font-weight:700">${toBRL(receitaStress3)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${toBRL(latest.ebitda)}</div>
+          <div style="font-size:16px; font-weight:700; color:${ebitdaStress3 < 0 ? '#f87171' : '#fff'}">${toBRL(ebitdaStress3)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">DL/EBITDA</div>
+          <div style="font-size:11px; text-decoration:line-through; opacity:0.5">${clamp2(latest.alav)}x</div>
+          <div style="font-size:16px; font-weight:700; color:${alavStress3 > 3 ? '#f87171' : '#4ade80'}">${alavStress3 > 10 ? '>10x' : clamp2(alavStress3) + 'x'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; opacity:0.7">Variação EBITDA</div>
+          <div style="font-size:16px; font-weight:700; color:#f87171">${latest.ebitda > 0 ? toPct((ebitdaStress3 - latest.ebitda) / latest.ebitda) : 'N/A'}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px; padding:10px; background:${ebitdaStress3 < 0 || alavStress3 > 3.5 ? 'rgba(248,113,113,0.2)' : 'rgba(251,191,36,0.2)'}; border-radius:6px; font-size:12px">
+        ${ebitdaStress3 < 0 ? '🚨 EBITDA NEGATIVO - Empresa não sobrevive este cenário' : 
+          alavStress3 > 3.5 ? '⚠️ Situação CRÍTICA - Renegociação necessária' : '⚠️ Cenário difícil mas gerenciável'}
+      </div>
+    </div>
+  `;
+  
+  // Índice de Resiliência
+  let pontuacaoResiliencia = 100;
+  if(alavStress1 > 3) pontuacaoResiliencia -= 25;
+  if(liqStress1 < 1) pontuacaoResiliencia -= 25;
+  if(alavStress2 > 3) pontuacaoResiliencia -= 15;
+  if(ebitdaStress3 < 0) pontuacaoResiliencia -= 35;
+  else if(alavStress3 > 3.5) pontuacaoResiliencia -= 20;
+  
+  const resilienciaLabel = pontuacaoResiliencia >= 80 ? 'ALTA' : pontuacaoResiliencia >= 50 ? 'MÉDIA' : 'BAIXA';
+  const resilienciaCor = pontuacaoResiliencia >= 80 ? '#4ade80' : pontuacaoResiliencia >= 50 ? '#fbbf24' : '#f87171';
+  
+  html += `
+    <div style="background:rgba(255,255,255,0.15); border-radius:10px; padding:16px; text-align:center">
+      <div style="font-size:12px; opacity:0.7; margin-bottom:8px">ÍNDICE DE RESILIÊNCIA</div>
+      <div style="font-size:36px; font-weight:800; color:${resilienciaCor}">${resilienciaLabel}</div>
+      <div style="font-size:13px; margin-top:8px; opacity:0.8">
+        ${pontuacaoResiliencia >= 80 ? 'Empresa aguenta cenários adversos com folga' :
+          pontuacaoResiliencia >= 50 ? 'Empresa aguenta cenário moderado, mas não severo' :
+          'Empresa vulnerável a cenários adversos - monitorar de perto'}
+      </div>
+    </div>
+  </div>
+  `;
+  
   container.innerHTML = html;
 }
 
@@ -2746,12 +3246,535 @@ function renderDefesaCredito(data){
         </div>
       </div>
     </div>
+    
+    <!-- SIMULADOR DE OPERAÇÕES -->
+    <div class="defense-section" style="background:linear-gradient(135deg, #0f172a, #1e293b); color:#fff; border:none">
+      <div class="defense-section-title" style="color:#fff">
+        <span style="font-size:20px">🧮</span>
+        Simulador de Operações
+      </div>
+      <p style="font-size:13px; opacity:0.8; margin-bottom:20px">
+        Simule o impacto de uma nova operação de crédito nos indicadores da empresa.
+      </p>
+      
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:16px; margin-bottom:20px">
+        <div>
+          <label style="font-size:12px; opacity:0.7">Valor da Operação</label>
+          <input type="text" id="simValor" placeholder="R$ 500.000" 
+            style="width:100%; padding:10px; border:none; border-radius:8px; margin-top:4px; font-size:14px"
+            value="${toBRL(disponivel * 1.5)}">
+        </div>
+        <div>
+          <label style="font-size:12px; opacity:0.7">Prazo (meses)</label>
+          <input type="number" id="simPrazo" placeholder="36" value="36"
+            style="width:100%; padding:10px; border:none; border-radius:8px; margin-top:4px; font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px; opacity:0.7">Taxa a.m. (%)</label>
+          <input type="number" id="simTaxa" placeholder="1.5" value="1.5" step="0.1"
+            style="width:100%; padding:10px; border:none; border-radius:8px; margin-top:4px; font-size:14px">
+        </div>
+        <div style="display:flex; align-items:flex-end">
+          <button onclick="simularOperacao()" 
+            style="width:100%; padding:12px; background:#3b82f6; color:#fff; border:none; border-radius:8px; font-weight:600; cursor:pointer">
+            ▶ Simular
+          </button>
+        </div>
+      </div>
+      
+      <div id="simResultado" style="display:none">
+        <!-- Resultado será inserido aqui -->
+      </div>
+    </div>
+  `;
+  
+  // Armazenar dados para o simulador
+  window.SIMULADOR_DATA = {
+    ebitda: ebitdaAnual,
+    dividaLiq: latest.dividaLiq || 0,
+    liq: latest.liq,
+    pl: latest.pl || 0,
+    ativoTotal: latest.ativo || 0,
+    servicoDividaAtual: servicoDividaAtual,
+    disponivel: disponivel,
+    alav: latest.alav
+  };
+  
+  container.innerHTML = html;
+}
+
+// Função do Simulador de Operações
+function simularOperacao(){
+  const data = window.SIMULADOR_DATA;
+  if(!data) return alert('Dados não disponíveis');
+  
+  // Pegar valores do formulário
+  const valorStr = document.getElementById('simValor')?.value || '0';
+  const valor = parseFloat(valorStr.replace(/[^\d,]/g, '').replace(',', '.')) || 0;
+  const prazo = parseInt(document.getElementById('simPrazo')?.value) || 36;
+  const taxa = parseFloat(document.getElementById('simTaxa')?.value) || 1.5;
+  
+  if(valor <= 0){
+    return alert('Informe um valor válido para a operação');
+  }
+  
+  // Calcular parcela (Price)
+  const taxaMensal = taxa / 100;
+  const parcela = valor * (taxaMensal * Math.pow(1 + taxaMensal, prazo)) / (Math.pow(1 + taxaMensal, prazo) - 1);
+  const parcelaAnual = parcela * 12;
+  
+  // Calcular impactos
+  const novaDividaLiq = data.dividaLiq + valor;
+  const novoAlav = data.ebitda > 0 ? novaDividaLiq / data.ebitda : 99;
+  const novaLiq = data.liq * (1 + valor / (data.ativoTotal * 0.3 || 1)); // Melhora liquidez
+  const novaCobertura = data.ebitda / (data.servicoDividaAtual + parcelaAnual);
+  const novoEndividamento = (data.pl > 0) ? novaDividaLiq / data.pl * 100 : 0;
+  
+  // Determinar status de cada indicador
+  const getStatus = (valor, limiteOk, limiteAtencao, inverter = false) => {
+    if(inverter){
+      if(valor >= limiteOk) return { cor: '#4ade80', icon: '✓', texto: 'OK' };
+      if(valor >= limiteAtencao) return { cor: '#fbbf24', icon: '⚠', texto: 'Atenção' };
+      return { cor: '#f87171', icon: '⛔', texto: 'Crítico' };
+    }
+    if(valor <= limiteOk) return { cor: '#4ade80', icon: '✓', texto: 'OK' };
+    if(valor <= limiteAtencao) return { cor: '#fbbf24', icon: '⚠', texto: 'Atenção' };
+    return { cor: '#f87171', icon: '⛔', texto: 'Crítico' };
+  };
+  
+  const statusAlav = getStatus(novoAlav, 2.5, 3.5);
+  const statusLiq = getStatus(novaLiq, 1.2, 1.0, true);
+  const statusCobertura = getStatus(novaCobertura, 2.0, 1.5, true);
+  const statusEndiv = getStatus(novoEndividamento, 60, 80);
+  
+  // Veredicto geral
+  let veredicto = 'APROVÁVEL';
+  let verdictoCor = '#4ade80';
+  let veredictIcon = '✓';
+  
+  if(statusAlav.texto === 'Crítico' || statusCobertura.texto === 'Crítico'){
+    veredicto = 'NÃO RECOMENDADO';
+    verdictoCor = '#f87171';
+    veredictIcon = '⛔';
+  } else if(statusAlav.texto === 'Atenção' || statusCobertura.texto === 'Atenção'){
+    veredicto = 'APROVÁVEL COM RESSALVAS';
+    verdictoCor = '#fbbf24';
+    veredictIcon = '⚠';
+  }
+  
+  const resultado = document.getElementById('simResultado');
+  resultado.style.display = 'block';
+  resultado.innerHTML = `
+    <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:16px">
+      <div style="font-size:13px; opacity:0.7; margin-bottom:8px">Resumo da Operação</div>
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; text-align:center">
+        <div>
+          <div style="font-size:11px; opacity:0.6">Valor</div>
+          <div style="font-size:18px; font-weight:700">${toBRL(valor)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px; opacity:0.6">Parcela Mensal</div>
+          <div style="font-size:18px; font-weight:700">${toBRL(parcela)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px; opacity:0.6">Custo Total</div>
+          <div style="font-size:18px; font-weight:700">${toBRL(parcela * prazo)}</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="background:rgba(255,255,255,0.05); border-radius:10px; overflow:hidden">
+      <table style="width:100%; font-size:13px; border-collapse:collapse">
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+          <td style="padding:12px">Indicador</td>
+          <td style="padding:12px; text-align:center">Atual</td>
+          <td style="padding:12px; text-align:center">Pós-Operação</td>
+          <td style="padding:12px; text-align:center">Status</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+          <td style="padding:12px">DL/EBITDA</td>
+          <td style="padding:12px; text-align:center">${clamp2(data.alav)}x</td>
+          <td style="padding:12px; text-align:center; font-weight:700">${clamp2(novoAlav)}x</td>
+          <td style="padding:12px; text-align:center; color:${statusAlav.cor}">${statusAlav.icon} ${statusAlav.texto}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+          <td style="padding:12px">Liquidez</td>
+          <td style="padding:12px; text-align:center">${clamp2(data.liq)}</td>
+          <td style="padding:12px; text-align:center; font-weight:700">${clamp2(novaLiq)}</td>
+          <td style="padding:12px; text-align:center; color:${statusLiq.cor}">${statusLiq.icon} ${statusLiq.texto}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+          <td style="padding:12px">Cobertura do Serviço da Dívida</td>
+          <td style="padding:12px; text-align:center">—</td>
+          <td style="padding:12px; text-align:center; font-weight:700">${clamp2(novaCobertura)}x</td>
+          <td style="padding:12px; text-align:center; color:${statusCobertura.cor}">${statusCobertura.icon} ${statusCobertura.texto}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px">Endividamento (DL/PL)</td>
+          <td style="padding:12px; text-align:center">${clamp2(data.dividaLiq / (data.pl || 1) * 100)}%</td>
+          <td style="padding:12px; text-align:center; font-weight:700">${clamp2(novoEndividamento)}%</td>
+          <td style="padding:12px; text-align:center; color:${statusEndiv.cor}">${statusEndiv.icon} ${statusEndiv.texto}</td>
+        </tr>
+      </table>
+    </div>
+    
+    <div style="margin-top:16px; padding:16px; background:${verdictoCor}20; border:1px solid ${verdictoCor}; border-radius:10px; text-align:center">
+      <div style="font-size:24px; font-weight:800; color:${verdictoCor}">${veredictIcon} ${veredicto}</div>
+      <div style="font-size:13px; margin-top:8px; opacity:0.9">
+        ${veredicto === 'APROVÁVEL' ? 'A operação está dentro dos parâmetros de risco aceitáveis.' :
+          veredicto === 'APROVÁVEL COM RESSALVAS' ? 'Operação possível, mas recomenda-se garantias adicionais ou covenants.' :
+          'Operação comprometeria a capacidade de pagamento. Não recomendada.'}
+      </div>
+    </div>
+    
+    ${veredicto !== 'APROVÁVEL' ? `
+      <div style="margin-top:12px; padding:12px; background:rgba(255,255,255,0.1); border-radius:8px; font-size:12px">
+        <strong>💡 Sugestão:</strong> 
+        ${novoAlav > 3 ? `Reduzir valor para ${toBRL(data.ebitda * 2.5 - data.dividaLiq)} para manter DL/EBITDA ≤ 2.5x. ` : ''}
+        ${novaCobertura < 1.5 ? `Aumentar prazo para ${Math.ceil(parcelaAnual / (data.ebitda * 0.5))} meses para melhorar cobertura. ` : ''}
+      </div>
+    ` : ''}
+  `;
+}
+window.simularOperacao = simularOperacao;
+
+// ================== ABA 5: ROTEIRO DE VISITA ==================
+function renderRoteiroVisita(data){
+  if(!data || !data.rows || !data.rows.length) return;
+  
+  const rows = data.rows;
+  const latest = rows[0];
+  const previo = rows[1] || null;
+  const empresaNome = data.empresaNome;
+  const container = document.getElementById("roteiroVisitaContent");
+  const score = calcularScore(latest);
+  
+  // Gerar perguntas baseadas nos dados
+  const perguntasInvestigar = [];
+  const checklistVisual = [];
+  const documentosSolicitar = [];
+  
+  // Análise de variações para perguntas
+  if(previo){
+    const varReceita = ((latest.receita - previo.receita) / previo.receita * 100);
+    const varMargem = (latest.margem - previo.margem) * 100;
+    
+    if(Math.abs(varReceita) > 15){
+      perguntasInvestigar.push({
+        categoria: 'Receita',
+        contexto: `Variou ${varReceita > 0 ? '+' : ''}${clamp2(varReceita)}% vs ano anterior`,
+        perguntas: varReceita > 0 ? [
+          'Quais foram os principais motores do crescimento?',
+          'Novos clientes ou aumento de volume dos existentes?',
+          'Este crescimento é sustentável?',
+          'Houve aumento de capacidade produtiva?'
+        ] : [
+          'O que causou a queda nas vendas?',
+          'Perdeu algum cliente importante?',
+          'Qual a perspectiva de recuperação?',
+          'O mercado como um todo está em queda?'
+        ]
+      });
+    }
+    
+    if(Math.abs(varMargem) > 3){
+      perguntasInvestigar.push({
+        categoria: 'Margem',
+        contexto: `Variou ${varMargem > 0 ? '+' : ''}${clamp2(varMargem)} p.p. vs ano anterior`,
+        perguntas: varMargem > 0 ? [
+          'O que explica a melhoria da margem?',
+          'Houve eventos não-recorrentes?',
+          'Renegociou com fornecedores?',
+          'Este ganho é estrutural ou pontual?'
+        ] : [
+          'Custos subiram ou preços caíram?',
+          'Houve ociosidade operacional?',
+          'Qual o plano para recuperar margem?',
+          'Concorrência está mais agressiva?'
+        ]
+      });
+    }
+  }
+  
+  // Perguntas sobre alavancagem
+  if(latest.alav > 2){
+    perguntasInvestigar.push({
+      categoria: 'Endividamento',
+      contexto: `DL/EBITDA de ${clamp2(latest.alav)}x`,
+      perguntas: [
+        'Qual foi a finalidade das dívidas contraídas?',
+        'Qual o cronograma de amortização?',
+        'Há plano de desalavancagem?',
+        'Qual a taxa média do endividamento?'
+      ]
+    });
+  }
+  
+  // Perguntas sobre liquidez
+  if(latest.liq < 1.2){
+    perguntasInvestigar.push({
+      categoria: 'Liquidez',
+      contexto: `Liquidez corrente de ${clamp2(latest.liq)}`,
+      perguntas: [
+        'Como está o fluxo de caixa atual?',
+        'Há recebíveis vencidos relevantes?',
+        'Qual o prazo médio de recebimento?',
+        'Tem acesso a linhas de crédito emergencial?'
+      ]
+    });
+  }
+  
+  // Perguntas sobre concentração (se tiver contexto)
+  perguntasInvestigar.push({
+    categoria: 'Clientes e Mercado',
+    contexto: 'Análise de risco comercial',
+    perguntas: [
+      'Quem são os 3 maiores clientes e % do faturamento?',
+      'Há contratos formais com principais clientes?',
+      'Qual o tempo de relacionamento com eles?',
+      'Há risco de perda de algum cliente relevante?',
+      'Como está a carteira de pedidos/contratos?'
+    ]
+  });
+  
+  // Perguntas sobre fornecedores
+  perguntasInvestigar.push({
+    categoria: 'Fornecedores',
+    contexto: 'Análise de risco operacional',
+    perguntas: [
+      'Quem são os principais fornecedores?',
+      'Há dependência de fornecedor único para algum insumo?',
+      'Os prazos de pagamento estão sendo cumpridos?',
+      'Houve mudança nos termos comerciais recentemente?'
+    ]
+  });
+  
+  // Checklist visual
+  checklistVisual.push(
+    { item: 'Estado geral das instalações (conservação, limpeza, organização)', icon: '🏭' },
+    { item: 'Movimentação de pessoas (funcionários trabalhando, clientes)', icon: '👥' },
+    { item: 'Equipamentos em operação (máquinas ligadas, produção ativa)', icon: '⚙️' },
+    { item: 'Estoque físico (volume, organização, produtos parados)', icon: '📦' },
+    { item: 'Frota de veículos (estado, quantidade, utilização)', icon: '🚚' },
+    { item: 'Clima organizacional (ambiente de trabalho, equipe motivada)', icon: '😊' },
+    { item: 'Placas, letreiros e identidade visual (manutenção da marca)', icon: '🏪' },
+    { item: 'Segurança (câmeras, portaria, controle de acesso)', icon: '🔒' }
+  );
+  
+  // Documentos a solicitar
+  documentosSolicitar.push(
+    { doc: 'Balancete atualizado (último trimestre)', prioridade: 'alta' },
+    { doc: 'Faturamento mensal dos últimos 6 meses', prioridade: 'alta' },
+    { doc: 'Posição de endividamento bancário atualizada', prioridade: 'alta' },
+    { doc: 'Relação de clientes com % do faturamento', prioridade: 'media' },
+    { doc: 'Contratos vigentes com principais clientes', prioridade: 'media' },
+    { doc: 'Aging de contas a receber', prioridade: 'media' },
+    { doc: 'Certidões negativas (FGTS, INSS, Federal, Estadual, Municipal)', prioridade: 'alta' },
+    { doc: 'Declaração de faturamento assinada', prioridade: 'baixa' }
+  );
+  
+  // Se tiver indicadores problemáticos, adicionar documentos específicos
+  if(latest.alav > 2.5){
+    documentosSolicitar.unshift({ doc: 'Cronograma de amortização de dívidas', prioridade: 'alta' });
+  }
+  if(latest.liq < 1){
+    documentosSolicitar.unshift({ doc: 'Fluxo de caixa projetado próximos 6 meses', prioridade: 'alta' });
+  }
+  
+  let html = `
+    <div style="background:linear-gradient(135deg, #059669, #10b981); color:#fff; border-radius:12px; padding:20px; margin-bottom:20px">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px">
+        <div>
+          <div style="font-size:18px; font-weight:700">📋 Roteiro de Visita</div>
+          <div style="font-size:14px; opacity:0.9; margin-top:4px">${empresaNome}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:12px; opacity:0.8">Score Atual</div>
+          <div style="font-size:24px; font-weight:800">${score}</div>
+        </div>
+      </div>
+      <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.2); font-size:13px; opacity:0.9">
+        <strong>💡 Objetivo:</strong> Validar os números, entender o contexto e identificar riscos não aparentes nos demonstrativos.
+      </div>
+    </div>
+    
+    <!-- PERGUNTAS PARA INVESTIGAR -->
+    <div class="diag-card" style="border-left:4px solid #3b82f6">
+      <div class="diag-title" style="color:#1e40af">
+        <span style="font-size:24px">🔍</span>
+        Perguntas para Investigar
+      </div>
+      <p style="font-size:12px; color:#6b7280; margin-bottom:16px">
+        Baseadas na análise dos demonstrativos. Marque as que foram respondidas.
+      </p>
+      
+      ${perguntasInvestigar.map((grupo, idx) => `
+        <div style="background:#f8fafc; border-radius:8px; padding:16px; margin-bottom:12px">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+            <div style="font-weight:700; color:#1e40af">${grupo.categoria}</div>
+            <div style="font-size:11px; background:#dbeafe; color:#1e40af; padding:4px 8px; border-radius:4px">
+              ${grupo.contexto}
+            </div>
+          </div>
+          ${grupo.perguntas.map((p, i) => `
+            <div style="display:flex; align-items:flex-start; gap:10px; padding:8px 0; ${i < grupo.perguntas.length - 1 ? 'border-bottom:1px solid #e2e8f0' : ''}">
+              <input type="checkbox" style="margin-top:3px; width:16px; height:16px; cursor:pointer">
+              <span style="font-size:13px">${p}</span>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+    </div>
+    
+    <!-- CHECKLIST VISUAL -->
+    <div class="diag-card" style="border-left:4px solid #f59e0b">
+      <div class="diag-title" style="color:#b45309">
+        <span style="font-size:24px">👁️</span>
+        Checklist de Observação Visual
+      </div>
+      <p style="font-size:12px; color:#6b7280; margin-bottom:16px">
+        Itens para observar durante a visita presencial.
+      </p>
+      
+      <div style="display:grid; gap:8px">
+        ${checklistVisual.map(item => `
+          <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#fffbeb; border-radius:8px">
+            <input type="checkbox" style="width:18px; height:18px; cursor:pointer">
+            <span style="font-size:18px">${item.icon}</span>
+            <span style="font-size:13px">${item.item}</span>
+          </div>
+        `).join('')}
+      </div>
+      
+      <div style="margin-top:16px">
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px">📸 Observações da Visita:</div>
+        <textarea placeholder="Anote aqui suas observações durante a visita..." 
+          style="width:100%; padding:12px; border:1px solid #fcd34d; border-radius:8px; min-height:100px; font-family:inherit; resize:vertical; background:#fff"></textarea>
+      </div>
+    </div>
+    
+    <!-- DOCUMENTOS A SOLICITAR -->
+    <div class="diag-card" style="border-left:4px solid #8b5cf6">
+      <div class="diag-title" style="color:#6d28d9">
+        <span style="font-size:24px">📄</span>
+        Documentos a Solicitar
+      </div>
+      <p style="font-size:12px; color:#6b7280; margin-bottom:16px">
+        Lista de documentos para completar a análise.
+      </p>
+      
+      <div style="display:grid; gap:8px">
+        ${documentosSolicitar.map(d => `
+          <div style="display:flex; align-items:center; gap:12px; padding:12px; background:${d.prioridade === 'alta' ? '#fef2f2' : d.prioridade === 'media' ? '#fffbeb' : '#f8fafc'}; border-radius:8px; border-left:3px solid ${d.prioridade === 'alta' ? '#ef4444' : d.prioridade === 'media' ? '#f59e0b' : '#9ca3af'}">
+            <input type="checkbox" style="width:18px; height:18px; cursor:pointer">
+            <span style="font-size:13px; flex:1">${d.doc}</span>
+            <span style="font-size:10px; padding:2px 6px; border-radius:3px; background:${d.prioridade === 'alta' ? '#fee2e2' : d.prioridade === 'media' ? '#fef3c7' : '#f3f4f6'}; color:${d.prioridade === 'alta' ? '#991b1b' : d.prioridade === 'media' ? '#92400e' : '#6b7280'}">
+              ${d.prioridade.toUpperCase()}
+            </span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- RESUMO PARA VISITA -->
+    <div class="diag-card info">
+      <div class="diag-title">
+        <span style="font-size:24px">📊</span>
+        Resumo Rápido para Visita
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:16px; margin-top:16px">
+        <div style="text-align:center; padding:16px; background:#f8fafc; border-radius:8px">
+          <div style="font-size:11px; color:#6b7280; margin-bottom:4px">Receita</div>
+          <div style="font-size:18px; font-weight:700">${toBRL(latest.receita)}</div>
+          ${previo ? `<div style="font-size:11px; color:${latest.receita >= previo.receita ? '#10b981' : '#ef4444'}">${latest.receita >= previo.receita ? '↑' : '↓'} vs ${previo.ano}</div>` : ''}
+        </div>
+        <div style="text-align:center; padding:16px; background:#f8fafc; border-radius:8px">
+          <div style="font-size:11px; color:#6b7280; margin-bottom:4px">Margem EBITDA</div>
+          <div style="font-size:18px; font-weight:700">${toPct(latest.margem)}</div>
+          ${previo ? `<div style="font-size:11px; color:${latest.margem >= previo.margem ? '#10b981' : '#ef4444'}">${latest.margem >= previo.margem ? '↑' : '↓'} vs ${previo.ano}</div>` : ''}
+        </div>
+        <div style="text-align:center; padding:16px; background:#f8fafc; border-radius:8px">
+          <div style="font-size:11px; color:#6b7280; margin-bottom:4px">DL/EBITDA</div>
+          <div style="font-size:18px; font-weight:700; color:${latest.alav > 3 ? '#ef4444' : latest.alav > 2 ? '#f59e0b' : '#10b981'}">${clamp2(latest.alav)}x</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:#f8fafc; border-radius:8px">
+          <div style="font-size:11px; color:#6b7280; margin-bottom:4px">Liquidez</div>
+          <div style="font-size:18px; font-weight:700; color:${latest.liq < 1 ? '#ef4444' : latest.liq < 1.2 ? '#f59e0b' : '#10b981'}">${clamp2(latest.liq)}</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:20px; padding:16px; background:linear-gradient(135deg, #0a3c7d, #1e40af); color:#fff; border-radius:8px">
+        <div style="font-size:14px; font-weight:700; margin-bottom:8px">🎯 Foco Principal da Visita:</div>
+        <div style="font-size:13px; line-height:1.6">
+          ${latest.alav > 2.5 ? '• Entender o endividamento e plano de desalavancagem<br>' : ''}
+          ${latest.liq < 1.2 ? '• Verificar situação de caixa e necessidade de capital de giro<br>' : ''}
+          ${previo && latest.margem < previo.margem ? '• Investigar queda na margem operacional<br>' : ''}
+          ${previo && latest.receita < previo.receita ? '• Entender motivos da queda de receita<br>' : ''}
+          ${score < 65 ? '• Avaliar riscos e garantias necessárias<br>' : ''}
+          ${score >= 80 ? '• Identificar oportunidades de novos negócios<br>' : ''}
+          • Validar informações qualitativas (clientes, fornecedores, mercado)
+        </div>
+      </div>
+    </div>
+    
+    <!-- BOTÕES DE AÇÃO -->
+    <div style="margin-top:20px; display:flex; gap:12px; flex-wrap:wrap">
+      <button class="btn btn-outline" onclick="window.print()">
+        🖨️ Imprimir Roteiro
+      </button>
+      <button class="btn btn-primary" onclick="copiarRoteiroTexto()">
+        📋 Copiar como Texto
+      </button>
+    </div>
   `;
   
   container.innerHTML = html;
 }
 
-// ================== ABA 5: CONTEXTO QUALITATIVO ==================
+// Função para copiar roteiro como texto
+function copiarRoteiroTexto(){
+  const data = CURRENT_ANALYSIS_DATA;
+  if(!data) return;
+  
+  const latest = data.rows[0];
+  const texto = `
+ROTEIRO DE VISITA - ${data.empresaNome}
+Data: ${new Date().toLocaleDateString('pt-BR')}
+
+INDICADORES PRINCIPAIS:
+- Receita: ${toBRL(latest.receita)}
+- Margem EBITDA: ${toPct(latest.margem)}
+- DL/EBITDA: ${clamp2(latest.alav)}x
+- Liquidez: ${clamp2(latest.liq)}
+- Score: ${calcularScore(latest)}
+
+PERGUNTAS PARA FAZER:
+□ Quem são os 3 maiores clientes e % do faturamento?
+□ Há contratos formais com principais clientes?
+□ Quem são os principais fornecedores?
+□ Como está o fluxo de caixa atual?
+□ Qual a perspectiva para os próximos 12 meses?
+
+DOCUMENTOS A SOLICITAR:
+□ Balancete atualizado
+□ Faturamento mensal últimos 6 meses
+□ Posição de endividamento bancário
+□ Certidões negativas
+□ Aging de contas a receber
+
+OBSERVAÇÕES:
+_______________________________
+_______________________________
+_______________________________
+  `.trim();
+  
+  navigator.clipboard.writeText(texto);
+  alert('Roteiro copiado para a área de transferência!');
+}
+window.copiarRoteiroTexto = copiarRoteiroTexto;
+
+// ================== ABA 6: CONTEXTO QUALITATIVO ==================
 async function renderContexto(data){
   if(!data || !data.rows || !data.rows.length) return;
   
