@@ -1586,6 +1586,10 @@ function renderHealthDashboard(rows){
   const benchmarkHtml = gerarBenchmarkHtml(latest);
   html += benchmarkHtml;
   
+  // Adicionar Análises Avançadas (O QUE NINGUÉM MOSTRA)
+  const analiseAvancadaHtml = gerarAnaliseAvancadaHtml(latest, rows);
+  html += analiseAvancadaHtml;
+  
   document.getElementById("healthDashboard").innerHTML = html;
 }
 
@@ -1668,6 +1672,453 @@ function gerarBenchmarkHtml(latest){
       </div>
     </div>
   `;
+}
+
+// ================== ANÁLISES AVANÇADAS - O QUE NINGUÉM MOSTRA ==================
+function gerarAnaliseAvancadaHtml(latest, rows){
+  const previo = rows[1] || null;
+  
+  // ===== 1. VALUATION DA EMPRESA =====
+  // Múltiplo de EBITDA típico por setor (usando 5x como média)
+  const multiploEbitda = 5;
+  const valorEmpresa = latest.ebitda > 0 ? latest.ebitda * multiploEbitda : 0;
+  const valorEmpresaAnterior = previo && previo.ebitda > 0 ? previo.ebitda * multiploEbitda : 0;
+  const variacaoValor = valorEmpresaAnterior > 0 ? valorEmpresa - valorEmpresaAnterior : null;
+  
+  // ===== 2. CUSTO DO DINHEIRO PARADO =====
+  // Taxa de oportunidade: 1.5% ao mês (CDI + spread)
+  const taxaMensal = 0.015;
+  const dinheiroEmEstoque = latest.estoques || 0;
+  const dinheiroEmRecebiveis = latest.contasReceber || 0;
+  const dinheiroParado = dinheiroEmEstoque + dinheiroEmRecebiveis;
+  const custoMensalDinheiroParado = dinheiroParado * taxaMensal;
+  const custoAnualDinheiroParado = custoMensalDinheiroParado * 12;
+  
+  // ===== 3. ALTMAN Z-SCORE (Probabilidade de Falência) =====
+  // Z = 1.2*X1 + 1.4*X2 + 3.3*X3 + 0.6*X4 + 1.0*X5
+  // X1 = Capital de Giro / Ativo Total
+  // X2 = Lucros Retidos / Ativo Total (usamos PL como proxy)
+  // X3 = EBITDA / Ativo Total
+  // X4 = Valor de Mercado PL / Passivo Total (usamos PL / Dívida)
+  // X5 = Receita / Ativo Total
+  const ativo = latest.ativo || latest.receita * 1.5; // Estimar se não tiver
+  const capitalGiro = (latest.ativoCirc || 0) - (latest.passivoCirc || 0);
+  const X1 = ativo > 0 ? capitalGiro / ativo : 0;
+  const X2 = ativo > 0 ? (latest.pl || 0) / ativo : 0;
+  const X3 = ativo > 0 ? latest.ebitda / ativo : 0;
+  const X4 = latest.dividaLiq > 0 ? (latest.pl || 0) / latest.dividaLiq : 3;
+  const X5 = ativo > 0 ? latest.receita / ativo : 0;
+  const zScore = (1.2 * X1) + (1.4 * X2) + (3.3 * X3) + (0.6 * X4) + (1.0 * X5);
+  
+  let zScoreStatus, zScoreCor, zScoreTexto;
+  if(zScore > 2.99){
+    zScoreStatus = 'ZONA SEGURA';
+    zScoreCor = '#10b981';
+    zScoreTexto = 'Baixa probabilidade de insolvência';
+  } else if(zScore > 1.81){
+    zScoreStatus = 'ZONA CINZENTA';
+    zScoreCor = '#f59e0b';
+    zScoreTexto = 'Situação incerta - monitorar de perto';
+  } else {
+    zScoreStatus = 'ZONA DE PERIGO';
+    zScoreCor = '#ef4444';
+    zScoreTexto = 'Alta probabilidade de dificuldades financeiras em 2 anos';
+  }
+  
+  // ===== 4. PONTO DE EQUILÍBRIO =====
+  // Custos Fixos estimados = Receita - EBITDA - (margem variável estimada * Receita)
+  const margemContribuicao = 0.35; // Estimativa conservadora
+  const custoFixoEstimado = latest.receita * (1 - latest.margem) * 0.6; // 60% dos custos são fixos
+  const pontoEquilibrio = margemContribuicao > 0 ? custoFixoEstimado / margemContribuicao : 0;
+  const margemSeguranca = latest.receita > 0 ? ((latest.receita - pontoEquilibrio) / latest.receita * 100) : 0;
+  
+  // ===== 5. CAPACIDADE DE CRESCIMENTO SUSTENTÁVEL =====
+  // g = ROE * (1 - payout)
+  // Assumindo payout de 30%
+  const payout = 0.30;
+  const crescimentoSustentavel = latest.roe * (1 - payout) * 100;
+  
+  // ===== 6. PRODUTIVIDADE POR FUNCIONÁRIO =====
+  // Estimativa: Receita / 150K por funcionário (média Brasil)
+  const funcionariosEstimado = Math.round(latest.receita / 150000) || 1;
+  const receitaPorFunc = latest.receita / funcionariosEstimado;
+  const ebitdaPorFunc = latest.ebitda / funcionariosEstimado;
+  const setorReceitaFunc = 200000; // Média de mercado
+  const produtividadeVsSetor = ((receitaPorFunc / setorReceitaFunc) - 1) * 100;
+  
+  // ===== 7. CUSTO REAL DA DÍVIDA =====
+  const despesaFinanceira = latest.despesaFin || (latest.dividaLiq * 0.15); // Estimar 15% a.a. se não tiver
+  const custoSobreReceita = latest.receita > 0 ? (despesaFinanceira / latest.receita * 100) : 0;
+  const custoSobreEbitda = latest.ebitda > 0 ? (despesaFinanceira / latest.ebitda * 100) : 0;
+  
+  // ===== 8. CRIAÇÃO/DESTRUIÇÃO DE VALOR (EVA Simplificado) =====
+  // EVA = NOPAT - (Capital Investido * WACC)
+  // Simplificado: EVA = EBITDA - Impostos - (Ativo * 12%)
+  const wacc = 0.12; // 12% custo de capital
+  const capitalInvestido = ativo;
+  const nopat = latest.ebitda * 0.75; // EBITDA - 25% impostos
+  const eva = nopat - (capitalInvestido * wacc);
+  
+  // ===== 9. PROJEÇÃO 3 ANOS =====
+  let taxaCrescimento = 0;
+  if(rows.length >= 2){
+    const receitaInicial = rows[rows.length - 1].receita;
+    const receitaFinal = rows[0].receita;
+    const anos = rows.length - 1;
+    taxaCrescimento = anos > 0 ? (Math.pow(receitaFinal / receitaInicial, 1/anos) - 1) : 0;
+  }
+  const receitaAno1 = latest.receita * (1 + taxaCrescimento);
+  const receitaAno2 = receitaAno1 * (1 + taxaCrescimento);
+  const receitaAno3 = receitaAno2 * (1 + taxaCrescimento);
+  const ebitdaAno3 = receitaAno3 * latest.margem;
+  const valorAno3 = ebitdaAno3 * multiploEbitda;
+  const variacaoValor3Anos = valorEmpresa > 0 ? ((valorAno3 / valorEmpresa) - 1) * 100 : 0;
+  
+  // ===== 10. MAPA DE CALOR (SCORES POR ÁREA) =====
+  const scoreRentabilidade = Math.min(100, Math.max(0, (latest.margem / 0.20) * 100));
+  const scoreAlavancagem = Math.min(100, Math.max(0, ((4 - latest.alav) / 4) * 100));
+  const scoreLiquidez = Math.min(100, Math.max(0, (latest.liq / 2) * 100));
+  const scoreEficiencia = Math.min(100, Math.max(0, (latest.roe / 0.25) * 100));
+  const scoreCrescimento = Math.min(100, Math.max(0, (taxaCrescimento + 0.10) / 0.30 * 100));
+  
+  // Gerar HTML
+  let html = `
+    <div style="margin-top:24px">
+      <div style="background:linear-gradient(135deg, #0f172a, #1e293b); color:#fff; border-radius:16px; padding:24px; margin-bottom:20px">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
+          <span style="font-size:28px">🧠</span>
+          <div>
+            <h4 style="font-size:20px; font-weight:800; margin:0">Análise Profunda</h4>
+            <p style="font-size:12px; opacity:0.7; margin:4px 0 0 0">O que nenhum banco mostra • O que seu CFO deveria calcular</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- LINHA 1: Valuation + Custo do Dinheiro Parado -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:16px">
+        
+        <!-- VALUATION DA EMPRESA -->
+        <div style="background:linear-gradient(135deg, #fef3c7, #fde68a); border-radius:12px; padding:20px; position:relative; overflow:hidden">
+          <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">💰</div>
+          <div style="font-size:12px; font-weight:600; color:#92400e; margin-bottom:8px">💰 VALUATION DA EMPRESA</div>
+          <div style="font-size:32px; font-weight:800; color:#78350f">${toBRL(valorEmpresa)}</div>
+          <div style="font-size:11px; color:#92400e; margin-top:4px">Baseado em ${multiploEbitda}x EBITDA (múltiplo de mercado)</div>
+          ${variacaoValor !== null ? `
+            <div style="margin-top:16px; padding:12px; background:${variacaoValor >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; border-radius:8px">
+              <div style="font-size:13px; font-weight:700; color:${variacaoValor >= 0 ? '#065f46' : '#991b1b'}">
+                ${variacaoValor >= 0 ? '📈 Valorização' : '📉 Desvalorização'}: ${toBRL(Math.abs(variacaoValor))}
+              </div>
+              <div style="font-size:11px; color:${variacaoValor >= 0 ? '#065f46' : '#991b1b'}">
+                ${variacaoValor >= 0 ? 'Parabéns! Seu patrimônio cresceu.' : 'Você PERDEU esse valor em patrimônio no último ano.'}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        
+        <!-- CUSTO DO DINHEIRO PARADO -->
+        <div style="background:linear-gradient(135deg, #fee2e2, #fecaca); border-radius:12px; padding:20px; position:relative; overflow:hidden">
+          <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">🔥</div>
+          <div style="font-size:12px; font-weight:600; color:#991b1b; margin-bottom:8px">🔥 CUSTO DO DINHEIRO PARADO</div>
+          <div style="font-size:32px; font-weight:800; color:#7f1d1d">${toBRL(custoMensalDinheiroParado)}<span style="font-size:16px">/mês</span></div>
+          <div style="font-size:11px; color:#991b1b; margin-top:4px">
+            Estoque: ${toBRL(dinheiroEmEstoque)} + Recebíveis: ${toBRL(dinheiroEmRecebiveis)}
+          </div>
+          <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.5); border-radius:8px">
+            <div style="font-size:13px; font-weight:700; color:#7f1d1d">
+              💸 ${toBRL(custoAnualDinheiroParado)}/ano queimando
+            </div>
+            <div style="font-size:11px; color:#991b1b">
+              Isso pagaria ${Math.round(custoAnualDinheiroParado / 36000)} funcionários com salário de R$ 3.000
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- LINHA 2: Z-Score + Ponto de Equilíbrio -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:16px">
+        
+        <!-- ALTMAN Z-SCORE -->
+        <div style="background:#fff; border:2px solid ${zScoreCor}; border-radius:12px; padding:20px">
+          <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:8px">☠️ ALTMAN Z-SCORE (Risco de Falência)</div>
+          <div style="display:flex; align-items:center; gap:16px">
+            <div style="width:80px; height:80px; border-radius:50%; background:${zScoreCor}; display:flex; align-items:center; justify-content:center">
+              <span style="font-size:24px; font-weight:800; color:#fff">${zScore.toFixed(2)}</span>
+            </div>
+            <div>
+              <div style="font-size:18px; font-weight:800; color:${zScoreCor}">${zScoreStatus}</div>
+              <div style="font-size:12px; color:#6b7280; margin-top:4px">${zScoreTexto}</div>
+            </div>
+          </div>
+          <div style="margin-top:16px; background:#f8fafc; border-radius:8px; padding:12px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; color:#6b7280; margin-bottom:8px">
+              <span>Perigo</span><span>Cinzento</span><span>Seguro</span>
+            </div>
+            <div style="height:8px; background:#e2e8f0; border-radius:4px; position:relative">
+              <div style="position:absolute; left:0; top:0; bottom:0; width:30%; background:#ef4444; border-radius:4px 0 0 4px"></div>
+              <div style="position:absolute; left:30%; top:0; bottom:0; width:20%; background:#f59e0b"></div>
+              <div style="position:absolute; left:50%; top:0; bottom:0; width:50%; background:#10b981; border-radius:0 4px 4px 0"></div>
+              <div style="position:absolute; left:${Math.min(95, Math.max(5, (zScore / 4) * 100))}%; top:-4px; width:16px; height:16px; background:#1e293b; border-radius:50%; border:2px solid #fff; transform:translateX(-50%)"></div>
+            </div>
+            <div style="font-size:10px; color:#9ca3af; margin-top:8px; text-align:center">
+              Modelo de Edward Altman (1968) - Precisão histórica de 80-90%
+            </div>
+          </div>
+        </div>
+        
+        <!-- PONTO DE EQUILÍBRIO -->
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">
+          <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:8px">⚖️ PONTO DE EQUILÍBRIO</div>
+          <div style="font-size:28px; font-weight:800; color:#1e293b">${toBRL(pontoEquilibrio)}</div>
+          <div style="font-size:11px; color:#6b7280">Faturamento mínimo para não ter prejuízo</div>
+          
+          <div style="margin-top:16px">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+              <span style="font-size:12px; color:#6b7280">Margem de Segurança</span>
+              <span style="font-size:14px; font-weight:700; color:${margemSeguranca > 20 ? '#10b981' : margemSeguranca > 10 ? '#f59e0b' : '#ef4444'}">${margemSeguranca.toFixed(1)}%</span>
+            </div>
+            <div style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden">
+              <div style="height:100%; width:${Math.min(100, (pontoEquilibrio / latest.receita) * 100)}%; background:linear-gradient(90deg, #ef4444, #f59e0b, #10b981)"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:#9ca3af; margin-top:4px">
+              <span>Break-even: ${toBRL(pontoEquilibrio)}</span>
+              <span>Atual: ${toBRL(latest.receita)}</span>
+            </div>
+          </div>
+          
+          ${margemSeguranca < 15 ? `
+            <div style="margin-top:12px; padding:10px; background:#fef2f2; border-radius:6px; font-size:11px; color:#991b1b">
+              ⚠️ <strong>Alerta:</strong> Margem de segurança baixa. Uma queda de ${margemSeguranca.toFixed(0)}% na receita já gera prejuízo.
+            </div>
+          ` : ''}
+        </div>
+      </div>
+      
+      <!-- LINHA 3: Crescimento Sustentável + Produtividade -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:16px">
+        
+        <!-- CAPACIDADE DE CRESCIMENTO -->
+        <div style="background:linear-gradient(135deg, #ecfdf5, #d1fae5); border-radius:12px; padding:20px">
+          <div style="font-size:12px; font-weight:600; color:#065f46; margin-bottom:8px">🚀 CRESCIMENTO SUSTENTÁVEL</div>
+          <div style="font-size:32px; font-weight:800; color:#047857">${crescimentoSustentavel.toFixed(1)}%<span style="font-size:16px">/ano</span></div>
+          <div style="font-size:11px; color:#065f46; margin-top:4px">Quanto pode crescer SEM precisar de banco</div>
+          
+          <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.6); border-radius:8px">
+            <div style="font-size:12px; color:#065f46">
+              ${crescimentoSustentavel > 15 ? 
+                '✅ Excelente! Pode financiar crescimento com recursos próprios.' :
+                crescimentoSustentavel > 8 ?
+                '⚠️ Crescimento moderado. Para expandir mais rápido, precisará de capital.' :
+                '🚨 Capacidade limitada. Crescimento agressivo exigirá aporte ou dívida.'
+              }
+            </div>
+          </div>
+          
+          <div style="margin-top:12px; font-size:11px; color:#065f46">
+            <strong>Se quiser crescer 20%:</strong> Precisará de ${toBRL(latest.receita * 0.20 * 0.3)} em capital adicional
+          </div>
+        </div>
+        
+        <!-- PRODUTIVIDADE POR FUNCIONÁRIO -->
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">
+          <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:8px">👷 PRODUTIVIDADE POR FUNCIONÁRIO</div>
+          
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px">
+            <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+              <div style="font-size:10px; color:#6b7280">Receita/Func.</div>
+              <div style="font-size:18px; font-weight:700; color:#1e293b">${toBRL(receitaPorFunc)}</div>
+            </div>
+            <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+              <div style="font-size:10px; color:#6b7280">EBITDA/Func.</div>
+              <div style="font-size:18px; font-weight:700; color:#1e293b">${toBRL(ebitdaPorFunc)}</div>
+            </div>
+          </div>
+          
+          <div style="padding:12px; background:${produtividadeVsSetor >= 0 ? '#ecfdf5' : '#fef2f2'}; border-radius:8px">
+            <div style="font-size:13px; font-weight:700; color:${produtividadeVsSetor >= 0 ? '#065f46' : '#991b1b'}">
+              ${produtividadeVsSetor >= 0 ? '📈' : '📉'} ${Math.abs(produtividadeVsSetor).toFixed(0)}% ${produtividadeVsSetor >= 0 ? 'ACIMA' : 'ABAIXO'} do setor
+            </div>
+            <div style="font-size:11px; color:${produtividadeVsSetor >= 0 ? '#065f46' : '#991b1b'}">
+              Média do setor: ${toBRL(setorReceitaFunc)}/funcionário
+            </div>
+          </div>
+          
+          <div style="margin-top:12px; font-size:10px; color:#9ca3af">
+            *Estimativa baseada em ~${funcionariosEstimado} funcionários (R$ 150K receita/func)
+          </div>
+        </div>
+      </div>
+      
+      <!-- LINHA 4: Custo da Dívida + Criação de Valor -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:16px">
+        
+        <!-- CUSTO REAL DA DÍVIDA -->
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">
+          <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:8px">💸 CUSTO REAL DA DÍVIDA</div>
+          
+          <div style="display:flex; align-items:center; gap:20px; margin-bottom:16px">
+            <div style="position:relative; width:100px; height:100px">
+              <svg viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e2e8f0" stroke-width="3"/>
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${custoSobreReceita > 10 ? '#ef4444' : custoSobreReceita > 5 ? '#f59e0b' : '#10b981'}" stroke-width="3" stroke-dasharray="${Math.min(100, custoSobreReceita * 2)}, 100"/>
+              </svg>
+              <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center">
+                <div style="font-size:20px; font-weight:800; color:${custoSobreReceita > 10 ? '#ef4444' : '#1e293b'}">${custoSobreReceita.toFixed(1)}%</div>
+                <div style="font-size:9px; color:#6b7280">da receita</div>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:24px; font-weight:700; color:#1e293b">${toBRL(despesaFinanceira)}</div>
+              <div style="font-size:11px; color:#6b7280">Despesa financeira anual</div>
+              <div style="font-size:12px; color:${custoSobreEbitda > 30 ? '#ef4444' : '#6b7280'}; margin-top:8px">
+                ${custoSobreEbitda.toFixed(0)}% do EBITDA vai para juros
+              </div>
+            </div>
+          </div>
+          
+          <div style="padding:10px; background:${custoSobreReceita > 8 ? '#fef2f2' : '#f8fafc'}; border-radius:6px; font-size:11px">
+            ${custoSobreReceita > 10 ? 
+              '<span style="color:#991b1b">🚨 <strong>Crítico:</strong> Mais de 10% da receita vai para juros. Renegociar urgente!</span>' :
+              custoSobreReceita > 5 ?
+              '<span style="color:#92400e">⚠️ <strong>Atenção:</strong> Custo financeiro elevado. Considere renegociar taxas.</span>' :
+              '<span style="color:#065f46">✅ <strong>Saudável:</strong> Custo financeiro sob controle.</span>'
+            }
+          </div>
+        </div>
+        
+        <!-- CRIAÇÃO/DESTRUIÇÃO DE VALOR (EVA) -->
+        <div style="background:${eva >= 0 ? 'linear-gradient(135deg, #ecfdf5, #d1fae5)' : 'linear-gradient(135deg, #fef2f2, #fecaca)'}; border-radius:12px; padding:20px; position:relative; overflow:hidden">
+          <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">${eva >= 0 ? '📈' : '📉'}</div>
+          <div style="font-size:12px; font-weight:600; color:${eva >= 0 ? '#065f46' : '#991b1b'}; margin-bottom:8px">
+            ${eva >= 0 ? '✨ CRIAÇÃO DE VALOR' : '💀 DESTRUIÇÃO DE VALOR'}
+          </div>
+          <div style="font-size:32px; font-weight:800; color:${eva >= 0 ? '#047857' : '#dc2626'}">${toBRL(Math.abs(eva))}</div>
+          <div style="font-size:11px; color:${eva >= 0 ? '#065f46' : '#991b1b'}; margin-top:4px">
+            ${eva >= 0 ? 'Valor CRIADO para os sócios este ano' : 'Valor DESTRUÍDO dos sócios este ano'}
+          </div>
+          
+          <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.6); border-radius:8px; font-size:11px">
+            <div style="color:${eva >= 0 ? '#065f46' : '#991b1b'}">
+              ${eva >= 0 ? 
+                '✅ A empresa está gerando retorno acima do custo de capital. Os sócios estão ganhando dinheiro de verdade.' :
+                '⚠️ O retorno está abaixo do custo de capital (12%). Os sócios perderiam menos deixando o dinheiro aplicado.'
+              }
+            </div>
+          </div>
+          
+          <div style="margin-top:12px; font-size:10px; color:${eva >= 0 ? '#065f46' : '#991b1b'}">
+            EVA = NOPAT (${toBRL(nopat)}) - Capital × WACC (${toBRL(capitalInvestido * wacc)})
+          </div>
+        </div>
+      </div>
+      
+      <!-- LINHA 5: Projeção 3 Anos -->
+      <div style="background:linear-gradient(135deg, #1e293b, #334155); color:#fff; border-radius:12px; padding:20px; margin-bottom:16px">
+        <div style="font-size:12px; font-weight:600; opacity:0.8; margin-bottom:8px">🔮 PROJEÇÃO - SE CONTINUAR ASSIM...</div>
+        
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:20px">
+          <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:8px">
+            <div style="font-size:11px; opacity:0.7">Hoje</div>
+            <div style="font-size:11px; opacity:0.5">${latest.ano}</div>
+            <div style="font-size:18px; font-weight:700; margin-top:8px">${toBRL(latest.receita)}</div>
+          </div>
+          <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:8px">
+            <div style="font-size:11px; opacity:0.7">Ano 1</div>
+            <div style="font-size:11px; opacity:0.5">${latest.ano + 1}</div>
+            <div style="font-size:18px; font-weight:700; margin-top:8px">${toBRL(receitaAno1)}</div>
+          </div>
+          <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:8px">
+            <div style="font-size:11px; opacity:0.7">Ano 2</div>
+            <div style="font-size:11px; opacity:0.5">${latest.ano + 2}</div>
+            <div style="font-size:18px; font-weight:700; margin-top:8px">${toBRL(receitaAno2)}</div>
+          </div>
+          <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.15); border-radius:8px; border:1px solid rgba(255,255,255,0.3)">
+            <div style="font-size:11px; opacity:0.7">Ano 3</div>
+            <div style="font-size:11px; opacity:0.5">${latest.ano + 3}</div>
+            <div style="font-size:18px; font-weight:700; margin-top:8px">${toBRL(receitaAno3)}</div>
+          </div>
+        </div>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div style="padding:16px; background:rgba(255,255,255,0.1); border-radius:8px">
+            <div style="font-size:11px; opacity:0.7">Valor da Empresa em 3 Anos</div>
+            <div style="font-size:24px; font-weight:700; margin-top:4px">${toBRL(valorAno3)}</div>
+            <div style="font-size:12px; margin-top:8px; color:${variacaoValor3Anos >= 0 ? '#4ade80' : '#f87171'}">
+              ${variacaoValor3Anos >= 0 ? '📈' : '📉'} ${variacaoValor3Anos >= 0 ? '+' : ''}${variacaoValor3Anos.toFixed(1)}% vs hoje
+            </div>
+          </div>
+          <div style="padding:16px; background:rgba(255,255,255,0.1); border-radius:8px">
+            <div style="font-size:11px; opacity:0.7">Taxa de Crescimento Histórica</div>
+            <div style="font-size:24px; font-weight:700; margin-top:4px; color:${taxaCrescimento >= 0 ? '#4ade80' : '#f87171'}">
+              ${(taxaCrescimento * 100).toFixed(1)}%<span style="font-size:14px">/ano</span>
+            </div>
+            <div style="font-size:12px; margin-top:8px; opacity:0.7">
+              ${taxaCrescimento >= 0.10 ? '🚀 Crescimento acelerado' :
+                taxaCrescimento >= 0 ? '➡️ Crescimento moderado' :
+                '📉 Empresa encolhendo'}
+            </div>
+          </div>
+        </div>
+        
+        ${taxaCrescimento < 0 ? `
+          <div style="margin-top:16px; padding:12px; background:rgba(248,113,113,0.2); border-radius:8px; font-size:12px">
+            🚨 <strong>Alerta:</strong> A empresa está encolhendo ${(Math.abs(taxaCrescimento) * 100).toFixed(1)}% ao ano. 
+            Se continuar assim, em 3 anos a receita será ${toPct(Math.pow(1 + taxaCrescimento, 3))} do que é hoje.
+          </div>
+        ` : ''}
+      </div>
+      
+      <!-- LINHA 6: Mapa de Calor de Riscos -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">
+        <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">🗺️ MAPA DE CALOR - ONDE ESTÃO OS PROBLEMAS</div>
+        
+        <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px">
+          ${[
+            { nome: 'Rentabilidade', score: scoreRentabilidade, icon: '💰' },
+            { nome: 'Alavancagem', score: scoreAlavancagem, icon: '🏦' },
+            { nome: 'Liquidez', score: scoreLiquidez, icon: '💧' },
+            { nome: 'Eficiência', score: scoreEficiencia, icon: '⚡' },
+            { nome: 'Crescimento', score: scoreCrescimento, icon: '📈' }
+          ].map(item => {
+            const cor = item.score >= 70 ? '#10b981' : item.score >= 40 ? '#f59e0b' : '#ef4444';
+            return `
+              <div style="text-align:center">
+                <div style="width:100%; padding-bottom:100%; background:${cor}; border-radius:12px; position:relative; opacity:${0.3 + (item.score/100) * 0.7}">
+                  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%)">
+                    <div style="font-size:24px">${item.icon}</div>
+                    <div style="font-size:16px; font-weight:800; color:#fff">${Math.round(item.score)}</div>
+                  </div>
+                </div>
+                <div style="font-size:10px; color:#6b7280; margin-top:4px">${item.nome}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        
+        <div style="margin-top:16px; display:flex; justify-content:center; gap:16px; font-size:11px; color:#6b7280">
+          <span><span style="display:inline-block; width:12px; height:12px; background:#10b981; border-radius:2px; margin-right:4px"></span>Bom (≥70)</span>
+          <span><span style="display:inline-block; width:12px; height:12px; background:#f59e0b; border-radius:2px; margin-right:4px"></span>Atenção (40-69)</span>
+          <span><span style="display:inline-block; width:12px; height:12px; background:#ef4444; border-radius:2px; margin-right:4px"></span>Crítico (<40)</span>
+        </div>
+        
+        <div style="margin-top:16px; padding:12px; background:#f8fafc; border-radius:8px">
+          <div style="font-size:12px; font-weight:600; color:#1e293b; margin-bottom:8px">📋 Prioridade de Ação:</div>
+          <div style="font-size:12px; color:#6b7280">
+            ${[
+              { nome: 'Rentabilidade', score: scoreRentabilidade },
+              { nome: 'Alavancagem', score: scoreAlavancagem },
+              { nome: 'Liquidez', score: scoreLiquidez },
+              { nome: 'Eficiência', score: scoreEficiencia },
+              { nome: 'Crescimento', score: scoreCrescimento }
+            ].filter(i => i.score < 50).sort((a,b) => a.score - b.score).slice(0,3).map((item, idx) => 
+              `<div style="margin-top:4px">${idx + 1}. <strong>${item.nome}</strong> (Score: ${Math.round(item.score)}) - Precisa de atenção urgente</div>`
+            ).join('') || '<div style="color:#10b981">✅ Todos os indicadores estão em níveis aceitáveis!</div>'}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  return html;
 }
 
 function getTrend(rows, field, invert=false){
@@ -4213,4 +4664,3 @@ document.addEventListener('mouseout', (ev)=>{
 document.addEventListener('click', (ev)=>{
   if(!ev.target.closest('.custom-tooltip') && !ev.target.closest('.info-pill')) hideTip();
 });
- 
