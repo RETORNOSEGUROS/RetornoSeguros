@@ -1476,7 +1476,7 @@ function renderHealthDashboard(rows){
   const varEbitda = previo ? ((latest.ebitda - previo.ebitda) / previo.ebitda * 100) : null;
   const varMargem = previo ? ((latest.margem - previo.margem) * 100) : null;
 
-  const html = `
+  let html = `
     <div style="background:linear-gradient(135deg, #f8fafc, #e0f2fe); border:1px solid #bae6fd; border-radius:12px; padding:24px; margin-bottom:24px">
       <h4 style="font-size:18px; font-weight:700; margin-bottom:20px; color:#0c4a6e">
         🎯 Dashboard de Saúde Financeira - ${latest.ano}
