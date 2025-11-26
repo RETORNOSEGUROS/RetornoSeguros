@@ -4290,6 +4290,33 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
   // Ordenar por prioridade
   recomendacoes.sort((a, b) => a.prioridade - b.prioridade);
   
+  // Calcular limite seguro do banco
+  const limiteSeguro = Math.min(disponivelBase * 2.5, ebitda * 3, pl * 0.8);
+  const limiteBanco = Math.max(0, limiteSeguro);
+  
+  // ===== ALOCAÇÃO INTELIGENTE POR PRIORIDADE =====
+  // Em vez de dividir proporcionalmente, aloca primeiro nas prioridades mais altas
+  let saldoDisponivel = limiteBanco;
+  
+  recomendacoes.forEach(r => {
+    r.valorNecessario = r.valor; // Necessidade total identificada
+    
+    if(saldoDisponivel > 0){
+      // Aloca o que couber nessa operação
+      r.valorBanco = Math.min(r.valor, saldoDisponivel);
+      saldoDisponivel -= r.valorBanco;
+      
+      // Calcular % do necessário que foi atendido
+      r.pctAtendido = r.valor > 0 ? (r.valorBanco / r.valor * 100) : 0;
+    } else {
+      r.valorBanco = 0;
+      r.pctAtendido = 0;
+    }
+    
+    // Gap não atendido
+    r.valorGap = r.valor - r.valorBanco;
+  });
+  
   // Agrupar por categoria
   const categorias = {};
   recomendacoes.forEach(r => {
@@ -4297,9 +4324,15 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
     categorias[r.categoria].push(r);
   });
   
-  // Calcular valor total recomendado (limitado pela capacidade)
-  const limiteSeguro = Math.min(disponivelBase * 2.5, ebitda * 3, pl * 0.8);
-  const valorRecomendado = Math.min(valorTotal, limiteSeguro);
+  // Calcular totais
+  const totalNecessario = recomendacoes.reduce((s, r) => s + r.valorNecessario, 0);
+  const totalBanco = recomendacoes.reduce((s, r) => s + r.valorBanco, 0);
+  const totalGap = totalNecessario - totalBanco;
+  const pctAtendidoGeral = totalNecessario > 0 ? (totalBanco / totalNecessario * 100) : 0;
+  
+  // Operações que receberam algo do banco
+  const operacoesBanco = recomendacoes.filter(r => r.valorBanco > 0);
+  const operacoesNaoAtendidas = recomendacoes.filter(r => r.valorBanco === 0);
   
   // ===== GERAR HTML =====
   let html = `
@@ -4322,123 +4355,218 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
       </div>
     </div>
     
-    <!-- Resumo da Recomendação -->
-    <div style="background:rgba(255,255,255,0.15); border-radius:12px; padding:20px; margin-bottom:20px">
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:16px">
-        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
-          <div style="font-size:12px; opacity:0.8">💰 Valor Total Recomendado</div>
-          <div style="font-size:26px; font-weight:800; margin-top:8px">${toBRL(valorRecomendado)}</div>
-        </div>
-        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
-          <div style="font-size:12px; opacity:0.8">📊 Operações Sugeridas</div>
-          <div style="font-size:26px; font-weight:800; margin-top:8px">${recomendacoes.length}</div>
-        </div>
-        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
-          <div style="font-size:12px; opacity:0.8">🏷️ Categorias</div>
-          <div style="font-size:26px; font-weight:800; margin-top:8px">${Object.keys(categorias).length}</div>
-        </div>
-        <div style="text-align:center; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
-          <div style="font-size:12px; opacity:0.8">⚡ Prioridade #1</div>
-          <div style="font-size:14px; font-weight:700; margin-top:8px">${recomendacoes[0]?.tipo || 'N/A'}</div>
-          <div style="font-size:12px; opacity:0.7">${toBRL(recomendacoes[0]?.valor || 0)}</div>
+    <!-- ========== VISÃO 1: NECESSIDADE TOTAL DA EMPRESA ========== -->
+    <div style="background:linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%); border-radius:12px; padding:20px; margin-bottom:20px">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px">
+        <span style="font-size:24px">🏢</span>
+        <div>
+          <div style="font-size:16px; font-weight:700">NECESSIDADE TOTAL DA EMPRESA</div>
+          <div style="font-size:11px; opacity:0.8">Para resolver TODOS os problemas identificados</div>
         </div>
       </div>
-    </div>
-    
-    <!-- Alocação Visual por Categoria -->
-    <div style="margin-bottom:20px">
-      <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📊 Alocação por Categoria</div>
-      <div style="display:grid; gap:8px">
+      
+      <div style="text-align:center; padding:20px; background:rgba(255,255,255,0.15); border-radius:10px; margin-bottom:16px">
+        <div style="font-size:12px; opacity:0.8">💰 Investimento Total Necessário</div>
+        <div style="font-size:32px; font-weight:800; margin-top:8px">${toBRL(totalNecessario)}</div>
+        <div style="font-size:11px; opacity:0.7; margin-top:4px">${recomendacoes.length} áreas de atuação identificadas</div>
+      </div>
+      
+      <!-- Breakdown por categoria -->
+      <div style="font-size:12px; font-weight:600; margin-bottom:10px; opacity:0.9">📊 Distribuição por Categoria:</div>
+      <div style="display:grid; gap:6px; margin-bottom:16px">
         ${Object.entries(categorias).map(([cat, items]) => {
-          const totalCat = items.reduce((s, i) => s + i.valor, 0);
-          const pctCat = valorRecomendado > 0 ? (totalCat / valorRecomendado * 100) : 0;
+          const totalCat = items.reduce((s, i) => s + i.valorNecessario, 0);
+          const pctCat = totalNecessario > 0 ? (totalCat / totalNecessario * 100) : 0;
           const corCat = items[0].cor;
           return `
-            <div style="display:flex; align-items:center; gap:12px">
-              <div style="width:120px; font-size:12px; font-weight:600">${cat}</div>
-              <div style="flex:1; height:24px; background:rgba(0,0,0,0.3); border-radius:4px; overflow:hidden">
+            <div style="display:flex; align-items:center; gap:10px">
+              <div style="width:100px; font-size:11px; font-weight:600">${cat}</div>
+              <div style="flex:1; height:20px; background:rgba(0,0,0,0.3); border-radius:4px; overflow:hidden">
                 <div style="height:100%; width:${Math.min(pctCat, 100)}%; background:${corCat}; display:flex; align-items:center; padding-left:8px">
-                  <span style="font-size:11px; font-weight:600">${toBRL(totalCat)}</span>
+                  <span style="font-size:10px; font-weight:600">${toBRL(totalCat)}</span>
                 </div>
               </div>
-              <div style="width:50px; text-align:right; font-size:11px; opacity:0.8">${pctCat.toFixed(0)}%</div>
+              <div style="width:40px; text-align:right; font-size:10px; opacity:0.8">${pctCat.toFixed(0)}%</div>
             </div>
           `;
         }).join('')}
       </div>
+      
+      <!-- Lista resumida de todas as necessidades -->
+      <div style="font-size:11px; opacity:0.9; padding:12px; background:rgba(0,0,0,0.2); border-radius:8px">
+        <div style="font-weight:600; margin-bottom:8px">📋 Detalhamento das Necessidades:</div>
+        <div style="display:grid; gap:4px">
+          ${recomendacoes.map(r => `
+            <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.1)">
+              <span>${r.icon} ${r.tipo}</span>
+              <span style="font-weight:600">${toBRL(r.valorNecessario)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      
+      <div style="margin-top:12px; padding:10px; background:rgba(255,255,255,0.1); border-radius:6px; font-size:11px">
+        💡 <strong>Fontes possíveis:</strong> Crédito bancário, Aporte dos sócios, Investidores, Venda de ativos, 
+        Renegociação com fornecedores, Incentivos fiscais, Linhas de fomento (BNDES, Finep)
+      </div>
     </div>
     
-    <!-- Detalhamento por Operação -->
-    <div style="font-size:13px; font-weight:600; margin-bottom:12px; opacity:0.9">📋 Detalhamento das ${recomendacoes.length} Operações Recomendadas</div>
-  `;
-  
-  // Cards de cada recomendação
-  recomendacoes.forEach((r, idx) => {
-    html += `
-      <div style="background:rgba(255,255,255,0.1); border-radius:10px; padding:16px; margin-bottom:12px; border-left:4px solid ${r.cor}">
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px">
-          <div style="width:48px; height:48px; background:${r.cor}; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:24px">
-            ${r.icon}
-          </div>
-          <div style="flex:1">
-            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
-              <span style="font-size:15px; font-weight:700">${r.tipo}</span>
-              <span style="font-size:10px; padding:2px 8px; background:rgba(255,255,255,0.2); border-radius:4px">P${r.prioridade}</span>
-              <span style="font-size:10px; padding:2px 8px; background:${r.cor}; border-radius:4px">${r.categoria}</span>
-            </div>
-            <div style="font-size:22px; font-weight:800; color:#fef08a">${toBRL(r.valor)}</div>
-          </div>
+    <!-- ========== VISÃO 2: RECOMENDAÇÃO DO BANCO ========== -->
+    <div style="background:linear-gradient(135deg, #059669 0%, #047857 100%); border-radius:12px; padding:20px; margin-bottom:20px">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px">
+        <span style="font-size:24px">🏦</span>
+        <div>
+          <div style="font-size:16px; font-weight:700">RECOMENDAÇÃO DO BANCO</div>
+          <div style="font-size:11px; opacity:0.8">Limite aprovável e alocação prioritária</div>
         </div>
-        
-        <div style="font-size:12px; opacity:0.9; margin-bottom:8px; padding:10px; background:rgba(0,0,0,0.2); border-radius:6px">
-          <strong>📌 Finalidade:</strong> ${r.finalidade}
+      </div>
+      
+      <!-- Cards de resumo -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; margin-bottom:16px">
+        <div style="text-align:center; padding:14px; background:rgba(255,255,255,0.15); border-radius:10px">
+          <div style="font-size:11px; opacity:0.8">💰 Limite Aprovável</div>
+          <div style="font-size:22px; font-weight:800; margin-top:6px">${toBRL(limiteBanco)}</div>
         </div>
-        
-        <div style="font-size:11px; opacity:0.8; margin-bottom:8px">
-          💡 <em>${r.motivo}</em>
+        <div style="text-align:center; padding:14px; background:rgba(255,255,255,0.15); border-radius:10px">
+          <div style="font-size:11px; opacity:0.8">📊 % da Necessidade</div>
+          <div style="font-size:22px; font-weight:800; margin-top:6px">${pctAtendidoGeral.toFixed(1)}%</div>
         </div>
-        
-        <div style="font-size:11px; opacity:0.9; margin-bottom:12px; padding:8px; background:rgba(16,185,129,0.2); border-radius:6px">
-          📈 <strong>Impacto Esperado:</strong> ${r.impacto}
+        <div style="text-align:center; padding:14px; background:rgba(255,255,255,0.15); border-radius:10px">
+          <div style="font-size:11px; opacity:0.8">✅ Operações Atendidas</div>
+          <div style="font-size:22px; font-weight:800; margin-top:6px">${operacoesBanco.length}/${recomendacoes.length}</div>
         </div>
-        
-        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:11px">
-          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
-            <div style="opacity:0.7">Produto</div>
-            <div style="font-weight:600; margin-top:2px">${r.produto}</div>
+        <div style="text-align:center; padding:14px; background:rgba(255,255,255,0.15); border-radius:10px">
+          <div style="font-size:11px; opacity:0.8">🔴 Gap Restante</div>
+          <div style="font-size:22px; font-weight:800; margin-top:6px">${toBRL(totalGap)}</div>
+        </div>
+      </div>
+      
+      <!-- Barra visual de cobertura -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px; margin-bottom:6px; opacity:0.8">Cobertura do Banco vs Necessidade Total:</div>
+        <div style="height:24px; background:rgba(0,0,0,0.3); border-radius:6px; overflow:hidden; position:relative">
+          <div style="height:100%; width:${Math.min(pctAtendidoGeral, 100)}%; background:linear-gradient(90deg, #10b981, #34d399); display:flex; align-items:center; justify-content:center">
+            <span style="font-size:11px; font-weight:700">${toBRL(totalBanco)} (${pctAtendidoGeral.toFixed(1)}%)</span>
           </div>
-          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
-            <div style="opacity:0.7">Prazo</div>
-            <div style="font-weight:600; margin-top:2px">${r.prazo}</div>
-          </div>
-          <div style="padding:8px; background:rgba(255,255,255,0.1); border-radius:6px; text-align:center">
-            <div style="opacity:0.7">Garantia</div>
-            <div style="font-weight:600; margin-top:2px">${r.garantia}</div>
+          <div style="position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:10px; opacity:0.7">
+            Gap: ${toBRL(totalGap)}
           </div>
         </div>
       </div>
-    `;
-  });
-  
-  // Resumo final
-  html += `
-    <div style="background:rgba(255,255,255,0.15); border-radius:10px; padding:16px; margin-top:16px">
+      
+      <!-- Alocação Prioritária -->
+      <div style="font-size:13px; font-weight:600; margin-bottom:12px">⚡ Alocação por Prioridade (Máximo Impacto):</div>
+      
+      ${operacoesBanco.length > 0 ? `
+        <div style="display:grid; gap:10px; margin-bottom:16px">
+          ${operacoesBanco.map((r, idx) => `
+            <div style="background:rgba(255,255,255,0.1); border-radius:8px; padding:14px; border-left:4px solid ${r.cor}">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px">
+                <div style="width:36px; height:36px; background:${r.cor}; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px">
+                  ${r.icon}
+                </div>
+                <div style="flex:1">
+                  <div style="display:flex; align-items:center; gap:6px">
+                    <span style="font-size:13px; font-weight:700">${r.tipo}</span>
+                    <span style="font-size:9px; padding:2px 6px; background:rgba(255,255,255,0.2); border-radius:4px">P${r.prioridade}</span>
+                    ${r.pctAtendido >= 100 ? '<span style="font-size:9px; padding:2px 6px; background:#10b981; border-radius:4px">✓ 100%</span>' : `<span style="font-size:9px; padding:2px 6px; background:#f59e0b; border-radius:4px">${r.pctAtendido.toFixed(0)}%</span>`}
+                  </div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-size:18px; font-weight:800; color:#fef08a">${toBRL(r.valorBanco)}</div>
+                  ${r.valorGap > 0 ? `<div style="font-size:9px; opacity:0.7">de ${toBRL(r.valorNecessario)}</div>` : ''}
+                </div>
+              </div>
+              
+              <div style="font-size:11px; opacity:0.9; margin-bottom:8px; padding:8px; background:rgba(0,0,0,0.2); border-radius:6px">
+                📌 ${r.finalidade}
+              </div>
+              
+              <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; font-size:10px">
+                <div style="padding:6px; background:rgba(255,255,255,0.1); border-radius:4px; text-align:center">
+                  <div style="opacity:0.7">Produto</div>
+                  <div style="font-weight:600">${r.produto.split('/')[0].trim()}</div>
+                </div>
+                <div style="padding:6px; background:rgba(255,255,255,0.1); border-radius:4px; text-align:center">
+                  <div style="opacity:0.7">Prazo</div>
+                  <div style="font-weight:600">${r.prazo}</div>
+                </div>
+                <div style="padding:6px; background:rgba(255,255,255,0.1); border-radius:4px; text-align:center">
+                  <div style="opacity:0.7">Garantia</div>
+                  <div style="font-weight:600">${r.garantia.split('+')[0].trim()}</div>
+                </div>
+              </div>
+              
+              ${r.impacto ? `
+                <div style="margin-top:8px; padding:6px 10px; background:rgba(16,185,129,0.2); border-radius:4px; font-size:10px">
+                  📈 <strong>Impacto:</strong> ${r.impacto}
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+      ` : `
+        <div style="padding:20px; background:rgba(0,0,0,0.2); border-radius:8px; text-align:center; font-size:12px; opacity:0.8">
+          ⚠️ Limite aprovável não cobre nenhuma operação completa
+        </div>
+      `}
+      
+      ${operacoesNaoAtendidas.length > 0 ? `
+        <!-- Operações não atendidas pelo banco -->
+        <div style="background:rgba(0,0,0,0.2); border-radius:8px; padding:12px; margin-bottom:16px">
+          <div style="font-size:11px; font-weight:600; margin-bottom:8px; color:#fca5a5">
+            ❌ Não cobertas pelo limite do banco (${operacoesNaoAtendidas.length} operações):
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px">
+            ${operacoesNaoAtendidas.map(r => `
+              <span style="font-size:10px; padding:4px 8px; background:rgba(220,38,38,0.3); border-radius:4px">
+                ${r.icon} ${r.tipo}: ${toBRL(r.valorNecessario)}
+              </span>
+            `).join('')}
+          </div>
+          <div style="font-size:10px; opacity:0.7; margin-top:8px">
+            💡 Buscar essas necessidades em: aporte de sócios, investidores, outras instituições, linhas de fomento
+          </div>
+        </div>
+      ` : ''}
+      
+      <!-- Alerta importante -->
+      ${pctAtendidoGeral < 50 ? `
+        <div style="padding:12px; background:rgba(251,191,36,0.2); border:1px solid rgba(251,191,36,0.5); border-radius:8px; margin-bottom:16px">
+          <div style="font-size:12px; font-weight:600; color:#fef08a; margin-bottom:4px">⚠️ Atenção: Cobertura Parcial</div>
+          <div style="font-size:11px; opacity:0.9">
+            O crédito bancário cobre apenas ${pctAtendidoGeral.toFixed(1)}% da necessidade total.
+            A empresa deve buscar os ${toBRL(totalGap)} restantes em outras fontes para solução completa.
+            ${operacoesBanco.length > 0 ? `Com este valor, priorizamos ${operacoesBanco[0].tipo} para máximo impacto imediato.` : ''}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+    
+    <!-- ========== RESUMO EXECUTIVO ========== -->
+    <div style="background:rgba(255,255,255,0.15); border-radius:10px; padding:16px">
       <div style="font-size:13px; font-weight:600; margin-bottom:12px">📝 Resumo Executivo para Proposta</div>
-      <div style="font-size:12px; line-height:1.6; opacity:0.9">
-        <p>Baseado na análise financeira completa, recomendamos operação total de <strong>${toBRL(valorRecomendado)}</strong>, 
-        distribuída em <strong>${recomendacoes.length} operações</strong> nas seguintes categorias:</p>
+      <div style="font-size:12px; line-height:1.7; opacity:0.9">
+        <p><strong>DIAGNÓSTICO:</strong> Identificamos ${recomendacoes.length} áreas de atuação que demandam 
+        investimento total de <strong>${toBRL(totalNecessario)}</strong>.</p>
         
-        <ul style="margin:12px 0; padding-left:20px">
-          ${Object.entries(categorias).map(([cat, items]) => {
-            const totalCat = items.reduce((s, i) => s + i.valor, 0);
-            return `<li><strong>${cat}:</strong> ${toBRL(totalCat)} (${items.map(i => i.tipo).join(', ')})</li>`;
-          }).join('')}
+        <p><strong>CAPACIDADE DO BANCO:</strong> Podemos aprovar até <strong>${toBRL(limiteBanco)}</strong>, 
+        o que cobre ${pctAtendidoGeral.toFixed(1)}% da necessidade total.</p>
+        
+        <p><strong>ALOCAÇÃO RECOMENDADA:</strong></p>
+        <ul style="margin:8px 0; padding-left:20px">
+          ${operacoesBanco.map(r => `
+            <li><strong>${r.tipo}:</strong> ${toBRL(r.valorBanco)} ${r.pctAtendido < 100 ? `(${r.pctAtendido.toFixed(0)}% da necessidade)` : '(100%)'}</li>
+          `).join('')}
         </ul>
         
-        <p><strong>Prioridade imediata:</strong> ${recomendacoes.filter(r => r.prioridade === 1).map(r => r.tipo).join(', ') || 'Nenhuma urgência'}</p>
+        ${operacoesNaoAtendidas.length > 0 ? `
+          <p><strong>FORA DO ESCOPO BANCÁRIO:</strong> ${operacoesNaoAtendidas.map(r => r.tipo).join(', ')} 
+          (total de ${toBRL(totalGap)}) - sugerir busca em outras fontes.</p>
+        ` : ''}
         
-        <p>A empresa apresenta capacidade de pagamento de ${toBRL(disponivelBase)}/ano para novas operações,
-        com DL/EBITDA atual de ${clamp2(alav)}x.</p>
+        <p><strong>INDICADORES:</strong> DL/EBITDA ${clamp2(alav)}x | Liquidez ${clamp2(liq)}x | 
+        Margem ${toPct(margem)} | Capacidade ${toBRL(disponivelBase)}/ano</p>
       </div>
       
       <button onclick="copiarRecomendacao()" style="margin-top:12px; padding:10px 20px; background:#fff; color:#059669; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:12px">
@@ -4449,39 +4577,52 @@ function gerarRecomendacaoCredito(latest, rows, disponivelBase){
   
   // Armazenar para copiar
   window.RECOMENDACAO_TEXTO = `RECOMENDAÇÃO DE CRÉDITO - ANÁLISE COMPLETA
-${'='.repeat(50)}
+${'='.repeat(60)}
 
-VALOR TOTAL RECOMENDADO: ${toBRL(valorRecomendado)}
-QUANTIDADE DE OPERAÇÕES: ${recomendacoes.length}
+PARTE 1: NECESSIDADE TOTAL DA EMPRESA
+${'─'.repeat(60)}
+Investimento Total Necessário: ${toBRL(totalNecessario)}
 
-DIAGNÓSTICO:
-${diagnostico.liquidezCritica ? '🚨 Liquidez Crítica\n' : ''}${diagnostico.liquidezBaixa ? '⚠️ Liquidez Baixa\n' : ''}${diagnostico.alavancagemAlta ? '⚠️ Alavancagem Alta\n' : ''}${diagnostico.margemBaixa ? '⚠️ Margem Baixa\n' : ''}${diagnostico.crescimentoNegativo ? '📉 Receita Caindo\n' : ''}${diagnostico.empresaSaudavel ? '✅ Empresa Saudável\n' : ''}
-
-ALOCAÇÃO POR CATEGORIA:
+Por Categoria:
 ${Object.entries(categorias).map(([cat, items]) => {
-  const totalCat = items.reduce((s, i) => s + i.valor, 0);
-  return `- ${cat}: ${toBRL(totalCat)}`;
+  const totalCat = items.reduce((s, i) => s + i.valorNecessario, 0);
+  return `• ${cat}: ${toBRL(totalCat)}`;
 }).join('\n')}
 
-DETALHAMENTO DAS OPERAÇÕES:
-${recomendacoes.map((r, i) => `
+Detalhamento:
+${recomendacoes.map((r, i) => `${i+1}. ${r.tipo}: ${toBRL(r.valorNecessario)}`).join('\n')}
+
+
+PARTE 2: RECOMENDAÇÃO DO BANCO
+${'─'.repeat(60)}
+Limite Aprovável: ${toBRL(limiteBanco)}
+Cobertura: ${pctAtendidoGeral.toFixed(1)}% da necessidade total
+Gap Restante: ${toBRL(totalGap)}
+
+ALOCAÇÃO POR PRIORIDADE:
+${operacoesBanco.map((r, i) => `
 ${i+1}. ${r.tipo.toUpperCase()} [Prioridade ${r.prioridade}]
-   Valor: ${toBRL(r.valor)}
-   Categoria: ${r.categoria}
+   Valor Banco: ${toBRL(r.valorBanco)} (${r.pctAtendido.toFixed(0)}% da necessidade)
+   Necessidade Total: ${toBRL(r.valorNecessario)}
    Finalidade: ${r.finalidade}
-   Motivo: ${r.motivo}
    Produto: ${r.produto}
    Prazo: ${r.prazo}
    Garantia: ${r.garantia}
-   Impacto Esperado: ${r.impacto}
+   Impacto: ${r.impacto}
 `).join('')}
 
+${operacoesNaoAtendidas.length > 0 ? `
+NÃO COBERTAS PELO BANCO:
+${operacoesNaoAtendidas.map(r => `• ${r.tipo}: ${toBRL(r.valorNecessario)}`).join('\n')}
+Sugestão: Buscar em aporte de sócios, investidores, linhas de fomento
+` : ''}
+
 INDICADORES ATUAIS:
-- DL/EBITDA: ${clamp2(alav)}x
-- Liquidez: ${clamp2(liq)}x
-- Margem EBITDA: ${toPct(margem)}
-- ROE: ${toPct(roe)}
-- Capacidade de Pagamento: ${toBRL(disponivelBase)}/ano
+• DL/EBITDA: ${clamp2(alav)}x
+• Liquidez: ${clamp2(liq)}x
+• Margem EBITDA: ${toPct(margem)}
+• ROE: ${toPct(roe)}
+• Capacidade de Pagamento: ${toBRL(disponivelBase)}/ano
 `;
   
   return html;
