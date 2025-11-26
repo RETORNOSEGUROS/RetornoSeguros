@@ -965,95 +965,244 @@ function calcularIndicadores(d){
     return (isNaN(n) || !isFinite(n)) ? 0 : n;
   };
   
-  const receita = getNum(d.receita);
+  // === DADOS BÁSICOS ===
+  const receita = getNum(d.receita) || getNum(d.receitaLiquida);
+  const receitaBruta = getNum(d.receitaBruta);
   const ebitda = getNum(d.ebitda);
+  const ebit = getNum(d.ebit);
   const lucroBruto = getNum(d.lucroBruto);
-  const lucroLiq = getNum(d.lucroLiq);
+  const lucroLiq = getNum(d.lucroLiq) || getNum(d.lucroLiquido);
   const dividaBruta = getNum(d.dividaBruta);
-  const caixa = getNum(d.caixa);
+  const caixa = getNum(d.caixa) || getNum(d.disponiveis);
+  const aplicacoesCP = getNum(d.aplicacoesFinanceirasCP);
+  const disponiveis = caixa + aplicacoesCP;
   const estoques = getNum(d.estoques);
   const cr = getNum(d.contasReceber);
   const cp = getNum(d.contasPagar);
-  const despFin = getNum(d.despesaFin);
-  const pl = getNum(d.pl);
-  const ativo = getNum(d.ativo);
+  const despFin = getNum(d.despesaFin) || getNum(d.despesasFinanceiras);
+  const recFin = getNum(d.receitasFinanceiras);
+  const pl = getNum(d.pl) || getNum(d.patrimonioLiquido);
+  const ativo = getNum(d.ativo) || getNum(d.ativoTotal);
   const cmv = getNum(d.cmv);
-  const ativoCirc = getNum(d.ativoCirc);
-  const passivoCirc = getNum(d.passivoCirc);
-
-  // Dívida Líquida
-  const dl = dividaBruta - caixa;
+  const ativoCirc = getNum(d.ativoCirc) || getNum(d.ativoCirculante);
+  const passivoCirc = getNum(d.passivoCirc) || getNum(d.passivoCirculante);
+  const passivoNaoCirc = getNum(d.passivoNaoCirculante);
+  const ativoNaoCirc = getNum(d.ativoNaoCirculante);
+  const realizavelLP = getNum(d.realizavelLP);
+  const imobilizado = getNum(d.imobilizado);
+  const depreciacao = getNum(d.depreciacao) || getNum(d.depreciacaoAmortizacao);
+  const intangivel = getNum(d.intangivel);
+  const capitalSocial = getNum(d.capitalSocial);
+  const funcionarios = getNum(d.funcionarios);
   
-  // Margens
+  // === EMPRÉSTIMOS ===
+  const emprestimosCP = getNum(d.emprestimosCP);
+  const emprestimosLP = getNum(d.emprestimosLP);
+  const debentures = getNum(d.debentures);
+  
+  // === CÁLCULOS DERIVADOS ===
+  
+  // Dívida Bruta calculada (se não vier pronta)
+  const dividaBrutaCalc = dividaBruta || (emprestimosCP + emprestimosLP + debentures);
+  
+  // Dívida Líquida
+  const dl = dividaBrutaCalc - disponiveis;
+  
+  // Passivo Total
+  const passivoTotal = passivoCirc + passivoNaoCirc;
+  
+  // Imobilizado Líquido
+  const imobilizadoLiq = imobilizado - depreciacao;
+  
+  // === MARGENS ===
   const margem = safeDiv(ebitda, receita);
   const margemBruta = safeDiv(lucroBruto, receita);
   const margemLiq = safeDiv(lucroLiq, receita);
+  const margemOperacional = safeDiv(ebit, receita);
   
-  // Endividamento
+  // === ENDIVIDAMENTO ===
   const alav = safeDiv(dl, ebitda);
   const dlSobrePL = safeDiv(dl, pl);
-  const endividamento = safeDiv(dividaBruta, ativo);
-  const composicaoEnd = safeDiv(dividaBruta, (dividaBruta + pl));
+  const endividamento = safeDiv(dividaBrutaCalc, ativo);
+  const composicaoEnd = safeDiv(dividaBrutaCalc, (dividaBrutaCalc + pl));
+  const endividamentoGeral = safeDiv(passivoTotal, ativo);
+  const composicaoEndCP = safeDiv(passivoCirc, passivoTotal);
+  const ctcp = safeDiv(passivoTotal, pl); // Capital Terceiros / Capital Próprio
   
-  // Liquidez
-  const liq = safeDiv(caixa + cr + estoques, cp);
-  const liqSeca = safeDiv(caixa + cr, cp);
-  const liqImediata = safeDiv(caixa, cp);
-  const liqCorrente = safeDiv(ativoCirc, passivoCirc);
+  // === LIQUIDEZ ===
+  const liq = safeDiv(caixa + cr + estoques, cp || passivoCirc);
+  const liqSeca = safeDiv(caixa + cr, cp || passivoCirc);
+  const liqImediata = safeDiv(disponiveis, cp || passivoCirc);
+  const liqCorrente = safeDiv(ativoCirc, passivoCirc) || liq;
+  const liqGeral = safeDiv(ativoCirc + realizavelLP, passivoTotal);
   
-  // Rentabilidade
+  // === RENTABILIDADE ===
   const roe = safeDiv(lucroLiq, pl);
   const roa = safeDiv(lucroLiq, ativo);
-  const roic = safeDiv(lucroLiq, (pl + dividaBruta));
+  const nopat = ebit * 0.66; // EBIT * (1 - 34% imposto)
+  const capitalInvestido = pl + dividaBrutaCalc;
+  const roic = safeDiv(nopat, capitalInvestido);
   
-  // Eficiência
+  // === EFICIÊNCIA / GIRO ===
   const giroAtv = safeDiv(receita, ativo);
+  const giroPL = safeDiv(receita, pl);
+  const giroEstoque = safeDiv(receita, estoques);
   const alavFin = safeDiv(ativo, pl);
+  const gaf = safeDiv(roe, roa); // Grau Alavancagem Financeira
   
-  // Ciclo Operacional e Financeiro
-  const giroEst = safeDiv(cmv, estoques);
-  const diasEst = safeDiv(365, giroEst);
-  const pmr = safeDiv(cr * 365, receita);
-  const pmp = safeDiv(cp * 365, receita);
+  // === IMOBILIZAÇÃO ===
+  const imobPL = safeDiv(imobilizado, pl);
+  const imobRecursosNC = safeDiv(ativoNaoCirc, (pl + passivoNaoCirc));
+  
+  // === CICLO OPERACIONAL E FINANCEIRO ===
+  const cmvUsar = cmv || receita * 0.7; // Estimar CMV se não tiver
+  const giroEst = safeDiv(cmvUsar, estoques);
+  const diasEst = safeDiv(365, giroEst); // PME
+  const pmr = safeDiv(cr * 360, receita);
+  const pmp = safeDiv(cp * 360, cmvUsar);
   const cicloOp = (diasEst || 0) + (pmr || 0);
   const ciclo = cicloOp - (pmp || 0);
   
-  // Cobertura
-  const juros = safeDiv(ebitda, despFin);
-  const coberturaDiv = safeDiv(ebitda, dividaBruta);
+  // === COBERTURA ===
+  const juros = safeDiv(ebitda, despFin); // Cobertura de juros
+  const coberturaDiv = safeDiv(ebitda, dividaBrutaCalc);
+  const resultadoFin = recFin - despFin;
   
-  // Capital de Giro
-  const capGiro = (caixa + cr + estoques) - cp;
-  const ccl = ativoCirc - passivoCirc;
-  const ncg = (cr + estoques) - cp;
+  // === CAPITAL DE GIRO ===
+  const capGiro = (disponiveis + cr + estoques) - cp;
+  const ccl = ativoCirc - passivoCirc; // Capital Circulante Líquido
+  const ncg = (cr + estoques) - cp; // Necessidade de Capital de Giro
   const ncgRec = safeDiv(ncg, receita);
+  
+  // === ANÁLISE DUPONT ===
+  // ROE = Margem Líquida × Giro do Ativo × Alavancagem Financeira
+  const dupontMargem = margemLiq;
+  const dupontGiro = giroAtv;
+  const dupontAlav = alavFin;
+  const roeDupont = (dupontMargem || 0) * (dupontGiro || 0) * (dupontAlav || 0);
+  
+  // === PRODUTIVIDADE ===
+  const receitaPorFunc = funcionarios > 0 ? receita / funcionarios : null;
+  const ebitdaPorFunc = funcionarios > 0 ? ebitda / funcionarios : null;
+  const lucroLiqPorFunc = funcionarios > 0 ? lucroLiq / funcionarios : null;
+  
+  // === VALUATION SIMPLES ===
+  const valorEmpresa = ebitda * 5; // Múltiplo 5x EBITDA
+  const valorEquity = valorEmpresa - dl;
+  
+  // === ALTMAN Z-SCORE (adaptado) ===
+  const capitalGiroAtivo = safeDiv(ccl, ativo);
+  const lucrosRetidos = safeDiv(pl - capitalSocial, ativo);
+  const ebitAtivo = safeDiv(ebit || ebitda, ativo);
+  const plPassivo = safeDiv(pl, passivoTotal);
+  const receitaAtivo = giroAtv;
+  // Z = 1.2×A + 1.4×B + 3.3×C + 0.6×D + 1.0×E
+  const zScore = (1.2 * (capitalGiroAtivo || 0)) + 
+                 (1.4 * (lucrosRetidos || 0)) + 
+                 (3.3 * (ebitAtivo || 0)) + 
+                 (0.6 * (plPassivo || 0)) + 
+                 (1.0 * (receitaAtivo || 0));
 
   return {
-    receita, ebitda, lucroBruto, lucroLiq, dividaBruta, caixa, dl,
-    margem, margemBruta, margemLiq,
+    // Dados brutos
+    receita, receitaBruta, ebitda, ebit, lucroBruto, lucroLiq, 
+    dividaBruta: dividaBrutaCalc, caixa, disponiveis, dl,
+    estoques, cr, cp, pl, ativo, despFin, recFin, cmv,
+    ativoCirc, passivoCirc, passivoNaoCirc, passivoTotal,
+    imobilizado, imobilizadoLiq, intangivel, funcionarios,
+    emprestimosCP, emprestimosLP, debentures, capitalSocial,
+    
+    // Margens
+    margem, margemBruta, margemLiq, margemOperacional,
+    
+    // Endividamento
     alav, dlSobrePL, endividamento, composicaoEnd,
-    liq, liqSeca, liqImediata, liqCorrente,
+    endividamentoGeral, composicaoEndCP, ctcp,
+    
+    // Liquidez
+    liq, liqSeca, liqImediata, liqCorrente, liqGeral,
+    
+    // Rentabilidade
     roe, roa, roic,
-    giroAtv, alavFin,
+    
+    // Eficiência
+    giroAtv, giroPL, giroEstoque, alavFin, gaf,
+    
+    // Imobilização
+    imobPL, imobRecursosNC,
+    
+    // Ciclo
     giroEst, diasEst, pmr, pmp, cicloOp, ciclo,
-    juros, coberturaDiv,
+    
+    // Cobertura
+    juros, coberturaDiv, resultadoFin,
+    
+    // Capital de Giro
     capGiro, ccl, ncg, ncgRec,
-    estoques, cr, cp, pl, ativo, despFin, cmv
+    
+    // DuPont
+    dupontMargem, dupontGiro, dupontAlav, roeDupont,
+    
+    // Produtividade
+    receitaPorFunc, ebitdaPorFunc, lucroLiqPorFunc,
+    
+    // Valuation
+    valorEmpresa, valorEquity,
+    
+    // Z-Score
+    zScore, capitalGiroAtivo, lucrosRetidos, ebitAtivo, plPassivo
   };
 }
 
 function criarIndicadoresVazios(){
   return {
-    receita:0, ebitda:0, lucroBruto:0, lucroLiq:0, dividaBruta:0, caixa:0, dl:0,
-    margem:null, margemBruta:null, margemLiq:null,
+    // Dados brutos
+    receita:0, receitaBruta:0, ebitda:0, ebit:0, lucroBruto:0, lucroLiq:0, 
+    dividaBruta:0, caixa:0, disponiveis:0, dl:0,
+    estoques:0, cr:0, cp:0, pl:0, ativo:0, despFin:0, recFin:0, cmv:0,
+    ativoCirc:0, passivoCirc:0, passivoNaoCirc:0, passivoTotal:0,
+    imobilizado:0, imobilizadoLiq:0, intangivel:0, funcionarios:0,
+    emprestimosCP:0, emprestimosLP:0, debentures:0, capitalSocial:0,
+    
+    // Margens
+    margem:null, margemBruta:null, margemLiq:null, margemOperacional:null,
+    
+    // Endividamento
     alav:null, dlSobrePL:null, endividamento:null, composicaoEnd:null,
-    liq:null, liqSeca:null, liqImediata:null, liqCorrente:null,
+    endividamentoGeral:null, composicaoEndCP:null, ctcp:null,
+    
+    // Liquidez
+    liq:null, liqSeca:null, liqImediata:null, liqCorrente:null, liqGeral:null,
+    
+    // Rentabilidade
     roe:null, roa:null, roic:null,
-    giroAtv:null, alavFin:null,
+    
+    // Eficiência
+    giroAtv:null, giroPL:null, giroEstoque:null, alavFin:null, gaf:null,
+    
+    // Imobilização
+    imobPL:null, imobRecursosNC:null,
+    
+    // Ciclo
     giroEst:null, diasEst:null, pmr:null, pmp:null, cicloOp:null, ciclo:null,
-    juros:null, coberturaDiv:null,
+    
+    // Cobertura
+    juros:null, coberturaDiv:null, resultadoFin:null,
+    
+    // Capital de Giro
     capGiro:0, ccl:0, ncg:0, ncgRec:null,
-    estoques:0, cr:0, cp:0, pl:0, ativo:0, despFin:0, cmv:0
+    
+    // DuPont
+    dupontMargem:null, dupontGiro:null, dupontAlav:null, roeDupont:null,
+    
+    // Produtividade
+    receitaPorFunc:null, ebitdaPorFunc:null, lucroLiqPorFunc:null,
+    
+    // Valuation
+    valorEmpresa:null, valorEquity:null,
+    
+    // Z-Score
+    zScore:null, capitalGiroAtivo:null, lucrosRetidos:null, ebitAtivo:null, plPassivo:null
   };
 }
 
@@ -1205,18 +1354,56 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
   const nomeEmpresa = info?.nome || "(Empresa)";
   document.getElementById("finEmpresaAlvo").textContent = `Empresa: ${nomeEmpresa}`;
 
-  // Limpar formulário
-  ["finAno","finReceita","finLucroBruto","finEbitda","finLucroLiq","finDividaBruta","finCaixa",
-   "finEstoques","finCR","finCP","finDespesaFin","finDistribLucro","finProLabore","finQtdSocios",
-   "finPL","finAtivo","finCMV","finImobilizado","finDepreciacao","finPassivoCirc","finAtivoCirc"]
-   .forEach(id=>{ 
-     const el=document.getElementById(id);
-     if(el) el.value="";
-   });
+  // Lista completa de campos para limpar
+  const todosOsCampos = [
+    // Básico
+    "finAno","finReceita","finEbitda","finLucroLiq","finPL","finAtivo","finDividaBruta","finCaixa",
+    // DRE
+    "finReceitaBruta","finDeducoes","finReceitaLiq","finCMV","finLucroBruto",
+    "finDespVendas","finDespAdm","finDepAmort","finOutrasDesp","finEBIT","finEbitdaDRE",
+    "finReceitaFin","finDespesaFin","finResultadoFin","finLAIR","finIRCS","finLucroLiqDRE",
+    // Ativo Circulante
+    "finACCaixa","finACAplicacoes","finCR","finACPDD","finEstoques","finACImpostos",
+    "finACAdiantFornec","finACDespAntecip","finACOutros","finAtivoCirc",
+    // Ativo Não Circulante
+    "finANCRealizavel","finANCInvest","finImobilizado","finDepreciacao","finANCIntangivel","finAtivoNaoCirc","finAtivoTotal",
+    // Passivo Circulante
+    "finCP","finPCEmprestimos","finPCSalarios","finPCImpostos","finPCAdiantClientes",
+    "finPCDividendos","finPCProvisoes","finPCOutros","finPassivoCirc",
+    // Passivo Não Circulante
+    "finPNCEmprestimos","finPNCDebentures","finPNCProvisoes","finPNCOutros","finPassivoNaoCirc",
+    // Patrimônio Líquido
+    "finPLCapital","finPLReservasCapital","finPLReservasLucro","finPLLucrosAcum","finPLAjustes","finPLTotal","finPassivoTotal",
+    // Outros
+    "finQtdSocios","finFuncionarios","finDistribLucro","finProLabore",
+    "finMarketShare","finCrescSetor","finMargemSetor","finRankingSetor",
+    "finValorImoveis","finValorMaquinas","finValorVeiculos","finInadimplencia",
+    "finLimiteTotal","finLimiteUsado","finTaxaMedia","finScoreExterno"
+  ];
+  
+  // Limpar todos os campos
+  todosOsCampos.forEach(id => { 
+    const el = document.getElementById(id);
+    if(el) el.value = "";
+  });
 
   // Definir ano atual como padrão se não houver ano
   const anoAtual = new Date().getFullYear();
   document.getElementById("finAno").value = ano || anoAtual;
+  
+  // Resetar para primeira aba do formulário
+  document.querySelectorAll('.form-tab-btn').forEach(b => {
+    b.style.background = 'var(--border)';
+    b.style.color = 'var(--text-secondary)';
+  });
+  const primeiraAba = document.querySelector('.form-tab-btn[data-formtab="basico"]');
+  if(primeiraAba){
+    primeiraAba.style.background = 'var(--accent)';
+    primeiraAba.style.color = '#fff';
+  }
+  document.querySelectorAll('.form-tab-content').forEach(c => c.style.display = 'none');
+  const primeiroConteudo = document.getElementById('formtab-basico');
+  if(primeiroConteudo) primeiroConteudo.style.display = 'block';
 
   // Se temos docId, carregar dados existentes
   if(docId && docId !== 'null' && docId !== ''){
@@ -1225,26 +1412,103 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
       if(finDoc.exists){
         const d = finDoc.data() || {};
         document.getElementById("finAno").value = d.ano || anoAtual;
+        
+        // === BÁSICO ===
         setMoney("finReceita", d.receitaLiquida || d.receita);
-        setMoney("finLucroBruto", d.lucroBruto);
         setMoney("finEbitda", d.ebitda);
         setMoney("finLucroLiq", d.lucroLiquido || d.lucroLiq);
-        setMoney("finDividaBruta", d.dividaBruta);
-        setMoney("finCaixa", d.caixa || d.disponibilidades);
-        setMoney("finEstoques", d.estoques);
-        setMoney("finCR", d.contasReceber || d.duplicatasReceber);
-        setMoney("finCP", d.contasPagar || d.fornecedores);
-        setMoney("finDespesaFin", d.despesasFinanceiras || d.despesaFin);
-        setMoney("finDistribLucro", d.distribuicaoLucros || d.distribLucro);
-        setMoney("finProLabore", d.proLabore);
         setMoney("finPL", d.patrimonioLiquido || d.pl);
         setMoney("finAtivo", d.ativoTotal || d.ativo);
+        setMoney("finDividaBruta", d.dividaBruta);
+        setMoney("finCaixa", d.caixa || d.disponibilidades || d.disponiveis);
+        
+        // === DRE ===
+        setMoney("finReceitaBruta", d.receitaBruta);
+        setMoney("finDeducoes", d.deducoes);
+        setMoney("finReceitaLiq", d.receitaLiquida || d.receita);
         setMoney("finCMV", d.cmv || d.custoMercadorias);
+        setMoney("finLucroBruto", d.lucroBruto);
+        setMoney("finDespVendas", d.despesasVendas);
+        setMoney("finDespAdm", d.despesasAdm);
+        setMoney("finDepAmort", d.depreciacaoAmortizacao);
+        setMoney("finOutrasDesp", d.outrasDespesas);
+        setMoney("finEBIT", d.ebit);
+        setMoney("finEbitdaDRE", d.ebitda);
+        setMoney("finReceitaFin", d.receitasFinanceiras);
+        setMoney("finDespesaFin", d.despesasFinanceiras || d.despesaFin);
+        setMoney("finResultadoFin", d.resultadoFinanceiro);
+        setMoney("finLAIR", d.lucroAntesIR);
+        setMoney("finIRCS", d.ircs);
+        setMoney("finLucroLiqDRE", d.lucroLiquido || d.lucroLiq);
+        
+        // === ATIVO CIRCULANTE ===
+        setMoney("finACCaixa", d.caixa || d.disponibilidades || d.disponiveis);
+        setMoney("finACAplicacoes", d.aplicacoesFinanceirasCP);
+        setMoney("finCR", d.contasReceber || d.duplicatasReceber);
+        setMoney("finACPDD", d.pdd);
+        setMoney("finEstoques", d.estoques);
+        setMoney("finACImpostos", d.impostosRecuperar);
+        setMoney("finACAdiantFornec", d.adiantamentoFornecedores);
+        setMoney("finACDespAntecip", d.despesasAntecipadas);
+        setMoney("finACOutros", d.outrosAC);
+        setMoney("finAtivoCirc", d.ativoCirculante || d.ativoCirc);
+        
+        // === ATIVO NÃO CIRCULANTE ===
+        setMoney("finANCRealizavel", d.realizavelLP);
+        setMoney("finANCInvest", d.investimentos);
         setMoney("finImobilizado", d.imobilizado);
         setMoney("finDepreciacao", d.depreciacao);
+        setMoney("finANCIntangivel", d.intangivel);
+        setMoney("finAtivoNaoCirc", d.ativoNaoCirculante);
+        setMoney("finAtivoTotal", d.ativoTotal || d.ativo);
+        
+        // === PASSIVO CIRCULANTE ===
+        setMoney("finCP", d.contasPagar || d.fornecedores);
+        setMoney("finPCEmprestimos", d.emprestimosCP);
+        setMoney("finPCSalarios", d.salariosPagar);
+        setMoney("finPCImpostos", d.impostosPagar);
+        setMoney("finPCAdiantClientes", d.adiantamentoClientes);
+        setMoney("finPCDividendos", d.dividendosPagar);
+        setMoney("finPCProvisoes", d.provisoesCP);
+        setMoney("finPCOutros", d.outrosPC);
         setMoney("finPassivoCirc", d.passivoCirculante || d.passivoCirc);
-        setMoney("finAtivoCirc", d.ativoCirculante || d.ativoCirc);
-        document.getElementById("finQtdSocios").value = d.qtdSocios || "";
+        
+        // === PASSIVO NÃO CIRCULANTE ===
+        setMoney("finPNCEmprestimos", d.emprestimosLP);
+        setMoney("finPNCDebentures", d.debentures);
+        setMoney("finPNCProvisoes", d.provisoesLP);
+        setMoney("finPNCOutros", d.outrosPNC);
+        setMoney("finPassivoNaoCirc", d.passivoNaoCirculante);
+        
+        // === PATRIMÔNIO LÍQUIDO ===
+        setMoney("finPLCapital", d.capitalSocial);
+        setMoney("finPLReservasCapital", d.reservasCapital);
+        setMoney("finPLReservasLucro", d.reservasLucro);
+        setMoney("finPLLucrosAcum", d.lucrosAcumulados);
+        setMoney("finPLAjustes", d.ajustesAvaliacao);
+        setMoney("finPLTotal", d.patrimonioLiquido || d.pl);
+        
+        // === OUTROS ===
+        const setNum = (id, val) => {
+          const el = document.getElementById(id);
+          if(el && val != null) el.value = val;
+        };
+        setNum("finQtdSocios", d.qtdSocios);
+        setNum("finFuncionarios", d.funcionarios);
+        setMoney("finDistribLucro", d.distribuicaoLucros || d.distribLucro);
+        setMoney("finProLabore", d.proLabore);
+        setNum("finMarketShare", d.marketShare);
+        setNum("finCrescSetor", d.crescimentoSetor);
+        setNum("finMargemSetor", d.margemSetor);
+        setNum("finRankingSetor", d.rankingSetor);
+        setMoney("finValorImoveis", d.valorImoveis);
+        setMoney("finValorMaquinas", d.valorMaquinas);
+        setMoney("finValorVeiculos", d.valorVeiculos);
+        setNum("finInadimplencia", d.inadimplencia);
+        setMoney("finLimiteTotal", d.limiteTotal);
+        setMoney("finLimiteUsado", d.limiteUsado);
+        setNum("finTaxaMedia", d.taxaMedia);
+        setNum("finScoreExterno", d.scoreExterno);
       }
     }catch(e){
       console.error("Erro ao carregar dados:", e);
@@ -1279,44 +1543,237 @@ async function salvarFinanceiro(){
     btnSalvar.textContent = "💾 Salvando...";
   }
 
-  // Usar nomes de campos compatíveis com o formato original
+  // Função helper para pegar valor numérico de campo
+  const getNum = (id) => {
+    const el = document.getElementById(id);
+    return el ? (Number(el.value) || 0) : 0;
+  };
+
+  // ========== DADOS COMPLETOS ==========
   const dados = {
     ano,
-    receitaLiquida: getMoney("finReceita"),
-    lucroBruto: getMoney("finLucroBruto"),
-    ebitda: getMoney("finEbitda"),
-    lucroLiquido: getMoney("finLucroLiq"),
-    dividaBruta: getMoney("finDividaBruta"),
-    caixa: getMoney("finCaixa"),
-    estoques: getMoney("finEstoques"),
-    contasReceber: getMoney("finCR"),
-    contasPagar: getMoney("finCP"),
-    despesasFinanceiras: getMoney("finDespesaFin"),
-    distribuicaoLucros: getMoney("finDistribLucro"),
-    proLabore: getMoney("finProLabore"),
-    qtdSocios: Number(document.getElementById("finQtdSocios").value) || 0,
-    patrimonioLiquido: getMoney("finPL"),
-    ativoTotal: getMoney("finAtivo"),
+    
+    // === DRE - RECEITAS ===
+    receitaBruta: getMoney("finReceitaBruta"),
+    deducoes: getMoney("finDeducoes"),
+    receitaLiquida: getMoney("finReceita") || getMoney("finReceitaLiq"),
+    
+    // === DRE - CUSTOS E LUCROS ===
     cmv: getMoney("finCMV"),
+    lucroBruto: getMoney("finLucroBruto"),
+    
+    // === DRE - DESPESAS OPERACIONAIS ===
+    despesasVendas: getMoney("finDespVendas"),
+    despesasAdm: getMoney("finDespAdm"),
+    depreciacaoAmortizacao: getMoney("finDepAmort"),
+    outrasDespesas: getMoney("finOutrasDesp"),
+    ebit: getMoney("finEBIT"),
+    ebitda: getMoney("finEbitda") || getMoney("finEbitdaDRE"),
+    
+    // === DRE - RESULTADO FINANCEIRO ===
+    receitasFinanceiras: getMoney("finReceitaFin"),
+    despesasFinanceiras: getMoney("finDespesaFin"),
+    resultadoFinanceiro: getMoney("finResultadoFin"),
+    
+    // === DRE - RESULTADO FINAL ===
+    lucroAntesIR: getMoney("finLAIR"),
+    ircs: getMoney("finIRCS"),
+    lucroLiquido: getMoney("finLucroLiq") || getMoney("finLucroLiqDRE"),
+    
+    // === ATIVO CIRCULANTE ===
+    caixa: getMoney("finCaixa") || getMoney("finACCaixa"),
+    aplicacoesFinanceirasCP: getMoney("finACAplicacoes"),
+    contasReceber: getMoney("finCR"),
+    pdd: getMoney("finACPDD"),
+    estoques: getMoney("finEstoques"),
+    impostosRecuperar: getMoney("finACImpostos"),
+    adiantamentoFornecedores: getMoney("finACAdiantFornec"),
+    despesasAntecipadas: getMoney("finACDespAntecip"),
+    outrosAC: getMoney("finACOutros"),
+    ativoCirculante: getMoney("finAtivoCirc"),
+    
+    // === ATIVO NÃO CIRCULANTE ===
+    realizavelLP: getMoney("finANCRealizavel"),
+    investimentos: getMoney("finANCInvest"),
     imobilizado: getMoney("finImobilizado"),
     depreciacao: getMoney("finDepreciacao"),
+    intangivel: getMoney("finANCIntangivel"),
+    ativoNaoCirculante: getMoney("finAtivoNaoCirc"),
+    ativoTotal: getMoney("finAtivo") || getMoney("finAtivoTotal"),
+    
+    // === PASSIVO CIRCULANTE ===
+    contasPagar: getMoney("finCP"),
+    emprestimosCP: getMoney("finPCEmprestimos"),
+    salariosPagar: getMoney("finPCSalarios"),
+    impostosPagar: getMoney("finPCImpostos"),
+    adiantamentoClientes: getMoney("finPCAdiantClientes"),
+    dividendosPagar: getMoney("finPCDividendos"),
+    provisoesCP: getMoney("finPCProvisoes"),
+    outrosPC: getMoney("finPCOutros"),
     passivoCirculante: getMoney("finPassivoCirc"),
-    ativoCirculante: getMoney("finAtivoCirc"),
-    // Campos calculados
-    dividaLiquida: getMoney("finDividaBruta") - getMoney("finCaixa"),
+    
+    // === PASSIVO NÃO CIRCULANTE ===
+    emprestimosLP: getMoney("finPNCEmprestimos"),
+    debentures: getMoney("finPNCDebentures"),
+    provisoesLP: getMoney("finPNCProvisoes"),
+    outrosPNC: getMoney("finPNCOutros"),
+    passivoNaoCirculante: getMoney("finPassivoNaoCirc"),
+    
+    // === PATRIMÔNIO LÍQUIDO ===
+    capitalSocial: getMoney("finPLCapital"),
+    reservasCapital: getMoney("finPLReservasCapital"),
+    reservasLucro: getMoney("finPLReservasLucro"),
+    lucrosAcumulados: getMoney("finPLLucrosAcum"),
+    ajustesAvaliacao: getMoney("finPLAjustes"),
+    patrimonioLiquido: getMoney("finPL") || getMoney("finPLTotal"),
+    
+    // === INFORMAÇÕES SOCIETÁRIAS ===
+    qtdSocios: getNum("finQtdSocios"),
+    funcionarios: getNum("finFuncionarios"),
+    distribuicaoLucros: getMoney("finDistribLucro"),
+    proLabore: getMoney("finProLabore"),
+    
+    // === INDICADORES DE MERCADO ===
+    marketShare: getNum("finMarketShare"),
+    crescimentoSetor: getNum("finCrescSetor"),
+    margemSetor: getNum("finMargemSetor"),
+    rankingSetor: getNum("finRankingSetor"),
+    
+    // === QUALIDADE DO ATIVO ===
+    valorImoveis: getMoney("finValorImoveis"),
+    valorMaquinas: getMoney("finValorMaquinas"),
+    valorVeiculos: getMoney("finValorVeiculos"),
+    inadimplencia: getNum("finInadimplencia"),
+    
+    // === INFORMAÇÕES DE CRÉDITO ===
+    limiteTotal: getMoney("finLimiteTotal"),
+    limiteUsado: getMoney("finLimiteUsado"),
+    taxaMedia: getNum("finTaxaMedia"),
+    scoreExterno: getNum("finScoreExterno"),
+    
+    // === CAMPOS CALCULADOS ===
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: CTX.uid
   };
 
-  // Calcular indicadores automaticamente
+  // ========== CALCULAR DÍVIDAS E INDICADORES ==========
+  
+  // Dívida Bruta = Empréstimos CP + LP + Debêntures
+  dados.dividaBruta = (dados.emprestimosCP || 0) + (dados.emprestimosLP || 0) + (dados.debentures || 0);
+  if(dados.dividaBruta === 0){
+    dados.dividaBruta = getMoney("finDividaBruta"); // fallback campo simples
+  }
+  
+  // Disponibilidades = Caixa + Aplicações CP
+  dados.disponiveis = (dados.caixa || 0) + (dados.aplicacoesFinanceirasCP || 0);
+  
+  // Dívida Líquida = Dívida Bruta - Disponibilidades
+  dados.dividaLiquida = dados.dividaBruta - dados.disponiveis;
+  
+  // ========== INDICADORES AUTOMÁTICOS ==========
+  
+  // Margem Bruta
+  if(dados.receitaLiquida > 0 && dados.lucroBruto){
+    dados.margemBruta = dados.lucroBruto / dados.receitaLiquida;
+  }
+  
+  // Margem EBITDA
   if(dados.receitaLiquida > 0 && dados.ebitda > 0){
     dados.margemEbitda = dados.ebitda / dados.receitaLiquida;
   }
+  
+  // Margem Operacional (EBIT)
+  if(dados.receitaLiquida > 0 && dados.ebit){
+    dados.margemOperacional = dados.ebit / dados.receitaLiquida;
+  }
+  
+  // Margem Líquida
+  if(dados.receitaLiquida > 0 && dados.lucroLiquido){
+    dados.margemLiquida = dados.lucroLiquido / dados.receitaLiquida;
+  }
+  
+  // DL/EBITDA (Alavancagem)
   if(dados.ebitda > 0 && dados.dividaLiquida != null){
     dados.alavancagemDivLiqEbitda = dados.dividaLiquida / dados.ebitda;
   }
-  if(dados.contasPagar > 0){
-    dados.liquidezCorrente = (dados.caixa + dados.contasReceber + dados.estoques) / dados.contasPagar;
+  
+  // Liquidez Corrente = AC / PC
+  if(dados.passivoCirculante > 0){
+    dados.liquidezCorrente = dados.ativoCirculante / dados.passivoCirculante;
+  } else if(dados.contasPagar > 0){
+    // Fallback se não tiver PC total
+    const acEstimado = (dados.caixa || 0) + (dados.contasReceber || 0) + (dados.estoques || 0);
+    dados.liquidezCorrente = acEstimado / dados.contasPagar;
+  }
+  
+  // Liquidez Seca = (AC - Estoques) / PC
+  if(dados.passivoCirculante > 0 && dados.ativoCirculante > 0){
+    dados.liquidezSeca = (dados.ativoCirculante - (dados.estoques || 0)) / dados.passivoCirculante;
+  }
+  
+  // Liquidez Imediata = Disponível / PC
+  if(dados.passivoCirculante > 0){
+    dados.liquidezImediata = dados.disponiveis / dados.passivoCirculante;
+  }
+  
+  // Liquidez Geral = (AC + RLP) / (PC + PNC)
+  const passivoTotal = (dados.passivoCirculante || 0) + (dados.passivoNaoCirculante || 0);
+  if(passivoTotal > 0){
+    dados.liquidezGeral = ((dados.ativoCirculante || 0) + (dados.realizavelLP || 0)) / passivoTotal;
+  }
+  
+  // ROE = Lucro Líquido / PL
+  if(dados.patrimonioLiquido > 0 && dados.lucroLiquido){
+    dados.roe = dados.lucroLiquido / dados.patrimonioLiquido;
+  }
+  
+  // ROA = Lucro Líquido / Ativo Total
+  if(dados.ativoTotal > 0 && dados.lucroLiquido){
+    dados.roa = dados.lucroLiquido / dados.ativoTotal;
+  }
+  
+  // ROIC = NOPAT / Capital Investido
+  if(dados.ebit && dados.ativoTotal > 0){
+    const nopat = dados.ebit * 0.66; // EBIT * (1 - 34% imposto)
+    const capitalInvestido = (dados.patrimonioLiquido || 0) + (dados.dividaBruta || 0);
+    if(capitalInvestido > 0){
+      dados.roic = nopat / capitalInvestido;
+    }
+  }
+  
+  // Giro do Ativo = Receita / Ativo Total
+  if(dados.ativoTotal > 0 && dados.receitaLiquida > 0){
+    dados.giroAtivo = dados.receitaLiquida / dados.ativoTotal;
+  }
+  
+  // Endividamento Geral = (PC + PNC) / Ativo Total
+  if(dados.ativoTotal > 0){
+    dados.endividamentoGeral = passivoTotal / dados.ativoTotal;
+  }
+  
+  // Composição do Endividamento = PC / (PC + PNC)
+  if(passivoTotal > 0 && dados.passivoCirculante > 0){
+    dados.composicaoEndividamento = dados.passivoCirculante / passivoTotal;
+  }
+  
+  // Imobilização do PL = Imobilizado / PL
+  if(dados.patrimonioLiquido > 0 && dados.imobilizado > 0){
+    dados.imobilizacaoPL = dados.imobilizado / dados.patrimonioLiquido;
+  }
+  
+  // Cobertura de Juros = EBITDA / Despesas Financeiras
+  if(dados.despesasFinanceiras > 0 && dados.ebitda > 0){
+    dados.coberturaJuros = dados.ebitda / dados.despesasFinanceiras;
+  }
+  
+  // Capital Terceiros / Capital Próprio
+  if(dados.patrimonioLiquido > 0){
+    dados.ctcp = passivoTotal / dados.patrimonioLiquido;
+  }
+  
+  // Grau de Alavancagem Financeira = ROE / ROA
+  if(dados.roa > 0 && dados.roe){
+    dados.gaf = dados.roe / dados.roa;
   }
 
   try{
@@ -1351,6 +1808,10 @@ async function salvarFinanceiro(){
         ultimaDividaLiquida: dados.dividaLiquida,
         ultimaAlavancagem: dados.alavancagemDivLiqEbitda || null,
         ultimaLiquidez: dados.liquidezCorrente || null,
+        ultimaMargemBruta: dados.margemBruta || null,
+        ultimaMargemLiquida: dados.margemLiquida || null,
+        ultimoROE: dados.roe || null,
+        ultimoROA: dados.roa || null,
         financeiroAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
     }catch(e){
