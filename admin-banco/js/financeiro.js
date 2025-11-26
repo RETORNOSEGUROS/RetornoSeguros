@@ -27,6 +27,7 @@ let EMPRESAS_CACHE = new Map();
 let AGENCIAS_CACHE = new Map();
 let RMS_CACHE = new Map();
 let SORT_STATE = { field: 'nome', dir: 'asc' };
+let CURRENT_ANALYSIS_DATA = null; // Dados atuais para as abas de análise
 
 // Charts
 let chart1, chart2, chart3, chart4, chart5;
@@ -271,6 +272,32 @@ function wireUi(){
       if(e.target===m2) m2.style.display="none"; 
     });
   }
+  
+  // Sistema de Abas do Modal de Detalhes
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tabId = btn.dataset.tab;
+      
+      // Atualizar botões
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      
+      // Atualizar conteúdo
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      document.getElementById("tab-" + tabId).classList.add("active");
+      
+      // Renderizar conteúdo da aba se necessário
+      if(tabId === "diagnostico" && CURRENT_ANALYSIS_DATA){
+        renderDiagnostico(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "plano" && CURRENT_ANALYSIS_DATA){
+        renderPlanoAcao(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "defesa" && CURRENT_ANALYSIS_DATA){
+        renderDefesaCredito(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "contexto" && CURRENT_ANALYSIS_DATA){
+        renderContexto(CURRENT_ANALYSIS_DATA);
+      }
+    });
+  });
   
   console.log("[wireUi] Event listeners configurados");
 }
@@ -1364,6 +1391,12 @@ async function abrirModalDetalhes(empresaId){
   const info = EMPRESAS_CACHE.get(empresaId) || {nome:"(sem nome)"};
   document.getElementById("detEmpresaAlvo").textContent = `Empresa: ${info.nome}`;
 
+  // Resetar para aba Dashboard
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelector(".tab-btn[data-tab='dashboard']")?.classList.add("active");
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-dashboard")?.classList.add("active");
+
   try{
     const snap = await db.collection("empresas").doc(empresaId)
       .collection("financeiro").orderBy("ano","desc").get();
@@ -1394,6 +1427,13 @@ async function abrirModalDetalhes(empresaId){
     });
     
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
+
+    // Armazenar dados para as outras abas
+    CURRENT_ANALYSIS_DATA = {
+      empresaId: empresaId,
+      empresaNome: info.nome,
+      rows: rowsCalc
+    };
 
     // Dashboard de Saúde
     renderHealthDashboard(rowsCalc);
@@ -2015,6 +2055,839 @@ function renderTabelaDetalhes(rows, empresaId){
     `;
     tbody.appendChild(tr);
   });
+}
+
+// ================== ABA 2: DIAGNÓSTICO INTELIGENTE ==================
+function renderDiagnostico(data){
+  if(!data || !data.rows || !data.rows.length) return;
+  
+  const rows = data.rows;
+  const latest = rows[0];
+  const previo = rows[1] || null;
+  const container = document.getElementById("diagnosticoContent");
+  
+  let html = '';
+  
+  // Detectar variações significativas (>15%)
+  const variacoes = [];
+  
+  if(previo){
+    // Variação de Receita
+    const varReceita = ((latest.receita - previo.receita) / previo.receita * 100);
+    if(Math.abs(varReceita) > 15){
+      variacoes.push({
+        indicador: 'Receita',
+        de: toBRL(previo.receita),
+        para: toBRL(latest.receita),
+        variacao: varReceita,
+        tipo: varReceita > 0 ? 'aumento' : 'queda',
+        perguntas: varReceita > 0 ? [
+          'Ganhou novos clientes relevantes? Quais e qual o potencial de recorrência?',
+          'Aumentou preços? O mercado absorveu bem?',
+          'Lançou novos produtos/serviços? Qual a margem deles?',
+          'Ganhou algum contrato/licitação relevante?',
+          'Concorrente fechou ou perdeu mercado?'
+        ] : [
+          'Perdeu algum cliente relevante (>10% do faturamento)? Por quê?',
+          'Reduziu equipe comercial ou capacidade produtiva?',
+          'Problemas de entrega, qualidade ou prazo?',
+          'O setor como um todo está em queda?',
+          'Há perspectiva de recuperação? Em quanto tempo?'
+        ],
+        dica: varReceita > 0 
+          ? 'Crescimento acelerado pode pressionar capital de giro. Avaliar se há estrutura para suportar.'
+          : 'Queda de receita impacta diretamente o fluxo de caixa. Monitorar liquidez.'
+      });
+    }
+    
+    // Variação de Margem EBITDA
+    const varMargem = (latest.margem - previo.margem) * 100;
+    if(Math.abs(varMargem) > 3){ // 3 pontos percentuais
+      variacoes.push({
+        indicador: 'Margem EBITDA',
+        de: toPct(previo.margem),
+        para: toPct(latest.margem),
+        variacao: varMargem,
+        unidade: 'p.p.',
+        tipo: varMargem > 0 ? 'aumento' : 'queda',
+        perguntas: varMargem > 0 ? [
+          'A receita aumentou ou os custos diminuíram?',
+          'Houve corte de pessoal ou renegociação com fornecedores?',
+          'Mudou o mix de produtos para itens de maior margem?',
+          'Houve eventos não-recorrentes (venda de ativos, créditos tributários)?',
+          'Esse ganho é sustentável ou pontual?'
+        ] : [
+          'Houve aumento de custos de matéria-prima ou mão de obra?',
+          'Precisou baixar preços para competir?',
+          'Houve ociosidade operacional?',
+          'Custos fixos aumentaram (aluguel, folha)?',
+          'Há plano para recuperar a margem?'
+        ],
+        dica: varMargem > 0
+          ? 'Margem que sobe muito rápido pode cair igualmente rápido. Investigar se é estrutural.'
+          : 'Compressão de margem afeta capacidade de pagamento. Avaliar impacto no fluxo.'
+      });
+    }
+    
+    // Variação de Alavancagem
+    if(previo.alav && latest.alav){
+      const varAlav = latest.alav - previo.alav;
+      if(Math.abs(varAlav) > 0.5){
+        variacoes.push({
+          indicador: 'DL/EBITDA (Alavancagem)',
+          de: clamp2(previo.alav) + 'x',
+          para: clamp2(latest.alav) + 'x',
+          variacao: varAlav,
+          unidade: 'x',
+          tipo: varAlav > 0 ? 'aumento' : 'queda',
+          perguntas: varAlav > 0 ? [
+            'Contraiu novas dívidas? Para qual finalidade?',
+            'O EBITDA caiu? Por qual motivo?',
+            'Houve investimentos (CAPEX) financiados com dívida?',
+            'Distribuiu dividendos acima da capacidade?',
+            'Qual o cronograma de amortização das dívidas?'
+          ] : [
+            'Pagou dívidas ou renegociou para longo prazo?',
+            'O EBITDA aumentou significativamente?',
+            'Recebeu aporte de capital dos sócios?',
+            'Vendeu ativos para abater dívida?',
+            'A redução é sustentável?'
+          ],
+          dica: varAlav > 0
+            ? 'Aumento de alavancagem reduz margem de segurança. Monitorar capacidade de pagamento.'
+            : 'Desalavancagem é positiva, mas verificar se não foi às custas de crescimento.'
+        });
+      }
+    }
+    
+    // Variação de Liquidez
+    if(previo.liq && latest.liq){
+      const varLiq = latest.liq - previo.liq;
+      if(Math.abs(varLiq) > 0.3){
+        variacoes.push({
+          indicador: 'Liquidez Corrente',
+          de: clamp2(previo.liq),
+          para: clamp2(latest.liq),
+          variacao: varLiq,
+          unidade: '',
+          tipo: varLiq > 0 ? 'aumento' : 'queda',
+          perguntas: varLiq > 0 ? [
+            'Acumulou caixa de operações?',
+            'Recebeu linhas de crédito de longo prazo?',
+            'Reduziu passivos de curto prazo?',
+            'O aumento veio de recebíveis ou estoques (menos líquidos)?'
+          ] : [
+            'Houve queima de caixa operacional?',
+            'Dívidas de longo prazo viraram curto prazo?',
+            'Antecipou pagamentos ou distribuiu dividendos?',
+            'Capital de giro está pressionado?',
+            'Há necessidade de reforço de liquidez?'
+          ],
+          dica: varLiq < 0
+            ? 'Liquidez em queda é sinal de alerta. Avaliar se há acesso a linhas de crédito.'
+            : 'Liquidez alta pode indicar conservadorismo ou oportunidade de investimento.'
+        });
+      }
+    }
+  }
+  
+  // Renderizar alertas de variações
+  if(variacoes.length > 0){
+    html += `
+      <div class="diag-card alert">
+        <div class="diag-title">
+          <span style="font-size:24px">⚠️</span>
+          Variações Significativas Detectadas
+        </div>
+        <p style="font-size:13px; color:#92400e; margin-bottom:16px">
+          O sistema identificou ${variacoes.length} variação(ões) relevante(s) entre ${previo.ano} e ${latest.ano} que merecem investigação.
+        </p>
+      </div>
+    `;
+    
+    variacoes.forEach(v => {
+      const isPositive = (v.tipo === 'aumento' && v.indicador !== 'DL/EBITDA (Alavancagem)') ||
+                        (v.tipo === 'queda' && v.indicador === 'DL/EBITDA (Alavancagem)');
+      
+      html += `
+        <div class="diag-card ${isPositive ? 'success' : 'danger'}">
+          <div class="diag-title">
+            <span style="font-size:20px">${isPositive ? '📈' : '📉'}</span>
+            ${v.indicador}: ${v.tipo} de ${v.de} para ${v.para}
+            <span style="margin-left:auto; font-size:14px; font-weight:800; color:${isPositive ? '#10b981' : '#ef4444'}">
+              ${v.variacao > 0 ? '+' : ''}${v.unidade ? clamp2(v.variacao) + v.unidade : toPct(v.variacao/100)}
+            </span>
+          </div>
+          
+          <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text-secondary)">
+            🔍 Perguntas para investigar:
+          </div>
+          <ul class="diag-questions">
+            ${v.perguntas.map(p => `<li>□ ${p}</li>`).join('')}
+          </ul>
+          
+          <div class="diag-tip">
+            <span style="font-size:16px">💡</span>
+            <span><strong>Dica:</strong> ${v.dica}</span>
+          </div>
+        </div>
+      `;
+    });
+  } else if(previo) {
+    html += `
+      <div class="diag-card success">
+        <div class="diag-title">
+          <span style="font-size:24px">✅</span>
+          Estabilidade nos Indicadores
+        </div>
+        <p style="font-size:13px; color:#166534">
+          Não foram detectadas variações significativas entre ${previo.ano} e ${latest.ano}. 
+          Os indicadores mantiveram-se dentro de faixas normais de flutuação.
+        </p>
+      </div>
+    `;
+  }
+  
+  // Pontos Positivos e de Atenção
+  const score = calcularScore(latest);
+  const pontosPositivos = [];
+  const pontosAtencao = [];
+  
+  // Analisar cada indicador
+  if(latest.margem >= 0.15) pontosPositivos.push('Margem EBITDA saudável (≥15%)');
+  else if(latest.margem < 0.08) pontosAtencao.push('Margem EBITDA baixa (<8%) - pressão na geração de caixa');
+  
+  if(latest.alav <= 2) pontosPositivos.push('Alavancagem confortável (DL/EBITDA ≤ 2x)');
+  else if(latest.alav > 3) pontosAtencao.push('Alavancagem elevada (DL/EBITDA > 3x) - risco de solvência');
+  
+  if(latest.liq >= 1.5) pontosPositivos.push('Liquidez confortável (≥1.5x)');
+  else if(latest.liq < 1) pontosAtencao.push('Liquidez crítica (<1.0x) - risco de inadimplência');
+  
+  if(latest.roe >= 0.15) pontosPositivos.push('ROE atrativo (≥15%) - boa rentabilidade para sócios');
+  else if(latest.roe < 0.08) pontosAtencao.push('ROE baixo (<8%) - rentabilidade pode não compensar risco');
+  
+  // Verificar tendências de crescimento
+  if(rows.length >= 3){
+    let crescimentoConsistente = true;
+    for(let i = 0; i < rows.length - 1; i++){
+      if(rows[i].receita < rows[i+1].receita * 0.95){ // tolerância de 5%
+        crescimentoConsistente = false;
+        break;
+      }
+    }
+    if(crescimentoConsistente) pontosPositivos.push(`Receita crescendo consistentemente há ${rows.length} anos`);
+  }
+  
+  if(pontosPositivos.length > 0){
+    html += `
+      <div class="diag-card success">
+        <div class="diag-title">
+          <span style="font-size:24px">✅</span>
+          Pontos Positivos
+        </div>
+        <ul style="list-style:none; padding:0; margin:0">
+          ${pontosPositivos.map(p => `<li style="padding:8px 0; border-bottom:1px solid #d1fae5; display:flex; align-items:center; gap:8px">
+            <span style="color:#10b981">✓</span> ${p}
+          </li>`).join('')}
+        </ul>
+      </div>
+    `;
+  }
+  
+  if(pontosAtencao.length > 0){
+    html += `
+      <div class="diag-card danger">
+        <div class="diag-title">
+          <span style="font-size:24px">⚡</span>
+          Pontos de Atenção
+        </div>
+        <ul style="list-style:none; padding:0; margin:0">
+          ${pontosAtencao.map(p => `<li style="padding:8px 0; border-bottom:1px solid #fecaca; display:flex; align-items:center; gap:8px">
+            <span style="color:#ef4444">⚠</span> ${p}
+          </li>`).join('')}
+        </ul>
+      </div>
+    `;
+  }
+  
+  // Score geral
+  html += `
+    <div class="diag-card info">
+      <div class="diag-title">
+        <span style="font-size:24px">🎯</span>
+        Resumo do Diagnóstico
+      </div>
+      <div style="display:flex; align-items:center; gap:16px; margin-top:12px">
+        <div class="score-badge ${getStatusFinanceiro(score).classe}" style="width:60px; height:60px; font-size:20px">
+          ${score}
+        </div>
+        <div>
+          <div style="font-size:16px; font-weight:700">${getStatusFinanceiro(score).label}</div>
+          <div style="font-size:13px; color:var(--text-secondary)">
+            ${score >= 80 ? 'Empresa com indicadores sólidos. Baixo risco de crédito.' :
+              score >= 65 ? 'Empresa saudável com alguns pontos de melhoria.' :
+              score >= 50 ? 'Empresa com indicadores medianos. Monitorar de perto.' :
+              'Empresa com indicadores frágeis. Alto risco de crédito.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  container.innerHTML = html;
+}
+
+// ================== ABA 3: PLANO DE AÇÃO ==================
+function renderPlanoAcao(data){
+  if(!data || !data.rows || !data.rows.length) return;
+  
+  const rows = data.rows;
+  const latest = rows[0];
+  const container = document.getElementById("planoAcaoContent");
+  
+  let html = '';
+  
+  // Identificar indicadores problemáticos e gerar planos
+  const problemas = [];
+  
+  // Liquidez crítica
+  if(latest.liq < 1.2){
+    problemas.push({
+      indicador: 'Liquidez Corrente',
+      valor: clamp2(latest.liq),
+      meta: '1.2 a 1.5',
+      severidade: latest.liq < 1 ? 'alta' : 'media',
+      acoes: [
+        {
+          fase: 'Imediato (0-30 dias)',
+          items: [
+            'Levantar aging completo de contas a receber',
+            'Identificar inadimplentes >60 dias e acionar cobrança',
+            'Revisar política de crédito para novos clientes',
+            'Suspender compras não essenciais'
+          ]
+        },
+        {
+          fase: 'Curto Prazo (30-90 dias)',
+          items: [
+            'Renegociar prazo com 5 maiores fornecedores (30→45-60 dias)',
+            'Oferecer desconto de 2-3% para pagamento antecipado',
+            'Avaliar antecipação de recebíveis (custo vs benefício)',
+            'Identificar estoques parados >90 dias para liquidar'
+          ]
+        },
+        {
+          fase: 'Médio Prazo (90-180 dias)',
+          items: [
+            'Buscar linha de capital de giro de longo prazo',
+            'Implementar gestão de estoque mínimo/máximo',
+            'Automatizar régua de cobrança',
+            'Revisar ciclo financeiro completo (PMR, PMP, PME)'
+          ]
+        }
+      ],
+      impacto: `Estimativa: redução PMR em 10 dias + aumento PMP em 15 dias pode liberar até ${toBRL(latest.receita * 0.07)}`
+    });
+  }
+  
+  // Alavancagem alta
+  if(latest.alav > 2.5){
+    problemas.push({
+      indicador: 'DL/EBITDA (Alavancagem)',
+      valor: clamp2(latest.alav) + 'x',
+      meta: '< 2.5x',
+      severidade: latest.alav > 3.5 ? 'alta' : 'media',
+      acoes: [
+        {
+          fase: 'Imediato (0-30 dias)',
+          items: [
+            'Mapear todas as dívidas com taxas, prazos e garantias',
+            'Identificar dívidas com taxas mais altas para priorizar',
+            'Calcular capacidade real de pagamento mensal',
+            'Verificar possibilidade de carência em contratos vigentes'
+          ]
+        },
+        {
+          fase: 'Curto Prazo (30-90 dias)',
+          items: [
+            'Renegociar dívidas de curto para longo prazo',
+            'Buscar consolidação com taxa menor',
+            'Suspender distribuição de dividendos',
+            'Avaliar venda de ativos não operacionais'
+          ]
+        },
+        {
+          fase: 'Médio Prazo (90-180 dias)',
+          items: [
+            'Focar em aumento de EBITDA (receita ou custos)',
+            'Considerar aporte de capital dos sócios',
+            'Estabelecer meta de redução: 0.5x por semestre',
+            'Criar reserva para amortizações extraordinárias'
+          ]
+        }
+      ],
+      impacto: `Meta: reduzir DL/EBITDA de ${clamp2(latest.alav)}x para 2.5x em 12 meses. Necessário aumentar EBITDA em ${toPct((latest.alav/2.5 - 1))} ou reduzir dívida em ${toBRL(latest.dividaLiq - latest.ebitda * 2.5)}`
+    });
+  }
+  
+  // Margem baixa
+  if(latest.margem < 0.10){
+    problemas.push({
+      indicador: 'Margem EBITDA',
+      valor: toPct(latest.margem),
+      meta: '≥ 12%',
+      severidade: latest.margem < 0.05 ? 'alta' : 'media',
+      acoes: [
+        {
+          fase: 'Imediato (0-30 dias)',
+          items: [
+            'Fazer análise detalhada da DRE por linha de produto/serviço',
+            'Identificar produtos/serviços deficitários',
+            'Revisar precificação - há espaço para reajuste?',
+            'Mapear custos fixos vs variáveis'
+          ]
+        },
+        {
+          fase: 'Curto Prazo (30-90 dias)',
+          items: [
+            'Renegociar com 3 maiores fornecedores (meta: -5%)',
+            'Revisar contratos de serviços recorrentes (TI, limpeza, segurança)',
+            'Avaliar descontinuação de linhas deficitárias',
+            'Otimizar mix de vendas para produtos de maior margem'
+          ]
+        },
+        {
+          fase: 'Médio Prazo (90-180 dias)',
+          items: [
+            'Automatizar processos para reduzir custos operacionais',
+            'Avaliar terceirização de atividades não-core',
+            'Investir em eficiência energética se relevante',
+            'Revisar estrutura organizacional (níveis hierárquicos)'
+          ]
+        }
+      ],
+      impacto: `Meta: aumentar margem de ${toPct(latest.margem)} para 12%. Com receita atual, significa adicionar ${toBRL(latest.receita * (0.12 - latest.margem))} ao EBITDA anual.`
+    });
+  }
+  
+  // ROE baixo
+  if(latest.roe < 0.10 && latest.roe > 0){
+    problemas.push({
+      indicador: 'ROE (Rentabilidade)',
+      valor: toPct(latest.roe),
+      meta: '≥ 12%',
+      severidade: 'baixa',
+      acoes: [
+        {
+          fase: 'Análise Imediata',
+          items: [
+            'Comparar ROE com custo de oportunidade dos sócios',
+            'Verificar se há capital excessivo imobilizado',
+            'Analisar se patrimônio está inflado por reavaliações',
+            'Calcular ROIC para visão mais ampla'
+          ]
+        },
+        {
+          fase: 'Ações Estruturais',
+          items: [
+            'Aumentar eficiência do capital empregado',
+            'Considerar distribuição de reservas se houver excesso',
+            'Revisar ativos não produtivos',
+            'Melhorar giro do ativo operacional'
+          ]
+        }
+      ],
+      impacto: 'ROE baixo pode indicar uso ineficiente do capital ou margem insuficiente.'
+    });
+  }
+  
+  // Renderizar planos
+  if(problemas.length === 0){
+    html = `
+      <div class="diag-card success">
+        <div class="diag-title">
+          <span style="font-size:24px">✅</span>
+          Indicadores Saudáveis
+        </div>
+        <p style="font-size:14px; color:#166534">
+          Todos os principais indicadores estão dentro de parâmetros aceitáveis. 
+          Não há plano de ação urgente necessário.
+        </p>
+        <p style="font-size:13px; color:#166534; margin-top:12px">
+          <strong>Recomendação:</strong> Manter monitoramento trimestral e focar em melhoria contínua.
+        </p>
+      </div>
+    `;
+  } else {
+    html += `
+      <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:12px; padding:16px; margin-bottom:20px">
+        <div style="font-size:15px; font-weight:700; color:#0c4a6e; margin-bottom:8px">
+          📋 Planos de Ação Identificados
+        </div>
+        <p style="font-size:13px; color:#0369a1">
+          Foram identificados ${problemas.length} indicador(es) que requerem atenção. 
+          Abaixo estão os planos de ação recomendados para cada um.
+        </p>
+      </div>
+    `;
+    
+    problemas.forEach((p, idx) => {
+      html += `
+        <div class="diag-card ${p.severidade === 'alta' ? 'danger' : p.severidade === 'media' ? 'alert' : 'info'}" style="margin-bottom:24px">
+          <div class="diag-title">
+            <span style="font-size:20px">${p.severidade === 'alta' ? '🚨' : p.severidade === 'media' ? '⚠️' : '💡'}</span>
+            ${p.indicador}
+            <span style="margin-left:auto; font-size:14px">
+              Atual: <strong>${p.valor}</strong> → Meta: <strong>${p.meta}</strong>
+            </span>
+          </div>
+          
+          <div class="action-timeline" style="margin-top:20px">
+            ${p.acoes.map(fase => `
+              <div class="action-phase">
+                <div class="action-phase-title">📅 ${fase.fase}</div>
+                ${fase.items.map(item => `
+                  <div class="action-item">
+                    <div class="action-checkbox"></div>
+                    <span>${item}</span>
+                  </div>
+                `).join('')}
+              </div>
+            `).join('')}
+          </div>
+          
+          <div style="background:rgba(255,255,255,0.5); border-radius:8px; padding:12px; margin-top:16px">
+            <div style="font-size:12px; font-weight:600; color:var(--brand); margin-bottom:4px">📊 IMPACTO ESTIMADO:</div>
+            <div style="font-size:13px">${p.impacto}</div>
+          </div>
+        </div>
+      `;
+    });
+  }
+  
+  container.innerHTML = html;
+}
+
+// ================== ABA 4: DEFESA DE CRÉDITO ==================
+function renderDefesaCredito(data){
+  if(!data || !data.rows || !data.rows.length) return;
+  
+  const rows = data.rows;
+  const latest = rows[0];
+  const empresaNome = data.empresaNome;
+  const container = document.getElementById("defesaCreditoContent");
+  const score = calcularScore(latest);
+  
+  // Calcular médias
+  const mediaEbitda = rows.reduce((sum, r) => sum + (r.ebitda || 0), 0) / rows.length;
+  
+  // Gerar argumentos positivos
+  const argumentosFavoraveis = [];
+  
+  if(mediaEbitda > 0){
+    argumentosFavoraveis.push({
+      titulo: 'GERAÇÃO DE CAIXA CONSISTENTE',
+      texto: `A empresa apresenta EBITDA positivo nos últimos ${rows.length} anos, com média de ${toBRL(mediaEbitda)}/ano, demonstrando capacidade operacional de geração de caixa.`
+    });
+  }
+  
+  if(rows.length >= 2 && rows[0].margem > rows[rows.length-1].margem){
+    argumentosFavoraveis.push({
+      titulo: 'TENDÊNCIA DE MELHORIA NA MARGEM',
+      texto: `A margem EBITDA evoluiu de ${toPct(rows[rows.length-1].margem)} (${rows[rows.length-1].ano}) para ${toPct(latest.margem)} (${latest.ano}), demonstrando ganho de eficiência operacional ao longo do período.`
+    });
+  }
+  
+  if(latest.alav <= 2.5){
+    argumentosFavoraveis.push({
+      titulo: 'ALAVANCAGEM CONTROLADA',
+      texto: `DL/EBITDA de ${clamp2(latest.alav)}x está abaixo do limite prudencial de 3.0x, oferecendo margem de segurança para absorver a operação proposta sem comprometer a estrutura de capital.`
+    });
+  }
+  
+  if(latest.liq >= 1.2){
+    argumentosFavoraveis.push({
+      titulo: 'LIQUIDEZ ADEQUADA',
+      texto: `Liquidez corrente de ${clamp2(latest.liq)}x garante capacidade de honrar compromissos de curto prazo, indicando gestão prudente do capital de giro.`
+    });
+  }
+  
+  if(rows.length >= 3){
+    let crescendo = true;
+    for(let i = 0; i < rows.length - 1; i++){
+      if(rows[i].receita < rows[i+1].receita) { crescendo = false; break; }
+    }
+    if(crescendo){
+      const crescimento = ((rows[0].receita / rows[rows.length-1].receita) - 1) * 100;
+      argumentosFavoraveis.push({
+        titulo: 'CRESCIMENTO SUSTENTADO',
+        texto: `Receita crescendo consistentemente nos últimos ${rows.length} anos, com evolução total de ${clamp2(crescimento)}%, demonstrando posicionamento competitivo e capacidade de expansão.`
+      });
+    }
+  }
+  
+  // Gerar pontos de atenção com mitigantes
+  const pontosRisco = [];
+  
+  if(latest.alav > 2){
+    pontosRisco.push({
+      risco: 'Alavancagem acima do ideal',
+      mitigante: `Embora o DL/EBITDA de ${clamp2(latest.alav)}x esteja acima de 2x, a empresa apresenta geração de caixa consistente e o cronograma de amortização está adequado ao fluxo. A operação proposta não elevará significativamente este indicador.`
+    });
+  }
+  
+  if(latest.liq < 1.3){
+    pontosRisco.push({
+      risco: 'Liquidez em monitoramento',
+      mitigante: `A liquidez corrente de ${clamp2(latest.liq)}x, embora adequada, merece acompanhamento. A empresa tem acesso a linhas de crédito pré-aprovadas e o ciclo financeiro está sendo otimizado com metas de melhoria.`
+    });
+  }
+  
+  if(latest.margem < 0.12){
+    pontosRisco.push({
+      risco: 'Margem operacional apertada',
+      mitigante: `A margem EBITDA de ${toPct(latest.margem)} está abaixo da média setorial, porém a empresa tem plano estruturado de redução de custos em implementação, com meta de atingir 12% em 12 meses.`
+    });
+  }
+  
+  // Cálculo de capacidade de pagamento
+  const ebitdaAnual = latest.ebitda || 0;
+  const ircsEstimado = ebitdaAnual * 0.15; // Estimativa conservadora
+  const servicoDividaAtual = (latest.dividaLiq || 0) * 0.20; // Estimativa de 20% ao ano
+  const disponivel = ebitdaAnual - ircsEstimado - servicoDividaAtual;
+  
+  let html = `
+    <div style="background:linear-gradient(135deg, #0a3c7d, #1e40af); color:#fff; border-radius:12px; padding:20px; margin-bottom:20px">
+      <div style="font-size:18px; font-weight:700; margin-bottom:8px">🎯 Relatório de Defesa de Crédito</div>
+      <div style="font-size:14px; opacity:0.9">${empresaNome}</div>
+      <div style="font-size:12px; opacity:0.7; margin-top:4px">Baseado em dados de ${rows.length} exercício(s) fiscal(is)</div>
+    </div>
+    
+    <div class="defense-section">
+      <div class="defense-section-title">
+        <span style="font-size:20px">✅</span>
+        Argumentos Favoráveis
+      </div>
+      ${argumentosFavoraveis.map((a, i) => `
+        <div class="argument-card">
+          <div class="argument-title">${i+1}. ${a.titulo}</div>
+          <div class="argument-text">"${a.texto}"</div>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText('${a.texto.replace(/'/g, "\\'")}'); this.textContent='✓ Copiado!'">📋 Copiar argumento</button>
+        </div>
+      `).join('')}
+    </div>
+    
+    ${pontosRisco.length > 0 ? `
+    <div class="defense-section">
+      <div class="defense-section-title">
+        <span style="font-size:20px">⚠️</span>
+        Pontos de Atenção + Mitigantes
+      </div>
+      ${pontosRisco.map(p => `
+        <div class="argument-card risk">
+          <div class="argument-title">RISCO: ${p.risco}</div>
+          <div class="argument-text"><strong>MITIGANTE:</strong> "${p.mitigante}"</div>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText('${p.mitigante.replace(/'/g, "\\'")}'); this.textContent='✓ Copiado!'">📋 Copiar mitigante</button>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+    
+    <div class="defense-section">
+      <div class="defense-section-title">
+        <span style="font-size:20px">📊</span>
+        Capacidade de Pagamento
+      </div>
+      <table class="capacity-table">
+        <tr>
+          <td>EBITDA anual (${latest.ano})</td>
+          <td>${toBRL(ebitdaAnual)}</td>
+        </tr>
+        <tr>
+          <td>(-) IR/CS estimado (15%)</td>
+          <td>${toBRL(ircsEstimado)}</td>
+        </tr>
+        <tr>
+          <td>(-) Serviço dívida atual (estimado)</td>
+          <td>${toBRL(servicoDividaAtual)}</td>
+        </tr>
+        <tr>
+          <td>(=) DISPONÍVEL PARA NOVA OPERAÇÃO</td>
+          <td style="color:${disponivel > 0 ? '#10b981' : '#ef4444'}">${toBRL(disponivel)}</td>
+        </tr>
+      </table>
+      
+      <div style="margin-top:16px; padding:12px; background:#f8fafc; border-radius:8px">
+        <div style="font-size:13px; color:var(--text-secondary)">
+          <strong>Linha sugerida:</strong> Capital de Giro ou BNDES<br>
+          <strong>Valor máximo recomendado:</strong> ${toBRL(disponivel * 2)} (prestação ≈ ${toBRL(disponivel * 0.5)}/mês)<br>
+          <strong>Prazo sugerido:</strong> 24-36 meses
+        </div>
+      </div>
+    </div>
+    
+    <div class="defense-section">
+      <div class="defense-section-title">
+        <span style="font-size:20px">📋</span>
+        Score e Classificação
+      </div>
+      <div style="display:flex; align-items:center; gap:20px">
+        <div class="score-badge ${getStatusFinanceiro(score).classe}" style="width:70px; height:70px; font-size:24px">
+          ${score}
+        </div>
+        <div>
+          <div style="font-size:18px; font-weight:700">${getStatusFinanceiro(score).label}</div>
+          <div style="font-size:13px; color:var(--text-secondary); margin-top:4px">
+            ${score >= 80 ? 'Cliente com excelente perfil de crédito. Aprovação recomendada.' :
+              score >= 65 ? 'Cliente com bom perfil. Operação aprovável com monitoramento padrão.' :
+              score >= 50 ? 'Cliente com perfil mediano. Operação aprovável com garantias adicionais.' :
+              'Cliente com perfil frágil. Operação requer análise especial e garantias reforçadas.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  container.innerHTML = html;
+}
+
+// ================== ABA 5: CONTEXTO QUALITATIVO ==================
+function renderContexto(data){
+  if(!data || !data.rows || !data.rows.length) return;
+  
+  const empresaId = data.empresaId;
+  const latest = data.rows[0];
+  const container = document.getElementById("contextoContent");
+  
+  // Formulário de contexto (será salvo no Firestore em versão futura)
+  const html = `
+    <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:12px; padding:16px; margin-bottom:20px">
+      <div style="font-size:15px; font-weight:700; color:#0c4a6e; margin-bottom:8px">
+        📄 Informações Qualitativas - Exercício ${latest.ano}
+      </div>
+      <p style="font-size:13px; color:#0369a1">
+        Registre informações qualitativas que contextualizam os números. 
+        Estes dados ajudam na análise e na defesa de operações de crédito.
+      </p>
+    </div>
+    
+    <div class="context-form">
+      <div class="context-group">
+        <div class="context-group-title">📌 Eventos Relevantes do Ano</div>
+        <div class="context-checkboxes">
+          <label class="context-check"><input type="checkbox" name="evento" value="filial_aberta"> Abertura de filial/unidade</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="filial_fechada"> Fechamento de filial</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="aquisicao"> Aquisição de empresa/carteira</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="venda_ativos"> Venda de ativos relevantes</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="capex"> Investimento em equipamentos</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="reestruturacao"> Reestruturação organizacional</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="troca_gestao"> Troca de gestão/sócios</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="contrato"> Ganho/perda contrato relevante</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="judicial"> Processo judicial relevante</label>
+          <label class="context-check"><input type="checkbox" name="evento" value="sinistro"> Evento climático/sinistro</label>
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">👥 Principais Clientes (% do faturamento)</div>
+        <div style="display:grid; gap:12px">
+          <div style="display:flex; gap:12px; align-items:center">
+            <span style="width:20px; font-weight:600">1.</span>
+            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+          </div>
+          <div style="display:flex; gap:12px; align-items:center">
+            <span style="width:20px; font-weight:600">2.</span>
+            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+          </div>
+          <div style="display:flex; gap:12px; align-items:center">
+            <span style="width:20px; font-weight:600">3.</span>
+            <input type="text" placeholder="Nome do cliente" style="flex:1; padding:10px; border:1px solid var(--border); border-radius:8px">
+            <input type="number" placeholder="%" style="width:80px; padding:10px; border:1px solid var(--border); border-radius:8px">
+          </div>
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">🏭 Principais Fornecedores</div>
+        <div style="display:grid; gap:12px">
+          <input type="text" placeholder="Fornecedor 1" style="padding:10px; border:1px solid var(--border); border-radius:8px">
+          <input type="text" placeholder="Fornecedor 2" style="padding:10px; border:1px solid var(--border); border-radius:8px">
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">👨‍💼 Quadro de Funcionários</div>
+        <div style="display:flex; gap:16px">
+          <div style="flex:1">
+            <label style="font-size:12px; color:var(--text-secondary)">Ano Atual</label>
+            <input type="number" placeholder="Nº funcionários" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+          </div>
+          <div style="flex:1">
+            <label style="font-size:12px; color:var(--text-secondary)">Ano Anterior</label>
+            <input type="number" placeholder="Nº funcionários" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+          </div>
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">🔮 Perspectiva para Próximo Ano</div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap">
+          <label class="context-check" style="padding:12px 20px; background:#d1fae5; border-radius:8px; cursor:pointer">
+            <input type="radio" name="perspectiva" value="otimista"> 
+            📈 Otimista (crescimento >10%)
+          </label>
+          <label class="context-check" style="padding:12px 20px; background:#fef3c7; border-radius:8px; cursor:pointer">
+            <input type="radio" name="perspectiva" value="estavel"> 
+            ➡️ Estável (±10%)
+          </label>
+          <label class="context-check" style="padding:12px 20px; background:#fee2e2; border-radius:8px; cursor:pointer">
+            <input type="radio" name="perspectiva" value="pessimista"> 
+            📉 Pessimista (queda >10%)
+          </label>
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">📝 Justificativa da Perspectiva</div>
+        <textarea placeholder="Descreva os motivos da perspectiva informada..." 
+          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:100px; font-family:inherit; resize:vertical"></textarea>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">💰 Necessidade de Crédito Prevista</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px">
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary)">Capital de Giro</label>
+            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+          </div>
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary)">Investimento (CAPEX)</label>
+            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+          </div>
+          <div>
+            <label style="font-size:12px; color:var(--text-secondary)">Refinanciamento</label>
+            <input type="text" placeholder="R$ 0,00" style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; margin-top:4px">
+          </div>
+        </div>
+      </div>
+      
+      <div class="context-group">
+        <div class="context-group-title">📋 Observações Adicionais</div>
+        <textarea placeholder="Informações adicionais relevantes para a análise..." 
+          style="width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; min-height:80px; font-family:inherit; resize:vertical"></textarea>
+      </div>
+    </div>
+    
+    <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:12px">
+      <button class="btn btn-outline" onclick="alert('Funcionalidade de salvar contexto será implementada em breve!')">
+        💾 Salvar Contexto
+      </button>
+    </div>
+  `;
+  
+  container.innerHTML = html;
 }
 
 // ================== EXPORTAR PDF ==================
