@@ -289,6 +289,12 @@ function wireUi(){
       // Renderizar conteúdo da aba se necessário
       if(tabId === "diagnostico" && CURRENT_ANALYSIS_DATA){
         renderDiagnostico(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "planejamento" && CURRENT_ANALYSIS_DATA){
+        renderPlanejamento(
+          CURRENT_ANALYSIS_DATA.rows, 
+          CURRENT_ANALYSIS_DATA.empresa, 
+          CURRENT_ANALYSIS_DATA.setor || 'industria'
+        );
       } else if(tabId === "plano" && CURRENT_ANALYSIS_DATA){
         renderPlanoAcao(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "defesa" && CURRENT_ANALYSIS_DATA){
@@ -1488,6 +1494,12 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
         const d = finDoc.data() || {};
         document.getElementById("finAno").value = d.ano || anoAtual;
         
+        // Setor
+        const setorSelect = document.getElementById("finSetor");
+        if(setorSelect && d.setor){
+          setorSelect.value = d.setor;
+        }
+        
         // === BÁSICO ===
         setMoney("finReceita", d.receitaLiquida || d.receita);
         setMoney("finEbitda", d.ebitda);
@@ -1637,6 +1649,7 @@ async function salvarFinanceiro(){
   // ========== DADOS COMPLETOS ==========
   const dados = {
     ano,
+    setor: document.getElementById("finSetor")?.value || 'industria',
     
     // === DRE - RECEITAS ===
     receitaBruta: getMoney("finReceitaBruta"),
@@ -1985,11 +1998,16 @@ async function abrirModalDetalhes(empresaId){
     });
     
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
+    
+    // Detectar setor mais recente ou usar default
+    const setorMaisRecente = rows.find(r => r.setor)?.setor || 'industria';
 
     // Armazenar dados para as outras abas
     CURRENT_ANALYSIS_DATA = {
       empresaId: empresaId,
       empresaNome: info.nome,
+      empresa: info.nome,
+      setor: setorMaisRecente,
       rows: rowsCalc
     };
 
@@ -7143,3 +7161,1129 @@ document.addEventListener('mouseout', (ev)=>{
 document.addEventListener('click', (ev)=>{
   if(!ev.target.closest('.custom-tooltip') && !ev.target.closest('.info-pill')) hideTip();
 });
+
+// ================================================================================
+// ==================== MÓDULO DE PLANEJAMENTO FINANCEIRO ====================
+// ================================================================================
+
+// ===== BENCHMARKS POR SETOR =====
+const BENCHMARKS_SETOR = {
+  'industria': {
+    nome: 'Indústria',
+    margemBruta: 0.30,
+    margemEbitda: 0.12,
+    margemLiquida: 0.06,
+    liquidezCorrente: 1.5,
+    liquidezSeca: 1.0,
+    dlEbitda: 2.5,
+    roe: 0.12,
+    roa: 0.06,
+    giroAtivo: 1.0,
+    cicloFinanceiro: 60,
+    endividamentoGeral: 0.55
+  },
+  'comercio': {
+    nome: 'Comércio',
+    margemBruta: 0.25,
+    margemEbitda: 0.08,
+    margemLiquida: 0.04,
+    liquidezCorrente: 1.3,
+    liquidezSeca: 0.8,
+    dlEbitda: 2.0,
+    roe: 0.15,
+    roa: 0.08,
+    giroAtivo: 2.0,
+    cicloFinanceiro: 45,
+    endividamentoGeral: 0.50
+  },
+  'servicos': {
+    nome: 'Serviços',
+    margemBruta: 0.45,
+    margemEbitda: 0.18,
+    margemLiquida: 0.10,
+    liquidezCorrente: 1.4,
+    liquidezSeca: 1.3,
+    dlEbitda: 1.5,
+    roe: 0.18,
+    roa: 0.12,
+    giroAtivo: 1.2,
+    cicloFinanceiro: 30,
+    endividamentoGeral: 0.40
+  },
+  'agronegocio': {
+    nome: 'Agronegócio',
+    margemBruta: 0.28,
+    margemEbitda: 0.15,
+    margemLiquida: 0.08,
+    liquidezCorrente: 1.2,
+    liquidezSeca: 0.7,
+    dlEbitda: 3.0,
+    roe: 0.14,
+    roa: 0.07,
+    giroAtivo: 0.8,
+    cicloFinanceiro: 90,
+    endividamentoGeral: 0.60
+  },
+  'tecnologia': {
+    nome: 'Tecnologia',
+    margemBruta: 0.60,
+    margemEbitda: 0.22,
+    margemLiquida: 0.12,
+    liquidezCorrente: 2.0,
+    liquidezSeca: 1.8,
+    dlEbitda: 1.0,
+    roe: 0.20,
+    roa: 0.15,
+    giroAtivo: 1.5,
+    cicloFinanceiro: 20,
+    endividamentoGeral: 0.30
+  },
+  'construcao': {
+    nome: 'Construção Civil',
+    margemBruta: 0.25,
+    margemEbitda: 0.10,
+    margemLiquida: 0.05,
+    liquidezCorrente: 1.4,
+    liquidezSeca: 1.0,
+    dlEbitda: 3.0,
+    roe: 0.10,
+    roa: 0.05,
+    giroAtivo: 0.6,
+    cicloFinanceiro: 120,
+    endividamentoGeral: 0.60
+  },
+  'saude': {
+    nome: 'Saúde',
+    margemBruta: 0.40,
+    margemEbitda: 0.15,
+    margemLiquida: 0.08,
+    liquidezCorrente: 1.5,
+    liquidezSeca: 1.2,
+    dlEbitda: 2.0,
+    roe: 0.15,
+    roa: 0.10,
+    giroAtivo: 1.3,
+    cicloFinanceiro: 40,
+    endividamentoGeral: 0.45
+  },
+  'transporte': {
+    nome: 'Transporte/Logística',
+    margemBruta: 0.22,
+    margemEbitda: 0.10,
+    margemLiquida: 0.04,
+    liquidezCorrente: 1.2,
+    liquidezSeca: 1.0,
+    dlEbitda: 3.5,
+    roe: 0.12,
+    roa: 0.05,
+    giroAtivo: 1.0,
+    cicloFinanceiro: 35,
+    endividamentoGeral: 0.65
+  },
+  'educacao': {
+    nome: 'Educação',
+    margemBruta: 0.50,
+    margemEbitda: 0.20,
+    margemLiquida: 0.10,
+    liquidezCorrente: 1.3,
+    liquidezSeca: 1.2,
+    dlEbitda: 2.0,
+    roe: 0.16,
+    roa: 0.10,
+    giroAtivo: 1.0,
+    cicloFinanceiro: 25,
+    endividamentoGeral: 0.45
+  },
+  'varejo': {
+    nome: 'Varejo',
+    margemBruta: 0.30,
+    margemEbitda: 0.06,
+    margemLiquida: 0.03,
+    liquidezCorrente: 1.2,
+    liquidezSeca: 0.6,
+    dlEbitda: 2.5,
+    roe: 0.12,
+    roa: 0.06,
+    giroAtivo: 2.5,
+    cicloFinanceiro: 50,
+    endividamentoGeral: 0.55
+  }
+};
+
+// ===== FUNÇÃO: CALCULAR TAXA DE CRESCIMENTO HISTÓRICA =====
+function calcularTaxaCrescimento(rows, campo){
+  if(rows.length < 2) return 0.05; // Default 5%
+  
+  const valores = rows.map(r => r[campo]).filter(v => v && v > 0);
+  if(valores.length < 2) return 0.05;
+  
+  // CAGR = (Valor Final / Valor Inicial)^(1/n) - 1
+  const inicial = valores[valores.length - 1];
+  const final = valores[0];
+  const anos = valores.length - 1;
+  
+  if(inicial <= 0) return 0.05;
+  
+  const cagr = Math.pow(final / inicial, 1 / anos) - 1;
+  
+  // Limitar entre -20% e +50%
+  return Math.max(-0.20, Math.min(0.50, cagr));
+}
+
+// ===== FUNÇÃO: PROJETAR LINHA DO BALANÇO/DRE =====
+function projetarValor(valorAtual, taxaCrescimento, anos){
+  return valorAtual * Math.pow(1 + taxaCrescimento, anos);
+}
+
+// ===== FUNÇÃO: GERAR PROJEÇÕES 3 ANOS =====
+function gerarProjecoes(rows, setor){
+  const latest = rows[0];
+  const benchmark = BENCHMARKS_SETOR[setor] || BENCHMARKS_SETOR['industria'];
+  
+  // Calcular taxas de crescimento históricas
+  const txReceita = calcularTaxaCrescimento(rows, 'receita');
+  const txEbitda = calcularTaxaCrescimento(rows, 'ebitda');
+  const txLucro = calcularTaxaCrescimento(rows, 'lucroLiq');
+  const txAtivo = calcularTaxaCrescimento(rows, 'ativo');
+  
+  const anoAtual = latest.ano || new Date().getFullYear();
+  
+  // Cenários de crescimento
+  const cenarios = {
+    pessimista: {
+      nome: 'Pessimista',
+      cor: '#ef4444',
+      fator: 0.5 // 50% do crescimento histórico
+    },
+    realista: {
+      nome: 'Realista',
+      cor: '#3b82f6',
+      fator: 1.0 // Mantém crescimento histórico
+    },
+    otimista: {
+      nome: 'Otimista',
+      cor: '#10b981',
+      fator: 1.5 // 150% do crescimento histórico
+    }
+  };
+  
+  const projecoes = {};
+  
+  Object.keys(cenarios).forEach(cenario => {
+    const fator = cenarios[cenario].fator;
+    projecoes[cenario] = {
+      ...cenarios[cenario],
+      anos: []
+    };
+    
+    for(let i = 1; i <= 3; i++){
+      const ano = anoAtual + i;
+      const txReceitaAjustada = txReceita * fator;
+      
+      // Projetar valores principais
+      const receita = projetarValor(latest.receita || 0, txReceitaAjustada, i);
+      const ebitda = receita * (latest.margem || benchmark.margemEbitda);
+      const lucroLiq = receita * (latest.margemLiq || benchmark.margemLiquida);
+      
+      // Projetar balanço baseado em giro/ciclo
+      const giro = latest.giroAtv || benchmark.giroAtivo;
+      const ativo = receita / giro;
+      
+      // Manter estrutura de capital similar
+      const plRatio = latest.plSobrePassivo || 0.4;
+      const pl = ativo * plRatio;
+      
+      // Estimar capital de giro baseado no ciclo
+      const ciclo = latest.ciclo || benchmark.cicloFinanceiro;
+      const ncg = (receita / 360) * ciclo;
+      
+      // Dívida para fechar o balanço
+      const passivo = ativo - pl;
+      const dlEbitda = ebitda > 0 ? (passivo * 0.6) / ebitda : 0;
+      
+      projecoes[cenario].anos.push({
+        ano,
+        receita,
+        ebitda,
+        margemEbitda: receita > 0 ? ebitda / receita : 0,
+        lucroLiq,
+        margemLiq: receita > 0 ? lucroLiq / receita : 0,
+        ativo,
+        pl,
+        passivo,
+        ncg,
+        dlEbitda,
+        roe: pl > 0 ? lucroLiq / pl : 0,
+        roa: ativo > 0 ? lucroLiq / ativo : 0
+      });
+    }
+  });
+  
+  return {
+    taxas: { receita: txReceita, ebitda: txEbitda, lucro: txLucro, ativo: txAtivo },
+    cenarios: projecoes,
+    benchmark
+  };
+}
+
+// ===== FUNÇÃO: SIMULAR META =====
+function simularMeta(latest, meta, tipoMeta, setor){
+  const benchmark = BENCHMARKS_SETOR[setor] || BENCHMARKS_SETOR['industria'];
+  const resultado = { necessidades: [], balanco: {}, dre: {} };
+  
+  switch(tipoMeta){
+    case 'receita':
+      // Meta: crescer X% na receita
+      const novaReceita = latest.receita * (1 + meta / 100);
+      const crescReceita = novaReceita - latest.receita;
+      
+      // Manter margem atual
+      const margem = latest.margem || benchmark.margemEbitda;
+      const novoEbitda = novaReceita * margem;
+      const margemLiq = latest.margemLiq || benchmark.margemLiquida;
+      const novoLucro = novaReceita * margemLiq;
+      
+      // Calcular necessidade de capital de giro
+      const pmr = latest.pmr || 30;
+      const pme = latest.diasEst || 45;
+      const pmp = latest.pmp || 30;
+      
+      const aumentoCR = (crescReceita / 360) * pmr;
+      const aumentoEstoque = (crescReceita * 0.6 / 360) * pme; // CMV ~60% receita
+      const aumentoFornec = (crescReceita * 0.6 / 360) * pmp;
+      const ncgAdicional = aumentoCR + aumentoEstoque - aumentoFornec;
+      
+      // Necessidade de financiamento
+      const lucroRetido = novoLucro * 0.7; // 70% reinvestido
+      const necessidadeFinanc = Math.max(0, ncgAdicional - lucroRetido);
+      
+      resultado.dre = {
+        receita: novaReceita,
+        cmv: novaReceita * 0.6,
+        lucroBruto: novaReceita * 0.4,
+        ebitda: novoEbitda,
+        lucroLiq: novoLucro
+      };
+      
+      resultado.balanco = {
+        contasReceber: (latest.cr || 0) + aumentoCR,
+        estoques: (latest.estoques || 0) + aumentoEstoque,
+        fornecedores: (latest.cp || 0) + aumentoFornec,
+        ncg: (latest.ncg || 0) + ncgAdicional
+      };
+      
+      resultado.necessidades = [
+        { desc: `Aumentar vendas em ${toBRL(crescReceita)}/ano`, valor: crescReceita },
+        { desc: `Capital de giro adicional necessário`, valor: ncgAdicional },
+        { desc: `Lucro retido disponível para reinvestir`, valor: lucroRetido },
+        { desc: `Necessidade de financiamento externo`, valor: necessidadeFinanc }
+      ];
+      
+      if(necessidadeFinanc > 0){
+        resultado.necessidades.push({
+          desc: `Sugestão: Linha de capital de giro de ${toBRL(necessidadeFinanc * 1.2)}`,
+          tipo: 'acao'
+        });
+      }
+      break;
+      
+    case 'lucro':
+      // Meta: atingir lucro de X reais
+      const lucroMeta = meta;
+      const lucroAtual = latest.lucroLiq || 0;
+      const margemLiqAtual = latest.margemLiq || benchmark.margemLiquida;
+      
+      // Opção 1: Aumentar receita mantendo margem
+      const receitaNecessaria1 = lucroMeta / margemLiqAtual;
+      const crescNecessario1 = latest.receita > 0 ? 
+        ((receitaNecessaria1 / latest.receita) - 1) * 100 : 0;
+      
+      // Opção 2: Aumentar margem mantendo receita
+      const margemNecessaria = latest.receita > 0 ? lucroMeta / latest.receita : 0;
+      
+      // Opção 3: Combinação (meio a meio)
+      const receitaComb = latest.receita * 1.15; // +15%
+      const margemComb = lucroMeta / receitaComb;
+      
+      resultado.dre = {
+        opcao1: { receita: receitaNecessaria1, margem: margemLiqAtual, lucro: lucroMeta },
+        opcao2: { receita: latest.receita, margem: margemNecessaria, lucro: lucroMeta },
+        opcao3: { receita: receitaComb, margem: margemComb, lucro: lucroMeta }
+      };
+      
+      resultado.necessidades = [
+        { desc: `Lucro atual: ${toBRL(lucroAtual)}`, valor: lucroAtual },
+        { desc: `Meta de lucro: ${toBRL(lucroMeta)}`, valor: lucroMeta },
+        { desc: `Gap a superar: ${toBRL(lucroMeta - lucroAtual)}`, valor: lucroMeta - lucroAtual },
+        { desc: `---`, tipo: 'separador' },
+        { desc: `OPÇÃO 1: Aumentar receita em ${crescNecessario1.toFixed(1)}%`, tipo: 'opcao' },
+        { desc: `• Receita necessária: ${toBRL(receitaNecessaria1)}` },
+        { desc: `• Mantendo margem de ${(margemLiqAtual * 100).toFixed(1)}%` },
+        { desc: `---`, tipo: 'separador' },
+        { desc: `OPÇÃO 2: Aumentar margem líquida`, tipo: 'opcao' },
+        { desc: `• Margem necessária: ${(margemNecessaria * 100).toFixed(1)}%` },
+        { desc: `• Aumento de ${((margemNecessaria - margemLiqAtual) * 100).toFixed(1)}pp` },
+        { desc: `---`, tipo: 'separador' },
+        { desc: `OPÇÃO 3: Combinação (+15% receita + margem)`, tipo: 'opcao' },
+        { desc: `• Receita: ${toBRL(receitaComb)}` },
+        { desc: `• Margem necessária: ${(margemComb * 100).toFixed(1)}%` }
+      ];
+      break;
+      
+    case 'alavancagem':
+      // Meta: reduzir DL/EBITDA para Xx
+      const dlEbitdaMeta = meta;
+      const dlAtual = latest.dl || 0;
+      const ebitdaAtual = latest.ebitda || 0;
+      const dlEbitdaAtual = ebitdaAtual > 0 ? dlAtual / ebitdaAtual : 0;
+      
+      // Dívida máxima para atingir meta
+      const dlMaxima = ebitdaAtual * dlEbitdaMeta;
+      const amortizacaoNecessaria = dlAtual - dlMaxima;
+      
+      // Ou EBITDA mínimo para atingir meta
+      const ebitdaMinimo = dlAtual / dlEbitdaMeta;
+      const crescEbitdaNecessario = ebitdaAtual > 0 ?
+        ((ebitdaMinimo / ebitdaAtual) - 1) * 100 : 0;
+      
+      resultado.necessidades = [
+        { desc: `DL/EBITDA atual: ${dlEbitdaAtual.toFixed(2)}x`, valor: dlEbitdaAtual },
+        { desc: `Meta: ${dlEbitdaMeta.toFixed(2)}x`, valor: dlEbitdaMeta },
+        { desc: `---`, tipo: 'separador' },
+        { desc: `OPÇÃO 1: Amortizar dívida`, tipo: 'opcao' },
+        { desc: `• Dívida líquida atual: ${toBRL(dlAtual)}` },
+        { desc: `• Dívida máxima permitida: ${toBRL(dlMaxima)}` },
+        { desc: `• Amortização necessária: ${toBRL(amortizacaoNecessaria)}` },
+        { desc: `---`, tipo: 'separador' },
+        { desc: `OPÇÃO 2: Aumentar EBITDA`, tipo: 'opcao' },
+        { desc: `• EBITDA atual: ${toBRL(ebitdaAtual)}` },
+        { desc: `• EBITDA necessário: ${toBRL(ebitdaMinimo)}` },
+        { desc: `• Crescimento necessário: ${crescEbitdaNecessario.toFixed(1)}%` }
+      ];
+      break;
+      
+    case 'benchmark':
+      // Meta: igualar benchmark do setor
+      const gaps = [];
+      
+      if(latest.margem < benchmark.margemEbitda){
+        gaps.push({
+          indicador: 'Margem EBITDA',
+          atual: latest.margem,
+          meta: benchmark.margemEbitda,
+          gap: benchmark.margemEbitda - latest.margem,
+          impacto: (benchmark.margemEbitda - latest.margem) * latest.receita
+        });
+      }
+      
+      if(latest.liqCorrente < benchmark.liquidezCorrente){
+        gaps.push({
+          indicador: 'Liquidez Corrente',
+          atual: latest.liqCorrente,
+          meta: benchmark.liquidezCorrente,
+          gap: benchmark.liquidezCorrente - latest.liqCorrente
+        });
+      }
+      
+      if(latest.alav > benchmark.dlEbitda && latest.alav > 0){
+        gaps.push({
+          indicador: 'DL/EBITDA',
+          atual: latest.alav,
+          meta: benchmark.dlEbitda,
+          gap: latest.alav - benchmark.dlEbitda,
+          tipo: 'inverso'
+        });
+      }
+      
+      if(latest.roe < benchmark.roe){
+        gaps.push({
+          indicador: 'ROE',
+          atual: latest.roe,
+          meta: benchmark.roe,
+          gap: benchmark.roe - latest.roe
+        });
+      }
+      
+      if(latest.ciclo > benchmark.cicloFinanceiro){
+        gaps.push({
+          indicador: 'Ciclo Financeiro',
+          atual: latest.ciclo,
+          meta: benchmark.cicloFinanceiro,
+          gap: latest.ciclo - benchmark.cicloFinanceiro,
+          tipo: 'inverso'
+        });
+      }
+      
+      resultado.gaps = gaps;
+      resultado.benchmark = benchmark;
+      
+      resultado.necessidades = [
+        { desc: `Comparação com setor: ${benchmark.nome}`, tipo: 'titulo' },
+        { desc: `---`, tipo: 'separador' }
+      ];
+      
+      gaps.forEach(g => {
+        const formatVal = g.indicador.includes('%') || g.indicador.includes('Margem') || g.indicador.includes('ROE') ?
+          (v) => (v * 100).toFixed(1) + '%' :
+          g.indicador.includes('dias') || g.indicador.includes('Ciclo') ?
+          (v) => Math.round(v) + ' dias' :
+          (v) => v.toFixed(2);
+          
+        resultado.necessidades.push({
+          desc: `${g.indicador}: ${formatVal(g.atual)} → ${formatVal(g.meta)}`,
+          tipo: 'gap',
+          status: g.tipo === 'inverso' ? 'reduzir' : 'aumentar'
+        });
+        
+        if(g.impacto){
+          resultado.necessidades.push({
+            desc: `  → Impacto: +${toBRL(g.impacto)} no EBITDA`
+          });
+        }
+      });
+      break;
+  }
+  
+  return resultado;
+}
+
+// ===== FUNÇÃO: GERAR ROADMAP DE AÇÕES =====
+function gerarRoadmap(latest, projecoes, metas, setor){
+  const benchmark = BENCHMARKS_SETOR[setor] || BENCHMARKS_SETOR['industria'];
+  const roadmap = { Q1: [], Q2: [], Q3: [], Q4: [] };
+  
+  // Q1: Ações de curto prazo (caixa e capital de giro)
+  if(latest.liqImediata < 0.3){
+    roadmap.Q1.push({
+      acao: 'Constituir reserva de caixa',
+      meta: 'Elevar liquidez imediata para 0.3',
+      impacto: 'Ter 1 mês de folga para emergências'
+    });
+  }
+  
+  if(latest.pmr > 35){
+    roadmap.Q1.push({
+      acao: 'Implementar cobrança ativa',
+      meta: `Reduzir PMR de ${Math.round(latest.pmr)} para 30 dias`,
+      impacto: toBRL((latest.pmr - 30) * latest.receita / 360) + ' liberados'
+    });
+  }
+  
+  if(latest.pmp < 25){
+    roadmap.Q1.push({
+      acao: 'Renegociar prazos com fornecedores',
+      meta: `Aumentar PMP de ${Math.round(latest.pmp || 0)} para 30 dias`,
+      impacto: 'Reduzir necessidade de capital de giro'
+    });
+  }
+  
+  // Q2: Eficiência operacional
+  if(latest.diasEst > 60){
+    roadmap.Q2.push({
+      acao: 'Revisar política de estoques',
+      meta: `Reduzir PME de ${Math.round(latest.diasEst)} para 45 dias`,
+      impacto: toBRL((latest.diasEst - 45) * (latest.receita * 0.6) / 360) + ' liberados'
+    });
+  }
+  
+  if(latest.margem < benchmark.margemEbitda){
+    roadmap.Q2.push({
+      acao: 'Programa de redução de custos',
+      meta: `Elevar margem de ${(latest.margem * 100).toFixed(1)}% para ${(benchmark.margemEbitda * 100).toFixed(1)}%`,
+      impacto: toBRL((benchmark.margemEbitda - latest.margem) * latest.receita) + '/ano'
+    });
+  }
+  
+  if(latest.giroAtv < benchmark.giroAtivo){
+    roadmap.Q2.push({
+      acao: 'Otimizar utilização de ativos',
+      meta: `Elevar giro de ${(latest.giroAtv || 0).toFixed(2)}x para ${benchmark.giroAtivo.toFixed(2)}x`,
+      impacto: 'Mais receita com mesma estrutura'
+    });
+  }
+  
+  // Q3: Estrutura de capital
+  if(latest.alav > 2.5){
+    const amortizacaoTri = latest.ebitda * 0.5 / 4; // 50% EBITDA anual / 4
+    roadmap.Q3.push({
+      acao: 'Programa de desalavancagem',
+      meta: `Amortizar ${toBRL(amortizacaoTri)} por trimestre`,
+      impacto: `Reduzir DL/EBITDA de ${latest.alav.toFixed(1)}x para 2.5x`
+    });
+  }
+  
+  if(latest.composicaoEndCP > 0.6){
+    roadmap.Q3.push({
+      acao: 'Alongar perfil da dívida',
+      meta: 'Trocar dívida CP por LP',
+      impacto: 'Aliviar pressão no fluxo de caixa'
+    });
+  }
+  
+  if(latest.juros < 3){
+    roadmap.Q3.push({
+      acao: 'Renegociar taxas de juros',
+      meta: 'Reduzir custo médio da dívida',
+      impacto: 'Melhorar cobertura de juros'
+    });
+  }
+  
+  // Q4: Avaliação e planejamento
+  roadmap.Q4.push({
+    acao: 'Avaliar resultados do ano',
+    meta: 'Comparar realizado vs planejado',
+    impacto: 'Base para plano do próximo ano'
+  });
+  
+  roadmap.Q4.push({
+    acao: 'Definir metas para próximo ano',
+    meta: 'Elaborar orçamento anual',
+    impacto: 'Direcionamento estratégico'
+  });
+  
+  if(latest.roe < benchmark.roe){
+    roadmap.Q4.push({
+      acao: 'Revisão estratégica de rentabilidade',
+      meta: `Plano para elevar ROE de ${(latest.roe * 100).toFixed(1)}% para ${(benchmark.roe * 100).toFixed(1)}%`,
+      impacto: 'Justificar capital investido'
+    });
+  }
+  
+  return roadmap;
+}
+
+// ===== FUNÇÃO: RENDERIZAR ABA DE PLANEJAMENTO =====
+function renderPlanejamento(rows, nomeEmpresa, setor = 'industria'){
+  const container = document.getElementById('planejamentoContent');
+  if(!container) return;
+  
+  if(!rows || rows.length === 0){
+    container.innerHTML = `
+      <div style="text-align:center; padding:40px; color:var(--text-muted)">
+        <div style="font-size:48px; margin-bottom:16px">📊</div>
+        <div style="font-size:16px; font-weight:600">Sem dados para planejamento</div>
+        <div style="font-size:13px; margin-top:8px">Lance pelo menos 1 ano de dados financeiros</div>
+      </div>
+    `;
+    return;
+  }
+  
+  const latest = rows[0];
+  const projecoes = gerarProjecoes(rows, setor);
+  const roadmap = gerarRoadmap(latest, projecoes, {}, setor);
+  const benchmark = BENCHMARKS_SETOR[setor] || BENCHMARKS_SETOR['industria'];
+  
+  // Anos históricos
+  const anosHistoricos = rows.slice(0, 4).reverse();
+  const anoAtual = latest.ano || new Date().getFullYear();
+  
+  let html = `
+    <!-- CABEÇALHO -->
+    <div style="background:linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border-radius:12px; padding:24px; margin-bottom:24px; color:#fff">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px">
+        <div>
+          <div style="font-size:24px; font-weight:800">📈 Planejamento Financeiro</div>
+          <div style="font-size:14px; opacity:0.9; margin-top:4px">${nomeEmpresa}</div>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center">
+          <label style="font-size:12px">Setor:</label>
+          <select id="setorSelect" style="padding:8px 12px; border-radius:6px; border:none; font-size:13px; background:#fff; color:#1e40af; font-weight:600">
+            ${Object.keys(BENCHMARKS_SETOR).map(s => 
+              `<option value="${s}" ${s === setor ? 'selected' : ''}>${BENCHMARKS_SETOR[s].nome}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 1: HISTÓRICO + PROJEÇÕES -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">
+      <div style="font-size:14px; font-weight:700; color:#1e40af; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>📊</span> HISTÓRICO E PROJEÇÕES (3 ANOS)
+      </div>
+      
+      <div style="overflow-x:auto">
+        <table style="width:100%; border-collapse:collapse; font-size:12px">
+          <thead>
+            <tr style="background:#f8fafc">
+              <th style="padding:10px; text-align:left; border-bottom:2px solid #e2e8f0; min-width:140px">Indicador</th>
+              ${anosHistoricos.map(r => `
+                <th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0; background:#e0f2fe">
+                  ${r.ano || '—'}
+                </th>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map((a, i) => `
+                <th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0; background:#dcfce7">
+                  ${a.ano}p
+                </th>
+              `).join('')}
+              <th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0; background:#fef3c7">
+                Benchmark
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Receita -->
+            <tr>
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9; font-weight:600">Receita Líquida</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.receita)}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a; font-weight:500">${toBRL(a.receita)}</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#6b7280">—</td>
+            </tr>
+            
+            <!-- EBITDA -->
+            <tr>
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9; font-weight:600">EBITDA</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.ebitda)}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a; font-weight:500">${toBRL(a.ebitda)}</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#6b7280">—</td>
+            </tr>
+            
+            <!-- Margem EBITDA -->
+            <tr style="background:#f8fafc">
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9">↳ Margem EBITDA</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:${r.margem >= benchmark.margemEbitda ? '#16a34a' : '#dc2626'}">${r.margem ? (r.margem * 100).toFixed(1) + '%' : '—'}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a">${(a.margemEbitda * 100).toFixed(1)}%</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#d97706; font-weight:600">${(benchmark.margemEbitda * 100).toFixed(1)}%</td>
+            </tr>
+            
+            <!-- Lucro Líquido -->
+            <tr>
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9; font-weight:600">Lucro Líquido</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.lucroLiq)}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a; font-weight:500">${toBRL(a.lucroLiq)}</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#6b7280">—</td>
+            </tr>
+            
+            <!-- ROE -->
+            <tr style="background:#f8fafc">
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9">ROE</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:${r.roe >= benchmark.roe ? '#16a34a' : '#dc2626'}">${r.roe ? (r.roe * 100).toFixed(1) + '%' : '—'}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a">${(a.roe * 100).toFixed(1)}%</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#d97706; font-weight:600">${(benchmark.roe * 100).toFixed(1)}%</td>
+            </tr>
+            
+            <!-- DL/EBITDA -->
+            <tr>
+              <td style="padding:10px; border-bottom:1px solid #f1f5f9">DL/EBITDA</td>
+              ${anosHistoricos.map(r => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:${r.alav <= benchmark.dlEbitda ? '#16a34a' : '#dc2626'}">${r.alav != null ? r.alav.toFixed(2) + 'x' : '—'}</td>
+              `).join('')}
+              ${projecoes.cenarios.realista.anos.map(a => `
+                <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#16a34a">${a.dlEbitda.toFixed(2)}x</td>
+              `).join('')}
+              <td style="padding:10px; text-align:right; border-bottom:1px solid #f1f5f9; color:#d97706; font-weight:600">${benchmark.dlEbitda.toFixed(1)}x</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <div style="margin-top:16px; padding:12px; background:#f0f9ff; border-radius:8px; font-size:11px; color:#1e40af">
+        📈 <strong>Taxa de crescimento histórica:</strong> 
+        Receita ${(projecoes.taxas.receita * 100).toFixed(1)}%/ano | 
+        EBITDA ${(projecoes.taxas.ebitda * 100).toFixed(1)}%/ano | 
+        Lucro ${(projecoes.taxas.lucro * 100).toFixed(1)}%/ano
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 2: CENÁRIOS -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">
+      <div style="font-size:14px; font-weight:700; color:#1e40af; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>🎯</span> CENÁRIOS PROJETADOS (${anoAtual + 3})
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px">
+        ${Object.keys(projecoes.cenarios).map(cenario => {
+          const c = projecoes.cenarios[cenario];
+          const ultimo = c.anos[2];
+          return `
+            <div style="background:${c.cor}10; border:2px solid ${c.cor}; border-radius:12px; padding:16px">
+              <div style="font-size:13px; font-weight:700; color:${c.cor}; margin-bottom:12px">${c.nome.toUpperCase()}</div>
+              
+              <div style="display:grid; gap:8px">
+                <div style="display:flex; justify-content:space-between">
+                  <span style="font-size:11px; color:#6b7280">Receita</span>
+                  <span style="font-size:12px; font-weight:600">${toBRL(ultimo.receita)}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between">
+                  <span style="font-size:11px; color:#6b7280">EBITDA</span>
+                  <span style="font-size:12px; font-weight:600">${toBRL(ultimo.ebitda)}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between">
+                  <span style="font-size:11px; color:#6b7280">Lucro Líq.</span>
+                  <span style="font-size:12px; font-weight:600">${toBRL(ultimo.lucroLiq)}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between">
+                  <span style="font-size:11px; color:#6b7280">ROE</span>
+                  <span style="font-size:12px; font-weight:600">${(ultimo.roe * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+              
+              <div style="margin-top:12px; padding-top:12px; border-top:1px solid ${c.cor}30; font-size:10px; color:#6b7280; text-align:center">
+                Crescimento: ${cenario === 'pessimista' ? '50%' : cenario === 'realista' ? '100%' : '150%'} do histórico
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 3: BENCHMARK DO SETOR -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">
+      <div style="font-size:14px; font-weight:700; color:#1e40af; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>📊</span> COMPARAÇÃO COM BENCHMARK - ${benchmark.nome.toUpperCase()}
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:16px">
+        ${[
+          { nome: 'Margem EBITDA', atual: latest.margem, bench: benchmark.margemEbitda, formato: 'pct', melhor: 'maior' },
+          { nome: 'Margem Líquida', atual: latest.margemLiq, bench: benchmark.margemLiquida, formato: 'pct', melhor: 'maior' },
+          { nome: 'Liquidez Corrente', atual: latest.liqCorrente, bench: benchmark.liquidezCorrente, formato: 'dec', melhor: 'maior' },
+          { nome: 'DL/EBITDA', atual: latest.alav, bench: benchmark.dlEbitda, formato: 'x', melhor: 'menor' },
+          { nome: 'ROE', atual: latest.roe, bench: benchmark.roe, formato: 'pct', melhor: 'maior' },
+          { nome: 'ROA', atual: latest.roa, bench: benchmark.roa, formato: 'pct', melhor: 'maior' },
+          { nome: 'Giro do Ativo', atual: latest.giroAtv, bench: benchmark.giroAtivo, formato: 'x', melhor: 'maior' },
+          { nome: 'Ciclo Financeiro', atual: latest.ciclo, bench: benchmark.cicloFinanceiro, formato: 'dias', melhor: 'menor' }
+        ].map(item => {
+          const formatVal = (v) => {
+            if(v == null) return '—';
+            if(item.formato === 'pct') return (v * 100).toFixed(1) + '%';
+            if(item.formato === 'x') return v.toFixed(2) + 'x';
+            if(item.formato === 'dias') return Math.round(v) + ' dias';
+            return v.toFixed(2);
+          };
+          
+          const atual = item.atual || 0;
+          const bench = item.bench;
+          const isBom = item.melhor === 'maior' ? atual >= bench : atual <= bench;
+          const gap = item.melhor === 'maior' ? bench - atual : atual - bench;
+          const pctGap = bench !== 0 ? Math.abs(gap / bench * 100) : 0;
+          
+          return `
+            <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#f8fafc; border-radius:8px">
+              <div style="width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; background:${isBom ? '#dcfce7' : '#fef2f2'}">
+                ${isBom ? '✓' : '↑'}
+              </div>
+              <div style="flex:1">
+                <div style="font-size:11px; color:#6b7280">${item.nome}</div>
+                <div style="display:flex; align-items:baseline; gap:8px">
+                  <span style="font-size:16px; font-weight:700; color:${isBom ? '#16a34a' : '#dc2626'}">${formatVal(atual)}</span>
+                  <span style="font-size:11px; color:#6b7280">vs ${formatVal(bench)}</span>
+                </div>
+              </div>
+              ${!isBom ? `
+                <div style="text-align:right">
+                  <div style="font-size:10px; color:#dc2626">Gap</div>
+                  <div style="font-size:12px; font-weight:600; color:#dc2626">${pctGap.toFixed(0)}%</div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 4: SIMULADOR DE METAS -->
+    <div style="background:linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border:2px solid #f59e0b; border-radius:12px; padding:20px; margin-bottom:24px">
+      <div style="font-size:14px; font-weight:700; color:#92400e; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>🎯</span> SIMULADOR DE METAS
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:16px">
+        <button class="sim-btn" data-tipo="receita" style="padding:16px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; transition:all 0.2s">
+          <div style="font-size:24px; margin-bottom:8px">📈</div>
+          <div style="font-size:12px; font-weight:600; color:#92400e">Crescer Receita</div>
+          <div style="font-size:10px; color:#6b7280; margin-top:4px">Definir % de crescimento</div>
+        </button>
+        
+        <button class="sim-btn" data-tipo="lucro" style="padding:16px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; transition:all 0.2s">
+          <div style="font-size:24px; margin-bottom:8px">💰</div>
+          <div style="font-size:12px; font-weight:600; color:#92400e">Meta de Lucro</div>
+          <div style="font-size:10px; color:#6b7280; margin-top:4px">Definir valor desejado</div>
+        </button>
+        
+        <button class="sim-btn" data-tipo="alavancagem" style="padding:16px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; transition:all 0.2s">
+          <div style="font-size:24px; margin-bottom:8px">🏦</div>
+          <div style="font-size:12px; font-weight:600; color:#92400e">Desalavancar</div>
+          <div style="font-size:10px; color:#6b7280; margin-top:4px">Reduzir DL/EBITDA</div>
+        </button>
+        
+        <button class="sim-btn" data-tipo="benchmark" style="padding:16px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; transition:all 0.2s">
+          <div style="font-size:24px; margin-bottom:8px">🏆</div>
+          <div style="font-size:12px; font-weight:600; color:#92400e">Igualar Setor</div>
+          <div style="font-size:10px; color:#6b7280; margin-top:4px">Alcançar benchmark</div>
+        </button>
+      </div>
+      
+      <div id="simuladorInput" style="display:none; padding:16px; background:#fff; border-radius:8px; margin-bottom:16px">
+        <!-- Preenchido dinamicamente -->
+      </div>
+      
+      <div id="simuladorResultado" style="display:none; padding:16px; background:#fff; border-radius:8px">
+        <!-- Preenchido dinamicamente -->
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 5: ROADMAP TRIMESTRAL -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">
+      <div style="font-size:14px; font-weight:700; color:#1e40af; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>🗺️</span> ROADMAP DE AÇÕES - ${anoAtual + 1}
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px">
+        ${['Q1', 'Q2', 'Q3', 'Q4'].map((q, idx) => {
+          const cores = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
+          const acoes = roadmap[q] || [];
+          return `
+            <div style="border:2px solid ${cores[idx]}; border-radius:12px; overflow:hidden">
+              <div style="background:${cores[idx]}; color:#fff; padding:12px; text-align:center; font-weight:700">
+                ${q}/${anoAtual + 1}
+              </div>
+              <div style="padding:12px">
+                ${acoes.length > 0 ? acoes.map(a => `
+                  <div style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid #f1f5f9">
+                    <div style="font-size:12px; font-weight:600; color:#1e293b">${a.acao}</div>
+                    <div style="font-size:10px; color:#6b7280; margin-top:4px">Meta: ${a.meta}</div>
+                    <div style="font-size:10px; color:${cores[idx]}; margin-top:2px; font-weight:500">→ ${a.impacto}</div>
+                  </div>
+                `).join('') : `
+                  <div style="font-size:11px; color:#9ca3af; text-align:center; padding:20px 0">
+                    Sem ações prioritárias
+                  </div>
+                `}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    
+    <!-- SEÇÃO 6: RESUMO EXECUTIVO -->
+    <div style="background:linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius:12px; padding:24px; color:#fff">
+      <div style="font-size:14px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:8px">
+        <span>📋</span> RESUMO EXECUTIVO DO PLANEJAMENTO
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px">
+        <div style="background:rgba(255,255,255,0.1); border-radius:8px; padding:16px">
+          <div style="font-size:11px; opacity:0.7; margin-bottom:8px">PROJEÇÃO ${anoAtual + 3} (Realista)</div>
+          <div style="font-size:20px; font-weight:700">${toBRL(projecoes.cenarios.realista.anos[2].receita)}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">Receita projetada</div>
+        </div>
+        
+        <div style="background:rgba(255,255,255,0.1); border-radius:8px; padding:16px">
+          <div style="font-size:11px; opacity:0.7; margin-bottom:8px">POTENCIAL DE MELHORIA</div>
+          <div style="font-size:20px; font-weight:700">${toBRL((benchmark.margemEbitda - (latest.margem || 0)) * latest.receita)}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">Se atingir margem do setor</div>
+        </div>
+        
+        <div style="background:rgba(255,255,255,0.1); border-radius:8px; padding:16px">
+          <div style="font-size:11px; opacity:0.7; margin-bottom:8px">AÇÕES PRIORITÁRIAS</div>
+          <div style="font-size:20px; font-weight:700">${Object.values(roadmap).flat().length}</div>
+          <div style="font-size:11px; opacity:0.7; margin-top:4px">Iniciativas mapeadas</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.1); border-radius:8px; font-size:12px">
+        💡 <strong>Próximos passos:</strong> 
+        Revisar metas com a empresa, validar premissas de crescimento, definir responsáveis por cada ação do roadmap, 
+        e acompanhar trimestralmente o progresso vs planejado.
+      </div>
+    </div>
+  `;
+  
+  container.innerHTML = html;
+  
+  // Event listeners para o simulador
+  container.querySelectorAll('.sim-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tipo = btn.dataset.tipo;
+      mostrarSimulador(tipo, latest, setor);
+    });
+    
+    btn.addEventListener('mouseover', () => {
+      btn.style.transform = 'translateY(-2px)';
+      btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+    });
+    
+    btn.addEventListener('mouseout', () => {
+      btn.style.transform = '';
+      btn.style.boxShadow = '';
+    });
+  });
+  
+  // Event listener para mudança de setor
+  const setorSelect = document.getElementById('setorSelect');
+  if(setorSelect){
+    setorSelect.addEventListener('change', () => {
+      renderPlanejamento(rows, nomeEmpresa, setorSelect.value);
+    });
+  }
+}
+
+// ===== FUNÇÃO: MOSTRAR SIMULADOR =====
+function mostrarSimulador(tipo, latest, setor){
+  const inputDiv = document.getElementById('simuladorInput');
+  const resultDiv = document.getElementById('simuladorResultado');
+  
+  if(!inputDiv || !resultDiv) return;
+  
+  inputDiv.style.display = 'block';
+  resultDiv.style.display = 'none';
+  
+  let inputHtml = '';
+  
+  switch(tipo){
+    case 'receita':
+      inputHtml = `
+        <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:12px">📈 Definir meta de crescimento de receita</div>
+        <div style="display:flex; align-items:center; gap:12px">
+          <span style="font-size:13px">Crescer</span>
+          <input type="number" id="simValor" value="20" min="0" max="200" style="width:80px; padding:8px; border:2px solid #d97706; border-radius:6px; font-size:14px; font-weight:600; text-align:center">
+          <span style="font-size:13px">% em relação ao ano atual (${toBRL(latest.receita)})</span>
+          <button id="simCalcular" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>
+        </div>
+      `;
+      break;
+      
+    case 'lucro':
+      inputHtml = `
+        <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:12px">💰 Definir meta de lucro líquido</div>
+        <div style="display:flex; align-items:center; gap:12px">
+          <span style="font-size:13px">Atingir lucro de R$</span>
+          <input type="number" id="simValor" value="${Math.round((latest.lucroLiq || 0) * 1.5)}" style="width:120px; padding:8px; border:2px solid #d97706; border-radius:6px; font-size:14px; font-weight:600; text-align:center">
+          <span style="font-size:13px">(atual: ${toBRL(latest.lucroLiq)})</span>
+          <button id="simCalcular" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>
+        </div>
+      `;
+      break;
+      
+    case 'alavancagem':
+      inputHtml = `
+        <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:12px">🏦 Definir meta de desalavancagem</div>
+        <div style="display:flex; align-items:center; gap:12px">
+          <span style="font-size:13px">Reduzir DL/EBITDA para</span>
+          <input type="number" id="simValor" value="2.0" step="0.1" min="0" max="10" style="width:80px; padding:8px; border:2px solid #d97706; border-radius:6px; font-size:14px; font-weight:600; text-align:center">
+          <span style="font-size:13px">x (atual: ${latest.alav ? latest.alav.toFixed(2) : '—'}x)</span>
+          <button id="simCalcular" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>
+        </div>
+      `;
+      break;
+      
+    case 'benchmark':
+      inputHtml = `
+        <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:12px">🏆 Igualar benchmark do setor</div>
+        <div style="display:flex; align-items:center; gap:12px">
+          <span style="font-size:13px">Calcular gap para atingir indicadores médios do setor</span>
+          <button id="simCalcular" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Analisar Gaps</button>
+        </div>
+      `;
+      break;
+  }
+  
+  inputDiv.innerHTML = inputHtml;
+  
+  // Event listener para calcular
+  const btnCalcular = document.getElementById('simCalcular');
+  if(btnCalcular){
+    btnCalcular.addEventListener('click', () => {
+      const inputValor = document.getElementById('simValor');
+      const valor = inputValor ? parseFloat(inputValor.value) : 0;
+      
+      const resultado = simularMeta(latest, valor, tipo, setor);
+      mostrarResultadoSimulacao(resultado, tipo);
+    });
+  }
+}
+
+// ===== FUNÇÃO: MOSTRAR RESULTADO DA SIMULAÇÃO =====
+function mostrarResultadoSimulacao(resultado, tipo){
+  const resultDiv = document.getElementById('simuladorResultado');
+  if(!resultDiv) return;
+  
+  resultDiv.style.display = 'block';
+  
+  let html = `<div style="font-size:13px; font-weight:600; color:#16a34a; margin-bottom:12px">✅ RESULTADO DA SIMULAÇÃO</div>`;
+  
+  html += `<div style="display:grid; gap:8px">`;
+  
+  resultado.necessidades.forEach(item => {
+    if(item.tipo === 'separador'){
+      html += `<div style="border-top:1px solid #e2e8f0; margin:4px 0"></div>`;
+    } else if(item.tipo === 'titulo'){
+      html += `<div style="font-size:12px; font-weight:700; color:#1e293b">${item.desc}</div>`;
+    } else if(item.tipo === 'opcao'){
+      html += `<div style="font-size:12px; font-weight:600; color:#3b82f6; margin-top:8px">${item.desc}</div>`;
+    } else if(item.tipo === 'acao'){
+      html += `<div style="font-size:11px; padding:8px; background:#dcfce7; border-radius:6px; color:#16a34a">💡 ${item.desc}</div>`;
+    } else if(item.tipo === 'gap'){
+      html += `<div style="font-size:12px; padding:6px 10px; background:${item.status === 'reduzir' ? '#fef2f2' : '#f0f9ff'}; border-radius:4px; display:flex; align-items:center; gap:8px">
+        <span style="color:${item.status === 'reduzir' ? '#dc2626' : '#2563eb'}">${item.status === 'reduzir' ? '↓' : '↑'}</span>
+        ${item.desc}
+      </div>`;
+    } else {
+      html += `<div style="font-size:12px; color:#374151; padding:4px 0; display:flex; justify-content:space-between">
+        <span>${item.desc}</span>
+        ${item.valor !== undefined ? `<span style="font-weight:600">${typeof item.valor === 'number' ? toBRL(item.valor) : item.valor}</span>` : ''}
+      </div>`;
+    }
+  });
+  
+  html += `</div>`;
+  
+  // Se tem DRE projetada
+  if(resultado.dre && resultado.dre.receita){
+    html += `
+      <div style="margin-top:16px; padding:12px; background:#f0f9ff; border-radius:8px">
+        <div style="font-size:11px; font-weight:600; color:#1e40af; margin-bottom:8px">📊 DRE PROJETADA</div>
+        <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; font-size:11px">
+          <div>Receita: <strong>${toBRL(resultado.dre.receita)}</strong></div>
+          <div>CMV: <strong>${toBRL(resultado.dre.cmv)}</strong></div>
+          <div>Lucro Bruto: <strong>${toBRL(resultado.dre.lucroBruto)}</strong></div>
+          <div>EBITDA: <strong>${toBRL(resultado.dre.ebitda)}</strong></div>
+        </div>
+      </div>
+    `;
+  }
+  
+  // Se tem balanço projetado
+  if(resultado.balanco && resultado.balanco.ncg){
+    html += `
+      <div style="margin-top:12px; padding:12px; background:#ecfdf5; border-radius:8px">
+        <div style="font-size:11px; font-weight:600; color:#16a34a; margin-bottom:8px">📋 BALANÇO PROJETADO (parcial)</div>
+        <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; font-size:11px">
+          <div>Contas a Receber: <strong>${toBRL(resultado.balanco.contasReceber)}</strong></div>
+          <div>Estoques: <strong>${toBRL(resultado.balanco.estoques)}</strong></div>
+          <div>Fornecedores: <strong>${toBRL(resultado.balanco.fornecedores)}</strong></div>
+          <div>NCG: <strong>${toBRL(resultado.balanco.ncg)}</strong></div>
+        </div>
+      </div>
+    `;
+  }
+  
+  resultDiv.innerHTML = html;
+}
+
+// Expor função globalmente
+window.renderPlanejamento = renderPlanejamento;
+window.BENCHMARKS_SETOR = BENCHMARKS_SETOR;
