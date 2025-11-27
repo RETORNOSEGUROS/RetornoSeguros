@@ -889,6 +889,9 @@ function renderTabela(arr){
   listaComCalc.forEach((row, index)=>{
     try {
       const status = getStatusFinanceiro(row.score);
+      const lead = calcularLeadScore(row);
+      row.oportunidade = lead.score; // Para ordenação
+      row.lead = lead;
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
@@ -932,6 +935,9 @@ function renderTabela(arr){
           </span>
         </td>
         <td>
+          ${gerarColunaOportunidade(lead)}
+        </td>
+        <td>
           <div style="display:flex; gap:6px">
             <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
               onclick="abrirModalDetalhes('${row.empresaId}')">
@@ -949,6 +955,9 @@ function renderTabela(arr){
       console.error(`[renderTabela] Erro ao renderizar linha ${index}:`, e, row);
     }
   });
+  
+  // Atualizar painel de oportunidades
+  atualizarPainelOportunidades(listaComCalc);
   
   console.log("[renderTabela] Renderização concluída");
 }
@@ -9565,3 +9574,400 @@ function abrirSimuladorImpacto(data) {
 
 window.renderDividasBancarias = renderDividasBancarias;
 window.OPERACOES_DIVIDA = OPERACOES_DIVIDA;
+
+// ================================================================================
+// ==================== MÓDULO DE LEAD SCORING DE CRÉDITO ====================
+// ================================================================================
+
+/**
+ * LEAD SCORING DE CRÉDITO
+ * Identifica clientes com maior probabilidade de fechar negócio:
+ * - NECESSIDADE: Precisa de crédito (liquidez apertada, crescimento, etc.)
+ * - CAPACIDADE: Banco vai aprovar (indicadores saudáveis, sem risco alto)
+ * - PRODUTO IDEAL: Sugere o produto mais adequado para a situação
+ */
+
+// Calcula score de NECESSIDADE de crédito (0-100)
+function calcularScoreNecessidade(calc) {
+  let score = 0;
+  let sinais = [];
+  
+  // 1. Liquidez apertada (0.8 a 1.3 = precisa de giro)
+  if (calc.liq != null && calc.liq >= 0.7 && calc.liq <= 1.3) {
+    const pontos = calc.liq < 1.0 ? 25 : 15;
+    score += pontos;
+    sinais.push({ fator: 'Liquidez apertada', valor: calc.liq?.toFixed(2), pontos });
+  }
+  
+  // 2. NCG positiva alta (capital de giro sendo consumido)
+  if (calc.ncg != null && calc.ncg > 0 && calc.receita > 0) {
+    const ncgSobreReceita = calc.ncg / calc.receita;
+    if (ncgSobreReceita > 0.15) {
+      const pontos = Math.min(20, Math.round(ncgSobreReceita * 50));
+      score += pontos;
+      sinais.push({ fator: 'NCG elevada', valor: (ncgSobreReceita * 100).toFixed(0) + '% da receita', pontos });
+    }
+  }
+  
+  // 3. Ciclo financeiro longo (usando calc.ciclo)
+  if (calc.ciclo != null && calc.ciclo > 45) {
+    const pontos = Math.min(15, Math.round((calc.ciclo - 45) / 5));
+    score += pontos;
+    sinais.push({ fator: 'Ciclo financeiro longo', valor: calc.ciclo?.toFixed(0) + ' dias', pontos });
+  }
+  
+  // 4. Crescimento de receita (verificar se existe variação)
+  // Se não tiver histórico, estimar pela margem e tamanho
+  if (calc.margem > 0.10 && calc.receita > 5000000) {
+    score += 10;
+    sinais.push({ fator: 'Empresa em crescimento', valor: 'Margem ' + (calc.margem * 100).toFixed(0) + '%', pontos: 10 });
+  }
+  
+  // 5. Imobilização alta (pode precisar renovar)
+  if (calc.imobPL != null && calc.imobPL > 0.5 && calc.margem > 0.08) {
+    score += 10;
+    sinais.push({ fator: 'Potencial renovação ativos', valor: 'Imob/PL: ' + (calc.imobPL * 100).toFixed(0) + '%', pontos: 10 });
+  }
+  
+  // 6. Dívida baixa = espaço para captar
+  if (calc.alav != null && calc.alav < 1.5 && calc.alav >= 0) {
+    score += 15;
+    sinais.push({ fator: 'Espaço para nova dívida', valor: 'DL/EBITDA: ' + calc.alav?.toFixed(1) + 'x', pontos: 15 });
+  }
+  
+  // 7. Sazonalidade (Q4 = preparação para próximo ano)
+  const mesAtual = new Date().getMonth();
+  if (mesAtual >= 9) { // Out, Nov, Dez
+    score += 5;
+    sinais.push({ fator: 'Período de planejamento', valor: 'Q4 - preparação', pontos: 5 });
+  }
+  
+  return { score: Math.min(100, score), sinais };
+}
+
+// Calcula score de CAPACIDADE de pagamento (0-100)
+function calcularScoreCapacidade(calc) {
+  let score = 0;
+  let sinais = [];
+  
+  // 1. DL/EBITDA saudável (< 2.5 = ótimo, < 3.5 = ok)
+  if (calc.alav != null) {
+    if (calc.alav < 0) {
+      score += 25; // Caixa líquido
+      sinais.push({ fator: 'Caixa líquido', valor: 'DL/EBITDA negativo', pontos: 25 });
+    } else if (calc.alav <= 1.5) {
+      score += 25;
+      sinais.push({ fator: 'Baixa alavancagem', valor: calc.alav.toFixed(1) + 'x', pontos: 25 });
+    } else if (calc.alav <= 2.5) {
+      score += 18;
+      sinais.push({ fator: 'Alavancagem moderada', valor: calc.alav.toFixed(1) + 'x', pontos: 18 });
+    } else if (calc.alav <= 3.5) {
+      score += 8;
+      sinais.push({ fator: 'Alavancagem aceitável', valor: calc.alav.toFixed(1) + 'x', pontos: 8 });
+    }
+    // > 3.5 = não pontua
+  }
+  
+  // 2. Margem EBITDA (gera caixa para pagar)
+  if (calc.margem != null) {
+    if (calc.margem >= 0.15) {
+      score += 25;
+      sinais.push({ fator: 'Margem excelente', valor: (calc.margem * 100).toFixed(0) + '%', pontos: 25 });
+    } else if (calc.margem >= 0.10) {
+      score += 18;
+      sinais.push({ fator: 'Margem boa', valor: (calc.margem * 100).toFixed(0) + '%', pontos: 18 });
+    } else if (calc.margem >= 0.06) {
+      score += 10;
+      sinais.push({ fator: 'Margem aceitável', valor: (calc.margem * 100).toFixed(0) + '%', pontos: 10 });
+    }
+  }
+  
+  // 3. Cobertura de juros (calc.juros = EBITDA / Despesa Financeira)
+  if (calc.juros != null && calc.juros > 0) {
+    if (calc.juros >= 3) {
+      score += 20;
+      sinais.push({ fator: 'Ótima cobertura de juros', valor: calc.juros.toFixed(1) + 'x', pontos: 20 });
+    } else if (calc.juros >= 2) {
+      score += 12;
+      sinais.push({ fator: 'Cobertura adequada', valor: calc.juros.toFixed(1) + 'x', pontos: 12 });
+    } else if (calc.juros >= 1.5) {
+      score += 5;
+      sinais.push({ fator: 'Cobertura mínima', valor: calc.juros.toFixed(1) + 'x', pontos: 5 });
+    }
+  }
+  
+  // 4. Liquidez corrente (não muito baixa nem muito alta)
+  if (calc.liq != null) {
+    if (calc.liq >= 1.2 && calc.liq <= 2.5) {
+      score += 15;
+      sinais.push({ fator: 'Liquidez equilibrada', valor: calc.liq.toFixed(2), pontos: 15 });
+    } else if (calc.liq >= 1.0 && calc.liq < 1.2) {
+      score += 8;
+      sinais.push({ fator: 'Liquidez adequada', valor: calc.liq.toFixed(2), pontos: 8 });
+    }
+  }
+  
+  // 5. ROE positivo (empresa rentável)
+  if (calc.roe != null && calc.roe > 0) {
+    if (calc.roe >= 0.15) {
+      score += 15;
+      sinais.push({ fator: 'Alta rentabilidade', valor: (calc.roe * 100).toFixed(0) + '%', pontos: 15 });
+    } else if (calc.roe >= 0.08) {
+      score += 10;
+      sinais.push({ fator: 'Boa rentabilidade', valor: (calc.roe * 100).toFixed(0) + '%', pontos: 10 });
+    } else if (calc.roe > 0) {
+      score += 5;
+      sinais.push({ fator: 'Empresa lucrativa', valor: (calc.roe * 100).toFixed(0) + '%', pontos: 5 });
+    }
+  }
+  
+  return { score: Math.min(100, score), sinais };
+}
+
+// Sugere o produto ideal baseado na situação
+function sugerirProdutoIdeal(calc, necessidade, capacidade) {
+  const produtos = [];
+  
+  // 1. Capital de Giro - liquidez apertada ou NCG alta
+  if (calc.liq < 1.2 || (calc.ncg && calc.ncg > 0 && calc.receita && calc.ncg / calc.receita > 0.1)) {
+    const valor = calc.ncg > 0 ? calc.ncg : (calc.receita * 0.15);
+    produtos.push({
+      produto: 'Capital de Giro',
+      icon: '💰',
+      motivo: calc.liq < 1.0 ? 'Liquidez abaixo de 1.0' : 'NCG consumindo caixa',
+      valorEstimado: Math.max(valor, 100000),
+      prioridade: calc.liq < 1.0 ? 1 : 2
+    });
+  }
+  
+  // 2. Antecipação de Recebíveis - ciclo financeiro longo
+  if (calc.ciclo > 45 && calc.cr > 0) {
+    produtos.push({
+      produto: 'Antecipação de Recebíveis',
+      icon: '📄',
+      motivo: 'Ciclo de ' + (calc.ciclo || 0).toFixed(0) + ' dias',
+      valorEstimado: calc.cr * 0.7,
+      prioridade: 2
+    });
+  }
+  
+  // 3. Finame/BNDES - empresa com margem boa e baixa alavancagem
+  if (calc.margem >= 0.10 && calc.alav < 2.5 && calc.receita > 2000000) {
+    const valorEstimado = calc.receita * 0.2;
+    produtos.push({
+      produto: 'Finame / BNDES',
+      icon: '🏭',
+      motivo: 'Perfil para investimento',
+      valorEstimado: valorEstimado,
+      prioridade: 3
+    });
+  }
+  
+  // 4. Financiamento de veículos/máquinas - empresa estável
+  if (calc.margem >= 0.08 && calc.liq >= 1.0 && calc.alav < 3) {
+    produtos.push({
+      produto: 'Financ. Máquinas/Veículos',
+      icon: '🚛',
+      motivo: 'Empresa estável para investir',
+      valorEstimado: calc.receita * 0.1,
+      prioridade: 3
+    });
+  }
+  
+  // 5. Refinanciamento/Portabilidade - se já tem dívida e paga juros altos
+  if (calc.alav > 1.5 && calc.alav < 3 && calc.despFin > 0 && calc.juros && calc.juros < 3) {
+    produtos.push({
+      produto: 'Refinanciamento/Portabilidade',
+      icon: '🔄',
+      motivo: 'Potencial redução de custo',
+      valorEstimado: calc.dividaBruta || calc.dl,
+      prioridade: 2
+    });
+  }
+  
+  // 6. Conta Garantida - necessidade pontual
+  if (calc.liq >= 0.9 && calc.liq < 1.3 && calc.margem >= 0.06) {
+    produtos.push({
+      produto: 'Conta Garantida',
+      icon: '💳',
+      motivo: 'Colchão para sazonalidade',
+      valorEstimado: calc.receita / 12,
+      prioridade: 4
+    });
+  }
+  
+  // Ordenar por prioridade
+  produtos.sort((a, b) => a.prioridade - b.prioridade);
+  
+  return produtos.slice(0, 2);
+}
+
+// Calcula o LEAD SCORE final (combinação de necessidade e capacidade)
+function calcularLeadScore(calc) {
+  const necessidade = calcularScoreNecessidade(calc);
+  const capacidade = calcularScoreCapacidade(calc);
+  
+  // Se capacidade muito baixa (< 30), não é lead qualificado
+  if (capacidade.score < 30) {
+    return {
+      score: 0,
+      classificacao: 'frio',
+      icon: '⚪',
+      label: 'Risco Alto',
+      cor: '#9ca3af',
+      motivo: 'Indicadores fracos para aprovação',
+      necessidade,
+      capacidade,
+      produtos: []
+    };
+  }
+  
+  // Se capacidade muito alta (> 85) mas necessidade baixa (< 30)
+  if (capacidade.score > 85 && necessidade.score < 30) {
+    return {
+      score: Math.round((necessidade.score + capacidade.score) / 2 * 0.5),
+      classificacao: 'morno',
+      icon: '⚪',
+      label: 'Sem Necessidade',
+      cor: '#6b7280',
+      motivo: 'Empresa saudável, baixa necessidade',
+      necessidade,
+      capacidade,
+      produtos: []
+    };
+  }
+  
+  // Score combinado: média ponderada (necessidade 40% + capacidade 60%)
+  const scoreFinal = Math.round(necessidade.score * 0.4 + capacidade.score * 0.6);
+  const produtos = sugerirProdutoIdeal(calc, necessidade, capacidade);
+  
+  // Classificação
+  let classificacao, icon, label, cor;
+  
+  if (scoreFinal >= 70 && necessidade.score >= 40 && capacidade.score >= 50) {
+    classificacao = 'quente';
+    icon = '🔥';
+    label = 'Hot Lead';
+    cor = '#dc2626';
+  } else if (scoreFinal >= 55 && necessidade.score >= 30 && capacidade.score >= 40) {
+    classificacao = 'morno_alto';
+    icon = '🟡';
+    label = 'Boa Chance';
+    cor = '#f59e0b';
+  } else if (scoreFinal >= 40 && capacidade.score >= 35) {
+    classificacao = 'morno';
+    icon = '🟢';
+    label = 'Potencial';
+    cor = '#22c55e';
+  } else {
+    classificacao = 'frio';
+    icon = '⚪';
+    label = 'Baixo Potencial';
+    cor = '#9ca3af';
+  }
+  
+  return {
+    score: scoreFinal,
+    classificacao,
+    icon,
+    label,
+    cor,
+    motivo: produtos.length > 0 ? produtos[0].motivo : 'Avaliar oportunidade',
+    necessidade,
+    capacidade,
+    produtos
+  };
+}
+
+// Atualiza o painel de oportunidades na tela inicial
+function atualizarPainelOportunidades(listaComCalc) {
+  const painel = document.getElementById('painelOportunidades');
+  const lista = document.getElementById('listaOportunidades');
+  const qtdEl = document.getElementById('qtdOportunidades');
+  
+  if (!painel || !lista) return;
+  
+  // Calcular lead score para cada empresa
+  const empresasComLead = listaComCalc.map(row => {
+    const lead = calcularLeadScore(row);
+    return { ...row, lead };
+  });
+  
+  // Filtrar apenas hot leads e boas chances
+  const oportunidades = empresasComLead
+    .filter(e => e.lead.classificacao === 'quente' || e.lead.classificacao === 'morno_alto')
+    .sort((a, b) => b.lead.score - a.lead.score)
+    .slice(0, 5);
+  
+  if (oportunidades.length === 0) {
+    painel.style.display = 'none';
+    return;
+  }
+  
+  painel.style.display = 'block';
+  qtdEl.textContent = oportunidades.filter(o => o.lead.classificacao === 'quente').length + ' hot leads';
+  
+  lista.innerHTML = oportunidades.map(emp => {
+    const produtos = emp.lead.produtos;
+    const produtoPrincipal = produtos[0];
+    
+    return `
+      <div style="background:rgba(255,255,255,.95); border-radius:10px; padding:16px; color:#1e293b; display:flex; justify-content:space-between; align-items:center; gap:16px">
+        <div style="flex:1">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px">
+            <span style="font-size:20px">${emp.lead.icon}</span>
+            <span style="font-weight:700; font-size:15px">${escapeHtml(emp.nome)}</span>
+            <span style="background:${emp.lead.cor}; color:#fff; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:600">${emp.lead.label}</span>
+          </div>
+          <div style="display:flex; gap:16px; font-size:12px; color:#64748b; flex-wrap:wrap">
+            <span>📊 Score: <strong style="color:#1e293b">${emp.score}</strong></span>
+            <span>💰 Receita: <strong style="color:#1e293b">${toBRL(emp.receita)}</strong></span>
+            <span>📈 Margem: <strong style="color:#1e293b">${toPct(emp.margem)}</strong></span>
+            <span>⚖️ DL/EBITDA: <strong style="color:#1e293b">${emp.alav != null ? emp.alav.toFixed(1) + 'x' : '—'}</strong></span>
+          </div>
+        </div>
+        <div style="text-align:right; min-width:180px">
+          ${produtoPrincipal ? `
+            <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; padding:8px 12px; margin-bottom:8px">
+              <div style="font-size:11px; color:#92400e; margin-bottom:2px">Produto Sugerido</div>
+              <div style="font-weight:700; color:#78350f; font-size:13px">${produtoPrincipal.icon} ${produtoPrincipal.produto}</div>
+              <div style="font-size:11px; color:#92400e">~ ${toBRL(produtoPrincipal.valorEstimado)}</div>
+            </div>
+          ` : ''}
+          <button class="btn btn-outline" style="padding:6px 12px; font-size:11px; background:#fff" onclick="abrirModalDetalhes('${emp.empresaId}')">
+            📊 Ver Análise
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Gera HTML da coluna de oportunidade para a tabela
+function gerarColunaOportunidade(lead) {
+  if (lead.classificacao === 'frio' || !lead.produtos.length) {
+    return `
+      <div style="text-align:center">
+        <span style="color:${lead.cor}; font-size:16px">${lead.icon}</span>
+        <div style="font-size:10px; color:#9ca3af">${lead.label}</div>
+      </div>
+    `;
+  }
+  
+  const produto = lead.produtos[0];
+  return `
+    <div style="text-align:center">
+      <div style="display:flex; align-items:center; justify-content:center; gap:4px; margin-bottom:2px">
+        <span style="font-size:14px">${lead.icon}</span>
+        <span style="font-size:12px; font-weight:700; color:${lead.cor}">${lead.score}</span>
+      </div>
+      <div style="font-size:10px; color:#64748b; white-space:nowrap">${produto.icon} ${produto.produto}</div>
+      <div style="font-size:9px; color:#9ca3af">~${toBRL(produto.valorEstimado)}</div>
+    </div>
+  `;
+}
+
+// Expor funções
+window.calcularLeadScore = calcularLeadScore;
+window.atualizarPainelOportunidades = atualizarPainelOportunidades;
+window.gerarColunaOportunidade = gerarColunaOportunidade;
