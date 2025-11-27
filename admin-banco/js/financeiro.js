@@ -1993,9 +1993,9 @@ function renderHealthDashboard(rows){
       
       ${rows.length > 1 ? `
       <div style="margin-top:20px; padding-top:16px; border-top:1px solid #bae6fd">
-        <div style="font-weight:600; color:#0c4a6e; margin-bottom:12px">📊 Comparativo de Anos</div>
+        <div style="font-weight:600; color:#0c4a6e; margin-bottom:12px">📊 Comparativo de Anos - Indicadores Completos</div>
         <div style="overflow-x:auto">
-          <table style="width:100%; border-collapse:collapse; font-size:12px; background:#fff; border-radius:8px">
+          <table style="width:100%; border-collapse:collapse; font-size:11px; background:#fff; border-radius:8px">
             <thead>
               <tr style="background:#f1f5f9">
                 <th style="padding:10px; text-align:left; border-bottom:1px solid #e2e8f0">Indicador</th>
@@ -2003,32 +2003,111 @@ function renderHealthDashboard(rows){
               </tr>
             </thead>
             <tbody>
+              <!-- RESULTADOS -->
+              <tr style="background:#f0f9ff">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#0369a1; font-size:10px">📈 RESULTADOS</td>
+              </tr>
               <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Receita</strong></td>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Receita Líquida</td>
                 ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.receita)}</td>`).join('')}
               </tr>
               <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>EBITDA</strong></td>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">EBITDA</td>
                 ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.ebitda)}</td>`).join('')}
               </tr>
               <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Margem EBITDA</strong></td>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Lucro Líquido</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toBRL(r.lucroLiq)}</td>`).join('')}
+              </tr>
+              
+              <!-- MARGENS -->
+              <tr style="background:#ecfdf5">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#065f46; font-size:10px">📊 MARGENS</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Margem Bruta</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.margemBruta)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Margem EBITDA</td>
                 ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.margem)}</td>`).join('')}
               </tr>
               <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>DL/EBITDA</strong></td>
-                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.alav != null ? clamp2(r.alav) + 'x' : '—'}</td>`).join('')}
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Margem Líquida</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.margemLiq)}</td>`).join('')}
+              </tr>
+              
+              <!-- RENTABILIDADE -->
+              <tr style="background:#fef3c7">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#92400e; font-size:10px">💰 RENTABILIDADE</td>
               </tr>
               <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>Liquidez</strong></td>
-                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.liq != null ? clamp2(r.liq) : '—'}</td>`).join('')}
-              </tr>
-              <tr>
-                <td style="padding:8px; border-bottom:1px solid #f1f5f9"><strong>ROE</strong></td>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">ROE</td>
                 ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.roe)}</td>`).join('')}
               </tr>
               <tr>
-                <td style="padding:8px"><strong>Score</strong></td>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">ROA</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.roa)}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">ROIC</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${toPct(r.roic)}</td>`).join('')}
+              </tr>
+              
+              <!-- LIQUIDEZ -->
+              <tr style="background:#dbeafe">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#1e40af; font-size:10px">💧 LIQUIDEZ</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Liq. Corrente</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.liqCorrente != null ? clamp2(r.liqCorrente) : r.liq != null ? clamp2(r.liq) : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Liq. Seca</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.liqSeca != null ? clamp2(r.liqSeca) : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Liq. Imediata</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.liqImediata != null ? clamp2(r.liqImediata) : '—'}</td>`).join('')}
+              </tr>
+              
+              <!-- ENDIVIDAMENTO -->
+              <tr style="background:#fee2e2">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#991b1b; font-size:10px">🏦 ENDIVIDAMENTO</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">DL/EBITDA</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.alav != null ? clamp2(r.alav) + 'x' : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Endiv. Geral</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.endividamentoGeral != null ? (r.endividamentoGeral * 100).toFixed(0) + '%' : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">CT/CP</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.ctcp != null ? clamp2(r.ctcp) : '—'}</td>`).join('')}
+              </tr>
+              
+              <!-- EFICIÊNCIA -->
+              <tr style="background:#f3e8ff">
+                <td colspan="${rows.slice(0,4).length + 1}" style="padding:8px; font-weight:700; color:#7c3aed; font-size:10px">⚡ EFICIÊNCIA</td>
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Giro do Ativo</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.giroAtv != null ? clamp2(r.giroAtv) + 'x' : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Ciclo Financeiro</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.ciclo != null ? Math.round(r.ciclo) + ' dias' : '—'}</td>`).join('')}
+              </tr>
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #f1f5f9">Cobert. Juros</td>
+                ${rows.slice(0,4).map(r => `<td style="padding:8px; text-align:right; border-bottom:1px solid #f1f5f9">${r.juros != null ? clamp2(r.juros) + 'x' : '—'}</td>`).join('')}
+              </tr>
+              
+              <!-- SCORE -->
+              <tr style="background:#f1f5f9">
+                <td style="padding:8px; font-weight:700">🎯 Score Final</td>
                 ${rows.slice(0,4).map(r => {
                   const sc = calcularScore(r);
                   const st = getStatusFinanceiro(sc);
@@ -2579,7 +2658,298 @@ function gerarAnaliseAvancadaHtml(latest, rows){
     </div>
   `;
   
+  // ========== NOVOS PAINÉIS AVANÇADOS ==========
+  
+  // ===== PAINEL 1: ANÁLISE DUPONT (Decomposição do ROE) =====
+  const dupontMargem = latest.margemLiq || (latest.margem * 0.6);
+  const dupontGiro = latest.giroAtv || (latest.receita / ativo);
+  const dupontAlav = latest.alavFin || (ativo / latest.pl);
+  const roeDupont = dupontMargem * dupontGiro * dupontAlav;
+  
+  html += `
+    <div style="margin-top:16px">
+      <div style="background:linear-gradient(135deg, #4f46e5, #7c3aed); color:#fff; border-radius:12px; padding:20px; margin-bottom:16px">
+        <div style="font-size:12px; font-weight:600; opacity:0.9; margin-bottom:8px">🔬 ANÁLISE DUPONT - Decomposição do ROE</div>
+        <div style="font-size:11px; opacity:0.7; margin-bottom:20px">Entenda DE ONDE vem (ou deveria vir) a rentabilidade</div>
+        
+        <div style="display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px">
+          <div style="text-align:center; padding:16px 20px; background:rgba(255,255,255,0.15); border-radius:12px; min-width:120px">
+            <div style="font-size:10px; opacity:0.8">Margem Líquida</div>
+            <div style="font-size:24px; font-weight:800">${(dupontMargem * 100).toFixed(1)}%</div>
+            <div style="font-size:10px; opacity:0.7; margin-top:4px">Lucro / Receita</div>
+          </div>
+          <div style="font-size:24px; font-weight:300">×</div>
+          <div style="text-align:center; padding:16px 20px; background:rgba(255,255,255,0.15); border-radius:12px; min-width:120px">
+            <div style="font-size:10px; opacity:0.8">Giro do Ativo</div>
+            <div style="font-size:24px; font-weight:800">${dupontGiro.toFixed(2)}x</div>
+            <div style="font-size:10px; opacity:0.7; margin-top:4px">Receita / Ativo</div>
+          </div>
+          <div style="font-size:24px; font-weight:300">×</div>
+          <div style="text-align:center; padding:16px 20px; background:rgba(255,255,255,0.15); border-radius:12px; min-width:120px">
+            <div style="font-size:10px; opacity:0.8">Alavancagem</div>
+            <div style="font-size:24px; font-weight:800">${dupontAlav.toFixed(2)}x</div>
+            <div style="font-size:10px; opacity:0.7; margin-top:4px">Ativo / PL</div>
+          </div>
+          <div style="font-size:24px; font-weight:300">=</div>
+          <div style="text-align:center; padding:16px 20px; background:rgba(255,255,255,0.25); border-radius:12px; border:2px solid rgba(255,255,255,0.3); min-width:120px">
+            <div style="font-size:10px; opacity:0.8">ROE</div>
+            <div style="font-size:28px; font-weight:800">${(roeDupont * 100).toFixed(1)}%</div>
+            <div style="font-size:10px; opacity:0.7; margin-top:4px">Retorno / Equity</div>
+          </div>
+        </div>
+        
+        <div style="margin-top:20px; padding:16px; background:rgba(255,255,255,0.1); border-radius:10px">
+          <div style="font-size:12px; font-weight:600; margin-bottom:8px">💡 Diagnóstico DuPont:</div>
+          <div style="font-size:12px; opacity:0.9">
+            ${dupontMargem < 0.05 && dupontGiro < 1 ? 
+              '⚠️ <strong>Duplo problema:</strong> Margem baixa E giro lento. Precisa revisar preços E otimizar ativos.' :
+              dupontMargem < 0.05 ? 
+              '📉 <strong>Margem comprimida:</strong> O ROE depende muito de volume. Trabalhe preços e custos.' :
+              dupontGiro < 0.8 ?
+              '🐌 <strong>Ativos subutilizados:</strong> Muitos recursos parados. Aumente vendas ou reduza ativos.' :
+              dupontAlav > 3 ?
+              '🏦 <strong>Muito alavancada:</strong> ROE alto, mas com risco. Depende demais de dívida.' :
+              '✅ <strong>Equilíbrio saudável:</strong> ROE bem distribuído entre margem, giro e alavancagem.'
+            }
+          </div>
+        </div>
+      </div>
+      
+      <!-- ===== PAINEL 2: LIQUIDEZ COMPLETA (4 tipos) ===== -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+        <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">💧 PAINEL DE LIQUIDEZ - Capacidade de Pagamento</div>
+        
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px">
+          ${[
+            { nome: 'Imediata', valor: latest.liqImediata, formula: 'Disponível/PC', ideal: '≥0.3', cor: latest.liqImediata >= 0.3 ? '#10b981' : latest.liqImediata >= 0.1 ? '#f59e0b' : '#ef4444' },
+            { nome: 'Seca', valor: latest.liqSeca, formula: '(AC-Estoque)/PC', ideal: '≥1.0', cor: latest.liqSeca >= 1 ? '#10b981' : latest.liqSeca >= 0.7 ? '#f59e0b' : '#ef4444' },
+            { nome: 'Corrente', valor: latest.liqCorrente || latest.liq, formula: 'AC/PC', ideal: '≥1.5', cor: (latest.liqCorrente || latest.liq) >= 1.5 ? '#10b981' : (latest.liqCorrente || latest.liq) >= 1 ? '#f59e0b' : '#ef4444' },
+            { nome: 'Geral', valor: latest.liqGeral, formula: '(AC+RLP)/(PC+PNC)', ideal: '≥1.0', cor: latest.liqGeral >= 1 ? '#10b981' : latest.liqGeral >= 0.7 ? '#f59e0b' : '#ef4444' }
+          ].map(item => `
+            <div style="text-align:center; padding:16px; background:#f8fafc; border-radius:10px; border-bottom:4px solid ${item.cor}">
+              <div style="font-size:10px; color:#6b7280; margin-bottom:4px">${item.nome}</div>
+              <div style="font-size:28px; font-weight:800; color:${item.cor}">${item.valor != null ? item.valor.toFixed(2) : '—'}</div>
+              <div style="font-size:9px; color:#9ca3af; margin-top:4px">${item.formula}</div>
+              <div style="font-size:9px; color:#6b7280; margin-top:2px">Ideal: ${item.ideal}</div>
+            </div>
+          `).join('')}
+        </div>
+        
+        <div style="margin-top:16px; padding:12px; background:#f0f9ff; border-radius:8px">
+          <div style="font-size:12px; color:#0369a1">
+            ${latest.liqImediata < 0.1 ? '🚨 <strong>Liquidez Imediata crítica:</strong> Não tem caixa para emergências. Risco de inadimplência.' :
+              latest.liqSeca < 0.7 ? '⚠️ <strong>Liquidez Seca baixa:</strong> Depende de vender estoque para pagar contas.' :
+              (latest.liqCorrente || latest.liq) < 1 ? '⚠️ <strong>Capital de Giro negativo:</strong> Passivo de curto prazo maior que ativo. Perigoso!' :
+              '✅ <strong>Liquidez adequada:</strong> Capacidade de honrar compromissos de curto e longo prazo.'
+            }
+          </div>
+        </div>
+      </div>
+      
+      <!-- ===== PAINEL 3: ANÁLISE FLEURIET (Modelo Brasileiro) ===== -->
+      ${gerarFleurietHtml(latest)}
+      
+      <!-- ===== PAINEL 4: ESTRUTURA DE CAPITAL ===== -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+        <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">🏗️ ESTRUTURA DE CAPITAL</div>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <!-- Composição do Financiamento -->
+          <div>
+            <div style="font-size:11px; color:#6b7280; margin-bottom:8px">Composição do Financiamento</div>
+            <div style="height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden; display:flex">
+              ${latest.pl > 0 && ativo > 0 ? `
+                <div style="width:${(latest.pl / ativo * 100).toFixed(0)}%; background:linear-gradient(90deg, #10b981, #34d399); display:flex; align-items:center; justify-content:center">
+                  <span style="font-size:10px; color:#fff; font-weight:600">${(latest.pl / ativo * 100).toFixed(0)}% Próprio</span>
+                </div>
+                <div style="flex:1; background:linear-gradient(90deg, #f59e0b, #fbbf24); display:flex; align-items:center; justify-content:center">
+                  <span style="font-size:10px; color:#fff; font-weight:600">${(100 - latest.pl / ativo * 100).toFixed(0)}% Terceiros</span>
+                </div>
+              ` : '<div style="flex:1; display:flex; align-items:center; justify-content:center; font-size:10px; color:#6b7280">Sem dados</div>'}
+            </div>
+          </div>
+          
+          <!-- Composição da Dívida -->
+          <div>
+            <div style="font-size:11px; color:#6b7280; margin-bottom:8px">Composição da Dívida (CP vs LP)</div>
+            <div style="height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden; display:flex">
+              ${latest.composicaoEndCP != null ? `
+                <div style="width:${(latest.composicaoEndCP * 100).toFixed(0)}%; background:linear-gradient(90deg, #ef4444, #f87171); display:flex; align-items:center; justify-content:center">
+                  <span style="font-size:10px; color:#fff; font-weight:600">${(latest.composicaoEndCP * 100).toFixed(0)}% CP</span>
+                </div>
+                <div style="flex:1; background:linear-gradient(90deg, #3b82f6, #60a5fa); display:flex; align-items:center; justify-content:center">
+                  <span style="font-size:10px; color:#fff; font-weight:600">${(100 - latest.composicaoEndCP * 100).toFixed(0)}% LP</span>
+                </div>
+              ` : '<div style="flex:1; display:flex; align-items:center; justify-content:center; font-size:10px; color:#6b7280">Sem dados</div>'}
+            </div>
+          </div>
+        </div>
+        
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-top:16px">
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:10px; color:#6b7280">CT/CP</div>
+            <div style="font-size:18px; font-weight:700; color:${latest.ctcp > 2 ? '#ef4444' : latest.ctcp > 1 ? '#f59e0b' : '#10b981'}">${latest.ctcp != null ? latest.ctcp.toFixed(2) : '—'}</div>
+            <div style="font-size:9px; color:#9ca3af">Ideal: ≤1.0</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:10px; color:#6b7280">End. Geral</div>
+            <div style="font-size:18px; font-weight:700; color:${latest.endividamentoGeral > 0.7 ? '#ef4444' : latest.endividamentoGeral > 0.5 ? '#f59e0b' : '#10b981'}">${latest.endividamentoGeral != null ? (latest.endividamentoGeral * 100).toFixed(0) + '%' : '—'}</div>
+            <div style="font-size:9px; color:#9ca3af">Ideal: ≤50%</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:10px; color:#6b7280">Imob/PL</div>
+            <div style="font-size:18px; font-weight:700; color:${latest.imobPL > 1 ? '#ef4444' : latest.imobPL > 0.7 ? '#f59e0b' : '#10b981'}">${latest.imobPL != null ? (latest.imobPL * 100).toFixed(0) + '%' : '—'}</div>
+            <div style="font-size:9px; color:#9ca3af">Ideal: ≤70%</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:10px; color:#6b7280">GAF</div>
+            <div style="font-size:18px; font-weight:700; color:${latest.gaf > 2 ? '#f59e0b' : '#3b82f6'}">${latest.gaf != null ? latest.gaf.toFixed(2) : '—'}</div>
+            <div style="font-size:9px; color:#9ca3af">Grau Alav. Fin.</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- ===== PAINEL 5: CICLO FINANCEIRO ===== -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+        <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">🔄 CICLO FINANCEIRO - Quanto tempo seu dinheiro fica "preso"</div>
+        
+        <div style="display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; margin-bottom:20px">
+          <div style="text-align:center; padding:12px 16px; background:#fef3c7; border-radius:8px">
+            <div style="font-size:10px; color:#92400e">PME (Estoque)</div>
+            <div style="font-size:20px; font-weight:700; color:#78350f">${latest.diasEst != null ? Math.round(latest.diasEst) : '—'}</div>
+            <div style="font-size:9px; color:#92400e">dias</div>
+          </div>
+          <div style="font-size:20px; color:#9ca3af">+</div>
+          <div style="text-align:center; padding:12px 16px; background:#dbeafe; border-radius:8px">
+            <div style="font-size:10px; color:#1e40af">PMR (Receber)</div>
+            <div style="font-size:20px; font-weight:700; color:#1e3a8a">${latest.pmr != null ? Math.round(latest.pmr) : '—'}</div>
+            <div style="font-size:9px; color:#1e40af">dias</div>
+          </div>
+          <div style="font-size:20px; color:#9ca3af">−</div>
+          <div style="text-align:center; padding:12px 16px; background:#dcfce7; border-radius:8px">
+            <div style="font-size:10px; color:#166534">PMP (Pagar)</div>
+            <div style="font-size:20px; font-weight:700; color:#14532d">${latest.pmp != null ? Math.round(latest.pmp) : '—'}</div>
+            <div style="font-size:9px; color:#166534">dias</div>
+          </div>
+          <div style="font-size:20px; color:#9ca3af">=</div>
+          <div style="text-align:center; padding:12px 20px; background:${latest.ciclo > 60 ? '#fee2e2' : latest.ciclo > 30 ? '#fef3c7' : '#dcfce7'}; border-radius:8px; border:2px solid ${latest.ciclo > 60 ? '#ef4444' : latest.ciclo > 30 ? '#f59e0b' : '#10b981'}">
+            <div style="font-size:10px; color:#6b7280">Ciclo Financeiro</div>
+            <div style="font-size:24px; font-weight:800; color:${latest.ciclo > 60 ? '#dc2626' : latest.ciclo > 30 ? '#d97706' : '#16a34a'}">${latest.ciclo != null ? Math.round(latest.ciclo) : '—'}</div>
+            <div style="font-size:9px; color:#6b7280">dias</div>
+          </div>
+        </div>
+        
+        <div style="padding:12px; background:#f8fafc; border-radius:8px; font-size:12px; color:#6b7280">
+          ${latest.ciclo > 90 ? 
+            '🚨 <strong>Ciclo muito longo:</strong> Mais de 90 dias com dinheiro parado. Urgente otimizar estoque e cobrança.' :
+            latest.ciclo > 60 ?
+            '⚠️ <strong>Ciclo extenso:</strong> Empresa precisa financiar 2 meses de operação. Negocie prazos.' :
+            latest.ciclo > 30 ?
+            '➡️ <strong>Ciclo moderado:</strong> Dentro do normal para maioria dos setores.' :
+            latest.ciclo <= 0 ?
+            '✅ <strong>Ciclo negativo:</strong> Fornecedores financiam a operação. Excelente gestão de capital!' :
+            '✅ <strong>Ciclo curto:</strong> Boa eficiência operacional. Pouca necessidade de capital de giro.'
+          }
+        </div>
+      </div>
+    </div>
+  `;
+  
   return html;
+}
+
+// ===== FUNÇÃO AUXILIAR: ANÁLISE FLEURIET =====
+function gerarFleurietHtml(latest){
+  // Modelo Fleuriet - Classificação Financeira Brasileira
+  // CDG = PL + PNC - (Imobilizado + Investimentos + Intangível)
+  // NCG = (CR + Estoques + Outros AC Operacionais) - (Fornecedores + Salários + Impostos + Outros PC Operacionais)
+  // ST = CDG - NCG (ou Caixa - Empréstimos CP)
+  
+  const pl = latest.pl || 0;
+  const pnc = latest.passivoNaoCirc || 0;
+  const anc = (latest.imobilizado || 0) + (latest.investimentos || 0) + (latest.intangivel || 0);
+  const cdg = pl + pnc - anc;
+  
+  const ncg = latest.ncg || ((latest.cr || 0) + (latest.estoques || 0) - (latest.cp || 0));
+  const st = latest.ccl || (latest.disponiveis || latest.caixa || 0) - (latest.emprestimosCP || 0);
+  
+  // Classificação Fleuriet
+  let tipoFleuriet, corFleuriet, descricaoFleuriet, iconeFleuriet;
+  
+  if(cdg > 0 && ncg < 0 && st > 0){
+    tipoFleuriet = 'EXCELENTE';
+    corFleuriet = '#10b981';
+    iconeFleuriet = '🏆';
+    descricaoFleuriet = 'Folga financeira total. CDG positivo, NCG negativo (fornecedores financiam) e Saldo de Tesouraria positivo.';
+  } else if(cdg > 0 && ncg > 0 && st > 0 && cdg > ncg){
+    tipoFleuriet = 'SÓLIDA';
+    corFleuriet = '#22c55e';
+    iconeFleuriet = '✅';
+    descricaoFleuriet = 'Estrutura saudável. CDG financia a NCG e ainda sobra caixa.';
+  } else if(cdg > 0 && ncg > 0 && st > 0 && cdg < ncg){
+    tipoFleuriet = 'SATISFATÓRIA';
+    corFleuriet = '#84cc16';
+    iconeFleuriet = '👍';
+    descricaoFleuriet = 'Aceitável. CDG positivo mas não cobre toda NCG. Usa empréstimos de curto prazo.';
+  } else if(cdg > 0 && ncg > 0 && st < 0){
+    tipoFleuriet = 'INSUFICIENTE';
+    corFleuriet = '#f59e0b';
+    iconeFleuriet = '⚠️';
+    descricaoFleuriet = 'Atenção! CDG positivo mas NCG maior. Dependência de empréstimos de curto prazo (Efeito Tesoura).';
+  } else if(cdg < 0 && ncg > 0 && st < 0){
+    tipoFleuriet = 'RUIM';
+    corFleuriet = '#ef4444';
+    iconeFleuriet = '🔴';
+    descricaoFleuriet = 'Situação crítica. CDG negativo e empresa depende totalmente de dívida de curto prazo.';
+  } else if(cdg < 0 && ncg < 0 && st < 0){
+    tipoFleuriet = 'PÉSSIMA';
+    corFleuriet = '#dc2626';
+    iconeFleuriet = '☠️';
+    descricaoFleuriet = 'Alto risco de insolvência. Mesmo com NCG negativo, não consegue gerar caixa.';
+  } else {
+    tipoFleuriet = 'INDEFINIDA';
+    corFleuriet = '#6b7280';
+    iconeFleuriet = '❓';
+    descricaoFleuriet = 'Dados insuficientes para classificar. Preencha mais campos do Balanço.';
+  }
+  
+  return `
+    <div style="background:linear-gradient(135deg, ${corFleuriet}15, ${corFleuriet}25); border:2px solid ${corFleuriet}; border-radius:12px; padding:20px; margin-bottom:16px">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px">
+        <div style="font-size:40px">${iconeFleuriet}</div>
+        <div>
+          <div style="font-size:12px; font-weight:600; color:#6b7280">📊 MODELO FLEURIET (Análise Dinâmica)</div>
+          <div style="font-size:24px; font-weight:800; color:${corFleuriet}">Situação ${tipoFleuriet}</div>
+        </div>
+      </div>
+      
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:16px">
+        <div style="text-align:center; padding:16px; background:#fff; border-radius:10px">
+          <div style="font-size:10px; color:#6b7280">CDG</div>
+          <div style="font-size:11px; color:#9ca3af; margin-bottom:4px">Capital de Giro</div>
+          <div style="font-size:20px; font-weight:800; color:${cdg >= 0 ? '#10b981' : '#ef4444'}">${toBRL(cdg)}</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:#fff; border-radius:10px">
+          <div style="font-size:10px; color:#6b7280">NCG</div>
+          <div style="font-size:11px; color:#9ca3af; margin-bottom:4px">Necessidade C.G.</div>
+          <div style="font-size:20px; font-weight:800; color:${ncg <= 0 ? '#10b981' : ncg < cdg ? '#f59e0b' : '#ef4444'}">${toBRL(ncg)}</div>
+        </div>
+        <div style="text-align:center; padding:16px; background:#fff; border-radius:10px">
+          <div style="font-size:10px; color:#6b7280">ST</div>
+          <div style="font-size:11px; color:#9ca3af; margin-bottom:4px">Saldo Tesouraria</div>
+          <div style="font-size:20px; font-weight:800; color:${st >= 0 ? '#10b981' : '#ef4444'}">${toBRL(st)}</div>
+        </div>
+      </div>
+      
+      <div style="padding:12px; background:#fff; border-radius:8px; font-size:12px; color:#6b7280">
+        <strong>Diagnóstico:</strong> ${descricaoFleuriet}
+      </div>
+      
+      <div style="margin-top:12px; font-size:10px; color:#6b7280; text-align:center">
+        Modelo de Michel Fleuriet - Padrão de análise de crédito no Brasil
+      </div>
+    </div>
+  `;
 }
 
 function getTrend(rows, field, invert=false){
