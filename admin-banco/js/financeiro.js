@@ -295,6 +295,8 @@ function wireUi(){
           CURRENT_ANALYSIS_DATA.empresa, 
           CURRENT_ANALYSIS_DATA.setor || 'industria'
         );
+      } else if(tabId === "dividas" && CURRENT_ANALYSIS_DATA){
+        renderDividasBancarias(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "plano" && CURRENT_ANALYSIS_DATA){
         renderPlanoAcao(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "defesa" && CURRENT_ANALYSIS_DATA){
@@ -8287,3 +8289,1279 @@ function mostrarResultadoSimulacao(resultado, tipo){
 // Expor função globalmente
 window.renderPlanejamento = renderPlanejamento;
 window.BENCHMARKS_SETOR = BENCHMARKS_SETOR;
+
+// ================================================================================
+// ==================== MÓDULO DE DÍVIDAS BANCÁRIAS ====================
+// ================================================================================
+
+// ===== LISTAS DE REFERÊNCIA =====
+const LISTA_BANCOS = [
+  { id: 'bb', nome: 'Banco do Brasil' },
+  { id: 'caixa', nome: 'Caixa Econômica Federal' },
+  { id: 'bradesco', nome: 'Bradesco' },
+  { id: 'itau', nome: 'Itaú' },
+  { id: 'santander', nome: 'Santander' },
+  { id: 'safra', nome: 'Safra' },
+  { id: 'btg', nome: 'BTG Pactual' },
+  { id: 'sicredi', nome: 'Sicredi' },
+  { id: 'sicoob', nome: 'Sicoob' },
+  { id: 'banrisul', nome: 'Banrisul' },
+  { id: 'brde', nome: 'BRDE' },
+  { id: 'bndes', nome: 'BNDES' },
+  { id: 'abc', nome: 'Banco ABC Brasil' },
+  { id: 'votorantim', nome: 'Banco Votorantim' },
+  { id: 'daycoval', nome: 'Daycoval' },
+  { id: 'pine', nome: 'Pine' },
+  { id: 'sofisa', nome: 'Sofisa' },
+  { id: 'inter', nome: 'Banco Inter' },
+  { id: 'c6', nome: 'C6 Bank' },
+  { id: 'original', nome: 'Banco Original' },
+  { id: 'outro', nome: 'Outro' }
+];
+
+const TIPOS_OPERACAO = [
+  { id: 'conta_garantida', nome: 'Conta Garantida / Cheque Especial', categoria: 'giro' },
+  { id: 'capital_giro', nome: 'Capital de Giro', categoria: 'giro' },
+  { id: 'antecip_recebiveis', nome: 'Antecipação de Recebíveis', categoria: 'giro' },
+  { id: 'desconto_duplicatas', nome: 'Desconto de Duplicatas', categoria: 'giro' },
+  { id: 'desconto_cheques', nome: 'Desconto de Cheques', categoria: 'giro' },
+  { id: 'cartao_credito', nome: 'Antecipação de Cartões', categoria: 'giro' },
+  { id: 'credito_rotativo', nome: 'Crédito Rotativo', categoria: 'giro' },
+  { id: 'bndes_automatico', nome: 'BNDES Automático', categoria: 'investimento' },
+  { id: 'finame', nome: 'Finame', categoria: 'investimento' },
+  { id: 'finame_direto', nome: 'Finame Direto', categoria: 'investimento' },
+  { id: 'financ_maquinas', nome: 'Financiamento de Máquinas', categoria: 'investimento' },
+  { id: 'financ_veiculos', nome: 'Financiamento de Veículos', categoria: 'investimento' },
+  { id: 'financ_imobiliario', nome: 'Financiamento Imobiliário', categoria: 'investimento' },
+  { id: 'leasing', nome: 'Leasing/Arrendamento', categoria: 'investimento' },
+  { id: 'proger', nome: 'Proger', categoria: 'investimento' },
+  { id: 'fce', nome: 'FCO/FNE/FNO', categoria: 'investimento' },
+  { id: 'acc', nome: 'ACC', categoria: 'comex' },
+  { id: 'ace', nome: 'ACE', categoria: 'comex' },
+  { id: 'finimp', nome: 'Finimp', categoria: 'comex' },
+  { id: 'prorural', nome: 'Crédito Rural', categoria: 'rural' },
+  { id: 'custeio', nome: 'Custeio Agrícola', categoria: 'rural' },
+  { id: 'investimento_rural', nome: 'Investimento Rural', categoria: 'rural' },
+  { id: 'cpr', nome: 'CPR Financeira', categoria: 'rural' },
+  { id: 'debentures', nome: 'Debêntures', categoria: 'mercado' },
+  { id: 'cri', nome: 'CRI', categoria: 'mercado' },
+  { id: 'cra', nome: 'CRA', categoria: 'mercado' },
+  { id: 'nota_comercial', nome: 'Nota Comercial', categoria: 'mercado' },
+  { id: 'outro', nome: 'Outro', categoria: 'outro' }
+];
+
+const TIPOS_GARANTIA = [
+  { id: 'imovel_urbano', nome: 'Imóvel Urbano', tipo: 'real' },
+  { id: 'imovel_rural', nome: 'Imóvel Rural', tipo: 'real' },
+  { id: 'maquinas', nome: 'Máquinas e Equipamentos', tipo: 'real' },
+  { id: 'veiculos', nome: 'Veículos', tipo: 'real' },
+  { id: 'estoques', nome: 'Estoques', tipo: 'real' },
+  { id: 'recebiveis', nome: 'Recebíveis/Duplicatas', tipo: 'real' },
+  { id: 'aplicacoes', nome: 'Aplicações Financeiras', tipo: 'real' },
+  { id: 'aval', nome: 'Aval dos Sócios', tipo: 'pessoal' },
+  { id: 'fianca', nome: 'Fiança', tipo: 'pessoal' },
+  { id: 'carta_fianca', nome: 'Carta de Fiança Bancária', tipo: 'pessoal' },
+  { id: 'fgi', nome: 'FGI (Fundo Garantidor)', tipo: 'fundo' },
+  { id: 'fampe', nome: 'Fampe (Sebrae)', tipo: 'fundo' },
+  { id: 'seguro_credito', nome: 'Seguro de Crédito', tipo: 'seguro' },
+  { id: 'sem_garantia', nome: 'Sem Garantia (Clean)', tipo: 'nenhuma' }
+];
+
+const TIPOS_INDEXADOR = [
+  { id: 'pre', nome: 'Pré-fixado' },
+  { id: 'cdi', nome: 'CDI +' },
+  { id: 'selic', nome: 'SELIC +' },
+  { id: 'ipca', nome: 'IPCA +' },
+  { id: 'igpm', nome: 'IGP-M +' },
+  { id: 'tlp', nome: 'TLP +' },
+  { id: 'tjlp', nome: 'TJLP +' },
+  { id: 'tr', nome: 'TR +' },
+  { id: 'dolar', nome: 'Variação Cambial +' }
+];
+
+let OPERACOES_DIVIDA = [];
+
+function gerarIdOperacao() {
+  return 'op_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+function calcularTaxaAnual(taxaMensal) {
+  return (Math.pow(1 + taxaMensal / 100, 12) - 1) * 100;
+}
+
+function calcularCustoTotalReciprocidades(operacao) {
+  let custoMensal = 0;
+  if (operacao.reciprocidades) {
+    custoMensal += operacao.reciprocidades.seguroPrestamistaValor || 0;
+    custoMensal += operacao.reciprocidades.seguroBemValor || 0;
+    custoMensal += operacao.reciprocidades.capitalizacaoValor || 0;
+    custoMensal += operacao.reciprocidades.consorcioValor || 0;
+    custoMensal += operacao.reciprocidades.tarifasValor || 0;
+    custoMensal += operacao.reciprocidades.outrosCustos || 0;
+  }
+  return custoMensal;
+}
+
+function calcularCustoEfetivo(operacao) {
+  const custoRecip = calcularCustoTotalReciprocidades(operacao);
+  const saldo = operacao.saldoDevedor || 0;
+  if (saldo <= 0) return operacao.taxaMensal || 0;
+  const custoRecipPct = (custoRecip / saldo) * 100;
+  return (operacao.taxaMensal || 0) + custoRecipPct;
+}
+
+async function carregarOperacoesDivida(empresaId) {
+  try {
+    const snap = await db.collection('empresas').doc(empresaId).collection('operacoes_divida').get();
+    OPERACOES_DIVIDA = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    return OPERACOES_DIVIDA;
+  } catch (e) {
+    console.error('[carregarOperacoesDivida] Erro:', e);
+    OPERACOES_DIVIDA = [];
+    return [];
+  }
+}
+
+async function salvarOperacaoDivida(empresaId, operacao) {
+  try {
+    const ref = db.collection('empresas').doc(empresaId).collection('operacoes_divida');
+    if (operacao.id && !operacao.id.startsWith('op_')) {
+      await ref.doc(operacao.id).update({...operacao, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()});
+    } else {
+      const docRef = await ref.add({...operacao, criadoEm: firebase.firestore.FieldValue.serverTimestamp()});
+      operacao.id = docRef.id;
+    }
+    await carregarOperacoesDivida(empresaId);
+    return true;
+  } catch (e) {
+    console.error('[salvarOperacaoDivida] Erro:', e);
+    alert('Erro ao salvar: ' + e.message);
+    return false;
+  }
+}
+
+async function excluirOperacaoDivida(empresaId, operacaoId) {
+  try {
+    await db.collection('empresas').doc(empresaId).collection('operacoes_divida').doc(operacaoId).delete();
+    await carregarOperacoesDivida(empresaId);
+    return true;
+  } catch (e) {
+    console.error('[excluirOperacaoDivida] Erro:', e);
+    return false;
+  }
+}
+
+function calcularConsolidadoDividas(operacoes, dadosEmpresa) {
+  const consolidado = {
+    totalDividaBruta: 0, totalParcelas: 0, custoMedioPonderado: 0,
+    custoEfetivoPonderado: 0, totalReciprocidades: 0, qtdOperacoes: operacoes.length,
+    porBanco: {}, porTipo: {}, porIndexador: {}, porCategoria: {},
+    vencimentos: [], operacoesOrdenadas: []
+  };
+  
+  let somaPonderadaTaxa = 0, somaPonderadaCET = 0;
+  
+  operacoes.forEach(op => {
+    const saldo = op.saldoDevedor || 0;
+    const parcela = op.valorParcela || 0;
+    const taxaMensal = op.taxaMensal || 0;
+    const custoEfetivo = calcularCustoEfetivo(op);
+    const custoRecip = calcularCustoTotalReciprocidades(op);
+    
+    consolidado.totalDividaBruta += saldo;
+    consolidado.totalParcelas += parcela;
+    consolidado.totalReciprocidades += custoRecip;
+    somaPonderadaTaxa += saldo * taxaMensal;
+    somaPonderadaCET += saldo * custoEfetivo;
+    
+    const bancoNome = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || op.bancoOutro || 'Outro';
+    if (!consolidado.porBanco[bancoNome]) consolidado.porBanco[bancoNome] = { saldo: 0, parcelas: 0, qtd: 0 };
+    consolidado.porBanco[bancoNome].saldo += saldo;
+    consolidado.porBanco[bancoNome].parcelas += parcela;
+    consolidado.porBanco[bancoNome].qtd++;
+    
+    const tipoInfo = TIPOS_OPERACAO.find(t => t.id === op.tipoOperacao);
+    const tipoNome = tipoInfo?.nome || 'Outro';
+    const categoria = tipoInfo?.categoria || 'outro';
+    if (!consolidado.porTipo[tipoNome]) consolidado.porTipo[tipoNome] = { saldo: 0, parcelas: 0, qtd: 0 };
+    consolidado.porTipo[tipoNome].saldo += saldo;
+    consolidado.porTipo[tipoNome].qtd++;
+    
+    const categoriaNome = { giro: 'Capital de Giro', investimento: 'Investimento', comex: 'Comércio Exterior', rural: 'Rural', mercado: 'Mercado de Capitais', outro: 'Outros' }[categoria] || 'Outros';
+    if (!consolidado.porCategoria[categoriaNome]) consolidado.porCategoria[categoriaNome] = { saldo: 0, parcelas: 0, qtd: 0 };
+    consolidado.porCategoria[categoriaNome].saldo += saldo;
+    consolidado.porCategoria[categoriaNome].qtd++;
+    
+    const indexadorNome = TIPOS_INDEXADOR.find(i => i.id === op.indexador)?.nome || 'Outro';
+    if (!consolidado.porIndexador[indexadorNome]) consolidado.porIndexador[indexadorNome] = { saldo: 0, qtd: 0 };
+    consolidado.porIndexador[indexadorNome].saldo += saldo;
+    consolidado.porIndexador[indexadorNome].qtd++;
+  });
+  
+  if (consolidado.totalDividaBruta > 0) {
+    consolidado.custoMedioPonderado = somaPonderadaTaxa / consolidado.totalDividaBruta;
+    consolidado.custoEfetivoPonderado = somaPonderadaCET / consolidado.totalDividaBruta;
+  }
+  
+  consolidado.operacoesOrdenadas = operacoes.map(op => ({ ...op, custoEfetivo: calcularCustoEfetivo(op) })).sort((a, b) => b.custoEfetivo - a.custoEfetivo);
+  
+  if (dadosEmpresa) {
+    const ebitda = dadosEmpresa.ebitda || 0;
+    consolidado.dlEbitda = ebitda > 0 ? consolidado.totalDividaBruta / ebitda : null;
+    consolidado.parcelasSobreEbitda = ebitda > 0 ? (consolidado.totalParcelas * 12) / ebitda : null;
+    consolidado.custoAnualJuros = consolidado.totalDividaBruta * consolidado.custoMedioPonderado * 12 / 100;
+  }
+  
+  return consolidado;
+}
+
+function gerarRecomendacoesDividas(operacoes, consolidado, dadosEmpresa) {
+  const recomendacoes = [];
+  if (operacoes.length === 0) return recomendacoes;
+  
+  const taxaMedia = consolidado.custoMedioPonderado;
+  consolidado.operacoesOrdenadas.slice(0, 3).forEach(op => {
+    if (op.custoEfetivo > taxaMedia * 1.15) {
+      const economia = op.saldoDevedor * (op.custoEfetivo - taxaMedia) * 12 / 100;
+      const bancoNome = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || 'Banco';
+      recomendacoes.push({
+        tipo: 'critico', titulo: 'Renegociar/Portar operação ' + bancoNome,
+        descricao: 'Taxa de ' + op.custoEfetivo.toFixed(2) + '% a.m. está ' + ((op.custoEfetivo / taxaMedia - 1) * 100).toFixed(0) + '% acima da média. Saldo: ' + toBRL(op.saldoDevedor),
+        economia: economia, operacaoId: op.id
+      });
+    }
+  });
+  
+  operacoes.forEach(op => {
+    const custoRecip = calcularCustoTotalReciprocidades(op);
+    if (custoRecip > 10000) {
+      const bancoNome = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || 'Banco';
+      recomendacoes.push({
+        tipo: 'atencao', titulo: 'Reciprocidades elevadas - ' + bancoNome,
+        descricao: 'Custos extras de ' + toBRL(custoRecip) + '/mês com seguros, capitalização, etc.',
+        economia: custoRecip * 12
+      });
+    }
+  });
+  
+  Object.entries(consolidado.porBanco).forEach(([banco, dados]) => {
+    const pct = dados.saldo / consolidado.totalDividaBruta;
+    if (pct > 0.4 && Object.keys(consolidado.porBanco).length > 1) {
+      recomendacoes.push({
+        tipo: 'atencao', titulo: 'Alta concentração em ' + banco,
+        descricao: (pct * 100).toFixed(0) + '% da dívida está neste banco. Isso reduz poder de negociação.'
+      });
+    }
+  });
+  
+  const operacoesGiro = operacoes.filter(op => TIPOS_OPERACAO.find(t => t.id === op.tipoOperacao)?.categoria === 'giro');
+  if (operacoesGiro.length >= 3) {
+    const totalGiro = operacoesGiro.reduce((s, op) => s + (op.saldoDevedor || 0), 0);
+    recomendacoes.push({
+      tipo: 'oportunidade', titulo: 'Consolidar operações de capital de giro',
+      descricao: operacoesGiro.length + ' operações de giro totalizam ' + toBRL(totalGiro) + '. Consolidar pode reduzir taxa.',
+      economia: totalGiro * 0.003 * 12
+    });
+  }
+  
+  if (consolidado.dlEbitda && consolidado.dlEbitda > 3) {
+    recomendacoes.push({
+      tipo: 'critico', titulo: 'Alavancagem elevada',
+      descricao: 'DL/EBITDA de ' + consolidado.dlEbitda.toFixed(1) + 'x está acima do recomendado (2.5x).'
+    });
+  }
+  
+  const ordem = { urgente: 0, critico: 1, atencao: 2, oportunidade: 3 };
+  recomendacoes.sort((a, b) => ordem[a.tipo] - ordem[b.tipo]);
+  return recomendacoes;
+}
+
+function simularPortabilidade(operacao, novaTaxa, novoPrazo) {
+  const saldo = operacao.saldoDevedor || 0;
+  const parcelaAtual = operacao.valorParcela || 0;
+  const parcelasRestantes = operacao.parcelasRestantes || 0;
+  const custoRecipAtual = calcularCustoTotalReciprocidades(operacao);
+  
+  const novaTaxaDec = novaTaxa / 100;
+  const novaParcela = novoPrazo > 0 ? saldo * (novaTaxaDec * Math.pow(1 + novaTaxaDec, novoPrazo)) / (Math.pow(1 + novaTaxaDec, novoPrazo) - 1) : 0;
+  
+  const custoTotalAtual = (parcelaAtual * parcelasRestantes) + (custoRecipAtual * parcelasRestantes);
+  const custoTotalNovo = novaParcela * novoPrazo;
+  
+  const multaLiquidacao = saldo * ((operacao.multaLiquidacao || 2) / 100);
+  const iofNovo = saldo * 0.0038;
+  const custosSaida = multaLiquidacao + iofNovo;
+  
+  const economiaTotal = custoTotalAtual - custoTotalNovo - custosSaida;
+  const economiaMensal = parcelaAtual + custoRecipAtual - novaParcela;
+  const paybackMeses = custosSaida > 0 && economiaMensal > 0 ? Math.ceil(custosSaida / economiaMensal) : 0;
+  
+  return {
+    saldo, parcelaAtual, novaParcela,
+    reducaoParcela: parcelaAtual - novaParcela,
+    reducaoParcelaPct: parcelaAtual > 0 ? ((parcelaAtual - novaParcela) / parcelaAtual) * 100 : 0,
+    custoTotalAtual, custoTotalNovo, custosSaida, multaLiquidacao, iofNovo,
+    economiaTotal, economiaMensal, paybackMeses,
+    vale: economiaTotal > 0
+  };
+}
+
+function simularConsolidacao(operacoes, novaTaxa, novoPrazo) {
+  const totalSaldo = operacoes.reduce((s, op) => s + (op.saldoDevedor || 0), 0);
+  const totalParcelas = operacoes.reduce((s, op) => s + (op.valorParcela || 0), 0);
+  const totalRecip = operacoes.reduce((s, op) => s + calcularCustoTotalReciprocidades(op), 0);
+  
+  const mediaParcelasRestantes = operacoes.reduce((s, op) => s + (op.parcelasRestantes || 0), 0) / operacoes.length;
+  const custoTotalAtual = (totalParcelas + totalRecip) * mediaParcelasRestantes;
+  
+  const novaTaxaDec = novaTaxa / 100;
+  const novaParcela = novoPrazo > 0 ? totalSaldo * (novaTaxaDec * Math.pow(1 + novaTaxaDec, novoPrazo)) / (Math.pow(1 + novaTaxaDec, novoPrazo) - 1) : 0;
+  const custoTotalNovo = novaParcela * novoPrazo;
+  
+  const custosSaida = operacoes.reduce((s, op) => s + (op.saldoDevedor || 0) * ((op.multaLiquidacao || 2) / 100), 0) + (totalSaldo * 0.0038);
+  const economiaMensal = totalParcelas + totalRecip - novaParcela;
+  
+  return {
+    qtdOperacoes: operacoes.length, totalSaldo, totalParcelas, totalRecip, novaParcela,
+    reducaoParcela: totalParcelas - novaParcela,
+    reducaoParcelaPct: totalParcelas > 0 ? ((totalParcelas - novaParcela) / totalParcelas) * 100 : 0,
+    custoTotalAtual, custoTotalNovo, custosSaida, economiaMensal,
+    liberacaoMensal: economiaMensal > 0 ? economiaMensal : 0
+  };
+}
+
+async function renderDividasBancarias(data) {
+  const container = document.getElementById('dividasContent');
+  if (!container) return;
+  
+  const empresaId = data.empresaId;
+  const empresaNome = data.empresa || data.empresaNome;
+  const latest = data.rows?.[0] || {};
+  
+  container.innerHTML = '<div style="text-align:center; padding:40px"><div class="loading">Carregando...</div></div>';
+  
+  await carregarOperacoesDivida(empresaId);
+  const operacoes = OPERACOES_DIVIDA;
+  const dadosEmpresa = { ebitda: latest.ebitda || 0, receita: latest.receita || 0, pl: latest.pl || 0 };
+  const consolidado = calcularConsolidadoDividas(operacoes, dadosEmpresa);
+  const recomendacoes = gerarRecomendacoesDividas(operacoes, consolidado, dadosEmpresa);
+  
+  let html = '<div style="background:linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%); border-radius:12px; padding:24px; margin-bottom:24px; color:#fff">' +
+    '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px">' +
+    '<div><div style="font-size:24px; font-weight:800">🏦 Dívidas Bancárias</div>' +
+    '<div style="font-size:14px; opacity:0.9; margin-top:4px">' + empresaNome + '</div></div>' +
+    '<button id="btnNovaOperacao" style="padding:12px 24px; background:#fff; color:#1e3a5f; border:none; border-radius:8px; font-weight:700; cursor:pointer">➕ Nova Operação</button>' +
+    '</div></div>';
+  
+  if (operacoes.length === 0) {
+    html += '<div style="background:#fff; border:2px dashed #e2e8f0; border-radius:12px; padding:60px; text-align:center">' +
+      '<div style="font-size:64px; margin-bottom:16px">🏦</div>' +
+      '<div style="font-size:18px; font-weight:600; color:#1e293b">Nenhuma operação cadastrada</div>' +
+      '<div style="font-size:14px; color:#64748b; margin-top:8px; margin-bottom:24px">Cadastre as dívidas bancárias para ter visão completa</div>' +
+      '<button id="btnNovaOperacao2" style="padding:12px 24px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600; cursor:pointer">Cadastrar Primeira Operação</button></div>';
+  } else {
+    // Resumo consolidado
+    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">' +
+      '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">📊 VISÃO CONSOLIDADA</div>' +
+      '<div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:16px; margin-bottom:20px">' +
+      '<div style="background:#f8fafc; border-radius:8px; padding:16px; text-align:center">' +
+      '<div style="font-size:11px; color:#64748b; margin-bottom:4px">DÍVIDA BRUTA</div>' +
+      '<div style="font-size:20px; font-weight:800; color:#1e293b">' + toBRL(consolidado.totalDividaBruta) + '</div></div>' +
+      '<div style="background:#f8fafc; border-radius:8px; padding:16px; text-align:center">' +
+      '<div style="font-size:11px; color:#64748b; margin-bottom:4px">PARCELAS/MÊS</div>' +
+      '<div style="font-size:20px; font-weight:800; color:#1e293b">' + toBRL(consolidado.totalParcelas) + '</div></div>' +
+      '<div style="background:#f8fafc; border-radius:8px; padding:16px; text-align:center">' +
+      '<div style="font-size:11px; color:#64748b; margin-bottom:4px">CUSTO MÉDIO</div>' +
+      '<div style="font-size:20px; font-weight:800; color:#1e293b">' + consolidado.custoMedioPonderado.toFixed(2) + '% <small style="font-size:11px">a.m.</small></div>' +
+      '<div style="font-size:10px; color:#64748b">' + calcularTaxaAnual(consolidado.custoMedioPonderado).toFixed(1) + '% a.a.</div></div>' +
+      '<div style="background:#f8fafc; border-radius:8px; padding:16px; text-align:center">' +
+      '<div style="font-size:11px; color:#64748b; margin-bottom:4px">DL/EBITDA</div>' +
+      '<div style="font-size:20px; font-weight:800; color:' + (consolidado.dlEbitda > 3 ? '#dc2626' : consolidado.dlEbitda > 2.5 ? '#f59e0b' : '#16a34a') + '">' + (consolidado.dlEbitda ? consolidado.dlEbitda.toFixed(1) + 'x' : '—') + '</div></div>' +
+      '<div style="background:#f8fafc; border-radius:8px; padding:16px; text-align:center">' +
+      '<div style="font-size:11px; color:#64748b; margin-bottom:4px">OPERAÇÕES</div>' +
+      '<div style="font-size:20px; font-weight:800; color:#1e293b">' + consolidado.qtdOperacoes + '</div></div></div>';
+    
+    if (consolidado.totalReciprocidades > 0) {
+      html += '<div style="background:#fef3c7; border-radius:8px; padding:12px; font-size:12px; color:#92400e">' +
+        '⚠️ <strong>Custos com Reciprocidades:</strong> ' + toBRL(consolidado.totalReciprocidades) + '/mês (' + toBRL(consolidado.totalReciprocidades * 12) + '/ano)</div>';
+    }
+    html += '</div>';
+    
+    // Por Banco e Categoria
+    html += '<div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:24px">' +
+      '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">' +
+      '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">🏦 POR BANCO</div>';
+    
+    Object.entries(consolidado.porBanco).sort((a,b) => b[1].saldo - a[1].saldo).forEach(([banco, dados]) => {
+      const pct = (dados.saldo / consolidado.totalDividaBruta) * 100;
+      html += '<div style="margin-bottom:12px"><div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">' +
+        '<span style="font-weight:600">' + banco + '</span><span>' + toBRL(dados.saldo) + ' (' + pct.toFixed(0) + '%)</span></div>' +
+        '<div style="background:#e2e8f0; border-radius:4px; height:8px; overflow:hidden">' +
+        '<div style="background:' + (pct > 40 ? '#f59e0b' : '#3b82f6') + '; height:100%; width:' + pct + '%"></div></div></div>';
+    });
+    html += '</div>';
+    
+    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px">' +
+      '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">📊 POR TIPO</div>';
+    
+    const cores = { 'Capital de Giro': '#ef4444', 'Investimento': '#22c55e', 'Comércio Exterior': '#3b82f6', 'Rural': '#84cc16', 'Mercado de Capitais': '#8b5cf6', 'Outros': '#6b7280' };
+    Object.entries(consolidado.porCategoria).sort((a,b) => b[1].saldo - a[1].saldo).forEach(([cat, dados]) => {
+      const pct = (dados.saldo / consolidado.totalDividaBruta) * 100;
+      html += '<div style="margin-bottom:12px"><div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">' +
+        '<span style="font-weight:600">' + cat + '</span><span>' + toBRL(dados.saldo) + ' (' + pct.toFixed(0) + '%)</span></div>' +
+        '<div style="background:#e2e8f0; border-radius:4px; height:8px; overflow:hidden">' +
+        '<div style="background:' + (cores[cat] || '#6b7280') + '; height:100%; width:' + pct + '%"></div></div></div>';
+    });
+    html += '</div></div>';
+    
+    // Cronograma
+    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">' +
+      '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">📅 CRONOGRAMA DE AMORTIZAÇÕES (12 meses)</div>' +
+      gerarCronogramaHtml(operacoes) + '</div>';
+    
+    // Ranking
+    html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">' +
+      '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">🏆 RANKING DE CUSTO</div>' +
+      '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12px">' +
+      '<thead><tr style="background:#f8fafc">' +
+      '<th style="padding:10px; text-align:left; border-bottom:2px solid #e2e8f0">#</th>' +
+      '<th style="padding:10px; text-align:left; border-bottom:2px solid #e2e8f0">Banco</th>' +
+      '<th style="padding:10px; text-align:left; border-bottom:2px solid #e2e8f0">Tipo</th>' +
+      '<th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0">Saldo</th>' +
+      '<th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0">Taxa</th>' +
+      '<th style="padding:10px; text-align:right; border-bottom:2px solid #e2e8f0">CET</th>' +
+      '<th style="padding:10px; text-align:center; border-bottom:2px solid #e2e8f0">Status</th>' +
+      '<th style="padding:10px; text-align:center; border-bottom:2px solid #e2e8f0">Ações</th></tr></thead><tbody>';
+    
+    consolidado.operacoesOrdenadas.forEach((op, idx) => {
+      const bancoNome = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || op.bancoOutro || 'Outro';
+      const tipoNome = TIPOS_OPERACAO.find(t => t.id === op.tipoOperacao)?.nome || 'Outro';
+      const isAcima = op.custoEfetivo > consolidado.custoMedioPonderado * 1.1;
+      const isAbaixo = op.custoEfetivo < consolidado.custoMedioPonderado * 0.9;
+      
+      html += '<tr style="border-bottom:1px solid #f1f5f9">' +
+        '<td style="padding:10px; font-weight:700">' + (idx + 1) + '</td>' +
+        '<td style="padding:10px; font-weight:600">' + bancoNome + '</td>' +
+        '<td style="padding:10px; color:#64748b">' + tipoNome + '</td>' +
+        '<td style="padding:10px; text-align:right">' + toBRL(op.saldoDevedor) + '</td>' +
+        '<td style="padding:10px; text-align:right">' + (op.taxaMensal || 0).toFixed(2) + '%</td>' +
+        '<td style="padding:10px; text-align:right; font-weight:700; color:' + (isAcima ? '#dc2626' : isAbaixo ? '#16a34a' : '#1e293b') + '">' + op.custoEfetivo.toFixed(2) + '%</td>' +
+        '<td style="padding:10px; text-align:center">' +
+        (isAcima ? '<span style="background:#fef2f2; color:#dc2626; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:600">CARA</span>' :
+         isAbaixo ? '<span style="background:#f0fdf4; color:#16a34a; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:600">BOA</span>' :
+         '<span style="background:#f8fafc; color:#64748b; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:600">OK</span>') + '</td>' +
+        '<td style="padding:10px; text-align:center">' +
+        '<button class="btn-editar-op" data-id="' + op.id + '" style="padding:4px 8px; font-size:10px; background:#f1f5f9; border:none; border-radius:4px; cursor:pointer; margin-right:4px">✏️</button>' +
+        '<button class="btn-simular-op" data-id="' + op.id + '" style="padding:4px 8px; font-size:10px; background:#dbeafe; border:none; border-radius:4px; cursor:pointer">🔄</button></td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+    
+    // Simuladores
+    html += '<div style="background:linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border:2px solid #f59e0b; border-radius:12px; padding:20px; margin-bottom:24px">' +
+      '<div style="font-size:14px; font-weight:700; color:#92400e; margin-bottom:16px">🎯 SIMULADORES</div>' +
+      '<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px">' +
+      '<button id="btnSimPortabilidade" style="padding:20px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; text-align:center">' +
+      '<div style="font-size:28px; margin-bottom:8px">🔄</div><div style="font-size:13px; font-weight:700; color:#92400e">Portabilidade</div>' +
+      '<div style="font-size:10px; color:#6b7280; margin-top:4px">Trazer operação para seu banco</div></button>' +
+      '<button id="btnSimConsolidacao" style="padding:20px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; text-align:center">' +
+      '<div style="font-size:28px; margin-bottom:8px">🔗</div><div style="font-size:13px; font-weight:700; color:#92400e">Consolidação</div>' +
+      '<div style="font-size:10px; color:#6b7280; margin-top:4px">Juntar várias operações</div></button>' +
+      '<button id="btnSimImpacto" style="padding:20px; background:#fff; border:2px solid #d97706; border-radius:8px; cursor:pointer; text-align:center">' +
+      '<div style="font-size:28px; margin-bottom:8px">📊</div><div style="font-size:13px; font-weight:700; color:#92400e">Impacto</div>' +
+      '<div style="font-size:10px; color:#6b7280; margin-top:4px">Ver efeito nos indicadores</div></button></div>' +
+      '<div id="areaSimulador" style="margin-top:16px; display:none"></div></div>';
+    
+    // Recomendações
+    if (recomendacoes.length > 0) {
+      html += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:24px">' +
+        '<div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:16px">💡 RECOMENDAÇÕES</div><div style="display:grid; gap:12px">';
+      
+      const coresRec = { urgente: { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', icon: '🚨' }, critico: { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', icon: '🔴' }, atencao: { bg: '#fefce8', border: '#fef08a', text: '#a16207', icon: '🟡' }, oportunidade: { bg: '#f0fdf4', border: '#bbf7d0', text: '#16a34a', icon: '🟢' } };
+      
+      recomendacoes.slice(0, 5).forEach(rec => {
+        const cor = coresRec[rec.tipo] || coresRec.atencao;
+        html += '<div style="background:' + cor.bg + '; border:1px solid ' + cor.border + '; border-radius:8px; padding:16px">' +
+          '<div style="display:flex; gap:12px; align-items:flex-start"><div style="font-size:20px">' + cor.icon + '</div>' +
+          '<div style="flex:1"><div style="font-size:13px; font-weight:700; color:' + cor.text + '">' + rec.titulo + '</div>' +
+          '<div style="font-size:12px; color:#4b5563; margin-top:4px">' + rec.descricao + '</div>' +
+          (rec.economia ? '<div style="font-size:11px; color:#16a34a; margin-top:8px; font-weight:600">💰 Economia potencial: ' + toBRL(rec.economia) + '/ano</div>' : '') +
+          '</div></div></div>';
+      });
+      html += '</div></div>';
+    }
+  }
+  
+  html += gerarModalCadastroHtml();
+  container.innerHTML = html;
+  configurarEventListenersDividas(empresaId, data);
+}
+
+function gerarCronogramaHtml(operacoes) {
+  const hoje = new Date();
+  const meses = [];
+  for (let i = 0; i < 12; i++) {
+    const data = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+    meses.push({ data, label: data.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }), parcelas: 0 });
+  }
+  operacoes.forEach(op => {
+    const parcela = op.valorParcela || 0;
+    const parcelasRestantes = op.parcelasRestantes || 0;
+    for (let i = 0; i < Math.min(parcelasRestantes, 12); i++) {
+      if (meses[i]) meses[i].parcelas += parcela;
+    }
+  });
+  const maxParcela = Math.max(...meses.map(m => m.parcelas), 1);
+  
+  let html = '<div style="display:grid; grid-template-columns:repeat(12, 1fr); gap:8px">';
+  meses.forEach(m => {
+    const altura = (m.parcelas / maxParcela) * 100;
+    html += '<div style="text-align:center"><div style="height:80px; display:flex; align-items:flex-end; justify-content:center; margin-bottom:8px">' +
+      '<div style="background:#3b82f6; width:100%; border-radius:4px 4px 0 0; height:' + Math.max(altura, 5) + '%"></div></div>' +
+      '<div style="font-size:10px; font-weight:600; color:#1e293b">' + m.label + '</div>' +
+      '<div style="font-size:9px; color:#64748b">' + (m.parcelas > 0 ? toBRL(m.parcelas) : '—') + '</div></div>';
+  });
+  return html + '</div>';
+}
+
+function gerarModalCadastroHtml() {
+  let html = '<div id="modalOperacao" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000; overflow-y:auto">' +
+    '<div style="background:#fff; max-width:800px; margin:40px auto; border-radius:12px; max-height:90vh; overflow-y:auto">' +
+    '<div style="background:#1e3a5f; color:#fff; padding:20px; border-radius:12px 12px 0 0; display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:1">' +
+    '<div style="font-size:18px; font-weight:700">🏦 Cadastrar Operação de Crédito</div>' +
+    '<button id="btnFecharModal" style="background:none; border:none; color:#fff; font-size:24px; cursor:pointer">×</button></div>' +
+    '<div style="padding:24px"><input type="hidden" id="opId" value="">';
+  
+  // Identificação
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">📋 Identificação</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Banco/Instituição *</label>' +
+    '<select id="opBanco" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  LISTA_BANCOS.forEach(b => { html += '<option value="' + b.id + '">' + b.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div id="divBancoOutro" style="display:none"><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Nome do Banco</label>' +
+    '<input type="text" id="opBancoOutro" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="Informe o banco"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Tipo de Operação *</label>' +
+    '<select id="opTipo" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">' +
+    '<optgroup label="Capital de Giro">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'giro').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Investimento">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'investimento').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Comércio Exterior">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'comex').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Rural">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'rural').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Mercado de Capitais">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'mercado').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup></select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Data de Contratação</label>' +
+    '<input type="date" id="opDataContratacao" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Finalidade</label>' +
+    '<input type="text" id="opFinalidade" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="Ex: Capital de giro, Máquina X..."></div></div></div>';
+  
+  // Valores
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">💰 Valores e Prazos</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor Original Contratado</label>' +
+    '<input type="text" id="opValorOriginal" class="money-div" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Saldo Devedor Atual *</label>' +
+    '<input type="text" id="opSaldoDevedor" class="money-div" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Prazo Total (meses)</label>' +
+    '<input type="number" id="opPrazoTotal" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="48"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Carência (meses)</label>' +
+    '<input type="number" id="opCarencia" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="0" value="0"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Parcelas Restantes *</label>' +
+    '<input type="number" id="opParcelasRestantes" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="24"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor da Parcela *</label>' +
+    '<input type="text" id="opValorParcela" class="money-div" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Taxa
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">📈 Taxa de Juros</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Indexador</label>' +
+    '<select id="opIndexador" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  TIPOS_INDEXADOR.forEach(i => { html += '<option value="' + i.id + '">' + i.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Taxa Total (% a.m.) *</label>' +
+    '<input type="number" id="opTaxaMensal" step="0.01" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="1.50"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Taxa Anual (auto)</label>' +
+    '<input type="text" id="opTaxaAnual" readonly style="width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:6px; font-size:13px; background:#f9fafb" placeholder="—"></div></div></div>';
+  
+  // Garantias
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🔒 Garantias</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Tipo de Garantia</label>' +
+    '<select id="opGarantia" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  TIPOS_GARANTIA.forEach(g => { html += '<option value="' + g.id + '">' + g.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor das Garantias</label>' +
+    '<input type="text" id="opValorGarantia" class="money-div" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Reciprocidades
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🤝 Reciprocidades (Custos Ocultos)</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:16px">' +
+    '<label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer"><input type="checkbox" id="opRecFolha"> Folha de Pagamento</label>' +
+    '<label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer"><input type="checkbox" id="opRecDomicilio"> Domicílio Bancário</label>' +
+    '<label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer"><input type="checkbox" id="opRecCobranca"> Cobrança Registrada</label></div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:8px"><input type="checkbox" id="opRecSeguroPrest"> Seguro Prestamista</label>' +
+    '<input type="text" id="opRecSeguroPrestValor" class="money-div" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><label style="display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:8px"><input type="checkbox" id="opRecCapitalizacao"> Capitalização</label>' +
+    '<input type="text" id="opRecCapitalizacaoValor" class="money-div" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><label style="display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:8px"><input type="checkbox" id="opRecTarifas"> Tarifas Bancárias</label>' +
+    '<input type="text" id="opRecTarifasValor" class="money-div" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:8px">Outros Custos Mensais</label>' +
+    '<input type="text" id="opRecOutros" class="money-div" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Saída
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🚪 Condições de Saída</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Multa Liquidação Antecipada (%)</label>' +
+    '<input type="number" id="opMulta" step="0.1" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="2.0" value="2"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Lock-up (meses)</label>' +
+    '<input type="number" id="opLockup" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="0" value="0"></div></div></div>';
+  
+  // Botões
+  html += '<div style="display:flex; gap:12px; justify-content:flex-end; padding-top:16px; border-top:1px solid #e2e8f0">' +
+    '<button id="btnCancelarOp" style="padding:12px 24px; background:#f1f5f9; color:#374151; border:none; border-radius:8px; font-weight:600; cursor:pointer">Cancelar</button>' +
+    '<button id="btnExcluirOp" style="padding:12px 24px; background:#fee2e2; color:#dc2626; border:none; border-radius:8px; font-weight:600; cursor:pointer; display:none">Excluir</button>' +
+    '<button id="btnSalvarOp" style="padding:12px 24px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600; cursor:pointer">Salvar Operação</button></div>' +
+    '</div></div></div>';
+  
+  return html;
+}
+
+function parseMoney(str) {
+  if (!str) return 0;
+  return parseFloat(str.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function formatMoney(val) {
+  return 'R$ ' + val.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+function configurarEventListenersDividas(empresaId, data) {
+  document.getElementById('btnNovaOperacao')?.addEventListener('click', () => abrirModalOperacao(null));
+  document.getElementById('btnNovaOperacao2')?.addEventListener('click', () => abrirModalOperacao(null));
+  document.getElementById('btnFecharModal')?.addEventListener('click', fecharModalOperacao);
+  document.getElementById('btnCancelarOp')?.addEventListener('click', fecharModalOperacao);
+  
+  document.getElementById('opBanco')?.addEventListener('change', (e) => {
+    document.getElementById('divBancoOutro').style.display = e.target.value === 'outro' ? 'block' : 'none';
+  });
+  
+  document.getElementById('opTaxaMensal')?.addEventListener('input', (e) => {
+    const taxaMensal = parseFloat(e.target.value) || 0;
+    document.getElementById('opTaxaAnual').value = calcularTaxaAnual(taxaMensal).toFixed(2) + '% a.a.';
+  });
+  
+  document.querySelectorAll('#modalOperacao .money-div').forEach(input => {
+    input.addEventListener('input', (e) => {
+      let v = e.target.value.replace(/\D/g, '');
+      v = (parseInt(v, 10) / 100).toFixed(2);
+      e.target.value = 'R$ ' + v.replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    });
+  });
+  
+  document.getElementById('btnSalvarOp')?.addEventListener('click', async () => {
+    const operacao = {
+      id: document.getElementById('opId').value || null,
+      banco: document.getElementById('opBanco').value,
+      bancoOutro: document.getElementById('opBancoOutro').value,
+      tipoOperacao: document.getElementById('opTipo').value,
+      dataContratacao: document.getElementById('opDataContratacao').value,
+      finalidade: document.getElementById('opFinalidade').value,
+      valorOriginal: parseMoney(document.getElementById('opValorOriginal').value),
+      saldoDevedor: parseMoney(document.getElementById('opSaldoDevedor').value),
+      prazoTotal: parseInt(document.getElementById('opPrazoTotal').value) || 0,
+      carencia: parseInt(document.getElementById('opCarencia').value) || 0,
+      parcelasRestantes: parseInt(document.getElementById('opParcelasRestantes').value) || 0,
+      valorParcela: parseMoney(document.getElementById('opValorParcela').value),
+      indexador: document.getElementById('opIndexador').value,
+      taxaMensal: parseFloat(document.getElementById('opTaxaMensal').value) || 0,
+      garantia: document.getElementById('opGarantia').value,
+      valorGarantia: parseMoney(document.getElementById('opValorGarantia').value),
+      multaLiquidacao: parseFloat(document.getElementById('opMulta').value) || 2,
+      lockup: parseInt(document.getElementById('opLockup').value) || 0,
+      reciprocidades: {
+        folhaPagamento: document.getElementById('opRecFolha').checked,
+        domicilioBancario: document.getElementById('opRecDomicilio').checked,
+        cobranca: document.getElementById('opRecCobranca').checked,
+        seguroPrestamista: document.getElementById('opRecSeguroPrest').checked,
+        seguroPrestamistaValor: parseMoney(document.getElementById('opRecSeguroPrestValor').value),
+        capitalizacao: document.getElementById('opRecCapitalizacao').checked,
+        capitalizacaoValor: parseMoney(document.getElementById('opRecCapitalizacaoValor').value),
+        tarifas: document.getElementById('opRecTarifas').checked,
+        tarifasValor: parseMoney(document.getElementById('opRecTarifasValor').value),
+        outrosCustos: parseMoney(document.getElementById('opRecOutros').value)
+      }
+    };
+    
+    if (!operacao.saldoDevedor || !operacao.taxaMensal) {
+      alert('Preencha pelo menos o saldo devedor e a taxa mensal.');
+      return;
+    }
+    
+    const sucesso = await salvarOperacaoDivida(empresaId, operacao);
+    if (sucesso) {
+      fecharModalOperacao();
+      renderDividasBancarias(data);
+    }
+  });
+  
+  document.getElementById('btnExcluirOp')?.addEventListener('click', async () => {
+    const id = document.getElementById('opId').value;
+    if (id && confirm('Tem certeza que deseja excluir esta operação?')) {
+      await excluirOperacaoDivida(empresaId, id);
+      fecharModalOperacao();
+      renderDividasBancarias(data);
+    }
+  });
+  
+  document.querySelectorAll('.btn-editar-op').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const op = OPERACOES_DIVIDA.find(o => o.id === btn.dataset.id);
+      if (op) abrirModalOperacao(op);
+    });
+  });
+  
+  document.querySelectorAll('.btn-simular-op').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const op = OPERACOES_DIVIDA.find(o => o.id === btn.dataset.id);
+      if (op) abrirSimuladorPortabilidade(op, data);
+    });
+  });
+  
+  document.getElementById('btnSimPortabilidade')?.addEventListener('click', () => abrirSimuladorPortabilidade(null, data));
+  document.getElementById('btnSimConsolidacao')?.addEventListener('click', () => abrirSimuladorConsolidacao(data));
+  document.getElementById('btnSimImpacto')?.addEventListener('click', () => abrirSimuladorImpacto(data));
+}
+
+function abrirModalOperacao(operacao) {
+  const modal = document.getElementById('modalOperacao');
+  if (!modal) return;
+  
+  // Limpar
+  document.getElementById('opId').value = '';
+  document.getElementById('opBanco').value = 'bb';
+  document.getElementById('opBancoOutro').value = '';
+  document.getElementById('opTipo').value = 'capital_giro';
+  document.getElementById('opDataContratacao').value = '';
+  document.getElementById('opFinalidade').value = '';
+  document.getElementById('opValorOriginal').value = '';
+  document.getElementById('opSaldoDevedor').value = '';
+  document.getElementById('opPrazoTotal').value = '';
+  document.getElementById('opCarencia').value = '0';
+  document.getElementById('opParcelasRestantes').value = '';
+  document.getElementById('opValorParcela').value = '';
+  document.getElementById('opIndexador').value = 'cdi';
+  document.getElementById('opTaxaMensal').value = '';
+  document.getElementById('opTaxaAnual').value = '';
+  document.getElementById('opGarantia').value = 'aval';
+  document.getElementById('opValorGarantia').value = '';
+  document.getElementById('opRecFolha').checked = false;
+  document.getElementById('opRecDomicilio').checked = false;
+  document.getElementById('opRecCobranca').checked = false;
+  document.getElementById('opRecSeguroPrest').checked = false;
+  document.getElementById('opRecSeguroPrestValor').value = '';
+  document.getElementById('opRecCapitalizacao').checked = false;
+  document.getElementById('opRecCapitalizacaoValor').value = '';
+  document.getElementById('opRecTarifas').checked = false;
+  document.getElementById('opRecTarifasValor').value = '';
+  document.getElementById('opRecOutros').value = '';
+  document.getElementById('opMulta').value = '2';
+  document.getElementById('opLockup').value = '0';
+  document.getElementById('divBancoOutro').style.display = 'none';
+  document.getElementById('btnExcluirOp').style.display = 'none';
+  
+  if (operacao) {
+    document.getElementById('opId').value = operacao.id || '';
+    document.getElementById('opBanco').value = operacao.banco || 'bb';
+    document.getElementById('opBancoOutro').value = operacao.bancoOutro || '';
+    document.getElementById('opTipo').value = operacao.tipoOperacao || 'capital_giro';
+    document.getElementById('opDataContratacao').value = operacao.dataContratacao || '';
+    document.getElementById('opFinalidade').value = operacao.finalidade || '';
+    if (operacao.valorOriginal) document.getElementById('opValorOriginal').value = formatMoney(operacao.valorOriginal);
+    if (operacao.saldoDevedor) document.getElementById('opSaldoDevedor').value = formatMoney(operacao.saldoDevedor);
+    document.getElementById('opPrazoTotal').value = operacao.prazoTotal || '';
+    document.getElementById('opCarencia').value = operacao.carencia || '0';
+    document.getElementById('opParcelasRestantes').value = operacao.parcelasRestantes || '';
+    if (operacao.valorParcela) document.getElementById('opValorParcela').value = formatMoney(operacao.valorParcela);
+    document.getElementById('opIndexador').value = operacao.indexador || 'cdi';
+    document.getElementById('opTaxaMensal').value = operacao.taxaMensal || '';
+    if (operacao.taxaMensal) document.getElementById('opTaxaAnual').value = calcularTaxaAnual(operacao.taxaMensal).toFixed(2) + '% a.a.';
+    document.getElementById('opGarantia').value = operacao.garantia || 'aval';
+    if (operacao.valorGarantia) document.getElementById('opValorGarantia').value = formatMoney(operacao.valorGarantia);
+    
+    if (operacao.reciprocidades) {
+      document.getElementById('opRecFolha').checked = operacao.reciprocidades.folhaPagamento || false;
+      document.getElementById('opRecDomicilio').checked = operacao.reciprocidades.domicilioBancario || false;
+      document.getElementById('opRecCobranca').checked = operacao.reciprocidades.cobranca || false;
+      document.getElementById('opRecSeguroPrest').checked = operacao.reciprocidades.seguroPrestamista || false;
+      if (operacao.reciprocidades.seguroPrestamistaValor) document.getElementById('opRecSeguroPrestValor').value = formatMoney(operacao.reciprocidades.seguroPrestamistaValor);
+      document.getElementById('opRecCapitalizacao').checked = operacao.reciprocidades.capitalizacao || false;
+      if (operacao.reciprocidades.capitalizacaoValor) document.getElementById('opRecCapitalizacaoValor').value = formatMoney(operacao.reciprocidades.capitalizacaoValor);
+      document.getElementById('opRecTarifas').checked = operacao.reciprocidades.tarifas || false;
+      if (operacao.reciprocidades.tarifasValor) document.getElementById('opRecTarifasValor').value = formatMoney(operacao.reciprocidades.tarifasValor);
+      if (operacao.reciprocidades.outrosCustos) document.getElementById('opRecOutros').value = formatMoney(operacao.reciprocidades.outrosCustos);
+    }
+    
+    document.getElementById('opMulta').value = operacao.multaLiquidacao || '2';
+    document.getElementById('opLockup').value = operacao.lockup || '0';
+    if (operacao.banco === 'outro') document.getElementById('divBancoOutro').style.display = 'block';
+    document.getElementById('btnExcluirOp').style.display = 'inline-block';
+  }
+  
+  modal.style.display = 'block';
+}
+
+function fecharModalOperacao() {
+  document.getElementById('modalOperacao').style.display = 'none';
+}
+
+function gerarModalCadastroHtml() {
+  let html = '<div id="modalOperacao" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000; overflow-y:auto">' +
+    '<div style="background:#fff; max-width:800px; margin:40px auto; border-radius:12px; max-height:90vh; overflow-y:auto">' +
+    '<div style="background:#1e3a5f; color:#fff; padding:20px; border-radius:12px 12px 0 0; display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:1">' +
+    '<div style="font-size:18px; font-weight:700">🏦 Cadastrar Operação de Crédito</div>' +
+    '<button id="btnFecharModal" style="background:none; border:none; color:#fff; font-size:24px; cursor:pointer">×</button></div>' +
+    '<div style="padding:24px"><input type="hidden" id="opId" value="">';
+  
+  // Identificação
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">📋 Identificação</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Banco/Instituição *</label>' +
+    '<select id="opBanco" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  LISTA_BANCOS.forEach(b => { html += '<option value="' + b.id + '">' + b.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div id="divBancoOutro" style="display:none"><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Nome do Banco</label>' +
+    '<input type="text" id="opBancoOutro" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="Informe o banco"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Tipo de Operação *</label>' +
+    '<select id="opTipo" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">' +
+    '<optgroup label="Capital de Giro">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'giro').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Investimento">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'investimento').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Comércio Exterior">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'comex').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Rural">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'rural').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup><optgroup label="Mercado de Capitais">';
+  TIPOS_OPERACAO.filter(t => t.categoria === 'mercado').forEach(t => { html += '<option value="' + t.id + '">' + t.nome + '</option>'; });
+  html += '</optgroup></select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Data de Contratação</label>' +
+    '<input type="date" id="opDataContratacao" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Finalidade</label>' +
+    '<input type="text" id="opFinalidade" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="Ex: Capital de giro, Máquina X..."></div></div></div>';
+  
+  // Valores
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">💰 Valores e Prazos</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor Original</label>' +
+    '<input type="text" id="opValorOriginal" class="money-input" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Saldo Devedor Atual *</label>' +
+    '<input type="text" id="opSaldoDevedor" class="money-input" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Prazo Total (meses)</label>' +
+    '<input type="number" id="opPrazoTotal" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="48"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Carência (meses)</label>' +
+    '<input type="number" id="opCarencia" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="0" value="0"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Parcelas Restantes *</label>' +
+    '<input type="number" id="opParcelasRestantes" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="24"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor da Parcela *</label>' +
+    '<input type="text" id="opValorParcela" class="money-input" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Taxas
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">📈 Taxa de Juros</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Indexador</label>' +
+    '<select id="opIndexador" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  TIPOS_INDEXADOR.forEach(i => { html += '<option value="' + i.id + '">' + i.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div id="divSpread" style="display:none"><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Spread (% a.a.)</label>' +
+    '<input type="number" id="opSpread" step="0.01" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="3.50"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Taxa Total (% a.m.) *</label>' +
+    '<input type="number" id="opTaxaMensal" step="0.01" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="1.50"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Taxa Anual (auto)</label>' +
+    '<input type="text" id="opTaxaAnual" readonly style="width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:6px; font-size:13px; background:#f9fafb" placeholder="—"></div></div></div>';
+  
+  // Garantias
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🔒 Garantias</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Tipo de Garantia</label>' +
+    '<select id="opGarantia" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px">';
+  TIPOS_GARANTIA.forEach(g => { html += '<option value="' + g.id + '">' + g.nome + '</option>'; });
+  html += '</select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Valor das Garantias</label>' +
+    '<input type="text" id="opValorGarantia" class="money-input" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Reciprocidades
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🤝 Reciprocidades e Custos Adicionais</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px">' +
+    '<div style="display:flex; align-items:center; gap:8px"><input type="checkbox" id="opRecFolha"><label for="opRecFolha" style="font-size:12px">Folha de Pagamento</label></div>' +
+    '<div style="display:flex; align-items:center; gap:8px"><input type="checkbox" id="opRecDomicilio"><label for="opRecDomicilio" style="font-size:12px">Domicílio Bancário</label></div>' +
+    '<div style="display:flex; align-items:center; gap:8px"><input type="checkbox" id="opRecCobranca"><label for="opRecCobranca" style="font-size:12px">Cobrança Registrada</label></div></div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px"><input type="checkbox" id="opRecSeguroPrest"><label for="opRecSeguroPrest" style="font-size:12px">Seguro Prestamista</label></div>' +
+    '<input type="text" id="opRecSeguroPrestValor" class="money-input" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px"><input type="checkbox" id="opRecCapitalizacao"><label for="opRecCapitalizacao" style="font-size:12px">Capitalização</label></div>' +
+    '<input type="text" id="opRecCapitalizacaoValor" class="money-input" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><div style="display:flex; align-items:center; gap:8px; margin-bottom:8px"><input type="checkbox" id="opRecTarifas"><label for="opRecTarifas" style="font-size:12px">Tarifas Bancárias</label></div>' +
+    '<input type="text" id="opRecTarifasValor" class="money-input" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px" placeholder="Valor mensal R$"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Outros Custos Mensais</label>' +
+    '<input type="text" id="opRecOutros" class="money-input" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="R$ 0,00"></div></div></div>';
+  
+  // Condições de Saída
+  html += '<div style="margin-bottom:24px"><div style="font-size:14px; font-weight:700; color:#1e3a5f; margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">🚪 Condições de Saída</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Multa por Liquidação (%)</label>' +
+    '<input type="number" id="opMulta" step="0.1" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="2.0" value="2"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:4px">Lock-up (meses)</label>' +
+    '<input type="number" id="opLockup" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px" placeholder="0" value="0"></div></div></div>';
+  
+  // Botões
+  html += '<div style="display:flex; gap:12px; justify-content:flex-end; padding-top:16px; border-top:1px solid #e2e8f0">' +
+    '<button id="btnCancelarOp" style="padding:12px 24px; background:#f1f5f9; color:#374151; border:none; border-radius:8px; font-weight:600; cursor:pointer">Cancelar</button>' +
+    '<button id="btnExcluirOp" style="padding:12px 24px; background:#fee2e2; color:#dc2626; border:none; border-radius:8px; font-weight:600; cursor:pointer; display:none">Excluir</button>' +
+    '<button id="btnSalvarOp" style="padding:12px 24px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600; cursor:pointer">Salvar Operação</button></div>' +
+    '</div></div></div>';
+  
+  return html;
+}
+
+function parseMoneyDivida(str) {
+  if (!str) return 0;
+  return parseFloat(str.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function formatMoneyInput(input) {
+  let v = input.value.replace(/\D/g, '');
+  v = (parseInt(v, 10) / 100).toFixed(2);
+  input.value = 'R$ ' + v.replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+function configurarEventListenersDividas(empresaId, data) {
+  document.getElementById('btnNovaOperacao')?.addEventListener('click', () => abrirModalOperacao(null));
+  document.getElementById('btnNovaOperacao2')?.addEventListener('click', () => abrirModalOperacao(null));
+  document.getElementById('btnFecharModal')?.addEventListener('click', fecharModalOperacao);
+  document.getElementById('btnCancelarOp')?.addEventListener('click', fecharModalOperacao);
+  
+  document.getElementById('opBanco')?.addEventListener('change', (e) => {
+    document.getElementById('divBancoOutro').style.display = e.target.value === 'outro' ? 'block' : 'none';
+  });
+  
+  document.getElementById('opIndexador')?.addEventListener('change', (e) => {
+    document.getElementById('divSpread').style.display = e.target.value !== 'pre' ? 'block' : 'none';
+  });
+  
+  document.getElementById('opTaxaMensal')?.addEventListener('input', (e) => {
+    const taxaMensal = parseFloat(e.target.value) || 0;
+    document.getElementById('opTaxaAnual').value = calcularTaxaAnual(taxaMensal).toFixed(2) + '% a.a.';
+  });
+  
+  document.querySelectorAll('#modalOperacao .money-input').forEach(input => {
+    input.addEventListener('input', () => formatMoneyInput(input));
+  });
+  
+  document.getElementById('btnSalvarOp')?.addEventListener('click', async () => {
+    const operacao = {
+      id: document.getElementById('opId').value || null,
+      banco: document.getElementById('opBanco').value,
+      bancoOutro: document.getElementById('opBancoOutro').value,
+      tipoOperacao: document.getElementById('opTipo').value,
+      dataContratacao: document.getElementById('opDataContratacao').value,
+      finalidade: document.getElementById('opFinalidade').value,
+      valorOriginal: parseMoneyDivida(document.getElementById('opValorOriginal').value),
+      saldoDevedor: parseMoneyDivida(document.getElementById('opSaldoDevedor').value),
+      prazoTotal: parseInt(document.getElementById('opPrazoTotal').value) || 0,
+      carencia: parseInt(document.getElementById('opCarencia').value) || 0,
+      parcelasRestantes: parseInt(document.getElementById('opParcelasRestantes').value) || 0,
+      valorParcela: parseMoneyDivida(document.getElementById('opValorParcela').value),
+      indexador: document.getElementById('opIndexador').value,
+      spread: parseFloat(document.getElementById('opSpread').value) || 0,
+      taxaMensal: parseFloat(document.getElementById('opTaxaMensal').value) || 0,
+      garantia: document.getElementById('opGarantia').value,
+      valorGarantia: parseMoneyDivida(document.getElementById('opValorGarantia').value),
+      multaLiquidacao: parseFloat(document.getElementById('opMulta').value) || 2,
+      lockup: parseInt(document.getElementById('opLockup').value) || 0,
+      reciprocidades: {
+        folhaPagamento: document.getElementById('opRecFolha').checked,
+        domicilioBancario: document.getElementById('opRecDomicilio').checked,
+        cobranca: document.getElementById('opRecCobranca').checked,
+        seguroPrestamista: document.getElementById('opRecSeguroPrest').checked,
+        seguroPrestamistaValor: parseMoneyDivida(document.getElementById('opRecSeguroPrestValor').value),
+        capitalizacao: document.getElementById('opRecCapitalizacao').checked,
+        capitalizacaoValor: parseMoneyDivida(document.getElementById('opRecCapitalizacaoValor').value),
+        tarifas: document.getElementById('opRecTarifas').checked,
+        tarifasValor: parseMoneyDivida(document.getElementById('opRecTarifasValor').value),
+        outrosCustos: parseMoneyDivida(document.getElementById('opRecOutros').value)
+      }
+    };
+    
+    if (!operacao.saldoDevedor || !operacao.taxaMensal) {
+      alert('Preencha pelo menos o saldo devedor e a taxa mensal.');
+      return;
+    }
+    
+    const sucesso = await salvarOperacaoDivida(empresaId, operacao);
+    if (sucesso) {
+      fecharModalOperacao();
+      renderDividasBancarias(data);
+    }
+  });
+  
+  document.getElementById('btnExcluirOp')?.addEventListener('click', async () => {
+    const id = document.getElementById('opId').value;
+    if (id && confirm('Tem certeza que deseja excluir esta operação?')) {
+      await excluirOperacaoDivida(empresaId, id);
+      fecharModalOperacao();
+      renderDividasBancarias(data);
+    }
+  });
+  
+  document.querySelectorAll('.btn-editar-op').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const op = OPERACOES_DIVIDA.find(o => o.id === btn.dataset.id);
+      if (op) abrirModalOperacao(op);
+    });
+  });
+  
+  document.querySelectorAll('.btn-simular-op').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const op = OPERACOES_DIVIDA.find(o => o.id === btn.dataset.id);
+      if (op) abrirSimuladorPortabilidade(op, data);
+    });
+  });
+  
+  document.getElementById('btnSimPortabilidade')?.addEventListener('click', () => abrirSimuladorPortabilidade(null, data));
+  document.getElementById('btnSimConsolidacao')?.addEventListener('click', () => abrirSimuladorConsolidacao(data));
+  document.getElementById('btnSimImpacto')?.addEventListener('click', () => abrirSimuladorImpacto(data));
+}
+
+function abrirModalOperacao(operacao) {
+  const modal = document.getElementById('modalOperacao');
+  if (!modal) return;
+  
+  // Limpar formulário
+  document.getElementById('opId').value = '';
+  document.getElementById('opBanco').value = 'bb';
+  document.getElementById('opBancoOutro').value = '';
+  document.getElementById('opTipo').value = 'capital_giro';
+  document.getElementById('opDataContratacao').value = '';
+  document.getElementById('opFinalidade').value = '';
+  document.getElementById('opValorOriginal').value = '';
+  document.getElementById('opSaldoDevedor').value = '';
+  document.getElementById('opPrazoTotal').value = '';
+  document.getElementById('opCarencia').value = '0';
+  document.getElementById('opParcelasRestantes').value = '';
+  document.getElementById('opValorParcela').value = '';
+  document.getElementById('opIndexador').value = 'cdi';
+  document.getElementById('opSpread').value = '';
+  document.getElementById('opTaxaMensal').value = '';
+  document.getElementById('opTaxaAnual').value = '';
+  document.getElementById('opGarantia').value = 'aval';
+  document.getElementById('opValorGarantia').value = '';
+  document.getElementById('opRecFolha').checked = false;
+  document.getElementById('opRecDomicilio').checked = false;
+  document.getElementById('opRecCobranca').checked = false;
+  document.getElementById('opRecSeguroPrest').checked = false;
+  document.getElementById('opRecSeguroPrestValor').value = '';
+  document.getElementById('opRecCapitalizacao').checked = false;
+  document.getElementById('opRecCapitalizacaoValor').value = '';
+  document.getElementById('opRecTarifas').checked = false;
+  document.getElementById('opRecTarifasValor').value = '';
+  document.getElementById('opRecOutros').value = '';
+  document.getElementById('opMulta').value = '2';
+  document.getElementById('opLockup').value = '0';
+  document.getElementById('divBancoOutro').style.display = 'none';
+  document.getElementById('divSpread').style.display = 'block';
+  document.getElementById('btnExcluirOp').style.display = 'none';
+  
+  if (operacao) {
+    document.getElementById('opId').value = operacao.id || '';
+    document.getElementById('opBanco').value = operacao.banco || 'bb';
+    document.getElementById('opBancoOutro').value = operacao.bancoOutro || '';
+    document.getElementById('opTipo').value = operacao.tipoOperacao || 'capital_giro';
+    document.getElementById('opDataContratacao').value = operacao.dataContratacao || '';
+    document.getElementById('opFinalidade').value = operacao.finalidade || '';
+    if (operacao.valorOriginal) document.getElementById('opValorOriginal').value = 'R$ ' + operacao.valorOriginal.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    if (operacao.saldoDevedor) document.getElementById('opSaldoDevedor').value = 'R$ ' + operacao.saldoDevedor.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    document.getElementById('opPrazoTotal').value = operacao.prazoTotal || '';
+    document.getElementById('opCarencia').value = operacao.carencia || '0';
+    document.getElementById('opParcelasRestantes').value = operacao.parcelasRestantes || '';
+    if (operacao.valorParcela) document.getElementById('opValorParcela').value = 'R$ ' + operacao.valorParcela.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    document.getElementById('opIndexador').value = operacao.indexador || 'cdi';
+    document.getElementById('opSpread').value = operacao.spread || '';
+    document.getElementById('opTaxaMensal').value = operacao.taxaMensal || '';
+    if (operacao.taxaMensal) document.getElementById('opTaxaAnual').value = calcularTaxaAnual(operacao.taxaMensal).toFixed(2) + '% a.a.';
+    document.getElementById('opGarantia').value = operacao.garantia || 'aval';
+    if (operacao.valorGarantia) document.getElementById('opValorGarantia').value = 'R$ ' + operacao.valorGarantia.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    if (operacao.reciprocidades) {
+      document.getElementById('opRecFolha').checked = operacao.reciprocidades.folhaPagamento || false;
+      document.getElementById('opRecDomicilio').checked = operacao.reciprocidades.domicilioBancario || false;
+      document.getElementById('opRecCobranca').checked = operacao.reciprocidades.cobranca || false;
+      document.getElementById('opRecSeguroPrest').checked = operacao.reciprocidades.seguroPrestamista || false;
+      if (operacao.reciprocidades.seguroPrestamistaValor) document.getElementById('opRecSeguroPrestValor').value = 'R$ ' + operacao.reciprocidades.seguroPrestamistaValor.toFixed(2).replace('.', ',');
+      document.getElementById('opRecCapitalizacao').checked = operacao.reciprocidades.capitalizacao || false;
+      if (operacao.reciprocidades.capitalizacaoValor) document.getElementById('opRecCapitalizacaoValor').value = 'R$ ' + operacao.reciprocidades.capitalizacaoValor.toFixed(2).replace('.', ',');
+      document.getElementById('opRecTarifas').checked = operacao.reciprocidades.tarifas || false;
+      if (operacao.reciprocidades.tarifasValor) document.getElementById('opRecTarifasValor').value = 'R$ ' + operacao.reciprocidades.tarifasValor.toFixed(2).replace('.', ',');
+      if (operacao.reciprocidades.outrosCustos) document.getElementById('opRecOutros').value = 'R$ ' + operacao.reciprocidades.outrosCustos.toFixed(2).replace('.', ',');
+    }
+    document.getElementById('opMulta').value = operacao.multaLiquidacao || '2';
+    document.getElementById('opLockup').value = operacao.lockup || '0';
+    if (operacao.banco === 'outro') document.getElementById('divBancoOutro').style.display = 'block';
+    if (operacao.indexador === 'pre') document.getElementById('divSpread').style.display = 'none';
+    document.getElementById('btnExcluirOp').style.display = 'inline-block';
+  }
+  modal.style.display = 'block';
+}
+
+function fecharModalOperacao() {
+  document.getElementById('modalOperacao').style.display = 'none';
+}
+
+function abrirSimuladorPortabilidade(operacaoSelecionada, data) {
+  const area = document.getElementById('areaSimulador');
+  if (!area) return;
+  
+  let html = '<div style="background:#fff; border-radius:8px; padding:20px">' +
+    '<div style="font-size:14px; font-weight:700; color:#92400e; margin-bottom:16px">🔄 Simulador de Portabilidade</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Operação a Portar</label>' +
+    '<select id="simOpSelecionada" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px">';
+  
+  OPERACOES_DIVIDA.forEach(op => {
+    const banco = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || op.bancoOutro || 'Outro';
+    html += '<option value="' + op.id + '" ' + (operacaoSelecionada?.id === op.id ? 'selected' : '') + '>' + banco + ' - ' + toBRL(op.saldoDevedor) + ' @ ' + (op.taxaMensal || 0).toFixed(2) + '%</option>';
+  });
+  
+  html += '</select></div>' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Nova Taxa (% a.m.)</label>' +
+    '<input type="number" id="simNovaTaxa" step="0.01" value="1.30" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Novo Prazo (meses)</label>' +
+    '<input type="number" id="simNovoPrazo" value="' + (operacaoSelecionada?.parcelasRestantes || 36) + '" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div></div>' +
+    '<button id="btnCalcularPort" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>' +
+    '<div id="resultadoPortabilidade" style="margin-top:16px"></div></div>';
+  
+  area.innerHTML = html;
+  area.style.display = 'block';
+  
+  document.getElementById('btnCalcularPort')?.addEventListener('click', () => {
+    const opId = document.getElementById('simOpSelecionada').value;
+    const op = OPERACOES_DIVIDA.find(o => o.id === opId);
+    const novaTaxa = parseFloat(document.getElementById('simNovaTaxa').value) || 0;
+    const novoPrazo = parseInt(document.getElementById('simNovoPrazo').value) || 0;
+    if (!op) return;
+    
+    const r = simularPortabilidade(op, novaTaxa, novoPrazo);
+    
+    document.getElementById('resultadoPortabilidade').innerHTML = 
+      '<div style="background:' + (r.vale ? '#f0fdf4' : '#fef2f2') + '; border:1px solid ' + (r.vale ? '#bbf7d0' : '#fecaca') + '; border-radius:8px; padding:16px">' +
+      '<div style="font-size:14px; font-weight:700; color:' + (r.vale ? '#16a34a' : '#dc2626') + '; margin-bottom:12px">' + (r.vale ? '✅ VALE A PENA!' : '❌ NÃO COMPENSA') + '</div>' +
+      '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; font-size:12px">' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Parcela Atual</div><div style="font-size:16px; font-weight:700">' + toBRL(r.parcelaAtual) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Nova Parcela</div><div style="font-size:16px; font-weight:700; color:#16a34a">' + toBRL(r.novaParcela) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Redução Mensal</div><div style="font-size:16px; font-weight:700; color:#16a34a">' + toBRL(r.reducaoParcela) + ' (-' + r.reducaoParcelaPct.toFixed(0) + '%)</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Custos de Saída</div><div style="font-size:16px; font-weight:700; color:#dc2626">' + toBRL(r.custosSaida) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Economia Total</div><div style="font-size:16px; font-weight:700; color:' + (r.economiaTotal >= 0 ? '#16a34a' : '#dc2626') + '">' + toBRL(r.economiaTotal) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Payback</div><div style="font-size:16px; font-weight:700">' + r.paybackMeses + ' meses</div></div></div></div>';
+  });
+}
+
+function abrirSimuladorConsolidacao(data) {
+  const area = document.getElementById('areaSimulador');
+  if (!area) return;
+  
+  let html = '<div style="background:#fff; border-radius:8px; padding:20px">' +
+    '<div style="font-size:14px; font-weight:700; color:#92400e; margin-bottom:16px">🔗 Simulador de Consolidação</div>' +
+    '<div style="margin-bottom:16px"><label style="font-size:12px; font-weight:600; display:block; margin-bottom:8px">Selecione as operações:</label>' +
+    '<div style="display:grid; gap:8px; max-height:200px; overflow-y:auto; padding:8px; background:#f9fafb; border-radius:6px">';
+  
+  OPERACOES_DIVIDA.forEach(op => {
+    const banco = LISTA_BANCOS.find(b => b.id === op.banco)?.nome || op.bancoOutro || 'Outro';
+    html += '<label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer">' +
+      '<input type="checkbox" class="consolidar-check" value="' + op.id + '">' +
+      '<span>' + banco + ' - ' + toBRL(op.saldoDevedor) + ' @ ' + (op.taxaMensal || 0).toFixed(2) + '%</span></label>';
+  });
+  
+  html += '</div></div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Nova Taxa (% a.m.)</label>' +
+    '<input type="number" id="simConsTaxa" step="0.01" value="1.30" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Novo Prazo (meses)</label>' +
+    '<input type="number" id="simConsPrazo" value="48" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div></div>' +
+    '<button id="btnCalcularCons" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>' +
+    '<div id="resultadoConsolidacao" style="margin-top:16px"></div></div>';
+  
+  area.innerHTML = html;
+  area.style.display = 'block';
+  
+  document.getElementById('btnCalcularCons')?.addEventListener('click', () => {
+    const selecionados = Array.from(document.querySelectorAll('.consolidar-check:checked')).map(c => c.value);
+    const ops = OPERACOES_DIVIDA.filter(op => selecionados.includes(op.id));
+    if (ops.length < 2) { alert('Selecione pelo menos 2 operações.'); return; }
+    
+    const novaTaxa = parseFloat(document.getElementById('simConsTaxa').value) || 0;
+    const novoPrazo = parseInt(document.getElementById('simConsPrazo').value) || 0;
+    const r = simularConsolidacao(ops, novaTaxa, novoPrazo);
+    
+    document.getElementById('resultadoConsolidacao').innerHTML = 
+      '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:16px">' +
+      '<div style="font-size:14px; font-weight:700; color:#16a34a; margin-bottom:12px">📊 Resultado (' + r.qtdOperacoes + ' operações)</div>' +
+      '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; font-size:12px">' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Total Consolidado</div><div style="font-size:16px; font-weight:700">' + toBRL(r.totalSaldo) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Parcelas Atuais</div><div style="font-size:16px; font-weight:700">' + toBRL(r.totalParcelas) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Nova Parcela</div><div style="font-size:16px; font-weight:700; color:#16a34a">' + toBRL(r.novaParcela) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Redução Mensal</div><div style="font-size:16px; font-weight:700; color:#16a34a">' + toBRL(r.reducaoParcela) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Liberação/Mês</div><div style="font-size:16px; font-weight:700; color:#16a34a">' + toBRL(r.liberacaoMensal) + '</div></div>' +
+      '<div><div style="color:#6b7280; margin-bottom:4px">Custos Saída</div><div style="font-size:16px; font-weight:700; color:#dc2626">' + toBRL(r.custosSaida) + '</div></div></div></div>';
+  });
+}
+
+function abrirSimuladorImpacto(data) {
+  const area = document.getElementById('areaSimulador');
+  if (!area) return;
+  
+  const latest = data.rows?.[0] || {};
+  const consolidado = calcularConsolidadoDividas(OPERACOES_DIVIDA, { ebitda: latest.ebitda || 0 });
+  
+  let html = '<div style="background:#fff; border-radius:8px; padding:20px">' +
+    '<div style="font-size:14px; font-weight:700; color:#92400e; margin-bottom:16px">📊 Impacto nos Indicadores</div>' +
+    '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px">' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">Reduzir dívida em</label>' +
+    '<input type="text" id="simReducao" class="money-input" value="R$ 1.000.000,00" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div>' +
+    '<div><label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px">E/ou nova taxa (% a.m.)</label>' +
+    '<input type="number" id="simNovaTaxaImp" step="0.01" value="' + (consolidado.custoMedioPonderado * 0.85).toFixed(2) + '" style="width:100%; padding:10px; border:1px solid #d1d5db; border-radius:6px"></div></div>' +
+    '<button id="btnCalcularImpacto" style="padding:10px 20px; background:#d97706; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer">Calcular</button>' +
+    '<div id="resultadoImpacto" style="margin-top:16px"></div></div>';
+  
+  area.innerHTML = html;
+  area.style.display = 'block';
+  
+  document.getElementById('simReducao')?.addEventListener('input', (e) => formatMoneyInput(e.target));
+  
+  document.getElementById('btnCalcularImpacto')?.addEventListener('click', () => {
+    const reducao = parseMoneyDivida(document.getElementById('simReducao').value);
+    const novaTaxa = parseFloat(document.getElementById('simNovaTaxaImp').value) || consolidado.custoMedioPonderado;
+    const ebitda = latest.ebitda || 1;
+    const novaDivida = consolidado.totalDividaBruta - reducao;
+    const novoDlEbitda = novaDivida / ebitda;
+    const novoJurosAnual = novaDivida * novaTaxa * 12 / 100;
+    const economiaJuros = consolidado.custoAnualJuros - novoJurosAnual;
+    
+    document.getElementById('resultadoImpacto').innerHTML = 
+      '<div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:16px">' +
+      '<div style="font-size:14px; font-weight:700; color:#0369a1; margin-bottom:12px">📈 Impacto do Cenário</div>' +
+      '<div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; font-size:12px">' +
+      '<div style="text-align:center; padding:12px; background:#fff; border-radius:6px"><div style="color:#6b7280; margin-bottom:4px">DL/EBITDA</div>' +
+      '<div style="font-size:14px"><span style="color:#dc2626">' + (consolidado.dlEbitda?.toFixed(1) || '—') + 'x</span> → <span style="color:#16a34a; font-weight:700">' + novoDlEbitda.toFixed(1) + 'x</span></div></div>' +
+      '<div style="text-align:center; padding:12px; background:#fff; border-radius:6px"><div style="color:#6b7280; margin-bottom:4px">Custo Médio</div>' +
+      '<div style="font-size:14px"><span style="color:#dc2626">' + consolidado.custoMedioPonderado.toFixed(2) + '%</span> → <span style="color:#16a34a; font-weight:700">' + novaTaxa.toFixed(2) + '%</span></div></div>' +
+      '<div style="text-align:center; padding:12px; background:#fff; border-radius:6px"><div style="color:#6b7280; margin-bottom:4px">Juros/Ano</div>' +
+      '<div style="font-size:14px"><span style="color:#dc2626">' + toBRL(consolidado.custoAnualJuros) + '</span> → <span style="color:#16a34a; font-weight:700">' + toBRL(novoJurosAnual) + '</span></div></div>' +
+      '<div style="text-align:center; padding:12px; background:#dcfce7; border-radius:6px"><div style="color:#16a34a; margin-bottom:4px; font-weight:600">Economia/Ano</div>' +
+      '<div style="font-size:18px; font-weight:800; color:#16a34a">' + toBRL(economiaJuros) + '</div></div></div></div>';
+  });
+}
+
+window.renderDividasBancarias = renderDividasBancarias;
+window.OPERACOES_DIVIDA = OPERACOES_DIVIDA;
