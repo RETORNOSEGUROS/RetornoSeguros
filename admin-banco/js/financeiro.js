@@ -5158,7 +5158,7 @@ function renderPlanoAcao(data){
   container.innerHTML = html;
 }
 
-// ================== ABA 4: DEFESA DE CRÉDITO ==================
+// ================== ABA 4: INTELIGÊNCIA DE CRÉDITO ==================
 function renderDefesaCredito(data){
   if(!data || !data.rows || !data.rows.length) return;
   
@@ -5166,7 +5166,65 @@ function renderDefesaCredito(data){
   const latest = rows[0];
   const empresaNome = data.empresaNome;
   const container = document.getElementById("defesaCreditoContent");
+  
+  // Preparar objeto calc completo para o módulo de Inteligência de Crédito
+  const calc = {
+    empresa: empresaNome,
+    ano: latest.ano,
+    receita: latest.receita || 0,
+    ebitda: latest.ebitda || 0,
+    lucroLiquido: latest.lucroLiq || 0,
+    margem: latest.margem || 0,
+    alav: latest.alav,
+    liq: latest.liq,
+    roe: latest.roe,
+    pl: latest.pl || 0,
+    ativoTotal: latest.ativo || 0,
+    dividaBruta: latest.dividaBruta || (latest.dividaLiq || 0) + (latest.disponibilidades || 0),
+    dividaLiq: latest.dividaLiq || 0,
+    disponibilidades: latest.disponibilidades || latest.caixa || 0,
+    contasReceber: latest.contasReceber || latest.duplicatasReceber || 0,
+    estoques: latest.estoques || 0,
+    fornecedores: latest.contasPagar || latest.fornecedores || 0,
+    passivoCirculante: latest.passivoCirc || 0,
+    ativoCirculante: latest.ativoCirc || 0,
+    imobilizado: latest.imobilizado || 0,
+    despesaFin: latest.despesaFin || 0,
+    ciclo: latest.ciclo || 0,
+    setor: latest.setor || 'Indústria',
+    crescimentoReceita: rows.length >= 2 && rows[1].receita > 0 ? 
+      ((latest.receita / rows[1].receita) - 1) * 100 : 0,
+    crescimentoEbitda: rows.length >= 2 && rows[1].ebitda > 0 ? 
+      ((latest.ebitda / rows[1].ebitda) - 1) * 100 : 0,
+    // Dados extras
+    pctDividaLP: 70, // Estimativa padrão
+    limiteDisponivel: latest.limiteDisponivel || 0,
+    inadimplencia: latest.inadimplencia || 2,
+    investimentoRecente: false,
+    servicoDivida: (latest.dividaLiq || 0) * 0.20
+  };
+  
+  // Verificar se o módulo de Inteligência de Crédito está disponível
+  if (typeof renderAbaInteligenciaCredito === 'function') {
+    container.innerHTML = renderAbaInteligenciaCredito(calc);
+  } else {
+    // Fallback para versão antiga
+    container.innerHTML = renderDefesaCreditoLegacy(data);
+  }
+}
+
+// Versão legacy da função (mantida para compatibilidade)
+function renderDefesaCreditoLegacy(data){
+  const rows = data.rows;
+  const latest = rows[0];
+  const empresaNome = data.empresaNome;
   const score = calcularScore(latest);
+  
+  // Calcular EBITDA anual para capacidade de pagamento
+  const ebitdaAnual = latest.ebitda || 0;
+  const ircsEstimado = ebitdaAnual * 0.15;
+  const servicoDividaAtual = (latest.dividaLiq || 0) * 0.20;
+  const disponivel = ebitdaAnual - ircsEstimado - servicoDividaAtual;
   
   // Calcular médias
   const mediaEbitda = rows.reduce((sum, r) => sum + (r.ebitda || 0), 0) / rows.length;
@@ -5239,12 +5297,6 @@ function renderDefesaCredito(data){
       mitigante: `A margem EBITDA de ${toPct(latest.margem)} está abaixo da média setorial, porém a empresa tem plano estruturado de redução de custos em implementação, com meta de atingir 12% em 12 meses.`
     });
   }
-  
-  // Cálculo de capacidade de pagamento
-  const ebitdaAnual = latest.ebitda || 0;
-  const ircsEstimado = ebitdaAnual * 0.15; // Estimativa conservadora
-  const servicoDividaAtual = (latest.dividaLiq || 0) * 0.20; // Estimativa de 20% ao ano
-  const disponivel = ebitdaAnual - ircsEstimado - servicoDividaAtual;
   
   let html = `
     <div style="background:linear-gradient(135deg, #0a3c7d, #1e40af); color:#fff; border-radius:12px; padding:20px; margin-bottom:20px">
@@ -5403,7 +5455,7 @@ function renderDefesaCredito(data){
     alav: latest.alav
   };
   
-  container.innerHTML = html;
+  return html;
 }
 
 // ================== RECOMENDAÇÃO INTELIGENTE DE CRÉDITO ==================
@@ -10798,3 +10850,1322 @@ window.abrirSeletorPDF = abrirSeletorPDF;
 window.baixarPDFTemplate = baixarPDFTemplate;
 window.abrirModalImportacaoPDF = abrirModalImportacaoPDF;
 window.fecharModalImportPDF = fecharModalImportPDF;
+// ================================================================================
+// ==================== MÓDULO DE INTELIGÊNCIA DE CRÉDITO ====================
+// ================================================================================
+
+/**
+ * SISTEMA DE APOIO À DECISÃO DE CRÉDITO
+ * 
+ * Fase 1: Diagnóstico Automático - Lista pontos fracos e compara com thresholds
+ * Fase 2: Banco de Argumentos - Argumentos pré-definidos para cada problema
+ * Fase 3: Simulador de Cenários - Simular diferentes valores/prazos
+ * Fase 4: Templates de Comitê - Gerar dossiê profissional
+ */
+
+// ==================== THRESHOLDS DE CRÉDITO ====================
+const THRESHOLDS_CREDITO = {
+  // Indicadores de Capacidade de Pagamento
+  dlEbitda: {
+    otimo: 1.5,
+    bom: 2.5,
+    atencao: 3.5,
+    critico: 4.0,
+    label: 'DL/EBITDA',
+    unidade: 'x',
+    descricao: 'Anos para pagar a dívida com geração de caixa'
+  },
+  liquidez: {
+    critico: 0.8,
+    atencao: 1.0,
+    bom: 1.2,
+    otimo: 1.5,
+    label: 'Liquidez Corrente',
+    unidade: '',
+    descricao: 'Capacidade de pagar obrigações de curto prazo'
+  },
+  coberturaJuros: {
+    critico: 1.0,
+    atencao: 1.5,
+    bom: 2.0,
+    otimo: 3.0,
+    label: 'Cobertura de Juros',
+    unidade: 'x',
+    descricao: 'Quantas vezes o EBITDA cobre as despesas financeiras'
+  },
+  
+  // Indicadores de Rentabilidade
+  margemEbitda: {
+    critico: 5,
+    atencao: 8,
+    bom: 12,
+    otimo: 18,
+    label: 'Margem EBITDA',
+    unidade: '%',
+    descricao: 'Eficiência operacional da empresa'
+  },
+  roe: {
+    critico: 0,
+    atencao: 8,
+    bom: 15,
+    otimo: 25,
+    label: 'ROE',
+    unidade: '%',
+    descricao: 'Retorno sobre o patrimônio dos sócios'
+  },
+  margemLiquida: {
+    critico: 0,
+    atencao: 3,
+    bom: 6,
+    otimo: 12,
+    label: 'Margem Líquida',
+    unidade: '%',
+    descricao: 'Lucro líquido sobre receita'
+  },
+  
+  // Indicadores de Estrutura
+  endividamentoPL: {
+    otimo: 30,
+    bom: 60,
+    atencao: 100,
+    critico: 150,
+    label: 'Endividamento/PL',
+    unidade: '%',
+    descricao: 'Proporção de dívida vs patrimônio'
+  },
+  imobilizacaoPL: {
+    otimo: 50,
+    bom: 80,
+    atencao: 100,
+    critico: 120,
+    label: 'Imobilização do PL',
+    unidade: '%',
+    descricao: 'Quanto do patrimônio está em ativos fixos'
+  },
+  
+  // Indicadores Operacionais
+  cicloFinanceiro: {
+    otimo: 30,
+    bom: 60,
+    atencao: 90,
+    critico: 120,
+    label: 'Ciclo Financeiro',
+    unidade: 'dias',
+    descricao: 'Tempo entre pagamento e recebimento'
+  },
+  
+  // Crescimento
+  crescimentoReceita: {
+    critico: -20,
+    atencao: -5,
+    bom: 5,
+    otimo: 15,
+    label: 'Crescimento Receita',
+    unidade: '%',
+    descricao: 'Variação da receita vs ano anterior'
+  }
+};
+
+// ==================== BANCO DE ARGUMENTOS ====================
+const BANCO_ARGUMENTOS = {
+  dlEbitda_alto: {
+    titulo: 'Alavancagem Elevada',
+    argumentos: [
+      {
+        texto: 'A dívida é majoritariamente de longo prazo ({pctLP}% vence após 24 meses), sem pressão de caixa imediata.',
+        condicao: (calc) => calc.pctDividaLP > 60,
+        dados: (calc) => ({ pctLP: (calc.pctDividaLP || 70).toFixed(0) })
+      },
+      {
+        texto: 'O EBITDA está em recuperação, com crescimento de {crescEbitda}% vs período anterior. Projeção reduz DL/EBITDA para {dlProjetado}x em 12 meses.',
+        condicao: (calc) => calc.crescimentoEbitda > 5,
+        dados: (calc) => ({ 
+          crescEbitda: (calc.crescimentoEbitda || 10).toFixed(0),
+          dlProjetado: ((calc.alav || 3) * 0.8).toFixed(1)
+        })
+      },
+      {
+        texto: 'A dívida financiou expansão de capacidade produtiva, investimento que gerará receita adicional estimada de {receitaAdicional}.',
+        condicao: (calc) => calc.investimentoRecente,
+        dados: (calc) => ({ receitaAdicional: toBRL(calc.receita * 0.15) })
+      },
+      {
+        texto: 'Empresa possui {disponivel} em caixa e aplicações, podendo reduzir dívida líquida se necessário.',
+        condicao: (calc) => calc.disponibilidades > calc.dividaBruta * 0.2,
+        dados: (calc) => ({ disponivel: toBRL(calc.disponibilidades) })
+      },
+      {
+        texto: 'Comparado ao benchmark do setor ({setorNome}), a média de DL/EBITDA é {mediaSetor}x. A empresa está dentro do padrão setorial.',
+        condicao: () => true,
+        dados: (calc) => ({ 
+          setorNome: calc.setor || 'Indústria',
+          mediaSetor: '2.8'
+        })
+      }
+    ]
+  },
+  
+  liquidez_baixa: {
+    titulo: 'Liquidez Apertada',
+    argumentos: [
+      {
+        texto: 'A empresa possui linha de crédito pré-aprovada de {limite} disponível para eventual necessidade.',
+        condicao: (calc) => calc.limiteDisponivel > 0,
+        dados: (calc) => ({ limite: toBRL(calc.limiteDisponivel) })
+      },
+      {
+        texto: 'O ciclo financeiro de {ciclo} dias está sendo reduzido com renegociação de prazos com fornecedores.',
+        condicao: (calc) => calc.ciclo > 45,
+        dados: (calc) => ({ ciclo: (calc.ciclo || 60).toFixed(0) })
+      },
+      {
+        texto: 'Contas a receber de {cr} representam ativos de alta qualidade, com inadimplência de apenas {inadimplencia}%.',
+        condicao: (calc) => calc.contasReceber > 0,
+        dados: (calc) => ({ 
+          cr: toBRL(calc.contasReceber),
+          inadimplencia: (calc.inadimplencia || 2).toFixed(1)
+        })
+      },
+      {
+        texto: 'A liquidez apertada é característica do setor {setor}, que opera com capital de giro financiado.',
+        condicao: () => true,
+        dados: (calc) => ({ setor: calc.setor || 'industrial' })
+      },
+      {
+        texto: 'Estoques de {estoques} são de alta liquidez e podem ser convertidos rapidamente em caso de necessidade.',
+        condicao: (calc) => calc.estoques > calc.passivoCirculante * 0.3,
+        dados: (calc) => ({ estoques: toBRL(calc.estoques) })
+      }
+    ]
+  },
+  
+  margem_baixa: {
+    titulo: 'Margem EBITDA Reduzida',
+    argumentos: [
+      {
+        texto: 'Margem foi impactada por custos pontuais de {custoExtra}, que não se repetirão no próximo exercício.',
+        condicao: () => true,
+        dados: () => ({ custoExtra: 'reestruturação/expansão' })
+      },
+      {
+        texto: 'Empresa está em fase de ganho de escala. Volume cresceu {crescVol}%, diluindo custos fixos progressivamente.',
+        condicao: (calc) => calc.crescimentoReceita > 10,
+        dados: (calc) => ({ crescVol: (calc.crescimentoReceita || 15).toFixed(0) })
+      },
+      {
+        texto: 'Novo contrato com cliente âncora elevará margem em aproximadamente {deltaMargem} pontos percentuais.',
+        condicao: () => true,
+        dados: () => ({ deltaMargem: '2-3' })
+      },
+      {
+        texto: 'Investimentos em automação reduzirão custo operacional em {economia}/ano a partir do próximo trimestre.',
+        condicao: (calc) => calc.imobilizado > calc.receita * 0.3,
+        dados: (calc) => ({ economia: toBRL(calc.receita * 0.03) })
+      },
+      {
+        texto: 'A margem está alinhada com a média do setor {setor} ({margemSetor}%), não representando anomalia.',
+        condicao: () => true,
+        dados: (calc) => ({ setor: calc.setor || 'de atuação', margemSetor: '10' })
+      }
+    ]
+  },
+  
+  crescimento_negativo: {
+    titulo: 'Queda no Faturamento',
+    argumentos: [
+      {
+        texto: 'Redução pontual por {motivo}. Carteira de pedidos atual já indica recuperação de {recuperacao}%.',
+        condicao: () => true,
+        dados: () => ({ motivo: 'sazonalidade/perda pontual de cliente', recuperacao: '15-20' })
+      },
+      {
+        texto: 'Queda foi estratégica: empresa eliminou clientes de baixa margem para focar em operações rentáveis.',
+        condicao: (calc) => calc.margemEbitda > 12,
+        dados: () => ({})
+      },
+      {
+        texto: 'Setor como um todo retraiu {retracaoSetor}% no período. Empresa performou acima da média setorial.',
+        condicao: () => true,
+        dados: () => ({ retracaoSetor: '8-10' })
+      },
+      {
+        texto: 'Novo produto/serviço lançado em {periodo} deve adicionar {adicional} em faturamento nos próximos 12 meses.',
+        condicao: () => true,
+        dados: (calc) => ({ periodo: 'breve', adicional: toBRL(calc.receita * 0.1) })
+      }
+    ]
+  },
+  
+  roe_baixo: {
+    titulo: 'Retorno Sobre PL Baixo',
+    argumentos: [
+      {
+        texto: 'Patrimônio elevado ({pl}) reflete reinvestimento de lucros, demonstrando solidez e visão de longo prazo.',
+        condicao: (calc) => calc.pl > calc.receita * 0.5,
+        dados: (calc) => ({ pl: toBRL(calc.pl) })
+      },
+      {
+        texto: 'ROE impactado por aporte recente de capital para expansão. Retorno deve normalizar em 12-18 meses.',
+        condicao: () => true,
+        dados: () => ({})
+      },
+      {
+        texto: 'Empresa prioriza solidez patrimonial vs distribuição. PL robusto reduz risco para credores.',
+        condicao: (calc) => calc.pl > 0 && calc.alav < 2,
+        dados: () => ({})
+      }
+    ]
+  },
+  
+  endividamento_alto: {
+    titulo: 'Endividamento Elevado sobre PL',
+    argumentos: [
+      {
+        texto: 'Estrutura de capital alavancada é típica do setor {setor}, que demanda investimentos intensivos.',
+        condicao: () => true,
+        dados: (calc) => ({ setor: calc.setor || 'industrial' })
+      },
+      {
+        texto: 'Dívida é integralmente coberta por ativos tangíveis de {ativos}, com LTV de {ltv}%.',
+        condicao: (calc) => calc.ativoTotal > calc.dividaBruta * 1.5,
+        dados: (calc) => ({ 
+          ativos: toBRL(calc.ativoTotal),
+          ltv: ((calc.dividaBruta / calc.ativoTotal) * 100).toFixed(0)
+        })
+      },
+      {
+        texto: 'Fluxo de caixa operacional de {fco} é suficiente para servir a dívida sem necessidade de refinanciamento.',
+        condicao: (calc) => calc.ebitda > calc.servicoDivida,
+        dados: (calc) => ({ fco: toBRL(calc.ebitda) })
+      }
+    ]
+  },
+  
+  ciclo_longo: {
+    titulo: 'Ciclo Financeiro Longo',
+    argumentos: [
+      {
+        texto: 'Ciclo longo é característico do setor {setor}, com projetos de {prazo} meses.',
+        condicao: () => true,
+        dados: (calc) => ({ setor: calc.setor || 'de atuação', prazo: '3-6' })
+      },
+      {
+        texto: 'Empresa está implementando antecipação de recebíveis, reduzindo ciclo em {reducao} dias.',
+        condicao: () => true,
+        dados: () => ({ reducao: '15-20' })
+      },
+      {
+        texto: 'Estoques elevados são estratégicos para garantir entrega rápida e fidelização de clientes.',
+        condicao: (calc) => calc.estoques > calc.receita / 12,
+        dados: () => ({})
+      }
+    ]
+  },
+  
+  concentracao_receita: {
+    titulo: 'Concentração de Receita',
+    argumentos: [
+      {
+        texto: 'Principais clientes são empresas de grande porte com baixo risco de crédito.',
+        condicao: () => true,
+        dados: () => ({})
+      },
+      {
+        texto: 'Contratos de longo prazo ({prazo} anos) garantem previsibilidade de receita.',
+        condicao: () => true,
+        dados: () => ({ prazo: '2-3' })
+      },
+      {
+        texto: 'Empresa está diversificando carteira, com {novos} novos clientes nos últimos 12 meses.',
+        condicao: () => true,
+        dados: () => ({ novos: '5-10' })
+      }
+    ]
+  }
+};
+
+// ==================== FUNÇÃO DE DIAGNÓSTICO ====================
+function gerarDiagnosticoCredito(calc) {
+  const diagnostico = {
+    empresa: calc.empresa || 'Empresa',
+    data: new Date().toLocaleDateString('pt-BR'),
+    pontosFracos: [],
+    pontosFortes: [],
+    alertas: [],
+    recomendacoes: [],
+    scoreGeral: 0
+  };
+  
+  let pontuacao = 100;
+  
+  // ====== ANÁLISE DL/EBITDA ======
+  if (calc.alav !== null && calc.alav !== undefined && !isNaN(calc.alav)) {
+    if (calc.alav < 0) {
+      diagnostico.pontosFortes.push({
+        indicador: 'DL/EBITDA',
+        valor: 'Caixa Líquido',
+        avaliacao: 'excelente',
+        descricao: 'Empresa tem mais caixa do que dívida'
+      });
+      pontuacao += 10;
+    } else if (calc.alav <= THRESHOLDS_CREDITO.dlEbitda.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'DL/EBITDA',
+        valor: calc.alav.toFixed(2) + 'x',
+        avaliacao: 'excelente',
+        descricao: 'Alavancagem muito saudável'
+      });
+      pontuacao += 5;
+    } else if (calc.alav <= THRESHOLDS_CREDITO.dlEbitda.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'DL/EBITDA',
+        valor: calc.alav.toFixed(2) + 'x',
+        avaliacao: 'bom',
+        descricao: 'Alavancagem dentro do aceitável'
+      });
+    } else if (calc.alav <= THRESHOLDS_CREDITO.dlEbitda.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'DL/EBITDA',
+        valor: calc.alav.toFixed(2) + 'x',
+        limite: THRESHOLDS_CREDITO.dlEbitda.bom + 'x',
+        severidade: 'media',
+        tipoArgumento: 'dlEbitda_alto',
+        descricao: 'Alavancagem acima do ideal, mas ainda aceitável'
+      });
+      diagnostico.alertas.push('⚠️ DL/EBITDA de ' + calc.alav.toFixed(2) + 'x está acima do limite preferencial de 2,5x');
+      pontuacao -= 15;
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'DL/EBITDA',
+        valor: calc.alav.toFixed(2) + 'x',
+        limite: THRESHOLDS_CREDITO.dlEbitda.atencao + 'x',
+        severidade: 'alta',
+        tipoArgumento: 'dlEbitda_alto',
+        descricao: 'Alavancagem crítica - alto risco'
+      });
+      diagnostico.alertas.push('🚨 DL/EBITDA de ' + calc.alav.toFixed(2) + 'x indica risco elevado de crédito');
+      pontuacao -= 30;
+    }
+  }
+  
+  // ====== ANÁLISE LIQUIDEZ ======
+  if (calc.liq !== null && calc.liq !== undefined && !isNaN(calc.liq)) {
+    if (calc.liq >= THRESHOLDS_CREDITO.liquidez.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Liquidez Corrente',
+        valor: calc.liq.toFixed(2),
+        avaliacao: 'excelente',
+        descricao: 'Folga confortável no curto prazo'
+      });
+      pontuacao += 5;
+    } else if (calc.liq >= THRESHOLDS_CREDITO.liquidez.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Liquidez Corrente',
+        valor: calc.liq.toFixed(2),
+        avaliacao: 'bom',
+        descricao: 'Liquidez adequada'
+      });
+    } else if (calc.liq >= THRESHOLDS_CREDITO.liquidez.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'Liquidez Corrente',
+        valor: calc.liq.toFixed(2),
+        limite: THRESHOLDS_CREDITO.liquidez.bom.toString(),
+        severidade: 'media',
+        tipoArgumento: 'liquidez_baixa',
+        descricao: 'Liquidez apertada, requer atenção'
+      });
+      diagnostico.alertas.push('⚠️ Liquidez de ' + calc.liq.toFixed(2) + ' próxima do limite mínimo');
+      pontuacao -= 10;
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'Liquidez Corrente',
+        valor: calc.liq.toFixed(2),
+        limite: THRESHOLDS_CREDITO.liquidez.critico.toString(),
+        severidade: 'alta',
+        tipoArgumento: 'liquidez_baixa',
+        descricao: 'Liquidez insuficiente - risco de inadimplência'
+      });
+      diagnostico.alertas.push('🚨 Liquidez de ' + calc.liq.toFixed(2) + ' indica dificuldade de pagamento no curto prazo');
+      pontuacao -= 25;
+    }
+  }
+  
+  // ====== ANÁLISE MARGEM EBITDA ======
+  if (calc.margem !== null && calc.margem !== undefined && !isNaN(calc.margem)) {
+    if (calc.margem >= THRESHOLDS_CREDITO.margemEbitda.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Margem EBITDA',
+        valor: calc.margem.toFixed(1) + '%',
+        avaliacao: 'excelente',
+        descricao: 'Margem muito forte'
+      });
+      pontuacao += 10;
+    } else if (calc.margem >= THRESHOLDS_CREDITO.margemEbitda.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Margem EBITDA',
+        valor: calc.margem.toFixed(1) + '%',
+        avaliacao: 'bom',
+        descricao: 'Margem saudável'
+      });
+      pontuacao += 5;
+    } else if (calc.margem >= THRESHOLDS_CREDITO.margemEbitda.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'Margem EBITDA',
+        valor: calc.margem.toFixed(1) + '%',
+        limite: THRESHOLDS_CREDITO.margemEbitda.bom + '%',
+        severidade: 'media',
+        tipoArgumento: 'margem_baixa',
+        descricao: 'Margem abaixo do ideal'
+      });
+      pontuacao -= 10;
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'Margem EBITDA',
+        valor: calc.margem.toFixed(1) + '%',
+        limite: THRESHOLDS_CREDITO.margemEbitda.atencao + '%',
+        severidade: 'alta',
+        tipoArgumento: 'margem_baixa',
+        descricao: 'Margem muito baixa - operação fragilizada'
+      });
+      diagnostico.alertas.push('🚨 Margem EBITDA de ' + calc.margem.toFixed(1) + '% indica operação com baixa rentabilidade');
+      pontuacao -= 20;
+    }
+  }
+  
+  // ====== ANÁLISE ROE ======
+  if (calc.roe !== null && calc.roe !== undefined && !isNaN(calc.roe)) {
+    if (calc.roe >= THRESHOLDS_CREDITO.roe.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'ROE',
+        valor: calc.roe.toFixed(1) + '%',
+        avaliacao: 'excelente',
+        descricao: 'Excelente retorno aos acionistas'
+      });
+      pontuacao += 5;
+    } else if (calc.roe >= THRESHOLDS_CREDITO.roe.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'ROE',
+        valor: calc.roe.toFixed(1) + '%',
+        avaliacao: 'bom',
+        descricao: 'Bom retorno sobre patrimônio'
+      });
+    } else if (calc.roe >= THRESHOLDS_CREDITO.roe.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'ROE',
+        valor: calc.roe.toFixed(1) + '%',
+        limite: THRESHOLDS_CREDITO.roe.bom + '%',
+        severidade: 'baixa',
+        tipoArgumento: 'roe_baixo',
+        descricao: 'Retorno modesto sobre patrimônio'
+      });
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'ROE',
+        valor: calc.roe.toFixed(1) + '%',
+        limite: THRESHOLDS_CREDITO.roe.atencao + '%',
+        severidade: 'media',
+        tipoArgumento: 'roe_baixo',
+        descricao: 'Baixo retorno ou prejuízo'
+      });
+      if (calc.roe < 0) {
+        diagnostico.alertas.push('🚨 ROE negativo indica prejuízo no período');
+        pontuacao -= 20;
+      }
+    }
+  }
+  
+  // ====== ANÁLISE COBERTURA DE JUROS ======
+  const coberturaJuros = calc.ebitda && calc.despesaFin ? calc.ebitda / calc.despesaFin : null;
+  if (coberturaJuros !== null && !isNaN(coberturaJuros) && coberturaJuros !== Infinity) {
+    if (coberturaJuros >= THRESHOLDS_CREDITO.coberturaJuros.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Cobertura de Juros',
+        valor: coberturaJuros.toFixed(1) + 'x',
+        avaliacao: 'excelente',
+        descricao: 'EBITDA cobre folgadamente os juros'
+      });
+    } else if (coberturaJuros >= THRESHOLDS_CREDITO.coberturaJuros.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Cobertura de Juros',
+        valor: coberturaJuros.toFixed(1) + 'x',
+        avaliacao: 'bom',
+        descricao: 'Boa capacidade de pagamento de juros'
+      });
+    } else if (coberturaJuros >= THRESHOLDS_CREDITO.coberturaJuros.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'Cobertura de Juros',
+        valor: coberturaJuros.toFixed(1) + 'x',
+        limite: THRESHOLDS_CREDITO.coberturaJuros.bom + 'x',
+        severidade: 'media',
+        tipoArgumento: 'dlEbitda_alto',
+        descricao: 'Cobertura de juros apertada'
+      });
+      pontuacao -= 10;
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'Cobertura de Juros',
+        valor: coberturaJuros.toFixed(1) + 'x',
+        limite: THRESHOLDS_CREDITO.coberturaJuros.critico + 'x',
+        severidade: 'alta',
+        tipoArgumento: 'dlEbitda_alto',
+        descricao: 'Cobertura de juros insuficiente'
+      });
+      diagnostico.alertas.push('🚨 Cobertura de juros de ' + coberturaJuros.toFixed(1) + 'x é insuficiente');
+      pontuacao -= 20;
+    }
+  }
+  
+  // ====== ANÁLISE CICLO FINANCEIRO ======
+  if (calc.ciclo !== null && calc.ciclo !== undefined && !isNaN(calc.ciclo)) {
+    if (calc.ciclo <= THRESHOLDS_CREDITO.cicloFinanceiro.otimo) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Ciclo Financeiro',
+        valor: calc.ciclo.toFixed(0) + ' dias',
+        avaliacao: 'excelente',
+        descricao: 'Ciclo de caixa muito eficiente'
+      });
+    } else if (calc.ciclo <= THRESHOLDS_CREDITO.cicloFinanceiro.bom) {
+      diagnostico.pontosFortes.push({
+        indicador: 'Ciclo Financeiro',
+        valor: calc.ciclo.toFixed(0) + ' dias',
+        avaliacao: 'bom',
+        descricao: 'Ciclo de caixa adequado'
+      });
+    } else if (calc.ciclo <= THRESHOLDS_CREDITO.cicloFinanceiro.atencao) {
+      diagnostico.pontosFracos.push({
+        indicador: 'Ciclo Financeiro',
+        valor: calc.ciclo.toFixed(0) + ' dias',
+        limite: THRESHOLDS_CREDITO.cicloFinanceiro.bom + ' dias',
+        severidade: 'media',
+        tipoArgumento: 'ciclo_longo',
+        descricao: 'Ciclo financeiro longo'
+      });
+    } else {
+      diagnostico.pontosFracos.push({
+        indicador: 'Ciclo Financeiro',
+        valor: calc.ciclo.toFixed(0) + ' dias',
+        limite: THRESHOLDS_CREDITO.cicloFinanceiro.atencao + ' dias',
+        severidade: 'alta',
+        tipoArgumento: 'ciclo_longo',
+        descricao: 'Ciclo financeiro muito longo - demanda capital de giro'
+      });
+      pontuacao -= 10;
+    }
+  }
+  
+  // ====== ANÁLISE PL NEGATIVO ======
+  if (calc.pl !== null && calc.pl !== undefined && calc.pl < 0) {
+    diagnostico.pontosFracos.push({
+      indicador: 'Patrimônio Líquido',
+      valor: toBRL(calc.pl),
+      limite: 'Positivo',
+      severidade: 'critica',
+      tipoArgumento: 'endividamento_alto',
+      descricao: 'Passivo a descoberto - empresa tecnicamente insolvente'
+    });
+    diagnostico.alertas.push('🚨 PATRIMÔNIO LÍQUIDO NEGATIVO - Situação crítica');
+    pontuacao -= 40;
+  }
+  
+  // ====== GERAR RECOMENDAÇÕES ======
+  if (diagnostico.pontosFracos.length === 0) {
+    diagnostico.recomendacoes.push('✅ Empresa com perfil de crédito excelente');
+    diagnostico.recomendacoes.push('✅ Baixo risco - pode ter condições diferenciadas');
+  } else if (diagnostico.pontosFracos.filter(p => p.severidade === 'alta' || p.severidade === 'critica').length > 0) {
+    diagnostico.recomendacoes.push('⚠️ Avaliar garantias adicionais');
+    diagnostico.recomendacoes.push('⚠️ Considerar prazo mais curto');
+    diagnostico.recomendacoes.push('⚠️ Preparar argumentos sólidos para comitê');
+  } else {
+    diagnostico.recomendacoes.push('💡 Perfil aprovável com condições padrão');
+    diagnostico.recomendacoes.push('💡 Preparar justificativas para pontos de atenção');
+  }
+  
+  // Calcular score final
+  diagnostico.scoreGeral = Math.max(0, Math.min(100, pontuacao));
+  
+  // Classificar
+  if (diagnostico.scoreGeral >= 80) {
+    diagnostico.classificacao = { label: 'Excelente', cor: '#16a34a', icon: '🟢' };
+  } else if (diagnostico.scoreGeral >= 60) {
+    diagnostico.classificacao = { label: 'Bom', cor: '#2563eb', icon: '🔵' };
+  } else if (diagnostico.scoreGeral >= 40) {
+    diagnostico.classificacao = { label: 'Regular', cor: '#f59e0b', icon: '🟡' };
+  } else {
+    diagnostico.classificacao = { label: 'Crítico', cor: '#dc2626', icon: '🔴' };
+  }
+  
+  return diagnostico;
+}
+
+// ==================== FUNÇÃO PARA GERAR ARGUMENTOS ====================
+function gerarArgumentosDefesa(calc, diagnostico) {
+  const argumentos = [];
+  
+  for (const pontoFraco of diagnostico.pontosFracos) {
+    if (!pontoFraco.tipoArgumento) continue;
+    
+    const bancoArg = BANCO_ARGUMENTOS[pontoFraco.tipoArgumento];
+    if (!bancoArg) continue;
+    
+    const argumentosPonto = {
+      problema: pontoFraco.indicador + ': ' + pontoFraco.valor,
+      titulo: bancoArg.titulo,
+      argumentos: []
+    };
+    
+    for (const arg of bancoArg.argumentos) {
+      // Verificar condição
+      let aplicavel = true;
+      try {
+        aplicavel = arg.condicao(calc);
+      } catch (e) {
+        aplicavel = true; // Se der erro, inclui mesmo assim
+      }
+      
+      if (aplicavel) {
+        // Substituir variáveis no texto
+        let texto = arg.texto;
+        try {
+          const dados = arg.dados(calc);
+          for (const [chave, valor] of Object.entries(dados)) {
+            texto = texto.replace(new RegExp('\\{' + chave + '\\}', 'g'), valor);
+          }
+        } catch (e) {
+          // Manter texto original se der erro
+        }
+        
+        argumentosPonto.argumentos.push(texto);
+      }
+    }
+    
+    if (argumentosPonto.argumentos.length > 0) {
+      argumentos.push(argumentosPonto);
+    }
+  }
+  
+  return argumentos;
+}
+
+// ==================== SIMULADOR DE CENÁRIOS ====================
+function simularCenarioCredito(calc, valorOperacao, prazoMeses, taxaMensal) {
+  const resultado = {
+    valorOperacao,
+    prazoMeses,
+    taxaMensal,
+    parcela: 0,
+    totalJuros: 0,
+    totalPago: 0,
+    impactoIndicadores: {},
+    viabilidade: {}
+  };
+  
+  // Calcular parcela (Price)
+  const taxaDecimal = taxaMensal / 100;
+  if (taxaDecimal > 0) {
+    resultado.parcela = valorOperacao * (taxaDecimal * Math.pow(1 + taxaDecimal, prazoMeses)) / (Math.pow(1 + taxaDecimal, prazoMeses) - 1);
+  } else {
+    resultado.parcela = valorOperacao / prazoMeses;
+  }
+  
+  resultado.totalPago = resultado.parcela * prazoMeses;
+  resultado.totalJuros = resultado.totalPago - valorOperacao;
+  
+  // Impacto nos indicadores
+  const novaDividaBruta = (calc.dividaBruta || 0) + valorOperacao;
+  const novaDividaLiquida = novaDividaBruta - (calc.disponibilidades || 0);
+  const novoEbitda = calc.ebitda || 0;
+  
+  resultado.impactoIndicadores = {
+    dlEbitdaAtual: calc.alav || 0,
+    dlEbitdaNovo: novoEbitda > 0 ? novaDividaLiquida / novoEbitda : null,
+    
+    parcelaSobreEbitda: novoEbitda > 0 ? (resultado.parcela * 12 / novoEbitda * 100) : null,
+    parcelaSobreReceita: calc.receita > 0 ? (resultado.parcela * 12 / calc.receita * 100) : null,
+    
+    servicoDividaAnual: resultado.parcela * 12,
+    servicoDividaSobreEbitda: novoEbitda > 0 ? (resultado.parcela * 12 / novoEbitda) : null
+  };
+  
+  // Avaliar viabilidade
+  const comprometimentoFluxo = resultado.impactoIndicadores.parcelaSobreEbitda || 0;
+  const novoDlEbitda = resultado.impactoIndicadores.dlEbitdaNovo || 0;
+  
+  if (novoDlEbitda > 4) {
+    resultado.viabilidade = {
+      status: 'critico',
+      cor: '#dc2626',
+      icon: '🔴',
+      mensagem: 'DL/EBITDA ficará em ' + novoDlEbitda.toFixed(2) + 'x - muito elevado',
+      recomendacao: 'Reduzir valor ou aumentar prazo significativamente'
+    };
+  } else if (novoDlEbitda > 3) {
+    resultado.viabilidade = {
+      status: 'dificil',
+      cor: '#f59e0b',
+      icon: '🟡',
+      mensagem: 'DL/EBITDA ficará em ' + novoDlEbitda.toFixed(2) + 'x - acima do ideal',
+      recomendacao: 'Preparar argumentos sólidos e considerar garantias extras'
+    };
+  } else if (comprometimentoFluxo > 50) {
+    resultado.viabilidade = {
+      status: 'atencao',
+      cor: '#f59e0b',
+      icon: '🟡',
+      mensagem: 'Parcela compromete ' + comprometimentoFluxo.toFixed(0) + '% do EBITDA anual',
+      recomendacao: 'Aumentar prazo para reduzir parcela mensal'
+    };
+  } else {
+    resultado.viabilidade = {
+      status: 'viavel',
+      cor: '#16a34a',
+      icon: '🟢',
+      mensagem: 'Operação viável - indicadores dentro dos limites',
+      recomendacao: 'Prosseguir com a proposta'
+    };
+  }
+  
+  return resultado;
+}
+
+// ==================== GERAR CENÁRIOS ALTERNATIVOS ====================
+function gerarCenariosAlternativos(calc, valorDesejado, prazoDesejado, taxaDesejada) {
+  const cenarios = [];
+  
+  // Cenário 1: Original
+  cenarios.push({
+    nome: 'Cenário Solicitado',
+    descricao: 'Conforme pedido do cliente',
+    ...simularCenarioCredito(calc, valorDesejado, prazoDesejado, taxaDesejada)
+  });
+  
+  // Cenário 2: Valor reduzido (70%)
+  cenarios.push({
+    nome: 'Valor Reduzido',
+    descricao: 'Redução de 30% no valor',
+    ...simularCenarioCredito(calc, valorDesejado * 0.7, prazoDesejado, taxaDesejada)
+  });
+  
+  // Cenário 3: Prazo estendido
+  cenarios.push({
+    nome: 'Prazo Estendido',
+    descricao: 'Prazo 50% maior',
+    ...simularCenarioCredito(calc, valorDesejado, Math.round(prazoDesejado * 1.5), taxaDesejada)
+  });
+  
+  // Cenário 4: Combinado (valor menor + prazo maior)
+  cenarios.push({
+    nome: 'Cenário Conservador',
+    descricao: 'Valor -20% e prazo +25%',
+    ...simularCenarioCredito(calc, valorDesejado * 0.8, Math.round(prazoDesejado * 1.25), taxaDesejada)
+  });
+  
+  return cenarios;
+}
+
+// ==================== GERAR HTML DO DIAGNÓSTICO ====================
+function renderDiagnosticoCredito(calc) {
+  const diagnostico = gerarDiagnosticoCredito(calc);
+  const argumentos = gerarArgumentosDefesa(calc, diagnostico);
+  
+  let html = `
+    <div class="diagnostico-credito">
+      <!-- Cabeçalho -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding:16px; background:linear-gradient(135deg, ${diagnostico.classificacao.cor}22 0%, ${diagnostico.classificacao.cor}11 100%); border-radius:12px; border-left:4px solid ${diagnostico.classificacao.cor}">
+        <div>
+          <div style="font-size:18px; font-weight:700; color:${diagnostico.classificacao.cor}">
+            ${diagnostico.classificacao.icon} Perfil de Crédito: ${diagnostico.classificacao.label}
+          </div>
+          <div style="font-size:13px; color:#64748b; margin-top:4px">
+            Score: ${diagnostico.scoreGeral}/100 pontos
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:32px; font-weight:700; color:${diagnostico.classificacao.cor}">${diagnostico.scoreGeral}</div>
+          <div style="font-size:11px; color:#64748b">pontos</div>
+        </div>
+      </div>
+      
+      <!-- Alertas -->
+      ${diagnostico.alertas.length > 0 ? `
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px; margin-bottom:16px">
+          <div style="font-weight:600; color:#991b1b; margin-bottom:8px">⚠️ Alertas do Crédito</div>
+          ${diagnostico.alertas.map(a => `<div style="font-size:13px; color:#7f1d1d; padding:4px 0">• ${a}</div>`).join('')}
+        </div>
+      ` : ''}
+      
+      <!-- Grid de Análise -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px">
+        
+        <!-- Pontos Fortes -->
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:16px">
+          <div style="font-weight:600; color:#166534; margin-bottom:12px; display:flex; align-items:center; gap:8px">
+            ✅ Pontos Fortes (${diagnostico.pontosFortes.length})
+          </div>
+          ${diagnostico.pontosFortes.length > 0 ? 
+            diagnostico.pontosFortes.map(p => `
+              <div style="background:#fff; border-radius:6px; padding:10px; margin-bottom:8px; border:1px solid #dcfce7">
+                <div style="display:flex; justify-content:space-between; align-items:center">
+                  <span style="font-weight:600; color:#166534; font-size:13px">${p.indicador}</span>
+                  <span style="background:#16a34a; color:#fff; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600">${p.valor}</span>
+                </div>
+                <div style="font-size:11px; color:#15803d; margin-top:4px">${p.descricao}</div>
+              </div>
+            `).join('') : 
+            '<div style="font-size:13px; color:#64748b; font-style:italic">Nenhum ponto forte identificado</div>'
+          }
+        </div>
+        
+        <!-- Pontos Fracos -->
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:16px">
+          <div style="font-weight:600; color:#991b1b; margin-bottom:12px; display:flex; align-items:center; gap:8px">
+            ❌ Pontos de Atenção (${diagnostico.pontosFracos.length})
+          </div>
+          ${diagnostico.pontosFracos.length > 0 ? 
+            diagnostico.pontosFracos.map(p => `
+              <div style="background:#fff; border-radius:6px; padding:10px; margin-bottom:8px; border:1px solid #fecaca">
+                <div style="display:flex; justify-content:space-between; align-items:center">
+                  <span style="font-weight:600; color:#991b1b; font-size:13px">${p.indicador}</span>
+                  <span style="background:${p.severidade === 'alta' || p.severidade === 'critica' ? '#dc2626' : '#f59e0b'}; color:#fff; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600">${p.valor}</span>
+                </div>
+                <div style="font-size:11px; color:#7f1d1d; margin-top:4px">${p.descricao}</div>
+                <div style="font-size:10px; color:#a1a1aa; margin-top:2px">Limite recomendado: ${p.limite}</div>
+              </div>
+            `).join('') : 
+            '<div style="font-size:13px; color:#64748b; font-style:italic">Nenhum ponto fraco identificado</div>'
+          }
+        </div>
+      </div>
+      
+      <!-- Argumentos de Defesa -->
+      ${argumentos.length > 0 ? `
+        <div style="background:linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%); border:1px solid #bfdbfe; border-radius:12px; padding:16px; margin-bottom:20px">
+          <div style="font-weight:700; color:#1e40af; margin-bottom:16px; font-size:15px; display:flex; align-items:center; gap:8px">
+            💬 Argumentos de Defesa Sugeridos
+          </div>
+          
+          ${argumentos.map(arg => `
+            <div style="background:#fff; border-radius:8px; padding:14px; margin-bottom:12px; border:1px solid #bfdbfe">
+              <div style="font-weight:600; color:#1e3a5f; margin-bottom:10px; font-size:13px">
+                📋 ${arg.problema}
+              </div>
+              <div style="padding-left:12px; border-left:3px solid #3b82f6">
+                ${arg.argumentos.map((a, i) => `
+                  <div style="font-size:12px; color:#334155; padding:6px 0; ${i > 0 ? 'border-top:1px dashed #e2e8f0; margin-top:6px;' : ''}">
+                    <strong style="color:#2563eb">${i+1}.</strong> ${a}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      <!-- Recomendações -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:16px">
+        <div style="font-weight:600; color:#1e3a5f; margin-bottom:12px">📌 Recomendações</div>
+        ${diagnostico.recomendacoes.map(r => `<div style="font-size:13px; color:#475569; padding:4px 0">• ${r}</div>`).join('')}
+      </div>
+    </div>
+  `;
+  
+  return html;
+}
+
+// ==================== GERAR HTML DO SIMULADOR ====================
+function renderSimuladorCredito(calc) {
+  const html = `
+    <div class="simulador-credito">
+      <div style="background:linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border-radius:12px; padding:20px; margin-bottom:20px">
+        <div style="font-weight:700; color:#5b21b6; margin-bottom:16px; font-size:16px">
+          🧮 Simulador de Cenários de Crédito
+        </div>
+        
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:16px">
+          <div>
+            <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px">Valor da Operação (R$)</label>
+            <input type="text" id="simValor" class="form-input" style="font-size:14px" placeholder="1.000.000" 
+              value="${calc.receita ? Math.round(calc.receita * 0.15).toLocaleString('pt-BR') : '500000'}">
+          </div>
+          <div>
+            <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px">Prazo (meses)</label>
+            <input type="number" id="simPrazo" class="form-input" style="font-size:14px" value="36" min="6" max="120">
+          </div>
+          <div>
+            <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px">Taxa (% a.m.)</label>
+            <input type="text" id="simTaxa" class="form-input" style="font-size:14px" value="1.50" placeholder="1.50">
+          </div>
+        </div>
+        
+        <button class="btn btn-primary" style="width:100%; background:#7c3aed" onclick="executarSimulacao()">
+          📊 Simular Cenários
+        </button>
+      </div>
+      
+      <div id="resultadoSimulacao"></div>
+    </div>
+  `;
+  
+  return html;
+}
+
+// Função para executar simulação
+function executarSimulacao() {
+  // Pegar contexto atual
+  if (!CONTEXTO_ANALISE_ATUAL) {
+    alert('Erro: Nenhuma empresa selecionada');
+    return;
+  }
+  
+  const calc = CONTEXTO_ANALISE_ATUAL;
+  
+  // Pegar valores dos inputs
+  const valorStr = document.getElementById('simValor').value.replace(/\./g, '').replace(',', '.');
+  const valor = parseFloat(valorStr) || 500000;
+  const prazo = parseInt(document.getElementById('simPrazo').value) || 36;
+  const taxaStr = document.getElementById('simTaxa').value.replace(',', '.');
+  const taxa = parseFloat(taxaStr) || 1.5;
+  
+  // Gerar cenários
+  const cenarios = gerarCenariosAlternativos(calc, valor, prazo, taxa);
+  
+  // Renderizar resultado
+  let html = `
+    <div style="font-weight:600; color:#1e3a5f; margin-bottom:16px; font-size:14px">
+      📊 Comparativo de Cenários
+    </div>
+    
+    <div style="overflow-x:auto">
+      <table style="width:100%; border-collapse:collapse; font-size:12px">
+        <thead>
+          <tr style="background:#1e3a5f; color:#fff">
+            <th style="padding:10px; text-align:left">Cenário</th>
+            <th style="padding:10px; text-align:right">Valor</th>
+            <th style="padding:10px; text-align:right">Prazo</th>
+            <th style="padding:10px; text-align:right">Parcela</th>
+            <th style="padding:10px; text-align:right">DL/EBITDA</th>
+            <th style="padding:10px; text-align:center">Viabilidade</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+  
+  for (const cen of cenarios) {
+    html += `
+      <tr style="border-bottom:1px solid #e2e8f0">
+        <td style="padding:10px">
+          <div style="font-weight:600; color:#1e3a5f">${cen.nome}</div>
+          <div style="font-size:10px; color:#64748b">${cen.descricao}</div>
+        </td>
+        <td style="padding:10px; text-align:right; font-weight:600">${toBRL(cen.valorOperacao)}</td>
+        <td style="padding:10px; text-align:right">${cen.prazoMeses}m</td>
+        <td style="padding:10px; text-align:right; font-weight:600">${toBRL(cen.parcela)}</td>
+        <td style="padding:10px; text-align:right">
+          ${cen.impactoIndicadores.dlEbitdaNovo !== null ? cen.impactoIndicadores.dlEbitdaNovo.toFixed(2) + 'x' : '-'}
+        </td>
+        <td style="padding:10px; text-align:center">
+          <span style="background:${cen.viabilidade.cor}22; color:${cen.viabilidade.cor}; padding:4px 8px; border-radius:4px; font-weight:600; font-size:11px">
+            ${cen.viabilidade.icon} ${cen.viabilidade.status.toUpperCase()}
+          </span>
+        </td>
+      </tr>
+    `;
+  }
+  
+  html += `
+        </tbody>
+      </table>
+    </div>
+    
+    <div style="margin-top:16px; background:#f8fafc; border-radius:8px; padding:12px">
+      <div style="font-weight:600; color:#1e3a5f; margin-bottom:8px; font-size:13px">💡 Recomendação</div>
+  `;
+  
+  // Encontrar melhor cenário viável
+  const melhorViavel = cenarios.find(c => c.viabilidade.status === 'viavel') || cenarios.find(c => c.viabilidade.status === 'atencao');
+  
+  if (melhorViavel) {
+    html += `
+      <div style="font-size:12px; color:#475569">
+        ${melhorViavel.viabilidade.icon} <strong>${melhorViavel.nome}</strong>: ${melhorViavel.viabilidade.mensagem}
+        <br><span style="color:#6b7280">${melhorViavel.viabilidade.recomendacao}</span>
+      </div>
+    `;
+  } else {
+    html += `
+      <div style="font-size:12px; color:#dc2626">
+        ⚠️ Nenhum cenário viável identificado. Considere reduzir significativamente o valor ou buscar outras fontes de financiamento.
+      </div>
+    `;
+  }
+  
+  html += '</div>';
+  
+  document.getElementById('resultadoSimulacao').innerHTML = html;
+}
+
+// Variável para armazenar contexto atual
+let CONTEXTO_ANALISE_ATUAL = null;
+
+// ==================== GERAR HTML COMPLETO DA ABA ====================
+function renderAbaInteligenciaCredito(calc) {
+  // Salvar contexto
+  CONTEXTO_ANALISE_ATUAL = calc;
+  
+  const html = `
+    <div style="padding:10px">
+      <!-- Tabs internas -->
+      <div style="display:flex; gap:8px; margin-bottom:20px; border-bottom:2px solid #e2e8f0; padding-bottom:8px">
+        <button class="ic-tab-btn active" data-ictab="diagnostico" onclick="trocarAbaIC('diagnostico')" style="padding:8px 16px; border:none; background:#7c3aed; color:#fff; border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">
+          🔍 Diagnóstico
+        </button>
+        <button class="ic-tab-btn" data-ictab="simulador" onclick="trocarAbaIC('simulador')" style="padding:8px 16px; border:none; background:#e2e8f0; color:#64748b; border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">
+          🧮 Simulador
+        </button>
+        <button class="ic-tab-btn" data-ictab="dossie" onclick="trocarAbaIC('dossie')" style="padding:8px 16px; border:none; background:#e2e8f0; color:#64748b; border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">
+          📑 Dossiê Comitê
+        </button>
+      </div>
+      
+      <!-- Conteúdo Diagnóstico -->
+      <div id="ic-tab-diagnostico" class="ic-tab-content" style="display:block">
+        ${renderDiagnosticoCredito(calc)}
+      </div>
+      
+      <!-- Conteúdo Simulador -->
+      <div id="ic-tab-simulador" class="ic-tab-content" style="display:none">
+        ${renderSimuladorCredito(calc)}
+      </div>
+      
+      <!-- Conteúdo Dossiê -->
+      <div id="ic-tab-dossie" class="ic-tab-content" style="display:none">
+        ${renderDossieComite(calc)}
+      </div>
+    </div>
+  `;
+  
+  return html;
+}
+
+// Trocar abas internas
+function trocarAbaIC(aba) {
+  // Desativar todas
+  document.querySelectorAll('.ic-tab-btn').forEach(btn => {
+    btn.style.background = '#e2e8f0';
+    btn.style.color = '#64748b';
+  });
+  document.querySelectorAll('.ic-tab-content').forEach(c => c.style.display = 'none');
+  
+  // Ativar selecionada
+  const btn = document.querySelector(`.ic-tab-btn[data-ictab="${aba}"]`);
+  if (btn) {
+    btn.style.background = '#7c3aed';
+    btn.style.color = '#fff';
+  }
+  const content = document.getElementById('ic-tab-' + aba);
+  if (content) content.style.display = 'block';
+}
+
+// ==================== DOSSIÊ PARA COMITÊ ====================
+function renderDossieComite(calc) {
+  const diagnostico = gerarDiagnosticoCredito(calc);
+  const argumentos = gerarArgumentosDefesa(calc, diagnostico);
+  
+  const html = `
+    <div class="dossie-comite">
+      <div style="background:linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); color:#fff; border-radius:12px; padding:20px; margin-bottom:20px">
+        <div style="display:flex; justify-content:space-between; align-items:center">
+          <div>
+            <div style="font-size:12px; opacity:0.8; text-transform:uppercase; letter-spacing:1px">Dossiê de Crédito</div>
+            <div style="font-size:22px; font-weight:700; margin-top:4px">${escapeHtml(calc.empresa || 'Empresa')}</div>
+            <div style="font-size:13px; opacity:0.8; margin-top:4px">Gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:48px; font-weight:700">${diagnostico.scoreGeral}</div>
+            <div style="font-size:12px; opacity:0.8">Score de Crédito</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Resumo Executivo -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:20px">
+        <h3 style="font-size:16px; color:#1e3a5f; margin-bottom:16px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">
+          📋 Resumo Executivo
+        </h3>
+        
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-bottom:20px">
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:11px; color:#64748b; text-transform:uppercase">Receita</div>
+            <div style="font-size:18px; font-weight:700; color:#1e3a5f">${toBRL(calc.receita)}</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:11px; color:#64748b; text-transform:uppercase">EBITDA</div>
+            <div style="font-size:18px; font-weight:700; color:#1e3a5f">${toBRL(calc.ebitda)}</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:11px; color:#64748b; text-transform:uppercase">Margem</div>
+            <div style="font-size:18px; font-weight:700; color:#1e3a5f">${(calc.margem || 0).toFixed(1)}%</div>
+          </div>
+          <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:8px">
+            <div style="font-size:11px; color:#64748b; text-transform:uppercase">DL/EBITDA</div>
+            <div style="font-size:18px; font-weight:700; color:#1e3a5f">${calc.alav !== null ? calc.alav.toFixed(2) + 'x' : '-'}</div>
+          </div>
+        </div>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px">
+          <div>
+            <div style="font-weight:600; color:#166534; margin-bottom:8px">✅ Pontos Fortes</div>
+            <ul style="margin:0; padding-left:20px; font-size:13px; color:#475569">
+              ${diagnostico.pontosFortes.slice(0, 4).map(p => `<li style="margin-bottom:4px">${p.indicador}: ${p.valor}</li>`).join('')}
+              ${diagnostico.pontosFortes.length === 0 ? '<li style="color:#94a3b8; font-style:italic">Nenhum identificado</li>' : ''}
+            </ul>
+          </div>
+          <div>
+            <div style="font-weight:600; color:#dc2626; margin-bottom:8px">⚠️ Pontos de Atenção</div>
+            <ul style="margin:0; padding-left:20px; font-size:13px; color:#475569">
+              ${diagnostico.pontosFracos.slice(0, 4).map(p => `<li style="margin-bottom:4px">${p.indicador}: ${p.valor}</li>`).join('')}
+              ${diagnostico.pontosFracos.length === 0 ? '<li style="color:#94a3b8; font-style:italic">Nenhum identificado</li>' : ''}
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Parecer e Argumentos -->
+      ${argumentos.length > 0 ? `
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:20px">
+          <h3 style="font-size:16px; color:#1e3a5f; margin-bottom:16px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">
+            💬 Argumentação para Pontos de Atenção
+          </h3>
+          
+          ${argumentos.map(arg => `
+            <div style="margin-bottom:16px">
+              <div style="font-weight:600; color:#7c3aed; font-size:13px; margin-bottom:8px">
+                📌 ${arg.problema}
+              </div>
+              <div style="background:#f8fafc; border-radius:8px; padding:12px">
+                ${arg.argumentos.slice(0, 3).map((a, i) => `
+                  <div style="font-size:12px; color:#334155; margin-bottom:6px">
+                    ${i + 1}. ${a}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      <!-- Parecer do Gerente -->
+      <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:20px">
+        <h3 style="font-size:16px; color:#1e3a5f; margin-bottom:16px; padding-bottom:8px; border-bottom:2px solid #e2e8f0">
+          ✍️ Parecer do Gerente
+        </h3>
+        <textarea id="parecerGerente" style="width:100%; min-height:120px; border:1px solid #e2e8f0; border-radius:8px; padding:12px; font-size:13px; resize:vertical" placeholder="Digite aqui seu parecer sobre a operação, justificando a recomendação de aprovação..."></textarea>
+      </div>
+      
+      <!-- Botões de Ação -->
+      <div style="display:flex; gap:12px; justify-content:flex-end">
+        <button class="btn btn-outline" onclick="copiarDossieTexto()">
+          📋 Copiar Texto
+        </button>
+        <button class="btn btn-primary" style="background:#1e3a5f" onclick="gerarDossiePDF()">
+          📄 Exportar PDF
+        </button>
+      </div>
+    </div>
+  `;
+  
+  return html;
+}
+
+// Copiar dossiê como texto
+function copiarDossieTexto() {
+  if (!CONTEXTO_ANALISE_ATUAL) return;
+  
+  const calc = CONTEXTO_ANALISE_ATUAL;
+  const diagnostico = gerarDiagnosticoCredito(calc);
+  const argumentos = gerarArgumentosDefesa(calc, diagnostico);
+  const parecer = document.getElementById('parecerGerente')?.value || '';
+  
+  let texto = `
+═══════════════════════════════════════════════════════════════
+                    DOSSIÊ DE CRÉDITO
+═══════════════════════════════════════════════════════════════
+
+EMPRESA: ${calc.empresa || 'N/D'}
+DATA: ${new Date().toLocaleDateString('pt-BR')}
+SCORE DE CRÉDITO: ${diagnostico.scoreGeral}/100 (${diagnostico.classificacao.label})
+
+───────────────────────────────────────────────────────────────
+                    RESUMO EXECUTIVO
+───────────────────────────────────────────────────────────────
+
+Receita: ${toBRL(calc.receita)}
+EBITDA: ${toBRL(calc.ebitda)}
+Margem EBITDA: ${(calc.margem || 0).toFixed(1)}%
+DL/EBITDA: ${calc.alav !== null ? calc.alav.toFixed(2) + 'x' : 'N/D'}
+Liquidez: ${calc.liq !== null ? calc.liq.toFixed(2) : 'N/D'}
+ROE: ${calc.roe !== null ? calc.roe.toFixed(1) + '%' : 'N/D'}
+
+───────────────────────────────────────────────────────────────
+                    PONTOS FORTES
+───────────────────────────────────────────────────────────────
+${diagnostico.pontosFortes.map(p => `• ${p.indicador}: ${p.valor} - ${p.descricao}`).join('\n')}
+
+───────────────────────────────────────────────────────────────
+                    PONTOS DE ATENÇÃO
+───────────────────────────────────────────────────────────────
+${diagnostico.pontosFracos.map(p => `• ${p.indicador}: ${p.valor} (limite: ${p.limite}) - ${p.descricao}`).join('\n')}
+
+───────────────────────────────────────────────────────────────
+                    ARGUMENTAÇÃO
+───────────────────────────────────────────────────────────────
+${argumentos.map(arg => `
+${arg.problema}:
+${arg.argumentos.map((a, i) => `  ${i+1}. ${a}`).join('\n')}
+`).join('\n')}
+
+───────────────────────────────────────────────────────────────
+                    PARECER DO GERENTE
+───────────────────────────────────────────────────────────────
+${parecer || '(Não informado)'}
+
+═══════════════════════════════════════════════════════════════
+`;
+  
+  navigator.clipboard.writeText(texto).then(() => {
+    alert('✅ Dossiê copiado para a área de transferência!');
+  }).catch(() => {
+    // Fallback
+    const textarea = document.createElement('textarea');
+    textarea.value = texto;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('✅ Dossiê copiado!');
+  });
+}
+
+// Gerar PDF do dossiê (placeholder - precisaria de backend)
+function gerarDossiePDF() {
+  alert('📄 Para exportar em PDF:\n\n' +
+        '1. Clique em "Copiar Texto"\n' +
+        '2. Cole em um documento Word\n' +
+        '3. Formate como desejar\n' +
+        '4. Exporte como PDF\n\n' +
+        'Ou use Ctrl+P para imprimir esta página como PDF.');
+}
+
+// Expor funções globalmente
+window.gerarDiagnosticoCredito = gerarDiagnosticoCredito;
+window.gerarArgumentosDefesa = gerarArgumentosDefesa;
+window.simularCenarioCredito = simularCenarioCredito;
+window.gerarCenariosAlternativos = gerarCenariosAlternativos;
+window.renderAbaInteligenciaCredito = renderAbaInteligenciaCredito;
+window.renderDiagnosticoCredito = renderDiagnosticoCredito;
+window.renderSimuladorCredito = renderSimuladorCredito;
+window.renderDossieComite = renderDossieComite;
+window.trocarAbaIC = trocarAbaIC;
+window.executarSimulacao = executarSimulacao;
+window.copiarDossieTexto = copiarDossieTexto;
+window.gerarDossiePDF = gerarDossiePDF;
+window.CONTEXTO_ANALISE_ATUAL = CONTEXTO_ANALISE_ATUAL;
