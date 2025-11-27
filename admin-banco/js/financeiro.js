@@ -2999,28 +2999,87 @@ function renderRecommendations(rows, nomeEmpresa){
     return;
   }
 
+  // Contar por tipo
+  const criticos = recomendacoes.filter(r => r.tipo === 'critico').length;
+  const serios = recomendacoes.filter(r => r.tipo === 'serio').length;
+  const atencao = recomendacoes.filter(r => r.tipo === 'atencao').length;
+  const positivos = recomendacoes.filter(r => r.tipo === 'positivo').length;
+
+  // Definir cores por tipo
+  const getCores = (tipo) => {
+    switch(tipo){
+      case 'critico': return {bg: '#fef2f2', border: '#ef4444', text: '#991b1b', badge: '#dc2626'};
+      case 'serio': return {bg: '#fffbeb', border: '#f59e0b', text: '#92400e', badge: '#d97706'};
+      case 'atencao': return {bg: '#f0f9ff', border: '#3b82f6', text: '#1e40af', badge: '#2563eb'};
+      case 'positivo': return {bg: '#ecfdf5', border: '#10b981', text: '#065f46', badge: '#059669'};
+      default: return {bg: '#f8fafc', border: '#e2e8f0', text: '#475569', badge: '#64748b'};
+    }
+  };
+
   const html = `
-    <div class="recommendations">
-      <h4>💡 Recomendações e Oportunidades de Melhoria</h4>
-      <div style="font-size:13px; color:var(--text-secondary); margin-bottom:16px">
-        Análise baseada nos dados de ${latest.ano} • Sistema de diagnóstico automático
-      </div>
-      ${recomendacoes.map(rec=>`
-        <div class="recommendation-item">
-          <div class="recommendation-icon">${rec.icon}</div>
-          <div class="recommendation-content">
-            <div class="recommendation-title">${rec.titulo}</div>
-            <div class="recommendation-desc">${rec.descricao}</div>
-            ${rec.meta? `<div style="margin-top:6px; font-size:12px; color:var(--accent); font-weight:600">🎯 Meta: ${rec.meta}</div>` : ""}
+    <div style="margin-bottom:24px">
+      <!-- Header com resumo -->
+      <div style="background:linear-gradient(135deg, #1e293b, #334155); color:#fff; border-radius:12px; padding:20px; margin-bottom:20px">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px">
+          <div>
+            <h4 style="font-size:18px; font-weight:700; margin:0">💡 Diagnóstico Inteligente</h4>
+            <div style="font-size:12px; opacity:0.8; margin-top:4px">
+              ${recomendacoes.length} ${recomendacoes.length === 1 ? 'item identificado' : 'itens identificados'} • Análise de ${latest.ano}
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            ${criticos > 0 ? `<span style="background:#dc2626; color:#fff; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:600">🚨 ${criticos} Crítico${criticos > 1 ? 's' : ''}</span>` : ''}
+            ${serios > 0 ? `<span style="background:#d97706; color:#fff; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:600">⚠️ ${serios} Sério${serios > 1 ? 's' : ''}</span>` : ''}
+            ${atencao > 0 ? `<span style="background:#2563eb; color:#fff; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:600">📋 ${atencao} Atenção</span>` : ''}
+            ${positivos > 0 ? `<span style="background:#059669; color:#fff; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:600">✅ ${positivos} Forte${positivos > 1 ? 's' : ''}</span>` : ''}
           </div>
         </div>
-      `).join("")}
+      </div>
       
-      <div style="margin-top:16px; padding:12px; background:#fff; border-radius:8px; border:1px solid #bae6fd">
-        <div style="font-size:13px; font-weight:600; color:#0c4a6e; margin-bottom:4px">
-          📋 Para defesa de crédito:
+      <!-- Lista de Recomendações -->
+      <div style="display:flex; flex-direction:column; gap:12px">
+        ${recomendacoes.map(rec => {
+          const cores = getCores(rec.tipo);
+          return `
+            <div style="background:${cores.bg}; border:1px solid ${cores.border}; border-left:4px solid ${cores.border}; border-radius:8px; padding:16px; position:relative">
+              <div style="display:flex; gap:12px">
+                <div style="font-size:28px; flex-shrink:0">${rec.icon}</div>
+                <div style="flex:1; min-width:0">
+                  <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px">
+                    <span style="font-size:15px; font-weight:700; color:${cores.text}">${rec.titulo}</span>
+                    <span style="background:${cores.badge}; color:#fff; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:600; text-transform:uppercase">
+                      ${rec.tipo === 'critico' ? 'URGENTE' : rec.tipo === 'serio' ? 'IMPORTANTE' : rec.tipo === 'atencao' ? 'MONITORAR' : 'DESTAQUE'}
+                    </span>
+                  </div>
+                  <div style="font-size:13px; color:#374151; line-height:1.5">${rec.descricao}</div>
+                  ${rec.meta ? `
+                    <div style="margin-top:12px; padding:10px; background:rgba(255,255,255,0.7); border-radius:6px; display:flex; flex-wrap:wrap; gap:16px">
+                      <div>
+                        <div style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600">🎯 Meta</div>
+                        <div style="font-size:12px; color:${cores.text}; font-weight:600; margin-top:2px">${rec.meta}</div>
+                      </div>
+                      ${rec.impacto ? `
+                        <div>
+                          <div style="font-size:10px; color:#6b7280; text-transform:uppercase; font-weight:600">💰 Impacto</div>
+                          <div style="font-size:12px; color:#047857; font-weight:600; margin-top:2px">${rec.impacto}</div>
+                        </div>
+                      ` : ''}
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      
+      <!-- Resumo para Defesa de Crédito -->
+      <div style="margin-top:20px; background:linear-gradient(135deg, #dbeafe, #e0e7ff); border:1px solid #93c5fd; border-radius:12px; padding:16px">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px">
+          <span style="font-size:20px">🏦</span>
+          <span style="font-size:14px; font-weight:700; color:#1e40af">Argumentos para Negociação com Banco</span>
         </div>
-        <div style="font-size:12px; color:var(--text-secondary)">
+        <div style="font-size:12px; color:#1e40af; line-height:1.6">
           ${gerarPontosDefesaCredito(latest, recomendacoes)}
         </div>
       </div>
@@ -3034,151 +3093,275 @@ function gerarRecomendacoes(calc, historico){
   const recs = [];
   const previo = historico[1] || null;
 
-  // 1. Margem EBITDA
-  if(calc.margem != null && calc.margem < 0.10){
-    const metaMargem = calc.margem < 0.05 ? 8 : 12;
+  // ========== CATEGORIA 1: PROBLEMAS CRÍTICOS (VERMELHO) ==========
+  
+  // 1.1 Z-Score em zona de perigo
+  if(calc.zScore != null && calc.zScore < 1.81){
     recs.push({
-      icon:"📉",
-      titulo:"Margem EBITDA Baixa",
-      descricao:`A margem EBITDA está em ${toPct(calc.margem)}, abaixo do ideal (≥10%). Isso indica baixa eficiência operacional. Recomenda-se: (1) Revisar estrutura de custos fixos, (2) Renegociar contratos com fornecedores, (3) Avaliar política de precificação, (4) Eliminar desperdícios operacionais.`,
-      meta:`Alcançar ${metaMargem}% em 12 meses através de redução de custos em 15-20%`
+      icon:"☠️",
+      tipo:"critico",
+      titulo:"ALERTA: Z-Score em Zona de Perigo",
+      descricao:`Z-Score de ${calc.zScore.toFixed(2)} indica ALTA probabilidade de dificuldades financeiras em 24 meses. Este é o indicador mais grave. Ações URGENTES: (1) Convoque reunião de sócios, (2) Contrate consultoria de reestruturação, (3) Negocie com credores ANTES de atrasar, (4) Corte despesas não essenciais imediatamente, (5) Venda ativos não operacionais.`,
+      meta:`Elevar Z-Score para acima de 1.81 (zona cinzenta) em 12 meses`,
+      impacto: "Evitar insolvência e preservar a empresa"
     });
-  } else if(calc.margem != null && calc.margem >= 0.10 && calc.margem < 0.15){
+  }
+  
+  // 1.2 Capital de Giro Negativo
+  if(calc.ccl != null && calc.ccl < 0){
+    const deficit = Math.abs(calc.ccl);
     recs.push({
-      icon:"📊",
-      titulo:"Oportunidade de Melhoria na Margem",
-      descricao:`Margem EBITDA de ${toPct(calc.margem)} está na faixa aceitável, mas pode melhorar. Foque em: (1) Otimização de processos, (2) Automação de tarefas repetitivas, (3) Negociação de melhores condições com fornecedores estratégicos.`,
-      meta:`Atingir 15-18% em 18 meses`
+      icon:"🚨",
+      tipo:"critico",
+      titulo:"Capital de Giro NEGATIVO",
+      descricao:`Déficit de ${toBRL(deficit)} no capital de giro. Passivo de curto prazo maior que ativo circulante. Isso significa que a empresa NÃO consegue pagar suas contas no prazo. Ações: (1) Aporte emergencial de capital, (2) Alongar dívidas de CP para LP, (3) Antecipar recebíveis, (4) Liquidar estoques parados, (5) Renegociar com fornecedores.`,
+      meta:`Tornar CCL positivo em R$ ${toBRL(deficit * 1.2)} nos próximos 6 meses`,
+      impacto: `Recuperar capacidade de pagamento e evitar inadimplência`
+    });
+  }
+  
+  // 1.3 Liquidez Imediata Crítica
+  if(calc.liqImediata != null && calc.liqImediata < 0.1){
+    recs.push({
+      icon:"💀",
+      tipo:"critico",
+      titulo:"Sem Caixa para Emergências",
+      descricao:`Liquidez imediata de ${clamp2(calc.liqImediata)} indica que a empresa não tem dinheiro em caixa para pagar nem 10% das dívidas de curto prazo. Qualquer imprevisto (cliente que atrasa, despesa inesperada) pode causar inadimplência. Ações: (1) Constituir reserva de emergência, (2) Linha de crédito pré-aprovada, (3) Reduzir distribuição de lucros, (4) Acelerar recebimentos.`,
+      meta:`Elevar liquidez imediata para 0.3+ em 6 meses`,
+      impacto: "Ter pelo menos 1 mês de folga de caixa"
+    });
+  }
+  
+  // 1.4 Cobertura de Juros Insuficiente
+  if(calc.juros != null && calc.juros < 1.5){
+    recs.push({
+      icon:"💸",
+      tipo:"critico",
+      titulo:"EBITDA Não Cobre os Juros",
+      descricao:`Cobertura de juros de apenas ${clamp2(calc.juros)}x significa que quase todo o EBITDA vai para pagar juros. Não sobra para investir, crescer ou distribuir. Ações URGENTES: (1) Renegociar taxas de juros, (2) Trocar dívida cara por mais barata, (3) Amortizar dívidas mais caras primeiro, (4) NÃO contrair novas dívidas.`,
+      meta:`Elevar cobertura para 2.5x+ em 18 meses`,
+      impacto: `Liberar ${toBRL(calc.despFin * 0.3)}/ano para reinvestimento`
     });
   }
 
-  // 2. Alavancagem
+  // ========== CATEGORIA 2: PROBLEMAS SÉRIOS (AMARELO) ==========
+  
+  // 2.1 Endividamento Alto
   if(calc.alav != null && calc.alav > 3.5){
     recs.push({
       icon:"⚠️",
-      titulo:"Endividamento Elevado - Risco Alto",
-      descricao:`DL/EBITDA de ${clamp2(calc.alav)}x está acima do limite recomendado (3.5x). Isso representa risco significativo. Ações urgentes: (1) Não contrair novas dívidas, (2) Priorizar geração de caixa para amortização, (3) Renegociar prazos com credores, (4) Considerar venda de ativos não estratégicos, (5) Implementar programa de redução de despesas.`,
-      meta:`Reduzir para abaixo de 3.0x em 24 meses, idealmente 2.0x em 36 meses`
+      tipo:"serio",
+      titulo:"Endividamento Elevado - DL/EBITDA > 3.5x",
+      descricao:`Alavancagem de ${clamp2(calc.alav)}x está acima do limite de risco. Bancos consideram >3.5x como "distress". Isso dificulta novos créditos e pode ativar cláusulas de vencimento antecipado. Ações: (1) Não contrair novas dívidas, (2) Direcionar 50%+ do EBITDA para amortização, (3) Renegociar prazos mais longos, (4) Considerar venda de ativos não estratégicos.`,
+      meta:`Reduzir para 2.5x em 24 meses`,
+      impacto: "Recuperar acesso a crédito e reduzir custo de capital"
     });
-  } else if(calc.alav != null && calc.alav >= 2.5 && calc.alav <= 3.5){
+  } else if(calc.alav != null && calc.alav > 2.5){
     recs.push({
       icon:"🟡",
-      titulo:"Endividamento Moderado - Atenção",
-      descricao:`DL/EBITDA de ${clamp2(calc.alav)}x está em zona de atenção. Recomenda-se: (1) Evitar novas dívidas até reduzir este índice, (2) Direcionar pelo menos 30% do EBITDA para amortização, (3) Melhorar geração de caixa operacional.`,
-      meta:`Reduzir para 1.5-2.0x em 18 meses`
+      tipo:"atencao",
+      titulo:"Endividamento em Zona de Atenção",
+      descricao:`DL/EBITDA de ${clamp2(calc.alav)}x está em zona de monitoramento. Recomenda-se: (1) Evitar novas dívidas até reduzir, (2) Destinar 30% do EBITDA para amortização, (3) Melhorar geração de caixa operacional.`,
+      meta:`Reduzir para 2.0x em 18 meses`,
+      impacto: "Melhores condições em futuras operações de crédito"
     });
   }
-
-  // 3. Liquidez
-  if(calc.liq != null && calc.liq < 1.0){
+  
+  // 2.2 Margem EBITDA Baixa
+  if(calc.margem != null && calc.margem < 0.08){
     recs.push({
-      icon:"🚨",
-      titulo:"Liquidez Crítica - Risco Imediato",
-      descricao:`Liquidez de ${clamp2(calc.liq)} indica que a empresa não tem recursos suficientes para pagar obrigações de curto prazo. Ações imediatas: (1) Renegociar prazos com fornecedores, (2) Acelerar recebimentos (descontos para pagamento antecipado), (3) Reduzir estoques, (4) Buscar linhas de capital de giro, (5) Postergar investimentos não essenciais.`,
-      meta:`Elevar para acima de 1.2 em 6 meses, idealmente 1.5+ em 12 meses`
+      icon:"📉",
+      tipo:"serio",
+      titulo:"Margem EBITDA Muito Baixa",
+      descricao:`Margem de ${toPct(calc.margem)} está abaixo de 8%, indicando operação com baixa rentabilidade. A empresa trabalha muito para lucrar pouco. Ações: (1) Análise ABC de clientes (cortar não rentáveis), (2) Revisão de preços, (3) Renegociar com fornecedores estratégicos, (4) Automatizar processos, (5) Reduzir custos fixos em 15%.`,
+      meta:`Alcançar 12% em 12 meses`,
+      impacto: `Gerar mais ${toBRL(calc.receita * 0.04)}/ano de EBITDA`
     });
-  } else if(calc.liq != null && calc.liq >= 1.0 && calc.liq < 1.3){
+  } else if(calc.margem != null && calc.margem < 0.12){
     recs.push({
-      icon:"💧",
-      titulo:"Liquidez Baixa - Atenção ao Fluxo de Caixa",
-      descricao:`Liquidez de ${clamp2(calc.liq)} está no limite. Recomenda-se: (1) Monitoramento diário do fluxo de caixa, (2) Políticas mais agressivas de cobrança, (3) Revisar prazos de pagamento e recebimento, (4) Manter reserva de capital de giro.`,
-      meta:`Atingir 1.5-2.0 em 12 meses`
+      icon:"📊",
+      tipo:"atencao",
+      titulo:"Oportunidade de Melhorar Margem",
+      descricao:`Margem EBITDA de ${toPct(calc.margem)} está aceitável mas pode melhorar. Foque em: (1) Otimização de processos, (2) Renegociação de contratos, (3) Revisão de mix de produtos/serviços.`,
+      meta:`Atingir 15% em 18 meses`,
+      impacto: `Adicionar ${toBRL(calc.receita * 0.03)}/ano ao EBITDA`
     });
   }
-
-  // 4. Ciclo Financeiro
+  
+  // 2.3 Ciclo Financeiro Longo
   if(calc.ciclo != null && calc.ciclo > 90){
-    const economiaCaixa = (calc.receita / 365) * (calc.ciclo - 60);
+    const dinheiroTravado = (calc.receita / 365) * calc.ciclo;
+    const economiaPotencial = (calc.receita / 365) * (calc.ciclo - 45);
     recs.push({
-      icon:"⏱️",
-      titulo:"Ciclo Financeiro Longo - Caixa Travado",
-      descricao:`Ciclo financeiro de ${clamp2(calc.ciclo)} dias está muito longo, travando ${toBRL(economiaCaixa)} em capital de giro. Ações: (1) Reduzir prazo médio de recebimento (oferecer descontos para pagamento à vista), (2) Negociar prazos maiores com fornecedores, (3) Otimizar giro de estoques, (4) Implementar sistema de gestão de crédito mais eficiente.`,
-      meta:`Reduzir para 45-60 dias em 12 meses, liberando caixa para crescimento`
+      icon:"⏰",
+      tipo:"serio",
+      titulo:"Ciclo Financeiro Muito Longo",
+      descricao:`Ciclo de ${Math.round(calc.ciclo)} dias significa ${toBRL(dinheiroTravado)} travados na operação. Ações: (1) PMR de ${Math.round(calc.pmr || 0)} dias → reduzir para 25 com descontos para pagamento antecipado, (2) PME de ${Math.round(calc.diasEst || 0)} dias → reduzir estoque mínimo, (3) PMP de ${Math.round(calc.pmp || 0)} dias → negociar prazos maiores com fornecedores.`,
+      meta:`Reduzir para 45 dias em 12 meses`,
+      impacto: `Liberar ${toBRL(economiaPotencial)} de capital de giro`
     });
-  } else if(calc.ciclo != null && calc.ciclo >= 60 && calc.ciclo <= 90){
+  } else if(calc.ciclo != null && calc.ciclo > 60){
     recs.push({
       icon:"🔄",
-      titulo:"Otimizar Ciclo de Conversão de Caixa",
-      descricao:`Ciclo de ${clamp2(calc.ciclo)} dias pode ser melhorado. Foque em: (1) Reduzir PMR (prazo médio de recebimento), (2) Aumentar PMP (prazo médio de pagamento), (3) Melhorar giro de estoques.`,
-      meta:`Reduzir para 30-45 dias em 18 meses`
+      tipo:"atencao",
+      titulo:"Otimizar Ciclo de Caixa",
+      descricao:`Ciclo de ${Math.round(calc.ciclo)} dias pode ser reduzido. Priorize: reduzir prazo de recebimento (PMR: ${Math.round(calc.pmr || 0)} dias) e aumentar prazo de pagamento (PMP: ${Math.round(calc.pmp || 0)} dias).`,
+      meta:`Reduzir para 45 dias em 18 meses`,
+      impacto: "Melhorar fluxo de caixa e reduzir necessidade de capital"
     });
   }
-
-  // 5. Rentabilidade
+  
+  // 2.4 Liquidez Corrente Baixa
+  if(calc.liqCorrente != null && calc.liqCorrente < 1.0){
+    recs.push({
+      icon:"💧",
+      tipo:"serio",
+      titulo:"Liquidez Corrente Crítica",
+      descricao:`Liquidez de ${clamp2(calc.liqCorrente)} indica que o ativo circulante não cobre o passivo circulante. Ações: (1) Alongar dívidas de curto prazo, (2) Reduzir estoques, (3) Acelerar cobranças, (4) Renegociar prazos com fornecedores.`,
+      meta:`Elevar para 1.3+ em 6 meses`,
+      impacto: "Restaurar capacidade de pagamento"
+    });
+  } else if((calc.liqCorrente || calc.liq) != null && (calc.liqCorrente || calc.liq) < 1.3){
+    recs.push({
+      icon:"💧",
+      tipo:"atencao",
+      titulo:"Liquidez Apertada",
+      descricao:`Liquidez de ${clamp2(calc.liqCorrente || calc.liq)} está no limite. Monitore o fluxo de caixa diariamente e mantenha uma reserva mínima.`,
+      meta:`Atingir 1.5+ em 12 meses`,
+      impacto: "Ter folga para imprevistos"
+    });
+  }
+  
+  // 2.5 ROE Baixo
   if(calc.roe != null && calc.roe < 0.08){
     recs.push({
       icon:"📈",
-      titulo:"Rentabilidade sobre Patrimônio Baixa",
-      descricao:`ROE de ${toPct(calc.roe)} está abaixo do mínimo aceitável (8-10%). Isso indica baixo retorno para os sócios. Ações: (1) Revisar estratégia de precificação, (2) Melhorar margem operacional, (3) Aumentar giro de ativos, (4) Avaliar alavancagem financeira ótima, (5) Considerar desinvestimento em áreas não rentáveis.`,
-      meta:`Atingir 10-15% em 18 meses`
-    });
-  } else if(calc.roe != null && calc.roe >= 0.08 && calc.roe < 0.12){
-    recs.push({
-      icon:"💹",
-      titulo:"Oportunidade de Aumentar Rentabilidade",
-      descricao:`ROE de ${toPct(calc.roe)} está aceitável, mas pode melhorar. Foque em: (1) Aumentar margem líquida, (2) Melhorar giro de ativos, (3) Otimizar estrutura de capital.`,
-      meta:`Alcançar 15%+ em 24 meses`
+      tipo:"serio",
+      titulo:"Baixo Retorno sobre Patrimônio",
+      descricao:`ROE de ${toPct(calc.roe)} está abaixo do mínimo aceitável (8%). Os sócios ganhariam mais deixando o dinheiro em aplicações financeiras. Análise DuPont mostra: Margem ${toPct(calc.margemLiq || calc.margem * 0.6)} × Giro ${clamp2(calc.giroAtv || 0)} × Alav ${clamp2(calc.alavFin || 0)}. Foque no componente mais fraco.`,
+      meta:`Atingir 12% em 18 meses`,
+      impacto: "Justificar o capital investido pelos sócios"
     });
   }
 
-  // 6. Cobertura de Juros
-  if(calc.juros != null && calc.juros < 2){
+  // ========== CATEGORIA 3: OPORTUNIDADES DE MELHORIA ==========
+  
+  // 3.1 Estrutura de Capital (CT/CP alto)
+  if(calc.ctcp != null && calc.ctcp > 2){
     recs.push({
-      icon:"💸",
-      titulo:"Cobertura de Juros Insuficiente",
-      descricao:`Cobertura de ${calc.juros!=null? clamp2(calc.juros)+"x" : "—"} está abaixo do recomendado (≥2x). A empresa está comprometendo muito EBITDA com despesas financeiras. Ações: (1) Renegociar dívidas para reduzir taxa de juros, (2) Amortizar dívidas mais caras primeiro, (3) Evitar novas dívidas, (4) Melhorar geração de EBITDA.`,
-      meta:`Elevar para 3-5x em 24 meses`
+      icon:"🏗️",
+      tipo:"atencao",
+      titulo:"Estrutura de Capital Desequilibrada",
+      descricao:`Relação Capital Terceiros/Próprio de ${clamp2(calc.ctcp)} indica excesso de financiamento por dívida. Ideal seria abaixo de 1.5. Considere: (1) Reinvestir lucros ao invés de distribuir, (2) Aporte de capital pelos sócios, (3) Amortização acelerada de dívidas.`,
+      meta:`Reduzir CT/CP para 1.5 em 24 meses`,
+      impacto: "Reduzir risco financeiro e custo de capital"
     });
   }
-
-  // 7. Capital de Giro Negativo
-  if(calc.capGiro != null && calc.capGiro < 0){
+  
+  // 3.2 Imobilização Alta
+  if(calc.imobPL != null && calc.imobPL > 1){
+    recs.push({
+      icon:"🏢",
+      tipo:"atencao",
+      titulo:"Muito Capital Preso em Imobilizado",
+      descricao:`Imobilização do PL de ${(calc.imobPL * 100).toFixed(0)}% indica que todo o patrimônio líquido (e mais) está investido em ativos fixos, não sobrando para capital de giro. Considere: (1) Venda de imóveis não operacionais, (2) Sale-leaseback de ativos, (3) Aporte de capital.`,
+      meta:`Reduzir para 80% em 24 meses`,
+      impacto: "Liberar recursos para capital de giro"
+    });
+  }
+  
+  // 3.3 Composição de Dívida (muito no CP)
+  if(calc.composicaoEndCP != null && calc.composicaoEndCP > 0.6){
+    recs.push({
+      icon:"📅",
+      tipo:"atencao",
+      titulo:"Dívida Concentrada no Curto Prazo",
+      descricao:`${(calc.composicaoEndCP * 100).toFixed(0)}% da dívida vence em até 12 meses. Isso pressiona o caixa e aumenta o risco de refinanciamento. Ações: (1) Alongar dívidas para LP, (2) Trocar linhas de capital de giro por empréstimos de longo prazo, (3) Negociar carência em novas operações.`,
+      meta:`Reduzir dívida CP para 40% do total em 18 meses`,
+      impacto: "Aliviar pressão no fluxo de caixa"
+    });
+  }
+  
+  // 3.4 Giro do Ativo Baixo
+  if(calc.giroAtv != null && calc.giroAtv < 0.8){
     recs.push({
       icon:"⚡",
-      titulo:"Capital de Giro Negativo",
-      descricao:`Capital de giro negativo de ${toBRL(calc.capGiro)} indica que passivos de curto prazo superam ativos circulantes. Isso é insustentável a médio prazo. Ações urgentes: (1) Aporte de capital pelos sócios, (2) Linha de crédito para capital de giro, (3) Renegociação de dívidas de curto para longo prazo, (4) Melhoria imediata da geração de caixa.`,
-      meta:`Tornar positivo em 6-12 meses`
+      tipo:"atencao",
+      titulo:"Ativos Subutilizados",
+      descricao:`Giro do ativo de ${clamp2(calc.giroAtv)}x indica que os ativos não estão gerando receita proporcional. Para cada R$ 1 de ativo, a empresa gera apenas R$ ${clamp2(calc.giroAtv)} de receita. Ações: (1) Vender ativos ociosos, (2) Aumentar vendas com mesma estrutura, (3) Revisar investimentos em ativos fixos.`,
+      meta:`Elevar giro para 1.2x em 18 meses`,
+      impacto: "Melhorar rentabilidade via eficiência"
     });
   }
 
-  // 8. Comparação com ano anterior
+  // ========== CATEGORIA 4: ANÁLISE DE TENDÊNCIA ==========
+  
   if(previo){
+    // Queda de Receita
     if(calc.receita < previo.receita * 0.95){
       const queda = ((previo.receita - calc.receita) / previo.receita) * 100;
       recs.push({
         icon:"📉",
-        titulo:"Queda de Receita",
-        descricao:`Receita caiu ${queda.toFixed(1)}% vs ano anterior. Investigue: (1) Perda de clientes, (2) Redução de preços, (3) Fatores de mercado. Ações: (1) Plano de recuperação de market share, (2) Análise de concorrência, (3) Estratégia de retenção de clientes, (4) Novos canais de venda.`,
-        meta:`Recuperar crescimento de 5-10% ao ano`
+        tipo:"serio",
+        titulo:`Queda de ${queda.toFixed(1)}% na Receita`,
+        descricao:`Receita caiu de ${toBRL(previo.receita)} para ${toBRL(calc.receita)}. Investigue: perda de clientes, redução de preços, fatores de mercado. Ações: (1) Análise de churn, (2) Pesquisa com clientes perdidos, (3) Revisão de estratégia comercial.`,
+        meta:`Reverter queda e crescer 5% no próximo ano`,
+        impacto: `Recuperar ${toBRL(previo.receita - calc.receita)} em faturamento`
       });
     }
-
-    if(calc.margem && previo.margem && calc.margem < previo.margem * 0.90){
+    
+    // Deterioração da Margem
+    if(calc.margem && previo.margem && calc.margem < previo.margem * 0.85){
+      const quedaMargem = ((previo.margem - calc.margem) * 100).toFixed(1);
       recs.push({
         icon:"⚠️",
-        titulo:"Deterioração da Margem",
-        descricao:`Margem EBITDA caiu significativamente vs ano anterior. Ações imediatas: (1) Análise detalhada de custos, (2) Identificar aumento de despesas, (3) Revisar política de preços, (4) Eliminar ineficiências operacionais.`,
-        meta:`Recuperar margem anterior em 12 meses`
+        tipo:"serio",
+        titulo:`Margem Caiu ${quedaMargem} pontos percentuais`,
+        descricao:`Margem EBITDA foi de ${toPct(previo.margem)} para ${toPct(calc.margem)}. Isso representa perda de ${toBRL(calc.receita * (previo.margem - calc.margem))} em EBITDA. Analise: aumento de custos, guerra de preços, ineficiências.`,
+        meta:`Recuperar margem de ${toPct(previo.margem)} em 12 meses`,
+        impacto: `Voltar a gerar ${toBRL(calc.receita * previo.margem)} de EBITDA`
+      });
+    }
+    
+    // Piora no Z-Score
+    if(calc.zScore && previo.zScore && calc.zScore < previo.zScore * 0.85){
+      recs.push({
+        icon:"📊",
+        tipo:"serio",
+        titulo:"Deterioração do Z-Score",
+        descricao:`Z-Score piorou de ${previo.zScore.toFixed(2)} para ${calc.zScore.toFixed(2)}, indicando aumento do risco de insolvência. Identifique os componentes que pioraram e corrija.`,
+        meta:`Estabilizar e melhorar Z-Score em 12 meses`,
+        impacto: "Sair da trajetória de risco"
       });
     }
   }
 
-  // 9. Pontos Fortes (para usar na defesa de crédito)
+  // ========== CATEGORIA 5: PONTOS FORTES (para defesa de crédito) ==========
+  
   const pontosFortes = [];
-  if(calc.margem >= 0.15) pontosFortes.push("Margem EBITDA saudável");
-  if(calc.alav <= 2) pontosFortes.push("Endividamento controlado");
-  if(calc.liq >= 1.5) pontosFortes.push("Boa liquidez");
-  if(calc.roe >= 0.15) pontosFortes.push("Excelente rentabilidade");
-  if(calc.ciclo <= 45) pontosFortes.push("Ciclo financeiro eficiente");
+  if(calc.margem >= 0.15) pontosFortes.push({ind: "Margem EBITDA", val: toPct(calc.margem), desc: "acima de 15%"});
+  if(calc.alav != null && calc.alav <= 2) pontosFortes.push({ind: "DL/EBITDA", val: clamp2(calc.alav) + "x", desc: "baixa alavancagem"});
+  if((calc.liqCorrente || calc.liq) >= 1.5) pontosFortes.push({ind: "Liquidez", val: clamp2(calc.liqCorrente || calc.liq), desc: "boa folga"});
+  if(calc.roe >= 0.15) pontosFortes.push({ind: "ROE", val: toPct(calc.roe), desc: "excelente retorno"});
+  if(calc.ciclo != null && calc.ciclo <= 45) pontosFortes.push({ind: "Ciclo Financeiro", val: Math.round(calc.ciclo) + " dias", desc: "muito eficiente"});
+  if(calc.juros >= 4) pontosFortes.push({ind: "Cobertura Juros", val: clamp2(calc.juros) + "x", desc: "folga para honrar"});
+  if(calc.zScore > 2.99) pontosFortes.push({ind: "Z-Score", val: calc.zScore.toFixed(2), desc: "zona segura"});
+  if(calc.giroAtv >= 1.5) pontosFortes.push({ind: "Giro do Ativo", val: clamp2(calc.giroAtv) + "x", desc: "ativos produtivos"});
 
-  if(pontosFortes.length >= 3){
+  if(pontosFortes.length >= 2){
     recs.unshift({
       icon:"✅",
-      titulo:"Pontos Fortes da Empresa",
-      descricao:`A empresa apresenta ${pontosFortes.length} indicadores positivos: ${pontosFortes.join(", ")}. Estes são argumentos sólidos para negociação de crédito e devem ser destacados em apresentações para instituições financeiras.`,
-      meta:null
+      tipo:"positivo",
+      titulo:`${pontosFortes.length} Pontos Fortes Identificados`,
+      descricao:`A empresa apresenta indicadores positivos que devem ser destacados: ${pontosFortes.map(p => `<strong>${p.ind}</strong> (${p.val} - ${p.desc})`).join(", ")}. Use estes argumentos em negociações com bancos e fornecedores.`,
+      meta: null,
+      impacto: "Maior poder de barganha em negociações"
     });
   }
+
+  // ========== ORDENAR POR PRIORIDADE ==========
+  const prioridade = {critico: 0, serio: 1, atencao: 2, positivo: 3};
+  recs.sort((a, b) => (prioridade[a.tipo] || 99) - (prioridade[b.tipo] || 99));
 
   return recs;
 }
@@ -3186,24 +3369,43 @@ function gerarRecomendacoes(calc, historico){
 function gerarPontosDefesaCredito(calc, recs){
   const pontos = [];
   
-  // Pontos positivos
-  if(calc.margem >= 0.12) pontos.push(`• Margem EBITDA de ${toPct(calc.margem)} demonstra boa eficiência operacional`);
-  if(calc.alav <= 2.5) pontos.push(`• DL/EBITDA de ${calc.alav? clamp2(calc.alav)+"x" : "—"} indica capacidade de pagamento saudável`);
-  if(calc.liq >= 1.2) pontos.push(`• Liquidez corrente de ${calc.liq? clamp2(calc.liq) : "—"} garante pagamento de obrigações de curto prazo`);
-  if(calc.roe >= 0.10) pontos.push(`• ROE de ${toPct(calc.roe)} mostra boa rentabilidade para os sócios`);
-  if(calc.juros >= 3) pontos.push(`• Cobertura de juros de ${calc.juros? clamp2(calc.juros)+"x" : "—"} demonstra folga para honrar compromissos financeiros`);
+  // Pontos positivos baseados nos novos indicadores
+  if(calc.margem >= 0.12) pontos.push(`✓ <strong>Margem EBITDA</strong> de ${toPct(calc.margem)} demonstra eficiência operacional`);
+  if(calc.alav != null && calc.alav <= 2.5) pontos.push(`✓ <strong>DL/EBITDA</strong> de ${clamp2(calc.alav)}x indica baixo risco de crédito`);
+  if((calc.liqCorrente || calc.liq) >= 1.2) pontos.push(`✓ <strong>Liquidez</strong> de ${clamp2(calc.liqCorrente || calc.liq)} garante capacidade de pagamento`);
+  if(calc.roe >= 0.10) pontos.push(`✓ <strong>ROE</strong> de ${toPct(calc.roe)} demonstra rentabilidade para os sócios`);
+  if(calc.juros >= 3) pontos.push(`✓ <strong>Cobertura de juros</strong> de ${clamp2(calc.juros)}x - folga para honrar compromissos`);
+  if(calc.zScore > 2.5) pontos.push(`✓ <strong>Z-Score</strong> de ${calc.zScore.toFixed(2)} coloca empresa em zona segura`);
+  if(calc.giroAtv >= 1) pontos.push(`✓ <strong>Giro do ativo</strong> de ${clamp2(calc.giroAtv)}x indica boa utilização de recursos`);
+  if(calc.ciclo != null && calc.ciclo <= 60) pontos.push(`✓ <strong>Ciclo financeiro</strong> de ${Math.round(calc.ciclo)} dias é eficiente`);
 
-  // Pontos de atenção com plano de ação
-  const problemasComPlano = recs.filter(r=> r.meta != null);
+  // Se tem planos de melhoria
+  const problemasComPlano = recs.filter(r => r.meta != null && r.tipo !== 'positivo');
   if(problemasComPlano.length > 0){
-    pontos.push(`• Empresa tem plano estruturado para melhorar ${problemasComPlano.length} indicador(es) com metas e prazos definidos`);
+    pontos.push(`📋 Empresa possui <strong>plano estruturado</strong> para ${problemasComPlano.length} ponto(s) de melhoria com metas definidas`);
   }
 
-  // Recomendações gerais
-  pontos.push(`• Recomenda-se linha de crédito para ${calc.alav > 2.5? "reestruturação de dívidas" : "capital de giro"} com prazo ${calc.liq < 1.3? "mínimo de 24 meses" : "de 12-18 meses"}`);
+  // Recomendação de produto
+  let produtoRecomendado = "capital de giro";
+  let prazoRecomendado = "12-24 meses";
   
-  if(calc.receita > 1000000){
-    pontos.push(`• Faturamento anual de ${toBRL(calc.receita)} qualifica para linhas corporativas com melhores condições`);
+  if(calc.alav > 3){
+    produtoRecomendado = "reestruturação de dívidas";
+    prazoRecomendado = "36-48 meses";
+  } else if(calc.ciclo > 60){
+    produtoRecomendado = "antecipação de recebíveis";
+    prazoRecomendado = "rotativo";
+  } else if(calc.imobPL > 0.8){
+    produtoRecomendado = "financiamento de longo prazo";
+    prazoRecomendado = "48-60 meses";
+  }
+  
+  pontos.push(`🏦 <strong>Produto indicado:</strong> ${produtoRecomendado} com prazo ${prazoRecomendado}`);
+  
+  if(calc.receita > 5000000){
+    pontos.push(`💼 Faturamento de <strong>${toBRL(calc.receita)}</strong> qualifica para linhas corporate`);
+  } else if(calc.receita > 1000000){
+    pontos.push(`💼 Faturamento de <strong>${toBRL(calc.receita)}</strong> qualifica para linhas middle market`);
   }
 
   return pontos.join("<br>");
