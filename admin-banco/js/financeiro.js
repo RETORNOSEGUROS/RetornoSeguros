@@ -1000,6 +1000,28 @@ function calcularIndicadores(d){
   const emprestimosLP = getNum(d.emprestimosLP);
   const debentures = getNum(d.debentures);
   
+  // === CONTINGÊNCIAS JUDICIAIS ===
+  const processosTrab = getNum(d.processosTrabalhistas);
+  const processosTrib = getNum(d.processosTributarios);
+  const processosCiv = getNum(d.processosCiveis);
+  const processosAmb = getNum(d.processosAmbientais);
+  const qtdProcessos = getNum(d.qtdProcessos);
+  const depositosJudiciais = getNum(d.depositosJudiciais);
+  const provisaoContingencias = getNum(d.provisaoContingencias);
+  const passivoContingente = getNum(d.passivoContingente);
+  
+  // Contingência Total = Trabalhista + Tributário + Cível + Ambiental
+  const contingenciaTotal = processosTrab + processosTrib + processosCiv + processosAmb;
+  
+  // Exposição Total = Contingência + Passivo Contingente (possível)
+  const exposicaoTotal = contingenciaTotal + passivoContingente;
+  
+  // PDD (Provisão para Devedores Duvidosos)
+  const pdd = getNum(d.pdd);
+  
+  // Investimentos e outros ativos
+  const investimentos = getNum(d.investimentos);
+  
   // === CÁLCULOS DERIVADOS ===
   
   // Dívida Bruta calculada (se não vier pronta)
@@ -1150,7 +1172,43 @@ function calcularIndicadores(d){
     valorEmpresa, valorEquity,
     
     // Z-Score
-    zScore, capitalGiroAtivo, lucrosRetidos, ebitAtivo, plPassivo
+    zScore, capitalGiroAtivo, lucrosRetidos, ebitAtivo, plPassivo,
+    
+    // === CONTINGÊNCIAS JUDICIAIS ===
+    processosTrab, processosTrib, processosCiv, processosAmb,
+    qtdProcessos, depositosJudiciais, provisaoContingencias, passivoContingente,
+    contingenciaTotal, exposicaoTotal,
+    
+    // Indicadores de Contingência
+    contingenciaSobrePL: safeDiv(contingenciaTotal, pl),
+    contingenciaSobreAtivo: safeDiv(contingenciaTotal, ativo),
+    exposicaoSobreReceita: safeDiv(exposicaoTotal, receita),
+    coberturaContinProvisao: safeDiv(provisaoContingencias, contingenciaTotal),
+    
+    // === QUALIDADE DO ATIVO ===
+    pdd,
+    qualidadeRecebiveis: safeDiv(pdd, cr), // % de inadimplência esperada
+    idadeAtivos: safeDiv(depreciacao, imobilizado), // Quão "velhos" são os ativos
+    pesoIntangiveis: safeDiv(intangivel, ativo), // Quanto é "ar" no balanço
+    investimentos,
+    
+    // === ANÁLISE VERTICAL (% do total) ===
+    // Ativo
+    acSobreAtivo: safeDiv(ativoCirc, ativo),
+    ancSobreAtivo: safeDiv(ativoNaoCirc, ativo),
+    caixaSobreAtivo: safeDiv(disponiveis, ativo),
+    crSobreAtivo: safeDiv(cr, ativo),
+    estoqueSobreAtivo: safeDiv(estoques, ativo),
+    imobSobreAtivo: safeDiv(imobilizado, ativo),
+    
+    // Passivo
+    pcSobrePassivo: safeDiv(passivoCirc, passivoTotal + pl),
+    pncSobrePassivo: safeDiv(passivoNaoCirc, passivoTotal + pl),
+    plSobrePassivo: safeDiv(pl, passivoTotal + pl),
+    
+    // DRE (% da Receita)
+    cmvSobreReceita: safeDiv(cmv, receita),
+    despFinSobreReceita: safeDiv(despFin, receita)
   };
 }
 
@@ -1202,7 +1260,21 @@ function criarIndicadoresVazios(){
     valorEmpresa:null, valorEquity:null,
     
     // Z-Score
-    zScore:null, capitalGiroAtivo:null, lucrosRetidos:null, ebitAtivo:null, plPassivo:null
+    zScore:null, capitalGiroAtivo:null, lucrosRetidos:null, ebitAtivo:null, plPassivo:null,
+    
+    // Contingências Judiciais
+    processosTrab:0, processosTrib:0, processosCiv:0, processosAmb:0,
+    qtdProcessos:0, depositosJudiciais:0, provisaoContingencias:0, passivoContingente:0,
+    contingenciaTotal:0, exposicaoTotal:0,
+    contingenciaSobrePL:null, contingenciaSobreAtivo:null, exposicaoSobreReceita:null, coberturaContinProvisao:null,
+    
+    // Qualidade do Ativo
+    pdd:0, qualidadeRecebiveis:null, idadeAtivos:null, pesoIntangiveis:null, investimentos:0,
+    
+    // Análise Vertical
+    acSobreAtivo:null, ancSobreAtivo:null, caixaSobreAtivo:null, crSobreAtivo:null, estoqueSobreAtivo:null, imobSobreAtivo:null,
+    pcSobrePassivo:null, pncSobrePassivo:null, plSobrePassivo:null,
+    cmvSobreReceita:null, despFinSobreReceita:null
   };
 }
 
@@ -1378,7 +1450,10 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
     "finQtdSocios","finFuncionarios","finDistribLucro","finProLabore",
     "finMarketShare","finCrescSetor","finMargemSetor","finRankingSetor",
     "finValorImoveis","finValorMaquinas","finValorVeiculos","finInadimplencia",
-    "finLimiteTotal","finLimiteUsado","finTaxaMedia","finScoreExterno"
+    "finLimiteTotal","finLimiteUsado","finTaxaMedia","finScoreExterno",
+    // Contingências Judiciais
+    "finProcessosTrab","finProcessosTrib","finProcessosCiv","finProcessosAmb",
+    "finQtdProcessos","finDepJudiciais","finProvisaoContingencias","finPassivoContingente"
   ];
   
   // Limpar todos os campos
@@ -1509,6 +1584,16 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
         setMoney("finLimiteUsado", d.limiteUsado);
         setNum("finTaxaMedia", d.taxaMedia);
         setNum("finScoreExterno", d.scoreExterno);
+        
+        // Contingências Judiciais
+        setMoney("finProcessosTrab", d.processosTrabalhistas);
+        setMoney("finProcessosTrib", d.processosTributarios);
+        setMoney("finProcessosCiv", d.processosCiveis);
+        setMoney("finProcessosAmb", d.processosAmbientais);
+        setNum("finQtdProcessos", d.qtdProcessos);
+        setMoney("finDepJudiciais", d.depositosJudiciais);
+        setMoney("finProvisaoContingencias", d.provisaoContingencias);
+        setMoney("finPassivoContingente", d.passivoContingente);
       }
     }catch(e){
       console.error("Erro ao carregar dados:", e);
@@ -1650,6 +1735,16 @@ async function salvarFinanceiro(){
     limiteUsado: getMoney("finLimiteUsado"),
     taxaMedia: getNum("finTaxaMedia"),
     scoreExterno: getNum("finScoreExterno"),
+    
+    // === CONTINGÊNCIAS E RISCOS JUDICIAIS ===
+    processosTrabalhistas: getMoney("finProcessosTrab"),
+    processosTributarios: getMoney("finProcessosTrib"),
+    processosCiveis: getMoney("finProcessosCiv"),
+    processosAmbientais: getMoney("finProcessosAmb"),
+    qtdProcessos: getNum("finQtdProcessos"),
+    depositosJudiciais: getMoney("finDepJudiciais"),
+    provisaoContingencias: getMoney("finProvisaoContingencias"),
+    passivoContingente: getMoney("finPassivoContingente"),
     
     // === CAMPOS CALCULADOS ===
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -2852,6 +2947,18 @@ function gerarAnaliseAvancadaHtml(latest, rows){
           }
         </div>
       </div>
+      
+      <!-- ===== PAINEL 6: ANÁLISE VERTICAL DO BALANÇO ===== -->
+      ${gerarAnaliseVerticalHtml(latest, rows[1])}
+      
+      <!-- ===== PAINEL 7: QUALIDADE DO ATIVO ===== -->
+      ${gerarQualidadeAtivoHtml(latest)}
+      
+      <!-- ===== PAINEL 8: CONTINGÊNCIAS JUDICIAIS ===== -->
+      ${gerarContingenciasHtml(latest)}
+      
+      <!-- ===== PAINEL 9: ANÁLISE HORIZONTAL (Evolução) ===== -->
+      ${gerarAnaliseHorizontalHtml(rows)}
     </div>
   `;
   
@@ -2947,6 +3054,363 @@ function gerarFleurietHtml(latest){
       
       <div style="margin-top:12px; font-size:10px; color:#6b7280; text-align:center">
         Modelo de Michel Fleuriet - Padrão de análise de crédito no Brasil
+      </div>
+    </div>
+  `;
+}
+
+// ===== FUNÇÃO: ANÁLISE VERTICAL DO BALANÇO =====
+function gerarAnaliseVerticalHtml(latest, previo){
+  if(!latest.ativo || latest.ativo === 0) return '';
+  
+  const ativo = latest.ativo;
+  const passivoMaisPL = (latest.passivoCirc || 0) + (latest.passivoNaoCirc || 0) + (latest.pl || 0);
+  
+  // Calcular variações se tiver ano anterior
+  const calcVar = (atual, anterior) => {
+    if(!anterior || anterior === 0) return null;
+    return ((atual - anterior) / anterior * 100);
+  };
+  
+  return `
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+      <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">📊 ANÁLISE VERTICAL DO BALANÇO</div>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px">
+        <!-- ATIVO -->
+        <div>
+          <div style="font-size:11px; font-weight:700; color:#1e40af; margin-bottom:8px; padding-bottom:4px; border-bottom:2px solid #1e40af">ATIVO</div>
+          
+          <div style="font-size:10px; color:#6b7280; margin-bottom:6px">
+            <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f1f5f9">
+              <span>Total Ativo</span>
+              <span style="font-weight:700">${toBRL(ativo)}</span>
+            </div>
+          </div>
+          
+          <!-- Ativo Circulante -->
+          <div style="background:#dbeafe; border-radius:6px; padding:8px; margin-bottom:8px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#1e40af">
+              <span>Circulante</span>
+              <span>${latest.acSobreAtivo != null ? (latest.acSobreAtivo * 100).toFixed(1) + '%' : '—'}</span>
+            </div>
+            <div style="font-size:10px; color:#3b82f6; margin-top:4px">
+              ${[
+                latest.caixaSobreAtivo ? `Caixa: ${(latest.caixaSobreAtivo * 100).toFixed(1)}%` : null,
+                latest.crSobreAtivo ? `Receb: ${(latest.crSobreAtivo * 100).toFixed(1)}%` : null,
+                latest.estoqueSobreAtivo ? `Estoq: ${(latest.estoqueSobreAtivo * 100).toFixed(1)}%` : null
+              ].filter(Boolean).join(' | ') || 'Sem detalhe'}
+            </div>
+          </div>
+          
+          <!-- Ativo Não Circulante -->
+          <div style="background:#e0e7ff; border-radius:6px; padding:8px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#4338ca">
+              <span>Não Circulante</span>
+              <span>${latest.ancSobreAtivo != null ? (latest.ancSobreAtivo * 100).toFixed(1) + '%' : '—'}</span>
+            </div>
+            <div style="font-size:10px; color:#6366f1; margin-top:4px">
+              ${latest.imobSobreAtivo ? `Imobilizado: ${(latest.imobSobreAtivo * 100).toFixed(1)}%` : 'Sem detalhe'}
+              ${latest.pesoIntangiveis ? ` | Intang: ${(latest.pesoIntangiveis * 100).toFixed(1)}%` : ''}
+            </div>
+          </div>
+        </div>
+        
+        <!-- PASSIVO + PL -->
+        <div>
+          <div style="font-size:11px; font-weight:700; color:#dc2626; margin-bottom:8px; padding-bottom:4px; border-bottom:2px solid #dc2626">PASSIVO + PL</div>
+          
+          <div style="font-size:10px; color:#6b7280; margin-bottom:6px">
+            <div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #f1f5f9">
+              <span>Total</span>
+              <span style="font-weight:700">${toBRL(passivoMaisPL)}</span>
+            </div>
+          </div>
+          
+          <!-- Passivo Circulante -->
+          <div style="background:#fee2e2; border-radius:6px; padding:8px; margin-bottom:8px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#dc2626">
+              <span>Circulante</span>
+              <span>${latest.pcSobrePassivo != null ? (latest.pcSobrePassivo * 100).toFixed(1) + '%' : '—'}</span>
+            </div>
+          </div>
+          
+          <!-- Passivo Não Circulante -->
+          <div style="background:#fecaca; border-radius:6px; padding:8px; margin-bottom:8px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#b91c1c">
+              <span>Não Circulante</span>
+              <span>${latest.pncSobrePassivo != null ? (latest.pncSobrePassivo * 100).toFixed(1) + '%' : '—'}</span>
+            </div>
+          </div>
+          
+          <!-- Patrimônio Líquido -->
+          <div style="background:#dcfce7; border-radius:6px; padding:8px">
+            <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#16a34a">
+              <span>Patrimônio Líquido</span>
+              <span>${latest.plSobrePassivo != null ? (latest.plSobrePassivo * 100).toFixed(1) + '%' : '—'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Barra visual de composição -->
+      <div style="margin-top:16px">
+        <div style="font-size:10px; color:#6b7280; margin-bottom:6px">Composição do Financiamento:</div>
+        <div style="height:20px; border-radius:10px; overflow:hidden; display:flex; background:#e2e8f0">
+          ${latest.pcSobrePassivo ? `<div style="width:${(latest.pcSobrePassivo * 100).toFixed(0)}%; background:#ef4444; display:flex; align-items:center; justify-content:center; font-size:9px; color:#fff; font-weight:600">${(latest.pcSobrePassivo * 100).toFixed(0)}% CP</div>` : ''}
+          ${latest.pncSobrePassivo ? `<div style="width:${(latest.pncSobrePassivo * 100).toFixed(0)}%; background:#f59e0b; display:flex; align-items:center; justify-content:center; font-size:9px; color:#fff; font-weight:600">${(latest.pncSobrePassivo * 100).toFixed(0)}% LP</div>` : ''}
+          ${latest.plSobrePassivo ? `<div style="width:${(latest.plSobrePassivo * 100).toFixed(0)}%; background:#10b981; display:flex; align-items:center; justify-content:center; font-size:9px; color:#fff; font-weight:600">${(latest.plSobrePassivo * 100).toFixed(0)}% PL</div>` : ''}
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:9px; color:#6b7280; margin-top:4px">
+          <span>🔴 Curto Prazo</span>
+          <span>🟡 Longo Prazo</span>
+          <span>🟢 Capital Próprio</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ===== FUNÇÃO: QUALIDADE DO ATIVO =====
+function gerarQualidadeAtivoHtml(latest){
+  const temDados = latest.qualidadeRecebiveis != null || latest.idadeAtivos != null || latest.pesoIntangiveis != null;
+  if(!temDados) return '';
+  
+  return `
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+      <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">🔍 QUALIDADE DO ATIVO</div>
+      
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px">
+        <!-- Qualidade dos Recebíveis -->
+        <div style="text-align:center; padding:12px; background:${latest.qualidadeRecebiveis > 0.10 ? '#fef2f2' : latest.qualidadeRecebiveis > 0.05 ? '#fffbeb' : '#ecfdf5'}; border-radius:8px">
+          <div style="font-size:10px; color:#6b7280">PDD/Recebíveis</div>
+          <div style="font-size:20px; font-weight:700; color:${latest.qualidadeRecebiveis > 0.10 ? '#dc2626' : latest.qualidadeRecebiveis > 0.05 ? '#d97706' : '#16a34a'}">
+            ${latest.qualidadeRecebiveis != null ? (latest.qualidadeRecebiveis * 100).toFixed(1) + '%' : '—'}
+          </div>
+          <div style="font-size:9px; color:#6b7280; margin-top:4px">
+            ${latest.qualidadeRecebiveis > 0.10 ? '⚠️ Inadimplência alta' : latest.qualidadeRecebiveis > 0.05 ? 'Atenção' : '✓ Saudável'}
+          </div>
+        </div>
+        
+        <!-- Idade dos Ativos -->
+        <div style="text-align:center; padding:12px; background:${latest.idadeAtivos > 0.7 ? '#fef2f2' : latest.idadeAtivos > 0.5 ? '#fffbeb' : '#ecfdf5'}; border-radius:8px">
+          <div style="font-size:10px; color:#6b7280">Idade Ativos</div>
+          <div style="font-size:20px; font-weight:700; color:${latest.idadeAtivos > 0.7 ? '#dc2626' : latest.idadeAtivos > 0.5 ? '#d97706' : '#16a34a'}">
+            ${latest.idadeAtivos != null ? (latest.idadeAtivos * 100).toFixed(0) + '%' : '—'}
+          </div>
+          <div style="font-size:9px; color:#6b7280; margin-top:4px">
+            ${latest.idadeAtivos > 0.7 ? '⚠️ Ativos velhos' : latest.idadeAtivos > 0.5 ? 'Moderado' : '✓ Ativos novos'}
+          </div>
+        </div>
+        
+        <!-- Peso Intangíveis -->
+        <div style="text-align:center; padding:12px; background:${latest.pesoIntangiveis > 0.3 ? '#fef2f2' : latest.pesoIntangiveis > 0.15 ? '#fffbeb' : '#f8fafc'}; border-radius:8px">
+          <div style="font-size:10px; color:#6b7280">Intangíveis/Ativo</div>
+          <div style="font-size:20px; font-weight:700; color:${latest.pesoIntangiveis > 0.3 ? '#dc2626' : latest.pesoIntangiveis > 0.15 ? '#d97706' : '#3b82f6'}">
+            ${latest.pesoIntangiveis != null ? (latest.pesoIntangiveis * 100).toFixed(1) + '%' : '—'}
+          </div>
+          <div style="font-size:9px; color:#6b7280; margin-top:4px">
+            ${latest.pesoIntangiveis > 0.3 ? '⚠️ Muito intangível' : latest.pesoIntangiveis > 0.15 ? 'Atenção' : '→ Normal'}
+          </div>
+        </div>
+        
+        <!-- Imobilização do PL -->
+        <div style="text-align:center; padding:12px; background:${latest.imobPL > 1 ? '#fef2f2' : latest.imobPL > 0.7 ? '#fffbeb' : '#ecfdf5'}; border-radius:8px">
+          <div style="font-size:10px; color:#6b7280">Imob/PL</div>
+          <div style="font-size:20px; font-weight:700; color:${latest.imobPL > 1 ? '#dc2626' : latest.imobPL > 0.7 ? '#d97706' : '#16a34a'}">
+            ${latest.imobPL != null ? (latest.imobPL * 100).toFixed(0) + '%' : '—'}
+          </div>
+          <div style="font-size:9px; color:#6b7280; margin-top:4px">
+            ${latest.imobPL > 1 ? '⚠️ Capital preso' : latest.imobPL > 0.7 ? 'Alto' : '✓ Equilibrado'}
+          </div>
+        </div>
+      </div>
+      
+      <div style="margin-top:12px; padding:10px; background:#f8fafc; border-radius:6px; font-size:11px; color:#6b7280">
+        💡 <strong>Interpretação:</strong> 
+        PDD/Receb alto indica problemas de crédito com clientes. 
+        Idade dos ativos >70% sugere necessidade de investimento. 
+        Intangíveis altos podem indicar ágio de aquisições.
+      </div>
+    </div>
+  `;
+}
+
+// ===== FUNÇÃO: CONTINGÊNCIAS JUDICIAIS =====
+function gerarContingenciasHtml(latest){
+  const temContingencias = latest.contingenciaTotal > 0 || latest.exposicaoTotal > 0 || latest.qtdProcessos > 0;
+  if(!temContingencias) return '';
+  
+  // Determinar nível de risco
+  let nivelRisco, corRisco, iconeRisco;
+  const contingenciaSobrePL = latest.contingenciaSobrePL || 0;
+  const exposicaoSobreReceita = latest.exposicaoSobreReceita || 0;
+  
+  if(contingenciaSobrePL > 0.3 || exposicaoSobreReceita > 0.2){
+    nivelRisco = 'CRÍTICO';
+    corRisco = '#dc2626';
+    iconeRisco = '🚨';
+  } else if(contingenciaSobrePL > 0.15 || exposicaoSobreReceita > 0.1){
+    nivelRisco = 'ALTO';
+    corRisco = '#f59e0b';
+    iconeRisco = '⚠️';
+  } else if(contingenciaSobrePL > 0.05 || exposicaoSobreReceita > 0.05){
+    nivelRisco = 'MODERADO';
+    corRisco = '#3b82f6';
+    iconeRisco = '📋';
+  } else {
+    nivelRisco = 'BAIXO';
+    corRisco = '#10b981';
+    iconeRisco = '✓';
+  }
+  
+  return `
+    <div style="background:linear-gradient(135deg, ${corRisco}10, ${corRisco}20); border:2px solid ${corRisco}; border-radius:12px; padding:20px; margin-bottom:16px">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px">
+        <div style="display:flex; align-items:center; gap:10px">
+          <span style="font-size:28px">⚖️</span>
+          <div>
+            <div style="font-size:12px; font-weight:600; color:#6b7280">CONTINGÊNCIAS JUDICIAIS</div>
+            <div style="font-size:18px; font-weight:800; color:${corRisco}">Risco ${nivelRisco}</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:10px; color:#6b7280">Qtd Processos</div>
+          <div style="font-size:24px; font-weight:700; color:${corRisco}">${latest.qtdProcessos || '—'}</div>
+        </div>
+      </div>
+      
+      <!-- Breakdown por tipo -->
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:16px">
+        <div style="text-align:center; padding:10px; background:#fff; border-radius:8px">
+          <div style="font-size:18px">👷</div>
+          <div style="font-size:9px; color:#6b7280">Trabalhista</div>
+          <div style="font-size:14px; font-weight:700; color:#374151">${toBRL(latest.processosTrab)}</div>
+        </div>
+        <div style="text-align:center; padding:10px; background:#fff; border-radius:8px">
+          <div style="font-size:18px">🏛️</div>
+          <div style="font-size:9px; color:#6b7280">Tributário</div>
+          <div style="font-size:14px; font-weight:700; color:#374151">${toBRL(latest.processosTrib)}</div>
+        </div>
+        <div style="text-align:center; padding:10px; background:#fff; border-radius:8px">
+          <div style="font-size:18px">📜</div>
+          <div style="font-size:9px; color:#6b7280">Cível</div>
+          <div style="font-size:14px; font-weight:700; color:#374151">${toBRL(latest.processosCiv)}</div>
+        </div>
+        <div style="text-align:center; padding:10px; background:#fff; border-radius:8px">
+          <div style="font-size:18px">🌿</div>
+          <div style="font-size:9px; color:#6b7280">Ambiental</div>
+          <div style="font-size:14px; font-weight:700; color:#374151">${toBRL(latest.processosAmb)}</div>
+        </div>
+      </div>
+      
+      <!-- Totais e Cobertura -->
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:16px">
+        <div style="background:#fff; border-radius:8px; padding:12px; text-align:center">
+          <div style="font-size:10px; color:#6b7280">Contingência Total</div>
+          <div style="font-size:18px; font-weight:700; color:#dc2626">${toBRL(latest.contingenciaTotal)}</div>
+          <div style="font-size:9px; color:#6b7280">${latest.contingenciaSobrePL ? (latest.contingenciaSobrePL * 100).toFixed(1) + '% do PL' : ''}</div>
+        </div>
+        <div style="background:#fff; border-radius:8px; padding:12px; text-align:center">
+          <div style="font-size:10px; color:#6b7280">Exposição Total</div>
+          <div style="font-size:18px; font-weight:700; color:#b91c1c">${toBRL(latest.exposicaoTotal)}</div>
+          <div style="font-size:9px; color:#6b7280">${latest.exposicaoSobreReceita ? (latest.exposicaoSobreReceita * 100).toFixed(1) + '% da Receita' : ''}</div>
+        </div>
+        <div style="background:#fff; border-radius:8px; padding:12px; text-align:center">
+          <div style="font-size:10px; color:#6b7280">Provisão Constituída</div>
+          <div style="font-size:18px; font-weight:700; color:#16a34a">${toBRL(latest.provisaoContingencias)}</div>
+          <div style="font-size:9px; color:#6b7280">${latest.coberturaContinProvisao ? 'Cobre ' + (latest.coberturaContinProvisao * 100).toFixed(0) + '%' : ''}</div>
+        </div>
+      </div>
+      
+      <!-- Análise de Cobertura -->
+      <div style="background:#fff; border-radius:8px; padding:12px">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+          <span style="font-size:11px; color:#6b7280">Cobertura da Provisão</span>
+          <span style="font-size:12px; font-weight:600; color:${latest.coberturaContinProvisao >= 1 ? '#10b981' : latest.coberturaContinProvisao >= 0.5 ? '#f59e0b' : '#dc2626'}">
+            ${latest.coberturaContinProvisao ? (latest.coberturaContinProvisao * 100).toFixed(0) + '%' : '—'}
+          </span>
+        </div>
+        <div style="height:8px; background:#e2e8f0; border-radius:4px; overflow:hidden">
+          <div style="height:100%; width:${Math.min(100, (latest.coberturaContinProvisao || 0) * 100)}%; background:${latest.coberturaContinProvisao >= 1 ? '#10b981' : latest.coberturaContinProvisao >= 0.5 ? '#f59e0b' : '#dc2626'}"></div>
+        </div>
+        <div style="font-size:10px; color:#6b7280; margin-top:8px">
+          ${iconeRisco} ${latest.coberturaContinProvisao >= 1 ? 
+            'Provisão cobre 100% das contingências prováveis. Situação adequada.' :
+            latest.coberturaContinProvisao >= 0.5 ?
+            'Provisão cobre apenas parte das contingências. Risco de impacto no resultado.' :
+            'Provisão insuficiente! Risco significativo de perdas não provisionadas.'
+          }
+        </div>
+      </div>
+      
+      ${latest.depositosJudiciais > 0 ? `
+        <div style="margin-top:12px; padding:10px; background:rgba(255,255,255,0.7); border-radius:6px">
+          <div style="font-size:11px; color:#6b7280">
+            💰 <strong>Depósitos Judiciais:</strong> ${toBRL(latest.depositosJudiciais)} 
+            (valores que podem ser recuperados se a empresa vencer)
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// ===== FUNÇÃO: ANÁLISE HORIZONTAL (Evolução) =====
+function gerarAnaliseHorizontalHtml(rows){
+  if(rows.length < 2) return '';
+  
+  const atual = rows[0];
+  const anterior = rows[1];
+  
+  const calcVar = (a, b) => {
+    if(!b || b === 0) return null;
+    return ((a - b) / Math.abs(b) * 100);
+  };
+  
+  const formatVar = (val) => {
+    if(val === null) return '—';
+    const cor = val >= 0 ? '#10b981' : '#ef4444';
+    const seta = val >= 0 ? '↑' : '↓';
+    return `<span style="color:${cor}; font-weight:600">${seta} ${Math.abs(val).toFixed(1)}%</span>`;
+  };
+  
+  const itens = [
+    { nome: 'Receita', atual: atual.receita, ant: anterior.receita },
+    { nome: 'EBITDA', atual: atual.ebitda, ant: anterior.ebitda },
+    { nome: 'Lucro Líquido', atual: atual.lucroLiq, ant: anterior.lucroLiq },
+    { nome: 'Ativo Total', atual: atual.ativo, ant: anterior.ativo },
+    { nome: 'Patrimônio Líquido', atual: atual.pl, ant: anterior.pl },
+    { nome: 'Dívida Líquida', atual: atual.dl, ant: anterior.dl, inverso: true },
+    { nome: 'Caixa', atual: atual.disponiveis, ant: anterior.disponiveis },
+    { nome: 'Recebíveis', atual: atual.cr, ant: anterior.cr },
+    { nome: 'Estoques', atual: atual.estoques, ant: anterior.estoques }
+  ].filter(i => i.atual > 0 || i.ant > 0);
+  
+  if(itens.length === 0) return '';
+  
+  return `
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; margin-bottom:16px">
+      <div style="font-size:12px; font-weight:600; color:#6b7280; margin-bottom:16px">📈 ANÁLISE HORIZONTAL - Evolução ${anterior.ano || 'Ant.'} → ${atual.ano || 'Atual'}</div>
+      
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px">
+        ${itens.map(item => {
+          const varPct = calcVar(item.atual, item.ant);
+          const corFundo = item.inverso ? 
+            (varPct > 0 ? '#fef2f2' : '#ecfdf5') :
+            (varPct >= 0 ? '#ecfdf5' : '#fef2f2');
+          
+          return `
+            <div style="background:${corFundo}; border-radius:8px; padding:10px">
+              <div style="font-size:10px; color:#6b7280; margin-bottom:4px">${item.nome}</div>
+              <div style="display:flex; justify-content:space-between; align-items:center">
+                <span style="font-size:13px; font-weight:600">${toBRL(item.atual)}</span>
+                ${formatVar(varPct)}
+              </div>
+              <div style="font-size:9px; color:#9ca3af; margin-top:2px">Ant: ${toBRL(item.ant)}</div>
+            </div>
+          `;
+        }).join('')}
       </div>
     </div>
   `;
@@ -3291,6 +3755,104 @@ function gerarRecomendacoes(calc, historico){
       descricao:`Giro do ativo de ${clamp2(calc.giroAtv)}x indica que os ativos não estão gerando receita proporcional. Para cada R$ 1 de ativo, a empresa gera apenas R$ ${clamp2(calc.giroAtv)} de receita. Ações: (1) Vender ativos ociosos, (2) Aumentar vendas com mesma estrutura, (3) Revisar investimentos em ativos fixos.`,
       meta:`Elevar giro para 1.2x em 18 meses`,
       impacto: "Melhorar rentabilidade via eficiência"
+    });
+  }
+  
+  // 3.5 Qualidade dos Recebíveis (PDD Alta)
+  if(calc.qualidadeRecebiveis != null && calc.qualidadeRecebiveis > 0.10){
+    recs.push({
+      icon:"💳",
+      tipo:"serio",
+      titulo:"Alta Inadimplência de Clientes",
+      descricao:`PDD de ${(calc.qualidadeRecebiveis * 100).toFixed(1)}% sobre recebíveis indica problemas de crédito com clientes. Isso corrói a margem e pode virar prejuízo. Ações: (1) Revisar política de crédito, (2) Endurecer análise de novos clientes, (3) Cobrar mais ativamente, (4) Considerar venda de carteira.`,
+      meta:`Reduzir inadimplência para 5% em 12 meses`,
+      impacto: `Recuperar ${toBRL(calc.cr * (calc.qualidadeRecebiveis - 0.05))} em recebíveis`
+    });
+  } else if(calc.qualidadeRecebiveis != null && calc.qualidadeRecebiveis > 0.05){
+    recs.push({
+      icon:"💳",
+      tipo:"atencao",
+      titulo:"Inadimplência em Nível de Atenção",
+      descricao:`PDD de ${(calc.qualidadeRecebiveis * 100).toFixed(1)}% indica inadimplência moderada. Monitore e ajuste políticas de crédito se necessário.`,
+      meta:`Manter abaixo de 5%`,
+      impacto: "Preservar qualidade da carteira de clientes"
+    });
+  }
+  
+  // 3.6 Ativos Muito Velhos
+  if(calc.idadeAtivos != null && calc.idadeAtivos > 0.7){
+    recs.push({
+      icon:"🏭",
+      tipo:"atencao",
+      titulo:"Ativos Imobilizados Envelhecidos",
+      descricao:`${(calc.idadeAtivos * 100).toFixed(0)}% dos ativos já estão depreciados. Isso pode indicar: (1) Necessidade de reinvestimento, (2) Equipamentos obsoletos, (3) Perda de competitividade. Avalie plano de CAPEX para renovação.`,
+      meta:`Planejar renovação de ativos críticos`,
+      impacto: "Manter competitividade operacional"
+    });
+  }
+  
+  // 3.7 Muito Intangível no Balanço
+  if(calc.pesoIntangiveis != null && calc.pesoIntangiveis > 0.3){
+    recs.push({
+      icon:"☁️",
+      tipo:"atencao",
+      titulo:"Alto Peso de Intangíveis",
+      descricao:`${(calc.pesoIntangiveis * 100).toFixed(1)}% do ativo é intangível (ágio, marcas, softwares). Isso pode ser: (1) Ágio de aquisições que pode virar impairment, (2) Capitalização agressiva de despesas. Bancos costumam descontar intangíveis na análise.`,
+      meta:`Monitorar teste de impairment anual`,
+      impacto: "Evitar surpresas com baixa de ativos"
+    });
+  }
+
+  // ========== CATEGORIA 3B: CONTINGÊNCIAS JUDICIAIS ==========
+  
+  // Contingências altas em relação ao PL
+  if(calc.contingenciaSobrePL != null && calc.contingenciaSobrePL > 0.15){
+    recs.push({
+      icon:"⚖️",
+      tipo: calc.contingenciaSobrePL > 0.3 ? "critico" : "serio",
+      titulo:"Contingências Judiciais Elevadas",
+      descricao:`Contingências de ${toBRL(calc.contingenciaTotal)} representam ${(calc.contingenciaSobrePL * 100).toFixed(1)}% do PL. Tipos: Trabalhista ${toBRL(calc.processosTrab)}, Tributário ${toBRL(calc.processosTrib)}, Cível ${toBRL(calc.processosCiv)}, Ambiental ${toBRL(calc.processosAmb)}. Ações: (1) Priorizar acordos, (2) Provisionar adequadamente, (3) Revisar práticas que geram processos.`,
+      meta:`Reduzir exposição judicial para menos de 10% do PL`,
+      impacto: `Eliminar risco de ${toBRL(calc.contingenciaTotal)} em perdas`
+    });
+  }
+  
+  // Provisão insuficiente
+  if(calc.coberturaContinProvisao != null && calc.coberturaContinProvisao < 0.5 && calc.contingenciaTotal > 0){
+    recs.push({
+      icon:"📋",
+      tipo:"serio",
+      titulo:"Provisão para Contingências Insuficiente",
+      descricao:`Provisão cobre apenas ${(calc.coberturaContinProvisao * 100).toFixed(0)}% das contingências prováveis. Faltam ${toBRL(calc.contingenciaTotal - calc.provisaoContingencias)} para cobertura total. Isso pode resultar em impacto não esperado no resultado se perder ações.`,
+      meta:`Elevar provisão para 100% das perdas prováveis`,
+      impacto: `Evitar surpresa de ${toBRL(calc.contingenciaTotal - calc.provisaoContingencias)} no resultado`
+    });
+  }
+  
+  // Muitos processos trabalhistas
+  if(calc.processosTrab > 0 && calc.funcionarios > 0){
+    const processosPorFunc = calc.qtdProcessos / calc.funcionarios;
+    if(processosPorFunc > 0.1){
+      recs.push({
+        icon:"👷",
+        tipo:"atencao",
+        titulo:"Volume Alto de Processos Trabalhistas",
+        descricao:`${calc.qtdProcessos} processos para ${calc.funcionarios} funcionários (${(processosPorFunc * 100).toFixed(0)}%). Isso sugere problemas de gestão de pessoas ou práticas trabalhistas inadequadas. Ações: (1) Auditoria trabalhista, (2) Revisar práticas de RH, (3) Treinar gestores.`,
+        meta:`Reduzir novos processos em 50%`,
+        impacto: "Melhorar ambiente de trabalho e reduzir custos"
+      });
+    }
+  }
+  
+  // Processos tributários altos
+  if(calc.processosTrib > 0 && calc.receita > 0 && (calc.processosTrib / calc.receita) > 0.05){
+    recs.push({
+      icon:"🏛️",
+      tipo:"serio",
+      titulo:"Exposição Tributária Relevante",
+      descricao:`Processos tributários de ${toBRL(calc.processosTrib)} representam ${((calc.processosTrib / calc.receita) * 100).toFixed(1)}% da receita. Ações: (1) Avaliar parcelamento ou adesão a refis, (2) Revisar planejamento tributário, (3) Buscar teses de defesa.`,
+      meta:`Resolver ou parcelar contingências tributárias`,
+      impacto: `Eliminar risco fiscal de ${toBRL(calc.processosTrib)}`
     });
   }
 
