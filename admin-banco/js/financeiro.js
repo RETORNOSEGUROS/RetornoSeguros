@@ -258,26 +258,14 @@ function wireUi(){
   const btnImportarPdf = document.getElementById("btnImportarPdfEdicao");
   if(btnImportarPdf) {
     btnImportarPdf.addEventListener("click", () => {
-      if(EDIT_CTX && EDIT_CTX.empresaId) {
-        // Fechar modal atual
-        const modal = document.getElementById("modalFin");
-        if(modal) modal.style.display = "none";
-        // Abrir modal de importação
-        abrirModalImportacaoPDF(EDIT_CTX.empresaId);
-      } else {
-        alert("Selecione uma empresa primeiro");
-      }
+      abrirSeletorPDF();
     });
   }
   
   const btnBaixarPdf = document.getElementById("btnBaixarPdfEdicao");
   if(btnBaixarPdf) {
     btnBaixarPdf.addEventListener("click", () => {
-      if(EDIT_CTX && EDIT_CTX.empresaId) {
-        gerarPDFColeta(EDIT_CTX.empresaId);
-      } else {
-        alert("Selecione uma empresa primeiro");
-      }
+      baixarPDFTemplate();
     });
   }
 
@@ -538,17 +526,10 @@ function mostrarEmpresasSemDados(empresas){
   
   container.style.display = "block";
   lista.innerHTML = empresas.map(emp => `
-    <div style="display:inline-flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:4px; align-items:center">
-      <span style="padding:4px 8px; font-size:12px; font-weight:500; color:#1e3a5f">${escapeHtml(emp.nome)}</span>
-      <button class="btn btn-outline" style="padding:4px 8px; font-size:11px" 
-        onclick="abrirModalEdicao('${emp.id}', null, null)" title="Cadastrar manualmente">
-        ✏️ Manual
-      </button>
-      <button class="btn btn-outline" style="padding:4px 8px; font-size:11px; border-color:#7c3aed; color:#7c3aed" 
-        onclick="abrirModalImportacaoPDF('${emp.id}')" title="Importar PDF preenchido">
-        📤 Importar PDF
-      </button>
-    </div>
+    <button class="btn" style="padding:8px 14px; font-size:12px; background:linear-gradient(135deg, #fef3c7, #fde68a); border:1px solid #f59e0b; color:#92400e; border-radius:8px" 
+      onclick="abrirModalEdicao('${emp.id}', null, null)">
+      ➕ ${escapeHtml(emp.nome)}
+    </button>
   `).join("");
 }
 
@@ -10413,16 +10394,72 @@ window.adicionarBotaoDownloadPdf = adicionarBotaoDownloadPdf;
 // ================================================================================
 
 /**
- * SISTEMA DE COLETA VIA PDF
- * 1. Gera PDF editável com CNPJ e nome da empresa
- * 2. Cliente preenche no Adobe Reader
- * 3. Sistema lê o PDF e preenche automaticamente
- * 4. Salva 3 anos de uma vez
+ * SISTEMA DE COLETA VIA PDF - VERSÃO SIMPLIFICADA
+ * 1. Usuário abre modal de edição de uma empresa
+ * 2. Faz upload do PDF preenchido
+ * 3. Sistema lê os campos e preenche o formulário automaticamente
+ * 4. Usuário confere e salva (pode salvar múltiplos anos)
+ * 
+ * NÃO VALIDA CNPJ - lê qualquer PDF do formato correto
  */
 
-// Mapeamento de campos do PDF para campos do sistema
+// Mapeamento de campos do PDF para IDs do formulário HTML
+const MAPEAMENTO_PDF_PARA_FORM = {
+  // Campos básicos (aba Básico)
+  'dre_receita_liquida': 'finReceita',
+  'dre_ebitda': 'finEbitda',
+  'dre_lucro_liquido': 'finLucroLiq',
+  'passivo_total_pl': 'finPL',
+  'ativo_ativo_total': 'finAtivo',
+  'ativo_caixa': 'finCaixa',
+  
+  // DRE Completa
+  'dre_receita_bruta': 'finReceitaBruta',
+  'dre_deducoes': 'finDeducoes',
+  'dre_cmv': 'finCMV',
+  'dre_lucro_bruto': 'finLucroBruto',
+  'dre_desp_vendas': 'finDespVendas',
+  'dre_desp_admin': 'finDespAdm',
+  'dre_depreciacao': 'finDepAmort',
+  'dre_outras_desp': 'finOutrasDesp',
+  'dre_ebit': 'finEBIT',
+  'dre_receitas_fin': 'finReceitaFin',
+  'dre_despesas_fin': 'finDespesaFin',
+  'dre_lair': 'finLAIR',
+  'dre_ir_csll': 'finIRCS',
+  
+  // Ativo
+  'ativo_aplicacoes_cp': 'finACAplicacoes',
+  'ativo_contas_receber': 'finCR',
+  'ativo_estoques': 'finEstoques',
+  'ativo_outros_ac': 'finACOutros',
+  'ativo_total_ac': 'finAtivoCirc',
+  'ativo_realizavel_lp': 'finANCRealizavel',
+  'ativo_imobilizado': 'finImobilizado',
+  'ativo_deprec_acum': 'finDepreciacao',
+  'ativo_intangivel': 'finANCIntangivel',
+  'ativo_total_anc': 'finAtivoNaoCirc',
+  
+  // Passivo
+  'passivo_fornecedores': 'finCP',
+  'passivo_emprestimos_cp': 'finPCEmprestimos',
+  'passivo_obrig_trab': 'finPCSalarios',
+  'passivo_obrig_trib': 'finPCImpostos',
+  'passivo_outros_pc': 'finPCOutros',
+  'passivo_total_pc': 'finPassivoCirc',
+  'passivo_emprestimos_lp': 'finPNCEmprestimos',
+  'passivo_outros_pnc': 'finPNCOutros',
+  'passivo_total_pnc': 'finPassivoNaoCirc',
+  'passivo_capital_social': 'finPLCapital',
+  'passivo_reservas': 'finPLReservasLucro',
+  'passivo_lucros_acum': 'finPLLucrosAcum',
+  
+  // Info complementares
+  'info_funcionarios': 'finFuncionarios'
+};
+
+// Mapeamento para campos de sistema (para salvar no Firebase)
 const MAPEAMENTO_CAMPOS_PDF = {
-  // DRE
   'dre_receita_bruta': 'receitaBruta',
   'dre_deducoes': 'deducoes',
   'dre_receita_liquida': 'receitaLiquida',
@@ -10439,8 +10476,6 @@ const MAPEAMENTO_CAMPOS_PDF = {
   'dre_lair': 'lair',
   'dre_ir_csll': 'irCsll',
   'dre_lucro_liquido': 'lucroLiquido',
-  
-  // Ativo
   'ativo_caixa': 'caixa',
   'ativo_aplicacoes_cp': 'aplicacoesFinanceirasCP',
   'ativo_contas_receber': 'contasReceber',
@@ -10453,8 +10488,6 @@ const MAPEAMENTO_CAMPOS_PDF = {
   'ativo_intangivel': 'intangivel',
   'ativo_total_anc': 'ativoNaoCirculante',
   'ativo_ativo_total': 'ativoTotal',
-  
-  // Passivo
   'passivo_fornecedores': 'fornecedores',
   'passivo_emprestimos_cp': 'emprestimosCP',
   'passivo_obrig_trab': 'obrigacoesTrabalhistas',
@@ -10469,13 +10502,7 @@ const MAPEAMENTO_CAMPOS_PDF = {
   'passivo_lucros_acum': 'lucrosAcumulados',
   'passivo_total_pl': 'patrimonioLiquido',
   'passivo_passivo_pl_total': 'passivoTotal',
-  
-  // Info complementares
-  'info_funcionarios': 'funcionarios',
-  'info_fat_mensal': 'faturamentoMensal',
-  'info_pmr': 'prazoMedioRecebimento',
-  'info_pmp': 'prazoMedioPagamento',
-  'info_giro_estoque': 'giroEstoque'
+  'info_funcionarios': 'funcionarios'
 };
 
 // Carrega biblioteca PDF.js dinamicamente se necessário
@@ -10505,24 +10532,29 @@ async function lerCamposPDF(file) {
   
   // Iterar por todas as páginas
   for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const annotations = await page.getAnnotations();
-    
-    for (const annot of annotations) {
-      if (annot.subtype === 'Widget' && annot.fieldName) {
-        let valor = annot.fieldValue || '';
-        
-        // Limpar valor monetário
-        if (typeof valor === 'string') {
-          valor = valor.trim();
+    try {
+      const page = await pdf.getPage(i);
+      const annotations = await page.getAnnotations();
+      
+      for (const annot of annotations) {
+        try {
+          if (annot.subtype === 'Widget' && annot.fieldName) {
+            let valor = annot.fieldValue || '';
+            if (typeof valor === 'string') {
+              valor = valor.trim();
+            }
+            campos[annot.fieldName] = valor;
+          }
+        } catch (e) {
+          // Ignora erro em campo individual
         }
-        
-        campos[annot.fieldName] = valor;
       }
+    } catch (e) {
+      console.warn(`[lerCamposPDF] Erro na página ${i}:`, e);
     }
   }
   
-  console.log('[lerCamposPDF] Campos encontrados:', campos);
+  console.log('[lerCamposPDF] Campos encontrados:', Object.keys(campos).length, campos);
   return campos;
 }
 
@@ -10542,399 +10574,227 @@ function parseValorPDF(valor) {
   return isNaN(num) ? 0 : num;
 }
 
-// Organiza dados do PDF por ano
-function organizarDadosPorAno(camposPDF) {
-  const anos = {
-    ano1: camposPDF['ano_1'] || '',
-    ano2: camposPDF['ano_2'] || '',
-    ano3: camposPDF['ano_3'] || ''
-  };
-  
-  const dadosPorAno = {};
-  
-  // Para cada ano (1, 2, 3)
-  for (let i = 1; i <= 3; i++) {
-    const anoKey = `ano${i}`;
-    const anoValor = anos[anoKey];
+// Variável global para armazenar dados do PDF
+let DADOS_PDF_IMPORTADO = null;
+
+// Processa PDF e preenche formulário direto no modal de edição
+async function processarPDFNoFormulario(file, anoEscolhido = null) {
+  try {
+    console.log('[processarPDFNoFormulario] Iniciando leitura do PDF...');
+    const campos = await lerCamposPDF(file);
     
-    if (!anoValor || anoValor.trim() === '') continue;
+    if (Object.keys(campos).length === 0) {
+      alert('❌ Não foi possível ler campos do PDF.\n\n' +
+            '⚠️ IMPORTANTE:\n' +
+            '• O Chrome/Edge NÃO salvam campos de PDF editável corretamente\n' +
+            '• Use o Adobe Acrobat Reader (gratuito) para preencher e salvar\n' +
+            '• Ou use outro leitor de PDF que suporte formulários\n\n' +
+            'Baixe o Adobe Reader: https://get.adobe.com/br/reader/');
+      return { sucesso: false, camposPreenchidos: 0 };
+    }
     
-    const anoNum = parseInt(anoValor);
-    if (isNaN(anoNum) || anoNum < 2000 || anoNum > 2100) continue;
-    
-    dadosPorAno[anoNum] = {
-      ano: anoNum
-    };
-    
-    // Mapear cada campo
-    for (const [campoPDF, campoSistema] of Object.entries(MAPEAMENTO_CAMPOS_PDF)) {
-      const chavePDF = `${campoPDF}_ano${i}`;
-      if (camposPDF[chavePDF] !== undefined) {
-        dadosPorAno[anoNum][campoSistema] = parseValorPDF(camposPDF[chavePDF]);
+    // Detectar anos disponíveis no PDF
+    const anosDisponiveis = [];
+    for (let i = 1; i <= 3; i++) {
+      const anoVal = campos[`ano_${i}`];
+      if (anoVal && anoVal.trim() !== '') {
+        const anoNum = parseInt(anoVal);
+        if (!isNaN(anoNum) && anoNum >= 2000 && anoNum <= 2100) {
+          anosDisponiveis.push({ indice: i, ano: anoNum });
+        }
       }
     }
     
-    // Calcular campos derivados
-    const d = dadosPorAno[anoNum];
+    console.log('[processarPDFNoFormulario] Anos detectados:', anosDisponiveis);
     
-    // Receita líquida (se não preenchida, calcular)
-    if (!d.receitaLiquida && d.receitaBruta) {
-      d.receitaLiquida = d.receitaBruta - (d.deducoes || 0);
+    // Se não escolheu ano específico e tem múltiplos anos, perguntar
+    let indiceAno = 3; // Default: ano mais recente (ano_3)
+    
+    if (anosDisponiveis.length > 1 && !anoEscolhido) {
+      const opcoes = anosDisponiveis.map(a => `${a.ano}`).join(', ');
+      const escolha = prompt(
+        `📅 O PDF tem dados de ${anosDisponiveis.length} anos: ${opcoes}\n\n` +
+        `Digite qual ano deseja importar agora:\n` +
+        `(você pode importar os outros anos depois)`
+      );
+      
+      if (!escolha) return { sucesso: false, camposPreenchidos: 0 };
+      
+      const anoEscolhidoNum = parseInt(escolha);
+      const encontrado = anosDisponiveis.find(a => a.ano === anoEscolhidoNum);
+      if (encontrado) {
+        indiceAno = encontrado.indice;
+        anoEscolhido = encontrado.ano;
+      }
+    } else if (anosDisponiveis.length === 1) {
+      indiceAno = anosDisponiveis[0].indice;
+      anoEscolhido = anosDisponiveis[0].ano;
+    } else if (anoEscolhido) {
+      const encontrado = anosDisponiveis.find(a => a.ano === anoEscolhido);
+      if (encontrado) {
+        indiceAno = encontrado.indice;
+      }
     }
-    // Usar receitaLiquida como receita principal
-    d.receita = d.receitaLiquida || d.receitaBruta || 0;
     
-    // Lucro Bruto
-    if (!d.lucroBruto && d.receitaLiquida && d.cmv) {
-      d.lucroBruto = d.receitaLiquida - d.cmv;
+    // Preencher campo de ano
+    if (anoEscolhido) {
+      const elAno = document.getElementById('finAno');
+      if (elAno) elAno.value = anoEscolhido;
     }
     
-    // EBITDA (se não preenchido, calcular)
-    if (!d.ebitda && d.ebit) {
-      d.ebitda = d.ebit + (d.depreciacaoAmortizacao || 0);
-    }
+    let camposPreenchidos = 0;
     
-    // Dívida Bruta
-    d.dividaBruta = (d.emprestimosCP || 0) + (d.emprestimosLP || 0);
-    
-    // Disponibilidades
-    d.disponibilidades = (d.caixa || 0) + (d.aplicacoesFinanceirasCP || 0);
-    
-    // PL (se não preenchido)
-    if (!d.patrimonioLiquido) {
-      d.patrimonioLiquido = (d.capitalSocial || 0) + (d.reservas || 0) + (d.lucrosAcumulados || 0);
-    }
-    d.pl = d.patrimonioLiquido;
-    
-    // Ativo (se não preenchido)
-    if (!d.ativoTotal) {
-      d.ativoTotal = (d.ativoCirculante || 0) + (d.ativoNaoCirculante || 0);
-    }
-    d.ativo = d.ativoTotal;
-    
-    // Mapeamentos alternativos para compatibilidade
-    d.lucroLiq = d.lucroLiquido;
-    d.despesaFin = d.despesasFinanceiras;
-    d.contasPagar = d.fornecedores;
-    d.duplicatasReceber = d.contasReceber;
-  }
-  
-  return dadosPorAno;
-}
-
-// Abre modal de importação de PDF
-function abrirModalImportacaoPDF(empresaId) {
-  const empresa = EMPRESAS_CACHE.get(empresaId);
-  if (!empresa) {
-    alert('Empresa não encontrada');
-    return;
-  }
-  
-  const modal = document.createElement('div');
-  modal.id = 'modalImportPDF';
-  modal.className = 'modal-backdrop';
-  modal.innerHTML = `
-    <div class="modal" style="max-width:700px">
-      <div class="modal-header" style="background:linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%); color:#fff">
-        <h2 style="font-size:18px; display:flex; align-items:center; gap:10px">
-          📤 Importar PDF Preenchido
-        </h2>
-        <button class="modal-close" onclick="fecharModalImportPDF()">&times;</button>
-      </div>
-      <div class="modal-body" style="padding:24px">
-        <div style="background:#f5f3ff; border:2px dashed #7c3aed; border-radius:12px; padding:30px; text-align:center; margin-bottom:20px">
-          <div style="font-size:48px; margin-bottom:10px">📄</div>
-          <div style="font-size:14px; font-weight:600; color:#5b21b6; margin-bottom:5px">
-            ${escapeHtml(empresa.nome)}
-          </div>
-          <div style="font-size:12px; color:#7c3aed; margin-bottom:15px">
-            Selecione o PDF preenchido pelo cliente
-          </div>
-          <input type="file" id="inputPDFImport" accept=".pdf" style="display:none" onchange="processarPDFImportado(this, '${empresaId}')">
-          <button class="btn btn-primary" style="background:#7c3aed" onclick="document.getElementById('inputPDFImport').click()">
-            📁 Selecionar PDF
-          </button>
-        </div>
+    // Preencher campos do formulário
+    for (const [campoPDF, campoForm] of Object.entries(MAPEAMENTO_PDF_PARA_FORM)) {
+      try {
+        const chavePDF = `${campoPDF}_ano${indiceAno}`;
+        const valor = campos[chavePDF];
         
-        <div id="statusImportPDF" style="display:none"></div>
-        
-        <div id="previewDadosPDF" style="display:none">
-          <h4 style="font-size:14px; color:#1e3a5f; margin-bottom:12px; display:flex; align-items:center; gap:8px">
-            📊 Dados Encontrados no PDF
-          </h4>
-          <div id="tabelaPreviewPDF"></div>
-          
-          <div style="margin-top:20px; display:flex; gap:12px; justify-content:flex-end">
-            <button class="btn btn-outline" onclick="fecharModalImportPDF()">Cancelar</button>
-            <button class="btn btn-primary" style="background:#16a34a" id="btnConfirmarImport" onclick="confirmarImportacaoPDF('${empresaId}')">
-              ✅ Importar e Salvar 3 Anos
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-  
-  document.body.appendChild(modal);
-  setTimeout(() => modal.classList.add('show'), 10);
-}
-
-// Fecha modal de importação
-function fecharModalImportPDF() {
-  const modal = document.getElementById('modalImportPDF');
-  if (modal) {
-    modal.classList.remove('show');
-    setTimeout(() => modal.remove(), 300);
+        if (valor !== undefined && valor !== '') {
+          const el = document.getElementById(campoForm);
+          if (el) {
+            const valorNumerico = parseValorPDF(valor);
+            el.value = valorNumerico || '';
+            camposPreenchidos++;
+            console.log(`[PDF] ${campoForm} = ${valorNumerico}`);
+          }
+        }
+      } catch (e) {
+        // Ignora erro em campo individual
+      }
+    }
+    
+    // Campos especiais que precisam de mapeamento adicional
+    // Dívida Bruta = Empréstimos CP + LP
+    try {
+      const empCP = parseValorPDF(campos[`passivo_emprestimos_cp_ano${indiceAno}`]) || 0;
+      const empLP = parseValorPDF(campos[`passivo_emprestimos_lp_ano${indiceAno}`]) || 0;
+      const divBruta = empCP + empLP;
+      const elDivida = document.getElementById('finDividaBruta');
+      if (elDivida && divBruta > 0) {
+        elDivida.value = divBruta;
+      }
+    } catch(e) {}
+    
+    // DRE no modo básico - preencher finReceita com receita líquida
+    try {
+      const recLiq = parseValorPDF(campos[`dre_receita_liquida_ano${indiceAno}`]);
+      if (recLiq) {
+        const elReceita = document.getElementById('finReceita');
+        if (elReceita) elReceita.value = recLiq;
+      }
+    } catch(e) {}
+    
+    // Armazenar dados completos para possível salvamento de múltiplos anos
+    DADOS_PDF_IMPORTADO = {
+      campos: campos,
+      anosDisponiveis: anosDisponiveis
+    };
+    
+    if (camposPreenchidos > 0) {
+      alert(`✅ PDF lido com sucesso!\n\n` +
+            `• ${camposPreenchidos} campos preenchidos\n` +
+            `• Ano: ${anoEscolhido || 'Não informado'}\n\n` +
+            `Confira os dados e clique em "Salvar Dados".` +
+            (anosDisponiveis.length > 1 ? `\n\n💡 O PDF tem ${anosDisponiveis.length} anos. Salve este e depois importe novamente para os outros.` : ''));
+    } else {
+      alert('⚠️ PDF lido, mas nenhum campo foi preenchido.\n\n' +
+            'Verifique se o PDF foi preenchido corretamente.');
+    }
+    
+    return { sucesso: true, camposPreenchidos, anosDisponiveis };
+    
+  } catch (error) {
+    console.error('[processarPDFNoFormulario] Erro:', error);
+    alert('❌ Erro ao processar PDF:\n' + error.message);
+    return { sucesso: false, camposPreenchidos: 0 };
   }
 }
 
-// Variável global para armazenar dados do PDF processado
-let DADOS_PDF_IMPORTADO = null;
-
-// Processa o PDF importado
-async function processarPDFImportado(input, empresaId) {
+// Função chamada pelo input file no modal de edição
+async function importarPDFModal(input) {
   const file = input.files[0];
   if (!file) return;
   
-  const statusEl = document.getElementById('statusImportPDF');
-  const previewEl = document.getElementById('previewDadosPDF');
-  const tabelaEl = document.getElementById('tabelaPreviewPDF');
-  
-  statusEl.style.display = 'block';
-  statusEl.innerHTML = `
-    <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:16px; text-align:center">
-      <div style="font-size:24px; margin-bottom:8px">⏳</div>
-      <div style="font-weight:600; color:#92400e">Processando PDF...</div>
-      <div style="font-size:12px; color:#a16207">Lendo campos preenchidos</div>
-    </div>
-  `;
+  // Mostrar loading
+  const btnImportar = document.getElementById('btnImportarPdfEdicao');
+  if (btnImportar) {
+    btnImportar.disabled = true;
+    btnImportar.innerHTML = '⏳ Lendo...';
+  }
   
   try {
-    const campos = await lerCamposPDF(file);
-    const dadosPorAno = organizarDadosPorAno(campos);
-    
-    const anosEncontrados = Object.keys(dadosPorAno).sort();
-    
-    if (anosEncontrados.length === 0) {
-      statusEl.innerHTML = `
-        <div style="background:#fee2e2; border:1px solid #ef4444; border-radius:8px; padding:16px; text-align:center">
-          <div style="font-size:24px; margin-bottom:8px">❌</div>
-          <div style="font-weight:600; color:#991b1b">Nenhum dado encontrado</div>
-          <div style="font-size:12px; color:#b91c1c">Verifique se o PDF foi preenchido corretamente e se os anos foram informados.</div>
-        </div>
-      `;
-      return;
+    await processarPDFNoFormulario(file);
+  } finally {
+    // Restaurar botão
+    if (btnImportar) {
+      btnImportar.disabled = false;
+      btnImportar.innerHTML = '📤 Importar PDF';
     }
-    
-    // Salvar para uso posterior
-    DADOS_PDF_IMPORTADO = dadosPorAno;
-    
-    // Mostrar preview
-    statusEl.innerHTML = `
-      <div style="background:#dcfce7; border:1px solid #16a34a; border-radius:8px; padding:12px; text-align:center; margin-bottom:15px">
-        <div style="font-weight:600; color:#166534">✅ PDF lido com sucesso!</div>
-        <div style="font-size:12px; color:#15803d">${anosEncontrados.length} ano(s) encontrado(s): ${anosEncontrados.join(', ')}</div>
-      </div>
-    `;
-    
-    // Criar tabela de preview
-    let html = `
-      <div style="overflow-x:auto">
-        <table style="width:100%; border-collapse:collapse; font-size:12px">
-          <thead>
-            <tr style="background:#1e3a5f; color:#fff">
-              <th style="padding:8px; text-align:left">Campo</th>
-              ${anosEncontrados.map(a => `<th style="padding:8px; text-align:right">${a}</th>`).join('')}
-            </tr>
-          </thead>
-          <tbody>
-    `;
-    
-    // Campos principais para mostrar
-    const camposPreview = [
-      { campo: 'receita', label: 'Receita Líquida' },
-      { campo: 'ebitda', label: 'EBITDA' },
-      { campo: 'lucroLiquido', label: 'Lucro Líquido' },
-      { campo: 'ativoTotal', label: 'Ativo Total' },
-      { campo: 'patrimonioLiquido', label: 'Patrimônio Líquido' },
-      { campo: 'dividaBruta', label: 'Dívida Bruta' },
-      { campo: 'caixa', label: 'Caixa' },
-      { campo: 'contasReceber', label: 'Contas a Receber' },
-      { campo: 'estoques', label: 'Estoques' },
-      { campo: 'fornecedores', label: 'Fornecedores' },
-    ];
-    
-    for (const { campo, label } of camposPreview) {
-      html += `<tr style="border-bottom:1px solid #e2e8f0">
-        <td style="padding:6px 8px; font-weight:500">${label}</td>`;
-      
-      for (const ano of anosEncontrados) {
-        const valor = dadosPorAno[ano][campo] || 0;
-        html += `<td style="padding:6px 8px; text-align:right">${toBRL(valor)}</td>`;
-      }
-      
-      html += `</tr>`;
-    }
-    
-    html += `</tbody></table></div>`;
-    
-    tabelaEl.innerHTML = html;
-    previewEl.style.display = 'block';
-    
-  } catch (error) {
-    console.error('[processarPDFImportado] Erro:', error);
-    statusEl.innerHTML = `
-      <div style="background:#fee2e2; border:1px solid #ef4444; border-radius:8px; padding:16px; text-align:center">
-        <div style="font-size:24px; margin-bottom:8px">❌</div>
-        <div style="font-weight:600; color:#991b1b">Erro ao processar PDF</div>
-        <div style="font-size:12px; color:#b91c1c">${error.message}</div>
-      </div>
-    `;
+    // Limpar input para permitir reimportar mesmo arquivo
+    input.value = '';
   }
 }
 
-// Confirma importação e salva os 3 anos
-async function confirmarImportacaoPDF(empresaId) {
-  if (!DADOS_PDF_IMPORTADO) {
-    alert('Nenhum dado para importar');
-    return;
+// Abre seletor de arquivo para importar PDF
+function abrirSeletorPDF() {
+  // Criar input file temporário
+  let inputPDF = document.getElementById('inputPDFHidden');
+  if (!inputPDF) {
+    inputPDF = document.createElement('input');
+    inputPDF.type = 'file';
+    inputPDF.id = 'inputPDFHidden';
+    inputPDF.accept = '.pdf';
+    inputPDF.style.display = 'none';
+    inputPDF.onchange = function() { importarPDFModal(this); };
+    document.body.appendChild(inputPDF);
   }
-  
-  const btnConfirmar = document.getElementById('btnConfirmarImport');
-  btnConfirmar.disabled = true;
-  btnConfirmar.innerHTML = '⏳ Salvando...';
-  
-  try {
-    const anos = Object.keys(DADOS_PDF_IMPORTADO).sort();
-    let salvos = 0;
-    
-    for (const ano of anos) {
-      const dados = DADOS_PDF_IMPORTADO[ano];
-      
-      // Verificar se já existe registro para este ano
-      const existente = await db.collection('empresas').doc(empresaId)
-        .collection('financeiro').where('ano', '==', parseInt(ano)).limit(1).get();
-      
-      const dadosSalvar = {
-        ano: parseInt(ano),
-        // DRE
-        receitaBruta: dados.receitaBruta || 0,
-        receitaLiquida: dados.receitaLiquida || dados.receita || 0,
-        cmv: dados.cmv || 0,
-        lucroBruto: dados.lucroBruto || 0,
-        despesasVendas: dados.despesasVendas || 0,
-        despesasAdministrativas: dados.despesasAdministrativas || 0,
-        depreciacaoAmortizacao: dados.depreciacaoAmortizacao || 0,
-        ebit: dados.ebit || 0,
-        ebitda: dados.ebitda || 0,
-        receitasFinanceiras: dados.receitasFinanceiras || 0,
-        despesasFinanceiras: dados.despesasFinanceiras || 0,
-        lucroLiquido: dados.lucroLiquido || 0,
-        
-        // Ativo
-        caixa: dados.caixa || 0,
-        aplicacoesFinanceirasCP: dados.aplicacoesFinanceirasCP || 0,
-        contasReceber: dados.contasReceber || 0,
-        estoques: dados.estoques || 0,
-        ativoCirculante: dados.ativoCirculante || 0,
-        realizavelLP: dados.realizavelLP || 0,
-        imobilizado: dados.imobilizado || 0,
-        intangivel: dados.intangivel || 0,
-        ativoNaoCirculante: dados.ativoNaoCirculante || 0,
-        ativoTotal: dados.ativoTotal || 0,
-        
-        // Passivo
-        fornecedores: dados.fornecedores || 0,
-        emprestimosCP: dados.emprestimosCP || 0,
-        passivoCirculante: dados.passivoCirculante || 0,
-        emprestimosLP: dados.emprestimosLP || 0,
-        passivoNaoCirculante: dados.passivoNaoCirculante || 0,
-        capitalSocial: dados.capitalSocial || 0,
-        reservas: dados.reservas || 0,
-        lucrosAcumulados: dados.lucrosAcumulados || 0,
-        patrimonioLiquido: dados.patrimonioLiquido || 0,
-        
-        // Calculados
-        dividaBruta: dados.dividaBruta || 0,
-        funcionarios: dados.funcionarios || 0,
-        
-        // Metadados
-        importadoViaPDF: true,
-        dataImportacao: firebase.firestore.FieldValue.serverTimestamp()
-      };
-      
-      if (!existente.empty) {
-        // Atualizar existente
-        await existente.docs[0].ref.update(dadosSalvar);
-      } else {
-        // Criar novo
-        await db.collection('empresas').doc(empresaId)
-          .collection('financeiro').add(dadosSalvar);
-      }
-      
-      salvos++;
-    }
-    
-    // Fechar modal e recarregar
-    fecharModalImportPDF();
-    DADOS_PDF_IMPORTADO = null;
-    
-    // Mensagem de sucesso
-    alert(`✅ ${salvos} ano(s) importado(s) com sucesso!\n\nAnos: ${anos.join(', ')}`);
-    
-    // Recarregar lista
-    await carregarDados();
-    
-  } catch (error) {
-    console.error('[confirmarImportacaoPDF] Erro:', error);
-    alert('Erro ao salvar dados: ' + error.message);
-    btnConfirmar.disabled = false;
-    btnConfirmar.innerHTML = '✅ Importar e Salvar 3 Anos';
-  }
+  inputPDF.click();
 }
 
-// Função para gerar PDF de coleta (download do template)
-async function gerarPDFColeta(empresaId) {
-  const empresa = EMPRESAS_CACHE.get(empresaId);
-  if (!empresa) {
-    alert('Empresa não encontrada');
-    return;
-  }
+// Função para download do PDF template
+function baixarPDFTemplate() {
+  // Baixar o PDF editável
+  const link = document.createElement('a');
+  link.href = 'formulario_coleta_EDITAVEL.pdf';
+  link.download = 'formulario_coleta_dados_financeiros.pdf';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
   
-  // Buscar dados completos da empresa
-  let cnpj = '';
-  let telefone = '';
+  // Mostrar dicas
+  setTimeout(() => {
+    alert('📄 PDF baixado!\n\n' +
+          '⚠️ IMPORTANTE para o cliente:\n\n' +
+          '1. Abrir com Adobe Acrobat Reader (não Chrome/Edge)\n' +
+          '2. Preencher os campos clicáveis\n' +
+          '3. Informar os 3 anos (ex: 2022, 2023, 2024)\n' +
+          '4. Salvar (Ctrl+S) e devolver\n\n' +
+          '💡 Download gratuito do Adobe Reader:\n' +
+          'https://get.adobe.com/br/reader/');
+  }, 500);
+}
+
+// Função de compatibilidade (chamada da lista de empresas sem dados)
+function abrirModalImportacaoPDF(empresaId) {
+  // Abre o modal de edição normal
+  abrirModalEdicao(empresaId, null, null);
   
-  try {
-    const empDoc = await db.collection('empresas').doc(empresaId).get();
-    if (empDoc.exists) {
-      const empData = empDoc.data();
-      cnpj = empData.cnpj || empData.CNPJ || '';
-      telefone = empData.telefone || empData.celular || '';
-    }
-  } catch (e) {
-    console.error('Erro ao buscar dados da empresa:', e);
-  }
-  
-  // Por enquanto, vamos baixar o template genérico
-  // Em produção, isso chamaria um backend para gerar PDF personalizado
-  
-  // Criar link de download
-  const linkPDF = 'gerar_pdf_coleta.py'; // Placeholder - em produção seria uma URL de API
-  
-  alert(`📄 Para gerar o PDF personalizado para "${empresa.nome}":\n\n` +
-        `1. Execute o script gerar_pdf_coleta.py com os parâmetros:\n` +
-        `   - CNPJ: ${cnpj || '(não cadastrado)'}\n` +
-        `   - Razão Social: ${empresa.nome}\n\n` +
-        `2. Ou use o PDF template genérico disponível em:\n` +
-        `   formulario_coleta_EDITAVEL.pdf\n\n` +
-        `O cliente preenche e devolve, depois você importa aqui!`);
+  // Aguarda modal abrir e clica no importar
+  setTimeout(() => {
+    abrirSeletorPDF();
+  }, 300);
+}
+
+function fecharModalImportPDF() {
+  // Compatibilidade - não faz nada, usa o modal padrão
 }
 
 // Expor funções globalmente
+window.lerCamposPDF = lerCamposPDF;
+window.processarPDFNoFormulario = processarPDFNoFormulario;
+window.importarPDFModal = importarPDFModal;
+window.abrirSeletorPDF = abrirSeletorPDF;
+window.baixarPDFTemplate = baixarPDFTemplate;
 window.abrirModalImportacaoPDF = abrirModalImportacaoPDF;
 window.fecharModalImportPDF = fecharModalImportPDF;
-window.processarPDFImportado = processarPDFImportado;
-window.confirmarImportacaoPDF = confirmarImportacaoPDF;
-window.gerarPDFColeta = gerarPDFColeta;
-window.lerCamposPDF = lerCamposPDF;
