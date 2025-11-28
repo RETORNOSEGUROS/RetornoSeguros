@@ -1,704 +1,990 @@
-// relatorios.js — Página de relatórios “fora da curva”
-// ----------------------------------------------------
-// ⚙️ CONFIGURAÇÃO (ajuste aqui conforme seu schema/coleções)
-const CFG = {
-  collections: {
-    cotacoes: "cotacoes-gerentes",     // base dos relatórios
-    agencias:  "agencias",
-    usuarios:  "usuarios_banco",       // deve conter perfil, agenciaId, nome, etc.
-    empresas:  "empresas",             // opcional: para nomes/campos extras
-  },
-  fields: {
-    // Campos nas cotações
-    createdAt: ["createdAt", "dataCriacao", "criadoEm", "data"], // timestamp Firestore OU string dd/mm/aaaa
-    updatedAt: ["updatedAt", "atualizadoEm"],
-    empresaNome: ["empresaNome", "empresa", "razaoSocial", "nomeEmpresa"],
-    empresaId: ["empresaId", "empresaID"],
-    agenciaId: ["agenciaId", "agenciaID"],
-    agenciaNome: ["agenciaNome", "agencia"], // se existir
-    rmUid: ["rmUid", "rmId", "rmUID"],
-    rmNome: ["rmNome", "rm", "responsavel"],
-    status: ["status"],
-    ramo: ["ramo", "produto"],
-    seguradora: ["seguradora"],
-    tipo: ["tipo"], // presencial/online (quando vier de visitas/chat-cotação)
-    premio: ["premio", "premio_total", "valorPremio", "premioNegocio"],
-    // Para identificar “negócio emitido”
-    statusEmitidoMatch: ["Negócio Emitido", "Negócio Fechado", "Emitido", "Emissão concluída"],
-  },
-  // Mapa de Status (para agrupar parecidos)
-  statusAliases: {
-    "Negócio Emitido": "Negócio Emitido",
-    "Negócio Fechado": "Negócio Emitido",
-    "Em Emissão": "Em Emissão",
-    "Pendente Agência": "Pendente",
-    "Pendente Corretor": "Pendente",
-    "Pendente Seguradora": "Pendente",
-    "Pendente Cliente": "Pendente",
-    "Recusado Cliente": "Recusado",
-    "Recusado Seguradora": "Recusado",
-    "Emitido Declinado": "Recusado"
-  },
-  currency: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }),
-  number: new Intl.NumberFormat("pt-BR"),
-  dateFmt(d){ // Date -> dd/mm/aaaa
-    const day = String(d.getDate()).padStart(2,"0");
-    const mo  = String(d.getMonth()+1).padStart(2,"0");
-    const yr  = d.getFullYear();
-    return `${day}/${mo}/${yr}`;
-  }
+// relatorios.js — Super Relatório Gerencial
+// Firebase v8 compatível com o resto do sistema
+
+// ==== Firebase Init ====
+if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
+  firebase.initializeApp(firebaseConfig);
+}
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// ==== Estado Global ====
+let CTX = { uid: null, perfil: null, agenciaId: null, nome: null, isAdmin: false };
+const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
+
+let DADOS = {
+  cotacoes: [],
+  filtrados: [],
+  agencias: {},
+  rms: {},
+  ramos: new Set(),
+  status: new Set(),
+  seguradoras: new Set()
 };
 
-// ------- Firebase imports (v9 modular) -------
-import {
-  getFirestore, collection, query, where, orderBy, getDocs, Timestamp
-} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
-import {
-  getApp
-} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+let PAGINACAO = { pagina: 1, itensPorPagina: 20 };
+let ORDENACAO = { campo: 'dataCriacao', direcao: 'desc' };
+let CHARTS = {};
 
-const db = getFirestore(getApp());
+// ==== Helpers ====
+const $ = (id) => document.getElementById(id);
+const normalizar = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const normalizarPerfil = (p) => normalizar(p).replace(/[-_]+/g, " ");
 
-// ------- Utilidades -------
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const toDate = (x) => {
+  if (!x) return null;
+  if (x.toDate) return x.toDate();
+  if (x instanceof Date) return x;
+  const d = new Date(x);
+  return isNaN(d) ? null : d;
+};
 
-function pick(obj, keys, fallback=null){
-  for(const k of keys){
-    if(obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
-  }
-  return fallback;
+const fmtData = (d) => d ? d.toLocaleDateString("pt-BR") : "-";
+const fmtDataHora = (d) => d ? d.toLocaleString("pt-BR") : "-";
+
+const parseValor = (v) => {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  const s = String(v).replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3})/g, "").replace(",", ".");
+  return parseFloat(s) || 0;
+};
+
+const fmtBRL = (n) => parseValor(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const fmtBRLShort = (n) => {
+  const v = parseValor(n);
+  if (v >= 1e6) return `R$ ${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `R$ ${(v / 1e3).toFixed(0)}K`;
+  return fmtBRL(v);
+};
+
+const fmtNum = (n) => Number(n || 0).toLocaleString("pt-BR");
+const fmtPct = (n) => `${Number(n || 0).toFixed(1)}%`;
+
+// Status helpers
+const STATUS_EMITIDO = ["negócio emitido", "negocio emitido", "emitido"];
+const STATUS_PENDENTE = ["pendente agência", "pendente corretor", "pendente seguradora", "pendente cliente", "pendente agencia"];
+const STATUS_RECUSADO = ["recusado cliente", "recusado seguradora", "emitido declinado"];
+
+function categoriaStatus(status) {
+  const st = normalizar(status);
+  if (STATUS_EMITIDO.some(s => st.includes(s))) return "emitido";
+  if (STATUS_PENDENTE.some(s => st.includes(s))) return "pendente";
+  if (STATUS_RECUSADO.some(s => st.includes(s))) return "recusado";
+  if (st.includes("emissao") || st.includes("emissão")) return "emissao";
+  if (st.includes("fechado")) return "emitido";
+  return "outros";
 }
-function parseMaybeDate(v){
-  // Aceita Timestamp do Firestore, Date ou string dd/mm/aaaa
-  if(!v) return null;
-  if(v instanceof Timestamp) return v.toDate();
-  if(v.toDate) return v.toDate();
-  if(v instanceof Date) return v;
-  if(typeof v === "string"){
-    const m = v.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if(m){
-      const d = Number(m[1]), mo = Number(m[2])-1, y = Number(m[3]);
-      return new Date(y, mo, d, 12, 0, 0);
+
+function corStatus(status) {
+  const cat = categoriaStatus(status);
+  switch (cat) {
+    case "emitido": return { bg: "#dcfce7", color: "#15803d", class: "badge-success" };
+    case "pendente": return { bg: "#fef3c7", color: "#b45309", class: "badge-warning" };
+    case "recusado": return { bg: "#fee2e2", color: "#dc2626", class: "badge-danger" };
+    case "emissao": return { bg: "#e0e7ff", color: "#4338ca", class: "badge-info" };
+    default: return { bg: "#f1f5f9", color: "#64748b", class: "badge-muted" };
+  }
+}
+
+// ==== Auth ====
+auth.onAuthStateChanged(async (user) => {
+  if (!user) { location.href = "login.html"; return; }
+  CTX.uid = user.uid;
+  
+  try {
+    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+    if (snap.exists) {
+      const d = snap.data();
+      CTX.perfil = normalizarPerfil(d.perfil || "");
+      CTX.agenciaId = d.agenciaId || null;
+      CTX.nome = d.nome || user.email;
+      CTX.isAdmin = CTX.perfil === "admin" || ADMIN_EMAILS.includes(user.email?.toLowerCase());
+    } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
+      CTX.perfil = "admin";
+      CTX.isAdmin = true;
+      CTX.nome = user.email;
     }
-    // ISO?
-    const d = new Date(v);
-    if(!isNaN(d)) return d;
+  } catch (e) {
+    console.warn("Erro perfil:", e);
   }
-  return null;
-}
-function normalizeStatus(raw){
-  if(!raw) return "Sem status";
-  if(CFG.statusAliases[raw]) return CFG.statusAliases[raw];
-  return raw;
-}
-function isEmitido(status){
-  const s = normalizeStatus(status);
-  return CFG.fields.statusEmitidoMatch.includes(s);
-}
-function toNumberPremio(v){
-  if(typeof v === "number") return v;
-  if(typeof v === "string"){
-    // remove R$, pontos, vírgulas brasileiras
-    const num = v.replace(/[R$\s\.]/g,"").replace(",",".");
-    const n = parseFloat(num);
-    return isNaN(n) ? 0 : n;
-  }
-  return 0;
-}
-function groupBy(arr, fnKey){
-  const map = new Map();
-  for(const it of arr){
-    const k = fnKey(it);
-    map.set(k, (map.get(k)||[]).concat(it));
-  }
-  return map;
-}
-function sum(arr, fn){
-  let t=0;
-  for(const it of arr){ t += fn(it)||0; }
-  return t;
-}
-function monthKey(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
-function rangeMonths(year){
-  return Array.from({length:12}, (_,i)=> `${year}-${String(i+1).padStart(2,"0")}`);
-}
-function pctDelta(curr, prev){
-  if(prev === 0) return curr>0 ? 100 : 0;
-  return ((curr - prev)/prev)*100;
-}
-function setDelta(el, value){
-  if(!el) return;
-  const s = value;
-  const sign = s>0 ? "+" : (s<0 ? "":"");
-  el.textContent = `${sign}${s.toFixed(1)}% vs a/a`;
-  el.className = "delta " + (s>=0 ? "text-emerald-600" : "text-rose-600");
-}
-function multiSelectValues(sel){
-  return Array.from(sel.selectedOptions).map(o=>o.value).filter(Boolean);
-}
-function downloadCSV(filename, rows){
-  const escape = (v)=> `"${String(v??"").replaceAll(`"`,`""`)}"`;
-  const csv = rows.map(r=> r.map(escape).join(",")).join("\n");
-  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
+  
+  init();
+});
 
-// ------- Estado -------
-let state = {
-  raw: [],           // dados carregados (dentro do range de datas)
-  filtered: [],      // após aplicar filtros
-  yoy: false,
-  agenciaMap: new Map(), // id->nome
-  rmMap: new Map(),      // uid->nome
-  statusSet: new Set(),
-  ramoSet: new Set(),
-  seguradoraSet: new Set()
-};
-
-// ------- Carregamento inicial -------
-init().catch(console.error);
-
-async function init(){
-  initEvents();
+// ==== Inicialização ====
+async function init() {
+  $("dataGeracao").textContent = new Date().toLocaleString("pt-BR");
+  
+  // Eventos
+  $("btnAplicar").addEventListener("click", aplicarFiltros);
+  $("btnLimpar").addEventListener("click", limparFiltros);
+  $("btnExportPDF").addEventListener("click", exportarPDF);
+  $("btnExportExcel").addEventListener("click", exportarExcel);
+  $("buscaTabela").addEventListener("input", debounce(filtrarTabela, 300));
+  
+  // Ordenação na tabela
+  document.querySelectorAll("th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => ordenarPor(th.dataset.sort));
+  });
+  
+  // Carregar dados
   await carregarLookups();
   setDefaultDates();
-  await aplicarFiltros(); // carrega e desenha tudo
+  await carregarDados();
 }
 
-function initEvents(){
-  $("#btn-aplicar").addEventListener("click", aplicarFiltros);
-  $("#btn-limpar").addEventListener("click", () => {
-    $$("select").forEach(s=> s.value="");
-    $("#f-empresa").value="";
-    $("#f-tipo").value="";
-    setDefaultDates(true);
-  });
-  $("#btn-export").addEventListener("click", exportarCSV);
-  $("#btn-save-view").addEventListener("click", saveView);
-  $("#btn-load-view").addEventListener("click", loadView);
-  $("#chk-yoy").addEventListener("change", (e)=> {
-    state.yoy = e.target.checked;
-    desenhar();
-  });
-  $("#f-agencia").addEventListener("change", filtrarRMsPorAgencia);
+function debounce(fn, delay) {
+  let timeout;
+  return (...args) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => fn(...args), delay);
+  };
 }
 
-function setDefaultDates(keep=false){
-  const hoje = new Date();
-  const inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-  if(!keep){
-    $("#f-data-inicio").value = inicio.toISOString().substring(0,10);
-    $("#f-data-fim").value    = hoje.toISOString().substring(0,10);
-  }
-}
-
-async function carregarLookups(){
+// ==== Carregar Lookups ====
+async function carregarLookups() {
   // Agências
-  try{
-    const snapAg = await getDocs(collection(db, CFG.collections.agencias));
-    const selAg = $("#f-agencia");
-    selAg.innerHTML = `<option value="">Todas</option>`;
-    snapAg.forEach(doc=>{
+  try {
+    const snap = await db.collection("agencias_banco").get();
+    snap.forEach(doc => {
       const d = doc.data();
-      const nome = d.nome || d.descricao || d.titulo || doc.id;
-      state.agenciaMap.set(doc.id, nome);
-      const opt = document.createElement("option");
-      opt.value = doc.id; opt.textContent = nome;
-      selAg.appendChild(opt);
+      DADOS.agencias[doc.id] = d.nome || doc.id;
     });
-  }catch(e){ console.warn("Agencias lookup:", e); }
-
-  // Usuários (para RMs)
-  try{
-    const snapU = await getDocs(collection(db, CFG.collections.usuarios));
-    const selRM = $("#f-rm");
-    selRM.innerHTML = `<option value="">Todos</option>`;
-    snapU.forEach(doc=>{
-      const d = doc.data();
-      const nome = d.nome || d.displayName || d.email || doc.id;
-      state.rmMap.set(doc.id, nome);
-      const opt = document.createElement("option");
-      opt.value = doc.id; opt.textContent = `${nome}${d.agenciaId ? ` — ${state.agenciaMap.get(d.agenciaId)||d.agenciaId}`: ""}`;
-      opt.dataset.agenciaId = d.agenciaId || "";
-      selRM.appendChild(opt);
-    });
-  }catch(e){ console.warn("Usuarios lookup:", e); }
-}
-
-function filtrarRMsPorAgencia(){
-  const ag = $("#f-agencia").value;
-  const selRM = $("#f-rm");
-  const all = Array.from(selRM.querySelectorAll("option"));
-  all.forEach(o=>{
-    if(!o.value) { o.hidden=false; return; }
-    const a = o.dataset.agenciaId || "";
-    o.hidden = ag && a && a !== ag;
-  });
-  // Mantém seleção válida
-  if(ag){
-    const curr = selRM.value;
-    const currOpt = selRM.querySelector(`option[value="${curr}"]`);
-    if(curr && currOpt && currOpt.hidden) selRM.value = "";
-  }
-}
-
-// ------- Consulta de dados -------
-async function aplicarFiltros(){
-  const diStr = $("#f-data-inicio").value;
-  const dfStr = $("#f-data-fim").value;
-  const di = diStr ? new Date(diStr+"T00:00:00") : null;
-  const df = dfStr ? new Date(dfStr+"T23:59:59") : null;
-
-  // Consulta básica por data no Firestore (melhor performance)
-  // Tenta com 'createdAt' e variantes; se não achar, busca tudo (cautela).
-  let snap = null;
-  const colRef = collection(db, CFG.collections.cotacoes);
-
-  const tried = [];
-  for(const key of CFG.fields.createdAt){
-    tried.push(key);
-    try{
-      if(di && df){
-        const qRef = query(colRef,
-          where(key, ">=", Timestamp.fromDate(di)),
-          where(key, "<=", Timestamp.fromDate(df)),
-          orderBy(key, "asc")
-        );
-        snap = await getDocs(qRef);
-        if(snap.size >= 0){ break; }
-      }
-    }catch(e){
-      // campo pode ser string — cai para plano B
+    
+    const selAgencia = $("fAgencia");
+    selAgencia.innerHTML = '<option value="">Todas</option>';
+    
+    if (!CTX.isAdmin) {
+      // Não-admin vê só sua agência
+      const nome = DADOS.agencias[CTX.agenciaId] || CTX.agenciaId;
+      selAgencia.innerHTML = `<option value="${CTX.agenciaId}">${nome}</option>`;
+      selAgencia.disabled = true;
+    } else {
+      Object.entries(DADOS.agencias).sort((a, b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+        selAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
+      });
     }
+  } catch (e) { console.warn("Erro agências:", e); }
+  
+  // RMs
+  try {
+    const snap = await db.collection("usuarios_banco").get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      if (d.nome) DADOS.rms[doc.id] = d.nome;
+    });
+  } catch (e) { console.warn("Erro RMs:", e); }
+}
+
+function setDefaultDates() {
+  const hoje = new Date();
+  const inicio = new Date(hoje.getFullYear(), 0, 1); // 1º de janeiro
+  $("fDataInicio").value = inicio.toISOString().substring(0, 10);
+  $("fDataFim").value = hoje.toISOString().substring(0, 10);
+}
+
+// ==== Carregar Dados ====
+async function carregarDados() {
+  mostrarLoading(true);
+  
+  try {
+    const col = db.collection("cotacoes-gerentes");
+    let query;
+    
+    if (CTX.isAdmin) {
+      query = col;
+    } else if (["gerente chefe", "assistente"].includes(CTX.perfil) && CTX.agenciaId) {
+      query = col.where("agenciaId", "==", CTX.agenciaId);
+    } else {
+      // RM - buscar por múltiplos campos
+      const queries = [
+        col.where("rmUid", "==", CTX.uid).get(),
+        col.where("rmId", "==", CTX.uid).get(),
+        col.where("criadoPorUid", "==", CTX.uid).get()
+      ];
+      const results = await Promise.allSettled(queries);
+      const map = new Map();
+      results.forEach(r => {
+        if (r.status === "fulfilled") {
+          r.value.forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() }));
+        }
+      });
+      DADOS.cotacoes = Array.from(map.values());
+      processarDados();
+      return;
+    }
+    
+    const snap = await query.get();
+    DADOS.cotacoes = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    processarDados();
+    
+  } catch (e) {
+    console.error("Erro ao carregar:", e);
+    mostrarLoading(false);
   }
+}
 
-  if(!snap){
-    // fallback: busca tudo e filtra em memória (para schemas com string de data)
-    snap = await getDocs(colRef);
-  }
-
-  const dados = [];
-  snap.forEach(doc=>{
-    const d = doc.data();
-    const createdRaw = pick(d, CFG.fields.createdAt) || pick(d, CFG.fields.updatedAt);
-    const dt = parseMaybeDate(createdRaw);
-    // Se intervalo foi escolhido mas não conseguimos filtrar por query, filtramos aqui:
-    if(di && df && dt && (dt < di || dt > df)) return;
-
-    const row = {
-      id: doc.id,
-      data: dt,
-      empresa: pick(d, CFG.fields.empresaNome) || "",
-      empresaId: pick(d, CFG.fields.empresaId) || "",
-      agenciaId: pick(d, CFG.fields.agenciaId) || "",
-      agenciaNome: pick(d, CFG.fields.agenciaNome) || (d.agenciaId ? (state.agenciaMap.get(d.agenciaId) || d.agenciaId) : ""),
-      rmUid: pick(d, CFG.fields.rmUid) || "",
-      rmNome: pick(d, CFG.fields.rmNome) || (state.rmMap.get(pick(d, CFG.fields.rmUid)) || ""),
-      status: normalizeStatus(pick(d, CFG.fields.status) || ""),
-      ramo: pick(d, CFG.fields.ramo) || "",
-      seguradora: pick(d, CFG.fields.seguradora) || "",
-      tipo: pick(d, CFG.fields.tipo) || "",
-      premio: toNumberPremio(pick(d, CFG.fields.premio) || 0)
-    };
-    dados.push(row);
+function processarDados() {
+  // Limpar sets
+  DADOS.ramos.clear();
+  DADOS.status.clear();
+  DADOS.seguradoras.clear();
+  
+  // Processar cada cotação
+  DADOS.cotacoes.forEach(c => {
+    c._dataCriacao = toDate(c.dataCriacao);
+    c._valor = parseValor(c.valorFinal ?? c.valorNegocio ?? c.premio ?? c.valorDesejado ?? 0);
+    c._status = c.status || "Sem status";
+    c._ramo = c.ramo || "Não informado";
+    c._empresaNome = c.empresaNome || "Empresa";
+    c._rmNome = c.rmNome || DADOS.rms[c.rmUid] || DADOS.rms[c.rmId] || "-";
+    c._agenciaNome = DADOS.agencias[c.agenciaId] || c.agenciaId || "-";
+    c._seguradora = c.seguradora || "-";
+    
+    // Calcular dias aberto
+    if (c._dataCriacao) {
+      c._diasAberto = Math.floor((new Date() - c._dataCriacao) / (1000 * 60 * 60 * 24));
+    } else {
+      c._diasAberto = 0;
+    }
+    
+    // Coletar para filtros
+    if (c._ramo) DADOS.ramos.add(c._ramo);
+    if (c._status) DADOS.status.add(c._status);
+    if (c._seguradora && c._seguradora !== "-") DADOS.seguradoras.add(c._seguradora);
   });
-
-  state.raw = dados;
-
-  // Popular listas multi-select (Status/Ramo/Seguradora) dinamicamente
-  popularFacetas(dados);
-
-  // Aplicar filtros atuais sobre o raw
-  state.filtered = filtrarMemoria(dados);
-  state.yoy = $("#chk-yoy").checked;
-
-  // Render
-  desenhar();
+  
+  // Popular filtros
+  popularFiltros();
+  
+  // Aplicar filtros iniciais
+  aplicarFiltros();
 }
 
-function popularFacetas(dados){
-  const sSel = $("#f-status");
-  const rSel = $("#f-ramo");
-  const sgSel = $("#f-seguradora");
-
-  const sts = Array.from(new Set(dados.map(d=>d.status).filter(Boolean))).sort();
-  const ramos = Array.from(new Set(dados.map(d=>d.ramo).filter(Boolean))).sort();
-  const segs = Array.from(new Set(dados.map(d=>d.seguradora).filter(Boolean))).sort();
-
-  if(!state.statusSet.size){ // só popula 1x; depois mantém seleção do usuário
-    sSel.innerHTML = sts.map(s=>`<option value="${s}">${s}</option>`).join("");
-    state.statusSet = new Set(sts);
-  }
-  if(!state.ramoSet.size){
-    rSel.innerHTML = ramos.map(s=>`<option value="${s}">${s}</option>`).join("");
-    state.ramoSet = new Set(ramos);
-  }
-  if(!state.seguradoraSet.size){
-    sgSel.innerHTML = segs.map(s=>`<option value="${s}">${s}</option>`).join("");
-    state.seguradoraSet = new Set(segs);
-  }
+function popularFiltros() {
+  // RMs
+  const selRM = $("fRM");
+  selRM.innerHTML = '<option value="">Todos</option>';
+  const rmsUnicos = [...new Set(DADOS.cotacoes.map(c => c._rmNome).filter(Boolean))].sort();
+  rmsUnicos.forEach(rm => {
+    selRM.innerHTML += `<option value="${rm}">${rm}</option>`;
+  });
+  
+  // Status
+  const selStatus = $("fStatus");
+  selStatus.innerHTML = '<option value="">Todos</option>';
+  [...DADOS.status].sort().forEach(st => {
+    selStatus.innerHTML += `<option value="${st}">${st}</option>`;
+  });
+  
+  // Ramos
+  const selRamo = $("fRamo");
+  selRamo.innerHTML = '<option value="">Todos</option>';
+  [...DADOS.ramos].sort().forEach(r => {
+    selRamo.innerHTML += `<option value="${r}">${r}</option>`;
+  });
+  
+  // Seguradoras
+  const selSeg = $("fSeguradora");
+  selSeg.innerHTML = '<option value="">Todas</option>';
+  [...DADOS.seguradoras].sort().forEach(s => {
+    selSeg.innerHTML += `<option value="${s}">${s}</option>`;
+  });
 }
 
-function filtrarMemoria(arr){
-  const ag = $("#f-agencia").value;
-  const rm = $("#f-rm").value;
-  const status = new Set(multiSelectValues($("#f-status")));
-  const ramo   = new Set(multiSelectValues($("#f-ramo")));
-  const segur  = new Set(multiSelectValues($("#f-seguradora")));
-  const tipo   = $("#f-tipo").value;
-  const empresa= ($("#f-empresa").value || "").toLowerCase().trim();
-
-  return arr.filter(d=>{
-    if(ag && d.agenciaId !== ag) return false;
-    if(rm && d.rmUid !== rm) return false;
-    if(status.size && !status.has(d.status)) return false;
-    if(ramo.size && !ramo.has(d.ramo)) return false;
-    if(segur.size && !segur.has(d.seguradora)) return false;
-    if(tipo && d.tipo !== tipo) return false;
-    if(empresa && !(d.empresa||"").toLowerCase().includes(empresa)) return false;
+// ==== Filtros ====
+function aplicarFiltros() {
+  const dataInicio = $("fDataInicio").value ? new Date($("fDataInicio").value + "T00:00:00") : null;
+  const dataFim = $("fDataFim").value ? new Date($("fDataFim").value + "T23:59:59") : null;
+  const agencia = $("fAgencia").value;
+  const rm = $("fRM").value;
+  const status = $("fStatus").value;
+  const ramo = $("fRamo").value;
+  const empresa = normalizar($("fEmpresa").value);
+  const valorMin = parseValor($("fValorMin").value);
+  const valorMax = parseValor($("fValorMax").value) || Infinity;
+  const seguradora = $("fSeguradora").value;
+  
+  DADOS.filtrados = DADOS.cotacoes.filter(c => {
+    if (dataInicio && c._dataCriacao && c._dataCriacao < dataInicio) return false;
+    if (dataFim && c._dataCriacao && c._dataCriacao > dataFim) return false;
+    if (agencia && c.agenciaId !== agencia) return false;
+    if (rm && c._rmNome !== rm) return false;
+    if (status && c._status !== status) return false;
+    if (ramo && c._ramo !== ramo) return false;
+    if (empresa && !normalizar(c._empresaNome).includes(empresa)) return false;
+    if (valorMin && c._valor < valorMin) return false;
+    if (valorMax < Infinity && c._valor > valorMax) return false;
+    if (seguradora && c._seguradora !== seguradora) return false;
     return true;
   });
-}
-
-// ------- Desenho -------
-let charts = {};
-function destroyCharts(){
-  Object.values(charts).forEach(ch => { try{ ch.destroy(); }catch{} });
-  charts = {};
-}
-
-function desenhar(){
-  // KPIs + Tabela
-  desenharKPIs();
-  desenharTabela();
-
-  // Gráficos
-  destroyCharts();
-  desenharChartStatus();
-  desenharChartLinhasYoY();
-  desenharChartRamo();
-  desenharChartRM();
-  desenharChartSeguradora();
-}
-
-// KPIs com YoY
-function desenharKPIs(){
-  const data = state.filtered;
-
-  const totalPremio = sum(data, d=>d.premio);
-  const qtd = data.length;
-  const emitidos = data.filter(d=> isEmitido(d.status)).length;
-  const conv = qtd ? (emitidos / qtd) : 0;
-  const ticket = qtd ? (totalPremio / qtd) : 0;
-
-  $("#kpi-premio").textContent = CFG.currency.format(totalPremio);
-  $("#kpi-qtd").textContent = CFG.number.format(qtd);
-  $("#kpi-emitidos").textContent = CFG.number.format(emitidos);
-  $("#kpi-conversao").textContent = (conv*100).toFixed(1) + "%";
-  $("#kpi-ticket").textContent = CFG.currency.format(ticket);
-
-  // YoY deltas
-  const yoy = $("#chk-yoy").checked;
-  const diStr = $("#f-data-inicio").value;
-  const dfStr = $("#f-data-fim").value;
-  if(yoy && diStr && dfStr){
-    const di = new Date(diStr);
-    const df = new Date(dfStr);
-    const diPrev = new Date(di); diPrev.setFullYear(diPrev.getFullYear()-1);
-    const dfPrev = new Date(df); dfPrev.setFullYear(dfPrev.getFullYear()-1);
-
-    const prev = state.raw.filter(d => d.data && d.data >= diPrev && d.data <= dfPrev);
-    const prevFilt = filtrarMemoria(prev);
-
-    const totalPremioPrev = sum(prevFilt, d=>d.premio);
-    const qtdPrev = prevFilt.length;
-    const emitPrev = prevFilt.filter(d=> isEmitido(d.status)).length;
-    const convPrev = qtdPrev ? (emitPrev/qtdPrev) : 0;
-    const ticketPrev = qtdPrev ? (totalPremioPrev/qtdPrev) : 0;
-
-    setDelta($("#kpi-premio-delta"), pctDelta(totalPremio, totalPremioPrev));
-    setDelta($("#kpi-qtd-delta"), pctDelta(qtd, qtdPrev));
-    setDelta($("#kpi-emitidos-delta"), pctDelta(emitidos, emitPrev));
-    setDelta($("#kpi-conversao-delta"), pctDelta(conv, convPrev));
-    setDelta($("#kpi-ticket-delta"), pctDelta(ticket, ticketPrev));
+  
+  // Contar filtros ativos
+  let filtrosAtivos = 0;
+  if (dataInicio || dataFim) filtrosAtivos++;
+  if (agencia) filtrosAtivos++;
+  if (rm) filtrosAtivos++;
+  if (status) filtrosAtivos++;
+  if (ramo) filtrosAtivos++;
+  if (empresa) filtrosAtivos++;
+  if (valorMin || valorMax < Infinity) filtrosAtivos++;
+  if (seguradora) filtrosAtivos++;
+  
+  const badge = $("filtrosAtivos");
+  if (filtrosAtivos > 0) {
+    badge.textContent = `${filtrosAtivos} ativo${filtrosAtivos > 1 ? 's' : ''}`;
+    badge.classList.remove("hidden");
   } else {
-    ["premio","qtd","emitidos","conversao","ticket"].forEach(k=>{
-      $(`#kpi-${k}-delta`).textContent = "";
-    });
+    badge.classList.add("hidden");
   }
+  
+  // Atualizar tudo
+  PAGINACAO.pagina = 1;
+  ordenarDados();
+  atualizarKPIs();
+  atualizarGraficos();
+  atualizarRankings();
+  atualizarAnalise();
+  atualizarTabela();
+  mostrarLoading(false);
 }
 
-function desenharTabela(){
-  const tb = $("#tbody");
-  tb.innerHTML = "";
-  const data = state.filtered.slice().sort((a,b)=> (b.data?.getTime()||0) - (a.data?.getTime()||0));
-  $("#lbl-count").textContent = data.length;
-
-  const frag = document.createDocumentFragment();
-  for(const d of data.slice(0, 2000)){ // proteção
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${d.data ? CFG.dateFmt(d.data) : "—"}</td>
-      <td>${d.empresa || "—"}</td>
-      <td class="hide-sm">${d.agenciaNome || (state.agenciaMap.get(d.agenciaId)||"—")}</td>
-      <td>${d.rmNome || (state.rmMap.get(d.rmUid)||"—")}</td>
-      <td><span class="badge">${d.status||"—"}</span></td>
-      <td class="hide-sm">${d.ramo || "—"}</td>
-      <td class="hide-sm">${d.seguradora || "—"}</td>
-      <td>${CFG.currency.format(d.premio||0)}</td>
-      <td class="hide-sm">${d.tipo || "—"}</td>
-    `;
-    frag.appendChild(tr);
-  }
-  tb.appendChild(frag);
+function limparFiltros() {
+  $("fAgencia").value = CTX.isAdmin ? "" : CTX.agenciaId;
+  $("fRM").value = "";
+  $("fStatus").value = "";
+  $("fRamo").value = "";
+  $("fEmpresa").value = "";
+  $("fValorMin").value = "";
+  $("fValorMax").value = "";
+  $("fSeguradora").value = "";
+  $("fPreset").value = "";
+  setDefaultDates();
+  aplicarFiltros();
 }
 
-function baseChartCfg(){
-  return {
-    plugins: [ChartDataLabels],
+function aplicarPreset(preset) {
+  const hoje = new Date();
+  let inicio, fim;
+  
+  switch (preset) {
+    case "hoje":
+      inicio = fim = hoje;
+      break;
+    case "semana":
+      inicio = new Date(hoje);
+      inicio.setDate(hoje.getDate() - hoje.getDay());
+      fim = hoje;
+      break;
+    case "mes":
+      inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+      fim = hoje;
+      break;
+    case "trimestre":
+      const trimestre = Math.floor(hoje.getMonth() / 3);
+      inicio = new Date(hoje.getFullYear(), trimestre * 3, 1);
+      fim = hoje;
+      break;
+    case "ano":
+      inicio = new Date(hoje.getFullYear(), 0, 1);
+      fim = hoje;
+      break;
+    case "mesPassado":
+      inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+      fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+      break;
+    case "anoPassado":
+      inicio = new Date(hoje.getFullYear() - 1, 0, 1);
+      fim = new Date(hoje.getFullYear() - 1, 11, 31);
+      break;
+    default:
+      return;
+  }
+  
+  $("fDataInicio").value = inicio.toISOString().substring(0, 10);
+  $("fDataFim").value = fim.toISOString().substring(0, 10);
+}
+
+// ==== KPIs ====
+function atualizarKPIs() {
+  const dados = DADOS.filtrados;
+  
+  const total = dados.length;
+  const emitidos = dados.filter(c => categoriaStatus(c._status) === "emitido").length;
+  const pendentes = dados.filter(c => categoriaStatus(c._status) === "pendente").length;
+  const recusados = dados.filter(c => categoriaStatus(c._status) === "recusado").length;
+  const valorTotal = dados.reduce((sum, c) => sum + c._valor, 0);
+  const taxaConversao = total > 0 ? (emitidos / total) * 100 : 0;
+  
+  $("kpiTotalCotacoes").textContent = fmtNum(total);
+  $("kpiEmitidos").textContent = fmtNum(emitidos);
+  $("kpiValorTotal").textContent = fmtBRLShort(valorTotal);
+  $("kpiPendentes").textContent = fmtNum(pendentes);
+  $("kpiRecusados").textContent = fmtNum(recusados);
+  $("kpiConversao").textContent = fmtPct(taxaConversao);
+}
+
+// ==== Gráficos ====
+function atualizarGraficos() {
+  atualizarGraficoEvolucao();
+  atualizarGraficoStatus();
+  atualizarGraficoRamo();
+  atualizarGraficoAgencia();
+}
+
+function atualizarGraficoEvolucao() {
+  const ctx = $("chartEvolucao");
+  if (CHARTS.evolucao) CHARTS.evolucao.destroy();
+  
+  // Agrupar por mês
+  const porMes = {};
+  DADOS.filtrados.forEach(c => {
+    if (c._dataCriacao) {
+      const key = `${c._dataCriacao.getFullYear()}-${String(c._dataCriacao.getMonth() + 1).padStart(2, '0')}`;
+      if (!porMes[key]) porMes[key] = { qtd: 0, valor: 0, emitidos: 0 };
+      porMes[key].qtd++;
+      porMes[key].valor += c._valor;
+      if (categoriaStatus(c._status) === "emitido") porMes[key].emitidos++;
+    }
+  });
+  
+  const meses = Object.keys(porMes).sort();
+  const labels = meses.map(m => {
+    const [ano, mes] = m.split("-");
+    return `${mes}/${ano.slice(2)}`;
+  });
+  
+  CHARTS.evolucao = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Cotações',
+          data: meses.map(m => porMes[m].qtd),
+          borderColor: '#6366f1',
+          backgroundColor: 'rgba(99, 102, 241, 0.1)',
+          fill: true,
+          tension: 0.4,
+          yAxisID: 'y'
+        },
+        {
+          label: 'Emitidos',
+          data: meses.map(m => porMes[m].emitidos),
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          fill: true,
+          tension: 0.4,
+          yAxisID: 'y'
+        },
+        {
+          label: 'Valor (R$)',
+          data: meses.map(m => porMes[m].valor),
+          borderColor: '#f59e0b',
+          borderDash: [5, 5],
+          tension: 0.4,
+          yAxisID: 'y1'
+        }
+      ]
+    },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom' },
-        datalabels: {
-          formatter: (v, ctx)=>{
-            if(Array.isArray(v)) return "";
-            if(typeof v === "number" && v >= 1000) return CFG.number.format(Math.round(v));
-            if(typeof v === "number") return Math.round(v);
-            return "";
-          },
-          anchor: 'end',
-          align: 'top',
-          offset: 4,
-          clamp: true
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx)=>{
-              const y = ctx.parsed?.y ?? ctx.parsed;
-              if(typeof y === "number") return ` ${CFG.currency.format(y)}`;
-              return ` ${y}`;
-            }
-          }
-        }
-      },
+      interaction: { intersect: false, mode: 'index' },
+      plugins: { legend: { position: 'bottom' } },
       scales: {
-        x: { ticks: { maxRotation: 0, autoSkip: true } },
-        y: { beginAtZero: true }
+        y: { position: 'left', beginAtZero: true },
+        y1: {
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          ticks: { callback: v => fmtBRLShort(v) }
+        }
       }
     }
-  };
+  });
 }
 
-function desenharChartStatus(){
-  const data = state.filtered;
-  const by = groupBy(data, d=> d.status || "Sem status");
-  const labels = Array.from(by.keys());
-  const counts = labels.map(l => by.get(l).length);
-
-  $("#legend-status").textContent = `${labels.length} status`;
-
-  const cfg = baseChartCfg();
-  cfg.data = {
-    labels,
-    datasets: [{
-      type: 'doughnut',
-      data: counts
-    }]
-  };
-  cfg.options.plugins.datalabels.formatter = (v)=> CFG.number.format(v);
-  cfg.options.plugins.tooltip.callbacks.label = (ctx)=> ` ${ctx.label}: ${CFG.number.format(ctx.parsed)}`;
-  charts.status = new Chart($("#chartStatus"), cfg);
+function atualizarGraficoStatus() {
+  const ctx = $("chartStatus");
+  if (CHARTS.status) CHARTS.status.destroy();
+  
+  const porStatus = {};
+  DADOS.filtrados.forEach(c => {
+    const st = c._status;
+    if (!porStatus[st]) porStatus[st] = { qtd: 0, valor: 0 };
+    porStatus[st].qtd++;
+    porStatus[st].valor += c._valor;
+  });
+  
+  const entries = Object.entries(porStatus).sort((a, b) => b[1].qtd - a[1].qtd);
+  
+  CHARTS.status = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: entries.map(([st]) => st),
+      datasets: [{
+        data: entries.map(([, d]) => d.qtd),
+        backgroundColor: entries.map(([st]) => corStatus(st).bg),
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '60%',
+      plugins: {
+        legend: { position: 'right', labels: { usePointStyle: true, padding: 15 } }
+      }
+    }
+  });
 }
 
-function desenharChartLinhasYoY(){
-  const diStr = $("#f-data-inicio").value;
-  const dfStr = $("#f-data-fim").value;
-  if(!diStr || !dfStr) return;
-
-  const di = new Date(diStr);
-  const df = new Date(dfStr);
-
-  const year = di.getFullYear(); // considera ano do início
-  const months = rangeMonths(year);
-
-  const dataCurr = state.filtered.filter(d=> d.data && d.data.getFullYear() === year);
-  const gCurr = new Map(months.map(m=>[m,0]));
-  dataCurr.forEach(d=>{
-    gCurr.set(monthKey(d.data), (gCurr.get(monthKey(d.data))||0) + (d.premio||0));
+function atualizarGraficoRamo() {
+  const ctx = $("chartRamo");
+  if (CHARTS.ramo) CHARTS.ramo.destroy();
+  
+  const porRamo = {};
+  DADOS.filtrados.forEach(c => {
+    const r = c._ramo;
+    if (!porRamo[r]) porRamo[r] = { qtd: 0, valor: 0 };
+    porRamo[r].qtd++;
+    porRamo[r].valor += c._valor;
   });
-
-  let monthsPrev = rangeMonths(year-1);
-  const dataPrevRaw = state.raw.filter(d=> d.data && d.data.getFullYear() === (year-1));
-  const dataPrev = filtrarMemoria(dataPrevRaw); // aplica filtros (exceto datas absolutas)
-  const gPrev = new Map(monthsPrev.map(m=>[m,0]));
-  dataPrev.forEach(d=>{
-    gPrev.set(monthKey(d.data), (gPrev.get(monthKey(d.data))||0) + (d.premio||0));
+  
+  const entries = Object.entries(porRamo).sort((a, b) => b[1].valor - a[1].valor).slice(0, 10);
+  
+  CHARTS.ramo = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: entries.map(([r]) => r.length > 15 ? r.slice(0, 15) + '...' : r),
+      datasets: [{
+        label: 'Valor',
+        data: entries.map(([, d]) => d.valor),
+        backgroundColor: '#6366f1',
+        borderRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { callback: v => fmtBRLShort(v) } }
+      }
+    }
   });
+}
 
-  $("#legend-linhas").textContent = `Ano ${year}${state.yoy?` vs ${year-1}`:""}`;
+function atualizarGraficoAgencia() {
+  const ctx = $("chartAgencia");
+  if (CHARTS.agencia) CHARTS.agencia.destroy();
+  
+  const porAgencia = {};
+  DADOS.filtrados.forEach(c => {
+    const a = c._agenciaNome;
+    if (!porAgencia[a]) porAgencia[a] = { qtd: 0, valor: 0, emitidos: 0 };
+    porAgencia[a].qtd++;
+    porAgencia[a].valor += c._valor;
+    if (categoriaStatus(c._status) === "emitido") porAgencia[a].emitidos++;
+  });
+  
+  const entries = Object.entries(porAgencia).sort((a, b) => b[1].valor - a[1].valor).slice(0, 8);
+  
+  CHARTS.agencia = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: entries.map(([a]) => a.length > 20 ? a.slice(0, 20) + '...' : a),
+      datasets: [
+        {
+          label: 'Cotações',
+          data: entries.map(([, d]) => d.qtd),
+          backgroundColor: '#6366f1',
+          borderRadius: 4
+        },
+        {
+          label: 'Emitidos',
+          data: entries.map(([, d]) => d.emitidos),
+          backgroundColor: '#10b981',
+          borderRadius: 4
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom' } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
 
-  const cfg = baseChartCfg();
-  cfg.data = {
-    labels: months.map(m=> m.split("-")[1]+"/"+m.split("-")[0].slice(-2)),
-    datasets: [{
-      label: String(year),
-      type: 'line',
-      data: months.map(m=> gCurr.get(m)||0),
-      tension: .3
-    }]
-  };
-  if(state.yoy){
-    cfg.data.datasets.push({
-      label: String(year-1),
-      type: 'line',
-      data: monthsPrev.map(m=> gPrev.get(m)||0),
-      tension: .3
-    });
+// ==== Rankings ====
+function atualizarRankings() {
+  // Top RMs
+  const porRM = {};
+  DADOS.filtrados.forEach(c => {
+    const rm = c._rmNome;
+    if (!porRM[rm]) porRM[rm] = { qtd: 0, valor: 0 };
+    porRM[rm].qtd++;
+    porRM[rm].valor += c._valor;
+  });
+  
+  const topRMs = Object.entries(porRM).sort((a, b) => b[1].valor - a[1].valor).slice(0, 10);
+  $("rankingRMs").innerHTML = topRMs.map(([rm, d], i) => `
+    <div class="flex items-center gap-3 p-2 rounded-lg ${i === 0 ? 'bg-yellow-50' : 'bg-slate-50'}">
+      <div class="w-6 h-6 rounded-full ${i < 3 ? 'bg-yellow-400 text-white' : 'bg-slate-200 text-slate-600'} flex items-center justify-center text-xs font-bold">${i + 1}</div>
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-slate-800 truncate text-sm">${rm}</div>
+        <div class="text-xs text-slate-500">${d.qtd} cotações</div>
+      </div>
+      <div class="text-sm font-bold text-slate-700">${fmtBRLShort(d.valor)}</div>
+    </div>
+  `).join('') || '<div class="text-slate-400 text-sm">Sem dados</div>';
+  
+  // Top Empresas
+  const porEmpresa = {};
+  DADOS.filtrados.forEach(c => {
+    const e = c._empresaNome;
+    if (!porEmpresa[e]) porEmpresa[e] = { qtd: 0, valor: 0 };
+    porEmpresa[e].qtd++;
+    porEmpresa[e].valor += c._valor;
+  });
+  
+  const topEmpresas = Object.entries(porEmpresa).sort((a, b) => b[1].valor - a[1].valor).slice(0, 10);
+  $("rankingEmpresas").innerHTML = topEmpresas.map(([emp, d], i) => `
+    <div class="flex items-center gap-3 p-2 rounded-lg bg-slate-50">
+      <div class="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">${i + 1}</div>
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-slate-800 truncate text-sm">${emp}</div>
+        <div class="text-xs text-slate-500">${d.qtd} cotações</div>
+      </div>
+      <div class="text-sm font-bold text-slate-700">${fmtBRLShort(d.valor)}</div>
+    </div>
+  `).join('') || '<div class="text-slate-400 text-sm">Sem dados</div>';
+  
+  // Top Ramos
+  const porRamo = {};
+  DADOS.filtrados.forEach(c => {
+    const r = c._ramo;
+    if (!porRamo[r]) porRamo[r] = { qtd: 0, valor: 0 };
+    porRamo[r].qtd++;
+    porRamo[r].valor += c._valor;
+  });
+  
+  const topRamos = Object.entries(porRamo).sort((a, b) => b[1].qtd - a[1].qtd).slice(0, 10);
+  $("rankingRamos").innerHTML = topRamos.map(([ramo, d], i) => `
+    <div class="flex items-center gap-3 p-2 rounded-lg bg-slate-50">
+      <div class="w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-xs font-bold">${i + 1}</div>
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-slate-800 truncate text-sm">${ramo}</div>
+        <div class="text-xs text-slate-500">${fmtBRLShort(d.valor)}</div>
+      </div>
+      <div class="text-sm font-bold text-slate-700">${d.qtd}</div>
+    </div>
+  `).join('') || '<div class="text-slate-400 text-sm">Sem dados</div>';
+}
+
+// ==== Análise ====
+function atualizarAnalise() {
+  const dados = DADOS.filtrados;
+  
+  // Ticket médio
+  const total = dados.length;
+  const valorTotal = dados.reduce((s, c) => s + c._valor, 0);
+  $("metricaTicketMedio").textContent = total > 0 ? fmtBRL(valorTotal / total) : "-";
+  
+  // Tempo médio
+  const comData = dados.filter(c => c._diasAberto > 0);
+  const tempoMedio = comData.length > 0 ? comData.reduce((s, c) => s + c._diasAberto, 0) / comData.length : 0;
+  $("metricaTempoMedio").textContent = tempoMedio > 0 ? `${Math.round(tempoMedio)} dias` : "-";
+  
+  // Maior negócio
+  const maior = dados.reduce((max, c) => c._valor > max ? c._valor : max, 0);
+  $("metricaMaiorNegocio").textContent = maior > 0 ? fmtBRL(maior) : "-";
+  
+  // Empresas únicas
+  const empresasUnicas = new Set(dados.map(c => c._empresaNome)).size;
+  $("metricaEmpresasUnicas").textContent = fmtNum(empresasUnicas);
+  
+  // Análise de recusas
+  const recusados = dados.filter(c => categoriaStatus(c._status) === "recusado");
+  const porMotivo = {};
+  recusados.forEach(c => {
+    const motivo = c._status;
+    if (!porMotivo[motivo]) porMotivo[motivo] = { qtd: 0, valor: 0 };
+    porMotivo[motivo].qtd++;
+    porMotivo[motivo].valor += c._valor;
+  });
+  
+  const motivosOrdenados = Object.entries(porMotivo).sort((a, b) => b[1].qtd - a[1].qtd);
+  $("analiseRecusas").innerHTML = motivosOrdenados.length > 0 ? motivosOrdenados.map(([motivo, d]) => `
+    <div class="flex items-center justify-between p-3 bg-rose-50 rounded-lg">
+      <div>
+        <div class="font-medium text-slate-800">${motivo}</div>
+        <div class="text-xs text-slate-500">${d.qtd} ocorrências • ${fmtBRL(d.valor)} perdido</div>
+      </div>
+      <div class="text-rose-600 font-bold">${fmtPct((d.qtd / recusados.length) * 100)}</div>
+    </div>
+  `).join('') : '<div class="text-slate-400">Nenhuma recusa no período</div>';
+}
+
+// ==== Tabela ====
+function ordenarDados() {
+  const { campo, direcao } = ORDENACAO;
+  const mult = direcao === 'asc' ? 1 : -1;
+  
+  DADOS.filtrados.sort((a, b) => {
+    let va = a[campo] ?? a['_' + campo];
+    let vb = b[campo] ?? b['_' + campo];
+    
+    if (va instanceof Date) va = va.getTime();
+    if (vb instanceof Date) vb = vb.getTime();
+    
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * mult;
+    return String(va || "").localeCompare(String(vb || ""), 'pt-BR') * mult;
+  });
+}
+
+function ordenarPor(campo) {
+  if (ORDENACAO.campo === campo) {
+    ORDENACAO.direcao = ORDENACAO.direcao === 'asc' ? 'desc' : 'asc';
+  } else {
+    ORDENACAO.campo = campo;
+    ORDENACAO.direcao = 'desc';
   }
-  cfg.options.plugins.datalabels.display = false;
-
-  charts.linhas = new Chart($("#chartLinhas"), cfg);
-}
-
-function topEntries(mapOrObj, limit=10){
-  const entries = Array.isArray(mapOrObj)
-    ? mapOrObj
-    : Array.from(Object.entries(mapOrObj instanceof Map ? Object.fromEntries(mapOrObj) : mapOrObj));
-  return entries.sort((a,b)=> b[1]-a[1]).slice(0, limit);
-}
-
-function desenharChartRamo(){
-  const data = state.filtered;
-  const grp = {};
-  data.forEach(d=>{
-    const k = d.ramo || "—";
-    grp[k] = (grp[k]||0) + (d.premio||0);
+  
+  // Atualizar visual dos headers
+  document.querySelectorAll("th[data-sort]").forEach(th => {
+    th.classList.remove('sorted');
+    th.querySelector('.sort-icon').textContent = '↕';
   });
-  const top = topEntries(grp, 10);
-  $("#legend-ramo").textContent = `${top.length} ramos (Top 10)`;
-
-  const cfg = baseChartCfg();
-  cfg.data = {
-    labels: top.map(t=>t[0]),
-    datasets: [{ type:'bar', data: top.map(t=> t[1]) }]
-  };
-  charts.ramo = new Chart($("#chartRamo"), cfg);
+  const th = document.querySelector(`th[data-sort="${campo}"]`);
+  if (th) {
+    th.classList.add('sorted');
+    th.querySelector('.sort-icon').textContent = ORDENACAO.direcao === 'asc' ? '↑' : '↓';
+  }
+  
+  ordenarDados();
+  atualizarTabela();
 }
 
-function desenharChartRM(){
-  const data = state.filtered;
-  const grp = {};
-  data.forEach(d=>{
-    const k = d.rmNome || "—";
-    grp[k] = (grp[k]||0) + (d.premio||0);
-  });
-  const top = topEntries(grp, 10);
-  $("#legend-rm").textContent = `${top.length} RMs (Top 10)`;
-
-  const cfg = baseChartCfg();
-  cfg.data = {
-    labels: top.map(t=>t[0]),
-    datasets: [{ type:'bar', data: top.map(t=> t[1]) }]
-  };
-  cfg.options.indexAxis = 'y';
-  charts.rm = new Chart($("#chartRM"), cfg);
+function atualizarTabela() {
+  const busca = normalizar($("buscaTabela").value);
+  let dados = DADOS.filtrados;
+  
+  if (busca) {
+    dados = dados.filter(c => 
+      normalizar(c._empresaNome).includes(busca) ||
+      normalizar(c._rmNome).includes(busca) ||
+      normalizar(c._ramo).includes(busca) ||
+      normalizar(c._status).includes(busca)
+    );
+  }
+  
+  // Paginação
+  const total = dados.length;
+  const itens = PAGINACAO.itensPorPagina === 'all' ? total : PAGINACAO.itensPorPagina;
+  const totalPaginas = Math.ceil(total / itens) || 1;
+  PAGINACAO.pagina = Math.min(PAGINACAO.pagina, totalPaginas);
+  
+  const inicio = (PAGINACAO.pagina - 1) * itens;
+  const fim = Math.min(inicio + itens, total);
+  const paginados = dados.slice(inicio, fim);
+  
+  // Render tabela
+  const tbody = $("tabelaBody");
+  if (paginados.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-slate-400">Nenhum registro encontrado</td></tr>';
+  } else {
+    tbody.innerHTML = paginados.map(c => {
+      const cor = corStatus(c._status);
+      return `
+        <tr>
+          <td class="font-medium">${c._empresaNome}</td>
+          <td>${c._agenciaNome}</td>
+          <td>${c._rmNome}</td>
+          <td>${c._ramo}</td>
+          <td class="font-semibold">${fmtBRL(c._valor)}</td>
+          <td><span class="badge ${cor.class}">${c._status}</span></td>
+          <td>${fmtData(c._dataCriacao)}</td>
+          <td>${c._diasAberto}</td>
+          <td class="no-print">
+            <a href="chat-cotacao.html?id=${c.id}" class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">Ver →</a>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+  
+  // Info
+  $("qtdResultados").textContent = `${fmtNum(total)} registros`;
+  $("paginacaoInfo").textContent = `${inicio + 1}-${fim}`;
+  $("paginacaoTotal").textContent = fmtNum(total);
+  
+  // Botões paginação
+  renderPaginacao(totalPaginas);
 }
 
-function desenharChartSeguradora(){
-  const data = state.filtered;
-  const grp = {};
-  data.forEach(d=>{
-    const k = d.seguradora || "—";
-    grp[k] = (grp[k]||0) + (d.premio||0);
-  });
-  const arr = Object.entries(grp);
-  $("#legend-seguradora").textContent = `${arr.length} seguradoras`;
-
-  const cfg = baseChartCfg();
-  cfg.data = {
-    labels: arr.map(t=>t[0]),
-    datasets: [{ type:'bar', data: arr.map(t=> t[1]) }]
-  };
-  charts.seguradora = new Chart($("#chartSeguradora"), cfg);
+function renderPaginacao(totalPaginas) {
+  const container = $("paginacaoBotoes");
+  if (totalPaginas <= 1) {
+    container.innerHTML = '';
+    return;
+  }
+  
+  let html = '';
+  
+  // Anterior
+  html += `<button class="px-3 py-1 rounded ${PAGINACAO.pagina === 1 ? 'bg-slate-100 text-slate-400' : 'bg-slate-200 hover:bg-slate-300'}" ${PAGINACAO.pagina === 1 ? 'disabled' : ''} onclick="irParaPagina(${PAGINACAO.pagina - 1})">←</button>`;
+  
+  // Páginas
+  const maxBotoes = 5;
+  let inicio = Math.max(1, PAGINACAO.pagina - Math.floor(maxBotoes / 2));
+  let fim = Math.min(totalPaginas, inicio + maxBotoes - 1);
+  inicio = Math.max(1, fim - maxBotoes + 1);
+  
+  for (let i = inicio; i <= fim; i++) {
+    html += `<button class="px-3 py-1 rounded ${i === PAGINACAO.pagina ? 'bg-indigo-600 text-white' : 'bg-slate-200 hover:bg-slate-300'}" onclick="irParaPagina(${i})">${i}</button>`;
+  }
+  
+  // Próximo
+  html += `<button class="px-3 py-1 rounded ${PAGINACAO.pagina === totalPaginas ? 'bg-slate-100 text-slate-400' : 'bg-slate-200 hover:bg-slate-300'}" ${PAGINACAO.pagina === totalPaginas ? 'disabled' : ''} onclick="irParaPagina(${PAGINACAO.pagina + 1})">→</button>`;
+  
+  container.innerHTML = html;
 }
 
-// ------- Exportar CSV -------
-function exportarCSV(){
-  const rows = [
-    ["Data","Empresa","Agência","RM","Status","Ramo","Seguradora","Prêmio","Tipo"]
+function irParaPagina(pagina) {
+  PAGINACAO.pagina = pagina;
+  atualizarTabela();
+}
+
+function mudarItensPorPagina() {
+  const val = $("itensPorPagina").value;
+  PAGINACAO.itensPorPagina = val === 'all' ? 'all' : parseInt(val);
+  PAGINACAO.pagina = 1;
+  atualizarTabela();
+}
+
+function filtrarTabela() {
+  PAGINACAO.pagina = 1;
+  atualizarTabela();
+}
+
+// ==== Tabs ====
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+  
+  $("tabGraficos").classList.toggle('hidden', tab !== 'graficos');
+  $("tabRanking").classList.toggle('hidden', tab !== 'ranking');
+  $("tabAnalise").classList.toggle('hidden', tab !== 'analise');
+}
+
+// ==== Filtros Toggle ====
+function toggleFilters() {
+  const content = $("filtersContent");
+  const arrow = $("filterArrow");
+  content.classList.toggle('open');
+  arrow.style.transform = content.classList.contains('open') ? '' : 'rotate(-90deg)';
+}
+
+// ==== Loading ====
+function mostrarLoading(show) {
+  const tbody = $("tabelaBody");
+  if (show) {
+    tbody.innerHTML = '<tr><td colspan="9" class="loading"><div class="spinner"></div></td></tr>';
+  }
+}
+
+// ==== Exports ====
+function exportarPDF() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  
+  // Título
+  doc.setFontSize(18);
+  doc.setTextColor(30, 41, 59);
+  doc.text('Relatório Gerencial - Retorno Seguros', 14, 20);
+  
+  // Data
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 28);
+  doc.text(`Período: ${$("fDataInicio").value || 'Início'} a ${$("fDataFim").value || 'Fim'}`, 14, 33);
+  
+  // KPIs
+  const kpis = [
+    ['Total Cotações', $("kpiTotalCotacoes").textContent],
+    ['Emitidos', $("kpiEmitidos").textContent],
+    ['Valor Total', $("kpiValorTotal").textContent],
+    ['Pendentes', $("kpiPendentes").textContent],
+    ['Recusados', $("kpiRecusados").textContent],
+    ['Taxa Conversão', $("kpiConversao").textContent]
   ];
-  for(const d of state.filtered){
-    rows.push([
-      d.data ? CFG.dateFmt(d.data) : "",
-      d.empresa || "",
-      d.agenciaNome || (state.agenciaMap.get(d.agenciaId)||""),
-      d.rmNome || (state.rmMap.get(d.rmUid)||""),
-      d.status || "",
-      d.ramo || "",
-      d.seguradora || "",
-      String(d.premio || 0).replace(".",","),
-      d.tipo || ""
-    ]);
-  }
-  downloadCSV(`relatorio_${Date.now()}.csv`, rows);
+  
+  doc.setFontSize(12);
+  doc.setTextColor(30, 41, 59);
+  doc.text('Resumo:', 14, 45);
+  
+  let x = 14;
+  kpis.forEach(([label, value]) => {
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    doc.text(label, x, 52);
+    doc.setFontSize(11);
+    doc.setTextColor(30, 41, 59);
+    doc.text(value, x, 58);
+    x += 45;
+  });
+  
+  // Tabela
+  const dados = DADOS.filtrados.map(c => [
+    c._empresaNome.slice(0, 25),
+    c._agenciaNome.slice(0, 15),
+    c._rmNome.slice(0, 15),
+    c._ramo.slice(0, 15),
+    fmtBRL(c._valor),
+    c._status,
+    fmtData(c._dataCriacao)
+  ]);
+  
+  doc.autoTable({
+    startY: 68,
+    head: [['Empresa', 'Agência', 'Gerente', 'Ramo', 'Valor', 'Status', 'Data']],
+    body: dados,
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+    alternateRowStyles: { fillColor: [248, 250, 252] }
+  });
+  
+  // Salvar
+  doc.save(`relatorio-gerencial-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
-// ------- Salvar / Carregar Vistas de Filtros -------
-function getFilters(){
-  return {
-    di: $("#f-data-inicio").value,
-    df: $("#f-data-fim").value,
-    agencia: $("#f-agencia").value,
-    rm: $("#f-rm").value,
-    status: multiSelectValues($("#f-status")),
-    ramo: multiSelectValues($("#f-ramo")),
-    seguradora: multiSelectValues($("#f-seguradora")),
-    tipo: $("#f-tipo").value,
-    empresa: $("#f-empresa").value,
-    yoy: $("#chk-yoy").checked
-  };
+function exportarExcel() {
+  const dados = DADOS.filtrados.map(c => ({
+    'Empresa': c._empresaNome,
+    'Agência': c._agenciaNome,
+    'Gerente': c._rmNome,
+    'Ramo': c._ramo,
+    'Valor': c._valor,
+    'Status': c._status,
+    'Data Criação': fmtData(c._dataCriacao),
+    'Dias Aberto': c._diasAberto,
+    'Seguradora': c._seguradora
+  }));
+  
+  const ws = XLSX.utils.json_to_sheet(dados);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Relatório');
+  XLSX.writeFile(wb, `relatorio-gerencial-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
-function setFilters(f){
-  if(!f) return;
-  $("#f-data-inicio").value = f.di || "";
-  $("#f-data-fim").value = f.df || "";
-  $("#f-agencia").value = f.agencia || "";
-  filtrarRMsPorAgencia();
-  $("#f-rm").value = f.rm || "";
 
-  function setMulti(sel, values){
-    const map = new Set(values||[]);
-    Array.from(sel.options).forEach(o=> o.selected = map.has(o.value));
-  }
-  setMulti($("#f-status"), f.status);
-  setMulti($("#f-ramo"), f.ramo);
-  setMulti($("#f-seguradora"), f.seguradora);
-
-  $("#f-tipo").value = f.tipo || "";
-  $("#f-empresa").value = f.empresa || "";
-  $("#chk-yoy").checked = !!f.yoy;
-}
-function saveView(){
-  const name = prompt("Nome para salvar esta combinação de filtros:");
-  if(!name) return;
-  const key = `relatorios:view:${name}`;
-  localStorage.setItem(key, JSON.stringify(getFilters()));
-  alert("Vista salva!");
-}
-function loadView(){
-  const keys = Object.keys(localStorage).filter(k=> k.startsWith("relatorios:view:"));
-  if(!keys.length){ alert("Nenhuma vista salva."); return; }
-  const name = prompt(`Qual vista carregar?\n\n${keys.map(k=> "- "+k.replace("relatorios:view:","")).join("\n")}`);
-  if(!name) return;
-  const key = `relatorios:view:${name}`;
-  const v = localStorage.getItem(key);
-  if(!v){ alert("Vista não encontrada."); return; }
-  setFilters(JSON.parse(v));
-  aplicarFiltros();
-}
+// ==== Globals ====
+window.aplicarPreset = aplicarPreset;
+window.switchTab = switchTab;
+window.toggleFilters = toggleFilters;
+window.irParaPagina = irParaPagina;
+window.mudarItensPorPagina = mudarItensPorPagina;
