@@ -1,36 +1,31 @@
-// admin-banco/js/painel.js — Painel Moderno (menu + KPIs + listas + gráficos + comparações)
+// painel.js — Dashboard Moderno - Retorno Seguros
 
-// ==== Firebase base ====
+// ==== Firebase ====
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db   = firebase.firestore();
+const db = firebase.firestore();
 
+// ==== Estado Global ====
 let CTX = { uid: null, perfil: null, agenciaId: null, nome: null };
-
-// Admins por e-mail (fallback quando não há usuarios_banco/{uid})
 const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
 
-// Cache para evitar múltiplas chamadas
-const CACHE = {
-  empresas: null,
-  visitas: null,
-  agendaVisitas: null,
-  cotacoes: null,
-  cotacoesAgencia: null, // para comparação
-  timestamp: 0
+// Cache para evitar queries repetidas
+const CACHE = { data: {}, timestamp: 0 };
+const CACHE_TTL = 60000;
+
+// ==== Helpers ====
+const normalizar = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const normalizarPerfil = (p) => normalizar(p).replace(/[-_]+/g, " ");
+const isGC = (perfil) => ["gerente chefe", "gerente-chefe", "gerente_chefe"].includes(normalizarPerfil(perfil));
+
+const toDate = (x) => {
+  if (!x) return null;
+  if (x.toDate) return x.toDate();
+  if (x instanceof Date) return x;
+  const d = new Date(x);
+  return isNaN(d) ? null : d;
 };
-const CACHE_TTL = 60000; // 1 minuto
 
-// ==== Utils ====
-const normalizarPerfil = (p) => String(p || "")
-  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase().replace(/[-_]+/g, " ").trim();
-
-const normalizar = (s) => String(s || "")
-  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase().trim();
-
-const toDate = (x) => x?.toDate ? x.toDate() : (x ? new Date(x) : null);
 const fmtData = (d) => d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtHora = (d) => d ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
 const fmtDataHora = (d) => d ? `${fmtData(d)} ${fmtHora(d)}` : "-";
@@ -38,416 +33,323 @@ const fmtDataHora = (d) => d ? `${fmtData(d)} ${fmtHora(d)}` : "-";
 const parseValor = (v) => {
   if (v == null) return 0;
   if (typeof v === "number") return v;
-  const limp = String(v)
-    .replace(/[^0-9,.-]/g, "")
-    .replace(/\.(?=\d{3}(\D|$))/g, "")
-    .replace(",", ".");
-  const n = parseFloat(limp);
-  return Number.isFinite(n) ? n : 0;
+  const s = String(v).replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3})/g, "").replace(",", ".");
+  return parseFloat(s) || 0;
 };
 
-const fmtBRL = (n) => `R$ ${parseValor(n).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtBRL = (n) => parseValor(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtBRLShort = (n) => {
-  const val = parseValor(n);
-  if (val >= 1000000) return `R$ ${(val / 1000000).toFixed(1)}M`;
-  if (val >= 1000) return `R$ ${(val / 1000).toFixed(1)}K`;
-  return fmtBRL(val);
+  const v = parseValor(n);
+  if (v >= 1e6) return `R$ ${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `R$ ${(v / 1e3).toFixed(1)}K`;
+  return fmtBRL(v);
 };
 
+// Skeleton loader
 function skeleton(id, n = 3) {
-  const ul = document.getElementById(id);
-  if (!ul) return;
-  ul.innerHTML = "";
-  for (let i = 0; i < n; i++) {
-    const li = document.createElement("li");
-    li.className = "skeleton h-14 rounded-xl";
-    ul.appendChild(li);
-  }
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = Array(n).fill('<div class="skeleton h-14 rounded-xl"></div>').join('');
 }
 
-// ==== Persistência ====
+// ==== Persistência Auth ====
 async function ensurePersistence() {
-  try {
-    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-  } catch (e1) {
-    try {
-      await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
-    } catch (e2) {
-      await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
-    }
-  }
+  try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); }
+  catch { try { await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION); } catch { } }
 }
 
-// ==== Auth + contexto ====
+// ==== Boot ====
 async function initAuth() {
   await ensurePersistence();
-
-  const failback = setTimeout(() => {
+  
+  const timeout = setTimeout(() => {
     if (!auth.currentUser) location.href = "login.html";
   }, 5000);
 
   auth.onAuthStateChanged(async (user) => {
-    if (!user) { clearTimeout(failback); location.href = "login.html"; return; }
-    clearTimeout(failback);
-
+    if (!user) { clearTimeout(timeout); location.href = "login.html"; return; }
+    clearTimeout(timeout);
     CTX.uid = user.uid;
 
-    let snap = null;
-    try { snap = await db.collection("usuarios_banco").doc(user.uid).get(); }
-    catch (e) { console.warn("Erro lendo usuarios_banco:", e?.message); }
-
-    if (!snap || !snap.exists) {
-      if (ADMIN_EMAILS.includes((user.email || "").toLowerCase())) {
+    // Buscar perfil
+    try {
+      const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+      if (snap.exists) {
+        const d = snap.data();
+        CTX.perfil = normalizarPerfil(d.perfil || "");
+        CTX.agenciaId = d.agenciaId || d.agenciaid || null;
+        CTX.nome = d.nome || user.email;
+      } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
         CTX.perfil = "admin";
         CTX.agenciaId = null;
-        CTX.nome = user.email || "admin";
-        initDashboard();
-        return;
+        CTX.nome = user.email;
       } else {
-        const elPerfil = document.getElementById("perfilUsuario");
-        if (elPerfil) elPerfil.textContent = "Usuário sem perfil cadastrado";
+        document.getElementById("perfilUsuario").textContent = "Sem perfil";
         return;
       }
+    } catch (e) {
+      console.warn("Erro ao ler perfil:", e);
+      if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
+        CTX.perfil = "admin";
+        CTX.nome = user.email;
+      }
     }
-
-    const d = snap.data();
-    CTX.perfil = normalizarPerfil(d.perfil || "");
-    CTX.agenciaId = d.agenciaId || d.agenciaid || null;
-    CTX.nome = d.nome || user.email;
 
     initDashboard();
   });
 }
 
-// ==== Inicializar Dashboard ====
 function initDashboard() {
   atualizarTopo();
-  montarMenuLateral(CTX.perfil);
-  carregarTudo();
-  initDrawerMobile();
-}
-
-async function carregarTudo() {
-  // Carrega em paralelo para performance
-  await Promise.all([
+  montarMenu();
+  initDrawer();
+  initModal();
+  
+  // Carregar dados em paralelo
+  Promise.all([
     carregarKPIs(),
-    carregarResumoPainel(),
-    carregarGraficos(),
+    carregarGraficoStatus(),
     carregarComparacoes(),
-    carregarFeedMovimentacoes()
+    carregarFeed(),
+    carregarVencimentos(),
+    carregarAgenda(),
+    carregarProducao(),
+    carregarCotacoes()
   ]);
 }
 
-// ==== Header (saudação + perfil enxuto) ====
+// ==== Header ====
 function atualizarTopo() {
-  const titulo = document.getElementById("tituloSaudacao");
-  const hora = new Date().getHours();
-  let saudacao = "Olá";
-  if (hora >= 5 && hora < 12) saudacao = "Bom dia";
-  else if (hora >= 12 && hora < 18) saudacao = "Boa tarde";
-  else saudacao = "Boa noite";
+  const h = new Date().getHours();
+  const saudacao = h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite";
+  const nome = CTX.nome?.split(' ')[0] || "Usuário";
   
-  if (titulo) titulo.textContent = `${saudacao}, ${CTX.nome?.split(' ')[0] || 'Usuário'}`;
-
-  const elPerfil = document.getElementById("perfilUsuario");
-  if (elPerfil) {
-    const p = (CTX.perfil || "").toLowerCase();
-    const label =
-      p === "rm" ? "Gerente de Relacionamento" :
-      p === "admin" ? "Administrador" :
-      p === "assistente" ? "Assistente" :
-      (p.includes("gerente") ? "Gerente Chefe" : (CTX.perfil || "").toUpperCase());
-    elPerfil.textContent = label;
-  }
+  document.getElementById("tituloSaudacao").textContent = `${saudacao}, ${nome}`;
+  
+  const perfis = {
+    "admin": "Administrador",
+    "rm": "Gerente RM",
+    "gerente chefe": "Gerente Chefe",
+    "assistente": "Assistente"
+  };
+  document.getElementById("perfilUsuario").textContent = perfis[CTX.perfil] || CTX.perfil?.toUpperCase() || "";
 }
 
-// ==== Menu lateral ====
-function montarMenuLateral(perfilBruto) {
+// ==== Menu Lateral ====
+function montarMenu() {
   const nav = document.getElementById("menuNav");
   if (!nav) return;
-  nav.innerHTML = "";
 
-  const perfil = normalizarPerfil(perfilBruto);
+  const perfil = CTX.perfil;
+  const isAdmin = perfil === "admin";
+  const currentPage = location.pathname.split('/').pop() || 'painel.html';
 
-  const ICON = {
-    gerentes: `<span>👤</span>`,
-    empresa: `<span>🏢</span>`,
-    agencia: `<span>🏦</span>`,
-    agenda: `<span>📅</span>`,
-    visitas: `<span>📌</span>`,
-    cotacao: `<span>📄</span>`,
-    producao: `<span>📈</span>`,
-    dicas: `<span>💡</span>`,
-    consultar: `<span>🔎</span>`,
-    ramos: `<span>🧩</span>`,
-    rel: `<span>📊</span>`,
-    venc: `<span>⏰</span>`,
-    func: `<span>🧍</span>`,
-    carteira: `<span>👛</span>`,
-    comissoes: `<span>💵</span>`,
-    resgates: `<span>🔐</span>`,
-    financeiro: `<span>💳</span>`,
-    home: `<span>🏠</span>`
-  };
-
-  const GRUPOS = [
+  const MENU = [
     { titulo: "Principal", itens: [
-      ["Painel", "painel.html", ICON.home],
+      { label: "Dashboard", href: "painel.html", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" }
     ]},
     { titulo: "Cadastros", itens: [
-      ["Cadastrar Gerentes", "cadastro-geral.html", ICON.gerentes],
-      ["Cadastrar Empresa", "cadastro-empresa.html", ICON.empresa],
-      ["Agências", "agencias.html", ICON.agencia],
-      ["Empresas", "empresas.html", ICON.empresa],
-      ["Funcionários", "funcionarios.html", ICON.func]
+      { label: "Gerentes", href: "cadastro-geral.html", icon: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z", roles: ["admin"] },
+      { label: "Empresas", href: "empresas.html", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" },
+      { label: "Nova Empresa", href: "cadastro-empresa.html", icon: "M12 6v6m0 0v6m0-6h6m-6 0H6" },
+      { label: "Agências", href: "agencias.html", icon: "M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z", roles: ["admin"] },
+      { label: "Funcionários", href: "funcionarios.html", icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" }
     ]},
     { titulo: "Operações", itens: [
-      ["Agenda Visitas", "agenda-visitas.html", ICON.agenda],
-      ["Visitas", "visitas.html", ICON.visitas],
-      ["Solicitações de Cotação", "cotacoes.html", ICON.cotacao],
-      ["Produção", "negocios-fechados.html", ICON.producao],
-      ["Financeiro", "financeiro.html", ICON.financeiro],
-      ["Dicas Produtos", "dicas-produtos.html", ICON.dicas],
-      ["Consultar Dicas", "consultar-dicas.html", ICON.consultar],
-      ["Ramos Seguro", "ramos-seguro.html", ICON.ramos]
+      { label: "Agenda", href: "agenda-visitas.html", icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
+      { label: "Visitas", href: "visitas.html", icon: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" },
+      { label: "Cotações", href: "cotacoes.html", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+      { label: "Produção", href: "negocios-fechados.html", icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
+      { label: "Financeiro", href: "financeiro.html", icon: "M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" },
+      { label: "Consultar Dicas", href: "consultar-dicas.html", icon: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
+      { label: "Dicas Produtos", href: "dicas-produtos.html", icon: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z", roles: ["admin"] },
+      { label: "Ramos Seguro", href: "ramos-seguro.html", icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10", roles: ["admin"] }
     ]},
     { titulo: "Relatórios", itens: [
-      ["Relatório Visitas", "visitas-relatorio.html", ICON.rel],
-      ["Vencimentos", "vencimentos.html", ICON.venc],
-      ["Relatórios", "relatorios.html", ICON.rel]
+      { label: "Visitas", href: "visitas-relatorio.html", icon: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
+      { label: "Vencimentos", href: "vencimentos.html", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+      { label: "Relatórios", href: "relatorios.html", icon: "M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" }
     ]},
     { titulo: "Admin", adminOnly: true, itens: [
-      ["Carteira", "carteira.html", ICON.carteira],
-      ["Comissões", "comissoes.html", ICON.comissoes],
-      ["Resgates (Admin)", "resgates-admin.html", ICON.resgates]
+      { label: "Carteira", href: "carteira.html", icon: "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" },
+      { label: "Comissões", href: "comissoes.html", icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
+      { label: "Resgates", href: "resgates-admin.html", icon: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" }
     ]}
   ];
 
-  // Perfis permitidos por rota
-  const ROTAS_POR_PERFIL = {
-    "admin": new Set([...GRUPOS.flatMap(g => g.itens.map(i => i[1]))]),
-    "rm": new Set([
-      "painel.html", "cadastro-empresa.html", "agenda-visitas.html", "visitas.html", "empresas.html",
-      "cotacoes.html", "negocios-fechados.html", "consultar-dicas.html", "visitas-relatorio.html",
-      "vencimentos.html", "funcionarios.html", "financeiro.html"
-    ]),
-    "gerente chefe": new Set([
-      "painel.html", "cadastro-empresa.html", "agenda-visitas.html", "visitas.html", "empresas.html",
-      "cotacoes.html", "negocios-fechados.html", "consultar-dicas.html", "visitas-relatorio.html",
-      "vencimentos.html", "funcionarios.html", "financeiro.html"
-    ]),
-    "assistente": new Set([
-      "painel.html", "agenda-visitas.html", "visitas.html", "cotacoes.html", "consultar-dicas.html",
-      "funcionarios.html", "financeiro.html"
-    ])
+  // Permissões por perfil
+  const ROTAS = {
+    "admin": new Set(MENU.flatMap(g => g.itens.map(i => i.href))),
+    "rm": new Set(["painel.html", "cadastro-empresa.html", "empresas.html", "agenda-visitas.html", "visitas.html", "cotacoes.html", "negocios-fechados.html", "consultar-dicas.html", "visitas-relatorio.html", "vencimentos.html", "funcionarios.html", "financeiro.html"]),
+    "gerente chefe": new Set(["painel.html", "cadastro-empresa.html", "empresas.html", "agenda-visitas.html", "visitas.html", "cotacoes.html", "negocios-fechados.html", "consultar-dicas.html", "visitas-relatorio.html", "vencimentos.html", "funcionarios.html", "financeiro.html"]),
+    "assistente": new Set(["painel.html", "agenda-visitas.html", "visitas.html", "cotacoes.html", "consultar-dicas.html", "funcionarios.html", "financeiro.html"])
   };
-  const perfilKey = ["gerente chefe", "gerente-chefe", "gerente_chefe"].includes(perfil) ? "gerente chefe" : perfil;
-  const pode = ROTAS_POR_PERFIL[perfilKey] || new Set();
 
-  const frag = document.createDocumentFragment();
-  const currentPage = window.location.pathname.split('/').pop() || 'painel.html';
+  const pode = ROTAS[perfil] || new Set();
+  let html = '';
 
-  GRUPOS.forEach(grupo => {
-    if (grupo.adminOnly && perfilKey !== "admin") return;
+  MENU.forEach(grupo => {
+    if (grupo.adminOnly && !isAdmin) return;
 
-    let permitidos = grupo.itens.filter(([_, href]) => perfilKey === "admin" || pode.has(href));
-
-    // guarda extra: se NÃO for admin, nunca mostrar "dicas-produtos" e "ramos-seguro"
-    if (perfilKey !== "admin") {
-      permitidos = permitidos.filter(([_, href]) => href !== "dicas-produtos.html" && href !== "ramos-seguro.html");
-    }
-
-    if (!permitidos.length) return;
-
-    const h = document.createElement("div");
-    h.className = "nav-group-title mt-4 first:mt-0";
-    h.textContent = grupo.titulo;
-    frag.appendChild(h);
-
-    permitidos.forEach(([label, href, icon]) => {
-      const a = document.createElement("a");
-      a.href = href;
-      a.className = `nav-link ${currentPage === href ? 'active' : ''}`;
-      a.innerHTML = `<span class="nav-icon">${icon}</span><span>${label}</span>`;
-      frag.appendChild(a);
+    let itens = grupo.itens.filter(item => {
+      if (item.roles && !item.roles.includes(perfil) && !isAdmin) return false;
+      return isAdmin || pode.has(item.href);
     });
+
+    if (!itens.length) return;
+
+    html += `<div class="nav-section"><div class="nav-title">${grupo.titulo}</div>`;
+    itens.forEach(item => {
+      const active = currentPage === item.href ? 'active' : '';
+      html += `
+        <a href="${item.href}" class="nav-link ${active}">
+          <span class="nav-icon">
+            <svg class="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${item.icon}"/>
+            </svg>
+          </span>
+          <span>${item.label}</span>
+        </a>
+      `;
+    });
+    html += '</div>';
   });
 
-  nav.appendChild(frag);
-  if (window.innerWidth >= 1024) nav.classList.remove("hidden");
+  nav.innerHTML = html;
+  if (window.innerWidth >= 1024) nav.classList.remove('hidden');
 }
 
-// ==== Helper para queries por perfil (com cache) ====
-async function getDocsPerfil(colName, limitN = 0, forceRefresh = false) {
+// ==== Query Helper com RBAC ====
+async function getDocsPerfil(colName) {
   const cacheKey = colName;
-  const now = Date.now();
-  
-  if (!forceRefresh && CACHE[cacheKey] && (now - CACHE.timestamp) < CACHE_TTL) {
-    return CACHE[cacheKey];
+  if (CACHE.data[cacheKey] && Date.now() - CACHE.timestamp < CACHE_TTL) {
+    return CACHE.data[cacheKey];
   }
 
   const col = db.collection(colName);
   const perfil = CTX.perfil;
   let snaps = [];
 
-  if (perfil === "admin") {
-    snaps = [await (limitN ? col.limit(limitN).get() : col.get())];
-  } else if (perfil === "rm") {
-    snaps = [await (limitN ? col.where("rmUid", "==", CTX.uid).limit(limitN).get()
-                           : col.where("rmUid", "==", CTX.uid).get())];
-  } else if (perfil === "assistente" || perfil === "gerente chefe") {
-    const s1 = await (limitN ? col.where("agenciaId", "==", CTX.agenciaId).limit(limitN).get()
-                             : col.where("agenciaId", "==", CTX.agenciaId).get());
-    let s2 = { forEach: () => {}, empty: true, docs: [] };
-    try {
-      s2 = await (limitN ? col.where("gerenteChefeUid", "==", CTX.uid).limit(limitN).get()
-                         : col.where("gerenteChefeUid", "==", CTX.uid).get());
-    } catch (e) { /* opcional */ }
-    snaps = [s1, s2];
-  } else {
-    snaps = [await (limitN ? col.limit(limitN).get() : col.get())];
+  try {
+    if (perfil === "admin") {
+      snaps = [await col.get()];
+    } else if (perfil === "rm") {
+      // RM vê apenas seus docs
+      const queries = [
+        col.where("rmUid", "==", CTX.uid).get(),
+        col.where("rmId", "==", CTX.uid).get(),
+        col.where("usuarioId", "==", CTX.uid).get(),
+        col.where("criadoPorUid", "==", CTX.uid).get()
+      ];
+      const results = await Promise.allSettled(queries);
+      snaps = results.filter(r => r.status === "fulfilled").map(r => r.value);
+    } else if (isGC(perfil) || perfil === "assistente") {
+      // Gerente Chefe e Assistente veem da agência
+      if (CTX.agenciaId) {
+        snaps = [await col.where("agenciaId", "==", CTX.agenciaId).get()];
+      }
+    }
+  } catch (e) {
+    console.warn(`Query ${colName} falhou:`, e);
   }
 
   const map = new Map();
-  snaps.forEach(s => s.forEach(d => map.set(d.id, d)));
+  snaps.forEach(s => s?.forEach?.(d => map.set(d.id, { id: d.id, ...d.data() })));
   const result = Array.from(map.values());
-  
-  CACHE[cacheKey] = result;
-  CACHE.timestamp = now;
-  
+
+  CACHE.data[cacheKey] = result;
+  CACHE.timestamp = Date.now();
   return result;
 }
 
-// ==== Buscar dados da agência (para comparação) ====
+// Buscar todos da agência (para comparação)
 async function getDocsAgencia(colName) {
-  if (!CTX.agenciaId) return [];
-  
-  const cacheKey = colName + 'Agencia';
-  const now = Date.now();
-  
-  if (CACHE[cacheKey] && (now - CACHE.timestamp) < CACHE_TTL) {
-    return CACHE[cacheKey];
-  }
-
+  if (!CTX.agenciaId || CTX.perfil === "admin") return [];
   try {
     const snap = await db.collection(colName).where("agenciaId", "==", CTX.agenciaId).get();
-    const result = snap.docs.map(d => d.data());
-    CACHE[cacheKey] = result;
-    return result;
-  } catch (e) {
-    console.warn("Erro ao buscar dados da agência:", e);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch {
     return [];
   }
 }
 
-// ==== KPIs (topo) ====
+// ==== KPIs ====
 async function carregarKPIs() {
-  const perfil = CTX.perfil;
   const ano = new Date().getFullYear();
   const iniAno = new Date(ano, 0, 1);
   const fimAno = new Date(ano + 1, 0, 1);
-
-  // rótulos dinâmicos
-  const lblV = document.getElementById("lblVisitas");
-  const lblC = document.getElementById("lblCotacoes");
-  if (lblV) lblV.textContent = (perfil === "gerente chefe" ? "Visitas (ano)" : "Visitas (últ. 30d)");
-  if (lblC) lblC.textContent = (perfil === "gerente chefe" ? "Cotações (ano)" : "Cotações");
+  const perfil = CTX.perfil;
 
   // Empresas
   try {
-    let docs = await getDocsPerfil("empresas");
+    const docs = await getDocsPerfil("empresas");
     animateNumber("kpiEmpresas", docs.length);
-  } catch (e) { console.warn("[KPI Empresas]", e.message); }
+  } catch { }
 
-  // Visitas
+  // Visitas do ANO
+  // Admin: todas | GC: da agência | RM: próprias
   try {
-    let docs = await getDocsPerfil("visitas");
-    if (perfil === "gerente chefe") {
-      docs = docs.filter(d => {
-        const data = toDate(d.data ? d.data() : d)?.data || toDate((d.data ? d.data() : d).data);
-        return data && data >= iniAno && data < fimAno;
-      });
-    } else {
-      const d30 = new Date(); d30.setDate(d30.getDate() - 30);
-      docs = docs.filter(d => {
-        const data = toDate((d.data ? d.data() : d).data);
-        return data && data >= d30;
-      });
-    }
-    animateNumber("kpiVisitas", docs.length);
-  } catch (e) { console.warn("[KPI Visitas]", e.message); }
+    const docs = await getDocsPerfil("agenda_visitas");
+    const visitasAno = docs.filter(d => {
+      const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora) || toDate(d.data);
+      return dt && dt >= iniAno && dt < fimAno;
+    });
+    animateNumber("kpiVisitas", visitasAno.length);
+    document.getElementById("lblVisitas").textContent = "Visitas " + ano;
+  } catch { }
 
   // Cotações
   try {
-    let docs = await getDocsPerfil("cotacoes-gerentes");
-    if (perfil === "gerente chefe") {
-      docs = docs.filter(d => {
-        const dd = d.data ? d.data() : d;
-        const dt = toDate(dd.dataCriacao) || toDate(dd.data);
-        return dt && dt >= iniAno && dt < fimAno;
-      });
-    }
+    const docs = await getDocsPerfil("cotacoes-gerentes");
     animateNumber("kpiCotacoes", docs.length);
-  } catch (e) { console.warn("[KPI Cotações]", e.message); }
+  } catch { }
 
-  // Produção (emissão)
+  // Produção do ANO
   try {
-    let docs = await getDocsPerfil("cotacoes-gerentes");
+    const docs = await getDocsPerfil("cotacoes-gerentes");
     let total = 0;
-    docs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
+    docs.forEach(d => {
       const st = normalizar(d.status || "");
-      const dt = toDate(d.dataCriacao) || toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || new Date(0);
-      if (st === "negocio emitido" && dt >= iniAno && dt < fimAno) {
-        const v = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
-        total += parseValor(v);
+      const dt = toDate(d.dataCriacao) || toDate(d.vigenciaInicial);
+      if (st === "negocio emitido" && dt && dt >= iniAno && dt < fimAno) {
+        total += parseValor(d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0);
       }
     });
     document.getElementById("kpiProducao").textContent = fmtBRLShort(total);
-  } catch (e) { console.warn("[KPI Produção]", e.message); }
+  } catch { }
 }
 
-// Animação de números
-function animateNumber(elementId, target, duration = 800) {
-  const el = document.getElementById(elementId);
+function animateNumber(id, target) {
+  const el = document.getElementById(id);
   if (!el) return;
-  
-  const start = 0;
-  const startTime = performance.now();
-  
-  function update(currentTime) {
-    const elapsed = currentTime - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    const easeOut = 1 - Math.pow(1 - progress, 3);
-    const current = Math.floor(start + (target - start) * easeOut);
-    el.textContent = current.toLocaleString('pt-BR');
-    
-    if (progress < 1) {
-      requestAnimationFrame(update);
-    }
+  const duration = 600;
+  const start = performance.now();
+
+  function update(now) {
+    const progress = Math.min((now - start) / duration, 1);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.floor(target * ease).toLocaleString('pt-BR');
+    if (progress < 1) requestAnimationFrame(update);
   }
-  
   requestAnimationFrame(update);
 }
 
-// ==== Gráficos ====
+// ==== Gráfico Status ====
 let chartStatus = null;
 
-async function carregarGraficos() {
+async function carregarGraficoStatus() {
   try {
     const docs = await getDocsPerfil("cotacoes-gerentes");
     const statusCount = {};
-    
-    docs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
-      const status = d.status || "Sem status";
-      statusCount[status] = (statusCount[status] || 0) + 1;
+
+    docs.forEach(d => {
+      const st = d.status || "Sem status";
+      statusCount[st] = (statusCount[st] || 0) + 1;
     });
 
     const labels = Object.keys(statusCount);
     const data = Object.values(statusCount);
-    
-    // Cores por status
+
     const cores = labels.map(s => {
       const st = normalizar(s);
       if (st.includes("emitido")) return '#10b981';
@@ -463,68 +365,58 @@ async function carregarGraficos() {
     if (!ctx) return;
 
     if (chartStatus) chartStatus.destroy();
-    
+
     chartStatus = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: labels,
-        datasets: [{
-          data: data,
-          backgroundColor: cores,
-          borderWidth: 0,
-          hoverOffset: 8
-        }]
+        labels,
+        datasets: [{ data, backgroundColor: cores, borderWidth: 0, hoverOffset: 6 }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: '65%',
+        cutout: '70%',
         plugins: {
           legend: {
             position: 'right',
             labels: {
               usePointStyle: true,
               pointStyle: 'circle',
-              padding: 15,
-              font: { family: 'DM Sans', size: 11 }
+              padding: 12,
+              font: { family: 'Plus Jakarta Sans', size: 11 }
             }
           }
         }
       }
     });
   } catch (e) {
-    console.warn("[Gráfico Status]", e.message);
+    console.warn("[Gráfico]", e);
   }
 }
 
 // ==== Comparações (Você vs Agência) ====
 async function carregarComparacoes() {
+  const card = document.getElementById("cardComparacao");
   if (CTX.perfil === "admin") {
-    // Admin vê dados gerais, não faz sentido "você vs agência"
-    document.querySelector('.card:has(#compCotacoesVoce)')?.classList.add('hidden');
+    card?.classList.add('hidden');
     return;
   }
 
-  const mesAtual = new Date();
-  const iniMes = new Date(mesAtual.getFullYear(), mesAtual.getMonth(), 1);
-  const fimMes = new Date(mesAtual.getFullYear(), mesAtual.getMonth() + 1, 0, 23, 59, 59);
+  const agora = new Date();
+  const iniMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
+  const fimMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59);
 
   try {
-    // Dados do usuário
+    // Meus dados
     const meusDocs = await getDocsPerfil("cotacoes-gerentes");
-    const meusDocsNoMes = meusDocs.filter(doc => {
-      const d = doc.data ? doc.data() : doc;
+    const meusNoMes = meusDocs.filter(d => {
       const dt = toDate(d.dataCriacao);
       return dt && dt >= iniMes && dt <= fimMes;
     });
-    
-    // Minhas cotações no mês
-    const minhasCotacoes = meusDocsNoMes.length;
-    
-    // Minha produção (emitidos)
+
+    const minhasCotacoes = meusNoMes.length;
     let minhaProducao = 0;
-    meusDocs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
+    meusDocs.forEach(d => {
       const st = normalizar(d.status || "");
       const dt = toDate(d.dataCriacao);
       if (st === "negocio emitido" && dt && dt >= iniMes && dt <= fimMes) {
@@ -532,15 +424,14 @@ async function carregarComparacoes() {
       }
     });
 
-    // Dados da agência (todos os gerentes)
+    // Dados da agência
     const docsAgencia = await getDocsAgencia("cotacoes-gerentes");
-    const docsAgenciaMes = docsAgencia.filter(d => {
+    const agenciaMes = docsAgencia.filter(d => {
       const dt = toDate(d.dataCriacao);
       return dt && dt >= iniMes && dt <= fimMes;
     });
-    
-    const cotacoesAgencia = docsAgenciaMes.length;
-    
+
+    const cotacoesAgencia = agenciaMes.length;
     let producaoAgencia = 0;
     docsAgencia.forEach(d => {
       const st = normalizar(d.status || "");
@@ -550,83 +441,66 @@ async function carregarComparacoes() {
       }
     });
 
-    // Atualizar UI - Cotações
+    // Atualizar UI
     document.getElementById("compCotacoesVoce").textContent = minhasCotacoes;
     document.getElementById("compCotacoesAgencia").textContent = cotacoesAgencia;
-    const percCotacoes = cotacoesAgencia > 0 ? (minhasCotacoes / cotacoesAgencia) * 100 : 0;
-    document.getElementById("barCotacoesVoce").style.width = `${Math.min(percCotacoes, 100)}%`;
+    const pCot = cotacoesAgencia > 0 ? (minhasCotacoes / cotacoesAgencia) * 100 : 0;
+    document.getElementById("barCotacoesVoce").style.width = Math.min(pCot, 100) + '%';
 
-    // Atualizar UI - Produção
     document.getElementById("compProducaoVoce").textContent = fmtBRLShort(minhaProducao);
     document.getElementById("compProducaoAgencia").textContent = fmtBRLShort(producaoAgencia);
-    const percProducao = producaoAgencia > 0 ? (minhaProducao / producaoAgencia) * 100 : 0;
-    document.getElementById("barProducaoVoce").style.width = `${Math.min(percProducao, 100)}%`;
+    const pProd = producaoAgencia > 0 ? (minhaProducao / producaoAgencia) * 100 : 0;
+    document.getElementById("barProducaoVoce").style.width = Math.min(pProd, 100) + '%';
 
-    // Produção por Ramo
-    const ramosProd = {};
-    meusDocs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
-      const st = normalizar(d.status || "");
-      if (st === "negocio emitido") {
-        const ramo = d.ramo || "Outros";
-        const valor = parseValor(d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0);
-        ramosProd[ramo] = (ramosProd[ramo] || 0) + valor;
-      }
+    // Cotações por Ramo (VALOR, não quantidade)
+    const ramoValor = {};
+    meusDocs.forEach(d => {
+      const ramo = d.ramo || "Outros";
+      const valor = parseValor(d.valorFinal ?? d.valorDesejado ?? d.premio ?? 0);
+      ramoValor[ramo] = (ramoValor[ramo] || 0) + valor;
     });
 
-    const ramosDiv = document.getElementById("producaoRamos");
-    if (ramosDiv) {
-      const entries = Object.entries(ramosProd).sort((a, b) => b[1] - a[1]).slice(0, 5);
-      if (entries.length === 0) {
-        ramosDiv.innerHTML = '<div class="text-slate-400 text-sm">Nenhuma produção registrada</div>';
-      } else {
-        const maxVal = entries[0][1];
-        ramosDiv.innerHTML = entries.map(([ramo, valor]) => {
-          const perc = maxVal > 0 ? (valor / maxVal) * 100 : 0;
-          return `
-            <div class="flex items-center gap-3">
-              <div class="w-24 text-xs text-slate-600 truncate">${ramo}</div>
-              <div class="flex-1 comparison-bar">
-                <div class="fill you" style="width: ${perc}%"></div>
-              </div>
-              <div class="text-xs font-semibold text-slate-700 w-20 text-right">${fmtBRLShort(valor)}</div>
-            </div>
-          `;
-        }).join('');
-      }
+    const ramosDiv = document.getElementById("cotacoesRamos");
+    const entries = Object.entries(ramoValor).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    if (!entries.length) {
+      ramosDiv.innerHTML = '<div class="text-slate-400 text-xs">Nenhuma cotação</div>';
+    } else {
+      const max = entries[0][1];
+      ramosDiv.innerHTML = entries.map(([ramo, valor]) => `
+        <div class="flex items-center gap-2">
+          <div class="w-20 text-xs text-slate-500 truncate">${ramo}</div>
+          <div class="flex-1 progress-bar">
+            <div class="progress-fill bg-gradient-to-r from-violet-500 to-violet-400" style="width:${max > 0 ? (valor / max) * 100 : 0}%"></div>
+          </div>
+          <div class="text-xs font-semibold text-slate-700 w-16 text-right">${fmtBRLShort(valor)}</div>
+        </div>
+      `).join('');
     }
   } catch (e) {
-    console.warn("[Comparações]", e.message);
+    console.warn("[Comparações]", e);
   }
 }
 
 // ==== Feed de Movimentações ====
-async function carregarFeedMovimentacoes() {
+async function carregarFeed() {
   const container = document.getElementById("feedMovimentacoes");
   if (!container) return;
 
   try {
     const docs = await getDocsPerfil("cotacoes-gerentes");
-    
-    // Pegar as últimas 5 cotações com interações
     const comInteracoes = [];
-    
-    docs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
+
+    docs.forEach(d => {
       const interacoes = d.interacoes || [];
-      
-      if (interacoes.length > 0) {
-        // Pegar a última interação
+      if (interacoes.length) {
         const ultima = [...interacoes].sort((a, b) => {
-          const dtA = toDate(a.dataHora) || new Date(0);
-          const dtB = toDate(b.dataHora) || new Date(0);
-          return dtB - dtA;
+          return (toDate(b.dataHora) || 0) - (toDate(a.dataHora) || 0);
         })[0];
-        
+
         comInteracoes.push({
-          id: doc.id || d.id,
+          id: d.id,
           empresaNome: d.empresaNome || "Empresa",
-          ramo: d.ramo || "-",
           status: d.status || "-",
           ultimaInteracao: ultima,
           dataInteracao: toDate(ultima.dataHora)
@@ -634,319 +508,298 @@ async function carregarFeedMovimentacoes() {
       }
     });
 
-    // Ordenar por data da última interação
     comInteracoes.sort((a, b) => (b.dataInteracao || 0) - (a.dataInteracao || 0));
-    
     const ultimas = comInteracoes.slice(0, 5);
 
-    if (ultimas.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-state-icon">💬</div>
-          <div class="text-sm">Nenhuma movimentação recente</div>
-        </div>
-      `;
+    if (!ultimas.length) {
+      container.innerHTML = '<div class="empty-state"><div class="text-sm">Nenhuma movimentação</div></div>';
       return;
     }
 
     container.innerHTML = ultimas.map(item => {
-      const tipo = item.ultimaInteracao.tipo || "observacao";
-      const cardClass = tipo === "mudanca_status" ? "pending" : "new";
-      const badge = getBadgeStatus(item.status);
-      
+      const badge = getBadge(item.status);
+      const indicador = item.ultimaInteracao.tipo === "mudanca_status" ? "bg-amber-500" : "bg-emerald-500";
+
       return `
-        <a href="chat-cotacao.html?id=${item.id}" class="msg-card ${cardClass} block">
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-1">
-                <span class="font-semibold text-brand-800 truncate">${item.empresaNome}</span>
-                <span class="${badge.class}">${item.status}</span>
-              </div>
-              <div class="text-sm text-slate-600 line-clamp-2">
-                ${item.ultimaInteracao.mensagem || "Sem mensagem"}
-              </div>
-              <div class="flex items-center gap-2 mt-2 text-xs text-slate-400">
-                <span>${item.ultimaInteracao.autorNome || "Usuário"}</span>
-                <span>•</span>
-                <span>${fmtDataHora(item.dataInteracao)}</span>
-              </div>
+        <a href="chat-cotacao.html?id=${item.id}" class="activity-card block">
+          <div class="activity-indicator ${indicador}"></div>
+          <div class="pl-2">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="font-semibold text-slate-800 text-sm truncate">${item.empresaNome}</span>
+              <span class="${badge}">${item.status}</span>
             </div>
-            <div class="text-slate-400 text-lg">→</div>
+            <div class="text-xs text-slate-500 line-clamp-1">${item.ultimaInteracao.mensagem || "-"}</div>
+            <div class="text-[10px] text-slate-400 mt-1">${item.ultimaInteracao.autorNome || ""} • ${fmtDataHora(item.dataInteracao)}</div>
           </div>
         </a>
       `;
     }).join('');
   } catch (e) {
-    console.warn("[Feed Movimentações]", e.message);
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon">⚠️</div>
-        <div class="text-sm">Erro ao carregar movimentações</div>
-      </div>
-    `;
+    console.warn("[Feed]", e);
+    container.innerHTML = '<div class="empty-state text-sm">Erro ao carregar</div>';
   }
 }
 
-function getBadgeStatus(status) {
+function getBadge(status) {
   const st = normalizar(status);
-  if (st.includes("emitido")) return { class: "badge badge-success" };
-  if (st.includes("fechado")) return { class: "badge badge-success" };
-  if (st.includes("pendente")) return { class: "badge badge-warning" };
-  if (st.includes("recusado")) return { class: "badge badge-danger" };
-  if (st.includes("iniciado")) return { class: "badge badge-info" };
-  if (st.includes("emissao")) return { class: "badge badge-info" };
-  return { class: "badge badge-muted" };
+  if (st.includes("emitido") || st.includes("fechado")) return "badge badge-success";
+  if (st.includes("pendente")) return "badge badge-warning";
+  if (st.includes("recusado")) return "badge badge-danger";
+  if (st.includes("iniciado") || st.includes("emissao")) return "badge badge-info";
+  return "badge badge-muted";
 }
 
-// ==== Painel: listas ====
-async function carregarResumoPainel() {
-  skeleton("listaVisitasAgendadas", 3);
-  skeleton("listaVisitas", 3);
-  skeleton("listaProducao", 3);
-  skeleton("listaCotacoes", 3);
+// ==== Próximos Vencimentos ====
+async function carregarVencimentos() {
+  const container = document.getElementById("listaVencimentos");
+  if (!container) return;
 
-  await Promise.all([
-    blocoVisitasAgendadas(),
-    blocoMinhasVisitas(),
-    blocoProducao(),
-    blocoMinhasCotacoes()
-  ]);
-}
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+  const iniMes = new Date(anoAtual, mesAtual, 1);
+  const fimProxMes = new Date(anoAtual, mesAtual + 2, 0, 23, 59, 59);
 
-// 1) Visitas Agendadas
-async function blocoVisitasAgendadas() {
-  const now = Date.now();
-  const docs = await getDocsPerfil("agenda_visitas");
-  const futuros = [];
+  try {
+    // Buscar cotações emitidas com fim de vigência
+    const docs = await getDocsPerfil("cotacoes-gerentes");
+    const vencimentos = [];
 
-  docs.forEach(doc => {
-    const d = doc.data ? doc.data() : doc;
-    const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
-    if (dt && !isNaN(dt) && dt.getTime() >= now) futuros.push({ ...d, dt });
-  });
-  futuros.sort((a, b) => a.dt - b.dt);
+    docs.forEach(d => {
+      const st = normalizar(d.status || "");
+      if (st !== "negocio emitido") return;
 
-  let arr = futuros.slice(0, 5);
-  if (arr.length === 0) {
-    const limite = now - 20 * 24 * 60 * 60 * 1000;
-    const recentes = [];
-    docs.forEach(doc => {
-      const d = doc.data ? doc.data() : doc;
-      const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
-      if (dt && !isNaN(dt) && dt.getTime() >= limite) recentes.push({ ...d, dt });
+      const fimVig = toDate(d.fimVigencia) || toDate(d.vigenciaFinal);
+      if (!fimVig) return;
+
+      if (fimVig >= iniMes && fimVig <= fimProxMes) {
+        vencimentos.push({
+          id: d.id,
+          empresaNome: d.empresaNome || "Empresa",
+          ramo: d.ramo || "-",
+          fimVigencia: fimVig,
+          valor: parseValor(d.valorFinal ?? d.premio ?? d.valorDesejado ?? 0)
+        });
+      }
     });
-    recentes.sort((a, b) => a.dt - b.dt);
-    arr = recentes.slice(0, 5);
+
+    // Também buscar de visitas (ramos com vencimento)
+    const visitas = await getDocsPerfil("visitas");
+    visitas.forEach(v => {
+      const ramos = v.ramos || {};
+      Object.entries(ramos).forEach(([key, item]) => {
+        const fimVig = toDate(item.vencimento) || toDate(item.fimVigencia);
+        if (!fimVig) return;
+
+        if (fimVig >= iniMes && fimVig <= fimProxMes) {
+          vencimentos.push({
+            id: v.id,
+            empresaNome: v.empresaNome || v.empresa || "Empresa",
+            ramo: key.replace(/_/g, " ").toUpperCase(),
+            fimVigencia: fimVig,
+            valor: parseValor(item.premio ?? 0),
+            origem: "visita"
+          });
+        }
+      });
+    });
+
+    vencimentos.sort((a, b) => a.fimVigencia - b.fimVigencia);
+
+    if (!vencimentos.length) {
+      container.innerHTML = '<div class="empty-state py-8"><div class="text-sm">Nenhum vencimento próximo</div></div>';
+      return;
+    }
+
+    container.innerHTML = vencimentos.slice(0, 10).map(v => {
+      const diasRestantes = Math.ceil((v.fimVigencia - agora) / (1000 * 60 * 60 * 24));
+      const urgencia = diasRestantes <= 7 ? 'border-red-200 bg-red-50' :
+                       diasRestantes <= 30 ? 'border-amber-200 bg-amber-50' :
+                       'border-slate-200 bg-white';
+      const textUrgencia = diasRestantes <= 7 ? 'text-red-600' :
+                           diasRestantes <= 30 ? 'text-amber-600' : 'text-slate-600';
+
+      return `
+        <div class="scroll-item card ${urgencia} p-4">
+          <div class="font-semibold text-slate-800 text-sm truncate mb-1">${v.empresaNome}</div>
+          <div class="text-xs text-slate-500 mb-2">${v.ramo}</div>
+          <div class="flex items-center justify-between">
+            <span class="text-xs ${textUrgencia} font-semibold">${fmtData(v.fimVigencia)}</span>
+            <span class="text-xs font-bold text-slate-700">${fmtBRLShort(v.valor)}</span>
+          </div>
+          <div class="text-[10px] ${textUrgencia} mt-1">${diasRestantes > 0 ? `${diasRestantes} dias` : 'Vencido!'}</div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    console.warn("[Vencimentos]", e);
+    container.innerHTML = '<div class="empty-state text-sm">Erro ao carregar</div>';
   }
-
-  document.getElementById("qtdVA").textContent = String(arr.length);
-
-  const ul = document.getElementById("listaVisitasAgendadas");
-  if (!ul) return;
-  
-  if (arr.length === 0) {
-    ul.innerHTML = `
-      <li class="empty-state py-6">
-        <div class="empty-state-icon">📅</div>
-        <div class="text-sm">Nenhuma visita agendada</div>
-      </li>
-    `;
-    return;
-  }
-
-  ul.innerHTML = arr.map(v => `
-    <li class="row-item">
-      <div class="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center text-sm flex-shrink-0">
-        📅
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="font-semibold text-brand-800 truncate">${v.empresaNome || v.empresa || "-"}</div>
-        <div class="text-xs text-slate-500">${fmtData(v.dt)} às ${fmtHora(v.dt)} • ${v.tipo || "-"}</div>
-      </div>
-      <div class="text-xs text-slate-400">${v.rmNome || v.rm || ""}</div>
-    </li>
-  `).join('');
 }
 
-// 2) Minhas Visitas (últimas 5)
-async function blocoMinhasVisitas() {
-  const docs = await getDocsPerfil("visitas");
-  const ul = document.getElementById("listaVisitas");
-  if (!ul) return;
+// ==== Agenda ====
+async function carregarAgenda() {
+  const container = document.getElementById("listaVisitasAgendadas");
+  if (!container) return;
 
-  if (!docs.length) {
-    ul.innerHTML = `
-      <li class="empty-state py-6">
-        <div class="empty-state-icon">📌</div>
-        <div class="text-sm">Nenhuma visita registrada</div>
-      </li>
-    `;
-    return;
-  }
+  try {
+    const docs = await getDocsPerfil("agenda_visitas");
+    const agora = Date.now();
+    const futuras = [];
 
-  const cacheEmp = new Map();
-  const getEmpresaNome = async (id, fb) => {
-    if (fb) return fb;
-    if (!id) return "-";
-    if (cacheEmp.has(id)) return cacheEmp.get(id);
-    const dd = await db.collection("empresas").doc(id).get();
-    const nome = dd.exists ? (dd.data().nome || dd.data().razaoSocial || "-") : "-";
-    cacheEmp.set(id, nome);
-    return nome;
-  };
+    docs.forEach(d => {
+      const dt = toDate(d.dataHoraTs) || toDate(d.dataHoraStr) || toDate(d.dataHora);
+      if (dt && dt.getTime() >= agora) {
+        futuras.push({ ...d, dt });
+      }
+    });
 
-  const ord = (x) => toDate((x.data ? x.data() : x).data) || new Date(0);
-  const last5 = docs.sort((a, b) => ord(b) - ord(a)).slice(0, 5);
+    futuras.sort((a, b) => a.dt - b.dt);
+    const lista = futuras.slice(0, 5);
 
-  const items = [];
-  for (const doc of last5) {
-    const v = doc.data ? doc.data() : doc;
-    const dt = toDate(v.data);
-    const nomeEmp = await getEmpresaNome(v.empresaId, v.empresaNome);
-    items.push({ nomeEmp, dt, tipo: v.tipo });
-  }
+    document.getElementById("qtdVA").textContent = lista.length;
 
-  ul.innerHTML = items.map(item => `
-    <li class="row-item">
-      <div class="w-10 h-10 rounded-xl bg-teal-100 flex items-center justify-center text-sm flex-shrink-0">
-        📌
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="font-semibold text-brand-800 truncate">${item.nomeEmp}</div>
-        <div class="text-xs text-slate-500">${fmtData(item.dt)}${item.tipo ? " • " + item.tipo : ""}</div>
-      </div>
-    </li>
-  `).join('');
-}
+    if (!lista.length) {
+      container.innerHTML = '<li class="empty-state py-4"><div class="text-sm">Nenhuma visita agendada</div></li>';
+      return;
+    }
 
-// 3) Produção (emitidos)
-async function blocoProducao() {
-  const docs = await getDocsPerfil("cotacoes-gerentes");
-  const ul = document.getElementById("listaProducao");
-  if (!ul) return;
-
-  const emitidos = [];
-  docs.forEach(doc => {
-    const d = doc.data ? doc.data() : doc;
-    const st = normalizar(d.status || "");
-    if (st === "negocio emitido") emitidos.push(d);
-  });
-
-  if (!emitidos.length) {
-    ul.innerHTML = `
-      <li class="empty-state py-6">
-        <div class="empty-state-icon">📈</div>
-        <div class="text-sm">Nenhum negócio emitido</div>
-      </li>
-    `;
-    return;
-  }
-
-  emitidos.sort((a, b) => (toDate(b.dataCriacao) || 0) - (toDate(a.dataCriacao) || 0));
-  
-  ul.innerHTML = emitidos.slice(0, 5).map(d => {
-    const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
-    const vIni = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
-    const inicio = vIni ? `Início: ${fmtData(vIni)}` : "";
-    
-    return `
-      <li class="row-item">
-        <div class="w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center text-sm flex-shrink-0">
-          💰
+    container.innerHTML = lista.map(v => `
+      <li class="list-item">
+        <div class="icon-box bg-blue-100 text-blue-600">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
         </div>
         <div class="flex-1 min-w-0">
-          <div class="font-semibold text-brand-800 truncate">${d.empresaNome || "Empresa"}</div>
-          <div class="text-xs text-slate-500">${d.ramo || "Ramo"}${inicio ? " • " + inicio : ""}</div>
+          <div class="font-semibold text-slate-800 text-sm truncate">${v.empresaNome || v.empresa || "-"}</div>
+          <div class="text-xs text-slate-500">${fmtData(v.dt)} às ${fmtHora(v.dt)}</div>
         </div>
-        <div class="text-sm font-semibold text-green-600">${fmtBRLShort(valor)}</div>
       </li>
-    `;
-  }).join('');
-}
-
-// 4) Minhas Cotações
-async function blocoMinhasCotacoes() {
-  let docs = await getDocsPerfil("cotacoes-gerentes");
-  const ul = document.getElementById("listaCotacoes");
-  if (!ul) return;
-
-  if (!docs.length) {
-    ul.innerHTML = `
-      <li class="empty-state py-6">
-        <div class="empty-state-icon">📋</div>
-        <div class="text-sm">Nenhuma cotação encontrada</div>
-      </li>
-    `;
-    return;
+    `).join('');
+  } catch (e) {
+    console.warn("[Agenda]", e);
   }
-
-  const ord = (x) => {
-    const d = x.data ? x.data() : x;
-    return toDate(d.ultimaAtualizacao) || toDate(d.atualizadoEm) ||
-           toDate(d.dataCriacao) || toDate(d.data) || new Date(0);
-  };
-  docs = docs.sort((a, b) => ord(b) - ord(a)).slice(0, 5);
-
-  ul.innerHTML = docs.map(x => {
-    const d = x.data ? x.data() : x;
-    const valor = d.valorFinal ?? d.valorDesejado ?? d.premio ?? 0;
-    const badge = getBadgeStatus(d.status);
-    
-    return `
-      <li class="row-item">
-        <div class="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-sm flex-shrink-0">
-          📋
-        </div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 mb-0.5">
-            <span class="font-semibold text-brand-800 truncate">${d.empresaNome || "Empresa"}</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-slate-500">${d.ramo || "Ramo"}</span>
-            <span class="${badge.class} text-[10px]">${d.status || "-"}</span>
-          </div>
-        </div>
-        <div class="text-sm font-semibold text-slate-600">${fmtBRLShort(valor)}</div>
-      </li>
-    `;
-  }).join('');
 }
 
-// ==== Drawer Mobile (animação) ====
-function initDrawerMobile() {
+// ==== Produção ====
+async function carregarProducao() {
+  const container = document.getElementById("listaProducao");
+  if (!container) return;
+
+  try {
+    const docs = await getDocsPerfil("cotacoes-gerentes");
+    const emitidos = docs.filter(d => normalizar(d.status || "") === "negocio emitido");
+
+    emitidos.sort((a, b) => (toDate(b.dataCriacao) || 0) - (toDate(a.dataCriacao) || 0));
+
+    if (!emitidos.length) {
+      container.innerHTML = '<li class="empty-state py-4"><div class="text-sm">Nenhum negócio emitido</div></li>';
+      return;
+    }
+
+    container.innerHTML = emitidos.slice(0, 5).map(d => {
+      const valor = parseValor(d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0);
+      return `
+        <li class="list-item">
+          <div class="icon-box bg-green-100 text-green-600">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-slate-800 text-sm truncate">${d.empresaNome || "Empresa"}</div>
+            <div class="text-xs text-slate-500">${d.ramo || "-"}</div>
+          </div>
+          <div class="text-sm font-bold text-green-600">${fmtBRLShort(valor)}</div>
+        </li>
+      `;
+    }).join('');
+  } catch (e) {
+    console.warn("[Produção]", e);
+  }
+}
+
+// ==== Cotações ====
+async function carregarCotacoes() {
+  const container = document.getElementById("listaCotacoes");
+  if (!container) return;
+
+  try {
+    const docs = await getDocsPerfil("cotacoes-gerentes");
+
+    docs.sort((a, b) => {
+      const dtA = toDate(a.ultimaAtualizacao) || toDate(a.dataCriacao) || 0;
+      const dtB = toDate(b.ultimaAtualizacao) || toDate(b.dataCriacao) || 0;
+      return dtB - dtA;
+    });
+
+    if (!docs.length) {
+      container.innerHTML = '<li class="empty-state py-4"><div class="text-sm">Nenhuma cotação</div></li>';
+      return;
+    }
+
+    container.innerHTML = docs.slice(0, 5).map(d => {
+      const valor = parseValor(d.valorFinal ?? d.valorDesejado ?? d.premio ?? 0);
+      const badge = getBadge(d.status);
+      return `
+        <li class="list-item">
+          <div class="icon-box bg-amber-100 text-amber-600">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-0.5">
+              <span class="font-semibold text-slate-800 text-sm truncate">${d.empresaNome || "Empresa"}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-slate-500">${d.ramo || "-"}</span>
+              <span class="${badge} text-[10px]">${d.status || "-"}</span>
+            </div>
+          </div>
+          <div class="text-sm font-semibold text-slate-600">${fmtBRLShort(valor)}</div>
+        </li>
+      `;
+    }).join('');
+  } catch (e) {
+    console.warn("[Cotações]", e);
+  }
+}
+
+// ==== Drawer Mobile ====
+function initDrawer() {
   const nav = document.getElementById('menuNav');
-  const body = document.body;
   const overlay = document.getElementById('sidebarOverlay');
   const fabMenu = document.getElementById('fabMenu');
-
   if (!nav || !overlay) return;
 
-  const openNav = () => {
+  const open = () => {
     if (window.innerWidth >= 1024) return;
     nav.classList.remove('hidden');
     overlay.classList.add('show');
-    body.classList.add('overflow-hidden');
+    document.body.classList.add('overflow-hidden');
   };
 
-  const closeNav = () => {
+  const close = () => {
     if (window.innerWidth >= 1024) return;
     nav.classList.add('hidden');
     overlay.classList.remove('show');
-    body.classList.remove('overflow-hidden');
+    document.body.classList.remove('overflow-hidden');
   };
 
-  fabMenu?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openNav(); });
-  overlay.addEventListener('click', closeNav);
-  
-  document.addEventListener('click', (e) => {
+  fabMenu?.addEventListener('click', e => { e.preventDefault(); open(); });
+  overlay.addEventListener('click', close);
+
+  document.addEventListener('click', e => {
     if (window.innerWidth >= 1024) return;
-    if (!nav.contains(e.target) && !fabMenu?.contains(e.target)) closeNav();
+    if (!nav.contains(e.target) && !fabMenu?.contains(e.target)) close();
   });
-  
+
   window.addEventListener('resize', () => {
     if (window.innerWidth >= 1024) {
       overlay.classList.remove('show');
-      body.classList.remove('overflow-hidden');
+      document.body.classList.remove('overflow-hidden');
       nav.classList.remove('hidden');
     } else {
       nav.classList.add('hidden');
@@ -954,50 +807,52 @@ function initDrawerMobile() {
   });
 }
 
-// ==== Troca de senha ====
-(function initTrocaSenha() {
-  const abrir = document.getElementById("abrirTrocaSenha");
-  const fechar = document.getElementById("fecharTrocaSenha");
+// ==== Modal Troca Senha ====
+function initModal() {
   const modal = document.getElementById("modalTrocaSenha");
   const form = document.getElementById("formTrocarSenha");
+  const abrir = document.getElementById("abrirTrocaSenha");
+  const fechar = document.getElementById("fecharTrocaSenha");
+  const overlay = document.getElementById("modalOverlay");
   const erroEl = document.getElementById("trocaErro");
   const infoEl = document.getElementById("trocaInfo");
 
-  if (!abrir || !fechar || !modal || !form) return;
+  if (!modal || !form) return;
 
   const abrirModal = () => {
-    if (erroEl) erroEl.textContent = "";
-    if (infoEl) infoEl.textContent = "";
+    erroEl && (erroEl.textContent = "");
+    infoEl && (infoEl.textContent = "");
     form.reset();
-    modal.classList.remove("hidden");
+    modal.classList.add("show");
   };
-  const fecharModal = () => { modal.classList.add("hidden"); };
 
-  abrir.addEventListener("click", abrirModal);
-  fechar.addEventListener("click", fecharModal);
-  modal.addEventListener("click", (e) => { if (e.target === modal) fecharModal(); });
+  const fecharModal = () => modal.classList.remove("show");
+
+  abrir?.addEventListener("click", abrirModal);
+  fechar?.addEventListener("click", fecharModal);
+  overlay?.addEventListener("click", fecharModal);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    if (erroEl) erroEl.textContent = "";
-    if (infoEl) infoEl.textContent = "";
+    erroEl && (erroEl.textContent = "");
+    infoEl && (infoEl.textContent = "");
 
     const senhaAtual = document.getElementById("senhaAtual").value.trim();
     const novaSenha = document.getElementById("novaSenha").value.trim();
     const novaSenha2 = document.getElementById("novaSenha2").value.trim();
 
     if (novaSenha !== novaSenha2) {
-      if (erroEl) erroEl.textContent = "As senhas novas não conferem.";
+      erroEl && (erroEl.textContent = "As senhas não conferem.");
       return;
     }
     if (novaSenha.length < 6) {
-      if (erroEl) erroEl.textContent = "A nova senha deve ter pelo menos 6 caracteres.";
+      erroEl && (erroEl.textContent = "Mínimo 6 caracteres.");
       return;
     }
 
     const user = auth.currentUser;
-    if (!user || !user.email) {
-      if (erroEl) erroEl.textContent = "Você precisa estar logado.";
+    if (!user?.email) {
+      erroEl && (erroEl.textContent = "Não autenticado.");
       return;
     }
 
@@ -1005,14 +860,13 @@ function initDrawerMobile() {
       const cred = firebase.auth.EmailAuthProvider.credential(user.email, senhaAtual);
       await user.reauthenticateWithCredential(cred);
       await user.updatePassword(novaSenha);
-
-      if (infoEl) infoEl.textContent = "Senha atualizada com sucesso! Saindo...";
-      setTimeout(() => { auth.signOut().then(() => location.href = "login.html"); }, 1200);
+      infoEl && (infoEl.textContent = "Senha atualizada!");
+      setTimeout(() => auth.signOut().then(() => location.href = "login.html"), 1500);
     } catch (err) {
-      if (erroEl) erroEl.textContent = err?.message || "Erro ao trocar senha.";
+      erroEl && (erroEl.textContent = err?.message || "Erro.");
     }
   });
-})();
+}
 
 // ==== Start ====
 initAuth();
