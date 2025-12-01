@@ -277,11 +277,20 @@ async function carregarRamos() {
   try {
     const snap = await db.collection("ramos-seguro").get();
     RAMOS = [];
+    
     snap.forEach(doc => {
       const d = doc.data();
-      RAMOS.push(d.nome || doc.id);
+      // Usar nomeExibicao se existir, senão usar campo ou doc.id
+      const nomeExibicao = d.nomeExibicao || d.nome || d.campo || doc.id;
+      RAMOS.push({
+        id: doc.id,
+        campo: d.campo || doc.id,
+        nomeExibicao: nomeExibicao
+      });
     });
-    RAMOS.sort();
+    
+    // Ordenar por nomeExibicao
+    RAMOS.sort((a, b) => a.nomeExibicao.localeCompare(b.nomeExibicao));
     
     // Preencher selects
     const selNova = $("novaRamo");
@@ -289,11 +298,11 @@ async function carregarRamos() {
     
     if (selNova) {
       selNova.innerHTML = '<option value="">Selecione o ramo</option>';
-      RAMOS.forEach(r => selNova.innerHTML += `<option value="${r}">${r}</option>`);
+      RAMOS.forEach(r => selNova.innerHTML += `<option value="${r.nomeExibicao}">${r.nomeExibicao}</option>`);
     }
     if (selFiltro) {
       selFiltro.innerHTML = '<option value="">Todos</option>';
-      RAMOS.forEach(r => selFiltro.innerHTML += `<option value="${r}">${r}</option>`);
+      RAMOS.forEach(r => selFiltro.innerHTML += `<option value="${r.nomeExibicao}">${r.nomeExibicao}</option>`);
     }
   } catch (e) { console.warn("Erro ramos:", e); }
 }
@@ -555,10 +564,14 @@ function aplicarFiltros() {
   const dataInicio = $("filtroDataInicio")?.value ? new Date($("filtroDataInicio").value + "T00:00:00") : null;
   const dataFim = $("filtroDataFim")?.value ? new Date($("filtroDataFim").value + "T23:59:59") : null;
   
+  // Normalizar ramo para comparação
+  const ramoNorm = normalizar(ramo);
+  
   COTACOES_FILTRADAS = COTACOES.filter(c => {
     if (empresa && !normalizar(c._empresaNome).includes(empresa)) return false;
     if (status && c._status !== status) return false;
-    if (ramo && c._ramo !== ramo) return false;
+    // Comparar ramo de forma flexível (normalizado)
+    if (ramo && normalizar(c._ramo) !== ramoNorm) return false;
     if (temperatura && c._temperatura !== temperatura) return false;
     if (agencia && c._agenciaId !== agencia) return false;
     if (rm && c._rmUid !== rm) return false;
