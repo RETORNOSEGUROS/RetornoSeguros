@@ -278,7 +278,15 @@ function renderizarResumo() {
   $("valorDesejado").textContent = fmtBRL(valor);
   $("ramo").textContent = cotacaoData.ramo || "-";
   $("cnpj").textContent = cotacaoData.empresaCNPJ || "-";
-  $("gerente").textContent = cotacaoData.rmNome || "-";
+  
+  // Gerente é sempre o vinculado à cotação/empresa, não quem criou
+  let gerenteNome = cotacaoData.rmNome || "";
+  if (!gerenteNome && cotacaoData.rmUid) {
+    // Tentar buscar pelo UID se disponível
+    gerenteNome = cotacaoData.rmUid; // fallback para o UID
+  }
+  $("gerente").textContent = gerenteNome || "-";
+  
   $("agencia").textContent = cotacaoData.agenciaNome || "-";
   
   // Vigência
