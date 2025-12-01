@@ -23,6 +23,9 @@ let RMS = {};
 let MODAL_EMPRESA = null;
 let MODAL_RAMO = null;
 
+// Cotações para ranking (RM vê da agência inteira)
+let COTACOES_RANKING = [];
+
 // Ordenação
 let SORT_COLUMN = null; // 'total' ou 'percent'
 let SORT_DIR = 'desc';
@@ -170,17 +173,27 @@ async function carregarLookups() {
     
     const selAgencia = $("filtroAgencia");
     const selRankingAgencia = $("rankingAgencia");
-    if (selAgencia) {
-      selAgencia.innerHTML = '<option value="">Todas</option>';
-      Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
-        selAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
-      });
-    }
-    if (selRankingAgencia) {
-      selRankingAgencia.innerHTML = '<option value="">Todas</option>';
-      Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
-        selRankingAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
-      });
+    
+    // Só Admin vê filtro de agência
+    if (CTX.isAdmin) {
+      if (selAgencia) {
+        selAgencia.innerHTML = '<option value="">Todas</option>';
+        Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+          selAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
+        });
+        selAgencia.parentElement.style.display = '';
+      }
+      if (selRankingAgencia) {
+        selRankingAgencia.innerHTML = '<option value="">Todas</option>';
+        Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+          selRankingAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
+        });
+        selRankingAgencia.parentElement.style.display = '';
+      }
+    } else {
+      // Ocultar filtro de agência para não-admin
+      if (selAgencia) selAgencia.parentElement.style.display = 'none';
+      if (selRankingAgencia) selRankingAgencia.parentElement.style.display = 'none';
     }
   } catch (e) { console.warn("Erro agências:", e); }
   
@@ -194,10 +207,19 @@ async function carregarLookups() {
     
     const sel = $("filtroRM");
     if (sel) {
+      // Admin vê todos, outros veem só da agência
       sel.innerHTML = '<option value="">Todos</option>';
-      Object.entries(RMS).sort((a,b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
-        sel.innerHTML += `<option value="${id}">${rm.nome}</option>`;
-      });
+      Object.entries(RMS)
+        .filter(([id, rm]) => CTX.isAdmin || rm.agenciaId === CTX.agenciaId)
+        .sort((a,b) => a[1].nome.localeCompare(b[1].nome))
+        .forEach(([id, rm]) => {
+          sel.innerHTML += `<option value="${id}">${rm.nome}</option>`;
+        });
+      
+      // RM não vê filtro de gerente (só vê os próprios dados)
+      if (!CTX.isAdmin && CTX.perfil !== "gerente chefe" && CTX.perfil !== "assistente") {
+        sel.parentElement.style.display = 'none';
+      }
     }
   } catch (e) { console.warn("Erro RMs:", e); }
 }
@@ -207,7 +229,7 @@ async function carregarEmpresas() {
     const snap = await db.collection("empresas").get();
     snap.forEach(doc => {
       const d = doc.data();
-      EMPRESAS.push({
+      const empresa = {
         id: doc.id,
         nome: d.nome || d.razaoSocial || "Empresa",
         cnpj: d.cnpj || "",
@@ -216,7 +238,23 @@ async function carregarEmpresas() {
         rmNome: d.rmNome || d.gerenteNome || "",
         agenciaId: d.agenciaId || "",
         numFuncionarios: d.numFuncionarios || 0
-      });
+      };
+      
+      // Filtrar por permissão
+      if (CTX.isAdmin) {
+        // Admin vê todas
+        EMPRESAS.push(empresa);
+      } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "assistente") {
+        // Gerente Chefe/Assistente vê só da agência
+        if (empresa.agenciaId === CTX.agenciaId) {
+          EMPRESAS.push(empresa);
+        }
+      } else {
+        // RM vê só as suas (vinculadas a ele)
+        if (empresa.rmUid === CTX.uid) {
+          EMPRESAS.push(empresa);
+        }
+      }
     });
     EMPRESAS.sort((a, b) => a.nome.localeCompare(b.nome));
   } catch (e) { console.warn("Erro empresas:", e); }
@@ -227,7 +265,7 @@ async function carregarCotacoes() {
     const snap = await db.collection("cotacoes-gerentes").get();
     snap.forEach(doc => {
       const d = doc.data();
-      COTACOES.push({
+      const cotacao = {
         id: doc.id,
         empresaId: d.empresaId || "",
         empresaNome: d.empresaNome || "",
@@ -239,7 +277,30 @@ async function carregarCotacoes() {
         rmUid: d.rmUid || d.rmId || "",
         rmNome: d.rmNome || "",
         agenciaId: d.agenciaId || ""
-      });
+      };
+      
+      // Para ranking: RM vê todas da agência
+      if (CTX.isAdmin) {
+        COTACOES_RANKING.push(cotacao);
+      } else if (cotacao.agenciaId === CTX.agenciaId) {
+        COTACOES_RANKING.push(cotacao);
+      }
+      
+      // Para mapa: filtrar por permissão
+      if (CTX.isAdmin) {
+        // Admin vê todas
+        COTACOES.push(cotacao);
+      } else if (CTX.perfil === "gerente chefe" || CTX.perfil === "assistente") {
+        // Gerente Chefe/Assistente vê só da agência
+        if (cotacao.agenciaId === CTX.agenciaId) {
+          COTACOES.push(cotacao);
+        }
+      } else {
+        // RM vê só as suas
+        if (cotacao.rmUid === CTX.uid) {
+          COTACOES.push(cotacao);
+        }
+      }
     });
   } catch (e) { console.warn("Erro cotações:", e); }
 }
@@ -515,13 +576,29 @@ function atualizarRanking() {
   
   const dataInicio = $("rankingDataInicio")?.value ? new Date($("rankingDataInicio").value + "T00:00:00") : null;
   const dataFim = $("rankingDataFim")?.value ? new Date($("rankingDataFim").value + "T23:59:59") : null;
-  const agencia = $("rankingAgencia")?.value || "";
+  const agenciaFiltro = $("rankingAgencia")?.value || "";
   
-  // Filtrar cotações
-  const cotsFiltradas = COTACOES.filter(c => {
+  // Para o ranking, precisamos de TODAS as cotações da agência (não só do RM)
+  // Então fazemos uma query separada se for RM
+  let cotacoesParaRanking = [];
+  
+  if (CTX.isAdmin) {
+    // Admin vê todas, mas pode filtrar por agência
+    cotacoesParaRanking = COTACOES.filter(c => {
+      if (agenciaFiltro && c.agenciaId !== agenciaFiltro) return false;
+      return true;
+    });
+  } else {
+    // Gerente Chefe, Assistente e RM veem ranking da própria agência
+    // Usamos COTACOES que já está filtrado por agência para GC/Assistente
+    // Para RM, precisamos buscar todas da agência
+    cotacoesParaRanking = COTACOES_RANKING || COTACOES;
+  }
+  
+  // Filtrar por período
+  const cotsFiltradas = cotacoesParaRanking.filter(c => {
     if (dataInicio && c.dataCriacao && c.dataCriacao < dataInicio) return false;
     if (dataFim && c.dataCriacao && c.dataCriacao > dataFim) return false;
-    if (agencia && c.agenciaId !== agencia) return false;
     return true;
   });
   
@@ -556,12 +633,19 @@ function atualizarRanking() {
     });
   });
   
+  // Título do ranking baseado no perfil
+  let tituloRanking = "Ranking Geral";
+  if (!CTX.isAdmin && CTX.agenciaId) {
+    const nomeAgencia = AGENCIAS[CTX.agenciaId] || "Agência";
+    tituloRanking = `Ranking ${nomeAgencia}`;
+  }
+  
   // Renderizar
   let html = `
     <div class="ranking-card">
       <div class="ranking-card-header">
         <span class="icon">🏆</span>
-        <span>Ranking Geral</span>
+        <span>${tituloRanking}</span>
         <span class="percent">${cotsFiltradas.length} cotações</span>
       </div>
       <div class="ranking-list">
