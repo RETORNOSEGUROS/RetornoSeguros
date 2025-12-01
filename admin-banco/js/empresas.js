@@ -9,18 +9,23 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 // ==== Estado Global ====
-let CTX = { uid: null, perfil: null, agenciaId: null, nome: null, email: null, isAdmin: false };
+let CTX = { uid: null, perfil: null, agenciaId: null, nome: null, isAdmin: false };
 const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
 
 let EMPRESAS = [];
 let EMPRESAS_FILTRADAS = [];
 let COTACOES = [];
+let COTACOES_FILTRADAS = [];
 let RAMOS = [];
 let AGENCIAS = {};
 let RMS = {};
 
 let MODAL_EMPRESA = null;
 let MODAL_RAMO = null;
+
+// Ordenação
+let SORT_COLUMN = null; // 'total' ou 'percent'
+let SORT_DIR = 'desc';
 
 // ==== Helpers ====
 const $ = id => document.getElementById(id);
@@ -36,8 +41,12 @@ const toDate = x => {
 
 const fmtData = d => d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtBRL = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
+const fmtBRLCompact = v => {
+  if (v >= 1000000) return `R$ ${(v/1000000).toFixed(1)}M`;
+  if (v >= 1000) return `R$ ${(v/1000).toFixed(0)}K`;
+  return fmtBRL(v);
+};
 
-// Status helpers
 function categoriaStatus(status) {
   if (!status) return "sem";
   const s = normalizar(status);
@@ -49,25 +58,42 @@ function categoriaStatus(status) {
 }
 
 function statusIcon(cat) {
-  switch (cat) {
-    case "emitido": return "🟢";
-    case "pendente": return "🟡";
-    case "recusado": return "🔴";
-    case "emissao": return "🔵";
-    case "oportunidade": return "💎";
-    default: return "⚪";
-  }
+  const icons = { emitido: "🟢", pendente: "🟡", recusado: "🔴", emissao: "🔵", oportunidade: "💎" };
+  return icons[cat] || "⚪";
 }
 
 function statusLabel(cat) {
-  switch (cat) {
-    case "emitido": return "Emitido";
-    case "pendente": return "Pendente";
-    case "recusado": return "Recusado";
-    case "emissao": return "Em Emissão";
-    case "oportunidade": return "Oportunidade";
-    default: return "Não Cotado";
+  const labels = { emitido: "Emitido", pendente: "Pendente", recusado: "Recusado", emissao: "Em Emissão", oportunidade: "Oportunidade" };
+  return labels[cat] || "Não Cotado";
+}
+
+function getIcone(id) {
+  const icons = {
+    "saude": "🏥", "dental": "🦷", "vida": "❤️", "vida-global": "🌍",
+    "patrimonial": "🏢", "frota": "🚗", "equipamentos": "⚙️",
+    "garantia": "📜", "rc": "⚖️", "cyber": "💻", "transporte": "🚚", "credito": "💳"
+  };
+  const idLower = normalizar(id);
+  for (const [key, icon] of Object.entries(icons)) {
+    if (idLower.includes(key)) return icon;
   }
+  return "📋";
+}
+
+function getAbreviacao(nome) {
+  const map = {
+    "saude": "SAÚDE", "saúde": "SAÚDE", "dental": "DENTAL", "vida": "VIDA",
+    "vida global": "V.GLOB", "patrimonial": "PATRIM", "frota": "FROTA",
+    "equipamentos": "EQUIP", "garantia": "GARANT", "rc": "RC",
+    "cyber": "CYBER", "transporte": "TRANSP", "credito": "CRÉD",
+    "funcionarios": "FUNC", "funcionários": "FUNC", "socios": "SÓC", "sócios": "SÓC",
+    "empresarial": "EMPRES", "pessoa chave": "P.CHAV", "resgatavel": "RESGAT", "resgatável": "RESGAT"
+  };
+  const n = normalizar(nome);
+  for (const [key, abbr] of Object.entries(map)) {
+    if (n.includes(key)) return abbr;
+  }
+  return nome.substring(0, 5).toUpperCase();
 }
 
 // ==== Auth ====
@@ -88,7 +114,6 @@ auth.onAuthStateChanged(async user => {
     } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
       CTX.perfil = "admin";
       CTX.isAdmin = true;
-      CTX.nome = user.email;
     }
   } catch (e) { console.warn("Erro perfil:", e); }
   
@@ -97,81 +122,64 @@ auth.onAuthStateChanged(async user => {
 
 // ==== Inicialização ====
 async function init() {
-  await Promise.all([
-    carregarRamos(),
-    carregarLookups()
-  ]);
-  
-  await Promise.all([
-    carregarEmpresas(),
-    carregarCotacoes()
-  ]);
+  await Promise.all([carregarRamos(), carregarLookups()]);
+  await Promise.all([carregarEmpresas(), carregarCotacoes()]);
   
   processarDados();
   renderizarTudo();
+  atualizarRanking();
 }
 
 // ==== Carregar Dados ====
 async function carregarRamos() {
   try {
     let snap;
-    try {
-      snap = await db.collection("ramos-seguro").orderBy("ordem").get();
-    } catch {
-      snap = await db.collection("ramos-seguro").get();
-    }
+    try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
+    catch { snap = await db.collection("ramos-seguro").get(); }
     
     snap.forEach(doc => {
       const d = doc.data();
       RAMOS.push({
         id: doc.id,
         nome: d.nomeExibicao || d.nome || doc.id,
-        icon: getIcone(doc.id)
+        icon: getIcone(doc.id),
+        abbr: getAbreviacao(d.nomeExibicao || d.nome || doc.id)
       });
     });
     
     if (RAMOS.length === 0) {
-      // Fallback
       RAMOS = [
-        { id: "saude", nome: "Saúde", icon: "🏥" },
-        { id: "dental", nome: "Dental", icon: "🦷" },
-        { id: "vida", nome: "Vida", icon: "❤️" },
-        { id: "patrimonial", nome: "Patrimonial", icon: "🏢" },
-        { id: "frota", nome: "Frota", icon: "🚗" },
-        { id: "equipamentos", nome: "Equipamentos", icon: "⚙️" },
-        { id: "garantia", nome: "Garantia", icon: "📜" },
-        { id: "rc", nome: "RC", icon: "⚖️" }
+        { id: "saude", nome: "Saúde", icon: "🏥", abbr: "SAÚDE" },
+        { id: "dental", nome: "Dental", icon: "🦷", abbr: "DENTAL" },
+        { id: "vida", nome: "Vida", icon: "❤️", abbr: "VIDA" },
+        { id: "patrimonial", nome: "Patrimonial", icon: "🏢", abbr: "PATRIM" },
+        { id: "frota", nome: "Frota", icon: "🚗", abbr: "FROTA" },
+        { id: "equipamentos", nome: "Equipamentos", icon: "⚙️", abbr: "EQUIP" },
+        { id: "garantia", nome: "Garantia", icon: "📜", abbr: "GARANT" },
+        { id: "rc", nome: "RC", icon: "⚖️", abbr: "RC" }
       ];
     }
   } catch (e) { console.warn("Erro ramos:", e); }
-}
-
-function getIcone(id) {
-  const icons = {
-    "saude": "🏥", "dental": "🦷", "vida": "❤️", "vida-global": "🌍",
-    "patrimonial": "🏢", "frota": "🚗", "equipamentos": "⚙️",
-    "garantia": "📜", "rc": "⚖️", "cyber": "💻", "transporte": "🚚", "credito": "💳"
-  };
-  const idLower = (id || "").toLowerCase();
-  for (const [key, icon] of Object.entries(icons)) {
-    if (idLower.includes(key)) return icon;
-  }
-  return "📋";
 }
 
 async function carregarLookups() {
   // Agências
   try {
     const snap = await db.collection("agencias_banco").get();
-    snap.forEach(doc => {
-      AGENCIAS[doc.id] = doc.data().nome || doc.id;
-    });
+    snap.forEach(doc => { AGENCIAS[doc.id] = doc.data().nome || doc.id; });
     
-    const sel = $("filtroAgencia");
-    if (sel) {
-      sel.innerHTML = '<option value="">Todas</option>';
-      Object.entries(AGENCIAS).sort((a, b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
-        sel.innerHTML += `<option value="${id}">${nome}</option>`;
+    const selAgencia = $("filtroAgencia");
+    const selRankingAgencia = $("rankingAgencia");
+    if (selAgencia) {
+      selAgencia.innerHTML = '<option value="">Todas</option>';
+      Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+        selAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
+      });
+    }
+    if (selRankingAgencia) {
+      selRankingAgencia.innerHTML = '<option value="">Todas</option>';
+      Object.entries(AGENCIAS).sort((a,b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+        selRankingAgencia.innerHTML += `<option value="${id}">${nome}</option>`;
       });
     }
   } catch (e) { console.warn("Erro agências:", e); }
@@ -181,15 +189,13 @@ async function carregarLookups() {
     const snap = await db.collection("usuarios_banco").get();
     snap.forEach(doc => {
       const d = doc.data();
-      if (d.nome) {
-        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
-      }
+      if (d.nome) RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
     });
     
     const sel = $("filtroRM");
     if (sel) {
       sel.innerHTML = '<option value="">Todos</option>';
-      Object.entries(RMS).sort((a, b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
+      Object.entries(RMS).sort((a,b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
         sel.innerHTML += `<option value="${id}">${rm.nome}</option>`;
       });
     }
@@ -206,14 +212,12 @@ async function carregarEmpresas() {
         nome: d.nome || d.razaoSocial || "Empresa",
         cnpj: d.cnpj || "",
         cidade: d.cidade || "",
-        estado: d.estado || d.uf || "",
         rmUid: d.rmUid || d.rmId || d.gerenteId || "",
         rmNome: d.rmNome || d.gerenteNome || "",
         agenciaId: d.agenciaId || "",
         numFuncionarios: d.numFuncionarios || 0
       });
     });
-    
     EMPRESAS.sort((a, b) => a.nome.localeCompare(b.nome));
   } catch (e) { console.warn("Erro empresas:", e); }
 }
@@ -232,7 +236,6 @@ async function carregarCotacoes() {
         statusCat: categoriaStatus(d.status),
         valor: parseFloat(d.valorFinal || d.valorNegocio || d.premio || d.valorDesejado || 0),
         dataCriacao: toDate(d.dataCriacao),
-        dataAtualizacao: toDate(d.dataAtualizacao),
         rmUid: d.rmUid || d.rmId || "",
         rmNome: d.rmNome || "",
         agenciaId: d.agenciaId || ""
@@ -243,6 +246,30 @@ async function carregarCotacoes() {
 
 // ==== Processar Dados ====
 function processarDados() {
+  // Filtrar cotações por período se definido
+  const dataInicio = $("filtroDataInicio")?.value ? new Date($("filtroDataInicio").value + "T00:00:00") : null;
+  const dataFim = $("filtroDataFim")?.value ? new Date($("filtroDataFim").value + "T23:59:59") : null;
+  
+  COTACOES_FILTRADAS = COTACOES.filter(c => {
+    if (dataInicio && c.dataCriacao && c.dataCriacao < dataInicio) return false;
+    if (dataFim && c.dataCriacao && c.dataCriacao > dataFim) return false;
+    return true;
+  });
+  
+  // Calcular % por ramo
+  const totalEmpresas = EMPRESAS.length;
+  RAMOS.forEach(ramo => {
+    const empresasComCotacao = new Set();
+    COTACOES_FILTRADAS.forEach(c => {
+      if (matchRamo(c.ramo, ramo)) {
+        const emp = EMPRESAS.find(e => e.id === c.empresaId || normalizar(e.nome) === normalizar(c.empresaNome));
+        if (emp) empresasComCotacao.add(emp.id);
+      }
+    });
+    ramo.cotadas = empresasComCotacao.size;
+    ramo.percent = totalEmpresas > 0 ? Math.round((empresasComCotacao.size / totalEmpresas) * 100) : 0;
+  });
+  
   // Para cada empresa, calcular status por ramo
   EMPRESAS.forEach(emp => {
     emp.ramos = {};
@@ -251,44 +278,27 @@ function processarDados() {
     emp.totalRecusados = 0;
     emp.totalValor = 0;
     emp.oportunidades = 0;
+    emp.totalCotacoes = 0;
     
-    // Buscar RM nome se não tiver
-    if (!emp.rmNome && emp.rmUid && RMS[emp.rmUid]) {
-      emp.rmNome = RMS[emp.rmUid].nome;
-    }
+    if (!emp.rmNome && emp.rmUid && RMS[emp.rmUid]) emp.rmNome = RMS[emp.rmUid].nome;
     
     RAMOS.forEach(ramo => {
-      // Buscar cotações desta empresa para este ramo
-      const cotacoesRamo = COTACOES.filter(c => {
-        const matchEmpresa = c.empresaId === emp.id || 
-                            normalizar(c.empresaNome) === normalizar(emp.nome);
-        const matchRamo = normalizar(c.ramo).includes(normalizar(ramo.id)) ||
-                         normalizar(c.ramo).includes(normalizar(ramo.nome)) ||
-                         normalizar(ramo.nome).includes(normalizar(c.ramo));
-        return matchEmpresa && matchRamo;
+      const cotacoesRamo = COTACOES_FILTRADAS.filter(c => {
+        const matchEmpresa = c.empresaId === emp.id || normalizar(c.empresaNome) === normalizar(emp.nome);
+        return matchEmpresa && matchRamo(c.ramo, ramo);
       });
       
       if (cotacoesRamo.length === 0) {
-        // Oportunidade!
-        emp.ramos[ramo.id] = {
-          status: "oportunidade",
-          cotacoes: [],
-          valor: 0
-        };
+        emp.ramos[ramo.id] = { status: "oportunidade", cotacoes: [], valor: 0 };
         emp.oportunidades++;
       } else {
-        // Ordenar por relevância: emitido > emissao > pendente > recusado
         const prioridade = { emitido: 4, emissao: 3, pendente: 2, recusado: 1 };
         cotacoesRamo.sort((a, b) => (prioridade[b.statusCat] || 0) - (prioridade[a.statusCat] || 0));
         
         const melhor = cotacoesRamo[0];
-        emp.ramos[ramo.id] = {
-          status: melhor.statusCat,
-          cotacoes: cotacoesRamo,
-          valor: melhor.valor
-        };
+        emp.ramos[ramo.id] = { status: melhor.statusCat, cotacoes: cotacoesRamo, valor: melhor.valor };
+        emp.totalCotacoes += cotacoesRamo.length;
         
-        // Contadores
         if (melhor.statusCat === "emitido") {
           emp.totalEmitidos++;
           emp.totalValor += melhor.valor;
@@ -300,11 +310,17 @@ function processarDados() {
       }
     });
     
-    // Calcular cobertura
     emp.cobertura = Math.round(((RAMOS.length - emp.oportunidades) / RAMOS.length) * 100);
   });
   
   EMPRESAS_FILTRADAS = [...EMPRESAS];
+}
+
+function matchRamo(cotacaoRamo, ramo) {
+  const cr = normalizar(cotacaoRamo);
+  const rn = normalizar(ramo.nome);
+  const ri = normalizar(ramo.id);
+  return cr.includes(ri) || cr.includes(rn) || rn.includes(cr) || ri.includes(cr);
 }
 
 // ==== Renderização ====
@@ -314,146 +330,129 @@ function renderizarTudo() {
 }
 
 function renderizarStats() {
-  const totalEmpresas = EMPRESAS_FILTRADAS.length;
-  
-  let totalEmitidos = 0;
-  let totalPendentes = 0;
-  let totalRecusados = 0;
-  let totalOportunidades = 0;
-  let somaCobertura = 0;
+  const total = EMPRESAS_FILTRADAS.length;
+  let emitidos = 0, pendentes = 0, recusados = 0, oportunidades = 0, somaCobertura = 0;
   
   EMPRESAS_FILTRADAS.forEach(emp => {
-    totalEmitidos += emp.totalEmitidos;
-    totalPendentes += emp.totalPendentes;
-    totalRecusados += emp.totalRecusados;
-    totalOportunidades += emp.oportunidades;
+    emitidos += emp.totalEmitidos;
+    pendentes += emp.totalPendentes;
+    recusados += emp.totalRecusados;
+    oportunidades += emp.oportunidades;
     somaCobertura += emp.cobertura;
   });
   
-  const coberturaMedia = totalEmpresas > 0 ? Math.round(somaCobertura / totalEmpresas) : 0;
-  
-  $("statEmpresas").textContent = totalEmpresas;
-  $("statEmitidos").textContent = totalEmitidos;
-  $("statPendentes").textContent = totalPendentes;
-  $("statRecusados").textContent = totalRecusados;
-  $("statOportunidades").textContent = totalOportunidades;
-  $("statCobertura").textContent = coberturaMedia + "%";
+  $("statEmpresas").textContent = total;
+  $("statEmitidos").textContent = emitidos;
+  $("statPendentes").textContent = pendentes;
+  $("statRecusados").textContent = recusados;
+  $("statOportunidades").textContent = oportunidades;
+  $("statCobertura").textContent = (total > 0 ? Math.round(somaCobertura / total) : 0) + "%";
 }
 
 function renderizarTabela() {
   const container = $("tableScroll");
   
   if (EMPRESAS_FILTRADAS.length === 0) {
-    container.innerHTML = `
-      <div class="loading" style="padding: 40px;">
-        <span style="font-size: 48px;">🔍</span>
-        <span style="margin-top: 16px;">Nenhuma empresa encontrada</span>
-      </div>
-    `;
+    container.innerHTML = `<div class="loading" style="padding: 40px;"><span style="font-size: 48px;">🔍</span><span style="margin-top: 16px;">Nenhuma empresa encontrada</span></div>`;
     $("tableCount").textContent = "0 empresas";
     return;
   }
   
-  // Header
-  let headerHtml = `<tr><th>Empresa</th>`;
+  // Ordenar se necessário
+  if (SORT_COLUMN) {
+    EMPRESAS_FILTRADAS.sort((a, b) => {
+      let va, vb;
+      if (SORT_COLUMN === 'total') { va = a.totalValor; vb = b.totalValor; }
+      else if (SORT_COLUMN === 'percent') { va = a.cobertura; vb = b.cobertura; }
+      return SORT_DIR === 'desc' ? vb - va : va - vb;
+    });
+  }
+  
+  // Header com abreviação, ícone e %
+  let headerHtml = `<tr><th>EMPRESA</th>`;
   RAMOS.forEach(ramo => {
-    headerHtml += `<th title="${ramo.nome}">${ramo.icon}</th>`;
+    headerHtml += `
+      <th title="${ramo.nome} (${ramo.percent}% cotado)">
+        <div class="col-header">
+          <span class="col-header-abbr">${ramo.abbr}</span>
+          <span class="col-header-icon">${ramo.icon}</span>
+          <span class="col-header-percent">${ramo.percent}%</span>
+        </div>
+      </th>`;
   });
-  headerHtml += `<th>Total</th><th>%</th></tr>`;
+  
+  // Colunas ordenáveis
+  const totalIcon = SORT_COLUMN === 'total' ? (SORT_DIR === 'desc' ? '↓' : '↑') : '↕';
+  const percentIcon = SORT_COLUMN === 'percent' ? (SORT_DIR === 'desc' ? '↓' : '↑') : '↕';
+  
+  headerHtml += `
+    <th class="sortable" onclick="ordenarPor('total')" title="Ordenar por valor total">
+      TOTAL <span class="sort-icon ${SORT_COLUMN === 'total' ? 'active' : ''}">${totalIcon}</span>
+    </th>
+    <th class="sortable" onclick="ordenarPor('percent')" title="Ordenar por cobertura">
+      % <span class="sort-icon ${SORT_COLUMN === 'percent' ? 'active' : ''}">${percentIcon}</span>
+    </th>
+  </tr>`;
   
   // Body
   let bodyHtml = "";
-  
-  // Totais por ramo
   const totaisPorRamo = {};
-  RAMOS.forEach(ramo => {
-    totaisPorRamo[ramo.id] = { emitidos: 0, valor: 0 };
-  });
+  RAMOS.forEach(ramo => { totaisPorRamo[ramo.id] = { qtd: 0, valor: 0 }; });
   
   EMPRESAS_FILTRADAS.forEach(emp => {
-    bodyHtml += `<tr>`;
-    
-    // Célula da empresa
-    bodyHtml += `
-      <td>
-        <div class="empresa-cell">
-          <div class="empresa-nome">${emp.nome}</div>
-          <div class="empresa-meta">
-            <span>👤 ${emp.rmNome || '-'}</span>
-            ${emp.cidade ? `<span>📍 ${emp.cidade}</span>` : ''}
-          </div>
-          <div class="empresa-progress">
-            <div class="empresa-progress-bar" style="width: ${emp.cobertura}%"></div>
-          </div>
+    bodyHtml += `<tr><td>
+      <div class="empresa-cell">
+        <div class="empresa-nome" title="${emp.nome}">${emp.nome}</div>
+        <div class="empresa-meta">
+          <span>👤 ${emp.rmNome || '-'}</span>
+          ${emp.cidade ? `<span>📍 ${emp.cidade}</span>` : ''}
         </div>
-      </td>
-    `;
+        <div class="empresa-progress"><div class="empresa-progress-bar" style="width: ${emp.cobertura}%"></div></div>
+      </div>
+    </td>`;
     
-    // Células dos ramos
     RAMOS.forEach(ramo => {
       const ramoData = emp.ramos[ramo.id] || { status: "sem", cotacoes: [], valor: 0 };
-      const statusClass = ramoData.status;
-      const icon = statusIcon(ramoData.status);
+      bodyHtml += `<td><div class="status-cell ${ramoData.status}" onclick="abrirModal('${emp.id}', '${ramo.id}')" title="${ramo.nome}: ${statusLabel(ramoData.status)}">${statusIcon(ramoData.status)}</div></td>`;
       
-      bodyHtml += `
-        <td>
-          <div class="status-cell ${statusClass}" 
-               onclick="abrirModal('${emp.id}', '${ramo.id}')" 
-               title="${ramo.nome}: ${statusLabel(ramoData.status)}">
-            ${icon}
-          </div>
-        </td>
-      `;
-      
-      // Totais
       if (ramoData.status === "emitido") {
-        totaisPorRamo[ramo.id].emitidos++;
+        totaisPorRamo[ramo.id].qtd++;
         totaisPorRamo[ramo.id].valor += ramoData.valor;
       }
     });
     
-    // Total da empresa
     bodyHtml += `
-      <td class="total-cell">
-        <div class="total-valor">${fmtBRL(emp.totalValor)}</div>
-      </td>
-      <td class="total-cell">
-        <div class="total-percent">${emp.cobertura}%</div>
-      </td>
-    `;
-    
-    bodyHtml += `</tr>`;
+      <td class="total-cell"><div class="total-valor">${fmtBRLCompact(emp.totalValor)}</div></td>
+      <td class="total-cell"><div class="total-percent">${emp.cobertura}%</div></td>
+    </tr>`;
   });
   
-  // Footer (totais)
-  let footerHtml = `<tr><td><strong>TOTAL</strong></td>`;
-  let totalGeral = 0;
+  // Footer
+  let footerHtml = `<tr><td><strong>TOTAL EMITIDOS</strong></td>`;
+  let totalGeralValor = 0;
   
   RAMOS.forEach(ramo => {
     const dados = totaisPorRamo[ramo.id];
-    totalGeral += dados.valor;
-    footerHtml += `
-      <td class="total-cell">
-        <div style="font-size: 11px;">${dados.emitidos}</div>
-      </td>
-    `;
+    totalGeralValor += dados.valor;
+    footerHtml += `<td class="total-cell" title="${fmtBRL(dados.valor)}"><strong>${dados.qtd}</strong></td>`;
   });
   
-  footerHtml += `
-    <td class="total-cell"><div class="total-valor">${fmtBRL(totalGeral)}</div></td>
-    <td></td>
-  </tr>`;
+  footerHtml += `<td class="total-cell"><div class="total-valor">${fmtBRLCompact(totalGeralValor)}</div></td><td></td></tr>`;
   
-  container.innerHTML = `
-    <table class="matrix-table">
-      <thead>${headerHtml}</thead>
-      <tbody>${bodyHtml}</tbody>
-      <tfoot>${footerHtml}</tfoot>
-    </table>
-  `;
-  
+  container.innerHTML = `<table class="matrix-table"><thead>${headerHtml}</thead><tbody>${bodyHtml}</tbody><tfoot>${footerHtml}</tfoot></table>`;
   $("tableCount").textContent = `${EMPRESAS_FILTRADAS.length} empresas × ${RAMOS.length} ramos`;
 }
+
+function ordenarPor(coluna) {
+  if (SORT_COLUMN === coluna) {
+    SORT_DIR = SORT_DIR === 'desc' ? 'asc' : 'desc';
+  } else {
+    SORT_COLUMN = coluna;
+    SORT_DIR = 'desc';
+  }
+  renderizarTabela();
+}
+window.ordenarPor = ordenarPor;
 
 // ==== Filtros ====
 function aplicarFiltros() {
@@ -462,21 +461,16 @@ function aplicarFiltros() {
   const rm = $("filtroRM")?.value || "";
   const exibir = $("filtroExibir")?.value || "todos";
   
+  // Reprocessar para aplicar filtro de data
+  processarDados();
+  
   EMPRESAS_FILTRADAS = EMPRESAS.filter(emp => {
-    // Busca por nome
     if (busca && !normalizar(emp.nome).includes(busca)) return false;
-    
-    // Agência
     if (agencia && emp.agenciaId !== agencia) return false;
-    
-    // RM
     if (rm && emp.rmUid !== rm) return false;
-    
-    // Exibir
     if (exibir === "oportunidades" && emp.oportunidades === 0) return false;
     if (exibir === "completas" && emp.cobertura < 100) return false;
     if (exibir === "vazias" && emp.cobertura > 0) return false;
-    
     return true;
   });
   
@@ -487,17 +481,148 @@ function limparFiltros() {
   $("filtroEmpresa").value = "";
   $("filtroAgencia").value = "";
   $("filtroRM").value = "";
+  $("filtroDataInicio").value = "";
+  $("filtroDataFim").value = "";
   $("filtroExibir").value = "todos";
+  SORT_COLUMN = null;
+  SORT_DIR = 'desc';
   
+  processarDados();
   EMPRESAS_FILTRADAS = [...EMPRESAS];
   renderizarTudo();
 }
+
+// ==== Tabs ====
+function trocarTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  
+  if (tab === 'mapa') {
+    document.querySelector('.tab:nth-child(1)').classList.add('active');
+    $("tabMapa").classList.add('active');
+  } else {
+    document.querySelector('.tab:nth-child(2)').classList.add('active');
+    $("tabRanking").classList.add('active');
+    atualizarRanking();
+  }
+}
+window.trocarTab = trocarTab;
+
+// ==== Ranking ====
+function atualizarRanking() {
+  const container = $("rankingContainer");
+  if (!container) return;
+  
+  const dataInicio = $("rankingDataInicio")?.value ? new Date($("rankingDataInicio").value + "T00:00:00") : null;
+  const dataFim = $("rankingDataFim")?.value ? new Date($("rankingDataFim").value + "T23:59:59") : null;
+  const agencia = $("rankingAgencia")?.value || "";
+  
+  // Filtrar cotações
+  const cotsFiltradas = COTACOES.filter(c => {
+    if (dataInicio && c.dataCriacao && c.dataCriacao < dataInicio) return false;
+    if (dataFim && c.dataCriacao && c.dataCriacao > dataFim) return false;
+    if (agencia && c.agenciaId !== agencia) return false;
+    return true;
+  });
+  
+  // Ranking geral
+  const porGerente = {};
+  cotsFiltradas.forEach(c => {
+    const uid = c.rmUid || "sem-gerente";
+    const nome = c.rmNome || "Sem Gerente";
+    if (!porGerente[uid]) porGerente[uid] = { nome, total: 0, emitidos: 0, valor: 0 };
+    porGerente[uid].total++;
+    if (c.statusCat === "emitido") {
+      porGerente[uid].emitidos++;
+      porGerente[uid].valor += c.valor;
+    }
+  });
+  
+  const rankingGeral = Object.values(porGerente).sort((a, b) => b.total - a.total);
+  
+  // Ranking por ramo
+  const porRamo = {};
+  RAMOS.forEach(ramo => { porRamo[ramo.id] = { ramo, gerentes: {} }; });
+  
+  cotsFiltradas.forEach(c => {
+    RAMOS.forEach(ramo => {
+      if (matchRamo(c.ramo, ramo)) {
+        const uid = c.rmUid || "sem-gerente";
+        const nome = c.rmNome || "Sem Gerente";
+        if (!porRamo[ramo.id].gerentes[uid]) porRamo[ramo.id].gerentes[uid] = { nome, total: 0, emitidos: 0 };
+        porRamo[ramo.id].gerentes[uid].total++;
+        if (c.statusCat === "emitido") porRamo[ramo.id].gerentes[uid].emitidos++;
+      }
+    });
+  });
+  
+  // Renderizar
+  let html = `
+    <div class="ranking-card">
+      <div class="ranking-card-header">
+        <span class="icon">🏆</span>
+        <span>Ranking Geral</span>
+        <span class="percent">${cotsFiltradas.length} cotações</span>
+      </div>
+      <div class="ranking-list">
+        ${rankingGeral.slice(0, 10).map((g, i) => `
+          <div class="ranking-item">
+            <div class="ranking-position ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : 'normal'}">${i + 1}º</div>
+            <div class="ranking-info">
+              <div class="ranking-name">${g.nome}</div>
+              <div class="ranking-sub">${g.emitidos} emitidos • ${fmtBRLCompact(g.valor)}</div>
+            </div>
+            <div class="ranking-value">${g.total}</div>
+          </div>
+        `).join('') || '<div style="padding: 20px; text-align: center; color: var(--muted);">Sem dados</div>'}
+      </div>
+    </div>
+  `;
+  
+  // Cards por ramo
+  RAMOS.forEach(ramo => {
+    const dados = porRamo[ramo.id];
+    const ranking = Object.values(dados.gerentes).sort((a, b) => b.total - a.total);
+    const totalRamo = ranking.reduce((sum, g) => sum + g.total, 0);
+    
+    html += `
+      <div class="ranking-card">
+        <div class="ranking-card-header">
+          <span class="icon">${ramo.icon}</span>
+          <span>${ramo.nome}</span>
+          <span class="percent">${totalRamo} cot.</span>
+        </div>
+        <div class="ranking-list">
+          ${ranking.slice(0, 5).map((g, i) => `
+            <div class="ranking-item">
+              <div class="ranking-position ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : 'normal'}">${i + 1}º</div>
+              <div class="ranking-info">
+                <div class="ranking-name">${g.nome}</div>
+                <div class="ranking-sub">${g.emitidos} emitidos</div>
+              </div>
+              <div class="ranking-value">${g.total}</div>
+            </div>
+          `).join('') || '<div style="padding: 16px; text-align: center; color: var(--muted); font-size: 12px;">Sem cotações</div>'}
+        </div>
+      </div>
+    `;
+  });
+  
+  container.innerHTML = html;
+}
+
+function limparFiltrosRanking() {
+  $("rankingDataInicio").value = "";
+  $("rankingDataFim").value = "";
+  $("rankingAgencia").value = "";
+  atualizarRanking();
+}
+window.limparFiltrosRanking = limparFiltrosRanking;
 
 // ==== Modal ====
 function abrirModal(empresaId, ramoId) {
   const empresa = EMPRESAS.find(e => e.id === empresaId);
   const ramo = RAMOS.find(r => r.id === ramoId);
-  
   if (!empresa || !ramo) return;
   
   MODAL_EMPRESA = empresa;
@@ -510,10 +635,7 @@ function abrirModal(empresaId, ramoId) {
   let bodyHtml = `
     <div class="modal-empresa">
       <div class="modal-empresa-nome">${empresa.nome}</div>
-      <div class="modal-empresa-info">
-        👤 ${empresa.rmNome || 'Não vinculado'} 
-        ${empresa.cidade ? `• 📍 ${empresa.cidade}` : ''}
-      </div>
+      <div class="modal-empresa-info">👤 ${empresa.rmNome || 'Não vinculado'} ${empresa.cidade ? `• 📍 ${empresa.cidade}` : ''}</div>
     </div>
   `;
   
@@ -525,9 +647,7 @@ function abrirModal(empresaId, ramoId) {
         <div class="oportunidade-desc">Esta empresa ainda não possui cotação para ${ramo.nome}.</div>
       </div>
     `;
-    $("btnCriarCotacao").style.display = "inline-flex";
   } else {
-    // Mostrar status atual
     bodyHtml += `
       <div class="modal-status-card">
         <div class="modal-status-icon">${statusIcon(ramoData.status)}</div>
@@ -539,11 +659,8 @@ function abrirModal(empresaId, ramoId) {
       </div>
     `;
     
-    // Histórico de cotações
     if (ramoData.cotacoes.length > 0) {
-      bodyHtml += `<h4 style="margin-bottom: 12px; font-size: 14px;">📋 Histórico de Cotações</h4>`;
-      bodyHtml += `<div class="cotacoes-list">`;
-      
+      bodyHtml += `<h4 style="margin-bottom: 12px; font-size: 14px;">📋 Histórico de Cotações</h4><div class="cotacoes-list">`;
       ramoData.cotacoes.slice(0, 5).forEach(cot => {
         bodyHtml += `
           <div class="cotacao-item">
@@ -561,15 +678,12 @@ function abrirModal(empresaId, ramoId) {
           </div>
         `;
       });
-      
       bodyHtml += `</div>`;
     }
-    
-    // Botão de nova cotação mesmo se já tem
-    $("btnCriarCotacao").style.display = "inline-flex";
   }
   
   $("modalBody").innerHTML = bodyHtml;
+  $("btnCriarCotacao").style.display = "inline-flex";
   $("modalDetalhes").classList.add("active");
 }
 
@@ -581,75 +695,112 @@ function fecharModal() {
 
 function criarCotacaoDoModal() {
   if (!MODAL_EMPRESA || !MODAL_RAMO) return;
-  
-  // Redirecionar para cotações com parâmetros
   const params = new URLSearchParams({
     empresaId: MODAL_EMPRESA.id,
     empresaNome: MODAL_EMPRESA.nome,
     ramo: MODAL_RAMO.nome,
     nova: "1"
   });
-  
   window.location.href = `cotacoes.html?${params}`;
 }
 
-// ==== Export ====
+// ==== Export PDF (formatado) ====
 function exportarPDF() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   
+  // Cores
+  const brandColor = [79, 70, 229];
+  const headerBg = [30, 41, 59];
+  const successColor = [16, 185, 129];
+  const warningColor = [245, 158, 11];
+  const dangerColor = [239, 68, 68];
+  
+  // Título
+  doc.setFillColor(...brandColor);
+  doc.rect(0, 0, 297, 25, 'F');
+  doc.setTextColor(255, 255, 255);
   doc.setFontSize(18);
-  doc.setTextColor(79, 70, 229);
-  doc.text('Mapa de Produtos por Empresa', 14, 20);
+  doc.setFont(undefined, 'bold');
+  doc.text('🗺️ Mapa de Produtos por Empresa', 14, 16);
   
   doc.setFontSize(10);
-  doc.setTextColor(100);
-  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 28);
-  doc.text(`Total: ${EMPRESAS_FILTRADAS.length} empresas`, 14, 34);
+  doc.setFont(undefined, 'normal');
+  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 200, 10);
+  doc.text(`Total: ${EMPRESAS_FILTRADAS.length} empresas`, 200, 16);
   
-  // Montar dados
-  const headers = ['Empresa', ...RAMOS.map(r => r.nome), 'Total', '%'];
+  // Filtros aplicados
+  let y = 32;
+  doc.setTextColor(100, 100, 100);
+  doc.setFontSize(9);
+  const filtros = [];
+  if ($("filtroAgencia")?.value) filtros.push(`Agência: ${AGENCIAS[$("filtroAgencia").value] || '-'}`);
+  if ($("filtroRM")?.value) filtros.push(`Gerente: ${RMS[$("filtroRM").value]?.nome || '-'}`);
+  if ($("filtroDataInicio")?.value) filtros.push(`De: ${$("filtroDataInicio").value}`);
+  if ($("filtroDataFim")?.value) filtros.push(`Até: ${$("filtroDataFim").value}`);
+  if (filtros.length > 0) {
+    doc.text(`Filtros: ${filtros.join(' | ')}`, 14, y);
+    y += 6;
+  }
+  
+  // Legenda
+  doc.setFillColor(220, 252, 231); doc.rect(14, y, 8, 4, 'F');
+  doc.setFillColor(254, 243, 199); doc.rect(40, y, 8, 4, 'F');
+  doc.setFillColor(254, 226, 226); doc.rect(70, y, 8, 4, 'F');
+  doc.setFillColor(237, 233, 254); doc.rect(100, y, 8, 4, 'F');
+  
+  doc.setTextColor(0, 0, 0);
+  doc.text('Emitido', 24, y + 3);
+  doc.text('Pendente', 50, y + 3);
+  doc.text('Recusado', 80, y + 3);
+  doc.text('Oportunidade', 110, y + 3);
+  y += 10;
+  
+  // Tabela
+  const headers = ['Empresa', ...RAMOS.map(r => r.abbr), 'Total', '%'];
   const dados = EMPRESAS_FILTRADAS.map(emp => {
-    const row = [emp.nome];
+    const row = [emp.nome.substring(0, 25)];
     RAMOS.forEach(ramo => {
       const ramoData = emp.ramos[ramo.id];
-      row.push(statusLabel(ramoData?.status || 'sem').substring(0, 3));
+      const statusMap = { emitido: 'Emi', pendente: 'Pen', recusado: 'Rec', emissao: 'Ems', oportunidade: 'Opo' };
+      row.push(statusMap[ramoData?.status] || '-');
     });
-    row.push(fmtBRL(emp.totalValor));
+    row.push(fmtBRLCompact(emp.totalValor));
     row.push(emp.cobertura + '%');
     return row;
   });
   
   doc.autoTable({
-    startY: 40,
+    startY: y,
     head: [headers],
     body: dados,
-    styles: { fontSize: 7, cellPadding: 2 },
-    headStyles: { fillColor: [79, 70, 229] },
-    columnStyles: { 0: { cellWidth: 40 } }
+    styles: { fontSize: 7, cellPadding: 2, halign: 'center' },
+    headStyles: { fillColor: headerBg, textColor: 255, fontStyle: 'bold' },
+    columnStyles: { 0: { cellWidth: 35, halign: 'left' } },
+    didParseCell: function(data) {
+      if (data.section === 'body' && data.column.index > 0 && data.column.index <= RAMOS.length) {
+        const val = data.cell.raw;
+        if (val === 'Emi') data.cell.styles.fillColor = [220, 252, 231];
+        else if (val === 'Pen') data.cell.styles.fillColor = [254, 243, 199];
+        else if (val === 'Rec') data.cell.styles.fillColor = [254, 226, 226];
+        else if (val === 'Opo') data.cell.styles.fillColor = [237, 233, 254];
+      }
+    }
   });
   
   doc.save(`mapa-produtos-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 function exportarExcel() {
-  // Montar dados
   const dados = EMPRESAS_FILTRADAS.map(emp => {
-    const row = {
-      'Empresa': emp.nome,
-      'Cidade': emp.cidade,
-      'Gerente': emp.rmNome || '-'
-    };
-    
+    const row = { 'Empresa': emp.nome, 'Cidade': emp.cidade, 'Gerente': emp.rmNome || '-' };
     RAMOS.forEach(ramo => {
       const ramoData = emp.ramos[ramo.id];
       row[ramo.nome] = statusLabel(ramoData?.status || 'sem');
     });
-    
     row['Total Valor'] = emp.totalValor;
     row['Cobertura %'] = emp.cobertura;
     row['Oportunidades'] = emp.oportunidades;
-    
     return row;
   });
   
@@ -667,3 +818,4 @@ window.fecharModal = fecharModal;
 window.criarCotacaoDoModal = criarCotacaoDoModal;
 window.exportarPDF = exportarPDF;
 window.exportarExcel = exportarExcel;
+window.atualizarRanking = atualizarRanking;
