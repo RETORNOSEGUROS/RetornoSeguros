@@ -325,14 +325,36 @@ async function carregarCotacoes() {
   COTACOES = docs.map(doc => {
     const d = doc.data();
     const temp = calcularTemperatura({ ...d, id: doc.id });
+    
+    // O gerente é o vinculado à cotação (que veio da empresa)
+    // Se não tem rmNome, tenta buscar pelo rmUid
+    let rmNome = d.rmNome || '';
+    const rmUid = d.rmUid || d.rmId || '';
+    
+    if (!rmNome && rmUid && RMS[rmUid]) {
+      rmNome = RMS[rmUid].nome;
+    }
+    
+    // Se ainda não tem, tenta buscar da empresa vinculada
+    if (!rmNome && d.empresaId && EMPRESAS[d.empresaId]) {
+      const emp = EMPRESAS[d.empresaId];
+      rmNome = emp.rmNome || emp.gerenteNome || '';
+      if (!rmNome) {
+        const empRmId = emp.rmUid || emp.rmId || emp.gerenteId;
+        if (empRmId && RMS[empRmId]) {
+          rmNome = RMS[empRmId].nome;
+        }
+      }
+    }
+    
     return {
       id: doc.id,
       ...d,
       _empresaNome: d.empresaNome || "Empresa",
       _agenciaId: d.agenciaId || "",
       _agenciaNome: AGENCIAS[d.agenciaId] || d.agenciaId || "-",
-      _rmNome: d.rmNome || RMS[d.rmUid]?.nome || RMS[d.rmId]?.nome || "-",
-      _rmUid: d.rmUid || d.rmId || "",
+      _rmNome: rmNome || "-",
+      _rmUid: rmUid,
       _ramo: d.ramo || "Não informado",
       _status: d.status || "Sem status",
       _statusCat: categoriaStatus(d.status),
@@ -691,8 +713,21 @@ function resolverEmpresaNova() {
   );
   
   if (empresa) {
-    hiddenId.value = empresa[0];
-    info.innerHTML = `CNPJ: ${empresa[1].cnpj || '-'} | RM: ${empresa[1].rmNome || '-'}`;
+    const [empId, empData] = empresa;
+    hiddenId.value = empId;
+    
+    // Buscar nome do gerente vinculado
+    let gerenteNome = empData.rmNome || empData.gerenteNome || '';
+    const gerenteId = empData.rmUid || empData.rmId || empData.gerenteId;
+    
+    if (!gerenteNome && gerenteId && RMS[gerenteId]) {
+      gerenteNome = RMS[gerenteId].nome;
+    }
+    
+    info.innerHTML = `
+      <span>📄 CNPJ: ${empData.cnpj || '-'}</span>
+      <span style="margin-left: 16px;">👤 Gerente: <strong>${gerenteNome || 'Não vinculado'}</strong></span>
+    `;
   } else {
     hiddenId.value = "";
     info.innerHTML = "";
@@ -713,6 +748,23 @@ async function criarNovaCotacao() {
   try {
     const empresa = empresaId ? EMPRESAS[empresaId] : null;
     
+    // IMPORTANTE: O gerente é sempre o vinculado à empresa, não quem está criando
+    // Quem cria (admin) fica registrado em criadoPorUid/criadoPorNome
+    // O gerente responsável vem da empresa
+    let rmUid = empresa?.rmUid || empresa?.rmId || empresa?.gerenteId || "";
+    let rmNome = empresa?.rmNome || empresa?.gerenteNome || "";
+    
+    // Se a empresa tem rmUid mas não tem nome, busca o nome
+    if (rmUid && !rmNome && RMS[rmUid]) {
+      rmNome = RMS[rmUid].nome;
+    }
+    
+    // Se não for admin, usa o próprio usuário como RM
+    if (!CTX.isAdmin && !rmUid) {
+      rmUid = CTX.uid;
+      rmNome = CTX.nome;
+    }
+    
     const novaCotacao = {
       empresaNome,
       empresaId: empresaId || null,
@@ -723,13 +775,16 @@ async function criarNovaCotacao() {
       status: "Pendente Agência",
       dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
       dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+      // Quem criou (pode ser admin)
       criadoPorUid: CTX.uid,
       criadoPorNome: CTX.nome,
-      rmUid: CTX.uid,
-      rmNome: CTX.nome,
-      agenciaId: CTX.agenciaId || empresa?.agenciaId || "",
+      // Gerente responsável (vinculado à empresa)
+      rmUid: rmUid,
+      rmNome: rmNome,
+      rmId: rmUid, // compatibilidade
+      agenciaId: empresa?.agenciaId || CTX.agenciaId || "",
       interacoes: observacoes ? [{
-        autorNome: CTX.nome,
+        autorNome: CTX.nome, // Quem escreveu a obs (pode ser admin)
         autorUid: CTX.uid,
         mensagem: observacoes,
         dataHora: new Date(),
