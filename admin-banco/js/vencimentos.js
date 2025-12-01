@@ -202,11 +202,16 @@ async function getEmpresaInfo(empId) {
 async function carregarDados() {
   REGISTROS = [];
   
+  console.log("[Vencimentos] Iniciando carga de dados...");
+  console.log("[Vencimentos] CTX:", CTX);
+  
   // Carregar VISITAS
   await carregarVisitas();
   
   // Carregar NEGÓCIOS EMITIDOS
   await carregarNegociosEmitidos();
+  
+  console.log(`[Vencimentos] Total de registros: ${REGISTROS.length}`);
   
   // Ordenar por data de vencimento
   REGISTROS.sort((a, b) => {
@@ -223,6 +228,7 @@ async function carregarVisitas() {
     if (CTX.isAdmin) {
       const snap = await db.collection("visitas").get();
       docs = snap.docs;
+      console.log(`[Visitas] Admin - Total: ${docs.length}`);
     } else if (isGC(CTX.perfil) && CTX.agenciaId) {
       // GC: da agência
       const map = new Map();
@@ -242,17 +248,21 @@ async function carregarVisitas() {
         }
       }
       docs = Array.from(map.values());
+      console.log(`[Visitas] GC - Total: ${docs.length}`);
     } else {
       // RM: próprios
       const buckets = [];
       try { buckets.push(await db.collection("visitas").where("rmUid", "==", CTX.uid).get()); } catch {}
       try { buckets.push(await db.collection("visitas").where("criadoPorUid", "==", CTX.uid).get()); } catch {}
+      try { buckets.push(await db.collection("visitas").where("usuarioId", "==", CTX.uid).get()); } catch {}
       const map = new Map();
       buckets.forEach(s => s?.docs.forEach(d => map.set(d.id, d)));
       docs = Array.from(map.values());
+      console.log(`[Visitas] RM - Total: ${docs.length}`);
     }
     
     // Processar visitas
+    let countComVencimento = 0;
     for (const doc of docs) {
       const v = doc.data() || {};
       const empresaId = v.empresaId;
@@ -267,10 +277,17 @@ async function carregarVisitas() {
       const ramos = v.ramos || {};
       for (const key of Object.keys(ramos)) {
         const item = ramos[key] || {};
-        if (!item.vencimento && !item.fimVigencia) continue;
         
-        const fim = parseFimVigencia(item.vencimento || item.fimVigencia);
+        // Tentar vários campos de vencimento
+        const vencimentoRaw = item.vencimento || item.fimVigencia || item.dataVencimento || 
+                             item.vigenciaFim || item.fim_vigencia || null;
+        
+        if (!vencimentoRaw) continue;
+        
+        const fim = parseFimVigencia(vencimentoRaw);
         if (!fim.date) continue;
+        
+        countComVencimento++;
         
         REGISTROS.push({
           id: doc.id + "_" + key,
@@ -283,11 +300,12 @@ async function carregarVisitas() {
           rmNome: v.rmNome || emp.rmNome || "-",
           ramo: (key || item.ramo || "-").toString().replace(/_/g, " "),
           fim: fim,
-          premio: parseCurrency(item.valorEstimado || item.premio || 0),
+          premio: parseCurrency(item.valorEstimado || item.premio || item.valor || 0),
           seguradora: item.seguradora || "-"
         });
       }
     }
+    console.log(`[Visitas] Com vencimento válido: ${countComVencimento}`);
   } catch (e) { console.warn("Erro visitas:", e); }
 }
 
@@ -298,10 +316,12 @@ async function carregarNegociosEmitidos() {
     if (CTX.isAdmin) {
       const snap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
       docs = snap.docs;
+      console.log(`[Negócios] Admin - Total: ${docs.length}`);
     } else if (isGC(CTX.perfil) && CTX.agenciaId) {
       // GC: da agência (query pode falhar, então pega tudo e filtra)
       const snap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
       docs = snap.docs;
+      console.log(`[Negócios] GC - Total: ${docs.length}`);
     } else {
       // RM: próprios
       const buckets = [];
@@ -312,9 +332,11 @@ async function carregarNegociosEmitidos() {
       const map = new Map();
       buckets.forEach(s => s?.docs.forEach(d => map.set(d.id, d)));
       docs = Array.from(map.values());
+      console.log(`[Negócios] RM - Total: ${docs.length}`);
     }
     
     // Processar negócios
+    let countComVencimento = 0;
     for (const doc of docs) {
       const c = doc.data() || {};
       const emp = await getEmpresaInfo(c.empresaId);
@@ -325,8 +347,20 @@ async function carregarNegociosEmitidos() {
         if (String(ag) !== String(CTX.agenciaId) && !EMPRESAS_AGENCIA.has(c.empresaId)) continue;
       }
       
-      const fim = parseFimVigencia(c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal);
-      if (!fim.date) continue;
+      // Tentar vários campos de fim de vigência
+      const fimRaw = c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal || 
+                    c.vigencia_final || c.fimVigenciaTs || c.dataFimVigencia || null;
+      
+      const fim = parseFimVigencia(fimRaw);
+      if (!fim.date) {
+        // Log para debug
+        if (docs.indexOf(doc) < 5) {
+          console.log(`[Negócio] Sem vencimento válido:`, { id: doc.id, fimRaw, campos: Object.keys(c).filter(k => k.toLowerCase().includes('vig') || k.toLowerCase().includes('fim')) });
+        }
+        continue;
+      }
+      
+      countComVencimento++;
       
       REGISTROS.push({
         id: doc.id,
@@ -343,6 +377,7 @@ async function carregarNegociosEmitidos() {
         seguradora: c.seguradora || "Bradesco Seguros"
       });
     }
+    console.log(`[Negócios] Com vencimento válido: ${countComVencimento}`);
   } catch (e) { console.warn("Erro negócios:", e); }
 }
 
@@ -458,29 +493,28 @@ function renderizarTudo() {
 }
 
 function renderizarAlert() {
-  const hoje = new Date();
-  const mesAtual = hoje.getMonth() + 1;
-  const anoAtual = hoje.getFullYear();
-  
-  const vencimentosMes = REGISTROS.filter(r => 
-    r.fim.mes === mesAtual && r.fim.ano === anoAtual
-  );
+  const alert = $("alertBanner");
+  if (!alert) return;
   
   const urgentes = REGISTROS.filter(r => {
     const urg = getUrgencia(r.fim);
     return urg.tipo === "urgente" || urg.tipo === "vencido";
   });
   
-  const alert = $("alertBanner");
   if (urgentes.length > 0) {
+    const temVencido = urgentes.some(r => getUrgencia(r.fim).tipo === "vencido");
     alert.style.display = "flex";
-    alert.className = urgentes.some(r => getUrgencia(r.fim).tipo === "vencido") ? "alert-banner urgent" : "alert-banner";
-    $("alertTitle").textContent = urgentes.some(r => getUrgencia(r.fim).tipo === "vencido") 
-      ? "⚠️ Existem seguros vencidos!" 
-      : "Atenção: Vencimentos próximos";
-    $("alertDesc").textContent = `${urgentes.length} seguro(s) precisam de atenção nos próximos 30 dias`;
-    $("alertValue").textContent = urgentes.length;
-    $("alertIcon").textContent = urgentes.some(r => getUrgencia(r.fim).tipo === "vencido") ? "🚨" : "⚠️";
+    alert.className = temVencido ? "alert-banner urgent" : "alert-banner";
+    
+    const alertIcon = alert.querySelector(".alert-icon");
+    const alertTitle = $("alertTitle");
+    const alertDesc = $("alertDesc");
+    const alertValue = $("alertValue");
+    
+    if (alertIcon) alertIcon.textContent = temVencido ? "🚨" : "⚠️";
+    if (alertTitle) alertTitle.textContent = temVencido ? "⚠️ Existem seguros vencidos!" : "Atenção: Vencimentos próximos";
+    if (alertDesc) alertDesc.textContent = `${urgentes.length} seguro(s) precisam de atenção nos próximos 30 dias`;
+    if (alertValue) alertValue.textContent = urgentes.length;
   } else {
     alert.style.display = "none";
   }
