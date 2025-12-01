@@ -783,6 +783,85 @@ async function uploadAnexo() {
   }
 }
 
+// ==== Edição de Valor ====
+function formatarMoedaInput(input) {
+  let v = (input.value || '').replace(/\D/g, '');
+  if (!v) { input.value = 'R$ 0,00'; return; }
+  v = (parseInt(v, 10) / 100).toFixed(2).replace('.', ',');
+  v = v.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  input.value = 'R$ ' + v;
+}
+
+function desformatarMoeda(str) {
+  if (!str) return 0;
+  return parseFloat(str.replace(/[^\d]/g, '') / 100);
+}
+
+function toggleEditarValor() {
+  const form = $("valorEditForm");
+  const display = $("valorDesejado");
+  const btn = $("btnEditValor");
+  
+  if (form.style.display === "none") {
+    form.style.display = "block";
+    const valorAtual = Number(cotacaoData.valorDesejado || cotacaoData.valorFinal || 0);
+    $("novoValorInput").value = fmtBRL(valorAtual);
+    $("novoValorInput").focus();
+    $("novoValorInput").select();
+  } else {
+    form.style.display = "none";
+  }
+}
+
+function cancelarEditarValor() {
+  $("valorEditForm").style.display = "none";
+}
+
+async function salvarNovoValor() {
+  const novoValor = desformatarMoeda($("novoValorInput")?.value);
+  
+  if (!novoValor || isNaN(novoValor) || novoValor <= 0) {
+    alert("Valor inválido.");
+    return;
+  }
+  
+  const valorAntigo = Number(cotacaoData.valorDesejado || cotacaoData.valorFinal || 0);
+  
+  try {
+    // Registrar alteração no histórico
+    const interacao = {
+      autorNome: CTX.nome,
+      autorUid: CTX.uid,
+      mensagem: `💰 Valor alterado de ${fmtBRL(valorAntigo)} para ${fmtBRL(novoValor)}`,
+      dataHora: new Date(),
+      tipo: "sistema"
+    };
+    
+    await cotacaoRef.update({
+      valorDesejado: novoValor,
+      valorFinal: novoValor, // Atualiza ambos campos
+      dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+      interacoes: firebase.firestore.FieldValue.arrayUnion(interacao)
+    });
+    
+    // Atualizar dados locais
+    cotacaoData.valorDesejado = novoValor;
+    cotacaoData.valorFinal = novoValor;
+    cotacaoData.interacoes = (cotacaoData.interacoes || []).concat([interacao]);
+    
+    // Atualizar UI
+    $("valorDesejado").textContent = fmtBRL(novoValor);
+    cancelarEditarValor();
+    renderizarChat();
+    
+    alert("Valor atualizado com sucesso!");
+    
+  } catch (e) {
+    console.error("Erro ao atualizar valor:", e);
+    alert("Erro ao atualizar valor.");
+  }
+}
+
 // ==== Utilitários ====
 function copiarLink() {
   const url = window.location.href;
@@ -802,3 +881,7 @@ window.atualizarStatus = atualizarStatus;
 window.abrirUpload = abrirUpload;
 window.uploadAnexo = uploadAnexo;
 window.copiarLink = copiarLink;
+window.toggleEditarValor = toggleEditarValor;
+window.cancelarEditarValor = cancelarEditarValor;
+window.salvarNovoValor = salvarNovoValor;
+window.formatarMoedaInput = formatarMoedaInput;
