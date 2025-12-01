@@ -1,529 +1,951 @@
-// --- Firebase v8 ---
-if (!firebase.apps.length) {
+// visitas.js — Registrar Visita Modernizado
+// Firebase v8
+
+// ==== Firebase Init ====
+if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
-const db   = firebase.firestore();
+const db = firebase.firestore();
 
-/* =======================
-   Estado/Perfil
-   ======================= */
-let usuarioAtual = null;
-let perfilAtual  = "";          // "admin" | "gerente chefe" | "assistente" | "rm" | ...
-let minhaAgencia = "";
-let isAdmin      = false;
+// ==== Estado Global ====
+let CTX = { uid: null, perfil: null, agenciaId: null, nome: null, email: null, isAdmin: false };
+const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
 
-// Mapa auxiliar das empresas carregadas (para obter agenciaId/rm na hora de salvar)
-const empresaMetaMap = new Map(); // empresaId -> { nome, agenciaId, rmUid, rmNome }
+let EMPRESAS = {};
+let SEGURADORAS = [];
+let RMS = {};
+let EMPRESA_SELECIONADA = null;
+let CONTATOS = [];
+let CHECKLIST_ITEMS = [];
+let RAMOS_DATA = {};
+let COTACAO_RAMO = null;
 
-/* =======================
-   Helpers de texto/perfil
-   ======================= */
-// normaliza textos (remove acento, minúsculo)
-const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .toLowerCase().trim();
+// Timer
+let TIMER_RUNNING = false;
+let TIMER_SECONDS = 0;
+let TIMER_INTERVAL = null;
 
-// troca "_" e "-" por espaço e normaliza
-const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
+// Geo
+let GEO_DATA = null;
 
-/* =======================
-   Helpers de máscara/validação (mantidos)
-   ======================= */
+// Ramos config
+const RAMOS_CONFIG = [
+  { id: "saude", nome: "Saúde", icon: "🏥" },
+  { id: "dental", nome: "Dental", icon: "🦷" },
+  { id: "vida", nome: "Vida", icon: "❤️" },
+  { id: "vida-global", nome: "Vida Global", icon: "🌍" },
+  { id: "patrimonial", nome: "Patrimonial", icon: "🏢" },
+  { id: "frota", nome: "Frota", icon: "🚗" },
+  { id: "equipamentos", nome: "Equipamentos", icon: "⚙️" },
+  { id: "garantia", nome: "Garantia", icon: "📜" },
+  { id: "rc", nome: "RC Profissional", icon: "⚖️" },
+  { id: "cyber", nome: "Cyber", icon: "💻" },
+  { id: "transporte", nome: "Transporte", icon: "🚚" },
+  { id: "credito", nome: "Crédito", icon: "💳" }
+];
 
-// dd/mm/aaaa enquanto digita (aceita só números)
-function maskDDMMYYYY(value) {
-  let v = (value || "").replace(/\D/g, "").slice(0, 8);
-  if (v.length >= 5) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
-  else if (v.length >= 3) v = v.slice(0, 2) + "/" + v.slice(2);
-  return v;
+const CHECKLIST_DEFAULT = [
+  "Apresentar a empresa e serviços",
+  "Levantar necessidades do cliente",
+  "Verificar apólices vigentes",
+  "Coletar datas de vencimento",
+  "Identificar decisores",
+  "Agendar próximo contato",
+  "Entregar material institucional"
+];
+
+// ==== Helpers ====
+const $ = id => document.getElementById(id);
+const normalizar = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+const toDate = x => {
+  if (!x) return null;
+  if (x.toDate) return x.toDate();
+  if (x instanceof Date) return x;
+  const d = new Date(x);
+  return isNaN(d) ? null : d;
+};
+
+const fmtData = d => d ? d.toLocaleDateString("pt-BR") : "-";
+const fmtHora = d => d ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "-";
+
+function fmtBRL(v) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
 }
 
-function validaDDMMYYYY(v) {
-  if (!v) return true;
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
-  if (!m) return false;
-  const d = parseInt(m[1], 10);
-  const mo = parseInt(m[2], 10);
-  const y = parseInt(m[3], 10);
-  if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 1900) return false;
-  const dt = new Date(y, mo - 1, d);
-  return dt.getFullYear() === y && dt.getMonth() === (mo - 1) && dt.getDate() === d;
+function formatarMoeda(input) {
+  let v = (input.value || '').replace(/\D/g, '');
+  if (!v) { input.value = ''; return; }
+  v = (parseInt(v, 10) / 100).toFixed(2).replace('.', ',');
+  v = v.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  input.value = 'R$ ' + v;
 }
 
-// moeda BR em tempo real
-function maskMoedaBR(v) {
-  v = (v || "").toString().replace(/\D/g, "");
-  if (!v) return "R$ 0,00";
-  v = (parseInt(v, 10) / 100).toFixed(2);
-  let [int, dec] = v.split(".");
-  int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return "R$ " + int + "," + dec;
-}
-
-// parse "R$ 50.100,15" -> 50100.15
-function parseMoedaBRToNumber(str) {
+function desformatarMoeda(str) {
   if (!str) return 0;
-  return parseFloat(str.replace(/[R$\s\.]/g, "").replace(",", ".")) || 0;
+  return parseFloat(str.replace(/[^\d]/g, '') || 0) / 100;
 }
 
-/* =======================
-   Perfil do usuário
-   ======================= */
-async function getPerfilAgencia() {
-  const user = auth.currentUser;
-  if (!user) return { perfil:"", agenciaId:"", isAdmin:false, nome:"" };
-  const udoc = await db.collection("usuarios_banco").doc(user.uid).get();
-  const d = udoc.exists ? (udoc.data() || {}) : {};
-  const perfil = roleNorm(d.perfil || d.roleId || "");
-  const agenciaId = d.agenciaId || "";
-  const admin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
-  return { perfil, agenciaId, isAdmin: admin, nome: d.nome || user.email || "" };
+function getIniciais(nome) {
+  if (!nome) return "?";
+  const parts = nome.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-/* =======================
-   Carregamentos
-   ======================= */
-
-async function carregarEmpresas() {
-  const select = document.getElementById("empresa");
-  const infoEmpresa = document.getElementById("infoEmpresa");
-  const rmNomeSpan = document.getElementById("rmNome");
-
-  if (!select) return;
-
-  select.innerHTML = `<option value="">Carregando empresas...</option>`;
-  empresaMetaMap.clear();
-
-  // monta queries por perfil
-  const colEmp = db.collection("empresas");
-  const buckets = [];
-
-  if (isAdmin) {
-    try { buckets.push(await colEmp.orderBy("nome").get()); }
-    catch { buckets.push(await colEmp.get()); }
-  } else if (["gerente chefe","assistente"].includes(perfilAtual)) {
-    if (minhaAgencia) {
-      try { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).orderBy("nome").get()); }
-      catch { buckets.push(await colEmp.where("agenciaId","==",minhaAgencia).get()); }
-    }
-  } else {
-    try { buckets.push(await colEmp.where("rmUid","==",usuarioAtual.uid).get()); } catch(e){}
-    try { buckets.push(await colEmp.where("rmId","==", usuarioAtual.uid).get()); } catch(e){}
-    try { buckets.push(await colEmp.where("usuarioId","==",usuarioAtual.uid).get()); } catch(e){}
-    try { buckets.push(await colEmp.where("gerenteId","==",usuarioAtual.uid).get()); } catch(e){}
-  }
-
-  // mescla por ID
-  const map = new Map();
-  buckets.forEach(snap => {
-    snap?.forEach?.(doc => map.set(doc.id, doc));
-    if (snap?.docs) snap.docs.forEach(doc => map.set(doc.id, doc));
-  });
-
-  const docs = Array.from(map.values()).map(d => ({ id: d.id, ...d.data() }))
-    .sort((a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR"));
-
-  // render
-  select.innerHTML = `<option value="">Selecione uma empresa</option>`;
-  docs.forEach(data => {
-    const option = document.createElement("option");
-    option.value = data.id;
-    option.textContent = data.nome || "(Sem nome)";
-
-    const rmNome = data.rmNome || data.rm || data.rm_nome || "Não informado";
-    option.setAttribute("data-rm", rmNome);
-
-    empresaMetaMap.set(data.id, {
-      nome: data.nome || "(Sem nome)",
-      agenciaId: data.agenciaId || "",
-      rmUid: data.rmUid || data.rmId || null,
-      rmNome: rmNome
-    });
-
-    select.appendChild(option);
-  });
-
-  // mostra RM quando trocar a empresa
-  select.addEventListener("change", () => {
-    const selectedOption = select.options[select.selectedIndex];
-    const rmNome = selectedOption.getAttribute("data-rm") || "Não informado";
-    rmNomeSpan.textContent = rmNome;
-    infoEmpresa.style.display = selectedOption.value ? "block" : "none";
-  });
-}
-
-function carregarSeguradoras() {
-  return db.collection("seguradoras").get()
-    .then(snapshot => {
-      const arr = [];
-      snapshot.forEach(doc => {
-        const n = (doc.data() && doc.data().nome) ? String(doc.data().nome).trim() : null;
-        if (n) arr.push(n);
-      });
-      return arr.sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
-    })
-    .catch(err => {
-      console.error("Erro ao carregar seguradoras:", err);
-      return [];
-    });
-}
-
-async function carregarRamosSeguro() {
+// ==== Auth ====
+auth.onAuthStateChanged(async user => {
+  if (!user) { location.href = "login.html"; return; }
+  
+  CTX.uid = user.uid;
+  CTX.email = user.email;
+  
   try {
-    const snapshot = await db.collection("ramos-seguro").orderBy("ordem").get();
-    const ramos = [];
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      ramos.push({ id: doc.id, nome: data.nomeExibicao || data.nome || doc.id });
-    });
-    if (ramos.length) return ramos;
-
-    return [
-      { id: "auto", nome: "Automóvel" },
-      { id: "vida", nome: "Vida" },
-      { id: "saude", nome: "Saúde" },
-      { id: "dental", nome: "Dental" },
-      { id: "empresarial", nome: "Empresarial" },
-      { id: "residencial", nome: "Residencial" },
-      { id: "equipamentos", nome: "Equipamentos" },
-      { id: "frota", nome: "Frota" },
-      { id: "rc", nome: "Responsabilidade Civil" },
-      { id: "transportes", nome: "Transportes" }
-    ];
-  } catch (e) {
-    console.error("Erro ao carregar ramos-seguro:", e);
-    return [
-      { id: "auto", nome: "Automóvel" },
-      { id: "vida", nome: "Vida" },
-      { id: "saude", nome: "Saúde" },
-      { id: "dental", nome: "Dental" },
-      { id: "empresarial", nome: "Empresarial" }
-    ];
-  }
-}
-
-/* =======================
-   UI dinâmica dos ramos
-   ======================= */
-
-async function gerarCamposRamos(seguradoras) {
-  const ramos = await carregarRamosSeguro();
-  const container = document.getElementById("ramos-container");
-  container.innerHTML = "";
-
-  if (!ramos.length) {
-    container.innerHTML = `<div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#fff7ed;color:#7c2d12;">
-      Não há ramos configurados. Configure em <strong>ramos-seguro</strong> no Firestore.
-    </div>`;
-    return;
-  }
-
-  ramos.forEach(ramo => {
-    const box = document.createElement("div");
-    box.className = "ramo-box";
-
-    const head = document.createElement("div");
-    head.className = "head";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.className = "ramo";
-    checkbox.value = ramo.id;
-
-    const labelCheck = document.createElement("label");
-    labelCheck.style.margin = "0";
-    labelCheck.append(` ${ramo.nome}`);
-
-    head.appendChild(checkbox);
-    head.appendChild(labelCheck);
-    box.appendChild(head);
-
-    const sub = document.createElement("div");
-    sub.className = "subcampos";
-    sub.id = `campos-${ramo.id}`;
-
-    sub.innerHTML = `
-      <label>Vencimento (dd/mm/aaaa):</label>
-      <input type="text" id="${ramo.id}-vencimento" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10">
-
-      <label>Prêmio anual (R$):</label>
-      <input type="text" id="${ramo.id}-premio" placeholder="R$ 0,00">
-
-      <label>Seguradora:</label>
-      <select id="${ramo.id}-seguradora">
-        <option value="">Selecione</option>
-        ${seguradoras.map(s => `<option value="${s}">${s}</option>`).join("")}
-      </select>
-
-      <label>Observações:</label>
-      <textarea id="${ramo.id}-observacoes" placeholder="Comentários ou detalhes adicionais..."></textarea>
-    `;
-
-    const vencInput = sub.querySelector(`#${ramo.id}-vencimento`);
-    vencInput.addEventListener("input", (e) => {
-      e.target.value = maskDDMMYYYY(e.target.value);
-    });
-
-    const premioInput = sub.querySelector(`#${ramo.id}-premio`);
-    premioInput.addEventListener("input", (e) => {
-      e.target.value = maskMoedaBR(e.target.value);
-    });
-    premioInput.addEventListener("focus", (e) => {
-      if (!e.target.value) e.target.value = "R$ 0,00";
-    });
-
-    checkbox.addEventListener("change", () => {
-      sub.style.display = checkbox.checked ? "block" : "none";
-    });
-
-    box.appendChild(sub);
-    container.appendChild(box);
-  });
-}
-
-/* =======================
-   Salvar (grava agenciaId/rm e numeroFuncionarios)
-   ======================= */
-
-function registrarVisita() {
-  const empresaSelect = document.getElementById("empresa");
-  const empresaId = empresaSelect?.value || "";
-  const tipoVisitaSelect = document.getElementById("tipoVisita");
-  const tipoVisita = tipoVisitaSelect ? tipoVisitaSelect.value : "";
-  const empresaNome = empresaSelect?.options?.[empresaSelect.selectedIndex]?.textContent || "";
-
-  const numFuncStr = (document.getElementById("numFuncionarios")?.value || "").trim();
-  const numeroFuncionarios = numFuncStr === "" ? null : Math.max(0, parseInt(numFuncStr, 10) || 0);
-
-  if (!empresaId)  return alert("Selecione a empresa.");
-  if (!tipoVisita) return alert("Selecione o tipo da visita.");
-
-  const meta = empresaMetaMap.get(empresaId) || {};
-  const agenciaDaEmpresa = meta.agenciaId || "";
-  const rmUidEmpresa     = meta.rmUid || null;
-  const rmNomeEmpresa    = meta.rmNome || (empresaSelect.options[empresaSelect.selectedIndex]?.getAttribute("data-rm") || "");
-
-  auth.onAuthStateChanged(async (user) => {
-    if (!user) { alert("Usuário não autenticado."); return; }
-
-    if (perfilAtual === "rm" && agenciaDaEmpresa && minhaAgencia && agenciaDaEmpresa !== minhaAgencia) {
-      alert("Você só pode registrar visitas de empresas da sua agência.");
-      return;
+    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+    if (snap.exists) {
+      const d = snap.data();
+      CTX.perfil = normalizar(d.perfil || "").replace(/[-_]/g, " ");
+      CTX.agenciaId = d.agenciaId || null;
+      CTX.nome = d.nome || user.email;
+      CTX.isAdmin = CTX.perfil === "admin" || ADMIN_EMAILS.includes(user.email?.toLowerCase());
+    } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
+      CTX.perfil = "admin";
+      CTX.isAdmin = true;
+      CTX.nome = user.email;
     }
-
-    const visita = {
-      empresaId,
-      empresaNome,
-      tipoVisita,
-      rmNome: rmNomeEmpresa || "Não informado",
-      rmUid:  rmUidEmpresa || null,
-      agenciaId: agenciaDaEmpresa || minhaAgencia || "",
-      usuarioId: user.uid,
-      criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-      numeroFuncionarios,
-      ramos: {}
-    };
-
-    let algumRamo = false;
-    let erroVenc = null;
-
-    document.querySelectorAll(".ramo").forEach(input => {
-      if (input.checked) {
-        algumRamo = true;
-        const id = input.value;
-
-        const vencimentoStr = (document.getElementById(`${id}-vencimento`).value || "").trim();
-        const premioStr = document.getElementById(`${id}-premio`).value || "";
-        const premioNum = parseMoedaBRToNumber(premioStr);
-        const seguradoraSel = document.getElementById(`${id}-seguradora`).value || "";
-        const obs = document.getElementById(`${id}-observacoes`).value || "";
-
-        if (!validaDDMMYYYY(vencimentoStr)) {
-          erroVenc = `Vencimento inválido em ${id}. Use dd/mm/aaaa.`;
-        }
-
-        visita.ramos[id] = {
-          vencimento: vencimentoStr,
-          premio: premioNum,
-          seguradora: seguradoraSel,
-          observacoes: obs
-        };
-      }
-    });
-
-    if (erroVenc) return alert(erroVenc);
-    if (!algumRamo) return alert("Marque pelo menos um ramo e preencha os campos.");
-
-    try {
-      await db.collection("visitas").add(visita);
-      alert("Visita registrada com sucesso.");
-      location.reload();
-    } catch (err) {
-      console.error("Erro ao registrar visita:", err);
-      alert("Erro ao salvar visita.");
-    }
-  });
-}
-
-/* =======================
-   Bootstrap
-   ======================= */
-window.addEventListener("DOMContentLoaded", async () => {
-  auth.onAuthStateChanged(async (user) => {
-    if (!user) return (window.location.href = "login.html");
-    usuarioAtual = user;
-
-    const ctx = await getPerfilAgencia();
-    perfilAtual  = ctx.perfil;
-    minhaAgencia = ctx.agenciaId;
-    isAdmin      = ctx.isAdmin;
-
-    await carregarEmpresas();
-    const seguradoras = await carregarSeguradoras();
-    await gerarCamposRamos(seguradoras);
-  });
+  } catch (e) { console.warn("Erro perfil:", e); }
+  
+  await init();
 });
 
-window.registrarVisita = registrarVisita;
-
-/* ============================================================
-   ADIÇÕES: PDF 1 página e GERAR LINK (com rmNome no URL)
-   ============================================================ */
-
-function coletarDadosFormulario() {
-  const empresaSelect = document.getElementById("empresa");
-  const tipoVisita = (document.getElementById("tipoVisita")?.value || "").trim();
-  const empresaId = empresaSelect?.value || "";
-  const empresaNome = empresaSelect?.options?.[empresaSelect.selectedIndex]?.textContent || "";
-  const rmNome = document.getElementById("rmNome")?.textContent || "";
-  const numFuncionarios = (document.getElementById("numFuncionarios")?.value || "").trim();
-
-  const ramos = [];
-  document.querySelectorAll(".ramo").forEach(input => {
-    const id = input.value;
-    const label = input.parentElement?.textContent?.trim() || id.toUpperCase();
-    ramos.push({ id, nome: label });
-  });
-
-  return { empresaId, empresaNome, tipoVisita, rmNome, numFuncionarios, ramos };
+// ==== Inicialização ====
+async function init() {
+  showLoading(true);
+  
+  await Promise.all([
+    carregarEmpresas(),
+    carregarSeguradoras(),
+    carregarRMs()
+  ]);
+  
+  renderizarRamos();
+  renderizarChecklist();
+  setDefaultDateTime();
+  
+  showLoading(false);
 }
 
-async function gerarPDF() {
-  const { PDFDocument, StandardFonts, rgb } = PDFLib;
-  const dados = coletarDadosFormulario();
-  if (!dados.empresaId) { alert("Selecione a empresa para gerar o PDF."); return; }
+function showLoading(show) {
+  const el = $("loadingOverlay");
+  if (el) el.classList.toggle('active', show);
+}
 
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([595.28, 841.89]); // A4
-  const form = pdf.getForm();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
+// ==== Carregar Dados ====
+async function carregarEmpresas() {
+  try {
+    const snap = await db.collection("empresas").get();
+    const datalist = $("empresasDatalist");
+    
+    snap.forEach(doc => {
+      const d = doc.data();
+      EMPRESAS[doc.id] = { id: doc.id, ...d };
+      
+      if (datalist) {
+        const opt = document.createElement("option");
+        opt.value = d.nome || d.razaoSocial || "";
+        opt.dataset.id = doc.id;
+        datalist.appendChild(opt);
+      }
+    });
+  } catch (e) { console.warn("Erro empresas:", e); }
+}
 
-  const M = 28, W = page.getWidth(), H = page.getHeight();
-  const innerW = W - M*2;
-  let y = H - M;
+async function carregarSeguradoras() {
+  try {
+    const snap = await db.collection("seguradoras").get();
+    snap.forEach(doc => {
+      SEGURADORAS.push(doc.data().nome || doc.id);
+    });
+    SEGURADORAS.sort();
+  } catch (e) { 
+    SEGURADORAS = ["Bradesco", "SulAmérica", "Porto Seguro", "Allianz", "Mapfre", "Tokio Marine", "Liberty", "Zurich", "HDI", "Sompo", "Outros"];
+  }
+}
 
+async function carregarRMs() {
+  try {
+    const snap = await db.collection("usuarios_banco").get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      if (d.nome) {
+        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
+      }
+    });
+  } catch (e) { console.warn("Erro RMs:", e); }
+}
+
+// ==== Empresa ====
+$("empresaInput")?.addEventListener("change", function() {
+  const nome = this.value.trim();
+  const empresa = Object.values(EMPRESAS).find(e => 
+    (e.nome || e.razaoSocial || "").toLowerCase() === nome.toLowerCase()
+  );
+  
+  if (empresa) {
+    selecionarEmpresa(empresa);
+  }
+});
+
+async function selecionarEmpresa(empresa) {
+  EMPRESA_SELECIONADA = empresa;
+  
+  $("empresaNome").textContent = empresa.nome || empresa.razaoSocial || "-";
+  
+  const badgesHtml = [];
+  if (empresa.cidade) badgesHtml.push(`<span class="badge badge-muted">📍 ${empresa.cidade}${empresa.estado ? ', ' + empresa.estado : ''}</span>`);
+  if (empresa.numFuncionarios) badgesHtml.push(`<span class="badge badge-info">👥 ${empresa.numFuncionarios} func.</span>`);
+  $("empresaBadges").innerHTML = badgesHtml.join('');
+  
+  let rmNome = empresa.rmNome || empresa.gerenteNome || '';
+  const rmId = empresa.rmUid || empresa.rmId || empresa.gerenteId;
+  if (!rmNome && rmId && RMS[rmId]) rmNome = RMS[rmId].nome;
+  
+  $("empresaInfoGrid").innerHTML = `
+    <div class="empresa-info-item"><span>👤</span> <strong>${rmNome || 'Não vinculado'}</strong></div>
+    <div class="empresa-info-item"><span>📞</span> ${empresa.telefone || '-'}</div>
+    <div class="empresa-info-item"><span>📧</span> ${empresa.email || '-'}</div>
+    <div class="empresa-info-item"><span>📄</span> ${empresa.cnpj || '-'}</div>
+  `;
+  
+  if (empresa.numFuncionarios) {
+    $("numFuncionarios").value = empresa.numFuncionarios;
+  }
+  
+  await carregarHistoricoEmpresa(empresa.id);
+  await carregarSegurosMapeados(empresa.id);
+  
+  $("empresaCard").classList.add('active');
+}
+
+function limparEmpresa() {
+  EMPRESA_SELECIONADA = null;
+  $("empresaInput").value = "";
+  $("empresaCard").classList.remove('active');
+  $("historicoVisitas").innerHTML = '<div class="historico-empty">Nenhuma visita registrada</div>';
+  $("segurosAtivosSection").style.display = "none";
+}
+
+async function carregarHistoricoEmpresa(empresaId) {
+  const container = $("historicoVisitas");
+  
+  try {
+    const snap = await db.collection("visitas")
+      .where("empresaId", "==", empresaId)
+      .orderBy("dataHora", "desc")
+      .limit(5)
+      .get();
+    
+    if (snap.empty) {
+      container.innerHTML = '<div class="historico-empty">Nenhuma visita registrada</div>';
+      return;
+    }
+    
+    let html = "";
+    snap.forEach(doc => {
+      const d = doc.data();
+      const data = toDate(d.dataHora);
+      const tipo = d.tipoVisita || d.tipo || "Presencial";
+      const tipoBadge = tipo === "Online" ? "badge-info" : "badge-success";
+      
+      html += `
+        <div class="historico-item">
+          <div class="historico-item-left">
+            <span class="badge ${tipoBadge}">${tipo === "Online" ? "🔵" : "🟢"} ${tipo}</span>
+            <span>${fmtData(data)}</span>
+          </div>
+          <span style="color: var(--muted); font-size: 12px;">${d.rmNome || '-'}</span>
+        </div>
+      `;
+    });
+    
+    container.innerHTML = html;
+  } catch (e) {
+    console.warn("Erro histórico:", e);
+    container.innerHTML = '<div class="historico-empty">Erro ao carregar histórico</div>';
+  }
+}
+
+async function carregarSegurosMapeados(empresaId) {
+  const section = $("segurosAtivosSection");
+  const container = $("segurosAtivos");
+  
+  try {
+    const snap = await db.collection("visitas")
+      .where("empresaId", "==", empresaId)
+      .orderBy("dataHora", "desc")
+      .limit(1)
+      .get();
+    
+    if (snap.empty) {
+      section.style.display = "none";
+      return;
+    }
+    
+    const visita = snap.docs[0].data();
+    const ramos = visita.ramos || {};
+    
+    const hoje = new Date();
+    let html = "";
+    let temRamos = false;
+    
+    Object.entries(ramos).forEach(([ramoId, dados]) => {
+      if (!dados.abordado) return;
+      temRamos = true;
+      
+      const config = RAMOS_CONFIG.find(r => r.id === ramoId) || { icon: "📋", nome: ramoId };
+      
+      let chipClass = "";
+      let vencInfo = "";
+      
+      if (dados.vencimento) {
+        const [dia, mes, ano] = dados.vencimento.split("/");
+        const dataVenc = new Date(ano, mes - 1, dia);
+        const diffDias = Math.ceil((dataVenc - hoje) / (1000 * 60 * 60 * 24));
+        
+        if (diffDias < 0) {
+          chipClass = "vencido";
+          vencInfo = "Vencido";
+        } else if (diffDias <= 60) {
+          chipClass = "vence-breve";
+          vencInfo = `Vence ${dados.vencimento}`;
+        } else {
+          vencInfo = `Vence ${dados.vencimento}`;
+        }
+      } else if (dados.status === "nao-possui") {
+        vencInfo = "Não possui";
+      }
+      
+      html += `
+        <div class="seguro-ativo-chip ${chipClass}">
+          <span>${config.icon}</span>
+          <span><strong>${config.nome}</strong></span>
+          ${vencInfo ? `<span style="color: var(--muted);">• ${vencInfo}</span>` : ''}
+        </div>
+      `;
+    });
+    
+    if (temRamos) {
+      container.innerHTML = html;
+      section.style.display = "block";
+    } else {
+      section.style.display = "none";
+    }
+  } catch (e) {
+    console.warn("Erro seguros mapeados:", e);
+    section.style.display = "none";
+  }
+}
+
+// ==== Timer ====
+function toggleTimer() {
+  if (TIMER_RUNNING) {
+    stopTimer();
+  } else {
+    startTimer();
+  }
+}
+
+function startTimer() {
+  TIMER_RUNNING = true;
+  $("btnTimerStart").textContent = "⏸";
+  $("btnTimerStart").classList.add('active');
+  
+  TIMER_INTERVAL = setInterval(() => {
+    TIMER_SECONDS++;
+    updateTimerDisplay();
+  }, 1000);
+}
+
+function stopTimer() {
+  TIMER_RUNNING = false;
+  $("btnTimerStart").textContent = "▶";
+  $("btnTimerStart").classList.remove('active');
+  
+  if (TIMER_INTERVAL) {
+    clearInterval(TIMER_INTERVAL);
+    TIMER_INTERVAL = null;
+  }
+}
+
+function resetTimer() {
+  stopTimer();
+  TIMER_SECONDS = 0;
+  updateTimerDisplay();
+}
+
+function updateTimerDisplay() {
+  const h = Math.floor(TIMER_SECONDS / 3600);
+  const m = Math.floor((TIMER_SECONDS % 3600) / 60);
+  const s = TIMER_SECONDS % 60;
+  $("timerDisplay").textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// ==== Geolocalização ====
+function capturarGeo() {
+  if (!navigator.geolocation) {
+    alert("Geolocalização não suportada neste navegador.");
+    return;
+  }
+  
+  $("geoStatus").textContent = "Capturando...";
+  
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      GEO_DATA = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: new Date()
+      };
+      
+      $("geoStatus").textContent = "✅ Localização capturada";
+      $("geoCoords").textContent = `${GEO_DATA.lat.toFixed(6)}, ${GEO_DATA.lng.toFixed(6)}`;
+      $("geoCard").style.background = "#dcfce7";
+    },
+    err => {
+      console.warn("Erro geo:", err);
+      $("geoStatus").textContent = "❌ Erro ao capturar";
+      $("geoCoords").textContent = err.message;
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+// ==== Contatos ====
+function addContato() {
+  const nome = $("contatoNome").value.trim();
+  const cargo = $("contatoCargo").value.trim();
+  
+  if (!nome) {
+    alert("Informe o nome do contato.");
+    return;
+  }
+  
+  CONTATOS.push({ nome, cargo });
+  $("contatoNome").value = "";
+  $("contatoCargo").value = "";
+  
+  renderizarContatos();
+}
+
+function removeContato(index) {
+  CONTATOS.splice(index, 1);
+  renderizarContatos();
+}
+
+function renderizarContatos() {
+  const container = $("contatosList");
+  
+  if (CONTATOS.length === 0) {
+    container.innerHTML = '<div class="historico-empty" id="contatosEmpty">Nenhum contato adicionado</div>';
+    $("contatosCount").textContent = "0";
+    return;
+  }
+  
+  container.innerHTML = CONTATOS.map((c, i) => `
+    <div class="contato-item">
+      <div class="contato-avatar">${getIniciais(c.nome)}</div>
+      <div class="contato-info">
+        <div class="contato-nome">${c.nome}</div>
+        <div class="contato-cargo">${c.cargo || '-'}</div>
+      </div>
+      <button class="contato-remove" onclick="removeContato(${i})">✕</button>
+    </div>
+  `).join('');
+  
+  $("contatosCount").textContent = CONTATOS.length;
+}
+
+// ==== Checklist ====
+function renderizarChecklist() {
+  CHECKLIST_ITEMS = CHECKLIST_DEFAULT.map(item => ({ text: item, done: false }));
+  
+  const container = $("checklist");
+  container.innerHTML = CHECKLIST_ITEMS.map((item, i) => `
+    <div class="checklist-item ${item.done ? 'done' : ''}" onclick="toggleChecklistItem(${i})">
+      <div class="checklist-checkbox">${item.done ? '✓' : ''}</div>
+      <span class="checklist-text">${item.text}</span>
+    </div>
+  `).join('');
+  
+  updateChecklistProgress();
+}
+
+function toggleChecklistItem(index) {
+  CHECKLIST_ITEMS[index].done = !CHECKLIST_ITEMS[index].done;
+  
+  const items = document.querySelectorAll('.checklist-item');
+  if (items[index]) {
+    items[index].classList.toggle('done', CHECKLIST_ITEMS[index].done);
+    items[index].querySelector('.checklist-checkbox').textContent = CHECKLIST_ITEMS[index].done ? '✓' : '';
+  }
+  
+  updateChecklistProgress();
+}
+
+function updateChecklistProgress() {
+  const done = CHECKLIST_ITEMS.filter(i => i.done).length;
+  const total = CHECKLIST_ITEMS.length;
+  $("checklistProgress").textContent = `${done}/${total}`;
+}
+
+// ==== Ramos ====
+function renderizarRamos() {
+  const container = $("ramosContainer");
+  
+  const seguradorasOptions = SEGURADORAS.map(s => `<option value="${s}">${s}</option>`).join('');
+  
+  container.innerHTML = RAMOS_CONFIG.map(ramo => {
+    RAMOS_DATA[ramo.id] = {
+      abordado: false,
+      status: "",
+      interesse: "",
+      vencimento: "",
+      seguradora: "",
+      valorEstimado: "",
+      concorrente: "",
+      obs: ""
+    };
+    
+    return `
+      <div class="ramo-card" id="ramo-${ramo.id}" onclick="toggleRamo('${ramo.id}', event)">
+        <div class="ramo-header">
+          <div class="ramo-header-left">
+            <div class="ramo-icon">${ramo.icon}</div>
+            <span class="ramo-nome">${ramo.nome}</span>
+          </div>
+          <div class="ramo-toggle"></div>
+        </div>
+        <div class="ramo-body" onclick="event.stopPropagation()">
+          <div style="margin-bottom: 14px;">
+            <label style="font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; display: block;">STATUS</label>
+            <div class="status-selector">
+              <div class="status-option" data-status="ativo" onclick="setRamoStatus('${ramo.id}', 'ativo', this)">🟢 Ativo</div>
+              <div class="status-option" data-status="vence" onclick="setRamoStatus('${ramo.id}', 'vence', this)">🟡 Vence</div>
+              <div class="status-option" data-status="vencido" onclick="setRamoStatus('${ramo.id}', 'vencido', this)">🔴 Vencido</div>
+              <div class="status-option" data-status="nao-possui" onclick="setRamoStatus('${ramo.id}', 'nao-possui', this)">⚪ Não tem</div>
+            </div>
+          </div>
+          
+          <div style="margin-bottom: 14px;">
+            <label style="font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; display: block;">INTERESSE</label>
+            <div class="interesse-selector">
+              <div class="interesse-option" data-interesse="alto" onclick="setRamoInteresse('${ramo.id}', 'alto', this)" title="Alto">🔥</div>
+              <div class="interesse-option" data-interesse="medio" onclick="setRamoInteresse('${ramo.id}', 'medio', this)" title="Médio">🟡</div>
+              <div class="interesse-option" data-interesse="baixo" onclick="setRamoInteresse('${ramo.id}', 'baixo', this)" title="Baixo">❄️</div>
+            </div>
+          </div>
+          
+          <div class="ramo-fields">
+            <div class="ramo-field">
+              <label>Vencimento</label>
+              <input type="text" id="${ramo.id}-vencimento" placeholder="dd/mm/aaaa" maxlength="10" oninput="formatarData(this)" onchange="updateRamoField('${ramo.id}', 'vencimento', this.value)">
+            </div>
+            <div class="ramo-field">
+              <label>Seguradora Atual</label>
+              <select id="${ramo.id}-seguradora" onchange="updateRamoField('${ramo.id}', 'seguradora', this.value)">
+                <option value="">Selecione</option>
+                ${seguradorasOptions}
+              </select>
+            </div>
+            <div class="ramo-field">
+              <label>Valor Estimado</label>
+              <input type="text" id="${ramo.id}-valor" placeholder="R$ 0,00" oninput="formatarMoeda(this); updateRamoField('${ramo.id}', 'valorEstimado', this.value)">
+            </div>
+            <div class="ramo-field">
+              <label>Concorrente</label>
+              <input type="text" id="${ramo.id}-concorrente" placeholder="Corretor atual" onchange="updateRamoField('${ramo.id}', 'concorrente', this.value)">
+            </div>
+            <div class="ramo-field full">
+              <label>Observações</label>
+              <textarea id="${ramo.id}-obs" placeholder="Notas sobre este ramo..." onchange="updateRamoField('${ramo.id}', 'obs', this.value)"></textarea>
+            </div>
+          </div>
+          
+          <div class="ramo-actions">
+            <button class="btn btn-sm btn-primary" onclick="abrirModalCotacao('${ramo.id}')">📋 Criar Cotação</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleRamo(ramoId, event) {
+  if (event.target.closest('.ramo-body')) return;
+  
+  const card = $(`ramo-${ramoId}`);
+  const isActive = card.classList.contains('active');
+  
+  card.classList.toggle('active');
+  RAMOS_DATA[ramoId].abordado = !isActive;
+  
+  updateRamosCount();
+}
+
+function setRamoStatus(ramoId, status, el) {
+  el.parentElement.querySelectorAll('.status-option').forEach(opt => opt.classList.remove('active'));
+  el.classList.add('active');
+  RAMOS_DATA[ramoId].status = status;
+}
+
+function setRamoInteresse(ramoId, interesse, el) {
+  el.parentElement.querySelectorAll('.interesse-option').forEach(opt => opt.classList.remove('active'));
+  el.classList.add('active');
+  RAMOS_DATA[ramoId].interesse = interesse;
+}
+
+function updateRamoField(ramoId, field, value) {
+  RAMOS_DATA[ramoId][field] = value;
+}
+
+function formatarData(input) {
+  let v = input.value.replace(/\D/g, '');
+  if (v.length > 2) v = v.slice(0, 2) + '/' + v.slice(2);
+  if (v.length > 5) v = v.slice(0, 5) + '/' + v.slice(5, 9);
+  input.value = v;
+}
+
+function updateRamosCount() {
+  const count = Object.values(RAMOS_DATA).filter(r => r.abordado).length;
+  $("ramosAtivosCount").textContent = `${count} ramo${count !== 1 ? 's' : ''}`;
+}
+
+// ==== Criar Cotação ====
+function abrirModalCotacao(ramoId) {
+  COTACAO_RAMO = ramoId;
+  
+  const ramo = RAMOS_CONFIG.find(r => r.id === ramoId) || { nome: ramoId, icon: "📋" };
+  const dados = RAMOS_DATA[ramoId] || {};
+  
+  $("cotacaoInfo").innerHTML = `
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <span style="font-size: 32px;">${ramo.icon}</span>
+      <div>
+        <div style="font-weight: 700; font-size: 16px;">${ramo.nome}</div>
+        <div style="font-size: 13px; color: var(--muted);">${EMPRESA_SELECIONADA?.nome || '-'}</div>
+      </div>
+    </div>
+  `;
+  
+  $("cotacaoValor").value = dados.valorEstimado || "";
+  
+  const tempMap = { alto: "quente", medio: "morno", baixo: "frio" };
+  $("cotacaoTemperatura").value = tempMap[dados.interesse] || "morno";
+  
+  $("modalCotacao").classList.add('active');
+}
+
+function fecharModalCotacao() {
+  $("modalCotacao").classList.remove('active');
+  COTACAO_RAMO = null;
+}
+
+async function confirmarCriarCotacao() {
+  if (!EMPRESA_SELECIONADA || !COTACAO_RAMO) {
+    alert("Dados incompletos.");
+    return;
+  }
+  
+  const ramo = RAMOS_CONFIG.find(r => r.id === COTACAO_RAMO) || { nome: COTACAO_RAMO };
+  const valor = desformatarMoeda($("cotacaoValor").value);
+  const temperatura = $("cotacaoTemperatura").value;
+  
+  let rmUid = EMPRESA_SELECIONADA.rmUid || EMPRESA_SELECIONADA.rmId || EMPRESA_SELECIONADA.gerenteId || "";
+  let rmNome = EMPRESA_SELECIONADA.rmNome || EMPRESA_SELECIONADA.gerenteNome || "";
+  if (rmUid && !rmNome && RMS[rmUid]) rmNome = RMS[rmUid].nome;
+  if (!rmUid) { rmUid = CTX.uid; rmNome = CTX.nome; }
+  
+  const cotacao = {
+    empresaNome: EMPRESA_SELECIONADA.nome || EMPRESA_SELECIONADA.razaoSocial,
+    empresaId: EMPRESA_SELECIONADA.id,
+    empresaCNPJ: EMPRESA_SELECIONADA.cnpj || null,
+    ramo: ramo.nome,
+    valorDesejado: valor,
+    temperatura,
+    status: "Pendente Agência",
+    dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
+    dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+    criadoPorUid: CTX.uid,
+    criadoPorNome: CTX.nome,
+    rmUid,
+    rmNome,
+    agenciaId: EMPRESA_SELECIONADA.agenciaId || CTX.agenciaId || "",
+    origem: "visita",
+    interacoes: [{
+      autorNome: CTX.nome,
+      autorUid: CTX.uid,
+      mensagem: `📋 Cotação criada a partir de visita comercial`,
+      dataHora: new Date(),
+      tipo: "sistema"
+    }]
+  };
+  
+  try {
+    const docRef = await db.collection("cotacoes-gerentes").add(cotacao);
+    alert(`Cotação criada com sucesso!\nID: ${docRef.id}`);
+    fecharModalCotacao();
+  } catch (e) {
+    console.error("Erro ao criar cotação:", e);
+    alert("Erro ao criar cotação.");
+  }
+}
+
+// ==== Default DateTime ====
+function setDefaultDateTime() {
   const now = new Date();
-  const dataStr = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
-  page.drawText(`Data: ${dataStr}`, { x:M, y, size:12, font, color:rgb(0,0.25,0.5) });
-  y -= 14;
-
-  const headerLine = (label, value, key) => {
-    page.drawText(label, { x:M, y, size:9, font, color:rgb(0.2,0.2,0.2) });
-    const tf = form.createTextField(key);
-    tf.setText(value || "");
-    tf.addToPage(page, { x:M+140, y:y-2, width:innerW-140, height:14 });
-    y -= 20;
-  };
-  headerLine("Empresa", dados.empresaNome, "hdr_empresa");
-  headerLine("Tipo de visita", dados.tipoVisita || "Presencial", "hdr_tipo");
-  headerLine("RM responsável", dados.rmNome || "", "hdr_rm");
-  headerLine("Nº de funcionários", dados.numFuncionarios || "", "hdr_func");
-
-  y -= 2;
-  page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
-  y -= 12;
-
-  page.drawText('Mapeamento de Seguros (linhas em branco para anotar)', { x:M, y, size:11, font, color:rgb(0,0.25,0.5) });
-  y -= 12;
-
-  const cols = [
-    { key:"ramo",       label:"Ramo",        w:100 },
-    { key:"venc",       label:"Vencimento",  w:80  },
-    { key:"premio",     label:"Prêmio anual (R$)", w:110 },
-    { key:"seguradora", label:"Seguradora",  w:120 },
-    { key:"obs",        label:"Observações", w: innerW - (100+80+110+120) }
-  ];
-  let x = M;
-  cols.forEach(c => { page.drawText(c.label, {x, y, size:9, font, color:rgb(0.2,0.2,0.2)}); x += c.w; });
-  y -= 8;
-  page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
-  y -= 6;
-
-  const rowH = 16, footerReserved = 64;
-  const maxRows = Math.max(0, Math.floor((y - M - footerReserved) / rowH));
-  const visiveis = (dados.ramos || []).slice(0, maxRows);
-  const extras = Math.max(0, (dados.ramos || []).length - visiveis.length);
-
-  const addField = (fx,fy,w,h,name,text="")=>{
-    const f = form.createTextField(name);
-    f.setText(text);
-    f.addToPage(page,{x:fx,y:fy,width:w,height:h});
-  };
-
-  for (let i=0;i<visiveis.length;i++){
-    const r = visiveis[i];
-    let cx = M; const cy = y - rowH + 2;
-    addField(cx,cy,cols[0].w-2,rowH-2,`row_${i}_ramo`, r.nome);       cx+=cols[0].w;
-    addField(cx,cy,cols[1].w-2,rowH-2,`row_${i}_venc`, "");           cx+=cols[1].w;
-    addField(cx,cy,cols[2].w-2,rowH-2,`row_${i}_premio`, "");         cx+=cols[2].w;
-    addField(cx,cy,cols[3].w-2,rowH-2,`row_${i}_seg`, "");            cx+=cols[3].w;
-    addField(cx,cy,cols[4].w-2,rowH-2,`row_${i}_obs`, "");
-    y -= rowH;
-  }
-  if (extras>0){
-    page.drawText(`+${extras} ramos adicionais (ver sistema)`, { x:M, y:y-2, size:9, font, color:rgb(0.4,0.1,0.1) });
-    y -= 12;
-  }
-
-  y -= 2;
-  page.drawLine({ start:{x:M,y}, end:{x:W-M,y}, thickness:1, color:rgb(0.86,0.89,0.94) });
-  y -= 10;
-  page.drawText('Anotações (editável):', { x:M, y, size:10, font, color:rgb(0.2,0.2,0.2) });
-  const notas = form.createTextField('anotacoes_visita');
-  const notasH = Math.max(34, (y - M) - 16);
-  notas.setText('');
-  notas.addToPage(page,{ x:M, y:y-notasH, width:innerW, height:notasH });
-
-  form.updateFieldAppearances(font);
-  const pdfBytes = await pdf.save();
-
-  const blob = new Blob([pdfBytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `Visita_${(dados.empresaNome || "empresa").replace(/\s+/g,'_')}.pdf`;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  $("dataVisita").value = now.toISOString().split("T")[0];
+  $("horaVisita").value = now.toTimeString().slice(0, 5);
 }
 
+// ==== Resumo ====
+function visualizarResumo() {
+  if (!EMPRESA_SELECIONADA) {
+    alert("Selecione uma empresa.");
+    return;
+  }
+  
+  if (!$("tipoVisita").value) {
+    alert("Selecione o tipo de visita.");
+    return;
+  }
+  
+  const ramosAbordados = Object.entries(RAMOS_DATA).filter(([_, d]) => d.abordado);
+  
+  const interesseIcons = { alto: "🔥", medio: "🟡", baixo: "❄️" };
+  const statusLabels = { ativo: "Ativo", vence: "Vence em breve", vencido: "Vencido", "nao-possui": "Não possui" };
+  
+  let ramosHtml = "";
+  if (ramosAbordados.length > 0) {
+    ramosHtml = ramosAbordados.map(([id, dados]) => {
+      const ramo = RAMOS_CONFIG.find(r => r.id === id) || { nome: id, icon: "📋" };
+      const details = [];
+      if (dados.status) details.push(statusLabels[dados.status] || dados.status);
+      if (dados.vencimento) details.push(`Venc: ${dados.vencimento}`);
+      if (dados.seguradora) details.push(dados.seguradora);
+      if (dados.valorEstimado) details.push(dados.valorEstimado);
+      
+      return `
+        <div class="resumo-ramo">
+          <div class="resumo-ramo-icon">${ramo.icon}</div>
+          <div class="resumo-ramo-info">
+            <div class="resumo-ramo-nome">${ramo.nome}</div>
+            <div class="resumo-ramo-details">${details.join(' • ') || 'Sem detalhes'}</div>
+          </div>
+          <div class="resumo-ramo-interesse">${interesseIcons[dados.interesse] || '➖'}</div>
+        </div>
+      `;
+    }).join('');
+  } else {
+    ramosHtml = '<div class="historico-empty">Nenhum ramo mapeado</div>';
+  }
+  
+  $("resumoContent").innerHTML = `
+    <div class="resumo-header">
+      <div class="resumo-empresa">🏢 ${EMPRESA_SELECIONADA.nome || EMPRESA_SELECIONADA.razaoSocial}</div>
+      <div class="resumo-meta">
+        <span>📅 ${$("dataVisita").value.split("-").reverse().join("/")}</span>
+        <span>🕐 ${$("horaVisita").value}</span>
+        <span class="badge ${$("tipoVisita").value === "Online" ? "badge-info" : "badge-success"}">
+          ${$("tipoVisita").value === "Online" ? "🔵" : "🟢"} ${$("tipoVisita").value}
+        </span>
+      </div>
+      ${TIMER_SECONDS > 0 ? `<div style="margin-top: 8px; color: var(--muted);">⏱️ Duração: ${$("timerDisplay").textContent}</div>` : ''}
+      ${GEO_DATA ? `<div style="margin-top: 4px; color: var(--muted);">📍 Localização capturada</div>` : ''}
+    </div>
+    
+    ${CONTATOS.length > 0 ? `
+      <div style="margin-bottom: 20px;">
+        <h4 style="font-size: 14px; margin-bottom: 10px;">👥 Contatos (${CONTATOS.length})</h4>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          ${CONTATOS.map(c => `<span class="badge badge-muted">${c.nome}${c.cargo ? ` - ${c.cargo}` : ''}</span>`).join('')}
+        </div>
+      </div>
+    ` : ''}
+    
+    <div>
+      <h4 style="font-size: 14px; margin-bottom: 10px;">🎯 Ramos Mapeados (${ramosAbordados.length})</h4>
+      <div class="resumo-ramos">
+        ${ramosHtml}
+      </div>
+    </div>
+    
+    ${$("observacoesGerais").value ? `
+      <div style="margin-top: 20px;">
+        <h4 style="font-size: 14px; margin-bottom: 10px;">📝 Observações</h4>
+        <div style="background: #f8fafc; padding: 14px; border-radius: 10px; font-size: 14px;">${$("observacoesGerais").value}</div>
+      </div>
+    ` : ''}
+  `;
+  
+  $("modalResumo").classList.add('active');
+}
+
+function fecharResumo() {
+  $("modalResumo").classList.remove('active');
+}
+
+function confirmarSalvar() {
+  fecharResumo();
+  salvarVisita();
+}
+
+// ==== Salvar Visita ====
+async function salvarVisita() {
+  if (!EMPRESA_SELECIONADA) {
+    alert("Selecione uma empresa.");
+    return;
+  }
+  
+  const tipoVisita = $("tipoVisita").value;
+  if (!tipoVisita) {
+    alert("Selecione o tipo de visita.");
+    return;
+  }
+  
+  const dataStr = $("dataVisita").value;
+  const horaStr = $("horaVisita").value;
+  if (!dataStr || !horaStr) {
+    alert("Informe data e hora da visita.");
+    return;
+  }
+  
+  showLoading(true);
+  
+  const dataHora = new Date(`${dataStr}T${horaStr}:00`);
+  
+  let rmUid = EMPRESA_SELECIONADA.rmUid || EMPRESA_SELECIONADA.rmId || EMPRESA_SELECIONADA.gerenteId || "";
+  let rmNome = EMPRESA_SELECIONADA.rmNome || EMPRESA_SELECIONADA.gerenteNome || "";
+  if (rmUid && !rmNome && RMS[rmUid]) rmNome = RMS[rmUid].nome;
+  if (!rmUid) { rmUid = CTX.uid; rmNome = CTX.nome; }
+  
+  const ramos = {};
+  Object.entries(RAMOS_DATA).forEach(([id, dados]) => {
+    if (dados.abordado) {
+      ramos[id] = {
+        abordado: true,
+        status: dados.status,
+        interesse: dados.interesse,
+        vencimento: dados.vencimento,
+        seguradora: dados.seguradora,
+        valorEstimado: dados.valorEstimado,
+        concorrente: dados.concorrente,
+        obs: dados.obs
+      };
+    }
+  });
+  
+  const visita = {
+    empresaId: EMPRESA_SELECIONADA.id,
+    empresaNome: EMPRESA_SELECIONADA.nome || EMPRESA_SELECIONADA.razaoSocial,
+    empresaCNPJ: EMPRESA_SELECIONADA.cnpj || null,
+    cidade: EMPRESA_SELECIONADA.cidade || "",
+    tipoVisita,
+    dataHora,
+    dataHoraTs: firebase.firestore.Timestamp.fromDate(dataHora),
+    numFuncionarios: parseInt($("numFuncionarios").value) || null,
+    contatos: CONTATOS,
+    checklist: CHECKLIST_ITEMS,
+    ramos,
+    observacoes: $("observacoesGerais").value.trim(),
+    duracao: TIMER_SECONDS,
+    geolocalizacao: GEO_DATA,
+    rmUid,
+    rmNome,
+    agenciaId: EMPRESA_SELECIONADA.agenciaId || CTX.agenciaId || "",
+    criadoPorUid: CTX.uid,
+    criadoPorNome: CTX.nome,
+    criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  
+  try {
+    await db.collection("visitas").add(visita);
+    
+    if (visita.numFuncionarios && EMPRESA_SELECIONADA.id) {
+      try {
+        await db.collection("empresas").doc(EMPRESA_SELECIONADA.id).update({
+          numFuncionarios: visita.numFuncionarios,
+          ultimaVisita: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) { console.warn("Erro ao atualizar empresa:", e); }
+    }
+    
+    showLoading(false);
+    alert("Visita registrada com sucesso!");
+    
+    const ramosComInteresseAlto = Object.entries(ramos).filter(([_, d]) => d.interesse === "alto");
+    if (ramosComInteresseAlto.length > 0) {
+      const criar = confirm(`Você marcou ${ramosComInteresseAlto.length} ramo(s) com interesse ALTO. Deseja criar cotações automaticamente?`);
+      if (criar) {
+        for (const [ramoId, _] of ramosComInteresseAlto) {
+          COTACAO_RAMO = ramoId;
+          await confirmarCriarCotacao();
+        }
+      }
+    }
+    
+    if (confirm("Deseja registrar outra visita?")) {
+      location.reload();
+    } else {
+      location.href = "painel.html";
+    }
+    
+  } catch (e) {
+    showLoading(false);
+    console.error("Erro ao salvar visita:", e);
+    alert("Erro ao salvar visita: " + e.message);
+  }
+}
+
+// ==== Gerar Link ====
 function gerarLink() {
-  const empresaSel  = document.getElementById("empresa");
-  const empresaId   = empresaSel?.value || "";
-  const empresaNome = empresaSel?.options?.[empresaSel.selectedIndex]?.textContent || "";
-  const rmNome      = empresaSel?.options?.[empresaSel.selectedIndex]?.getAttribute("data-rm") || "";
-
-  if (!empresaId) { alert("Selecione a empresa antes de gerar o link."); return; }
-
-  const baseDir = location.origin + location.pathname.replace(/[^\/]+$/, ''); // mesma pasta do visitas.html
-  const url = `${baseDir}visita-cliente.html?empresaId=${encodeURIComponent(empresaId)}&empresaNome=${encodeURIComponent(empresaNome)}&rmNome=${encodeURIComponent(rmNome)}`;
-
-  try { navigator.clipboard.writeText(url); } catch(e) {}
-  alert("Link copiado!\n\n" + url + "\n\nCole onde preferir (e-mail, WhatsApp, SMS).");
-  console.log("Link do cliente:", url);
+  if (!EMPRESA_SELECIONADA) {
+    alert("Selecione uma empresa primeiro.");
+    return;
+  }
+  
+  const params = new URLSearchParams({ empresa: EMPRESA_SELECIONADA.id });
+  const url = `${location.origin}${location.pathname}?${params}`;
+  
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(() => {
+      alert("Link copiado para a área de transferência!");
+    });
+  } else {
+    prompt("Copie o link:", url);
+  }
 }
 
-window.gerarPDF  = gerarPDF;
+// ==== Globals ====
+window.limparEmpresa = limparEmpresa;
+window.toggleTimer = toggleTimer;
+window.resetTimer = resetTimer;
+window.capturarGeo = capturarGeo;
+window.addContato = addContato;
+window.removeContato = removeContato;
+window.toggleChecklistItem = toggleChecklistItem;
+window.toggleRamo = toggleRamo;
+window.setRamoStatus = setRamoStatus;
+window.setRamoInteresse = setRamoInteresse;
+window.updateRamoField = updateRamoField;
+window.formatarMoeda = formatarMoeda;
+window.formatarData = formatarData;
+window.abrirModalCotacao = abrirModalCotacao;
+window.fecharModalCotacao = fecharModalCotacao;
+window.confirmarCriarCotacao = confirmarCriarCotacao;
+window.visualizarResumo = visualizarResumo;
+window.fecharResumo = fecharResumo;
+window.confirmarSalvar = confirmarSalvar;
+window.salvarVisita = salvarVisita;
 window.gerarLink = gerarLink;
