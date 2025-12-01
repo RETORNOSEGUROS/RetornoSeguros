@@ -414,6 +414,21 @@ function renderizarTudo() {
   renderizarTabelaCompleta();
   renderizarRamos();
   renderizarComparativo();
+  
+  // Atualizar ranking se visível
+  if ($("tabRanking")?.classList.contains("active")) {
+    renderizarRanking();
+  }
+  
+  // Ocultar aba de ranking para RM (só vê os próprios dados)
+  const tabRankingBtn = $("tabRankingBtn");
+  if (tabRankingBtn) {
+    if (!CTX.isAdmin && CTX.perfil !== "gerente chefe") {
+      tabRankingBtn.style.display = "none";
+    } else {
+      tabRankingBtn.style.display = "";
+    }
+  }
 }
 
 function renderizarStats() {
@@ -810,11 +825,235 @@ function trocarTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   
-  const tabMap = { visao: 0, detalhes: 1, ramos: 2, comparativo: 3 };
+  const tabMap = { visao: 0, detalhes: 1, ramos: 2, ranking: 3, comparativo: 4 };
   document.querySelectorAll('.tab')[tabMap[tab]].classList.add('active');
-  $(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
+  
+  const tabIds = { visao: 'tabVisao', detalhes: 'tabDetalhes', ramos: 'tabRamos', ranking: 'tabRanking', comparativo: 'tabComparativo' };
+  $(tabIds[tab]).classList.add('active');
+  
+  // Se for aba de ranking, renderizar
+  if (tab === 'ranking') {
+    renderizarRanking();
+  }
 }
 window.trocarTab = trocarTab;
+
+// ==== Ranking ====
+function renderizarRanking() {
+  const tipo = $("rankingTipo")?.value || "geral";
+  
+  // Mostrar/ocultar filtro de ramo
+  const grpRamo = $("rankingRamoGroup");
+  if (grpRamo) {
+    grpRamo.style.display = tipo === "ramo" ? "" : "none";
+  }
+  
+  // Preencher select de ramos se necessário
+  const selRamo = $("rankingRamoFiltro");
+  if (selRamo && selRamo.options.length <= 1) {
+    const ramosSet = new Set();
+    NEGOCIOS_FILTRADOS.forEach(n => { if (n.ramo && n.ramo !== "-") ramosSet.add(n.ramo); });
+    Array.from(ramosSet).sort().forEach(ramo => {
+      selRamo.innerHTML += `<option value="${ramo}">${ramo}</option>`;
+    });
+  }
+  
+  // Mostrar container correto
+  const containerGeral = $("rankingGeralContainer");
+  const containerRamo = $("rankingRamoContainer");
+  
+  if (tipo === "geral") {
+    containerGeral.style.display = "";
+    containerRamo.style.display = "none";
+    renderizarRankingGeral();
+  } else {
+    containerGeral.style.display = "none";
+    containerRamo.style.display = "";
+    renderizarRankingPorRamo();
+  }
+}
+
+function renderizarRankingGeral() {
+  // Agrupar por gerente
+  const porGerente = {};
+  NEGOCIOS_FILTRADOS.forEach(n => {
+    const key = n.rmUid || n.rmNome || "sem-gerente";
+    if (!porGerente[key]) {
+      porGerente[key] = {
+        uid: n.rmUid,
+        nome: n.rmNome || "Sem Gerente",
+        agencia: n.agenciaNome || "-",
+        total: 0,
+        qtd: 0
+      };
+    }
+    porGerente[key].total += n.premio;
+    porGerente[key].qtd++;
+  });
+  
+  const ranking = Object.values(porGerente).sort((a, b) => b.total - a.total);
+  const totalGeral = NEGOCIOS_FILTRADOS.reduce((s, n) => s + n.premio, 0);
+  
+  // Renderizar Pódio (top 3)
+  const podium = $("rankingPodium");
+  if (podium) {
+    if (ranking.length >= 3) {
+      const [primeiro, segundo, terceiro] = ranking;
+      podium.innerHTML = `
+        <div class="podium-item silver">
+          <div class="podium-avatar">${getIniciais(segundo.nome)}</div>
+          <div class="podium-name" title="${segundo.nome}">${segundo.nome}</div>
+          <div class="podium-value">${fmtBRLCompact(segundo.total)}</div>
+          <div class="podium-qtd">${segundo.qtd} negócios</div>
+          <div class="podium-base">2º</div>
+        </div>
+        <div class="podium-item gold">
+          <div class="podium-avatar">${getIniciais(primeiro.nome)}</div>
+          <div class="podium-name" title="${primeiro.nome}">${primeiro.nome}</div>
+          <div class="podium-value">${fmtBRLCompact(primeiro.total)}</div>
+          <div class="podium-qtd">${primeiro.qtd} negócios</div>
+          <div class="podium-base">1º</div>
+        </div>
+        <div class="podium-item bronze">
+          <div class="podium-avatar">${getIniciais(terceiro.nome)}</div>
+          <div class="podium-name" title="${terceiro.nome}">${terceiro.nome}</div>
+          <div class="podium-value">${fmtBRLCompact(terceiro.total)}</div>
+          <div class="podium-qtd">${terceiro.qtd} negócios</div>
+          <div class="podium-base">3º</div>
+        </div>
+      `;
+    } else if (ranking.length > 0) {
+      podium.innerHTML = ranking.slice(0, 3).map((g, i) => `
+        <div class="podium-item ${i === 0 ? 'gold' : i === 1 ? 'silver' : 'bronze'}">
+          <div class="podium-avatar">${getIniciais(g.nome)}</div>
+          <div class="podium-name">${g.nome}</div>
+          <div class="podium-value">${fmtBRLCompact(g.total)}</div>
+          <div class="podium-qtd">${g.qtd} negócios</div>
+          <div class="podium-base">${i + 1}º</div>
+        </div>
+      `).join('');
+    } else {
+      podium.innerHTML = `<div class="empty-state"><div class="icon">🏆</div><h3>Sem dados para ranking</h3></div>`;
+    }
+  }
+  
+  // Renderizar Tabela
+  const tbody = $("rankingTableBody");
+  if (tbody) {
+    if (ranking.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="icon">🏆</div><h3>Nenhum gerente encontrado</h3></td></tr>`;
+    } else {
+      tbody.innerHTML = ranking.map((g, i) => {
+        const pct = totalGeral > 0 ? ((g.total / totalGeral) * 100) : 0;
+        const ticket = g.qtd > 0 ? g.total / g.qtd : 0;
+        const posClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : 'normal';
+        
+        return `
+          <tr>
+            <td><span class="rank-position ${posClass}">${i + 1}º</span></td>
+            <td>
+              <div class="gerente-cell">
+                <div class="gerente-avatar">${getIniciais(g.nome)}</div>
+                <div class="gerente-info">
+                  <span class="gerente-nome">${g.nome}</span>
+                  <span class="gerente-agencia">${g.agencia}</span>
+                </div>
+              </div>
+            </td>
+            <td style="font-weight: 700;">${g.qtd}</td>
+            <td class="valor-cell">${fmtBRL(g.total)}</td>
+            <td>${fmtBRL(ticket)}</td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="progress-bar-container" style="width: 80px;">
+                  <div class="progress-bar-fill" style="width: ${pct}%"></div>
+                </div>
+                <span style="font-weight: 600;">${pct.toFixed(1)}%</span>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
+  
+  $("rankingCount").textContent = `${ranking.length} gerentes`;
+}
+
+function renderizarRankingPorRamo() {
+  const container = $("rankingRamoGrid");
+  if (!container) return;
+  
+  const ramoFiltro = $("rankingRamoFiltro")?.value || "";
+  
+  // Agrupar por ramo e depois por gerente
+  const porRamo = {};
+  NEGOCIOS_FILTRADOS.forEach(n => {
+    if (ramoFiltro && n.ramo !== ramoFiltro) return;
+    
+    if (!porRamo[n.ramo]) porRamo[n.ramo] = { gerentes: {}, total: 0 };
+    
+    const key = n.rmUid || n.rmNome || "sem-gerente";
+    if (!porRamo[n.ramo].gerentes[key]) {
+      porRamo[n.ramo].gerentes[key] = {
+        nome: n.rmNome || "Sem Gerente",
+        total: 0,
+        qtd: 0
+      };
+    }
+    porRamo[n.ramo].gerentes[key].total += n.premio;
+    porRamo[n.ramo].gerentes[key].qtd++;
+    porRamo[n.ramo].total += n.premio;
+  });
+  
+  const ramos = Object.entries(porRamo).sort((a, b) => b[1].total - a[1].total);
+  
+  if (ramos.length === 0) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">🏷️</div><h3>Nenhum ramo encontrado</h3></div>`;
+    return;
+  }
+  
+  container.innerHTML = ramos.map(([ramo, dados]) => {
+    const ranking = Object.values(dados.gerentes).sort((a, b) => b.total - a.total);
+    
+    return `
+      <div class="ranking-ramo-card">
+        <div class="ranking-ramo-header">
+          <div class="ranking-ramo-title">
+            <span style="font-size: 24px;">${getIconeRamo(ramo)}</span>
+            <span>${ramo}</span>
+          </div>
+          <div class="ranking-ramo-total">${fmtBRLCompact(dados.total)}</div>
+        </div>
+        <div class="ranking-ramo-list">
+          ${ranking.slice(0, 10).map((g, i) => {
+            const posClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : 'normal';
+            return `
+              <div class="ranking-ramo-item">
+                <div class="ranking-ramo-position ${posClass}">${i + 1}º</div>
+                <div class="ranking-ramo-info">
+                  <div class="ranking-ramo-name">${g.nome}</div>
+                  <div class="ranking-ramo-sub">${g.qtd} negócios</div>
+                </div>
+                <div class="ranking-ramo-value">${fmtBRLCompact(g.total)}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function getIniciais(nome) {
+  if (!nome || nome === "-") return "?";
+  const partes = nome.split(" ").filter(p => p.length > 0);
+  if (partes.length === 0) return "?";
+  if (partes.length === 1) return partes[0].charAt(0).toUpperCase();
+  return (partes[0].charAt(0) + partes[partes.length - 1].charAt(0)).toUpperCase();
+}
+
+window.renderizarRanking = renderizarRanking;
 
 // ==== Modal Ramo ====
 function abrirModalRamo(ramo) {
@@ -1007,6 +1246,59 @@ async function exportarPDF() {
     doc.setFontSize(9);
     doc.setTextColor(100, 116, 139);
     doc.text(`* Exibindo os 50 primeiros de ${NEGOCIOS_FILTRADOS.length} negócios`, 14, doc.lastAutoTable.finalY + 10);
+  }
+  
+  // ===== RANKING DE GERENTES (só para Admin e GC) =====
+  if (CTX.isAdmin || CTX.perfil === "gerente chefe") {
+    doc.addPage();
+    
+    doc.setFillColor(...verde);
+    doc.rect(0, 0, pageWidth, 20, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont(undefined, 'bold');
+    doc.text('🏆 Ranking de Gerentes', 14, 14);
+    
+    // Agrupar por gerente
+    const porGerente = {};
+    NEGOCIOS_FILTRADOS.forEach(n => {
+      const key = n.rmUid || n.rmNome || "sem-gerente";
+      if (!porGerente[key]) {
+        porGerente[key] = { nome: n.rmNome || "Sem Gerente", total: 0, qtd: 0 };
+      }
+      porGerente[key].total += n.premio;
+      porGerente[key].qtd++;
+    });
+    
+    const rankingGerentes = Object.values(porGerente).sort((a, b) => b.total - a.total);
+    
+    const rankingData = rankingGerentes.slice(0, 20).map((g, i) => {
+      const pct = total > 0 ? ((g.total / total) * 100).toFixed(1) : 0;
+      return [`${i + 1}º`, g.nome, g.qtd.toString(), fmtBRL(g.total), `${pct}%`];
+    });
+    
+    doc.autoTable({
+      startY: 30,
+      head: [['#', 'Gerente', 'Qtd', 'Prêmio', '%']],
+      body: rankingData,
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: escuro, textColor: 255, fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 15, halign: 'center' },
+        1: { cellWidth: 60 },
+        2: { cellWidth: 20, halign: 'center' },
+        3: { cellWidth: 45, halign: 'right' },
+        4: { cellWidth: 25, halign: 'center' }
+      },
+      didParseCell: function(data) {
+        if (data.section === 'body' && data.column.index === 0) {
+          const pos = parseInt(data.cell.raw);
+          if (pos === 1) data.cell.styles.fillColor = [254, 243, 199];
+          else if (pos === 2) data.cell.styles.fillColor = [241, 245, 249];
+          else if (pos === 3) data.cell.styles.fillColor = [254, 215, 170];
+        }
+      }
+    });
   }
   
   // Rodapé
