@@ -908,22 +908,36 @@ async function salvarVisita() {
   }
 }
 
-// ==== Gerar Link ====
+// ==== Gerar Link para Cliente ====
 function gerarLink() {
   if (!EMPRESA_SELECIONADA) {
     alert("Selecione uma empresa primeiro.");
     return;
   }
   
-  const params = new URLSearchParams({ empresa: EMPRESA_SELECIONADA.id });
-  const url = `${location.origin}${location.pathname}?${params}`;
+  // Buscar RM da empresa
+  let rmNome = EMPRESA_SELECIONADA.rmNome || EMPRESA_SELECIONADA.gerenteNome || '';
+  const rmId = EMPRESA_SELECIONADA.rmUid || EMPRESA_SELECIONADA.rmId || EMPRESA_SELECIONADA.gerenteId;
+  if (!rmNome && rmId && RMS[rmId]) rmNome = RMS[rmId].nome;
+  
+  const params = new URLSearchParams({
+    empresaId: EMPRESA_SELECIONADA.id,
+    empresaNome: EMPRESA_SELECIONADA.nome || EMPRESA_SELECIONADA.razaoSocial || '',
+    rmNome: rmNome || CTX.nome || ''
+  });
+  
+  // Link para página do cliente
+  const baseUrl = location.origin + location.pathname.replace('visitas.html', '');
+  const url = `${baseUrl}visita-cliente.html?${params}`;
   
   if (navigator.clipboard) {
     navigator.clipboard.writeText(url).then(() => {
-      alert("Link copiado para a área de transferência!");
+      alert(`Link copiado!\n\nEnvie para o cliente preencher:\n${url}`);
+    }).catch(() => {
+      prompt("Copie o link abaixo:", url);
     });
   } else {
-    prompt("Copie o link:", url);
+    prompt("Copie o link abaixo:", url);
   }
 }
 
