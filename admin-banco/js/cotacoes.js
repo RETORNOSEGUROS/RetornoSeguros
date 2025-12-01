@@ -462,6 +462,7 @@ function renderizarLista() {
           <div class="cotacao-actions">
             <span class="time-badge ${isUrgente ? 'urgent' : ''}">🕐 ${tempoStr}</span>
             ${c._interacoes > 0 ? `<span class="time-badge">💬 ${c._interacoes}</span>` : ''}
+            <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); abrirModalEdicao('${c.id}')" title="Editar">✏️</button>
             <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); abrirCotacao('${c.id}')">Abrir →</button>
           </div>
         </div>
@@ -1151,6 +1152,103 @@ function exportarRelatorioPDF() {
   gerarPDF();
 }
 
+// ==== Edição Rápida ====
+let COTACAO_EDITANDO = null;
+
+function abrirModalEdicao(id) {
+  const cotacao = COTACOES.find(c => c.id === id);
+  if (!cotacao) return;
+  
+  COTACAO_EDITANDO = cotacao;
+  
+  $("editCotacaoId").value = id;
+  $("editEmpresaNome").textContent = cotacao._empresaNome;
+  $("editValor").value = fmtBRL(cotacao._valor);
+  $("editTemperatura").value = cotacao._temperatura || 'morno';
+  $("editObservacao").value = "";
+  
+  // Atualizar botões de temperatura
+  setEditTemp(cotacao._temperatura || 'morno');
+  
+  $("modalEdicao").classList.add('active');
+}
+
+function fecharModalEdicao() {
+  $("modalEdicao").classList.remove('active');
+  COTACAO_EDITANDO = null;
+}
+
+function setEditTemp(temp) {
+  $("editTemperatura").value = temp;
+  
+  // Atualizar visual dos botões
+  document.querySelectorAll('.edit-temp-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.temp === temp);
+  });
+}
+
+async function salvarEdicaoCotacao() {
+  const id = $("editCotacaoId").value;
+  const novoValor = desformatarMoeda($("editValor").value);
+  const novaTemp = $("editTemperatura").value;
+  const observacao = $("editObservacao").value.trim();
+  
+  if (!id || !COTACAO_EDITANDO) {
+    alert("Erro: cotação não encontrada.");
+    return;
+  }
+  
+  if (!novoValor || novoValor <= 0) {
+    alert("Informe um valor válido.");
+    return;
+  }
+  
+  try {
+    const valorAntigo = COTACAO_EDITANDO._valor;
+    const tempAntiga = COTACAO_EDITANDO._temperatura;
+    
+    // Montar mensagem de alteração
+    let msgs = [];
+    if (novoValor !== valorAntigo) {
+      msgs.push(`Valor: ${fmtBRL(valorAntigo)} → ${fmtBRL(novoValor)}`);
+    }
+    if (novaTemp !== tempAntiga) {
+      msgs.push(`Temperatura: ${labelTemperatura(tempAntiga)} → ${labelTemperatura(novaTemp)}`);
+    }
+    if (observacao) {
+      msgs.push(`Obs: ${observacao}`);
+    }
+    
+    const interacao = {
+      autorNome: CTX.nome,
+      autorUid: CTX.uid,
+      mensagem: `✏️ Cotação editada. ${msgs.join('. ')}`,
+      dataHora: new Date(),
+      tipo: "sistema"
+    };
+    
+    const ref = db.collection("cotacoes-gerentes").doc(id);
+    await ref.update({
+      valorDesejado: novoValor,
+      valorFinal: novoValor,
+      temperatura: novaTemp,
+      dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+      interacoes: firebase.firestore.FieldValue.arrayUnion(interacao)
+    });
+    
+    alert("Cotação atualizada com sucesso!");
+    fecharModalEdicao();
+    
+    // Recarregar dados
+    await carregarCotacoes();
+    renderizarTudo();
+    
+  } catch (e) {
+    console.error("Erro ao salvar edição:", e);
+    alert("Erro ao salvar alterações.");
+  }
+}
+
 // ==== Globals ====
 window.setView = setView;
 window.toggleFiltros = toggleFiltros;
@@ -1175,3 +1273,7 @@ window.abrirModalRelatorio = abrirModalRelatorio;
 window.fecharModalRelatorio = fecharModalRelatorio;
 window.exportarRelatorioPDF = exportarRelatorioPDF;
 window.formatarMoeda = formatarMoeda;
+window.abrirModalEdicao = abrirModalEdicao;
+window.fecharModalEdicao = fecharModalEdicao;
+window.setEditTemp = setEditTemp;
+window.salvarEdicaoCotacao = salvarEdicaoCotacao;
