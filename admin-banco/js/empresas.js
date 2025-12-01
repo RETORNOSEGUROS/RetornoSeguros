@@ -1,473 +1,669 @@
-// === Mapa de Produtos por Empresa (Agência → RM → Ano + % por Ramo) ===
+// empresas.js — Mapa de Produtos por Empresa
+// Firebase v8
+
+// ==== Firebase Init ====
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
   firebase.initializeApp(firebaseConfig);
 }
 const auth = firebase.auth();
-const db   = firebase.firestore();
+const db = firebase.firestore();
 
-// ---- Estado / RBAC ----
-let meuUid = "";
-let perfilRaw = "";
-let perfil = "";           // normalizado
-let minhaAgencia = "";
-let isAdmin = false;
+// ==== Estado Global ====
+let CTX = { uid: null, perfil: null, agenciaId: null, nome: null, email: null, isAdmin: false };
+const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
 
-let produtos = [];
-let nomesProdutos = {};
-let empresasCache = []; // cache das empresas (dados básicos)
-let linhasRenderizadas = []; // cache p/ PDF
+let EMPRESAS = [];
+let EMPRESAS_FILTRADAS = [];
+let COTACOES = [];
+let RAMOS = [];
+let AGENCIAS = {};
+let RMS = {};
 
-// filtros atuais
-let agencias = [];         // [{id, nome}]
-let agenciaSel = "";       // agência selecionada (id)
-let rmSel = "";            // RM selecionado (nome)
-let anoSel = new Date().getFullYear(); // ano selecionado (padrão: corrente)
+let MODAL_EMPRESA = null;
+let MODAL_RAMO = null;
 
-// ---- Utils ----
-const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .toLowerCase().trim();
+// ==== Helpers ====
+const $ = id => document.getElementById(id);
+const normalizar = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
-const roleNorm = (s) => normalize(s).replace(/[-_]+/g, " ");
+const toDate = x => {
+  if (!x) return null;
+  if (x.toDate) return x.toDate();
+  if (x instanceof Date) return x;
+  const d = new Date(x);
+  return isNaN(d) ? null : d;
+};
 
-function classFromStatus(statusRaw) {
-  const s = normalize(statusRaw);
-  if (["negocio emitido"].includes(s)) return "verde";
-  if ([
-    "pendente agencia","pendente corretor","pendente seguradora","pendente cliente",
-    "proposta enviada","proposta reenviada","cotacao iniciada","pedido de cotacao"
-  ].includes(s)) return "amarelo";
-  if (["recusado cliente","recusado seguradora","emitido declinado","negocio emitido declinado"].includes(s)) return "vermelho";
-  if (["negocio fechado","em emissao"].includes(s)) return "azul";
-  return "nenhum";
+const fmtData = d => d ? d.toLocaleDateString("pt-BR") : "-";
+const fmtBRL = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
+
+// Status helpers
+function categoriaStatus(status) {
+  if (!status) return "sem";
+  const s = normalizar(status);
+  if (s.includes("emitido") && !s.includes("declinado")) return "emitido";
+  if (s.includes("fechado") || s.includes("emissao") || s.includes("emissão")) return "emissao";
+  if (s.includes("recusado") || s.includes("declinado") || s.includes("perdido")) return "recusado";
+  if (s.includes("pendente") || s.includes("aguardando") || s.includes("analise") || s.includes("análise")) return "pendente";
+  return "sem";
 }
 
-// tenta deduzir o ano da cotação
-function getCotacaoAno(c) {
-  const candidatos = [
-    c.ano, c.anoVigencia, c.anoReferencia, c.vigenciaAno,
-    c.vigencia?.ano
-  ].filter(Boolean);
-  if (candidatos.length) {
-    const n = parseInt(candidatos[0], 10);
-    if (!isNaN(n)) return n;
+function statusIcon(cat) {
+  switch (cat) {
+    case "emitido": return "🟢";
+    case "pendente": return "🟡";
+    case "recusado": return "🔴";
+    case "emissao": return "🔵";
+    case "oportunidade": return "💎";
+    default: return "⚪";
   }
-  const ts = c.createdAt || c.criadoEm || c.atualizadoEm || c.data || c.dataReferencia || c.updatedAt;
+}
+
+function statusLabel(cat) {
+  switch (cat) {
+    case "emitido": return "Emitido";
+    case "pendente": return "Pendente";
+    case "recusado": return "Recusado";
+    case "emissao": return "Em Emissão";
+    case "oportunidade": return "Oportunidade";
+    default: return "Não Cotado";
+  }
+}
+
+// ==== Auth ====
+auth.onAuthStateChanged(async user => {
+  if (!user) { location.href = "login.html"; return; }
+  
+  CTX.uid = user.uid;
+  CTX.email = user.email;
+  
   try {
-    if (ts && typeof ts.toDate === "function") return ts.toDate().getFullYear();
-    if (typeof ts === "string") {
-      const d = new Date(ts);
-      if (!isNaN(d.getTime())) return d.getFullYear();
+    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+    if (snap.exists) {
+      const d = snap.data();
+      CTX.perfil = normalizar(d.perfil || "").replace(/[-_]/g, " ");
+      CTX.agenciaId = d.agenciaId || null;
+      CTX.nome = d.nome || user.email;
+      CTX.isAdmin = CTX.perfil === "admin" || ADMIN_EMAILS.includes(user.email?.toLowerCase());
+    } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
+      CTX.perfil = "admin";
+      CTX.isAdmin = true;
+      CTX.nome = user.email;
     }
-  } catch(_) {}
-  return new Date().getFullYear();
-}
-
-function byTxt(a,b){ return (a||"").localeCompare(b||"","pt-BR"); }
-function erroUI(msg){
-  const cont = document.getElementById("tabelaEmpresas");
-  if (cont) cont.innerHTML = `<div class="muted" style="padding:12px">${msg}</div>`;
-}
-function percent(n, d){ return d > 0 ? Math.round((n * 100) / d) : 0; }
-
-// ---- Boot ----
-auth.onAuthStateChanged(async (user) => {
-  if (!user) return (window.location.href = "login.html");
-  meuUid = user.uid;
-
-  try {
-    const up = await db.collection("usuarios_banco").doc(user.uid).get();
-    const d  = up.exists ? (up.data()||{}) : {};
-    perfilRaw     = d.perfil || d.roleId || "";
-    perfil        = roleNorm(perfilRaw);
-    minhaAgencia  = d.agenciaId || "";
-  } catch { perfilRaw = ""; perfil = ""; minhaAgencia = ""; }
-  isAdmin = (perfil === "admin") || (user.email === "patrick@retornoseguros.com.br");
-
-  // UI: RM esconde seletor de RM
-  if (perfil === "rm" && !isAdmin) {
-    const sel = document.getElementById("filtroRM");
-    if (sel) sel.style.display = "none";
-  }
-
-  montarComboAno();
-
-  try {
-    await carregarProdutos();
-    await carregarAgencias(); // mostra NOME, não UID
-    await carregarRM();
-    await carregarEmpresas();
-  } catch (e) {
-    console.error("[empresas] boot:", e);
-    erroUI("Erro ao carregar dados.");
-  }
-
-  // Handlers de filtro
-  const ag = document.getElementById("filtroAgencia");
-  const rm = document.getElementById("filtroRM");
-  const an = document.getElementById("filtroAno");
-  if (ag) ag.onchange = async () => { agenciaSel = ag.value || ""; await carregarRM(); await carregarEmpresas(); };
-  if (rm) rm.onchange = async () => { rmSel = rm.value || ""; await carregarEmpresas(); };
-  if (an) an.onchange = async () => {
-    const v = an.value;
-    anoSel = v === "todos" ? "todos" : parseInt(v, 10);
-    await carregarEmpresas();
-  };
+  } catch (e) { console.warn("Erro perfil:", e); }
+  
+  await init();
 });
 
-// ---- Monta combo de Ano ----
-function montarComboAno() {
-  const sel = document.getElementById("filtroAno");
-  if (!sel) return;
-  const anoAtual = new Date().getFullYear();
-  const anos = [anoAtual, anoAtual - 1, anoAtual - 2, anoAtual - 3];
-  sel.innerHTML = "";
-  anos.forEach(a => {
-    const opt = document.createElement("option");
-    opt.value = String(a);
-    opt.textContent = String(a);
-    sel.appendChild(opt);
-  });
-  const optTodos = document.createElement("option");
-  optTodos.value = "todos";
-  optTodos.textContent = "Todos os anos";
-  sel.appendChild(optTodos);
-  sel.value = String(anoAtual);
-  anoSel = anoAtual;
+// ==== Inicialização ====
+async function init() {
+  await Promise.all([
+    carregarRamos(),
+    carregarLookups()
+  ]);
+  
+  await Promise.all([
+    carregarEmpresas(),
+    carregarCotacoes()
+  ]);
+  
+  processarDados();
+  renderizarTudo();
 }
 
-// ---- Produtos (colunas) ----
-async function carregarProdutos() {
-  let snap;
-  try { snap = await db.collection("ramos-seguro").orderBy("ordem").get(); }
-  catch { snap = await db.collection("ramos-seguro").get(); }
-  produtos = []; nomesProdutos = {};
-  snap.forEach(doc => {
-    const id   = doc.id;
-    const nome = doc.data().nomeExibicao || id;
-    produtos.push(id);
-    nomesProdutos[id] = nome;
-  });
-}
-
-// ---- Agências (combo) — usa agencias_banco p/ nome; fallback empresas
-async function carregarAgencias() {
-  const select = document.getElementById("filtroAgencia");
-  if (!select) return;
-
-  // RM não escolhe agência
-  if (!isAdmin && perfil === "rm") {
-    select.style.display = "none";
-    agenciaSel = minhaAgencia || "";
-    return;
-  }
-
-  select.innerHTML = `<option value="">Todas</option>`;
-  const mapAg = new Map();
-
-  // 1) preferencial
+// ==== Carregar Dados ====
+async function carregarRamos() {
   try {
-    const snapAg = await db.collection("agencias_banco").get();
-    snapAg.forEach(doc => {
-      const d = doc.data() || {};
-      const id = doc.id;
-      const nome = d.nome || d.nomeAgencia || d.nomeExibicao || id;
-      if (id) mapAg.set(id, nome);
-    });
-  } catch (e) { console.warn("[empresas] agencias_banco:", e); }
-
-  // 2) fallback/complemento
-  try {
-    let q = db.collection("empresas");
-    if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
-      q = q.where("agenciaId","==",minhaAgencia);
+    let snap;
+    try {
+      snap = await db.collection("ramos-seguro").orderBy("ordem").get();
+    } catch {
+      snap = await db.collection("ramos-seguro").get();
     }
-    const snapshot = await q.get();
-    snapshot.forEach(doc => {
-      const e = doc.data() || {};
-      const id   = e.agenciaId || "";
-      const nome = e.agenciaNome || e.agencia || mapAg.get(id) || id || "";
-      if (id) mapAg.set(id, nome);
-    });
-  } catch (e) {
-    console.warn("[empresas] carregarAgencias: fallback empresas", e);
-  }
-
-  agencias = Array.from(mapAg.entries())
-    .map(([id, nome]) => ({id, nome}))
-    .sort((a,b)=>byTxt(a.nome,b.nome));
-
-  agencias.forEach(a => {
-    const opt = document.createElement("option");
-    opt.value = a.id;
-    opt.textContent = a.nome || a.id; // exibe NOME
-    select.appendChild(opt);
-  });
-
-  if (!isAdmin && perfil === "gerente chefe" && minhaAgencia) {
-    select.value = minhaAgencia;
-    agenciaSel = minhaAgencia;
-  }
-}
-
-// ---- Combo RM (depende da agência) ----
-async function carregarRM() {
-  const select = document.getElementById("filtroRM");
-  if (!select) return;
-  if (!isAdmin && perfil === "rm") return;
-
-  select.innerHTML = `<option value="">Todos</option>`;
-
-  let q = db.collection("empresas");
-  if (!isAdmin) {
-    if (perfil === "gerente chefe" && (agenciaSel || minhaAgencia)) {
-      q = q.where("agenciaId","==",agenciaSel || minhaAgencia);
-    }
-  } else {
-    if (agenciaSel) q = q.where("agenciaId","==",agenciaSel);
-  }
-
-  try {
-    const snapshot = await q.get();
-    const rms = new Set();
-    snapshot.forEach(doc => {
-      const e = doc.data() || {};
-      const nome = e.rmNome || e.rm;
-      if (nome) rms.add(nome);
-    });
-    Array.from(rms)
-      .sort(byTxt)
-      .forEach(nome => {
-        const opt = document.createElement("option");
-        opt.value = nome;
-        opt.textContent = nome;
-        select.appendChild(opt);
+    
+    snap.forEach(doc => {
+      const d = doc.data();
+      RAMOS.push({
+        id: doc.id,
+        nome: d.nomeExibicao || d.nome || doc.id,
+        icon: getIcone(doc.id)
       });
-  } catch (e) {
-    console.warn("[empresas] carregarRM:", e);
-  }
+    });
+    
+    if (RAMOS.length === 0) {
+      // Fallback
+      RAMOS = [
+        { id: "saude", nome: "Saúde", icon: "🏥" },
+        { id: "dental", nome: "Dental", icon: "🦷" },
+        { id: "vida", nome: "Vida", icon: "❤️" },
+        { id: "patrimonial", nome: "Patrimonial", icon: "🏢" },
+        { id: "frota", nome: "Frota", icon: "🚗" },
+        { id: "equipamentos", nome: "Equipamentos", icon: "⚙️" },
+        { id: "garantia", nome: "Garantia", icon: "📜" },
+        { id: "rc", nome: "RC", icon: "⚖️" }
+      ];
+    }
+  } catch (e) { console.warn("Erro ramos:", e); }
 }
 
-// ---- Busca de cotações por empresa (RBAC) ----
-async function buscarCotacoesParaEmpresa(empresaId) {
-  if (isAdmin || perfil === "gerente chefe") {
-    try { return (await db.collection("cotacoes-gerentes").where("empresaId","==",empresaId).get()).docs; }
-    catch(e){ console.warn("[empresas] cotacoes empresaId:", e); return []; }
+function getIcone(id) {
+  const icons = {
+    "saude": "🏥", "dental": "🦷", "vida": "❤️", "vida-global": "🌍",
+    "patrimonial": "🏢", "frota": "🚗", "equipamentos": "⚙️",
+    "garantia": "📜", "rc": "⚖️", "cyber": "💻", "transporte": "🚚", "credito": "💳"
+  };
+  const idLower = (id || "").toLowerCase();
+  for (const [key, icon] of Object.entries(icons)) {
+    if (idLower.includes(key)) return icon;
   }
-  if (perfil === "rm") {
-    const buckets = [];
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmUid","==",meuUid).get()); } catch(e){}
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("rmId","==",meuUid).get()); } catch(e){}
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("usuarioId","==",meuUid).get()); } catch(e){}
-    try { buckets.push(await db.collection("cotacoes-gerentes").where("gerenteId","==",meuUid).get()); } catch(e){}
-    const map = new Map();
-    buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
-    return Array.from(map.values()).filter(d => (d.data()||{}).empresaId === empresaId);
-  }
-  return [];
+  return "📋";
 }
 
-// ---- Carregar Empresas (aplica filtros de Agência, RM e Ano) ----
-async function carregarEmpresas() {
-  const filtroRMNome = (rmSel || document.getElementById("filtroRM")?.value || "").trim();
-
+async function carregarLookups() {
+  // Agências
   try {
-    let docs = [];
-
-    if (isAdmin) {
-      let q = db.collection("empresas");
-      if (agenciaSel) q = q.where("agenciaId","==",agenciaSel);
-      docs = (await q.get()).docs;
-    } else if (perfil === "gerente chefe") {
-      const ag = agenciaSel || minhaAgencia;
-      let q = db.collection("empresas");
-      if (ag) q = q.where("agenciaId","==",ag);
-      docs = (await q.get()).docs;
-    } else if (perfil === "rm") {
-      const buckets = [];
-      try { buckets.push(await db.collection("empresas").where("rmUid","==",meuUid).get()); } catch(e){}
-      try { buckets.push(await db.collection("empresas").where("rmId","==",meuUid).get()); } catch(e){}
-      try { buckets.push(await db.collection("empresas").where("criadoPorUid","==",meuUid).get()); } catch(e){}
-      const map = new Map();
-      buckets.forEach(s => s?.docs?.forEach(d => map.set(d.id, d)));
-      docs = Array.from(map.values());
-      if (docs.length === 0 && minhaAgencia) {
-        try {
-          const snapAg = await db.collection("empresas").where("agenciaId","==",minhaAgencia).get();
-          docs = snapAg.docs.filter(d => {
-            const e = d.data() || {};
-            const dono = e.rmUid || e.rmId || e.criadoPorUid || null;
-            return dono === meuUid;
-          });
-        } catch(e){}
+    const snap = await db.collection("agencias_banco").get();
+    snap.forEach(doc => {
+      AGENCIAS[doc.id] = doc.data().nome || doc.id;
+    });
+    
+    const sel = $("filtroAgencia");
+    if (sel) {
+      sel.innerHTML = '<option value="">Todas</option>';
+      Object.entries(AGENCIAS).sort((a, b) => a[1].localeCompare(b[1])).forEach(([id, nome]) => {
+        sel.innerHTML += `<option value="${id}">${nome}</option>`;
+      });
+    }
+  } catch (e) { console.warn("Erro agências:", e); }
+  
+  // RMs
+  try {
+    const snap = await db.collection("usuarios_banco").get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      if (d.nome) {
+        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
       }
-    }
-
-    empresasCache = [];
-    docs.forEach(doc => {
-      const e = { id: doc.id, ...doc.data() };
-      const nomeRM = e.rmNome || e.rm || "";
-      if (filtroRMNome && nomeRM !== filtroRMNome) return;
-      empresasCache.push(e);
     });
-
-    if (!empresasCache.length) {
-      document.getElementById("tabelaEmpresas").innerHTML =
-        `<div class="muted" style="padding:12px">Nenhuma empresa no escopo atual.</div>`;
-      linhasRenderizadas = [];
-      return;
-    }
-
-    // Monta linhas com status por produto e % por empresa
-    const linhas = await Promise.all(
-      empresasCache.map(async (empresa) => {
-        const cotDocs = await buscarCotacoesParaEmpresa(empresa.id);
-        const statusPorProduto = {};
-        produtos.forEach(p => statusPorProduto[p] = "nenhum");
-
-        cotDocs.forEach(doc => {
-          const c = doc.data() || {};
-          const ano = getCotacaoAno(c);
-          if (anoSel !== "todos" && ano !== anoSel) return;
-
-          const ramo = c.ramo;
-          const produtoId = produtos.find(id =>
-            normalize(nomesProdutos[id]) === normalize(ramo)
-          );
-          if (!produtoId) return;
-          statusPorProduto[produtoId] = classFromStatus(c.status);
-        });
-
-        const totalRamos = produtos.length;
-        const ramosComMov = Object.values(statusPorProduto).filter(s => s !== "nenhum").length;
-        const pctEmpresa = percent(ramosComMov, totalRamos);
-
-        return { nome: empresa.nome, status: statusPorProduto, pctEmpresa };
-      })
-    );
-
-    // % por ramo (cabeçalho)
-    const totalEmpresas = linhas.length;
-    const contagemPorRamo = {};
-    produtos.forEach(p => contagemPorRamo[p] = 0);
-    linhas.forEach(linha => {
-      produtos.forEach(p => {
-        if (linha.status[p] !== "nenhum") contagemPorRamo[p] += 1;
+    
+    const sel = $("filtroRM");
+    if (sel) {
+      sel.innerHTML = '<option value="">Todos</option>';
+      Object.entries(RMS).sort((a, b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
+        sel.innerHTML += `<option value="${id}">${rm.nome}</option>`;
       });
-    });
-    const pctPorRamo = {};
-    produtos.forEach(p => pctPorRamo[p] = percent(contagemPorRamo[p], totalEmpresas));
-
-    // Render — COM EMOJIS na tela, e badge % ao lado do nome da empresa
-    let tituloAno = (anoSel === "todos") ? "Todos os anos" : String(anoSel);
-    let html = `<table><thead><tr><th>Empresa <span class="badge">${tituloAno}</span></th>`;
-    produtos.forEach(p => {
-      const pct = pctPorRamo[p];
-      html += `<th title="% de empresas com movimento neste ramo no período">${nomesProdutos[p]} <span class="badge">${pct}%</span></th>`;
-    });
-    html += `</tr></thead><tbody>`;
-
-    linhas.forEach(linha => {
-      html += `<tr><td>${linha.nome || "-"} <span class="badge" title="% de ramos com movimento nesta empresa">${linha.pctEmpresa}%</span></td>`;
-      produtos.forEach(p => {
-        const cor = linha.status[p];
-        const classe = {
-          verde: "status-verde",
-          vermelho: "status-vermelho",
-          amarelo: "status-amarelo",
-          azul: "status-azul",
-          nenhum: "status-cinza"
-        }[cor] || "status-cinza";
-        const simbolo = { verde:"🟢", amarelo:"🟡", vermelho:"🔴", azul:"🔵", nenhum:"⚪️" }[cor] || "⚪️";
-        html += `<td class="${classe}">${simbolo}</td>`;
-      });
-      html += `</tr>`;
-    });
-
-    html += `</tbody></table>`;
-    document.getElementById("tabelaEmpresas").innerHTML = html;
-
-    // guarda para PDF
-    linhasRenderizadas = linhas;
-
-  } catch (err) {
-    console.error("[empresas] carregarEmpresas:", err);
-    erroUI("Erro ao carregar empresas.");
-  }
+    }
+  } catch (e) { console.warn("Erro RMs:", e); }
 }
 
-// === Abrir Painel CRM em nova página com os filtros atuais ===
-function abrirPainelCRM(){
-  const ag = document.getElementById("filtroAgencia")?.value || "";
-  const rm = document.getElementById("filtroRM")?.value || "";
-  const an = document.getElementById("filtroAno")?.value || new Date().getFullYear();
-  const url = `crm.html?agencia=${encodeURIComponent(ag)}&rm=${encodeURIComponent(rm)}&ano=${encodeURIComponent(an)}`;
-  window.open(url, "_blank");
+async function carregarEmpresas() {
+  try {
+    const snap = await db.collection("empresas").get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      EMPRESAS.push({
+        id: doc.id,
+        nome: d.nome || d.razaoSocial || "Empresa",
+        cnpj: d.cnpj || "",
+        cidade: d.cidade || "",
+        estado: d.estado || d.uf || "",
+        rmUid: d.rmUid || d.rmId || d.gerenteId || "",
+        rmNome: d.rmNome || d.gerenteNome || "",
+        agenciaId: d.agenciaId || "",
+        numFuncionarios: d.numFuncionarios || 0
+      });
+    });
+    
+    EMPRESAS.sort((a, b) => a.nome.localeCompare(b.nome));
+  } catch (e) { console.warn("Erro empresas:", e); }
 }
 
-// === Exportar para PDF (pinta colunas > 0 e remove emoji nelas; mantém nome da empresa) ===
-async function gerarPDF() {
-  if (!window.jspdf || !window.jspdf.jsPDF) {
-    alert("Biblioteca jsPDF não carregada. Inclua os scripts do jsPDF e do AutoTable no HTML.");
-    return;
-  }
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF("l", "pt", "a4");
+async function carregarCotacoes() {
+  try {
+    const snap = await db.collection("cotacoes-gerentes").get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      COTACOES.push({
+        id: doc.id,
+        empresaId: d.empresaId || "",
+        empresaNome: d.empresaNome || "",
+        ramo: d.ramo || "",
+        status: d.status || "",
+        statusCat: categoriaStatus(d.status),
+        valor: parseFloat(d.valorFinal || d.valorNegocio || d.premio || d.valorDesejado || 0),
+        dataCriacao: toDate(d.dataCriacao),
+        dataAtualizacao: toDate(d.dataAtualizacao),
+        rmUid: d.rmUid || d.rmId || "",
+        rmNome: d.rmNome || "",
+        agenciaId: d.agenciaId || ""
+      });
+    });
+  } catch (e) { console.warn("Erro cotações:", e); }
+}
 
-  // Título
-  doc.setFontSize(14);
-  doc.setTextColor(0,64,128);
-  doc.text("Mapa de Produtos por Empresa", 40, 40);
-
-  // Legenda com quadradinhos (evita emoji no PDF)
-  doc.setFontSize(10);
-  doc.setTextColor(0,0,0);
-  doc.text("Legenda:", 40, 60);
-  const legend = [
-    {label:"Emitido",   color:[212,237,218]},
-    {label:"Pendente",  color:[255,243,205]},
-    {label:"Recusado",  color:[248,215,218]},
-    {label:"Fechado/Emissão", color:[207,226,255]},
-    {label:"Sem cotação", color:[246,246,246]}
-  ];
-  let lx = 100;
-  legend.forEach(item => {
-    doc.setFillColor(item.color[0], item.color[1], item.color[2]);
-    doc.rect(lx, 52, 14, 10, "F");
-    doc.setTextColor(0,0,0);
-    doc.text(item.label, lx + 20, 60);
-    lx += 120;
-  });
-
-  // Tabela
-  const tabela = document.querySelector("#tabelaEmpresas table");
-  if (tabela && doc.autoTable) {
-    doc.autoTable({
-      html: tabela,
-      startY: 80,
-      styles: { fontSize: 7, halign: "center", valign: "middle" },
-      headStyles: { fillColor: [0,64,128], textColor: 255 },
-      didParseCell: (data) => {
-        const cls = data.cell.raw?.getAttribute?.("class") || "";
-
-        // pinta as células conforme a classe
-        if (cls.includes("status-verde"))   data.cell.styles.fillColor = [212,237,218];
-        if (cls.includes("status-amarelo")) data.cell.styles.fillColor = [255,243,205];
-        if (cls.includes("status-vermelho"))data.cell.styles.fillColor = [248,215,218];
-        if (cls.includes("status-azul"))    data.cell.styles.fillColor = [207,226,255];
-        if (cls.includes("status-cinza"))   data.cell.styles.fillColor = [246,246,246];
-
-        // mantém texto da 1ª coluna (nome da empresa + %). Limpa somente colunas de status.
-        if (data.section === 'body' && data.column.index > 0) {
-          data.cell.text = [' '];
+// ==== Processar Dados ====
+function processarDados() {
+  // Para cada empresa, calcular status por ramo
+  EMPRESAS.forEach(emp => {
+    emp.ramos = {};
+    emp.totalEmitidos = 0;
+    emp.totalPendentes = 0;
+    emp.totalRecusados = 0;
+    emp.totalValor = 0;
+    emp.oportunidades = 0;
+    
+    // Buscar RM nome se não tiver
+    if (!emp.rmNome && emp.rmUid && RMS[emp.rmUid]) {
+      emp.rmNome = RMS[emp.rmUid].nome;
+    }
+    
+    RAMOS.forEach(ramo => {
+      // Buscar cotações desta empresa para este ramo
+      const cotacoesRamo = COTACOES.filter(c => {
+        const matchEmpresa = c.empresaId === emp.id || 
+                            normalizar(c.empresaNome) === normalizar(emp.nome);
+        const matchRamo = normalizar(c.ramo).includes(normalizar(ramo.id)) ||
+                         normalizar(c.ramo).includes(normalizar(ramo.nome)) ||
+                         normalizar(ramo.nome).includes(normalizar(c.ramo));
+        return matchEmpresa && matchRamo;
+      });
+      
+      if (cotacoesRamo.length === 0) {
+        // Oportunidade!
+        emp.ramos[ramo.id] = {
+          status: "oportunidade",
+          cotacoes: [],
+          valor: 0
+        };
+        emp.oportunidades++;
+      } else {
+        // Ordenar por relevância: emitido > emissao > pendente > recusado
+        const prioridade = { emitido: 4, emissao: 3, pendente: 2, recusado: 1 };
+        cotacoesRamo.sort((a, b) => (prioridade[b.statusCat] || 0) - (prioridade[a.statusCat] || 0));
+        
+        const melhor = cotacoesRamo[0];
+        emp.ramos[ramo.id] = {
+          status: melhor.statusCat,
+          cotacoes: cotacoesRamo,
+          valor: melhor.valor
+        };
+        
+        // Contadores
+        if (melhor.statusCat === "emitido") {
+          emp.totalEmitidos++;
+          emp.totalValor += melhor.valor;
+        } else if (melhor.statusCat === "pendente") {
+          emp.totalPendentes++;
+        } else if (melhor.statusCat === "recusado") {
+          emp.totalRecusados++;
         }
       }
     });
-  } else {
-    doc.text("Tabela não encontrada para exportação.", 40, 90);
-  }
-
-  doc.save("Mapa-Produtos.pdf");
+    
+    // Calcular cobertura
+    emp.cobertura = Math.round(((RAMOS.length - emp.oportunidades) / RAMOS.length) * 100);
+  });
+  
+  EMPRESAS_FILTRADAS = [...EMPRESAS];
 }
+
+// ==== Renderização ====
+function renderizarTudo() {
+  renderizarStats();
+  renderizarTabela();
+}
+
+function renderizarStats() {
+  const totalEmpresas = EMPRESAS_FILTRADAS.length;
+  
+  let totalEmitidos = 0;
+  let totalPendentes = 0;
+  let totalRecusados = 0;
+  let totalOportunidades = 0;
+  let somaCobertura = 0;
+  
+  EMPRESAS_FILTRADAS.forEach(emp => {
+    totalEmitidos += emp.totalEmitidos;
+    totalPendentes += emp.totalPendentes;
+    totalRecusados += emp.totalRecusados;
+    totalOportunidades += emp.oportunidades;
+    somaCobertura += emp.cobertura;
+  });
+  
+  const coberturaMedia = totalEmpresas > 0 ? Math.round(somaCobertura / totalEmpresas) : 0;
+  
+  $("statEmpresas").textContent = totalEmpresas;
+  $("statEmitidos").textContent = totalEmitidos;
+  $("statPendentes").textContent = totalPendentes;
+  $("statRecusados").textContent = totalRecusados;
+  $("statOportunidades").textContent = totalOportunidades;
+  $("statCobertura").textContent = coberturaMedia + "%";
+}
+
+function renderizarTabela() {
+  const container = $("tableScroll");
+  
+  if (EMPRESAS_FILTRADAS.length === 0) {
+    container.innerHTML = `
+      <div class="loading" style="padding: 40px;">
+        <span style="font-size: 48px;">🔍</span>
+        <span style="margin-top: 16px;">Nenhuma empresa encontrada</span>
+      </div>
+    `;
+    $("tableCount").textContent = "0 empresas";
+    return;
+  }
+  
+  // Header
+  let headerHtml = `<tr><th>Empresa</th>`;
+  RAMOS.forEach(ramo => {
+    headerHtml += `<th title="${ramo.nome}">${ramo.icon}</th>`;
+  });
+  headerHtml += `<th>Total</th><th>%</th></tr>`;
+  
+  // Body
+  let bodyHtml = "";
+  
+  // Totais por ramo
+  const totaisPorRamo = {};
+  RAMOS.forEach(ramo => {
+    totaisPorRamo[ramo.id] = { emitidos: 0, valor: 0 };
+  });
+  
+  EMPRESAS_FILTRADAS.forEach(emp => {
+    bodyHtml += `<tr>`;
+    
+    // Célula da empresa
+    bodyHtml += `
+      <td>
+        <div class="empresa-cell">
+          <div class="empresa-nome">${emp.nome}</div>
+          <div class="empresa-meta">
+            <span>👤 ${emp.rmNome || '-'}</span>
+            ${emp.cidade ? `<span>📍 ${emp.cidade}</span>` : ''}
+          </div>
+          <div class="empresa-progress">
+            <div class="empresa-progress-bar" style="width: ${emp.cobertura}%"></div>
+          </div>
+        </div>
+      </td>
+    `;
+    
+    // Células dos ramos
+    RAMOS.forEach(ramo => {
+      const ramoData = emp.ramos[ramo.id] || { status: "sem", cotacoes: [], valor: 0 };
+      const statusClass = ramoData.status;
+      const icon = statusIcon(ramoData.status);
+      
+      bodyHtml += `
+        <td>
+          <div class="status-cell ${statusClass}" 
+               onclick="abrirModal('${emp.id}', '${ramo.id}')" 
+               title="${ramo.nome}: ${statusLabel(ramoData.status)}">
+            ${icon}
+          </div>
+        </td>
+      `;
+      
+      // Totais
+      if (ramoData.status === "emitido") {
+        totaisPorRamo[ramo.id].emitidos++;
+        totaisPorRamo[ramo.id].valor += ramoData.valor;
+      }
+    });
+    
+    // Total da empresa
+    bodyHtml += `
+      <td class="total-cell">
+        <div class="total-valor">${fmtBRL(emp.totalValor)}</div>
+      </td>
+      <td class="total-cell">
+        <div class="total-percent">${emp.cobertura}%</div>
+      </td>
+    `;
+    
+    bodyHtml += `</tr>`;
+  });
+  
+  // Footer (totais)
+  let footerHtml = `<tr><td><strong>TOTAL</strong></td>`;
+  let totalGeral = 0;
+  
+  RAMOS.forEach(ramo => {
+    const dados = totaisPorRamo[ramo.id];
+    totalGeral += dados.valor;
+    footerHtml += `
+      <td class="total-cell">
+        <div style="font-size: 11px;">${dados.emitidos}</div>
+      </td>
+    `;
+  });
+  
+  footerHtml += `
+    <td class="total-cell"><div class="total-valor">${fmtBRL(totalGeral)}</div></td>
+    <td></td>
+  </tr>`;
+  
+  container.innerHTML = `
+    <table class="matrix-table">
+      <thead>${headerHtml}</thead>
+      <tbody>${bodyHtml}</tbody>
+      <tfoot>${footerHtml}</tfoot>
+    </table>
+  `;
+  
+  $("tableCount").textContent = `${EMPRESAS_FILTRADAS.length} empresas × ${RAMOS.length} ramos`;
+}
+
+// ==== Filtros ====
+function aplicarFiltros() {
+  const busca = normalizar($("filtroEmpresa")?.value || "");
+  const agencia = $("filtroAgencia")?.value || "";
+  const rm = $("filtroRM")?.value || "";
+  const exibir = $("filtroExibir")?.value || "todos";
+  
+  EMPRESAS_FILTRADAS = EMPRESAS.filter(emp => {
+    // Busca por nome
+    if (busca && !normalizar(emp.nome).includes(busca)) return false;
+    
+    // Agência
+    if (agencia && emp.agenciaId !== agencia) return false;
+    
+    // RM
+    if (rm && emp.rmUid !== rm) return false;
+    
+    // Exibir
+    if (exibir === "oportunidades" && emp.oportunidades === 0) return false;
+    if (exibir === "completas" && emp.cobertura < 100) return false;
+    if (exibir === "vazias" && emp.cobertura > 0) return false;
+    
+    return true;
+  });
+  
+  renderizarTudo();
+}
+
+function limparFiltros() {
+  $("filtroEmpresa").value = "";
+  $("filtroAgencia").value = "";
+  $("filtroRM").value = "";
+  $("filtroExibir").value = "todos";
+  
+  EMPRESAS_FILTRADAS = [...EMPRESAS];
+  renderizarTudo();
+}
+
+// ==== Modal ====
+function abrirModal(empresaId, ramoId) {
+  const empresa = EMPRESAS.find(e => e.id === empresaId);
+  const ramo = RAMOS.find(r => r.id === ramoId);
+  
+  if (!empresa || !ramo) return;
+  
+  MODAL_EMPRESA = empresa;
+  MODAL_RAMO = ramo;
+  
+  const ramoData = empresa.ramos[ramoId] || { status: "sem", cotacoes: [], valor: 0 };
+  
+  $("modalTitle").innerHTML = `${ramo.icon} ${ramo.nome}`;
+  
+  let bodyHtml = `
+    <div class="modal-empresa">
+      <div class="modal-empresa-nome">${empresa.nome}</div>
+      <div class="modal-empresa-info">
+        👤 ${empresa.rmNome || 'Não vinculado'} 
+        ${empresa.cidade ? `• 📍 ${empresa.cidade}` : ''}
+      </div>
+    </div>
+  `;
+  
+  if (ramoData.status === "oportunidade") {
+    bodyHtml += `
+      <div class="oportunidade-card">
+        <div class="oportunidade-icon">💎</div>
+        <div class="oportunidade-title">Oportunidade de Negócio!</div>
+        <div class="oportunidade-desc">Esta empresa ainda não possui cotação para ${ramo.nome}.</div>
+      </div>
+    `;
+    $("btnCriarCotacao").style.display = "inline-flex";
+  } else {
+    // Mostrar status atual
+    bodyHtml += `
+      <div class="modal-status-card">
+        <div class="modal-status-icon">${statusIcon(ramoData.status)}</div>
+        <div class="modal-status-info">
+          <div class="modal-status-label">Status Atual</div>
+          <div class="modal-status-value">${statusLabel(ramoData.status)}</div>
+          ${ramoData.valor > 0 ? `<div class="modal-status-detail">Valor: ${fmtBRL(ramoData.valor)}</div>` : ''}
+        </div>
+      </div>
+    `;
+    
+    // Histórico de cotações
+    if (ramoData.cotacoes.length > 0) {
+      bodyHtml += `<h4 style="margin-bottom: 12px; font-size: 14px;">📋 Histórico de Cotações</h4>`;
+      bodyHtml += `<div class="cotacoes-list">`;
+      
+      ramoData.cotacoes.slice(0, 5).forEach(cot => {
+        bodyHtml += `
+          <div class="cotacao-item">
+            <div class="cotacao-item-left">
+              <div class="cotacao-status-dot ${cot.statusCat}"></div>
+              <div>
+                <div style="font-weight: 600;">${cot.status || '-'}</div>
+                <div style="font-size: 11px; color: var(--muted);">${fmtData(cot.dataCriacao)}</div>
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-weight: 600;">${fmtBRL(cot.valor)}</div>
+              <div style="font-size: 11px; color: var(--muted);">${cot.rmNome || '-'}</div>
+            </div>
+          </div>
+        `;
+      });
+      
+      bodyHtml += `</div>`;
+    }
+    
+    // Botão de nova cotação mesmo se já tem
+    $("btnCriarCotacao").style.display = "inline-flex";
+  }
+  
+  $("modalBody").innerHTML = bodyHtml;
+  $("modalDetalhes").classList.add("active");
+}
+
+function fecharModal() {
+  $("modalDetalhes").classList.remove("active");
+  MODAL_EMPRESA = null;
+  MODAL_RAMO = null;
+}
+
+function criarCotacaoDoModal() {
+  if (!MODAL_EMPRESA || !MODAL_RAMO) return;
+  
+  // Redirecionar para cotações com parâmetros
+  const params = new URLSearchParams({
+    empresaId: MODAL_EMPRESA.id,
+    empresaNome: MODAL_EMPRESA.nome,
+    ramo: MODAL_RAMO.nome,
+    nova: "1"
+  });
+  
+  window.location.href = `cotacoes.html?${params}`;
+}
+
+// ==== Export ====
+function exportarPDF() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  
+  doc.setFontSize(18);
+  doc.setTextColor(79, 70, 229);
+  doc.text('Mapa de Produtos por Empresa', 14, 20);
+  
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 28);
+  doc.text(`Total: ${EMPRESAS_FILTRADAS.length} empresas`, 14, 34);
+  
+  // Montar dados
+  const headers = ['Empresa', ...RAMOS.map(r => r.nome), 'Total', '%'];
+  const dados = EMPRESAS_FILTRADAS.map(emp => {
+    const row = [emp.nome];
+    RAMOS.forEach(ramo => {
+      const ramoData = emp.ramos[ramo.id];
+      row.push(statusLabel(ramoData?.status || 'sem').substring(0, 3));
+    });
+    row.push(fmtBRL(emp.totalValor));
+    row.push(emp.cobertura + '%');
+    return row;
+  });
+  
+  doc.autoTable({
+    startY: 40,
+    head: [headers],
+    body: dados,
+    styles: { fontSize: 7, cellPadding: 2 },
+    headStyles: { fillColor: [79, 70, 229] },
+    columnStyles: { 0: { cellWidth: 40 } }
+  });
+  
+  doc.save(`mapa-produtos-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+function exportarExcel() {
+  // Montar dados
+  const dados = EMPRESAS_FILTRADAS.map(emp => {
+    const row = {
+      'Empresa': emp.nome,
+      'Cidade': emp.cidade,
+      'Gerente': emp.rmNome || '-'
+    };
+    
+    RAMOS.forEach(ramo => {
+      const ramoData = emp.ramos[ramo.id];
+      row[ramo.nome] = statusLabel(ramoData?.status || 'sem');
+    });
+    
+    row['Total Valor'] = emp.totalValor;
+    row['Cobertura %'] = emp.cobertura;
+    row['Oportunidades'] = emp.oportunidades;
+    
+    return row;
+  });
+  
+  const ws = XLSX.utils.json_to_sheet(dados);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Mapa de Produtos");
+  XLSX.writeFile(wb, `mapa-produtos-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// ==== Globals ====
+window.aplicarFiltros = aplicarFiltros;
+window.limparFiltros = limparFiltros;
+window.abrirModal = abrirModal;
+window.fecharModal = fecharModal;
+window.criarCotacaoDoModal = criarCotacaoDoModal;
+window.exportarPDF = exportarPDF;
+window.exportarExcel = exportarExcel;
