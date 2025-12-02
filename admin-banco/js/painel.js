@@ -568,7 +568,6 @@ function initDrawerMobile(){
 // ==== Gráficos e Dados Adicionais ====
 let COTACOES_CACHE = [];
 let chartStatus = null;
-let chartRamo = null;
 
 const fmtBRLCompact = (v)=>{
   const n = parseValor(v);
@@ -582,22 +581,43 @@ async function carregarDadosGraficos() {
     const docs = await getDocsPerfil("cotacoes-gerentes");
     COTACOES_CACHE = docs.map(d => d.data ? d.data() : d);
     
-    renderizarGraficoStatus();
-    renderizarGraficoRamo();
     popularFiltroRamo();
+    renderizarGraficoStatus();
     carregarVencimentosVertical();
-    carregarMovimentacoesComValor();
   } catch(e) {
     console.warn("Erro gráficos:", e);
   }
 }
 
+function popularFiltroRamo() {
+  const select = document.getElementById("filtroRamoGrafico");
+  if (!select) return;
+  
+  const ramosSet = new Set();
+  COTACOES_CACHE.forEach(c => {
+    if (c.ramo) ramosSet.add(c.ramo);
+  });
+  
+  select.innerHTML = '<option value="">Todos</option>';
+  Array.from(ramosSet).sort().forEach(ramo => {
+    select.innerHTML += `<option value="${ramo}">${ramo}</option>`;
+  });
+}
+
+// Gráfico de Status - filtrado por ramo quando selecionado
 function renderizarGraficoStatus() {
   const ctx = document.getElementById("chartStatus")?.getContext("2d");
   if (!ctx) return;
   
+  const ramoFiltro = document.getElementById("filtroRamoGrafico")?.value || "";
+  
+  // Filtrar cotações pelo ramo selecionado
+  const cotacoesFiltradas = ramoFiltro 
+    ? COTACOES_CACHE.filter(c => c.ramo === ramoFiltro)
+    : COTACOES_CACHE;
+  
   const porStatus = {};
-  COTACOES_CACHE.forEach(c => {
+  cotacoesFiltradas.forEach(c => {
     const status = c.status || "Sem Status";
     if (!porStatus[status]) porStatus[status] = { qtd: 0, valor: 0 };
     porStatus[status].qtd++;
@@ -612,6 +632,11 @@ function renderizarGraficoStatus() {
     'Em Negociação': 'rgba(59, 130, 246, 0.8)',
     'Aguardando Cotação': 'rgba(245, 158, 11, 0.8)',
     'Aguardando Proposta': 'rgba(139, 92, 246, 0.8)',
+    'Pendente Cliente': 'rgba(251, 191, 36, 0.8)',
+    'Pendente Agência': 'rgba(249, 115, 22, 0.8)',
+    'Recusado Cliente': 'rgba(239, 68, 68, 0.8)',
+    'Recusado Seguradora': 'rgba(220, 38, 38, 0.8)',
+    'Negócio Iniciado': 'rgba(99, 102, 241, 0.8)',
     'Perdido': 'rgba(239, 68, 68, 0.8)',
     'Cancelado': 'rgba(100, 116, 139, 0.8)'
   };
@@ -634,13 +659,35 @@ function renderizarGraficoStatus() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { display: false },
+        legend: {
+          display: true,
+          position: 'right',
+          labels: {
+            usePointStyle: true,
+            padding: 8,
+            font: { size: 10 },
+            generateLabels: function(chart) {
+              const data = chart.data;
+              return data.labels.map((label, i) => {
+                const dados = porStatus[label];
+                return {
+                  text: `${label}: ${dados.qtd} • ${fmtBRLCompact(dados.valor)}`,
+                  fillStyle: data.datasets[0].backgroundColor[i],
+                  strokeStyle: '#fff',
+                  lineWidth: 1,
+                  hidden: false,
+                  index: i
+                };
+              });
+            }
+          }
+        },
         tooltip: {
           callbacks: {
             label: (ctx) => {
               const status = labels[ctx.dataIndex];
               const dados = porStatus[status];
-              return `${status}: ${dados.qtd} • ${fmtBRLCompact(dados.valor)}`;
+              return `${status}: ${dados.qtd} cotações • ${fmtBRLCompact(dados.valor)}`;
             }
           }
         }
@@ -648,109 +695,17 @@ function renderizarGraficoStatus() {
     }
   });
   
-  // Legenda com valores
-  const legenda = document.getElementById("statusLegenda");
-  if (legenda) {
-    legenda.innerHTML = labels.map((s, i) => {
-      const dados = porStatus[s];
-      return `<div class="flex items-center gap-2">
-        <span style="background: ${bgColors[i]}; width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0;"></span>
-        <span class="truncate">${s}:</span>
-        <strong>${dados.qtd}</strong>
-        <span class="text-slate-400">•</span>
-        <span class="text-emerald-600 font-semibold">${fmtBRLCompact(dados.valor)}</span>
-      </div>`;
-    }).join('');
-  }
-}
-
-function popularFiltroRamo() {
-  const select = document.getElementById("filtroRamoGrafico");
-  if (!select) return;
-  
-  const ramosSet = new Set();
-  COTACOES_CACHE.forEach(c => {
-    if (c.ramo) ramosSet.add(c.ramo);
-  });
-  
-  select.innerHTML = '<option value="">Todos</option>';
-  Array.from(ramosSet).sort().forEach(ramo => {
-    select.innerHTML += `<option value="${ramo}">${ramo}</option>`;
-  });
-}
-
-function renderizarGraficoRamo() {
-  const ctx = document.getElementById("chartRamo")?.getContext("2d");
-  if (!ctx) return;
-  
-  const ramoFiltro = document.getElementById("filtroRamoGrafico")?.value || "";
-  
-  const porRamo = {};
-  COTACOES_CACHE.forEach(c => {
-    if (ramoFiltro && c.ramo !== ramoFiltro) return;
-    const ramo = c.ramo || "Sem Ramo";
-    if (!porRamo[ramo]) porRamo[ramo] = { qtd: 0, valor: 0 };
-    porRamo[ramo].qtd++;
-    porRamo[ramo].valor += parseValor(c.valorFinal ?? c.valorNegocio ?? c.premioLiquido ?? c.premio ?? c.valorDesejado ?? 0);
-  });
-  
-  const sorted = Object.entries(porRamo).sort((a, b) => b[1].qtd - a[1].qtd).slice(0, 8);
-  const labels = sorted.map(s => s[0]);
-  const qtds = sorted.map(s => s[1].qtd);
-  
-  const cores = [
-    'rgba(59, 130, 246, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)',
-    'rgba(139, 92, 246, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(20, 184, 166, 0.8)',
-    'rgba(239, 68, 68, 0.8)', 'rgba(99, 102, 241, 0.8)'
-  ];
-  
-  if (chartRamo) chartRamo.destroy();
-  
-  chartRamo = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: 'Cotações',
-        data: qtds,
-        backgroundColor: cores.slice(0, labels.length),
-        borderRadius: 6
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      indexAxis: 'y',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const ramo = labels[ctx.dataIndex];
-              const dados = porRamo[ramo];
-              return `${dados.qtd} cotações • ${fmtBRLCompact(dados.valor)}`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { beginAtZero: true, grid: { display: false } },
-        y: { grid: { display: false }, ticks: { font: { size: 10 } } }
-      }
-    }
-  });
-  
-  // Legenda resumo
-  const legenda = document.getElementById("ramoLegenda");
-  if (legenda) {
-    const totalQtd = sorted.reduce((a, s) => a + s[1].qtd, 0);
-    const totalValor = sorted.reduce((a, s) => a + s[1].valor, 0);
-    legenda.textContent = `Total: ${totalQtd} cotações • ${fmtBRLCompact(totalValor)}`;
+  // Atualizar título se filtrado
+  const titulo = document.querySelector('#chartStatus')?.closest('.card')?.querySelector('h3');
+  if (titulo) {
+    const baseTitle = 'Cotações por Status';
+    titulo.innerHTML = titulo.innerHTML.replace(/Cotações por Status.*?(?=<|$)/, 
+      ramoFiltro ? `Cotações por Status <span class="text-xs font-normal text-slate-400">(${ramoFiltro})</span>` : baseTitle);
   }
 }
 
 function atualizarGraficoRamo() {
-  renderizarGraficoRamo();
+  renderizarGraficoStatus();
 }
 window.atualizarGraficoRamo = atualizarGraficoRamo;
 
@@ -811,6 +766,14 @@ async function carregarVencimentosVertical() {
   }
 }
 
+// Override do carregarResumoPainel para incluir gráficos
+const _carregarResumoPainelOriginal = carregarResumoPainel;
+carregarResumoPainel = async function() {
+  await _carregarResumoPainelOriginal();
+  await carregarDadosGraficos();
+  await carregarMovimentacoesComValor();
+};
+
 // Movimentações com valor
 async function carregarMovimentacoesComValor() {
   const container = document.getElementById("feedMovimentacoes");
@@ -833,8 +796,27 @@ async function carregarMovimentacoesComValor() {
       'Em Negociação': 'bg-blue-500',
       'Aguardando Cotação': 'bg-amber-500',
       'Aguardando Proposta': 'bg-violet-500',
+      'Pendente Cliente': 'bg-yellow-500',
+      'Pendente Agência': 'bg-orange-500',
+      'Recusado Cliente': 'bg-red-500',
+      'Recusado Seguradora': 'bg-red-600',
+      'Negócio Iniciado': 'bg-indigo-500',
       'Perdido': 'bg-red-500',
       'Cancelado': 'bg-slate-400'
+    };
+    
+    const statusBadgeColors = {
+      'Negócio Emitido': 'badge-success',
+      'Em Negociação': 'badge-info',
+      'Aguardando Cotação': 'badge-warning',
+      'Aguardando Proposta': 'badge-info',
+      'Pendente Cliente': 'badge-warning',
+      'Pendente Agência': 'badge-warning',
+      'Recusado Cliente': 'badge-danger',
+      'Recusado Seguradora': 'badge-danger',
+      'Negócio Iniciado': 'badge-info',
+      'Perdido': 'badge-danger',
+      'Cancelado': 'badge-muted'
     };
     
     container.innerHTML = docs.map(d => {
@@ -842,19 +824,24 @@ async function carregarMovimentacoesComValor() {
       const dt = toDate(d.ultimaAtualizacao) || toDate(d.dataCriacao);
       const status = d.status || "-";
       const indicatorColor = statusColors[status] || 'bg-slate-300';
+      const badgeColor = statusBadgeColors[status] || 'badge-muted';
+      const obs = d.observacao || d.obs || d.descricao || "";
       
       return `
         <div class="activity-card">
           <div class="activity-indicator ${indicatorColor}"></div>
-          <div class="flex items-start justify-between gap-2 pl-2">
-            <div class="min-w-0 flex-1">
-              <div class="font-semibold text-slate-800 text-sm truncate">${d.empresaNome || "Empresa"}</div>
-              <div class="text-xs text-slate-500">${d.ramo || "-"} • ${status}</div>
+          <div class="pl-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <div class="font-bold text-slate-800 text-sm">${d.empresaNome || "Empresa"}</div>
+                <span class="badge ${badgeColor}">${status}</span>
+              </div>
+              <div class="text-right flex-shrink-0">
+                <div class="text-[10px] text-slate-400">${d.rmNome || ""} • ${fmtData(dt)}</div>
+                <div class="text-xs font-bold text-emerald-600">${fmtBRLCompact(valor)}</div>
+              </div>
             </div>
-            <div class="text-right flex-shrink-0">
-              <div class="text-xs text-slate-400">${fmtData(dt)}</div>
-              <div class="text-xs font-semibold text-emerald-600">${fmtBRLCompact(valor)}</div>
-            </div>
+            ${obs ? `<div class="text-xs text-slate-500 mt-1 truncate">${obs}</div>` : ''}
           </div>
         </div>
       `;
@@ -864,13 +851,6 @@ async function carregarMovimentacoesComValor() {
     console.warn("Erro movimentações:", e);
   }
 }
-
-// Override do carregarResumoPainel para incluir gráficos
-const _carregarResumoPainelOriginal = carregarResumoPainel;
-carregarResumoPainel = async function() {
-  await _carregarResumoPainelOriginal();
-  await carregarDadosGraficos();
-};
 
 // ==== Start ====
 initAuth();
