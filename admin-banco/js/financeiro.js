@@ -12245,6 +12245,8 @@ window.trocarSubAbaRecuperacao = trocarSubAbaRecuperacao;
 function calcularNecessidadeRecuperacao(calc, rows) {
   const resultado = {
     subAba: 'global',
+    situacaoGeral: '', // CRÍTICA, ATENÇÃO, SAUDÁVEL, EXCELENTE
+    motivoGlobal: '',
     creditoGlobal: {
       total: 0,
       itens: [],
@@ -12262,186 +12264,440 @@ function calcularNecessidadeRecuperacao(calc, rows) {
     }
   };
   
+  // Dados do balanço/DRE
   const receita = calc.receita || 0;
   const ebitda = calc.ebitda || 0;
   const margem = calc.margem || 0;
-  const liquidez = calc.liq || calc.liqCorrente || 0;
+  const margemLiq = calc.margemLiq || 0;
+  const liquidez = calc.liqCorrente || calc.liq || 0;
+  const liqSeca = calc.liqSeca || 0;
+  const liqImediata = calc.liqImediata || 0;
   const alav = calc.alav || 0;
   const dividaLiq = calc.dl || 0;
-  const caixa = calc.caixa || 0;
-  const estoque = calc.estoque || 0;
-  const cr = calc.cr || 0; // Contas a receber
-  const fornecedores = calc.fornec || 0;
-  const passivo = calc.passivo || calc.pc || 0;
-  const ativo = calc.ativo || calc.at || 0;
+  const dividaBruta = calc.dividaBruta || 0;
+  const caixa = calc.caixa || calc.disponiveis || 0;
+  const estoque = calc.estoques || 0;
+  const cr = calc.cr || 0;
+  const cp = calc.cp || 0;
   const pl = calc.pl || 0;
-  const custoFinanceiro = calc.despFin || 0;
+  const ativo = calc.ativo || 0;
+  const despFin = calc.despFin || 0;
+  const lucroLiq = calc.lucroLiq || 0;
+  const ccl = calc.ccl || 0; // Capital Circulante Líquido
+  const ncg = calc.ncg || 0; // Necessidade de Capital de Giro
+  const roe = calc.roe || 0;
+  const roa = calc.roa || 0;
+  const roic = calc.roic || 0;
+  const giroAtv = calc.giroAtv || 0;
+  const ciclo = calc.ciclo || 0;
+  const pmr = calc.pmr || 0;
+  const pmp = calc.pmp || 0;
+  const diasEst = calc.diasEst || 0;
+  const juros = calc.juros || 0; // Cobertura de juros
+  const zScore = calc.zScore || 0;
+  const ctcp = calc.ctcp || 0;
+  const endividamentoGeral = calc.endividamentoGeral || 0;
+  const ac = calc.ativoCirc || 0;
+  const pc = calc.passivoCirc || 0;
+  const empCP = calc.emprestimosCP || 0;
+  const empLP = calc.emprestimosLP || 0;
   
-  // ===== ANÁLISE DE NECESSIDADES - CRÉDITO GLOBAL =====
+  // ==============================================================
+  // CLASSIFICAÇÃO DA SITUAÇÃO GERAL DA EMPRESA
+  // ==============================================================
+  let pontuacao = 0;
   
-  // 1. CAPITAL DE GIRO
-  const capitalGiroNecessario = (receita * 0.15); // 15% da receita como capital de giro ideal
-  const capitalGiroAtual = (calc.ac || 0) - (calc.pc || 0);
-  if (capitalGiroAtual < capitalGiroNecessario * 0.5) {
-    const deficit = capitalGiroNecessario - Math.max(0, capitalGiroAtual);
-    resultado.creditoGlobal.itens.push({
-      categoria: '💵 Capital de Giro',
-      valor: deficit,
-      prioridade: 1,
-      urgencia: 'CRÍTICO',
-      descricao: 'Recompor capital de giro para operação saudável',
-      acoes: [
-        `Injetar ${toBRL(deficit * 0.4)} para pagamento de fornecedores em atraso`,
-        `Reservar ${toBRL(deficit * 0.3)} para folha de pagamento (2 meses)`,
-        `Manter ${toBRL(deficit * 0.3)} como colchão de segurança`
-      ],
-      impacto: `Evitar inadimplência e manter operação funcionando`,
-      prazoRetorno: '3-6 meses'
+  // Liquidez (peso 25)
+  if (liquidez >= 1.5) pontuacao += 25;
+  else if (liquidez >= 1.2) pontuacao += 20;
+  else if (liquidez >= 1.0) pontuacao += 10;
+  else if (liquidez >= 0.8) pontuacao += 5;
+  
+  // Alavancagem (peso 25)
+  if (alav <= 1.5) pontuacao += 25;
+  else if (alav <= 2.5) pontuacao += 20;
+  else if (alav <= 3.5) pontuacao += 10;
+  else if (alav <= 5) pontuacao += 5;
+  
+  // Margem EBITDA (peso 25)
+  if (margem >= 0.15) pontuacao += 25;
+  else if (margem >= 0.10) pontuacao += 20;
+  else if (margem >= 0.05) pontuacao += 10;
+  else if (margem > 0) pontuacao += 5;
+  
+  // ROE (peso 25)
+  if (roe >= 0.20) pontuacao += 25;
+  else if (roe >= 0.12) pontuacao += 20;
+  else if (roe >= 0.05) pontuacao += 10;
+  else if (roe > 0) pontuacao += 5;
+  
+  // Determinar situação
+  if (pontuacao >= 80) {
+    resultado.situacaoGeral = 'EXCELENTE';
+  } else if (pontuacao >= 60) {
+    resultado.situacaoGeral = 'SAUDÁVEL';
+  } else if (pontuacao >= 40) {
+    resultado.situacaoGeral = 'ATENÇÃO';
+  } else {
+    resultado.situacaoGeral = 'CRÍTICA';
+  }
+  
+  // ==============================================================
+  // ANÁLISE INTELIGENTE POR INDICADOR - GAPS REAIS
+  // ==============================================================
+  
+  const gaps = [];
+  
+  // 1. ANÁLISE DE LIQUIDEZ
+  if (liquidez < 1.0) {
+    const deficitLiquidez = (pc * 1.2) - ac; // Precisa de AC = 1.2x PC para ficar saudável
+    const causaLiquidez = [];
+    
+    // Diagnóstico detalhado
+    if (liqImediata < 0.2) {
+      causaLiquidez.push(`Caixa muito baixo (${(liqImediata*100).toFixed(0)}% do PC)`);
+    }
+    if (diasEst > 90) {
+      causaLiquidez.push(`Estoque parado há ${Math.round(diasEst)} dias`);
+    }
+    if (pmr > 60) {
+      causaLiquidez.push(`Recebimento lento (PMR ${Math.round(pmr)} dias)`);
+    }
+    if (empCP > dividaBruta * 0.5) {
+      causaLiquidez.push(`${((empCP/dividaBruta)*100).toFixed(0)}% da dívida vence em 12 meses`);
+    }
+    
+    gaps.push({
+      indicador: 'LIQUIDEZ CORRENTE',
+      valorAtual: liquidez.toFixed(2),
+      valorIdeal: '≥ 1.20',
+      gap: Math.abs(1.2 - liquidez).toFixed(2),
+      status: liquidez < 0.8 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: causaLiquidez.join(' | ') || 'Passivo circulante maior que ativo circulante',
+      valorNecessario: Math.max(0, deficitLiquidez)
     });
   }
   
-  // 2. RENEGOCIAÇÃO DE DÍVIDAS CARAS
-  if (custoFinanceiro > ebitda * 0.3) {
-    const economiaEstimada = custoFinanceiro * 0.4; // Potencial de redução de 40%
-    const valorRefinanciamento = dividaLiq * 0.6; // 60% da dívida para trocar
-    resultado.creditoGlobal.itens.push({
-      categoria: '🔄 Refinanciamento de Dívidas',
-      valor: valorRefinanciamento,
-      prioridade: 2,
-      urgencia: 'ALTO',
-      descricao: 'Trocar dívidas caras por crédito mais barato',
-      acoes: [
-        `Refinanciar ${toBRL(valorRefinanciamento)} em dívidas de curto prazo`,
-        `Trocar taxas médias de ~3%am por ~1.5%am`,
-        `Alongar prazo de 12 para 36-48 meses`,
-        `Economia estimada: ${toBRL(economiaEstimada)}/ano em juros`
-      ],
-      impacto: `Reduzir despesa financeira de ${toBRL(custoFinanceiro)} para ${toBRL(custoFinanceiro * 0.6)}/ano`,
-      prazoRetorno: '6-12 meses'
+  // 2. ANÁLISE DE CAPITAL DE GIRO
+  if (ccl < 0 || ncg > caixa * 3) {
+    const deficitCCL = Math.abs(Math.min(0, ccl)) + (ncg * 0.3);
+    const causaCCL = [];
+    
+    if (ccl < 0) {
+      causaCCL.push(`CCL negativo de ${toBRL(Math.abs(ccl))}`);
+    }
+    if (ncg > 0 && caixa < ncg * 0.3) {
+      causaCCL.push(`NCG de ${toBRL(ncg)} sem cobertura adequada de caixa`);
+    }
+    if (ciclo > 60) {
+      causaCCL.push(`Ciclo financeiro de ${Math.round(ciclo)} dias consumindo capital`);
+    }
+    
+    gaps.push({
+      indicador: 'CAPITAL DE GIRO',
+      valorAtual: toBRL(ccl),
+      valorIdeal: '> 0 (positivo)',
+      gap: toBRL(deficitCCL),
+      status: ccl < -receita*0.05 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: causaCCL.join(' | ') || 'Capital de giro insuficiente para operação',
+      valorNecessario: deficitCCL
     });
   }
   
-  // 3. REDUÇÃO DE ESTOQUE PARADO
-  if (estoque > receita * 0.25) { // Estoque > 3 meses de faturamento
-    const estoqueExcedente = estoque - (receita * 0.15);
-    resultado.creditoGlobal.itens.push({
-      categoria: '📦 Redução de Estoque',
-      valor: estoqueExcedente * 0.3, // 30% do excedente como investimento em liquidação
-      prioridade: 3,
-      urgencia: 'MÉDIO',
-      descricao: 'Investir em marketing/promoções para liquidar estoque parado',
-      acoes: [
-        `Campanha de liquidação com desconto de 20-30%`,
-        `Investir ${toBRL(estoqueExcedente * 0.05)} em marketing digital`,
-        `Oferecer parcelamento especial para grandes compradores`,
-        `Meta: converter ${toBRL(estoqueExcedente * 0.6)} em 90 dias`
-      ],
-      impacto: `Liberar ${toBRL(estoqueExcedente * 0.6)} em caixa e reduzir custo de armazenagem`,
-      prazoRetorno: '3-4 meses'
+  // 3. ANÁLISE DE ALAVANCAGEM / ENDIVIDAMENTO
+  if (alav > 3.5) {
+    const dividaExcedente = (alav - 2.5) * ebitda; // Quanto precisa reduzir para chegar em 2.5x
+    const causaAlav = [];
+    
+    if (despFin > ebitda * 0.4) {
+      causaAlav.push(`${((despFin/ebitda)*100).toFixed(0)}% do EBITDA vai para juros`);
+    }
+    if (empCP > empLP) {
+      causaAlav.push(`Dívida concentrada no curto prazo (${toPct(empCP/(empCP+empLP))})`);
+    }
+    if (ctcp > 2) {
+      causaAlav.push(`Capital de terceiros é ${ctcp.toFixed(1)}x o capital próprio`);
+    }
+    
+    gaps.push({
+      indicador: 'ALAVANCAGEM (DL/EBITDA)',
+      valorAtual: alav.toFixed(2) + 'x',
+      valorIdeal: '≤ 2.5x',
+      gap: (alav - 2.5).toFixed(2) + 'x',
+      status: alav > 5 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: causaAlav.join(' | ') || 'Endividamento acima da capacidade de pagamento',
+      valorNecessario: dividaExcedente
     });
   }
   
-  // 4. INVESTIMENTO EM EFICIÊNCIA OPERACIONAL
-  if (margem < 10) {
-    const investimentoEficiencia = receita * 0.03; // 3% da receita
-    const ganhoMargemEstimado = 2; // pontos percentuais
-    resultado.creditoGlobal.itens.push({
-      categoria: '⚙️ Eficiência Operacional',
-      valor: investimentoEficiencia,
-      prioridade: 4,
-      urgencia: 'MÉDIO',
-      descricao: 'Investir em automação e otimização de processos',
-      acoes: [
-        `Sistema ERP/gestão: ${toBRL(investimentoEficiencia * 0.3)}`,
-        `Automação de processos: ${toBRL(investimentoEficiencia * 0.3)}`,
-        `Treinamento de equipe: ${toBRL(investimentoEficiencia * 0.2)}`,
-        `Renegociação com fornecedores (consultoria): ${toBRL(investimentoEficiencia * 0.2)}`
-      ],
-      impacto: `Aumentar margem de ${(margem*100).toFixed(1)}% para ${((margem+ganhoMargemEstimado/100)*100).toFixed(1)}%`,
-      prazoRetorno: '12-18 meses'
+  // 4. ANÁLISE DE COBERTURA DE JUROS
+  if (juros < 2.0 && despFin > 0) {
+    const aumentoEbitdaNecessario = despFin * 3 - ebitda; // Precisa de EBITDA = 3x despFin
+    const causaJuros = [];
+    
+    if (juros < 1.0) {
+      causaJuros.push(`EBITDA NÃO cobre juros - operação consome caixa`);
+    }
+    if (margem < 0.08) {
+      causaJuros.push(`Margem baixa (${toPct(margem)}) não gera caixa suficiente`);
+    }
+    
+    gaps.push({
+      indicador: 'COBERTURA DE JUROS',
+      valorAtual: juros.toFixed(2) + 'x',
+      valorIdeal: '≥ 3.0x',
+      gap: (3 - juros).toFixed(2) + 'x',
+      status: juros < 1.5 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: causaJuros.join(' | ') || 'EBITDA insuficiente para cobrir despesas financeiras',
+      valorNecessario: Math.max(0, aumentoEbitdaNecessario)
     });
   }
   
-  // 5. REESTRUTURAÇÃO DE FOLHA
-  const folhaEstimada = receita * 0.25; // Estimativa de 25% da receita
-  if (margem < 5) {
-    resultado.creditoGlobal.itens.push({
-      categoria: '👥 Reestruturação de Pessoal',
-      valor: folhaEstimada * 0.15, // Custo de rescisões
-      prioridade: 5,
-      urgencia: margem < 0 ? 'CRÍTICO' : 'ALTO',
-      descricao: 'Adequar quadro de funcionários à realidade da empresa',
-      acoes: [
-        `Provisionar ${toBRL(folhaEstimada * 0.15)} para rescisões`,
-        `Reduzir quadro em 15-20% de forma estratégica`,
-        `Focar em áreas não essenciais primeiro`,
-        `Economia mensal estimada: ${toBRL(folhaEstimada * 0.03)}`
-      ],
-      impacto: `Reduzir custo fixo em ${toBRL(folhaEstimada * 0.15 * 12)}/ano`,
-      prazoRetorno: '2-4 meses'
+  // 5. ANÁLISE DE MARGEM OPERACIONAL
+  if (margem < 0.08) {
+    const aumentoMargemNecessario = receita * (0.12 - margem);
+    const causaMargem = [];
+    
+    if (calc.margemBruta && calc.margemBruta < 0.25) {
+      causaMargem.push(`Margem bruta baixa (${toPct(calc.margemBruta)}) - problema de precificação ou CMV alto`);
+    }
+    if (margem < margemLiq * 2) {
+      causaMargem.push(`Muita despesa operacional consumindo resultado`);
+    }
+    if (giroAtv < 0.8) {
+      causaMargem.push(`Giro do ativo baixo (${giroAtv.toFixed(2)}x) - ativos subutilizados`);
+    }
+    
+    gaps.push({
+      indicador: 'MARGEM EBITDA',
+      valorAtual: toPct(margem),
+      valorIdeal: '≥ 12%',
+      gap: toPct(0.12 - margem),
+      status: margem < 0.05 ? 'CRÍTICO' : margem < 0 ? 'GRAVE' : 'ATENÇÃO',
+      diagnostico: causaMargem.join(' | ') || 'Operação com rentabilidade abaixo do ideal',
+      valorNecessario: aumentoMargemNecessario
     });
   }
   
-  // 6. MARKETING E VENDAS (se receita caindo)
-  if (rows.length >= 2) {
-    const receitaAnterior = rows[rows.length - 2].receita || 0;
-    const variacao = receitaAnterior > 0 ? (receita - receitaAnterior) / receitaAnterior : 0;
-    if (variacao < -0.05) { // Queda > 5%
-      const investimentoMkt = receita * 0.05;
+  // 6. ANÁLISE DE CICLO FINANCEIRO
+  if (ciclo > 60) {
+    const capitalEmpatado = (ciclo / 365) * receita;
+    const reducaoNecessaria = ((ciclo - 30) / 365) * receita;
+    const causaCiclo = [];
+    
+    if (diasEst > 60) {
+      causaCiclo.push(`PME de ${Math.round(diasEst)} dias - estoque parado`);
+    }
+    if (pmr > 45) {
+      causaCiclo.push(`PMR de ${Math.round(pmr)} dias - cobrança lenta`);
+    }
+    if (pmp < 30) {
+      causaCiclo.push(`PMP de ${Math.round(pmp)} dias - pagando rápido demais`);
+    }
+    
+    gaps.push({
+      indicador: 'CICLO FINANCEIRO',
+      valorAtual: Math.round(ciclo) + ' dias',
+      valorIdeal: '≤ 30 dias',
+      gap: Math.round(ciclo - 30) + ' dias',
+      status: ciclo > 90 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: causaCiclo.join(' | ') || 'Ciclo financeiro longo consumindo capital de giro',
+      valorNecessario: reducaoNecessaria
+    });
+  }
+  
+  // 7. ANÁLISE DE ROE
+  if (roe < 0.08 && pl > 0) {
+    const lucroNecessario = pl * 0.15 - lucroLiq;
+    const causaROE = [];
+    
+    if (roa < 0.05) {
+      causaROE.push(`ROA baixo (${toPct(roa)}) - ativos pouco produtivos`);
+    }
+    if (calc.alavFin > 3) {
+      causaROE.push(`Alavancagem financeira destruindo valor`);
+    }
+    if (margemLiq < 0.03) {
+      causaROE.push(`Margem líquida de apenas ${toPct(margemLiq)}`);
+    }
+    
+    gaps.push({
+      indicador: 'ROE',
+      valorAtual: toPct(roe),
+      valorIdeal: '≥ 15%',
+      gap: toPct(0.15 - roe),
+      status: roe < 0 ? 'CRÍTICO' : roe < 0.05 ? 'ATENÇÃO' : 'OBSERVAR',
+      diagnostico: causaROE.join(' | ') || 'Retorno sobre patrimônio abaixo do custo de capital',
+      valorNecessario: Math.max(0, lucroNecessario)
+    });
+  }
+  
+  // 8. ANÁLISE Z-SCORE (RISCO DE FALÊNCIA)
+  if (zScore < 1.8) {
+    gaps.push({
+      indicador: 'Z-SCORE ALTMAN',
+      valorAtual: zScore.toFixed(2),
+      valorIdeal: '≥ 2.99',
+      gap: (2.99 - zScore).toFixed(2),
+      status: zScore < 1.1 ? 'CRÍTICO' : 'ATENÇÃO',
+      diagnostico: 'Alto risco de dificuldades financeiras em 24 meses',
+      valorNecessario: receita * 0.15 // Estimativa de capital necessário
+    });
+  }
+  
+  // ==============================================================
+  // GERAR ITENS DE CRÉDITO BASEADO NOS GAPS
+  // ==============================================================
+  
+  // Ordenar gaps por criticidade
+  const ordemStatus = { 'CRÍTICO': 1, 'GRAVE': 2, 'ATENÇÃO': 3, 'OBSERVAR': 4 };
+  gaps.sort((a, b) => (ordemStatus[a.status] || 5) - (ordemStatus[b.status] || 5));
+  
+  gaps.forEach((gap, idx) => {
+    const item = gerarItemRecuperacao(gap, calc, rows, idx);
+    if (item && item.valor > 0) {
+      resultado.creditoGlobal.itens.push(item);
+    }
+  });
+  
+  // ==============================================================
+  // EMPRESA SAUDÁVEL/EXCELENTE - SUGESTÕES DE CRESCIMENTO
+  // ==============================================================
+  
+  if (resultado.situacaoGeral === 'EXCELENTE' || resultado.situacaoGeral === 'SAUDÁVEL') {
+    // Calcular capacidade de investimento
+    const capacidadeEndividamento = Math.max(0, (2.5 * ebitda) - dividaLiq);
+    const caixaExcedente = Math.max(0, caixa - (receita * 0.05));
+    
+    if (resultado.situacaoGeral === 'EXCELENTE') {
+      // Sugerir aquisições
       resultado.creditoGlobal.itens.push({
-        categoria: '📈 Marketing e Vendas',
-        valor: investimentoMkt,
-        prioridade: 4,
-        urgencia: 'ALTO',
-        descricao: 'Investir para recuperar faturamento',
+        categoria: '🚀 Aquisição Estratégica',
+        valor: capacidadeEndividamento * 0.7,
+        prioridade: 1,
+        urgencia: 'OPORTUNIDADE',
+        indicadorAlvo: 'Market Share / Receita',
+        valorAtual: toBRL(receita),
+        valorMeta: toBRL(receita * 1.25),
+        descricao: 'Adquirir concorrente ou empresa complementar para aumentar market share',
         acoes: [
-          `Marketing digital: ${toBRL(investimentoMkt * 0.4)}`,
-          `Força de vendas (comissões agressivas): ${toBRL(investimentoMkt * 0.3)}`,
-          `Promoções e incentivos: ${toBRL(investimentoMkt * 0.2)}`,
-          `CRM e relacionamento: ${toBRL(investimentoMkt * 0.1)}`
+          `Identificar targets com faturamento de ${toBRL(receita * 0.15)} a ${toBRL(receita * 0.30)}`,
+          `Múltiplo de compra estimado: 4-6x EBITDA do target`,
+          `Sinergias esperadas: 15-20% de redução de custos pós-integração`,
+          `Potencial de cross-sell: +10-15% de receita combinada`
         ],
-        impacto: `Recuperar ${toPct(Math.abs(variacao))} de faturamento = ${toBRL(Math.abs(receita * variacao))}`,
-        prazoRetorno: '6-12 meses'
+        impacto: `Aumentar faturamento em 20-30% e ganhar escala operacional`,
+        prazoRetorno: '24-36 meses',
+        metricaMelhoria: '+25% Receita | +15% Market Share'
+      });
+      
+      resultado.creditoGlobal.itens.push({
+        categoria: '🏭 Expansão de Capacidade',
+        valor: receita * 0.15,
+        prioridade: 2,
+        urgencia: 'OPORTUNIDADE',
+        indicadorAlvo: 'Giro do Ativo / Receita',
+        valorAtual: giroAtv.toFixed(2) + 'x',
+        valorMeta: (giroAtv * 1.2).toFixed(2) + 'x',
+        descricao: 'Investir em nova unidade ou ampliação para crescimento orgânico',
+        acoes: [
+          `Nova planta/unidade: ${toBRL(receita * 0.10)}`,
+          `Equipamentos e tecnologia: ${toBRL(receita * 0.03)}`,
+          `Capital de giro adicional: ${toBRL(receita * 0.02)}`,
+          `ROI esperado: 18-22% ao ano`
+        ],
+        impacto: `Aumentar capacidade produtiva em 30-40%`,
+        prazoRetorno: '18-24 meses',
+        metricaMelhoria: '+30% Capacidade | +20% Receita'
+      });
+      
+      resultado.creditoGlobal.itens.push({
+        categoria: '💡 Inovação e P&D',
+        valor: receita * 0.05,
+        prioridade: 3,
+        urgencia: 'ESTRATÉGICO',
+        indicadorAlvo: 'Margem EBITDA / Diferenciação',
+        valorAtual: toPct(margem),
+        valorMeta: toPct(margem + 0.03),
+        descricao: 'Desenvolver novos produtos/serviços de maior valor agregado',
+        acoes: [
+          `Centro de P&D/Inovação: ${toBRL(receita * 0.02)}`,
+          `Novos produtos/serviços: ${toBRL(receita * 0.02)}`,
+          `Propriedade intelectual e patentes: ${toBRL(receita * 0.01)}`,
+          `Lançar 2-3 produtos premium em 18 meses`
+        ],
+        impacto: `Aumentar margem em 2-3 p.p. via produtos de maior valor`,
+        prazoRetorno: '18-30 meses',
+        metricaMelhoria: '+3% Margem | +15% Ticket Médio'
+      });
+    }
+    
+    if (resultado.situacaoGeral === 'SAUDÁVEL') {
+      // Sugerir fortalecimento
+      resultado.creditoGlobal.itens.push({
+        categoria: '📈 Aceleração Comercial',
+        valor: receita * 0.08,
+        prioridade: 1,
+        urgencia: 'OPORTUNIDADE',
+        indicadorAlvo: 'Receita / Market Share',
+        valorAtual: toBRL(receita),
+        valorMeta: toBRL(receita * 1.15),
+        descricao: 'Investir em expansão comercial e marketing para crescer 15%',
+        acoes: [
+          `Marketing e branding: ${toBRL(receita * 0.03)}`,
+          `Força de vendas (novos mercados): ${toBRL(receita * 0.025)}`,
+          `Tecnologia comercial (CRM, e-commerce): ${toBRL(receita * 0.015)}`,
+          `Capital de giro adicional: ${toBRL(receita * 0.01)}`
+        ],
+        impacto: `Crescer receita em 15% mantendo margem atual`,
+        prazoRetorno: '12-18 meses',
+        metricaMelhoria: '+15% Receita | +20% Base Clientes'
+      });
+      
+      resultado.creditoGlobal.itens.push({
+        categoria: '⚙️ Eficiência Operacional',
+        valor: receita * 0.04,
+        prioridade: 2,
+        urgencia: 'MELHORIA',
+        indicadorAlvo: 'Margem EBITDA / ROE',
+        valorAtual: toPct(margem),
+        valorMeta: toPct(margem + 0.02),
+        descricao: 'Automatizar processos e reduzir custos operacionais',
+        acoes: [
+          `Sistema ERP integrado: ${toBRL(receita * 0.015)}`,
+          `Automação industrial/processos: ${toBRL(receita * 0.015)}`,
+          `Consultoria de eficiência: ${toBRL(receita * 0.005)}`,
+          `Treinamento de equipe: ${toBRL(receita * 0.005)}`
+        ],
+        impacto: `Melhorar margem em 2 p.p. e ROE em 3 p.p.`,
+        prazoRetorno: '12-18 meses',
+        metricaMelhoria: '+2% Margem | +3% ROE'
       });
     }
   }
   
-  // 7. ALONGAMENTO DE PASSIVO CIRCULANTE
-  const pc = calc.pc || 0;
-  if (liquidez < 1) {
-    resultado.creditoGlobal.itens.push({
-      categoria: '📅 Alongamento de Dívidas CP',
-      valor: pc * 0.4, // 40% do PC para alongar
-      prioridade: 2,
-      urgencia: 'CRÍTICO',
-      descricao: 'Converter dívidas de curto para longo prazo',
-      acoes: [
-        `Negociar com bancos alongamento de ${toBRL(pc * 0.2)}`,
-        `Renegociar com fornecedores prazo de ${toBRL(pc * 0.15)}`,
-        `Parcelar impostos em atraso: ${toBRL(pc * 0.05)}`
-      ],
-      impacto: `Melhorar liquidez de ${liquidez.toFixed(2)} para ${((calc.ac || 0) / ((calc.pc || 1) * 0.6)).toFixed(2)}`,
-      prazoRetorno: 'Imediato'
-    });
-  }
+  // ==============================================================
+  // MOTIVO DA NECESSIDADE DE CRÉDITO GLOBAL
+  // ==============================================================
   
-  // 8. RESERVA DE CONTINGÊNCIA
-  const reservaIdeal = receita * 0.05; // 2 meses de operação
-  if (caixa < reservaIdeal) {
-    resultado.creditoGlobal.itens.push({
-      categoria: '🛡️ Reserva de Contingência',
-      valor: reservaIdeal - caixa,
-      prioridade: 6,
-      urgencia: 'BAIXO',
-      descricao: 'Criar colchão financeiro para imprevistos',
-      acoes: [
-        `Reservar ${toBRL((reservaIdeal - caixa) * 0.5)} para emergências`,
-        `Aplicar em CDB liquidez diária ou conta remunerada`,
-        `Não usar para operação normal`
-      ],
-      impacto: `Segurança para enfrentar 60 dias de crise sem receita`,
-      prazoRetorno: 'Longo prazo'
-    });
+  if (gaps.length > 0) {
+    const gapsCriticos = gaps.filter(g => g.status === 'CRÍTICO').map(g => g.indicador);
+    const gapsAtencao = gaps.filter(g => g.status === 'ATENÇÃO').map(g => g.indicador);
+    
+    if (gapsCriticos.length > 0) {
+      resultado.motivoGlobal = `A empresa apresenta ${gapsCriticos.length} indicador(es) em situação CRÍTICA: ${gapsCriticos.join(', ')}. ` +
+        `A necessidade de crédito global considera a recuperação completa de todos os indicadores para níveis saudáveis de mercado. ` +
+        `Um único banco não pode assumir todo esse risco porque: (1) a exposição seria muito alta em relação ao porte da empresa, ` +
+        `(2) os indicadores atuais não suportam esse nível de endividamento adicional, e ` +
+        `(3) a recuperação precisa ser gradual para não comprometer o fluxo de caixa.`;
+    } else if (gapsAtencao.length > 0) {
+      resultado.motivoGlobal = `A empresa está em situação de ATENÇÃO em ${gapsAtencao.length} indicador(es): ${gapsAtencao.join(', ')}. ` +
+        `O crédito global representa o valor necessário para elevar todos os indicadores ao nível ideal de mercado. ` +
+        `A diferença entre global e viável existe porque um único banco precisa limitar sua exposição ao risco da empresa.`;
+    } else {
+      resultado.motivoGlobal = `A empresa está em boa situação financeira. O valor apresentado representa oportunidades de crescimento e ` +
+        `fortalecimento, não necessidades de recuperação. A empresa pode usar crédito de forma estratégica para acelerar seu desenvolvimento.`;
+    }
   }
   
   // Ordenar por prioridade
@@ -12451,30 +12707,29 @@ function calcularNecessidadeRecuperacao(calc, rows) {
   resultado.creditoGlobal.total = resultado.creditoGlobal.itens.reduce((sum, item) => sum + item.valor, 0);
   
   // Calcular taxa máxima suportável
-  // A empresa precisa conseguir pagar os juros do crédito global com o EBITDA
-  // Taxa máxima = (EBITDA disponível para juros) / (Crédito Total) * 12 meses
-  const ebitdaDisponivelJuros = Math.max(0, ebitda - custoFinanceiro) * 0.6; // 60% do EBITDA livre
+  const ebitdaDisponivelJuros = Math.max(0, ebitda - despFin) * 0.5;
   resultado.creditoGlobal.taxaMaxima = resultado.creditoGlobal.total > 0 
-    ? Math.min(2.5, (ebitdaDisponivelJuros / resultado.creditoGlobal.total) * 100)
+    ? Math.min(2.5, Math.max(1.2, (ebitdaDisponivelJuros / resultado.creditoGlobal.total) * 100))
     : 2.0;
-  resultado.creditoGlobal.spreadMaximo = Math.max(0, resultado.creditoGlobal.taxaMaxima - 1.0); // CDI ~1%
+  resultado.creditoGlobal.spreadMaximo = Math.max(0, resultado.creditoGlobal.taxaMaxima - 1.0);
   
   // Prazo de recuperação
-  resultado.creditoGlobal.prazoRecuperacao = Math.ceil(resultado.creditoGlobal.total / (ebitda * 0.4) * 12); // Meses
+  resultado.creditoGlobal.prazoRecuperacao = Math.ceil(resultado.creditoGlobal.total / (ebitda * 0.35) * 12);
   resultado.creditoGlobal.prazoRecuperacao = Math.min(60, Math.max(24, resultado.creditoGlobal.prazoRecuperacao));
   
-  // ===== CRÉDITO VIÁVEL (1 BANCO) =====
-  // Regra: banco pode emprestar até 10-15% da exposição total, foco nos itens mais urgentes
+  // ==============================================================
+  // CRÉDITO VIÁVEL (1 BANCO)
+  // ==============================================================
   
   const limiteViavel = Math.min(
-    resultado.creditoGlobal.total * 0.20, // Máximo 20% do global
-    ebitda * 2.5, // Máximo 2.5x EBITDA
-    receita * 0.08 // Máximo 8% da receita
+    resultado.creditoGlobal.total * 0.25,
+    ebitda * 2.0,
+    receita * 0.10
   );
   
   let valorAcumulado = 0;
   resultado.creditoGlobal.itens.forEach(item => {
-    if (valorAcumulado < limiteViavel && item.urgencia !== 'BAIXO') {
+    if (valorAcumulado < limiteViavel && item.urgencia !== 'ESTRATÉGICO') {
       const valorParaEsteItem = Math.min(item.valor, limiteViavel - valorAcumulado);
       if (valorParaEsteItem > 0) {
         resultado.creditoViavel.itens.push({
@@ -12482,7 +12737,7 @@ function calcularNecessidadeRecuperacao(calc, rows) {
           valorOriginal: item.valor,
           valor: valorParaEsteItem,
           percentualAtendido: (valorParaEsteItem / item.valor) * 100,
-          acoesPrioritarias: item.acoes.slice(0, 2) // Só as 2 primeiras ações
+          acoesPrioritarias: item.acoes.slice(0, 2)
         });
         valorAcumulado += valorParaEsteItem;
       }
@@ -12494,128 +12749,508 @@ function calcularNecessidadeRecuperacao(calc, rows) {
     ? (valorAcumulado / resultado.creditoGlobal.total) * 100 
     : 0;
   
-  // Taxa máxima para crédito viável (pode ser um pouco maior pois é menor valor)
-  resultado.creditoViavel.taxaMaxima = Math.min(2.8, resultado.creditoGlobal.taxaMaxima * 1.2);
+  resultado.creditoViavel.taxaMaxima = Math.min(2.8, resultado.creditoGlobal.taxaMaxima * 1.15);
   resultado.creditoViavel.spreadMaximo = Math.max(0, resultado.creditoViavel.taxaMaxima - 1.0);
-  resultado.creditoViavel.prazoRecuperacao = Math.ceil(resultado.creditoViavel.total / (ebitda * 0.3) * 12);
+  resultado.creditoViavel.prazoRecuperacao = Math.ceil(resultado.creditoViavel.total / (ebitda * 0.25) * 12);
   resultado.creditoViavel.prazoRecuperacao = Math.min(48, Math.max(18, resultado.creditoViavel.prazoRecuperacao));
   
   return resultado;
 }
 
+// Função auxiliar para gerar item de recuperação baseado no gap
+function gerarItemRecuperacao(gap, calc, rows, prioridade) {
+  const receita = calc.receita || 0;
+  const ebitda = calc.ebitda || 0;
+  const caixa = calc.caixa || 0;
+  const estoque = calc.estoques || 0;
+  const cr = calc.cr || 0;
+  const dividaBruta = calc.dividaBruta || 0;
+  const despFin = calc.despFin || 0;
+  const margem = calc.margem || 0;
+  const liquidez = calc.liqCorrente || calc.liq || 0;
+  const ciclo = calc.ciclo || 0;
+  const pmr = calc.pmr || 0;
+  const diasEst = calc.diasEst || 0;
+  
+  let item = null;
+  
+  switch(gap.indicador) {
+    case 'LIQUIDEZ CORRENTE':
+      item = {
+        categoria: '💧 Recomposição de Liquidez',
+        valor: gap.valorNecessario,
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesLiquidez(calc, gap.valorNecessario),
+        impacto: `Elevar liquidez corrente de ${gap.valorAtual} para ${gap.valorIdeal}`,
+        prazoRetorno: '3-6 meses',
+        metricaMelhoria: `Liquidez ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'CAPITAL DE GIRO':
+      item = {
+        categoria: '💵 Recomposição de Capital de Giro',
+        valor: gap.valorNecessario,
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesCCL(calc, gap.valorNecessario),
+        impacto: `Normalizar capital de giro para operação sustentável`,
+        prazoRetorno: '3-6 meses',
+        metricaMelhoria: `CCL ${gap.valorAtual} → positivo`
+      };
+      break;
+      
+    case 'ALAVANCAGEM (DL/EBITDA)':
+      item = {
+        categoria: '🔄 Reestruturação de Dívidas',
+        valor: gap.valorNecessario * 0.6, // 60% para refinanciar
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesAlavancagem(calc, gap.valorNecessario),
+        impacto: `Reduzir alavancagem de ${gap.valorAtual} para ${gap.valorIdeal}`,
+        prazoRetorno: '12-24 meses',
+        metricaMelhoria: `DL/EBITDA ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'COBERTURA DE JUROS':
+      item = {
+        categoria: '📉 Redução de Custo Financeiro',
+        valor: despFin * 2, // 2 anos de juros para refinanciar
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesCoberturaJuros(calc),
+        impacto: `Melhorar cobertura de juros de ${gap.valorAtual} para ${gap.valorIdeal}`,
+        prazoRetorno: '6-12 meses',
+        metricaMelhoria: `Cobertura ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'MARGEM EBITDA':
+      item = {
+        categoria: '⚙️ Melhoria de Margem Operacional',
+        valor: receita * 0.05, // 5% da receita para investir em eficiência
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesMargem(calc),
+        impacto: `Aumentar margem EBITDA de ${gap.valorAtual} para ${gap.valorIdeal}`,
+        prazoRetorno: '12-18 meses',
+        metricaMelhoria: `Margem ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'CICLO FINANCEIRO':
+      const capitalLiberado = ((ciclo - 30) / 365) * receita;
+      item = {
+        categoria: '🔄 Otimização do Ciclo Financeiro',
+        valor: capitalLiberado * 0.3, // 30% do capital empatado
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesCiclo(calc),
+        impacto: `Reduzir ciclo financeiro e liberar ${toBRL(capitalLiberado)} de capital`,
+        prazoRetorno: '6-12 meses',
+        metricaMelhoria: `Ciclo ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'ROE':
+      item = {
+        categoria: '📈 Melhoria de Rentabilidade',
+        valor: receita * 0.03,
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: gerarAcoesROE(calc),
+        impacto: `Elevar ROE de ${gap.valorAtual} para ${gap.valorIdeal}`,
+        prazoRetorno: '18-24 meses',
+        metricaMelhoria: `ROE ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+      
+    case 'Z-SCORE ALTMAN':
+      item = {
+        categoria: '🛡️ Fortalecimento Financeiro',
+        valor: gap.valorNecessario,
+        prioridade: prioridade + 1,
+        urgencia: gap.status,
+        indicadorAlvo: gap.indicador,
+        valorAtual: gap.valorAtual,
+        valorMeta: gap.valorIdeal,
+        descricao: gap.diagnostico,
+        acoes: [
+          `Aporte de capital próprio de ${toBRL(gap.valorNecessario * 0.3)} para fortalecer PL`,
+          `Refinanciamento de ${toBRL(gap.valorNecessario * 0.4)} de dívidas de CP para LP`,
+          `Reserva de contingência de ${toBRL(gap.valorNecessario * 0.3)} para emergências`,
+          `Revisão completa de estrutura de custos`
+        ],
+        impacto: `Reduzir risco de dificuldades financeiras - Z-Score de ${gap.valorAtual} para ≥ 2.99`,
+        prazoRetorno: '12-24 meses',
+        metricaMelhoria: `Z-Score ${gap.valorAtual} → ${gap.valorIdeal}`
+      };
+      break;
+  }
+  
+  return item;
+}
+
+// Funções auxiliares para gerar ações específicas baseadas nos números
+function gerarAcoesLiquidez(calc, valorNecessario) {
+  const acoes = [];
+  const caixa = calc.caixa || 0;
+  const estoque = calc.estoques || 0;
+  const cr = calc.cr || 0;
+  const empCP = calc.emprestimosCP || 0;
+  const liqImediata = calc.liqImediata || 0;
+  const diasEst = calc.diasEst || 0;
+  
+  if (liqImediata < 0.15) {
+    acoes.push(`Reforçar caixa em ${toBRL(valorNecessario * 0.4)} para cobrir 15% do PC (liquidez imediata atual: ${(liqImediata*100).toFixed(0)}%)`);
+  }
+  if (diasEst > 60 && estoque > 0) {
+    const estoqueExcesso = estoque * ((diasEst - 45) / diasEst);
+    acoes.push(`Liquidar ${toBRL(estoqueExcesso)} em estoque parado (PME atual: ${Math.round(diasEst)} dias → meta: 45 dias)`);
+  }
+  if (empCP > 0) {
+    acoes.push(`Alongar ${toBRL(Math.min(empCP * 0.5, valorNecessario * 0.3))} de empréstimos de CP para LP`);
+  }
+  if (cr > calc.receita * 0.15) {
+    acoes.push(`Acelerar cobrança de ${toBRL(cr * 0.2)} em recebíveis atrasados`);
+  }
+  
+  if (acoes.length < 2) {
+    acoes.push(`Constituir reserva de ${toBRL(valorNecessario * 0.3)} para capital de giro`);
+  }
+  
+  return acoes;
+}
+
+function gerarAcoesCCL(calc, valorNecessario) {
+  const acoes = [];
+  const ncg = calc.ncg || 0;
+  const ciclo = calc.ciclo || 0;
+  const pc = calc.passivoCirc || 0;
+  
+  if (ncg > 0) {
+    acoes.push(`Financiar NCG de ${toBRL(ncg)} com linha de capital de giro (atualmente descoberto)`);
+  }
+  if (ciclo > 45) {
+    acoes.push(`Reduzir ciclo financeiro de ${Math.round(ciclo)} para 30 dias → libera ${toBRL((ciclo-30)/365*calc.receita)} de capital`);
+  }
+  acoes.push(`Converter ${toBRL(Math.min(pc * 0.3, valorNecessario * 0.4))} de passivo circulante para longo prazo`);
+  acoes.push(`Manter reserva mínima de ${toBRL(valorNecessario * 0.2)} para sazonalidades`);
+  
+  return acoes;
+}
+
+function gerarAcoesAlavancagem(calc, dividaExcedente) {
+  const acoes = [];
+  const empCP = calc.emprestimosCP || 0;
+  const empLP = calc.emprestimosLP || 0;
+  const despFin = calc.despFin || 0;
+  const ebitda = calc.ebitda || 0;
+  
+  if (empCP > empLP) {
+    acoes.push(`Refinanciar ${toBRL(empCP * 0.6)} de dívidas de curto prazo (${((empCP/(empCP+empLP))*100).toFixed(0)}% da dívida é CP)`);
+  }
+  if (despFin > ebitda * 0.25) {
+    const economiaJuros = despFin * 0.3;
+    acoes.push(`Renegociar taxas para economizar ${toBRL(economiaJuros)}/ano em juros (atual: ${((despFin/ebitda)*100).toFixed(0)}% do EBITDA)`);
+  }
+  acoes.push(`Amortizar ${toBRL(dividaExcedente * 0.3)} com geração de caixa dos próximos 24 meses`);
+  acoes.push(`Direcionar 40% do EBITDA (${toBRL(ebitda * 0.4)}/ano) para redução de dívida`);
+  
+  return acoes;
+}
+
+function gerarAcoesCoberturaJuros(calc) {
+  const acoes = [];
+  const despFin = calc.despFin || 0;
+  const dividaBruta = calc.dividaBruta || 0;
+  const taxaImplicita = dividaBruta > 0 ? (despFin / dividaBruta * 100) : 0;
+  
+  acoes.push(`Trocar dívidas com taxa média de ${taxaImplicita.toFixed(1)}% a.a. por linhas de ${Math.max(10, taxaImplicita * 0.6).toFixed(1)}% a.a.`);
+  acoes.push(`Economia estimada de ${toBRL(despFin * 0.35)}/ano em despesas financeiras`);
+  acoes.push(`Buscar linhas subsidiadas (BNDES, FCO, Pronampe) com taxas de 8-12% a.a.`);
+  acoes.push(`Alongar prazo médio de 24 para 48-60 meses reduzindo pressão no fluxo`);
+  
+  return acoes;
+}
+
+function gerarAcoesMargem(calc) {
+  const acoes = [];
+  const margem = calc.margem || 0;
+  const margemBruta = calc.margemBruta || 0;
+  const giroAtv = calc.giroAtv || 0;
+  const receita = calc.receita || 0;
+  
+  if (margemBruta < 0.30) {
+    acoes.push(`Renegociar com fornecedores para melhorar margem bruta de ${(margemBruta*100).toFixed(0)}% para 30% → +${toBRL(receita * 0.05)}/ano`);
+  }
+  if (giroAtv < 1.0) {
+    acoes.push(`Otimizar ativos subutilizados (giro atual: ${giroAtv.toFixed(2)}x) → vender ou arrendar ativos ociosos`);
+  }
+  acoes.push(`Investir ${toBRL(receita * 0.02)} em automação para reduzir custos operacionais em 10%`);
+  acoes.push(`Revisar mix de produtos/serviços focando nos de maior margem`);
+  
+  return acoes;
+}
+
+function gerarAcoesCiclo(calc) {
+  const acoes = [];
+  const pmr = calc.pmr || 0;
+  const pmp = calc.pmp || 0;
+  const diasEst = calc.diasEst || 0;
+  const receita = calc.receita || 0;
+  
+  if (diasEst > 45) {
+    const liberacao = ((diasEst - 45) / 365) * receita * 0.7;
+    acoes.push(`Reduzir PME de ${Math.round(diasEst)} para 45 dias → libera ${toBRL(liberacao)} (liquidar estoque parado)`);
+  }
+  if (pmr > 35) {
+    const liberacao = ((pmr - 30) / 365) * receita;
+    acoes.push(`Reduzir PMR de ${Math.round(pmr)} para 30 dias → libera ${toBRL(liberacao)} (política de cobrança mais agressiva)`);
+  }
+  if (pmp < 35) {
+    acoes.push(`Negociar prazo com fornecedores de ${Math.round(pmp)} para 45 dias (ganho de ${Math.round(45-pmp)} dias de float)`);
+  }
+  acoes.push(`Implementar antecipação de recebíveis para emergências (custo ~1.5% a.m.)`);
+  
+  return acoes;
+}
+
+function gerarAcoesROE(calc) {
+  const acoes = [];
+  const roe = calc.roe || 0;
+  const roa = calc.roa || 0;
+  const margem = calc.margem || 0;
+  const giroAtv = calc.giroAtv || 0;
+  
+  if (roa < 0.06) {
+    acoes.push(`Melhorar ROA de ${(roa*100).toFixed(1)}% para 8%+ via otimização de ativos improdutivos`);
+  }
+  if (margem < 0.10) {
+    acoes.push(`Aumentar margem líquida via revisão de custos e precificação`);
+  }
+  if (giroAtv < 0.8) {
+    acoes.push(`Elevar giro do ativo de ${giroAtv.toFixed(2)}x para 1.0x+ (vender ativos ociosos)`);
+  }
+  acoes.push(`Análise DuPont: focar em ${margem < 0.05 ? 'margem' : giroAtv < 0.8 ? 'giro' : 'eficiência'} para maximizar ROE`);
+  
+  return acoes;
+}
+
 function renderCreditoGlobal(calc, analise) {
   const global = analise.creditoGlobal;
+  const situacao = analise.situacaoGeral;
+  
+  const corSituacao = {
+    'EXCELENTE': { bg: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', badge: '#d1fae5', text: '#065f46' },
+    'SAUDÁVEL': { bg: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)', badge: '#dbeafe', text: '#1e40af' },
+    'ATENÇÃO': { bg: 'linear-gradient(135deg, #d97706 0%, #f59e0b 100%)', badge: '#fef3c7', text: '#92400e' },
+    'CRÍTICA': { bg: 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)', badge: '#fee2e2', text: '#991b1b' }
+  }[situacao] || { bg: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)', badge: '#e2e8f0', text: '#475569' };
+  
+  const emojiSituacao = {
+    'EXCELENTE': '🌟',
+    'SAUDÁVEL': '✅',
+    'ATENÇÃO': '⚠️',
+    'CRÍTICA': '🚨'
+  }[situacao] || '📊';
   
   return `
-    <div class="card" style="background:linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%); color:#fff; margin-bottom:20px">
+    <!-- Situação Geral -->
+    <div class="card" style="background:${corSituacao.bg}; color:#fff; margin-bottom:20px">
       <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px">
         <div>
-          <div style="font-size:13px; opacity:.8; margin-bottom:4px">NECESSIDADE TOTAL DE CRÉDITO</div>
-          <div style="font-size:32px; font-weight:800">${toBRL(global.total)}</div>
-          <div style="font-size:12px; opacity:.7; margin-top:4px">Para recuperação completa da empresa</div>
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
+            <span style="font-size:28px">${emojiSituacao}</span>
+            <div>
+              <div style="font-size:12px; opacity:.8">SITUAÇÃO GERAL DA EMPRESA</div>
+              <div style="font-size:24px; font-weight:800">${situacao}</div>
+            </div>
+          </div>
+          <div style="font-size:13px; opacity:.9; max-width:500px">
+            ${situacao === 'EXCELENTE' || situacao === 'SAUDÁVEL' 
+              ? 'Empresa em boa condição financeira. Valores abaixo representam oportunidades de crescimento.'
+              : 'Empresa necessita de ajustes. Valores abaixo representam necessidades de recuperação.'}
+          </div>
         </div>
-        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
-          <div style="font-size:11px; opacity:.7">TAXA MÁXIMA</div>
-          <div style="font-size:24px; font-weight:700">${global.taxaMaxima.toFixed(2)}% a.m.</div>
-          <div style="font-size:10px; opacity:.6">Spread: ${global.spreadMaximo.toFixed(2)}% + CDI</div>
-        </div>
-        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
-          <div style="font-size:11px; opacity:.7">PRAZO RECUPERAÇÃO</div>
-          <div style="font-size:24px; font-weight:700">${global.prazoRecuperacao} meses</div>
-          <div style="font-size:10px; opacity:.6">${Math.ceil(global.prazoRecuperacao/12)} anos</div>
+        <div style="display:flex; gap:16px">
+          <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+            <div style="font-size:11px; opacity:.7">NECESSIDADE TOTAL</div>
+            <div style="font-size:24px; font-weight:700">${toBRL(global.total)}</div>
+          </div>
+          <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+            <div style="font-size:11px; opacity:.7">TAXA MÁXIMA</div>
+            <div style="font-size:24px; font-weight:700">${global.taxaMaxima.toFixed(2)}%</div>
+            <div style="font-size:10px; opacity:.6">a.m.</div>
+          </div>
+          <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+            <div style="font-size:11px; opacity:.7">PRAZO</div>
+            <div style="font-size:24px; font-weight:700">${global.prazoRecuperacao}</div>
+            <div style="font-size:10px; opacity:.6">meses</div>
+          </div>
         </div>
       </div>
     </div>
     
+    <!-- Motivo da Necessidade Global -->
+    <div class="card" style="margin-bottom:20px; border-left:4px solid ${situacao === 'CRÍTICA' ? '#ef4444' : situacao === 'ATENÇÃO' ? '#f59e0b' : '#3b82f6'}">
+      <h3 style="font-size:16px; font-weight:700; margin-bottom:12px; color:#1e3a5f">
+        💡 Por que a empresa precisa de ${toBRL(global.total)}?
+      </h3>
+      <div style="font-size:14px; color:#475569; line-height:1.7">
+        ${analise.motivoGlobal}
+      </div>
+    </div>
+    
+    <!-- Tabela de Gaps Identificados -->
     <div class="card" style="margin-bottom:20px">
       <h3 style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
-        📋 Detalhamento da Necessidade de Crédito Global
+        📊 Análise de Indicadores - Gaps Identificados
       </h3>
       
       <div style="overflow-x:auto">
         <table style="width:100%; border-collapse:collapse">
           <thead>
             <tr style="background:#f8fafc">
-              <th style="padding:12px; text-align:left; font-size:11px; text-transform:uppercase; color:#64748b">Categoria</th>
-              <th style="padding:12px; text-align:right; font-size:11px; text-transform:uppercase; color:#64748b">Valor</th>
-              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Urgência</th>
-              <th style="padding:12px; text-align:left; font-size:11px; text-transform:uppercase; color:#64748b">Descrição</th>
-              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Retorno</th>
+              <th style="padding:12px; text-align:left; font-size:11px; text-transform:uppercase; color:#64748b">Indicador</th>
+              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Atual</th>
+              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Meta</th>
+              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Status</th>
+              <th style="padding:12px; text-align:right; font-size:11px; text-transform:uppercase; color:#64748b">Valor Necessário</th>
             </tr>
           </thead>
           <tbody>
             ${global.itens.map((item, i) => `
               <tr style="border-bottom:1px solid #e2e8f0; ${i % 2 ? 'background:#fafbfc' : ''}">
-                <td style="padding:12px; font-weight:600">${item.categoria}</td>
-                <td style="padding:12px; text-align:right; font-weight:700; color:#1e3a5f">${toBRL(item.valor)}</td>
+                <td style="padding:12px">
+                  <div style="font-weight:600">${item.categoria}</div>
+                  <div style="font-size:11px; color:#64748b">${item.indicadorAlvo || ''}</div>
+                </td>
+                <td style="padding:12px; text-align:center; font-weight:600; color:#dc2626">${item.valorAtual || '-'}</td>
+                <td style="padding:12px; text-align:center; font-weight:600; color:#059669">${item.valorMeta || '-'}</td>
                 <td style="padding:12px; text-align:center">
                   <span style="padding:4px 10px; border-radius:20px; font-size:11px; font-weight:600;
-                    background:${item.urgencia === 'CRÍTICO' ? '#fee2e2' : item.urgencia === 'ALTO' ? '#fef3c7' : item.urgencia === 'MÉDIO' ? '#dbeafe' : '#d1fae5'};
-                    color:${item.urgencia === 'CRÍTICO' ? '#991b1b' : item.urgencia === 'ALTO' ? '#92400e' : item.urgencia === 'MÉDIO' ? '#1e40af' : '#065f46'}">
+                    background:${item.urgencia === 'CRÍTICO' ? '#fee2e2' : item.urgencia === 'ALTO' || item.urgencia === 'ATENÇÃO' ? '#fef3c7' : item.urgencia === 'OPORTUNIDADE' ? '#d1fae5' : '#dbeafe'};
+                    color:${item.urgencia === 'CRÍTICO' ? '#991b1b' : item.urgencia === 'ALTO' || item.urgencia === 'ATENÇÃO' ? '#92400e' : item.urgencia === 'OPORTUNIDADE' ? '#065f46' : '#1e40af'}">
                     ${item.urgencia}
                   </span>
                 </td>
-                <td style="padding:12px; font-size:13px; color:#475569">${item.descricao}</td>
-                <td style="padding:12px; text-align:center; font-size:12px; color:#64748b">${item.prazoRetorno}</td>
+                <td style="padding:12px; text-align:right; font-weight:700; color:#1e3a5f">${toBRL(item.valor)}</td>
               </tr>
             `).join('')}
           </tbody>
           <tfoot>
             <tr style="background:#1e3a5f; color:#fff">
-              <td style="padding:14px; font-weight:700; font-size:15px">TOTAL</td>
+              <td colspan="4" style="padding:14px; font-weight:700; font-size:15px">TOTAL NECESSÁRIO</td>
               <td style="padding:14px; text-align:right; font-weight:800; font-size:16px">${toBRL(global.total)}</td>
-              <td colspan="3"></td>
             </tr>
           </tfoot>
         </table>
       </div>
     </div>
     
-    <!-- Detalhamento das Ações -->
+    <!-- Detalhamento das Ações Inteligentes -->
     <div class="card">
       <h3 style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
-        🎯 Plano Detalhado de Aplicação dos Recursos
+        🎯 Plano de Aplicação dos Recursos - Baseado nos Indicadores
       </h3>
       
       ${global.itens.map(item => `
         <div style="background:#f8fafc; border-radius:12px; padding:16px; margin-bottom:12px; border-left:4px solid ${
-          item.urgencia === 'CRÍTICO' ? '#ef4444' : item.urgencia === 'ALTO' ? '#f59e0b' : item.urgencia === 'MÉDIO' ? '#3b82f6' : '#10b981'
+          item.urgencia === 'CRÍTICO' ? '#ef4444' : 
+          item.urgencia === 'ALTO' || item.urgencia === 'ATENÇÃO' ? '#f59e0b' : 
+          item.urgencia === 'OPORTUNIDADE' ? '#10b981' : 
+          item.urgencia === 'ESTRATÉGICO' ? '#8b5cf6' : '#3b82f6'
         }">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
-            <div style="font-weight:700; color:#1e3a5f">${item.categoria}</div>
-            <div style="font-weight:700; color:#1e3a5f">${toBRL(item.valor)}</div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; flex-wrap:wrap; gap:8px">
+            <div>
+              <div style="font-weight:700; color:#1e3a5f; font-size:15px">${item.categoria}</div>
+              ${item.metricaMelhoria ? `<div style="font-size:12px; color:#059669; font-weight:600; margin-top:4px">📈 ${item.metricaMelhoria}</div>` : ''}
+            </div>
+            <div style="text-align:right">
+              <div style="font-weight:700; color:#1e3a5f; font-size:18px">${toBRL(item.valor)}</div>
+              ${item.prazoRetorno ? `<div style="font-size:11px; color:#64748b">Retorno: ${item.prazoRetorno}</div>` : ''}
+            </div>
           </div>
           
-          <div style="font-size:13px; color:#475569; margin-bottom:12px">
-            <strong>Ações necessárias:</strong>
+          <div style="font-size:13px; color:#475569; margin-bottom:12px; padding:10px; background:#fff; border-radius:8px; border:1px solid #e2e8f0">
+            <strong style="color:#1e3a5f">Diagnóstico:</strong> ${item.descricao}
+          </div>
+          
+          <div style="font-size:13px; color:#475569; margin-bottom:8px">
+            <strong style="color:#1e3a5f">Ações recomendadas:</strong>
           </div>
           <ul style="margin:0 0 12px 20px; font-size:13px; color:#334155">
             ${item.acoes.map(acao => `<li style="margin-bottom:6px">${acao}</li>`).join('')}
           </ul>
           
-          <div style="display:flex; gap:20px; font-size:12px">
+          <div style="display:flex; gap:20px; font-size:12px; flex-wrap:wrap">
             <div><strong style="color:#059669">Impacto:</strong> ${item.impacto}</div>
-            <div><strong style="color:#2563eb">Prazo:</strong> ${item.prazoRetorno}</div>
           </div>
         </div>
       `).join('')}
     </div>
     
-    <!-- Aviso -->
-    <div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:12px; padding:16px; margin-top:20px">
-      <div style="display:flex; gap:12px">
-        <span style="font-size:24px">⚠️</span>
-        <div>
-          <div style="font-weight:700; color:#92400e; margin-bottom:4px">Importante</div>
-          <div style="font-size:13px; color:#78350f">
-            Este é o cenário ideal de recuperação total. Na prática, é improvável que a empresa consiga 
-            captar ${toBRL(global.total)} de uma só vez. Recomenda-se buscar o <strong>Crédito Viável</strong> 
-            para atacar os pontos mais urgentes primeiro, e ir buscando recursos adicionais conforme a empresa 
-            for melhorando seus indicadores.
+    <!-- Aviso contextualizado -->
+    ${situacao === 'CRÍTICA' || situacao === 'ATENÇÃO' ? `
+      <div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:12px; padding:16px; margin-top:20px">
+        <div style="display:flex; gap:12px">
+          <span style="font-size:24px">⚠️</span>
+          <div>
+            <div style="font-weight:700; color:#92400e; margin-bottom:4px">Importante</div>
+            <div style="font-size:13px; color:#78350f">
+              O valor de ${toBRL(global.total)} representa a necessidade total para recuperação completa. 
+              Na prática, recomenda-se buscar o <strong>Crédito Viável</strong> primeiro para atacar os pontos 
+              mais críticos, e ir buscando recursos adicionais conforme os indicadores forem melhorando.
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    ` : `
+      <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:12px; padding:16px; margin-top:20px">
+        <div style="display:flex; gap:12px">
+          <span style="font-size:24px">💡</span>
+          <div>
+            <div style="font-weight:700; color:#065f46; margin-bottom:4px">Oportunidade de Crescimento</div>
+            <div style="font-size:13px; color:#166534">
+              A empresa está em situação ${situacao.toLowerCase()}. Os valores acima representam 
+              <strong>oportunidades de investimento</strong> para acelerar o crescimento, não necessidades de recuperação. 
+              A empresa tem capacidade de endividamento saudável para financiar expansão.
+            </div>
+          </div>
+        </div>
+      </div>
+    `}
   `;
 }
 
