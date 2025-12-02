@@ -314,6 +314,8 @@ function wireUi(){
         renderDividasBancarias(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "plano" && CURRENT_ANALYSIS_DATA){
         renderPlanoAcao(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "recuperacao" && CURRENT_ANALYSIS_DATA){
+        renderPlanoRecuperacao(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "defesa" && CURRENT_ANALYSIS_DATA){
         renderDefesaCredito(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "roteiro" && CURRENT_ANALYSIS_DATA){
@@ -12169,3 +12171,640 @@ window.executarSimulacao = executarSimulacao;
 window.copiarDossieTexto = copiarDossieTexto;
 window.gerarDossiePDF = gerarDossiePDF;
 window.CONTEXTO_ANALISE_ATUAL = CONTEXTO_ANALISE_ATUAL;
+
+// ================================================================================
+// ===== PLANO DE RECUPERAÇÃO - ANÁLISE DE CRÉDITO GLOBAL E VIÁVEL =====
+// ================================================================================
+
+function renderPlanoRecuperacao(data) {
+  const container = document.getElementById("recuperacaoContent");
+  if (!container) return;
+  
+  const rows = data.rows || [];
+  if (!rows.length) {
+    container.innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-muted)">
+      Sem dados financeiros para análise de recuperação.
+    </div>`;
+    return;
+  }
+  
+  const latest = rows[rows.length - 1] || {};
+  const calc = calcularIndicadores(latest);
+  calc.empresa = data.empresa || "Empresa";
+  
+  // Calcular necessidades de crédito
+  const analiseRecuperacao = calcularNecessidadeRecuperacao(calc, rows);
+  
+  container.innerHTML = `
+    <div style="margin-bottom:20px">
+      <div style="display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap">
+        <button class="btn ${analiseRecuperacao.subAba === 'global' ? 'btn-primary' : 'btn-outline'}" onclick="trocarSubAbaRecuperacao('global')" style="flex:1; min-width:200px">
+          🌐 Crédito Global (Recuperação Total)
+        </button>
+        <button class="btn ${analiseRecuperacao.subAba === 'viavel' ? 'btn-primary' : 'btn-outline'}" onclick="trocarSubAbaRecuperacao('viavel')" style="flex:1; min-width:200px">
+          🏦 Crédito Viável (1 Banco)
+        </button>
+      </div>
+      
+      <div id="subAbaRecuperacaoGlobal" style="${analiseRecuperacao.subAba === 'global' ? '' : 'display:none'}">
+        ${renderCreditoGlobal(calc, analiseRecuperacao)}
+      </div>
+      
+      <div id="subAbaRecuperacaoViavel" style="${analiseRecuperacao.subAba === 'viavel' ? 'display:none' : ''}">
+        ${renderCreditoViavel(calc, analiseRecuperacao)}
+      </div>
+    </div>
+  `;
+}
+
+function trocarSubAbaRecuperacao(aba) {
+  const divGlobal = document.getElementById('subAbaRecuperacaoGlobal');
+  const divViavel = document.getElementById('subAbaRecuperacaoViavel');
+  
+  if (aba === 'global') {
+    divGlobal.style.display = 'block';
+    divViavel.style.display = 'none';
+  } else {
+    divGlobal.style.display = 'none';
+    divViavel.style.display = 'block';
+  }
+  
+  // Atualizar botões
+  document.querySelectorAll('#recuperacaoContent .btn').forEach((btn, i) => {
+    if ((i === 0 && aba === 'global') || (i === 1 && aba === 'viavel')) {
+      btn.classList.remove('btn-outline');
+      btn.classList.add('btn-primary');
+    } else {
+      btn.classList.remove('btn-primary');
+      btn.classList.add('btn-outline');
+    }
+  });
+}
+window.trocarSubAbaRecuperacao = trocarSubAbaRecuperacao;
+
+function calcularNecessidadeRecuperacao(calc, rows) {
+  const resultado = {
+    subAba: 'global',
+    creditoGlobal: {
+      total: 0,
+      itens: [],
+      taxaMaxima: 0,
+      prazoRecuperacao: 0,
+      spreadMaximo: 0
+    },
+    creditoViavel: {
+      total: 0,
+      itens: [],
+      taxaMaxima: 0,
+      prazoRecuperacao: 0,
+      spreadMaximo: 0,
+      percentualDoGlobal: 0
+    }
+  };
+  
+  const receita = calc.receita || 0;
+  const ebitda = calc.ebitda || 0;
+  const margem = calc.margem || 0;
+  const liquidez = calc.liq || calc.liqCorrente || 0;
+  const alav = calc.alav || 0;
+  const dividaLiq = calc.dl || 0;
+  const caixa = calc.caixa || 0;
+  const estoque = calc.estoque || 0;
+  const cr = calc.cr || 0; // Contas a receber
+  const fornecedores = calc.fornec || 0;
+  const passivo = calc.passivo || calc.pc || 0;
+  const ativo = calc.ativo || calc.at || 0;
+  const pl = calc.pl || 0;
+  const custoFinanceiro = calc.despFin || 0;
+  
+  // ===== ANÁLISE DE NECESSIDADES - CRÉDITO GLOBAL =====
+  
+  // 1. CAPITAL DE GIRO
+  const capitalGiroNecessario = (receita * 0.15); // 15% da receita como capital de giro ideal
+  const capitalGiroAtual = (calc.ac || 0) - (calc.pc || 0);
+  if (capitalGiroAtual < capitalGiroNecessario * 0.5) {
+    const deficit = capitalGiroNecessario - Math.max(0, capitalGiroAtual);
+    resultado.creditoGlobal.itens.push({
+      categoria: '💵 Capital de Giro',
+      valor: deficit,
+      prioridade: 1,
+      urgencia: 'CRÍTICO',
+      descricao: 'Recompor capital de giro para operação saudável',
+      acoes: [
+        `Injetar ${toBRL(deficit * 0.4)} para pagamento de fornecedores em atraso`,
+        `Reservar ${toBRL(deficit * 0.3)} para folha de pagamento (2 meses)`,
+        `Manter ${toBRL(deficit * 0.3)} como colchão de segurança`
+      ],
+      impacto: `Evitar inadimplência e manter operação funcionando`,
+      prazoRetorno: '3-6 meses'
+    });
+  }
+  
+  // 2. RENEGOCIAÇÃO DE DÍVIDAS CARAS
+  if (custoFinanceiro > ebitda * 0.3) {
+    const economiaEstimada = custoFinanceiro * 0.4; // Potencial de redução de 40%
+    const valorRefinanciamento = dividaLiq * 0.6; // 60% da dívida para trocar
+    resultado.creditoGlobal.itens.push({
+      categoria: '🔄 Refinanciamento de Dívidas',
+      valor: valorRefinanciamento,
+      prioridade: 2,
+      urgencia: 'ALTO',
+      descricao: 'Trocar dívidas caras por crédito mais barato',
+      acoes: [
+        `Refinanciar ${toBRL(valorRefinanciamento)} em dívidas de curto prazo`,
+        `Trocar taxas médias de ~3%am por ~1.5%am`,
+        `Alongar prazo de 12 para 36-48 meses`,
+        `Economia estimada: ${toBRL(economiaEstimada)}/ano em juros`
+      ],
+      impacto: `Reduzir despesa financeira de ${toBRL(custoFinanceiro)} para ${toBRL(custoFinanceiro * 0.6)}/ano`,
+      prazoRetorno: '6-12 meses'
+    });
+  }
+  
+  // 3. REDUÇÃO DE ESTOQUE PARADO
+  if (estoque > receita * 0.25) { // Estoque > 3 meses de faturamento
+    const estoqueExcedente = estoque - (receita * 0.15);
+    resultado.creditoGlobal.itens.push({
+      categoria: '📦 Redução de Estoque',
+      valor: estoqueExcedente * 0.3, // 30% do excedente como investimento em liquidação
+      prioridade: 3,
+      urgencia: 'MÉDIO',
+      descricao: 'Investir em marketing/promoções para liquidar estoque parado',
+      acoes: [
+        `Campanha de liquidação com desconto de 20-30%`,
+        `Investir ${toBRL(estoqueExcedente * 0.05)} em marketing digital`,
+        `Oferecer parcelamento especial para grandes compradores`,
+        `Meta: converter ${toBRL(estoqueExcedente * 0.6)} em 90 dias`
+      ],
+      impacto: `Liberar ${toBRL(estoqueExcedente * 0.6)} em caixa e reduzir custo de armazenagem`,
+      prazoRetorno: '3-4 meses'
+    });
+  }
+  
+  // 4. INVESTIMENTO EM EFICIÊNCIA OPERACIONAL
+  if (margem < 10) {
+    const investimentoEficiencia = receita * 0.03; // 3% da receita
+    const ganhoMargemEstimado = 2; // pontos percentuais
+    resultado.creditoGlobal.itens.push({
+      categoria: '⚙️ Eficiência Operacional',
+      valor: investimentoEficiencia,
+      prioridade: 4,
+      urgencia: 'MÉDIO',
+      descricao: 'Investir em automação e otimização de processos',
+      acoes: [
+        `Sistema ERP/gestão: ${toBRL(investimentoEficiencia * 0.3)}`,
+        `Automação de processos: ${toBRL(investimentoEficiencia * 0.3)}`,
+        `Treinamento de equipe: ${toBRL(investimentoEficiencia * 0.2)}`,
+        `Renegociação com fornecedores (consultoria): ${toBRL(investimentoEficiencia * 0.2)}`
+      ],
+      impacto: `Aumentar margem de ${(margem*100).toFixed(1)}% para ${((margem+ganhoMargemEstimado/100)*100).toFixed(1)}%`,
+      prazoRetorno: '12-18 meses'
+    });
+  }
+  
+  // 5. REESTRUTURAÇÃO DE FOLHA
+  const folhaEstimada = receita * 0.25; // Estimativa de 25% da receita
+  if (margem < 5) {
+    resultado.creditoGlobal.itens.push({
+      categoria: '👥 Reestruturação de Pessoal',
+      valor: folhaEstimada * 0.15, // Custo de rescisões
+      prioridade: 5,
+      urgencia: margem < 0 ? 'CRÍTICO' : 'ALTO',
+      descricao: 'Adequar quadro de funcionários à realidade da empresa',
+      acoes: [
+        `Provisionar ${toBRL(folhaEstimada * 0.15)} para rescisões`,
+        `Reduzir quadro em 15-20% de forma estratégica`,
+        `Focar em áreas não essenciais primeiro`,
+        `Economia mensal estimada: ${toBRL(folhaEstimada * 0.03)}`
+      ],
+      impacto: `Reduzir custo fixo em ${toBRL(folhaEstimada * 0.15 * 12)}/ano`,
+      prazoRetorno: '2-4 meses'
+    });
+  }
+  
+  // 6. MARKETING E VENDAS (se receita caindo)
+  if (rows.length >= 2) {
+    const receitaAnterior = rows[rows.length - 2].receita || 0;
+    const variacao = receitaAnterior > 0 ? (receita - receitaAnterior) / receitaAnterior : 0;
+    if (variacao < -0.05) { // Queda > 5%
+      const investimentoMkt = receita * 0.05;
+      resultado.creditoGlobal.itens.push({
+        categoria: '📈 Marketing e Vendas',
+        valor: investimentoMkt,
+        prioridade: 4,
+        urgencia: 'ALTO',
+        descricao: 'Investir para recuperar faturamento',
+        acoes: [
+          `Marketing digital: ${toBRL(investimentoMkt * 0.4)}`,
+          `Força de vendas (comissões agressivas): ${toBRL(investimentoMkt * 0.3)}`,
+          `Promoções e incentivos: ${toBRL(investimentoMkt * 0.2)}`,
+          `CRM e relacionamento: ${toBRL(investimentoMkt * 0.1)}`
+        ],
+        impacto: `Recuperar ${toPct(Math.abs(variacao))} de faturamento = ${toBRL(Math.abs(receita * variacao))}`,
+        prazoRetorno: '6-12 meses'
+      });
+    }
+  }
+  
+  // 7. ALONGAMENTO DE PASSIVO CIRCULANTE
+  const pc = calc.pc || 0;
+  if (liquidez < 1) {
+    resultado.creditoGlobal.itens.push({
+      categoria: '📅 Alongamento de Dívidas CP',
+      valor: pc * 0.4, // 40% do PC para alongar
+      prioridade: 2,
+      urgencia: 'CRÍTICO',
+      descricao: 'Converter dívidas de curto para longo prazo',
+      acoes: [
+        `Negociar com bancos alongamento de ${toBRL(pc * 0.2)}`,
+        `Renegociar com fornecedores prazo de ${toBRL(pc * 0.15)}`,
+        `Parcelar impostos em atraso: ${toBRL(pc * 0.05)}`
+      ],
+      impacto: `Melhorar liquidez de ${liquidez.toFixed(2)} para ${((calc.ac || 0) / ((calc.pc || 1) * 0.6)).toFixed(2)}`,
+      prazoRetorno: 'Imediato'
+    });
+  }
+  
+  // 8. RESERVA DE CONTINGÊNCIA
+  const reservaIdeal = receita * 0.05; // 2 meses de operação
+  if (caixa < reservaIdeal) {
+    resultado.creditoGlobal.itens.push({
+      categoria: '🛡️ Reserva de Contingência',
+      valor: reservaIdeal - caixa,
+      prioridade: 6,
+      urgencia: 'BAIXO',
+      descricao: 'Criar colchão financeiro para imprevistos',
+      acoes: [
+        `Reservar ${toBRL((reservaIdeal - caixa) * 0.5)} para emergências`,
+        `Aplicar em CDB liquidez diária ou conta remunerada`,
+        `Não usar para operação normal`
+      ],
+      impacto: `Segurança para enfrentar 60 dias de crise sem receita`,
+      prazoRetorno: 'Longo prazo'
+    });
+  }
+  
+  // Ordenar por prioridade
+  resultado.creditoGlobal.itens.sort((a, b) => a.prioridade - b.prioridade);
+  
+  // Calcular total global
+  resultado.creditoGlobal.total = resultado.creditoGlobal.itens.reduce((sum, item) => sum + item.valor, 0);
+  
+  // Calcular taxa máxima suportável
+  // A empresa precisa conseguir pagar os juros do crédito global com o EBITDA
+  // Taxa máxima = (EBITDA disponível para juros) / (Crédito Total) * 12 meses
+  const ebitdaDisponivelJuros = Math.max(0, ebitda - custoFinanceiro) * 0.6; // 60% do EBITDA livre
+  resultado.creditoGlobal.taxaMaxima = resultado.creditoGlobal.total > 0 
+    ? Math.min(2.5, (ebitdaDisponivelJuros / resultado.creditoGlobal.total) * 100)
+    : 2.0;
+  resultado.creditoGlobal.spreadMaximo = Math.max(0, resultado.creditoGlobal.taxaMaxima - 1.0); // CDI ~1%
+  
+  // Prazo de recuperação
+  resultado.creditoGlobal.prazoRecuperacao = Math.ceil(resultado.creditoGlobal.total / (ebitda * 0.4) * 12); // Meses
+  resultado.creditoGlobal.prazoRecuperacao = Math.min(60, Math.max(24, resultado.creditoGlobal.prazoRecuperacao));
+  
+  // ===== CRÉDITO VIÁVEL (1 BANCO) =====
+  // Regra: banco pode emprestar até 10-15% da exposição total, foco nos itens mais urgentes
+  
+  const limiteViavel = Math.min(
+    resultado.creditoGlobal.total * 0.20, // Máximo 20% do global
+    ebitda * 2.5, // Máximo 2.5x EBITDA
+    receita * 0.08 // Máximo 8% da receita
+  );
+  
+  let valorAcumulado = 0;
+  resultado.creditoGlobal.itens.forEach(item => {
+    if (valorAcumulado < limiteViavel && item.urgencia !== 'BAIXO') {
+      const valorParaEsteItem = Math.min(item.valor, limiteViavel - valorAcumulado);
+      if (valorParaEsteItem > 0) {
+        resultado.creditoViavel.itens.push({
+          ...item,
+          valorOriginal: item.valor,
+          valor: valorParaEsteItem,
+          percentualAtendido: (valorParaEsteItem / item.valor) * 100,
+          acoesPrioritarias: item.acoes.slice(0, 2) // Só as 2 primeiras ações
+        });
+        valorAcumulado += valorParaEsteItem;
+      }
+    }
+  });
+  
+  resultado.creditoViavel.total = valorAcumulado;
+  resultado.creditoViavel.percentualDoGlobal = resultado.creditoGlobal.total > 0 
+    ? (valorAcumulado / resultado.creditoGlobal.total) * 100 
+    : 0;
+  
+  // Taxa máxima para crédito viável (pode ser um pouco maior pois é menor valor)
+  resultado.creditoViavel.taxaMaxima = Math.min(2.8, resultado.creditoGlobal.taxaMaxima * 1.2);
+  resultado.creditoViavel.spreadMaximo = Math.max(0, resultado.creditoViavel.taxaMaxima - 1.0);
+  resultado.creditoViavel.prazoRecuperacao = Math.ceil(resultado.creditoViavel.total / (ebitda * 0.3) * 12);
+  resultado.creditoViavel.prazoRecuperacao = Math.min(48, Math.max(18, resultado.creditoViavel.prazoRecuperacao));
+  
+  return resultado;
+}
+
+function renderCreditoGlobal(calc, analise) {
+  const global = analise.creditoGlobal;
+  
+  return `
+    <div class="card" style="background:linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%); color:#fff; margin-bottom:20px">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px">
+        <div>
+          <div style="font-size:13px; opacity:.8; margin-bottom:4px">NECESSIDADE TOTAL DE CRÉDITO</div>
+          <div style="font-size:32px; font-weight:800">${toBRL(global.total)}</div>
+          <div style="font-size:12px; opacity:.7; margin-top:4px">Para recuperação completa da empresa</div>
+        </div>
+        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+          <div style="font-size:11px; opacity:.7">TAXA MÁXIMA</div>
+          <div style="font-size:24px; font-weight:700">${global.taxaMaxima.toFixed(2)}% a.m.</div>
+          <div style="font-size:10px; opacity:.6">Spread: ${global.spreadMaximo.toFixed(2)}% + CDI</div>
+        </div>
+        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+          <div style="font-size:11px; opacity:.7">PRAZO RECUPERAÇÃO</div>
+          <div style="font-size:24px; font-weight:700">${global.prazoRecuperacao} meses</div>
+          <div style="font-size:10px; opacity:.6">${Math.ceil(global.prazoRecuperacao/12)} anos</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
+        📋 Detalhamento da Necessidade de Crédito Global
+      </h3>
+      
+      <div style="overflow-x:auto">
+        <table style="width:100%; border-collapse:collapse">
+          <thead>
+            <tr style="background:#f8fafc">
+              <th style="padding:12px; text-align:left; font-size:11px; text-transform:uppercase; color:#64748b">Categoria</th>
+              <th style="padding:12px; text-align:right; font-size:11px; text-transform:uppercase; color:#64748b">Valor</th>
+              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Urgência</th>
+              <th style="padding:12px; text-align:left; font-size:11px; text-transform:uppercase; color:#64748b">Descrição</th>
+              <th style="padding:12px; text-align:center; font-size:11px; text-transform:uppercase; color:#64748b">Retorno</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${global.itens.map((item, i) => `
+              <tr style="border-bottom:1px solid #e2e8f0; ${i % 2 ? 'background:#fafbfc' : ''}">
+                <td style="padding:12px; font-weight:600">${item.categoria}</td>
+                <td style="padding:12px; text-align:right; font-weight:700; color:#1e3a5f">${toBRL(item.valor)}</td>
+                <td style="padding:12px; text-align:center">
+                  <span style="padding:4px 10px; border-radius:20px; font-size:11px; font-weight:600;
+                    background:${item.urgencia === 'CRÍTICO' ? '#fee2e2' : item.urgencia === 'ALTO' ? '#fef3c7' : item.urgencia === 'MÉDIO' ? '#dbeafe' : '#d1fae5'};
+                    color:${item.urgencia === 'CRÍTICO' ? '#991b1b' : item.urgencia === 'ALTO' ? '#92400e' : item.urgencia === 'MÉDIO' ? '#1e40af' : '#065f46'}">
+                    ${item.urgencia}
+                  </span>
+                </td>
+                <td style="padding:12px; font-size:13px; color:#475569">${item.descricao}</td>
+                <td style="padding:12px; text-align:center; font-size:12px; color:#64748b">${item.prazoRetorno}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:#1e3a5f; color:#fff">
+              <td style="padding:14px; font-weight:700; font-size:15px">TOTAL</td>
+              <td style="padding:14px; text-align:right; font-weight:800; font-size:16px">${toBRL(global.total)}</td>
+              <td colspan="3"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Detalhamento das Ações -->
+    <div class="card">
+      <h3 style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
+        🎯 Plano Detalhado de Aplicação dos Recursos
+      </h3>
+      
+      ${global.itens.map(item => `
+        <div style="background:#f8fafc; border-radius:12px; padding:16px; margin-bottom:12px; border-left:4px solid ${
+          item.urgencia === 'CRÍTICO' ? '#ef4444' : item.urgencia === 'ALTO' ? '#f59e0b' : item.urgencia === 'MÉDIO' ? '#3b82f6' : '#10b981'
+        }">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+            <div style="font-weight:700; color:#1e3a5f">${item.categoria}</div>
+            <div style="font-weight:700; color:#1e3a5f">${toBRL(item.valor)}</div>
+          </div>
+          
+          <div style="font-size:13px; color:#475569; margin-bottom:12px">
+            <strong>Ações necessárias:</strong>
+          </div>
+          <ul style="margin:0 0 12px 20px; font-size:13px; color:#334155">
+            ${item.acoes.map(acao => `<li style="margin-bottom:6px">${acao}</li>`).join('')}
+          </ul>
+          
+          <div style="display:flex; gap:20px; font-size:12px">
+            <div><strong style="color:#059669">Impacto:</strong> ${item.impacto}</div>
+            <div><strong style="color:#2563eb">Prazo:</strong> ${item.prazoRetorno}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    
+    <!-- Aviso -->
+    <div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:12px; padding:16px; margin-top:20px">
+      <div style="display:flex; gap:12px">
+        <span style="font-size:24px">⚠️</span>
+        <div>
+          <div style="font-weight:700; color:#92400e; margin-bottom:4px">Importante</div>
+          <div style="font-size:13px; color:#78350f">
+            Este é o cenário ideal de recuperação total. Na prática, é improvável que a empresa consiga 
+            captar ${toBRL(global.total)} de uma só vez. Recomenda-se buscar o <strong>Crédito Viável</strong> 
+            para atacar os pontos mais urgentes primeiro, e ir buscando recursos adicionais conforme a empresa 
+            for melhorando seus indicadores.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCreditoViavel(calc, analise) {
+  const viavel = analise.creditoViavel;
+  const global = analise.creditoGlobal;
+  
+  return `
+    <div class="card" style="background:linear-gradient(135deg, #059669 0%, #10b981 100%); color:#fff; margin-bottom:20px">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px">
+        <div>
+          <div style="font-size:13px; opacity:.8; margin-bottom:4px">CRÉDITO VIÁVEL (1 BANCO)</div>
+          <div style="font-size:32px; font-weight:800">${toBRL(viavel.total)}</div>
+          <div style="font-size:12px; opacity:.7; margin-top:4px">
+            ${viavel.percentualDoGlobal.toFixed(0)}% da necessidade global • Foco em itens urgentes
+          </div>
+        </div>
+        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+          <div style="font-size:11px; opacity:.7">TAXA MÁXIMA</div>
+          <div style="font-size:24px; font-weight:700">${viavel.taxaMaxima.toFixed(2)}% a.m.</div>
+          <div style="font-size:10px; opacity:.6">Spread: ${viavel.spreadMaximo.toFixed(2)}% + CDI</div>
+        </div>
+        <div style="text-align:center; background:rgba(255,255,255,.15); padding:16px 24px; border-radius:12px">
+          <div style="font-size:11px; opacity:.7">PRAZO PAGAMENTO</div>
+          <div style="font-size:24px; font-weight:700">${viavel.prazoRecuperacao} meses</div>
+          <div style="font-size:10px; opacity:.6">${(viavel.prazoRecuperacao/12).toFixed(1)} anos</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Comparativo -->
+    <div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:16px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
+        📊 Comparativo: Global vs Viável
+      </h3>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+        <div style="background:#fee2e2; border-radius:12px; padding:16px; text-align:center">
+          <div style="font-size:12px; color:#991b1b; margin-bottom:4px">NECESSIDADE GLOBAL</div>
+          <div style="font-size:24px; font-weight:800; color:#dc2626">${toBRL(global.total)}</div>
+          <div style="font-size:11px; color:#991b1b">Todos os bancos</div>
+        </div>
+        <div style="background:#d1fae5; border-radius:12px; padding:16px; text-align:center">
+          <div style="font-size:12px; color:#065f46; margin-bottom:4px">VIÁVEL 1 BANCO</div>
+          <div style="font-size:24px; font-weight:800; color:#059669">${toBRL(viavel.total)}</div>
+          <div style="font-size:11px; color:#065f46">${viavel.percentualDoGlobal.toFixed(0)}% do total</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:16px; background:#f8fafc; border-radius:8px; padding:12px">
+        <div style="font-size:12px; color:#64748b; margin-bottom:8px">Cobertura da necessidade:</div>
+        <div style="background:#e2e8f0; border-radius:20px; height:24px; overflow:hidden">
+          <div style="background:linear-gradient(90deg, #059669, #10b981); height:100%; width:${viavel.percentualDoGlobal}%; display:flex; align-items:center; justify-content:center">
+            <span style="color:#fff; font-size:11px; font-weight:700">${viavel.percentualDoGlobal.toFixed(0)}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Itens prioritários -->
+    <div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:18px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
+        🎯 Itens Prioritários para Crédito Viável
+      </h3>
+      
+      <div style="font-size:13px; color:#475569; margin-bottom:16px">
+        Com ${toBRL(viavel.total)}, a empresa consegue atacar os seguintes pontos urgentes:
+      </div>
+      
+      ${viavel.itens.map((item, i) => `
+        <div style="background:#fff; border:2px solid #10b981; border-radius:12px; padding:16px; margin-bottom:12px">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px">
+            <div>
+              <div style="font-weight:700; color:#1e3a5f; font-size:15px">${item.categoria}</div>
+              <div style="font-size:12px; color:#64748b; margin-top:2px">${item.descricao}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-weight:800; color:#059669; font-size:18px">${toBRL(item.valor)}</div>
+              ${item.valorOriginal > item.valor ? `
+                <div style="font-size:11px; color:#64748b">
+                  de ${toBRL(item.valorOriginal)} (${item.percentualAtendido.toFixed(0)}%)
+                </div>
+              ` : ''}
+            </div>
+          </div>
+          
+          <div style="background:#f0fdf4; border-radius:8px; padding:12px">
+            <div style="font-size:12px; font-weight:600; color:#065f46; margin-bottom:8px">✅ Ações prioritárias:</div>
+            <ul style="margin:0 0 0 16px; font-size:13px; color:#166534">
+              ${item.acoesPrioritarias.map(acao => `<li style="margin-bottom:4px">${acao}</li>`).join('')}
+            </ul>
+          </div>
+          
+          <div style="margin-top:12px; font-size:12px; color:#475569">
+            <strong>Impacto esperado:</strong> ${item.impacto}
+          </div>
+        </div>
+      `).join('')}
+      
+      ${viavel.itens.length === 0 ? `
+        <div style="text-align:center; padding:40px; color:#64748b">
+          A empresa está em situação saudável, sem necessidade urgente de crédito.
+        </div>
+      ` : ''}
+    </div>
+    
+    <!-- Simulação de Parcela -->
+    <div class="card" style="margin-bottom:20px">
+      <h3 style="font-size:16px; font-weight:700; margin-bottom:16px; color:#1e3a5f">
+        📊 Simulação de Parcela
+      </h3>
+      
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px">
+        ${[
+          { prazo: 24, taxa: viavel.taxaMaxima },
+          { prazo: 36, taxa: viavel.taxaMaxima * 0.95 },
+          { prazo: 48, taxa: viavel.taxaMaxima * 0.90 }
+        ].map(cenario => {
+          const taxaMensal = cenario.taxa / 100;
+          const parcela = viavel.total * (taxaMensal * Math.pow(1 + taxaMensal, cenario.prazo)) / (Math.pow(1 + taxaMensal, cenario.prazo) - 1);
+          const totalPago = parcela * cenario.prazo;
+          const jurosTotal = totalPago - viavel.total;
+          
+          return `
+            <div style="background:#f8fafc; border-radius:12px; padding:16px; text-align:center">
+              <div style="font-size:12px; color:#64748b; margin-bottom:4px">${cenario.prazo} meses</div>
+              <div style="font-size:22px; font-weight:800; color:#1e3a5f">${toBRL(parcela)}</div>
+              <div style="font-size:11px; color:#64748b">
+                Taxa: ${cenario.taxa.toFixed(2)}% a.m.
+              </div>
+              <div style="font-size:11px; color:#64748b; margin-top:4px">
+                Total: ${toBRL(totalPago)}
+              </div>
+              <div style="font-size:11px; color:#dc2626">
+                Juros: ${toBRL(jurosTotal)}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+    
+    <!-- Capacidade de Pagamento -->
+    <div class="card" style="background:#f0fdf4; border:2px solid #10b981">
+      <h3 style="font-size:16px; font-weight:700; margin-bottom:16px; color:#065f46">
+        💪 Capacidade de Pagamento da Empresa
+      </h3>
+      
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:16px">
+        <div style="text-align:center">
+          <div style="font-size:11px; color:#065f46">EBITDA Anual</div>
+          <div style="font-size:20px; font-weight:700; color:#059669">${toBRL(calc.ebitda || 0)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; color:#065f46">Disponível p/ Dívida (40%)</div>
+          <div style="font-size:20px; font-weight:700; color:#059669">${toBRL((calc.ebitda || 0) * 0.4)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; color:#065f46">Mensal Disponível</div>
+          <div style="font-size:20px; font-weight:700; color:#059669">${toBRL((calc.ebitda || 0) * 0.4 / 12)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px; color:#065f46">Comprometimento</div>
+          <div style="font-size:20px; font-weight:700; color:#059669">
+            ${(((viavel.total * (viavel.taxaMaxima/100) * Math.pow(1 + viavel.taxaMaxima/100, viavel.prazoRecuperacao)) / (Math.pow(1 + viavel.taxaMaxima/100, viavel.prazoRecuperacao) - 1)) / ((calc.ebitda || 1) * 0.4 / 12) * 100).toFixed(0)}%
+          </div>
+        </div>
+      </div>
+      
+      <div style="margin-top:16px; font-size:13px; color:#166534; text-align:center">
+        ✅ A empresa consegue pagar as parcelas com folga dentro dos ${viavel.prazoRecuperacao} meses
+      </div>
+    </div>
+    
+    <!-- Recomendação final -->
+    <div style="background:#1e3a5f; color:#fff; border-radius:12px; padding:20px; margin-top:20px">
+      <div style="font-size:18px; font-weight:700; margin-bottom:12px">📝 Recomendação</div>
+      <div style="font-size:14px; line-height:1.7">
+        Com um crédito de <strong>${toBRL(viavel.total)}</strong> a uma taxa máxima de <strong>${viavel.taxaMaxima.toFixed(2)}% a.m.</strong> 
+        (spread de ${viavel.spreadMaximo.toFixed(2)}% + CDI), em até <strong>${viavel.prazoRecuperacao} meses</strong>, 
+        a empresa consegue atacar os ${viavel.itens.length} pontos mais urgentes de sua situação financeira.
+        <br><br>
+        Isso representa <strong>${viavel.percentualDoGlobal.toFixed(0)}% da necessidade total</strong>, mas permite 
+        que a empresa comece sua recuperação de forma sustentável, melhorando seus indicadores para conseguir 
+        créditos adicionais no futuro.
+      </div>
+    </div>
+  `;
+}
+
+window.renderPlanoRecuperacao = renderPlanoRecuperacao;
+window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
