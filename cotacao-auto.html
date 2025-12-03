@@ -1724,8 +1724,8 @@
         }
 
         // ============================================================
-        // CALCULATOR - ALGORITMO SIMPLIFICADO
-        // Taxa única que já inclui tudo (casco + adicionais)
+        // CALCULATOR - CALIBRADO COM APÓLICES REAIS
+        // Saveiro HDI: R$ 2.930 | Tokio Corolla: R$ 3.912 | Bradesco: R$ 3.529
         // ============================================================
         function calcularResultado() {
             const fipe = formData.valorFipe;
@@ -1736,19 +1736,16 @@
             let novoBonus = 0;
             
             if (formData.tipoSeguro === 'novo') {
-                novoBonus = 0; // Seguro novo = sem bônus
+                novoBonus = 0;
             } else {
                 const bonusAtual = parseInt(formData.bonus) || 0;
                 
                 if (formData.sinistro === 'sim') {
-                    // Com sinistro: perde 1 classe (mínimo 0)
                     novoBonus = Math.max(bonusAtual - 1, 0);
                 } else {
-                    // Sem sinistro: ganha 1 classe (máximo 10)
                     novoBonus = Math.min(bonusAtual + 1, 10);
                 }
                 
-                // Se não sabe o bônus, assume 4 (conservador)
                 if (formData.bonus === 'naosei') {
                     novoBonus = 4;
                 }
@@ -1757,56 +1754,57 @@
             formData.novoBonus = novoBonus;
             
             // ============================================================
-            // 2. TAXA BASE (já inclui cobertura padrão)
-            // Base: 2.5% para perfil médio com coberturas básicas
+            // 2. TAXA BASE: 2.2%
+            // Calibrada com Saveiro HDI e Corolla Tokio
             // ============================================================
-            let taxa = 0.025;
+            let taxa = 0.022;
             
             // ============================================================
-            // 3. AJUSTES POR COBERTURAS ESCOLHIDAS
+            // 3. AJUSTES POR COBERTURAS
+            // Franquia super tem impacto MUITO alto
             // ============================================================
             
             // RCF - Responsabilidade Civil
             switch (formData.terceiros) {
-                case '50': break; // base
-                case '100': taxa += 0.002; break;
-                case '200': taxa += 0.004; break;
-                case '300': taxa += 0.005; break;
-                case '500': taxa += 0.006; break;
-                case '800': taxa += 0.008; break;
+                case '50': taxa += 0.004; break;
+                case '100': taxa += 0.006; break;
+                case '200': taxa += 0.015; break;
+                case '300': taxa += 0.018; break;
+                case '500': taxa += 0.020; break;
+                case '800': taxa += 0.022; break;
+            }
+            
+            // Franquia (Super é MUITO mais cara)
+            switch (formData.franquia) {
+                case 'basica': break;
+                case 'reduzida': taxa += 0.005; break;   // 50% da básica
+                case 'super': taxa += 0.030; break;      // 25% da básica - impacto alto!
             }
             
             // Carro reserva
             switch (formData.reserva) {
                 case '0': break;
-                case '7': taxa += 0.001; break;
-                case '15': taxa += 0.002; break;
-                case '30': taxa += 0.003; break;
+                case '7': taxa += 0.002; break;
+                case '15': taxa += 0.004; break;
+                case '30': taxa += 0.006; break;
             }
             
-            // Franquia
-            switch (formData.franquia) {
-                case 'basica': break;
-                case 'reduzida': taxa += 0.004; break;
-                case 'super': taxa += 0.008; break;
-            }
-            
-            // Extras (pequenos incrementos)
+            // Extras
             const qtdExtras = formData.extras.length;
-            taxa += qtdExtras * 0.001;
+            taxa += qtdExtras * 0.002;
             
-            // Reboque extra
+            // Reboque adicional
             switch (formData.reboque) {
                 case '200': break;
-                case '400': taxa += 0.001; break;
-                case '600': taxa += 0.002; break;
-                case 'ilimitado': taxa += 0.003; break;
+                case '400': taxa += 0.003; break;
+                case '600': taxa += 0.005; break;
+                case 'ilimitado': taxa += 0.007; break;
             }
             
             // ============================================================
             // 4. APLICAR DESCONTO DO NOVO BÔNUS (5% por classe)
             // ============================================================
-            const descontoBonus = novoBonus * 0.05; // 5% por classe
+            const descontoBonus = novoBonus * 0.05;
             taxa = taxa * (1 - descontoBonus);
             
             // ============================================================
@@ -1815,28 +1813,30 @@
             
             // Idade do condutor
             switch (formData.idade) {
-                case '18-25': taxa *= 1.25; break;  // Jovem = mais caro
+                case '18-25': taxa *= 1.40; break;  // Jovem +40%
                 case '26-35': taxa *= 1.05; break;
-                case '36-45': break; // base
-                case '46-60': taxa *= 0.97; break;  // Experiente = desconto
+                case '36-45': break;
+                case '46-60': taxa *= 0.95; break;
                 case '60+': taxa *= 1.03; break;
             }
             
             // Local de pernoite
             switch (formData.garagem) {
-                case 'fechada': taxa *= 0.95; break;  // Mais seguro
-                case 'aberto': break; // base
-                case 'rua': taxa *= 1.10; break;  // Mais risco
+                case 'fechada': taxa *= 0.90; break;  // Desconto -10%
+                case 'aberto': break;
+                case 'rua': taxa *= 1.10; break;
             }
             
             // ============================================================
             // 6. CÁLCULO FINAL
+            // Margem fixa de ~R$ 150 para cada lado (faixa ~R$ 300)
             // ============================================================
             const premio = fipe * taxa;
             
-            // Margem de ±5%
-            const min = Math.round(premio * 0.95);
-            const max = Math.round(premio * 1.05);
+            // Margem: mínimo R$ 150, ou 5% para valores altos
+            const margemValor = Math.max(premio * 0.05, 150);
+            const min = Math.round(premio - margemValor);
+            const max = Math.round(premio + margemValor);
             
             formData.valorEstimadoMin = min;
             formData.valorEstimadoMax = max;
