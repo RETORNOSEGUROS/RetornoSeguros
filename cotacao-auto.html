@@ -988,7 +988,6 @@
             <div class="select-group">
                 <select class="select-input" id="bonus" onchange="checkBonus()">
                     <option value="">Selecione</option>
-                    <option value="0">Bônus 0 (sem desconto)</option>
                     <option value="1">Bônus 1 (5% desconto)</option>
                     <option value="2">Bônus 2 (10% desconto)</option>
                     <option value="3">Bônus 3 (15% desconto)</option>
@@ -1001,6 +1000,16 @@
                     <option value="10">Bônus 10 (50% desconto)</option>
                     <option value="naosei">Não sei / Não lembro</option>
                 </select>
+            </div>
+
+            <div style="margin-top: 1.5rem;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--text-dark);">
+                    📅 Quando vence sua apólice atual?
+                </label>
+                <input type="date" class="text-input" id="vencimentoApolice" style="text-align: center;">
+                <p style="font-size: 0.8rem; color: var(--text-light); margin-top: 0.5rem;">
+                    Assim podemos te lembrar na hora certa!
+                </p>
             </div>
 
             <div class="info-tooltip">
@@ -1305,6 +1314,8 @@
             garagem: '',
             bonus: '',
             sinistro: '',
+            vencimentoApolice: '',
+            novoBonus: 0,
             reboque: '',
             terceiros: '',
             reserva: '',
@@ -1639,6 +1650,14 @@
                 document.getElementById('greetingName').textContent = formData.nome.split(' ')[0];
             }
             
+            // Captura data de vencimento da apólice
+            if (step === '6b') {
+                const vencimento = document.getElementById('vencimentoApolice').value;
+                if (vencimento) {
+                    formData.vencimentoApolice = vencimento;
+                }
+            }
+            
             if (currentIndex < stepOrder.length - 1) {
                 const nextStepId = stepOrder[currentIndex + 1];
                 // Marca próximo passo como completo também (para permitir voltar)
@@ -1705,127 +1724,123 @@
         }
 
         // ============================================================
-        // CALCULATOR - TAXAS CALIBRADAS COM MERCADO REAL
+        // CALCULATOR - ALGORITMO SIMPLIFICADO
+        // Taxa única que já inclui tudo (casco + adicionais)
         // ============================================================
         function calcularResultado() {
             const fipe = formData.valorFipe;
             
             // ============================================================
-            // TAXA BASE: 2.8% (agressiva, alinhada com mercado)
+            // 1. CALCULAR NOVO BÔNUS
             // ============================================================
-            let taxaBase = 0.028;
+            let novoBonus = 0;
             
-            // Descontos REAIS por classe de bônus (5% por classe)
-            const descontosBonus = {
-                '0': 0,       // Sem desconto
-                '1': 0.05,    // 5% desconto
-                '2': 0.10,    // 10% desconto
-                '3': 0.15,    // 15% desconto
-                '4': 0.20,    // 20% desconto
-                '5': 0.25,    // 25% desconto
-                '6': 0.30,    // 30% desconto
-                '7': 0.35,    // 35% desconto
-                '8': 0.40,    // 40% desconto
-                '9': 0.45,    // 45% desconto
-                '10': 0.50,   // 50% desconto (máximo)
-                'naosei': 0.20  // Conservador - assume bônus 4
-            };
-            
-            // Se for seguro novo, usa taxa um pouco maior e sem desconto de bônus
             if (formData.tipoSeguro === 'novo') {
-                taxaBase = 0.035; // 3.5% para quem não tem seguro
+                novoBonus = 0; // Seguro novo = sem bônus
             } else {
-                // Aplica desconto de bônus
-                const desconto = descontosBonus[formData.bonus] || 0;
-                taxaBase = taxaBase * (1 - desconto);
+                const bonusAtual = parseInt(formData.bonus) || 0;
+                
+                if (formData.sinistro === 'sim') {
+                    // Com sinistro: perde 1 classe (mínimo 0)
+                    novoBonus = Math.max(bonusAtual - 1, 0);
+                } else {
+                    // Sem sinistro: ganha 1 classe (máximo 10)
+                    novoBonus = Math.min(bonusAtual + 1, 10);
+                }
+                
+                // Se não sabe o bônus, assume 4 (conservador)
+                if (formData.bonus === 'naosei') {
+                    novoBonus = 4;
+                }
             }
             
-            // Valor base do casco
-            let valorCasco = fipe * taxaBase;
+            formData.novoBonus = novoBonus;
             
             // ============================================================
-            // MODIFICADORES DE PERFIL (mais suaves)
+            // 2. TAXA BASE (já inclui cobertura padrão)
+            // Base: 2.5% para perfil médio com coberturas básicas
             // ============================================================
-            
-            // Idade do condutor
-            switch (formData.idade) {
-                case '18-25': valorCasco *= 1.25; break;
-                case '26-35': valorCasco *= 1.05; break;
-                case '36-45': break; // base
-                case '46-60': valorCasco *= 0.98; break;
-                case '60+': valorCasco *= 1.02; break;
-            }
-            
-            // Local de pernoite
-            switch (formData.garagem) {
-                case 'fechada': valorCasco *= 0.95; break;
-                case 'aberto': break; // base
-                case 'rua': valorCasco *= 1.08; break;
-            }
-            
-            // Sinistro na vigência anterior
-            if (formData.sinistro === 'sim') {
-                valorCasco *= 1.10;
-            }
-            
-            // Tipo de franquia
-            switch (formData.franquia) {
-                case 'basica': break;
-                case 'reduzida': valorCasco *= 1.15; break;
-                case 'super': valorCasco *= 1.30; break;
-            }
+            let taxa = 0.025;
             
             // ============================================================
-            // ADICIONAIS (valores calibrados com mercado)
+            // 3. AJUSTES POR COBERTURAS ESCOLHIDAS
             // ============================================================
-            let adicionais = 0;
             
-            // Assistência 24h básica (sempre inclusa)
-            adicionais += 60;
-            
-            // RCF - Responsabilidade Civil Facultativa
+            // RCF - Responsabilidade Civil
             switch (formData.terceiros) {
-                case '50': adicionais += 180; break;
-                case '100': adicionais += 350; break;
-                case '200': adicionais += 800; break;
-                case '300': adicionais += 1100; break;
-                case '500': adicionais += 1500; break;
-                case '800': adicionais += 2000; break;
+                case '50': break; // base
+                case '100': taxa += 0.002; break;
+                case '200': taxa += 0.004; break;
+                case '300': taxa += 0.005; break;
+                case '500': taxa += 0.006; break;
+                case '800': taxa += 0.008; break;
             }
             
             // Carro reserva
             switch (formData.reserva) {
-                case '7': adicionais += 50; break;
-                case '15': adicionais += 100; break;
-                case '30': adicionais += 180; break;
+                case '0': break;
+                case '7': taxa += 0.001; break;
+                case '15': taxa += 0.002; break;
+                case '30': taxa += 0.003; break;
             }
             
-            // Serviços extras
-            if (formData.extras.includes('vidros')) adicionais += 70;
-            if (formData.extras.includes('martelinho')) adicionais += 50;
-            if (formData.extras.includes('parachoque')) adicionais += 60;
-            if (formData.extras.includes('pintura')) adicionais += 50;
-            if (formData.extras.includes('pneu')) adicionais += 70;
+            // Franquia
+            switch (formData.franquia) {
+                case 'basica': break;
+                case 'reduzida': taxa += 0.004; break;
+                case 'super': taxa += 0.008; break;
+            }
             
-            // Reboque adicional
+            // Extras (pequenos incrementos)
+            const qtdExtras = formData.extras.length;
+            taxa += qtdExtras * 0.001;
+            
+            // Reboque extra
             switch (formData.reboque) {
-                case '200': break; // padrão
-                case '400': adicionais += 20; break;
-                case '600': adicionais += 40; break;
-                case 'ilimitado': adicionais += 80; break;
+                case '200': break;
+                case '400': taxa += 0.001; break;
+                case '600': taxa += 0.002; break;
+                case 'ilimitado': taxa += 0.003; break;
             }
             
             // ============================================================
-            // CÁLCULO FINAL
+            // 4. APLICAR DESCONTO DO NOVO BÔNUS (5% por classe)
             // ============================================================
-            const total = valorCasco + adicionais;
+            const descontoBonus = novoBonus * 0.05; // 5% por classe
+            taxa = taxa * (1 - descontoBonus);
             
-            // Margem de 5% para cima e para baixo (mais apertada)
-            const min = Math.round(total * 0.95);
-            const max = Math.round(total * 1.05);
+            // ============================================================
+            // 5. MODIFICADORES DE PERFIL
+            // ============================================================
+            
+            // Idade do condutor
+            switch (formData.idade) {
+                case '18-25': taxa *= 1.25; break;  // Jovem = mais caro
+                case '26-35': taxa *= 1.05; break;
+                case '36-45': break; // base
+                case '46-60': taxa *= 0.97; break;  // Experiente = desconto
+                case '60+': taxa *= 1.03; break;
+            }
+            
+            // Local de pernoite
+            switch (formData.garagem) {
+                case 'fechada': taxa *= 0.95; break;  // Mais seguro
+                case 'aberto': break; // base
+                case 'rua': taxa *= 1.10; break;  // Mais risco
+            }
+            
+            // ============================================================
+            // 6. CÁLCULO FINAL
+            // ============================================================
+            const premio = fipe * taxa;
+            
+            // Margem de ±5%
+            const min = Math.round(premio * 0.95);
+            const max = Math.round(premio * 1.05);
             
             formData.valorEstimadoMin = min;
             formData.valorEstimadoMax = max;
+            formData.taxaFinal = (taxa * 100).toFixed(2);
             
             const parcelaMin = Math.round(min / 12);
             const parcelaMax = Math.round(max / 12);
@@ -1910,7 +1925,8 @@
                         condutor: formData.condutor,
                         idade: formData.idade,
                         garagem: formData.garagem,
-                        bonus: formData.bonus,
+                        bonusAtual: formData.bonus,
+                        novoBonus: formData.novoBonus,
                         sinistro: formData.sinistro
                     },
                     coberturas: {
@@ -1922,8 +1938,10 @@
                     },
                     valorEstimado: {
                         min: formData.valorEstimadoMin,
-                        max: formData.valorEstimadoMax
+                        max: formData.valorEstimadoMax,
+                        taxaFinal: formData.taxaFinal
                     },
+                    vencimentoApolice: formData.vencimentoApolice || null,
                     status: 'novo',
                     dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
                     origem: 'site_cotacao_auto'
