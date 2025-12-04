@@ -1750,25 +1750,25 @@
             formData.novoBonus = novoBonus;
             
             // ============================================================
-            // 2. CASCO - Taxa base 2.5%
+            // 2. CASCO - Taxa base 1.6% (calibrado Tokio Marine Dez/2025)
             // ============================================================
-            let taxaCasco = 0.025; // 2.5% base
+            let taxaCasco = 0.016; // 1.6% base
             
-            // Franquia (impacto no prêmio)
-            // Básica = 8% FIPE | Reduzida = 50% da básica | Super = 25% da básica
+            // Franquia (multiplicadores baseados em cotações reais)
+            // Básica = 1.0 | Reduzida 50% = 1.28 | Super 25% = 1.60
             switch (formData.franquia) {
                 case 'basica': break;
-                case 'reduzida': taxaCasco += 0.004; break;  // +0.4%
-                case 'super': taxaCasco += 0.025; break;     // +2.5%
+                case 'reduzida': taxaCasco *= 1.28; break;  // +28%
+                case 'super': taxaCasco *= 1.60; break;     // +60%
             }
             
-            // Modificadores de perfil
+            // Modificadores de perfil (calibrado com apólices reais)
             switch (formData.idade) {
-                case '18-25': taxaCasco *= 1.35; break;
-                case '26-35': taxaCasco *= 1.05; break;
-                case '36-45': break;
-                case '46-60': taxaCasco *= 0.95; break;
-                case '60+': taxaCasco *= 1.02; break;
+                case '18-25': taxaCasco *= 1.80; break;  // Jovem = risco MUITO alto (+80%)
+                case '26-35': taxaCasco *= 1.05; break;  // Adulto jovem
+                case '36-45': break;                      // Base (referência)
+                case '46-60': taxaCasco *= 0.92; break;  // Experiente = desconto
+                case '60+': taxaCasco *= 0.88; break;    // Sênior = bom desconto
             }
             
             switch (formData.garagem) {
@@ -1777,23 +1777,23 @@
                 case 'rua': taxaCasco *= 1.12; break;
             }
             
-            // Aplicar desconto de bônus (5% por classe)
-            const descontoBonusPct = novoBonus * 0.05;
+            // Aplicar desconto de bônus (3% por classe, máx 30%)
+            const descontoBonusPct = novoBonus * 0.03;
             taxaCasco = taxaCasco * (1 - descontoBonusPct);
             
             const valorCasco = fipe * taxaCasco;
             
             // ============================================================
-            // 3. RCF - Valores fixos com desconto de bônus
+            // 3. RCF - Valores calibrados Tokio Marine (Dez/2025)
             // ============================================================
             let valorRCFBase = 0;
             
             switch (formData.terceiros) {
-                case '100': valorRCFBase = 800; break;
-                case '150': valorRCFBase = 950; break;
-                case '200': valorRCFBase = 1100; break;
-                case '250': valorRCFBase = 1250; break;
-                case '300': valorRCFBase = 1400; break;
+                case '100': valorRCFBase = 540; break;   // Tokio: R$ 541
+                case '150': valorRCFBase = 450; break;   // Interpolado
+                case '200': valorRCFBase = 590; break;   // Tokio: R$ 593
+                case '250': valorRCFBase = 620; break;   // Interpolado
+                case '300': valorRCFBase = 660; break;   // Tokio: R$ 657
             }
             
             // Desconto de bônus no RCF (metade do desconto do casco)
@@ -1801,34 +1801,34 @@
             const valorRCF = valorRCFBase * (1 - descontoRCF);
             
             // ============================================================
-            // 4. EXTRAS - Valores fixos
+            // 4. EXTRAS - Valores calibrados Tokio Marine
             // ============================================================
             let valorExtras = 0;
             
-            // Assistência 24h (sempre inclusa)
-            valorExtras += 50;
+            // Assistência 24h (sempre inclusa) - Tokio: ~R$ 73
+            valorExtras += 73;
             
             // Carro reserva
             switch (formData.reserva) {
                 case '0': break;
-                case '7': valorExtras += 80; break;
-                case '15': valorExtras += 120; break;
-                case '30': valorExtras += 180; break;
+                case '7': valorExtras += 50; break;
+                case '15': valorExtras += 80; break;
+                case '30': valorExtras += 120; break;
             }
             
-            // Serviços extras
-            if (formData.extras.includes('vidros')) valorExtras += 60;
-            if (formData.extras.includes('martelinho')) valorExtras += 50;
-            if (formData.extras.includes('parachoque')) valorExtras += 50;
-            if (formData.extras.includes('pintura')) valorExtras += 50;
-            if (formData.extras.includes('pneu')) valorExtras += 60;
+            // Serviços extras (valores reduzidos - franquias de serviço)
+            if (formData.extras.includes('vidros')) valorExtras += 40;
+            if (formData.extras.includes('martelinho')) valorExtras += 35;
+            if (formData.extras.includes('parachoque')) valorExtras += 35;
+            if (formData.extras.includes('pintura')) valorExtras += 35;
+            if (formData.extras.includes('pneu')) valorExtras += 40;
             
-            // Reboque adicional
+            // Reboque adicional - Tokio: ~R$ 15/300km, ~R$ 48/ilimitado
             switch (formData.reboque) {
                 case '200': break;
-                case '400': valorExtras += 50; break;
-                case '600': valorExtras += 80; break;
-                case 'ilimitado': valorExtras += 120; break;
+                case '400': valorExtras += 15; break;
+                case '600': valorExtras += 30; break;
+                case 'ilimitado': valorExtras += 48; break;
             }
             
             // ============================================================
@@ -1839,9 +1839,9 @@
             // Adicionar IOF (7.38%)
             const premioTotal = premioLiquido * 1.0738;
             
-            // Margem: ±R$ 150 (faixa ~R$ 300)
-            const min = Math.round(premioTotal - 150);
-            const max = Math.round(premioTotal + 150);
+            // Margem: ±R$ 500 (faixa ~R$ 1.000 para cobrir variações de mercado)
+            const min = Math.round(premioTotal - 500);
+            const max = Math.round(premioTotal + 500);
             
             // Garantir que taxa fique entre 2.5% (bônus 10) e 7.8% (bônus 0 completo)
             const taxaFinal = (premioLiquido / fipe) * 100;
