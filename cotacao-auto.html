@@ -739,6 +739,82 @@
             display: block;
         }
 
+        /* Autocomplete Dropdown */
+        .autocomplete-wrapper {
+            position: relative;
+            width: 100%;
+        }
+
+        .autocomplete-input {
+            width: 100%;
+            padding: 1rem 1.25rem;
+            border: 2px solid #e5e9ec;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-family: inherit;
+            transition: all 0.3s ease;
+            background: var(--white);
+        }
+
+        .autocomplete-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(0, 136, 170, 0.1);
+        }
+
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--white);
+            border: 2px solid var(--primary);
+            border-top: none;
+            border-radius: 0 0 12px 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 20px rgba(0, 136, 170, 0.15);
+        }
+
+        .autocomplete-dropdown.show {
+            display: block;
+        }
+
+        .autocomplete-item {
+            padding: 0.875rem 1.25rem;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.2s ease;
+        }
+
+        .autocomplete-item:last-child {
+            border-bottom: none;
+        }
+
+        .autocomplete-item:hover,
+        .autocomplete-item.highlighted {
+            background: var(--light-bg);
+        }
+
+        .autocomplete-item.selected {
+            background: rgba(0, 136, 170, 0.1);
+            font-weight: 600;
+        }
+
+        .autocomplete-no-results {
+            padding: 1rem;
+            text-align: center;
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+
+        .autocomplete-input.has-value {
+            border-color: var(--success);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
         /* Responsive */
         @media (max-width: 480px) {
             .step-card {
@@ -882,22 +958,24 @@
         <div class="step-card" id="step3">
             <div class="step-icon">🚗</div>
             <h2 class="step-title">Me conta sobre seu carro</h2>
-            <p class="step-subtitle">Selecione as informações do veículo</p>
+            <p class="step-subtitle">Digite para buscar marca e modelo</p>
             
             <div class="select-group">
                 <label class="input-label">Marca</label>
-                <input type="text" class="search-input" id="searchMarca" placeholder="🔍 Digite para buscar..." oninput="filterSelect('marca', this.value)">
-                <select class="select-input" id="marca" onchange="loadModelos()">
-                    <option value="">Carregando marcas...</option>
-                </select>
+                <div class="autocomplete-wrapper">
+                    <input type="text" class="autocomplete-input" id="searchMarca" placeholder="Ex: Volkswagen, Fiat, Toyota..." autocomplete="off">
+                    <div class="autocomplete-dropdown" id="dropdownMarca"></div>
+                </div>
+                <input type="hidden" id="marca">
             </div>
 
             <div class="select-group">
                 <label class="input-label">Modelo</label>
-                <input type="text" class="search-input" id="searchModelo" placeholder="🔍 Digite para buscar..." oninput="filterSelect('modelo', this.value)">
-                <select class="select-input" id="modelo" onchange="loadAnos()" disabled>
-                    <option value="">Selecione a marca primeiro</option>
-                </select>
+                <div class="autocomplete-wrapper">
+                    <input type="text" class="autocomplete-input" id="searchModelo" placeholder="Selecione a marca primeiro..." autocomplete="off" disabled>
+                    <div class="autocomplete-dropdown" id="dropdownModelo"></div>
+                </div>
+                <input type="hidden" id="modelo">
             </div>
 
             <div class="select-group">
@@ -1235,21 +1313,21 @@
                         <span class="franquia-name">Franquia Básica</span>
                         <span class="franquia-value" id="franquiaBasica">~R$ 5.500</span>
                     </div>
-                    <div class="franquia-desc">Pago menos no seguro, mais se usar</div>
+                    <div class="franquia-desc">Preço base do casco</div>
                 </div>
                 <div class="franquia-card" onclick="selectFranquia(this, 'reduzida')">
                     <div class="franquia-header">
                         <span class="franquia-name">Franquia Reduzida (50%)</span>
                         <span class="franquia-value" id="franquiaReduzida">~R$ 2.750</span>
                     </div>
-                    <div class="franquia-desc">Equilíbrio custo-benefício</div>
+                    <div class="franquia-desc">+50% no casco | Metade da franquia</div>
                 </div>
                 <div class="franquia-card" onclick="selectFranquia(this, 'super')">
                     <div class="franquia-header">
                         <span class="franquia-name">Super Reduzida (25%)</span>
                         <span class="franquia-value" id="franquiaSuper">~R$ 1.375</span>
                     </div>
-                    <div class="franquia-desc">Pago mais no seguro, menos se usar</div>
+                    <div class="franquia-desc">+110% no casco | Franquia mínima</div>
                 </div>
             </div>
 
@@ -1361,140 +1439,201 @@
         const FIPE_API = 'https://parallelum.com.br/fipe/api/v1';
 
         async function loadMarcas() {
-            const marcaSelect = document.getElementById('marca');
-            
             try {
                 // Verifica cache
                 if (fipeCache.marcas) {
-                    populateMarcas(fipeCache.marcas);
+                    setupAutocomplete();
                     return;
                 }
-
-                marcaSelect.innerHTML = '<option value="">Carregando marcas...</option>';
                 
                 const response = await fetch(`${FIPE_API}/carros/marcas`);
                 if (!response.ok) throw new Error('Erro na API');
                 
                 const marcas = await response.json();
+                // Ordenar alfabeticamente
+                marcas.sort((a, b) => a.nome.localeCompare(b.nome));
                 fipeCache.marcas = marcas;
-                populateMarcas(marcas);
+                setupAutocomplete();
                 
             } catch (error) {
                 console.error('Erro ao carregar marcas:', error);
-                marcaSelect.innerHTML = '<option value="">Erro ao carregar - tente novamente</option>';
                 document.getElementById('fipeError').classList.add('show');
             }
         }
 
-        function populateMarcas(marcas) {
-            const marcaSelect = document.getElementById('marca');
-            marcaSelect.innerHTML = '<option value="">Selecione a marca</option>';
+        function setupAutocomplete() {
+            const searchMarca = document.getElementById('searchMarca');
+            const dropdownMarca = document.getElementById('dropdownMarca');
+            const searchModelo = document.getElementById('searchModelo');
+            const dropdownModelo = document.getElementById('dropdownModelo');
             
-            // Ordenar alfabeticamente
-            marcas.sort((a, b) => a.nome.localeCompare(b.nome));
-            
-            marcas.forEach(marca => {
-                const option = document.createElement('option');
-                option.value = marca.codigo;
-                option.textContent = marca.nome;
-                option.dataset.nome = marca.nome;
-                marcaSelect.appendChild(option);
+            // Autocomplete de Marca
+            searchMarca.addEventListener('input', function() {
+                const search = this.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                
+                if (search.length < 1) {
+                    dropdownMarca.classList.remove('show');
+                    return;
+                }
+                
+                const filtered = fipeCache.marcas.filter(m => 
+                    m.nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(search)
+                ).slice(0, 15); // Limita a 15 resultados
+                
+                renderDropdown(dropdownMarca, filtered, 'marca');
             });
-        }
-
-        // Função para filtrar opções do select baseado na busca
-        function filterSelect(selectId, searchTerm) {
-            const select = document.getElementById(selectId);
-            const options = select.querySelectorAll('option');
-            const search = searchTerm.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
             
-            let firstMatch = null;
-            
-            options.forEach((option, index) => {
-                if (index === 0) return; // Pula o placeholder
-                
-                const text = option.textContent.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-                const matches = text.includes(search);
-                
-                option.style.display = matches ? '' : 'none';
-                
-                if (matches && !firstMatch) {
-                    firstMatch = option;
+            searchMarca.addEventListener('focus', function() {
+                if (this.value.length >= 1 && dropdownMarca.children.length > 0) {
+                    dropdownMarca.classList.add('show');
                 }
             });
             
-            // Se houver match e o usuário digitou pelo menos 2 caracteres, seleciona o primeiro
-            if (firstMatch && searchTerm.length >= 2) {
-                // Destaca visualmente mas não seleciona automaticamente
-                select.value = '';
+            // Autocomplete de Modelo
+            searchModelo.addEventListener('input', function() {
+                const marcaCodigo = document.getElementById('marca').value;
+                if (!marcaCodigo || !fipeCache.modelos[marcaCodigo]) return;
+                
+                const search = this.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                
+                if (search.length < 1) {
+                    // Mostrar todos se não digitou nada
+                    const all = fipeCache.modelos[marcaCodigo].slice(0, 20);
+                    renderDropdown(dropdownModelo, all, 'modelo');
+                    return;
+                }
+                
+                const filtered = fipeCache.modelos[marcaCodigo].filter(m => 
+                    m.nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(search)
+                ).slice(0, 15);
+                
+                renderDropdown(dropdownModelo, filtered, 'modelo');
+            });
+            
+            searchModelo.addEventListener('focus', function() {
+                const marcaCodigo = document.getElementById('marca').value;
+                if (marcaCodigo && fipeCache.modelos[marcaCodigo]) {
+                    const search = this.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    let items;
+                    if (search.length < 1) {
+                        items = fipeCache.modelos[marcaCodigo].slice(0, 20);
+                    } else {
+                        items = fipeCache.modelos[marcaCodigo].filter(m => 
+                            m.nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(search)
+                        ).slice(0, 15);
+                    }
+                    renderDropdown(dropdownModelo, items, 'modelo');
+                }
+            });
+            
+            // Fechar dropdown ao clicar fora
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.autocomplete-wrapper')) {
+                    dropdownMarca.classList.remove('show');
+                    dropdownModelo.classList.remove('show');
+                }
+            });
+        }
+
+        function renderDropdown(dropdown, items, type) {
+            dropdown.innerHTML = '';
+            
+            if (items.length === 0) {
+                dropdown.innerHTML = '<div class="autocomplete-no-results">Nenhum resultado encontrado</div>';
+                dropdown.classList.add('show');
+                return;
+            }
+            
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'autocomplete-item';
+                div.textContent = item.nome;
+                div.dataset.codigo = item.codigo;
+                div.dataset.nome = item.nome;
+                
+                div.addEventListener('click', function() {
+                    selectAutocompleteItem(type, this.dataset.codigo, this.dataset.nome);
+                });
+                
+                dropdown.appendChild(div);
+            });
+            
+            dropdown.classList.add('show');
+        }
+
+        function selectAutocompleteItem(type, codigo, nome) {
+            if (type === 'marca') {
+                document.getElementById('marca').value = codigo;
+                document.getElementById('searchMarca').value = nome;
+                document.getElementById('searchMarca').classList.add('has-value');
+                document.getElementById('dropdownMarca').classList.remove('show');
+                
+                formData.marcaCodigo = codigo;
+                formData.marcaNome = nome;
+                
+                // Habilitar e carregar modelos
+                loadModelos();
+                
+            } else if (type === 'modelo') {
+                document.getElementById('modelo').value = codigo;
+                document.getElementById('searchModelo').value = nome;
+                document.getElementById('searchModelo').classList.add('has-value');
+                document.getElementById('dropdownModelo').classList.remove('show');
+                
+                formData.modeloCodigo = codigo;
+                formData.modeloNome = nome;
+                
+                // Carregar anos
+                loadAnos();
             }
         }
 
         async function loadModelos() {
-            const marcaCodigo = document.getElementById('marca').value;
-            const marcaSelect = document.getElementById('marca');
-            const modeloSelect = document.getElementById('modelo');
+            const marcaCodigo = formData.marcaCodigo;
+            const searchModelo = document.getElementById('searchModelo');
             const anoSelect = document.getElementById('ano');
             
-            // Limpar busca
-            document.getElementById('searchModelo').value = '';
-            
             // Reset
-            modeloSelect.innerHTML = '<option value="">Selecione o modelo</option>';
-            modeloSelect.disabled = true;
+            searchModelo.value = '';
+            searchModelo.placeholder = 'Carregando modelos...';
+            searchModelo.disabled = true;
+            searchModelo.classList.remove('has-value');
             anoSelect.innerHTML = '<option value="">Selecione o modelo primeiro</option>';
             anoSelect.disabled = true;
             document.getElementById('vehicleDisplay').style.display = 'none';
             document.getElementById('btnStep3').disabled = true;
             document.getElementById('fipeError').classList.remove('show');
+            document.getElementById('modelo').value = '';
             
             if (!marcaCodigo) return;
-            
-            // Salva marca selecionada
-            formData.marcaCodigo = marcaCodigo;
-            formData.marcaNome = marcaSelect.options[marcaSelect.selectedIndex].dataset.nome;
             
             try {
                 // Verifica cache
                 if (fipeCache.modelos[marcaCodigo]) {
-                    populateModelos(fipeCache.modelos[marcaCodigo]);
+                    searchModelo.placeholder = 'Digite para buscar modelo...';
+                    searchModelo.disabled = false;
                     return;
                 }
-
-                modeloSelect.innerHTML = '<option value="">Carregando modelos...</option>';
                 
                 const response = await fetch(`${FIPE_API}/carros/marcas/${marcaCodigo}/modelos`);
                 if (!response.ok) throw new Error('Erro na API');
                 
                 const data = await response.json();
                 fipeCache.modelos[marcaCodigo] = data.modelos;
-                populateModelos(data.modelos);
+                
+                searchModelo.placeholder = 'Digite para buscar modelo...';
+                searchModelo.disabled = false;
                 
             } catch (error) {
                 console.error('Erro ao carregar modelos:', error);
-                modeloSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+                searchModelo.placeholder = 'Erro ao carregar - tente novamente';
                 document.getElementById('fipeError').classList.add('show');
             }
         }
 
-        function populateModelos(modelos) {
-            const modeloSelect = document.getElementById('modelo');
-            modeloSelect.innerHTML = '<option value="">Selecione o modelo</option>';
-            modeloSelect.disabled = false;
-            
-            modelos.forEach(modelo => {
-                const option = document.createElement('option');
-                option.value = modelo.codigo;
-                option.textContent = modelo.nome;
-                option.dataset.nome = modelo.nome;
-                modeloSelect.appendChild(option);
-            });
-        }
-
         async function loadAnos() {
             const marcaCodigo = formData.marcaCodigo;
-            const modeloCodigo = document.getElementById('modelo').value;
-            const modeloSelect = document.getElementById('modelo');
+            const modeloCodigo = formData.modeloCodigo;
             const anoSelect = document.getElementById('ano');
             
             // Reset
@@ -1505,10 +1644,6 @@
             document.getElementById('fipeError').classList.remove('show');
             
             if (!modeloCodigo) return;
-            
-            // Salva modelo selecionado
-            formData.modeloCodigo = modeloCodigo;
-            formData.modeloNome = modeloSelect.options[modeloSelect.selectedIndex].dataset.nome;
             
             const cacheKey = `${marcaCodigo}-${modeloCodigo}`;
             
@@ -1540,7 +1675,6 @@
             anoSelect.innerHTML = '<option value="">Selecione o ano</option>';
             anoSelect.disabled = false;
             
-            // Filtra apenas anos (remove "32000-1" que é zero km genérico às vezes)
             anos.forEach(ano => {
                 const option = document.createElement('option');
                 option.value = ano.codigo;
@@ -1835,11 +1969,12 @@
                 case '60+':   taxaCasco *= 1.05; break;  // Sênior (+5% - risco volta)
             }
             
-            // Franquia (multiplicadores baseados em cotações reais)
+            // Franquia (multiplicadores AJUSTADOS)
+            // Básica agora tem acréscimo, reduzida e super mais agressivos
             switch (formData.franquia) {
-                case 'basica': break;
-                case 'reduzida': taxaCasco *= 1.28; break;  // +28%
-                case 'super': taxaCasco *= 1.60; break;     // +60%
+                case 'basica': taxaCasco *= 1.0; break;      // Base (sem acréscimo)
+                case 'reduzida': taxaCasco *= 1.50; break;   // +50% (era +28%)
+                case 'super': taxaCasco *= 2.10; break;      // +110% (era +60%)
             }
             
             // Garagem
