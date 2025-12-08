@@ -1614,122 +1614,103 @@
         // CALCULATOR - TAXAS AJUSTADAS
         // ============================================================
         function calcularResultado() {
-            const fipe = formData.valorFipe;
-            
+            const fipe = formData.valorFipe || 0;
+
             // ============================================================
-            // TAXA BASE AGRESSIVA: 3.5% para bônus 0
-            // Descontos de bônus aplicados sobre a taxa
+            // MOTOR RETORNO v1 - CÁLCULO DO PRÊMIO
             // ============================================================
-            let taxaBase = 0.035; // 3.5% base
-            
-            // Fator de desconto por bônus
-            const descontosBonus = {
-                '0': 1.00,      // Sem desconto
-                '1': 0.90,      // 10% desconto
-                '2': 0.85,      // 15% desconto
-                '3': 0.80,      // 20% desconto
-                '4': 0.75,      // 25% desconto
-                '5': 0.70,      // 30% desconto
-                '6': 0.70,      // 30% desconto
-                '7': 0.70,      // 30% desconto
-                '8': 0.65,      // 35% desconto
-                '9': 0.65,      // 35% desconto
-                '10': 0.65,     // 35% desconto
-                'naosei': 0.85  // Conservador
+
+            // 1) Taxa base por faixa de idade (para bônus 0)
+            const baseRateByAge = {
+                '18-25': 0.041, // 4,10% da FIPE
+                '26-35': 0.033, // 3,30%
+                '36-45': 0.028, // 2,80%
+                '46-60': 0.025, // 2,50%
+                '60+':   0.027  // 2,70% - ligeiramente mais agressivo
             };
-            
-            // Se for seguro novo, usa taxa um pouco maior e sem desconto de bônus
-            if (formData.tipoSeguro === 'novo') {
-                taxaBase = 0.045; // 4.5% para quem não tem seguro
-            } else {
-                // Aplica desconto de bônus
-                const fatorBonus = descontosBonus[formData.bonus] || 1.00;
-                taxaBase = taxaBase * fatorBonus;
-            }
-            
-            // Valor base do casco
-            let valorCasco = fipe * taxaBase;
-            
-            // ============================================================
-            // MODIFICADORES DE PERFIL
-            // ============================================================
-            
-            // Idade do condutor
-            switch (formData.idade) {
-                case '18-25': valorCasco *= 1.35; break;
-                case '26-35': valorCasco *= 1.08; break;
-                case '36-45': break; // base
-                case '46-60': break; // base
-                case '60+': valorCasco *= 1.03; break;
-            }
-            
-            // Local de pernoite
-            switch (formData.garagem) {
-                case 'fechada': valorCasco *= 0.92; break;
-                case 'aberto': break; // base
-                case 'rua': valorCasco *= 1.12; break;
-            }
-            
-            // Sinistro na vigência anterior
-            if (formData.sinistro === 'sim') {
-                valorCasco *= 1.15;
-            }
-            
-            // Tipo de franquia
+
+            const idadeFaixa = formData.idade || '36-45';
+            let taxaBase = baseRateByAge[idadeFaixa] || 0.028;
+
+            // 2) Bônus / Seguro novo
+            let bonusClasse = (formData.tipoSeguro === 'novo') ? 0 : parseInt(formData.bonus || '0', 10);
+            let fatorBonus = 1 - 0.05 * bonusClasse;
+            if (fatorBonus < 0.5) fatorBonus = 0.5; // nunca dá mais que 50% de desconto
+
+            let taxa = taxaBase * fatorBonus;
+
+            // 3) Fatores de coberturas
+            let fatorTotal = 1.0;
+
+            // Franquia
             switch (formData.franquia) {
-                case 'basica': break;
-                case 'reduzida': valorCasco *= 1.20; break;
-                case 'super': valorCasco *= 1.40; break;
+                case 'reduzida':
+                    fatorTotal *= 1.15;
+                    break;
+                case 'super':
+                    fatorTotal *= 1.30;
+                    break;
+                // 'basica' ou vazio mantêm 1.0
             }
-            
-            // ============================================================
-            // ADICIONAIS (valores fixos de mercado)
-            // ============================================================
-            let adicionais = 0;
-            
-            // Assistência 24h básica (sempre inclusa)
-            adicionais += 80;
-            
-            // RCF - Responsabilidade Civil Facultativa
-            switch (formData.terceiros) {
-                case '50': adicionais += 250; break;
-                case '100': adicionais += 450; break;
-                case '200': adicionais += 1100; break;
-                case '300': adicionais += 1500; break;
+
+            // Terceiros (RCF)
+            const rcfMap = {
+                '50': 0.98,
+                '100': 1.00,
+                '150': 1.05,
+                '200': 1.10,
+                '250': 1.15,
+                '300': 1.20
+            };
+            if (formData.terceiros && rcfMap[formData.terceiros]) {
+                fatorTotal *= rcfMap[formData.terceiros];
             }
-            
+
+            // Reboque
+            const reboqueMap = {
+                '200': 1.00,
+                '400': 1.04,
+                '600': 1.08,
+                'ilimitado': 1.12
+            };
+            if (formData.reboque && reboqueMap[formData.reboque]) {
+                fatorTotal *= reboqueMap[formData.reboque];
+            }
+
             // Carro reserva
-            switch (formData.reserva) {
-                case '7': adicionais += 70; break;
-                case '15': adicionais += 130; break;
-                case '30': adicionais += 220; break;
+            const reservaMap = {
+                '0':  1.00,
+                '7':  1.03,
+                '15': 1.06,
+                '30': 1.09
+            };
+            if (typeof formData.reserva !== 'undefined' && reservaMap[formData.reserva]) {
+                fatorTotal *= reservaMap[formData.reserva];
             }
-            
+
             // Serviços extras
-            if (formData.extras.includes('vidros')) adicionais += 90;
-            if (formData.extras.includes('martelinho')) adicionais += 70;
-            if (formData.extras.includes('parachoque')) adicionais += 85;
-            if (formData.extras.includes('pintura')) adicionais += 70;
-            if (formData.extras.includes('pneu')) adicionais += 100;
-            
-            // Reboque adicional
-            switch (formData.reboque) {
-                case '200': break; // padrão
-                case '400': adicionais += 25; break;
-                case '600': adicionais += 50; break;
-                case 'ilimitado': adicionais += 100; break;
+            let fatorExtras = 1.0;
+            if (Array.isArray(formData.extras)) {
+                if (formData.extras.includes('vidros'))      fatorExtras += 0.03;
+                if (formData.extras.includes('martelinho'))  fatorExtras += 0.02;
+                if (formData.extras.includes('parachoque'))  fatorExtras += 0.02;
+                if (formData.extras.includes('pintura'))     fatorExtras += 0.02;
+                if (formData.extras.includes('pneu'))        fatorExtras += 0.03;
             }
-            
+            fatorTotal *= fatorExtras;
+
+            // 4) Taxa final e prêmio estimado
+            const taxaFinal = taxa * fatorTotal;
+            const premioEstimado = fipe * taxaFinal;
+
             // ============================================================
-            // CÁLCULO FINAL
-            // ============================================================
-            const total = valorCasco + adicionais;
-            
-            // Margem de 8% para cima e para baixo (mais apertada)
-            const min = Math.round(total * 0.92);
-            const max = Math.round(total * 1.08);
-            
-            formData.valorEstimadoMin = min;
+const total = premioEstimado;
+
+            // Intervalo para exibição (faixa comercial)
+            const min = Math.round(total * 0.93); // -7%
+            const max = Math.round(total * 1.07); // +7%
+
+formData.valorEstimadoMin = min;
             formData.valorEstimadoMax = max;
             
             const parcelaMin = Math.round(min / 12);
@@ -1795,6 +1776,7 @@
             salvarLead();
             
             showStep(12);
+        }
         }
 
         // ============================================================
