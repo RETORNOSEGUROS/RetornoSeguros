@@ -2,7 +2,7 @@
 // SISTEMA DE PROJEÇÕES E METAS - RETORNO SEGUROS v2.3
 // ================================================================================
 
-console.log("=== Projecoes.js v2.3 ===");
+console.log("=== Projecoes.js v2.3 COMPLETO ===");
 
 if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -57,9 +57,7 @@ auth.onAuthStateChanged(async user => {
   await initSistema();
 });
 
-// INIT
 async function initSistema() {
-  // Tabs
   document.querySelectorAll('.tab').forEach(btn => {
     btn.addEventListener('click', () => {
       const tab = btn.getAttribute('data-tab');
@@ -200,7 +198,6 @@ function atualizarFiltroRamos() {
   });
 }
 
-// PLANEJAMENTOS
 async function carregarPlanejamentos() {
   if (!ESTADO.agenciaId) return;
   try {
@@ -279,9 +276,7 @@ async function excluirPlanejamento(planId) {
     checksSnap.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
     
-    if (ESTADO.planejamentoId === planId) {
-      limparMetas();
-    }
+    if (ESTADO.planejamentoId === planId) limparMetas();
     await carregarPlanejamentos();
     alert('Planejamento excluído!');
   } catch (e) { console.error(e); alert('Erro: ' + e.message); }
@@ -313,7 +308,6 @@ async function carregarPlanejamento() {
   renderizarPlanejamentosSalvos();
 }
 
-// RAMOS
 function renderizarRamos() {
   const container = $('ramosGrid');
   container.innerHTML = '';
@@ -358,9 +352,7 @@ function restaurarSelecoes() {
     if (item) {
       item.classList.add('selected');
       const input = item.querySelector('input');
-      if (input && ESTADO.metas[ramoId]?.anual) {
-        input.value = toBRL(ESTADO.metas[ramoId].anual);
-      }
+      if (input && ESTADO.metas[ramoId]?.anual) input.value = toBRL(ESTADO.metas[ramoId].anual);
     }
   });
   atualizarTotalBar();
@@ -408,10 +400,7 @@ function atualizarTotalBar() {
   }
 }
 
-function formatarInputMoeda(input) {
-  const v = parseBRL(input.value);
-  if (v > 0) input.value = toBRL(v);
-}
+function formatarInputMoeda(input) { const v = parseBRL(input.value); if (v > 0) input.value = toBRL(v); }
 
 function limparMetas() {
   ESTADO.metas = {};
@@ -426,7 +415,6 @@ function limparMetas() {
   atualizarFiltroRamos();
 }
 
-// SALVAR
 async function salvarEGerarPlanejamento() {
   if (!ESTADO.agenciaId) return alert('Selecione uma agência');
   if (ESTADO.ramosSelecionados.length === 0) return alert('Selecione pelo menos um ramo');
@@ -456,10 +444,7 @@ async function salvarEGerarPlanejamento() {
     
     await carregarPlanejamentos();
     alert('Planejamento salvo!');
-  } catch (e) {
-    console.error("[salvar]", e);
-    alert('Erro: ' + e.message);
-  }
+  } catch (e) { console.error("[salvar]", e); alert('Erro: ' + e.message); }
 }
 
 // DISTRIBUIÇÃO
@@ -475,7 +460,6 @@ function gerarDistribuicao() {
   
   let gerentesExibir = CACHE.gerentes;
   if (filtroGerente) gerentesExibir = CACHE.gerentes.filter(g => g.id === filtroGerente);
-  
   if (gerentesExibir.length === 0) {
     container.innerHTML = '<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-title">Nenhum gerente</div></div>';
     return;
@@ -487,105 +471,45 @@ function gerarDistribuicao() {
   let html = '';
   gerentesExibir.forEach(gerente => {
     const empresasGerente = CACHE.empresas.filter(e => e.rmUid === gerente.id);
-    
-    html += `
-      <div class="card" style="margin-bottom:24px">
-        <div class="card-header">
-          <div class="card-title">
-            <div class="card-icon" style="background:var(--accent-bg)">${getIniciais(gerente.nome)}</div>
-            <div>
-              <div>${gerente.nome}</div>
-              <div style="font-size:12px;color:var(--text-muted)">${empresasGerente.length} empresas</div>
-            </div>
-          </div>
-          <button class="btn btn-secondary" onclick="sortearEmpresas('${gerente.id}')">🎲 Sortear</button>
-        </div>
-        <div class="months-grid">
-    `;
+    html += `<div class="card" style="margin-bottom:24px"><div class="card-header"><div class="card-title"><div class="card-icon" style="background:var(--accent-bg)">${getIniciais(gerente.nome)}</div><div><div>${gerente.nome}</div><div style="font-size:12px;color:var(--text-muted)">${empresasGerente.length} empresas</div></div></div><button class="btn btn-secondary" onclick="sortearEmpresas('${gerente.id}')">🎲 Sortear</button></div><div class="months-grid">`;
     
     MESES.forEach((mes, idx) => {
       const mesNum = idx + 1;
-      html += `
-        <div class="month-card">
-          <div class="month-header">
-            <div class="month-name">${mes}</div>
-            <div class="month-meta">${ESTADO.ano}</div>
-          </div>
-          <div class="month-body">
-      `;
+      html += `<div class="month-card"><div class="month-header"><div class="month-name">${mes}</div><div class="month-meta">${ESTADO.ano}</div></div><div class="month-body">`;
       
       ramosExibir.forEach(ramoId => {
         const ramo = RAMOS_CONFIG[ramoId];
         const meta = ESTADO.metas[ramoId];
         if (!ramo || !meta) return;
-        
         const empresasSalvas = ESTADO.distribuicao?.[gerente.id]?.[mesNum]?.[ramoId] || [];
-        
-        html += `
-          <div class="month-ramo">
-            <div class="month-ramo-header">
-              <div class="month-ramo-title"><span>${ramo.icon}</span><span>${ramo.nome}</span></div>
-              <div class="month-ramo-meta">Meta: ${toBRLCompact(meta.porGerente)}/mês</div>
-            </div>
-            <div class="empresas-slots">
-        `;
+        html += `<div class="month-ramo"><div class="month-ramo-header"><div class="month-ramo-title"><span>${ramo.icon}</span><span>${ramo.nome}</span></div><div class="month-ramo-meta">Meta: ${toBRLCompact(meta.porGerente)}/mês</div></div><div class="empresas-slots">`;
         
         for (let i = 0; i < 3; i++) {
           const slotId = `${gerente.id}-${mesNum}-${ramoId}-${i}`;
           const empresaId = empresasSalvas[i];
           const empresa = empresaId ? CACHE.empresas.find(e => e.id === empresaId) : null;
-          
           if (empresa) {
             const func = empresa.funcionariosQtd || empresa.numFuncionarios || 0;
             const potencial = func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
-            html += `
-              <div class="empresa-slot filled" data-slot="${slotId}" data-empresa="${empresa.id}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')">
-                <div class="slot-number">✓</div>
-                <div class="slot-content">
-                  <div class="slot-empresa">${empresa.nome}</div>
-                  <div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • ' + func + ' func.' : ''}</div>
-                </div>
-              </div>
-            `;
+            html += `<div class="empresa-slot filled" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')"><div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${empresa.nome}</div><div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • '+func+' func.' : ''}</div></div></div>`;
           } else {
-            html += `
-              <div class="empresa-slot" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')">
-                <div class="slot-number">${i + 1}</div>
-                <div class="slot-content">
-                  <div class="slot-empresa">Selecionar empresa...</div>
-                </div>
-              </div>
-            `;
+            html += `<div class="empresa-slot" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')"><div class="slot-number">${i+1}</div><div class="slot-content"><div class="slot-empresa">Selecionar empresa...</div></div></div>`;
           }
         }
         html += '</div></div>';
       });
-      
       html += '</div></div>';
     });
-    
-    html += `
-        </div>
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
-          <button class="btn btn-primary" onclick="salvarDistribuicaoGerente('${gerente.id}')">💾 Salvar Distribuição</button>
-        </div>
-      </div>
-    `;
+    html += `</div><div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end"><button class="btn btn-primary" onclick="salvarDistribuicaoGerente('${gerente.id}')">💾 Salvar Distribuição</button></div></div>`;
   });
-  
   container.innerHTML = html;
 }
 
 function sortearEmpresas(gerenteId) {
   const gerente = CACHE.gerentes.find(g => g.id === gerenteId);
   if (!gerente) return;
-  
   const empresasGerente = CACHE.empresas.filter(e => e.rmUid === gerenteId);
-  if (empresasGerente.length === 0) {
-    alert('Este gerente não possui empresas');
-    return;
-  }
-  
+  if (empresasGerente.length === 0) { alert('Este gerente não possui empresas'); return; }
   if (!ESTADO.distribuicao[gerenteId]) ESTADO.distribuicao[gerenteId] = {};
   
   ESTADO.ramosSelecionados.forEach(ramoId => {
@@ -603,34 +527,22 @@ function sortearEmpresas(gerenteId) {
       if (idx >= embaralhadas.length) idx = 0;
     }
   });
-  
   gerarDistribuicao();
   alert('Empresas sorteadas para ' + gerente.nome + '! Salve para confirmar.');
 }
 
 async function salvarDistribuicaoGerente(gerenteId) {
-  if (!ESTADO.planejamentoId) {
-    alert('Salve o planejamento primeiro na aba "Configurar Metas"');
-    return;
-  }
-  
+  if (!ESTADO.planejamentoId) { alert('Salve o planejamento primeiro na aba "Configurar Metas"'); return; }
   try {
-    await db.collection('projecoes').doc(ESTADO.planejamentoId).update({
-      distribuicao: ESTADO.distribuicao,
-      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    await db.collection('projecoes').doc(ESTADO.planejamentoId).update({ distribuicao: ESTADO.distribuicao, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() });
     await gerarChecklistsGerente(gerenteId);
     alert('Distribuição salva e checklists gerados!');
-  } catch (e) {
-    console.error("[salvarDistribuicaoGerente]", e);
-    alert('Erro: ' + e.message);
-  }
+  } catch (e) { console.error("[salvarDistribuicaoGerente]", e); alert('Erro: ' + e.message); }
 }
 
 async function gerarChecklistsGerente(gerenteId) {
   const distGerente = ESTADO.distribuicao[gerenteId];
   if (!distGerente) return;
-  
   const gerente = CACHE.gerentes.find(g => g.id === gerenteId);
   const batch = db.batch();
   
@@ -638,50 +550,27 @@ async function gerarChecklistsGerente(gerenteId) {
     for (const [ramoId, empresaIds] of Object.entries(ramos)) {
       const ramoConfig = RAMOS_CONFIG[ramoId];
       if (!ramoConfig) continue;
-      
       for (const empresaId of empresaIds) {
         if (!empresaId) continue;
-        
         const empresa = CACHE.empresas.find(e => e.id === empresaId);
         const visita = CACHE.visitas[empresaId];
         const checklistId = `${ESTADO.ano}-${mes}-${empresaId}-${ramoId}`;
-        
         const checksStatus = {};
         ramoConfig.checklist.forEach(item => {
           if (item.auto) {
             let autoConcluido = false;
-            if (item.fonte === 'funcionarios') {
-              autoConcluido = (empresa?.funcionariosQtd || empresa?.numFuncionarios || 0) > 0;
-            } else if (item.fonte === 'visita') {
-              autoConcluido = !!visita?.ramos?.[ramoConfig.visitaStatus];
-            }
+            if (item.fonte === 'funcionarios') autoConcluido = (empresa?.funcionariosQtd || empresa?.numFuncionarios || 0) > 0;
+            else if (item.fonte === 'visita') autoConcluido = !!visita?.ramos?.[ramoConfig.visitaStatus];
             checksStatus[item.id] = { concluido: autoConcluido, auto: true, concluidoEm: autoConcluido ? new Date() : null };
           } else {
             checksStatus[item.id] = { concluido: false, auto: false, concluidoEm: null };
           }
         });
-        
-        const checklistDoc = {
-          id: checklistId,
-          ano: ESTADO.ano,
-          mes: parseInt(mes),
-          empresaId,
-          empresaNome: empresa?.nome || '',
-          ramoId,
-          ramoNome: ramoConfig.nome,
-          gerenteId,
-          gerenteNome: gerente?.nome || '',
-          agenciaId: ESTADO.agenciaId,
-          projecaoId: ESTADO.planejamentoId,
-          checks: checksStatus,
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        
+        const checklistDoc = { id: checklistId, ano: ESTADO.ano, mes: parseInt(mes), empresaId, empresaNome: empresa?.nome || '', ramoId, ramoNome: ramoConfig.nome, gerenteId, gerenteNome: gerente?.nome || '', agenciaId: ESTADO.agenciaId, projecaoId: ESTADO.planejamentoId, checks: checksStatus, criadoEm: firebase.firestore.FieldValue.serverTimestamp() };
         batch.set(db.collection('projecoes-checklist').doc(checklistId), checklistDoc, { merge: true });
       }
     }
   }
-  
   await batch.commit();
 }
 
@@ -689,53 +578,29 @@ async function gerarChecklistsGerente(gerenteId) {
 let SLOT_ATUAL = null, RAMO_ATUAL = null, GERENTE_ATUAL = null, EMP_SELECIONADA = null;
 
 function abrirSeletorEmpresa(slotId, ramoId, gerenteId) {
-  SLOT_ATUAL = slotId;
-  RAMO_ATUAL = ramoId;
-  GERENTE_ATUAL = gerenteId;
-  EMP_SELECIONADA = null;
+  SLOT_ATUAL = slotId; RAMO_ATUAL = ramoId; GERENTE_ATUAL = gerenteId; EMP_SELECIONADA = null;
   renderizarListaEmpresas();
   $('modalEmpresa').classList.add('active');
 }
 
-function fecharModalEmpresa() {
-  $('modalEmpresa').classList.remove('active');
-}
+function fecharModalEmpresa() { $('modalEmpresa').classList.remove('active'); }
 
 function renderizarListaEmpresas(filtro = '') {
   const container = $('empresaList');
   const ramo = RAMOS_CONFIG[RAMO_ATUAL];
-  
-  let lista = CACHE.empresas
-    .filter(e => e.rmUid === GERENTE_ATUAL)
-    .filter(e => !filtro || e.nome?.toLowerCase().includes(filtro.toLowerCase()))
-    .map(emp => {
-      const visita = CACHE.visitas[emp.id];
-      const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
-      let status = visita?.ramos?.[ramo.visitaStatus]?.status || 'nao-mapeado';
-      let potencial = ramo.campoAuto && func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
-      return { ...emp, potencial, status, funcionarios: func };
-    });
-  
+  let lista = CACHE.empresas.filter(e => e.rmUid === GERENTE_ATUAL).filter(e => !filtro || e.nome?.toLowerCase().includes(filtro.toLowerCase())).map(emp => {
+    const visita = CACHE.visitas[emp.id];
+    const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
+    let status = visita?.ramos?.[ramo.visitaStatus]?.status || 'nao-mapeado';
+    let potencial = ramo.campoAuto && func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
+    return { ...emp, potencial, status, funcionarios: func };
+  });
   lista.sort((a, b) => b.potencial - a.potencial);
-  
-  if (lista.length === 0) {
-    container.innerHTML = '<div class="empty-state"><p>Nenhuma empresa deste gerente</p></div>';
-    return;
-  }
-  
-  container.innerHTML = lista.slice(0, 50).map(e => `
-    <div class="empresa-option" data-id="${e.id}" onclick="selecionarEmpresaModal('${e.id}')">
-      <div style="flex:1">
-        <div style="font-weight:600">${e.nome}</div>
-        <div style="font-size:12px;color:var(--text-muted)">${e.funcionarios > 0 ? e.funcionarios + ' func. • ' : ''}Potencial: ${toBRLCompact(e.potencial)}/mês</div>
-      </div>
-    </div>
-  `).join('');
+  if (lista.length === 0) { container.innerHTML = '<div class="empty-state"><p>Nenhuma empresa deste gerente</p></div>'; return; }
+  container.innerHTML = lista.slice(0, 50).map(e => `<div class="empresa-option" data-id="${e.id}" onclick="selecionarEmpresaModal('${e.id}')"><div style="flex:1"><div style="font-weight:600">${e.nome}</div><div style="font-size:12px;color:var(--text-muted)">${e.funcionarios > 0 ? e.funcionarios + ' func. • ' : ''}Potencial: ${toBRLCompact(e.potencial)}/mês</div></div></div>`).join('');
 }
 
-function filtrarEmpresasModal() {
-  renderizarListaEmpresas($('buscaEmpresa').value);
-}
+function filtrarEmpresasModal() { renderizarListaEmpresas($('buscaEmpresa').value); }
 
 function selecionarEmpresaModal(id) {
   document.querySelectorAll('.empresa-option.selected').forEach(el => el.classList.remove('selected'));
@@ -745,112 +610,188 @@ function selecionarEmpresaModal(id) {
 
 function confirmarEmpresa() {
   if (!EMP_SELECIONADA || !SLOT_ATUAL) return alert('Selecione uma empresa');
-  
   const emp = CACHE.empresas.find(e => e.id === EMP_SELECIONADA);
   if (!emp) return;
-  
   const ramo = RAMOS_CONFIG[RAMO_ATUAL];
   const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
   const potencial = func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
-  
   const slot = document.querySelector(`[data-slot="${SLOT_ATUAL}"]`);
   if (slot) {
     slot.classList.add('filled');
-    slot.innerHTML = `
-      <div class="slot-number">✓</div>
-      <div class="slot-content">
-        <div class="slot-empresa">${emp.nome}</div>
-        <div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • ' + func + ' func.' : ''}</div>
-      </div>
-    `;
+    slot.innerHTML = `<div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${emp.nome}</div><div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • '+func+' func.' : ''}</div></div>`;
     slot.setAttribute('data-empresa', emp.id);
   }
-  
   const [gerenteId, mes, ramoId, slotIdx] = SLOT_ATUAL.split('-');
   const mesNum = parseInt(mes);
   const slotNum = parseInt(slotIdx);
-  
   if (!ESTADO.distribuicao[gerenteId]) ESTADO.distribuicao[gerenteId] = {};
   if (!ESTADO.distribuicao[gerenteId][mesNum]) ESTADO.distribuicao[gerenteId][mesNum] = {};
   if (!ESTADO.distribuicao[gerenteId][mesNum][ramoId]) ESTADO.distribuicao[gerenteId][mesNum][ramoId] = [];
   ESTADO.distribuicao[gerenteId][mesNum][ramoId][slotNum] = emp.id;
-  
   fecharModalEmpresa();
 }
-="color:#64748b;font-size:12px">Em Andamento</div>
-        </div>
-        <div style="flex:1;background:#fef2f2;border-radius:10px;padding:16px;text-align:center;border-left:4px solid #ef4444">
-          <div style="font-size:32px;font-weight:700;color:#ef4444">${atrasados}</div>
-          <div style="color:#64748b;font-size:12px">Com Atraso</div>
-        </div>
-      </div>
-  `;
+
+// CHECKLIST - FUNÇÕES COMPLETAS
+async function renderizarChecklists() {
+  const container = $('checklistContent');
+  const filtroGerente = $('filtroGerenteCheck')?.value;
+  const filtroMes = $('filtroMesCheck')?.value;
+  const filtroRamo = $('filtroRamoCheck')?.value;
   
-  // Agrupar por mês
-  const porMes = {};
-  CACHE.checklistsData.forEach(data => {
-    if (!porMes[data.mes]) porMes[data.mes] = [];
-    porMes[data.mes].push(data);
+  container.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title">Carregando...</div></div>';
+  
+  try {
+    let query = db.collection('projecoes-checklist').where('agenciaId', '==', ESTADO.agenciaId).where('ano', '==', ESTADO.ano);
+    if (filtroGerente) query = query.where('gerenteId', '==', filtroGerente);
+    if (filtroMes) query = query.where('mes', '==', parseInt(filtroMes));
+    if (filtroRamo) query = query.where('ramoId', '==', filtroRamo);
+    
+    const snap = await query.get();
+    if (snap.empty) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">Nenhum checklist</div><p>Distribua empresas e salve para gerar checklists</p></div>';
+      return;
+    }
+    
+    CACHE.checklistsData = [];
+    snap.forEach(doc => CACHE.checklistsData.push({ docId: doc.id, ...doc.data() }));
+    
+    // Agrupar por gerente e mês
+    const agrupado = {};
+    CACHE.checklistsData.forEach(data => {
+      const key = `${data.gerenteId}-${data.mes}`;
+      if (!agrupado[key]) agrupado[key] = { gerenteId: data.gerenteId, gerenteNome: data.gerenteNome || 'Gerente', mes: data.mes, items: [] };
+      agrupado[key].items.push(data);
+    });
+    
+    let html = '';
+    Object.values(agrupado).sort((a, b) => a.mes - b.mes || a.gerenteNome.localeCompare(b.gerenteNome)).forEach(grupo => {
+      html += `<div class="checklist-grupo"><div class="checklist-grupo-header">${grupo.gerenteNome} - ${MESES[grupo.mes - 1]} ${ESTADO.ano}</div>`;
+      
+      grupo.items.forEach(data => {
+        const ramoConfig = RAMOS_CONFIG[data.ramoId];
+        if (!ramoConfig) return;
+        const totalChecks = ramoConfig.checklist.length;
+        const checksConcluidos = Object.values(data.checks || {}).filter(c => c.concluido).length;
+        const progresso = Math.round((checksConcluidos / totalChecks) * 100);
+        const atrasados = ramoConfig.checklist.filter(item => { const st = data.checks?.[item.id]; return !st?.concluido && new Date().getDate() > item.prazo; }).length;
+        
+        let corBarra = '#3b82f6';
+        if (progresso >= 100) corBarra = '#10b981';
+        else if (progresso >= 50) corBarra = '#f59e0b';
+        else if (progresso < 25) corBarra = '#ef4444';
+        
+        html += `<div class="checklist-row" onclick="toggleChecklistDetail('${data.docId}')">
+          <div class="checklist-row-icon">${ramoConfig.icon}</div>
+          <div class="checklist-row-info"><div class="checklist-row-empresa">${data.empresaNome}</div><div class="checklist-row-ramo">${ramoConfig.nome}</div></div>
+          <div class="checklist-row-progress"><div class="mini-progress-bar"><div class="mini-progress-fill" style="width:${progresso}%;background:${corBarra}"></div></div><span class="progress-text" style="color:${corBarra}">${progresso}%</span></div>
+          ${atrasados > 0 ? `<div class="checklist-row-alert">⚠️ ${atrasados}</div>` : ''}
+          <div class="checklist-row-arrow">▼</div>
+        </div>
+        <div class="checklist-detail" id="detail-${data.docId}"><div class="checklist-items">`;
+        
+        ramoConfig.checklist.forEach(item => {
+          const checkStatus = data.checks?.[item.id] || {};
+          const concluido = checkStatus.concluido;
+          const atrasado = !concluido && new Date().getDate() > item.prazo;
+          html += `<div class="checklist-item ${concluido ? 'done' : ''} ${atrasado ? 'late' : ''}">
+            <div class="check-box" onclick="event.stopPropagation();toggleCheck('${data.docId}', ${item.id})">${concluido ? '✓' : ''}</div>
+            <div class="check-content"><div class="check-title">${item.texto}${item.auto ? '<span class="badge-auto">AUTO</span>' : ''}</div><div class="check-meta">Prazo: dia ${item.prazo}${atrasado ? '<span class="check-late">⚠️ ATRASADO</span>' : ''}</div></div>
+          </div>`;
+        });
+        html += `</div></div>`;
+      });
+      html += `</div>`;
+    });
+    container.innerHTML = html;
+  } catch (e) {
+    console.error("[renderizarChecklists]", e);
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">❌</div><div class="empty-title">Erro ao carregar</div><p>' + e.message + '</p></div>';
+  }
+}
+
+function toggleChecklistDetail(docId) {
+  const detail = document.getElementById('detail-' + docId);
+  document.querySelectorAll('.checklist-detail').forEach(d => { if (d.id !== 'detail-' + docId) { d.classList.remove('open'); d.style.display = 'none'; } });
+  document.querySelectorAll('.checklist-row').forEach(r => { if (!r.nextElementSibling || r.nextElementSibling.id !== 'detail-' + docId) r.classList.remove('open'); });
+  if (detail) {
+    const isOpen = detail.classList.contains('open');
+    detail.classList.toggle('open', !isOpen);
+    detail.style.display = isOpen ? 'none' : 'block';
+    detail.previousElementSibling?.classList.toggle('open', !isOpen);
+  }
+}
+
+async function toggleCheck(docId, itemId) {
+  try {
+    const ref = db.collection('projecoes-checklist').doc(docId);
+    const doc = await ref.get();
+    if (!doc.exists) return;
+    const data = doc.data();
+    const atual = data.checks?.[itemId]?.concluido || false;
+    await ref.update({ [`checks.${itemId}.concluido`]: !atual, [`checks.${itemId}.concluidoEm`]: !atual ? new Date() : null, [`checks.${itemId}.concluidoPor`]: !atual ? CTX.uid : null });
+    renderizarChecklists();
+  } catch (e) { console.error("[toggleCheck]", e); }
+}
+
+// GERAR PDF
+async function gerarPDFChecklist() {
+  if (CACHE.checklistsData.length === 0) { alert('Nenhum checklist para exportar. Aplique os filtros desejados primeiro.'); return; }
+  
+  const filtroGerente = $('filtroGerenteCheck')?.value;
+  const filtroMes = $('filtroMesCheck')?.value;
+  const gerente = filtroGerente ? CACHE.gerentes.find(g => g.id === filtroGerente) : null;
+  const mesNome = filtroMes ? MESES[parseInt(filtroMes) - 1] : 'Todos os meses';
+  const agencia = CACHE.agencias.find(a => a.id === ESTADO.agenciaId);
+  
+  const totalChecklists = CACHE.checklistsData.length;
+  let concluidos = 0, emAndamento = 0, atrasados = 0;
+  CACHE.checklistsData.forEach(c => {
+    const ramoConfig = RAMOS_CONFIG[c.ramoId];
+    if (!ramoConfig) return;
+    const total = ramoConfig.checklist.length;
+    const done = Object.values(c.checks || {}).filter(ch => ch.concluido).length;
+    if (done === total) concluidos++;
+    else emAndamento++;
+    if (ramoConfig.checklist.some(item => !c.checks?.[item.id]?.concluido && new Date().getDate() > item.prazo)) atrasados++;
   });
+  
+  let htmlPDF = `<div style="font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:30px;color:#1e293b">
+    <div style="text-align:center;margin-bottom:30px;padding-bottom:20px;border-bottom:3px solid #2563eb">
+      <h1 style="color:#1e3a5f;margin:0 0 10px;font-size:26px">📊 Relatório de Projeções e Metas</h1>
+      <p style="color:#64748b;margin:0;font-size:14px">${agencia?.nome || 'Agência'} • ${ESTADO.ano}</p>
+      ${gerente ? `<p style="color:#2563eb;font-weight:600;margin:8px 0 0;font-size:16px">Gerente: ${gerente.nome}</p>` : ''}
+      <p style="color:#64748b;margin:5px 0 0;font-size:13px">Período: ${mesNome}</p>
+      <p style="color:#94a3b8;font-size:11px;margin:10px 0 0">Gerado em: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}</p>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:30px">
+      <div style="flex:1;background:#f0f9ff;border-radius:10px;padding:16px;text-align:center;border-left:4px solid #2563eb"><div style="font-size:32px;font-weight:700;color:#2563eb">${totalChecklists}</div><div style="color:#64748b;font-size:12px">Total</div></div>
+      <div style="flex:1;background:#f0fdf4;border-radius:10px;padding:16px;text-align:center;border-left:4px solid #10b981"><div style="font-size:32px;font-weight:700;color:#10b981">${concluidos}</div><div style="color:#64748b;font-size:12px">Concluídos</div></div>
+      <div style="flex:1;background:#fffbeb;border-radius:10px;padding:16px;text-align:center;border-left:4px solid #f59e0b"><div style="font-size:32px;font-weight:700;color:#f59e0b">${emAndamento}</div><div style="color:#64748b;font-size:12px">Em Andamento</div></div>
+      <div style="flex:1;background:#fef2f2;border-radius:10px;padding:16px;text-align:center;border-left:4px solid #ef4444"><div style="font-size:32px;font-weight:700;color:#ef4444">${atrasados}</div><div style="color:#64748b;font-size:12px">Com Atraso</div></div>
+    </div>`;
+  
+  const porMes = {};
+  CACHE.checklistsData.forEach(data => { if (!porMes[data.mes]) porMes[data.mes] = []; porMes[data.mes].push(data); });
   
   Object.keys(porMes).sort((a, b) => a - b).forEach(mes => {
     htmlPDF += `<h2 style="color:#1e3a5f;border-bottom:2px solid #e2e8f0;padding-bottom:8px;margin:25px 0 15px;font-size:18px">${MESES[mes - 1]} ${ESTADO.ano}</h2>`;
-    htmlPDF += `<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:12px">
-      <thead>
-        <tr style="background:#f8fafc">
-          <th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Empresa</th>
-          <th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Ramo</th>
-          <th style="padding:10px;text-align:center;border:1px solid #e2e8f0;font-weight:600;width:120px">Progresso</th>
-          <th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Etapas</th>
-        </tr>
-      </thead>
-      <tbody>`;
+    htmlPDF += `<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:12px"><thead><tr style="background:#f8fafc"><th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Empresa</th><th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Ramo</th><th style="padding:10px;text-align:center;border:1px solid #e2e8f0;font-weight:600;width:120px">Progresso</th><th style="padding:10px;text-align:left;border:1px solid #e2e8f0;font-weight:600">Etapas</th></tr></thead><tbody>`;
     
     porMes[mes].forEach(data => {
       const ramoConfig = RAMOS_CONFIG[data.ramoId];
       if (!ramoConfig) return;
-      
       const totalChecks = ramoConfig.checklist.length;
       const checksConcluidos = Object.values(data.checks || {}).filter(c => c.concluido).length;
       const progresso = Math.round((checksConcluidos / totalChecks) * 100);
       const temAtraso = ramoConfig.checklist.some(item => !data.checks?.[item.id]?.concluido && new Date().getDate() > item.prazo);
-      
-      let barColor = '#3b82f6';
-      if (progresso >= 100) barColor = '#10b981';
-      else if (progresso >= 50) barColor = '#f59e0b';
-      else if (progresso < 25) barColor = '#ef4444';
-      
-      const etapas = ramoConfig.checklist.map(item => {
-        const st = data.checks?.[item.id];
-        if (st?.concluido) return '✅';
-        if (new Date().getDate() > item.prazo) return '❌';
-        return '⬜';
-      }).join(' ');
-      
-      htmlPDF += `
-        <tr style="${temAtraso ? 'background:#fef2f2' : ''}">
-          <td style="padding:10px;border:1px solid #e2e8f0;font-weight:500">${data.empresaNome}</td>
-          <td style="padding:10px;border:1px solid #e2e8f0">${ramoConfig.icon} ${ramoConfig.nome}</td>
-          <td style="padding:10px;border:1px solid #e2e8f0;text-align:center">
-            <div style="background:#e2e8f0;border-radius:10px;height:10px;width:80px;display:inline-block;vertical-align:middle;overflow:hidden">
-              <div style="background:${barColor};height:10px;width:${progresso}%"></div>
-            </div>
-            <span style="font-size:11px;color:#64748b;margin-left:5px">${progresso}%</span>
-          </td>
-          <td style="padding:10px;border:1px solid #e2e8f0;font-size:14px">${etapas}</td>
-        </tr>
-      `;
+      let barColor = progresso >= 100 ? '#10b981' : progresso >= 50 ? '#f59e0b' : progresso < 25 ? '#ef4444' : '#3b82f6';
+      const etapas = ramoConfig.checklist.map(item => { const st = data.checks?.[item.id]; if (st?.concluido) return '✅'; if (new Date().getDate() > item.prazo) return '❌'; return '⬜'; }).join(' ');
+      htmlPDF += `<tr style="${temAtraso ? 'background:#fef2f2' : ''}"><td style="padding:10px;border:1px solid #e2e8f0;font-weight:500">${data.empresaNome}</td><td style="padding:10px;border:1px solid #e2e8f0">${ramoConfig.icon} ${ramoConfig.nome}</td><td style="padding:10px;border:1px solid #e2e8f0;text-align:center"><div style="background:#e2e8f0;border-radius:10px;height:10px;width:80px;display:inline-block;vertical-align:middle;overflow:hidden"><div style="background:${barColor};height:10px;width:${progresso}%"></div></div><span style="font-size:11px;color:#64748b;margin-left:5px">${progresso}%</span></td><td style="padding:10px;border:1px solid #e2e8f0;font-size:14px">${etapas}</td></tr>`;
     });
-    
     htmlPDF += `</tbody></table>`;
   });
   
-  htmlPDF += `
-      <div style="margin-top:30px;padding:15px;background:#f8fafc;border-radius:10px;font-size:12px;color:#64748b">
-        <strong>Legenda:</strong> ✅ Concluído &nbsp;&nbsp; ⬜ Pendente &nbsp;&nbsp; ❌ Atrasado
-      </div>
-    </div>
-  `;
+  htmlPDF += `<div style="margin-top:30px;padding:15px;background:#f8fafc;border-radius:10px;font-size:12px;color:#64748b"><strong>Legenda:</strong> ✅ Concluído &nbsp;&nbsp; ⬜ Pendente &nbsp;&nbsp; ❌ Atrasado</div></div>`;
   
   const element = document.createElement('div');
   element.innerHTML = htmlPDF;
@@ -859,124 +800,40 @@ function confirmarEmpresa() {
   const nomeArquivo = `relatorio-projecoes-${ESTADO.ano}${filtroMes ? '-' + MESES[filtroMes - 1].toLowerCase() : ''}${gerente ? '-' + gerente.nome.split(' ')[0].toLowerCase() : ''}.pdf`;
   
   try {
-    await html2pdf().set({
-      margin: 10,
-      filename: nomeArquivo,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(element).save();
-  } catch (e) {
-    console.error(e);
-    alert('Erro ao gerar PDF');
-  }
-  
+    await html2pdf().set({ margin: 10, filename: nomeArquivo, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(element).save();
+  } catch (e) { console.error(e); alert('Erro ao gerar PDF'); }
   document.body.removeChild(element);
 }
 
 // LEADS
 async function carregarLeads() {
   const container = $('leadsContent');
-  if (CACHE.empresas.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-icon">💡</div><div class="empty-title">Selecione uma agência</div></div>';
-    return;
-  }
+  if (CACHE.empresas.length === 0) { container.innerHTML = '<div class="empty-state"><div class="empty-icon">💡</div><div class="empty-title">Selecione uma agência</div></div>'; return; }
   
   const leadsDental = [], leadsSaude = [];
-  
   CACHE.empresas.forEach(emp => {
     const visita = CACHE.visitas[emp.id];
     const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
-    
     if (func > 0) {
       const status = visita?.ramos?.dental?.status;
-      if (status === 'nao-possui' || !status) {
-        leadsDental.push({
-          ...emp,
-          funcionarios: func,
-          potencial: func * 18.5,
-          status: status || 'nao-mapeado',
-          prioridade: status === 'nao-possui' ? 'high' : 'medium'
-        });
-      }
+      if (status === 'nao-possui' || !status) leadsDental.push({ ...emp, funcionarios: func, potencial: func * 18.5, status: status || 'nao-mapeado', prioridade: status === 'nao-possui' ? 'high' : 'medium' });
     }
-    
     const statusSaude = visita?.ramos?.saude?.status;
-    if (statusSaude === 'nao-possui' || !statusSaude) {
-      leadsSaude.push({
-        ...emp,
-        funcionarios: func,
-        potencial: func > 0 ? func * 400 : 3 * 400,
-        status: statusSaude || 'nao-mapeado',
-        prioridade: statusSaude === 'nao-possui' ? 'high' : 'medium',
-        dica: func === 0 ? 'Mínimo 3 vidas = R$ 1.200/mês' : null
-      });
-    }
+    if (statusSaude === 'nao-possui' || !statusSaude) leadsSaude.push({ ...emp, funcionarios: func, potencial: func > 0 ? func * 400 : 3 * 400, status: statusSaude || 'nao-mapeado', prioridade: statusSaude === 'nao-possui' ? 'high' : 'medium', dica: func === 0 ? 'Mínimo 3 vidas = R$ 1.200/mês' : null });
   });
   
   leadsDental.sort((a, b) => b.potencial - a.potencial);
   leadsSaude.sort((a, b) => b.potencial - a.potencial);
   
   let html = '';
-  
   if (leadsDental.length > 0) {
     const total = leadsDental.reduce((s, l) => s + l.potencial, 0);
-    html += `
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <div class="card-icon" style="background:rgba(59,130,246,0.1)">🦷</div>
-            <span>Dental Funcionários</span>
-          </div>
-          <div class="meta-valor">${toBRLCompact(total)}/mês</div>
-        </div>
-        <p style="margin-bottom:16px;color:var(--text-muted)">Funcionários × R$ 18,50/mês</p>
-        <table class="leads-table">
-          <thead><tr><th>Empresa</th><th>Func.</th><th>Potencial/Mês</th><th>Status</th></tr></thead>
-          <tbody>
-            ${leadsDental.slice(0, 20).map(l => `
-              <tr>
-                <td><div class="lead-empresa"><div class="lead-priority ${l.prioridade}"></div><div style="font-weight:600">${l.nome}</div></div></td>
-                <td>${l.funcionarios}</td>
-                <td class="lead-potencial">${toBRL(l.potencial)}</td>
-                <td><span class="badge ${l.status === 'nao-possui' ? 'badge-success' : ''}">${l.status === 'nao-possui' ? 'Não possui' : 'Não mapeado'}</span></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
+    html += `<div class="card"><div class="card-header"><div class="card-title"><div class="card-icon" style="background:rgba(59,130,246,0.1)">🦷</div><span>Dental Funcionários</span></div><div class="meta-valor">${toBRLCompact(total)}/mês</div></div><p style="margin-bottom:16px;color:var(--text-muted)">Funcionários × R$ 18,50/mês</p><table class="leads-table"><thead><tr><th>Empresa</th><th>Func.</th><th>Potencial/Mês</th><th>Status</th></tr></thead><tbody>${leadsDental.slice(0, 20).map(l => `<tr><td><div class="lead-empresa"><div class="lead-priority ${l.prioridade}"></div><div style="font-weight:600">${l.nome}</div></div></td><td>${l.funcionarios}</td><td class="lead-potencial">${toBRL(l.potencial)}</td><td><span class="badge ${l.status === 'nao-possui' ? 'badge-success' : ''}">${l.status === 'nao-possui' ? 'Não possui' : 'Não mapeado'}</span></td></tr>`).join('')}</tbody></table></div>`;
   }
-  
   if (leadsSaude.length > 0) {
     const total = leadsSaude.reduce((s, l) => s + l.potencial, 0);
-    html += `
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <div class="card-icon" style="background:rgba(239,68,68,0.1)">🏥</div>
-            <span>Saúde Funcionários</span>
-          </div>
-          <div class="meta-valor">${toBRLCompact(total)}/mês</div>
-        </div>
-        <p style="margin-bottom:16px;color:var(--text-muted)">Funcionários × R$ 400/mês | Mínimo: 3 vidas</p>
-        <table class="leads-table">
-          <thead><tr><th>Empresa</th><th>Func.</th><th>Potencial/Mês</th><th>Status</th></tr></thead>
-          <tbody>
-            ${leadsSaude.slice(0, 20).map(l => `
-              <tr>
-                <td><div class="lead-empresa"><div class="lead-priority ${l.prioridade}"></div><div><div style="font-weight:600">${l.nome}</div>${l.dica ? `<div style="font-size:11px;color:var(--text-muted)">${l.dica}</div>` : ''}</div></div></td>
-                <td>${l.funcionarios || '-'}</td>
-                <td class="lead-potencial">${toBRL(l.potencial)}</td>
-                <td><span class="badge ${l.status === 'nao-possui' ? 'badge-success' : ''}">${l.status === 'nao-possui' ? 'Não possui' : 'Não mapeado'}</span></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
+    html += `<div class="card"><div class="card-header"><div class="card-title"><div class="card-icon" style="background:rgba(239,68,68,0.1)">🏥</div><span>Saúde Funcionários</span></div><div class="meta-valor">${toBRLCompact(total)}/mês</div></div><p style="margin-bottom:16px;color:var(--text-muted)">Funcionários × R$ 400/mês | Mínimo: 3 vidas</p><table class="leads-table"><thead><tr><th>Empresa</th><th>Func.</th><th>Potencial/Mês</th><th>Status</th></tr></thead><tbody>${leadsSaude.slice(0, 20).map(l => `<tr><td><div class="lead-empresa"><div class="lead-priority ${l.prioridade}"></div><div><div style="font-weight:600">${l.nome}</div>${l.dica ? `<div style="font-size:11px;color:var(--text-muted)">${l.dica}</div>` : ''}</div></div></td><td>${l.funcionarios || '-'}</td><td class="lead-potencial">${toBRL(l.potencial)}</td><td><span class="badge ${l.status === 'nao-possui' ? 'badge-success' : ''}">${l.status === 'nao-possui' ? 'Não possui' : 'Não mapeado'}</span></td></tr>`).join('')}</tbody></table></div>`;
   }
-  
   container.innerHTML = html || '<div class="empty-state"><div class="empty-icon">🎉</div><div class="empty-title">Sem leads disponíveis</div></div>';
 }
 
