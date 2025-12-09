@@ -475,30 +475,42 @@ function gerarDistribuicao() {
     
     MESES.forEach((mes, idx) => {
       const mesNum = idx + 1;
+      
+      // Pegar empresas salvas para este mês (do primeiro ramo, pois são as mesmas)
+      const primeiroRamo = ESTADO.ramosSelecionados[0];
+      const empresasSalvas = ESTADO.distribuicao?.[gerente.id]?.[mesNum]?.[primeiroRamo] || [];
+      
+      // Calcular meta total do mês (soma de todos os ramos)
+      const metaMesTotal = ramosExibir.reduce((sum, ramoId) => {
+        return sum + (ESTADO.metas[ramoId]?.porGerente || 0);
+      }, 0);
+      
       html += `<div class="month-card"><div class="month-header"><div class="month-name">${mes}</div><div class="month-meta">${ESTADO.ano}</div></div><div class="month-body">`;
       
+      // Mostrar ramos selecionados como badges
+      html += `<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:6px">`;
       ramosExibir.forEach(ramoId => {
         const ramo = RAMOS_CONFIG[ramoId];
-        const meta = ESTADO.metas[ramoId];
-        if (!ramo || !meta) return;
-        const empresasSalvas = ESTADO.distribuicao?.[gerente.id]?.[mesNum]?.[ramoId] || [];
-        html += `<div class="month-ramo"><div class="month-ramo-header"><div class="month-ramo-title"><span>${ramo.icon}</span><span>${ramo.nome}</span></div><div class="month-ramo-meta">Meta: ${toBRLCompact(meta.porGerente)}/mês</div></div><div class="empresas-slots">`;
-        
-        for (let i = 0; i < 3; i++) {
-          const slotId = `${gerente.id}-${mesNum}-${ramoId}-${i}`;
-          const empresaId = empresasSalvas[i];
-          const empresa = empresaId ? CACHE.empresas.find(e => e.id === empresaId) : null;
-          if (empresa) {
-            const func = empresa.funcionariosQtd || empresa.numFuncionarios || 0;
-            const potencial = func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
-            html += `<div class="empresa-slot filled" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')"><div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${empresa.nome}</div><div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • '+func+' func.' : ''}</div></div></div>`;
-          } else {
-            html += `<div class="empresa-slot" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${ramoId}','${gerente.id}')"><div class="slot-number">${i+1}</div><div class="slot-content"><div class="slot-empresa">Selecionar empresa...</div></div></div>`;
-          }
-        }
-        html += '</div></div>';
+        if (ramo) html += `<span style="background:${ramo.cor}15;color:${ramo.cor};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600">${ramo.icon} ${ramo.nome}</span>`;
       });
-      html += '</div></div>';
+      html += `</div>`;
+      html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Meta total: ${toBRLCompact(metaMesTotal)}/mês</div>`;
+      
+      // 3 slots de empresas (mesmas para todos os ramos)
+      html += `<div class="empresas-slots">`;
+      for (let i = 0; i < 3; i++) {
+        const slotId = `${gerente.id}-${mesNum}-${i}`;
+        const empresaId = empresasSalvas[i];
+        const empresa = empresaId ? CACHE.empresas.find(e => e.id === empresaId) : null;
+        
+        if (empresa) {
+          const func = empresa.funcionariosQtd || empresa.numFuncionarios || 0;
+          html += `<div class="empresa-slot filled" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${gerente.id}')"><div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${empresa.nome}</div><div class="slot-potencial">${func > 0 ? func + ' funcionários' : 'Sem funcionários'}</div></div></div>`;
+        } else {
+          html += `<div class="empresa-slot" data-slot="${slotId}" onclick="abrirSeletorEmpresa('${slotId}','${gerente.id}')"><div class="slot-number">${i+1}</div><div class="slot-content"><div class="slot-empresa">Selecionar empresa...</div></div></div>`;
+        }
+      }
+      html += '</div></div></div>';
     });
     html += `</div><div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end"><button class="btn btn-primary" onclick="salvarDistribuicaoGerente('${gerente.id}')">💾 Salvar Distribuição</button></div></div>`;
   });
@@ -512,23 +524,31 @@ function sortearEmpresas(gerenteId) {
   if (empresasGerente.length === 0) { alert('Este gerente não possui empresas'); return; }
   if (!ESTADO.distribuicao[gerenteId]) ESTADO.distribuicao[gerenteId] = {};
   
-  ESTADO.ramosSelecionados.forEach(ramoId => {
-    const embaralhadas = shuffle(empresasGerente);
-    let idx = 0;
-    for (let mes = 1; mes <= 12; mes++) {
-      if (!ESTADO.distribuicao[gerenteId][mes]) ESTADO.distribuicao[gerenteId][mes] = {};
-      ESTADO.distribuicao[gerenteId][mes][ramoId] = [];
-      for (let slot = 0; slot < 3; slot++) {
-        if (idx < embaralhadas.length) {
-          ESTADO.distribuicao[gerenteId][mes][ramoId].push(embaralhadas[idx].id);
-          idx++;
-        }
-      }
+  // Embaralha empresas uma vez
+  const embaralhadas = shuffle(empresasGerente);
+  let idx = 0;
+  
+  // 3 empresas por mês (total), distribuídas entre os ramos
+  for (let mes = 1; mes <= 12; mes++) {
+    if (!ESTADO.distribuicao[gerenteId][mes]) ESTADO.distribuicao[gerenteId][mes] = {};
+    
+    // Pega 3 empresas para este mês
+    const empresasMes = [];
+    for (let i = 0; i < 3; i++) {
+      empresasMes.push(embaralhadas[idx].id);
+      idx++;
       if (idx >= embaralhadas.length) idx = 0;
     }
-  });
+    
+    // Distribui as 3 empresas entre os ramos selecionados
+    // Cada empresa recebe todos os ramos (mesma empresa trabalha todos os produtos)
+    ESTADO.ramosSelecionados.forEach(ramoId => {
+      ESTADO.distribuicao[gerenteId][mes][ramoId] = [...empresasMes];
+    });
+  }
+  
   gerarDistribuicao();
-  alert('Empresas sorteadas para ' + gerente.nome + '! Salve para confirmar.');
+  alert('Empresas sorteadas para ' + gerente.nome + '!\n3 empresas por mês (mesmas empresas para todos os ramos).\nSalve para confirmar.');
 }
 
 async function salvarDistribuicaoGerente(gerenteId) {
@@ -575,10 +595,10 @@ async function gerarChecklistsGerente(gerenteId) {
 }
 
 // MODAL EMPRESA
-let SLOT_ATUAL = null, RAMO_ATUAL = null, GERENTE_ATUAL = null, EMP_SELECIONADA = null;
+let SLOT_ATUAL = null, GERENTE_ATUAL = null, EMP_SELECIONADA = null;
 
-function abrirSeletorEmpresa(slotId, ramoId, gerenteId) {
-  SLOT_ATUAL = slotId; RAMO_ATUAL = ramoId; GERENTE_ATUAL = gerenteId; EMP_SELECIONADA = null;
+function abrirSeletorEmpresa(slotId, gerenteId) {
+  SLOT_ATUAL = slotId; GERENTE_ATUAL = gerenteId; EMP_SELECIONADA = null;
   renderizarListaEmpresas();
   $('modalEmpresa').classList.add('active');
 }
@@ -587,17 +607,13 @@ function fecharModalEmpresa() { $('modalEmpresa').classList.remove('active'); }
 
 function renderizarListaEmpresas(filtro = '') {
   const container = $('empresaList');
-  const ramo = RAMOS_CONFIG[RAMO_ATUAL];
   let lista = CACHE.empresas.filter(e => e.rmUid === GERENTE_ATUAL).filter(e => !filtro || e.nome?.toLowerCase().includes(filtro.toLowerCase())).map(emp => {
-    const visita = CACHE.visitas[emp.id];
     const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
-    let status = visita?.ramos?.[ramo.visitaStatus]?.status || 'nao-mapeado';
-    let potencial = ramo.campoAuto && func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
-    return { ...emp, potencial, status, funcionarios: func };
+    return { ...emp, funcionarios: func };
   });
-  lista.sort((a, b) => b.potencial - a.potencial);
+  lista.sort((a, b) => b.funcionarios - a.funcionarios);
   if (lista.length === 0) { container.innerHTML = '<div class="empty-state"><p>Nenhuma empresa deste gerente</p></div>'; return; }
-  container.innerHTML = lista.slice(0, 50).map(e => `<div class="empresa-option" data-id="${e.id}" onclick="selecionarEmpresaModal('${e.id}')"><div style="flex:1"><div style="font-weight:600">${e.nome}</div><div style="font-size:12px;color:var(--text-muted)">${e.funcionarios > 0 ? e.funcionarios + ' func. • ' : ''}Potencial: ${toBRLCompact(e.potencial)}/mês</div></div></div>`).join('');
+  container.innerHTML = lista.slice(0, 50).map(e => `<div class="empresa-option" data-id="${e.id}" onclick="selecionarEmpresaModal('${e.id}')"><div style="flex:1"><div style="font-weight:600">${e.nome}</div><div style="font-size:12px;color:var(--text-muted)">${e.funcionarios > 0 ? e.funcionarios + ' funcionários' : 'Sem funcionários cadastrados'}</div></div></div>`).join('');
 }
 
 function filtrarEmpresasModal() { renderizarListaEmpresas($('buscaEmpresa').value); }
@@ -612,22 +628,27 @@ function confirmarEmpresa() {
   if (!EMP_SELECIONADA || !SLOT_ATUAL) return alert('Selecione uma empresa');
   const emp = CACHE.empresas.find(e => e.id === EMP_SELECIONADA);
   if (!emp) return;
-  const ramo = RAMOS_CONFIG[RAMO_ATUAL];
   const func = emp.funcionariosQtd || emp.numFuncionarios || 0;
-  const potencial = func > 0 ? func * ramo.ticketMedio : ramo.ticketMedio;
   const slot = document.querySelector(`[data-slot="${SLOT_ATUAL}"]`);
   if (slot) {
     slot.classList.add('filled');
-    slot.innerHTML = `<div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${emp.nome}</div><div class="slot-potencial">${toBRLCompact(potencial)}/mês${func > 0 ? ' • '+func+' func.' : ''}</div></div>`;
+    slot.innerHTML = `<div class="slot-number">✓</div><div class="slot-content"><div class="slot-empresa">${emp.nome}</div><div class="slot-potencial">${func > 0 ? func + ' funcionários' : 'Sem funcionários'}</div></div>`;
     slot.setAttribute('data-empresa', emp.id);
   }
-  const [gerenteId, mes, ramoId, slotIdx] = SLOT_ATUAL.split('-');
+  // Formato: gerenteId-mes-slotIdx
+  const [gerenteId, mes, slotIdx] = SLOT_ATUAL.split('-');
   const mesNum = parseInt(mes);
   const slotNum = parseInt(slotIdx);
+  
   if (!ESTADO.distribuicao[gerenteId]) ESTADO.distribuicao[gerenteId] = {};
   if (!ESTADO.distribuicao[gerenteId][mesNum]) ESTADO.distribuicao[gerenteId][mesNum] = {};
-  if (!ESTADO.distribuicao[gerenteId][mesNum][ramoId]) ESTADO.distribuicao[gerenteId][mesNum][ramoId] = [];
-  ESTADO.distribuicao[gerenteId][mesNum][ramoId][slotNum] = emp.id;
+  
+  // Salvar a mesma empresa em todos os ramos selecionados
+  ESTADO.ramosSelecionados.forEach(ramoId => {
+    if (!ESTADO.distribuicao[gerenteId][mesNum][ramoId]) ESTADO.distribuicao[gerenteId][mesNum][ramoId] = [];
+    ESTADO.distribuicao[gerenteId][mesNum][ramoId][slotNum] = emp.id;
+  });
+  
   fecharModalEmpresa();
 }
 
