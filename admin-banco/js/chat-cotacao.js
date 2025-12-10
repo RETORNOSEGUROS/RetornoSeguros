@@ -18,6 +18,10 @@ let cotacaoRef = null;
 let cotacaoData = null;
 let configStatus = null;
 
+// Lookups
+let AGENCIAS = {};
+let RAMOS = [];
+
 // ==== Status Config ====
 const STATUS_FIXOS = [
   "Negócio Emitido",
@@ -144,6 +148,55 @@ function getIniciais(nome) {
   return nome.substring(0, 2).toUpperCase();
 }
 
+// ==== Helper para buscar nomeExibicao do ramo ====
+function getRamoNomeExibicao(ramoId) {
+  if (!ramoId) return "-";
+  
+  // Busca pelo campo (ID do ramo)
+  const ramoEncontrado = RAMOS.find(r => 
+    r.campo === ramoId || 
+    r.id === ramoId || 
+    normalizar(r.campo) === normalizar(ramoId) ||
+    normalizar(r.nomeExibicao) === normalizar(ramoId)
+  );
+  
+  if (ramoEncontrado) {
+    return ramoEncontrado.nomeExibicao;
+  }
+  
+  // Se não encontrou, retorna o valor original
+  return ramoId;
+}
+
+// ==== Carregar Lookups ====
+async function carregarLookups() {
+  // Agências
+  try {
+    const snap = await db.collection("agencias_banco").get();
+    snap.forEach(doc => {
+      AGENCIAS[doc.id] = doc.data().nome || doc.id;
+    });
+  } catch (e) { console.warn("Erro agências:", e); }
+  
+  // Ramos
+  try {
+    const snap = await db.collection("ramos-seguro").get();
+    RAMOS = [];
+    
+    snap.forEach(doc => {
+      const d = doc.data();
+      const nomeExibicao = d.nomeExibicao || d.nome || d.campo || doc.id;
+      RAMOS.push({
+        id: doc.id,
+        campo: d.campo || doc.id,
+        nomeExibicao: nomeExibicao
+      });
+    });
+    
+    RAMOS.sort((a, b) => a.nomeExibicao.localeCompare(b.nomeExibicao));
+  } catch (e) { console.warn("Erro ramos:", e); }
+}
+
 // ==== Auth ====
 auth.onAuthStateChanged(async user => {
   if (!user) { window.location.href = "login.html"; return; }
@@ -236,6 +289,9 @@ async function verificarPermissao() {
 
 // ==== Inicialização ====
 async function init() {
+  // Carregar lookups primeiro para ter os nomes corretos
+  await carregarLookups();
+  
   renderizarCabecalho();
   renderizarResumo();
   renderizarTemperatura();
@@ -257,7 +313,10 @@ async function init() {
 // ==== Renderização ====
 function renderizarCabecalho() {
   $("headerEmpresa").textContent = cotacaoData.empresaNome || "Empresa";
-  $("headerSub").textContent = `${cotacaoData.ramo || '-'} • ${cotacaoData.rmNome || '-'}`;
+  
+  // Usar nomeExibicao do ramo
+  const ramoExibicao = getRamoNomeExibicao(cotacaoData.ramo);
+  $("headerSub").textContent = `${ramoExibicao} • ${cotacaoData.rmNome || '-'}`;
   
   const statusEl = $("headerStatus");
   statusEl.textContent = cotacaoData.status || "-";
@@ -276,7 +335,11 @@ function atualizarHeaderHeat(temp) {
 function renderizarResumo() {
   const valor = Number(cotacaoData.valorDesejado || cotacaoData.valorFinal || 0);
   $("valorDesejado").textContent = fmtBRL(valor);
-  $("ramo").textContent = cotacaoData.ramo || "-";
+  
+  // Usar nomeExibicao do ramo
+  const ramoExibicao = getRamoNomeExibicao(cotacaoData.ramo);
+  $("ramo").textContent = ramoExibicao;
+  
   $("cnpj").textContent = cotacaoData.empresaCNPJ || "-";
   
   // Gerente é sempre o vinculado à cotação/empresa, não quem criou
@@ -287,7 +350,12 @@ function renderizarResumo() {
   }
   $("gerente").textContent = gerenteNome || "-";
   
-  $("agencia").textContent = cotacaoData.agenciaNome || "-";
+  // Buscar nome da agência pelo ID
+  let agenciaNome = cotacaoData.agenciaNome || "";
+  if (!agenciaNome && cotacaoData.agenciaId) {
+    agenciaNome = AGENCIAS[cotacaoData.agenciaId] || cotacaoData.agenciaId;
+  }
+  $("agencia").textContent = agenciaNome || "-";
   
   // Vigência
   const ini = toDate(cotacaoData.inicioVigencia);
