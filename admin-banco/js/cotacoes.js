@@ -1308,6 +1308,36 @@ async function salvarEdicaoCotacao() {
   }
 }
 
+// ==== Excluir Cotação ====
+async function excluirCotacao(id) {
+  const cotacao = COTACOES.find(c => c.id === id);
+  if (!cotacao) {
+    alert("Cotação não encontrada.");
+    return;
+  }
+  
+  const confirmacao = confirm(`⚠️ Tem certeza que deseja EXCLUIR a cotação?\n\nEmpresa: ${cotacao._empresaNome}\nRamo: ${cotacao._ramo}\nValor: ${fmtBRL(cotacao._valor)}\n\nEsta ação não pode ser desfeita!`);
+  
+  if (!confirmacao) return;
+  
+  try {
+    await db.collection("cotacoes-gerentes").doc(id).delete();
+    
+    // Fechar o modal de edição se estiver aberto
+    fecharModalEdicao();
+    
+    alert("Cotação excluída com sucesso!");
+    
+    // Recarregar dados
+    await carregarCotacoes();
+    renderizarTudo();
+    
+  } catch (e) {
+    console.error("Erro ao excluir cotação:", e);
+    alert("Erro ao excluir cotação. Tente novamente.");
+  }
+}
+
 // ==== Globals ====
 window.setView = setView;
 window.toggleFiltros = toggleFiltros;
@@ -1336,3 +1366,4 @@ window.abrirModalEdicao = abrirModalEdicao;
 window.fecharModalEdicao = fecharModalEdicao;
 window.setEditTemp = setEditTemp;
 window.salvarEdicaoCotacao = salvarEdicaoCotacao;
+window.excluirCotacao = excluirCotacao;
