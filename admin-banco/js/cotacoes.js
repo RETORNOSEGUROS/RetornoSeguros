@@ -307,6 +307,26 @@ async function carregarRamos() {
   } catch (e) { console.warn("Erro ramos:", e); }
 }
 
+// ==== Helper para buscar nomeExibicao do ramo ====
+function getRamoNomeExibicao(ramoId) {
+  if (!ramoId) return "Não informado";
+  
+  // Busca pelo campo (ID do ramo)
+  const ramoEncontrado = RAMOS.find(r => 
+    r.campo === ramoId || 
+    r.id === ramoId || 
+    normalizar(r.campo) === normalizar(ramoId) ||
+    normalizar(r.nomeExibicao) === normalizar(ramoId)
+  );
+  
+  if (ramoEncontrado) {
+    return ramoEncontrado.nomeExibicao;
+  }
+  
+  // Se não encontrou, retorna o valor original (pode já ser o nomeExibicao)
+  return ramoId;
+}
+
 // ==== Carregar Cotações ====
 async function carregarCotacoes() {
   const col = db.collection("cotacoes-gerentes");
@@ -356,6 +376,9 @@ async function carregarCotacoes() {
       }
     }
     
+    // Buscar nomeExibicao do ramo
+    const ramoNomeExibicao = getRamoNomeExibicao(d.ramo);
+    
     return {
       id: doc.id,
       ...d,
@@ -364,7 +387,8 @@ async function carregarCotacoes() {
       _agenciaNome: AGENCIAS[d.agenciaId] || d.agenciaId || "-",
       _rmNome: rmNome || "-",
       _rmUid: rmUid,
-      _ramo: d.ramo || "Não informado",
+      _ramo: ramoNomeExibicao,
+      _ramoOriginal: d.ramo || "", // Guardar o valor original para edição
       _status: d.status || "Sem status",
       _statusCat: categoriaStatus(d.status),
       _valor: parseValor(d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0),
@@ -1180,6 +1204,16 @@ function abrirModalEdicao(id) {
   $("editTemperatura").value = cotacao._temperatura || 'morno';
   $("editObservacao").value = "";
   
+  // Preencher o select de ramo com os valores disponíveis
+  const selRamo = $("editRamo");
+  if (selRamo) {
+    selRamo.innerHTML = '<option value="">Selecione o ramo</option>';
+    RAMOS.forEach(r => {
+      const selected = (r.nomeExibicao === cotacao._ramo || r.campo === cotacao._ramoOriginal) ? 'selected' : '';
+      selRamo.innerHTML += `<option value="${r.nomeExibicao}" ${selected}>${r.nomeExibicao}</option>`;
+    });
+  }
+  
   // Atualizar botões de temperatura
   setEditTemp(cotacao._temperatura || 'morno');
   
@@ -1204,6 +1238,7 @@ async function salvarEdicaoCotacao() {
   const id = $("editCotacaoId").value;
   const novoValor = desformatarMoeda($("editValor").value);
   const novaTemp = $("editTemperatura").value;
+  const novoRamo = $("editRamo")?.value || "";
   const observacao = $("editObservacao").value.trim();
   
   if (!id || !COTACAO_EDITANDO) {
@@ -1219,6 +1254,7 @@ async function salvarEdicaoCotacao() {
   try {
     const valorAntigo = COTACAO_EDITANDO._valor;
     const tempAntiga = COTACAO_EDITANDO._temperatura;
+    const ramoAntigo = COTACAO_EDITANDO._ramo;
     
     // Montar mensagem de alteração
     let msgs = [];
@@ -1227,6 +1263,9 @@ async function salvarEdicaoCotacao() {
     }
     if (novaTemp !== tempAntiga) {
       msgs.push(`Temperatura: ${labelTemperatura(tempAntiga)} → ${labelTemperatura(novaTemp)}`);
+    }
+    if (novoRamo && novoRamo !== ramoAntigo) {
+      msgs.push(`Produto: ${ramoAntigo} → ${novoRamo}`);
     }
     if (observacao) {
       msgs.push(`Obs: ${observacao}`);
@@ -1240,14 +1279,21 @@ async function salvarEdicaoCotacao() {
       tipo: "sistema"
     };
     
-    const ref = db.collection("cotacoes-gerentes").doc(id);
-    await ref.update({
+    const updateData = {
       valorDesejado: novoValor,
       valorFinal: novoValor,
       temperatura: novaTemp,
       dataAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
       interacoes: firebase.firestore.FieldValue.arrayUnion(interacao)
-    });
+    };
+    
+    // Adicionar ramo se foi alterado
+    if (novoRamo && novoRamo !== ramoAntigo) {
+      updateData.ramo = novoRamo;
+    }
+    
+    const ref = db.collection("cotacoes-gerentes").doc(id);
+    await ref.update(updateData);
     
     alert("Cotação atualizada com sucesso!");
     fecharModalEdicao();
