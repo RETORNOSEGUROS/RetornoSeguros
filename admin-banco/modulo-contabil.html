@@ -606,9 +606,14 @@
                                             <i class="bi bi-exclamation-triangle me-2"></i>
                                             <strong>Reimportar do zero?</strong> Apaga todos os lançamentos importados via OFX e permite importar novamente.
                                         </div>
-                                        <button class="btn btn-danger btn-sm" onclick="apagarTodosImportados()">
-                                            <i class="bi bi-trash me-1"></i> Apagar Todos Importados
-                                        </button>
+                                        <div>
+                                            <button class="btn btn-warning btn-sm me-2" onclick="verificarTotais()">
+                                                <i class="bi bi-bug me-1"></i> Verificar Totais
+                                            </button>
+                                            <button class="btn btn-danger btn-sm" onclick="apagarTodosImportados()">
+                                                <i class="bi bi-trash me-1"></i> Apagar Todos Importados
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1261,16 +1266,17 @@
         // ==================== CARREGAR DADOS ====================
         async function carregarDados() {
             try {
-                // Carregar lançamentos do mês atual
+                // Carregar TODOS os lançamentos (sem limite)
                 const snapshot = await db.collection('contabilidade')
                     .orderBy('data', 'desc')
-                    .limit(500)
                     .get();
 
                 lancamentosCache = [];
                 snapshot.forEach(doc => {
                     lancamentosCache.push({ id: doc.id, ...doc.data() });
                 });
+                
+                console.log(`Carregados ${lancamentosCache.length} lançamentos`);
 
                 atualizarDashboard();
                 atualizarUltimosLancamentos();
@@ -2595,6 +2601,108 @@
             } catch (error) {
                 console.error('Erro ao apagar:', error);
                 mostrarToast('Erro ao apagar lançamentos: ' + error.message, 'danger');
+            }
+        }
+
+        async function verificarTotais() {
+            mostrarToast('Verificando dados no Firebase... Aguarde!', 'info');
+
+            try {
+                const snapshot = await db.collection('contabilidade').get();
+                
+                let totalReceitas = 0;
+                let totalDespesas = 0;
+                let countReceitas = 0;
+                let countDespesas = 0;
+                let valoresEstranhos = [];
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    let valor = data.valor;
+                    
+                    // Verificar se valor é string
+                    if (typeof valor === 'string') {
+                        valor = parseFloat(valor.replace(',', '.'));
+                        valoresEstranhos.push({id: doc.id, valorOriginal: data.valor, tipo: 'string'});
+                    }
+                    
+                    // Verificar se valor é NaN ou undefined
+                    if (isNaN(valor) || valor === undefined || valor === null) {
+                        valoresEstranhos.push({id: doc.id, valorOriginal: data.valor, tipo: 'invalido'});
+                        valor = 0;
+                    }
+
+                    if (data.tipo === 'RECEITA') {
+                        totalReceitas += valor;
+                        countReceitas++;
+                    } else if (data.tipo === 'DESPESA') {
+                        totalDespesas += valor;
+                        countDespesas++;
+                    }
+                });
+
+                const resultado = totalReceitas - totalDespesas;
+
+                let msg = `📊 VERIFICAÇÃO DO FIREBASE:\n\n`;
+                msg += `Total de documentos: ${snapshot.size}\n`;
+                msg += `Receitas: ${countReceitas} docs = R$ ${totalReceitas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}\n`;
+                msg += `Despesas: ${countDespesas} docs = R$ ${totalDespesas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}\n`;
+                msg += `Saldo: R$ ${resultado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}\n`;
+                
+                if (valoresEstranhos.length > 0) {
+                    msg += `\n⚠️ ${valoresEstranhos.length} valores com problemas encontrados!`;
+                }
+
+                alert(msg);
+                
+                console.log('Detalhes da verificação:', {
+                    totalDocs: snapshot.size,
+                    receitas: { count: countReceitas, total: totalReceitas },
+                    despesas: { count: countDespesas, total: totalDespesas },
+                    valoresEstranhos
+                });
+
+                if (valoresEstranhos.length > 0 && confirm(`Foram encontrados ${valoresEstranhos.length} valores com problemas.\n\nDeseja tentar corrigir automaticamente?`)) {
+                    await corrigirValores(valoresEstranhos);
+                }
+
+            } catch (error) {
+                console.error('Erro na verificação:', error);
+                mostrarToast('Erro ao verificar: ' + error.message, 'danger');
+            }
+        }
+
+        async function corrigirValores(valoresEstranhos) {
+            mostrarToast('Corrigindo valores... Aguarde!', 'warning');
+            
+            try {
+                const batch = db.batch();
+                let corrigidos = 0;
+
+                for (const item of valoresEstranhos) {
+                    const docRef = db.collection('contabilidade').doc(item.id);
+                    let novoValor = 0;
+                    
+                    if (typeof item.valorOriginal === 'string') {
+                        novoValor = parseFloat(item.valorOriginal.replace(/[^\d,.-]/g, '').replace(',', '.'));
+                    }
+                    
+                    if (!isNaN(novoValor) && novoValor > 0) {
+                        batch.update(docRef, { valor: novoValor });
+                        corrigidos++;
+                    }
+                }
+
+                await batch.commit();
+                mostrarToast(`${corrigidos} valores corrigidos!`, 'success');
+                
+                // Recarregar dados
+                await carregarDados();
+                carregarTodosRelatorios();
+                
+            } catch (error) {
+                console.error('Erro ao corrigir:', error);
+                mostrarToast('Erro ao corrigir: ' + error.message, 'danger');
             }
         }
 
