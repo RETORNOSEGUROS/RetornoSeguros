@@ -223,8 +223,14 @@
             </a>
             <div class="d-flex align-items-center">
                 <span class="text-white me-3" id="competenciaAtual"></span>
-                <button class="btn btn-outline-light btn-sm" onclick="abrirConfiguracoes()">
+                <a href="painel.html" class="btn btn-outline-light btn-sm me-2" title="Voltar ao Painel">
+                    <i class="bi bi-house"></i>
+                </a>
+                <button class="btn btn-outline-light btn-sm me-2" onclick="abrirConfiguracoes()">
                     <i class="bi bi-gear"></i>
+                </button>
+                <button class="btn btn-outline-light btn-sm" onclick="logout()" title="Sair">
+                    <i class="bi bi-box-arrow-right"></i>
                 </button>
             </div>
         </div>
@@ -769,8 +775,67 @@
             appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
         };
 
-        firebase.initializeApp(firebaseConfig);
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
         const db = firebase.firestore();
+
+        // Admins permitidos (fallback)
+        const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
+        
+        // Contexto do usuário
+        let CTX = { uid: null, perfil: null, nome: null };
+
+        // ==================== AUTENTICAÇÃO ====================
+        async function initAuth() {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    location.href = "login.html";
+                }, 5000);
+
+                auth.onAuthStateChanged(async (user) => {
+                    if (!user) {
+                        clearTimeout(timeout);
+                        location.href = "login.html";
+                        return;
+                    }
+                    clearTimeout(timeout);
+
+                    CTX.uid = user.uid;
+                    
+                    // Tentar buscar perfil do usuário
+                    try {
+                        const snap = await db.collection("usuarios_banco").doc(user.uid).get();
+                        if (snap.exists) {
+                            const d = snap.data();
+                            CTX.perfil = (d.perfil || "").toLowerCase();
+                            CTX.nome = d.nome || user.email;
+                        } else if (ADMIN_EMAILS.includes((user.email || "").toLowerCase())) {
+                            CTX.perfil = "admin";
+                            CTX.nome = user.email;
+                        }
+                    } catch (e) {
+                        console.warn("Erro ao buscar perfil:", e);
+                        if (ADMIN_EMAILS.includes((user.email || "").toLowerCase())) {
+                            CTX.perfil = "admin";
+                            CTX.nome = user.email;
+                        }
+                    }
+
+                    // Verificar se tem permissão (só admin pode acessar contabilidade)
+                    if (CTX.perfil !== "admin") {
+                        mostrarToast("Acesso restrito a administradores", "danger");
+                        setTimeout(() => location.href = "painel.html", 2000);
+                        return;
+                    }
+
+                    // Atualizar nome no header
+                    document.getElementById('competenciaAtual').innerHTML = 
+                        `<span class="me-2">${CTX.nome}</span> | ${formatarMesAno(mesAtual)}`;
+
+                    resolve();
+                });
+            });
+        }
 
         // ==================== CATEGORIAS PRÉ-DEFINIDAS ====================
         const CATEGORIAS = {
@@ -839,13 +904,18 @@
         let mesAtual = new Date().toISOString().slice(0, 7);
 
         // ==================== INICIALIZAÇÃO ====================
-        document.addEventListener('DOMContentLoaded', function() {
-            inicializarDatas();
-            carregarCategorias();
-            carregarSeguradoras();
-            carregarDados();
-            configurarMascaraValor();
-            configurarFormulario();
+        document.addEventListener('DOMContentLoaded', async function() {
+            try {
+                await initAuth();
+                inicializarDatas();
+                carregarCategorias();
+                carregarSeguradoras();
+                await carregarDados();
+                configurarMascaraValor();
+                configurarFormulario();
+            } catch (e) {
+                console.error("Erro na inicialização:", e);
+            }
         });
 
         function inicializarDatas() {
@@ -1099,6 +1169,8 @@
                 valor,
                 descricao,
                 documento,
+                createdBy: CTX.uid,
+                createdByNome: CTX.nome,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
             };
 
@@ -1560,6 +1632,15 @@
 
         function abrirConfiguracoes() {
             mostrarToast('Configurações em desenvolvimento', 'info');
+        }
+
+        function logout() {
+            auth.signOut().then(() => {
+                location.href = "login.html";
+            }).catch((error) => {
+                console.error("Erro ao sair:", error);
+                mostrarToast("Erro ao sair", "danger");
+            });
         }
 
         // Monitorar mudança de categoria para mostrar campo produtor
