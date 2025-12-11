@@ -254,6 +254,11 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#importar">
+                    <i class="bi bi-upload me-1"></i> Importar Extrato
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" data-bs-toggle="tab" href="#extrato">
                     <i class="bi bi-list-ul me-1"></i> Extrato
                 </a>
@@ -523,6 +528,92 @@
                                         </button>
                                     </div>
                                 </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Importar Extrato -->
+            <div class="tab-pane fade" id="importar">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="card mb-4">
+                            <div class="card-header bg-white">
+                                <h5 class="mb-0"><i class="bi bi-upload me-2"></i>Importar Extrato Bancário (OFX)</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row align-items-center">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Selecione o arquivo OFX do Bradesco</label>
+                                            <input type="file" class="form-control" id="arquivoOFX" accept=".ofx,.OFX">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="mb-3">
+                                            <label class="form-label">Competência</label>
+                                            <input type="month" class="form-control" id="competenciaImport">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <button class="btn btn-primary w-100 mt-4" onclick="processarOFX()">
+                                            <i class="bi bi-gear me-1"></i> Processar Extrato
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="alert alert-info mb-0">
+                                    <i class="bi bi-info-circle me-2"></i>
+                                    O sistema tentará categorizar automaticamente as transações conhecidas (seguradoras, tarifas, impostos). 
+                                    Você só precisará categorizar as transações não identificadas.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Lista de transações importadas -->
+                        <div class="card d-none" id="cardTransacoesImportadas">
+                            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Transações do Extrato</h5>
+                                <div>
+                                    <span class="badge bg-success me-2" id="badgeCategorizadas">0 categorizadas</span>
+                                    <span class="badge bg-warning" id="badgePendentes">0 pendentes</span>
+                                </div>
+                            </div>
+                            <div class="card-body p-0">
+                                <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                                    <table class="table table-hover table-sm mb-0">
+                                        <thead style="position: sticky; top: 0; z-index: 10;">
+                                            <tr>
+                                                <th width="40">
+                                                    <input type="checkbox" id="selecionarTodos" onchange="toggleSelecionarTodos()">
+                                                </th>
+                                                <th width="90">Data</th>
+                                                <th>Descrição do Banco</th>
+                                                <th width="120" class="text-end">Valor</th>
+                                                <th width="120">Tipo</th>
+                                                <th width="200">Categoria</th>
+                                                <th width="60">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tabelaTransacoesImport">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="card-footer bg-white">
+                                <div class="row align-items-center">
+                                    <div class="col-md-6">
+                                        <strong>Total Selecionado: <span id="totalSelecionado" class="text-primary">R$ 0,00</span></strong>
+                                    </div>
+                                    <div class="col-md-6 text-end">
+                                        <button class="btn btn-outline-secondary me-2" onclick="limparImportacao()">
+                                            <i class="bi bi-x-circle me-1"></i> Limpar
+                                        </button>
+                                        <button class="btn btn-success" onclick="salvarTransacoesSelecionadas()">
+                                            <i class="bi bi-check-circle me-1"></i> Salvar Selecionadas na Contabilidade
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1663,6 +1754,360 @@
         // Atualizar relatórios quando clicar na aba
         document.querySelector('[href="#relatorios"]').addEventListener('click', function() {
             setTimeout(carregarTodosRelatorios, 100);
+        });
+
+        // ==================== IMPORTAÇÃO OFX ====================
+        let transacoesImportadas = [];
+
+        // Regras de categorização automática
+        const REGRAS_AUTO = [
+            // RECEITAS - Seguradoras
+            { pattern: /BRADESCO VIDA/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'Bradesco Seguros' },
+            { pattern: /BRADESCO PREVIDENCIA/i, tipo: 'RECEITA', categoria: 'comissao_previdencia', seguradora: 'Bradesco Seguros' },
+            { pattern: /BRADESCO AUTO/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Bradesco Seguros' },
+            { pattern: /TOKIO MARINE/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'Tokio Marine' },
+            { pattern: /ODONTOPREV/i, tipo: 'RECEITA', categoria: 'outras_receitas', seguradora: 'Odontoprev' },
+            { pattern: /PORTO SEGURO/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Porto Seguro' },
+            { pattern: /SULAMÉRICA|SULAMERICA/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'SulAmérica' },
+            { pattern: /ITAU SEGUROS/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'Itaú Seguros' },
+            { pattern: /HDI SEGUROS/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'HDI Seguros' },
+            { pattern: /LIBERTY/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Liberty Seguros' },
+            { pattern: /ALLIANZ/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Allianz' },
+            { pattern: /MAPFRE/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Mapfre' },
+            { pattern: /ZURICH/i, tipo: 'RECEITA', categoria: 'comissao_auto', seguradora: 'Zurich' },
+            { pattern: /CAIXA SEGUR/i, tipo: 'RECEITA', categoria: 'comissao_residencial', seguradora: 'Caixa Seguradora' },
+            { pattern: /BB SEGUROS/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'BB Seguros' },
+            { pattern: /ICATU/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'Icatu Seguros' },
+            { pattern: /MAG SEGUROS|MONGERAL/i, tipo: 'RECEITA', categoria: 'comissao_vida', seguradora: 'MAG Seguros' },
+            
+            // RECEITAS - Outros
+            { pattern: /RESG.*CDB|RESGATE.*CDB|VENCTO.*CDB/i, tipo: 'RECEITA', categoria: 'rendimento' },
+            
+            // DESPESAS - Impostos e Tributos
+            { pattern: /SIMPLES NACIONAL/i, tipo: 'DESPESA', categoria: 'das' },
+            { pattern: /RECEITA FEDERAL/i, tipo: 'DESPESA', categoria: 'das' },
+            { pattern: /TRIBUTO.*INTERNET/i, tipo: 'DESPESA', categoria: 'das' },
+            
+            // DESPESAS - Tarifas
+            { pattern: /TARIFA BANC/i, tipo: 'DESPESA', categoria: 'tarifas_bancarias' },
+            { pattern: /ANUIDADE.*CARTAO|CARTAO.*ANUIDADE/i, tipo: 'DESPESA', categoria: 'tarifas_bancarias' },
+            
+            // DESPESAS - Seguros próprios
+            { pattern: /DEBITO AUTOMATICO.*SEGURO/i, tipo: 'DESPESA', categoria: 'outras_despesas' },
+            
+            // DESPESAS - Contabilidade
+            { pattern: /CONTABILIDADE/i, tipo: 'DESPESA', categoria: 'contador' },
+            
+            // DESPESAS - Empréstimos
+            { pattern: /CAPITAL.*GIRO|OPERACAO.*CAPITAL/i, tipo: 'DESPESA', categoria: 'juros' },
+            
+            // DESPESAS - Título de Capitalização
+            { pattern: /TITULO.*CAPITALIZACAO/i, tipo: 'DESPESA', categoria: 'outras_despesas' }
+        ];
+
+        function processarOFX() {
+            const fileInput = document.getElementById('arquivoOFX');
+            const competencia = document.getElementById('competenciaImport').value;
+
+            if (!fileInput.files.length) {
+                mostrarToast('Selecione um arquivo OFX', 'warning');
+                return;
+            }
+
+            if (!competencia) {
+                mostrarToast('Selecione a competência', 'warning');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const conteudo = e.target.result;
+                const transacoes = parseOFX(conteudo);
+                
+                if (transacoes.length === 0) {
+                    mostrarToast('Nenhuma transação encontrada no arquivo', 'warning');
+                    return;
+                }
+
+                // Categorizar automaticamente
+                transacoesImportadas = transacoes.map((t, idx) => {
+                    const categorizada = categorizarAutomatico(t);
+                    return {
+                        id: idx,
+                        ...t,
+                        ...categorizada,
+                        competencia,
+                        selecionada: true
+                    };
+                });
+
+                renderizarTransacoesImport();
+                document.getElementById('cardTransacoesImportadas').classList.remove('d-none');
+                
+                const categorizadas = transacoesImportadas.filter(t => t.categorizada).length;
+                const pendentes = transacoesImportadas.length - categorizadas;
+                
+                mostrarToast(`${transacoesImportadas.length} transações importadas! ${categorizadas} categorizadas automaticamente.`, 'success');
+            };
+
+            reader.readAsText(file, 'ISO-8859-1');
+        }
+
+        function parseOFX(conteudo) {
+            const transacoes = [];
+            const regex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/g;
+            let match;
+
+            while ((match = regex.exec(conteudo)) !== null) {
+                const bloco = match[1];
+                
+                const tipo = extrairValor(bloco, 'TRNTYPE');
+                const dataStr = extrairValor(bloco, 'DTPOSTED');
+                const valorStr = extrairValor(bloco, 'TRNAMT');
+                const memo = extrairValor(bloco, 'MEMO');
+                const fitid = extrairValor(bloco, 'FITID');
+
+                if (dataStr && valorStr) {
+                    // Converter data YYYYMMDD para YYYY-MM-DD
+                    const ano = dataStr.substring(0, 4);
+                    const mes = dataStr.substring(4, 6);
+                    const dia = dataStr.substring(6, 8);
+                    const data = `${ano}-${mes}-${dia}`;
+
+                    // Converter valor (trocar vírgula por ponto)
+                    const valor = Math.abs(parseFloat(valorStr.replace(',', '.')));
+                    const ehCredito = tipo === 'CREDIT' || parseFloat(valorStr.replace(',', '.')) > 0;
+
+                    transacoes.push({
+                        fitid,
+                        data,
+                        descricaoBanco: memo || 'Sem descrição',
+                        valor,
+                        ehCredito,
+                        tipoOriginal: tipo
+                    });
+                }
+            }
+
+            // Ordenar por data
+            transacoes.sort((a, b) => a.data.localeCompare(b.data));
+
+            return transacoes;
+        }
+
+        function extrairValor(bloco, tag) {
+            const regex = new RegExp(`<${tag}>([^<\\n]+)`, 'i');
+            const match = bloco.match(regex);
+            return match ? match[1].trim() : null;
+        }
+
+        function categorizarAutomatico(transacao) {
+            const desc = transacao.descricaoBanco.toUpperCase();
+            
+            for (const regra of REGRAS_AUTO) {
+                if (regra.pattern.test(desc)) {
+                    // Verificar se o tipo bate (receita deve ser crédito, despesa deve ser débito)
+                    const ehReceita = regra.tipo === 'RECEITA';
+                    if (ehReceita === transacao.ehCredito) {
+                        return {
+                            tipo: regra.tipo,
+                            categoriaId: regra.categoria,
+                            seguradora: regra.seguradora || null,
+                            categorizada: true
+                        };
+                    }
+                }
+            }
+
+            // Não categorizada - sugerir tipo baseado em crédito/débito
+            return {
+                tipo: transacao.ehCredito ? 'RECEITA' : 'DESPESA',
+                categoriaId: '',
+                seguradora: null,
+                categorizada: false
+            };
+        }
+
+        function renderizarTransacoesImport() {
+            const tbody = document.getElementById('tabelaTransacoesImport');
+            
+            tbody.innerHTML = transacoesImportadas.map(t => {
+                const categoria = encontrarCategoria(t.categoriaId, t.tipo);
+                const statusClass = t.categorizada ? 'text-success' : 'text-warning';
+                const statusIcon = t.categorizada ? 'bi-check-circle-fill' : 'bi-question-circle-fill';
+                
+                return `
+                    <tr class="${t.categorizada ? '' : 'table-warning'}">
+                        <td>
+                            <input type="checkbox" class="check-transacao" data-id="${t.id}" 
+                                ${t.selecionada ? 'checked' : ''} onchange="atualizarSelecao(${t.id})">
+                        </td>
+                        <td>${formatarData(t.data)}</td>
+                        <td>
+                            <small class="text-muted">${t.descricaoBanco}</small>
+                            ${t.seguradora ? `<br><span class="badge bg-primary">${t.seguradora}</span>` : ''}
+                        </td>
+                        <td class="text-end ${t.ehCredito ? 'valor-positivo' : 'valor-negativo'}">
+                            ${t.ehCredito ? '+' : '-'} ${formatarMoeda(t.valor)}
+                        </td>
+                        <td>
+                            <select class="form-select form-select-sm" onchange="alterarTipoImport(${t.id}, this.value)">
+                                <option value="RECEITA" ${t.tipo === 'RECEITA' ? 'selected' : ''}>Receita</option>
+                                <option value="DESPESA" ${t.tipo === 'DESPESA' ? 'selected' : ''}>Despesa</option>
+                            </select>
+                        </td>
+                        <td>
+                            <select class="form-select form-select-sm" onchange="alterarCategoriaImport(${t.id}, this.value)">
+                                <option value="">-- Selecione --</option>
+                                ${gerarOptionsCategoria(t.tipo, t.categoriaId)}
+                            </select>
+                        </td>
+                        <td class="text-center">
+                            <i class="bi ${statusIcon} ${statusClass}"></i>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            atualizarContadores();
+        }
+
+        function gerarOptionsCategoria(tipo, selecionada) {
+            const categorias = CATEGORIAS[tipo] || [];
+            return categorias.map(c => 
+                `<option value="${c.id}" ${c.id === selecionada ? 'selected' : ''}>${c.nome}</option>`
+            ).join('');
+        }
+
+        function alterarTipoImport(id, novoTipo) {
+            const t = transacoesImportadas.find(x => x.id === id);
+            if (t) {
+                t.tipo = novoTipo;
+                t.categoriaId = '';
+                t.categorizada = false;
+                renderizarTransacoesImport();
+            }
+        }
+
+        function alterarCategoriaImport(id, novaCategoria) {
+            const t = transacoesImportadas.find(x => x.id === id);
+            if (t) {
+                t.categoriaId = novaCategoria;
+                t.categorizada = !!novaCategoria;
+                atualizarContadores();
+                
+                // Atualizar ícone de status na linha
+                const linha = document.querySelector(`[data-id="${id}"]`).closest('tr');
+                const statusCell = linha.querySelector('td:last-child i');
+                if (novaCategoria) {
+                    statusCell.className = 'bi bi-check-circle-fill text-success';
+                    linha.classList.remove('table-warning');
+                } else {
+                    statusCell.className = 'bi bi-question-circle-fill text-warning';
+                    linha.classList.add('table-warning');
+                }
+            }
+        }
+
+        function atualizarSelecao(id) {
+            const t = transacoesImportadas.find(x => x.id === id);
+            if (t) {
+                t.selecionada = !t.selecionada;
+                atualizarContadores();
+            }
+        }
+
+        function toggleSelecionarTodos() {
+            const checked = document.getElementById('selecionarTodos').checked;
+            transacoesImportadas.forEach(t => t.selecionada = checked);
+            document.querySelectorAll('.check-transacao').forEach(cb => cb.checked = checked);
+            atualizarContadores();
+        }
+
+        function atualizarContadores() {
+            const categorizadas = transacoesImportadas.filter(t => t.categorizada).length;
+            const pendentes = transacoesImportadas.length - categorizadas;
+            const selecionadas = transacoesImportadas.filter(t => t.selecionada);
+            
+            let totalReceitas = 0;
+            let totalDespesas = 0;
+            selecionadas.forEach(t => {
+                if (t.tipo === 'RECEITA') totalReceitas += t.valor;
+                else totalDespesas += t.valor;
+            });
+            
+            document.getElementById('badgeCategorizadas').textContent = `${categorizadas} categorizadas`;
+            document.getElementById('badgePendentes').textContent = `${pendentes} pendentes`;
+            document.getElementById('totalSelecionado').textContent = 
+                `${selecionadas.length} itens | Receitas: ${formatarMoeda(totalReceitas)} | Despesas: ${formatarMoeda(totalDespesas)}`;
+        }
+
+        async function salvarTransacoesSelecionadas() {
+            const selecionadas = transacoesImportadas.filter(t => t.selecionada && t.categorizada);
+            
+            if (selecionadas.length === 0) {
+                mostrarToast('Selecione e categorize as transações antes de salvar', 'warning');
+                return;
+            }
+
+            const pendentes = transacoesImportadas.filter(t => t.selecionada && !t.categorizada);
+            if (pendentes.length > 0) {
+                mostrarToast(`${pendentes.length} transações selecionadas ainda não foram categorizadas`, 'warning');
+                return;
+            }
+
+            try {
+                const batch = db.batch();
+                
+                for (const t of selecionadas) {
+                    const categoria = encontrarCategoria(t.categoriaId, t.tipo);
+                    const docRef = db.collection('contabilidade').doc();
+                    
+                    batch.set(docRef, {
+                        tipo: t.tipo,
+                        data: t.data,
+                        competencia: t.competencia,
+                        categoriaId: t.categoriaId,
+                        categoriaNome: categoria?.nome || t.categoriaId,
+                        contaDebito: t.tipo === 'RECEITA' ? '1.1.02' : categoria?.conta,
+                        contaCredito: t.tipo === 'RECEITA' ? categoria?.conta : '1.1.02',
+                        valor: t.valor,
+                        descricao: t.descricaoBanco,
+                        documento: `IMPORT-${t.fitid}`,
+                        seguradora: t.seguradora || null,
+                        importadoOFX: true,
+                        fitid: t.fitid,
+                        createdBy: CTX.uid,
+                        createdByNome: CTX.nome,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+
+                await batch.commit();
+                
+                mostrarToast(`${selecionadas.length} lançamentos salvos com sucesso!`, 'success');
+                limparImportacao();
+                await carregarDados();
+                carregarTodosRelatorios();
+                
+            } catch (error) {
+                console.error('Erro ao salvar:', error);
+                mostrarToast('Erro ao salvar lançamentos', 'danger');
+            }
+        }
+
+        function limparImportacao() {
+            transacoesImportadas = [];
+            document.getElementById('arquivoOFX').value = '';
+            document.getElementById('cardTransacoesImportadas').classList.add('d-none');
+            document.getElementById('tabelaTransacoesImport').innerHTML = '';
+        }
+
+        // Inicializar competência do import
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('competenciaImport').value = mesAtual;
         });
     </script>
 </body>
