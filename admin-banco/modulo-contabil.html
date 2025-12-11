@@ -544,19 +544,13 @@
                             </div>
                             <div class="card-body">
                                 <div class="row align-items-center">
-                                    <div class="col-md-6">
+                                    <div class="col-md-8">
                                         <div class="mb-3">
                                             <label class="form-label">Selecione o arquivo OFX do Bradesco</label>
                                             <input type="file" class="form-control" id="arquivoOFX" accept=".ofx,.OFX">
                                         </div>
                                     </div>
-                                    <div class="col-md-3">
-                                        <div class="mb-3">
-                                            <label class="form-label">Competência</label>
-                                            <input type="month" class="form-control" id="competenciaImport">
-                                        </div>
-                                    </div>
-                                    <div class="col-md-3">
+                                    <div class="col-md-4">
                                         <button class="btn btn-primary w-100 mt-4" onclick="processarOFX()">
                                             <i class="bi bi-gear me-1"></i> Processar Extrato
                                         </button>
@@ -564,19 +558,28 @@
                                 </div>
                                 <div class="alert alert-info mb-0">
                                     <i class="bi bi-info-circle me-2"></i>
-                                    O sistema tentará categorizar automaticamente as transações conhecidas (seguradoras, tarifas, impostos). 
-                                    Você só precisará categorizar as transações não identificadas.
+                                    O sistema usa a <strong>data de cada transação</strong> para definir a competência automaticamente.
+                                    Categorização automática para seguradoras, tarifas e impostos conhecidos.
                                 </div>
                             </div>
                         </div>
 
                         <!-- Lista de transações importadas -->
                         <div class="card d-none" id="cardTransacoesImportadas">
-                            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                                <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Transações do Extrato</h5>
-                                <div>
-                                    <span class="badge bg-success me-2" id="badgeCategorizadas">0 categorizadas</span>
-                                    <span class="badge bg-warning" id="badgePendentes">0 pendentes</span>
+                            <div class="card-header bg-white">
+                                <div class="row align-items-center">
+                                    <div class="col-md-4">
+                                        <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Transações do Extrato</h5>
+                                    </div>
+                                    <div class="col-md-4 text-center">
+                                        <span class="badge bg-success me-2" id="badgeCategorizadas">0 categorizadas</span>
+                                        <span class="badge bg-warning" id="badgePendentes">0 pendentes</span>
+                                    </div>
+                                    <div class="col-md-4 text-end">
+                                        <select class="form-select form-select-sm d-inline-block" style="width: auto;" id="filtroCompetenciaImport" onchange="filtrarPorCompetencia()">
+                                            <option value="">Todos os meses</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
                             <div class="card-body p-0">
@@ -588,11 +591,12 @@
                                                     <input type="checkbox" id="selecionarTodos" onchange="toggleSelecionarTodos()">
                                                 </th>
                                                 <th width="90">Data</th>
+                                                <th width="80">Compet.</th>
                                                 <th>Descrição do Banco</th>
-                                                <th width="120" class="text-end">Valor</th>
-                                                <th width="120">Tipo</th>
-                                                <th width="200">Categoria</th>
-                                                <th width="60">Status</th>
+                                                <th width="110" class="text-end">Valor</th>
+                                                <th width="100">Tipo</th>
+                                                <th width="180">Categoria</th>
+                                                <th width="50">OK</th>
                                             </tr>
                                         </thead>
                                         <tbody id="tabelaTransacoesImport">
@@ -1807,15 +1811,9 @@
 
         function processarOFX() {
             const fileInput = document.getElementById('arquivoOFX');
-            const competencia = document.getElementById('competenciaImport').value;
 
             if (!fileInput.files.length) {
                 mostrarToast('Selecione um arquivo OFX', 'warning');
-                return;
-            }
-
-            if (!competencia) {
-                mostrarToast('Selecione a competência', 'warning');
                 return;
             }
 
@@ -1831,9 +1829,11 @@
                     return;
                 }
 
-                // Categorizar automaticamente
+                // Categorizar automaticamente e definir competência pela data
                 transacoesImportadas = transacoes.map((t, idx) => {
                     const categorizada = categorizarAutomatico(t);
+                    // Competência = mês/ano da data da transação (YYYY-MM)
+                    const competencia = t.data.substring(0, 7);
                     return {
                         id: idx,
                         ...t,
@@ -1844,12 +1844,17 @@
                 });
 
                 renderizarTransacoesImport();
+                popularFiltroCompetencia();
                 document.getElementById('cardTransacoesImportadas').classList.remove('d-none');
                 
                 const categorizadas = transacoesImportadas.filter(t => t.categorizada).length;
                 const pendentes = transacoesImportadas.length - categorizadas;
                 
-                mostrarToast(`${transacoesImportadas.length} transações importadas! ${categorizadas} categorizadas automaticamente.`, 'success');
+                // Mostrar período do extrato
+                const dataInicio = transacoesImportadas[0]?.data;
+                const dataFim = transacoesImportadas[transacoesImportadas.length - 1]?.data;
+                
+                mostrarToast(`${transacoesImportadas.length} transações de ${formatarData(dataInicio)} a ${formatarData(dataFim)}. ${categorizadas} categorizadas automaticamente!`, 'success');
             };
 
             reader.readAsText(file, 'ISO-8859-1');
@@ -1930,13 +1935,21 @@
             };
         }
 
-        function renderizarTransacoesImport() {
+        function renderizarTransacoesImport(filtroCompetencia = '') {
             const tbody = document.getElementById('tabelaTransacoesImport');
             
-            tbody.innerHTML = transacoesImportadas.map(t => {
+            // Filtrar se necessário
+            const transacoesExibir = filtroCompetencia 
+                ? transacoesImportadas.filter(t => t.competencia === filtroCompetencia)
+                : transacoesImportadas;
+            
+            tbody.innerHTML = transacoesExibir.map(t => {
                 const categoria = encontrarCategoria(t.categoriaId, t.tipo);
                 const statusClass = t.categorizada ? 'text-success' : 'text-warning';
                 const statusIcon = t.categorizada ? 'bi-check-circle-fill' : 'bi-question-circle-fill';
+                // Formatar competência como MM/AAAA
+                const [ano, mes] = t.competencia.split('-');
+                const competenciaFormatada = `${mes}/${ano}`;
                 
                 return `
                     <tr class="${t.categorizada ? '' : 'table-warning'}">
@@ -1944,13 +1957,14 @@
                             <input type="checkbox" class="check-transacao" data-id="${t.id}" 
                                 ${t.selecionada ? 'checked' : ''} onchange="atualizarSelecao(${t.id})">
                         </td>
-                        <td>${formatarData(t.data)}</td>
+                        <td><small>${formatarData(t.data)}</small></td>
+                        <td><small class="text-muted">${competenciaFormatada}</small></td>
                         <td>
-                            <small class="text-muted">${t.descricaoBanco}</small>
-                            ${t.seguradora ? `<br><span class="badge bg-primary">${t.seguradora}</span>` : ''}
+                            <small>${t.descricaoBanco}</small>
+                            ${t.seguradora ? `<span class="badge bg-primary ms-1">${t.seguradora}</span>` : ''}
                         </td>
                         <td class="text-end ${t.ehCredito ? 'valor-positivo' : 'valor-negativo'}">
-                            ${t.ehCredito ? '+' : '-'} ${formatarMoeda(t.valor)}
+                            <small>${t.ehCredito ? '+' : '-'} ${formatarMoeda(t.valor)}</small>
                         </td>
                         <td>
                             <select class="form-select form-select-sm" onchange="alterarTipoImport(${t.id}, this.value)">
@@ -1987,7 +2001,8 @@
                 t.tipo = novoTipo;
                 t.categoriaId = '';
                 t.categorizada = false;
-                renderizarTransacoesImport();
+                const filtroAtual = document.getElementById('filtroCompetenciaImport').value;
+                renderizarTransacoesImport(filtroAtual);
             }
         }
 
@@ -2103,12 +2118,27 @@
             document.getElementById('arquivoOFX').value = '';
             document.getElementById('cardTransacoesImportadas').classList.add('d-none');
             document.getElementById('tabelaTransacoesImport').innerHTML = '';
+            document.getElementById('filtroCompetenciaImport').innerHTML = '<option value="">Todos os meses</option>';
         }
 
-        // Inicializar competência do import
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('competenciaImport').value = mesAtual;
-        });
+        function popularFiltroCompetencia() {
+            const competencias = [...new Set(transacoesImportadas.map(t => t.competencia))].sort();
+            const select = document.getElementById('filtroCompetenciaImport');
+            select.innerHTML = '<option value="">Todos os meses</option>';
+            
+            competencias.forEach(comp => {
+                const [ano, mes] = comp.split('-');
+                const opt = document.createElement('option');
+                opt.value = comp;
+                opt.textContent = `${mes}/${ano}`;
+                select.appendChild(opt);
+            });
+        }
+
+        function filtrarPorCompetencia() {
+            const filtro = document.getElementById('filtroCompetenciaImport').value;
+            renderizarTransacoesImport(filtro);
+        }
     </script>
 </body>
 </html>
