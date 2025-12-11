@@ -2140,7 +2140,7 @@
             { pattern: /TITULO.*CAPITALIZACAO/i, tipo: 'DESPESA', categoria: 'outras_despesas' }
         ];
 
-        function processarOFX() {
+        async function processarOFX() {
             const fileInput = document.getElementById('arquivoOFX');
 
             if (!fileInput.files.length) {
@@ -2151,7 +2151,7 @@
             const file = fileInput.files[0];
             const reader = new FileReader();
 
-            reader.onload = function(e) {
+            reader.onload = async function(e) {
                 const conteudo = e.target.result;
                 const transacoes = parseOFX(conteudo);
                 
@@ -2160,17 +2160,41 @@
                     return;
                 }
 
-                // Categorizar automaticamente e definir competência pela data
+                // Buscar FITIDs já importados para evitar duplicidade
+                mostrarToast('Verificando duplicidades...', 'info');
+                const fitidsExistentes = new Set();
+                
+                try {
+                    const snapshot = await db.collection('contabilidade')
+                        .where('importadoOFX', '==', true)
+                        .get();
+                    
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (data.fitid) {
+                            fitidsExistentes.add(data.fitid);
+                        }
+                    });
+                } catch (error) {
+                    console.warn('Erro ao verificar duplicidades:', error);
+                }
+
+                // Categorizar automaticamente e marcar duplicadas
+                let countDuplicadas = 0;
                 transacoesImportadas = transacoes.map((t, idx) => {
                     const categorizada = categorizarAutomatico(t);
-                    // Competência = mês/ano da data da transação (YYYY-MM)
                     const competencia = t.data.substring(0, 7);
+                    const jáImportada = fitidsExistentes.has(t.fitid);
+                    
+                    if (jáImportada) countDuplicadas++;
+                    
                     return {
                         id: idx,
                         ...t,
                         ...categorizada,
                         competencia,
-                        selecionada: true
+                        selecionada: !jáImportada, // Não selecionar as já importadas
+                        jaImportada: jáImportada
                     };
                 });
 
@@ -2178,14 +2202,17 @@
                 popularFiltroCompetencia();
                 document.getElementById('cardTransacoesImportadas').classList.remove('d-none');
                 
-                const categorizadas = transacoesImportadas.filter(t => t.categorizada).length;
-                const pendentes = transacoesImportadas.length - categorizadas;
-                
-                // Mostrar período do extrato
+                const categorizadas = transacoesImportadas.filter(t => t.categorizada && !t.jaImportada).length;
                 const dataInicio = transacoesImportadas[0]?.data;
                 const dataFim = transacoesImportadas[transacoesImportadas.length - 1]?.data;
                 
-                mostrarToast(`${transacoesImportadas.length} transações de ${formatarData(dataInicio)} a ${formatarData(dataFim)}. ${categorizadas} categorizadas automaticamente!`, 'success');
+                let msg = `${transacoesImportadas.length} transações de ${formatarData(dataInicio)} a ${formatarData(dataFim)}.`;
+                if (countDuplicadas > 0) {
+                    msg += ` ⚠️ ${countDuplicadas} já importadas anteriormente (em cinza).`;
+                }
+                msg += ` ${categorizadas} novas categorizadas automaticamente.`;
+                
+                mostrarToast(msg, countDuplicadas > 0 ? 'warning' : 'success');
             };
 
             reader.readAsText(file, 'ISO-8859-1');
@@ -2276,40 +2303,53 @@
             
             tbody.innerHTML = transacoesExibir.map(t => {
                 const categoria = encontrarCategoria(t.categoriaId, t.tipo);
-                const statusClass = t.categorizada ? 'text-success' : 'text-warning';
-                const statusIcon = t.categorizada ? 'bi-check-circle-fill' : 'bi-question-circle-fill';
+                const statusClass = t.jaImportada ? 'text-secondary' : (t.categorizada ? 'text-success' : 'text-warning');
+                const statusIcon = t.jaImportada ? 'bi-check-circle' : (t.categorizada ? 'bi-check-circle-fill' : 'bi-question-circle-fill');
+                const statusTitle = t.jaImportada ? 'Já importada anteriormente' : (t.categorizada ? 'Categorizada' : 'Pendente');
+                
                 // Formatar competência como MM/AAAA
                 const [ano, mes] = t.competencia.split('-');
                 const competenciaFormatada = `${mes}/${ano}`;
                 
+                // Classe da linha: cinza se já importada, amarela se pendente
+                let rowClass = '';
+                if (t.jaImportada) {
+                    rowClass = 'table-secondary text-muted';
+                } else if (!t.categorizada) {
+                    rowClass = 'table-warning';
+                }
+                
                 return `
-                    <tr class="${t.categorizada ? '' : 'table-warning'}">
+                    <tr class="${rowClass}">
                         <td>
                             <input type="checkbox" class="check-transacao" data-id="${t.id}" 
-                                ${t.selecionada ? 'checked' : ''} onchange="atualizarSelecao(${t.id})">
+                                ${t.selecionada ? 'checked' : ''} 
+                                ${t.jaImportada ? 'disabled' : ''}
+                                onchange="atualizarSelecao(${t.id})">
                         </td>
                         <td><small>${formatarData(t.data)}</small></td>
                         <td><small class="text-muted">${competenciaFormatada}</small></td>
                         <td>
                             <small>${t.descricaoBanco}</small>
                             ${t.seguradora ? `<span class="badge bg-primary ms-1">${t.seguradora}</span>` : ''}
+                            ${t.jaImportada ? `<span class="badge bg-secondary ms-1">JÁ IMPORTADA</span>` : ''}
                         </td>
                         <td class="text-end ${t.ehCredito ? 'valor-positivo' : 'valor-negativo'}">
                             <small>${t.ehCredito ? '+' : '-'} ${formatarMoeda(t.valor)}</small>
                         </td>
                         <td>
-                            <select class="form-select form-select-sm" onchange="alterarTipoImport(${t.id}, this.value)">
+                            <select class="form-select form-select-sm" onchange="alterarTipoImport(${t.id}, this.value)" ${t.jaImportada ? 'disabled' : ''}>
                                 <option value="RECEITA" ${t.tipo === 'RECEITA' ? 'selected' : ''}>Receita</option>
                                 <option value="DESPESA" ${t.tipo === 'DESPESA' ? 'selected' : ''}>Despesa</option>
                             </select>
                         </td>
                         <td>
-                            <select class="form-select form-select-sm" onchange="alterarCategoriaImport(${t.id}, this.value)">
+                            <select class="form-select form-select-sm" onchange="alterarCategoriaImport(${t.id}, this.value)" ${t.jaImportada ? 'disabled' : ''}>
                                 <option value="">-- Selecione --</option>
                                 ${gerarOptionsCategoria(t.tipo, t.categoriaId)}
                             </select>
                         </td>
-                        <td class="text-center">
+                        <td class="text-center" title="${statusTitle}">
                             <i class="bi ${statusIcon} ${statusClass}"></i>
                         </td>
                     </tr>
@@ -2367,15 +2407,24 @@
 
         function toggleSelecionarTodos() {
             const checked = document.getElementById('selecionarTodos').checked;
-            transacoesImportadas.forEach(t => t.selecionada = checked);
-            document.querySelectorAll('.check-transacao').forEach(cb => cb.checked = checked);
+            transacoesImportadas.forEach(t => {
+                // Não selecionar as já importadas
+                if (!t.jaImportada) {
+                    t.selecionada = checked;
+                }
+            });
+            document.querySelectorAll('.check-transacao:not([disabled])').forEach(cb => cb.checked = checked);
             atualizarContadores();
         }
 
         function atualizarContadores() {
-            const categorizadas = transacoesImportadas.filter(t => t.categorizada).length;
-            const pendentes = transacoesImportadas.length - categorizadas;
-            const selecionadas = transacoesImportadas.filter(t => t.selecionada);
+            // Excluir já importadas dos contadores
+            const novas = transacoesImportadas.filter(t => !t.jaImportada);
+            const jaImportadas = transacoesImportadas.filter(t => t.jaImportada).length;
+            
+            const categorizadas = novas.filter(t => t.categorizada).length;
+            const pendentes = novas.length - categorizadas;
+            const selecionadas = novas.filter(t => t.selecionada);
             
             let totalReceitas = 0;
             let totalDespesas = 0;
@@ -2385,13 +2434,15 @@
             });
             
             document.getElementById('badgeCategorizadas').textContent = `${categorizadas} categorizadas`;
-            document.getElementById('badgePendentes').textContent = `${pendentes} pendentes`;
+            document.getElementById('badgePendentes').innerHTML = `${pendentes} pendentes` + 
+                (jaImportadas > 0 ? ` <span class="badge bg-secondary">${jaImportadas} duplicadas</span>` : '');
             document.getElementById('totalSelecionado').textContent = 
                 `${selecionadas.length} itens | Receitas: ${formatarMoeda(totalReceitas)} | Despesas: ${formatarMoeda(totalDespesas)}`;
         }
 
         async function salvarTransacoesSelecionadas() {
-            const selecionadas = transacoesImportadas.filter(t => t.selecionada);
+            // Filtrar: só selecionadas E não já importadas
+            const selecionadas = transacoesImportadas.filter(t => t.selecionada && !t.jaImportada);
             
             if (selecionadas.length === 0) {
                 mostrarToast('Selecione as transações que deseja salvar', 'warning');
@@ -2475,6 +2526,9 @@
             
             let count = 0;
             transacoesImportadas.forEach(t => {
+                // Ignorar já importadas
+                if (t.jaImportada) return;
+                
                 if (!t.categorizada) {
                     // Verificar se o tipo faz sentido (crédito = receita, débito = despesa)
                     const tipoCorreto = (tipo === 'RECEITA' && t.ehCredito) || (tipo === 'DESPESA' && !t.ehCredito);
@@ -2495,12 +2549,14 @@
 
         function selecionarApenasCategorizado() {
             transacoesImportadas.forEach(t => {
+                // Ignorar já importadas
+                if (t.jaImportada) return;
                 t.selecionada = t.categorizada;
             });
-            document.querySelectorAll('.check-transacao').forEach(cb => {
+            document.querySelectorAll('.check-transacao:not([disabled])').forEach(cb => {
                 const id = parseInt(cb.dataset.id);
                 const t = transacoesImportadas.find(x => x.id === id);
-                if (t) cb.checked = t.selecionada;
+                if (t && !t.jaImportada) cb.checked = t.selecionada;
             });
             atualizarContadores();
             mostrarToast('Selecionadas apenas as transações categorizadas', 'info');
@@ -2508,12 +2564,14 @@
 
         function inverterSelecao() {
             transacoesImportadas.forEach(t => {
+                // Ignorar já importadas
+                if (t.jaImportada) return;
                 t.selecionada = !t.selecionada;
             });
-            document.querySelectorAll('.check-transacao').forEach(cb => {
+            document.querySelectorAll('.check-transacao:not([disabled])').forEach(cb => {
                 const id = parseInt(cb.dataset.id);
                 const t = transacoesImportadas.find(x => x.id === id);
-                if (t) cb.checked = t.selecionada;
+                if (t && !t.jaImportada) cb.checked = t.selecionada;
             });
             atualizarContadores();
         }
