@@ -598,6 +598,19 @@
                                     O sistema usa a <strong>data de cada transação</strong> para definir a competência automaticamente.
                                     Categorização automática para seguradoras, tarifas e impostos conhecidos.
                                 </div>
+                                
+                                <!-- Botão para limpar lançamentos importados -->
+                                <div class="alert alert-danger mt-3 mb-0">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <i class="bi bi-exclamation-triangle me-2"></i>
+                                            <strong>Reimportar do zero?</strong> Apaga todos os lançamentos importados via OFX e permite importar novamente.
+                                        </div>
+                                        <button class="btn btn-danger btn-sm" onclick="apagarTodosImportados()">
+                                            <i class="bi bi-trash me-1"></i> Apagar Todos Importados
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -2518,6 +2531,71 @@
             document.getElementById('cardTransacoesImportadas').classList.add('d-none');
             document.getElementById('tabelaTransacoesImport').innerHTML = '';
             document.getElementById('filtroCompetenciaImport').innerHTML = '<option value="">Todos os meses</option>';
+        }
+
+        async function apagarTodosImportados() {
+            if (!confirm('⚠️ ATENÇÃO!\n\nIsso vai APAGAR TODOS os lançamentos que foram importados via OFX.\n\nOs lançamentos manuais serão mantidos.\n\nTem certeza?')) {
+                return;
+            }
+            
+            if (!confirm('🔴 CONFIRMAÇÃO FINAL\n\nVocê está prestes a apagar TODOS os lançamentos importados.\n\nEssa ação NÃO pode ser desfeita!\n\nDigite OK para confirmar:')) {
+                return;
+            }
+
+            mostrarToast('Apagando lançamentos importados... Aguarde!', 'warning');
+
+            try {
+                // Buscar todos os documentos com importadoOFX = true
+                const snapshot = await db.collection('contabilidade')
+                    .where('importadoOFX', '==', true)
+                    .get();
+
+                if (snapshot.empty) {
+                    mostrarToast('Nenhum lançamento importado encontrado', 'info');
+                    return;
+                }
+
+                const total = snapshot.size;
+                let deletados = 0;
+
+                // Deletar em lotes de 500 (limite do Firebase)
+                const batchSize = 500;
+                const batches = [];
+                let batch = db.batch();
+                let count = 0;
+
+                snapshot.forEach(doc => {
+                    batch.delete(doc.ref);
+                    count++;
+                    deletados++;
+
+                    if (count >= batchSize) {
+                        batches.push(batch);
+                        batch = db.batch();
+                        count = 0;
+                    }
+                });
+
+                // Adicionar último batch se tiver docs restantes
+                if (count > 0) {
+                    batches.push(batch);
+                }
+
+                // Executar todos os batches
+                for (const b of batches) {
+                    await b.commit();
+                }
+
+                mostrarToast(`✅ ${total} lançamentos importados foram apagados com sucesso!`, 'success');
+                
+                // Recarregar dados
+                await carregarDados();
+                carregarTodosRelatorios();
+                
+            } catch (error) {
+                console.error('Erro ao apagar:', error);
+                mostrarToast('Erro ao apagar lançamentos: ' + error.message, 'danger');
+            }
         }
 
         function categorizarPendentesEmMassa(tipo) {
