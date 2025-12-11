@@ -605,10 +605,10 @@
                         <div class="card d-none" id="cardTransacoesImportadas">
                             <div class="card-header bg-white">
                                 <div class="row align-items-center">
-                                    <div class="col-md-4">
+                                    <div class="col-md-3">
                                         <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Transações do Extrato</h5>
                                     </div>
-                                    <div class="col-md-4 text-center">
+                                    <div class="col-md-5 text-center">
                                         <span class="badge bg-success me-2" id="badgeCategorizadas">0 categorizadas</span>
                                         <span class="badge bg-warning" id="badgePendentes">0 pendentes</span>
                                     </div>
@@ -616,6 +616,29 @@
                                         <select class="form-select form-select-sm d-inline-block" style="width: auto;" id="filtroCompetenciaImport" onchange="filtrarPorCompetencia()">
                                             <option value="">Todos os meses</option>
                                         </select>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Barra de ações em massa -->
+                            <div class="card-body bg-light py-2 border-bottom">
+                                <div class="row align-items-center">
+                                    <div class="col-md-6">
+                                        <strong class="me-2">Categorizar pendentes em massa:</strong>
+                                        <button class="btn btn-success btn-sm me-1" onclick="categorizarPendentesEmMassa('RECEITA')">
+                                            <i class="bi bi-arrow-up me-1"></i>Todas como Receita
+                                        </button>
+                                        <button class="btn btn-danger btn-sm" onclick="categorizarPendentesEmMassa('DESPESA')">
+                                            <i class="bi bi-arrow-down me-1"></i>Todas como Despesa
+                                        </button>
+                                    </div>
+                                    <div class="col-md-6 text-end">
+                                        <button class="btn btn-outline-secondary btn-sm me-1" onclick="selecionarApenasCategorizado()">
+                                            <i class="bi bi-check-square me-1"></i>Selecionar só categorizadas
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" onclick="inverterSelecao()">
+                                            <i class="bi bi-toggle-on me-1"></i>Inverter seleção
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -2368,23 +2391,40 @@
         }
 
         async function salvarTransacoesSelecionadas() {
-            const selecionadas = transacoesImportadas.filter(t => t.selecionada && t.categorizada);
+            const selecionadas = transacoesImportadas.filter(t => t.selecionada);
             
             if (selecionadas.length === 0) {
-                mostrarToast('Selecione e categorize as transações antes de salvar', 'warning');
+                mostrarToast('Selecione as transações que deseja salvar', 'warning');
                 return;
             }
 
-            const pendentes = transacoesImportadas.filter(t => t.selecionada && !t.categorizada);
-            if (pendentes.length > 0) {
-                mostrarToast(`${pendentes.length} transações selecionadas ainda não foram categorizadas`, 'warning');
-                return;
+            // Separar categorizadas e não categorizadas
+            const categorizadas = selecionadas.filter(t => t.categorizada);
+            const naoCategorizadas = selecionadas.filter(t => !t.categorizada);
+
+            if (naoCategorizadas.length > 0) {
+                // Categorizar automaticamente as não categorizadas com categoria genérica
+                naoCategorizadas.forEach(t => {
+                    if (t.ehCredito) {
+                        t.tipo = 'RECEITA';
+                        t.categoriaId = 'outras_receitas';
+                        t.categorizada = true;
+                    } else {
+                        t.tipo = 'DESPESA';
+                        t.categoriaId = 'outras_despesas';
+                        t.categorizada = true;
+                    }
+                });
+                mostrarToast(`${naoCategorizadas.length} transações sem categoria foram marcadas como "Outras"`, 'info');
             }
+
+            // Agora todas estão categorizadas
+            const parasSalvar = selecionadas;
 
             try {
                 const batch = db.batch();
                 
-                for (const t of selecionadas) {
+                for (const t of parasSalvar) {
                     const categoria = encontrarCategoria(t.categoriaId, t.tipo);
                     const docRef = db.collection('contabilidade').doc();
                     
@@ -2393,9 +2433,9 @@
                         data: t.data,
                         competencia: t.competencia,
                         categoriaId: t.categoriaId,
-                        categoriaNome: categoria?.nome || t.categoriaId,
-                        contaDebito: t.tipo === 'RECEITA' ? '1.1.02' : categoria?.conta,
-                        contaCredito: t.tipo === 'RECEITA' ? categoria?.conta : '1.1.02',
+                        categoriaNome: categoria?.nome || (t.tipo === 'RECEITA' ? 'Outras Receitas' : 'Outras Despesas'),
+                        contaDebito: t.tipo === 'RECEITA' ? '1.1.02' : (categoria?.conta || '5.1.99'),
+                        contaCredito: t.tipo === 'RECEITA' ? (categoria?.conta || '4.1.99') : '1.1.02',
                         valor: t.valor,
                         descricao: t.descricaoBanco,
                         documento: `IMPORT-${t.fitid}`,
@@ -2410,14 +2450,14 @@
 
                 await batch.commit();
                 
-                mostrarToast(`${selecionadas.length} lançamentos salvos com sucesso!`, 'success');
+                mostrarToast(`${parasSalvar.length} lançamentos salvos com sucesso!`, 'success');
                 limparImportacao();
                 await carregarDados();
                 carregarTodosRelatorios();
                 
             } catch (error) {
                 console.error('Erro ao salvar:', error);
-                mostrarToast('Erro ao salvar lançamentos', 'danger');
+                mostrarToast('Erro ao salvar lançamentos: ' + error.message, 'danger');
             }
         }
 
@@ -2427,6 +2467,55 @@
             document.getElementById('cardTransacoesImportadas').classList.add('d-none');
             document.getElementById('tabelaTransacoesImport').innerHTML = '';
             document.getElementById('filtroCompetenciaImport').innerHTML = '<option value="">Todos os meses</option>';
+        }
+
+        function categorizarPendentesEmMassa(tipo) {
+            // Categoria genérica baseada no tipo
+            const categoriaGenerica = tipo === 'RECEITA' ? 'outras_receitas' : 'outras_despesas';
+            
+            let count = 0;
+            transacoesImportadas.forEach(t => {
+                if (!t.categorizada) {
+                    // Verificar se o tipo faz sentido (crédito = receita, débito = despesa)
+                    const tipoCorreto = (tipo === 'RECEITA' && t.ehCredito) || (tipo === 'DESPESA' && !t.ehCredito);
+                    
+                    if (tipoCorreto) {
+                        t.tipo = tipo;
+                        t.categoriaId = categoriaGenerica;
+                        t.categorizada = true;
+                        count++;
+                    }
+                }
+            });
+            
+            const filtroAtual = document.getElementById('filtroCompetenciaImport').value;
+            renderizarTransacoesImport(filtroAtual);
+            mostrarToast(`${count} transações categorizadas como "${tipo === 'RECEITA' ? 'Outras Receitas' : 'Outras Despesas'}"`, 'success');
+        }
+
+        function selecionarApenasCategorizado() {
+            transacoesImportadas.forEach(t => {
+                t.selecionada = t.categorizada;
+            });
+            document.querySelectorAll('.check-transacao').forEach(cb => {
+                const id = parseInt(cb.dataset.id);
+                const t = transacoesImportadas.find(x => x.id === id);
+                if (t) cb.checked = t.selecionada;
+            });
+            atualizarContadores();
+            mostrarToast('Selecionadas apenas as transações categorizadas', 'info');
+        }
+
+        function inverterSelecao() {
+            transacoesImportadas.forEach(t => {
+                t.selecionada = !t.selecionada;
+            });
+            document.querySelectorAll('.check-transacao').forEach(cb => {
+                const id = parseInt(cb.dataset.id);
+                const t = transacoesImportadas.find(x => x.id === id);
+                if (t) cb.checked = t.selecionada;
+            });
+            atualizarContadores();
         }
 
         function popularFiltroCompetencia() {
