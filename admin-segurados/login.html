@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin CRM - Retorno Seguros</title>
+    <link rel="stylesheet" href="css/admin-style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="login-page">
+    <div class="login-container">
+        <div class="login-header">
+            <img src="../img/logo-retorno.png" alt="Retorno Seguros" onerror="this.style.display='none'">
+            <h1>CRM Retorno Seguros</h1>
+            <p>Sistema de Gestão de Leads</p>
+        </div>
+
+        <div class="login-error" id="loginError"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label class="form-label">E-mail</label>
+                <input type="email" class="form-control" id="email" placeholder="Seu e-mail" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Senha</label>
+                <div style="position: relative;">
+                    <input type="password" class="form-control" id="senha" placeholder="Sua senha" required>
+                    <button type="button" onclick="togglePassword()" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                        <i class="fas fa-eye" id="toggleIcon"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;" id="btnLogin">
+                <i class="fas fa-sign-in-alt"></i> Entrar
+            </button>
+        </form>
+
+        <div style="text-align: center; margin-top: 25px; padding-top: 25px; border-top: 1px solid var(--border-color);">
+            <p style="font-size: 13px; color: var(--text-muted);">
+                <i class="fas fa-shield-alt"></i> Acesso restrito a administradores
+            </p>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <script>
+        // Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+            authDomain: "retorno-seguros.firebaseapp.com",
+            projectId: "retorno-seguros",
+            storageBucket: "retorno-seguros.firebasestorage.app",
+            messagingSenderId: "495712392972",
+            appId: "1:495712392972:web:e1e78aedc48bdeea48db29",
+            measurementId: "G-C6E44WXLPW"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // E-mails autorizados como admin
+        const ADMINS_AUTORIZADOS = [
+            'patrick@retornoseguros.com.br',
+            'pchemis@gmail.com',
+            'admin@retornoseguros.com.br'
+        ];
+
+        // Verificar se já está logado
+        auth.onAuthStateChanged(async (user) => {
+            if (user) {
+                const isAdmin = await verificarAdmin(user.email);
+                if (isAdmin) {
+                    window.location.href = 'dashboard.html';
+                }
+            }
+        });
+
+        // Verificar se é admin
+        async function verificarAdmin(email) {
+            // Primeiro verifica na lista fixa
+            if (ADMINS_AUTORIZADOS.includes(email.toLowerCase())) {
+                return true;
+            }
+            
+            // Depois verifica no Firestore (para funcionários adicionados)
+            try {
+                const adminDoc = await db.collection('admins_crm').where('email', '==', email.toLowerCase()).get();
+                if (!adminDoc.empty) {
+                    const adminData = adminDoc.docs[0].data();
+                    return adminData.ativo !== false;
+                }
+            } catch (error) {
+                console.error('Erro ao verificar admin:', error);
+            }
+            
+            return false;
+        }
+
+        // Login
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value.trim();
+            const senha = document.getElementById('senha').value;
+            const btnLogin = document.getElementById('btnLogin');
+            const errorDiv = document.getElementById('loginError');
+
+            btnLogin.disabled = true;
+            btnLogin.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Entrando...';
+            errorDiv.classList.remove('show');
+
+            try {
+                // Verificar se é admin antes de logar
+                const isAdmin = await verificarAdmin(email);
+                if (!isAdmin) {
+                    throw new Error('Acesso negado. Você não tem permissão de administrador.');
+                }
+
+                // Fazer login
+                await auth.signInWithEmailAndPassword(email, senha);
+                
+                // Registrar acesso
+                await db.collection('logs_acesso').add({
+                    email: email,
+                    tipo: 'login_admin_crm',
+                    dataHora: firebase.firestore.FieldValue.serverTimestamp(),
+                    userAgent: navigator.userAgent
+                });
+
+                window.location.href = 'dashboard.html';
+                
+            } catch (error) {
+                console.error('Erro no login:', error);
+                
+                let mensagem = 'Erro ao fazer login. Tente novamente.';
+                
+                if (error.message.includes('Acesso negado')) {
+                    mensagem = error.message;
+                } else if (error.code === 'auth/user-not-found') {
+                    mensagem = 'E-mail não cadastrado no sistema.';
+                } else if (error.code === 'auth/wrong-password') {
+                    mensagem = 'Senha incorreta.';
+                } else if (error.code === 'auth/invalid-email') {
+                    mensagem = 'E-mail inválido.';
+                } else if (error.code === 'auth/too-many-requests') {
+                    mensagem = 'Muitas tentativas. Aguarde alguns minutos.';
+                }
+
+                errorDiv.textContent = mensagem;
+                errorDiv.classList.add('show');
+            } finally {
+                btnLogin.disabled = false;
+                btnLogin.innerHTML = '<i class="fas fa-sign-in-alt"></i> Entrar';
+            }
+        });
+
+        // Toggle senha
+        function togglePassword() {
+            const input = document.getElementById('senha');
+            const icon = document.getElementById('toggleIcon');
+            
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.classList.replace('fa-eye', 'fa-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.classList.replace('fa-eye-slash', 'fa-eye');
+            }
+        }
+    </script>
+</body>
+</html>
