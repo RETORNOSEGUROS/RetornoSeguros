@@ -723,11 +723,20 @@
                     return false;
                 }
                 
-                // Verifica se existe lead com esse telefone (pode virar indicador)
-                const queryLead = await db.collection('leads_crm')
-                    .where('whatsapp', '==', telefoneLimpo)
-                    .limit(1)
-                    .get();
+                // Tenta verificar se existe lead com esse telefone (pode falhar por permissão)
+                let leadId = null;
+                try {
+                    const queryLead = await db.collection('leads_crm')
+                        .where('whatsapp', '==', telefoneLimpo)
+                        .limit(1)
+                        .get();
+                    if (!queryLead.empty) {
+                        leadId = queryLead.docs[0].id;
+                    }
+                } catch (e) {
+                    // Ignora erro de permissão - visitante não tem acesso a leads_crm
+                    console.log('Não foi possível verificar leads_crm (normal para visitantes)');
+                }
                 
                 // Gera novo código
                 const codigo = gerarCodigo(nome, telefoneLimpo);
@@ -757,7 +766,7 @@
                     dataCadastro: firebase.firestore.FieldValue.serverTimestamp(),
                     ativo: true,
                     origem: 'site',
-                    leadId: queryLead.empty ? null : queryLead.docs[0].id
+                    leadId: leadId
                 });
                 
                 codigoAtual = codigoFinal;
@@ -811,20 +820,28 @@
                     return false;
                 }
                 
-                // Não encontrou - verifica se tem lead com esse telefone
-                const queryLead = await db.collection('leads_crm')
-                    .where('whatsapp', '==', telefoneLimpo)
-                    .limit(1)
-                    .get();
+                // Não encontrou como indicador - tenta verificar se tem lead
+                let leadNome = '';
+                try {
+                    const queryLead = await db.collection('leads_crm')
+                        .where('whatsapp', '==', telefoneLimpo)
+                        .limit(1)
+                        .get();
+                    
+                    if (!queryLead.empty) {
+                        const leadData = queryLead.docs[0].data();
+                        leadNome = leadData.nome || '';
+                    }
+                } catch (e) {
+                    // Ignora erro de permissão - visitante não tem acesso a leads_crm
+                    console.log('Não foi possível verificar leads_crm (normal para visitantes)');
+                }
                 
                 showLoading(false);
                 
-                if (!queryLead.empty) {
-                    const leadData = queryLead.docs[0].data();
-                    showAlert(`Encontramos seu cadastro, ${leadData.nome?.split(' ')[0] || ''}! Gere seu código na aba "Quero Indicar".`, 'info');
-                    
-                    // Preenche o nome automaticamente
-                    document.getElementById('nome').value = leadData.nome || '';
+                if (leadNome) {
+                    showAlert(`Encontramos seu cadastro, ${leadNome.split(' ')[0]}! Gere seu código na aba "Quero Indicar".`, 'info');
+                    document.getElementById('nome').value = leadNome;
                     document.getElementById('telefone').value = telefone;
                     switchTab('novo');
                 } else {
