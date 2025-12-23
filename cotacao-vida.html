@@ -472,6 +472,33 @@
             white-space: nowrap;
         }
 
+        .coverage-value-input {
+            width: 110px;
+            padding: 0.4rem 0.5rem;
+            border: 1px solid #e5e9ec;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-family: inherit;
+            font-weight: 600;
+            color: var(--text-dark);
+            text-align: right;
+            margin-right: 0.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .coverage-value-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(0, 136, 170, 0.1);
+        }
+
+        .coverage-value-group {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.25rem;
+        }
+
         .coverage-badge {
             background: var(--success);
             color: white;
@@ -507,6 +534,14 @@
         .result-installment {
             font-size: 1rem;
             opacity: 0.9;
+        }
+
+        .result-note {
+            font-size: 0.8rem;
+            opacity: 0.85;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(255,255,255,0.2);
         }
 
         .result-discount {
@@ -985,6 +1020,7 @@
                 <div class="result-value" id="resultValue">R$ 54 - R$ 65</div>
                 <div class="result-installment">débito em conta ou boleto</div>
                 <div class="result-discount">💳 No cartão: 10% de desconto!</div>
+                <div class="result-note">*Valores aproximados. O valor final depende da análise da seguradora.</div>
                 <div class="result-promise">
                     <strong>🤝 Vamos brigar por esse valor!</strong>
                     Se a gente conseguir, você fecha com a Retorno?
@@ -1138,19 +1174,19 @@
             },
             doencasGraves: { 
                 nome: '🎗️ Doenças Graves', 
-                desc: 'Diagnóstico de câncer, infarto, AVC e outras 27 doenças - recebe R$ 20 mil para tratamento',
+                desc: 'Diagnóstico de câncer, infarto, AVC e outras 27 doenças - recebe para tratamento',
                 valorPadrao: 20000,
                 recomendadoPara: ['filhos_pequenos', 'casal']
             },
             dih: { 
                 nome: '🏨 Diária de Internação', 
-                desc: 'Se você ficar internado, recebe R$ 100 por dia (até 90 dias)',
+                desc: 'Se você ficar internado, recebe por dia (até 90 dias)',
                 valorPadrao: 100,
                 recomendadoPara: []
             },
             funeral: { 
                 nome: '⚱️ Funeral Familiar', 
-                desc: 'Cobre funeral de toda a família (você, cônjuge, filhos e pais) - R$ 7 mil cada',
+                desc: 'Cobre funeral de toda a família (você, cônjuge, filhos e pais)',
                 valorPadrao: 7000,
                 recomendadoPara: ['casal', 'filhos_pequenos', 'filhos_adultos']
             }
@@ -1378,29 +1414,83 @@
                     formData.familia === cond || formData.ocupacao === cond
                 );
                 
+                // Valor inicial (usa capital do usuário para IPA e IFPD)
+                let valorInicial = config.valorPadrao;
+                if (key === 'ipa' || key === 'ifpd') {
+                    valorInicial = formData.capital;
+                }
+                
                 // Calcular preço
                 let precoAnual = 0;
                 if (key === 'ipa') {
-                    precoAnual = formData.capital * taxasBase.ipa * mult;
+                    precoAnual = valorInicial * taxasBase.ipa * mult;
                 } else if (key === 'ifpd') {
-                    precoAnual = formData.capital * taxasBase.ifpd * mult;
+                    precoAnual = valorInicial * taxasBase.ifpd * mult;
                 } else if (key === 'doencasGraves') {
-                    precoAnual = config.valorPadrao * taxasBase.doencasGraves * mult;
+                    precoAnual = valorInicial * taxasBase.doencasGraves * mult;
                 } else if (key === 'dih') {
-                    precoAnual = (taxasBase.dih + taxasBase.dihUti) * mult;
+                    precoAnual = (taxasBase.dih + taxasBase.dihUti) * mult * (valorInicial / 100);
                 } else if (key === 'funeral') {
-                    precoAnual = taxasBase.funeral * mult;
+                    precoAnual = taxasBase.funeral * mult * (valorInicial / 7000);
                 }
                 
                 const precoMensal = Math.round(precoAnual / 12);
                 
                 // Inicializar no formData
                 formData.coberturas[key] = {
-                    valor: config.valorPadrao,
+                    valor: valorInicial,
                     precoAnual: precoAnual,
                     precoMensal: precoMensal,
                     ativo: isRecomendado
                 };
+                
+                // Determinar se o campo de valor é editável e seu formato
+                let valorInputHtml = '';
+                if (key === 'ipa' || key === 'ifpd') {
+                    valorInputHtml = `
+                        <div class="coverage-value-group">
+                            <input type="text" class="coverage-value-input" 
+                                   id="valor_${key}" 
+                                   value="R$ ${valorInicial.toLocaleString('pt-BR')}"
+                                   onchange="atualizarValorCobertura('${key}', this)"
+                                   onfocus="this.select()">
+                            <span class="coverage-price" id="price_${key}">~R$ ${precoMensal}/mês</span>
+                        </div>
+                    `;
+                } else if (key === 'doencasGraves') {
+                    valorInputHtml = `
+                        <div class="coverage-value-group">
+                            <input type="text" class="coverage-value-input" 
+                                   id="valor_${key}" 
+                                   value="R$ ${(valorInicial/1000).toFixed(0)} mil"
+                                   onchange="atualizarValorCobertura('${key}', this)"
+                                   onfocus="this.select()">
+                            <span class="coverage-price" id="price_${key}">~R$ ${precoMensal}/mês</span>
+                        </div>
+                    `;
+                } else if (key === 'dih') {
+                    valorInputHtml = `
+                        <div class="coverage-value-group">
+                            <input type="text" class="coverage-value-input" 
+                                   id="valor_${key}" 
+                                   value="R$ ${valorInicial}/dia"
+                                   onchange="atualizarValorCobertura('${key}', this)"
+                                   onfocus="this.select()">
+                            <span class="coverage-price" id="price_${key}">~R$ ${precoMensal}/mês</span>
+                        </div>
+                    `;
+                } else if (key === 'funeral') {
+                    valorInputHtml = `
+                        <div class="coverage-value-group">
+                            <input type="text" class="coverage-value-input" 
+                                   id="valor_${key}" 
+                                   value="R$ ${(valorInicial/1000).toFixed(0)} mil"
+                                   onchange="atualizarValorCobertura('${key}', this)"
+                                   onfocus="this.select()">
+                            <span class="coverage-price" id="price_${key}">~R$ ${precoMensal}/mês</span>
+                        </div>
+                    `;
+                }
                 
                 html += `
                     <div class="coverage-item ${isRecomendado ? 'active recommended' : ''}" id="cov_${key}">
@@ -1410,7 +1500,7 @@
                                 <div class="coverage-name">${config.nome}${isRecomendado ? '<span class="coverage-badge">Sugestão</span>' : ''}</div>
                                 <div class="coverage-desc">${config.desc}</div>
                             </div>
-                            <span class="coverage-price">~R$ ${precoMensal}/mês</span>
+                            ${valorInputHtml}
                         </div>
                     </div>
                 `;
@@ -1426,6 +1516,71 @@
                 document.getElementById('coverageTipText').textContent = 
                     'Como autônomo/empresário, IPA é fundamental - se você ficar inválido, recebe o capital para se manter.';
             }
+        }
+
+        function atualizarValorCobertura(key, input) {
+            const mult = getMultiplicadorIdade();
+            
+            // Extrair valor numérico do input
+            let valorStr = input.value.replace(/[^\d]/g, '');
+            let valor = parseInt(valorStr) || 0;
+            
+            // Para valores em "mil", multiplicar
+            if (key === 'doencasGraves' || key === 'funeral') {
+                if (valor < 1000) valor = valor * 1000;
+            }
+            
+            // Para diária, o valor já é o valor por dia
+            if (key === 'dih') {
+                if (valor > 500) valor = 500; // máximo R$ 500/dia
+                if (valor < 50) valor = 50;   // mínimo R$ 50/dia
+            }
+            
+            // Limites
+            if (key === 'ipa' || key === 'ifpd') {
+                if (valor > 1000000) valor = 1000000;
+                if (valor < 50000) valor = 50000;
+            }
+            if (key === 'doencasGraves') {
+                if (valor > 100000) valor = 100000;
+                if (valor < 10000) valor = 10000;
+            }
+            if (key === 'funeral') {
+                if (valor > 20000) valor = 20000;
+                if (valor < 5000) valor = 5000;
+            }
+            
+            // Atualizar valor no formData
+            formData.coberturas[key].valor = valor;
+            
+            // Recalcular preço
+            let precoAnual = 0;
+            if (key === 'ipa') {
+                precoAnual = valor * taxasBase.ipa * mult;
+            } else if (key === 'ifpd') {
+                precoAnual = valor * taxasBase.ifpd * mult;
+            } else if (key === 'doencasGraves') {
+                precoAnual = valor * taxasBase.doencasGraves * mult;
+            } else if (key === 'dih') {
+                precoAnual = (taxasBase.dih + taxasBase.dihUti) * mult * (valor / 100);
+            } else if (key === 'funeral') {
+                precoAnual = taxasBase.funeral * mult * (valor / 7000);
+            }
+            
+            const precoMensal = Math.round(precoAnual / 12);
+            formData.coberturas[key].precoAnual = precoAnual;
+            formData.coberturas[key].precoMensal = precoMensal;
+            
+            // Atualizar UI
+            if (key === 'ipa' || key === 'ifpd') {
+                input.value = `R$ ${valor.toLocaleString('pt-BR')}`;
+            } else if (key === 'doencasGraves' || key === 'funeral') {
+                input.value = `R$ ${(valor/1000).toFixed(0)} mil`;
+            } else if (key === 'dih') {
+                input.value = `R$ ${valor}/dia`;
+            }
+            
+            document.getElementById(`price_${key}`).textContent = `~R$ ${precoMensal}/mês`;
         }
 
         function toggleCoverage(key) {
@@ -1509,10 +1664,10 @@
             
             Object.entries(formData.coberturas).forEach(([key, cob]) => {
                 if (cob.ativo) {
-                    let valorDisplay = key === 'dih' ? 'R$ 100/dia' : 
-                                       key === 'doencasGraves' ? 'R$ 20k' :
-                                       key === 'funeral' ? 'R$ 7k' :
-                                       `R$ ${(cob.valor/1000)}k`;
+                    let valorDisplay = key === 'dih' ? `R$ ${cob.valor}/dia` : 
+                                       key === 'doencasGraves' ? `R$ ${(cob.valor/1000).toFixed(0)}k` :
+                                       key === 'funeral' ? `R$ ${(cob.valor/1000).toFixed(0)}k` :
+                                       `R$ ${(cob.valor/1000).toFixed(0)}k`;
                     coveragesHtml += `
                         <div class="coverage-summary-item">
                             <div class="coverage-summary-icon">${icons[key]}</div>
@@ -1533,14 +1688,20 @@
             // WhatsApp
             const primeiroNome = formData.nome.split(' ')[0];
             
+            const nomesCompletos = {
+                ipa: 'Invalidez Acidental (IPA)',
+                ifpd: 'Invalidez por Doença (IFPD)',
+                doencasGraves: 'Doenças Graves',
+                dih: 'Diária de Internação',
+                funeral: 'Funeral Familiar'
+            };
+            
             let coberturasTexto = [`Morte: R$ ${capital.toLocaleString('pt-BR')}`, `Morte Acidental: +R$ ${capital.toLocaleString('pt-BR')}`];
             Object.entries(formData.coberturas).forEach(([key, cob]) => {
                 if (cob.ativo) {
-                    let valor = key === 'dih' ? 'R$ 100/dia' : 
-                               key === 'doencasGraves' ? 'R$ 20.000' :
-                               key === 'funeral' ? 'R$ 7.000' :
+                    let valor = key === 'dih' ? `R$ ${cob.valor}/dia` : 
                                `R$ ${cob.valor.toLocaleString('pt-BR')}`;
-                    coberturasTexto.push(`${nomes[key]}: ${valor}`);
+                    coberturasTexto.push(`${nomesCompletos[key]}: ${valor}`);
                 }
             });
             
@@ -1556,7 +1717,8 @@
                 `Já vou adiantando meus dados para agilizar:\n` +
                 `📋 Nome completo: \n` +
                 `📋 CPF: \n` +
-                `📋 Data de nascimento: `;
+                `📋 Data de nascimento: \n` +
+                `📋 Profissão: `;
             
             const whatsappUrl = `https://wa.me/5554996454300?text=${encodeURIComponent(mensagem)}`;
             document.getElementById('whatsappBtn').href = whatsappUrl;
