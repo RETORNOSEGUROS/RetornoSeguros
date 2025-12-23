@@ -580,6 +580,14 @@
             opacity: 0.9;
         }
 
+        .result-note {
+            font-size: 0.8rem;
+            opacity: 0.85;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+
         .result-promise {
             background: rgba(255,255,255,0.15);
             border-radius: 10px;
@@ -863,6 +871,34 @@
                 </div>
             </div>
 
+            <!-- Seleção de Padrão de Construção -->
+            <div id="padraoContainer" style="display: none; margin-top: 1.25rem;">
+                <label class="input-label">Qual o padrão de acabamento do imóvel?</label>
+                <p style="font-size: 0.85rem; color: var(--text-light); margin-bottom: 1rem;">Isso ajuda a estimar o custo de reconstrução</p>
+                
+                <div class="options-grid three-cols" id="padraoOptions">
+                    <div class="option-btn" onclick="selectPadrao(this, 'baixo')">
+                        <span class="option-icon">🏠</span>
+                        <span class="option-text">Simples</span>
+                        <span class="option-desc" id="padraoValorBaixo">~R$ 1.400/m²</span>
+                    </div>
+                    <div class="option-btn" onclick="selectPadrao(this, 'medio')">
+                        <span class="option-icon">🏡</span>
+                        <span class="option-text">Médio</span>
+                        <span class="option-desc" id="padraoValorMedio">~R$ 2.000/m²</span>
+                    </div>
+                    <div class="option-btn" onclick="selectPadrao(this, 'alto')">
+                        <span class="option-icon">🏰</span>
+                        <span class="option-text">Alto Padrão</span>
+                        <span class="option-desc" id="padraoValorAlto">~R$ 2.600/m²</span>
+                    </div>
+                </div>
+                
+                <div class="info-tooltip" style="margin-top: 0.75rem;">
+                    O valor por m² é baseado no custo médio de construção da sua região (SINAPI/CUB)
+                </div>
+            </div>
+
             <div class="info-box">
                 <p>💡 <strong>Por que pedimos o CEP?</strong> O custo de reconstrução varia por região. Uma casa em São Paulo custa diferente de uma no interior do RS.</p>
             </div>
@@ -1126,6 +1162,7 @@
                 <div class="result-label">Valor estimado anual</div>
                 <div class="result-value" id="resultValue">R$ 850 - R$ 1.050</div>
                 <div class="result-installment" id="resultInstallment">ou 12x de ~R$ 79 no cartão</div>
+                <div class="result-note">*Valores aproximados. O valor final depende da análise das seguradoras.</div>
                 <div class="result-promise">
                     <strong>🤝 Vamos brigar por esse valor!</strong>
                     Se a gente conseguir, você fecha com a Retorno?
@@ -1153,6 +1190,10 @@
                 <div class="summary-item">
                     <span class="summary-label">Área</span>
                     <span class="summary-value" id="sumArea">120 m²</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Padrão</span>
+                    <span class="summary-value" id="sumPadrao">Médio</span>
                 </div>
                 <div class="summary-item">
                     <span class="summary-label">Valor reconstrução</span>
@@ -1251,11 +1292,13 @@
             cep: '',
             cidade: '',
             estado: '',
+            padraoAcabamento: '',
             tipoImovel: '',
             tipoConstrucao: '',
             usoImovel: '',
             metros: 0,
             custoM2: 2000,
+            custoM2Base: 2000,
             valorImovel: 0,
             itens: [],
             valorConteudo: 30000,
@@ -1442,10 +1485,12 @@
         async function buscarCep() {
             const cep = document.getElementById('cepInput').value.replace(/\D/g, '');
             const locationDisplay = document.getElementById('locationDisplay');
+            const padraoContainer = document.getElementById('padraoContainer');
             const btn = document.getElementById('btnStep2');
             
             if (cep.length !== 8) {
                 locationDisplay.classList.remove('show');
+                padraoContainer.style.display = 'none';
                 btn.disabled = true;
                 return;
             }
@@ -1457,6 +1502,7 @@
                 if (data.erro) {
                     document.getElementById('locationText').innerHTML = '❌ CEP não encontrado';
                     locationDisplay.classList.add('show');
+                    padraoContainer.style.display = 'none';
                     btn.disabled = true;
                     return;
                 }
@@ -1464,21 +1510,58 @@
                 formData.cep = cep;
                 formData.cidade = data.localidade;
                 formData.estado = data.uf;
-                formData.custoM2 = custoM2PorEstado[data.uf] || 2000;
+                formData.custoM2Base = custoM2PorEstado[data.uf] || 2000;
                 
                 document.getElementById('locationText').innerHTML = `
-                    📍 <strong>${data.localidade}/${data.uf}</strong><br>
-                    <small>Custo médio de construção: R$ ${formData.custoM2.toLocaleString('pt-BR')}/m²</small>
+                    📍 <strong>${data.localidade}/${data.uf}</strong>
                 `;
                 locationDisplay.classList.add('show');
                 document.getElementById('cepInput').classList.add('success');
-                btn.disabled = false;
+                
+                // Calcular e mostrar valores por padrão
+                const base = formData.custoM2Base;
+                const valorBaixo = base;
+                const valorMedio = Math.round(base * 1.3);
+                const valorAlto = Math.round(base * 1.7);
+                
+                document.getElementById('padraoValorBaixo').textContent = `~R$ ${valorBaixo.toLocaleString('pt-BR')}/m²`;
+                document.getElementById('padraoValorMedio').textContent = `~R$ ${valorMedio.toLocaleString('pt-BR')}/m²`;
+                document.getElementById('padraoValorAlto').textContent = `~R$ ${valorAlto.toLocaleString('pt-BR')}/m²`;
+                
+                // Mostrar seleção de padrão
+                padraoContainer.style.display = 'block';
+                
+                // Reset seleção anterior
+                document.querySelectorAll('#padraoOptions .option-btn').forEach(b => b.classList.remove('selected'));
+                formData.padraoAcabamento = '';
+                btn.disabled = true;
                 
             } catch (error) {
                 document.getElementById('locationText').innerHTML = '❌ Erro ao buscar CEP';
                 locationDisplay.classList.add('show');
+                padraoContainer.style.display = 'none';
                 btn.disabled = true;
             }
+        }
+
+        // Seleção de padrão de acabamento
+        function selectPadrao(element, value) {
+            const parent = element.parentElement;
+            parent.querySelectorAll('.option-btn').forEach(btn => btn.classList.remove('selected'));
+            element.classList.add('selected');
+            formData.padraoAcabamento = value;
+            
+            // Calcular custo por m² baseado no padrão
+            // Simples = base regional, Médio = +30%, Alto = +70%
+            const multiplicadores = {
+                'baixo': 1.0,
+                'medio': 1.3,
+                'alto': 1.7
+            };
+            formData.custoM2 = Math.round(formData.custoM2Base * multiplicadores[value]);
+            
+            // Habilitar botão
+            document.getElementById('btnStep2').disabled = false;
         }
 
         // Cálculo valor imóvel
@@ -1503,11 +1586,18 @@
             const valorCalculado = Math.round(metros * formData.custoM2 * multiplicador);
             formData.valorImovel = valorCalculado;
             
+            const padraoLabels = {
+                'baixo': 'simples',
+                'medio': 'médio',
+                'alto': 'alto padrão'
+            };
+            const padraoTexto = padraoLabels[formData.padraoAcabamento] || 'médio';
+            
             document.getElementById('calcValue').textContent = `R$ ${valorCalculado.toLocaleString('pt-BR')}`;
             document.getElementById('calcBreakdown').innerHTML = `
                 <strong>Como calculamos:</strong><br>
-                ${metros} m² × R$ ${formData.custoM2.toLocaleString('pt-BR')}/m² 
-                ${multiplicador !== 1 ? `× ${multiplicador} (${formData.tipoConstrucao})` : '(padrão médio ${formData.estado})'}
+                ${metros} m² × R$ ${formData.custoM2.toLocaleString('pt-BR')}/m² (${padraoTexto})
+                ${multiplicador !== 1 ? `<br>× ${multiplicador} (construção ${formData.tipoConstrucao})` : ''}
             `;
             
             calcCard.style.display = 'block';
@@ -1730,6 +1820,13 @@
             document.getElementById('sumTipo').textContent = tipoLabels[formData.tipoImovel] || '';
             document.getElementById('sumConstrucao').textContent = construcaoLabels[formData.tipoConstrucao] || '';
             document.getElementById('sumArea').textContent = `${formData.metros} m²`;
+            
+            const padraoLabels = {
+                'baixo': 'Simples',
+                'medio': 'Médio',
+                'alto': 'Alto Padrão'
+            };
+            document.getElementById('sumPadrao').textContent = padraoLabels[formData.padraoAcabamento] || 'Médio';
             document.getElementById('sumValorImovel').textContent = `R$ ${formData.valorImovel.toLocaleString('pt-BR')}`;
             
             // Resumo coberturas
@@ -1875,8 +1972,10 @@
                 estado: formData.estado,
                 tipoImovel: formData.tipoImovel,
                 tipoConstrucao: formData.tipoConstrucao,
+                padraoAcabamento: formData.padraoAcabamento,
                 usoImovel: formData.usoImovel,
                 metros: formData.metros,
+                custoM2: formData.custoM2,
                 valorImovel: formData.valorImovel,
                 valorConteudo: formData.valorConteudo,
                 itens: formData.itens,
@@ -1889,7 +1988,7 @@
                 ultimoStep: 9,
                 dataFinalizacao: firebase.firestore.FieldValue.serverTimestamp(),
                 ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
-                origem: 'site_cotacao_residencial_v3'
+                origem: 'site_cotacao_residencial_v4'
             };
 
             // Salva na coleção específica (pode falhar por permissão de update)
@@ -1913,9 +2012,16 @@
             try {
                 const tipoImovelTexto = {
                     'casa': 'Casa',
+                    'casa_condominio': 'Casa em condomínio',
                     'apartamento': 'Apartamento',
                     'sobrado': 'Sobrado',
                     'kitnet': 'Kitnet/Studio'
+                };
+                
+                const padraoTexto = {
+                    'baixo': 'Simples',
+                    'medio': 'Médio',
+                    'alto': 'Alto Padrão'
                 };
                 
                 const dadosCRM = {
@@ -1930,7 +2036,7 @@
                     ramo: 'residencial',
                     responsavelId: null,
                     responsavelNome: null,
-                    observacoes: `${tipoImovelTexto[formData.tipoImovel] || formData.tipoImovel} | ${formData.metros || 'N/A'}m² | Valor Imóvel: R$ ${formData.valorImovel?.toLocaleString('pt-BR') || 'N/A'} | Conteúdo: R$ ${formData.valorConteudo?.toLocaleString('pt-BR') || 'N/A'}`,
+                    observacoes: `${tipoImovelTexto[formData.tipoImovel] || formData.tipoImovel} | ${formData.metros || 'N/A'}m² | Padrão ${padraoTexto[formData.padraoAcabamento] || 'Médio'} | Valor Imóvel: R$ ${formData.valorImovel?.toLocaleString('pt-BR') || 'N/A'} | Conteúdo: R$ ${formData.valorConteudo?.toLocaleString('pt-BR') || 'N/A'}`,
                     status: 'pre_cadastro',
                     origem: 'site',
                     dadosSite: dadosFinais,
