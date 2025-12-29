@@ -6,6 +6,15 @@
     <title>Clientes - Retorno Seguros CRM</title>
     <link rel="stylesheet" href="css/admin-style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .badge-count.badge-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+        .text-muted {
+            color: var(--text-muted, #6b7280);
+        }
+    </style>
 </head>
 <body>
     <!-- Sidebar -->
@@ -192,6 +201,7 @@
                                 <th>Cliente</th>
                                 <th>Contato</th>
                                 <th>Cidade/UF</th>
+                                <th>Cotações</th>
                                 <th>Apólices</th>
                                 <th>Próx. Renovação</th>
                                 <th>Valor Total</th>
@@ -200,7 +210,7 @@
                         </thead>
                         <tbody id="tabelaClientes">
                             <tr>
-                                <td colspan="7" class="text-center">Carregando...</td>
+                                <td colspan="8" class="text-center">Carregando...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -270,9 +280,9 @@
                     </div>
                 </div>
 
-                <!-- Histórico de Leads -->
+                <!-- Histórico de Cotações -->
                 <div class="detail-section">
-                    <h4><i class="fas fa-funnel-dollar"></i> Histórico de Leads</h4>
+                    <h4><i class="fas fa-funnel-dollar"></i> Cotações / Leads</h4>
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
@@ -281,10 +291,11 @@
                                     <th>Ramo</th>
                                     <th>Status</th>
                                     <th>Valor</th>
+                                    <th>Ver</th>
                                 </tr>
                             </thead>
                             <tbody id="bodyLeadsCliente">
-                                <tr><td colspan="4" class="text-center">Nenhum lead</td></tr>
+                                <tr><td colspan="5" class="text-center">Nenhuma cotação</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -368,18 +379,90 @@
                     }
                 }
 
-                // Transformar leads em clientes (todos os leads com nome ou whatsapp viram clientes)
-                clientes = leads.filter(lead => lead.nome || lead.whatsapp).map(lead => {
-                    // Buscar apólices deste cliente (por leadId, email ou nome)
-                    const apolicesCliente = apolices.filter(a => 
+                // =============================================
+                // AGRUPAR CLIENTES PELO CPF (OU NOME+TELEFONE)
+                // =============================================
+                const clientesAgrupados = {};
+                const hoje = new Date();
+
+                leads.filter(lead => lead.nome || lead.whatsapp).forEach(lead => {
+                    // Criar chave única: CPF (prioridade) ou nome+telefone normalizado
+                    const cpfLimpo = lead.cpf ? lead.cpf.replace(/\D/g, '') : '';
+                    const telLimpo = (lead.whatsapp || lead.telefone || '').replace(/\D/g, '');
+                    const nomeLimpo = (lead.nome || '').toLowerCase().trim();
+                    
+                    // Chave de agrupamento: CPF se tiver, senão nome+telefone
+                    let chave = cpfLimpo || `${nomeLimpo}_${telLimpo}`;
+                    
+                    // Se não tem CPF nem telefone, usar nome + email
+                    if (!cpfLimpo && !telLimpo) {
+                        const emailLimpo = (lead.email || '').toLowerCase().trim();
+                        chave = `${nomeLimpo}_${emailLimpo}`;
+                    }
+
+                    if (!clientesAgrupados[chave]) {
+                        clientesAgrupados[chave] = {
+                            chave,
+                            leads: [],
+                            apolicesCliente: [],
+                            nome: lead.nome,
+                            email: lead.email,
+                            whatsapp: lead.whatsapp || lead.telefone,
+                            cpf: lead.cpf,
+                            cidade: lead.cidade,
+                            estado: lead.estado,
+                            cep: lead.cep,
+                            dataNascimento: lead.dataNascimento,
+                            criadoEm: lead.criadoEm,
+                            ramos: new Set()
+                        };
+                    }
+
+                    const grupo = clientesAgrupados[chave];
+                    
+                    // Adicionar este lead ao grupo
+                    grupo.leads.push(lead);
+                    
+                    // Atualizar informações com dados mais completos
+                    if (!grupo.nome && lead.nome) grupo.nome = lead.nome;
+                    if (!grupo.email && lead.email) grupo.email = lead.email;
+                    if (!grupo.whatsapp && (lead.whatsapp || lead.telefone)) grupo.whatsapp = lead.whatsapp || lead.telefone;
+                    if (!grupo.cpf && lead.cpf) grupo.cpf = lead.cpf;
+                    if (!grupo.cidade && lead.cidade) grupo.cidade = lead.cidade;
+                    if (!grupo.estado && lead.estado) grupo.estado = lead.estado;
+                    if (!grupo.dataNascimento && lead.dataNascimento) grupo.dataNascimento = lead.dataNascimento;
+                    
+                    // Manter data mais antiga como criadoEm
+                    if (lead.criadoEm) {
+                        const dataLead = lead.criadoEm.toDate ? lead.criadoEm.toDate() : new Date(lead.criadoEm);
+                        const dataGrupo = grupo.criadoEm?.toDate ? grupo.criadoEm.toDate() : new Date(grupo.criadoEm || Date.now());
+                        if (dataLead < dataGrupo) {
+                            grupo.criadoEm = lead.criadoEm;
+                        }
+                    }
+                    
+                    // Adicionar ramo
+                    if (lead.ramo) grupo.ramos.add(lead.ramo);
+
+                    // Buscar apólices deste lead
+                    const apolicesLead = apolices.filter(a => 
                         a.leadId === lead.id || 
                         a.clienteId === lead.id ||
                         (a.email && a.email === lead.email) ||
                         (a.clienteNome && a.clienteNome === lead.nome)
                     );
                     
-                    const hoje = new Date();
-                    const apolicesAtivas = apolicesCliente.filter(a => {
+                    apolicesLead.forEach(apolice => {
+                        // Evitar duplicatas
+                        if (!grupo.apolicesCliente.find(a => a.id === apolice.id)) {
+                            grupo.apolicesCliente.push(apolice);
+                        }
+                    });
+                });
+
+                // Transformar grupos em array de clientes
+                clientes = Object.values(clientesAgrupados).map(grupo => {
+                    const apolicesAtivas = grupo.apolicesCliente.filter(a => {
                         if (!a.dataFimVigencia) return false;
                         const fim = a.dataFimVigencia.toDate ? a.dataFimVigencia.toDate() : new Date(a.dataFimVigencia);
                         return fim >= hoje;
@@ -392,23 +475,33 @@
 
                     const valorTotal = apolicesAtivas.reduce((sum, a) => sum + (parseFloat(a.valorPremio) || 0), 0);
 
+                    // Converter Set de ramos para array
+                    const ramosArray = Array.from(grupo.ramos);
+
                     return {
-                        id: lead.id,
-                        nome: lead.nome || '-',
-                        email: lead.email || '-',
-                        whatsapp: lead.whatsapp || lead.telefone || '-',
-                        cpf: lead.cpf || '',
-                        cidade: lead.cidade || '-',
-                        estado: lead.estado || '-',
-                        criadoEm: lead.criadoEm,
-                        status: lead.status,
-                        apolicesCliente,
+                        id: grupo.leads[0].id, // ID do primeiro lead para navegação
+                        chave: grupo.chave,
+                        nome: grupo.nome || '-',
+                        email: grupo.email || '-',
+                        whatsapp: grupo.whatsapp || '-',
+                        cpf: grupo.cpf || '',
+                        cidade: grupo.cidade || '-',
+                        estado: grupo.estado || '-',
+                        cep: grupo.cep,
+                        dataNascimento: grupo.dataNascimento,
+                        criadoEm: grupo.criadoEm,
+                        leadsCliente: grupo.leads, // Todos os leads deste cliente
+                        apolicesCliente: grupo.apolicesCliente,
                         qtdApolices: apolicesAtivas.length,
+                        qtdCotacoes: grupo.leads.length, // Quantidade de cotações
                         proximaRenovacao,
                         valorTotal,
-                        ramoPrincipal: apolicesAtivas[0]?.ramo || lead.ramo || '-'
+                        ramoPrincipal: ramosArray[0] || '-',
+                        ramos: ramosArray
                     };
                 });
+
+                console.log(`Total de leads: ${leads.length}, Clientes únicos: ${clientes.length}`);
 
                 atualizarEstatisticas();
                 filtrarClientes();
@@ -509,7 +602,7 @@
             const tbody = document.getElementById('tabelaClientes');
 
             if (clientesFiltrados.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center">Nenhum cliente encontrado</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center">Nenhum cliente encontrado</td></tr>';
                 return;
             }
 
@@ -526,8 +619,13 @@
                     cliente.proximaRenovacao >= hoje && 
                     cliente.proximaRenovacao <= em30dias;
 
+                // Mostrar ramos das cotações
+                const ramosTexto = cliente.ramos && cliente.ramos.length > 0 
+                    ? cliente.ramos.map(r => formatarRamo(r)).join(', ')
+                    : '-';
+
                 return `
-                    <tr onclick="abrirDetalheCliente('${cliente.id}')" style="cursor: pointer;">
+                    <tr onclick="abrirDetalheCliente('${cliente.chave}')" style="cursor: pointer;">
                         <td>
                             <strong>${cliente.nome || 'Sem nome'}</strong>
                             ${cliente.cpf ? `<br><small class="text-muted">${formatarCPF(cliente.cpf)}</small>` : ''}
@@ -538,14 +636,18 @@
                         </td>
                         <td>${cliente.cidade || '-'}${cliente.estado ? '/' + cliente.estado : ''}</td>
                         <td>
-                            <span class="badge-count">${cliente.qtdApolices}</span>
+                            <span class="badge-count" title="${ramosTexto}">${cliente.qtdCotacoes || cliente.leadsCliente?.length || 0}</span>
+                            <small class="text-muted" style="display: block; font-size: 0.7rem;">${ramosTexto}</small>
+                        </td>
+                        <td>
+                            <span class="badge-count ${cliente.qtdApolices > 0 ? 'badge-success' : ''}">${cliente.qtdApolices}</span>
                         </td>
                         <td>
                             ${renovacaoProxima ? `<span class="status-badge status-pendente">${proximaRen}</span>` : proximaRen}
                         </td>
                         <td>R$ ${cliente.valorTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                         <td>
-                            <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); abrirDetalheCliente('${cliente.id}')">
+                            <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); abrirDetalheCliente('${cliente.chave}')">
                                 <i class="fas fa-eye"></i>
                             </button>
                         </td>
@@ -555,8 +657,8 @@
         }
 
         // Abrir detalhe do cliente
-        function abrirDetalheCliente(id) {
-            const cliente = clientes.find(c => c.id === id);
+        function abrirDetalheCliente(chave) {
+            const cliente = clientes.find(c => c.chave === chave);
             if (!cliente) return;
 
             document.getElementById('modalClienteNome').textContent = cliente.nome || 'Cliente';
@@ -613,7 +715,7 @@
                 bodyApolices.innerHTML = '<tr><td colspan="6" class="text-center">Nenhuma apólice cadastrada</td></tr>';
             }
 
-            // Leads do cliente
+            // Leads/Cotações do cliente (agora mostra TODAS as cotações agrupadas)
             const bodyLeads = document.getElementById('bodyLeadsCliente');
             if (cliente.leadsCliente && cliente.leadsCliente.length > 0) {
                 bodyLeads.innerHTML = cliente.leadsCliente.map(lead => {
@@ -622,16 +724,21 @@
                         : '-';
 
                     return `
-                        <tr>
+                        <tr onclick="window.location.href='lead-detalhe.html?id=${lead.id}'" style="cursor: pointer;">
                             <td>${data}</td>
                             <td>${formatarRamo(lead.ramo)}</td>
                             <td><span class="status-badge status-${lead.status}">${formatarStatus(lead.status)}</span></td>
                             <td>R$ ${(lead.valorPremio || lead.valorCotacao || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                            <td>
+                                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); window.location.href='lead-detalhe.html?id=${lead.id}'">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </td>
                         </tr>
                     `;
                 }).join('');
             } else {
-                bodyLeads.innerHTML = '<tr><td colspan="4" class="text-center">Nenhum lead registrado</td></tr>';
+                bodyLeads.innerHTML = '<tr><td colspan="5" class="text-center">Nenhuma cotação registrada</td></tr>';
             }
 
             document.getElementById('modalCliente').classList.add('active');
@@ -720,11 +827,4 @@
         });
 
         // Fechar modais clicando fora
-        document.querySelectorAll('.modal-overlay').forEach(overlay => {
-            overlay.addEventListener('click', e => {
-                if (e.target === overlay) overlay.classList.remove('active');
-            });
-        });
-    </script>
-</body>
-</html>
+        document.querySelectorAll(
