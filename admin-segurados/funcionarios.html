@@ -157,6 +157,7 @@
                                 <th>E-mail</th>
                                 <th>Telefone</th>
                                 <th>Cargo</th>
+                                <th>% Comissão</th>
                                 <th>Status</th>
                                 <th>Leads</th>
                                 <th>Fechados</th>
@@ -166,7 +167,7 @@
                         </thead>
                         <tbody id="tabelaFuncionarios">
                             <tr>
-                                <td colspan="9" class="text-center">Carregando...</td>
+                                <td colspan="10" class="text-center">Carregando...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -188,13 +189,15 @@
                                 <th>Funcionário</th>
                                 <th>Leads Recebidos</th>
                                 <th>Negócios Fechados</th>
+                                <th>Prêmio Total</th>
                                 <th>Receita Gerada</th>
+                                <th>Comissão a Receber</th>
                                 <th>Taxa de Conversão</th>
                             </tr>
                         </thead>
                         <tbody id="tabelaRanking">
                             <tr>
-                                <td colspan="6" class="text-center">Carregando...</td>
+                                <td colspan="8" class="text-center">Carregando...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -404,6 +407,7 @@
                 const fechados = leadsFunc.filter(l => l.status === 'negocio_fechado').length;
                 const perdidos = leadsFunc.filter(l => l.status === 'negocio_perdido').length;
                 const conversao = (fechados + perdidos) > 0 ? ((fechados / (fechados + perdidos)) * 100).toFixed(1) : '0.0';
+                const comissaoPadrao = func.comissaoPadrao || 50;
 
                 return `
                     <tr>
@@ -411,6 +415,7 @@
                         <td>${func.email}</td>
                         <td>${func.telefone || '-'}</td>
                         <td>${formatarCargo(func.cargo)}</td>
+                        <td><strong>${comissaoPadrao}%</strong></td>
                         <td>
                             <span class="status-badge ${func.ativo !== false ? 'status-fechado' : 'status-perdido'}">
                                 ${func.ativo !== false ? 'Ativo' : 'Inativo'}
@@ -453,25 +458,44 @@
 
                     const fechados = leadsMes.filter(l => l.status === 'negocio_fechado');
                     const perdidos = leadsMes.filter(l => l.status === 'negocio_perdido').length;
-                    const receita = fechados.reduce((sum, l) => sum + (l.valorPremio || 0), 0);
+                    
+                    // Prêmio Total = soma dos prêmios líquidos
+                    const premioTotal = fechados.reduce((sum, l) => sum + (l.valorPremio || 0), 0);
+                    
+                    // Receita Gerada = Prêmio × % Comissão do Negócio
+                    const receitaGerada = fechados.reduce((sum, l) => {
+                        return sum + ((l.valorPremio || 0) * ((l.comissao || 0) / 100));
+                    }, 0);
+                    
+                    // Comissão a Receber = Receita × % do Funcionário
+                    const percentualFunc = func.comissaoPadrao || 50;
+                    const comissaoReceber = fechados.reduce((sum, l) => {
+                        const receitaNegocio = (l.valorPremio || 0) * ((l.comissao || 0) / 100);
+                        const percFunc = l.comissaoFuncionario || percentualFunc;
+                        return sum + (receitaNegocio * (percFunc / 100));
+                    }, 0);
+                    
                     const conversao = (fechados.length + perdidos) > 0 
                         ? ((fechados.length / (fechados.length + perdidos)) * 100).toFixed(1) 
                         : '0.0';
 
                     return {
                         nome: func.nome,
+                        percentual: percentualFunc,
                         leads: leadsMes.length,
                         fechados: fechados.length,
-                        receita,
+                        premioTotal,
+                        receitaGerada,
+                        comissaoReceber,
                         conversao
                     };
                 })
-                .sort((a, b) => b.fechados - a.fechados || b.receita - a.receita);
+                .sort((a, b) => b.fechados - a.fechados || b.receitaGerada - a.receitaGerada);
 
             const tbody = document.getElementById('tabelaRanking');
 
             if (ranking.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center">Nenhum funcionário ativo</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center">Nenhum funcionário ativo</td></tr>';
                 return;
             }
 
@@ -483,13 +507,26 @@
                           index === 2 ? '<i class="fas fa-medal" style="color: #cd7f32;"></i>' : 
                           (index + 1)}
                     </td>
-                    <td><strong>${item.nome}</strong></td>
+                    <td><strong>${item.nome}</strong> <small style="color: var(--text-muted);">(${item.percentual}%)</small></td>
                     <td>${item.leads}</td>
                     <td>${item.fechados}</td>
-                    <td>R$ ${item.receita.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                    <td>${formatarMoeda(item.premioTotal)}</td>
+                    <td>${formatarMoeda(item.receitaGerada)}</td>
+                    <td><strong class="text-success">${formatarMoeda(item.comissaoReceber)}</strong></td>
                     <td>${item.conversao}%</td>
                 </tr>
             `).join('');
+        }
+
+        // Formatar moeda brasileira
+        function formatarMoeda(valor) {
+            if (valor === null || valor === undefined || isNaN(valor)) return 'R$ 0,00';
+            return valor.toLocaleString('pt-BR', { 
+                style: 'currency', 
+                currency: 'BRL',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
         }
 
         // Aplicar filtros
