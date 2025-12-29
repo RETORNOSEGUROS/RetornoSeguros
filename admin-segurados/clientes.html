@@ -353,12 +353,15 @@
         // Carregar dados
         async function carregarDados() {
             try {
+                console.log('Iniciando carregamento de dados...');
+                
                 // Carregar leads do CRM como clientes
-                const snapLeads = await db.collection('leads_crm').orderBy('nome').get();
+                const snapLeads = await db.collection('leads_crm').get();
                 leads = [];
                 snapLeads.forEach(doc => {
                     leads.push({ id: doc.id, ...doc.data() });
                 });
+                console.log('Leads carregados:', leads.length);
 
                 // Carregar apólices
                 const snapApolices = await db.collection('apolices_cliente').get();
@@ -366,6 +369,7 @@
                 snapApolices.forEach(doc => {
                     apolices.push({ id: doc.id, ...doc.data() });
                 });
+                console.log('Apólices carregadas:', apolices.length);
 
                 // Badge leads novos (pré-cadastro)
                 const leadsNovos = leads.filter(l => l.status === 'pre_cadastro').length;
@@ -385,19 +389,29 @@
                 const clientesAgrupados = {};
                 const hoje = new Date();
 
-                leads.filter(lead => lead.nome || lead.whatsapp).forEach(lead => {
+                // Filtrar leads válidos (que tenham nome ou whatsapp)
+                const leadsValidos = leads.filter(lead => lead.nome || lead.whatsapp || lead.telefone || lead.email);
+                console.log('Leads válidos para clientes:', leadsValidos.length);
+
+                leadsValidos.forEach(lead => {
                     // Criar chave única: CPF (prioridade) ou nome+telefone normalizado
-                    const cpfLimpo = lead.cpf ? lead.cpf.replace(/\D/g, '') : '';
-                    const telLimpo = (lead.whatsapp || lead.telefone || '').replace(/\D/g, '');
-                    const nomeLimpo = (lead.nome || '').toLowerCase().trim();
+                    const cpfLimpo = lead.cpf ? String(lead.cpf).replace(/\D/g, '') : '';
+                    const telLimpo = String(lead.whatsapp || lead.telefone || '').replace(/\D/g, '');
+                    const nomeLimpo = String(lead.nome || '').toLowerCase().trim();
+                    const emailLimpo = String(lead.email || '').toLowerCase().trim();
                     
-                    // Chave de agrupamento: CPF se tiver, senão nome+telefone
-                    let chave = cpfLimpo || `${nomeLimpo}_${telLimpo}`;
-                    
-                    // Se não tem CPF nem telefone, usar nome + email
-                    if (!cpfLimpo && !telLimpo) {
-                        const emailLimpo = (lead.email || '').toLowerCase().trim();
+                    // Chave de agrupamento: CPF se tiver, senão nome+telefone, senão nome+email
+                    let chave = '';
+                    if (cpfLimpo && cpfLimpo.length >= 11) {
+                        chave = cpfLimpo;
+                    } else if (nomeLimpo && telLimpo) {
+                        chave = `${nomeLimpo}_${telLimpo}`;
+                    } else if (nomeLimpo && emailLimpo) {
                         chave = `${nomeLimpo}_${emailLimpo}`;
+                    } else if (nomeLimpo) {
+                        chave = `nome_${nomeLimpo}_${lead.id}`;
+                    } else {
+                        chave = `lead_${lead.id}`;
                     }
 
                     if (!clientesAgrupados[chave]) {
@@ -405,16 +419,16 @@
                             chave,
                             leads: [],
                             apolicesCliente: [],
-                            nome: lead.nome,
-                            email: lead.email,
-                            whatsapp: lead.whatsapp || lead.telefone,
-                            cpf: lead.cpf,
-                            cidade: lead.cidade,
-                            estado: lead.estado,
-                            cep: lead.cep,
-                            dataNascimento: lead.dataNascimento,
+                            nome: lead.nome || '',
+                            email: lead.email || '',
+                            whatsapp: lead.whatsapp || lead.telefone || '',
+                            cpf: lead.cpf || '',
+                            cidade: lead.cidade || '',
+                            estado: lead.estado || '',
+                            cep: lead.cep || '',
+                            dataNascimento: lead.dataNascimento || '',
                             criadoEm: lead.criadoEm,
-                            ramos: new Set()
+                            ramos: []
                         };
                     }
 
@@ -432,24 +446,17 @@
                     if (!grupo.estado && lead.estado) grupo.estado = lead.estado;
                     if (!grupo.dataNascimento && lead.dataNascimento) grupo.dataNascimento = lead.dataNascimento;
                     
-                    // Manter data mais antiga como criadoEm
-                    if (lead.criadoEm) {
-                        const dataLead = lead.criadoEm.toDate ? lead.criadoEm.toDate() : new Date(lead.criadoEm);
-                        const dataGrupo = grupo.criadoEm?.toDate ? grupo.criadoEm.toDate() : new Date(grupo.criadoEm || Date.now());
-                        if (dataLead < dataGrupo) {
-                            grupo.criadoEm = lead.criadoEm;
-                        }
+                    // Adicionar ramo (evitando duplicatas)
+                    if (lead.ramo && !grupo.ramos.includes(lead.ramo)) {
+                        grupo.ramos.push(lead.ramo);
                     }
-                    
-                    // Adicionar ramo
-                    if (lead.ramo) grupo.ramos.add(lead.ramo);
 
                     // Buscar apólices deste lead
                     const apolicesLead = apolices.filter(a => 
                         a.leadId === lead.id || 
                         a.clienteId === lead.id ||
-                        (a.email && a.email === lead.email) ||
-                        (a.clienteNome && a.clienteNome === lead.nome)
+                        (a.email && lead.email && a.email === lead.email) ||
+                        (a.clienteNome && lead.nome && a.clienteNome === lead.nome)
                     );
                     
                     apolicesLead.forEach(apolice => {
@@ -460,26 +467,35 @@
                     });
                 });
 
+                console.log('Grupos criados:', Object.keys(clientesAgrupados).length);
+
                 // Transformar grupos em array de clientes
                 clientes = Object.values(clientesAgrupados).map(grupo => {
                     const apolicesAtivas = grupo.apolicesCliente.filter(a => {
                         if (!a.dataFimVigencia) return false;
-                        const fim = a.dataFimVigencia.toDate ? a.dataFimVigencia.toDate() : new Date(a.dataFimVigencia);
-                        return fim >= hoje;
+                        try {
+                            const fim = a.dataFimVigencia.toDate ? a.dataFimVigencia.toDate() : new Date(a.dataFimVigencia);
+                            return fim >= hoje;
+                        } catch (e) {
+                            return false;
+                        }
                     });
 
-                    const proximaRenovacao = apolicesAtivas
-                        .map(a => a.dataFimVigencia?.toDate ? a.dataFimVigencia.toDate() : new Date(a.dataFimVigencia))
-                        .filter(d => d >= hoje)
-                        .sort((a, b) => a - b)[0];
+                    let proximaRenovacao = null;
+                    try {
+                        const datas = apolicesAtivas
+                            .map(a => a.dataFimVigencia?.toDate ? a.dataFimVigencia.toDate() : new Date(a.dataFimVigencia))
+                            .filter(d => d && d >= hoje)
+                            .sort((a, b) => a - b);
+                        proximaRenovacao = datas[0] || null;
+                    } catch (e) {
+                        proximaRenovacao = null;
+                    }
 
                     const valorTotal = apolicesAtivas.reduce((sum, a) => sum + (parseFloat(a.valorPremio) || 0), 0);
 
-                    // Converter Set de ramos para array
-                    const ramosArray = Array.from(grupo.ramos);
-
                     return {
-                        id: grupo.leads[0].id, // ID do primeiro lead para navegação
+                        id: grupo.leads[0]?.id || grupo.chave,
                         chave: grupo.chave,
                         nome: grupo.nome || '-',
                         email: grupo.email || '-',
@@ -490,25 +506,31 @@
                         cep: grupo.cep,
                         dataNascimento: grupo.dataNascimento,
                         criadoEm: grupo.criadoEm,
-                        leadsCliente: grupo.leads, // Todos os leads deste cliente
+                        leadsCliente: grupo.leads,
                         apolicesCliente: grupo.apolicesCliente,
                         qtdApolices: apolicesAtivas.length,
-                        qtdCotacoes: grupo.leads.length, // Quantidade de cotações
+                        qtdCotacoes: grupo.leads.length,
                         proximaRenovacao,
                         valorTotal,
-                        ramoPrincipal: ramosArray[0] || '-',
-                        ramos: ramosArray
+                        ramoPrincipal: grupo.ramos[0] || '-',
+                        ramos: grupo.ramos
                     };
                 });
 
-                console.log(`Total de leads: ${leads.length}, Clientes únicos: ${clientes.length}`);
+                console.log('Clientes processados:', clientes.length);
 
                 atualizarEstatisticas();
                 filtrarClientes();
 
             } catch (error) {
                 console.error('Erro ao carregar dados:', error);
-                mostrarToast('Erro ao carregar dados', 'error');
+                mostrarToast('Erro ao carregar dados: ' + error.message, 'error');
+                
+                // Mostrar mensagem de erro na tabela
+                const tbody = document.getElementById('tabelaClientes');
+                if (tbody) {
+                    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Erro ao carregar: ${error.message}</td></tr>`;
+                }
             }
         }
 
