@@ -800,6 +800,7 @@
         const db = firebase.firestore();
         
         let indicadoresCache = [];
+        let leadsIndicadosCache = [];
         let indicadorSelecionado = null;
         
         // Verifica autenticação
@@ -819,44 +820,96 @@
         });
         
         // ============================================================
-        // CARREGAR ESTATÍSTICAS
+        // CARREGAR ESTATÍSTICAS (CALCULADO EM TEMPO REAL)
         // ============================================================
         async function carregarEstatisticas() {
             try {
-                // Total de indicadores (todos, independente do campo ativo)
+                // Carregar todos os indicadores
                 const indicadoresSnap = await db.collection('indicadores').get();
                 
-                // Conta apenas os ativos (ou os que não tem o campo definido)
+                // Carregar todos os leads indicados (leads_crm com indicadoPorCodigo)
+                const leadsSnap = await db.collection('leads_crm').get();
+                leadsIndicadosCache = [];
+                leadsSnap.forEach(doc => {
+                    const data = doc.data();
+                    if (data.indicadoPorCodigo) {
+                        leadsIndicadosCache.push({ id: doc.id, ...data });
+                    }
+                });
+                
+                console.log('Leads indicados encontrados:', leadsIndicadosCache.length);
+                
+                // Filtrar indicadores ativos
                 const indicadoresAtivos = indicadoresSnap.docs.filter(doc => {
                     const data = doc.data();
-                    return data.ativo !== false; // Inclui se ativo é true ou undefined
+                    return data.ativo !== false;
                 });
                 
                 document.getElementById('totalIndicadores').textContent = indicadoresAtivos.length;
                 
-                // Calcula totais
+                // Calcular totais baseado nos leads reais
                 let totalIndicacoes = 0;
                 let totalConvertidas = 0;
                 let valorTotal = 0;
                 
-                indicadoresAtivos.forEach(doc => {
-                    const data = doc.data();
-                    totalIndicacoes += data.totalIndicacoes || 0;
-                    totalConvertidas += data.indicacoesConvertidas || 0;
-                    valorTotal += data.valorGerado || 0;
+                // Criar mapa de estatísticas por código de indicador
+                const estatsPorCodigo = {};
+                
+                leadsIndicadosCache.forEach(lead => {
+                    const codigo = lead.indicadoPorCodigo?.toUpperCase();
+                    if (!codigo) return;
+                    
+                    if (!estatsPorCodigo[codigo]) {
+                        estatsPorCodigo[codigo] = {
+                            totalIndicacoes: 0,
+                            indicacoesConvertidas: 0,
+                            valorGerado: 0
+                        };
+                    }
+                    
+                    estatsPorCodigo[codigo].totalIndicacoes++;
+                    totalIndicacoes++;
+                    
+                    // Verificar se o lead foi convertido (negócio fechado)
+                    if (lead.status === 'negocio_fechado') {
+                        estatsPorCodigo[codigo].indicacoesConvertidas++;
+                        totalConvertidas++;
+                        
+                        // Somar valor do prêmio
+                        const valorPremio = parseFloat(lead.valorPremio) || 0;
+                        estatsPorCodigo[codigo].valorGerado += valorPremio;
+                        valorTotal += valorPremio;
+                    }
                 });
+                
+                console.log('Estatísticas por código:', estatsPorCodigo);
                 
                 document.getElementById('totalIndicacoes').textContent = totalIndicacoes;
                 document.getElementById('totalConvertidas').textContent = totalConvertidas;
                 document.getElementById('valorGerado').textContent = formatarMoeda(valorTotal);
                 
-                // Top indicadores
+                // Top indicadores com estatísticas calculadas
                 const topIndicadores = indicadoresAtivos
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .sort((a, b) => (b.indicacoesConvertidas || 0) - (a.indicacoesConvertidas || 0))
+                    .map(doc => {
+                        const data = doc.data();
+                        const codigo = data.codigoIndicacao?.toUpperCase();
+                        const stats = estatsPorCodigo[codigo] || { totalIndicacoes: 0, indicacoesConvertidas: 0, valorGerado: 0 };
+                        
+                        return { 
+                            id: doc.id, 
+                            ...data,
+                            totalIndicacoes: stats.totalIndicacoes,
+                            indicacoesConvertidas: stats.indicacoesConvertidas,
+                            valorGerado: stats.valorGerado
+                        };
+                    })
+                    .sort((a, b) => (b.valorGerado || 0) - (a.valorGerado || 0) || (b.indicacoesConvertidas || 0) - (a.indicacoesConvertidas || 0))
                     .slice(0, 3);
                 
                 renderizarTopIndicadores(topIndicadores);
+                
+                // Salvar estatísticas calculadas para uso em outras funções
+                window.estatsPorCodigo = estatsPorCodigo;
                 
             } catch (error) {
                 console.error('Erro ao carregar estatísticas:', error);
@@ -909,7 +962,21 @@
                     snapshot = await db.collection('indicadores').get();
                 }
                 
-                indicadoresCache = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Mapear indicadores com estatísticas calculadas em tempo real
+                indicadoresCache = snapshot.docs.map(doc => {
+                    const data = doc.data();
+                    const codigo = data.codigoIndicacao?.toUpperCase();
+                    const stats = window.estatsPorCodigo?.[codigo] || { totalIndicacoes: 0, indicacoesConvertidas: 0, valorGerado: 0 };
+                    
+                    return { 
+                        id: doc.id, 
+                        ...data,
+                        // Sobrescrever com valores calculados em tempo real
+                        totalIndicacoes: stats.totalIndicacoes,
+                        indicacoesConvertidas: stats.indicacoesConvertidas,
+                        valorGerado: stats.valorGerado
+                    };
+                });
                 
                 filtrarIndicadores();
                 
@@ -989,73 +1056,56 @@
                 const periodo = parseInt(document.getElementById('filtroPeriodo').value);
                 const ramo = document.getElementById('filtroRamo').value;
                 
-                let query = db.collection('leads_crm')
-                    .where('indicadoPorCodigo', '!=', null)
-                    .orderBy('indicadoPorCodigo')
-                    .orderBy('dataCadastro', 'desc')
-                    .limit(50);
+                // Usar cache se disponível, senão carregar
+                let leads = leadsIndicadosCache.length > 0 ? [...leadsIndicadosCache] : [];
                 
-                const snapshot = await query.get();
+                if (leads.length === 0) {
+                    // Carregar leads indicados do Firebase
+                    const snapshot = await db.collection('leads_crm').get();
+                    leads = [];
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (data.indicadoPorCodigo) {
+                            leads.push({ id: doc.id, ...data });
+                        }
+                    });
+                    leadsIndicadosCache = leads;
+                }
                 
-                let leads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Ordenar por data (mais recentes primeiro)
+                leads.sort((a, b) => {
+                    const dataA = a.dataCadastro?.toDate?.() || a.criadoEm?.toDate?.() || new Date(0);
+                    const dataB = b.dataCadastro?.toDate?.() || b.criadoEm?.toDate?.() || new Date(0);
+                    return dataB - dataA;
+                });
                 
-                // Filtra por período
+                // Filtrar por período
                 if (periodo > 0) {
                     const dataLimite = new Date();
                     dataLimite.setDate(dataLimite.getDate() - periodo);
                     
                     leads = leads.filter(lead => {
-                        const dataLead = lead.dataCadastro?.toDate() || new Date(0);
+                        const dataLead = lead.dataCadastro?.toDate?.() || lead.criadoEm?.toDate?.() || new Date(0);
                         return dataLead >= dataLimite;
                     });
                 }
                 
-                // Filtra por ramo
+                // Filtrar por ramo
                 if (ramo) {
                     leads = leads.filter(lead => lead.ramo === ramo);
                 }
                 
-                renderizarIndicacoesRecentes(leads);
+                console.log('Indicações recentes encontradas:', leads.length);
+                renderizarIndicacoesRecentes(leads.slice(0, 50));
                 
             } catch (error) {
                 console.error('Erro ao carregar indicações:', error);
-                // Tenta query alternativa sem ordenação composta
-                carregarIndicacoesRecentesSimples();
             }
         }
         
         async function carregarIndicacoesRecentesSimples() {
-            try {
-                const snapshot = await db.collection('leads_crm')
-                    .orderBy('dataCadastro', 'desc')
-                    .limit(100)
-                    .get();
-                
-                let leads = snapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(lead => lead.indicadoPorCodigo);
-                
-                const periodo = parseInt(document.getElementById('filtroPeriodo').value);
-                const ramo = document.getElementById('filtroRamo').value;
-                
-                if (periodo > 0) {
-                    const dataLimite = new Date();
-                    dataLimite.setDate(dataLimite.getDate() - periodo);
-                    leads = leads.filter(lead => {
-                        const dataLead = lead.dataCadastro?.toDate() || new Date(0);
-                        return dataLead >= dataLimite;
-                    });
-                }
-                
-                if (ramo) {
-                    leads = leads.filter(lead => lead.ramo === ramo);
-                }
-                
-                renderizarIndicacoesRecentes(leads.slice(0, 50));
-                
-            } catch (error) {
-                console.error('Erro na query simples:', error);
-            }
+            // Fallback - chamar a função principal
+            await carregarIndicacoesRecentes();
         }
         
         // ============================================================
@@ -1074,7 +1124,10 @@
             empty.style.display = 'none';
             
             tbody.innerHTML = leads.map(lead => {
-                const data = lead.dataCadastro?.toDate() || new Date();
+                // Pegar data do lead (pode ser dataCadastro ou criadoEm)
+                const dataObj = lead.dataCadastro || lead.criadoEm;
+                const data = dataObj?.toDate?.() || (dataObj ? new Date(dataObj) : new Date());
+                
                 const ramo = lead.ramo || 'auto';
                 const ramoClass = `ramo-${ramo}`;
                 const ramoLabel = {
@@ -1087,19 +1140,32 @@
                 const status = lead.status || 'novo';
                 const statusClass = {
                     'novo': 'status-pendente',
+                    'pre_cadastro': 'status-pendente',
                     'em_contato': 'status-ativo',
+                    'contato_realizado': 'status-ativo',
+                    'pendente_documentos': 'status-pendente',
                     'cotacao_enviada': 'status-convertido',
                     'negocio_fechado': 'status-ativo',
-                    'perdido': 'status-badge'
+                    'perdido': 'status-badge',
+                    'negocio_perdido': 'status-badge'
                 }[status] || 'status-badge';
                 
                 const statusLabel = {
                     'novo': 'Novo',
+                    'pre_cadastro': 'Pré-Cadastro',
                     'em_contato': 'Em Contato',
-                    'cotacao_enviada': 'Cotado',
-                    'negocio_fechado': 'Fechado',
-                    'perdido': 'Perdido'
+                    'contato_realizado': 'Contato Realizado',
+                    'pendente_documentos': 'Pendente Docs',
+                    'cotacao_enviada': 'Cotação Enviada',
+                    'negocio_fechado': 'Fechado ✓',
+                    'perdido': 'Perdido',
+                    'negocio_perdido': 'Perdido'
                 }[status] || status;
+                
+                // Destacar se foi convertido
+                const valorDisplay = lead.status === 'negocio_fechado' && lead.valorPremio 
+                    ? `<strong style="color: #10b981;">${formatarMoeda(lead.valorPremio)}</strong>`
+                    : (lead.valorPremio ? formatarMoeda(lead.valorPremio) : '-');
                 
                 return `
                     <tr>
@@ -1111,7 +1177,7 @@
                         <td>${lead.nome || '-'}</td>
                         <td><span class="ramo-badge ${ramoClass}">${ramoLabel}</span></td>
                         <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
-                        <td>${lead.valorPremio ? formatarMoeda(lead.valorPremio) : '-'}</td>
+                        <td>${valorDisplay}</td>
                         <td>
                             <button class="btn-action btn-ver" onclick="verLead('${lead.id}')" title="Ver lead">
                                 <i class="fas fa-eye"></i>
@@ -1120,6 +1186,7 @@
                     </tr>
                 `;
             }).join('');
+        }
         }
         
         // ============================================================
