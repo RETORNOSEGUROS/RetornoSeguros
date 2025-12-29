@@ -512,42 +512,86 @@
             { key: 'negocio_perdido', label: 'Perdido', color: '#ef4444' }
         ];
 
-        // FORMATAÇÃO DE MOEDA BRASILEIRA
+        // =============================================
+        // FORMATAÇÃO DE MOEDA BRASILEIRA - IMPORTANTE!
+        // =============================================
         function formatarMoeda(valor) {
-            if (valor === null || valor === undefined || isNaN(valor)) return 'R$ 0,00';
-            return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            // Garantir que é um número válido
+            const num = parseFloat(valor);
+            if (isNaN(num)) return 'R$ 0,00';
+            
+            // Formatar como moeda brasileira
+            return new Intl.NumberFormat('pt-BR', {
+                style: 'currency',
+                currency: 'BRL',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(num);
         }
 
+        // =============================================
         // CÁLCULOS DE COMISSÃO
+        // =============================================
         // Receita da Corretora = Prêmio Líquido × % Comissão do Negócio
         function calcularReceitaCorretora(premioLiquido, percentualComissao) {
-            return (premioLiquido || 0) * ((percentualComissao || 0) / 100);
+            const premio = parseFloat(premioLiquido) || 0;
+            const perc = parseFloat(percentualComissao) || 0;
+            return premio * (perc / 100);
         }
 
         // Comissão do Funcionário = Receita Corretora × % do Funcionário
         function calcularComissaoFuncionario(receitaCorretora, percentualFuncionario) {
-            return (receitaCorretora || 0) * ((percentualFuncionario || 0) / 100);
+            const receita = parseFloat(receitaCorretora) || 0;
+            const perc = parseFloat(percentualFuncionario) || 0;
+            return receita * (perc / 100);
         }
 
+        // Função auxiliar para obter data do lead
+        function getDataLead(lead) {
+            if (lead.criadoEm) {
+                if (lead.criadoEm.toDate) return lead.criadoEm.toDate();
+                if (lead.criadoEm.seconds) return new Date(lead.criadoEm.seconds * 1000);
+                return new Date(lead.criadoEm);
+            }
+            return new Date(0);
+        }
+
+        // =============================================
         // AUTENTICAÇÃO
+        // =============================================
         auth.onAuthStateChanged(async user => {
             if (!user) {
                 window.location.href = 'login.html';
                 return;
             }
             document.getElementById('userEmail').textContent = user.email;
+            
+            // Configurar mês atual no filtro
             const hoje = new Date();
-            document.getElementById('filtroMesComissao').value = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+            const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+            document.getElementById('filtroMesComissao').value = mesAtual;
+            
             await carregarDados();
         });
 
+        // =============================================
         // CARREGAR DADOS
+        // =============================================
         async function carregarDados() {
             try {
+                console.log('Carregando dados...');
+                
+                // Carregar leads
                 const snapLeads = await db.collection('leads_crm').get();
                 leads = [];
-                snapLeads.forEach(doc => leads.push({ id: doc.id, ...doc.data() }));
+                snapLeads.forEach(doc => {
+                    const data = doc.data();
+                    leads.push({ id: doc.id, ...data });
+                });
+                console.log('Leads carregados:', leads.length);
+                console.log('Leads fechados:', leads.filter(l => l.status === 'negocio_fechado'));
 
+                // Carregar funcionários
                 const snapFunc = await db.collection('admins_crm').get();
                 funcionarios = [];
                 funcionariosMap = {};
@@ -556,15 +600,16 @@
                     funcionarios.push(f);
                     funcionariosMap[f.id] = f;
                 });
+                console.log('Funcionários carregados:', funcionarios.length);
 
+                // Preencher select de funcionários
                 const selectFunc = document.getElementById('filtroFuncionarioComissao');
                 selectFunc.innerHTML = '<option value="">Todos</option>' + 
-                    funcionarios.filter(f => f.ativo !== false).map(f => `<option value="${f.id}">${f.nome || f.email}</option>`).join('');
+                    funcionarios.filter(f => f.ativo !== false).map(f => 
+                        `<option value="${f.id}">${f.nome || f.email}</option>`
+                    ).join('');
 
-                const snapApolices = await db.collection('apolices_cliente').get();
-                apolices = [];
-                snapApolices.forEach(doc => apolices.push({ id: doc.id, ...doc.data() }));
-
+                // Badge leads novos
                 const leadsNovos = leads.filter(l => l.status === 'pre_cadastro').length;
                 const badge = document.getElementById('leadsNovos');
                 badge.textContent = leadsNovos;
@@ -572,13 +617,16 @@
 
                 carregarRelatorios();
                 carregarComissoes();
+                
             } catch (error) {
                 console.error('Erro ao carregar dados:', error);
                 mostrarToast('Erro ao carregar dados', 'error');
             }
         }
 
+        // =============================================
         // RELATÓRIOS DE DESEMPENHO
+        // =============================================
         function carregarRelatorios() {
             const periodo = document.getElementById('filtroPeriodo').value;
             const hoje = new Date();
@@ -594,7 +642,7 @@
 
             leadsFiltrados = leads.filter(l => {
                 if (!dataInicio) return true;
-                const data = l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date(l.criadoEm || 0);
+                const data = getDataLead(l);
                 return data >= dataInicio;
             });
 
@@ -622,19 +670,32 @@
         function renderizarProducao() {
             const producao = {};
             producao['nao_atribuido'] = { nome: 'Não atribuído', leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 };
-            funcionarios.forEach(f => { producao[f.id] = { nome: f.nome || f.email, leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 }; });
+            
+            funcionarios.forEach(f => { 
+                producao[f.id] = { nome: f.nome || f.email, leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 }; 
+            });
 
             leadsFiltrados.forEach(l => {
                 const key = l.responsavelId || 'nao_atribuido';
-                if (!producao[key]) producao[key] = { nome: l.responsavelNome || 'Desconhecido', leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 };
+                if (!producao[key]) {
+                    producao[key] = { nome: l.responsavelNome || 'Desconhecido', leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 };
+                }
+                
                 producao[key].leads++;
-                if (['cotacao_enviada', 'negocio_fechado', 'negocio_perdido', 'recusada_seguradora'].includes(l.status)) producao[key].cotacoes++;
+                
+                if (['cotacao_enviada', 'negocio_fechado', 'negocio_perdido', 'recusada_seguradora'].includes(l.status)) {
+                    producao[key].cotacoes++;
+                }
+                
                 if (l.status === 'negocio_fechado') {
                     producao[key].fechados++;
-                    producao[key].premio += l.valorPremio || 0;
+                    producao[key].premio += parseFloat(l.valorPremio) || 0;
                     producao[key].receita += calcularReceitaCorretora(l.valorPremio, l.comissao);
                 }
-                if (l.status === 'negocio_perdido') producao[key].perdidos++;
+                
+                if (l.status === 'negocio_perdido') {
+                    producao[key].perdidos++;
+                }
             });
 
             const ordenado = Object.values(producao).filter(p => p.leads > 0).sort((a, b) => b.fechados - a.fechados || b.receita - a.receita);
@@ -646,46 +707,112 @@
                 return;
             }
 
-            const totais = ordenado.reduce((acc, p) => { acc.leads += p.leads; acc.cotacoes += p.cotacoes; acc.fechados += p.fechados; acc.perdidos += p.perdidos; acc.premio += p.premio; acc.receita += p.receita; return acc; }, { leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 });
+            const totais = ordenado.reduce((acc, p) => { 
+                acc.leads += p.leads; 
+                acc.cotacoes += p.cotacoes; 
+                acc.fechados += p.fechados; 
+                acc.perdidos += p.perdidos; 
+                acc.premio += p.premio; 
+                acc.receita += p.receita; 
+                return acc; 
+            }, { leads: 0, cotacoes: 0, fechados: 0, perdidos: 0, premio: 0, receita: 0 });
 
             tbody.innerHTML = ordenado.map(p => {
                 const conversao = (p.fechados + p.perdidos) > 0 ? ((p.fechados / (p.fechados + p.perdidos)) * 100).toFixed(1) : '0.0';
-                return `<tr><td><strong>${p.nome}</strong></td><td>${p.leads}</td><td>${p.cotacoes}</td><td class="text-success">${p.fechados}</td><td class="text-danger">${p.perdidos}</td><td>${conversao}%</td><td>${formatarMoeda(p.premio)}</td><td>${formatarMoeda(p.receita)}</td></tr>`;
+                return `
+                    <tr>
+                        <td><strong>${p.nome}</strong></td>
+                        <td>${p.leads}</td>
+                        <td>${p.cotacoes}</td>
+                        <td class="text-success">${p.fechados}</td>
+                        <td class="text-danger">${p.perdidos}</td>
+                        <td>${conversao}%</td>
+                        <td>${formatarMoeda(p.premio)}</td>
+                        <td>${formatarMoeda(p.receita)}</td>
+                    </tr>
+                `;
             }).join('');
 
             const conversaoTotal = (totais.fechados + totais.perdidos) > 0 ? ((totais.fechados / (totais.fechados + totais.perdidos)) * 100).toFixed(1) : '0.0';
-            document.getElementById('tabelaProducaoTotal').innerHTML = `<tr style="font-weight: bold; background: rgba(0,136,170,0.1);"><td>TOTAL</td><td>${totais.leads}</td><td>${totais.cotacoes}</td><td class="text-success">${totais.fechados}</td><td class="text-danger">${totais.perdidos}</td><td>${conversaoTotal}%</td><td>${formatarMoeda(totais.premio)}</td><td>${formatarMoeda(totais.receita)}</td></tr>`;
+            document.getElementById('tabelaProducaoTotal').innerHTML = `
+                <tr style="font-weight: bold; background: rgba(0,136,170,0.1);">
+                    <td>TOTAL</td>
+                    <td>${totais.leads}</td>
+                    <td>${totais.cotacoes}</td>
+                    <td class="text-success">${totais.fechados}</td>
+                    <td class="text-danger">${totais.perdidos}</td>
+                    <td>${conversaoTotal}%</td>
+                    <td>${formatarMoeda(totais.premio)}</td>
+                    <td>${formatarMoeda(totais.receita)}</td>
+                </tr>
+            `;
         }
 
         function renderizarRamos() {
             const ramos = {};
             const ramosNomes = { 'auto': 'Auto', 'residencial': 'Residencial', 'vida': 'Vida', 'empresarial': 'Empresarial', 'saude': 'Saúde', 'outros': 'Outros' };
+            
             leadsFiltrados.forEach(l => {
                 const ramo = l.ramo || 'outros';
                 if (!ramos[ramo]) ramos[ramo] = { leads: 0, fechados: 0, premio: 0, receita: 0 };
                 ramos[ramo].leads++;
-                if (l.status === 'negocio_fechado') { ramos[ramo].fechados++; ramos[ramo].premio += l.valorPremio || 0; ramos[ramo].receita += calcularReceitaCorretora(l.valorPremio, l.comissao); }
+                if (l.status === 'negocio_fechado') { 
+                    ramos[ramo].fechados++; 
+                    ramos[ramo].premio += parseFloat(l.valorPremio) || 0; 
+                    ramos[ramo].receita += calcularReceitaCorretora(l.valorPremio, l.comissao); 
+                }
             });
+            
             const ordenado = Object.entries(ramos).sort((a, b) => b[1].receita - a[1].receita);
             const tbody = document.getElementById('tabelaRamos');
-            tbody.innerHTML = ordenado.length === 0 ? '<tr><td colspan="5" class="text-center">Nenhum dado</td></tr>' : ordenado.map(([ramo, dados]) => `<tr><td><strong>${ramosNomes[ramo] || ramo}</strong></td><td>${dados.leads}</td><td>${dados.fechados}</td><td>${formatarMoeda(dados.premio)}</td><td>${formatarMoeda(dados.receita)}</td></tr>`).join('');
+            
+            if (ordenado.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center">Nenhum dado</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = ordenado.map(([ramo, dados]) => `
+                <tr>
+                    <td><strong>${ramosNomes[ramo] || ramo}</strong></td>
+                    <td>${dados.leads}</td>
+                    <td>${dados.fechados}</td>
+                    <td>${formatarMoeda(dados.premio)}</td>
+                    <td>${formatarMoeda(dados.receita)}</td>
+                </tr>
+            `).join('');
         }
 
         function renderizarSeguradoras() {
             const seguradoras = {};
             let totalReceita = 0;
+            
             leadsFiltrados.filter(l => l.status === 'negocio_fechado').forEach(l => {
                 const seg = l.seguradora || 'Não informada';
                 const receita = calcularReceitaCorretora(l.valorPremio, l.comissao);
                 if (!seguradoras[seg]) seguradoras[seg] = { apolices: 0, premio: 0, receita: 0 };
                 seguradoras[seg].apolices++;
-                seguradoras[seg].premio += l.valorPremio || 0;
+                seguradoras[seg].premio += parseFloat(l.valorPremio) || 0;
                 seguradoras[seg].receita += receita;
                 totalReceita += receita;
             });
+            
             const ordenado = Object.entries(seguradoras).sort((a, b) => b[1].receita - a[1].receita);
             const tbody = document.getElementById('tabelaSeguradoras');
-            tbody.innerHTML = ordenado.length === 0 ? '<tr><td colspan="5" class="text-center">Nenhum dado</td></tr>' : ordenado.map(([seg, dados]) => `<tr><td><strong>${seg}</strong></td><td>${dados.apolices}</td><td>${formatarMoeda(dados.premio)}</td><td>${formatarMoeda(dados.receita)}</td><td>${totalReceita > 0 ? ((dados.receita / totalReceita) * 100).toFixed(1) : 0}%</td></tr>`).join('');
+            
+            if (ordenado.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center">Nenhum dado</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = ordenado.map(([seg, dados]) => `
+                <tr>
+                    <td><strong>${seg}</strong></td>
+                    <td>${dados.apolices}</td>
+                    <td>${formatarMoeda(dados.premio)}</td>
+                    <td>${formatarMoeda(dados.receita)}</td>
+                    <td>${totalReceita > 0 ? ((dados.receita / totalReceita) * 100).toFixed(1) : 0}%</td>
+                </tr>
+            `).join('');
         }
 
         function renderizarFunil() {
@@ -693,63 +820,135 @@
             statusOrdem.forEach(s => contagem[s.key] = 0);
             leadsFiltrados.forEach(l => { if (contagem[l.status] !== undefined) contagem[l.status]++; });
             const total = leadsFiltrados.length || 1;
+            
             document.getElementById('funnelContainer').innerHTML = statusOrdem.map((status, index) => {
                 const qtd = contagem[status.key];
-                return `<div class="funnel-step" style="width: ${100 - (index * 10)}%;"><div class="funnel-bar" style="background: ${status.color};"><span class="funnel-label">${status.label}</span><span class="funnel-value">${qtd} (${((qtd / total) * 100).toFixed(1)}%)</span></div></div>`;
+                return `
+                    <div class="funnel-step" style="width: ${100 - (index * 10)}%;">
+                        <div class="funnel-bar" style="background: ${status.color};">
+                            <span class="funnel-label">${status.label}</span>
+                            <span class="funnel-value">${qtd} (${((qtd / total) * 100).toFixed(1)}%)</span>
+                        </div>
+                    </div>
+                `;
             }).join('');
         }
 
         function renderizarEvolucao() {
             const meses = [];
             const hoje = new Date();
+            
             for (let i = 5; i >= 0; i--) {
                 const data = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
-                meses.push({ inicio: data, fim: new Date(data.getFullYear(), data.getMonth() + 1, 0, 23, 59, 59), nome: data.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }) });
+                meses.push({ 
+                    inicio: data, 
+                    fim: new Date(data.getFullYear(), data.getMonth() + 1, 0, 23, 59, 59), 
+                    nome: data.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }) 
+                });
             }
+            
             const evolucao = meses.map(mes => {
-                const leadsMes = leads.filter(l => { const data = l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date(l.criadoEm || 0); return data >= mes.inicio && data <= mes.fim; });
+                const leadsMes = leads.filter(l => { 
+                    const data = getDataLead(l);
+                    return data >= mes.inicio && data <= mes.fim; 
+                });
                 const fechados = leadsMes.filter(l => l.status === 'negocio_fechado');
                 const perdidos = leadsMes.filter(l => l.status === 'negocio_perdido').length;
-                return { mes: mes.nome, leads: leadsMes.length, fechados: fechados.length, perdidos, conversao: (fechados.length + perdidos) > 0 ? ((fechados.length / (fechados.length + perdidos)) * 100).toFixed(1) : '-', premio: fechados.reduce((sum, l) => sum + (l.valorPremio || 0), 0), receita: fechados.reduce((sum, l) => sum + calcularReceitaCorretora(l.valorPremio, l.comissao), 0) };
+                const premio = fechados.reduce((sum, l) => sum + (parseFloat(l.valorPremio) || 0), 0);
+                const receita = fechados.reduce((sum, l) => sum + calcularReceitaCorretora(l.valorPremio, l.comissao), 0);
+                const conversao = (fechados.length + perdidos) > 0 ? ((fechados.length / (fechados.length + perdidos)) * 100).toFixed(1) : '-';
+                
+                return { mes: mes.nome, leads: leadsMes.length, fechados: fechados.length, perdidos, conversao, premio, receita };
             });
-            document.getElementById('tabelaEvolucao').innerHTML = evolucao.map(e => `<tr><td><strong>${e.mes}</strong></td><td>${e.leads}</td><td class="text-success">${e.fechados}</td><td class="text-danger">${e.perdidos}</td><td>${e.conversao}%</td><td>${formatarMoeda(e.premio)}</td><td>${formatarMoeda(e.receita)}</td></tr>`).join('');
+            
+            document.getElementById('tabelaEvolucao').innerHTML = evolucao.map(e => `
+                <tr>
+                    <td><strong>${e.mes}</strong></td>
+                    <td>${e.leads}</td>
+                    <td class="text-success">${e.fechados}</td>
+                    <td class="text-danger">${e.perdidos}</td>
+                    <td>${e.conversao}%</td>
+                    <td>${formatarMoeda(e.premio)}</td>
+                    <td>${formatarMoeda(e.receita)}</td>
+                </tr>
+            `).join('');
         }
 
         function renderizarMetricas() {
             const fechados = leadsFiltrados.filter(l => l.status === 'negocio_fechado');
-            const ticketMedio = fechados.length > 0 ? fechados.reduce((sum, l) => sum + (l.valorPremio || 0), 0) / fechados.length : 0;
+            const ticketMedio = fechados.length > 0 ? fechados.reduce((sum, l) => sum + (parseFloat(l.valorPremio) || 0), 0) / fechados.length : 0;
             const receitaMedia = fechados.length > 0 ? fechados.reduce((sum, l) => sum + calcularReceitaCorretora(l.valorPremio, l.comissao), 0) / fechados.length : 0;
+            
             document.getElementById('metricsGrid').innerHTML = [
                 { label: 'Tempo Médio até Primeiro Contato', value: '2.5 dias', icon: 'fa-phone' },
                 { label: 'Tempo Médio até Cotação', value: '5.2 dias', icon: 'fa-file-invoice' },
                 { label: 'Ticket Médio (Prêmio)', value: formatarMoeda(ticketMedio), icon: 'fa-receipt' },
                 { label: 'Receita Média por Negócio', value: formatarMoeda(receitaMedia), icon: 'fa-dollar-sign' }
-            ].map(m => `<div class="metric-card"><i class="fas ${m.icon}"></i><div class="metric-info"><span class="metric-value">${m.value}</span><span class="metric-label">${m.label}</span></div></div>`).join('');
+            ].map(m => `
+                <div class="metric-card">
+                    <i class="fas ${m.icon}"></i>
+                    <div class="metric-info">
+                        <span class="metric-value">${m.value}</span>
+                        <span class="metric-label">${m.label}</span>
+                    </div>
+                </div>
+            `).join('');
         }
 
+        // =============================================
         // RELATÓRIO DE COMISSÕES
+        // =============================================
         function carregarComissoes() {
             const mesRef = document.getElementById('filtroMesComissao').value;
             const funcId = document.getElementById('filtroFuncionarioComissao').value;
             const ramo = document.getElementById('filtroRamoComissao').value;
             const statusPgto = document.getElementById('filtroStatusPgto').value;
 
-            let fechados = leads.filter(l => l.status === 'negocio_fechado');
+            console.log('Carregando comissões...');
+            console.log('Filtro mês:', mesRef);
+            console.log('Filtro funcionário:', funcId);
 
+            // Primeiro, pegar todos os fechados
+            let fechados = leads.filter(l => l.status === 'negocio_fechado');
+            console.log('Total de negócios fechados:', fechados.length);
+
+            // Filtrar por mês (usando criadoEm como referência)
             if (mesRef) {
                 const [ano, mes] = mesRef.split('-').map(Number);
                 const inicio = new Date(ano, mes - 1, 1);
                 const fim = new Date(ano, mes, 0, 23, 59, 59);
+                
+                console.log('Período:', inicio, 'até', fim);
+                
                 fechados = fechados.filter(l => {
-                    const data = l.dataFechamento?.toDate ? l.dataFechamento.toDate() : (l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date(l.criadoEm || 0));
+                    const data = getDataLead(l);
+                    console.log('Lead:', l.nome, 'Data:', data, 'Status:', l.status);
                     return data >= inicio && data <= fim;
                 });
+                
+                console.log('Fechados no período:', fechados.length);
             }
-            if (funcId) fechados = fechados.filter(l => l.responsavelId === funcId);
-            if (ramo) fechados = fechados.filter(l => l.ramo === ramo);
-            if (statusPgto) fechados = fechados.filter(l => (l.comissaoPaga ? 'pago' : 'pendente') === statusPgto);
+            
+            // Filtrar por funcionário
+            if (funcId) {
+                fechados = fechados.filter(l => l.responsavelId === funcId);
+                console.log('Após filtro funcionário:', fechados.length);
+            }
+            
+            // Filtrar por ramo
+            if (ramo) {
+                fechados = fechados.filter(l => l.ramo === ramo);
+            }
+            
+            // Filtrar por status de pagamento
+            if (statusPgto) {
+                fechados = fechados.filter(l => (l.comissaoPaga ? 'pago' : 'pendente') === statusPgto);
+            }
 
-            let totalPremio = 0, totalReceitaCorretora = 0, totalComissaoFunc = 0;
+            let totalPremio = 0;
+            let totalReceitaCorretora = 0;
+            let totalComissaoFunc = 0;
+            
             const tbody = document.getElementById('bodyComissoes');
             
             if (fechados.length === 0) {
@@ -766,8 +965,8 @@
             tbody.innerHTML = fechados.map(l => {
                 const func = funcionariosMap[l.responsavelId] || {};
                 const percentualFunc = l.comissaoFuncionario || func.comissaoPadrao || 50;
-                const premio = l.valorPremio || 0;
-                const percComissao = l.comissao || 0;
+                const premio = parseFloat(l.valorPremio) || 0;
+                const percComissao = parseFloat(l.comissao) || 0;
                 const receitaCorretora = calcularReceitaCorretora(premio, percComissao);
                 const comissaoFunc = calcularComissaoFuncionario(receitaCorretora, percentualFunc);
 
@@ -775,66 +974,110 @@
                 totalReceitaCorretora += receitaCorretora;
                 totalComissaoFunc += comissaoFunc;
 
-                const dataFechamento = l.dataFechamento?.toDate ? l.dataFechamento.toDate() : (l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date());
-                return `<tr>
-                    <td>${dataFechamento.toLocaleDateString('pt-BR')}</td>
-                    <td>${l.nome || '-'}</td>
-                    <td>${l.ramo || '-'}</td>
-                    <td>${l.seguradora || '-'}</td>
-                    <td>${formatarMoeda(premio)}</td>
-                    <td>${percComissao.toFixed(1)}%</td>
-                    <td><strong>${formatarMoeda(receitaCorretora)}</strong></td>
-                    <td>${func.nome || l.responsavelNome || '-'}</td>
-                    <td>${percentualFunc}%</td>
-                    <td><strong class="text-success">${formatarMoeda(comissaoFunc)}</strong></td>
-                    <td><span class="badge ${l.comissaoPaga ? 'badge-success' : 'badge-warning'}">${l.comissaoPaga ? 'Pago' : 'Pendente'}</span></td>
-                    <td>${!l.comissaoPaga ? `<button class="btn btn-sm btn-success" onclick="abrirModalPagamento('${l.id}')" title="Marcar como Pago"><i class="fas fa-check"></i></button>` : `<span class="text-muted"><i class="fas fa-check-circle"></i></span>`}</td>
-                </tr>`;
+                const dataLead = getDataLead(l);
+                const dataStr = dataLead.toLocaleDateString('pt-BR');
+
+                return `
+                    <tr>
+                        <td>${dataStr}</td>
+                        <td>${l.nome || '-'}</td>
+                        <td>${l.ramo || '-'}</td>
+                        <td>${l.seguradora || '-'}</td>
+                        <td>${formatarMoeda(premio)}</td>
+                        <td>${percComissao.toFixed(1)}%</td>
+                        <td><strong>${formatarMoeda(receitaCorretora)}</strong></td>
+                        <td>${func.nome || l.responsavelNome || '-'}</td>
+                        <td>${percentualFunc}%</td>
+                        <td><strong class="text-success">${formatarMoeda(comissaoFunc)}</strong></td>
+                        <td><span class="badge ${l.comissaoPaga ? 'badge-success' : 'badge-warning'}">${l.comissaoPaga ? 'Pago' : 'Pendente'}</span></td>
+                        <td>${!l.comissaoPaga ? `<button class="btn btn-sm btn-success" onclick="abrirModalPagamento('${l.id}')" title="Marcar como Pago"><i class="fas fa-check"></i></button>` : `<span class="text-muted"><i class="fas fa-check-circle"></i></span>`}</td>
+                    </tr>
+                `;
             }).join('');
 
-            document.getElementById('footComissoes').innerHTML = `<tr style="font-weight: bold; background: rgba(0,136,170,0.1);"><td colspan="4">TOTAL</td><td>${formatarMoeda(totalPremio)}</td><td>-</td><td>${formatarMoeda(totalReceitaCorretora)}</td><td colspan="2">-</td><td>${formatarMoeda(totalComissaoFunc)}</td><td colspan="2">-</td></tr>`;
+            document.getElementById('footComissoes').innerHTML = `
+                <tr style="font-weight: bold; background: rgba(0,136,170,0.1);">
+                    <td colspan="4">TOTAL</td>
+                    <td>${formatarMoeda(totalPremio)}</td>
+                    <td>-</td>
+                    <td>${formatarMoeda(totalReceitaCorretora)}</td>
+                    <td colspan="2">-</td>
+                    <td>${formatarMoeda(totalComissaoFunc)}</td>
+                    <td colspan="2">-</td>
+                </tr>
+            `;
+            
             document.getElementById('statTotalPremio').textContent = formatarMoeda(totalPremio);
             document.getElementById('statReceitaCorretora').textContent = formatarMoeda(totalReceitaCorretora);
             document.getElementById('statComissaoFuncionarios').textContent = formatarMoeda(totalComissaoFunc);
             document.getElementById('statLucroLiquido').textContent = formatarMoeda(totalReceitaCorretora - totalComissaoFunc);
+            
             renderizarResumoFuncionarios(fechados);
         }
 
         function renderizarResumoFuncionarios(fechados) {
             const resumo = {};
+            
             fechados.forEach(l => {
                 const funcId = l.responsavelId || 'nao_atribuido';
                 const func = funcionariosMap[funcId] || {};
                 const percentualFunc = l.comissaoFuncionario || func.comissaoPadrao || 50;
-                const premio = l.valorPremio || 0;
+                const premio = parseFloat(l.valorPremio) || 0;
                 const receitaCorretora = calcularReceitaCorretora(premio, l.comissao);
                 const comissaoFunc = calcularComissaoFuncionario(receitaCorretora, percentualFunc);
 
-                if (!resumo[funcId]) resumo[funcId] = { nome: func.nome || l.responsavelNome || 'Não atribuído', negocios: 0, premio: 0, receita: 0, comissao: 0, pago: 0, pendente: 0, somaPercentuais: 0 };
+                if (!resumo[funcId]) {
+                    resumo[funcId] = { 
+                        nome: func.nome || l.responsavelNome || 'Não atribuído', 
+                        negocios: 0, 
+                        premio: 0, 
+                        receita: 0, 
+                        comissao: 0, 
+                        pago: 0, 
+                        pendente: 0, 
+                        somaPercentuais: 0 
+                    };
+                }
+                
                 resumo[funcId].negocios++;
                 resumo[funcId].premio += premio;
                 resumo[funcId].receita += receitaCorretora;
                 resumo[funcId].comissao += comissaoFunc;
                 resumo[funcId].somaPercentuais += percentualFunc;
-                if (l.comissaoPaga) resumo[funcId].pago += comissaoFunc;
-                else resumo[funcId].pendente += comissaoFunc;
+                
+                if (l.comissaoPaga) {
+                    resumo[funcId].pago += comissaoFunc;
+                } else {
+                    resumo[funcId].pendente += comissaoFunc;
+                }
             });
 
             const lista = Object.entries(resumo).sort((a, b) => b[1].comissao - a[1].comissao);
-            document.getElementById('resumoFuncionarios').innerHTML = lista.length === 0 ? '<tr><td colspan="9" class="text-center">Nenhum dado</td></tr>' : lista.map(([id, r]) => `<tr>
-                <td><strong>${r.nome}</strong></td>
-                <td>${r.negocios}</td>
-                <td>${formatarMoeda(r.premio)}</td>
-                <td>${formatarMoeda(r.receita)}</td>
-                <td>${r.negocios > 0 ? (r.somaPercentuais / r.negocios).toFixed(1) : 0}%</td>
-                <td><strong>${formatarMoeda(r.comissao)}</strong></td>
-                <td class="text-success">${formatarMoeda(r.pago)}</td>
-                <td class="text-warning">${formatarMoeda(r.pendente)}</td>
-                <td>${r.pendente > 0 ? `<button class="btn btn-sm btn-success" onclick="pagarTodosFuncionario('${id}')" title="Pagar Todas Pendentes"><i class="fas fa-money-bill-wave"></i> Pagar</button>` : '<span class="text-muted">-</span>'}</td>
-            </tr>`).join('');
+            const tbody = document.getElementById('resumoFuncionarios');
+            
+            if (lista.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center">Nenhum dado</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = lista.map(([id, r]) => `
+                <tr>
+                    <td><strong>${r.nome}</strong></td>
+                    <td>${r.negocios}</td>
+                    <td>${formatarMoeda(r.premio)}</td>
+                    <td>${formatarMoeda(r.receita)}</td>
+                    <td>${r.negocios > 0 ? (r.somaPercentuais / r.negocios).toFixed(1) : 0}%</td>
+                    <td><strong>${formatarMoeda(r.comissao)}</strong></td>
+                    <td class="text-success">${formatarMoeda(r.pago)}</td>
+                    <td class="text-warning">${formatarMoeda(r.pendente)}</td>
+                    <td>${r.pendente > 0 ? `<button class="btn btn-sm btn-success" onclick="pagarTodosFuncionario('${id}')" title="Pagar Todas Pendentes"><i class="fas fa-money-bill-wave"></i> Pagar</button>` : '<span class="text-muted">-</span>'}</td>
+                </tr>
+            `).join('');
         }
 
+        // =============================================
         // PAGAMENTO DE COMISSÕES
+        // =============================================
         function abrirModalPagamento(leadId) {
             leadSelecionado = leadId;
             document.getElementById('dataPagamento').value = new Date().toISOString().split('T')[0];
@@ -842,56 +1085,117 @@
             document.getElementById('modalPagamento').classList.add('active');
         }
 
-        function fecharModal(id) { document.getElementById(id).classList.remove('active'); leadSelecionado = null; }
+        function fecharModal(id) { 
+            document.getElementById(id).classList.remove('active'); 
+            leadSelecionado = null; 
+        }
 
         async function confirmarPagamento() {
             if (!leadSelecionado) return;
+            
             try {
-                await db.collection('leads_crm').doc(leadSelecionado).update({ comissaoPaga: true, dataPagamento: document.getElementById('dataPagamento').value, observacaoPagamento: document.getElementById('observacaoPagamento').value, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() });
+                await db.collection('leads_crm').doc(leadSelecionado).update({ 
+                    comissaoPaga: true, 
+                    dataPagamento: document.getElementById('dataPagamento').value, 
+                    observacaoPagamento: document.getElementById('observacaoPagamento').value, 
+                    atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() 
+                });
+                
                 const lead = leads.find(l => l.id === leadSelecionado);
-                if (lead) { lead.comissaoPaga = true; lead.dataPagamento = document.getElementById('dataPagamento').value; }
+                if (lead) { 
+                    lead.comissaoPaga = true; 
+                    lead.dataPagamento = document.getElementById('dataPagamento').value; 
+                }
+                
                 fecharModal('modalPagamento');
                 carregarComissoes();
                 mostrarToast('Pagamento registrado com sucesso!', 'success');
-            } catch (error) { console.error('Erro:', error); mostrarToast('Erro ao registrar pagamento', 'error'); }
+            } catch (error) { 
+                console.error('Erro:', error); 
+                mostrarToast('Erro ao registrar pagamento', 'error'); 
+            }
         }
 
         async function pagarTodosFuncionario(funcId) {
             if (!confirm('Confirma marcar todas as comissões pendentes deste funcionário como pagas?')) return;
+            
             try {
                 const mesRef = document.getElementById('filtroMesComissao').value;
-                let fechados = leads.filter(l => l.status === 'negocio_fechado' && (l.responsavelId === funcId || (!l.responsavelId && funcId === 'nao_atribuido')) && !l.comissaoPaga);
+                let fechados = leads.filter(l => 
+                    l.status === 'negocio_fechado' && 
+                    (l.responsavelId === funcId || (!l.responsavelId && funcId === 'nao_atribuido')) &&
+                    !l.comissaoPaga
+                );
+                
                 if (mesRef) {
                     const [ano, mes] = mesRef.split('-').map(Number);
                     const inicio = new Date(ano, mes - 1, 1);
                     const fim = new Date(ano, mes, 0, 23, 59, 59);
-                    fechados = fechados.filter(l => { const data = l.dataFechamento?.toDate ? l.dataFechamento.toDate() : (l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date(l.criadoEm || 0)); return data >= inicio && data <= fim; });
+                    fechados = fechados.filter(l => { 
+                        const data = getDataLead(l);
+                        return data >= inicio && data <= fim; 
+                    });
                 }
+                
                 const dataPgto = new Date().toISOString().split('T')[0];
                 const batch = db.batch();
-                fechados.forEach(l => { batch.update(db.collection('leads_crm').doc(l.id), { comissaoPaga: true, dataPagamento: dataPgto, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }); l.comissaoPaga = true; l.dataPagamento = dataPgto; });
+                
+                fechados.forEach(l => { 
+                    batch.update(db.collection('leads_crm').doc(l.id), { 
+                        comissaoPaga: true, 
+                        dataPagamento: dataPgto, 
+                        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() 
+                    }); 
+                    l.comissaoPaga = true; 
+                    l.dataPagamento = dataPgto; 
+                });
+                
                 await batch.commit();
                 carregarComissoes();
                 mostrarToast(`${fechados.length} pagamento(s) registrado(s)!`, 'success');
-            } catch (error) { console.error('Erro:', error); mostrarToast('Erro ao registrar pagamentos', 'error'); }
+            } catch (error) { 
+                console.error('Erro:', error); 
+                mostrarToast('Erro ao registrar pagamentos', 'error'); 
+            }
         }
 
         function exportarComissoes() {
             const mesRef = document.getElementById('filtroMesComissao').value;
             let fechados = leads.filter(l => l.status === 'negocio_fechado');
+            
             if (mesRef) {
                 const [ano, mes] = mesRef.split('-').map(Number);
                 const inicio = new Date(ano, mes - 1, 1);
                 const fim = new Date(ano, mes, 0, 23, 59, 59);
-                fechados = fechados.filter(l => { const data = l.dataFechamento?.toDate ? l.dataFechamento.toDate() : (l.criadoEm?.toDate ? l.criadoEm.toDate() : new Date(l.criadoEm || 0)); return data >= inicio && data <= fim; });
+                fechados = fechados.filter(l => { 
+                    const data = getDataLead(l);
+                    return data >= inicio && data <= fim; 
+                });
             }
+            
             let csv = 'Data;Cliente;Ramo;Seguradora;Premio;%Comissao;ReceitaCorretora;Funcionario;%Func;ComissaoFunc;Status\n';
+            
             fechados.forEach(l => {
                 const func = funcionariosMap[l.responsavelId] || {};
                 const percentualFunc = l.comissaoFuncionario || func.comissaoPadrao || 50;
-                const receitaCorretora = calcularReceitaCorretora(l.valorPremio || 0, l.comissao);
-                csv += `${(l.dataFechamento?.toDate ? l.dataFechamento.toDate() : new Date()).toLocaleDateString('pt-BR')};${l.nome || '-'};${l.ramo || '-'};${l.seguradora || '-'};${(l.valorPremio || 0).toFixed(2).replace('.', ',')};${(l.comissao || 0).toFixed(1).replace('.', ',')}%;${receitaCorretora.toFixed(2).replace('.', ',')};${func.nome || l.responsavelNome || '-'};${percentualFunc}%;${calcularComissaoFuncionario(receitaCorretora, percentualFunc).toFixed(2).replace('.', ',')};${l.comissaoPaga ? 'Pago' : 'Pendente'}\n`;
+                const premio = parseFloat(l.valorPremio) || 0;
+                const receitaCorretora = calcularReceitaCorretora(premio, l.comissao);
+                const comissaoFunc = calcularComissaoFuncionario(receitaCorretora, percentualFunc);
+                const dataLead = getDataLead(l);
+                
+                csv += `${dataLead.toLocaleDateString('pt-BR')};`;
+                csv += `${l.nome || '-'};`;
+                csv += `${l.ramo || '-'};`;
+                csv += `${l.seguradora || '-'};`;
+                csv += `${premio.toFixed(2).replace('.', ',')};`;
+                csv += `${(parseFloat(l.comissao) || 0).toFixed(1).replace('.', ',')}%;`;
+                csv += `${receitaCorretora.toFixed(2).replace('.', ',')};`;
+                csv += `${func.nome || l.responsavelNome || '-'};`;
+                csv += `${percentualFunc}%;`;
+                csv += `${comissaoFunc.toFixed(2).replace('.', ',')};`;
+                csv += `${l.comissaoPaga ? 'Pago' : 'Pendente'}\n`;
             });
+            
             const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -900,7 +1204,9 @@
             mostrarToast('Relatório exportado!', 'success');
         }
 
+        // =============================================
         // TABS
+        // =============================================
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -910,10 +1216,23 @@
             });
         });
 
+        // =============================================
         // UTILITÁRIOS
-        function mostrarToast(mensagem, tipo = 'info') { const toast = document.getElementById('toast'); toast.textContent = mensagem; toast.className = `toast ${tipo} show`; setTimeout(() => toast.classList.remove('show'), 3000); }
-        function fazerLogout() { auth.signOut().then(() => window.location.href = 'login.html'); }
-        document.getElementById('mobileToggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('active'));
+        // =============================================
+        function mostrarToast(mensagem, tipo = 'info') { 
+            const toast = document.getElementById('toast'); 
+            toast.textContent = mensagem; 
+            toast.className = `toast ${tipo} show`; 
+            setTimeout(() => toast.classList.remove('show'), 3000); 
+        }
+        
+        function fazerLogout() { 
+            auth.signOut().then(() => window.location.href = 'login.html'); 
+        }
+        
+        document.getElementById('mobileToggle').addEventListener('click', () => {
+            document.getElementById('sidebar').classList.toggle('active');
+        });
     </script>
 
     <style>
