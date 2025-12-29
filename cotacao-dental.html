@@ -808,23 +808,12 @@
                 <input type="number" class="form-input" id="funcionarios" placeholder="Ex: 50" min="1">
             </div>
             
-            <div class="price-ranges">
-                <div class="price-range-item" id="range1">
-                    <span class="price-range-label">Até 29 funcionários</span>
-                    <span class="price-range-value">R$ 27,42/pessoa</span>
+            <div class="tip-box" style="margin-top: 1rem;">
+                <div class="tip-box-header">
+                    <span>💡</span>
+                    <span>Quanto mais funcionários, menor o custo!</span>
                 </div>
-                <div class="price-range-item" id="range2">
-                    <span class="price-range-label">30 a 99 funcionários</span>
-                    <span class="price-range-value">R$ 24,19/pessoa</span>
-                </div>
-                <div class="price-range-item" id="range3">
-                    <span class="price-range-label">100 a 199 funcionários</span>
-                    <span class="price-range-value">R$ 18,15/pessoa</span>
-                </div>
-                <div class="price-range-item" id="range4">
-                    <span class="price-range-label">Acima de 200</span>
-                    <span class="price-range-value">R$ 14,16/pessoa</span>
-                </div>
+                <p>Empresas com mais colaboradores conseguem condições especiais. Vamos calcular o melhor valor para você!</p>
             </div>
             
             <button class="btn btn-primary" onclick="nextStep(2)">Continuar →</button>
@@ -1039,7 +1028,12 @@
                     <span>✅</span>
                     <span>Próximo passo</span>
                 </div>
-                <p>Informe o CNPJ da empresa e um contato para que nossa equipe finalize a análise e envie a proposta completa.</p>
+                <p>Informe os dados da empresa e um contato para que nossa equipe finalize a análise e envie a proposta completa.</p>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Nome da Empresa</label>
+                <input type="text" class="form-input" id="nomeEmpresa" placeholder="Razão social ou nome fantasia">
             </div>
             
             <div class="form-group">
@@ -1097,6 +1091,7 @@
             nome: '',
             funcionarios: 0,
             dependentes: '',
+            nomeEmpresa: '',
             cnpj: '',
             whatsapp: ''
         };
@@ -1142,7 +1137,6 @@
                     return;
                 }
                 formData.funcionarios = funcionarios;
-                highlightPriceRange(funcionarios);
             }
             
             if (current === 3) {
@@ -1155,11 +1149,11 @@
             if (current === 5) {
                 // Go to loading step
                 showStep(6);
-                // Simulate loading and show result
+                // Simulate loading and show result (9 segundos)
                 setTimeout(() => {
                     calculateResult();
                     showStep(7);
-                }, 4000);
+                }, 9000);
                 return;
             }
             
@@ -1171,21 +1165,6 @@
             if (current > 1) {
                 showStep(current - 1);
             }
-        }
-
-        // Highlight Price Range
-        function highlightPriceRange(funcionarios) {
-            document.querySelectorAll('.price-range-item').forEach(item => {
-                item.classList.remove('active');
-            });
-            
-            let rangeId = '';
-            if (funcionarios <= 29) rangeId = 'range1';
-            else if (funcionarios <= 99) rangeId = 'range2';
-            else if (funcionarios <= 199) rangeId = 'range3';
-            else rangeId = 'range4';
-            
-            document.getElementById(rangeId).classList.add('active');
         }
 
         // Select Dependentes
@@ -1263,8 +1242,14 @@
 
         // Enviar Cotação
         async function enviarCotacao() {
+            const nomeEmpresa = document.getElementById('nomeEmpresa').value.trim();
             const cnpj = document.getElementById('cnpj').value.trim();
             const whatsapp = document.getElementById('whatsapp').value.trim();
+            
+            if (!nomeEmpresa) {
+                alert('Por favor, informe o nome da empresa.');
+                return;
+            }
             
             if (!cnpj || cnpj.length < 18) {
                 alert('Por favor, informe o CNPJ completo.');
@@ -1276,6 +1261,7 @@
                 return;
             }
             
+            formData.nomeEmpresa = nomeEmpresa;
             formData.cnpj = cnpj;
             formData.whatsapp = whatsapp;
             
@@ -1292,21 +1278,33 @@
                 else if (funcionarios <= 199) precoPerCapita = 18.15;
                 else precoPerCapita = 14.16;
                 
-                // Save to Firebase
+                // Save to Firebase - Empresa como lead principal
                 await db.collection('leads_crm').add({
+                    // Dados do contato/solicitante
                     nome: formData.nome,
-                    cnpj: formData.cnpj,
                     whatsapp: formData.whatsapp.replace(/\D/g, ''),
+                    
+                    // Dados da empresa
+                    nomeEmpresa: formData.nomeEmpresa,
+                    cnpj: formData.cnpj,
                     funcionarios: formData.funcionarios,
                     dependentes: formData.dependentes,
+                    
+                    // Dados comerciais
                     valorCotacao: precoPerCapita,
                     valorPremio: precoPerCapita * funcionarios,
+                    
+                    // Classificação
                     ramo: 'dental',
                     tipo: 'empresarial',
                     status: 'pre_cadastro',
                     origem: 'site',
+                    
+                    // Indicação (se houver)
                     indicadoPorCodigo: indicadorCodigo || null,
                     indicadoPorNome: indicadorNome || null,
+                    
+                    // Timestamps
                     criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
                     dataCadastro: firebase.firestore.FieldValue.serverTimestamp()
                 });
@@ -1318,8 +1316,9 @@
                 
                 // Create WhatsApp message
                 const whatsNum = '5554996135668';
-                const msg = `Olá! Sou ${formData.nome} e acabei de fazer uma cotação de Plano Dental Empresarial no site.%0A%0A` +
+                const msg = `Olá! Sou ${formData.nome} da empresa *${formData.nomeEmpresa}* e acabei de fazer uma cotação de Plano Dental Empresarial no site.%0A%0A` +
                     `📊 *Dados da cotação:*%0A` +
+                    `• Empresa: ${formData.nomeEmpresa}%0A` +
                     `• CNPJ: ${formData.cnpj}%0A` +
                     `• Funcionários: ${formData.funcionarios}%0A` +
                     `• Dependentes: ${formData.dependentes === 'sim' ? 'Sim' : 'Não'}%0A` +
@@ -1337,14 +1336,6 @@
                 alert('Erro ao enviar cotação. Tente novamente.');
             }
         }
-
-        // Input listener for funcionarios
-        document.getElementById('funcionarios').addEventListener('input', function() {
-            const value = parseInt(this.value);
-            if (value > 0) {
-                highlightPriceRange(value);
-            }
-        });
 
         // Initialize
         updateProgress();
