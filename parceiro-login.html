@@ -1062,18 +1062,94 @@
         <div class="login-box">
             <div class="login-logo">🤝</div>
             <h1 class="login-title">Portal do Parceiro</h1>
-            <p class="login-subtitle">Digite seu código de parceiro para acessar</p>
+            <p class="login-subtitle">Acesse sua conta de parceiro</p>
             
-            <input type="text" class="login-input" id="codigoInput" placeholder="Ex: RET1234" maxlength="10">
+            <div class="form-group" style="margin-bottom: 1rem; text-align: left;">
+                <label style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; display: block;">Código do Parceiro</label>
+                <input type="text" class="login-input" id="codigoInput" placeholder="Ex: RET1234" maxlength="10" style="margin-bottom: 0;">
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 1rem; text-align: left;">
+                <label style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; display: block;">Senha</label>
+                <input type="password" class="login-input" id="senhaInput" placeholder="••••••" style="margin-bottom: 0;">
+            </div>
+            
             <button class="login-btn" onclick="fazerLogin()">
                 <i class="fas fa-sign-in-alt"></i> Entrar
             </button>
             
             <div class="login-error" id="loginError"></div>
             
+            <p style="margin-top: 1rem; font-size: 0.85rem;">
+                <a href="#" onclick="abrirEsqueciSenha()" style="color: #f59e0b; text-decoration: none;">Esqueci minha senha</a>
+            </p>
+            
             <p class="login-link">
                 Ainda não é parceiro? <a href="parceiro-cadastro.html">Cadastre-se aqui</a>
             </p>
+            
+            <p style="margin-top: 1rem; font-size: 0.75rem; color: #64748b;">
+                💡 Senha padrão: últimos 6 dígitos do seu CNPJ
+            </p>
+        </div>
+    </div>
+
+    <!-- Modal Esqueci Senha -->
+    <div class="modal-overlay" id="modalEsqueciSenha">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-key"></i> Recuperar Senha</h3>
+                <button class="modal-close" onclick="fecharModal('modalEsqueciSenha')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 1rem; color: var(--text-light);">
+                    Digite seu código de parceiro para recuperar a senha:
+                </p>
+                <div class="form-group">
+                    <label class="form-label">Código do Parceiro</label>
+                    <input type="text" class="form-control" id="codigoRecuperacao" placeholder="Ex: RET1234" maxlength="10" style="text-transform: uppercase;">
+                </div>
+                <div class="info-box">
+                    <i class="fas fa-info-circle"></i>
+                    <p>A senha será enviada para o WhatsApp cadastrado.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="fecharModal('modalEsqueciSenha')">Cancelar</button>
+                <button class="btn btn-primary" onclick="recuperarSenha()">
+                    <i class="fas fa-paper-plane"></i> Enviar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Alterar Senha -->
+    <div class="modal-overlay" id="modalAlterarSenha">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-lock"></i> Alterar Senha</h3>
+                <button class="modal-close" onclick="fecharModal('modalAlterarSenha')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Senha Atual</label>
+                    <input type="password" class="form-control" id="senhaAtual" placeholder="Digite sua senha atual">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Nova Senha</label>
+                    <input type="password" class="form-control" id="novaSenha" placeholder="Mínimo 6 caracteres">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Confirmar Nova Senha</label>
+                    <input type="password" class="form-control" id="confirmarSenha" placeholder="Repita a nova senha">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="fecharModal('modalAlterarSenha')">Cancelar</button>
+                <button class="btn btn-success" onclick="alterarSenha()">
+                    <i class="fas fa-check"></i> Salvar
+                </button>
+            </div>
         </div>
     </div>
 
@@ -1087,6 +1163,9 @@
             </a>
             <div class="header-user">
                 <span class="empresa-nome" id="empresaNome">Carregando...</span>
+                <button class="btn-logout" onclick="abrirAlterarSenha()" title="Alterar Senha" style="margin-right: 5px;">
+                    <i class="fas fa-key"></i>
+                </button>
                 <button class="btn-logout" onclick="fazerLogout()">
                     <i class="fas fa-sign-out-alt"></i> Sair
                 </button>
@@ -1585,19 +1664,61 @@
         // Verificar Login Salvo
         document.addEventListener('DOMContentLoaded', async () => {
             const codigoSalvo = localStorage.getItem('parceiro_codigo');
+            const logadoSalvo = localStorage.getItem('parceiro_logado');
+            
+            // Auto-preencher o código se existir
             if (codigoSalvo) {
                 document.getElementById('codigoInput').value = codigoSalvo;
-                await fazerLogin();
+            }
+            
+            // Se estava logado, tentar reconectar automaticamente
+            if (codigoSalvo && logadoSalvo === 'true') {
+                await autoLogin(codigoSalvo);
             }
         });
+        
+        // Auto login (sem pedir senha novamente)
+        async function autoLogin(codigo) {
+            try {
+                const snapshot = await db.collection('empresas_parceiras')
+                    .where('codigo', '==', codigo)
+                    .where('status', '==', 'aprovado')
+                    .limit(1)
+                    .get();
+
+                if (!snapshot.empty) {
+                    parceiroId = snapshot.docs[0].id;
+                    parceiroData = snapshot.docs[0].data();
+                    
+                    // Mostrar dashboard
+                    document.getElementById('loginOverlay').classList.add('hidden');
+                    document.getElementById('dashboardContent').classList.remove('hidden');
+                    
+                    // Carregar dados
+                    carregarDashboard();
+                } else {
+                    // Limpar dados salvos se não encontrou
+                    localStorage.removeItem('parceiro_logado');
+                }
+            } catch (error) {
+                console.error('Erro no auto-login:', error);
+            }
+        }
 
         // Login
         async function fazerLogin() {
             const codigo = document.getElementById('codigoInput').value.trim().toUpperCase();
+            const senha = document.getElementById('senhaInput').value.trim();
             
             if (!codigo) {
                 document.getElementById('loginError').style.display = 'block';
                 document.getElementById('loginError').textContent = 'Digite seu código de parceiro.';
+                return;
+            }
+            
+            if (!senha) {
+                document.getElementById('loginError').style.display = 'block';
+                document.getElementById('loginError').textContent = 'Digite sua senha.';
                 return;
             }
 
@@ -1630,7 +1751,16 @@
                 parceiroId = snapshot.docs[0].id;
                 parceiroData = snapshot.docs[0].data();
                 
+                // Verificar senha
+                const senhaCorreta = validarSenha(senha, parceiroData);
+                if (!senhaCorreta) {
+                    document.getElementById('loginError').style.display = 'block';
+                    document.getElementById('loginError').textContent = 'Senha incorreta.';
+                    return;
+                }
+                
                 localStorage.setItem('parceiro_codigo', codigo);
+                localStorage.setItem('parceiro_logado', 'true');
                 
                 // Mostrar dashboard
                 document.getElementById('loginOverlay').classList.add('hidden');
@@ -1645,16 +1775,141 @@
                 document.getElementById('loginError').textContent = 'Erro ao conectar. Tente novamente.';
             }
         }
+        
+        // Validar senha (personalizada ou padrão = últimos 6 dígitos do CNPJ)
+        function validarSenha(senhaDigitada, dados) {
+            // Se tem senha personalizada, usar ela
+            if (dados.senha) {
+                return senhaDigitada === dados.senha;
+            }
+            
+            // Senão, senha padrão = últimos 6 dígitos do CNPJ
+            const cnpj = (dados.cnpj || '').replace(/\D/g, '');
+            const senhaPadrao = cnpj.slice(-6);
+            
+            return senhaDigitada === senhaPadrao;
+        }
+        
+        // Obter senha padrão
+        function getSenhaPadrao(dados) {
+            const cnpj = (dados.cnpj || '').replace(/\D/g, '');
+            return cnpj.slice(-6);
+        }
+        
+        // Abrir modal esqueci senha
+        function abrirEsqueciSenha() {
+            document.getElementById('codigoRecuperacao').value = document.getElementById('codigoInput').value;
+            document.getElementById('modalEsqueciSenha').classList.add('active');
+        }
+        
+        // Recuperar senha
+        async function recuperarSenha() {
+            const codigo = document.getElementById('codigoRecuperacao').value.trim().toUpperCase();
+            
+            if (!codigo) {
+                alert('Digite o código do parceiro.');
+                return;
+            }
+            
+            try {
+                const snapshot = await db.collection('empresas_parceiras')
+                    .where('codigo', '==', codigo)
+                    .limit(1)
+                    .get();
+                
+                if (snapshot.empty) {
+                    alert('Código não encontrado.');
+                    return;
+                }
+                
+                const dados = snapshot.docs[0].data();
+                const whatsapp = dados.whatsapp || dados.telefone || '';
+                const senha = dados.senha || getSenhaPadrao(dados);
+                
+                if (!whatsapp) {
+                    alert('WhatsApp não cadastrado. Entre em contato com a Retorno Seguros.');
+                    return;
+                }
+                
+                // Abrir WhatsApp com a senha
+                const mensagem = `🔐 *Recuperação de Senha - Portal do Parceiro*%0A%0AOlá ${dados.nomeEmpresa}!%0A%0ASua senha atual é: *${senha}*%0ACódigo: *${codigo}*%0A%0AAcesse: https://retornoseguros.vercel.app/parceiro-login.html%0A%0A_Retorno Seguros_`;
+                
+                // Número da Retorno para enviar
+                const numRetorno = '5554996135668';
+                window.open(`https://wa.me/${whatsapp.replace(/\D/g, '')}?text=${mensagem}`, '_blank');
+                
+                alert('Verifique seu WhatsApp! A senha foi enviada.');
+                fecharModal('modalEsqueciSenha');
+                
+            } catch (error) {
+                console.error('Erro:', error);
+                alert('Erro ao recuperar senha. Tente novamente.');
+            }
+        }
+        
+        // Abrir modal alterar senha
+        function abrirAlterarSenha() {
+            document.getElementById('senhaAtual').value = '';
+            document.getElementById('novaSenha').value = '';
+            document.getElementById('confirmarSenha').value = '';
+            document.getElementById('modalAlterarSenha').classList.add('active');
+        }
+        
+        // Alterar senha
+        async function alterarSenha() {
+            const senhaAtual = document.getElementById('senhaAtual').value.trim();
+            const novaSenha = document.getElementById('novaSenha').value.trim();
+            const confirmarSenha = document.getElementById('confirmarSenha').value.trim();
+            
+            if (!senhaAtual || !novaSenha || !confirmarSenha) {
+                alert('Preencha todos os campos.');
+                return;
+            }
+            
+            if (novaSenha.length < 6) {
+                alert('A nova senha deve ter no mínimo 6 caracteres.');
+                return;
+            }
+            
+            if (novaSenha !== confirmarSenha) {
+                alert('As senhas não conferem.');
+                return;
+            }
+            
+            // Verificar senha atual
+            if (!validarSenha(senhaAtual, parceiroData)) {
+                alert('Senha atual incorreta.');
+                return;
+            }
+            
+            try {
+                await db.collection('empresas_parceiras').doc(parceiroId).update({
+                    senha: novaSenha,
+                    senhaAlteradaEm: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                
+                parceiroData.senha = novaSenha;
+                
+                alert('✅ Senha alterada com sucesso!');
+                fecharModal('modalAlterarSenha');
+                
+            } catch (error) {
+                console.error('Erro:', error);
+                alert('Erro ao alterar senha. Tente novamente.');
+            }
+        }
 
         // Logout
         function fazerLogout() {
             localStorage.removeItem('parceiro_codigo');
+            localStorage.removeItem('parceiro_logado');
             parceiroData = null;
             parceiroId = null;
             todasIndicacoes = [];
             document.getElementById('loginOverlay').classList.remove('hidden');
             document.getElementById('dashboardContent').classList.add('hidden');
             document.getElementById('codigoInput').value = '';
+            document.getElementById('senhaInput').value = '';
             document.getElementById('loginError').style.display = 'none';
         }
 
