@@ -1859,9 +1859,12 @@
                     seguradora: null,
                     valorPremio: null,
                     comissao: null,
-                    // DADOS DE INDICAÇÃO
+                    // DADOS DE INDICAÇÃO (cliente)
                     indicadoPorCodigo: indicacaoData.codigo || null,
                     indicadoPorNome: indicacaoData.nome || null,
+                    // DADOS DE EMPRESA PARCEIRA
+                    empresaParceiraCodigo: empresaParceiraData.codigo || null,
+                    empresaParceiraNome: empresaParceiraData.nome || null,
                     criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
                     atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
                     criadoPor: 'site_cotacao_vida'
@@ -1883,15 +1886,49 @@
             nome: null
         };
         
+        // Dados de empresa parceira
+        let empresaParceiraData = {
+            codigo: null,
+            nome: null
+        };
+        
         async function capturarIndicacao() {
             const urlParams = new URLSearchParams(window.location.search);
-            const codigoRef = urlParams.get('ref');
             
+            // 1. Verificar código de EMPRESA PARCEIRA (?codigo=)
+            const codigoEmpresa = urlParams.get('codigo');
+            if (codigoEmpresa) {
+                empresaParceiraData.codigo = codigoEmpresa.toUpperCase();
+                console.log('Código de empresa parceira detectado:', empresaParceiraData.codigo);
+                
+                try {
+                    const snapshot = await db.collection('empresas_parceiras')
+                        .where('codigo', '==', empresaParceiraData.codigo)
+                        .where('status', '==', 'aprovado')
+                        .limit(1)
+                        .get();
+                    
+                    if (!snapshot.empty) {
+                        const empresa = snapshot.docs[0].data();
+                        empresaParceiraData.nome = empresa.nomeEmpresa || '';
+                        console.log('Empresa parceira encontrada:', empresaParceiraData.nome);
+                        
+                        // Incrementa contador de indicações da empresa
+                        await snapshot.docs[0].ref.update({
+                            totalIndicacoes: firebase.firestore.FieldValue.increment(1)
+                        });
+                    }
+                } catch (error) {
+                    console.error('Erro ao buscar empresa parceira:', error);
+                }
+            }
+            
+            // 2. Verificar código de INDICADOR CLIENTE (?ref=)
+            const codigoRef = urlParams.get('ref');
             if (codigoRef) {
                 indicacaoData.codigo = codigoRef.toUpperCase();
                 console.log('Código de indicação detectado:', indicacaoData.codigo);
                 
-                // Busca nome do indicador
                 try {
                     const snapshot = await db.collection('indicadores')
                         .where('codigoIndicacao', '==', indicacaoData.codigo)
@@ -1903,7 +1940,6 @@
                         indicacaoData.nome = indicador.nome?.split(' ')[0] || '';
                         console.log('Indicador encontrado:', indicacaoData.nome);
                         
-                        // Incrementa contador de indicações
                         await snapshot.docs[0].ref.update({
                             totalIndicacoes: firebase.firestore.FieldValue.increment(1)
                         });
