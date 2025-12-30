@@ -797,95 +797,100 @@
         }
 
         // ============================================================
-        // CARREGAR LEADS COM PAGINAÇÃO
+        // CARREGAR LEADS COM PAGINAÇÃO (FILTROS CLIENT-SIDE)
         // ============================================================
+        let todosLeadsBanco = []; // Cache de todos os leads
+        
         async function carregarLeadsRecentes(reset = false) {
             try {
                 if (reset) {
-                    ultimoLeadCarregado = null;
-                    todosLeadsCarregados = false;
                     leadsExibidos = [];
                     document.getElementById('leadsRecentesTable').innerHTML = `
                         <tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr>
                     `;
                 }
                 
-                if (todosLeadsCarregados) return;
-                
-                // Montar query
-                let query = db.collection(COLECOES.leads);
-                
-                // Aplicar filtros
-                if (filtrosAtuais.ramo) {
-                    query = query.where('ramo', '==', filtrosAtuais.ramo);
-                }
-                if (filtrosAtuais.status) {
-                    query = query.where('status', '==', filtrosAtuais.status);
-                }
-                if (filtrosAtuais.dataDe) {
-                    query = query.where('criadoEm', '>=', firebase.firestore.Timestamp.fromDate(new Date(filtrosAtuais.dataDe)));
-                }
-                if (filtrosAtuais.dataAte) {
-                    const dataAteFim = new Date(filtrosAtuais.dataAte);
-                    dataAteFim.setHours(23, 59, 59, 999);
-                    query = query.where('criadoEm', '<=', firebase.firestore.Timestamp.fromDate(dataAteFim));
-                }
-                
-                // Ordenação e paginação
-                query = query.orderBy('criadoEm', 'desc');
-                
-                if (ultimoLeadCarregado) {
-                    query = query.startAfter(ultimoLeadCarregado);
-                }
-                
-                query = query.limit(LEADS_POR_PAGINA);
-                
-                const leadsSnapshot = await query.get();
-                
-                if (leadsSnapshot.empty && reset) {
-                    document.getElementById('leadsRecentesTable').innerHTML = `
-                        <tr>
-                            <td colspan="7" class="empty-state" style="padding: 40px; text-align: center;">
-                                <i class="fas fa-inbox" style="font-size: 40px; color: var(--text-muted);"></i>
-                                <p style="margin-top: 10px;">Nenhum lead encontrado</p>
-                            </td>
-                        </tr>
-                    `;
-                    atualizarInfoResultados(0);
-                    return;
-                }
-                
-                if (leadsSnapshot.size < LEADS_POR_PAGINA) {
-                    todosLeadsCarregados = true;
-                }
-                
-                // Guardar último documento para paginação
-                if (!leadsSnapshot.empty) {
-                    ultimoLeadCarregado = leadsSnapshot.docs[leadsSnapshot.docs.length - 1];
-                }
-                
-                // Processar leads
-                const novosLeads = [];
-                leadsSnapshot.forEach(doc => {
-                    const lead = { id: doc.id, ...doc.data() };
+                // Se não tem cache ou é reset, buscar do banco
+                if (todosLeadsBanco.length === 0 || reset) {
+                    const leadsSnapshot = await db.collection(COLECOES.leads)
+                        .orderBy('criadoEm', 'desc')
+                        .get();
                     
-                    // Filtro de telefone (client-side pois Firestore não suporta busca parcial)
+                    todosLeadsBanco = [];
+                    leadsSnapshot.forEach(doc => {
+                        todosLeadsBanco.push({ id: doc.id, ...doc.data() });
+                    });
+                }
+                
+                // Aplicar filtros CLIENT-SIDE
+                let leadsFiltrados = todosLeadsBanco.filter(lead => {
+                    // Filtro de Ramo
+                    if (filtrosAtuais.ramo && lead.ramo !== filtrosAtuais.ramo) {
+                        return false;
+                    }
+                    
+                    // Filtro de Status
+                    if (filtrosAtuais.status && lead.status !== filtrosAtuais.status) {
+                        return false;
+                    }
+                    
+                    // Filtro de Data De
+                    if (filtrosAtuais.dataDe) {
+                        const dataDeInicio = new Date(filtrosAtuais.dataDe + 'T00:00:00');
+                        const criadoEm = lead.criadoEm?.toDate();
+                        if (!criadoEm || criadoEm < dataDeInicio) {
+                            return false;
+                        }
+                    }
+                    
+                    // Filtro de Data Até
+                    if (filtrosAtuais.dataAte) {
+                        const dataAteFim = new Date(filtrosAtuais.dataAte + 'T23:59:59');
+                        const criadoEm = lead.criadoEm?.toDate();
+                        if (!criadoEm || criadoEm > dataAteFim) {
+                            return false;
+                        }
+                    }
+                    
+                    // Filtro de Telefone
                     if (filtrosAtuais.telefone) {
                         const telefoneNormalizado = (lead.whatsapp || '').replace(/\D/g, '');
                         const filtroNormalizado = filtrosAtuais.telefone.replace(/\D/g, '');
                         if (!telefoneNormalizado.includes(filtroNormalizado)) {
-                            return; // Pular este lead
+                            return false;
                         }
                     }
                     
-                    novosLeads.push(lead);
+                    return true;
                 });
                 
+                // Atualizar total para exibição
+                totalLeads = todosLeadsBanco.length;
+                
+                // Paginação client-side
+                const inicio = leadsExibidos.length;
+                const novosLeads = leadsFiltrados.slice(inicio, inicio + LEADS_POR_PAGINA);
+                
                 leadsExibidos = [...leadsExibidos, ...novosLeads];
+                todosLeadsCarregados = leadsExibidos.length >= leadsFiltrados.length;
+                
+                if (leadsFiltrados.length === 0) {
+                    document.getElementById('leadsRecentesTable').innerHTML = `
+                        <tr>
+                            <td colspan="7" class="empty-state" style="padding: 40px; text-align: center;">
+                                <i class="fas fa-inbox" style="font-size: 40px; color: var(--text-muted);"></i>
+                                <p style="margin-top: 10px;">Nenhum lead encontrado com os filtros aplicados</p>
+                            </td>
+                        </tr>
+                    `;
+                    atualizarInfoResultados(0, leadsFiltrados.length);
+                    document.getElementById('paginacaoContainer').style.display = 'none';
+                    return;
+                }
                 
                 // Renderizar
                 renderizarLeads();
-                atualizarInfoResultados(leadsExibidos.length);
+                atualizarInfoResultados(leadsExibidos.length, leadsFiltrados.length);
                 atualizarBotaoPaginacao();
                 
             } catch (error) {
@@ -972,9 +977,9 @@
             }).join('');
         }
 
-        function atualizarInfoResultados(qtd) {
-            document.getElementById('qtdExibidos').textContent = qtd;
-            document.getElementById('qtdTotal').textContent = totalLeads;
+        function atualizarInfoResultados(qtdExibidos, qtdFiltrados) {
+            document.getElementById('qtdExibidos').textContent = qtdExibidos;
+            document.getElementById('qtdTotal').textContent = qtdFiltrados !== undefined ? qtdFiltrados : totalLeads;
             
             const filtrosAtivos = filtrosAtuais.ramo || filtrosAtuais.status || filtrosAtuais.dataDe || filtrosAtuais.dataAte || filtrosAtuais.telefone;
             document.getElementById('filtrosAtivos').style.display = filtrosAtivos ? 'inline' : 'none';
@@ -1011,7 +1016,10 @@
             filtrosAtuais.dataAte = document.getElementById('filtroDataAte').value || null;
             filtrosAtuais.telefone = document.getElementById('filtroTelefone').value;
             
-            carregarLeadsRecentes(true);
+            // Resetar paginação e recarregar
+            leadsExibidos = [];
+            todosLeadsCarregados = false;
+            carregarLeadsRecentes(false); // false = usa cache do banco
         }
 
         function limparFiltros() {
@@ -1029,7 +1037,10 @@
                 telefone: ''
             };
             
-            carregarLeadsRecentes(true);
+            // Resetar paginação e recarregar
+            leadsExibidos = [];
+            todosLeadsCarregados = false;
+            carregarLeadsRecentes(false); // false = usa cache do banco
         }
 
         // ============================================================
