@@ -374,45 +374,41 @@ async function carregarNegociosEmitidos() {
         if (String(ag) !== String(CTX.agenciaId) && !EMPRESAS_AGENCIA.has(c.empresaId)) continue;
       }
       
-      // Tentar vários campos de fim de vigência (incluindo mais variações)
-      let fimRaw = c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal || 
-                   c.vigencia_final || c.fimVigenciaTs || c.dataFimVigencia ||
-                   c.vigencia_ate || c.vigenciaAte || c.dataVencimento || 
-                   c.vencimento || c.fim_vigencia || null;
+      // Usar mesma lógica do negocios-fechados.js
+      // Os campos principais são: inicioVigencia e fimVigencia
+      let fimVigenciaDate = toDate(c.fimVigencia);
+      const inicioVigenciaDate = toDate(c.inicioVigencia);
       
-      // Se não tem fim, tentar calcular a partir do início + 12 meses
-      if (!fimRaw) {
-        const iniRaw = c.vigenciaInicial || c.vigenciaInicio || c.inicioVigencia ||
-                       c.vigencia_de || c.vigencia_inicial || c.dataInicio || 
-                       c.dataInicioVigencia || c.dataCriacao || null;
-        if (iniRaw) {
-          const iniDate = toDate(iniRaw);
-          if (iniDate && !isNaN(iniDate)) {
-            // Calcular fim = início + 12 meses (padrão seguros)
-            const fimDate = new Date(iniDate);
-            fimDate.setFullYear(fimDate.getFullYear() + 1);
-            fimRaw = fimDate;
-            console.log(`[Negócio] ${doc.id} - Calculado fim a partir de início: ${fmtData(iniDate)} -> ${fmtData(fimDate)}`);
-          }
-        }
+      // Se não tem fim, calcular a partir do início + 12 meses
+      if (!fimVigenciaDate && inicioVigenciaDate) {
+        fimVigenciaDate = new Date(inicioVigenciaDate);
+        fimVigenciaDate.setFullYear(fimVigenciaDate.getFullYear() + 1);
+        console.log(`[Negócio] ${c.empresaNome} - Calculado fim: ${fmtData(inicioVigenciaDate)} -> ${fmtData(fimVigenciaDate)}`);
       }
       
-      const fim = parseFimVigencia(fimRaw);
-      if (!fim.date) {
+      if (!fimVigenciaDate) {
         countSemVencimento++;
-        // Log apenas os primeiros 5 para debug
-        if (countSemVencimento <= 5) {
-          console.log(`[Negócio] Sem vencimento válido:`, { 
+        if (countSemVencimento <= 3) {
+          console.log(`[Negócio] Sem vigência:`, { 
             id: doc.id, 
-            empresaNome: c.empresaNome,
-            fimRaw, 
-            campos: Object.keys(c).filter(k => k.toLowerCase().includes('vig') || k.toLowerCase().includes('fim') || k.toLowerCase().includes('venc'))
+            empresa: c.empresaNome,
+            inicioVigencia: c.inicioVigencia,
+            fimVigencia: c.fimVigencia
           });
         }
         continue;
       }
       
       countComVencimento++;
+      
+      // Criar objeto de fim no formato esperado
+      const fim = {
+        date: fimVigenciaDate,
+        dia: fimVigenciaDate.getDate(),
+        mes: fimVigenciaDate.getMonth() + 1,
+        ano: fimVigenciaDate.getFullYear(),
+        display: fimVigenciaDate.toLocaleDateString("pt-BR")
+      };
       
       REGISTROS.push({
         id: doc.id,
