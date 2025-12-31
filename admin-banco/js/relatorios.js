@@ -196,9 +196,22 @@ function popularSelectRM() {
   const sel = $("fRM");
   const agenciaFiltro = $("fAgencia").value;
   
+  // CORREÇÃO: RM vê apenas ele mesmo
+  if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
+    sel.innerHTML = `<option value="${CTX.uid}" selected>${CTX.nome}</option>`;
+    sel.disabled = true;
+    return;
+  }
+  
   sel.innerHTML = '<option value="">Todos os Gerentes</option>';
   Object.entries(DADOS.rms)
-    .filter(([id, rm]) => !agenciaFiltro || rm.agenciaId === agenciaFiltro)
+    .filter(([id, rm]) => {
+      // Filtrar por agência selecionada
+      if (agenciaFiltro && rm.agenciaId !== agenciaFiltro) return false;
+      // CORREÇÃO: GC/Assistente vê apenas da sua agência
+      if (!CTX.isAdmin && rm.agenciaId !== CTX.agenciaId) return false;
+      return true;
+    })
     .sort((a, b) => a[1].nome.localeCompare(b[1].nome))
     .forEach(([id, rm]) => {
       sel.innerHTML += `<option value="${id}">${rm.nome}</option>`;
