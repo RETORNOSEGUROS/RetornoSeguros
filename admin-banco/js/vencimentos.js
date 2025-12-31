@@ -37,6 +37,17 @@ const MESES_NOME = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junh
                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const MESES_ABREV = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
+// Converte Firestore Timestamp ou string para Date
+const toDate = (x) => {
+  if (!x) return null;
+  if (x.toDate) return x.toDate();
+  if (x instanceof Date) return x;
+  const d = new Date(x);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const fmtData = (d) => d ? d.toLocaleDateString("pt-BR") : "-";
+
 function isGC(perfil) {
   if (!perfil) return false;
   const p = normalizar(perfil);
@@ -318,10 +329,24 @@ async function carregarNegociosEmitidos() {
       docs = snap.docs;
       console.log(`[Negócios] Admin - Total: ${docs.length}`);
     } else if (isGC(CTX.perfil) && CTX.agenciaId) {
-      // GC: da agência (query pode falhar, então pega tudo e filtra)
-      const snap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
-      docs = snap.docs;
-      console.log(`[Negócios] GC - Total: ${docs.length}`);
+      // GC: buscar todos e filtrar (evita problema de índice)
+      try {
+        const snap = await db.collection("cotacoes-gerentes").where("status", "==", "Negócio Emitido").get();
+        docs = snap.docs.filter(doc => {
+          const d = doc.data();
+          return d.agenciaId === CTX.agenciaId;
+        });
+      } catch(e) {
+        console.warn("[Negócios] Query status falhou, tentando fallback:", e.message);
+        // Fallback: pegar tudo e filtrar
+        const snap = await db.collection("cotacoes-gerentes").get();
+        docs = snap.docs.filter(doc => {
+          const d = doc.data();
+          const st = String(d.status||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+          return st === "negocio emitido" && d.agenciaId === CTX.agenciaId;
+        });
+      }
+      console.log(`[Negócios] GC - Total após filtro: ${docs.length}`);
     } else {
       // RM: próprios
       const buckets = [];
@@ -337,25 +362,52 @@ async function carregarNegociosEmitidos() {
     
     // Processar negócios
     let countComVencimento = 0;
+    let countSemVencimento = 0;
+    
     for (const doc of docs) {
       const c = doc.data() || {};
       const emp = await getEmpresaInfo(c.empresaId);
       
-      // RBAC extra para GC
+      // RBAC extra para GC (já filtrado acima, mas por segurança)
       if (!CTX.isAdmin && isGC(CTX.perfil) && CTX.agenciaId) {
         const ag = c.agenciaId || c.agencia || emp.agenciaId || "-";
         if (String(ag) !== String(CTX.agenciaId) && !EMPRESAS_AGENCIA.has(c.empresaId)) continue;
       }
       
-      // Tentar vários campos de fim de vigência
-      const fimRaw = c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal || 
-                    c.vigencia_final || c.fimVigenciaTs || c.dataFimVigencia || null;
+      // Tentar vários campos de fim de vigência (incluindo mais variações)
+      let fimRaw = c.fimVigencia || c.fimVigenciaStr || c.vigenciaFinal || 
+                   c.vigencia_final || c.fimVigenciaTs || c.dataFimVigencia ||
+                   c.vigencia_ate || c.vigenciaAte || c.dataVencimento || 
+                   c.vencimento || c.fim_vigencia || null;
+      
+      // Se não tem fim, tentar calcular a partir do início + 12 meses
+      if (!fimRaw) {
+        const iniRaw = c.vigenciaInicial || c.vigenciaInicio || c.inicioVigencia ||
+                       c.vigencia_de || c.vigencia_inicial || c.dataInicio || 
+                       c.dataInicioVigencia || c.dataCriacao || null;
+        if (iniRaw) {
+          const iniDate = toDate(iniRaw);
+          if (iniDate && !isNaN(iniDate)) {
+            // Calcular fim = início + 12 meses (padrão seguros)
+            const fimDate = new Date(iniDate);
+            fimDate.setFullYear(fimDate.getFullYear() + 1);
+            fimRaw = fimDate;
+            console.log(`[Negócio] ${doc.id} - Calculado fim a partir de início: ${fmtData(iniDate)} -> ${fmtData(fimDate)}`);
+          }
+        }
+      }
       
       const fim = parseFimVigencia(fimRaw);
       if (!fim.date) {
-        // Log para debug
-        if (docs.indexOf(doc) < 5) {
-          console.log(`[Negócio] Sem vencimento válido:`, { id: doc.id, fimRaw, campos: Object.keys(c).filter(k => k.toLowerCase().includes('vig') || k.toLowerCase().includes('fim')) });
+        countSemVencimento++;
+        // Log apenas os primeiros 5 para debug
+        if (countSemVencimento <= 5) {
+          console.log(`[Negócio] Sem vencimento válido:`, { 
+            id: doc.id, 
+            empresaNome: c.empresaNome,
+            fimRaw, 
+            campos: Object.keys(c).filter(k => k.toLowerCase().includes('vig') || k.toLowerCase().includes('fim') || k.toLowerCase().includes('venc'))
+          });
         }
         continue;
       }
@@ -377,7 +429,7 @@ async function carregarNegociosEmitidos() {
         seguradora: c.seguradora || "Bradesco Seguros"
       });
     }
-    console.log(`[Negócios] Com vencimento válido: ${countComVencimento}`);
+    console.log(`[Negócios] Com vencimento: ${countComVencimento}, Sem vencimento: ${countSemVencimento}`);
   } catch (e) { console.warn("Erro negócios:", e); }
 }
 
