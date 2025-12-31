@@ -165,27 +165,65 @@ async function carregarLookups() {
     snap.forEach(doc => {
       const d = doc.data();
       if (d.nome) {
-        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
+        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId, perfil: d.perfil };
       }
     });
     
     const selRM = $("filtroRM");
     if (selRM) {
-      selRM.innerHTML = '<option value="">Todos</option>';
-      Object.entries(RMS).sort((a, b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
-        selRM.innerHTML += `<option value="${id}">${rm.nome}</option>`;
-      });
+      // CORREÇÃO: Filtrar RMs por permissão
+      if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        // RM vê apenas ele mesmo no dropdown
+        selRM.innerHTML = `<option value="${CTX.uid}" selected>${CTX.nome}</option>`;
+        selRM.disabled = true;
+      } else {
+        selRM.innerHTML = '<option value="">Todos</option>';
+        // Admin vê todos, GC/Assistente vê apenas da sua agência
+        Object.entries(RMS)
+          .filter(([id, rm]) => CTX.isAdmin || rm.agenciaId === CTX.agenciaId)
+          .sort((a, b) => a[1].nome.localeCompare(b[1].nome))
+          .forEach(([id, rm]) => {
+            selRM.innerHTML += `<option value="${id}">${rm.nome}</option>`;
+          });
+      }
     }
   } catch (e) { console.warn("Erro RMs:", e); }
 }
 
 async function carregarEmpresas() {
   try {
-    const snap = await db.collection("empresas").get();
+    let query = db.collection("empresas");
+    
+    // CORREÇÃO: Filtrar empresas por permissão
+    // RM vê apenas empresas vinculadas a ele
+    // GC/Assistente vê empresas da agência
+    // Admin vê todas
+    if (!CTX.isAdmin) {
+      if (["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        if (CTX.agenciaId) {
+          query = query.where("agenciaId", "==", CTX.agenciaId);
+        }
+      } else {
+        // RM: buscar por vários campos de vínculo
+        // Como Firestore não suporta OR nativo, carregamos da agência e filtramos
+        if (CTX.agenciaId) {
+          query = query.where("agenciaId", "==", CTX.agenciaId);
+        }
+      }
+    }
+    
+    const snap = await query.get();
     const datalist = $("empresasDatalist");
     
     snap.forEach(doc => {
       const d = doc.data();
+      
+      // Para RM: filtro adicional no client (só empresas dele)
+      if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        const rmUid = d.rmUid || d.rmId || d.gerenteId || "";
+        if (rmUid !== CTX.uid) return; // Pula empresas de outros RMs
+      }
+      
       EMPRESAS[doc.id] = d;
       
       if (datalist) {
