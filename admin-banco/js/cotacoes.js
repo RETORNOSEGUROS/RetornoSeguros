@@ -342,23 +342,60 @@ async function carregarCotacoes() {
   const col = db.collection("cotacoes-gerentes");
   let docs = [];
   
-  if (CTX.isAdmin) {
-    docs = (await col.orderBy("dataCriacao", "desc").limit(500).get()).docs;
-  } else if (["gerente chefe", "assistente"].includes(CTX.perfil) && CTX.agenciaId) {
-    docs = (await col.where("agenciaId", "==", CTX.agenciaId).orderBy("dataCriacao", "desc").limit(300).get()).docs;
-  } else {
-    // RM - busca por vários campos de posse
-    const queries = [
-      col.where("rmUid", "==", CTX.uid).get(),
-      col.where("rmId", "==", CTX.uid).get(),
-      col.where("criadoPorUid", "==", CTX.uid).get()
-    ];
-    const results = await Promise.allSettled(queries);
-    const map = new Map();
-    results.forEach(r => {
-      if (r.status === "fulfilled") r.value.forEach(doc => map.set(doc.id, doc));
-    });
-    docs = Array.from(map.values());
+  try {
+    if (CTX.isAdmin) {
+      try {
+        docs = (await col.orderBy("dataCriacao", "desc").limit(500).get()).docs;
+      } catch (e) {
+        console.warn("Admin: orderBy falhou, buscando sem ordem:", e.message);
+        docs = (await col.limit(500).get()).docs;
+      }
+    } else if (["gerente chefe", "assistente"].includes(CTX.perfil) && CTX.agenciaId) {
+      // Gerente Chefe/Assistente - buscar por agenciaId
+      try {
+        // Tentar com índice composto
+        docs = (await col.where("agenciaId", "==", CTX.agenciaId).orderBy("dataCriacao", "desc").limit(300).get()).docs;
+      } catch (e) {
+        console.warn("GC: índice composto não existe, buscando sem orderBy:", e.message);
+        try {
+          // Fallback: sem orderBy
+          docs = (await col.where("agenciaId", "==", CTX.agenciaId).limit(300).get()).docs;
+        } catch (e2) {
+          console.warn("GC: query por agenciaId falhou, buscando tudo e filtrando:", e2.message);
+          // Fallback final: pegar tudo e filtrar no cliente
+          const allDocs = (await col.limit(500).get()).docs;
+          docs = allDocs.filter(doc => {
+            const d = doc.data();
+            return d.agenciaId === CTX.agenciaId;
+          });
+        }
+      }
+    } else {
+      // RM - busca por vários campos de posse
+      const queries = [
+        col.where("rmUid", "==", CTX.uid).get(),
+        col.where("rmId", "==", CTX.uid).get(),
+        col.where("criadoPorUid", "==", CTX.uid).get()
+      ];
+      const results = await Promise.allSettled(queries);
+      const map = new Map();
+      results.forEach(r => {
+        if (r.status === "fulfilled") r.value.forEach(doc => map.set(doc.id, doc));
+      });
+      docs = Array.from(map.values());
+    }
+  } catch (e) {
+    console.error("Erro ao carregar cotações:", e);
+    docs = [];
+  }
+  
+  console.log(`[Cotações] Total carregado: ${docs.length}`);
+  
+  if (docs.length === 0) {
+    COTACOES = [];
+    COTACOES_FILTRADAS = [];
+    renderizarTudo();
+    return;
   }
   
   COTACOES = docs.map(doc => {
