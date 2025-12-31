@@ -297,26 +297,59 @@ async function getDocsPerfil(colName, limitN=0){
   const perfil = CTX.perfil;
   let snaps = [];
 
-  if(perfil==="admin"){
-    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
-  } else if(perfil==="rm"){
-    snaps = [ await (limitN? col.where("rmUid","==",CTX.uid).limit(limitN).get()
-                     : col.where("rmUid","==",CTX.uid).get()) ];
-  } else if(perfil==="assistente" || perfil==="gerente chefe"){
-    const s1 = await (limitN? col.where("agenciaId","==",CTX.agenciaId).limit(limitN).get()
-                            : col.where("agenciaId","==",CTX.agenciaId).get());
-    let s2 = { forEach:()=>{}, empty:true, docs:[] };
-    try {
-      s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
-                        : col.where("gerenteChefeUid","==",CTX.uid).get());
-    } catch(e){ /* opcional */ }
-    snaps = [s1,s2];
-  } else {
-    snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+  try {
+    if(perfil==="admin"){
+      snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+    } else if(perfil==="rm"){
+      // RM: buscar por vários campos de vínculo
+      const queries = [];
+      try { queries.push(await col.where("rmUid","==",CTX.uid).get()); } catch(e){}
+      try { queries.push(await col.where("rmId","==",CTX.uid).get()); } catch(e){}
+      try { queries.push(await col.where("criadoPorUid","==",CTX.uid).get()); } catch(e){}
+      snaps = queries.filter(q => q && q.docs);
+    } else if(perfil==="assistente" || perfil==="gerente chefe"){
+      // GC/Assistente: buscar por agenciaId com fallback
+      let s1 = { forEach:()=>{}, empty:true, docs:[] };
+      try {
+        s1 = await (limitN? col.where("agenciaId","==",CTX.agenciaId).limit(limitN).get()
+                          : col.where("agenciaId","==",CTX.agenciaId).get());
+      } catch(e){
+        console.warn(`[${colName}] Query agenciaId falhou, tentando fallback:`, e.message);
+        // Fallback: pegar tudo e filtrar no cliente
+        try {
+          const allDocs = await (limitN ? col.limit(500).get() : col.get());
+          s1 = {
+            forEach: (fn) => {
+              allDocs.forEach(doc => {
+                const d = doc.data();
+                if (d.agenciaId === CTX.agenciaId) fn(doc);
+              });
+            },
+            docs: allDocs.docs.filter(doc => doc.data().agenciaId === CTX.agenciaId)
+          };
+        } catch(e2) {
+          console.warn(`[${colName}] Fallback também falhou:`, e2.message);
+        }
+      }
+      
+      let s2 = { forEach:()=>{}, empty:true, docs:[] };
+      try {
+        s2 = await (limitN? col.where("gerenteChefeUid","==",CTX.uid).limit(limitN).get()
+                          : col.where("gerenteChefeUid","==",CTX.uid).get());
+      } catch(e){ /* opcional */ }
+      snaps = [s1,s2];
+    } else {
+      snaps = [ await (limitN? col.limit(limitN).get() : col.get()) ];
+    }
+  } catch(e) {
+    console.error(`[${colName}] Erro geral:`, e.message);
+    return [];
   }
 
   const map = new Map();
-  snaps.forEach(s=> s.forEach(d=> map.set(d.id,d)));
+  snaps.forEach(s=> {
+    if(s && s.forEach) s.forEach(d=> map.set(d.id,d));
+  });
   return Array.from(map.values());
 }
 
