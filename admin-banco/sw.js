@@ -1,7 +1,7 @@
 // Service Worker - Retorno Seguros PWA
-// VERSÃO ATUALIZADA - Dezembro 2024 - v4 (Fix queries GC)
-const CACHE_NAME = 'retorno-seguros-v4';
-const STATIC_CACHE = 'static-v4';
+// VERSÃO ATUALIZADA - Dezembro 2024 - v5 (Fix dashboard + vencimentos)
+const CACHE_NAME = 'retorno-seguros-v5';
+const STATIC_CACHE = 'static-v5';
 
 // Arquivos para cache estático
 const STATIC_FILES = [
