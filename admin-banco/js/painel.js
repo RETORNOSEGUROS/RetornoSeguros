@@ -356,13 +356,11 @@ async function getDocsPerfil(colName, limitN=0){
 // ==== Painel: listas ====
 async function carregarResumoPainel(){
   skeleton("listaVisitasAgendadas",5);
-  skeleton("listaVisitas",5);
   skeleton("listaProducao",5);
   skeleton("listaCotacoes",5);
 
   await Promise.all([
     blocoVisitasAgendadas(),
-    blocoMinhasVisitas(),
     blocoProducao(),
     blocoMinhasCotacoes()
   ]);
@@ -394,9 +392,11 @@ async function blocoVisitasAgendadas(){
     arr=recentes.slice(0,10);
   }
 
-  document.getElementById("qtdVA").textContent = String(arr.length);
+  const qtdEl = document.getElementById("qtdVA");
+  if(qtdEl) qtdEl.textContent = String(arr.length);
 
   const ul=document.getElementById("listaVisitasAgendadas");
+  if(!ul) { console.warn("[Painel] Elemento listaVisitasAgendadas não encontrado"); return; }
   ul.innerHTML = arr.length?"":"<li class='row'><span class='meta'>Nenhuma visita futura.</span></li>";
   arr.forEach(v=>{
     ul.innerHTML += `
@@ -410,7 +410,9 @@ async function blocoVisitasAgendadas(){
 // 2) Minhas Visitas (últimas 5)
 async function blocoMinhasVisitas(){
   const docs = await getDocsPerfil("visitas");
-  const ul = document.getElementById("listaVisitas"); ul.innerHTML="";
+  const ul = document.getElementById("listaVisitas");
+  if(!ul) { console.warn("[Painel] Elemento listaVisitas não encontrado"); return; }
+  ul.innerHTML="";
   if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhuma visita.</span></li>"; return; }
 
   const cacheEmp=new Map();
@@ -440,7 +442,9 @@ async function blocoMinhasVisitas(){
 // 3) Produção (emitidos) — mostra "início" só se existir
 async function blocoProducao(){
   const docs = await getDocsPerfil("cotacoes-gerentes");
-  const ul = document.getElementById("listaProducao"); ul.innerHTML="";
+  const ul = document.getElementById("listaProducao");
+  if(!ul) { console.warn("[Painel] Elemento listaProducao não encontrado"); return; }
+  ul.innerHTML="";
   if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Nenhum negócio.</span></li>"; return; }
 
   const emitidos=[];
@@ -455,7 +459,7 @@ async function blocoProducao(){
   emitidos.sort((a,b)=> (toDate(b.dataCriacao)||0)-(toDate(a.dataCriacao)||0));
   emitidos.slice(0,5).forEach(d=>{
     const valor = d.valorFinal ?? d.valorNegocio ?? d.premio ?? d.valorDesejado ?? 0;
-    const vIni  = toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
+    const vIni  = toDate(d.inicioVigencia) || toDate(d.vigenciaInicial) || toDate(d.vigenciaInicio) || toDate(d.vigencia_de) || null;
     const inicio = vIni ? ` • início ${fmtData(vIni)}` : "";
     ul.innerHTML += `
       <li class="row">
@@ -468,7 +472,9 @@ async function blocoProducao(){
 // 4) Minhas Cotações — últimas 5
 async function blocoMinhasCotacoes(){
   let docs = await getDocsPerfil("cotacoes-gerentes");
-  const ul = document.getElementById("listaCotacoes"); ul.innerHTML="";
+  const ul = document.getElementById("listaCotacoes");
+  if(!ul) { console.warn("[Painel] Elemento listaCotacoes não encontrado"); return; }
+  ul.innerHTML="";
   if(!docs.length){ ul.innerHTML="<li class='row'><span class='meta'>Sem cotações.</span></li>"; return; }
 
   const ord = (x)=>{
