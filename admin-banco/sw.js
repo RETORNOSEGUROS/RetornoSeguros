@@ -1,6 +1,7 @@
 // Service Worker - Retorno Seguros PWA
-const CACHE_NAME = 'retorno-seguros-v1';
-const STATIC_CACHE = 'static-v1';
+// VERSÃO ATUALIZADA - Dezembro 2024
+const CACHE_NAME = 'retorno-seguros-v3';
+const STATIC_CACHE = 'static-v3';
 
 // Arquivos para cache estático
 const STATIC_FILES = [
@@ -78,24 +79,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Para assets estáticos (JS, CSS, imagens) - Cache First
+  // Para assets estáticos (JS, CSS, imagens) - NETWORK FIRST (corrigido)
+  // Isso resolve o problema de precisar Ctrl+Shift+R
   if (request.destination === 'script' || 
       request.destination === 'style' || 
       request.destination === 'image' ||
       request.destination === 'font') {
     event.respondWith(
-      caches.match(request)
-        .then(cached => {
-          if (cached) return cached;
-          
-          return fetch(request)
-            .then(response => {
-              const responseClone = response.clone();
-              caches.open(STATIC_CACHE).then(cache => {
-                cache.put(request, responseClone);
-              });
-              return response;
-            });
+      fetch(request)
+        .then(response => {
+          // Salvar nova versão no cache
+          const responseClone = response.clone();
+          caches.open(STATIC_CACHE).then(cache => {
+            cache.put(request, responseClone);
+          });
+          return response;
+        })
+        .catch(() => {
+          // Fallback para cache se offline
+          return caches.match(request);
         })
     );
     return;
