@@ -144,11 +144,34 @@ function showLoading(show) {
 // ==== Carregar Dados ====
 async function carregarEmpresas() {
   try {
-    const snap = await db.collection("empresas").get();
+    let query = db.collection("empresas");
+    
+    // CORREÇÃO: Filtrar empresas por permissão
+    if (!CTX.isAdmin) {
+      if (["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        if (CTX.agenciaId) {
+          query = query.where("agenciaId", "==", CTX.agenciaId);
+        }
+      } else {
+        // RM: filtrar pela agência e depois no client pelo rmUid
+        if (CTX.agenciaId) {
+          query = query.where("agenciaId", "==", CTX.agenciaId);
+        }
+      }
+    }
+    
+    const snap = await query.get();
     const datalist = $("empresasDatalist");
     
     snap.forEach(doc => {
       const d = doc.data();
+      
+      // Para RM: filtro adicional no client (só empresas dele)
+      if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        const rmUid = d.rmUid || d.rmId || d.gerenteId || "";
+        if (rmUid !== CTX.uid) return; // Pula empresas de outros RMs
+      }
+      
       EMPRESAS[doc.id] = { id: doc.id, ...d };
       
       if (datalist) {
@@ -179,7 +202,10 @@ async function carregarRMs() {
     snap.forEach(doc => {
       const d = doc.data();
       if (d.nome) {
-        RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
+        // CORREÇÃO: Filtrar RMs por agência (exceto Admin)
+        if (CTX.isAdmin || d.agenciaId === CTX.agenciaId) {
+          RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
+        }
       }
     });
   } catch (e) { console.warn("Erro RMs:", e); }
