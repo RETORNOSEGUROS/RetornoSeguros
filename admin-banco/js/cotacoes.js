@@ -246,10 +246,20 @@ async function carregarLookups() {
     
     const selRM = $("filtroRM");
     if (selRM) {
-      selRM.innerHTML = '<option value="">Todos</option>';
-      Object.entries(RMS).sort((a, b) => a[1].nome.localeCompare(b[1].nome)).forEach(([id, rm]) => {
-        selRM.innerHTML += `<option value="${id}">${rm.nome}</option>`;
-      });
+      // CORREÇÃO: Filtrar RMs por permissão
+      if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
+        // RM vê apenas ele mesmo
+        selRM.innerHTML = `<option value="${CTX.uid}" selected>${CTX.nome}</option>`;
+        selRM.disabled = true;
+      } else {
+        selRM.innerHTML = '<option value="">Todos</option>';
+        Object.entries(RMS)
+          .filter(([id, rm]) => CTX.isAdmin || rm.agenciaId === CTX.agenciaId)
+          .sort((a, b) => a[1].nome.localeCompare(b[1].nome))
+          .forEach(([id, rm]) => {
+            selRM.innerHTML += `<option value="${id}">${rm.nome}</option>`;
+          });
+      }
     }
   } catch (e) { console.warn("Erro RMs:", e); }
   
