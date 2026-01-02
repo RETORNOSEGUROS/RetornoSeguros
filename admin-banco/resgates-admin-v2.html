@@ -210,4 +210,61 @@ function render(list){
   // Totais gerais (toda a lista filtrada)
   const somaGeral=list.reduce((s,r)=>s+Number(r.valor||0),0);
   $("countTotal").textContent=`${list.length} item(s)`;
-  $("soma
+  $("somaTotal").textContent=money(somaGeral);
+  $("infoQtd").textContent=`Exibindo ${start+1}-${Math.min(end,list.length)} de ${list.length}`;
+
+  paginatedList.forEach(r=>{
+    const valor=Number(r.valor||0);
+    const nome=r.userNome||mapUser[r.userId]||r.userId||"-";
+    const email=r.userEmail||"-";
+    const criado=dateBR(r.criadoISO||r.createdAt);
+    let dateSub="";
+    if(r.status==="pago")dateSub=`Pago em ${dateBR(r.pagoEm)}`;
+    else if(r.status==="negado")dateSub=`Negado em ${dateBR(r.negadoEm)}`;
+
+    let statusBadge="";
+    if(r.status==="pago")statusBadge=`<span class="badge badge-success">✓ Pago</span>`;
+    else if(r.status==="negado")statusBadge=`<span class="badge badge-danger">✗ Negado</span>`;
+    else statusBadge=`<span class="badge badge-warning">⏳ Pendente</span>`;
+
+    const tr=document.createElement("tr");
+    tr.innerHTML=`
+      <td><div class="date-info"><span class="date-main">${criado}</span>${dateSub?`<span class="date-sub">${dateSub}</span>`:""}</div></td>
+      <td><div class="user-info"><span class="user-name">${esc(nome)}</span><span class="user-email">${esc(email)}</span></div></td>
+      <td><strong>${esc(r.metodo||"-")}</strong></td>
+      <td><div class="ellipsis" title="${esc(r.detalhes||"-")}">${esc(r.detalhes||"-")}</div></td>
+      <td class="valor-cell">${money(valor)}</td>
+      <td>${statusBadge}</td>
+      <td class="actions-cell">
+        ${r.status==="pendente"?`<button class="btn btn-success btn-sm" onclick="aprovar('${r.id}',${valor})">✓ Aprovar</button><button class="btn btn-danger btn-sm" onclick="negar('${r.id}')">✗ Negar</button>`:`<span style="color:var(--gray-600);font-size:12px">—</span>`}
+      </td>`;
+    tb.appendChild(tr);
+  });
+
+  if(totalPages>1){$("pagination").style.display="flex";$("pageInfo").textContent=`Página ${currentPage} de ${totalPages}`;$("btnPrevPage").disabled=currentPage===1;$("btnNextPage").disabled=currentPage===totalPages}else{$("pagination").style.display="none"}
+}
+
+async function aprovar(id,valorSugerido){
+  const v=prompt("Valor a pagar (pode ajustar):",String(valorSugerido).replace(".",","));
+  if(v===null)return;
+  const valorPago=Number(String(v).replace(/\./g,"").replace(",","."));
+  if(isNaN(valorPago)||valorPago<=0){showToast("Valor inválido","error");return}
+  const obs=prompt("Observações (opcional):","");
+  try{
+    await RES.doc(id).set({status:"pago",valorSolicitado:Number((valorSugerido||0).toFixed(2)),valor:Number(valorPago.toFixed(2)),pagoEm:firebase.firestore.FieldValue.serverTimestamp(),aprovadoPorUid:auth.currentUser.uid,aprovadoPorEmail:auth.currentUser.email,obsAdmin:obs||""},{merge:true});
+    showToast("✅ Resgate aprovado!");await carregar();
+  }catch(e){console.error(e);showToast("❌ Erro ao aprovar","error")}
+}
+
+async function negar(id){
+  const motivo=prompt("Motivo da negativa (opcional):","");
+  try{
+    await RES.doc(id).set({status:"negado",negadoEm:firebase.firestore.FieldValue.serverTimestamp(),motivoAdmin:motivo||""},{merge:true});
+    showToast("Resgate negado");await carregar();
+  }catch(e){console.error(e);showToast("❌ Erro","error")}
+}
+
+window.aprovar=aprovar;window.negar=negar;window.aplicar=aplicar;
+</script>
+</body>
+</html>
