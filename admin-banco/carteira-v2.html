@@ -291,19 +291,41 @@ async function atualizarTudo(){await carregarEntradas();await carregarSaidas();c
 
 async function carregarEntradas(){
   entradas=[];const hoje=todayISO();
-  let perfilView=me.perfil,agenciaView=me.agenciaId;
-  if(me.isAdmin&&viewUid!==me.uid){const vs=await COL_USERS.doc(viewUid).get();if(vs.exists){const d=vs.data()||{};perfilView=(d.perfil||"").toLowerCase();agenciaView=d.agenciaId||""}}
-  if(perfilView==="rm"){
+  let perfilView=me.perfil,agenciaView=me.agenciaId,nomeView=me.nome;
+  
+  // Se admin visualizando outro usuário, busca dados dele
+  if(me.isAdmin&&viewUid!==me.uid){
+    const vs=await COL_USERS.doc(viewUid).get();
+    if(vs.exists){const d=vs.data()||{};perfilView=(d.perfil||"").toLowerCase();agenciaView=d.agenciaId||"";nomeView=d.nome||""}
+  }
+  
+  const perfilNorm=perfilView.toLowerCase().replace(/[_\s]/g,"");
+  
+  // RM - recebe comissão de RM
+  if(perfilNorm==="rm"){
     let snap=await COL_COMISSOES.where("rmUid","==",viewUid).get();
-    if(snap.empty){const myDoc=await COL_USERS.doc(viewUid).get();const nome=myDoc.exists?(myDoc.data()?.nome||""):"";if(nome)snap=await COL_COMISSOES.where("rmNome","==",nome).get()}
+    // fallback por nome se não encontrar por UID
+    if(snap.empty&&nomeView){snap=await COL_COMISSOES.where("rmNome","==",nomeView).get()}
     snap.forEach(doc=>{const c=doc.data()||{},nome=c.empresaNome||"-",pars=Array.isArray(c.parcelas)?c.parcelas:[];
       pars.forEach(p=>{const comp=p.competenciaISO||"";if(!comp||comp>hoje)return;const valor=Number(p.rm||0);if(valor>0)entradas.push({empresa:nome,competenciaISO:comp,valor})})});
-  }else if(perfilView==="gerente_chefe"||perfilView==="gerente chefe"){
+  }
+  // Gerente Chefe - recebe comissão GF dos negócios da sua agência/time
+  else if(perfilNorm==="gerentechefe"){
     if(!agenciaView){entradas=[];return}
     const snap=await COL_COMISSOES.where("agenciaId","==",agenciaView).get();
     snap.forEach(doc=>{const c=doc.data()||{},nome=c.empresaNome||"-",pars=Array.isArray(c.parcelas)?c.parcelas:[];
       pars.forEach(p=>{const comp=p.competenciaISO||"";if(!comp||comp>hoje)return;const valor=Number(p.gf||0);if(valor>0)entradas.push({empresa:nome,competenciaISO:comp,valor})})});
-  }else{entradas=[]}
+  }
+  // Outros perfis (usuario, colaborador, etc) - busca por UID ou nome em qualquer campo
+  else{
+    // Tenta buscar como RM primeiro (caso tenha sido cadastrado assim)
+    let snap=await COL_COMISSOES.where("rmUid","==",viewUid).get();
+    if(snap.empty&&nomeView){snap=await COL_COMISSOES.where("rmNome","==",nomeView).get()}
+    
+    snap.forEach(doc=>{const c=doc.data()||{},nome=c.empresaNome||"-",pars=Array.isArray(c.parcelas)?c.parcelas:[];
+      pars.forEach(p=>{const comp=p.competenciaISO||"";if(!comp||comp>hoje)return;const valor=Number(p.rm||0);if(valor>0)entradas.push({empresa:nome,competenciaISO:comp,valor})})});
+  }
+  
   entradas.sort((a,b)=>a.competenciaISO<b.competenciaISO?1:-1);
 }
 
