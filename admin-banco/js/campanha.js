@@ -195,11 +195,14 @@ function renderizarEmpresas(filtro = '') {
     const container = document.getElementById('listaEmpresas');
     const filtroLower = filtro.toLowerCase();
     
-    const empresasFiltradas = empresasData.filter(emp => 
-        emp.razaoSocial?.toLowerCase().includes(filtroLower) ||
-        emp.nomeFantasia?.toLowerCase().includes(filtroLower) ||
-        emp.cnpj?.includes(filtro)
-    );
+    // Função auxiliar para pegar nome da empresa
+    const getNomeEmpresa = (emp) => emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa';
+    
+    const empresasFiltradas = empresasData.filter(emp => {
+        if (!filtro) return true;
+        const nome = getNomeEmpresa(emp).toLowerCase();
+        return nome.includes(filtroLower) || emp.cnpj?.includes(filtro);
+    });
     
     if (empresasFiltradas.length === 0) {
         container.innerHTML = `
@@ -215,12 +218,13 @@ function renderizarEmpresas(filtro = '') {
         const campanha = emp.campanha || {};
         const status = calcularStatusEmpresa(emp);
         const progresso = calcularProgressoEmpresa(emp);
+        const nomeEmpresa = getNomeEmpresa(emp);
         
         return `
             <div class="card-empresa ${status.classe}" onclick="abrirEmpresa('${emp.id}')">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
-                        <div class="empresa-nome">${emp.razaoSocial || emp.nomeFantasia || 'Empresa'}</div>
+                        <div class="empresa-nome">${nomeEmpresa}</div>
                         <div class="empresa-info">
                             ${emp.cnpj ? formatarCNPJ(emp.cnpj) : 'CNPJ não informado'}
                         </div>
@@ -289,8 +293,11 @@ async function abrirEmpresa(empresaId) {
     
     sociosTemp = [...(empresaAtual.socios || [])];
     
+    // Função auxiliar para pegar nome da empresa
+    const nomeEmpresa = empresaAtual.razaoSocial || empresaAtual.nomeFantasia || empresaAtual.nome || empresaAtual.empresa || 'Empresa';
+    
     // Atualizar header do modal
-    document.getElementById('modalEmpresaNome').textContent = empresaAtual.razaoSocial || empresaAtual.nomeFantasia || 'Empresa';
+    document.getElementById('modalEmpresaNome').textContent = nomeEmpresa;
     document.getElementById('modalEmpresaCnpj').textContent = empresaAtual.cnpj ? formatarCNPJ(empresaAtual.cnpj) : '';
     
     // Atualizar progresso
@@ -853,7 +860,7 @@ async function registrarAcao(tipo, pontos, dados = {}) {
             pontos,
             dados,
             empresaId: empresaAtual.id,
-            empresaNome: empresaAtual.razaoSocial || empresaAtual.nomeFantasia,
+            empresaNome: empresaAtual.razaoSocial || empresaAtual.nomeFantasia || empresaAtual.nome || empresaAtual.empresa || 'Empresa',
             participanteId,
             participanteNome: participanteData.nome,
             dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
@@ -1038,7 +1045,7 @@ async function gerarPesquisa() {
         // Criar documento de pesquisa
         const pesquisaRef = await db.collection('pesquisas_colaboradores').add({
             empresaId: emp.id,
-            empresaNome: emp.razaoSocial || emp.nomeFantasia,
+            empresaNome: emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa',
             empresaCnpj: emp.cnpj,
             funcionariosQtd: emp.funcionariosQtd,
             campanhaId: campanhaId,
@@ -1206,9 +1213,10 @@ function copiarLinkPesquisa() {
 // Enviar pesquisa via WhatsApp
 function enviarPesquisaWhatsApp(link) {
     const emp = empresaAtual;
+    const nomeEmp = emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa';
     const mensagem = encodeURIComponent(
         `🎯 *Pesquisa de Benefícios*\n\n` +
-        `Olá! A empresa ${emp.razaoSocial || emp.nomeFantasia} está avaliando a possibilidade de oferecer planos de saúde e dental para os colaboradores.\n\n` +
+        `Olá! A empresa ${nomeEmp} está avaliando a possibilidade de oferecer planos de saúde e dental para os colaboradores.\n\n` +
         `Por favor, responda esta pesquisa rápida (menos de 2 minutos) para entendermos seu interesse:\n\n` +
         `👉 ${link}\n\n` +
         `Sua participação é muito importante! 🙏`
