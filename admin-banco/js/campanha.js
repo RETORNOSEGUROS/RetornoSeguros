@@ -33,6 +33,32 @@ const PONTUACAO = {
 // Mínimo de respostas para pontuar pesquisa
 const MIN_RESPOSTAS_PESQUISA = 10;
 
+// Aguardar Firebase carregar
+function waitForFirebase() {
+    return new Promise((resolve) => {
+        const check = () => {
+            if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0) {
+                resolve();
+            } else if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length === 0) {
+                // Firebase carregado mas não inicializado
+                const firebaseConfig = {
+                    apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+                    authDomain: "retorno-seguros.firebaseapp.com",
+                    projectId: "retorno-seguros",
+                    storageBucket: "retorno-seguros.appspot.com",
+                    messagingSenderId: "495712392972",
+                    appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
+                };
+                firebase.initializeApp(firebaseConfig);
+                resolve();
+            } else {
+                setTimeout(check, 50);
+            }
+        };
+        check();
+    });
+}
+
 // Inicialização
 document.addEventListener('DOMContentLoaded', async () => {
     // Pegar parâmetros da URL
@@ -46,6 +72,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     try {
+        await waitForFirebase();
         await carregarDados();
         configurarEventos();
     } catch (error) {
