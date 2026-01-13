@@ -203,21 +203,37 @@ async function atualizarStats() {
 }
 
 // Abrir modal nova campanha
-function abrirModalNovaCampanha() {
+async function abrirModalNovaCampanha() {
+    // Carregar agências se ainda não foram carregadas
+    if (agencias.length === 0) {
+        const db = firebase.firestore();
+        const agenciasSnap = await db.collection('agencias_banco').get();
+        agencias = agenciasSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    }
+    
     // Preencher checkboxes de agências
     const container = document.getElementById('checkboxAgencias');
-    container.innerHTML = agencias.map(ag => `
-        <div class="form-check">
-            <input class="form-check-input" type="checkbox" value="${ag.id}" id="ag_${ag.id}">
-            <label class="form-check-label" for="ag_${ag.id}">${ag.nome || ag.id}</label>
-        </div>
-    `).join('');
+    
+    if (agencias.length === 0) {
+        container.innerHTML = '<p class="text-muted">Nenhuma agência cadastrada</p>';
+    } else {
+        container.innerHTML = agencias.map(ag => `
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" value="${ag.id}" id="ag_${ag.id}">
+                <label class="form-check-label" for="ag_${ag.id}">${ag.nome || ag.nomeAgencia || ag.id}</label>
+            </div>
+        `).join('');
+    }
     
     // Definir datas padrão
     const hoje = new Date();
     const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     document.getElementById('inputCampanhaInicio').value = hoje.toISOString().split('T')[0];
     document.getElementById('inputCampanhaFim').value = fimMes.toISOString().split('T')[0];
+    
+    // Limpar campos
+    document.getElementById('inputCampanhaNome').value = '';
+    document.getElementById('inputCampanhaDesc').value = '';
     
     new bootstrap.Modal(document.getElementById('modalNovaCampanha')).show();
 }
