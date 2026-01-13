@@ -1,784 +1,1260 @@
-// campanhas-admin.js — Administração de Campanhas
-// Firebase v8
+/**
+ * CAMPANHAS ADMIN - Painel de Gerenciamento
+ * Sistema de campanhas de indicação para assistentes de banco
+ */
 
-// ==== Firebase Init ====
-if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
-  firebase.initializeApp(firebaseConfig);
-}
-const auth = firebase.auth();
-const db = firebase.firestore();
+// Variáveis globais
+let campanhas = [];
+let agencias = [];
+let campanhaAtual = null;
+let participanteAtual = null;
 
-// ==== Estado Global ====
-let CTX = { uid: null, perfil: null, isAdmin: false };
-const ADMIN_EMAILS = ["patrick@retornoseguros.com.br"];
-
-let CAMPANHAS = [];
-let PARTICIPANTES_TODOS = [];
-let ACOES_TODAS = [];
-let AGENCIAS = {};
-
-let CAMPANHA_ATUAL = null;
-
-// ==== Regras de Pontuação Padrão ====
-const REGRAS_PADRAO = [
-  { id: "funcionarios", tipo: "numero_funcionarios", descricao: "Conseguiu o número atualizado de funcionários", pontos: 5, icon: "👥" },
-  { id: "socios", tipo: "dados_socios", descricao: "Informou nome e data de nascimento dos sócios", pontos: 10, icon: "👤" },
-  { id: "email_dental", tipo: "email_cotacao_dental", descricao: "Informou e-mail e enviamos cotação de dental", pontos: 8, icon: "🦷" },
-  { id: "email_saude", tipo: "email_cotacao_saude", descricao: "Informou e-mail e enviamos cotação de saúde", pontos: 10, icon: "🏥" },
-  { id: "reuniao", tipo: "reuniao_agendada", descricao: "Agendou reunião da corretora com o cliente", pontos: 15, icon: "📅" },
-  { id: "contato", tipo: "contato_beneficios", descricao: "Perguntou ao cliente se entendeu os benefícios", pontos: 12, icon: "📞" },
-  { id: "decisao_nao", tipo: "decisao_nao_fechou", descricao: "Decisão justificada - não fechou negócio", pontos: 8, icon: "📝" },
-  { id: "decisao_sim", tipo: "decisao_fechou", descricao: "Cliente fechou negócio!", pontos: 40, icon: "🎉" }
-];
-
-// ==== Helpers ====
-const $ = id => document.getElementById(id);
-const normalizar = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-const fmtData = d => d ? d.toLocaleDateString("pt-BR") : "-";
-const fmtDataHora = d => d ? d.toLocaleString("pt-BR") : "-";
-
-const toDate = x => {
-  if (!x) return null;
-  if (x.toDate) return x.toDate();
-  if (x instanceof Date) return x;
-  const d = new Date(x);
-  return isNaN(d) ? null : d;
-};
-
-// ==== Auth ====
-auth.onAuthStateChanged(async user => {
-  if (!user) { location.href = "login.html"; return; }
-  
-  CTX.uid = user.uid;
-  CTX.email = user.email;
-  
-  try {
-    const snap = await db.collection("usuarios_banco").doc(user.uid).get();
-    if (snap.exists) {
-      const d = snap.data();
-      CTX.perfil = normalizar(d.perfil || "").replace(/[-_]/g, " ");
-      CTX.isAdmin = CTX.perfil === "admin" || ADMIN_EMAILS.includes(user.email?.toLowerCase());
-    } else if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
-      CTX.perfil = "admin";
-      CTX.isAdmin = true;
-    }
-  } catch (e) { console.warn("Erro perfil:", e); }
-  
-  // Apenas admin pode acessar
-  if (!CTX.isAdmin) {
-    alert("Acesso restrito a administradores.");
-    location.href = "painel.html";
-    return;
-  }
-  
-  await init();
+// Inicialização
+document.addEventListener('DOMContentLoaded', async () => {
+    // Verificar autenticação
+    firebase.auth().onAuthStateChanged(async (user) => {
+        if (!user) {
+            window.location.href = 'login.html';
+            return;
+        }
+        
+        await carregarDados();
+        configurarEventos();
+    });
 });
 
-// ==== Inicialização ====
-async function init() {
-  await carregarAgencias();
-  await Promise.all([carregarCampanhas(), carregarTodasAcoes()]);
-  renderizarTudo();
+// Carregar dados iniciais
+async function carregarDados() {
+    const db = firebase.firestore();
+    
+    // Carregar agências
+    const agenciasSnap = await db.collection('agencias_banco').get();
+    agencias = agenciasSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // Carregar campanhas
+    await carregarCampanhas();
+    
+    // Carregar stats
+    await atualizarStats();
+    
+    // Carregar ações pendentes
+    await carregarAcoesPendentes();
 }
 
-// ==== Carregar Dados ====
-async function carregarAgencias() {
-  try {
-    const snap = await db.collection("agencias_banco").get();
-    snap.forEach(doc => {
-      AGENCIAS[doc.id] = doc.data().nome || doc.id;
-    });
-    
-    // Preencher selects de agências
-    const options = Object.entries(AGENCIAS)
-      .sort((a, b) => a[1].localeCompare(b[1]))
-      .map(([id, nome]) => `<option value="${id}">${nome}</option>`)
-      .join("");
-    
-    const selCampanha = $("campanhaAgencias");
-    if (selCampanha) selCampanha.innerHTML = options;
-    
-    const selParticipante = $("participanteAgencia");
-    if (selParticipante) selParticipante.innerHTML = `<option value="">Selecione...</option>${options}`;
-    
-  } catch (e) { console.error("Erro agências:", e); }
-}
-
-async function carregarCampanhas() {
-  CAMPANHAS = [];
-  PARTICIPANTES_TODOS = [];
-  
-  try {
-    const snap = await db.collection("campanhas").orderBy("dataCriacao", "desc").get();
-    
-    for (const doc of snap.docs) {
-      const d = doc.data();
-      const campanha = {
-        id: doc.id,
-        nome: d.nome || "Campanha",
-        descricao: d.descricao || "",
-        status: d.status || "ativa",
-        dataInicio: toDate(d.dataInicio),
-        dataFim: toDate(d.dataFim),
-        dataCriacao: toDate(d.dataCriacao),
-        agencias: d.agencias || [],
-        regras: d.regras || REGRAS_PADRAO,
-        participantes: [],
-        totalPontos: 0,
-        totalAcoes: 0
-      };
-      
-      // Carregar participantes
-      const partSnap = await db.collection("campanhas").doc(doc.id)
-        .collection("participantes").get();
-      
-      partSnap.forEach(pDoc => {
-        const p = pDoc.data();
-        const participante = {
-          id: pDoc.id,
-          campanhaId: doc.id,
-          campanhaNome: campanha.nome,
-          nome: p.nome || "Participante",
-          agenciaId: p.agenciaId || "",
-          agenciaNome: p.agenciaNome || AGENCIAS[p.agenciaId] || "",
-          cargo: p.cargo || "",
-          email: p.email || "",
-          telefone: p.telefone || "",
-          pontos: p.pontos || 0,
-          ultimoAcesso: toDate(p.ultimoAcesso)
-        };
-        campanha.participantes.push(participante);
-        campanha.totalPontos += participante.pontos;
-        PARTICIPANTES_TODOS.push(participante);
-      });
-      
-      CAMPANHAS.push(campanha);
-    }
-    
-    // Ordenar participantes por pontos
-    PARTICIPANTES_TODOS.sort((a, b) => b.pontos - a.pontos);
-    
-  } catch (e) { console.error("Erro campanhas:", e); }
-}
-
-async function carregarTodasAcoes() {
-  ACOES_TODAS = [];
-  
-  try {
-    for (const campanha of CAMPANHAS) {
-      const snap = await db.collection("campanhas").doc(campanha.id)
-        .collection("acoes")
-        .orderBy("dataRegistro", "desc")
-        .limit(100)
-        .get();
-      
-      snap.forEach(doc => {
-        const d = doc.data();
-        ACOES_TODAS.push({
-          id: doc.id,
-          campanhaId: campanha.id,
-          campanhaNome: campanha.nome,
-          tipo: d.tipo,
-          empresaId: d.empresaId || "",
-          empresaNome: d.empresaNome || "",
-          participanteId: d.participanteId || "",
-          participanteNome: d.participanteNome || "",
-          pontos: d.pontos || 0,
-          dados: d.dados || {},
-          dataRegistro: toDate(d.dataRegistro),
-          status: d.status || "aprovado"
+// Configurar eventos
+function configurarEventos() {
+    // Tabs principais
+    document.querySelectorAll('#mainTabs .nav-link').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.tab;
+            
+            document.querySelectorAll('#mainTabs .nav-link').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            document.querySelectorAll('.card-custom').forEach(c => c.style.display = 'none');
+            
+            switch(tab) {
+                case 'campanhas':
+                    document.getElementById('tabCampanhas').style.display = 'block';
+                    break;
+                case 'pendentes':
+                    document.getElementById('tabPendentes').style.display = 'block';
+                    carregarAcoesPendentes();
+                    break;
+                case 'empresas':
+                    document.getElementById('tabEmpresas').style.display = 'block';
+                    carregarEmpresasCampanha();
+                    break;
+                case 'pesquisas':
+                    document.getElementById('tabPesquisas').style.display = 'block';
+                    carregarPesquisas();
+                    break;
+                case 'relatorios':
+                    document.getElementById('tabRelatorios').style.display = 'block';
+                    break;
+            }
         });
-      });
-      
-      campanha.totalAcoes = snap.size;
-    }
-    
-    ACOES_TODAS.sort((a, b) => (b.dataRegistro || 0) - (a.dataRegistro || 0));
-    
-  } catch (e) { console.error("Erro ações:", e); }
-}
-
-// ==== Renderização ====
-function renderizarTudo() {
-  renderizarStats();
-  renderizarCampanhas();
-  renderizarRanking();
-  renderizarAcoes();
-  preencherFiltros();
-}
-
-function renderizarStats() {
-  const campanhasAtivas = CAMPANHAS.filter(c => c.status === "ativa").length;
-  const totalParticipantes = PARTICIPANTES_TODOS.length;
-  const totalPontos = PARTICIPANTES_TODOS.reduce((sum, p) => sum + p.pontos, 0);
-  const totalAcoes = ACOES_TODAS.length;
-  const negocios = ACOES_TODAS.filter(a => a.tipo === "decisao_fechou").length;
-  
-  $("statCampanhasAtivas").textContent = campanhasAtivas;
-  $("statParticipantes").textContent = totalParticipantes;
-  $("statPontosTotal").textContent = totalPontos.toLocaleString("pt-BR");
-  $("statAcoes").textContent = totalAcoes;
-  $("statNegocios").textContent = negocios;
-}
-
-function renderizarCampanhas() {
-  const container = $("campanhasGrid");
-  
-  if (CAMPANHAS.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state" style="grid-column: 1/-1;">
-        <div class="empty-state-icon">🎯</div>
-        <h3>Nenhuma campanha criada</h3>
-        <p>Crie sua primeira campanha para engajar assistentes de banco!</p>
-        <button class="btn btn-primary" style="margin-top: 16px;" onclick="abrirModalNovaCampanha()">➕ Criar Campanha</button>
-      </div>
-    `;
-    return;
-  }
-  
-  container.innerHTML = CAMPANHAS.map(c => `
-    <div class="campanha-card">
-      <div class="campanha-card-header">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <h3>${c.nome}</h3>
-          <span class="campanha-badge ${c.status}">${c.status === 'ativa' ? '🟢 Ativa' : '🔴 Encerrada'}</span>
-        </div>
-        <p>${c.descricao || 'Sem descrição'}</p>
-      </div>
-      <div class="campanha-card-body">
-        <div class="campanha-card-stats">
-          <div class="mini-stat">
-            <div class="mini-stat-value">${c.participantes.length}</div>
-            <div class="mini-stat-label">Participantes</div>
-          </div>
-          <div class="mini-stat">
-            <div class="mini-stat-value">${c.totalPontos.toLocaleString("pt-BR")}</div>
-            <div class="mini-stat-label">Pontos</div>
-          </div>
-          <div class="mini-stat">
-            <div class="mini-stat-value">${c.totalAcoes}</div>
-            <div class="mini-stat-label">Ações</div>
-          </div>
-        </div>
-        <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">
-          📅 ${c.dataInicio ? fmtData(c.dataInicio) : 'Sem data'} até ${c.dataFim ? fmtData(c.dataFim) : 'Sem data'}
-        </div>
-        <div class="campanha-card-actions">
-          <button class="btn btn-sm btn-secondary" style="flex: 1;" onclick="gerenciarCampanha('${c.id}')">⚙️ Gerenciar</button>
-          <button class="btn btn-sm btn-primary" style="flex: 1;" onclick="abrirModalNovoParticipante('${c.id}')">➕ Participante</button>
-        </div>
-      </div>
-    </div>
-  `).join("");
-}
-
-function renderizarRanking() {
-  const container = $("rankingTableBody");
-  const filtro = $("filtroRankingCampanha")?.value || "";
-  
-  let participantes = [...PARTICIPANTES_TODOS];
-  if (filtro) {
-    participantes = participantes.filter(p => p.campanhaId === filtro);
-  }
-  
-  // Recalcular posições
-  participantes.sort((a, b) => b.pontos - a.pontos);
-  
-  if (participantes.length === 0) {
-    container.innerHTML = `
-      <tr>
-        <td colspan="6" style="text-align: center; padding: 40px; color: var(--muted);">
-          Nenhum participante encontrado
-        </td>
-      </tr>
-    `;
-    return;
-  }
-  
-  container.innerHTML = participantes.map((p, idx) => {
-    const pos = idx + 1;
-    let badgeClass = "normal";
-    if (pos === 1) badgeClass = "gold";
-    else if (pos === 2) badgeClass = "silver";
-    else if (pos === 3) badgeClass = "bronze";
-    
-    const acoes = ACOES_TODAS.filter(a => a.participanteId === p.id).length;
-    
-    return `
-      <tr>
-        <td><span class="ranking-badge ${badgeClass}">${pos}º</span></td>
-        <td><strong>${p.nome}</strong></td>
-        <td>${p.agenciaNome || '-'}</td>
-        <td>${p.campanhaNome}</td>
-        <td style="text-align: right;">${acoes}</td>
-        <td style="text-align: right; font-weight: 700; color: var(--brand);">${p.pontos.toLocaleString("pt-BR")}</td>
-      </tr>
-    `;
-  }).join("");
-}
-
-function renderizarAcoes() {
-  const container = $("acoesTableBody");
-  const filtroCampanha = $("filtroAcaoCampanha")?.value || "";
-  const filtroTipo = $("filtroAcaoTipo")?.value || "";
-  
-  let acoes = [...ACOES_TODAS];
-  if (filtroCampanha) {
-    acoes = acoes.filter(a => a.campanhaId === filtroCampanha);
-  }
-  if (filtroTipo) {
-    acoes = acoes.filter(a => a.tipo === filtroTipo);
-  }
-  
-  if (acoes.length === 0) {
-    container.innerHTML = `
-      <tr>
-        <td colspan="6" style="text-align: center; padding: 40px; color: var(--muted);">
-          Nenhuma ação encontrada
-        </td>
-      </tr>
-    `;
-    return;
-  }
-  
-  container.innerHTML = acoes.slice(0, 100).map(a => {
-    const regra = REGRAS_PADRAO.find(r => r.tipo === a.tipo);
-    return `
-      <tr>
-        <td>${fmtDataHora(a.dataRegistro)}</td>
-        <td>${a.participanteNome}</td>
-        <td>${a.empresaNome}</td>
-        <td>
-          <span style="display: flex; align-items: center; gap: 8px;">
-            <span>${regra?.icon || '📋'}</span>
-            <span>${regra?.descricao || a.tipo}</span>
-          </span>
-        </td>
-        <td style="text-align: right; font-weight: 700; color: var(--brand);">+${a.pontos}</td>
-        <td style="text-align: center;">
-          <span style="padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #d1fae5; color: #065f46;">
-            ✓ Aprovado
-          </span>
-        </td>
-      </tr>
-    `;
-  }).join("");
-}
-
-function preencherFiltros() {
-  // Filtro de campanhas no ranking
-  const selRanking = $("filtroRankingCampanha");
-  if (selRanking) {
-    selRanking.innerHTML = `<option value="">Todas as Campanhas</option>` +
-      CAMPANHAS.map(c => `<option value="${c.id}">${c.nome}</option>`).join("");
-  }
-  
-  // Filtro de campanhas nas ações
-  const selAcaoCampanha = $("filtroAcaoCampanha");
-  if (selAcaoCampanha) {
-    selAcaoCampanha.innerHTML = `<option value="">Todas as Campanhas</option>` +
-      CAMPANHAS.map(c => `<option value="${c.id}">${c.nome}</option>`).join("");
-  }
-  
-  // Filtro de tipos nas ações
-  const selAcaoTipo = $("filtroAcaoTipo");
-  if (selAcaoTipo) {
-    selAcaoTipo.innerHTML = `<option value="">Todos os Tipos</option>` +
-      REGRAS_PADRAO.map(r => `<option value="${r.tipo}">${r.icon} ${r.descricao}</option>`).join("");
-  }
-}
-
-// ==== Tabs ====
-function trocarTab(tabId) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  
-  event.target.classList.add('active');
-  $(`tab${tabId.charAt(0).toUpperCase() + tabId.slice(1)}`).classList.add('active');
-}
-
-// ==== Modais ====
-function abrirModalNovaCampanha() {
-  // Limpar formulário
-  $("campanhaNome").value = "";
-  $("campanhaDesc").value = "";
-  $("campanhaInicio").value = "";
-  $("campanhaFim").value = "";
-  
-  // Selecionar todas as agências por padrão
-  const select = $("campanhaAgencias");
-  if (select) {
-    Array.from(select.options).forEach(opt => opt.selected = true);
-  }
-  
-  $("modalNovaCampanha").classList.add("active");
-}
-
-function fecharModal(modalId) {
-  $(modalId).classList.remove("active");
-}
-
-// ==== Criar Campanha ====
-async function criarCampanha() {
-  const nome = $("campanhaNome").value.trim();
-  const descricao = $("campanhaDesc").value.trim();
-  const dataInicio = $("campanhaInicio").value;
-  const dataFim = $("campanhaFim").value;
-  
-  if (!nome) {
-    alert("Informe o nome da campanha!");
-    return;
-  }
-  
-  // Pegar agências selecionadas
-  const select = $("campanhaAgencias");
-  const agencias = Array.from(select.selectedOptions).map(opt => opt.value);
-  
-  try {
-    await db.collection("campanhas").add({
-      nome: nome,
-      descricao: descricao,
-      status: "ativa",
-      dataInicio: dataInicio ? new Date(dataInicio + "T00:00:00") : null,
-      dataFim: dataFim ? new Date(dataFim + "T23:59:59") : null,
-      dataCriacao: firebase.firestore.FieldValue.serverTimestamp(),
-      agencias: agencias,
-      regras: REGRAS_PADRAO,
-      criadoPor: CTX.uid
     });
     
-    fecharModal("modalNovaCampanha");
+    // Filtro de status
+    document.getElementById('filtroStatus').addEventListener('change', renderizarCampanhas);
     
-    // Recarregar dados
-    CAMPANHAS = [];
-    PARTICIPANTES_TODOS = [];
-    await carregarCampanhas();
-    await carregarTodasAcoes();
-    renderizarTudo();
+    // Busca de empresas
+    document.getElementById('buscaEmpresa').addEventListener('input', carregarEmpresasCampanha);
     
-    alert("Campanha criada com sucesso!");
-    
-  } catch (error) {
-    console.error("Erro ao criar campanha:", error);
-    alert("Erro ao criar campanha. Tente novamente.");
-  }
+    // Tabs do modal
+    document.querySelectorAll('[data-modal-tab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.modalTab;
+            
+            document.querySelectorAll('[data-modal-tab]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            document.getElementById('modalTabParticipantes').style.display = tab === 'participantes' ? 'block' : 'none';
+            document.getElementById('modalTabRanking').style.display = tab === 'ranking' ? 'block' : 'none';
+            document.getElementById('modalTabConfig').style.display = tab === 'config' ? 'block' : 'none';
+            
+            if (tab === 'ranking') carregarRankingCampanha();
+        });
+    });
 }
 
-// ==== Gerenciar Campanha ====
-function gerenciarCampanha(campanhaId) {
-  const campanha = CAMPANHAS.find(c => c.id === campanhaId);
-  if (!campanha) return;
-  
-  CAMPANHA_ATUAL = campanha;
-  
-  $("modalGerenciarTitle").innerHTML = `📋 ${campanha.nome}`;
-  
-  const participantesHtml = campanha.participantes.length > 0 
-    ? campanha.participantes.map(p => {
-        const iniciais = (p.nome || "?").split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
-        return `
-          <div class="participante-item">
-            <div class="participante-avatar">${iniciais}</div>
-            <div class="participante-info">
-              <div class="participante-nome">${p.nome}</div>
-              <div class="participante-agencia">${p.agenciaNome || 'Sem agência'} • ${p.pontos} pts</div>
+// Carregar campanhas
+async function carregarCampanhas() {
+    const db = firebase.firestore();
+    
+    const campanhasSnap = await db.collection('campanhas')
+        .orderBy('dataCriacao', 'desc')
+        .get();
+    
+    campanhas = await Promise.all(campanhasSnap.docs.map(async doc => {
+        const data = { id: doc.id, ...doc.data() };
+        
+        // Contar participantes
+        const participantesSnap = await db.collection('campanhas').doc(doc.id)
+            .collection('participantes').get();
+        data.totalParticipantes = participantesSnap.size;
+        
+        // Somar pontos
+        let totalPontos = 0;
+        participantesSnap.docs.forEach(p => {
+            totalPontos += p.data().pontos || 0;
+        });
+        data.totalPontos = totalPontos;
+        
+        return data;
+    }));
+    
+    renderizarCampanhas();
+}
+
+// Renderizar campanhas
+function renderizarCampanhas() {
+    const filtro = document.getElementById('filtroStatus').value;
+    const container = document.getElementById('listaCampanhas');
+    
+    const campanhasFiltradas = campanhas.filter(c => 
+        filtro === 'todas' || c.status === filtro
+    );
+    
+    if (campanhasFiltradas.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="bi bi-megaphone" style="font-size: 2rem;"></i>
+                <p class="mt-2">Nenhuma campanha encontrada</p>
             </div>
-            <div class="participante-actions">
-              <button class="btn btn-sm btn-secondary" onclick="verLinkParticipante('${campanha.id}', '${p.id}', '${p.nome}')">🔗 Link</button>
-              <button class="btn btn-sm btn-danger" onclick="removerParticipante('${campanha.id}', '${p.id}')">🗑️</button>
-            </div>
-          </div>
         `;
-      }).join("")
-    : `<div style="text-align: center; padding: 30px; color: var(--muted);">Nenhum participante adicionado</div>`;
-  
-  $("modalGerenciarBody").innerHTML = `
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
-      <div class="stat-card">
-        <div class="stat-icon">👥</div>
-        <div class="stat-value">${campanha.participantes.length}</div>
-        <div class="stat-label">Participantes</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon">⭐</div>
-        <div class="stat-value">${campanha.totalPontos.toLocaleString("pt-BR")}</div>
-        <div class="stat-label">Pontos Total</div>
-      </div>
-    </div>
+        return;
+    }
     
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
-      <h4 style="font-weight: 700;">👥 Participantes</h4>
-      <button class="btn btn-sm btn-primary" onclick="abrirModalNovoParticipante('${campanha.id}')">➕ Adicionar</button>
-    </div>
-    
-    <div class="participantes-list">
-      ${participantesHtml}
-    </div>
-    
-    <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border);">
-      <h4 style="font-weight: 700; margin-bottom: 16px;">⚙️ Ações</h4>
-      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-        <button class="btn btn-secondary" onclick="exportarCampanha('${campanha.id}')">📊 Exportar Dados</button>
-        ${campanha.status === 'ativa' 
-          ? `<button class="btn btn-danger" onclick="encerrarCampanha('${campanha.id}')">🏁 Encerrar Campanha</button>`
-          : `<button class="btn btn-success" onclick="reativarCampanha('${campanha.id}')">▶️ Reativar Campanha</button>`
-        }
-      </div>
-    </div>
-  `;
-  
-  $("modalGerenciarCampanha").classList.add("active");
+    container.innerHTML = campanhasFiltradas.map(c => `
+        <div class="campanha-item ${c.status}">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <h5 class="mb-1">${c.nome || 'Campanha'}</h5>
+                    <p class="text-muted mb-2">${c.descricao || ''}</p>
+                    <div class="d-flex gap-3">
+                        <span class="badge bg-${c.status === 'ativa' ? 'success' : 'secondary'}">${c.status === 'ativa' ? 'Ativa' : 'Encerrada'}</span>
+                        <span class="text-muted small"><i class="bi bi-people"></i> ${c.totalParticipantes} participantes</span>
+                        <span class="text-muted small"><i class="bi bi-star"></i> ${c.totalPontos} pontos</span>
+                    </div>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="abrirGerenciarCampanha('${c.id}')">
+                        <i class="bi bi-gear"></i> Gerenciar
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
 }
 
-// ==== Participantes ====
-function abrirModalNovoParticipante(campanhaId) {
-  CAMPANHA_ATUAL = CAMPANHAS.find(c => c.id === campanhaId);
-  if (!CAMPANHA_ATUAL) return;
-  
-  // Limpar formulário
-  $("participanteNome").value = "";
-  $("participanteAgencia").value = "";
-  $("participanteCargo").value = "";
-  $("participanteEmail").value = "";
-  $("participanteTelefone").value = "";
-  
-  // Filtrar agências da campanha
-  const select = $("participanteAgencia");
-  if (select && CAMPANHA_ATUAL.agencias?.length > 0) {
-    select.innerHTML = `<option value="">Selecione...</option>` +
-      CAMPANHA_ATUAL.agencias
-        .map(id => `<option value="${id}">${AGENCIAS[id] || id}</option>`)
-        .join("");
-  }
-  
-  fecharModal("modalGerenciarCampanha");
-  $("modalNovoParticipante").classList.add("active");
+// Atualizar estatísticas
+async function atualizarStats() {
+    const db = firebase.firestore();
+    
+    // Campanhas ativas
+    const campanhasAtivas = campanhas.filter(c => c.status === 'ativa').length;
+    document.getElementById('statCampanhas').textContent = campanhasAtivas;
+    
+    // Total participantes
+    let totalParticipantes = 0;
+    let totalPontos = 0;
+    campanhas.forEach(c => {
+        totalParticipantes += c.totalParticipantes || 0;
+        totalPontos += c.totalPontos || 0;
+    });
+    document.getElementById('statParticipantes').textContent = totalParticipantes;
+    document.getElementById('statPontos').textContent = totalPontos;
+    
+    // Negócios fechados
+    let negocios = 0;
+    const empresasSnap = await db.collection('empresas')
+        .where('campanha.dental.fechouNegocio', '==', true)
+        .get();
+    negocios += empresasSnap.size;
+    
+    const empresasSaudeSnap = await db.collection('empresas')
+        .where('campanha.saude.fechouNegocio', '==', true)
+        .get();
+    negocios += empresasSaudeSnap.size;
+    
+    document.getElementById('statNegocios').textContent = negocios;
 }
 
-async function adicionarParticipante() {
-  if (!CAMPANHA_ATUAL) return;
-  
-  const nome = $("participanteNome").value.trim();
-  const agenciaId = $("participanteAgencia").value;
-  const cargo = $("participanteCargo").value.trim();
-  const email = $("participanteEmail").value.trim();
-  const telefone = $("participanteTelefone").value.trim();
-  
-  if (!nome) {
-    alert("Informe o nome do participante!");
-    return;
-  }
-  
-  try {
-    const docRef = await db.collection("campanhas").doc(CAMPANHA_ATUAL.id)
-      .collection("participantes").add({
-        nome: nome,
-        agenciaId: agenciaId,
-        agenciaNome: AGENCIAS[agenciaId] || "",
-        cargo: cargo,
-        email: email,
-        telefone: telefone,
-        pontos: 0,
-        dataCriacao: firebase.firestore.FieldValue.serverTimestamp()
-      });
+// Abrir modal nova campanha
+function abrirModalNovaCampanha() {
+    // Preencher checkboxes de agências
+    const container = document.getElementById('checkboxAgencias');
+    container.innerHTML = agencias.map(ag => `
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" value="${ag.id}" id="ag_${ag.id}">
+            <label class="form-check-label" for="ag_${ag.id}">${ag.nome || ag.id}</label>
+        </div>
+    `).join('');
     
-    fecharModal("modalNovoParticipante");
+    // Definir datas padrão
+    const hoje = new Date();
+    const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    document.getElementById('inputCampanhaInicio').value = hoje.toISOString().split('T')[0];
+    document.getElementById('inputCampanhaFim').value = fimMes.toISOString().split('T')[0];
     
-    // Mostrar link imediatamente
-    verLinkParticipante(CAMPANHA_ATUAL.id, docRef.id, nome);
-    
-    // Recarregar dados
-    CAMPANHAS = [];
-    PARTICIPANTES_TODOS = [];
-    await carregarCampanhas();
-    renderizarTudo();
-    
-  } catch (error) {
-    console.error("Erro ao adicionar participante:", error);
-    alert("Erro ao adicionar. Tente novamente.");
-  }
+    new bootstrap.Modal(document.getElementById('modalNovaCampanha')).show();
 }
 
-function verLinkParticipante(campanhaId, participanteId, nome) {
-  const baseUrl = window.location.origin + window.location.pathname.replace("campanhas-admin.html", "");
-  const link = `${baseUrl}campanha.html?c=${campanhaId}&p=${participanteId}`;
-  
-  $("linkParticipanteNome").textContent = nome;
-  $("linkParticipanteUrl").value = link;
-  
-  // Salvar para WhatsApp
-  window.LINK_ATUAL = { nome, link };
-  
-  fecharModal("modalGerenciarCampanha");
-  $("modalLinkParticipante").classList.add("active");
+// Criar campanha
+async function criarCampanha() {
+    const nome = document.getElementById('inputCampanhaNome').value.trim();
+    const descricao = document.getElementById('inputCampanhaDesc').value.trim();
+    const dataInicio = document.getElementById('inputCampanhaInicio').value;
+    const dataFim = document.getElementById('inputCampanhaFim').value;
+    
+    const agenciasSelecionadas = [];
+    document.querySelectorAll('#checkboxAgencias input:checked').forEach(cb => {
+        agenciasSelecionadas.push(cb.value);
+    });
+    
+    if (!nome) {
+        alert('Informe o nome da campanha');
+        return;
+    }
+    
+    if (agenciasSelecionadas.length === 0) {
+        alert('Selecione pelo menos uma agência');
+        return;
+    }
+    
+    try {
+        const db = firebase.firestore();
+        
+        await db.collection('campanhas').add({
+            nome,
+            descricao,
+            dataInicio,
+            dataFim,
+            agencias: agenciasSelecionadas,
+            status: 'ativa',
+            dataCriacao: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        bootstrap.Modal.getInstance(document.getElementById('modalNovaCampanha')).hide();
+        
+        alert('Campanha criada com sucesso!');
+        await carregarCampanhas();
+        await atualizarStats();
+        
+    } catch (error) {
+        console.error('Erro ao criar campanha:', error);
+        alert('Erro ao criar campanha');
+    }
 }
 
+// Abrir gerenciar campanha
+async function abrirGerenciarCampanha(campanhaId) {
+    campanhaAtual = campanhas.find(c => c.id === campanhaId);
+    if (!campanhaAtual) return;
+    
+    document.getElementById('modalGerenciarTitulo').textContent = campanhaAtual.nome || 'Gerenciar Campanha';
+    document.getElementById('selectStatusCampanha').value = campanhaAtual.status;
+    
+    // Resetar tabs
+    document.querySelectorAll('[data-modal-tab]').forEach(b => b.classList.remove('active'));
+    document.querySelector('[data-modal-tab="participantes"]').classList.add('active');
+    document.getElementById('modalTabParticipantes').style.display = 'block';
+    document.getElementById('modalTabRanking').style.display = 'none';
+    document.getElementById('modalTabConfig').style.display = 'none';
+    
+    await carregarParticipantesCampanha();
+    
+    new bootstrap.Modal(document.getElementById('modalGerenciarCampanha')).show();
+}
+
+// Carregar participantes da campanha
+async function carregarParticipantesCampanha() {
+    const db = firebase.firestore();
+    const container = document.getElementById('listaParticipantesCampanha');
+    
+    const participantesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+        .collection('participantes')
+        .orderBy('pontos', 'desc')
+        .get();
+    
+    if (participantesSnap.empty) {
+        container.innerHTML = '<p class="text-muted text-center py-3">Nenhum participante cadastrado</p>';
+        return;
+    }
+    
+    container.innerHTML = participantesSnap.docs.map((doc, idx) => {
+        const p = doc.data();
+        return `
+            <div class="participante-card d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="badge bg-secondary me-2">#${idx + 1}</span>
+                    <strong>${p.nome || 'Participante'}</strong>
+                    <span class="text-muted ms-2">${p.agenciaNome || ''}</span>
+                    <span class="badge bg-primary ms-2">${p.pontos || 0} pts</span>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-outline-success" onclick="abrirLinkParticipante('${doc.id}', '${p.nome}', '${p.telefone || ''}')">
+                        <i class="bi bi-link-45deg"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="removerParticipante('${doc.id}')">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Carregar ranking da campanha
+async function carregarRankingCampanha() {
+    const db = firebase.firestore();
+    const container = document.getElementById('rankingCampanha');
+    
+    const participantesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+        .collection('participantes')
+        .orderBy('pontos', 'desc')
+        .get();
+    
+    if (participantesSnap.empty) {
+        container.innerHTML = '<p class="text-muted text-center py-3">Nenhum participante</p>';
+        return;
+    }
+    
+    container.innerHTML = `
+        <table class="table table-modern">
+            <thead>
+                <tr>
+                    <th>Posição</th>
+                    <th>Nome</th>
+                    <th>Agência</th>
+                    <th>Pontos</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${participantesSnap.docs.map((doc, idx) => {
+                    const p = doc.data();
+                    const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
+                    return `
+                        <tr>
+                            <td><strong>${medal}</strong></td>
+                            <td>${p.nome || 'Participante'}</td>
+                            <td>${p.agenciaNome || '-'}</td>
+                            <td><strong class="text-primary">${p.pontos || 0}</strong></td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+// Abrir modal novo participante
+function abrirModalNovoParticipante() {
+    // Preencher select de agências
+    const select = document.getElementById('selectParticipanteAgencia');
+    select.innerHTML = '<option value="">Selecione...</option>' + 
+        agencias.filter(ag => campanhaAtual.agencias?.includes(ag.id))
+            .map(ag => `<option value="${ag.id}" data-nome="${ag.nome}">${ag.nome || ag.id}</option>`)
+            .join('');
+    
+    // Limpar campos
+    document.getElementById('inputParticipanteNome').value = '';
+    document.getElementById('inputParticipanteCargo').value = '';
+    document.getElementById('inputParticipanteEmail').value = '';
+    document.getElementById('inputParticipanteTelefone').value = '';
+    
+    new bootstrap.Modal(document.getElementById('modalNovoParticipante')).show();
+}
+
+// Criar participante
+async function criarParticipante() {
+    const nome = document.getElementById('inputParticipanteNome').value.trim();
+    const agenciaSelect = document.getElementById('selectParticipanteAgencia');
+    const agenciaId = agenciaSelect.value;
+    const agenciaNome = agenciaSelect.selectedOptions[0]?.dataset.nome || '';
+    const cargo = document.getElementById('inputParticipanteCargo').value.trim();
+    const email = document.getElementById('inputParticipanteEmail').value.trim();
+    const telefone = document.getElementById('inputParticipanteTelefone').value.trim();
+    
+    if (!nome || !agenciaId) {
+        alert('Preencha nome e agência');
+        return;
+    }
+    
+    try {
+        const db = firebase.firestore();
+        
+        await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('participantes').add({
+                nome,
+                agenciaId,
+                agenciaNome,
+                cargo,
+                email,
+                telefone,
+                pontos: 0,
+                dataCriacao: firebase.firestore.FieldValue.serverTimestamp()
+            });
+        
+        bootstrap.Modal.getInstance(document.getElementById('modalNovoParticipante')).hide();
+        
+        await carregarParticipantesCampanha();
+        await carregarCampanhas();
+        
+        alert('Participante adicionado com sucesso!');
+        
+    } catch (error) {
+        console.error('Erro ao criar participante:', error);
+        alert('Erro ao criar participante');
+    }
+}
+
+// Abrir link do participante
+function abrirLinkParticipante(participanteId, nome, telefone) {
+    participanteAtual = { id: participanteId, nome, telefone };
+    
+    const baseUrl = window.location.origin + window.location.pathname.replace('campanhas-admin.html', 'campanha.html');
+    const link = `${baseUrl}?c=${campanhaAtual.id}&p=${participanteId}`;
+    
+    document.getElementById('inputLinkParticipante').value = link;
+    
+    new bootstrap.Modal(document.getElementById('modalLinkParticipante')).show();
+}
+
+// Copiar link
 function copiarLink() {
-  const input = $("linkParticipanteUrl");
-  input.select();
-  document.execCommand("copy");
-  alert("Link copiado!");
+    const input = document.getElementById('inputLinkParticipante');
+    input.select();
+    document.execCommand('copy');
+    alert('Link copiado!');
 }
 
+// Enviar WhatsApp
 function enviarWhatsApp() {
-  if (!window.LINK_ATUAL) return;
-  
-  const texto = encodeURIComponent(
-    `🎯 Olá ${window.LINK_ATUAL.nome}!\n\n` +
-    `Você foi convidado(a) para participar da nossa campanha de indicações!\n\n` +
-    `Acesse seu portal exclusivo:\n${window.LINK_ATUAL.link}\n\n` +
-    `Boa sorte! 🏆`
-  );
-  
-  window.open(`https://wa.me/?text=${texto}`, "_blank");
+    const link = document.getElementById('inputLinkParticipante').value;
+    const nome = participanteAtual?.nome || 'participante';
+    const telefone = participanteAtual?.telefone?.replace(/\D/g, '') || '';
+    
+    const mensagem = encodeURIComponent(
+        `Olá ${nome}! 🎯\n\n` +
+        `Você foi convidado(a) para participar da nossa Campanha de Indicação!\n\n` +
+        `📊 *Sistema de Pontuação:*\n` +
+        `• Funcionários atualizados: 5 pts\n` +
+        `• Dados dos sócios: 10 pts\n` +
+        `• E-mail + cotação dental: 8 pts\n` +
+        `• E-mail + cotação saúde: 10 pts\n` +
+        `• Reunião agendada: 15 pts\n` +
+        `• Confirmou entendimento: 12 pts\n` +
+        `• Decisão justificada: 8 pts\n` +
+        `• Negócio fechado: 40 pts\n\n` +
+        `🔗 Acesse pelo link:\n${link}\n\n` +
+        `Boa sorte! 🚀`
+    );
+    
+    const whatsappUrl = telefone 
+        ? `https://wa.me/55${telefone}?text=${mensagem}`
+        : `https://wa.me/?text=${mensagem}`;
+    
+    window.open(whatsappUrl, '_blank');
 }
 
-async function removerParticipante(campanhaId, participanteId) {
-  if (!confirm("Tem certeza que deseja remover este participante?")) return;
-  
-  try {
-    await db.collection("campanhas").doc(campanhaId)
-      .collection("participantes").doc(participanteId).delete();
+// Remover participante
+async function removerParticipante(participanteId) {
+    if (!confirm('Tem certeza que deseja remover este participante?')) return;
     
-    // Recarregar
-    CAMPANHAS = [];
-    PARTICIPANTES_TODOS = [];
-    await carregarCampanhas();
-    renderizarTudo();
-    
-    fecharModal("modalGerenciarCampanha");
-    alert("Participante removido.");
-    
-  } catch (error) {
-    console.error("Erro:", error);
-    alert("Erro ao remover.");
-  }
+    try {
+        const db = firebase.firestore();
+        await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('participantes').doc(participanteId).delete();
+        
+        await carregarParticipantesCampanha();
+        alert('Participante removido');
+        
+    } catch (error) {
+        console.error('Erro ao remover participante:', error);
+        alert('Erro ao remover');
+    }
 }
 
-// ==== Ações da Campanha ====
-async function encerrarCampanha(campanhaId) {
-  if (!confirm("Tem certeza que deseja encerrar esta campanha?")) return;
-  
-  try {
-    await db.collection("campanhas").doc(campanhaId).update({ status: "encerrada" });
+// Carregar ações pendentes
+async function carregarAcoesPendentes() {
+    const db = firebase.firestore();
+    const container = document.getElementById('listaAcoesPendentes');
     
-    CAMPANHAS = [];
-    PARTICIPANTES_TODOS = [];
-    await carregarCampanhas();
-    renderizarTudo();
+    // Buscar empresas que têm ações pendentes de confirmação admin
+    const empresasSnap = await db.collection('empresas').get();
     
-    fecharModal("modalGerenciarCampanha");
-    alert("Campanha encerrada.");
+    const pendentes = [];
     
-  } catch (error) {
-    console.error("Erro:", error);
-    alert("Erro ao encerrar.");
-  }
+    empresasSnap.docs.forEach(doc => {
+        const emp = doc.data();
+        const campanha = emp.campanha || {};
+        
+        // Verificar pendências de dental
+        if (campanha.dental?.emailEnviado && !campanha.dental?.reuniaoConfirmada) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'reuniaoDental',
+                label: 'Confirmar Reunião Dental',
+                pontos: 15
+            });
+        }
+        if (campanha.dental?.reuniaoConfirmada && !campanha.dental?.entendeuConfirmado) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'entendeuDental',
+                label: 'Confirmar Entendimento Dental',
+                pontos: 12
+            });
+        }
+        if (campanha.dental?.decisao === 'fechou' && !campanha.dental?.fechouNegocio) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'fechouDental',
+                label: 'Confirmar Negócio Dental',
+                pontos: 40
+            });
+        }
+        
+        // Verificar pendências de saúde
+        if (campanha.saude?.emailEnviado && !campanha.saude?.reuniaoConfirmada) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'reuniaoSaude',
+                label: 'Confirmar Reunião Saúde',
+                pontos: 15
+            });
+        }
+        if (campanha.saude?.reuniaoConfirmada && !campanha.saude?.entendeuConfirmado) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'entendeuSaude',
+                label: 'Confirmar Entendimento Saúde',
+                pontos: 12
+            });
+        }
+        if (campanha.saude?.decisao === 'fechou' && !campanha.saude?.fechouNegocio) {
+            pendentes.push({
+                empresaId: doc.id,
+                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                tipo: 'fechouSaude',
+                label: 'Confirmar Negócio Saúde',
+                pontos: 40
+            });
+        }
+    });
+    
+    // Atualizar badge
+    document.getElementById('badgePendentes').textContent = pendentes.length;
+    
+    if (pendentes.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="bi bi-check-circle" style="font-size: 2rem;"></i>
+                <p class="mt-2">Nenhuma ação pendente</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = pendentes.map(p => `
+        <div class="acao-pendente">
+            <div>
+                <strong>${p.empresaNome}</strong>
+                <span class="badge badge-tipo bg-warning text-dark ms-2">${p.label}</span>
+            </div>
+            <button class="btn btn-sm btn-success" onclick="confirmarAcaoAdmin('${p.empresaId}', '${p.tipo}', ${p.pontos})">
+                <i class="bi bi-check-lg"></i> Confirmar (+${p.pontos} pts)
+            </button>
+        </div>
+    `).join('');
 }
 
-async function reativarCampanha(campanhaId) {
-  try {
-    await db.collection("campanhas").doc(campanhaId).update({ status: "ativa" });
+// Confirmar ação do admin
+async function confirmarAcaoAdmin(empresaId, tipo, pontos) {
+    try {
+        const db = firebase.firestore();
+        
+        // Atualizar empresa
+        const campo = tipo.replace('reuniao', 'reuniaoConfirmada')
+                        .replace('entendeu', 'entendeuConfirmado')
+                        .replace('fechou', 'fechouNegocio');
+        
+        const ramo = tipo.toLowerCase().includes('dental') ? 'dental' : 'saude';
+        
+        await db.collection('empresas').doc(empresaId).update({
+            [`campanha.${ramo}.${campo.replace(ramo.charAt(0).toUpperCase() + ramo.slice(1), '')}`]: true,
+            [`campanha.${ramo}.${campo.replace(ramo.charAt(0).toUpperCase() + ramo.slice(1), '')}Em`]: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        // Encontrar participante que fez a ação e dar pontos
+        const empresaDoc = await db.collection('empresas').doc(empresaId).get();
+        const empresa = empresaDoc.data();
+        const participanteId = empresa.campanha?.[ramo]?.emailEnviadoPor;
+        
+        if (participanteId) {
+            // Encontrar em qual campanha está
+            for (const campanha of campanhas) {
+                const partDoc = await db.collection('campanhas').doc(campanha.id)
+                    .collection('participantes').doc(participanteId).get();
+                
+                if (partDoc.exists) {
+                    const pontosAtuais = partDoc.data().pontos || 0;
+                    await partDoc.ref.update({ pontos: pontosAtuais + pontos });
+                    
+                    // Registrar ação
+                    await db.collection('campanhas').doc(campanha.id)
+                        .collection('acoes').add({
+                            tipo,
+                            pontos,
+                            empresaId,
+                            empresaNome: empresa.razaoSocial || empresa.nomeFantasia,
+                            participanteId,
+                            participanteNome: partDoc.data().nome,
+                            confirmadoPorAdmin: true,
+                            dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    
+                    break;
+                }
+            }
+        }
+        
+        alert('Ação confirmada com sucesso!');
+        await carregarAcoesPendentes();
+        await atualizarStats();
+        
+    } catch (error) {
+        console.error('Erro ao confirmar ação:', error);
+        alert('Erro ao confirmar');
+    }
+}
+
+// Carregar empresas com dados de campanha
+async function carregarEmpresasCampanha() {
+    const db = firebase.firestore();
+    const container = document.getElementById('listaEmpresasCampanha');
+    const busca = document.getElementById('buscaEmpresa').value.toLowerCase();
     
-    CAMPANHAS = [];
-    PARTICIPANTES_TODOS = [];
-    await carregarCampanhas();
-    renderizarTudo();
+    const empresasSnap = await db.collection('empresas').get();
     
-    fecharModal("modalGerenciarCampanha");
-    alert("Campanha reativada.");
+    const empresasComDados = empresasSnap.docs.filter(doc => {
+        const emp = doc.data();
+        const temDados = emp.funcionariosQtd || emp.socios?.length || emp.campanha;
+        if (!temDados) return false;
+        
+        if (busca) {
+            const nome = (emp.razaoSocial || emp.nomeFantasia || '').toLowerCase();
+            return nome.includes(busca);
+        }
+        return true;
+    }).map(doc => ({ id: doc.id, ...doc.data() }));
     
-  } catch (error) {
-    console.error("Erro:", error);
-    alert("Erro ao reativar.");
-  }
+    if (empresasComDados.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="bi bi-building" style="font-size: 2rem;"></i>
+                <p class="mt-2">Nenhuma empresa com dados de campanha</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = empresasComDados.map(emp => {
+        const campanha = emp.campanha || {};
+        return `
+            <div class="empresa-card ${campanha.dental || campanha.saude ? 'tem-acao' : ''}">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <strong>${emp.razaoSocial || emp.nomeFantasia}</strong>
+                        <div class="small text-muted mt-1">
+                            ${emp.funcionariosQtd ? `<span class="badge bg-info me-1">👥 ${emp.funcionariosQtd} func.</span>` : ''}
+                            ${emp.socios?.length ? `<span class="badge bg-info me-1">👤 ${emp.socios.length} sócio(s)</span>` : ''}
+                            ${campanha.dental?.emailEnviado ? '<span class="badge bg-success me-1">🦷 Dental</span>' : ''}
+                            ${campanha.saude?.emailEnviado ? '<span class="badge bg-danger me-1">❤️ Saúde</span>' : ''}
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="abrirDetalheEmpresa('${emp.id}')">
+                        <i class="bi bi-eye"></i> Ver
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
-function exportarCampanha(campanhaId) {
-  const campanha = CAMPANHAS.find(c => c.id === campanhaId);
-  if (!campanha) return;
-  
-  const acoes = ACOES_TODAS.filter(a => a.campanhaId === campanhaId);
-  
-  const dados = acoes.map(a => ({
-    "Data": fmtDataHora(a.dataRegistro),
-    "Participante": a.participanteNome,
-    "Empresa": a.empresaNome,
-    "Ação": a.tipo,
-    "Pontos": a.pontos
-  }));
-  
-  const ws = XLSX.utils.json_to_sheet(dados);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Ações");
-  
-  // Aba de participantes
-  const partDados = campanha.participantes.map(p => ({
-    "Nome": p.nome,
-    "Agência": p.agenciaNome,
-    "Pontos": p.pontos,
-    "Último Acesso": fmtDataHora(p.ultimoAcesso)
-  }));
-  const wsPart = XLSX.utils.json_to_sheet(partDados);
-  XLSX.utils.book_append_sheet(wb, wsPart, "Participantes");
-  
-  XLSX.writeFile(wb, `campanha-${campanha.nome.replace(/\s+/g, "-")}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+// Abrir detalhe da empresa
+async function abrirDetalheEmpresa(empresaId) {
+    const db = firebase.firestore();
+    const doc = await db.collection('empresas').doc(empresaId).get();
+    const emp = doc.data();
+    
+    document.getElementById('modalEmpresaTitulo').textContent = emp.razaoSocial || emp.nomeFantasia;
+    
+    const campanha = emp.campanha || {};
+    
+    let html = `
+        <div class="row">
+            <div class="col-md-6">
+                <h6 class="text-muted">Informações Coletadas</h6>
+                <table class="table table-sm">
+                    <tr>
+                        <th>Funcionários:</th>
+                        <td>${emp.funcionariosQtd || '-'}</td>
+                    </tr>
+                    <tr>
+                        <th>E-mail Responsável:</th>
+                        <td>${emp.emailResponsavel || '-'}</td>
+                    </tr>
+                </table>
+                
+                ${emp.socios?.length ? `
+                    <h6 class="text-muted mt-3">Sócios</h6>
+                    <ul class="list-group list-group-flush">
+                        ${emp.socios.map(s => `
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>${s.nome}</span>
+                                <span class="text-muted">${formatarData(s.dataNascimento)}</span>
+                            </li>
+                        `).join('')}
+                    </ul>
+                ` : ''}
+            </div>
+            
+            <div class="col-md-6">
+                <h6 class="text-muted">Status Dental</h6>
+                <ul class="list-group list-group-flush mb-3">
+                    <li class="list-group-item">${campanha.dental?.emailEnviado ? '✅' : '⬜'} E-mail enviado ${campanha.dental?.email ? `(${campanha.dental.email})` : ''}</li>
+                    <li class="list-group-item">${campanha.dental?.reuniaoConfirmada ? '✅' : '⬜'} Reunião confirmada</li>
+                    <li class="list-group-item">${campanha.dental?.entendeuConfirmado ? '✅' : '⬜'} Entendeu benefícios</li>
+                    <li class="list-group-item">${campanha.dental?.decisaoRegistrada ? '✅' : '⬜'} Decisão: ${campanha.dental?.decisao || '-'}</li>
+                    ${campanha.dental?.justificativa ? `<li class="list-group-item text-muted small">"${campanha.dental.justificativa}"</li>` : ''}
+                    <li class="list-group-item">${campanha.dental?.fechouNegocio ? '✅' : '⬜'} Negócio fechado</li>
+                </ul>
+                
+                <h6 class="text-muted">Status Saúde</h6>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item">${campanha.saude?.emailEnviado ? '✅' : '⬜'} E-mail enviado ${campanha.saude?.email ? `(${campanha.saude.email})` : ''}</li>
+                    <li class="list-group-item">${campanha.saude?.reuniaoConfirmada ? '✅' : '⬜'} Reunião confirmada</li>
+                    <li class="list-group-item">${campanha.saude?.entendeuConfirmado ? '✅' : '⬜'} Entendeu benefícios</li>
+                    <li class="list-group-item">${campanha.saude?.decisaoRegistrada ? '✅' : '⬜'} Decisão: ${campanha.saude?.decisao || '-'}</li>
+                    ${campanha.saude?.justificativa ? `<li class="list-group-item text-muted small">"${campanha.saude.justificativa}"</li>` : ''}
+                    <li class="list-group-item">${campanha.saude?.fechouNegocio ? '✅' : '⬜'} Negócio fechado</li>
+                </ul>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('detalheEmpresaConteudo').innerHTML = html;
+    
+    new bootstrap.Modal(document.getElementById('modalDetalheEmpresa')).show();
 }
 
-// ==== Filtros ====
-function filtrarRanking() {
-  renderizarRanking();
+// Exportar ranking
+async function exportarRanking() {
+    const db = firebase.firestore();
+    const dados = [];
+    
+    for (const campanha of campanhas) {
+        const participantesSnap = await db.collection('campanhas').doc(campanha.id)
+            .collection('participantes')
+            .orderBy('pontos', 'desc')
+            .get();
+        
+        participantesSnap.docs.forEach((doc, idx) => {
+            const p = doc.data();
+            dados.push({
+                Campanha: campanha.nome,
+                Posicao: idx + 1,
+                Nome: p.nome,
+                Agencia: p.agenciaNome,
+                Pontos: p.pontos || 0,
+                Email: p.email,
+                Telefone: p.telefone
+            });
+        });
+    }
+    
+    exportarExcel(dados, 'ranking-campanhas');
 }
 
-function filtrarAcoes() {
-  renderizarAcoes();
+// Exportar empresas
+async function exportarEmpresas() {
+    const db = firebase.firestore();
+    const empresasSnap = await db.collection('empresas').get();
+    
+    const dados = empresasSnap.docs.filter(doc => {
+        const emp = doc.data();
+        return emp.funcionariosQtd || emp.socios?.length || emp.campanha;
+    }).map(doc => {
+        const emp = doc.data();
+        const campanha = emp.campanha || {};
+        
+        return {
+            Empresa: emp.razaoSocial || emp.nomeFantasia,
+            CNPJ: emp.cnpj,
+            Funcionarios: emp.funcionariosQtd || '',
+            Socios: emp.socios?.map(s => `${s.nome} (${s.dataNascimento})`).join('; ') || '',
+            EmailResponsavel: emp.emailResponsavel || '',
+            DentalEmail: campanha.dental?.email || '',
+            DentalDecisao: campanha.dental?.decisao || '',
+            DentalJustificativa: campanha.dental?.justificativa || '',
+            DentalFechou: campanha.dental?.fechouNegocio ? 'Sim' : 'Não',
+            SaudeEmail: campanha.saude?.email || '',
+            SaudeDecisao: campanha.saude?.decisao || '',
+            SaudeJustificativa: campanha.saude?.justificativa || '',
+            SaudeFechou: campanha.saude?.fechouNegocio ? 'Sim' : 'Não'
+        };
+    });
+    
+    exportarExcel(dados, 'empresas-campanha');
 }
 
-// ==== Exportar Relatório Geral ====
-function exportarRelatorio() {
-  // Participantes
-  const partDados = PARTICIPANTES_TODOS.map((p, idx) => ({
-    "Posição": idx + 1,
-    "Nome": p.nome,
-    "Agência": p.agenciaNome,
-    "Campanha": p.campanhaNome,
-    "Pontos": p.pontos
-  }));
-  
-  const ws = XLSX.utils.json_to_sheet(partDados);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Ranking");
-  
-  // Ações
-  const acoesDados = ACOES_TODAS.map(a => ({
-    "Data": fmtDataHora(a.dataRegistro),
-    "Campanha": a.campanhaNome,
-    "Participante": a.participanteNome,
-    "Empresa": a.empresaNome,
-    "Ação": a.tipo,
-    "Pontos": a.pontos
-  }));
-  const wsAcoes = XLSX.utils.json_to_sheet(acoesDados);
-  XLSX.utils.book_append_sheet(wb, wsAcoes, "Ações");
-  
-  XLSX.writeFile(wb, `relatorio-campanhas-${new Date().toISOString().slice(0, 10)}.xlsx`);
+// Exportar ações
+async function exportarAcoes() {
+    const db = firebase.firestore();
+    const dados = [];
+    
+    for (const campanha of campanhas) {
+        const acoesSnap = await db.collection('campanhas').doc(campanha.id)
+            .collection('acoes')
+            .orderBy('dataRegistro', 'desc')
+            .get();
+        
+        acoesSnap.docs.forEach(doc => {
+            const a = doc.data();
+            dados.push({
+                Campanha: campanha.nome,
+                Participante: a.participanteNome,
+                Empresa: a.empresaNome,
+                Tipo: a.tipo,
+                Pontos: a.pontos,
+                Data: a.dataRegistro?.toDate().toLocaleDateString('pt-BR') || ''
+            });
+        });
+    }
+    
+    exportarExcel(dados, 'acoes-campanhas');
 }
 
-// ==== Globals ====
-window.trocarTab = trocarTab;
-window.abrirModalNovaCampanha = abrirModalNovaCampanha;
-window.fecharModal = fecharModal;
-window.criarCampanha = criarCampanha;
-window.gerenciarCampanha = gerenciarCampanha;
-window.abrirModalNovoParticipante = abrirModalNovoParticipante;
-window.adicionarParticipante = adicionarParticipante;
-window.verLinkParticipante = verLinkParticipante;
-window.copiarLink = copiarLink;
-window.enviarWhatsApp = enviarWhatsApp;
-window.removerParticipante = removerParticipante;
-window.encerrarCampanha = encerrarCampanha;
-window.reativarCampanha = reativarCampanha;
-window.exportarCampanha = exportarCampanha;
-window.filtrarRanking = filtrarRanking;
-window.filtrarAcoes = filtrarAcoes;
-window.exportarRelatorio = exportarRelatorio;
+// Função para exportar Excel
+function exportarExcel(dados, nomeArquivo) {
+    const ws = XLSX.utils.json_to_sheet(dados);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    XLSX.writeFile(wb, `${nomeArquivo}_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+// Confirmar exclusão de campanha
+async function confirmarExcluirCampanha() {
+    if (!confirm('ATENÇÃO: Isso irá excluir a campanha e todos os dados de participantes. Continuar?')) return;
+    
+    try {
+        const db = firebase.firestore();
+        
+        // Excluir participantes
+        const participantesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('participantes').get();
+        for (const doc of participantesSnap.docs) {
+            await doc.ref.delete();
+        }
+        
+        // Excluir ações
+        const acoesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('acoes').get();
+        for (const doc of acoesSnap.docs) {
+            await doc.ref.delete();
+        }
+        
+        // Excluir campanha
+        await db.collection('campanhas').doc(campanhaAtual.id).delete();
+        
+        bootstrap.Modal.getInstance(document.getElementById('modalGerenciarCampanha')).hide();
+        
+        alert('Campanha excluída');
+        await carregarCampanhas();
+        
+    } catch (error) {
+        console.error('Erro ao excluir:', error);
+        alert('Erro ao excluir campanha');
+    }
+}
+
+// Utilitários
+function formatarData(data) {
+    if (!data) return '';
+    const d = new Date(data + 'T00:00:00');
+    return d.toLocaleDateString('pt-BR');
+}
+
+// =====================================================
+// PESQUISAS DE COLABORADORES
+// =====================================================
+
+let pesquisaAtual = null;
+
+// Carregar pesquisas
+async function carregarPesquisas() {
+    const db = firebase.firestore();
+    const container = document.getElementById('listaPesquisas');
+    
+    try {
+        const pesquisasSnap = await db.collection('pesquisas_colaboradores')
+            .orderBy('dataCriacao', 'desc')
+            .get();
+        
+        if (pesquisasSnap.empty) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-clipboard-data" style="font-size: 2rem;"></i>
+                    <p class="mt-2">Nenhuma pesquisa criada ainda</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = pesquisasSnap.docs.map(doc => {
+            const p = doc.data();
+            const progresso = Math.min((p.totalRespostas || 0) / 10 * 100, 100);
+            const corProgresso = progresso >= 100 ? 'success' : progresso >= 50 ? 'warning' : 'info';
+            
+            return `
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h5 class="mb-1">${p.empresaNome || 'Empresa'}</h5>
+                                <p class="text-muted mb-2 small">
+                                    <i class="bi bi-people"></i> ${p.funcionariosQtd || 0} funcionários
+                                    • Enviada por: ${p.participanteNome || '-'}
+                                </p>
+                            </div>
+                            <div class="text-end">
+                                <span class="badge bg-${corProgresso}">${p.totalRespostas || 0} respostas</span>
+                            </div>
+                        </div>
+                        
+                        <div class="progress mb-2" style="height: 8px;">
+                            <div class="progress-bar bg-${corProgresso}" style="width: ${progresso}%"></div>
+                        </div>
+                        <small class="text-muted">${Math.round(progresso)}% da meta (10 respostas)</small>
+                        
+                        <div class="mt-3">
+                            <button class="btn btn-sm btn-primary" onclick="verDetalhesPesquisa('${doc.id}')">
+                                <i class="bi bi-eye"></i> Ver Respostas
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="copiarLinkPesquisa('${doc.id}', '${p.empresaId}')">
+                                <i class="bi bi-link-45deg"></i> Copiar Link
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch (error) {
+        console.error('Erro ao carregar pesquisas:', error);
+        container.innerHTML = '<p class="text-danger">Erro ao carregar pesquisas</p>';
+    }
+}
+
+// Ver detalhes da pesquisa
+async function verDetalhesPesquisa(pesquisaId) {
+    const db = firebase.firestore();
+    
+    try {
+        // Carregar pesquisa
+        const pesquisaDoc = await db.collection('pesquisas_colaboradores').doc(pesquisaId).get();
+        if (!pesquisaDoc.exists) {
+            alert('Pesquisa não encontrada');
+            return;
+        }
+        
+        pesquisaAtual = { id: pesquisaDoc.id, ...pesquisaDoc.data() };
+        
+        // Carregar respostas
+        const respostasSnap = await db.collection('pesquisas_colaboradores').doc(pesquisaId)
+            .collection('respostas')
+            .orderBy('dataResposta', 'desc')
+            .get();
+        
+        pesquisaAtual.respostas = respostasSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // Atualizar modal
+        document.getElementById('modalPesquisaTitulo').innerHTML = `
+            <i class="bi bi-clipboard-data"></i> ${pesquisaAtual.empresaNome} - ${pesquisaAtual.respostas.length} respostas
+        `;
+        
+        // Calcular estatísticas
+        const stats = calcularEstatisticasPesquisa(pesquisaAtual.respostas);
+        
+        document.getElementById('detalhePesquisaConteudo').innerHTML = `
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card bg-light text-center p-3">
+                        <h3 class="mb-0 text-primary">${pesquisaAtual.respostas.length}</h3>
+                        <small>Respostas</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-light text-center p-3">
+                        <h3 class="mb-0 text-success">${stats.dentalSim}</h3>
+                        <small>Interessados Dental</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-light text-center p-3">
+                        <h3 class="mb-0 text-danger">${stats.saudeSim}</h3>
+                        <small>Interessados Saúde</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-light text-center p-3">
+                        <h3 class="mb-0 text-info">${stats.mediaIdade.toFixed(0)}</h3>
+                        <small>Idade Média</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            <i class="bi bi-emoji-smile"></i> Plano Dental
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-around text-center">
+                                <div>
+                                    <h4 class="text-success">${stats.dentalSim}</h4>
+                                    <small>Contratariam</small>
+                                </div>
+                                <div>
+                                    <h4 class="text-danger">${stats.dentalNao}</h4>
+                                    <small>Não contratariam</small>
+                                </div>
+                            </div>
+                            <hr>
+                            <p class="mb-1"><strong>Média de dependentes:</strong> ${stats.mediaDependentesDental.toFixed(1)}</p>
+                            <p class="mb-0"><strong>Potencial mensal:</strong> R$ ${stats.potencialDental.toFixed(2).replace('.', ',')}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-danger text-white">
+                            <i class="bi bi-heart-pulse"></i> Plano Saúde
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-around text-center">
+                                <div>
+                                    <h4 class="text-success">${stats.saudeSim}</h4>
+                                    <small>Contratariam</small>
+                                </div>
+                                <div>
+                                    <h4 class="text-danger">${stats.saudeNao}</h4>
+                                    <small>Não contratariam</small>
+                                </div>
+                            </div>
+                            <hr>
+                            <p class="mb-1"><strong>Média de dependentes:</strong> ${stats.mediaDependentesSaude.toFixed(1)}</p>
+                            <p class="mb-0"><strong>Potencial mensal:</strong> R$ ${stats.potencialSaude.toFixed(2).replace('.', ',')}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <h6 class="mb-3"><i class="bi bi-list-ul"></i> Respostas Individuais</h6>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Idade</th>
+                            <th>Dental?</th>
+                            <th>Dep. Dental</th>
+                            <th>Saúde?</th>
+                            <th>Dep. Saúde</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pesquisaAtual.respostas.map(r => `
+                            <tr>
+                                <td>${r.idade || '-'}</td>
+                                <td>${r.dentalInteresse === 'sim' ? '✅' : '❌'}</td>
+                                <td>${r.dentalDependentes || 0}</td>
+                                <td>${r.saudeInteresse === 'sim' ? '✅' : '❌'}</td>
+                                <td>${r.saudeDependentes?.length || 0}</td>
+                                <td>${r.dataResposta?.toDate().toLocaleDateString('pt-BR') || '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+        
+        new bootstrap.Modal(document.getElementById('modalDetalhePesquisa')).show();
+        
+    } catch (error) {
+        console.error('Erro ao carregar pesquisa:', error);
+        alert('Erro ao carregar detalhes');
+    }
+}
+
+// Calcular estatísticas da pesquisa
+function calcularEstatisticasPesquisa(respostas) {
+    const stats = {
+        dentalSim: 0,
+        dentalNao: 0,
+        saudeSim: 0,
+        saudeNao: 0,
+        mediaIdade: 0,
+        mediaDependentesDental: 0,
+        mediaDependentesSaude: 0,
+        potencialDental: 0,
+        potencialSaude: 0
+    };
+    
+    if (respostas.length === 0) return stats;
+    
+    let totalIdade = 0;
+    let totalDepDental = 0;
+    let totalDepSaude = 0;
+    
+    const VALOR_DENTAL = 18.15;
+    
+    respostas.forEach(r => {
+        totalIdade += r.idade || 0;
+        
+        // Dental
+        if (r.dentalInteresse === 'sim') {
+            stats.dentalSim++;
+            stats.potencialDental += VALOR_DENTAL; // Titular
+            const deps = r.dentalDependentes || 0;
+            totalDepDental += deps;
+            stats.potencialDental += deps * VALOR_DENTAL; // Dependentes
+        } else {
+            stats.dentalNao++;
+        }
+        
+        // Saúde
+        if (r.saudeInteresse === 'sim') {
+            stats.saudeSim++;
+            stats.potencialSaude += r.saudeValorTitular || 0;
+            
+            const depsSaude = r.saudeDependentes || [];
+            totalDepSaude += depsSaude.length;
+            depsSaude.forEach(d => {
+                stats.potencialSaude += d.valor || 0;
+            });
+        } else {
+            stats.saudeNao++;
+        }
+    });
+    
+    stats.mediaIdade = totalIdade / respostas.length;
+    stats.mediaDependentesDental = stats.dentalSim > 0 ? totalDepDental / stats.dentalSim : 0;
+    stats.mediaDependentesSaude = stats.saudeSim > 0 ? totalDepSaude / stats.saudeSim : 0;
+    
+    return stats;
+}
+
+// Copiar link da pesquisa
+function copiarLinkPesquisa(pesquisaId, empresaId) {
+    const baseUrl = window.location.origin + window.location.pathname.replace('campanhas-admin.html', 'pesquisa-colaboradores.html');
+    const link = `${baseUrl}?p=${pesquisaId}&e=${empresaId}`;
+    
+    navigator.clipboard.writeText(link).then(() => {
+        alert('Link copiado para a área de transferência!');
+    }).catch(() => {
+        prompt('Copie o link:', link);
+    });
+}
+
+// Exportar respostas da pesquisa atual
+function exportarRespostasPesquisa() {
+    if (!pesquisaAtual || !pesquisaAtual.respostas) {
+        alert('Nenhuma pesquisa selecionada');
+        return;
+    }
+    
+    const dados = pesquisaAtual.respostas.map(r => ({
+        Idade: r.idade,
+        'Dental - Interesse': r.dentalInteresse === 'sim' ? 'Sim' : 'Não',
+        'Dental - Dependentes': r.dentalDependentes || 0,
+        'Saúde - Interesse': r.saudeInteresse === 'sim' ? 'Sim' : 'Não',
+        'Saúde - Valor Titular': r.saudeValorTitular || 0,
+        'Saúde - Qtd Dependentes': r.saudeDependentes?.length || 0,
+        'Saúde - Interesse Dependentes': r.saudeDepInteresse || '-',
+        'Data Resposta': r.dataResposta?.toDate().toLocaleDateString('pt-BR') || ''
+    }));
+    
+    exportarExcel(dados, `pesquisa-${pesquisaAtual.empresaNome || 'empresa'}`);
+}
+
+// Exportar todas as pesquisas
+async function exportarPesquisas() {
+    const db = firebase.firestore();
+    const dados = [];
+    
+    try {
+        const pesquisasSnap = await db.collection('pesquisas_colaboradores').get();
+        
+        for (const pesquisaDoc of pesquisasSnap.docs) {
+            const p = pesquisaDoc.data();
+            
+            // Carregar respostas
+            const respostasSnap = await db.collection('pesquisas_colaboradores').doc(pesquisaDoc.id)
+                .collection('respostas').get();
+            
+            const stats = calcularEstatisticasPesquisa(respostasSnap.docs.map(d => d.data()));
+            
+            dados.push({
+                Empresa: p.empresaNome,
+                CNPJ: p.empresaCnpj,
+                Funcionarios: p.funcionariosQtd,
+                'Total Respostas': p.totalRespostas || 0,
+                'Interessados Dental': stats.dentalSim,
+                'Não Interessados Dental': stats.dentalNao,
+                'Potencial Dental (R$)': stats.potencialDental.toFixed(2),
+                'Interessados Saúde': stats.saudeSim,
+                'Não Interessados Saúde': stats.saudeNao,
+                'Potencial Saúde (R$)': stats.potencialSaude.toFixed(2),
+                'Participante': p.participanteNome,
+                'Data Criação': p.dataCriacao?.toDate().toLocaleDateString('pt-BR') || ''
+            });
+        }
+        
+        exportarExcel(dados, 'relatorio-pesquisas');
+        
+    } catch (error) {
+        console.error('Erro ao exportar:', error);
+        alert('Erro ao exportar pesquisas');
+    }
+}
