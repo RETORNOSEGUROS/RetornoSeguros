@@ -235,8 +235,8 @@ function renderizarEmpresas(filtro = '') {
                     </div>
                 </div>
                 <div class="empresa-status">
-                    ${emp.funcionariosQtd ? `<span class="status-badge ok">👥 ${emp.funcionariosQtd} func.</span>` : '<span class="status-badge pending">👥 Func. pendente</span>'}
-                    ${emp.socios?.length ? `<span class="status-badge ok">👤 ${emp.socios.length} sócio(s)</span>` : '<span class="status-badge pending">👤 Sócios pendente</span>'}
+                    ${campanha.funcionariosQtd ? `<span class="status-badge ok">👥 ${campanha.funcionariosQtd} func.</span>` : '<span class="status-badge pending">👥 Func. pendente</span>'}
+                    ${campanha.socios?.length ? `<span class="status-badge ok">👤 ${campanha.socios.length} sócio(s)</span>` : '<span class="status-badge pending">👤 Sócios pendente</span>'}
                     ${campanha.dental?.emailEnviado ? '<span class="status-badge ok">🦷 Dental</span>' : ''}
                     ${campanha.saude?.emailEnviado ? '<span class="status-badge ok">❤️ Saúde</span>' : ''}
                 </div>
@@ -253,7 +253,8 @@ function calcularStatusEmpresa(emp) {
         return { classe: 'concluida', cor: 'success', texto: '✅ Concluída' };
     }
     
-    if (emp.funcionariosQtd || emp.socios?.length || campanha.dental?.emailEnviado || campanha.saude?.emailEnviado) {
+    // Usar campos da campanha (separados do sistema existente)
+    if (campanha.funcionariosQtd || campanha.socios?.length || campanha.dental?.emailEnviado || campanha.saude?.emailEnviado) {
         return { classe: 'andamento', cor: 'warning', texto: '🔄 Em andamento' };
     }
     
@@ -266,8 +267,9 @@ function calcularProgressoEmpresa(emp) {
     let pontos = 0;
     let total = 183; // Total possível: 5+10+8+10+15+15+12+12+8+8+40+40
     
-    if (emp.funcionariosQtd) pontos += 5;
-    if (emp.socios?.length) pontos += 10;
+    // Usar campos da campanha (separados do sistema existente)
+    if (campanha.funcionariosQtd) pontos += 5;
+    if (campanha.socios?.length) pontos += 10;
     
     // Dental
     if (campanha.dental?.emailEnviado) pontos += 8;
@@ -291,7 +293,9 @@ async function abrirEmpresa(empresaId) {
     empresaAtual = empresasData.find(e => e.id === empresaId);
     if (!empresaAtual) return;
     
-    sociosTemp = [...(empresaAtual.socios || [])];
+    // Usar sócios da campanha (separados do sistema existente)
+    const campanha = empresaAtual.campanha || {};
+    sociosTemp = [...(campanha.socios || [])];
     
     // Função auxiliar para pegar nome da empresa
     const nomeEmpresa = empresaAtual.razaoSocial || empresaAtual.nomeFantasia || empresaAtual.nome || empresaAtual.empresa || 'Empresa';
@@ -331,15 +335,16 @@ function toggleSecao(secao) {
 // Atualizar seção de informações
 function atualizarSecaoInfo() {
     const emp = empresaAtual;
+    const campanha = emp.campanha || {};
     let pontosInfo = 0;
     
-    // Funcionários
-    if (emp.funcionariosQtd) {
+    // Funcionários (usar campo da campanha)
+    if (campanha.funcionariosQtd) {
         pontosInfo += 5;
         document.getElementById('acaoFuncionarios').classList.add('concluida');
         document.getElementById('formFuncionarios').style.display = 'none';
         document.getElementById('funcionariosOk').style.display = 'block';
-        document.getElementById('funcionariosValor').textContent = emp.funcionariosQtd;
+        document.getElementById('funcionariosValor').textContent = campanha.funcionariosQtd;
     } else {
         document.getElementById('acaoFuncionarios').classList.remove('concluida');
         document.getElementById('formFuncionarios').style.display = 'block';
@@ -347,14 +352,14 @@ function atualizarSecaoInfo() {
         document.getElementById('inputFuncionarios').value = '';
     }
     
-    // Sócios
-    if (emp.socios?.length) {
+    // Sócios (usar campo da campanha)
+    if (campanha.socios?.length) {
         pontosInfo += 10;
         document.getElementById('acaoSocios').classList.add('concluida');
         document.getElementById('formSocios').style.display = 'none';
         document.getElementById('btnConfirmarSocios').style.display = 'none';
         document.getElementById('sociosOk').style.display = 'block';
-        renderizarListaSocios(emp.socios, true);
+        renderizarListaSocios(campanha.socios, true);
     } else {
         document.getElementById('acaoSocios').classList.remove('concluida');
         document.getElementById('formSocios').style.display = 'block';
@@ -426,11 +431,11 @@ async function confirmarSocios() {
     try {
         const db = firebase.firestore();
         
-        // Atualizar empresa
+        // Atualizar empresa - salvar dentro de campanha para não interferir no sistema existente
         await db.collection('empresas').doc(empresaAtual.id).update({
-            socios: sociosTemp,
-            sociosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-            sociosAtualizadoPor: participanteId
+            'campanha.socios': sociosTemp,
+            'campanha.sociosAtualizadoEm': firebase.firestore.FieldValue.serverTimestamp(),
+            'campanha.sociosAtualizadoPor': participanteId
         });
         
         // Registrar ação
@@ -440,7 +445,8 @@ async function confirmarSocios() {
         });
         
         // Atualizar dados locais
-        empresaAtual.socios = [...sociosTemp];
+        empresaAtual.campanha = empresaAtual.campanha || {};
+        empresaAtual.campanha.socios = [...sociosTemp];
         const idx = empresasData.findIndex(e => e.id === empresaAtual.id);
         if (idx >= 0) empresasData[idx] = empresaAtual;
         
@@ -469,11 +475,11 @@ async function salvarFuncionarios() {
     try {
         const db = firebase.firestore();
         
-        // Atualizar empresa
+        // Atualizar empresa - salvar dentro de campanha para não interferir no sistema existente
         await db.collection('empresas').doc(empresaAtual.id).update({
-            funcionariosQtd: qtd,
-            funcionariosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-            funcionariosAtualizadoPor: participanteId
+            'campanha.funcionariosQtd': qtd,
+            'campanha.funcionariosAtualizadoEm': firebase.firestore.FieldValue.serverTimestamp(),
+            'campanha.funcionariosAtualizadoPor': participanteId
         });
         
         // Registrar ação
@@ -482,7 +488,8 @@ async function salvarFuncionarios() {
         });
         
         // Atualizar dados locais
-        empresaAtual.funcionariosQtd = qtd;
+        empresaAtual.campanha = empresaAtual.campanha || {};
+        empresaAtual.campanha.funcionariosQtd = qtd;
         const idx = empresasData.findIndex(e => e.id === empresaAtual.id);
         if (idx >= 0) empresasData[idx] = empresaAtual;
         
@@ -492,6 +499,7 @@ async function salvarFuncionarios() {
         // Atualizar interface
         atualizarSecaoInfo();
         atualizarSecaoDental();
+        atualizarSecaoPesquisa();
         
     } catch (error) {
         console.error('Erro ao salvar funcionários:', error);
@@ -502,11 +510,12 @@ async function salvarFuncionarios() {
 // Atualizar seção Dental
 function atualizarSecaoDental() {
     const emp = empresaAtual;
-    const campanha = emp.campanha?.dental || {};
+    const campanha = emp.campanha || {};
+    const campanhaD = campanha.dental || {};
     let pontosDental = 0;
     
-    // Verificar se está desbloqueado (precisa ter funcionários)
-    const desbloqueado = !!emp.funcionariosQtd;
+    // Verificar se está desbloqueado (precisa ter funcionários na campanha)
+    const desbloqueado = !!campanha.funcionariosQtd;
     
     if (desbloqueado) {
         document.getElementById('dentalBloqueado').style.display = 'none';
@@ -519,12 +528,12 @@ function atualizarSecaoDental() {
     }
     
     // E-mail
-    if (campanha.emailEnviado) {
+    if (campanhaD.emailEnviado) {
         pontosDental += 8;
         document.getElementById('acaoEmailDental').classList.add('concluida');
         document.getElementById('formEmailDental').style.display = 'none';
         document.getElementById('emailDentalOk').style.display = 'block';
-        document.getElementById('emailDentalValor').textContent = campanha.email || '';
+        document.getElementById('emailDentalValor').textContent = campanhaD.email || '';
     } else {
         document.getElementById('acaoEmailDental').classList.remove('concluida');
         document.getElementById('formEmailDental').style.display = 'block';
@@ -532,7 +541,7 @@ function atualizarSecaoDental() {
     }
     
     // Reunião
-    if (campanha.reuniaoConfirmada) {
+    if (campanhaD.reuniaoConfirmada) {
         pontosDental += 15;
         document.getElementById('acaoReuniaoDental').classList.add('concluida');
         document.getElementById('reuniaoDentalPendente').style.display = 'none';
@@ -545,7 +554,7 @@ function atualizarSecaoDental() {
     }
     
     // Entendeu
-    if (campanha.entendeuConfirmado) {
+    if (campanhaD.entendeuConfirmado) {
         pontosDental += 12;
         document.getElementById('acaoEntendeuDental').classList.add('concluida');
         document.getElementById('entendeuDentalPendente').style.display = 'none';
@@ -558,7 +567,7 @@ function atualizarSecaoDental() {
     }
     
     // Decisão
-    if (campanha.decisaoRegistrada) {
+    if (campanhaD.decisaoRegistrada) {
         pontosDental += 8;
         document.getElementById('acaoDecisaoDental').classList.add('concluida');
         document.getElementById('formDecisaoDental').style.display = 'none';
@@ -570,7 +579,7 @@ function atualizarSecaoDental() {
     }
     
     // Fechou negócio
-    if (campanha.fechouNegocio) {
+    if (campanhaD.fechouNegocio) {
         pontosDental += 40;
         document.getElementById('acaoFechouDental').style.display = 'block';
     } else {
@@ -583,11 +592,12 @@ function atualizarSecaoDental() {
 // Atualizar seção Saúde
 function atualizarSecaoSaude() {
     const emp = empresaAtual;
-    const campanha = emp.campanha?.saude || {};
+    const campanha = emp.campanha || {};
+    const campanhaS = campanha.saude || {};
     let pontosSaude = 0;
     
-    // Verificar se está desbloqueado (precisa ter sócios)
-    const desbloqueado = emp.socios?.length > 0;
+    // Verificar se está desbloqueado (precisa ter sócios na campanha)
+    const desbloqueado = campanha.socios?.length > 0;
     
     if (desbloqueado) {
         document.getElementById('saudeBloqueado').style.display = 'none';
@@ -600,12 +610,12 @@ function atualizarSecaoSaude() {
     }
     
     // E-mail
-    if (campanha.emailEnviado) {
+    if (campanhaS.emailEnviado) {
         pontosSaude += 10;
         document.getElementById('acaoEmailSaude').classList.add('concluida');
         document.getElementById('formEmailSaude').style.display = 'none';
         document.getElementById('emailSaudeOk').style.display = 'block';
-        document.getElementById('emailSaudeValor').textContent = campanha.email || '';
+        document.getElementById('emailSaudeValor').textContent = campanhaS.email || '';
     } else {
         document.getElementById('acaoEmailSaude').classList.remove('concluida');
         document.getElementById('formEmailSaude').style.display = 'block';
@@ -613,7 +623,7 @@ function atualizarSecaoSaude() {
     }
     
     // Reunião
-    if (campanha.reuniaoConfirmada) {
+    if (campanhaS.reuniaoConfirmada) {
         pontosSaude += 15;
         document.getElementById('acaoReuniaoSaude').classList.add('concluida');
         document.getElementById('reuniaoSaudePendente').style.display = 'none';
@@ -626,7 +636,7 @@ function atualizarSecaoSaude() {
     }
     
     // Entendeu
-    if (campanha.entendeuConfirmado) {
+    if (campanhaS.entendeuConfirmado) {
         pontosSaude += 12;
         document.getElementById('acaoEntendeuSaude').classList.add('concluida');
         document.getElementById('entendeuSaudePendente').style.display = 'none';
@@ -639,7 +649,7 @@ function atualizarSecaoSaude() {
     }
     
     // Decisão
-    if (campanha.decisaoRegistrada) {
+    if (campanhaS.decisaoRegistrada) {
         pontosSaude += 8;
         document.getElementById('acaoDecisaoSaude').classList.add('concluida');
         document.getElementById('formDecisaoSaude').style.display = 'none';
@@ -651,7 +661,7 @@ function atualizarSecaoSaude() {
     }
     
     // Fechou negócio
-    if (campanha.fechouNegocio) {
+    if (campanhaS.fechouNegocio) {
         pontosSaude += 40;
         document.getElementById('acaoFechouSaude').style.display = 'block';
     } else {
@@ -1033,8 +1043,9 @@ function validarEmail(email) {
 // Gerar pesquisa de colaboradores
 async function gerarPesquisa() {
     const emp = empresaAtual;
+    const campanha = emp.campanha || {};
     
-    if (!emp.funcionariosQtd) {
+    if (!campanha.funcionariosQtd) {
         alert('Informe o número de funcionários antes de gerar a pesquisa');
         return;
     }
@@ -1047,7 +1058,7 @@ async function gerarPesquisa() {
             empresaId: emp.id,
             empresaNome: emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa',
             empresaCnpj: emp.cnpj,
-            funcionariosQtd: emp.funcionariosQtd,
+            funcionariosQtd: campanha.funcionariosQtd,
             campanhaId: campanhaId,
             participanteId: participanteId,
             participanteNome: participanteData.nome,
@@ -1288,8 +1299,9 @@ async function verificarRespostasPesquisa() {
 // Atualizar seção de pesquisa
 function atualizarSecaoPesquisa() {
     const emp = empresaAtual;
-    const pesquisa = emp.campanha?.pesquisa || {};
-    const funcionarios = emp.funcionariosQtd || 0;
+    const campanha = emp.campanha || {};
+    const pesquisa = campanha.pesquisa || {};
+    const funcionarios = campanha.funcionariosQtd || 0;
     
     const container = document.getElementById('secaoPesquisa');
     if (!container) return;
