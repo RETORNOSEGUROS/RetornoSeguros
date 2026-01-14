@@ -9,6 +9,33 @@ let agencias = [];
 let campanhaAtual = null;
 let participanteAtual = null;
 
+// Função auxiliar para pegar nome da empresa
+function getNomeEmpresa(emp) {
+    if (!emp) return 'Empresa';
+    
+    // Tentar campos diretos primeiro
+    if (emp.razaoSocial) return emp.razaoSocial;
+    if (emp.nomeFantasia) return emp.nomeFantasia;
+    if (emp.nome) return emp.nome;
+    if (emp.empresa) return emp.empresa;
+    if (emp.denominacao) return emp.denominacao;
+    if (emp.razao_social) return emp.razao_social;
+    if (emp.nome_fantasia) return emp.nome_fantasia;
+    
+    // Tentar dentro de campanha
+    if (emp.campanha?.empresaNome) return emp.campanha.empresaNome;
+    
+    // Tentar dentro de dados
+    if (emp.dados?.razaoSocial) return emp.dados.razaoSocial;
+    if (emp.dados?.nomeFantasia) return emp.dados.nomeFantasia;
+    if (emp.dados?.nome) return emp.dados.nome;
+    
+    // Log para debug (pode remover depois)
+    console.log('Empresa sem nome detectada:', Object.keys(emp));
+    
+    return 'Empresa';
+}
+
 // Aguardar Firebase carregar
 function waitForFirebase() {
     return new Promise((resolve) => {
@@ -560,7 +587,7 @@ async function carregarAcoesPendentes() {
         if (campanha.dental?.emailEnviado && !campanha.dental?.reuniaoConfirmada) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'reuniaoDental',
                 label: 'Confirmar Reunião Dental',
                 pontos: 15
@@ -569,7 +596,7 @@ async function carregarAcoesPendentes() {
         if (campanha.dental?.reuniaoConfirmada && !campanha.dental?.entendeuConfirmado) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'entendeuDental',
                 label: 'Confirmar Entendimento Dental',
                 pontos: 12
@@ -578,7 +605,7 @@ async function carregarAcoesPendentes() {
         if (campanha.dental?.decisao === 'fechou' && !campanha.dental?.fechouNegocio) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'fechouDental',
                 label: 'Confirmar Negócio Dental',
                 pontos: 40
@@ -589,7 +616,7 @@ async function carregarAcoesPendentes() {
         if (campanha.saude?.emailEnviado && !campanha.saude?.reuniaoConfirmada) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'reuniaoSaude',
                 label: 'Confirmar Reunião Saúde',
                 pontos: 15
@@ -598,7 +625,7 @@ async function carregarAcoesPendentes() {
         if (campanha.saude?.reuniaoConfirmada && !campanha.saude?.entendeuConfirmado) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'entendeuSaude',
                 label: 'Confirmar Entendimento Saúde',
                 pontos: 12
@@ -607,7 +634,7 @@ async function carregarAcoesPendentes() {
         if (campanha.saude?.decisao === 'fechou' && !campanha.saude?.fechouNegocio) {
             pendentes.push({
                 empresaId: doc.id,
-                empresaNome: emp.razaoSocial || emp.nomeFantasia,
+                empresaNome: getNomeEmpresa(emp),
                 tipo: 'fechouSaude',
                 label: 'Confirmar Negócio Saúde',
                 pontos: 40
@@ -646,16 +673,23 @@ async function confirmarAcaoAdmin(empresaId, tipo, pontos) {
     try {
         const db = firebase.firestore();
         
-        // Atualizar empresa
-        const campo = tipo.replace('reuniao', 'reuniaoConfirmada')
-                        .replace('entendeu', 'entendeuConfirmado')
-                        .replace('fechou', 'fechouNegocio');
-        
+        // Determinar o ramo (dental ou saude)
         const ramo = tipo.toLowerCase().includes('dental') ? 'dental' : 'saude';
         
+        // Determinar qual campo atualizar
+        let campoUpdate = '';
+        if (tipo.includes('reuniao')) {
+            campoUpdate = 'reuniaoConfirmada';
+        } else if (tipo.includes('entendeu')) {
+            campoUpdate = 'entendeuConfirmado';
+        } else if (tipo.includes('fechou')) {
+            campoUpdate = 'fechouNegocio';
+        }
+        
+        // Atualizar empresa
         await db.collection('empresas').doc(empresaId).update({
-            [`campanha.${ramo}.${campo.replace(ramo.charAt(0).toUpperCase() + ramo.slice(1), '')}`]: true,
-            [`campanha.${ramo}.${campo.replace(ramo.charAt(0).toUpperCase() + ramo.slice(1), '')}Em`]: firebase.firestore.FieldValue.serverTimestamp()
+            [`campanha.${ramo}.${campoUpdate}`]: true,
+            [`campanha.${ramo}.${campoUpdate}Em`]: firebase.firestore.FieldValue.serverTimestamp()
         });
         
         // Encontrar participante que fez a ação e dar pontos
@@ -679,7 +713,7 @@ async function confirmarAcaoAdmin(empresaId, tipo, pontos) {
                             tipo,
                             pontos,
                             empresaId,
-                            empresaNome: empresa.razaoSocial || empresa.nomeFantasia,
+                            empresaNome: getNomeEmpresa(empresa),
                             participanteId,
                             participanteNome: partDoc.data().nome,
                             confirmadoPorAdmin: true,
@@ -711,11 +745,13 @@ async function carregarEmpresasCampanha() {
     
     const empresasComDados = empresasSnap.docs.filter(doc => {
         const emp = doc.data();
-        const temDados = emp.funcionariosQtd || emp.socios?.length || emp.campanha;
+        const campanha = emp.campanha || {};
+        // Verificar se tem dados da campanha
+        const temDados = campanha.funcionariosQtd || campanha.socios?.length || campanha.dental || campanha.saude || campanha.pesquisa;
         if (!temDados) return false;
         
         if (busca) {
-            const nome = (emp.razaoSocial || emp.nomeFantasia || '').toLowerCase();
+            const nome = getNomeEmpresa(emp).toLowerCase();
             return nome.includes(busca);
         }
         return true;
@@ -733,14 +769,15 @@ async function carregarEmpresasCampanha() {
     
     container.innerHTML = empresasComDados.map(emp => {
         const campanha = emp.campanha || {};
+        const nomeEmpresa = getNomeEmpresa(emp);
         return `
             <div class="empresa-card ${campanha.dental || campanha.saude ? 'tem-acao' : ''}">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <strong>${emp.razaoSocial || emp.nomeFantasia}</strong>
+                        <strong>${nomeEmpresa}</strong>
                         <div class="small text-muted mt-1">
-                            ${emp.funcionariosQtd ? `<span class="badge bg-info me-1">👥 ${emp.funcionariosQtd} func.</span>` : ''}
-                            ${emp.socios?.length ? `<span class="badge bg-info me-1">👤 ${emp.socios.length} sócio(s)</span>` : ''}
+                            ${campanha.funcionariosQtd ? `<span class="badge bg-info me-1">👥 ${campanha.funcionariosQtd} func.</span>` : ''}
+                            ${campanha.socios?.length ? `<span class="badge bg-info me-1">👤 ${campanha.socios.length} sócio(s)</span>` : ''}
                             ${campanha.dental?.emailEnviado ? '<span class="badge bg-success me-1">🦷 Dental</span>' : ''}
                             ${campanha.saude?.emailEnviado ? '<span class="badge bg-danger me-1">❤️ Saúde</span>' : ''}
                         </div>
@@ -760,7 +797,7 @@ async function abrirDetalheEmpresa(empresaId) {
     const doc = await db.collection('empresas').doc(empresaId).get();
     const emp = doc.data();
     
-    document.getElementById('modalEmpresaTitulo').textContent = emp.razaoSocial || emp.nomeFantasia;
+    document.getElementById('modalEmpresaTitulo').textContent = getNomeEmpresa(emp);
     
     const campanha = emp.campanha || {};
     
@@ -771,18 +808,18 @@ async function abrirDetalheEmpresa(empresaId) {
                 <table class="table table-sm">
                     <tr>
                         <th>Funcionários:</th>
-                        <td>${emp.funcionariosQtd || '-'}</td>
+                        <td>${campanha.funcionariosQtd || '-'}</td>
                     </tr>
                     <tr>
                         <th>E-mail Responsável:</th>
-                        <td>${emp.emailResponsavel || '-'}</td>
+                        <td>${campanha.dental?.email || campanha.saude?.email || '-'}</td>
                     </tr>
                 </table>
                 
-                ${emp.socios?.length ? `
+                ${campanha.socios?.length ? `
                     <h6 class="text-muted mt-3">Sócios</h6>
                     <ul class="list-group list-group-flush">
-                        ${emp.socios.map(s => `
+                        ${campanha.socios.map(s => `
                             <li class="list-group-item d-flex justify-content-between">
                                 <span>${s.nome}</span>
                                 <span class="text-muted">${formatarData(s.dataNascimento)}</span>
@@ -856,22 +893,22 @@ async function exportarEmpresas() {
     
     const dados = empresasSnap.docs.filter(doc => {
         const emp = doc.data();
-        return emp.funcionariosQtd || emp.socios?.length || emp.campanha;
+        const campanha = emp.campanha || {};
+        return campanha.funcionariosQtd || campanha.socios?.length || campanha.dental || campanha.saude;
     }).map(doc => {
         const emp = doc.data();
         const campanha = emp.campanha || {};
         
         return {
-            Empresa: emp.razaoSocial || emp.nomeFantasia,
+            Empresa: getNomeEmpresa(emp),
             CNPJ: emp.cnpj,
-            Funcionarios: emp.funcionariosQtd || '',
-            Socios: emp.socios?.map(s => `${s.nome} (${s.dataNascimento})`).join('; ') || '',
-            EmailResponsavel: emp.emailResponsavel || '',
-            DentalEmail: campanha.dental?.email || '',
+            Funcionarios: campanha.funcionariosQtd || '',
+            Socios: campanha.socios?.map(s => `${s.nome} (${s.dataNascimento})`).join('; ') || '',
+            EmailDental: campanha.dental?.email || '',
             DentalDecisao: campanha.dental?.decisao || '',
             DentalJustificativa: campanha.dental?.justificativa || '',
             DentalFechou: campanha.dental?.fechouNegocio ? 'Sim' : 'Não',
-            SaudeEmail: campanha.saude?.email || '',
+            EmailSaude: campanha.saude?.email || '',
             SaudeDecisao: campanha.saude?.decisao || '',
             SaudeJustificativa: campanha.saude?.justificativa || '',
             SaudeFechou: campanha.saude?.fechouNegocio ? 'Sim' : 'Não'
