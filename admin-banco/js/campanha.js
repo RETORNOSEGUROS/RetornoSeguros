@@ -191,12 +191,33 @@ function configurarEventos() {
 }
 
 // Renderizar lista de empresas
+// Função auxiliar para pegar nome da empresa (global)
+function getNomeEmpresa(emp) {
+    if (!emp) return 'Empresa';
+    
+    // Tentar campos diretos primeiro
+    if (emp.razaoSocial) return emp.razaoSocial;
+    if (emp.nomeFantasia) return emp.nomeFantasia;
+    if (emp.nome) return emp.nome;
+    if (emp.empresa) return emp.empresa;
+    if (emp.denominacao) return emp.denominacao;
+    if (emp.razao_social) return emp.razao_social;
+    if (emp.nome_fantasia) return emp.nome_fantasia;
+    
+    // Tentar dentro de campanha
+    if (emp.campanha?.empresaNome) return emp.campanha.empresaNome;
+    
+    // Tentar dentro de dados
+    if (emp.dados?.razaoSocial) return emp.dados.razaoSocial;
+    if (emp.dados?.nomeFantasia) return emp.dados.nomeFantasia;
+    if (emp.dados?.nome) return emp.dados.nome;
+    
+    return 'Empresa';
+}
+
 function renderizarEmpresas(filtro = '') {
     const container = document.getElementById('listaEmpresas');
     const filtroLower = filtro.toLowerCase();
-    
-    // Função auxiliar para pegar nome da empresa
-    const getNomeEmpresa = (emp) => emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa';
     
     const empresasFiltradas = empresasData.filter(emp => {
         if (!filtro) return true;
@@ -298,7 +319,7 @@ async function abrirEmpresa(empresaId) {
     sociosTemp = [...(campanha.socios || [])];
     
     // Função auxiliar para pegar nome da empresa
-    const nomeEmpresa = empresaAtual.razaoSocial || empresaAtual.nomeFantasia || empresaAtual.nome || empresaAtual.empresa || 'Empresa';
+    const nomeEmpresa = getNomeEmpresa(empresaAtual);
     
     // Atualizar header do modal
     document.getElementById('modalEmpresaNome').textContent = nomeEmpresa;
@@ -431,11 +452,15 @@ async function confirmarSocios() {
     try {
         const db = firebase.firestore();
         
+        // Pegar nome da empresa para salvar junto
+        const nomeEmpresa = getNomeEmpresa(empresaAtual);
+        
         // Atualizar empresa - salvar dentro de campanha para não interferir no sistema existente
         await db.collection('empresas').doc(empresaAtual.id).update({
             'campanha.socios': sociosTemp,
             'campanha.sociosAtualizadoEm': firebase.firestore.FieldValue.serverTimestamp(),
-            'campanha.sociosAtualizadoPor': participanteId
+            'campanha.sociosAtualizadoPor': participanteId,
+            'campanha.empresaNome': nomeEmpresa // Salvar nome para facilitar listagem
         });
         
         // Registrar ação
@@ -447,6 +472,7 @@ async function confirmarSocios() {
         // Atualizar dados locais
         empresaAtual.campanha = empresaAtual.campanha || {};
         empresaAtual.campanha.socios = [...sociosTemp];
+        empresaAtual.campanha.empresaNome = nomeEmpresa;
         const idx = empresasData.findIndex(e => e.id === empresaAtual.id);
         if (idx >= 0) empresasData[idx] = empresaAtual;
         
@@ -475,11 +501,15 @@ async function salvarFuncionarios() {
     try {
         const db = firebase.firestore();
         
+        // Pegar nome da empresa para salvar junto
+        const nomeEmpresa = getNomeEmpresa(empresaAtual);
+        
         // Atualizar empresa - salvar dentro de campanha para não interferir no sistema existente
         await db.collection('empresas').doc(empresaAtual.id).update({
             'campanha.funcionariosQtd': qtd,
             'campanha.funcionariosAtualizadoEm': firebase.firestore.FieldValue.serverTimestamp(),
-            'campanha.funcionariosAtualizadoPor': participanteId
+            'campanha.funcionariosAtualizadoPor': participanteId,
+            'campanha.empresaNome': nomeEmpresa // Salvar nome para facilitar listagem
         });
         
         // Registrar ação
@@ -490,6 +520,7 @@ async function salvarFuncionarios() {
         // Atualizar dados locais
         empresaAtual.campanha = empresaAtual.campanha || {};
         empresaAtual.campanha.funcionariosQtd = qtd;
+        empresaAtual.campanha.empresaNome = nomeEmpresa;
         const idx = empresasData.findIndex(e => e.id === empresaAtual.id);
         if (idx >= 0) empresasData[idx] = empresaAtual;
         
@@ -683,6 +714,9 @@ async function salvarEmailDental() {
     try {
         const db = firebase.firestore();
         
+        // Pegar nome da empresa para salvar junto
+        const nomeEmpresa = getNomeEmpresa(empresaAtual);
+        
         // Atualizar empresa
         const campanhaData = empresaAtual.campanha || {};
         campanhaData.dental = campanhaData.dental || {};
@@ -690,12 +724,14 @@ async function salvarEmailDental() {
         campanhaData.dental.email = email;
         campanhaData.dental.emailEnviadoEm = new Date().toISOString();
         campanhaData.dental.emailEnviadoPor = participanteId;
+        campanhaData.empresaNome = nomeEmpresa;
         
         await db.collection('empresas').doc(empresaAtual.id).update({
             'campanha.dental.emailEnviado': true,
             'campanha.dental.email': email,
             'campanha.dental.emailEnviadoEm': firebase.firestore.FieldValue.serverTimestamp(),
             'campanha.dental.emailEnviadoPor': participanteId,
+            'campanha.empresaNome': nomeEmpresa,
             emailResponsavel: email
         });
         
@@ -729,6 +765,9 @@ async function salvarEmailSaude() {
     try {
         const db = firebase.firestore();
         
+        // Pegar nome da empresa para salvar junto
+        const nomeEmpresa = getNomeEmpresa(empresaAtual);
+        
         // Atualizar empresa
         const campanhaData = empresaAtual.campanha || {};
         campanhaData.saude = campanhaData.saude || {};
@@ -736,12 +775,14 @@ async function salvarEmailSaude() {
         campanhaData.saude.email = email;
         campanhaData.saude.emailEnviadoEm = new Date().toISOString();
         campanhaData.saude.emailEnviadoPor = participanteId;
+        campanhaData.empresaNome = nomeEmpresa;
         
         await db.collection('empresas').doc(empresaAtual.id).update({
             'campanha.saude.emailEnviado': true,
             'campanha.saude.email': email,
             'campanha.saude.emailEnviadoEm': firebase.firestore.FieldValue.serverTimestamp(),
             'campanha.saude.emailEnviadoPor': participanteId,
+            'campanha.empresaNome': nomeEmpresa,
             emailResponsavel: email
         });
         
@@ -870,7 +911,7 @@ async function registrarAcao(tipo, pontos, dados = {}) {
             pontos,
             dados,
             empresaId: empresaAtual.id,
-            empresaNome: empresaAtual.razaoSocial || empresaAtual.nomeFantasia || empresaAtual.nome || empresaAtual.empresa || 'Empresa',
+            empresaNome: getNomeEmpresa(empresaAtual),
             participanteId,
             participanteNome: participanteData.nome,
             dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
@@ -1056,7 +1097,7 @@ async function gerarPesquisa() {
         // Criar documento de pesquisa
         const pesquisaRef = await db.collection('pesquisas_colaboradores').add({
             empresaId: emp.id,
-            empresaNome: emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa',
+            empresaNome: getNomeEmpresa(emp),
             empresaCnpj: emp.cnpj,
             funcionariosQtd: campanha.funcionariosQtd,
             campanhaId: campanhaId,
@@ -1224,7 +1265,7 @@ function copiarLinkPesquisa() {
 // Enviar pesquisa via WhatsApp
 function enviarPesquisaWhatsApp(link) {
     const emp = empresaAtual;
-    const nomeEmp = emp.razaoSocial || emp.nomeFantasia || emp.nome || emp.empresa || 'Empresa';
+    const nomeEmp = getNomeEmpresa(emp);
     const mensagem = encodeURIComponent(
         `🎯 *Pesquisa de Benefícios*\n\n` +
         `Olá! A empresa ${nomeEmp} está avaliando a possibilidade de oferecer planos de saúde e dental para os colaboradores.\n\n` +
