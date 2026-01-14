@@ -610,11 +610,26 @@ function atualizarSecaoDental() {
     }
     
     // Fechou negócio
+    const acaoFechouDental = document.getElementById('acaoFechouDental');
+    const fechouDentalOk = acaoFechouDental.querySelector('.fechou-ok');
+    const fechouDentalAguardando = acaoFechouDental.querySelector('.fechou-aguardando');
+    
     if (campanhaD.fechouNegocio) {
         pontosDental += 40;
-        document.getElementById('acaoFechouDental').style.display = 'block';
+        acaoFechouDental.style.display = 'block';
+        acaoFechouDental.classList.add('concluida');
+        acaoFechouDental.classList.remove('aguardando');
+        if (fechouDentalOk) fechouDentalOk.style.display = 'block';
+        if (fechouDentalAguardando) fechouDentalAguardando.style.display = 'none';
+    } else if (campanhaD.decisao === 'fechou') {
+        // Decisão foi "fechou" mas admin ainda não confirmou
+        acaoFechouDental.style.display = 'block';
+        acaoFechouDental.classList.add('aguardando');
+        acaoFechouDental.classList.remove('concluida');
+        if (fechouDentalOk) fechouDentalOk.style.display = 'none';
+        if (fechouDentalAguardando) fechouDentalAguardando.style.display = 'block';
     } else {
-        document.getElementById('acaoFechouDental').style.display = 'none';
+        acaoFechouDental.style.display = 'none';
     }
     
     document.getElementById('pontosDental').textContent = `${pontosDental}/83 pts`;
@@ -692,11 +707,26 @@ function atualizarSecaoSaude() {
     }
     
     // Fechou negócio
+    const acaoFechouSaude = document.getElementById('acaoFechouSaude');
+    const fechouSaudeOk = acaoFechouSaude.querySelector('.fechou-ok');
+    const fechouSaudeAguardando = acaoFechouSaude.querySelector('.fechou-aguardando');
+    
     if (campanhaS.fechouNegocio) {
         pontosSaude += 40;
-        document.getElementById('acaoFechouSaude').style.display = 'block';
+        acaoFechouSaude.style.display = 'block';
+        acaoFechouSaude.classList.add('concluida');
+        acaoFechouSaude.classList.remove('aguardando');
+        if (fechouSaudeOk) fechouSaudeOk.style.display = 'block';
+        if (fechouSaudeAguardando) fechouSaudeAguardando.style.display = 'none';
+    } else if (campanhaS.decisao === 'fechou') {
+        // Decisão foi "fechou" mas admin ainda não confirmou
+        acaoFechouSaude.style.display = 'block';
+        acaoFechouSaude.classList.add('aguardando');
+        acaoFechouSaude.classList.remove('concluida');
+        if (fechouSaudeOk) fechouSaudeOk.style.display = 'none';
+        if (fechouSaudeAguardando) fechouSaudeAguardando.style.display = 'block';
     } else {
-        document.getElementById('acaoFechouSaude').style.display = 'none';
+        acaoFechouSaude.style.display = 'none';
     }
     
     document.getElementById('pontosSaude').textContent = `${pontosSaude}/85 pts`;
@@ -1094,7 +1124,49 @@ async function gerarPesquisa() {
     try {
         const db = firebase.firestore();
         
-        // Criar documento de pesquisa
+        // VERIFICAR SE JÁ EXISTE PESQUISA PARA ESTA EMPRESA
+        if (campanha.pesquisa?.id) {
+            // Já existe pesquisa, apenas mostrar o link
+            const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'pesquisa-colaboradores.html');
+            const link = `${baseUrl}?p=${campanha.pesquisa.id}&e=${emp.id}`;
+            mostrarModalLinkPesquisa(link);
+            return;
+        }
+        
+        // Verificar também na coleção (caso tenha pesquisa mas não salvou na empresa)
+        const pesquisaExistente = await db.collection('pesquisas_colaboradores')
+            .where('empresaId', '==', emp.id)
+            .where('campanhaId', '==', campanhaId)
+            .limit(1)
+            .get();
+        
+        if (!pesquisaExistente.empty) {
+            // Já existe pesquisa na coleção
+            const pesquisaDoc = pesquisaExistente.docs[0];
+            
+            // Atualizar empresa com ID da pesquisa existente
+            await db.collection('empresas').doc(emp.id).update({
+                'campanha.pesquisa.id': pesquisaDoc.id,
+                'campanha.pesquisa.linkEnviado': true,
+                'campanha.pesquisa.totalRespostas': pesquisaDoc.data().totalRespostas || 0
+            });
+            
+            // Atualizar dados locais
+            empresaAtual.campanha = empresaAtual.campanha || {};
+            empresaAtual.campanha.pesquisa = {
+                id: pesquisaDoc.id,
+                linkEnviado: true,
+                totalRespostas: pesquisaDoc.data().totalRespostas || 0
+            };
+            
+            // Mostrar link existente
+            const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'pesquisa-colaboradores.html');
+            const link = `${baseUrl}?p=${pesquisaDoc.id}&e=${emp.id}`;
+            mostrarModalLinkPesquisa(link);
+            return;
+        }
+        
+        // Criar novo documento de pesquisa
         const pesquisaRef = await db.collection('pesquisas_colaboradores').add({
             empresaId: emp.id,
             empresaNome: getNomeEmpresa(emp),
