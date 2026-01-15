@@ -124,6 +124,10 @@ function configurarEventos() {
                     document.getElementById('tabPesquisas').style.display = 'block';
                     carregarPesquisas();
                     break;
+                case 'checklists':
+                    document.getElementById('tabChecklists').style.display = 'block';
+                    carregarChecklists();
+                    break;
                 case 'relatorios':
                     document.getElementById('tabRelatorios').style.display = 'block';
                     break;
@@ -1337,5 +1341,411 @@ async function exportarPesquisas() {
     } catch (error) {
         console.error('Erro ao exportar:', error);
         alert('Erro ao exportar pesquisas');
+    }
+}
+
+// =====================================================
+// CHECKLISTS DE ENTENDIMENTO
+// =====================================================
+
+let checklistAtual = null;
+
+// Carregar checklists
+async function carregarChecklists() {
+    const db = firebase.firestore();
+    const container = document.getElementById('listaChecklists');
+    
+    try {
+        const checklistsSnap = await db.collection('checklists_entendimento')
+            .orderBy('dataCriacao', 'desc')
+            .get();
+        
+        if (checklistsSnap.empty) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-clipboard-check" style="font-size: 2rem;"></i>
+                    <p class="mt-2">Nenhum checklist criado ainda</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = checklistsSnap.docs.map(doc => {
+            const c = doc.data();
+            const stats = c.estatisticas || {};
+            const saudeStats = stats.saude || {};
+            const dentalStats = stats.dental || {};
+            
+            const corStatus = c.respondido ? 'success' : 'warning';
+            const textStatus = c.respondido ? 'Respondido' : 'Aguardando';
+            
+            return `
+                <div class="card mb-3 ${c.respondido ? 'border-success' : 'border-warning'}">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h5 class="mb-1">${c.empresaNome || 'Empresa'}</h5>
+                                <p class="text-muted mb-2 small">
+                                    <i class="bi bi-people"></i> ${c.funcionariosQtd || 0} funcionários
+                                    • <i class="bi bi-person"></i> ${c.sociosQtd || 0} sócios
+                                    • Enviado por: ${c.participanteNome || '-'}
+                                </p>
+                            </div>
+                            <div class="text-end">
+                                <span class="badge bg-${corStatus}">${textStatus}</span>
+                            </div>
+                        </div>
+                        
+                        ${c.respondido ? `
+                            <div class="row mt-2">
+                                <div class="col-6">
+                                    <div class="small">
+                                        <strong class="text-danger"><i class="bi bi-heart-pulse"></i> Saúde:</strong>
+                                        ${saudeStats.porcentagemSim || 0}% entendeu
+                                        <br><span class="text-muted">Prob: ${saudeStats.probabilidade ?? '-'}/10</span>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="small">
+                                        <strong class="text-primary"><i class="bi bi-emoji-smile"></i> Dental:</strong>
+                                        ${dentalStats.porcentagemSim || 0}% entendeu
+                                        <br><span class="text-muted">Prob: ${dentalStats.probabilidade ?? '-'}/10</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+                        
+                        <div class="mt-3">
+                            <button class="btn btn-sm btn-primary" onclick="verDetalhesChecklist('${doc.id}')" ${!c.respondido ? 'disabled' : ''}>
+                                <i class="bi bi-eye"></i> Ver Respostas
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="copiarLinkChecklist('${doc.id}', '${c.empresaId}', '${c.campanhaId}', '${c.participanteId}')">
+                                <i class="bi bi-link-45deg"></i> Copiar Link
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch (error) {
+        console.error('Erro ao carregar checklists:', error);
+        container.innerHTML = '<p class="text-danger">Erro ao carregar checklists</p>';
+    }
+}
+
+// Ver detalhes do checklist
+async function verDetalhesChecklist(checklistId) {
+    const db = firebase.firestore();
+    
+    try {
+        const checklistDoc = await db.collection('checklists_entendimento').doc(checklistId).get();
+        if (!checklistDoc.exists) {
+            alert('Checklist não encontrado');
+            return;
+        }
+        
+        checklistAtual = { id: checklistDoc.id, ...checklistDoc.data() };
+        
+        // Atualizar modal
+        document.getElementById('modalChecklistTitulo').innerHTML = `
+            <i class="bi bi-clipboard-check"></i> ${checklistAtual.empresaNome} - Checklist de Entendimento
+        `;
+        
+        const respostas = checklistAtual.respostas || {};
+        const stats = checklistAtual.estatisticas || {};
+        const saudeStats = stats.saude || {};
+        const dentalStats = stats.dental || {};
+        const pesquisaStats = stats.pesquisa || {};
+        
+        // Perguntas de Saúde
+        const perguntasSaude = [
+            { id: 'saude_hotelaria', texto: 'Internação hotelaria (Sírio, Einstein)' },
+            { id: 'saude_exterior', texto: 'Cobertura exterior + seguro viagem' },
+            { id: 'saude_reembolso_fora_rede', texto: 'Reembolso fora da rede' },
+            { id: 'saude_reembolso_10x', texto: 'Reembolso até 10x tabela ANS' },
+            { id: 'saude_cobertura_nacional', texto: 'Cobertura Nacional' },
+            { id: 'saude_dependentes', texto: 'Inclusão dependentes' },
+            { id: 'saude_minimo_vidas', texto: 'Mínimo 3 pessoas, 1 titular' },
+            { id: 'saude_colaborador_paga', texto: 'Colaborador paga 100%' },
+            { id: 'saude_deducao_dre', texto: 'Dedutível na DRE' },
+            { id: 'saude_pesquisa_colaboradores', texto: 'Já fez pesquisa colaboradores' }
+        ];
+        
+        // Perguntas de Dental
+        const perguntasDental = [
+            { id: 'dental_cobertura_nacional', texto: 'Cobertura Nacional' },
+            { id: 'dental_custo_20', texto: 'Custo < R$ 20/mês' },
+            { id: 'dental_reter_talentos', texto: 'Ajuda reter talentos' },
+            { id: 'dental_colaborador_100', texto: 'Colaborador paga 100%' },
+            { id: 'dental_deducao_dre', texto: 'Dedutível na DRE' },
+            { id: 'dental_nao_obrigatorio', texto: 'Não precisa todos no plano' },
+            { id: 'dental_custo_anual', texto: 'Custo anual < limpeza particular' },
+            { id: 'dental_coberturas', texto: 'Entendeu coberturas' },
+            { id: 'dental_pesquisa_colaboradores', texto: 'Já fez pesquisa colaboradores' }
+        ];
+        
+        // Perguntas de Pesquisa
+        const perguntasPesquisa = [
+            { id: 'pesquisa_recebeu_link', texto: 'Recebeu pesquisa colaboradores?' },
+            { id: 'pesquisa_compartilhou', texto: 'Compartilhou link da pesquisa?' }
+        ];
+        
+        // Função para renderizar resposta
+        const renderResposta = (pergunta) => {
+            const resposta = respostas[pergunta.id];
+            if (!resposta) return '<span class="text-muted">-</span>';
+            
+            if (resposta.tipo === 'escala') {
+                return `<span class="badge bg-info">${resposta.valor}/10</span>`;
+            }
+            
+            return resposta.valor 
+                ? '<span class="text-success fs-5">✓</span>'
+                : '<span class="text-danger fs-5">✗</span>';
+        };
+        
+        document.getElementById('detalheChecklistConteudo').innerHTML = `
+            <!-- Resumo Estatísticas -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card bg-danger bg-opacity-10">
+                        <div class="card-body text-center">
+                            <h3 class="text-danger">${saudeStats.porcentagemSim || 0}%</h3>
+                            <small class="text-muted">Entendimento Saúde</small>
+                            <div class="mt-2">
+                                <span class="badge bg-success">${saudeStats.sim || 0} ✓</span>
+                                <span class="badge bg-danger">${saudeStats.nao || 0} ✗</span>
+                            </div>
+                            <div class="mt-1">
+                                <small>Probabilidade: <strong>${saudeStats.probabilidade ?? '-'}/10</strong></small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-primary bg-opacity-10">
+                        <div class="card-body text-center">
+                            <h3 class="text-primary">${dentalStats.porcentagemSim || 0}%</h3>
+                            <small class="text-muted">Entendimento Dental</small>
+                            <div class="mt-2">
+                                <span class="badge bg-success">${dentalStats.sim || 0} ✓</span>
+                                <span class="badge bg-danger">${dentalStats.nao || 0} ✗</span>
+                            </div>
+                            <div class="mt-1">
+                                <small>Probabilidade: <strong>${dentalStats.probabilidade ?? '-'}/10</strong></small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-success bg-opacity-10">
+                        <div class="card-body text-center">
+                            <h3 class="text-success">${pesquisaStats.sim || 0}/${pesquisaStats.total || 2}</h3>
+                            <small class="text-muted">Confirmações Pesquisa</small>
+                            <div class="mt-2">
+                                ${respostas.pesquisa_recebeu_link?.valor ? '<span class="badge bg-success">Recebeu ✓</span>' : '<span class="badge bg-secondary">Não recebeu</span>'}
+                            </div>
+                            <div class="mt-1">
+                                ${respostas.pesquisa_compartilhou?.valor ? '<span class="badge bg-success">Compartilhou ✓</span>' : '<span class="badge bg-secondary">Não compartilhou</span>'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Detalhes Saúde -->
+            <div class="card mb-3">
+                <div class="card-header bg-danger bg-opacity-10">
+                    <h6 class="mb-0"><i class="bi bi-heart-pulse text-danger"></i> Plano de Saúde</h6>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        <tbody>
+                            ${perguntasSaude.map(p => `
+                                <tr>
+                                    <td style="width: 40px;">${renderResposta(p)}</td>
+                                    <td>${p.texto}</td>
+                                </tr>
+                            `).join('')}
+                            <tr class="table-warning">
+                                <td><span class="badge bg-info">${respostas.saude_probabilidade?.valor ?? '-'}/10</span></td>
+                                <td><strong>Probabilidade de contratação</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Detalhes Dental -->
+            <div class="card mb-3">
+                <div class="card-header bg-primary bg-opacity-10">
+                    <h6 class="mb-0"><i class="bi bi-emoji-smile text-primary"></i> Plano Dental</h6>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        <tbody>
+                            ${perguntasDental.map(p => `
+                                <tr>
+                                    <td style="width: 40px;">${renderResposta(p)}</td>
+                                    <td>${p.texto}</td>
+                                </tr>
+                            `).join('')}
+                            <tr class="table-warning">
+                                <td><span class="badge bg-info">${respostas.dental_probabilidade?.valor ?? '-'}/10</span></td>
+                                <td><strong>Probabilidade de disponibilizar</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Detalhes Pesquisa -->
+            <div class="card mb-3">
+                <div class="card-header bg-success bg-opacity-10">
+                    <h6 class="mb-0"><i class="bi bi-clipboard-check text-success"></i> Pesquisa de Colaboradores</h6>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm mb-0">
+                        <tbody>
+                            ${perguntasPesquisa.map(p => `
+                                <tr>
+                                    <td style="width: 40px;">${renderResposta(p)}</td>
+                                    <td>${p.texto}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Informações Adicionais -->
+            <div class="card bg-light">
+                <div class="card-body small">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <strong>Empresa:</strong> ${checklistAtual.empresaNome}<br>
+                            <strong>CNPJ:</strong> ${checklistAtual.empresaCnpj || '-'}<br>
+                            <strong>Funcionários:</strong> ${checklistAtual.funcionariosQtd || '-'}
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Assistente:</strong> ${checklistAtual.participanteNome || '-'}<br>
+                            <strong>Agência:</strong> ${checklistAtual.agenciaNome || '-'}<br>
+                            <strong>Respondido em:</strong> ${checklistAtual.respondidoEm?.toDate().toLocaleDateString('pt-BR') || '-'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        new bootstrap.Modal(document.getElementById('modalDetalheChecklist')).show();
+        
+    } catch (error) {
+        console.error('Erro ao carregar checklist:', error);
+        alert('Erro ao carregar detalhes');
+    }
+}
+
+// Copiar link do checklist
+function copiarLinkChecklist(checklistId, empresaId, campanhaId, participanteId) {
+    const baseUrl = window.location.origin + window.location.pathname.replace('campanhas-admin.html', 'checklist-empresa.html');
+    const link = `${baseUrl}?ch=${checklistId}&e=${empresaId}&c=${campanhaId}&p=${participanteId}`;
+    
+    navigator.clipboard.writeText(link).then(() => {
+        alert('Link copiado para a área de transferência!');
+    }).catch(() => {
+        prompt('Copie o link:', link);
+    });
+}
+
+// Exportar checklist atual
+function exportarChecklistAtual() {
+    if (!checklistAtual || !checklistAtual.respostas) {
+        alert('Nenhum checklist selecionado');
+        return;
+    }
+    
+    const respostas = checklistAtual.respostas;
+    
+    const dados = [{
+        'Empresa': checklistAtual.empresaNome,
+        'CNPJ': checklistAtual.empresaCnpj || '',
+        'Funcionários': checklistAtual.funcionariosQtd || '',
+        'Sócios': checklistAtual.sociosQtd || '',
+        'Assistente': checklistAtual.participanteNome || '',
+        'Agência': checklistAtual.agenciaNome || '',
+        
+        // Saúde
+        'Saúde - Hotelaria': respostas.saude_hotelaria?.valor ? 'Sim' : 'Não',
+        'Saúde - Exterior': respostas.saude_exterior?.valor ? 'Sim' : 'Não',
+        'Saúde - Reembolso Fora Rede': respostas.saude_reembolso_fora_rede?.valor ? 'Sim' : 'Não',
+        'Saúde - Reembolso 10x': respostas.saude_reembolso_10x?.valor ? 'Sim' : 'Não',
+        'Saúde - Cobertura Nacional': respostas.saude_cobertura_nacional?.valor ? 'Sim' : 'Não',
+        'Saúde - Dependentes': respostas.saude_dependentes?.valor ? 'Sim' : 'Não',
+        'Saúde - Mínimo Vidas': respostas.saude_minimo_vidas?.valor ? 'Sim' : 'Não',
+        'Saúde - Colaborador Paga': respostas.saude_colaborador_paga?.valor ? 'Sim' : 'Não',
+        'Saúde - Dedução DRE': respostas.saude_deducao_dre?.valor ? 'Sim' : 'Não',
+        'Saúde - Pesquisa': respostas.saude_pesquisa_colaboradores?.valor ? 'Sim' : 'Não',
+        'Saúde - Probabilidade': respostas.saude_probabilidade?.valor ?? '',
+        
+        // Dental
+        'Dental - Cobertura Nacional': respostas.dental_cobertura_nacional?.valor ? 'Sim' : 'Não',
+        'Dental - Custo R$20': respostas.dental_custo_20?.valor ? 'Sim' : 'Não',
+        'Dental - Reter Talentos': respostas.dental_reter_talentos?.valor ? 'Sim' : 'Não',
+        'Dental - Colaborador 100%': respostas.dental_colaborador_100?.valor ? 'Sim' : 'Não',
+        'Dental - Dedução DRE': respostas.dental_deducao_dre?.valor ? 'Sim' : 'Não',
+        'Dental - Não Obrigatório': respostas.dental_nao_obrigatorio?.valor ? 'Sim' : 'Não',
+        'Dental - Custo Anual': respostas.dental_custo_anual?.valor ? 'Sim' : 'Não',
+        'Dental - Coberturas': respostas.dental_coberturas?.valor ? 'Sim' : 'Não',
+        'Dental - Pesquisa': respostas.dental_pesquisa_colaboradores?.valor ? 'Sim' : 'Não',
+        'Dental - Probabilidade': respostas.dental_probabilidade?.valor ?? '',
+        
+        // Pesquisa
+        'Recebeu Pesquisa': respostas.pesquisa_recebeu_link?.valor ? 'Sim' : 'Não',
+        'Compartilhou Link': respostas.pesquisa_compartilhou?.valor ? 'Sim' : 'Não',
+        
+        'Data Resposta': checklistAtual.respondidoEm?.toDate().toLocaleDateString('pt-BR') || ''
+    }];
+    
+    exportarExcel(dados, `checklist-${checklistAtual.empresaNome || 'empresa'}`);
+}
+
+// Exportar todos os checklists
+async function exportarTodosChecklists() {
+    const db = firebase.firestore();
+    const dados = [];
+    
+    try {
+        const checklistsSnap = await db.collection('checklists_entendimento')
+            .where('respondido', '==', true)
+            .get();
+        
+        checklistsSnap.docs.forEach(doc => {
+            const c = doc.data();
+            const respostas = c.respostas || {};
+            const stats = c.estatisticas || {};
+            
+            dados.push({
+                'Empresa': c.empresaNome,
+                'CNPJ': c.empresaCnpj || '',
+                'Funcionários': c.funcionariosQtd || '',
+                'Sócios': c.sociosQtd || '',
+                'Assistente': c.participanteNome || '',
+                'Agência': c.agenciaNome || '',
+                'Entendimento Saúde (%)': stats.saude?.porcentagemSim || 0,
+                'Probabilidade Saúde': stats.saude?.probabilidade ?? '',
+                'Entendimento Dental (%)': stats.dental?.porcentagemSim || 0,
+                'Probabilidade Dental': stats.dental?.probabilidade ?? '',
+                'Recebeu Pesquisa': respostas.pesquisa_recebeu_link?.valor ? 'Sim' : 'Não',
+                'Compartilhou Link': respostas.pesquisa_compartilhou?.valor ? 'Sim' : 'Não',
+                'Data Resposta': c.respondidoEm?.toDate().toLocaleDateString('pt-BR') || ''
+            });
+        });
+        
+        exportarExcel(dados, 'relatorio-checklists');
+        
+    } catch (error) {
+        console.error('Erro ao exportar:', error);
+        alert('Erro ao exportar checklists');
     }
 }
