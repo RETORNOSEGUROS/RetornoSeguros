@@ -274,6 +274,11 @@ function renderizarEmpresas(filtro = '') {
 function calcularStatusEmpresa(emp) {
     const campanha = emp.campanha || {};
     
+    // IMPORTANTE: Ignorar dados de outras campanhas
+    if (campanha.campanhaId && campanha.campanhaId !== campanhaId) {
+        return { classe: 'diamante', cor: 'info', texto: '💎 Nova' };
+    }
+    
     if (campanha.dental?.fechouNegocio || campanha.saude?.fechouNegocio) {
         return { classe: 'concluida', cor: 'success', texto: '✅ Concluída' };
     }
@@ -289,8 +294,14 @@ function calcularStatusEmpresa(emp) {
 // Calcular progresso da empresa
 function calcularProgressoEmpresa(emp) {
     const campanha = emp.campanha || {};
+    
+    // IMPORTANTE: Ignorar dados de outras campanhas
+    if (campanha.campanhaId && campanha.campanhaId !== campanhaId) {
+        return 0;
+    }
+    
     let pontos = 0;
-    let total = 183; // Total possível: 5+10+8+10+15+15+12+12+8+8+40+40
+    let total = 159; // Total possível: 5+10+8+10+15+15+8+8+40+40 (sem os 12+12 de entendimento)
     
     // Usar campos da campanha (separados do sistema existente)
     if (campanha.funcionariosQtd) pontos += 5;
@@ -315,6 +326,18 @@ function calcularProgressoEmpresa(emp) {
 async function abrirEmpresa(empresaId) {
     empresaAtual = empresasData.find(e => e.id === empresaId);
     if (!empresaAtual) return;
+    
+    // IMPORTANTE: Verificar se os dados de campanha são desta campanha
+    // Se forem de outra campanha, ignorar (tratar como empresa nova)
+    if (empresaAtual.campanha && empresaAtual.campanha.campanhaId !== campanhaId) {
+        console.log('Dados de campanha antiga detectados, ignorando...');
+        empresaAtual.campanha = { campanhaId: campanhaId }; // Reset para nova campanha
+    }
+    
+    // Garantir que campanhaId está setado
+    if (empresaAtual.campanha) {
+        empresaAtual.campanha.campanhaId = campanhaId;
+    }
     
     // Usar sócios da campanha (separados do sistema existente)
     const campanha = empresaAtual.campanha || {};
@@ -507,7 +530,9 @@ async function salvarFuncionarios() {
         const nomeEmpresa = getNomeEmpresa(empresaAtual);
         
         // Atualizar empresa - salvar dentro de campanha para não interferir no sistema existente
+        // IMPORTANTE: Incluir campanhaId para identificar de qual campanha são os dados
         await db.collection('empresas').doc(empresaAtual.id).update({
+            'campanha.campanhaId': campanhaId,
             'campanha.funcionariosQtd': qtd,
             'campanha.funcionariosAtualizadoEm': firebase.firestore.FieldValue.serverTimestamp(),
             'campanha.funcionariosAtualizadoPor': participanteId,
@@ -521,6 +546,7 @@ async function salvarFuncionarios() {
         
         // Atualizar dados locais
         empresaAtual.campanha = empresaAtual.campanha || {};
+        empresaAtual.campanha.campanhaId = campanhaId;
         empresaAtual.campanha.funcionariosQtd = qtd;
         empresaAtual.campanha.empresaNome = nomeEmpresa;
         const idx = empresasData.findIndex(e => e.id === empresaAtual.id);
