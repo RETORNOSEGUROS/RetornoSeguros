@@ -1832,9 +1832,6 @@ async function atualizarSecaoChecklist() {
         }
     }
     
-    const container = document.getElementById('secaoChecklist');
-    if (!container) return;
-    
     // Verificar se está desbloqueado
     if (!funcionarios || socios.length === 0) {
         container.innerHTML = `
