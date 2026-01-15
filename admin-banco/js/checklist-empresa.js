@@ -310,9 +310,9 @@ function renderizarPergunta(pergunta, secao) {
 // Responder Sim/Não
 function responderSimNao(perguntaId, valor, pontuaSeTrue) {
     respostas[perguntaId] = {
-        valor: valor,
+        valor: valor === true, // Garantir que seja boolean
         tipo: 'sim_nao',
-        pontuaSeTrue: pontuaSeTrue
+        pontuaSeTrue: pontuaSeTrue === true // Garantir que seja boolean, não undefined
     };
     
     // Atualizar visual
@@ -331,7 +331,7 @@ function responderSimNao(perguntaId, valor, pontuaSeTrue) {
 // Responder Escala
 function responderEscala(perguntaId, valor) {
     respostas[perguntaId] = {
-        valor: valor,
+        valor: parseInt(valor) || 0, // Garantir que seja número
         tipo: 'escala'
     };
     
@@ -360,6 +360,28 @@ function atualizarProgresso() {
     document.getElementById('btnSubmit').disabled = respondidas < total;
 }
 
+// Função para remover valores undefined (Firebase não aceita)
+function sanitizarParaFirebase(obj) {
+    if (obj === null || obj === undefined) {
+        return null;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => sanitizarParaFirebase(item));
+    }
+    if (typeof obj === 'object') {
+        const resultado = {};
+        for (const [key, value] of Object.entries(obj)) {
+            const valorSanitizado = sanitizarParaFirebase(value);
+            // Só inclui se não for undefined
+            if (valorSanitizado !== undefined) {
+                resultado[key] = valorSanitizado === undefined ? null : valorSanitizado;
+            }
+        }
+        return resultado;
+    }
+    return obj;
+}
+
 // Enviar respostas
 async function enviarRespostas() {
     const btn = document.getElementById('btnSubmit');
@@ -373,13 +395,17 @@ async function enviarRespostas() {
         // Calcular estatísticas
         const stats = calcularEstatisticas();
         
+        // Sanitizar dados para remover undefined (Firebase não aceita)
+        const respostasSanitizadas = sanitizarParaFirebase(respostas);
+        const statsSanitizadas = sanitizarParaFirebase(stats);
+        
         // Atualizar checklist como respondido
         const checklistRef = db.collection('checklists_entendimento').doc(checklistId);
         batch.update(checklistRef, {
             respondido: true,
             respondidoEm: firebase.firestore.FieldValue.serverTimestamp(),
-            respostas: respostas,
-            estatisticas: stats
+            respostas: respostasSanitizadas,
+            estatisticas: statsSanitizadas
         });
         
         // Verificar se precisa pontuar por pesquisa confirmada
@@ -395,7 +421,7 @@ async function enviarRespostas() {
                 'campanha.pesquisa.confirmadaEm': firebase.firestore.FieldValue.serverTimestamp(),
                 'campanha.checklist.respondido': true,
                 'campanha.checklist.respondidoEm': firebase.firestore.FieldValue.serverTimestamp(),
-                'campanha.checklist.estatisticas': stats
+                'campanha.checklist.estatisticas': statsSanitizadas
             });
         } else {
             // Apenas marcar checklist como respondido
@@ -403,7 +429,7 @@ async function enviarRespostas() {
             batch.update(empresaRef, {
                 'campanha.checklist.respondido': true,
                 'campanha.checklist.respondidoEm': firebase.firestore.FieldValue.serverTimestamp(),
-                'campanha.checklist.estatisticas': stats
+                'campanha.checklist.estatisticas': statsSanitizadas
             });
         }
         
@@ -427,7 +453,7 @@ async function enviarRespostas() {
                 empresaId: empresaId,
                 checklistId: checklistId,
                 pontos: PONTUACAO.checklistRespondido,
-                estatisticas: stats,
+                estatisticas: statsSanitizadas,
                 criadoEm: firebase.firestore.FieldValue.serverTimestamp()
             });
             
@@ -470,9 +496,11 @@ function calcularEstatisticas() {
     // Processar saúde
     PERGUNTAS.saude.forEach(p => {
         if (p.tipo === 'escala') {
-            stats.saude.probabilidade = respostas[p.id]?.valor;
+            // Garantir que probabilidade seja número ou null, nunca undefined
+            const valor = respostas[p.id]?.valor;
+            stats.saude.probabilidade = (valor !== undefined && valor !== null) ? valor : null;
         } else if (respostas[p.id]) {
-            if (respostas[p.id].valor) {
+            if (respostas[p.id].valor === true) {
                 stats.saude.sim++;
                 stats.geral.sim++;
             } else {
@@ -485,9 +513,11 @@ function calcularEstatisticas() {
     // Processar dental
     PERGUNTAS.dental.forEach(p => {
         if (p.tipo === 'escala') {
-            stats.dental.probabilidade = respostas[p.id]?.valor;
+            // Garantir que probabilidade seja número ou null, nunca undefined
+            const valor = respostas[p.id]?.valor;
+            stats.dental.probabilidade = (valor !== undefined && valor !== null) ? valor : null;
         } else if (respostas[p.id]) {
-            if (respostas[p.id].valor) {
+            if (respostas[p.id].valor === true) {
                 stats.dental.sim++;
                 stats.geral.sim++;
             } else {
@@ -500,7 +530,7 @@ function calcularEstatisticas() {
     // Processar pesquisa
     PERGUNTAS.pesquisa.forEach(p => {
         if (respostas[p.id]) {
-            if (respostas[p.id].valor) {
+            if (respostas[p.id].valor === true) {
                 stats.pesquisa.sim++;
                 stats.geral.sim++;
             } else {
