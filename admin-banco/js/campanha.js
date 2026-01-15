@@ -27,7 +27,11 @@ const PONTUACAO = {
     fechouDental: 40,
     fechouSaude: 40,
     pesquisaEnviada: 20,
-    pesquisaRespostas: 50  // Quando 10+ funcionários respondem
+    pesquisaRespostas: 50,  // Quando 10+ funcionários respondem
+    // CHECKLIST DE ENTENDIMENTO (pontuação automática quando empresa responde)
+    checklistGerado: 5,           // Assistente gera o link
+    checklistRespondido: 25,      // Automático - empresa respondeu
+    pesquisaConfirmada: 20        // Automático - empresa confirmou que recebeu pesquisa
 };
 
 // Mínimo de respostas para pontuar pesquisa
@@ -1065,7 +1069,13 @@ async function carregarMeusPontos() {
         decisaoDental: '📝 Decisão Dental',
         decisaoSaude: '📝 Decisão Saúde',
         fechouDental: '✅ Fechou Dental',
-        fechouSaude: '✅ Fechou Saúde'
+        fechouSaude: '✅ Fechou Saúde',
+        pesquisaEnviada: '📊 Pesquisa Enviada',
+        pesquisaRespostas: '📊 10+ Respostas',
+        checklistGerado: '📋 Checklist Gerado',
+        checklistRespondido: '📋 Checklist Respondido',
+        pesquisaConfirmada: '✉️ Pesquisa Confirmada',
+        pesquisaConfirmadaEmpresa: '✉️ Pesquisa Confirmada'
     };
     
     document.getElementById('pontosBreakdown').innerHTML = Object.entries(breakdown).map(([tipo, data]) => `
@@ -1531,5 +1541,383 @@ fecharModalEmpresa = function() {
         clearInterval(intervalVerificarRespostas);
         intervalVerificarRespostas = null;
     }
+    // Parar verificação do checklist também
+    if (intervalVerificarChecklist) {
+        clearInterval(intervalVerificarChecklist);
+        intervalVerificarChecklist = null;
+    }
     _fecharModalEmpresaOriginal();
+};
+
+// =====================================================
+// CHECKLIST DE ENTENDIMENTO
+// =====================================================
+
+// Intervalo para verificar status do checklist
+let intervalVerificarChecklist = null;
+
+// Gerar checklist de entendimento
+async function gerarChecklist() {
+    const emp = empresaAtual;
+    const campanha = emp.campanha || {};
+    
+    // Verificar pré-requisitos
+    if (!campanha.funcionariosQtd) {
+        alert('Informe o número de funcionários antes de gerar o checklist');
+        return;
+    }
+    
+    if (!campanha.socios?.length) {
+        alert('Informe os dados dos sócios antes de gerar o checklist');
+        return;
+    }
+    
+    try {
+        const db = firebase.firestore();
+        
+        // Verificar se já existe checklist
+        if (campanha.checklist?.id) {
+            // Já existe, mostrar link
+            verLinkChecklist();
+            return;
+        }
+        
+        // Verificar na coleção também
+        const checklistExistente = await db.collection('checklists_entendimento')
+            .where('empresaId', '==', emp.id)
+            .where('campanhaId', '==', campanhaId)
+            .limit(1)
+            .get();
+        
+        if (!checklistExistente.empty) {
+            // Já existe na coleção
+            const checklistDoc = checklistExistente.docs[0];
+            
+            // Atualizar empresa com ID existente
+            await db.collection('empresas').doc(emp.id).update({
+                'campanha.checklist.id': checklistDoc.id,
+                'campanha.checklist.linkEnviado': true,
+                'campanha.checklist.respondido': checklistDoc.data().respondido || false
+            });
+            
+            empresaAtual.campanha.checklist = {
+                id: checklistDoc.id,
+                linkEnviado: true,
+                respondido: checklistDoc.data().respondido || false
+            };
+            
+            atualizarSecaoChecklist();
+            verLinkChecklist();
+            return;
+        }
+        
+        const nomeEmpresa = getNomeEmpresa(emp);
+        
+        // Criar novo checklist
+        const checklistRef = await db.collection('checklists_entendimento').add({
+            empresaId: emp.id,
+            empresaNome: nomeEmpresa,
+            empresaCnpj: emp.cnpj,
+            campanhaId: campanhaId,
+            participanteId: participanteId,
+            participanteNome: participanteData.nome,
+            agenciaId: participanteData.agenciaId,
+            agenciaNome: participanteData.agenciaNome,
+            funcionariosQtd: campanha.funcionariosQtd,
+            sociosQtd: campanha.socios.length,
+            respondido: false,
+            dataCriacao: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        // Atualizar empresa
+        await db.collection('empresas').doc(emp.id).update({
+            'campanha.checklist.id': checklistRef.id,
+            'campanha.checklist.linkEnviado': true,
+            'campanha.checklist.linkEnviadoEm': firebase.firestore.FieldValue.serverTimestamp(),
+            'campanha.checklist.linkEnviadoPor': participanteId,
+            'campanha.checklist.respondido': false
+        });
+        
+        // Registrar ação e ganhar pontos
+        await registrarAcao('checklistGerado', PONTUACAO.checklistGerado, {
+            checklistId: checklistRef.id
+        });
+        
+        // Atualizar dados locais
+        empresaAtual.campanha = empresaAtual.campanha || {};
+        empresaAtual.campanha.checklist = {
+            id: checklistRef.id,
+            linkEnviado: true,
+            respondido: false
+        };
+        
+        // Mostrar pontos
+        mostrarPontos(PONTUACAO.checklistGerado);
+        
+        // Atualizar interface
+        atualizarSecaoChecklist();
+        
+        // Mostrar link
+        const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'checklist-empresa.html');
+        const link = `${baseUrl}?ch=${checklistRef.id}&e=${emp.id}&c=${campanhaId}&p=${participanteId}`;
+        
+        mostrarModalLinkChecklist(link);
+        
+    } catch (error) {
+        console.error('Erro ao gerar checklist:', error);
+        alert('Erro ao gerar checklist. Tente novamente.');
+    }
+}
+
+// Ver link do checklist existente
+function verLinkChecklist() {
+    const checklist = empresaAtual.campanha?.checklist;
+    if (!checklist?.id) return;
+    
+    const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'checklist-empresa.html');
+    const link = `${baseUrl}?ch=${checklist.id}&e=${empresaAtual.id}&c=${campanhaId}&p=${participanteId}`;
+    
+    mostrarModalLinkChecklist(link);
+}
+
+// Mostrar modal com link do checklist
+function mostrarModalLinkChecklist(link) {
+    const nomeEmp = getNomeEmpresa(empresaAtual);
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal-link-pesquisa';
+    modal.innerHTML = `
+        <div class="modal-link-content">
+            <div class="modal-link-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                <h5><i class="bi bi-clipboard-check"></i> Checklist de Entendimento</h5>
+                <button onclick="this.parentElement.parentElement.parentElement.remove()">×</button>
+            </div>
+            <div class="modal-link-body">
+                <p>Envie este link para a empresa <strong>${nomeEmp}</strong> responder o checklist de entendimento sobre os planos:</p>
+                <div class="link-box">
+                    <input type="text" value="${link}" readonly id="inputLinkChecklist">
+                    <button onclick="copiarLinkChecklist()"><i class="bi bi-clipboard"></i></button>
+                </div>
+                <button class="btn-whatsapp" onclick="enviarChecklistWhatsApp('${link}')">
+                    <i class="bi bi-whatsapp"></i> Enviar via WhatsApp
+                </button>
+                <div class="mt-3 text-center">
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle"></i> Quando a empresa responder, você ganhará <strong>+25 pontos</strong> automaticamente!
+                    </small>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+}
+
+// Copiar link do checklist
+function copiarLinkChecklist() {
+    const input = document.getElementById('inputLinkChecklist');
+    input.select();
+    document.execCommand('copy');
+    alert('Link copiado!');
+}
+
+// Enviar checklist via WhatsApp
+function enviarChecklistWhatsApp(link) {
+    const nomeEmp = getNomeEmpresa(empresaAtual);
+    const mensagem = encodeURIComponent(
+        `📋 *Pesquisa de Entendimento - Planos de Saúde e Dental*\n\n` +
+        `Olá! Segue a pesquisa para confirmar o entendimento sobre os benefícios dos planos apresentados para a empresa *${nomeEmp}*.\n\n` +
+        `Por favor, responda as perguntas clicando no link abaixo:\n\n` +
+        `👉 ${link}\n\n` +
+        `São apenas alguns minutos! Obrigado! 🙏`
+    );
+    
+    window.open(`https://wa.me/?text=${mensagem}`, '_blank');
+}
+
+// Verificar status do checklist (chamado periodicamente)
+async function verificarStatusChecklist() {
+    const emp = empresaAtual;
+    const checklist = emp.campanha?.checklist;
+    
+    if (!checklist?.id || checklist.respondido) return;
+    
+    try {
+        const db = firebase.firestore();
+        
+        const checklistDoc = await db.collection('checklists_entendimento').doc(checklist.id).get();
+        if (!checklistDoc.exists) return;
+        
+        const data = checklistDoc.data();
+        
+        if (data.respondido && !checklist.respondido) {
+            // Checklist foi respondido! Atualizar dados locais
+            empresaAtual.campanha.checklist = {
+                ...checklist,
+                respondido: true,
+                respondidoEm: data.respondidoEm,
+                estatisticas: data.estatisticas
+            };
+            
+            // Atualizar empresa no Firestore
+            await db.collection('empresas').doc(emp.id).update({
+                'campanha.checklist.respondido': true,
+                'campanha.checklist.respondidoEm': data.respondidoEm,
+                'campanha.checklist.estatisticas': data.estatisticas
+            });
+            
+            // Atualizar interface
+            atualizarSecaoChecklist();
+            
+            // Recarregar pontos (os pontos já foram adicionados pelo checklist-empresa.js)
+            const participanteDoc = await db.collection('campanhas').doc(campanhaId)
+                .collection('participantes').doc(participanteId).get();
+            if (participanteDoc.exists) {
+                participanteData.pontos = participanteDoc.data().pontos || 0;
+                document.getElementById('pontosTotal').textContent = participanteData.pontos;
+            }
+        }
+        
+    } catch (error) {
+        console.error('Erro ao verificar checklist:', error);
+    }
+}
+
+// Atualizar seção do checklist
+function atualizarSecaoChecklist() {
+    const emp = empresaAtual;
+    const campanha = emp.campanha || {};
+    const checklist = campanha.checklist || {};
+    const funcionarios = campanha.funcionariosQtd || 0;
+    const socios = campanha.socios || [];
+    
+    const container = document.getElementById('secaoChecklist');
+    if (!container) return;
+    
+    // Verificar se está desbloqueado
+    if (!funcionarios || socios.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-4">
+                <i class="bi bi-lock" style="font-size: 2rem;"></i>
+                <p class="mt-2">Informe funcionários e sócios para desbloquear</p>
+            </div>
+        `;
+        document.getElementById('pontosChecklist').textContent = '🔒 Bloqueado';
+        return;
+    }
+    
+    let pontosChecklist = 0;
+    if (checklist.linkEnviado) pontosChecklist += 5;
+    if (checklist.respondido) pontosChecklist += 25;
+    if (checklist.estatisticas?.pesquisa?.sim >= 1) pontosChecklist += 20; // Se confirmou pesquisa
+    
+    let html = '';
+    
+    if (!checklist.id) {
+        // Ainda não gerou checklist
+        html = `
+            <div class="text-center py-4">
+                <i class="bi bi-clipboard-check" style="font-size: 3rem; color: #667eea;"></i>
+                <h6 class="mt-3">Checklist de Entendimento</h6>
+                <p class="text-muted">Gere um checklist para a empresa confirmar que entendeu os benefícios dos planos.</p>
+                <button class="btn-acao primary" onclick="gerarChecklist()" style="max-width: 300px; margin: 0 auto;">
+                    <i class="bi bi-send"></i> Gerar Checklist (+5 pts)
+                </button>
+            </div>
+        `;
+    } else {
+        // Já gerou checklist
+        const stats = checklist.estatisticas || {};
+        const saudeStats = stats.saude || {};
+        const dentalStats = stats.dental || {};
+        
+        html = `
+            <div class="acao-item concluida">
+                <div class="acao-titulo">
+                    <i class="bi bi-send"></i>
+                    Link Gerado
+                    <span class="acao-pontos">+5 pts</span>
+                </div>
+                <div class="text-success">
+                    <i class="bi bi-check-circle-fill"></i> Checklist criado
+                </div>
+                <button class="btn btn-sm btn-outline-primary mt-2" onclick="verLinkChecklist()">
+                    <i class="bi bi-link-45deg"></i> Ver Link
+                </button>
+            </div>
+            
+            <div class="acao-item ${checklist.respondido ? 'concluida' : 'aguardando'}">
+                <div class="acao-titulo">
+                    <i class="bi bi-clipboard-check"></i>
+                    Empresa Respondeu
+                    <span class="acao-pontos">+25 pts</span>
+                </div>
+                ${checklist.respondido ? `
+                    <div class="text-success">
+                        <i class="bi bi-check-circle-fill"></i> Checklist respondido!
+                    </div>
+                    <div class="mt-2 small">
+                        <div class="row">
+                            <div class="col-6">
+                                <strong class="text-danger"><i class="bi bi-heart-pulse"></i> Saúde:</strong>
+                                <span>${saudeStats.porcentagemSim || 0}% entendeu</span>
+                                <br><small class="text-muted">Probabilidade: ${saudeStats.probabilidade ?? '-'}/10</small>
+                            </div>
+                            <div class="col-6">
+                                <strong class="text-info"><i class="bi bi-emoji-smile"></i> Dental:</strong>
+                                <span>${dentalStats.porcentagemSim || 0}% entendeu</span>
+                                <br><small class="text-muted">Probabilidade: ${dentalStats.probabilidade ?? '-'}/10</small>
+                            </div>
+                        </div>
+                    </div>
+                ` : `
+                    <div class="text-warning">
+                        <i class="bi bi-clock"></i> Aguardando empresa responder...
+                    </div>
+                    <small class="text-muted d-block mt-1">
+                        <i class="bi bi-info-circle"></i> Você receberá os pontos automaticamente quando a empresa responder
+                    </small>
+                `}
+            </div>
+            
+            ${checklist.respondido ? `
+                <div class="acao-item ${stats.pesquisa?.sim >= 1 ? 'concluida' : ''}">
+                    <div class="acao-titulo">
+                        <i class="bi bi-envelope-check"></i>
+                        Pesquisa Confirmada
+                        <span class="acao-pontos">+20 pts</span>
+                    </div>
+                    ${stats.pesquisa?.sim >= 1 ? `
+                        <div class="text-success">
+                            <i class="bi bi-check-circle-fill"></i> Empresa confirmou que recebeu a pesquisa!
+                        </div>
+                    ` : `
+                        <div class="text-muted">
+                            <i class="bi bi-x-circle"></i> Empresa ainda não confirmou recebimento da pesquisa
+                        </div>
+                    `}
+                </div>
+            ` : ''}
+        `;
+    }
+    
+    container.innerHTML = html;
+    
+    // Atualizar badge de pontos
+    document.getElementById('pontosChecklist').textContent = `${pontosChecklist}/50 pts`;
+}
+
+// Integrar checklist na abertura da empresa
+const _abrirEmpresaComPesquisa = abrirEmpresa;
+abrirEmpresa = async function(empresaId) {
+    await _abrirEmpresaComPesquisa(empresaId);
+    
+    // Atualizar seção checklist
+    atualizarSecaoChecklist();
+    
+    // Iniciar verificação periódica do checklist
+    const checklist = empresaAtual.campanha?.checklist;
+    if (checklist?.id && !checklist?.respondido) {
+        intervalVerificarChecklist = setInterval(verificarStatusChecklist, 30000);
+    }
 };
