@@ -299,14 +299,12 @@ function calcularProgressoEmpresa(emp) {
     // Dental
     if (campanha.dental?.emailEnviado) pontos += 8;
     if (campanha.dental?.reuniaoConfirmada) pontos += 15;
-    if (campanha.dental?.entendeuConfirmado) pontos += 12;
     if (campanha.dental?.decisaoRegistrada) pontos += 8;
     if (campanha.dental?.fechouNegocio) pontos += 40;
     
     // Saúde
     if (campanha.saude?.emailEnviado) pontos += 10;
     if (campanha.saude?.reuniaoConfirmada) pontos += 15;
-    if (campanha.saude?.entendeuConfirmado) pontos += 12;
     if (campanha.saude?.decisaoRegistrada) pontos += 8;
     if (campanha.saude?.fechouNegocio) pontos += 40;
     
@@ -588,19 +586,6 @@ function atualizarSecaoDental() {
         document.getElementById('reuniaoDentalOk').style.display = 'none';
     }
     
-    // Entendeu
-    if (campanhaD.entendeuConfirmado) {
-        pontosDental += 12;
-        document.getElementById('acaoEntendeuDental').classList.add('concluida');
-        document.getElementById('entendeuDentalPendente').style.display = 'none';
-        document.getElementById('entendeuDentalOk').style.display = 'block';
-    } else {
-        document.getElementById('acaoEntendeuDental').classList.remove('concluida');
-        document.getElementById('acaoEntendeuDental').classList.add('aguardando');
-        document.getElementById('entendeuDentalPendente').style.display = 'block';
-        document.getElementById('entendeuDentalOk').style.display = 'none';
-    }
-    
     // Decisão
     if (campanhaD.decisaoRegistrada) {
         pontosDental += 8;
@@ -636,7 +621,7 @@ function atualizarSecaoDental() {
         acaoFechouDental.style.display = 'none';
     }
     
-    document.getElementById('pontosDental').textContent = `${pontosDental}/83 pts`;
+    document.getElementById('pontosDental').textContent = `${pontosDental}/71 pts`;
 }
 
 // Atualizar seção Saúde
@@ -685,19 +670,6 @@ function atualizarSecaoSaude() {
         document.getElementById('reuniaoSaudeOk').style.display = 'none';
     }
     
-    // Entendeu
-    if (campanhaS.entendeuConfirmado) {
-        pontosSaude += 12;
-        document.getElementById('acaoEntendeuSaude').classList.add('concluida');
-        document.getElementById('entendeuSaudePendente').style.display = 'none';
-        document.getElementById('entendeuSaudeOk').style.display = 'block';
-    } else {
-        document.getElementById('acaoEntendeuSaude').classList.remove('concluida');
-        document.getElementById('acaoEntendeuSaude').classList.add('aguardando');
-        document.getElementById('entendeuSaudePendente').style.display = 'block';
-        document.getElementById('entendeuSaudeOk').style.display = 'none';
-    }
-    
     // Decisão
     if (campanhaS.decisaoRegistrada) {
         pontosSaude += 8;
@@ -733,7 +705,7 @@ function atualizarSecaoSaude() {
         acaoFechouSaude.style.display = 'none';
     }
     
-    document.getElementById('pontosSaude').textContent = `${pontosSaude}/85 pts`;
+    document.getElementById('pontosSaude').textContent = `${pontosSaude}/73 pts`;
 }
 
 // Salvar e-mail dental
