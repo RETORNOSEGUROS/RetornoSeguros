@@ -241,6 +241,12 @@ function renderizarEmpresas(filtro = '') {
     
     container.innerHTML = empresasFiltradas.map(emp => {
         const campanha = emp.campanha || {};
+        
+        // CORREÇÃO: Só usar dados se forem da campanha atual
+        // Se não tem campanhaId ou é de outra campanha, ignorar os dados
+        const isDadosCampanhaAtual = campanha.campanhaId === campanhaId;
+        const dadosCampanha = isDadosCampanhaAtual ? campanha : {};
+        
         const status = calcularStatusEmpresa(emp);
         const progresso = calcularProgressoEmpresa(emp);
         const nomeEmpresa = getNomeEmpresa(emp);
@@ -260,10 +266,10 @@ function renderizarEmpresas(filtro = '') {
                     </div>
                 </div>
                 <div class="empresa-status">
-                    ${campanha.funcionariosQtd ? `<span class="status-badge ok">👥 ${campanha.funcionariosQtd} func.</span>` : '<span class="status-badge pending">👥 Func. pendente</span>'}
-                    ${campanha.socios?.length ? `<span class="status-badge ok">👤 ${campanha.socios.length} sócio(s)</span>` : '<span class="status-badge pending">👤 Sócios pendente</span>'}
-                    ${campanha.dental?.emailEnviado ? '<span class="status-badge ok">🦷 Dental</span>' : ''}
-                    ${campanha.saude?.emailEnviado ? '<span class="status-badge ok">❤️ Saúde</span>' : ''}
+                    ${dadosCampanha.funcionariosQtd ? `<span class="status-badge ok">👥 ${dadosCampanha.funcionariosQtd} func.</span>` : ''}
+                    ${dadosCampanha.socios?.length ? `<span class="status-badge ok">👤 ${dadosCampanha.socios.length} sócio(s)</span>` : ''}
+                    ${dadosCampanha.dental?.emailEnviado ? '<span class="status-badge ok">🦷 Dental</span>' : ''}
+                    ${dadosCampanha.saude?.emailEnviado ? '<span class="status-badge ok">❤️ Saúde</span>' : ''}
                 </div>
             </div>
         `;
