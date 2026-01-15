@@ -8,6 +8,7 @@ let campanhas = [];
 let agencias = [];
 let campanhaAtual = null;
 let participanteAtual = null;
+let campanhaFiltroId = null; // Campanha selecionada para filtrar ações/empresas
 
 // Função auxiliar para pegar nome da empresa
 function getNomeEmpresa(emp) {
@@ -89,11 +90,43 @@ async function carregarDados() {
     // Carregar campanhas
     await carregarCampanhas();
     
+    // Popular seletores de campanha
+    popularSeletoresCampanha();
+    
     // Carregar stats
     await atualizarStats();
     
     // Carregar ações pendentes
     await carregarAcoesPendentes();
+}
+
+// Popular seletores de campanha nos filtros
+function popularSeletoresCampanha() {
+    const seletores = ['selectFiltroCampanha', 'selectFiltroCampanhaEmpresas'];
+    
+    seletores.forEach(seletorId => {
+        const select = document.getElementById(seletorId);
+        if (!select) return;
+        
+        select.innerHTML = '<option value="">Todas as campanhas</option>' +
+            campanhas.map(c => `
+                <option value="${c.id}" ${c.status === 'ativa' ? '' : 'class="text-muted"'}>
+                    ${c.nome} ${c.status !== 'ativa' ? '(Encerrada)' : ''}
+                </option>
+            `).join('');
+    });
+}
+
+// Filtrar por campanha selecionada
+function filtrarPorCampanha(campanhaId) {
+    campanhaFiltroId = campanhaId || null;
+    carregarAcoesPendentes();
+}
+
+// Filtrar empresas por campanha
+function filtrarEmpresasPorCampanha(campanhaId) {
+    campanhaFiltroId = campanhaId || null;
+    carregarEmpresasCampanha();
 }
 
 // Configurar eventos
@@ -587,11 +620,26 @@ async function carregarAcoesPendentes() {
         const emp = doc.data();
         const campanha = emp.campanha || {};
         
+        // ⚠️ IMPORTANTE: Filtrar por campanhaId se selecionado
+        if (campanhaFiltroId && campanha.campanhaId !== campanhaFiltroId) {
+            return; // Pular empresas de outras campanhas
+        }
+        
+        // Também pular se não tem campanhaId (dados órfãos)
+        if (!campanha.campanhaId) {
+            return;
+        }
+        
+        // Buscar nome da campanha para exibição
+        const campanhaNome = campanhas.find(c => c.id === campanha.campanhaId)?.nome || '';
+        
         // Verificar pendências de dental
         if (campanha.dental?.emailEnviado && !campanha.dental?.reuniaoConfirmada) {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'reuniaoDental',
                 label: 'Confirmar Reunião Dental',
                 pontos: 15
@@ -601,6 +649,8 @@ async function carregarAcoesPendentes() {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'entendeuDental',
                 label: 'Confirmar Entendimento Dental',
                 pontos: 12
@@ -610,6 +660,8 @@ async function carregarAcoesPendentes() {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'fechouDental',
                 label: 'Confirmar Negócio Dental',
                 pontos: 40
@@ -621,6 +673,8 @@ async function carregarAcoesPendentes() {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'reuniaoSaude',
                 label: 'Confirmar Reunião Saúde',
                 pontos: 15
@@ -630,6 +684,8 @@ async function carregarAcoesPendentes() {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'entendeuSaude',
                 label: 'Confirmar Entendimento Saúde',
                 pontos: 12
@@ -639,6 +695,8 @@ async function carregarAcoesPendentes() {
             pendentes.push({
                 empresaId: doc.id,
                 empresaNome: getNomeEmpresa(emp),
+                campanhaId: campanha.campanhaId,
+                campanhaNome,
                 tipo: 'fechouSaude',
                 label: 'Confirmar Negócio Saúde',
                 pontos: 40
@@ -653,7 +711,7 @@ async function carregarAcoesPendentes() {
         container.innerHTML = `
             <div class="text-center text-muted py-5">
                 <i class="bi bi-check-circle" style="font-size: 2rem;"></i>
-                <p class="mt-2">Nenhuma ação pendente</p>
+                <p class="mt-2">Nenhuma ação pendente${campanhaFiltroId ? ' para esta campanha' : ''}</p>
             </div>
         `;
         return;
@@ -664,8 +722,9 @@ async function carregarAcoesPendentes() {
             <div>
                 <strong>${p.empresaNome}</strong>
                 <span class="badge badge-tipo bg-warning text-dark ms-2">${p.label}</span>
+                ${!campanhaFiltroId && p.campanhaNome ? `<br><small class="text-muted">📋 ${p.campanhaNome}</small>` : ''}
             </div>
-            <button class="btn btn-sm btn-success" onclick="confirmarAcaoAdmin('${p.empresaId}', '${p.tipo}', ${p.pontos})">
+            <button class="btn btn-sm btn-success" onclick="confirmarAcaoAdmin('${p.empresaId}', '${p.tipo}', ${p.pontos}, '${p.campanhaId}')">
                 <i class="bi bi-check-lg"></i> Confirmar (+${p.pontos} pts)
             </button>
         </div>
@@ -673,7 +732,7 @@ async function carregarAcoesPendentes() {
 }
 
 // Confirmar ação do admin
-async function confirmarAcaoAdmin(empresaId, tipo, pontos) {
+async function confirmarAcaoAdmin(empresaId, tipo, pontos, campanhaIdParam) {
     try {
         const db = firebase.firestore();
         
@@ -701,31 +760,29 @@ async function confirmarAcaoAdmin(empresaId, tipo, pontos) {
         const empresa = empresaDoc.data();
         const participanteId = empresa.campanha?.[ramo]?.emailEnviadoPor;
         
-        if (participanteId) {
-            // Encontrar em qual campanha está
-            for (const campanha of campanhas) {
-                const partDoc = await db.collection('campanhas').doc(campanha.id)
-                    .collection('participantes').doc(participanteId).get();
+        // Usar o campanhaId passado diretamente (mais eficiente)
+        const campanhaIdUsar = campanhaIdParam || empresa.campanha?.campanhaId;
+        
+        if (participanteId && campanhaIdUsar) {
+            const partDoc = await db.collection('campanhas').doc(campanhaIdUsar)
+                .collection('participantes').doc(participanteId).get();
+            
+            if (partDoc.exists) {
+                const pontosAtuais = partDoc.data().pontos || 0;
+                await partDoc.ref.update({ pontos: pontosAtuais + pontos });
                 
-                if (partDoc.exists) {
-                    const pontosAtuais = partDoc.data().pontos || 0;
-                    await partDoc.ref.update({ pontos: pontosAtuais + pontos });
-                    
-                    // Registrar ação
-                    await db.collection('campanhas').doc(campanha.id)
-                        .collection('acoes').add({
-                            tipo,
-                            pontos,
-                            empresaId,
-                            empresaNome: getNomeEmpresa(empresa),
-                            participanteId,
-                            participanteNome: partDoc.data().nome,
-                            confirmadoPorAdmin: true,
-                            dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                    
-                    break;
-                }
+                // Registrar ação
+                await db.collection('campanhas').doc(campanhaIdUsar)
+                    .collection('acoes').add({
+                        tipo,
+                        pontos,
+                        empresaId,
+                        empresaNome: getNomeEmpresa(empresa),
+                        participanteId,
+                        participanteNome: partDoc.data().nome,
+                        confirmadoPorAdmin: true,
+                        dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
+                    });
             }
         }
         
@@ -750,10 +807,17 @@ async function carregarEmpresasCampanha() {
     const empresasComDados = empresasSnap.docs.filter(doc => {
         const emp = doc.data();
         const campanha = emp.campanha || {};
+        
+        // ⚠️ IMPORTANTE: Filtrar por campanhaId se selecionado
+        if (campanhaFiltroId && campanha.campanhaId !== campanhaFiltroId) {
+            return false;
+        }
+        
         // Verificar se tem dados da campanha
         const temDados = campanha.funcionariosQtd || campanha.socios?.length || campanha.dental || campanha.saude || campanha.pesquisa;
         if (!temDados) return false;
         
+        // Filtrar por busca
         if (busca) {
             const nome = getNomeEmpresa(emp).toLowerCase();
             return nome.includes(busca);
@@ -765,7 +829,7 @@ async function carregarEmpresasCampanha() {
         container.innerHTML = `
             <div class="text-center text-muted py-5">
                 <i class="bi bi-building" style="font-size: 2rem;"></i>
-                <p class="mt-2">Nenhuma empresa com dados de campanha</p>
+                <p class="mt-2">Nenhuma empresa com dados${campanhaFiltroId ? ' nesta campanha' : ''}</p>
             </div>
         `;
         return;
@@ -774,11 +838,14 @@ async function carregarEmpresasCampanha() {
     container.innerHTML = empresasComDados.map(emp => {
         const campanha = emp.campanha || {};
         const nomeEmpresa = getNomeEmpresa(emp);
+        const campanhaNome = campanhas.find(c => c.id === campanha.campanhaId)?.nome || '';
+        
         return `
             <div class="empresa-card ${campanha.dental || campanha.saude ? 'tem-acao' : ''}">
                 <div class="d-flex justify-content-between">
                     <div>
                         <strong>${nomeEmpresa}</strong>
+                        ${!campanhaFiltroId && campanhaNome ? `<br><small class="text-muted">📋 ${campanhaNome}</small>` : ''}
                         <div class="small text-muted mt-1">
                             ${campanha.funcionariosQtd ? `<span class="badge bg-info me-1">👥 ${campanha.funcionariosQtd} func.</span>` : ''}
                             ${campanha.socios?.length ? `<span class="badge bg-info me-1">👤 ${campanha.socios.length} sócio(s)</span>` : ''}
@@ -1747,5 +1814,215 @@ async function exportarTodosChecklists() {
     } catch (error) {
         console.error('Erro ao exportar:', error);
         alert('Erro ao exportar checklists');
+    }
+}
+
+// =====================================================
+// ENCERRAR CAMPANHA E ZERAR DADOS
+// =====================================================
+
+// Salvar status da campanha
+async function salvarStatusCampanha() {
+    if (!campanhaAtual) return;
+    
+    const novoStatus = document.getElementById('selectStatusCampanha').value;
+    
+    try {
+        const db = firebase.firestore();
+        
+        await db.collection('campanhas').doc(campanhaAtual.id).update({
+            status: novoStatus,
+            statusAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        campanhaAtual.status = novoStatus;
+        
+        alert('Status atualizado!');
+        await carregarCampanhas();
+        
+    } catch (error) {
+        console.error('Erro ao atualizar status:', error);
+        alert('Erro ao atualizar');
+    }
+}
+
+// Encerrar campanha com opção de zerar dados
+async function encerrarCampanhaComReset() {
+    if (!campanhaAtual) return;
+    
+    const confirmar = confirm(
+        `⚠️ ATENÇÃO!\n\n` +
+        `Você está prestes a ENCERRAR a campanha "${campanhaAtual.nome}" e ZERAR todos os dados das empresas vinculadas.\n\n` +
+        `Isso irá:\n` +
+        `• Mudar o status da campanha para "Encerrada"\n` +
+        `• Limpar todos os dados de funcionários, sócios, dental, saúde das empresas\n` +
+        `• Os dados de pesquisas e checklists serão mantidos para histórico\n\n` +
+        `Esta ação NÃO pode ser desfeita!\n\n` +
+        `Deseja continuar?`
+    );
+    
+    if (!confirmar) return;
+    
+    // Segunda confirmação
+    const confirmar2 = prompt(
+        `Para confirmar, digite o nome da campanha:\n"${campanhaAtual.nome}"`
+    );
+    
+    if (confirmar2 !== campanhaAtual.nome) {
+        alert('Nome incorreto. Operação cancelada.');
+        return;
+    }
+    
+    try {
+        const db = firebase.firestore();
+        const batch = db.batch();
+        
+        // 1. Atualizar status da campanha
+        const campanhaRef = db.collection('campanhas').doc(campanhaAtual.id);
+        batch.update(campanhaRef, {
+            status: 'encerrada',
+            encerradaEm: firebase.firestore.FieldValue.serverTimestamp(),
+            dadosZerados: true
+        });
+        
+        // 2. Buscar todas as empresas com dados desta campanha
+        const empresasSnap = await db.collection('empresas')
+            .where('campanha.campanhaId', '==', campanhaAtual.id)
+            .get();
+        
+        console.log(`Encontradas ${empresasSnap.size} empresas para zerar`);
+        
+        // 3. Zerar dados de cada empresa
+        empresasSnap.docs.forEach(doc => {
+            const empresaRef = db.collection('empresas').doc(doc.id);
+            batch.update(empresaRef, {
+                'campanha': {
+                    // Manter apenas histórico de qual foi a última campanha
+                    ultimaCampanhaId: campanhaAtual.id,
+                    ultimaCampanhaNome: campanhaAtual.nome,
+                    zeradoEm: firebase.firestore.FieldValue.serverTimestamp()
+                }
+            });
+        });
+        
+        // Executar batch
+        await batch.commit();
+        
+        alert(`✅ Campanha "${campanhaAtual.nome}" encerrada com sucesso!\n\n${empresasSnap.size} empresas tiveram seus dados zerados.`);
+        
+        // Fechar modal e recarregar
+        bootstrap.Modal.getInstance(document.getElementById('modalGerenciarCampanha')).hide();
+        await carregarCampanhas();
+        await atualizarStats();
+        await carregarAcoesPendentes();
+        
+    } catch (error) {
+        console.error('Erro ao encerrar campanha:', error);
+        alert('Erro ao encerrar campanha: ' + error.message);
+    }
+}
+
+// Zerar dados de uma campanha específica (sem encerrar)
+async function zerarDadosCampanha(campanhaId) {
+    const campanha = campanhas.find(c => c.id === campanhaId);
+    if (!campanha) {
+        alert('Campanha não encontrada');
+        return;
+    }
+    
+    const confirmar = confirm(
+        `⚠️ ATENÇÃO!\n\n` +
+        `Você está prestes a ZERAR todos os dados das empresas da campanha "${campanha.nome}".\n\n` +
+        `A campanha continuará ativa, mas todas as empresas terão seus dados limpos.\n\n` +
+        `Deseja continuar?`
+    );
+    
+    if (!confirmar) return;
+    
+    try {
+        const db = firebase.firestore();
+        
+        const empresasSnap = await db.collection('empresas')
+            .where('campanha.campanhaId', '==', campanhaId)
+            .get();
+        
+        if (empresasSnap.empty) {
+            alert('Nenhuma empresa encontrada com dados desta campanha.');
+            return;
+        }
+        
+        const batch = db.batch();
+        
+        empresasSnap.docs.forEach(doc => {
+            const empresaRef = db.collection('empresas').doc(doc.id);
+            batch.update(empresaRef, {
+                'campanha': {
+                    campanhaId: campanhaId, // Manter vinculado
+                    resetadoEm: firebase.firestore.FieldValue.serverTimestamp()
+                }
+            });
+        });
+        
+        await batch.commit();
+        
+        alert(`✅ Dados zerados!\n\n${empresasSnap.size} empresas foram resetadas.`);
+        
+        await carregarAcoesPendentes();
+        await carregarEmpresasCampanha();
+        
+    } catch (error) {
+        console.error('Erro ao zerar dados:', error);
+        alert('Erro: ' + error.message);
+    }
+}
+
+// Confirmar exclusão de campanha
+async function confirmarExcluirCampanha() {
+    if (!campanhaAtual) return;
+    
+    const confirmar = confirm(
+        `⚠️ ATENÇÃO!\n\n` +
+        `Você está prestes a EXCLUIR permanentemente a campanha "${campanhaAtual.nome}".\n\n` +
+        `Isso irá remover:\n` +
+        `• A campanha\n` +
+        `• Todos os participantes\n` +
+        `• Todas as ações registradas\n\n` +
+        `Os dados das empresas NÃO serão afetados.\n\n` +
+        `Esta ação NÃO pode ser desfeita!`
+    );
+    
+    if (!confirmar) return;
+    
+    try {
+        const db = firebase.firestore();
+        
+        // Deletar participantes
+        const participantesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('participantes').get();
+        
+        for (const doc of participantesSnap.docs) {
+            await doc.ref.delete();
+        }
+        
+        // Deletar ações
+        const acoesSnap = await db.collection('campanhas').doc(campanhaAtual.id)
+            .collection('acoes').get();
+        
+        for (const doc of acoesSnap.docs) {
+            await doc.ref.delete();
+        }
+        
+        // Deletar campanha
+        await db.collection('campanhas').doc(campanhaAtual.id).delete();
+        
+        alert('Campanha excluída!');
+        
+        bootstrap.Modal.getInstance(document.getElementById('modalGerenciarCampanha')).hide();
+        await carregarCampanhas();
+        await atualizarStats();
+        
+    } catch (error) {
+        console.error('Erro ao excluir campanha:', error);
+        alert('Erro ao excluir');
     }
 }
