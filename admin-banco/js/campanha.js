@@ -1833,7 +1833,8 @@ function mostrarModalLinkChecklist(link) {
                     border-radius: 10px;
                     color: #2e7d32;
                 ">
-                    <i class="bi bi-info-circle"></i> Quando a empresa responder, você ganhará <strong>+25 pontos</strong> automaticamente!
+                    <i class="bi bi-info-circle"></i> Quando a empresa responder, você ganhará automaticamente:<br>
+                    <strong>+25 pts</strong> (respondido) + <strong>+12 pts</strong> (entendeu dental) + <strong>+12 pts</strong> (entendeu saúde)
                 </div>
             </div>
         </div>
@@ -1980,9 +1981,23 @@ async function atualizarSecaoChecklist() {
         return;
     }
     
+    // Verificar se gerou pesquisa de colaboradores
+    const pesquisaGerada = campanha.pesquisa?.id || campanha.pesquisa?.linkEnviado;
+    if (!pesquisaGerada) {
+        container.innerHTML = `
+            <div class="text-center text-muted py-4">
+                <i class="bi bi-lock" style="font-size: 2rem; color: #ffc107;"></i>
+                <p class="mt-2"><strong>Gere primeiro a Pesquisa de Colaboradores</strong></p>
+                <p class="small text-muted">O checklist pergunta se a empresa recebeu a pesquisa, então é necessário gerar a pesquisa antes.</p>
+            </div>
+        `;
+        document.getElementById('pontosChecklist').textContent = '🔒 Aguardando Pesquisa';
+        return;
+    }
+    
     let pontosChecklist = 0;
     if (checklist.linkEnviado) pontosChecklist += 5;
-    if (checklist.respondido) pontosChecklist += 25;
+    if (checklist.respondido) pontosChecklist += 25 + 12 + 12; // +25 checklist +12 dental +12 saúde
     if (checklist.estatisticas?.pesquisa?.sim >= 1) pontosChecklist += 20; // Se confirmou pesquisa
     
     let html = '';
@@ -2024,13 +2039,18 @@ async function atualizarSecaoChecklist() {
                 <div class="acao-titulo">
                     <i class="bi bi-clipboard-check"></i>
                     Empresa Respondeu
-                    <span class="acao-pontos">+25 pts</span>
+                    <span class="acao-pontos">+49 pts</span>
                 </div>
                 ${checklist.respondido ? `
                     <div class="text-success">
                         <i class="bi bi-check-circle-fill"></i> Checklist respondido!
                     </div>
                     <div class="mt-2 small">
+                        <div class="mb-2">
+                            <span class="badge bg-success me-1">+25 respondido</span>
+                            <span class="badge bg-danger me-1">+12 entendeu saúde</span>
+                            <span class="badge bg-primary">+12 entendeu dental</span>
+                        </div>
                         <div class="row">
                             <div class="col-6">
                                 <strong class="text-danger"><i class="bi bi-heart-pulse"></i> Saúde:</strong>
@@ -2049,7 +2069,7 @@ async function atualizarSecaoChecklist() {
                         <i class="bi bi-clock"></i> Aguardando empresa responder...
                     </div>
                     <small class="text-muted d-block mt-1">
-                        <i class="bi bi-info-circle"></i> Você receberá os pontos automaticamente quando a empresa responder
+                        <i class="bi bi-info-circle"></i> +25 respondido +12 entendeu saúde +12 entendeu dental
                     </small>
                 `}
             </div>
@@ -2077,8 +2097,8 @@ async function atualizarSecaoChecklist() {
     
     container.innerHTML = html;
     
-    // Atualizar badge de pontos
-    document.getElementById('pontosChecklist').textContent = `${pontosChecklist}/50 pts`;
+    // Atualizar badge de pontos (5 + 25 + 12 + 12 + 20 = 74)
+    document.getElementById('pontosChecklist').textContent = `${pontosChecklist}/74 pts`;
 }
 
 // Integrar checklist na abertura da empresa
