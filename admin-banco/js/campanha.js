@@ -1727,32 +1727,134 @@ function mostrarModalLinkChecklist(link) {
     if (existente) existente.remove();
     
     const modal = document.createElement('div');
-    modal.className = 'modal-link-pesquisa modal-link-checklist';
+    modal.className = 'modal-link-checklist';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        padding: 20px;
+    `;
+    
     modal.innerHTML = `
-        <div class="modal-link-content">
-            <div class="modal-link-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                <h5><i class="bi bi-clipboard-check"></i> Checklist de Entendimento</h5>
-                <button onclick="this.parentElement.parentElement.parentElement.remove()">×</button>
+        <div style="
+            background: white;
+            border-radius: 16px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+            animation: slideUp 0.3s ease;
+        ">
+            <div style="
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            ">
+                <h5 style="margin: 0; display: flex; align-items: center; gap: 10px;">
+                    <i class="bi bi-clipboard-check"></i> Checklist de Entendimento
+                </h5>
+                <button onclick="this.closest('.modal-link-checklist').remove()" style="
+                    background: rgba(255,255,255,0.2);
+                    border: none;
+                    color: white;
+                    width: 35px;
+                    height: 35px;
+                    border-radius: 50%;
+                    font-size: 1.5rem;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                ">×</button>
             </div>
-            <div class="modal-link-body">
-                <p>Envie este link para a empresa <strong>${nomeEmp}</strong> responder o checklist de entendimento sobre os planos:</p>
-                <div class="link-box">
-                    <input type="text" value="${link}" readonly id="inputLinkChecklist">
-                    <button onclick="copiarLinkChecklist()"><i class="bi bi-clipboard"></i></button>
+            <div style="padding: 25px;">
+                <p style="margin-bottom: 20px; color: #333;">
+                    Envie este link para a empresa <strong>${nomeEmp}</strong> responder o checklist de entendimento sobre os planos:
+                </p>
+                <div style="
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 20px;
+                ">
+                    <input type="text" value="${link}" readonly id="inputLinkChecklist" style="
+                        flex: 1;
+                        padding: 12px 15px;
+                        border: 2px solid #e0e0e0;
+                        border-radius: 10px;
+                        font-size: 0.9rem;
+                        background: #f8f9fa;
+                    ">
+                    <button onclick="copiarLinkChecklist()" style="
+                        padding: 12px 20px;
+                        background: linear-gradient(135deg, #667eea, #764ba2);
+                        color: white;
+                        border: none;
+                        border-radius: 10px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 5px;
+                    ">
+                        <i class="bi bi-clipboard"></i> Copiar
+                    </button>
                 </div>
-                <button class="btn-whatsapp" onclick="enviarChecklistWhatsApp('${link}')">
+                <button onclick="enviarChecklistWhatsApp('${link}')" style="
+                    width: 100%;
+                    padding: 15px;
+                    background: linear-gradient(135deg, #25D366, #128C7E);
+                    color: white;
+                    border: none;
+                    border-radius: 10px;
+                    font-size: 1rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 10px;
+                ">
                     <i class="bi bi-whatsapp"></i> Enviar via WhatsApp
                 </button>
-                <div class="mt-3 text-center">
-                    <small class="text-muted">
-                        <i class="bi bi-info-circle"></i> Quando a empresa responder, você ganhará <strong>+25 pontos</strong> automaticamente!
-                    </small>
+                <div style="
+                    margin-top: 20px;
+                    text-align: center;
+                    padding: 15px;
+                    background: #e8f5e9;
+                    border-radius: 10px;
+                    color: #2e7d32;
+                ">
+                    <i class="bi bi-info-circle"></i> Quando a empresa responder, você ganhará <strong>+25 pontos</strong> automaticamente!
                 </div>
             </div>
         </div>
     `;
     
+    // Adicionar animação CSS
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    `;
+    document.head.appendChild(style);
+    
     document.body.appendChild(modal);
+    
+    // Fechar ao clicar fora
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.remove();
+    });
 }
 
 // Copiar link do checklist
