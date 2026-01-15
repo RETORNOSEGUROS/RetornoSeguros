@@ -362,24 +362,53 @@ function atualizarProgresso() {
 
 // Função para remover valores undefined (Firebase não aceita)
 function sanitizarParaFirebase(obj) {
-    if (obj === null || obj === undefined) {
-        return null;
-    }
+    if (obj === null) return null;
+    if (obj === undefined) return null;
+    
     if (Array.isArray(obj)) {
-        return obj.map(item => sanitizarParaFirebase(item));
+        return obj.map(item => sanitizarParaFirebase(item)).filter(item => item !== undefined);
     }
+    
     if (typeof obj === 'object') {
         const resultado = {};
-        for (const [key, value] of Object.entries(obj)) {
-            const valorSanitizado = sanitizarParaFirebase(value);
-            // Só inclui se não for undefined
-            if (valorSanitizado !== undefined) {
-                resultado[key] = valorSanitizado === undefined ? null : valorSanitizado;
+        for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                const value = obj[key];
+                // Converter undefined para null
+                if (value === undefined) {
+                    resultado[key] = null;
+                } else if (typeof value === 'object' && value !== null) {
+                    resultado[key] = sanitizarParaFirebase(value);
+                } else {
+                    resultado[key] = value;
+                }
             }
         }
         return resultado;
     }
+    
     return obj;
+}
+
+// Função para garantir que respostas estejam completas antes de enviar
+function prepararRespostasParaEnvio() {
+    const respostasCompletas = {};
+    
+    // Processar todas as perguntas e garantir valores válidos
+    [...PERGUNTAS.saude, ...PERGUNTAS.dental, ...PERGUNTAS.pesquisa].forEach(p => {
+        if (respostas[p.id]) {
+            respostasCompletas[p.id] = {
+                valor: respostas[p.id].valor !== undefined ? respostas[p.id].valor : null,
+                tipo: respostas[p.id].tipo || 'sim_nao'
+            };
+            // Adicionar pontuaSeTrue apenas se existir
+            if (respostas[p.id].pontuaSeTrue !== undefined) {
+                respostasCompletas[p.id].pontuaSeTrue = respostas[p.id].pontuaSeTrue;
+            }
+        }
+    });
+    
+    return respostasCompletas;
 }
 
 // Enviar respostas
@@ -395,8 +424,11 @@ async function enviarRespostas() {
         // Calcular estatísticas
         const stats = calcularEstatisticas();
         
+        // Preparar respostas para envio (garantir valores válidos)
+        const respostasParaEnvio = prepararRespostasParaEnvio();
+        
         // Sanitizar dados para remover undefined (Firebase não aceita)
-        const respostasSanitizadas = sanitizarParaFirebase(respostas);
+        const respostasSanitizadas = sanitizarParaFirebase(respostasParaEnvio);
         const statsSanitizadas = sanitizarParaFirebase(stats);
         
         // Atualizar checklist como respondido
