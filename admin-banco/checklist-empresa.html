@@ -914,14 +914,9 @@
             if (!campanhaId || !participanteId) return;
             
             try {
-                // +25 pontos por checklist respondido
-                await db.collection('campanhas').doc(campanhaId)
-                    .collection('participantes').doc(participanteId)
-                    .update({
-                        pontos: firebase.firestore.FieldValue.increment(25)
-                    });
+                let pontosTotal = 25; // Base: checklist respondido
                 
-                // Registrar ação
+                // +25 pontos por checklist respondido
                 await db.collection('campanhas').doc(campanhaId)
                     .collection('acoes').add({
                         tipo: 'checklistRespondido',
@@ -932,14 +927,53 @@
                         dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 
+                // +12 pontos - Confirmou Entendimento DENTAL
+                pontosTotal += 12;
+                await db.collection('campanhas').doc(campanhaId)
+                    .collection('acoes').add({
+                        tipo: 'entendeuDental',
+                        empresaId: empresaId,
+                        empresaNome: empresaNome,
+                        participanteId: participanteId,
+                        pontos: 12,
+                        confirmadoViaChecklist: true,
+                        porcentagemEntendimento: estatisticas.dental?.porcentagemSim || 0,
+                        dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                
+                // Atualizar empresa - marcar entendeu dental
+                await db.collection('empresas').doc(empresaId).update({
+                    'campanha.dental.entendeu': true,
+                    'campanha.dental.entendeuEm': firebase.firestore.FieldValue.serverTimestamp(),
+                    'campanha.dental.entendeuViaChecklist': true,
+                    'campanha.dental.porcentagemEntendimento': estatisticas.dental?.porcentagemSim || 0
+                });
+                
+                // +12 pontos - Confirmou Entendimento SAÚDE
+                pontosTotal += 12;
+                await db.collection('campanhas').doc(campanhaId)
+                    .collection('acoes').add({
+                        tipo: 'entendeuSaude',
+                        empresaId: empresaId,
+                        empresaNome: empresaNome,
+                        participanteId: participanteId,
+                        pontos: 12,
+                        confirmadoViaChecklist: true,
+                        porcentagemEntendimento: estatisticas.saude?.porcentagemSim || 0,
+                        dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                
+                // Atualizar empresa - marcar entendeu saúde
+                await db.collection('empresas').doc(empresaId).update({
+                    'campanha.saude.entendeu': true,
+                    'campanha.saude.entendeuEm': firebase.firestore.FieldValue.serverTimestamp(),
+                    'campanha.saude.entendeuViaChecklist': true,
+                    'campanha.saude.porcentagemEntendimento': estatisticas.saude?.porcentagemSim || 0
+                });
+                
                 // +20 pontos se confirmou receber pesquisa
                 if (respostas['pesquisa_recebeu_link'] === true) {
-                    await db.collection('campanhas').doc(campanhaId)
-                        .collection('participantes').doc(participanteId)
-                        .update({
-                            pontos: firebase.firestore.FieldValue.increment(20)
-                        });
-                    
+                    pontosTotal += 20;
                     await db.collection('campanhas').doc(campanhaId)
                         .collection('acoes').add({
                             tipo: 'pesquisaConfirmadaEmpresa',
@@ -950,6 +984,15 @@
                             dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
                         });
                 }
+                
+                // Atualizar pontos do participante (total de uma vez)
+                await db.collection('campanhas').doc(campanhaId)
+                    .collection('participantes').doc(participanteId)
+                    .update({
+                        pontos: firebase.firestore.FieldValue.increment(pontosTotal)
+                    });
+                
+                console.log(`Pontuação total: +${pontosTotal} pts`);
                 
             } catch (error) {
                 console.error('Erro ao pontuar:', error);
