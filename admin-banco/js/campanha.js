@@ -1670,9 +1670,41 @@ async function gerarChecklist() {
 }
 
 // Ver link do checklist existente
-function verLinkChecklist() {
-    const checklist = empresaAtual?.campanha?.checklist;
-    console.log('verLinkChecklist - checklist:', checklist);
+async function verLinkChecklist() {
+    let checklist = empresaAtual?.campanha?.checklist;
+    console.log('verLinkChecklist - checklist inicial:', checklist);
+    
+    // Se não tem ID local, buscar do Firebase
+    if (!checklist?.id) {
+        try {
+            const db = firebase.firestore();
+            // Busca simples sem índice composto
+            const checklistSnap = await db.collection('checklists_entendimento')
+                .where('empresaId', '==', empresaAtual.id)
+                .get();
+            
+            // Filtrar pelo campanhaId manualmente
+            const docs = checklistSnap.docs.filter(doc => doc.data().campanhaId === campanhaId);
+            
+            if (docs.length > 0) {
+                const checklistDoc = docs[0];
+                checklist = {
+                    id: checklistDoc.id,
+                    linkEnviado: true,
+                    respondido: checklistDoc.data().respondido || false,
+                    estatisticas: checklistDoc.data().estatisticas
+                };
+                
+                // Atualizar dados locais
+                empresaAtual.campanha = empresaAtual.campanha || {};
+                empresaAtual.campanha.checklist = checklist;
+                
+                console.log('Checklist encontrado no Firebase:', checklist);
+            }
+        } catch (error) {
+            console.error('Erro ao buscar checklist:', error);
+        }
+    }
     
     if (!checklist?.id) {
         alert('Checklist não encontrado. Tente gerar novamente.');
@@ -1808,14 +1840,16 @@ async function atualizarSecaoChecklist() {
     if (!checklist.id && funcionarios && socios.length > 0) {
         try {
             const db = firebase.firestore();
+            // Busca simples sem índice composto
             const checklistSnap = await db.collection('checklists_entendimento')
                 .where('empresaId', '==', emp.id)
-                .where('campanhaId', '==', campanhaId)
-                .limit(1)
                 .get();
             
-            if (!checklistSnap.empty) {
-                const checklistDoc = checklistSnap.docs[0];
+            // Filtrar pelo campanhaId manualmente
+            const docs = checklistSnap.docs.filter(doc => doc.data().campanhaId === campanhaId);
+            
+            if (docs.length > 0) {
+                const checklistDoc = docs[0];
                 checklist = {
                     id: checklistDoc.id,
                     linkEnviado: true,
