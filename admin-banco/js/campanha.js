@@ -1606,7 +1606,7 @@ async function gerarChecklist() {
                 respondido: checklistDoc.data().respondido || false
             };
             
-            atualizarSecaoChecklist();
+            await atualizarSecaoChecklist();
             verLinkChecklist();
             return;
         }
@@ -1655,7 +1655,7 @@ async function gerarChecklist() {
         mostrarPontos(PONTUACAO.checklistGerado);
         
         // Atualizar interface
-        atualizarSecaoChecklist();
+        await atualizarSecaoChecklist();
         
         // Mostrar link
         const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'checklist-empresa.html');
@@ -1671,12 +1671,18 @@ async function gerarChecklist() {
 
 // Ver link do checklist existente
 function verLinkChecklist() {
-    const checklist = empresaAtual.campanha?.checklist;
-    if (!checklist?.id) return;
+    const checklist = empresaAtual?.campanha?.checklist;
+    console.log('verLinkChecklist - checklist:', checklist);
+    
+    if (!checklist?.id) {
+        alert('Checklist não encontrado. Tente gerar novamente.');
+        return;
+    }
     
     const baseUrl = window.location.origin + window.location.pathname.replace('campanha.html', 'checklist-empresa.html');
     const link = `${baseUrl}?ch=${checklist.id}&e=${empresaAtual.id}&c=${campanhaId}&p=${participanteId}`;
     
+    console.log('Link gerado:', link);
     mostrarModalLinkChecklist(link);
 }
 
@@ -1684,8 +1690,12 @@ function verLinkChecklist() {
 function mostrarModalLinkChecklist(link) {
     const nomeEmp = getNomeEmpresa(empresaAtual);
     
+    // Remover modal existente se houver
+    const existente = document.querySelector('.modal-link-checklist');
+    if (existente) existente.remove();
+    
     const modal = document.createElement('div');
-    modal.className = 'modal-link-pesquisa';
+    modal.className = 'modal-link-pesquisa modal-link-checklist';
     modal.innerHTML = `
         <div class="modal-link-content">
             <div class="modal-link-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
@@ -1767,7 +1777,7 @@ async function verificarStatusChecklist() {
             });
             
             // Atualizar interface
-            atualizarSecaoChecklist();
+            await atualizarSecaoChecklist();
             
             // Recarregar pontos (os pontos já foram adicionados pelo checklist-empresa.js)
             const participanteDoc = await db.collection('campanhas').doc(campanhaId)
@@ -1784,12 +1794,43 @@ async function verificarStatusChecklist() {
 }
 
 // Atualizar seção do checklist
-function atualizarSecaoChecklist() {
+async function atualizarSecaoChecklist() {
     const emp = empresaAtual;
     const campanha = emp.campanha || {};
-    const checklist = campanha.checklist || {};
+    let checklist = campanha.checklist || {};
     const funcionarios = campanha.funcionariosQtd || 0;
     const socios = campanha.socios || [];
+    
+    const container = document.getElementById('secaoChecklist');
+    if (!container) return;
+    
+    // Se não tem checklist local, buscar do Firebase
+    if (!checklist.id && funcionarios && socios.length > 0) {
+        try {
+            const db = firebase.firestore();
+            const checklistSnap = await db.collection('checklists_entendimento')
+                .where('empresaId', '==', emp.id)
+                .where('campanhaId', '==', campanhaId)
+                .limit(1)
+                .get();
+            
+            if (!checklistSnap.empty) {
+                const checklistDoc = checklistSnap.docs[0];
+                checklist = {
+                    id: checklistDoc.id,
+                    linkEnviado: true,
+                    respondido: checklistDoc.data().respondido || false,
+                    estatisticas: checklistDoc.data().estatisticas
+                };
+                
+                // Atualizar dados locais
+                empresaAtual.campanha = empresaAtual.campanha || {};
+                empresaAtual.campanha.checklist = checklist;
+            }
+        } catch (error) {
+            console.log('Erro ao buscar checklist:', error);
+        }
+    }
     
     const container = document.getElementById('secaoChecklist');
     if (!container) return;
@@ -1912,8 +1953,8 @@ const _abrirEmpresaComPesquisa = abrirEmpresa;
 abrirEmpresa = async function(empresaId) {
     await _abrirEmpresaComPesquisa(empresaId);
     
-    // Atualizar seção checklist
-    atualizarSecaoChecklist();
+    // Atualizar seção checklist (agora é async)
+    await atualizarSecaoChecklist();
     
     // Iniciar verificação periódica do checklist
     const checklist = empresaAtual.campanha?.checklist;
