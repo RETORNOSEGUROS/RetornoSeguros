@@ -275,7 +275,16 @@ function calcularStatusEmpresa(emp) {
     const campanha = emp.campanha || {};
     
     // IMPORTANTE: Ignorar dados de outras campanhas
+    // Se campanhaId existe e é diferente, considerar como nova
+    // Se campanhaId não existe mas tem dados, também pode ser de campanha antiga (antes dessa feature)
     if (campanha.campanhaId && campanha.campanhaId !== campanhaId) {
+        return { classe: 'diamante', cor: 'info', texto: '💎 Nova' };
+    }
+    
+    // Se tem dados mas não tem campanhaId, verificar se há dados reais (pode ser de antes da feature)
+    // Por segurança, considerar como "em andamento" só se tiver campanhaId correto
+    if (!campanha.campanhaId && (campanha.funcionariosQtd || campanha.dental || campanha.saude)) {
+        // Dados sem campanhaId = provável de campanha antiga, tratar como nova
         return { classe: 'diamante', cor: 'info', texto: '💎 Nova' };
     }
     
@@ -295,8 +304,13 @@ function calcularStatusEmpresa(emp) {
 function calcularProgressoEmpresa(emp) {
     const campanha = emp.campanha || {};
     
-    // IMPORTANTE: Ignorar dados de outras campanhas
+    // IMPORTANTE: Ignorar dados de outras campanhas ou sem campanhaId
     if (campanha.campanhaId && campanha.campanhaId !== campanhaId) {
+        return 0;
+    }
+    
+    // Se tem dados mas não tem campanhaId, provavelmente é de campanha antiga
+    if (!campanha.campanhaId && (campanha.funcionariosQtd || campanha.dental || campanha.saude)) {
         return 0;
     }
     
@@ -327,21 +341,46 @@ async function abrirEmpresa(empresaId) {
     empresaAtual = empresasData.find(e => e.id === empresaId);
     if (!empresaAtual) return;
     
+    const campanha = empresaAtual.campanha || {};
+    
     // IMPORTANTE: Verificar se os dados de campanha são desta campanha
-    // Se forem de outra campanha, ignorar (tratar como empresa nova)
-    if (empresaAtual.campanha && empresaAtual.campanha.campanhaId !== campanhaId) {
-        console.log('Dados de campanha antiga detectados, ignorando...');
-        empresaAtual.campanha = { campanhaId: campanhaId }; // Reset para nova campanha
+    // Caso 1: Tem campanhaId mas é de outra campanha
+    // Caso 2: Tem dados mas não tem campanhaId (campanha antiga antes dessa feature)
+    const isOutraCampanha = campanha.campanhaId && campanha.campanhaId !== campanhaId;
+    const isDadosSemCampanhaId = !campanha.campanhaId && (campanha.funcionariosQtd || campanha.dental || campanha.saude);
+    
+    if (isOutraCampanha || isDadosSemCampanhaId) {
+        console.log('Dados de campanha antiga detectados, fazendo reset...');
+        
+        // Reset no Firebase - limpar dados da campanha anterior
+        try {
+            const db = firebase.firestore();
+            await db.collection('empresas').doc(empresaId).update({
+                'campanha': {
+                    campanhaId: campanhaId,
+                    resetadoEm: firebase.firestore.FieldValue.serverTimestamp()
+                }
+            });
+            console.log('Dados resetados no Firebase');
+        } catch (error) {
+            console.error('Erro ao resetar dados:', error);
+        }
+        
+        // Reset local
+        empresaAtual.campanha = { campanhaId: campanhaId };
+        
+        // Atualizar no array
+        const idx = empresasData.findIndex(e => e.id === empresaId);
+        if (idx >= 0) empresasData[idx] = empresaAtual;
     }
     
-    // Garantir que campanhaId está setado
-    if (empresaAtual.campanha) {
+    // Se não tem campanhaId, setar o atual
+    if (empresaAtual.campanha && !empresaAtual.campanha.campanhaId) {
         empresaAtual.campanha.campanhaId = campanhaId;
     }
     
     // Usar sócios da campanha (separados do sistema existente)
-    const campanha = empresaAtual.campanha || {};
-    sociosTemp = [...(campanha.socios || [])];
+    sociosTemp = [...(empresaAtual.campanha?.socios || [])];
     
     // Função auxiliar para pegar nome da empresa
     const nomeEmpresa = getNomeEmpresa(empresaAtual);
@@ -936,27 +975,44 @@ async function salvarDecisaoSaude() {
 async function registrarAcao(tipo, pontos, dados = {}) {
     const db = firebase.firestore();
     
-    // Criar documento de ação
-    await db.collection('campanhas').doc(campanhaId)
-        .collection('acoes').add({
-            tipo,
-            pontos,
-            dados,
-            empresaId: empresaAtual.id,
-            empresaNome: getNomeEmpresa(empresaAtual),
-            participanteId,
-            participanteNome: participanteData.nome,
-            dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
-        });
-    
-    // Atualizar pontos do participante
-    const novosPontos = (participanteData.pontos || 0) + pontos;
-    await db.collection('campanhas').doc(campanhaId)
-        .collection('participantes').doc(participanteId)
-        .update({ pontos: novosPontos });
-    
-    participanteData.pontos = novosPontos;
-    document.getElementById('pontosTotal').textContent = novosPontos;
+    try {
+        // Verificar se participante existe na campanha
+        const participanteRef = db.collection('campanhas').doc(campanhaId)
+            .collection('participantes').doc(participanteId);
+        
+        const participanteSnap = await participanteRef.get();
+        if (!participanteSnap.exists) {
+            console.error('Participante não encontrado na campanha:', participanteId);
+            throw new Error('Participante não encontrado nesta campanha');
+        }
+        
+        // Criar documento de ação
+        await db.collection('campanhas').doc(campanhaId)
+            .collection('acoes').add({
+                tipo,
+                pontos,
+                dados,
+                empresaId: empresaAtual.id,
+                empresaNome: getNomeEmpresa(empresaAtual),
+                participanteId,
+                participanteNome: participanteData.nome,
+                dataRegistro: firebase.firestore.FieldValue.serverTimestamp()
+            });
+        
+        // Atualizar pontos do participante (usando set com merge para maior robustez)
+        const novosPontos = (participanteData.pontos || 0) + pontos;
+        await participanteRef.set({ 
+            pontos: novosPontos,
+            ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        
+        participanteData.pontos = novosPontos;
+        document.getElementById('pontosTotal').textContent = novosPontos;
+        
+    } catch (error) {
+        console.error('Erro ao registrar ação:', error);
+        throw error;
+    }
 }
 
 // Mostrar animação de pontos
