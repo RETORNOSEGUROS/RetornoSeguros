@@ -9,6 +9,20 @@ let agencias = [];
 let campanhaAtual = null;
 let participanteAtual = null;
 let campanhaFiltroId = null; // Campanha selecionada para filtrar ações/empresas
+let campanhasExistentesCache = new Set(); // Cache de IDs de campanhas que existem
+
+// Função auxiliar: obter Set de campanhas existentes
+async function obterCampanhasExistentes() {
+    const db = firebase.firestore();
+    const campanhasSnap = await db.collection('campanhas').get();
+    campanhasExistentesCache = new Set(campanhasSnap.docs.map(doc => doc.id));
+    return campanhasExistentesCache;
+}
+
+// Verificar se campanha existe (usa cache)
+function campanhaExiste(campanhaId) {
+    return campanhasExistentesCache.has(campanhaId);
+}
 
 // Função auxiliar para pegar nome da empresa
 function getNomeEmpresa(emp) {
@@ -87,8 +101,11 @@ async function carregarDados() {
     const agenciasSnap = await db.collection('agencias_banco').get();
     agencias = agenciasSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     
-    // Carregar campanhas
+    // Carregar campanhas (também popula o cache)
     await carregarCampanhas();
+    
+    // Popular cache de campanhas existentes
+    await obterCampanhasExistentes();
     
     // Popular seletores de campanha
     popularSeletoresCampanha();
@@ -102,7 +119,7 @@ async function carregarDados() {
 
 // Popular seletores de campanha nos filtros
 function popularSeletoresCampanha() {
-    const seletores = ['selectFiltroCampanha', 'selectFiltroCampanhaEmpresas'];
+    const seletores = ['selectFiltroCampanha', 'selectFiltroCampanhaEmpresas', 'selectFiltroCampanhaPesquisas', 'selectFiltroCampanhaChecklists'];
     
     seletores.forEach(seletorId => {
         const select = document.getElementById(seletorId);
@@ -127,6 +144,18 @@ function filtrarPorCampanha(campanhaId) {
 function filtrarEmpresasPorCampanha(campanhaId) {
     campanhaFiltroId = campanhaId || null;
     carregarEmpresasCampanha();
+}
+
+// Filtrar pesquisas por campanha
+function filtrarPesquisasPorCampanha(campanhaId) {
+    campanhaFiltroId = campanhaId || null;
+    carregarPesquisas();
+}
+
+// Filtrar checklists por campanha
+function filtrarChecklistsPorCampanha(campanhaId) {
+    campanhaFiltroId = campanhaId || null;
+    carregarChecklists();
 }
 
 // Configurar eventos
@@ -802,18 +831,26 @@ async function carregarEmpresasCampanha() {
     const container = document.getElementById('listaEmpresasCampanha');
     const busca = document.getElementById('buscaEmpresa').value.toLowerCase();
     
+    // Atualizar cache de campanhas existentes
+    await obterCampanhasExistentes();
+    
     const empresasSnap = await db.collection('empresas').get();
     
     const empresasComDados = empresasSnap.docs.filter(doc => {
         const emp = doc.data();
         const campanha = emp.campanha || {};
         
-        // ⚠️ IMPORTANTE: Filtrar por campanhaId se selecionado
+        // ⚠️ IMPORTANTE: Verificar se a campanha ainda existe
+        if (!campanha.campanhaId || !campanhaExiste(campanha.campanhaId)) {
+            return false;
+        }
+        
+        // ⚠️ Filtrar por campanhaId se selecionado
         if (campanhaFiltroId && campanha.campanhaId !== campanhaFiltroId) {
             return false;
         }
         
-        // Verificar se tem dados da campanha
+        // Verificar se tem dados reais da campanha (não apenas campanhaId)
         const temDados = campanha.funcionariosQtd || campanha.socios?.length || campanha.dental || campanha.saude || campanha.pesquisa;
         if (!temDados) return false;
         
@@ -1078,24 +1115,44 @@ async function carregarPesquisas() {
     const container = document.getElementById('listaPesquisas');
     
     try {
+        // Atualizar cache de campanhas existentes
+        await obterCampanhasExistentes();
+        
         const pesquisasSnap = await db.collection('pesquisas_colaboradores')
             .orderBy('dataCriacao', 'desc')
             .get();
         
-        if (pesquisasSnap.empty) {
+        // ⚠️ FILTRAR: Apenas pesquisas de campanhas que EXISTEM
+        const pesquisasFiltradas = pesquisasSnap.docs.filter(doc => {
+            const p = doc.data();
+            
+            // Se não tem campanhaId, ignorar (dado legado)
+            if (!p.campanhaId) return false;
+            
+            // Verificar se a campanha ainda existe
+            if (!campanhaExiste(p.campanhaId)) return false;
+            
+            // Se há filtro de campanha selecionado, aplicar
+            if (campanhaFiltroId && p.campanhaId !== campanhaFiltroId) return false;
+            
+            return true;
+        });
+        
+        if (pesquisasFiltradas.length === 0) {
             container.innerHTML = `
                 <div class="text-center text-muted py-5">
                     <i class="bi bi-clipboard-data" style="font-size: 2rem;"></i>
-                    <p class="mt-2">Nenhuma pesquisa criada ainda</p>
+                    <p class="mt-2">Nenhuma pesquisa criada ainda${campanhaFiltroId ? ' para esta campanha' : ''}</p>
                 </div>
             `;
             return;
         }
         
-        container.innerHTML = pesquisasSnap.docs.map(doc => {
+        container.innerHTML = pesquisasFiltradas.map(doc => {
             const p = doc.data();
             const progresso = Math.min((p.totalRespostas || 0) / 10 * 100, 100);
             const corProgresso = progresso >= 100 ? 'success' : progresso >= 50 ? 'warning' : 'info';
+            const campanhaNome = campanhas.find(c => c.id === p.campanhaId)?.nome || '';
             
             return `
                 <div class="card mb-3">
@@ -1106,6 +1163,7 @@ async function carregarPesquisas() {
                                 <p class="text-muted mb-2 small">
                                     <i class="bi bi-people"></i> ${p.funcionariosQtd || 0} funcionários
                                     • Enviada por: ${p.participanteNome || '-'}
+                                    ${!campanhaFiltroId && campanhaNome ? `<br>📋 ${campanhaNome}` : ''}
                                 </p>
                             </div>
                             <div class="text-end">
@@ -1423,25 +1481,45 @@ async function carregarChecklists() {
     const container = document.getElementById('listaChecklists');
     
     try {
+        // Atualizar cache de campanhas existentes
+        await obterCampanhasExistentes();
+        
         const checklistsSnap = await db.collection('checklists_entendimento')
             .orderBy('dataCriacao', 'desc')
             .get();
         
-        if (checklistsSnap.empty) {
+        // ⚠️ FILTRAR: Apenas checklists de campanhas que EXISTEM
+        const checklistsFiltrados = checklistsSnap.docs.filter(doc => {
+            const c = doc.data();
+            
+            // Se não tem campanhaId, ignorar (dado legado)
+            if (!c.campanhaId) return false;
+            
+            // Verificar se a campanha ainda existe
+            if (!campanhaExiste(c.campanhaId)) return false;
+            
+            // Se há filtro de campanha selecionado, aplicar
+            if (campanhaFiltroId && c.campanhaId !== campanhaFiltroId) return false;
+            
+            return true;
+        });
+        
+        if (checklistsFiltrados.length === 0) {
             container.innerHTML = `
                 <div class="text-center text-muted py-5">
                     <i class="bi bi-clipboard-check" style="font-size: 2rem;"></i>
-                    <p class="mt-2">Nenhum checklist criado ainda</p>
+                    <p class="mt-2">Nenhum checklist criado ainda${campanhaFiltroId ? ' para esta campanha' : ''}</p>
                 </div>
             `;
             return;
         }
         
-        container.innerHTML = checklistsSnap.docs.map(doc => {
+        container.innerHTML = checklistsFiltrados.map(doc => {
             const c = doc.data();
             const stats = c.estatisticas || {};
             const saudeStats = stats.saude || {};
             const dentalStats = stats.dental || {};
+            const campanhaNome = campanhas.find(camp => camp.id === c.campanhaId)?.nome || '';
             
             const corStatus = c.respondido ? 'success' : 'warning';
             const textStatus = c.respondido ? 'Respondido' : 'Aguardando';
@@ -1456,6 +1534,7 @@ async function carregarChecklists() {
                                     <i class="bi bi-people"></i> ${c.funcionariosQtd || 0} funcionários
                                     • <i class="bi bi-person"></i> ${c.sociosQtd || 0} sócios
                                     • Enviado por: ${c.participanteNome || '-'}
+                                    ${!campanhaFiltroId && campanhaNome ? `<br>📋 ${campanhaNome}` : ''}
                                 </p>
                             </div>
                             <div class="text-end">
@@ -2018,8 +2097,14 @@ async function confirmarExcluirCampanha() {
         alert('Campanha excluída!');
         
         bootstrap.Modal.getInstance(document.getElementById('modalGerenciarCampanha')).hide();
+        
+        // Atualizar cache e recarregar tudo
         await carregarCampanhas();
+        await obterCampanhasExistentes(); // ⚠️ Atualizar cache
         await atualizarStats();
+        
+        // Recarregar abas que podem ter dados antigos
+        await carregarAcoesPendentes();
         
     } catch (error) {
         console.error('Erro ao excluir campanha:', error);
