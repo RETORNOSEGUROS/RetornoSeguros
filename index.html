@@ -2086,7 +2086,7 @@
                     </div>
                     <div class="form-group">
                         <label for="insta-phone">Telefone/WhatsApp</label>
-                        <input type="tel" id="insta-phone" placeholder="(00) 00000-0000" required>
+                        <input type="tel" id="insta-phone" placeholder="(54)99999-9999" required>
                     </div>
                     <div id="insta-error" style="color: #ff6b6b; font-size: 0.9rem; margin-bottom: 1rem; display: none;"></div>
                     <button type="submit" class="form-button" id="insta-btn" style="background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);">
@@ -2333,6 +2333,7 @@
         // ============================================================
         async function handleInstagramSubmit(event) {
             event.preventDefault();
+            console.log('📝 Iniciando cadastro Instagram...');
             
             const nome = document.getElementById('insta-name').value.trim();
             let instagram = document.getElementById('insta-username').value.trim();
@@ -2344,7 +2345,9 @@
             errorDiv.style.display = 'none';
             
             // Formata o @ do Instagram (remove @ se já tiver)
-            instagram = instagram.replace('@', '').toLowerCase();
+            instagram = instagram.replace(/@/g, '').toLowerCase().trim();
+            
+            console.log('📋 Dados:', { nome, instagram, telefone });
             
             if (!nome || !instagram || !telefone) {
                 errorDiv.textContent = 'Preencha todos os campos.';
@@ -2365,6 +2368,8 @@
             submitBtn.textContent = 'Salvando...';
             
             try {
+                console.log('🔍 Verificando duplicados...');
+                
                 // Verifica se já existe cadastro com esse telefone ou Instagram
                 const queryTelefone = await db.collection('seguidores_instagram')
                     .where('telefone', '==', telefoneLimpo)
@@ -2374,16 +2379,28 @@
                     .where('instagram', '==', instagram)
                     .get();
                 
-                if (!queryTelefone.empty || !queryInstagram.empty) {
-                    errorDiv.textContent = 'Este telefone ou Instagram já está cadastrado na promoção!';
+                if (!queryTelefone.empty) {
+                    console.log('⚠️ Telefone já cadastrado');
+                    errorDiv.textContent = 'Este telefone já está cadastrado na promoção!';
                     errorDiv.style.display = 'block';
                     submitBtn.disabled = false;
                     submitBtn.textContent = 'Participar da Promoção';
                     return false;
                 }
                 
+                if (!queryInstagram.empty) {
+                    console.log('⚠️ Instagram já cadastrado');
+                    errorDiv.textContent = 'Este Instagram já está cadastrado na promoção!';
+                    errorDiv.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Participar da Promoção';
+                    return false;
+                }
+                
+                console.log('💾 Salvando no Firestore...');
+                
                 // Salva no Firestore
-                await db.collection('seguidores_instagram').add({
+                const docRef = await db.collection('seguidores_instagram').add({
                     nome: nome,
                     instagram: instagram,
                     telefone: telefoneLimpo,
@@ -2392,12 +2409,14 @@
                     campanha: 'promo_10_anos'
                 });
                 
+                console.log('✅ Cadastro salvo com sucesso! ID:', docRef.id);
+                
                 // Esconde o formulário e mostra a tela de sucesso
                 document.getElementById('instagramFormContainer').style.display = 'none';
                 document.getElementById('instagramSuccessContainer').style.display = 'block';
                 
             } catch (error) {
-                console.error('Erro ao salvar:', error);
+                console.error('❌ Erro ao salvar:', error);
                 console.error('Código:', error.code);
                 console.error('Mensagem:', error.message);
                 
@@ -2529,22 +2548,32 @@
                 });
             }
 
-            // Máscara para telefone Instagram
+            // Máscara para telefone Instagram - formato (XX)XXXXX-XXXX
             const instaPhoneInput = document.getElementById('insta-phone');
             if (instaPhoneInput) {
                 instaPhoneInput.addEventListener('input', function(e) {
                     let value = e.target.value.replace(/\D/g, '');
                     if (value.length > 11) value = value.slice(0, 11);
                     
-                    if (value.length > 10) {
-                        value = value.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
-                    } else if (value.length > 6) {
-                        value = value.replace(/(\d{2})(\d{4,5})(\d{0,4})/, '($1) $2-$3');
-                    } else if (value.length > 2) {
-                        value = value.replace(/(\d{2})(\d{0,5})/, '($1) $2');
+                    let formatted = '';
+                    if (value.length > 0) {
+                        formatted = '(' + value.slice(0, 2);
+                    }
+                    if (value.length >= 2) {
+                        formatted += ')' + value.slice(2, 7);
+                    }
+                    if (value.length >= 7) {
+                        formatted += '-' + value.slice(7, 11);
                     }
                     
-                    e.target.value = value;
+                    e.target.value = formatted;
+                });
+                
+                // Prevenir caracteres não numéricos
+                instaPhoneInput.addEventListener('keypress', function(e) {
+                    if (!/[0-9]/.test(e.key) && e.key !== 'Backspace' && e.key !== 'Delete' && e.key !== 'Tab') {
+                        e.preventDefault();
+                    }
                 });
             }
         });
