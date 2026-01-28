@@ -1,5 +1,6 @@
-// visitas.js — Registrar Visita Modernizado
+// visitas.js — Registrar Visita Modernizado (CORRIGIDO)
 // Firebase v8
+// Versão com histórico de visitas funcionando corretamente
 
 // ==== Firebase Init ====
 if (!firebase.apps.length && typeof firebaseConfig !== "undefined") {
@@ -69,9 +70,20 @@ const toDate = x => {
 
 const fmtData = d => d ? d.toLocaleDateString("pt-BR") : "-";
 const fmtHora = d => d ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "-";
+const fmtDataHora = d => d ? `${fmtData(d)} às ${fmtHora(d)}` : "-";
 
 function fmtBRL(v) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
+}
+
+function fmtDuracao(segundos) {
+  if (!segundos) return "-";
+  const h = Math.floor(segundos / 3600);
+  const m = Math.floor((segundos % 3600) / 60);
+  const s = segundos % 60;
+  if (h > 0) return `${h}h ${m}min`;
+  if (m > 0) return `${m}min ${s}s`;
+  return `${s}s`;
 }
 
 function formatarMoeda(input) {
@@ -132,6 +144,7 @@ async function init() {
   renderizarRamos();
   renderizarChecklist();
   setDefaultDateTime();
+  criarModalDetalhesVisita(); // NOVO: Criar modal de detalhes
   
   showLoading(false);
 }
@@ -146,14 +159,12 @@ async function carregarEmpresas() {
   try {
     let query = db.collection("empresas");
     
-    // CORREÇÃO: Filtrar empresas por permissão
     if (!CTX.isAdmin) {
       if (["gerente chefe", "assistente"].includes(CTX.perfil)) {
         if (CTX.agenciaId) {
           query = query.where("agenciaId", "==", CTX.agenciaId);
         }
       } else {
-        // RM: filtrar pela agência e depois no client pelo rmUid
         if (CTX.agenciaId) {
           query = query.where("agenciaId", "==", CTX.agenciaId);
         }
@@ -166,10 +177,9 @@ async function carregarEmpresas() {
     snap.forEach(doc => {
       const d = doc.data();
       
-      // Para RM: filtro adicional no client (só empresas dele)
       if (!CTX.isAdmin && !["gerente chefe", "assistente"].includes(CTX.perfil)) {
         const rmUid = d.rmUid || d.rmId || d.gerenteId || "";
-        if (rmUid !== CTX.uid) return; // Pula empresas de outros RMs
+        if (rmUid !== CTX.uid) return;
       }
       
       EMPRESAS[doc.id] = { id: doc.id, ...d };
@@ -202,7 +212,6 @@ async function carregarRMs() {
     snap.forEach(doc => {
       const d = doc.data();
       if (d.nome) {
-        // CORREÇÃO: Filtrar RMs por agência (exceto Admin)
         if (CTX.isAdmin || d.agenciaId === CTX.agenciaId) {
           RMS[doc.id] = { nome: d.nome, agenciaId: d.agenciaId };
         }
@@ -262,6 +271,10 @@ function limparEmpresa() {
   $("segurosAtivosSection").style.display = "none";
 }
 
+// ============================================
+// CORREÇÃO PRINCIPAL: Histórico com detalhes
+// ============================================
+
 async function carregarHistoricoEmpresa(empresaId) {
   const container = $("historicoVisitas");
   
@@ -269,7 +282,7 @@ async function carregarHistoricoEmpresa(empresaId) {
     const snap = await db.collection("visitas")
       .where("empresaId", "==", empresaId)
       .orderBy("dataHora", "desc")
-      .limit(5)
+      .limit(10) // Aumentado de 5 para 10
       .get();
     
     if (snap.empty) {
@@ -280,17 +293,34 @@ async function carregarHistoricoEmpresa(empresaId) {
     let html = "";
     snap.forEach(doc => {
       const d = doc.data();
+      const visitaId = doc.id;
       const data = toDate(d.dataHora);
       const tipo = d.tipoVisita || d.tipo || "Presencial";
       const tipoBadge = tipo === "Online" ? "badge-info" : "badge-success";
       
+      // Contar informações extras
+      const numContatos = (d.contatos || []).length;
+      const numRamos = Object.values(d.ramos || {}).filter(r => r.abordado).length;
+      const temObs = d.observacoes && d.observacoes.trim().length > 0;
+      
+      // Indicadores visuais
+      let indicadores = [];
+      if (numContatos > 0) indicadores.push(`👥${numContatos}`);
+      if (numRamos > 0) indicadores.push(`🎯${numRamos}`);
+      if (temObs) indicadores.push(`📝`);
+      if (d.duracao > 0) indicadores.push(`⏱️`);
+      
       html += `
-        <div class="historico-item">
+        <div class="historico-item historico-item-clickable" onclick="verDetalhesVisita('${visitaId}')" title="Clique para ver detalhes">
           <div class="historico-item-left">
             <span class="badge ${tipoBadge}">${tipo === "Online" ? "🔵" : "🟢"} ${tipo}</span>
             <span>${fmtData(data)}</span>
+            <span class="historico-indicadores">${indicadores.join(' ')}</span>
           </div>
-          <span style="color: var(--muted); font-size: 12px;">${d.rmNome || '-'}</span>
+          <div class="historico-item-right">
+            <span style="color: var(--muted); font-size: 12px;">${d.rmNome || '-'}</span>
+            <span class="historico-ver-mais">👁️</span>
+          </div>
         </div>
       `;
     });
@@ -301,6 +331,263 @@ async function carregarHistoricoEmpresa(empresaId) {
     container.innerHTML = '<div class="historico-empty">Erro ao carregar histórico</div>';
   }
 }
+
+// ============================================
+// NOVO: Modal de Detalhes da Visita
+// ============================================
+
+function criarModalDetalhesVisita() {
+  // Verificar se modal já existe
+  if ($("modalDetalhesVisita")) return;
+  
+  const modalHtml = `
+    <div class="modal-overlay" id="modalDetalhesVisita">
+      <div class="modal modal-lg">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modalDetalhesTitle">📋 Detalhes da Visita</h3>
+          <button class="modal-close" onclick="fecharDetalhesVisita()">✕</button>
+        </div>
+        <div class="modal-body" id="modalDetalhesContent">
+          <div class="loading-spinner">Carregando...</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="fecharDetalhesVisita()">Fechar</button>
+          <button class="btn btn-primary" onclick="duplicarVisita()" id="btnDuplicarVisita">📋 Usar como Base</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+let VISITA_DETALHES_ATUAL = null;
+
+async function verDetalhesVisita(visitaId) {
+  const modal = $("modalDetalhesVisita");
+  const content = $("modalDetalhesContent");
+  
+  modal.classList.add('active');
+  content.innerHTML = '<div class="loading-spinner">Carregando detalhes...</div>';
+  
+  try {
+    const doc = await db.collection("visitas").doc(visitaId).get();
+    
+    if (!doc.exists) {
+      content.innerHTML = '<div class="error-message">Visita não encontrada</div>';
+      return;
+    }
+    
+    const visita = doc.data();
+    VISITA_DETALHES_ATUAL = { id: visitaId, ...visita };
+    
+    const data = toDate(visita.dataHora);
+    const tipo = visita.tipoVisita || visita.tipo || "Presencial";
+    const tipoBadge = tipo === "Online" ? "badge-info" : "badge-success";
+    
+    // Contatos
+    const contatos = visita.contatos || [];
+    let contatosHtml = '<div class="empty-state">Nenhum contato registrado</div>';
+    if (contatos.length > 0) {
+      contatosHtml = contatos.map(c => `
+        <div class="detalhe-contato">
+          <div class="contato-avatar-sm">${getIniciais(c.nome)}</div>
+          <div>
+            <div class="contato-nome-sm">${c.nome}</div>
+            <div class="contato-cargo-sm">${c.cargo || '-'}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    // Ramos mapeados
+    const ramos = visita.ramos || {};
+    const ramosAbordados = Object.entries(ramos).filter(([_, d]) => d.abordado);
+    let ramosHtml = '<div class="empty-state">Nenhum ramo mapeado</div>';
+    
+    const statusLabels = { 
+      ativo: "🟢 Ativo", 
+      vence: "🟡 Vence em breve", 
+      vencido: "🔴 Vencido", 
+      "nao-possui": "⚪ Não possui" 
+    };
+    const interesseIcons = { alto: "🔥 Alto", medio: "🟡 Médio", baixo: "❄️ Baixo" };
+    
+    if (ramosAbordados.length > 0) {
+      ramosHtml = ramosAbordados.map(([id, dados]) => {
+        const config = RAMOS_CONFIG.find(r => r.id === id) || { nome: id, icon: "📋" };
+        
+        let detalhes = [];
+        if (dados.status) detalhes.push(statusLabels[dados.status] || dados.status);
+        if (dados.interesse) detalhes.push(interesseIcons[dados.interesse] || dados.interesse);
+        if (dados.vencimento) detalhes.push(`📅 Venc: ${dados.vencimento}`);
+        if (dados.seguradora) detalhes.push(`🏛️ ${dados.seguradora}`);
+        if (dados.valorEstimado) detalhes.push(`💰 ${dados.valorEstimado}`);
+        if (dados.concorrente) detalhes.push(`🏢 Atual: ${dados.concorrente}`);
+        
+        return `
+          <div class="detalhe-ramo">
+            <div class="detalhe-ramo-header">
+              <span class="detalhe-ramo-icon">${config.icon}</span>
+              <span class="detalhe-ramo-nome">${config.nome}</span>
+            </div>
+            <div class="detalhe-ramo-info">${detalhes.join(' • ') || 'Sem detalhes'}</div>
+            ${dados.obs ? `<div class="detalhe-ramo-obs">📝 ${dados.obs}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+    
+    // Checklist
+    const checklist = visita.checklist || [];
+    let checklistHtml = '<div class="empty-state">Nenhum checklist registrado</div>';
+    if (checklist.length > 0) {
+      const concluidos = checklist.filter(i => i.done).length;
+      checklistHtml = `
+        <div class="checklist-resumo">
+          <span class="checklist-progress-bar">
+            <span class="checklist-progress-fill" style="width: ${(concluidos/checklist.length)*100}%"></span>
+          </span>
+          <span class="checklist-progress-text">${concluidos}/${checklist.length} concluídos</span>
+        </div>
+        <div class="checklist-items">
+          ${checklist.map(item => `
+            <div class="checklist-item-mini ${item.done ? 'done' : ''}">
+              <span class="checklist-check">${item.done ? '✓' : '○'}</span>
+              <span>${item.text}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+    
+    // Geolocalização
+    let geoHtml = '';
+    if (visita.geolocalizacao) {
+      const geo = visita.geolocalizacao;
+      geoHtml = `
+        <div class="detalhe-section">
+          <h4 class="detalhe-section-title">📍 Localização</h4>
+          <div class="detalhe-geo">
+            <span>Lat: ${geo.lat?.toFixed(6) || '-'}, Lng: ${geo.lng?.toFixed(6) || '-'}</span>
+            <a href="https://www.google.com/maps?q=${geo.lat},${geo.lng}" target="_blank" class="btn btn-sm btn-secondary">Ver no Mapa</a>
+          </div>
+        </div>
+      `;
+    }
+    
+    content.innerHTML = `
+      <div class="detalhe-visita">
+        <!-- Cabeçalho -->
+        <div class="detalhe-header">
+          <div class="detalhe-empresa">${visita.empresaNome || '-'}</div>
+          <div class="detalhe-meta">
+            <span class="badge ${tipoBadge}">${tipo === "Online" ? "🔵" : "🟢"} ${tipo}</span>
+            <span>📅 ${fmtDataHora(data)}</span>
+            ${visita.duracao ? `<span>⏱️ ${fmtDuracao(visita.duracao)}</span>` : ''}
+          </div>
+          <div class="detalhe-rm">👤 Responsável: <strong>${visita.rmNome || '-'}</strong></div>
+          ${visita.numFuncionarios ? `<div class="detalhe-func">👥 Funcionários: <strong>${visita.numFuncionarios}</strong></div>` : ''}
+        </div>
+        
+        <!-- Contatos -->
+        <div class="detalhe-section">
+          <h4 class="detalhe-section-title">👥 Pessoas Contactadas (${contatos.length})</h4>
+          <div class="detalhe-contatos">${contatosHtml}</div>
+        </div>
+        
+        <!-- Ramos Mapeados -->
+        <div class="detalhe-section">
+          <h4 class="detalhe-section-title">🎯 Ramos Mapeados (${ramosAbordados.length})</h4>
+          <div class="detalhe-ramos">${ramosHtml}</div>
+        </div>
+        
+        <!-- Checklist -->
+        <div class="detalhe-section">
+          <h4 class="detalhe-section-title">✅ Checklist</h4>
+          <div class="detalhe-checklist">${checklistHtml}</div>
+        </div>
+        
+        ${geoHtml}
+        
+        <!-- Observações -->
+        ${visita.observacoes ? `
+          <div class="detalhe-section">
+            <h4 class="detalhe-section-title">📝 Observações</h4>
+            <div class="detalhe-obs">${visita.observacoes}</div>
+          </div>
+        ` : ''}
+        
+        <!-- Metadados -->
+        <div class="detalhe-footer">
+          <span>Registrado por: ${visita.criadoPorNome || '-'}</span>
+          <span>ID: ${visitaId}</span>
+        </div>
+      </div>
+    `;
+    
+  } catch (e) {
+    console.error("Erro ao carregar detalhes:", e);
+    content.innerHTML = `<div class="error-message">Erro ao carregar: ${e.message}</div>`;
+  }
+}
+
+function fecharDetalhesVisita() {
+  $("modalDetalhesVisita").classList.remove('active');
+  VISITA_DETALHES_ATUAL = null;
+}
+
+function duplicarVisita() {
+  if (!VISITA_DETALHES_ATUAL) return;
+  
+  const visita = VISITA_DETALHES_ATUAL;
+  
+  // Preencher contatos
+  CONTATOS = [...(visita.contatos || [])];
+  renderizarContatos();
+  
+  // Preencher ramos
+  const ramos = visita.ramos || {};
+  Object.entries(ramos).forEach(([id, dados]) => {
+    if (dados.abordado && RAMOS_DATA[id]) {
+      RAMOS_DATA[id] = { ...dados };
+      
+      // Ativar card visual
+      const card = $(`ramo-${id}`);
+      if (card) {
+        card.classList.add('active');
+        
+        // Preencher campos
+        if (dados.status) {
+          const statusBtn = card.querySelector(`[data-status="${dados.status}"]`);
+          if (statusBtn) statusBtn.classList.add('active');
+        }
+        if (dados.interesse) {
+          const intBtn = card.querySelector(`[data-interesse="${dados.interesse}"]`);
+          if (intBtn) intBtn.classList.add('active');
+        }
+        if (dados.vencimento) $(`${id}-vencimento`).value = dados.vencimento;
+        if (dados.seguradora) $(`${id}-seguradora`).value = dados.seguradora;
+        if (dados.valorEstimado) $(`${id}-valor`).value = dados.valorEstimado;
+        if (dados.concorrente) $(`${id}-concorrente`).value = dados.concorrente;
+        if (dados.obs) $(`${id}-obs`).value = dados.obs;
+      }
+    }
+  });
+  updateRamosCount();
+  
+  // Preencher observações
+  if (visita.observacoes) {
+    $("observacoesGerais").value = visita.observacoes;
+  }
+  
+  fecharDetalhesVisita();
+  alert("Dados da visita anterior carregados! Ajuste conforme necessário e salve como nova visita.");
+}
+
+// ============================================
+// FIM DAS CORREÇÕES PRINCIPAIS
+// ============================================
 
 async function carregarSegurosMapeados(empresaId) {
   const section = $("segurosAtivosSection");
@@ -941,7 +1228,6 @@ function gerarLink() {
     return;
   }
   
-  // Buscar RM da empresa
   let rmNome = EMPRESA_SELECIONADA.rmNome || EMPRESA_SELECIONADA.gerenteNome || '';
   const rmId = EMPRESA_SELECIONADA.rmUid || EMPRESA_SELECIONADA.rmId || EMPRESA_SELECIONADA.gerenteId;
   if (!rmNome && rmId && RMS[rmId]) rmNome = RMS[rmId].nome;
@@ -952,7 +1238,6 @@ function gerarLink() {
     rmNome: rmNome || CTX.nome || ''
   });
   
-  // Link para página do cliente
   const baseUrl = location.origin + location.pathname.replace('visitas.html', '');
   const url = `${baseUrl}visita-cliente.html?${params}`;
   
@@ -989,3 +1274,8 @@ window.fecharResumo = fecharResumo;
 window.confirmarSalvar = confirmarSalvar;
 window.salvarVisita = salvarVisita;
 window.gerarLink = gerarLink;
+
+// NOVOS EXPORTS para modal de detalhes
+window.verDetalhesVisita = verDetalhesVisita;
+window.fecharDetalhesVisita = fecharDetalhesVisita;
+window.duplicarVisita = duplicarVisita;
