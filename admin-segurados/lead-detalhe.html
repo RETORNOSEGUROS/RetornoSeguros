@@ -1108,12 +1108,20 @@
                         ` : ''}
 
                         <!-- Dados do Site (se veio do site) -->
-                        ${lead.dadosSite ? `
-                        <div class="dados-site">
-                            <h4><i class="fas fa-globe"></i> Dados do Questionário</h4>
-                            ${formatarDadosSite(lead.dadosSite, lead.ramo)}
-                        </div>
-                        ` : ''}
+                        ${(function(){
+                            try {
+                                // Para leads auto: tenta dadosSite, senão constroi dos campos soltos
+                                if (lead.ramo === 'auto' && (lead.dadosSite || lead.veiculo || lead.temSeguro || lead.reboque || lead.terceiros)) {
+                                    var dados = lead.dadosSite || buildDadosSiteFromFlat(lead);
+                                    if (dados) return '<div class="dados-site"><h4><i class="fas fa-globe"></i> Dados do Questionário</h4>' + formatarDadosSite(dados, 'auto') + '</div>';
+                                }
+                                // Para outros ramos com dadosSite
+                                if (lead.dadosSite) {
+                                    return '<div class="dados-site"><h4><i class="fas fa-globe"></i> Dados do Questionário</h4>' + formatarDadosSite(lead.dadosSite, lead.ramo) + '</div>';
+                                }
+                                return '';
+                            } catch(e) { console.error('Erro ao renderizar dados do site:', e, lead); return ''; }
+                        })()}
 
                         <!-- Observações -->
                         ${lead.observacoes ? `
@@ -1741,6 +1749,58 @@
         }
 
         // Formatar dados do site de forma amigável
+        // Constrói dadosSite a partir de campos soltos (leads antigos que não têm dadosSite aninhado)
+        function buildDadosSiteFromFlat(lead) {
+            if (lead.ramo !== 'auto') return null;
+            
+            // Separar marca/modelo do campo "veiculo" que é uma string "Marca Modelo"
+            const veiculoStr = lead.veiculo || '';
+            
+            // Labels para campos flat
+            const utilizLabels = {particular:'Particular',profissional:'Profissional',transporte:'Transporte de passageiros'};
+            const condutorLabels = {eu:'O próprio',outro:'Outra pessoa'};
+            const garagemLabels = {fechada:'Garagem fechada',aberta:'Estacionamento aberto',rua:'Na rua'};
+            const franquiaLabels = {basica:'Básica',reduzida:'Reduzida (50%)','super-reduzida':'Super Reduzida (25%)'};
+            const reboqueLabels = {'200km':'Até 200 km','400km':'Até 400 km','600km':'Até 600 km','ilimitado':'Km ilimitado'};
+            const terceirosLabels = {'100mil':'R$ 100 mil','200mil':'R$ 200 mil','300mil':'R$ 300 mil','500mil':'R$ 500 mil','800mil':'R$ 800 mil'};
+            const reservaLabels = {nao:'Não precisa','7dias':'7 dias','15dias':'15 dias','30dias':'30 dias'};
+            const extrasLabels = {vidros:'Vidros',martelinho:'Martelinho de Ouro',parachoque:'Para-choque',pintura:'Pintura e Lataria',pneu:'Pneu, Roda e Suspensão'};
+            
+            const bonusDescs = {'0':'0%','1':'5%','2':'10%','3':'15%','4':'20%','5':'25%','6':'30%','7':'35%','8':'40%','9':'45%','10':'50%'};
+            const temSeguroSim = lead.temSeguro === 'sim';
+            const bonusVal = lead.bonus || '0';
+            const bonusLabel = bonusVal === 'nao-sei' ? 'Não sei' : (bonusVal === '0' && !temSeguroSim ? 'Primeiro seguro' : 'Classe ' + bonusVal + ' (' + (bonusDescs[bonusVal] || '0%') + ')');
+            
+            const extras = lead.extras || [];
+            const extrasFormatted = Array.isArray(extras) ? extras.map(function(e) { return extrasLabels[e] || e; }) : [];
+            
+            return {
+                veiculo: {
+                    marca: veiculoStr,
+                    modelo: '',
+                    ano: lead.anoVeiculo || '-',
+                    valorFipe: lead.valorFipe || '-'
+                },
+                perfil: {
+                    temSeguro: temSeguroSim ? 'Sim - Renovação' : 'Não - Primeiro seguro',
+                    mesVencimento: lead.mesVencimento || '',
+                    utilizacao: utilizLabels[lead.utilizacao] || lead.utilizacao || '-',
+                    condutor: condutorLabels[lead.condutor] || lead.condutor || '-',
+                    idade: lead.idadeCondutor || lead.idade || '-',
+                    garagem: garagemLabels[lead.pernoite] || lead.pernoite || '-',
+                    bonus: bonusLabel,
+                    sinistro: lead.sinistro === 'sim' ? 'Sim, teve sinistro' : 'Não teve sinistro'
+                },
+                coberturas: {
+                    reboque: reboqueLabels[lead.reboque] || lead.reboque || '-',
+                    terceiros: terceirosLabels[lead.terceiros] || lead.terceiros || '-',
+                    reserva: reservaLabels[lead.carroReserva] || lead.carroReserva || '-',
+                    franquia: franquiaLabels[lead.franquia] || lead.franquia || '-',
+                    extras: extrasFormatted
+                }
+            };
+        }
+
         function formatarDadosSite(dados, ramo) {
             if (!dados) return '';
             
@@ -1750,14 +1810,15 @@
             // Auto
             if (ramo === 'auto' && dados.veiculo) {
                 formatoReconhecido = true;
+                const marcaModelo = dados.veiculo.modelo ? (dados.veiculo.marca + ' ' + dados.veiculo.modelo) : dados.veiculo.marca;
                 html += `
                     <div class="dados-grupo">
                         <h5>🚗 Veículo</h5>
                         <div class="dados-grid">
-                            <div class="dado-item"><span class="dado-label">Marca:</span> <span class="dado-valor">${dados.veiculo.marca || '-'}</span></div>
-                            <div class="dado-item"><span class="dado-label">Modelo:</span> <span class="dado-valor">${dados.veiculo.modelo || '-'}</span></div>
+                            <div class="dado-item" style="grid-column: 1 / -1;"><span class="dado-label">Marca / Modelo:</span> <span class="dado-valor">${marcaModelo || '-'}</span></div>
                             <div class="dado-item"><span class="dado-label">Ano:</span> <span class="dado-valor">${dados.veiculo.ano || '-'}</span></div>
                             <div class="dado-item"><span class="dado-label">Valor FIPE:</span> <span class="dado-valor">${dados.veiculo.valorFipe || '-'}</span></div>
+                            ${dados.perfil && dados.perfil.utilizacao ? '<div class="dado-item"><span class="dado-label">Utilização:</span> <span class="dado-valor">' + dados.perfil.utilizacao + '</span></div>' : ''}
                         </div>
                     </div>
                 `;
