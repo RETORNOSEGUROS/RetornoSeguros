@@ -1115,6 +1115,11 @@
                                     var dados = lead.dadosSite || buildDadosSiteFromFlat(lead);
                                     if (dados) return '<div class="dados-site"><h4><i class="fas fa-globe"></i> Dados do Questionário</h4>' + formatarDadosSite(dados, 'auto') + '</div>';
                                 }
+                                // Para leads residencial: tenta dadosSite, senão constroi dos campos soltos
+                                if (lead.ramo === 'residencial' && (lead.dadosSite || lead.tipoImovel || lead.metros || lead.valorImovel)) {
+                                    var dados = lead.dadosSite || buildDadosSiteFromFlatResidencial(lead);
+                                    if (dados) return '<div class="dados-site"><h4><i class="fas fa-globe"></i> Dados do Questionário</h4>' + formatarDadosSite(dados, 'residencial') + '</div>';
+                                }
                                 // Para outros ramos com dadosSite
                                 if (lead.dadosSite) {
                                     return '<div class="dados-site"><h4><i class="fas fa-globe"></i> Dados do Questionário</h4>' + formatarDadosSite(lead.dadosSite, lead.ramo) + '</div>';
@@ -1801,6 +1806,24 @@
             };
         }
 
+        // Constrói dadosSite a partir de campos soltos para leads RESIDENCIAIS
+        function buildDadosSiteFromFlatResidencial(lead) {
+            return {
+                tipoImovel: lead.tipoImovel || '',
+                tipoConstrucao: lead.tipoConstrucao || '',
+                usoImovel: lead.usoImovel || '',
+                padraoAcabamento: lead.padraoAcabamento || '',
+                metros: lead.metros || 0,
+                valorImovel: lead.valorImovel || 0,
+                valorConteudo: lead.valorConteudo || 0,
+                itens: lead.itens || [],
+                coberturas: lead.coberturas || {},
+                cidade: lead.cidade || '',
+                estado: lead.estado || '',
+                cep: lead.cep || ''
+            };
+        }
+
         function formatarDadosSite(dados, ramo) {
             if (!dados) return '';
             
@@ -1894,25 +1917,47 @@
             // Residencial
             else if (ramo === 'residencial') {
                 formatoReconhecido = true;
-                const tipoImovelTexto = { 'casa': 'Casa', 'apartamento': 'Apartamento', 'sobrado': 'Sobrado', 'kitnet': 'Kitnet/Studio' };
+                const tipoImovelTexto = { 'casa': 'Casa', 'apartamento': 'Apartamento', 'sobrado': 'Sobrado', 'kitnet': 'Kitnet/Studio', 'casa_condominio': 'Casa em condomínio' };
+                const construcaoTexto = { 'alvenaria': 'Alvenaria', 'mista': 'Mista', 'madeira': 'Madeira' };
+                const usoTexto = { 'residencia': 'Moradia habitual', 'veraneio': 'Veraneio / Temporada', 'alugado': 'Alugado' };
+                const padraoTexto = { 'baixo': 'Simples', 'medio': 'Médio', 'alto': 'Alto Padrão' };
+
+                // Suporta formato plano (novo) e aninhado (antigo se existir)
+                const tipoImovel = dados.tipoImovel || (dados.imovel && dados.imovel.tipo) || '';
+                const tipoConstrucao = dados.tipoConstrucao || (dados.imovel && dados.imovel.construcao) || '';
+                const usoImovel = dados.usoImovel || (dados.imovel && dados.imovel.uso) || '';
+                const padrao = dados.padraoAcabamento || (dados.imovel && dados.imovel.padrao) || '';
+                const metros = dados.metros || (dados.imovel && dados.imovel.metros) || 0;
+                const valorImovel = dados.valorImovel || (dados.imovel && dados.imovel.valorImovel) || 0;
+                const valorConteudo = dados.valorConteudo || (dados.conteudo && dados.conteudo.valorConteudo) || 0;
+                const itens = dados.itens || (dados.conteudo && dados.conteudo.itens) || [];
+                const coberturas = dados.coberturas || {};
+                const cidade = dados.cidade || (dados.imovel && dados.imovel.cidade) || '';
+                const estado = dados.estado || (dados.imovel && dados.imovel.estado) || '';
+
                 html += `
                     <div class="dados-grupo">
                         <h5>🏠 Dados do Imóvel</h5>
                         <div class="dados-grid">
-                            <div class="dado-item"><span class="dado-label">Tipo:</span> <span class="dado-valor">${tipoImovelTexto[dados.tipoImovel] || dados.tipoImovel || '-'}</span></div>
-                            <div class="dado-item"><span class="dado-label">Uso:</span> <span class="dado-valor">${dados.usoImovel || '-'}</span></div>
-                            <div class="dado-item"><span class="dado-label">Metragem:</span> <span class="dado-valor">${dados.metros || '-'} m²</span></div>
-                            <div class="dado-item"><span class="dado-label">Valor Imóvel:</span> <span class="dado-valor">${dados.valorImovel ? 'R$ ' + dados.valorImovel.toLocaleString('pt-BR') : '-'}</span></div>
-                            <div class="dado-item"><span class="dado-label">Valor Conteúdo:</span> <span class="dado-valor">${dados.valorConteudo ? 'R$ ' + dados.valorConteudo.toLocaleString('pt-BR') : '-'}</span></div>
+                            <div class="dado-item"><span class="dado-label">Tipo:</span> <span class="dado-valor">${tipoImovelTexto[tipoImovel] || tipoImovel || '-'}</span></div>
+                            <div class="dado-item"><span class="dado-label">Construção:</span> <span class="dado-valor">${construcaoTexto[tipoConstrucao] || tipoConstrucao || '-'}</span></div>
+                            <div class="dado-item"><span class="dado-label">Uso:</span> <span class="dado-valor">${usoTexto[usoImovel] || usoImovel || '-'}</span></div>
+                            <div class="dado-item"><span class="dado-label">Padrão:</span> <span class="dado-valor">${padraoTexto[padrao] || padrao || '-'}</span></div>
+                            <div class="dado-item"><span class="dado-label">Metragem:</span> <span class="dado-valor">${metros || '-'} m²</span></div>
+                            ${cidade ? `<div class="dado-item"><span class="dado-label">Localização:</span> <span class="dado-valor">${cidade}/${estado}</span></div>` : ''}
+                            <div class="dado-item"><span class="dado-label">Valor Imóvel:</span> <span class="dado-valor">${typeof valorImovel === 'number' && valorImovel > 0 ? 'R$ ' + valorImovel.toLocaleString('pt-BR') : (valorImovel || '-')}</span></div>
+                            <div class="dado-item"><span class="dado-label">Valor Conteúdo:</span> <span class="dado-valor">${typeof valorConteudo === 'number' && valorConteudo > 0 ? 'R$ ' + valorConteudo.toLocaleString('pt-BR') : (valorConteudo || '-')}</span></div>
                         </div>
                     </div>
                 `;
-                if (dados.coberturas) {
+                if (coberturas && typeof coberturas === 'object') {
                     const coberturasList = [];
-                    Object.entries(dados.coberturas).forEach(([nome, info]) => {
-                        if (info && info.ativo) {
-                            const nomeFormatado = nome.charAt(0).toUpperCase() + nome.slice(1);
-                            coberturasList.push(`${nomeFormatado}: R$ ${info.valor?.toLocaleString('pt-BR') || '-'}`);
+                    const nomesCobertura = { basica:'Incêndio/Raio/Explosão', moradia:'Moradia Temporária', vendaval:'Vendaval/Granizo', eletricos:'Danos Elétricos', roubo:'Roubo/Furto', vidros:'Vidros/Mármores', alagamento:'Alagamento', rc:'RC Familiar', equipamentos:'Equip. Portáteis', tubulacoes:'Tubulações', salvamento:'Salvamento' };
+                    Object.entries(coberturas).forEach(([nome, info]) => {
+                        if (info && (info.ativo === true || info.ativo === undefined)) {
+                            const nomeFormatado = nomesCobertura[nome] || nome.charAt(0).toUpperCase() + nome.slice(1);
+                            const val = info.valor || info;
+                            coberturasList.push(`${nomeFormatado}: R$ ${typeof val === 'number' ? val.toLocaleString('pt-BR') : (val || '-')}`);
                         }
                     });
                     if (coberturasList.length > 0) {
@@ -1926,12 +1971,13 @@
                         `;
                     }
                 }
-                if (dados.itens && dados.itens.length > 0) {
+                if (itens && itens.length > 0) {
+                    const itensTexto = { tv:'TVs', computador:'Computadores', celular:'Celulares/Tablets', geladeira:'Geladeira', ar:'Ar-condicionado', maquina:'Máq. Lavar/Secar', moveis:'Móveis planejados', joias:'Joias/Relógios', bicicleta:'Bicicletas', instrumentos:'Instrumentos', homeoffice:'Home Office', arte:'Obras de arte' };
                     html += `
                         <div class="dados-grupo">
-                            <h5>📦 Itens Especiais</h5>
+                            <h5>📦 Itens na Residência</h5>
                             <div class="dados-lista">
-                                ${dados.itens.map(item => `<span class="cobertura-tag">${item}</span>`).join('')}
+                                ${itens.map(item => `<span class="cobertura-tag">${itensTexto[item] || item}</span>`).join('')}
                             </div>
                         </div>
                     `;
