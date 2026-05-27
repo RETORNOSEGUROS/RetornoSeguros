@@ -2265,8 +2265,7 @@
           <option value="">Todos os RMs</option>
         </select>
         <select class="filter-select" id="vencFiltroAno">
-          <option>2026</option>
-          <option>2027</option>
+          <option value="todos">Todos os anos</option>
         </select>
       </div>
 
@@ -3192,6 +3191,17 @@
         <input type="text" class="form-control" id="produtoExtra">
       </div>
 
+      <!-- Quem solicitou (admin pode atribuir crédito a outro) -->
+      <div class="form-group perm-admin" id="creditoCotacaoWrap" style="display:none;">
+        <label class="form-label">Esta cotação foi solicitada por <small style="color:#94a3b8;">(crédito de pontos)</small></label>
+        <select class="form-control" id="creditoCotacaoUid">
+          <option value="">— Eu mesmo (logado) —</option>
+        </select>
+        <div style="font-size:11px; color:#64748b; margin-top:4px;">
+          Use quando um gerente pediu por email/WhatsApp e você abriu no sistema. O gerente recebe os pontos da etapa.
+        </div>
+      </div>
+
       <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534; margin-top:8px;">
         💰 Mapear este produto vale <strong>+5 pontos</strong> (+5 extra se vencimento próximo).
       </div>
@@ -3477,13 +3487,18 @@
   }
 
   function renderEmpresaCard(e) {
-    const inicial = e.nome.charAt(0);
-    const isEstag = perfilAtual === 'estagiario';
-    const isAssist = perfilAtual === 'assistente';
+    const inicial = (e.nome || '?').charAt(0);
+    const ativo = perfilEfetivo();
+    const isEstag = ativo === 'estagiario';
+    const isAssist = ativo === 'assistente';
 
-    // Para estagiário: destacar empresas pendentes de dados base (mock: funcionarios = 0 ou socios vazios)
-    // No mock vamos considerar "pendente" se id par + funcionarios menor que 10
-    const pendenteCadastro = isEstag && (parseInt(e.id) % 3 === 0);
+    // Pendente cadastro = sem nº funcionários OU sem sócios cadastrados
+    const semFunc = !e.funcionarios || e.funcionarios === 0;
+    const semSocios = !e.socios || e.socios.length === 0;
+    const pendenteCadastro = semFunc || semSocios;
+
+    // Mapeamento incompleto = nenhum produto mapeado
+    const algumMapeado = Object.values(e.produtos || {}).some(s => s !== 'vazia');
 
     // Botão de ação muda conforme perfil
     let btnLabel, btnIcon;
@@ -3498,14 +3513,35 @@
       btnIcon = 'map-pin';
     }
 
+    // Badge de dados base
+    let badgeDados = '';
+    if (pendenteCadastro) {
+      const oqFalta = [];
+      if (semFunc) oqFalta.push('funcionários');
+      if (semSocios) oqFalta.push('sócios');
+      badgeDados = `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:800;margin-left:4px;">FALTA ${oqFalta.join(' + ').toUpperCase()}</span>`;
+    } else if (!algumMapeado) {
+      badgeDados = `<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:800;margin-left:4px;">PRONTO P/ MAPEAR</span>`;
+    }
+
+    // Linha de informações: nº funcionários (sempre) + nº sócios (apenas se RM+)
+    const podeVerSocios = !isEstag; // assistente vê quantidade mas não nomes
+    let linhaInfo = '';
+    if (e.funcionarios > 0 || (e.socios && e.socios.length > 0)) {
+      const partes = [];
+      if (e.funcionarios > 0) partes.push(`<span style="color:#475569;"><i data-lucide="users" class="w-3 h-3 inline" style="vertical-align:-2px;"></i> <strong>${e.funcionarios}</strong> colab.</span>`);
+      if (podeVerSocios && e.socios && e.socios.length > 0) partes.push(`<span style="color:#475569;"><i data-lucide="user-check" class="w-3 h-3 inline" style="vertical-align:-2px;"></i> <strong>${e.socios.length}</strong> sócio${e.socios.length > 1 ? 's' : ''}</span>`);
+      if (partes.length > 0) linhaInfo = `<div style="font-size: 11px; margin-top: 2px;">${partes.join(' · ')}</div>`;
+    }
+
     return `
       <div class="empresa-card ${pendenteCadastro ? 'empresa-pendente' : ''}" onclick="abrirRaioX('${e.id}')">
         <div class="empresa-info">
           <div class="empresa-logo">${inicial}</div>
           <div>
-            <div class="empresa-nome">${e.nome} ${pendenteCadastro ? '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:800;margin-left:4px;">PENDENTE CADASTRO</span>' : ''}</div>
-            <div class="empresa-meta">${mascararCNPJ(e.cnpj)} · ${e.cidade}</div>
-            <div class="empresa-meta-extra">Última interação: ${e.ultimaInteracao}</div>
+            <div class="empresa-nome">${e.nome} ${badgeDados}</div>
+            <div class="empresa-meta">${mascararCNPJ(e.cnpj) || 'sem CNPJ'} · ${e.cidade || 'sem cidade'}</div>
+            ${linhaInfo}
           </div>
         </div>
         <div class="produtos-bolinhas">
@@ -4172,29 +4208,25 @@
         const d = pd[prod.id];
         if (!d) return;
         const isConosco = d.statusVisual === 'conosco';
-        // Vencimento de produto não-conosco
+        const isFechada = d.statusVisual === 'fechada';
+
+        // 1. Vencimento informado (mes/ano) → para produto com outra seguradora
         if (d.vencimentoMes && d.vencimentoAno) {
           VENCIMENTOS.push({
-            empresaId: e.id,
-            empresa: e.nome,
-            produto: prod.id,
-            mes: d.vencimentoMes,
-            ano: d.vencimentoAno,
-            rm: e.rm,
-            conosco: isConosco
+            empresaId: e.id, empresa: e.nome,
+            produto: prod.id, mes: d.vencimentoMes, ano: d.vencimentoAno,
+            rm: e.rm, conosco: isConosco,
+            seguradora: d.seguradoraAtual || ''
           });
         }
-        // Vigência conosco - usa vigenciaFim
-        if (isConosco && d.vigenciaFim && /^\d{2}\/\d{2}\/\d{4}$/.test(d.vigenciaFim)) {
+        // 2. Vigência fim (já é cliente OU fechou conosco) — gera próximo vencimento
+        if ((isConosco || isFechada) && d.vigenciaFim && /^\d{2}\/\d{2}\/\d{4}$/.test(d.vigenciaFim)) {
           const [dd, mm, aaaa] = d.vigenciaFim.split('/').map(Number);
           VENCIMENTOS.push({
-            empresaId: e.id,
-            empresa: e.nome,
-            produto: prod.id,
-            mes: mm,
-            ano: aaaa,
-            rm: e.rm,
-            conosco: true
+            empresaId: e.id, empresa: e.nome,
+            produto: prod.id, mes: mm, ano: aaaa,
+            rm: e.rm, conosco: true,
+            seguradora: d.seguradoraAtual || d.seguradora || ''
           });
         }
       });
@@ -4216,7 +4248,8 @@
 
     const fProd = document.getElementById('vencFiltroProduto')?.value || '';
     const fRm = document.getElementById('vencFiltroRm')?.value || '';
-    const fAno = parseInt(document.getElementById('vencFiltroAno')?.value || new Date().getFullYear());
+    const fAnoRaw = document.getElementById('vencFiltroAno')?.value || 'todos';
+    const fAno = fAnoRaw === 'todos' ? null : parseInt(fAnoRaw);
 
     // Atualizar dropdown de RM dinâmico
     const fRmSel = document.getElementById('vencFiltroRm');
@@ -4225,10 +4258,25 @@
         Object.entries(MAPA_RMS).map(([uid, r]) => `<option value="${uid}">${r.nome}</option>`).join('');
     }
 
+    // Atualizar dropdown de ano dinâmico (anos que existem nos vencimentos)
+    const fAnoSel = document.getElementById('vencFiltroAno');
+    if (fAnoSel) {
+      const anosUnicos = [...new Set(VENCIMENTOS.map(v => v.ano))].sort();
+      const valSelecionado = fAnoSel.value || 'todos';
+      // Sempre incluir o ano atual e o próximo, mesmo se não houver vencimento ainda
+      const anoAtual = new Date().getFullYear();
+      if (!anosUnicos.includes(anoAtual)) anosUnicos.push(anoAtual);
+      if (!anosUnicos.includes(anoAtual + 1)) anosUnicos.push(anoAtual + 1);
+      anosUnicos.sort();
+
+      fAnoSel.innerHTML = '<option value="todos">Todos os anos</option>' +
+        anosUnicos.map(a => `<option value="${a}" ${String(a) === valSelecionado ? 'selected' : ''}>${a}</option>`).join('');
+    }
+
     let lista = VENCIMENTOS.filter(v => {
       if (fProd && v.produto !== fProd) return false;
       if (fRm && v.rm !== fRm) return false;
-      if (v.ano !== fAno) return false;
+      if (fAno !== null && v.ano !== fAno) return false;
       return true;
     });
 
@@ -5701,6 +5749,18 @@
 
     document.getElementById('modalProduto').classList.add('open');
     lucide.createIcons();
+
+    // Popular dropdown de crédito (apenas admin)
+    if (CTX.isAdmin) {
+      const sel = document.getElementById('creditoCotacaoUid');
+      const wrap = document.getElementById('creditoCotacaoWrap');
+      const rms = (EQUIPE_REAL || []).filter(p => (p.perfil === 'rm' || p.perfil === 'chefe') && p.ativo && p.uid !== CTX.uid);
+      if (rms.length > 0 && wrap) {
+        wrap.style.display = '';
+        sel.innerHTML = '<option value="">— Eu mesmo (logado) —</option>' +
+          rms.map(r => `<option value="${r.uid}|${r.nome}|${r.perfil}">${r.nome} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`).join('');
+      }
+    }
   }
 
   function selPillProd(el) {
@@ -5819,14 +5879,31 @@
   async function criarCotacao(empresa, produto) {
     if (!empresa || !produto) return;
     try {
+      // Verificar se admin atribuiu o crédito a outro
+      let creditoUid = CTX.uid;
+      let creditoNome = CTX.nome;
+      let creditoPerfil = CTX.perfilSimulado || CTX.perfil;
+      let creditoAtribuido = false;
+
+      const selCred = document.getElementById('creditoCotacaoUid');
+      if (CTX.isAdmin && selCred && selCred.value) {
+        const [uid, nome, perfil] = selCred.value.split('|');
+        creditoUid = uid;
+        creditoNome = nome;
+        creditoPerfil = perfil;
+        creditoAtribuido = true;
+      }
+
       const cot = {
         empresaId: empresa.id, empresaNome: empresa.nome,
         agenciaId: empresa.agenciaId || CTX.agenciaId,
         produtoId: produto.id, produtoNome: produto.nome, produtoIcon: produto.icon,
         status: 'solicitada',
         etapa: 5,
-        solicitadoPorUid: CTX.uid, solicitadoPorNome: CTX.nome,
-        solicitadoPorPerfil: CTX.perfilSimulado || CTX.perfil,
+        solicitadoPorUid: creditoUid, solicitadoPorNome: creditoNome,
+        solicitadoPorPerfil: creditoPerfil,
+        atribuidoPeloAdmin: creditoAtribuido,
+        registradoPorUid: CTX.uid, registradoPorNome: CTX.nome, // quem efetivamente clicou
         dataSolicitacao: firebase.firestore.FieldValue.serverTimestamp(),
         criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
@@ -5834,23 +5911,33 @@
 
       const ref = await db.collection('mb_cotacoes').add(cot);
 
-      // Ação pontuada
+      // Pontuar quem foi creditado (não o admin se ele atribuiu)
       await db.collection('mb_acoes').add({
         tipo: 'cotacao_solicitada',
         empresaId: empresa.id, empresaNome: empresa.nome,
         produto: produto.id, produtoNome: produto.nome,
         cotacaoId: ref.id,
         agenciaId: empresa.agenciaId || CTX.agenciaId,
-        usuarioId: CTX.uid, usuarioNome: CTX.nome,
-        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+        usuarioId: creditoUid, usuarioNome: creditoNome,
+        usuarioPerfil: creditoPerfil,
+        atribuidoPor: creditoAtribuido ? CTX.uid : null,
+        atribuidoPorNome: creditoAtribuido ? CTX.nome : null,
         pontos: 5,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
+      // Sincronizar produto da empresa pra status "cotando"
+      await db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(produto.id).set({
+        statusVisual: 'cotando',
+        ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
       setTimeout(() => {
-        alert('✅ Cotação solicitada!\n\nO corretor (Patrick) receberá a solicitação. Acompanhe em "Cotações em Andamento".');
+        alert(`✅ Cotação solicitada!${creditoAtribuido ? `\n\nCrédito atribuído a ${creditoNome}.` : ''}\n\nAcompanhe em "Cotações em Andamento".`);
         document.getElementById('modalProduto').classList.remove('open');
+        // Recarregar empresas pra atualizar a bolinha
+        carregarEmpresasReais().then(() => renderEmpresas());
       }, 400);
     } catch (e) {
       alert('Erro ao solicitar cotação: ' + e.message);
@@ -6035,7 +6122,20 @@
           <label class="form-label">Seguradora</label>
           <input type="text" class="form-control" id="acaoSeguradora" placeholder="Ex: Porto Seguro">
         </div>
-        <div style="background:#dcfce7; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">🎉 Fechamento vale <strong>100 pts × multiplicador</strong>, dividido 50/30/20 entre quem fechou, quem mapeou e quem cadastrou.</div>
+        ${CTX.isAdmin ? `
+          <div class="form-group">
+            <label class="form-label">Atribuir o fechamento (50%) a <small style="color:#94a3b8;">opcional</small></label>
+            <select class="form-control" id="acaoCreditoUid">
+              <option value="">— Eu mesmo —</option>
+              ${(EQUIPE_REAL || []).filter(p => (p.perfil === 'rm' || p.perfil === 'chefe') && p.ativo && p.uid !== CTX.uid)
+                .map(r => `<option value="${r.uid}|${r.nome}|${r.perfil}">${r.nome} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`).join('')}
+            </select>
+            <div style="font-size:11px; color:#64748b; margin-top:4px;">
+              Use quando o gerente conduziu o cliente e você só formalizou a emissão no sistema.
+            </div>
+          </div>
+        ` : ''}
+        <div style="background:#dcfce7; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">🎉 Fechamento vale <strong>100 pts × multiplicador</strong>, dividido 50% (fechou) / 30% (cotou) / 20% (solicitou).</div>
       `;
     } else if (acao === 'perder') {
       body = `
@@ -6080,6 +6180,10 @@
 
     const obs = (document.getElementById('acaoObs') || {}).value || '';
 
+    // Status visual do produto da empresa (sincronia)
+    let novoStatusVisual = null;
+    let updateProdutoEmpresa = null; // { vigenciaInicio, vigenciaFim, seguradora }
+
     try {
       if (acao === 'cotar') {
         update.status = 'cotando';
@@ -6090,6 +6194,7 @@
         update.observacoes = obs;
         acaoLog.tipo = 'cotacao_realizada';
         acaoLog.pontos = 10;
+        novoStatusVisual = 'cotando';
       } else if (acao === 'enviar') {
         update.status = 'enviada';
         update.etapa = 7;
@@ -6097,6 +6202,7 @@
         if (obs) update.observacoes = obs;
         acaoLog.tipo = 'cotacao_enviada';
         acaoLog.pontos = 8;
+        novoStatusVisual = 'cotando';
       } else if (acao === 'reuniao') {
         const data = document.getElementById('acaoData').value.trim();
         if (!data || !/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return alert('Informe a data da reunião (dd/mm/aaaa)');
@@ -6106,6 +6212,7 @@
         if (obs) update.observacoes = obs;
         acaoLog.tipo = 'reuniao_agendada';
         acaoLog.pontos = 12;
+        novoStatusVisual = 'quente';
       } else if (acao === 'fechar') {
         const valor = parseFloat(document.getElementById('acaoValor').value || '0');
         const vigIni = document.getElementById('acaoVigIni').value.trim();
@@ -6120,34 +6227,68 @@
         update.vigenciaFim = vigFim;
         update.seguradora = seguradora || null;
         update.dataDecisao = firebase.firestore.FieldValue.serverTimestamp();
-        update.fechadoPorUid = CTX.uid;
-        update.fechadoPorNome = CTX.nome;
+
+        // Crédito do fechamento (admin pode atribuir a outro)
+        let fechadorUid = CTX.uid, fechadorNome = CTX.nome, fechadorPerfil = CTX.perfilSimulado || CTX.perfil;
+        let fechamentoAtribuido = false;
+        const selCred = document.getElementById('acaoCreditoUid');
+        if (CTX.isAdmin && selCred && selCred.value) {
+          const [uid, nome, perfil] = selCred.value.split('|');
+          fechadorUid = uid; fechadorNome = nome; fechadorPerfil = perfil;
+          fechamentoAtribuido = true;
+        }
+        update.fechadoPorUid = fechadorUid;
+        update.fechadoPorNome = fechadorNome;
+        update.fechamentoAtribuido = fechamentoAtribuido;
+        update.registradoPorUid = CTX.uid;
+        update.registradoPorNome = CTX.nome;
+
         // Multiplicador por produto
         const mults = { frota: 1.5, empresarial: 1.5, 'saude-socios': 1.3, 'saude-colab': 1.3, 'vida-grupo': 1.3, 'vida-socios': 1.3, dental: 1.0 };
         const m = mults[c.produtoId] || 1.0;
         const ptsTotal = Math.round(100 * m);
-        // 50% pra quem fechou, 30% pra quem cotou, 20% pra quem solicitou (simplificação MVP)
+
+        // 50% pra quem fechou
         acaoLog.tipo = 'fechamento';
+        acaoLog.usuarioId = fechadorUid;
+        acaoLog.usuarioNome = fechadorNome;
+        acaoLog.usuarioPerfil = fechadorPerfil;
+        acaoLog.atribuidoPor = fechamentoAtribuido ? CTX.uid : null;
+        acaoLog.atribuidoPorNome = fechamentoAtribuido ? CTX.nome : null;
         acaoLog.pontos = Math.round(ptsTotal * 0.5);
         acaoLog.multiplicador = m;
         acaoLog.valorFechado = valor;
-        // Adicionalmente, pontuar quem cotou e quem solicitou
-        if (c.cotadoPorUid && c.cotadoPorUid !== CTX.uid) {
+
+        // 30% pra quem cotou
+        if (c.cotadoPorUid && c.cotadoPorUid !== fechadorUid) {
           await db.collection('mb_acoes').add({
             ...acaoLog,
             usuarioId: c.cotadoPorUid, usuarioNome: c.cotadoPorNome,
+            usuarioPerfil: c.cotadoPorPerfil || 'rm',
             pontos: Math.round(ptsTotal * 0.3),
+            atribuidoPor: null, atribuidoPorNome: null,
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
-        if (c.solicitadoPorUid && c.solicitadoPorUid !== CTX.uid && c.solicitadoPorUid !== c.cotadoPorUid) {
+        // 20% pra quem solicitou
+        if (c.solicitadoPorUid && c.solicitadoPorUid !== fechadorUid && c.solicitadoPorUid !== c.cotadoPorUid) {
           await db.collection('mb_acoes').add({
             ...acaoLog,
             usuarioId: c.solicitadoPorUid, usuarioNome: c.solicitadoPorNome,
+            usuarioPerfil: c.solicitadoPorPerfil || 'rm',
             pontos: Math.round(ptsTotal * 0.2),
+            atribuidoPor: null, atribuidoPorNome: null,
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
+
+        novoStatusVisual = 'fechada';
+        updateProdutoEmpresa = {
+          vigenciaInicio: vigIni,
+          vigenciaFim: vigFim,
+          seguradora: seguradora || null,
+          valorFechado: valor
+        };
       } else if (acao === 'perder') {
         const motivo = document.getElementById('acaoMotivo').value;
         update.status = motivo === 'sem_aceitacao' ? 'sem_aceitacao' : 'perdida';
@@ -6158,18 +6299,32 @@
         acaoLog.tipo = 'cotacao_perdida';
         acaoLog.motivo = motivo;
         acaoLog.pontos = motivo === 'sem_aceitacao' ? 8 : 10;
+        // Volta o produto pra mapeado (não some, mas não conta mais como em cotação)
+        novoStatusVisual = 'mapeada';
       }
 
       await db.collection('mb_cotacoes').doc(c.id).update(update);
       await db.collection('mb_acoes').add(acaoLog);
 
+      // Sincronizar produto da empresa
+      if (novoStatusVisual) {
+        const prodUpdate = {
+          statusVisual: novoStatusVisual,
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        if (updateProdutoEmpresa) Object.assign(prodUpdate, updateProdutoEmpresa);
+        await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).set(prodUpdate, { merge: true });
+      }
+
       document.getElementById('modalAvancarCotacao').classList.remove('open');
       confetti({ particleCount: acao === 'fechar' ? 200 : 60, spread: 70, origin: { y: 0.6 } });
       await carregarERenderCotacoes();
-      // Atualizar ranking também
+      await carregarEmpresasReais();
+      renderEmpresas();
       await carregarRankingReal();
       renderRanking();
     } catch (e) {
+      console.error(e);
       alert('Erro: ' + e.message);
     }
   }
