@@ -8,6 +8,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- Firebase v8 (mesma versão que você usa no sistema atual) -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
   <style>
     * { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
@@ -21,6 +25,94 @@
     body {
       background: #f8fafc;
       color: #1e293b;
+    }
+
+    /* ============= LOGIN / LOADING SCREEN ============= */
+    .auth-overlay {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 50%, #7c3aed 100%);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .auth-overlay.hidden { display: none; }
+    .auth-card {
+      background: white;
+      border-radius: 18px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.35);
+      width: 100%;
+      max-width: 400px;
+      overflow: hidden;
+    }
+    .auth-header {
+      padding: 28px 28px 18px;
+      text-align: center;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .auth-logo {
+      width: 60px; height: 60px;
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center; justify-content: center;
+      font-size: 28px; font-weight: 800; color: white;
+      margin-bottom: 14px;
+    }
+    .auth-title { font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 4px; }
+    .auth-sub { font-size: 13px; color: #64748b; }
+    .auth-body { padding: 22px 28px 26px; }
+    .auth-link {
+      font-size: 12px; font-weight: 600; color: var(--primary);
+      cursor: pointer; text-decoration: none;
+    }
+    .auth-link:hover { text-decoration: underline; }
+    .auth-error {
+      background: #fee2e2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-bottom: 14px;
+    }
+    .loading-spinner {
+      width: 44px; height: 44px;
+      border: 4px solid #e0e7ff;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Banner de modo demo (admin "ver como") */
+    .demo-banner {
+      background: #fef3c7;
+      border-bottom: 1.5px solid #f59e0b;
+      padding: 7px 28px;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 12px; color: #78350f; font-weight: 600;
+    }
+    .demo-banner.hidden { display: none; }
+    .demo-banner button {
+      background: white; border: 1px solid #f59e0b; color: #78350f;
+      padding: 3px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 11px; font-weight: 700;
+    }
+
+    /* Link da equipe - botão copiar */
+    .link-display {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #475569;
+      word-break: break-all;
+      margin-top: 8px;
     }
 
     /* Sidebar */
@@ -1612,6 +1704,64 @@
 </head>
 <body>
 
+<!-- AUTH OVERLAY (login OU loading) -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card" id="authCard">
+    <div class="auth-header">
+      <div class="auth-logo">R</div>
+      <div class="auth-title">Mapeamento Bancário</div>
+      <div class="auth-sub" id="authSub">Entre com seu email do banco</div>
+    </div>
+    <div class="auth-body" id="authBody">
+      <!-- Loading state -->
+      <div id="authLoading" style="text-align: center; padding: 16px 0;">
+        <div class="loading-spinner" style="margin: 0 auto 12px;"></div>
+        <div style="font-size: 13px; color: #64748b;">Carregando...</div>
+      </div>
+
+      <!-- Login form -->
+      <div id="authLoginForm" style="display: none;">
+        <div id="authError" class="auth-error" style="display:none;"></div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" class="form-control" id="authEmail" placeholder="seu@email.com" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Senha</label>
+          <input type="password" class="form-control" id="authSenha" placeholder="••••••••" autocomplete="current-password">
+        </div>
+        <button class="btn-primary" style="width: 100%; padding: 11px; font-size: 14px; margin-top: 6px;" onclick="fazerLogin()">
+          Entrar
+        </button>
+        <div style="margin-top: 14px; text-align: center; font-size: 12px; color: #94a3b8;">
+          Assistente ou estagiário? <a class="auth-link" onclick="document.getElementById('authLinkForm').style.display='block';document.getElementById('authLoginForm').style.display='none';">tenho um link de acesso</a>
+        </div>
+      </div>
+
+      <!-- Link form -->
+      <div id="authLinkForm" style="display: none;">
+        <div id="authLinkError" class="auth-error" style="display:none;"></div>
+        <p style="font-size: 13px; color: #475569; margin-bottom: 10px;">Cole abaixo o link que você recebeu por email/WhatsApp:</p>
+        <div class="form-group">
+          <input type="text" class="form-control" id="authLinkInput" placeholder="https://...?link=xxxxxxxxx">
+        </div>
+        <button class="btn-primary" style="width: 100%; padding: 11px; font-size: 14px;" onclick="entrarPorLinkCampo()">
+          Entrar com link
+        </button>
+        <div style="margin-top: 14px; text-align: center; font-size: 12px; color: #94a3b8;">
+          <a class="auth-link" onclick="document.getElementById('authLinkForm').style.display='none';document.getElementById('authLoginForm').style.display='block';">← voltar para login</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BANNER MODO DEMO (admin testando outro perfil) -->
+<div class="demo-banner hidden" id="demoBanner">
+  <span>👁️ Você está em <strong>"modo ver como"</strong> — visualizando como <strong id="demoComoNome">—</strong>. Suas ações ainda serão registradas como Patrick.</span>
+  <button onclick="sairModoDemo()">Sair do modo demo</button>
+</div>
+
 <!-- SIDEBAR -->
 <aside class="sidebar">
   <div class="brand">
@@ -2942,22 +3092,33 @@
   function trocarPerfil(p) {
     perfilAtual = p;
     const dados = PERFIS[p];
-    document.getElementById('userAvatar').textContent = dados.inicial;
-    document.getElementById('userAvatar').style.background = `linear-gradient(135deg, ${dados.cor}, #7c3aed)`;
-    document.getElementById('userName').textContent = dados.nome;
-    document.getElementById('userRole').textContent = dados.papel;
+    if (dados) {
+      document.getElementById('userAvatar').textContent = dados.inicial;
+      document.getElementById('userAvatar').style.background = `linear-gradient(135deg, ${dados.cor}, #7c3aed)`;
+      document.getElementById('userName').textContent = dados.nome;
+      document.getElementById('userRole').textContent = dados.papel;
+    }
     aplicarPermissoes();
     renderEmpresas();
   }
 
-  function aplicarPermissoes() {
-    const isAdmin = perfilAtual === 'admin';
-    const isChefe = perfilAtual === 'chefe';
-    const isRM = perfilAtual === 'rm';
-    const isAssist = perfilAtual === 'assistente';
-    const isEstag = perfilAtual === 'estagiario';
+  function perfilEfetivo() {
+    // Se admin estiver em modo "ver como", usa o perfil simulado
+    if (typeof CTX !== 'undefined' && CTX.perfilSimulado) return CTX.perfilSimulado;
+    if (typeof CTX !== 'undefined' && CTX.perfil) return CTX.perfil;
+    return perfilAtual;
+  }
 
-    const showRmPlus = isAdmin || isChefe || isRM; // RM e acima
+  function aplicarPermissoes() {
+    const ativo = perfilEfetivo();
+    perfilAtual = ativo; // sincroniza para funções legadas
+    const isAdmin = ativo === 'admin';
+    const isChefe = ativo === 'chefe';
+    const isRM = ativo === 'rm';
+    const isAssist = ativo === 'assistente';
+    const isEstag = ativo === 'estagiario';
+
+    const showRmPlus = isAdmin || isChefe || isRM;
     const showChefePlus = isAdmin || isChefe;
     const showAdmin = isAdmin;
     const showNaoEstag = !isEstag;
@@ -2984,40 +3145,72 @@
 
   function renderEmpresas() {
     const container = document.getElementById('empresasContainer');
+    if (!container) return;
+
+    // Atualizar dropdown de filtro de RM dinamicamente
+    const fRmSel = document.getElementById('filtroRm');
+    if (fRmSel && Object.keys(MAPA_RMS).length > 0 && fRmSel.options.length <= 4) {
+      fRmSel.innerHTML = '<option value="">Todos os RMs</option>' +
+        Object.entries(MAPA_RMS).map(([uid, r]) => `<option value="${uid}">${r.nome}</option>`).join('');
+    }
+
     const search = (document.getElementById('searchInput').value || '').toLowerCase();
     const fRm = document.getElementById('filtroRm').value;
     const fProd = document.getElementById('filtroProduto').value;
     const fStatus = document.getElementById('filtroStatus').value;
 
     let lista = EMPRESAS.filter(e => {
-      if (search && !e.nome.toLowerCase().includes(search)) return false;
+      if (search && !(e.nome || '').toLowerCase().includes(search)) return false;
       if (fRm && e.rm !== fRm) return false;
-      if (fProd && e.produtos[fProd] === 'vazia') return false;
-      if (fStatus === 'quente' && !Object.values(e.produtos).includes('quente')) return false;
-      if (fStatus === 'cotando' && !Object.values(e.produtos).includes('cotando')) return false;
-      if (fStatus === 'fechada' && !Object.values(e.produtos).includes('fechada')) return false;
-      if (fStatus === 'semmap' && Object.values(e.produtos).every(p => p !== 'vazia')) return false;
+      if (fProd && e.produtos && e.produtos[fProd] === 'vazia') return false;
+      if (fStatus === 'quente' && !Object.values(e.produtos || {}).includes('quente')) return false;
+      if (fStatus === 'cotando' && !Object.values(e.produtos || {}).includes('cotando')) return false;
+      if (fStatus === 'fechada' && !Object.values(e.produtos || {}).includes('fechada')) return false;
+      if (fStatus === 'semmap' && Object.values(e.produtos || {}).every(p => p !== 'vazia')) return false;
       return true;
     });
+
+    if (lista.length === 0) {
+      container.innerHTML = `
+        <div style="background:white;border:1px dashed #cbd5e1;border-radius:12px;padding:40px;text-align:center;color:#94a3b8;">
+          <i data-lucide="inbox" class="w-10 h-10" style="margin: 0 auto 12px; display: block;"></i>
+          <div style="font-size: 15px; font-weight: 700; color: #475569; margin-bottom: 6px;">
+            ${EMPRESAS.length === 0 ? 'Nenhuma empresa carregada' : 'Nenhuma empresa nos filtros'}
+          </div>
+          <div style="font-size: 13px;">
+            ${EMPRESAS.length === 0 ? 'As empresas da agência aparecerão aqui após o carregamento.' : 'Ajuste os filtros para ver outras empresas.'}
+          </div>
+        </div>
+      `;
+      lucide.createIcons();
+      return;
+    }
 
     // Agrupar por RM
     const grupos = {};
     lista.forEach(e => {
-      if (!grupos[e.rm]) grupos[e.rm] = [];
-      grupos[e.rm].push(e);
+      const key = e.rm || 'sem-rm';
+      if (!grupos[key]) grupos[key] = [];
+      grupos[key].push(e);
     });
 
-    const ordemRMs = ['mariana', 'pedro', 'lucia'];
+    // Ordem: primeiro RM do usuário logado, depois os demais por nº de empresas
+    const ordemRMs = Object.keys(grupos).sort((a, b) => {
+      if (a === CTX.uid) return -1;
+      if (b === CTX.uid) return 1;
+      return grupos[b].length - grupos[a].length;
+    });
 
     container.innerHTML = ordemRMs.map(rmKey => {
       const empresas = grupos[rmKey] || [];
       if (empresas.length === 0) return '';
-      const rm = RMS[rmKey];
-      const ehMinhaCarteira = perfilAtual === 'rm' && rmKey === 'mariana';
+      const rm = MAPA_RMS[rmKey] || { nome: empresas[0].rmNome || 'Sem RM atribuído', cor: '#94a3b8' };
+      const ehMinhaCarteira = (CTX.perfil === 'rm' && rmKey === CTX.uid);
+      const inicial = (rm.nome || '?').charAt(0).toUpperCase();
       return `
-        <div class="rm-group ${ehMinhaCarteira ? '' : ''}" id="rmgroup-${rmKey}">
+        <div class="rm-group" id="rmgroup-${rmKey}">
           <div class="rm-group-header" onclick="toggleGroup('${rmKey}')">
-            <div class="rm-avatar" style="background: ${rm.cor};">${rm.nome.charAt(0)}</div>
+            <div class="rm-avatar" style="background: ${rm.cor};">${inicial}</div>
             <div>
               <h2>${rm.nome} ${ehMinhaCarteira ? '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700;margin-left:6px;">SUA CARTEIRA</span>' : ''}</h2>
             </div>
@@ -3113,7 +3306,7 @@
           </div>
           <div class="info-item">
             <div class="info-label">RM Responsável</div>
-            <div class="info-value">${RMS[e.rm].nome}</div>
+            <div class="info-value">${(MAPA_RMS[e.rm] || {}).nome || e.rmNome || 'Não atribuído'}</div>
           </div>
           ${!isEstag && !isAssist ? `
           <div class="info-item">
@@ -4059,11 +4252,705 @@
     }
   });
 
-  // ============= INIT =============
-  aplicarPermissoes();
-  renderEmpresas();
-  renderRanking();
-  lucide.createIcons();
+  // ============= FIREBASE BOOT =============
+  const firebaseConfig = {
+    apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+    authDomain: "retorno-seguros.firebaseapp.com",
+    projectId: "retorno-seguros",
+    storageBucket: "retorno-seguros.appspot.com",
+    messagingSenderId: "495712392972",
+    appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
+  };
+  if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const auth = firebase.auth();
+
+  // Contexto global do usuário logado
+  const CTX = {
+    uid: null,
+    email: null,
+    nome: null,
+    perfil: null,        // 'admin' | 'chefe' | 'rm' | 'assistente' | 'estagiario'
+    agenciaId: null,
+    agenciaNome: null,
+    isAdmin: false,
+    viaLink: false,
+    perfilSimulado: null // para modo "ver como" do admin
+  };
+
+  const ADMIN_EMAILS = ['patrick@retornoseguros.com.br', 'admin@retornoseguros.com.br', 'pchemis@gmail.com'];
+
+  function normalizarPerfil(s) {
+    const n = String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[-_]/g, ' ');
+    if (n === 'admin' || n === 'corretor') return 'admin';
+    if (n === 'gerente chefe' || n === 'gerentechefe') return 'chefe';
+    if (n === 'rm' || n === 'rm (gerente de conta)' || n.startsWith('rm ')) return 'rm';
+    if (n === 'assistente') return 'assistente';
+    if (n === 'estagiario' || n === 'estagiário') return 'estagiario';
+    return n;
+  }
+
+  // Token aleatório curto e legível
+  function gerarToken() {
+    return Math.random().toString(36).substring(2, 9) + Math.random().toString(36).substring(2, 9);
+  }
+
+  // ============= BOOT FLOW =============
+  async function boot() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const linkToken = urlParams.get('link');
+
+    if (linkToken) {
+      // Entrar via link público
+      mostrarLoading('Validando link de acesso...');
+      try {
+        await entrarPorLink(linkToken);
+      } catch (e) {
+        console.error(e);
+        mostrarErroLink('Link inválido ou expirado. Peça um novo ao seu gerente.');
+      }
+      return;
+    }
+
+    // Aguardar estado de auth
+    auth.onAuthStateChanged(async user => {
+      if (user && !user.isAnonymous) {
+        mostrarLoading('Carregando seu perfil...');
+        try {
+          await entrarPorLogin(user);
+        } catch (e) {
+          console.error(e);
+          mostrarErroLogin('Erro ao carregar perfil. Tente novamente.');
+        }
+      } else {
+        mostrarFormLogin();
+      }
+    });
+  }
+
+  function mostrarLoading(msg) {
+    document.getElementById('authOverlay').classList.remove('hidden');
+    document.getElementById('authLoading').style.display = '';
+    document.getElementById('authLoginForm').style.display = 'none';
+    document.getElementById('authLinkForm').style.display = 'none';
+    document.querySelector('#authLoading div:last-child').textContent = msg || 'Carregando...';
+  }
+
+  function mostrarFormLogin() {
+    document.getElementById('authOverlay').classList.remove('hidden');
+    document.getElementById('authLoading').style.display = 'none';
+    document.getElementById('authLoginForm').style.display = '';
+    document.getElementById('authLinkForm').style.display = 'none';
+  }
+
+  function mostrarErroLogin(msg) {
+    mostrarFormLogin();
+    const err = document.getElementById('authError');
+    err.textContent = msg;
+    err.style.display = '';
+  }
+
+  function mostrarErroLink(msg) {
+    document.getElementById('authLoading').style.display = 'none';
+    document.getElementById('authLoginForm').style.display = 'none';
+    document.getElementById('authLinkForm').style.display = '';
+    const err = document.getElementById('authLinkError');
+    err.textContent = msg;
+    err.style.display = '';
+  }
+
+  async function fazerLogin() {
+    const email = document.getElementById('authEmail').value.trim();
+    const senha = document.getElementById('authSenha').value;
+    if (!email || !senha) return mostrarErroLogin('Preencha email e senha');
+    document.getElementById('authError').style.display = 'none';
+    mostrarLoading('Autenticando...');
+    try {
+      await auth.signInWithEmailAndPassword(email, senha);
+      // onAuthStateChanged vai pegar
+    } catch (e) {
+      mostrarErroLogin(e.code === 'auth/wrong-password' ? 'Senha incorreta' :
+                       e.code === 'auth/user-not-found' ? 'Email não cadastrado' :
+                       e.code === 'auth/invalid-email' ? 'Email inválido' :
+                       'Erro: ' + e.message);
+    }
+  }
+
+  async function entrarPorLogin(user) {
+    CTX.uid = user.uid;
+    CTX.email = user.email;
+    const isAdmin = ADMIN_EMAILS.includes((user.email || '').toLowerCase());
+
+    if (isAdmin) {
+      CTX.isAdmin = true;
+      CTX.perfil = 'admin';
+      CTX.nome = user.email.split('@')[0];
+
+      // Admin pode escolher agência ou ver tudo. Inicialmente: a primeira agência da lista
+      const agSnap = await db.collection('agencias_banco').orderBy('nome').limit(1).get();
+      if (!agSnap.empty) {
+        const doc = agSnap.docs[0];
+        CTX.agenciaId = doc.id;
+        CTX.agenciaNome = doc.data().nome;
+      }
+    } else {
+      // Buscar perfil em usuarios_banco
+      const snap = await db.collection('usuarios_banco').doc(user.uid).get();
+      if (!snap.exists) {
+        await auth.signOut();
+        return mostrarErroLogin('Usuário não encontrado no sistema do banco. Contate o admin.');
+      }
+      const d = snap.data();
+      CTX.perfil = normalizarPerfil(d.perfil || '');
+      CTX.agenciaId = d.agenciaId;
+      CTX.nome = d.nome || user.email;
+
+      if (CTX.agenciaId) {
+        const agDoc = await db.collection('agencias_banco').doc(CTX.agenciaId).get();
+        CTX.agenciaNome = agDoc.exists ? agDoc.data().nome : 'Agência';
+      }
+    }
+
+    await iniciarApp();
+  }
+
+  async function entrarPorLink(token) {
+    await auth.signInAnonymously();
+    const snap = await db.collection('mb_links').doc(token).get();
+    if (!snap.exists) throw new Error('Token não encontrado');
+    const link = snap.data();
+
+    // Buscar usuário (mb_usuarios para assistente/estagiário, usuarios_banco para RM/GC)
+    let userDoc;
+    if (link.tipo === 'mb') {
+      userDoc = await db.collection('mb_usuarios').doc(link.uid).get();
+    } else {
+      userDoc = await db.collection('usuarios_banco').doc(link.uid).get();
+    }
+    if (!userDoc.exists) throw new Error('Usuário do link não encontrado');
+    const d = userDoc.data();
+    if (d.status === 'inativo') throw new Error('Link revogado');
+
+    CTX.uid = link.uid; // uid do dono do link, não o anônimo
+    CTX.uidAnonimo = auth.currentUser.uid;
+    CTX.email = d.email || null;
+    CTX.nome = d.nome;
+    CTX.perfil = normalizarPerfil(d.perfil);
+    CTX.agenciaId = d.agenciaId;
+    CTX.viaLink = true;
+
+    if (CTX.agenciaId) {
+      const agDoc = await db.collection('agencias_banco').doc(CTX.agenciaId).get();
+      CTX.agenciaNome = agDoc.exists ? agDoc.data().nome : 'Agência';
+    }
+
+    await iniciarApp();
+  }
+
+  function entrarPorLinkCampo() {
+    const v = document.getElementById('authLinkInput').value.trim();
+    if (!v) return;
+    let token = v;
+    if (v.includes('?link=')) token = v.split('?link=')[1].split('&')[0];
+    window.location.href = window.location.pathname + '?link=' + token;
+  }
+
+  function sair() {
+    auth.signOut().then(() => location.href = location.pathname);
+  }
+
+  // ============= INICIAR APP (após auth) =============
+  async function iniciarApp() {
+    mostrarLoading('Carregando empresas e equipe...');
+    try {
+      await Promise.all([
+        carregarEmpresasReais(),
+        carregarEquipeReal()
+      ]);
+
+      // Esconder overlay
+      document.getElementById('authOverlay').classList.add('hidden');
+
+      // Atualizar UI com dados do CTX
+      atualizarUIHeader();
+      mostrarMenuSwitcher();
+
+      aplicarPermissoes();
+      renderEmpresas();
+      renderRanking();
+      lucide.createIcons();
+    } catch (e) {
+      console.error(e);
+      mostrarErroLogin('Erro ao carregar dados: ' + e.message);
+    }
+  }
+
+  function atualizarUIHeader() {
+    const ativo = CTX.perfilSimulado || CTX.perfil;
+    const nomeMostrar = CTX.perfilSimulado ? `${CTX.nome} → vendo como ${CTX.perfilSimulado}` : CTX.nome;
+    const inicial = (CTX.nome || 'U').charAt(0).toUpperCase();
+    document.getElementById('userAvatar').textContent = inicial;
+    document.getElementById('userName').textContent = CTX.nome;
+    const papeis = { admin: 'Admin / Corretor', chefe: 'Gerente Chefe', rm: 'RM · Agência ' + (CTX.agenciaNome || ''),
+                     assistente: 'Assistente', estagiario: 'Estagiário' };
+    document.getElementById('userRole').textContent = papeis[ativo] || ativo;
+
+    // Atualizar banner da agência
+    const banner = document.querySelector('.agencia-name');
+    if (banner) banner.innerHTML = `<i data-lucide="landmark" class="w-5 h-5 text-indigo-600"></i> ${CTX.agenciaNome || 'Agência'}`;
+
+    // Banner demo se admin estiver impersonando
+    const demoBanner = document.getElementById('demoBanner');
+    if (CTX.isAdmin && CTX.perfilSimulado) {
+      demoBanner.classList.remove('hidden');
+      document.getElementById('demoComoNome').textContent = papeis[CTX.perfilSimulado] || CTX.perfilSimulado;
+    } else {
+      demoBanner.classList.add('hidden');
+    }
+  }
+
+  function mostrarMenuSwitcher() {
+    // Switcher de perfil só fica visível pro admin
+    const sel = document.querySelector('.demo-selector');
+    if (sel) sel.style.display = CTX.isAdmin ? '' : 'none';
+  }
+
+  function sairModoDemo() {
+    CTX.perfilSimulado = null;
+    document.getElementById('perfilSwitcher').value = 'admin';
+    atualizarUIHeader();
+    aplicarPermissoes();
+    renderEmpresas();
+    renderRanking();
+  }
+
+  // ============= CARREGADORES REAIS =============
+  let EMPRESAS_REAIS = [];
+  let EQUIPE_REAL = [];
+  let MAPA_RMS = {}; // uid -> {nome, cor}
+  const CORES_RM = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6', '#ef4444'];
+
+  async function carregarEmpresasReais() {
+    let query = db.collection('empresas');
+    if (CTX.agenciaId && !CTX.isAdmin) {
+      query = query.where('agenciaId', '==', CTX.agenciaId);
+    } else if (CTX.agenciaId && CTX.isAdmin) {
+      query = query.where('agenciaId', '==', CTX.agenciaId);
+    }
+    const snap = await query.get();
+    const lista = [];
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      // Carregar produtos mapeados da subcoleção (não vamos travar se falhar)
+      let produtos = { frota: 'vazia', empresarial: 'vazia', 'saude-socios': 'vazia',
+                       'saude-colab': 'vazia', 'vida-grupo': 'vazia', 'vida-socios': 'vazia', dental: 'vazia' };
+      try {
+        const prodSnap = await db.collection('empresas').doc(doc.id).collection('mb_produtos').get();
+        prodSnap.forEach(p => {
+          const pd = p.data();
+          produtos[p.id] = pd.statusVisual || 'mapeada';
+        });
+      } catch(e) { /* subcoleção pode não existir ainda */ }
+
+      lista.push({
+        id: doc.id,
+        nome: d.nome || d.razaoSocial || 'Empresa sem nome',
+        cnpj: d.cnpj || '',
+        cidade: d.cidade || d.municipio || '',
+        rm: d.rmUid || d.rmId || d.gerenteId || '',
+        rmNome: d.rmNome || d.gerenteNome || '',
+        agenciaId: d.agenciaId || '',
+        funcionarios: d.numFuncionarios || d.funcionariosQtd || 0,
+        socios: d.socios || [],
+        ultimaInteracao: 'Sem registro',
+        produtos: produtos
+      });
+    }
+    EMPRESAS_REAIS = lista.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+    // substitui o array mock
+    EMPRESAS.length = 0;
+    EMPRESAS_REAIS.forEach(e => EMPRESAS.push(e));
+  }
+
+  async function carregarEquipeReal() {
+    EQUIPE_REAL = [];
+    MAPA_RMS = {};
+
+    // 1. Usuários do banco (RMs e Gerentes Chefes)
+    let query = db.collection('usuarios_banco');
+    if (CTX.agenciaId && !CTX.isAdmin) {
+      query = query.where('agenciaId', '==', CTX.agenciaId);
+    }
+    const snap = await query.get();
+    let i = 0;
+    snap.forEach(d => {
+      const data = d.data();
+      const perfilN = normalizarPerfil(data.perfil);
+      if (!['chefe', 'rm', 'admin'].includes(perfilN)) return; // ignora outros
+      if (CTX.agenciaId && data.agenciaId !== CTX.agenciaId && !CTX.isAdmin) return;
+
+      const cor = CORES_RM[i % CORES_RM.length]; i++;
+      const pessoa = {
+        uid: d.id, nome: data.nome || data.email, email: data.email,
+        perfil: perfilN, papel: perfilN === 'chefe' ? 'Gerente Chefe' : 'RM · Gerente de Conta',
+        agenciaId: data.agenciaId, ativo: data.status !== 'inativo',
+        cor: cor, linkToken: data.mbLinkToken || null,
+        categoria: perfilN, origem: 'banco'
+      };
+      EQUIPE_REAL.push(pessoa);
+      if (perfilN === 'rm' || perfilN === 'chefe') MAPA_RMS[d.id] = { nome: pessoa.nome, cor: cor };
+    });
+
+    // 2. mb_usuarios (Assistentes e Estagiários)
+    try {
+      let q2 = db.collection('mb_usuarios');
+      if (CTX.agenciaId) q2 = q2.where('agenciaId', '==', CTX.agenciaId);
+      const snap2 = await q2.get();
+      snap2.forEach(d => {
+        const data = d.data();
+        if (data.status === 'inativo') return;
+        EQUIPE_REAL.push({
+          uid: d.id, nome: data.nome, email: data.email,
+          perfil: normalizarPerfil(data.perfil),
+          papel: data.perfil === 'estagiario' ? 'Estagiário' : 'Assistente',
+          agenciaId: data.agenciaId, ativo: true,
+          cor: data.perfil === 'estagiario' ? '#f59e0b' : '#10b981',
+          linkToken: data.linkToken,
+          categoria: normalizarPerfil(data.perfil), origem: 'mb'
+        });
+      });
+    } catch(e) { /* mb_usuarios pode não existir ainda */ }
+
+    // Atualizar globals de render
+    RMS_LIST = EQUIPE_REAL.filter(p => p.perfil === 'rm' || p.perfil === 'chefe').reduce((acc, p) => {
+      acc[p.uid] = { nome: p.nome, cor: p.cor };
+      return acc;
+    }, {});
+  }
+
+  // ============= GERAR LINK PESSOAL =============
+  async function gerarLinkPessoal(uid, perfilDestino, nomeDestino) {
+    const token = gerarToken();
+    const tipo = (perfilDestino === 'assistente' || perfilDestino === 'estagiario') ? 'mb' : 'banco';
+
+    try {
+      await db.collection('mb_links').doc(token).set({
+        uid: uid,
+        tipo: tipo,
+        perfilSnapshot: perfilDestino,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        criadoPorUid: CTX.uid
+      });
+
+      // Atualizar referência no doc do usuário
+      if (tipo === 'mb') {
+        await db.collection('mb_usuarios').doc(uid).update({ linkToken: token });
+      } else {
+        await db.collection('usuarios_banco').doc(uid).update({ mbLinkToken: token });
+      }
+
+      const url = `${window.location.origin}${window.location.pathname}?link=${token}`;
+
+      // Mostrar modal com o link
+      mostrarLinkGerado(url, nomeDestino);
+
+      // Recarregar equipe
+      await carregarEquipeReal();
+      return url;
+    } catch (e) {
+      alert('Erro ao gerar link: ' + e.message);
+      return null;
+    }
+  }
+
+  function mostrarLinkGerado(url, nome) {
+    const cont = document.createElement('div');
+    cont.className = 'cad-modal open';
+    cont.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head">
+          <h2>🔗 Link de ${nome}</h2>
+          <p>Compartilhe por WhatsApp ou email. A pessoa salva no celular como atalho.</p>
+        </div>
+        <div class="cad-modal-body">
+          <div class="link-display" style="user-select: all;">${url}</div>
+          <div style="display: flex; gap: 8px; margin-top: 12px;">
+            <button class="btn-primary" style="flex:1;" onclick="navigator.clipboard.writeText('${url}'); this.textContent='✓ Copiado!'; setTimeout(()=>this.innerHTML='<i data-lucide=\\'copy\\' class=\\'w-3.5 h-3.5\\'></i> Copiar link', 2000);">
+              <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copiar link
+            </button>
+            <button class="btn-secondary" style="flex:1;" onclick="window.open('https://wa.me/?text=' + encodeURIComponent('Olá ${nome}, segue seu link de acesso ao Mapeamento Bancário: ${url}'))">
+              <i data-lucide="message-circle" class="w-3.5 h-3.5"></i> Enviar WhatsApp
+            </button>
+          </div>
+          <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 12px; color: #78350f;">
+            <strong>⚠️ Atenção:</strong> qualquer pessoa com este link entra como <strong>${nome}</strong>. Não compartilhe em grupos.
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="this.closest('.cad-modal').remove()">Fechar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(cont);
+    lucide.createIcons();
+  }
+
+  // ============= CADASTRAR ASSISTENTE/ESTAGIÁRIO REAL =============
+  async function salvarPessoaReal() {
+    // Pega valores do modal
+    const modal = document.getElementById('cadModal');
+    const perfilSel = modal.querySelector('.pill-option.selected');
+    const perfilTxt = perfilSel ? perfilSel.textContent.toLowerCase() : 'estagiário';
+    const perfil = perfilTxt.includes('estag') ? 'estagiario' : 'assistente';
+    const inputs = modal.querySelectorAll('input');
+    const nome = inputs[0].value.trim();
+    const email = inputs[1].value.trim();
+    const tel = inputs[2].value.trim();
+
+    if (!nome || !email) return alert('Preencha nome e email');
+
+    try {
+      const novoRef = db.collection('mb_usuarios').doc();
+      const token = gerarToken();
+
+      await novoRef.set({
+        nome, email, telefone: tel,
+        perfil, agenciaId: CTX.agenciaId,
+        status: 'ativo',
+        linkToken: token,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        criadoPorUid: CTX.uid
+      });
+
+      await db.collection('mb_links').doc(token).set({
+        uid: novoRef.id, tipo: 'mb', perfilSnapshot: perfil,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        criadoPorUid: CTX.uid
+      });
+
+      fecharCadastroPessoa();
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+      await carregarEquipeReal();
+      renderEquipe();
+
+      const url = `${window.location.origin}${window.location.pathname}?link=${token}`;
+      setTimeout(() => mostrarLinkGerado(url, nome), 400);
+    } catch (e) {
+      alert('Erro ao cadastrar: ' + e.message);
+    }
+  }
+
+  // Sobrescreve a função antiga (que era mock)
+  window.salvarPessoa = salvarPessoaReal;
+
+  // ============= SALVAR VISITA REAL =============
+  async function salvarVisitaReal() {
+    const empresaNome = document.getElementById('visitaEmpresa').value.trim();
+    const empresa = EMPRESAS.find(e => e.nome === empresaNome) || EMPRESAS[0];
+    if (!empresa) return alert('Empresa não encontrada');
+
+    // Calcular pontos
+    let pontos = 10; // default presencial
+    const respondidos = Object.keys(visitaProdutos).filter(k => visitaProdutos[k]).length;
+    pontos += respondidos * 5;
+    if (respondidos === 7) pontos += 15;
+
+    const visitaDoc = {
+      empresaId: empresa.id,
+      empresaNome: empresa.nome,
+      agenciaId: CTX.agenciaId,
+      usuarioId: CTX.uid,
+      usuarioNome: CTX.nome,
+      usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+      produtos: visitaProdutos,
+      pontos: pontos,
+      criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    try {
+      const visitaRef = await db.collection('mb_visitas').add(visitaDoc);
+
+      // Ação de pontuação (log)
+      await db.collection('mb_acoes').add({
+        tipo: 'visita',
+        empresaId: empresa.id,
+        agenciaId: CTX.agenciaId,
+        usuarioId: CTX.uid,
+        usuarioNome: CTX.nome,
+        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+        pontos: 10,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        refVisita: visitaRef.id
+      });
+
+      // Para cada produto respondido, criar/atualizar mb_produtos da empresa
+      for (const [prodId, resp] of Object.entries(visitaProdutos)) {
+        if (!resp || resp === 'nao') continue;
+        const prodRef = db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(prodId);
+        await prodRef.set({
+          tem: resp === 'sim',
+          statusVisual: 'mapeada',
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+          ultimoAutorUid: CTX.uid,
+          ultimoAutorNome: CTX.nome
+        }, { merge: true });
+
+        // Ação de mapeamento (+5 cada)
+        await db.collection('mb_acoes').add({
+          tipo: 'mapeamento',
+          empresaId: empresa.id,
+          produto: prodId,
+          agenciaId: CTX.agenciaId,
+          usuarioId: CTX.uid,
+          usuarioNome: CTX.nome,
+          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          pontos: 5,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+      setTimeout(async () => {
+        fecharVisita();
+        await carregarEmpresasReais();
+        renderEmpresas();
+      }, 1200);
+    } catch (e) {
+      alert('Erro ao salvar visita: ' + e.message);
+      console.error(e);
+    }
+  }
+
+  window.salvarVisita = salvarVisitaReal;
+
+  // ============= TROCAR PERFIL (modo "ver como" do admin) =============
+  const trocarPerfilOriginal = window.trocarPerfil;
+  window.trocarPerfil = function(p) {
+    if (!CTX.isAdmin) return; // só admin pode trocar
+    if (p === 'admin') {
+      CTX.perfilSimulado = null;
+    } else {
+      CTX.perfilSimulado = p;
+    }
+    perfilAtual = CTX.perfilSimulado || 'admin';
+    atualizarUIHeader();
+    aplicarPermissoes();
+    renderEmpresas();
+    renderRanking();
+  };
+
+  // ============= ADAPTAÇÕES: renderEquipe usa dados reais =============
+  const renderEquipeOriginal = window.renderEquipe;
+  window.renderEquipe = function() {
+    if (!EQUIPE_REAL || EQUIPE_REAL.length === 0) {
+      document.getElementById('equipeCategorias').innerHTML =
+        '<div style="background:white;border:1px dashed #cbd5e1;border-radius:12px;padding:30px;text-align:center;color:#94a3b8;">Carregando equipe...</div>';
+      return;
+    }
+
+    const ativo = CTX.perfilSimulado || CTX.perfil;
+    const podeGerenciar = (ativo === 'admin' || ativo === 'chefe');
+
+    const categorias = [
+      { id: 'chefe', titulo: '👔 GERENTE CHEFE', icon: 'star' },
+      { id: 'rm', titulo: '💼 GERENTES DE CONTA (RMs)', icon: 'briefcase' },
+      { id: 'assistente', titulo: '📋 ASSISTENTES', icon: 'clipboard-list' },
+      { id: 'estagiario', titulo: '🌱 ESTAGIÁRIOS', icon: 'sprout' }
+    ];
+
+    const html = categorias.map(cat => {
+      const pessoas = EQUIPE_REAL.filter(p => p.categoria === cat.id && p.ativo);
+      if (pessoas.length === 0 && !podeGerenciar) return '';
+
+      const cardsHtml = pessoas.map(p => renderPessoaCardReal(p, podeGerenciar)).join('');
+      const addBtn = (podeGerenciar && (cat.id === 'assistente' || cat.id === 'estagiario'))
+        ? `<div class="pessoa-card" style="border-style:dashed; display:flex; align-items:center; justify-content:center; cursor:pointer; min-height: 240px; color:#64748b;" onclick="abrirCadastroPessoa()">
+            <div style="text-align:center;">
+              <div style="font-size:32px; margin-bottom:8px;">+</div>
+              <div style="font-size:13px; font-weight:700;">Cadastrar ${cat.id === 'assistente' ? 'Assistente' : 'Estagiário'}</div>
+              <div style="font-size:11px; margin-top:4px;">Link pessoal será gerado</div>
+            </div>
+          </div>`
+        : '';
+
+      return `
+        <div class="equipe-categoria">
+          <h3>${cat.titulo} · ${pessoas.length}</h3>
+          <div class="equipe-grid">
+            ${cardsHtml}
+            ${addBtn}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    document.getElementById('equipeCategorias').innerHTML = html;
+    lucide.createIcons();
+  };
+
+  function renderPessoaCardReal(p, podeGerenciar) {
+    const iniciais = (p.nome || '').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
+    const lider = p.perfil === 'chefe' || p.perfil === 'admin';
+
+    return `
+      <div class="pessoa-card ${lider ? 'lider' : ''}">
+        <div class="pessoa-status">ATIVO</div>
+        <div class="pessoa-head">
+          <div class="pessoa-avatar" style="background: linear-gradient(135deg, ${p.cor}, #7c3aed);">${iniciais || '?'}</div>
+          <div>
+            <div class="pessoa-nome">${p.nome}</div>
+            <div class="pessoa-papel">${p.papel}</div>
+          </div>
+        </div>
+        ${p.linkToken ? `
+          <div style="font-size: 11px; color: #64748b; padding: 6px 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9; margin: 6px 0 10px;">
+            <span style="color:#10b981; font-weight: 700;">✓ Link ativo</span> · Token: <span class="font-mono">${p.linkToken.substring(0, 8)}...</span>
+          </div>
+        ` : `
+          <div style="font-size: 11px; color: #94a3b8; padding: 6px 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9; margin: 6px 0 10px;">
+            Sem link de acesso gerado
+          </div>
+        `}
+        ${podeGerenciar ? `
+          <div class="pessoa-acoes">
+            <button class="pessoa-btn" onclick="gerarLinkPessoal('${p.uid}', '${p.perfil}', '${p.nome}')">
+              <i data-lucide="${p.linkToken ? 'refresh-cw' : 'link'}" class="w-3 h-3"></i>
+              ${p.linkToken ? 'Renovar link' : 'Gerar link'}
+            </button>
+            ${(p.perfil === 'assistente' || p.perfil === 'estagiario') ? `
+              <button class="pessoa-btn danger" onclick="desativarPessoa('${p.uid}', '${p.nome}')"><i data-lucide="user-x" class="w-3 h-3"></i> Desativar</button>
+            ` : ''}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  async function desativarPessoa(uid, nome) {
+    if (!confirm(`Desativar ${nome}? Pontos e histórico serão preservados, mas ela some das listas ativas.`)) return;
+    try {
+      await db.collection('mb_usuarios').doc(uid).update({
+        status: 'inativo',
+        desativadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        desativadoPorUid: CTX.uid
+      });
+      await carregarEquipeReal();
+      renderEquipe();
+    } catch(e) { alert('Erro: ' + e.message); }
+  }
+
+  window.desativarPessoa = desativarPessoa;
+  window.gerarLinkPessoal = gerarLinkPessoal;
+
+  // ============= INIT REAL =============
+  // Mock vazio inicial (para não quebrar funções que usam EMPRESAS antes do load)
+  EMPRESAS.length = 0;
+
+  let RMS_LIST = {}; // será preenchido após carregar equipe
+
+  // Boot!
+  boot();
 </script>
 
 </body>
