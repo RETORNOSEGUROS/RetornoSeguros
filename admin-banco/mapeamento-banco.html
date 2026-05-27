@@ -1984,13 +1984,13 @@
           </div>
           <div class="dash-hero-info perm-rmplus">
             <div class="lbl">Sua produção</div>
-            <div class="val" id="dashProducao">R$ 28.4K</div>
-            <div class="sub">3 negócios fechados este mês</div>
+            <div class="val" id="dashProducao">R$ 0</div>
+            <div class="sub" id="dashProducaoSub">0 negócios fechados este mês</div>
           </div>
           <div class="dash-hero-info perm-estag-only" style="display: none;">
             <div class="lbl">Produção da agência</div>
-            <div class="val">12 negócios</div>
-            <div class="sub">fechados em maio (volume)</div>
+            <div class="val" id="dashProducaoAg">0</div>
+            <div class="sub">fechados este mês</div>
           </div>
         </div>
       </div>
@@ -4099,6 +4099,44 @@
     // Próxima meta
     document.getElementById('dashNextMeta').textContent = '—';
     document.getElementById('dashNextMetaSub').textContent = 'em desenvolvimento';
+
+    // SUA PRODUÇÃO REAL: cotações fechadas do mês onde fechadoPorUid = eu OU recebi crédito
+    try {
+      const inicioMes = new Date();
+      inicioMes.setDate(1); inicioMes.setHours(0,0,0,0);
+
+      let query = db.collection('mb_cotacoes').where('status', '==', 'fechada');
+      if (CTX.agenciaId) query = query.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await query.get();
+
+      let meuValor = 0;
+      let meuQtd = 0;
+      let agenciaQtd = 0;
+      snap.forEach(d => {
+        const c = d.data();
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (!dt || dt < inicioMes) return;
+        agenciaQtd++;
+        if (c.fechadoPorUid === CTX.uid) {
+          meuValor += c.valor || 0;
+          meuQtd++;
+        }
+      });
+
+      const elProd = document.getElementById('dashProducao');
+      const elProdSub = document.getElementById('dashProducaoSub');
+      const elProdAg = document.getElementById('dashProducaoAg');
+      if (elProd) {
+        const formatado = meuValor >= 1000
+          ? 'R$ ' + (meuValor / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'K'
+          : 'R$ ' + meuValor.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+        elProd.textContent = formatado;
+      }
+      if (elProdSub) elProdSub.textContent = `${meuQtd} negócio${meuQtd !== 1 ? 's' : ''} fechado${meuQtd !== 1 ? 's' : ''} este mês`;
+      if (elProdAg) elProdAg.textContent = agenciaQtd + ' negócios';
+    } catch (e) {
+      console.warn('Erro produção dashboard:', e);
+    }
   }
 
   // ============= RANKING TELA =============
@@ -5716,7 +5754,8 @@
     document.getElementById('modalProdutoTitulo').innerHTML = `${p.icon} ${p.nome}`;
     document.getElementById('modalProdutoEmpresa').textContent = e.nome;
     document.getElementById('vencMes').value = dadosExistentes.vencimentoMes || '';
-    document.getElementById('vencAno').value = dadosExistentes.vencimentoAno || '';
+    // Pré-popular ano corrente se vazio (era o bug: placeholder não é valor)
+    document.getElementById('vencAno').value = dadosExistentes.vencimentoAno || new Date().getFullYear();
     document.getElementById('seguradoraAtual').value = dadosExistentes.seguradoraAtual || '';
     document.getElementById('produtoObs').value = dadosExistentes.observacoes || '';
     document.getElementById('vigInicio').value = dadosExistentes.vigenciaInicio || '';
@@ -5747,6 +5786,22 @@
       extraField.style.display = 'none';
     }
 
+    // Bloco vencimento (pra produtos não-conosco)
+    const venc = document.getElementById('vencMes');
+    if (venc && !venc._handlerInstalado) {
+      venc.addEventListener('change', function() {
+        const mes = parseInt(this.value);
+        if (!mes) return;
+        const anoInput = document.getElementById('vencAno');
+        const hoje = new Date();
+        const mesAtual = hoje.getMonth() + 1;
+        const anoAtual = hoje.getFullYear();
+        // Se mês escolhido já passou neste ano, sugere próximo
+        anoInput.value = (mes < mesAtual) ? (anoAtual + 1) : anoAtual;
+      });
+      venc._handlerInstalado = true;
+    }
+
     document.getElementById('modalProduto').classList.add('open');
     lucide.createIcons();
 
@@ -5757,8 +5812,12 @@
       const rms = (EQUIPE_REAL || []).filter(p => (p.perfil === 'rm' || p.perfil === 'chefe') && p.ativo && p.uid !== CTX.uid);
       if (rms.length > 0 && wrap) {
         wrap.style.display = '';
+        const rmDaEmpresa = e.rm;
         sel.innerHTML = '<option value="">— Eu mesmo (logado) —</option>' +
-          rms.map(r => `<option value="${r.uid}|${r.nome}|${r.perfil}">${r.nome} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`).join('');
+          rms.map(r => {
+            const isRmEmp = r.uid === rmDaEmpresa;
+            return `<option value="${r.uid}|${r.nome}|${r.perfil}" ${isRmEmp ? 'selected' : ''}>${r.nome} ${isRmEmp ? '⭐ RM desta empresa' : ''} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`;
+          }).join('');
       }
     }
   }
@@ -5790,10 +5849,19 @@
     if (!selPill) return alert('Selecione um status');
     const statusVisual = selPill.getAttribute('data-st');
 
+    const vMes = parseInt(document.getElementById('vencMes').value) || null;
+    const vAno = parseInt(document.getElementById('vencAno').value) || null;
+
+    // Validação: se status não é "vazia" e o user preencheu mês sem ano (ou vice-versa), alerta
+    if (statusVisual !== 'vazia' && statusVisual !== 'conosco') {
+      if (vMes && !vAno) return alert('Preencha o ANO do vencimento (campo ao lado do mês).');
+      if (!vMes && vAno) return alert('Preencha o MÊS do vencimento.');
+    }
+
     const dados = {
       statusVisual,
-      vencimentoMes: parseInt(document.getElementById('vencMes').value) || null,
-      vencimentoAno: parseInt(document.getElementById('vencAno').value) || null,
+      vencimentoMes: vMes,
+      vencimentoAno: vAno,
       seguradoraAtual: document.getElementById('seguradoraAtual').value.trim() || null,
       observacoes: document.getElementById('produtoObs').value.trim() || null,
       vigenciaInicio: document.getElementById('vigInicio').value.trim() || null,
@@ -6103,6 +6171,11 @@
         <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+12 pts</strong>.</div>
       `;
     } else if (acao === 'fechar') {
+      // Identificar RM da empresa para pré-seleção
+      const empresaDaCotacao = EMPRESAS.find(emp => emp.id === c.empresaId);
+      const rmDaEmpresa = empresaDaCotacao ? empresaDaCotacao.rm : null;
+      const rmInfo = rmDaEmpresa ? (EQUIPE_REAL || []).find(p => p.uid === rmDaEmpresa) : null;
+
       body = `
         <div class="form-group">
           <label class="form-label">Valor do prêmio (R$)</label>
@@ -6124,15 +6197,19 @@
         </div>
         ${CTX.isAdmin ? `
           <div class="form-group">
-            <label class="form-label">Atribuir o fechamento (50%) a <small style="color:#94a3b8;">opcional</small></label>
-            <select class="form-control" id="acaoCreditoUid">
-              <option value="">— Eu mesmo —</option>
-              ${(EQUIPE_REAL || []).filter(p => (p.perfil === 'rm' || p.perfil === 'chefe') && p.ativo && p.uid !== CTX.uid)
-                .map(r => `<option value="${r.uid}|${r.nome}|${r.perfil}">${r.nome} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`).join('')}
+            <label class="form-label" style="color:#4338ca;">⭐ Quem fechou esse negócio? <small style="color:#94a3b8; font-weight:500;">(recebe 50% dos pontos)</small></label>
+            <select class="form-control" id="acaoCreditoUid" style="border-color:#a5b4fc; background:#eef2ff;">
+              <option value="">— Eu mesmo (${CTX.nome}) —</option>
+              ${(EQUIPE_REAL || [])
+                .filter(p => (p.perfil === 'rm' || p.perfil === 'chefe') && p.ativo && p.uid !== CTX.uid)
+                .map(r => {
+                  const isRmDaEmpresa = r.uid === rmDaEmpresa;
+                  return `<option value="${r.uid}|${r.nome}|${r.perfil}" ${isRmDaEmpresa ? 'selected' : ''}>${r.nome} ${isRmDaEmpresa ? '⭐ RM desta empresa' : ''} (${r.perfil === 'chefe' ? 'Ger. Chefe' : 'RM'})</option>`;
+                }).join('')}
             </select>
-            <div style="font-size:11px; color:#64748b; margin-top:4px;">
-              Use quando o gerente conduziu o cliente e você só formalizou a emissão no sistema.
-            </div>
+            ${rmInfo ? `<div style="font-size:11px; color:#166534; background:#dcfce7; padding:6px 10px; border-radius:6px; margin-top:6px; font-weight:600;">
+              💡 <strong>${rmInfo.nome}</strong> é o RM responsável por esta empresa — já pré-selecionado. Mude se preciso.
+            </div>` : ''}
           </div>
         ` : ''}
         <div style="background:#dcfce7; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">🎉 Fechamento vale <strong>100 pts × multiplicador</strong>, dividido 50% (fechou) / 30% (cotou) / 20% (solicitou).</div>
