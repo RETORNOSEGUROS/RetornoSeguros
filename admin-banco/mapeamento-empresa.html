@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mapeamento de Seguros</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <style>
+    :root {
+      --brand: #4f46e5; --brand-dark: #4338ca;
+      --bg: #f1f5f9; --card: #fff; --border: #e2e8f0;
+      --text: #1e293b; --muted: #64748b; --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; padding: 20px;
+    }
+    .container { max-width: 760px; margin: 0 auto; }
+
+    .hero {
+      background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 55%, #7c3aed 100%);
+      color: white; border-radius: 18px; padding: 28px 26px; margin-bottom: 20px;
+      text-align: center;
+    }
+    .hero h1 { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+    .hero .empresa-nome {
+      font-size: 28px; font-weight: 800; margin: 12px 0 6px;
+      background: linear-gradient(90deg, #fde68a, #fbbf24);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p { font-size: 14px; opacity: 0.85; max-width: 480px; margin: 0 auto; }
+
+    .card {
+      background: white; border-radius: 14px; border: 1px solid var(--border);
+      margin-bottom: 18px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+    }
+    .card-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, #fafbfc, #f8fafc);
+      font-size: 14px; font-weight: 700; color: var(--text);
+    }
+    .card-body { padding: 18px 20px; }
+
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block; font-size: 12px; font-weight: 700;
+      color: #475569; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; padding: 11px 13px; border: 1.5px solid var(--border);
+      border-radius: 10px; font-size: 14px; font-family: inherit;
+      background: white; transition: all 0.2s;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      outline: none; border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    }
+    .form-textarea { min-height: 60px; resize: vertical; }
+
+    .produto-box {
+      background: white; border: 2px solid var(--border); border-radius: 14px;
+      margin-bottom: 12px; overflow: hidden; transition: all 0.2s;
+    }
+    .produto-box.tem-sim { border-color: #86efac; background: #f0fdf4; }
+    .produto-box.tem-nao { border-color: #fecaca; background: #fef2f2; opacity: 0.85; }
+    .produto-head {
+      padding: 14px 18px; display: flex; align-items: center; gap: 14px;
+      cursor: pointer;
+    }
+    .produto-icon { font-size: 24px; }
+    .produto-label { flex: 1; font-weight: 700; font-size: 15px; }
+    .opcoes {
+      display: flex; gap: 6px;
+    }
+    .opcao-btn {
+      padding: 7px 16px; border: 2px solid var(--border); background: white;
+      border-radius: 100px; font-size: 12px; font-weight: 700; cursor: pointer;
+      transition: all 0.15s; color: #64748b;
+    }
+    .opcao-btn:hover { border-color: #cbd5e1; }
+    .opcao-btn.ativa-sim { background: #10b981; border-color: #10b981; color: white; }
+    .opcao-btn.ativa-nao { background: #ef4444; border-color: #ef4444; color: white; }
+
+    .subcampos {
+      display: none; padding: 16px 18px 18px;
+      border-top: 1px solid #d4f4e0; background: #fafffb;
+    }
+    .produto-box.tem-sim .subcampos { display: block; }
+    .subcampos-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    .subcampos-grid .full { grid-column: 1 / -1; }
+    @media (max-width: 500px) {
+      .subcampos-grid { grid-template-columns: 1fr; }
+      .produto-head { flex-wrap: wrap; }
+    }
+    .subcampos label {
+      font-size: 11px; color: #166534; font-weight: 700; text-transform: uppercase;
+    }
+    .subcampos input, .subcampos select, .subcampos textarea {
+      width: 100%; padding: 9px 11px; border: 1px solid #bbf7d0;
+      border-radius: 8px; font-size: 13px; font-family: inherit; background: white;
+    }
+    .obrigatorio::after { content: ' *'; color: #ef4444; }
+
+    .btn-enviar {
+      width: 100%; padding: 18px 24px; border: none; border-radius: 14px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+      color: white; font-weight: 800; font-size: 16px; cursor: pointer;
+      transition: all 0.2s; box-shadow: 0 8px 24px rgba(79,70,229,0.35);
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .btn-enviar:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(79,70,229,0.45); }
+    .btn-enviar:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .sucesso {
+      display: none; background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+      border: 2px solid #86efac; padding: 30px; border-radius: 16px;
+      text-align: center; color: #14532d;
+    }
+    .sucesso.show { display: block; }
+    .sucesso h2 { font-size: 22px; margin-bottom: 10px; }
+    .sucesso p { font-size: 14px; }
+
+    .loading-overlay {
+      position: fixed; inset: 0; background: var(--bg); display: flex;
+      align-items: center; justify-content: center; flex-direction: column; gap: 20px; z-index: 100;
+    }
+    .spinner {
+      width: 44px; height: 44px; border: 4px solid var(--border);
+      border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .erro-container {
+      max-width: 460px; margin: 80px auto; text-align: center;
+      background: white; border-radius: 16px; padding: 40px;
+      border: 1px solid var(--border);
+    }
+    .erro-container h2 { color: #991b1b; margin-bottom: 10px; }
+    .erro-container p { color: var(--muted); font-size: 14px; }
+
+    .footer {
+      text-align: center; margin-top: 24px; padding-top: 16px;
+      color: var(--muted); font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Loading -->
+  <div id="loading" class="loading-overlay">
+    <div class="spinner"></div>
+    <div style="color: var(--muted); font-size: 14px;">Carregando...</div>
+  </div>
+
+  <!-- Erro (token inválido) -->
+  <div id="erro" class="erro-container" style="display: none;">
+    <h2>🔗 Link inválido ou expirado</h2>
+    <p>Este link de mapeamento não está mais ativo. Entre em contato com o gerente que enviou para gerar um novo.</p>
+  </div>
+
+  <!-- Conteúdo principal -->
+  <div id="conteudo" class="container" style="display: none;">
+
+    <div class="hero">
+      <h1>📋 Mapeamento de Seguros</h1>
+      <div class="empresa-nome" id="empresaNome">—</div>
+      <p>Preencha os seguros que sua empresa <strong>tem hoje</strong>. As informações vão direto para o seu gerente.</p>
+    </div>
+
+    <!-- Dados gerais -->
+    <div class="card">
+      <div class="card-header">🏢 Dados da Empresa</div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>Número de colaboradores <small style="color:#94a3b8; text-transform:none;">(opcional)</small></label>
+          <input type="number" id="numFuncionarios" class="form-input" min="0" placeholder="Ex: 45">
+        </div>
+      </div>
+    </div>
+
+    <!-- Produtos -->
+    <div class="card">
+      <div class="card-header">🎯 Seguros que a empresa tem</div>
+      <div class="card-body">
+        <div style="background: #fffbeb; border: 1px solid #fcd34d; padding: 12px 14px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; color: #78350f;">
+          ℹ️ Para cada seguro, marque <strong>SIM</strong> ou <strong>NÃO</strong>. Se sim, preencha pelo menos o <strong>mês/ano de vencimento</strong>.
+        </div>
+        <div id="produtosWrap"></div>
+      </div>
+    </div>
+
+    <button class="btn-enviar" onclick="enviar()">
+      <span>📤</span>
+      <span>Enviar mapeamento</span>
+    </button>
+
+    <div id="sucesso" class="sucesso">
+      <h2>✅ Recebemos suas informações!</h2>
+      <p>Obrigado! Seu gerente já tem os dados e vai entrar em contato em breve.</p>
+    </div>
+
+    <div class="footer">
+      Retorno Seguros — Mapeamento de seguros empresariais
+    </div>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+      authDomain: "retorno-seguros.firebaseapp.com",
+      projectId: "retorno-seguros",
+      storageBucket: "retorno-seguros.appspot.com",
+      messagingSenderId: "979966947706",
+      appId: "1:979966947706:web:b8b6a8a85d0a3f9e6f9f9e"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const PRODUTOS = [
+      { id: 'frota',        nome: 'Frota / Auto',         icon: '🚗' },
+      { id: 'empresarial',  nome: 'Empresarial',          icon: '🏢' },
+      { id: 'saude-socios', nome: 'Saúde — Sócios',       icon: '👥' },
+      { id: 'saude-colab',  nome: 'Saúde — Colaboradores', icon: '👨‍👩‍👧' },
+      { id: 'vida-grupo',   nome: 'Vida em Grupo',        icon: '🛡️' },
+      { id: 'vida-socios',  nome: 'Vida — Sócios',        icon: '💼' },
+      { id: 'dental',       nome: 'Dental',               icon: '🦷' }
+    ];
+
+    const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+    let LINK = null;        // documento do link
+    let LINK_ID = null;     // id do doc do link
+    let EMPRESA = null;     // documento da empresa
+    let respostas = {};     // estado: { [prodId]: { tem: 'sim'|'nao', vencimentoMes, vencimentoAno, seguradora, valorAnual, observacoes } }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('t');
+        if (!token) return mostrarErro();
+
+        // Auth anônima (necessária pra ler/escrever conforme regras)
+        try { await firebase.auth().signInAnonymously(); } catch(e) { console.warn('auth anônima falhou:', e); }
+
+        // Buscar link pelo token
+        const snap = await db.collection('mb_links_empresa').where('token','==',token).limit(1).get();
+        if (snap.empty) return mostrarErro();
+        LINK = snap.docs[0].data();
+        LINK_ID = snap.docs[0].id;
+
+        // Buscar empresa
+        const empSnap = await db.collection('empresas').doc(LINK.empresaId).get();
+        if (!empSnap.exists) return mostrarErro();
+        EMPRESA = empSnap.data();
+
+        document.getElementById('empresaNome').textContent = EMPRESA.nome || EMPRESA.razaoSocial || LINK.empresaNome || 'Empresa';
+        if (EMPRESA.numFuncionarios) {
+          document.getElementById('numFuncionarios').value = EMPRESA.numFuncionarios;
+        }
+
+        // Renderizar 7 produtos
+        renderProdutos();
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('conteudo').style.display = 'block';
+      } catch(e) {
+        console.error(e);
+        mostrarErro();
+      }
+    });
+
+    function mostrarErro() {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('erro').style.display = 'block';
+    }
+
+    function renderProdutos() {
+      const wrap = document.getElementById('produtosWrap');
+      wrap.innerHTML = PRODUTOS.map(p => `
+        <div class="produto-box" id="box-${p.id}">
+          <div class="produto-head">
+            <span class="produto-icon">${p.icon}</span>
+            <span class="produto-label">${p.nome}</span>
+            <div class="opcoes">
+              <button type="button" class="opcao-btn" data-prod="${p.id}" data-resp="sim" onclick="responderProduto('${p.id}','sim')">SIM</button>
+              <button type="button" class="opcao-btn" data-prod="${p.id}" data-resp="nao" onclick="responderProduto('${p.id}','nao')">NÃO</button>
+            </div>
+          </div>
+          <div class="subcampos">
+            <div class="subcampos-grid">
+              <div>
+                <label class="obrigatorio">Mês do vencimento</label>
+                <select id="vencMes-${p.id}">
+                  <option value="">— escolha —</option>
+                  ${MESES.map((m, i) => `<option value="${i+1}">${m}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="obrigatorio">Ano do vencimento</label>
+                <input type="number" id="vencAno-${p.id}" min="2025" max="2030" placeholder="${new Date().getFullYear()}">
+              </div>
+              <div>
+                <label>Seguradora atual</label>
+                <input type="text" id="seguradora-${p.id}" placeholder="Ex: Porto Seguro">
+              </div>
+              <div>
+                <label>Valor anual pago (R$)</label>
+                <input type="text" id="valor-${p.id}" placeholder="R$ 0,00" oninput="mascaraMoeda(this)">
+              </div>
+              <div class="full">
+                <label>Observações</label>
+                <textarea id="obs-${p.id}" rows="2" placeholder="Algo importante sobre esse seguro..."></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function responderProduto(prodId, resp) {
+      const box = document.getElementById('box-' + prodId);
+      box.classList.remove('tem-sim','tem-nao');
+      box.classList.add('tem-' + resp);
+      box.querySelectorAll('.opcao-btn').forEach(b => {
+        b.classList.remove('ativa-sim','ativa-nao');
+        if (b.getAttribute('data-resp') === resp) {
+          b.classList.add('ativa-' + resp);
+        }
+      });
+      if (!respostas[prodId]) respostas[prodId] = {};
+      respostas[prodId].tem = resp;
+
+      // Se "sim", pré-preenche ano com o atual
+      if (resp === 'sim') {
+        const anoEl = document.getElementById('vencAno-' + prodId);
+        if (anoEl && !anoEl.value) anoEl.value = new Date().getFullYear();
+      }
+    }
+    window.responderProduto = responderProduto;
+
+    function mascaraMoeda(input) {
+      let v = input.value.replace(/\D/g, '');
+      if (!v) { input.value = ''; return; }
+      v = (parseInt(v) / 100).toFixed(2).replace('.', ',').replace(/(\d)(?=(\d{3})+,)/g, '$1.');
+      input.value = 'R$ ' + v;
+    }
+    window.mascaraMoeda = mascaraMoeda;
+
+    function lerMoeda(input) {
+      if (!input) return 0;
+      return parseFloat((input.value || '').replace(/[^\d,]/g,'').replace(',', '.')) || 0;
+    }
+
+    async function enviar() {
+      const btn = document.querySelector('.btn-enviar');
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳</span><span>Enviando...</span>';
+
+      try {
+        // Coletar respostas
+        const numFunc = parseInt(document.getElementById('numFuncionarios').value) || null;
+
+        let temPeloMenosUm = false;
+        let pendencias = [];
+
+        for (const p of PRODUTOS) {
+          const r = respostas[p.id];
+          if (!r || !r.tem) {
+            pendencias.push(p.nome);
+            continue;
+          }
+          temPeloMenosUm = true;
+          if (r.tem === 'sim') {
+            r.vencimentoMes = parseInt(document.getElementById('vencMes-' + p.id).value) || null;
+            r.vencimentoAno = parseInt(document.getElementById('vencAno-' + p.id).value) || null;
+            if (!r.vencimentoMes || !r.vencimentoAno) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
+              return alert(`Preencha mês e ano de vencimento de "${p.nome}" (obrigatório quando você tem o seguro).`);
+            }
+            r.seguradora = (document.getElementById('seguradora-' + p.id).value || '').trim() || null;
+            r.valorAnual = lerMoeda(document.getElementById('valor-' + p.id));
+            r.observacoes = (document.getElementById('obs-' + p.id).value || '').trim() || null;
+          }
+        }
+
+        if (!temPeloMenosUm) {
+          btn.disabled = false;
+          btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
+          return alert('Responda SIM ou NÃO em pelo menos um produto antes de enviar.');
+        }
+
+        // Salvar cada produto em empresas/{id}/mb_produtos/{prodId}
+        for (const p of PRODUTOS) {
+          const r = respostas[p.id];
+          if (!r || !r.tem) continue;
+          const dados = {
+            tem: r.tem === 'sim',
+            statusVisual: 'mapeada',
+            ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+            ultimoAutorUid: LINK.geradoPorUid || 'cliente',
+            ultimoAutorNome: LINK.geradoPorNome || 'Cliente (autopreenchimento)',
+            preenchidoViaLink: true,
+            linkId: LINK_ID
+          };
+          if (r.tem === 'sim') {
+            dados.vencimentoMes = r.vencimentoMes;
+            dados.vencimentoAno = r.vencimentoAno;
+            dados.seguradoraAtual = r.seguradora;
+            dados.valorAnualPago = r.valorAnual || null;
+            dados.observacoes = r.observacoes;
+          }
+          // Marca como já pontuado para não dar pontos extras na próxima edição
+          dados.jaPontuouMapeamento = true;
+          await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set(dados, { merge: true });
+        }
+
+        // Atualizar nº funcionários se informado (SOBRESCREVE conforme você pediu)
+        const empresaUpdate = {
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+          ultimoAutorViaLink: true
+        };
+        if (numFunc !== null && numFunc > 0) {
+          empresaUpdate.numFuncionarios = numFunc;
+        }
+        await db.collection('empresas').doc(LINK.empresaId).set(empresaUpdate, { merge: true });
+
+        // Marca o link como preenchido
+        await db.collection('mb_links_empresa').doc(LINK_ID).update({
+          preenchido: true,
+          preenchidoEm: firebase.firestore.FieldValue.serverTimestamp(),
+          respostas: respostas,
+          numFuncionariosInformado: numFunc
+        });
+
+        // Pontuação: registra ações para o gerador do link
+        // (1 ação de mapeamento_via_link por produto que respondeu = 5 pts cada)
+        if (LINK.geradoPorUid) {
+          for (const p of PRODUTOS) {
+            const r = respostas[p.id];
+            if (!r || !r.tem) continue;
+            await db.collection('mb_acoes').add({
+              tipo: 'mapeamento_via_link',
+              empresaId: LINK.empresaId, empresaNome: LINK.empresaNome,
+              produto: p.id, produtoNome: p.nome,
+              agenciaId: LINK.agenciaId,
+              usuarioId: LINK.geradoPorUid, usuarioNome: LINK.geradoPorNome,
+              pontos: 5,
+              motivo: 'Cliente preencheu via link de autopreenchimento',
+              criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        }
+
+        // Sucesso
+        document.getElementById('conteudo').querySelectorAll('.card, .btn-enviar').forEach(el => el.style.display = 'none');
+        document.getElementById('sucesso').classList.add('show');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch(e) {
+        console.error(e);
+        alert('Erro ao enviar: ' + e.message);
+        btn.disabled = false;
+        btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
+      }
+    }
+    window.enviar = enviar;
+  </script>
+</body>
+</html>
