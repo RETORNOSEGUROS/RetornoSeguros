@@ -1697,6 +1697,7 @@ async function salvarFinanceiro(){
     despesasAdm: getMoney("finDespAdm"),
     depreciacaoAmortizacao: getMoney("finDepAmort"),
     outrasDespesas: getMoney("finOutrasDesp"),
+    outrasReceitas: getMoney("finOutrasReceitas"),
     ebit: getMoney("finEBIT"),
     ebitda: getMoney("finEbitda") || getMoney("finEbitdaDRE"),
     
@@ -13480,15 +13481,20 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
   window.aplicarAutocalculo = function(d){
     if(!d) return d;
 
-    /* DRE — só recalcula se houver ao menos um bruto da DRE preenchido */
-    const temBrutosDRE = algum([d.receitaBruta, d.deducoes, d.cmv, d.despesasVendas, d.despesasAdm,
-                                d.depreciacaoAmortizacao, d.outrasDespesas, d.receitasFinanceiras,
+    /* DRE — recalcula se houver qualquer COMPONENTE da DRE preenchido.
+       Receita Líquida pode vir DIRETA (campo principal) ou de Bruta − Deduções.
+       Componentes (não subtotais) é que disparam — assim um registro legado que só
+       tem os subtotais salvos (receitaLiquida/ebitda/etc.) é preservado intacto. */
+    const temComponentesDRE = algum([d.receitaBruta, d.deducoes, d.cmv,
+                                d.despesasVendas, d.despesasAdm, d.depreciacaoAmortizacao,
+                                d.outrasDespesas, d.outrasReceitas, d.receitasFinanceiras,
                                 d.despesasFinanceiras, d.ircs]);
-    if(temBrutosDRE){
-      d.receitaLiquida = n(d.receitaBruta) - n(d.deducoes);
+    if(temComponentesDRE){
+      // Se houver receita bruta informada, calcula a líquida; senão usa a líquida digitada direto
+      if(n(d.receitaBruta) !== 0) d.receitaLiquida = n(d.receitaBruta) - n(d.deducoes);
       d.lucroBruto     = n(d.receitaLiquida) - n(d.cmv);
       d.ebit           = n(d.lucroBruto) - n(d.despesasVendas) - n(d.despesasAdm)
-                       - n(d.depreciacaoAmortizacao) - n(d.outrasDespesas);
+                       - n(d.depreciacaoAmortizacao) - n(d.outrasDespesas) + n(d.outrasReceitas);
       d.ebitda         = n(d.ebit) + n(d.depreciacaoAmortizacao);
       d.resultadoFinanceiro = n(d.receitasFinanceiras) - n(d.despesasFinanceiras);
       d.lucroAntesIR   = n(d.ebit) + n(d.resultadoFinanceiro);
@@ -13539,13 +13545,14 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
   };
 
   /* ===== 2) INTERFACE AO VIVO ===== */
-  const CALC_IDS = ['finReceita','finReceitaLiq','finLucroBruto','finEBIT','finEbitda','finEbitdaDRE',
+  // Receita Líquida (finReceitaLiq) NÃO entra aqui: é campo de entrada direta.
+  const CALC_IDS = ['finLucroBruto','finEBIT','finEbitda','finEbitdaDRE',
     'finResultadoFin','finLAIR','finLucroLiq','finLucroLiqDRE',
     'finAtivoCirc','finAtivoNaoCirc','finAtivo','finAtivoTotal',
     'finPassivoCirc','finPassivoNaoCirc','finPL','finPLTotal','finPassivoTotal'];
 
-  const BRUTO_IDS = ['finReceitaBruta','finDeducoes','finCMV','finDespVendas','finDespAdm','finDepAmort',
-    'finOutrasDesp','finReceitaFin','finDespesaFin','finIRCS',
+  const BRUTO_IDS = ['finReceitaBruta','finDeducoes','finReceitaLiq','finCMV','finDespVendas','finDespAdm',
+    'finDepAmort','finOutrasDesp','finOutrasReceitas','finReceitaFin','finDespesaFin','finIRCS',
     'finCaixa','finACCaixa','finACAplicacoes','finCR','finACPDD','finEstoques','finACImpostos',
     'finACAdiantFornec','finACDespAntecip','finACOutros',
     'finANCRealizavel','finANCInvest','finImobilizado','finDepreciacao','finANCIntangivel',
@@ -13557,16 +13564,21 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
 
   function previewDRE(){
     const rb=lerUI('finReceitaBruta'), ded=lerUI('finDeducoes'), cmv=lerUI('finCMV'),
-          dv=lerUI('finDespVendas'), da=lerUI('finDespAdm'), dep=lerUI('finDepAmort'), od=lerUI('finOutrasDesp'),
+          dv=lerUI('finDespVendas'), da=lerUI('finDespAdm'), dep=lerUI('finDepAmort'),
+          od=lerUI('finOutrasDesp'), orc=lerUI('finOutrasReceitas'),
           rf=lerUI('finReceitaFin'), df=lerUI('finDespesaFin'), ir=lerUI('finIRCS');
-    if(!(rb||ded||cmv||dv||da||dep||od||rf||df||ir)) return; // legado: não mexe
-    const rl=rb-ded;            setUI(['finReceita','finReceitaLiq'], rl);
-    const lb=rl-cmv;            setUI(['finLucroBruto'], lb);
-    const ebit=lb-dv-da-dep-od; setUI(['finEBIT'], ebit);
-    const ebitda=ebit+dep;      setUI(['finEbitda','finEbitdaDRE'], ebitda);
-    const resFin=rf-df;         setUI(['finResultadoFin'], resFin);
-    const lair=ebit+resFin;     setUI(['finLAIR'], lair);
-    const ll=lair-ir;           setUI(['finLucroLiq','finLucroLiqDRE'], ll);
+    const rlDireta=lerUI('finReceitaLiq');
+    if(!(rb||ded||rlDireta||cmv||dv||da||dep||od||orc||rf||df||ir)) return; // legado/vazio: não mexe
+    // Receita líquida: usa a bruta−deduções se houver bruta; senão a digitada direto
+    let rl = rlDireta;
+    if(rb){ rl = rb - ded; setUI(['finReceitaLiq'], rl); }
+    setUI(['finReceita'], rl); // espelho no resumo (aba Básico)
+    const lb=rl-cmv;               setUI(['finLucroBruto'], lb);
+    const ebit=lb-dv-da-dep-od+orc; setUI(['finEBIT'], ebit);
+    const ebitda=ebit+dep;         setUI(['finEbitda','finEbitdaDRE'], ebitda);
+    const resFin=rf-df;            setUI(['finResultadoFin'], resFin);
+    const lair=ebit+resFin;        setUI(['finLAIR'], lair);
+    const ll=lair-ir;              setUI(['finLucroLiq','finLucroLiqDRE'], ll);
   }
 
   function previewBalanco(){
