@@ -1651,6 +1651,10 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
   
   // Re-aplicar máscaras de moeda
   moneyBindInputs(document.getElementById("modalFin"));
+
+  // Ativar autocálculo ao vivo: trava os campos calculados, preenche-os a partir
+  // dos brutos e mostra o status de fechamento do balanço.
+  if(window.ativarAutocalculoUI) ativarAutocalculoUI();
 }
 window.abrirModalEdicao = abrirModalEdicao;
 
@@ -1791,6 +1795,12 @@ async function salvarFinanceiro(){
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: CTX.uid
   };
+
+  // ========== AUTOCÁLCULO (DRE + totais do balanço a partir dos brutos) ==========
+  // Recalcula receitaLiquida, lucroBruto, ebit, ebitda, lucroLiquido e os totais
+  // do balanço a partir dos campos brutos. Retrocompatível: registros legados sem
+  // os componentes brutos são preservados (ver definição no fim do arquivo).
+  aplicarAutocalculo(dados);
 
   // ========== CALCULAR DÍVIDAS E INDICADORES ==========
   
@@ -13443,3 +13453,209 @@ function renderCreditoViavel(calc, analise) {
 
 window.renderPlanoRecuperacao = renderPlanoRecuperacao;
 window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
+
+
+/* ============================================================================
+   MÓDULO DE AUTOCÁLCULO  —  Análise Financeira / Retorno Seguros
+   ----------------------------------------------------------------------------
+   Integrado ao financeiro.js. Faz duas coisas:
+     1) aplicarAutocalculo(dados): recalcula Receita Líquida, Lucro Bruto, EBIT,
+        EBITDA, LAIR, Lucro Líquido e os totais do balanço a partir dos campos
+        BRUTOS, logo antes de salvar (chamado em salvarFinanceiro).
+     2) Interface ao vivo: trava os campos de resultado (=), preenche-os enquanto
+        o usuário digita os brutos e mostra se o balanço fecha (ativado em
+        abrirModalEdicao via ativarAutocalculoUI).
+   Retrocompatível: um bloco só é recalculado quando há pelo menos um campo bruto
+   preenchido; registros legados que só têm os totais salvos são preservados.
+============================================================================ */
+(function(){
+  "use strict";
+
+  const n = v => { const x = Number(v); return (isNaN(x)||!isFinite(x)) ? 0 : x; };
+  const lerUI = (...ids) => { for(const id of ids){ const el=document.getElementById(id); if(el){ const v=getMoney(id); if(v) return v; } } return 0; };
+  const algum = arr => arr.some(v => n(v) !== 0);
+  const setUI = (ids, v) => ids.forEach(id => { if(document.getElementById(id)) setMoney(id, v); });
+
+  /* ===== 1) RECÁLCULO NO OBJETO `dados` (chamado em salvarFinanceiro) ===== */
+  window.aplicarAutocalculo = function(d){
+    if(!d) return d;
+
+    /* DRE — só recalcula se houver ao menos um bruto da DRE preenchido */
+    const temBrutosDRE = algum([d.receitaBruta, d.deducoes, d.cmv, d.despesasVendas, d.despesasAdm,
+                                d.depreciacaoAmortizacao, d.outrasDespesas, d.receitasFinanceiras,
+                                d.despesasFinanceiras, d.ircs]);
+    if(temBrutosDRE){
+      d.receitaLiquida = n(d.receitaBruta) - n(d.deducoes);
+      d.lucroBruto     = n(d.receitaLiquida) - n(d.cmv);
+      d.ebit           = n(d.lucroBruto) - n(d.despesasVendas) - n(d.despesasAdm)
+                       - n(d.depreciacaoAmortizacao) - n(d.outrasDespesas);
+      d.ebitda         = n(d.ebit) + n(d.depreciacaoAmortizacao);
+      d.resultadoFinanceiro = n(d.receitasFinanceiras) - n(d.despesasFinanceiras);
+      d.lucroAntesIR   = n(d.ebit) + n(d.resultadoFinanceiro);
+      d.lucroLiquido   = n(d.lucroAntesIR) - n(d.ircs);
+    }
+
+    /* ATIVO */
+    const temAC = algum([d.caixa, d.aplicacoesFinanceirasCP, d.contasReceber, d.pdd, d.estoques,
+                         d.impostosRecuperar, d.adiantamentoFornecedores, d.despesasAntecipadas, d.outrosAC]);
+    if(temAC)
+      d.ativoCirculante = n(d.caixa) + n(d.aplicacoesFinanceirasCP) + n(d.contasReceber)
+                        - n(d.pdd) + n(d.estoques) + n(d.impostosRecuperar)
+                        + n(d.adiantamentoFornecedores) + n(d.despesasAntecipadas) + n(d.outrosAC);
+
+    const temANC = algum([d.realizavelLP, d.investimentos, d.imobilizado, d.depreciacao, d.intangivel]);
+    if(temANC)
+      d.ativoNaoCirculante = n(d.realizavelLP) + n(d.investimentos)
+                           + (n(d.imobilizado) - n(d.depreciacao)) + n(d.intangivel);
+
+    if(temAC || temANC)
+      d.ativoTotal = n(d.ativoCirculante) + n(d.ativoNaoCirculante);
+
+    /* PASSIVO */
+    const temPC = algum([d.contasPagar, d.emprestimosCP, d.salariosPagar, d.impostosPagar,
+                         d.adiantamentoClientes, d.dividendosPagar, d.provisoesCP, d.outrosPC]);
+    if(temPC)
+      d.passivoCirculante = n(d.contasPagar) + n(d.emprestimosCP) + n(d.salariosPagar)
+                          + n(d.impostosPagar) + n(d.adiantamentoClientes) + n(d.dividendosPagar)
+                          + n(d.provisoesCP) + n(d.outrosPC);
+
+    const temPNC = algum([d.emprestimosLP, d.debentures, d.provisoesLP, d.outrosPNC]);
+    if(temPNC)
+      d.passivoNaoCirculante = n(d.emprestimosLP) + n(d.debentures) + n(d.provisoesLP) + n(d.outrosPNC);
+
+    /* PATRIMÔNIO LÍQUIDO */
+    const temPL = algum([d.capitalSocial, d.reservasCapital, d.reservasLucro, d.lucrosAcumulados, d.ajustesAvaliacao]);
+    if(temPL)
+      d.patrimonioLiquido = n(d.capitalSocial) + n(d.reservasCapital) + n(d.reservasLucro)
+                          + n(d.lucrosAcumulados) + n(d.ajustesAvaliacao);
+
+    d.passivoTotal = n(d.passivoCirculante) + n(d.passivoNaoCirculante);
+
+    /* validação de fechamento (salva junto, útil pra relatórios/auditoria) */
+    d.balancoDiferenca = n(d.ativoTotal) - (n(d.passivoTotal) + n(d.patrimonioLiquido));
+    d.balancoFecha = Math.abs(d.balancoDiferenca) < Math.max(1, n(d.ativoTotal) * 0.005);
+
+    return d;
+  };
+
+  /* ===== 2) INTERFACE AO VIVO ===== */
+  const CALC_IDS = ['finReceita','finReceitaLiq','finLucroBruto','finEBIT','finEbitda','finEbitdaDRE',
+    'finResultadoFin','finLAIR','finLucroLiq','finLucroLiqDRE',
+    'finAtivoCirc','finAtivoNaoCirc','finAtivo','finAtivoTotal',
+    'finPassivoCirc','finPassivoNaoCirc','finPL','finPLTotal','finPassivoTotal'];
+
+  const BRUTO_IDS = ['finReceitaBruta','finDeducoes','finCMV','finDespVendas','finDespAdm','finDepAmort',
+    'finOutrasDesp','finReceitaFin','finDespesaFin','finIRCS',
+    'finCaixa','finACCaixa','finACAplicacoes','finCR','finACPDD','finEstoques','finACImpostos',
+    'finACAdiantFornec','finACDespAntecip','finACOutros',
+    'finANCRealizavel','finANCInvest','finImobilizado','finDepreciacao','finANCIntangivel',
+    'finCP','finPCEmprestimos','finPCSalarios','finPCImpostos','finPCAdiantClientes','finPCDividendos',
+    'finPCProvisoes','finPCOutros',
+    'finPNCEmprestimos','finPNCDebentures','finPNCProvisoes','finPNCOutros',
+    'finPLCapital','finPLReservasCapital','finPLReservasLucro','finPLLucrosAcum','finPLAjustes'];
+  const BRUTO_SET = new Set(BRUTO_IDS);
+
+  function previewDRE(){
+    const rb=lerUI('finReceitaBruta'), ded=lerUI('finDeducoes'), cmv=lerUI('finCMV'),
+          dv=lerUI('finDespVendas'), da=lerUI('finDespAdm'), dep=lerUI('finDepAmort'), od=lerUI('finOutrasDesp'),
+          rf=lerUI('finReceitaFin'), df=lerUI('finDespesaFin'), ir=lerUI('finIRCS');
+    if(!(rb||ded||cmv||dv||da||dep||od||rf||df||ir)) return; // legado: não mexe
+    const rl=rb-ded;            setUI(['finReceita','finReceitaLiq'], rl);
+    const lb=rl-cmv;            setUI(['finLucroBruto'], lb);
+    const ebit=lb-dv-da-dep-od; setUI(['finEBIT'], ebit);
+    const ebitda=ebit+dep;      setUI(['finEbitda','finEbitdaDRE'], ebitda);
+    const resFin=rf-df;         setUI(['finResultadoFin'], resFin);
+    const lair=ebit+resFin;     setUI(['finLAIR'], lair);
+    const ll=lair-ir;           setUI(['finLucroLiq','finLucroLiqDRE'], ll);
+  }
+
+  function previewBalanco(){
+    const acC = [lerUI('finACCaixa','finCaixa'), lerUI('finACAplicacoes'), lerUI('finCR'), lerUI('finACPDD'),
+                 lerUI('finEstoques'), lerUI('finACImpostos'), lerUI('finACAdiantFornec'),
+                 lerUI('finACDespAntecip'), lerUI('finACOutros')];
+    let ac = lerUI('finAtivoCirc');
+    if(acC.some(v=>v)){ ac = acC[0]+acC[1]+acC[2]-acC[3]+acC[4]+acC[5]+acC[6]+acC[7]+acC[8]; setUI(['finAtivoCirc'], ac); }
+
+    const ancC = [lerUI('finANCRealizavel'), lerUI('finANCInvest'), lerUI('finImobilizado'),
+                  lerUI('finDepreciacao'), lerUI('finANCIntangivel')];
+    let anc = lerUI('finAtivoNaoCirc');
+    if(ancC.some(v=>v)){ anc = ancC[0]+ancC[1]+(ancC[2]-ancC[3])+ancC[4]; setUI(['finAtivoNaoCirc'], anc); }
+
+    const ativo = ac + anc;
+    if(acC.some(v=>v)||ancC.some(v=>v)) setUI(['finAtivo','finAtivoTotal'], ativo);
+
+    const pcC = [lerUI('finCP'), lerUI('finPCEmprestimos'), lerUI('finPCSalarios'), lerUI('finPCImpostos'),
+                 lerUI('finPCAdiantClientes'), lerUI('finPCDividendos'), lerUI('finPCProvisoes'), lerUI('finPCOutros')];
+    let pc = lerUI('finPassivoCirc');
+    if(pcC.some(v=>v)){ pc = pcC.reduce((a,b)=>a+b,0); setUI(['finPassivoCirc'], pc); }
+
+    const pncC = [lerUI('finPNCEmprestimos'), lerUI('finPNCDebentures'), lerUI('finPNCProvisoes'), lerUI('finPNCOutros')];
+    let pnc = lerUI('finPassivoNaoCirc');
+    if(pncC.some(v=>v)){ pnc = pncC.reduce((a,b)=>a+b,0); setUI(['finPassivoNaoCirc'], pnc); }
+
+    const plC = [lerUI('finPLCapital'), lerUI('finPLReservasCapital'), lerUI('finPLReservasLucro'),
+                 lerUI('finPLLucrosAcum'), lerUI('finPLAjustes')];
+    let pl = lerUI('finPL','finPLTotal');
+    if(plC.some(v=>v)){ pl = plC.reduce((a,b)=>a+b,0); setUI(['finPL','finPLTotal'], pl); }
+
+    setUI(['finPassivoTotal'], pc + pnc);
+    atualizarStatusBalanco(ativo, pc + pnc + pl);
+  }
+
+  function atualizarStatusBalanco(ativo, passivoMaisPl){
+    const box = document.getElementById('autocalcBalanco');
+    if(!box) return;
+    const fmt = v => (Number.isFinite(v) ? v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}) : '—');
+    if(ativo===0 && passivoMaisPl===0){ box.className='autocalc-status'; box.style.display='none'; return; }
+    box.style.display='flex';
+    const diff = ativo - passivoMaisPl;
+    if(Math.abs(diff) < Math.max(1, ativo*0.005)){
+      box.className='autocalc-status ok';
+      box.innerHTML = '✓ Balanço fecha: Ativo = Passivo + PL = <b style="margin-left:4px">'+fmt(ativo)+'</b>';
+    } else {
+      box.className='autocalc-status bad';
+      box.innerHTML = '✕ Balanço NÃO fecha — diferença de <b style="margin:0 4px">'+fmt(Math.abs(diff))+'</b> ('
+        + (diff>0?'Ativo maior':'Passivo+PL maior') + '). Revise os lançamentos.';
+    }
+  }
+
+  function recalcular(){ try{ previewDRE(); previewBalanco(); }catch(e){ console.warn('[autocalculo]', e); } }
+  window.recalcularAutocalculo = recalcular;
+
+  function travarCampos(){
+    CALC_IDS.forEach(id=>{
+      const el=document.getElementById(id);
+      if(el && !el.readOnly){ el.readOnly=true; el.tabIndex=-1; el.classList.add('campo-calculado'); }
+    });
+    if(!document.getElementById('autocalcBalanco')){
+      const btn=document.getElementById('finSalvar');
+      if(btn && btn.parentNode){
+        const div=document.createElement('div');
+        div.id='autocalcBalanco'; div.className='autocalc-status'; div.style.display='none';
+        btn.parentNode.insertBefore(div, btn);
+      }
+    }
+  }
+
+  window.ativarAutocalculoUI = function(){ travarCampos(); recalcular(); };
+
+  function injetarCSS(){
+    if(document.getElementById('autocalcCSS')) return;
+    const s=document.createElement('style'); s.id='autocalcCSS';
+    s.textContent =
+      '.campo-calculado{background:#eef4fb!important;color:#0a3c7d!important;font-weight:600;cursor:not-allowed;border-style:dashed!important}'+
+      '.autocalc-status{padding:11px 15px;border-radius:9px;font-weight:600;font-size:13px;margin:12px 0;align-items:center;line-height:1.4}'+
+      '.autocalc-status.ok{background:#e3f6ee;color:#1f7a52}'+
+      '.autocalc-status.bad{background:#fce8e6;color:#c0362c}';
+    document.head.appendChild(s);
+  }
+
+  function instalar(){
+    injetarCSS();
+    document.addEventListener('input', e=>{ if(e.target && BRUTO_SET.has(e.target.id)) recalcular(); });
+    document.addEventListener('blur',  e=>{ if(e.target && BRUTO_SET.has(e.target.id)) recalcular(); }, true);
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', instalar);
+  else instalar();
+
+})();
