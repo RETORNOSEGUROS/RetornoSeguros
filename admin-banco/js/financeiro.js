@@ -1466,7 +1466,7 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
     "finAno","finReceita","finEbitda","finLucroLiq","finPL","finAtivo","finDividaBruta","finCaixa",
     // DRE
     "finReceitaBruta","finDeducoes","finReceitaLiq","finCMV","finLucroBruto",
-    "finDespVendas","finDespAdm","finDepAmort","finOutrasDesp","finEBIT","finEbitdaDRE",
+    "finDespVendas","finDespAdm","finDepAmort","finOutrasDesp","finOutrasReceitas","finEBIT","finEbitdaDRE",
     "finReceitaFin","finDespesaFin","finResultadoFin","finLAIR","finIRCS","finLucroLiqDRE",
     // Ativo Circulante
     "finACCaixa","finACAplicacoes","finCR","finACPDD","finEstoques","finACImpostos",
@@ -1657,6 +1657,47 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
   if(window.ativarAutocalculoUI) ativarAutocalculoUI();
 }
 window.abrirModalEdicao = abrirModalEdicao;
+
+// ===== Trocar o ANO dentro do modal recarrega aquele exercício (ou limpa p/ ano novo) =====
+// Resolve o problema de, ao abrir um ano já mapeado e querer lançar outro ano,
+// o formulário continuar com os dados do ano anterior.
+async function trocarAnoNoModal(novoAno){
+  novoAno = parseInt(novoAno, 10);
+  if(!novoAno || novoAno < 2000 || novoAno > 2100) return;
+  const empresaId = EDIT_CTX?.empresaId;
+  if(!empresaId) return;
+  if(EDIT_CTX && Number(EDIT_CTX.ano) === novoAno) return; // mesmo ano, nada a fazer
+
+  // procura se já existe um lançamento para esse ano
+  let docId = null;
+  try{
+    const snap = await db.collection("empresas").doc(empresaId)
+      .collection("financeiro").where("ano","==",novoAno).limit(1).get();
+    if(!snap.empty) docId = snap.docs[0].id;
+  }catch(e){ console.warn("[trocarAnoNoModal] busca falhou:", e); }
+
+  // reabre o modal já no ano certo: com docId -> carrega; sem docId -> limpa tudo
+  await abrirModalEdicao(empresaId, novoAno, docId);
+
+  if(!docId){
+    // ano ainda não mapeado: avisa que o formulário está limpo para um novo exercício
+    if(typeof mostrarInfo === "function") mostrarInfo("📝 Ano " + novoAno + " ainda não tem dados — formulário limpo para um novo lançamento.");
+  }
+}
+window.trocarAnoNoModal = trocarAnoNoModal;
+
+// liga o evento ao campo de ano (uma única vez)
+(function(){
+  function ligar(){
+    const el = document.getElementById("finAno");
+    if(el && !el.dataset.anoBound){
+      el.dataset.anoBound = "1";
+      el.addEventListener("change", function(){ trocarAnoNoModal(this.value); });
+    }
+  }
+  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", ligar);
+  else ligar();
+})();
 
 async function salvarFinanceiro(){
   const empresaId = EDIT_CTX?.empresaId;
