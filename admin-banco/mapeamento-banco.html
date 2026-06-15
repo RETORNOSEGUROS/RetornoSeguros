@@ -2845,6 +2845,7 @@
         <div style="display: flex; gap: 6px; background: #f1f5f9; padding: 4px; border-radius: 10px;">
           <button class="cot-view-btn active" id="btnViewKanban" onclick="setCotacaoView('kanban')" style="border:none; background:white; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.08);">🗂 Kanban</button>
           <button class="cot-view-btn" id="btnViewLista" onclick="setCotacaoView('lista')" style="border:none; background:transparent; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; color:#64748b;">☰ Lista</button>
+          <button class="cot-view-btn" id="btnViewRamo" onclick="setCotacaoView('ramo')" style="border:none; background:transparent; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; color:#64748b;">🏷 Por ramo</button>
         </div>
       </div>
 
@@ -2860,6 +2861,12 @@
       <div id="cotacoesKanbanView">
         <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">💡 Arraste os cards para a próxima etapa. Cada avanço pede as informações necessárias.</div>
         <div class="kanban" id="kanbanWrap"></div>
+      </div>
+
+      <!-- VISÃO POR RAMO -->
+      <div id="cotacoesRamoView" style="display: none;">
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">🏷 Todas as negociações agrupadas por ramo (abertas, fechadas e perdidas). Clique numa negociação pra ver a linha do tempo completa.</div>
+        <div id="cotacoesRamoContainer"></div>
       </div>
 
       <!-- VISÃO LISTA -->
@@ -3888,7 +3895,9 @@
     mapeou_bonus_venc:         5,
     qualificacao:              15,
     cotacao_solicitada:        5,
+    coleta_informacoes:        8,
     cotacao_realizada:         10,
+    analise_cliente:           5,
     cotacao_enviada:           8,
     reuniao_agendada:          12,
     fechado_base:              100,
@@ -3909,10 +3918,12 @@
     { grupo: 'Funil', chave: 'mapeou_produto',     label: '3 · Mapeamento de produto',    desc: 'Por produto mapeado' },
     { grupo: 'Funil', chave: 'mapeou_bonus_venc',  label: '3b · Bônus vencimento próximo', desc: 'Extra se venc. em até 90 dias' },
     { grupo: 'Funil', chave: 'qualificacao',       label: '4 · Qualificação completa',    desc: 'Dados completos para cotar' },
-    { grupo: 'Funil', chave: 'cotacao_solicitada', label: '5 · Cotação solicitada',       desc: 'Pedida ao corretor' },
+    { grupo: 'Funil', chave: 'cotacao_solicitada', label: '5 · Negócio iniciado',         desc: 'Cotação aberta / pedida ao corretor' },
+    { grupo: 'Funil', chave: 'coleta_informacoes', label: '5b · Coletou informações',     desc: 'Reuniu dados completos pra cotar' },
     { grupo: 'Funil', chave: 'cotacao_realizada',  label: '6 · Cotação realizada',        desc: 'Corretor lançou valores' },
     { grupo: 'Funil', chave: 'cotacao_enviada',    label: '7 · Cotação enviada',          desc: 'Enviada ao cliente' },
     { grupo: 'Funil', chave: 'reuniao_agendada',   label: '8 · Reunião agendada',         desc: 'Data marcada' },
+    { grupo: 'Funil', chave: 'analise_cliente',     label: '8b · Em análise (cliente)',    desc: 'Proposta em avaliação pelo cliente' },
     { grupo: 'Funil', chave: 'fechado_base',       label: '9a · FECHADO 💎',              desc: 'Base × multiplicador, divisão 50/30/20' },
     { grupo: 'Funil', chave: 'perda_com_motivo',   label: '9b · Não fechado (com motivo)', desc: 'Incentiva registrar a perda' },
     { grupo: 'Funil', chave: 'sem_aceitacao',      label: '9c · Sem aceitação seguradora', desc: 'Cotação rejeitada externa' },
@@ -6338,7 +6349,7 @@
       const candidatas = [];
       snap.forEach(d => {
         const c = { id: d.id, ...d.data() };
-        if (!['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status)) return;
+        if (!STATUS_ATIVOS.includes(c.status)) return;
         const dias = diasNaEtapa(c);
         const limite = prazos[c.status];
         if (dias > limite) candidatas.push({ c, dias, limite });
@@ -6492,7 +6503,7 @@
       // ===== KPIs =====
       const fechadas = cotPeriodo.filter(c => c.status === 'fechada');
       const perdidas = cotPeriodo.filter(c => c.status === 'perdida' || c.status === 'sem_aceitacao');
-      const andamento = cotPeriodo.filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status));
+      const andamento = cotPeriodo.filter(c => STATUS_ATIVOS.includes(c.status));
       const decididas = fechadas.length + perdidas.length;
       const producaoR = fechadas.reduce((s, c) => s + (c.valor || 0), 0);
       const taxaConv = decididas > 0 ? (fechadas.length / decididas * 100) : 0;
@@ -6772,14 +6783,14 @@
   }
 
   function renderTempoParado(cotacoesAtivas) {
-    const ativas = cotacoesAtivas.filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status));
+    const ativas = cotacoesAtivas.filter(c => STATUS_ATIVOS.includes(c.status));
     if (ativas.length === 0) {
       document.getElementById('relTempoParado').innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px; font-size:12px;">Nenhuma cotação ativa no momento.</div>';
       return;
     }
     const agora = Date.now();
     const grupos = {};
-    ['solicitada','cotando','enviada','reuniao_agendada'].forEach(s => grupos[s] = { soma: 0, count: 0, max: 0 });
+    STATUS_ATIVOS.forEach(s => grupos[s] = { soma: 0, count: 0, max: 0 });
     ativas.forEach(c => {
       const dt = c.atualizadoEm && c.atualizadoEm.toDate ? c.atualizadoEm.toDate().getTime() : (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate().getTime() : agora);
       const dias = Math.floor((agora - dt) / 86400000);
@@ -6789,7 +6800,7 @@
         grupos[c.status].max = Math.max(grupos[c.status].max, dias);
       }
     });
-    const ordem = ['solicitada','cotando','enviada','reuniao_agendada'];
+    const ordem = STATUS_ATIVOS;
     document.getElementById('relTempoParado').innerHTML = ordem.filter(s => grupos[s].count > 0).map(s => {
       const g = grupos[s];
       const media = (g.soma / g.count).toFixed(1);
@@ -6817,7 +6828,7 @@
   function renderCotacoesFrias(cotacoesAtivas) {
     const agora = Date.now();
     const frias = cotacoesAtivas
-      .filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status))
+      .filter(c => STATUS_ATIVOS.includes(c.status))
       .map(c => {
         const dt = c.atualizadoEm && c.atualizadoEm.toDate ? c.atualizadoEm.toDate().getTime() : agora;
         return { ...c, diasParado: Math.floor((agora - dt) / 86400000) };
@@ -7239,7 +7250,7 @@
       }
 
       // ===== Pipeline em R$ =====
-      const ativas = cotacoes.filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status));
+      const ativas = cotacoes.filter(c => STATUS_ATIVOS.includes(c.status));
       const quentesNeg = cotacoes.filter(c => ['enviada','reuniao_agendada'].includes(c.status));
 
       // valor de cada cotação: usa valorProposto, ou estimativa por ticket médio
@@ -7517,20 +7528,17 @@
   function renderKanban() {
     const wrap = document.getElementById('kanbanWrap');
     if (!wrap) return;
-    const colunas = [
-      { id: 'solicitada', nome: 'Solicitada', cor: '#f59e0b' },
-      { id: 'cotando', nome: 'Cotando', cor: '#3b82f6' },
-      { id: 'enviada', nome: 'Enviada', cor: '#0ea5e9' },
-      { id: 'reuniao_agendada', nome: 'Reunião', cor: '#8b5cf6' },
-      { id: 'fechada', nome: 'Fechada 💎', cor: '#10b981' },
-      { id: 'perdida', nome: 'Não fechou', cor: '#ef4444' }
-    ];
+    const colunas = ETAPAS_FUNIL.map(e => ({ id: e.id, nome: e.label, cor: e.cor }))
+      .concat([
+        { id: 'fechada', nome: 'Fechada 💎', cor: '#10b981' },
+        { id: 'perdida', nome: 'Não fechou', cor: '#ef4444' }
+      ]);
 
     const isEstag = perfilEfetivo() === 'estagiario';
     const isAssist = perfilEfetivo() === 'assistente';
 
-    // Atualiza grid pra caber 6 colunas
-    wrap.style.gridTemplateColumns = 'repeat(6, minmax(210px, 1fr))';
+    // Grid acompanha o nº de colunas do funil
+    wrap.style.gridTemplateColumns = `repeat(${colunas.length}, minmax(200px, 1fr))`;
 
     const motivosLabel = {
       preco: '💰 Preço', cobertura: '📋 Cobertura', prazo: '⏰ Desistiu',
@@ -7550,14 +7558,18 @@
         const cls = dias >= limite ? 'vencido' : (dias >= limite*0.75 ? 'urgente' : '');
         const corTempo = dias >= limite ? '#ef4444' : dias >= limite*0.75 ? '#f59e0b' : '#94a3b8';
         const valor = c.valor || c.valorProposto;
-        const ativa = ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status);
+        const ativa = STATUS_ATIVOS.includes(c.status);
         const podeArrastar = !isEstag && !isAssist && ativa;
         const motivoTxt = (c.status === 'perdida' || c.status === 'sem_aceitacao') && c.motivoPerda
           ? `<div style="font-size:10px; color:#ef4444; margin-top:4px; font-weight:600;">${motivosLabel[c.motivoPerda] || c.motivoPerda}</div>` : '';
+        const ch = c.chanceFechamento && CHANCE_INFO[c.chanceFechamento];
+        const chanceTxt = (ativa && ch)
+          ? `<div style="font-size:10px; margin-top:4px; font-weight:700; color:${ch.cor};">${ch.emoji} Chance ${ch.label}</div>` : '';
         return `
           <div class="kanban-card ${cls}" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirRaioX('${c.empresaId}')">
             <div class="kanban-card-empresa">${c.empresaNome}</div>
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}</div>
+            ${chanceTxt}
             ${motivoTxt}
             <div class="kanban-card-foot">
               ${ativa
@@ -7573,7 +7585,7 @@
 
       return `
         <div class="kanban-col" data-status="${col.id}"
-             ${col.id !== 'perdida' && col.id !== 'fechada' ? `ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event,'${col.id}')"` : ''}>
+             ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event,'${col.id}')">
           <div class="kanban-col-head" style="color:${col.cor};">
             <span>${col.nome}</span>
             <span class="kanban-col-count">${cards.length}</span>
@@ -7609,23 +7621,25 @@
     KANBAN_DRAG_ID = null;
     if (!c || c.status === novoStatus) return;
 
-    // Mapear destino → ação que dispara o modal correto
-    const ordem = ['solicitada','cotando','enviada','reuniao_agendada','fechada'];
-    const idxAtual = ordem.indexOf(c.status);
-    const idxNovo = ordem.indexOf(novoStatus);
+    if (!ehStatusAtivo(c.status)) {
+      alert('Esta negociação já foi finalizada (fechada ou declinada).');
+      return;
+    }
 
-    // Só permite avançar 1 etapa por vez (pra capturar os dados necessários)
+    // Fechar ou declinar: permitido a partir de qualquer etapa ativa
+    if (novoStatus === 'fechada') { abrirAvancarCotacao(c.id, 'fechar'); return; }
+    if (novoStatus === 'perdida') { abrirAvancarCotacao(c.id, 'perder'); return; }
+
+    // Entre etapas ativas: só avança uma por vez (cada etapa pede dados próprios)
+    const idxAtual = STATUS_ATIVOS.indexOf(c.status);
+    const idxNovo  = STATUS_ATIVOS.indexOf(novoStatus);
     if (idxNovo === idxAtual + 1) {
-      const acaoMap = { cotando: 'cotar', enviada: 'enviar', reuniao_agendada: 'reuniao', fechada: 'fechar' };
-      const acao = acaoMap[novoStatus];
-      if (acao) {
-        abrirAvancarCotacao(c.id, acao);
-        return;
-      }
+      const acao = ACAO_POR_STATUS[novoStatus];
+      if (acao) { abrirAvancarCotacao(c.id, acao); return; }
     } else if (idxNovo > idxAtual + 1) {
-      alert('Avance uma etapa por vez — cada etapa precisa de informações específicas (valor, data, etc).');
+      alert('Avance uma etapa por vez — cada etapa precisa de informações específicas.');
     } else {
-      alert('Não dá pra voltar etapas no kanban. Use "Cliente recusou" se a negociação não avançou.');
+      alert('Não dá pra voltar etapas. Se a negociação não avançou, arraste para "Não fechou".');
     }
   }
 
@@ -9527,10 +9541,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     const selPill = document.querySelector('#modalProdutoStatus .pill-option.selected');
     if (!selPill) return alert('Selecione um status');
-    const statusVisual = selPill.getAttribute('data-st');
+    let statusVisual = selPill.getAttribute('data-st');
 
     const vMes = parseInt(document.getElementById('vencMes').value) || null;
     const vAno = parseInt(document.getElementById('vencAno').value) || null;
+
+    // Status automático: registrou um vencimento → já conta como "mapeado"
+    if (statusVisual === 'vazia' && vMes && vAno) statusVisual = 'mapeada';
 
     // Validação: se status não é "vazia" e o user preencheu mês sem ano (ou vice-versa), alerta
     if (statusVisual !== 'vazia' && statusVisual !== 'conosco') {
@@ -9620,14 +9637,40 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   let COTACAO_ATUAL = null;
   let COTACAO_ACAO = null; // 'cotar' | 'enviar' | 'reuniao' | 'fechar' | 'perder'
 
+  // ===== FUNIL DE VENDAS (definição central das etapas) =====
+  // Ordem do funil ideal: Iniciada → Coletando info → Cotando → Enviada → Reunião → Em análise → Fechada / Declinada
+  const ETAPAS_FUNIL = [
+    { id: 'solicitada',       label: 'Iniciada',       cor: '#f59e0b', icon: '⏳', etapa: 5 },
+    { id: 'informacoes',      label: 'Coletando info', cor: '#eab308', icon: '📋', etapa: 5.5 },
+    { id: 'cotando',          label: 'Cotando',        cor: '#3b82f6', icon: '🔍', etapa: 6 },
+    { id: 'enviada',          label: 'Enviada',        cor: '#0ea5e9', icon: '📧', etapa: 7 },
+    { id: 'reuniao_agendada', label: 'Reunião',        cor: '#8b5cf6', icon: '📅', etapa: 8 },
+    { id: 'analise',          label: 'Em análise',     cor: '#a855f7', icon: '🤔', etapa: 8.5 }
+  ];
+  const STATUS_ATIVOS = ETAPAS_FUNIL.map(e => e.id);           // etapas "abertas"
+  const ORDEM_FUNIL   = STATUS_ATIVOS.concat(['fechada']);     // ordem de avanço
+  function ehStatusAtivo(s) { return STATUS_ATIVOS.includes(s); }
+  function etapaInfo(s) { return ETAPAS_FUNIL.find(e => e.id === s) || null; }
+  // ação (modal) que cada status-destino dispara
+  const ACAO_POR_STATUS = { informacoes: 'coletar', cotando: 'cotar', enviada: 'enviar', reuniao_agendada: 'reuniao', analise: 'analise', fechada: 'fechar', perdida: 'perder' };
+
   const STATUS_COTACAO = {
-    solicitada:       { label: 'Aguardando cotação', cor: '#f59e0b', icon: '⏳' },
-    cotando:          { label: 'Corretor cotando',   cor: '#3b82f6', icon: '🔍' },
-    enviada:          { label: 'Enviada ao cliente', cor: '#0ea5e9', icon: '📧' },
-    reuniao_agendada: { label: 'Reunião agendada',   cor: '#8b5cf6', icon: '📅' },
-    fechada:          { label: 'Fechada ✓',          cor: '#10b981', icon: '💎' },
-    perdida:          { label: 'Perdida',            cor: '#ef4444', icon: '✗' },
-    sem_aceitacao:    { label: 'Sem aceitação',      cor: '#94a3b8', icon: '—' }
+    solicitada:       { label: 'Aguardando início',     cor: '#f59e0b', icon: '⏳' },
+    informacoes:      { label: 'Coletando informações', cor: '#eab308', icon: '📋' },
+    cotando:          { label: 'Corretor cotando',      cor: '#3b82f6', icon: '🔍' },
+    enviada:          { label: 'Enviada ao cliente',    cor: '#0ea5e9', icon: '📧' },
+    reuniao_agendada: { label: 'Reunião agendada',      cor: '#8b5cf6', icon: '📅' },
+    analise:          { label: 'Em análise (cliente)',  cor: '#a855f7', icon: '🤔' },
+    fechada:          { label: 'Fechada ✓',             cor: '#10b981', icon: '💎' },
+    perdida:          { label: 'Declinada',             cor: '#ef4444', icon: '✗' },
+    sem_aceitacao:    { label: 'Sem aceitação',         cor: '#94a3b8', icon: '—' }
+  };
+
+  // Chance de fechamento (informada em cada etapa)
+  const CHANCE_INFO = {
+    alta:  { label: 'Alta',  cor: '#10b981', emoji: '🟢' },
+    media: { label: 'Média', cor: '#f59e0b', emoji: '🟡' },
+    baixa: { label: 'Baixa', cor: '#ef4444', emoji: '🔴' }
   };
 
   async function solicitarCotacaoDoMapeamento() {
@@ -9748,7 +9791,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   function atualizarKpiCotacoes() {
-    const ativas = COTACOES.filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status));
+    const ativas = COTACOES.filter(c => STATUS_ATIVOS.includes(c.status));
     document.getElementById('kpiCotSolic').textContent = COTACOES.filter(c => c.status === 'solicitada').length;
     document.getElementById('kpiCotCotando').textContent = COTACOES.filter(c => c.status === 'cotando').length;
     document.getElementById('kpiCotEnviadas').textContent = COTACOES.filter(c => ['enviada','reuniao_agendada'].includes(c.status)).length;
@@ -9760,18 +9803,186 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     COTACAO_VIEW = v;
     document.getElementById('cotacoesKanbanView').style.display = (v === 'kanban') ? '' : 'none';
     document.getElementById('cotacoesListaView').style.display = (v === 'lista') ? '' : 'none';
-    document.getElementById('btnViewKanban').classList.toggle('active', v === 'kanban');
-    document.getElementById('btnViewLista').classList.toggle('active', v === 'lista');
-    document.getElementById('btnViewKanban').style.background = (v === 'kanban') ? 'white' : 'transparent';
-    document.getElementById('btnViewKanban').style.color = (v === 'kanban') ? '#0f172a' : '#64748b';
-    document.getElementById('btnViewKanban').style.boxShadow = (v === 'kanban') ? '0 1px 3px rgba(0,0,0,0.08)' : 'none';
-    document.getElementById('btnViewLista').style.background = (v === 'lista') ? 'white' : 'transparent';
-    document.getElementById('btnViewLista').style.color = (v === 'lista') ? '#0f172a' : '#64748b';
-    document.getElementById('btnViewLista').style.boxShadow = (v === 'lista') ? '0 1px 3px rgba(0,0,0,0.08)' : 'none';
+    document.getElementById('cotacoesRamoView').style.display = (v === 'ramo') ? '' : 'none';
+    const setBtn = (id, on) => {
+      const b = document.getElementById(id); if (!b) return;
+      b.classList.toggle('active', on);
+      b.style.background = on ? 'white' : 'transparent';
+      b.style.color = on ? '#0f172a' : '#64748b';
+      b.style.boxShadow = on ? '0 1px 3px rgba(0,0,0,0.08)' : 'none';
+    };
+    setBtn('btnViewKanban', v === 'kanban');
+    setBtn('btnViewLista', v === 'lista');
+    setBtn('btnViewRamo', v === 'ramo');
     if (v === 'kanban') renderKanban();
+    else if (v === 'ramo') renderCotacoesPorRamo();
     else renderCotacoes();
   }
   window.setCotacaoView = setCotacaoView;
+
+  // ---------- Helpers de data ----------
+  function _toDate(v) {
+    if (!v) return null;
+    if (v.toDate) return v.toDate();
+    if (typeof v === 'string') { const d = new Date(v); return isNaN(d) ? null : d; }
+    if (v instanceof Date) return v;
+    return null;
+  }
+  function fmtDataCurta(v) {
+    const d = _toDate(v);
+    if (!d) return '—';
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  // ---------- Visão: Negociações por ramo ----------
+  function renderCotacoesPorRamo() {
+    const cont = document.getElementById('cotacoesRamoContainer');
+    if (!cont) return;
+    if (!COTACOES || COTACOES.length === 0) {
+      cont.innerHTML = `<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:40px; text-align:center; color:#94a3b8;">Nenhuma negociação registrada ainda.</div>`;
+      return;
+    }
+    // agrupa por ramo (produtoId), respeitando a ordem dos ramos cadastrados
+    const ordemRamos = (PRODUTOS || []).map(p => p.id);
+    const grupos = {};
+    COTACOES.forEach(c => {
+      const k = c.produtoId || 'outros';
+      (grupos[k] = grupos[k] || []).push(c);
+    });
+    const chaves = Object.keys(grupos).sort((a, b) => {
+      const ia = ordemRamos.indexOf(a), ib = ordemRamos.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+
+    cont.innerHTML = chaves.map(k => {
+      const lista = grupos[k].slice().sort((a, b) => (_toDate(b.atualizadoEm) || 0) - (_toDate(a.atualizadoEm) || 0));
+      const ramo = (PRODUTOS || []).find(p => p.id === k) || { nome: grupos[k][0].produtoNome || 'Outros', icon: '📦', cor: '#64748b' };
+      const ativas = lista.filter(c => ehStatusAtivo(c.status)).length;
+      const fechadas = lista.filter(c => c.status === 'fechada');
+      const perdidas = lista.filter(c => c.status === 'perdida' || c.status === 'sem_aceitacao').length;
+      const valorFechado = fechadas.reduce((s, c) => s + (c.valor || 0), 0);
+
+      const linhas = lista.map(c => {
+        const si = STATUS_COTACAO[c.status] || { label: c.status, cor: '#64748b', icon: '•' };
+        const ch = c.chanceFechamento && CHANCE_INFO[c.chanceFechamento];
+        const valor = c.valor || c.valorProposto;
+        const dataRef = c.dataDecisao || c.atualizadoEm || c.dataSolicitacao;
+        return `
+          <div onclick="abrirTimelineNegocio('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid #f1f5f9; cursor:pointer;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.empresaNome}</div>
+              <div style="font-size:11px; color:#94a3b8;">${fmtDataCurta(dataRef)}${ch ? ` · <span style="color:${ch.cor};font-weight:700;">${ch.emoji} ${ch.label}</span>` : ''}</div>
+            </div>
+            ${valor ? `<div style="font-size:12px; font-weight:700; color:#166534; font-family:'JetBrains Mono';">${fmtBRcompacto(valor)}</div>` : ''}
+            <div style="font-size:11px; font-weight:700; color:${si.cor}; background:${si.cor}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon} ${si.label}</div>
+            <i data-lucide="chevron-right" class="w-4 h-4" style="color:#cbd5e1;"></i>
+          </div>`;
+      }).join('');
+
+      return `
+        <div style="background:white; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:14px; overflow:hidden;">
+          <div style="display:flex; align-items:center; gap:10px; padding:12px 14px; background:${ramo.cor}10; border-bottom:1px solid #f1f5f9;">
+            <span style="font-size:20px;">${ramo.icon}</span>
+            <div style="flex:1;">
+              <div style="font-size:15px; font-weight:800; color:#0f172a;">${ramo.nome}</div>
+              <div style="font-size:11px; color:#64748b;">${lista.length} negociações · ${ativas} abertas · ${fechadas.length} fechadas · ${perdidas} perdidas</div>
+            </div>
+            ${valorFechado > 0 ? `<div style="text-align:right;"><div style="font-size:10px; color:#94a3b8;">FECHADO</div><div style="font-size:14px; font-weight:800; color:#10b981; font-family:'JetBrains Mono';">${fmtBRcompacto(valorFechado)}</div></div>` : ''}
+          </div>
+          ${linhas}
+        </div>`;
+    }).join('');
+    lucide.createIcons();
+  }
+  window.renderCotacoesPorRamo = renderCotacoesPorRamo;
+
+  // ---------- Linha do tempo (checklist) de um negócio ----------
+  function abrirTimelineNegocio(cotacaoId) {
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+
+    // Monta os passos: do histórico (se houver) ou reconstrói pelos campos de data
+    let passos = [];
+    if (Array.isArray(c.historico) && c.historico.length) {
+      passos = c.historico.map(h => ({
+        label: h.label || (STATUS_COTACAO[h.status] || {}).label || h.status,
+        data: h.em, obs: h.obs, chance: h.chance, por: h.por
+      }));
+    } else {
+      const add = (data, label) => { if (data) passos.push({ label, data }); };
+      add(c.dataSolicitacao, 'Iniciada');
+      add(c.dataCotacao, 'Cotando');
+      add(c.dataEnvio, 'Enviada ao cliente');
+      if (c.dataReuniao) passos.push({ label: 'Reunião agendada', data: c.dataReuniao });
+      add(c.dataDecisao, c.status === 'fechada' ? 'Fechada' : 'Declinada');
+    }
+    // ordena por data
+    passos.sort((a, b) => (_toDate(a.data) || 0) - (_toDate(b.data) || 0));
+
+    const motivosLabel = { preco: 'Preço', cobertura: 'Cobertura', prazo: 'Cliente desistiu', confianca: 'Confia na atual', sem_aceitacao: 'Seguradora não aceitou', outro: 'Outro' };
+    const si = STATUS_COTACAO[c.status] || {};
+    const ch = c.chanceFechamento && CHANCE_INFO[c.chanceFechamento];
+
+    const passosHtml = passos.map((p, i) => {
+      const pi = ETAPAS_FUNIL.find(e => e.label === p.label) || {};
+      const cor = pi.cor || (p.label.match(/Fechad/) ? '#10b981' : p.label.match(/Declin/) ? '#ef4444' : '#6366f1');
+      const chp = p.chance && CHANCE_INFO[p.chance];
+      return `
+        <div style="display:flex; gap:12px;">
+          <div style="display:flex; flex-direction:column; align-items:center;">
+            <div style="width:12px; height:12px; border-radius:50%; background:${cor}; margin-top:4px;"></div>
+            ${i < passos.length - 1 ? `<div style="width:2px; flex:1; background:#e2e8f0; min-height:24px;"></div>` : ''}
+          </div>
+          <div style="padding-bottom:16px; flex:1;">
+            <div style="font-size:13px; font-weight:700; color:#0f172a;">${p.label}</div>
+            <div style="font-size:11px; color:#94a3b8;">${fmtDataCurta(p.data)}${p.por ? ' · ' + p.por : ''}${chp ? ` · <span style="color:${chp.cor};font-weight:700;">${chp.emoji} chance ${chp.label}</span>` : ''}</div>
+            ${p.obs ? `<div style="font-size:12px; color:#475569; background:#f8fafc; border:1px solid #f1f5f9; border-radius:8px; padding:7px 10px; margin-top:6px;">${p.obs}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('') || '<div style="color:#94a3b8; font-size:13px;">Sem movimentações registradas.</div>';
+
+    const fechamentoBox = c.status === 'fechada'
+      ? `<div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; color:#166534;">
+           💎 <strong>Fechado</strong> · ${c.valor ? fmtBR(c.valor) : '—'} · ${c.seguradora || 'seguradora —'}<br>
+           <span style="font-size:11px;">Vigência: ${c.vigenciaInicio || '?'} a ${c.vigenciaFim || '?'}</span>
+         </div>`
+      : (c.status === 'perdida' || c.status === 'sem_aceitacao')
+      ? `<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; color:#991b1b;">
+           ✗ <strong>Não fechou</strong> · ${motivosLabel[c.motivoPerda] || c.motivoPerda || 'motivo —'}<br>
+           ${c.seguradoraVencedora ? `<span style="font-size:11px;">Fechou com: <strong>${c.seguradoraVencedora}</strong>${c.valorConcorrente ? ' · ' + fmtBR(c.valorConcorrente) : ''}</span><br>` : ''}
+           ${c.registrarProxAno ? `<span style="font-size:11px;">🔁 Re-registrado pra tentar ano que vem.</span>` : ''}
+         </div>`
+      : '';
+
+    let modal = document.getElementById('modalTimeline');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'modalTimeline';
+    modal.className = 'cad-modal open';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="document.getElementById('modalTimeline').remove()"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head">
+          <h2>${c.produtoIcon || ''} ${c.produtoNome}</h2>
+          <p>${c.empresaNome}</p>
+        </div>
+        <div class="cad-modal-body">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+            <span style="font-size:12px; font-weight:700; color:${si.cor}; background:${si.cor}18; padding:4px 12px; border-radius:100px;">${si.icon || ''} ${si.label || c.status}</span>
+            ${ch ? `<span style="font-size:12px; font-weight:700; color:${ch.cor};">${ch.emoji} Chance ${ch.label}</span>` : ''}
+          </div>
+          ${fechamentoBox}
+          <div style="font-size:12px; font-weight:700; color:#475569; margin-bottom:10px; text-transform:uppercase; letter-spacing:.04em;">Linha do tempo</div>
+          ${passosHtml}
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalTimeline').remove()">Fechar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    lucide.createIcons();
+  }
+  window.abrirTimelineNegocio = abrirTimelineNegocio;
 
   function filtrarCotacoes(filtro, el) {
     cotacaoFiltro = filtro;
@@ -9785,7 +9996,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     let lista = COTACOES;
 
     if (cotacaoFiltro === 'ativas') {
-      lista = lista.filter(c => ['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status));
+      lista = lista.filter(c => STATUS_ATIVOS.includes(c.status));
     } else {
       lista = lista.filter(c => c.status === cotacaoFiltro);
     }
@@ -9863,7 +10074,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           </div>
 
           <!-- Barra de tempo parado na etapa -->
-          ${['solicitada','cotando','enviada','reuniao_agendada'].includes(c.status) ? `
+          ${STATUS_ATIVOS.includes(c.status) ? `
             <div style="display: flex; align-items: center; gap: 10px; padding: 6px 0; margin: 8px 0; font-size: 11px;">
               <span style="color: #64748b; font-weight: 600; white-space: nowrap;">⏱ Parado há ${labelTempo}</span>
               <div style="flex: 1; background:#f1f5f9; border-radius: 100px; height: 6px; overflow: hidden;">
@@ -9916,9 +10127,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     COTACAO_ACAO = acao;
 
     const titulos = {
+      coletar: '📋 Coletando informações',
       cotar:   '🔍 Marcar cotação como realizada',
       enviar:  '📧 Cotação enviada ao cliente',
       reuniao: '📅 Reunião agendada',
+      analise: '🤔 Em análise pelo cliente',
       fechar:  '💎 Fechar negócio!',
       perder:  '✗ Não fechou'
     };
@@ -9926,13 +10139,35 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('modalAvancarSub').textContent = `${c.empresaNome} · ${c.produtoNome}`;
 
     let body = '';
-    if (acao === 'cotar') {
+    if (acao === 'coletar') {
+      body = `
+        <div style="background:#fefce8; border:1px solid #fde68a; border-radius:8px; padding:10px 12px; font-size:12px; color:#854d0e; margin-bottom:12px;">
+          📋 Marque que você já reuniu as informações necessárias pra cotar (apólice atual, sinistralidade, nº de vidas/itens, etc).
+        </div>
+        <div class="form-group">
+          <label class="form-label">O que foi coletado / o que ainda falta</label>
+          <textarea class="form-control" id="acaoObs" rows="3" placeholder="Ex: recebi apólice atual e relação de vidas; falta sinistralidade dos últimos 12 meses..."></textarea>
+        </div>
+        <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('coleta_informacoes')} pts</strong>.</div>
+      `;
+    } else if (acao === 'analise') {
+      body = `
+        <div style="background:#faf5ff; border:1px solid #e9d5ff; border-radius:8px; padding:10px 12px; font-size:12px; color:#6b21a8; margin-bottom:12px;">
+          🤔 A proposta foi apresentada e o cliente está avaliando.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Observações da análise</label>
+          <textarea class="form-control" id="acaoObs" rows="3" placeholder="Ex: cliente vai decidir até sexta; comparando com a renovação atual..."></textarea>
+        </div>
+        <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('analise_cliente')} pts</strong>.</div>
+      `;
+    } else if (acao === 'cotar') {
       body = `
         <div class="form-group">
           <label class="form-label">Observações sobre a cotação</label>
           <textarea class="form-control" id="acaoObs" rows="3" placeholder="Detalhes técnicos, valor estimado..."></textarea>
         </div>
-        <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+10 pts</strong>.</div>
+        <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('cotacao_realizada')} pts</strong>.</div>
       `;
     } else if (acao === 'enviar') {
       body = `
@@ -10018,12 +10253,41 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <option value="outro">Outro</option>
           </select>
         </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group">
+            <label class="form-label">Seguradora que fechou <small style="color:#94a3b8;">(se foi com outra)</small></label>
+            <input type="text" class="form-control" id="acaoSegVencedora" placeholder="Ex: concorrente / Porto...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Valor do concorrente (R$)</label>
+            <input type="text" class="form-control" id="acaoValorConcorrente" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+          </div>
+        </div>
         <div class="form-group">
           <label class="form-label">Detalhes</label>
-          <textarea class="form-control" id="acaoObs" rows="3"></textarea>
+          <textarea class="form-control" id="acaoObs" rows="2"></textarea>
         </div>
-        <div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; font-size:12px; color:#78350f;">📋 Registrar a perda com motivo vale <strong>+10 pts</strong> — informação valiosa para próxima abordagem.</div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer; margin-bottom:6px;">
+          <input type="checkbox" id="acaoRegistrarProxAno" checked style="width:16px; height:16px;">
+          Registrar de novo no calendário de renovações pra <strong>tentar ano que vem</strong> <small style="color:#94a3b8;">(só faz sentido em renovações mapeadas)</small>
+        </label>
+        <div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; font-size:12px; color:#78350f;">📋 Registrar a perda com motivo vale <strong>+${getPonto('perda_com_motivo')} pts</strong> — informação valiosa para a próxima abordagem.</div>
       `;
+    }
+    // Chance de fechamento — disponível nas etapas ativas (não em fechar/perder)
+    if (['coletar','cotar','enviar','reuniao','analise'].includes(acao)) {
+      const atual = c.chanceFechamento || '';
+      const opt = (val) => {
+        const i = CHANCE_INFO[val];
+        const sel = atual === val;
+        return `<button type="button" class="chance-opt ${sel ? 'sel' : ''}" data-chance="${val}" onclick="selChance(this)" style="flex:1; padding:8px; border-radius:8px; border:2px solid ${sel ? i.cor : '#e2e8f0'}; background:${sel ? i.cor + '18' : 'white'}; color:${i.cor}; font-weight:700; font-size:13px; cursor:pointer;">${i.emoji} ${i.label}</button>`;
+      };
+      body += `
+        <div class="form-group" style="margin-top:4px;">
+          <label class="form-label">Chance de fechamento</label>
+          <div style="display:flex; gap:8px;">${opt('alta')}${opt('media')}${opt('baixa')}</div>
+          <input type="hidden" id="acaoChance" value="${atual}">
+        </div>`;
     }
     document.getElementById('modalAvancarBody').innerHTML = body;
     document.getElementById('modalAvancarCotacao').classList.add('open');
@@ -10047,13 +10311,28 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     };
 
     const obs = (document.getElementById('acaoObs') || {}).value || '';
+    const chance = (document.getElementById('acaoChance') || {}).value || c.chanceFechamento || null;
 
     // Status visual do produto da empresa (sincronia)
     let novoStatusVisual = null;
     let updateProdutoEmpresa = null; // { vigenciaInicio, vigenciaFim, seguradora }
 
     try {
-      if (acao === 'cotar') {
+      if (acao === 'coletar') {
+        update.status = 'informacoes';
+        update.etapa = 5.5;
+        if (obs) update.observacoes = obs;
+        acaoLog.tipo = 'coleta_informacoes';
+        acaoLog.pontos = getPonto('coleta_informacoes');
+        novoStatusVisual = 'cotando';
+      } else if (acao === 'analise') {
+        update.status = 'analise';
+        update.etapa = 8.5;
+        if (obs) update.observacoes = obs;
+        acaoLog.tipo = 'analise_cliente';
+        acaoLog.pontos = getPonto('analise_cliente');
+        novoStatusVisual = 'quente';
+      } else if (acao === 'cotar') {
         update.status = 'cotando';
         update.etapa = 6;
         update.cotadoPorUid = CTX.uid;
@@ -10168,12 +10447,29 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         update.motivoPerda = motivo;
         update.observacoes = obs;
         update.dataDecisao = firebase.firestore.FieldValue.serverTimestamp();
+        const segV = (document.getElementById('acaoSegVencedora') || {}).value || '';
+        const valC = lerMoeda(document.getElementById('acaoValorConcorrente') || { value: '' });
+        if (segV) update.seguradoraVencedora = segV.trim();
+        if (valC > 0) update.valorConcorrente = valC;
+        update.registrarProxAno = !!(document.getElementById('acaoRegistrarProxAno') || {}).checked;
         acaoLog.tipo = 'cotacao_perdida';
         acaoLog.motivo = motivo;
         acaoLog.pontos = motivo === 'sem_aceitacao' ? getPonto('sem_aceitacao') : getPonto('perda_com_motivo');
         // Volta o produto pra mapeado (não some, mas não conta mais como em cotação)
         novoStatusVisual = 'mapeada';
       }
+
+      // Chance de fechamento (mantém entre etapas)
+      if (chance) update.chanceFechamento = chance;
+      // Histórico/timeline do negócio — uma entrada por avanço
+      update.historico = firebase.firestore.FieldValue.arrayUnion({
+        status: update.status || c.status,
+        label: (STATUS_COTACAO[update.status] || {}).label || acao,
+        obs: obs || null,
+        chance: chance || null,
+        por: CTX.nome || null,
+        em: new Date().toISOString()
+      });
 
       await db.collection('mb_cotacoes').doc(c.id).update(update);
       await db.collection('mb_acoes').add(acaoLog);
@@ -10185,6 +10481,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
         };
         if (updateProdutoEmpresa) Object.assign(prodUpdate, updateProdutoEmpresa);
+        // Perda com "registrar pro ano que vem": empurra o vencimento +1 ano pra voltar no calendário
+        if (acao === 'perder' && update.registrarProxAno) {
+          try {
+            const snapP = await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).get();
+            const dadosP = snapP.exists ? snapP.data() : {};
+            if (dadosP.vencimentoAno) prodUpdate.vencimentoAno = Number(dadosP.vencimentoAno) + 1;
+            if (update.seguradoraVencedora) prodUpdate.seguradoraAtual = update.seguradoraVencedora;
+          } catch (err) { /* segue sem o bump */ }
+        }
         await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).set(prodUpdate, { merge: true });
       }
 
@@ -10200,6 +10505,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       alert('Erro: ' + e.message);
     }
   }
+
+  function selChance(btn) {
+    const val = btn.getAttribute('data-chance');
+    document.querySelectorAll('.chance-opt').forEach(b => {
+      const c = CHANCE_INFO[b.getAttribute('data-chance')];
+      const on = b === btn;
+      b.style.border = '2px solid ' + (on ? c.cor : '#e2e8f0');
+      b.style.background = on ? (c.cor + '18') : 'white';
+    });
+    const hid = document.getElementById('acaoChance');
+    if (hid) hid.value = val;
+  }
+  window.selChance = selChance;
 
   window.solicitarCotacaoDoMapeamento = solicitarCotacaoDoMapeamento;
   window.criarCotacao = criarCotacao;
