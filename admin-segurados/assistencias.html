@@ -35,6 +35,19 @@
   .as-wa{background:#25d366;color:#fff} .as-call{background:#eff6ff;color:#1d4ed8;border:1px solid #dbeafe} .as-map{background:#eff6ff;color:#1d4ed8;border:1px solid #dbeafe}
   .as-empty{text-align:center;color:#94a3b8;padding:3rem 1rem}
   .as-empty i{font-size:2.5rem;margin-bottom:1rem;display:block;opacity:.5}
+  .as-log{border-top:1px solid #f1f5f9;margin-top:.9rem;padding-top:.9rem}
+  .as-log-title{font-size:.78rem;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem}
+  .as-log-list{margin-bottom:.7rem}
+  .logitem{font-size:.88rem;color:#334155;padding:.4rem 0;border-bottom:1px dashed #eef2f7;display:flex;gap:.5rem;flex-wrap:wrap;align-items:baseline}
+  .logitem .t{font-weight:700;color:#1d4ed8;white-space:nowrap}
+  .logitem small{color:#94a3b8}
+  .logvazio{font-size:.85rem;color:#94a3b8;padding:.3rem 0}
+  .as-quick{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.6rem}
+  .qbtn{font-size:.78rem;padding:.35rem .7rem;border:1px solid #dbeafe;background:#eff6ff;color:#1d4ed8;border-radius:50px;cursor:pointer}
+  .qbtn:hover{background:#dbeafe}
+  .as-add{display:flex;gap:.5rem}
+  .as-add input{flex:1;padding:.55rem .8rem;border:1px solid #e2e8f0;border-radius:8px;font-size:.88rem}
+  .as-addbtn{background:#1d4ed8;color:#fff;white-space:nowrap;border:none;cursor:pointer}
 </style>
 </head>
 <body>
@@ -189,11 +202,12 @@
         document.getElementById('mobileToggle')?.addEventListener('click',()=>document.getElementById('sidebar').classList.toggle('active'));
         function fazerLogout(){auth.signOut().then(()=>window.location.href='login.html');}
 
-        let TODOS=[], FILTRO='todos';
+        let TODOS=[], FILTRO='todos', USER='';
         auth.onAuthStateChanged(user=>{
             if(!user){window.location.href='login.html';return;}
             const un=document.getElementById('userName'); if(un) un.textContent=user.email.split('@')[0];
             const av=document.getElementById('userAvatar'); if(av) av.textContent=user.email.charAt(0).toUpperCase();
+            USER=user.email;
             ouvir();
         });
 
@@ -221,8 +235,10 @@
         function render(){
             let arr=TODOS.filter(x=>{ const st=x.status||'novo'; return FILTRO==='todos'||st===FILTRO; });
             const wrap=document.getElementById('lista');
+            var act=document.activeElement; var aId=act&&act.id; var aVal=act&&act.value;
             if(!arr.length){ wrap.innerHTML='<div class="as-empty"><i class="fas fa-inbox"></i>Nenhum pedido '+(FILTRO!=='todos'?'nesse filtro':'ainda')+'.</div>'; return; }
             wrap.innerHTML=arr.map(card).join('');
+            if(aId){ var el=document.getElementById(aId); if(el){ el.value=aVal; try{el.focus();}catch(e){} } }
         }
 
         function card(d){
@@ -235,6 +251,10 @@
             const transAlerta=(d.transito||'').toLowerCase().indexOf('sim')===0?'alerta':'';
             const rodarAlerta=(d.podeRodar||'').toLowerCase().indexOf('trav')>=0?'alerta':'';
             const wMsg=encodeURIComponent('Olá '+(d.nome||'')+', aqui é da Retorno Seguros. Recebemos seu pedido de assistência para o veículo placa '+(d.placa||'')+'. Já estamos acionando o guincho. 🚗');
+            var notas=(d.acompanhamento||[]).slice().sort(function(a,b){return ((a.em&&a.em.toMillis)?a.em.toMillis():0)-((b.em&&b.em.toMillis)?b.em.toMillis():0);});
+            var logItens=notas.map(function(n){return '<div class="logitem"><span class="t">'+horaData(n.em)+'</span> '+esc(n.texto)+(n.por?(' <small>· '+esc((n.por||'').split("@")[0])+'</small>'):'')+'</div>';}).join('') || '<div class="logvazio">Sem anotações ainda.</div>';
+            var quicks=['Seguradora acionada','Guincho a caminho','Guincho chegou ao local','Cliente atendido','Concluído'].map(function(q){return '<button type="button" class="qbtn" onclick="quick(\''+d.id+'\',\''+q+'\')">'+q+'</button>';}).join('');
+            var logBlock='<div class="as-log"><div class="as-log-title"><i class="fas fa-clock-rotate-left"></i> Acompanhamento</div><div class="as-log-list">'+logItens+'</div><div class="as-quick">'+quicks+'</div><div class="as-add"><input id="nota-'+d.id+'" placeholder="Anote aqui (ex: Guincho a caminho, previsão 1h)" onkeydown="if(event.key===\'Enter\'){addNota(\''+d.id+'\')}"><button type="button" class="as-btn as-addbtn" onclick="addNota(\''+d.id+'\')"><i class="fas fa-plus"></i> Anotar</button></div></div>';
             return '<div class="as-card '+(st==='novo'?'novo':'')+'">'
               +'<div class="as-head"><div><h3>'+esc(d.nome)+'<span class="as-plate">'+esc(d.placa)+'</span></h3>'
               +'<div class="as-time">'+quando(d.criadoEm)+(d.veiculo?(' · '+esc(d.veiculo)):'')+'</div></div>'+badge+'</div>'
@@ -260,9 +280,18 @@
                 +(d.mapsLink?('<a class="as-btn as-map" href="'+d.mapsLink+'" target="_blank"><i class="fas fa-location-dot"></i> Mapa</a>'):'')
                 +(cel?('<a class="as-btn as-call" href="tel:+'+(cel.length<=11?'55':'')+cel+'"><i class="fas fa-phone"></i> Ligar</a>'):'')
                 +(cel?('<a class="as-btn as-wa" href="https://wa.me/'+(cel.length<=11?'55':'')+cel+'?text='+wMsg+'" target="_blank"><i class="fab fa-whatsapp"></i> WhatsApp cliente</a>'):'')
-              +'</div></div>';
+              +'</div>'+logBlock+'</div>';
         }
         function mudarStatus(id,v){ db.collection('assistencias').doc(id).update({status:v}).catch(e=>alert('Erro: '+e.message)); }
+        function horaData(ts){ if(!ts||!ts.toDate) return ''; return ts.toDate().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+        function quick(id,txt){ var inp=document.getElementById('nota-'+id); if(inp){ inp.value=txt; inp.focus(); } }
+        function addNota(id){
+            var inp=document.getElementById('nota-'+id); if(!inp) return;
+            var txt=inp.value.trim(); if(!txt) return;
+            var nota={texto:txt, em:firebase.firestore.Timestamp.now(), por:USER};
+            inp.value='';
+            db.collection('assistencias').doc(id).update({acompanhamento: firebase.firestore.FieldValue.arrayUnion(nota)}).catch(function(e){ alert('Erro ao anotar: '+e.message); });
+        }
     </script>
 </body>
 </html>
