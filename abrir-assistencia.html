@@ -256,8 +256,8 @@
   <!-- Sucesso -->
   <div class="ok-box card" id="okBox">
     <div class="big"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
-    <h2>Pedido registrado!</h2>
-    <p>Recebemos seu pedido de assistência. Para agilizar, encaminhe também pelo WhatsApp da Retorno — a mensagem já vai pronta.</p>
+    <h2 id="okTitle">Quase lá!</h2>
+    <p id="okText">Toque no botão abaixo para enviar seu pedido pela Retorno no WhatsApp e confirmar o atendimento.</p>
     <a class="btn btn-wa" id="btnWa" href="#" target="_blank">
       <svg viewBox="0 0 24 24"><path d="M17.5 14.4c-.3-.15-1.76-.87-2-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.16-.17.2-.35.22-.64.08-.3-.15-1.26-.47-2.4-1.48-.88-.79-1.48-1.76-1.65-2.06-.17-.3-.02-.46.13-.6.13-.14.3-.35.45-.52.15-.18.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.21-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37s-1.04 1.02-1.04 2.48 1.07 2.88 1.22 3.07c.15.2 2.1 3.2 5.08 4.49.7.3 1.26.49 1.69.62.71.23 1.36.2 1.87.12.57-.08 1.76-.72 2-1.41.25-.7.25-1.29.18-1.41-.08-.12-.27-.2-.57-.35M12 21.8a9.87 9.87 0 0 1-5-1.38l-.36-.21-3.74.98 1-3.65-.24-.37A9.86 9.86 0 1 1 12 21.8M12 0C5.5 0 .16 5.34.16 11.9c0 2.1.55 4.14 1.59 5.94L.06 24l6.3-1.65A11.9 11.9 0 1 0 12 0"/></svg>
       Enviar pelo WhatsApp
@@ -300,23 +300,36 @@
   placa.addEventListener('input',function(){ this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,7); });
 
   // ---- localização ----
+  function aplicarLocal(pos, btn){
+    local.lat=pos.coords.latitude; local.lng=pos.coords.longitude;
+    local.maps='https://www.google.com/maps?q='+local.lat+','+local.lng;
+    document.getElementById('locLink').href=local.maps;
+    document.getElementById('locOk').style.display='flex';
+    var mp=document.getElementById('mapPrev');
+    mp.src='https://maps.google.com/maps?q='+local.lat+','+local.lng+'&z=16&output=embed';
+    mp.style.display='block';
+    btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Atualizar localização';
+  }
+  function resetLocBtn(btn){ btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10a8 8 0 1 0-16 0c0 6 8 10 8 10z"/><circle cx="12" cy="12" r="3"/></svg> Usar minha localização atual'; }
+  function geoMsg(err){
+    if(err && err.code===1) return 'Permissão de localização negada. Toque no cadeado (ou ícone de site) ao lado do endereço, permita a Localização e tente de novo — ou digite o endereço abaixo.';
+    if(err && err.code===2) return 'Não foi possível obter sua localização agora (sinal de GPS indisponível). Tente em local mais aberto ou digite o endereço abaixo.';
+    if(err && err.code===3) return 'A localização demorou para responder. Tente novamente ou digite o endereço abaixo.';
+    return 'Não foi possível obter a localização. Por favor, digite o endereço abaixo.';
+  }
   function pegarLocal(){
     var btn=document.getElementById('btnLocal');
-    if(!navigator.geolocation){ alert('Seu aparelho não permite localização. Descreva o endereço abaixo.'); return; }
+    if(!navigator.geolocation){ alert('Seu navegador não permite localização. Por favor, digite o endereço abaixo.'); return; }
     btn.disabled=true; btn.innerHTML='Buscando sua localização...';
-    navigator.geolocation.getCurrentPosition(function(pos){
-      local.lat=pos.coords.latitude; local.lng=pos.coords.longitude;
-      local.maps='https://www.google.com/maps?q='+local.lat+','+local.lng;
-      document.getElementById('locLink').href=local.maps;
-      document.getElementById('locOk').style.display='flex';
-      var mp=document.getElementById('mapPrev');
-      mp.src='https://maps.google.com/maps?q='+local.lat+','+local.lng+'&z=16&output=embed';
-      mp.style.display='block';
-      btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Atualizar localização';
-    }, function(err){
-      btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10a8 8 0 1 0-16 0c0 6 8 10 8 10z"/><circle cx="12" cy="12" r="3"/></svg> Usar minha localização atual';
-      alert('Não foi possível obter a localização ('+err.message+'). Por favor, descreva o endereço no campo abaixo.');
-    }, {enableHighAccuracy:true, timeout:10000});
+    var done=false;
+    function ok(pos){ if(done)return; done=true; aplicarLocal(pos,btn); }
+    navigator.geolocation.getCurrentPosition(ok, function(err){
+      if(done) return;
+      if(err && err.code===3){
+        // segunda tentativa, menos precisa (mais rápida no celular)
+        navigator.geolocation.getCurrentPosition(ok, function(e2){ if(done)return; done=true; resetLocBtn(btn); alert(geoMsg(e2)); }, {enableHighAccuracy:false, timeout:25000, maximumAge:300000});
+      } else { done=true; resetLocBtn(btn); alert(geoMsg(err)); }
+    }, {enableHighAccuracy:true, timeout:12000, maximumAge:60000});
   }
 
   // ---- fotos ----
@@ -373,27 +386,38 @@
       obs:document.getElementById('obs').value.trim(),
       fotos:{}, status:'novo', canal:'site'
     };
-    // upload fotos
+    // upload fotos (em paralelo e com tempo limite — nunca trava)
     if(fbOk && storage){
-      for(var slot in fotosFiles){
-        try{
+      var slots=Object.keys(fotosFiles);
+      try{
+        var rs=await Promise.all(slots.map(function(slot){
           var ref=storage.ref('assistencias/'+Date.now()+'_'+slot+'_'+(dados.placa||'sp')+'.jpg');
-          var snap=await ref.put(fotosFiles[slot]);
-          dados.fotos[slot]=await snap.ref.getDownloadURL();
-        }catch(e){ console.warn('falha foto '+slot, e); }
-      }
+          return comLimite(ref.put(fotosFiles[slot]).then(function(s){return s.ref.getDownloadURL();}), 15000)
+                 .then(function(u){return {slot:slot,url:u};})
+                 .catch(function(e){console.warn('foto',slot,e); return null;});
+        }));
+        rs.forEach(function(r){ if(r && r.url) dados.fotos[r.slot]=r.url; });
+      }catch(e){ console.warn('upload geral', e); }
     }
-    // salvar no CRM
+    // salvar no CRM (com tempo limite)
+    var salvou=false;
     if(fbOk && db){
       try{
         dados.criadoEm=firebase.firestore.FieldValue.serverTimestamp();
-        await db.collection('assistencias').add(dados);
+        await comLimite(db.collection('assistencias').add(dados), 12000);
+        salvou=true;
       }catch(e){ console.warn('falha ao salvar', e); }
     }
-    mostrarSucesso(dados);
+    mostrarSucesso(dados, salvou);
   }
 
-  function mostrarSucesso(d){
+  function comLimite(p, ms){
+    return Promise.race([p, new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('tempo limite')); }, ms); })]);
+  }
+
+  function mostrarSucesso(d, salvou){
+    var btn=document.getElementById('btnEnviar');
+    btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> Enviar pedido de assistência';
     var fotosTxt=Object.keys(d.fotos||{}).map(function(k){return '• '+k+': '+d.fotos[k];}).join('\n');
     var loc = d.mapsLink ? d.mapsLink : (d.endereco||'(não informado)');
     var msg='*PEDIDO DE ASSISTENCIA / GUINCHO*\n\n'+
@@ -409,6 +433,10 @@
       (d.obs?('*Obs:* '+d.obs+'\n'):'')+
       (fotosTxt?('\n*Fotos:*\n'+fotosTxt+'\n'):'');
     document.getElementById('btnWa').href='https://wa.me/'+WA+'?text='+encodeURIComponent(msg);
+    if(salvou){
+      document.getElementById('okTitle').textContent='Pedido registrado!';
+      document.getElementById('okText').textContent='Recebemos seu pedido na Retorno. Para agilizar, envie também pelo WhatsApp — a mensagem já vai pronta.';
+    }
     document.getElementById('form').style.display='none';
     var ok=document.getElementById('okBox'); ok.style.display='block';
     ok.scrollIntoView({behavior:'smooth',block:'start'});
