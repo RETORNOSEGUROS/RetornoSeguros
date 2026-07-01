@@ -6446,6 +6446,7 @@
         await db.collection('empresas').doc(c2.empresaId).collection('mb_produtos').doc(c2.produtoId).set({
           vigenciaInicio: novaVigIni || null, vigenciaFim: novaVigFim || null,
           seguradora: novaSeguradora || null, valorFechado: valor,
+          ...vencDeVigenciaFim(novaVigFim),
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
       }
@@ -8404,6 +8405,7 @@
           await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).set({
             vigenciaInicio: vigIni, vigenciaFim: vigFim,
             seguradoraAtual: seguradora, seguradora, premioAnual: valor || null,
+            ...vencDeVigenciaFim(vigFim),
             ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
         }
@@ -11757,6 +11759,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.abrirOpBancaria = abrirOpBancaria;
   window.salvarOpBancaria = salvarOpBancaria;
 
+  // O FIM DA VIGÊNCIA define o mês/ano de vencimento (é o que vai pra agenda/renovações)
+  function vencDeVigenciaFim(vigFim) {
+    if (!vigFim || !/^\d{2}\/\d{2}\/\d{4}$/.test(vigFim)) return {};
+    const [dd, mm, aaaa] = vigFim.split('/').map(Number);
+    return { vencimentoMes: mm, vencimentoAno: aaaa };
+  }
+  window.vencDeVigenciaFim = vencDeVigenciaFim;
+
   // Renovações automáticas: 2 meses antes do vencimento de um seguro mapeado,
   // cria a negociação já na 1ª etapa do funil ("Iniciada"), com as infos da visita.
   let RENOVACOES_AUTO_RAN = false;
@@ -11770,7 +11780,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       for (const ramoId of Object.keys(dados)) {
         const pd = dados[ramoId] || {};
         if (!pd.vencimentoMes || !pd.vencimentoAno) continue;
-        if (!['mapeada', 'conosco', 'quente'].includes(pd.statusVisual)) continue; // só mapeados/nossos
+        if (!['mapeada', 'conosco', 'quente', 'fechada'].includes(pd.statusVisual)) continue; // mapeados/nossos/fechados
         const venc = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
         const dias = Math.floor((venc - hoje) / 86400000);
         if (dias < 0 || dias > JANELA_DIAS) continue;
@@ -12500,7 +12510,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           vigenciaInicio: vigIni,
           vigenciaFim: vigFim,
           seguradora: seguradora || null,
-          valorFechado: valor
+          valorFechado: valor,
+          ...vencDeVigenciaFim(vigFim)
         };
       } else if (acao === 'perder') {
         const motivo = document.getElementById('acaoMotivo').value;
