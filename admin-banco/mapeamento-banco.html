@@ -1556,6 +1556,8 @@
     .ve-tem-btn { padding:7px 16px; border-radius:8px; border:2px solid #e2e8f0; background:white; font-weight:700; font-size:13px; cursor:pointer; }
     .ve-tem-btn.sim { color:#166534; } .ve-tem-btn.sim.sel { border-color:#10b981; background:#dcfce7; }
     .ve-tem-btn.nao { color:#991b1b; } .ve-tem-btn.nao.sel { border-color:#ef4444; background:#fee2e2; }
+    .ve-nosso-btn { flex:1; padding:7px; border-radius:8px; border:2px solid #e2e8f0; background:white; font-weight:700; font-size:12px; cursor:pointer; color:#64748b; }
+    .ve-nosso-btn.sel { border-color:#4f46e5; background:#eef2ff; color:#4338ca; }
 
     .cfg-card {
       background: white;
@@ -9745,13 +9747,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       return `
         <div class="ve-card" data-ramo="${p.id}">
           <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-            <div style="font-size:14px; font-weight:700; color:#0f172a;">${p.icon} ${p.nome} ${jaMapeado ? `<span style="font-size:10px; color:#0ea5e9; font-weight:700;">· já mapeado</span>` : ''}</div>
+            <div style="font-size:14px; font-weight:700; color:#0f172a;">${p.icon} ${p.nome} ${jaMapeado ? (['conosco','fechada'].includes(d.statusVisual) ? `<span style="font-size:10px; color:#10b981; font-weight:700;">· ✅ nosso</span>` : `<span style="font-size:10px; color:#0ea5e9; font-weight:700;">· 🌐 no mercado</span>`) : ''}</div>
             <div style="display:flex; gap:6px;">
               <button type="button" class="ve-tem-btn sim ${temAtual ? 'sel' : ''}" onclick="veSetTem(this,'sim')">Tem</button>
               <button type="button" class="ve-tem-btn nao ${d.statusVisual === 'nao_tem' ? 'sel' : ''}" onclick="veSetTem(this,'nao')">Não tem</button>
             </div>
           </div>
           <div class="ve-detalhes" style="display:${temAtual ? 'block' : 'none'}; margin-top:10px;">
+            <div style="margin-bottom:10px;">
+              <label class="form-label" style="font-size:11px;">Está com a NOSSA corretora?</label>
+              <div style="display:flex; gap:8px;">
+                <button type="button" class="ve-nosso-btn ${(d.statusVisual === 'conosco' || d.statusVisual === 'fechada') ? 'sel' : ''}" data-nosso="sim" onclick="veSetNosso(this)">✅ Sim (nosso)</button>
+                <button type="button" class="ve-nosso-btn ${(d.statusVisual === 'conosco' || d.statusVisual === 'fechada') ? '' : 'sel'}" data-nosso="nao" onclick="veSetNosso(this)">🌐 Não (no mercado)</button>
+              </div>
+            </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div><label class="form-label" style="font-size:11px;">Mês de vencimento</label><select class="form-control ve-venc-mes" style="padding:7px;">${opMes}</select></div>
               <div><label class="form-label" style="font-size:11px;">Ano</label><input type="number" class="form-control ve-venc-ano" placeholder="2026" value="${d.vencimentoAno || ''}" style="padding:7px;"></div>
@@ -9777,6 +9786,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     card.setAttribute('data-resp', val);
     card.querySelector('.ve-detalhes').style.display = (val === 'sim') ? 'block' : 'none';
   }
+  function veSetNosso(btn) {
+    const card = btn.closest('.ve-card');
+    card.querySelectorAll('.ve-nosso-btn').forEach(b => b.classList.remove('sel'));
+    btn.classList.add('sel');
+  }
+  window.veSetNosso = veSetNosso;
   function fecharVisitaEntrada() { document.getElementById('visitaEntradaOverlay').style.display = 'none'; }
   window.abrirVisitaEntrada = abrirVisitaEntrada;
   window.veSelTipo = veSelTipo;
@@ -9803,10 +9818,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           const seg = (card.querySelector('.ve-seg') || {}).value || '';
           const premio = lerMoeda(card.querySelector('.ve-premio') || { value: '' });
           const obs = (card.querySelector('.ve-obs') || {}).value || '';
-          // preserva 'conosco'/'fechada' se já era; senão marca 'mapeada' (no mercado)
+          // nosso (com nossa corretora) → 'conosco'; senão 'mapeada' (no mercado). Preserva 'fechada'.
+          const nossoSel = card.querySelector('.ve-nosso-btn.sel');
+          const ehNosso = nossoSel && nossoSel.getAttribute('data-nosso') === 'sim';
           const snap = await ref.get();
           const stAnt = snap.exists ? snap.data().statusVisual : null;
-          const st = (stAnt === 'conosco' || stAnt === 'fechada') ? stAnt : 'mapeada';
+          const st = ehNosso ? (stAnt === 'fechada' ? 'fechada' : 'conosco') : 'mapeada';
           await ref.set({
             statusVisual: st,
             vencimentoMes: mes, vencimentoAno: ano,
@@ -11266,6 +11283,46 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.abrirOpBancaria = abrirOpBancaria;
   window.salvarOpBancaria = salvarOpBancaria;
 
+  // Renovações automáticas: 2 meses antes do vencimento de um seguro mapeado,
+  // cria a negociação já na 1ª etapa do funil ("Iniciada"), com as infos da visita.
+  let RENOVACOES_AUTO_RAN = false;
+  async function verificarRenovacoesAutomaticas() {
+    if (!CTX || !CTX.agenciaId) return 0;
+    const hoje = new Date();
+    const JANELA_DIAS = 60; // ~2 meses
+    let criadas = 0;
+    for (const e of (EMPRESAS || [])) {
+      const dados = e.produtosDados || {};
+      for (const ramoId of Object.keys(dados)) {
+        const pd = dados[ramoId] || {};
+        if (!pd.vencimentoMes || !pd.vencimentoAno) continue;
+        if (!['mapeada', 'conosco', 'quente'].includes(pd.statusVisual)) continue; // só mapeados/nossos
+        const venc = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
+        const dias = Math.floor((venc - hoje) / 86400000);
+        if (dias < 0 || dias > JANELA_DIAS) continue;
+        // já em negociação ativa?
+        if ((COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === ramoId && ehStatusAtivo(c.status))) continue;
+        // já gerada neste ciclo?
+        const ciclo = pd.vencimentoAno + '-' + pd.vencimentoMes;
+        if (pd.renovacaoAutoCiclo === ciclo) continue;
+        const ramo = (PRODUTOS || []).find(r => r.id === ramoId);
+        if (!ramo) continue;
+        const obs = [];
+        if (pd.seguradoraAtual) obs.push('Seguradora atual: ' + pd.seguradoraAtual);
+        if (pd.observacoes) obs.push(pd.observacoes);
+        obs.push('Renovação automática · vence ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno);
+        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || null, observacoes: obs.join(' · '), vencimentoRef: ciclo });
+        if (id) {
+          try { await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(ramoId).set({ renovacaoAutoCiclo: ciclo }, { merge: true }); } catch (err) {}
+          if (e.produtosDados[ramoId]) e.produtosDados[ramoId].renovacaoAutoCiclo = ciclo;
+          criadas++;
+        }
+      }
+    }
+    return criadas;
+  }
+  window.verificarRenovacoesAutomaticas = verificarRenovacoesAutomaticas;
+
   async function carregarERenderCotacoes() {
     document.getElementById('cotacoesContainer').innerHTML = '<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:30px; text-align:center; color:#94a3b8;">Carregando cotações...</div>';
 
@@ -11298,6 +11355,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const db_ = b.atualizadoEm && b.atualizadoEm.toDate ? b.atualizadoEm.toDate() : new Date(0);
         return db_ - da;
       });
+
+      // Renovações automáticas (roda 1x por sessão; recarrega e renderiza se criar alguma)
+      if (!RENOVACOES_AUTO_RAN) {
+        RENOVACOES_AUTO_RAN = true;
+        const criadas = await verificarRenovacoesAutomaticas();
+        if (criadas > 0) {
+          flashSalvo(criadas + ' renovação(ões) entraram no funil automaticamente');
+          return carregarERenderCotacoes();
+        }
+      }
 
       atualizarKpiCotacoes();
       if (COTACAO_VIEW === 'kanban') renderKanban();
