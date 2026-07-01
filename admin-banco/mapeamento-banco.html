@@ -8184,6 +8184,7 @@
         return `
           <div class="kanban-card ${cls}" style="position:relative;" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirRaioX('${c.empresaId}')">
             ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação" style="position:absolute; top:5px; right:5px; border:none; background:#fef2f2; color:#ef4444; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">🗑</button>` : ''}
+            ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
@@ -8329,6 +8330,92 @@
     } catch (e) { alert('Erro ao mover: ' + e.message); }
   }
   window.voltarEtapaCotacao = voltarEtapaCotacao;
+
+  // Admin: editar informações de um negócio finalizado (fechado ou perdido)
+  const MOTIVOS_PERDA = { preco: 'Preço', cobertura: 'Cobertura', prazo: 'Cliente desistiu', confianca: 'Confia na atual', sem_aceitacao: 'Seguradora não aceitou', outro: 'Outro' };
+  function abrirEditarFechado(cotacaoId) {
+    if (!CTX.isAdmin) return alert('Apenas o admin pode editar.');
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    const ehPerda = (c.status === 'perdida' || c.status === 'sem_aceitacao');
+    let modal = document.getElementById('modalEditarFechado');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'modalEditarFechado';
+    modal.className = 'cad-modal open';
+    const corpo = ehPerda ? `
+      <div class="form-group">
+        <label class="form-label">Motivo</label>
+        <select class="form-control" id="efMotivo">${Object.entries(MOTIVOS_PERDA).map(([k, v]) => `<option value="${k}" ${c.motivoPerda === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      </div>
+      <div class="form-group"><label class="form-label">Seguradora vencedora</label><input type="text" class="form-control" id="efSegVenc" value="${(c.seguradoraVencedora || '').replace(/"/g, '&quot;')}" placeholder="opcional"></div>
+      <div class="form-group"><label class="form-label">Valor do concorrente (R$)</label><input type="text" class="form-control" id="efValorConc" value="${c.valorConcorrente ? fmtBR(c.valorConcorrente) : ''}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)"></div>
+    ` : `
+      <div class="form-group"><label class="form-label">Valor do prêmio (R$)</label><input type="text" class="form-control" id="efValor" value="${c.valor ? fmtBR(c.valor) : ''}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)"></div>
+      <div class="form-group"><label class="form-label">Seguradora</label><input type="text" class="form-control" id="efSeguradora" value="${(c.seguradora || '').replace(/"/g, '&quot;')}" placeholder="Ex: Porto Seguro"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div class="form-group"><label class="form-label">Vigência início</label><input type="text" class="form-control" id="efVigIni" value="${c.vigenciaInicio || ''}" placeholder="dd/mm/aaaa" maxlength="10" oninput="formatarData(this)"></div>
+        <div class="form-group"><label class="form-label">Vigência fim</label><input type="text" class="form-control" id="efVigFim" value="${c.vigenciaFim || ''}" placeholder="dd/mm/aaaa" maxlength="10" oninput="formatarData(this)"></div>
+      </div>
+      <div style="font-size:11px; color:#64748b; background:#eef2ff; border-radius:8px; padding:8px 10px;">A vigência fim atualiza o próximo vencimento nas renovações e no raio-X da empresa.</div>
+    `;
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="document.getElementById('modalEditarFechado').remove()"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head"><h2>✏️ Editar ${ehPerda ? 'negócio' : 'negócio fechado'}</h2><p>${c.produtoIcon || ''} ${c.produtoNome} · ${c.empresaNome}</p></div>
+        <div class="cad-modal-body">
+          <input type="hidden" id="efId" value="${c.id}">
+          ${corpo}
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalEditarFechado').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="salvarEditarFechado()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar alterações</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    lucide.createIcons();
+  }
+  async function salvarEditarFechado() {
+    if (!CTX.isAdmin) return alert('Apenas o admin pode editar.');
+    const id = document.getElementById('efId').value;
+    const c = COTACOES.find(x => x.id === id);
+    if (!c) return;
+    const ehPerda = (c.status === 'perdida' || c.status === 'sem_aceitacao');
+    try {
+      if (ehPerda) {
+        await db.collection('mb_cotacoes').doc(id).set({
+          motivoPerda: document.getElementById('efMotivo').value,
+          seguradoraVencedora: document.getElementById('efSegVenc').value.trim() || null,
+          valorConcorrente: lerMoeda(document.getElementById('efValorConc')) || null,
+          editadoEm: firebase.firestore.FieldValue.serverTimestamp(), editadoPorNome: CTX.nome
+        }, { merge: true });
+      } else {
+        const valor = lerMoeda(document.getElementById('efValor'));
+        const seguradora = document.getElementById('efSeguradora').value.trim() || null;
+        const vigIni = document.getElementById('efVigIni').value.trim() || null;
+        const vigFim = document.getElementById('efVigFim').value.trim() || null;
+        if (vigIni && !/^\d{2}\/\d{2}\/\d{4}$/.test(vigIni)) return alert('Vigência início inválida (dd/mm/aaaa).');
+        if (vigFim && !/^\d{2}\/\d{2}\/\d{4}$/.test(vigFim)) return alert('Vigência fim inválida (dd/mm/aaaa).');
+        await db.collection('mb_cotacoes').doc(id).set({
+          valor, seguradora, vigenciaInicio: vigIni, vigenciaFim: vigFim,
+          editadoEm: firebase.firestore.FieldValue.serverTimestamp(), editadoPorNome: CTX.nome
+        }, { merge: true });
+        if (c.empresaId && c.produtoId) {
+          await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).set({
+            vigenciaInicio: vigIni, vigenciaFim: vigFim,
+            seguradoraAtual: seguradora, seguradora, premioAnual: valor || null,
+            ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        }
+      }
+      document.getElementById('modalEditarFechado').remove();
+      flashSalvo('Negócio atualizado!');
+      try { await carregarEmpresasReais(); } catch (e) {}
+      carregarERenderCotacoes();
+    } catch (e) { alert('Erro ao salvar: ' + e.message); }
+  }
+  window.abrirEditarFechado = abrirEditarFechado;
+  window.salvarEditarFechado = salvarEditarFechado;
 
   // ============= AGENDA / VISITAS =============
   async function renderAgenda() {
