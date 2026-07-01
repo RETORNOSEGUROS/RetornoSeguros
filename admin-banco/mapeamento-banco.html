@@ -8237,16 +8237,20 @@
     KANBAN_DRAG_ID = null;
     if (!c || c.status === novoStatus) return;
 
-    if (!ehStatusAtivo(c.status)) {
-      alert('Esta negociação já foi finalizada (fechada ou declinada).');
-      return;
-    }
+    const isAdmin = CTX.isAdmin;
 
     // Fechar ou declinar: permitido a partir de qualquer etapa ativa
     if (novoStatus === 'fechada') { abrirAvancarCotacao(c.id, 'fechar'); return; }
     if (novoStatus === 'perdida') { abrirAvancarCotacao(c.id, 'perder'); return; }
 
-    // Entre etapas ativas: só avança uma por vez (cada etapa pede dados próprios)
+    // Card já finalizado (fechada/perdida)
+    if (!ehStatusAtivo(c.status)) {
+      if (isAdmin && ehStatusAtivo(novoStatus)) { voltarEtapaCotacao(c, novoStatus, 'Reaberta pelo admin'); return; }
+      alert('Esta negociação já foi finalizada (fechada ou declinada).');
+      return;
+    }
+
+    // Entre etapas ativas
     const idxAtual = STATUS_ATIVOS.indexOf(c.status);
     const idxNovo  = STATUS_ATIVOS.indexOf(novoStatus);
     if (idxNovo === idxAtual + 1) {
@@ -8255,6 +8259,8 @@
     } else if (idxNovo > idxAtual + 1) {
       alert('Avance uma etapa por vez — cada etapa precisa de informações específicas.');
     } else {
+      // Voltar etapa: só admin
+      if (isAdmin) { voltarEtapaCotacao(c, novoStatus, 'Voltou de etapa (admin)'); return; }
       alert('Não dá pra voltar etapas. Se a negociação não avançou, arraste para "Não fechou".');
     }
   }
@@ -8265,6 +8271,63 @@
   window.kanbanDragOver = kanbanDragOver;
   window.kanbanDragLeave = kanbanDragLeave;
   window.kanbanDrop = kanbanDrop;
+
+  // Admin: excluir cotação de qualquer etapa (para corrigir erros)
+  async function excluirCotacaoAdmin(cotacaoId) {
+    if (!CTX.isAdmin) return alert('Apenas o admin pode excluir cotações.');
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    if (!confirm(`Excluir a cotação de ${c.produtoNome || 'produto'} — ${c.empresaNome || ''}?\n\nEsta ação não pode ser desfeita.`)) return;
+    try {
+      await db.collection('mb_cotacoes').doc(cotacaoId).delete();
+      // Se o produto ficou "em cotação" e não há outra negociação ativa, reverte o status
+      if (c.empresaId && c.produtoId) {
+        const outraAtiva = (COTACOES || []).some(x => x.id !== cotacaoId && x.empresaId === c.empresaId && x.produtoId === c.produtoId && ehStatusAtivo(x.status));
+        if (!outraAtiva) {
+          try {
+            const ref = db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId);
+            const snap = await ref.get();
+            if (snap.exists && snap.data().statusVisual === 'cotando') {
+              const pd = snap.data();
+              const novo = (pd.vencimentoMes && pd.vencimentoAno) ? 'mapeada' : 'vazia';
+              await ref.set({ statusVisual: novo }, { merge: true });
+            }
+          } catch (err) {}
+        }
+      }
+      const modal = document.getElementById('modalTimeline'); if (modal) modal.remove();
+      flashSalvo('Cotação excluída.');
+      try { await carregarEmpresasReais(); } catch (err) {}
+      carregarERenderCotacoes();
+    } catch (e) { alert('Erro ao excluir: ' + e.message); }
+  }
+  window.excluirCotacaoAdmin = excluirCotacaoAdmin;
+
+  // Admin: voltar cotação para uma etapa anterior (ou reabrir uma finalizada)
+  async function voltarEtapaCotacao(c, novoStatus, motivo) {
+    try {
+      const upd = {
+        status: novoStatus,
+        etapa: novoStatus,
+        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        historico: firebase.firestore.FieldValue.arrayUnion({
+          status: novoStatus,
+          label: (STATUS_COTACAO[novoStatus] || {}).label || novoStatus,
+          obs: motivo || null, chance: null,
+          por: CTX.nome || null, em: new Date().toISOString()
+        })
+      };
+      // Reabrindo uma finalizada: limpa campos de decisão
+      if (!ehStatusAtivo(c.status)) { upd.dataDecisao = null; upd.motivoPerda = null; }
+      await db.collection('mb_cotacoes').doc(c.id).set(upd, { merge: true });
+      // Sincroniza o produto para "em cotação"
+      try { await db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId).set({ statusVisual: 'cotando' }, { merge: true }); } catch (e) {}
+      flashSalvo('Etapa atualizada.');
+      try { await carregarEmpresasReais(); } catch (e) {}
+      carregarERenderCotacoes();
+    } catch (e) { alert('Erro ao mover: ' + e.message); }
+  }
+  window.voltarEtapaCotacao = voltarEtapaCotacao;
 
   // ============= AGENDA / VISITAS =============
   async function renderAgenda() {
@@ -11886,6 +11949,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           ${passosHtml}
         </div>
         <div class="cad-modal-foot">
+          ${CTX.isAdmin ? `<button class="btn-secondary" style="margin-right:auto; color:#ef4444; border-color:#fecaca;" onclick="excluirCotacaoAdmin('${c.id}')"><i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i> Excluir cotação</button>` : ''}
           <button class="btn-secondary" onclick="document.getElementById('modalTimeline').remove()">Fechar</button>
         </div>
       </div>`;
