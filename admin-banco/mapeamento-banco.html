@@ -4646,7 +4646,7 @@
   const MAPEAMENTO_INFO = {
     nao_mapeado: { label: 'Não mapeado', cor: '#94a3b8', emoji: '⚪' },
     mercado:     { label: 'No mercado',  cor: '#0ea5e9', emoji: '🌐' },
-    cliente:     { label: 'Já é cliente', cor: '#10b981', emoji: '✅' },
+    cliente:     { label: 'Nosso',       cor: '#10b981', emoji: '✅' },
     nao_tem:     { label: 'Não tem o produto', cor: '#64748b', emoji: '🚫' }
   };
   const FUNIL_INFO = {
@@ -4656,9 +4656,11 @@
   };
   function getMapeamento(dados) {
     dados = dados || {};
-    if (dados.mapeamento && MAPEAMENTO_INFO[dados.mapeamento]) return dados.mapeamento;
     const st = dados.statusVisual;
+    // Fechado/nosso via funil OU marcado como cliente é SEMPRE nosso (nunca "de mercado"),
+    // independente de um campo 'mapeamento' antigo que tenha sobrado.
     if (st === 'conosco' || st === 'fechada') return 'cliente';
+    if (dados.mapeamento && MAPEAMENTO_INFO[dados.mapeamento]) return dados.mapeamento;
     if (st === 'mapeada' || st === 'quente') return 'mercado';
     if (st === 'nao_tem') return 'nao_tem';
     if (dados.vencimentoMes && dados.vencimentoAno) return 'mercado';
@@ -5784,7 +5786,7 @@
           </div>
           <div style="font-size: 13px;">${p ? p.icon : ''} ${p ? p.nome : v.produto}</div>
           <div>
-            <span style="background:${st.cor}22; color:${st.cor}; padding:3px 9px; border-radius:100px; font-size:11px; font-weight:700;">${v.conosco ? '💎 Cliente' : st.txt}</span>
+            <span style="background:${st.cor}22; color:${st.cor}; padding:3px 9px; border-radius:100px; font-size:11px; font-weight:700;">${v.conosco ? '💎 Nosso' : st.txt}</span>
           </div>
           <div style="text-align: right;">
             ${quente ? `<span style="color:#f59e0b; font-weight:800; font-size:12px;">🔥 ${diasTxt}</span>` : `<span style="color:#64748b; font-size:12px;">${dias < 0 ? diasTxt : 'em ' + diasTxt}</span>`}
@@ -11611,6 +11613,34 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(p.id).set(dados, { merge: true });
 
+      // PRODUÇÃO de "já é cliente" fechado FORA do funil:
+      // conta como produção no mês de INÍCIO da vigência (backfill de negócios já fechados no ano).
+      const bfRef = db.collection('mb_cotacoes').doc('bf_' + e.id + '_' + p.id);
+      if (statusVisual === 'conosco' && premioInformado > 0) {
+        const vi = (document.getElementById('vigInicio').value || '').trim();
+        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(vi);
+        const temFechadaReal = (COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === p.id && c.status === 'fechada' && c.origem !== 'backfill_cliente');
+        if (mVi && !temFechadaReal) {
+          const dataInicio = new Date(parseInt(mVi[3]), parseInt(mVi[2]) - 1, parseInt(mVi[1]));
+          await bfRef.set({
+            empresaId: e.id, empresaNome: e.nome,
+            produtoId: p.id, produtoNome: p.nome, produtoIcon: p.icon || '📦',
+            agenciaId: e.agenciaId || CTX.agenciaId || null,
+            status: 'fechada', etapa: 10, origem: 'backfill_cliente',
+            valor: premioInformado,
+            seguradora: dados.seguradoraAtual || null,
+            dataDecisao: dataInicio,
+            solicitadoPorUid: e.rm || CTX.uid, registradoPorUid: CTX.uid, registradoPorNome: CTX.nome,
+            observacoes: 'Cliente já fechado fora do funil — lançado no mapeamento (início de vigência).',
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+            atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        }
+      } else {
+        // Deixou de ser "já é cliente" (ou zerou o prêmio) → remove o backfill se existir
+        try { await bfRef.delete(); } catch (err) {}
+      }
+
       // Ação pontuada APENAS na primeira vez que o produto sai de "vazia"
       // (vale tanto pra "tem o produto" quanto pra "não tem" — ambos são informação útil)
       if (vaiPontuar) {
@@ -12787,6 +12817,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       await db.collection('mb_cotacoes').doc(c.id).update(update);
       await db.collection('mb_acoes').add(acaoLog);
+
+      // Se fechou de verdade pelo funil, remove eventual backfill manual do mesmo produto (evita produção em dobro)
+      if (acao === 'fechar') { try { await db.collection('mb_cotacoes').doc('bf_' + c.empresaId + '_' + c.produtoId).delete(); } catch (err) {} }
 
       // Sincronizar produto da empresa
       if (novoStatusVisual) {
