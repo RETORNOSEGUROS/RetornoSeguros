@@ -4175,13 +4175,17 @@
       <!-- Bloco "Já é cliente" -->
       <div id="blocoConosco" style="display:none; background:#dbeafe; border:1px solid #93c5fd; border-radius:9px; padding:12px; margin-bottom:14px;">
         <div style="font-size:13px; font-weight:700; color:#1e40af; margin-bottom:10px;">💎 Cliente já tem esse produto conosco</div>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" style="font-size:11px;">Prêmio anual (R$) <small style="color:#64748b;">— manual ou vem do negócio fechado</small></label>
+          <input type="text" class="form-control" id="premioCliente" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+        </div>
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
           <div>
             <label class="form-label" style="font-size:11px;">Vigência início (dd/mm/aaaa)</label>
             <input type="text" class="form-control" id="vigInicio" placeholder="01/01/2026">
           </div>
           <div>
-            <label class="form-label" style="font-size:11px;">Vigência fim (dd/mm/aaaa)</label>
+            <label class="form-label" style="font-size:11px;">Vigência fim (dd/mm/aaaa) <small style="color:#64748b;">→ renovações</small></label>
             <input type="text" class="form-control" id="vigFim" placeholder="31/12/2026">
           </div>
         </div>
@@ -4634,6 +4638,48 @@
   window.salvarPermissoesUsuario = salvarPermissoesUsuario;
 
   // ============= RENDER LISTA DE EMPRESAS =============
+  // ===== MODELO EM 2 DIMENSÕES: mapeamento (durável) × funil (derivado das cotações) =====
+  const MAPEAMENTO_INFO = {
+    nao_mapeado: { label: 'Não mapeado', cor: '#94a3b8', emoji: '⚪' },
+    mercado:     { label: 'No mercado',  cor: '#0ea5e9', emoji: '🌐' },
+    cliente:     { label: 'Já é cliente', cor: '#10b981', emoji: '✅' },
+    nao_tem:     { label: 'Não tem o produto', cor: '#64748b', emoji: '🚫' }
+  };
+  const FUNIL_INFO = {
+    cotando: { label: 'Em cotação', cor: '#f59e0b', emoji: '🟡' },
+    fechado: { label: 'Fechado',    cor: '#8b5cf6', emoji: '🟣' },
+    perdido: { label: 'Perdido',    cor: '#ef4444', emoji: '🔴' }
+  };
+  function getMapeamento(dados) {
+    dados = dados || {};
+    if (dados.mapeamento && MAPEAMENTO_INFO[dados.mapeamento]) return dados.mapeamento;
+    const st = dados.statusVisual;
+    if (st === 'conosco' || st === 'fechada') return 'cliente';
+    if (st === 'mapeada' || st === 'quente') return 'mercado';
+    if (st === 'nao_tem') return 'nao_tem';
+    if (dados.vencimentoMes && dados.vencimentoAno) return 'mercado';
+    return 'nao_mapeado';
+  }
+  function getFunilProduto(empresaId, produtoId) {
+    const cots = (typeof COTACOES !== 'undefined' ? COTACOES : []).filter(c => c.empresaId === empresaId && c.produtoId === produtoId);
+    if (!cots.length) return null;
+    if (cots.some(c => ehStatusAtivo(c.status))) return 'cotando';
+    let ult = null, ultT = -1;
+    cots.forEach(c => {
+      if (!['fechada', 'perdida', 'sem_aceitacao'].includes(c.status)) return;
+      const t = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().getTime() : 0;
+      if (t >= ultT) { ultT = t; ult = c; }
+    });
+    if (ult) return ult.status === 'fechada' ? 'fechado' : 'perdido';
+    return null;
+  }
+  // mapeamento -> statusVisual equivalente (retrocompatibilidade)
+  function mapeamentoParaStatus(m) {
+    return { nao_mapeado: 'vazia', mercado: 'mapeada', cliente: 'conosco', nao_tem: 'nao_tem' }[m] || 'vazia';
+  }
+  window.getMapeamento = getMapeamento;
+  window.getFunilProduto = getFunilProduto;
+
   function getStatusLabel(s) {
     return { vazia: 'Não mapeado', mapeada: 'Mapeado', cotando: 'Em cotação', fechada: 'Fechado', conosco: 'Já é cliente', perdida: 'Perdido', quente: '🔥 Vencendo', nao_tem: 'Cliente não tem', nao_abordado: 'Não abordado' }[s] || 'Não mapeado';
   }
@@ -5027,15 +5073,21 @@
     if (segNome) detalhes.push(`🏢 ${segNome}`);
     if (atualizadoEm) detalhes.push(`atualizado ${fmtDataCurta(atualizadoEm)}`);
 
+    // Duas dimensões: mapeamento + funil
+    const mapaK = getMapeamento(dadosProduto);
+    const funilK = getFunilProduto(empresaId, p.id);
+    const mi = MAPEAMENTO_INFO[mapaK] || MAPEAMENTO_INFO.nao_mapeado;
+    const fi = funilK ? FUNIL_INFO[funilK] : null;
+
     return `
       <div class="produto-card">
-        <div class="produto-icon" style="background: ${cor}22;">${p.icon}</div>
+        <div class="produto-icon" style="background: ${mi.cor}22;">${p.icon}</div>
         <div class="produto-info">
           <div class="produto-nome">${p.nome}</div>
-          <div class="produto-status">
-            <span class="dot" style="background: ${cor};"></span>
-            ${stLabel}
-            ${venc ? `<span style="color:#94a3b8;">· ${venc}</span>` : ''}
+          <div class="produto-status" style="flex-wrap:wrap; gap:6px;">
+            <span style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; color:${mi.cor}; background:${mi.cor}18; padding:2px 9px; border-radius:100px;">${mi.emoji} ${mi.label}</span>
+            ${fi ? `<span style="display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; color:${fi.cor}; background:${fi.cor}18; padding:2px 9px; border-radius:100px;">${fi.emoji} ${fi.label}</span>` : ''}
+            ${venc ? `<span style="color:#94a3b8; font-size:12px;">· ${venc}</span>` : ''}
           </div>
           ${detalhes.length ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">${detalhes.join(' · ')}</div>` : ''}
           <div class="produto-pipeline">${pipeline}</div>
@@ -9433,14 +9485,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     nao_tem:     { label: 'Cliente não tem',           cor: '#64748b' },
     nao_mapeado: { label: 'Não mapeado',               cor: '#e2e8f0' }
   };
+  // Categoria da matriz combinando as duas dimensões (funil ativo tem prioridade visual)
   function statusMatriz(e, ramoId) {
-    const temCot = (COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === ramoId && ehStatusAtivo(c.status));
-    if (temCot) return 'cotacao';
-    const st = (e.produtos || {})[ramoId];
-    if (st === 'fechada' || st === 'conosco') return 'nosso';
-    if (st === 'mapeada' || st === 'quente') return 'mercado';
-    if (st === 'perdida') return 'perdido';
-    if (st === 'nao_tem' || st === 'nao') return 'nao_tem';
+    const funil = getFunilProduto(e.id, ramoId);
+    if (funil === 'cotando') return 'cotacao';
+    const mapa = getMapeamento((e.produtosDados || {})[ramoId]);
+    if (funil === 'fechado' || mapa === 'cliente') return 'nosso';
+    if (funil === 'perdido') return 'perdido';
+    if (mapa === 'mercado') return 'mercado';
+    if (mapa === 'nao_tem') return 'nao_tem';
     return 'nao_mapeado';
   }
 
@@ -10310,6 +10363,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           const st = ehNosso ? (stAnt === 'fechada' ? 'fechada' : 'conosco') : 'mapeada';
           await ref.set({
             statusVisual: st,
+            mapeamento: ehNosso ? 'cliente' : 'mercado',
             vencimentoMes: mes, vencimentoAno: ano,
             seguradoraAtual: seg.trim() || null,
             premioAnual: premio > 0 ? premio : null,
@@ -10319,7 +10373,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           }, { merge: true });
           comProduto++;
         } else if (naoSel) {
-          await ref.set({ statusVisual: 'nao_tem', ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(), ultimoAutorNome: CTX.nome }, { merge: true });
+          await ref.set({ statusVisual: 'nao_tem', mapeamento: 'nao_tem', ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(), ultimoAutorNome: CTX.nome }, { merge: true });
           semProduto++;
         } else {
           // não marcou nada → "não abordado" (só se ainda não havia nada mapeado)
@@ -11291,6 +11345,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('produtoObs').value = dadosExistentes.observacoes || '';
     document.getElementById('vigInicio').value = dadosExistentes.vigenciaInicio || '';
     document.getElementById('vigFim').value = dadosExistentes.vigenciaFim || '';
+    const premioEl = document.getElementById('premioCliente');
+    if (premioEl) premioEl.value = dadosExistentes.premioAnual ? fmtBR(dadosExistentes.premioAnual) : '';
 
     // Selecionar status atual
     document.querySelectorAll('#modalProdutoStatus .pill-option').forEach(el => {
@@ -11405,6 +11461,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       ultimoAutorUid: CTX.uid,
       ultimoAutorNome: CTX.nome
     };
+
+    // Dimensão de mapeamento (não sobrescreve quando o status é 'cotando' — o funil não muda o mapeamento)
+    if (statusVisual === 'conosco' || statusVisual === 'fechada') dados.mapeamento = 'cliente';
+    else if (statusVisual === 'mapeada' || statusVisual === 'quente') dados.mapeamento = 'mercado';
+    else if (statusVisual === 'nao_tem') dados.mapeamento = 'nao_tem';
+    else if (statusVisual === 'vazia') dados.mapeamento = 'nao_mapeado';
+
+    // "Já é cliente": prêmio (manual ou do fechamento) + vencimento vindo do FIM da vigência
+    if (statusVisual === 'conosco') {
+      const premio = lerMoeda(document.getElementById('premioCliente') || { value: '' });
+      if (premio > 0) dados.premioAnual = premio;
+      const vf = (document.getElementById('vigFim').value || '').trim();
+      Object.assign(dados, vencDeVigenciaFim(vf));
+    }
 
     try {
       // Ler estado anterior do produto pra saber se já pontuou
@@ -12535,10 +12605,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
         novoStatusVisual = 'fechada';
         updateProdutoEmpresa = {
+          mapeamento: 'cliente',
           vigenciaInicio: vigIni,
           vigenciaFim: vigFim,
           seguradora: seguradora || null,
           valorFechado: valor,
+          premioAnual: valor || null,
           ...vencDeVigenciaFim(vigFim)
         };
       } else if (acao === 'perder') {
@@ -12561,12 +12633,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (resultado === 'ninguem') {
           // Cotou e ninguém tem → fica como "não tem produto ativo" (não é "não mapeado")
           novoStatusVisual = 'nao_tem';
+          updateProdutoEmpresa = { mapeamento: 'nao_tem' };
         } else if (resultado === 'fechou_outro') {
           // Fechou com outro → renova o mapeamento com os dados do concorrente
           novoStatusVisual = 'mapeada';
           const vMes = parseInt((document.getElementById('acaoVencMes') || {}).value) || null;
           const vAno = parseInt((document.getElementById('acaoVencAno') || {}).value) || null;
-          updateProdutoEmpresa = {};
+          updateProdutoEmpresa = { mapeamento: 'mercado' };
           if (valC > 0) updateProdutoEmpresa.premioAnual = valC;
           if (segV) updateProdutoEmpresa.seguradoraAtual = segV.trim();
           if (vMes) updateProdutoEmpresa.vencimentoMes = vMes;
@@ -12574,6 +12647,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         } else {
           // Cliente desistiu / mantém a atual → continua mapeado
           novoStatusVisual = 'mapeada';
+          updateProdutoEmpresa = { mapeamento: 'mercado' };
         }
       }
 
