@@ -93,6 +93,11 @@
       border-top: 1px solid #d4f4e0; background: #fafffb;
     }
     .produto-box.tem-sim .subcampos { display: block; }
+    .interesse-box { display: none; padding: 0 18px 16px; }
+    .produto-box.tem-nao .interesse-box { display: block; }
+    .int-btn { padding: 8px 14px; border-radius: 8px; border: 2px solid #e2e8f0; background: white; font-weight: 700; font-size: 13px; cursor: pointer; color: #64748b; }
+    .int-btn.int-sim.ativa { border-color: #6366f1; background: #eef2ff; color: #4338ca; }
+    .int-btn.int-nao.ativa { border-color: #94a3b8; background: #f1f5f9; color: #475569; }
     .subcampos-grid {
       display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
     }
@@ -225,7 +230,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    const PRODUTOS = [
+    let PRODUTOS = [
       { id: 'frota',        nome: 'Frota / Auto',         icon: '🚗' },
       { id: 'empresarial',  nome: 'Empresarial',          icon: '🏢' },
       { id: 'saude-socios', nome: 'Saúde — Sócios',       icon: '👥' },
@@ -267,7 +272,17 @@
           document.getElementById('numFuncionarios').value = EMPRESA.numFuncionarios;
         }
 
-        // Renderizar 7 produtos
+        // Carregar TODOS os produtos cadastrados no sistema (ramos ativos)
+        try {
+          const ramosSnap = await db.collection('mb_ramos').get();
+          if (!ramosSnap.empty) {
+            const arr = [];
+            ramosSnap.forEach(d => { const r = d.data(); if (r.ativo !== false) arr.push({ id: d.id, nome: r.nome, icon: r.icon || '📦', ordem: r.ordem || 0 }); });
+            if (arr.length) { arr.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); PRODUTOS = arr; }
+          }
+        } catch (e) { console.warn('ramos dinâmicos falhou, usando padrão', e); }
+
+        // Renderizar produtos
         renderProdutos();
 
         document.getElementById('loading').style.display = 'none';
@@ -322,6 +337,13 @@
               </div>
             </div>
           </div>
+          <div class="interesse-box" id="interesse-${p.id}">
+            <label style="display:block; font-size:13px; font-weight:600; color:#334155; margin-bottom:8px;">Não tem hoje. Tem interesse em receber uma cotação?</label>
+            <div class="opcoes">
+              <button type="button" class="int-btn" data-prod="${p.id}" data-int="sim" onclick="responderInteresse('${p.id}','sim')">👍 Sim, quero cotar</button>
+              <button type="button" class="int-btn" data-prod="${p.id}" data-int="nao" onclick="responderInteresse('${p.id}','nao')">Não, obrigado</button>
+            </div>
+          </div>
         </div>
       `).join('');
     }
@@ -346,6 +368,17 @@
       }
     }
     window.responderProduto = responderProduto;
+
+    function responderInteresse(prodId, val) {
+      if (!respostas[prodId]) respostas[prodId] = {};
+      respostas[prodId].interesse = val;
+      const box = document.getElementById('interesse-' + prodId);
+      box.querySelectorAll('.int-btn').forEach(b => {
+        b.classList.add('int-' + b.getAttribute('data-int'));
+        b.classList.toggle('ativa', b.getAttribute('data-int') === val);
+      });
+    }
+    window.responderInteresse = responderInteresse;
 
     function mascaraMoeda(input) {
       let v = input.value.replace(/\D/g, '');
@@ -400,28 +433,61 @@
         }
 
         // Salvar cada produto em empresas/{id}/mb_produtos/{prodId}
+        const cotacoesParaCriar = [];
         for (const p of PRODUTOS) {
           const r = respostas[p.id];
           if (!r || !r.tem) continue;
           const dados = {
-            tem: r.tem === 'sim',
-            statusVisual: 'mapeada',
             ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
             ultimoAutorUid: LINK.geradoPorUid || 'cliente',
             ultimoAutorNome: LINK.geradoPorNome || 'Cliente (autopreenchimento)',
             preenchidoViaLink: true,
-            linkId: LINK_ID
+            linkId: LINK_ID,
+            jaPontuouMapeamento: true
           };
           if (r.tem === 'sim') {
+            dados.tem = true;
+            dados.statusVisual = 'mapeada';
             dados.vencimentoMes = r.vencimentoMes;
             dados.vencimentoAno = r.vencimentoAno;
             dados.seguradoraAtual = r.seguradora;
             dados.valorAnualPago = r.valorAnual || null;
             dados.observacoes = r.observacoes;
+          } else {
+            // Não tem o produto hoje
+            dados.tem = false;
+            dados.naoTemProduto = true;
+            if (r.interesse === 'sim') {
+              // Não tem, mas quer cotar → entra no funil
+              dados.statusVisual = 'cotando';
+              dados.interesseCotar = true;
+              cotacoesParaCriar.push(p);
+            } else {
+              // Não tem e não quer → mapeado como "não tem produto ativo"
+              dados.statusVisual = 'nao_tem';
+              dados.interesseCotar = false;
+            }
           }
-          // Marca como já pontuado para não dar pontos extras na próxima edição
-          dados.jaPontuouMapeamento = true;
           await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set(dados, { merge: true });
+        }
+
+        // Criar cotações no funil para "não tem, mas tem interesse em cotar"
+        for (const p of cotacoesParaCriar) {
+          await db.collection('mb_cotacoes').add({
+            empresaId: LINK.empresaId, empresaNome: LINK.empresaNome || EMPRESA.nome || '',
+            produtoId: p.id, produtoNome: p.nome, produtoIcon: p.icon || '📦',
+            agenciaId: LINK.agenciaId || EMPRESA.agenciaId || null,
+            status: 'solicitada', etapa: 'solicitada', origem: 'oportunidade',
+            chanceFechamento: 'media',
+            solicitadoPorUid: LINK.geradoPorUid || null,
+            solicitadoPorNome: LINK.geradoPorNome || 'Cliente (link)',
+            observacoes: 'Cliente informou que NÃO tem, mas tem INTERESSE em cotar (via link).',
+            interesseViaLink: true,
+            historico: [{ status: 'solicitada', label: 'Iniciada', obs: 'Interesse em cotar via link do cliente', por: 'Cliente', em: new Date().toISOString() }],
+            dataSolicitacao: firebase.firestore.FieldValue.serverTimestamp(),
+            atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          });
         }
 
         // Atualizar nº funcionários se informado (SOBRESCREVE conforme você pediu)
