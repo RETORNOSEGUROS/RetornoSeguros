@@ -9738,18 +9738,42 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     let cotSnap;
     try { let q = db.collection('mb_cotacoes'); if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId); cotSnap = await q.get(); } catch (e) { cotSnap = { forEach: () => {} }; }
     const realGrupo = {}, realMesGrupo = {}, producaoMensal = new Array(12).fill(0);
+    const fechadasNoAno = new Set(); // empresaId|produtoId já contados como fechamento (funil ou backfill) neste ano
     cotSnap.forEach(d => {
       const c = d.data();
       if (c.status !== 'fechada') return;
-      const uid = c.solicitadoPorUid || c.registradoPorUid;
-      if (escopo !== 'agencia' && uid !== escopo) return;
       const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
       if (!dt || dt.getFullYear() !== ano) return;
+      fechadasNoAno.add(c.empresaId + '|' + c.produtoId);
+      const uid = c.solicitadoPorUid || c.registradoPorUid;
+      if (escopo !== 'agencia' && uid !== escopo) return;
       const gid = ramoGrupo[c.produtoId] || 'outros';
       const val = c.valor || 0;
       realGrupo[gid] = (realGrupo[gid] || 0) + val;
       producaoMensal[dt.getMonth()] += val;
       if (dt.getMonth() === RM_MES.getMonth()) realMesGrupo[gid] = (realMesGrupo[gid] || 0) + val;
+    });
+
+    // + Clientes "NOSSO" mapeados que NÃO passaram pelo funil:
+    //   conta o prêmio como produção no ano/mês de INÍCIO da vigência (sem duplicar com fechamentos)
+    (EMPRESAS || []).forEach(e => {
+      if (escopo !== 'agencia' && e.rm !== escopo) return;
+      const dados = e.produtosDados || {};
+      Object.keys(dados).forEach(rid => {
+        const pd = dados[rid] || {};
+        if (getMapeamento(pd) !== 'cliente') return;       // só "nosso"
+        const premio = pd.premioAnual || pd.valorFechado || 0;
+        if (premio <= 0) return;
+        if (fechadasNoAno.has(e.id + '|' + rid)) return;   // já contado como fechamento (funil/backfill)
+        let anoProd = new Date().getFullYear(), mesProd = new Date().getMonth();
+        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+        if (mVi) { anoProd = parseInt(mVi[3]); mesProd = parseInt(mVi[2]) - 1; }
+        if (anoProd !== ano) return;
+        const gid = ramoGrupo[rid] || 'outros';
+        realGrupo[gid] = (realGrupo[gid] || 0) + premio;
+        producaoMensal[mesProd] += premio;
+        if (mesProd === RM_MES.getMonth()) realMesGrupo[gid] = (realMesGrupo[gid] || 0) + premio;
+      });
     });
     const realAnualTotal = Object.values(realGrupo).reduce((s, v) => s + v, 0);
     const realMesTotal = Object.values(realMesGrupo).reduce((s, v) => s + v, 0);
