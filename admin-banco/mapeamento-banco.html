@@ -8237,7 +8237,7 @@
         const corTempo = dias >= limite ? '#ef4444' : dias >= limite*0.75 ? '#f59e0b' : '#94a3b8';
         const valor = c.valor || c.valorProposto;
         const ativa = STATUS_ATIVOS.includes(c.status);
-        const podeArrastar = !isEstag && !isAssist && ativa;
+        const podeArrastar = !isEstag && !isAssist && (ativa || CTX.isAdmin);
         const motivoTxt = (c.status === 'perdida' || c.status === 'sem_aceitacao') && c.motivoPerda
           ? `<div style="font-size:10px; color:#ef4444; margin-top:4px; font-weight:600;">${motivosLabel[c.motivoPerda] || c.motivoPerda}</div>` : '';
         const ch = c.chanceFechamento && CHANCE_INFO[c.chanceFechamento];
@@ -8248,6 +8248,7 @@
           <div class="kanban-card ${cls}" style="position:relative;" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirRaioX('${c.empresaId}')">
             ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação" style="position:absolute; top:5px; right:5px; border:none; background:#fef2f2; color:#ef4444; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">🗑</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
+            ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
@@ -8393,6 +8394,44 @@
     } catch (e) { alert('Erro ao mover: ' + e.message); }
   }
   window.voltarEtapaCotacao = voltarEtapaCotacao;
+
+  // Admin: reabrir um negócio finalizado escolhendo a etapa (menu, mais confiável que arrastar)
+  function abrirReabrirCotacao(cotacaoId) {
+    if (!CTX.isAdmin) return alert('Apenas o admin pode reabrir.');
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    let modal = document.getElementById('modalReabrir');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'modalReabrir';
+    modal.className = 'cad-modal open';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="document.getElementById('modalReabrir').remove()"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head"><h2>↩ Reabrir negócio</h2><p>${c.produtoIcon || ''} ${c.produtoNome} · ${c.empresaNome}</p></div>
+        <div class="cad-modal-body">
+          <p style="font-size:13px; color:#64748b; margin:0 0 12px;">Escolha para qual etapa do funil este negócio volta:</p>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${ETAPAS_FUNIL.map(e => `
+              <button class="btn-secondary" style="justify-content:flex-start; text-align:left; padding:11px 14px; display:flex; align-items:center; gap:10px;" onclick="reabrirParaEtapa('${c.id}','${e.id}')">
+                <span style="font-size:18px;">${e.icon}</span>
+                <span style="font-weight:700; color:${e.cor};">${e.label}</span>
+              </button>`).join('')}
+          </div>
+        </div>
+        <div class="cad-modal-foot"><button class="btn-secondary" onclick="document.getElementById('modalReabrir').remove()">Cancelar</button></div>
+      </div>`;
+    document.body.appendChild(modal);
+    lucide.createIcons();
+  }
+  async function reabrirParaEtapa(cotacaoId, etapaId) {
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    const m = document.getElementById('modalReabrir'); if (m) m.remove();
+    await voltarEtapaCotacao(c, etapaId, 'Reaberta pelo admin');
+  }
+  window.abrirReabrirCotacao = abrirReabrirCotacao;
+  window.reabrirParaEtapa = reabrirParaEtapa;
 
   // Admin: editar informações de um negócio finalizado (fechado ou perdido)
   const MOTIVOS_PERDA = { preco: 'Preço', cobertura: 'Cobertura', prazo: 'Cliente desistiu', confianca: 'Confia na atual', sem_aceitacao: 'Seguradora não aceitou', outro: 'Outro' };
