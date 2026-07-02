@@ -5018,6 +5018,15 @@
 
     const podeEditar = !isEstag; // estagiário não edita produtos
 
+    // Ajuste 2: prêmio, seguradora e data da última atualização/mapeamento
+    const premioVal = dadosProduto.premioAnual || dadosProduto.valorAnualPago || dadosProduto.valorFechado || 0;
+    const segNome = dadosProduto.seguradoraAtual || dadosProduto.seguradora || '';
+    const atualizadoEm = dadosProduto.ultimaAtualizacao;
+    const detalhes = [];
+    if (premioVal) detalhes.push(`💰 ${fmtBR(premioVal)}`);
+    if (segNome) detalhes.push(`🏢 ${segNome}`);
+    if (atualizadoEm) detalhes.push(`atualizado ${fmtDataCurta(atualizadoEm)}`);
+
     return `
       <div class="produto-card">
         <div class="produto-icon" style="background: ${cor}22;">${p.icon}</div>
@@ -5028,6 +5037,7 @@
             ${stLabel}
             ${venc ? `<span style="color:#94a3b8;">· ${venc}</span>` : ''}
           </div>
+          ${detalhes.length ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">${detalhes.join(' · ')}</div>` : ''}
           <div class="produto-pipeline">${pipeline}</div>
         </div>
         <div class="produto-actions">
@@ -12313,7 +12323,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <div style="background:#dcfce7; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">🎉 Fechamento vale <strong>100 pts × multiplicador</strong>, dividido 50% (fechou) / 30% (cotou) / 20% (solicitou).</div>
       `;
     } else if (acao === 'perder') {
+      const mesesOpt = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'].map((m, i) => `<option value="${i+1}">${m}</option>`).join('');
       body = `
+        <div class="form-group">
+          <label class="form-label">O que aconteceu?</label>
+          <select class="form-control" id="acaoResultado" onchange="perderResultadoChange()">
+            <option value="fechou_outro">🏢 Fechou com OUTRA corretora/seguradora</option>
+            <option value="ninguem">🚫 Não fechou com ninguém — não tem o produto</option>
+            <option value="desistiu">😕 Cliente desistiu / mantém a atual</option>
+          </select>
+        </div>
         <div class="form-group">
           <label class="form-label">Motivo</label>
           <select class="form-control" id="acaoMotivo">
@@ -12325,25 +12344,34 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <option value="outro">Outro</option>
           </select>
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-          <div class="form-group">
-            <label class="form-label">Seguradora que fechou <small style="color:#94a3b8;">(se foi com outra)</small></label>
-            <input type="text" class="form-control" id="acaoSegVencedora" placeholder="Ex: concorrente / Porto...">
+        <div id="perderCamposOutro">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Seguradora que fechou</label>
+              <input type="text" class="form-control" id="acaoSegVencedora" placeholder="Ex: Porto, Bradesco...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Prêmio do concorrente (R$)</label>
+              <input type="text" class="form-control" id="acaoValorConcorrente" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Valor do concorrente (R$)</label>
-            <input type="text" class="form-control" id="acaoValorConcorrente" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Mês de vencimento</label>
+              <select class="form-control" id="acaoVencMes"><option value="">— mês —</option>${mesesOpt}</select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ano de vencimento</label>
+              <input type="number" class="form-control" id="acaoVencAno" min="2025" max="2035" placeholder="${new Date().getFullYear() + 1}">
+            </div>
           </div>
+          <div style="background:#e0f2fe; border:1px solid #7dd3fc; border-radius:8px; padding:9px 12px; font-size:12px; color:#075985;">🔁 Isso <strong>renova o mapeamento</strong>: o produto fica "no mercado" com esses dados e volta pro calendário de renovações.</div>
         </div>
         <div class="form-group">
           <label class="form-label">Detalhes</label>
           <textarea class="form-control" id="acaoObs" rows="2"></textarea>
         </div>
-        <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer; margin-bottom:6px;">
-          <input type="checkbox" id="acaoRegistrarProxAno" checked style="width:16px; height:16px;">
-          Registrar de novo no calendário de renovações pra <strong>tentar ano que vem</strong> <small style="color:#94a3b8;">(só faz sentido em renovações mapeadas)</small>
-        </label>
-        <div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; font-size:12px; color:#78350f;">📋 Registrar a perda com motivo vale <strong>+${getPonto('perda_com_motivo')} pts</strong> — informação valiosa para a próxima abordagem.</div>
+        <div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:8px; padding:10px 12px; font-size:12px; color:#78350f;">📋 Registrar a perda com motivo é informação valiosa para a próxima abordagem.</div>
       `;
     }
     // Chance de fechamento — disponível nas etapas ativas (não em fechar/perder)
@@ -12514,22 +12542,39 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           ...vencDeVigenciaFim(vigFim)
         };
       } else if (acao === 'perder') {
+        const resultado = (document.getElementById('acaoResultado') || {}).value || 'desistiu';
         const motivo = document.getElementById('acaoMotivo').value;
         update.status = motivo === 'sem_aceitacao' ? 'sem_aceitacao' : 'perdida';
         update.etapa = 9;
         update.motivoPerda = motivo;
+        update.resultadoPerda = resultado;
         update.observacoes = obs;
         update.dataDecisao = firebase.firestore.FieldValue.serverTimestamp();
         const segV = (document.getElementById('acaoSegVencedora') || {}).value || '';
         const valC = lerMoeda(document.getElementById('acaoValorConcorrente') || { value: '' });
         if (segV) update.seguradoraVencedora = segV.trim();
         if (valC > 0) update.valorConcorrente = valC;
-        update.registrarProxAno = !!(document.getElementById('acaoRegistrarProxAno') || {}).checked;
         acaoLog.tipo = 'cotacao_perdida';
         acaoLog.motivo = motivo;
         acaoLog.pontos = motivo === 'sem_aceitacao' ? getPonto('sem_aceitacao') : getPonto('perda_com_motivo');
-        // Volta o produto pra mapeado (não some, mas não conta mais como em cotação)
-        novoStatusVisual = 'mapeada';
+
+        if (resultado === 'ninguem') {
+          // Cotou e ninguém tem → fica como "não tem produto ativo" (não é "não mapeado")
+          novoStatusVisual = 'nao_tem';
+        } else if (resultado === 'fechou_outro') {
+          // Fechou com outro → renova o mapeamento com os dados do concorrente
+          novoStatusVisual = 'mapeada';
+          const vMes = parseInt((document.getElementById('acaoVencMes') || {}).value) || null;
+          const vAno = parseInt((document.getElementById('acaoVencAno') || {}).value) || null;
+          updateProdutoEmpresa = {};
+          if (valC > 0) updateProdutoEmpresa.premioAnual = valC;
+          if (segV) updateProdutoEmpresa.seguradoraAtual = segV.trim();
+          if (vMes) updateProdutoEmpresa.vencimentoMes = vMes;
+          if (vAno) updateProdutoEmpresa.vencimentoAno = vAno;
+        } else {
+          // Cliente desistiu / mantém a atual → continua mapeado
+          novoStatusVisual = 'mapeada';
+        }
       }
 
       // Chance de fechamento (mantém entre etapas)
@@ -12578,6 +12623,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       alert('Erro: ' + e.message);
     }
   }
+
+  function perderResultadoChange() {
+    const r = (document.getElementById('acaoResultado') || {}).value;
+    const box = document.getElementById('perderCamposOutro');
+    if (box) box.style.display = (r === 'fechou_outro') ? 'block' : 'none';
+  }
+  window.perderResultadoChange = perderResultadoChange;
 
   function selChance(btn) {
     const val = btn.getAttribute('data-chance');
