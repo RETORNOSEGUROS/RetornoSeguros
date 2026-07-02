@@ -1303,7 +1303,8 @@
     }
     .month-card:hover { border-color: #c7d2fe; box-shadow: 0 4px 14px rgba(79,70,229,0.08); }
     .month-card.atual { background: linear-gradient(135deg, #eef2ff, white); border-color: var(--primary); border-width: 1.5px; }
-    .month-card.passado { opacity: 0.55; }
+    .month-card.passado { opacity: 0.6; filter: grayscale(0.85); background: #f8fafc; }
+    .month-card.passado .mc-count { background: #cbd5e1; }
     .month-card .mc-head {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 8px;
@@ -5577,33 +5578,34 @@
       PRODUTOS.forEach(prod => {
         const d = pd[prod.id];
         if (!d) return;
-        const isConosco = d.statusVisual === 'conosco';
-        const isFechada = d.statusVisual === 'fechada';
+        const isCliente = (d.statusVisual === 'conosco' || d.statusVisual === 'fechada');
+        const premio = d.premioAnual || d.valorAnualPago || d.valorFechado || 0;
+        const seg = d.seguradoraAtual || d.seguradora || '';
 
-        // 1. Vencimento informado (mes/ano) → SEMPRE aparece, independente do status
-        //    (mesmo em cotação, o vencimento do seguro atual continua valendo)
-        if (d.vencimentoMes && d.vencimentoAno) {
-          VENCIMENTOS.push({
-            empresaId: e.id, empresa: e.nome,
-            produto: prod.id, mes: d.vencimentoMes, ano: d.vencimentoAno,
-            rm: e.rm, conosco: isConosco,
-            statusVisual: d.statusVisual || 'mapeada',
-            seguradora: d.seguradoraAtual || '',
-            observacoes: d.observacoes || ''
-          });
+        let mes = null, ano = null;
+        if (isCliente) {
+          // Negócio nosso/fechado: vence no FIM da vigência (renova só ano que vem,
+          // não aparece no ano em que foi fechado)
+          if (d.vigenciaFim && /^\d{2}\/\d{2}\/\d{4}$/.test(d.vigenciaFim)) {
+            const [dd, mm, aaaa] = d.vigenciaFim.split('/').map(Number);
+            mes = mm; ano = aaaa;
+          } else if (d.vencimentoMes && d.vencimentoAno) {
+            mes = d.vencimentoMes; ano = d.vencimentoAno;
+          }
+        } else if (d.vencimentoMes && d.vencimentoAno) {
+          // No mercado / em cotação: vencimento do seguro atual
+          mes = d.vencimentoMes; ano = d.vencimentoAno;
         }
-        // 2. Vigência fim (já é cliente OU fechou conosco) — gera próximo vencimento
-        if ((isConosco || isFechada) && d.vigenciaFim && /^\d{2}\/\d{2}\/\d{4}$/.test(d.vigenciaFim)) {
-          const [dd, mm, aaaa] = d.vigenciaFim.split('/').map(Number);
-          VENCIMENTOS.push({
-            empresaId: e.id, empresa: e.nome,
-            produto: prod.id, mes: mm, ano: aaaa,
-            rm: e.rm, conosco: true,
-            statusVisual: d.statusVisual,
-            seguradora: d.seguradoraAtual || d.seguradora || '',
-            observacoes: d.observacoes || ''
-          });
-        }
+        if (!mes || !ano) return;
+
+        VENCIMENTOS.push({
+          empresaId: e.id, empresa: e.nome,
+          produto: prod.id, mes, ano,
+          rm: e.rm, conosco: isCliente,
+          statusVisual: d.statusVisual || 'mapeada',
+          seguradora: seg, premio,
+          observacoes: d.observacoes || ''
+        });
       });
     });
   }
@@ -5614,8 +5616,11 @@
   }
   function ehQuente(v) {
     if (v.conosco) return false;
+    if (_temCotacaoAtiva(v.empresaId, v.produto)) return false; // já foi pro funil → sai da janela
     const dias = diasAteVencimento(v);
-    return dias >= 0 && dias <= JANELAS[v.produto];
+    const janela = JANELAS[v.produto] || 60;
+    // inclui o mês corrente (o cálculo usa dia 1, então o mês atual pode dar dias levemente negativos)
+    return dias >= -31 && dias <= janela;
   }
 
   function renderVencimentos() {
@@ -5661,15 +5666,20 @@
       ? `<div style="grid-column: 1/-1; text-align: center; padding: 24px; background: white; border-radius: 12px; border: 1px dashed #cbd5e1; color: #94a3b8; font-size: 13px;">Nenhuma oportunidade na janela ideal com os filtros atuais.</div>`
       : quentes.map(q => {
           const dias = diasAteVencimento(q);
+          const diasTxt = dias < 0 ? 'este mês' : `em ${dias} dias`;
           const prod = PRODUTOS.find(p => p.id === q.produto);
           const mesNome = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][q.mes - 1];
+          const extras = [];
+          if (q.seguradora) extras.push(`🏢 ${q.seguradora}`);
+          if (q.premio) extras.push(`💰 ${fmtBR(q.premio)}`);
           return `
             <div class="quente-card" onclick="abrirRaioX('${q.empresaId}')">
               <div class="qc-empresa">${q.empresa}</div>
               <div class="qc-produto">${prod.icon} ${prod.nome}</div>
-              <div class="qc-data">Vence em <strong>${mesNome}/${q.ano}</strong> · em ${dias} dias</div>
+              <div class="qc-data">Vence em <strong>${mesNome}/${q.ano}</strong> · ${diasTxt}</div>
+              ${extras.length ? `<div class="qc-data" style="color:#94a3b8;">${extras.join(' · ')}</div>` : ''}
               <div class="qc-actions">
-                <button class="qc-btn" onclick="event.stopPropagation(); alert('Iniciando tratativa...')">Iniciar Tratativa</button>
+                <button class="qc-btn" onclick="event.stopPropagation(); iniciarTratativa('${q.empresaId}','${q.produto}','renovacao')">Iniciar Tratativa</button>
                 <button class="qc-btn outline" onclick="event.stopPropagation(); abrirRaioX('${q.empresaId}')">Ver Empresa</button>
               </div>
             </div>
@@ -5759,21 +5769,25 @@
     const linhas = itens.map(v => {
       const p = PRODUTOS.find(pp => pp.id === v.produto);
       const dias = diasAteVencimento(v);
+      const diasTxt = dias < 0 ? 'este mês' : `${dias}d`;
       const quente = ehQuente(v);
       const st = statusLabels[v.statusVisual] || { txt: v.statusVisual || '—', cor: '#64748b' };
       const rmNome = (MAPA_RMS[v.rm] || {}).nome || '—';
+      const sub = [`RM: ${rmNome}`];
+      if (v.seguradora) sub.push(`🏢 ${v.seguradora}`);
+      if (v.premio) sub.push(`💰 ${fmtBR(v.premio)}`);
       return `
         <div onclick="document.getElementById('modalDetalheMes').remove(); abrirRaioX('${v.empresaId}')" style="display:grid; grid-template-columns: 2fr 1.3fr 1fr 1fr; gap: 10px; padding: 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer; align-items: center; ${quente ? 'background:#fffbeb;' : ''}">
           <div>
             <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${v.empresa}</div>
-            <div style="font-size: 11px; color: #64748b;">RM: ${rmNome}${v.seguradora ? ' · ' + v.seguradora : ''}</div>
+            <div style="font-size: 11px; color: #64748b;">${sub.join(' · ')}</div>
           </div>
           <div style="font-size: 13px;">${p ? p.icon : ''} ${p ? p.nome : v.produto}</div>
           <div>
             <span style="background:${st.cor}22; color:${st.cor}; padding:3px 9px; border-radius:100px; font-size:11px; font-weight:700;">${v.conosco ? '💎 Cliente' : st.txt}</span>
           </div>
           <div style="text-align: right;">
-            ${quente ? `<span style="color:#f59e0b; font-weight:800; font-size:12px;">🔥 ${dias}d</span>` : `<span style="color:#64748b; font-size:12px;">em ${dias}d</span>`}
+            ${quente ? `<span style="color:#f59e0b; font-weight:800; font-size:12px;">🔥 ${diasTxt}</span>` : `<span style="color:#64748b; font-size:12px;">${dias < 0 ? diasTxt : 'em ' + diasTxt}</span>`}
           </div>
         </div>
       `;
@@ -11897,7 +11911,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (id) {
       try { await carregarEmpresasReais(); } catch (err) {}
       try { await carregarERenderCotacoes(); } catch (err) {}
-      renderOportunidades();
+      try { renderOportunidades(); } catch (err) {}
+      try { if (typeof renderVencimentos === 'function') renderVencimentos(); } catch (err) {}
       flashSalvo('Negociação criada no funil!');
     }
   }
