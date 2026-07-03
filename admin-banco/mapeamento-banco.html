@@ -3054,9 +3054,13 @@
           <div style="font-size: 13px; color: #64748b; font-weight: 600;">Negócios emitidos · vigência ativa</div>
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Produção do Mês</div>
         </div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <select id="prodFiltroAno" class="filter-select" onchange="renderProducao()"></select>
           <select id="prodFiltroMes" class="filter-select" onchange="renderProducao()">
             <option value="">Todos os meses</option>
+          </select>
+          <select id="prodFiltroRm" class="filter-select perm-chefe" onchange="renderProducao()">
+            <option value="">Todos os gerentes</option>
           </select>
         </div>
       </div>
@@ -7252,6 +7256,27 @@
 
       // ===== KPIs =====
       const fechadas = cotPeriodo.filter(c => c.status === 'fechada');
+      // + "Já é nosso" mapeados no período (data = início de vigência), respeitando escopo e produto
+      try {
+        const jaTem = new Set(fechadas.map(c => c.empresaId + '|' + c.produtoId + '|' + ((c.dataDecisao && c.dataDecisao.toDate) ? c.dataDecisao.toDate().getFullYear() : '')));
+        (EMPRESAS || []).forEach(e => {
+          if (escopo === 'meu' && e.rm !== uidEfetivo()) return;
+          const dados = e.produtosDados || {};
+          Object.keys(dados).forEach(rid => {
+            const pd = dados[rid] || {};
+            if (getMapeamento(pd) !== 'cliente') return;
+            const premio = pd.premioAnual || pd.valorFechado || 0;
+            if (premio <= 0) return;
+            if (fProduto && rid !== fProduto) return;
+            let d = new Date();
+            const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+            if (mVi) d = new Date(+mVi[3], +mVi[2] - 1, +mVi[1]);
+            if (d < inicio) return; // fora do período
+            if (jaTem.has(e.id + '|' + rid + '|' + d.getFullYear())) return;
+            fechadas.push({ empresaId: e.id, produtoId: rid, valor: premio, dataDecisao: { toDate: () => d }, criadoEm: { toDate: () => d }, status: 'fechada', origem: 'nosso_mapeado' });
+          });
+        });
+      } catch (e) {}
       const perdidas = cotPeriodo.filter(c => c.status === 'perdida' || c.status === 'sem_aceitacao');
       const andamento = cotPeriodo.filter(c => STATUS_ATIVOS.includes(c.status));
       const decididas = fechadas.length + perdidas.length;
@@ -13320,6 +13345,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function carregarERenderProducao() {
     document.getElementById('producaoContainer').innerHTML = '<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:30px; text-align:center; color:#94a3b8;">Carregando...</div>';
 
+    // Filtros (ano / mês / gerente)
+    (function popularFiltrosProducao() {
+      const selAno = document.getElementById('prodFiltroAno');
+      if (selAno && !selAno.options.length) {
+        const anoAtual = new Date().getFullYear();
+        let opts = '<option value="">Todos os anos</option>';
+        for (let a = anoAtual; a >= anoAtual - 3; a--) opts += `<option value="${a}">${a}</option>`;
+        selAno.innerHTML = opts; selAno.value = String(anoAtual);
+      }
+      const selMes = document.getElementById('prodFiltroMes');
+      if (selMes && selMes.options.length <= 1) {
+        selMes.innerHTML = '<option value="">Todos os meses</option>' + (MESES_PT || []).map((m, i) => `<option value="${i}">${m}</option>`).join('');
+      }
+      const selRm = document.getElementById('prodFiltroRm');
+      if (selRm && selRm.options.length <= 1 && (CTX.isAdmin || perfilEfetivo() === 'chefe')) {
+        const rms = (EQUIPE_REAL || []).filter(u => u.perfil === 'rm' || u.perfil === 'chefe');
+        selRm.innerHTML = '<option value="">Todos os gerentes</option>' + rms.map(u => `<option value="${u.uid}">${u.nome}</option>`).join('');
+      }
+    })();
+    const fAno = parseInt((document.getElementById('prodFiltroAno') || {}).value) || null;
+    const fMesRaw = (document.getElementById('prodFiltroMes') || {}).value;
+    const fMes = (fMesRaw === '' || fMesRaw == null) ? null : parseInt(fMesRaw);
+    const fRm = (document.getElementById('prodFiltroRm') || {}).value || '';
+
     try {
       let query = db.collection('mb_cotacoes').where('status', '==', 'fechada');
       if (CTX.agenciaId) query = query.where('agenciaId', '==', CTX.agenciaId);
@@ -13332,9 +13381,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const ehRm = (perfilEfetivo() === 'rm');
       const _uidEf = uidEfetivo();
       const _minhasEmp = new Set((EMPRESAS_REAIS || []).filter(e => e.rm === _uidEf).map(e => e.id));
-      const fechadas = ehRm
+      let fechadas = ehRm
         ? todasFechadas.filter(c => _minhasEmp.has(c.empresaId))
-        : todasFechadas;
+        : todasFechadas.slice();
 
       fechadas.sort((a, b) => {
         const da = a.dataDecisao && a.dataDecisao.toDate ? a.dataDecisao.toDate() : new Date(0);
@@ -13367,6 +13416,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           return db_ - da;
         });
       } catch (e) {}
+
+      // Aplicar filtros de ano / mês / gerente
+      const _empresaRm = {}; (EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
+      fechadas = fechadas.filter(c => {
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (fAno && (!dt || dt.getFullYear() !== fAno)) return false;
+        if (fMes !== null && (!dt || dt.getMonth() !== fMes)) return false;
+        if (fRm && _empresaRm[c.empresaId] !== fRm) return false;
+        return true;
+      });
 
       // KPIs (do que vê)
       const totalValor = fechadas.reduce((s, c) => s + (c.valor || 0), 0);
