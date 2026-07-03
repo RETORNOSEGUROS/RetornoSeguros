@@ -2103,6 +2103,9 @@
         </div>
       </div>
 
+      <!-- Funil rápido: negociações, prazos e dias parado -->
+      <div id="homeFunilLista" style="margin-top: 6px;"></div>
+
       <!-- Termômetro de meta coletiva -->
       <div class="termometro perm-naoestag" id="termometroWrap" style="display:none;">
         <div class="termometro-head">
@@ -7966,6 +7969,45 @@
   };
 
   // ============= HOME / HOJE =============
+  // Lista do funil na tela Hoje: etapa, cliente, produto, valor, dias parado e prazo p/ declinar
+  function renderHomeFunilLista(ativas) {
+    const cont = document.getElementById('homeFunilLista');
+    if (!cont) return;
+    if (!ativas || !ativas.length) { cont.innerHTML = ''; return; }
+    const linhas = ativas.map(c => {
+      const dias = diasNaEtapa(c);
+      const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfo(c.status) || {}).prazoDias || 999;
+      return { c, dias, limite, faltam: limite - dias };
+    }).sort((a, b) => a.faltam - b.faltam);
+
+    cont.innerHTML = `
+      <div class="acao-grupo-head"><i data-lucide="git-branch" class="w-4 h-4 text-indigo-500"></i> Suas negociações no funil</div>
+      <div style="background:white; border-radius:12px; overflow:hidden; border:1px solid #e2e8f0;">
+        ${linhas.map(({ c, dias, limite, faltam }) => {
+          const si = STATUS_COTACAO[c.status] || etapaInfo(c.status) || {};
+          const pr = (PRODUTOS || []).find(p => p.id === c.produtoId) || {};
+          const valor = c.valor || c.valorProposto || 0;
+          const vencido = faltam < 0;
+          const urgente = faltam >= 0 && faltam <= 2;
+          const corPrazo = vencido ? '#ef4444' : urgente ? '#f59e0b' : '#10b981';
+          const txtPrazo = vencido ? `⚠ ${Math.abs(faltam)}d em atraso` : `faltam ${faltam}d p/ declinar`;
+          return `
+            <div onclick="abrirNegociacao('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${vencido ? 'background:#fef2f2;' : ''}">
+              <span style="font-size:11px; font-weight:700; color:${si.cor || '#64748b'}; background:${(si.cor || '#64748b')}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon || ''} ${si.label || c.status}</span>
+              <div style="flex:1; min-width:0;">
+                <div style="font-weight:700; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${c.empresaNome || '—'}</div>
+                <div style="font-size:11px; color:#64748b;">${pr.icon || c.produtoIcon || ''} ${c.produtoNome || ''}${valor ? ' · ' + fmtBR(valor) : ''}</div>
+              </div>
+              <div style="text-align:right; white-space:nowrap;">
+                <div style="font-size:11px; color:#94a3b8;">⏱ parado ${dias}d</div>
+                <div style="font-size:11px; font-weight:700; color:${corPrazo};">${txtPrazo}</div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>`;
+    lucide.createIcons();
+  }
+
   async function renderHome() {
     // Saudação por horário
     const h = new Date().getHours();
@@ -8028,6 +8070,9 @@
         `Você tem ${ativas.length} negociação${ativas.length !== 1 ? 'ões' : ''} em aberto` +
         (esfriando.length > 0 ? ` · ${esfriando.length} esfriando` : '') +
         (reunioesPendentes.length > 0 ? ` · ${reunioesPendentes.length} reunião(ões) aguardando desfecho` : '');
+
+      // ===== Lista do funil (etapa, cliente, valor, dias parado, prazo p/ declinar) =====
+      try { renderHomeFunilLista(ativas); } catch (e) {}
 
       // ===== Streak =====
       await renderStreak();
