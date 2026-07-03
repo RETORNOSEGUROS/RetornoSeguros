@@ -2624,6 +2624,7 @@
       <!-- Tabs de configuração -->
       <div class="cfg-tabs">
         <div class="cfg-tab active" onclick="setCfgTab('ramos', this)"><i data-lucide="layers" class="w-3.5 h-3.5"></i> Ramos &amp; Grupos</div>
+        <div class="cfg-tab" onclick="setCfgTab('funil', this)"><i data-lucide="git-branch" class="w-3.5 h-3.5"></i> Etapas do Funil</div>
         <div class="cfg-tab nav-gamif" onclick="setCfgTab('pontos', this)"><i data-lucide="star" class="w-3.5 h-3.5"></i> Pontos por Etapa</div>
         <div class="cfg-tab" onclick="setCfgTab('multiplicadores', this)"><i data-lucide="x-square" class="w-3.5 h-3.5"></i> Multiplicadores</div>
         <div class="cfg-tab" onclick="setCfgTab('janelas', this)"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i> Janelas de Atuação</div>
@@ -2665,6 +2666,18 @@
       </div>
 
       <!-- SEÇÃO: PONTOS POR ETAPA -->
+      <div class="cfg-section" id="cfg-funil">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+          <div>
+            <div style="font-size:15px; font-weight:800; color:#0f172a;">Etapas do Funil</div>
+            <div style="font-size:12px; color:#64748b;">Ordem, checklist de ações e prazo (auto-cancelamento) de cada etapa. As etapas Fechada e Não fechou são fixas.</div>
+          </div>
+          <button class="btn-secondary perm-admin" onclick="adicionarEtapaFunil()"><i data-lucide="plus" class="w-3.5 h-3.5 inline"></i> Nova etapa</button>
+        </div>
+        <div id="funilEtapasWrap"></div>
+        <button class="btn-primary perm-admin" style="margin-top:14px;" onclick="salvarFunilConfig()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar funil</button>
+      </div>
+
       <div class="cfg-section" id="cfg-pontos">
         <div class="cfg-card">
           <h3><i data-lucide="star" class="w-5 h-5 text-amber-500"></i> Pontos por etapa do funil</h3>
@@ -5970,6 +5983,7 @@
     el.classList.add('active');
     document.querySelectorAll('.cfg-section').forEach(s => s.classList.remove('active'));
     document.getElementById('cfg-' + secao).classList.add('active');
+    if (secao === 'funil') abrirTabFunil();
     lucide.createIcons();
   }
 
@@ -7048,7 +7062,7 @@
         const c = { id: d.id, ...d.data() };
         if (!STATUS_ATIVOS.includes(c.status)) return;
         const dias = diasNaEtapa(c);
-        const limite = prazos[c.status];
+        const limite = prazos[c.status] || (etapaInfo(c.status) || {}).prazoDias || 999;
         if (dias > limite) candidatas.push({ c, dias, limite });
       });
       for (const item of candidatas) {
@@ -8251,7 +8265,7 @@
       const valorCol = cards.reduce((s,c) => s + (c.valor || c.valorProposto || 0), 0);
       const cardsHtml = cards.map(c => {
         const dias = diasNaEtapa(c);
-        const limite = PRAZOS_CACHE ? (PRAZOS_CACHE[c.status] || 999) : 999;
+        const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfo(c.status) || {}).prazoDias || 999;
         const cls = dias >= limite ? 'vencido' : (dias >= limite*0.75 ? 'urgente' : '');
         const corTempo = dias >= limite ? '#ef4444' : dias >= limite*0.75 ? '#f59e0b' : '#94a3b8';
         const valor = c.valor || c.valorProposto;
@@ -8271,6 +8285,11 @@
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
+            ${ativa ? (() => {
+              const et = etapaInfo(c.status);
+              if (!et || !et.checklist || !et.checklist.length) return '';
+              return `<div style="margin-top:6px; padding:6px 8px; background:#f8fafc; border-radius:6px;">${et.checklist.map(it => `<div style="font-size:10px; color:#64748b; line-height:1.35;">☐ ${it}</div>`).join('')}</div>`;
+            })() : ''}
             ${motivoTxt}
             <div class="kanban-card-foot">
               ${ativa
@@ -9477,6 +9496,94 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.abrirEmojiPicker = abrirEmojiPicker;
   window.escolherEmoji = escolherEmoji;
 
+  // ============= CONFIG DO FUNIL (etapas · checklist · prazos) =============
+  let FUNIL_EDIT = [];
+  function abrirTabFunil() {
+    FUNIL_EDIT = ETAPAS_FUNIL.map(e => ({ ...e, checklist: [...(e.checklist || [])] }));
+    renderFunilConfig();
+  }
+  function lerFunilEdits() {
+    const wrap = document.getElementById('funilEtapasWrap');
+    if (!wrap) return;
+    [...wrap.children].forEach((div, i) => {
+      if (!FUNIL_EDIT[i]) return;
+      FUNIL_EDIT[i].icon = (div.querySelector('.fn-icon') || {}).value || '📍';
+      FUNIL_EDIT[i].label = ((div.querySelector('.fn-label') || {}).value || '').trim() || FUNIL_EDIT[i].id;
+      FUNIL_EDIT[i].prazoDias = parseInt((div.querySelector('.fn-prazo') || {}).value) || 7;
+      FUNIL_EDIT[i].ativo = (div.querySelector('.fn-ativo') || {}).checked;
+      FUNIL_EDIT[i].checklist = ((div.querySelector('.fn-checklist') || {}).value || '').split('\n').map(s => s.trim()).filter(Boolean);
+    });
+  }
+  function renderFunilConfig() {
+    const wrap = document.getElementById('funilEtapasWrap');
+    if (!wrap) return;
+    wrap.innerHTML = FUNIL_EDIT.map((e, i) => {
+      const ehPadrao = ETAPAS_FUNIL_DEFAULT.some(d => d.id === e.id);
+      return `
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <input type="text" class="form-control fn-icon" value="${(e.icon || '📍').replace(/"/g, '&quot;')}" style="width:52px; text-align:center; padding:6px;">
+          <input type="text" class="form-control fn-label" value="${(e.label || '').replace(/"/g, '&quot;')}" placeholder="Nome da etapa" style="flex:1;">
+          <button class="btn-mini" onclick="moverEtapaFunil(${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn-mini" onclick="moverEtapaFunil(${i},1)" ${i === FUNIL_EDIT.length - 1 ? 'disabled' : ''}>↓</button>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+          <label style="font-size:12px; color:#475569;">Prazo p/ cancelar: <input type="number" class="form-control fn-prazo" value="${e.prazoDias || 7}" min="1" max="180" style="width:66px; display:inline-block; padding:4px 8px; text-align:center;"> dias</label>
+          <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="fn-ativo" ${e.ativo !== false ? 'checked' : ''} style="width:15px;height:15px;"> ativa no funil</label>
+          ${ehPadrao ? '<span style="margin-left:auto; font-size:11px; color:#94a3b8;">etapa padrão</span>' : `<button class="btn-mini" style="color:#ef4444; margin-left:auto;" onclick="removerEtapaFunil(${i})">Excluir</button>`}
+        </div>
+        <label style="font-size:11px; color:#475569; font-weight:700;">Checklist de ações esperadas para avançar (uma por linha)</label>
+        <textarea class="form-control fn-checklist" rows="3" placeholder="Ex: Cotar em 2 seguradoras&#10;Montar comparativo">${(e.checklist || []).join('\n')}</textarea>
+      </div>`;
+    }).join('');
+    lucide.createIcons();
+  }
+  function adicionarEtapaFunil() {
+    lerFunilEdits();
+    FUNIL_EDIT.push({ id: 'etapa_' + Date.now().toString(36), label: 'Nova etapa', icon: '📍', cor: '#64748b', ordem: FUNIL_EDIT.length, ativo: true, prazoDias: 7, checklist: [] });
+    renderFunilConfig();
+  }
+  function moverEtapaFunil(i, dir) {
+    lerFunilEdits();
+    const j = i + dir;
+    if (j < 0 || j >= FUNIL_EDIT.length) return;
+    const t = FUNIL_EDIT[i]; FUNIL_EDIT[i] = FUNIL_EDIT[j]; FUNIL_EDIT[j] = t;
+    renderFunilConfig();
+  }
+  async function removerEtapaFunil(i) {
+    lerFunilEdits();
+    const e = FUNIL_EDIT[i];
+    if (ETAPAS_FUNIL_DEFAULT.some(d => d.id === e.id)) return alert('Etapa padrão não pode ser excluída — você pode desativá-la desmarcando "ativa no funil".');
+    if (!confirm('Excluir a etapa "' + e.label + '"?')) return;
+    try { await db.collection('mb_funil_etapas').doc(e.id).delete(); } catch (err) {}
+    FUNIL_EDIT.splice(i, 1);
+    renderFunilConfig();
+  }
+  async function salvarFunilConfig() {
+    if (!CTX.isAdmin) return alert('Apenas admin.');
+    lerFunilEdits();
+    if (!FUNIL_EDIT.some(e => e.ativo !== false)) return alert('Deixe pelo menos uma etapa ativa no funil.');
+    try {
+      for (let i = 0; i < FUNIL_EDIT.length; i++) {
+        const e = FUNIL_EDIT[i];
+        await db.collection('mb_funil_etapas').doc(e.id).set({
+          label: e.label, icon: e.icon, cor: e.cor || '#64748b',
+          ordem: i, etapa: i, ativo: e.ativo !== false,
+          prazoDias: e.prazoDias || 7, checklist: e.checklist || []
+        }, { merge: true });
+      }
+      await carregarFunilConfig();
+      flashSalvo('Funil salvo!');
+      try { carregarERenderCotacoes(); } catch (e) {}
+    } catch (e) { alert('Erro ao salvar funil: ' + e.message); }
+  }
+  window.abrirTabFunil = abrirTabFunil;
+  window.renderFunilConfig = renderFunilConfig;
+  window.adicionarEtapaFunil = adicionarEtapaFunil;
+  window.moverEtapaFunil = moverEtapaFunil;
+  window.removerEtapaFunil = removerEtapaFunil;
+  window.salvarFunilConfig = salvarFunilConfig;
+
   // ============= CADASTRO RÁPIDO DE COTAÇÃO (ícone na empresa) =============
   function abrirCotacaoRapida(empresaId) {
     const e = (EMPRESAS || []).find(x => x.id === empresaId);
@@ -10600,6 +10707,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       mostrarMenuSwitcher();
 
       await carregarPermissoesUsuario();
+      try { await carregarFunilConfig(); } catch (e) {}
       aplicarPermissoes();
       renderEmpresas();
       renderRanking();
@@ -11722,19 +11830,53 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ===== FUNIL DE VENDAS (definição central das etapas) =====
   // Ordem do funil ideal: Iniciada → Coletando info → Cotando → Enviada → Reunião → Em análise → Fechada / Declinada
-  const ETAPAS_FUNIL = [
-    { id: 'solicitada',       label: 'Iniciada',       cor: '#f59e0b', icon: '⏳', etapa: 5 },
-    { id: 'informacoes',      label: 'Coletando info', cor: '#eab308', icon: '📋', etapa: 5.5 },
-    { id: 'cotando',          label: 'Cotando',        cor: '#3b82f6', icon: '🔍', etapa: 6 },
-    { id: 'enviada',          label: 'Enviada',        cor: '#0ea5e9', icon: '📧', etapa: 7 },
-    { id: 'reuniao_agendada', label: 'Reunião',        cor: '#8b5cf6', icon: '📅', etapa: 8 },
-    { id: 'analise',          label: 'Em análise',     cor: '#a855f7', icon: '🤔', etapa: 8.5 }
+  const ETAPAS_FUNIL_DEFAULT = [
+    { id: 'solicitada',       label: 'Iniciada',       cor: '#f59e0b', icon: '⏳', etapa: 5,   ativo: true, prazoDias: 7,  checklist: ['Confirmar dados da empresa', 'Entender a necessidade / produto'] },
+    { id: 'informacoes',      label: 'Coletando info', cor: '#eab308', icon: '📋', etapa: 5.5, ativo: true, prazoDias: 5,  checklist: ['Pegar apólice / vencimento atual', 'Levantar coberturas e valores'] },
+    { id: 'cotando',          label: 'Cotando',        cor: '#3b82f6', icon: '🔍', etapa: 6,   ativo: true, prazoDias: 5,  checklist: ['Cotar em pelo menos 2 seguradoras', 'Montar comparativo'] },
+    { id: 'enviada',          label: 'Enviada',        cor: '#0ea5e9', icon: '📧', etapa: 7,   ativo: true, prazoDias: 10, checklist: ['Enviar proposta ao cliente', 'Confirmar recebimento'] },
+    { id: 'reuniao_agendada', label: 'Reunião',        cor: '#8b5cf6', icon: '📅', etapa: 8,   ativo: true, prazoDias: 14, checklist: ['Agendar a reunião', 'Preparar argumentos e objeções'] },
+    { id: 'analise',          label: 'Em análise',     cor: '#a855f7', icon: '🤔', etapa: 8.5, ativo: true, prazoDias: 7,  checklist: ['Fazer follow-up', 'Resolver objeções pendentes'] }
   ];
-  const STATUS_ATIVOS = ETAPAS_FUNIL.map(e => e.id);           // etapas "abertas"
-  const ORDEM_FUNIL   = STATUS_ATIVOS.concat(['fechada']);     // ordem de avanço
+  let ETAPAS_FUNIL = ETAPAS_FUNIL_DEFAULT.map(e => ({ ...e, checklist: [...e.checklist] }));
+  let STATUS_ATIVOS = ETAPAS_FUNIL.map(e => e.id);           // etapas "abertas"
+  let ORDEM_FUNIL   = STATUS_ATIVOS.concat(['fechada']);     // ordem de avanço
   function ehStatusAtivo(s) { return STATUS_ATIVOS.includes(s); }
   function etapaInfo(s) { return ETAPAS_FUNIL.find(e => e.id === s) || null; }
+  // Recomputa tudo que deriva das etapas (após carregar/editar a config do funil)
+  function recomputarFunil() {
+    STATUS_ATIVOS = ETAPAS_FUNIL.map(e => e.id);
+    ORDEM_FUNIL = STATUS_ATIVOS.concat(['fechada']);
+    // STATUS_COTACAO ganha as etapas (inclui customizadas) pra rótulos/cores funcionarem em todo lugar
+    ETAPAS_FUNIL.forEach(e => { STATUS_COTACAO[e.id] = { label: e.label, cor: e.cor, icon: e.icon }; });
+    // Prazos de auto-cancelamento cobrindo TODAS as etapas
+    const pen = (PRAZOS_CACHE && PRAZOS_CACHE.penalidade) || (typeof PRAZOS_DEFAULT !== 'undefined' ? PRAZOS_DEFAULT.penalidade : 20);
+    const novo = { penalidade: pen };
+    ETAPAS_FUNIL.forEach(e => { novo[e.id] = e.prazoDias || 7; });
+    PRAZOS_CACHE = novo;
+  }
   // ação (modal) que cada status-destino dispara
+  async function carregarFunilConfig() {
+    try {
+      const snap = await db.collection('mb_funil_etapas').get();
+      if (snap.empty) {
+        if (CTX.isAdmin) {
+          for (const e of ETAPAS_FUNIL_DEFAULT) { try { await db.collection('mb_funil_etapas').doc(e.id).set(e); } catch (err) {} }
+        }
+        ETAPAS_FUNIL = ETAPAS_FUNIL_DEFAULT.map(e => ({ ...e, checklist: [...e.checklist] }));
+      } else {
+        const arr = [];
+        snap.forEach(d => { const x = d.data(); arr.push({ id: d.id, ...x, checklist: x.checklist || [] }); });
+        const ativas = arr.filter(e => e.ativo !== false).sort((a, b) => ((a.ordem != null ? a.ordem : a.etapa) || 0) - ((b.ordem != null ? b.ordem : b.etapa) || 0));
+        ETAPAS_FUNIL = ativas.length ? ativas : ETAPAS_FUNIL_DEFAULT.map(e => ({ ...e, checklist: [...e.checklist] }));
+      }
+    } catch (e) {
+      ETAPAS_FUNIL = ETAPAS_FUNIL_DEFAULT.map(e => ({ ...e, checklist: [...e.checklist] }));
+    }
+    recomputarFunil();
+  }
+  window.carregarFunilConfig = carregarFunilConfig;
+
   const ACAO_POR_STATUS = { informacoes: 'coletar', cotando: 'cotar', enviada: 'enviar', reuniao_agendada: 'reuniao', analise: 'analise', fechada: 'fechar', perdida: 'perder' };
 
   const STATUS_COTACAO = {
@@ -12268,6 +12410,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div class="cad-modal-body">
           <input type="hidden" id="negId" value="${c.id}">
+          ${(() => {
+            const et = etapaInfo(c.status);
+            if (!et || !et.checklist || !et.checklist.length) return '';
+            return `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; margin-bottom:14px;">
+              <div style="font-size:12px; font-weight:800; color:#92400e; margin-bottom:6px;">📋 Para avançar de "${et.label}":</div>
+              ${et.checklist.map(item => `<div style="font-size:12px; color:#78350f; padding:2px 0;">☐ ${item}</div>`).join('')}
+            </div>`;
+          })()}
 
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
             <div class="form-group">
