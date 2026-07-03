@@ -4529,6 +4529,12 @@
     if (typeof CTX !== 'undefined' && CTX.perfil) return CTX.perfil;
     return perfilAtual;
   }
+  // uid "efetivo" para filtros de visibilidade: respeita o "ver como" (uid simulado)
+  function uidEfetivo() {
+    if (typeof CTX !== 'undefined' && CTX.uidSimulado) return CTX.uidSimulado;
+    return (typeof CTX !== 'undefined' && CTX.uid) || null;
+  }
+  window.uidEfetivo = uidEfetivo;
 
   // Gamificação zerada (a ser redesenhada). Vire true para reativar as telas de pontos/ranking/sprints/streak.
   let GAMIFICACAO_ATIVA = false;
@@ -7209,8 +7215,9 @@
       let cotFiltradas = todasCot.filter(c => {
         if (c.status === 'cancelada') return false;
         if (escopo === 'meu') {
-          const meuTouch = c.solicitadoPorUid === CTX.uid || c.cotadoPorUid === CTX.uid || c.fechadoPorUid === CTX.uid;
-          const empresaMinha = (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === CTX.uid);
+          const _u = uidEfetivo();
+          const meuTouch = c.solicitadoPorUid === _u || c.cotadoPorUid === _u || c.fechadoPorUid === _u;
+          const empresaMinha = (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === _u);
           if (!meuTouch && !empresaMinha) return false;
         }
         if (fProduto && c.produtoId !== fProduto) return false;
@@ -7860,7 +7867,7 @@
       cont.innerHTML = '<div style="color:#94a3b8; padding: 20px; text-align: center; font-size: 13px;">Sem cotações com esse filtro.</div>';
       return;
     }
-    const ehRm = perfilEfetivo() === 'rm' && !CTX.isAdmin;
+    const ehRm = perfilEfetivo() === 'rm';
     cont.innerHTML = `
       <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1.2fr 0.9fr 0.8fr; gap: 10px; padding: 10px 12px; border-bottom: 2px solid #e2e8f0; font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">
         <div>Empresa · Produto</div>
@@ -8033,10 +8040,11 @@
       cotacoes = cotacoes.filter(c => c.status !== 'cancelada');
 
       // Privacidade: RM vê só as dele (empresas que atende ou que participou)
-      if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
+      if (perfilEfetivo() === 'rm') {
+        const uid = uidEfetivo();
         cotacoes = cotacoes.filter(c =>
-          c.solicitadoPorUid === CTX.uid || c.cotadoPorUid === CTX.uid || c.fechadoPorUid === CTX.uid ||
-          (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === CTX.uid));
+          c.solicitadoPorUid === uid || c.cotadoPorUid === uid || c.fechadoPorUid === uid ||
+          (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === uid));
       }
       COTACOES = cotacoes; // disponibiliza pro clique abrir a negociação / avançar etapa
 
@@ -8692,9 +8700,10 @@
       if (tipo === 'reuniao') visitas = [];
 
       // Privacidade
-      if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
-        visitas = visitas.filter(v => v.responsavelUid === CTX.uid || (EMPRESAS_REAIS || []).some(e => e.id === v.empresaId && e.rm === CTX.uid));
-        reunioes = reunioes.filter(r => r.rmUid === CTX.uid || (EMPRESAS_REAIS || []).some(e => e.id === r.empresaId && e.rm === CTX.uid));
+      if (perfilEfetivo() === 'rm') {
+        const uid = uidEfetivo();
+        visitas = visitas.filter(v => v.responsavelUid === uid || (EMPRESAS_REAIS || []).some(e => e.id === v.empresaId && e.rm === uid));
+        reunioes = reunioes.filter(r => r.rmUid === uid || (EMPRESAS_REAIS || []).some(e => e.id === r.empresaId && e.rm === uid));
       }
 
       // Aplicar filtro de período
@@ -9030,7 +9039,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       snap.forEach(d => pesquisas.push({ id: d.id, ...d.data() }));
 
       // Privacidade: RM vê só suas (geradas por ele ou da empresa dele)
-      if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
+      if (perfilEfetivo() === 'rm') {
         pesquisas = pesquisas.filter(p => p.geradoPorUid === CTX.uid || p.rmUid === CTX.uid);
       }
 
@@ -9041,7 +9050,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const snap2 = await q.get();
       pesquisas = [];
       snap2.forEach(d => pesquisas.push({ id: d.id, ...d.data() }));
-      if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
+      if (perfilEfetivo() === 'rm') {
         pesquisas = pesquisas.filter(p => p.geradoPorUid === CTX.uid || p.rmUid === CTX.uid);
       }
       pesquisas.sort((a, b) => {
@@ -10923,7 +10932,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const demoBanner = document.getElementById('demoBanner');
     if (CTX.isAdmin && CTX.perfilSimulado) {
       demoBanner.classList.remove('hidden');
-      document.getElementById('demoComoNome').textContent = papeis[CTX.perfilSimulado] || CTX.perfilSimulado;
+      document.getElementById('demoComoNome').textContent = (CTX.nomeSimulado ? CTX.nomeSimulado + ' — ' : '') + (papeis[CTX.perfilSimulado] || CTX.perfilSimulado);
     } else {
       demoBanner.classList.add('hidden');
     }
@@ -10960,7 +10969,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // Admin/Chefe veem tudo da agência
     if (podeVerTudoDaAgencia()) return true;
     // RM vê só as próprias
-    if (perfilEfetivo() === 'rm') return e.rm === CTX.uid;
+    if (perfilEfetivo() === 'rm') return e.rm === uidEfetivo();
     // Assistente e estagiário veem tudo (sem valores R$)
     return true;
   }
@@ -10996,8 +11005,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     });
 
     // FILTRO DE PRIVACIDADE: RM vê só suas empresas
-    if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
-      empresasBase = empresasBase.filter(e => e.rm === CTX.uid);
+    if (perfilEfetivo() === 'rm') {
+      empresasBase = empresasBase.filter(e => e.rm === uidEfetivo());
     }
 
     // Carregar subcoleções em paralelo
@@ -11071,6 +11080,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       acc[p.uid] = { nome: p.nome, cor: p.cor };
       return acc;
     }, {});
+    try { popularSwitcherEquipe(); } catch (e) {}
   }
 
   // ============= RANKING REAL =============
@@ -11370,19 +11380,38 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ============= TROCAR PERFIL (modo "ver como" do admin) =============
   const trocarPerfilOriginal = window.trocarPerfil;
-  window.trocarPerfil = function(p) {
+  window.trocarPerfil = async function(val) {
     if (!CTX.isAdmin) return; // só admin pode trocar
-    if (p === 'admin') {
-      CTX.perfilSimulado = null;
+    if (val === 'admin' || !val) {
+      CTX.perfilSimulado = null; CTX.uidSimulado = null; CTX.nomeSimulado = null;
     } else {
-      CTX.perfilSimulado = p;
+      // val = uid de um membro real da equipe → simula o perfil E a identidade daquele usuário
+      const m = (EQUIPE_REAL || []).find(u => u.uid === val);
+      if (m) { CTX.perfilSimulado = m.perfil; CTX.uidSimulado = m.uid; CTX.nomeSimulado = m.nome; }
+      else { CTX.perfilSimulado = val; CTX.uidSimulado = null; CTX.nomeSimulado = null; } // fallback: só papel
     }
     perfilAtual = CTX.perfilSimulado || 'admin';
     atualizarUIHeader();
     aplicarPermissoes();
-    renderEmpresas();
-    renderRanking();
+    // Recarrega os dados já no escopo do perfil/usuário simulado
+    try { await carregarEmpresasReais(); } catch (e) {}
+    try { renderEmpresas(); } catch (e) {}
+    try { await carregarERenderCotacoes(); } catch (e) {}
+    try { renderHome(); } catch (e) {}
+    try { renderRanking(); } catch (e) {}
   };
+
+  // Popular o switcher "ver como" com a equipe real (cada opção carrega o uid do usuário)
+  function popularSwitcherEquipe() {
+    const sel = document.getElementById('perfilSwitcher');
+    if (!sel || !CTX.isAdmin) return;
+    const papelLbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', admin: 'Admin' };
+    const membros = (EQUIPE_REAL || []).filter(u => u.ativo !== false && u.uid !== CTX.uid);
+    sel.innerHTML = `<option value="admin">Eu (${CTX.nome || 'Admin'})</option>` +
+      membros.map(m => `<option value="${m.uid}">${m.nome} (${papelLbl[m.perfil] || m.perfil})</option>`).join('');
+    sel.value = CTX.uidSimulado || 'admin';
+  }
+  window.popularSwitcherEquipe = popularSwitcherEquipe;
 
   // ============= ADAPTAÇÕES: renderEquipe usa dados reais =============
   const renderEquipeOriginal = window.renderEquipe;
@@ -12301,12 +12330,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       snap.forEach(d => COTACOES.push({ id: d.id, ...d.data() }));
 
       // FILTRO DE PRIVACIDADE: RM vê só cotações das empresas que ELE atende (ou que participou)
-      if (perfilEfetivo() === 'rm' && !CTX.isAdmin) {
+      if (perfilEfetivo() === 'rm') {
+        const uid = uidEfetivo();
         COTACOES = COTACOES.filter(c =>
-          c.solicitadoPorUid === CTX.uid ||
-          c.cotadoPorUid === CTX.uid ||
-          c.fechadoPorUid === CTX.uid ||
-          (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === CTX.uid) // empresa é dele
+          c.solicitadoPorUid === uid ||
+          c.cotadoPorUid === uid ||
+          c.fechadoPorUid === uid ||
+          (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === uid) // empresa é dele
         );
       }
 
@@ -13297,13 +13327,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       snap.forEach(d => todasFechadas.push({ id: d.id, ...d.data() }));
 
       // FILTRO DE PRIVACIDADE: RM vê só fechamentos dele
-      const ehRm = (perfilEfetivo() === 'rm' && !CTX.isAdmin);
+      const ehRm = (perfilEfetivo() === 'rm');
+      const _uidEf = uidEfetivo();
       const fechadas = ehRm
         ? todasFechadas.filter(c =>
-            c.fechadoPorUid === CTX.uid ||
-            c.cotadoPorUid === CTX.uid ||
-            c.solicitadoPorUid === CTX.uid ||
-            (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === CTX.uid))
+            c.fechadoPorUid === _uidEf ||
+            c.cotadoPorUid === _uidEf ||
+            c.solicitadoPorUid === _uidEf ||
+            (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId && e.rm === _uidEf))
         : todasFechadas;
 
       fechadas.sort((a, b) => {
