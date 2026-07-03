@@ -7991,16 +7991,24 @@
           const urgente = faltam >= 0 && faltam <= 2;
           const corPrazo = vencido ? '#ef4444' : urgente ? '#f59e0b' : '#10b981';
           const txtPrazo = vencido ? `⚠ ${Math.abs(faltam)}d em atraso` : `faltam ${faltam}d p/ declinar`;
+          // Barra: quanto mais perto de expirar, mais cheia e mais quente (verde → amarelo → vermelho)
+          const pct = vencido ? 100 : Math.max(5, Math.min(100, Math.round((dias / limite) * 100)));
+          const corBar = (vencido || faltam <= 2) ? '#ef4444' : (faltam <= 5 ? '#f59e0b' : '#10b981');
           return `
-            <div onclick="abrirNegociacao('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${vencido ? 'background:#fef2f2;' : ''}">
-              <span style="font-size:11px; font-weight:700; color:${si.cor || '#64748b'}; background:${(si.cor || '#64748b')}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon || ''} ${si.label || c.status}</span>
-              <div style="flex:1; min-width:0;">
-                <div style="font-weight:700; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${c.empresaNome || '—'}</div>
-                <div style="font-size:11px; color:#64748b;">${pr.icon || c.produtoIcon || ''} ${c.produtoNome || ''}${valor ? ' · ' + fmtBR(valor) : ''}</div>
+            <div onclick="abrirNegociacao('${c.id}')" style="padding:11px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; ${vencido ? 'background:#fef2f2;' : ''}">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:11px; font-weight:700; color:${si.cor || '#64748b'}; background:${(si.cor || '#64748b')}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon || ''} ${si.label || c.status}</span>
+                <div style="flex:1; min-width:0;">
+                  <div style="font-weight:700; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${c.empresaNome || '—'}</div>
+                  <div style="font-size:11px; color:#64748b;">${pr.icon || c.produtoIcon || ''} ${c.produtoNome || ''}${valor ? ' · ' + fmtBR(valor) : ''}</div>
+                </div>
+                <div style="text-align:right; white-space:nowrap;">
+                  <div style="font-size:11px; color:#94a3b8;">⏱ parado ${dias}d</div>
+                  <div style="font-size:11px; font-weight:700; color:${corPrazo};">${txtPrazo}</div>
+                </div>
               </div>
-              <div style="text-align:right; white-space:nowrap;">
-                <div style="font-size:11px; color:#94a3b8;">⏱ parado ${dias}d</div>
-                <div style="font-size:11px; font-weight:700; color:${corPrazo};">${txtPrazo}</div>
+              <div style="height:6px; background:#eef2f7; border-radius:100px; overflow:hidden; margin-top:8px;">
+                <div style="height:100%; width:${pct}%; background:${corBar}; transition:width .3s;"></div>
               </div>
             </div>`;
         }).join('')}
@@ -8030,6 +8038,7 @@
           c.solicitadoPorUid === CTX.uid || c.cotadoPorUid === CTX.uid || c.fechadoPorUid === CTX.uid ||
           (EMPRESAS_REAIS || []).some(e => e.id === c.empresaId));
       }
+      COTACOES = cotacoes; // disponibiliza pro clique abrir a negociação / avançar etapa
 
       // ===== Pipeline em R$ =====
       const ativas = cotacoes.filter(c => STATUS_ATIVOS.includes(c.status));
@@ -12436,7 +12445,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ---------- Linha do tempo (checklist) de um negócio ----------
   // ============= TELA DA NEGOCIAÇÃO (editar valores + comentários) =============
   async function abrirNegociacao(cotacaoId) {
-    const c = COTACOES.find(x => x.id === cotacaoId);
+    let c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) {
+      try { const d = await db.collection('mb_cotacoes').doc(cotacaoId).get(); if (d.exists) c = { id: d.id, ...d.data() }; } catch (e) {}
+    }
     if (!c) return;
     const si = STATUS_COTACAO[c.status] || {};
     const prod = (PRODUTOS || []).find(p => p.id === c.produtoId) || {};
@@ -12487,6 +12499,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               ${et.checklist.map(item => `<div style="font-size:12px; color:#78350f; padding:2px 0;">☐ ${item}</div>`).join('')}
             </div>`;
           })()}
+
+          ${ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+            <button class="btn-primary" style="flex:1; min-width:130px;" onclick="avancarEtapaNegociacao('${c.id}')">➡ Avançar etapa</button>
+            <button class="btn-secondary" style="background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="acaoNegociacao('${c.id}','fechar')">💎 Fechar</button>
+            <button class="btn-secondary" style="background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Não fechou</button>
+          </div>` : ''}
 
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
             <div class="form-group">
@@ -12565,6 +12583,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.abrirNegociacao = abrirNegociacao;
   window.salvarNegociacao = salvarNegociacao;
   window.adicionarComentario = adicionarComentario;
+
+  // Avançar etapa a partir do card aberto (pra quem não arrasta / mobile)
+  function avancarEtapaNegociacao(id) {
+    const c = COTACOES.find(x => x.id === id);
+    if (!c) return;
+    const idx = STATUS_ATIVOS.indexOf(c.status);
+    const proximo = STATUS_ATIVOS[idx + 1] || 'fechada';
+    const m = document.getElementById('modalNegociacao'); if (m) m.remove();
+    const acao = ACAO_POR_STATUS[proximo];
+    if (acao) abrirAvancarCotacao(id, acao);
+    else voltarEtapaCotacao(c, proximo, 'Avançou de etapa');
+  }
+  function acaoNegociacao(id, acao) {
+    const m = document.getElementById('modalNegociacao'); if (m) m.remove();
+    abrirAvancarCotacao(id, acao);
+  }
+  window.avancarEtapaNegociacao = avancarEtapaNegociacao;
+  window.acaoNegociacao = acaoNegociacao;
 
   function abrirTimelineNegocio(cotacaoId) {
     const c = COTACOES.find(x => x.id === cotacaoId);
