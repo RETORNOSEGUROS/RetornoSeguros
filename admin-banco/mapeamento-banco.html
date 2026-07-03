@@ -8264,7 +8264,7 @@
         const chanceTxt = (ativa && ch)
           ? `<div style="font-size:10px; margin-top:4px; font-weight:700; color:${ch.cor};">${ch.emoji} Chance ${ch.label}</div>` : '';
         return `
-          <div class="kanban-card ${cls}" style="position:relative;" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirRaioX('${c.empresaId}')">
+          <div class="kanban-card ${cls}" style="position:relative;" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirNegociacao('${c.id}')">
             ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação" style="position:absolute; top:5px; right:5px; border:none; background:#fef2f2; color:#ef4444; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">🗑</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
@@ -8338,11 +8338,12 @@
     // Entre etapas ativas
     const idxAtual = STATUS_ATIVOS.indexOf(c.status);
     const idxNovo  = STATUS_ATIVOS.indexOf(novoStatus);
-    if (idxNovo === idxAtual + 1) {
+    if (idxNovo > idxAtual) {
+      // Avançar (uma ou várias etapas de uma vez — ex.: fechou direto numa reunião)
       const acao = ACAO_POR_STATUS[novoStatus];
       if (acao) { abrirAvancarCotacao(c.id, acao); return; }
-    } else if (idxNovo > idxAtual + 1) {
-      alert('Avance uma etapa por vez — cada etapa precisa de informações específicas.');
+      voltarEtapaCotacao(c, novoStatus, 'Avançou de etapa');
+      return;
     } else {
       // Voltar etapa: só admin
       if (isAdmin) { voltarEtapaCotacao(c, novoStatus, 'Voltou de etapa (admin)'); return; }
@@ -12222,6 +12223,130 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.renderCotacoesPorRamo = renderCotacoesPorRamo;
 
   // ---------- Linha do tempo (checklist) de um negócio ----------
+  // ============= TELA DA NEGOCIAÇÃO (editar valores + comentários) =============
+  async function abrirNegociacao(cotacaoId) {
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    const si = STATUS_COTACAO[c.status] || {};
+    const prod = (PRODUTOS || []).find(p => p.id === c.produtoId) || {};
+    const ativa = ehStatusAtivo(c.status);
+    const podeEditar = perfilEfetivo() !== 'estagiario'; // estagiário comenta mas não altera valores
+    const ehFechada = c.status === 'fechada';
+
+    // Carregar comentários
+    let comentarios = [];
+    try {
+      const snap = await db.collection('mb_cotacoes').doc(cotacaoId).collection('comentarios').get();
+      snap.forEach(d => comentarios.push({ id: d.id, ...d.data() }));
+      comentarios.sort((a, b) => (_toDate(a.em) || 0) - (_toDate(b.em) || 0));
+    } catch (e) {}
+
+    const chanceOpts = ['alta', 'media', 'baixa'].map(k => {
+      const ci = CHANCE_INFO[k] || {};
+      return `<option value="${k}" ${c.chanceFechamento === k ? 'selected' : ''}>${ci.emoji || ''} ${ci.label || k}</option>`;
+    }).join('');
+
+    const comentariosHtml = comentarios.length ? comentarios.map(cm => {
+      const perfilTag = cm.autorPerfil ? ` · ${cm.autorPerfil}` : '';
+      return `<div style="padding:9px 0; border-top:1px solid #f1f5f9;">
+        <div style="font-size:11px; color:#94a3b8; margin-bottom:2px;"><strong style="color:#475569;">${cm.autorNome || 'Usuário'}</strong>${perfilTag} · ${fmtDataCurta(cm.em)}</div>
+        <div style="font-size:13px; color:#334155; white-space:pre-wrap;">${(cm.texto || '').replace(/</g, '&lt;')}</div>
+      </div>`;
+    }).join('') : '<div style="font-size:12px; color:#94a3b8; padding:8px 0;">Nenhum comentário ainda. Seja o primeiro.</div>';
+
+    let modal = document.getElementById('modalNegociacao');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'modalNegociacao';
+    modal.className = 'cad-modal open';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="document.getElementById('modalNegociacao').remove()"></div>
+      <div class="cad-modal-panel" style="max-width:560px;">
+        <div class="cad-modal-head">
+          <h2>${prod.icon || ''} ${c.produtoNome || prod.nome || 'Negociação'}</h2>
+          <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span></p>
+        </div>
+        <div class="cad-modal-body">
+          <input type="hidden" id="negId" value="${c.id}">
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">${ehFechada ? 'Valor fechado (R$)' : 'Prêmio proposto (R$)'}</label>
+              <input type="text" class="form-control" id="negValor" value="${(ehFechada ? c.valor : c.valorProposto) ? fmtBR(ehFechada ? c.valor : c.valorProposto) : ''}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)" ${podeEditar ? '' : 'disabled'}>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Chance de fechamento</label>
+              <select class="form-control" id="negChance" ${podeEditar && ativa ? '' : 'disabled'}>${chanceOpts}</select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Observações da negociação</label>
+            <textarea class="form-control" id="negObs" rows="2" ${podeEditar ? '' : 'disabled'}>${(c.observacoes || '').replace(/</g, '&lt;')}</textarea>
+          </div>
+          ${podeEditar ? `<div style="display:flex; gap:8px; margin-bottom:14px;">
+            <button class="btn-primary" style="flex:1;" onclick="salvarNegociacao()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar alterações</button>
+            <button class="btn-secondary" onclick="abrirTimelineNegocio('${c.id}')">🕒 Linha do tempo</button>
+            <button class="btn-secondary" onclick="abrirRaioX('${c.empresaId}')">🏢 Raio-X</button>
+          </div>` : `<div style="display:flex; gap:8px; margin-bottom:14px;">
+            <button class="btn-secondary" style="flex:1;" onclick="abrirTimelineNegocio('${c.id}')">🕒 Linha do tempo</button>
+            <button class="btn-secondary" style="flex:1;" onclick="abrirRaioX('${c.empresaId}')">🏢 Raio-X</button>
+          </div>`}
+
+          <div style="border-top:1px solid #e2e8f0; padding-top:14px;">
+            <div style="font-size:14px; font-weight:800; color:#0f172a; margin-bottom:6px;">💬 Comentários</div>
+            <div id="negComentarios" style="max-height:220px; overflow-y:auto; margin-bottom:10px;">${comentariosHtml}</div>
+            <div style="display:flex; gap:8px;">
+              <input type="text" class="form-control" id="negNovoComentario" placeholder="Escreva um comentário..." onkeydown="if(event.key==='Enter'){adicionarComentario();}">
+              <button class="btn-primary" onclick="adicionarComentario()">Comentar</button>
+            </div>
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          ${CTX.isAdmin ? `<button class="btn-secondary" style="margin-right:auto; color:#ef4444; border-color:#fecaca;" onclick="excluirCotacaoAdmin('${c.id}')">🗑 Excluir</button>` : ''}
+          <button class="btn-secondary" onclick="document.getElementById('modalNegociacao').remove()">Fechar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    lucide.createIcons();
+  }
+  async function salvarNegociacao() {
+    const id = document.getElementById('negId').value;
+    const c = COTACOES.find(x => x.id === id);
+    if (!c) return;
+    if (perfilEfetivo() === 'estagiario') return alert('Estagiário não altera valores (mas pode comentar).');
+    const ehFechada = c.status === 'fechada';
+    const valor = lerMoeda(document.getElementById('negValor'));
+    const chance = (document.getElementById('negChance') || {}).value || null;
+    const obs = (document.getElementById('negObs').value || '').trim() || null;
+    const upd = { observacoes: obs, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() };
+    if (ehFechada) upd.valor = valor || null; else upd.valorProposto = valor || null;
+    if (chance) upd.chanceFechamento = chance;
+    try {
+      await db.collection('mb_cotacoes').doc(id).set(upd, { merge: true });
+      Object.assign(c, upd);
+      flashSalvo('Negociação atualizada!');
+      try { carregarERenderCotacoes(); } catch (e) {}
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+  async function adicionarComentario() {
+    const id = document.getElementById('negId').value;
+    const input = document.getElementById('negNovoComentario');
+    const texto = (input.value || '').trim();
+    if (!texto) return;
+    try {
+      await db.collection('mb_cotacoes').doc(id).collection('comentarios').add({
+        texto,
+        autorUid: CTX.uid, autorNome: CTX.nome, autorPerfil: perfilEfetivo(),
+        em: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      input.value = '';
+      abrirNegociacao(id); // recarrega com o novo comentário
+    } catch (e) { alert('Erro ao comentar: ' + e.message); }
+  }
+  window.abrirNegociacao = abrirNegociacao;
+  window.salvarNegociacao = salvarNegociacao;
+  window.adicionarComentario = adicionarComentario;
+
   function abrirTimelineNegocio(cotacaoId) {
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
