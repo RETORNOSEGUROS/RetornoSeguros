@@ -4895,7 +4895,7 @@
           <button class="btn-visita" style="background: linear-gradient(135deg, #eef2ff, #e0e7ff); border-color: #c7d2fe; color: #4338ca;" onclick="event.stopPropagation(); abrirCotacaoRapida('${e.id}')" title="Cotação rápida no funil">
             ⚡
           </button>
-          <button class="btn-visita" style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-color: #86efac; color: #166534;" onclick="event.stopPropagation(); gerarLinkMapeamentoEmpresa('${e.id}')" title="Gerar link para cliente preencher">
+          <button class="btn-visita" style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-color: #86efac; color: #166534;" onclick="event.stopPropagation(); gerarLinkMapeamentoEmpresa('${e.id}')" title="${e.ultimoLinkMapeamento ? 'Último link: ' + new Date(e.ultimoLinkMapeamento.em).toLocaleDateString('pt-BR') + ' por ' + (e.ultimoLinkMapeamento.porNome || '?') + ' · clique para gerar novo' : 'Gerar link para cliente preencher'}">
             🔗
           </button>
         </div>
@@ -4937,6 +4937,17 @@
           <div class="info-item">
             <div class="info-label">Funcionários</div>
             <div class="info-value">${e.funcionarios > 0 ? e.funcionarios + ' colaboradores' : '<span style="color:#f59e0b;">⚠ Não cadastrado</span>'}</div>
+            ${(() => {
+              const hf = (e.funcionariosHistorico || []).slice().sort((a, b) => new Date(a.em) - new Date(b.em));
+              if (hf.length < 2) return '';
+              const ant = hf[hf.length - 2];
+              if (!ant || !ant.valor) return '';
+              const dif = (e.funcionarios || 0) - ant.valor;
+              if (dif === 0) return '';
+              const pct = Math.round(dif / ant.valor * 100);
+              const dt = new Date(ant.em).toLocaleDateString('pt-BR', { month: '2-digit', year: 'numeric' });
+              return `<div style="font-size:11px; margin-top:2px; font-weight:700; color:${dif > 0 ? '#166534' : '#991b1b'};">${dif > 0 ? '▲' : '▼'} era ${ant.valor} em ${dt} (${dif > 0 ? '+' : ''}${pct}%)</div>`;
+            })()}
           </div>
           <div class="info-item">
             <div class="info-label">RM Responsável</div>
@@ -8839,30 +8850,63 @@
     if (!empresa) return alert('Empresa não encontrada');
 
     try {
-      // Verifica se já existe link válido pra esta empresa (não preenchido)
-      const existSnap = await db.collection('mb_links_empresa')
-        .where('empresaId', '==', empresaId)
-        .where('preenchido', '==', false)
-        .limit(1).get();
+      // 1) Varredura: marca como EXPIRADOS os links pendentes desta empresa que passaram do prazo.
+      //    Guarda expirouEm; quem gerou (geradoPorUid/Nome) já está no doc — útil pra gamificação futura.
+      try {
+        const pendSnap = await db.collection('mb_links_empresa')
+          .where('empresaId', '==', empresaId)
+          .where('preenchido', '==', false).get();
+        const agora = new Date();
+        for (const d of pendSnap.docs) {
+          const l = d.data();
+          const exp = l.expiraEm && l.expiraEm.toDate ? l.expiraEm.toDate() : null;
+          if (!l.expirado && exp && exp < agora) {
+            await d.ref.update({ expirado: true, expirouEm: firebase.firestore.FieldValue.serverTimestamp() });
+          }
+        }
+      } catch (e) { /* varredura é best-effort, não bloqueia a geração */ }
 
-      let token, docId;
-      if (!existSnap.empty) {
-        // Reaproveita link existente
-        const doc = existSnap.docs[0];
-        token = doc.data().token;
-        docId = doc.id;
-      } else {
-        token = gerarTokenAleatorio(24);
-        const docRef = await db.collection('mb_links_empresa').add({
-          token, tipo: 'mapeamento',
-          empresaId, empresaNome: empresa.nome,
-          agenciaId: CTX.agenciaId,
-          geradoPorUid: CTX.uid, geradoPorNome: CTX.nome,
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-          preenchidoEm: null, preenchido: false
-        });
-        docId = docRef.id;
-      }
+      // 2) Congela no link o que o cliente NÃO deve responder de novo:
+      //    - tem (mercado), nosso/fechado, em cotação ou perdido → BLOQUEADO (mostra "já informado", sem expor detalhes)
+      //    - respondeu "não tem" → PRÉ-MARCADO "Não", editável (pode ter contratado depois)
+      //    - sem resposta → LIBERADO (somente estes pontuam)
+      const produtosBloqueados = [], produtosNaoTem = [], produtosPermitidos = [];
+      (PRODUTOS || []).forEach(p => {
+        const cat = statusMatriz(empresa, p.id);
+        if (cat === 'nao_tem') produtosNaoTem.push(p.id);
+        else if (cat === 'nao_mapeado') produtosPermitidos.push(p.id);
+        else produtosBloqueados.push(p.id);
+      });
+
+      // 3) Token SEMPRE novo — atribuição correta de quem gerou (nada de reaproveitar link de outro usuário)
+      const token = gerarTokenAleatorio(24);
+      const expiraEm = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias, todos os perfis
+      const docRef = await db.collection('mb_links_empresa').add({
+        token, tipo: 'mapeamento',
+        empresaId, empresaNome: empresa.nome,
+        agenciaId: CTX.agenciaId,
+        geradoPorUid: CTX.uid, geradoPorNome: CTX.nome,
+        geradoPorPerfil: CTX.perfilSimulado || CTX.perfil || null,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        expiraEm: firebase.firestore.Timestamp.fromDate(expiraEm),
+        expirado: false, expirouEm: null,
+        preenchidoEm: null, preenchido: false,
+        produtosBloqueados, produtosNaoTem, produtosPermitidos
+      });
+      const docId = docRef.id;
+
+      // 4) Carimbo na empresa: "último link gerado por X em Y" (aparece nas listas e no futuro Painel de Mapeamento)
+      await db.collection('empresas').doc(empresaId).set({
+        ultimoLinkMapeamento: {
+          linkId: docId,
+          porUid: CTX.uid, porNome: CTX.nome,
+          em: new Date().toISOString(),
+          expiraEm: expiraEm.toISOString(),
+          status: 'pendente'
+        }
+      }, { merge: true });
+      const empLocal = EMPRESAS.find(x => x.id === empresaId);
+      if (empLocal) empLocal.ultimoLinkMapeamento = { linkId: docId, porUid: CTX.uid, porNome: CTX.nome, em: new Date().toISOString(), status: 'pendente' };
 
       // Monta URL pública (mesmo diretório do app)
       const base = window.location.href.replace(/[^/]*$/, '');
@@ -8886,10 +8930,11 @@
             </div>
             <div style="margin-top: 14px; padding: 12px 14px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; font-size: 12px; color: #166534;">
               💡 <strong>Como funciona:</strong><br>
-              • Cliente clica no link, vê uma tela limpa com o nome da empresa<br>
-              • Marca os produtos que tem e preenche vencimento, seguradora, valor anual<br>
-              • Pode informar/atualizar nº de colaboradores também<br>
-              • Tudo salva automaticamente no sistema · você pontua quem solicitou
+              • Link válido por <strong>7 dias</strong> — expira em <strong>${expiraEm.toLocaleDateString('pt-BR')}</strong><br>
+              • Produtos já mapeados vão <strong>congelados</strong> ("já informado", sem expor seguradora, valores ou vencimentos)<br>
+              • Produtos "não tem" vão pré-marcados — o cliente corrige se tiver contratado<br>
+              • Cliente responde só o que falta e pode atualizar o nº de colaboradores<br>
+              • Você pontua apenas pelos produtos ainda não mapeados
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px;">
               <a href="https://wa.me/?text=${encodeURIComponent('Olá! Para agilizar nossa visita, peço que preencha rapidamente os seguros que sua empresa possui hoje: ' + url)}" target="_blank" class="btn-primary" style="text-align: center; background: #25d366; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 6px;">📱 WhatsApp</a>
@@ -11027,6 +11072,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         rmNome: d.rmNome || d.gerenteNome || '',
         agenciaId: d.agenciaId || '',
         funcionarios: d.numFuncionarios || d.funcionariosQtd || 0,
+        funcionariosHistorico: d.funcionariosHistorico || [],
+        ultimoLinkMapeamento: d.ultimoLinkMapeamento || null,
         socios: d.socios || [],
         ultimaInteracao: 'Sem registro',
         produtos: { frota: 'vazia', empresarial: 'vazia', 'saude-socios': 'vazia',
@@ -11346,11 +11393,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (!resp) continue; // só ignora se não respondeu nada; 'sim' e 'nao' ambos contam
         const prodRef = db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(prodId);
 
-        // Verificar se já pontuou este produto antes
-        let jaPontuou = false;
+        // Verificar se já pontuou este produto antes e se já tem o mapeador original
+        let jaPontuou = false, temPrimeiroMap = false;
         try {
           const snapAnt = await prodRef.get();
-          if (snapAnt.exists) jaPontuou = snapAnt.data().jaPontuouMapeamento === true;
+          if (snapAnt.exists) {
+            jaPontuou = snapAnt.data().jaPontuouMapeamento === true;
+            temPrimeiroMap = !!snapAnt.data().primeiroMapeamento;
+          }
         } catch(err) { /* não existe */ }
 
         // Pegar campos extras do form
@@ -11368,6 +11418,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           ultimoAutorNome: CTX.nome
         };
         if (!jaPontuou) dadosProduto.jaPontuouMapeamento = true;
+        if (!temPrimeiroMap) dadosProduto.primeiroMapeamento = { uid: CTX.uid, nome: CTX.nome, via: 'visita', em: new Date().toISOString() };
 
         if (venc && venc.value && venc.value !== 'Não sei') {
           const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -11574,12 +11625,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (qtd < 0) return alert('Quantidade inválida');
 
     try {
-      await db.collection('empresas').doc(e.id).update({
+      const updFunc = {
         numFuncionarios: qtd,
         funcionariosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         funcionariosAtualizadoPor: CTX.uid,
         funcionariosAtualizadoPorNome: CTX.nome
-      });
+      };
+      // Histórico: só registra quando o valor MUDA (permite ver crescimento da empresa ao longo do tempo)
+      if (qtd !== (e.funcionarios || 0)) {
+        updFunc.funcionariosHistorico = firebase.firestore.FieldValue.arrayUnion({
+          valor: qtd, em: new Date().toISOString(), via: 'sistema', porUid: CTX.uid, porNome: CTX.nome
+        });
+      }
+      await db.collection('empresas').doc(e.id).update(updFunc);
+      if (qtd !== (e.funcionarios || 0)) {
+        e.funcionariosHistorico = (e.funcionariosHistorico || []).concat([{ valor: qtd, em: new Date().toISOString(), via: 'sistema' }]);
+      }
 
       const antesEraZero = (e.funcionarios || 0) === 0;
       if (antesEraZero && qtd > 0) {
@@ -11871,12 +11932,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
 
     try {
-      // Ler estado anterior do produto pra saber se já pontuou
-      let jaPontuou = false;
+      // Ler estado anterior do produto pra saber se já pontuou e se já tem o mapeador original
+      let jaPontuou = false, temPrimeiroMapeamento = false;
       try {
         const snapAnterior = await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(p.id).get();
-        if (snapAnterior.exists) jaPontuou = snapAnterior.data().jaPontuouMapeamento === true;
+        if (snapAnterior.exists) {
+          jaPontuou = snapAnterior.data().jaPontuouMapeamento === true;
+          temPrimeiroMapeamento = !!snapAnterior.data().primeiroMapeamento;
+        }
       } catch(err) { /* não existe ainda */ }
+
+      // primeiroMapeamento é IMUTÁVEL: grava uma vez, nunca sobrescreve.
+      // É ele que permite creditar o mapeador original quando o negócio fechar lá na frente.
+      if (!temPrimeiroMapeamento && statusVisual !== 'vazia') {
+        dados.primeiroMapeamento = { uid: CTX.uid, nome: CTX.nome, via: 'sistema', em: new Date().toISOString() };
+      }
 
       // Se vai pontuar pela primeira vez, marca o flag
       const vaiPontuar = !jaPontuou && statusVisual !== 'vazia';
