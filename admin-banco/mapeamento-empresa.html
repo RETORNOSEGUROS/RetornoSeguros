@@ -70,6 +70,12 @@
     }
     .produto-box.tem-sim { border-color: #86efac; background: #f0fdf4; }
     .produto-box.tem-nao { border-color: #fecaca; background: #fef2f2; opacity: 0.85; }
+    .produto-box.congelado { border-color: #86efac; background: #f0fdf4; opacity: 0.7; }
+    .badge-congelado {
+      background: #dcfce7; color: #166534; border: 1px solid #86efac;
+      font-size: 12px; font-weight: 800; padding: 5px 12px; border-radius: 100px; white-space: nowrap;
+    }
+    .hint-pre { display: block; font-size: 11px; font-weight: 600; color: #b45309; margin-top: 2px; }
     .produto-head {
       padding: 14px 18px; display: flex; align-items: center; gap: 14px;
       cursor: pointer;
@@ -246,6 +252,9 @@
     let LINK_ID = null;     // id do doc do link
     let EMPRESA = null;     // documento da empresa
     let respostas = {};     // estado: { [prodId]: { tem: 'sim'|'nao', vencimentoMes, vencimentoAno, seguradora, valorAnual, observacoes } }
+    let PROD_BLOQUEADOS = new Set(); // já mapeados → congelados no formulário
+    let PROD_PRE_NAO = new Set();    // respondidos "não tem" → pré-marcados, editáveis
+    let PROD_PERMITIDOS = new Set(); // sem resposta → únicos que pontuam
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
@@ -261,6 +270,26 @@
         if (snap.empty) return mostrarErro();
         LINK = snap.docs[0].data();
         LINK_ID = snap.docs[0].id;
+
+        // ── Validações do link ──
+        // Link já respondido: cada link aceita UMA resposta (atribuição limpa de quem gerou)
+        if (LINK.preenchido === true) {
+          return mostrarErro('✅ Este link já foi respondido', 'O mapeamento enviado por este link já foi recebido. Se precisar atualizar alguma informação, peça um novo link ao seu gerente.');
+        }
+        // Expiração (7 dias): valida ao abrir e registra no banco quando vence
+        const expData = LINK.expiraEm && LINK.expiraEm.toDate ? LINK.expiraEm.toDate() : (LINK.expiraEm ? new Date(LINK.expiraEm) : null);
+        if (LINK.expirado === true || (expData && expData < new Date())) {
+          if (!LINK.expirado) {
+            try { await db.collection('mb_links_empresa').doc(LINK_ID).update({ expirado: true, expirouEm: firebase.firestore.FieldValue.serverTimestamp() }); } catch (e) { /* best-effort */ }
+          }
+          return mostrarErro('⏰ Este link expirou', 'Links de mapeamento valem por 7 dias. Peça um novo ao gerente que enviou — leva menos de um minuto.');
+        }
+
+        // Listas de congelamento definidas no momento da geração do link:
+        // BLOQ = já mapeado (aparece "já informado", sem detalhes) · PRENAO = respondeu "não tem" (pré-marcado, editável)
+        PROD_BLOQUEADOS = new Set(LINK.produtosBloqueados || []);
+        PROD_PRE_NAO = new Set(LINK.produtosNaoTem || []);
+        PROD_PERMITIDOS = new Set(LINK.produtosPermitidos || []);
 
         // Buscar empresa
         const empSnap = await db.collection('empresas').doc(LINK.empresaId).get();
@@ -293,18 +322,39 @@
       }
     });
 
-    function mostrarErro() {
+    function mostrarErro(titulo, texto) {
       document.getElementById('loading').style.display = 'none';
-      document.getElementById('erro').style.display = 'block';
+      const erro = document.getElementById('erro');
+      if (titulo) erro.querySelector('h2').textContent = titulo;
+      if (texto) erro.querySelector('p').textContent = texto;
+      erro.style.display = 'block';
     }
 
     function renderProdutos() {
       const wrap = document.getElementById('produtosWrap');
-      wrap.innerHTML = PRODUTOS.map(p => `
+      // Ordena: pendentes primeiro (o que o cliente precisa responder), depois pré-marcados, congelados por último
+      const ordenados = PRODUTOS.slice().sort((a, b) => {
+        const peso = id => PROD_BLOQUEADOS.has(id) ? 2 : (PROD_PRE_NAO.has(id) ? 1 : 0);
+        return peso(a.id) - peso(b.id);
+      });
+      wrap.innerHTML = ordenados.map(p => {
+        // CONGELADO: já mapeado no sistema. Mostra só "já informado" — nenhum detalhe
+        // (seguradora, valor, vencimento) trafega para esta página pública.
+        if (PROD_BLOQUEADOS.has(p.id)) {
+          return `
+        <div class="produto-box congelado" id="box-${p.id}">
+          <div class="produto-head" style="cursor: default;">
+            <span class="produto-icon">${p.icon}</span>
+            <span class="produto-label">${p.nome}</span>
+            <span class="badge-congelado">✓ Já informado</span>
+          </div>
+        </div>`;
+        }
+        return `
         <div class="produto-box" id="box-${p.id}">
           <div class="produto-head">
             <span class="produto-icon">${p.icon}</span>
-            <span class="produto-label">${p.nome}</span>
+            <span class="produto-label">${p.nome}${PROD_PRE_NAO.has(p.id) ? ' <span class="hint-pre">informado antes como "não tem" — mudou? corrija abaixo</span>' : ''}</span>
             <div class="opcoes">
               <button type="button" class="opcao-btn" data-prod="${p.id}" data-resp="sim" onclick="responderProduto('${p.id}','sim')">SIM</button>
               <button type="button" class="opcao-btn" data-prod="${p.id}" data-resp="nao" onclick="responderProduto('${p.id}','nao')">NÃO</button>
@@ -345,7 +395,15 @@
             </div>
           </div>
         </div>
-      `).join('');
+      `;}).join('');
+
+      // Pré-marca "NÃO" nos produtos já respondidos como "não tem" (cliente pode corrigir para SIM)
+      PROD_PRE_NAO.forEach(id => {
+        if (document.getElementById('box-' + id)) {
+          responderProduto(id, 'nao');
+          if (respostas[id]) respostas[id].preMarcadoNao = true;
+        }
+      });
     }
 
     function responderProduto(prodId, resp) {
@@ -359,7 +417,10 @@
         }
       });
       if (!respostas[prodId]) respostas[prodId] = {};
+      const eraPreMarcado = respostas[prodId].preMarcadoNao === true;
       respostas[prodId].tem = resp;
+      // Pré-marcado que virou SIM = informação nova (a empresa contratou nesse meio tempo)
+      if (eraPreMarcado && resp === 'sim') respostas[prodId].preMarcadoNao = false;
 
       // Se "sim", pré-preenche ano com o atual
       if (resp === 'sim') {
@@ -399,6 +460,20 @@
       btn.innerHTML = '<span>⏳</span><span>Enviando...</span>';
 
       try {
+        // Revalida o link NO ENVIO (cliente pode ter deixado a aba aberta por dias)
+        try {
+          const linkCheck = await db.collection('mb_links_empresa').doc(LINK_ID).get();
+          const lc = linkCheck.exists ? linkCheck.data() : null;
+          const expData = lc && lc.expiraEm && lc.expiraEm.toDate ? lc.expiraEm.toDate() : null;
+          if (!lc || lc.preenchido === true) {
+            return mostrarErro('✅ Este link já foi respondido', 'O mapeamento deste link já foi recebido. Peça um novo ao seu gerente se precisar atualizar algo.');
+          }
+          if (lc.expirado === true || (expData && expData < new Date())) {
+            try { await db.collection('mb_links_empresa').doc(LINK_ID).update({ expirado: true, expirouEm: firebase.firestore.FieldValue.serverTimestamp() }); } catch (e) {}
+            return mostrarErro('⏰ Este link expirou', 'Links de mapeamento valem por 7 dias. Peça um novo ao gerente que enviou.');
+          }
+        } catch (e) { /* se a checagem falhar, segue o fluxo normal */ }
+
         // Coletar respostas
         const numFunc = parseInt(document.getElementById('numFuncionarios').value) || null;
 
@@ -406,11 +481,14 @@
         let pendencias = [];
 
         for (const p of PRODUTOS) {
+          if (PROD_BLOQUEADOS.has(p.id)) continue; // congelado: nunca coleta nem valida
           const r = respostas[p.id];
           if (!r || !r.tem) {
             pendencias.push(p.nome);
             continue;
           }
+          // Pré-marcado "não tem" que o cliente NÃO mexeu: não conta como resposta nova
+          if (r.preMarcadoNao === true && r.tem === 'nao' && !r.interesse) continue;
           temPeloMenosUm = true;
           if (r.tem === 'sim') {
             r.vencimentoMes = parseInt(document.getElementById('vencMes-' + p.id).value) || null;
@@ -426,17 +504,22 @@
           }
         }
 
-        if (!temPeloMenosUm) {
+        const funcMudou = numFunc !== null && numFunc > 0 && numFunc !== (EMPRESA.numFuncionarios || 0);
+        if (!temPeloMenosUm && !funcMudou) {
           btn.disabled = false;
           btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
-          return alert('Responda SIM ou NÃO em pelo menos um produto antes de enviar.');
+          return alert('Responda SIM ou NÃO em pelo menos um produto pendente (ou atualize o nº de colaboradores) antes de enviar.');
         }
 
         // Salvar cada produto em empresas/{id}/mb_produtos/{prodId}
         const cotacoesParaCriar = [];
+        const produtosSalvos = [];   // ids efetivamente gravados nesta resposta
+        const produtosPontuar = [];  // só produtos SEM mapeamento prévio geram pontos
         for (const p of PRODUTOS) {
+          if (PROD_BLOQUEADOS.has(p.id)) continue; // congelado: nada a gravar
           const r = respostas[p.id];
           if (!r || !r.tem) continue;
+          if (r.preMarcadoNao === true && r.tem === 'nao' && !r.interesse) continue; // intocado: mantém como está
           const dados = {
             ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
             ultimoAutorUid: LINK.geradoPorUid || 'cliente',
@@ -445,6 +528,22 @@
             linkId: LINK_ID,
             jaPontuouMapeamento: true
           };
+          // primeiroMapeamento é IMUTÁVEL: só nasce aqui para produtos que estavam SEM resposta
+          // quando o link foi gerado (é o que credita o mapeador original no fechamento futuro).
+          const isLinkNovo = Array.isArray(LINK.produtosPermitidos) || Array.isArray(LINK.produtosBloqueados) || Array.isArray(LINK.produtosNaoTem);
+          if (isLinkNovo && PROD_PERMITIDOS.has(p.id)) {
+            dados.primeiroMapeamento = {
+              uid: LINK.geradoPorUid || 'cliente',
+              nome: LINK.geradoPorNome || 'Cliente (link)',
+              via: 'link', linkId: LINK_ID,
+              em: new Date().toISOString()
+            };
+            produtosPontuar.push(p);
+          } else if (!isLinkNovo) {
+            produtosPontuar.push(p); // link antigo (gerado antes desta versão): pontua como antes
+          } else if (PROD_PRE_NAO.has(p.id) && r.tem === 'sim') {
+            produtosPontuar.push(p); // "não tem" corrigido para SIM = informação nova → pontua (sem tocar no primeiroMapeamento)
+          }
           if (r.tem === 'sim') {
             dados.tem = true;
             dados.statusVisual = 'mapeada';
@@ -469,6 +568,7 @@
             }
           }
           await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set(dados, { merge: true });
+          produtosSalvos.push(p.id);
         }
 
         // Criar cotações no funil para "não tem, mas tem interesse em cotar"
@@ -490,13 +590,24 @@
           });
         }
 
-        // Atualizar nº funcionários se informado (SOBRESCREVE conforme você pediu)
+        // Atualizar nº funcionários: em branco mantém o último; se mudou, entra no HISTÓRICO
         const empresaUpdate = {
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
           ultimoAutorViaLink: true
         };
         if (numFunc !== null && numFunc > 0) {
           empresaUpdate.numFuncionarios = numFunc;
+          if (numFunc !== (EMPRESA.numFuncionarios || 0)) {
+            empresaUpdate.funcionariosHistorico = firebase.firestore.FieldValue.arrayUnion({
+              valor: numFunc, em: new Date().toISOString(), via: 'link', linkId: LINK_ID
+            });
+          }
+        }
+        // Carimbo: se este é o último link da empresa, marca como respondido (aparece nas listas do sistema)
+        if (EMPRESA.ultimoLinkMapeamento && EMPRESA.ultimoLinkMapeamento.linkId === LINK_ID) {
+          empresaUpdate.ultimoLinkMapeamento = Object.assign({}, EMPRESA.ultimoLinkMapeamento, {
+            status: 'respondido', respondidoEm: new Date().toISOString()
+          });
         }
         await db.collection('empresas').doc(LINK.empresaId).set(empresaUpdate, { merge: true });
 
@@ -505,15 +616,14 @@
           preenchido: true,
           preenchidoEm: firebase.firestore.FieldValue.serverTimestamp(),
           respostas: respostas,
+          produtosRespondidos: produtosSalvos,
           numFuncionariosInformado: numFunc
         });
 
         // Pontuação: registra ações para o gerador do link
-        // (1 ação de mapeamento_via_link por produto que respondeu = 5 pts cada)
+        // (somente produtos que estavam SEM mapeamento quando o link foi gerado = 5 pts cada)
         if (LINK.geradoPorUid) {
-          for (const p of PRODUTOS) {
-            const r = respostas[p.id];
-            if (!r || !r.tem) continue;
+          for (const p of produtosPontuar) {
             await db.collection('mb_acoes').add({
               tipo: 'mapeamento_via_link',
               empresaId: LINK.empresaId, empresaNome: LINK.empresaNome,
