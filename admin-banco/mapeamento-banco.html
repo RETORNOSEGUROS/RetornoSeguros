@@ -161,6 +161,12 @@
     /* Fila de ação */
     .acao-grupo { margin-bottom: 18px; }
     .acao-grupo-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 14px; font-weight: 800; color: #0f172a; }
+    .acao-grupo-head.colapsavel { cursor: pointer; user-select: none; padding: 4px 2px; border-radius: 8px; transition: background .15s; }
+    .acao-grupo-head.colapsavel:hover { background: #f1f5f9; }
+    .acao-grupo-head .seta-colapso { margin-left: auto; transition: transform .2s; color: #94a3b8; font-size: 13px; }
+    .acao-grupo-head.fechado .seta-colapso { transform: rotate(-90deg); }
+    .grupo-corpo { overflow: hidden; transition: max-height .25s ease, opacity .2s; }
+    .grupo-corpo.fechado { max-height: 0 !important; opacity: 0; margin: 0 !important; }
     .acao-grupo-head .badge-count { background: #ef4444; color: white; border-radius: 100px; padding: 1px 9px; font-size: 12px; }
     .acao-item {
       background: white; border-radius: 12px; padding: 14px 16px; border: 1px solid #e2e8f0;
@@ -2127,8 +2133,8 @@
 
       <!-- Feed de conquistas -->
       <div style="margin-top: 18px;">
-        <div class="acao-grupo-head"><i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i> Acontecendo na agência</div>
-        <div class="feed-conquistas" id="feedConquistas">
+        <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('feedConquistas')"><i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i> Acontecendo na agência<i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
+        <div class="feed-conquistas grupo-corpo fechado" id="feedConquistas" style="max-height:0;">
           <div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>
         </div>
       </div>
@@ -8139,8 +8145,8 @@
     }).sort((a, b) => a.faltam - b.faltam);
 
     cont.innerHTML = `
-      <div class="acao-grupo-head"><i data-lucide="git-branch" class="w-4 h-4 text-indigo-500"></i> Suas negociações no funil</div>
-      <div style="display:flex; flex-direction:column; gap:8px;">
+      <div class="acao-grupo-head colapsavel" onclick="toggleGrupo('grupoFunilCorpo')"><i data-lucide="git-branch" class="w-4 h-4 text-indigo-500"></i> Suas negociações no funil <span class="badge-count" style="background:#6366f1;">${linhas.length}</span><i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
+      <div class="grupo-corpo" id="grupoFunilCorpo" style="display:flex; flex-direction:column; gap:8px;">
         ${linhas.map(({ c, dias, limite, faltam }) => {
           const si = STATUS_COTACAO[c.status] || etapaInfo(c.status) || {};
           const pr = (PRODUTOS || []).find(p => p.id === c.produtoId) || {};
@@ -8172,7 +8178,46 @@
         }).join('')}
       </div>`;
     lucide.createIcons();
+    aplicarColapso('grupoFunilCorpo', false);
   }
+
+  // Colapso das seções da tela Hoje (lembra a preferência durante a sessão)
+  const COLAPSO_ESTADO = {};
+  function toggleGrupo(id) {
+    const corpo = document.getElementById(id);
+    if (!corpo) return;
+    const head = corpo.previousElementSibling;
+    const vaiabrir = corpo.classList.contains('fechado');
+    if (vaiabrir) {
+      corpo.classList.remove('fechado');
+      corpo.style.maxHeight = corpo.scrollHeight + 'px';
+      if (head) head.classList.remove('fechado');
+      COLAPSO_ESTADO[id] = 'aberto';
+      setTimeout(() => { if (!corpo.classList.contains('fechado')) corpo.style.maxHeight = 'none'; }, 260);
+    } else {
+      corpo.style.maxHeight = corpo.scrollHeight + 'px';
+      requestAnimationFrame(() => { corpo.classList.add('fechado'); });
+      if (head) head.classList.add('fechado');
+      COLAPSO_ESTADO[id] = 'fechado';
+    }
+  }
+  window.toggleGrupo = toggleGrupo;
+
+  // Aplica o estado lembrado (chamado após render de cada seção)
+  function aplicarColapso(id, padraoFechado) {
+    const corpo = document.getElementById(id);
+    if (!corpo) return;
+    const head = corpo.previousElementSibling;
+    const estado = COLAPSO_ESTADO[id] || (padraoFechado ? 'fechado' : 'aberto');
+    if (estado === 'fechado') {
+      corpo.classList.add('fechado'); corpo.style.maxHeight = '0';
+      if (head) head.classList.add('fechado');
+    } else {
+      corpo.classList.remove('fechado'); corpo.style.maxHeight = 'none';
+      if (head) head.classList.remove('fechado');
+    }
+  }
+  window.aplicarColapso = aplicarColapso;
 
   async function renderHome() {
     // Saudação por horário
@@ -8385,7 +8430,8 @@
       .slice(0, 5);
     if (oportunidades.length > 0) {
       html += `<div class="acao-grupo">
-        <div class="acao-grupo-head">📅 Oportunidades a cotar (vence em breve) <span class="badge-count">${oportunidades.length}</span></div>`;
+        <div class="acao-grupo-head colapsavel" onclick="toggleGrupo('grupoOportCorpo')">📅 Oportunidades a cotar (vence em breve) <span class="badge-count">${oportunidades.length}</span><i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
+        <div class="grupo-corpo" id="grupoOportCorpo">`;
       html += oportunidades.map(v => {
         const p = PRODUTOS.find(pp => pp.id === v.produto);
         return `<div class="acao-item nova" onclick="abrirRaioX('${v.empresaId}')">
@@ -8397,7 +8443,7 @@
           <div class="acao-item-cta">cotar →</div>
         </div>`;
       }).join('');
-      html += `</div>`;
+      html += `</div></div>`;
     }
 
     if (!html) {
@@ -8414,50 +8460,80 @@
   async function renderFeed() {
     const cont = document.getElementById('feedConquistas');
     try {
+      const ehRM = perfilEfetivo() === 'rm';
+      const meuUid = uidEfetivo();
+      // Conjunto das empresas da carteira do RM (para saber o que é "seu")
+      const minhasEmpresas = ehRM ? new Set((EMPRESAS_REAIS || []).filter(e => e.rm === meuUid).map(e => e.id)) : null;
+
       let q = db.collection('mb_acoes');
       if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
       const snap = await q.get();
       let acoes = [];
       snap.forEach(d => acoes.push(d.data()));
-      // Ordenar por data desc
-      acoes.sort((a,b) => {
+      acoes.sort((a, b) => {
         const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : new Date(0);
         const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : new Date(0);
         return db_ - da;
       });
-      // Filtrar os mais interessantes (fechamentos, mapeamentos, visitas)
-      const interessantes = acoes.filter(a => ['fechamento','mapeou_produto','mapeamento','visita','dados_base','cotacao_solicitada'].includes(a.tipo)).slice(0, 8);
+
+      const tiposFeed = ['fechamento', 'mapeou_produto', 'mapeamento', 'visita', 'dados_base', 'cotacao_solicitada', 'mapeamento_via_link'];
+      let interessantes = acoes.filter(a => tiposFeed.includes(a.tipo)).slice(0, 30);
+
+      // Marca cada ação como "minha" (cliente da carteira do RM) ou "de colega"
+      interessantes = interessantes.map(a => {
+        const minhaEmpresa = minhasEmpresas ? minhasEmpresas.has(a.empresaId) : true;
+        const souEu = a.usuarioId === meuUid;
+        return { a, minhaEmpresa, souEu };
+      }).slice(0, 12);
 
       if (interessantes.length === 0) {
-        cont.innerHTML = '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda. Comece registrando ações!</div>';
+        cont.innerHTML = '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>';
         return;
       }
 
       const cores = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6'];
-      const textos = {
-        fechamento: a => `<strong>${a.usuarioNome}</strong> fechou ${a.produtoNome || 'um negócio'} ${a.valorFechado ? '— ' + fmtBRcompacto(a.valorFechado) : ''} 🎉`,
+
+      // Texto COMPLETO (não-RM, ou RM vendo seu próprio cliente): mostra empresa e valor
+      const textosCheios = {
+        fechamento: a => `<strong>${a.usuarioNome}</strong> fechou ${a.produtoNome || 'um negócio'}${a.valorFechado ? ' — ' + fmtBRcompacto(a.valorFechado) : ''}${a.empresaNome ? ' na ' + a.empresaNome : ''} 🎉`,
         mapeou_produto: a => `<strong>${a.usuarioNome}</strong> mapeou ${a.produtoNome || 'um produto'} na ${a.empresaNome}`,
         mapeamento: a => `<strong>${a.usuarioNome}</strong> mapeou produto na ${a.empresaNome}`,
+        mapeamento_via_link: a => `<strong>${a.empresaNome || 'Uma empresa'}</strong> respondeu o mapeamento de ${a.produtoNome || 'um produto'} pelo link 🔗`,
         visita: a => `<strong>${a.usuarioNome}</strong> registrou visita na ${a.empresaNome} 📍`,
         dados_base: a => `<strong>${a.usuarioNome}</strong> cadastrou dados da ${a.empresaNome}`,
         cotacao_solicitada: a => `<strong>${a.usuarioNome}</strong> pediu cotação de ${a.produtoNome || 'produto'} 🎯`
       };
 
-      cont.innerHTML = interessantes.map(a => {
+      // Texto ANÔNIMO (RM vendo movimento de colega): só o fato + produto, SEM empresa nem valor
+      const textosAnon = {
+        fechamento: a => `Um colega fechou ${a.produtoNome || 'um negócio'} na agência 🎉`,
+        mapeou_produto: a => `Um colega mapeou ${a.produtoNome || 'um produto'}`,
+        mapeamento: a => `Um colega mapeou um produto`,
+        mapeamento_via_link: a => `Um cliente da agência respondeu um mapeamento pelo link 🔗`,
+        visita: a => `Um colega registrou uma visita 📍`,
+        dados_base: a => `Um colega cadastrou uma empresa`,
+        cotacao_solicitada: a => `Um colega pediu uma cotação 🎯`
+      };
+
+      cont.innerHTML = interessantes.map(({ a, minhaEmpresa, souEu }) => {
         const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
         const tempo = dt ? tempoRelativo(dt) : '';
-        const ini = (a.usuarioNome || '?').split(' ').map(n=>n[0]).slice(0,2).join('').toUpperCase();
-        const cor = cores[(a.usuarioNome||'').length % cores.length];
-        const txt = (textos[a.tipo] || (x => x.tipo))(a);
+        // Regra do RM: só vê detalhes (empresa/valor) se for cliente da SUA carteira; senão, anônimo
+        const mostrarCheio = !minhasEmpresas || minhaEmpresa;
+        const mapa = mostrarCheio ? textosCheios : textosAnon;
+        const txt = (mapa[a.tipo] || (x => 'Atividade na agência'))(a);
+        const ini = mostrarCheio ? (a.usuarioNome || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() : '•';
+        const cor = mostrarCheio ? cores[(a.usuarioNome || '').length % cores.length] : '#94a3b8';
+        const destaqueMeu = (minhasEmpresas && minhaEmpresa) ? 'background:#f0f9ff; border-radius:8px;' : '';
         return `
-          <div class="feed-item">
-            <div class="feed-avatar" style="background: linear-gradient(135deg, ${cor}, #7c3aed);">${ini}</div>
+          <div class="feed-item" style="${destaqueMeu}">
+            <div class="feed-avatar" style="background: linear-gradient(135deg, ${cor}, ${mostrarCheio ? '#7c3aed' : '#64748b'});">${ini}</div>
             <div class="feed-texto">${txt}</div>
             <div class="feed-tempo">${tempo}</div>
-          </div>
-        `;
+          </div>`;
       }).join('');
-    } catch(e) {
+      aplicarColapso('feedConquistas', true);
+    } catch (e) {
       console.warn('Erro feed:', e);
     }
   }
