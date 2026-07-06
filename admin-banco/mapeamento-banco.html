@@ -2099,6 +2099,9 @@
         <p id="homeResumo">Carregando seu dia...</p>
       </div>
 
+      <!-- Notificações (visitas solicitadas/confirmadas) -->
+      <div id="homeNotificacoes" style="margin-top:12px;"></div>
+
       <!-- Pipeline em R$ -->
       <div class="home-pipeline-bar">
         <div class="pipe-card" style="border-left: 4px solid #f59e0b;">
@@ -3913,12 +3916,13 @@
             </div>
           </div>
           <div class="form-group" id="agSlotEmpresaWrap">
-            <label class="form-label">Empresa / cliente</label>
-            <input type="text" class="form-control" id="agSlotEmpresa" placeholder="Nome do cliente">
+            <label class="form-label">Cliente <span style="font-weight:600; color:#94a3b8;">(comece a digitar — só os da sua carteira)</span></label>
+            <input type="text" class="form-control" id="agSlotEmpresa" placeholder="Nome do cliente" list="agSlotEmpresaLista" autocomplete="off" oninput="agSlotAutoCidade()">
+            <datalist id="agSlotEmpresaLista"></datalist>
           </div>
           <div class="form-group" id="agSlotCidadeWrap">
             <label class="form-label">Cidade do cliente</label>
-            <input type="text" class="form-control" id="agSlotCidade" placeholder="Ex: Carazinho/RS">
+            <input type="text" class="form-control" id="agSlotCidade" placeholder="Preenche sozinho ao escolher o cliente">
           </div>
           <div class="form-group">
             <label class="form-label">Observações</label>
@@ -8215,12 +8219,89 @@
   }
   window.aplicarColapso = aplicarColapso;
 
+  // ============= NOTIFICAÇÕES (aparecem no topo do "Hoje") =============
+  // para: 'corretor' (qualquer admin/chefe) OU paraUid: uid específico
+  async function criarNotificacao(n) {
+    try {
+      await db.collection('mb_notificacoes').add({
+        para: n.para || null,
+        paraUid: n.paraUid || null,
+        tipo: n.tipo, titulo: n.titulo, corpo: n.corpo || '',
+        agendaId: n.agendaId || null, empresaId: n.empresaId || null,
+        deUid: n.deUid || CTX.uid, deNome: n.deNome || CTX.nome,
+        agenciaId: CTX.agenciaId || null,
+        lida: false,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (e) { console.warn('notificação:', e.message); }
+  }
+
+  async function marcarNotifLida(id) {
+    try { await db.collection('mb_notificacoes').doc(id).set({ lida: true }, { merge: true }); } catch (e) {}
+    const el = document.getElementById('notif-' + id);
+    if (el) el.style.display = 'none';
+    const wrap = document.getElementById('homeNotificacoes');
+    if (wrap && !wrap.querySelector('.notif-card:not([style*="display: none"])')) wrap.innerHTML = '';
+  }
+  window.marcarNotifLida = marcarNotifLida;
+
+  async function renderNotificacoes() {
+    const wrap = document.getElementById('homeNotificacoes');
+    if (!wrap) return;
+    try {
+      const meuUid = uidEfetivo();
+      const souCorretor = CTX.isAdmin || perfilEfetivo() === 'chefe';
+      let q = db.collection('mb_notificacoes');
+      if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await q.get();
+      const minhas = [];
+      snap.forEach(d => {
+        const n = { id: d.id, ...d.data() };
+        if (n.lida) return;
+        // Destinada a mim? (uid específico) OU (para o corretor e eu sou corretor/chefe)
+        if (n.paraUid === meuUid || (n.para === 'corretor' && souCorretor)) minhas.push(n);
+      });
+      minhas.sort((a, b) => {
+        const ta = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
+        const tb = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate().getTime() : 0;
+        return tb - ta;
+      });
+      if (!minhas.length) { wrap.innerHTML = ''; return; }
+
+      const corPorTipo = { visita_solicitada: '#f59e0b', visita_confirmada: '#10b981' };
+      const iconPorTipo = { visita_solicitada: '📩', visita_confirmada: '✅' };
+      wrap.innerHTML = minhas.slice(0, 6).map(n => {
+        const cor = corPorTipo[n.tipo] || '#6366f1';
+        const ic = iconPorTipo[n.tipo] || '🔔';
+        const ehSolic = n.tipo === 'visita_solicitada';
+        return `
+          <div class="notif-card" id="notif-${n.id}" style="display:flex; align-items:center; gap:12px; background:${cor}0f; border:1px solid ${cor}44; border-left:3px solid ${cor}; border-radius:10px; padding:11px 14px; margin-bottom:8px;">
+            <div style="font-size:20px;">${ic}</div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:800; color:#0f172a;">${n.titulo}</div>
+              <div style="font-size:12px; color:#64748b;">${n.corpo}</div>
+            </div>
+            ${ehSolic ? `<button class="btn-mini" style="background:${cor}; color:#fff; border:none; font-weight:700;" onclick="irAprovarVisita('${n.agendaId}','${n.id}')">Ver e confirmar</button>` : ''}
+            <button title="Marcar como vista" onclick="marcarNotifLida('${n.id}')" style="border:none; background:none; cursor:pointer; color:#94a3b8; font-size:16px;">✕</button>
+          </div>`;
+      }).join('');
+    } catch (e) { console.warn('renderNotificacoes:', e.message); wrap.innerHTML = ''; }
+  }
+
+  function irAprovarVisita(agendaId, notifId) {
+    if (notifId) marcarNotifLida(notifId);
+    navTo('agenda');
+    setTimeout(() => { try { setAgendaTab('corretor', document.querySelector('#screen-agenda .rank-tab:nth-child(2)')); } catch (e) {} }, 150);
+  }
+  window.irAprovarVisita = irAprovarVisita;
+
   async function renderHome() {
     // Saudação por horário
     const h = new Date().getHours();
     const saud = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
     const primeiroNome = (CTX.nome || '').split(' ')[0] || '';
     document.getElementById('homeSaudacao').textContent = `${saud}, ${primeiroNome}!`;
+    try { renderNotificacoes(); } catch (e) {}
 
     try {
       // Carregar cotações da agência
@@ -11237,9 +11318,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     await carregarAgenda();
 
     const meu = (a) => a.solicitanteUid === CTX.uid;
+    const vejoTudoAg = CTX.isAdmin || perfilEfetivo() === 'chefe';
     let pendentes = AGENDA.filter(a => a.status === 'pendente');
-    if (!CTX.isAdmin) pendentes = pendentes.filter(meu);
-    const confirmados = AGENDA.filter(a => a.status === 'aprovado').sort((a, b) => _agendaDataOrd(a) - _agendaDataOrd(b));
+    if (!vejoTudoAg) pendentes = pendentes.filter(meu);
+    let confirmados = AGENDA.filter(a => a.status === 'aprovado').sort((a, b) => _agendaDataOrd(a) - _agendaDataOrd(b));
+    // RM só vê, entre os confirmados, os SEUS + os informes/bloqueios do corretor (onde ele estará)
+    if (!vejoTudoAg) confirmados = confirmados.filter(a => meu(a) || a.tipo === 'bloqueio' || a.tipoInforme === 'corretor');
 
     const cardSlot = (a, acoes) => {
       const si = STATUS_AGENDA[a.status] || {};
@@ -11280,12 +11364,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   function abrirAgendaSlot(tipo) {
-    // RM só pode solicitar visita; admin pode visita ou bloqueio
+    // RM só pode solicitar visita; admin pode visita ou bloqueio/informe
     if (tipo === 'bloqueio' && !CTX.isAdmin) tipo = 'visita';
     document.getElementById('agSlotTipo').value = tipo;
     const isBloq = tipo === 'bloqueio';
-    document.getElementById('agSlotTitulo').textContent = isBloq ? '🔒 Bloquear horário' : (CTX.isAdmin ? '📅 Nova visita' : '📅 Solicitar visita ao corretor');
-    document.getElementById('agSlotSub').textContent = isBloq ? 'Trava um horário na sua agenda' : (CTX.isAdmin ? 'Adiciona direto na agenda' : 'O corretor vai aprovar ou recusar');
+    document.getElementById('agSlotTitulo').textContent = isBloq ? '🔒 Informar que estarei na agência' : (CTX.isAdmin ? '📅 Nova visita' : '📅 Solicitar visita ao corretor');
+    document.getElementById('agSlotSub').textContent = isBloq ? 'Os RMs verão que você estará ocupado nesse horário' : (CTX.isAdmin ? 'Adiciona direto na agenda' : 'O corretor vai aprovar ou recusar');
     document.getElementById('agSlotEmpresaWrap').style.display = isBloq ? 'none' : '';
     document.getElementById('agSlotCidadeWrap').style.display = isBloq ? 'none' : '';
     document.getElementById('agSlotBtnLabel').textContent = (CTX.isAdmin || isBloq) ? 'Adicionar' : 'Solicitar';
@@ -11294,29 +11378,68 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('agSlotEmpresa').value = '';
     document.getElementById('agSlotCidade').value = '';
     document.getElementById('agSlotObs').value = '';
+    // Datalist de clientes: RM vê só a própria carteira; corretor/chefe vê todos
+    const dl = document.getElementById('agSlotEmpresaLista');
+    if (dl) {
+      const meuUid = uidEfetivo();
+      const vejoTudo = CTX.isAdmin || perfilEfetivo() === 'chefe';
+      const lista = (EMPRESAS || []).filter(e => vejoTudo || e.rm === meuUid);
+      dl.innerHTML = lista.map(e => `<option value="${(e.nome || '').replace(/"/g, '&quot;')}">`).join('');
+    }
     document.getElementById('modalAgendaSlot').classList.add('open');
   }
+
+  // Auto-preenche a cidade quando o cliente escolhido bate com uma empresa
+  function agSlotAutoCidade() {
+    const nome = (document.getElementById('agSlotEmpresa').value || '').trim().toLowerCase();
+    const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome);
+    if (e && e.cidade) document.getElementById('agSlotCidade').value = e.cidade;
+  }
+  window.agSlotAutoCidade = agSlotAutoCidade;
 
   async function salvarAgendaSlot() {
     const tipo = document.getElementById('agSlotTipo').value;
     const data = document.getElementById('agSlotData').value.trim();
     if (!data || !/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return alert('Informe a data (dd/mm/aaaa).');
     const hora = document.getElementById('agSlotHora').value || '';
+    const nomeCliente = tipo === 'bloqueio' ? null : (document.getElementById('agSlotEmpresa').value.trim() || null);
+    // Vincula a empresa (pra creditar visita/histórico depois)
+    let empresaId = null, cidade = null;
+    if (nomeCliente) {
+      const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nomeCliente.toLowerCase());
+      if (e) { empresaId = e.id; cidade = e.cidade || null; }
+    }
+    if (tipo !== 'bloqueio' && !empresaId) return alert('Escolha um cliente válido da sua carteira (use a lista que aparece ao digitar).');
+    cidade = document.getElementById('agSlotCidade').value.trim() || cidade;
+
     // admin agenda direto = aprovado; RM solicitando = pendente
     const status = (CTX.isAdmin) ? 'aprovado' : 'pendente';
     const dados = {
       tipo, data, hora,
-      empresaNome: tipo === 'bloqueio' ? null : (document.getElementById('agSlotEmpresa').value.trim() || null),
-      cidade: tipo === 'bloqueio' ? null : (document.getElementById('agSlotCidade').value.trim() || null),
+      empresaId,
+      empresaNome: nomeCliente,
+      cidade: tipo === 'bloqueio' ? null : cidade,
       obs: document.getElementById('agSlotObs').value.trim() || null,
       status,
+      // Bloqueio feito pelo corretor/admin é um "informe" visível aos RMs
+      tipoInforme: (tipo === 'bloqueio' && CTX.isAdmin) ? 'corretor' : null,
       solicitanteUid: CTX.uid, solicitanteNome: CTX.nome,
       agenciaId: CTX.agenciaId || null,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     };
     if (status === 'aprovado') dados.aprovadoEm = firebase.firestore.FieldValue.serverTimestamp();
     try {
-      await db.collection('mb_agenda').add(dados);
+      const ref = await db.collection('mb_agenda').add(dados);
+      // RM solicitou → notifica o corretor no "Hoje" dele
+      if (status === 'pendente') {
+        await criarNotificacao({
+          para: 'corretor',
+          tipo: 'visita_solicitada',
+          titulo: `${CTX.nome} solicitou sua visita`,
+          corpo: `${nomeCliente || 'cliente'}${cidade ? ' · ' + cidade : ''} · ${data}${hora ? ' às ' + hora : ''} — confirme para agendar`,
+          agendaId: ref.id, empresaId, deUid: CTX.uid, deNome: CTX.nome
+        });
+      }
       document.getElementById('modalAgendaSlot').classList.remove('open');
       flashSalvo(status === 'aprovado' ? 'Adicionado à agenda!' : 'Solicitação enviada ao corretor!');
       renderAgendaCorretor();
@@ -11324,7 +11447,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   async function aprovarAgenda(id) {
-    if (!CTX.isAdmin) return;
+    if (!CTX.isAdmin && perfilEfetivo() !== 'chefe') return;
     const a = AGENDA.find(x => x.id === id);
     const novaHora = prompt('Confirmar/ajustar horário (HH:MM) para travar a agenda:', a ? (a.hora || '') : '');
     if (novaHora === null) return; // cancelou
@@ -11333,7 +11456,33 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         status: 'aprovado', hora: novaHora || (a ? a.hora : '') || '',
         aprovadoEm: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
-      flashSalvo('Visita aprovada — agenda travada.');
+
+      // Cria a visita no CALENDÁRIO, creditada ao RM que solicitou
+      if (a && a.tipo !== 'bloqueio' && a.empresaId) {
+        const [d, m, y] = (a.data || '').split('/');
+        const dataISO = (y && m && d) ? `${y}-${m}-${d}` : null;
+        if (dataISO) {
+          await db.collection('mb_agendamentos').add({
+            empresaId: a.empresaId, empresaNome: a.empresaNome,
+            data: dataISO, hora: novaHora || a.hora || '', duracao: 60,
+            tipo: 'presencial', cidade: a.cidade || null,
+            gerenteUid: a.solicitanteUid, gerenteNome: a.solicitanteNome, // dono = RM
+            agenciaId: CTX.agenciaId || null,
+            status: 'agendada', origemSolicitacao: id,
+            token: gerarTokenAleatorio(20),
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        // Notifica o RM no "Hoje" dele
+        await criarNotificacao({
+          paraUid: a.solicitanteUid,
+          tipo: 'visita_confirmada',
+          titulo: `${CTX.nome} confirmou sua visita`,
+          corpo: `${a.empresaNome || 'cliente'}${a.cidade ? ' · ' + a.cidade : ''} · ${a.data}${(novaHora || a.hora) ? ' às ' + (novaHora || a.hora) : ''} — já está na sua agenda ✅`,
+          agendaId: id, empresaId: a.empresaId
+        });
+      }
+      flashSalvo('Visita aprovada — agenda travada e RM avisado.');
       renderAgendaCorretor();
     } catch (e) { alert('Erro: ' + e.message); }
   }
@@ -11369,6 +11518,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const snap = await db.collection('mb_agendamentos').get();
       AGENDAMENTOS = [];
       snap.forEach(d => AGENDAMENTOS.push({ id: d.id, ...d.data() }));
+      // Auto-conclusão: visita agendada cujo horário já passou +1h vira "realizada" (vai pro histórico)
+      const agora = Date.now();
+      for (const a of AGENDAMENTOS) {
+        if (a.status !== 'agendada') continue;
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.data || '');
+        if (!m) continue;
+        const [hh, mm] = (a.hora || '00:00').split(':').map(Number);
+        const inicio = new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]), hh || 0, mm || 0).getTime();
+        if (agora >= inicio + 60 * 60 * 1000) {
+          a.status = 'realizada'; a.autoConcluida = true;
+          db.collection('mb_agendamentos').doc(a.id).set({ status: 'realizada', autoConcluida: true, concluidaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
+        }
+      }
     } catch (e) { console.warn('Agendamentos:', e.message); AGENDAMENTOS = []; }
   }
 
@@ -11385,10 +11547,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     cont.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:20px;">Carregando...</div>';
     await carregarAgendamentos();
 
+    // ===== PRIVACIDADE =====
+    // RM vê apenas as PRÓPRIAS visitas + os informes/bloqueios do corretor (quando ele estará na agência).
+    // Corretor/admin e chefe veem tudo. Ninguém vê a agenda de OUTRO RM.
+    const meuUid = uidEfetivo();
+    const vejoTudo = CTX.isAdmin || perfilEfetivo() === 'chefe';
+    let visiveis = AGENDAMENTOS;
+    if (!vejoTudo) {
+      visiveis = AGENDAMENTOS.filter(a => a.gerenteUid === meuUid || a.tipoInforme === 'corretor');
+    }
+
     const ano = AGENDA_MES.getFullYear(), mes = AGENDA_MES.getMonth();
     // agrupa por dia do mês
     const porDia = {};
-    AGENDAMENTOS.forEach(a => {
+    visiveis.forEach(a => {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.data || '');
       if (!m) return;
       if (parseInt(m[1]) !== ano || parseInt(m[2]) - 1 !== mes) return;
@@ -13627,6 +13799,25 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             ${c.valorOperacao ? `<span style="font-size:11px; color:#4338ca; font-weight:700;">OP: ${fmtBRcompacto(c.valorOperacao)}</span>` : ''}
           </div>
           ${fechamentoBox}
+          ${(() => {
+            const vh = Array.isArray(c.valorHistorico) ? c.valorHistorico.slice() : [];
+            if (vh.length < 1) return '';
+            vh.sort((a, b) => new Date(a.em) - new Date(b.em));
+            const primeiro = vh[0].valor, ultimo = vh[vh.length - 1].valor;
+            const dif = ultimo - primeiro;
+            const setinha = vh.map((h, i) => {
+              const cor = i === vh.length - 1 ? '#0f172a' : '#94a3b8';
+              return `<span style="white-space:nowrap;"><span style="font-size:10px; color:#94a3b8;">${h.etapaLabel}</span> <strong style="color:${cor};">${fmtBR(h.valor, 0)}</strong></span>`;
+            }).join('<span style="color:#cbd5e1; margin:0 6px;">→</span>');
+            const resumo = vh.length > 1 && dif !== 0
+              ? `<div style="font-size:11px; margin-top:6px; color:${dif > 0 ? '#166534' : '#b45309'}; font-weight:700;">${dif > 0 ? '▲' : '▼'} ${dif > 0 ? 'subiu' : 'caiu'} ${fmtBR(Math.abs(dif), 0)} da primeira à última etapa</div>`
+              : '';
+            return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; margin-bottom:12px;">
+              <div style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">💰 Evolução do valor</div>
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:2px; font-size:13px;">${setinha}</div>
+              ${resumo}
+            </div>`;
+          })()}
           <div style="font-size:12px; font-weight:700; color:#475569; margin-bottom:10px; text-transform:uppercase; letter-spacing:.04em;">Linha do tempo</div>
           ${passosHtml}
         </div>
@@ -13795,6 +13986,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('modalAvancarSub').textContent = `${c.empresaNome} · ${c.produtoNome}`;
 
     let body = '';
+    // Campo de valor da negociação — presente em TODA etapa ativa, sempre editável.
+    // Guarda a evolução: começou em X, apresentou Y, fechou/perdeu em Z.
+    const valorAtual = c.valorNegociacao || c.valorProposto || c.valor || 0;
+    const campoValorNeg = (label) => `
+      <div class="form-group">
+        <label class="form-label">💰 ${label || 'Valor da negociação (R$)'}</label>
+        <input type="text" class="form-control" id="acaoValorNeg" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)" value="${valorAtual > 0 ? fmtBR(valorAtual, 2) : ''}">
+        <div style="font-size:11px; color:#64748b; margin-top:4px;">Pode ajustar a cada etapa — assim você acompanha como o valor evoluiu na negociação.</div>
+      </div>`;
+
     if (acao === 'coletar') {
       body = `
         <div style="background:#fefce8; border:1px solid #fde68a; border-radius:8px; padding:10px 12px; font-size:12px; color:#854d0e; margin-bottom:12px;">
@@ -13804,6 +14005,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label class="form-label">O que foi coletado / o que ainda falta</label>
           <textarea class="form-control" id="acaoObs" rows="3" placeholder="Ex: recebi apólice atual e relação de vidas; falta sinistralidade dos últimos 12 meses..."></textarea>
         </div>
+        ${campoValorNeg('Valor estimado da negociação (R$)')}
         <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('coleta_informacoes')} pts</strong>.</div>
       `;
     } else if (acao === 'analise') {
@@ -13815,6 +14017,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label class="form-label">Observações da análise</label>
           <textarea class="form-control" id="acaoObs" rows="3" placeholder="Ex: cliente vai decidir até sexta; comparando com a renovação atual..."></textarea>
         </div>
+        ${campoValorNeg('Valor apresentado ao cliente (R$)')}
         <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('analise_cliente')} pts</strong>.</div>
       `;
     } else if (acao === 'cotar') {
@@ -13823,6 +14026,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label class="form-label">Observações sobre a cotação</label>
           <textarea class="form-control" id="acaoObs" rows="3" placeholder="Detalhes técnicos, valor estimado..."></textarea>
         </div>
+        ${campoValorNeg('Valor cotado / estimado (R$)')}
         <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+${getPonto('cotacao_realizada')} pts</strong>.</div>
       `;
     } else if (acao === 'enviar') {
@@ -13850,6 +14054,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label class="form-label">Observações</label>
           <textarea class="form-control" id="acaoObs" rows="2" placeholder="Reunião presencial na agência..."></textarea>
         </div>
+        ${campoValorNeg('Valor em negociação (R$)')}
         <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:8px; padding:10px 12px; font-size:12px; color:#166534;">💰 Esta ação vale <strong>+12 pts</strong>.</div>
       `;
     } else if (acao === 'fechar') {
@@ -13986,6 +14191,23 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     const obs = (document.getElementById('acaoObs') || {}).value || '';
     const chance = (document.getElementById('acaoChance') || {}).value || c.chanceFechamento || null;
+
+    // Valor da negociação — capturado em QUALQUER etapa (campo unificado + histórico da evolução)
+    let valorNegEtapa = 0;
+    const elNeg = document.getElementById('acaoValorNeg');
+    const elProp = document.getElementById('acaoValorProposto');
+    const elFech = document.getElementById('acaoValor');
+    if (elNeg) valorNegEtapa = lerMoeda(elNeg);
+    else if (elProp) valorNegEtapa = lerMoeda(elProp);
+    else if (elFech) valorNegEtapa = lerMoeda(elFech);
+    if (valorNegEtapa > 0) {
+      update.valorNegociacao = valorNegEtapa;
+      const labelEtapa = (STATUS_COTACAO[({ coletar: 'informacoes', cotar: 'cotando', enviar: 'enviada', reuniao: 'reuniao_agendada', analise: 'analise', fechar: 'fechada', perder: 'perdida' })[acao]] || {}).label || acao;
+      update.valorHistorico = firebase.firestore.FieldValue.arrayUnion({
+        etapa: acao, etapaLabel: labelEtapa, valor: valorNegEtapa,
+        em: new Date().toISOString(), porNome: CTX.nome
+      });
+    }
 
     // Status visual do produto da empresa (sincronia)
     let novoStatusVisual = null;
