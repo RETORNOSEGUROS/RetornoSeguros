@@ -6845,7 +6845,8 @@
     // Popular tabela de metas por GERENTE × GRUPO (produção)
     const wrapGer = document.getElementById('metasPorGerenteWrap');
     if (wrapGer) {
-      const gerentes = (EQUIPE_REAL || []).filter(p => p.ativo && (p.perfil === 'rm' || p.perfil === 'chefe'));
+      // Só RMs entram na visão por gerente — o chefe é o consolidado de toda a equipe
+      const gerentes = (EQUIPE_REAL || []).filter(p => p.ativo && p.perfil === 'rm');
       if (gerentes.length === 0 || (GRUPOS || []).length === 0) {
         wrapGer.innerHTML = '<div style="font-size:12px;color:#94a3b8;">Nenhum gerente/grupo carregado ainda.</div>';
       } else {
@@ -6927,6 +6928,7 @@
       const ramoGrupo = {}; (RAMOS_ALL || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
       const realGrupo = {};       // produção realizada por grupo
       const realGerGrupo = {};    // produção realizada por gerente × grupo
+      const contadasProd = new Set(); // empresa|produto já contados pelo funil (evita duplicar com 'já é nosso')
       cotSnap.forEach(d => {
         const c = d.data();
         if (c.status === 'cancelada') return;
@@ -6939,9 +6941,28 @@
           realGrupo[gid] = (realGrupo[gid] || 0) + (c.valor || 0);
           const uid = c.solicitadoPorUid || c.registradoPorUid;
           if (uid) { realGerGrupo[uid] = realGerGrupo[uid] || {}; realGerGrupo[uid][gid] = (realGerGrupo[uid][gid] || 0) + (c.valor || 0); }
+          contadasProd.add((c.empresaId || '') + '|' + (c.produtoId || ''));
         } else if (c.status === 'perdida' || c.status === 'sem_aceitacao') {
           cotReal++;
         }
+      });
+
+      // "Já é nosso": produtos mapeados como cliente (apólices que já eram suas, fora do funil).
+      // Credita ao RM dono da empresa e soma na produção — senão o realizado fica menor que a realidade.
+      (EMPRESAS_REAIS || []).forEach(e => {
+        const dados = e.produtosDados || {};
+        Object.keys(dados).forEach(rid => {
+          const pd = dados[rid] || {};
+          if (getMapeamento(pd) !== 'cliente') return;
+          if (contadasProd.has((e.id || '') + '|' + rid)) return; // já contado pelo funil
+          const premio = pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0;
+          if (premio <= 0) return;
+          const gid = ramoGrupo[rid] || 'outros';
+          prodReal += premio;
+          realGrupo[gid] = (realGrupo[gid] || 0) + premio;
+          const uid = e.rm;
+          if (uid) { realGerGrupo[uid] = realGerGrupo[uid] || {}; realGerGrupo[uid][gid] = (realGerGrupo[uid][gid] || 0) + premio; }
+        });
       });
 
       document.getElementById('metaAnoProdValor').textContent = fmtBRcompacto(meta.producao || 0);
@@ -7008,10 +7029,13 @@
           if (metaP === 0 && realP === 0) return '';
           return barra(g.nome, g.cor, metaP, realP);
         }).filter(Boolean).join('');
-        // Resumo por gerente (só os que têm meta definida)
-        const gerComMeta = Object.keys(meta.porGerente || {});
+        // Resumo por gerente (só os que têm meta definida) — EXCLUI o chefe (ele é a soma da equipe)
+        const gerComMeta = Object.keys(meta.porGerente || {}).filter(uid => {
+          const p = (EQUIPE_REAL || []).find(x => x.uid === uid);
+          return !p || p.perfil !== 'chefe';
+        });
         if (gerComMeta.length) {
-          h += '<div style="margin-top:18px; padding-top:14px; border-top:1px dashed #e2e8f0; font-size:12px; font-weight:700; color:#475569;">👤 Por gerente</div>';
+          h += '<div style="margin-top:18px; padding-top:14px; border-top:1px dashed #e2e8f0; font-size:12px; font-weight:700; color:#475569;">👤 Por gerente <small style="font-weight:500; color:#94a3b8;">· o gerente-chefe não entra aqui (é o consolidado da equipe)</small></div>';
           gerComMeta.forEach(uid => {
             const pessoa = (EQUIPE_REAL || []).find(p => p.uid === uid);
             const nome = pessoa ? pessoa.nome : 'Gerente';
