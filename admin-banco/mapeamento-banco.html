@@ -3571,6 +3571,7 @@
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Onde atacar</div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <select class="form-control" id="mapFiltroAno" style="width: auto; min-width: 110px;" onchange="renderPainelMapeamento()"></select>
           <select class="form-control" id="mapFiltroProduto" style="width: auto; min-width: 170px;" onchange="renderPainelMapeamento()"></select>
           <select class="form-control" id="mapFiltroRM" style="width: auto; min-width: 150px; display: none;" onchange="renderPainelMapeamento()"></select>
           <input class="form-control" id="mapBusca" placeholder="Buscar empresa..." style="width: 170px;" oninput="renderPainelMapeamento()">
@@ -3802,6 +3803,7 @@
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Relatório Inteligente</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
+          <select class="filter-select" id="matrizFiltroAno" onchange="renderMatrizSeguros()"></select>
           <select class="filter-select" id="matrizFiltroGrupo" onchange="renderMatrizSeguros()"><option value="">Todos os grupos</option></select>
           <input type="text" class="form-control" id="matrizBusca" placeholder="Buscar empresa..." oninput="renderMatrizSeguros()" style="padding:7px 12px; font-size:13px; width:200px;">
         </div>
@@ -4783,18 +4785,51 @@
     if (dados.vencimentoMes && dados.vencimentoAno) return 'mercado';
     return 'nao_mapeado';
   }
-  function getFunilProduto(empresaId, produtoId) {
+  // Ano da decisão de uma cotação (fechada/perdida)
+  function anoDecisaoCot(c) {
+    const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+    return dt ? dt.getFullYear() : null;
+  }
+  // Existe alguma cotação DECIDIDA (fechada/perdida) para empresa×produto? (prova que a empresa tem o produto)
+  function jaTeveDecisao(empresaId, produtoId) {
+    return (typeof COTACOES !== 'undefined' ? COTACOES : []).some(c =>
+      c.empresaId === empresaId && c.produtoId === produtoId && ['fechada', 'perdida', 'sem_aceitacao'].includes(c.status));
+  }
+
+  // getFunilProduto(empresaId, produtoId[, ano])
+  //   ano ausente/null  → ESTADO ATUAL (comportamento original, intocado)
+  //   ano informado     → SAFRA daquele ano:
+  //     · cotando: pertence ao presente — só aparece vendo o ano corrente
+  //     · fechado: "nosso" persiste (fechamos até aquele ano e não perdemos depois)
+  //     · perdido: só no ano em que perdemos; ano seguinte zera (cai pro mapeamento = mercado)
+  function getFunilProduto(empresaId, produtoId, ano) {
     const cots = (typeof COTACOES !== 'undefined' ? COTACOES : []).filter(c => c.empresaId === empresaId && c.produtoId === produtoId);
     if (!cots.length) return null;
-    if (cots.some(c => ehStatusAtivo(c.status))) return 'cotando';
+    ano = ano || null;
+    const anoAtual = new Date().getFullYear();
+
+    if (cots.some(c => ehStatusAtivo(c.status)) && (!ano || ano === anoAtual)) return 'cotando';
+
+    const decididas = cots.filter(c => ['fechada', 'perdida', 'sem_aceitacao'].includes(c.status));
+    if (!decididas.length) return null;
+
+    if (!ano) {
+      let ult = null, ultT = -1;
+      decididas.forEach(c => {
+        const t = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().getTime() : 0;
+        if (t >= ultT) { ultT = t; ult = c; }
+      });
+      return ult ? (ult.status === 'fechada' ? 'fechado' : 'perdido') : null;
+    }
+
+    // Com filtro de ano: considera só decisões até o fim daquele ano
+    const ateAno = decididas.filter(c => { const a = anoDecisaoCot(c); return a !== null && a <= ano; });
+    if (!ateAno.length) return null;
     let ult = null, ultT = -1;
-    cots.forEach(c => {
-      if (!['fechada', 'perdida', 'sem_aceitacao'].includes(c.status)) return;
-      const t = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().getTime() : 0;
-      if (t >= ultT) { ultT = t; ult = c; }
-    });
-    if (ult) return ult.status === 'fechada' ? 'fechado' : 'perdido';
-    return null;
+    ateAno.forEach(c => { const t = c.dataDecisao.toDate().getTime(); if (t >= ultT) { ultT = t; ult = c; } });
+    if (!ult) return null;
+    if (ult.status === 'fechada') return 'fechado';        // nosso persiste ao longo dos anos
+    return anoDecisaoCot(ult) === ano ? 'perdido' : null;  // perda no ano = perdido; perda antiga = zera
   }
   // mapeamento -> statusVisual equivalente (retrocompatibilidade)
   function mapeamentoParaStatus(m) {
@@ -9951,14 +9986,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     nao_mapeado: { label: 'Não mapeado',               cor: '#e2e8f0' }
   };
   // Categoria da matriz combinando as duas dimensões (funil ativo tem prioridade visual)
-  function statusMatriz(e, ramoId) {
-    const funil = getFunilProduto(e.id, ramoId);
+  function statusMatriz(e, ramoId, ano) {
+    const funil = getFunilProduto(e.id, ramoId, ano);
     if (funil === 'cotando') return 'cotacao';
     const mapa = getMapeamento((e.produtosDados || {})[ramoId]);
-    if (funil === 'fechado' || mapa === 'cliente') return 'nosso';
+    // Ao filtrar por ano passado, "nosso" só vale se o funil confirmar fechamento até aquele ano
+    // (evita marcar como nosso um negócio fechado depois do ano consultado).
+    if (funil === 'fechado' || (!ano && mapa === 'cliente')) return 'nosso';
     if (funil === 'perdido') return 'perdido';
     if (mapa === 'mercado') return 'mercado';
     if (mapa === 'nao_tem') return 'nao_tem';
+    // Safra passada: se já cotamos/perdemos esse produto algum dia, a empresa TEM ele → mercado
+    if (ano && jaTeveDecisao(e.id, ramoId)) return 'mercado';
     return 'nao_mapeado';
   }
 
@@ -9969,6 +10008,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       selG.innerHTML = '<option value="">Todos os grupos</option>' + (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
     }
     const grupoFiltro = selG ? selG.value : '';
+    // Filtro de ano (safra) — usa a mesma regra do Painel de Mapeamento
+    const selAnoM = document.getElementById('matrizFiltroAno');
+    if (selAnoM && selAnoM.options.length === 0) {
+      const ay = new Date().getFullYear(); const arr = [];
+      for (let a = ay; a >= ay - 4; a--) arr.push(a);
+      selAnoM.innerHTML = `<option value="">Ano atual</option>` + arr.map(a => `<option value="${a}">${a}</option>`).join('');
+    }
+    const anoMatriz = (selAnoM && selAnoM.value) ? parseInt(selAnoM.value) : null;
     const busca = (document.getElementById('matrizBusca') || {}).value || '';
     const buscaLower = busca.trim().toLowerCase();
 
@@ -10002,7 +10049,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       </tr>`;
       const linhas = empresas.map(e => {
         const cels = ramos.map(r => {
-          const cat = statusMatriz(e, r.id);
+          const cat = statusMatriz(e, r.id, anoMatriz);
           contagem[cat] = (contagem[cat] || 0) + 1;
           const c = MATRIZ_CATS[cat];
           return `<td style="text-align:center; padding:6px;"><span title="${r.nome}: ${c.label}" style="width:16px; height:16px; border-radius:50%; background:${c.cor}; ${cat === 'nao_mapeado' ? 'box-shadow:inset 0 0 0 1px #cbd5e1;' : ''} display:inline-block; ${cat === 'nao_tem' ? 'position:relative;' : ''}"></span></td>`;
@@ -10027,14 +10074,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Regra central: célula MAPEADA = qualquer status ≠ 'nao_mapeado' (saber que NÃO tem também é informação).
   // % da empresa = produtos respondidos ÷ produtos ativos · % do produto = empresas que responderam ÷ empresas.
 
-  function calcularCoberturaEmpresa(e) {
+  function calcularCoberturaEmpresa(e, ano) {
     const ramos = PRODUTOS || [];
     let resp = 0;
-    ramos.forEach(r => { if (statusMatriz(e, r.id) !== 'nao_mapeado') resp++; });
+    ramos.forEach(r => { if (statusMatriz(e, r.id, ano) !== 'nao_mapeado') resp++; });
     return { respondidos: resp, total: ramos.length, pct: ramos.length ? Math.round(resp / ramos.length * 100) : 0 };
   }
 
-  function calcularStatsCarteira(lista) {
+  function calcularStatsCarteira(lista, ano) {
     const ramos = PRODUTOS || [];
     const stats = {
       empresas: lista.length,
@@ -10046,7 +10093,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     lista.forEach(e => {
       let resp = 0;
       ramos.forEach(r => {
-        const cat = statusMatriz(e, r.id);
+        const cat = statusMatriz(e, r.id, ano);
         const pp = stats.porProduto[r.id];
         if (cat === 'nao_mapeado') { pp.branco++; return; }
         resp++; pp.resp++;
@@ -10064,7 +10111,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   function montarSliceRM(nome, lista) {
-    const s = calcularStatsCarteira(lista);
+    const s = calcularStatsCarteira(lista); // ranking sempre no estado atual (comparação justa entre colegas)
     const porProduto = {};
     Object.entries(s.porProduto).forEach(([rid, pp]) => {
       porProduto[rid] = s.empresas ? Math.round(pp.resp / s.empresas * 100) : 0;
@@ -10101,6 +10148,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const perfil = perfilEfetivo();
     const ramos = PRODUTOS || [];
 
+    // Filtro de ano (safra). "Atual" = estado de hoje; anos anteriores aplicam a regra de safra.
+    const anoAtual = new Date().getFullYear();
+    const selAno = document.getElementById('mapFiltroAno');
+    if (selAno && selAno.options.length === 0) {
+      const anos = [];
+      for (let a = anoAtual; a >= anoAtual - 4; a--) anos.push(a);
+      selAno.innerHTML = `<option value="">Atual</option>` + anos.map(a => `<option value="${a}">${a}</option>`).join('');
+    }
+    const anoFiltro = (selAno && selAno.value) ? parseInt(selAno.value) : null;
+    const subEl = document.getElementById('mapPainelSub');
+    if (subEl) subEl.textContent = anoFiltro
+      ? `Safra ${anoFiltro} · como estava a carteira naquele ano`
+      : 'Cobertura da carteira · quanto já sabemos de cada cliente';
+
     // Filtro de produto (popular uma vez)
     const selP = document.getElementById('mapFiltroProduto');
     if (selP && selP.options.length === 0) {
@@ -10128,7 +10189,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (rmFiltro) lista = lista.filter(e => e.rm === rmFiltro);
     if (busca) lista = lista.filter(e => (e.nome || '').toLowerCase().includes(busca));
 
-    const stats = calcularStatsCarteira(lista);
+    const stats = calcularStatsCarteira(lista, anoFiltro);
 
     // ── KPIs ──
     const kpis = document.getElementById('mapKpis');
@@ -10179,8 +10240,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const listaEl = document.getElementById('mapListaEmpresas');
     if (listaEl) {
       const comCobertura = lista.map(e => {
-        const cob = calcularCoberturaEmpresa(e);
-        const catProd = prodFiltro ? statusMatriz(e, prodFiltro) : null;
+        const cob = calcularCoberturaEmpresa(e, anoFiltro);
+        const catProd = prodFiltro ? statusMatriz(e, prodFiltro, anoFiltro) : null;
         return { e, cob, catProd };
       });
       if (prodFiltro) comCobertura.sort((a, b) => (a.catProd === 'nao_mapeado' ? 0 : 1) - (b.catProd === 'nao_mapeado' ? 0 : 1) || (a.e.nome || '').localeCompare(b.e.nome || ''));
