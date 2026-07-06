@@ -2133,7 +2133,7 @@
 
       <!-- Feed de conquistas -->
       <div style="margin-top: 18px;">
-        <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('feedConquistas')"><i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i> Acontecendo na agência<i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
+        <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('feedConquistas')"><i data-lucide="sparkles" class="w-4 h-4 text-amber-500"></i> Radar da agência <span style="font-weight:600; color:#94a3b8; font-size:12px;">· oportunidades e movimento</span><i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
         <div class="feed-conquistas grupo-corpo fechado" id="feedConquistas" style="max-height:0;">
           <div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>
         </div>
@@ -8457,14 +8457,183 @@
     cont.innerHTML = html;
   }
 
+  // ============= FEED DE AÇÃO (sugestões que empurram pra ação) =============
+  // Frases de incentivo gentis (tom leve, sem competição pesada por enquanto)
+  const FRASES_MOTIVA = [
+    'às vezes o grande resultado vem de quem a gente menos espera 😄',
+    'cada conversa plantada hoje é uma safra amanhã 🌱',
+    'quem não é visto, não é lembrado — bora aparecer! 👋',
+    'pequenos passos toda semana viram grandes números no ano 📈',
+    'a melhor cotação é a que a gente lembra de pedir 😉',
+    'oportunidade boa é a que ninguém olhou ainda 👀'
+  ];
+  function fraseMotiva(seed) { return FRASES_MOTIVA[Math.abs(seed) % FRASES_MOTIVA.length]; }
+
+  // Projeção de meta: quanto falta e quanto por mês até dezembro pra fechar o ano
+  async function projecaoMetaRM() {
+    try {
+      const ano = new Date().getFullYear();
+      const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get();
+      if (!snap.exists) return null;
+      const metaDoc = snap.data();
+      const meuUid = uidEfetivo();
+      const porGer = metaDoc.porGerente || {};
+      const metaGrupo = {};
+      Object.entries(porGer[meuUid] || {}).forEach(([g, v]) => metaGrupo[g] = (metaGrupo[g] || 0) + (v || 0));
+      const metaTotal = Object.values(metaGrupo).reduce((s, v) => s + v, 0);
+      if (metaTotal <= 0) return null;
+
+      // Realizado do RM no ano (fechadas das empresas da carteira)
+      const minhas = new Set((EMPRESAS_REAIS || []).filter(e => e.rm === meuUid).map(e => e.id));
+      let realizado = 0;
+      (COTACOES || []).forEach(c => {
+        if (c.status !== 'fechada' || !minhas.has(c.empresaId)) return;
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (dt && dt.getFullYear() === ano) realizado += (c.valor || 0);
+      });
+      const falta = Math.max(0, metaTotal - realizado);
+      const mesAtual = new Date().getMonth(); // 0..11
+      const mesesRestantes = 12 - mesAtual;   // inclui o mês corrente
+      const pct = Math.round(realizado / metaTotal * 100);
+      return { metaTotal, realizado, falta, pct, mesesRestantes, porMes: falta / mesesRestantes, ano };
+    } catch (e) { return null; }
+  }
+
+  // Gera até `limite` sugestões de ação priorizadas, a partir dos dados do RM
+  function gerarSugestoesRM(limite) {
+    const sugestoes = [];
+    const meuUid = uidEfetivo();
+    const minhas = (EMPRESAS_REAIS || []).filter(e => e.rm === meuUid);
+    const ramos = (PRODUTOS || []);
+
+    // Helper: empresas onde o produto NÃO é nosso nem está cotando (oportunidade de cotar)
+    const semNegocio = (e, rid) => { const s = statusMatriz(e, rid); return s !== 'nosso' && s !== 'cotacao'; };
+
+    // 1) DENTAL: empresas com funcionários mapeados e sem dental cotado/nosso
+    const temDental = ramos.some(r => r.id === 'dental');
+    if (temDental) {
+      const alvos = minhas.filter(e => (e.funcionarios || 0) > 0 && semNegocio(e, 'dental'));
+      if (alvos.length >= 1) {
+        const escolhidos = alvos.slice().sort((a, b) => (b.funcionarios || 0) - (a.funcionarios || 0)).slice(0, 2);
+        sugestoes.push({
+          prio: 2, icon: '🦷', cor: '#06b6d4',
+          titulo: `${alvos.length} empresa${alvos.length > 1 ? 's' : ''} com quadro de funcionários e sem dental`,
+          corpo: `Que tal começar por <strong>${escolhidos.map(e => e.nome).join('</strong> e <strong>')}</strong>? ${fraseMotiva(alvos.length)}`,
+          cta: 'ver empresa →', acao: escolhidos[0] ? `abrirRaioX('${escolhidos[0].id}')` : `navTo('empresas')`
+        });
+      }
+    }
+
+    // 2) SÓCIOS mapeados sem cotação de saúde/vida de sócios
+    ['saude-socios', 'vida-socios'].forEach(rid => {
+      const r = ramos.find(x => x.id === rid); if (!r) return;
+      const alvos = minhas.filter(e => statusMatriz(e, rid) === 'mercado'); // tem no mercado, não é nosso
+      if (alvos.length >= 2) {
+        sugestoes.push({
+          prio: 3, icon: r.icon, cor: r.cor,
+          titulo: `${alvos.length} empresas com ${r.nome.toLowerCase()} mapeado e ainda não cotamos`,
+          corpo: `Sócio satisfeito abre portas pro resto da empresa. Vale uma tentativa. ${fraseMotiva(alvos.length + rid.length)}`,
+          cta: 'ver lista →', acao: `navTo('mapeamento')`
+        });
+      }
+    });
+
+    // 3) SÓCIOS não mapeados (oportunidade escondida)
+    const semSocios = minhas.filter(e => statusMatriz(e, 'saude-socios') === 'nao_mapeado' && statusMatriz(e, 'vida-socios') === 'nao_mapeado');
+    if (semSocios.length >= 3) {
+      sugestoes.push({
+        prio: 4, icon: '🔍', cor: '#8b5cf6',
+        titulo: `${semSocios.length} empresas suas sem os sócios mapeados`,
+        corpo: `Pode ter oportunidade boa aí escondida. Um link de mapeamento resolve rápido. ${fraseMotiva(semSocios.length)}`,
+        cta: 'ver empresas →', acao: `navTo('empresas')`
+      });
+    }
+
+    // 4) VENCIMENTOS: produto que vence em breve e não é nosso (usa VENCIMENTOS já calculado)
+    try {
+      const proximos = (VENCIMENTOS || [])
+        .map(v => ({ ...v, dias: diasAteVencimento(v) }))
+        .filter(v => v.dias >= 0 && v.dias <= 60 && !v.conosco && minhas.some(e => e.id === v.empresaId));
+      if (proximos.length >= 1) {
+        const v0 = proximos.sort((a, b) => a.dias - b.dias)[0];
+        const p = ramos.find(x => x.id === v0.produto);
+        sugestoes.push({
+          prio: 1, icon: '⏰', cor: '#f59e0b',
+          titulo: `${v0.empresa}: ${p ? p.nome : v0.produto} vence em ${v0.dias} dias`,
+          corpo: `Janela aberta pra disputar essa conta. Melhor pedir a cotação agora. ${fraseMotiva(v0.dias)}`,
+          cta: 'cotar →', acao: `abrirRaioX('${v0.empresaId}')`
+        });
+      }
+    } catch (e) {}
+
+    return sugestoes.sort((a, b) => a.prio - b.prio).slice(0, limite);
+  }
+
   async function renderFeed() {
     const cont = document.getElementById('feedConquistas');
+    const ehRM = perfilEfetivo() === 'rm';
     try {
-      const ehRM = perfilEfetivo() === 'rm';
-      const meuUid = uidEfetivo();
-      // Conjunto das empresas da carteira do RM (para saber o que é "seu")
-      const minhasEmpresas = ehRM ? new Set((EMPRESAS_REAIS || []).filter(e => e.rm === meuUid).map(e => e.id)) : null;
+      if (ehRM) {
+        const cards = [];
 
+        // (a) Projeção de meta anual — "nosso objetivo", dividido pelos meses que faltam
+        const proj = await projecaoMetaRM();
+        if (proj) {
+          if (proj.falta <= 0) {
+            cards.push(`<div class="feed-item" style="background:#f0fdf4; border-radius:8px;">
+              <div class="feed-avatar" style="background:linear-gradient(135deg,#10b981,#059669);">🎉</div>
+              <div class="feed-texto">Você já bateu o objetivo do ano de ${fmtBRcompacto(proj.metaTotal)}! Cada novo negócio agora é bônus. 🚀</div>
+            </div>`);
+          } else {
+            cards.push(`<div class="feed-item" style="background:#eff6ff; border-radius:8px;">
+              <div class="feed-avatar" style="background:linear-gradient(135deg,#6366f1,#4f46e5);">🎯</div>
+              <div class="feed-texto">Nosso objetivo de ${proj.ano} é ${fmtBRcompacto(proj.metaTotal)} — você está com <strong>${proj.pct}%</strong>. Faltam ${fmtBRcompacto(proj.falta)}: dá cerca de <strong>${fmtBRcompacto(proj.porMes)}/mês</strong> nos ${proj.mesesRestantes} meses restantes pra fechar o ano no azul. 💪</div>
+            </div>`);
+          }
+        }
+
+        // (b) Pulso agregado da agência (anônimo) — noção de movimento sem expor ninguém
+        try {
+          let qCot = db.collection('mb_cotacoes');
+          if (CTX.agenciaId) qCot = qCot.where('agenciaId', '==', CTX.agenciaId);
+          const snap = await qCot.get();
+          let iniciais = 0, quentes = 0, fechadasSemana = 0;
+          const seteDias = Date.now() - 7 * 864e5;
+          snap.forEach(d => {
+            const c = d.data();
+            if (STATUS_ATIVOS.includes(c.status)) iniciais++;
+            if (['enviada', 'reuniao_agendada'].includes(c.status)) quentes++;
+            if (c.status === 'fechada') {
+              const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().getTime() : 0;
+              if (dt >= seteDias) fechadasSemana++;
+            }
+          });
+          if (iniciais + quentes + fechadasSemana > 0) {
+            cards.push(`<div class="feed-item">
+              <div class="feed-avatar" style="background:linear-gradient(135deg,#0ea5e9,#6366f1);">📊</div>
+              <div class="feed-texto">A agência tem <strong>${iniciais}</strong> cotaç${iniciais === 1 ? 'ão' : 'ões'} em fase inicial e <strong>${quentes}</strong> perto de fechar${fechadasSemana > 0 ? ` · ${fechadasSemana} negócio${fechadasSemana > 1 ? 's' : ''} fechado${fechadasSemana > 1 ? 's' : ''} essa semana 👏` : ''}. O jogo está rolando!</div>
+            </div>`);
+          }
+        } catch (e) {}
+
+        // (c) Sugestões de ação baseadas nos dados do RM (completa até ~7 cards no total)
+        const sugestoes = gerarSugestoesRM(Math.max(1, 7 - cards.length));
+        sugestoes.forEach(s => {
+          cards.push(`<div class="feed-item" style="cursor:pointer;" onclick="${s.acao}">
+            <div class="feed-avatar" style="background:linear-gradient(135deg,${s.cor},#7c3aed);">${s.icon}</div>
+            <div class="feed-texto"><strong>${s.titulo}</strong><br><span style="color:#64748b;">${s.corpo}</span></div>
+            <div class="feed-tempo" style="color:${s.cor}; font-weight:700; white-space:nowrap;">${s.cta}</div>
+          </div>`);
+        });
+
+        cont.innerHTML = cards.length
+          ? cards.slice(0, 7).join('')
+          : '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Tudo em dia! Nenhuma ação urgente agora. ✨</div>';
+        aplicarColapso('feedConquistas', cards.length === 0);
+        return;
+      }
+
+      // ===== NÃO-RM: feed clássico de atividades da equipe (com empresa e valor) =====
       let q = db.collection('mb_acoes');
       if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
       const snap = await q.get();
@@ -8475,26 +8644,16 @@
         const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : new Date(0);
         return db_ - da;
       });
-
       const tiposFeed = ['fechamento', 'mapeou_produto', 'mapeamento', 'visita', 'dados_base', 'cotacao_solicitada', 'mapeamento_via_link'];
-      let interessantes = acoes.filter(a => tiposFeed.includes(a.tipo)).slice(0, 30);
-
-      // Marca cada ação como "minha" (cliente da carteira do RM) ou "de colega"
-      interessantes = interessantes.map(a => {
-        const minhaEmpresa = minhasEmpresas ? minhasEmpresas.has(a.empresaId) : true;
-        const souEu = a.usuarioId === meuUid;
-        return { a, minhaEmpresa, souEu };
-      }).slice(0, 12);
+      const interessantes = acoes.filter(a => tiposFeed.includes(a.tipo)).slice(0, 12);
 
       if (interessantes.length === 0) {
         cont.innerHTML = '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>';
+        aplicarColapso('feedConquistas', true);
         return;
       }
-
       const cores = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6'];
-
-      // Texto COMPLETO (não-RM, ou RM vendo seu próprio cliente): mostra empresa e valor
-      const textosCheios = {
+      const textos = {
         fechamento: a => `<strong>${a.usuarioNome}</strong> fechou ${a.produtoNome || 'um negócio'}${a.valorFechado ? ' — ' + fmtBRcompacto(a.valorFechado) : ''}${a.empresaNome ? ' na ' + a.empresaNome : ''} 🎉`,
         mapeou_produto: a => `<strong>${a.usuarioNome}</strong> mapeou ${a.produtoNome || 'um produto'} na ${a.empresaNome}`,
         mapeamento: a => `<strong>${a.usuarioNome}</strong> mapeou produto na ${a.empresaNome}`,
@@ -8503,31 +8662,14 @@
         dados_base: a => `<strong>${a.usuarioNome}</strong> cadastrou dados da ${a.empresaNome}`,
         cotacao_solicitada: a => `<strong>${a.usuarioNome}</strong> pediu cotação de ${a.produtoNome || 'produto'} 🎯`
       };
-
-      // Texto ANÔNIMO (RM vendo movimento de colega): só o fato + produto, SEM empresa nem valor
-      const textosAnon = {
-        fechamento: a => `Um colega fechou ${a.produtoNome || 'um negócio'} na agência 🎉`,
-        mapeou_produto: a => `Um colega mapeou ${a.produtoNome || 'um produto'}`,
-        mapeamento: a => `Um colega mapeou um produto`,
-        mapeamento_via_link: a => `Um cliente da agência respondeu um mapeamento pelo link 🔗`,
-        visita: a => `Um colega registrou uma visita 📍`,
-        dados_base: a => `Um colega cadastrou uma empresa`,
-        cotacao_solicitada: a => `Um colega pediu uma cotação 🎯`
-      };
-
-      cont.innerHTML = interessantes.map(({ a, minhaEmpresa, souEu }) => {
+      cont.innerHTML = interessantes.map(a => {
         const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
         const tempo = dt ? tempoRelativo(dt) : '';
-        // Regra do RM: só vê detalhes (empresa/valor) se for cliente da SUA carteira; senão, anônimo
-        const mostrarCheio = !minhasEmpresas || minhaEmpresa;
-        const mapa = mostrarCheio ? textosCheios : textosAnon;
-        const txt = (mapa[a.tipo] || (x => 'Atividade na agência'))(a);
-        const ini = mostrarCheio ? (a.usuarioNome || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() : '•';
-        const cor = mostrarCheio ? cores[(a.usuarioNome || '').length % cores.length] : '#94a3b8';
-        const destaqueMeu = (minhasEmpresas && minhaEmpresa) ? 'background:#f0f9ff; border-radius:8px;' : '';
-        return `
-          <div class="feed-item" style="${destaqueMeu}">
-            <div class="feed-avatar" style="background: linear-gradient(135deg, ${cor}, ${mostrarCheio ? '#7c3aed' : '#64748b'});">${ini}</div>
+        const ini = (a.usuarioNome || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
+        const cor = cores[(a.usuarioNome || '').length % cores.length];
+        const txt = (textos[a.tipo] || (x => 'Atividade na agência'))(a);
+        return `<div class="feed-item">
+            <div class="feed-avatar" style="background: linear-gradient(135deg, ${cor}, #7c3aed);">${ini}</div>
             <div class="feed-texto">${txt}</div>
             <div class="feed-tempo">${tempo}</div>
           </div>`;
