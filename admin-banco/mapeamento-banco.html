@@ -8469,7 +8469,7 @@
   ];
   function fraseMotiva(seed) { return FRASES_MOTIVA[Math.abs(seed) % FRASES_MOTIVA.length]; }
 
-  // Projeção de meta: quanto falta e quanto por mês até dezembro pra fechar o ano
+  // Projeção de meta POR GRUPO: objetivo, realizado, falta e valor/mês até dezembro de cada grupo
   async function projecaoMetaRM() {
     try {
       const ano = new Date().getFullYear();
@@ -8479,24 +8479,70 @@
       const meuUid = uidEfetivo();
       const porGer = metaDoc.porGerente || {};
       const metaGrupo = {};
-      Object.entries(porGer[meuUid] || {}).forEach(([g, v]) => metaGrupo[g] = (metaGrupo[g] || 0) + (v || 0));
+      Object.entries(porGer[meuUid] || {}).forEach(([g, v]) => { if (v > 0) metaGrupo[g] = (metaGrupo[g] || 0) + v; });
       const metaTotal = Object.values(metaGrupo).reduce((s, v) => s + v, 0);
       if (metaTotal <= 0) return null;
 
-      // Realizado do RM no ano (fechadas das empresas da carteira)
-      const minhas = new Set((EMPRESAS_REAIS || []).filter(e => e.rm === meuUid).map(e => e.id));
-      let realizado = 0;
+      // Mapa ramo → grupo
+      const ramoGrupo = {}; (RAMOS_ALL || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
+      const minhas = (EMPRESAS_REAIS || []).filter(e => e.rm === meuUid);
+      const minhasIds = new Set(minhas.map(e => e.id));
+
+      // Realizado por grupo: cotações fechadas no ano + clientes "nosso" mapeados (prêmio)
+      const realGrupo = {};
+      const contadas = new Set();
       (COTACOES || []).forEach(c => {
-        if (c.status !== 'fechada' || !minhas.has(c.empresaId)) return;
+        if (c.status !== 'fechada' || !minhasIds.has(c.empresaId)) return;
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        if (dt && dt.getFullYear() === ano) realizado += (c.valor || 0);
+        if (!dt || dt.getFullYear() !== ano) return;
+        const g = ramoGrupo[c.produtoId] || 'outros';
+        realGrupo[g] = (realGrupo[g] || 0) + (c.valor || 0);
+        contadas.add(c.empresaId + '|' + c.produtoId);
       });
-      const falta = Math.max(0, metaTotal - realizado);
-      const mesAtual = new Date().getMonth(); // 0..11
-      const mesesRestantes = 12 - mesAtual;   // inclui o mês corrente
-      const pct = Math.round(realizado / metaTotal * 100);
-      return { metaTotal, realizado, falta, pct, mesesRestantes, porMes: falta / mesesRestantes, ano };
+      minhas.forEach(e => {
+        const dados = e.produtosDados || {};
+        Object.keys(dados).forEach(rid => {
+          const pd = dados[rid] || {};
+          if (getMapeamento(pd) !== 'cliente') return;
+          if (contadas.has(e.id + '|' + rid)) return;
+          const premio = pd.premioAnual || pd.valorFechado || 0;
+          if (premio <= 0) return;
+          const g = ramoGrupo[rid] || 'outros';
+          realGrupo[g] = (realGrupo[g] || 0) + premio;
+        });
+      });
+
+      const mesAtual = new Date().getMonth();
+      const mesesRestantes = 12 - mesAtual;
+      const grupos = Object.keys(metaGrupo).map(gid => {
+        const meta = metaGrupo[gid];
+        const real = realGrupo[gid] || 0;
+        const falta = Math.max(0, meta - real);
+        const gInfo = (GRUPOS || []).find(x => x.id === gid) || { nome: gid, cor: '#64748b' };
+        return { gid, nome: gInfo.nome, cor: gInfo.cor, meta, real, falta, pct: Math.round(real / meta * 100), porMes: falta / mesesRestantes };
+      }).sort((a, b) => b.falta - a.falta);
+
+      return { ano, mesesRestantes, grupos, metaTotal, realTotal: Object.values(realGrupo).reduce((s, v) => s + v, 0) };
     } catch (e) { return null; }
+  }
+
+  // Dentro de um grupo, encontra o ramo com maior oportunidade (mais empresas mapeadas e não nossas)
+  function melhorRamoDoGrupo(gid) {
+    const meuUid = uidEfetivo();
+    const minhas = (EMPRESAS_REAIS || []).filter(e => e.rm === meuUid);
+    const ramosGrupo = (PRODUTOS || []).filter(r => r.grupoId === gid);
+    let melhor = null;
+    ramosGrupo.forEach(r => {
+      let mapeadasSemNegocio = 0, semMapear = 0;
+      minhas.forEach(e => {
+        const s = statusMatriz(e, r.id);
+        if (s === 'mercado') mapeadasSemNegocio++;          // tem no mercado, dá pra disputar
+        else if (s === 'nao_mapeado') semMapear++;          // nem sabemos ainda
+      });
+      const score = mapeadasSemNegocio * 2 + semMapear;     // prioriza quem já sabemos que tem
+      if (!melhor || score > melhor.score) melhor = { ramo: r, mapeadasSemNegocio, semMapear, score };
+    });
+    return melhor;
   }
 
   // Gera até `limite` sugestões de ação priorizadas, a partir dos dados do RM
@@ -8576,19 +8622,40 @@
       if (ehRM) {
         const cards = [];
 
-        // (a) Projeção de meta anual — "nosso objetivo", dividido pelos meses que faltam
+        // (a) FOCO DO DIA — um grupo por dia, rotacionando pelos dias do ano
         const proj = await projecaoMetaRM();
-        if (proj) {
-          if (proj.falta <= 0) {
+        if (proj && proj.grupos.length) {
+          const abertos = proj.grupos.filter(g => g.falta > 0);
+          if (abertos.length === 0) {
             cards.push(`<div class="feed-item" style="background:#f0fdf4; border-radius:8px;">
               <div class="feed-avatar" style="background:linear-gradient(135deg,#10b981,#059669);">🎉</div>
-              <div class="feed-texto">Você já bateu o objetivo do ano de ${fmtBRcompacto(proj.metaTotal)}! Cada novo negócio agora é bônus. 🚀</div>
+              <div class="feed-texto">Você já bateu o objetivo do ano em todos os grupos (${fmtBRcompacto(proj.metaTotal)})! Cada novo negócio agora é puro bônus. 🚀</div>
             </div>`);
           } else {
-            cards.push(`<div class="feed-item" style="background:#eff6ff; border-radius:8px;">
-              <div class="feed-avatar" style="background:linear-gradient(135deg,#6366f1,#4f46e5);">🎯</div>
-              <div class="feed-texto">Nosso objetivo de ${proj.ano} é ${fmtBRcompacto(proj.metaTotal)} — você está com <strong>${proj.pct}%</strong>. Faltam ${fmtBRcompacto(proj.falta)}: dá cerca de <strong>${fmtBRcompacto(proj.porMes)}/mês</strong> nos ${proj.mesesRestantes} meses restantes pra fechar o ano no azul. 💪</div>
+            // Rotação diária estável: usa o dia do ano pra girar entre os grupos com meta em aberto
+            const diaDoAno = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 864e5);
+            const g = abertos[diaDoAno % abertos.length];
+            const diasSemana = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+            cards.push(`<div class="feed-item" style="background:${g.cor}12; border-radius:8px; border-left:3px solid ${g.cor};">
+              <div class="feed-avatar" style="background:linear-gradient(135deg,${g.cor},#7c3aed);">🎯</div>
+              <div class="feed-texto"><strong>Foco de ${diasSemana[new Date().getDay()]} — ${g.nome}</strong><br><span style="color:#64748b;">Objetivo do ano: ${fmtBRcompacto(g.meta)} · você está com <strong>${g.pct}%</strong>. Faltam ${fmtBRcompacto(g.falta)} — cerca de <strong>${fmtBRcompacto(g.porMes)}/mês</strong> até dezembro. Dá pra chegar! 💪</span></div>
             </div>`);
+
+            // Dica específica: o ramo dentro do grupo com maior oportunidade
+            const dica = melhorRamoDoGrupo(g.gid);
+            if (dica && (dica.mapeadasSemNegocio > 0 || dica.semMapear > 0)) {
+              let txt;
+              if (dica.mapeadasSemNegocio > 0) {
+                txt = `Você tem <strong>${dica.mapeadasSemNegocio} empresa${dica.mapeadasSemNegocio > 1 ? 's' : ''}</strong> com ${dica.ramo.nome.toLowerCase()} mapeado e ainda sem cotar. É o caminho mais curto pra avançar em ${g.nome} hoje. ${fraseMotiva(dica.mapeadasSemNegocio + g.gid.length)}`;
+              } else {
+                txt = `Ninguém em ${g.nome} pra disputar ainda? Você tem <strong>${dica.semMapear} empresa${dica.semMapear > 1 ? 's' : ''}</strong> sem ${dica.ramo.nome.toLowerCase()} mapeado — mande um link e descubra a oportunidade. ${fraseMotiva(dica.semMapear)}`;
+              }
+              cards.push(`<div class="feed-item" style="cursor:pointer;" onclick="navTo('mapeamento')">
+                <div class="feed-avatar" style="background:linear-gradient(135deg,${dica.ramo.cor || g.cor},#7c3aed);">${dica.ramo.icon || '💡'}</div>
+                <div class="feed-texto"><strong>Caminho de hoje em ${g.nome}</strong><br><span style="color:#64748b;">${txt}</span></div>
+                <div class="feed-tempo" style="color:${g.cor}; font-weight:700; white-space:nowrap;">ver →</div>
+              </div>`);
+            }
           }
         }
 
