@@ -2116,7 +2116,7 @@
           <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
             <div style="font-size:14px; font-weight:800; color:#0f172a;">📊 Você vs. a agência</div>
             <select class="filter-select" id="rmCompFiltroGrupo" onchange="renderComparativoRM()" style="font-size:12px; width:auto;">
-              <option value="">Meta: todos os grupos</option>
+              <option value="">Todos os ramos</option>
             </select>
           </div>
           <div id="rmComparativoBarras"><div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Calculando seus indicadores...</div></div>
@@ -9216,7 +9216,6 @@
     wrap.style.display = '';
 
     const meuUid = uidEfetivo();
-    const anoAtual = new Date().getFullYear();
     box.innerHTML = '<div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Comparando com a agência...</div>';
     let porRM;
     try { porRM = await _empresasPorRMagencia(); } catch (e) { console.warn('comparativo', e); box.innerHTML = '<div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Não foi possível carregar a comparação.</div>'; return; }
@@ -9225,106 +9224,119 @@
 
     const ramosAll = (RAMOS_ALL || PRODUTOS || []);
 
-    // popular filtro de grupo (para a barra de meta por ramo)
+    // Filtro de ramo (grupos) — SEM a palavra "meta"
     const selG = document.getElementById('rmCompFiltroGrupo');
     if (selG && selG.options.length <= 1) {
-      selG.innerHTML = '<option value="">Meta: todos os grupos</option>' + (GRUPOS || []).map(g => `<option value="${g.id}">Meta: ${g.nome}</option>`).join('');
+      const gruposComNome = (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
+      selG.innerHTML = '<option value="">Todos os ramos</option>' + gruposComNome;
     }
-    const grupoMeta = selG ? selG.value : '';
+    const grupoSel = selG ? selG.value : '';
 
-    // ---- Calcula um indicador (0-100) por RM e devolve {meu, mediaAgencia, rank, totalRms} ----
-    function indicador(fnPctDoRM) {
-      const valores = {};
-      uids.forEach(uid => { valores[uid] = fnPctDoRM(porRM[uid]); });
-      const meu = valores[meuUid] || 0;
-      const lista = Object.values(valores);
-      const media = lista.length ? Math.round(lista.reduce((s, v) => s + v, 0) / lista.length) : 0;
-      // ranking (maior = 1º); empates dividem posição
-      const ordenado = [...lista].sort((a, b) => b - a);
-      const rank = ordenado.indexOf(meu) + 1;
-      return { meu, media, rank, total: uids.length };
-    }
-
-    // % de sócios mapeados (empresas com ao menos 1 sócio cadastrado / total da carteira)
-    const socios = indicador(emps => {
-      if (!emps.length) return 0;
-      const ok = emps.filter(e => (e.socios || []).some(s => s && (s.nome || '').trim())).length;
-      return Math.round(ok / emps.length * 100);
-    });
-    // % de dados de funcionários preenchidos
-    const func = indicador(emps => {
-      if (!emps.length) return 0;
-      const ok = emps.filter(e => (e.funcionarios || 0) > 0).length;
-      return Math.round(ok / emps.length * 100);
-    });
-    // Helpers locais que leem SÓ de produtosDados (disponível para todas as empresas da agência),
-    // sem depender de COTACOES global (que para um RM só traz as cotações dele).
-    const _mapeadoLocal = (e, rid) => {
-      const pd = (e.produtosDados || {})[rid];
-      return pd && pd.statusVisual && pd.statusVisual !== 'vazia'; // tem algum status = mapeado
-    };
-    const _cotadoOuNossoLocal = (e, rid) => {
+    // Predicados por empresa
+    const temSocio = e => (e.socios || []).some(s => s && (s.nome || '').trim());
+    const temFunc = e => (e.funcionarios || 0) > 0;
+    const _cotado = (e, rid) => {
       const pd = (e.produtosDados || {})[rid];
       if (!pd) return false;
       const sv = pd.statusVisual;
       return sv === 'cotando' || sv === 'conosco' || sv === 'fechada' || sv === 'perdido' || pd.mapeamento === 'mercado';
     };
+    const _mapeado = (e, rid) => {
+      const pd = (e.produtosDados || {})[rid];
+      return !!(pd && pd.statusVisual && pd.statusVisual !== 'vazia');
+    };
 
-    // % de empresas com cotação iniciada (algum ramo cotado/nosso/perdido)
-    const cotacoes = indicador(emps => {
-      if (!emps.length) return 0;
-      const ok = emps.filter(e => ramosAll.some(r => _cotadoOuNossoLocal(e, r.id))).length;
-      return Math.round(ok / emps.length * 100);
-    });
-    // % de "avanço no ramo" — cobertura de mapeamento no grupo escolhido
-    const ramosMeta = grupoMeta ? ramosAll.filter(r => r.grupoId === grupoMeta) : ramosAll;
-    const metaRamo = indicador(emps => {
-      if (!emps.length || !ramosMeta.length) return 0;
-      let soma = 0;
-      emps.forEach(e => {
-        const mapeados = ramosMeta.filter(r => _mapeadoLocal(e, r.id)).length;
-        soma += mapeados / ramosMeta.length;
+    // Calcula indicador: % do RM, % da agência (TOTAL: soma de todos cotados / soma de todos clientes) e ranking
+    function indicador(predEmpresa) {
+      const pctPorRM = {};
+      let totalOk = 0, totalEmp = 0;
+      uids.forEach(uid => {
+        const emps = porRM[uid] || [];
+        const ok = emps.filter(predEmpresa).length;
+        pctPorRM[uid] = emps.length ? Math.round(ok / emps.length * 100) : 0;
+        totalOk += ok; totalEmp += emps.length;
       });
-      return Math.round(soma / emps.length * 100);
-    });
+      const meu = pctPorRM[meuUid] || 0;
+      const agencia = totalEmp ? Math.round(totalOk / totalEmp * 100) : 0;
+      const ordenado = Object.values(pctPorRM).sort((a, b) => b - a);
+      const rank = ordenado.indexOf(meu) + 1;
+      // números absolutos do RM (para a frase: "cotou 4 de 40")
+      const meusEmp = porRM[meuUid] || [];
+      const meuOk = meusEmp.filter(predEmpresa).length;
+      return { meu, agencia, rank, total: uids.length, meuOk, meuTotal: meusEmp.length };
+    }
 
-    const medalha = r => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : `${r}º`;
-    function barraDupla(titulo, ind, cor) {
-      const acimaDaMedia = ind.meu >= ind.media;
-      const corRank = ind.rank === 1 ? '#f59e0b' : (ind.rank <= 3 ? '#10b981' : '#64748b');
+    // --- Base: sócios e funcionários (NÃO dependem de ramo) ---
+    const indSocios = indicador(temSocio);
+    const indFunc = indicador(temFunc);
+
+    // --- Por ramo (segue o filtro): cotação e mapeamento no grupo escolhido ---
+    const ramosDoGrupo = grupoSel ? ramosAll.filter(r => r.grupoId === grupoSel) : ramosAll;
+    const nomeRamo = grupoSel ? ((GRUPOS || []).find(g => g.id === grupoSel) || {}).nome || 'ramo' : 'todos os ramos';
+    const indCotRamo = indicador(e => ramosDoGrupo.some(r => _cotado(e, r.id)));
+    const indMapRamo = indicador(e => ramosDoGrupo.some(r => _mapeado(e, r.id)));
+
+    // ===== Componente: par de barras VERTICAIS (você vs agência) =====
+    // cor = cor sólida do RM; a agência usa a MESMA cor em tom pastel (não cinza).
+    const H = 78; // altura máxima da barra em px
+    function barraVertical(titulo, ind, cor, subtitulo) {
+      const hMeu = Math.max(Math.round(ind.meu / 100 * H), 3);
+      const hAg = Math.max(Math.round(ind.agencia / 100 * H), 3);
+      const acima = ind.meu >= ind.agencia;
+      const corRank = ind.rank === 1 ? '#16a34a' : (ind.rank <= Math.ceil(ind.total / 2) ? '#0ea5e9' : '#f97316');
       return `
-        <div style="margin-bottom:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">
-            <span style="font-size:13px; font-weight:700; color:#334155;">${titulo}</span>
-            <span style="font-size:12px; font-weight:800; color:${corRank};">${medalha(ind.rank)} <span style="font-weight:500; color:#94a3b8;">de ${ind.total}</span></span>
-          </div>
-          <!-- barra do RM -->
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-            <span style="font-size:10px; color:#64748b; width:52px; text-align:right;">Você</span>
-            <div style="flex:1; height:14px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
-              <div style="height:100%; width:${Math.max(ind.meu, 2)}%; background:linear-gradient(90deg, ${cor}cc, ${cor}); border-radius:100px;"></div>
+        <div style="flex:1; min-width:130px; background:#fbfcff; border:1px solid #eef2ff; border-radius:12px; padding:12px 10px 10px;">
+          <div style="font-size:12px; font-weight:800; color:#334155; text-align:center; line-height:1.2; min-height:28px;">${titulo}</div>
+          ${subtitulo ? `<div style="font-size:9.5px; color:#94a3b8; text-align:center; margin-top:-2px; margin-bottom:2px;">${subtitulo}</div>` : ''}
+          <div style="display:flex; align-items:flex-end; justify-content:center; gap:14px; height:${H}px; margin:8px 0 6px;">
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%;">
+              <span style="font-size:12px; font-weight:800; color:${cor}; margin-bottom:3px;">${ind.meu}%</span>
+              <div style="width:26px; height:${hMeu}px; background:linear-gradient(180deg, ${cor}, ${cor}cc); border-radius:6px 6px 0 0;"></div>
+              <span style="font-size:9px; color:#64748b; margin-top:4px; font-weight:700;">Você</span>
             </div>
-            <span style="font-size:12px; font-weight:800; color:${cor}; width:38px;">${ind.meu}%</span>
-          </div>
-          <!-- barra da agência -->
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:10px; color:#94a3b8; width:52px; text-align:right;">Agência</span>
-            <div style="flex:1; height:10px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
-              <div style="height:100%; width:${Math.max(ind.media, 2)}%; background:#cbd5e1; border-radius:100px;"></div>
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%;">
+              <span style="font-size:12px; font-weight:800; color:${cor}88; margin-bottom:3px;">${ind.agencia}%</span>
+              <div style="width:26px; height:${hAg}px; background:${cor}3a; border:1px solid ${cor}66; border-radius:6px 6px 0 0;"></div>
+              <span style="font-size:9px; color:#94a3b8; margin-top:4px; font-weight:700;">Agência</span>
             </div>
-            <span style="font-size:11px; font-weight:700; color:#94a3b8; width:38px;">${ind.media}%</span>
           </div>
-          <div style="font-size:10px; color:${acimaDaMedia ? '#10b981' : '#f97316'}; margin-top:3px; text-align:right; font-weight:700;">
-            ${acimaDaMedia ? `▲ ${ind.meu - ind.media} pts acima da média` : `▼ ${ind.media - ind.meu} pts abaixo da média`}
+          <div style="text-align:center; font-size:11px; font-weight:800; color:${corRank};">${ind.rank}º <span style="font-weight:600; color:#94a3b8;">de ${ind.total}</span></div>
+          <div style="text-align:center; font-size:10px; font-weight:700; color:${acima ? '#16a34a' : '#f97316'}; margin-top:2px;">
+            ${acima ? `▲ ${ind.meu - ind.agencia} pts acima` : `▼ ${ind.agencia - ind.meu} pts abaixo`}
           </div>
         </div>`;
     }
 
-    box.innerHTML =
-      barraDupla('🧑‍💼 Sócios mapeados', socios, '#6366f1') +
-      barraDupla('👥 Dados de funcionários', func, '#0ea5e9') +
-      barraDupla('🎯 Cotações iniciadas', cotacoes, '#f59e0b') +
-      barraDupla(`📈 Avanço ${grupoMeta ? 'no grupo' : 'nos ramos'}`, metaRamo, '#10b981');
+    // ===== Frase de GAP acionável: pega o maior déficit e sugere ação =====
+    const gaps = [
+      { nome: 'mapear os sócios', ind: indSocios, verbo: 'mapeie os sócios de mais empresas' },
+      { nome: 'mapear o nº de funcionários', ind: indFunc, verbo: 'levante o número de funcionários de mais empresas' },
+      { nome: `cotar em ${nomeRamo}`, ind: indCotRamo, verbo: `mande mais cotações de ${nomeRamo} para o funil` },
+      { nome: `mapear ${nomeRamo}`, ind: indMapRamo, verbo: `descubra a situação de ${nomeRamo} em mais empresas` }
+    ];
+    const abaixo = gaps.filter(g => g.ind.meu < g.ind.agencia).sort((a, b) => (b.ind.agencia - b.ind.meu) - (a.ind.agencia - a.ind.meu));
+    let fraseGap;
+    if (!abaixo.length) {
+      fraseGap = `<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px 14px; font-size:12.5px; color:#166534; font-weight:600;">🎉 Você está na média ou acima da agência em todos os pontos. Mandou bem!</div>`;
+    } else {
+      const g = abaixo[0];
+      fraseGap = `<div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:10px 14px; font-size:12.5px; color:#9a3412;">
+        <strong>Seu maior gap:</strong> você está em <strong>${g.ind.meu}%</strong> em ${g.nome} e a agência em <strong>${g.ind.agencia}%</strong> (você é o ${g.ind.rank}º de ${g.ind.total}). Para melhorar, ${g.verbo}.
+      </div>`;
+    }
+
+    box.innerHTML = `
+      <div style="font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Cadastro da carteira</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+        ${barraVertical('🧑‍💼 Sócios', indSocios, '#6366f1', 'empresas com sócio')}
+        ${barraVertical('👥 Funcionários', indFunc, '#0ea5e9', 'com nº preenchido')}
+      </div>
+      <div style="font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Por ramo · ${nomeRamo}</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        ${barraVertical(`🎯 Cotado`, indCotRamo, '#f59e0b', `${indCotRamo.meuOk} de ${indCotRamo.meuTotal} empresas`)}
+        ${barraVertical(`🗺️ Mapeado`, indMapRamo, '#10b981', `${indMapRamo.meuOk} de ${indMapRamo.meuTotal} empresas`)}
+      </div>
+      ${fraseGap}`;
   }
   window.renderComparativoRM = renderComparativoRM;
 
