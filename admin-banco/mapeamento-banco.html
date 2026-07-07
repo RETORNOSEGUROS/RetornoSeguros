@@ -2183,32 +2183,6 @@
       </div>
     </div>
 
-    <!-- Meta Card -->
-    <div class="meta-card">
-      <h3><i data-lucide="zap" class="w-4 h-4"></i> META DA SEMANA</h3>
-      <div class="titulo" id="metaTitulo">Comece a registrar ações da equipe</div>
-      <div class="meta-grid">
-        <div class="meta-item">
-          <div class="meta-label">DADOS BASE (func + sócios)</div>
-          <div class="meta-num"><span id="metaDadosNum">0</span><span>/<span id="metaDadosAlvo">10</span> empresas</span></div>
-          <div class="progress-bar"><div class="progress-fill" id="metaDadosBar" style="width: 0%"></div></div>
-          <div style="font-size: 11px; font-weight: 600; margin-top: 6px; opacity: 0.85;" id="metaDadosTxt">Sem cadastros esta semana</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">MAPEAMENTO DE PRODUTOS</div>
-          <div class="meta-num"><span id="metaMapNum">0</span><span>/<span id="metaMapAlvo">5</span> empresas</span></div>
-          <div class="progress-bar"><div class="progress-fill" id="metaMapBar" style="width: 0%"></div></div>
-          <div style="font-size: 11px; font-weight: 600; margin-top: 6px; opacity: 0.85;" id="metaMapTxt">Sem mapeamentos esta semana</div>
-        </div>
-        <div class="meta-item perm-rmplus">
-          <div class="meta-label">VISITAS REGISTRADAS</div>
-          <div class="meta-num"><span id="metaVisitasNum">0</span><span>/<span id="metaVisitasAlvo">15</span> visitas</span></div>
-          <div class="progress-bar"><div class="progress-fill" id="metaVisitasBar" style="width: 0%"></div></div>
-          <div style="font-size: 11px; font-weight: 600; margin-top: 6px; opacity: 0.85;" id="metaVisitasTxt">Sem visitas esta semana</div>
-        </div>
-      </div>
-    </div>
-
     <!-- Ranking strip -->
     <div class="ranking-strip perm-naoestag">
       <div class="ranking-title">🏆 RANKING DA AGÊNCIA</div>
@@ -2223,6 +2197,9 @@
       <select class="filter-select" id="filtroRm" onchange="filtrar()">
         <option value="">Todos os RMs</option>
       </select>
+      <select class="filter-select" id="filtroGrupo" onchange="filtrar()">
+        <option value="">Todos os grupos</option>
+      </select>
       <select class="filter-select" id="filtroProduto" onchange="filtrar()">
         <option value="">Todos os produtos</option>
         <option value="frota">Frota</option>
@@ -2235,12 +2212,25 @@
       </select>
       <select class="filter-select" id="filtroStatus" onchange="filtrar()">
         <option value="">Qualquer status</option>
+        <option value="nosso">✓ Já é nosso (fechado/cliente)</option>
+        <option value="cotacao">🎯 Em cotação (no funil)</option>
         <option value="quente">🔥 Quente (vencendo)</option>
-        <option value="cotando">Em cotação</option>
-        <option value="fechada">Fechadas</option>
-        <option value="semmap">Sem mapeamento</option>
+        <option value="perdido">✗ Perdido</option>
+        <option value="mercado">🏢 No mercado (concorrente)</option>
+        <option value="naotem">— Cliente não tem</option>
+        <option value="naomapeado">◻ Não mapeado</option>
       </select>
+      <select class="filter-select" id="filtroFalta" onchange="filtrar()">
+        <option value="">Sem filtro de pendência</option>
+        <option value="socio">⚠ Falta dados de sócio</option>
+        <option value="funcionarios">⚠ Falta nº de funcionários</option>
+        <option value="ambos">⚠ Falta sócio E funcionários</option>
+        <option value="semqualquermap">◻ Nenhum produto mapeado</option>
+        <option value="incompleto">◻ Mapeamento incompleto</option>
+      </select>
+      <button class="filter-select" onclick="limparFiltrosEmpresas()" style="cursor:pointer; background:#f1f5f9; border-color:#cbd5e1; color:#475569; font-weight:600;">Limpar</button>
     </div>
+    <div id="filtroResumo" style="font-size:12px; color:#64748b; margin:-4px 0 12px; min-height:16px;"></div>
 
     <!-- Legenda -->
     <div class="legend" style="margin-bottom: 14px;">
@@ -3068,6 +3058,9 @@
           <select id="prodFiltroAno" class="filter-select" onchange="renderProducao()"></select>
           <select id="prodFiltroMes" class="filter-select" onchange="renderProducao()">
             <option value="">Todos os meses</option>
+          </select>
+          <select id="prodFiltroGrupo" class="filter-select" onchange="renderProducao()">
+            <option value="">Todos os grupos</option>
           </select>
           <select id="prodFiltroRm" class="filter-select perm-chefe" onchange="renderProducao()">
             <option value="">Todos os gerentes</option>
@@ -4874,26 +4867,86 @@
 
     // Atualizar dropdown de filtro de RM dinamicamente
     const fRmSel = document.getElementById('filtroRm');
-    if (fRmSel && Object.keys(MAPA_RMS).length > 0 && fRmSel.options.length <= 4) {
+    if (fRmSel && fRmSel.options.length <= 1) {
+      // Só RMs que realmente têm empresas na carteira atualmente visível (respeita a agência em visão)
+      const rmsComEmpresa = {};
+      (EMPRESAS || []).forEach(e => {
+        if (!e.rm) return;
+        const nome = (MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) || e.rmNome || 'RM';
+        rmsComEmpresa[e.rm] = nome;
+      });
+      const ordenados = Object.entries(rmsComEmpresa).sort((a, b) => a[1].localeCompare(b[1]));
       fRmSel.innerHTML = '<option value="">Todos os RMs</option>' +
-        Object.entries(MAPA_RMS).map(([uid, r]) => `<option value="${uid}">${r.nome}</option>`).join('');
+        ordenados.map(([uid, nome]) => `<option value="${uid}">${nome}</option>`).join('');
+    }
+    // Popular filtro de grupo
+    const fGrupoSel = document.getElementById('filtroGrupo');
+    if (fGrupoSel && fGrupoSel.options.length <= 1) {
+      fGrupoSel.innerHTML = '<option value="">Todos os grupos</option>' + (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
     }
 
     const search = (document.getElementById('searchInput').value || '').toLowerCase();
     const fRm = document.getElementById('filtroRm').value;
     const fProd = document.getElementById('filtroProduto').value;
     const fStatus = document.getElementById('filtroStatus').value;
+    const fGrupo = (document.getElementById('filtroGrupo') || {}).value || '';
+    const fFalta = (document.getElementById('filtroFalta') || {}).value || '';
+    const anoAtual = new Date().getFullYear();
+
+    // Ramos do grupo selecionado (ex: vida = vida-grupo + vida-socios)
+    const ramosDoGrupo = fGrupo ? (RAMOS_ALL || PRODUTOS || []).filter(r => r.grupoId === fGrupo).map(r => r.id) : null;
+    // Ramos que o filtro de status/produto deve olhar
+    const ramosAlvo = fProd ? [fProd] : (ramosDoGrupo || (RAMOS_ALL || PRODUTOS || []).map(r => r.id));
+
+    // Ajuda: a empresa tem algum ramo-alvo no status pedido?
+    // Para "nosso", usamos ano=null (ano corrente) para incluir tanto funil fechado quanto cliente atual.
+    const _temStatusEm = (e, statusFn, anoRef) => ramosAlvo.some(rid => statusFn(statusMatriz(e, rid, anoRef)));
 
     let lista = EMPRESAS.filter(e => {
       if (search && !(e.nome || '').toLowerCase().includes(search)) return false;
       if (fRm && e.rm !== fRm) return false;
-      if (fProd && e.produtos && e.produtos[fProd] === 'vazia') return false;
-      if (fStatus === 'quente' && !Object.values(e.produtos || {}).includes('quente')) return false;
-      if (fStatus === 'cotando' && !Object.values(e.produtos || {}).includes('cotando')) return false;
-      if (fStatus === 'fechada' && !Object.values(e.produtos || {}).includes('fechada')) return false;
-      if (fStatus === 'semmap' && Object.values(e.produtos || {}).every(p => p !== 'vazia')) return false;
+
+      // Filtro por grupo (sem status específico): empresa entra se tem qualquer ramo do grupo relevante
+      if (fGrupo && !fProd && !fStatus) {
+        const temAlgoNoGrupo = ramosDoGrupo.some(rid => statusMatriz(e, rid, null) !== 'nao_mapeado');
+        if (!temAlgoNoGrupo) return false;
+      }
+
+      // Filtro de status (aplicado sobre os ramos-alvo: produto específico, grupo, ou todos)
+      if (fStatus === 'nosso'      && !_temStatusEm(e, s => s === 'nosso', null)) return false;
+      if (fStatus === 'cotacao'    && !_temStatusEm(e, s => s === 'cotacao', null)) return false;
+      if (fStatus === 'perdido'    && !_temStatusEm(e, s => s === 'perdido', null)) return false;
+      if (fStatus === 'mercado'    && !_temStatusEm(e, s => s === 'mercado', null)) return false;
+      if (fStatus === 'naotem'     && !_temStatusEm(e, s => s === 'nao_tem', null)) return false;
+      if (fStatus === 'naomapeado' && !_temStatusEm(e, s => s === 'nao_mapeado', null)) return false;
+      if (fStatus === 'quente'     && !Object.values(e.produtos || {}).includes('quente')) return false;
+
+      // Só produto/grupo selecionado, sem status: exige que o produto NÃO esteja vazio
+      if (fProd && !fStatus && e.produtos && e.produtos[fProd] === 'vazia') return false;
+
+      // Filtros de pendência (o que falta)
+      if (fFalta) {
+        const semSocio = !(e.socios || []).some(s => s && (s.nome || '').trim());
+        const semFunc = !((e.funcionarios || 0) > 0);
+        const ramosAll = (RAMOS_ALL || PRODUTOS || []);
+        const mapeados = ramosAll.filter(r => statusMatriz(e, r.id, null) !== 'nao_mapeado').length;
+        if (fFalta === 'socio' && !semSocio) return false;
+        if (fFalta === 'funcionarios' && !semFunc) return false;
+        if (fFalta === 'ambos' && !(semSocio && semFunc)) return false;
+        if (fFalta === 'semqualquermap' && mapeados > 0) return false;
+        if (fFalta === 'incompleto' && (mapeados === 0 || mapeados === ramosAll.length)) return false;
+      }
       return true;
     });
+
+    // Resumo do filtro
+    const resumoEl = document.getElementById('filtroResumo');
+    if (resumoEl) {
+      const temFiltro = search || fRm || fProd || fStatus || fGrupo || fFalta;
+      resumoEl.innerHTML = temFiltro
+        ? `<strong style="color:#4338ca;">${lista.length}</strong> de ${EMPRESAS.length} empresas no filtro`
+        : `${EMPRESAS.length} empresas na carteira`;
+    }
 
     if (lista.length === 0) {
       container.innerHTML = `
@@ -5027,6 +5080,13 @@
   }
 
   function filtrar() { renderEmpresas(); }
+  function limparFiltrosEmpresas() {
+    ['searchInput', 'filtroRm', 'filtroProduto', 'filtroStatus', 'filtroGrupo', 'filtroFalta'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    renderEmpresas();
+  }
+  window.limparFiltrosEmpresas = limparFiltrosEmpresas;
 
   // ============= RAIO-X DA EMPRESA =============
   function abrirRaioX(empresaId) {
@@ -15023,11 +15083,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const rms = (EQUIPE_REAL || []).filter(u => u.perfil === 'rm' || u.perfil === 'chefe');
         selRm.innerHTML = '<option value="">Todos os gerentes</option>' + rms.map(u => `<option value="${u.uid}">${u.nome}</option>`).join('');
       }
+      const selGrupo = document.getElementById('prodFiltroGrupo');
+      if (selGrupo && selGrupo.options.length <= 1) {
+        selGrupo.innerHTML = '<option value="">Todos os grupos</option>' + (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
+      }
     })();
     const fAno = parseInt((document.getElementById('prodFiltroAno') || {}).value) || null;
     const fMesRaw = (document.getElementById('prodFiltroMes') || {}).value;
     const fMes = (fMesRaw === '' || fMesRaw == null) ? null : parseInt(fMesRaw);
     const fRm = (document.getElementById('prodFiltroRm') || {}).value || '';
+    const fGrupo = (document.getElementById('prodFiltroGrupo') || {}).value || '';
+    const _ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => _ramoGrupo[r.id] = r.grupoId);
 
     try {
       let query = db.collection('mb_cotacoes').where('status', '==', 'fechada');
@@ -15085,6 +15151,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (fAno && (!dt || dt.getFullYear() !== fAno)) return false;
         if (fMes !== null && (!dt || dt.getMonth() !== fMes)) return false;
         if (fRm && _empresaRm[c.empresaId] !== fRm) return false;
+        if (fGrupo && _ramoGrupo[c.produtoId] !== fGrupo) return false;
         return true;
       });
 
