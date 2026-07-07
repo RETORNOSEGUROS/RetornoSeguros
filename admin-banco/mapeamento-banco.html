@@ -6931,9 +6931,10 @@
           if (uidC) { cotGerGrupo[uidC] = cotGerGrupo[uidC] || {}; cotGerGrupo[uidC][gidC] = (cotGerGrupo[uidC][gidC] || 0) + 1; }
         }
         const chave = (c.empresaId || '') + '|' + (c.produtoId || '');
-        if (c.status === 'fechada') fechadosQualquerData.add(chave);
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        if (!dt || dt < inicioAno || dt > fimAno) return;
+        const noAno = dt && dt >= inicioAno && dt <= fimAno;
+        if (c.status === 'fechada' && noAno) fechadosQualquerData.add(chave); // trava do já-nosso: só fechamentos DO ANO
+        if (!noAno) return;
         if (c.status === 'fechada') {
           const uid = empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
           const ant = fechadosAno[chave];
@@ -6961,14 +6962,19 @@
           if (getMapeamento(pd) !== 'cliente') return;
           const gid = ramoGrupo[rid] || 'outros';
           if (contadasProd.has((e.id || '') + '|' + rid)) return;         // já contado pelo funil (produto exato)
-          if (empresaGrupoFunil.has((e.id || '') + '|' + gid)) return;    // o FUNIL já fechou algo deste grupo/empresa → não dobra
+          if (empresaGrupoFunil.has((e.id || '') + '|' + gid)) return;    // o FUNIL já fechou algo deste grupo/empresa
           const premio = pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0;
           if (premio <= 0) return;
+          // Só conta como produção DO ANO se a vigência começou neste ano (igual ao Relatório de Metas).
+          // Clientes antigos (vigência de anos anteriores) não inflam a produção do ano corrente.
+          let anoProd = new Date().getFullYear();
+          const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+          if (mVi) anoProd = parseInt(mVi[3]);
+          if (anoProd !== ano) return;
           prodReal += premio;
           realGrupo[gid] = (realGrupo[gid] || 0) + premio;
           const uid = e.rm;
           if (uid) { realGerGrupo[uid] = realGerGrupo[uid] || {}; realGerGrupo[uid][gid] = (realGerGrupo[uid][gid] || 0) + premio; }
-          // NÃO trava o grupo aqui — dois produtos já-nossos distintos do mesmo grupo devem somar
         });
       });
 
