@@ -6919,6 +6919,7 @@
       // (fica o de maior valor). Assim renovação lançada como novo fechamento não soma 2x.
       const fechadosAno = {};       // chave empresa|produto -> {valor, uid, gid}
       const fechadosQualquerData = new Set(); // todo empresa|produto já fechado algum dia (trava do já-nosso)
+      const empresaGrupoFunil = new Set(); // empresa|grupo que o FUNIL fechou (trava contra id divergente no já-nosso)
       cotSnap.forEach(d => {
         const c = d.data();
         if (c.status === 'cancelada') return;
@@ -6932,24 +6933,21 @@
         const chave = (c.empresaId || '') + '|' + (c.produtoId || '');
         if (c.status === 'fechada') fechadosQualquerData.add(chave);
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        if (!dt || dt < inicioAno || dt > fimAno) {
-          if (c.status === 'perdida' || c.status === 'sem_aceitacao') { /* perdidas fora do ano não contam */ }
-          return;
-        }
+        if (!dt || dt < inicioAno || dt > fimAno) return;
         if (c.status === 'fechada') {
           const uid = empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
           const ant = fechadosAno[chave];
-          // guarda só o de maior valor por empresa+produto (dedup de renovação/refação)
-          if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, uid, gid: ramoGrupo[c.produtoId] || 'outros' };
+          if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, uid, gid: ramoGrupo[c.produtoId] || 'outros', empresaId: c.empresaId };
         } else if (c.status === 'perdida' || c.status === 'sem_aceitacao') {
           cotReal++;
         }
       });
-      // Aplica os fechamentos deduplicados
+      // Aplica os fechamentos deduplicados; marca empresa+grupo como contado
       Object.values(fechadosAno).forEach(f => {
         prodReal += f.valor; cotReal++;
         realGrupo[f.gid] = (realGrupo[f.gid] || 0) + f.valor;
         if (f.uid) { realGerGrupo[f.uid] = realGerGrupo[f.uid] || {}; realGerGrupo[f.uid][f.gid] = (realGerGrupo[f.uid][f.gid] || 0) + f.valor; }
+        empresaGrupoFunil.add((f.empresaId || '') + '|' + f.gid);
       });
       // Copia a trava para o já-nosso
       fechadosQualquerData.forEach(k => contadasProd.add(k));
@@ -6961,14 +6959,16 @@
         Object.keys(dados).forEach(rid => {
           const pd = dados[rid] || {};
           if (getMapeamento(pd) !== 'cliente') return;
-          if (contadasProd.has((e.id || '') + '|' + rid)) return; // já contado pelo funil
+          const gid = ramoGrupo[rid] || 'outros';
+          if (contadasProd.has((e.id || '') + '|' + rid)) return;         // já contado pelo funil (produto exato)
+          if (empresaGrupoFunil.has((e.id || '') + '|' + gid)) return;    // o FUNIL já fechou algo deste grupo/empresa → não dobra
           const premio = pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0;
           if (premio <= 0) return;
-          const gid = ramoGrupo[rid] || 'outros';
           prodReal += premio;
           realGrupo[gid] = (realGrupo[gid] || 0) + premio;
           const uid = e.rm;
           if (uid) { realGerGrupo[uid] = realGerGrupo[uid] || {}; realGerGrupo[uid][gid] = (realGerGrupo[uid][gid] || 0) + premio; }
+          // NÃO trava o grupo aqui — dois produtos já-nossos distintos do mesmo grupo devem somar
         });
       });
 
