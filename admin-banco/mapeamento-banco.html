@@ -1923,6 +1923,7 @@
 
     @media (max-width: 768px) {
       .topbar { padding: 10px 14px 10px 60px; }
+      #prodGraficosGrid { grid-template-columns: 1fr !important; }
       .screen { padding: 14px 12px !important; }
       .main > .screen, .main { padding-left: 0; padding-right: 0; }
       /* KPIs e grids empilham */
@@ -3056,9 +3057,6 @@
         </div>
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <select id="prodFiltroAno" class="filter-select" onchange="renderProducao()"></select>
-          <select id="prodFiltroMes" class="filter-select" onchange="renderProducao()">
-            <option value="">Todos os meses</option>
-          </select>
           <select id="prodFiltroGrupo" class="filter-select" onchange="renderProducao()">
             <option value="">Todos os grupos</option>
           </select>
@@ -3070,12 +3068,47 @@
 
       <!-- KPIs produção -->
       <div class="equipe-kpis">
-        <div class="kpi-card"><div class="label">Fechados no mês</div><div class="value" id="kpiProdQtd">0</div></div>
+        <div class="kpi-card"><div class="label">Fechados no período</div><div class="value" id="kpiProdQtd">0</div></div>
         <div class="kpi-card"><div class="label">Produção R$</div><div class="value" id="kpiProdValor">R$ 0</div></div>
         <div class="kpi-card"><div class="label">Ticket médio</div><div class="value" id="kpiProdTicket">R$ 0</div></div>
         <div class="kpi-card"><div class="label">Top produto</div><div class="value" id="kpiProdTopProd" style="font-size: 18px;">—</div></div>
       </div>
 
+      <!-- Alternância Mensal / Anual + faixa de meses clicáveis -->
+      <div style="background:white; border-radius:12px; padding:14px 16px; margin-bottom:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+          <div class="rank-tabs" style="margin:0;">
+            <div class="rank-tab active" id="prodTabMensal" onclick="setModoProducao('mensal')">📅 Análise mensal</div>
+            <div class="rank-tab" id="prodTabAnual" onclick="setModoProducao('anual')">📊 Análise anual</div>
+          </div>
+          <div style="font-size:12px; color:#64748b;" id="prodPeriodoLabel">—</div>
+        </div>
+        <!-- Meses clicáveis (só no modo mensal) -->
+        <div id="prodMesesStrip" style="display:flex; gap:5px; flex-wrap:wrap;"></div>
+      </div>
+
+      <!-- Gráficos: linha (evolução) + pizza (ramos) -->
+      <div style="display:grid; grid-template-columns: 1.6fr 1fr; gap:14px; margin-bottom:14px;" id="prodGraficosGrid">
+        <div style="background:white; border-radius:12px; padding:16px;">
+          <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:4px;" id="prodChartLinhaTitulo">Evolução da produção</div>
+          <div style="font-size:11px; color:#94a3b8; margin-bottom:10px;" id="prodChartLinhaSub">clique num mês acima para detalhar</div>
+          <div style="height:240px;"><canvas id="prodChartLinha"></canvas></div>
+        </div>
+        <div style="background:white; border-radius:12px; padding:16px;">
+          <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:4px;">Produção por ramo</div>
+          <div style="font-size:11px; color:#94a3b8; margin-bottom:10px;" id="prodChartPizzaSub">% de cada ramo no período</div>
+          <div style="height:200px;"><canvas id="prodChartPizza"></canvas></div>
+          <div id="prodPizzaLegenda" style="margin-top:10px; display:flex; flex-direction:column; gap:4px;"></div>
+        </div>
+      </div>
+
+      <!-- Lista (menor, com filtro por ramo) -->
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+        <div style="font-size:13px; font-weight:800; color:#0f172a;">📋 Negócios fechados <span id="prodListaContagem" style="font-weight:600; color:#94a3b8; font-size:12px;"></span></div>
+        <select id="prodFiltroRamoLista" class="filter-select" onchange="renderProducao()" style="font-size:12px; width:auto;">
+          <option value="">Todos os ramos</option>
+        </select>
+      </div>
       <!-- Lista -->
       <div id="producaoContainer">
         <div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:30px; text-align:center; color:#94a3b8;">Carregando...</div>
@@ -15247,6 +15280,131 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.confirmarAvancarCotacao = confirmarAvancarCotacao;
 
   // ============= PRODUÇÃO (cotações fechadas) =============
+  // ===== Produção: modo mensal/anual, faixa de meses e gráficos =====
+  let _prodChartLinha = null, _prodChartPizza = null;
+
+  function setModoProducao(modo) {
+    window._PROD_MODO = modo;
+    const tMensal = document.getElementById('prodTabMensal');
+    const tAnual = document.getElementById('prodTabAnual');
+    if (tMensal) tMensal.classList.toggle('active', modo === 'mensal');
+    if (tAnual) tAnual.classList.toggle('active', modo === 'anual');
+    const strip = document.getElementById('prodMesesStrip');
+    if (strip) strip.style.display = (modo === 'mensal') ? 'flex' : 'none';
+    carregarERenderProducao();
+  }
+  window.setModoProducao = setModoProducao;
+
+  function selecionarMesProducao(mes) {
+    window._PROD_MES = mes;
+    window._PROD_MODO = 'mensal';
+    setModoProducao('mensal');
+  }
+  window.selecionarMesProducao = selecionarMesProducao;
+
+  function renderProducaoMesesStrip(fechadasAno, ano, modo, mesSel) {
+    const strip = document.getElementById('prodMesesStrip');
+    const label = document.getElementById('prodPeriodoLabel');
+    if (!strip) return;
+    strip.style.display = (modo === 'mensal') ? 'flex' : 'none';
+    // produção por mês (para destacar meses com movimento)
+    const porMes = new Array(12).fill(0);
+    fechadasAno.forEach(c => {
+      const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+      if (dt) porMes[dt.getMonth()] += (c.valor || 0);
+    });
+    const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    strip.innerHTML = meses.map((m, i) => {
+      const ativo = (modo === 'mensal' && i === mesSel);
+      const temProd = porMes[i] > 0;
+      return `<button onclick="selecionarMesProducao(${i})" style="
+        border:1px solid ${ativo ? '#4338ca' : (temProd ? '#c7d2fe' : '#e2e8f0')};
+        background:${ativo ? '#4338ca' : (temProd ? '#eef2ff' : '#f8fafc')};
+        color:${ativo ? 'white' : (temProd ? '#4338ca' : '#94a3b8')};
+        font-weight:${ativo ? 800 : 600}; font-size:12px; padding:6px 12px; border-radius:8px; cursor:pointer; transition:all .15s;
+      ">${m}</button>`;
+    }).join('');
+    if (label) {
+      if (modo === 'anual') label.textContent = `Ano de ${ano} · ${fechadasAno.length} negócios`;
+      else label.textContent = `${meses[mesSel]}/${String(ano).slice(2)}`;
+    }
+  }
+  window.renderProducaoMesesStrip = renderProducaoMesesStrip;
+
+  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel) {
+    // ---- Gráfico de linha: produção acumulada por mês do ano ----
+    const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const porMes = new Array(12).fill(0);
+    fechadasAno.forEach(c => {
+      const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+      if (dt) porMes[dt.getMonth()] += (c.valor || 0);
+    });
+    const tituloLinha = document.getElementById('prodChartLinhaTitulo');
+    const subLinha = document.getElementById('prodChartLinhaSub');
+    if (tituloLinha) tituloLinha.textContent = modo === 'anual' ? `Produção mês a mês · ${ano}` : `Produção do ano · ${ano}`;
+    if (subLinha) subLinha.textContent = modo === 'mensal' ? `destaque no mês selecionado (${meses[mesSel]})` : 'clique num mês acima para detalhar';
+
+    const canvasL = document.getElementById('prodChartLinha');
+    if (canvasL && typeof Chart !== 'undefined') {
+      if (_prodChartLinha) _prodChartLinha.destroy();
+      // cor dos pontos: destaca o mês selecionado no modo mensal
+      const cores = meses.map((_, i) => (modo === 'mensal' && i === mesSel) ? '#4338ca' : '#a5b4fc');
+      const raios = meses.map((_, i) => (modo === 'mensal' && i === mesSel) ? 6 : 3);
+      _prodChartLinha = new Chart(canvasL, {
+        type: 'line',
+        data: {
+          labels: meses,
+          datasets: [{
+            label: 'Produção R$', data: porMes,
+            borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.12)',
+            fill: true, tension: 0.3,
+            pointBackgroundColor: cores, pointRadius: raios, pointHoverRadius: 7
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          onClick: (evt, els) => { if (els.length) selecionarMesProducao(els[0].index); },
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtBR(ctx.parsed.y) } } },
+          scales: { y: { ticks: { callback: v => fmtBRcompacto(v) }, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+        }
+      });
+    }
+
+    // ---- Pizza: % por ramo no período (mês selecionado ou ano) ----
+    const base = (modo === 'mensal') ? fechadasAno.filter(c => { const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null; return dt && dt.getMonth() === mesSel; }) : fechadasAno;
+    const porRamo = {};
+    base.forEach(c => { porRamo[c.produtoNome || c.produtoId] = (porRamo[c.produtoNome || c.produtoId] || 0) + (c.valor || 0); });
+    const entradas = Object.entries(porRamo).sort((a, b) => b[1] - a[1]);
+    const totalPizza = entradas.reduce((s, e) => s + e[1], 0);
+    const paleta = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+    const subPizza = document.getElementById('prodChartPizzaSub');
+    if (subPizza) subPizza.textContent = modo === 'mensal' ? `% por ramo em ${meses[mesSel]}` : `% por ramo em ${ano}`;
+
+    const canvasP = document.getElementById('prodChartPizza');
+    if (canvasP && typeof Chart !== 'undefined') {
+      if (_prodChartPizza) _prodChartPizza.destroy();
+      if (entradas.length) {
+        _prodChartPizza = new Chart(canvasP, {
+          type: 'doughnut',
+          data: { labels: entradas.map(e => e[0]), datasets: [{ data: entradas.map(e => e[1]), backgroundColor: paleta, borderWidth: 2, borderColor: '#fff' }] },
+          options: { responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${fmtBR(ctx.parsed)} (${totalPizza ? Math.round(ctx.parsed / totalPizza * 100) : 0}%)` } } } }
+        });
+      }
+    }
+    // legenda da pizza
+    const leg = document.getElementById('prodPizzaLegenda');
+    if (leg) {
+      leg.innerHTML = entradas.length ? entradas.map((e, i) => {
+        const pct = totalPizza ? Math.round(e[1] / totalPizza * 100) : 0;
+        return `<div style="display:flex; align-items:center; justify-content:space-between; font-size:11.5px;">
+          <span style="display:flex; align-items:center; gap:6px; color:#334155;"><span style="width:10px; height:10px; border-radius:3px; background:${paleta[i % paleta.length]};"></span>${e[0]}</span>
+          <span style="font-weight:700; color:#0f172a;">${pct}% <span style="color:#94a3b8; font-weight:500;">${fmtBRcompacto(e[1])}</span></span>
+        </div>`;
+      }).join('') : '<div style="color:#94a3b8; font-size:12px; text-align:center;">Sem produção no período.</div>';
+    }
+  }
+  window.renderProducaoGraficos = renderProducaoGraficos;
+
   async function carregarERenderProducao() {
     document.getElementById('producaoContainer').innerHTML = '<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:30px; text-align:center; color:#94a3b8;">Carregando...</div>';
 
@@ -15259,10 +15417,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         for (let a = anoAtual; a >= anoAtual - 3; a--) opts += `<option value="${a}">${a}</option>`;
         selAno.innerHTML = opts; selAno.value = String(anoAtual);
       }
-      const selMes = document.getElementById('prodFiltroMes');
-      if (selMes && selMes.options.length <= 1) {
-        selMes.innerHTML = '<option value="">Todos os meses</option>' + (MESES_PT || []).map((m, i) => `<option value="${i}">${m}</option>`).join('');
-      }
       const selRm = document.getElementById('prodFiltroRm');
       if (selRm && selRm.options.length <= 1 && (CTX.isAdmin || perfilEfetivo() === 'chefe')) {
         const rms = (EQUIPE_REAL || []).filter(u => u.perfil === 'rm' || u.perfil === 'chefe');
@@ -15273,12 +15427,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         selGrupo.innerHTML = '<option value="">Todos os grupos</option>' + (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
       }
     })();
-    const fAno = parseInt((document.getElementById('prodFiltroAno') || {}).value) || null;
-    const fMesRaw = (document.getElementById('prodFiltroMes') || {}).value;
-    const fMes = (fMesRaw === '' || fMesRaw == null) ? null : parseInt(fMesRaw);
+    const fAno = parseInt((document.getElementById('prodFiltroAno') || {}).value) || new Date().getFullYear();
     const fRm = (document.getElementById('prodFiltroRm') || {}).value || '';
     const fGrupo = (document.getElementById('prodFiltroGrupo') || {}).value || '';
+    const fRamoLista = (document.getElementById('prodFiltroRamoLista') || {}).value || '';
     const _ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => _ramoGrupo[r.id] = r.grupoId);
+
+    // Modo: mensal (um mês selecionado) ou anual (ano inteiro)
+    if (typeof window._PROD_MODO === 'undefined') window._PROD_MODO = 'mensal';
+    if (typeof window._PROD_MES === 'undefined') window._PROD_MES = new Date().getMonth();
+    const modo = window._PROD_MODO;
+    // no modo mensal, o mês vem do strip; no anual, ignora mês
+    const fMes = (modo === 'mensal') ? window._PROD_MES : null;
+
+    // popular filtro de ramo da lista (uma vez)
+    const selRamoL = document.getElementById('prodFiltroRamoLista');
+    if (selRamoL && selRamoL.options.length <= 1) {
+      selRamoL.innerHTML = '<option value="">Todos os ramos</option>' + (PRODUTOS || []).map(p => `<option value="${p.id}">${p.icon || ''} ${p.nome}</option>`).join('');
+    }
 
     try {
       let query = db.collection('mb_cotacoes').where('status', '==', 'fechada');
@@ -15331,14 +15497,26 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       // Aplicar filtros de ano / mês / gerente
       const _empresaRm = {}; (EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
-      fechadas = fechadas.filter(c => {
+      // 1) fechadasAno = ano + rm + grupo (SEM mês) — base dos gráficos de linha e pizza
+      const fechadasAno = fechadas.filter(c => {
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (fAno && (!dt || dt.getFullYear() !== fAno)) return false;
-        if (fMes !== null && (!dt || dt.getMonth() !== fMes)) return false;
         if (fRm && _empresaRm[c.empresaId] !== fRm) return false;
         if (fGrupo && _ramoGrupo[c.produtoId] !== fGrupo) return false;
         return true;
       });
+      // 2) fechadas = fechadasAno + filtro de mês (modo mensal) + ramo da lista — KPIs e lista
+      fechadas = fechadasAno.filter(c => {
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (fMes !== null && (!dt || dt.getMonth() !== fMes)) return false;
+        if (fRamoLista && c.produtoId !== fRamoLista) return false;
+        return true;
+      });
+
+      // ===== Gráficos (linha por mês do ano + pizza por ramo) =====
+      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('graf prod', e); }
+      // ===== Faixa de meses clicáveis + labels =====
+      try { renderProducaoMesesStrip(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('meses prod', e); }
 
       // KPIs (do que vê)
       const totalValor = fechadas.reduce((s, c) => s + (c.valor || 0), 0);
@@ -15348,6 +15526,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         porProduto[c.produtoNome] = (porProduto[c.produtoNome] || 0) + (c.valor || 0);
       });
       const topProd = Object.entries(porProduto).sort((a, b) => b[1] - a[1])[0];
+
+      const contagemEl = document.getElementById('prodListaContagem');
+      if (contagemEl) contagemEl.textContent = `· ${fechadas.length} no período`;
 
       document.getElementById('kpiProdQtd').textContent = fechadas.length;
       document.getElementById('kpiProdValor').textContent = fmtBR(totalValor);
@@ -15394,25 +15575,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             </div>
           ` : '');
           return `
-            <div style="background:white; border:1px solid #e2e8f0; border-left: 4px solid #10b981; border-radius:12px; padding:16px; margin-bottom:10px;">
-              <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
-                <div style="flex: 1;">
-                  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                    <span style="font-size: 20px;">${c.produtoIcon || '💎'}</span>
-                    <strong style="font-size: 15px;">${c.empresaNome}</strong>
-                    <span style="font-size: 12px; color:#64748b;">· ${c.produtoNome}</span>
+            <div style="background:white; border:1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius:9px; padding:10px 12px; margin-bottom:7px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                <div style="flex: 1; min-width:0;">
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 15px;">${c.produtoIcon || '💎'}</span>
+                    <strong style="font-size: 13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.empresaNome}</strong>
+                    <span style="font-size: 11px; color:#94a3b8; white-space:nowrap;">· ${c.produtoNome}</span>
                   </div>
-                  <div style="font-size: 12px; color:#64748b; margin-bottom: 4px;">
-                    Fechado por <strong>${c.fechadoPorNome || '—'}</strong> em ${dt}
-                    ${c.seguradora ? ` · seguradora: <strong>${c.seguradora}</strong>` : ''}
-                  </div>
-                  <div style="font-size: 12px; color:#475569;">
-                    Vigência: <strong>${c.vigenciaInicio || '—'}</strong> a <strong>${c.vigenciaFim || '—'}</strong>
+                  <div style="font-size: 11px; color:#94a3b8; margin-top: 2px;">
+                    ${c.fechadoPorNome || '—'} · ${dt}${c.seguradora ? ` · ${c.seguradora}` : ''}${c.vigenciaInicio ? ` · vig. ${c.vigenciaInicio}` : ''}
                   </div>
                 </div>
-                <div style="text-align: right;">
-                  <div style="background:#dcfce7; color:#166534; padding:8px 14px; border-radius:10px; font-size:18px; font-weight:800;">${fmtBR(c.valor || 0)}</div>
-                </div>
+                <div style="background:#dcfce7; color:#166534; padding:5px 10px; border-radius:8px; font-size:14px; font-weight:800; white-space:nowrap;">${fmtBR(c.valor || 0)}</div>
               </div>
               ${editBtns}
             </div>
