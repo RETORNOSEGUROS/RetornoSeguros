@@ -3204,33 +3204,11 @@
 
 <!-- SEMANAL -->
       <div id="metasSemanalWrap" style="display: none;">
-        <!-- Configuração geral da agência (só admin/chefe) -->
-        <div style="background: white; border-radius: 12px; padding: 20px; margin-top: 0;">
-          <h3 style="margin: 0 0 4px; font-size: 14px; color: #0f172a;">🎯 Metas semanais padrão da agência</h3>
-          <p style="margin:0 0 12px; font-size:11px; color:#94a3b8;">Valor por pessoa/semana. A soma de todos vira a meta da agência. Corretor e gerente-chefe também contam quando agem nesses pontos.</p>
-          <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;">
-            <div class="form-group" style="margin: 0;">
-              <label class="form-label" style="font-size:11px;">Dados sócios</label>
-              <input type="number" class="form-control" id="metaSemSocios" placeholder="5">
-            </div>
-            <div class="form-group" style="margin: 0;">
-              <label class="form-label" style="font-size:11px;">Dados funcionários</label>
-              <input type="number" class="form-control" id="metaSemFunc" placeholder="5">
-            </div>
-            <div class="form-group" style="margin: 0;">
-              <label class="form-label" style="font-size:11px;">Mapeamentos <small style="color:#94a3b8;">(inc. link)</small></label>
-              <input type="number" class="form-control" id="metaSemMap" placeholder="20">
-            </div>
-            <div class="form-group" style="margin: 0;">
-              <label class="form-label" style="font-size:11px;">Cotações <small style="color:#94a3b8;">(→ funil)</small></label>
-              <input type="number" class="form-control" id="metaSemCot" placeholder="5">
-            </div>
-            <div class="form-group" style="margin: 0;">
-              <label class="form-label" style="font-size:11px;">Visitas <small style="color:#94a3b8;">(concluídas)</small></label>
-              <input type="number" class="form-control" id="metaSemVisitas" placeholder="10">
-            </div>
-          </div>
-          <button class="btn-primary" style="margin-top: 14px;" onclick="salvarMetaSemanalAgencia()">Salvar para toda a agência</button>
+        <!-- Meta total da agência = soma das metas individuais (calculada, não editável) -->
+        <div style="background: linear-gradient(135deg,#eef2ff,#faf5ff); border:1px solid #c7d2fe; border-radius: 12px; padding: 20px; margin-top: 0;">
+          <h3 style="margin: 0 0 4px; font-size: 14px; color: #0f172a;">🎯 Meta semanal da agência <small style="font-weight:500; color:#94a3b8;">· soma automática de todos os agentes</small></h3>
+          <p style="margin:0 0 14px; font-size:11px; color:#64748b;">Este é o total que a equipe precisa entregar por semana. É a soma das metas individuais abaixo — o gerente-chefe e o corretor herdam esta meta da agência (não têm meta própria).</p>
+          <div id="metaSemTotalAgencia" style="display:grid; grid-template-columns:repeat(5,1fr); gap:12px;"></div>
         </div>
 
         <!-- Evolução da semana por agente -->
@@ -6811,7 +6789,7 @@
     el.classList.add('active');
     document.getElementById('metasAnualWrap').style.display = (tab === 'anual') ? '' : 'none';
     document.getElementById('metasSemanalWrap').style.display = (tab === 'semanal') ? '' : 'none';
-    if (tab === 'semanal') { carregarMetaSemanalAgencia(); renderMetasPessoa(); renderEvolucaoSemanal(); }
+    if (tab === 'semanal') { renderMetaTotalAgencia(); renderMetasPessoa(); renderEvolucaoSemanal(); }
   }
 
   async function renderMetas() {
@@ -6937,10 +6915,13 @@
       const cotGerGrupo = {};     // QUANTIDADE de cotações por gerente × grupo (entraram no funil)
       const cotGrupo = {};        // quantidade de cotações por grupo (agência)
       const contadasProd = new Set(); // empresa|produto já contados pelo funil (evita duplicar com 'já é nosso')
+      // Primeiro passo: coleta os fechamentos, deduplicados por empresa+produto NO ANO
+      // (fica o de maior valor). Assim renovação lançada como novo fechamento não soma 2x.
+      const fechadosAno = {};       // chave empresa|produto -> {valor, uid, gid}
+      const fechadosQualquerData = new Set(); // todo empresa|produto já fechado algum dia (trava do já-nosso)
       cotSnap.forEach(d => {
         const c = d.data();
         if (c.status === 'cancelada') return;
-        // Toda cotação que ENTROU no funil conta na quantidade do grupo (por data de solicitação no ano)
         const dtSol = c.dataSolicitacao && c.dataSolicitacao.toDate ? c.dataSolicitacao.toDate() : (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate() : null);
         const gidC = ramoGrupo[c.produtoId] || 'outros';
         const uidC = empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
@@ -6948,23 +6929,30 @@
           cotGrupo[gidC] = (cotGrupo[gidC] || 0) + 1;
           if (uidC) { cotGerGrupo[uidC] = cotGerGrupo[uidC] || {}; cotGerGrupo[uidC][gidC] = (cotGerGrupo[uidC][gidC] || 0) + 1; }
         }
+        const chave = (c.empresaId || '') + '|' + (c.produtoId || '');
+        if (c.status === 'fechada') fechadosQualquerData.add(chave);
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        // Marca como "contado pelo funil" TODO produto fechado (qualquer data) — a empresa também
-        // o terá como 'cliente', então isso evita a dupla contagem no bloco "já é nosso" abaixo.
-        if (c.status === 'fechada') contadasProd.add((c.empresaId || '') + '|' + (c.produtoId || ''));
-        if (!dt || dt < inicioAno || dt > fimAno) return;
+        if (!dt || dt < inicioAno || dt > fimAno) {
+          if (c.status === 'perdida' || c.status === 'sem_aceitacao') { /* perdidas fora do ano não contam */ }
+          return;
+        }
         if (c.status === 'fechada') {
-          prodReal += c.valor || 0;
-          cotReal++;
-          const gid = ramoGrupo[c.produtoId] || 'outros';
-          realGrupo[gid] = (realGrupo[gid] || 0) + (c.valor || 0);
-          // Crédito ao RM DONO da empresa (consistente com o resto do sistema); fallback: quem registrou
           const uid = empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
-          if (uid) { realGerGrupo[uid] = realGerGrupo[uid] || {}; realGerGrupo[uid][gid] = (realGerGrupo[uid][gid] || 0) + (c.valor || 0); }
+          const ant = fechadosAno[chave];
+          // guarda só o de maior valor por empresa+produto (dedup de renovação/refação)
+          if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, uid, gid: ramoGrupo[c.produtoId] || 'outros' };
         } else if (c.status === 'perdida' || c.status === 'sem_aceitacao') {
           cotReal++;
         }
       });
+      // Aplica os fechamentos deduplicados
+      Object.values(fechadosAno).forEach(f => {
+        prodReal += f.valor; cotReal++;
+        realGrupo[f.gid] = (realGrupo[f.gid] || 0) + f.valor;
+        if (f.uid) { realGerGrupo[f.uid] = realGerGrupo[f.uid] || {}; realGerGrupo[f.uid][f.gid] = (realGerGrupo[f.uid][f.gid] || 0) + f.valor; }
+      });
+      // Copia a trava para o já-nosso
+      fechadosQualquerData.forEach(k => contadasProd.add(k));
 
       // "Já é nosso": produtos mapeados como cliente (apólices que já eram suas, fora do funil).
       // Credita ao RM dono da empresa e soma na produção — senão o realizado fica menor que a realidade.
@@ -7168,40 +7156,12 @@
   }
 
   async function carregarMetaSemanalAgencia() {
-    const docId = CTX.agenciaId;
-    try {
-      const snap = await db.collection('mb_metas_semanais').doc(docId).get();
-      const meta = snap.exists ? snap.data() : {};
-      const g = (id, def) => { const el = document.getElementById(id); if (el) el.value = def; };
-      g('metaSemSocios', meta.dadosSocios ?? 5);
-      g('metaSemFunc', meta.dadosFuncionarios ?? 5);
-      g('metaSemMap', meta.mapeamentos ?? 20);
-      g('metaSemCot', meta.cotacoes ?? 5);
-      g('metaSemVisitas', meta.visitas ?? 10);
-    } catch (e) { console.warn(e); }
+    // A meta da agência agora é a soma automática das individuais
+    try { await renderMetaTotalAgencia(); } catch (e) {}
   }
 
-  async function salvarMetaSemanalAgencia() {
-    if (!CTX.isAdmin && CTX.perfil !== 'chefe') return alert('Apenas admin/chefe.');
-    const num = id => parseInt((document.getElementById(id) || {}).value) || 0;
-    const dados = {
-      agenciaId: CTX.agenciaId,
-      dadosSocios: num('metaSemSocios'),
-      dadosFuncionarios: num('metaSemFunc'),
-      mapeamentos: num('metaSemMap'),
-      cotacoes: num('metaSemCot'),
-      visitas: num('metaSemVisitas'),
-      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-      atualizadoPorUid: CTX.uid, atualizadoPorNome: CTX.nome
-    };
-    try {
-      await db.collection('mb_metas_semanais').doc(CTX.agenciaId).set(dados, { merge: true });
-      alert('✅ Metas semanais da agência salvas');
-      atualizarMetaSemana();
-    } catch (e) {
-      alert('Erro: ' + e.message);
-    }
-  }
+  // Mantida por compatibilidade — a meta da agência é derivada das individuais, não se salva à parte
+  async function salvarMetaSemanalAgencia() { try { await renderMetaTotalAgencia(); } catch (e) {} }
 
   // ============= EVOLUÇÃO SEMANAL POR AGENTE =============
   // Regras de contagem que você definiu:
@@ -7318,6 +7278,33 @@
   }
   window.renderEvolucaoSemanal = renderEvolucaoSemanal;
 
+  // Meta semanal da agência = soma das metas individuais (o chefe/corretor herdam, não somam)
+  async function renderMetaTotalAgencia() {
+    const wrap = document.getElementById('metaSemTotalAgencia');
+    if (!wrap) return;
+    const metasPessoa = {};
+    try { const snap = await db.collection('mb_metas_pessoa').where('agenciaId', '==', CTX.agenciaId).get(); snap.forEach(d => metasPessoa[d.id] = d.data()); } catch (e) {}
+    const soma = { dadosSocios: 0, dadosFuncionarios: 0, mapeamentos: 0, cotacoes: 0, visitas: 0 };
+    (EQUIPE_REAL || []).filter(p => p.ativo && p.perfil !== 'chefe' && p.perfil !== 'admin').forEach(p => {
+      const m = metasPessoa[p.uid] || {};
+      Object.keys(soma).forEach(k => soma[k] += (m[k] || 0));
+    });
+    const campos = [
+      { k: 'dadosSocios', label: 'Dados sócios', icon: '🧑‍💼' },
+      { k: 'dadosFuncionarios', label: 'Dados func.', icon: '👥' },
+      { k: 'mapeamentos', label: 'Mapeamentos', icon: '🎯' },
+      { k: 'cotacoes', label: 'Cotações', icon: '📨' },
+      { k: 'visitas', label: 'Visitas', icon: '📍' }
+    ];
+    wrap.innerHTML = campos.map(c => `
+      <div style="background:white; border:1px solid #e0e7ff; border-radius:10px; padding:12px; text-align:center;">
+        <div style="font-size:11px; color:#64748b;">${c.icon} ${c.label}</div>
+        <div style="font-size:22px; font-weight:800; color:#4338ca; margin-top:2px;">${soma[c.k]}</div>
+        <div style="font-size:10px; color:#94a3b8;">por semana</div>
+      </div>`).join('');
+  }
+  window.renderMetaTotalAgencia = renderMetaTotalAgencia;
+
   async function renderMetasPessoa() {
     const cont = document.getElementById('metasPorPessoaList');
     if (!cont) return;
@@ -7331,7 +7318,7 @@
       snap.forEach(d => { metasPessoa[d.id] = d.data(); });
     } catch (e) { console.warn(e); }
 
-    cont.innerHTML = EQUIPE_REAL.filter(p => p.ativo).map(p => {
+    cont.innerHTML = EQUIPE_REAL.filter(p => p.ativo && p.perfil !== 'chefe' && p.perfil !== 'admin').map(p => {
       const m = metasPessoa[p.uid] || {};
       const ini = (p.nome || '?').split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase();
       return `
@@ -7376,6 +7363,7 @@
         setTimeout(() => { btn.innerHTML = original; btn.style.background = ''; btn.style.color = ''; }, 1500);
       }
       try { renderEvolucaoSemanal(); } catch (e) {}
+      try { renderMetaTotalAgencia(); } catch (e) {}
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
