@@ -4867,17 +4867,23 @@
 
     // Atualizar dropdown de filtro de RM dinamicamente
     const fRmSel = document.getElementById('filtroRm');
-    if (fRmSel && fRmSel.options.length <= 1) {
-      // Só RMs que realmente têm empresas na carteira atualmente visível (respeita a agência em visão)
+    if (fRmSel) {
+      // Só RMs que (1) pertencem à agência atualmente em visão E (2) têm empresa na carteira visível.
+      // MAPA_RMS já vem filtrado por CTX.agenciaId, então cruzar com ele exclui RMs de outras agências.
+      const valAtual = fRmSel.value;
+      const rmsAgencia = MAPA_RMS || {};
       const rmsComEmpresa = {};
       (EMPRESAS || []).forEach(e => {
         if (!e.rm) return;
-        const nome = (MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) || e.rmNome || 'RM';
-        rmsComEmpresa[e.rm] = nome;
+        // se há lista de RMs da agência, o RM da empresa PRECISA estar nela
+        if (Object.keys(rmsAgencia).length > 0 && !rmsAgencia[e.rm]) return;
+        rmsComEmpresa[e.rm] = (rmsAgencia[e.rm] && rmsAgencia[e.rm].nome) || e.rmNome || 'RM';
       });
       const ordenados = Object.entries(rmsComEmpresa).sort((a, b) => a[1].localeCompare(b[1]));
       fRmSel.innerHTML = '<option value="">Todos os RMs</option>' +
         ordenados.map(([uid, nome]) => `<option value="${uid}">${nome}</option>`).join('');
+      // preserva a seleção se ainda existir na nova lista
+      if (valAtual && rmsComEmpresa[valAtual]) fRmSel.value = valAtual;
     }
     // Popular filtro de grupo
     const fGrupoSel = document.getElementById('filtroGrupo');
@@ -12584,6 +12590,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // FILTRO DE PRIVACIDADE: RM vê só suas empresas
     if (perfilEfetivo() === 'rm') {
       empresasBase = empresasBase.filter(e => e.rm === uidEfetivo());
+    }
+
+    // TRAVA DE AGÊNCIA (defesa em profundidade): se há uma agência em visão, nenhuma empresa
+    // de outra agência pode passar — mesmo que a query tenha trazido algo com agenciaId divergente
+    // ou ausente. Só se aplica quando CTX.agenciaId está definido (visão de UMA agência).
+    if (CTX.agenciaId) {
+      empresasBase = empresasBase.filter(e => e.agenciaId === CTX.agenciaId);
     }
 
     // Carregar subcoleções em paralelo
