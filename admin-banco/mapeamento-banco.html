@@ -9171,18 +9171,44 @@
 
   // ============= COMPARATIVO RM vs AGÊNCIA (topo do Hoje) =============
   // Barras fáceis de ler: a barra do RM sobre a média da agência, + posição no ranking dos RMs.
-  function _empresasPorRM() {
-    // agrupa TODAS as empresas da agência por RM (usa EMPRESAS_REAIS, que já respeita a agência em visão)
+  // Busca TODAS as empresas da agência (agrupadas por RM) só para cálculo agregado.
+  // O RM não vê as empresas dos colegas — usamos apenas os números para média e ranking.
+  let _COMPARATIVO_CACHE = null;
+  async function _empresasPorRMagencia() {
+    if (_COMPARATIVO_CACHE && _COMPARATIVO_CACHE.agenciaId === CTX.agenciaId) return _COMPARATIVO_CACHE.porRM;
+    let query = db.collection('empresas');
+    if (CTX.agenciaId) query = query.where('agenciaId', '==', CTX.agenciaId);
+    else query = query.limit(500);
+    const snap = await query.get();
     const porRM = {};
-    (EMPRESAS_REAIS || []).forEach(e => {
-      if (!e.rm) return;
-      if (MAPA_RMS && Object.keys(MAPA_RMS).length && !MAPA_RMS[e.rm]) return; // só RMs da agência
-      (porRM[e.rm] = porRM[e.rm] || []).push(e);
+    // Carrega os produtos mapeados de cada empresa em paralelo (para % de mapeamento/cotação por ramo)
+    const docs = snap.docs.filter(doc => {
+      const d = doc.data();
+      if (CTX.agenciaId && d.agenciaId !== CTX.agenciaId) return false;
+      return !!(d.rmUid || d.rmId || d.gerenteId);
     });
+    await Promise.all(docs.map(async doc => {
+      const d = doc.data();
+      const rm = d.rmUid || d.rmId || d.gerenteId || '';
+      if (MAPA_RMS && Object.keys(MAPA_RMS).length && !MAPA_RMS[rm]) return; // só RMs da agência
+      const produtosDados = {};
+      try {
+        const ps = await db.collection('empresas').doc(doc.id).collection('mb_produtos').get();
+        ps.forEach(p => { produtosDados[p.id] = p.data(); });
+      } catch (e) {}
+      const emp = {
+        id: doc.id, rm,
+        socios: d.socios || [],
+        funcionarios: d.numFuncionarios || d.funcionariosQtd || 0,
+        produtosDados
+      };
+      (porRM[rm] = porRM[rm] || []).push(emp);
+    }));
+    _COMPARATIVO_CACHE = { agenciaId: CTX.agenciaId, porRM };
     return porRM;
   }
 
-  function renderComparativoRM() {
+  async function renderComparativoRM() {
     const wrap = document.getElementById('rmComparativoWrap');
     const box = document.getElementById('rmComparativoBarras');
     if (!wrap || !box) return;
@@ -9191,7 +9217,9 @@
 
     const meuUid = uidEfetivo();
     const anoAtual = new Date().getFullYear();
-    const porRM = _empresasPorRM();
+    box.innerHTML = '<div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Comparando com a agência...</div>';
+    let porRM;
+    try { porRM = await _empresasPorRMagencia(); } catch (e) { console.warn('comparativo', e); box.innerHTML = '<div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Não foi possível carregar a comparação.</div>'; return; }
     const uids = Object.keys(porRM);
     if (!uids.length || !porRM[meuUid]) { box.innerHTML = '<div style="color:#94a3b8; font-size:12px; text-align:center; padding:14px;">Sem carteira atribuída ainda.</div>'; return; }
 
@@ -9229,22 +9257,32 @@
       const ok = emps.filter(e => (e.funcionarios || 0) > 0).length;
       return Math.round(ok / emps.length * 100);
     });
-    // % de empresas com cotação iniciada (algum ramo no funil ou já decidido no ano)
+    // Helpers locais que leem SÓ de produtosDados (disponível para todas as empresas da agência),
+    // sem depender de COTACOES global (que para um RM só traz as cotações dele).
+    const _mapeadoLocal = (e, rid) => {
+      const pd = (e.produtosDados || {})[rid];
+      return pd && pd.statusVisual && pd.statusVisual !== 'vazia'; // tem algum status = mapeado
+    };
+    const _cotadoOuNossoLocal = (e, rid) => {
+      const pd = (e.produtosDados || {})[rid];
+      if (!pd) return false;
+      const sv = pd.statusVisual;
+      return sv === 'cotando' || sv === 'conosco' || sv === 'fechada' || sv === 'perdido' || pd.mapeamento === 'mercado';
+    };
+
+    // % de empresas com cotação iniciada (algum ramo cotado/nosso/perdido)
     const cotacoes = indicador(emps => {
       if (!emps.length) return 0;
-      const ok = emps.filter(e => ramosAll.some(r => {
-        const st = statusMatriz(e, r.id, null);
-        return st === 'cotacao' || st === 'nosso' || st === 'perdido';
-      })).length;
+      const ok = emps.filter(e => ramosAll.some(r => _cotadoOuNossoLocal(e, r.id))).length;
       return Math.round(ok / emps.length * 100);
     });
-    // % de "meta por ramo" — aqui como cobertura de mapeamento no grupo escolhido (proxy de avanço no ramo)
+    // % de "avanço no ramo" — cobertura de mapeamento no grupo escolhido
     const ramosMeta = grupoMeta ? ramosAll.filter(r => r.grupoId === grupoMeta) : ramosAll;
     const metaRamo = indicador(emps => {
       if (!emps.length || !ramosMeta.length) return 0;
       let soma = 0;
       emps.forEach(e => {
-        const mapeados = ramosMeta.filter(r => statusMatriz(e, r.id, null) !== 'nao_mapeado').length;
+        const mapeados = ramosMeta.filter(r => _mapeadoLocal(e, r.id)).length;
         soma += mapeados / ramosMeta.length;
       });
       return Math.round(soma / emps.length * 100);
@@ -12749,6 +12787,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }));
 
     EMPRESAS_REAIS = empresasBase.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+    _COMPARATIVO_CACHE = null; // dados mudaram; recalcular comparação na próxima abertura do Hoje
     EMPRESAS.length = 0;
     EMPRESAS_REAIS.forEach(e => EMPRESAS.push(e));
   }
