@@ -27,6 +27,10 @@
     body {
       background: #f8fafc;
       color: #1e293b;
+      overflow-x: hidden;
+    }
+    @media (max-width: 1024px) {
+      .main { width: 100%; max-width: 100vw; overflow-x: hidden; }
     }
 
     /* ============= LOGIN / LOADING SCREEN ============= */
@@ -1907,8 +1911,8 @@
         background: #4f46e5; color: white; border: none; cursor: pointer;
         box-shadow: 0 2px 10px rgba(79,70,229,0.35);
       }
-      .sidebar { transform: translateX(-100%); transition: transform 0.25s ease; box-shadow: 2px 0 20px rgba(0,0,0,0.18); }
-      .sidebar.open { transform: translateX(0); }
+      .sidebar { transform: translateX(-100%); transition: transform 0.25s ease; box-shadow: 2px 0 20px rgba(0,0,0,0.18); z-index: 45; }
+      .sidebar.open { transform: translateX(0); z-index: 45; }
       .sidebar-overlay.show { display: block; position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 40; }
       .main { margin-left: 0; }
       .topbar { padding-left: 64px; }
@@ -3094,10 +3098,11 @@
         </div>
       </div>
 
-      <!-- Tabs Anual / Semanal -->
+      <!-- Tabs Anual / Semanal / Indicadores -->
       <div class="rank-tabs" style="margin-bottom: 16px;">
         <div class="rank-tab active" onclick="trocarTabMetas('anual', this)">📅 Metas Anuais</div>
         <div class="rank-tab" onclick="trocarTabMetas('semanal', this)">⚡ Metas Semanais</div>
+        <div class="rank-tab" onclick="trocarTabMetas('indicadores', this)">📊 Indicadores</div>
       </div>
 
       <!-- ANUAL -->
@@ -3229,6 +3234,45 @@
           <div id="metasPorPessoaList">
             <div style="color:#94a3b8; font-size:13px; text-align:center; padding:14px;">Carregando equipe...</div>
           </div>
+        </div>
+      </div>
+
+<!-- INDICADORES -->
+      <div id="metasIndicadoresWrap" style="display: none;">
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+            <div>
+              <h3 style="margin: 0; font-size: 14px; color: #0f172a;">📊 Penetração na carteira</h3>
+              <p style="margin:4px 0 0; font-size:11px; color:#94a3b8;">Quanto da base já foi trabalhado em cada frente. Base: <strong id="indTotalEmp">0</strong> empresas.</p>
+            </div>
+            <select class="form-control" id="indFiltroRM" onchange="renderIndicadores()" style="width:auto; min-width:180px; font-size:13px;"><option value="">Toda a agência</option></select>
+          </div>
+        </div>
+
+        <!-- Indicadores de cadastro/mapeamento -->
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+          <h3 style="margin: 0 0 16px; font-size: 13px; color: #475569; text-transform:uppercase; letter-spacing:.04em;">Cadastro e mapeamento</h3>
+          <div id="indCadastro"></div>
+        </div>
+
+        <!-- Indicadores por produto -->
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 4px;">
+            <h3 style="margin: 0; font-size: 13px; color: #475569; text-transform:uppercase; letter-spacing:.04em;">Mapeamento por produto</h3>
+            <span style="font-size:11px; color:#94a3b8;">% de empresas com o produto mapeado</span>
+          </div>
+          <p style="margin:0 0 16px; font-size:11px; color:#94a3b8;">Ex: de 140 empresas, em quantas já sabemos a situação da frota?</p>
+          <div id="indPorProduto"></div>
+        </div>
+
+        <!-- Indicadores de cotação por produto -->
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 4px;">
+            <h3 style="margin: 0; font-size: 13px; color: #475569; text-transform:uppercase; letter-spacing:.04em;">Cotação por produto</h3>
+            <span style="font-size:11px; color:#94a3b8;">% de empresas com cotação no ano</span>
+          </div>
+          <p style="margin:0 0 16px; font-size:11px; color:#94a3b8;">Ex: das 140 empresas, em quantas já cotamos frota este ano?</p>
+          <div id="indCotProduto"></div>
         </div>
       </div>
 
@@ -6789,6 +6833,8 @@
     el.classList.add('active');
     document.getElementById('metasAnualWrap').style.display = (tab === 'anual') ? '' : 'none';
     document.getElementById('metasSemanalWrap').style.display = (tab === 'semanal') ? '' : 'none';
+    document.getElementById('metasIndicadoresWrap').style.display = (tab === 'indicadores') ? '' : 'none';
+    if (tab === 'indicadores') renderIndicadores();
     if (tab === 'semanal') { renderMetaTotalAgencia(); renderMetasPessoa(); renderEvolucaoSemanal(); }
   }
 
@@ -7078,6 +7124,94 @@
   }
 
   let _META_ANALISE = null;
+  // ============= INDICADORES (penetração na carteira) =============
+  // Barra estilo "termômetro": a cor muda conforme a faixa do %, como no medidor de qualidade.
+  function _corFaixa(pct) {
+    if (pct >= 80) return { cor: '#16a34a', label: 'Excelente' };
+    if (pct >= 60) return { cor: '#84cc16', label: 'Bom' };
+    if (pct >= 40) return { cor: '#eab308', label: 'Regular' };
+    if (pct >= 20) return { cor: '#f97316', label: 'Baixo' };
+    return { cor: '#dc2626', label: 'Muito baixo' };
+  }
+  function _barraInd(label, num, den, sufixo) {
+    const pct = den > 0 ? Math.round(num / den * 100) : 0;
+    const f = _corFaixa(pct);
+    return `
+      <div style="margin-bottom: 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;">
+          <span style="font-size:13px; font-weight:600; color:#334155;">${label}</span>
+          <span style="font-size:13px;"><strong style="color:${f.cor};">${pct}%</strong> <span style="color:#94a3b8; font-size:11px;">${num}/${den}${sufixo || ''}</span></span>
+        </div>
+        <div style="height:16px; background:#f1f5f9; border-radius:100px; overflow:hidden; position:relative;">
+          <div style="height:100%; width:${Math.max(pct, 2)}%; background:linear-gradient(90deg, ${f.cor}cc, ${f.cor}); border-radius:100px; transition:width .5s; display:flex; align-items:center; justify-content:flex-end; padding-right:8px;">
+            ${pct >= 12 ? `<span style="font-size:10px; font-weight:800; color:white;">${f.label}</span>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderIndicadores() {
+    // Filtro por RM
+    const sel = document.getElementById('indFiltroRM');
+    const vejoTudo = CTX.isAdmin || perfilEfetivo() === 'chefe';
+    if (sel && sel.options.length <= 1) {
+      const rmsU = {};
+      (EMPRESAS || []).forEach(e => { if (e.rm) rmsU[e.rm] = e.rmNome || (RMS_LIST && RMS_LIST[e.rm] && RMS_LIST[e.rm].nome) || 'RM'; });
+      sel.innerHTML = '<option value="">Toda a agência</option>' + Object.entries(rmsU).map(([uid, nome]) => `<option value="${uid}">${nome}</option>`).join('');
+    }
+    if (sel && !vejoTudo) { sel.value = uidEfetivo(); sel.disabled = true; }
+    const rmFiltro = sel ? sel.value : '';
+
+    let empresas = (EMPRESAS || []).slice();
+    if (rmFiltro) empresas = empresas.filter(e => e.rm === rmFiltro);
+    const total = empresas.length;
+    document.getElementById('indTotalEmp').textContent = total;
+
+    const anoAtual = new Date().getFullYear();
+    const ramos = (PRODUTOS || []);
+
+    // ===== Cadastro e mapeamento =====
+    let comSocios = 0, comFunc = 0, mapAlgum = 0, mapCompleto = 0;
+    empresas.forEach(e => {
+      const socios = (e.socios || []).filter(s => s && (s.nome || '').trim());
+      if (socios.length > 0) comSocios++;
+      if ((e.funcionarios || 0) > 0) comFunc++;
+      let mapeados = 0;
+      ramos.forEach(r => { if (statusMatriz(e, r.id) !== 'nao_mapeado') mapeados++; });
+      if (mapeados > 0) mapAlgum++;
+      if (ramos.length && mapeados === ramos.length) mapCompleto++;
+    });
+    // % de mapeamento médio por empresa (média das coberturas individuais)
+    let somaCob = 0;
+    empresas.forEach(e => {
+      let m = 0; ramos.forEach(r => { if (statusMatriz(e, r.id) !== 'nao_mapeado') m++; });
+      somaCob += ramos.length ? (m / ramos.length) : 0;
+    });
+    const cobMedia = total ? Math.round(somaCob / total * 100) : 0;
+
+    document.getElementById('indCadastro').innerHTML =
+      _barraInd('Sócios cadastrados (empresas com ao menos 1 sócio)', comSocios, total) +
+      _barraInd('Dados de funcionários preenchidos', comFunc, total) +
+      _barraInd('Empresas com algum mapeamento', mapAlgum, total) +
+      _barraInd('Empresas 100% mapeadas', mapCompleto, total) +
+      `<div style="margin-top:16px; padding-top:14px; border-top:1px dashed #e2e8f0;">${_barraInd('Cobertura média de mapeamento por empresa', cobMedia, 100, ' pts')}</div>`;
+
+    // ===== Mapeamento por produto =====
+    document.getElementById('indPorProduto').innerHTML = ramos.map(r => {
+      let comMap = 0;
+      empresas.forEach(e => { if (statusMatriz(e, r.id) !== 'nao_mapeado') comMap++; });
+      return _barraInd(`${r.icon} ${r.nome}`, comMap, total);
+    }).join('') || '<div style="color:#94a3b8; font-size:12px;">Sem produtos.</div>';
+
+    // ===== Cotação por produto (no ano) =====
+    document.getElementById('indCotProduto').innerHTML = ramos.map(r => {
+      let comCot = 0;
+      empresas.forEach(e => { if (_cotadoNoAno(e.id, r.id, anoAtual) || statusMatriz(e, r.id) === 'nosso') comCot++; });
+      return _barraInd(`${r.icon} ${r.nome}`, comCot, total);
+    }).join('') || '<div style="color:#94a3b8; font-size:12px;">Sem produtos.</div>';
+  }
+  window.renderIndicadores = renderIndicadores;
+
   function renderAnaliseGerente() {
     const wrap = document.getElementById('metaAnaliseGerente');
     const uid = (document.getElementById('metaGerFiltro') || {}).value;
