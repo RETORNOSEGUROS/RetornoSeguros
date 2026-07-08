@@ -3057,9 +3057,6 @@
         </div>
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <select id="prodFiltroAno" class="filter-select" onchange="renderProducao()"></select>
-          <select id="prodFiltroGrupo" class="filter-select" onchange="renderProducao()">
-            <option value="">Todos os grupos</option>
-          </select>
           <select id="prodFiltroRm" class="filter-select perm-chefe" onchange="renderProducao()">
             <option value="">Todos os gerentes</option>
           </select>
@@ -3081,6 +3078,9 @@
             <div class="rank-tab active" id="prodTabMensal" onclick="setModoProducao('mensal')">📅 Análise mensal</div>
             <div class="rank-tab" id="prodTabAnual" onclick="setModoProducao('anual')">📊 Análise anual</div>
           </div>
+          <select id="prodFiltroGrupo" class="filter-select" onchange="renderProducao()" style="font-size:12px; width:auto;">
+            <option value="">Todos os ramos</option>
+          </select>
           <div style="font-size:12px; color:#64748b;" id="prodPeriodoLabel">—</div>
         </div>
         <!-- Meses clicáveis (só no modo mensal) -->
@@ -15331,40 +15331,51 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.renderProducaoMesesStrip = renderProducaoMesesStrip;
 
-  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel) {
-    // ---- Gráfico de linha: produção acumulada por mês do ano ----
+  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel, fechadasAgenciaAno, metaAnual, mostrarVoce) {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    // produção mensal (do filtro) e da agência
     const porMes = new Array(12).fill(0);
-    fechadasAno.forEach(c => {
-      const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-      if (dt) porMes[dt.getMonth()] += (c.valor || 0);
-    });
+    fechadasAno.forEach(c => { const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null; if (dt) porMes[dt.getMonth()] += (c.valor || 0); });
+    const porMesAg = new Array(12).fill(0);
+    (fechadasAgenciaAno || []).forEach(c => { const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null; if (dt) porMesAg[dt.getMonth()] += (c.valor || 0); });
+
+    // versões acumuladas (para comparar com a meta que sobe ao longo do ano)
+    const acum = arr => { let s = 0; return arr.map(v => (s += v)); };
+    const cumVoce = acum(porMes);
+    const cumAg = acum(porMesAg);
+    // meta acumulada: meta/12 subindo mês a mês até dezembro
+    const metaMensal = (metaAnual || 0) / 12;
+    const cumMeta = meses.map((_, i) => Math.round(metaMensal * (i + 1)));
+
     const tituloLinha = document.getElementById('prodChartLinhaTitulo');
     const subLinha = document.getElementById('prodChartLinhaSub');
-    if (tituloLinha) tituloLinha.textContent = modo === 'anual' ? `Produção mês a mês · ${ano}` : `Produção do ano · ${ano}`;
-    if (subLinha) subLinha.textContent = modo === 'mensal' ? `destaque no mês selecionado (${meses[mesSel]})` : 'clique num mês acima para detalhar';
+    if (tituloLinha) tituloLinha.textContent = `Produção acumulada · ${ano}`;
+    if (subLinha) subLinha.textContent = modo === 'mensal' ? `destaque em ${meses[mesSel]} · linhas acumuladas no ano` : 'produção vs meta vs agência (acumulado)';
 
     const canvasL = document.getElementById('prodChartLinha');
     if (canvasL && typeof Chart !== 'undefined') {
       if (_prodChartLinha) _prodChartLinha.destroy();
-      // cor dos pontos: destaca o mês selecionado no modo mensal
-      const cores = meses.map((_, i) => (modo === 'mensal' && i === mesSel) ? '#4338ca' : '#a5b4fc');
-      const raios = meses.map((_, i) => (modo === 'mensal' && i === mesSel) ? 6 : 3);
+      const datasets = [];
+      // Linha "Você" só quando faz sentido (RM ou filtro por gerente); senão a produção JÁ é a da agência
+      if (mostrarVoce) {
+        datasets.push({ label: 'Você', data: cumVoce, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
+        datasets.push({ label: 'Agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'transparent', fill: false, tension: 0.3, pointRadius: 2, borderWidth: 2 });
+      } else {
+        datasets.push({ label: 'Produção da agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
+      }
+      if (metaAnual > 0) {
+        datasets.push({ label: 'Meta', data: cumMeta, borderColor: '#f59e0b', backgroundColor: 'transparent', fill: false, borderDash: [6, 4], tension: 0, pointRadius: 0, borderWidth: 2 });
+      }
       _prodChartLinha = new Chart(canvasL, {
         type: 'line',
-        data: {
-          labels: meses,
-          datasets: [{
-            label: 'Produção R$', data: porMes,
-            borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.12)',
-            fill: true, tension: 0.3,
-            pointBackgroundColor: cores, pointRadius: raios, pointHoverRadius: 7
-          }]
-        },
+        data: { labels: meses, datasets },
         options: {
           responsive: true, maintainAspectRatio: false,
           onClick: (evt, els) => { if (els.length) selecionarMesProducao(els[0].index); },
-          plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtBR(ctx.parsed.y) } } },
+          plugins: {
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 }, padding: 10 } },
+            tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtBR(ctx.parsed.y)}` } }
+          },
           scales: { y: { ticks: { callback: v => fmtBRcompacto(v) }, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
         }
       });
@@ -15497,6 +15508,34 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       // Aplicar filtros de ano / mês / gerente
       const _empresaRm = {}; (EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
+
+      // ===== Produção da AGÊNCIA inteira (ignora privacidade RM) — para as linhas Agência e comparativo =====
+      // Reconstrói funil + já-nossos de TODAS as empresas, aplica ano+grupo (sem RM, sem mês).
+      const fechadasAgenciaAno = [];
+      const _jaTemAg = new Set(todasFechadas.map(c => c.empresaId + '|' + c.produtoId + '|' + ((c.dataDecisao && c.dataDecisao.toDate) ? c.dataDecisao.toDate().getFullYear() : '')));
+      todasFechadas.forEach(c => {
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (fAno && (!dt || dt.getFullYear() !== fAno)) return;
+        if (fGrupo && _ramoGrupo[c.produtoId] !== fGrupo) return;
+        fechadasAgenciaAno.push(c);
+      });
+      (EMPRESAS || []).forEach(e => {
+        const dados = e.produtosDados || {};
+        Object.keys(dados).forEach(rid => {
+          const pd = dados[rid] || {};
+          if (getMapeamento(pd) !== 'cliente') return;
+          const premio = pd.premioAnual || pd.valorFechado || 0;
+          if (premio <= 0) return;
+          let d = new Date();
+          const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+          if (mVi) d = new Date(+mVi[3], +mVi[2] - 1, +mVi[1]);
+          if (_jaTemAg.has(e.id + '|' + rid + '|' + d.getFullYear())) return;
+          if (fAno && d.getFullYear() !== fAno) return;
+          if (fGrupo && _ramoGrupo[rid] !== fGrupo) return;
+          fechadasAgenciaAno.push({ empresaId: e.id, produtoId: rid, valor: premio, dataDecisao: { toDate: () => d } });
+        });
+      });
+
       // 1) fechadasAno = ano + rm + grupo (SEM mês) — base dos gráficos de linha e pizza
       const fechadasAno = fechadas.filter(c => {
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
@@ -15513,8 +15552,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         return true;
       });
 
+      // ===== Meta anual (total ou do grupo selecionado) =====
+      let metaAnualValor = 0;
+      try {
+        const metaDoc = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${fAno}`).get();
+        if (metaDoc.exists) {
+          const md = metaDoc.data();
+          if (fGrupo) metaAnualValor = (md.grupos && md.grupos[fGrupo]) || 0;
+          else metaAnualValor = md.producao || (md.grupos ? Object.values(md.grupos).reduce((s, v) => s + (v || 0), 0) : 0);
+        }
+      } catch (e) { console.warn('meta prod', e); }
+
       // ===== Gráficos (linha por mês do ano + pizza por ramo) =====
-      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('graf prod', e); }
+      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes, fechadasAgenciaAno, metaAnualValor, ehRm || !!fRm); } catch (e) { console.warn('graf prod', e); }
       // ===== Faixa de meses clicáveis + labels =====
       try { renderProducaoMesesStrip(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('meses prod', e); }
 
@@ -15565,17 +15615,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         cont.innerHTML = bannerAgregado + fechadas.map(c => {
           const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().toLocaleDateString('pt-BR') : '—';
           const editBtns = (CTX.isAdmin && c.origem !== 'nosso_mapeado') ? `
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #f1f5f9; display: flex; gap: 8px; justify-content: flex-end;">
-              <button class="pessoa-btn" onclick="editarProducao('${c.id}')"><i data-lucide="edit-3" class="w-3 h-3"></i> Editar</button>
-              <button class="pessoa-btn danger" onclick="excluirProducao('${c.id}')"><i data-lucide="trash-2" class="w-3 h-3"></i> Cancelar</button>
-            </div>
+              <button onclick="editarProducao('${c.id}')" title="Editar" style="border:none; background:#eef2ff; color:#4338ca; width:28px; height:28px; border-radius:7px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i data-lucide="edit-3" class="w-3.5 h-3.5"></i></button>
+              <button onclick="excluirProducao('${c.id}')" title="Cancelar" style="border:none; background:#fef2f2; color:#dc2626; width:28px; height:28px; border-radius:7px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
           ` : ((CTX.isAdmin && c.origem === 'nosso_mapeado') ? `
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #f1f5f9; display: flex; gap: 8px; justify-content: flex-end;">
-              <button class="pessoa-btn" onclick="editarVigenciaNosso('${c.empresaId}','${c.produtoId}')"><i data-lucide="calendar" class="w-3 h-3"></i> Editar vigência</button>
-            </div>
+              <button onclick="editarVigenciaNosso('${c.empresaId}','${c.produtoId}')" title="Editar vigência" style="border:none; background:#eef2ff; color:#4338ca; width:28px; height:28px; border-radius:7px; cursor:pointer; display:flex; align-items:center; justify-content:center;"><i data-lucide="calendar" class="w-3.5 h-3.5"></i></button>
           ` : '');
           return `
-            <div style="background:white; border:1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius:9px; padding:10px 12px; margin-bottom:7px;">
+            <div style="background:white; border:1px solid #e2e8f0; border-left: 3px solid #10b981; border-radius:9px; padding:9px 12px; margin-bottom:6px;">
               <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
                 <div style="flex: 1; min-width:0;">
                   <div style="display: flex; align-items: center; gap: 6px;">
@@ -15588,8 +15634,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                   </div>
                 </div>
                 <div style="background:#dcfce7; color:#166534; padding:5px 10px; border-radius:8px; font-size:14px; font-weight:800; white-space:nowrap;">${fmtBR(c.valor || 0)}</div>
+                ${editBtns}
               </div>
-              ${editBtns}
             </div>
           `;
         }).join('');
