@@ -31,7 +31,7 @@
     }
 
     /* ============= TEMA ESCURO (piloto) ============= */
-    /* Ativado por body.dark. Sobrescreve os padrões de cor mais comuns sem alterar a lógica. */
+    /* Ativado por body. Sobrescreve os padrões de cor mais comuns sem alterar a lógica. */
     body.dark {
       background: #0b1120;
       color: #e2e8f0;
@@ -3161,7 +3161,13 @@
           <div style="height:240px;"><canvas id="prodChartLinha"></canvas></div>
         </div>
         <div style="background:white; border-radius:12px; padding:16px;">
-          <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:4px;">Produção por ramo</div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px;">
+            <div style="font-size:13px; font-weight:800; color:#0f172a;">Produção por ramo</div>
+            <div id="prodPizzaToggle" style="display:none; gap:0; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+              <button id="prodPizzaBtnVoce" onclick="setPizzaFonte('voce')" style="border:none; background:#4338ca; color:#fff; font-size:11px; font-weight:700; padding:5px 12px; cursor:pointer;">Você</button>
+              <button id="prodPizzaBtnAgencia" onclick="setPizzaFonte('agencia')" style="border:none; background:#fff; color:#64748b; font-size:11px; font-weight:700; padding:5px 12px; cursor:pointer;">Agência</button>
+            </div>
+          </div>
           <div style="font-size:11px; color:#94a3b8; margin-bottom:10px;" id="prodChartPizzaSub">% de cada ramo no período</div>
           <div style="height:200px;"><canvas id="prodChartPizza"></canvas></div>
           <div id="prodPizzaLegenda" style="margin-top:10px; display:flex; flex-direction:column; gap:4px;"></div>
@@ -15372,6 +15378,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.setModoProducao = setModoProducao;
 
+  function setPizzaFonte(fonte) {
+    window._PROD_PIZZA_FONTE = fonte;
+    carregarERenderProducao();
+  }
+  window.setPizzaFonte = setPizzaFonte;
+
   function selecionarMesProducao(mes) {
     window._PROD_MES = mes;
     window._PROD_MODO = 'mensal';
@@ -15490,14 +15502,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
 
     // ---- Pizza: % por ramo no período (mês selecionado ou ano) ----
-    const base = (modo === 'mensal') ? fechadasAno.filter(c => { const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null; return dt && dt.getMonth() === mesSel; }) : fechadasAno;
+    // Para RM, permite alternar entre a distribuição DELE e a da AGÊNCIA.
+    const podeAlternar = mostrarVoce && (fechadasAgenciaAno && fechadasAgenciaAno.length > 0);
+    const toggleEl = document.getElementById('prodPizzaToggle');
+    if (toggleEl) toggleEl.style.display = podeAlternar ? 'flex' : 'none';
+    const fontePizza = (podeAlternar && window._PROD_PIZZA_FONTE === 'agencia') ? 'agencia' : 'voce';
+    // atualiza visual dos botões
+    const bV = document.getElementById('prodPizzaBtnVoce'), bA = document.getElementById('prodPizzaBtnAgencia');
+    if (bV && bA) {
+      const on = 'background:#4338ca; color:#fff;', off = 'background:#fff; color:#64748b;';
+      bV.style.cssText = `border:none; font-size:11px; font-weight:700; padding:5px 12px; cursor:pointer; ${fontePizza === 'voce' ? on : off}`;
+      bA.style.cssText = `border:none; font-size:11px; font-weight:700; padding:5px 12px; cursor:pointer; ${fontePizza === 'agencia' ? on : off}`;
+    }
+
+    const _nomeRamo = {}; (PRODUTOS || []).forEach(p => _nomeRamo[p.id] = p.nome);
+    const fonteDados = (fontePizza === 'agencia') ? (fechadasAgenciaAno || []) : fechadasAno;
+    const base = (modo === 'mensal') ? fonteDados.filter(c => { const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null; return dt && dt.getMonth() === mesSel; }) : fonteDados;
     const porRamo = {};
-    base.forEach(c => { porRamo[c.produtoNome || c.produtoId] = (porRamo[c.produtoNome || c.produtoId] || 0) + (c.valor || 0); });
+    base.forEach(c => { const nome = c.produtoNome || _nomeRamo[c.produtoId] || c.produtoId; porRamo[nome] = (porRamo[nome] || 0) + (c.valor || 0); });
     const entradas = Object.entries(porRamo).sort((a, b) => b[1] - a[1]);
     const totalPizza = entradas.reduce((s, e) => s + e[1], 0);
     const paleta = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
     const subPizza = document.getElementById('prodChartPizzaSub');
-    if (subPizza) subPizza.textContent = modo === 'mensal' ? `% por ramo em ${meses[mesSel]}` : `% por ramo em ${ano}`;
+    const qFonte = fontePizza === 'agencia' ? ' · agência' : (podeAlternar ? ' · você' : '');
+    if (subPizza) subPizza.textContent = (modo === 'mensal' ? `% por ramo em ${meses[mesSel]}` : `% por ramo em ${ano}`) + qFonte;
 
     const canvasP = document.getElementById('prodChartPizza');
     if (canvasP && typeof Chart !== 'undefined') {
