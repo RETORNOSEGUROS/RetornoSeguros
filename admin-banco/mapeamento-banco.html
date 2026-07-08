@@ -15331,7 +15331,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.renderProducaoMesesStrip = renderProducaoMesesStrip;
 
-  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel, fechadasAgenciaAno, metaAgencia, mostrarVoce, metaMinhaRM) {
+  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel, fechadasAgenciaAno, metaAgencia, mostrarVoce, metaMinhaRM, porGerenteMes) {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     // produção mensal (do filtro) e da agência
     const porMes = new Array(12).fill(0);
@@ -15343,7 +15343,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const acum = arr => { let s = 0; return arr.map(v => (s += v)); };
     const cumVoce = acum(porMes);
     const cumAg = acum(porMesAg);
-    // metas acumuladas: meta/12 subindo mês a mês até dezembro
     const cumMetaFn = total => meses.map((_, i) => Math.round((total || 0) / 12 * (i + 1)));
     const cumMetaAg = cumMetaFn(metaAgencia);
     const cumMetaRM = cumMetaFn(metaMinhaRM);
@@ -15351,22 +15350,31 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const tituloLinha = document.getElementById('prodChartLinhaTitulo');
     const subLinha = document.getElementById('prodChartLinhaSub');
     if (tituloLinha) tituloLinha.textContent = `Produção acumulada · ${ano}`;
-    if (subLinha) subLinha.textContent = modo === 'mensal' ? `destaque em ${meses[mesSel]} · linhas acumuladas no ano` : 'produção vs meta vs agência (acumulado)';
+
+    const temGestor = porGerenteMes && Object.keys(porGerenteMes).length > 0;
+    if (subLinha) subLinha.textContent = temGestor ? 'meta da agência vs produção de cada gerente (acumulado)' : (modo === 'mensal' ? `destaque em ${meses[mesSel]} · linhas acumuladas no ano` : 'produção vs meta vs agência (acumulado)');
 
     const canvasL = document.getElementById('prodChartLinha');
     if (canvasL && typeof Chart !== 'undefined') {
       if (_prodChartLinha) _prodChartLinha.destroy();
       const datasets = [];
-      if (mostrarVoce) {
+      const paletaGer = ['#6366f1', '#0ea5e9', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#f43f5e', '#22c55e', '#3b82f6', '#a855f7'];
+
+      if (temGestor) {
+        // ADMIN/CHEFE: meta da agência (amarelo forte pontilhado) + 1 linha por gerente
+        if (metaAgencia > 0) datasets.push({ label: 'Meta da agência', data: cumMetaAg, borderColor: '#eab308', backgroundColor: 'transparent', fill: false, borderDash: [3, 4], tension: 0, pointRadius: 0, borderWidth: 3 });
+        const gers = Object.entries(porGerenteMes).sort((a, b) => b[1].meses.reduce((s, v) => s + v, 0) - a[1].meses.reduce((s, v) => s + v, 0));
+        gers.forEach(([uid, info], i) => {
+          datasets.push({ label: info.nome, data: acum(info.meses), borderColor: paletaGer[i % paletaGer.length], backgroundColor: 'transparent', fill: false, tension: 0.3, pointRadius: 2, pointHoverRadius: 5, borderWidth: 2 });
+        });
+      } else if (mostrarVoce) {
+        // RM: você + agência + suas metas
         datasets.push({ label: 'Você', data: cumVoce, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
         datasets.push({ label: 'Agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'transparent', fill: false, tension: 0.3, pointRadius: 2, borderWidth: 2 });
-        // sua meta: amarelo FORTE sólido
         if (metaMinhaRM > 0) datasets.push({ label: 'Sua meta', data: cumMetaRM, borderColor: '#eab308', backgroundColor: 'transparent', fill: false, tension: 0, pointRadius: 0, borderWidth: 3 });
-        // meta da agência: pontilhada
         if (metaAgencia > 0) datasets.push({ label: 'Meta da agência', data: cumMetaAg, borderColor: '#f59e0b', backgroundColor: 'transparent', fill: false, borderDash: [3, 4], tension: 0, pointRadius: 0, borderWidth: 2 });
       } else {
         datasets.push({ label: 'Produção da agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
-        // meta da agência: amarelo forte pontilhado
         if (metaAgencia > 0) datasets.push({ label: 'Meta da agência', data: cumMetaAg, borderColor: '#eab308', backgroundColor: 'transparent', fill: false, borderDash: [3, 4], tension: 0, pointRadius: 0, borderWidth: 3 });
       }
       _prodChartLinha = new Chart(canvasL, {
@@ -15376,7 +15384,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           responsive: true, maintainAspectRatio: false,
           onClick: (evt, els) => { if (els.length) selecionarMesProducao(els[0].index); },
           plugins: {
-            legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 }, padding: 10 } },
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 }, padding: 8 } },
             tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtBR(ctx.parsed.y)}` } }
           },
           scales: { y: { ticks: { callback: v => fmtBRcompacto(v) }, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
@@ -15509,11 +15517,25 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         });
       } catch (e) {}
 
-      // Aplicar filtros de ano / mês / gerente
-      const _empresaRm = {}; (EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
+      // ===== Produção da AGÊNCIA inteira (ignora privacidade RM) — para as linhas Agência e por gerente =====
+      // O funil (todasFechadas) todos veem; mas os "já é nosso" vêm de EMPRESAS, que para um RM só tem as dele.
+      // Então buscamos as empresas de TODA a agência via query própria (só para agregação, sem expor a lista).
+      let empresasAgencia = EMPRESAS_REAIS || [];
+      if (perfilEfetivo() === 'rm') {
+        try {
+          let q = db.collection('empresas');
+          if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId); else q = q.limit(800);
+          const snapEmp = await q.get();
+          const docs = snapEmp.docs.filter(d => !CTX.agenciaId || d.data().agenciaId === CTX.agenciaId);
+          empresasAgencia = await Promise.all(docs.map(async d => {
+            const dd = d.data();
+            const produtosDados = {};
+            try { const ps = await db.collection('empresas').doc(d.id).collection('mb_produtos').get(); ps.forEach(p => produtosDados[p.id] = p.data()); } catch (e) {}
+            return { id: d.id, nome: dd.nome, rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, rmNome: dd.rmNome, produtosDados };
+          }));
+        } catch (e) { console.warn('empresas agencia prod', e); }
+      }
 
-      // ===== Produção da AGÊNCIA inteira (ignora privacidade RM) — para as linhas Agência e comparativo =====
-      // Reconstrói funil + já-nossos de TODAS as empresas, aplica ano+grupo (sem RM, sem mês).
       const fechadasAgenciaAno = [];
       const _jaTemAg = new Set(todasFechadas.map(c => c.empresaId + '|' + c.produtoId + '|' + ((c.dataDecisao && c.dataDecisao.toDate) ? c.dataDecisao.toDate().getFullYear() : '')));
       todasFechadas.forEach(c => {
@@ -15522,7 +15544,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (fGrupo && _ramoGrupo[c.produtoId] !== fGrupo) return;
         fechadasAgenciaAno.push(c);
       });
-      (EMPRESAS || []).forEach(e => {
+      empresasAgencia.forEach(e => {
         const dados = e.produtosDados || {};
         Object.keys(dados).forEach(rid => {
           const pd = dados[rid] || {};
@@ -15535,11 +15557,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           if (_jaTemAg.has(e.id + '|' + rid + '|' + d.getFullYear())) return;
           if (fAno && d.getFullYear() !== fAno) return;
           if (fGrupo && _ramoGrupo[rid] !== fGrupo) return;
-          fechadasAgenciaAno.push({ empresaId: e.id, produtoId: rid, valor: premio, dataDecisao: { toDate: () => d } });
+          fechadasAgenciaAno.push({ empresaId: e.id, produtoId: rid, valor: premio, dataDecisao: { toDate: () => d }, rmDono: e.rm });
         });
       });
+      // mapa empresa->rm da agência inteira (para separar produção por gerente)
+      const _empresaRmAg = {}; empresasAgencia.forEach(e => { _empresaRmAg[e.id] = e.rm; });
 
       // 1) fechadasAno = ano + rm + grupo (SEM mês) — base dos gráficos de linha e pizza
+      const _empresaRm = {}; (EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
       const fechadasAno = fechadas.filter(c => {
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (fAno && (!dt || dt.getFullYear() !== fAno)) return false;
@@ -15577,8 +15602,26 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }
       } catch (e) { console.warn('meta prod', e); }
 
+      // ===== Produção por gerente (para admin/chefe: uma linha por gerente) =====
+      const ehGestor = (CTX.isAdmin || perfilEfetivo() === 'chefe') && !fRm;
+      let porGerenteMes = null;
+      if (ehGestor) {
+        porGerenteMes = {}; // { uid: {nome, meses:[12]} }
+        fechadasAgenciaAno.forEach(c => {
+          const uid = c.rmDono || _empresaRmAg[c.empresaId];
+          if (!uid) return;
+          const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+          if (!dt) return;
+          if (!porGerenteMes[uid]) {
+            const p = (EQUIPE_REAL || []).find(x => x.uid === uid);
+            porGerenteMes[uid] = { nome: (p && p.nome) || (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || 'RM', meses: new Array(12).fill(0) };
+          }
+          porGerenteMes[uid].meses[dt.getMonth()] += (c.valor || 0);
+        });
+      }
+
       // ===== Gráficos (linha por mês do ano + pizza por ramo) =====
-      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes, fechadasAgenciaAno, metaAgencia, ehRm || !!fRm, metaMinhaRM); } catch (e) { console.warn('graf prod', e); }
+      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes, fechadasAgenciaAno, metaAgencia, ehRm || !!fRm, metaMinhaRM, porGerenteMes); } catch (e) { console.warn('graf prod', e); }
       // ===== Faixa de meses clicáveis + labels =====
       try { renderProducaoMesesStrip(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('meses prod', e); }
 
