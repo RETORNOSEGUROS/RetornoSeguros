@@ -15331,7 +15331,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.renderProducaoMesesStrip = renderProducaoMesesStrip;
 
-  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel, fechadasAgenciaAno, metaAnual, mostrarVoce) {
+  function renderProducaoGraficos(fechadasAno, ano, modo, mesSel, fechadasAgenciaAno, metaAgencia, mostrarVoce, metaMinhaRM) {
     const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     // produção mensal (do filtro) e da agência
     const porMes = new Array(12).fill(0);
@@ -15343,9 +15343,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const acum = arr => { let s = 0; return arr.map(v => (s += v)); };
     const cumVoce = acum(porMes);
     const cumAg = acum(porMesAg);
-    // meta acumulada: meta/12 subindo mês a mês até dezembro
-    const metaMensal = (metaAnual || 0) / 12;
-    const cumMeta = meses.map((_, i) => Math.round(metaMensal * (i + 1)));
+    // metas acumuladas: meta/12 subindo mês a mês até dezembro
+    const cumMetaFn = total => meses.map((_, i) => Math.round((total || 0) / 12 * (i + 1)));
+    const cumMetaAg = cumMetaFn(metaAgencia);
+    const cumMetaRM = cumMetaFn(metaMinhaRM);
 
     const tituloLinha = document.getElementById('prodChartLinhaTitulo');
     const subLinha = document.getElementById('prodChartLinhaSub');
@@ -15356,15 +15357,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (canvasL && typeof Chart !== 'undefined') {
       if (_prodChartLinha) _prodChartLinha.destroy();
       const datasets = [];
-      // Linha "Você" só quando faz sentido (RM ou filtro por gerente); senão a produção JÁ é a da agência
       if (mostrarVoce) {
         datasets.push({ label: 'Você', data: cumVoce, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
         datasets.push({ label: 'Agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'transparent', fill: false, tension: 0.3, pointRadius: 2, borderWidth: 2 });
+        // sua meta: amarelo FORTE sólido
+        if (metaMinhaRM > 0) datasets.push({ label: 'Sua meta', data: cumMetaRM, borderColor: '#eab308', backgroundColor: 'transparent', fill: false, tension: 0, pointRadius: 0, borderWidth: 3 });
+        // meta da agência: pontilhada
+        if (metaAgencia > 0) datasets.push({ label: 'Meta da agência', data: cumMetaAg, borderColor: '#f59e0b', backgroundColor: 'transparent', fill: false, borderDash: [3, 4], tension: 0, pointRadius: 0, borderWidth: 2 });
       } else {
         datasets.push({ label: 'Produção da agência', data: cumAg, borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.10)', fill: true, tension: 0.3, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2.5 });
-      }
-      if (metaAnual > 0) {
-        datasets.push({ label: 'Meta', data: cumMeta, borderColor: '#f59e0b', backgroundColor: 'transparent', fill: false, borderDash: [6, 4], tension: 0, pointRadius: 0, borderWidth: 2 });
+        // meta da agência: amarelo forte pontilhado
+        if (metaAgencia > 0) datasets.push({ label: 'Meta da agência', data: cumMetaAg, borderColor: '#eab308', backgroundColor: 'transparent', fill: false, borderDash: [3, 4], tension: 0, pointRadius: 0, borderWidth: 3 });
       }
       _prodChartLinha = new Chart(canvasL, {
         type: 'line',
@@ -15552,19 +15555,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         return true;
       });
 
-      // ===== Meta anual (total ou do grupo selecionado) =====
-      let metaAnualValor = 0;
+      // ===== Meta anual: da agência e do RM (total ou do grupo selecionado) =====
+      let metaAgencia = 0, metaMinhaRM = 0;
       try {
         const metaDoc = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${fAno}`).get();
         if (metaDoc.exists) {
           const md = metaDoc.data();
-          if (fGrupo) metaAnualValor = (md.grupos && md.grupos[fGrupo]) || 0;
-          else metaAnualValor = md.producao || (md.grupos ? Object.values(md.grupos).reduce((s, v) => s + (v || 0), 0) : 0);
+          const _valGrupo = obj => (obj && typeof obj === 'object') ? (obj.prod || 0) : (obj || 0);
+          if (fGrupo) {
+            metaAgencia = _valGrupo(md.grupos && md.grupos[fGrupo]);
+          } else {
+            metaAgencia = md.producao || (md.grupos ? Object.values(md.grupos).reduce((s, v) => s + _valGrupo(v), 0) : 0);
+          }
+          // Meta do RM (porGerente[uid] = { grupoId: valorProd })
+          const meuUid = uidEfetivo();
+          const pg = (md.porGerente && md.porGerente[meuUid]) || null;
+          if (pg) {
+            if (fGrupo) metaMinhaRM = pg[fGrupo] || 0;
+            else metaMinhaRM = Object.values(pg).reduce((s, v) => s + (v || 0), 0);
+          }
         }
       } catch (e) { console.warn('meta prod', e); }
 
       // ===== Gráficos (linha por mês do ano + pizza por ramo) =====
-      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes, fechadasAgenciaAno, metaAnualValor, ehRm || !!fRm); } catch (e) { console.warn('graf prod', e); }
+      try { renderProducaoGraficos(fechadasAno, fAno, modo, fMes, fechadasAgenciaAno, metaAgencia, ehRm || !!fRm, metaMinhaRM); } catch (e) { console.warn('graf prod', e); }
       // ===== Faixa de meses clicáveis + labels =====
       try { renderProducaoMesesStrip(fechadasAno, fAno, modo, fMes); } catch (e) { console.warn('meses prod', e); }
 
