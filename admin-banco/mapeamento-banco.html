@@ -11811,8 +11811,26 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // Separadas em: SUAS (nosso/fechado) e MERCADO (mapeado com concorrente, ainda não é nosso).
     const projSeuGrupo = {};      // renovações suas por grupo
     const projMercadoGrupo = {};  // renovações do mercado por grupo
+    const pipelineGrupo = {};     // negócios EM COTAÇÃO no funil (etapa 2+) por grupo
     const mesAtual = new Date().getMonth();
     const anoAtual = new Date().getFullYear();
+
+    // 1) Pipeline: cotações ativas da etapa 2 (informacoes) em diante — estas SUBSCREVEM a renovação mapeada.
+    //    Guardamos empresa|produto que está no funil para NÃO contar de novo como renovação.
+    const noFunilSet = new Set();
+    const etapasContam = STATUS_ATIVOS.filter(s => s !== 'solicitada'); // etapa 2+ (exclui "só solicitada")
+    (COTACOES || []).forEach(c => {
+      if (!etapasContam.includes(c.status)) return;
+      const rmDono = empresaRm[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
+      if (escopo !== 'agencia' && rmDono !== escopo) return;
+      const gid = ramoGrupo[c.produtoId] || 'outros';
+      const val = c.valorNegociacao || c.valor || 0;
+      if (val > 0) pipelineGrupo[gid] = (pipelineGrupo[gid] || 0) + val;
+      noFunilSet.add(c.empresaId + '|' + c.produtoId); // subscreve a renovação
+    });
+    const pipelineTotal = Object.values(pipelineGrupo).reduce((s, v) => s + v, 0);
+
+    // 2) Renovações mapeadas — pulando as que já estão no funil (evita duplicar)
     (EMPRESAS || []).forEach(e => {
       if (escopo !== 'agencia' && e.rm !== escopo) return;
       const dados = e.produtosDados || {};
@@ -11821,6 +11839,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const premio = pd.premioAnual || pd.valorFechado || 0;
         if (premio <= 0) return;
         if (!pd.vencimentoMes || !pd.vencimentoAno) return;
+        if (noFunilSet.has(e.id + '|' + rid)) return; // já está no funil → conta no pipeline, não aqui
         // vence deste mês até dezembro do ano do relatório
         const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
         const venceNoPeriodo = (vAno === ano) && (ano > anoAtual || vMes >= mesAtual);
@@ -11833,9 +11852,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     });
     const projSeuTotal = Object.values(projSeuGrupo).reduce((s, v) => s + v, 0);
     const projMercadoTotal = Object.values(projMercadoGrupo).reduce((s, v) => s + v, 0);
-    const projTotal = projSeuTotal + projMercadoTotal;
+    const projTotal = projSeuTotal + projMercadoTotal + pipelineTotal;
     const projGrupo = {}; // total combinado por grupo (para compatibilidade)
-    (GRUPOS || []).forEach(g => { projGrupo[g.id] = (projSeuGrupo[g.id] || 0) + (projMercadoGrupo[g.id] || 0); });
+    (GRUPOS || []).forEach(g => { projGrupo[g.id] = (projSeuGrupo[g.id] || 0) + (projMercadoGrupo[g.id] || 0) + (pipelineGrupo[g.id] || 0); });
 
     // KPIs
     const realizadoRef = (RM_PERIODO === 'mensal') ? realMesTotal : realAnualTotal;
@@ -11878,9 +11897,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // Projeção de renovações — por grupo, com potencial de atingimento da meta
     html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;">
       <h3 style="margin:0 0 6px;font-size:15px;font-weight:800;color:#0f172a;">💡 Projeção — se fechar as renovações mapeadas</h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 14px;">Renovações que vencem <strong>deste mês até dezembro/${ano}</strong>: as <span style="color:#0ea5e9;font-weight:700;">suas</span> (já é nosso / fechado) + as do <span style="color:#f59e0b;font-weight:700;">mercado</span> (mapeadas com concorrente). Some ao já produzido e veja quanto da meta você alcança.</p>`;
+      <p style="font-size:12px;color:#64748b;margin:0 0 14px;"><span style="color:#8b5cf6;font-weight:700;">Em cotação</span> (negócios no funil, da etapa 2 em diante) + renovações que vencem <strong>deste mês até dezembro/${ano}</strong>: as <span style="color:#0ea5e9;font-weight:700;">suas</span> (já é nosso) e as do <span style="color:#f59e0b;font-weight:700;">mercado</span> (concorrente). Uma renovação que já entrou no funil conta só em "Em cotação", sem duplicar.</p>`;
     if (projTotal === 0 && realAnualTotal === 0) {
-      html += '<div style="color:#94a3b8;font-size:13px;">Nenhuma renovação mapeada com prêmio e vencimento informados ainda.</div>';
+      html += '<div style="color:#94a3b8;font-size:13px;">Nenhum negócio em cotação nem renovação mapeada com prêmio e vencimento ainda.</div>';
     } else {
       // linha por grupo
       const gruposMostrar = (GRUPOS || []).filter(g => (metaGrupo[g.id] || 0) > 0 || (realGrupo[g.id] || 0) > 0 || (projGrupo[g.id] || 0) > 0);
@@ -11889,6 +11908,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <th style="text-align:left;padding:6px 4px;">Grupo</th>
           <th style="padding:6px 4px;">Meta</th>
           <th style="padding:6px 4px;">Produzido</th>
+          <th style="padding:6px 4px;color:#8b5cf6;">Em cotação</th>
           <th style="padding:6px 4px;color:#0ea5e9;">Renov. suas</th>
           <th style="padding:6px 4px;color:#f59e0b;">Renov. mercado</th>
           <th style="padding:6px 4px;">Se fechar tudo</th>
@@ -11896,15 +11916,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       gruposMostrar.forEach(g => {
         const meta = metaGrupo[g.id] || 0;
         const real = realGrupo[g.id] || 0;
+        const pipe = pipelineGrupo[g.id] || 0;
         const pSeu = projSeuGrupo[g.id] || 0;
         const pMerc = projMercadoGrupo[g.id] || 0;
-        const potencial = real + pSeu + pMerc;
+        const potencial = real + pipe + pSeu + pMerc;
         const pct = meta > 0 ? Math.round(potencial / meta * 100) : (potencial > 0 ? 100 : 0);
         const cPct = pct >= 100 ? '#10b981' : pct >= 70 ? '#4f46e5' : pct >= 40 ? '#f59e0b' : '#ef4444';
         html += `<tr style="text-align:right;border-bottom:1px solid #f8fafc;">
           <td style="text-align:left;padding:7px 4px;font-weight:700;color:${g.cor};">${g.nome}</td>
           <td style="padding:7px 4px;color:#64748b;">${fmtBRcompacto(meta)}</td>
           <td style="padding:7px 4px;font-weight:700;">${fmtBRcompacto(real)}</td>
+          <td style="padding:7px 4px;color:#8b5cf6;">${pipe > 0 ? '+' + fmtBRcompacto(pipe) : '—'}</td>
           <td style="padding:7px 4px;color:#0ea5e9;">${pSeu > 0 ? '+' + fmtBRcompacto(pSeu) : '—'}</td>
           <td style="padding:7px 4px;color:#f59e0b;">${pMerc > 0 ? '+' + fmtBRcompacto(pMerc) : '—'}</td>
           <td style="padding:7px 4px;"><strong style="color:${cPct};">${pct}%</strong></td>
@@ -11917,13 +11939,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <td style="text-align:left;padding:8px 4px;">Total</td>
         <td style="padding:8px 4px;">${fmtBRcompacto(metaTotal)}</td>
         <td style="padding:8px 4px;">${fmtBRcompacto(realAnualTotal)}</td>
+        <td style="padding:8px 4px;color:#8b5cf6;">+${fmtBRcompacto(pipelineTotal)}</td>
         <td style="padding:8px 4px;color:#0ea5e9;">+${fmtBRcompacto(projSeuTotal)}</td>
         <td style="padding:8px 4px;color:#f59e0b;">+${fmtBRcompacto(projMercadoTotal)}</td>
         <td style="padding:8px 4px;color:#4338ca;">${pctTot}%</td>
       </tr></tbody></table></div>`;
       html += `<div style="margin-top:14px;padding:12px 14px;background:linear-gradient(135deg,#eef2ff,#f0fdf4);border-radius:10px;font-size:13px;color:#3730a3;">
-        Produzido <strong>${fmtBR(realAnualTotal)}</strong> + renovações suas <strong>${fmtBR(projSeuTotal)}</strong> + mercado <strong>${fmtBR(projMercadoTotal)}</strong> = <strong style="font-size:15px;">${fmtBR(realAnualTotal + projTotal)}</strong>${metaTotal > 0 ? ` · chegaria a <strong style="font-size:15px;">${pctTot}%</strong> da meta` : ''}.
-        ${metaTotal > 0 && pctTot < 100 ? `<br><span style="color:#9a3412;">Faltariam <strong>${fmtBR(Math.max(0, metaTotal - (realAnualTotal + projTotal)))}</strong> — hora de cotar mais e buscar novos negócios.</span>` : (pctTot >= 100 ? '<br><span style="color:#166534;font-weight:700;">Fechando essas renovações, você bate a meta! 🎯</span>' : '')}
+        Produzido <strong>${fmtBR(realAnualTotal)}</strong> + em cotação <strong>${fmtBR(pipelineTotal)}</strong> + renovações suas <strong>${fmtBR(projSeuTotal)}</strong> + mercado <strong>${fmtBR(projMercadoTotal)}</strong> = <strong style="font-size:15px;">${fmtBR(potTotal)}</strong>${metaTotal > 0 ? ` · chegaria a <strong style="font-size:15px;">${pctTot}%</strong> da meta` : ''}.
+        ${metaTotal > 0 && pctTot < 100 ? `<br><span style="color:#9a3412;">Faltariam <strong>${fmtBR(Math.max(0, metaTotal - potTotal))}</strong> — hora de cotar mais e buscar novos negócios.</span>` : (pctTot >= 100 ? '<br><span style="color:#166534;font-weight:700;">Fechando esse pipeline e renovações, você bate a meta! 🎯</span>' : '')}
       </div>`;
     }
     html += `</div>`;
