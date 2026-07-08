@@ -11821,32 +11821,39 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     //    Guardamos empresa|produto que está no funil para NÃO contar de novo como renovação.
     const noFunilSet = new Set();
     const etapasContam = STATUS_ATIVOS.filter(s => s !== 'solicitada'); // etapa 2+ (exclui "só solicitada")
+    // Escopo do pipeline: espelha o filtro da tela "Cotações em Andamento".
+    // - EMPRESAS_REAIS já vem filtrado para o usuário logado (RM vê só as dele).
+    // - Se um gestor selecionou um RM específico no escopo, restringe às empresas desse RM.
+    let idsCarteira;
+    if (escopo === 'agencia') {
+      idsCarteira = null; // conta todas as cotações da agência
+    } else {
+      // se o escopo é o próprio usuário logado, EMPRESAS_REAIS já é a carteira dele;
+      // se é outro RM (gestor filtrando), pega as empresas cujo dono é esse RM.
+      const doEscopo = (EMPRESAS_REAIS || []).filter(e => e.rm === escopo);
+      const base = doEscopo.length ? doEscopo : (EMPRESAS_REAIS || []); // fallback: carteira já filtrada
+      idsCarteira = new Set(base.map(e => e.id));
+    }
     cotacoesAtivas.forEach(c => {
       if (!etapasContam.includes(c.status)) return;
-      const rmDono = empresaRm[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
-      if (escopo !== 'agencia' && rmDono !== escopo) return;
+      if (idsCarteira && !idsCarteira.has(c.empresaId)) return;
       const gid = ramoGrupo[c.produtoId] || 'outros';
       const val = c.valorNegociacao || c.valor || 0;
       if (val > 0) pipelineGrupo[gid] = (pipelineGrupo[gid] || 0) + val;
       noFunilSet.add(c.empresaId + '|' + c.produtoId); // subscreve a renovação
     });
-    // DIAGNÓSTICO TEMPORÁRIO
-    console.log('=== PIPELINE DEBUG ===');
-    console.log('escopo:', escopo, '| RM_MES ano:', ano);
-    console.log('cotacoesAtivas (total):', cotacoesAtivas.length);
-    console.log('STATUS_ATIVOS:', JSON.stringify(STATUS_ATIVOS));
-    console.log('etapasContam:', JSON.stringify(etapasContam));
-    cotacoesAtivas.forEach(c => {
-      const rmDono = empresaRm[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
-      console.log(`  cot: status=${c.status} | produtoId=${c.produtoId} | grupo=${ramoGrupo[c.produtoId] || '???'} | val=${c.valorNegociacao || c.valor || 0} | empresaRm=${empresaRm[c.empresaId] || '?'} | rmDono=${rmDono} | contaEtapa=${etapasContam.includes(c.status)} | passaEscopo=${escopo === 'agencia' || rmDono === escopo}`);
-    });
-    console.log('pipelineGrupo resultante:', JSON.stringify(pipelineGrupo));
-    console.log('======================');
     const pipelineTotal = Object.values(pipelineGrupo).reduce((s, v) => s + v, 0);
 
-    // 2) Renovações mapeadas — pulando as que já estão no funil (evita duplicar)
-    (EMPRESAS || []).forEach(e => {
-      if (escopo !== 'agencia' && e.rm !== escopo) return;
+    // 2) Renovações mapeadas — pulando as que já estão no funil (evita duplicar).
+    //    Usa a MESMA carteira do pipeline (EMPRESAS_REAIS já filtrado para o usuário).
+    let carteira;
+    if (escopo === 'agencia') {
+      carteira = (EMPRESAS_REAIS || EMPRESAS || []);
+    } else {
+      const doEscopo = (EMPRESAS_REAIS || []).filter(e => e.rm === escopo);
+      carteira = doEscopo.length ? doEscopo : (EMPRESAS_REAIS || []);
+    }
+    carteira.forEach(e => {
       const dados = e.produtosDados || {};
       Object.keys(dados).forEach(rid => {
         const pd = dados[rid] || {};
