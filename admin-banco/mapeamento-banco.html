@@ -3648,6 +3648,21 @@
     </div><!-- /screen-agenda -->
 
     <!-- Modal: agendar visita a um cliente -->
+    <!-- Modal: detalhes da visita (ao clicar no card) -->
+    <div class="cad-modal" id="modalDetalheVisita">
+      <div class="cad-modal-bg" onclick="document.getElementById('modalDetalheVisita').classList.remove('open')"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head"><h2>🗓️ Detalhes da visita</h2><p>Informações do agendamento</p></div>
+        <div class="cad-modal-body">
+          <div id="detVisitaCorpo"></div>
+          <div id="detVisitaAcoes" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:14px;"></div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-primary" onclick="document.getElementById('modalDetalheVisita').classList.remove('open')">Fechar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: presença do corretor na agência -->
     <div class="cad-modal" id="modalPresencaAgencia">
       <div class="cad-modal-bg" onclick="document.getElementById('modalPresencaAgencia').classList.remove('open')"></div>
@@ -12428,7 +12443,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const ehPresenca = a.tipo === 'presenca_agencia';
         const rmCurto = (a.gerenteNome || '').split(' ')[0];
         const equipeExtra = (a.equipe && a.equipe.length) ? ` +${a.equipe.length}` : '';
-        const clique = (a.empresaId && !ehPresenca) ? `abrirVisitaEntrada('${a.empresaId}','${a.id}')` : `event.stopPropagation();`;
+        const clique = (a.empresaId && !ehPresenca) ? `verDetalheVisita('${a.id}')` : `event.stopPropagation();`;
         if (ehPresenca) {
           return `<div onclick="event.stopPropagation();" title="${a.gerenteNome} na agência${a.observacoes ? ' · ' + a.observacoes : ''}" style="font-size:10px; background:#fef9c3; color:#854d0e; border-radius:5px; padding:3px 5px; margin-bottom:2px; overflow:hidden;">
             <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600;">📍 ${a.hora || ''}${a.horaFim ? '–' + a.horaFim : ''} ${rmCurto}</div>
@@ -12579,6 +12594,49 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ---------- Cadastro de visita (overlay) ----------
   let VE_TIPO = 'presencial';
+  // Ao clicar numa visita do calendário: mostra só as INFORMAÇÕES do agendamento.
+  function verDetalheVisita(id) {
+    const a = (AGENDAMENTOS || []).find(x => x.id === id);
+    if (!a) return;
+    const TIPO_LBL = { presencial: '📍 Presencial', ligacao: '📞 Ligação', video: '🎥 Vídeo' };
+    const dataFmt = (() => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.data || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : (a.data || '—'); })();
+    const statusLbl = a.status === 'realizada' ? '<span style="color:#166534; font-weight:700;">✓ Realizada</span>' : '<span style="color:#4338ca; font-weight:700;">Agendada</span>';
+    const equipe = (a.equipe && a.equipe.length) ? a.equipe.map(x => x.nome).join(', ') : null;
+    const linha = (icon, label, val) => val ? `<div style="display:flex; gap:8px; padding:7px 0; border-bottom:1px solid #f1f5f9; font-size:13px;"><span style="width:20px;">${icon}</span><span style="color:#64748b; min-width:96px;">${label}</span><strong style="color:#0f172a; flex:1;">${val}</strong></div>` : '';
+    const corpo = `
+      ${linha('🏢', 'Empresa', a.empresaNome)}
+      ${linha('📅', 'Data', dataFmt)}
+      ${linha('⏰', 'Horário', (a.hora || '—') + (a.horaFim ? ' – ' + a.horaFim : ' (1h)'))}
+      ${linha('🔖', 'Tipo', TIPO_LBL[a.tipo] || a.tipo)}
+      ${linha('📍', 'Cidade', a.cidade)}
+      ${linha('👤', 'Gerente', a.gerenteNome)}
+      ${linha('👥', 'Equipe junto', equipe)}
+      ${linha('🙋', 'Responsável', a.responsavelEmpresa)}
+      ${linha('✉️', 'E-mail', a.responsavelEmail)}
+      ${linha('📊', 'Status', statusLbl)}
+      ${a.observacoes ? `<div style="margin-top:10px; background:#f8fafc; border-radius:8px; padding:10px; font-size:13px; color:#475569;"><strong>Observações:</strong><br>${a.observacoes}</div>` : ''}
+    `;
+    document.getElementById('detVisitaCorpo').innerHTML = corpo;
+    // botão de link (se tem token) e de registrar mapeamento
+    const acoes = document.getElementById('detVisitaAcoes');
+    if (acoes) {
+      const btns = [];
+      if (a.token) btns.push(`<button class="btn-secondary" onclick="copiarLinkVisitaAg('${a.token}')"><i data-lucide="link" class="w-3.5 h-3.5 inline"></i> Copiar link</button>`);
+      if (a.empresaId && a.status !== 'realizada') btns.push(`<button class="btn-secondary" onclick="document.getElementById('modalDetalheVisita').classList.remove('open'); abrirVisitaEntrada('${a.empresaId}','${a.id}')"><i data-lucide="check-circle" class="w-3.5 h-3.5 inline"></i> Registrar mapeamento</button>`);
+      acoes.innerHTML = btns.join('');
+    }
+    document.getElementById('modalDetalheVisita').classList.add('open');
+    try { if (window.lucide) lucide.createIcons(); } catch (e) {}
+  }
+  window.verDetalheVisita = verDetalheVisita;
+  function copiarLinkVisitaAg(token) {
+    const url = `${window.location.origin}${window.location.pathname}?visita=${token}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => flashSalvo('Link copiado!')).catch(() => prompt('Link da visita:', url));
+    } else { prompt('Link da visita:', url); }
+  }
+  window.copiarLinkVisitaAg = copiarLinkVisitaAg;
+
   async function abrirVisitaEntrada(empresaId, agendamentoId) {
     const e = (EMPRESAS || []).find(x => x.id === empresaId);
     if (!e) return alert('Empresa não encontrada.');
