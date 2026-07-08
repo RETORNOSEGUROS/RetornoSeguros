@@ -3587,7 +3587,10 @@
             <div style="font-size: 20px; font-weight: 800; color: #0f172a; min-width:180px; text-align:center;" id="agendaMesLabel">—</div>
             <button class="btn-secondary" onclick="mudarMesAgenda(1)" style="padding:6px 12px;">▶</button>
           </div>
-          <button class="btn-primary" onclick="abrirAgendarVisita()"><i data-lucide="calendar-plus" class="w-3.5 h-3.5 inline"></i> Agendar visita</button>
+          <div style="display:flex; gap:8px;">
+            <button class="btn-secondary perm-admin" onclick="abrirPresencaAgencia()" style="border-color:#c7d2fe; color:#4338ca;"><i data-lucide="map-pin" class="w-3.5 h-3.5 inline"></i> Estarei na agência</button>
+            <button class="btn-primary" onclick="abrirAgendarVisita()"><i data-lucide="calendar-plus" class="w-3.5 h-3.5 inline"></i> Agendar visita</button>
+          </div>
         </div>
         <div id="agendaCalendarioContainer"></div>
       </div>
@@ -3645,6 +3648,38 @@
     </div><!-- /screen-agenda -->
 
     <!-- Modal: agendar visita a um cliente -->
+    <!-- Modal: presença do corretor na agência -->
+    <div class="cad-modal" id="modalPresencaAgencia">
+      <div class="cad-modal-bg" onclick="document.getElementById('modalPresencaAgencia').classList.remove('open')"></div>
+      <div class="cad-modal-panel">
+        <div class="cad-modal-head"><h2>📍 Estarei na agência</h2><p>Informe à equipe quando você estará disponível na agência</p></div>
+        <div class="cad-modal-body">
+          <div class="form-group">
+            <label class="form-label">Data</label>
+            <input type="date" class="form-control" id="paData">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Das</label>
+              <input type="time" class="form-control" id="paHoraInicio">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Até</label>
+              <input type="time" class="form-control" id="paHoraFim">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Observação <small style="color:#94a3b8;">(opcional)</small></label>
+            <input type="text" class="form-control" id="paObs" placeholder="Ex: manhã de reuniões, tarde livre para visitas">
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalPresencaAgencia').classList.remove('open')">Cancelar</button>
+          <button class="btn-primary" onclick="salvarPresencaAgencia()"><i data-lucide="check" class="w-3.5 h-3.5 inline"></i> Informar</button>
+        </div>
+      </div>
+    </div>
+
     <div class="cad-modal" id="modalAgendarVisita">
       <div class="cad-modal-bg" onclick="document.getElementById('modalAgendarVisita').classList.remove('open')"></div>
       <div class="cad-modal-panel">
@@ -3681,10 +3716,29 @@
             <label class="form-label">Gerente responsável</label>
             <select class="form-control" id="avGerente"></select>
           </div>
+          <div class="form-group">
+            <label class="form-label">Quem vai junto <small style="color:#94a3b8;">(equipe da agência)</small></label>
+            <div id="avEquipeLista" style="display:flex; flex-wrap:wrap; gap:6px; max-height:120px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:8px;"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Responsável na empresa</label>
+              <input type="text" class="form-control" id="avRespNome" placeholder="Nome de quem recebeu">
+            </div>
+            <div class="form-group">
+              <label class="form-label">E-mail do responsável</label>
+              <input type="email" class="form-control" id="avRespEmail" placeholder="email@empresa.com">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Observações</label>
+            <textarea class="form-control" id="avObs" rows="2" placeholder="Anotações sobre a visita..."></textarea>
+          </div>
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalAgendarVisita').classList.remove('open')">Cancelar</button>
-          <button class="btn-primary" onclick="salvarAgendarVisita()"><i data-lucide="check" class="w-3.5 h-3.5 inline"></i> Agendar</button>
+          <button class="btn-secondary" onclick="salvarAgendarVisita(true)"><i data-lucide="link" class="w-3.5 h-3.5 inline"></i> Agendar e gerar link</button>
+          <button class="btn-primary" onclick="salvarAgendarVisita(false)"><i data-lucide="check" class="w-3.5 h-3.5 inline"></i> Agendar</button>
         </div>
       </div>
     </div>
@@ -12371,7 +12425,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const eventos = visitas.slice(0, 3).map(a => {
         const t = TIPO_CONTATO[a.tipo] || TIPO_CONTATO.presencial;
         const realizada = a.status === 'realizada';
-        return `<div onclick="event.stopPropagation(); abrirVisitaEntrada('${a.empresaId}','${a.id}')" title="${a.empresaNome} · ${a.gerenteNome || ''}" style="font-size:10px; background:${realizada ? '#dcfce7' : '#eef2ff'}; color:${realizada ? '#166534' : '#4338ca'}; border-radius:5px; padding:2px 5px; margin-bottom:2px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${realizada ? '✓ ' : ''}${a.hora || ''} ${t.emoji} ${a.empresaNome}</div>`;
+        const ehPresenca = a.tipo === 'presenca_agencia';
+        const rmCurto = (a.gerenteNome || '').split(' ')[0];
+        const equipeExtra = (a.equipe && a.equipe.length) ? ` +${a.equipe.length}` : '';
+        const clique = (a.empresaId && !ehPresenca) ? `abrirVisitaEntrada('${a.empresaId}','${a.id}')` : `event.stopPropagation();`;
+        if (ehPresenca) {
+          return `<div onclick="event.stopPropagation();" title="${a.gerenteNome} na agência${a.observacoes ? ' · ' + a.observacoes : ''}" style="font-size:10px; background:#fef9c3; color:#854d0e; border-radius:5px; padding:3px 5px; margin-bottom:2px; overflow:hidden;">
+            <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600;">📍 ${a.hora || ''}${a.horaFim ? '–' + a.horaFim : ''} ${rmCurto}</div>
+          </div>`;
+        }
+        return `<div onclick="event.stopPropagation(); ${clique}" title="${a.empresaNome} · ${a.gerenteNome || ''}${(a.equipe && a.equipe.length) ? ' + ' + a.equipe.map(x => x.nome).join(', ') : ''}" style="font-size:10px; background:${realizada ? '#dcfce7' : '#eef2ff'}; color:${realizada ? '#166534' : '#4338ca'}; border-radius:5px; padding:3px 5px; margin-bottom:2px; cursor:pointer; overflow:hidden;">
+          <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600;">${realizada ? '✓ ' : ''}${a.hora || ''} ${t.emoji} ${a.empresaNome}</div>
+          ${rmCurto ? `<div style="font-size:9px; opacity:.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">👤 ${rmCurto}${equipeExtra}</div>` : ''}
+        </div>`;
       }).join('');
       const mais = visitas.length > 3 ? `<div style="font-size:9px; color:#94a3b8;">+${visitas.length - 3}</div>` : '';
       celulas += `
@@ -12405,6 +12471,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('avHora').value = '';
     document.getElementById('avTipo').value = 'presencial';
     document.getElementById('avCidade').value = '';
+    // Equipe que pode ir junto (todos os ativos da agência, menos o próprio gerente da visita)
+    const eqWrap = document.getElementById('avEquipeLista');
+    if (eqWrap) {
+      const equipe = (EQUIPE_REAL || []).filter(p => p.ativo && p.uid !== CTX.uid);
+      eqWrap.innerHTML = equipe.length ? equipe.map(p => `
+        <label style="display:flex; align-items:center; gap:5px; font-size:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; padding:4px 9px; cursor:pointer;">
+          <input type="checkbox" class="avEquipeChk" value="${p.uid}|${p.nome}"> ${p.nome} <span style="color:#94a3b8;">${p.papel || p.perfil}</span>
+        </label>`).join('') : '<span style="font-size:12px; color:#94a3b8;">Sem outros membros na equipe.</span>';
+    }
+    const rn = document.getElementById('avRespNome'); if (rn) rn.value = '';
+    const re = document.getElementById('avRespEmail'); if (re) re.value = '';
+    const ob = document.getElementById('avObs'); if (ob) ob.value = '';
     document.getElementById('modalAgendarVisita').classList.add('open');
   }
   function abrirAgendarVisitaNoDia(dataISO) { abrirAgendarVisita(dataISO); }
@@ -12413,7 +12491,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome);
     if (e && e.cidade && !document.getElementById('avCidade').value) document.getElementById('avCidade').value = e.cidade;
   }
-  async function salvarAgendarVisita() {
+  async function salvarAgendarVisita(gerarLink) {
     const nome = (document.getElementById('avEmpresa').value || '').trim();
     const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
     if (!e) return alert('Selecione uma empresa válida da lista.');
@@ -12425,27 +12503,79 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if ((CTX.isAdmin || perfilEfetivo() === 'chefe') && selG && selG.value) {
       const [uid, gnome] = selG.value.split('|'); gerenteUid = uid; gerenteNome = gnome;
     }
+    // Equipe que vai junto
+    const equipe = Array.from(document.querySelectorAll('.avEquipeChk:checked')).map(chk => {
+      const [uid, n] = chk.value.split('|'); return { uid, nome: n };
+    });
+    const respNome = (document.getElementById('avRespNome') || {}).value || '';
+    const respEmail = (document.getElementById('avRespEmail') || {}).value || '';
+    const obs = (document.getElementById('avObs') || {}).value || '';
+    const token = gerarTokenAleatorio(20);
     try {
-      await db.collection('mb_agendamentos').add({
+      const ref = await db.collection('mb_agendamentos').add({
         empresaId: e.id, empresaNome: e.nome,
         data, hora, duracao: 60,
         tipo: document.getElementById('avTipo').value,
         cidade: document.getElementById('avCidade').value.trim() || e.cidade || null,
         gerenteUid, gerenteNome,
+        equipe, // quem vai junto
+        responsavelEmpresa: respNome.trim() || null,
+        responsavelEmail: respEmail.trim() || null,
+        observacoes: obs.trim() || null,
         agenciaId: CTX.agenciaId || null,
         status: 'agendada',
-        token: gerarTokenAleatorio(20),
+        token,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
       document.getElementById('modalAgendarVisita').classList.remove('open');
       flashSalvo('Visita agendada!');
       renderCalendarioVisitas();
+      if (gerarLink) {
+        const url = `${window.location.origin}${window.location.pathname}?visita=${token}`;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(() => alert('✅ Visita agendada!\n\nLink copiado para enviar à empresa:\n' + url)).catch(() => prompt('Link da visita para a empresa:', url));
+        } else { prompt('Link da visita para a empresa:', url); }
+      }
     } catch (err) { alert('Erro ao agendar: ' + err.message); }
   }
   window.abrirAgendarVisita = abrirAgendarVisita;
   window.abrirAgendarVisitaNoDia = abrirAgendarVisitaNoDia;
   window.avPreencherCidade = avPreencherCidade;
   window.salvarAgendarVisita = salvarAgendarVisita;
+
+  // ---------- Presença do corretor na agência ----------
+  function abrirPresencaAgencia() {
+    const hoje = new Date().toISOString().slice(0, 10);
+    document.getElementById('paData').value = hoje;
+    document.getElementById('paHoraInicio').value = '';
+    document.getElementById('paHoraFim').value = '';
+    document.getElementById('paObs').value = '';
+    document.getElementById('modalPresencaAgencia').classList.add('open');
+  }
+  async function salvarPresencaAgencia() {
+    const data = document.getElementById('paData').value;
+    const ini = document.getElementById('paHoraInicio').value;
+    const fim = document.getElementById('paHoraFim').value;
+    if (!data || !ini || !fim) return alert('Preencha data, hora de início e fim.');
+    const obs = (document.getElementById('paObs').value || '').trim();
+    try {
+      await db.collection('mb_agendamentos').add({
+        tipo: 'presenca_agencia', tipoInforme: 'corretor',
+        empresaNome: `📍 ${CTX.nome} na agência`,
+        data, hora: ini, horaFim: fim,
+        gerenteUid: CTX.uid, gerenteNome: CTX.nome,
+        agenciaId: CTX.agenciaId || null,
+        status: 'agendada',
+        observacoes: obs || null,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      document.getElementById('modalPresencaAgencia').classList.remove('open');
+      flashSalvo('Presença informada à equipe!');
+      renderCalendarioVisitas();
+    } catch (err) { alert('Erro: ' + err.message); }
+  }
+  window.abrirPresencaAgencia = abrirPresencaAgencia;
+  window.salvarPresencaAgencia = salvarPresencaAgencia;
 
   // ---------- Cadastro de visita (overlay) ----------
   let VE_TIPO = 'presencial';
