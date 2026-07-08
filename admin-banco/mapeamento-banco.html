@@ -11763,6 +11763,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     let cotSnap;
     try { let q = db.collection('mb_cotacoes'); if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId); cotSnap = await q.get(); } catch (e) { cotSnap = { forEach: () => {} }; }
     const realGrupo = {}, realMesGrupo = {}, producaoMensal = new Array(12).fill(0);
+    const producaoMensalGrupo = {}; // { gid: [12] } para o gráfico colorido por grupo
+    const _addProdMes = (gid, mes, val) => { (producaoMensalGrupo[gid] = producaoMensalGrupo[gid] || new Array(12).fill(0))[mes] += val; };
     const fechadasNoAno = new Set(); // empresaId|produtoId já contados como fechamento (funil ou backfill) neste ano
     cotSnap.forEach(d => {
       const c = d.data();
@@ -11776,6 +11778,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const val = c.valor || 0;
       realGrupo[gid] = (realGrupo[gid] || 0) + val;
       producaoMensal[dt.getMonth()] += val;
+      _addProdMes(gid, dt.getMonth(), val);
       if (dt.getMonth() === RM_MES.getMonth()) realMesGrupo[gid] = (realMesGrupo[gid] || 0) + val;
     });
 
@@ -11797,26 +11800,42 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const gid = ramoGrupo[rid] || 'outros';
         realGrupo[gid] = (realGrupo[gid] || 0) + premio;
         producaoMensal[mesProd] += premio;
+        _addProdMes(gid, mesProd, premio);
         if (mesProd === RM_MES.getMonth()) realMesGrupo[gid] = (realMesGrupo[gid] || 0) + premio;
       });
     });
     const realAnualTotal = Object.values(realGrupo).reduce((s, v) => s + v, 0);
     const realMesTotal = Object.values(realMesGrupo).reduce((s, v) => s + v, 0);
 
-    // Projeção: prêmio das renovações mapeadas do escopo
-    const projGrupo = {};
+    // Projeção: renovações mapeadas que VENCEM deste mês até dezembro do ano.
+    // Separadas em: SUAS (nosso/fechado) e MERCADO (mapeado com concorrente, ainda não é nosso).
+    const projSeuGrupo = {};      // renovações suas por grupo
+    const projMercadoGrupo = {};  // renovações do mercado por grupo
+    const mesAtual = new Date().getMonth();
+    const anoAtual = new Date().getFullYear();
     (EMPRESAS || []).forEach(e => {
       if (escopo !== 'agencia' && e.rm !== escopo) return;
       const dados = e.produtosDados || {};
       Object.keys(dados).forEach(rid => {
         const pd = dados[rid] || {};
-        if (!['mapeada', 'conosco', 'quente'].includes(pd.statusVisual)) return;
+        const premio = pd.premioAnual || pd.valorFechado || 0;
+        if (premio <= 0) return;
         if (!pd.vencimentoMes || !pd.vencimentoAno) return;
+        // vence deste mês até dezembro do ano do relatório
+        const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
+        const venceNoPeriodo = (vAno === ano) && (ano > anoAtual || vMes >= mesAtual);
+        if (!venceNoPeriodo) return;
         const gid = ramoGrupo[rid] || 'outros';
-        projGrupo[gid] = (projGrupo[gid] || 0) + (pd.premioAnual || 0);
+        const cat = getMapeamento(pd); // 'cliente' = nosso; senão mercado
+        if (cat === 'cliente') projSeuGrupo[gid] = (projSeuGrupo[gid] || 0) + premio;
+        else projMercadoGrupo[gid] = (projMercadoGrupo[gid] || 0) + premio;
       });
     });
-    const projTotal = Object.values(projGrupo).reduce((s, v) => s + v, 0);
+    const projSeuTotal = Object.values(projSeuGrupo).reduce((s, v) => s + v, 0);
+    const projMercadoTotal = Object.values(projMercadoGrupo).reduce((s, v) => s + v, 0);
+    const projTotal = projSeuTotal + projMercadoTotal;
+    const projGrupo = {}; // total combinado por grupo (para compatibilidade)
+    (GRUPOS || []).forEach(g => { projGrupo[g.id] = (projSeuGrupo[g.id] || 0) + (projMercadoGrupo[g.id] || 0); });
 
     // KPIs
     const realizadoRef = (RM_PERIODO === 'mensal') ? realMesTotal : realAnualTotal;
@@ -11856,28 +11875,82 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!algum) html += '<div style="color:#94a3b8;font-size:13px;">Sem metas ou produção neste escopo. Cadastre as metas em "Metas → Metas Anuais".</div>';
     html += `</div>`;
 
-    // Projeção de renovações
+    // Projeção de renovações — por grupo, com potencial de atingimento da meta
     html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;">
       <h3 style="margin:0 0 6px;font-size:15px;font-weight:800;color:#0f172a;">💡 Projeção — se fechar as renovações mapeadas</h3>
-      <p style="font-size:12px;color:#64748b;margin:0 0 12px;">Somando o prêmio dos seguros já mapeados (nossos ou no mercado) que estão em renovação:</p>`;
-    if (projTotal === 0) html += '<div style="color:#94a3b8;font-size:13px;">Nenhuma renovação mapeada com prêmio informado ainda.</div>';
-    else {
-      (GRUPOS || []).forEach(g => { const p = projGrupo[g.id] || 0; if (p === 0) return; html += `<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9;"><span style="color:${g.cor};font-weight:700;">${g.nome}</span><span style="font-family:'JetBrains Mono';font-weight:700;color:#0ea5e9;">+${fmtBR(p)}</span></div>`; });
-      html += `<div style="margin-top:12px;padding:12px 14px;background:#eef2ff;border-radius:10px;font-size:13px;color:#3730a3;">
-        Produzido <strong>${fmtBR(realAnualTotal)}</strong> + renovações mapeadas <strong>${fmtBR(projTotal)}</strong> = <strong style="font-size:15px;">${fmtBR(projetadoTotal)}</strong>${metaTotal > 0 ? ` · <strong>${pctProj.toFixed(0)}%</strong> da meta` : ''}</div>`;
+      <p style="font-size:12px;color:#64748b;margin:0 0 14px;">Renovações que vencem <strong>deste mês até dezembro/${ano}</strong>: as <span style="color:#0ea5e9;font-weight:700;">suas</span> (já é nosso / fechado) + as do <span style="color:#f59e0b;font-weight:700;">mercado</span> (mapeadas com concorrente). Some ao já produzido e veja quanto da meta você alcança.</p>`;
+    if (projTotal === 0 && realAnualTotal === 0) {
+      html += '<div style="color:#94a3b8;font-size:13px;">Nenhuma renovação mapeada com prêmio e vencimento informados ainda.</div>';
+    } else {
+      // linha por grupo
+      const gruposMostrar = (GRUPOS || []).filter(g => (metaGrupo[g.id] || 0) > 0 || (realGrupo[g.id] || 0) > 0 || (projGrupo[g.id] || 0) > 0);
+      html += `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:right;color:#94a3b8;font-size:11px;border-bottom:1px solid #e2e8f0;">
+          <th style="text-align:left;padding:6px 4px;">Grupo</th>
+          <th style="padding:6px 4px;">Meta</th>
+          <th style="padding:6px 4px;">Produzido</th>
+          <th style="padding:6px 4px;color:#0ea5e9;">Renov. suas</th>
+          <th style="padding:6px 4px;color:#f59e0b;">Renov. mercado</th>
+          <th style="padding:6px 4px;">Se fechar tudo</th>
+        </tr></thead><tbody>`;
+      gruposMostrar.forEach(g => {
+        const meta = metaGrupo[g.id] || 0;
+        const real = realGrupo[g.id] || 0;
+        const pSeu = projSeuGrupo[g.id] || 0;
+        const pMerc = projMercadoGrupo[g.id] || 0;
+        const potencial = real + pSeu + pMerc;
+        const pct = meta > 0 ? Math.round(potencial / meta * 100) : (potencial > 0 ? 100 : 0);
+        const cPct = pct >= 100 ? '#10b981' : pct >= 70 ? '#4f46e5' : pct >= 40 ? '#f59e0b' : '#ef4444';
+        html += `<tr style="text-align:right;border-bottom:1px solid #f8fafc;">
+          <td style="text-align:left;padding:7px 4px;font-weight:700;color:${g.cor};">${g.nome}</td>
+          <td style="padding:7px 4px;color:#64748b;">${fmtBRcompacto(meta)}</td>
+          <td style="padding:7px 4px;font-weight:700;">${fmtBRcompacto(real)}</td>
+          <td style="padding:7px 4px;color:#0ea5e9;">${pSeu > 0 ? '+' + fmtBRcompacto(pSeu) : '—'}</td>
+          <td style="padding:7px 4px;color:#f59e0b;">${pMerc > 0 ? '+' + fmtBRcompacto(pMerc) : '—'}</td>
+          <td style="padding:7px 4px;"><strong style="color:${cPct};">${pct}%</strong></td>
+        </tr>`;
+      });
+      // total
+      const potTotal = realAnualTotal + projTotal;
+      const pctTot = metaTotal > 0 ? Math.round(potTotal / metaTotal * 100) : 0;
+      html += `<tr style="text-align:right;border-top:2px solid #e2e8f0;font-weight:800;">
+        <td style="text-align:left;padding:8px 4px;">Total</td>
+        <td style="padding:8px 4px;">${fmtBRcompacto(metaTotal)}</td>
+        <td style="padding:8px 4px;">${fmtBRcompacto(realAnualTotal)}</td>
+        <td style="padding:8px 4px;color:#0ea5e9;">+${fmtBRcompacto(projSeuTotal)}</td>
+        <td style="padding:8px 4px;color:#f59e0b;">+${fmtBRcompacto(projMercadoTotal)}</td>
+        <td style="padding:8px 4px;color:#4338ca;">${pctTot}%</td>
+      </tr></tbody></table></div>`;
+      html += `<div style="margin-top:14px;padding:12px 14px;background:linear-gradient(135deg,#eef2ff,#f0fdf4);border-radius:10px;font-size:13px;color:#3730a3;">
+        Produzido <strong>${fmtBR(realAnualTotal)}</strong> + renovações suas <strong>${fmtBR(projSeuTotal)}</strong> + mercado <strong>${fmtBR(projMercadoTotal)}</strong> = <strong style="font-size:15px;">${fmtBR(realAnualTotal + projTotal)}</strong>${metaTotal > 0 ? ` · chegaria a <strong style="font-size:15px;">${pctTot}%</strong> da meta` : ''}.
+        ${metaTotal > 0 && pctTot < 100 ? `<br><span style="color:#9a3412;">Faltariam <strong>${fmtBR(Math.max(0, metaTotal - (realAnualTotal + projTotal)))}</strong> — hora de cotar mais e buscar novos negócios.</span>` : (pctTot >= 100 ? '<br><span style="color:#166534;font-weight:700;">Fechando essas renovações, você bate a meta! 🎯</span>' : '')}
+      </div>`;
     }
     html += `</div>`;
 
-    // Produção mês a mês
+    // Produção mês a mês — barra empilhada pela proporção de cada grupo no mês
     const maxMes = Math.max(...producaoMensal, 1);
+    const gruposComProd = (GRUPOS || []).filter(g => (producaoMensalGrupo[g.id] || []).some(v => v > 0));
+    const legenda = gruposComProd.map(g => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#64748b;margin-right:12px;"><span style="width:10px;height:10px;border-radius:3px;background:${g.cor};"></span>${g.nome}</span>`).join('');
     html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px;">
-      <h3 style="margin:0 0 14px;font-size:15px;font-weight:800;color:#0f172a;">Produção mês a mês <small style="font-weight:500;color:#94a3b8;">· ${ano}</small></h3>
-      <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:6px;align-items:end;height:120px;">
+      <h3 style="margin:0 0 4px;font-size:15px;font-weight:800;color:#0f172a;">Produção mês a mês <small style="font-weight:500;color:#94a3b8;">· ${ano}</small></h3>
+      <div style="margin-bottom:12px;">${legenda || '<span style="font-size:11px;color:#94a3b8;">Sem produção no ano.</span>'}</div>
+      <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:6px;align-items:end;height:130px;">
         ${producaoMensal.map((v, i) => {
-          const h = Math.max(2, (v / maxMes * 100));
+          const hTotal = Math.max(2, (v / maxMes * 100));
+          // segmentos empilhados por grupo (de baixo para cima)
+          let segs = '';
+          if (v > 0) {
+            gruposComProd.forEach(g => {
+              const gv = (producaoMensalGrupo[g.id] || [])[i] || 0;
+              if (gv <= 0) return;
+              const segPct = gv / v * 100; // proporção dentro do mês
+              segs += `<div style="width:100%;height:${segPct}%;background:${g.cor};" title="${g.nome} ${MESES_PT[i]}: ${fmtBR(gv)}"></div>`;
+            });
+          }
           const destaque = (RM_PERIODO === 'mensal' && i === RM_MES.getMonth());
           return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:end;height:100%;cursor:pointer;" title="${MESES_PT[i]}: ${fmtBR(v)}" onclick="RM_MES=new Date(${ano},${i},1); setPeriodoRelMetas('mensal');">
-            <div style="width:100%;background:${destaque ? '#4f46e5' : '#c7d2fe'};height:${h}%;border-radius:4px 4px 0 0;"></div>
+            <div style="width:100%;height:${hTotal}%;border-radius:4px 4px 0 0;overflow:hidden;display:flex;flex-direction:column-reverse;${destaque ? 'outline:2px solid #4338ca;outline-offset:1px;' : ''}${v === 0 ? 'background:#f1f5f9;' : ''}">${segs}</div>
             <div style="font-size:9px;color:#94a3b8;margin-top:3px;">${['J','F','M','A','M','J','J','A','S','O','N','D'][i]}</div>
           </div>`;
         }).join('')}
