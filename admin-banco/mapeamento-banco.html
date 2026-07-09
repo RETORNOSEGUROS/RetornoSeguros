@@ -9594,11 +9594,29 @@
       somaPeso += peso;
       somaPond += peso * dim.pct;
     });
-    const fator = somaPeso > 0 ? Math.round(somaPond / somaPeso) : 0;
+    const fatorBruto = somaPeso > 0 ? Math.round(somaPond / somaPeso) : 0;
 
-    return { dimensoes, fator, totalEmpresas: totalEmp };
+    // ---- Penalização por prazo expirado ----
+    // Negócio parado na etapa ALÉM do prazo, SEM ação = inércia → reduz o fator.
+    // Perder o negócio atuando NÃO penaliza (só conta cotação ativa parada).
+    let expirados = 0;
+    (cotacoes || []).forEach(c => {
+      if (!ehStatusAtivoSafe(c.status)) return;
+      const dias = (typeof diasNaEtapa === 'function') ? diasNaEtapa(c) : 0;
+      const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfoSafe(c.status) || {}).prazoDias || 999;
+      if (dias > limite) expirados++;
+    });
+    const penalidadePorNeg = (FATOR_CFG.penalidade || 0); // % do fator por negócio expirado
+    const descontoTotal = Math.min(expirados * penalidadePorNeg, fatorBruto); // não passa de zerar
+    const fator = Math.max(0, Math.round(fatorBruto - descontoTotal));
+
+    return { dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp };
   }
   window.calcularCobertura = calcularCobertura;
+
+  // Helpers seguros (evitam erro se chamados antes da inicialização do funil)
+  function ehStatusAtivoSafe(s) { try { return ehStatusAtivo(s); } catch (e) { return false; } }
+  function etapaInfoSafe(s) { try { return etapaInfo(s); } catch (e) { return null; } }
 
   // ============= TELA CAMPANHA =============
   async function renderCampanha() {
@@ -9945,7 +9963,13 @@
       const aceit = covMinha.fator >= FATOR_CFG.pisoRm;
       html += `<div style="margin-top:12px; padding:10px 12px; background:rgba(255,255,255,0.15); border-radius:9px; font-size:12.5px;">
         ${aceit ? '✅ Você está no nível aceitável — valorizado mesmo se a agência não bater.' : `📈 Faltam ${FATOR_CFG.pisoRm - covMinha.fator} pontos para você chegar ao nível aceitável (${FATOR_CFG.pisoRm}%).`}
-      </div></div>`;
+      </div>`;
+      if (covMinha.expirados > 0) {
+        html += `<div style="margin-top:8px; padding:10px 12px; background:rgba(0,0,0,0.18); border-radius:9px; font-size:12.5px;">
+          ⏰ ${covMinha.expirados} ${covMinha.expirados === 1 ? 'negócio seu está parado' : 'negócios seus estão parados'} além do prazo — custou ${covMinha.descontoTotal.toFixed(1)} do seu fator. Avance no funil para recuperar.
+        </div>`;
+      }
+      html += `</div>`;
     }
 
     html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
@@ -9955,6 +9979,11 @@
     if (proxMarco) {
       html += `<div style="margin-top:14px; padding:12px 14px; background:#eef2ff; border-radius:10px; font-size:13px; color:#3730a3;">
         📈 Faltam <strong>${proxMarco - covAg.fator} pontos de fator</strong> para a agência chegar a <strong>${proxMarco}%</strong>${(proxMarco >= FATOR_CFG.pisoAgencia && covAg.fator < FATOR_CFG.pisoAgencia) ? ' — e destravar os bônus de assistentes/estagiários e do ranking!' : '.'}
+      </div>`;
+    }
+    if (covAg.expirados > 0) {
+      html += `<div style="margin-top:10px; padding:12px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; font-size:13px; color:#991b1b;">
+        ⏰ <strong>${covAg.expirados} ${covAg.expirados === 1 ? 'negócio parado' : 'negócios parados'}</strong> além do prazo da etapa — isso reduziu o fator em <strong>${covAg.descontoTotal.toFixed(1)} ${covAg.descontoTotal === 1 ? 'ponto' : 'pontos'}</strong> (de ${covAg.fatorBruto}% para ${covAg.fator}%). Mover esses negócios no funil recupera o fator.
       </div>`;
     }
     html += `</div>`;
