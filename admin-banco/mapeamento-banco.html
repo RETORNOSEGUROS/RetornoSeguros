@@ -9648,10 +9648,95 @@
       return { uid, nome, cor, cov };
     }).sort((a, b) => b.cov.fator - a.cov.fator);
 
-    cont.innerHTML = montarPainelCampanha(covAg, rmsCov);
+    cont.innerHTML = `
+      <div class="rank-tabs" style="margin-bottom:16px;">
+        <div class="rank-tab active" id="campTabCobertura" onclick="setCampAba('cobertura')">📊 Cobertura & Fatores</div>
+        <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
+      </div>
+      <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov)}</div>
+      <div id="campAbaRanking" style="display:none;"></div>`;
     try { lucide.createIcons(); } catch (e) {}
+    // pré-carrega o ranking individual
+    try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
   }
   window.renderCampanha = renderCampanha;
+
+  function setCampAba(aba) {
+    document.getElementById('campTabCobertura').classList.toggle('active', aba === 'cobertura');
+    document.getElementById('campTabRanking').classList.toggle('active', aba === 'ranking');
+    document.getElementById('campAbaCobertura').style.display = aba === 'cobertura' ? '' : 'none';
+    document.getElementById('campAbaRanking').style.display = aba === 'ranking' ? '' : 'none';
+  }
+  window.setCampAba = setCampAba;
+
+  // Ranking individual: soma das ações de cada pessoa DENTRO da campanha
+  async function renderRankingPontos() {
+    const box = document.getElementById('campAbaRanking');
+    if (!box) return;
+    box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Somando pontos...</div>';
+    let acoes = [];
+    try { acoes = await _carregarAcoes(true); } catch (e) {}
+
+    // filtra por período da campanha (pela data da ação) e por quem PONTUA
+    const dentroCampanha = a => {
+      const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
+      if (!dt) return true; // sem data, conta (retrocompat)
+      const iso = dt.toISOString().slice(0, 10);
+      if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return false;
+      if (CAMPANHA.fim && iso > CAMPANHA.fim) return false;
+      return true;
+    };
+    // quem pontua: rm, assistente, estagiario. Corretor/admin NÃO pontuam. Chefe = agência (não no ranking individual).
+    const pontuadores = {};
+    (EQUIPE_REAL || []).forEach(p => {
+      if (['rm', 'assistente', 'estagiario'].includes(p.perfil)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
+    });
+
+    acoes.forEach(a => {
+      if (!dentroCampanha(a)) return;
+      const uid = a.usuarioId;
+      if (!uid || !pontuadores[uid]) return; // só quem pontua
+      pontuadores[uid].pontos += (a.pontos || 0);
+      pontuadores[uid].acoes += 1;
+    });
+
+    const lista = Object.entries(pontuadores).map(([uid, p]) => ({ uid, ...p })).sort((a, b) => b.pontos - a.pontos);
+    const totalPontos = lista.reduce((s, p) => s + p.pontos, 0);
+    const eu = uidEfetivo();
+
+    const perfilLabel = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
+    let html = `<div style="background:white; border-radius:14px; padding:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a;">Ranking de pontos · ${CAMPANHA.ano}</div>
+        <div style="font-size:12px; color:#94a3b8;">${lista.length} participantes · ${totalPontos} pts no total</div>
+      </div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">Cada ação (mapear, cotar, dar check, cadastrar contato...) soma pontos para quem a fez. Corretor e admin agem, mas não entram no ranking.</div>`;
+
+    if (!lista.length) {
+      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhuma ação pontuada na campanha ainda.</div>';
+    } else {
+      const medalha = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
+      lista.forEach((p, i) => {
+        const souEu = p.uid === eu;
+        const share = totalPontos > 0 ? Math.round(p.pontos / totalPontos * 100) : 0;
+        html += `<div style="display:flex; align-items:center; gap:12px; padding:12px; border-radius:10px; margin-bottom:6px; background:${souEu ? '#eef2ff' : '#fbfcff'}; border:1px solid ${souEu ? '#c7d2fe' : '#f1f5f9'};">
+          <div style="font-size:16px; font-weight:800; width:32px; text-align:center;">${medalha(i)}</div>
+          <div style="width:10px; height:10px; border-radius:50%; background:${p.cor};"></div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:700; color:#0f172a;">${p.nome} ${souEu ? '<span style="font-size:10px; color:#4338ca;">(você)</span>' : ''}</div>
+            <div style="font-size:11px; color:#94a3b8;">${perfilLabel[p.perfil] || p.perfil} · ${p.acoes} ações · ${share}% dos pontos</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:18px; font-weight:800; color:#4338ca;">${p.pontos}</div>
+            <div style="font-size:10px; color:#94a3b8;">pontos</div>
+          </div>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+    box.innerHTML = html;
+  }
+  window.renderRankingPontos = renderRankingPontos;
 
   function _corFator(pct) {
     if (pct >= 80) return '#16a34a';
