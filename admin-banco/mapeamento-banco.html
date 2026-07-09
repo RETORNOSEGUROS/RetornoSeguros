@@ -9628,7 +9628,7 @@
         empresasAg = await Promise.all(docs.map(async d => {
           const dd = d.data(); const produtosDados = {};
           try { const ps = await db.collection('empresas').doc(d.id).collection('mb_produtos').get(); ps.forEach(p => produtosDados[p.id] = p.data()); } catch (e) {}
-          return { id: d.id, nome: dd.nome, rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, socios: dd.socios || [], funcionarios: dd.numFuncionarios || dd.funcionariosQtd || dd.funcionarios || 0, emailDecisor: dd.emailDecisor || '', emailRh: dd.emailRh || '', produtosDados };
+          return { id: d.id, nome: dd.nome, agenciaId: dd.agenciaId || '', rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, socios: dd.socios || [], funcionarios: dd.numFuncionarios || dd.funcionariosQtd || dd.funcionarios || 0, emailDecisor: dd.emailDecisor || '', emailRh: dd.emailRh || '', produtosDados };
         }));
       }
       let qc = db.collection('mb_cotacoes');
@@ -9637,9 +9637,17 @@
       snapC.forEach(d => { const c = d.data(); if (ehStatusAtivo(c.status)) cotAtivas.push(c); });
     } catch (e) { console.warn('campanha dados', e); }
 
+    // ISOLAMENTO DE AGÊNCIA: se uma agência está selecionada, descarta empresas/cotações de fora.
+    if (CTX.agenciaId) {
+      empresasAg = empresasAg.filter(e => !e.agenciaId || e.agenciaId === CTX.agenciaId);
+      cotAtivas = cotAtivas.filter(c => !c.agenciaId || c.agenciaId === CTX.agenciaId);
+    }
+    // RMs válidos = os que estão na equipe da agência atual (EQUIPE_REAL já vem filtrado por agência)
+    const uidsEquipe = new Set((EQUIPE_REAL || []).filter(p => ['rm', 'chefe'].includes(p.perfil)).map(p => p.uid));
+
     const covAg = calcularCobertura(empresasAg, cotAtivas);
     const porRM = {};
-    empresasAg.forEach(e => { if (e.rm) (porRM[e.rm] = porRM[e.rm] || []).push(e); });
+    empresasAg.forEach(e => { if (e.rm && (!CTX.agenciaId || uidsEquipe.has(e.rm))) (porRM[e.rm] = porRM[e.rm] || []).push(e); });
     const rmsCov = Object.keys(porRM).map(uid => {
       const cotDoRm = cotAtivas.filter(c => porRM[uid].some(e => e.id === c.empresaId));
       const cov = calcularCobertura(porRM[uid], cotDoRm);
@@ -9648,6 +9656,15 @@
       return { uid, nome, cor, cov };
     }).sort((a, b) => b.cov.fator - a.cov.fator);
 
+    // Se o usuário é RM, calcula a cobertura DELE (para mostrar "quanto EU tenho em cada indicador")
+    let covMinha = null;
+    if (perfilEfetivo() === 'rm') {
+      const meu = uidEfetivo();
+      const minhasEmp = porRM[meu] || [];
+      const minhasCot = cotAtivas.filter(c => minhasEmp.some(e => e.id === c.empresaId));
+      covMinha = calcularCobertura(minhasEmp, minhasCot);
+    }
+
     const _ehGestorAba = (perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm'));
     cont.innerHTML = `
       <div class="rank-tabs" style="margin-bottom:16px;">
@@ -9655,7 +9672,7 @@
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
         ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
-      <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov)}</div>
+      <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha)}</div>
       <div id="campAbaRanking" style="display:none;"></div>
       ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
@@ -9695,11 +9712,12 @@
     // quem pontua: rm, assistente, estagiario. Corretor/admin NÃO pontuam. Chefe = agência (não no ranking individual).
     const pontuadores = {};
     (EQUIPE_REAL || []).forEach(p => {
-      if (['rm', 'assistente', 'estagiario'].includes(p.perfil)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
+      if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
     });
 
     acoes.forEach(a => {
       if (!dentroCampanha(a)) return;
+      if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) return; // isolamento de agência
       const uid = a.usuarioId;
       if (!uid || !pontuadores[uid]) return; // só quem pontua
       pontuadores[uid].pontos += (a.pontos || 0);
@@ -9762,6 +9780,7 @@
       snap.forEach(d => {
         const c = d.data();
         if (c.status !== 'fechada') return;
+        if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return; // isolamento
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (!dt) return;
         const iso = dt.toISOString().slice(0, 10);
@@ -9837,8 +9856,8 @@
       const acoes = await _carregarAcoes(true).catch(() => []);
       const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
       const pts = {};
-      (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil)) pts[p.uid] = { nome: p.nome, perfil: p.perfil, pontos: 0 }; });
-      acoes.forEach(a => { if (dentro(a) && pts[a.usuarioId]) pts[a.usuarioId].pontos += (a.pontos || 0); });
+      (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pts[p.uid] = { nome: p.nome, perfil: p.perfil, pontos: 0 }; });
+      acoes.forEach(a => { if (dentro(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pts[a.usuarioId]) pts[a.usuarioId].pontos += (a.pontos || 0); });
       const lista = Object.values(pts).sort((a, b) => b.pontos - a.pontos);
       const totalPts = lista.reduce((s, p) => s + p.pontos, 0);
       html += `<div style="padding:12px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; font-size:13px; color:#166534; margin-bottom:14px;">
@@ -9868,13 +9887,26 @@
     return '#ef4444';
   }
 
-  function montarPainelCampanha(covAg, rmsCov) {
+  function montarPainelCampanha(covAg, rmsCov, covMinha) {
     const dimLabels = {
       cotacao_iniciada: '🎯 Cotação iniciada', produtos_mapeados: '🗺️ Produtos mapeados',
       funcionarios: '👥 Funcionários', socios: '🧑‍💼 Sócios',
       contato_decisor: '📧 Decisor', contato_rh: '🧑‍💼 RH'
     };
     const fmtData = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? `${m[3]}/${m[2]}` : ''; };
+    const barrasDim = (cov) => Object.keys(dimLabels).map(ch => {
+      const d = cov.dimensoes[ch]; if (!d) return '';
+      const cor = _corFator(d.pct);
+      return `<div style="margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span></span>
+          <span style="font-weight:800; color:${cor};">${d.pct}%</span>
+        </div>
+        <div style="height:8px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
+          <div style="height:100%; width:${Math.max(d.pct, 2)}%; background:${cor}; border-radius:100px;"></div>
+        </div>
+      </div>`;
+    }).join('');
 
     let html = `
       <div style="background:linear-gradient(135deg,#4338ca,#7c3aed); border-radius:16px; padding:22px 24px; color:white; margin-bottom:16px;">
@@ -9891,21 +9923,34 @@
         </div>
       </div>`;
 
+    // Card "Sua cobertura" — só para RM: quanto ELE tem em cada indicador
+    if (covMinha) {
+      html += `<div style="background:linear-gradient(135deg,#0f766e,#0891b2); border-radius:14px; padding:20px; margin-bottom:16px; color:white;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px;">
+          <div style="font-size:15px; font-weight:800;">Sua cobertura</div>
+          <div style="font-size:22px; font-weight:800;">${covMinha.fator}% <span style="font-size:12px; font-weight:500; opacity:.85;">seu fator</span></div>
+        </div>`;
+      Object.keys(dimLabels).forEach(ch => {
+        const d = covMinha.dimensoes[ch]; if (!d) return;
+        html += `<div style="margin-bottom:11px;">
+          <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+            <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok}/${d.total}</span></span>
+            <span style="font-weight:800;">${d.pct}%</span>
+          </div>
+          <div style="height:8px; background:rgba(255,255,255,0.2); border-radius:100px; overflow:hidden;">
+            <div style="height:100%; width:${Math.max(d.pct, 2)}%; background:white; border-radius:100px;"></div>
+          </div>
+        </div>`;
+      });
+      const aceit = covMinha.fator >= FATOR_CFG.pisoRm;
+      html += `<div style="margin-top:12px; padding:10px 12px; background:rgba(255,255,255,0.15); border-radius:9px; font-size:12.5px;">
+        ${aceit ? '✅ Você está no nível aceitável — valorizado mesmo se a agência não bater.' : `📈 Faltam ${FATOR_CFG.pisoRm - covMinha.fator} pontos para você chegar ao nível aceitável (${FATOR_CFG.pisoRm}%).`}
+      </div></div>`;
+    }
+
     html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">Cobertura da agência por dimensão</div>`;
-    Object.keys(dimLabels).forEach(ch => {
-      const d = covAg.dimensoes[ch]; if (!d) return;
-      const cor = _corFator(d.pct);
-      html += `<div style="margin-bottom:12px;">
-        <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
-          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span></span>
-          <span style="font-weight:800; color:${cor};">${d.pct}%</span>
-        </div>
-        <div style="height:8px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
-          <div style="height:100%; width:${Math.max(d.pct, 2)}%; background:${cor}; border-radius:100px;"></div>
-        </div>
-      </div>`;
-    });
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">Cobertura da agência por dimensão</div>
+      ${barrasDim(covAg)}`;
     const proxMarco = [50, 60, 70, 80, 90, 100].find(m => covAg.fator < m);
     if (proxMarco) {
       html += `<div style="margin-top:14px; padding:12px 14px; background:#eef2ff; border-radius:10px; font-size:13px; color:#3730a3;">
