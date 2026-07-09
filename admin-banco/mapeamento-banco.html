@@ -2744,6 +2744,7 @@
         <div class="cfg-tab" onclick="setCfgTab('janelas', this)"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i> Janelas de Atuação</div>
         <div class="cfg-tab" onclick="setCfgTab('metas', this)"><i data-lucide="target" class="w-3.5 h-3.5"></i> Metas Semanais</div>
         <div class="cfg-tab" onclick="setCfgTab('bonus', this)"><i data-lucide="gift" class="w-3.5 h-3.5"></i> Bônus e Streak</div>
+        <div class="cfg-tab" onclick="setCfgTab('fatorbonus', this)"><i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i> Fator &amp; Bônus</div>
         <div class="cfg-tab" onclick="setCfgTab('divisao', this)"><i data-lucide="git-fork" class="w-3.5 h-3.5"></i> Divisão de Pontos</div>
       </div>
 
@@ -2782,6 +2783,59 @@
           </div>
           <button class="btn-primary" onclick="salvarCampanha()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar campanha</button>
           <div id="campResumo" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <!-- SEÇÃO: FATOR & BÔNUS -->
+      <div class="cfg-section" id="cfg-fatorbonus">
+        <div class="cfg-card">
+          <h3><i data-lucide="scale" class="w-5 h-5 text-indigo-500"></i> Pesos das dimensões do fator</h3>
+          <p class="cfg-desc">O <strong>fator de cobertura</strong> é a média ponderada das dimensões abaixo. Quanto maior o peso, mais aquela dimensão influencia o fator final. Cotação iniciada costuma pesar mais porque é o que vira negócio.</p>
+          <table class="cfg-table">
+            <thead><tr><th>DIMENSÃO</th><th style="width:110px;text-align:center;">PESO</th></tr></thead>
+            <tbody id="cfgPesosBody"></tbody>
+          </table>
+          <button class="btn-primary" style="margin-top:12px;" onclick="salvarFatorBonus()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar pesos e limites</button>
+        </div>
+
+        <div class="cfg-card">
+          <h3><i data-lucide="gift" class="w-5 h-5 text-amber-500"></i> Limites de bônus e pisos</h3>
+          <p class="cfg-desc">Os tetos definem o máximo que cada papel pode ganhar a mais. Os pisos definem quando o bônus é liberado.</p>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px;">
+            <div class="form-group">
+              <label class="form-label">Teto de bônus do RM (pontos)</label>
+              <input type="number" step="0.1" class="form-control" id="fbTetoRm">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Máximo que um RM ganha a mais com fator 100%.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Teto de bônus do gerente-chefe (pontos)</label>
+              <input type="number" step="0.1" class="form-control" id="fbTetoChefe">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Depende do fator da agência inteira.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Piso "aceitável" do RM (%)</label>
+              <input type="number" step="1" min="0" max="100" class="form-control" id="fbPisoRm">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Acima disso, o RM é valorizado mesmo se a agência vai mal.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Piso da agência p/ abrir potes (%)</label>
+              <input type="number" step="1" min="0" max="100" class="form-control" id="fbPisoAgencia">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Abaixo disso, assistentes/estagiários e ranking não recebem.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Pote assistentes/estagiários (%)</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="fbPoteApoio">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Pote do ranking (%)</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="fbPoteRanking">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Penalização por prazo expirado (% do fator)</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="fbPenalidade">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Desconto no fator por negócio que estourou o prazo de etapa sem ação.</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -4721,6 +4775,30 @@
   let GRUPOS     = GRUPOS_DEFAULT.slice();
   let PONTOS_CACHE = { ...PONTOS_DEFAULT };
   let CAMPANHA = { ano: new Date().getFullYear(), inicio: null, fim: null, ativa: false, modoSombra: true };
+  // Configuração do fator de cobertura e dos bônus (editável na aba Fator & Bônus)
+  const FATOR_DEFAULT = {
+    pesos: {
+      cotacao_iniciada: 3,   // negócios que entraram no funil (etapa 2+) — o que mais importa
+      produtos_mapeados: 2,  // % de produtos com status conhecido
+      funcionarios: 1.5,     // % de empresas com nº de funcionários
+      socios: 1,             // % de empresas com sócios mapeados
+      contato_decisor: 1,    // % com e-mail do decisor
+      contato_rh: 0.5        // % com e-mail do RH
+    },
+    tetoRm: 4.1, tetoChefe: 7.38,
+    pisoRm: 60, pisoAgencia: 50,
+    poteApoio: 2, poteRanking: 3,
+    penalidade: 0.5
+  };
+  let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
+  const FATOR_DIM_META = [
+    { chave: 'cotacao_iniciada', label: 'Cotação iniciada (funil etapa 2+)', desc: 'O que mais vira negócio' },
+    { chave: 'produtos_mapeados', label: 'Produtos mapeados', desc: 'Status conhecido (tem / não tem / nosso)' },
+    { chave: 'funcionarios', label: 'Nº de funcionários mapeado', desc: 'Gera oportunidade de dental, vida...' },
+    { chave: 'socios', label: 'Sócios mapeados', desc: 'Do contrato social' },
+    { chave: 'contato_decisor', label: 'Contato do decisor', desc: 'E-mail de quem decide' },
+    { chave: 'contato_rh', label: 'Contato do RH', desc: 'E-mail do RH' }
+  ];
 
   // Helpers de pontuação — TODO o sistema pontua através destes.
   function getPonto(chave) {
@@ -10786,6 +10864,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     await carregarRamos();
     await carregarConfigPontos();
     await carregarCampanha();
+    await carregarFatorConfig();
   }
 
   // ---------- Render: tela de Configurações (abas dinâmicas) ----------
@@ -10846,10 +10925,71 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   function renderConfigTudo() {
     renderCfgCampanha();
+    renderCfgFatorBonus();
     renderCfgRamos();
     renderCfgPontos();
     renderCfgMultiplicadores();
   }
+
+  // ---------- FATOR & BÔNUS ----------
+  async function carregarFatorConfig() {
+    try {
+      const snap = await db.collection('mb_config').doc('fator').get();
+      if (snap.exists) {
+        const d = snap.data();
+        FATOR_CFG = {
+          pesos: { ...FATOR_DEFAULT.pesos, ...(d.pesos || {}) },
+          tetoRm: d.tetoRm != null ? d.tetoRm : FATOR_DEFAULT.tetoRm,
+          tetoChefe: d.tetoChefe != null ? d.tetoChefe : FATOR_DEFAULT.tetoChefe,
+          pisoRm: d.pisoRm != null ? d.pisoRm : FATOR_DEFAULT.pisoRm,
+          pisoAgencia: d.pisoAgencia != null ? d.pisoAgencia : FATOR_DEFAULT.pisoAgencia,
+          poteApoio: d.poteApoio != null ? d.poteApoio : FATOR_DEFAULT.poteApoio,
+          poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
+          penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
+        };
+      }
+    } catch (e) { console.warn('fator cfg', e); }
+  }
+
+  function renderCfgFatorBonus() {
+    const body = document.getElementById('cfgPesosBody');
+    if (body) {
+      body.innerHTML = FATOR_DIM_META.map(d => `
+        <tr>
+          <td><strong>${d.label}</strong><br><span style="font-size:11px;color:#94a3b8;">${d.desc}</span></td>
+          <td style="text-align:center;"><input type="number" step="0.1" min="0" class="cfg-input cfg-peso-input" data-chave="${d.chave}" value="${FATOR_CFG.pesos[d.chave] != null ? FATOR_CFG.pesos[d.chave] : 1}"></td>
+        </tr>`).join('');
+    }
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    set('fbTetoRm', FATOR_CFG.tetoRm);
+    set('fbTetoChefe', FATOR_CFG.tetoChefe);
+    set('fbPisoRm', FATOR_CFG.pisoRm);
+    set('fbPisoAgencia', FATOR_CFG.pisoAgencia);
+    set('fbPoteApoio', FATOR_CFG.poteApoio);
+    set('fbPoteRanking', FATOR_CFG.poteRanking);
+    set('fbPenalidade', FATOR_CFG.penalidade);
+  }
+
+  async function salvarFatorBonus() {
+    const pesos = {};
+    document.querySelectorAll('.cfg-peso-input').forEach(inp => {
+      pesos[inp.dataset.chave] = parseFloat(inp.value) || 0;
+    });
+    const num = id => parseFloat((document.getElementById(id) || {}).value) || 0;
+    const nova = {
+      pesos,
+      tetoRm: num('fbTetoRm'), tetoChefe: num('fbTetoChefe'),
+      pisoRm: num('fbPisoRm'), pisoAgencia: num('fbPisoAgencia'),
+      poteApoio: num('fbPoteApoio'), poteRanking: num('fbPoteRanking'),
+      penalidade: num('fbPenalidade')
+    };
+    try {
+      await db.collection('mb_config').doc('fator').set(nova, { merge: true });
+      FATOR_CFG = nova;
+      flashSalvo('Configuração de fator salva!');
+    } catch (e) { alert('Erro ao salvar: ' + e.message); }
+  }
+  window.salvarFatorBonus = salvarFatorBonus;
 
   // ---------- CAMPANHA ----------
   async function carregarCampanha() {
