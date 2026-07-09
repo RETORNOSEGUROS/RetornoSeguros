@@ -2736,7 +2736,8 @@
 
       <!-- Tabs de configuração -->
       <div class="cfg-tabs">
-        <div class="cfg-tab active" onclick="setCfgTab('ramos', this)"><i data-lucide="layers" class="w-3.5 h-3.5"></i> Ramos &amp; Grupos</div>
+        <div class="cfg-tab active" onclick="setCfgTab('campanha', this)"><i data-lucide="trophy" class="w-3.5 h-3.5"></i> Campanha</div>
+        <div class="cfg-tab" onclick="setCfgTab('ramos', this)"><i data-lucide="layers" class="w-3.5 h-3.5"></i> Ramos &amp; Grupos</div>
         <div class="cfg-tab" onclick="setCfgTab('funil', this)"><i data-lucide="git-branch" class="w-3.5 h-3.5"></i> Etapas do Funil</div>
         <div class="cfg-tab nav-gamif" onclick="setCfgTab('pontos', this)"><i data-lucide="star" class="w-3.5 h-3.5"></i> Pontos por Etapa</div>
         <div class="cfg-tab" onclick="setCfgTab('multiplicadores', this)"><i data-lucide="x-square" class="w-3.5 h-3.5"></i> Multiplicadores</div>
@@ -2746,8 +2747,47 @@
         <div class="cfg-tab" onclick="setCfgTab('divisao', this)"><i data-lucide="git-fork" class="w-3.5 h-3.5"></i> Divisão de Pontos</div>
       </div>
 
+      <!-- SEÇÃO: CAMPANHA -->
+      <div class="cfg-section active" id="cfg-campanha">
+        <div class="cfg-card">
+          <h3><i data-lucide="trophy" class="w-5 h-5 text-amber-500"></i> Campanha de pontuação</h3>
+          <p class="cfg-desc">Defina o período da campanha vigente. Apenas negócios <strong>fechados dentro deste período</strong> entram na base de bônus; o mapeamento e a cobertura contam o ano todo.</p>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:14px;">
+            <div class="form-group">
+              <label class="form-label">Ano-alvo da campanha</label>
+              <input type="number" class="form-control" id="campAno" min="2025" max="2030" placeholder="2026">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Início da campanha</label>
+              <input type="date" class="form-control" id="campInicio">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Fim da campanha</label>
+              <input type="date" class="form-control" id="campFim">
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px;">
+            <div class="toggle-switch" id="campModoSombraToggle"></div>
+            <div>
+              <div style="font-size:13px; font-weight:700; color:#92400e;">Modo sombra (observação)</div>
+              <div style="font-size:11px; color:#a16207;">A campanha calcula tudo e mostra os pontos, mas sinaliza que ainda está em fase de calibração — sem valer como oficial.</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px;">
+            <div class="toggle-switch" id="campAtivaToggle"></div>
+            <div>
+              <div style="font-size:13px; font-weight:700; color:#166534;">Campanha ativa</div>
+              <div style="font-size:11px; color:#15803d;">Quando ligada, a equipe vê o placar de pontuação no menu.</div>
+            </div>
+          </div>
+          <button class="btn-primary" onclick="salvarCampanha()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar campanha</button>
+          <div id="campResumo" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+
       <!-- SEÇÃO: RAMOS & GRUPOS (CRUD) -->
-      <div class="cfg-section active" id="cfg-ramos">
+      <div class="cfg-section" id="cfg-ramos">
         <div class="cfg-card">
           <h3><i data-lucide="folder-tree" class="w-5 h-5 text-indigo-500"></i> Grupos de ramos</h3>
           <p class="cfg-desc">Agrupe seus ramos (ex.: <strong>Vida</strong>, <strong>RE — Ramos Elementares</strong>, <strong>Saúde</strong>). As metas e relatórios podem ser vistos por grupo.</p>
@@ -4680,6 +4720,7 @@
   let RAMOS_ALL  = RAMOS_DEFAULT.slice();   // inclui inativos (pra tela de config)
   let GRUPOS     = GRUPOS_DEFAULT.slice();
   let PONTOS_CACHE = { ...PONTOS_DEFAULT };
+  let CAMPANHA = { ano: new Date().getFullYear(), inicio: null, fim: null, ativa: false, modoSombra: true };
 
   // Helpers de pontuação — TODO o sistema pontua através destes.
   function getPonto(chave) {
@@ -10744,6 +10785,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     await carregarGrupos();
     await carregarRamos();
     await carregarConfigPontos();
+    await carregarCampanha();
   }
 
   // ---------- Render: tela de Configurações (abas dinâmicas) ----------
@@ -10803,10 +10845,69 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   function renderConfigTudo() {
+    renderCfgCampanha();
     renderCfgRamos();
     renderCfgPontos();
     renderCfgMultiplicadores();
   }
+
+  // ---------- CAMPANHA ----------
+  async function carregarCampanha() {
+    try {
+      const snap = await db.collection('mb_config').doc('campanha').get();
+      if (snap.exists) {
+        const d = snap.data();
+        CAMPANHA = {
+          ano: d.ano || new Date().getFullYear(),
+          inicio: d.inicio || null, fim: d.fim || null,
+          ativa: !!d.ativa, modoSombra: d.modoSombra !== false
+        };
+      }
+    } catch (e) { console.warn('campanha', e); }
+  }
+
+  function renderCfgCampanha() {
+    const anoEl = document.getElementById('campAno');
+    if (!anoEl) return;
+    anoEl.value = CAMPANHA.ano || new Date().getFullYear();
+    document.getElementById('campInicio').value = CAMPANHA.inicio || '';
+    document.getElementById('campFim').value = CAMPANHA.fim || '';
+    const tS = document.getElementById('campModoSombraToggle');
+    const tA = document.getElementById('campAtivaToggle');
+    if (tS) tS.classList.toggle('on', !!CAMPANHA.modoSombra);
+    if (tA) tA.classList.toggle('on', !!CAMPANHA.ativa);
+    renderCampResumo();
+  }
+
+  function renderCampResumo() {
+    const el = document.getElementById('campResumo');
+    if (!el) return;
+    if (!CAMPANHA.inicio || !CAMPANHA.fim) { el.innerHTML = '<div style="font-size:12px;color:#94a3b8;">Defina as datas para ativar a campanha.</div>'; return; }
+    const fmt = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; };
+    const hoje = new Date().toISOString().slice(0, 10);
+    const dentro = hoje >= CAMPANHA.inicio && hoje <= CAMPANHA.fim;
+    el.innerHTML = `<div style="padding:12px 14px; background:${CAMPANHA.ativa ? '#f0fdf4' : '#f8fafc'}; border:1px solid ${CAMPANHA.ativa ? '#bbf7d0' : '#e2e8f0'}; border-radius:8px; font-size:13px; color:#334155;">
+      <strong>Campanha ${CAMPANHA.ano}</strong> · ${fmt(CAMPANHA.inicio)} até ${fmt(CAMPANHA.fim)}
+      ${CAMPANHA.ativa ? (dentro ? ' · <span style="color:#166534;font-weight:700;">🟢 em andamento</span>' : ' · <span style="color:#f59e0b;font-weight:700;">fora do período</span>') : ' · <span style="color:#94a3b8;">desativada</span>'}
+      ${CAMPANHA.modoSombra ? '<br><span style="font-size:11px;color:#a16207;">👁 Modo sombra: em calibração, ainda não oficial.</span>' : ''}
+    </div>`;
+  }
+
+  async function salvarCampanha() {
+    const ano = parseInt(document.getElementById('campAno').value) || new Date().getFullYear();
+    const inicio = document.getElementById('campInicio').value || null;
+    const fim = document.getElementById('campFim').value || null;
+    if (inicio && fim && inicio > fim) return alert('A data de início não pode ser depois do fim.');
+    const modoSombra = document.getElementById('campModoSombraToggle').classList.contains('on');
+    const ativa = document.getElementById('campAtivaToggle').classList.contains('on');
+    try {
+      await db.collection('mb_config').doc('campanha').set({ ano, inicio, fim, modoSombra, ativa }, { merge: true });
+      CAMPANHA = { ano, inicio, fim, modoSombra, ativa };
+      renderCampResumo();
+      flashSalvo('Campanha salva!');
+    } catch (e) { alert('Erro ao salvar campanha: ' + e.message); }
+  }
+  window.salvarCampanha = salvarCampanha;
 
   // ---------- CRUD: grupos ----------
   function adicionarGrupoLinha() {
