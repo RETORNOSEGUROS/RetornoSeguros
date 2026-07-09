@@ -4796,6 +4796,13 @@
     tetoRm: 4.1, tetoChefe: 7.38,
     pisoRm: 60, pisoAgencia: 50,
     poteApoio: 2, poteRanking: 3,
+    // Degraus do pote de apoio (assistentes/estagiários): cresce com o fator da agência, teto = poteApoio.
+    // Cada faixa: {min: fator mínimo da agência, pct: % do pote}. Abaixo do pisoAgencia = 0.
+    apoioFaixas: [
+      { min: 50, pct: 1 },
+      { min: 65, pct: 1.5 },
+      { min: 80, pct: 2 }
+    ],
     penalidade: 0.5
   };
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
@@ -9781,6 +9788,55 @@
   window.renderRankingPontos = renderRankingPontos;
 
   // ============= PAINEL DO GESTOR (admin/chefe) — "quanto a mais", nunca em R$ =============
+  // ===== FÓRMULA FINAL: consolida bônus por pessoa (em pontos, nunca R$) =====
+  // Junta: bônus sobre comissão (RM/chefe) + pote de apoio (assist/estag) + pote de ranking (todos).
+  function poteApoioPct(fatorAgencia) {
+    if (fatorAgencia < (FATOR_CFG.pisoAgencia || 50)) return 0;
+    const faixas = (FATOR_CFG.apoioFaixas || []).slice().sort((a, b) => a.min - b.min);
+    let pct = 0;
+    faixas.forEach(f => { if (fatorAgencia >= f.min) pct = f.pct; });
+    return Math.min(pct, FATOR_CFG.poteApoio || 2); // nunca passa do teto
+  }
+
+  function consolidarCampanha({ baseRm, baseTotal, fatorPorRm, fatorAgencia, pontosPorUid }) {
+    const potesAbertos = fatorAgencia >= (FATOR_CFG.pisoAgencia || 50);
+    const resultado = {}; // uid -> { comissao, ranking, apoio, total, fontes:{} }
+
+    const add = (uid, campo, val) => {
+      if (!resultado[uid]) resultado[uid] = { comissao: 0, ranking: 0, apoio: 0, total: 0 };
+      resultado[uid][campo] += val;
+      resultado[uid].total += val;
+    };
+
+    // 1) Bônus de comissão do RM (só se fator dele >= piso aceitável)
+    Object.keys(baseRm || {}).forEach(uid => {
+      const fator = fatorPorRm[uid] || 0;
+      if (fator < (FATOR_CFG.pisoRm || 60)) return; // abaixo do aceitável, sem bônus
+      const bonusPct = (FATOR_CFG.tetoRm * fator / 100); // pontos percentuais a mais
+      add(uid, 'comissao', (baseRm[uid] || 0) * bonusPct / 100);
+    });
+
+    // 2) Potes coletivos (só se agência passou do piso)
+    if (potesAbertos) {
+      const totalPontos = Object.values(pontosPorUid || {}).reduce((s, p) => s + (p.pontos || 0), 0);
+      // 2a) Pote do ranking: proporcional aos pontos de cada um
+      const poteRankingBase = baseTotal * (FATOR_CFG.poteRanking || 0) / 100;
+      Object.keys(pontosPorUid || {}).forEach(uid => {
+        const share = totalPontos > 0 ? (pontosPorUid[uid].pontos / totalPontos) : 0;
+        add(uid, 'ranking', poteRankingBase * share);
+      });
+      // 2b) Pote de apoio: assistentes/estagiários, dividido IGUALMENTE, escalonado pela agência
+      const apoioPct = poteApoioPct(fatorAgencia);
+      const apoiadores = Object.keys(pontosPorUid || {}).filter(uid => ['assistente', 'estagiario'].includes(pontosPorUid[uid].perfil));
+      if (apoioPct > 0 && apoiadores.length) {
+        const poteApoioBase = baseTotal * apoioPct / 100;
+        const fatia = poteApoioBase / apoiadores.length;
+        apoiadores.forEach(uid => add(uid, 'apoio', fatia));
+      }
+    }
+    return { resultado, potesAbertos, apoioPct: poteApoioPct(fatorAgencia) };
+  }
+
   async function renderPainelGestor() {
     const box = document.getElementById('campAbaGestor');
     if (!box) return;
@@ -9824,6 +9880,16 @@
     // Fator de cada RM (do covRms) e da agência
     const fatorPorRm = {}; rmsCov.forEach(r => fatorPorRm[r.uid] = r.cov.fator);
     const potesAbertos = covAg.fator >= FATOR_CFG.pisoAgencia;
+
+    // Pontos por uid (dentro da campanha) — para o pote de ranking e a consolidação final
+    const acoesCamp = await _carregarAcoes(true).catch(() => []);
+    const _dentroCamp = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+    const pontosPorUid = {};
+    (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontosPorUid[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0 }; });
+    acoesCamp.forEach(a => { if (_dentroCamp(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pontosPorUid[a.usuarioId]) pontosPorUid[a.usuarioId].pontos += (a.pontos || 0); });
+
+    // CONSOLIDAÇÃO — a fórmula final por pessoa
+    const { resultado: consolidado } = consolidarCampanha({ baseRm, baseTotal, fatorPorRm, fatorAgencia: covAg.fator, pontosPorUid });
 
     // ---- Cartão-resumo do "a mais" ----
     // O bônus do RM é uma fração a mais sobre a base dele (teto × fator/100, como pontos percentuais).
@@ -9870,25 +9936,62 @@
         🔒 Potes travados. Faltam <strong>${FATOR_CFG.pisoAgencia - covAg.fator} pontos de fator</strong> para a agência destravar os bônus de assistentes/estagiários (${FATOR_CFG.poteApoio}%) e do ranking (${FATOR_CFG.poteRanking}%).
       </div>`;
     } else {
-      // ranking individual para dividir o pote do ranking
-      const acoes = await _carregarAcoes(true).catch(() => []);
-      const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
-      const pts = {};
-      (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pts[p.uid] = { nome: p.nome, perfil: p.perfil, pontos: 0 }; });
-      acoes.forEach(a => { if (dentro(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pts[a.usuarioId]) pts[a.usuarioId].pontos += (a.pontos || 0); });
-      const lista = Object.values(pts).sort((a, b) => b.pontos - a.pontos);
+      const lista = Object.values(pontosPorUid).sort((a, b) => b.pontos - a.pontos);
       const totalPts = lista.reduce((s, p) => s + p.pontos, 0);
+      const apoioPct = poteApoioPct(covAg.fator);
       html += `<div style="padding:12px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; font-size:13px; color:#166534; margin-bottom:14px;">
-        ✅ Potes abertos! Pote do ranking (${FATOR_CFG.poteRanking}%) dividido proporcional aos pontos:
+        ✅ Potes abertos! Pote do ranking (${FATOR_CFG.poteRanking}%) proporcional aos pontos · Pote de apoio (${apoioPct}% neste nível de agência) dividido igual entre assistentes/estagiários.
       </div>`;
       lista.forEach(p => {
         const share = totalPts > 0 ? (p.pontos / totalPts) : 0;
         const doPote = (FATOR_CFG.poteRanking * share);
         html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f1f5f9; font-size:13px;">
           <span style="color:#334155;">${p.nome} <span style="font-size:11px; color:#94a3b8;">${p.pontos} pts · ${Math.round(share * 100)}%</span></span>
-          <strong style="color:#16a34a;">+${doPote.toFixed(2)} <span style="font-weight:500; color:#94a3b8;">do pote</span></strong>
+          <strong style="color:#16a34a;">+${doPote.toFixed(2)} <span style="font-weight:500; color:#94a3b8;">do ranking</span></strong>
         </div>`;
       });
+    }
+    html += `</div>`;
+
+    // ---- TABELA CONSOLIDADA FINAL: total a pagar a mais por pessoa ----
+    const linhasFinal = Object.keys(consolidado).map(uid => {
+      const nome = (pontosPorUid[uid] && pontosPorUid[uid].nome) || (rmsCov.find(r => r.uid === uid) || {}).nome || (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || 'Pessoa';
+      const perfil = (pontosPorUid[uid] && pontosPorUid[uid].perfil) || 'rm';
+      return { uid, nome, perfil, ...consolidado[uid] };
+    }).filter(l => l.total > 0.005).sort((a, b) => b.total - a.total);
+
+    html += `<div style="background:#0f172a; border-radius:14px; padding:20px; margin-top:16px; color:#e2e8f0;">
+      <div style="font-size:15px; font-weight:800; color:white; margin-bottom:4px;">🧮 Consolidado — o que você paga a mais</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Soma de todas as fontes por pessoa, em pontos. É o acerto do fim da campanha, além do que já é pago no mês a mês.</div>`;
+    if (!linhasFinal.length) {
+      html += '<div style="color:#94a3b8; font-size:13px;">Nada a pagar a mais ainda — os fatores e potes precisam subir.</div>';
+    } else {
+      const perfLabel = { rm: 'RM', chefe: 'Chefe', assistente: 'Assist.', estagiario: 'Estag.' };
+      html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr style="text-align:right; color:#64748b; font-size:11px; border-bottom:1px solid #334155;">
+          <th style="text-align:left; padding:6px 4px;">Pessoa</th>
+          <th style="padding:6px 4px;">Comissão</th>
+          <th style="padding:6px 4px;">Ranking</th>
+          <th style="padding:6px 4px;">Apoio</th>
+          <th style="padding:6px 4px; color:#e2e8f0;">TOTAL a mais</th>
+        </tr></thead><tbody>`;
+      let somaGeral = 0;
+      linhasFinal.forEach(l => {
+        somaGeral += l.total;
+        html += `<tr style="text-align:right; border-bottom:1px solid #1e293b;">
+          <td style="text-align:left; padding:7px 4px; color:white; font-weight:700;">${l.nome} <span style="font-size:10px; color:#64748b; font-weight:500;">${perfLabel[l.perfil] || ''}</span></td>
+          <td style="padding:7px 4px; color:#94a3b8;">${l.comissao > 0 ? fmtBRcompacto(Math.round(l.comissao)) : '—'}</td>
+          <td style="padding:7px 4px; color:#94a3b8;">${l.ranking > 0 ? l.ranking.toFixed(1) : '—'}</td>
+          <td style="padding:7px 4px; color:#94a3b8;">${l.apoio > 0 ? fmtBRcompacto(Math.round(l.apoio)) : '—'}</td>
+          <td style="padding:7px 4px; color:#4ade80; font-weight:800;">${fmtBRcompacto(Math.round(l.total))}</td>
+        </tr>`;
+      });
+      html += `<tr style="text-align:right; border-top:2px solid #334155;">
+        <td style="text-align:left; padding:9px 4px; color:white; font-weight:800;">Total geral</td>
+        <td colspan="3"></td>
+        <td style="padding:9px 4px; color:#4ade80; font-weight:800; font-size:15px;">${fmtBRcompacto(Math.round(somaGeral))}</td>
+      </tr>`;
+      html += `</tbody></table></div>`;
     }
     html += `</div>`;
 
@@ -11459,6 +11562,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           pisoRm: d.pisoRm != null ? d.pisoRm : FATOR_DEFAULT.pisoRm,
           pisoAgencia: d.pisoAgencia != null ? d.pisoAgencia : FATOR_DEFAULT.pisoAgencia,
           poteApoio: d.poteApoio != null ? d.poteApoio : FATOR_DEFAULT.poteApoio,
+          apoioFaixas: Array.isArray(d.apoioFaixas) && d.apoioFaixas.length ? d.apoioFaixas : FATOR_DEFAULT.apoioFaixas,
           poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
           penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
         };
