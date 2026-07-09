@@ -9648,24 +9648,30 @@
       return { uid, nome, cor, cov };
     }).sort((a, b) => b.cov.fator - a.cov.fator);
 
+    const _ehGestorAba = (perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm'));
     cont.innerHTML = `
       <div class="rank-tabs" style="margin-bottom:16px;">
         <div class="rank-tab active" id="campTabCobertura" onclick="setCampAba('cobertura')">📊 Cobertura & Fatores</div>
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
+        ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
       <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov)}</div>
-      <div id="campAbaRanking" style="display:none;"></div>`;
+      <div id="campAbaRanking" style="display:none;"></div>
+      ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
-    // pré-carrega o ranking individual
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
+    if (_ehGestorAba) { window._CAMP_COVAG = covAg; window._CAMP_RMSCOV = rmsCov; }
   }
   window.renderCampanha = renderCampanha;
 
   function setCampAba(aba) {
-    document.getElementById('campTabCobertura').classList.toggle('active', aba === 'cobertura');
-    document.getElementById('campTabRanking').classList.toggle('active', aba === 'ranking');
-    document.getElementById('campAbaCobertura').style.display = aba === 'cobertura' ? '' : 'none';
-    document.getElementById('campAbaRanking').style.display = aba === 'ranking' ? '' : 'none';
+    ['cobertura', 'ranking', 'gestor'].forEach(a => {
+      const tab = document.getElementById('campTab' + a.charAt(0).toUpperCase() + a.slice(1));
+      const box = document.getElementById('campAba' + a.charAt(0).toUpperCase() + a.slice(1));
+      if (tab) tab.classList.toggle('active', aba === a);
+      if (box) box.style.display = aba === a ? '' : 'none';
+    });
+    if (aba === 'gestor') renderPainelGestor();
   }
   window.setCampAba = setCampAba;
 
@@ -9737,6 +9743,122 @@
     box.innerHTML = html;
   }
   window.renderRankingPontos = renderRankingPontos;
+
+  // ============= PAINEL DO GESTOR (admin/chefe) — "quanto a mais", nunca em R$ =============
+  async function renderPainelGestor() {
+    const box = document.getElementById('campAbaGestor');
+    if (!box) return;
+    box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Calculando base da campanha...</div>';
+
+    const covAg = window._CAMP_COVAG || { fator: 0 };
+    const rmsCov = window._CAMP_RMSCOV || [];
+
+    // Fechamentos DENTRO da campanha (base de pagamento)
+    let fechados = [];
+    try {
+      let qc = db.collection('mb_cotacoes');
+      if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await qc.get();
+      snap.forEach(d => {
+        const c = d.data();
+        if (c.status !== 'fechada') return;
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (!dt) return;
+        const iso = dt.toISOString().slice(0, 10);
+        if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return; // só o que fechou na campanha
+        if (CAMPANHA.fim && iso > CAMPANHA.fim) return;
+        fechados.push(c);
+      });
+    } catch (e) { console.warn('gestor fechados', e); }
+
+    // "Peso" de cada negócio = multiplicador do produto (rótulo neutro, nunca comissão)
+    const _empresaRm = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
+    // Base ponderada por RM: soma de (valor × peso do produto) dos fechamentos da campanha
+    const baseRm = {};
+    let baseTotal = 0;
+    fechados.forEach(c => {
+      const uid = _empresaRm[c.empresaId] || c.fechadoPorUid;
+      const peso = getMultiplicador(c.produtoId) || 1;
+      const val = (c.valor || 0) * peso;
+      baseRm[uid] = (baseRm[uid] || 0) + val;
+      baseTotal += val;
+    });
+
+    // Fator de cada RM (do covRms) e da agência
+    const fatorPorRm = {}; rmsCov.forEach(r => fatorPorRm[r.uid] = r.cov.fator);
+    const potesAbertos = covAg.fator >= FATOR_CFG.pisoAgencia;
+
+    // ---- Cartão-resumo do "a mais" ----
+    // O bônus do RM é uma fração a mais sobre a base dele (teto × fator/100, como pontos percentuais).
+    let html = `
+      <div style="background:#0f172a; border-radius:14px; padding:20px 22px; color:#e2e8f0; margin-bottom:16px;">
+        <div style="font-size:12px; color:#94a3b8; font-weight:700; letter-spacing:.04em;">🔐 VISÍVEL SÓ PARA GESTORES</div>
+        <div style="font-size:15px; font-weight:800; color:white; margin:6px 0 4px;">Estimativa de bônus da campanha</div>
+        <div style="font-size:12px; color:#94a3b8;">Base = negócios <strong style="color:#cbd5e1;">fechados dentro da campanha</strong> (${fechados.length}), ponderados pelo peso de cada produto. Valores em <strong style="color:#cbd5e1;">pontos</strong>, nunca em dinheiro.</div>
+      </div>`;
+
+    // ---- Tabela por RM: fator, base, bônus a mais ----
+    html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Bônus a mais por gerente</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Quanto cada RM ganha <strong>além</strong> do padrão, conforme o fator de cobertura dele. Só quem passou do piso (${FATOR_CFG.pisoRm}%) recebe.</div>
+      <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr style="text-align:right; color:#94a3b8; font-size:11px; border-bottom:1px solid #e2e8f0;">
+          <th style="text-align:left; padding:6px 4px;">Gerente</th>
+          <th style="padding:6px 4px;">Fator</th>
+          <th style="padding:6px 4px;">Base (pontos)</th>
+          <th style="padding:6px 4px;">Bônus a mais</th>
+        </tr></thead><tbody>`;
+    rmsCov.forEach(r => {
+      const fator = r.cov.fator;
+      const aceitavel = fator >= FATOR_CFG.pisoRm;
+      const base = Math.round(baseRm[r.uid] || 0);
+      // bônus a mais = teto × fator, aplicado como % da base do RM (só se aceitável)
+      const bonusPct = aceitavel ? (FATOR_CFG.tetoRm * fator / 100) : 0;
+      const bonusPontos = Math.round(base * bonusPct / 100);
+      html += `<tr style="text-align:right; border-bottom:1px solid #f8fafc;">
+        <td style="text-align:left; padding:7px 4px; font-weight:700; color:#0f172a;">${r.nome}</td>
+        <td style="padding:7px 4px; color:${_corFator(fator)}; font-weight:700;">${fator}%</td>
+        <td style="padding:7px 4px; color:#64748b;">${fmtBRcompacto(base)}</td>
+        <td style="padding:7px 4px; font-weight:800; color:${aceitavel ? '#16a34a' : '#94a3b8'};">${aceitavel ? '+' + bonusPct.toFixed(2) + ' <span style=\"font-weight:500; color:#94a3b8;\">(' + fmtBRcompacto(bonusPontos) + ' pts)</span>' : '— abaixo do piso'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+
+    // ---- Potes de apoio e ranking ----
+    html += `<div style="background:white; border-radius:14px; padding:20px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Potes coletivos</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Só abrem quando a agência passa de ${FATOR_CFG.pisoAgencia}% de fator. Fator atual: <strong style="color:${_corFator(covAg.fator)};">${covAg.fator}%</strong>.</div>`;
+    if (!potesAbertos) {
+      html += `<div style="padding:14px; background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; font-size:13px; color:#9a3412;">
+        🔒 Potes travados. Faltam <strong>${FATOR_CFG.pisoAgencia - covAg.fator} pontos de fator</strong> para a agência destravar os bônus de assistentes/estagiários (${FATOR_CFG.poteApoio}%) e do ranking (${FATOR_CFG.poteRanking}%).
+      </div>`;
+    } else {
+      // ranking individual para dividir o pote do ranking
+      const acoes = await _carregarAcoes(true).catch(() => []);
+      const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+      const pts = {};
+      (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil)) pts[p.uid] = { nome: p.nome, perfil: p.perfil, pontos: 0 }; });
+      acoes.forEach(a => { if (dentro(a) && pts[a.usuarioId]) pts[a.usuarioId].pontos += (a.pontos || 0); });
+      const lista = Object.values(pts).sort((a, b) => b.pontos - a.pontos);
+      const totalPts = lista.reduce((s, p) => s + p.pontos, 0);
+      html += `<div style="padding:12px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; font-size:13px; color:#166534; margin-bottom:14px;">
+        ✅ Potes abertos! Pote do ranking (${FATOR_CFG.poteRanking}%) dividido proporcional aos pontos:
+      </div>`;
+      lista.forEach(p => {
+        const share = totalPts > 0 ? (p.pontos / totalPts) : 0;
+        const doPote = (FATOR_CFG.poteRanking * share);
+        html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f1f5f9; font-size:13px;">
+          <span style="color:#334155;">${p.nome} <span style="font-size:11px; color:#94a3b8;">${p.pontos} pts · ${Math.round(share * 100)}%</span></span>
+          <strong style="color:#16a34a;">+${doPote.toFixed(2)} <span style="font-weight:500; color:#94a3b8;">do pote</span></strong>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+
+    box.innerHTML = html;
+    try { lucide.createIcons(); } catch (e) {}
+  }
+  window.renderPainelGestor = renderPainelGestor;
 
   function _corFator(pct) {
     if (pct >= 80) return '#16a34a';
