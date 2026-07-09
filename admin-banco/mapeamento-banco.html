@@ -2108,7 +2108,8 @@
     <div class="nav-item perm-chefeplus" onclick="navTo('metas')"><i data-lucide="target" class="w-4 h-4"></i> Metas (semanal / anual)</div>
 
     <div class="nav-section nav-gamif">Engajamento</div>
-    <div class="nav-item perm-naoestag nav-gamif" onclick="navTo('ranking')"><i data-lucide="trophy" class="w-4 h-4"></i> Ranking</div>
+    <div class="nav-item nav-gamif" onclick="navTo('campanha')"><i data-lucide="trophy" class="w-4 h-4"></i> Campanha</div>
+    <div class="nav-item perm-naoestag nav-gamif" onclick="navTo('ranking')"><i data-lucide="bar-chart-3" class="w-4 h-4"></i> Ranking</div>
 
     <div class="nav-section perm-chefeplus">Gestão</div>
     <div class="nav-item perm-chefeplus" onclick="navTo('equipe')"><i data-lucide="users" class="w-4 h-4"></i> Equipe da Agência</div>
@@ -2506,6 +2507,12 @@
     </div><!-- /screen-dashboard -->
 
     <!-- ===================== TELA: RANKING ===================== -->
+    <div class="screen" id="screen-campanha">
+      <div id="campanhaConteudo">
+        <div style="text-align:center; padding:40px; color:#94a3b8;">Carregando campanha...</div>
+      </div>
+    </div>
+
     <div class="screen" id="screen-ranking">
 
       <div class="rank-tabs">
@@ -5914,6 +5921,7 @@
       producao:      'Produção do Mês <small>· negócios fechados</small>',
       dashboard:     'Meu Dashboard <small>· seu desempenho</small>',
       ranking:       'Ranking <small>· competição saudável</small>',
+      campanha:      'Campanha <small>· cobertura, fatores e bônus</small>',
       vencimentos:   'Vencimentos do Ano <small>· planejando o pipeline</small>',
       oportunidades: 'Oportunidades Quentes <small>· hora de agir</small>',
       equipe:        'Equipe da Agência <small>· gestão e histórico</small>',
@@ -5935,6 +5943,7 @@
     if (telaReal === 'home')        renderHome();
     if (telaReal === 'dashboard')   renderDashboard();
     if (telaReal === 'ranking')     { renderRankingTela(); renderRankingAgencias(); }
+    if (telaReal === 'campanha')    renderCampanha();
     if (telaReal === 'vencimentos') renderVencimentos();
     if (telaReal === 'oportunidades') renderOportunidades();
     if (telaReal === 'equipe')      renderEquipe();
@@ -9507,6 +9516,227 @@
   // Busca TODAS as empresas da agência (agrupadas por RM) só para cálculo agregado.
   // O RM não vê as empresas dos colegas — usamos apenas os números para média e ranking.
   let _COMPARATIVO_CACHE = null;
+  // ============= MOTOR DE COBERTURA (gamificação) =============
+  // Calcula os percentuais de cobertura de cada dimensão para um conjunto de empresas + cotações.
+  // Retorna { dimensoes: {chave: {ok, total, pct}}, fator } — fator = média ponderada pelos pesos.
+  // `janela` = { inicioAno, fimAno } do vencimento elegível para "cotação iniciada".
+  function calcularCobertura(empresas, cotacoes, opts = {}) {
+    empresas = empresas || [];
+    cotacoes = cotacoes || [];
+    const anoCamp = opts.ano || CAMPANHA.ano || new Date().getFullYear();
+    const mesAtual = new Date().getMonth();
+    const anoAtual = new Date().getFullYear();
+    const ramosAtivos = (PRODUTOS || []).map(p => p.id);
+    const _grupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => _grupo[r.id] = r.grupoId);
+
+    // ---- Dimensões cadastrais (por EMPRESA) ----
+    const totalEmp = empresas.length;
+    let okSocios = 0, okFunc = 0, okDecisor = 0, okRh = 0;
+    empresas.forEach(e => {
+      if ((e.socios || []).some(s => s && (s.nome || '').trim())) okSocios++;
+      if ((e.funcionarios || 0) > 0) okFunc++;
+      if ((e.emailDecisor || '').trim()) okDecisor++;
+      if ((e.emailRh || '').trim()) okRh++;
+    });
+
+    // ---- Produtos mapeados (por EMPRESA×PRODUTO) — dedup automático (1 status por célula) ----
+    // "mapeado" = status conhecido: nosso, fechado, mercado, perdido, não tem. Vazio não conta.
+    let totalCelulas = 0, okMapeado = 0;
+    empresas.forEach(e => {
+      const dados = e.produtosDados || {};
+      ramosAtivos.forEach(rid => {
+        totalCelulas++;
+        const pd = dados[rid];
+        const st = pd && pd.statusVisual;
+        if (st && st !== 'vazia') okMapeado++; // qualquer status conhecido conta 1x
+      });
+    });
+
+    // ---- Cotação iniciada (funil etapa 2+) — só produtos ELEGÍVEIS por vencimento na campanha ----
+    // Denominador: empresa×produto cujo vencimento cai deste mês até o fim da campanha (janela de ação).
+    // Numerador: desses, quantos têm cotação ativa etapa 2+ (informacoes em diante).
+    const etapasContam = (typeof STATUS_ATIVOS !== 'undefined' ? STATUS_ATIVOS : []).filter(s => s !== 'solicitada');
+    const noFunil = new Set();
+    cotacoes.forEach(c => { if (etapasContam.includes(c.status)) noFunil.add(c.empresaId + '|' + c.produtoId); });
+    let totalElegiveis = 0, okCotIniciada = 0;
+    empresas.forEach(e => {
+      const dados = e.produtosDados || {};
+      ramosAtivos.forEach(rid => {
+        const pd = dados[rid];
+        if (!pd) return;
+        // elegível: tem vencimento dentro da janela da campanha (deste mês até dez do ano-alvo)
+        if (!pd.vencimentoMes || !pd.vencimentoAno) return;
+        const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
+        const elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+        if (!elegivel) return;
+        totalElegiveis++;
+        if (noFunil.has(e.id + '|' + rid)) okCotIniciada++;
+      });
+    });
+
+    const pct = (ok, tot) => tot > 0 ? Math.round(ok / tot * 100) : 0;
+    const dimensoes = {
+      socios:            { ok: okSocios, total: totalEmp, pct: pct(okSocios, totalEmp) },
+      funcionarios:      { ok: okFunc, total: totalEmp, pct: pct(okFunc, totalEmp) },
+      contato_decisor:   { ok: okDecisor, total: totalEmp, pct: pct(okDecisor, totalEmp) },
+      contato_rh:        { ok: okRh, total: totalEmp, pct: pct(okRh, totalEmp) },
+      produtos_mapeados: { ok: okMapeado, total: totalCelulas, pct: pct(okMapeado, totalCelulas) },
+      cotacao_iniciada:  { ok: okCotIniciada, total: totalElegiveis, pct: pct(okCotIniciada, totalElegiveis) }
+    };
+
+    // ---- Fator = média ponderada pelos pesos configurados ----
+    // Dimensões sem base (total 0) são ignoradas para não zerar injustamente a média.
+    let somaPeso = 0, somaPond = 0;
+    Object.keys(FATOR_CFG.pesos).forEach(chave => {
+      const dim = dimensoes[chave];
+      if (!dim || dim.total === 0) return; // sem base → fora da média
+      const peso = FATOR_CFG.pesos[chave] || 0;
+      somaPeso += peso;
+      somaPond += peso * dim.pct;
+    });
+    const fator = somaPeso > 0 ? Math.round(somaPond / somaPeso) : 0;
+
+    return { dimensoes, fator, totalEmpresas: totalEmp };
+  }
+  window.calcularCobertura = calcularCobertura;
+
+  // ============= TELA CAMPANHA =============
+  async function renderCampanha() {
+    const cont = document.getElementById('campanhaConteudo');
+    if (!cont) return;
+    await carregarCampanha(); await carregarFatorConfig();
+
+    if (!CAMPANHA.ativa) {
+      cont.innerHTML = `<div style="background:white; border-radius:14px; padding:40px; text-align:center;">
+        <div style="font-size:40px; margin-bottom:10px;">🏁</div>
+        <div style="font-size:16px; font-weight:800; color:#0f172a; margin-bottom:6px;">Nenhuma campanha ativa</div>
+        <div style="font-size:13px; color:#64748b; max-width:420px; margin:0 auto;">${CTX.isAdmin ? 'Ative a campanha em Configurações → Campanha para a equipe começar a ver o placar.' : 'Aguarde o administrador iniciar a campanha de pontuação.'}</div>
+      </div>`;
+      return;
+    }
+
+    cont.innerHTML = '<div style="text-align:center; padding:40px; color:#94a3b8;">Calculando cobertura da carteira...</div>';
+
+    let empresasAg = EMPRESAS_REAIS || [];
+    let cotAtivas = [];
+    try {
+      if (perfilEfetivo() === 'rm') {
+        let q = db.collection('empresas');
+        if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+        const snapE = await q.get();
+        const docs = snapE.docs.filter(d => !CTX.agenciaId || d.data().agenciaId === CTX.agenciaId);
+        empresasAg = await Promise.all(docs.map(async d => {
+          const dd = d.data(); const produtosDados = {};
+          try { const ps = await db.collection('empresas').doc(d.id).collection('mb_produtos').get(); ps.forEach(p => produtosDados[p.id] = p.data()); } catch (e) {}
+          return { id: d.id, nome: dd.nome, rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, socios: dd.socios || [], funcionarios: dd.funcionarios || 0, emailDecisor: dd.emailDecisor || '', emailRh: dd.emailRh || '', produtosDados };
+        }));
+      }
+      let qc = db.collection('mb_cotacoes');
+      if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+      const snapC = await qc.get();
+      snapC.forEach(d => { const c = d.data(); if (ehStatusAtivo(c.status)) cotAtivas.push(c); });
+    } catch (e) { console.warn('campanha dados', e); }
+
+    const covAg = calcularCobertura(empresasAg, cotAtivas);
+    const porRM = {};
+    empresasAg.forEach(e => { if (e.rm) (porRM[e.rm] = porRM[e.rm] || []).push(e); });
+    const rmsCov = Object.keys(porRM).map(uid => {
+      const cotDoRm = cotAtivas.filter(c => porRM[uid].some(e => e.id === c.empresaId));
+      const cov = calcularCobertura(porRM[uid], cotDoRm);
+      const nome = (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || (EQUIPE_REAL.find(x => x.uid === uid) || {}).nome || 'RM';
+      const cor = (MAPA_RMS[uid] && MAPA_RMS[uid].cor) || '#6366f1';
+      return { uid, nome, cor, cov };
+    }).sort((a, b) => b.cov.fator - a.cov.fator);
+
+    cont.innerHTML = montarPainelCampanha(covAg, rmsCov);
+    try { lucide.createIcons(); } catch (e) {}
+  }
+  window.renderCampanha = renderCampanha;
+
+  function _corFator(pct) {
+    if (pct >= 80) return '#16a34a';
+    if (pct >= 60) return '#0ea5e9';
+    if (pct >= 40) return '#f59e0b';
+    if (pct >= 20) return '#f97316';
+    return '#ef4444';
+  }
+
+  function montarPainelCampanha(covAg, rmsCov) {
+    const dimLabels = {
+      cotacao_iniciada: '🎯 Cotação iniciada', produtos_mapeados: '🗺️ Produtos mapeados',
+      funcionarios: '👥 Funcionários', socios: '🧑‍💼 Sócios',
+      contato_decisor: '📧 Decisor', contato_rh: '🧑‍💼 RH'
+    };
+    const fmtData = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? `${m[3]}/${m[2]}` : ''; };
+
+    let html = `
+      <div style="background:linear-gradient(135deg,#4338ca,#7c3aed); border-radius:16px; padding:22px 24px; color:white; margin-bottom:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div>
+            <div style="font-size:12px; opacity:.85; font-weight:600;">CAMPANHA ${CAMPANHA.ano} ${CAMPANHA.modoSombra ? '· 👁 modo sombra' : ''}</div>
+            <div style="font-size:24px; font-weight:800;">Fator da agência: ${covAg.fator}%</div>
+            <div style="font-size:12px; opacity:.85;">${fmtData(CAMPANHA.inicio)} até ${fmtData(CAMPANHA.fim)}</div>
+          </div>
+          <div style="text-align:center; background:rgba(255,255,255,0.15); border-radius:12px; padding:12px 18px;">
+            <div style="font-size:11px; opacity:.85;">Bônus do gerente-chefe</div>
+            <div style="font-size:22px; font-weight:800;">+${(FATOR_CFG.tetoChefe * covAg.fator / 100).toFixed(2)}</div>
+          </div>
+        </div>
+      </div>`;
+
+    html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">Cobertura da agência por dimensão</div>`;
+    Object.keys(dimLabels).forEach(ch => {
+      const d = covAg.dimensoes[ch]; if (!d) return;
+      const cor = _corFator(d.pct);
+      html += `<div style="margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span></span>
+          <span style="font-weight:800; color:${cor};">${d.pct}%</span>
+        </div>
+        <div style="height:8px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
+          <div style="height:100%; width:${Math.max(d.pct, 2)}%; background:${cor}; border-radius:100px;"></div>
+        </div>
+      </div>`;
+    });
+    const proxMarco = [50, 60, 70, 80, 90, 100].find(m => covAg.fator < m);
+    if (proxMarco) {
+      html += `<div style="margin-top:14px; padding:12px 14px; background:#eef2ff; border-radius:10px; font-size:13px; color:#3730a3;">
+        📈 Faltam <strong>${proxMarco - covAg.fator} pontos de fator</strong> para a agência chegar a <strong>${proxMarco}%</strong>${(proxMarco >= FATOR_CFG.pisoAgencia && covAg.fator < FATOR_CFG.pisoAgencia) ? ' — e destravar os bônus de assistentes/estagiários e do ranking!' : '.'}
+      </div>`;
+    }
+    html += `</div>`;
+
+    html += `<div style="background:white; border-radius:14px; padding:20px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Fator de cobertura por gerente</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Piso aceitável: ${FATOR_CFG.pisoRm}% · quem passa disso é valorizado mesmo se a agência vai mal.</div>`;
+    if (!rmsCov.length) {
+      html += '<div style="color:#94a3b8; font-size:13px;">Sem gerentes com carteira ainda.</div>';
+    } else {
+      rmsCov.forEach((r, i) => {
+        const cor = _corFator(r.cov.fator);
+        const aceitavel = r.cov.fator >= FATOR_CFG.pisoRm;
+        const bonus = (FATOR_CFG.tetoRm * r.cov.fator / 100);
+        html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #f1f5f9;">
+          <div style="font-size:14px; font-weight:800; color:#94a3b8; width:24px;">${i + 1}º</div>
+          <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome} ${aceitavel ? '<span style="font-size:10px; background:#dcfce7; color:#166534; padding:1px 6px; border-radius:5px;">✓ aceitável</span>' : ''}</div>
+            <div style="height:6px; background:#f1f5f9; border-radius:100px; overflow:hidden; margin-top:4px;">
+              <div style="height:100%; width:${Math.max(r.cov.fator, 2)}%; background:${cor}; border-radius:100px;"></div>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:15px; font-weight:800; color:${cor};">${r.cov.fator}%</div>
+            <div style="font-size:10px; color:#94a3b8;">bônus +${bonus.toFixed(2)}</div>
+          </div>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+    return html;
+  }
+
   async function _empresasPorRMagencia() {
     if (_COMPARATIVO_CACHE && _COMPARATIVO_CACHE.agenciaId === CTX.agenciaId) return _COMPARATIVO_CACHE.porRM;
     let query = db.collection('empresas');
