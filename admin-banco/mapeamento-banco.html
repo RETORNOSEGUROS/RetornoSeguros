@@ -9690,6 +9690,55 @@
       covMinha = calcularCobertura(minhasEmp, minhasCot);
     }
 
+    // Dados para SIMULAÇÃO do próprio agente (cenários "e se")
+    let simMinha = null;
+    const _perfMeu = perfilEfetivo();
+    if (['rm', 'assistente', 'estagiario'].includes(_perfMeu)) {
+      const meu = uidEfetivo();
+      // base de comissão dos negócios do próprio RM emitidos na campanha
+      let minhaBaseComissao = 0, baseTotalAg = 0;
+      try {
+        let qc = db.collection('mb_cotacoes');
+        if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+        const snap = await qc.get();
+        snap.forEach(d => {
+          const c = d.data();
+          if (c.status !== 'fechada' || !c.comissaoPct) return;
+          const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+          if (!dt) return; const iso = dt.toISOString().slice(0, 10);
+          if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return;
+          if (CAMPANHA.fim && iso > CAMPANHA.fim) return;
+          const base = (c.valor || 0) * (c.comissaoPct / 100);
+          baseTotalAg += base;
+          const donoRm = (porRM[meu] || []).some(e => e.id === c.empresaId);
+          if (donoRm) minhaBaseComissao += base;
+        });
+      } catch (e) {}
+      // pontos do próprio e total (dentro da campanha)
+      const acoesSim = await _carregarAcoes(true).catch(() => []);
+      const _dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+      let meusPontos = 0, totalPontosAg = 0, nApoiadores = 0;
+      const setApoiadores = new Set();
+      (EQUIPE_REAL || []).forEach(p => { if (['assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) setApoiadores.add(p.uid); });
+      nApoiadores = setApoiadores.size || 1;
+      acoesSim.forEach(a => {
+        if (!_dentro(a)) return;
+        if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) return;
+        const p = (EQUIPE_REAL || []).find(x => x.uid === a.usuarioId);
+        if (!p || !['rm', 'assistente', 'estagiario'].includes(p.perfil)) return;
+        totalPontosAg += (a.pontos || 0);
+        if (a.usuarioId === meu) meusPontos += (a.pontos || 0);
+      });
+      simMinha = {
+        perfil: _perfMeu,
+        fatorMeu: covMinha ? covMinha.fator : 0,
+        minhaBaseComissao, baseTotalAg,
+        meusPontos, totalPontosAg,
+        nApoiadores,
+        souApoiador: ['assistente', 'estagiario'].includes(_perfMeu)
+      };
+    }
+
     const _ehGestorAba = (perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm'));
     cont.innerHTML = `
       <div class="rank-tabs" style="margin-bottom:16px;">
@@ -9697,7 +9746,7 @@
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
         ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
-      <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha)}</div>
+      <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha, simMinha)}</div>
       <div id="campAbaRanking" style="display:none;"></div>
       ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
@@ -10008,7 +10057,7 @@
     return '#ef4444';
   }
 
-  function montarPainelCampanha(covAg, rmsCov, covMinha) {
+  function montarPainelCampanha(covAg, rmsCov, covMinha, simMinha) {
     const dimLabels = {
       cotacao_iniciada: '🎯 Cotação iniciada', produtos_mapeados: '🗺️ Produtos mapeados',
       funcionarios: '👥 Funcionários', socios: '🧑‍💼 Sócios',
@@ -10090,6 +10139,52 @@
       </div>`;
     }
     html += `</div>`;
+
+    // ===== SIMULAÇÃO: cenários "e se" para o próprio agente =====
+    if (simMinha) {
+      const cenarios = [50, 60, 70, 80, 90, 100];
+      const calcParaAgencia = (fatorAg) => {
+        const potesAbertos = fatorAg >= (FATOR_CFG.pisoAgencia || 50);
+        let comissao = 0, ranking = 0, apoio = 0;
+        // comissão (só RM, usa o fator DELE — não muda com a agência; mostramos no cenário do próprio fator)
+        if (simMinha.perfil === 'rm' && simMinha.fatorMeu >= (FATOR_CFG.pisoRm || 60)) {
+          comissao = simMinha.minhaBaseComissao * (FATOR_CFG.tetoRm * simMinha.fatorMeu / 100) / 100;
+        }
+        if (potesAbertos) {
+          const share = simMinha.totalPontosAg > 0 ? (simMinha.meusPontos / simMinha.totalPontosAg) : 0;
+          ranking = (simMinha.baseTotalAg * (FATOR_CFG.poteRanking || 0) / 100) * share;
+          if (simMinha.souApoiador) {
+            const apPct = poteApoioPct(fatorAg);
+            apoio = (simMinha.baseTotalAg * apPct / 100) / (simMinha.nApoiadores || 1);
+          }
+        }
+        return comissao + ranking + apoio;
+      };
+      const hojeTotal = calcParaAgencia(covAg.fator);
+      html += `<div style="background:linear-gradient(135deg,#7c3aed,#4338ca); border-radius:14px; padding:20px; margin-bottom:16px; color:white;">
+        <div style="font-size:15px; font-weight:800; margin-bottom:4px;">🔮 Simulação — quanto você pode pontuar</div>
+        <div style="font-size:12px; opacity:.85; margin-bottom:16px;">Sua pontuação de bônus cresce conforme a agência sobe de fator. Veja os cenários:</div>
+        <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:16px;">
+          <div style="font-size:12px; opacity:.85;">Hoje (agência ${covAg.fator}%):</div>
+          <div style="font-size:26px; font-weight:800;">${fmtBRcompacto(Math.round(hojeTotal))} <span style="font-size:13px; font-weight:500; opacity:.8;">pts</span></div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px;">`;
+      cenarios.forEach(c => {
+        const val = calcParaAgencia(c);
+        const ganho = val - hojeTotal;
+        const destaque = c >= (FATOR_CFG.pisoAgencia || 50);
+        html += `<div style="background:rgba(255,255,255,${destaque ? '0.18' : '0.08'}); border-radius:10px; padding:10px 8px; text-align:center;">
+          <div style="font-size:11px; opacity:.8;">agência ${c}%</div>
+          <div style="font-size:16px; font-weight:800; margin:3px 0;">${fmtBRcompacto(Math.round(val))}</div>
+          ${ganho > 0.5 ? `<div style="font-size:10px; color:#86efac;">+${fmtBRcompacto(Math.round(ganho))}</div>` : '<div style="font-size:10px; opacity:.5;">—</div>'}
+        </div>`;
+      });
+      html += `</div>`;
+      if (simMinha.perfil === 'rm' && simMinha.fatorMeu < (FATOR_CFG.pisoRm || 60)) {
+        html += `<div style="margin-top:14px; padding:10px 12px; background:rgba(0,0,0,0.2); border-radius:9px; font-size:12px;">💡 Seu fator está abaixo de ${FATOR_CFG.pisoRm}% — subindo sua cobertura, você destrava o bônus sobre seus próprios negócios (não incluído acima).</div>`;
+      }
+      html += `</div>`;
+    }
 
     html += `<div style="background:white; border-radius:14px; padding:20px;">
       <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Fator de cobertura por gerente</div>
