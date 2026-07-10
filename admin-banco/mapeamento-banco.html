@@ -9698,6 +9698,73 @@
   }
   window.calcularCobertura = calcularCobertura;
 
+  // Busca produção do ANO por grupo + meta por grupo, para alimentar a diversificação do fator.
+  // Produção conta o ano TODO (mesmo fora da campanha) — ajuda a bater a meta.
+  // escopoUid = null (agência) ou uid de um RM.
+  async function _dadosGrupoDoAno(ano, escopoUid) {
+    const ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
+    const inicioAno = new Date(ano, 0, 1), fimAno = new Date(ano, 11, 31, 23, 59, 59);
+    const producaoGrupo = {}, metaGrupo = {};
+    const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
+
+    // ---- Produção realizada por grupo (fechamentos do ano, dedup por empresa|produto) ----
+    try {
+      let qc = db.collection('mb_cotacoes');
+      if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await qc.get();
+      const fechadosAno = {};
+      snap.forEach(d => {
+        const c = d.data();
+        if (c.status !== 'fechada') return;
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (!dt || dt < inicioAno || dt > fimAno) return;
+        const uid = _empresaRM[c.empresaId] || c.fechadoPorUid;
+        if (escopoUid && uid !== escopoUid) return;
+        const chave = (c.empresaId || '') + '|' + (c.produtoId || '');
+        const ant = fechadosAno[chave];
+        if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, gid: ramoGrupo[c.produtoId] || 'outros' };
+      });
+      Object.values(fechadosAno).forEach(f => { producaoGrupo[f.gid] = (producaoGrupo[f.gid] || 0) + f.valor; });
+    } catch (e) { console.warn('produção grupo', e); }
+
+    // ---- Já-nosso (apólices que já eram suas, vigência começou no ano) ----
+    const contadas = new Set(Object.keys({})); // simplificado: dedup só entre já-nossos aqui
+    (EMPRESAS_REAIS || []).forEach(e => {
+      if (escopoUid && e.rm !== escopoUid) return;
+      const dados = e.produtosDados || {};
+      Object.keys(dados).forEach(rid => {
+        const pd = dados[rid] || {};
+        if (getMapeamento(pd) !== 'cliente') return;
+        const premio = pd.premioAnual || pd.valorFechado || 0;
+        if (premio <= 0) return;
+        let anoProd = new Date().getFullYear();
+        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+        if (mVi) anoProd = parseInt(mVi[3]);
+        if (anoProd !== ano) return;
+        const gid = ramoGrupo[rid] || 'outros';
+        producaoGrupo[gid] = (producaoGrupo[gid] || 0) + premio;
+      });
+    });
+
+    // ---- Metas por grupo ----
+    try {
+      const docId = (CTX.agenciaId || 'default') + '_' + ano;
+      const snap = await db.collection('mb_metas_anuais').doc(docId).get();
+      if (snap.exists) {
+        const meta = snap.data();
+        if (escopoUid && meta.porGerente && meta.porGerente[escopoUid]) {
+          // meta do RM por grupo
+          Object.entries(meta.porGerente[escopoUid]).forEach(([gid, v]) => { metaGrupo[gid] = (metaGrupo[gid] || 0) + (v || 0); });
+        } else if (!escopoUid && meta.grupos) {
+          Object.entries(meta.grupos).forEach(([gid, obj]) => { metaGrupo[gid] = (obj && obj.prod != null) ? obj.prod : (typeof obj === 'number' ? obj : 0); });
+        }
+      }
+    } catch (e) { console.warn('meta grupo', e); }
+
+    return { producaoGrupo, metaGrupo };
+  }
+  window._dadosGrupoDoAno = _dadosGrupoDoAno;
+
   // Helpers seguros (evitam erro se chamados antes da inicialização do funil)
   function ehStatusAtivoSafe(s) { try { return ehStatusAtivo(s); } catch (e) { return false; } }
   function etapaInfoSafe(s) { try { return etapaInfo(s); } catch (e) { return null; } }
@@ -9747,24 +9814,27 @@
     // RMs válidos = os que estão na equipe da agência atual (EQUIPE_REAL já vem filtrado por agência)
     const uidsEquipe = new Set((EQUIPE_REAL || []).filter(p => ['rm', 'chefe'].includes(p.perfil)).map(p => p.uid));
 
-    const covAg = calcularCobertura(empresasAg, cotAtivas);
+    // Produção e meta por grupo (ano todo) — para a diversificação do fator
+    const dadosGrupoAg = await _dadosGrupoDoAno(CAMPANHA.ano, null).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
+    const covAg = calcularCobertura(empresasAg, cotAtivas, { producaoGrupo: dadosGrupoAg.producaoGrupo, metaGrupo: dadosGrupoAg.metaGrupo });
     const porRM = {};
     empresasAg.forEach(e => { if (e.rm && (!CTX.agenciaId || uidsEquipe.has(e.rm))) (porRM[e.rm] = porRM[e.rm] || []).push(e); });
-    const rmsCov = Object.keys(porRM).map(uid => {
+    const rmsCov = [];
+    for (const uid of Object.keys(porRM)) {
       const cotDoRm = cotAtivas.filter(c => porRM[uid].some(e => e.id === c.empresaId));
-      const cov = calcularCobertura(porRM[uid], cotDoRm);
+      const dg = await _dadosGrupoDoAno(CAMPANHA.ano, uid).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
+      const cov = calcularCobertura(porRM[uid], cotDoRm, { producaoGrupo: dg.producaoGrupo, metaGrupo: dg.metaGrupo });
       const nome = (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || (EQUIPE_REAL.find(x => x.uid === uid) || {}).nome || 'RM';
       const cor = (MAPA_RMS[uid] && MAPA_RMS[uid].cor) || '#6366f1';
-      return { uid, nome, cor, cov };
-    }).sort((a, b) => b.cov.fator - a.cov.fator);
+      rmsCov.push({ uid, nome, cor, cov });
+    }
+    rmsCov.sort((a, b) => b.cov.fator - a.cov.fator);
 
     // Se o usuário é RM, calcula a cobertura DELE (para mostrar "quanto EU tenho em cada indicador")
     let covMinha = null;
     if (perfilEfetivo() === 'rm') {
       const meu = uidEfetivo();
-      const minhasEmp = porRM[meu] || [];
-      const minhasCot = cotAtivas.filter(c => minhasEmp.some(e => e.id === c.empresaId));
-      covMinha = calcularCobertura(minhasEmp, minhasCot);
+      covMinha = (rmsCov.find(r => r.uid === meu) || {}).cov || null;
     }
 
     // Dados para SIMULAÇÃO do próprio agente (cenários "e se")
@@ -9796,7 +9866,7 @@
       const _dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
       let meusPontos = 0, totalPontosAg = 0, nApoiadores = 0;
       const setApoiadores = new Set();
-      (EQUIPE_REAL || []).forEach(p => { if (['assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) setApoiadores.add(p.uid); });
+      (EQUIPE_REAL || []).forEach(p => { if (p.ativo !== false && ['assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) setApoiadores.add(p.uid); });
       nApoiadores = setApoiadores.size || 1;
       acoesSim.forEach(a => {
         if (!_dentro(a)) return;
@@ -9863,7 +9933,7 @@
     // quem pontua: rm, assistente, estagiario. Corretor/admin NÃO pontuam. Chefe = agência (não no ranking individual).
     const pontuadores = {};
     (EQUIPE_REAL || []).forEach(p => {
-      if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
+      if (p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
     });
 
     acoes.forEach(a => {
@@ -9951,13 +10021,24 @@
         const share = totalPontos > 0 ? (pontosPorUid[uid].pontos / totalPontos) : 0;
         add(uid, 'ranking', poteRankingBase * share);
       });
-      // 2b) Pote de apoio: assistentes/estagiários, dividido IGUALMENTE, escalonado pela agência
+      // 2b) Pote de apoio: escalonado pela agência. Dividido 80% assistentes / 20% estagiários.
+      //     Fallback: se não há um dos grupos, o outro leva 100%.
       const apoioPct = poteApoioPct(fatorAgencia);
-      const apoiadores = Object.keys(pontosPorUid || {}).filter(uid => ['assistente', 'estagiario'].includes(pontosPorUid[uid].perfil));
-      if (apoioPct > 0 && apoiadores.length) {
+      if (apoioPct > 0) {
         const poteApoioBase = baseTotal * apoioPct / 100;
-        const fatia = poteApoioBase / apoiadores.length;
-        apoiadores.forEach(uid => add(uid, 'apoio', fatia));
+        const assistentes = Object.keys(pontosPorUid).filter(uid => pontosPorUid[uid].perfil === 'assistente');
+        const estagiarios = Object.keys(pontosPorUid).filter(uid => pontosPorUid[uid].perfil === 'estagiario');
+        let fatiaAssist = 0.8, fatiaEstag = 0.2;
+        if (!assistentes.length) { fatiaEstag = 1; fatiaAssist = 0; }
+        if (!estagiarios.length) { fatiaAssist = 1; fatiaEstag = 0; }
+        if (assistentes.length) {
+          const porAssist = (poteApoioBase * fatiaAssist) / assistentes.length;
+          assistentes.forEach(uid => add(uid, 'apoio', porAssist));
+        }
+        if (estagiarios.length) {
+          const porEstag = (poteApoioBase * fatiaEstag) / estagiarios.length;
+          estagiarios.forEach(uid => add(uid, 'apoio', porEstag));
+        }
       }
     }
     return { resultado, potesAbertos, apoioPct: poteApoioPct(fatorAgencia) };
@@ -10011,7 +10092,7 @@
     const acoesCamp = await _carregarAcoes(true).catch(() => []);
     const _dentroCamp = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
     const pontosPorUid = {};
-    (EQUIPE_REAL || []).forEach(p => { if (['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontosPorUid[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0 }; });
+    (EQUIPE_REAL || []).forEach(p => { if (p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontosPorUid[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0 }; });
     acoesCamp.forEach(a => { if (_dentroCamp(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pontosPorUid[a.usuarioId]) pontosPorUid[a.usuarioId].pontos += (a.pontos || 0); });
 
     // CONSOLIDAÇÃO — a fórmula final por pessoa
