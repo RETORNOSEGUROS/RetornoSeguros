@@ -4807,7 +4807,19 @@
       { min: 65, pct: 1.5 },
       { min: 80, pct: 2 }
     ],
-    penalidade: 0.5
+    penalidade: 0.5,
+    // ---- NOVA ESTRUTURA: fator = atividade × gate ----
+    // Atividade = pesoCotacao% cotação iniciada + pesoDiversif% produção diversificada por grupo.
+    pesoAtivCotacao: 40,   // % do fator de atividade que vem de cotação iniciada
+    pesoAtivDiversif: 60,  // % que vem de produção diversificada (fechar importa mais)
+    // Gate cadastral: abre inteiro (1,0) em gateAlvo% de cobertura; cai até gatePiso em 0%.
+    gateAlvo: 60, gatePiso: 0.5,
+    // Alvo de % da meta por GRUPO para o grupo contar como "coberto" na diversificação.
+    metaPorGrupo: { auto: 0.5, dental: 100, saude: 50, re: 50, vida: 100, previdencia: 50 },
+    // Peso temporal da cotação: pontos por cotação iniciada, do 1º ao último mês da campanha.
+    cotacaoPtsInicio: 10, cotacaoPtsFim: 4,
+    // Plus de originação: pontos extras divididos entre quem originou cotação de um negócio FECHADO.
+    plusOriginacao: 5
   };
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
   const FATOR_DIM_META = [
@@ -9571,9 +9583,11 @@
       });
     });
 
-    // ---- Cotação iniciada (funil etapa 2+) — só produtos ELEGÍVEIS por vencimento na campanha ----
-    // Denominador: empresa×produto cujo vencimento cai deste mês até o fim da campanha (janela de ação).
-    // Numerador: desses, quantos têm cotação ativa etapa 2+ (informacoes em diante).
+    // ---- Cotação iniciada (funil etapa 2+) — denominador AMPLIADO ----
+    // Denominador = potencial de negócio da janela: produtos elegíveis =
+    //   (a) qualquer produto com vencimento dentro da campanha (nosso ou de mercado), OU
+    //   (b) produto respondido "não tem" (oportunidade de nova venda).
+    // Numerador: desses, quantos têm cotação ativa etapa 2+.
     const etapasContam = (typeof STATUS_ATIVOS !== 'undefined' ? STATUS_ATIVOS : []).filter(s => s !== 'solicitada');
     const noFunil = new Set();
     cotacoes.forEach(c => { if (etapasContam.includes(c.status)) noFunil.add(c.empresaId + '|' + c.produtoId); });
@@ -9583,10 +9597,15 @@
       ramosAtivos.forEach(rid => {
         const pd = dados[rid];
         if (!pd) return;
-        // elegível: tem vencimento dentro da janela da campanha (deste mês até dez do ano-alvo)
-        if (!pd.vencimentoMes || !pd.vencimentoAno) return;
-        const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
-        const elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+        const st = pd.statusVisual;
+        let elegivel = false;
+        // (b) "não tem" = oportunidade de nova venda, sempre elegível
+        if (st === 'nao_tem') elegivel = true;
+        // (a) vencimento dentro da janela da campanha
+        if (!elegivel && pd.vencimentoMes && pd.vencimentoAno) {
+          const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
+          elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+        }
         if (!elegivel) return;
         totalElegiveis++;
         if (noFunil.has(e.id + '|' + rid)) okCotIniciada++;
@@ -9605,19 +9624,60 @@
 
     // ---- Fator = média ponderada pelos pesos configurados ----
     // Dimensões sem base (total 0) são ignoradas para não zerar injustamente a média.
-    let somaPeso = 0, somaPond = 0;
-    Object.keys(FATOR_CFG.pesos).forEach(chave => {
-      const dim = dimensoes[chave];
-      if (!dim || dim.total === 0) return; // sem base → fora da média
-      const peso = FATOR_CFG.pesos[chave] || 0;
-      somaPeso += peso;
-      somaPond += peso * dim.pct;
+    // ============ NOVA ESTRUTURA: fator = atividade × gate ============
+    // GATE cadastral: média das dimensões cadastrais vira um multiplicador 0..1.
+    // Abre inteiro (1,0) em gateAlvo% de cobertura; cai até gatePiso em 0%.
+    const cadChaves = ['socios', 'funcionarios', 'contato_decisor', 'contato_rh', 'produtos_mapeados'];
+    let somaCadPeso = 0, somaCadPond = 0;
+    cadChaves.forEach(ch => {
+      const dim = dimensoes[ch];
+      if (!dim || dim.total === 0) return;
+      const peso = (FATOR_CFG.pesos[ch] != null ? FATOR_CFG.pesos[ch] : 1);
+      somaCadPeso += peso; somaCadPond += peso * dim.pct;
     });
-    const fatorBruto = somaPeso > 0 ? Math.round(somaPond / somaPeso) : 0;
+    const cobCadastral = somaCadPeso > 0 ? (somaCadPond / somaCadPeso) : 0; // %
+    const gateAlvo = FATOR_CFG.gateAlvo || 60;
+    const gatePiso = FATOR_CFG.gatePiso != null ? FATOR_CFG.gatePiso : 0.5;
+    let gate;
+    if (cobCadastral >= gateAlvo) gate = 1.0;
+    else gate = gatePiso + (1 - gatePiso) * (cobCadastral / gateAlvo);
+
+    // ATIVIDADE parte 1: cotação iniciada (a dimensão já calculada)
+    const pctCotacao = dimensoes.cotacao_iniciada.pct;
+
+    // ATIVIDADE parte 2: produção diversificada por grupo.
+    // Cada grupo tem alvo próprio (% da meta). Conta quantos grupos atingiram o alvo.
+    // Precisa de opts.producaoGrupo {grupoId: valor} e opts.metaGrupo {grupoId: valorMeta}.
+    const metaPorGrupoAlvo = FATOR_CFG.metaPorGrupo || {};
+    const producaoGrupo = opts.producaoGrupo || {};
+    const metaGrupo = opts.metaGrupo || {};
+    const gruposAll = (GRUPOS || []).map(g => g.id).filter(gid => metaPorGrupoAlvo[gid] != null);
+    let gruposNoAlvo = 0, gruposComMeta = 0;
+    const detalheGrupos = {};
+    gruposAll.forEach(gid => {
+      const meta = metaGrupo[gid] || 0;
+      const prod = producaoGrupo[gid] || 0;
+      const alvoPct = metaPorGrupoAlvo[gid] || 0; // % da meta que precisa atingir
+      if (meta <= 0) { detalheGrupos[gid] = { pctMeta: 0, alvo: alvoPct, ok: false, semMeta: true }; return; }
+      gruposComMeta++;
+      const pctMeta = (prod / meta) * 100;
+      const ok = pctMeta >= alvoPct;
+      if (ok) gruposNoAlvo++;
+      detalheGrupos[gid] = { pctMeta: Math.round(pctMeta), alvo: alvoPct, ok };
+    });
+    const pctDiversif = gruposComMeta > 0 ? Math.round(gruposNoAlvo / gruposComMeta * 100) : 0;
+
+    // Fator de atividade = pesoCotacao% × cotação + pesoDiversif% × diversificação
+    const pC = (FATOR_CFG.pesoAtivCotacao != null ? FATOR_CFG.pesoAtivCotacao : 40);
+    const pD = (FATOR_CFG.pesoAtivDiversif != null ? FATOR_CFG.pesoAtivDiversif : 60);
+    const somaP = pC + pD || 1;
+    const atividade = (pctCotacao * pC + pctDiversif * pD) / somaP; // %
+
+    const fatorBruto = Math.round(atividade * gate); // atividade × gate
+
+    dimensoes.diversificacao = { ok: gruposNoAlvo, total: gruposComMeta, pct: pctDiversif };
 
     // ---- Penalização por prazo expirado ----
-    // Negócio parado na etapa ALÉM do prazo, SEM ação = inércia → reduz o fator.
-    // Perder o negócio atuando NÃO penaliza (só conta cotação ativa parada).
     let expirados = 0;
     (cotacoes || []).forEach(c => {
       if (!ehStatusAtivoSafe(c.status)) return;
@@ -9625,11 +9685,16 @@
       const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfoSafe(c.status) || {}).prazoDias || 999;
       if (dias > limite) expirados++;
     });
-    const penalidadePorNeg = (FATOR_CFG.penalidade || 0); // % do fator por negócio expirado
-    const descontoTotal = Math.min(expirados * penalidadePorNeg, fatorBruto); // não passa de zerar
+    const penalidadePorNeg = (FATOR_CFG.penalidade || 0);
+    const descontoTotal = Math.min(expirados * penalidadePorNeg, fatorBruto);
     const fator = Math.max(0, Math.round(fatorBruto - descontoTotal));
 
-    return { dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp };
+    return {
+      dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp,
+      // novos campos da estrutura atividade × gate
+      gate: Math.round(gate * 100) / 100, cobCadastral: Math.round(cobCadastral),
+      atividade: Math.round(atividade), pctCotacao, pctDiversif, detalheGrupos
+    };
   }
   window.calcularCobertura = calcularCobertura;
 
@@ -11670,6 +11735,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           pisoAgencia: d.pisoAgencia != null ? d.pisoAgencia : FATOR_DEFAULT.pisoAgencia,
           poteApoio: d.poteApoio != null ? d.poteApoio : FATOR_DEFAULT.poteApoio,
           apoioFaixas: Array.isArray(d.apoioFaixas) && d.apoioFaixas.length ? d.apoioFaixas : FATOR_DEFAULT.apoioFaixas,
+          pesoAtivCotacao: d.pesoAtivCotacao != null ? d.pesoAtivCotacao : FATOR_DEFAULT.pesoAtivCotacao,
+          pesoAtivDiversif: d.pesoAtivDiversif != null ? d.pesoAtivDiversif : FATOR_DEFAULT.pesoAtivDiversif,
+          gateAlvo: d.gateAlvo != null ? d.gateAlvo : FATOR_DEFAULT.gateAlvo,
+          gatePiso: d.gatePiso != null ? d.gatePiso : FATOR_DEFAULT.gatePiso,
+          metaPorGrupo: d.metaPorGrupo || FATOR_DEFAULT.metaPorGrupo,
+          cotacaoPtsInicio: d.cotacaoPtsInicio != null ? d.cotacaoPtsInicio : FATOR_DEFAULT.cotacaoPtsInicio,
+          cotacaoPtsFim: d.cotacaoPtsFim != null ? d.cotacaoPtsFim : FATOR_DEFAULT.cotacaoPtsFim,
+          plusOriginacao: d.plusOriginacao != null ? d.plusOriginacao : FATOR_DEFAULT.plusOriginacao,
           poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
           penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
         };
