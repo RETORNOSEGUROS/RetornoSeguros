@@ -9980,20 +9980,22 @@
         <div class="rank-tab active" id="campTabCobertura" onclick="setCampAba('cobertura')">📊 Cobertura & Fatores</div>
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
         <div class="rank-tab" id="campTabExtrato" onclick="setCampAba('extrato')">🧾 Extrato de pontos</div>
+        <div class="rank-tab" id="campTabSimulador" onclick="setCampAba('simulador')">🔮 Simulador</div>
         ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
       <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha, simMinha)}</div>
       <div id="campAbaRanking" style="display:none;"></div>
       <div id="campAbaExtrato" style="display:none;"></div>
+      <div id="campAbaSimulador" style="display:none;"></div>
       ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
-    if (_ehGestorAba) { window._CAMP_COVAG = covAg; window._CAMP_RMSCOV = rmsCov; }
+    window._CAMP_COVAG = covAg; window._CAMP_RMSCOV = rmsCov; window._CAMP_SIMMINHA = simMinha;
   }
   window.renderCampanha = renderCampanha;
 
   function setCampAba(aba) {
-    ['cobertura', 'ranking', 'extrato', 'gestor'].forEach(a => {
+    ['cobertura', 'ranking', 'extrato', 'simulador', 'gestor'].forEach(a => {
       const tab = document.getElementById('campTab' + a.charAt(0).toUpperCase() + a.slice(1));
       const box = document.getElementById('campAba' + a.charAt(0).toUpperCase() + a.slice(1));
       if (tab) tab.classList.toggle('active', aba === a);
@@ -10001,6 +10003,7 @@
     });
     if (aba === 'gestor') renderPainelGestor();
     if (aba === 'extrato') renderExtrato();
+    if (aba === 'simulador') renderSimulador();
   }
   window.setCampAba = setCampAba;
 
@@ -10157,6 +10160,117 @@
   }
   window.renderExtrato = renderExtrato;
   window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
+
+  // ===== SIMULADOR AVANÇADO: matriz de cenários cruzados =====
+  function renderSimulador() {
+    const box = document.getElementById('campAbaSimulador');
+    if (!box) return;
+    const covAg = window._CAMP_COVAG || { fator: 0 };
+    const rmsCov = window._CAMP_RMSCOV || [];
+    const sim = window._CAMP_SIMMINHA;
+    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
+
+    // função de cálculo do bônus total em pontos dado (fatorMeu, fatorAgencia)
+    const calcTotal = (fatorMeu, fatorAg, s) => {
+      if (!s) return 0;
+      const potesAbertos = fatorAg >= (FATOR_CFG.pisoAgencia || 50);
+      let comissao = 0, ranking = 0, apoio = 0;
+      if (s.perfil === 'rm' && fatorMeu >= (FATOR_CFG.pisoRm || 60)) {
+        comissao = s.minhaBaseComissao * (FATOR_CFG.tetoRm * fatorMeu / 100) / 100;
+      }
+      if (potesAbertos) {
+        const share = s.totalPontosAg > 0 ? (s.meusPontos / s.totalPontosAg) : 0;
+        ranking = (s.baseTotalAg * (FATOR_CFG.poteRanking || 0) / 100) * share;
+        if (s.souApoiador) {
+          const apPct = poteApoioPct(fatorAg);
+          apoio = (s.baseTotalAg * apPct / 100) / (s.nApoiadores || 1);
+        }
+      }
+      return comissao + ranking + apoio;
+    };
+
+    let html = '';
+
+    // ---- Matriz para o AGENTE (meu fator × fator da agência) ----
+    if (sim) {
+      const fatoresMeu = sim.perfil === 'rm' ? [30, 50, 60, 75, 90, 100] : [0]; // apoiador não tem fator próprio de comissão
+      const fatoresAg = [30, 50, 65, 80, 100];
+      html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">🔮 Simulador de cenários</div>
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">${sim.perfil === 'rm' ? 'Cruze o <strong>seu fator</strong> (linhas) com o <strong>fator da agência</strong> (colunas) e veja sua pontuação em cada situação.' : 'Veja sua pontuação conforme o <strong>fator da agência</strong> sobe. Como apoiador, seu bônus vem dos potes coletivos.'}</div>`;
+
+      if (sim.perfil === 'rm') {
+        // tabela cruzada
+        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px; min-width:520px;">
+          <thead><tr>
+            <th style="padding:8px 6px; text-align:left; color:#64748b; font-size:11px;">Seu fator ↓ / Agência →</th>
+            ${fatoresAg.map(fa => `<th style="padding:8px 6px; text-align:center; color:#64748b; font-size:11px; ${fa >= FATOR_CFG.pisoAgencia ? 'background:#f0fdf4;' : ''}">${fa}%</th>`).join('')}
+          </tr></thead><tbody>`;
+        fatoresMeu.forEach(fm => {
+          const aceit = fm >= (FATOR_CFG.pisoRm || 60);
+          html += `<tr>
+            <td style="padding:8px 6px; font-weight:700; color:${aceit ? '#16a34a' : '#ef4444'};">${fm}% ${aceit ? '✓' : ''}</td>
+            ${fatoresAg.map(fa => {
+              const val = calcTotal(fm, fa, sim);
+              const atual = (Math.abs(fm - sim.fatorMeu) <= 8 && Math.abs(fa - covAg.fator) <= 10);
+              return `<td style="padding:8px 6px; text-align:center; ${atual ? 'background:#eef2ff; font-weight:800; color:#4338ca; border:2px solid #c7d2fe;' : 'color:#334155;'}">${fmtPts(val)}</td>`;
+            }).join('')}
+          </tr>`;
+        });
+        html += `</tbody></table></div>
+          <div style="font-size:11px; color:#94a3b8; margin-top:10px;">🟦 destaque = sua situação atual (fator ${sim.fatorMeu}%, agência ${covAg.fator}%). Verde no seu fator = acima do piso aceitável (recebe bônus de comissão).</div>`;
+      } else {
+        // apoiador: linha simples por fator da agência
+        html += `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px;">`;
+        fatoresAg.forEach(fa => {
+          const val = calcTotal(0, fa, sim);
+          const atual = Math.abs(fa - covAg.fator) <= 10;
+          html += `<div style="background:${atual ? '#eef2ff' : '#f8fafc'}; border:${atual ? '2px solid #c7d2fe' : '1px solid #f1f5f9'}; border-radius:10px; padding:12px 8px; text-align:center;">
+            <div style="font-size:11px; color:#94a3b8;">agência ${fa}%</div>
+            <div style="font-size:17px; font-weight:800; color:#4338ca; margin-top:3px;">${fmtPts(val)}</div>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // ---- Visão do GESTOR: quem puxa a agência para baixo ----
+    if (ehGestor && rmsCov.length) {
+      const abaixo = rmsCov.filter(r => r.cov.fator < (FATOR_CFG.pisoRm || 60)).sort((a, b) => a.cov.fator - b.cov.fator);
+      const acima = rmsCov.filter(r => r.cov.fator >= (FATOR_CFG.pisoRm || 60));
+      html += `<div style="background:white; border-radius:14px; padding:20px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Quem está puxando a agência</div>
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">Fator da agência hoje: <strong style="color:${_corFator(covAg.fator)};">${covAg.fator}%</strong>. Veja onde agir para destravar os potes (piso ${FATOR_CFG.pisoAgencia}%).</div>`;
+      if (abaixo.length) {
+        html += `<div style="font-size:12px; font-weight:700; color:#991b1b; margin-bottom:8px;">⚠️ Abaixo do aceitável (${FATOR_CFG.pisoRm}%) — precisam de atenção:</div>`;
+        abaixo.forEach(r => {
+          const falta = (FATOR_CFG.pisoRm || 60) - r.cov.fator;
+          html += `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:9px; margin-bottom:6px;">
+            <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
+            <div style="flex:1;"><span style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome}</span></div>
+            <div style="font-size:13px; font-weight:800; color:#ef4444;">${r.cov.fator}%</div>
+            <div style="font-size:11px; color:#991b1b;">faltam ${falta} pts</div>
+          </div>`;
+        });
+      }
+      if (acima.length) {
+        html += `<div style="font-size:12px; font-weight:700; color:#166534; margin:14px 0 8px;">✅ No nível aceitável:</div>`;
+        acima.forEach(r => {
+          html += `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; margin-bottom:6px;">
+            <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
+            <div style="flex:1;"><span style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome}</span></div>
+            <div style="font-size:13px; font-weight:800; color:#16a34a;">${r.cov.fator}%</div>
+          </div>`;
+        });
+      }
+      html += `</div>`;
+    }
+
+    if (!html) html = '<div style="background:white; border-radius:14px; padding:40px; text-align:center; color:#94a3b8;">Simulador disponível quando houver dados de campanha.</div>';
+    box.innerHTML = html;
+  }
+  window.renderSimulador = renderSimulador;
 
   // ============= PAINEL DO GESTOR (admin/chefe) — tudo em pontos =============
   // ===== FÓRMULA FINAL: consolida bônus por pessoa (sempre em pontos) =====
