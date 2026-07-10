@@ -4881,7 +4881,7 @@
       contato_rh: 0.5        // % com e-mail do RH
     },
     tetoRm: 4.1, tetoChefe: 7.38,
-    pisoRm: 60, pisoAgencia: 50,
+    pisoRm: 50, pisoAgencia: 50,
     poteApoio: 2, poteRanking: 3,
     // Degraus do pote de apoio (assistentes/estagiários): cresce com o fator da agência, teto = poteApoio.
     // Cada faixa: {min: fator mínimo da agência, pct: % do pote}. Abaixo do pisoAgencia = 0.
@@ -9722,6 +9722,8 @@
     const noFunil = new Set();
     cotacoes.forEach(c => { if (etapasContam.includes(c.status)) noFunil.add(c.empresaId + '|' + c.produtoId); });
     let totalElegiveis = 0, okCotIniciada = 0;
+    const listaOportunidades = [];
+    const nomeRamo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => nomeRamo[r.id] = r.nome);
     empresas.forEach(e => {
       const dados = e.produtosDados || {};
       ramosAtivos.forEach(rid => {
@@ -9729,37 +9731,39 @@
         if (!pd) return; // sem nenhum registro/ação de mapeamento → não é oportunidade
         const st = pd.statusVisual;
         if (!st || st === 'vazia') return; // vazio não conta (não houve mapeamento)
-        let elegivel = false;
+        let elegivel = false, motivo = '';
         // (b) "não tem" = oportunidade de venda nova (houve mapeamento). Sempre elegível.
-        if (st === 'nao_tem') elegivel = true;
+        if (st === 'nao_tem') { elegivel = true; motivo = 'Não tem — venda nova'; }
         // (c) já-nosso: só é oportunidade se o vencimento cai na campanha (renovação a trabalhar)
         else if (st === 'conosco' || st === 'fechada') {
           if (pd.vencimentoMes && pd.vencimentoAno) {
             const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
             elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+            if (elegivel) motivo = 'Nosso — renova ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno;
           }
         }
         // (a/d) mercado, mapeado, perdido, quente: oportunidade a disputar.
-        //   Se tem vencimento, precisa cair na campanha; se não tem vencimento mas está mapeado
-        //   como oportunidade ativa, conta (foi mapeado como algo a trabalhar).
         else {
           const temReag = pd.reagendarMes && pd.reagendarAno;
           const temVenc = pd.vencimentoMes && pd.vencimentoAno;
           if (temReag) {
-            // reagendamento manda: só é oportunidade se a retomada cai na campanha
             const rAno = parseInt(pd.reagendarAno), rMes = parseInt(pd.reagendarMes) - 1;
             elegivel = (rAno === anoCamp) && (anoCamp > anoAtual || rMes >= mesAtual);
+            if (elegivel) motivo = 'Reagendado p/ ' + String(pd.reagendarMes).padStart(2, '0') + '/' + pd.reagendarAno;
           } else if (temVenc) {
             const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
             elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+            if (elegivel) motivo = 'Mercado — vence ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno;
           } else {
-            // mapeado como oportunidade sem vencimento nem reagendamento → conta
             elegivel = ['mercado', 'mapeada', 'quente', 'perdido'].includes(st);
+            if (elegivel) motivo = 'Mapeado como oportunidade';
           }
         }
         if (!elegivel) return;
         totalElegiveis++;
-        if (noFunil.has(e.id + '|' + rid)) okCotIniciada++;
+        const cotada = noFunil.has(e.id + '|' + rid);
+        if (cotada) okCotIniciada++;
+        listaOportunidades.push({ empresa: e.nome, produto: nomeRamo[rid] || rid, motivo, cotada });
       });
     });
 
@@ -9833,7 +9837,7 @@
 
     return {
       dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp,
-      pctCotacao, pctDiversif, detalheGrupos
+      pctCotacao, pctDiversif, detalheGrupos, listaOportunidades
     };
   }
   window.calcularCobertura = calcularCobertura;
@@ -10059,6 +10063,10 @@
     try { lucide.createIcons(); } catch (e) {}
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
     window._CAMP_COVAG = covAg; window._CAMP_RMSCOV = rmsCov; window._CAMP_SIMMINHA = simMinha;
+    window._OPORTUNIDADES_CACHE = {
+      agencia: (covAg && covAg.listaOportunidades) || [],
+      minha: (covMinha && covMinha.listaOportunidades) || []
+    };
   }
   window.renderCampanha = renderCampanha;
 
@@ -10227,6 +10235,41 @@
     box.innerHTML = html;
   }
   window.renderExtrato = renderExtrato;
+
+  // Modal com o detalhe das oportunidades elegíveis (transparência do denominador da cotação)
+  window._OPORTUNIDADES_CACHE = { agencia: [], minha: [] };
+  function verOportunidades(escopo) {
+    const lista = (escopo === 'minha' ? window._OPORTUNIDADES_CACHE.minha : window._OPORTUNIDADES_CACHE.agencia) || [];
+    const cotadas = lista.filter(o => o.cotada).length;
+    let html = `<div style="position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px;" onclick="if(event.target===this)this.remove()">
+      <div style="background:white; border-radius:16px; max-width:640px; width:100%; max-height:80vh; overflow:auto; padding:24px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div style="font-size:17px; font-weight:800; color:#0f172a;">Oportunidades elegíveis para cotar</div>
+          <button onclick="this.closest('div[style*=fixed]').remove()" style="background:#f1f5f9; border:none; border-radius:8px; width:32px; height:32px; cursor:pointer; font-size:16px;">✕</button>
+        </div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:16px;">São os produtos que o sistema considera oportunidade nesta campanha: <strong>${lista.length}</strong> no total, <strong style="color:#16a34a;">${cotadas} já em cotação</strong>. Um produto vira oportunidade quando foi mapeado como "não tem", quando é nosso e vence na campanha, quando é de mercado, ou quando foi reagendado para o período.</div>`;
+    if (!lista.length) {
+      html += '<div style="color:#94a3b8; text-align:center; padding:20px;">Nenhuma oportunidade elegível no momento. Mapeie produtos (o que o cliente tem, não tem, vencimentos) para gerar oportunidades.</div>';
+    } else {
+      html += '<div style="border:1px solid #e2e8f0; border-radius:10px; overflow:hidden;">';
+      lista.sort((a, b) => (a.cotada === b.cotada) ? 0 : (a.cotada ? 1 : -1)).forEach((o, i) => {
+        html += `<div style="display:flex; align-items:center; gap:10px; padding:10px 14px; ${i % 2 ? 'background:#f8fafc;' : ''}">
+          <div style="font-size:14px;">${o.cotada ? '✅' : '⚪'}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:600; color:#0f172a;">${o.empresa}</div>
+            <div style="font-size:11.5px; color:#94a3b8;">${o.produto} · ${o.motivo}</div>
+          </div>
+          <div style="font-size:11px; font-weight:700; color:${o.cotada ? '#16a34a' : '#94a3b8'};">${o.cotada ? 'em cotação' : 'a cotar'}</div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    html += '</div></div>';
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+  }
+  window.verOportunidades = verOportunidades;
   window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
 
   // ===== SIMULADOR AVANÇADO: matriz de cenários cruzados =====
@@ -10243,8 +10286,9 @@
       if (!s) return 0;
       const potesAbertos = fatorAg >= (FATOR_CFG.pisoAgencia || 50);
       let comissao = 0, ranking = 0, apoio = 0;
-      if (s.perfil === 'rm' && fatorMeu >= (FATOR_CFG.pisoRm || 60)) {
-        comissao = s.minhaBaseComissao * (FATOR_CFG.tetoRm * fatorMeu / 100) / 100;
+      if (s.perfil === 'rm') {
+        const bonusPct = participacaoRM(fatorMeu, fatorAg) - PART_RM_BASE;
+        if (bonusPct > 0) comissao = s.minhaBaseComissao * bonusPct / 100;
       }
       if (potesAbertos) {
         const share = s.totalPontosAg > 0 ? (s.meusPontos / s.totalPontosAg) : 0;
@@ -10385,11 +10429,13 @@
       resultado[uid].total += val;
     };
 
-    // 1) Bônus de comissão do RM (só se fator dele >= piso aceitável)
+    // 1) Bônus de comissão do RM: participação multiplicativa (seu fator × fator da agência).
+    //    Abaixo de 50% de fator próprio, fica no piso (sem bônus). O bônus é o quanto passa de 24,6.
     Object.keys(baseRm || {}).forEach(uid => {
       const fator = fatorPorRm[uid] || 0;
-      if (fator < (FATOR_CFG.pisoRm || 60)) return; // abaixo do aceitável, sem bônus
-      const bonusPct = (FATOR_CFG.tetoRm * fator / 100); // pontos percentuais a mais
+      const participacao = participacaoRM(fator, fatorAgencia);
+      const bonusPct = participacao - PART_RM_BASE; // pontos percentuais a mais (0 se no piso)
+      if (bonusPct <= 0) return;
       add(uid, 'comissao', (baseRm[uid] || 0) * bonusPct / 100);
     });
 
@@ -10502,16 +10548,17 @@
         </tr></thead><tbody>`;
     rmsCov.forEach(r => {
       const fator = r.cov.fator;
-      const aceitavel = fator >= FATOR_CFG.pisoRm;
       const base = Math.round(baseRm[r.uid] || 0);
-      // bônus a mais = teto × fator, aplicado como % da base do RM (só se aceitável)
-      const bonusPct = aceitavel ? (FATOR_CFG.tetoRm * fator / 100) : 0;
+      // bônus a mais = participação(seu fator × agência) − piso, aplicado sobre a base
+      const participacao = participacaoRM(fator, covAg.fator);
+      const bonusPct = participacao - PART_RM_BASE;
+      const aceitavel = bonusPct > 0.001;
       const bonusPontos = Math.round(base * bonusPct / 100);
       html += `<tr style="text-align:right; border-bottom:1px solid #f8fafc;">
         <td style="text-align:left; padding:7px 4px; font-weight:700; color:#0f172a;">${r.nome}</td>
         <td style="padding:7px 4px; color:${_corFator(fator)}; font-weight:700;">${fator}%</td>
         <td style="padding:7px 4px; color:#64748b;">${fmtPts(base)}</td>
-        <td style="padding:7px 4px; font-weight:800; color:${aceitavel ? '#16a34a' : '#94a3b8'};">${aceitavel ? '+' + bonusPct.toFixed(2) + ' <span style=\"font-weight:500; color:#94a3b8;\">(' + fmtPts(bonusPontos) + ' pts)</span>' : '— abaixo do piso'}</td>
+        <td style="padding:7px 4px; font-weight:800; color:${aceitavel ? '#16a34a' : '#94a3b8'};">${aceitavel ? '+' + bonusPct.toFixed(2) + ' <span style=\"font-weight:500; color:#94a3b8;\">(' + fmtPts(bonusPontos) + ' pts)</span>' : '— no piso'}</td>
       </tr>`;
     });
     html += `</tbody></table></div></div>`;
@@ -10604,12 +10651,13 @@
       contato_decisor: '📧 Decisor', contato_rh: '🧑‍💼 RH'
     };
     const fmtData = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? `${m[3]}/${m[2]}` : ''; };
-    const barrasDim = (cov) => Object.keys(dimLabels).map(ch => {
+    const barrasDim = (cov, escopo) => Object.keys(dimLabels).map(ch => {
       const d = cov.dimensoes[ch]; if (!d) return '';
       const cor = _corFator(d.pct);
+      const linkVer = (ch === 'cotacao_iniciada') ? ` <a onclick="verOportunidades('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver ${d.total}</a>` : '';
       return `<div style="margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
-          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span></span>
+          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span>${linkVer}</span>
           <span style="font-weight:800; color:${cor};">${fmtFator(d.pct)}%</span>
         </div>
         <div style="height:8px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
@@ -10642,9 +10690,10 @@
         </div>`;
       Object.keys(dimLabels).forEach(ch => {
         const d = covMinha.dimensoes[ch]; if (!d) return;
+        const linkVer = (ch === 'cotacao_iniciada') ? ` <a onclick="verOportunidades('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver ${d.total}</a>` : '';
         html += `<div style="margin-bottom:11px;">
           <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
-            <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok}/${d.total}</span></span>
+            <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok}/${d.total}</span>${linkVer}</span>
             <span style="font-weight:800;">${fmtFator(d.pct)}%</span>
           </div>
           <div style="height:8px; background:rgba(255,255,255,0.2); border-radius:100px; overflow:hidden;">
@@ -10652,9 +10701,9 @@
           </div>
         </div>`;
       });
-      const aceit = covMinha.fator >= FATOR_CFG.pisoRm;
+      const aceit = covMinha.fator >= 50;
       html += `<div style="margin-top:12px; padding:10px 12px; background:rgba(255,255,255,0.15); border-radius:9px; font-size:12.5px;">
-        ${aceit ? '✅ Você está no nível aceitável — valorizado mesmo se a agência não bater.' : `📈 Faltam ${FATOR_CFG.pisoRm - covMinha.fator} pontos para você chegar ao nível aceitável (${FATOR_CFG.pisoRm}%).`}
+        ${aceit ? '✅ Seu fator passou de 50% — sua participação já cresce conforme você e a agência melhoram.' : `📈 Seu fator está em ${fmtFator(covMinha.fator)}%. A partir de 50% sua participação começa a subir acima do piso.`}
       </div>`;
       if (covMinha.expirados > 0) {
         html += `<div style="margin-top:8px; padding:10px 12px; background:rgba(0,0,0,0.18); border-radius:9px; font-size:12.5px;">
@@ -10666,7 +10715,7 @@
 
     html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
       <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">Cobertura da agência por dimensão</div>
-      ${barrasDim(covAg)}`;
+      ${barrasDim(covAg, 'agencia')}`;
     const proxMarco = [50, 60, 70, 80, 90, 100].find(m => covAg.fator < m);
     if (proxMarco) {
       html += `<div style="margin-top:14px; padding:12px 14px; background:#eef2ff; border-radius:10px; font-size:13px; color:#3730a3;">
