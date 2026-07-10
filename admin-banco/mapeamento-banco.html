@@ -9837,6 +9837,22 @@
   }
   window._dadosGrupoDoAno = _dadosGrupoDoAno;
 
+  // Pontos de uma cotação iniciada AGORA, com peso temporal: decai do 1º ao último mês da campanha.
+  // Cotar cedo vale mais (urgência). Fora da campanha, usa os pontos-base da ação.
+  function pontosCotacaoTemporal() {
+    const ini = FATOR_CFG.cotacaoPtsInicio, fim = FATOR_CFG.cotacaoPtsFim;
+    if (ini == null || fim == null || !CAMPANHA.inicio || !CAMPANHA.fim) return getPonto('cotacao_solicitada');
+    const hoje = new Date();
+    const dIni = new Date(CAMPANHA.inicio + 'T00:00:00');
+    const dFim = new Date(CAMPANHA.fim + 'T23:59:59');
+    if (hoje <= dIni) return ini;
+    if (hoje >= dFim) return fim;
+    // interpola linearmente entre início (ini pts) e fim (fim pts)
+    const frac = (hoje - dIni) / (dFim - dIni); // 0 no começo, 1 no fim
+    return Math.round(ini + (fim - ini) * frac);
+  }
+  window.pontosCotacaoTemporal = pontosCotacaoTemporal;
+
   // Helpers seguros (evitam erro se chamados antes da inicialização do funil)
   function ehStatusAtivoSafe(s) { try { return ehStatusAtivo(s); } catch (e) { return false; } }
   function etapaInfoSafe(s) { try { return etapaInfo(s); } catch (e) { return null; } }
@@ -9963,10 +9979,12 @@
       <div class="rank-tabs" style="margin-bottom:16px;">
         <div class="rank-tab active" id="campTabCobertura" onclick="setCampAba('cobertura')">📊 Cobertura & Fatores</div>
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
+        <div class="rank-tab" id="campTabExtrato" onclick="setCampAba('extrato')">🧾 Extrato de pontos</div>
         ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
       <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha, simMinha)}</div>
       <div id="campAbaRanking" style="display:none;"></div>
+      <div id="campAbaExtrato" style="display:none;"></div>
       ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
@@ -9975,13 +9993,14 @@
   window.renderCampanha = renderCampanha;
 
   function setCampAba(aba) {
-    ['cobertura', 'ranking', 'gestor'].forEach(a => {
+    ['cobertura', 'ranking', 'extrato', 'gestor'].forEach(a => {
       const tab = document.getElementById('campTab' + a.charAt(0).toUpperCase() + a.slice(1));
       const box = document.getElementById('campAba' + a.charAt(0).toUpperCase() + a.slice(1));
       if (tab) tab.classList.toggle('active', aba === a);
       if (box) box.style.display = aba === a ? '' : 'none';
     });
     if (aba === 'gestor') renderPainelGestor();
+    if (aba === 'extrato') renderExtrato();
   }
   window.setCampAba = setCampAba;
 
@@ -10054,6 +10073,90 @@
     box.innerHTML = html;
   }
   window.renderRankingPontos = renderRankingPontos;
+
+  // Rótulos amigáveis por tipo de ação (para o extrato)
+  const EXTRATO_LABELS = {
+    fechamento: { icon: '📜', txt: 'Emitiu / fechou negócio' },
+    plus_originacao: { icon: '⭐', txt: 'Originou negócio que fechou' },
+    cotacao_solicitada: { icon: '🎯', txt: 'Iniciou cotação' },
+    cotacao_realizada: { icon: '🔍', txt: 'Cotou' },
+    cotacao_enviada: { icon: '📧', txt: 'Enviou proposta' },
+    analise_cliente: { icon: '🤔', txt: 'Levou à análise' },
+    transmitida: { icon: '📤', txt: 'Transmitiu à seguradora' },
+    mapeamento_via_link: { icon: '🔗', txt: 'Mapeou via questionário' },
+    mapeou_produto: { icon: '🗺️', txt: 'Mapeou produto' },
+    mapeamento: { icon: '🗺️', txt: 'Mapeou produto' },
+    dados_base: { icon: '🏢', txt: 'Cadastrou dados base' },
+    editou_socios: { icon: '🧑‍💼', txt: 'Atualizou sócios' },
+    editou_funcionarios: { icon: '👥', txt: 'Atualizou funcionários' },
+    contato_decisor: { icon: '📧', txt: 'Cadastrou contato do decisor' },
+    contato_rh: { icon: '🧑‍💼', txt: 'Cadastrou contato do RH' },
+    checklist_item: { icon: '✓', txt: 'Marcou item de checklist' },
+    visita: { icon: '📍', txt: 'Registrou visita' }
+  };
+
+  async function renderExtrato() {
+    const box = document.getElementById('campAbaExtrato');
+    if (!box) return;
+    box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Carregando extrato...</div>';
+    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
+    let acoes = [];
+    try { acoes = await _carregarAcoes(true); } catch (e) {}
+
+    // filtra por período da campanha
+    const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+
+    // quem visualizar: gestor pode escolher; agente vê só o próprio
+    const pontuadores = (EQUIPE_REAL || []).filter(p => p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
+    let alvoUid = uidEfetivo();
+    if (ehGestor) {
+      const sel = box._alvoSel || (pontuadores[0] && pontuadores[0].uid);
+      alvoUid = sel;
+    }
+
+    const linhas = acoes.filter(a => dentro(a) && a.usuarioId === alvoUid && (a.pontos || 0) !== 0)
+      .sort((a, b) => { const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : 0; const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : 0; return db_ - da; });
+    const total = linhas.reduce((s, a) => s + (a.pontos || 0), 0);
+    const nomeAlvo = (pontuadores.find(p => p.uid === alvoUid) || {}).nome || (EQUIPE_REAL.find(p => p.uid === alvoUid) || {}).nome || 'Você';
+
+    let html = `<div style="background:white; border-radius:14px; padding:20px;">`;
+    // seletor de pessoa (gestor)
+    if (ehGestor && pontuadores.length) {
+      html += `<div style="margin-bottom:16px;">
+        <label style="font-size:12px; color:#64748b; font-weight:600; display:block; margin-bottom:5px;">Ver extrato de:</label>
+        <select class="form-control" style="max-width:280px;" onchange="_verExtratoDe(this.value)">
+          ${pontuadores.map(p => `<option value="${p.uid}" ${p.uid === alvoUid ? 'selected' : ''}>${p.nome} · ${({rm:'RM',assistente:'Assistente',estagiario:'Estagiário'})[p.perfil] || p.perfil}</option>`).join('')}
+        </select>
+      </div>`;
+    }
+    html += `<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a;">Extrato de ${nomeAlvo}</div>
+      <div style="font-size:20px; font-weight:800; color:#4338ca;">${total} <span style="font-size:12px; font-weight:500; color:#94a3b8;">pts</span></div>
+    </div>`;
+
+    if (!linhas.length) {
+      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhum ponto registrado na campanha ainda.</div>';
+    } else {
+      html += linhas.map(a => {
+        const meta = EXTRATO_LABELS[a.tipo] || { icon: '•', txt: a.tipo };
+        const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
+        const empresa = a.empresaNome ? ` · ${a.empresaNome}` : '';
+        const prod = a.produtoNome ? ` (${a.produtoNome})` : '';
+        return `<div style="display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #f5f7fa;">
+          <div style="font-size:16px; width:26px; text-align:center;">${meta.icon}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:12.5px; color:#334155;">${meta.txt}${prod}</div>
+            <div style="font-size:11px; color:#94a3b8;">${dt}${empresa}</div>
+          </div>
+          <div style="font-size:14px; font-weight:800; color:#16a34a;">+${a.pontos}</div>
+        </div>`;
+      }).join('');
+    }
+    html += `</div>`;
+    box.innerHTML = html;
+  }
+  window.renderExtrato = renderExtrato;
+  window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
 
   // ============= PAINEL DO GESTOR (admin/chefe) — tudo em pontos =============
   // ===== FÓRMULA FINAL: consolida bônus por pessoa (sempre em pontos) =====
@@ -15739,7 +15842,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         usuarioPerfil: creditoPerfil,
         atribuidoPor: creditoAtribuido ? CTX.uid : null,
         atribuidoPorNome: creditoAtribuido ? CTX.nome : null,
-        pontos: getPonto('cotacao_solicitada'),
+        pontos: pontosCotacaoTemporal(),
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
@@ -17094,6 +17197,36 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
+
+        // PLUS DE ORIGINAÇÃO — negócio FECHADO recompensa quem originou cotações dele ao longo da vida.
+        // Inclui cotações anteriores que declinaram e foram repescadas (ex: RM cotou e caiu, estagiário recotou e fechou → os dois ganham).
+        try {
+          const plus = FATOR_CFG.plusOriginacao || 0;
+          if (plus > 0) {
+            const origSet = {}; // uid -> nome (quem originou)
+            // cotação atual
+            if (c.solicitadoPorUid) origSet[c.solicitadoPorUid] = c.solicitadoPorNome || 'Pessoa';
+            // cotações históricas do mesmo empresa+produto
+            const histSnap = await db.collection('mb_cotacoes')
+              .where('empresaId', '==', c.empresaId).where('produtoId', '==', c.produtoId).get();
+            histSnap.forEach(d => { const h = d.data(); if (h.solicitadoPorUid) origSet[h.solicitadoPorUid] = h.solicitadoPorNome || origSet[h.solicitadoPorUid] || 'Pessoa'; });
+            const origs = Object.keys(origSet);
+            if (origs.length) {
+              const plusCada = Math.round(plus / origs.length); // divide o plus entre os originadores
+              for (const uid of origs) {
+                const pp = (EQUIPE_REAL || []).find(x => x.uid === uid);
+                await db.collection('mb_acoes').add({
+                  tipo: 'plus_originacao', empresaId: c.empresaId, empresaNome: c.empresaNome,
+                  produto: c.produtoId, produtoNome: c.produtoNome, cotacaoId: c.id,
+                  agenciaId: c.agenciaId || CTX.agenciaId,
+                  usuarioId: uid, usuarioNome: origSet[uid], usuarioPerfil: (pp && pp.perfil) || 'rm',
+                  pontos: Math.max(plusCada, 1),
+                  criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+                });
+              }
+            }
+          }
+        } catch (e) { console.warn('plus originação', e); }
 
         novoStatusVisual = 'fechada';
         updateProdutoEmpresa = {
