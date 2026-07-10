@@ -6307,7 +6307,21 @@
           // No mercado / em cotação: vencimento do seguro atual
           mes = d.vencimentoMes; ano = d.vencimentoAno;
         }
-        if (!mes || !ano) return;
+        if (!mes || !ano) {
+          // Produto reagendado: sem vencimento, mas com data de retomada → entra no radar por essa data
+          if (d.reagendarMes && d.reagendarAno) {
+            VENCIMENTOS.push({
+              empresaId: e.id, empresa: e.nome,
+              produto: prod.id, mes: d.reagendarMes, ano: d.reagendarAno,
+              rm: e.rm, conosco: false,
+              statusVisual: d.statusVisual || 'mapeada',
+              seguradora: seg, premio,
+              reagendado: true,
+              observacoes: d.observacoes || ''
+            });
+          }
+          return;
+        }
 
         VENCIMENTOS.push({
           empresaId: e.id, empresa: e.nome,
@@ -7358,6 +7372,8 @@
     cotando: 5,
     enviada: 10,
     reuniao_agendada: 14,
+    analise: 7,
+    transmitida: 10,
     penalidade: 20
   };
 
@@ -8058,7 +8074,9 @@
       { id: 'solicitada',        label: '⏳ Solicitada → Cotando', desc: 'Tempo máximo que pode ficar aguardando o corretor cotar.', cor: '#f59e0b' },
       { id: 'cotando',           label: '🔍 Cotando → Enviada',    desc: 'Tempo máximo que o corretor pode ficar com a cotação em mãos.', cor: '#3b82f6' },
       { id: 'enviada',           label: '📧 Enviada → Reunião',    desc: 'Tempo máximo que o cliente tem para responder após receber.', cor: '#0ea5e9' },
-      { id: 'reuniao_agendada',  label: '📅 Reunião → Decisão',    desc: 'Tempo máximo após a reunião para fechar ou descartar.', cor: '#8b5cf6' }
+      { id: 'reuniao_agendada',  label: '📅 Reunião → Decisão',    desc: 'Tempo máximo após a reunião para fechar ou descartar.', cor: '#8b5cf6' },
+      { id: 'analise',           label: '🤔 Em análise → Transmitir', desc: 'Tempo máximo que o cliente pode ficar analisando a proposta.', cor: '#a855f7' },
+      { id: 'transmitida',       label: '📤 Transmitido → Emissão', desc: 'Tempo máximo aguardando a seguradora emitir após transmitir.', cor: '#0891b2' }
     ];
     grid.innerHTML = etapas.map(e => `
       <div style="background: #f8fafc; border: 1.5px solid ${e.cor}33; border-radius: 10px; padding: 14px;">
@@ -8082,6 +8100,8 @@
       cotando: parseInt(document.getElementById('prazo_cotando').value) || PRAZOS_DEFAULT.cotando,
       enviada: parseInt(document.getElementById('prazo_enviada').value) || PRAZOS_DEFAULT.enviada,
       reuniao_agendada: parseInt(document.getElementById('prazo_reuniao_agendada').value) || PRAZOS_DEFAULT.reuniao_agendada,
+      analise: parseInt((document.getElementById('prazo_analise') || {}).value) || PRAZOS_DEFAULT.analise,
+      transmitida: parseInt((document.getElementById('prazo_transmitida') || {}).value) || PRAZOS_DEFAULT.transmitida,
       penalidade: parseInt(document.getElementById('prazoPenalidade').value) || PRAZOS_DEFAULT.penalidade,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
       atualizadoPorUid: CTX.uid
@@ -9691,11 +9711,17 @@
         //   Se tem vencimento, precisa cair na campanha; se não tem vencimento mas está mapeado
         //   como oportunidade ativa, conta (foi mapeado como algo a trabalhar).
         else {
-          if (pd.vencimentoMes && pd.vencimentoAno) {
+          const temReag = pd.reagendarMes && pd.reagendarAno;
+          const temVenc = pd.vencimentoMes && pd.vencimentoAno;
+          if (temReag) {
+            // reagendamento manda: só é oportunidade se a retomada cai na campanha
+            const rAno = parseInt(pd.reagendarAno), rMes = parseInt(pd.reagendarMes) - 1;
+            elegivel = (rAno === anoCamp) && (anoCamp > anoAtual || rMes >= mesAtual);
+          } else if (temVenc) {
             const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
             elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
           } else {
-            // mapeado como oportunidade sem vencimento definido → conta (ex: mercado, perdido a retomar)
+            // mapeado como oportunidade sem vencimento nem reagendamento → conta
             elegivel = ['mercado', 'mapeada', 'quente', 'perdido'].includes(st);
           }
         }
@@ -17100,10 +17126,25 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <div class="form-group">
           <label class="form-label">O que aconteceu?</label>
           <select class="form-control" id="acaoResultado" onchange="perderResultadoChange()">
-            <option value="fechou_outro">🏢 Fechou com OUTRA corretora/seguradora</option>
-            <option value="ninguem">🚫 Não fechou com ninguém — não tem o produto</option>
-            <option value="desistiu">😕 Cliente desistiu / mantém a atual</option>
+            <option value="fechou_outro">🏢 Renovou/fechou com OUTRA corretora ou seguradora</option>
+            <option value="reagendar">🔁 Não fechou com ninguém — reagendar para retomar depois</option>
+            <option value="sem_interesse">🚫 Não fechou e sem interesse em novo contato</option>
           </select>
+        </div>
+        <div id="perderCamposReagendar" style="display:none;">
+          <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px 12px; font-size:12px; color:#1e40af; margin-bottom:10px;">
+            🔁 O cliente não fechou com ninguém, mas topou retomar depois. Escolha quando voltar às tratativas — se cair na campanha, vira oportunidade de novo.
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Mês para retomar</label>
+              <select class="form-control" id="acaoReagMes"><option value="">— mês —</option>${mesesOpt}</select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ano para retomar</label>
+              <input type="number" class="form-control" id="acaoReagAno" min="2025" max="2035" placeholder="${new Date().getFullYear()}">
+            </div>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Motivo</label>
@@ -17393,12 +17434,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         acaoLog.motivo = motivo;
         acaoLog.pontos = motivo === 'sem_aceitacao' ? getPonto('sem_aceitacao') : getPonto('perda_com_motivo');
 
-        if (resultado === 'ninguem') {
-          // Cotou e ninguém tem → fica como "não tem produto ativo" (não é "não mapeado")
-          novoStatusVisual = 'nao_tem';
-          updateProdutoEmpresa = { mapeamento: 'nao_tem' };
+        if (resultado === 'reagendar') {
+          // Não fechou, mas vai retomar depois → guarda data de reagendamento (independente do vencimento)
+          const rMes = parseInt((document.getElementById('acaoReagMes') || {}).value) || null;
+          const rAno = parseInt((document.getElementById('acaoReagAno') || {}).value) || null;
+          novoStatusVisual = 'mapeada';
+          updateProdutoEmpresa = { mapeamento: 'mercado' };
+          if (rMes && rAno) {
+            updateProdutoEmpresa.reagendarMes = rMes;
+            updateProdutoEmpresa.reagendarAno = rAno;
+          }
         } else if (resultado === 'fechou_outro') {
-          // Fechou com outro → renova o mapeamento com os dados do concorrente
+          // Renovou/fechou com outro → renova o mapeamento com os dados do concorrente
           novoStatusVisual = 'mapeada';
           const vMes = parseInt((document.getElementById('acaoVencMes') || {}).value) || null;
           const vAno = parseInt((document.getElementById('acaoVencAno') || {}).value) || null;
@@ -17408,9 +17455,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           if (vMes) updateProdutoEmpresa.vencimentoMes = vMes;
           if (vAno) updateProdutoEmpresa.vencimentoAno = vAno;
         } else {
-          // Cliente desistiu / mantém a atual → continua mapeado
-          novoStatusVisual = 'mapeada';
-          updateProdutoEmpresa = { mapeamento: 'mercado' };
+          // sem_interesse → encerra sem reagendamento (não vira oportunidade)
+          novoStatusVisual = 'nao_tem';
+          updateProdutoEmpresa = { mapeamento: 'nao_tem' };
         }
       }
 
@@ -17468,6 +17515,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const r = (document.getElementById('acaoResultado') || {}).value;
     const box = document.getElementById('perderCamposOutro');
     if (box) box.style.display = (r === 'fechou_outro') ? 'block' : 'none';
+    const boxR = document.getElementById('perderCamposReagendar');
+    if (boxR) boxR.style.display = (r === 'reagendar') ? 'block' : 'none';
   }
   window.perderResultadoChange = perderResultadoChange;
 
