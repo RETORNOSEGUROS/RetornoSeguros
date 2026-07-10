@@ -9724,48 +9724,74 @@
     let totalElegiveis = 0, okCotIniciada = 0;
     const listaOportunidades = [];
     const nomeRamo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => nomeRamo[r.id] = r.nome);
+    const _ehNaCampanha = (mes, ano) => {
+      if (!mes || !ano) return false;
+      const vAno = parseInt(ano), vMes = parseInt(mes) - 1;
+      return (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
+    };
+    // Um par empresa|produto já está sendo trabalhado (em cotação no funil)?
+    const jaNoFunil = (empId, ramoId) => noFunil.has(empId + '|' + ramoId);
+
     empresas.forEach(e => {
+      const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
+      const sociosOk = (typeof _sociosCotaveis === 'function') ? _sociosCotaveis(e) : ((e.socios || []).filter(s => s && s.nome));
       const dados = e.produtosDados || {};
+
+      // avalia um ramo como oportunidade da campanha
+      const avaliar = (ramoId, motivoImplicito) => {
+        if (!nomeRamo[ramoId]) return;
+        const pd = dados[ramoId];
+        const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, ramoId) : null;
+
+        // já é nosso: só conta se vence DENTRO da campanha (renovação a trabalhar)
+        if (cat === 'nosso' || getMapeamento(pd) === 'cliente') {
+          if (pd && _ehNaCampanha(pd.vencimentoMes, pd.vencimentoAno)) {
+            registrar(e, ramoId, 'Nosso — renova ' + String(pd.vencimentoMes).padStart(2,'0') + '/' + pd.vencimentoAno);
+          }
+          return; // nosso que não vence na campanha → fora
+        }
+        // já em cotação ativa no funil → conta como oportunidade JÁ atendida
+        if (cat === 'cotacao' || jaNoFunil(e.id, ramoId)) { registrar(e, ramoId, 'Em cotação', true); return; }
+
+        // mercado/perdido: oportunidade a disputar
+        if (cat === 'mercado' || cat === 'perdido') {
+          // reagendamento manda, senão vencimento na campanha, senão conta como oportunidade aberta
+          if (pd && pd.reagendarMes && pd.reagendarAno) {
+            if (_ehNaCampanha(pd.reagendarMes, pd.reagendarAno)) registrar(e, ramoId, 'Reagendado p/ ' + String(pd.reagendarMes).padStart(2,'0') + '/' + pd.reagendarAno);
+            return;
+          }
+          if (pd && pd.vencimentoMes && pd.vencimentoAno) {
+            if (_ehNaCampanha(pd.vencimentoMes, pd.vencimentoAno)) registrar(e, ramoId, 'Mercado — vence ' + String(pd.vencimentoMes).padStart(2,'0') + '/' + pd.vencimentoAno);
+            return;
+          }
+          registrar(e, ramoId, 'No mercado — a conquistar');
+          return;
+        }
+        // não_tem ou não_mapeado, MAS com sinal de oportunidade implícita (funcionários/sócios)
+        if (motivoImplicito) { registrar(e, ramoId, motivoImplicito); return; }
+      };
+
+      // oportunidades implícitas por porte (mesma régra do Motor de Leads)
+      if (func > 0)  avaliar('dental',      func + ' funcionários → dental');
+      if (func >= 5) avaliar('saude-colab', func + ' funcionários → saúde');
+      if (func >= 3) avaliar('vida-grupo',  func + ' funcionários → vida');
+      if (sociosOk.length > 0) {
+        avaliar('saude-socios', sociosOk.length + ' sócio(s) → saúde');
+        avaliar('vida-socios',  sociosOk.length + ' sócio(s) → vida');
+      }
+      // demais ramos: avalia o que já tem registro (frota, empresarial, etc.) sem gatilho implícito
       ramosAtivos.forEach(rid => {
-        const pd = dados[rid];
-        if (!pd) return; // sem nenhum registro/ação de mapeamento → não é oportunidade
-        const st = pd.statusVisual;
-        if (!st || st === 'vazia') return; // vazio não conta (não houve mapeamento)
-        let elegivel = false, motivo = '';
-        // (b) "não tem" = oportunidade de venda nova (houve mapeamento). Sempre elegível.
-        if (st === 'nao_tem') { elegivel = true; motivo = 'Não tem — venda nova'; }
-        // (c) já-nosso: só é oportunidade se o vencimento cai na campanha (renovação a trabalhar)
-        else if (st === 'conosco' || st === 'fechada') {
-          if (pd.vencimentoMes && pd.vencimentoAno) {
-            const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
-            elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
-            if (elegivel) motivo = 'Nosso — renova ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno;
-          }
-        }
-        // (a/d) mercado, mapeado, perdido, quente: oportunidade a disputar.
-        else {
-          const temReag = pd.reagendarMes && pd.reagendarAno;
-          const temVenc = pd.vencimentoMes && pd.vencimentoAno;
-          if (temReag) {
-            const rAno = parseInt(pd.reagendarAno), rMes = parseInt(pd.reagendarMes) - 1;
-            elegivel = (rAno === anoCamp) && (anoCamp > anoAtual || rMes >= mesAtual);
-            if (elegivel) motivo = 'Reagendado p/ ' + String(pd.reagendarMes).padStart(2, '0') + '/' + pd.reagendarAno;
-          } else if (temVenc) {
-            const vAno = parseInt(pd.vencimentoAno), vMes = parseInt(pd.vencimentoMes) - 1;
-            elegivel = (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
-            if (elegivel) motivo = 'Mercado — vence ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno;
-          } else {
-            elegivel = ['mercado', 'mapeada', 'quente', 'perdido'].includes(st);
-            if (elegivel) motivo = 'Mapeado como oportunidade';
-          }
-        }
-        if (!elegivel) return;
-        totalElegiveis++;
-        const cotada = noFunil.has(e.id + '|' + rid);
-        if (cotada) okCotIniciada++;
-        listaOportunidades.push({ empresa: e.nome, produto: nomeRamo[rid] || rid, motivo, cotada });
+        if (['dental','saude-colab','vida-grupo','saude-socios','vida-socios'].includes(rid)) return; // já avaliados acima
+        if (dados[rid]) avaliar(rid, null);
       });
     });
+
+    function registrar(e, ramoId, motivo, jaCotada) {
+      totalElegiveis++;
+      const cotada = jaCotada || jaNoFunil(e.id, ramoId);
+      if (cotada) okCotIniciada++;
+      listaOportunidades.push({ empresa: e.nome, produto: nomeRamo[ramoId] || ramoId, motivo, cotada });
+    }
 
     const pct = (ok, tot) => tot > 0 ? Math.round(ok / tot * 10000) / 100 : 0;
     const dimensoes = {
