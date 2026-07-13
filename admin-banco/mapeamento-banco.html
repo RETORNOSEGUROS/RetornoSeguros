@@ -4961,7 +4961,11 @@
     pesosFator: {
       cotacao_iniciada: 35, diversificacao: 30, produtos_mapeados: 15,
       funcionarios: 8, socios: 4, contato_decisor: 5, contato_rh: 3
-    }
+    },
+    // ---- MODELO DE 4 BLOCOS ----
+    pesosBlocos: { preparo: 20, movimento: 35, producao: 25, diversificacao: 20 },
+    pesosPreparo: { produtos_mapeados: 40, funcionarios: 25, socios: 15, contato_decisor: 12, contato_rh: 8 },
+    metaAssumidas: 20  // quantas oportunidades assumidas = 100% no bloco movimento
   };
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
   const FATOR_DIM_META = [
@@ -9857,11 +9861,35 @@
 
     // ---- Fator = média ponderada pelos pesos configurados ----
     // Dimensões sem base (total 0) são ignoradas para não zerar injustamente a média.
-    // ============ FATOR = MÉDIA PONDERADA DAS DIMENSÕES ============
-    // Cada indicador contribui proporcionalmente (fazer algo sempre conta, nunca dá zero injusto).
-    // A cotação iniciada e a produção diversificada pesam mais (atividade domina o fator).
+    // ============ FATOR = 4 BLOCOS PONDERADOS ============
+    // Preparo(20) + Movimento(35) + Produção(25) + Diversificação(20)
+    // Cada bloco é 0-100%. O fator é a soma ponderada dos quatro.
+    const PB = FATOR_CFG.pesosBlocos || { preparo: 20, movimento: 35, producao: 25, diversificacao: 20 };
 
-    // Diversificação por grupo (continua sendo uma dimensão do fator).
+    // ---- BLOCO PREPARO: média ponderada do cadastro + mapeamento ----
+    // mapeamento pesa mais; decisor/RH pesam menos.
+    const PESOS_PREPARO = FATOR_CFG.pesosPreparo || {
+      produtos_mapeados: 40, funcionarios: 25, socios: 15, contato_decisor: 12, contato_rh: 8
+    };
+    let prepPeso = 0, prepPond = 0;
+    Object.keys(PESOS_PREPARO).forEach(ch => {
+      const dim = dimensoes[ch];
+      if (!dim || dim.total === 0) return;
+      prepPeso += PESOS_PREPARO[ch]; prepPond += PESOS_PREPARO[ch] * dim.pct;
+    });
+    const blocoPreparo = prepPeso > 0 ? (prepPond / prepPeso) : 0;
+
+    // ---- BLOCO MOVIMENTO: contagem de oportunidades ASSUMIDAS vs meta de assumidas ----
+    // "Esvaziar a pilha": cada oportunidade assumida conta; escala 0-100% por meta configurável.
+    const metaAssumidas = FATOR_CFG.metaAssumidas || 20;
+    const assumidas = opts.assumidas != null ? opts.assumidas : okCotIniciada; // fallback: em cotação
+    const blocoMovimento = Math.min(100, (assumidas / metaAssumidas) * 100);
+
+    // ---- BLOCO PRODUÇÃO: produção realizada vs meta total (trava em 100%) ----
+    const prodTotal = opts.prodTotal || 0, metaTotal = opts.metaTotal || 0;
+    const blocoProducao = metaTotal > 0 ? Math.min(100, (prodTotal / metaTotal) * 100) : 0;
+
+    // ---- BLOCO DIVERSIFICAÇÃO: grupos que bateram o mínimo ÷ total (só premia) ----
     const metaPorGrupoAlvo = FATOR_CFG.metaPorGrupo || {};
     const producaoGrupo = opts.producaoGrupo || {};
     const metaGrupo = opts.metaGrupo || {};
@@ -9879,27 +9907,26 @@
       if (ok) gruposNoAlvo++;
       detalheGrupos[gid] = { pctMeta: Math.round(pctMeta), alvo: alvoPct, ok };
     });
-    const pctDiversif = gruposComMeta > 0 ? Math.round(gruposNoAlvo / gruposComMeta * 10000) / 100 : 0;
-    dimensoes.diversificacao = { ok: gruposNoAlvo, total: gruposComMeta, pct: pctDiversif };
+    const blocoDiversif = gruposComMeta > 0 ? (gruposNoAlvo / gruposComMeta * 100) : 0;
 
-    const pctCotacao = dimensoes.cotacao_iniciada.pct;
+    // registra os blocos como "dimensões" para exibição
+    dimensoes.diversificacao = { ok: gruposNoAlvo, total: gruposComMeta, pct: Math.round(blocoDiversif * 100) / 100 };
+    dimensoes.movimento = { ok: assumidas, total: metaAssumidas, pct: Math.round(blocoMovimento * 100) / 100 };
+    dimensoes.producao = { ok: Math.round(prodTotal), total: Math.round(metaTotal), pct: Math.round(blocoProducao * 100) / 100 };
 
-    // Pesos das dimensões (somam ~100). Atividade pesa mais.
-    const PESOS_FATOR = FATOR_CFG.pesosFator || {
-      cotacao_iniciada: 35, diversificacao: 30, produtos_mapeados: 15,
-      funcionarios: 8, socios: 4, contato_decisor: 5, contato_rh: 3
+    // ---- FATOR = soma ponderada dos 4 blocos ----
+    const somaPB = (PB.preparo + PB.movimento + PB.producao + PB.diversificacao) || 100;
+    const fatorBruto = Math.round((
+      blocoPreparo * PB.preparo + blocoMovimento * PB.movimento +
+      blocoProducao * PB.producao + blocoDiversif * PB.diversificacao
+    ) / somaPB * 100) / 100;
+
+    const blocos = {
+      preparo: Math.round(blocoPreparo * 100) / 100,
+      movimento: Math.round(blocoMovimento * 100) / 100,
+      producao: Math.round(blocoProducao * 100) / 100,
+      diversificacao: Math.round(blocoDiversif * 100) / 100
     };
-    let somaPeso = 0, somaPond = 0;
-    Object.keys(PESOS_FATOR).forEach(ch => {
-      const dim = dimensoes[ch];
-      if (!dim) return;
-      // diversificação sempre entra (mesmo com base pequena); demais só se têm base
-      if (ch !== 'diversificacao' && dim.total === 0) return;
-      const peso = PESOS_FATOR[ch] || 0;
-      somaPeso += peso;
-      somaPond += peso * dim.pct;
-    });
-    const fatorBruto = somaPeso > 0 ? Math.round(somaPond / somaPeso * 100) / 100 : 0;
 
     // ---- Penalização por prazo expirado ----
     let expirados = 0;
@@ -9915,7 +9942,8 @@
 
     return {
       dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp,
-      pctCotacao, pctDiversif, detalheGrupos, listaOportunidades
+      blocos, pctCotacao: dimensoes.cotacao_iniciada.pct, pctDiversif: blocos.diversificacao,
+      detalheGrupos, listaOportunidades
     };
   }
   window.calcularCobertura = calcularCobertura;
@@ -10054,14 +10082,26 @@
 
     // Produção e meta por grupo (ano todo) — para a diversificação do fator
     const dadosGrupoAg = await _dadosGrupoDoAno(CAMPANHA.ano, null).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
-    const covAg = calcularCobertura(empresasAg, cotAtivas, { producaoGrupo: dadosGrupoAg.producaoGrupo, metaGrupo: dadosGrupoAg.metaGrupo });
+    const _somaVals = o => Object.values(o || {}).reduce((s, v) => s + (v || 0), 0);
+    // assumidas da agência = cotações ativas (que saíram para o funil)
+    const assumidasAg = cotAtivas.filter(c => ehStatusAtivoSafe(c.status)).length;
+    const covAg = calcularCobertura(empresasAg, cotAtivas, {
+      producaoGrupo: dadosGrupoAg.producaoGrupo, metaGrupo: dadosGrupoAg.metaGrupo,
+      prodTotal: _somaVals(dadosGrupoAg.producaoGrupo), metaTotal: _somaVals(dadosGrupoAg.metaGrupo),
+      assumidas: assumidasAg
+    });
     const porRM = {};
     empresasAg.forEach(e => { if (e.rm && (!CTX.agenciaId || uidsEquipe.has(e.rm))) (porRM[e.rm] = porRM[e.rm] || []).push(e); });
     const rmsCov = [];
     for (const uid of Object.keys(porRM)) {
       const cotDoRm = cotAtivas.filter(c => porRM[uid].some(e => e.id === c.empresaId));
       const dg = await _dadosGrupoDoAno(CAMPANHA.ano, uid).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
-      const cov = calcularCobertura(porRM[uid], cotDoRm, { producaoGrupo: dg.producaoGrupo, metaGrupo: dg.metaGrupo });
+      const assumidasRm = cotDoRm.filter(c => ehStatusAtivoSafe(c.status)).length;
+      const cov = calcularCobertura(porRM[uid], cotDoRm, {
+        producaoGrupo: dg.producaoGrupo, metaGrupo: dg.metaGrupo,
+        prodTotal: _somaVals(dg.producaoGrupo), metaTotal: _somaVals(dg.metaGrupo),
+        assumidas: assumidasRm
+      });
       const nome = (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || (EQUIPE_REAL.find(x => x.uid === uid) || {}).nome || 'RM';
       const cor = (MAPA_RMS[uid] && MAPA_RMS[uid].cor) || '#6366f1';
       rmsCov.push({ uid, nome, cor, cov });
@@ -10724,7 +10764,8 @@
 
   function montarPainelCampanha(covAg, rmsCov, covMinha, simMinha) {
     const dimLabels = {
-      cotacao_iniciada: '🎯 Cotação iniciada', produtos_mapeados: '🗺️ Produtos mapeados',
+      movimento: '🎯 Movimento (oportunidades assumidas)', producao: '💰 Produção (meta)',
+      diversificacao: '🌈 Diversificação (grupos)', produtos_mapeados: '🗺️ Produtos mapeados',
       funcionarios: '👥 Funcionários', socios: '🧑‍💼 Sócios',
       contato_decisor: '📧 Decisor', contato_rh: '🧑‍💼 RH'
     };
@@ -10732,7 +10773,7 @@
     const barrasDim = (cov, escopo) => Object.keys(dimLabels).map(ch => {
       const d = cov.dimensoes[ch]; if (!d) return '';
       const cor = _corFator(d.pct);
-      const linkVer = (ch === 'cotacao_iniciada') ? ` <a onclick="verOportunidades('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver ${d.total}</a>` : '';
+      const linkVer = (ch === 'movimento') ? ` <a onclick="verOportunidades('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver ${d.total}</a>` : '';
       return `<div style="margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
           <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span>${linkVer}</span>
@@ -12290,6 +12331,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           apoioAssist: d.apoioAssist != null ? d.apoioAssist : FATOR_DEFAULT.apoioAssist,
           apoioEstag: d.apoioEstag != null ? d.apoioEstag : FATOR_DEFAULT.apoioEstag,
           pesosFator: d.pesosFator || FATOR_DEFAULT.pesosFator,
+          pesosBlocos: d.pesosBlocos || FATOR_DEFAULT.pesosBlocos,
+          pesosPreparo: d.pesosPreparo || FATOR_DEFAULT.pesosPreparo,
+          metaAssumidas: d.metaAssumidas != null ? d.metaAssumidas : FATOR_DEFAULT.metaAssumidas,
           poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
           penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
         };
