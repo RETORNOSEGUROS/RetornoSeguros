@@ -9846,7 +9846,7 @@
       totalElegiveis++;
       const cotada = jaCotada || jaNoFunil(e.id, ramoId);
       if (cotada) okCotIniciada++;
-      listaOportunidades.push({ empresa: e.nome, produto: nomeRamo[ramoId] || ramoId, motivo, cotada });
+      listaOportunidades.push({ empresaId: e.id, empresa: e.nome, produtoId: ramoId, produto: nomeRamo[ramoId] || ramoId, motivo, cotada });
     }
 
     const pct = (ok, tot) => tot > 0 ? Math.round(ok / tot * 10000) / 100 : 0;
@@ -10275,6 +10275,7 @@
   const EXTRATO_LABELS = {
     fechamento: { icon: '📜', txt: 'Emitiu / fechou negócio' },
     plus_originacao: { icon: '⭐', txt: 'Originou negócio que fechou' },
+    oportunidade_assumida: { icon: '🙋', txt: 'Assumiu uma oportunidade' },
     cotacao_solicitada: { icon: '🎯', txt: 'Iniciou cotação' },
     cotacao_realizada: { icon: '🔍', txt: 'Cotou' },
     cotacao_enviada: { icon: '📧', txt: 'Enviou proposta' },
@@ -10371,13 +10372,17 @@
     } else {
       html += '<div style="border:1px solid #e2e8f0; border-radius:10px; overflow:hidden;">';
       lista.sort((a, b) => (a.cotada === b.cotada) ? 0 : (a.cotada ? 1 : -1)).forEach((o, i) => {
+        const podeAssumir = !o.cotada && o.empresaId && o.produtoId && ['rm', 'assistente', 'estagiario'].includes(perfilEfetivo());
+        const btnAssumir = podeAssumir
+          ? `<button onclick="assumirOportunidade('${o.empresaId}','${o.produtoId}', this)" style="background:#4f46e5; color:white; border:none; border-radius:8px; padding:6px 12px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap;">🙋 Assumir</button>`
+          : `<div style="font-size:11px; font-weight:700; color:${o.cotada ? '#16a34a' : '#94a3b8'};">${o.cotada ? 'em cotação' : 'a cotar'}</div>`;
         html += `<div style="display:flex; align-items:center; gap:10px; padding:10px 14px; ${i % 2 ? 'background:#f8fafc;' : ''}">
           <div style="font-size:14px;">${o.cotada ? '✅' : '⚪'}</div>
           <div style="flex:1; min-width:0;">
             <div style="font-size:13px; font-weight:600; color:#0f172a;">${o.empresa}</div>
             <div style="font-size:11.5px; color:#94a3b8;">${o.produto} · ${o.motivo}</div>
           </div>
-          <div style="font-size:11px; font-weight:700; color:${o.cotada ? '#16a34a' : '#94a3b8'};">${o.cotada ? 'em cotação' : 'a cotar'}</div>
+          ${btnAssumir}
         </div>`;
       });
       html += '</div>';
@@ -10388,6 +10393,55 @@
     document.body.appendChild(div.firstElementChild);
   }
   window.verOportunidades = verOportunidades;
+
+  // ASSUMIR OPORTUNIDADE — o gatilho de comprometimento ("cota esse seguro, tamo junto").
+  // Cria a cotação no funil (etapa solicitada) e pontua quem assumiu, com peso temporal.
+  async function assumirOportunidade(empresaId, produtoId, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '...'; btn.style.opacity = '0.6'; }
+    try {
+      const emp = (EMPRESAS_REAIS || EMPRESAS || []).find(e => e.id === empresaId);
+      const prod = (PRODUTOS || RAMOS_ALL || []).find(p => p.id === produtoId);
+      if (!emp || !prod) { alert('Dados não encontrados.'); return; }
+
+      // evita duplicar: já existe cotação ativa desse empresa+produto?
+      if (typeof _temCotacaoAtiva === 'function' && _temCotacaoAtiva(empresaId, produtoId)) {
+        if (btn) { btn.textContent = 'já ativa'; }
+        return;
+      }
+
+      const cot = {
+        empresaId, empresaNome: emp.nome,
+        produtoId, produtoNome: prod.nome, produtoIcon: prod.icon || '📦',
+        agenciaId: emp.agenciaId || CTX.agenciaId || null,
+        status: 'solicitada', etapa: 1, origem: 'assumida_campanha',
+        solicitadoPorUid: autorUid(), solicitadoPorNome: autorNome(),
+        registradoPorUid: autorUid(), registradoPorNome: autorNome(),
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      const ref = await db.collection('mb_cotacoes').add(cot);
+
+      // pontua quem assumiu, com peso temporal (assumir cedo vale mais)
+      await db.collection('mb_acoes').add({
+        tipo: 'oportunidade_assumida',
+        empresaId, empresaNome: emp.nome,
+        produto: produtoId, produtoNome: prod.nome,
+        cotacaoId: ref.id, agenciaId: emp.agenciaId || CTX.agenciaId,
+        usuarioId: autorUid(), usuarioNome: autorNome(), usuarioPerfil: perfilEfetivo(),
+        pontos: (typeof pontosCotacaoTemporal === 'function') ? pontosCotacaoTemporal() : 10,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      if (btn) { btn.textContent = '✅ Assumida!'; btn.style.background = '#16a34a'; }
+      flashSalvo('Oportunidade assumida! Já está no funil e você pontuou.');
+      // atualiza a campanha em segundo plano
+      setTimeout(() => { try { renderCampanha(); } catch (e) {} }, 1200);
+    } catch (e) {
+      alert('Erro ao assumir: ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🙋 Assumir'; btn.style.opacity = '1'; }
+    }
+  }
+  window.assumirOportunidade = assumirOportunidade;
   window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
 
   // ===== SIMULADOR AVANÇADO: matriz de cenários cruzados =====
