@@ -3339,7 +3339,8 @@
         </div>
       </div>
 
-      <div style="display:flex; justify-content:flex-end; margin-bottom:14px;">
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:14px;">
+        <button class="btn-secondary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP</button>
         <button class="btn-primary" onclick="abrirPedirCotacao()"><i data-lucide="plus" class="w-3.5 h-3.5 inline"></i> Pedir cotação</button>
       </div>
 
@@ -4752,6 +4753,7 @@
         <label class="form-label">Status atual</label>
         <div class="pill-group" id="modalProdutoStatus">
           <div class="pill-option" data-st="vazia" onclick="selPillProd(this)">⚪ Não mapeado</div>
+          <div class="pill-option" data-st="nao_tem" onclick="selPillProd(this)">🚫 Não tem</div>
           <div class="pill-option" data-st="mapeada" onclick="selPillProd(this)">🟢 Mapeado</div>
           <div class="pill-option" data-st="cotando" onclick="selPillProd(this)">🟡 Em cotação</div>
           <div class="pill-option" data-st="fechada" onclick="selPillProd(this)">🟣 Fechado</div>
@@ -13096,8 +13098,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <div class="cad-modal-body">
           <input type="hidden" id="crEmpresaId" value="${e.id}">
           <div class="form-group">
+            <label style="display:flex; align-items:center; gap:10px; cursor:pointer; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px;">
+              <input type="checkbox" id="crEhOp" onchange="crToggleOp()" style="width:18px; height:18px;">
+              <div>
+                <div style="font-weight:700; color:#0f172a; font-size:14px;">🏦 É uma OP?</div>
+                <div style="font-size:11.5px; color:#94a3b8;">Negócio de operação bancária — roda por fora do mapeamento de mercado.</div>
+              </div>
+            </label>
+          </div>
+          <div class="form-group">
             <label class="form-label">Produto / ramo</label>
             <select class="form-control" id="crProduto">${(PRODUTOS || []).map(p => `<option value="${p.id}">${p.icon} ${p.nome}</option>`).join('')}</select>
+          </div>
+          <div class="form-group" id="crSeguradoraWrap" style="display:none;">
+            <label class="form-label">🏦 Seguradora</label>
+            <input type="text" class="form-control" id="crSeguradora" value="Bradesco">
+            <div style="font-size:11px; color:#94a3b8; margin-top:3px;">A OP geralmente fecha na Bradesco, mas você pode editar.</div>
           </div>
           <div class="form-group">
             <label class="form-label">Valor estimado (R$) <small style="color:#94a3b8;">opcional</small></label>
@@ -13107,7 +13123,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <label class="form-label">Observações</label>
             <textarea class="form-control" id="crObs" rows="3" placeholder="Contexto, o que o cliente pediu..."></textarea>
           </div>
-          <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:9px 12px; font-size:12px; color:#4338ca;">A negociação entra direto na 1ª etapa do funil (Iniciada).</div>
+          <div id="crAvisoNormal" style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:9px 12px; font-size:12px; color:#4338ca;">A negociação entra direto na 1ª etapa do funil (Iniciada).</div>
+          <div id="crAvisoOp" style="display:none; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:9px 12px; font-size:12px; color:#4338ca;">🏦 Como OP, entra no funil <strong>sem</strong> alterar o mapeamento de mercado deste produto (se houver).</div>
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalCotacaoRapida').remove()">Cancelar</button>
@@ -13125,16 +13142,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e || !r) return alert('Selecione um produto.');
     const valor = lerMoeda(document.getElementById('crValor'));
     const obs = (document.getElementById('crObs').value || '').trim();
+    const ehOp = !!(document.getElementById('crEhOp') || {}).checked;
+    const seguradora = ehOp ? ((document.getElementById('crSeguradora') || {}).value || 'Bradesco').trim() : null;
     try {
-      const id = await criarCotacao(e, r, { origem: 'mapeamento', valorProposto: valor || null, observacoes: obs || null, silent: true });
+      const optsCot = ehOp
+        ? { origem: 'op', valorOperacao: valor || null, seguradora: seguradora || null, observacoes: obs || null, silent: true }
+        : { origem: 'mapeamento', valorProposto: valor || null, observacoes: obs || null, silent: true };
+      const id = await criarCotacao(e, r, optsCot);
       if (id) {
         const m = document.getElementById('modalCotacaoRapida'); if (m) m.remove();
         confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
         try { await carregarEmpresasReais(); renderEmpresas(); } catch (err) {}
-        flashSalvo('Cotação criada no funil!');
+        flashSalvo(ehOp ? 'OP criada no funil!' : 'Cotação criada no funil!');
       }
     } catch (err) { alert('Erro: ' + err.message); }
   }
+  function crToggleOp() {
+    const on = !!(document.getElementById('crEhOp') || {}).checked;
+    const seg = document.getElementById('crSeguradoraWrap');
+    const an = document.getElementById('crAvisoNormal'), ao = document.getElementById('crAvisoOp');
+    if (seg) seg.style.display = on ? 'block' : 'none';
+    if (an) an.style.display = on ? 'none' : 'block';
+    if (ao) ao.style.display = on ? 'block' : 'none';
+  }
+  window.crToggleOp = crToggleOp;
   window.abrirCotacaoRapida = abrirCotacaoRapida;
   window.salvarCotacaoRapida = salvarCotacaoRapida;
 
@@ -16126,9 +16157,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('blocoConosco').style.display = (st === 'conosco') ? '' : 'none';
     document.getElementById('blocoVencimento').style.display = (st === 'conosco' || st === 'vazia') ? (st === 'vazia' ? 'none' : 'none') : '';
     const gp = document.getElementById('grpPremioProduto');
-    if (gp) gp.style.display = (st === 'vazia') ? 'none' : '';
-    // Se "vazia", esconde os blocos
-    if (st === 'vazia') {
+    if (gp) gp.style.display = (st === 'vazia' || st === 'nao_tem') ? 'none' : '';
+    // Se "vazia" ou "não tem", esconde os blocos de vencimento/cliente
+    if (st === 'vazia' || st === 'nao_tem') {
       document.getElementById('blocoConosco').style.display = 'none';
       document.getElementById('blocoVencimento').style.display = 'none';
     }
