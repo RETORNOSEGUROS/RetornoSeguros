@@ -2369,6 +2369,14 @@
 
     </div><!-- /screen-empresas -->
 
+    <!-- Botão flutuante: análise da carteira em palavras -->
+    <button id="btnAnaliseCarteira" onclick="abrirAnaliseCarteira()" title="Dicas da sua carteira"
+      style="display:none; position:fixed; bottom:24px; right:24px; z-index:900; width:60px; height:60px; border-radius:50%; border:none; background:linear-gradient(135deg,#6366f1,#8b5cf6); color:white; font-size:26px; cursor:pointer; box-shadow:0 8px 24px rgba(99,102,241,0.45); animation:pulseChat 2s infinite;">💬</button>
+    <style>
+      @keyframes pulseChat { 0%,100%{ transform:scale(1); box-shadow:0 8px 24px rgba(99,102,241,0.45);} 50%{ transform:scale(1.08); box-shadow:0 10px 30px rgba(99,102,241,0.65);} }
+    </style>
+
+
     <!-- ===================== TELA: MEU DASHBOARD ===================== -->
     <div class="screen" id="screen-dashboard">
 
@@ -5375,6 +5383,124 @@
     return cnpj;
   }
 
+  // ============= ANÁLISE DA CARTEIRA EM PALAVRAS (assistente do RM) =============
+  function analisarCarteira() {
+    // empresas visíveis conforme o filtro de RM atual (ou toda a carteira do RM logado)
+    const fRm = (document.getElementById('filtroRm') || {}).value || '';
+    let lista = (EMPRESAS_REAIS || EMPRESAS || []).slice();
+    if (fRm) lista = lista.filter(e => e.rm === fRm);
+    else if (perfilEfetivo() === 'rm') lista = lista.filter(e => e.rm === uidEfetivo());
+
+    const nomeRM = fRm ? ((MAPA_RMS[fRm] && MAPA_RMS[fRm].nome) || 'gerente')
+      : (perfilEfetivo() === 'rm' ? (CTX.nome || 'gerente').split(' ')[0] : 'equipe');
+
+    const total = lista.length;
+    const ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
+
+    // contadores
+    let semMapeamentoNenhum = 0;    // nenhum produto mapeado
+    let semSocios = 0;              // sem sócios cadastrados
+    let semFuncionarios = 0;        // sem nº de funcionários
+    let semDecisor = 0, semRh = 0;
+    const semDentalComFunc = [];    // têm funcionários mas dental não mapeado
+    const frotasSemVenc = [];       // frota nossa/mercado sem vencimento
+    let comFuncSemSaude = 0;
+
+    lista.forEach(e => {
+      const dados = e.produtosDados || {};
+      const temAlgumMapeado = Object.values(dados).some(pd => pd && pd.statusVisual && pd.statusVisual !== 'vazia');
+      if (!temAlgumMapeado) semMapeamentoNenhum++;
+      const nSoc = (e.socios || []).filter(s => s && (s.nome || s)).length;
+      if (nSoc === 0) semSocios++;
+      const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
+      if (func === 0) semFuncionarios++;
+      if (!e.emailDecisor) semDecisor++;
+      if (!e.emailRh) semRh++;
+
+      // tem funcionários mas dental não sabido
+      if (func > 0) {
+        const dental = dados['dental'];
+        if (!dental || !dental.statusVisual || dental.statusVisual === 'vazia') semDentalComFunc.push(e.nome);
+        const saude = dados['saude-colab'];
+        if (!saude || !saude.statusVisual || saude.statusVisual === 'vazia') comFuncSemSaude++;
+      }
+      // frotas sem vencimento
+      const frota = dados['frota'];
+      if (frota && ['conosco', 'fechada', 'mercado', 'mapeada'].includes(frota.statusVisual) && !frota.vencimentoMes) {
+        frotasSemVenc.push(e.nome);
+      }
+    });
+
+    // monta as mensagens (só as relevantes, priorizando o que mais falta)
+    const msgs = [];
+    const primeiros = (arr, n) => arr.slice(0, n).join(', ') + (arr.length > n ? ` e mais ${arr.length - n}` : '');
+
+    if (total === 0) {
+      msgs.push({ icon: '📭', tom: 'neutro', txt: 'Não há empresas nesta visão. Selecione um RM ou carteira para ver as dicas.' });
+      return { nomeRM, total, msgs };
+    }
+
+    msgs.push({ icon: '👋', tom: 'destaque', txt: `${nomeRM}, você tem <strong>${total} empresas</strong> na carteira. Vamos ver onde estão as melhores oportunidades?` });
+
+    if (semMapeamentoNenhum > 0) {
+      const pct = Math.round(semMapeamentoNenhum / total * 100);
+      msgs.push({ icon: '🗺️', tom: 'alerta', txt: `Temos <strong>${semMapeamentoNenhum} empresas</strong> (${pct}%) onde <strong>nada foi mapeado ainda</strong>. Cada mapeamento pode virar um grande negócio! Uma dica: envie o link de mapeamento para o cliente responder, ou aproveite as visitas para preencher. Se tiver muitos, peça ajuda a um assistente ou estagiário.` });
+    }
+
+    if (semSocios > 0) {
+      msgs.push({ icon: '🧑‍💼', tom: 'dica', txt: `<strong>${semSocios} empresas</strong> estão sem o registro de sócios. Esse dado é ouro: é ele que abre oportunidades de <strong>seguro de vida dos sócios</strong> e <strong>plano de saúde dos sócios</strong>. Vale pedir na próxima conversa com o cliente.` });
+    }
+
+    if (semFuncionarios > 0) {
+      msgs.push({ icon: '👥', tom: 'dica', txt: `<strong>${semFuncionarios} empresas</strong> ainda não têm o número de colaboradores registrado. Saber isso é fundamental para oportunidades de <strong>dental</strong> e <strong>plano de saúde coletivo</strong> — quanto mais funcionários, maior a chance.` });
+    }
+
+    if (semDentalComFunc.length > 0) {
+      msgs.push({ icon: '😁', tom: 'oportunidade', txt: `Boa notícia: temos <strong>${semDentalComFunc.length} empresas com funcionários</strong> mas ainda não sabemos se têm plano <strong>dental</strong> (${primeiros(semDentalComFunc, 3)}). Que tal perguntar se já possuem? Dental é uma porta de entrada fácil — às vezes custa menos que um cafezinho por pessoa.` });
+    }
+
+    if (frotasSemVenc.length > 0) {
+      msgs.push({ icon: '🚚', tom: 'oportunidade', txt: `Falta mapear o <strong>vencimento de ${frotasSemVenc.length} frota(s)</strong> na sua carteira (${primeiros(frotasSemVenc, 3)}). Você está quase lá — com a data do vencimento, o sistema te avisa na hora certa de agir e não perder a renovação.` });
+    }
+
+    if (semDecisor > 0 || semRh > 0) {
+      msgs.push({ icon: '📧', tom: 'dica', txt: `Temos <strong>${semDecisor} empresas sem o contato do decisor</strong> e <strong>${semRh} sem o contato do RH</strong>. Ter esses contatos agiliza muito na hora de enviar propostas e fechar negócio.` });
+    }
+
+    // fecho motivacional
+    const bemMapeadas = total - semMapeamentoNenhum;
+    if (bemMapeadas > 0) {
+      msgs.push({ icon: '🎯', tom: 'destaque', txt: `Você já tem <strong>${bemMapeadas} empresas com algum mapeamento</strong> — ótimo trabalho! Cada dado que você completa aproxima um novo negócio. Bora atacar as pendentes? 💪` });
+    }
+
+    return { nomeRM, total, msgs };
+  }
+
+  function abrirAnaliseCarteira() {
+    const { nomeRM, msgs } = analisarCarteira();
+    const tomCor = { destaque: '#eef2ff', alerta: '#fef2f2', dica: '#f0fdf4', oportunidade: '#fff7ed', neutro: '#f8fafc' };
+    const tomBorda = { destaque: '#c7d2fe', alerta: '#fecaca', dica: '#bbf7d0', oportunidade: '#fed7aa', neutro: '#e2e8f0' };
+    let html = `<div style="position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:flex-end; justify-content:center;" onclick="if(event.target===this)this.remove()">
+      <div style="background:#f8fafc; border-radius:20px 20px 0 0; max-width:620px; width:100%; max-height:85vh; overflow:auto; padding:22px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <div style="font-size:17px; font-weight:800; color:#0f172a;">💬 Dicas da sua carteira</div>
+          <button onclick="this.closest('div[style*=fixed]').remove()" style="background:#e2e8f0; border:none; border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px;">✕</button>
+        </div>`;
+    msgs.forEach(m => {
+      html += `<div style="display:flex; gap:12px; background:${tomCor[m.tom] || '#f8fafc'}; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; border-radius:12px; padding:14px 16px; margin-bottom:10px;">
+        <div style="font-size:22px; flex-shrink:0;">${m.icon}</div>
+        <div style="font-size:13.5px; color:#334155; line-height:1.5;">${m.txt}</div>
+      </div>`;
+    });
+    html += `<div style="text-align:center; margin-top:8px; padding:10px; font-size:11px; color:#94a3b8;">Essas dicas se atualizam conforme você preenche os dados. 🚀</div>`;
+    html += `</div></div>`;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+  }
+  window.abrirAnaliseCarteira = abrirAnaliseCarteira;
+  window.analisarCarteira = analisarCarteira;
+
   function renderEmpresas() {
     const container = document.getElementById('empresasContainer');
     if (!container) return;
@@ -5799,7 +5925,7 @@
         return `
           <div class="tl-item">
             <div class="tl-date">${dtStr}</div>
-            <div class="tl-text"><strong>${a.usuarioNome || '—'}</strong> · ${label}${a.produto ? ' · ' + a.produto : ''} ${a.pontos ? `<span style="color:#10b981;">+${a.pontos} pts</span>` : ''}</div>
+            <div class="tl-text"><strong>${a.usuarioNome || '—'}</strong> · ${label}${a.produto ? ' · ' + a.produto : ''}</div>
           </div>
         `;
       }).join('');
@@ -6093,6 +6219,10 @@
 
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById('screen-' + telaReal).classList.add('active');
+
+    // Botão flutuante de análise da carteira: só na tela de empresas, e não para estagiário
+    const btnAnalise = document.getElementById('btnAnaliseCarteira');
+    if (btnAnalise) btnAnalise.style.display = (telaReal === 'empresas' && perfilEfetivo() !== 'estagiario') ? 'flex' : 'none';
 
     const titulos = {
       home:          'Hoje <small>· seu dia de trabalho</small>',
