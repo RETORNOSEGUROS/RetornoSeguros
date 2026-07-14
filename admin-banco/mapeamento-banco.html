@@ -3348,6 +3348,7 @@
       </div>
 
       <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:14px;">
+        <button class="btn-secondary" onclick="abrirRelatorioCotacoes()"><i data-lucide="file-text" class="w-3.5 h-3.5 inline"></i> Relatório PDF</button>
         <button class="btn-secondary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP</button>
         <button class="btn-primary" onclick="abrirPedirCotacao()"><i data-lucide="plus" class="w-3.5 h-3.5 inline"></i> Pedir cotação</button>
       </div>
@@ -6202,6 +6203,155 @@
     doc.save('carteira-' + nomeRM.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '.pdf');
   }
   window.gerarPdfCarteira = gerarPdfCarteira;
+
+  // ============= RELATÓRIO PDF DE COTAÇÕES (para o chefe) =============
+  function abrirRelatorioCotacoes() {
+    const etapas = (typeof ETAPAS_FUNIL !== 'undefined' ? ETAPAS_FUNIL : []).map(e => e.id);
+    const etapaLabel = s => (etapaInfo(s) || {}).label || s;
+    let chks = etapas.map(s => `<label style="display:flex; align-items:center; gap:8px; padding:6px 0; cursor:pointer;">
+      <input type="checkbox" class="relEtapa" value="${s}" checked style="width:16px; height:16px;"> ${etapaLabel(s)}
+    </label>`).join('');
+    const html = `<div style="position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this)this.remove()">
+      <div style="background:white; border-radius:16px; max-width:460px; width:100%; max-height:85vh; overflow:auto; padding:22px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <div style="font-size:17px; font-weight:800; color:#0f172a;">📄 Relatório de cotações</div>
+          <button onclick="this.closest('div[style*=fixed]').remove()" style="background:#f1f5f9; border:none; border-radius:8px; width:32px; height:32px; cursor:pointer;">✕</button>
+        </div>
+        <div style="font-size:13px; font-weight:700; color:#334155; margin-bottom:6px;">Quais etapas incluir?</div>
+        <div style="margin-bottom:16px; font-size:13px; color:#334155;">${chks}</div>
+        <div style="font-size:13px; font-weight:700; color:#334155; margin-bottom:6px;">Termômetro</div>
+        <select id="relChance" class="form-control" style="margin-bottom:20px;">
+          <option value="">Todas as chances</option>
+          <option value="alta">🟢 Só chance alta (quentes)</option>
+          <option value="media">🟡 Só chance média</option>
+          <option value="baixa">🔴 Só chance baixa</option>
+        </select>
+        <button class="btn-primary" style="width:100%;" onclick="gerarPdfCotacoes()"><i data-lucide="file-down" class="w-4 h-4 inline"></i> Gerar PDF</button>
+      </div>
+    </div>`;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+    lucide.createIcons();
+  }
+  window.abrirRelatorioCotacoes = abrirRelatorioCotacoes;
+
+  function gerarPdfCotacoes() {
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página.');
+    const etapasSel = Array.from(document.querySelectorAll('.relEtapa:checked')).map(c => c.value);
+    const chanceSel = (document.getElementById('relChance') || {}).value || '';
+    if (!etapasSel.length) return alert('Selecione ao menos uma etapa.');
+
+    // filtro de RM da tela
+    const fRm = (document.getElementById('filtroRmCot') || document.getElementById('filtroRm') || {}).value || '';
+    let cots = (COTACOES || []).filter(c => etapasSel.includes(c.status));
+    if (chanceSel) cots = cots.filter(c => c.chanceFechamento === chanceSel);
+    if (fRm) cots = cots.filter(c => (empresaRmDe(c.empresaId) === fRm) || c.solicitadoPorUid === fRm);
+    else if (perfilEfetivo() === 'rm') cots = cots.filter(c => (empresaRmDe(c.empresaId) === uidEfetivo()) || c.solicitadoPorUid === uidEfetivo());
+
+    if (!cots.length) { const m = document.querySelector('div[style*="position:fixed"]'); if (m) m.remove(); return alert('Nenhuma cotação encontrada com esses filtros.'); }
+
+    // agrupa por GRUPO
+    const ramoGrupo = {}, ramoNome = {};
+    (RAMOS_ALL || PRODUTOS || []).forEach(r => { ramoGrupo[r.id] = r.grupoId; ramoNome[r.id] = r.nome; });
+    const grpNome = {}; (GRUPOS || []).forEach(g => grpNome[g.id] = g.nome);
+    const porGrupo = {};
+    cots.forEach(c => {
+      const gid = ramoGrupo[c.produtoId] || 'outros';
+      (porGrupo[gid] = porGrupo[gid] || []).push(c);
+    });
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210, M = 14; let y = 0;
+    const valorDe = c => (c.valorProposto || c.valor || c.valorOperacao || 0);
+    const etapaLabel = s => (etapaInfo(s) || {}).label || s;
+
+    // cabeçalho
+    doc.setFillColor(79, 70, 229); doc.rect(0, 0, W, 26, 'F');
+    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+    doc.text('Relatório de Cotações', M, 12);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    const nomeF = fRm ? ((MAPA_RMS[fRm] && MAPA_RMS[fRm].nome) || 'RM') : (perfilEfetivo() === 'rm' ? CTX.nome : 'Todos os RMs');
+    doc.text((CTX.agenciaNome || 'Agência') + '  ·  ' + nomeF + '  ·  ' + new Date().toLocaleDateString('pt-BR'), M, 19);
+    const totalGeral = cots.reduce((s, c) => s + valorDe(c), 0);
+    doc.text(cots.length + ' cotações  ·  ' + fmtBR(totalGeral, 0) + ' em negociação', M, 24);
+    y = 34;
+
+    // filtros aplicados
+    doc.setTextColor(120); doc.setFontSize(8);
+    doc.text('Filtros: ' + etapasSel.map(etapaLabel).join(', ') + (chanceSel ? '  ·  chance ' + chanceSel : '  ·  todas as chances'), M, y);
+    y += 7;
+
+    const resumoGrupos = [];
+    Object.keys(porGrupo).sort((a, b) => (grpNome[a] || a).localeCompare(grpNome[b] || b)).forEach(gid => {
+      const arr = porGrupo[gid];
+      const subtotal = arr.reduce((s, c) => s + valorDe(c), 0);
+      resumoGrupos.push([grpNome[gid] || gid, arr.length, subtotal]);
+      if (y > 265) { doc.addPage(); y = 20; }
+      // cabeçalho do grupo
+      doc.setFillColor(238, 242, 255); doc.roundedRect(M, y, W - 2 * M, 8, 2, 2, 'F');
+      doc.setTextColor(55, 48, 163); doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5);
+      doc.text((grpNome[gid] || gid).toUpperCase(), M + 3, y + 5.5);
+      doc.text(fmtBR(subtotal, 0) + '  (' + arr.length + ')', W - M - 3, y + 5.5, { align: 'right' });
+      y += 11;
+      // linhas
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(60);
+      arr.sort((a, b) => valorDe(b) - valorDe(a)).forEach(c => {
+        if (y > 280) { doc.addPage(); y = 20; }
+        const emp = (c.empresaNome || '').length > 32 ? c.empresaNome.slice(0, 31) + '…' : (c.empresaNome || '—');
+        const rmN = (MAPA_RMS[empresaRmDe(c.empresaId)] && MAPA_RMS[empresaRmDe(c.empresaId)].nome) || c.solicitadoPorNome || '—';
+        const dias = (typeof diasNaEtapa === 'function') ? diasNaEtapa(c) : 0;
+        doc.setTextColor(30); doc.setFont('helvetica', 'bold');
+        doc.text(emp, M + 3, y);
+        doc.setFont('helvetica', 'normal'); doc.setTextColor(90);
+        doc.text(ramoNome[c.produtoId] || c.produtoId || '', M + 3, y + 4);
+        doc.text(etapaLabel(c.status) + '  ·  ' + dias + 'd parado', M + 70, y + 4);
+        doc.text(rmN, M + 125, y + 4);
+        doc.setTextColor(16, 122, 87); doc.setFont('helvetica', 'bold');
+        doc.text(fmtBR(valorDe(c), 0), W - M - 3, y, { align: 'right' });
+        doc.setDrawColor(240); doc.line(M + 3, y + 6, W - M - 3, y + 6);
+        y += 9;
+      });
+      y += 3;
+    });
+
+    // resumo geral por grupo
+    if (y > 250) { doc.addPage(); y = 20; }
+    y += 2;
+    doc.setDrawColor(79, 70, 229); doc.setLineWidth(0.5); doc.line(M, y, W - M, y); y += 6;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(30);
+    doc.text('Total por grupo', M, y); y += 7;
+    doc.setFontSize(9.5);
+    resumoGrupos.forEach(([nome, qtd, val]) => {
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(60);
+      doc.text(nome + '  (' + qtd + ')', M + 3, y);
+      doc.setFont('helvetica', 'bold'); doc.setTextColor(30);
+      doc.text(fmtBR(val, 0), W - M - 3, y, { align: 'right' });
+      y += 6;
+    });
+    y += 2; doc.setDrawColor(200); doc.line(M, y, W - M, y); y += 6;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(79, 70, 229);
+    doc.text('TOTAL GERAL', M + 3, y);
+    doc.text(fmtBR(totalGeral, 0), W - M - 3, y, { align: 'right' });
+
+    // rodapé
+    const totalPag = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPag; i++) {
+      doc.setPage(i); doc.setFontSize(8); doc.setTextColor(160);
+      doc.text('Valores estimados · negociações em andamento', M, 290);
+      doc.text(i + '/' + totalPag, W - M, 290, { align: 'right' });
+    }
+    doc.save('relatorio-cotacoes-' + new Date().toISOString().slice(0, 10) + '.pdf');
+    const m = document.querySelector('div[style*="position:fixed"]'); if (m) m.remove();
+  }
+  window.gerarPdfCotacoes = gerarPdfCotacoes;
+
+  // helper: RM dono da empresa
+  function empresaRmDe(empresaId) {
+    const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
+    return e ? e.rm : null;
+  }
 
   // Lista as cotações de OP de uma empresa (rodam por fora do mapeamento do produto)
   async function carregarOpsEmpresa(empresaId) {
