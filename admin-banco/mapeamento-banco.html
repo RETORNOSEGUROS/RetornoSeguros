@@ -2673,7 +2673,7 @@
           <div style="font-size: 13px; color: #64748b; font-weight: 600;">Gerar negócio toda semana</div>
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Motor de Leads</div>
         </div>
-        <button class="btn-primary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP bancária</button>
+        <button class="btn-primary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP</button>
       </div>
 
       <!-- Resumo da semana -->
@@ -2705,12 +2705,12 @@
       </div>
     </div><!-- /screen-oportunidades -->
 
-    <!-- Modal: Nova OP bancária -->
+    <!-- Modal: Nova OP -->
     <div class="cad-modal" id="modalOpBancaria">
       <div class="cad-modal-bg" onclick="document.getElementById('modalOpBancaria').classList.remove('open')"></div>
       <div class="cad-modal-panel">
         <div class="cad-modal-head">
-          <h2>🏦 Nova OP bancária</h2>
+          <h2>🏦 Nova OP</h2>
           <p>Reciprocidade — o gerente fechou uma operação e indica os ramos pra cotar</p>
         </div>
         <div class="cad-modal-body">
@@ -2726,6 +2726,11 @@
           <div class="form-group">
             <label class="form-label">Ramos que o gerente quer que o corretor avalie</label>
             <div id="opRamosCheckboxes" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">🏦 Seguradora</label>
+            <input type="text" class="form-control" id="opSeguradora" value="Bradesco">
+            <div style="font-size:11px; color:#94a3b8; margin-top:3px;">A OP geralmente fecha na Bradesco, mas você pode editar.</div>
           </div>
           <div class="form-group">
             <label class="form-label">Observações (opcional)</label>
@@ -5869,6 +5874,14 @@
     if (!isEstag) {
       html += `
         <div class="section">
+          <h3><i data-lucide="landmark" class="w-4 h-4"></i> Negócios de OP</h3>
+          <div id="rxOps" class="timeline">
+            <div style="color:#94a3b8; font-size:13px; text-align:center; padding:14px;">Carregando OPs...</div>
+          </div>
+        </div>
+      `;
+      html += `
+        <div class="section">
           <h3><i data-lucide="history" class="w-4 h-4"></i> Histórico de Interações</h3>
           <div id="rxHistorico" class="timeline">
             <div style="color:#94a3b8; font-size:13px; text-align:center; padding:14px;">Carregando histórico...</div>
@@ -5883,8 +5896,37 @@
     lucide.createIcons();
 
     // Carregar histórico assíncrono
-    if (!isEstag) carregarHistoricoEmpresa(e.id);
+    if (!isEstag) { carregarHistoricoEmpresa(e.id); carregarOpsEmpresa(e.id); }
   }
+
+  // Lista as cotações de OP de uma empresa (rodam por fora do mapeamento do produto)
+  async function carregarOpsEmpresa(empresaId) {
+    const cont = document.getElementById('rxOps');
+    if (!cont) return;
+    try {
+      const ops = (COTACOES || []).filter(c => c.empresaId === empresaId && (c.origem === 'op' || c.origem === 'op_bancaria'));
+      if (!ops.length) {
+        cont.innerHTML = '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:14px;">Nenhuma OP registrada nesta empresa.</div>';
+        return;
+      }
+      const statusLabel = {
+        solicitada: 'Solicitada', cotando: 'Cotando', enviada: 'Enviada', reuniao_agendada: 'Reunião',
+        analise: 'Em análise', transmitida: 'Transmitida', fechada: 'Fechada ✅', perdida: 'Não fechou', sem_aceitacao: 'Sem aceitação'
+      };
+      const statusCor = { fechada: '#10b981', perdida: '#ef4444', sem_aceitacao: '#ef4444' };
+      cont.innerHTML = ops.map(c => {
+        const cor = statusCor[c.status] || '#4f46e5';
+        const val = c.valorFechado || c.valor || c.valorProposto;
+        return `<div class="tl-item">
+          <div class="tl-date">${c.produtoIcon || '📦'} ${c.produtoNome || c.produtoId} · <span style="color:${cor}; font-weight:700;">${statusLabel[c.status] || c.status}</span></div>
+          <div class="tl-text">${c.seguradora ? c.seguradora + ' · ' : ''}${val ? fmtBR(val) : 'valor a definir'}${c.observacoes ? ' · ' + c.observacoes : ''}</div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      cont.innerHTML = '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:14px;">Erro ao carregar OPs.</div>';
+    }
+  }
+  window.carregarOpsEmpresa = carregarOpsEmpresa;
 
   async function carregarHistoricoEmpresa(empresaId) {
     try {
@@ -16330,7 +16372,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Origem do lead (de onde a negociação nasceu)
   const ORIGEM_INFO = {
     mapeamento:   { label: 'Mapeamento',   emoji: '🗺️', cor: '#64748b' },
-    op_bancaria:  { label: 'OP Bancária',  emoji: '🏦', cor: '#4f46e5' },
+    op_bancaria:  { label: 'OP',  emoji: '🏦', cor: '#4f46e5' },
     renovacao:    { label: 'Renovação',    emoji: '🔁', cor: '#0ea5e9' },
     oportunidade: { label: 'Oportunidade', emoji: '💡', cor: '#f59e0b' }
   };
@@ -16379,6 +16421,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
       };
       if (opts.valorOperacao) cot.valorOperacao = opts.valorOperacao;
+      if (opts.seguradora) cot.seguradora = opts.seguradora;
       if (opts.valorProposto) cot.valorProposto = opts.valorProposto;
       if (opts.vencimentoRef) cot.vencimentoRef = opts.vencimentoRef;
       if (opts.observacoes) cot.observacoes = opts.observacoes;
@@ -16403,11 +16446,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      // Sincronizar produto da empresa pra status "cotando"
-      await db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(produto.id).set({
-        statusVisual: 'cotando',
-        ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      // Sincronizar produto da empresa pra status "cotando".
+      // EXCEÇÃO: cotação de OP roda "por fora" — não toca no mapeamento de mercado do produto
+      // (o cliente pode ter esse produto no mercado com outro corretor, e essa info é preservada).
+      if (origem !== 'op' && origem !== 'op_bancaria') {
+        await db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(produto.id).set({
+          statusVisual: 'cotando',
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
 
       if (silent) return ref.id; // chamadas em lote (OP/renovação/oportunidade) controlam o feedback
 
@@ -16624,6 +16671,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('opEmpresa').value = '';
     document.getElementById('opValor').value = '';
     document.getElementById('opObs').value = '';
+    const segEl = document.getElementById('opSeguradora'); if (segEl) segEl.value = 'Bradesco';
     document.getElementById('modalOpBancaria').classList.add('open');
   }
   async function salvarOpBancaria() {
@@ -16632,6 +16680,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e) return alert('Selecione uma empresa válida da lista.');
     const valor = lerMoeda(document.getElementById('opValor'));
     const obs = (document.getElementById('opObs').value || '').trim();
+    const seguradora = (document.getElementById('opSeguradora').value || 'Bradesco').trim();
     const ramos = Array.from(document.querySelectorAll('.op-ramo:checked')).map(c => c.value);
     if (ramos.length === 0) return alert('Marque pelo menos um ramo pra avaliar.');
     try {
@@ -16639,7 +16688,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       for (const ramoId of ramos) {
         const r = (PRODUTOS || []).find(x => x.id === ramoId);
         if (!r) continue;
-        await criarCotacao(e, r, { origem: 'op_bancaria', valorOperacao: valor || null, observacoes: obs || null, silent: true });
+        await criarCotacao(e, r, { origem: 'op', valorOperacao: valor || null, seguradora: seguradora || null, observacoes: obs || null, silent: true });
         n++;
       }
       document.getElementById('modalOpBancaria').classList.remove('open');
@@ -17873,7 +17922,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (acao === 'fechar') { try { await db.collection('mb_cotacoes').doc('bf_' + c.empresaId + '_' + c.produtoId).delete(); } catch (err) {} }
 
       // Sincronizar produto da empresa
-      if (novoStatusVisual) {
+      // OP roda por fora do mapeamento: ao fechar/avançar, NÃO sobrescreve o status do produto
+      // (preserva o que o cliente tem no mercado). A OP conta no funil/produção por si só.
+      const _ehOP = (c.origem === 'op' || c.origem === 'op_bancaria');
+      if (novoStatusVisual && !_ehOP) {
         const prodUpdate = {
           statusVisual: novoStatusVisual,
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
