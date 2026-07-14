@@ -14,6 +14,7 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
   <!-- Chart.js para gráficos do relatório analítico -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     * { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
@@ -704,6 +705,13 @@
       margin-bottom: 14px;
       display: flex; align-items: center; gap: 8px;
     }
+    /* Seções expansíveis do raio-X */
+    .section.rx-collapsible > h3 { cursor: pointer; user-select: none; margin-bottom: 0; }
+    .section.rx-collapsible.rx-open > h3 { margin-bottom: 14px; }
+    .section.rx-collapsible .rx-seta { margin-left: auto; transition: transform .2s; color: #94a3b8; }
+    .section.rx-collapsible.rx-open .rx-seta { transform: rotate(180deg); }
+    .section.rx-collapsible .rx-body { display: none; }
+    .section.rx-collapsible.rx-open .rx-body { display: block; }
 
     .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
     .info-item .info-label { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; }
@@ -2349,6 +2357,7 @@
         <option value="incompleto">◻ Mapeamento incompleto</option>
       </select>
       <button class="filter-select" onclick="limparFiltrosEmpresas()" style="cursor:pointer; background:#f1f5f9; border-color:#cbd5e1; color:#475569; font-weight:600;">Limpar</button>
+      <button class="filter-select" onclick="gerarPdfCarteira()" style="cursor:pointer; background:linear-gradient(135deg,#4f46e5,#7c3aed); border:none; color:white; font-weight:700;">📄 PDF da carteira</button>
     </div>
     <div id="filtroResumo" style="font-size:12px; color:#64748b; margin:-4px 0 12px; min-height:16px;"></div>
 
@@ -5755,6 +5764,15 @@
 
     let html = '';
 
+    // Botão de compartilhar PDF (preparar visita / WhatsApp) — não para estagiário
+    if (!isEstag) {
+      html += `<div style="margin-bottom:14px;">
+        <button onclick="gerarPdfRaioX('${e.id}')" style="width:100%; background:linear-gradient(135deg,#4f46e5,#7c3aed); color:white; border:none; border-radius:11px; padding:13px; font-size:14px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <i data-lucide="file-down" class="w-4 h-4"></i> Baixar PDF da empresa (preparar visita)
+        </button>
+      </div>`;
+    }
+
     // INFO BÁSICA + AÇÕES PRINCIPAIS
     html += `
       <div class="section">
@@ -5895,10 +5913,295 @@
     document.getElementById('drawer').classList.add('open');
     document.getElementById('drawerBackdrop').classList.add('open');
     lucide.createIcons();
+    tornarSecoesExpansiveis();
 
     // Carregar histórico assíncrono
     if (!isEstag) { carregarHistoricoEmpresa(e.id); carregarOpsEmpresa(e.id); }
   }
+
+  // Transforma cada .section do raio-X em um card expansível (recolhe o conteúdo, clica no título pra abrir)
+  function tornarSecoesExpansiveis() {
+    const cont = document.getElementById('drawerContent');
+    if (!cont) return;
+    const secoes = cont.querySelectorAll('.section');
+    secoes.forEach((sec, idx) => {
+      const h3 = sec.querySelector('h3');
+      if (!h3 || sec.classList.contains('rx-collapsible')) return;
+      // envolve tudo que não é o h3 num .rx-body
+      const body = document.createElement('div');
+      body.className = 'rx-body';
+      // move todos os filhos após o h3 (inclusive o wrapper do h3 se houver) para o body
+      const filhos = Array.from(sec.childNodes);
+      let passouH3 = false;
+      filhos.forEach(node => {
+        // o h3 pode estar dentro de um div de cabeçalho (com botão editar). Detecta se contém o h3.
+        if (!passouH3) {
+          if (node === h3 || (node.nodeType === 1 && node.contains && node.contains(h3))) { passouH3 = true; return; }
+        }
+        if (passouH3) body.appendChild(node);
+      });
+      sec.appendChild(body);
+      sec.classList.add('rx-collapsible');
+      // seta no h3
+      const seta = document.createElement('i');
+      seta.setAttribute('data-lucide', 'chevron-down');
+      seta.className = 'rx-seta w-4 h-4';
+      // se o h3 está dentro de um cabeçalho com botão, coloca a seta no fim do cabeçalho; senão no h3
+      const head = h3.parentElement && h3.parentElement !== sec ? h3.parentElement : h3;
+      head.style.cursor = 'pointer';
+      head.appendChild(seta);
+      // primeira seção aberta, resto fechado
+      if (idx === 0) sec.classList.add('rx-open');
+      head.addEventListener('click', (ev) => {
+        if (ev.target.closest('button')) return; // não recolhe ao clicar em botões (editar etc)
+        sec.classList.toggle('rx-open');
+      });
+    });
+    lucide.createIcons();
+  }
+  window.tornarSecoesExpansiveis = tornarSecoesExpansiveis;
+
+  // ============= PDF DO RAIO-X DA EMPRESA (para preparar a visita / WhatsApp) =============
+  async function gerarPdfRaioX(empresaId) {
+    const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
+    if (!e) return alert('Empresa não encontrada.');
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página e tente de novo.');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210, M = 16;
+    let y = 0;
+
+    // Cabeçalho colorido
+    doc.setFillColor(79, 70, 229); doc.rect(0, 0, W, 30, 'F');
+    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(17);
+    doc.text(e.nome || 'Empresa', M, 15);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    doc.text((e.cidade || 'Cidade não informada') + '  ·  CNPJ ' + (e.cnpj || '—'), M, 23);
+    y = 40;
+
+    // Info básica
+    doc.setTextColor(30); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+    doc.text('Retrato da empresa', M, y); y += 7;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(60);
+    const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
+    const nSocios = (e.socios || []).filter(s => s && (s.nome || s)).length;
+    const rmNome = (MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) || e.rmNome || '—';
+    const linhasInfo = [
+      'Gerente responsável: ' + rmNome,
+      'Funcionários: ' + (func > 0 ? func + ' colaboradores' : 'não cadastrado'),
+      'Sócios cadastrados: ' + (nSocios > 0 ? nSocios : 'nenhum'),
+      'Contato decisor: ' + (e.emailDecisor || 'não cadastrado'),
+      'Contato RH: ' + (e.emailRh || 'não cadastrado')
+    ];
+    linhasInfo.forEach(l => { doc.text('•  ' + l, M, y); y += 6; });
+    y += 4;
+
+    // Mapa de seguros — o "de tantos seguros, você não tem nenhum comigo"
+    doc.setDrawColor(230); doc.line(M, y, W - M, y); y += 8;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(30);
+    doc.text('Mapa de seguros', M, y); y += 7;
+
+    const statusTxt = {
+      conosco: 'Conosco ✓', fechada: 'Conosco ✓', cotando: 'Em cotação',
+      mapeada: 'No mercado (outro corretor)', mercado: 'No mercado (outro corretor)',
+      quente: 'Vencendo', perdida: 'Perdido', nao_tem: 'Cliente NÃO tem', vazia: 'Não mapeado'
+    };
+    const statusCor = {
+      conosco: [16, 185, 129], fechada: [16, 185, 129], cotando: [245, 158, 11],
+      mapeada: [100, 116, 139], mercado: [100, 116, 139], quente: [245, 158, 11],
+      perdida: [239, 68, 68], nao_tem: [71, 85, 105], vazia: [203, 213, 225]
+    };
+    const dados = e.produtosDados || {};
+    let comNos = 0, total = 0;
+    doc.setFontSize(10);
+    (PRODUTOS || RAMOS_ALL || []).forEach(p => {
+      const pd = dados[p.id] || {};
+      const st = pd.statusVisual || 'vazia';
+      total++;
+      if (st === 'conosco' || st === 'fechada') comNos++;
+      const cor = statusCor[st] || [148, 163, 184];
+      doc.setFillColor(cor[0], cor[1], cor[2]); doc.circle(M + 1.5, y - 1.5, 1.5, 'F');
+      doc.setTextColor(40); doc.setFont('helvetica', 'bold');
+      doc.text(p.nome, M + 6, y);
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(90);
+      let extra = statusTxt[st] || 'Não mapeado';
+      if (pd.vencimentoMes && pd.vencimentoAno) extra += '  ·  vence ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno;
+      if (pd.seguradoraAtual) extra += '  ·  ' + pd.seguradoraAtual;
+      doc.text(extra, M + 55, y);
+      y += 6.5;
+      if (y > 260) { doc.addPage(); y = 20; }
+    });
+    y += 2;
+
+    // Frase-resumo (o gancho de venda)
+    const semNos = total - comNos;
+    doc.setFillColor(238, 242, 255); doc.roundedRect(M, y, W - 2 * M, 16, 3, 3, 'F');
+    doc.setTextColor(67, 56, 202); doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+    const frase = comNos === 0
+      ? `De ${total} seguros possíveis, esta empresa ainda não tem NENHUM conosco. Grande oportunidade!`
+      : `Temos ${comNos} de ${total} seguros com esta empresa. Faltam ${semNos} para conquistar.`;
+    doc.text(doc.splitTextToSize(frase, W - 2 * M - 8), M + 4, y + 7);
+    y += 22;
+
+    // Histórico de interações
+    if (y > 240) { doc.addPage(); y = 20; }
+    doc.setDrawColor(230); doc.line(M, y, W - M, y); y += 8;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(30);
+    doc.text('Histórico de interações', M, y); y += 7;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(70);
+    try {
+      const snap = await db.collection('mb_acoes').where('empresaId', '==', empresaId).limit(30).get();
+      const items = [];
+      snap.forEach(d => items.push(d.data()));
+      items.sort((a, b) => {
+        const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : new Date(0);
+        const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : new Date(0);
+        return db_ - da;
+      });
+      if (!items.length) {
+        doc.setTextColor(150); doc.text('Sem interações registradas ainda.', M, y); y += 6;
+      } else {
+        const lab = {
+          visita: 'Visita', mapeamento: 'Mapeou produto', cadastro_empresa: 'Cadastrou empresa',
+          dados_base: 'Cadastrou dados base', editou_funcionarios: 'Atualizou funcionários',
+          editou_socios: 'Atualizou sócios', cotacao_solicitada: 'Iniciou cotação',
+          oportunidade_assumida: 'Assumiu oportunidade', cotacao_perdida: 'Cotação não fechou'
+        };
+        items.slice(0, 18).forEach(a => {
+          const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toLocaleDateString('pt-BR') : '—';
+          const txt = `${dt}  ·  ${a.usuarioNome || '—'}  ·  ${lab[a.tipo] || a.tipo}${a.produtoNome ? ' (' + a.produtoNome + ')' : ''}`;
+          doc.setTextColor(70); doc.text(doc.splitTextToSize(txt, W - 2 * M), M, y);
+          y += 6;
+          if (y > 275) { doc.addPage(); y = 20; }
+        });
+      }
+    } catch (err) {
+      doc.setTextColor(150); doc.text('Não foi possível carregar o histórico.', M, y);
+    }
+
+    // Rodapé
+    const totalPag = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPag; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8); doc.setTextColor(160);
+      doc.text('Gerado em ' + new Date().toLocaleDateString('pt-BR') + '  ·  ' + (CTX.agenciaNome || 'Agência'), M, 290);
+      doc.text(i + '/' + totalPag, W - M, 290, { align: 'right' });
+    }
+
+    doc.save('raio-x-' + (e.nome || 'empresa').replace(/[^a-z0-9]/gi, '-').toLowerCase() + '.pdf');
+  }
+  window.gerarPdfRaioX = gerarPdfRaioX;
+
+  // ============= PDF DA CARTEIRA (Empresas da Agência) — retrato para o chefe / imprimir =============
+  async function gerarPdfCarteira() {
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página e tente de novo.');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+    const W = 297, H = 210, M = 12;
+    let y = 0;
+
+    // quais empresas (respeita o filtro de RM atual)
+    const fRm = (document.getElementById('filtroRm') || {}).value || '';
+    let lista = (EMPRESAS_REAIS || EMPRESAS || []).slice();
+    if (fRm) lista = lista.filter(e => e.rm === fRm);
+    else if (perfilEfetivo() === 'rm') lista = lista.filter(e => e.rm === uidEfetivo());
+    lista.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+
+    const nomeRM = fRm ? ((MAPA_RMS[fRm] && MAPA_RMS[fRm].nome) || 'Gerente')
+      : (perfilEfetivo() === 'rm' ? (CTX.nome || 'Gerente') : 'Agência');
+
+    // Cabeçalho
+    doc.setFillColor(79, 70, 229); doc.rect(0, 0, W, 24, 'F');
+    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+    doc.text('Carteira de ' + nomeRM, M, 11);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text((CTX.agenciaNome || 'Agência') + '  ·  ' + lista.length + ' empresas  ·  ' + new Date().toLocaleDateString('pt-BR'), M, 18);
+    y = 32;
+
+    // Tradução em palavras (topo) — reaproveita a análise
+    try {
+      const ana = analisarCarteira();
+      doc.setTextColor(30); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+      doc.text('Panorama da carteira', M, y); y += 6;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(70);
+      (ana.msgs || []).slice(0, 5).forEach(m => {
+        const txt = m.txt.replace(/<[^>]+>/g, ''); // tira tags HTML
+        const linhas = doc.splitTextToSize('•  ' + txt, W - 2 * M);
+        doc.text(linhas, M, y); y += linhas.length * 4.6 + 1.5;
+      });
+      y += 3;
+    } catch (e) { /* segue sem panorama */ }
+
+    // Tabela empresa × produtos (bolinhas)
+    if (y > 165) { doc.addPage(); y = 20; }
+    const produtos = (PRODUTOS || RAMOS_ALL || []);
+    const colEmpresaW = 70;
+    const colProdW = (W - 2 * M - colEmpresaW) / produtos.length;
+
+    const desenharCabecalhoTabela = () => {
+      doc.setFillColor(241, 245, 249); doc.rect(M, y, W - 2 * M, 8, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(60);
+      doc.text('EMPRESA', M + 2, y + 5.3);
+      produtos.forEach((p, i) => {
+        const cx = M + colEmpresaW + i * colProdW + colProdW / 2;
+        const nome = p.nome.length > 10 ? p.nome.slice(0, 9) + '.' : p.nome;
+        doc.text(nome, cx, y + 5.3, { align: 'center' });
+      });
+      y += 8;
+    };
+    desenharCabecalhoTabela();
+
+    const statusCor = {
+      conosco: [16, 185, 129], fechada: [16, 185, 129], cotando: [245, 158, 11],
+      mapeada: [100, 116, 139], mercado: [100, 116, 139], quente: [245, 158, 11],
+      perdida: [239, 68, 68], nao_tem: [71, 85, 105], vazia: [226, 232, 240]
+    };
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+    lista.forEach((e, idx) => {
+      if (y > 195) { doc.addPage(); y = 20; desenharCabecalhoTabela(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); }
+      if (idx % 2) { doc.setFillColor(250, 251, 253); doc.rect(M, y, W - 2 * M, 7, 'F'); }
+      doc.setTextColor(40);
+      const nome = (e.nome || '').length > 42 ? e.nome.slice(0, 41) + '…' : (e.nome || '');
+      doc.text(nome, M + 2, y + 4.8);
+      const dados = e.produtosDados || {};
+      produtos.forEach((p, i) => {
+        const pd = dados[p.id] || {};
+        const st = pd.statusVisual || 'vazia';
+        const cor = statusCor[st] || [226, 232, 240];
+        const cx = M + colEmpresaW + i * colProdW + colProdW / 2;
+        doc.setFillColor(cor[0], cor[1], cor[2]);
+        doc.circle(cx, y + 3.5, 1.8, 'F');
+      });
+      y += 7;
+    });
+
+    // Legenda
+    if (y > 185) { doc.addPage(); y = 20; }
+    y += 4;
+    const leg = [
+      ['Conosco', [16, 185, 129]], ['Em cotação', [245, 158, 11]],
+      ['No mercado', [100, 116, 139]], ['Não tem', [71, 85, 105]],
+      ['Perdido', [239, 68, 68]], ['Não mapeado', [226, 232, 240]]
+    ];
+    let lx = M;
+    doc.setFontSize(8); doc.setTextColor(70);
+    leg.forEach(([txt, cor]) => {
+      doc.setFillColor(cor[0], cor[1], cor[2]); doc.circle(lx + 2, y, 1.8, 'F');
+      doc.text(txt, lx + 6, y + 1); lx += 6 + doc.getTextWidth(txt) + 10;
+    });
+
+    // Rodapé
+    const totalPag = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPag; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8); doc.setTextColor(160);
+      doc.text('Retrato da carteira  ·  ' + (CTX.agenciaNome || 'Agência'), M, 204);
+      doc.text(i + '/' + totalPag, W - M, 204, { align: 'right' });
+    }
+
+    doc.save('carteira-' + nomeRM.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '.pdf');
+  }
+  window.gerarPdfCarteira = gerarPdfCarteira;
 
   // Lista as cotações de OP de uma empresa (rodam por fora do mapeamento do produto)
   async function carregarOpsEmpresa(empresaId) {
