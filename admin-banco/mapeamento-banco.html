@@ -6220,11 +6220,16 @@
         <div style="font-size:13px; font-weight:700; color:#334155; margin-bottom:6px;">Quais etapas incluir?</div>
         <div style="margin-bottom:16px; font-size:13px; color:#334155;">${chks}</div>
         <div style="font-size:13px; font-weight:700; color:#334155; margin-bottom:6px;">Termômetro</div>
-        <select id="relChance" class="form-control" style="margin-bottom:20px;">
+        <select id="relChance" class="form-control" style="margin-bottom:16px;">
           <option value="">Todas as chances</option>
           <option value="alta">🟢 Só chance alta (quentes)</option>
           <option value="media">🟡 Só chance média</option>
           <option value="baixa">🔴 Só chance baixa</option>
+        </select>
+        <div style="font-size:13px; font-weight:700; color:#334155; margin-bottom:6px;">Gerente</div>
+        <select id="relRm" class="form-control" style="margin-bottom:20px;">
+          <option value="">Todos os gerentes</option>
+          ${(EQUIPE_REAL || []).filter(p => p.perfil === 'rm' && p.ativo !== false).map(p => `<option value="${p.uid}">${p.nome}</option>`).join('')}
         </select>
         <button class="btn-primary" style="width:100%;" onclick="gerarPdfCotacoes()"><i data-lucide="file-down" class="w-4 h-4 inline"></i> Gerar PDF</button>
       </div>
@@ -6242,8 +6247,8 @@
     const chanceSel = (document.getElementById('relChance') || {}).value || '';
     if (!etapasSel.length) return alert('Selecione ao menos uma etapa.');
 
-    // filtro de RM da tela
-    const fRm = (document.getElementById('filtroRmCot') || document.getElementById('filtroRm') || {}).value || '';
+    // filtro de RM do modal (ou do próprio RM logado)
+    const fRm = (document.getElementById('relRm') || {}).value || '';
     let cots = (COTACOES || []).filter(c => etapasSel.includes(c.status));
     if (chanceSel) cots = cots.filter(c => c.chanceFechamento === chanceSel);
     if (fRm) cots = cots.filter(c => (empresaRmDe(c.empresaId) === fRm) || c.solicitadoPorUid === fRm);
@@ -13480,7 +13485,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
           <label style="font-size:12px; color:#475569;">Prazo p/ cancelar: <input type="number" class="form-control fn-prazo" value="${e.prazoDias || 7}" min="1" max="180" style="width:66px; display:inline-block; padding:4px 8px; text-align:center;"> dias</label>
           <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="fn-ativo" ${e.ativo !== false ? 'checked' : ''} style="width:15px;height:15px;"> ativa no funil</label>
-          ${ehPadrao ? '<span style="margin-left:auto; font-size:11px; color:#94a3b8;">etapa padrão</span>' : `<button class="btn-mini" style="color:#ef4444; margin-left:auto;" onclick="removerEtapaFunil(${i})">Excluir</button>`}
+          ${ehPadrao ? '<span style="margin-left:auto; font-size:11px; color:#94a3b8;">padrão</span>' : ''}<button class="btn-mini" style="color:#ef4444; ${ehPadrao ? '' : 'margin-left:auto;'}" onclick="removerEtapaFunil(${i})">Excluir</button>
         </div>
         <label style="font-size:11px; color:#475569; font-weight:700;">Checklist de ações esperadas para avançar (uma por linha)</label>
         <textarea class="form-control fn-checklist" rows="3" placeholder="Ex: Cotar em 2 seguradoras&#10;Montar comparativo">${(e.checklist || []).join('\n')}</textarea>
@@ -13503,8 +13508,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function removerEtapaFunil(i) {
     lerFunilEdits();
     const e = FUNIL_EDIT[i];
-    if (ETAPAS_FUNIL_DEFAULT.some(d => d.id === e.id)) return alert('Etapa padrão não pode ser excluída — você pode desativá-la desmarcando "ativa no funil".');
-    if (!confirm('Excluir a etapa "' + e.label + '"?')) return;
+    // conta cotações ativas nessa etapa
+    const nCots = (COTACOES || []).filter(c => c.status === e.id).length;
+    const ehPadrao = ETAPAS_FUNIL_DEFAULT.some(d => d.id === e.id);
+    let aviso = 'Excluir a etapa "' + e.label + '"?';
+    if (nCots > 0) {
+      aviso = '⚠ Existem ' + nCots + ' cotação(ões) nesta etapa. Se excluir, elas precisarão ser movidas manualmente (ficarão fora do funil). Recomendo mover as cotações antes.\n\nExcluir mesmo assim?';
+    } else if (ehPadrao) {
+      aviso = 'Excluir a etapa padrão "' + e.label + '"? Você pode recriá-la depois, mas perde o checklist configurado. (Alternativa: desmarcar "ativa no funil" apenas esconde.)\n\nExcluir de vez?';
+    }
+    if (!confirm(aviso)) return;
     try { await db.collection('mb_funil_etapas').doc(e.id).delete(); } catch (err) {}
     FUNIL_EDIT.splice(i, 1);
     renderFunilConfig();
@@ -13523,8 +13536,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }, { merge: true });
       }
       await carregarFunilConfig();
-      flashSalvo('Funil salvo!');
-      try { carregarERenderCotacoes(); } catch (e) {}
+      flashSalvo('Funil salvo! Atualizando o quadro...');
+      try {
+        await carregarERenderCotacoes();
+        if (typeof renderKanban === 'function') renderKanban();
+        if (typeof renderFunilConfig === 'function') { FUNIL_EDIT = ETAPAS_FUNIL.map(e => ({ ...e, checklist: [...(e.checklist || [])] })); renderFunilConfig(); }
+      } catch (e) {}
     } catch (e) { alert('Erro ao salvar funil: ' + e.message); }
   }
   window.abrirTabFunil = abrirTabFunil;
