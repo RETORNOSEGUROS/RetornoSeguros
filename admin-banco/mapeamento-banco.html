@@ -13617,6 +13617,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const valor = lerMoeda(document.getElementById('crValor'));
     const obs = (document.getElementById('crObs').value || '').trim();
     const ehOp = !!(document.getElementById('crEhOp') || {}).checked;
+    // Bloqueia duplicar: já existe negociação ativa deste produto nesta empresa?
+    if (typeof _temCotacaoAtiva === 'function' && _temCotacaoAtiva(e.id, r.id)) {
+      return alert(`Já existe uma negociação de ${r.nome} em andamento para ${e.nome}.\n\nEla já está no funil — continue por lá em vez de abrir outra.`);
+    }
     const seguradora = ehOp ? ((document.getElementById('crSeguradora') || {}).value || 'Bradesco').trim() : null;
     try {
       const optsCot = ehOp
@@ -17044,17 +17048,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const ramoId = r.id;
         const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
-        if (cat === 'nosso' || cat === 'cotacao') return;      // já é nosso ou já em cotação → fora
+        if (cat === 'nosso') return;   // já é nosso → a renovação dele aparece na outra seção
 
-        // Já cotado neste ano só volta a ser oportunidade se foi declinado
-        // COM reagendamento para uma data dentro da campanha.
+        // O que já está no funil CONTINUA aparecendo (pra dar o retrato completo),
+        // mas marcado como "no funil" e sem permitir mandar de novo.
+        const noFunil = _temCotacaoAtiva(e.id, ramoId);
         const reagendado = _reagendadoNaCampanha(pd);
-        if (!reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return;
+        // Finalizado neste ano (fechado/perdido) e sem reagendamento na campanha → fora do ciclo
+        if (!noFunil && !reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return;
 
         let motivo = null;
         if (reagendado) {
           motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
-        } else if (pd.statusVisual === 'nao_tem') {
+        } else if (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem') {
           motivo = 'cliente informou que NÃO tem';
         } else if (REGRAS_PORTE[ramoId] && REGRAS_PORTE[ramoId](e)) {
           motivo = _motivoPorte(ramoId, e);
@@ -17063,7 +17069,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
         out.push({
           empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon,
-          grupoId: r.grupoId, motivo, jaMapeado: cat === 'mercado'
+          grupoId: r.grupoId, motivo, jaMapeado: cat === 'mercado', noFunil
         });
       });
     });
@@ -17081,14 +17087,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const pd = dados[ramoId] || {};
         if (!pd.vencimentoMes || !pd.vencimentoAno) return;
         const cat = statusMatriz(e, ramoId);
-        if (cat === 'cotacao') return;                       // já estamos cotando
-        if (_temCotacaoAtiva(e.id, ramoId)) return;          // já em negociação
-        if (_cotadoNoAno(e.id, ramoId)) return;              // já cotado/perdido neste ano
+        // O que já está no funil continua na lista, marcado (sem permitir mandar de novo)
+        const noFunil = _temCotacaoAtiva(e.id, ramoId);
+        if (!noFunil && _cotadoNoAno(e.id, ramoId)) return;   // finalizado neste ano → fora
         const venc = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
         const diff = Math.floor((venc - hoje) / 86400000);
         if (diff < -31 || diff > dias) return;        // fora da janela
         const r = (PRODUTOS || []).find(x => x.id === ramoId) || { nome: ramoId, icon: '📦' };
-        out.push({ empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon, venc, diff, seguradora: pd.seguradoraAtual || '', nosso: cat === 'nosso' });
+        out.push({ empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon, venc, diff, seguradora: pd.seguradoraAtual || '', nosso: cat === 'nosso', noFunil });
       });
     });
     return out.sort((a, b) => a.diff - b.diff);
@@ -17132,9 +17138,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <div style="display:flex; align-items:center; gap:12px; padding:10px 4px; border-top:1px solid #f1f5f9;">
               <div style="flex:1; min-width:0;">
                 <div style="font-size:13px; font-weight:700; color:#0f172a;">${o.empresaNome}</div>
-                <div style="font-size:11px; color:#64748b;">${o.motivo}${o.jaMapeado ? ' · <span style=\"color:#0369a1; font-weight:700;\">tem no mercado</span>' : ''}</div>
+                <div style="font-size:11px; color:#64748b;">${o.motivo}${o.jaMapeado ? ' · <span style=\"color:#0369a1; font-weight:700;\">tem no mercado</span>' : ''}${o.noFunil ? ' · <span style=\"color:#4338ca; font-weight:700;\">já no funil</span>' : ''}</div>
               </div>
-              <button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="iniciarTratativa('${o.empresaId}','${o.ramoId}','oportunidade')">Iniciar tratativas →</button>
+              ${o.noFunil
+                ? `<span class="btn-mini" style="background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; font-weight:700; cursor:default;">✓ no funil</span>`
+                : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="iniciarTratativa('${o.empresaId}','${o.ramoId}')">Iniciar tratativas →</button>`}
             </div>`).join('');
           return `
             <div style="margin-bottom:6px;">
@@ -17165,9 +17173,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <div style="display:flex; align-items:center; gap:12px; padding:10px 4px; border-top:1px solid #f1f5f9;">
                 <div style="flex:1; min-width:0;">
                   <div style="font-size:13px; font-weight:700; color:#0f172a;">${r.empresaNome}</div>
-                  <div style="font-size:11px; color:#64748b;">${fmtDataCurta(r.venc)}${r.seguradora ? ' · ' + r.seguradora : ''} · <span style="color:${cor}; font-weight:700;">${venceEm}</span> · ${r.nosso ? '<span style="color:#059669; font-weight:700;">nossa renovação</span>' : '<span style="color:#0369a1; font-weight:700;">no mercado</span>'}</div>
+                  <div style="font-size:11px; color:#64748b;">${fmtDataCurta(r.venc)}${r.seguradora ? ' · ' + r.seguradora : ''} · <span style="color:${cor}; font-weight:700;">${venceEm}</span> · ${r.nosso ? '<span style="color:#059669; font-weight:700;">nossa renovação</span>' : '<span style="color:#0369a1; font-weight:700;">no mercado</span>'}${r.noFunil ? ' · <span style="color:#4338ca; font-weight:700;">já no funil</span>' : ''}</div>
                 </div>
-                <button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}','renovacao')">Iniciar renovação →</button>
+                ${r.noFunil
+                  ? `<span class="btn-mini" style="background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; font-weight:700; cursor:default;">✓ no funil</span>`
+                  : `<button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}')">Iniciar renovação →</button>`}
               </div>`;
           }).join('');
           return `
@@ -17246,13 +17256,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.vencDeVigenciaFim = vencDeVigenciaFim;
 
-  // Renovações automáticas: 2 meses antes do vencimento de um seguro mapeado,
+  // Renovações automáticas: 45 dias antes do vencimento de um seguro mapeado,
   // cria a negociação já na 1ª etapa do funil ("Iniciada"), com as infos da visita.
+  // Se o gerente já antecipou e colocou no funil, a rotina NÃO duplica (checa cotação ativa).
   let RENOVACOES_AUTO_RAN = false;
   async function verificarRenovacoesAutomaticas() {
     if (!CTX || !CTX.agenciaId) return 0;
     const hoje = new Date();
-    const JANELA_DIAS = 60; // ~2 meses
+    const JANELA_DIAS = 45; // entra no funil 45 dias antes do vencimento
     let criadas = 0;
     for (const e of (EMPRESAS || [])) {
       const dados = e.produtosDados || {};
