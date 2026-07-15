@@ -2924,6 +2924,33 @@
         </div>
 
         <div class="cfg-card">
+          <h3><i data-lucide="target" class="w-5 h-5 text-indigo-500"></i> Indicadores da campanha</h3>
+          <p class="cfg-desc">Cada indicador entrega um pedaço do bônus, <strong>proporcional ao percentual atingido</strong>. Ex.: teto 0,50 e mapeou 50% → leva 0,25. O <strong>RM</strong> é medido pela carteira dele; o <strong>chefe</strong>, pela agência inteira. O teto do chefe sai do mesmo percentual do total dele.</p>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:6px;">
+            <div class="form-group">
+              <label class="form-label">Total do RM</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="indTotalRM" oninput="renderIndSoma()">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Bônus máximo do gerente.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Total do chefe</label>
+              <input type="number" step="0.1" min="0" class="form-control" id="indTotalChefe" oninput="renderIndSoma()">
+              <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Bônus máximo do gerente-chefe.</div>
+            </div>
+          </div>
+
+          <div style="font-size:13px; font-weight:700; color:#334155; margin:10px 0 8px;">Teto de cada indicador (em pontos do RM)</div>
+          <table class="cfg-table">
+            <thead><tr><th>INDICADOR</th><th style="width:96px;text-align:center;">TETO RM</th><th style="width:86px;text-align:center;">% DO TOTAL</th><th style="width:96px;text-align:center;">TETO CHEFE</th></tr></thead>
+            <tbody id="indTetosBody"></tbody>
+          </table>
+          <div id="indSomaAviso" style="font-size:12px; margin:10px 0 4px;"></div>
+
+          <button class="btn-primary" style="margin-top:8px;" onclick="salvarIndicadores()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar indicadores</button>
+        </div>
+
+        <div class="cfg-card">
           <h3><i data-lucide="layers" class="w-5 h-5 text-emerald-500"></i> Fator = 4 Blocos</h3>
           <p class="cfg-desc">O fator de cada pessoa é a soma de quatro blocos, cada um com seu peso. <strong>Movimento e Produção</strong> (a atividade) dominam; o cadastro é preparo. Os pesos abaixo somam 100.</p>
 
@@ -4997,11 +5024,27 @@
       cotacao_iniciada: 35, diversificacao: 30, produtos_mapeados: 15,
       funcionarios: 8, socios: 4, contato_decisor: 5, contato_rh: 3
     },
-    // ---- MODELO DE 4 BLOCOS ----
+    // ---- MODELO DE 4 BLOCOS (legado — mantido enquanto convive com os indicadores) ----
     pesosBlocos: { preparo: 20, movimento: 35, producao: 25, diversificacao: 20 },
     pesosPreparo: { produtos_mapeados: 40, funcionarios: 25, socios: 15, contato_decisor: 12, contato_rh: 8 },
-    metaAssumidas: 20  // quantas oportunidades assumidas = 100% no bloco movimento
+    metaAssumidas: 20,  // quantas oportunidades assumidas = 100% no bloco movimento
+
+    // ---- MODELO DE INDICADORES ----
+    // Cada indicador tem um TETO em pontos de participação para o RM.
+    // O teto do chefe sai do mesmo percentual: (tetoRM / totalRM) × totalChefe.
+    indicadores: {
+      totalRM: 4, totalChefe: 7,
+      tetos: { cadastro: 0.4, mapeamento: 0.8, cotacoes: 1.4, producao: 1.4 }
+    }
   };
+
+  // Metadados dos indicadores — rótulo, o que mede e de onde vem o percentual.
+  const IND_META = [
+    { chave: 'cadastro',   icon: '🧑‍💼', label: 'Cadastro',              desc: 'Média entre % de sócios e % de funcionários mapeados na carteira' },
+    { chave: 'mapeamento', icon: '🗺️', label: 'Mapeamento de seguros', desc: 'Percentual dos seguros com status conhecido' },
+    { chave: 'cotacoes',   icon: '🎯', label: 'Cotações de oportunidades', desc: 'Das oportunidades da base, quantas viraram cotação (renovações não entram)' },
+    { chave: 'producao',   icon: '💰', label: 'Produção retorno',       desc: 'Grupos que bateram o alvo de produção ÷ total de grupos' }
+  ];
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
   const FATOR_DIM_META = [
     { chave: 'cotacao_iniciada', label: 'Cotação iniciada (funil etapa 2+)', desc: 'O que mais vira negócio' },
@@ -10500,8 +10543,38 @@
       listaOportunidades.push({ empresaId: e.id, empresa: e.nome, produtoId: ramoId, produto: nomeRamo[ramoId] || ramoId, motivo, cotada });
     }
 
+    // ---- OPORTUNIDADES DA BASE × quantas viraram cotação ----
+    // Base = o que o Motor de Leads chama de "Oportunidades na base":
+    //   gatilho de porte (sócios/funcionários) OU mapeado "não tem" OU reagendado na campanha.
+    // Renovações (vencimento mapeado) NÃO entram aqui — são outra seção.
+    // Importante: um negócio que virou nosso NA CAMPANHA continua contando (senão quem
+    // fecha perderia o crédito justamente por ter fechado).
+    const cotPorCelula = {};
+    cotacoes.forEach(c => {
+      if (c.origem === 'renovacao') return;             // renovação não conta como base
+      cotPorCelula[c.empresaId + '|' + c.produtoId] = true;
+    });
+    let totalBase = 0, okBase = 0;
+    empresas.forEach(e => {
+      const dados = e.produtosDados || {};
+      (PRODUTOS || []).forEach(r => {
+        if (r.somenteOp) return;
+        const pd = dados[r.id] || {};
+        const temCot = !!cotPorCelula[e.id + '|' + r.id];
+        const ehBase = (typeof _porteDispara === 'function' && _porteDispara(r, e))
+          || pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem'
+          || (typeof _reagendadoNaCampanha === 'function' && _reagendadoNaCampanha(pd));
+        if (!ehBase) return;
+        const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, r.id) : null;
+        if (cat === 'nosso' && !temCot) return;         // já era nosso antes → não é oportunidade
+        totalBase++;
+        if (temCot) okBase++;
+      });
+    });
+
     const pct = (ok, tot) => tot > 0 ? Math.round(ok / tot * 10000) / 100 : 0;
     const dimensoes = {
+      oport_base:        { ok: okBase, total: totalBase, pct: pct(okBase, totalBase) },
       socios:            { ok: okSocios, total: totalEmp, pct: pct(okSocios, totalEmp) },
       funcionarios:      { ok: okFunc, total: totalEmp, pct: pct(okFunc, totalEmp) },
       contato_decisor:   { ok: okDecisor, total: totalEmp, pct: pct(okDecisor, totalEmp) },
@@ -10598,6 +10671,65 @@
     };
   }
   window.calcularCobertura = calcularCobertura;
+
+  // ============= MODELO DE INDICADORES =============
+  // Cada indicador entrega um pedaço do bônus, proporcional ao percentual atingido.
+  // RM é medido pela carteira dele; chefe, pela agência inteira.
+  function indCfg() {
+    const d = (FATOR_DEFAULT.indicadores);
+    const c = (FATOR_CFG && FATOR_CFG.indicadores) || {};
+    return {
+      totalRM: c.totalRM != null ? Number(c.totalRM) : d.totalRM,
+      totalChefe: c.totalChefe != null ? Number(c.totalChefe) : d.totalChefe,
+      tetos: { ...d.tetos, ...(c.tetos || {}) }
+    };
+  }
+  // Percentual atingido de cada indicador, a partir do retorno de calcularCobertura
+  function indPercentuais(cov) {
+    const dim = (cov && cov.dimensoes) || {};
+    const g = ch => (dim[ch] && typeof dim[ch].pct === 'number') ? dim[ch].pct : 0;
+    const temBase = ch => dim[ch] && dim[ch].total > 0;
+    const mediaCadastro = (temBase('socios') || temBase('funcionarios'))
+      ? (g('socios') + g('funcionarios')) / 2 : 0;
+    return {
+      cadastro:   Math.round(mediaCadastro * 100) / 100,
+      mapeamento: g('produtos_mapeados'),
+      cotacoes:   g('oport_base'),
+      producao:   (cov && cov.blocos && typeof cov.blocos.diversificacao === 'number') ? cov.blocos.diversificacao : 0
+    };
+  }
+  // Monta os indicadores prontos pra exibir/pagar
+  function calcularIndicadores(cov) {
+    const cfg = indCfg();
+    const pcts = indPercentuais(cov);
+    const somaTetos = IND_META.reduce((s, m) => s + (Number(cfg.tetos[m.chave]) || 0), 0);
+    const itens = IND_META.map(m => {
+      const tetoRM = Number(cfg.tetos[m.chave]) || 0;
+      const fracao = cfg.totalRM > 0 ? (tetoRM / cfg.totalRM) : 0;
+      const tetoChefe = Math.round(fracao * cfg.totalChefe * 1000) / 1000;
+      const p = Math.max(0, Math.min(100, Number(pcts[m.chave]) || 0));
+      const dim = (cov && cov.dimensoes) || {};
+      let detalhe = '';
+      if (m.chave === 'cadastro') detalhe = `sócios ${fmtFator(dim.socios ? dim.socios.pct : 0)}% · funcionários ${fmtFator(dim.funcionarios ? dim.funcionarios.pct : 0)}%`;
+      else if (m.chave === 'mapeamento' && dim.produtos_mapeados) detalhe = `${dim.produtos_mapeados.ok} de ${dim.produtos_mapeados.total} células`;
+      else if (m.chave === 'cotacoes' && dim.oport_base) detalhe = `${dim.oport_base.ok} de ${dim.oport_base.total} oportunidades`;
+      else if (m.chave === 'producao' && dim.diversificacao) detalhe = `${dim.diversificacao.ok} de ${dim.diversificacao.total} grupos no alvo`;
+      return {
+        ...m, pct: Math.round(p * 100) / 100,
+        tetoRM, tetoChefe,
+        ganhoRM: Math.round(tetoRM * p / 100 * 1000) / 1000,
+        ganhoChefe: Math.round(tetoChefe * p / 100 * 1000) / 1000,
+        detalhe
+      };
+    });
+    return {
+      itens, totalRM: cfg.totalRM, totalChefe: cfg.totalChefe, somaTetos: Math.round(somaTetos * 1000) / 1000,
+      ganhoRM: Math.round(itens.reduce((s, i) => s + i.ganhoRM, 0) * 1000) / 1000,
+      ganhoChefe: Math.round(itens.reduce((s, i) => s + i.ganhoChefe, 0) * 1000) / 1000
+    };
+  }
+  window.calcularIndicadores = calcularIndicadores;
+  window.indCfg = indCfg;
 
   // Busca produção do ANO por grupo + meta por grupo, para alimentar a diversificação do fator.
   // Produção conta o ano TODO (mesmo fora da campanha) — ajuda a bater a meta.
@@ -13048,6 +13180,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   function renderConfigTudo() {
     renderCfgCampanha();
+    renderCfgIndicadores();
     renderCfgFatorBonus();
     renderCfgRamos();
     renderCfgPontos();
@@ -13082,6 +13215,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           pesosBlocos: d.pesosBlocos || FATOR_DEFAULT.pesosBlocos,
           pesosPreparo: d.pesosPreparo || FATOR_DEFAULT.pesosPreparo,
           metaAssumidas: d.metaAssumidas != null ? d.metaAssumidas : FATOR_DEFAULT.metaAssumidas,
+          indicadores: {
+            totalRM: (d.indicadores && d.indicadores.totalRM != null) ? d.indicadores.totalRM : FATOR_DEFAULT.indicadores.totalRM,
+            totalChefe: (d.indicadores && d.indicadores.totalChefe != null) ? d.indicadores.totalChefe : FATOR_DEFAULT.indicadores.totalChefe,
+            tetos: { ...FATOR_DEFAULT.indicadores.tetos, ...((d.indicadores && d.indicadores.tetos) || {}) }
+          },
           poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
           penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
         };
@@ -13187,6 +13325,71 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     } catch (e) { alert('Erro ao salvar: ' + e.message); }
   }
   window.salvarFatorAvancado = salvarFatorAvancado;
+
+  // ============= CONFIG DOS INDICADORES =============
+  function renderCfgIndicadores() {
+    const cfg = indCfg();
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    set('indTotalRM', cfg.totalRM);
+    set('indTotalChefe', cfg.totalChefe);
+    const body = document.getElementById('indTetosBody');
+    if (body) {
+      body.innerHTML = IND_META.map(m => `
+        <tr data-ind="${m.chave}">
+          <td><div style="font-weight:700; color:#0f172a; font-size:13px;">${m.icon} ${m.label}</div>
+              <div style="font-size:11px; color:#94a3b8;">${m.desc}</div></td>
+          <td style="text-align:center;"><input type="number" step="0.05" min="0" class="cfg-input ind-teto" style="width:78px;" value="${cfg.tetos[m.chave] != null ? cfg.tetos[m.chave] : 0}" oninput="renderIndSoma()"></td>
+          <td style="text-align:center;" class="ind-pct" style="font-size:12px;">—</td>
+          <td style="text-align:center;" class="ind-chefe">—</td>
+        </tr>`).join('');
+    }
+    renderIndSoma();
+  }
+  window.renderCfgIndicadores = renderCfgIndicadores;
+
+  // Recalcula ao vivo: % de cada teto sobre o total do RM e o teto equivalente do chefe
+  function renderIndSoma() {
+    const totRM = parseFloat((document.getElementById('indTotalRM') || {}).value) || 0;
+    const totCh = parseFloat((document.getElementById('indTotalChefe') || {}).value) || 0;
+    let soma = 0;
+    document.querySelectorAll('#indTetosBody tr[data-ind]').forEach(tr => {
+      const teto = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+      soma += teto;
+      const fr = totRM > 0 ? teto / totRM : 0;
+      const elP = tr.querySelector('.ind-pct'), elC = tr.querySelector('.ind-chefe');
+      if (elP) elP.textContent = (fr * 100).toFixed(1).replace('.', ',') + '%';
+      if (elC) elC.textContent = fmtFator(fr * totCh);
+    });
+    const aviso = document.getElementById('indSomaAviso');
+    if (aviso) {
+      const dif = Math.round((soma - totRM) * 1000) / 1000;
+      if (Math.abs(dif) < 0.005) {
+        aviso.innerHTML = `<span style="color:#059669; font-weight:700;">✓ Soma dos tetos: ${fmtFator(soma)} — fecha certinho com o total do RM.</span>`;
+      } else if (dif < 0) {
+        aviso.innerHTML = `<span style="color:#b45309; font-weight:700;">Soma dos tetos: ${fmtFator(soma)} de ${fmtFator(totRM)} — sobram ${fmtFator(Math.abs(dif))} sem indicador (ninguém consegue o bônus cheio).</span>`;
+      } else {
+        aviso.innerHTML = `<span style="color:#dc2626; font-weight:700;">Soma dos tetos: ${fmtFator(soma)} passa do total de ${fmtFator(totRM)} em ${fmtFator(dif)} — dá pra estourar o teto.</span>`;
+      }
+    }
+  }
+  window.renderIndSoma = renderIndSoma;
+
+  async function salvarIndicadores() {
+    const totalRM = parseFloat((document.getElementById('indTotalRM') || {}).value) || 0;
+    const totalChefe = parseFloat((document.getElementById('indTotalChefe') || {}).value) || 0;
+    if (totalRM <= 0 || totalChefe <= 0) return alert('Os totais do RM e do chefe precisam ser maiores que zero.');
+    const tetos = {};
+    document.querySelectorAll('#indTetosBody tr[data-ind]').forEach(tr => {
+      tetos[tr.getAttribute('data-ind')] = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+    });
+    try {
+      await db.collection('mb_config').doc('fator').set({ indicadores: { totalRM, totalChefe, tetos } }, { merge: true });
+      FATOR_CFG.indicadores = { totalRM, totalChefe, tetos };
+      flashSalvo('Indicadores salvos!');
+      try { if (typeof renderCampanha === 'function') renderCampanha(); } catch (e) {}
+    } catch (e) { alert('Erro ao salvar: ' + e.message); }
+  }
+  window.salvarIndicadores = salvarIndicadores;
 
   // ---------- CAMPANHA ----------
   async function carregarCampanha() {
