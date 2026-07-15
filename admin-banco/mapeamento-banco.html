@@ -3022,9 +3022,9 @@
 
         <div class="cfg-card">
           <h3><i data-lucide="layers" class="w-5 h-5 text-violet-500"></i> Ramos de seguro</h3>
-          <p class="cfg-desc">Inclua, edite ou exclua ramos. Use <strong>Ativo</strong> pra esconder um ramo das telas sem perder o histórico. O <strong>multiplicador</strong> também pode ser ajustado aqui.</p>
+          <p class="cfg-desc">Inclua, edite ou exclua ramos. Use <strong>Ativo</strong> pra esconder um ramo das telas sem perder o histórico. <strong>Só por OP</strong>: o ramo não aparece no questionário, no mapeamento nem nas oportunidades — só pode ser aberto por uma OP. Quando fecha, entra na produção e no calendário de renovações normalmente.</p>
           <table class="cfg-table">
-            <thead><tr><th style="width:60px;text-align:center;">ÍCONE</th><th>NOME</th><th style="width:200px;">GRUPO</th><th style="width:110px;text-align:center;">MULT.</th><th style="width:70px;text-align:center;">ATIVO</th><th style="width:60px;text-align:center;"></th></tr></thead>
+            <thead><tr><th style="width:60px;text-align:center;">ÍCONE</th><th>NOME</th><th style="width:180px;">GRUPO</th><th style="width:90px;text-align:center;">MULT.</th><th style="width:80px;text-align:center;">SÓ POR OP</th><th style="width:70px;text-align:center;">ATIVO</th><th style="width:60px;text-align:center;"></th></tr></thead>
             <tbody id="cfgRamosBody"></tbody>
           </table>
           <div style="display:flex; gap:8px; margin-top:12px;">
@@ -5717,7 +5717,7 @@
           </div>
         </div>
         <div class="produtos-bolinhas">
-          ${PRODUTOS.map(p => {
+          ${PRODUTOS.filter(p => !p.somenteOp).map(p => {
             const st = e.produtos[p.id] || 'vazia';
             return `<div class="bolinha ${st}" title="${p.nome}: ${getStatusLabel(st)}">
               <div class="tooltip">${p.icon} ${p.nome} · ${getStatusLabel(st)}</div>
@@ -5878,10 +5878,16 @@
     html += `</div>`;
 
     // PRODUTOS
+    // Ramos "só por OP" só aparecem aqui se já existir negócio deles nesta empresa
+    // (senão seriam uma bolinha cinza eterna e virariam ruído).
+    const _prodsRaioX = (PRODUTOS || []).filter(p => {
+      if (!p.somenteOp) return true;
+      return (COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === p.id);
+    });
     html += `
       <div class="section">
-        <h3><i data-lucide="layers" class="w-4 h-4"></i> Mapeamento dos 7 Produtos</h3>
-        ${PRODUTOS.map(p => {
+        <h3><i data-lucide="layers" class="w-4 h-4"></i> Mapeamento dos produtos</h3>
+        ${_prodsRaioX.map(p => {
           const dadosProduto = (e.produtosDados || {})[p.id] || {};
           const st = e.produtos[p.id] || 'vazia';
           return renderProdutoCard(p, st, isEstag, isAssist, e.id, dadosProduto);
@@ -10384,7 +10390,9 @@
     const anoCamp = opts.ano || CAMPANHA.ano || new Date().getFullYear();
     const mesAtual = new Date().getMonth();
     const anoAtual = new Date().getFullYear();
-    const ramosAtivos = (PRODUTOS || []).map(p => p.id);
+    // Ramos "só por OP" ficam fora do mapeamento e das oportunidades
+    // (senão virariam um buraco eterno na cobertura de todas as empresas).
+    const ramosAtivos = (PRODUTOS || []).filter(p => !p.somenteOp).map(p => p.id);
     const _grupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => _grupo[r.id] = r.grupoId);
 
     // ---- Dimensões cadastrais (por EMPRESA) ----
@@ -12987,12 +12995,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <td><input class="cfg-input cfg-ramo-nome" style="width:100%;text-align:left;" value="${escAttr(r.nome)}"></td>
         <td><select class="form-control cfg-ramo-grupo" style="padding:5px 8px;font-size:13px;">${grupoOpts(r.grupoId)}</select></td>
         <td style="text-align:center;"><input type="number" step="0.1" min="0.1" class="cfg-input cfg-ramo-mult" style="width:70px;" value="${r.multiplicador != null ? r.multiplicador : 1}"><span class="cfg-suffix">x</span></td>
+        <td style="text-align:center;"><div class="toggle-switch cfg-ramo-soop ${r.somenteOp ? 'on' : ''}" title="Só entra por OP"></div></td>
         <td style="text-align:center;"><div class="toggle-switch cfg-ramo-ativo ${r.ativo !== false ? 'on' : ''}"></div></td>
         <td style="text-align:center;"><button class="btn-mini-del" onclick="excluirRamo('${r.id}')"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button></td>
       </tr>`).join('');
 
     const elRamos = document.getElementById('cfgRamosBody');
-    if (elRamos) elRamos.innerHTML = ramosRows || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:14px;">Nenhum ramo. Adicione um.</td></tr>';
+    if (elRamos) elRamos.innerHTML = ramosRows || '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:14px;">Nenhum ramo. Adicione um.</td></tr>';
     lucide.createIcons();
   }
 
@@ -13317,7 +13326,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ---------- CRUD: ramos ----------
   function adicionarRamoLinha() {
-    RAMOS_ALL.push({ id: '__novo_' + Date.now(), nome: '', icon: '📦', cor: '#6366f1', grupoId: (GRUPOS[0] || {}).id || '', multiplicador: 1, ativo: true, ordem: (RAMOS_ALL.length + 1), _novo: true });
+    RAMOS_ALL.push({ id: '__novo_' + Date.now(), nome: '', icon: '📦', cor: '#6366f1', grupoId: (GRUPOS[0] || {}).id || '', multiplicador: 1, ativo: true, somenteOp: false, ordem: (RAMOS_ALL.length + 1), _novo: true });
     renderCfgRamos();
   }
   async function excluirRamo(rid) {
@@ -13348,10 +13357,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const grupoId = (tr.querySelector('.cfg-ramo-grupo') || {}).value || '';
         const mult = parseFloat((tr.querySelector('.cfg-ramo-mult') || {}).value) || 1;
         const ativo = (tr.querySelector('.cfg-ramo-ativo') || {}).classList.contains('on');
+        const somenteOp = !!((tr.querySelector('.cfg-ramo-soop') || {}).classList || { contains: () => false }).contains('on');
         const old = RAMOS_ALL.find(x => x.id === rid);
         const id = (old && old._novo) ? slugify(nome) : rid;
         const cor = old ? (old.cor || '#6366f1') : '#6366f1';
-        const dados = { nome: nome.trim(), icon, cor, grupoId, multiplicador: mult, ativo, ordem: ordem++ };
+        const dados = { nome: nome.trim(), icon, cor, grupoId, multiplicador: mult, ativo, somenteOp, ordem: ordem++ };
         batch.set(db.collection('mb_ramos').doc(id), dados);
         novos.push({ id, ...dados });
       });
@@ -13582,7 +13592,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           </div>
           <div class="form-group">
             <label class="form-label">Produto / ramo</label>
-            <select class="form-control" id="crProduto">${(PRODUTOS || []).map(p => `<option value="${p.id}" ${p.id === ramoId ? 'selected' : ''}>${p.icon} ${p.nome}</option>`).join('')}</select>
+            <select class="form-control" id="crProduto" onchange="crProdutoChange()">${(PRODUTOS || []).map(p => `<option value="${p.id}" ${p.id === ramoId ? 'selected' : ''}>${p.icon} ${p.nome}</option>`).join('')}</select>
           </div>
           <div class="form-group" id="crSeguradoraWrap" style="display:none;">
             <label class="form-label">🏦 Seguradora</label>
@@ -13607,6 +13617,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       </div>`;
     document.body.appendChild(modal);
     lucide.createIcons();
+    crProdutoChange();
   }
   async function salvarCotacaoRapida() {
     const empresaId = document.getElementById('crEmpresaId').value;
@@ -13617,6 +13628,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const valor = lerMoeda(document.getElementById('crValor'));
     const obs = (document.getElementById('crObs').value || '').trim();
     const ehOp = !!(document.getElementById('crEhOp') || {}).checked;
+    if (r.somenteOp && !ehOp) return alert(`${r.nome} só pode ser aberto como OP.`);
     // Bloqueia duplicar: já existe negociação ativa deste produto nesta empresa?
     if (typeof _temCotacaoAtiva === 'function' && _temCotacaoAtiva(e.id, r.id)) {
       return alert(`Já existe uma negociação de ${r.nome} em andamento para ${e.nome}.\n\nEla já está no funil — continue por lá em vez de abrir outra.`);
@@ -13637,6 +13649,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }
     } catch (err) { alert('Erro: ' + err.message); }
   }
+  // Ramo marcado como "só por OP": força o toggle de OP e trava
+  function crProdutoChange() {
+    const sel = document.getElementById('crProduto');
+    const chk = document.getElementById('crEhOp');
+    if (!sel || !chk) return;
+    const p = (PRODUTOS || []).find(x => x.id === sel.value);
+    const soOp = !!(p && p.somenteOp);
+    if (soOp) { chk.checked = true; chk.disabled = true; }
+    else { chk.disabled = false; }
+    const lbl = chk.closest('label');
+    if (lbl) lbl.style.opacity = soOp ? '0.75' : '1';
+    crToggleOp();
+  }
+  window.crProdutoChange = crProdutoChange;
+
   function crToggleOp() {
     const on = !!(document.getElementById('crEhOp') || {}).checked;
     const seg = document.getElementById('crSeguradoraWrap');
@@ -17045,6 +17072,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     (EMPRESAS || []).forEach(e => {
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
+        if (r.somenteOp) return;       // ramo que só nasce de OP não é oportunidade
         const ramoId = r.id;
         const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
@@ -18471,10 +18499,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (acao === 'fechar') { try { await db.collection('mb_cotacoes').doc('bf_' + c.empresaId + '_' + c.produtoId).delete(); } catch (err) {} }
 
       // Sincronizar produto da empresa
-      // OP roda por fora do mapeamento: ao fechar/avançar, NÃO sobrescreve o status do produto
-      // (preserva o que o cliente tem no mercado). A OP conta no funil/produção por si só.
+      // OP roda por fora do mapeamento: não sobrescreve o que o cliente tem no mercado.
+      // MAS, se não há mapeamento nenhum (ex.: auto individual, que só nasce de OP),
+      // ela registra normalmente — assim o negócio fechado entra no calendário de renovações.
       const _ehOP = (c.origem === 'op' || c.origem === 'op_bancaria');
-      if (novoStatusVisual && !_ehOP) {
+      let _podeEscrever = !_ehOP;
+      if (_ehOP) {
+        const _eObj = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
+        const _pdAtual = (_eObj && _eObj.produtosDados && _eObj.produtosDados[c.produtoId]) || {};
+        const _temMapa = _pdAtual.statusVisual && _pdAtual.statusVisual !== 'vazia';
+        _podeEscrever = !_temMapa;   // só escreve se o produto está em branco
+      }
+      if (novoStatusVisual && _podeEscrever) {
         const prodUpdate = {
           statusVisual: novoStatusVisual,
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
