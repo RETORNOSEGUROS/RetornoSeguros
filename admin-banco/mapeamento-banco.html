@@ -17023,9 +17023,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (ramoId === 'saude-socios' || ramoId === 'vida-socios') return `${soc} sócio(s) com dados completos`;
     return `${func} funcionários mapeados`;
   }
+  // Reagendamento só reabre a oportunidade se a data de retomada cair DENTRO do período
+  // da campanha vigente. Como mapeamos só o mês (não o dia), consideramos o mês inteiro.
+  function _reagendadoNaCampanha(pd) {
+    if (!pd || !pd.reagendarMes || !pd.reagendarAno) return false;
+    if (!CAMPANHA || !CAMPANHA.inicio || !CAMPANHA.fim) return false;
+    const mes = parseInt(pd.reagendarMes) - 1, ano = parseInt(pd.reagendarAno);
+    const iniMes = new Date(ano, mes, 1);
+    const fimMes = new Date(ano, mes + 1, 0);   // último dia do mês reagendado
+    const ini = new Date(CAMPANHA.inicio + 'T00:00:00');
+    const fim = new Date(CAMPANHA.fim + 'T23:59:59');
+    return fimMes >= ini && iniMes <= fim;
+  }
   function oportunidadesGeradas() {
     const out = [];
-    const hoje = new Date(), anoAtual = hoje.getFullYear(), mesAtual = hoje.getMonth();
+    const anoAtual = new Date().getFullYear();
     (EMPRESAS || []).forEach(e => {
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
@@ -17034,13 +17046,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const cat = statusMatriz(e, ramoId);
         if (cat === 'nosso' || cat === 'cotacao') return;      // já é nosso ou já em cotação → fora
 
-        // Reagendado pra frente reabre a oportunidade (mesmo se já cotamos neste ano)
-        let reagendado = false;
-        if (pd.reagendarMes && pd.reagendarAno) {
-          const rAno = parseInt(pd.reagendarAno), rMes = parseInt(pd.reagendarMes) - 1;
-          reagendado = (rAno > anoAtual) || (rAno === anoAtual && rMes >= mesAtual);
-        }
-        if (!reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return; // já mexemos nisso no ciclo
+        // Já cotado neste ano só volta a ser oportunidade se foi declinado
+        // COM reagendamento para uma data dentro da campanha.
+        const reagendado = _reagendadoNaCampanha(pd);
+        if (!reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return;
 
         let motivo = null;
         if (reagendado) {
@@ -17072,14 +17081,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const pd = dados[ramoId] || {};
         if (!pd.vencimentoMes || !pd.vencimentoAno) return;
         const cat = statusMatriz(e, ramoId);
-        if (cat === 'nosso' || cat === 'cotacao') return;    // já ganhamos/estamos cotando
+        if (cat === 'cotacao') return;                       // já estamos cotando
         if (_temCotacaoAtiva(e.id, ramoId)) return;          // já em negociação
         if (_cotadoNoAno(e.id, ramoId)) return;              // já cotado/perdido neste ano
         const venc = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
         const diff = Math.floor((venc - hoje) / 86400000);
         if (diff < -31 || diff > dias) return;        // fora da janela
         const r = (PRODUTOS || []).find(x => x.id === ramoId) || { nome: ramoId, icon: '📦' };
-        out.push({ empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon, venc, diff, seguradora: pd.seguradoraAtual || '' });
+        out.push({ empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon, venc, diff, seguradora: pd.seguradoraAtual || '', nosso: cat === 'nosso' });
       });
     });
     return out.sort((a, b) => a.diff - b.diff);
@@ -17140,12 +17149,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }
     }
 
-    // ===== Renovações (90 dias) — agrupadas por produto, expansíveis =====
+    // ===== Renovações (até o fim do ano) — nossas e do mercado, agrupadas por produto =====
     const contR = document.getElementById('oportRenovContainer');
     if (contR) {
       const grupos = _agruparPorRamo(renovs.map(r => ({ ...r, ramoNome: r.ramoNome, ramoIcon: r.ramoIcon })));
       if (!grupos.length) {
-        contR.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:20px;">Nenhuma renovação mapeada vencendo nos próximos 90 dias.</div>';
+        contR.innerHTML = '<div style="text-align:center; color:#94a3b8; font-size:13px; padding:20px;">Nenhuma renovação mapeada vencendo até o fim do ano.</div>';
       } else {
         contR.innerHTML = grupos.map((g, idx) => {
           const gid = 'renovGrp_' + g.ramoId;
@@ -17156,7 +17165,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <div style="display:flex; align-items:center; gap:12px; padding:10px 4px; border-top:1px solid #f1f5f9;">
                 <div style="flex:1; min-width:0;">
                   <div style="font-size:13px; font-weight:700; color:#0f172a;">${r.empresaNome}</div>
-                  <div style="font-size:11px; color:#64748b;">${fmtDataCurta(r.venc)}${r.seguradora ? ' · ' + r.seguradora : ''} · <span style="color:${cor}; font-weight:700;">${venceEm}</span></div>
+                  <div style="font-size:11px; color:#64748b;">${fmtDataCurta(r.venc)}${r.seguradora ? ' · ' + r.seguradora : ''} · <span style="color:${cor}; font-weight:700;">${venceEm}</span> · ${r.nosso ? '<span style="color:#059669; font-weight:700;">nossa renovação</span>' : '<span style="color:#0369a1; font-weight:700;">no mercado</span>'}</div>
                 </div>
                 <button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}','renovacao')">Iniciar renovação →</button>
               </div>`;
