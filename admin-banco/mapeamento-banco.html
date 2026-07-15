@@ -2682,13 +2682,12 @@
           <div style="font-size: 13px; color: #64748b; font-weight: 600;">Gerar negócio toda semana</div>
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Motor de Leads</div>
         </div>
-        <button class="btn-primary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP</button>
       </div>
 
       <!-- Resumo da semana -->
       <div class="equipe-kpis">
         <div class="kpi-card"><div class="label">💡 Oportunidades</div><div class="value" id="kpiOportGeradas">0</div></div>
-        <div class="kpi-card"><div class="label">🔁 Renovações (90d)</div><div class="value" id="kpiOportRenov">0</div></div>
+        <div class="kpi-card"><div class="label">🔁 Renovações (até dez)</div><div class="value" id="kpiOportRenov">0</div></div>
         <div class="kpi-card"><div class="label">🏦 OPs em aberto</div><div class="value" id="kpiOportOps">0</div></div>
         <div class="kpi-card" style="background:linear-gradient(135deg,#4f46e5,#7c3aed); color:white;"><div class="label" style="color:#e0e7ff;">Leads desta semana</div><div class="value" id="kpiOportTotal" style="color:white;">0</div></div>
       </div>
@@ -2707,7 +2706,7 @@
       <div style="background:white; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
           <span style="font-size:18px;">🔁</span>
-          <h3 style="font-size:16px; font-weight:800; color:#0f172a; margin:0;">Renovações mapeadas (próximos 90 dias)</h3>
+          <h3 style="font-size:16px; font-weight:800; color:#0f172a; margin:0;">Renovações mapeadas (até o fim do ano)</h3>
         </div>
         <p style="font-size:12px; color:#64748b; margin:0 0 12px;">Vencimentos que você mapeou e estão chegando. Iniciar tratativas cria a negociação no funil.</p>
         <div id="oportRenovContainer"></div>
@@ -12049,9 +12048,16 @@
     if (!CTX.isAdmin) return alert('Apenas o admin pode excluir cotações.');
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
-    if (!confirm(`Excluir a cotação de ${c.produtoNome || 'produto'} — ${c.empresaNome || ''}?\n\nEsta ação não pode ser desfeita.`)) return;
+    if (!confirm(`Excluir a cotação de ${c.produtoNome || 'produto'} — ${c.empresaNome || ''}?\n\nOs pontos que qualquer pessoa ganhou com esta negociação também serão apagados.\nEsta ação não pode ser desfeita.`)) return;
     try {
       await db.collection('mb_cotacoes').doc(cotacaoId).delete();
+      // Apaga os pontos/ações ligados a esta cotação (de todos os envolvidos)
+      try {
+        const snapA = await db.collection('mb_acoes').where('cotacaoId', '==', cotacaoId).get();
+        const dels = [];
+        snapA.forEach(d => dels.push(d.ref.delete()));
+        await Promise.all(dels);
+      } catch (err) { /* segue mesmo se não achar ações */ }
       // Se o produto ficou "em cotação" e não há outra negociação ativa, reverte o status
       if (c.empresaId && c.produtoId) {
         const outraAtiva = (COTACOES || []).some(x => x.id !== cotacaoId && x.empresaId === c.empresaId && x.produtoId === c.produtoId && ehStatusAtivo(x.status));
@@ -12068,8 +12074,10 @@
         }
       }
       const modal = document.getElementById('modalTimeline'); if (modal) modal.remove();
-      flashSalvo('Cotação excluída.');
+      flashSalvo('Cotação excluída e pontos removidos.');
       try { await carregarEmpresasReais(); } catch (err) {}
+      try { await carregarRankingReal(); } catch (err) {}
+      try { renderOportunidades(); } catch (err) {}
       carregarERenderCotacoes();
     } catch (e) { alert('Erro ao excluir: ' + e.message); }
   }
@@ -13552,7 +13560,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.salvarFunilConfig = salvarFunilConfig;
 
   // ============= CADASTRO RÁPIDO DE COTAÇÃO (ícone na empresa) =============
-  function abrirCotacaoRapida(empresaId) {
+  function abrirCotacaoRapida(empresaId, ramoId) {
     const e = (EMPRESAS || []).find(x => x.id === empresaId);
     if (!e) return alert('Empresa não encontrada.');
     let modal = document.getElementById('modalCotacaoRapida');
@@ -13574,7 +13582,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           </div>
           <div class="form-group">
             <label class="form-label">Produto / ramo</label>
-            <select class="form-control" id="crProduto">${(PRODUTOS || []).map(p => `<option value="${p.id}">${p.icon} ${p.nome}</option>`).join('')}</select>
+            <select class="form-control" id="crProduto">${(PRODUTOS || []).map(p => `<option value="${p.id}" ${p.id === ramoId ? 'selected' : ''}>${p.icon} ${p.nome}</option>`).join('')}</select>
           </div>
           <div class="form-group" id="crSeguradoraWrap" style="display:none;">
             <label class="form-label">🏦 Seguradora</label>
@@ -13619,6 +13627,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const m = document.getElementById('modalCotacaoRapida'); if (m) m.remove();
         confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
         try { await carregarEmpresasReais(); renderEmpresas(); } catch (err) {}
+        try { await carregarERenderCotacoes(); } catch (err) {}
+        try { renderOportunidades(); } catch (err) {}
         flashSalvo(ehOp ? 'OP criada no funil!' : 'Cotação criada no funil!');
       }
     } catch (err) { alert('Erro: ' + err.message); }
@@ -16993,36 +17003,60 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return (e.socios || []).filter(s => s && (s.nome || '').trim() && (s.nasc || s.dataNascimento || '').trim());
   }
 
-  // Regras de oportunidade: cruzam dados da empresa × ramos que ela ainda não tem
+  // Regras de oportunidade: cruzam dados da empresa × ramos.
+  // Genérico: percorre TODOS os produtos cadastrados (produto novo já entra automaticamente).
+  // Um ramo vira oportunidade quando:
+  //   (a) dá pra deduzir pelo porte (funcionários/sócios) — regras por ramo abaixo;
+  //   (b) foi mapeado como "não tem" — vale pra QUALQUER ramo;
+  //   (c) foi reagendado pra um mês daqui pra frente — volta a ser oportunidade.
+  // (Quem tem vencimento mapeado aparece na seção "Renovações", pra não duplicar.)
+  const REGRAS_PORTE = {
+    dental:         e => (Number(e.funcionarios) || 0) > 3,
+    'saude-colab':  e => (Number(e.funcionarios) || 0) > 3,
+    'vida-grupo':   e => (Number(e.funcionarios) || 0) >= 3,
+    'saude-socios': e => _sociosCotaveis(e).length > 0,
+    'vida-socios':  e => _sociosCotaveis(e).length > 0
+  };
+  function _motivoPorte(ramoId, e) {
+    const func = Number(e.funcionarios) || 0;
+    const soc = _sociosCotaveis(e).length;
+    if (ramoId === 'saude-socios' || ramoId === 'vida-socios') return `${soc} sócio(s) com dados completos`;
+    return `${func} funcionários mapeados`;
+  }
   function oportunidadesGeradas() {
     const out = [];
-    const anoAtual = new Date().getFullYear();
+    const hoje = new Date(), anoAtual = hoje.getFullYear(), mesAtual = hoje.getMonth();
     (EMPRESAS || []).forEach(e => {
-      const func = Number(e.funcionarios) || 0;
-      const sociosOk = _sociosCotaveis(e);
-      const push = (ramoId, motivo) => {
-        if (!_ramoExiste(ramoId)) return;
-        // Status do mapeamento: entra como oportunidade se NÃO for nosso e NÃO cotado no ano.
-        // "não_mapeado" (em branco) e "mercado" (tem fora, mapeado) são oportunidades válidas.
+      const dados = e.produtosDados || {};
+      (PRODUTOS || []).forEach(r => {
+        const ramoId = r.id;
+        const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
-        if (cat === 'nosso' || cat === 'cotacao') return;   // já é nosso ou já em cotação → fora
-        if (_cotadoNoAno(e.id, ramoId, anoAtual)) return;    // já cotado/perdido neste ano → fora
-        const r = PRODUTOS.find(x => x.id === ramoId);
-        const jaMapeado = cat === 'mercado';
+        if (cat === 'nosso' || cat === 'cotacao') return;      // já é nosso ou já em cotação → fora
+
+        // Reagendado pra frente reabre a oportunidade (mesmo se já cotamos neste ano)
+        let reagendado = false;
+        if (pd.reagendarMes && pd.reagendarAno) {
+          const rAno = parseInt(pd.reagendarAno), rMes = parseInt(pd.reagendarMes) - 1;
+          reagendado = (rAno > anoAtual) || (rAno === anoAtual && rMes >= mesAtual);
+        }
+        if (!reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return; // já mexemos nisso no ciclo
+
+        let motivo = null;
+        if (reagendado) {
+          motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
+        } else if (pd.statusVisual === 'nao_tem') {
+          motivo = 'cliente informou que NÃO tem';
+        } else if (REGRAS_PORTE[ramoId] && REGRAS_PORTE[ramoId](e)) {
+          motivo = _motivoPorte(ramoId, e);
+        }
+        if (!motivo) return;
+
         out.push({
           empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon,
-          grupoId: r.grupoId, motivo, jaMapeado
+          grupoId: r.grupoId, motivo, jaMapeado: cat === 'mercado'
         });
-      };
-      // Colaboradores → dental, saúde e vida em grupo
-      if (func > 0)   push('dental',      `${func} funcionários mapeados`);
-      if (func >= 5)  push('saude-colab', `${func} funcionários mapeados`);
-      if (func >= 3)  push('vida-grupo',  `${func} funcionários mapeados`);
-      // Sócios → só quando têm nome E nascimento (dados prontos pra cotar)
-      if (sociosOk.length > 0) {
-        push('saude-socios', `${sociosOk.length} sócio(s) com dados completos`);
-        push('vida-socios',  `${sociosOk.length} sócio(s) com dados completos`);
-      }
+      });
     });
     return out;
   }
@@ -17062,8 +17096,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   function renderOportunidades() {
     const ops = oportunidadesGeradas();
-    const renovs = renovacoesProximas(90);
-    const opsBancAtivas = (COTACOES || []).filter(c => c.origem === 'op_bancaria' && ehStatusAtivo(c.status)).length;
+    // Todo seguro mapeado que vence de hoje até o fim do ano é oportunidade
+    // (os prazos curtos só importam na agenda).
+    const _hj = new Date();
+    const _fimAno = new Date(_hj.getFullYear(), 11, 31);
+    const diasAteFimAno = Math.max(1, Math.ceil((_fimAno - _hj) / 86400000));
+    const renovs = renovacoesProximas(diasAteFimAno);
+    const opsBancAtivas = (COTACOES || []).filter(c => (c.origem === 'op' || c.origem === 'op_bancaria') && ehStatusAtivo(c.status)).length;
 
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('kpiOportGeradas', ops.length);
@@ -17138,18 +17177,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   // Cria a negociação no funil a partir de uma oportunidade ou renovação
-  async function iniciarTratativa(empresaId, ramoId, origem) {
-    const e = (EMPRESAS || []).find(x => x.id === empresaId);
-    const r = (PRODUTOS || []).find(x => x.id === ramoId);
-    if (!e || !r) return alert('Empresa ou ramo não encontrado.');
-    const id = await criarCotacao(e, r, { origem, silent: true });
-    if (id) {
-      try { await carregarEmpresasReais(); } catch (err) {}
-      try { await carregarERenderCotacoes(); } catch (err) {}
-      try { renderOportunidades(); } catch (err) {}
-      try { if (typeof renderVencimentos === 'function') renderVencimentos(); } catch (err) {}
-      flashSalvo('Negociação criada no funil!');
-    }
+  // "Iniciar tratativas" abre a mesma tela da cotação rápida (com o ramo já escolhido),
+  // pra você decidir ali se é OP ou não.
+  function iniciarTratativa(empresaId, ramoId) {
+    abrirCotacaoRapida(empresaId, ramoId);
   }
   window.iniciarTratativa = iniciarTratativa;
   window.renderOportunidades = renderOportunidades;
@@ -17380,6 +17411,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             </div>
             ${valor ? `<div style="font-size:12px; font-weight:700; color:#166534; font-family:'JetBrains Mono';">${fmtBRcompacto(valor)}</div>` : ''}
             <div style="font-size:11px; font-weight:700; color:${si.cor}; background:${si.cor}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon} ${si.label}</div>
+            ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação e seus pontos" style="border:none; background:#fef2f2; color:#ef4444; width:24px; height:24px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; flex-shrink:0;">🗑</button>` : ''}
             <i data-lucide="chevron-right" class="w-4 h-4" style="color:#cbd5e1;"></i>
           </div>`;
       }).join('');
