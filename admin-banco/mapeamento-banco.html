@@ -11875,6 +11875,130 @@
   }
   window.verProducaoRetorno = verProducaoRetorno;
 
+  // ---- Telas de "ver o que falta" da campanha (só da própria carteira) ----
+  function _empresasDaMinhaCarteira() {
+    const lista = (EMPRESAS_REAIS || EMPRESAS || []).filter(e => {
+      if (CTX.agenciaId && e.agenciaId && e.agenciaId !== CTX.agenciaId) return false;
+      return perfilEfetivo() === 'rm' ? e.rm === uidEfetivo() : true;
+    });
+    return lista.slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+  }
+  function _modalCamp(titulo, subtitulo, corpo) {
+    const antigo = document.getElementById('modalCampVer'); if (antigo) antigo.remove();
+    const html = `<div id="modalCampVer" style="position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this)this.remove()">
+      <div style="background:white; border-radius:16px; max-width:620px; width:100%; max-height:86vh; display:flex; flex-direction:column;">
+        <div style="padding:20px 22px 12px; border-bottom:1px solid #f1f5f9;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-size:17px; font-weight:800; color:#0f172a;">${titulo}</div>
+            <button onclick="document.getElementById('modalCampVer').remove()" style="background:#f1f5f9; border:none; border-radius:8px; width:32px; height:32px; cursor:pointer;">✕</button>
+          </div>
+          <div style="font-size:12.5px; color:#64748b; margin-top:4px;">${subtitulo}</div>
+        </div>
+        <div style="overflow:auto; padding:8px 22px 20px;">${corpo}</div>
+      </div></div>`;
+    const div = document.createElement('div'); div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+    try { lucide.createIcons(); } catch (e) {}
+  }
+  // fecha a sobretela e abre o editor do raio-X
+  function _campEditar(fn, empresaId) {
+    const m = document.getElementById('modalCampVer'); if (m) m.remove();
+    try { window[fn](empresaId); } catch (e) { alert('Não consegui abrir o cadastro: ' + e.message); }
+  }
+  window._campEditar = _campEditar;
+
+  function verFuncionarios() {
+    const lista = _empresasDaMinhaCarteira();
+    const comDado = lista.filter(e => (Number(e.funcionarios) || 0) > 0);
+    const sem = lista.filter(e => !((Number(e.funcionarios) || 0) > 0));
+    const linha = (e, temDado) => `<div style="display:flex; align-items:center; gap:12px; padding:10px 2px; border-bottom:1px solid #f4f6fa;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:13.5px; font-weight:700; color:#0f172a;">${e.nome}</div>
+        <div style="font-size:11px; color:#94a3b8;">${e.cidade || '—'}</div>
+      </div>
+      ${temDado
+        ? `<div style="text-align:right;"><div style="font-size:15px; font-weight:800; color:#16a34a; font-family:'JetBrains Mono',monospace;">${e.funcionarios}</div><div style="font-size:10px; color:#94a3b8;">colaboradores</div></div>`
+        : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="_campEditar('abrirEditarFuncionarios','${e.id}')">Incluir número →</button>`}
+    </div>`;
+    let corpo = '';
+    if (sem.length) corpo += `<div style="font-size:12px; font-weight:800; color:#b45309; margin:12px 0 4px; text-transform:uppercase; letter-spacing:.03em;">Faltam (${sem.length})</div>` + sem.map(e => linha(e, false)).join('');
+    if (comDado.length) corpo += `<div style="font-size:12px; font-weight:800; color:#16a34a; margin:18px 0 4px; text-transform:uppercase; letter-spacing:.03em;">Já mapeadas (${comDado.length})</div>` + comDado.map(e => linha(e, true)).join('');
+    if (!lista.length) corpo = '<div style="color:#94a3b8; text-align:center; padding:24px;">Nenhuma empresa na sua carteira.</div>';
+    _modalCamp('👥 Funcionários', `${comDado.length} de ${lista.length} empresas com o número de colaboradores. Saber isso abre dental, saúde e vida em grupo.`, corpo);
+  }
+  window.verFuncionarios = verFuncionarios;
+
+  function verSocios() {
+    const lista = _empresasDaMinhaCarteira();
+    const nSoc = e => (e.socios || []).filter(s => s && (s.nome || '').trim()).length;
+    const comDado = lista.filter(e => nSoc(e) > 0);
+    const sem = lista.filter(e => nSoc(e) === 0);
+    const linha = (e, temDado) => {
+      const n = nSoc(e);
+      const cotaveis = (typeof _sociosCotaveis === 'function') ? _sociosCotaveis(e).length : n;
+      return `<div style="display:flex; align-items:center; gap:12px; padding:10px 2px; border-bottom:1px solid #f4f6fa;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:13.5px; font-weight:700; color:#0f172a;">${e.nome}</div>
+          <div style="font-size:11px; color:#94a3b8;">${temDado ? (cotaveis < n ? `${n - cotaveis} sem data de nascimento — sem ela não dá pra cotar` : 'dados completos') : (e.cidade || '—')}</div>
+        </div>
+        ${temDado
+          ? `<div style="text-align:right; display:flex; align-items:center; gap:10px;">
+              <div><div style="font-size:15px; font-weight:800; color:${cotaveis > 0 ? '#16a34a' : '#f59e0b'}; font-family:'JetBrains Mono',monospace;">${n}</div><div style="font-size:10px; color:#94a3b8;">sócio${n === 1 ? '' : 's'}</div></div>
+              <button class="btn-mini" style="background:#f1f5f9; color:#475569; border:1px solid #e2e8f0;" onclick="_campEditar('abrirEditarSocios','${e.id}')">editar</button>
+            </div>`
+          : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="_campEditar('abrirEditarSocios','${e.id}')">Registrar sócios →</button>`}
+      </div>`;
+    };
+    let corpo = '';
+    if (sem.length) corpo += `<div style="font-size:12px; font-weight:800; color:#b45309; margin:12px 0 4px; text-transform:uppercase; letter-spacing:.03em;">Faltam (${sem.length})</div>` + sem.map(e => linha(e, false)).join('');
+    if (comDado.length) corpo += `<div style="font-size:12px; font-weight:800; color:#16a34a; margin:18px 0 4px; text-transform:uppercase; letter-spacing:.03em;">Já mapeadas (${comDado.length})</div>` + comDado.map(e => linha(e, true)).join('');
+    if (!lista.length) corpo = '<div style="color:#94a3b8; text-align:center; padding:24px;">Nenhuma empresa na sua carteira.</div>';
+    _modalCamp('🧑‍💼 Sócios', `${comDado.length} de ${lista.length} empresas com sócios registrados. Com nome e data de nascimento dá pra cotar vida e saúde dos sócios.`, corpo);
+  }
+  window.verSocios = verSocios;
+
+  function verProdutosMapeados() {
+    const lista = _empresasDaMinhaCarteira();
+    const ramos = (PRODUTOS || []).filter(r => !r.somenteOp);
+    const linhas = lista.map(e => {
+      const dados = e.produtosDados || {};
+      let ok = 0;
+      const bolinhas = ramos.map(r => {
+        const st = (dados[r.id] || {}).statusVisual;
+        const mapeado = st && st !== 'vazia';
+        if (mapeado) ok++;
+        return `<span title="${r.nome}${mapeado ? ' · mapeado' : ' · não mapeado'}" style="display:inline-flex; align-items:center; justify-content:center; width:23px; height:23px; border-radius:6px; font-size:12px; background:${mapeado ? '#dcfce7' : '#f4f6fa'}; border:1px solid ${mapeado ? '#86efac' : '#eef2f7'}; opacity:${mapeado ? 1 : 0.5};">${r.icon || '📦'}</span>`;
+      }).join('');
+      const pct = ramos.length ? Math.round(ok / ramos.length * 100) : 0;
+      const cor = _corFator(pct);
+      return `<div style="padding:10px 2px; border-bottom:1px solid #f4f6fa;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+          <div style="flex:1; min-width:0; font-size:13.5px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${e.nome}</div>
+          <div style="font-size:11px; color:#94a3b8; flex-shrink:0;">${ok} de ${ramos.length}</div>
+          <div style="font-size:13px; font-weight:800; color:${cor}; width:38px; text-align:right; flex-shrink:0; font-family:'JetBrains Mono',monospace;">${pct}%</div>
+        </div>
+        <div style="display:flex; gap:4px; flex-wrap:wrap;">${bolinhas}</div>
+      </div>`;
+    }).join('');
+    const totalCel = lista.length * ramos.length;
+    let okTotal = 0;
+    lista.forEach(e => ramos.forEach(r => { const st = ((e.produtosDados || {})[r.id] || {}).statusVisual; if (st && st !== 'vazia') okTotal++; }));
+    const corpo = lista.length ? linhas : '<div style="color:#94a3b8; text-align:center; padding:24px;">Nenhuma empresa na sua carteira.</div>';
+    _modalCamp('🗺️ Produtos mapeados', `${okTotal} de ${totalCel} possíveis. Verde = você já sabe o status (tem, não tem, é nosso). Cinza = ainda não perguntou.`, corpo);
+  }
+  window.verProdutosMapeados = verProdutosMapeados;
+
+  // Cadastrou algo pela campanha? recarrega os números por trás sem atrapalhar o fluxo
+  async function _refrescarCampanhaSeAberta() {
+    try {
+      const tela = document.getElementById('screen-campanha');
+      if (!tela || !tela.classList.contains('active')) return;
+      await carregarEmpresasReais();
+      renderCampanha();
+    } catch (e) { /* silencioso: é só atualização de fundo */ }
+  }
+  window._refrescarCampanhaSeAberta = _refrescarCampanhaSeAberta;
+
   function montarPainelCampanha(covAg, rmsCov, covMinha, simMinha) {
     // Só as dimensões que a campanha realmente usa (as mesmas dos indicadores).
     const dimLabels = {
@@ -11926,11 +12050,16 @@
     if (covMinha) {
       html += `<div style="background:linear-gradient(135deg,#0f766e,#0891b2); border-radius:14px; padding:20px; margin-bottom:16px; color:white;">
         <div style="font-size:15px; font-weight:800; margin-bottom:14px;">Sua cobertura</div>`;
+      // "ver" abre a lista do que falta — e já deixa agir dali (só na carteira do próprio RM)
+      const _verDim = {
+        funcionarios: 'verFuncionarios()', socios: 'verSocios()',
+        produtos_mapeados: 'verProdutosMapeados()',
+        oport_base: "verOportunidades('minha')", diversificacao: "verProducaoRetorno('minha')"
+      };
       Object.keys(dimLabels).forEach(ch => {
         const d = covMinha.dimensoes[ch]; if (!d) return;
-        let linkVer = '';
-        if (ch === 'oport_base') linkVer = ` <a onclick="verOportunidades('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver</a>`;
-        if (ch === 'diversificacao') linkVer = ` <a onclick="verProducaoRetorno('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver</a>`;
+        const linkVer = _verDim[ch]
+          ? ` <a onclick="${_verDim[ch]}" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver</a>` : '';
         html += `<div style="margin-bottom:11px;">
           <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
             <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok} de ${d.total} ${_unidade[ch] || ''}</span>${linkVer}</span>
@@ -16956,6 +17085,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       document.getElementById('modalFuncionarios').classList.remove('open');
       abrirRaioX(e.id);
       confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+      _refrescarCampanhaSeAberta();
     } catch (err) {
       alert('Erro ao salvar: ' + err.message);
     }
@@ -17056,6 +17186,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       document.getElementById('modalSocios').classList.remove('open');
       abrirRaioX(e.id);
       confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
+      _refrescarCampanhaSeAberta();
     } catch (err) {
       alert('Erro ao salvar sócios: ' + err.message);
     }
