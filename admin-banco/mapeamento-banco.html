@@ -11190,62 +11190,111 @@
     visita: { icon: '📍', txt: 'Registrou visita' }
   };
 
+  const _PERFIL_LBL = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', chefe: 'Gerente-chefe', corretor: 'Corretor', admin: 'Corretor' };
+  const _EXTRATO_ABERTOS = {};   // quem está expandido
+  window._toggleExtrato = function (uid) {
+    _EXTRATO_ABERTOS[uid] = !_EXTRATO_ABERTOS[uid];
+    renderExtrato();
+  };
+
   async function renderExtrato() {
     const box = document.getElementById('campAbaExtrato');
     if (!box) return;
-    box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Carregando extrato...</div>';
+    if (!box._carregado) box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Carregando extrato...</div>';
     const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
     let acoes = [];
     try { acoes = await _carregarAcoes(true); } catch (e) {}
+    box._carregado = true;
 
-    // filtra por período da campanha
     const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+    const daAgencia = a => !CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId;
+    const validas = acoes.filter(a => dentro(a) && daAgencia(a) && (a.pontos || 0) !== 0);
 
-    // quem visualizar: gestor pode escolher; agente vê só o próprio
-    const pontuadores = (EQUIPE_REAL || []).filter(p => p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
-    let alvoUid = uidEfetivo();
-    if (ehGestor) {
-      const sel = box._alvoSel || (pontuadores[0] && pontuadores[0].uid);
-      alvoUid = sel;
-    }
-
-    const linhas = acoes.filter(a => dentro(a) && a.usuarioId === alvoUid && (a.pontos || 0) !== 0)
-      .sort((a, b) => { const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : 0; const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : 0; return db_ - da; });
-    const total = linhas.reduce((s, a) => s + (a.pontos || 0), 0);
-    const nomeAlvo = (pontuadores.find(p => p.uid === alvoUid) || {}).nome || (EQUIPE_REAL.find(p => p.uid === alvoUid) || {}).nome || 'Você';
-
-    let html = `<div style="background:white; border-radius:14px; padding:20px;">`;
-    // seletor de pessoa (gestor)
-    if (ehGestor && pontuadores.length) {
-      html += `<div style="margin-bottom:16px;">
-        <label style="font-size:12px; color:#64748b; font-weight:600; display:block; margin-bottom:5px;">Ver extrato de:</label>
-        <select class="form-control" style="max-width:280px;" onchange="_verExtratoDe(this.value)">
-          ${pontuadores.map(p => `<option value="${p.uid}" ${p.uid === alvoUid ? 'selected' : ''}>${p.nome} · ${({rm:'RM',assistente:'Assistente',estagiario:'Estagiário'})[p.perfil] || p.perfil}</option>`).join('')}
-        </select>
+    const linhaAcao = a => {
+      const meta = EXTRATO_LABELS[a.tipo] || { icon: '•', txt: a.tipo };
+      const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
+      const empresa = a.empresaNome ? ` · ${a.empresaNome}` : '';
+      const prod = a.produtoNome ? ` (${a.produtoNome})` : '';
+      const neg = (a.pontos || 0) < 0;
+      return `<div style="display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #f5f7fa;">
+        <div style="font-size:16px; width:26px; text-align:center;">${meta.icon}</div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:12.5px; color:#334155;">${meta.txt}${prod}</div>
+          <div style="font-size:11px; color:#94a3b8;">${dt}${empresa}</div>
+        </div>
+        <div style="font-size:14px; font-weight:800; color:${neg ? '#dc2626' : '#16a34a'};">${neg ? '' : '+'}${a.pontos}</div>
       </div>`;
-    }
-    html += `<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a;">Extrato de ${nomeAlvo}</div>
-      <div style="font-size:20px; font-weight:800; color:#4338ca;">${total} <span style="font-size:12px; font-weight:500; color:#94a3b8;">pts</span></div>
-    </div>`;
+    };
 
-    if (!linhas.length) {
-      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhum ponto registrado na campanha ainda.</div>';
+    // ---- AGENTE: só o próprio extrato ----
+    if (!ehGestor) {
+      const minhas = validas.filter(a => a.usuarioId === uidEfetivo())
+        .sort((a, b) => { const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : 0; const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : 0; return db_ - da; });
+      const total = minhas.reduce((s, a) => s + (a.pontos || 0), 0);
+      box.innerHTML = `<div style="background:white; border-radius:14px; padding:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px;">
+          <div style="font-size:15px; font-weight:800; color:#0f172a;">Seu extrato de pontos</div>
+          <div style="font-size:20px; font-weight:800; color:#4338ca; font-family:'JetBrains Mono',monospace;">${total} <span style="font-size:12px; font-weight:500; color:#94a3b8;">pts</span></div>
+        </div>
+        ${minhas.length ? minhas.map(linhaAcao).join('') : '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhum ponto registrado na campanha ainda.</div>'}
+      </div>`;
+      return;
+    }
+
+    // ---- GESTOR: TODO MUNDO que agiu, inclusive chefe e corretor ----
+    const pessoas = {};
+    (EQUIPE_REAL || []).forEach(p => {
+      if (p.ativo === false) return;
+      if (CTX.agenciaId && p.agenciaId && p.agenciaId !== CTX.agenciaId) return;
+      pessoas[p.uid] = { uid: p.uid, nome: p.nome, perfil: normalizarPerfil(p.perfil), cor: p.cor || '#6366f1', acoes: [], pontos: 0 };
+    });
+    validas.forEach(a => {
+      const uid = a.usuarioId; if (!uid) return;
+      if (!pessoas[uid]) pessoas[uid] = { uid, nome: a.usuarioNome || 'Sem nome', perfil: normalizarPerfil(a.usuarioPerfil || ''), cor: '#94a3b8', acoes: [], pontos: 0 };
+      pessoas[uid].acoes.push(a);
+      pessoas[uid].pontos += (a.pontos || 0);
+    });
+    const lista = Object.values(pessoas).filter(p => p.acoes.length > 0)
+      .sort((a, b) => b.pontos - a.pontos);
+    const maxP = Math.max(...lista.map(p => p.pontos), 1);
+    const totalGeral = lista.reduce((s, p) => s + p.pontos, 0);
+    const noRanking = p => ['rm', 'assistente', 'estagiario'].includes(p.perfil);
+
+    let html = `<div style="background:white; border-radius:14px; padding:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a;">Extrato de pontos da equipe</div>
+        <div style="font-size:12px; color:#94a3b8;">${lista.length} pessoas · ${totalGeral.toLocaleString('pt-BR')} pts</div>
+      </div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">Clique num nome pra abrir o que ele fez. <strong>Gerente-chefe e corretor aparecem aqui</strong> mesmo sem entrar no ranking — dá pra mostrar quem está puxando o time.</div>`;
+
+    if (!lista.length) {
+      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhuma ação pontuada na campanha ainda.</div>';
     } else {
-      html += linhas.map(a => {
-        const meta = EXTRATO_LABELS[a.tipo] || { icon: '•', txt: a.tipo };
-        const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
-        const empresa = a.empresaNome ? ` · ${a.empresaNome}` : '';
-        const prod = a.produtoNome ? ` (${a.produtoNome})` : '';
-        return `<div style="display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #f5f7fa;">
-          <div style="font-size:16px; width:26px; text-align:center;">${meta.icon}</div>
-          <div style="flex:1; min-width:0;">
-            <div style="font-size:12.5px; color:#334155;">${meta.txt}${prod}</div>
-            <div style="font-size:11px; color:#94a3b8;">${dt}${empresa}</div>
+      lista.forEach(p => {
+        const aberto = !!_EXTRATO_ABERTOS[p.uid];
+        const larg = Math.max((p.pontos / maxP) * 100, 1.5);
+        const ordenadas = p.acoes.slice().sort((a, b) => { const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : 0; const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : 0; return db_ - da; });
+        html += `<div style="border:1px solid ${aberto ? '#c7d2fe' : '#f1f5f9'}; border-radius:11px; margin-bottom:8px; overflow:hidden;">
+          <div onclick="_toggleExtrato('${p.uid}')" style="display:flex; align-items:center; gap:11px; padding:11px 13px; cursor:pointer; background:${aberto ? '#f5f3ff' : 'white'};">
+            <div style="width:9px; height:9px; border-radius:50%; background:${p.cor}; flex-shrink:0;"></div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:13.5px; font-weight:800; color:#0f172a;">${p.nome}
+                ${!noRanking(p) ? '<span style="font-size:9.5px; background:#fef3c7; color:#92400e; padding:1px 6px; border-radius:5px; font-weight:700; margin-left:4px;">fora do ranking</span>' : ''}
+              </div>
+              <div style="font-size:11px; color:#94a3b8;">${_PERFIL_LBL[p.perfil] || p.perfil} · ${p.acoes.length} ${p.acoes.length === 1 ? 'ação' : 'ações'}</div>
+              <div style="height:3px; background:#f1f5f9; border-radius:100px; overflow:hidden; margin-top:5px;">
+                <div style="height:100%; width:${larg}%; background:${p.cor}; border-radius:100px; opacity:.75;"></div>
+              </div>
+            </div>
+            <div style="text-align:right; flex-shrink:0;">
+              <div style="font-size:16px; font-weight:800; color:#4338ca; font-family:'JetBrains Mono',monospace;">${p.pontos.toLocaleString('pt-BR')}</div>
+              <div style="font-size:10px; color:#94a3b8;">pontos</div>
+            </div>
+            <div style="font-size:13px; color:#cbd5e1; flex-shrink:0;">${aberto ? '▲' : '▼'}</div>
           </div>
-          <div style="font-size:14px; font-weight:800; color:#16a34a;">+${a.pontos}</div>
+          ${aberto ? `<div style="padding:4px 13px 12px; border-top:1px solid #f1f5f9;">${ordenadas.map(linhaAcao).join('')}</div>` : ''}
         </div>`;
-      }).join('');
+      });
     }
     html += `</div>`;
     box.innerHTML = html;
@@ -11339,7 +11388,6 @@
     }
   }
   window.assumirOportunidade = assumirOportunidade;
-  window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
 
   // ===== SIMULADOR AVANÇADO: matriz de cenários cruzados =====
   // ===== SIMULADOR: quanto os indicadores rendem em pontos =====
@@ -11772,8 +11820,10 @@
     </div>`;
   }
 
+  let _ESTRELA_SEQ = 0;   // IDs de gradiente SVG precisam ser únicos na página
   function blocoIndicadores(cov, quem, titulo, covAg) {
     if (!cov) return '';
+    const _seq = ++_ESTRELA_SEQ;
     const ehChefe = (quem === 'chefe');
     const ind = calcularIndicadores(cov, ehChefe ? null : covAg);
     const total = ehChefe ? ind.totalChefe : ind.totalRM;
@@ -11784,14 +11834,14 @@
       i.label, i.detalhe, i.pct,
       ehChefe ? i.ganhoChefe : i.ganhoRM,
       ehChefe ? i.tetoChefe : i.tetoRM,
-      quem + '_' + i.chave + '_' + k
+      _seq + '_' + quem + '_' + i.chave + '_' + k
     )).join('');
 
     // Plus da agência — só pro RM
     let blocoPlus = '';
     if (!ehChefe && ind.plus.length) {
       const cardsPlus = ind.plus.map((i, k) => _cardEstrela(
-        i.label, i.detalhe, i.pct, i.ganho, i.teto, 'plus_' + i.chave + '_' + k
+        i.label, i.detalhe, i.pct, i.ganho, i.teto, _seq + '_plus_' + i.chave + '_' + k
       )).join('');
       blocoPlus = `
         <div style="margin-top:18px; padding-top:16px; border-top:1px dashed #cbd5e1;">
@@ -12034,17 +12084,29 @@
             <div style="font-size:24px; font-weight:800;">${CTX.agenciaNome || 'Agência'}</div>
             <div style="font-size:12px; opacity:.85;">${fmtData(CAMPANHA.inicio)} até ${fmtData(CAMPANHA.fim)}</div>
           </div>
-          ${(perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm')) ? `<div style="text-align:center; background:rgba(255,255,255,0.15); border-radius:12px; padding:12px 18px;">
-            <div style="font-size:11px; opacity:.85;">Bônus do gerente-chefe</div>
-            <div style="font-size:22px; font-weight:800;">+${fmtFator(calcularIndicadores(covAg).ganhoChefe)}</div>
-            <div style="font-size:10.5px; opacity:.8;">de ${fmtFator(indCfg().totalChefe)} possíveis</div>
-          </div>` : ''}
+
         </div>
       </div>`;
 
     // ---- ESTRELAS: o RM vê os indicadores da carteira dele; gestor vê os da agência ----
     if (covMinha) html += blocoIndicadores(covMinha, 'rm', '⭐ Seus indicadores', covAg);
     if (perfilEfetivo() !== 'rm') html += blocoIndicadores(covAg, 'chefe', '⭐ Indicadores da agência');
+
+    // ADMIN/CORRETOR: abre o detalhe de cada gerente logo abaixo — é a tela de reunião com o chefe:
+    // dá pra apontar exatamente qual RM está puxando o indicador da agência pra baixo.
+    if (CTX.isAdmin && perfilEfetivo() !== 'rm' && rmsCov && rmsCov.length) {
+      const _tot = indCfg().totalRM;
+      const _ord = rmsCov.map(r => ({ ...r, _ind: calcularIndicadores(r.cov, covAg) })).sort((a, b) => b._ind.ganhoRM - a._ind.ganhoRM);
+      html += `<div style="background:#0f172a; border-radius:14px; padding:16px 20px; margin-bottom:12px; color:#e2e8f0;">
+        <div style="font-size:12px; color:#94a3b8; font-weight:700; letter-spacing:.04em;">🔐 VISÍVEL SÓ PARA VOCÊ</div>
+        <div style="font-size:15px; font-weight:800; color:white; margin-top:4px;">Cada gerente, indicador por indicador</div>
+        <div style="font-size:12px; color:#94a3b8; margin-top:2px;">O indicador da agência é a soma disso. Aqui você vê quem está puxando pra cima e quem está segurando.</div>
+      </div>`;
+      _ord.forEach((r, i) => {
+        const medal = ['🥇', '🥈', '🥉'][i] || `${i + 1}º`;
+        html += blocoIndicadores(r.cov, 'rm', `${medal} ${r.nome}`, covAg);
+      });
+    }
 
     // Card "Sua cobertura" — só para RM: quanto ELE tem em cada indicador
     if (covMinha) {
