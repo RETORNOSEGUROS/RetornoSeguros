@@ -11497,8 +11497,74 @@
       html += `</tbody></table></div>`;
     }
 
-    // ---- Bloco do gestor ----
-    if (!ehRM && indAg) {
+    // ---- Bloco do ADMIN: cenários da CORRETORA ----
+    // Único lugar do sistema que mostra reais — e só para o dono, nunca em perfil simulado.
+    if (CTX.isAdmin && !CTX.perfilSimulado) {
+      const POTE = (FATOR_CFG.poteRanking != null ? FATOR_CFG.poteRanking : 2);
+      const TETO_RM = cfg.totalRM, TETO_CH = cfg.totalChefe;
+      const fmtR = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+      // % que sai do bolso da corretora conforme o time atinge os indicadores
+      const saida = at => (PART_RM_BASE + TETO_RM * at / 100) + (PART_CHEFE_BASE + TETO_CH * at / 100) + POTE;
+      const fica = at => 100 - saida(at);
+      // atingimento de hoje (média entre o que os RMs e a agência conquistaram)
+      const atHoje = indAg ? Math.round((indAg.ganhoChefe / (TETO_CH || 1)) * 100) : 0;
+      const CENARIOS = [
+        { at: atHoje, label: 'Hoje', hoje: true },
+        { at: 0, label: 'Time mal' }, { at: 50, label: 'Mediano' }, { at: 100, label: 'Todos no teto' }
+      ];
+
+      html += `<div style="background:#0f172a; border-radius:14px; padding:18px 20px; margin-bottom:14px; color:#e2e8f0;">
+        <div style="font-size:12px; color:#94a3b8; font-weight:700; letter-spacing:.04em;">🔐 SÓ VOCÊ VÊ ESTA TELA</div>
+        <div style="font-size:16px; font-weight:800; color:white; margin-top:4px;">Cenários da corretora</div>
+        <div style="font-size:12.5px; color:#94a3b8; margin-top:3px;">Quanto sobra pra você depois de pagar a equipe, cruzando <strong style="color:#cbd5e1;">produção</strong> com <strong style="color:#cbd5e1;">o quanto o time atingiu</strong>.</div>
+      </div>`;
+
+      // Como o bolo é dividido em cada cenário
+      html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:14px;">
+        <div style="font-size:14px; font-weight:800; color:#0f172a; margin-bottom:3px;">Como o bolo se divide</div>
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">Quanto melhor o time vai, maior a fatia dele — e menor a sua, em percentual.</div>
+        <table class="cfg-table"><thead><tr>
+          <th>CENÁRIO</th><th style="text-align:right;">RMs</th><th style="text-align:right;">CHEFE</th>
+          <th style="text-align:right;">RANKING</th><th style="text-align:right;">SAI</th><th style="text-align:right;">VOCÊ FICA</th>
+        </tr></thead><tbody>`;
+      CENARIOS.forEach(c => {
+        const rm = PART_RM_BASE + TETO_RM * c.at / 100, ch = PART_CHEFE_BASE + TETO_CH * c.at / 100;
+        html += `<tr ${c.hoje ? 'style="background:#f0fdf4;"' : ''}>
+          <td style="font-weight:700; color:#0f172a;">${c.label} ${c.hoje ? `<span style="font-size:10px; color:#059669;">(${c.at}%)</span>` : `<span style="font-size:10px; color:#94a3b8;">(${c.at}%)</span>`}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#475569;">${fmtFator(rm)}%</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#475569;">${fmtFator(ch)}%</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#475569;">${fmtFator(POTE)}%</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#dc2626;">${fmtFator(saida(c.at))}%</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtFator(fica(c.at))}%</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+
+      // A matriz: produção × atingimento
+      html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:14px;">
+        <div style="font-size:14px; font-weight:800; color:#0f172a; margin-bottom:3px;">Quanto fica no seu bolso</div>
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">Linha = comissão total da agência. Coluna = quanto o time atingiu dos indicadores.</div>
+        <div style="overflow-x:auto;"><table class="cfg-table" style="min-width:520px;"><thead><tr>
+          <th>COMISSÃO TOTAL</th>
+          ${CENARIOS.map(c => `<th style="text-align:right;">${c.label.toUpperCase()}<br><small style="font-weight:400; color:#94a3b8;">fica ${fmtFator(fica(c.at))}%</small></th>`).join('')}
+        </tr></thead><tbody>`;
+      SIM_BASES.forEach(b => {
+        html += `<tr><td style="font-weight:800; color:#0f172a;">${fmtBaseSim(b)}</td>
+          ${CENARIOS.map(c => `<td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:${c.hoje ? '800' : '600'}; color:${c.hoje ? '#047857' : '#334155'}; ${c.hoje ? 'background:#f0fdf4;' : ''}">${fmtR(b * fica(c.at) / 100)}</td>`).join('')}
+        </tr>`;
+      });
+      html += `</tbody></table></div>
+        <div style="margin-top:14px; padding:12px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; font-size:12.5px; color:#166534;">
+          💡 <strong>A leitura que importa:</strong> com o time todo no teto você fica com ${fmtFator(fica(100))}% em vez de ${fmtFator(fica(0))}% — parece que perdeu.
+          Mas ${fmtFator(fica(100))}% de ${fmtBaseSim(SIM_BASES[SIM_BASES.length - 1])} (<strong>${fmtR(SIM_BASES[SIM_BASES.length - 1] * fica(100) / 100)}</strong>)
+          é muito mais que ${fmtFator(fica(0))}% de ${fmtBaseSim(SIM_BASES[0])} (<strong>${fmtR(SIM_BASES[0] * fica(0) / 100)}</strong>).
+          Pagar mais só acontece quando entra mais.
+        </div>
+      </div>`;
+    }
+
+    // ---- Bloco do gestor (chefe) ----
+    if (!ehRM && !(CTX.isAdmin && !CTX.perfilSimulado) && indAg) {
       const hoje = indAg.ganhoChefe, teto = indAg.totalChefe;
       html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
         <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Indicadores da agência em pontos</div>
@@ -11621,8 +11687,10 @@
 
     const covAg = window._CAMP_COVAG || { fator: 0 };
     const rmsCov = window._CAMP_RMSCOV || [];
+    const cfg = indCfg();
+    const POTE = (FATOR_CFG.poteRanking != null ? FATOR_CFG.poteRanking : 2);
 
-    // Fechamentos DENTRO da campanha (base de pagamento)
+    // ---- Fechamentos DENTRO da campanha = base de pagamento ----
     let fechados = [];
     try {
       let qc = db.collection('mb_cotacoes');
@@ -11631,150 +11699,131 @@
       snap.forEach(d => {
         const c = d.data();
         if (c.status !== 'fechada') return;
-        if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return; // isolamento
+        if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (!dt) return;
         const iso = dt.toISOString().slice(0, 10);
-        if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return; // só o que fechou na campanha
+        if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return;
         if (CAMPANHA.fim && iso > CAMPANHA.fim) return;
         fechados.push(c);
       });
     } catch (e) { console.warn('gestor fechados', e); }
 
-    // Base de comissão de cada negócio = prêmio × comissão% informada pelo admin na emissão.
-    // Negócios sem comissão informada (antigos) NÃO entram na campanha — contam só cobertura.
     const _empresaRm = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
     const baseRm = {};
     let baseTotal = 0, semComissao = 0;
     fechados.forEach(c => {
-      if (!c.comissaoPct || c.comissaoPct <= 0) { semComissao++; return; } // sem % → fora do pagamento
+      if (!c.comissaoPct || c.comissaoPct <= 0) { semComissao++; return; }
       const uid = _empresaRm[c.empresaId] || c.fechadoPorUid;
-      const baseComissao = (c.valor || 0) * (c.comissaoPct / 100); // ex: 200k × 50% = 100k
+      const baseComissao = (c.valor || 0) * (c.comissaoPct / 100);
       baseRm[uid] = (baseRm[uid] || 0) + baseComissao;
       baseTotal += baseComissao;
     });
 
-    // Fator de cada RM (do covRms) e da agência
-    const fatorPorRm = {}; rmsCov.forEach(r => fatorPorRm[r.uid] = r.cov.fator);
-    const potesAbertos = covAg.fator >= FATOR_CFG.pisoAgencia;
-
-    // Pontos por uid (dentro da campanha) — para o pote de ranking e a consolidação final
+    // ---- Pontos da campanha (pro pote do ranking) ----
     const acoesCamp = await _carregarAcoes(true).catch(() => []);
     const _dentroCamp = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
     const pontosPorUid = {};
     (EQUIPE_REAL || []).forEach(p => { if (p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontosPorUid[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0 }; });
     acoesCamp.forEach(a => { if (_dentroCamp(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pontosPorUid[a.usuarioId]) pontosPorUid[a.usuarioId].pontos += (a.pontos || 0); });
+    const totalPontos = Object.values(pontosPorUid).reduce((s, p) => s + p.pontos, 0);
+    const poteRankingTotal = baseTotal * POTE / 100;
 
-    // CONSOLIDAÇÃO — a fórmula final por pessoa
-    const { resultado: consolidado } = consolidarCampanha({ baseRm, baseTotal, fatorPorRm, fatorAgencia: covAg.fator, pontosPorUid });
+    // Admin vê em reais (é o bolso dele); chefe vê em pontos.
+    const ehDono = CTX.isAdmin && !CTX.perfilSimulado;
+    const fmtV = v => ehDono ? ('R$ ' + Math.round(v).toLocaleString('pt-BR')) : fmtPts(Math.round(v));
 
-    // ---- Cartão-resumo do "a mais" ----
-    // O bônus do RM é uma fração a mais sobre a base dele (teto × fator/100, como pontos percentuais).
-    let html = `
-      <div style="background:#0f172a; border-radius:14px; padding:20px 22px; color:#e2e8f0; margin-bottom:16px;">
-        <div style="font-size:12px; color:#94a3b8; font-weight:700; letter-spacing:.04em;">🔐 VISÍVEL SÓ PARA GESTORES</div>
-        <div style="font-size:15px; font-weight:800; color:white; margin:6px 0 4px;">Estimativa de bônus da campanha</div>
-        <div style="font-size:12px; color:#94a3b8;">Base = comissão dos negócios <strong style="color:#cbd5e1;">emitidos dentro da campanha</strong> (${fechados.length - semComissao} com percentual informado). Valores em <strong style="color:#cbd5e1;">pontos</strong>, nunca em dinheiro.${semComissao > 0 ? ` <span style="color:#fca5a5;">${semComissao} sem percentual ficaram de fora.</span>` : ''}</div>
+    // ---- Linhas por pessoa ----
+    const indAgObj = calcularIndicadores(covAg, null);
+    const linhas = [];
+    Object.entries(pontosPorUid).forEach(([uid, p]) => {
+      const share = totalPontos > 0 ? p.pontos / totalPontos : 0;
+      const ranking = poteRankingTotal * share;
+      const rmCov = rmsCov.find(r => r.uid === uid);
+      let piso = 0, proprio = 0, plus = 0, base = 0;
+      if (p.perfil === 'rm' && rmCov) {
+        base = baseRm[uid] || 0;
+        const ind = calcularIndicadores(rmCov.cov, covAg);
+        piso = base * PART_RM_BASE / 100;
+        proprio = base * ind.ganhoProprio / 100;
+        plus = base * ind.ganhoPlus / 100;
+      }
+      linhas.push({ uid, ...p, base, piso, proprio, plus, ranking, share, total: piso + proprio + plus + ranking });
+    });
+    // Gerente-chefe: medido pela agência, sobre a base total
+    const chefes = (EQUIPE_REAL || []).filter(p => normalizarPerfil(p.perfil) === 'chefe' && p.ativo !== false && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
+    chefes.forEach(p => {
+      const piso = baseTotal * PART_CHEFE_BASE / 100;
+      const proprio = baseTotal * indAgObj.ganhoChefe / 100;
+      linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, total: piso + proprio });
+    });
+    linhas.sort((a, b) => b.total - a.total);
+    const totalSai = linhas.reduce((s, l) => s + l.total, 0);
+    const ficaCorretora = baseTotal - totalSai;
+    const LBL = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', chefe: 'Gerente-chefe' };
+
+    let html = `<div style="background:#0f172a; border-radius:14px; padding:20px 22px; color:#e2e8f0; margin-bottom:14px;">
+      <div style="font-size:12px; color:#94a3b8; font-weight:700; letter-spacing:.04em;">🔐 VISÍVEL SÓ PARA GESTORES</div>
+      <div style="font-size:16px; font-weight:800; color:white; margin:6px 0 4px;">Quanto a campanha está pagando</div>
+      <div style="font-size:12px; color:#94a3b8;">Sobre os negócios <strong style="color:#cbd5e1;">emitidos dentro da campanha</strong> (${fechados.length - semComissao} com percentual informado).${semComissao > 0 ? ` <span style="color:#fca5a5;">${semComissao} sem percentual ficaram de fora.</span>` : ''}</div>
+    </div>`;
+
+    if (!baseTotal) {
+      html += `<div style="background:white; border-radius:14px; padding:30px; text-align:center; color:#94a3b8; font-size:13px;">
+        Nenhum negócio emitido com percentual informado ainda. Assim que os primeiros fecharem, os valores aparecem aqui.
       </div>`;
+      box.innerHTML = html; return;
+    }
 
-    // ---- Tabela por RM: fator, base, bônus a mais ----
-    html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Bônus a mais por gerente</div>
-      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Quanto cada RM ganha <strong>além</strong> do padrão, conforme o fator de cobertura dele. Só quem passou do piso (${FATOR_CFG.pisoRm}%) recebe.</div>
-      <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr style="text-align:right; color:#94a3b8; font-size:11px; border-bottom:1px solid #e2e8f0;">
-          <th style="text-align:left; padding:6px 4px;">Gerente</th>
-          <th style="padding:6px 4px;">Fator</th>
-          <th style="padding:6px 4px;">Base (pontos)</th>
-          <th style="padding:6px 4px;">Bônus a mais</th>
-        </tr></thead><tbody>`;
-    rmsCov.forEach(r => {
-      const fator = r.cov.fator;
-      const base = Math.round(baseRm[r.uid] || 0);
-      // bônus a mais = participação(seu fator × agência) − piso, aplicado sobre a base
-      const participacao = participacaoRM(fator, covAg.fator);
-      const bonusPct = participacao - PART_RM_BASE;
-      const aceitavel = bonusPct > 0.001;
-      const bonusPontos = Math.round(base * bonusPct / 100);
-      html += `<tr style="text-align:right; border-bottom:1px solid #f8fafc;">
-        <td style="text-align:left; padding:7px 4px; font-weight:700; color:#0f172a;">${r.nome}</td>
-        <td style="padding:7px 4px; color:${_corFator(fator)}; font-weight:700;">${fator}%</td>
-        <td style="padding:7px 4px; color:#64748b;">${fmtPts(base)}</td>
-        <td style="padding:7px 4px; font-weight:800; color:${aceitavel ? '#16a34a' : '#94a3b8'};">${aceitavel ? '+' + bonusPct.toFixed(2) + ' <span style=\"font-weight:500; color:#94a3b8;\">(' + fmtPts(bonusPontos) + ' pts)</span>' : '— no piso'}</td>
+    // Resumo do bolo
+    if (ehDono) {
+      html += `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
+        <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">COMISSÃO TOTAL</div><div style="font-size:19px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono',monospace;">${fmtV(baseTotal)}</div></div>
+        <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">SAI PRA EQUIPE</div><div style="font-size:19px; font-weight:800; color:#dc2626; font-family:'JetBrains Mono',monospace;">${fmtV(totalSai)}</div><div style="font-size:10.5px; color:#94a3b8;">${fmtFator(baseTotal > 0 ? totalSai / baseTotal * 100 : 0)}% do total</div></div>
+        <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">FICA PRA VOCÊ</div><div style="font-size:19px; font-weight:800; color:#16a34a; font-family:'JetBrains Mono',monospace;">${fmtV(ficaCorretora)}</div><div style="font-size:10.5px; color:#94a3b8;">${fmtFator(baseTotal > 0 ? ficaCorretora / baseTotal * 100 : 0)}% do total</div></div>
+      </div>`;
+    }
+
+    // Tabela por pessoa
+    html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:14px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Pessoa por pessoa</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">De onde vem cada pedaço do que cada um leva, no cenário de hoje.</div>
+      <div style="overflow-x:auto;"><table class="cfg-table" style="min-width:620px;"><thead><tr>
+        <th>PESSOA</th>
+        <th style="text-align:right;">PISO</th>
+        <th style="text-align:right;">INDICADORES</th>
+        <th style="text-align:right;">PLUS AGÊNCIA</th>
+        <th style="text-align:right;">RANKING</th>
+        <th style="text-align:right;">TOTAL</th>
+      </tr></thead><tbody>`;
+    linhas.forEach(l => {
+      html += `<tr>
+        <td><div style="display:flex; align-items:center; gap:7px;">
+          <div style="width:8px; height:8px; border-radius:50%; background:${l.cor};"></div>
+          <div><div style="font-weight:700; color:#0f172a; font-size:13px;">${l.nome}</div>
+          <div style="font-size:10.5px; color:#94a3b8;">${LBL[l.perfil] || l.perfil}${l.share > 0 ? ` · ${Math.round(l.share * 100)}% dos pontos` : ''}</div></div>
+        </div></td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#64748b;">${l.piso > 0 ? fmtV(l.piso) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0891b2; font-weight:600;">${l.proprio > 0 ? fmtV(l.proprio) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#7c3aed; font-weight:600;">${l.plus > 0 ? fmtV(l.plus) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#b45309; font-weight:600;">${l.ranking > 0 ? fmtV(l.ranking) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#0f172a;">${fmtV(l.total)}</td>
       </tr>`;
     });
-    html += `</tbody></table></div></div>`;
-
-    // ---- Potes de apoio e ranking ----
-    html += `<div style="background:white; border-radius:14px; padding:20px;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Potes coletivos</div>
-      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Só abrem quando a agência passa de ${FATOR_CFG.pisoAgencia}% de fator. Fator atual: <strong style="color:${_corFator(covAg.fator)};">${covAg.fator}%</strong>.</div>`;
-    if (!potesAbertos) {
-      html += `<div style="padding:14px; background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; font-size:13px; color:#9a3412;">
-        🔒 Potes travados. Faltam <strong>${FATOR_CFG.pisoAgencia - covAg.fator} pontos de fator</strong> para a agência destravar os bônus de assistentes/estagiários (${FATOR_CFG.poteApoio}%) e do ranking (${FATOR_CFG.poteRanking}%).
-      </div>`;
-    } else {
-      const lista = Object.values(pontosPorUid).sort((a, b) => b.pontos - a.pontos);
-      const totalPts = lista.reduce((s, p) => s + p.pontos, 0);
-      const apoioPct = poteApoioPct(covAg.fator);
-      html += `<div style="padding:12px 14px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; font-size:13px; color:#166534; margin-bottom:14px;">
-        ✅ Potes abertos! Pote do ranking (${FATOR_CFG.poteRanking}%) proporcional aos pontos · Pote de apoio (${apoioPct}% neste nível de agência) dividido igual entre assistentes/estagiários.
-      </div>`;
-      lista.forEach(p => {
-        const share = totalPts > 0 ? (p.pontos / totalPts) : 0;
-        const doPote = (FATOR_CFG.poteRanking * share);
-        html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f1f5f9; font-size:13px;">
-          <span style="color:#334155;">${p.nome} <span style="font-size:11px; color:#94a3b8;">${p.pontos} pts · ${Math.round(share * 100)}%</span></span>
-          <strong style="color:#16a34a;">+${doPote.toFixed(2)} <span style="font-weight:500; color:#94a3b8;">do ranking</span></strong>
-        </div>`;
-      });
-    }
-    html += `</div>`;
-
-    // ---- TABELA CONSOLIDADA FINAL: total a pagar a mais por pessoa ----
-    const linhasFinal = Object.keys(consolidado).map(uid => {
-      const nome = (pontosPorUid[uid] && pontosPorUid[uid].nome) || (rmsCov.find(r => r.uid === uid) || {}).nome || (MAPA_RMS[uid] && MAPA_RMS[uid].nome) || 'Pessoa';
-      const perfil = (pontosPorUid[uid] && pontosPorUid[uid].perfil) || 'rm';
-      return { uid, nome, perfil, ...consolidado[uid] };
-    }).filter(l => l.total > 0.005).sort((a, b) => b.total - a.total);
-
-    html += `<div style="background:#0f172a; border-radius:14px; padding:20px; margin-top:16px; color:#e2e8f0;">
-      <div style="font-size:15px; font-weight:800; color:white; margin-bottom:4px;">🧮 Consolidado — o que você paga a mais</div>
-      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Soma de todas as fontes por pessoa, em pontos. É o acerto do fim da campanha, além do que já é pago no mês a mês.</div>`;
-    if (!linhasFinal.length) {
-      html += '<div style="color:#94a3b8; font-size:13px;">Nada a pagar a mais ainda — os fatores e potes precisam subir.</div>';
-    } else {
-      const perfLabel = { rm: 'RM', chefe: 'Chefe', assistente: 'Assist.', estagiario: 'Estag.' };
-      html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr style="text-align:right; color:#64748b; font-size:11px; border-bottom:1px solid #334155;">
-          <th style="text-align:left; padding:6px 4px;">Pessoa</th>
-          <th style="padding:6px 4px;">Comissão</th>
-          <th style="padding:6px 4px;">Ranking</th>
-          <th style="padding:6px 4px;">Apoio</th>
-          <th style="padding:6px 4px; color:#e2e8f0;">TOTAL a mais</th>
-        </tr></thead><tbody>`;
-      let somaGeral = 0;
-      linhasFinal.forEach(l => {
-        somaGeral += l.total;
-        html += `<tr style="text-align:right; border-bottom:1px solid #1e293b;">
-          <td style="text-align:left; padding:7px 4px; color:white; font-weight:700;">${l.nome} <span style="font-size:10px; color:#64748b; font-weight:500;">${perfLabel[l.perfil] || ''}</span></td>
-          <td style="padding:7px 4px; color:#94a3b8;">${l.comissao > 0 ? fmtPts(Math.round(l.comissao)) : '—'}</td>
-          <td style="padding:7px 4px; color:#94a3b8;">${l.ranking > 0 ? l.ranking.toFixed(1) : '—'}</td>
-          <td style="padding:7px 4px; color:#94a3b8;">${l.apoio > 0 ? fmtPts(Math.round(l.apoio)) : '—'}</td>
-          <td style="padding:7px 4px; color:#4ade80; font-weight:800;">${fmtPts(Math.round(l.total))}</td>
-        </tr>`;
-      });
-      html += `<tr style="text-align:right; border-top:2px solid #334155;">
-        <td style="text-align:left; padding:9px 4px; color:white; font-weight:800;">Total geral</td>
-        <td colspan="3"></td>
-        <td style="padding:9px 4px; color:#4ade80; font-weight:800; font-size:15px;">${fmtPts(Math.round(somaGeral))}</td>
-      </tr>`;
-      html += `</tbody></table></div>`;
-    }
-    html += `</div>`;
+    html += `<tr style="border-top:2px solid #e2e8f0;">
+        <td style="font-weight:800; color:#0f172a;">Total</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#64748b;">${fmtV(linhas.reduce((s, l) => s + l.piso, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0891b2;">${fmtV(linhas.reduce((s, l) => s + l.proprio, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#7c3aed;">${fmtV(linhas.reduce((s, l) => s + l.plus, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#b45309;">${fmtV(linhas.reduce((s, l) => s + l.ranking, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#dc2626;">${fmtV(totalSai)}</td>
+      </tr></tbody></table></div>
+      <div style="font-size:11.5px; color:#94a3b8; margin-top:10px;">
+        <strong>Piso</strong>: o que a pessoa ganha independente da campanha. <strong>Indicadores</strong>: a carteira dela (ou a agência, no caso do chefe). <strong>Plus agência</strong>: o extra por a agência ir bem. <strong>Ranking</strong>: fatia do pote de ${fmtFator(POTE)}%, proporcional aos pontos.
+      </div>
+    </div>`;
 
     box.innerHTML = html;
-    try { lucide.createIcons(); } catch (e) {}
   }
   window.renderPainelGestor = renderPainelGestor;
 
