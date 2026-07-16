@@ -11610,6 +11610,64 @@
     return '#ef4444';
   }
 
+  // ---- ESTRELAS DOS INDICADORES ----
+  // Cada indicador vira uma estrela que enche conforme o percentual atingido,
+  // mostrando quanto já rendeu e qual é o teto.
+  function estrelaSVG(pct, cor, uid) {
+    const p = Math.max(0, Math.min(100, pct));
+    return `<svg viewBox="0 0 24 24" width="40" height="40" style="flex-shrink:0;">
+      <defs><linearGradient id="est_${uid}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="${p}%" stop-color="${cor}"/><stop offset="${p}%" stop-color="#e2e8f0"/>
+      </linearGradient></defs>
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+        fill="url(#est_${uid})" stroke="#cbd5e1" stroke-width="0.5"/>
+    </svg>`;
+  }
+  function blocoIndicadores(cov, quem, titulo) {
+    if (!cov) return '';
+    const ind = calcularIndicadores(cov);
+    const ehChefe = (quem === 'chefe');
+    const total = ehChefe ? ind.totalChefe : ind.totalRM;
+    const ganho = ehChefe ? ind.ganhoChefe : ind.ganhoRM;
+    const pctGeral = total > 0 ? (ganho / total * 100) : 0;
+    const cards = ind.itens.map((i, k) => {
+      const teto = ehChefe ? i.tetoChefe : i.tetoRM;
+      const g = ehChefe ? i.ganhoChefe : i.ganhoRM;
+      const cor = _corFator(i.pct);
+      return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:13px;">
+        <div style="display:flex; align-items:center; gap:11px;">
+          ${estrelaSVG(i.pct, cor, quem + '_' + i.chave + '_' + k)}
+          <div style="min-width:0; flex:1;">
+            <div style="font-size:12.5px; font-weight:700; color:#0f172a; line-height:1.25;">${i.label}</div>
+            <div style="font-size:11px; color:#94a3b8; margin-top:1px;">${i.detalhe || '—'}</div>
+          </div>
+          <div style="text-align:right; flex-shrink:0;">
+            <div style="font-size:16px; font-weight:800; color:${cor}; font-family:'JetBrains Mono',monospace;">${fmtFator(g)}</div>
+            <div style="font-size:10.5px; color:#94a3b8;">de ${fmtFator(teto)}</div>
+          </div>
+        </div>
+        <div style="height:6px; background:#e2e8f0; border-radius:100px; overflow:hidden; margin-top:9px;">
+          <div style="height:100%; width:${Math.max(i.pct, 1.5)}%; background:${cor}; border-radius:100px;"></div>
+        </div>
+        <div style="font-size:10.5px; color:#64748b; margin-top:4px; text-align:right;">${fmtFator(i.pct)}% do teto</div>
+      </div>`;
+    }).join('');
+    const aviso = Math.abs(ind.somaTetos - total) > 0.005 && !ehChefe
+      ? `<div style="font-size:11px; color:#b45309; margin-top:10px;">⚠ Os tetos somam ${fmtFator(ind.somaTetos)}, mas o total configurado é ${fmtFator(total)}.</div>` : '';
+    return `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a;">${titulo}</div>
+        <div style="font-size:13px; color:#64748b;">
+          <span style="font-size:20px; font-weight:800; color:${_corFator(pctGeral)}; font-family:'JetBrains Mono',monospace;">${fmtFator(ganho)}</span>
+          <span style="font-weight:600;"> de ${fmtFator(total)} possíveis</span>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:11px;">${cards}</div>
+      ${aviso}
+    </div>`;
+  }
+  window.blocoIndicadores = blocoIndicadores;
+
   function montarPainelCampanha(covAg, rmsCov, covMinha, simMinha) {
     const dimLabels = {
       movimento: '🎯 Movimento (oportunidades assumidas)', producao: '💰 Produção (meta)',
@@ -11643,10 +11701,15 @@
           </div>
           ${(perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm')) ? `<div style="text-align:center; background:rgba(255,255,255,0.15); border-radius:12px; padding:12px 18px;">
             <div style="font-size:11px; opacity:.85;">Bônus do gerente-chefe</div>
-            <div style="font-size:22px; font-weight:800;">+${(FATOR_CFG.tetoChefe * covAg.fator / 100).toFixed(2)}</div>
+            <div style="font-size:22px; font-weight:800;">+${fmtFator(calcularIndicadores(covAg).ganhoChefe)}</div>
+            <div style="font-size:10.5px; opacity:.8;">de ${fmtFator(indCfg().totalChefe)} possíveis</div>
           </div>` : ''}
         </div>
       </div>`;
+
+    // ---- ESTRELAS: o RM vê os indicadores da carteira dele; gestor vê os da agência ----
+    if (covMinha) html += blocoIndicadores(covMinha, 'rm', '⭐ Seus indicadores');
+    if (perfilEfetivo() !== 'rm') html += blocoIndicadores(covAg, 'chefe', '⭐ Indicadores da agência');
 
     // Card "Sua cobertura" — só para RM: quanto ELE tem em cada indicador
     if (covMinha) {
