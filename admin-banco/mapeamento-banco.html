@@ -11056,17 +11056,16 @@
       if (CAMPANHA.fim && iso > CAMPANHA.fim) return false;
       return true;
     };
-    // quem pontua: rm, assistente, estagiario. Corretor/admin NÃO pontuam. Chefe = agência (não no ranking individual).
+    // quem pontua: rm, assistente, estagiario. Corretor/admin NÃO pontuam.
     const pontuadores = {};
     (EQUIPE_REAL || []).forEach(p => {
       if (p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontuadores[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0, acoes: 0 };
     });
-
     acoes.forEach(a => {
       if (!dentroCampanha(a)) return;
-      if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) return; // isolamento de agência
+      if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) return;
       const uid = a.usuarioId;
-      if (!uid || !pontuadores[uid]) return; // só quem pontua
+      if (!uid || !pontuadores[uid]) return;
       pontuadores[uid].pontos += (a.pontos || 0);
       pontuadores[uid].acoes += 1;
     });
@@ -11075,64 +11074,68 @@
     const totalPontos = lista.reduce((s, p) => s + p.pontos, 0);
     const eu = uidEfetivo();
 
-    // ---- Pote do ranking: X% do TOTAL da agência, dividido pela fatia de pontos de cada um ----
+    // ---- Pote: fatia do total da agência dividida pela participação em pontos ----
     const potePct = (FATOR_CFG.poteRanking != null ? FATOR_CFG.poteRanking : 2);
-    const BASES_RANK = [50000, 250000, 600000];
-    const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(0) + ' mi' : (v / 1000).toFixed(0) + ' mil';
-    const _ehGestorRank = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
-    // Cenário "hoje": base real dos negócios emitidos na campanha (só gestor vê — é dado sensível)
-    let baseHoje = 0, temBaseHoje = false;
-    if (_ehGestorRank) {
-      (COTACOES || []).forEach(c => {
-        if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
-        if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
-        const dt = c.dataFechamento || (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate().toISOString().slice(0, 10) : null);
-        if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
-        if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
-        baseHoje += (c.valor || 0) * (c.comissaoPct / 100);
-      });
-      temBaseHoje = baseHoje > 0;
-    }
+    const BASES_RANK = [70000, 150000, 450000, 800000];
+    const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(0) + ' mi' : (v / 1000) + ' mil';
     const ptsDoPote = (base, share) => Math.round(base * (potePct / 100) * share);
 
+    // "Hoje": base real dos negócios emitidos dentro da campanha
+    let baseHoje = 0;
+    (COTACOES || []).forEach(c => {
+      if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
+      if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
+      const dt = c.dataFechamento || (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate().toISOString().slice(0, 10) : null);
+      if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
+      if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
+      baseHoje += (c.valor || 0) * (c.comissaoPct / 100);
+    });
+
     const perfilLabel = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
-    let html = `<div style="background:white; border-radius:14px; padding:20px;">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">
-        <div style="font-size:15px; font-weight:800; color:#0f172a;">Ranking de pontos · ${CAMPANHA.ano}</div>
-        <div style="font-size:12px; color:#94a3b8;">${lista.length} participantes · ${totalPontos} pts no total</div>
-      </div>
-      <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">Cada ação (mapear, cotar, dar check, cadastrar contato...) soma pontos para quem a fez. Corretor e admin agem, mas não entram no ranking.</div>
-      <div style="background:#f5f3ff; border:1px solid #ddd6fe; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#5b21b6; margin-bottom:16px;">
-        🏆 O pote do ranking é <strong>${fmtFator(potePct)}%</strong> do total da agência na campanha, dividido pela <strong>fatia de pontos</strong> de cada um. Quanto maior a sua fatia, maior o seu pedaço — e quanto melhor a agência inteira for, maior o pote de todos.
+    const fmtPt = n => n.toLocaleString('pt-BR');
+
+    let html = `<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+        <div style="font-size:16px; font-weight:800; color:#0f172a;">🏆 Ranking de pontos · ${CAMPANHA.ano}</div>
+        <div style="font-size:12px; color:#94a3b8;">${lista.length} participantes · ${fmtPt(totalPontos)} pontos no total</div>
       </div>`;
 
     if (!lista.length) {
-      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:20px;">Nenhuma ação pontuada na campanha ainda.</div>';
-    } else {
-      const medalha = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
-      lista.forEach((p, i) => {
-        const souEu = p.uid === eu;
-        const shareF = totalPontos > 0 ? (p.pontos / totalPontos) : 0;   // fração exata pro cálculo
-        const share = Math.round(shareF * 100);                           // % arredondado pra exibir
-        html += `<div style="display:flex; align-items:center; gap:12px; padding:12px; border-radius:10px; margin-bottom:6px; background:${souEu ? '#eef2ff' : '#fbfcff'}; border:1px solid ${souEu ? '#c7d2fe' : '#f1f5f9'};">
-          <div style="font-size:16px; font-weight:800; width:32px; text-align:center;">${medalha(i)}</div>
-          <div style="width:10px; height:10px; border-radius:50%; background:${p.cor};"></div>
+      html += '<div style="background:white; border-radius:14px; padding:30px; color:#94a3b8; font-size:13px; text-align:center;">Nenhuma ação pontuada na campanha ainda.</div>';
+      box.innerHTML = html;
+      return;
+    }
+
+    const medalha = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
+    lista.forEach((p, i) => {
+      const souEu = p.uid === eu;
+      const shareF = totalPontos > 0 ? (p.pontos / totalPontos) : 0;
+      const share = Math.round(shareF * 100);
+      const cenarios = [{ label: 'Hoje', v: ptsDoPote(baseHoje, shareF), hoje: true }]
+        .concat(BASES_RANK.map(b => ({ label: fmtBaseR(b), v: ptsDoPote(b, shareF), hoje: false })));
+
+      html += `<div style="background:white; border:1px solid ${souEu ? '#c7d2fe' : '#eef2f7'}; border-radius:14px; padding:15px 16px; margin-bottom:10px; ${souEu ? 'box-shadow:0 0 0 2px #ede9fe;' : ''}">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+          <div style="font-size:19px; font-weight:800; width:34px; text-align:center; color:#94a3b8;">${medalha(i)}</div>
+          <div style="width:10px; height:10px; border-radius:50%; background:${p.cor}; flex-shrink:0;"></div>
           <div style="flex:1; min-width:0;">
-            <div style="font-size:13px; font-weight:700; color:#0f172a;">${p.nome} ${souEu ? '<span style="font-size:10px; color:#4338ca;">(você)</span>' : ''}</div>
-            <div style="font-size:11px; color:#94a3b8;">${perfilLabel[p.perfil] || p.perfil} · ${p.acoes} ações · ${share}% dos pontos</div>
-            <div style="display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;">
-              ${temBaseHoje ? `<span style="font-size:10.5px; background:#0f172a; color:#e2e8f0; border-radius:6px; padding:2px 7px; font-weight:700;" title="Cenário com o total real da campanha até agora">hoje → ${ptsDoPote(baseHoje, shareF).toLocaleString('pt-BR')} pts</span>` : ''}
-              ${BASES_RANK.map(b => `<span style="font-size:10.5px; background:#eef2ff; color:#4338ca; border:1px solid #e0e7ff; border-radius:6px; padding:2px 7px; font-weight:600;">${fmtBaseR(b)} → <strong>${ptsDoPote(b, shareF).toLocaleString('pt-BR')}</strong> pts</span>`).join('')}
-            </div>
+            <div style="font-size:14px; font-weight:800; color:#0f172a;">${p.nome} ${souEu ? '<span style="font-size:10px; color:#4338ca; font-weight:700;">(você)</span>' : ''}</div>
+            <div style="font-size:11.5px; color:#94a3b8;">${perfilLabel[p.perfil] || p.perfil} · ${p.acoes} ${p.acoes === 1 ? 'ação' : 'ações'}</div>
           </div>
           <div style="text-align:right; flex-shrink:0;">
-            <div style="font-size:18px; font-weight:800; color:#4338ca;">${p.pontos}</div>
-            <div style="font-size:10px; color:#94a3b8;">pontos</div>
+            <div style="font-size:20px; font-weight:800; color:#4338ca; font-family:'JetBrains Mono',monospace; line-height:1.1;">${fmtPt(p.pontos)}</div>
+            <div style="font-size:10.5px; color:#94a3b8;">pontos · <strong style="color:#6366f1;">${share}%</strong></div>
           </div>
-        </div>`;
-      });
-    }
-    html += `</div>`;
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(${cenarios.length},1fr); gap:6px;">
+          ${cenarios.map(c => `
+            <div style="background:${c.hoje ? '#0f172a' : '#f8fafc'}; border:1px solid ${c.hoje ? '#0f172a' : '#eef2f7'}; border-radius:9px; padding:8px 6px; text-align:center;">
+              <div style="font-size:9.5px; font-weight:700; letter-spacing:.03em; color:${c.hoje ? '#94a3b8' : '#94a3b8'}; text-transform:uppercase;">${c.label}</div>
+              <div style="font-size:14px; font-weight:800; font-family:'JetBrains Mono',monospace; color:${c.hoje ? '#4ade80' : '#334155'}; margin-top:2px;">${fmtPt(c.v)}</div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    });
+
     box.innerHTML = html;
   }
   window.renderRankingPontos = renderRankingPontos;
