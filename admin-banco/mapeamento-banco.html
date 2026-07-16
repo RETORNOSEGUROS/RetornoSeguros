@@ -8958,30 +8958,42 @@
         diasParadoAoCancelar: dias,
         dataDecisao: firebase.firestore.FieldValue.serverTimestamp(),
         canceladoAutomatico: true,
+        diasParadoAoPerder: dias,
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      // Penalidade da agência: ação negativa anônima (sem usuário específico - penaliza todos os envolvidos)
-      const pen = (PRAZOS_CACHE && PRAZOS_CACHE.penalidade) || PRAZOS_DEFAULT.penalidade;
-      const envolvidos = [c.solicitadoPorUid, c.cotadoPorUid, c.fechadoPorUid].filter(Boolean);
-      const ids = [...new Set(envolvidos)];
-      for (const uid of ids) {
-        const nome = uid === c.solicitadoPorUid ? c.solicitadoPorNome
-                   : uid === c.cotadoPorUid ? c.cotadoPorNome
-                   : c.fechadoPorNome;
-        await db.collection('mb_acoes').add({
-          tipo: 'penalidade_inatividade',
-          empresaId: c.empresaId, empresaNome: c.empresaNome,
-          produto: c.produtoId, produtoNome: c.produtoNome,
-          cotacaoId: c.id,
-          agenciaId: c.agenciaId,
-          usuarioId: uid, usuarioNome: nome,
-          pontos: -Math.round(pen / ids.length),
-          motivo: `Cotação ${c.produtoNome} parada por ${dias} dias na etapa "${c.status}"`,
-          etapaParada: c.status,
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      // PENALIZAÇÃO AUTOMÁTICA: o negócio morreu parado, então TODOS que interagiram
+      // devolvem os pontos que ganharam nele — não uma multa fixa, mas o que renderam.
+      try {
+        const snapA = await db.collection('mb_acoes').where('cotacaoId', '==', c.id).get();
+        const porUid = {};
+        snapA.forEach(d => {
+          const a = d.data();
+          if ((a.pontos || 0) <= 0) return;                    // já negativa? ignora
+          if (a.tipo === 'penalizacao' || a.tipo === 'penalidade_inatividade') return;
+          if (!porUid[a.usuarioId]) porUid[a.usuarioId] = { nome: a.usuarioNome, perfil: a.usuarioPerfil, pontos: 0, ids: [] };
+          porUid[a.usuarioId].pontos += (a.pontos || 0);
+          porUid[a.usuarioId].ids.push(d.id);
         });
-      }
+        const etLbl = ((typeof etapaInfo === 'function' ? etapaInfo(c.status) : {}) || {}).label || c.status;
+        for (const [uid, p] of Object.entries(porUid)) {
+          await db.collection('mb_acoes').add({
+            tipo: 'penalizacao', subtipo: 'inatividade',
+            empresaId: c.empresaId, empresaNome: c.empresaNome,
+            produtoId: c.produtoId, produtoNome: c.produtoNome,
+            cotacaoId: c.id,
+            agenciaId: c.agenciaId,
+            usuarioId: uid, usuarioNome: p.nome, usuarioPerfil: p.perfil,
+            pontos: -p.pontos,
+            motivo: `Você conquistou ${p.pontos} ${p.pontos === 1 ? 'ponto' : 'pontos'} nesta negociação e perdeu por falta de atividade: ficou ${dias} dias parada na etapa "${etLbl}".`,
+            etapaParada: c.status, etapaParadaLabel: etLbl,
+            diasParado: dias,
+            acoesOrigem: p.ids,
+            automatica: true,
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      } catch (ePen) { console.warn('penalizacao automatica', ePen); }
 
       // Sincronizar produto da empresa
       if (c.empresaId && c.produtoId) {
@@ -11015,12 +11027,14 @@
         <div class="rank-tab" id="campTabRanking" onclick="setCampAba('ranking')">🏆 Ranking de pontos</div>
         <div class="rank-tab" id="campTabExtrato" onclick="setCampAba('extrato')">🧾 Extrato de pontos</div>
         <div class="rank-tab" id="campTabSimulador" onclick="setCampAba('simulador')">🔮 Simulador</div>
-        ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
+        <div class="rank-tab" id="campTabPenalizacoes" onclick="setCampAba('penalizacoes')">⚖️ Penalizações</div>
+      ${_ehGestorAba ? '<div class="rank-tab" id="campTabGestor" onclick="setCampAba(\'gestor\')">🔐 Painel do gestor</div>' : ''}
       </div>
       <div id="campAbaCobertura">${montarPainelCampanha(covAg, rmsCov, covMinha, simMinha)}</div>
       <div id="campAbaRanking" style="display:none;"></div>
       <div id="campAbaExtrato" style="display:none;"></div>
       <div id="campAbaSimulador" style="display:none;"></div>
+      <div id="campAbaPenalizacoes" style="display:none;"></div>
       ${_ehGestorAba ? '<div id="campAbaGestor" style="display:none;"></div>' : ''}`;
     try { lucide.createIcons(); } catch (e) {}
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
@@ -11034,7 +11048,7 @@
   window.renderCampanha = renderCampanha;
 
   function setCampAba(aba) {
-    ['cobertura', 'ranking', 'extrato', 'simulador', 'gestor'].forEach(a => {
+    ['cobertura', 'ranking', 'extrato', 'simulador', 'penalizacoes', 'gestor'].forEach(a => {
       const tab = document.getElementById('campTab' + a.charAt(0).toUpperCase() + a.slice(1));
       const box = document.getElementById('campAba' + a.charAt(0).toUpperCase() + a.slice(1));
       if (tab) tab.classList.toggle('active', aba === a);
@@ -11043,6 +11057,7 @@
     if (aba === 'gestor') renderPainelGestor();
     if (aba === 'extrato') renderExtrato();
     if (aba === 'simulador') renderSimulador();
+    if (aba === 'penalizacoes') renderPenalizacoes();
   }
   window.setCampAba = setCampAba;
 
@@ -11170,6 +11185,8 @@
 
   // Rótulos amigáveis por tipo de ação (para o extrato)
   const EXTRATO_LABELS = {
+    penalizacao: { icon: '⚖️', txt: 'Penalização' },
+    penalidade_inatividade: { icon: '⏰', txt: 'Negócio parado além do prazo' },
     fechamento: { icon: '📜', txt: 'Emitiu / fechou negócio' },
     plus_originacao: { icon: '⭐', txt: 'Originou negócio que fechou' },
     oportunidade_assumida: { icon: '🙋', txt: 'Assumiu uma oportunidade' },
@@ -11826,6 +11843,377 @@
     box.innerHTML = html;
   }
   window.renderPainelGestor = renderPainelGestor;
+
+  // ============= PENALIZAÇÕES =============
+  // Uma penalização é uma ação de pontos NEGATIVOS em mb_acoes, apontando pra origem.
+  // Assim o ranking, o extrato e os totais já descontam sozinhos — sem motor paralelo.
+  const STATUS_PERDIDO = ['perdida', 'sem_aceitacao', 'declinada'];
+
+  function _dentroCampanhaData(dt) {
+    if (!dt) return true;
+    const iso = (dt.toDate ? dt.toDate() : new Date(dt)).toISOString().slice(0, 10);
+    return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim);
+  }
+
+  // Negócios declinados que ficaram parados além do prazo da etapa antes de morrer.
+  // Guardamos `diasParadoAoPerder` na cotação quando ela é perdida; sem isso, usamos o
+  // tempo entre a última movimentação e a decisão como aproximação.
+  function _diasSemInteracao(c) {
+    if (typeof c.diasParadoAoPerder === 'number') return c.diasParadoAoPerder;
+    const ini = c.dataUltimaEtapa && c.dataUltimaEtapa.toDate ? c.dataUltimaEtapa.toDate()
+              : (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate() : null);
+    const fim = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+    if (!ini || !fim) return null;
+    return Math.round((fim - ini) / 86400000);
+  }
+  function _prazoDaEtapa(status) {
+    return (PRAZOS_CACHE && PRAZOS_CACHE[status]) || ((typeof etapaInfo === 'function' ? etapaInfo(status) : {}) || {}).prazoDias || null;
+  }
+
+  async function _acoesDaCotacao(cotacaoId) {
+    try {
+      const snap = await db.collection('mb_acoes').where('cotacaoId', '==', cotacaoId).get();
+      const out = []; snap.forEach(d => out.push({ id: d.id, ...d.data() }));
+      return out;
+    } catch (e) { console.warn('acoes da cotacao', e); return []; }
+  }
+
+  // Aplica a penalização automática de um negócio: devolve os pontos de TODOS que interagiram
+  async function penalizarNegocio(cotacaoId) {
+    const c = (COTACOES || []).find(x => x.id === cotacaoId);
+    if (!c) return alert('Negócio não encontrado.');
+    const acoes = await _acoesDaCotacao(cotacaoId);
+    const positivas = acoes.filter(a => (a.pontos || 0) > 0 && a.tipo !== 'penalizacao' && a.tipo !== 'penalidade_inatividade');
+    if (!positivas.length) return alert('Este negócio não gerou pontos — não há o que penalizar.');
+    if (acoes.some(a => a.tipo === 'penalizacao' || a.tipo === 'penalidade_inatividade')) return alert('Este negócio já foi penalizado.');
+
+    const porUid = {};
+    positivas.forEach(a => {
+      if (!porUid[a.usuarioId]) porUid[a.usuarioId] = { nome: a.usuarioNome, perfil: a.usuarioPerfil, pontos: 0, ids: [] };
+      porUid[a.usuarioId].pontos += (a.pontos || 0);
+      porUid[a.usuarioId].ids.push(a.id);
+    });
+    const total = Object.values(porUid).reduce((s, p) => s + p.pontos, 0);
+    const quem = Object.values(porUid).map(p => `${p.nome} (−${p.pontos})`).join(', ');
+    const dias = _diasSemInteracao(c);
+    const etapa = (typeof etapaInfo === 'function' ? etapaInfo(c.status) : {}) || {};
+    if (!confirm(`Penalizar ${c.empresaNome} · ${c.produtoNome}?\n\nVai retirar ${total} pontos no total:\n${quem}\n\nMotivo: negócio declinado sem interação${dias != null ? ` (${dias} dias parado)` : ''}.`)) return;
+
+    try {
+      const batch = db.batch();
+      Object.entries(porUid).forEach(([uid, p]) => {
+        const ref = db.collection('mb_acoes').doc();
+        batch.set(ref, {
+          tipo: 'penalizacao', subtipo: 'inatividade',
+          cotacaoId, empresaId: c.empresaId, empresaNome: c.empresaNome,
+          produtoId: c.produtoId, produtoNome: c.produtoNome,
+          etapaParada: c.status, etapaParadaLabel: etapa.label || c.status,
+          diasParado: dias,
+          usuarioId: uid, usuarioNome: p.nome, usuarioPerfil: p.perfil,
+          pontos: -p.pontos,
+          motivo: `Negócio declinado sem interação${dias != null ? ` — ${dias} dias parado` : ''} na etapa "${etapa.label || c.status}"`,
+          acoesOrigem: p.ids,
+          aplicadaPorUid: CTX.uid, aplicadaPorNome: CTX.nome,
+          agenciaId: c.agenciaId || CTX.agenciaId,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      await batch.commit();
+      _ACOES_CACHE = null;
+      flashSalvo('Penalização aplicada');
+      renderPenalizacoes();
+    } catch (e) { alert('Erro ao penalizar: ' + e.message); }
+  }
+  window.penalizarNegocio = penalizarNegocio;
+
+  // Desfaz uma penalização (apaga as ações negativas dela)
+  async function desfazerPenalizacao(chave, tipoChave) {
+    if (!confirm('Desfazer esta penalização? Os pontos voltam para quem os tinha.')) return;
+    try {
+      let q = db.collection('mb_acoes').where('tipo', '==', 'penalizacao');
+      q = (tipoChave === 'cotacao') ? q.where('cotacaoId', '==', chave) : q.where('grupoId', '==', chave);
+      const snap = await q.get();
+      const batch = db.batch();
+      snap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      _ACOES_CACHE = null;
+      flashSalvo('Penalização desfeita');
+      renderPenalizacoes();
+    } catch (e) { alert('Erro ao desfazer: ' + e.message); }
+  }
+  window.desfazerPenalizacao = desfazerPenalizacao;
+
+  // ---- PENALIZAÇÃO MANUAL ----
+  // Caso real: alguém informou 20 funcionários numa empresa de 400, ou marcou
+  // "não tem frota" quando tem. Os pontos daquele cadastro voltam, com motivo registrado.
+  const PENAL_CONTEXTO = [
+    { id: 'mapeamento', label: '🗺️ Mapeamento de seguros', desc: 'Status ou vencimento informado errado', pedeRamo: true,
+      tipos: ['mapeou_produto', 'mapeamento', 'mapeamento_via_link', 'mapeou_bonus_venc', 'mapeou_por_produto_visita'] },
+    { id: 'cadastro', label: '🏢 Cadastro da empresa', desc: 'Nº de funcionários ou sócios informado errado', pedeRamo: false,
+      tipos: ['dados_base', 'editou_funcionarios', 'editou_socios', 'empresa_cadastrada'] },
+    { id: 'negociacao', label: '🎯 Negociação', desc: 'Pontos de funil de um negócio', pedeRamo: true,
+      tipos: ['cotacao_solicitada', 'cotacao_realizada', 'cotacao_enviada', 'reuniao_agendada', 'analise_cliente', 'transmitida', 'coleta_informacoes', 'qualificacao', 'oportunidade_assumida'] },
+    { id: 'visita', label: '📍 Visita', desc: 'Visita registrada que não aconteceu', pedeRamo: false,
+      tipos: ['visita_presencial', 'visita_reuniao', 'visita_telefone', 'visita_whatsapp', 'visita_completa_bonus'] }
+  ];
+
+  function abrirPenalManual() {
+    const pessoas = (EQUIPE_REAL || []).filter(p => p.ativo !== false && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
+    const empresas = (EMPRESAS_REAIS || EMPRESAS || []).filter(e => !CTX.agenciaId || !e.agenciaId || e.agenciaId === CTX.agenciaId)
+      .slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+    const html = `<div id="modalPenal" style="position:fixed; inset:0; background:rgba(15,23,42,0.65); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this)this.remove()">
+      <div style="background:white; border-radius:16px; max-width:520px; width:100%; max-height:88vh; overflow:auto; padding:22px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <div style="font-size:17px; font-weight:800; color:#0f172a;">⚖️ Aplicar penalização</div>
+          <button onclick="document.getElementById('modalPenal').remove()" style="background:#f1f5f9; border:none; border-radius:8px; width:32px; height:32px; cursor:pointer;">✕</button>
+        </div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:16px;">Retira os pontos que a pessoa ganhou naquele registro. Fica gravado com o motivo e pode ser desfeito.</div>
+
+        <div class="form-group"><label class="form-label">Pessoa</label>
+          <select class="form-control" id="penUid">
+            <option value="">— escolha —</option>
+            ${pessoas.map(p => `<option value="${p.uid}|${(p.nome || '').replace(/"/g, '')}|${normalizarPerfil(p.perfil)}">${p.nome} · ${_PERFIL_LBL[normalizarPerfil(p.perfil)] || p.perfil}</option>`).join('')}
+          </select></div>
+
+        <div class="form-group"><label class="form-label">O que foi feito errado</label>
+          <select class="form-control" id="penContexto" onchange="penContextoChange()">
+            <option value="">— escolha —</option>
+            ${PENAL_CONTEXTO.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
+          </select>
+          <div id="penContextoDesc" style="font-size:11px; color:#94a3b8; margin-top:3px;"></div></div>
+
+        <div class="form-group"><label class="form-label">Empresa</label>
+          <select class="form-control" id="penEmpresa">
+            <option value="">— todas as empresas —</option>
+            ${empresas.map(e => `<option value="${e.id}">${e.nome}</option>`).join('')}
+          </select>
+          <div style="font-size:11px; color:#94a3b8; margin-top:3px;">Deixe em "todas" só se quiser penalizar um comportamento amplo.</div></div>
+
+        <div class="form-group" id="penRamoWrap" style="display:none;"><label class="form-label">Ramo</label>
+          <select class="form-control" id="penRamo">
+            <option value="">— todos os ramos —</option>
+            ${(PRODUTOS || []).map(r => `<option value="${r.id}">${r.icon || '📦'} ${r.nome}</option>`).join('')}
+          </select></div>
+
+        <div class="form-group"><label class="form-label">Motivo <span style="color:#dc2626;">*</span></label>
+          <textarea class="form-control" id="penMotivo" rows="3" placeholder="Ex.: informou 20 funcionários, mas a empresa tem 400. Confirmado com o cliente em 12/07."></textarea>
+          <div style="font-size:11px; color:#94a3b8; margin-top:3px;">A pessoa vê este motivo no extrato dela.</div></div>
+
+        <div id="penPreview" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Escolha a pessoa e o que foi feito errado para ver quantos pontos serão retirados.
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary" style="background:#dc2626; flex:1;" onclick="confirmarPenalManual()">Aplicar penalização</button>
+          <button class="btn-primary" style="background:#f1f5f9; color:#475569;" onclick="document.getElementById('modalPenal').remove()">Cancelar</button>
+        </div>
+      </div></div>`;
+    const div = document.createElement('div'); div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+    ['penUid', 'penContexto', 'penEmpresa', 'penRamo'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.addEventListener('change', penPreview);
+    });
+  }
+  window.abrirPenalManual = abrirPenalManual;
+
+  function penContextoChange() {
+    const ctx = PENAL_CONTEXTO.find(c => c.id === (document.getElementById('penContexto') || {}).value);
+    const wrap = document.getElementById('penRamoWrap');
+    if (wrap) wrap.style.display = (ctx && ctx.pedeRamo) ? '' : 'none';
+    const d = document.getElementById('penContextoDesc');
+    if (d) d.textContent = ctx ? ctx.desc : '';
+    penPreview();
+  }
+  window.penContextoChange = penContextoChange;
+
+  // Quais ações se encaixam no que o admin escolheu
+  async function _acoesAlvoPenal() {
+    const uidRaw = (document.getElementById('penUid') || {}).value || '';
+    const ctxId = (document.getElementById('penContexto') || {}).value || '';
+    const empId = (document.getElementById('penEmpresa') || {}).value || '';
+    const ramoId = (document.getElementById('penRamo') || {}).value || '';
+    if (!uidRaw || !ctxId) return null;
+    const uid = uidRaw.split('|')[0];
+    const ctx = PENAL_CONTEXTO.find(c => c.id === ctxId);
+    let acoes = [];
+    try { acoes = await _carregarAcoes(true); } catch (e) { return []; }
+    return acoes.filter(a =>
+      a.usuarioId === uid &&
+      (a.pontos || 0) > 0 && a.tipo !== 'penalizacao' && a.tipo !== 'penalidade_inatividade' &&
+      ctx.tipos.includes(a.tipo) &&
+      _dentroCampanhaData(a.criadoEm) &&
+      (!empId || a.empresaId === empId) &&
+      (!ramoId || !ctx.pedeRamo || a.produtoId === ramoId)
+    );
+  }
+
+  async function penPreview() {
+    const box = document.getElementById('penPreview'); if (!box) return;
+    const alvo = await _acoesAlvoPenal();
+    if (!alvo) { box.innerHTML = 'Escolha a pessoa e o que foi feito errado para ver quantos pontos serão retirados.'; return; }
+    if (!alvo.length) { box.innerHTML = '<span style="color:#b45309;">Nenhum ponto encontrado com esses filtros — não há o que retirar.</span>'; return; }
+    const total = alvo.reduce((s, a) => s + (a.pontos || 0), 0);
+    const detalhe = alvo.slice(0, 6).map(a => {
+      const m = EXTRATO_LABELS[a.tipo] || { icon: '•', txt: a.tipo };
+      return `<div style="display:flex; justify-content:space-between; padding:3px 0;"><span>${m.icon} ${m.txt}${a.empresaNome ? ' · ' + a.empresaNome : ''}</span><strong style="color:#dc2626;">−${a.pontos}</strong></div>`;
+    }).join('');
+    box.innerHTML = `<div style="font-weight:800; color:#dc2626; margin-bottom:6px;">Vai retirar ${total} ${total === 1 ? 'ponto' : 'pontos'} em ${alvo.length} ${alvo.length === 1 ? 'registro' : 'registros'}</div>${detalhe}${alvo.length > 6 ? `<div style="color:#94a3b8; margin-top:4px;">+ ${alvo.length - 6} outros</div>` : ''}`;
+  }
+  window.penPreview = penPreview;
+
+  async function confirmarPenalManual() {
+    const uidRaw = (document.getElementById('penUid') || {}).value || '';
+    const ctxId = (document.getElementById('penContexto') || {}).value || '';
+    const motivo = ((document.getElementById('penMotivo') || {}).value || '').trim();
+    if (!uidRaw) return alert('Escolha a pessoa.');
+    if (!ctxId) return alert('Escolha o que foi feito errado.');
+    if (motivo.length < 10) return alert('Escreva o motivo (mínimo 10 caracteres). A pessoa vai ver esse texto.');
+    const alvo = await _acoesAlvoPenal();
+    if (!alvo || !alvo.length) return alert('Nenhum ponto encontrado com esses filtros.');
+    const [uid, nome, perfil] = uidRaw.split('|');
+    const total = alvo.reduce((s, a) => s + (a.pontos || 0), 0);
+    const ctx = PENAL_CONTEXTO.find(c => c.id === ctxId);
+    const ramoId = (document.getElementById('penRamo') || {}).value || '';
+    const empId = (document.getElementById('penEmpresa') || {}).value || '';
+    if (!confirm(`Retirar ${total} pontos de ${nome}?\n\nMotivo: ${motivo}`)) return;
+    try {
+      const grupoId = 'pen_' + Date.now();
+      const emp = (EMPRESAS_REAIS || EMPRESAS || []).find(e => e.id === empId);
+      const ramo = (PRODUTOS || []).find(r => r.id === ramoId);
+      await db.collection('mb_acoes').add({
+        tipo: 'penalizacao', subtipo: 'manual', grupoId,
+        contexto: ctxId, contextoLabel: ctx.label,
+        empresaId: empId || null, empresaNome: emp ? emp.nome : null,
+        produtoId: ramoId || null, produtoNome: ramo ? ramo.nome : null,
+        usuarioId: uid, usuarioNome: nome, usuarioPerfil: perfil,
+        pontos: -total, motivo,
+        acoesOrigem: alvo.map(a => a.id),
+        aplicadaPorUid: CTX.uid, aplicadaPorNome: CTX.nome,
+        agenciaId: CTX.agenciaId,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      _ACOES_CACHE = null;
+      const m = document.getElementById('modalPenal'); if (m) m.remove();
+      flashSalvo('Penalização aplicada');
+      renderPenalizacoes();
+    } catch (e) { alert('Erro ao aplicar: ' + e.message); }
+  }
+  window.confirmarPenalManual = confirmarPenalManual;
+
+  // ---- TELA DA ABA ----
+  async function renderPenalizacoes() {
+    const box = document.getElementById('campAbaPenalizacoes');
+    if (!box) return;
+    if (!box._carregado) box.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8;">Carregando...</div>';
+    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
+    let acoes = [];
+    try { acoes = await _carregarAcoes(true); } catch (e) {}
+    box._carregado = true;
+
+    const daAg = a => !CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId;
+    const ehPenal = a => a.tipo === 'penalizacao' || a.tipo === 'penalidade_inatividade';
+    const penals = acoes.filter(a => ehPenal(a) && daAg(a) && _dentroCampanhaData(a.criadoEm))
+      .sort((a, b) => { const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : 0; const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : 0; return db_ - da; });
+    const jaPenalizado = new Set(penals.filter(p => p.cotacaoId).map(p => p.cotacaoId));
+
+    let html = '';
+
+    // ---- MEUS PONTOS PERDIDOS (todo mundo vê o próprio) ----
+    const meus = penals.filter(p => p.usuarioId === uidEfetivo());
+    const totalPerdi = meus.reduce((s, p) => s + Math.abs(p.pontos || 0), 0);
+    if (!ehGestor || meus.length) {
+      html += `<div style="background:${totalPerdi > 0 ? 'linear-gradient(135deg,#fef2f2,#fff1f2)' : 'white'}; border:1px solid ${totalPerdi > 0 ? '#fecaca' : '#f1f5f9'}; border-radius:14px; padding:20px; margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:4px;">
+          <div style="font-size:15px; font-weight:800; color:#0f172a;">Seus pontos perdidos</div>
+          <div style="font-size:22px; font-weight:800; color:${totalPerdi > 0 ? '#dc2626' : '#16a34a'}; font-family:'JetBrains Mono',monospace;">${totalPerdi > 0 ? '−' + totalPerdi : '0'}</div>
+        </div>
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:${meus.length ? '12px' : '0'};">${totalPerdi > 0 ? 'Pontos que você conquistou e devolveu. Cada linha explica o porquê.' : 'Você não perdeu nenhum ponto na campanha. Siga assim.'}</div>
+        ${meus.map(p => {
+          const dt = p.criadoEm && p.criadoEm.toDate ? p.criadoEm.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
+          const onde = [p.empresaNome, p.produtoNome].filter(Boolean).join(' · ');
+          return `<div style="display:flex; align-items:flex-start; gap:11px; padding:10px 0; border-top:1px solid #fee2e2;">
+            <div style="font-size:16px;">${p.subtipo === 'inatividade' ? '⏰' : '⚖️'}</div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:12.5px; font-weight:700; color:#0f172a;">${onde || p.contextoLabel || 'Penalização'}</div>
+              <div style="font-size:11.5px; color:#64748b; margin-top:2px;">${p.motivo || ''}</div>
+              <div style="font-size:10.5px; color:#94a3b8; margin-top:3px;">${dt}${p.aplicadaPorNome ? ` · por ${p.aplicadaPorNome}` : ''}</div>
+            </div>
+            <div style="font-size:15px; font-weight:800; color:#dc2626; font-family:'JetBrains Mono',monospace;">${p.pontos}</div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+    if (!ehGestor) { box.innerHTML = html; return; }
+
+    // ---- CANDIDATOS AUTOMÁTICOS: declinados que ficaram parados ----
+    const candidatos = (COTACOES || []).filter(c => {
+      if (!STATUS_PERDIDO.includes(c.status)) return false;
+      if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return false;
+      if (!_dentroCampanhaData(c.dataDecisao)) return false;
+      if (jaPenalizado.has(c.id)) return false;
+      const dias = _diasSemInteracao(c);
+      const prazo = _prazoDaEtapa(c.status);
+      return dias != null && prazo != null && dias > prazo;
+    });
+
+    html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a;">⏰ Negócios declinados sem interação</div>
+        <button class="btn-primary" style="background:#dc2626; font-size:12px; padding:7px 13px;" onclick="abrirPenalManual()">⚖️ Penalizar manualmente</button>
+      </div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Negócios que morreram parados além do prazo da etapa. Penalizar devolve os pontos de <strong>todos</strong> que interagiram naquele negócio.</div>`;
+
+    if (!candidatos.length) {
+      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:18px;">Nenhum negócio declinado por inatividade na campanha. 👏</div>';
+    } else {
+      candidatos.forEach(c => {
+        const dias = _diasSemInteracao(c);
+        const prazo = _prazoDaEtapa(c.status);
+        const et = (typeof etapaInfo === 'function' ? etapaInfo(c.status) : {}) || {};
+        html += `<div style="display:flex; align-items:center; gap:12px; padding:11px 2px; border-top:1px solid #f4f6fa;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13.5px; font-weight:700; color:#0f172a;">${c.empresaNome} · ${c.produtoNome}</div>
+            <div style="font-size:11.5px; color:#64748b;">morreu na etapa <strong>${et.label || c.status}</strong> · <span style="color:#dc2626; font-weight:700;">${dias} dias parado</span> (o prazo é ${prazo})</div>
+          </div>
+          <button class="btn-mini" style="background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; font-weight:700;" onclick="penalizarNegocio('${c.id}')">Penalizar →</button>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+
+    // ---- HISTÓRICO ----
+    html += `<div style="background:white; border-radius:14px; padding:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a;">Penalizações aplicadas</div>
+        <div style="font-size:12px; color:#94a3b8;">${penals.length} ${penals.length === 1 ? 'registro' : 'registros'} · ${penals.reduce((s, p) => s + Math.abs(p.pontos || 0), 0)} pts retirados</div>
+      </div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Tudo fica registrado e pode ser desfeito.</div>`;
+    if (!penals.length) {
+      html += '<div style="color:#94a3b8; font-size:13px; text-align:center; padding:18px;">Nenhuma penalização aplicada ainda.</div>';
+    } else {
+      penals.forEach(p => {
+        const dt = p.criadoEm && p.criadoEm.toDate ? p.criadoEm.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '';
+        const onde = [p.empresaNome, p.produtoNome].filter(Boolean).join(' · ');
+        const chave = p.cotacaoId || p.grupoId;
+        const tipoChave = p.cotacaoId ? 'cotacao' : 'grupo';
+        html += `<div style="display:flex; align-items:flex-start; gap:11px; padding:11px 2px; border-top:1px solid #f4f6fa;">
+          <div style="font-size:16px;">${p.subtipo === 'inatividade' ? '⏰' : '⚖️'}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:700; color:#0f172a;">${p.usuarioNome} <span style="font-weight:400; color:#94a3b8;">${onde ? '· ' + onde : ''}</span></div>
+            <div style="font-size:11.5px; color:#64748b; margin-top:2px;">${p.motivo || ''}</div>
+            <div style="font-size:10.5px; color:#94a3b8; margin-top:3px;">${dt}${p.aplicadaPorNome ? ` · por ${p.aplicadaPorNome}` : ''}</div>
+          </div>
+          <div style="text-align:right; flex-shrink:0;">
+            <div style="font-size:15px; font-weight:800; color:#dc2626; font-family:'JetBrains Mono',monospace;">${p.pontos}</div>
+            ${chave ? `<button class="btn-mini" style="background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; margin-top:4px; font-size:10px;" onclick="desfazerPenalizacao('${chave}','${tipoChave}')">desfazer</button>` : ''}
+          </div>
+        </div>`;
+      });
+    }
+    html += `</div>`;
+    box.innerHTML = html;
+  }
+  window.renderPenalizacoes = renderPenalizacoes;
 
   function _corFator(pct) {
     if (pct >= 80) return '#16a34a';
