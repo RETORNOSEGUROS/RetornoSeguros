@@ -17305,9 +17305,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const fim = new Date(CAMPANHA.fim + 'T23:59:59');
     return fimMes >= ini && iniMes <= fim;
   }
+  // Estado do trabalho numa célula empresa×ramo (o que aconteceu com aquela oportunidade).
+  // Renovações não contam aqui — a oportunidade da base é outra coisa.
+  const IND_ESTADO_INFO = {
+    funil:   { label: 'no funil',   cor: '#4338ca', bg: '#eef2ff', bd: '#c7d2fe', btn: '✓ no funil' },
+    fechada: { label: 'fechada',    cor: '#047857', bg: '#ecfdf5', bd: '#a7f3d0', btn: '✅ fechada' },
+    perdida: { label: 'não fechou', cor: '#b91c1c', bg: '#fef2f2', bd: '#fecaca', btn: '✗ não fechou' }
+  };
+  function _estadoOportunidade(empresaId, ramoId) {
+    const cots = (COTACOES || []).filter(c => c.empresaId === empresaId && c.produtoId === ramoId && c.origem !== 'renovacao');
+    if (!cots.length) return { estado: null, trabalhada: false };
+    if (cots.some(c => ehStatusAtivo(c.status))) return { estado: 'funil', trabalhada: true };
+    if (cots.some(c => c.status === 'fechada')) return { estado: 'fechada', trabalhada: true };
+    if (cots.some(c => c.status === 'perdida' || c.status === 'sem_aceitacao')) return { estado: 'perdida', trabalhada: true };
+    return { estado: null, trabalhada: true };
+  }
+
   function oportunidadesGeradas() {
     const out = [];
-    const anoAtual = new Date().getFullYear();
     (EMPRESAS || []).forEach(e => {
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
@@ -17315,15 +17330,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const ramoId = r.id;
         const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
-        if (cat === 'nosso') return;   // já é nosso → a renovação dele aparece na outra seção
 
-        // O que já está no funil CONTINUA aparecendo (pra dar o retrato completo),
-        // mas marcado como "no funil" e sem permitir mandar de novo.
-        const noFunil = _temCotacaoAtiva(e.id, ramoId);
+        // Toda oportunidade TRABALHADA continua na lista (mostrando o que deu),
+        // mesmo depois de fechar ou perder. Some só o que já era nosso de antes.
+        const { estado, trabalhada } = _estadoOportunidade(e.id, ramoId);
+        if (cat === 'nosso' && !trabalhada) return;   // já era nosso antes → não é oportunidade
+
         const reagendado = _reagendadoNaCampanha(pd);
-        // Finalizado neste ano (fechado/perdido) e sem reagendamento na campanha → fora do ciclo
-        if (!noFunil && !reagendado && _cotadoNoAno(e.id, ramoId, anoAtual)) return;
-
         let motivo = null;
         if (reagendado) {
           motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
@@ -17334,9 +17347,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }
         if (!motivo) return;
 
+        // Perdida COM reagendamento na campanha volta a ser acionável; o resto trava.
+        let estadoFinal = estado, bloqueado = !!estado;
+        if (estado === 'perdida' && reagendado) { estadoFinal = null; bloqueado = false; }
+
         out.push({
           empresaId: e.id, empresaNome: e.nome, ramoId, ramoNome: r.nome, ramoIcon: r.icon,
-          grupoId: r.grupoId, motivo, jaMapeado: cat === 'mercado', noFunil
+          grupoId: r.grupoId, motivo, jaMapeado: cat === 'mercado',
+          estado: estadoFinal, noFunil: bloqueado, trabalhada
         });
       });
     });
@@ -17401,16 +17419,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       } else {
         contO.innerHTML = grupos.map((g, idx) => {
           const gid = 'opGrp_' + g.ramoId;
-          const linhas = g.itens.slice(0, 60).map(o => `
+          const linhas = g.itens.slice(0, 60).map(o => { const _ei = o.estado ? IND_ESTADO_INFO[o.estado] : null; return `
             <div style="display:flex; align-items:center; gap:12px; padding:10px 4px; border-top:1px solid #f1f5f9;">
               <div style="flex:1; min-width:0;">
                 <div style="font-size:13px; font-weight:700; color:#0f172a;">${o.empresaNome}</div>
-                <div style="font-size:11px; color:#64748b;">${o.motivo}${o.jaMapeado ? ' · <span style=\"color:#0369a1; font-weight:700;\">tem no mercado</span>' : ''}${o.noFunil ? ' · <span style=\"color:#4338ca; font-weight:700;\">já no funil</span>' : ''}</div>
+                <div style="font-size:11px; color:#64748b;">${o.motivo}${o.jaMapeado ? ' · <span style=\"color:#0369a1; font-weight:700;\">tem no mercado</span>' : ''}${_ei ? ` · <span style="color:${_ei.cor}; font-weight:700;">${_ei.label}</span>` : ''}</div>
               </div>
-              ${o.noFunil
-                ? `<span class="btn-mini" style="background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; font-weight:700; cursor:default;">✓ no funil</span>`
+              ${_ei
+                ? `<span class="btn-mini" style="background:${_ei.bg}; color:${_ei.cor}; border:1px solid ${_ei.bd}; font-weight:700; cursor:default;" title="Esta oportunidade já foi trabalhada">${_ei.btn}</span>`
                 : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="iniciarTratativa('${o.empresaId}','${o.ramoId}')">Iniciar tratativas →</button>`}
-            </div>`).join('');
+            </div>`; }).join('');
           return `
             <div style="margin-bottom:6px;">
               <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('${gid}')" style="font-size:13px;">
