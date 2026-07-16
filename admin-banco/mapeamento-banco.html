@@ -2925,7 +2925,7 @@
 
         <div class="cfg-card">
           <h3><i data-lucide="target" class="w-5 h-5 text-indigo-500"></i> Indicadores da campanha</h3>
-          <p class="cfg-desc">Cada indicador entrega um pedaço do bônus, <strong>proporcional ao percentual atingido</strong>. Ex.: teto 0,50 e mapeou 50% → leva 0,25. O <strong>RM</strong> é medido pela carteira dele; o <strong>chefe</strong>, pela agência inteira. O teto do chefe sai do mesmo percentual do total dele.</p>
+          <p class="cfg-desc">Cada indicador entrega um pedaço do bônus, <strong>proporcional ao percentual atingido</strong>. Ex.: teto 0,50 e mapeou 50% → leva 0,25.<br>O <strong>RM</strong> ganha pelos indicadores da carteira dele <strong>+ um plus por cada indicador em que a AGÊNCIA vai bem</strong> (é o que o faz torcer pelo time). O <strong>chefe</strong> é medido só pela agência, e os tetos dele escalam até o total do chefe.<br><strong>Teto RM + Plus agência = total do RM.</strong></p>
 
           <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:6px;">
             <div class="form-group">
@@ -2942,7 +2942,7 @@
 
           <div style="font-size:13px; font-weight:700; color:#334155; margin:10px 0 8px;">Teto de cada indicador (em pontos do RM)</div>
           <table class="cfg-table">
-            <thead><tr><th>INDICADOR</th><th style="width:96px;text-align:center;">TETO RM</th><th style="width:86px;text-align:center;">% DO TOTAL</th><th style="width:96px;text-align:center;">TETO CHEFE</th></tr></thead>
+            <thead><tr><th>INDICADOR</th><th style="width:92px;text-align:center;">TETO RM<br><small style="font-weight:400;color:#94a3b8;">carteira dele</small></th><th style="width:92px;text-align:center;">PLUS AGÊNCIA<br><small style="font-weight:400;color:#94a3b8;">se a agência for bem</small></th><th style="width:92px;text-align:center;">TETO CHEFE</th></tr></thead>
             <tbody id="indTetosBody"></tbody>
           </table>
           <div id="indSomaAviso" style="font-size:12px; margin:10px 0 4px;"></div>
@@ -5034,7 +5034,11 @@
     // O teto do chefe sai do mesmo percentual: (tetoRM / totalRM) × totalChefe.
     indicadores: {
       totalRM: 4, totalChefe: 7,
-      tetos: { cadastro: 0.4, mapeamento: 0.8, cotacoes: 1.4, producao: 1.4 }
+      // Tetos próprios do RM (medidos na carteira dele)
+      tetos: { cadastro: 0.4, mapeamento: 0.8, cotacoes: 1.0, producao: 1.0 },
+      // Plus da agência: o RM ganha um extra em cada indicador que a AGÊNCIA for bem.
+      // (soma dos tetos próprios + soma do plus = totalRM)
+      plus:  { cadastro: 0.2, mapeamento: 0.2, cotacoes: 0.2, producao: 0.2 }
     }
   };
 
@@ -10555,20 +10559,29 @@
       cotPorCelula[c.empresaId + '|' + c.produtoId] = true;
     });
     let totalBase = 0, okBase = 0;
+    const listaBase = [];
     empresas.forEach(e => {
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
         if (r.somenteOp) return;
         const pd = dados[r.id] || {};
         const temCot = !!cotPorCelula[e.id + '|' + r.id];
-        const ehBase = (typeof _porteDispara === 'function' && _porteDispara(r, e))
-          || pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem'
-          || (typeof _reagendadoNaCampanha === 'function' && _reagendadoNaCampanha(pd));
-        if (!ehBase) return;
+        const reag = (typeof _reagendadoNaCampanha === 'function') && _reagendadoNaCampanha(pd);
+        const naoTem = pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem';
+        const porte = (typeof _porteDispara === 'function') && _porteDispara(r, e);
+        if (!porte && !naoTem && !reag) return;
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, r.id) : null;
         if (cat === 'nosso' && !temCot) return;         // já era nosso antes → não é oportunidade
         totalBase++;
         if (temCot) okBase++;
+        let motivo = 'oportunidade da base';
+        if (reag) motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
+        else if (naoTem) motivo = 'cliente informou que NÃO tem';
+        else if (porte && typeof _motivoPorte === 'function') motivo = _motivoPorte(r, e);
+        listaBase.push({
+          empresaId: e.id, empresa: e.nome, produtoId: r.id,
+          produto: r.nome, motivo, cotada: temCot
+        });
       });
     });
 
@@ -10667,7 +10680,10 @@
     return {
       dimensoes, fator, fatorBruto, expirados, descontoTotal, totalEmpresas: totalEmp,
       blocos, pctCotacao: dimensoes.cotacao_iniciada.pct, pctDiversif: blocos.diversificacao,
-      detalheGrupos, listaOportunidades
+      detalheGrupos,
+      // a lista que o "ver" mostra é exatamente a que o indicador conta
+      listaOportunidades: listaBase,
+      listaElegiveisLegado: listaOportunidades
     };
   }
   window.calcularCobertura = calcularCobertura;
@@ -10681,7 +10697,8 @@
     return {
       totalRM: c.totalRM != null ? Number(c.totalRM) : d.totalRM,
       totalChefe: c.totalChefe != null ? Number(c.totalChefe) : d.totalChefe,
-      tetos: { ...d.tetos, ...(c.tetos || {}) }
+      tetos: { ...d.tetos, ...(c.tetos || {}) },
+      plus:  { ...d.plus,  ...(c.plus  || {}) }
     };
   }
   // Percentual atingido de cada indicador, a partir do retorno de calcularCobertura
@@ -10698,33 +10715,59 @@
       producao:   (cov && cov.blocos && typeof cov.blocos.diversificacao === 'number') ? cov.blocos.diversificacao : 0
     };
   }
-  // Monta os indicadores prontos pra exibir/pagar
-  function calcularIndicadores(cov) {
+  function _detalheInd(chave, cov) {
+    const dim = (cov && cov.dimensoes) || {};
+    if (chave === 'cadastro') return `sócios ${fmtFator(dim.socios ? dim.socios.pct : 0)}% · funcionários ${fmtFator(dim.funcionarios ? dim.funcionarios.pct : 0)}%`;
+    if (chave === 'mapeamento' && dim.produtos_mapeados) return `${dim.produtos_mapeados.ok} de ${dim.produtos_mapeados.total} possíveis`;
+    if (chave === 'cotacoes' && dim.oport_base) return `${dim.oport_base.ok} de ${dim.oport_base.total} oportunidades`;
+    if (chave === 'producao' && dim.diversificacao) return `${dim.diversificacao.ok} de ${dim.diversificacao.total} grupos no alvo`;
+    return '';
+  }
+  // Monta os indicadores prontos pra exibir/pagar.
+  //   cov   = cobertura da pessoa (carteira do RM) ou da agência (pro chefe)
+  //   covAg = cobertura da AGÊNCIA — alimenta o "plus" que o RM ganha quando a agência vai bem
+  function calcularIndicadores(cov, covAg) {
     const cfg = indCfg();
     const pcts = indPercentuais(cov);
-    const somaTetos = IND_META.reduce((s, m) => s + (Number(cfg.tetos[m.chave]) || 0), 0);
+    const pctsAg = covAg ? indPercentuais(covAg) : null;
+    const somaTetosProprios = IND_META.reduce((s, m) => s + (Number(cfg.tetos[m.chave]) || 0), 0);
+    const somaPlus = IND_META.reduce((s, m) => s + (Number(cfg.plus[m.chave]) || 0), 0);
+
     const itens = IND_META.map(m => {
       const tetoRM = Number(cfg.tetos[m.chave]) || 0;
-      const fracao = cfg.totalRM > 0 ? (tetoRM / cfg.totalRM) : 0;
-      const tetoChefe = Math.round(fracao * cfg.totalChefe * 1000) / 1000;
+      // o chefe é medido pela agência: os tetos próprios dele escalam até o total do chefe
+      const tetoChefe = somaTetosProprios > 0
+        ? Math.round((tetoRM / somaTetosProprios) * cfg.totalChefe * 1000) / 1000 : 0;
       const p = Math.max(0, Math.min(100, Number(pcts[m.chave]) || 0));
-      const dim = (cov && cov.dimensoes) || {};
-      let detalhe = '';
-      if (m.chave === 'cadastro') detalhe = `sócios ${fmtFator(dim.socios ? dim.socios.pct : 0)}% · funcionários ${fmtFator(dim.funcionarios ? dim.funcionarios.pct : 0)}%`;
-      else if (m.chave === 'mapeamento' && dim.produtos_mapeados) detalhe = `${dim.produtos_mapeados.ok} de ${dim.produtos_mapeados.total} células`;
-      else if (m.chave === 'cotacoes' && dim.oport_base) detalhe = `${dim.oport_base.ok} de ${dim.oport_base.total} oportunidades`;
-      else if (m.chave === 'producao' && dim.diversificacao) detalhe = `${dim.diversificacao.ok} de ${dim.diversificacao.total} grupos no alvo`;
       return {
-        ...m, pct: Math.round(p * 100) / 100,
-        tetoRM, tetoChefe,
+        ...m, pct: Math.round(p * 100) / 100, tetoRM, tetoChefe,
         ganhoRM: Math.round(tetoRM * p / 100 * 1000) / 1000,
         ganhoChefe: Math.round(tetoChefe * p / 100 * 1000) / 1000,
-        detalhe
+        detalhe: _detalheInd(m.chave, cov)
       };
     });
+
+    // Plus da agência (só faz sentido pro RM — o chefe já É a agência)
+    const plus = pctsAg ? IND_META.map(m => {
+      const teto = Number(cfg.plus[m.chave]) || 0;
+      const p = Math.max(0, Math.min(100, Number(pctsAg[m.chave]) || 0));
+      return {
+        ...m, pct: Math.round(p * 100) / 100, teto,
+        ganho: Math.round(teto * p / 100 * 1000) / 1000,
+        detalhe: _detalheInd(m.chave, covAg)
+      };
+    }) : [];
+
+    const ganhoProprio = Math.round(itens.reduce((s, i) => s + i.ganhoRM, 0) * 1000) / 1000;
+    const ganhoPlus = Math.round(plus.reduce((s, i) => s + i.ganho, 0) * 1000) / 1000;
     return {
-      itens, totalRM: cfg.totalRM, totalChefe: cfg.totalChefe, somaTetos: Math.round(somaTetos * 1000) / 1000,
-      ganhoRM: Math.round(itens.reduce((s, i) => s + i.ganhoRM, 0) * 1000) / 1000,
+      itens, plus,
+      totalRM: cfg.totalRM, totalChefe: cfg.totalChefe,
+      somaTetos: Math.round((somaTetosProprios + somaPlus) * 1000) / 1000,
+      somaTetosProprios: Math.round(somaTetosProprios * 1000) / 1000,
+      somaPlus: Math.round(somaPlus * 1000) / 1000,
+      ganhoProprio, ganhoPlus,
+      ganhoRM: Math.round((ganhoProprio + ganhoPlus) * 1000) / 1000,
       ganhoChefe: Math.round(itens.reduce((s, i) => s + i.ganhoChefe, 0) * 1000) / 1000
     };
   }
@@ -10975,6 +11018,7 @@
     try { lucide.createIcons(); } catch (e) {}
     try { renderRankingPontos(); } catch (e) { console.warn('rank pts', e); }
     window._CAMP_COVAG = covAg; window._CAMP_RMSCOV = rmsCov; window._CAMP_SIMMINHA = simMinha;
+    window._CAMP_COVMINHA = covMinha;
     window._OPORTUNIDADES_CACHE = {
       agencia: (covAg && covAg.listaOportunidades) || [],
       minha: (covMinha && covMinha.listaOportunidades) || []
@@ -11239,114 +11283,112 @@
   window._verExtratoDe = function (uid) { const box = document.getElementById('campAbaExtrato'); if (box) { box._alvoSel = uid; renderExtrato(); } };
 
   // ===== SIMULADOR AVANÇADO: matriz de cenários cruzados =====
+  // ===== SIMULADOR: quanto os indicadores rendem em pontos =====
+  // Sem citar valores: a "base de referência" é um número neutro que o admin usa
+  // pra ilustrar a escala. Pontos = base × (participação em %).
+  const SIM_BASES = [50000, 100000, 200000, 500000, 1000000];
+  const fmtBaseSim = v => v >= 1000000 ? (v / 1000000).toFixed(0).replace('.', ',') + ' mi'
+                        : (v / 1000).toFixed(0) + ' mil';
+
   function renderSimulador() {
     const box = document.getElementById('campAbaSimulador');
     if (!box) return;
-    const covAg = window._CAMP_COVAG || { fator: 0 };
-    const rmsCov = window._CAMP_RMSCOV || [];
-    const sim = window._CAMP_SIMMINHA;
-    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
+    const covAg = window._CAMP_COVAG;
+    const covMinha = window._CAMP_COVMINHA;
+    const ehRM = perfilEfetivo() === 'rm';
+    const cfg = indCfg();
 
-    // função de cálculo do bônus total em pontos dado (fatorMeu, fatorAgencia)
-    const calcTotal = (fatorMeu, fatorAg, s) => {
-      if (!s) return 0;
-      const potesAbertos = fatorAg >= (FATOR_CFG.pisoAgencia || 50);
-      let comissao = 0, ranking = 0, apoio = 0;
-      if (s.perfil === 'rm') {
-        const bonusPct = participacaoRM(fatorMeu, fatorAg) - PART_RM_BASE;
-        if (bonusPct > 0) comissao = s.minhaBaseComissao * bonusPct / 100;
-      }
-      if (potesAbertos) {
-        const share = s.totalPontosAg > 0 ? (s.meusPontos / s.totalPontosAg) : 0;
-        ranking = (s.baseTotalAg * (FATOR_CFG.poteRanking || 0) / 100) * share;
-        if (s.souApoiador) {
-          const apPct = poteApoioPct(fatorAg);
-          apoio = (s.baseTotalAg * apPct / 100) / (s.nApoiadores || 1);
-        }
-      }
-      return comissao + ranking + apoio;
-    };
+    const indMeu = covMinha ? calcularIndicadores(covMinha, covAg) : null;
+    const indAg = covAg ? calcularIndicadores(covAg, null) : null;
 
-    let html = '';
+    const pontos = (base, part) => Math.round(base * part / 100);
+    const fmtPt = n => n.toLocaleString('pt-BR');
 
-    // ---- Matriz para o AGENTE (meu fator × fator da agência) ----
-    if (sim) {
-      const fatoresMeu = sim.perfil === 'rm' ? [30, 50, 60, 75, 90, 100] : [0]; // apoiador não tem fator próprio de comissão
-      const fatoresAg = [30, 50, 65, 80, 100];
+    let html = `<div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:14px 16px; margin-bottom:16px; font-size:13px; color:#3730a3;">
+      Cada indicador vira <strong>participação</strong>, e a participação vira <strong>pontos</strong> sobre a base de referência do negócio.
+      Quanto maior a base e maior a sua participação, mais pontos.
+    </div>`;
+
+    // ---- Bloco do RM ----
+    if (ehRM && indMeu) {
+      const hoje = indMeu.ganhoRM, teto = indMeu.totalRM;
       html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
-        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">🔮 Simulador de cenários</div>
-        <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">${sim.perfil === 'rm' ? 'Cruze o <strong>seu fator</strong> (linhas) com o <strong>fator da agência</strong> (colunas) e veja sua pontuação em cada situação.' : 'Veja sua pontuação conforme o <strong>fator da agência</strong> sobe. Como apoiador, seu bônus vem dos potes coletivos.'}</div>`;
+        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Seus indicadores em pontos</div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Hoje você está com <strong style="color:${_corFator(teto > 0 ? hoje / teto * 100 : 0)};">${fmtFator(hoje)}</strong> de ${fmtFator(teto)} possíveis.
+        </div>
+        <table class="cfg-table"><thead><tr>
+          <th>BASE DE REFERÊNCIA</th>
+          <th style="text-align:right;">HOJE (${fmtFator(hoje)})</th>
+          <th style="text-align:right;">NO TETO (${fmtFator(teto)})</th>
+          <th style="text-align:right;">DIFERENÇA</th>
+        </tr></thead><tbody>`;
+      SIM_BASES.forEach(b => {
+        const pHoje = pontos(b, hoje), pTeto = pontos(b, teto);
+        html += `<tr>
+          <td style="font-weight:700; color:#0f172a;">${fmtBaseSim(b)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pHoje)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pTeto)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pTeto - pHoje)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
 
-      if (sim.perfil === 'rm') {
-        // tabela cruzada: participação varia com o SEU fator (linhas) E o da agência (colunas)
-        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px; min-width:520px;">
-          <thead><tr>
-            <th style="padding:8px 6px; text-align:left; color:#64748b; font-size:11px;">Seu fator ↓ / Agência →</th>
-            ${fatoresAg.map(fa => `<th style="padding:8px 6px; text-align:center; color:#64748b; font-size:11px; ${fa >= FATOR_CFG.pisoAgencia ? 'background:#f0fdf4;' : ''}">${fa}%</th>`).join('')}
-          </tr></thead><tbody>`;
-        fatoresMeu.forEach(fm => {
-          const aceit = fm >= PORTEIRA;
-          html += `<tr>
-            <td style="padding:8px 6px; font-weight:700; color:${aceit ? '#16a34a' : '#ef4444'};">${fm}% ${aceit ? '✓' : ''}</td>
-            ${fatoresAg.map(fa => {
-              const participacao = participacaoRM(fm, fa);
-              const atual = (Math.abs(fm - sim.fatorMeu) <= 8 && Math.abs(fa - covAg.fator) <= 10);
-              const noPiso = participacao <= PART_RM_BASE + 0.001;
-              return `<td style="padding:8px 6px; text-align:center; ${atual ? 'background:#eef2ff; font-weight:800; color:#4338ca; border:2px solid #c7d2fe;' : (noPiso ? 'color:#94a3b8;' : 'color:#16a34a; font-weight:600;')}">${fmtFator(participacao)}</td>`;
-            }).join('')}
-          </tr>`;
-        });
-        html += `</tbody></table></div>
-          <div style="font-size:11px; color:#94a3b8; margin-top:10px;">🟦 sua situação atual (seu fator ${fmtFator(sim.fatorMeu)}%, agência ${fmtFator(covAg.fator)}%). Abaixo de ${PORTEIRA}% você fica no piso (${fmtFator(PART_RM_BASE)}). A partir daí, sua <strong>participação</strong> cresce conforme <strong>você E a agência</strong> melhoram — chega a ${fmtFator(PART_RM_BASE + PART_RM_TETO_BONUS)} quando os dois estão em 100%.</div>`;
-      } else {
-        // apoiador: linha simples por fator da agência
-        html += `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px;">`;
-        fatoresAg.forEach(fa => {
-          const val = calcTotal(0, fa, sim);
-          const atual = Math.abs(fa - covAg.fator) <= 10;
-          html += `<div style="background:${atual ? '#eef2ff' : '#f8fafc'}; border:${atual ? '2px solid #c7d2fe' : '1px solid #f1f5f9'}; border-radius:10px; padding:12px 8px; text-align:center;">
-            <div style="font-size:11px; color:#94a3b8;">agência ${fa}%</div>
-            <div style="font-size:17px; font-weight:800; color:#4338ca; margin-top:3px;">${fmtPts(val)}</div>
-          </div>`;
-        });
-        html += `</div>`;
-      }
-      html += `</div>`;
+      // ---- Comparativo da agência: quanto o plus da agência rende ----
+      const plusHoje = indMeu.ganhoPlus, plusTeto = indMeu.somaPlus;
+      html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">🤝 O quanto a agência te rende</div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Hoje a agência te dá <strong>${fmtFator(plusHoje)}</strong> de plus. Se ela chegasse no teto, seriam <strong>${fmtFator(plusTeto)}</strong>.
+        </div>
+        <table class="cfg-table"><thead><tr>
+          <th>BASE DE REFERÊNCIA</th>
+          <th style="text-align:right;">AGÊNCIA HOJE (${fmtFator(plusHoje)})</th>
+          <th style="text-align:right;">AGÊNCIA NO TETO (${fmtFator(plusTeto)})</th>
+          <th style="text-align:right;">DIFERENÇA</th>
+        </tr></thead><tbody>`;
+      SIM_BASES.forEach(b => {
+        const pH = pontos(b, plusHoje), pT = pontos(b, plusTeto);
+        html += `<tr>
+          <td style="font-weight:700; color:#0f172a;">${fmtBaseSim(b)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pH)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pT)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pT - pH)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>
+        <div style="margin-top:12px; padding:11px 13px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; font-size:12.5px; color:#166534;">
+          Por isso vale puxar o time junto: quando a agência inteira melhora, <strong>todo mundo</strong> leva mais.
+        </div>
+      </div>`;
     }
 
-    // ---- Visão do GESTOR: quem puxa a agência para baixo ----
-    if (ehGestor && rmsCov.length) {
-      const abaixo = rmsCov.filter(r => r.cov.fator < (FATOR_CFG.pisoRm || 60)).sort((a, b) => a.cov.fator - b.cov.fator);
-      const acima = rmsCov.filter(r => r.cov.fator >= (FATOR_CFG.pisoRm || 60));
-      html += `<div style="background:white; border-radius:14px; padding:20px;">
-        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Quem está puxando a agência</div>
-        <div style="font-size:12px; color:#94a3b8; margin-bottom:16px;">Fator da agência hoje: <strong style="color:${_corFator(covAg.fator)};">${covAg.fator}%</strong>. Veja onde agir para destravar os potes (piso ${FATOR_CFG.pisoAgencia}%).</div>`;
-      if (abaixo.length) {
-        html += `<div style="font-size:12px; font-weight:700; color:#991b1b; margin-bottom:8px;">⚠️ Abaixo do aceitável (${FATOR_CFG.pisoRm}%) — precisam de atenção:</div>`;
-        abaixo.forEach(r => {
-          const falta = (FATOR_CFG.pisoRm || 60) - r.cov.fator;
-          html += `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:9px; margin-bottom:6px;">
-            <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
-            <div style="flex:1;"><span style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome}</span></div>
-            <div style="font-size:13px; font-weight:800; color:#ef4444;">${fmtFator(r.cov.fator)}%</div>
-            <div style="font-size:11px; color:#991b1b;">faltam ${falta} pts</div>
-          </div>`;
-        });
-      }
-      if (acima.length) {
-        html += `<div style="font-size:12px; font-weight:700; color:#166534; margin:14px 0 8px;">✅ No nível aceitável:</div>`;
-        acima.forEach(r => {
-          html += `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; margin-bottom:6px;">
-            <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
-            <div style="flex:1;"><span style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome}</span></div>
-            <div style="font-size:13px; font-weight:800; color:#16a34a;">${fmtFator(r.cov.fator)}%</div>
-          </div>`;
-        });
-      }
-      html += `</div>`;
+    // ---- Bloco do gestor ----
+    if (!ehRM && indAg) {
+      const hoje = indAg.ganhoChefe, teto = indAg.totalChefe;
+      html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
+        <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">Indicadores da agência em pontos</div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          A agência está com <strong style="color:${_corFator(teto > 0 ? hoje / teto * 100 : 0)};">${fmtFator(hoje)}</strong> de ${fmtFator(teto)} possíveis.
+        </div>
+        <table class="cfg-table"><thead><tr>
+          <th>BASE DE REFERÊNCIA</th>
+          <th style="text-align:right;">HOJE (${fmtFator(hoje)})</th>
+          <th style="text-align:right;">NO TETO (${fmtFator(teto)})</th>
+          <th style="text-align:right;">DIFERENÇA</th>
+        </tr></thead><tbody>`;
+      SIM_BASES.forEach(b => {
+        const pH = pontos(b, hoje), pT = pontos(b, teto);
+        html += `<tr>
+          <td style="font-weight:700; color:#0f172a;">${fmtBaseSim(b)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pH)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pT)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pT - pH)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
     }
 
-    if (!html) html = '<div style="background:white; border-radius:14px; padding:40px; text-align:center; color:#94a3b8;">Simulador disponível quando houver dados de campanha.</div>';
     box.innerHTML = html;
   }
   window.renderSimulador = renderSimulador;
@@ -11623,66 +11665,149 @@
         fill="url(#est_${uid})" stroke="#cbd5e1" stroke-width="0.5"/>
     </svg>`;
   }
-  function blocoIndicadores(cov, quem, titulo) {
+  function _cardEstrela(label, detalhe, pct, ganho, teto, uid, extraBadge) {
+    const cor = _corFator(pct);
+    return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:13px;">
+      <div style="display:flex; align-items:center; gap:11px;">
+        ${estrelaSVG(pct, cor, uid)}
+        <div style="min-width:0; flex:1;">
+          <div style="font-size:12.5px; font-weight:700; color:#0f172a; line-height:1.25;">${label}${extraBadge || ''}</div>
+          <div style="font-size:11px; color:#94a3b8; margin-top:1px;">${detalhe || '—'}</div>
+        </div>
+        <div style="text-align:right; flex-shrink:0;">
+          <div style="font-size:16px; font-weight:800; color:${cor}; font-family:'JetBrains Mono',monospace;">${fmtFator(ganho)}</div>
+          <div style="font-size:10.5px; color:#94a3b8;">de ${fmtFator(teto)}</div>
+        </div>
+      </div>
+      <div style="height:6px; background:#e2e8f0; border-radius:100px; overflow:hidden; margin-top:9px;">
+        <div style="height:100%; width:${Math.max(pct, 1.5)}%; background:${cor}; border-radius:100px;"></div>
+      </div>
+      <div style="font-size:10.5px; color:#64748b; margin-top:4px; text-align:right;">${fmtFator(pct)}% do teto</div>
+    </div>`;
+  }
+
+  function blocoIndicadores(cov, quem, titulo, covAg) {
     if (!cov) return '';
-    const ind = calcularIndicadores(cov);
     const ehChefe = (quem === 'chefe');
+    const ind = calcularIndicadores(cov, ehChefe ? null : covAg);
     const total = ehChefe ? ind.totalChefe : ind.totalRM;
     const ganho = ehChefe ? ind.ganhoChefe : ind.ganhoRM;
     const pctGeral = total > 0 ? (ganho / total * 100) : 0;
-    const cards = ind.itens.map((i, k) => {
-      const teto = ehChefe ? i.tetoChefe : i.tetoRM;
-      const g = ehChefe ? i.ganhoChefe : i.ganhoRM;
-      const cor = _corFator(i.pct);
-      return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:13px;">
-        <div style="display:flex; align-items:center; gap:11px;">
-          ${estrelaSVG(i.pct, cor, quem + '_' + i.chave + '_' + k)}
-          <div style="min-width:0; flex:1;">
-            <div style="font-size:12.5px; font-weight:700; color:#0f172a; line-height:1.25;">${i.label}</div>
-            <div style="font-size:11px; color:#94a3b8; margin-top:1px;">${i.detalhe || '—'}</div>
+
+    const cards = ind.itens.map((i, k) => _cardEstrela(
+      i.label, i.detalhe, i.pct,
+      ehChefe ? i.ganhoChefe : i.ganhoRM,
+      ehChefe ? i.tetoChefe : i.tetoRM,
+      quem + '_' + i.chave + '_' + k
+    )).join('');
+
+    // Plus da agência — só pro RM
+    let blocoPlus = '';
+    if (!ehChefe && ind.plus.length) {
+      const cardsPlus = ind.plus.map((i, k) => _cardEstrela(
+        i.label, i.detalhe, i.pct, i.ganho, i.teto, 'plus_' + i.chave + '_' + k
+      )).join('');
+      blocoPlus = `
+        <div style="margin-top:18px; padding-top:16px; border-top:1px dashed #cbd5e1;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+            <div>
+              <div style="font-size:13.5px; font-weight:800; color:#0f172a;">🤝 Plus da agência</div>
+              <div style="font-size:11.5px; color:#64748b;">Você ganha um extra em cada indicador em que a <strong>agência inteira</strong> vai bem.</div>
+            </div>
+            <div style="font-size:12.5px; color:#64748b;">
+              <span style="font-size:17px; font-weight:800; color:${_corFator(ind.somaPlus > 0 ? ind.ganhoPlus / ind.somaPlus * 100 : 0)}; font-family:'JetBrains Mono',monospace;">${fmtFator(ind.ganhoPlus)}</span>
+              <span style="font-weight:600;"> de ${fmtFator(ind.somaPlus)}</span>
+            </div>
           </div>
-          <div style="text-align:right; flex-shrink:0;">
-            <div style="font-size:16px; font-weight:800; color:${cor}; font-family:'JetBrains Mono',monospace;">${fmtFator(g)}</div>
-            <div style="font-size:10.5px; color:#94a3b8;">de ${fmtFator(teto)}</div>
-          </div>
-        </div>
-        <div style="height:6px; background:#e2e8f0; border-radius:100px; overflow:hidden; margin-top:9px;">
-          <div style="height:100%; width:${Math.max(i.pct, 1.5)}%; background:${cor}; border-radius:100px;"></div>
-        </div>
-        <div style="font-size:10.5px; color:#64748b; margin-top:4px; text-align:right;">${fmtFator(i.pct)}% do teto</div>
-      </div>`;
-    }).join('');
-    const aviso = Math.abs(ind.somaTetos - total) > 0.005 && !ehChefe
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:11px;">${cardsPlus}</div>
+        </div>`;
+    }
+
+    const aviso = (!ehChefe && Math.abs(ind.somaTetos - total) > 0.005)
       ? `<div style="font-size:11px; color:#b45309; margin-top:10px;">⚠ Os tetos somam ${fmtFator(ind.somaTetos)}, mas o total configurado é ${fmtFator(total)}.</div>` : '';
+
+    const subtitulo = (!ehChefe && ind.plus.length)
+      ? `<div style="font-size:11.5px; color:#64748b; margin-top:2px;">${fmtFator(ind.ganhoProprio)} da sua carteira + ${fmtFator(ind.ganhoPlus)} do plus da agência</div>` : '';
+
     return `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
       <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
-        <div style="font-size:15px; font-weight:800; color:#0f172a;">${titulo}</div>
+        <div>
+          <div style="font-size:15px; font-weight:800; color:#0f172a;">${titulo}</div>
+          ${subtitulo}
+        </div>
         <div style="font-size:13px; color:#64748b;">
-          <span style="font-size:20px; font-weight:800; color:${_corFator(pctGeral)}; font-family:'JetBrains Mono',monospace;">${fmtFator(ganho)}</span>
+          <span style="font-size:22px; font-weight:800; color:${_corFator(pctGeral)}; font-family:'JetBrains Mono',monospace;">${fmtFator(ganho)}</span>
           <span style="font-weight:600;"> de ${fmtFator(total)} possíveis</span>
         </div>
       </div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:11px;">${cards}</div>
+      ${blocoPlus}
       ${aviso}
     </div>`;
   }
   window.blocoIndicadores = blocoIndicadores;
 
+  // Abre o detalhe da Produção retorno: quanto cada grupo atingiu do alvo esperado
+  function verProducaoRetorno(escopo) {
+    const cov = (escopo === 'minha') ? window._CAMP_COVMINHA : window._CAMP_COVAG;
+    if (!cov || !cov.detalheGrupos) return alert('Sem dados de produção ainda.');
+    const nomeG = {}; (GRUPOS || []).forEach(g => nomeG[g.id] = g.nome);
+    const linhas = Object.keys(cov.detalheGrupos).map(gid => {
+      const d = cov.detalheGrupos[gid];
+      if (d.semMeta) {
+        return `<div style="display:flex; align-items:center; gap:12px; padding:11px 4px; border-top:1px solid #f1f5f9;">
+          <div style="flex:1;"><div style="font-weight:700; color:#0f172a; font-size:13.5px;">${nomeG[gid] || gid}</div>
+          <div style="font-size:11.5px; color:#94a3b8;">sem meta cadastrada — fora da conta</div></div>
+          <span style="font-size:11px; color:#94a3b8;">—</span></div>`;
+      }
+      const cor = d.ok ? '#16a34a' : _corFator(Math.min(100, (d.pctMeta / (d.alvo || 1)) * 100));
+      const rumo = Math.min(100, d.alvo > 0 ? (d.pctMeta / d.alvo) * 100 : 0);
+      return `<div style="display:flex; align-items:center; gap:12px; padding:11px 4px; border-top:1px solid #f1f5f9;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:700; color:#0f172a; font-size:13.5px;">${nomeG[gid] || gid} ${d.ok ? '<span style="color:#16a34a;">✓ no alvo</span>' : ''}</div>
+          <div style="font-size:11.5px; color:#64748b;">está em <strong>${d.pctMeta}%</strong> da meta · o alvo é <strong>${d.alvo}%</strong></div>
+          <div style="height:6px; background:#f1f5f9; border-radius:100px; overflow:hidden; margin-top:6px;">
+            <div style="height:100%; width:${Math.max(rumo, 1.5)}%; background:${cor}; border-radius:100px;"></div>
+          </div>
+        </div>
+        <div style="font-size:18px;">${d.ok ? '🟢' : '⚪'}</div>
+      </div>`;
+    }).join('');
+    const noAlvo = Object.values(cov.detalheGrupos).filter(d => d.ok).length;
+    const comMeta = Object.values(cov.detalheGrupos).filter(d => !d.semMeta).length;
+    const html = `<div style="position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px;" onclick="if(event.target===this)this.remove()">
+      <div style="background:white; border-radius:16px; max-width:560px; width:100%; max-height:85vh; overflow:auto; padding:22px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div style="font-size:17px; font-weight:800; color:#0f172a;">💰 Produção retorno ${escopo === 'minha' ? '· sua carteira' : '· agência'}</div>
+          <button onclick="this.closest('div[style*=fixed]').remove()" style="background:#f1f5f9; border:none; border-radius:8px; width:32px; height:32px; cursor:pointer;">✕</button>
+        </div>
+        <div style="font-size:12.5px; color:#64748b; margin-bottom:12px;">Cada grupo tem um alvo próprio de quanto da meta você precisa atingir. Vale <strong>${noAlvo} de ${comMeta} grupos</strong> no alvo.</div>
+        ${linhas || '<div style="color:#94a3b8; text-align:center; padding:20px;">Nenhum grupo com meta cadastrada.</div>'}
+      </div></div>`;
+    const div = document.createElement('div'); div.innerHTML = html;
+    document.body.appendChild(div.firstElementChild);
+  }
+  window.verProducaoRetorno = verProducaoRetorno;
+
   function montarPainelCampanha(covAg, rmsCov, covMinha, simMinha) {
+    // Só as dimensões que a campanha realmente usa (as mesmas dos indicadores).
     const dimLabels = {
-      movimento: '🎯 Movimento (oportunidades assumidas)', producao: '💰 Produção (meta)',
-      diversificacao: '🎨 Diversificação (grupos)', produtos_mapeados: '🗺️ Produtos mapeados',
       funcionarios: '👥 Funcionários', socios: '🧑‍💼 Sócios',
-      contato_decisor: '📧 Decisor', contato_rh: '🧑‍💼 RH'
+      produtos_mapeados: '🗺️ Produtos mapeados',
+      oport_base: '🎯 Movimento (oportunidades)',
+      diversificacao: '💰 Produção retorno'
     };
     const fmtData = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? `${m[3]}/${m[2]}` : ''; };
+    const _unidade = { diversificacao: 'grupos no alvo', oport_base: 'oportunidades', produtos_mapeados: 'possíveis', funcionarios: 'empresas', socios: 'empresas' };
     const barrasDim = (cov, escopo) => Object.keys(dimLabels).map(ch => {
       const d = cov.dimensoes[ch]; if (!d) return '';
       const cor = _corFator(d.pct);
-      const linkVer = (ch === 'movimento' && escopo !== 'agencia_semlink') ? ` <a onclick="verOportunidades('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver ${d.total}</a>` : '';
+      let linkVer = '';
+      if (ch === 'oport_base' && escopo !== 'agencia_semlink') linkVer = ` <a onclick="verOportunidades('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver</a>`;
+      if (ch === 'diversificacao') linkVer = ` <a onclick="verProducaoRetorno('${escopo || 'agencia'}')" style="color:#6366f1; font-size:11px; cursor:pointer; text-decoration:underline;">ver</a>`;
       return `<div style="margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
-          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok}/${d.total}</span>${linkVer}</span>
+          <span style="color:#334155; font-weight:600;">${dimLabels[ch]} <span style="color:#94a3b8; font-weight:400;">${d.ok} de ${d.total} ${_unidade[ch] || ''}</span>${linkVer}</span>
           <span style="font-weight:800; color:${cor};">${fmtFator(d.pct)}%</span>
         </div>
         <div style="height:8px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
@@ -11708,7 +11833,7 @@
       </div>`;
 
     // ---- ESTRELAS: o RM vê os indicadores da carteira dele; gestor vê os da agência ----
-    if (covMinha) html += blocoIndicadores(covMinha, 'rm', '⭐ Seus indicadores');
+    if (covMinha) html += blocoIndicadores(covMinha, 'rm', '⭐ Seus indicadores', covAg);
     if (perfilEfetivo() !== 'rm') html += blocoIndicadores(covAg, 'chefe', '⭐ Indicadores da agência');
 
     // Card "Sua cobertura" — só para RM: quanto ELE tem em cada indicador
@@ -11720,10 +11845,12 @@
         </div>`;
       Object.keys(dimLabels).forEach(ch => {
         const d = covMinha.dimensoes[ch]; if (!d) return;
-        const linkVer = (ch === 'movimento') ? ` <a onclick="verOportunidades('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver ${d.total}</a>` : '';
+        let linkVer = '';
+        if (ch === 'oport_base') linkVer = ` <a onclick="verOportunidades('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver</a>`;
+        if (ch === 'diversificacao') linkVer = ` <a onclick="verProducaoRetorno('minha')" style="color:white; font-size:11px; cursor:pointer; text-decoration:underline; opacity:.9;">ver</a>`;
         html += `<div style="margin-bottom:11px;">
           <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
-            <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok}/${d.total}</span>${linkVer}</span>
+            <span style="font-weight:600; opacity:.95;">${dimLabels[ch]} <span style="opacity:.7; font-weight:400;">${d.ok} de ${d.total} ${_unidade[ch] || ''}</span>${linkVer}</span>
             <span style="font-weight:800;">${fmtFator(d.pct)}%</span>
           </div>
           <div style="height:8px; background:rgba(255,255,255,0.2); border-radius:100px; overflow:hidden;">
@@ -11731,10 +11858,6 @@
           </div>
         </div>`;
       });
-      const aceit = covMinha.fator >= 50;
-      html += `<div style="margin-top:12px; padding:10px 12px; background:rgba(255,255,255,0.15); border-radius:9px; font-size:12.5px;">
-        ${aceit ? '✅ Seu fator passou de 50% — sua participação já cresce conforme você e a agência melhoram.' : `📈 Seu fator está em ${fmtFator(covMinha.fator)}%. A partir de 50% sua participação começa a subir acima do piso.`}
-      </div>`;
       if (covMinha.expirados > 0) {
         html += `<div style="margin-top:8px; padding:10px 12px; background:rgba(0,0,0,0.18); border-radius:9px; font-size:12.5px;">
           ⏰ ${covMinha.expirados} ${covMinha.expirados === 1 ? 'negócio seu está parado' : 'negócios seus estão parados'} além do prazo — custou ${covMinha.descontoTotal.toFixed(1)} do seu fator. Avance no funil para recuperar.
@@ -11749,12 +11872,6 @@
     html += `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:16px;">
       <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">Cobertura da agência por dimensão</div>
       ${barrasDim(covAg, _ehGestorVisao ? 'agencia' : 'agencia_semlink')}`;
-    const proxMarco = [50, 60, 70, 80, 90, 100].find(m => covAg.fator < m);
-    if (proxMarco) {
-      html += `<div style="margin-top:14px; padding:12px 14px; background:#eef2ff; border-radius:10px; font-size:13px; color:#3730a3;">
-        📈 Faltam <strong>${proxMarco - covAg.fator} pontos de fator</strong> para a agência chegar a <strong>${proxMarco}%</strong>${(proxMarco >= FATOR_CFG.pisoAgencia && covAg.fator < FATOR_CFG.pisoAgencia) ? ' — e destravar os bônus de assistentes/estagiários e do ranking!' : '.'}
-      </div>`;
-    }
     if (covAg.expirados > 0) {
       html += `<div style="margin-top:10px; padding:12px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; font-size:13px; color:#991b1b;">
         ⏰ <strong>${covAg.expirados} ${covAg.expirados === 1 ? 'negócio parado' : 'negócios parados'}</strong> além do prazo da etapa — isso reduziu o fator em <strong>${covAg.descontoTotal.toFixed(1)} ${covAg.descontoTotal === 1 ? 'ponto' : 'pontos'}</strong> (de ${covAg.fatorBruto}% para ${covAg.fator}%). Mover esses negócios no funil recupera o fator.
@@ -11765,31 +11882,34 @@
     // Comparativo por gerente: todos veem os fatores (onde estão no time),
     // mas o bônus só aparece para o próprio RM (privacidade de valores).
     if (true) {
+    const _totRM = indCfg().totalRM;
+    // Mini ranking pelo que cada gerente já conquistou nos indicadores
+    const _rmsInd = rmsCov.map(r => {
+      const ind = calcularIndicadores(r.cov, covAg);
+      return { ...r, ganho: ind.ganhoRM, pctTeto: _totRM > 0 ? (ind.ganhoRM / _totRM * 100) : 0 };
+    }).sort((a, b) => b.ganho - a.ganho);
     html += `<div style="background:white; border-radius:14px; padding:20px;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Fator de cobertura por gerente</div>
-      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Piso aceitável: ${FATOR_CFG.pisoRm}% · quem passa disso é valorizado mesmo se a agência vai mal.</div>`;
-    if (!rmsCov.length) {
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:6px;">Indicadores por gerente</div>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:14px;">Quanto cada um já conquistou dos ${fmtFator(_totRM)} possíveis (carteira + plus da agência).</div>`;
+    if (!_rmsInd.length) {
       html += '<div style="color:#94a3b8; font-size:13px;">Sem gerentes com carteira ainda.</div>';
     } else {
-      rmsCov.forEach((r, i) => {
-        const cor = _corFator(r.cov.fator);
-        const aceitavel = r.cov.fator >= FATOR_CFG.pisoRm;
-        const bonus = (FATOR_CFG.tetoRm * r.cov.fator / 100);
-        const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && perfilEfetivo() !== 'rm');
+      _rmsInd.forEach((r, i) => {
+        const cor = _corFator(r.pctTeto);
         const souEu = r.uid === uidEfetivo();
-        const mostraBonus = ehGestor || souEu; // RM só vê o próprio bônus
-        html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #f1f5f9;">
-          <div style="font-size:14px; font-weight:800; color:#94a3b8; width:24px;">${i + 1}º</div>
+        const medalha = ['🥇', '🥈', '🥉'][i] || `${i + 1}º`;
+        html += `<div style="display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid #f1f5f9; ${souEu ? 'background:#f5f3ff; border-radius:8px;' : ''}">
+          <div style="font-size:15px; font-weight:800; color:#94a3b8; width:28px; text-align:center;">${medalha}</div>
           <div style="width:9px; height:9px; border-radius:50%; background:${r.cor};"></div>
           <div style="flex:1; min-width:0;">
-            <div style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome} ${souEu ? '<span style="font-size:10px; color:#4338ca;">(você)</span>' : ''} ${aceitavel ? '<span style="font-size:10px; background:#dcfce7; color:#166534; padding:1px 6px; border-radius:5px;">✓ aceitável</span>' : ''}</div>
+            <div style="font-size:13px; font-weight:700; color:#0f172a;">${r.nome} ${souEu ? '<span style="font-size:10px; color:#4338ca;">(você)</span>' : ''}</div>
             <div style="height:6px; background:#f1f5f9; border-radius:100px; overflow:hidden; margin-top:4px;">
-              <div style="height:100%; width:${Math.max(r.cov.fator, 2)}%; background:${cor}; border-radius:100px;"></div>
+              <div style="height:100%; width:${Math.max(r.pctTeto, 2)}%; background:${cor}; border-radius:100px;"></div>
             </div>
           </div>
-          <div style="text-align:right;">
-            <div style="font-size:15px; font-weight:800; color:${cor};">${fmtFator(r.cov.fator)}%</div>
-            ${mostraBonus ? `<div style="font-size:10px; color:#94a3b8;">+${fmtFator(bonus)} na participação</div>` : ''}
+          <div style="text-align:right; flex-shrink:0;">
+            <div style="font-size:15px; font-weight:800; color:${cor}; font-family:'JetBrains Mono',monospace;">${fmtFator(r.ganho)}</div>
+            <div style="font-size:10px; color:#94a3b8;">de ${fmtFator(_totRM)} possíveis</div>
           </div>
         </div>`;
       });
@@ -13281,7 +13401,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           indicadores: {
             totalRM: (d.indicadores && d.indicadores.totalRM != null) ? d.indicadores.totalRM : FATOR_DEFAULT.indicadores.totalRM,
             totalChefe: (d.indicadores && d.indicadores.totalChefe != null) ? d.indicadores.totalChefe : FATOR_DEFAULT.indicadores.totalChefe,
-            tetos: { ...FATOR_DEFAULT.indicadores.tetos, ...((d.indicadores && d.indicadores.tetos) || {}) }
+            tetos: { ...FATOR_DEFAULT.indicadores.tetos, ...((d.indicadores && d.indicadores.tetos) || {}) },
+            plus:  { ...FATOR_DEFAULT.indicadores.plus,  ...((d.indicadores && d.indicadores.plus)  || {}) }
           },
           poteRanking: d.poteRanking != null ? d.poteRanking : FATOR_DEFAULT.poteRanking,
           penalidade: d.penalidade != null ? d.penalidade : FATOR_DEFAULT.penalidade
@@ -13401,8 +13522,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <tr data-ind="${m.chave}">
           <td><div style="font-weight:700; color:#0f172a; font-size:13px;">${m.icon} ${m.label}</div>
               <div style="font-size:11px; color:#94a3b8;">${m.desc}</div></td>
-          <td style="text-align:center;"><input type="number" step="0.05" min="0" class="cfg-input ind-teto" style="width:78px;" value="${cfg.tetos[m.chave] != null ? cfg.tetos[m.chave] : 0}" oninput="renderIndSoma()"></td>
-          <td style="text-align:center;" class="ind-pct" style="font-size:12px;">—</td>
+          <td style="text-align:center;"><input type="number" step="0.05" min="0" class="cfg-input ind-teto" style="width:72px;" value="${cfg.tetos[m.chave] != null ? cfg.tetos[m.chave] : 0}" oninput="renderIndSoma()"></td>
+          <td style="text-align:center;"><input type="number" step="0.05" min="0" class="cfg-input ind-plus" style="width:72px;" value="${cfg.plus[m.chave] != null ? cfg.plus[m.chave] : 0}" oninput="renderIndSoma()"></td>
           <td style="text-align:center;" class="ind-chefe">—</td>
         </tr>`).join('');
     }
@@ -13414,24 +13535,28 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function renderIndSoma() {
     const totRM = parseFloat((document.getElementById('indTotalRM') || {}).value) || 0;
     const totCh = parseFloat((document.getElementById('indTotalChefe') || {}).value) || 0;
-    let soma = 0;
-    document.querySelectorAll('#indTetosBody tr[data-ind]').forEach(tr => {
-      const teto = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
-      soma += teto;
-      const fr = totRM > 0 ? teto / totRM : 0;
-      const elP = tr.querySelector('.ind-pct'), elC = tr.querySelector('.ind-chefe');
-      if (elP) elP.textContent = (fr * 100).toFixed(1).replace('.', ',') + '%';
-      if (elC) elC.textContent = fmtFator(fr * totCh);
+    let somaProp = 0, somaPlus = 0;
+    const linhas = Array.from(document.querySelectorAll('#indTetosBody tr[data-ind]'));
+    linhas.forEach(tr => {
+      somaProp += parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+      somaPlus += parseFloat((tr.querySelector('.ind-plus') || {}).value) || 0;
     });
+    linhas.forEach(tr => {
+      const teto = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+      const elC = tr.querySelector('.ind-chefe');
+      if (elC) elC.textContent = somaProp > 0 ? fmtFator((teto / somaProp) * totCh) : '—';
+    });
+    const soma = somaProp + somaPlus;
     const aviso = document.getElementById('indSomaAviso');
     if (aviso) {
       const dif = Math.round((soma - totRM) * 1000) / 1000;
+      const detalhe = `<span style="color:#64748b; font-weight:500;">(próprios ${fmtFator(somaProp)} + plus da agência ${fmtFator(somaPlus)})</span>`;
       if (Math.abs(dif) < 0.005) {
-        aviso.innerHTML = `<span style="color:#059669; font-weight:700;">✓ Soma dos tetos: ${fmtFator(soma)} — fecha certinho com o total do RM.</span>`;
+        aviso.innerHTML = `<span style="color:#059669; font-weight:700;">✓ Soma: ${fmtFator(soma)} — fecha certinho com o total do RM.</span> ${detalhe}`;
       } else if (dif < 0) {
-        aviso.innerHTML = `<span style="color:#b45309; font-weight:700;">Soma dos tetos: ${fmtFator(soma)} de ${fmtFator(totRM)} — sobram ${fmtFator(Math.abs(dif))} sem indicador (ninguém consegue o bônus cheio).</span>`;
+        aviso.innerHTML = `<span style="color:#b45309; font-weight:700;">Soma: ${fmtFator(soma)} de ${fmtFator(totRM)} — sobram ${fmtFator(Math.abs(dif))} sem indicador (ninguém alcança o bônus cheio).</span> ${detalhe}`;
       } else {
-        aviso.innerHTML = `<span style="color:#dc2626; font-weight:700;">Soma dos tetos: ${fmtFator(soma)} passa do total de ${fmtFator(totRM)} em ${fmtFator(dif)} — dá pra estourar o teto.</span>`;
+        aviso.innerHTML = `<span style="color:#dc2626; font-weight:700;">Soma: ${fmtFator(soma)} passa do total de ${fmtFator(totRM)} em ${fmtFator(dif)} — dá pra estourar o teto.</span> ${detalhe}`;
       }
     }
   }
@@ -13441,13 +13566,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const totalRM = parseFloat((document.getElementById('indTotalRM') || {}).value) || 0;
     const totalChefe = parseFloat((document.getElementById('indTotalChefe') || {}).value) || 0;
     if (totalRM <= 0 || totalChefe <= 0) return alert('Os totais do RM e do chefe precisam ser maiores que zero.');
-    const tetos = {};
+    const tetos = {}, plus = {};
     document.querySelectorAll('#indTetosBody tr[data-ind]').forEach(tr => {
-      tetos[tr.getAttribute('data-ind')] = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+      const ch = tr.getAttribute('data-ind');
+      tetos[ch] = parseFloat((tr.querySelector('.ind-teto') || {}).value) || 0;
+      plus[ch]  = parseFloat((tr.querySelector('.ind-plus') || {}).value) || 0;
     });
     try {
-      await db.collection('mb_config').doc('fator').set({ indicadores: { totalRM, totalChefe, tetos } }, { merge: true });
-      FATOR_CFG.indicadores = { totalRM, totalChefe, tetos };
+      await db.collection('mb_config').doc('fator').set({ indicadores: { totalRM, totalChefe, tetos, plus } }, { merge: true });
+      FATOR_CFG.indicadores = { totalRM, totalChefe, tetos, plus };
       flashSalvo('Indicadores salvos!');
       try { if (typeof renderCampanha === 'function') renderCampanha(); } catch (e) {}
     } catch (e) { alert('Erro ao salvar: ' + e.message); }
