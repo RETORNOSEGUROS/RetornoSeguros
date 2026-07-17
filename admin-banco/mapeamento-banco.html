@@ -4792,8 +4792,8 @@
     { grupo: 'Funil', chave: 'funil_iniciar_inicio',   label: '🚀 Colocar no funil · início da campanha', desc: 'Quanto vale trazer um negócio no 1º dia' },
     { grupo: 'Funil', chave: 'funil_iniciar_fim',      label: '🚀 Colocar no funil · fim da campanha',    desc: 'Quanto vale no último dia — cai linearmente entre os dois' },
     { grupo: 'Funil', chave: 'checklist_item',         label: '✅ Item de checklist concluído',            desc: 'Em qualquer etapa, inclusive na transmissão (assinatura, documento, boleto)' },
-    { grupo: 'Funil', chave: 'checklist_ultimo_etapa', label: '🏅 Último item que completa a etapa',       desc: 'Extra pra quem fecha a etapa', pendente: true },
-    { grupo: 'Funil', chave: 'percurso_completo_item', label: '🔁 Bônus percurso completo',                desc: 'Extra por item marcado, quando o negócio passa por todas as etapas', pendente: true },
+    { grupo: 'Funil', chave: 'checklist_ultimo_etapa', label: '🏅 Último item que completa a etapa',       desc: 'Extra pra quem fecha a etapa' },
+    { grupo: 'Funil', chave: 'percurso_completo_item', label: '🔁 Bônus percurso completo',                desc: 'Extra por item marcado, quando o negócio passa por todas as etapas' },
 
     { grupo: 'Desfecho', chave: 'ok_transmissao',           label: '🏁 OK para transmissão',            desc: 'O gol do time — a última etapa antes de emitir. Emitir em si não pontua: é consequência' },
     { grupo: 'Desfecho', chave: 'originou_transmitido',     label: '🌱 Originou o negócio que chegou lá', desc: 'Pra quem colocou no funil, quando o negócio alcança a transmissão' },
@@ -11017,6 +11017,8 @@
     penalizacao: { icon: '⚖️', txt: 'Penalização' },
     agenda_com_corretor: { icon: '🤝', txt: 'Chamou o corretor para a visita' },
     visita_estorno: { icon: '🗑️', txt: 'Visita excluída' },
+    checklist_ultimo_etapa: { icon: '🏅', txt: 'Fechou a etapa' },
+    percurso_completo: { icon: '🔁', txt: 'Percurso completo até a transmissão' },
     ok_transmissao: { icon: '🏁', txt: 'OK para transmissão' },
     originou_transmitido: { icon: '🌱', txt: 'Negócio que você trouxe chegou na transmissão' },
     penalidade_inatividade: { icon: '⏰', txt: 'Negócio parado além do prazo' },
@@ -19172,7 +19174,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const itensPadrao = (et && et.checklist) ? et.checklist.slice() : [];
     const extras = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
     const chaves = itensPadrao.map((_, i) => c.status + '|p' + i).concat(extras.map((_, i) => c.status + '|e' + i));
-    if (chaves.length && chaves.every(k => c.checklistFeito[k])) {
+    const etapaCompleta = chaves.length && chaves.every(k => c.checklistFeito[k]);
+
+    // Quem marca o item que FECHA a etapa leva um extra. ID derivado da etapa,
+    // para não pagar de novo se alguém desmarcar e marcar outra vez.
+    if (marcado && etapaCompleta) {
+      try {
+        const pts = getPonto('checklist_ultimo_etapa');
+        if (pts > 0) await db.collection('mb_acoes').doc('fim_' + cotacaoId + '_' + c.status).set({
+          tipo: 'checklist_ultimo_etapa',
+          empresaId: c.empresaId, empresaNome: c.empresaNome,
+          produtoId: c.produtoId, produtoNome: c.produtoNome,
+          agenciaId: c.agenciaId || CTX.agenciaId, cotacaoId,
+          etapa: c.status, etapaLabel: (et && et.label) || c.status,
+          usuarioId: autorUid(), usuarioNome: autorNome(),
+          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          pontos: pts,
+          motivo: `Fechou a etapa "${(et && et.label) || c.status}"`,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        _ACOES_CACHE = null;
+      } catch (e) { console.warn('ponto do ultimo item', e); }
+    }
+
+    if (etapaCompleta) {
       // A emissão (transmitida → emitida) é EXCLUSIVA do admin, mesmo com checklist completo.
       if (c.status === 'transmitida' && !CTX.isAdmin) {
         flashSalvo('Checklist completo! Aguardando emissão pelo admin.');
@@ -19937,6 +19962,41 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       await db.collection('mb_cotacoes').doc(c.id).update(update);
       await db.collection('mb_acoes').add(acaoLog);
+
+      // PERCURSO COMPLETO: o negócio passou por todas as etapas até a transmissão.
+      // Cada pessoa ganha um extra por CADA item de checklist que ela marcou no caminho —
+      // quem trabalhou mais leva mais. Vale mesmo que o negócio não seja emitido depois:
+      // o trabalho foi feito. ID derivado da cotação, então nunca paga duas vezes.
+      if (_creditarOrigem) {
+        try {
+          const ptsItem = getPonto('percurso_completo_item');
+          if (ptsItem > 0) {
+            const snapCl = await db.collection('mb_acoes')
+              .where('cotacaoId', '==', c.id).where('tipo', '==', 'checklist_item').get();
+            const porUid = {};
+            snapCl.forEach(d => {
+              const a = d.data();
+              if (!a.usuarioId) return;
+              if (!porUid[a.usuarioId]) porUid[a.usuarioId] = { nome: a.usuarioNome, perfil: a.usuarioPerfil, n: 0 };
+              porUid[a.usuarioId].n++;
+            });
+            for (const [uid, p] of Object.entries(porUid)) {
+              await db.collection('mb_acoes').doc('perc_' + c.id + '_' + uid).set({
+                tipo: 'percurso_completo',
+                empresaId: c.empresaId, empresaNome: c.empresaNome,
+                produtoId: c.produtoId, produtoNome: c.produtoNome,
+                cotacaoId: c.id, agenciaId: c.agenciaId || CTX.agenciaId,
+                usuarioId: uid, usuarioNome: p.nome, usuarioPerfil: p.perfil,
+                pontos: p.n * ptsItem,
+                itensMarcados: p.n,
+                motivo: `O negócio passou por todas as etapas até a transmissão — extra pelos ${p.n} ${p.n === 1 ? 'item que você marcou' : 'itens que você marcou'} no caminho`,
+                criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
+            _ACOES_CACHE = null;
+          }
+        } catch (ePc) { console.warn('percurso completo', ePc); }
+      }
 
       // O negócio chegou na transmissão: quem TROUXE ele pro funil também leva.
       // Trazer já pagou na hora (10→2); isto premia ter trazido algo que prestava.
