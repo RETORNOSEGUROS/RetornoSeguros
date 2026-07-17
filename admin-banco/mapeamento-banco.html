@@ -11016,6 +11016,7 @@
   const EXTRATO_LABELS = {
     penalizacao: { icon: '⚖️', txt: 'Penalização' },
     agenda_com_corretor: { icon: '🤝', txt: 'Chamou o corretor para a visita' },
+    visita_estorno: { icon: '🗑️', txt: 'Visita excluída' },
     ok_transmissao: { icon: '🏁', txt: 'OK para transmissão' },
     originou_transmitido: { icon: '🌱', txt: 'Negócio que você trouxe chegou na transmissão' },
     penalidade_inatividade: { icon: '⏰', txt: 'Negócio parado além do prazo' },
@@ -16519,12 +16520,81 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const btns = [];
       if (a.empresaId) btns.push(`<button class="btn-secondary" onclick="document.getElementById('modalDetalheVisita').classList.remove('open'); gerarLinkMapeamentoEmpresa('${a.empresaId}')"><i data-lucide="link" class="w-3.5 h-3.5 inline"></i> Gerar link de mapeamento</button>`);
       if (a.empresaId && a.status !== 'realizada') btns.push(`<button class="btn-secondary" onclick="document.getElementById('modalDetalheVisita').classList.remove('open'); abrirVisitaEntrada('${a.empresaId}','${a.id}')"><i data-lucide="check-circle" class="w-3.5 h-3.5 inline"></i> Registrar mapeamento</button>`);
+      // Excluir: para o dono da visita ou um gestor. Visita que não saiu, ou duplicada.
+      const _podeExcluir = a.gerenteUid === uidEfetivo() || CTX.isAdmin || perfilEfetivo() === 'chefe';
+      if (_podeExcluir) btns.push(`<button class="btn-secondary" style="background:#fef2f2; color:#b91c1c; border-color:#fecaca;" onclick="excluirVisitaAgenda('${a.id}')"><i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i> Excluir visita</button>`);
       acoes.innerHTML = btns.join('');
     }
     document.getElementById('modalDetalheVisita').classList.add('open');
     try { if (window.lucide) lucide.createIcons(); } catch (e) {}
   }
   window.verDetalheVisita = verDetalheVisita;
+
+  // Excluir uma visita da agenda. Se ela já foi registrada e pontuou,
+  // os pontos voltam — senão sobraria ponto de visita que não existe mais.
+  async function excluirVisitaAgenda(id) {
+    const a = (AGENDAMENTOS || []).find(x => x.id === id);
+    if (!a) return alert('Agendamento não encontrado.');
+    // Só o dono, o gestor ou o admin mexem
+    const meu = a.gerenteUid === uidEfetivo();
+    const gestor = CTX.isAdmin || perfilEfetivo() === 'chefe';
+    if (!meu && !gestor) return alert('Só quem agendou (ou um gestor) pode excluir esta visita.');
+
+    // Pontos a estornar: só os que existem POR CAUSA da visita.
+    // O mapeamento feito nela NÃO é estornado — aquele dado continua valendo
+    // na empresa, então o ponto dele foi merecido mesmo que a visita saia da agenda.
+    const TIPOS_DA_VISITA = ['visita', 'agenda_com_corretor'];
+    let acoesLigadas = [];
+    try {
+      const snap = await db.collection('mb_acoes').where('empresaId', '==', a.empresaId || '').get();
+      snap.forEach(d => {
+        const x = d.data();
+        if ((x.pontos || 0) <= 0) return;
+        if (!TIPOS_DA_VISITA.includes(x.tipo)) return;
+        // ponto do convite ao corretor: gravado com o id da solicitação de agenda
+        if (x.agendaId && a.origemSolicitacao && x.agendaId === a.origemSolicitacao) { acoesLigadas.push({ id: d.id, ...x }); return; }
+        // ponto do registro da visita
+        if (x.refVisita && a.visitaId && x.refVisita === a.visitaId) acoesLigadas.push({ id: d.id, ...x });
+      });
+    } catch (e) { console.warn('acoes da visita', e); }
+    const pts = acoesLigadas.reduce((s, x) => s + (x.pontos || 0), 0);
+
+    const dataFmt = (() => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.data || ''); return m ? `${m[3]}/${m[2]}` : (a.data || ''); })();
+    let msg = `Excluir a visita de ${a.empresaNome || 'cliente'} em ${dataFmt}?`;
+    if (pts > 0) msg += `\n\nEla rendeu ${pts} ${pts === 1 ? 'ponto' : 'pontos'} — que serão estornados.`;
+    if (a.status === 'realizada') msg += `\n\nAtenção: esta visita consta como REALIZADA. O mapeamento feito nela continua na empresa, e os pontos do mapeamento também — só os pontos da visita voltam.`;
+    if (!confirm(msg)) return;
+
+    try {
+      // 1) estorna os pontos da visita
+      for (const x of acoesLigadas) {
+        await db.collection('mb_acoes').add({
+          tipo: 'visita_estorno',
+          empresaId: a.empresaId, empresaNome: a.empresaNome,
+          agenciaId: a.agenciaId || CTX.agenciaId,
+          usuarioId: x.usuarioId, usuarioNome: x.usuarioNome, usuarioPerfil: x.usuarioPerfil,
+          pontos: -(x.pontos || 0),
+          motivo: `Visita excluída por ${CTX.nome}`,
+          acoesOrigem: [x.id],
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      // 2) apaga o log da visita, se ela chegou a ser registrada
+      if (a.visitaId) { try { await db.collection('mb_visitas').doc(a.visitaId).delete(); } catch (e) {} }
+      // 3) apaga o agendamento
+      await db.collection('mb_agendamentos').doc(id).delete();
+      // 4) apaga a solicitação de agenda que originou, se houver
+      if (a.origemSolicitacao) { try { await db.collection('mb_agenda').doc(a.origemSolicitacao).delete(); } catch (e) {} }
+
+      _ACOES_CACHE = null;
+      const m = document.getElementById('modalDetalheVisita'); if (m) m.classList.remove('open');
+      flashSalvo(pts > 0 ? `Visita excluída — ${pts} pts estornados` : 'Visita excluída');
+      await carregarAgendamentos();
+      renderCalendarioVisitas();
+      _refrescarCampanhaSeAberta();
+    } catch (e) { alert('Erro ao excluir: ' + e.message); }
+  }
+  window.excluirVisitaAgenda = excluirVisitaAgenda;
 
   async function abrirVisitaEntrada(empresaId, agendamentoId) {
     const e = (EMPRESAS || []).find(x => x.id === empresaId);
@@ -16712,9 +16782,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         } catch (err) {}
       }
       _ACOES_CACHE = null;
-      // marcar agendamento como realizado
+      // marcar agendamento como realizado — guardando qual visita nasceu dele,
+      // pra que excluir o agendamento consiga estornar os pontos certos depois
       if (agendamentoId) {
-        try { await db.collection('mb_agendamentos').doc(agendamentoId).set({ status: 'realizada', realizadaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (err) {}
+        try { await db.collection('mb_agendamentos').doc(agendamentoId).set({ status: 'realizada', visitaId: _visRef.id, realizadaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (err) {}
       }
       confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
       fecharVisitaEntrada();
