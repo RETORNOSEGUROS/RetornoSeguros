@@ -16567,6 +16567,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e) return alert('Empresa não encontrada.');
     const cards = document.querySelectorAll('#veProdutos .ve-card');
     let comProduto = 0, semProduto = 0, naoAbordado = 0;
+    const _pontuarMapa = [];   // produtos que vão gerar ponto de mapeamento
     try {
       for (const card of cards) {
         const ramoId = card.getAttribute('data-ramo');
@@ -16574,6 +16575,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const simSel = card.querySelector('.ve-tem-btn.sim.sel');
         const naoSel = card.querySelector('.ve-tem-btn.nao.sel');
         const ref = db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(ramoId);
+
+        // Mesma regra da outra rota de mapeamento: pontua só na 1ª vez que o produto
+        // sai de "vazio" — vale tanto pra "tem" quanto pra "não tem".
+        let jaPontuou = false;
+        try { const sa = await ref.get(); if (sa.exists) jaPontuou = sa.data().jaPontuouMapeamento === true; } catch (err) {}
+        if ((simSel || naoSel) && !jaPontuou) _pontuarMapa.push(ramoId);
+
         if (simSel) {
           const mes = parseInt((card.querySelector('.ve-venc-mes') || {}).value) || null;
           const ano = parseInt((card.querySelector('.ve-venc-ano') || {}).value) || null;
@@ -16611,13 +16619,52 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }
       }
       // registrar log da visita
-      await db.collection('mb_visitas').add({
+      const _visRef = await db.collection('mb_visitas').add({
         empresaId, empresaNome: e.nome, agenciaId: e.agenciaId || CTX.agenciaId,
         tipo: VE_TIPO, origem: 'cadastro_visita',
         usuarioId: autorUid(), usuarioNome: autorNome(),
         resumo: { comProduto, semProduto, naoAbordado },
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
+
+      // ---- PONTOS ----
+      // Esta rota (visita vinda da agenda) não pontuava nada: nem a visita, nem os
+      // produtos mapeados nela. Agora paga igual à outra rota de registro de visita.
+      const _ptsVisita = { presencial: 'visita_presencial', reuniao: 'visita_reuniao', video: 'visita_presencial', digital: 'visita_digital' };
+      const _chaveVis = _ptsVisita[VE_TIPO] || 'visita_presencial';
+      await db.collection('mb_acoes').add({
+        tipo: 'visita',
+        empresaId, empresaNome: e.nome,
+        agenciaId: e.agenciaId || CTX.agenciaId,
+        usuarioId: autorUid(), usuarioNome: autorNome(),
+        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+        pontos: getPonto(_chaveVis),
+        refVisita: _visRef.id,
+        origem: 'cadastro_visita',
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Um ponto de mapeamento por produto que saiu de "vazio" nesta visita
+      for (const ramoId of _pontuarMapa) {
+        const _r = (PRODUTOS || []).find(x => x.id === ramoId);
+        await db.collection('mb_acoes').add({
+          tipo: 'mapeamento',
+          empresaId, empresaNome: e.nome,
+          produto: ramoId, produtoNome: _r ? _r.nome : ramoId,
+          agenciaId: e.agenciaId || CTX.agenciaId,
+          usuarioId: autorUid(), usuarioNome: autorNome(),
+          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          pontos: getPonto('mapear_produto'),
+          refVisita: _visRef.id,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        // marca o produto pra não pontuar de novo por outra rota
+        try {
+          await db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(ramoId)
+            .set({ jaPontuouMapeamento: true }, { merge: true });
+        } catch (err) {}
+      }
+      _ACOES_CACHE = null;
       // marcar agendamento como realizado
       if (agendamentoId) {
         try { await db.collection('mb_agendamentos').doc(agendamentoId).set({ status: 'realizada', realizadaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (err) {}
