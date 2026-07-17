@@ -9848,8 +9848,8 @@
       });
       if (!minhas.length) { wrap.innerHTML = ''; return; }
 
-      const corPorTipo = { visita_solicitada: '#f59e0b', visita_confirmada: '#10b981' };
-      const iconPorTipo = { visita_solicitada: '📩', visita_confirmada: '✅' };
+      const corPorTipo = { visita_solicitada: '#f59e0b', visita_confirmada: '#10b981', visita_recusada: '#ef4444' };
+      const iconPorTipo = { visita_solicitada: '📩', visita_confirmada: '✅', visita_recusada: '🚫' };
       wrap.innerHTML = minhas.slice(0, 6).map(n => {
         const cor = corPorTipo[n.tipo] || '#6366f1';
         const ic = iconPorTipo[n.tipo] || '🔔';
@@ -16193,8 +16193,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         aprovadoEm: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
-      // Cria a visita no CALENDÁRIO, creditada ao RM que solicitou
-      if (a && a.tipo !== 'bloqueio' && a.empresaId) {
+      if (a && a.agendamentoId) {
+        // Pedido nascido do calendário (o RM marcou o corretor na equipe da visita):
+        // o agendamento JÁ existe, então só confirmamos — nada de visita duplicada.
+        try {
+          await db.collection('mb_agendamentos').doc(a.agendamentoId).set({
+            hora: novaHora || a.hora || '',
+            corretorConfirmado: true,
+            origemSolicitacao: id,
+            corretorConfirmadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        } catch (e2) { console.warn('confirmar agendamento', e2); }
+      } else if (a && a.tipo !== 'bloqueio' && a.empresaId) {
+        // Pedido nascido da tela de Agenda: cria a visita no calendário, dono = o RM
         const [d, m, y] = (a.data || '').split('/');
         const dataISO = (y && m && d) ? `${y}-${m}-${d}` : null;
         if (dataISO) {
@@ -16202,55 +16213,84 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             empresaId: a.empresaId, empresaNome: a.empresaNome,
             data: dataISO, hora: novaHora || a.hora || '', duracao: 60,
             tipo: 'presencial', cidade: a.cidade || null,
-            gerenteUid: a.solicitanteUid, gerenteNome: a.solicitanteNome, // dono = RM
+            gerenteUid: a.solicitanteUid, gerenteNome: a.solicitanteNome,
+            equipe: [{ uid: CTX.uid, nome: CTX.nome }],
             agenciaId: CTX.agenciaId || null,
             status: 'agendada', origemSolicitacao: id,
+            corretorConfirmado: true,
             token: gerarTokenAleatorio(20),
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
-        // Quem convidou o corretor pra ir junto ganha um plus: trazer o especialista
-        // pra frente do cliente é comportamento que a campanha quer premiar.
-        if (a.solicitanteUid && a.solicitanteUid !== CTX.uid) {
-          try {
-            const _pts = getPonto('agenda_com_corretor');
-            if (_pts > 0) await db.collection('mb_acoes').add({
-              tipo: 'agenda_com_corretor',
-              empresaId: a.empresaId, empresaNome: a.empresaNome,
-              agenciaId: CTX.agenciaId || null,
-              usuarioId: a.solicitanteUid, usuarioNome: a.solicitanteNome,
-              usuarioPerfil: 'rm',
-              pontos: _pts,
-              motivo: `Chamou ${CTX.nome} para a visita e teve confirmação`,
-              agendaId: id,
-              criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            _ACOES_CACHE = null;
-          } catch (ePt) { console.warn('ponto do convite', ePt); }
-        }
+      }
 
-        // Notifica o RM no "Hoje" dele
+      // ---- Vale para os DOIS caminhos: quem chamou o corretor e teve confirmação leva o plus.
+      if (a && a.tipo !== 'bloqueio' && a.solicitanteUid && a.solicitanteUid !== CTX.uid) {
+        try {
+          const _pts = getPonto('agenda_com_corretor');
+          if (_pts > 0) await db.collection('mb_acoes').add({
+            tipo: 'agenda_com_corretor',
+            empresaId: a.empresaId, empresaNome: a.empresaNome,
+            agenciaId: CTX.agenciaId || null,
+            usuarioId: a.solicitanteUid, usuarioNome: a.solicitanteNome,
+            usuarioPerfil: (EQUIPE_REAL.find(p => p.uid === a.solicitanteUid) || {}).perfil || 'rm',
+            pontos: _pts,
+            motivo: `Chamou ${CTX.nome} para a visita e teve confirmação`,
+            agendaId: id,
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          _ACOES_CACHE = null;
+          _refrescarCampanhaSeAberta();
+        } catch (ePt) { console.warn('ponto do convite', ePt); }
+
         await criarNotificacao({
           paraUid: a.solicitanteUid,
           tipo: 'visita_confirmada',
-          titulo: `${CTX.nome} confirmou sua visita`,
-          corpo: `${a.empresaNome || 'cliente'}${a.cidade ? ' · ' + a.cidade : ''} · ${a.data}${(novaHora || a.hora) ? ' às ' + (novaHora || a.hora) : ''} — já está na sua agenda ✅`,
+          titulo: `${CTX.nome} confirmou`,
+          corpo: `${a.empresaNome || 'cliente'}${a.cidade ? ' · ' + a.cidade : ''} · ${a.data}${(novaHora || a.hora) ? ' às ' + (novaHora || a.hora) : ''} — ele vai com você ✅`,
           agendaId: id, empresaId: a.empresaId
         });
       }
-      flashSalvo('Visita aprovada — agenda travada e RM avisado.');
+
+      flashSalvo('Confirmado — agenda travada e quem chamou foi avisado.');
       renderAgendaCorretor();
+      try { await carregarAgendamentos(); renderCalendarioVisitas(); } catch (e3) {}
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
   async function recusarAgenda(id) {
-    if (!CTX.isAdmin) return;
+    if (!CTX.isAdmin && perfilEfetivo() !== 'chefe') return;
+    const a = AGENDA.find(x => x.id === id);
     const motivo = prompt('Motivo da recusa / cancelamento (opcional):', '');
     if (motivo === null) return;
     try {
       await db.collection('mb_agenda').doc(id).set({ status: 'recusado', motivoRecusa: motivo || null }, { merge: true });
-      flashSalvo('Solicitação recusada.');
+
+      // Convite vindo do calendário: a visita continua de pé, mas sem você.
+      // Sai da equipe pra não ficar prometendo presença que não vai acontecer.
+      if (a && a.agendamentoId) {
+        try {
+          const snap = await db.collection('mb_agendamentos').doc(a.agendamentoId).get();
+          if (snap.exists) {
+            const eq = (snap.data().equipe || []).filter(x => x.uid !== CTX.uid);
+            await db.collection('mb_agendamentos').doc(a.agendamentoId).set({ equipe: eq, corretorConfirmado: false }, { merge: true });
+          }
+        } catch (e2) { console.warn('remover da equipe', e2); }
+      }
+
+      // Quem chamou precisa saber — senão vai contando com você
+      if (a && a.solicitanteUid && a.solicitanteUid !== CTX.uid) {
+        await criarNotificacao({
+          paraUid: a.solicitanteUid,
+          tipo: 'visita_recusada',
+          titulo: `${CTX.nome} não vai poder ir`,
+          corpo: `${a.empresaNome || 'cliente'} · ${a.data}${motivo ? ' — ' + motivo : ''}${a.agendamentoId ? '. Sua visita continua agendada.' : ''}`,
+          agendaId: id, empresaId: a.empresaId
+        });
+      }
+      flashSalvo('Recusado — quem chamou foi avisado.');
       renderAgendaCorretor();
+      try { await carregarAgendamentos(); renderCalendarioVisitas(); } catch (e3) {}
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
@@ -16441,8 +16481,43 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         token,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
+
+      // Marcou o corretor/admin na equipe? Isso vira um PEDIDO na agenda dele.
+      // O convite só conta (e só pontua) quando ele confirma — ninguém marca a
+      // agenda de outro sem que o outro saiba, e ninguém pontua por convite vazio.
+      const _corretores = equipe.filter(x => {
+        const p = (EQUIPE_REAL || []).find(u => u.uid === x.uid);
+        return p && ['admin', 'corretor'].includes(normalizarPerfil(p.perfil));
+      });
+      for (const c of _corretores) {
+        if (c.uid === CTX.uid) continue;   // o próprio corretor agendando: não é convite
+        try {
+          const [aa, mm, dd] = data.split('-');
+          const refPedido = await db.collection('mb_agenda').add({
+            tipo: document.getElementById('avTipo').value,
+            data: `${dd}/${mm}/${aa}`, hora,
+            empresaId: e.id, empresaNome: e.nome,
+            cidade: document.getElementById('avCidade').value.trim() || e.cidade || null,
+            obs: obs.trim() || null,
+            status: 'pendente',
+            solicitanteUid: gerenteUid, solicitanteNome: gerenteNome,
+            agendamentoId: ref.id,          // já existe no calendário: não criar outro ao aprovar
+            paraUid: c.uid,
+            agenciaId: CTX.agenciaId || null,
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          await criarNotificacao({
+            paraUid: c.uid,
+            tipo: 'visita_solicitada',
+            titulo: `${gerenteNome} quer você numa visita`,
+            corpo: `${e.nome}${e.cidade ? ' · ' + e.cidade : ''} · ${dd}/${mm}${hora ? ' às ' + hora : ''} — confirme para entrar na sua agenda`,
+            agendaId: refPedido.id, empresaId: e.id, deUid: gerenteUid, deNome: gerenteNome
+          });
+        } catch (eCv) { console.warn('convite ao corretor', eCv); }
+      }
+
       document.getElementById('modalAgendarVisita').classList.remove('open');
-      flashSalvo('Visita agendada!');
+      flashSalvo(_corretores.length ? 'Visita agendada! Pedido enviado ao corretor.' : 'Visita agendada!');
       renderCalendarioVisitas();
       if (gerarLink) {
         // Gera o link de mapeamento REAL da empresa (mesmo fluxo do botão de mapeamento)
