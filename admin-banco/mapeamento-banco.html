@@ -3828,9 +3828,9 @@
           <div class="form-group">
             <label class="form-label">Tipo</label>
             <select class="form-control" id="avTipo">
-              <option value="presencial">📍 Presencial</option>
-              <option value="ligacao">📞 Ligação</option>
-              <option value="video">🎥 Vídeo</option>
+              <option value="presencial">📍 Visita presencial</option>
+              <option value="video">🎥 Visita online</option>
+              <option value="reuniao">📅 Reunião formal (só sobre seguro)</option>
             </select>
           </div>
           <div class="form-group">
@@ -16306,7 +16306,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ============================================================
   let AGENDAMENTOS = [];
   let AGENDA_MES = new Date(); AGENDA_MES.setDate(1);
-  const TIPO_CONTATO = { presencial: { label: 'Presencial', emoji: '📍' }, ligacao: { label: 'Ligação', emoji: '📞' }, video: { label: 'Vídeo', emoji: '🎥' } };
+  // 'ligacao' fica só pra ler registros antigos — saiu do formulário e da tabela de pontos.
+  const TIPO_CONTATO = {
+    presencial: { label: 'Presencial', emoji: '📍' },
+    video: { label: 'Online', emoji: '🎥' },
+    reuniao: { label: 'Reunião formal', emoji: '📅' },
+    digital: { label: 'Digital (link)', emoji: '💻' },
+    ligacao: { label: 'Ligação', emoji: '📞' }
+  };
   const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
   async function carregarAgendamentos() {
@@ -16428,11 +16435,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // Equipe que pode ir junto (todos os ativos da agência, menos o próprio gerente da visita)
     const eqWrap = document.getElementById('avEquipeLista');
     if (eqWrap) {
-      const equipe = (EQUIPE_REAL || []).filter(p => p.ativo && p.uid !== CTX.uid);
-      eqWrap.innerHTML = equipe.length ? equipe.map(p => `
-        <label style="display:flex; align-items:center; gap:5px; font-size:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; padding:4px 9px; cursor:pointer;">
-          <input type="checkbox" class="avEquipeChk" value="${p.uid}|${p.nome}"> ${p.nome} <span style="color:#94a3b8;">${p.papel || p.perfil}</span>
-        </label>`).join('') : '<span style="font-size:12px; color:#94a3b8;">Sem outros membros na equipe.</span>';
+      // Corretor primeiro: é o convite que vira pedido na agenda dele e pontua
+      const equipe = (EQUIPE_REAL || []).filter(p => p.ativo && p.uid !== CTX.uid)
+        .sort((a, b) => (normalizarPerfil(b.perfil) === 'admin' ? 1 : 0) - (normalizarPerfil(a.perfil) === 'admin' ? 1 : 0));
+      eqWrap.innerHTML = equipe.length ? equipe.map(p => {
+        const ehCorretor = normalizarPerfil(p.perfil) === 'admin';
+        return `<label style="display:flex; align-items:center; gap:5px; font-size:12px; background:${ehCorretor ? '#eef2ff' : '#f8fafc'}; border:1px solid ${ehCorretor ? '#c7d2fe' : '#e2e8f0'}; border-radius:7px; padding:4px 9px; cursor:pointer;">
+          <input type="checkbox" class="avEquipeChk" value="${p.uid}|${p.nome}"> ${ehCorretor ? '🎯 ' : ''}${p.nome} <span style="color:${ehCorretor ? '#4338ca' : '#94a3b8'};">${p.papel || p.perfil}</span>
+        </label>`;
+      }).join('') + (equipe.some(p => normalizarPerfil(p.perfil) === 'admin')
+        ? '<div style="font-size:11px; color:#4338ca; margin-top:6px; width:100%;">Marcar o corretor envia um pedido pra agenda dele. Se ele confirmar, você ganha pontos.</div>' : '')
+        : '<span style="font-size:12px; color:#94a3b8;">Sem outros membros na equipe.</span>';
     }
     const rn = document.getElementById('avRespNome'); if (rn) rn.value = '';
     const re = document.getElementById('avRespEmail'); if (re) re.value = '';
@@ -16570,7 +16583,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function verDetalheVisita(id) {
     const a = (AGENDAMENTOS || []).find(x => x.id === id);
     if (!a) return;
-    const TIPO_LBL = { presencial: '📍 Presencial', ligacao: '📞 Ligação', video: '🎥 Vídeo' };
+    const TIPO_LBL = Object.fromEntries(Object.entries(TIPO_CONTATO).map(([k, v]) => [k, v.emoji + ' ' + v.label]));
     const dataFmt = (() => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.data || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : (a.data || '—'); })();
     const statusLbl = a.status === 'realizada' ? '<span style="color:#166534; font-weight:700;">✓ Realizada</span>' : '<span style="color:#4338ca; font-weight:700;">Agendada</span>';
     const equipe = (a.equipe && a.equipe.length) ? a.equipe.map(x => x.nome).join(', ') : null;
@@ -17230,6 +17243,43 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         });
       });
     } catch(e) { /* mb_usuarios pode não existir ainda */ }
+
+    // 3. O CORRETOR/ADMIN não mora em usuarios_banco — ele é reconhecido pelo e-mail no
+    //    login. Sem isto ele não existe na equipe, e o RM não consegue nem chamá-lo
+    //    para uma visita nem vê-lo em lugar nenhum. Entra aqui, para todas as agências.
+    try {
+      const snapC = await db.collection('mb_corretores').get();
+      snapC.forEach(d => {
+        const data = d.data();
+        if (data.ativo === false) return;
+        if (EQUIPE_REAL.some(p => p.uid === d.id)) return;
+        EQUIPE_REAL.push({
+          uid: d.id, nome: data.nome || data.email, email: data.email,
+          perfil: 'admin',          // 'admin' porque é assim que o resto do sistema já o exclui
+          papel: 'Corretor',
+          agenciaId: null, ativo: true,
+          cor: data.cor || '#0f172a',
+          categoria: 'corretor', origem: 'corretora'
+        });
+      });
+    } catch (e) { /* coleção pode não existir ainda */ }
+
+    // Fallback: se o próprio usuário logado é o admin e ainda não está na lista,
+    // ele se auto-registra — assim a equipe nunca fica sem o corretor.
+    if (CTX.isAdmin && CTX.uid && !EQUIPE_REAL.some(p => p.uid === CTX.uid)) {
+      EQUIPE_REAL.push({
+        uid: CTX.uid, nome: CTX.nome || 'Corretor', email: CTX.email,
+        perfil: 'admin', papel: 'Corretor', agenciaId: null, ativo: true,
+        cor: '#0f172a', categoria: 'corretor', origem: 'corretora'
+      });
+      // grava pra que os RMs também o enxerguem
+      try {
+        await db.collection('mb_corretores').doc(CTX.uid).set({
+          nome: CTX.nome || 'Corretor', email: CTX.email || null, ativo: true,
+          atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      } catch (e) {}
+    }
 
     // Atualizar globals de render
     RMS_LIST = EQUIPE_REAL.filter(p => p.perfil === 'rm' || p.perfil === 'chefe').reduce((acc, p) => {
