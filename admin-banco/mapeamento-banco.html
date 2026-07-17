@@ -16316,6 +16316,30 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   };
   const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
+  // Paga a visita de um agendamento concluído.
+  // O ID da ação é DERIVADO do agendamento (vis_<id>), então não importa quantas
+  // pessoas abram o app ao mesmo tempo: é sempre o mesmo documento, nunca duplica.
+  const _CHAVE_VISITA = { presencial: 'visita_presencial', video: 'visita_presencial', reuniao: 'visita_reuniao', digital: 'visita_digital', ligacao: 'visita_digital' };
+  async function _pagarVisitaAuto(a) {
+    if (!a || !a.empresaId || a.tipo === 'bloqueio') return;
+    try {
+      const pts = getPonto(_CHAVE_VISITA[a.tipo] || 'visita_presencial');
+      if (!pts) return;
+      await db.collection('mb_acoes').doc('vis_' + a.id).set({
+        tipo: 'visita',
+        empresaId: a.empresaId, empresaNome: a.empresaNome,
+        agenciaId: a.agenciaId || CTX.agenciaId,
+        usuarioId: a.gerenteUid, usuarioNome: a.gerenteNome,
+        usuarioPerfil: 'rm',
+        pontos: pts,
+        tipoVisita: a.tipo,
+        agendamentoRef: a.id,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      _ACOES_CACHE = null;
+    } catch (e) { console.warn('pontos da visita', e); }
+  }
+
   async function carregarAgendamentos() {
     try {
       const snap = await db.collection('mb_agendamentos').get();
@@ -16332,6 +16356,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (agora >= inicio + 60 * 60 * 1000) {
           a.status = 'realizada'; a.autoConcluida = true;
           db.collection('mb_agendamentos').doc(a.id).set({ status: 'realizada', autoConcluida: true, concluidaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch(() => {});
+          // A visita aconteceu: paga os pontos dela sozinha.
+          // Se não aconteceu, o gestor exclui a visita e os pontos são estornados.
+          _pagarVisitaAuto(a);
         }
       }
     } catch (e) { console.warn('Agendamentos:', e.message); AGENDAMENTOS = []; }
@@ -16641,7 +16668,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (!TIPOS_DA_VISITA.includes(x.tipo)) return;
         // ponto do convite ao corretor: gravado com o id da solicitação de agenda
         if (x.agendaId && a.origemSolicitacao && x.agendaId === a.origemSolicitacao) { acoesLigadas.push({ id: d.id, ...x }); return; }
-        // ponto do registro da visita
+        // ponto da visita: veio da auto-conclusão OU do registro do mapeamento — os dois
+        // usam o id do agendamento, então esta única checagem pega os dois casos
+        if (x.agendamentoRef === id || d.id === 'vis_' + id) { acoesLigadas.push({ id: d.id, ...x }); return; }
         if (x.refVisita && a.visitaId && x.refVisita === a.visitaId) acoesLigadas.push({ id: d.id, ...x });
       });
     } catch (e) { console.warn('acoes da visita', e); }
@@ -16654,7 +16683,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!confirm(msg)) return;
 
     try {
-      // 1) estorna os pontos da visita
+      // 1) estorna os pontos da visita com um lançamento negativo.
+      //    Não precisa apagar a ação original: como o agendamento some logo abaixo,
+      //    a auto-conclusão nunca mais o enxerga e não tem como recriar nada.
+      //    Assim o extrato mostra o que entrou e o que saiu — nada some sem rastro.
       for (const x of acoesLigadas) {
         await db.collection('mb_acoes').add({
           tipo: 'visita_estorno',
@@ -16662,7 +16694,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           agenciaId: a.agenciaId || CTX.agenciaId,
           usuarioId: x.usuarioId, usuarioNome: x.usuarioNome, usuarioPerfil: x.usuarioPerfil,
           pontos: -(x.pontos || 0),
-          motivo: `Visita excluída por ${CTX.nome}`,
+          motivo: `Visita em ${a.empresaNome || 'cliente'} não aconteceu — excluída por ${CTX.nome}`,
           acoesOrigem: [x.id],
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -16832,22 +16864,25 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      // ---- PONTOS ----
-      // Esta rota (visita vinda da agenda) não pontuava nada: nem a visita, nem os
-      // produtos mapeados nela. Agora paga igual à outra rota de registro de visita.
-      const _ptsVisita = { presencial: 'visita_presencial', reuniao: 'visita_reuniao', video: 'visita_presencial', digital: 'visita_digital' };
-      const _chaveVis = _ptsVisita[VE_TIPO] || 'visita_presencial';
-      await db.collection('mb_acoes').add({
+      // ---- PONTOS DA VISITA ----
+      // MESMO ID da auto-conclusão (vis_<agendamentoId>). Assim, tanto faz o que vem
+      // primeiro — registrar o mapeamento ou a hora passar: a visita paga UMA vez só.
+      const _chaveVis = _CHAVE_VISITA[VE_TIPO] || 'visita_presencial';
+      const _acaoVisita = {
         tipo: 'visita',
         empresaId, empresaNome: e.nome,
         agenciaId: e.agenciaId || CTX.agenciaId,
         usuarioId: autorUid(), usuarioNome: autorNome(),
         usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
         pontos: getPonto(_chaveVis),
+        tipoVisita: VE_TIPO,
         refVisita: _visRef.id,
+        agendamentoRef: agendamentoId || null,
         origem: 'cadastro_visita',
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
+      if (agendamentoId) await db.collection('mb_acoes').doc('vis_' + agendamentoId).set(_acaoVisita, { merge: true });
+      else await db.collection('mb_acoes').add(_acaoVisita);
 
       // Um ponto de mapeamento por produto que saiu de "vazio" nesta visita
       for (const ramoId of _pontuarMapa) {
