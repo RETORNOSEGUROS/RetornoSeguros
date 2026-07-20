@@ -10925,7 +10925,24 @@
     const perfilLabel = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
     const fmtPt = n => n.toLocaleString('pt-BR');
 
-    let html = `<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+    // ---- TOTALIZADOR da campanha (resumo do que aconteceu) ----
+    const _hoje = new Date(); _hoje.setHours(0,0,0,0);
+    const _encerrada = CAMPANHA.fim && _hoje > new Date(CAMPANHA.fim + 'T23:59:59');
+    const _totPts = lista.reduce((s, p) => s + p.pontos, 0);
+    const _totAcoes = lista.reduce((s, p) => s + (p.acoes || 0), 0);
+    const _totPessoas = lista.length;
+    const _campeao = lista[0];
+    let html = '';
+    html += `<div style="background:${_encerrada ? 'linear-gradient(135deg,#0f172a,#1e293b)' : 'white'}; border-radius:16px; padding:20px 22px; margin-bottom:16px; ${_encerrada ? 'color:white;' : 'border:1px solid #f1f5f9;'}">
+      <div style="font-size:${_encerrada ? '13' : '12'}px; font-weight:800; color:${_encerrada ? '#fbbf24' : '#94a3b8'}; letter-spacing:.03em;">${_encerrada ? '🏁 RESULTADO FINAL · ' + CAMPANHA.ano : '📊 A CAMPANHA ATÉ AGORA'}</div>
+      ${_encerrada && _campeao ? `<div style="font-size:18px; font-weight:800; margin:8px 0 4px;">🏆 ${_campeao.nome} venceu com ${_campeao.pontos.toLocaleString('pt-BR')} pontos</div>` : ''}
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:12px; margin-top:12px;">
+        <div><div style="font-size:22px; font-weight:800; color:${_encerrada ? 'white' : '#0f172a'}; font-family:'JetBrains Mono',monospace;">${_totPts.toLocaleString('pt-BR')}</div><div style="font-size:11px; color:#94a3b8;">pontos no total</div></div>
+        <div><div style="font-size:22px; font-weight:800; color:${_encerrada ? 'white' : '#0f172a'}; font-family:'JetBrains Mono',monospace;">${_totAcoes.toLocaleString('pt-BR')}</div><div style="font-size:11px; color:#94a3b8;">ações registradas</div></div>
+        <div><div style="font-size:22px; font-weight:800; color:${_encerrada ? 'white' : '#0f172a'}; font-family:'JetBrains Mono',monospace;">${_totPessoas}</div><div style="font-size:11px; color:#94a3b8;">no ranking</div></div>
+      </div>
+    </div>`;
+    html += `<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
         <div style="font-size:16px; font-weight:800; color:#0f172a;">🏆 Ranking de pontos · ${CAMPANHA.ano}</div>
         <div style="font-size:12px; color:#94a3b8;">${lista.length} participantes · ${fmtPt(totalPontos)} pontos no total</div>
       </div>`;
@@ -12480,17 +12497,54 @@
       </div>`;
     }).join('');
 
+    // Situação da campanha em relação a hoje: por vir / a X dias do fim / encerrada
+    const _statusCampanha = () => {
+      const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+      const dIni = CAMPANHA.inicio ? new Date(CAMPANHA.inicio + 'T00:00:00') : null;
+      const dFim = CAMPANHA.fim ? new Date(CAMPANHA.fim + 'T23:59:59') : null;
+      if (dFim && hoje > dFim) return { estado: 'encerrada', txt: 'Campanha encerrada', dias: 0 };
+      if (dIni && hoje < dIni) {
+        const d = Math.ceil((dIni - hoje) / 86400000);
+        return { estado: 'futura', txt: `Começa em ${d} ${d === 1 ? 'dia' : 'dias'}`, dias: d };
+      }
+      if (dFim) {
+        const d = Math.ceil((dFim - hoje) / 86400000);
+        return { estado: 'ativa', txt: d <= 1 ? 'Último dia!' : `${d} dias restantes`, dias: d };
+      }
+      return { estado: 'ativa', txt: 'Em andamento', dias: null };
+    };
+    const _sc = _statusCampanha();
+    const _corSel = _sc.estado === 'encerrada' ? '#ef4444' : (_sc.dias != null && _sc.dias <= 7 ? '#fbbf24' : 'rgba(255,255,255,.22)');
+
     let html = `
       <div style="background:linear-gradient(135deg,#4338ca,#7c3aed); border-radius:16px; padding:22px 24px; color:white; margin-bottom:16px;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
           <div>
             <div style="font-size:12px; opacity:.85; font-weight:600;">CAMPANHA ${CAMPANHA.ano} ${CAMPANHA.modoSombra ? '· 👁 modo sombra' : ''}</div>
             <div style="font-size:24px; font-weight:800;">${CTX.agenciaNome || 'Agência'}</div>
-            <div style="font-size:12px; opacity:.85;">${fmtData(CAMPANHA.inicio)} até ${fmtData(CAMPANHA.fim)}</div>
+            <div style="font-size:12.5px; opacity:.9; margin-top:2px;">📅 ${fmtData(CAMPANHA.inicio)} até ${fmtData(CAMPANHA.fim)}</div>
           </div>
-
+          <div style="text-align:center; background:${_corSel}; border-radius:12px; padding:12px 18px; ${_sc.estado === 'encerrada' ? '' : 'backdrop-filter:blur(4px);'}">
+            <div style="font-size:11px; opacity:.9; font-weight:600;">${_sc.estado === 'futura' ? 'AINDA NÃO COMEÇOU' : _sc.estado === 'encerrada' ? 'FINALIZADA' : 'FALTAM'}</div>
+            <div style="font-size:${_sc.dias != null ? '22px' : '15px'}; font-weight:800; line-height:1.2;">${_sc.dias != null && _sc.estado === 'ativa' ? _sc.dias : ''} ${_sc.dias != null && _sc.estado === 'ativa' ? (_sc.dias === 1 ? 'dia' : 'dias') : _sc.txt}</div>
+          </div>
         </div>
       </div>`;
+
+    // Faixa de encerramento: quando passou do fim, avisa e (pro gestor) oferece o fechamento
+    if (_sc.estado === 'encerrada') {
+      const ehGestor = CTX.isAdmin || perfilEfetivo() === 'chefe';
+      html += `<div style="background:linear-gradient(135deg,#fef2f2,#fff1f2); border:1px solid #fecaca; border-radius:14px; padding:18px 20px; margin-bottom:16px;">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <div style="font-size:28px;">🏁</div>
+          <div style="flex:1; min-width:200px;">
+            <div style="font-size:15px; font-weight:800; color:#991b1b;">A campanha ${CAMPANHA.ano} chegou ao fim</div>
+            <div style="font-size:12.5px; color:#b91c1c; margin-top:2px;">Ações registradas depois de ${fmtData(CAMPANHA.fim)} não contam mais para esta campanha. O ranking abaixo é o resultado final.</div>
+          </div>
+          ${ehGestor ? `<button class="btn-primary" style="background:#dc2626;" onclick="setCampAba('ranking')">Ver resultado final →</button>` : ''}
+        </div>
+      </div>`;
+    }
 
     // ---- ESTRELAS: o RM vê os indicadores da carteira dele; gestor vê os da agência ----
     if (covMinha) html += blocoIndicadores(covMinha, 'rm', '⭐ Seus indicadores', covAg);
