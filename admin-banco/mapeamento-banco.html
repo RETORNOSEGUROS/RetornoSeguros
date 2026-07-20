@@ -11591,16 +11591,23 @@
     const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(0) + ' mi' : (v / 1000) + ' mil';
     const ptsDoPote = (base, share) => Math.round(base * (potePct / 100) * share);
 
-    // "Hoje": base real dos negócios emitidos dentro da campanha
+    // "Hoje": base real (comissão) dos negócios FECHADOS dentro da campanha.
+    // A data do fechamento é 'dataDecisao' (gravada ao emitir). O 'dataFechamento'
+    // nunca existiu — por isso caía no criadoEm (data de criação, anterior à campanha)
+    // e o negócio recém-fechado era excluído, deixando baseHoje=0.
     let baseHoje = 0;
     (COTACOES || []).forEach(c => {
       if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
       if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
-      const dt = c.dataFechamento || (c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate().toISOString().slice(0, 10) : null);
+      let dt = null;
+      if (c.dataDecisao && c.dataDecisao.toDate) dt = c.dataDecisao.toDate().toISOString().slice(0, 10);
+      else if (c.dataFechamento) dt = c.dataFechamento;
+      // sem data confiável, conta mesmo assim (não perde o negócio por falta de carimbo)
       if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
       if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
       baseHoje += (c.valor || 0) * (c.comissaoPct / 100);
     });
+    window._CAMP_BASE_HOJE = baseHoje;   // a comissão real já fechada — usada no simulador
 
     const perfilLabel = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
     const fmtPt = n => n.toLocaleString('pt-BR');
@@ -11945,6 +11952,42 @@
       Cada indicador vira <strong>participação</strong>, e a participação vira <strong>pontos</strong> sobre a base de referência do negócio.
       Quanto maior a base e maior a sua participação, mais pontos.
     </div>`;
+
+    // ---- O QUE VOCÊ JÁ GANHA HOJE (base real da comissão fechada) ----
+    // Deixa concreto: em vez de só cenários "e se", mostra o que a comissão de hoje
+    // já está rendendo pra este participante, agora.
+    // usa o valor do ranking; se ainda não calculou, calcula aqui na hora (mesma regra)
+    let baseReal = window._CAMP_BASE_HOJE;
+    if (baseReal == null) {
+      baseReal = 0;
+      (COTACOES || []).forEach(c => {
+        if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
+        if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
+        let dt = null;
+        if (c.dataDecisao && c.dataDecisao.toDate) dt = c.dataDecisao.toDate().toISOString().slice(0, 10);
+        else if (c.dataFechamento) dt = c.dataFechamento;
+        if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
+        if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
+        baseReal += (c.valor || 0) * (c.comissaoPct / 100);
+      });
+    }
+    if (baseReal > 0 && ehRM && indMeu) {
+      const partTotal = indMeu.ganhoRM;                 // carteira + plus da agência
+      const tetoTotal = indMeu.somaTetosProprios + indMeu.somaPlus;
+      const ganhoAgora = pontos(baseReal, partTotal);
+      const ganhoTeto = pontos(baseReal, tetoTotal);
+      html += `<div style="background:linear-gradient(135deg,#065f46,#047857); border-radius:14px; padding:18px 20px; margin-bottom:16px; color:white;">
+        <div style="font-size:11.5px; font-weight:700; opacity:.85; letter-spacing:.03em;">💰 COM A COMISSÃO JÁ FECHADA HOJE (base ${fmtBaseSim(baseReal)})</div>
+        <div style="display:flex; align-items:baseline; gap:8px; margin-top:8px; flex-wrap:wrap;">
+          <div style="font-size:30px; font-weight:800; font-family:'JetBrains Mono',monospace;">${fmtPt(ganhoAgora)}</div>
+          <div style="font-size:13px; opacity:.9;">pontos são seus agora, com seus indicadores de hoje</div>
+        </div>
+        <div style="font-size:12.5px; opacity:.9; margin-top:6px;">
+          Se você levasse seus indicadores ao teto, essa mesma comissão te daria <strong>${fmtPt(ganhoTeto)}</strong> —
+          <strong>+${fmtPt(ganhoTeto - ganhoAgora)}</strong> só por melhorar sua cobertura, sem depender de fechar nada novo.
+        </div>
+      </div>`;
+    }
 
     // ---- Bloco do RM ----
     // ATENÇÃO: a 1ª tabela é só a CARTEIRA dele (sem o plus) e a 2ª é só o PLUS.
