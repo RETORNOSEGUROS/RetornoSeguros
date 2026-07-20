@@ -5531,6 +5531,310 @@
   }
 
   // ============= ANÁLISE DA CARTEIRA EM PALAVRAS (assistente do RM) =============
+  // ============================================================================
+  // RADAR INTELIGENTE — conselheiro da carteira (v155)
+  // Cada "gerador" olha um cruzamento de dados e devolve 0..N mensagens candidatas.
+  // Juntamos tudo num balaio, embaralhamos, tiramos as da última leva e mostramos 5.
+  // Repertório grande e variado, muda a cada abertura. Tudo local, sem custo.
+  // ============================================================================
+
+  window._RADAR_ULTIMAS = [];   // ids das mensagens mostradas na última abertura (anti-repetição)
+
+  function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function _tomDoDia() {
+    const d = new Date();
+    const diaSem = d.getDay();           // 0 dom .. 6 sab
+    const diaMes = d.getDate();
+    const ultDia = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    if (ultDia - diaMes <= 3) return 'reta_mes';   // últimos 3 dias do mês
+    if (diaSem === 1) return 'segunda';
+    if (diaSem === 5) return 'sexta';
+    return 'meio';
+  }
+
+  // Coleta tudo que os geradores podem precisar, numa passada só pela carteira.
+  async function _radarColeta() {
+    const perfil = perfilEfetivo();
+    let lista = (EMPRESAS_REAIS || EMPRESAS || []).slice();
+    if (perfil === 'rm') lista = lista.filter(e => e.rm === uidEfetivo());
+    const nome = (CTX.nome || 'gerente').split(' ')[0];
+    const total = lista.length;
+
+    const ramoGrupo = {}, ramoNome = {};
+    (RAMOS_ALL || PRODUTOS || []).forEach(r => { ramoGrupo[r.id] = r.grupoId; ramoNome[r.id] = r.nome; });
+
+    const semFunc = [], semSocios = [], semDental = [], semVidaSocios = [], semPrev = [];
+    const vencProx = [];        // seguros vencendo nos próximos 75 dias
+    const semVenc = [];         // nossos/mercado sem data de vencimento
+    let mapeadasAlgo = 0;
+    const hoje = new Date();
+
+    lista.forEach(e => {
+      const dados = e.produtosDados || {};
+      const temAlgo = Object.values(dados).some(pd => pd && pd.statusVisual && pd.statusVisual !== 'vazia');
+      if (temAlgo) mapeadasAlgo++;
+      const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
+      const nSoc = (e.socios || []).filter(s => s && (s.nome || s)).length;
+      if (func === 0) semFunc.push(e);
+      if (nSoc === 0) semSocios.push(e);
+      if (func > 0 && (!dados['dental'] || !dados['dental'].statusVisual || dados['dental'].statusVisual === 'vazia')) semDental.push({ e, func });
+      if (nSoc > 0 && (!dados['vida-socios'] || !dados['vida-socios'].statusVisual || dados['vida-socios'].statusVisual === 'vazia')) semVidaSocios.push({ e, nSoc });
+      if (nSoc > 0 && (!dados['prev-socios'] || !dados['prev-socios'].statusVisual || dados['prev-socios'].statusVisual === 'vazia')) semPrev.push({ e, nSoc });
+
+      Object.entries(dados).forEach(([rid, pd]) => {
+        if (!pd || !pd.statusVisual) return;
+        if (['conosco', 'fechada', 'mercado', 'mapeada'].includes(pd.statusVisual)) {
+          if (pd.vencimentoMes && pd.vencimentoAno) {
+            const dv = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
+            const dias = Math.round((dv - hoje) / 86400000);
+            if (dias >= -5 && dias <= 75) vencProx.push({ e, rid, dias, nome: ramoNome[rid] || rid });
+          } else if (['conosco', 'fechada', 'mercado'].includes(pd.statusVisual)) {
+            semVenc.push({ e, rid, nome: ramoNome[rid] || rid });
+          }
+        }
+      });
+    });
+
+    // oportunidades quentes (vencendo/reagendadas) — usa o cache se houver
+    let quentes = 0;
+    try { quentes = (window._OPORTUNIDADES_CACHE && window._OPORTUNIDADES_CACHE.minha || []).length; } catch (e) {}
+
+    // negócios parados no funil
+    let parados = [];
+    try {
+      parados = (COTACOES_CACHE || []).filter(c => {
+        if (!ehStatusAtivoSafe(c.status)) return false;
+        if (perfil === 'rm' && c.rmUid && c.rmUid !== uidEfetivo()) return false;
+        const dias = diasNaEtapa(c), lim = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || 999;
+        return dias > lim;
+      });
+    } catch (e) {}
+
+    // produção x objetivo por grupo + ticket médio por grupo
+    let prodGrupo = {}, metaGrupo = {}, ticketGrupo = {}, nFechadosGrupo = {};
+    try {
+      const ano = new Date().getFullYear();
+      const dd = await _dadosGrupoDoAno(ano, perfil === 'rm' ? uidEfetivo() : null);
+      prodGrupo = dd.producaoGrupo || {};
+      metaGrupo = dd.metaGrupo || {};
+      // ticket médio: precisa dos fechados individuais — recalcula rápido
+      let qc = db.collection('mb_cotacoes');
+      if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await qc.get();
+      const inicioAno = new Date(ano, 0, 1);
+      const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
+      const valoresPorGrupo = {};
+      snap.forEach(d => {
+        const c = d.data();
+        if (c.status !== 'fechada') return;
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (!dt || dt < inicioAno) return;
+        const uid = _empresaRM[c.empresaId] || c.fechadoPorUid;
+        if (perfil === 'rm' && uid !== uidEfetivo()) return;
+        const gid = ramoGrupo[c.produtoId] || 'outros';
+        (valoresPorGrupo[gid] = valoresPorGrupo[gid] || []).push(c.valor || 0);
+      });
+      Object.entries(valoresPorGrupo).forEach(([gid, vals]) => {
+        const validos = vals.filter(v => v > 0);
+        nFechadosGrupo[gid] = validos.length;
+        ticketGrupo[gid] = validos.length ? validos.reduce((s, v) => s + v, 0) / validos.length : 0;
+      });
+    } catch (e) { console.warn('radar grupos', e); }
+
+    // atividade recente do próprio usuário (dias desde a última visita/mapeamento)
+    let diasSemVisita = null, mapeouSemana = 0;
+    try {
+      const acoes = await _carregarAcoes(false);
+      const meu = uidEfetivo();
+      const seteDias = Date.now() - 7 * 86400000;
+      let ultimaVisita = 0;
+      acoes.forEach(a => {
+        if (a.usuarioId !== meu) return;
+        const t = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
+        if (a.tipo === 'visita' && t > ultimaVisita) ultimaVisita = t;
+        if (a.tipo === 'mapeamento' && t >= seteDias) mapeouSemana++;
+      });
+      if (ultimaVisita) diasSemVisita = Math.floor((Date.now() - ultimaVisita) / 86400000);
+    } catch (e) {}
+
+    return {
+      nome, total, lista, mapeadasAlgo, perfil,
+      semFunc, semSocios, semDental, semVidaSocios, semPrev,
+      vencProx, semVenc, quentes, parados,
+      prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo,
+      diasSemVisita, mapeouSemana,
+      grupoNome: { vida: 'Vida', re: 'RE', saude: 'Saúde' }
+    };
+  }
+
+  // ---- O CATÁLOGO DE GERADORES ----
+  // Cada um recebe os dados coletados e devolve um array de {id, icon, tom, txt, cta?}.
+  // Muitas variações de texto por gerador → o mesmo cenário nunca soa igual.
+  function _radarGeradores(D) {
+    const out = [];
+    const add = (id, icon, tom, txt, cta) => out.push({ id, icon, tom, txt, cta });
+    const cap = s => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
+
+    // 1) DADO QUE FALTA (funcionários) → dental
+    if (D.semFunc.length && D.total) {
+      const alvo = _pick(D.semFunc);
+      const temFunc = D.total - D.semFunc.length;
+      add('func', '👥', 'dica', _pick([
+        `Das suas <strong>${D.total} empresas</strong>, você sabe o nº de funcionários de apenas <strong>${temFunc}</strong>. Que tal ligar pra <strong>${alvo.nome}</strong> hoje e perguntar? Pode ser a porta pra um plano <strong>dental</strong>.`,
+        `Falta o nº de colaboradores em <strong>${D.semFunc.length} empresas</strong>. Comece por <strong>${alvo.nome}</strong> — quanto mais funcionários, maior a chance de um <strong>dental</strong> ou <strong>saúde coletivo</strong>.`,
+        `<strong>${alvo.nome}</strong> ainda está sem o nº de funcionários. Um dado simples que abre portas: dental, saúde, vida em grupo. Vale uma ligação rápida.`
+      ]));
+    }
+
+    // 2) OBJETIVO DO RAMO (produção x objetivo x ticket)
+    Object.keys(D.metaGrupo).forEach(gid => {
+      const meta = D.metaGrupo[gid], prod = D.prodGrupo[gid] || 0;
+      if (!meta || meta <= 0) return;
+      const falta = meta - prod;
+      const gn = D.grupoNome[gid] || cap(gid);
+      if (falta <= 0) {
+        add('obj_' + gid, '🏆', 'destaque', `Você <strong>bateu seu objetivo em ${gn}</strong> este ano (${fmtBRcompacto(prod)} de ${fmtBRcompacto(meta)})! Que tal usar o embalo e puxar mais uma?`);
+        return;
+      }
+      const ticket = D.ticketGrupo[gid] || 0, nFech = D.nFechadosGrupo[gid] || 0;
+      if (nFech >= 3 && ticket > 0) {
+        const W = Math.max(1, Math.ceil(falta / ticket));
+        add('obj_' + gid, '🎯', 'oportunidade', _pick([
+          `Seu objetivo em <strong>${gn}</strong> é ${fmtBRcompacto(meta)}. Você já fez ${fmtBRcompacto(prod)}. No seu ritmo médio deste ano, faltam cerca de <strong>${W} ${W === 1 ? 'negócio' : 'negócios'}</strong> pra chegar lá. Dá pra fazer! 💪`,
+          `Em <strong>${gn}</strong> você está a <strong>${W} ${W === 1 ? 'fechamento' : 'fechamentos'}</strong> do seu objetivo (mantendo seu desempenho do ano). Cada empresa que você trabalha te aproxima.`
+        ]));
+      } else {
+        add('obj_' + gid, '🎯', 'oportunidade', `Faltam <strong>${fmtBRcompacto(falta)}</strong> pro seu objetivo em <strong>${gn}</strong> este ano. Cada nova oportunidade que você abre conta — bora?`);
+      }
+    });
+
+    // 3) PRODUÇÃO ZERADA (puxão gentil, sem ticket)
+    Object.keys(D.metaGrupo).forEach(gid => {
+      if ((D.prodGrupo[gid] || 0) > 0) return;
+      if (!D.metaGrupo[gid]) return;
+      const gn = D.grupoNome[gid] || cap(gid);
+      add('zero_' + gid, '🌱', 'alerta', _pick([
+        `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? A primeira venda é a que destrava o resto. 🚀`,
+        `Ainda sem nenhuma produção em <strong>${gn}</strong> — mas isso é oportunidade, não problema. Tem carteira pra trabalhar. Que tal começar hoje?`
+      ]));
+    });
+
+    // 4) SEU RITMO POR RAMO (só pra RM) — uma mensagem, do ramo onde já há produção
+    if (D.perfil === 'rm') {
+      const comProd = Object.keys(D.prodGrupo).filter(gid => (D.prodGrupo[gid] || 0) > 0);
+      if (comProd.length) {
+        const gid = _pick(comProd), gn = D.grupoNome[gid] || cap(gid);
+        add('vsag', '📊', 'dica', _pick([
+          `Você já soma <strong>${fmtBRcompacto(D.prodGrupo[gid])}</strong> em <strong>${gn}</strong> este ano. Cada nova empresa que você trabalha engrossa esse número — e o da agência junto. 🤝`,
+          `Seu <strong>${gn}</strong> está rendendo (${fmtBRcompacto(D.prodGrupo[gid])} no ano). Que tal buscar mais uma empresa pra manter o embalo?`
+        ]));
+      }
+    }
+
+    // 5) VENCIMENTO PRÓXIMO (age na hora certa)
+    if (D.vencProx.length) {
+      const v = _pick(D.vencProx.filter(x => x.dias >= 0)) || D.vencProx[0];
+      if (v) add('venc', '⏰', 'alerta', _pick([
+        `O <strong>${v.nome}</strong> da <strong>${v.e.nome}</strong> vence em <strong>${v.dias} dias</strong>. É a hora de agir antes que alguém chegue primeiro. Que tal preparar a cotação?`,
+        `Atenção na <strong>${v.e.nome}</strong>: <strong>${v.nome}</strong> vencendo em ${v.dias} dias. Renovação na mão de quem se antecipa. 🎯`
+      ]), 'cotacoes');
+    }
+
+    // 6) VENCIMENTO A MAPEAR (o dado que falta pra virar oportunidade)
+    if (D.semVenc.length) {
+      const s = _pick(D.semVenc);
+      add('semvenc', '📅', 'dica', _pick([
+        `Que tal ligar pra <strong>${s.e.nome}</strong> e perguntar quando vence o <strong>${s.nome}</strong> deles? Na plataforma, todo vencimento que você mapeia vira oportunidade na hora certa. Se conseguir o valor da apólice, melhor ainda!`,
+        `A <strong>${s.e.nome}</strong> tem <strong>${s.nome}</strong> mas ainda sem data de vencimento. Só precisamos disso pra transformar em oportunidade — e o sistema te avisa na hora de agir.`
+      ]));
+    }
+
+    // 7) OPORTUNIDADES QUENTES
+    if (D.quentes > 0) {
+      add('quentes', '🔥', 'oportunidade', _pick([
+        `Já conferiu tudo que sua carteira pode gerar hoje? Você tem <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> esperando ação.`,
+        `<strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> na sua carteira agora. Vale abrir e ver qual dá pra atacar hoje. 🔥`
+      ]), 'oportunidades');
+    }
+
+    // 8) PREVIDÊNCIA DOS SÓCIOS
+    if (D.semPrev.length) {
+      const p = _pick(D.semPrev);
+      add('prev', '💰', 'oportunidade', _pick([
+        `A <strong>${p.e.nome}</strong> tem <strong>${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'}</strong> e nenhum com previdência mapeada. Que tal jogar no funil e trabalharmos juntos essa oportunidade?`,
+        `Previdência dos sócios é um terreno pouco explorado. A <strong>${p.e.nome}</strong> tem ${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'} — pode ser um ótimo começo.`
+      ]));
+    }
+
+    // 9) VIDA DOS SÓCIOS
+    if (D.semVidaSocios.length) {
+      const v = _pick(D.semVidaSocios);
+      add('vidasoc', '🛡️', 'dica', `A <strong>${v.e.nome}</strong> tem sócios sem <strong>seguro de vida</strong> mapeado. É uma conversa que costuma render — proteção pessoal fala mais alto que preço.`);
+    }
+
+    // 10) DENTAL (empresa grande com funcionários)
+    if (D.semDental.length) {
+      const maior = D.semDental.sort((a, b) => b.func - a.func)[0];
+      add('dental', '😁', 'oportunidade', _pick([
+        `A <strong>${maior.e.nome}</strong> tem <strong>${maior.func} funcionários</strong> e ainda não sabemos se têm <strong>dental</strong>. É sua maior empresa sem esse dado — uma ligação pode abrir um belo negócio.`,
+        `Dental é porta de entrada fácil — às vezes custa menos que um cafezinho por pessoa. A <strong>${maior.e.nome}</strong> (${maior.func} funcionários) é uma ótima candidata.`
+      ]));
+    }
+
+    // 11) RITMO / ATIVIDADE
+    if (D.mapeouSemana >= 5) {
+      add('ritmo', '🚀', 'destaque', `Você mapeou <strong>${D.mapeouSemana} seguros essa semana</strong> — que ritmo! Continua assim que os resultados vêm. 👏`);
+    }
+    if (D.diasSemVisita != null && D.diasSemVisita >= 7) {
+      add('visita', '📍', 'dica', _pick([
+        `Faz <strong>${D.diasSemVisita} dias</strong> desde sua última visita registrada. Que tal agendar uma essa semana? Presença gera negócio.`,
+        `Uma visita bem colocada vale por dez ligações. Já faz ${D.diasSemVisita} dias da última — bora marcar? 📍`
+      ]), 'agenda');
+    }
+
+    // 12) MOTIVACIONAIS / PANORAMA (sempre elegíveis, dão variedade)
+    const pctMap = D.total ? Math.round(D.mapeadasAlgo / D.total * 100) : 0;
+    add('motiv', '✨', 'neutro', _pick([
+      `Você tem <strong>${D.total} empresas</strong> na carteira e ${pctMap}% já com algum mapeamento. Cada dado novo é uma semente de negócio. 🌱`,
+      `Lembra: na nossa plataforma, <strong>tudo que você mapeia vira oportunidade</strong> na hora certa. Não é trabalho perdido — é colheita programada.`,
+      `Andamos devagar em alguns ramos até aqui, mas a carteira está cheia de oportunidade. O jogo vira pra quem age. Bora? 💪`,
+      `O melhor vendedor não é o que fala mais — é o que aparece na hora certa. E a hora certa, aqui, o sistema te mostra. 🎯`,
+      `Grandes números no fim do ano são feitos de pequenas ações toda semana. Um mapeamento, uma visita, uma cotação. Constância vence.`
+    ]));
+
+    return out;
+  }
+
+  // Monta a leva de mensagens do Radar (até 5), variando e sem repetir a última abertura.
+  async function radarMontar(maxMsgs) {
+    const D = await _radarColeta();
+    if (!D.total) return { nome: D.nome, msgs: [{ id: 'vazio', icon: '📭', tom: 'neutro', txt: 'Sua carteira ainda está vazia por aqui. Assim que houver empresas, trago as melhores jogadas. 🚀' }] };
+
+    let cands = _radarGeradores(D);
+    // remove as que apareceram na última leva (anti-repetição), a menos que sobre pouca coisa
+    const ultimas = window._RADAR_ULTIMAS || [];
+    let frescas = cands.filter(m => !ultimas.includes(m.id));
+    if (frescas.length < (maxMsgs || 5)) frescas = cands; // se não sobra variedade, libera tudo
+
+    // embaralha
+    for (let i = frescas.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [frescas[i], frescas[j]] = [frescas[j], frescas[i]]; }
+
+    // saudação com tom do dia sempre em 1º
+    const tom = _tomDoDia();
+    const saud = {
+      segunda: `Semana nova, ${D.nome}! Bora ver por onde começar? 👇`,
+      sexta: `Sexta chegando, ${D.nome}. Que tal garantir mais um negócio antes do fim de semana? 👇`,
+      reta_mes: `${D.nome}, reta final do mês! Cada ação agora conta dobrado. 👇`,
+      meio: `Bora, ${D.nome}? Aqui estão algumas jogadas pra hoje 👇`
+    }[tom];
+
+    const escolhidas = frescas.slice(0, (maxMsgs || 5) - 1);
+    window._RADAR_ULTIMAS = escolhidas.map(m => m.id);
+
+    return { nome: D.nome, msgs: [{ id: 'saud', icon: '👋', tom: 'destaque', txt: saud }, ...escolhidas] };
+  }
+  window.radarMontar = radarMontar;
+
   function analisarCarteira() {
     // empresas visíveis conforme o filtro de RM atual (ou toda a carteira do RM logado)
     const fRm = (document.getElementById('filtroRm') || {}).value || '';
@@ -13196,100 +13500,36 @@
 
   async function renderFeed() {
     const cont = document.getElementById('feedConquistas');
+    if (!cont) return;
     const ehRM = perfilEfetivo() === 'rm';
-    try {
-      if (ehRM) {
-        const cards = [];
+    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && !CTX.perfilSimulado);
 
-        // (a) FOCO DO DIA — um grupo por dia, rotacionando pelos dias do ano
-        const proj = await projecaoMetaRM();
-        if (proj && proj.grupos.length) {
-          const abertos = proj.grupos.filter(g => g.falta > 0);
-          if (abertos.length === 0) {
-            cards.push(`<div class="feed-item" style="background:#f0fdf4; border-radius:8px;">
-              <div class="feed-avatar" style="background:linear-gradient(135deg,#10b981,#059669);">🎉</div>
-              <div class="feed-texto">Você já bateu o objetivo do ano em todos os grupos (${fmtBRcompacto(proj.metaTotal)})! Cada novo negócio agora é puro bônus. 🚀</div>
-            </div>`);
-          } else {
-            // Rotação diária estável: usa o dia do ano pra girar entre os grupos com meta em aberto
-            const diaDoAno = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 864e5);
-            const g = abertos[diaDoAno % abertos.length];
-            const diasSemana = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
-            cards.push(`<div class="feed-item" style="background:${g.cor}12; border-radius:8px; border-left:3px solid ${g.cor};">
-              <div class="feed-avatar" style="background:linear-gradient(135deg,${g.cor},#7c3aed);">🎯</div>
-              <div class="feed-texto"><strong>Foco de ${diasSemana[new Date().getDay()]} — ${g.nome}</strong><br><span style="color:#64748b;">Objetivo do ano: ${fmtBRcompacto(g.meta)} · você está com <strong>${g.pct}%</strong>. Faltam ${fmtBRcompacto(g.falta)} — cerca de <strong>${fmtBRcompacto(g.porMes)}/mês</strong> até dezembro. Dá pra chegar! 💪</span></div>
-            </div>`);
-
-            // Dica específica: o ramo dentro do grupo com maior oportunidade
-            const dica = melhorRamoDoGrupo(g.gid);
-            if (dica && (dica.mapeadasSemNegocio > 0 || dica.semMapear > 0)) {
-              let txt;
-              if (dica.mapeadasSemNegocio > 0) {
-                txt = `Você tem <strong>${dica.mapeadasSemNegocio} empresa${dica.mapeadasSemNegocio > 1 ? 's' : ''}</strong> com ${dica.ramo.nome.toLowerCase()} mapeado e ainda sem cotar. É o caminho mais curto pra avançar em ${g.nome} hoje. ${fraseMotiva(dica.mapeadasSemNegocio + g.gid.length)}`;
-              } else {
-                txt = `Ninguém em ${g.nome} pra disputar ainda? Você tem <strong>${dica.semMapear} empresa${dica.semMapear > 1 ? 's' : ''}</strong> sem ${dica.ramo.nome.toLowerCase()} mapeado — mande um link e descubra a oportunidade. ${fraseMotiva(dica.semMapear)}`;
-              }
-              cards.push(`<div class="feed-item" style="cursor:pointer;" onclick="navTo('mapeamento')">
-                <div class="feed-avatar" style="background:linear-gradient(135deg,${dica.ramo.cor || g.cor},#7c3aed);">${dica.ramo.icon || '💡'}</div>
-                <div class="feed-texto"><strong>Caminho de hoje em ${g.nome}</strong><br><span style="color:#64748b;">${txt}</span></div>
-                <div class="feed-tempo" style="color:${g.cor}; font-weight:700; white-space:nowrap;">ver →</div>
-              </div>`);
-            }
-          }
-        }
-
-        // (b) Pulso agregado da agência (anônimo) — noção de movimento sem expor ninguém
-        try {
-          let qCot = db.collection('mb_cotacoes');
-          if (CTX.agenciaId) qCot = qCot.where('agenciaId', '==', CTX.agenciaId);
-          const snap = await qCot.get();
-          let iniciais = 0, quentes = 0, fechadasSemana = 0;
-          const seteDias = Date.now() - 7 * 864e5;
-          snap.forEach(d => {
-            const c = d.data();
-            if (STATUS_ATIVOS.includes(c.status)) iniciais++;
-            if (['enviada', 'reuniao_agendada'].includes(c.status)) quentes++;
-            if (c.status === 'fechada') {
-              const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate().getTime() : 0;
-              if (dt >= seteDias) fechadasSemana++;
-            }
-          });
-          if (iniciais + quentes + fechadasSemana > 0) {
-            cards.push(`<div class="feed-item">
-              <div class="feed-avatar" style="background:linear-gradient(135deg,#0ea5e9,#6366f1);">📊</div>
-              <div class="feed-texto">A agência tem <strong>${iniciais}</strong> cotaç${iniciais === 1 ? 'ão' : 'ões'} em fase inicial e <strong>${quentes}</strong> perto de fechar${fechadasSemana > 0 ? ` · ${fechadasSemana} negócio${fechadasSemana > 1 ? 's' : ''} fechado${fechadasSemana > 1 ? 's' : ''} essa semana 👏` : ''}. O jogo está rolando!</div>
-            </div>`);
-          }
-        } catch (e) {}
-
-        // (c) Sugestões de ação baseadas nos dados do RM (completa até ~7 cards no total)
-        const sugestoes = gerarSugestoesRM(Math.max(1, 7 - cards.length));
-        sugestoes.forEach(s => {
-          cards.push(`<div class="feed-item" style="cursor:pointer;" onclick="${s.acao}">
-            <div class="feed-avatar" style="background:linear-gradient(135deg,${s.cor},#7c3aed);">${s.icon}</div>
-            <div class="feed-texto"><strong>${s.titulo}</strong><br><span style="color:#64748b;">${s.corpo}</span></div>
-            <div class="feed-tempo" style="color:${s.cor}; font-weight:700; white-space:nowrap;">${s.cta}</div>
-          </div>`);
+    // ---- RADAR INTELIGENTE: conselhos que cruzam dados e chamam pra ação ----
+    // (para RM e gestores; assistente/estagiário veem o feed de atividades abaixo)
+    if (ehRM || ehGestor) {
+      try {
+        const { msgs } = await radarMontar(5);
+        const tomCor = { destaque: '#eef2ff', alerta: '#fef2f2', dica: '#f0fdf4', oportunidade: '#fff7ed', neutro: '#f8fafc' };
+        const tomBorda = { destaque: '#c7d2fe', alerta: '#fecaca', dica: '#bbf7d0', oportunidade: '#fed7aa', neutro: '#e2e8f0' };
+        const ctaTxt = { cotacoes: 'Pedir cotação →', oportunidades: 'Ver oportunidades →', agenda: 'Agendar visita →', empresas: 'Ver empresas →' };
+        let h = '';
+        msgs.forEach(m => {
+          const cta = m.cta ? `<div style="margin-top:8px;"><button onclick="event.stopPropagation(); ${m.cta === 'agenda' ? 'abrirAgendarVisita()' : m.cta === 'cotacoes' ? 'abrirPedirCotacao()' : "navTo('" + m.cta + "')"}" style="background:white; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; color:#4338ca; font-weight:700; font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer;">${ctaTxt[m.cta] || 'Ver →'}</button></div>` : '';
+          h += `<div style="display:flex; gap:12px; background:${tomCor[m.tom] || '#f8fafc'}; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; border-radius:12px; padding:13px 15px; margin-bottom:9px;">
+            <div style="font-size:22px; flex-shrink:0; line-height:1.3;">${m.icon}</div>
+            <div style="flex:1; min-width:0;"><div style="font-size:13.5px; color:#334155; line-height:1.5;">${m.txt}</div>${cta}</div>
+          </div>`;
         });
-
-        cont.innerHTML = cards.length
-          ? cards.slice(0, 7).join('')
-          : '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Tudo em dia! Nenhuma ação urgente agora. ✨</div>';
-        aplicarColapso('feedConquistas', cards.length === 0);
+        h += `<div style="text-align:center; margin-top:4px;"><button onclick="event.stopPropagation(); renderFeed();" style="background:none; border:none; color:#94a3b8; font-size:12px; cursor:pointer; text-decoration:underline;">🔄 Ver outras dicas</button></div>`;
+        cont.innerHTML = h;
+        aplicarColapso('feedConquistas', false);
         return;
-      }
+      } catch (e) { console.warn('radar', e); }
+    }
 
-      // ===== NÃO-RM: feed clássico de atividades da equipe (com empresa e valor) =====
-      let q = db.collection('mb_acoes');
-      if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
-      const snap = await q.get();
-      let acoes = [];
-      snap.forEach(d => acoes.push(d.data()));
-      acoes.sort((a, b) => {
-        const da = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : new Date(0);
-        const db_ = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate() : new Date(0);
-        return db_ - da;
-      });
+    // ---- Feed de atividades (assistente/estagiário, ou fallback) ----
+    try {
+      const acoes = await _carregarAcoes(false);
       const tiposFeed = ['fechamento', 'mapeou_produto', 'mapeamento', 'visita', 'dados_base', 'cotacao_solicitada', 'mapeamento_via_link'];
       const interessantes = acoes.filter(a => tiposFeed.includes(a.tipo)).slice(0, 12);
 
