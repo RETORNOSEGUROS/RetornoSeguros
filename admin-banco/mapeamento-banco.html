@@ -5568,6 +5568,11 @@
     const semVenc = [];         // nossos/mercado sem data de vencimento
     let mapeadasAlgo = 0;
     const hoje = new Date();
+    // Empresas candidatas por GRUPO: têm algum ramo daquele grupo ainda não mapeado.
+    // Usado para sugerir "que tal mapear a empresa X" em vez de um chamado genérico.
+    const candidatasGrupo = {};
+    const ramosDoGrupo = {};
+    (RAMOS_ALL || PRODUTOS || []).forEach(r => { (ramosDoGrupo[r.grupoId] = ramosDoGrupo[r.grupoId] || []).push(r.id); });
 
     lista.forEach(e => {
       const dados = e.produtosDados || {};
@@ -5580,6 +5585,15 @@
       if (func > 0 && (!dados['dental'] || !dados['dental'].statusVisual || dados['dental'].statusVisual === 'vazia')) semDental.push({ e, func });
       if (nSoc > 0 && (!dados['vida-socios'] || !dados['vida-socios'].statusVisual || dados['vida-socios'].statusVisual === 'vazia')) semVidaSocios.push({ e, nSoc });
       if (nSoc > 0 && (!dados['prev-socios'] || !dados['prev-socios'].statusVisual || dados['prev-socios'].statusVisual === 'vazia')) semPrev.push({ e, nSoc });
+
+      // candidata para um grupo se tem ao menos um ramo do grupo ainda 'vazio'
+      Object.keys(ramosDoGrupo).forEach(gid => {
+        const temVazio = ramosDoGrupo[gid].some(rid => {
+          const pd = dados[rid];
+          return !pd || !pd.statusVisual || pd.statusVisual === 'vazia';
+        });
+        if (temVazio) (candidatasGrupo[gid] = candidatasGrupo[gid] || []).push(e);
+      });
 
       Object.entries(dados).forEach(([rid, pd]) => {
         if (!pd || !pd.statusVisual) return;
@@ -5662,7 +5676,7 @@
       semFunc, semSocios, semDental, semVidaSocios, semPrev,
       vencProx, semVenc, quentes, parados,
       prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo,
-      diasSemVisita, mapeouSemana,
+      diasSemVisita, mapeouSemana, candidatasGrupo,
       grupoNome: { vida: 'Vida', re: 'RE', saude: 'Saúde' }
     };
   }
@@ -5713,10 +5727,20 @@
       if ((D.prodGrupo[gid] || 0) > 0) return;
       if (!D.metaGrupo[gid]) return;
       const gn = D.grupoNome[gid] || cap(gid);
-      add('zero_' + gid, '🌱', 'alerta', _pick([
-        `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? A primeira venda é a que destrava o resto. 🚀`,
-        `Ainda sem nenhuma produção em <strong>${gn}</strong> — mas isso é oportunidade, não problema. Tem carteira pra trabalhar. Que tal começar hoje?`
-      ]));
+      const cands = D.candidatasGrupo[gid] || [];
+      const alvo = cands.length ? _pick(cands) : null;
+      if (alvo) {
+        add('zero_' + gid, '🌱', 'alerta', _pick([
+          `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? Que tal começar mapeando a <strong>${alvo.nome}</strong>? A primeira venda é a que destrava o resto. 🚀`,
+          `Ainda sem produção em <strong>${gn}</strong> — mas isso é oportunidade, não problema. A <strong>${alvo.nome}</strong> é uma boa pra começar: mapeia o que falta e joga no funil. 💪`,
+          `<strong>${gn}</strong> zerado, mas tem carteira pra trabalhar. Que tal ligar pra <strong>${alvo.nome}</strong> hoje e descobrir a oportunidade que está ali parada?`
+        ]));
+      } else {
+        add('zero_' + gid, '🌱', 'alerta', _pick([
+          `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? A primeira venda é a que destrava o resto. 🚀`,
+          `Ainda sem produção em <strong>${gn}</strong> — mas isso é oportunidade. Que tal buscar uma empresa nova pra esse ramo?`
+        ]));
+      }
     });
 
     // 4) SEU RITMO POR RAMO (só pra RM) — uma mensagem, do ramo onde já há produção
