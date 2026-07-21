@@ -4805,7 +4805,14 @@
       <button class="btn-secondary" style="width: 100%; margin-top: 10px;" onclick="adicionarSocioForm()">
         <i data-lucide="plus" class="w-4 h-4 inline"></i> Adicionar sócio
       </button>
-      <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px 12px; font-size:12px; color:#4338ca; margin-top: 12px;">
+      <div style="border-top:1px dashed #e2e8f0; margin-top:14px; padding-top:12px;">
+        <label style="display:flex; align-items:flex-start; gap:9px; cursor:pointer; font-size:12.5px; color:#475569; background:#fffbeb; border:1px solid #fde68a; border-radius:9px; padding:11px 13px;">
+          <input type="checkbox" id="chkSemSocios" style="width:16px; height:16px; margin-top:1px; flex-shrink:0;" onchange="toggleSemSocios(this.checked)">
+          <span><strong>Esta empresa não tem sócios (só diretores).</strong><br>
+          <span style="color:#92400e; font-size:11.5px;">Conta como mapeamento de sócios na campanha, mas não gera oportunidade de Vida/Saúde Sócios.</span></span>
+        </label>
+      </div>
+      <div id="dicaSocios" style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px 12px; font-size:12px; color:#4338ca; margin-top: 12px;">
         💡 Data de nascimento no formato <strong>dd/mm/aaaa</strong>. Cadastrar sócios libera <strong>cotação de Saúde Sócios</strong> e <strong>Vida Sócios</strong>.
       </div>
     </div>
@@ -5582,7 +5589,8 @@
       const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
       const nSoc = (e.socios || []).filter(s => s && (s.nome || s)).length;
       if (func === 0) semFunc.push(e);
-      if (nSoc === 0) semSocios.push(e);
+      // "não tem sócios (só diretores)" já é mapeado — não entra como pendência
+      if (nSoc === 0 && !e.semSociosConfirmado) semSocios.push(e);
       if (func > 0 && (!dados['dental'] || !dados['dental'].statusVisual || dados['dental'].statusVisual === 'vazia')) semDental.push({ e, func });
       if (nSoc > 0 && (!dados['vida-socios'] || !dados['vida-socios'].statusVisual || dados['vida-socios'].statusVisual === 'vazia')) semVidaSocios.push({ e, nSoc });
       if (nSoc > 0 && (!dados['prev-socios'] || !dados['prev-socios'].statusVisual || dados['prev-socios'].statusVisual === 'vazia')) semPrev.push({ e, nSoc });
@@ -6137,9 +6145,10 @@
 
     // Pendente cadastro = sem nº funcionários OU sem sócios cadastrados
     const semFunc = !e.funcionarios || e.funcionarios === 0;
-    const semSocios = !e.socios || e.socios.length === 0;
+    // Sócios resolvidos = tem sócios OU foi confirmado que não tem (só diretores)
+    const semSocios = (!e.socios || e.socios.length === 0) && !e.semSociosConfirmado;
     const pendenteCadastro = semFunc || semSocios;
-    // Dados-base completos = tem funcionários E sócios mapeados (card fica azul, mais amigável)
+    // Dados-base completos = tem funcionários E sócios resolvidos (card fica azul, mais amigável)
     const dadosCompletos = !semFunc && !semSocios;
 
     // Mapeamento incompleto = nenhum produto mapeado
@@ -6306,7 +6315,7 @@
     html += `
       <div class="section">
         <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-          <h3 style="margin:0;"><i data-lucide="users" class="w-4 h-4"></i> Quadro Societário · ${e.socios.length} sócio${e.socios.length !== 1 ? 's' : ''}</h3>
+          <h3 style="margin:0;"><i data-lucide="users" class="w-4 h-4"></i> Quadro Societário · ${e.semSociosConfirmado && e.socios.length === 0 ? 'só diretores' : e.socios.length + ' sócio' + (e.socios.length !== 1 ? 's' : '')}</h3>
           ${!isEstag ? `<button class="btn-mini" onclick="abrirEditarSocios('${e.id}')">
             <i data-lucide="${e.socios.length > 0 ? 'edit-3' : 'plus'}" class="w-3 h-3"></i> ${e.socios.length > 0 ? 'Editar sócios' : 'Cadastrar sócios'}
           </button>` : (e.socios.length === 0 ? `<button class="btn-mini" onclick="abrirEditarSocios('${e.id}')">
@@ -6315,9 +6324,13 @@
         </div>
         ${e.sociosAtualizadoPorNome ? `<div style="font-size:10.5px; color:#94a3b8; margin-top:-8px; margin-bottom:8px;">✍ Sócios atualizados por ${e.sociosAtualizadoPorNome}${e.sociosAtualizadoEm && e.sociosAtualizadoEm.toDate ? ' · ' + e.sociosAtualizadoEm.toDate().toLocaleDateString('pt-BR') : ''}</div>` : ''}
     `;
-    if (e.socios.length === 0) {
+    if (e.socios.length === 0 && e.semSociosConfirmado) {
+      html += `<div style="background:#f0fdf4; border:1px solid #86efac; border-radius:9px; padding:12px; font-size:13px; color:#166534;">
+        <i data-lucide="check-circle" class="w-4 h-4 inline"></i> Confirmado: esta empresa não tem sócios (só diretores). Mapeamento concluído — não gera oportunidade de produtos de sócios.
+      </div>`;
+    } else if (e.socios.length === 0) {
       html += `<div style="background:#fef3c7; border:1px solid #fcd34d; border-radius:9px; padding:12px; font-size:13px; color:#92400e;">
-        <i data-lucide="alert-circle" class="w-4 h-4 inline"></i> Sócios ainda não cadastrados. Cadastre nome + data de nascimento (dd/mm/aaaa) para liberar cotação de planos.
+        <i data-lucide="alert-circle" class="w-4 h-4 inline"></i> Sócios ainda não cadastrados. Cadastre nome + data de nascimento (dd/mm/aaaa) para liberar cotação de planos — ou marque que a empresa não tem sócios.
       </div>`;
     } else if (isEstag) {
       html += `<div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:9px; padding:12px; font-size:13px; color:#4338ca;">
@@ -10949,7 +10962,8 @@
     const totalEmp = empresas.length;
     let okSocios = 0, okFunc = 0, okDecisor = 0, okRh = 0;
     empresas.forEach(e => {
-      if ((e.socios || []).some(s => s && (s.nome || '').trim())) okSocios++;
+      // Sócios "mapeado" = tem sócios cadastrados OU foi confirmado que não tem (só diretores)
+      if (((e.socios || []).some(s => s && (s.nome || '').trim())) || e.semSociosConfirmado) okSocios++;
       if ((e.funcionarios || 0) > 0) okFunc++;
       if ((e.emailDecisor || '').trim()) okDecisor++;
       if ((e.emailRh || '').trim()) okRh++;
@@ -19056,9 +19070,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (SOCIOS_EDITOR.length === 0) SOCIOS_EDITOR.push({ nome: '', nasc: '', percentual: '' });
     document.getElementById('modalSociosEmpresa').textContent = e.nome;
     renderSociosEditor();
+    const chk = document.getElementById('chkSemSocios');
+    if (chk) { chk.checked = !!e.semSociosConfirmado; toggleSemSocios(chk.checked); }
     document.getElementById('modalSocios').classList.add('open');
     lucide.createIcons();
   }
+  // Marca/desmarca "não tem sócios" — desabilita o editor de sócios quando marcado.
+  function toggleSemSocios(marcado) {
+    const editor = document.getElementById('sociosListEditor');
+    const dica = document.getElementById('dicaSocios');
+    if (editor) { editor.style.opacity = marcado ? '0.4' : '1'; editor.style.pointerEvents = marcado ? 'none' : 'auto'; }
+    // esconde a dica de cadastrar sócios quando não há sócios
+    if (dica) dica.style.display = marcado ? 'none' : 'block';
+  }
+  window.toggleSemSocios = toggleSemSocios;
 
   function renderSociosEditor() {
     const cont = document.getElementById('sociosListEditor');
@@ -19111,34 +19136,43 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function salvarSocios() {
     const e = EMPRESA_ATUAL_RX;
     if (!e) return;
-    // Validar
-    const sociosValidos = SOCIOS_EDITOR.filter(s => (s.nome || '').trim() && (s.nasc || '').trim());
-    if (sociosValidos.length === 0) return alert('Cadastre pelo menos 1 sócio com nome e data de nascimento');
-    // Validar formato data
-    for (const s of sociosValidos) {
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s.nasc)) return alert(`Data de nascimento inválida: ${s.nasc}. Use dd/mm/aaaa.`);
+    const semSocios = !!(document.getElementById('chkSemSocios') || {}).checked;
+
+    let sociosValidos = [];
+    if (!semSocios) {
+      // fluxo normal: precisa de ao menos 1 sócio válido
+      sociosValidos = SOCIOS_EDITOR.filter(s => (s.nome || '').trim() && (s.nasc || '').trim());
+      if (sociosValidos.length === 0) return alert('Cadastre pelo menos 1 sócio com nome e data de nascimento — ou marque "Esta empresa não tem sócios".');
+      for (const s of sociosValidos) {
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s.nasc)) return alert(`Data de nascimento inválida: ${s.nasc}. Use dd/mm/aaaa.`);
+      }
     }
 
     try {
+      // "não tem sócios" = mapeado (semSociosConfirmado:true) porém lista vazia.
+      // Conta como mapeamento na campanha, mas não gera oportunidade de produtos de sócios.
+      const jaEstavaMapeado = (e.socios || []).length > 0 || e.semSociosConfirmado;
       await db.collection('empresas').doc(e.id).update({
-        socios: sociosValidos,
+        socios: semSocios ? [] : sociosValidos,
+        semSociosConfirmado: semSocios,
         sociosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         sociosAtualizadoPor: CTX.uid,
         sociosAtualizadoPorNome: CTX.nome
       });
 
-      const antesEraZero = (e.socios || []).length === 0;
+      // Só pontua "1ª vez" se antes não havia nenhuma informação de sócios.
       await db.collection('mb_acoes').add({
-        tipo: antesEraZero ? 'dados_base' : 'editou_socios',
+        tipo: !jaEstavaMapeado ? 'dados_base' : 'editou_socios',
         empresaId: e.id, empresaNome: e.nome,
         agenciaId: CTX.agenciaId,
         usuarioId: autorUid(), usuarioNome: autorNome(),
         usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
-        pontos: antesEraZero ? getPonto('socios_primeira') : getPonto('socios_alteracao'),
+        pontos: !jaEstavaMapeado ? getPonto('socios_primeira') : getPonto('socios_alteracao'),
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
-      e.socios = sociosValidos;
+      e.socios = semSocios ? [] : sociosValidos;
+      e.semSociosConfirmado = semSocios;
       document.getElementById('modalSocios').classList.remove('open');
       abrirRaioX(e.id);
       confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
