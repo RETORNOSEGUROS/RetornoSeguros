@@ -4320,6 +4320,7 @@
           <select class="filter-select" id="matrizFiltroGrupo" onchange="renderMatrizSeguros()"><option value="">Todos os grupos</option></select>
           <select class="filter-select" id="matrizOrdenar" onchange="renderMatrizSeguros()"><option value="nome">Ordem: A-Z</option><option value="menor">Menos interação primeiro</option><option value="maior">Mais interação primeiro</option></select>
           <input type="text" class="form-control" id="matrizBusca" placeholder="Buscar empresa..." oninput="renderMatrizSeguros()" style="padding:7px 12px; font-size:13px; width:200px;">
+          <button class="btn-secondary" onclick="exportarMatrizPDF()" style="white-space:nowrap;"><i data-lucide="file-down" class="w-4 h-4 inline"></i> Salvar PDF</button>
         </div>
       </div>
 
@@ -15565,6 +15566,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.escolherEmoji = escolherEmoji;
 
   // ============= CONFIG DO FUNIL (etapas · checklist · prazos) =============
+  // Cada item de checklist pode ser uma string (formato antigo) ou {txt, resp}.
+  // resp: 'todos' (qualquer um marca), 'corretor' (só corretor/admin), 'seguradora' (só corretor/admin, é da cia).
+  function _normItem(it) {
+    if (typeof it === 'string') return { txt: it, resp: 'todos' };
+    return { txt: it.txt || '', resp: it.resp || 'todos' };
+  }
+  const RESP_LABEL = { todos: '👥 Todos', corretor: '🎯 Corretor', seguradora: '🏢 Seguradora' };
+  // Quem PODE marcar um item conforme a responsabilidade e o perfil de quem olha:
+  function podeMarcarItem(resp, perfil) {
+    if (resp === 'corretor' || resp === 'seguradora') return perfil === 'admin';  // só corretor/admin
+    return true;   // 'todos' = qualquer perfil, inclusive estagiário e assistente
+  }
   let FUNIL_EDIT = [];
   function abrirTabFunil() {
     FUNIL_EDIT = ETAPAS_FUNIL.map(e => ({ ...e, checklist: [...(e.checklist || [])] }));
@@ -15579,7 +15592,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       FUNIL_EDIT[i].label = ((div.querySelector('.fn-label') || {}).value || '').trim() || FUNIL_EDIT[i].id;
       FUNIL_EDIT[i].prazoDias = parseInt((div.querySelector('.fn-prazo') || {}).value) || 7;
       FUNIL_EDIT[i].ativo = (div.querySelector('.fn-ativo') || {}).checked;
-      FUNIL_EDIT[i].checklist = ((div.querySelector('.fn-checklist') || {}).value || '').split('\n').map(s => s.trim()).filter(Boolean);
+      // lê cada linha do checklist (texto + responsável); descarta linhas vazias
+      const linhas = [...div.querySelectorAll('.fn-checklist-lista > div')];
+      FUNIL_EDIT[i].checklist = linhas.map(l => ({
+        txt: ((l.querySelector('.fn-cl-txt') || {}).value || '').trim(),
+        resp: (l.querySelector('.fn-cl-resp') || {}).value || 'todos'
+      })).filter(it => it.txt);
     });
   }
   function renderFunilConfig() {
@@ -15600,12 +15618,38 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="fn-ativo" ${e.ativo !== false ? 'checked' : ''} style="width:15px;height:15px;"> ativa no funil</label>
           ${ehPadrao ? '<span style="margin-left:auto; font-size:11px; color:#94a3b8;">padrão</span>' : ''}<button class="btn-mini" style="color:#ef4444; ${ehPadrao ? '' : 'margin-left:auto;'}" onclick="removerEtapaFunil(${i})">Excluir</button>
         </div>
-        <label style="font-size:11px; color:#475569; font-weight:700;">Checklist de ações esperadas para avançar (uma por linha)</label>
-        <textarea class="form-control fn-checklist" rows="3" placeholder="Ex: Cotar em 2 seguradoras&#10;Montar comparativo">${(e.checklist || []).join('\n')}</textarea>
+        <label style="font-size:11px; color:#475569; font-weight:700; display:block; margin-bottom:6px;">Checklist de ações para avançar — com o responsável de cada item</label>
+        <div class="fn-checklist-lista" data-etapa="${i}">
+          ${(e.checklist || []).map((it, j) => { const n = _normItem(it); return `
+            <div style="display:flex; gap:6px; margin-bottom:5px; align-items:center;">
+              <input type="text" class="form-control fn-cl-txt" value="${(n.txt || '').replace(/"/g, '&quot;')}" placeholder="Ação esperada" style="flex:1; padding:6px 8px; font-size:12.5px;">
+              <select class="form-control fn-cl-resp" style="width:130px; padding:6px; font-size:12px;">
+                <option value="todos" ${n.resp === 'todos' ? 'selected' : ''}>👥 Todos</option>
+                <option value="corretor" ${n.resp === 'corretor' ? 'selected' : ''}>🎯 Corretor</option>
+                <option value="seguradora" ${n.resp === 'seguradora' ? 'selected' : ''}>🏢 Seguradora</option>
+              </select>
+              <button class="btn-mini" style="color:#ef4444;" onclick="removerChecklistLinha(${i}, ${j})">✕</button>
+            </div>`; }).join('')}
+        </div>
+        <button class="btn-mini" style="margin-top:2px;" onclick="adicionarChecklistLinha(${i})"><i data-lucide="plus" class="w-3 h-3"></i> item</button>
+        <div style="font-size:10.5px; color:#94a3b8; margin-top:6px;">🎯 Corretor e 🏢 Seguradora só podem ser marcados pelo corretor/admin. 👥 Todos, por qualquer um do time.</div>
       </div>`;
     }).join('');
     lucide.createIcons();
   }
+  function removerChecklistLinha(etapaIdx, linhaIdx) {
+    lerFunilEdits();
+    FUNIL_EDIT[etapaIdx].checklist.splice(linhaIdx, 1);
+    renderFunilConfig();
+  }
+  function adicionarChecklistLinha(etapaIdx) {
+    lerFunilEdits();
+    FUNIL_EDIT[etapaIdx].checklist = FUNIL_EDIT[etapaIdx].checklist || [];
+    FUNIL_EDIT[etapaIdx].checklist.push({ txt: '', resp: 'todos' });
+    renderFunilConfig();
+  }
+  window.removerChecklistLinha = removerChecklistLinha;
+  window.adicionarChecklistLinha = adicionarChecklistLinha;
   function adicionarEtapaFunil() {
     lerFunilEdits();
     FUNIL_EDIT.push({ id: 'etapa_' + Date.now().toString(36), label: 'Nova etapa', icon: '📍', cor: '#64748b', ordem: FUNIL_EDIT.length, ativo: true, prazoDias: 7, checklist: [] });
@@ -15976,6 +16020,146 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     lucide.createIcons();
   }
   window.renderMatrizSeguros = renderMatrizSeguros;
+
+  // ===== EXPORTAR O RELATÓRIO INTELIGENTE EM PDF (paisagem, fiel à tela) =====
+  function exportarMatrizPDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página e tente de novo.');
+    const { jsPDF } = window.jspdf;
+
+    // --- Recomputa exatamente o que a tela mostra (mesmos filtros) ---
+    const selG = document.getElementById('matrizFiltroGrupo');
+    const grupoFiltro = selG ? selG.value : '';
+    const selAnoM = document.getElementById('matrizFiltroAno');
+    const anoMatriz = (selAnoM && selAnoM.value) ? parseInt(selAnoM.value) : null;
+    const anoCorrente = new Date().getFullYear();
+    const selRmM = document.getElementById('matrizFiltroRM');
+    const vejoTudoM = CTX.isAdmin || perfilEfetivo() === 'chefe';
+    const rmFiltroM = (selRmM && vejoTudoM) ? selRmM.value : '';
+    const buscaLower = ((document.getElementById('matrizBusca') || {}).value || '').trim().toLowerCase();
+
+    let ramos = (PRODUTOS || []);
+    if (grupoFiltro) ramos = ramos.filter(r => r.grupoId === grupoFiltro);
+    let empresas = (EMPRESAS || []).slice();
+    if (rmFiltroM) empresas = empresas.filter(e => e.rm === rmFiltroM);
+    if (buscaLower) empresas = empresas.filter(e => (e.nome || '').toLowerCase().includes(buscaLower));
+    if (!empresas.length || !ramos.length) return alert('Nada para exportar com os filtros atuais.');
+
+    const pctEmpresa = e => {
+      let inter = 0; ramos.forEach(r => { if (statusMatriz(e, r.id, anoMatriz) !== 'nao_mapeado') inter++; });
+      return ramos.length ? Math.round(inter / ramos.length * 100) : 0;
+    };
+    const selOrd = document.getElementById('matrizOrdenar');
+    const ord = selOrd ? selOrd.value : 'nome';
+    empresas.forEach(e => e._pctInter = pctEmpresa(e));
+    if (ord === 'menor') empresas.sort((a, b) => a._pctInter - b._pctInter || (a.nome || '').localeCompare(b.nome || ''));
+    else if (ord === 'maior') empresas.sort((a, b) => b._pctInter - a._pctInter || (a.nome || '').localeCompare(b.nome || ''));
+    else empresas.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+
+    // --- Converte hex → rgb pra usar no jsPDF ---
+    const hex2rgb = h => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+
+    // --- Layout da página (A4 paisagem: 297 x 210 mm) ---
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+    const PW = 297, PH = 210, M = 8;
+    const colEmpresaW = 52, colPctW = 14;
+    const cellMin = 7;                        // largura mínima de cada coluna de ramo
+    const areaRamos = PW - M * 2 - colEmpresaW - colPctW;
+    const maxRamosPag = Math.max(1, Math.floor(areaRamos / cellMin));
+    const rowH = 6.2, headH = 20;
+    const topo = M + 16;
+    const linhasPorPag = Math.floor((PH - topo - headH - M) / rowH);
+
+    // divide os ramos em blocos que cabem na largura (páginas horizontais)
+    const blocosRamos = [];
+    for (let i = 0; i < ramos.length; i += maxRamosPag) blocosRamos.push(ramos.slice(i, i + maxRamosPag));
+
+    const grupoDe = rid => { const r = (PRODUTOS || []).find(x => x.id === rid); const g = (GRUPOS || []).find(x => x.id === (r && r.grupoId)); return g ? g.nome : ''; };
+    const tituloAno = anoMatriz ? ('Safra ' + anoMatriz) : ('Ano atual (' + anoCorrente + ')');
+    const rmLabel = rmFiltroM ? ((EMPRESAS.find(e => e.rm === rmFiltroM) || {}).rmNome || 'RM') : 'Toda a agência';
+
+    let primeira = true;
+    blocosRamos.forEach((bloco, bi) => {
+      const cellW = Math.max(cellMin, areaRamos / bloco.length);   // estica pra ocupar a largura
+      // paginação vertical dentro do bloco
+      for (let ini = 0; ini < empresas.length; ini += linhasPorPag) {
+        if (!primeira) doc.addPage();
+        primeira = false;
+        const fatia = empresas.slice(ini, ini + linhasPorPag);
+
+        // ---- Cabeçalho do documento ----
+        doc.setFontSize(13); doc.setTextColor(30, 27, 75); doc.setFont(undefined, 'bold');
+        doc.text('Relatório Inteligente — Cobertura da carteira', M, M + 5);
+        doc.setFontSize(8); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+        doc.text(`${tituloAno}  ·  ${rmLabel}  ·  ${empresas.length} empresas  ·  ${ramos.length} ramos` +
+          (blocosRamos.length > 1 ? `  ·  bloco ${bi + 1}/${blocosRamos.length}` : ''), M, M + 10);
+
+        // ---- Cabeçalho da tabela ----
+        let y = topo;
+        let x = M;
+        doc.setFillColor(241, 245, 249);
+        doc.rect(M, y, PW - M * 2, headH, 'F');
+        doc.setTextColor(71, 85, 105); doc.setFontSize(7.5); doc.setFont(undefined, 'bold');
+        doc.text('EMPRESA', x + 2, y + headH - 3);
+        x += colEmpresaW;
+        doc.text('%', x + colPctW / 2, y + headH - 3, { align: 'center' });
+        x += colPctW;
+        // nomes dos ramos na vertical (economiza largura)
+        bloco.forEach(r => {
+          doc.setFontSize(6); doc.setTextColor(51, 65, 85);
+          const nome = (r.nome || '').length > 16 ? r.nome.slice(0, 15) + '…' : (r.nome || '');
+          doc.text(nome, x + cellW / 2, y + headH - 2, { align: 'center', angle: 90, maxWidth: headH - 3 });
+          x += cellW;
+        });
+
+        // ---- Linhas ----
+        y += headH;
+        doc.setFont(undefined, 'normal');
+        fatia.forEach((e, idx) => {
+          x = M;
+          if (idx % 2 === 0) { doc.setFillColor(250, 250, 252); doc.rect(M, y, PW - M * 2, rowH, 'F'); }
+          // nome
+          doc.setTextColor(15, 23, 42); doc.setFontSize(7);
+          const nm = (e.nome || '').length > 34 ? e.nome.slice(0, 33) + '…' : (e.nome || '');
+          doc.text(nm, x + 2, y + rowH - 2);
+          x += colEmpresaW;
+          // %
+          const pct = e._pctInter;
+          doc.setTextColor(pct >= 60 ? 22 : pct >= 30 ? 180 : 148, pct >= 60 ? 163 : pct >= 30 ? 83 : 163, pct >= 60 ? 74 : pct >= 30 ? 9 : 184);
+          doc.setFont(undefined, 'bold');
+          doc.text(pct + '%', x + colPctW / 2, y + rowH - 2, { align: 'center' });
+          doc.setFont(undefined, 'normal');
+          x += colPctW;
+          // bolinhas
+          bloco.forEach(r => {
+            const cat = statusMatriz(e, r.id, anoMatriz);
+            const cor = (MATRIZ_CATS[cat] || MATRIZ_CATS.nao_mapeado).cor;
+            const [rr, gg, bb] = hex2rgb(cor);
+            if (cat === 'nao_mapeado') { doc.setDrawColor(203, 213, 225); doc.setFillColor(255, 255, 255); doc.circle(x + cellW / 2, y + rowH / 2, 1.7, 'S'); }
+            else { doc.setFillColor(rr, gg, bb); doc.circle(x + cellW / 2, y + rowH / 2, 1.9, 'F'); }
+            x += cellW;
+          });
+          y += rowH;
+        });
+
+        // ---- Rodapé com legenda ----
+        let lx = M;
+        const ly = PH - M + 1;
+        doc.setFontSize(6.5); doc.setFont(undefined, 'normal');
+        Object.values(MATRIZ_CATS).forEach(c => {
+          const [rr, gg, bb] = hex2rgb(c.cor);
+          if (c.cor === '#e2e8f0') { doc.setDrawColor(203, 213, 225); doc.setFillColor(255, 255, 255); doc.circle(lx + 1.5, ly - 1.5, 1.5, 'S'); }
+          else { doc.setFillColor(rr, gg, bb); doc.circle(lx + 1.5, ly - 1.5, 1.5, 'F'); }
+          doc.setTextColor(100, 116, 139);
+          doc.text(c.label, lx + 4, ly);
+          lx += 4 + doc.getTextWidth(c.label) + 6;
+        });
+      }
+    });
+
+    const nomeArq = `relatorio-inteligente-${tituloAno.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.pdf`;
+    doc.save(nomeArq);
+  }
+  window.exportarMatrizPDF = exportarMatrizPDF;
 
   // ============= PAINEL DE MAPEAMENTO =============
   // Regra central: célula MAPEADA = qualquer status ≠ 'nao_mapeado' (saber que NÃO tem também é informação).
@@ -19963,18 +20147,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             const itensPadrao = (et && et.checklist) ? et.checklist.slice() : [];
             // itens extras por produto+etapa (admin cadastra): CHECKLIST_EXTRA[produtoId][statusId] = [itens]
             const extras = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
-            const todos = itensPadrao.map((t, i) => ({ key: c.status + '|p' + i, texto: t, extra: false }))
-              .concat(extras.map((t, i) => ({ key: c.status + '|e' + i, texto: t, extra: true })));
+            const todos = itensPadrao.map((t, i) => { const n = _normItem(t); return { key: c.status + '|p' + i, texto: n.txt, resp: n.resp, extra: false }; })
+              .concat(extras.map((t, i) => { const n = _normItem(t); return { key: c.status + '|e' + i, texto: n.txt, resp: n.resp, extra: true }; }));
             if (!todos.length) return '';
             const feito = c.checklistFeito || {};
-            const podeMarcar = ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente';
+            const _perf = perfilEfetivo();
+            // a permissão real é POR ITEM (podeMarcarItem); aqui só checamos se a etapa está ativa
+            const ativaMarcavel = ativa;
             const nFeitos = todos.filter(it => feito[it.key]).length;
+            const selosResp = { corretor: '<span style="font-size:9px; background:#e0e7ff; color:#3730a3; padding:1px 5px; border-radius:4px;">🎯 corretor</span>', seguradora: '<span style="font-size:9px; background:#fef3c7; color:#92400e; padding:1px 5px; border-radius:4px;">🏢 seguradora</span>', todos: '' };
             const linhas = todos.map(it => {
               const marc = feito[it.key];
+              // trava por item: quem não é responsável não marca
+              const podeEste = ativaMarcavel && podeMarcarItem(it.resp || 'todos', _perf);
               const quem = marc ? `<span style="font-size:10px; color:#94a3b8; margin-left:4px;">✓ ${marc.porNome || ''}</span>` : '';
-              return `<label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#78350f; padding:4px 0; cursor:${podeMarcar ? 'pointer' : 'default'};">
-                <input type="checkbox" ${marc ? 'checked' : ''} ${podeMarcar ? '' : 'disabled'} onchange="toggleChecklist('${c.id}','${it.key}', this.checked)">
-                <span style="${marc ? 'text-decoration:line-through; opacity:.6;' : ''}">${it.texto}${it.extra ? " <span style='font-size:9px; background:#ddd6fe; color:#5b21b6; padding:1px 5px; border-radius:4px;'>extra</span>" : ''}</span>${quem}
+              const selo = (selosResp[it.resp] || '') + (it.extra ? " <span style='font-size:9px; background:#ddd6fe; color:#5b21b6; padding:1px 5px; border-radius:4px;'>extra</span>" : '');
+              return `<label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#78350f; padding:4px 0; cursor:${podeEste ? 'pointer' : 'default'}; ${!podeEste && !marc ? 'opacity:.55;' : ''}">
+                <input type="checkbox" ${marc ? 'checked' : ''} ${podeEste ? '' : 'disabled'} onchange="toggleChecklist('${c.id}','${it.key}', this.checked)">
+                <span style="${marc ? 'text-decoration:line-through; opacity:.6;' : ''}">${it.texto} ${selo}</span>${quem}
               </label>`;
             }).join('');
             return `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; margin-bottom:14px;">
@@ -19983,7 +20173,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                 ${CTX.isAdmin ? `<button class="btn-mini" style="font-size:10px;" onclick="abrirAddChecklistItem('${c.id}')"><i data-lucide="plus" class="w-3 h-3"></i> item</button>` : ''}
               </div>
               ${linhas}
-              ${podeMarcar ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>' : ''}
+              ${ativaMarcavel ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>' : ''}
             </div>`;
           })()}
 
@@ -20076,6 +20266,23 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function toggleChecklist(cotacaoId, itemKey, marcado) {
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
+    // TRAVA DE SEGURANÇA: confere a responsabilidade do item antes de gravar.
+    // A UI já desabilita, mas isto impede burlar pelo console.
+    try {
+      const et0 = etapaInfo(c.status);
+      const padrao0 = (et0 && et0.checklist) ? et0.checklist : [];
+      const extras0 = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
+      const m = /\|([pe])(\d+)$/.exec(itemKey);
+      if (m) {
+        const arr = m[1] === 'p' ? padrao0 : extras0;
+        const item = _normItem(arr[parseInt(m[2])] || {});
+        if (!podeMarcarItem(item.resp || 'todos', perfilEfetivo())) {
+          flashSalvo('Esse item é de responsabilidade ' + (RESP_LABEL[item.resp] || item.resp) + ' — você não pode marcá-lo.');
+          try { abrirNegociacao(cotacaoId); } catch (e) {}  // redesenha, desfaz o clique visual
+          return;
+        }
+      }
+    } catch (e) {}
     c.checklistFeito = c.checklistFeito || {};
     const campo = 'checklistFeito.' + itemKey.replace(/\|/g, '__');
     try {
