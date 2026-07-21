@@ -11602,8 +11602,10 @@
 
     // ---- Pote: fatia do total da agência dividida pela participação em pontos ----
     const potePct = (FATOR_CFG.poteRanking != null ? FATOR_CFG.poteRanking : 2);
-    const BASES_RANK = [70000, 150000, 450000, 800000];
-    const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(0) + ' mi' : (v / 1000) + ' mil';
+    // valor de simulação que o usuário informa (padrão: 100 mil). Guardado entre re-render.
+    if (window._RANK_SIM_BASE == null) window._RANK_SIM_BASE = 100000;
+    const simBase = window._RANK_SIM_BASE;
+    const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(1).replace('.0', '').replace('.', ',') + ' mi' : Math.round(v / 1000) + ' mil';
     const ptsDoPote = (base, share) => Math.round(base * (potePct / 100) * share);
 
     // "Hoje": base real (comissão) dos negócios FECHADOS dentro da campanha.
@@ -11663,9 +11665,13 @@
     html += `<div style="display:flex; align-items:center; gap:10px; padding:0 12px 6px; font-size:9.5px; font-weight:700; color:#cbd5e1; letter-spacing:.04em; text-transform:uppercase;">
       <div style="width:30px;"></div>
       <div style="flex:1; min-width:130px;">Participante</div>
-      <div style="display:flex; gap:5px;">
-        <div style="width:60px; text-align:center;">Hoje</div>
-        ${BASES_RANK.map(b => `<div style="width:60px; text-align:center;">${fmtBaseR(b)}</div>`).join('')}
+      <div style="display:flex; gap:5px; align-items:center;">
+        <div style="width:64px; text-align:center;">Hoje</div>
+        <div style="width:120px; text-align:center;">
+          <div style="font-size:9.5px; margin-bottom:3px;">Simular com base</div>
+          <input type="text" id="rankSimInput" value="${fmtBaseR(simBase)}" onchange="aplicarSimRank(this.value)" onkeydown="if(event.key==='Enter')aplicarSimRank(this.value)"
+            style="width:104px; text-align:center; font-size:12px; font-weight:700; padding:4px 6px; border:1px solid #c7d2fe; border-radius:7px; color:#4338ca; background:#eef2ff;">
+        </div>
       </div>
       <div style="width:62px; text-align:right;">Pontos</div>
     </div>`;
@@ -11676,8 +11682,10 @@
       const shareF = totalPontos > 0 ? (p.pontos / totalPontos) : 0;
       const share = Math.round(shareF * 100);
       const larg = Math.max((p.pontos / maxPontos) * 100, 1.5);
-      const cenarios = [{ label: 'Hoje', v: ptsDoPote(baseHoje, shareF), hoje: true }]
-        .concat(BASES_RANK.map(b => ({ label: fmtBaseR(b), v: ptsDoPote(b, shareF), hoje: false })));
+      const cenarios = [
+        { v: ptsDoPote(baseHoje, shareF), hoje: true, w: 64 },
+        { v: ptsDoPote(simBase, shareF), hoje: false, w: 120 }
+      ];
 
       html += `<div style="display:flex; align-items:center; gap:10px; padding:9px 6px; border-radius:10px; ${souEu ? 'background:#f5f3ff;' : ''} ${i < lista.length - 1 ? 'border-bottom:1px solid #f4f6fa;' : ''}">
         <div style="font-size:17px; font-weight:800; width:30px; text-align:center; color:#cbd5e1; flex-shrink:0;">${medalha(i)}</div>
@@ -11693,10 +11701,10 @@
         </div>
         <div style="display:flex; gap:5px; flex-shrink:0;">
           ${cenarios.map(c => `
-            <div style="width:60px; padding:6px 2px; border-radius:8px; text-align:center; ${c.hoje
+            <div style="width:${c.w}px; padding:6px 2px; border-radius:8px; text-align:center; ${c.hoje
               ? 'background:linear-gradient(135deg,#d1fae5,#a7f3d0); border:1px solid #6ee7b7;'
-              : 'background:#f8fafc; border:1px solid #eef2f7;'}">
-              <div style="font-size:13px; font-weight:800; font-family:'JetBrains Mono',monospace; color:${c.hoje ? '#047857' : '#475569'};">${fmtPt(c.v)}</div>
+              : 'background:#eef2ff; border:1px solid #c7d2fe;'}">
+              <div style="font-size:14px; font-weight:800; font-family:'JetBrains Mono',monospace; color:${c.hoje ? '#047857' : '#4338ca'};">${fmtPt(c.v)}</div>
             </div>`).join('')}
         </div>
         <div style="width:62px; text-align:right; flex-shrink:0;">
@@ -11710,6 +11718,31 @@
     box.innerHTML = html;
   }
   window.renderRankingPontos = renderRankingPontos;
+
+  // Interpreta o valor digitado no simulador do ranking e re-renderiza.
+  // Aceita "100 mil", "1 mi", "1,5 mi", "70000", "R$ 450.000".
+  function aplicarSimRank(txt) {
+    const base = _parseValorBR(txt);
+    if (base && base > 0) { window._RANK_SIM_BASE = base; renderRankingPontos(); }
+  }
+  window.aplicarSimRank = aplicarSimRank;
+
+  // Parser tolerante de valores em reais/abreviados → número
+  function _parseValorBR(txt) {
+    if (typeof txt === 'number') return txt;
+    let s = (txt || '').toString().toLowerCase().trim().replace(/r\$|\s/g, '');
+    let mult = 1;
+    // ordem importa: 'milh...' (milhão/milhões) e 'mi' = milhão; 'mil'/'k' = mil.
+    // 'milh' é tratado ANTES de 'mil' (senão "milhao" casaria "mil").
+    if (s.indexOf('milh') >= 0) { mult = 1000000; s = s.replace(/milh.*/, ''); }
+    else if (/mil|k/.test(s)) { mult = 1000; s = s.replace(/mil.*|k.*/, ''); }
+    else if (/mi/.test(s)) { mult = 1000000; s = s.replace(/mi.*/, ''); }
+    // vírgula decimal → ponto; remove separador de milhar
+    s = s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : Math.round(n * mult);
+  }
+  window._parseValorBR = _parseValorBR;
 
   // Rótulos amigáveis por tipo de ação (para o extrato)
   const EXTRATO_LABELS = {
@@ -11946,8 +11979,49 @@
   // Sem citar valores: a "base de referência" é um número neutro que o admin usa
   // pra ilustrar a escala. Pontos = base × (participação em %).
   const SIM_BASES = [50000, 100000, 200000, 500000, 1000000];
-  const fmtBaseSim = v => v >= 1000000 ? (v / 1000000).toFixed(0).replace('.', ',') + ' mi'
-                        : (v / 1000).toFixed(0) + ' mil';
+  const fmtBaseSim = v => v >= 1000000 ? (v / 1000000).toFixed(1).replace('.0', '').replace('.', ',') + ' mi'
+                        : Math.round(v / 1000) + ' mil';
+
+  // Monta a tabela do simulador: 1 linha "hoje" (base real dos negócios já fechados)
+  // + 1 linha editável onde o usuário informa um valor e vê como ficaria.
+  // parts = { hojePart, tetoPart, hojeLabel, tetoLabel } (participações em %).
+  function _tabelaSimulador(idTabela, baseRealNeg, parts, fmtPt, pontos) {
+    if (window._SIM_BASES == null) window._SIM_BASES = {};
+    if (window._SIM_BASES[idTabela] == null) window._SIM_BASES[idTabela] = 100000;
+    const simB = window._SIM_BASES[idTabela];
+    const { hojePart, tetoPart, hojeLabel, tetoLabel } = parts;
+
+    const linha = (rotulo, base, editavel) => {
+      const pH = pontos(base, hojePart), pT = pontos(base, tetoPart);
+      const rotHtml = editavel
+        ? `<input type="text" value="${fmtBaseSim(base)}" onchange="aplicarSimTabela('${idTabela}', this.value)" onkeydown="if(event.key==='Enter')aplicarSimTabela('${idTabela}', this.value)" style="width:96px; text-align:left; font-size:12.5px; font-weight:700; padding:4px 8px; border:1px solid #c7d2fe; border-radius:7px; color:#4338ca; background:#eef2ff;">`
+        : `<span style="font-weight:700; color:#0f172a;">${rotulo}</span>`;
+      return `<tr ${editavel ? 'style="background:#f8faff;"' : ''}>
+        <td>${rotHtml}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pH)}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pT)}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pT - pH)}</td>
+      </tr>`;
+    };
+
+    let t = `<table class="cfg-table"><thead><tr>
+      <th>BASE DE REFERÊNCIA</th>
+      <th style="text-align:right;">HOJE (${hojeLabel})</th>
+      <th style="text-align:right;">NO TETO (${tetoLabel})</th>
+      <th style="text-align:right;">DIFERENÇA</th>
+    </tr></thead><tbody>`;
+    // linha "hoje" só se já houver negócios fechados (base real > 0)
+    if (baseRealNeg > 0) t += linha('🏁 Com o que já fechou', baseRealNeg, false);
+    t += linha('', simB, true);
+    t += `</tbody></table>
+      <div style="font-size:11px; color:#94a3b8; margin-top:7px;">Digite um valor na 2ª linha (ex.: <em>100 mil</em>, <em>1 mi</em>) para simular.</div>`;
+    return t;
+  }
+  function aplicarSimTabela(id, txt) {
+    const b = _parseValorBR(txt);
+    if (b && b > 0) { window._SIM_BASES = window._SIM_BASES || {}; window._SIM_BASES[id] = b; renderSimulador(); }
+  }
+  window.aplicarSimTabela = aplicarSimTabela;
 
   function renderSimulador() {
     const box = document.getElementById('campAbaSimulador');
@@ -12013,22 +12087,8 @@
         <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
           Só o que depende de você: hoje <strong style="color:${_corFator(teto > 0 ? hoje / teto * 100 : 0)};">${fmtFator(hoje)}</strong> de ${fmtFator(teto)} possíveis. <span style="color:#94a3b8;">(o plus da agência vem na tabela abaixo)</span>
         </div>
-        <table class="cfg-table"><thead><tr>
-          <th>BASE DE REFERÊNCIA</th>
-          <th style="text-align:right;">HOJE (${fmtFator(hoje)})</th>
-          <th style="text-align:right;">NO TETO (${fmtFator(teto)})</th>
-          <th style="text-align:right;">DIFERENÇA</th>
-        </tr></thead><tbody>`;
-      SIM_BASES.forEach(b => {
-        const pHoje = pontos(b, hoje), pTeto = pontos(b, teto);
-        html += `<tr>
-          <td style="font-weight:700; color:#0f172a;">${fmtBaseSim(b)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pHoje)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pTeto)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pTeto - pHoje)}</td>
-        </tr>`;
-      });
-      html += `</tbody></table></div>`;
+        ${_tabelaSimulador('carteira', baseReal, { hojePart: hoje, tetoPart: teto, hojeLabel: fmtFator(hoje), tetoLabel: fmtFator(teto) }, fmtPt, pontos)}
+      </div>`;
 
       // ---- Comparativo da agência: quanto o plus da agência rende ----
       const plusHoje = indMeu.ganhoPlus, plusTeto = indMeu.somaPlus;
@@ -12037,22 +12097,7 @@
         <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
           Hoje a agência te dá <strong>${fmtFator(plusHoje)}</strong> de plus. Se ela chegasse no teto, seriam <strong>${fmtFator(plusTeto)}</strong>.
         </div>
-        <table class="cfg-table"><thead><tr>
-          <th>BASE DE REFERÊNCIA</th>
-          <th style="text-align:right;">AGÊNCIA HOJE (${fmtFator(plusHoje)})</th>
-          <th style="text-align:right;">AGÊNCIA NO TETO (${fmtFator(plusTeto)})</th>
-          <th style="text-align:right;">DIFERENÇA</th>
-        </tr></thead><tbody>`;
-      SIM_BASES.forEach(b => {
-        const pH = pontos(b, plusHoje), pT = pontos(b, plusTeto);
-        html += `<tr>
-          <td style="font-weight:700; color:#0f172a;">${fmtBaseSim(b)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#334155;">${fmtPt(pH)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">${fmtPt(pT)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#6366f1;">+${fmtPt(pT - pH)}</td>
-        </tr>`;
-      });
-      html += `</tbody></table>
+        ${_tabelaSimulador('plus', baseReal, { hojePart: plusHoje, tetoPart: plusTeto, hojeLabel: fmtFator(plusHoje), tetoLabel: fmtFator(plusTeto) }, fmtPt, pontos)}
         <div style="margin-top:12px; padding:11px 13px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; font-size:12.5px; color:#166534;">
           Por isso vale puxar o time junto: quando a agência inteira melhora, <strong>todo mundo</strong> leva mais.
         </div>
@@ -12066,22 +12111,10 @@
           ${fmtFator(indMeu.ganhoProprio)} da sua carteira + ${fmtFator(indMeu.ganhoPlus)} do plus da agência =
           <strong style="color:white;">${fmtFator(somaHoje)}</strong> de ${fmtFator(somaTeto)} possíveis.
         </div>
-        <table class="cfg-table" style="background:transparent;"><thead><tr>
-          <th style="color:#94a3b8;">BASE DE REFERÊNCIA</th>
-          <th style="text-align:right; color:#94a3b8;">HOJE (${fmtFator(somaHoje)})</th>
-          <th style="text-align:right; color:#94a3b8;">NO TETO (${fmtFator(somaTeto)})</th>
-          <th style="text-align:right; color:#94a3b8;">DIFERENÇA</th>
-        </tr></thead><tbody>`;
-      SIM_BASES.forEach(b => {
-        const pH = pontos(b, somaHoje), pT = pontos(b, somaTeto);
-        html += `<tr>
-          <td style="font-weight:700; color:#e2e8f0; border-color:#1e293b;">${fmtBaseSim(b)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#cbd5e1; border-color:#1e293b;">${fmtPt(pH)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#4ade80; border-color:#1e293b;">${fmtPt(pT)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:#a5b4fc; border-color:#1e293b;">+${fmtPt(pT - pH)}</td>
-        </tr>`;
-      });
-      html += `</tbody></table></div>`;
+        <div style="background:white; border-radius:10px; padding:10px;">
+        ${_tabelaSimulador('total', baseReal, { hojePart: somaHoje, tetoPart: somaTeto, hojeLabel: fmtFator(somaHoje), tetoLabel: fmtFator(somaTeto) }, fmtPt, pontos)}
+        </div>
+      </div>`;
     }
 
     // ---- Bloco do ADMIN: cenários da CORRETORA ----
