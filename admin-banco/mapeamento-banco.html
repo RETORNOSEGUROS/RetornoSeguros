@@ -3810,6 +3810,18 @@
         </div>
       </div>
 
+      <!-- PIPELINE POR GRUPO (para mostrar à seguradora) -->
+      <div style="background: white; border-radius: 12px; padding: 18px; margin-bottom: 18px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+          <div>
+            <h3 style="margin: 0; font-size: 14px; color: #0f172a;">🎯 Pipeline de negociação por grupo</h3>
+            <p style="margin:4px 0 0; font-size:11px; color:#94a3b8;">Negócios em andamento (da 2ª etapa até transmissão), por chance de fechamento. Ideal pra enviar à seguradora.</p>
+          </div>
+          <button class="btn-secondary" onclick="exportarPipelinePDF()" style="white-space:nowrap;"><i data-lucide="file-down" class="w-4 h-4 inline"></i> PDF de previsão</button>
+        </div>
+        <div id="relPipelineGrupo"></div>
+      </div>
+
       <!-- Linha 3: Por produto + Por seguradora + Por status -->
       <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px;">
         <div style="background: white; border-radius: 12px; padding: 18px;">
@@ -9501,6 +9513,15 @@
 
   async function renderRelatorio() {
     destruirCharts();
+    // Popula o filtro de produtos com os ramos REAIS (antes era lista fixa no HTML)
+    const selProd = document.getElementById('relatorioProduto');
+    if (selProd && selProd.dataset.pop !== '1') {
+      const atual = selProd.value;
+      selProd.innerHTML = '<option value="">Todos os produtos</option>' +
+        (PRODUTOS || []).map(r => `<option value="${r.id}">${r.icon || ''} ${r.nome}</option>`).join('');
+      selProd.value = atual;
+      selProd.dataset.pop = '1';
+    }
     const escopo = document.getElementById('relatorioEscopo')?.value || 'meu';
     const periodo = document.getElementById('relatorioPeriodo')?.value || 'mes';
     const fProduto = document.getElementById('relatorioProduto')?.value || '';
@@ -9645,6 +9666,9 @@
       // ===== FUNIL =====
       renderFunil(cotPeriodo, fechadas);
 
+      // ===== PIPELINE POR GRUPO (negócios ativos agora, por chance) =====
+      renderPipelineGrupo(escopo, fProduto);
+
       // ===== POR PRODUTO ===== (inclui os já nossos)
       renderChartProduto(cotComNosso);
 
@@ -9769,25 +9793,182 @@
     return Math.ceil((diff + start.getDay() + 1) / 7);
   }
 
+  // Probabilidade por chance (para o valor ponderado / previsão realista)
+  const PROB_CHANCE = { alta: 0.8, media: 0.5, baixa: 0.2 };
+
+  // Coleta o pipeline ATIVO (da 2ª etapa até transmissão/análise), agrupado por grupo×chance.
+  // "Da 2ª etapa em diante" = tira as recém-solicitadas (1ª etapa), que ainda não são negociação real.
+  function _coletarPipeline(escopo, fProduto) {
+    const ativas = (typeof ETAPAS_FUNIL !== 'undefined' && ETAPAS_FUNIL.length) ? ETAPAS_FUNIL.map(e => e.id) : [];
+    const daSegundaEmDiante = new Set(ativas.slice(1));   // ignora a 1ª etapa
+    const ramoGrupo = {}, ramoNome = {}, grupoNome = {};
+    (PRODUTOS || []).forEach(r => { ramoGrupo[r.id] = r.grupoId; ramoNome[r.id] = r.nome; });
+    (GRUPOS || []).forEach(g => { grupoNome[g.id] = g.nome; });
+
+    const porGrupo = {};   // gid -> { alta:{v,n}, media:{}, baixa:{}, semChance:{}, produtos:{} }
+    (COTACOES || []).forEach(c => {
+      if (!daSegundaEmDiante.has(c.status)) return;                 // só da 2ª etapa em diante
+      if (escopo === 'meu' && c.rmUid && c.rmUid !== uidEfetivo()) return;
+      if (fProduto && c.produtoId !== fProduto) return;
+      const gid = ramoGrupo[c.produtoId] || 'outros';
+      const ch = ['alta', 'media', 'baixa'].includes(c.chanceFechamento) ? c.chanceFechamento : 'semChance';
+      const val = c.valor || c.premioProposto || 0;
+      porGrupo[gid] = porGrupo[gid] || { alta: { v: 0, n: 0 }, media: { v: 0, n: 0 }, baixa: { v: 0, n: 0 }, semChance: { v: 0, n: 0 }, produtos: {}, total: 0, ponderado: 0 };
+      porGrupo[gid][ch].v += val; porGrupo[gid][ch].n++;
+      porGrupo[gid].total += val;
+      porGrupo[gid].ponderado += val * (PROB_CHANCE[c.chanceFechamento] || 0);
+      const pn = ramoNome[c.produtoId] || c.produtoId;
+      porGrupo[gid].produtos[pn] = porGrupo[gid].produtos[pn] || { v: 0, n: 0, alta: 0, media: 0, baixa: 0 };
+      porGrupo[gid].produtos[pn].v += val; porGrupo[gid].produtos[pn].n++;
+      if (['alta','media','baixa'].includes(c.chanceFechamento)) porGrupo[gid].produtos[pn][c.chanceFechamento] += val;
+    });
+    return { porGrupo, grupoNome };
+  }
+
+  // PDF de previsão de fechamento — limpo, pra enviar à seguradora.
+  function exportarPipelinePDF() {
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página.');
+    const { jsPDF } = window.jspdf;
+    const escopo = document.getElementById('relatorioEscopo')?.value || 'meu';
+    const fProduto = document.getElementById('relatorioProduto')?.value || '';
+    const { porGrupo, grupoNome } = _coletarPipeline(escopo, fProduto);
+    const gids = Object.keys(porGrupo).filter(g => porGrupo[g].total > 0);
+    if (!gids.length) return alert('Nenhum negócio em negociação para exportar.');
+
+    const fmt = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+    gids.sort((a, b) => porGrupo[b].total - porGrupo[a].total);
+    const totalGeral = gids.reduce((s, g) => s + porGrupo[g].total, 0);
+    const pondGeral = gids.reduce((s, g) => s + porGrupo[g].ponderado, 0);
+    const nNeg = gids.reduce((s, g) => s + g.alta.n + g.media.n + g.baixa.n + g.semChance.n, 0);
+
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const M = 16, PW = 210;
+    let y = M;
+
+    // Cabeçalho
+    doc.setFontSize(16); doc.setTextColor(30, 27, 75); doc.setFont(undefined, 'bold');
+    doc.text('Previsão de Fechamento — Pipeline', M, y); y += 7;
+    doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const quem = escopo === 'meu' ? (CTX.nome || '') : (CTX.agenciaNome || 'Agência');
+    doc.text(`${quem}  ·  emitido em ${hoje}`, M, y); y += 8;
+
+    // Resumo executivo (ideia c)
+    doc.setFillColor(238, 242, 255); doc.roundedRect(M, y, PW - M * 2, 24, 2, 2, 'F');
+    doc.setTextColor(49, 46, 129); doc.setFontSize(10); doc.setFont(undefined, 'bold');
+    doc.text('Resumo', M + 4, y + 6);
+    doc.setFont(undefined, 'normal'); doc.setFontSize(9); doc.setTextColor(55, 48, 163);
+    const resumo = doc.splitTextToSize(
+      `${nNeg} negocios em negociacao somam ${fmt(totalGeral)} em pipeline. Considerando a chance de cada um, a previsao ponderada de fechamento e de ${fmt(pondGeral)}.`,
+      PW - M * 2 - 8);
+    doc.text(resumo, M + 4, y + 12);
+    y += 30;
+
+    // Por grupo
+    gids.forEach(gid => {
+      const g = porGrupo[gid];
+      if (y > 250) { doc.addPage(); y = M; }
+      doc.setFillColor(15, 23, 42); doc.roundedRect(M, y, PW - M * 2, 9, 1.5, 1.5, 'F');
+      doc.setTextColor(255, 255, 255); doc.setFontSize(11); doc.setFont(undefined, 'bold');
+      doc.text(grupoNome[gid] || gid, M + 3, y + 6);
+      doc.text(fmt(g.total), PW - M - 3, y + 6, { align: 'right' });
+      y += 13;
+
+      doc.setTextColor(51, 65, 85); doc.setFontSize(9); doc.setFont(undefined, 'normal');
+      const linhaCh = (emoji, lbl, o) => { if (o.n) { doc.text(`${lbl}: ${fmt(o.v)}  (${o.n} ${o.n === 1 ? 'negocio' : 'negocios'})`, M + 4, y); y += 5; } };
+      linhaCh('', '  Alta', g.alta);
+      linhaCh('', '  Media', g.media);
+      linhaCh('', '  Baixa', g.baixa);
+      if (g.semChance.n) { doc.setTextColor(148, 163, 184); doc.text(`  Sem chance definida: ${fmt(g.semChance.v)} (${g.semChance.n})`, M + 4, y); y += 5; doc.setTextColor(51, 65, 85); }
+
+      // produtos
+      doc.setFontSize(8); doc.setTextColor(100, 116, 139);
+      Object.entries(g.produtos).sort((a, b) => b[1].v - a[1].v).forEach(([pn, pd]) => {
+        if (y > 275) { doc.addPage(); y = M; }
+        doc.text(`      ${pn}: ${fmt(pd.v)} (${pd.n})`, M + 4, y); y += 4.5;
+      });
+      y += 4;
+    });
+
+    // rodapé
+    doc.setFontSize(7.5); doc.setTextColor(148, 163, 184);
+    doc.text('Valores em negociacao, sujeitos a alteracao. Previsao ponderada: alta 80%, media 50%, baixa 20%.', M, 288);
+
+    doc.save(`previsao-fechamento-${hoje.replace(/\//g, '-')}.pdf`);
+  }
+  window.exportarPipelinePDF = exportarPipelinePDF;
+
+  function renderPipelineGrupo(escopo, fProduto) {
+    const cont = document.getElementById('relPipelineGrupo');
+    if (!cont) return;
+    const { porGrupo, grupoNome } = _coletarPipeline(escopo, fProduto);
+    const gids = Object.keys(porGrupo).filter(g => porGrupo[g].total > 0);
+    if (!gids.length) {
+      cont.innerHTML = '<div style="text-align:center; padding:24px; color:#94a3b8; font-size:13px;">Nenhum negócio em negociação no momento (da 2ª etapa em diante).</div>';
+      return;
+    }
+    const fmt = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+    gids.sort((a, b) => porGrupo[b].total - porGrupo[a].total);
+    const totalGeral = gids.reduce((s, g) => s + porGrupo[g].total, 0);
+    const pondGeral = gids.reduce((s, g) => s + porGrupo[g].ponderado, 0);
+
+    let h = `<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+      <div style="flex:1; min-width:150px; background:#f8fafc; border-radius:10px; padding:14px;">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">TOTAL EM NEGOCIAÇÃO</div>
+        <div style="font-size:24px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono';">${fmt(totalGeral)}</div>
+      </div>
+      <div style="flex:1; min-width:150px; background:#eff6ff; border-radius:10px; padding:14px;">
+        <div style="font-size:11px; color:#1d4ed8; font-weight:700;">PREVISÃO PONDERADA</div>
+        <div style="font-size:24px; font-weight:800; color:#1d4ed8; font-family:'JetBrains Mono';">${fmt(pondGeral)}</div>
+        <div style="font-size:10px; color:#93c5fd;">valor × chance (alta 80% · média 50% · baixa 20%)</div>
+      </div>
+    </div>`;
+
+    gids.forEach(gid => {
+      const g = porGrupo[gid];
+      const pAlta = g.total > 0 ? g.alta.v / g.total * 100 : 0;
+      const pMedia = g.total > 0 ? g.media.v / g.total * 100 : 0;
+      const pBaixa = g.total > 0 ? g.baixa.v / g.total * 100 : 0;
+      const pSem = g.total > 0 ? g.semChance.v / g.total * 100 : 0;
+      h += `<div style="border:1px solid #f1f5f9; border-radius:11px; padding:14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+          <div style="font-size:14px; font-weight:800; color:#0f172a;">${grupoNome[gid] || gid}</div>
+          <div style="font-size:15px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono';">${fmt(g.total)}</div>
+        </div>
+        <div style="display:flex; height:22px; border-radius:6px; overflow:hidden; margin-bottom:8px; background:#f1f5f9;">
+          ${pAlta > 0 ? `<div style="width:${pAlta}%; background:#10b981;" title="Alta"></div>` : ''}
+          ${pMedia > 0 ? `<div style="width:${pMedia}%; background:#f59e0b;" title="Média"></div>` : ''}
+          ${pBaixa > 0 ? `<div style="width:${pBaixa}%; background:#ef4444;" title="Baixa"></div>` : ''}
+          ${pSem > 0 ? `<div style="width:${pSem}%; background:#cbd5e1;" title="Sem chance definida"></div>` : ''}
+        </div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; margin-bottom:6px;">
+          ${g.alta.n ? `<span>🟢 Alta: <strong>${fmt(g.alta.v)}</strong> (${g.alta.n})</span>` : ''}
+          ${g.media.n ? `<span>🟡 Média: <strong>${fmt(g.media.v)}</strong> (${g.media.n})</span>` : ''}
+          ${g.baixa.n ? `<span>🔴 Baixa: <strong>${fmt(g.baixa.v)}</strong> (${g.baixa.n})</span>` : ''}
+          ${g.semChance.n ? `<span style="color:#94a3b8;">⚪ Sem chance: ${fmt(g.semChance.v)} (${g.semChance.n})</span>` : ''}
+        </div>
+        <div style="font-size:11px; color:#64748b; border-top:1px dashed #f1f5f9; padding-top:6px; margin-top:2px;">
+          ${Object.entries(g.produtos).sort((a,b)=>b[1].v-a[1].v).map(([pn, pd]) => `${pn}: <strong>${fmt(pd.v)}</strong> (${pd.n})`).join(' · ')}
+        </div>
+      </div>`;
+    });
+    cont.innerHTML = h;
+  }
+
   function renderFunil(cotacoes, fechadas) {
-    // Ordem real do funil. Cada etapa conta quem chegou ATÉ ela ou passou dela (efeito cascata).
-    const ORDEM = ['solicitada', 'informacoes', 'cotando', 'enviada', 'reuniao_agendada', 'analise', 'fechada'];
+    // Ordem REAL do funil, lida das etapas configuradas (não mais cravada).
+    // Assim, se você editar/adicionar/remover etapas em Config, o funil aqui acompanha.
+    const ativas = (typeof ETAPAS_FUNIL !== 'undefined' && ETAPAS_FUNIL.length)
+      ? ETAPAS_FUNIL.slice() : [];
+    const ORDEM = ativas.map(e => e.id).concat(['fechada']);
     const rank = s => ORDEM.indexOf(s);
-    // rank efetivo: perdida/sem_aceitacao contam até onde chegaram? Simplificação: entram no topo (solicitada)
     const rankCot = c => {
       if (c.status === 'fechada') return ORDEM.length - 1;
       const r = rank(c.status);
-      return r >= 0 ? r : 0; // perdida/sem_aceitacao/cancelada = passou ao menos por solicitada
+      return r >= 0 ? r : 0;
     };
-    const etapasDef = [
-      { id: 'solicitada',       nome: 'Solicitadas',       cor: '#f59e0b' },
-      { id: 'informacoes',      nome: 'Coletando info',    cor: '#eab308' },
-      { id: 'cotando',          nome: 'Cotando',           cor: '#3b82f6' },
-      { id: 'enviada',          nome: 'Enviadas',          cor: '#0ea5e9' },
-      { id: 'reuniao_agendada', nome: 'Reunião agendada',  cor: '#8b5cf6' },
-      { id: 'analise',          nome: 'Em análise',        cor: '#a855f7' },
-      { id: 'fechada',          nome: 'Fechadas',          cor: '#10b981' }
-    ];
+    const etapasDef = ativas.map(e => ({ id: e.id, nome: e.label, cor: e.cor || '#64748b' }))
+      .concat([{ id: 'fechada', nome: 'Fechadas', cor: '#10b981' }]);
     const todas = cotacoes.concat(fechadas.filter(f => f.origem === 'nosso_mapeado')); // inclui já-nossos como fechados
     const etapas = etapasDef.map((e, idx) => ({
       ...e,
@@ -10211,14 +10392,28 @@
       const cor = motivosCor[motivo] || '#64748b';
       const label = motivosLabel[motivo] || motivo;
       const w = (dados.valor / maxValor * 100);
+      const detId = 'perda_' + motivo.replace(/[^a-z0-9]/gi, '');
+      const rmNome = c => c.rmNome || (EMPRESAS.find(e => e.id === c.empresaId) || {}).rmNome || '—';
+      const prodNome = c => (PRODUTOS.find(p => p.id === c.produtoId) || {}).nome || c.produtoId || '—';
+      const linhasDet = dados.cotacoes
+        .sort((a, b) => (b.valorProposto || b.valor || 0) - (a.valorProposto || a.valor || 0))
+        .map(c => `<div style="display:flex; justify-content:space-between; gap:8px; padding:6px 8px; border-bottom:1px solid #f8fafc; font-size:11.5px;">
+          <div style="min-width:0;"><strong style="color:#0f172a;">${c.empresaNome || '—'}</strong> <span style="color:#94a3b8;">· ${prodNome(c)} · ${rmNome(c)}</span></div>
+          <div style="font-family:'JetBrains Mono'; font-weight:700; color:${cor}; white-space:nowrap;">${fmtBRcompacto(c.valorProposto || c.valor || 0)}</div>
+        </div>`).join('');
       return `
         <div style="margin-bottom: 10px;">
-          <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
-            <span style="font-weight: 600; color: #475569;">${label} <small style="color:#94a3b8;">${dados.count} cotação${dados.count !== 1 ? 'ões' : ''}</small></span>
-            <span style="font-family: 'JetBrains Mono'; font-weight: 800; color: ${cor};">${fmtBRcompacto(dados.valor)}</span>
+          <div onclick="var d=document.getElementById('${detId}'); d.style.display = d.style.display==='none'?'block':'none'; this.querySelector('.perda-seta').textContent = d.style.display==='none'?'▸':'▾';" style="cursor:pointer;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+              <span style="font-weight: 600; color: #475569;"><span class="perda-seta" style="color:#cbd5e1; font-size:10px;">▸</span> ${label} <small style="color:#94a3b8;">${dados.count} cotação${dados.count !== 1 ? 'ões' : ''}</small></span>
+              <span style="font-family: 'JetBrains Mono'; font-weight: 800; color: ${cor};">${fmtBRcompacto(dados.valor)}</span>
+            </div>
+            <div style="background:#f1f5f9; border-radius: 100px; height: 8px; overflow: hidden;">
+              <div style="background:${cor}; height: 100%; width: ${w}%; border-radius: 100px;"></div>
+            </div>
           </div>
-          <div style="background:#f1f5f9; border-radius: 100px; height: 8px; overflow: hidden;">
-            <div style="background:${cor}; height: 100%; width: ${w}%; border-radius: 100px;"></div>
+          <div id="${detId}" style="display:none; margin-top:6px; background:#fafbfc; border:1px solid #f1f5f9; border-radius:8px; padding:4px 6px;">
+            ${linhasDet}
           </div>
         </div>
       `;
