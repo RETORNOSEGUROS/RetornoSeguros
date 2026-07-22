@@ -10258,7 +10258,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '181';
+  const APP_VERSAO = '182';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -21037,14 +21037,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }
     } catch (e) {}
     c.checklistFeito = c.checklistFeito || {};
-    const campo = 'checklistFeito.' + itemKey.replace(/\|/g, '__');
+    // ID determinístico da ação: um item marcado = UM registro de ponto, sempre.
+    // Assim, remarcar não duplica pontos e desmarcar consegue apagar o certo.
+    const acaoId = 'chk_' + cotacaoId + '_' + itemKey.replace(/[^a-zA-Z0-9]/g, '_');
     try {
       if (marcado) {
         const registro = { porUid: autorUid(), porNome: autorNome(), em: new Date().toISOString() };
         c.checklistFeito[itemKey] = registro;
-        await db.collection('mb_cotacoes').doc(cotacaoId).set({ checklistFeito: c.checklistFeito }, { merge: true });
-        // Ação/registro para quem deu o check (futuro ponto)
-        await db.collection('mb_acoes').add({
+        try {
+          await db.collection('mb_cotacoes').doc(cotacaoId).update({ checklistFeito: c.checklistFeito });
+        } catch (eUp) {
+          await db.collection('mb_cotacoes').doc(cotacaoId).set({ checklistFeito: c.checklistFeito }, { merge: true });
+        }
+        // set com ID fixo: se marcar de novo, sobrescreve em vez de criar outro ponto
+        await db.collection('mb_acoes').doc(acaoId).set({
           tipo: 'checklist_item', empresaId: c.empresaId, empresaNome: c.empresaNome,
           agenciaId: c.agenciaId || CTX.agenciaId, cotacaoId,
           etapa: c.status, item: itemKey,
@@ -21052,9 +21058,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           usuarioPerfil: CTX.perfilSimulado || CTX.perfil, pontos: getPonto('checklist_item'),
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
         });
+        _ACOES_CACHE = null;
       } else {
         delete c.checklistFeito[itemKey];
-        await db.collection('mb_cotacoes').doc(cotacaoId).set({ checklistFeito: c.checklistFeito }, { merge: true });
+        // CRÍTICO: set+merge NÃO removia a chave apagada (por isso o item voltava
+        // marcado ao atualizar a página). FieldPath+delete remove a chave certa,
+        // mesmo com caracteres especiais, e sem atropelar edições simultâneas.
+        try {
+          await db.collection('mb_cotacoes').doc(cotacaoId).update(
+            new firebase.firestore.FieldPath('checklistFeito', itemKey),
+            firebase.firestore.FieldValue.delete()
+          );
+        } catch (eDel) {
+          // plano B: substitui o mapa inteiro
+          await db.collection('mb_cotacoes').doc(cotacaoId).update({ checklistFeito: c.checklistFeito });
+        }
+        // desmarcar devolve o ponto: apaga a ação de quem havia marcado
+        try { await db.collection('mb_acoes').doc(acaoId).delete(); } catch (e2) {}
+        _ACOES_CACHE = null;   // força recarregar as ações (pontos atualizam na hora)
       }
     } catch (e) { console.warn('checklist', e); }
 
@@ -21084,6 +21105,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }, { merge: true });
         _ACOES_CACHE = null;
       } catch (e) { console.warn('ponto do ultimo item', e); }
+    }
+
+    // Desmarcou e a etapa deixou de estar completa → o bônus de "fechou a etapa"
+    // some junto. Sem isso, o ponto ficaria pago por uma etapa que não está mais pronta.
+    if (!marcado && !etapaCompleta) {
+      try {
+        await db.collection('mb_acoes').doc('fim_' + cotacaoId + '_' + c.status).delete();
+        _ACOES_CACHE = null;
+      } catch (e) { /* não existia, tudo bem */ }
     }
 
     if (etapaCompleta) {
