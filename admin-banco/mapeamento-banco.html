@@ -3851,10 +3851,16 @@
           </div>
         </div>
         <div style="background: white; border-radius: 12px; padding: 18px;">
-          <h3 style="margin: 0 0 12px; font-size: 14px; color: #0f172a;">🏢 Produção por seguradora</h3>
-          <div style="position: relative; height: 220px;">
-            <canvas id="chartSeguradora"></canvas>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+            <div>
+              <h3 style="margin: 0; font-size: 14px; color: #0f172a;">🏢 Mapeamento por seguradora</h3>
+              <p style="margin:3px 0 0; font-size:10.5px; color:#94a3b8;">Onde está o prêmio da sua carteira hoje — no mercado e conosco.</p>
+            </div>
+            <select class="filter-select" id="mapSegGrupo" onchange="renderMapeamentoSeguradora()" style="padding:5px 9px; font-size:12px;">
+              <option value="">Todos os grupos</option>
+            </select>
           </div>
+          <div id="mapSeguradoraLista" style="max-height:260px; overflow-y:auto;"></div>
         </div>
         <div style="background: white; border-radius: 12px; padding: 18px;">
           <h3 style="margin: 0 0 12px; font-size: 14px; color: #0f172a;">📊 Status das cotações</h3>
@@ -4914,8 +4920,9 @@
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">Seguradora atual (opcional)</label>
-          <input type="text" class="form-control" id="seguradoraAtual" placeholder="Ex: Porto Seguro">
+          <label class="form-label">Seguradora atual <small style="color:#94a3b8; font-weight:500;">(opcional — muitos clientes preferem não informar)</small></label>
+          <input type="text" class="form-control" id="seguradoraAtual" list="listaSeguradoras" placeholder="Comece a digitar… ex: Tok → Tokio Marine" autocomplete="off">
+          <datalist id="listaSeguradoras"></datalist>
         </div>
       </div>
 
@@ -9792,7 +9799,7 @@
       renderChartProduto(cotComNosso);
 
       // ===== POR SEGURADORA =====
-      renderChartSeguradora(fechadas);
+      renderMapeamentoSeguradora();
 
       // ===== STATUS PIZZA =====
       renderChartStatus(cotComNosso);
@@ -10204,10 +10211,54 @@
   }
   window.exportarPipelinePDF = exportarPipelinePDF;
 
+  // ============================================================================
+  // SEGURADORAS DO MERCADO (v180)
+  // Lista ÚNICA para todos os ramos — a mesma seguradora costuma operar em vários
+  // (a Tokio faz vida, quase todas fazem D&O). O campo é sempre OPCIONAL e aceita
+  // texto livre: se a seguradora não estiver aqui, é só digitar.
+  // Editável em Config (mb_config/seguradoras) sem mexer no código.
+  // ============================================================================
+  const SEGURADORAS_DEFAULT = [
+    'Alfa Seguradora', 'Alice', 'Allianz', 'American Life', 'Amil', 'Argo', 'AXA', 'Azos', 'Azul Seguros',
+    'Berkley', 'Bradesco Saúde', 'Bradesco Seguros', 'Brasilseg (BB)',
+    'Caixa Seguradora', 'Capemisa', 'Care Plus', 'Chubb',
+    'Essor', 'Excelsior', 'Ezze',
+    'Fairfax', 'Fator Seguradora', 'Generali',
+    'Hapvida', 'HDI Seguros',
+    'Icatu', 'Itaú Seguros', 'Junto Seguros',
+    'Kovr', 'Mapfre', 'MetLife', 'Mitsui Sumitomo',
+    'NotreDame Intermédica', 'Odontoprev', 'Omint',
+    'Porto Saúde', 'Porto Seguro', 'Pottencial', 'Prudential',
+    'Sami', 'Sancor Seguros', 'Sombrero', 'Sompo Seguros', 'Suhai',
+    'SulAmérica', 'SulAmérica Saúde', 'Swiss Re',
+    'Tokio Marine', 'Too Seguros',
+    'Unimed', 'Uniodonto', 'Yelum (ex-Liberty)', 'Zurich'
+  ].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  let SEGURADORAS = SEGURADORAS_DEFAULT.slice();
+
+  // Carrega a lista personalizada, se o admin tiver editado
+  async function carregarSeguradoras() {
+    try {
+      const doc = await db.collection('mb_config').doc('seguradoras').get();
+      const lst = doc.exists && Array.isArray(doc.data().lista) ? doc.data().lista.filter(Boolean) : null;
+      SEGURADORAS = (lst && lst.length ? lst : SEGURADORAS_DEFAULT.slice())
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    } catch (e) { SEGURADORAS = SEGURADORAS_DEFAULT.slice(); }
+    _pintarDatalistSeguradoras();
+  }
+  window.carregarSeguradoras = carregarSeguradoras;
+
+  function _pintarDatalistSeguradoras() {
+    const dl = document.getElementById('listaSeguradoras');
+    if (dl) dl.innerHTML = SEGURADORAS.map(s => `<option value="${(s || '').replace(/"/g, '&quot;')}"></option>`).join('');
+  }
+  window._pintarDatalistSeguradoras = _pintarDatalistSeguradoras;
+
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '179';
+  const APP_VERSAO = '180';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -10363,6 +10414,78 @@
       }
     });
   }
+
+  // ===== MAPEAMENTO POR SEGURADORA =====
+  // Mostra onde está o prêmio da carteira: quanto de cada ramo está com cada
+  // concorrente e quanto já é nosso. É a foto do território — o que a "produção
+  // por seguradora" não mostrava, já que tudo que fechamos é Bradesco.
+  function renderMapeamentoSeguradora() {
+    const cont = document.getElementById('mapSeguradoraLista');
+    if (!cont) return;
+    const selG = document.getElementById('mapSegGrupo');
+    // popula o filtro de grupo uma vez
+    if (selG && selG.dataset.pop !== '1') {
+      selG.innerHTML = '<option value="">Todos os grupos</option>' +
+        (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome}</option>`).join('');
+      selG.dataset.pop = '1';
+    }
+    const grupoSel = selG ? selG.value : '';
+    const escopo = (document.getElementById('relatorioEscopo') || {}).value || 'agencia';
+
+    const ramoGrupo = {}, ramoNome = {};
+    (PRODUTOS || []).forEach(r => { ramoGrupo[r.id] = r.grupoId; ramoNome[r.id] = r.nome; });
+
+    let lista = (EMPRESAS_REAIS || EMPRESAS || []);
+    if (escopo === 'meu' && perfilEfetivo() === 'rm') lista = lista.filter(e => e.rm === uidEfetivo());
+
+    const porSeg = {};   // seguradora -> { total, n, conosco, ramos:{} }
+    lista.forEach(e => {
+      Object.entries(e.produtosDados || {}).forEach(([rid, pd]) => {
+        if (!pd || !pd.statusVisual) return;
+        if (grupoSel && ramoGrupo[rid] !== grupoSel) return;
+        const st = pd.statusVisual;
+        // só interessa o que existe: já é nosso, no mercado, ou mapeado com dados
+        if (!['conosco', 'fechada', 'mercado', 'mapeada'].includes(st)) return;
+        const ehNosso = (st === 'conosco' || st === 'fechada');
+        // tudo que fechamos é Bradesco; no mercado, usa o que foi informado
+        let seg = ehNosso ? 'Bradesco Seguros' : ((pd.seguradoraAtual || pd.seguradora || '').trim() || 'Não informada');
+        const premio = pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0;
+        porSeg[seg] = porSeg[seg] || { total: 0, n: 0, conosco: 0, ramos: {} };
+        porSeg[seg].total += premio;
+        porSeg[seg].n++;
+        if (ehNosso) porSeg[seg].conosco++;
+        const rn = ramoNome[rid] || rid;
+        porSeg[seg].ramos[rn] = (porSeg[seg].ramos[rn] || 0) + premio;
+      });
+    });
+
+    const itens = Object.entries(porSeg).sort((a, b) => (b[1].total - a[1].total) || (b[1].n - a[1].n));
+    if (!itens.length) {
+      cont.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:50px 20px; font-size:12px;">Nenhum seguro mapeado ainda com esse filtro.</div>';
+      return;
+    }
+    const maxV = Math.max(...itens.map(i => i[1].total), 1);
+    const fmt = v => v > 0 ? fmtBRcompacto(v) : '—';
+    cont.innerHTML = itens.map(([seg, d]) => {
+      const ehNosso = seg === 'Bradesco Seguros';
+      const cor = ehNosso ? '#10b981' : (seg === 'Não informada' ? '#cbd5e1' : '#6366f1');
+      const w = Math.max(2, d.total / maxV * 100);
+      const topRamos = Object.entries(d.ramos).sort((a, b) => b[1] - a[1]).slice(0, 3)
+        .map(([rn, v]) => `${rn}${v > 0 ? ' ' + fmtBRcompacto(v) : ''}`).join(' · ');
+      return `<div style="margin-bottom:11px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px; gap:8px;">
+          <span style="font-weight:700; color:#334155; min-width:0;">${seg}${ehNosso ? ' <span style="font-size:9.5px; background:#dcfce7; color:#166534; padding:1px 6px; border-radius:4px;">conosco</span>' : ''}
+            <span style="color:#94a3b8; font-weight:500;"> · ${d.n} ${d.n === 1 ? 'apólice' : 'apólices'}</span></span>
+          <span style="font-family:'JetBrains Mono'; font-weight:800; color:${cor}; white-space:nowrap;">${fmt(d.total)}</span>
+        </div>
+        <div style="background:#f1f5f9; border-radius:100px; height:7px; overflow:hidden;">
+          <div style="background:${cor}; height:100%; width:${w}%; border-radius:100px;"></div>
+        </div>
+        ${topRamos ? `<div style="font-size:10px; color:#94a3b8; margin-top:3px;">${topRamos}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+  window.renderMapeamentoSeguradora = renderMapeamentoSeguradora;
 
   function renderChartSeguradora(fechadas) {
     const por = {};
@@ -15295,6 +15418,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     await carregarCampanha();
     await carregarFatorConfig();
     await carregarPremiacao();
+    await carregarSeguradoras();
   }
 
   // ---------- Render: tela de Configurações (abas dinâmicas) ----------
