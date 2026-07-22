@@ -3565,6 +3565,7 @@
           <div style="font-size:11px; color:#94a3b8; margin-bottom:10px;" id="prodChartPizzaSub">% de cada ramo no período</div>
           <div style="height:200px;"><canvas id="prodChartPizza"></canvas></div>
           <div id="prodPizzaLegenda" style="margin-top:10px; display:flex; flex-direction:column; gap:4px;"></div>
+          <div id="prodPizzaAviso" style="display:none; font-size:10px; color:#94a3b8; margin-top:8px; line-height:1.4;"></div>
         </div>
       </div>
 
@@ -10311,7 +10312,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '189';
+  const APP_VERSAO = '190';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -22664,18 +22665,56 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (canvasP && typeof Chart !== 'undefined') {
       if (_prodChartPizza) _prodChartPizza.destroy();
       if (entradas.length) {
+        // PISO VISUAL: um ramo de R$ 4 mil dentro de R$ 1 milhão vira uma linha
+        // invisível. Damos a cada fatia não-zero um mínimo de 2,5% do círculo só
+        // para ela EXISTIR no desenho. Tooltip e legenda continuam com o valor e o
+        // percentual REAIS — e avisamos embaixo quando alguma fatia foi ampliada.
+        const PISO = 0.025;
+        const pisoValor = totalPizza * PISO;
+        const dadosVisuais = entradas.map(e => e[1] > 0 ? Math.max(e[1], pisoValor) : 0);
+        const ampliadas = entradas.filter(e => e[1] > 0 && e[1] < pisoValor).length;
+
         _prodChartPizza = new Chart(canvasP, {
           type: 'doughnut',
-          data: { labels: entradas.map(e => e[0]), datasets: [{ data: entradas.map(e => e[1]), backgroundColor: paleta, borderWidth: 2, borderColor: '#fff' }] },
-          options: { responsive: true, maintainAspectRatio: false, cutout: '70%', borderRadius: 4, plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(15,23,42,0.92)', titleColor: '#e2e8f0', bodyColor: '#f8fafc', padding: 10, cornerRadius: 10, boxPadding: 4, callbacks: { label: ctx => ` ${ctx.label}: ${fmtBR(ctx.parsed)} (${totalPizza ? Math.round(ctx.parsed / totalPizza * 100) : 0}%)` } } } }
+          data: { labels: entradas.map(e => e[0]), datasets: [{ data: dadosVisuais, backgroundColor: paleta, borderWidth: 2, borderColor: '#fff' }] },
+          options: {
+            responsive: true, maintainAspectRatio: false, cutout: '70%', borderRadius: 4,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: 'rgba(15,23,42,0.92)', titleColor: '#e2e8f0', bodyColor: '#f8fafc',
+                padding: 10, cornerRadius: 10, boxPadding: 4,
+                callbacks: {
+                  // sempre o valor REAL, nunca o inflado
+                  label: ctx => {
+                    const real = entradas[ctx.dataIndex] ? entradas[ctx.dataIndex][1] : 0;
+                    const p = totalPizza ? (real / totalPizza * 100) : 0;
+                    const pTxt = p > 0 && p < 1 ? 'menos de 1%' : Math.round(p) + '%';
+                    return ` ${ctx.label}: ${fmtBR(real)} (${pTxt})`;
+                  }
+                }
+              }
+            }
+          }
         });
+
+        // aviso de transparência
+        const _av = document.getElementById('prodPizzaAviso');
+        if (_av) {
+          _av.textContent = ampliadas > 0
+            ? `↑ ${ampliadas} ${ampliadas === 1 ? 'ramo teve a fatia ampliada' : 'ramos tiveram a fatia ampliada'} para ficar visível. Os valores ao lado são os reais.`
+            : '';
+          _av.style.display = ampliadas > 0 ? 'block' : 'none';
+        }
       }
     }
     // legenda da pizza
     const leg = document.getElementById('prodPizzaLegenda');
     if (leg) {
       leg.innerHTML = entradas.length ? entradas.map((e, i) => {
-        const pct = totalPizza ? Math.round(e[1] / totalPizza * 100) : 0;
+        const pctExato = totalPizza ? (e[1] / totalPizza * 100) : 0;
+        // "0%" escondia que o ramo existe — mostramos "<1%" quando é pequeno mas real
+        const pct = (pctExato > 0 && pctExato < 1) ? '<1' : Math.round(pctExato);
         return `<div style="display:flex; align-items:center; justify-content:space-between; font-size:11.5px;">
           <span style="display:flex; align-items:center; gap:6px; color:#334155;"><span style="width:10px; height:10px; border-radius:3px; background:${paleta[i % paleta.length]};"></span>${e[0]}</span>
           <span style="font-weight:700; color:#0f172a;">${pct}% <span style="color:#94a3b8; font-weight:500;">${fmtBRcompacto(e[1])}</span></span>
