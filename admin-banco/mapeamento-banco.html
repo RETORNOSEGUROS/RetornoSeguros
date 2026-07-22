@@ -3757,6 +3757,7 @@
               <option value="agencia">🏢 Toda a agência</option>
             </select>
             <select class="filter-select" id="relatorioPeriodo" onchange="onPeriodoRelatorio()" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white;">
+              <option value="campanha">🏆 Período da campanha</option>
               <option value="ano">📅 Ano atual (YTD)</option>
               <option value="mes">📅 Mês atual</option>
               <option value="ultimos30">📅 Últimos 30 dias</option>
@@ -9611,6 +9612,7 @@
     const titulo = escopo === 'meu' ? `Análise · ${CTX.nome}` : `Análise da Agência · ${CTX.agenciaNome || ''}`;
     document.getElementById('relatorioTitulo').textContent = titulo;
     const periodoLabels = {
+      campanha: 'Período da campanha',
       custom: 'Período personalizado',
       mes: 'Mês atual',
       ultimos30: 'Últimos 30 dias',
@@ -9630,6 +9632,11 @@
     else if (periodo === 'ultimos90')  inicio = new Date(hoje.getTime() - 90 * 86400000);
     else if (periodo === 'ano')        inicio = new Date(hoje.getFullYear(), 0, 1);
     else if (periodo === '12meses')    inicio = new Date(hoje.getTime() - 365 * 86400000);
+    else if (periodo === 'campanha') {
+      // mesma janela da campanha — assim os pontos batem com o ranking
+      inicio = CAMPANHA.inicio ? new Date(CAMPANHA.inicio + 'T00:00:00') : new Date(hoje.getFullYear(), 0, 1);
+      if (CAMPANHA.fim) fimPeriodo = new Date(CAMPANHA.fim + 'T23:59:59');
+    }
     else if (periodo === 'custom') {
       const di = (document.getElementById('relDataIni') || {}).value;
       const df = (document.getElementById('relDataFim') || {}).value;
@@ -9769,14 +9776,6 @@
       document.getElementById('relConversaoSub').textContent = `${fechadas.length} fechadas / ${decididas} decididas`;
       document.getElementById('relConversaoBar').style.width = Math.min(100, taxaConv) + '%';
 
-      // Plano B pro botão de PDF: além do onclick inline, liga por listener.
-      // Se o inline falhar por qualquer motivo, este pega.
-      const _btnPdf = document.getElementById('btnPipelinePDF');
-      if (_btnPdf && _btnPdf.dataset.lig !== '1') {
-        _btnPdf.addEventListener('click', function (ev) { ev.preventDefault(); exportarPipelinePDF(); });
-        _btnPdf.dataset.lig = '1';
-      }
-
       // Histórico com nome de empresa: escondido do RM quando ele olha a agência inteira
       const _blocoHist = document.getElementById('relBlocoHistorico');
       if (_blocoHist) _blocoHist.style.display = _podeVerDetalheAlheio ? '' : 'none';
@@ -9785,7 +9784,12 @@
       // deixa explícito o período e o escopo — a campanha conta o ANO todo, então os
       // números só batem se aqui estiver "Ano atual" + o mesmo escopo.
       const _subPts = document.getElementById('relPontosSub');
-      if (_subPts) _subPts.textContent = `${acoesPeriodo.length} ações · ${periodoLabels[periodo]} · ${_escopoMeu ? 'você' : 'toda a agência'}`;
+      if (_subPts) {
+        const _dica = (periodo !== 'campanha' && CAMPANHA && CAMPANHA.ativa)
+          ? ` <span style="color:#c7d2fe;">·</span> <span style="color:#6366f1; cursor:pointer; text-decoration:underline;" onclick="document.getElementById('relatorioPeriodo').value='campanha'; renderRelatorio();" title="Os pontos da campanha contam só o período dela">usar período da campanha</span>`
+          : '';
+        _subPts.innerHTML = `${acoesPeriodo.length} ações · ${periodoLabels[periodo]} · ${_escopoMeu ? 'você' : 'toda a agência'}${_dica}`;
+      }
       const topFonte = Object.entries(ptsTopFonte).sort((a,b)=>b[1]-a[1])[0];
       const fonteLabels = {
         visita: 'visitas', mapeamento: 'mapeamentos visita', mapeou_produto: 'mapeamentos',
@@ -10277,7 +10281,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '185';
+  const APP_VERSAO = '186';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -10405,8 +10409,12 @@
   function renderChartProduto(cotacoes) {
     const map = {};
     PRODUTOS.forEach(p => map[p.nome] = { total: 0, fechadas: 0 });
+    // Algumas cotações antigas não têm produtoNome gravado — resolvemos pelo produtoId.
+    // Sem isto, apareciam agrupadas como "undefined" no gráfico.
+    const nomeDoRamo = {};
+    (PRODUTOS || []).forEach(p => nomeDoRamo[p.id] = p.nome);
     cotacoes.forEach(c => {
-      const k = c.produtoNome;
+      const k = c.produtoNome || nomeDoRamo[c.produtoId] || (c.produtoId ? String(c.produtoId) : 'Sem produto');
       if (!map[k]) map[k] = { total: 0, fechadas: 0 };
       map[k].total++;
       if (c.status === 'fechada') map[k].fechadas++;
