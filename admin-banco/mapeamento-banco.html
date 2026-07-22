@@ -3270,6 +3270,15 @@
         </div>
 
         <div class="cfg-card perm-admin">
+          <h3><i data-lucide="brush-cleaning" class="w-5 h-5 text-rose-500"></i> Limpar pontos de checklist duplicados</h3>
+          <p class="cfg-desc">Até a v182, marcar e desmarcar um item criava pontos repetidos, e desmarcar não devolvia o ponto. Esta ferramenta compara as ações com o <strong>estado real de cada checklist</strong> e remove o que sobrou: duplicados e pontos de itens que já não estão marcados. <strong>Rode antes do recálculo.</strong></p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-primary" style="background:#e11d48;" onclick="previewLimpezaChecklist()"><i data-lucide="search" class="w-3.5 h-3.5 inline"></i> Ver o que seria removido</button>
+          </div>
+          <div id="limpezaResultado" style="margin-top:14px;"></div>
+        </div>
+
+        <div class="cfg-card perm-admin">
           <h3><i data-lucide="history" class="w-5 h-5 text-indigo-500"></i> Recalcular o histórico</h3>
           <p class="cfg-desc">Aplica a tabela acima nos pontos <strong>já registrados</strong>, para que a campanha inteira use um critério só. Mostra o antes e o depois antes de mexer em qualquer coisa, e dá pra desfazer.</p>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -10258,7 +10267,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '182';
+  const APP_VERSAO = '183';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -16103,6 +16112,145 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window._planoRecalculo = _planoRecalculo;
 
   let _RECALC_PLANO = null;
+
+  // ============================================================================
+  // LIMPEZA DE PONTOS DE CHECKLIST (v183)
+  // Reconcilia as ações de checklist com o ESTADO REAL de cada cotação:
+  //   • item marcado  → deve existir exatamente 1 ação
+  //   • item desmarcado → não deve existir nenhuma
+  // Remove duplicados (do bug do .add()) e órfãos (desmarcados que ficaram pagos).
+  // ============================================================================
+  let _LIMPEZA_PLANO = null;
+
+  async function _analisarLimpezaChecklist() {
+    // 1) estado real dos checklists
+    let qc = db.collection('mb_cotacoes');
+    if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
+    const snapCot = await qc.get();
+    const marcados = {};   // cotacaoId -> Set(itemKey)
+    snapCot.forEach(d => {
+      const c = d.data();
+      const s = new Set(Object.keys(c.checklistFeito || {}));
+      marcados[d.id] = s;
+    });
+
+    // 2) ações de checklist registradas
+    let qa = db.collection('mb_acoes').where('tipo', '==', 'checklist_item');
+    if (CTX.agenciaId) qa = qa.where('agenciaId', '==', CTX.agenciaId);
+    const snapAc = await qa.get();
+    const porChave = {};   // cotacaoId|item -> [ações]
+    snapAc.forEach(d => {
+      const a = { id: d.id, ...d.data() };
+      if (!a.cotacaoId || !a.item) return;
+      const k = a.cotacaoId + '||' + a.item;
+      (porChave[k] = porChave[k] || []).push(a);
+    });
+
+    const remover = [];
+    let dupl = 0, orfas = 0, ptsDupl = 0, ptsOrfas = 0;
+    Object.entries(porChave).forEach(([k, lista]) => {
+      const [cotId, item] = k.split('||');
+      const estaMarcado = marcados[cotId] ? marcados[cotId].has(item) : false;
+
+      if (!estaMarcado) {
+        // item não está marcado → nenhuma ação deveria existir
+        lista.forEach(a => { remover.push({ ...a, _motivo: 'orfa' }); orfas++; ptsOrfas += (a.pontos || 0); });
+        return;
+      }
+      if (lista.length <= 1) return;   // ok, exatamente uma
+
+      // duplicados: mantém o de ID determinístico (novo padrão); senão, o mais antigo
+      const idFixo = 'chk_' + cotId + '_' + item.replace(/[^a-zA-Z0-9]/g, '_');
+      let manter = lista.find(a => a.id === idFixo);
+      if (!manter) {
+        manter = lista.slice().sort((a, b) => {
+          const ta = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
+          const tb = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate().getTime() : 0;
+          return ta - tb;
+        })[0];
+      }
+      lista.forEach(a => {
+        if (a.id === manter.id) return;
+        remover.push({ ...a, _motivo: 'duplicada' });
+        dupl++; ptsDupl += (a.pontos || 0);
+      });
+    });
+
+    return { remover, dupl, orfas, ptsDupl, ptsOrfas, totalAcoes: snapAc.size };
+  }
+
+  async function previewLimpezaChecklist() {
+    const box = document.getElementById('limpezaResultado');
+    if (!box) return;
+    box.innerHTML = '<div style="color:#94a3b8; font-size:13px; padding:14px;">Comparando as ações com o estado dos checklists...</div>';
+    try {
+      const r = await _analisarLimpezaChecklist();
+      _LIMPEZA_PLANO = r.remover;
+      if (!r.remover.length) {
+        box.innerHTML = '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:13px; font-size:13px; color:#166534;">✓ Nada a limpar. As ' + r.totalAcoes + ' ações de checklist batem com o que está marcado.</div>';
+        return;
+      }
+      // consolida por pessoa, pra você ver quem perde pontos
+      const porPessoa = {};
+      r.remover.forEach(a => {
+        const k = _chavePessoa(a.usuarioId, a.usuarioNome);
+        porPessoa[k] = porPessoa[k] || { nome: _nomePessoa(a.usuarioId, a.usuarioNome), n: 0, pts: 0 };
+        porPessoa[k].n++; porPessoa[k].pts += (a.pontos || 0);
+      });
+      const lista = Object.values(porPessoa).sort((a, b) => b.pts - a.pts);
+
+      box.innerHTML = `
+        <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:14px; margin-bottom:12px;">
+          <div style="font-size:14px; font-weight:800; color:#9a3412; margin-bottom:6px;">${r.remover.length} ${r.remover.length === 1 ? 'ação será removida' : 'ações serão removidas'}</div>
+          <div style="font-size:12.5px; color:#9a3412;">
+            ${r.dupl > 0 ? `<div>• <strong>${r.dupl}</strong> duplicadas (mesmo item contado mais de uma vez) — ${r.ptsDupl} pts</div>` : ''}
+            ${r.orfas > 0 ? `<div>• <strong>${r.orfas}</strong> de itens que já não estão marcados — ${r.ptsOrfas} pts</div>` : ''}
+          </div>
+        </div>
+        <div style="overflow-x:auto; margin-bottom:12px;"><table class="cfg-table" style="min-width:360px;"><thead><tr>
+          <th>PESSOA</th><th style="text-align:right;">AÇÕES</th><th style="text-align:right;">PONTOS QUE SAEM</th>
+        </tr></thead><tbody>
+        ${lista.map(p => `<tr>
+          <td style="font-weight:700; color:#0f172a;">${p.nome}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono';">${p.n}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono'; color:#dc2626; font-weight:700;">−${p.pts}</td>
+        </tr>`).join('')}
+        </tbody></table></div>
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:11px 13px; font-size:12px; color:#991b1b; margin-bottom:10px;">
+          ⚠️ Isto apaga registros de pontos e <strong>não tem desfazer</strong>. Confira a tabela acima antes de aplicar.
+        </div>
+        <button class="btn-primary" style="background:#dc2626;" onclick="aplicarLimpezaChecklist()"><i data-lucide="trash-2" class="w-3.5 h-3.5 inline"></i> Aplicar limpeza (${r.remover.length})</button>`;
+      try { lucide.createIcons(); } catch (e) {}
+    } catch (e) {
+      console.error(e);
+      box.innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:13px; font-size:13px; color:#991b1b;">Erro ao analisar: ' + e.message + '</div>';
+    }
+  }
+  window.previewLimpezaChecklist = previewLimpezaChecklist;
+
+  async function aplicarLimpezaChecklist() {
+    if (!_LIMPEZA_PLANO || !_LIMPEZA_PLANO.length) return alert('Rode a análise primeiro.');
+    if (!confirm(`Remover ${_LIMPEZA_PLANO.length} ações de checklist?\n\nIsso apaga os pontos correspondentes e NÃO tem desfazer.`)) return;
+    const box = document.getElementById('limpezaResultado');
+    box.innerHTML = '<div style="color:#94a3b8; font-size:13px; padding:14px;">Removendo...</div>';
+    try {
+      let feitas = 0;
+      // lotes de 400 (o Firestore aceita 500 por lote)
+      for (let i = 0; i < _LIMPEZA_PLANO.length; i += 400) {
+        const lote = db.batch();
+        _LIMPEZA_PLANO.slice(i, i + 400).forEach(a => { lote.delete(db.collection('mb_acoes').doc(a.id)); feitas++; });
+        await lote.commit();
+      }
+      _ACOES_CACHE = null;
+      _LIMPEZA_PLANO = null;
+      box.innerHTML = `<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:13px; font-size:13px; color:#166534;">✓ ${feitas} ações removidas. Agora pode rodar o recálculo do histórico logo abaixo.</div>`;
+      try { await carregarRankingReal(); renderRanking(); } catch (e) {}
+    } catch (e) {
+      console.error(e);
+      box.innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:13px; font-size:13px; color:#991b1b;">Erro ao aplicar: ' + e.message + '</div>';
+    }
+  }
+  window.aplicarLimpezaChecklist = aplicarLimpezaChecklist;
 
   async function previewRecalculo() {
     const box = document.getElementById('recalcResultado');
