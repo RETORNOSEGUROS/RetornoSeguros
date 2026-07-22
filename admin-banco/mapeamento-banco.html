@@ -296,6 +296,36 @@
     .kanban-card-tempo { font-size: 10px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
     .kanban-card-valor { font-size: 11px; font-weight: 700; color: #166534; background: #dcfce7; padding: 1px 7px; border-radius: 100px; }
 
+    /* Card aguardando o corretor validar o avanço de etapa */
+    .kanban-card.aguarda-validacao {
+      border-color: #fbbf24 !important;
+      background: linear-gradient(135deg, #fffbeb, #fef9c3) !important;
+      animation: pulsaAmarelo 1.8s ease-in-out infinite;
+    }
+    @keyframes pulsaAmarelo {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251,191,36,0.45); }
+      50%      { box-shadow: 0 0 0 6px rgba(251,191,36,0); }
+    }
+    /* Card com pedido de declínio aberto */
+    .kanban-card.pede-declinio {
+      border-color: #f87171 !important;
+      background: linear-gradient(135deg, #fef2f2, #fee2e2) !important;
+      animation: pulsaVermelho 1.4s ease-in-out infinite;
+    }
+    @keyframes pulsaVermelho {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+      50%      { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+    }
+    .selo-validacao {
+      display:inline-flex; align-items:center; gap:3px;
+      font-size:9.5px; font-weight:800; padding:1px 6px; border-radius:100px;
+      background:#fef3c7; color:#92400e; margin-top:4px;
+    }
+    .selo-declinio { background:#fee2e2; color:#991b1b; }
+    @media (prefers-reduced-motion: reduce) {
+      .kanban-card.aguarda-validacao, .kanban-card.pede-declinio { animation: none; }
+    }
+
     /* Botão de ação flutuante (FAB) */
     .fab {
       position: fixed; bottom: 28px; right: 28px; z-index: 50;
@@ -10281,7 +10311,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '187';
+  const APP_VERSAO = '188';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -14379,9 +14409,21 @@
   // ============= KANBAN DE COTAÇÕES =============
   let KANBAN_DRAG_ID = null;
 
+  // Nome do RM dono da cotação (pela carteira da empresa; senão, quem solicitou).
+  function _rmDaCotacao(c) {
+    const uid = empresaRmDe(c.empresaId) || c.solicitadoPorUid;
+    const p = (EQUIPE_REAL || []).find(x => x.uid === uid);
+    if (p && p.nome) return p.nome;
+    return c.rmNome || c.solicitadoPorNome || '—';
+  }
+  window._rmDaCotacao = _rmDaCotacao;
+
   function renderKanban() {
     const wrap = document.getElementById('kanbanWrap');
     if (!wrap) return;
+    // Admin e chefe veem o RM em cada card — ajuda a bater o olho na agência toda.
+    // Pro RM não faz sentido (é tudo dele) e só ocuparia espaço.
+    const _vejoRmNoCard = ['admin', 'chefe'].includes(perfilEfetivo());
     const colunas = ETAPAS_FUNIL.map(e => ({ id: e.id, nome: e.label, cor: e.cor }))
       .concat([
         { id: 'fechada', nome: 'Fechada 💎', cor: '#10b981' },
@@ -14409,7 +14451,12 @@
       const cardsHtml = cards.map(c => {
         const dias = diasNaEtapa(c);
         const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfo(c.status) || {}).prazoDias || 999;
-        const cls = dias >= limite ? 'vencido' : (dias >= limite*0.75 ? 'urgente' : '');
+        let cls = dias >= limite ? 'vencido' : (dias >= limite*0.75 ? 'urgente' : '');
+        // estados que pedem ação do corretor — o card avisa sozinho, sem precisar abrir
+        const _aguarda = ativa && c.aguardandoValidacao;
+        const _pedeDecl = ativa && c.declinioPedido;
+        if (_pedeDecl) cls += ' pede-declinio';
+        else if (_aguarda) cls += ' aguarda-validacao';
         const corTempo = dias >= limite ? '#ef4444' : dias >= limite*0.75 ? '#f59e0b' : '#94a3b8';
         const valor = c.valor || c.valorProposto;
         const ativa = STATUS_ATIVOS.includes(c.status);
@@ -14429,6 +14476,10 @@
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
             ${motivoTxt}
+            ${_pedeDecl ? '<div class="selo-validacao selo-declinio">🚩 pediu declínio</div>' : (_aguarda ? '<div class="selo-validacao">⏳ aguarda sua validação</div>' : '')}
+            ${_vejoRmNoCard ? `<div style="font-size:10px; color:#94a3b8; margin-top:3px; display:flex; align-items:center; gap:4px;">
+              <span style="width:5px; height:5px; border-radius:50%; background:#c7d2fe; display:inline-block;"></span>${_rmDaCotacao(c)}
+            </div>` : ''}
             <div class="kanban-card-foot">
               ${ativa
                 ? `<span class="kanban-card-tempo" style="color:${corTempo};">⏱ ${dias}/${limite}d</span>`
@@ -21195,6 +21246,32 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             </div>`;
           })()}
 
+          ${(c.declinioPedido && ativa) ? `
+            <div style="background:linear-gradient(135deg,#fef2f2,#fee2e2); border:1px solid #f87171; border-radius:11px; padding:14px 16px; margin-bottom:14px;">
+              <div style="font-size:13px; font-weight:800; color:#991b1b;">🚩 Pedido de declínio</div>
+              <div style="font-size:12px; color:#b91c1c; margin-top:3px;">
+                <strong>${c.declinioPedidoPorNome || 'Alguém'}</strong> registrou que este negócio não vai fechar${c.declinioSeguradora ? ` (fechou com <strong>${c.declinioSeguradora}</strong>)` : ''}.
+                ${c.declinioMotivo ? `<br>Motivo: ${String(c.declinioMotivo).replace(/_/g, ' ')}` : ''}
+              </div>
+              ${CTX.isAdmin ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
+                <button class="btn-primary" style="background:#dc2626;" onclick="acaoNegociacao('${c.id}','perder')">✓ Confirmar declínio</button>
+                <button class="btn-secondary" onclick="recusarDeclinio('${c.id}')">↩ Manter em negociação</button>
+              </div>` : '<div style="font-size:11px; color:#b91c1c; margin-top:8px;">Aguardando o corretor confirmar.</div>'}
+            </div>` : ''}
+
+          ${(c.aguardandoValidacao && ativa) ? `
+            <div style="background:linear-gradient(135deg,#fffbeb,#fef3c7); border:1px solid #fbbf24; border-radius:11px; padding:14px 16px; margin-bottom:14px;">
+              <div style="font-size:13px; font-weight:800; color:#92400e;">⏳ Checklist completo — aguardando validação</div>
+              <div style="font-size:12px; color:#a16207; margin-top:3px;">
+                ${c.validacaoPedidaPorNome ? `<strong>${c.validacaoPedidaPorNome}</strong> concluiu os itens desta etapa.` : 'Os itens desta etapa foram concluídos.'}
+                ${CTX.isAdmin ? ' Você decide se o negócio avança.' : ' O corretor vai conferir antes de avançar.'}
+              </div>
+              ${CTX.isAdmin ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
+                <button class="btn-primary" onclick="validarAvanco('${c.id}')">✓ Validar e avançar</button>
+                <button class="btn-secondary" onclick="segurarNegocio('${c.id}')">⏸ Manter nesta etapa</button>
+              </div>` : ''}
+            </div>` : ''}
+
           ${_htmlParticipacao(c)}
 
           ${ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
@@ -21384,20 +21461,79 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
 
     if (etapaCompleta) {
-      // A emissão (transmitida → emitida) é EXCLUSIVA do admin, mesmo com checklist completo.
-      if (c.status === 'transmitida' && !CTX.isAdmin) {
-        flashSalvo('Checklist completo! Aguardando emissão pelo admin.');
+      // ---- PORTÃO DE VALIDAÇÃO ----
+      // Antes, completar o checklist avançava a etapa sozinho. Isso causava um problema
+      // real: dá pra querer registrar as interações de uma etapa (e pontuar) sem que o
+      // negócio ande — por exemplo, quando o cliente já sinalizou que não vai fechar.
+      // Agora, quem não é corretor deixa o negócio "aguardando validação"; o corretor
+      // confere e decide se avança. Se o próprio corretor completa, avança direto.
+      if (!CTX.isAdmin) {
+        try {
+          await db.collection('mb_cotacoes').doc(cotacaoId).update({
+            aguardandoValidacao: true,
+            validacaoPedidaEm: firebase.firestore.FieldValue.serverTimestamp(),
+            validacaoPedidaPorNome: autorNome()
+          });
+          c.aguardandoValidacao = true;
+        } catch (e) { console.warn('validacao', e); }
+        flashSalvo('Checklist completo! O corretor vai validar antes de avançar.');
         abrirNegociacao(cotacaoId);
+        try { renderKanban(); } catch (e) {}
         return;
       }
       flashSalvo('Checklist completo! Avançando etapa...');
       setTimeout(() => avancarEtapaNegociacao(cotacaoId), 600);
     } else {
+      // desmarcou algo: se estava aguardando validação, sai desse estado
+      if (c.aguardandoValidacao) {
+        try {
+          await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false });
+          c.aguardandoValidacao = false;
+          try { renderKanban(); } catch (e) {}
+        } catch (e) {}
+      }
       // só re-renderiza o modal para atualizar o contador
       abrirNegociacao(cotacaoId);
     }
   }
   window.toggleChecklist = toggleChecklist;
+
+  // Corretor valida: limpa o aviso e avança de fato.
+  async function validarAvanco(cotacaoId) {
+    if (!CTX.isAdmin) return alert('Só o corretor pode validar o avanço.');
+    try {
+      await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false });
+      const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.aguardandoValidacao = false;
+    } catch (e) {}
+    avancarEtapaNegociacao(cotacaoId);
+  }
+  window.validarAvanco = validarAvanco;
+
+  // Corretor decide segurar: o negócio fica onde está, com os pontos já registrados.
+  async function segurarNegocio(cotacaoId) {
+    if (!CTX.isAdmin) return;
+    try {
+      await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false, seguradoEm: firebase.firestore.FieldValue.serverTimestamp() });
+      const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.aguardandoValidacao = false;
+      flashSalvo('Negócio mantido nesta etapa. Os pontos do checklist seguem registrados.');
+      abrirNegociacao(cotacaoId);
+      try { renderKanban(); } catch (e) {}
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+  window.segurarNegocio = segurarNegocio;
+
+  // Corretor decide que o negócio continua vivo, apesar do pedido de declínio.
+  async function recusarDeclinio(cotacaoId) {
+    if (!CTX.isAdmin) return;
+    try {
+      await db.collection('mb_cotacoes').doc(cotacaoId).update({ declinioPedido: false });
+      const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.declinioPedido = false;
+      flashSalvo('Negócio mantido em negociação.');
+      abrirNegociacao(cotacaoId);
+      try { renderKanban(); } catch (e) {}
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+  window.recusarDeclinio = recusarDeclinio;
 
   // Admin adiciona item extra de checklist para o produto+etapa deste negócio
   async function abrirAddChecklistItem(cotacaoId) {
@@ -22098,7 +22234,29 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       } else if (acao === 'perder') {
         const resultado = (document.getElementById('acaoResultado') || {}).value || 'desistiu';
         const motivo = document.getElementById('acaoMotivo').value;
+        // Quem não é corretor PEDE o declínio; o corretor confirma. Assim nada é
+        // encerrado por engano, e o card avisa sozinho (vermelho pulsando) no kanban.
+        if (!CTX.isAdmin) {
+          update.declinioPedido = true;
+          update.declinioPedidoPorNome = autorNome();
+          update.declinioPedidoEm = firebase.firestore.FieldValue.serverTimestamp();
+          update.declinioMotivo = motivo;
+          update.declinioResultado = resultado;
+          update.observacoes = obs;
+          const _sv = ((document.getElementById('acaoSegVencedora') || {}).value || '').trim();
+          if (_sv) update.declinioSeguradora = _sv;
+          try {
+            await db.collection('mb_cotacoes').doc(c.id).update(update);
+            Object.assign(c, update);
+          } catch (e) { return alert('Erro: ' + e.message); }
+          document.getElementById('modalAcaoNeg').classList.remove('open');
+          flashSalvo('Pedido de declínio enviado. O corretor vai confirmar.');
+          try { renderKanban(); } catch (e) {}
+          try { abrirNegociacao(c.id); } catch (e) {}
+          return;
+        }
         update.status = motivo === 'sem_aceitacao' ? 'sem_aceitacao' : 'perdida';
+        update.declinioPedido = false;
         update.etapa = 9;
         update.motivoPerda = motivo;
         update.resultadoPerda = resultado;
