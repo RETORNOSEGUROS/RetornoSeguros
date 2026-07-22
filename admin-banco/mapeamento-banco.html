@@ -3280,8 +3280,8 @@
         </div>
 
         <div class="cfg-card perm-admin">
-          <h3><i data-lucide="brush-cleaning" class="w-5 h-5 text-rose-500"></i> Limpar pontos de checklist duplicados</h3>
-          <p class="cfg-desc">Até a v182, marcar e desmarcar um item criava pontos repetidos, e desmarcar não devolvia o ponto. Esta ferramenta compara as ações com o <strong>estado real de cada checklist</strong> e remove o que sobrou: duplicados e pontos de itens que já não estão marcados. <strong>Rode antes do recálculo.</strong></p>
+          <h3><i data-lucide="brush-cleaning" class="w-5 h-5 text-rose-500"></i> Limpar pontos duplicados</h3>
+          <p class="cfg-desc">Até a v184, salvar duas vezes criava pontos repetidos, e desmarcar um item não devolvia o ponto. Esta ferramenta compara as ações com o <strong>estado real dos dados</strong> e remove o que sobrou: checklists duplicados, pontos de itens desmarcados e cadastros de sócios/funcionários contados mais de uma vez. <strong>Rode antes do recálculo.</strong></p>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button class="btn-primary" style="background:#e11d48;" onclick="previewLimpezaChecklist()"><i data-lucide="search" class="w-3.5 h-3.5 inline"></i> Ver o que seria removido</button>
           </div>
@@ -10277,7 +10277,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '184';
+  const APP_VERSAO = '185';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12076,7 +12076,7 @@
         empresasAg = await Promise.all(docs.map(async d => {
           const dd = d.data(); const produtosDados = {};
           try { const ps = await db.collection('empresas').doc(d.id).collection('mb_produtos').get(); ps.forEach(p => produtosDados[p.id] = p.data()); } catch (e) {}
-          return { id: d.id, nome: dd.nome, agenciaId: dd.agenciaId || '', rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, socios: dd.socios || [], funcionarios: dd.numFuncionarios || dd.funcionariosQtd || dd.funcionarios || 0, emailDecisor: dd.emailDecisor || '', emailRh: dd.emailRh || '', produtosDados };
+          return { id: d.id, nome: dd.nome, agenciaId: dd.agenciaId || '', rm: dd.rmUid || dd.rmId || dd.gerenteId || dd.rm, socios: dd.socios || [], semSociosConfirmado: !!dd.semSociosConfirmado, funcionarios: dd.numFuncionarios || dd.funcionariosQtd || dd.funcionarios || 0, emailDecisor: dd.emailDecisor || '', emailRh: dd.emailRh || '', produtosDados };
         }));
       }
       let qc = db.collection('mb_cotacoes');
@@ -16186,7 +16186,35 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       });
     });
 
-    return { remover, dupl, orfas, ptsDupl, ptsOrfas, totalAcoes: snapAc.size };
+    // 3) duplicados de CADASTRO (dados_base / editou_socios / editou_funcionarios).
+    //    Mesmo bug do .add(): salvar duas vezes a mesma empresa gerava dois pontos.
+    let qb = db.collection('mb_acoes').where('tipo', 'in', ['dados_base', 'editou_socios', 'editou_funcionarios']);
+    if (CTX.agenciaId) qb = qb.where('agenciaId', '==', CTX.agenciaId);
+    let dupCad = 0, ptsCad = 0;
+    try {
+      const snapB = await qb.get();
+      const porEmpTipo = {};
+      snapB.forEach(d => {
+        const a = { id: d.id, ...d.data() };
+        if (!a.empresaId) return;
+        // agrupa por empresa + tipo + dia (edições no mesmo dia são a mesma coisa)
+        const dia = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toISOString().slice(0, 10) : 'sd';
+        const k = a.empresaId + '||' + a.tipo + '||' + (a.tipo === 'dados_base' ? 'unico' : dia);
+        (porEmpTipo[k] = porEmpTipo[k] || []).push(a);
+      });
+      Object.values(porEmpTipo).forEach(lista => {
+        if (lista.length <= 1) return;
+        // mantém o mais antigo (o primeiro registro legítimo)
+        const ordenada = lista.slice().sort((a, b) => {
+          const ta = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
+          const tb = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate().getTime() : 0;
+          return ta - tb;
+        });
+        ordenada.slice(1).forEach(a => { remover.push({ ...a, _motivo: 'cadastro_duplicado' }); dupCad++; ptsCad += (a.pontos || 0); });
+      });
+    } catch (e) { console.warn('dup cadastro', e); }
+
+    return { remover, dupl, orfas, ptsDupl, ptsOrfas, dupCad, ptsCad, totalAcoes: snapAc.size };
   }
 
   async function previewLimpezaChecklist() {
@@ -16215,6 +16243,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <div style="font-size:12.5px; color:#9a3412;">
             ${r.dupl > 0 ? `<div>• <strong>${r.dupl}</strong> duplicadas (mesmo item contado mais de uma vez) — ${r.ptsDupl} pts</div>` : ''}
             ${r.orfas > 0 ? `<div>• <strong>${r.orfas}</strong> de itens que já não estão marcados — ${r.ptsOrfas} pts</div>` : ''}
+            ${r.dupCad > 0 ? `<div>• <strong>${r.dupCad}</strong> de cadastro repetido (sócios/funcionários salvos mais de uma vez) — ${r.ptsCad} pts</div>` : ''}
           </div>
         </div>
         <div style="overflow-x:auto; margin-bottom:12px;"><table class="cfg-table" style="min-width:360px;"><thead><tr>
@@ -19185,6 +19214,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         funcionariosHistorico: d.funcionariosHistorico || [],
         ultimoLinkMapeamento: d.ultimoLinkMapeamento || null,
         socios: d.socios || [],
+        semSociosConfirmado: !!d.semSociosConfirmado,
         sociosAtualizadoPorNome: d.sociosAtualizadoPorNome || null,
         sociosAtualizadoEm: d.sociosAtualizadoEm || null,
         funcionariosAtualizadoPorNome: d.funcionariosAtualizadoPorNome || null,
@@ -19904,8 +19934,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }
 
       const antesEraZero = (e.funcionarios || 0) === 0;
+      // IDs determinísticos: salvar de novo não duplica pontos (1ª vez por empresa,
+      // edições no máximo uma por dia por empresa).
+      const _diaK = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       if (antesEraZero && qtd > 0) {
-        await db.collection('mb_acoes').add({
+        await db.collection('mb_acoes').doc('fnc_' + e.id).set({
           tipo: 'dados_base',
           empresaId: e.id, empresaNome: e.nome,
           agenciaId: CTX.agenciaId,
@@ -19913,9 +19946,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
           pontos: getPonto('funcionarios_primeira'),
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        }, { merge: true });
       } else {
-        await db.collection('mb_acoes').add({
+        await db.collection('mb_acoes').doc('fncedit_' + e.id + '_' + _diaK).set({
           tipo: 'editou_funcionarios',
           empresaId: e.id, empresaNome: e.nome,
           agenciaId: CTX.agenciaId,
@@ -19923,7 +19956,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
           pontos: getPonto('funcionarios_alteracao'),
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        }, { merge: true });
       }
 
       e.funcionarios = qtd;
@@ -20036,15 +20069,32 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       });
 
       // Só pontua "1ª vez" se antes não havia nenhuma informação de sócios.
-      await db.collection('mb_acoes').add({
-        tipo: !jaEstavaMapeado ? 'dados_base' : 'editou_socios',
-        empresaId: e.id, empresaNome: e.nome,
-        agenciaId: CTX.agenciaId,
-        usuarioId: autorUid(), usuarioNome: autorNome(),
-        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
-        pontos: !jaEstavaMapeado ? getPonto('socios_primeira') : getPonto('socios_alteracao'),
-        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      // ID determinístico: salvar de novo a MESMA empresa sobrescreve o registro,
+      // em vez de criar outro. Antes, tentar duas vezes duplicava os pontos.
+      if (!jaEstavaMapeado) {
+        await db.collection('mb_acoes').doc('soc_' + e.id).set({
+          tipo: 'dados_base',
+          empresaId: e.id, empresaNome: e.nome,
+          agenciaId: CTX.agenciaId,
+          usuarioId: autorUid(), usuarioNome: autorNome(),
+          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          pontos: getPonto('socios_primeira'),
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      } else {
+        // edições posteriores: uma por dia por empresa (evita farm ao salvar repetido)
+        const diaKey = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        await db.collection('mb_acoes').doc('socedit_' + e.id + '_' + diaKey).set({
+          tipo: 'editou_socios',
+          empresaId: e.id, empresaNome: e.nome,
+          agenciaId: CTX.agenciaId,
+          usuarioId: autorUid(), usuarioNome: autorNome(),
+          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          pontos: getPonto('socios_alteracao'),
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+      _ACOES_CACHE = null;
 
       e.socios = semSocios ? [] : sociosValidos;
       e.semSociosConfirmado = semSocios;
