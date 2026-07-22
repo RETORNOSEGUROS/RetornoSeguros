@@ -9527,7 +9527,9 @@
     const fProduto = document.getElementById('relatorioProduto')?.value || '';
     // Corretor/admin e gerente-chefe NÃO têm carteira própria nem pontuam.
     // Para eles, "apenas meus dados" não faz sentido — veem a agência toda.
-    const _semCarteira = CTX.isAdmin || ['admin', 'chefe'].includes(perfilEfetivo());
+    // ATENÇÃO: usar SOMENTE perfilEfetivo(). CTX.isAdmin continua true quando o admin
+    // está simulando um RM — se entrasse aqui, o RM simulado veria a agência inteira.
+    const _semCarteira = ['admin', 'chefe'].includes(perfilEfetivo());
     const _escopoMeu = escopo === 'meu' && !_semCarteira;
 
     // Título
@@ -9827,7 +9829,8 @@
       const ch = ['alta', 'media', 'baixa'].includes(c.chanceFechamento) ? c.chanceFechamento : 'semChance';
       // MESMOS campos de valor que o kanban usa (valorProposto é o principal em negociação)
       const val = c.valorProposto || c.valor || c.valorOperacao || 0;
-      porGrupo[gid] = porGrupo[gid] || { alta: { v: 0, n: 0 }, media: { v: 0, n: 0 }, baixa: { v: 0, n: 0 }, semChance: { v: 0, n: 0 }, produtos: {}, total: 0, ponderado: 0 };
+      porGrupo[gid] = porGrupo[gid] || { alta: { v: 0, n: 0 }, media: { v: 0, n: 0 }, baixa: { v: 0, n: 0 }, semChance: { v: 0, n: 0 }, produtos: {}, total: 0, ponderado: 0, itens: [] };
+      porGrupo[gid].itens.push({ empresa: c.empresaNome || '—', produto: ramoNome[c.produtoId] || c.produtoId, chance: c.chanceFechamento || '', valor: val, etapa: (etapaInfo(c.status) || {}).label || c.status, empresaId: c.empresaId });
       porGrupo[gid][ch].v += val; porGrupo[gid][ch].n++;
       porGrupo[gid].total += val;
       porGrupo[gid].ponderado += val * (PROB_CHANCE[c.chanceFechamento] || 0);
@@ -9853,7 +9856,12 @@
     gids.sort((a, b) => porGrupo[b].total - porGrupo[a].total);
     const totalGeral = gids.reduce((s, g) => s + porGrupo[g].total, 0);
     const pondGeral = gids.reduce((s, g) => s + porGrupo[g].ponderado, 0);
-    const nNeg = gids.reduce((s, g) => s + g.alta.n + g.media.n + g.baixa.n + g.semChance.n, 0);
+    // gids são IDs (strings) — precisa buscar o objeto em porGrupo. Antes acessava g.alta
+    // direto na string e lançava TypeError, matando o PDF antes de gerar.
+    const nNeg = gids.reduce((s, gid) => {
+      const g = porGrupo[gid];
+      return s + g.alta.n + g.media.n + g.baixa.n + g.semChance.n;
+    }, 0);
 
     const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
     const M = 16, PW = 210;
@@ -9895,13 +9903,17 @@
       linhaCh('', '  Baixa', g.baixa);
       if (g.semChance.n) { doc.setTextColor(148, 163, 184); doc.text(`  Sem chance definida: ${fmt(g.semChance.v)} (${g.semChance.n})`, M + 4, y); y += 5; doc.setTextColor(51, 65, 85); }
 
-      // produtos
-      doc.setFontSize(8); doc.setTextColor(100, 116, 139);
-      Object.entries(g.produtos).sort((a, b) => b[1].v - a[1].v).forEach(([pn, pd]) => {
+      // detalhamento: cada negócio (empresa · produto · etapa · chance · valor)
+      doc.setFontSize(7.5); doc.setTextColor(100, 116, 139);
+      const chLbl = { alta: 'Alta', media: 'Media', baixa: 'Baixa', '': 'sem chance' };
+      g.itens.sort((a, b) => b.valor - a.valor).forEach(it => {
         if (y > 275) { doc.addPage(); y = M; }
-        doc.text(`      ${pn}: ${fmt(pd.v)} (${pd.n})`, M + 4, y); y += 4.5;
+        const esq = `   ${it.empresa}  ·  ${it.produto}  ·  ${it.etapa}  ·  ${chLbl[it.chance] || 'sem chance'}`;
+        doc.text(doc.splitTextToSize(esq, PW - M * 2 - 32)[0], M + 3, y);
+        doc.text(fmt(it.valor), PW - M - 3, y, { align: 'right' });
+        y += 4.6;
       });
-      y += 4;
+      y += 5;
     });
 
     // rodapé
@@ -9963,6 +9975,23 @@
         </div>
         <div style="font-size:11px; color:#64748b; border-top:1px dashed #f1f5f9; padding-top:6px; margin-top:2px;">
           ${Object.entries(g.produtos).sort((a,b)=>b[1].v-a[1].v).map(([pn, pd]) => `${pn}: <strong>${fmt(pd.v)}</strong> (${pd.n})`).join(' · ')}
+        </div>
+        <div onclick="var d=document.getElementById('pipe_${gid}'); d.style.display=d.style.display==='none'?'block':'none'; this.querySelector('span').textContent=d.style.display==='none'?'▸ ver os negócios':'▾ ocultar';"
+             style="cursor:pointer; font-size:11px; color:#4338ca; font-weight:700; margin-top:8px;">
+          <span>▸ ver os negócios</span>
+        </div>
+        <div id="pipe_${gid}" style="display:none; margin-top:6px; background:#fafbfc; border:1px solid #f1f5f9; border-radius:8px; overflow:hidden;">
+          ${g.itens.sort((a,b)=>b.valor-a.valor).map(it => {
+            const ci = CHANCE_INFO[it.chance] || { emoji: '⚪', label: 'sem chance', cor: '#94a3b8' };
+            return `<div style="display:flex; justify-content:space-between; gap:8px; padding:7px 9px; border-bottom:1px solid #f8fafc; font-size:11.5px;">
+              <div style="min-width:0;">
+                <strong style="color:#0f172a;">${it.empresa}</strong>
+                <span style="color:#94a3b8;"> · ${it.produto} · ${it.etapa}</span>
+                <span style="color:${ci.cor};"> ${ci.emoji} ${ci.label}</span>
+              </div>
+              <div style="font-family:'JetBrains Mono'; font-weight:700; color:#0f172a; white-space:nowrap;">${fmt(it.valor)}</div>
+            </div>`;
+          }).join('')}
         </div>
       </div>`;
     });
@@ -16085,6 +16114,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.salvarCotacaoRapida = salvarCotacaoRapida;
 
   // ============= PEDIR COTAÇÃO (a partir do funil, com autocomplete de empresa) =============
+  // Empresas para as quais o usuário pode pedir cotação.
+  // RM (e apoio) só a própria carteira; chefe/corretor, todas da agência.
+  function _empresasQuePossoPedir() {
+    const lista = (EMPRESAS || []);
+    const perf = perfilEfetivo();
+    if (['admin', 'chefe'].includes(perf)) return lista;
+    const meu = uidEfetivo();
+    return lista.filter(e => e.rm === meu);
+  }
+  window._empresasQuePossoPedir = _empresasQuePossoPedir;
+
   function abrirPedirCotacao() {
     let modal = document.getElementById('modalPedirCotacao');
     if (modal) modal.remove();
@@ -16099,7 +16139,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <div class="form-group">
             <label class="form-label">Empresa</label>
             <input type="text" class="form-control" id="pcEmpresa" list="pcEmpresaList" placeholder="Comece a digitar o nome...">
-            <datalist id="pcEmpresaList">${(EMPRESAS || []).map(e => `<option value="${(e.nome || '').replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>
+            <datalist id="pcEmpresaList">${_empresasQuePossoPedir().map(e => `<option value="${(e.nome || '').replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>
           </div>
           <div class="form-group">
             <label class="form-label">Produto / ramo</label>
@@ -16124,8 +16164,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   async function salvarPedirCotacao() {
     const nome = (document.getElementById('pcEmpresa').value || '').trim();
-    const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
-    if (!e) return alert('Selecione uma empresa válida da lista (digite o nome e escolha).');
+    const e = _empresasQuePossoPedir().find(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
+    if (!e) {
+      // pode ser que a empresa exista, mas não seja da carteira de quem está pedindo
+      const existe = (EMPRESAS || []).some(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
+      return alert(existe
+        ? 'Essa empresa não está na sua carteira. Você só pode pedir cotação para empresas suas.'
+        : 'Selecione uma empresa válida da lista (digite o nome e escolha).');
+    }
     const ramoId = document.getElementById('pcProduto').value;
     const r = (PRODUTOS || []).find(x => x.id === ramoId);
     if (!r) return alert('Selecione um produto.');
