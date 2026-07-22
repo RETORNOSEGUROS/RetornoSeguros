@@ -3730,17 +3730,23 @@
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             <select class="filter-select" id="relatorioEscopo" onchange="renderRelatorio()" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white;">
-              <option value="meu">👤 Apenas meus dados</option>
+              <option value="meu">👤 Só a minha atuação</option>
               <option value="agencia">🏢 Toda a agência</option>
             </select>
-            <select class="filter-select" id="relatorioPeriodo" onchange="renderRelatorio()" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white;">
+            <select class="filter-select" id="relatorioPeriodo" onchange="onPeriodoRelatorio()" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white;">
+              <option value="ano">📅 Ano atual (YTD)</option>
               <option value="mes">📅 Mês atual</option>
               <option value="ultimos30">📅 Últimos 30 dias</option>
               <option value="trimestre">📅 Trimestre atual</option>
               <option value="ultimos90">📅 Últimos 90 dias</option>
-              <option value="ano">📅 Ano atual</option>
               <option value="12meses">📅 Últimos 12 meses</option>
+              <option value="custom">🗓️ Período personalizado…</option>
             </select>
+            <span id="relPeriodoCustom" style="display:none; gap:6px; align-items:center;">
+              <input type="date" id="relDataIni" onchange="renderRelatorio()" class="filter-select" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white; padding:6px;">
+              <span style="color:white; font-size:12px;">até</span>
+              <input type="date" id="relDataFim" onchange="renderRelatorio()" class="filter-select" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white; padding:6px;">
+            </span>
             <select class="filter-select" id="relatorioProduto" onchange="renderRelatorio()" style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: white;">
               <option value="">Todos os produtos</option>
               <option value="frota">🚗 Frota</option>
@@ -3901,8 +3907,8 @@
         </div>
       </div>
 
-      <!-- Lista detalhada com filtros adicionais -->
-      <div style="background: white; border-radius: 12px; padding: 18px;">
+      <!-- Lista detalhada com filtros adicionais (escondida do RM na visão da agência) -->
+      <div style="background: white; border-radius: 12px; padding: 18px;" id="relBlocoHistorico">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
           <h3 style="margin: 0; font-size: 14px; color: #0f172a;">📋 Histórico completo de cotações</h3>
           <div style="display: flex; gap: 8px;">
@@ -9511,8 +9517,35 @@
     RELATORIO_CHARTS = {};
   }
 
+  // Mostra/esconde os campos de data quando escolhe "Período personalizado"
+  function onPeriodoRelatorio() {
+    const p = (document.getElementById('relatorioPeriodo') || {}).value;
+    const box = document.getElementById('relPeriodoCustom');
+    if (box) box.style.display = (p === 'custom') ? 'inline-flex' : 'none';
+    if (p === 'custom') {
+      // pré-preenche com o ano corrente se estiver vazio
+      const di = document.getElementById('relDataIni'), df = document.getElementById('relDataFim');
+      const hj = new Date();
+      if (di && !di.value) di.value = new Date(hj.getFullYear(), 0, 1).toISOString().slice(0, 10);
+      if (df && !df.value) df.value = hj.toISOString().slice(0, 10);
+    }
+    renderRelatorio();
+  }
+  window.onPeriodoRelatorio = onPeriodoRelatorio;
+
   async function renderRelatorio() {
     destruirCharts();
+    // DEFAULTS por perfil (só na 1ª abertura da tela):
+    // • admin/chefe → abrem na visão da AGÊNCIA (é o papel deles); podem trocar pra própria
+    // • RM/apoio    → abrem na PRÓPRIA visão; podem trocar pra agência
+    // • período     → sempre começa em "Ano atual (YTD)"
+    const _selEsc = document.getElementById('relatorioEscopo');
+    const _selPer = document.getElementById('relatorioPeriodo');
+    if (_selEsc && _selEsc.dataset.init !== '1') {
+      _selEsc.value = ['admin', 'chefe'].includes(perfilEfetivo()) ? 'agencia' : 'meu';
+      _selEsc.dataset.init = '1';
+    }
+    if (_selPer && _selPer.dataset.init !== '1') { _selPer.value = 'ano'; _selPer.dataset.init = '1'; }
     // Popula o filtro de produtos com os ramos REAIS (antes era lista fixa no HTML)
     const selProd = document.getElementById('relatorioProduto');
     if (selProd && selProd.dataset.pop !== '1') {
@@ -9525,17 +9558,20 @@
     const escopo = document.getElementById('relatorioEscopo')?.value || 'meu';
     const periodo = document.getElementById('relatorioPeriodo')?.value || 'mes';
     const fProduto = document.getElementById('relatorioProduto')?.value || '';
-    // Corretor/admin e gerente-chefe NÃO têm carteira própria nem pontuam.
-    // Para eles, "apenas meus dados" não faz sentido — veem a agência toda.
-    // ATENÇÃO: usar SOMENTE perfilEfetivo(). CTX.isAdmin continua true quando o admin
-    // está simulando um RM — se entrasse aqui, o RM simulado veria a agência inteira.
-    const _semCarteira = ['admin', 'chefe'].includes(perfilEfetivo());
-    const _escopoMeu = escopo === 'meu' && !_semCarteira;
+    // "Apenas meus dados" agora significa literalmente OS MEUS, para qualquer perfil —
+    // inclusive admin/chefe, que assim conseguem ver a própria atuação.
+    // O que muda por perfil é só o DEFAULT (admin/chefe abrem em "agência").
+    const _escopoMeu = escopo === 'meu';
+    // O RM pode ver os NÚMEROS da agência (pra comparar), mas não as LISTAS com nome
+    // de empresas de outras carteiras. Gestores (admin/chefe) veem tudo.
+    const _podeVerDetalheAlheio = ['admin', 'chefe'].includes(perfilEfetivo()) || _escopoMeu;
+    window._REL_DETALHE_OK = _podeVerDetalheAlheio;
 
     // Título
     const titulo = escopo === 'meu' ? `Análise · ${CTX.nome}` : `Análise da Agência · ${CTX.agenciaNome || ''}`;
     document.getElementById('relatorioTitulo').textContent = titulo;
     const periodoLabels = {
+      custom: 'Período personalizado',
       mes: 'Mês atual',
       ultimos30: 'Últimos 30 dias',
       trimestre: 'Trimestre atual',
@@ -9547,14 +9583,20 @@
 
     // Datas
     const hoje = new Date();
-    let inicio;
+    let inicio, fimPeriodo = null;   // fimPeriodo só é usado no modo personalizado
     if (periodo === 'mes')        inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     else if (periodo === 'ultimos30')  inicio = new Date(hoje.getTime() - 30 * 86400000);
     else if (periodo === 'trimestre')  { const q = Math.floor(hoje.getMonth()/3)*3; inicio = new Date(hoje.getFullYear(), q, 1); }
     else if (periodo === 'ultimos90')  inicio = new Date(hoje.getTime() - 90 * 86400000);
     else if (periodo === 'ano')        inicio = new Date(hoje.getFullYear(), 0, 1);
     else if (periodo === '12meses')    inicio = new Date(hoje.getTime() - 365 * 86400000);
-    else inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    else if (periodo === 'custom') {
+      const di = (document.getElementById('relDataIni') || {}).value;
+      const df = (document.getElementById('relDataFim') || {}).value;
+      inicio = di ? new Date(di + 'T00:00:00') : new Date(hoje.getFullYear(), 0, 1);
+      fimPeriodo = df ? new Date(df + 'T23:59:59') : null;
+    }
+    else inicio = new Date(hoje.getFullYear(), 0, 1);
 
     try {
       // Carregar cotações
@@ -9580,7 +9622,9 @@
       // Por período (data de criação)
       const cotPeriodo = cotFiltradas.filter(c => {
         const dt = c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate() : null;
-        return dt && dt >= inicio;
+        if (!dt || dt < inicio) return false;
+        if (fimPeriodo && dt > fimPeriodo) return false;
+        return true;
       });
 
       // Ações no período
@@ -9594,6 +9638,7 @@
         const a = d.data();
         const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
         if (!dt || dt < inicio) return;
+        if (fimPeriodo && dt > fimPeriodo) return;
         if (_escopoMeu && a.usuarioId !== uidEfetivo()) return;
         acoesPeriodo.push(a);
         totalPontos += a.pontos || 0;
@@ -9651,6 +9696,10 @@
       document.getElementById('relConversao').textContent = decididas > 0 ? taxaConv.toFixed(0) + '%' : '—';
       document.getElementById('relConversaoSub').textContent = `${fechadas.length} fechadas / ${decididas} decididas`;
       document.getElementById('relConversaoBar').style.width = Math.min(100, taxaConv) + '%';
+
+      // Histórico com nome de empresa: escondido do RM quando ele olha a agência inteira
+      const _blocoHist = document.getElementById('relBlocoHistorico');
+      if (_blocoHist) _blocoHist.style.display = _podeVerDetalheAlheio ? '' : 'none';
 
       document.getElementById('relPontos').textContent = totalPontos.toLocaleString('pt-BR');
       // deixa explícito o período e o escopo — a campanha conta o ANO todo, então os
@@ -9980,6 +10029,7 @@
         <div style="font-size:11px; color:#64748b; border-top:1px dashed #f1f5f9; padding-top:6px; margin-top:2px;">
           ${Object.entries(g.produtos).sort((a,b)=>b[1].v-a[1].v).map(([pn, pd]) => `${pn}: <strong>${fmt(pd.v)}</strong> (${pd.n})`).join(' · ')}
         </div>
+        ${!window._REL_DETALHE_OK ? '' : `
         <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:10px; text-transform:uppercase; letter-spacing:.03em;">Negócios deste grupo</div>
         <div style="margin-top:4px; background:#fafbfc; border:1px solid #f1f5f9; border-radius:8px; overflow:hidden;">
           ${g.itens.sort((a,b)=>b.valor-a.valor).map(it => {
@@ -9993,7 +10043,7 @@
               <div style="font-family:'JetBrains Mono'; font-weight:700; color:#0f172a; white-space:nowrap;">${fmt(it.valor)}</div>
             </div>`;
           }).join('')}
-        </div>
+        </div>`}
       </div>`;
     });
     cont.innerHTML = h;
