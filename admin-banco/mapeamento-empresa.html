@@ -3823,9 +3823,16 @@
             <h3 style="margin: 0; font-size: 14px; color: #0f172a;">🎯 Pipeline de negociação por grupo</h3>
             <p style="margin:4px 0 0; font-size:11px; color:#94a3b8;">Negócios em andamento (da 2ª etapa até transmissão), por chance de fechamento. Ideal pra enviar à seguradora.</p>
           </div>
-          <button class="btn-secondary" onclick="exportarPipelinePDF()" style="white-space:nowrap;"><i data-lucide="file-down" class="w-4 h-4 inline"></i> PDF de previsão</button>
+          <button class="btn-secondary" id="btnPipelinePDF" type="button" onclick="exportarPipelinePDF()" style="white-space:nowrap;">📄 PDF de previsão</button>
         </div>
         <div id="relPipelineGrupo"></div>
+      </div>
+
+      <!-- PARTICIPAÇÃO MÉDIA POR PESSOA (só gestores) -->
+      <div style="background: white; border-radius: 12px; padding: 18px; margin-bottom: 18px;" id="relBlocoParticipacao">
+        <h3 style="margin: 0; font-size: 14px; color: #0f172a;">🤝 Participação média por pessoa</h3>
+        <p style="margin:4px 0 14px; font-size:11px; color:#94a3b8;">O quanto cada um pesou nos negócios em que atuou — fechados, perdidos e em andamento. Quem traz o negócio leva 25%; o resto vem dos checklists concluídos.</p>
+        <div id="relParticipacao"></div>
       </div>
 
       <!-- Linha 3: Por produto + Por seguradora + Por status -->
@@ -9697,6 +9704,14 @@
       document.getElementById('relConversaoSub').textContent = `${fechadas.length} fechadas / ${decididas} decididas`;
       document.getElementById('relConversaoBar').style.width = Math.min(100, taxaConv) + '%';
 
+      // Plano B pro botão de PDF: além do onclick inline, liga por listener.
+      // Se o inline falhar por qualquer motivo, este pega.
+      const _btnPdf = document.getElementById('btnPipelinePDF');
+      if (_btnPdf && _btnPdf.dataset.lig !== '1') {
+        _btnPdf.addEventListener('click', function (ev) { ev.preventDefault(); exportarPipelinePDF(); });
+        _btnPdf.dataset.lig = '1';
+      }
+
       // Histórico com nome de empresa: escondido do RM quando ele olha a agência inteira
       const _blocoHist = document.getElementById('relBlocoHistorico');
       if (_blocoHist) _blocoHist.style.display = _podeVerDetalheAlheio ? '' : 'none';
@@ -9730,6 +9745,9 @@
       // COTACOES — que é populada por outra tela e pode estar vazia ao entrar aqui direto.
       window._REL_COTACOES = cotFiltradas;
       renderPipelineGrupo(escopo, fProduto);
+
+      // ===== PARTICIPAÇÃO MÉDIA POR PESSOA (gestores) =====
+      renderParticipacaoMedia(cotPeriodo);
 
       // ===== POR PRODUTO ===== (inclui os já nossos)
       renderChartProduto(cotComNosso);
@@ -9855,6 +9873,118 @@
     return Math.ceil((diff + start.getDay() + 1) / 7);
   }
 
+  // ============================================================================
+  // PARTICIPAÇÃO NO NEGÓCIO (v175)
+  // Mede o quanto cada pessoa realmente trabalhou num negócio, fechado ou não.
+  // Regra: quem TROUXE o negócio pro funil leva 25% fixo. Os 75% restantes são
+  // rateados entre os itens de checklist marcados — quem marcou mais, participou mais.
+  // Assim a soma é sempre 100%, independente do tamanho do checklist.
+  // ============================================================================
+  const PARTIC_CRIADOR = 25;   // % de quem trouxe o negócio
+
+  function _participacaoNegocio(c) {
+    if (!c) return [];
+    const porUid = {};
+    const add = (uid, nome, pct) => {
+      if (!uid) return;
+      porUid[uid] = porUid[uid] || { uid, nome: nome || '—', pct: 0, checks: 0, criador: false };
+      porUid[uid].pct += pct;
+    };
+
+    // 1) quem trouxe o negócio
+    const criadorUid = c.solicitadoPorUid || c.registradoPorUid || null;
+    const criadorNome = c.solicitadoPorNome || c.registradoPorNome || '—';
+    if (criadorUid) { add(criadorUid, criadorNome, PARTIC_CRIADOR); porUid[criadorUid].criador = true; }
+
+    // 2) checklists marcados dividem o restante
+    const feitos = Object.values(c.checklistFeito || {}).filter(x => x && x.porUid);
+    const restante = criadorUid ? (100 - PARTIC_CRIADOR) : 100;
+    if (feitos.length) {
+      const fatia = restante / feitos.length;
+      feitos.forEach(f => { add(f.porUid, f.porNome, fatia); porUid[f.porUid].checks++; });
+    } else if (criadorUid) {
+      // ninguém marcou nada ainda: quem trouxe fica com 100%
+      porUid[criadorUid].pct = 100;
+    }
+
+    return Object.values(porUid).sort((a, b) => b.pct - a.pct);
+  }
+  window._participacaoNegocio = _participacaoNegocio;
+
+  // HTML da barrinha de participação, pra mostrar dentro da negociação
+  function _htmlParticipacao(c) {
+    const parts = _participacaoNegocio(c);
+    if (!parts.length) return '';
+    const cores = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6'];
+    const barra = parts.map((p, i) => `<div style="width:${p.pct}%; background:${cores[i % cores.length]};" title="${p.nome}: ${p.pct.toFixed(0)}%"></div>`).join('');
+    const legenda = parts.map((p, i) => `<span style="display:inline-flex; align-items:center; gap:4px; font-size:11px; color:#475569;">
+        <span style="width:8px; height:8px; border-radius:2px; background:${cores[i % cores.length]}; display:inline-block;"></span>
+        ${p.nome} <strong>${p.pct.toFixed(0)}%</strong>${p.criador ? ' <span style="color:#94a3b8;">(trouxe)</span>' : ''}
+      </span>`).join('');
+    return `<div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
+      <div style="font-size:11.5px; font-weight:800; color:#475569; margin-bottom:7px;">🤝 Participação neste negócio</div>
+      <div style="display:flex; height:14px; border-radius:5px; overflow:hidden; background:#e2e8f0; margin-bottom:8px;">${barra}</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">${legenda}</div>
+      <div style="font-size:10px; color:#94a3b8; margin-top:7px;">Quem traz o negócio leva ${PARTIC_CRIADOR}%; o restante é dividido entre os itens de checklist concluídos.</div>
+    </div>`;
+  }
+
+  // Participação média de cada pessoa, separada por desfecho do negócio.
+  // Só para gestores — mostra quem realmente puxa os negócios da agência.
+  function renderParticipacaoMedia(cotacoes) {
+    const bloco = document.getElementById('relBlocoParticipacao');
+    const cont = document.getElementById('relParticipacao');
+    if (!cont || !bloco) return;
+    // só gestor vê (é uma leitura sobre o time)
+    if (!['admin', 'chefe'].includes(perfilEfetivo())) { bloco.style.display = 'none'; return; }
+    bloco.style.display = '';
+
+    const baldes = { fechada: {}, perdida: {}, andamento: {} };
+    const qtd = { fechada: 0, perdida: 0, andamento: 0 };
+    (cotacoes || []).forEach(c => {
+      let balde = 'andamento';
+      if (c.status === 'fechada') balde = 'fechada';
+      else if (['perdida', 'sem_aceitacao'].includes(c.status)) balde = 'perdida';
+      qtd[balde]++;
+      _participacaoNegocio(c).forEach(p => {
+        const b = baldes[balde];
+        b[p.uid] = b[p.uid] || { nome: p.nome, soma: 0, n: 0 };
+        b[p.uid].soma += p.pct; b[p.uid].n++;
+      });
+    });
+
+    // consolida todas as pessoas que apareceram
+    const pessoas = {};
+    ['fechada', 'perdida', 'andamento'].forEach(k => {
+      Object.entries(baldes[k]).forEach(([uid, d]) => {
+        pessoas[uid] = pessoas[uid] || { nome: d.nome, fechada: null, perdida: null, andamento: null, totalNeg: 0 };
+        pessoas[uid][k] = d.soma / d.n;
+        pessoas[uid].totalNeg += d.n;
+      });
+    });
+    const lista = Object.values(pessoas).sort((a, b) => b.totalNeg - a.totalNeg);
+    if (!lista.length) { cont.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8; font-size:13px;">Sem negócios com participação registrada no período.</div>'; return; }
+
+    const cel = v => v == null ? '<span style="color:#cbd5e1;">—</span>' : `<strong>${v.toFixed(0)}%</strong>`;
+    cont.innerHTML = `<div style="overflow-x:auto;"><table class="cfg-table" style="min-width:520px;"><thead><tr>
+        <th>PESSOA</th>
+        <th style="text-align:right;">💎 FECHADOS (${qtd.fechada})</th>
+        <th style="text-align:right;">✗ PERDIDOS (${qtd.perdida})</th>
+        <th style="text-align:right;">⏳ EM ANDAMENTO (${qtd.andamento})</th>
+        <th style="text-align:right;">NEGÓCIOS</th>
+      </tr></thead><tbody>
+      ${lista.map(p => `<tr>
+        <td style="font-weight:700; color:#0f172a;">${p.nome}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono'; color:#16a34a;">${cel(p.fechada)}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono'; color:#dc2626;">${cel(p.perdida)}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono'; color:#0891b2;">${cel(p.andamento)}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono'; color:#64748b;">${p.totalNeg}</td>
+      </tr>`).join('')}
+    </tbody></table></div>
+    <div style="font-size:10.5px; color:#94a3b8; margin-top:8px;">Percentual médio de participação nos negócios em que a pessoa atuou. Não é volume — é o peso dela em cada negócio.</div>`;
+  }
+  window.renderParticipacaoMedia = renderParticipacaoMedia;
+
   // Probabilidade por chance (para o valor ponderado / previsão realista)
   const PROB_CHANCE = { alta: 0.8, media: 0.5, baixa: 0.2 };
 
@@ -9893,8 +10023,18 @@
 
   // PDF de previsão de fechamento — limpo, pra enviar à seguradora.
   function exportarPipelinePDF() {
-    try { return _exportarPipelinePDF(); }
-    catch (err) { console.error(err); alert('Não consegui gerar o PDF.\n\nDetalhe técnico: ' + (err && err.message ? err.message : err)); }
+    try {
+      if (!window.jspdf || !window.jspdf.jsPDF) {
+        alert('A biblioteca de PDF (jsPDF) não carregou nesta página.\n\nIsso costuma ser bloqueio de rede/CDN. Tente recarregar; se persistir, me avise.');
+        return;
+      }
+      const n = (window._REL_COTACOES || []).length;
+      const r = _exportarPipelinePDF();
+      return r;
+    } catch (err) {
+      console.error('[PDF pipeline]', err);
+      alert('Não consegui gerar o PDF.\n\nDetalhe técnico: ' + (err && err.message ? err.message : err));
+    }
   }
   function _exportarPipelinePDF() {
     if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página.');
@@ -20562,6 +20702,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               ${ativaMarcavel ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>' : ''}
             </div>`;
           })()}
+
+          ${_htmlParticipacao(c)}
 
           ${ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
             <button class="btn-primary" style="flex:1; min-width:130px;" onclick="avancarEtapaNegociacao('${c.id}')">➡ Avançar etapa</button>
