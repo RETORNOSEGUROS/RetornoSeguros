@@ -3767,6 +3767,7 @@
           <div style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">💎 Produção</div>
           <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 6px; font-family: 'JetBrains Mono';" id="relProducao">R$ 0</div>
           <div style="font-size: 11px; color: #64748b; margin-top: 4px;" id="relProducaoSub">0 negócios fechados</div>
+          <div style="font-size:10.5px; margin-top:3px;" id="relProducaoYoY"></div>
           <div style="height: 4px; background: #f1f5f9; border-radius: 100px; margin-top: 10px; overflow: hidden;">
             <div id="relProducaoBar" style="height: 100%; background: linear-gradient(90deg, #10b981, #059669); width: 0%; transition: width 0.6s;"></div>
           </div>
@@ -3775,6 +3776,7 @@
           <div style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">🎯 Cotações</div>
           <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 6px; font-family: 'JetBrains Mono';" id="relCotacoes">0</div>
           <div style="font-size: 11px; color: #64748b; margin-top: 4px;" id="relCotacoesSub">no período</div>
+          <div style="font-size:10.5px; margin-top:3px;" id="relCotacoesYoY"></div>
           <div style="font-size: 10px; margin-top: 8px; display: flex; gap: 10px; color: #94a3b8;">
             <span><strong style="color:#10b981;" id="relCotFechadas">0</strong> fechadas</span>
             <span><strong style="color:#ef4444;" id="relCotPerdidas">0</strong> perdidas</span>
@@ -3785,6 +3787,7 @@
           <div style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">⚡ Conversão</div>
           <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 6px; font-family: 'JetBrains Mono';" id="relConversao">—</div>
           <div style="font-size: 11px; color: #64748b; margin-top: 4px;" id="relConversaoSub">fechadas / decididas</div>
+          <div style="font-size:10.5px; margin-top:3px;" id="relConversaoYoY"></div>
           <div style="height: 4px; background: #f1f5f9; border-radius: 100px; margin-top: 10px; overflow: hidden;">
             <div id="relConversaoBar" style="height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); width: 0%; transition: width 0.6s;"></div>
           </div>
@@ -9634,6 +9637,21 @@
         return true;
       });
 
+      // ===== MESMO PERÍODO DO ANO ANTERIOR (comparativo) =====
+      // Desloca a janela em 1 ano. Se não houver dados, os deltas aparecem como "—".
+      const menos1Ano = d => { const x = new Date(d); x.setFullYear(x.getFullYear() - 1); return x; };
+      const inicioAnt = menos1Ano(inicio);
+      const fimAnt = fimPeriodo ? menos1Ano(fimPeriodo) : menos1Ano(hoje);
+      const cotAnoAnt = cotFiltradas.filter(c => {
+        const dt = c.criadoEm && c.criadoEm.toDate ? c.criadoEm.toDate() : null;
+        return dt && dt >= inicioAnt && dt <= fimAnt;
+      });
+      const fechAnt = cotAnoAnt.filter(c => c.status === 'fechada');
+      const perdAnt = cotAnoAnt.filter(c => ['perdida', 'sem_aceitacao'].includes(c.status));
+      const prodAnt = fechAnt.reduce((s, c) => s + (c.valor || 0), 0);
+      const decididasAnt = fechAnt.length + perdAnt.length;
+      const convAnt = decididasAnt > 0 ? (fechAnt.length / decididasAnt * 100) : null;
+
       // Ações no período
       let queryAcoes = db.collection('mb_acoes');
       if (CTX.agenciaId) queryAcoes = queryAcoes.where('agenciaId', '==', CTX.agenciaId);
@@ -9689,6 +9707,23 @@
       const taxaConv = decididas > 0 ? (fechadas.length / decididas * 100) : 0;
 
       const fmt$ = v => v >= 1000 ? 'R$ ' + (v/1000).toLocaleString('pt-BR', {maximumFractionDigits:1}) + 'K' : 'R$ ' + v.toLocaleString('pt-BR', {minimumFractionDigits:2});
+
+      // ---- comparativo com o mesmo período do ano anterior ----
+      const _yoy = (atual, anterior, formatador) => {
+        if (anterior == null || anterior === 0) {
+          return `<span style="color:#cbd5e1;">sem base do ano anterior</span>`;
+        }
+        const dif = atual - anterior;
+        const pct = (dif / anterior) * 100;
+        const cor = dif >= 0 ? '#16a34a' : '#dc2626';
+        const seta = dif >= 0 ? '▲' : '▼';
+        return `<span style="color:${cor}; font-weight:700;">${seta} ${Math.abs(pct).toFixed(0)}%</span>
+                <span style="color:#94a3b8;">vs ${formatador ? formatador(anterior) : anterior} no ano passado</span>`;
+      };
+      const _elYoY = (id, html2) => { const el = document.getElementById(id); if (el) el.innerHTML = html2; };
+      _elYoY('relProducaoYoY', _yoy(producaoR, prodAnt, fmt$));
+      _elYoY('relCotacoesYoY', _yoy(totalCotacoes, cotAnoAnt.length));
+      _elYoY('relConversaoYoY', convAnt == null ? '<span style="color:#cbd5e1;">sem base do ano anterior</span>' : _yoy(taxaConv, convAnt, v => v.toFixed(0) + '%'));
 
       document.getElementById('relProducao').textContent = fmt$(producaoR);
       document.getElementById('relProducaoSub').textContent = `${fechadas.length} negócio${fechadas.length !== 1 ? 's' : ''} fechado${fechadas.length !== 1 ? 's' : ''}`;
