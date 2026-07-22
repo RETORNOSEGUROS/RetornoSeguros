@@ -3838,7 +3838,7 @@
       <!-- PARTICIPAÇÃO MÉDIA POR PESSOA (só gestores) -->
       <div style="background: white; border-radius: 12px; padding: 18px; margin-bottom: 18px;" id="relBlocoParticipacao">
         <h3 style="margin: 0; font-size: 14px; color: #0f172a;">🤝 Participação média por pessoa</h3>
-        <p style="margin:4px 0 14px; font-size:11px; color:#94a3b8;">O quanto cada um pesou nos negócios em que atuou — fechados, perdidos e em andamento. Quem traz o negócio leva 25%; o resto vem dos checklists concluídos.</p>
+        <p style="margin:4px 0 14px; font-size:11px; color:#94a3b8;">O quanto cada um pesou nos negócios em que atuou — fechados, perdidos e em andamento. Quem traz o negócio leva 25%; o resto vem dos checklists concluídos. <span id="relPartEscopo"></span></p>
         <div id="relParticipacao"></div>
       </div>
 
@@ -9968,15 +9968,60 @@
     </div>`;
   }
 
+  // ---- Unificação de pessoa ----
+  // O mesmo ser humano pode ter registros com uids diferentes (login do admin, perfil
+  // simulado, cadastros antigos). Aqui reduzimos tudo a UMA chave por pessoa.
+  function _normNome(s) {
+    return (s || '').toString().trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // tira acento
+      .replace(/\s+/g, ' ');
+  }
+  // Resolve o registro (uid, nome) para UMA pessoa da equipe, quando possível.
+  // 1) pelo uid; 2) pelo nome completo; 3) pelo primeiro nome, se for inequívoco
+  //    (é o caso do admin gravado ora como "patrick", ora como "Patrick De Marco").
+  function _resolvePessoa(uid, nome) {
+    const eq = EQUIPE_REAL || [];
+    let m = eq.find(p => p.uid === uid);
+    if (m) return m;
+    const n = _normNome(nome);
+    if (!n) return null;
+    m = eq.find(p => _normNome(p.nome) === n);
+    if (m) return m;
+    // primeiro nome: só junta se houver exatamente UMA pessoa com esse primeiro nome
+    const prim = n.split(' ')[0];
+    const cands = eq.filter(p => _normNome(p.nome).split(' ')[0] === prim);
+    if (cands.length === 1) return cands[0];
+    return null;
+  }
+  function _chavePessoa(uid, nome) {
+    const p = _resolvePessoa(uid, nome);
+    if (p && p.nome) return 'n:' + _normNome(p.nome);
+    if (nome) return 'n:' + _normNome(nome);
+    return 'u:' + (uid || '?');
+  }
+  function _nomePessoa(uid, nome) {
+    const p = _resolvePessoa(uid, nome);
+    if (p && p.nome) return p.nome;
+    const n = (nome || '—').toString().trim();
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+
+  function _cargoDe(nome) {
+    const m = _resolvePessoa(null, nome);
+    const lbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', admin: 'Corretor' };
+    return m && lbl[m.perfil] ? ' · ' + lbl[m.perfil] : '';
+  }
+
   // Participação média de cada pessoa, separada por desfecho do negócio.
   // Só para gestores — mostra quem realmente puxa os negócios da agência.
   function renderParticipacaoMedia(cotacoes) {
     const bloco = document.getElementById('relBlocoParticipacao');
     const cont = document.getElementById('relParticipacao');
     if (!cont || !bloco) return;
-    // só gestor vê (é uma leitura sobre o time)
-    if (!['admin', 'chefe'].includes(perfilEfetivo())) { bloco.style.display = 'none'; return; }
     bloco.style.display = '';
+    const _esc = document.getElementById('relPartEscopo');
+    if (_esc) _esc.textContent = ['admin', 'chefe'].includes(perfilEfetivo())
+      ? '' : 'Aqui aparece quem atuou nos negócios da sua carteira — inclusive o gerente chefe, se ele ajudou.';
 
     const baldes = { fechada: {}, perdida: {}, andamento: {} };
     const qtd = { fechada: 0, perdida: 0, andamento: 0 };
@@ -9987,18 +10032,19 @@
       qtd[balde]++;
       _participacaoNegocio(c).forEach(p => {
         const b = baldes[balde];
-        b[p.uid] = b[p.uid] || { nome: p.nome, soma: 0, n: 0 };
-        b[p.uid].soma += p.pct; b[p.uid].n++;
+        const k = _chavePessoa(p.uid, p.nome);
+        b[k] = b[k] || { nome: _nomePessoa(p.uid, p.nome), soma: 0, n: 0 };
+        b[k].soma += p.pct; b[k].n++;
       });
     });
 
     // consolida todas as pessoas que apareceram
     const pessoas = {};
     ['fechada', 'perdida', 'andamento'].forEach(k => {
-      Object.entries(baldes[k]).forEach(([uid, d]) => {
-        pessoas[uid] = pessoas[uid] || { nome: d.nome, fechada: null, perdida: null, andamento: null, totalNeg: 0 };
-        pessoas[uid][k] = d.soma / d.n;
-        pessoas[uid].totalNeg += d.n;
+      Object.entries(baldes[k]).forEach(([chave, d]) => {
+        pessoas[chave] = pessoas[chave] || { nome: d.nome, fechada: null, perdida: null, andamento: null, totalNeg: 0 };
+        pessoas[chave][k] = d.soma / d.n;
+        pessoas[chave].totalNeg += d.n;
       });
     });
     const lista = Object.values(pessoas).sort((a, b) => b.totalNeg - a.totalNeg);
@@ -10013,7 +10059,7 @@
         <th style="text-align:right;">NEGÓCIOS</th>
       </tr></thead><tbody>
       ${lista.map(p => `<tr>
-        <td style="font-weight:700; color:#0f172a;">${p.nome}</td>
+        <td style="font-weight:700; color:#0f172a;">${p.nome}<span style="font-weight:600; color:#94a3b8; font-size:11px;">${_cargoDe(p.nome)}</span></td>
         <td style="text-align:right; font-family:'JetBrains Mono'; color:#16a34a;">${cel(p.fechada)}</td>
         <td style="text-align:right; font-family:'JetBrains Mono'; color:#dc2626;">${cel(p.perdida)}</td>
         <td style="text-align:right; font-family:'JetBrains Mono'; color:#0891b2;">${cel(p.andamento)}</td>
@@ -10161,7 +10207,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '178';
+  const APP_VERSAO = '179';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -15973,7 +16019,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <table class="cfg-table" style="margin-bottom:16px;">
           <thead><tr><th>PESSOA</th><th style="text-align:right;">ANTES</th><th style="text-align:right;">DEPOIS</th><th style="text-align:right;">DIFERENÇA</th></tr></thead>
           <tbody>${lista.map(p => `<tr>
-            <td style="font-weight:700; color:#0f172a;">${p.nome}</td>
+            <td style="font-weight:700; color:#0f172a;">${p.nome}<span style="font-weight:600; color:#94a3b8; font-size:11px;">${_cargoDe(p.nome)}</span></td>
             <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#94a3b8;">${p.antes.toLocaleString('pt-BR')}</td>
             <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#0f172a;">${p.depois.toLocaleString('pt-BR')}</td>
             <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:700; color:${p.depois >= p.antes ? '#16a34a' : '#dc2626'};">${seta(p.antes, p.depois)} ${(p.depois - p.antes).toLocaleString('pt-BR')}</td>
