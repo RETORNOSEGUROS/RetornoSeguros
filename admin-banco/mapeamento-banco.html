@@ -5664,6 +5664,12 @@
     const semFunc = [], semSocios = [], semDental = [], semVidaSocios = [], semPrev = [];
     const vencProx = [];        // seguros vencendo nos próximos 75 dias
     const semVenc = [];         // nossos/mercado sem data de vencimento
+    // --- novas coletas para as mensagens estruturadas ---
+    const semNadaMapeado = [];  // empresa sem NENHUM seguro mapeado
+    const semDecisor = [];      // sem e-mail/nome do decisor
+    const semRh = [];           // sem e-mail do RH
+    const funcSemBeneficio = []; // tem funcionários mas falta dental/saúde/vida em grupo
+    const semTelefone = [];
     let mapeadasAlgo = 0;
     const hoje = new Date();
     // Empresas candidatas por GRUPO: têm algum ramo daquele grupo ainda não mapeado.
@@ -5684,6 +5690,19 @@
       if (func > 0 && (!dados['dental'] || !dados['dental'].statusVisual || dados['dental'].statusVisual === 'vazia')) semDental.push({ e, func });
       if (nSoc > 0 && (!dados['vida-socios'] || !dados['vida-socios'].statusVisual || dados['vida-socios'].statusVisual === 'vazia')) semVidaSocios.push({ e, nSoc });
       if (nSoc > 0 && (!dados['prev-socios'] || !dados['prev-socios'].statusVisual || dados['prev-socios'].statusVisual === 'vazia')) semPrev.push({ e, nSoc });
+
+      // --- coletas novas ---
+      if (!temAlgo) semNadaMapeado.push(e);
+      if (!(e.emailDecisor || '').trim()) semDecisor.push(e);
+      if (!(e.emailRh || '').trim()) semRh.push(e);
+      if (!(e.telefone || e.whatsapp || '').toString().trim()) semTelefone.push(e);
+      // com funcionários mas sem os benefícios mapeados (dental, saúde, vida em grupo)
+      if (func > 0) {
+        const faltam = ['dental', 'saude-funcionarios', 'saude', 'vida-grupo', 'vida-funcionarios']
+          .filter(rid => ramoNome[rid] && (!dados[rid] || !dados[rid].statusVisual || dados[rid].statusVisual === 'vazia'))
+          .map(rid => ramoNome[rid]);
+        if (faltam.length) funcSemBeneficio.push({ e, func, faltam });
+      }
 
       // candidata para um grupo se tem ao menos um ramo do grupo ainda 'vazio'
       Object.keys(ramosDoGrupo).forEach(gid => {
@@ -5712,16 +5731,47 @@
     let quentes = 0;
     try { quentes = (window._OPORTUNIDADES_CACHE && window._OPORTUNIDADES_CACHE.minha || []).length; } catch (e) {}
 
-    // negócios parados no funil
-    let parados = [];
+    // ---- FUNIL: parados, enviadas, declínios sem justificativa, frias ----
+    // (antes usava COTACOES_CACHE, que NÃO existe — a coleta falhava silenciosamente)
+    const _meu = uidEfetivo();
+    const _minhas = c => perfil !== 'rm' || empresaRmDe(c.empresaId) === _meu || c.solicitadoPorUid === _meu;
+    let parados = [], paradosDetalhe = [], enviadasHa = [], semJustificativa = [], frias = [];
     try {
-      parados = (COTACOES_CACHE || []).filter(c => {
-        if (!ehStatusAtivoSafe(c.status)) return false;
-        if (perfil === 'rm' && c.rmUid && c.rmUid !== uidEfetivo()) return false;
-        const dias = diasNaEtapa(c), lim = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || 999;
-        return dias > lim;
+      const _todas = (COTACOES || []).filter(_minhas);
+      _todas.forEach(c => {
+        const ativa = ehStatusAtivoSafe(c.status);
+        const dias = diasNaEtapa(c);
+        const lim = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || 999;
+        const et = etapaInfo(c.status) || {};
+        const nomeProd = c.produtoNome || ramoNome[c.produtoId] || c.produtoId;
+
+        if (ativa && dias > lim) {
+          parados.push(c);
+          // quais itens do checklist que QUALQUER UM pode marcar ainda faltam?
+          const itens = (et.checklist || []).map(_normItem);
+          const feito = c.checklistFeito || {};
+          const pendentes = itens
+            .map((it, i) => ({ it, key: c.status + '|p' + i }))
+            .filter(x => (x.it.resp || 'todos') === 'todos' && !feito[x.key])
+            .map(x => x.it.txt);
+          paradosDetalhe.push({ c, dias, etapa: et.label || c.status, produto: nomeProd, pendentes });
+        }
+        // na etapa "enviada" há 2+ dias → hora de confirmar recebimento / tirar dúvidas
+        if (ativa && /envi/i.test(c.status) && dias >= 2) {
+          enviadasHa.push({ c, dias, produto: nomeProd });
+        }
+        // negociação fria: chance baixa ou sem chance definida, já com alguns dias
+        if (ativa && dias >= 3 && (c.chanceFechamento === 'baixa' || !c.chanceFechamento)) {
+          frias.push({ c, dias, produto: nomeProd, chance: c.chanceFechamento || null });
+        }
+        // declinado SEM saber com quem/por quanto → dá pra tentar descobrir
+        if (['perdida', 'sem_aceitacao'].includes(c.status)) {
+          const temInfo = (c.seguradoraVencedora || '').trim() || c.valorConcorrente > 0;
+          const semMotivo = !c.motivoPerda || c.declinioResultado === 'nao_justificou';
+          if (!temInfo && semMotivo) semJustificativa.push({ c, produto: nomeProd });
+        }
       });
-    } catch (e) {}
+    } catch (e) { console.warn('radar funil', e); }
 
     // produção x objetivo por grupo + ticket médio por grupo
     let prodGrupo = {}, metaGrupo = {}, ticketGrupo = {}, nFechadosGrupo = {};
@@ -5754,6 +5804,45 @@
       });
     } catch (e) { console.warn('radar grupos', e); }
 
+    // ---- MELHOR MÊS do ano (produção) ----
+    let melhorMes = null;
+    try {
+      const ano = new Date().getFullYear();
+      const porMes = {};
+      let qc2 = db.collection('mb_cotacoes');
+      if (CTX.agenciaId) qc2 = qc2.where('agenciaId', '==', CTX.agenciaId);
+      const snap2 = await qc2.get();
+      snap2.forEach(d => {
+        const c = d.data();
+        if (c.status !== 'fechada') return;
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (!dt || dt.getFullYear() !== ano) return;
+        if (perfil === 'rm' && empresaRmDe(c.empresaId) !== _meu && c.fechadoPorUid !== _meu) return;
+        porMes[dt.getMonth()] = (porMes[dt.getMonth()] || 0) + (c.valor || 0);
+      });
+      const mesesNome = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+      const ent = Object.entries(porMes).sort((a, b) => b[1] - a[1]);
+      const mesAtual = new Date().getMonth();
+      if (ent.length && Number(ent[0][0]) !== mesAtual) {
+        melhorMes = { nome: mesesNome[Number(ent[0][0])], valor: ent[0][1] };
+      }
+    } catch (e) {}
+
+    // ---- % de VENCIMENTOS já mapeados, por ramo ----
+    // "já mapeamos 30% das renovações do seu seguro de frota" + quais faltam
+    const coberturaRamo = {};
+    lista.forEach(e => {
+      const dados = e.produtosDados || {};
+      Object.keys(ramoNome).forEach(rid => {
+        coberturaRamo[rid] = coberturaRamo[rid] || { com: 0, total: 0, faltam: [] };
+        coberturaRamo[rid].total++;
+        const pd = dados[rid];
+        const temVenc = pd && pd.vencimentoMes && pd.vencimentoAno;
+        if (temVenc) coberturaRamo[rid].com++;
+        else coberturaRamo[rid].faltam.push(e);
+      });
+    });
+
     // atividade recente do próprio usuário (dias desde a última visita/mapeamento)
     let diasSemVisita = null, mapeouSemana = 0;
     try {
@@ -5773,8 +5862,9 @@
     return {
       nome, total, lista, mapeadasAlgo, perfil,
       semFunc, semSocios, semDental, semVidaSocios, semPrev,
-      vencProx, semVenc, quentes, parados,
-      prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo,
+      semNadaMapeado, semDecisor, semRh, semTelefone, funcSemBeneficio,
+      vencProx, semVenc, quentes, parados, paradosDetalhe, enviadasHa, semJustificativa, frias,
+      prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo, melhorMes, coberturaRamo, ramoNome,
       diasSemVisita, mapeouSemana, candidatasGrupo,
       grupoNome: { vida: 'Vida', re: 'RE', saude: 'Saúde' }
     };
@@ -5785,144 +5875,279 @@
   // Muitas variações de texto por gerador → o mesmo cenário nunca soa igual.
   function _radarGeradores(D) {
     const out = [];
-    const add = (id, icon, tom, txt, cta) => out.push({ id, icon, tom, txt, cta });
+    // acoes = [{rot:'Rótulo', js:'chamada()'}] — botões que levam direto à ação
+    const add = (id, icon, tom, txt, cta, acoes) => out.push({ id, icon, tom, txt, cta, acoes });
     const cap = s => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
+    const esc = s => String(s || '').replace(/'/g, "\\'");
+    const N = D.nome;
 
-    // 1) DADO QUE FALTA (funcionários) → dental
-    if (D.semFunc.length && D.total) {
-      const alvo = _pick(D.semFunc);
+    // ---- atalhos de ação reutilizáveis ----
+    const aRaioX = e => ({ rot: '🏢 Abrir empresa', js: `abrirRaioX('${esc(e.id)}')` });
+    const aLink  = e => ({ rot: '🔗 Gerar link do questionário', js: `gerarLinkMapeamentoEmpresa('${esc(e.id)}')` });
+    const aCotar = () => ({ rot: '⚡ Pedir cotação', js: 'abrirPedirCotacao()' });
+    const aAgenda = () => ({ rot: '📍 Agendar visita', js: 'abrirAgendarVisita()' });
+    const aEmail = (e, assunto) => (e.emailDecisor || e.emailRh)
+      ? { rot: '✉️ Enviar e-mail', js: `window.open('mailto:${esc(e.emailDecisor || e.emailRh)}?subject=${encodeURIComponent(assunto || 'Seguros — ' + (e.nome || ''))}','_blank')` }
+      : null;
+    const aWhats = e => {
+      const t = String(e.whatsapp || e.telefone || '').replace(/\D/g, '');
+      return t.length >= 10 ? { rot: '💬 WhatsApp', js: `window.open('https://wa.me/55${t}','_blank')` } : null;
+    };
+    const acoesDe = (e, extras) => [...(extras || []), aRaioX(e), aWhats(e), aEmail(e)].filter(Boolean).slice(0, 3);
+
+    // =====================================================================
+    // MENSAGEM 1 — CADASTRO E MAPEAMENTO (o que falta saber da empresa)
+    // =====================================================================
+
+    // 1a) empresa sem NENHUM seguro mapeado
+    if (D.semNadaMapeado.length) {
+      const e = _pick(D.semNadaMapeado);
+      add('m1_nada', '🗺️', 'oportunidade', _pick([
+        `A <strong>${e.nome}</strong> ainda não tem <strong>nenhum seguro mapeado</strong>. Que tal uma ligação, ou mandar o link do questionário pelo WhatsApp? Não custa nada perguntar — e cada resposta vira oportunidade aqui dentro.`,
+        `Temos <strong>${D.semNadaMapeado.length} ${D.semNadaMapeado.length === 1 ? 'empresa' : 'empresas'}</strong> sem nenhum mapeamento. Comece pela <strong>${e.nome}</strong>: gerar o link do questionário leva 10 segundos e o cliente responde quando puder.`,
+        `Descobrir que a empresa <em>não tem</em> um seguro também é informação valiosa — empresa desprotegida corre risco, e risco é conversa. A <strong>${e.nome}</strong> está totalmente em branco. Vamos abrir esse mapa?`
+      ]), null, acoesDe(e, [aLink(e)]));
+    }
+
+    // 1b) sem número de funcionários
+    if (D.semFunc.length) {
+      const e = _pick(D.semFunc);
       const temFunc = D.total - D.semFunc.length;
-      add('func', '👥', 'dica', _pick([
-        `Das suas <strong>${D.total} empresas</strong>, você sabe o nº de funcionários de apenas <strong>${temFunc}</strong>. Que tal ligar pra <strong>${alvo.nome}</strong> hoje e perguntar? Pode ser a porta pra um plano <strong>dental</strong>.`,
-        `Falta o nº de colaboradores em <strong>${D.semFunc.length} empresas</strong>. Comece por <strong>${alvo.nome}</strong> — quanto mais funcionários, maior a chance de um <strong>dental</strong> ou <strong>saúde coletivo</strong>.`,
-        `<strong>${alvo.nome}</strong> ainda está sem o nº de funcionários. Um dado simples que abre portas: dental, saúde, vida em grupo. Vale uma ligação rápida.`
+      add('m1_func', '👥', 'dica', _pick([
+        `Ainda não sabemos quantos funcionários a <strong>${e.nome}</strong> tem. Uma mensagem ou uma ligação resolvem isso — e esse dado abre a porta para <strong>dental, saúde e vida em grupo</strong>.`,
+        `Das suas <strong>${D.total} empresas</strong>, você sabe o número de colaboradores de <strong>${temFunc}</strong>. A <strong>${e.nome}</strong> é uma das que faltam. Quanto maior a empresa, maior a oportunidade em benefícios.`,
+        `<strong>${e.nome}</strong>: sem o nº de funcionários, a gente fica no escuro sobre benefícios. Pergunta rápida no WhatsApp já resolve. 😉`
+      ]), null, acoesDe(e, [aLink(e)]));
+    }
+
+    // 1c) sem e-mail do decisor
+    if (D.semDecisor.length) {
+      const e = _pick(D.semDecisor);
+      add('m1_decisor', '🎯', 'dica', _pick([
+        `Você sabe quem decide sobre seguros na <strong>${e.nome}</strong>? Cadastre o nome e o e-mail do decisor. Estamos sempre enviando oportunidades — numa dessas sai negócio.`,
+        `A <strong>${e.nome}</strong> está sem o contato do decisor. Ter esse e-mail é o que permite chegar na hora certa, com a proposta certa.`
+      ]), null, acoesDe(e));
+    }
+
+    // 1d) sem e-mail do RH
+    if (D.semRh.length) {
+      const e = _pick(D.semRh);
+      add('m1_rh', '🧑‍💼', 'dica', _pick([
+        `Você sabe o e-mail do RH da <strong>${e.nome}</strong>? Vale cadastrar. É sempre bom manter contato com quem cuida de <em>pessoas</em> nas empresas — é por ali que passa dental, saúde e vida.`,
+        `RH da <strong>${e.nome}</strong> ainda não cadastrado. Quem cuida de gente é quem abre a porta dos benefícios.`
+      ]), null, acoesDe(e));
+    }
+
+    // 1e) tem funcionários, mas falta mapear os benefícios
+    if (D.funcSemBeneficio.length) {
+      const x = _pick(D.funcSemBeneficio);
+      add('m1_benef', '🦷', 'oportunidade', _pick([
+        `A <strong>${x.e.nome}</strong> tem <strong>${x.func} funcionários</strong> e ainda não sabemos sobre ${x.faltam.slice(0, 2).join(' e ')}. Meio caminho andado — só falta perguntar se já têm.`,
+        `<strong>${x.func} colaboradores</strong> na <strong>${x.e.nome}</strong> e nenhum benefício mapeado. Se não têm, é oportunidade. Se têm, é renovação. Nos dois casos vale saber.`
+      ]), null, acoesDe(x.e, [aLink(x.e)]));
+    }
+
+    // 1f) sem sócios
+    if (D.semSocios.length) {
+      const e = _pick(D.semSocios);
+      add('m1_socios', '🧑‍💼', 'dica', `A <strong>${e.nome}</strong> está sem o quadro societário. Com nome e data de nascimento dá pra cotar <strong>vida e saúde dos sócios</strong> na hora. E se a empresa não tiver sócios, marque isso também — conta como mapeado.`,
+        null, acoesDe(e));
+    }
+
+    // =====================================================================
+    // MENSAGEM 2 — FUNIL (o que está travado, esperando você)
+    // =====================================================================
+
+    // 2a) negócio parado com itens de checklist que qualquer um pode resolver
+    const paradoComPendencia = (D.paradosDetalhe || []).filter(p => p.pendentes.length);
+    if (paradoComPendencia.length) {
+      const p = _pick(paradoComPendencia);
+      add('m2_parado', '⏳', 'alerta', _pick([
+        `O <strong>${p.produto}</strong> da <strong>${p.c.empresaNome}</strong> está há <strong>${p.dias} dias</strong> parado em "${p.etapa}". Estamos esperando: <em>${p.pendentes.slice(0, 2).join(', ')}</em>. Sua ajuda é fundamental — resolve essa pra nós?`,
+        `Travou: <strong>${p.c.empresaNome}</strong> · ${p.produto}, ${p.dias} dias em "${p.etapa}". Falta <em>${p.pendentes[0]}</em>. Um empurrãozinho e ele volta a andar. 💪`
+      ]), 'cotacoes', [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(p.c.id)}')` }]);
+    }
+
+    // 2b) cotação enviada — confirmar recebimento / tirar dúvidas
+    if ((D.enviadasHa || []).length) {
+      const x = _pick(D.enviadasHa);
+      add('m2_enviada', '📨', 'oportunidade', x.dias <= 3 ? _pick([
+        `Boa! Enviamos a cotação de <strong>${x.produto}</strong> para a <strong>${x.c.empresaNome}</strong>. Que tal confirmar se receberam? Uma mensagem simples já mantém a negociação viva.`,
+        `A proposta de <strong>${x.produto}</strong> foi pra <strong>${x.c.empresaNome}</strong> há ${x.dias} dias. Confirma o recebimento? Proposta que fica no vácuo esfria rápido.`
+      ]) : _pick([
+        `Já fazem <strong>${x.dias} dias</strong> que enviamos a cotação de ${x.produto} para a <strong>${x.c.empresaNome}</strong>. Não seria bom ligar e perguntar se entenderam, ou se ficou alguma dúvida?`,
+        `<strong>${x.c.empresaNome}</strong>: ${x.dias} dias desde o envio de ${x.produto}. Se precisar, coloque o corretor na jogada e agende uma reunião — <strong>olho no olho faz diferença</strong>. 👀`
+      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }, aAgenda()]);
+    }
+
+    // 2c) declínio sem justificativa — descobrir com quem fechou
+    if ((D.semJustificativa || []).length) {
+      const x = _pick(D.semJustificativa);
+      add('m2_semjust', '🔍', 'dica', _pick([
+        `Tentamos e não fechamos o <strong>${x.produto}</strong> na <strong>${x.c.empresaNome}</strong> — e não sabemos com quem ficou. Nos ajuda a descobrir <strong>com quem fechou e por quanto</strong>? Isso é ouro pra tentarmos de novo no ano que vem.`,
+        `<strong>${x.c.empresaNome}</strong> · ${x.produto}: perdemos sem saber o motivo. Uma conversa franca com o cliente hoje vale muito na renovação. Descobre pra gente?`
+      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }]);
+    }
+
+    // 2d) negociação fria — descobrir a concorrência
+    if ((D.frias || []).length) {
+      const x = _pick(D.frias);
+      add('m2_fria', '🧊', 'dica', _pick([
+        `O que transforma uma negociação de fria em quente é <strong>informação</strong>. A <strong>${x.c.empresaNome}</strong> (${x.produto}) está morna há ${x.dias} dias — que tal descobrir como estamos de <strong>preço e coberturas</strong> frente ao concorrente?`,
+        `<strong>${x.c.empresaNome}</strong> · ${x.produto} sem evolução. Pergunta direta costuma destravar: <em>"o que seria um empecilho para avançarmos?"</em>`
+      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }]);
+    }
+
+    // 2e) nenhuma oportunidade nova iniciada há dias
+    if (!D.parados.length && D.funcSemBeneficio.length && (D.quentes || 0) === 0) {
+      const x = _pick(D.funcSemBeneficio);
+      add('m2_iniciar', '🚀', 'oportunidade', `${N}, faz alguns dias que não abrimos nenhuma oportunidade nova. Que tal tentarmos o <strong>${x.faltam[0] || 'dental'}</strong> na <strong>${x.e.nome}</strong>? Já temos os ${x.func} funcionários mapeados — meio caminho andado. Peça só a chance de cotar, não custa nada.`,
+        null, [aCotar(), aRaioX(x.e)]);
+    }
+
+    // =====================================================================
+    // MENSAGEM 3 — PRODUÇÃO, OBJETIVOS E MATEMÁTICA DA META
+    // =====================================================================
+
+    // 3a) melhor mês do ano
+    if (D.melhorMes) {
+      add('m3_melhormes', '📈', 'destaque', _pick([
+        `${N}, <strong>${D.melhorMes.nome}</strong> foi seu melhor mês do ano: ${fmtBRcompacto(D.melhorMes.valor)} de produção. Que tal olhar o que deu certo lá e trazer para este mês? 🚀`,
+        `Seu recorde do ano é <strong>${D.melhorMes.nome}</strong> (${fmtBRcompacto(D.melhorMes.valor)}). O que você fez de diferente naquele mês? Repetir a receita costuma funcionar.`
       ]));
     }
 
-    // 2) OBJETIVO DO RAMO (produção x objetivo x ticket)
+    // 3b) ticket médio → quantos negócios faltam
     Object.keys(D.metaGrupo).forEach(gid => {
       const meta = D.metaGrupo[gid], prod = D.prodGrupo[gid] || 0;
-      if (!meta || meta <= 0) return;
-      const falta = meta - prod;
+      if (!meta || meta <= 0 || prod <= 0) return;
       const gn = D.grupoNome[gid] || cap(gid);
+      const ticket = D.ticketGrupo[gid] || 0, nF = D.nFechadosGrupo[gid] || 0;
+      const falta = meta - prod;
       if (falta <= 0) {
-        add('obj_' + gid, '🏆', 'destaque', `Você <strong>bateu seu objetivo em ${gn}</strong> este ano (${fmtBRcompacto(prod)} de ${fmtBRcompacto(meta)})! Que tal usar o embalo e puxar mais uma?`);
+        add('m3_bateu_' + gid, '🏆', 'destaque', `Você <strong>bateu seu objetivo em ${gn}</strong> (${fmtBRcompacto(prod)} de ${fmtBRcompacto(meta)})! Aproveita o embalo e puxa mais uma. 💪`);
         return;
       }
-      const ticket = D.ticketGrupo[gid] || 0, nFech = D.nFechadosGrupo[gid] || 0;
-      if (nFech >= 3 && ticket > 0) {
+      if (nF >= 3 && ticket > 0) {
         const W = Math.max(1, Math.ceil(falta / ticket));
-        add('obj_' + gid, '🎯', 'oportunidade', _pick([
-          `Seu objetivo em <strong>${gn}</strong> é ${fmtBRcompacto(meta)}. Você já fez ${fmtBRcompacto(prod)}. No seu ritmo médio deste ano, faltam cerca de <strong>${W} ${W === 1 ? 'negócio' : 'negócios'}</strong> pra chegar lá. Dá pra fazer! 💪`,
-          `Em <strong>${gn}</strong> você está a <strong>${W} ${W === 1 ? 'fechamento' : 'fechamentos'}</strong> do seu objetivo (mantendo seu desempenho do ano). Cada empresa que você trabalha te aproxima.`
-        ]));
-      } else {
-        add('obj_' + gid, '🎯', 'oportunidade', `Faltam <strong>${fmtBRcompacto(falta)}</strong> pro seu objetivo em <strong>${gn}</strong> este ano. Cada nova oportunidade que você abre conta — bora?`);
+        add('m3_ticket_' + gid, '🎯', 'oportunidade', `Seu ticket médio em <strong>${gn}</strong> este ano é <strong>${fmtBRcompacto(ticket)}</strong> por negócio. Faltam ${fmtBRcompacto(falta)} pro seu objetivo — ou seja, cerca de <strong>${W} ${W === 1 ? 'negócio novo' : 'negócios novos'}</strong> nesse mesmo ritmo. Dá pra fazer!`, 'oportunidades');
       }
     });
 
-    // 3) PRODUÇÃO ZERADA (puxão gentil, sem ticket)
+    // 3c) ramo zerado — com a MATEMÁTICA concreta pra chegar lá
+    const CUSTO_MEDIO = { saude: 380, dental: 25, vida: 12 };   // por pessoa/mês, referência de mercado
     Object.keys(D.metaGrupo).forEach(gid => {
       if ((D.prodGrupo[gid] || 0) > 0) return;
-      if (!D.metaGrupo[gid]) return;
+      const meta = D.metaGrupo[gid];
+      if (!meta) return;
       const gn = D.grupoNome[gid] || cap(gid);
+
+      if (gid === 'saude') {
+        const custo = CUSTO_MEDIO.saude;
+        const vidasAno = Math.ceil(meta / (custo * 12));
+        const grandes = (D.funcSemBeneficio || []).slice().sort((a, b) => b.func - a.func);
+        const alvo = grandes[0];
+        const variacoes = [
+          `Ainda estamos zerados em <strong>${gn}</strong>. Fazendo a conta: um plano custa em média <strong>R$ ${custo}/pessoa</strong>. Pro seu objetivo de ${fmtBRcompacto(meta)}, seriam cerca de <strong>${vidasAno} vidas</strong> no ano.${alvo ? ` A <strong>${alvo.e.nome}</strong> tem ${alvo.func} funcionários — sozinha já muda o jogo.` : ''}`,
+          `<strong>${gn}</strong> zerado. Mas olha por outro ângulo: fechando o plano para apenas <strong>3 pessoas por empresa</strong>, em 10 empresas você já constrói um resultado sólido no ano. Comece por uma. 🙂`
+        ];
+        if (alvo) variacoes.push(`Que tal apresentar <strong>saúde</strong> para a <strong>${alvo.e.nome}</strong>? São ${alvo.func} colaboradores mapeados. Mesmo que só uma parte adira, é o seu primeiro negócio no ramo.`);
+        add('m3_zero_saude', '🩺', 'alerta', _pick(variacoes), null, alvo ? [aCotar(), aRaioX(alvo.e)] : [aCotar()]);
+        return;
+      }
+
+      if (gid === 'vida' && (D.semVidaSocios || []).length) {
+        const v = _pick(D.semVidaSocios);
+        add('m3_zero_vida', '🛡️', 'alerta', `<strong>${gn}</strong> ainda zerado este ano. A <strong>${v.e.nome}</strong> tem <strong>${v.nSoc} ${v.nSoc === 1 ? 'sócio' : 'sócios'}</strong> sem seguro de vida mapeado — proteção pessoal é conversa que rende, porque fala do que a pessoa mais preza.`,
+          null, [aCotar(), aRaioX(v.e)]);
+        return;
+      }
+
       const cands = D.candidatasGrupo[gid] || [];
       const alvo = cands.length ? _pick(cands) : null;
-      if (alvo) {
-        add('zero_' + gid, '🌱', 'alerta', _pick([
-          `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? Que tal começar mapeando a <strong>${alvo.nome}</strong>? A primeira venda é a que destrava o resto. 🚀`,
-          `Ainda sem produção em <strong>${gn}</strong> — mas isso é oportunidade, não problema. A <strong>${alvo.nome}</strong> é uma boa pra começar: mapeia o que falta e joga no funil. 💪`,
-          `<strong>${gn}</strong> zerado, mas tem carteira pra trabalhar. Que tal ligar pra <strong>${alvo.nome}</strong> hoje e descobrir a oportunidade que está ali parada?`
-        ]));
-      } else {
-        add('zero_' + gid, '🌱', 'alerta', _pick([
-          `Seu <strong>${gn}</strong> ainda está zerado este ano. Bora abrir o placar? A primeira venda é a que destrava o resto. 🚀`,
-          `Ainda sem produção em <strong>${gn}</strong> — mas isso é oportunidade. Que tal buscar uma empresa nova pra esse ramo?`
-        ]));
-      }
+      add('m3_zero_' + gid, '🌱', 'alerta', alvo
+        ? `Seu <strong>${gn}</strong> está zerado este ano. Bora abrir o placar? Que tal começar pela <strong>${alvo.nome}</strong>? A primeira venda é a que destrava o resto. 🚀`
+        : `Seu <strong>${gn}</strong> ainda está zerado. Mas isso é oportunidade, não problema — tem carteira pra trabalhar.`,
+        null, alvo ? [aCotar(), aRaioX(alvo)] : [aCotar()]);
     });
 
-    // 4) SEU RITMO POR RAMO (só pra RM) — uma mensagem, do ramo onde já há produção
-    if (D.perfil === 'rm') {
-      const comProd = Object.keys(D.prodGrupo).filter(gid => (D.prodGrupo[gid] || 0) > 0);
-      if (comProd.length) {
-        const gid = _pick(comProd), gn = D.grupoNome[gid] || cap(gid);
-        add('vsag', '📊', 'dica', _pick([
-          `Você já soma <strong>${fmtBRcompacto(D.prodGrupo[gid])}</strong> em <strong>${gn}</strong> este ano. Cada nova empresa que você trabalha engrossa esse número — e o da agência junto. 🤝`,
-          `Seu <strong>${gn}</strong> está rendendo (${fmtBRcompacto(D.prodGrupo[gid])} no ano). Que tal buscar mais uma empresa pra manter o embalo?`
-        ]));
-      }
+    // 3d) seguro do carro do sócio no CNPJ
+    if ((D.semSocios || []).length < D.total && (D.prodGrupo['re'] || 0) === 0) {
+      add('m3_auto_socio', '🚗', 'dica', `Estamos zerados em <strong>RE</strong>. Uma porta que muita gente esquece: o <strong>carro do sócio no CNPJ da empresa</strong>. Consulte o corretor sobre os benefícios — costuma ser uma conversa fácil e abre o relacionamento.`, null, [aCotar()]);
     }
 
-    // 5) VENCIMENTO PRÓXIMO (age na hora certa)
-    if (D.vencProx.length) {
-      const v = _pick(D.vencProx.filter(x => x.dias >= 0)) || D.vencProx[0];
-      if (v) add('venc', '⏰', 'alerta', _pick([
-        `O <strong>${v.nome}</strong> da <strong>${v.e.nome}</strong> vence em <strong>${v.dias} dias</strong>. É a hora de agir antes que alguém chegue primeiro. Que tal preparar a cotação?`,
-        `Atenção na <strong>${v.e.nome}</strong>: <strong>${v.nome}</strong> vencendo em ${v.dias} dias. Renovação na mão de quem se antecipa. 🎯`
-      ]), 'cotacoes');
-    }
+    // =====================================================================
+    // MENSAGEM 4 — OPORTUNIDADES, COBERTURA E RITMO
+    // =====================================================================
 
-    // 6) VENCIMENTO A MAPEAR (o dado que falta pra virar oportunidade)
-    if (D.semVenc.length) {
-      const s = _pick(D.semVenc);
-      add('semvenc', '📅', 'dica', _pick([
-        `Que tal ligar pra <strong>${s.e.nome}</strong> e perguntar quando vence o <strong>${s.nome}</strong> deles? Na plataforma, todo vencimento que você mapeia vira oportunidade na hora certa. Se conseguir o valor da apólice, melhor ainda!`,
-        `A <strong>${s.e.nome}</strong> tem <strong>${s.nome}</strong> mas ainda sem data de vencimento. Só precisamos disso pra transformar em oportunidade — e o sistema te avisa na hora de agir.`
-      ]));
-    }
-
-    // 7) OPORTUNIDADES QUENTES
+    // 4a) oportunidades quentes
     if (D.quentes > 0) {
-      add('quentes', '🔥', 'oportunidade', _pick([
-        `Já conferiu tudo que sua carteira pode gerar hoje? Você tem <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> esperando ação.`,
-        `<strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> na sua carteira agora. Vale abrir e ver qual dá pra atacar hoje. 🔥`
+      add('m4_quentes', '🔥', 'oportunidade', _pick([
+        `Sua carteira está recheada: <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> esperando ação. Seu trabalho é só conseguir a chance de cotar — o resto a gente faz junto.`,
+        `A corretora trabalha todo dia pra identificar oportunidades na sua carteira. Você tem <strong>${D.quentes}</strong> agora. Uma interação pode ser o suficiente pra fechar um grande negócio.`,
+        `Já conferiu hoje tudo que sua carteira pode gerar? São <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade' : 'oportunidades'}</strong> quentes. Vamos juntos nessa — você é quem abre a porta. 🚪`
       ]), 'oportunidades');
     }
 
-    // 8) PREVIDÊNCIA DOS SÓCIOS
+    // 4b) % de vencimentos mapeados por ramo + quais faltam
+    const ramosCob = Object.entries(D.coberturaRamo || {})
+      .filter(([rid, v]) => v.total >= 5 && v.com > 0 && v.faltam.length)
+      .sort((a, b) => (b[1].com / b[1].total) - (a[1].com / a[1].total));
+    if (ramosCob.length) {
+      const [rid, v] = _pick(ramosCob.slice(0, 4));
+      const pct = Math.round(v.com / v.total * 100);
+      const alvos = v.faltam.slice(0, 3);
+      const pctNovo = Math.round((v.com + alvos.length) / v.total * 100);
+      add('m4_cobertura', '📊', 'dica', _pick([
+        `Você sabia que já mapeamos <strong>${pct}%</strong> das renovações de <strong>${D.ramoNome[rid]}</strong> da sua carteira? Mapeando mais ${alvos.length} empresas — como a <strong>${alvos[0].nome}</strong> — chegamos a <strong>${pctNovo}%</strong>.`,
+        `<strong>${D.ramoNome[rid]}</strong>: ${pct}% das renovações já mapeadas. Cada vencimento que entra vira uma oportunidade no momento certo. Falta a <strong>${alvos[0].nome}</strong>, entre outras.`
+      ]), null, [aRaioX(alvos[0]), aLink(alvos[0])]);
+    }
+
+    // 4c) vencimento próximo
+    if (D.vencProx.length) {
+      const v = _pick(D.vencProx.filter(x => x.dias >= 0)) || D.vencProx[0];
+      if (v) add('m4_venc', '⏰', 'alerta', _pick([
+        `O <strong>${v.nome}</strong> da <strong>${v.e.nome}</strong> vence em <strong>${v.dias} dias</strong>. Renovação é da corretora que se antecipa — bora preparar a cotação?`,
+        `Atenção na <strong>${v.e.nome}</strong>: ${v.nome} vencendo em ${v.dias} dias. Comece a estruturar agora e chegue antes do concorrente. 🎯`
+      ]), 'cotacoes', [aCotar(), aRaioX(v.e)]);
+    }
+
+    // 4d) vencimento a mapear
+    if (D.semVenc.length) {
+      const s = _pick(D.semVenc);
+      add('m4_semvenc', '📅', 'dica', _pick([
+        `Que tal ligar pra <strong>${s.e.nome}</strong> e perguntar quando vence o <strong>${s.nome}</strong>? Tudo que você mapeia vira oportunidade na hora certa — só precisamos da data. Se conseguir o valor, melhor ainda!`,
+        `A <strong>${s.e.nome}</strong> tem ${s.nome}, mas sem data de vencimento. É só isso que falta pra virar oportunidade automática aqui no sistema.`
+      ]), null, acoesDe(s.e, [aLink(s.e)]));
+    }
+
+    // 4e) previdência dos sócios
     if (D.semPrev.length) {
       const p = _pick(D.semPrev);
-      add('prev', '💰', 'oportunidade', _pick([
-        `A <strong>${p.e.nome}</strong> tem <strong>${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'}</strong> e nenhum com previdência mapeada. Que tal jogar no funil e trabalharmos juntos essa oportunidade?`,
-        `Previdência dos sócios é um terreno pouco explorado. A <strong>${p.e.nome}</strong> tem ${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'} — pode ser um ótimo começo.`
-      ]));
+      add('m4_prev', '💰', 'oportunidade', `A <strong>${p.e.nome}</strong> tem <strong>${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'}</strong> e nenhuma previdência mapeada. Que tal jogar no funil e trabalharmos juntos essa oportunidade?`,
+        null, [aCotar(), aRaioX(p.e)]);
     }
 
-    // 9) VIDA DOS SÓCIOS
-    if (D.semVidaSocios.length) {
-      const v = _pick(D.semVidaSocios);
-      add('vidasoc', '🛡️', 'dica', `A <strong>${v.e.nome}</strong> tem sócios sem <strong>seguro de vida</strong> mapeado. É uma conversa que costuma render — proteção pessoal fala mais alto que preço.`);
-    }
-
-    // 10) DENTAL (empresa grande com funcionários)
-    if (D.semDental.length) {
-      const maior = D.semDental.sort((a, b) => b.func - a.func)[0];
-      add('dental', '😁', 'oportunidade', _pick([
-        `A <strong>${maior.e.nome}</strong> tem <strong>${maior.func} funcionários</strong> e ainda não sabemos se têm <strong>dental</strong>. É sua maior empresa sem esse dado — uma ligação pode abrir um belo negócio.`,
-        `Dental é porta de entrada fácil — às vezes custa menos que um cafezinho por pessoa. A <strong>${maior.e.nome}</strong> (${maior.func} funcionários) é uma ótima candidata.`
-      ]));
-    }
-
-    // 11) RITMO / ATIVIDADE
-    if (D.mapeouSemana >= 5) {
-      add('ritmo', '🚀', 'destaque', `Você mapeou <strong>${D.mapeouSemana} seguros essa semana</strong> — que ritmo! Continua assim que os resultados vêm. 👏`);
-    }
+    // 4f) visita — lembrar do link e do corretor
     if (D.diasSemVisita != null && D.diasSemVisita >= 7) {
-      add('visita', '📍', 'dica', _pick([
-        `Faz <strong>${D.diasSemVisita} dias</strong> desde sua última visita registrada. Que tal agendar uma essa semana? Presença gera negócio.`,
-        `Uma visita bem colocada vale por dez ligações. Já faz ${D.diasSemVisita} dias da última — bora marcar? 📍`
-      ]), 'agenda');
+      add('m4_visita', '📍', 'dica', _pick([
+        `Faz <strong>${D.diasSemVisita} dias</strong> desde sua última visita registrada. Vai visitar essa semana? Informe aqui — e se puder, chame o corretor junto.`,
+        `Uma visita bem colocada vale por dez ligações. E na visita, não esqueça de gerar o <strong>link do questionário</strong>: peça pro cliente preencher, isso nos ajuda demais a criar oportunidades.`
+      ]), 'agenda', [aAgenda()]);
+    }
+    if (D.mapeouSemana >= 5) {
+      add('m4_ritmo', '🚀', 'destaque', `Você mapeou <strong>${D.mapeouSemana} seguros essa semana</strong> — que ritmo! Continua assim que o resultado vem. 👏`);
     }
 
-    // 12) MOTIVACIONAIS / PANORAMA (sempre elegíveis, dão variedade)
+    // 4g) panorama / motivacionais (sempre elegíveis, dão variedade)
     const pctMap = D.total ? Math.round(D.mapeadasAlgo / D.total * 100) : 0;
-    add('motiv', '✨', 'neutro', _pick([
+    add('m4_motiv', '✨', 'neutro', _pick([
       `Você tem <strong>${D.total} empresas</strong> na carteira e ${pctMap}% já com algum mapeamento. Cada dado novo é uma semente de negócio. 🌱`,
-      `Lembra: na nossa plataforma, <strong>tudo que você mapeia vira oportunidade</strong> na hora certa. Não é trabalho perdido — é colheita programada.`,
-      `Andamos devagar em alguns ramos até aqui, mas a carteira está cheia de oportunidade. O jogo vira pra quem age. Bora? 💪`,
+      `Lembra: tudo que você mapeia <strong>vira oportunidade</strong> na hora certa. Não é trabalho perdido — é colheita programada.`,
       `O melhor vendedor não é o que fala mais — é o que aparece na hora certa. E a hora certa, aqui, o sistema te mostra. 🎯`,
-      `Grandes números no fim do ano são feitos de pequenas ações toda semana. Um mapeamento, uma visita, uma cotação. Constância vence.`
+      `Grandes números no fim do ano são feitos de pequenas ações toda semana: um mapeamento, uma visita, uma cotação. Constância vence. 📈`,
+      `Seguro não é empurrar produto do banco: é um <strong>mar de oportunidades</strong> na sua carteira esperando alguém olhar. E esse alguém é você. 🌊`
     ]));
 
     return out;
@@ -5941,6 +6166,20 @@
 
     // embaralha
     for (let i = frescas.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [frescas[i], frescas[j]] = [frescas[j], frescas[i]]; }
+
+    // MESCLA AS ÓTICAS: pega em rodízio entre as categorias (m1 cadastro, m2 funil,
+    // m3 produção, m4 oportunidades) — assim a leva nunca vem só de um assunto.
+    const porCat = {};
+    frescas.forEach(m => { const k = (m.id || '').slice(0, 2); (porCat[k] = porCat[k] || []).push(m); });
+    const cats = Object.keys(porCat);
+    for (let i = cats.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cats[i], cats[j]] = [cats[j], cats[i]]; }
+    const mescladas = [];
+    let rodada = 0;
+    while (mescladas.length < frescas.length && rodada < 20) {
+      cats.forEach(k => { if (porCat[k][rodada]) mescladas.push(porCat[k][rodada]); });
+      rodada++;
+    }
+    frescas = mescladas.length ? mescladas : frescas;
 
     // saudação com tom do dia sempre em 1º
     const tom = _tomDoDia();
@@ -10312,7 +10551,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '192';
+  const APP_VERSAO = '193';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -14342,9 +14581,18 @@
         const tomCor = { destaque: '#eef2ff', alerta: '#fef2f2', dica: '#f0fdf4', oportunidade: '#fff7ed', neutro: '#f8fafc' };
         const tomBorda = { destaque: '#c7d2fe', alerta: '#fecaca', dica: '#bbf7d0', oportunidade: '#fed7aa', neutro: '#e2e8f0' };
         const ctaTxt = { cotacoes: 'Pedir cotação →', oportunidades: 'Ver oportunidades →', agenda: 'Agendar visita →', empresas: 'Ver empresas →' };
+        const _btn = (rot, js, borda) => `<button onclick="event.stopPropagation(); ${js}" style="background:white; border:1px solid ${borda}; color:#4338ca; font-weight:700; font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer;">${rot}</button>`;
         let h = '';
         msgs.forEach(m => {
-          const cta = m.cta ? `<div style="margin-top:8px;"><button onclick="event.stopPropagation(); ${m.cta === 'agenda' ? 'abrirAgendarVisita()' : m.cta === 'cotacoes' ? 'abrirPedirCotacao()' : "navTo('" + m.cta + "')"}" style="background:white; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; color:#4338ca; font-weight:700; font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer;">${ctaTxt[m.cta] || 'Ver →'}</button></div>` : '';
+          const bd = tomBorda[m.tom] || '#e2e8f0';
+          // acoes: lista de {rot, js} — permite vários botões (ligar, whats, e-mail, link…)
+          let cta = '';
+          if (m.acoes && m.acoes.length) {
+            cta = `<div style="margin-top:9px; display:flex; gap:6px; flex-wrap:wrap;">${m.acoes.map(a => _btn(a.rot, a.js, bd)).join('')}</div>`;
+          } else if (m.cta) {
+            const js = m.cta === 'agenda' ? 'abrirAgendarVisita()' : m.cta === 'cotacoes' ? 'abrirPedirCotacao()' : "navTo('" + m.cta + "')";
+            cta = `<div style="margin-top:8px;">${_btn(ctaTxt[m.cta] || 'Ver →', js, bd)}</div>`;
+          }
           h += `<div style="display:flex; gap:12px; background:${tomCor[m.tom] || '#f8fafc'}; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; border-radius:12px; padding:13px 15px; margin-bottom:9px;">
             <div style="font-size:22px; flex-shrink:0; line-height:1.3;">${m.icon}</div>
             <div style="flex:1; min-width:0;"><div style="font-size:13.5px; color:#334155; line-height:1.5;">${m.txt}</div>${cta}</div>
