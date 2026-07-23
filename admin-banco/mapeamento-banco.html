@@ -5828,6 +5828,37 @@
       }
     } catch (e) {}
 
+    // ---- PIPELINE em negociação e RENOVAÇÕES até o fim do ano ----
+    // "se fechar o que está em negociação, você chega a X% do objetivo"
+    let pipelineValor = 0, pipelineN = 0, renovAteDez = 0, renovN = 0;
+    try {
+      (COTACOES || []).filter(_minhas).forEach(c => {
+        if (!ehStatusAtivoSafe(c.status)) return;
+        pipelineValor += (c.valorProposto || c.valor || 0);
+        pipelineN++;
+      });
+    } catch (e) {}
+    const _fimAno = new Date(hoje.getFullYear(), 11, 31);
+    lista.forEach(e => {
+      Object.entries(e.produtosDados || {}).forEach(([rid, pd]) => {
+        if (!pd || !pd.vencimentoMes || !pd.vencimentoAno) return;
+        if (!['conosco', 'fechada', 'mercado', 'mapeada'].includes(pd.statusVisual)) return;
+        const dv = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
+        if (dv >= hoje && dv <= _fimAno) {
+          renovAteDez += (pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0);
+          renovN++;
+        }
+      });
+    });
+
+    // ---- COBERTURA POR EMPRESA: quantos ramos já mapeados de cada uma ----
+    const totalRamos = Object.keys(ramoNome).length || 1;
+    const coberturaEmpresa = lista.map(e => {
+      const dados = e.produtosDados || {};
+      const com = Object.values(dados).filter(pd => pd && pd.statusVisual && pd.statusVisual !== 'vazia').length;
+      return { e, com, pct: Math.round(com / totalRamos * 100) };
+    }).filter(x => x.com > 0 && x.pct < 60).sort((a, b) => b.pct - a.pct);
+
     // ---- % de VENCIMENTOS já mapeados, por ramo ----
     // "já mapeamos 30% das renovações do seu seguro de frota" + quais faltam
     const coberturaRamo = {};
@@ -5865,6 +5896,7 @@
       semNadaMapeado, semDecisor, semRh, semTelefone, funcSemBeneficio,
       vencProx, semVenc, quentes, parados, paradosDetalhe, enviadasHa, semJustificativa, frias,
       prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo, melhorMes, coberturaRamo, ramoNome,
+      pipelineValor, pipelineN, renovAteDez, renovN, coberturaEmpresa, totalRamos,
       diasSemVisita, mapeouSemana, candidatasGrupo,
       grupoNome: { vida: 'Vida', re: 'RE', saude: 'Saúde' }
     };
@@ -6138,6 +6170,38 @@
     }
     if (D.mapeouSemana >= 5) {
       add('m4_ritmo', '🚀', 'destaque', `Você mapeou <strong>${D.mapeouSemana} seguros essa semana</strong> — que ritmo! Continua assim que o resultado vem. 👏`);
+    }
+
+    // 4h) PIPELINE x OBJETIVO — "se fechar o que está na mesa, você chega a X%"
+    const _metaTotal = Object.values(D.metaGrupo || {}).reduce((s, v) => s + (v || 0), 0);
+    const _prodTotal = Object.values(D.prodGrupo || {}).reduce((s, v) => s + (v || 0), 0);
+    if (D.pipelineValor > 0 && _metaTotal > 0) {
+      const pctHoje = Math.round(_prodTotal / _metaTotal * 100);
+      const pctCom = Math.round((_prodTotal + D.pipelineValor) / _metaTotal * 100);
+      if (pctCom > pctHoje) {
+        add('m4_pipe_meta', '📐', 'oportunidade', _pick([
+          `Olha o tamanho do que está na mesa: você tem <strong>${fmtBRcompacto(D.pipelineValor)}</strong> em ${D.pipelineN} ${D.pipelineN === 1 ? 'negociação' : 'negociações'} abertas. Hoje você está em <strong>${pctHoje}%</strong> do objetivo — fechando o que já está no funil, salta pra <strong>${pctCom}%</strong>.`,
+          `${N}, seu funil vale <strong>${fmtBRcompacto(D.pipelineValor)}</strong> agora. Não é promessa: é negócio já iniciado. Cada um que fecha te leva de ${pctHoje}% para perto de <strong>${pctCom}%</strong> do objetivo.`
+        ]), 'cotacoes');
+      }
+    }
+
+    // 4i) RENOVAÇÕES até dezembro — o salto que já está mapeado
+    if (D.renovAteDez > 0 && D.renovN >= 2) {
+      const proxima = (D.vencProx || []).filter(x => x.dias >= 0).sort((a, b) => a.dias - b.dias)[0];
+      add('m4_renov', '🔄', 'oportunidade', _pick([
+        `Você tem <strong>${fmtBRcompacto(D.renovAteDez)}</strong> em renovações mapeadas até dezembro (${D.renovN} apólices). Isso é um salto e tanto no objetivo — e já está tudo aí, esperando você chegar antes.${proxima ? ` Comece pela <strong>${proxima.e.nome}</strong>, que vence em ${proxima.dias} dias.` : ''}`,
+        `${D.renovN} renovações mapeadas até o fim do ano, somando <strong>${fmtBRcompacto(D.renovAteDez)}</strong>. Renovação não cai do céu: quem estrutura com antecedência leva. ${proxima ? `A da <strong>${proxima.e.nome}</strong> vence em ${proxima.dias} dias — bora começar por ela?` : ''}`
+      ]), 'cotacoes', proxima ? [aCotar(), aRaioX(proxima.e)] : [aCotar()]);
+    }
+
+    // 4j) COBERTURA POR EMPRESA — quanto já sabemos de uma empresa específica
+    if ((D.coberturaEmpresa || []).length) {
+      const x = _pick(D.coberturaEmpresa.slice(0, 6));
+      add('m4_cob_emp', '🧩', 'dica', _pick([
+        `Na <strong>${x.e.nome}</strong> já mapeamos <strong>${x.pct}%</strong> dos seguros possíveis (${x.com} de ${D.totalRamos}). Já temos relacionamento — que tal completar o mapa e descobrir o que mais dá pra proteger?`,
+        `<strong>${x.e.nome}</strong>: ${x.com} seguros mapeados de ${D.totalRamos} possíveis. O cliente já confia em você. Perguntar sobre os outros é o passo natural.`
+      ]), null, acoesDe(x.e, [aLink(x.e)]));
     }
 
     // 4g) panorama / motivacionais (sempre elegíveis, dão variedade)
@@ -10551,7 +10615,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '193';
+  const APP_VERSAO = '194';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -14577,7 +14641,7 @@
     // (para RM e gestores; assistente/estagiário veem o feed de atividades abaixo)
     if (ehRM || ehGestor) {
       try {
-        const { msgs } = await radarMontar(5);
+        const { msgs } = await radarMontar(10);
         const tomCor = { destaque: '#eef2ff', alerta: '#fef2f2', dica: '#f0fdf4', oportunidade: '#fff7ed', neutro: '#f8fafc' };
         const tomBorda = { destaque: '#c7d2fe', alerta: '#fecaca', dica: '#bbf7d0', oportunidade: '#fed7aa', neutro: '#e2e8f0' };
         const ctaTxt = { cotacoes: 'Pedir cotação →', oportunidades: 'Ver oportunidades →', agenda: 'Agendar visita →', empresas: 'Ver empresas →' };
