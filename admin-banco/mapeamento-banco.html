@@ -10312,7 +10312,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '191';
+  const APP_VERSAO = '192';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12494,6 +12494,7 @@
     dados_base: { icon: '🏢', txt: 'Cadastrou dados base' },
     editou_socios: { icon: '🧑‍💼', txt: 'Atualizou sócios' },
     editou_funcionarios: { icon: '👥', txt: 'Atualizou funcionários' },
+    declinio_sem_justificativa: { icon: '🤷', txt: 'Registrou declínio (sem justificativa do cliente)' },
     contato_decisor: { icon: '📧', txt: 'Cadastrou contato do decisor' },
     contato_rh: { icon: '🧑‍💼', txt: 'Cadastrou contato do RH' },
     checklist_item: { icon: '✓', txt: 'Marcou item de checklist' },
@@ -21306,7 +21307,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <div style="font-size:12px; color:#b91c1c; margin-top:3px;">
                 <strong>${c.declinioPedidoPorNome || 'Alguém'}</strong> registrou que este negócio não vai fechar${c.declinioSeguradora ? ` (fechou com <strong>${c.declinioSeguradora}</strong>)` : ''}.
                 ${c.declinioMotivo ? `<br>Motivo: ${String(c.declinioMotivo).replace(/_/g, ' ')}` : ''}
+                ${c.declinioResultado === 'nao_justificou' ? '<br><em>O cliente não justificou — sem retorno.</em>' : ''}
               </div>
+              ${CTX.isAdmin && c.declinioPedidoPorNome ? `<div style="font-size:11px; color:#b91c1c; margin-top:6px; background:rgba(255,255,255,.6); border-radius:6px; padding:6px 9px;">
+                Ao confirmar, os pontos do declínio vão para <strong>${c.declinioPedidoPorNome}</strong>${c.declinioResultado === 'nao_justificou' ? ' (valor reduzido, pois não houve justificativa)' : ''}.
+              </div>` : ''}
               ${CTX.isAdmin ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
                 <button class="btn-primary" style="background:#dc2626;" onclick="acaoNegociacao('${c.id}','perder')">✓ Confirmar declínio</button>
                 <button class="btn-secondary" onclick="recusarDeclinio('${c.id}')">↩ Manter em negociação</button>
@@ -21333,6 +21338,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             ${CTX.isAdmin ? `<button class="btn-secondary" style="background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="acaoNegociacao('${c.id}','fechar')">📜 Emitir</button>` : ''}
             <button class="btn-secondary" style="background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Não fechou</button>
           </div>` : ''}
+
+          ${ativa && !c.declinioPedido && (perfilEfetivo() === 'estagiario' || perfilEfetivo() === 'assistente') ? `
+          <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+            <button class="btn-secondary" style="flex:1; min-width:150px; background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Pedir declínio</button>
+          </div>
+          <div style="font-size:11px; color:#94a3b8; margin:-8px 0 14px;">O corretor confirma antes de encerrar. Registrar o que o cliente disse conta pontos pra você.</div>` : ''}
 
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
             <div class="form-group">
@@ -22051,6 +22062,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <option value="fechou_outro">🏢 Renovou/fechou com OUTRA corretora ou seguradora</option>
             <option value="reagendar">🔁 Não fechou com ninguém — reagendar para retomar depois</option>
             <option value="sem_interesse">🚫 Não fechou e sem interesse em novo contato</option>
+            <option value="nao_justificou">🤷 Cliente não justificou — sumiu / não deu retorno</option>
           </select>
         </div>
         <div id="perderCamposReagendar" style="display:none;">
@@ -22140,13 +22152,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!c || !acao) return;
 
     const update = { atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() };
+    // Quando o corretor CONFIRMA um declínio pedido por outra pessoa, os pontos
+    // são de quem PEDIU — foi ela que trouxe a informação do cliente.
+    const _creditaA = (acao === 'perder' && CTX.isAdmin && c.declinioPedido && c.declinioPedidoPorUid)
+      ? { uid: c.declinioPedidoPorUid, nome: c.declinioPedidoPorNome || '—', perfil: c.declinioPedidoPerfil || '' }
+      : { uid: autorUid(), nome: autorNome(), perfil: CTX.perfilSimulado || CTX.perfil };
     const acaoLog = {
       empresaId: c.empresaId, empresaNome: c.empresaNome,
       produto: c.produtoId, produtoNome: c.produtoNome,
       cotacaoId: c.id,
       agenciaId: c.agenciaId,
-      usuarioId: autorUid(), usuarioNome: autorNome(),
-      usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+      usuarioId: _creditaA.uid, usuarioNome: _creditaA.nome,
+      usuarioPerfil: _creditaA.perfil,
       criadoEm: firebase.firestore.FieldValue.serverTimestamp()
     };
 
@@ -22297,7 +22314,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         // encerrado por engano, e o card avisa sozinho (vermelho pulsando) no kanban.
         if (!CTX.isAdmin) {
           update.declinioPedido = true;
+          update.declinioPedidoPorUid = autorUid();
           update.declinioPedidoPorNome = autorNome();
+          update.declinioPedidoPerfil = CTX.perfilSimulado || CTX.perfil;
           update.declinioPedidoEm = firebase.firestore.FieldValue.serverTimestamp();
           update.declinioMotivo = motivo;
           update.declinioResultado = resultado;
@@ -22347,6 +22366,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (motivo === 'sem_aceitacao') {
           acaoLog.pontos = getPonto('sem_aceitacao');
           acaoLog.detalhe = 'Seguradora não aceitou o risco';
+        } else if (resultado === 'nao_justificou') {
+          // Cliente sumiu / não deu retorno: quem registrou não conseguiu apurar nada.
+          // Vale menos que um declínio embasado, mas registrar é melhor que deixar
+          // o negócio apodrecendo no funil — então ainda conta algo.
+          acaoLog.tipo = 'declinio_sem_justificativa';
+          acaoLog.pontos = Math.max(1, Math.round(getPonto('declinio_com_motivo') / 3));
+          acaoLog.detalhe = 'Cliente não justificou — sem retorno';
         } else if (_temAgendamento) {
           acaoLog.tipo = 'declinio_com_agendamento';
           acaoLog.pontos = getPonto('declinio_com_agendamento');
