@@ -10615,7 +10615,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '194';
+  const APP_VERSAO = '195';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12310,6 +12310,9 @@
     const ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
     const inicioAno = new Date(ano, 0, 1), fimAno = new Date(ano, 11, 31, 23, 59, 59);
     const producaoGrupo = {}, metaGrupo = {};
+    // empresa|produto já contados como fechamento — evita contar a MESMA apólice
+    // duas vezes (uma como negócio fechado no funil, outra como "já é nosso").
+    const _jaContadas = new Set();
     const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
 
     // ---- Produção realizada por grupo (fechamentos do ano, dedup por empresa|produto) ----
@@ -12330,10 +12333,13 @@
         if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, gid: ramoGrupo[c.produtoId] || 'outros' };
       });
       Object.values(fechadosAno).forEach(f => { producaoGrupo[f.gid] = (producaoGrupo[f.gid] || 0) + f.valor; });
+      // guarda as chaves empresa|produto já contadas como fechamento, para não somar de novo
+      Object.keys(fechadosAno).forEach(k => _jaContadas.add(k));
     } catch (e) { console.warn('produção grupo', e); }
 
-    // ---- Já-nosso (apólices que já eram suas, vigência começou no ano) ----
-    const contadas = new Set(Object.keys({})); // simplificado: dedup só entre já-nossos aqui
+    // ---- Já-nosso: apólices que JÁ eram suas e NÃO passaram pelo funil ----
+    // (mesma regra do Relatório de Metas — sem isso, um negócio fechado no funil
+    //  era contado outra vez aqui, inflando o % da campanha)
     (EMPRESAS_REAIS || []).forEach(e => {
       if (escopoUid && e.rm !== escopoUid) return;
       const dados = e.produtosDados || {};
@@ -12342,6 +12348,7 @@
         if (getMapeamento(pd) !== 'cliente') return;
         const premio = pd.premioAnual || pd.valorFechado || 0;
         if (premio <= 0) return;
+        if (_jaContadas.has(e.id + '|' + rid)) return;   // já entrou como fechamento
         let anoProd = new Date().getFullYear();
         const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
         if (mVi) anoProd = parseInt(mVi[3]);
