@@ -294,40 +294,6 @@ const CENAS = [
   }
 ];
 
-/* ─────────── QUESTIONÁRIO (dados que a seguradora pede) ─────────── */
-const QPERGUNTAS = [
-  { fala: 'Perfeito! Vou precisar de alguns dados da empresa para levar às seguradoras. São poucas perguntas, prometo.', campo:null },
-  { fala: 'Qual o <strong>faturamento anual</strong> aproximado da empresa?', campo:'faturamento', tipo:'opcoes',
-    opcoes:['Até R$ 5 milhões','R$ 5 a 20 milhões','R$ 20 a 100 milhões','R$ 100 a 500 milhões','Acima de R$ 500 milhões'] },
-  { fala: 'E o <strong>patrimônio líquido</strong> mais recente?', campo:'patrimonio', tipo:'opcoes',
-    opcoes:['Até R$ 5 milhões','R$ 5 a 20 milhões','R$ 20 a 100 milhões','Acima de R$ 100 milhões','Não sei informar agora'] },
-  { fala: 'Quantas pessoas ocupam <strong>cargos de gestão</strong> — diretores, conselheiros, sócios administradores e gerentes com poder de decisão?', campo:'nAdmins', tipo:'texto', ph:'Ex: 6' },
-  { fala: 'Qual o <strong>setor de atuação</strong> da empresa?', campo:'setor', tipo:'texto', ph:'Ex: indústria metalúrgica, transporte, saúde…' },
-  { fala: 'A empresa tem <strong>capital aberto</strong> ou pretende abrir nos próximos 12 meses?', campo:'capitalAberto', tipo:'opcoes',
-    opcoes:['Não, capital fechado','Sim, capital aberto','Pretendemos abrir'] },
-  { fala: 'A empresa tem <strong>operações, filiais ou vendas no exterior</strong>? (Se tiver nos EUA, a seguradora precisa saber — muda bastante a análise.)', campo:'exterior', tipo:'opcoes',
-    opcoes:['Não, só Brasil','Sim, exceto EUA','Sim, incluindo EUA'] },
-  { fala: 'Nos <strong>últimos 5 anos</strong>, houve alguma reclamação, processo ou investigação contra administradores da empresa?', campo:'sinistros5anos', tipo:'opcoes',
-    opcoes:['Não, nenhuma','Sim, uma','Sim, mais de uma'] },
-  { fala: 'Você tem conhecimento de <strong>algum fato ou circunstância</strong> que possa vir a gerar uma reclamação futura contra os administradores?<br><span style="font-size:12.5px;color:#93a4c8;">Essa pergunta é padrão em todas as seguradoras. Omitir pode invalidar a apólice.</span>', campo:'fatoConhecido', tipo:'opcoes',
-    opcoes:['Não, nenhum','Sim, existe algo'] },
-  { fala: 'A empresa passa por <strong>auditoria externa</strong> nas demonstrações financeiras?', campo:'auditoria', tipo:'opcoes',
-    opcoes:['Sim, auditoria independente','Não','Apenas contabilidade interna'] },
-  { fala: 'Qual <strong>limite de indenização</strong> você gostaria de avaliar?', campo:'limite', tipo:'opcoes',
-    opcoes:['R$ 1 milhão','R$ 2 a 5 milhões','R$ 5 a 10 milhões','Acima de R$ 10 milhões','Quero a recomendação do corretor'] },
-  { fala: 'Marque as <strong>coberturas</strong> que fazem mais sentido para vocês:', campo:'coberturas', tipo:'checks',
-    checks:[
-      { t:'Custos de defesa', d:'Advogado, perícia e custas desde a primeira notificação' },
-      { t:'Danos a terceiros', d:'Indenização por prejuízo causado em decisão de gestão' },
-      { t:'Penhora online e bloqueio de bens', d:'Adiantamento da remuneração enquanto durar o bloqueio' },
-      { t:'Reclamações trabalhistas', d:'Quando o administrador é incluído pessoalmente no processo' },
-      { t:'Processos administrativos', d:'Receita, Ministério do Trabalho, agências reguladoras' },
-      { t:'Extensão ao cônjuge e herdeiros', d:'Protege quem responde junto pelo patrimônio' },
-      { t:'Período posterior à saída', d:'Cobre atos praticados enquanto estava na gestão' }
-    ] },
-  { fala: 'Por último: qual o <strong>melhor contato</strong> para o corretor retornar com a proposta?', campo:'contato', tipo:'contato' }
-];
-
 /* ─────────── MOTOR ─────────── */
 const $ = id => document.getElementById(id);
 const palco = $('palco');
@@ -463,103 +429,15 @@ async function renderResultado() {
     cx.appendChild(d);
   }
 
-  $('btCotar').onclick = () => { registrarInteresse('cotar'); iQ = 0; renderQuestionario(); };
+  $('btCotar').onclick = async () => {
+    await registrarInteresse('cotar');
+    // leva ao questionário (arquivo próprio), carregando o mesmo token —
+    // assim as respostas caem no MESMO registro que o corretor já está vendo
+    const t = new URLSearchParams(location.search).get('t');
+    location.href = 'QuestionarioDO.html' + (t ? '?t=' + encodeURIComponent(t) : '');
+  };
   $('btPdf').onclick = () => { registrarInteresse('pdf'); gerarPDF(r); };
   $('btContato').onclick = () => { registrarInteresse('contato'); renderContato(); };
-}
-
-/* ─────────── QUESTIONÁRIO ─────────── */
-let iQ = 0;
-const historico = [];
-
-async function renderQuestionario() {
-  const q = QPERGUNTAS[iQ];
-  progresso((iQ / QPERGUNTAS.length) * 100);
-  palco.innerHTML = `
-    <div class="cena">
-      <div class="rotulo">Cotação de D&O · ${iQ} de ${QPERGUNTAS.length - 1}</div>
-      <div id="hist">${historico.map(h => `
-        <div class="qbolha">${h.p}</div>
-        ${h.r ? `<div class="qbolha qresp">${h.r}</div>` : ''}`).join('')}</div>
-      <div class="qbolha" id="fala"></div>
-      <div class="zona-resposta" id="zona"></div>
-    </div>`;
-  const hist = $('hist');
-  if (hist) hist.scrollIntoView({ block: 'end' });
-
-  await digitar($('fala'), q.fala, 13);
-  await espera(200);
-
-  const z = $('zona');
-  z.classList.add('on');
-
-  if (!q.campo) {
-    z.innerHTML = `<button class="btn" id="ok">Vamos lá →</button>`;
-    $('ok').onclick = () => { historico.push({ p: q.fala, r: null }); iQ++; renderQuestionario(); };
-    return;
-  }
-
-  if (q.tipo === 'opcoes') {
-    z.innerHTML = `<div class="opcoes">${q.opcoes.map((o, k) => `<button class="op" data-k="${k}">${o}</button>`).join('')}</div>`;
-    z.querySelectorAll('.op').forEach(b => b.onclick = () => {
-      const v = q.opcoes[Number(b.dataset.k)];
-      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v });
-      salvarQuestionario(); iQ++; renderQuestionario();
-    });
-  } else if (q.tipo === 'texto') {
-    z.innerHTML = `<div class="campo-linha">
-      <input class="campo" id="tx" placeholder="${q.ph || ''}" autocomplete="off">
-      <button class="btn" id="ok">Continuar →</button></div>`;
-    const enviar = () => {
-      const v = $('tx').value.trim(); if (!v) return $('tx').focus();
-      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v });
-      salvarQuestionario(); iQ++; renderQuestionario();
-    };
-    $('ok').onclick = enviar;
-    $('tx').onkeydown = e => { if (e.key === 'Enter') enviar(); };
-    $('tx').focus();
-  } else if (q.tipo === 'checks') {
-    z.innerHTML = `<div id="cks">${q.checks.map((c, k) => `
-        <label class="qcheck" data-k="${k}"><input type="checkbox">
-          <span class="qcheck-txt"><b>${c.t}</b><span>${c.d}</span></span></label>`).join('')}</div>
-      <button class="btn" id="ok" style="margin-top:12px;">Continuar →</button>`;
-    z.querySelectorAll('.qcheck').forEach(l => {
-      l.onclick = e => {
-        if (e.target.tagName !== 'INPUT') { const i = l.querySelector('input'); i.checked = !i.checked; }
-        l.classList.toggle('on', l.querySelector('input').checked);
-      };
-    });
-    $('ok').onclick = () => {
-      const sel = [...z.querySelectorAll('.qcheck')].filter(l => l.querySelector('input').checked)
-        .map(l => q.checks[Number(l.dataset.k)].t);
-      QRESP[q.campo] = sel; historico.push({ p: q.fala, r: sel.length ? sel.join(' · ') : 'Nenhuma em especial' });
-      salvarQuestionario(); iQ++; renderQuestionario();
-    };
-  } else if (q.tipo === 'contato') {
-    z.innerHTML = `
-      <label class="lbl">Seu nome</label>
-      <input class="campo" id="cNome" style="width:100%;margin-bottom:12px;" placeholder="Nome completo">
-      <label class="lbl">Cargo</label>
-      <input class="campo" id="cCargo" style="width:100%;margin-bottom:12px;" placeholder="Ex: Diretor Financeiro">
-      <label class="lbl">Empresa</label>
-      <input class="campo" id="cEmp" style="width:100%;margin-bottom:12px;" placeholder="Razão social ou nome fantasia">
-      <label class="lbl">E-mail</label>
-      <input class="campo" id="cMail" type="email" style="width:100%;margin-bottom:12px;" placeholder="voce@empresa.com.br">
-      <label class="lbl">Telefone / WhatsApp</label>
-      <input class="campo" id="cTel" style="width:100%;margin-bottom:16px;" placeholder="(00) 00000-0000">
-      <button class="btn btn-ouro" id="ok" style="width:100%;">Enviar para o corretor →</button>`;
-    if (LINK && LINK.empresaNome) $('cEmp').value = LINK.empresaNome;
-    $('ok').onclick = async () => {
-      const nome = $('cNome').value.trim(), mail = $('cMail').value.trim();
-      if (!nome) return $('cNome').focus();
-      if (!mail && !$('cTel').value.trim()) return $('cMail').focus();
-      QRESP.contato = { nome, cargo: $('cCargo').value.trim(), empresa: $('cEmp').value.trim(), email: mail, telefone: $('cTel').value.trim() };
-      $('ok').disabled = true; $('ok').textContent = 'Enviando…';
-      await salvarQuestionario(true);
-      renderFim();
-    };
-  }
-  window.scrollTo(0, document.body.scrollHeight);
 }
 
 function renderContato() {
@@ -629,13 +507,26 @@ function gerarPDF(r) {
       'O D&O protege o patrimonio PESSOAL de diretores, conselheiros, socios administradores e gerentes com poder de decisao. Quando uma decisao de gestao gera prejuizo a terceiros, quem responde e a pessoa fisica — com o que e seu.', W - M * 2);
     doc.text(intro, M, y); y += intro.length * 5 + 6;
 
+    // Coberturas conforme apolice de mercado (base: Swiss Re Corporate Solutions)
     const cobs = [
-      ['Responsabilizacao pessoal por danos a terceiros', 'Indenizacao e custas quando um terceiro se sente prejudicado por uma decisao de gestao.'],
-      ['Custos de defesa', 'Advogado, pericia e custas processuais desde a primeira notificacao — mesmo que voce esteja certo.'],
-      ['Penhora online e bloqueio de bens', 'Adiantamento de 100% da ultima remuneracao liquida mensal enquanto durar o bloqueio judicial.'],
-      ['Reclamacoes trabalhistas', 'Cobre o administrador incluido pessoalmente por desconsideracao da personalidade juridica.'],
-      ['Processos administrativos e regulatorios', 'Defesa perante Receita, Ministerio do Trabalho, agencias reguladoras e demais orgaos.'],
-      ['Protecao apos a saida', 'Continua valendo para atos praticados enquanto voce estava na gestao.']
+      ['Cobertura Basica "A" — pagamento direto', 'A seguradora paga diretamente ao administrador a indenizacao e os custos.'],
+      ['Cobertura Basica "B" — reembolso a empresa', 'Reembolsa a empresa quando ela adianta a defesa ou a indenizacao do administrador.'],
+      ['Custos de defesa em investigacao', 'Cobre a defesa ja na fase de inquerito, antes mesmo de virar processo.'],
+      ['Custos de defesa emergenciais', 'Libera recursos para defesa imediata sem aguardar aprovacao previa.'],
+      ['Multas e penalidades', 'Multas civis aplicadas ao administrador, nos limites que a lei permite segurar.'],
+      ['Penhora online e bloqueio de bens', 'Adianta a ultima remuneracao liquida mensal enquanto durar o bloqueio judicial.'],
+      ['Conjuges ou companheiros', 'Estende a protecao a quem responde junto pelo patrimonio do casal.'],
+      ['Espolio, herdeiros e representantes legais', 'A familia nao herda o processo desprotegida.'],
+      ['Segurados aposentados', 'Continua protegendo quem ja saiu, por atos praticados enquanto estava na gestao.'],
+      ['Praticas trabalhistas indevidas', 'Quando o administrador e incluido pessoalmente em reclamacao trabalhista.'],
+      ['Responsabilidade tributaria', 'Defesa em autuacoes fiscais que atingem o administrador pessoalmente.'],
+      ['Danos morais, corporais e materiais', 'Indenizacao por danos decorrentes de atos de gestao.'],
+      ['Danos ambientais', 'Responsabilizacao pessoal do administrador em questoes ambientais.'],
+      ['Erros e omissoes em servicos profissionais', 'Falha tecnica na prestacao de servico que gere prejuizo a terceiro.'],
+      ['Eventos extraordinarios com reguladores', 'Procedimentos de orgaos reguladores e agencias fiscalizadoras.'],
+      ['Controladas, subsidiarias e coligadas', 'Estende a protecao aos administradores das empresas do grupo.'],
+      ['Gerenciamento de crises', 'Despesas de comunicacao e assessoria para proteger a reputacao.'],
+      ['Reclamacoes entre segurados', 'Disputas entre socios, diretores ou entre a empresa e o administrador.']
     ];
     doc.setFontSize(13); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
     doc.text('Principais coberturas', M, y); y += 8;
@@ -659,6 +550,41 @@ function gerarPDF(r) {
       doc.text(fr, M + 5, y + 17);
       y += 38;
     }
+
+    // ---- Como a apolice funciona + exclusoes (transparencia) ----
+    doc.addPage(); y = M + 6;
+    doc.setFontSize(13); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+    doc.text('Como a apolice funciona', M, y); y += 8;
+    const funciona = [
+      ['Base de cobertura', 'Apolice "a base de reclamacao com notificacao" (claims made): cobre reclamacoes feitas PELA PRIMEIRA VEZ durante a vigencia.'],
+      ['Prazo complementar', 'Ate 36 meses apos o fim da vigencia para notificar reclamacoes, SEM premio adicional.'],
+      ['Prazo suplementar', 'Ate 36 meses adicionais, mediante premio: 12 meses = 75% do premio; 24 meses = 100%; 36 meses = 120%.'],
+      ['Ambito geografico', 'Mundial.'],
+      ['Data de continuidade', 'Igual ao inicio da primeira apolice de D&O contratada — preserva a protecao de atos anteriores.']
+    ];
+    funciona.forEach(([t, d]) => {
+      if (y > 250) { doc.addPage(); y = M + 6; }
+      doc.setFontSize(10.5); doc.setFont(undefined, 'bold'); doc.setTextColor(30, 58, 109);
+      doc.text('• ' + t, M, y); y += 5;
+      doc.setFontSize(9.5); doc.setFont(undefined, 'normal'); doc.setTextColor(71, 85, 105);
+      const ld = doc.splitTextToSize(d, W - M * 2 - 5);
+      doc.text(ld, M + 4, y); y += ld.length * 4.4 + 4;
+    });
+
+    y += 4;
+    doc.setFontSize(13); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+    doc.text('Principais exclusoes', M, y); y += 7;
+    doc.setFontSize(9.5); doc.setFont(undefined, 'normal'); doc.setTextColor(71, 85, 105);
+    const excl = ['Atos dolosos do segurado',
+      'Ato ou fato que ja tenha sido objeto de reclamacao anterior',
+      'Ofertas publicas de valores mobiliarios',
+      'Reclamacoes relacionadas a fundos de pensao',
+      'Violacao de normas de combate a corrupcao (com direito a reembolso)',
+      'Riscos ciberneticos'];
+    excl.forEach(e => {
+      if (y > 268) { doc.addPage(); y = M + 6; }
+      doc.text('— ' + e, M + 2, y); y += 5;
+    });
 
     doc.setFontSize(8); doc.setTextColor(148, 163, 184);
     doc.text('Material informativo. Coberturas, limites e condicoes conforme a apolice contratada.', M, 285);
@@ -708,11 +634,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(location.search);
   const token = params.get('t');
 
-  // Sessão: um documento por visita. Se veio com token, amarra à empresa/gerente.
-  SESSAO = 'ap_' + PRODUTO.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  // Sessão ESTÁVEL: com token, a mesma pessoa sempre atualiza o MESMO registro
+  // (recarregar a página não cria um novo). Sem token, guarda na aba.
+  if (token) SESSAO = 'do_' + token;
+  else {
+    try { SESSAO = sessionStorage.getItem('sessao_ap_do'); } catch (e) {}
+    if (!SESSAO) {
+      SESSAO = 'ap_' + PRODUTO.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      try { sessionStorage.setItem('sessao_ap_do', SESSAO); } catch (e) {}
+    }
+  }
   const base = {
     produtoId: PRODUTO.id, produtoNome: PRODUTO.nome,
-    token: token || null, criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+    token: token || null, origem: 'apresentacao',
+    atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
     userAgent: navigator.userAgent.slice(0, 180)
   };
 
@@ -740,7 +675,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (e) { console.warn('link', e); }
   }
-  try { await db.collection('mb_apresentacoes').doc(SESSAO).set(base, { merge: true }); } catch (e) { console.warn('sessao', e); }
+  try {
+    const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
+    if (!doc.exists) base.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('mb_apresentacoes').doc(SESSAO).set(base, { merge: true });
+  } catch (e) { console.warn('sessao', e); }
 
   renderCena(0);
 });
