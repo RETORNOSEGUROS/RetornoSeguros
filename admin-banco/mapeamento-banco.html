@@ -3788,6 +3788,7 @@
             <option value="incompleto">Não terminaram</option>
           </select>
           <button class="btn-secondary" onclick="renderApresentacoes()">🔄 Atualizar</button>
+          <button class="btn-primary" onclick="abrirGerarApresentacao()"><i data-lucide="send" class="w-4 h-4 inline"></i> Enviar apresentação</button>
         </div>
       </div>
       <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:13px 16px; font-size:12.5px; color:#3730a3; margin-bottom:16px;">
@@ -10642,7 +10643,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '196';
+  const APP_VERSAO = '197';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17503,6 +17504,130 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
   }
   window.renderApresentacoes = renderApresentacoes;
+
+  // ===== GERAR E ENVIAR APRESENTAÇÃO =====
+  // Catálogo de apresentações disponíveis. Ao criar um produto novo, basta
+  // publicar o HTML e acrescentar uma linha aqui.
+  const APRESENTACOES = [
+    { id: 'do', nome: 'D&O — Responsabilidade de Administradores', arq: 'ApresentacaoDO.html',
+      desc: 'Protege o patrimônio pessoal de diretores, sócios e gerentes com poder de decisão.' }
+  ];
+
+  function abrirGerarApresentacao() {
+    const empresas = _empresasQuePossoPedir();
+    const modal = document.createElement('div');
+    modal.className = 'cad-modal open';
+    modal.id = 'modalGerarApres';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:560px;">
+        <div class="cad-modal-head">
+          <h2>📤 Enviar apresentação</h2>
+          <p>Gere um link personalizado. Tudo que o cliente responder volta pra cá.</p>
+        </div>
+        <div class="cad-modal-body">
+          <div class="form-group">
+            <label class="form-label">Produto</label>
+            <select class="form-control" id="apProd">
+              ${APRESENTACOES.map(a => `<option value="${a.id}">${a.nome}</option>`).join('')}
+            </select>
+            <div style="font-size:11.5px; color:#64748b; margin-top:5px;">${APRESENTACOES[0].desc}</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Empresa <small style="color:#94a3b8; font-weight:500;">(opcional — sem empresa o link vira uma demonstração)</small></label>
+            <input type="text" class="form-control" id="apEmpresa" list="apEmpList" placeholder="Comece a digitar o nome…" autocomplete="off">
+            <datalist id="apEmpList">${empresas.map(e => `<option value="${(e.nome || '').replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Para quem você está enviando? <small style="color:#94a3b8; font-weight:500;">(opcional)</small></label>
+            <input type="text" class="form-control" id="apDestino" placeholder="Ex: Carlos, diretor financeiro">
+          </div>
+          <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:11px 13px; font-size:12px; color:#3730a3;">
+            💡 O cliente percorre a apresentação, responde as perguntas e recebe um grau de exposição ao risco. No final ele pode pedir cotação, baixar o PDF ou pedir contato — e você vê tudo aqui.
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalGerarApres').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="gerarLinkApresentacao()">🔗 Gerar link</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    try { lucide.createIcons(); } catch (e) {}
+    setTimeout(() => { const c = document.getElementById('apEmpresa'); if (c) c.focus(); }, 80);
+  }
+  window.abrirGerarApresentacao = abrirGerarApresentacao;
+
+  async function gerarLinkApresentacao() {
+    const prodId = (document.getElementById('apProd') || {}).value || 'do';
+    const prod = APRESENTACOES.find(a => a.id === prodId) || APRESENTACOES[0];
+    const nomeEmp = ((document.getElementById('apEmpresa') || {}).value || '').trim();
+    const destino = ((document.getElementById('apDestino') || {}).value || '').trim();
+
+    let empresa = null;
+    if (nomeEmp) {
+      empresa = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === nomeEmp.toLowerCase());
+      if (!empresa) return alert('Empresa não encontrada na sua carteira. Deixe em branco para gerar um link de demonstração.');
+    }
+
+    try {
+      const token = gerarTokenAleatorio(24);
+      await db.collection('mb_links_apresentacao').add({
+        token, produtoId: prod.id, produtoNome: prod.nome,
+        empresaId: empresa ? empresa.id : null,
+        empresaNome: empresa ? empresa.nome : null,
+        destinatario: destino || null,
+        agenciaId: CTX.agenciaId || null,
+        geradoPorUid: autorUid(), geradoPorNome: autorNome(),
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      const base = window.location.href.replace(/[^/]*$/, '');
+      const url = `${base}${prod.arq}?t=${token}`;
+      const msg = `Olá${destino ? ' ' + destino.split(',')[0] : ''}! Preparei uma apresentação rápida sobre o ${prod.nome.split('—')[0].trim()}. São poucos minutos e no final você recebe uma leitura da sua exposição ao risco:\n\n${url}`;
+
+      const m = document.getElementById('modalGerarApres');
+      if (m) m.remove();
+      const modal = document.createElement('div');
+      modal.className = 'cad-modal open';
+      modal.id = 'modalLinkApres';
+      modal.innerHTML = `
+        <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+        <div class="cad-modal-panel" style="max-width:560px;">
+          <div class="cad-modal-head">
+            <h2>🔗 Link pronto</h2>
+            <p>${empresa ? `Para <strong>${empresa.nome}</strong>` : 'Link de demonstração'}${destino ? ` · ${destino}` : ''}</p>
+          </div>
+          <div class="cad-modal-body">
+            <label class="form-label">Link da apresentação</label>
+            <div style="display:flex; gap:8px;">
+              <input type="text" class="form-control" id="apLinkInput" value="${url}" readonly style="flex:1; font-size:12px;">
+              <button class="btn-primary" onclick="copiarLink('apLinkInput', this)">📋 Copiar</button>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+              <button class="btn-secondary" style="flex:1; min-width:150px; background:#f0fdf4; color:#166534; border-color:#86efac;"
+                onclick="window.open('https://wa.me/?text=' + encodeURIComponent(${JSON.stringify(msg)}), '_blank')">💬 Enviar por WhatsApp</button>
+              <button class="btn-secondary" style="flex:1; min-width:150px;"
+                onclick="window.open('mailto:?subject=' + encodeURIComponent('${prod.nome.replace(/'/g, "")}') + '&body=' + encodeURIComponent(${JSON.stringify(msg)}), '_blank')">✉️ Enviar por e-mail</button>
+            </div>
+            <div style="margin-top:14px; padding:12px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:10px; font-size:12px; color:#166534;">
+              💡 <strong>O que acontece agora:</strong><br>
+              • O cliente percorre as telas e responde as perguntas<br>
+              • Recebe o <strong>grau de exposição ao risco</strong> dele no final<br>
+              • Se pedir cotação, preenche o questionário na mesma tela<br>
+              • Tudo aparece aqui em <strong>Apresentações</strong> — inclusive se ele parar no meio
+            </div>
+          </div>
+          <div class="cad-modal-foot">
+            <button class="btn-secondary" onclick="document.getElementById('modalLinkApres').remove()">Fechar</button>
+            <button class="btn-primary" onclick="window.open('${url}','_blank')">👁 Ver como o cliente vê</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+    } catch (e) {
+      alert('Erro ao gerar o link: ' + e.message);
+    }
+  }
+  window.gerarLinkApresentacao = gerarLinkApresentacao;
 
   function _apLabel(k) {
     return ({
