@@ -8,6 +8,7 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   :root { --escuro:#050e24; --azul:#1e3a6d; --ciano:#38bdf8; --dourado:#fbbf24;
@@ -134,7 +135,7 @@
    limites, prêmio e parcelamento de forma legível. Produto-agnóstico:
    serve para D&O, frota, empresarial e o que vier.
    ══════════════════════════════════════════════════════════════════ */
-const ARQ_VERSAO = '1';
+const ARQ_VERSAO = '2';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cProposta Online v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 
@@ -351,6 +352,7 @@ function render() {
         </div>
         <div class="acoes">
           <button class="btn btn-ok" onclick="abrirModal('contratar')">✓ Quero contratar</button>
+          <button class="btn btn-2" onclick="baixarPDF()">📄 Baixar esta proposta em PDF</button>
           <button class="btn btn-2" onclick="abrirModal('duvida')">Tenho uma dúvida</button>
         </div>
       </div>
@@ -362,6 +364,140 @@ function render() {
     </div>`;
   registrar('abriu');
 }
+
+/* ---- PDF da proposta ---- */
+function baixarPDF() {
+  try {
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página.');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210, M = 16; let y = 0;
+    const sa = s => String(s || '').replace(/[""]/g, '"').replace(/[–—]/g, '-');
+
+    // ---- capa ----
+    doc.setFillColor(5, 14, 36); doc.rect(0, 0, W, 52, 'F');
+    doc.setFillColor(30, 58, 109); doc.circle(W - 18, 8, 26, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFontSize(9); doc.setFont(undefined, 'normal');
+    doc.text('RETORNO SEGUROS  ·  PROPOSTA', M, 15);
+    doc.setFontSize(17); doc.setFont(undefined, 'bold');
+    doc.text(doc.splitTextToSize(sa(P.produto || 'Proposta de seguro'), W - M * 2 - 30), M, 26);
+    doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(185, 203, 232);
+    let sub = [];
+    if (P.empresaNome) sub.push(sa(P.empresaNome));
+    if (P.seguradora) sub.push(sa(P.seguradora));
+    if (P.numero) sub.push('cotacao ' + P.numero);
+    doc.text(sub.join('  ·  '), M, 42);
+    y = 64;
+
+    // ---- prêmio ----
+    doc.setFillColor(240, 245, 252); doc.roundedRect(M, y - 8, W - M * 2, 30, 2, 2, 'F');
+    doc.setTextColor(100, 116, 139); doc.setFontSize(8.5); doc.setFont(undefined, 'bold');
+    doc.text('PREMIO TOTAL DO SEGURO', M + 5, y);
+    doc.setTextColor(15, 23, 42); doc.setFontSize(20); doc.setFont(undefined, 'bold');
+    doc.text(fmt(P.premioTotal).replace('R$', 'R$'), M + 5, y + 10);
+    doc.setFontSize(8.5); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+    const det = [];
+    if (P.premioLiquido) det.push('liquido ' + fmt(P.premioLiquido));
+    if (P.iof) det.push('IOF ' + fmt(P.iof));
+    if (P.lmiTotal) det.push('limite maximo ' + fmt(P.lmiTotal));
+    doc.text(det.join('  ·  '), M + 5, y + 16);
+    y += 32;
+
+    const linha = (rot, val) => {
+      if (!val) return;
+      if (y > 272) { doc.addPage(); y = M + 6; }
+      doc.setFontSize(9); doc.setTextColor(100, 116, 139); doc.setFont(undefined, 'normal');
+      doc.text(rot, M, y);
+      doc.setTextColor(15, 23, 42); doc.setFont(undefined, 'bold');
+      doc.text(sa(val), M + 46, y);
+      y += 5.6;
+    };
+    linha('Vigencia', P.vigenciaInicio ? `${P.vigenciaInicio} a ${P.vigenciaFim || ''}` : '');
+    linha('Validade da proposta', P.validade);
+    linha('Ambito geografico', P.ambito);
+    linha('Base de cobertura', P.baseCobertura);
+    y += 5;
+
+    // ---- pagamento ----
+    if ((P.parcelamento || []).length) {
+      if (y > 235) { doc.addPage(); y = M + 6; }
+      doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+      doc.text('Formas de pagamento', M, y); y += 7;
+      doc.setFontSize(8.5); doc.setFont(undefined, 'bold'); doc.setTextColor(100, 116, 139);
+      doc.text('CONDICAO', M, y); doc.text('1a PARCELA', M + 60, y);
+      doc.text('DEMAIS', M + 105, y); doc.text('TOTAL', M + 148, y); y += 4.5;
+      doc.setDrawColor(226, 232, 240); doc.line(M, y - 2, W - M, y - 2);
+      doc.setFont(undefined, 'normal'); doc.setTextColor(51, 65, 85); doc.setFontSize(9);
+      P.parcelamento.slice().sort((a, b) => (a.total || 0) - (b.total || 0)).forEach(p => {
+        if (y > 275) { doc.addPage(); y = M + 6; }
+        doc.text(sa(p.condicao), M, y);
+        doc.text(fmt(p.primeira), M + 60, y);
+        doc.text(p.demais > 0 ? fmt(p.demais) : '-', M + 105, y);
+        doc.text(fmt(p.total) + (p.juros > 0 ? '' : '  (sem juros)'), M + 148, y);
+        y += 5.2;
+      });
+      y += 6;
+    }
+
+    // ---- coberturas ----
+    if ((P.coberturas || []).length) {
+      if (y > 240) { doc.addPage(); y = M + 6; }
+      doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+      doc.text(`Coberturas contratadas (${P.coberturas.length})`, M, y); y += 8;
+      P.coberturas.forEach(c => {
+        if (y > 262) { doc.addPage(); y = M + 6; }
+        const nome = sa(_nomeCob(c.nome));
+        doc.setFontSize(9.5); doc.setFont(undefined, 'bold'); doc.setTextColor(30, 58, 109);
+        const ln = doc.splitTextToSize(nome, W - M * 2 - 40);
+        doc.text(ln, M, y);
+        if (c.lmi) {
+          doc.setTextColor(15, 23, 42); doc.setFontSize(9);
+          doc.text(fmt(c.lmi), W - M, y, { align: 'right' });
+        }
+        y += ln.length * 4.4;
+        const d = c.descricao || descrever(c.nome);
+        if (d) {
+          doc.setFontSize(8); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+          const ld = doc.splitTextToSize(sa(d), W - M * 2);
+          if (y + ld.length * 3.7 > 275) { doc.addPage(); y = M + 6; }
+          doc.text(ld, M, y); y += ld.length * 3.7;
+        }
+        y += 3.5;
+      });
+    }
+
+    // ---- exclusões ----
+    if ((P.exclusoes || []).length) {
+      if (y > 232) { doc.addPage(); y = M + 6; }
+      y += 4;
+      doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+      doc.text('Principais exclusoes', M, y); y += 6;
+      doc.setFontSize(8.5); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+      doc.text('O que esta apolice nao cobre:', M, y); y += 6;
+      doc.setFontSize(9); doc.setTextColor(71, 85, 105);
+      P.exclusoes.forEach(e => {
+        if (y > 274) { doc.addPage(); y = M + 6; }
+        const l = doc.splitTextToSize('- ' + sa(e), W - M * 2);
+        doc.text(l, M, y); y += l.length * 4.4 + 1;
+      });
+    }
+
+    // ---- rodapé em todas as páginas ----
+    const n = doc.getNumberOfPages();
+    for (let i = 1; i <= n; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7.5); doc.setTextColor(148, 163, 184); doc.setFont(undefined, 'normal');
+      doc.text('Resumo da cotacao. Coberturas, limites e condicoes conforme a apolice e a analise de risco da seguradora.', M, 288);
+      doc.text(`${i}/${n}`, W - M, 288, { align: 'right' });
+    }
+
+    const nomeArq = 'proposta-' + (P.empresaNome || 'seguro').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 40) + '.pdf';
+    doc.save(nomeArq);
+    registrar('pdf');
+  } catch (e) { alert('Nao consegui gerar o PDF: ' + e.message); }
+}
+window.baixarPDF = baixarPDF;
 
 /* ---- interesse ---- */
 let acaoAtual = null;
