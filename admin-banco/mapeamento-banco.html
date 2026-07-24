@@ -10663,7 +10663,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '204';
+  const APP_VERSAO = '205';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17651,7 +17651,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       while (nums.length < 2 && j < lns.length && guarda++ < 6) {
         const prox = lns[j];
         if (/^Cobertura\s+(B[áa]sica|Adicional)\b/i.test(prox)) break;   // já é a próxima cobertura
-        if (/^(LIMITE M[ÁA]XIMO|QUESTION[ÁA]RIO|DECLARA[ÇC][ÃA]O|OBJETO DO SEGURO|PRINCIPAIS)/i.test(prox)) break;
+        const semEsp = prox.replace(/\s+/g, '').toUpperCase();
+        if (/^(LIMITEM[ÁA]XIMO|QUESTION[ÁA]RIO|DECLARA[ÇC][ÃA]O|OBJETODOSEGURO|PRINCIPAIS|SEGURADORA|CORRETOR)/.test(semEsp)) break;
         if (ehCabecalho(prox)) { j++; continue; }
         const n = soValores(prox);
         if (n.length) nums = nums.concat(n);
@@ -17661,7 +17662,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (nums.length < 1) continue;
 
       nome = nome.replace(/\s*-?\s*Processo Susep:?\s*[\d./-]+/i, '')
-                 .replace(/\s*[-–]\s*$/, '')
+                 .replace(/\s*R\$\s*$/i, '')        // valor vinha como "R$ 1.500,00": sobrava o R$
+                 .replace(/\s*[-–:]\s*$/, '')
                  .replace(/\s+/g, ' ').trim();
       if (nome.length < 6) continue;
       if (P.coberturas.some(c => c.nome === nome)) continue;
@@ -17673,8 +17675,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (ml) P.lmiTotal = _num(ml[1]);
 
     // dados do item
-    const mrl = t.match(/Receita L[íi]quida[\s\S]{0,60}?([\d.]+,\d{2})/i);
-    if (mrl) P.receitaLiquida = _num(mrl[1]);
+    // A receita costuma cair algumas linhas abaixo do rótulo (a tabela intercala
+    // as colunas). Procuramos o primeiro valor "grande" nas linhas seguintes.
+    const iRL = lns.findIndex(l => /^Receita\s+L[íi]quida/i.test(l));
+    if (iRL >= 0) {
+      for (let k = iRL; k < Math.min(iRL + 6, lns.length); k++) {
+        const cand = (lns[k].match(/[\d.]{7,},\d{2}/g) || [])
+          .map(_num).filter(v => v > 10000);   // ignora "36", "0,00" e afins
+        if (cand.length) { P.receitaLiquida = cand[0]; break; }
+      }
+    }
     const mbc = t.match(/Base de Cobertura[\s\S]{0,120}?(Ap[óo]lice a Base de [^\n]+)/i);
     if (mbc) P.baseCobertura = mbc[1].replace(/\s*Mundial\s*$/i, '').replace(/\s+/g, ' ').trim();
     if (/[ÂA]mbito Geogr[áa]fico[\s\S]{0,80}?Mundial/i.test(t)) P.ambito = 'Mundial';
@@ -17685,10 +17695,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (/Data de Continuidade/i.test(t)) P.dataContinuidade = 'Igual à data de início da primeira apólice contratada — preserva a proteção de atos anteriores.';
 
     // exclusões (lista numerada)
-    const mex = t.match(/PRINCIPAIS EXCLUS[ÕO]ES([\s\S]{0,900}?)(?=\n\s*[A-ZÀ-Ú]{5,}|$)/i);
+    // o título pode vir com espaços no meio das letras — localizamos sem depender disso
+    const iEx = t.split('\n').findIndex(l => /^PRINCIPAISEXCLUS/i.test(l.replace(/\s+/g, '')));
+    const mex = iEx >= 0 ? [null, t.split('\n').slice(iEx + 1, iEx + 16).join('\n')] : null;
     if (mex) {
       mex[1].split('\n').forEach(l => {
-        const m = l.match(/^\s*\d+\.\s*(.+?)[;.]?\s*$/);
+        const m = l.match(/^\s*\d+\s*\.\s*(.+?)[;.]?\s*$/);
         if (m && m[1].length > 8) P.exclusoes.push(m[1].trim());
       });
     }
