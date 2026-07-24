@@ -10663,7 +10663,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '203';
+  const APP_VERSAO = '204';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17623,17 +17623,50 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       });
     });
 
-    // coberturas: "<nome> <LMI> <prêmio>" na mesma linha
-    linhas.forEach(l => {
-      const m = l.match(/^\s*(Cobertura\s+(?:B[áa]sica|Adicional).*?)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s*$/i);
-      if (m) {
-        // tira o processo SUSEP do nome — é ruído para o cliente
-        const nome = m[1].replace(/\s*-?\s*Processo Susep:?\s*[\d./-]+/i, '').replace(/\s+/g, ' ').trim();
-        if (!P.coberturas.some(c => c.nome === nome)) {
-          P.coberturas.push({ nome, lmi: _num(m[2]), premio: _num(m[3]) });
-        }
+    // ---- COBERTURAS ----
+    // Na tabela real o nome pode quebrar em várias linhas e os valores ficam
+    // centralizados verticalmente na célula. Por isso não exigimos que nome e
+    // números estejam na MESMA linha: abrimos um bloco quando aparece
+    // "Cobertura Básica/Adicional" e procuramos os dois valores logo adiante.
+    const lns = linhas.map(l => l.trim()).filter(Boolean);
+    const ehCabecalho = s => /^(Cobertura|LMI|Pr[êe]mio|Franquia|Valor)s?\s*:?\s*$/i.test(s)
+      || /^Cobertura:\s*LMI:/i.test(s) || /^Franquias?:/i.test(s);
+    const soValores = s => (s.match(/[\d.]+,\d{2}/g) || []);
+
+    for (let i = 0; i < lns.length; i++) {
+      const abre = lns[i].match(/^(Cobertura\s+(?:B[áa]sica|Adicional)\b.*)$/i);
+      if (!abre) continue;
+
+      let nome = abre[1];
+      let nums = [];
+      // valores que já estão na própria linha do nome
+      const naLinha = soValores(nome);
+      if (naLinha.length) {
+        const corte = nome.indexOf(naLinha[0]);
+        nums = naLinha.slice();
+        nome = nome.slice(0, corte);
       }
-    });
+      // segue algumas linhas à frente juntando continuação do nome e valores
+      let j = i + 1, guarda = 0;
+      while (nums.length < 2 && j < lns.length && guarda++ < 6) {
+        const prox = lns[j];
+        if (/^Cobertura\s+(B[áa]sica|Adicional)\b/i.test(prox)) break;   // já é a próxima cobertura
+        if (/^(LIMITE M[ÁA]XIMO|QUESTION[ÁA]RIO|DECLARA[ÇC][ÃA]O|OBJETO DO SEGURO|PRINCIPAIS)/i.test(prox)) break;
+        if (ehCabecalho(prox)) { j++; continue; }
+        const n = soValores(prox);
+        if (n.length) nums = nums.concat(n);
+        else if (!nums.length && prox.length < 90 && !/^\d/.test(prox)) nome += ' ' + prox;  // nome quebrado
+        j++;
+      }
+      if (nums.length < 1) continue;
+
+      nome = nome.replace(/\s*-?\s*Processo Susep:?\s*[\d./-]+/i, '')
+                 .replace(/\s*[-–]\s*$/, '')
+                 .replace(/\s+/g, ' ').trim();
+      if (nome.length < 6) continue;
+      if (P.coberturas.some(c => c.nome === nome)) continue;
+      P.coberturas.push({ nome, lmi: _num(nums[0]), premio: nums[1] ? _num(nums[1]) : 0 });
+    }
 
     // limite máximo da apólice
     const ml = t.match(/LIMITE M[ÁA]XIMO[\s\S]{0,80}?R?\$?\s*([\d.]+,\d{2})/i);
@@ -17804,6 +17837,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px 14px; font-size:12.5px; color:#92400e; margin-top:14px;">
               Você pode <strong>preencher à mão</strong> agora — leva um minuto e a proposta fica igual.
               Se esse for o novo padrão da seguradora, me avise que eu ensino o sistema a ler.
+            </div>
+            <div onclick="var d=document.getElementById('dbgTxt'); var ab=d.style.display==='none'; d.style.display=ab?'block':'none'; this.textContent=ab?'▲ ocultar o texto lido':'▾ ver o texto que consegui ler do PDF';"
+                 style="cursor:pointer; font-size:11.5px; color:#4338ca; font-weight:700; margin-top:12px;">▾ ver o texto que consegui ler do PDF</div>
+            <div id="dbgTxt" style="display:none; margin-top:8px;">
+              <textarea readonly id="dbgArea" style="width:100%; height:180px; font-family:monospace; font-size:10.5px; line-height:1.5; border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#fafbfc; color:#475569;">${escAttr((_PROP_TMP && _PROP_TMP.textoOriginal) || '(vazio — o PDF pode ser uma imagem digitalizada)')}</textarea>
+              <button class="btn-mini" style="margin-top:6px;" onclick="var a=document.getElementById('dbgArea'); a.select(); document.execCommand('copy'); this.textContent='✓ copiado';">📋 Copiar para me enviar</button>
             </div>
           </div>
           <div class="cad-modal-foot">
