@@ -2501,6 +2501,7 @@
     <div class="nav-item perm-rmplus" onclick="navTo('matriz')"><i data-lucide="grid-3x3" class="w-4 h-4"></i> Relatório Inteligente</div>
     <div class="nav-item" onclick="navTo('mapeamento')"><i data-lucide="percent" class="w-4 h-4"></i> Painel de Mapeamento</div>
     <div class="nav-item" onclick="navTo('links')"><i data-lucide="link" class="w-4 h-4"></i> Central de Links</div>
+    <div class="nav-item perm-rmplus" onclick="navTo('apresentacoes')"><i data-lucide="presentation" class="w-4 h-4"></i> Apresentações</div>
     <div class="nav-item perm-rmplus" onclick="navTo('relmetas')"><i data-lucide="gauge" class="w-4 h-4"></i> Relatório de Metas</div>
     <div class="nav-item" onclick="navTo('agenda')"><i data-lucide="calendar-clock" class="w-4 h-4"></i> Agenda · Visitas</div>
     <div class="nav-item" onclick="navTo('avisos')"><i data-lucide="megaphone" class="w-4 h-4"></i> Avisos &amp; Novidades</div>
@@ -3772,6 +3773,29 @@
     </div><!-- /screen-metas -->
 
     <!-- ===================== TELA: RELATÓRIO COMPLETO ===================== -->
+    <div class="screen" id="screen-apresentacoes">
+      <div class="equipe-actions" style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <div>
+          <div style="font-size: 13px; color: #64748b;">Quem viu, o que respondeu e quem pediu cotação</div>
+          <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Apresentações de produtos</div>
+        </div>
+        <div class="filter-bar" style="display:flex; gap:8px; flex-wrap:wrap;">
+          <select class="filter-select" id="apFiltro" onchange="renderApresentacoes()">
+            <option value="">Todas</option>
+            <option value="cotar">Pediram cotação</option>
+            <option value="contato">Pediram contato</option>
+            <option value="pdf">Baixaram o PDF</option>
+            <option value="incompleto">Não terminaram</option>
+          </select>
+          <button class="btn-secondary" onclick="renderApresentacoes()">🔄 Atualizar</button>
+        </div>
+      </div>
+      <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:13px 16px; font-size:12.5px; color:#3730a3; margin-bottom:16px;">
+        💡 Envie o link da apresentação ao cliente. Cada visita é registrada aqui com as respostas dadas, o grau de exposição calculado e o que a pessoa pediu no final.
+      </div>
+      <div id="apLista"></div>
+    </div>
+
     <div class="screen" id="screen-relatorio">
 
       <!-- Header com filtros principais -->
@@ -5439,6 +5463,7 @@
     { id: 'producao', label: 'Produção (Fechados)' },
     { id: 'vencimentos', label: 'Vencimentos' },
     { id: 'oportunidades', label: 'Oportunidades Quentes' },
+    { id: 'apresentacoes', label: 'Apresentações' },
     { id: 'relatorio', label: 'Relatório Completo' },
     { id: 'matriz', label: 'Relatório Inteligente' },
     { id: 'relmetas', label: 'Relatório de Metas' },
@@ -7614,6 +7639,7 @@
       config:        'Configurações <small>· apenas admin</small>',
       sprints:       'Sprints de Cotação <small>· operação em lote</small>',
       metas:         'Metas <small>· semanais e anuais</small>',
+      apresentacoes: 'Apresentações <small>· quem viu e o que respondeu</small>',
       relatorio:     'Relatório Completo <small>· análise consolidada</small>',
       agenda:        'Agenda <small>· visitas e reuniões</small>',
       pesquisas:     'Pesquisas Colaboradores <small>· benefícios</small>',
@@ -7646,6 +7672,7 @@
     if (telaReal === 'relmetas')    renderRelMetas();
     if (telaReal === 'mapeamento')  renderPainelMapeamento();
     if (telaReal === 'links')       renderCentralLinks();
+    if (telaReal === 'apresentacoes') renderApresentacoes();
 
     lucide.createIcons();
     _prepararDicasMobile(telaReal);
@@ -10615,7 +10642,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '195';
+  const APP_VERSAO = '196';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17401,6 +17428,88 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     lucide.createIcons();
   }
   window.renderMatrizSeguros = renderMatrizSeguros;
+
+  // ===== APRESENTAÇÕES DE PRODUTO — o que o cliente viu e respondeu =====
+  async function renderApresentacoes() {
+    const cont = document.getElementById('apLista');
+    if (!cont) return;
+    cont.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">Carregando…</div>';
+    const filtro = (document.getElementById('apFiltro') || {}).value || '';
+    try {
+      let q = db.collection('mb_apresentacoes');
+      if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await q.get();
+      let itens = [];
+      snap.forEach(d => itens.push({ id: d.id, ...d.data() }));
+
+      // RM vê só as das empresas da carteira dele
+      if (perfilEfetivo() === 'rm') {
+        const meu = uidEfetivo();
+        itens = itens.filter(a => !a.empresaId || empresaRmDe(a.empresaId) === meu || a.geradoPorUid === meu);
+      }
+      // ordena do mais recente pro mais antigo
+      itens.sort((a, b) => {
+        const ta = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
+        const tb = b.criadoEm && b.criadoEm.toDate ? b.criadoEm.toDate().getTime() : 0;
+        return tb - ta;
+      });
+      if (filtro === 'incompleto') itens = itens.filter(a => !a.concluiu);
+      else if (filtro) itens = itens.filter(a => a.ultimoInteresse === filtro || (a.interesse || []).some(i => i.tipo === filtro));
+
+      if (!itens.length) {
+        cont.innerHTML = '<div style="background:white; border-radius:14px; padding:36px; text-align:center; color:#94a3b8; font-size:13px;">Nenhuma apresentação ainda com esse filtro.</div>';
+        return;
+      }
+
+      const corNivel = { ALTA: '#dc2626', MODERADA: '#d97706', CONTROLADA: '#16a34a' };
+      const rotInteresse = { cotar: ['💎 Pediu cotação', '#16a34a', '#dcfce7'], contato: ['📞 Pediu contato', '#1d4ed8', '#dbeafe'], pdf: ['📄 Baixou o PDF', '#7c3aed', '#ede9fe'] };
+
+      cont.innerHTML = itens.map(a => {
+        const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
+        const quando = dt ? dt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+        const r = a.respostas || {}, q = a.questionario || {}, ct = q.contato || {};
+        const nivel = (r._risco && r._risco.nivel) || null;
+        const int = a.ultimoInteresse ? rotInteresse[a.ultimoInteresse] : null;
+        const quem = ct.nome || a.empresaNome || 'Visitante sem identificação';
+        const linhas = Object.entries(r).filter(([k]) => k !== '_risco')
+          .map(([k, v]) => `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${_apLabel(k)}:</span> <strong style="color:#334155;">${(v && v.texto) || '—'}</strong></div>`).join('');
+        const linhasQ = Object.entries(q).filter(([k]) => k !== 'contato')
+          .map(([k, v]) => `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${k}:</span> <strong style="color:#334155;">${Array.isArray(v) ? v.join(' · ') : v}</strong></div>`).join('');
+
+        return `<div style="background:white; border-radius:14px; padding:16px 18px; margin-bottom:11px; border:1px solid ${nivel === 'ALTA' ? '#fecaca' : '#f1f5f9'};">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+            <div style="min-width:0;">
+              <div style="font-size:14.5px; font-weight:800; color:#0f172a;">${quem}${ct.cargo ? `<span style="font-weight:500; color:#94a3b8; font-size:12px;"> · ${ct.cargo}</span>` : ''}</div>
+              <div style="font-size:11.5px; color:#94a3b8; margin-top:2px;">
+                ${a.produtoNome || a.produtoId || '—'} · ${quando}
+                ${a.geradoPorNome ? ` · enviado por ${a.geradoPorNome}` : ''}
+              </div>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              ${nivel ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:${corNivel[nivel]}18; color:${corNivel[nivel]};">EXPOSIÇÃO ${nivel}</span>` : ''}
+              ${int ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:${int[2]}; color:${int[1]};">${int[0]}</span>` : ''}
+              ${!a.concluiu ? `<span style="font-size:10px; font-weight:700; padding:3px 9px; border-radius:100px; background:#f1f5f9; color:#94a3b8;">parou na tela ${a.cenasVistas || 1}</span>` : ''}
+            </div>
+          </div>
+          ${(ct.email || ct.telefone) ? `<div style="font-size:12px; color:#4338ca; margin-bottom:8px;">${ct.email || ''}${ct.email && ct.telefone ? ' · ' : ''}${ct.telefone || ''}</div>` : ''}
+          ${linhas ? `<div onclick="var d=this.nextElementSibling; var ab=d.style.display==='none'; d.style.display=ab?'grid':'none'; this.textContent=ab?'▲ ocultar respostas':'▾ ver as respostas da apresentação';"
+               style="cursor:pointer; font-size:11.5px; color:#4338ca; font-weight:700;">▾ ver as respostas da apresentação</div>
+            <div style="display:none; gap:3px; margin-top:7px; background:#fafbfc; border-radius:8px; padding:10px 12px;">${linhas}${linhasQ ? '<div style="height:8px;"></div>' + linhasQ : ''}</div>` : ''}
+        </div>`;
+      }).join('');
+    } catch (e) {
+      console.error(e);
+      cont.innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:12px; padding:16px; font-size:13px; color:#991b1b;">Erro ao carregar: ' + e.message + '</div>';
+    }
+  }
+  window.renderApresentacoes = renderApresentacoes;
+
+  function _apLabel(k) {
+    return ({
+      conhecia: 'Já conhecia o produto', decisoesDia: 'Decisões por dia', jaProcessado: 'Já foi citado em processo',
+      dependentes: 'Dependentes', equipe: 'Pessoas sob gestão', regulado: 'Setor regulado', percepcao: 'Percepção do risco'
+    })[k] || k;
+  }
 
   // ===== EXPORTAR O RELATÓRIO INTELIGENTE EM PDF (paisagem, fiel à tela) =====
   function exportarMatrizPDF() {
