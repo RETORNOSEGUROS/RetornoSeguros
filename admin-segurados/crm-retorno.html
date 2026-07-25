@@ -487,6 +487,7 @@ const MENU = [
     { id:'instagram', icon:'fa-instagram', label:'Instagram', brands:true },
   ]},
   { sec:'Equipe & Relatórios', items:[
+    { id:'comissoes', icon:'fa-hand-holding-dollar', label:'Comissões' },
     { id:'funcionarios', icon:'fa-user-tie', label:'Funcionários' },
     { id:'relatorios', icon:'fa-chart-column', label:'Relatórios' },
     { id:'desistentes', icon:'fa-user-slash', label:'Desistentes' },
@@ -508,6 +509,7 @@ const EXPLAIN = {
   movimentacoes:'Inclusões e exclusões de beneficiários enviadas pelas empresas. Organize por empresa, aprove e leve ao portal da seguradora.',
   importar:'Importe listas de beneficiários em massa a partir de planilhas.',
   propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
+  comissoes:'Quanto você ganhou de comissão, somado automaticamente a partir das propostas lidas — por mês e por seguradora.',
   parceiros:'Empresas parceiras que trazem leads e indicações.',
   resgates:'Resgates de recompensas solicitados pelos parceiros.',
   instagram:'Campanhas e captação de seguidores no Instagram.',
@@ -585,6 +587,8 @@ function fmtDataHora(v){ if(!v) return '-'; if(v.toDate) v=v.toDate(); const d=(
 function fmtCNPJ(c){ c=(c||'').replace(/\D/g,''); return c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,'$1.$2.$3/$4-$5')||c; }
 function copiar(txt,ok){ navigator.clipboard.writeText(txt).then(()=>toast(ok||'Copiado para a área de transferência.','ok','Copiado')); }
 function fmtMotivo(m){ const map={demissao:'Demissão',pedido:'A pedido',obito:'Óbito',outro:'Outro'}; return map[m]||m||'-'; }
+function waNum(f){ f=(f||'').replace(/\D/g,''); if(!f) return null; if(f.length<=11) f='55'+f; return f; }
+function waBtn(fone,msg,label){ const n=waNum(fone); if(!n) return ''; return `<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/${n}${msg?('?text='+encodeURIComponent(msg)):''}" style="color:var(--ok)" title="Abrir no WhatsApp"><i class="fab fa-whatsapp"></i>${label?' '+label:''}</a>`; }
 function money(v){ v=Number(v)||0; return v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
 function toDate(v){ if(!v) return null; if(v.toDate) return v.toDate(); const d=new Date(v); return isNaN(d)?null:d; }
 function diasAte(v){ const d=toDate(v); if(!d) return null; const h=new Date(); h.setHours(0,0,0,0); return Math.round((d-h)/86400000); }
@@ -854,7 +858,7 @@ VIEWS.leads=function(){
         <td>${esc(l.ramo||l.tipoSeguro||'-')}</td>
         <td><span class="badge" style="background:${st.cor}22;color:${st.cor}"><span class="dot-b" style="background:${st.cor}"></span>${st.label}</span></td>
         <td style="color:var(--text-3)">${fmtData(l.criadoEm)}</td>
-        <td><button class="btn btn-ghost btn-sm" onclick="toast('Ficha do lead: disponível ao migrar a tela completa.','info','Em breve')"><i class="fas fa-eye"></i></button></td>
+        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.')}<button class="btn btn-ghost btn-sm" onclick="fichaCliente('${l.id}')"><i class="fas fa-eye"></i></button></td>
       </tr>`;
     }).join(''):`<tr><td colspan="6"><div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum lead encontrado</h4><p>Ajuste os filtros ou aguarde novos cadastros do site.</p></div></td></tr>`}
     </tbody></table></div></div>`;
@@ -1285,7 +1289,7 @@ function fichaCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
         <div class="mov-f"><div class="k">Status</div><div class="v">${statusBadge(st.label,st.cor)}</div></div>
-        <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'}</div></div>
+        <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'} ${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}</div></div>
         <div class="mov-f"><div class="k">E-mail</div><div class="v">${esc(c.email)||'-'}</div></div>
         <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
         <div class="mov-f"><div class="k">CPF/CNPJ</div><div class="v">${esc(c.cpf||c.cnpj)||'-'}</div></div>
@@ -1580,6 +1584,48 @@ async function salvarFuncionario(){ const id=document.getElementById('fnId').val
   try{ if(id) await db.collection('admins_crm').doc(id).update(dados); else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('admins_crm').add(dados);} closeModal(); toast('Funcionário salvo.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 
+/* ---------- COMISSÕES ---------- */
+const MESNOME=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+VIEWS.comissoes=function(){
+  let html=head('comissoes');
+  const props=CACHE.propostas.filter(p=>p.comissaoValor!=null);
+  const total=props.reduce((s,p)=>s+(+p.comissaoValor||0),0);
+  const premioTot=props.reduce((s,p)=>s+(+p.premioLiquido||0),0);
+  const pctMedio=premioTot?(total/premioTot*100):0;
+  const hoje=new Date(); const ini=new Date(hoje.getFullYear(),hoje.getMonth(),1);
+  const mesAtual=props.filter(p=>{const d=toDate(p.criadoEm);return d&&d>=ini;}).reduce((s,p)=>s+(+p.comissaoValor||0),0);
+  html+=`<div class="kpi-grid">
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-hand-holding-dollar"></i></div><div class="val" style="font-size:1.4rem">${money(total)}</div><div class="lbl">Comissão total lida</div></div>
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-calendar-day"></i></div><div class="val" style="font-size:1.4rem">${money(mesAtual)}</div><div class="lbl">Comissão neste mês</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.4rem">${money(premioTot)}</div><div class="lbl">Prêmio líquido total</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-percent"></i></div><div class="val">${pctMedio.toFixed(1)}%</div><div class="lbl">Comissão média</div></div>
+    <div class="kpi"><div class="ico i-orange"><i class="fas fa-file-invoice"></i></div><div class="val">${props.length}</div><div class="lbl">Propostas</div></div>
+  </div>`;
+  if(!props.length){ html+=`<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-hand-holding-dollar"></i></div><h4>Ainda sem comissões</h4><p>Leia e salve propostas em "Ler propostas" — a comissão de cada uma entra aqui automaticamente.</p></div></div>`; document.getElementById('viewRoot').innerHTML=html; return; }
+  // por seguradora
+  const seg={}; props.forEach(p=>{const k=p.seguradora||'—';(seg[k]=seg[k]||{n:0,com:0,prem:0});seg[k].n++;seg[k].com+=+p.comissaoValor||0;seg[k].prem+=+p.premioLiquido||0;});
+  const segArr=Object.entries(seg).sort((a,b)=>b[1].com-a[1].com);
+  // por mês
+  const mes={}; props.forEach(p=>{const d=toDate(p.criadoEm);const k=d?(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')):'—';(mes[k]=mes[k]||{n:0,com:0,label:d?(MESNOME[d.getMonth()]+'/'+d.getFullYear()):'—'});mes[k].n++;mes[k].com+=+p.comissaoValor||0;});
+  const mesArr=Object.entries(mes).sort((a,b)=>a[0]<b[0]?1:-1);
+  html+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px" class="dash-cols">
+    <div class="card"><div class="card-head"><h3><i class="fas fa-shield"></i> Por seguradora</h3></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Seguradora</th><th>Propostas</th><th>Prêmio</th><th>Comissão</th></tr></thead><tbody>
+      ${segArr.map(([k,v])=>`<tr><td><b>${esc(k)}</b></td><td>${v.n}</td><td>${money(v.prem)}</td><td><b style="color:var(--ok)">${money(v.com)}</b></td></tr>`).join('')}
+      </tbody></table></div></div>
+    <div class="card"><div class="card-head"><h3><i class="fas fa-calendar"></i> Por mês</h3></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Mês</th><th>Propostas</th><th>Comissão</th></tr></thead><tbody>
+      ${mesArr.map(([k,v])=>`<tr><td><b>${esc(v.label)}</b></td><td>${v.n}</td><td><b style="color:var(--ok)">${money(v.com)}</b></td></tr>`).join('')}
+      </tbody></table></div></div>
+  </div>`;
+  html+=`<div class="card" style="margin-top:18px"><div class="card-head"><h3><i class="fas fa-list"></i> Propostas com comissão</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Segurado</th><th>Seguradora</th><th>Prêmio líquido</th><th>%</th><th>Comissão</th><th>Data</th></tr></thead><tbody>
+    ${props.slice().sort((a,b)=>(toDate(b.criadoEm)||0)-(toDate(a.criadoEm)||0)).map(p=>`<tr><td><b>${esc(p.segurado||'-')}</b></td><td>${esc(p.seguradora||'-')}</td>
+      <td>${money(p.premioLiquido)}</td><td>${p.comissaoPct!=null?p.comissaoPct+'%':'-'}</td><td><b style="color:var(--ok)">${money(p.comissaoValor)}</b></td><td style="color:var(--text-3)">${fmtData(p.criadoEm)}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  document.getElementById('viewRoot').innerHTML=html;
+};
+
 /* ---------- RELATÓRIOS ---------- */
 VIEWS.relatorios=function(){
   let html=head('relatorios');
@@ -1812,8 +1858,36 @@ function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||
   coberturas:r.coberturas||[], arquivo:r.arquivo||null, confianca:r.confianca||null, avisos:r.warnings||[] }; }
 async function salvarProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
-  try{ await db.collection('propostas').add({...dadosProposta(r),criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
-    descartarProposta(id); toast('Proposta salva no CRM.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+  try{
+    const leadId=await vincularClienteProposta(r);
+    await db.collection('propostas').add({...dadosProposta(r),leadId:leadId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
+    descartarProposta(id);
+    toast('Proposta salva'+(leadId?' e vinculada ao cliente':'')+'.','ok');
+  }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+
+/* Liga a proposta a um cliente (cria/atualiza lead + registra interação) */
+async function vincularClienteProposta(r){
+  const cpf=(r.cpfCnpj||'').replace(/\D/g,''); const fone=(r.celular||r.telefone||'').replace(/\D/g,'');
+  let lead=(cpf&&CACHE.leads.find(l=>(l.cpf||'').replace(/\D/g,'')===cpf)) || (fone&&CACHE.leads.find(l=>(l.whatsapp||l.telefone||'').replace(/\D/g,'')===fone)) || null;
+  try{
+    let leadId;
+    if(lead){ leadId=lead.id; const upd={};
+      if(!lead.email&&r.email) upd.email=r.email;
+      if(!lead.whatsapp&&fone) upd.whatsapp=fone;
+      if(!lead.ramo&&r.ramo) upd.ramo=r.ramo;
+      if(Object.keys(upd).length){ upd.atualizadoEm=FV.serverTimestamp(); await db.collection('leads_crm').doc(lead.id).update(upd); }
+    } else {
+      const ref=await db.collection('leads_crm').add({ nome:r.segurado||null, cpf:r.cpfCnpj||null, whatsapp:fone||null, email:r.email||null,
+        ramo:r.ramo||null, status:'cotacao_enviada', origem:'proposta', temperatura:'quente',
+        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
+      leadId=ref.id;
+    }
+    await db.collection('interacoes_crm').add({ leadId, tipo:'nota',
+      texto:'Proposta '+(r.seguradora||'')+' '+(r.nrProposta||'')+' — prêmio '+money(r.premioLiquido)+', comissão '+(r.comissaoPct!=null?(r.comissaoPct+'% ('+money(r.comissaoValor)+')'):'—'),
+      autor:CURRENT_USER?.email?.split('@')[0]||'sistema', criadoEm:FV.serverTimestamp() });
+    return leadId;
+  }catch(e){ console.warn('vincular cliente',e); return null; }
 }
 async function gerarApoliceDaProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
@@ -1852,7 +1926,8 @@ function verProposta(id){
       ${(p.coberturas||[]).map(c=>`<tr><td>${esc(c.nome)}</td><td style="color:var(--text-2)">${esc(c.lmi)}</td><td>${money(c.premio)}</td></tr>`).join('')||`<tr><td colspan="3" style="color:var(--text-3)">Sem coberturas registradas.</td></tr>`}
       </tbody></table></div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="gerarApoliceDaPropostaSalva('${id}')"><i class="fas fa-file-contract"></i> Gerar apólice</button>
+    <div class="modal-foot">${waBtn(p.celular||p.telefone,'Olá '+((p.segurado||'').split(' ')[0]||'')+'! Sua proposta '+(p.seguradora||'')+' foi transmitida.','WhatsApp')}
+      <button class="btn btn-ghost" onclick="gerarApoliceDaPropostaSalva('${id}')"><i class="fas fa-file-contract"></i> Gerar apólice</button>
       <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`);
 }
 async function gerarApoliceDaPropostaSalva(id){ const p=CACHE.propostas.find(x=>x.id===id); if(!p) return;
@@ -1879,6 +1954,10 @@ async function modalFipe(codigo, ano, comb){
     const atualArr=await fipeFetch(codigo);
     const atual=fipeEscolher(atualArr, ano, comb);
     if(!atual) throw new Error('Veículo não encontrado para este código FIPE.');
+    // guarda um retrato do valor (constrói histórico próprio ao longo do tempo)
+    try{ const mesRef=(atual.mesReferencia||'').trim(); const docId=(codigo+'_'+mesRef).replace(/[^\w]+/g,'_');
+      await db.collection('fipe_historico').doc(docId).set({ codigoFipe:codigo, mesReferencia:mesRef, valor:atual.valor, valorNum:fipeNum(atual.valor),
+        marca:atual.marca||null, modelo:atual.modelo||null, anoModelo:atual.anoModelo||null, atualizadoEm:FV.serverTimestamp() },{merge:true}); }catch(e){}
     // histórico: últimas ~10 tabelas de referência
     let tabelas=[]; try{ const tr=await fetch('https://brasilapi.com.br/api/fipe/tabelas/v1'); tabelas=await tr.json(); }catch(e){}
     const refs=(tabelas||[]).slice(0,10);
