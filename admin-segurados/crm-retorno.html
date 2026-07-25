@@ -405,14 +405,19 @@ const EXPLAIN = {
   configuracoes:'Ajustes gerais do sistema e da sua conta.',
 };
 
-/* Portais das seguradoras (para o botão "Abrir portal") */
+/* Portais das seguradoras (URL padrão — pode ser sobrescrita por empresa) */
 const PORTAIS = {
   bradesco:{ nome:'Bradesco Saúde', url:'https://www.bradescosaudeconecta.com.br/' },
   amil:{ nome:'Amil', url:'https://credenciado.amil.com.br/' },
-  sulamerica:{ nome:'SulAmérica', url:'https://portal.sulamericaseguros.com.br/' },
-  hapvida:{ nome:'Hapvida', url:'https://www.hapvida.com.br/' },
+  sulamerica:{ nome:'SulAmérica', url:'https://saude.sulamerica.com.br/' },
   unimed:{ nome:'Unimed', url:'https://www.unimed.coop.br/' },
+  portoseguro:{ nome:'Porto Seguro', url:'https://www.portoseguro.com.br/' },
+  metlife:{ nome:'MetLife', url:'https://www.metlife.com.br/' },
+  hapvida:{ nome:'Hapvida', url:'https://www.hapvida.com.br/' },
+  outra:{ nome:'Seguradora', url:'' },
 };
+const SEGURADORA_OPCOES=[['bradesco','Bradesco Saúde'],['sulamerica','SulAmérica'],['unimed','Unimed'],['amil','Amil'],['portoseguro','Porto Seguro'],['metlife','MetLife'],['outra','Outra']];
+const PLANO_OPCOES=[['saude','Saúde','fa-heart-pulse'],['dental','Dental','fa-tooth'],['vida','Vida','fa-heart'],['previdencia','Previdência','fa-piggy-bank']];
 
 const STATUS_PIPELINE = {
   pre_cadastro:{label:'Pré-Cadastro',cor:'#64748b'},
@@ -576,11 +581,14 @@ function bootstrap(){
     CACHE.empresas=s.docs.map(d=>({id:d.id,...d.data()}));
     const r=(location.hash||'#dashboard').slice(1);
     if(r==='movimentacoes') VIEWS.movimentacoes();
+    if(r==='empresas') VIEWS.empresas();
   },err=>console.warn('empresas',err)));
   // Beneficiários ativos
   LISTENERS.push(db.collection('beneficiarios').onSnapshot(s=>{
     CACHE.beneficiarios=s.docs.map(d=>({id:d.id,...d.data()}));
-    if((location.hash||'#dashboard').slice(1)==='movimentacoes' && MOV_STATE.empresaId) VIEWS.movimentacoes();
+    const r=(location.hash||'#dashboard').slice(1);
+    if(r==='movimentacoes' && MOV_STATE.empresaId) VIEWS.movimentacoes();
+    if(r==='empresas') VIEWS.empresas();
   },err=>console.warn('benef',err)));
 
   router();
@@ -712,6 +720,113 @@ VIEWS.leads=function(){
   document.getElementById('viewRoot').innerHTML=html;
 };
 
+/* ---------- EMPRESAS (clientes cujos beneficiários você administra) ---------- */
+let EMP_FILTER={busca:''};
+VIEWS.empresas=function(){
+  const actions=`<button class="btn btn-primary btn-sm" onclick="modalEmpresa()"><i class="fas fa-plus"></i> Nova empresa</button>`;
+  let html=head('empresas',{actions});
+
+  let list=CACHE.empresas.slice().sort((a,b)=>(a.nomeEmpresa||'').localeCompare(b.nomeEmpresa||''));
+  if(EMP_FILTER.busca){ const q=EMP_FILTER.busca.toLowerCase();
+    list=list.filter(e=>`${e.nomeEmpresa||''} ${e.cnpj||''} ${e.responsavel||''}`.toLowerCase().includes(q)); }
+  const ativas=CACHE.empresas.filter(e=>e.status!=='inativo').length;
+  const totBenef=CACHE.beneficiarios.filter(b=>b.status!=='inativo').length;
+
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-building"></i></div><div class="val">${CACHE.empresas.length}</div><div class="lbl">Empresas cadastradas</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${ativas}</div><div class="lbl">Ativas</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-id-card"></i></div><div class="val">${totBenef}</div><div class="lbl">Beneficiários ativos</div></div>
+  </div>`;
+
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-building"></i> Empresas clientes</h3>
+    <div class="filters" style="margin:0"><input type="text" placeholder="Buscar por nome, CNPJ..." value="${esc(EMP_FILTER.busca)}" oninput="EMP_FILTER.busca=this.value;VIEWS.empresas()"></div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Empresa</th><th>CNPJ</th><th>Seguradora</th><th>Planos</th><th>Beneficiários</th><th>Status</th><th></th></tr></thead><tbody>
+    ${list.length?list.map(e=>{
+      const qtd=CACHE.beneficiarios.filter(b=>b.empresaId===e.id&&b.status!=='inativo').length;
+      const segNome=(PORTAIS[e.seguradora]||{}).nome||'-';
+      return `<tr>
+        <td><b>${esc(e.nomeEmpresa||'-')}</b>${e.responsavel?`<br><small style="color:var(--text-3)">${esc(e.responsavel)}</small>`:''}</td>
+        <td>${fmtCNPJ(e.cnpj)||'-'}</td>
+        <td>${esc(segNome)}</td>
+        <td>${(e.planos||[]).map(p=>`<span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-right:3px">${esc(p.toUpperCase())}</span>`).join('')||'-'}</td>
+        <td><b>${qtd}</b></td>
+        <td><span class="badge" style="background:${e.status==='inativo'?'var(--surface-3)':'var(--ok-bg)'};color:${e.status==='inativo'?'var(--text-3)':'var(--ok)'}">${e.status==='inativo'?'Inativo':'Ativo'}</span></td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="modalEmpresa('${e.id}')" title="Editar"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="verBenefEmpresa('${e.id}')" title="Beneficiários"><i class="fas fa-users"></i></button>
+        </td></tr>`;
+    }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-building"></i></div><h4>Nenhuma empresa</h4><p>Cadastre a primeira empresa cliente para administrar seus beneficiários.</p></div></td></tr>`}
+    </tbody></table></div></div>`;
+  document.getElementById('viewRoot').innerHTML=html;
+};
+function verBenefEmpresa(id){ const e=CACHE.empresas.find(x=>x.id===id); if(!e) return; MOV_STATE.empresaId=id; MOV_STATE.empresaNome=e.nomeEmpresa; MOV_STATE.tab='ativos'; location.hash='#movimentacoes'; }
+
+function modalEmpresa(id){
+  const e = id?CACHE.empresas.find(x=>x.id===id)||{}:{};
+  const seg=e.seguradora||'';
+  openModal(`
+    <div class="modal-head"><h3><i class="fas fa-building" style="color:var(--brand)"></i> ${id?'Editar empresa':'Nova empresa'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="empId" value="${id||''}">
+      <div class="form-row"><label>Nome da empresa *</label><input type="text" id="empNome" value="${esc(e.nomeEmpresa||'')}" placeholder="Razão social"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>CNPJ *</label><input type="text" id="empCnpj" value="${esc(fmtCNPJ(e.cnpj)||'')}" placeholder="00.000.000/0000-00"></div>
+        <div class="form-row"><label>Responsável</label><input type="text" id="empResp" value="${esc(e.responsavel||'')}" placeholder="Nome do contato"></div>
+        <div class="form-row"><label>E-mail</label><input type="email" id="empEmail" value="${esc(e.email||'')}" placeholder="email@empresa.com"></div>
+        <div class="form-row"><label>WhatsApp</label><input type="text" id="empWhats" value="${esc(e.whatsapp||'')}" placeholder="(00) 00000-0000"></div>
+      </div>
+      <div class="form-row"><label>Planos contratados *</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${PLANO_OPCOES.map(([v,l])=>`<label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border-2);border-radius:8px;cursor:pointer;font-size:.85rem">
+            <input type="checkbox" class="empPlano" value="${v}" ${(e.planos||[]).includes(v)?'checked':''}> ${l}</label>`).join('')}
+        </div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Seguradora</label><select id="empSeg">
+          <option value="">Selecione...</option>
+          ${SEGURADORA_OPCOES.map(([v,l])=>`<option value="${v}" ${seg===v?'selected':''}>${l}</option>`).join('')}
+        </select></div>
+        <div class="form-row"><label>Nº apólice</label><input type="text" id="empApolice" value="${esc(e.apolice||'')}"></div>
+      </div>
+      <div style="background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;color:var(--brand-dark);margin-bottom:10px"><i class="fas fa-key"></i> Acesso ao portal da seguradora</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-row" style="margin:0"><label>Login do portal</label><input type="text" id="empLogin" value="${esc(e.loginPortal||e.cnpj||'')}" placeholder="Ex.: CNPJ ou usuário"></div>
+          <div class="form-row" style="margin:0"><label>Senha do portal</label><input type="text" id="empSenha" value="${esc(e.senha||'')}" placeholder="Senha de acesso"></div>
+        </div>
+        <div class="form-row" style="margin:10px 0 0"><label>Link do portal (deixe vazio p/ usar o padrão da seguradora)</label><input type="text" id="empUrl" value="${esc(e.urlPortal||'')}" placeholder="https://..."></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Status</label><select id="empStatus">
+          <option value="ativo" ${e.status!=='inativo'?'selected':''}>Ativo</option>
+          <option value="inativo" ${e.status==='inativo'?'selected':''}>Inativo</option></select></div>
+      </div>
+      <div class="form-row"><label>Observações</label><textarea id="empObs" rows="2">${esc(e.observacoes||'')}</textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarEmpresa()"><i class="fas fa-floppy-disk"></i> Salvar empresa</button></div>`);
+  const c=document.getElementById('empCnpj'); if(c) c.addEventListener('input',()=>{ let v=c.value.replace(/\D/g,'').slice(0,14);
+    c.value=v.replace(/^(\d{2})(\d{3})?(\d{3})?(\d{4})?(\d{2})?$/,(m,a,b,d,f,g)=>[a,b&&'.'+b,d&&'.'+d,f&&'/'+f,g&&'-'+g].filter(Boolean).join('')); });
+}
+async function salvarEmpresa(){
+  const id=document.getElementById('empId').value;
+  const cnpj=document.getElementById('empCnpj').value.replace(/\D/g,'');
+  const nome=document.getElementById('empNome').value.trim();
+  const planos=[...document.querySelectorAll('.empPlano:checked')].map(x=>x.value);
+  if(!nome||!cnpj){ toast('Preencha nome e CNPJ.','err'); return; }
+  if(!planos.length){ toast('Selecione ao menos um plano.','err'); return; }
+  const dados={ nomeEmpresa:nome, cnpj, responsavel:document.getElementById('empResp').value.trim()||null,
+    email:document.getElementById('empEmail').value.trim()||null, whatsapp:document.getElementById('empWhats').value.replace(/\D/g,'')||null,
+    planos, seguradora:document.getElementById('empSeg').value||null, apolice:document.getElementById('empApolice').value.trim()||null,
+    loginPortal:document.getElementById('empLogin').value.trim()||null, senha:document.getElementById('empSenha').value.trim()||null,
+    urlPortal:document.getElementById('empUrl').value.trim()||null, status:document.getElementById('empStatus').value,
+    observacoes:document.getElementById('empObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
+  try{
+    if(id){ await db.collection('empresas_clientes').doc(id).update(dados); }
+    else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('empresas_clientes').add(dados); }
+    closeModal(); toast('Empresa salva com sucesso.','ok');
+  }catch(e){ console.error(e); toast('Erro ao salvar empresa.','err'); }
+}
+
 /* ---------- MOVIMENTAÇÕES (o coração do pedido) ---------- */
 let MOV_STATE={ empresaId:null, tab:'pendente' };
 VIEWS.movimentacoes=function(){
@@ -748,7 +863,7 @@ function renderMovEmpresasLista(){
     </div></div>`;
   document.getElementById('viewRoot').innerHTML=html;
 }
-function abrirEmpresaMov(id,nome){ MOV_STATE.empresaId=id||('nome:'+nome); MOV_STATE.empresaNome=nome; MOV_STATE.tab='pendente'; VIEWS.movimentacoes(); }
+function abrirEmpresaMov(id,nome){ MOV_STATE.empresaId=id||('nome:'+nome); MOV_STATE.empresaNome=nome; MOV_STATE.tab='pendente'; MOV_STATE.busca=''; VIEWS.movimentacoes(); }
 function voltarEmpresas(){ MOV_STATE.empresaId=null; VIEWS.movimentacoes(); }
 
 /* Passo 2: movimentações de UMA empresa + portal + credenciais + abas */
@@ -759,6 +874,8 @@ function renderMovEmpresa(){
             CACHE.empresas.find(e=>(e.nomeEmpresa||'').toLowerCase()===(MOV_STATE.empresaNome||'').toLowerCase()) || {};
   const nome=emp.nomeEmpresa||MOV_STATE.empresaNome||'Empresa';
   const seg=PORTAIS[(emp.seguradora||'bradesco')]||PORTAIS.bradesco;
+  const portalUrl=emp.urlPortal||seg.url||'';
+  const portalLogin=emp.loginPortal||emp.cnpj||emp.email||'';
 
   const counts={pendente:movs.filter(m=>m.status==='pendente').length,
     aprovado:movs.filter(m=>m.status==='aprovado').length,
@@ -773,8 +890,9 @@ function renderMovEmpresa(){
     <div class="seg-ic"><i class="fas fa-hospital-user"></i></div>
     <div class="seg-info"><b>${esc(nome)}</b><span>Seguradora: ${esc(seg.nome)} · CNPJ ${fmtCNPJ(emp.cnpj)||'-'}</span></div>
     <div style="flex:1"></div>
-    <button class="btn btn-ghost" onclick='abrirCredenciais(${JSON.stringify({nome,login:emp.cnpj||emp.email||"",senha:emp.senha||"",segNome:seg.nome})})'><i class="fas fa-circle-info"></i> Login e senha</button>
-    <a class="btn btn-primary" href="${seg.url}" target="_blank" rel="noopener"><i class="fas fa-arrow-up-right-from-square"></i> Abrir portal ${esc(seg.nome)}</a>
+    <button class="btn btn-ghost" onclick='abrirCredenciais(${JSON.stringify({nome,login:portalLogin,senha:emp.senha||"",segNome:seg.nome})})'><i class="fas fa-circle-info"></i> Login e senha</button>
+    ${portalUrl?`<a class="btn btn-primary" href="${portalUrl}" target="_blank" rel="noopener"><i class="fas fa-arrow-up-right-from-square"></i> Abrir portal ${esc(seg.nome)}</a>`
+      :`<button class="btn btn-ghost" onclick="modalEmpresa('${emp.id||''}')" title="Cadastre o link do portal"><i class="fas fa-link"></i> Definir link do portal</button>`}
   </div>`;
 
   // Abas
@@ -785,9 +903,14 @@ function renderMovEmpresa(){
     <button class="tab ${tab==='ativos'?'active':''}" onclick="MOV_STATE.tab='ativos';VIEWS.movimentacoes()"><i class="fas fa-id-card"></i> Beneficiários ativos <span class="cnt">${benef.length}</span></button>
   </div>`;
 
-  if(tab==='ativos'){ html+=renderBeneficiariosAtivos(benef,nome); }
+  // busca dentro da empresa (nome / cpf)
+  const q=(MOV_STATE.busca||'').toLowerCase();
+  const filtra=x=>!q||`${x.nome||''} ${x.cpf||''}`.toLowerCase().includes(q);
+  html+=`<div class="filters"><input type="text" placeholder="Buscar beneficiário por nome ou CPF..." value="${esc(MOV_STATE.busca||'')}" oninput="MOV_STATE.busca=this.value;VIEWS.movimentacoes()" style="min-width:280px"></div>`;
+
+  if(tab==='ativos'){ html+=renderBeneficiariosAtivos(benef.filter(filtra),nome); }
   else{
-    const lista=movs.filter(m=>m.status===tab);
+    const lista=movs.filter(m=>m.status===tab).filter(filtra);
     html+=`<div>${lista.length?lista.map(m=>renderMovCard(m,tab)).join(''):
       `<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-${tab==='pendente'?'mug-hot':'inbox'}"></i></div>
       <h4>${tab==='pendente'?'Tudo em dia por aqui 🎉':'Nada nesta aba'}</h4>
@@ -835,6 +958,7 @@ function renderMovCard(m,tab){
 
 function renderBeneficiariosAtivos(benef,nome){
   benef=benef.slice().sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  window.__benefExport={nome,rows:benef};
   return `<div class="card"><div class="card-head">
       <h3><i class="fas fa-id-card"></i> Beneficiários ativos — ${esc(nome)}</h3>
       <button class="btn btn-ghost btn-sm" onclick="exportarBenef()"><i class="fas fa-download"></i> Exportar CSV</button></div>
@@ -848,8 +972,20 @@ function renderBeneficiariosAtivos(benef,nome){
       `<tr><td colspan="6"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum beneficiário ativo</h4><p>Os beneficiários aparecem aqui conforme as inclusões são aprovadas.</p></div></td></tr>`}
     </tbody></table></div></div>`;
 }
-window.__benefExport=[];
-function exportarBenef(){ toast('Exportação completa entra na próxima fase.','info','Em breve'); }
+window.__benefExport={nome:'',rows:[]};
+function exportarBenef(){
+  const {nome,rows}=window.__benefExport||{rows:[]};
+  if(!rows||!rows.length){ toast('Nenhum beneficiário para exportar.','info'); return; }
+  const head=['Nome','CPF','Plano','Titularidade','Carteirinha','Certificado','Data de inclusao'];
+  const cell=v=>{ v=(v==null?'':String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const lines=[head.join(';')];
+  rows.forEach(b=>lines.push([b.nome,b.cpf,(b.plano||'').toUpperCase(),b.titularidade==='titular'?'Titular':'Dependente',b.cartao||'',b.certificado||'',fmtData(b.dataInicio||b.criadoEm)].map(cell).join(';')));
+  const blob=new Blob(['﻿'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='beneficiarios-'+(nome||'empresa').toLowerCase().replace(/[^a-z0-9]+/g,'-')+'.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('CSV gerado com '+rows.length+' beneficiário(s).','ok','Exportado');
+}
 
 /* =========================================================================
    MODAIS de movimentação
