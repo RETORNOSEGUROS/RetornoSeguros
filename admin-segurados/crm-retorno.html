@@ -317,7 +317,7 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
       <div class="search"><i class="fas fa-magnifying-glass"></i><input type="text" placeholder="Buscar leads, clientes, empresas..." id="globalSearch"></div>
       <div class="spacer"></div>
       <button class="icon-btn" onclick="toggleTheme()" title="Alternar tema"><i class="fas fa-moon" id="themeIcon"></i></button>
-      <button class="icon-btn" id="notifBtn" title="Notificações"><i class="fas fa-bell"></i><span class="dot hidden" id="notifDot"></span></button>
+      <button class="icon-btn" id="notifBtn" title="Notificações" onclick="toggleNotif()"><i class="fas fa-bell"></i><span class="dot hidden" id="notifDot"></span></button>
     </header>
     <main class="content" id="viewRoot"><!-- views renderizadas por JS --></main>
   </div>
@@ -432,8 +432,9 @@ const STATUS_PIPELINE = {
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
 let CACHE={ leads:[], movimentacoes:[], empresas:[], beneficiarios:[],
-  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[] };
+  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[] };
 let LISTENERS=[];
+let _leadsKnown=null; // p/ detectar leads novos e disparar notificação
 
 /* =========================================================================
    TEMA
@@ -569,7 +570,9 @@ function bootstrap(){
   // Leads (tempo real p/ badge "novos")
   LISTENERS.push(db.collection('leads_crm').orderBy('criadoEm','desc').onSnapshot(s=>{
     CACHE.leads=s.docs.map(d=>({id:d.id,...d.data()}));
+    detectarLeadsNovos(CACHE.leads);
     setBadge('leads',CACHE.leads.filter(isLeadNovo).length);
+    atualizarNotificacoes();
     if((location.hash||'#dashboard').slice(1)==='leads') VIEWS.leads();
     if((location.hash||'#dashboard').slice(1)==='dashboard') VIEWS.dashboard();
   },err=>console.warn('leads',err)));
@@ -577,6 +580,7 @@ function bootstrap(){
   LISTENERS.push(db.collection('movimentacoes_beneficiarios').orderBy('criadoEm','desc').onSnapshot(s=>{
     CACHE.movimentacoes=s.docs.map(d=>({id:d.id,...d.data()}));
     setBadge('mov',CACHE.movimentacoes.filter(m=>m.status==='pendente').length);
+    atualizarNotificacoes();
     const r=(location.hash||'#dashboard').slice(1);
     if(r==='movimentacoes') VIEWS.movimentacoes();
     if(r==='dashboard') VIEWS.dashboard();
@@ -601,6 +605,8 @@ function bootstrap(){
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
     if(key==='apolices') setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length);
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
+    if(key==='apolices'||key==='resgates') atualizarNotificacoes();
+    if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
     reRender(routes);
   },err=>console.warn(coll,err)));
   listen('apolices_cliente','apolices',['apolices','clientes','renovacoes','relatorios']);
@@ -610,6 +616,8 @@ function bootstrap(){
   listen('seguidores_instagram','seguidores',['instagram']);
   listen('admins_crm','admins',['funcionarios','relatorios']);
   listen('seguradoras','seguradoras',['configuracoes']);
+  listen('interacoes_crm','interacoes',[]);
+  atualizarNotificacoes();
 
   router();
 }
@@ -1011,7 +1019,7 @@ function exportarBenef(){
    MODAIS de movimentação
    ========================================================================= */
 function openModal(html){ const r=document.getElementById('modalRoot'); r.innerHTML=`<div class="modal">${html}</div>`; r.classList.add('open'); }
-function closeModal(){ document.getElementById('modalRoot').classList.remove('open'); }
+function closeModal(){ document.getElementById('modalRoot').classList.remove('open'); FICHA_LEAD=null; }
 document.getElementById('modalRoot').addEventListener('click',e=>{ if(e.target.id==='modalRoot') closeModal(); });
 
 function modalAprovar(id){
@@ -1171,10 +1179,19 @@ function fichaCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return
       </div>
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
       ${aps.length?aps.map(a=>`<div class="cred"><div style="flex:1"><b>${esc(a.ramo||'Apólice')}</b> · ${esc(a.seguradora||'')} <br><small style="color:var(--text-3)">Nº ${esc(a.numeroApolice||'-')} · vence ${fmtData(a.dataFimVigencia)}</small></div><div style="font-weight:700">${money(a.valorPremio)}</div></div>`).join(''):`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}
-      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Histórico</div>
-      <p style="color:var(--text-3);font-size:.85rem">Linha do tempo de interações entra numa próxima melhoria — hoje mostramos entrada em ${fmtData(c.criadoEm)}.</p>
+      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Histórico de interações</div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <select id="tlTipo" style="width:auto">${Object.entries(TIPO_INTERACAO).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('')}</select>
+          <input type="text" id="tlTexto" placeholder="O que aconteceu? (ex.: liguei, cliente pediu cotação)" style="flex:1">
+          <button class="btn btn-primary btn-sm" onclick="addInteracao('${c.id}')"><i class="fas fa-plus"></i> Registrar</button>
+        </div>
+      </div>
+      ${renderTimeline(c.id)}
     </div>`);
+  FICHA_LEAD=c.id;
 }
+let FICHA_LEAD=null;
 
 /* ---------- APÓLICES ---------- */
 let AP_FILTER={busca:''};
@@ -1579,6 +1596,105 @@ function modalSeguradora(id){ const s=id?CACHE.seguradoras.find(x=>x.id===id)||{
 async function salvarSeguradora(){ const id=document.getElementById('sgrId').value; const nome=document.getElementById('sgrNome').value.trim(); if(!nome){ toast('Informe o nome.','err'); return; }
   const dados={nome,codigo:document.getElementById('sgrCod').value.trim()||null,status:document.getElementById('sgrStatus').value,atualizadoEm:FV.serverTimestamp()};
   try{ if(id) await db.collection('seguradoras').doc(id).update(dados); else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('seguradoras').add(dados);} closeModal(); toast('Seguradora salva.','ok'); }catch(e){ toast('Erro.','err'); } }
+
+/* =========================================================================
+   FASE 4 — NOTIFICAÇÕES (sino) + ALERTA NA ÁREA DE TRABALHO
+   ========================================================================= */
+function coletarNotificacoes(){
+  const itens=[];
+  CACHE.leads.filter(isLeadNovo).slice(0,20).forEach(l=>itens.push({
+    tipo:'lead', icon:'fa-bolt', cor:'var(--brand)', rota:'leads',
+    titulo:'Lead novo', desc:esc(l.nomeEmpresa||l.nome||'Sem nome'), quando:l.criadoEm }));
+  CACHE.movimentacoes.filter(m=>m.status==='pendente').slice(0,20).forEach(m=>itens.push({
+    tipo:'mov', icon:'fa-right-left', cor:'var(--warn)', rota:'movimentacoes',
+    titulo:(m.tipo==='inclusao'?'Inclusão':'Exclusão')+' pendente', desc:esc((m.nome||'')+' · '+(m.empresaNome||'')), quando:m.criadoEm }));
+  CACHE.resgates.filter(r=>r.status==='pendente').slice(0,20).forEach(r=>itens.push({
+    tipo:'resg', icon:'fa-gift', cor:'var(--purple)', rota:'resgates',
+    titulo:'Resgate pendente', desc:esc((r.parceiroNome||'')+' · '+money(r.valor)), quando:r.criadoEm }));
+  CACHE.apolices.forEach(a=>{ const d=diasAte(a.dataFimVigencia); if(d!=null&&d<=15){ itens.push({
+    tipo:'renov', icon:'fa-rotate', cor:d<0?'var(--danger)':'var(--warn)', rota:'renovacoes',
+    titulo:d<0?'Apólice vencida':'Renovação em '+d+' dias', desc:esc(a.clienteNome||a.numeroApolice||'Apólice'), quando:null }); } });
+  itens.sort((a,b)=>(toDate(b.quando)||0)-(toDate(a.quando)||0));
+  return itens;
+}
+function atualizarNotificacoes(){
+  const itens=coletarNotificacoes();
+  const dot=document.getElementById('notifDot');
+  if(dot){ dot.textContent=itens.length>99?'99+':itens.length; dot.classList.toggle('hidden',itens.length===0);
+    dot.style.cssText='position:absolute;top:5px;right:6px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:var(--danger);color:#fff;font-size:.62rem;font-weight:700;display:'+(itens.length?'flex':'none')+';align-items:center;justify-content:center;border:2px solid var(--surface)'; }
+  const panel=document.getElementById('notifPanel');
+  if(panel&&panel.classList.contains('open')) renderNotifPanel();
+}
+function renderNotifPanel(){
+  const itens=coletarNotificacoes();
+  const p=document.getElementById('notifPanel');
+  p.innerHTML=`<div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <b style="font-size:.95rem"><i class="fas fa-bell" style="color:var(--brand)"></i> Notificações</b>
+      <span style="font-size:.75rem;color:var(--text-3)">${itens.length} pendência(s)</span></div>
+    <div style="max-height:60vh;overflow-y:auto">
+    ${itens.length?itens.map(n=>`<div onclick="location.hash='#${n.rota}';toggleNotif(true)" style="display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
+      <div style="width:34px;height:34px;border-radius:10px;background:${n.cor}22;color:${n.cor};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fas ${n.icon}"></i></div>
+      <div style="min-width:0"><div style="font-weight:600;font-size:.85rem">${n.titulo}</div><div style="font-size:.78rem;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${n.desc}</div>
+      ${n.quando?`<div style="font-size:.7rem;color:var(--text-3)">${fmtDataHora(n.quando)}</div>`:''}</div></div>`).join('')
+    :`<div class="empty" style="padding:40px 20px"><div class="em-ic"><i class="fas fa-check"></i></div><h4>Tudo em dia 🎉</h4><p>Sem pendências no momento.</p></div>`}
+    </div>`;
+}
+function toggleNotif(forceClose){
+  let p=document.getElementById('notifPanel');
+  if(!p){ p=document.createElement('div'); p.id='notifPanel';
+    p.style.cssText='position:fixed;top:58px;right:20px;width:360px;max-width:calc(100vw - 40px);background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);z-index:1200;display:none;overflow:hidden';
+    document.body.appendChild(p);
+    document.addEventListener('click',e=>{ if(p.classList.contains('open')&&!p.contains(e.target)&&e.target.id!=='notifBtn'&&!document.getElementById('notifBtn').contains(e.target)){ p.classList.remove('open'); p.style.display='none'; } });
+  }
+  if(forceClose){ p.classList.remove('open'); p.style.display='none'; return; }
+  const open=p.classList.toggle('open');
+  p.style.display=open?'block':'none';
+  if(open){ renderNotifPanel(); pedirPermissaoNotif(); }
+}
+/* alerta na área de trabalho ao chegar lead novo */
+function pedirPermissaoNotif(){ try{ if('Notification'in window&&Notification.permission==='default') Notification.requestPermission(); }catch(e){} }
+function detectarLeadsNovos(leads){
+  const ids=new Set(leads.map(l=>l.id));
+  if(_leadsKnown===null){ _leadsKnown=ids; return; } // primeira carga não dispara
+  const novos=leads.filter(l=>!_leadsKnown.has(l.id));
+  _leadsKnown=ids;
+  novos.forEach(l=>{
+    toast(esc(l.nomeEmpresa||l.nome||'Novo cadastro')+(l.ramo?' · '+esc(l.ramo):''),'info','🔔 Lead novo!');
+    try{ if('Notification'in window&&Notification.permission==='granted'){
+      const n=new Notification('🔔 Novo lead na Retorno Seguros',{body:(l.nomeEmpresa||l.nome||'Novo cadastro')+(l.whatsapp?' · '+l.whatsapp:''),tag:'lead-'+l.id});
+      n.onclick=()=>{ window.focus(); location.hash='#leads'; n.close(); };
+    }}catch(e){}
+  });
+}
+
+/* =========================================================================
+   FASE 4 — LINHA DO TEMPO DE INTERAÇÕES (ficha do cliente)
+   ========================================================================= */
+const TIPO_INTERACAO={ligacao:['Ligação','fa-phone','var(--info)'],whatsapp:['WhatsApp','fa-whatsapp','var(--ok)'],
+  email:['E-mail','fa-envelope','var(--purple)'],reuniao:['Reunião','fa-handshake','var(--orange)'],
+  nota:['Observação','fa-note-sticky','var(--text-2)']};
+function interacoesDoLead(id){ return CACHE.interacoes.filter(i=>i.leadId===id).sort((a,b)=>(toDate(b.criadoEm)||0)-(toDate(a.criadoEm)||0)); }
+function renderTimeline(id){
+  const its=interacoesDoLead(id);
+  return `<div id="tlList">${its.length?its.map(i=>{ const t=TIPO_INTERACAO[i.tipo]||TIPO_INTERACAO.nota;
+    return `<div style="display:flex;gap:11px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="width:30px;height:30px;border-radius:9px;background:${t[2]}22;color:${t[2]};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa${i.tipo==='whatsapp'?'b':'s'} ${t[1]}"></i></div>
+      <div style="flex:1;min-width:0"><div style="font-size:.82rem"><b>${t[0]}</b> <span style="color:var(--text-3)">· ${fmtDataHora(i.criadoEm)}${i.autor?' · '+esc(i.autor):''}</span></div>
+      <div style="font-size:.85rem;color:var(--text-2)">${esc(i.texto||'')}</div></div></div>`;
+  }).join(''):`<p style="color:var(--text-3);font-size:.85rem;padding:8px 0">Nenhuma interação registrada ainda.</p>`}</div>`;
+}
+async function addInteracao(id){
+  const tipo=document.getElementById('tlTipo').value;
+  const texto=document.getElementById('tlTexto').value.trim();
+  if(!texto){ toast('Escreva o que aconteceu na interação.','err'); return; }
+  try{
+    await db.collection('interacoes_crm').add({leadId:id,tipo,texto,autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
+    document.getElementById('tlTexto').value='';
+    toast('Interação registrada.','ok');
+    // otimista: injeta na hora (o snapshot confirma logo em seguida)
+    setTimeout(()=>{ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(id); },400);
+  }catch(e){ console.error(e); toast('Erro ao registrar.','err'); }
+}
 
 /* =========================================================================
    Sidebar mobile
