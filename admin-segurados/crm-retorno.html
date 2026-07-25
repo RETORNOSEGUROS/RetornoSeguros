@@ -368,6 +368,12 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
     if(mV){ r.placa=mV[1]; r.chassi=mV[2]; r.anoModelo=mV[3]; r.fabricante=clean(mV[4]); r.modelo=clean(mV[5]); r.combustivel=clean(mV[6]); }
     else { r.warnings.push('dados do veículo (placa/chassi/modelo)'); }
     r.codigoFipe = pick(/\b(\d{6}-\d)\b/);
+
+    // Contato: telefone + celular (aparecem juntos, logo antes do e-mail) e e-mail
+    const mFones=/(\(\d{2}\)\s?\d{4,5}-?\d{4})\s+(\(\d{2}\)\s?\d{4,5}-?\d{4})\s+[\w.+-]+@/.exec(t);
+    if(mFones){ r.telefone=clean(mFones[1]); r.celular=clean(mFones[2]); }
+    else { const one=/(\(\d{2}\)\s?\d{4,5}-?\d{4})\s+[\w.+-]+@/.exec(t); if(one) r.celular=clean(one[1]); }
+    const mMail=/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/.exec(t); if(mMail) r.email=mMail[0];
     const mVig = /(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/.exec(t);
     if(mVig){ r.vigenciaInicio=mVig[1]; r.vigenciaFim=mVig[2]; } else { r.warnings.push('vigência'); }
     r.tipoSeguro = pick(/(Seguro Novo|Renova[çc][ãa]o Cong[êe]nere|Renova[çc][ãa]o)/i);
@@ -1334,6 +1340,7 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div class="form-row"><label>Cliente *</label><input type="text" id="apCliente" value="${esc(a.clienteNome||'')}" placeholder="Nome do cliente"></div>
         <div class="form-row"><label>WhatsApp do cliente</label><input type="text" id="apWhats" value="${esc(a.clienteWhatsapp||'')}"></div>
+        <div class="form-row"><label>E-mail do cliente</label><input type="email" id="apEmail" value="${esc(a.clienteEmail||'')}"></div>
         <div class="form-row"><label>Ramo</label><select id="apRamo">${RAMO_OPCOES.map(r=>`<option ${a.ramo===r?'selected':''}>${r}</option>`).join('')}</select></div>
         <div class="form-row"><label>Seguradora</label><input type="text" id="apSeg" value="${esc(a.seguradora||'')}"></div>
         <div class="form-row"><label>Nº da apólice</label><input type="text" id="apNum" value="${esc(a.numeroApolice||'')}"></div>
@@ -1342,8 +1349,16 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
         <div class="form-row"><label>Fim vigência</label><input type="date" id="apFim" value="${a.dataFimVigencia&&toDate(a.dataFimVigencia)?toDate(a.dataFimVigencia).toISOString().slice(0,10):''}"></div>
         <div class="form-row"><label>Prêmio (R$)</label><input type="number" step="0.01" id="apPremio" value="${a.valorPremio||''}"></div>
         <div class="form-row"><label>Comissão (%)</label><input type="number" step="0.01" id="apComissao" value="${a.comissao||''}"></div>
+        <div class="form-row"><label>Placa</label><input type="text" id="apPlaca" value="${esc(a.veiculoPlaca||'')}"></div>
+        <div class="form-row"><label>Código FIPE</label>
+          <div style="display:flex;gap:8px"><input type="text" id="apFipe" value="${esc(a.codigoFipe||'')}" placeholder="000000-0" style="flex:1">
+          ${a.codigoFipe?`<button type="button" class="btn btn-ghost btn-sm" onclick="modalFipe('${esc(a.codigoFipe)}','${esc(a.veiculoAno||'')}','${esc(a.combustivel||'')}')"><i class="fas fa-magnifying-glass-dollar"></i></button>`:''}</div></div>
       </div>
       <div class="form-row"><label>Observações</label><textarea id="apObs" rows="2">${esc(a.observacoes||'')}</textarea></div>
+      ${a.coberturas&&a.coberturas.length?`<div class="form-row"><label>Coberturas da proposta (${a.coberturas.length})</label>
+        <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table><thead><tr><th>Cobertura</th><th>Limite / condição</th><th>Prêmio</th></tr></thead><tbody>
+        ${a.coberturas.map(c=>`<tr><td>${esc(c.nome)}</td><td style="color:var(--text-2)">${esc(c.lmi)}</td><td>${money(c.premio)}</td></tr>`).join('')}
+        </tbody></table></div></div>`:''}
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="salvarApolice()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`);
@@ -1351,10 +1366,12 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
 async function salvarApolice(){ const id=document.getElementById('apId').value;
   const cliente=document.getElementById('apCliente').value.trim(); if(!cliente){ toast('Informe o cliente.','err'); return; }
   const dados={ clienteNome:cliente, clienteWhatsapp:document.getElementById('apWhats').value.replace(/\D/g,'')||null,
+    clienteEmail:document.getElementById('apEmail').value.trim()||null,
     ramo:document.getElementById('apRamo').value, seguradora:document.getElementById('apSeg').value.trim()||null,
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
     valorPremio:parseFloat(document.getElementById('apPremio').value)||0, comissao:parseFloat(document.getElementById('apComissao').value)||0,
+    veiculoPlaca:document.getElementById('apPlaca').value.trim()||null, codigoFipe:document.getElementById('apFipe').value.trim()||null,
     observacoes:document.getElementById('apObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
   try{ if(id) await db.collection('apolices_cliente').doc(id).update(dados);
     else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('apolices_cliente').add(dados); }
@@ -1676,11 +1693,12 @@ VIEWS.propostas=function(){
 
   // propostas salvas
   html+=`<div class="card" style="margin-top:18px"><div class="card-head"><h3><i class="fas fa-folder-open"></i> Propostas salvas</h3></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Segurado</th><th>Seguradora</th><th>Placa</th><th>Prêmio líquido</th><th>Comissão</th><th>Proposta</th><th>Lida em</th></tr></thead><tbody>
+    <div class="tbl-wrap"><table><thead><tr><th>Segurado</th><th>Seguradora</th><th>Placa</th><th>Prêmio líquido</th><th>Comissão</th><th>Proposta</th><th>Lida em</th><th></th></tr></thead><tbody>
     ${salvas.length?salvas.map(p=>`<tr>
       <td><b>${esc(p.segurado||'-')}</b></td><td>${esc(p.seguradora||'-')}${p.ramo?' · '+esc(p.ramo):''}</td><td>${esc(p.placa||'-')}</td>
       <td>${money(p.premioLiquido)}</td><td><b style="color:var(--ok)">${p.comissaoPct!=null?p.comissaoPct+'% · '+money(p.comissaoValor):'-'}</b></td>
-      <td>${esc(p.nrProposta||'-')}</td><td style="color:var(--text-3)">${fmtData(p.criadoEm)}</td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-file-invoice"></i></div><h4>Nenhuma proposta salva</h4><p>Suba um PDF acima para começar.</p></div></td></tr>`}
+      <td>${esc(p.nrProposta||'-')}</td><td style="color:var(--text-3)">${fmtData(p.criadoEm)}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="verProposta('${p.id}')"><i class="fas fa-eye"></i></button></td></tr>`).join(''):`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-file-invoice"></i></div><h4>Nenhuma proposta salva</h4><p>Suba um PDF acima para começar.</p></div></td></tr>`}
     </tbody></table></div></div>`;
   document.getElementById('viewRoot').innerHTML=html;
   // render resultados da sessão (se houver)
@@ -1745,13 +1763,15 @@ function cardProposta(r){
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 18px;margin-bottom:14px">
       ${f('CPF/CNPJ',esc(r.cpfCnpj))}
+      ${f('Celular',esc(r.celular||r.telefone))}
+      ${f('E-mail',esc(r.email))}
       ${f('Nº Proposta',esc(r.nrProposta))}
       ${f('Nº Cotação',esc(r.nrCotacao))}
       ${f('Veículo',esc([r.fabricante,r.modelo].filter(Boolean).join(' ')))}
       ${f('Placa',esc(r.placa))}
       ${f('Ano',esc(r.anoModelo))}
       ${f('Chassi',esc(r.chassi))}
-      ${f('FIPE',esc(r.codigoFipe))}
+      ${f('Código FIPE',r.codigoFipe?`${esc(r.codigoFipe)} <button class="btn btn-ghost btn-sm" style="padding:2px 8px;margin-left:4px" onclick="modalFipe('${esc(r.codigoFipe)}','${esc(r.anoModelo||'')}','${esc(r.combustivel||'')}')"><i class="fas fa-magnifying-glass-dollar"></i> consultar</button>`:null)}
       ${f('Vigência',r.vigenciaInicio?esc(r.vigenciaInicio+' a '+r.vigenciaFim):null)}
       ${f('Prêmio líquido',r.premioLiquido!=null?money(r.premioLiquido):null)}
       ${f('Prêmio total',r.premioTotal!=null?money(r.premioTotal):null)}
@@ -1782,6 +1802,7 @@ function cardProposta(r){
 }
 function descartarProposta(id){ PROP_RESULTS=PROP_RESULTS.filter(r=>r.__id!==id); renderPropResults(); }
 function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||null, segurado:r.segurado||null, cpfCnpj:r.cpfCnpj||null,
+  email:r.email||null, celular:r.celular||null, telefone:r.telefone||null,
   nrProposta:r.nrProposta||null, nrCotacao:r.nrCotacao||null, placa:r.placa||null, chassi:r.chassi||null, anoModelo:r.anoModelo||null,
   fabricante:r.fabricante||null, modelo:r.modelo||null, combustivel:r.combustivel||null, codigoFipe:r.codigoFipe||null,
   vigenciaInicio:r.vigenciaInicio||null, vigenciaFim:r.vigenciaFim||null, tipoSeguro:r.tipoSeguro||null,
@@ -1797,15 +1818,112 @@ async function salvarProposta(id){
 async function gerarApoliceDaProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
   try{ await db.collection('apolices_cliente').add({ clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
+      clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
       ramo:r.ramo||'Auto', seguradora:r.seguradora||null, numeroApolice:r.nrProposta||null,
       dataInicioVigencia:converterData(r.vigenciaInicio), dataFimVigencia:converterData(r.vigenciaFim),
-      valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, status:'ativa',
-      veiculoPlaca:r.placa||null, veiculoModelo:r.modelo||null, veiculoAno:r.anoModelo||null,
+      valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, comissaoValor:r.comissaoValor||0, status:'ativa',
+      veiculoPlaca:r.placa||null, veiculoModelo:[r.fabricante,r.modelo].filter(Boolean).join(' ')||null, veiculoAno:r.anoModelo||null,
+      veiculoChassi:r.chassi||null, codigoFipe:r.codigoFipe||null, combustivel:r.combustivel||null,
+      coberturas:r.coberturas||[], premioTotal:r.premioTotal||null, formaPagamento:r.formaPagamento||null, parcelas:r.parcelas||null,
       origem:'proposta', criadoEm:FV.serverTimestamp() });
     toast('Apólice criada a partir da proposta.','ok'); location.hash='#apolices';
   }catch(e){ console.error(e); toast('Erro ao gerar apólice.','err'); }
 }
 function converterData(br){ if(!br) return null; const m=/(\d{2})\/(\d{2})\/(\d{4})/.exec(br); return m?`${m[3]}-${m[2]}-${m[1]}`:null; }
+
+/* Ver detalhes de uma proposta salva (inclui coberturas + contato) */
+function verProposta(id){
+  const p=CACHE.propostas.find(x=>x.id===id); if(!p) return;
+  const f=(k,v)=>`<div class="mov-f"><div class="k">${k}</div><div class="v">${v||'<span style=color:var(--text-3)>—</span>'}</div></div>`;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-file-invoice" style="color:var(--brand)"></i> ${esc(p.segurado||'Proposta')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 16px;margin-bottom:14px">
+        ${f('Seguradora',esc(p.seguradora)+' · '+esc(p.ramo||''))}${f('CPF/CNPJ',esc(p.cpfCnpj))}${f('Nº Proposta',esc(p.nrProposta))}
+        ${f('Celular',esc(p.celular||p.telefone))}${f('E-mail',esc(p.email))}${f('Pagamento',p.formaPagamento?esc(p.formaPagamento+' · '+p.parcelas+'x'):null)}
+        ${f('Veículo',esc([p.fabricante,p.modelo].filter(Boolean).join(' ')))}${f('Placa',esc(p.placa))}${f('Ano',esc(p.anoModelo))}
+        ${f('Prêmio líquido',money(p.premioLiquido))}${f('Prêmio total',money(p.premioTotal))}
+        ${f('Código FIPE',p.codigoFipe?`${esc(p.codigoFipe)} <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="modalFipe('${esc(p.codigoFipe)}','${esc(p.anoModelo||'')}','${esc(p.combustivel||'')}')"><i class="fas fa-magnifying-glass-dollar"></i></button>`:null)}
+      </div>
+      <div style="background:var(--ok-bg);border-radius:10px;padding:12px 16px;margin-bottom:14px">
+        <b style="color:var(--ok)">Comissão: ${p.comissaoPct!=null?p.comissaoPct+'% · '+money(p.comissaoValor):'—'}</b>
+        <span style="font-size:.78rem;color:var(--text-2)"> (código ${esc(p.comissaoCodigo||'—')}, sobre o líquido)</span></div>
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px">Coberturas (${(p.coberturas||[]).length})</div>
+      <div class="tbl-wrap"><table><thead><tr><th>Cobertura</th><th>Limite / condição</th><th>Prêmio</th></tr></thead><tbody>
+      ${(p.coberturas||[]).map(c=>`<tr><td>${esc(c.nome)}</td><td style="color:var(--text-2)">${esc(c.lmi)}</td><td>${money(c.premio)}</td></tr>`).join('')||`<tr><td colspan="3" style="color:var(--text-3)">Sem coberturas registradas.</td></tr>`}
+      </tbody></table></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="gerarApoliceDaPropostaSalva('${id}')"><i class="fas fa-file-contract"></i> Gerar apólice</button>
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`);
+}
+async function gerarApoliceDaPropostaSalva(id){ const p=CACHE.propostas.find(x=>x.id===id); if(!p) return;
+  PROP_RESULTS.push({...p,__id:'saved_'+id,warnings:p.avisos||[]}); await gerarApoliceDaProposta('saved_'+id); PROP_RESULTS=PROP_RESULTS.filter(x=>x.__id!=='saved_'+id); }
+
+/* ============ CONSULTA FIPE (valor + evolução mensal) — BrasilAPI ============ */
+async function fipeFetch(codigo, ref){
+  const url='https://brasilapi.com.br/api/fipe/preco/v1/'+encodeURIComponent(codigo)+(ref?('?tabela_referencia='+ref):'');
+  const r=await fetch(url); if(!r.ok) throw new Error('FIPE '+r.status); return r.json();
+}
+function fipeEscolher(arr, ano, comb){
+  if(!Array.isArray(arr)||!arr.length) return null;
+  let cand=arr;
+  if(ano) cand=cand.filter(x=>String(x.anoModelo)===String(ano)); if(!cand.length) cand=arr;
+  if(comb){ const c=comb.toLowerCase(); const cc=cand.filter(x=>(x.combustivel||'').toLowerCase().includes(c)||(x.siglaCombustivel||'').toLowerCase()===c[0]); if(cc.length) cand=cc; }
+  return cand[0];
+}
+function fipeNum(v){ return NUMBR(String(v||'').replace(/[R$\s.]/g,'').replace(',','.')); }
+function NUMBR(s){ const n=parseFloat(s); return isNaN(n)?null:n; }
+async function modalFipe(codigo, ano, comb){
+  openModal(`<div class="modal-head"><h3><i class="fas fa-magnifying-glass-dollar" style="color:var(--brand)"></i> Valor FIPE · ${esc(codigo)}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body" id="fipeBody"><div class="empty" style="padding:30px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Consultando a tabela FIPE...</h4><p>Buscando valor atual e histórico.</p></div></div>`);
+  try{
+    const atualArr=await fipeFetch(codigo);
+    const atual=fipeEscolher(atualArr, ano, comb);
+    if(!atual) throw new Error('Veículo não encontrado para este código FIPE.');
+    // histórico: últimas ~10 tabelas de referência
+    let tabelas=[]; try{ const tr=await fetch('https://brasilapi.com.br/api/fipe/tabelas/v1'); tabelas=await tr.json(); }catch(e){}
+    const refs=(tabelas||[]).slice(0,10);
+    const hist=[];
+    for(const t of refs){ try{ const arr=await fipeFetch(codigo,t.codigo); const it=fipeEscolher(arr,ano,comb); if(it) hist.push({mes:t.mes,valor:fipeNum(it.valor),label:it.valor}); }catch(e){} }
+    hist.reverse(); // do mais antigo p/ o mais novo
+    renderFipe(atual, hist);
+  }catch(e){ console.error(e);
+    document.getElementById('fipeBody').innerHTML=`<div class="empty" style="padding:24px"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div>
+      <h4>Não consegui consultar agora</h4><p>${esc(e.message)}<br>A tabela FIPE é consultada ao vivo pela internet; tente de novo em instantes.</p></div>`;
+  }
+}
+function renderFipe(atual, hist){
+  const el=document.getElementById('fipeBody'); if(!el) return;
+  let variacao='';
+  if(hist.length>=2){ const ini=hist[0].valor, fim=hist[hist.length-1].valor; if(ini&&fim){ const d=fim-ini; const pct=(d/ini*100);
+    variacao=`<span style="color:${d>=0?'var(--ok)':'var(--danger)'};font-weight:700"><i class="fas fa-arrow-trend-${d>=0?'up':'down'}"></i> ${d>=0?'+':''}${money(d)} (${d>=0?'+':''}${pct.toFixed(1)}%) no período</span>`; } }
+  el.innerHTML=`
+    <div style="display:flex;gap:14px;align-items:center;background:var(--brand-50);border-radius:12px;padding:16px 18px;margin-bottom:16px">
+      <div style="width:46px;height:46px;border-radius:12px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px"><i class="fas fa-car"></i></div>
+      <div><div style="font-size:.78rem;color:var(--text-2)">${esc(atual.marca||'')} ${esc(atual.modelo||'')} · ${esc(String(atual.anoModelo||''))} · ${esc(atual.combustivel||'')}</div>
+        <div style="font-size:1.5rem;font-weight:800;color:var(--brand-dark)">${esc(atual.valor||'-')}</div>
+        <div style="font-size:.75rem;color:var(--text-3)">Referência: ${esc((atual.mesReferencia||'').trim())}</div></div>
+    </div>
+    ${hist.length>=2?`<div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><b style="font-size:.9rem">Evolução (${hist.length} meses)</b>${variacao}</div>
+      ${sparkline(hist)}
+      <div class="tbl-wrap" style="margin-top:12px;max-height:200px;overflow-y:auto"><table><thead><tr><th>Mês de referência</th><th>Valor</th></tr></thead><tbody>
+      ${hist.slice().reverse().map(h=>`<tr><td>${esc((h.mes||'').trim())}</td><td>${esc(h.label)}</td></tr>`).join('')}
+      </tbody></table></div>`
+    :`<p style="color:var(--text-3);font-size:.85rem">Histórico indisponível no momento — mostrando apenas o valor atual.</p>`}
+    <p style="font-size:.72rem;color:var(--text-3);margin-top:12px"><i class="fas fa-circle-info"></i> Fonte: Tabela FIPE (via BrasilAPI), consultada ao vivo. Ideal para mostrar ao cliente a valorização/desvalorização do veículo.</p>`;
+}
+function sparkline(hist){
+  const vals=hist.map(h=>h.valor).filter(v=>v!=null); if(vals.length<2) return '';
+  const w=460,h=90,pad=6; const min=Math.min(...vals),max=Math.max(...vals),rng=(max-min)||1;
+  const pts=hist.map((d,i)=>{ const x=pad+(i/(hist.length-1))*(w-2*pad); const y=h-pad-((d.valor-min)/rng)*(h-2*pad); return [x,y]; });
+  const path=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area=path+` L ${pts[pts.length-1][0].toFixed(1)} ${h-pad} L ${pts[0][0].toFixed(1)} ${h-pad} Z`;
+  const up=vals[vals.length-1]>=vals[0]; const cor=up?'var(--ok)':'var(--danger)';
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:90px;overflow:visible">
+    <path d="${area}" fill="${cor}" opacity="0.12"/>
+    <path d="${path}" fill="none" stroke="${cor}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${pts.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${cor}"/>`).join('')}
+  </svg>`;
+}
 
 /* ---------- CONFIGURAÇÕES ---------- */
 let CFG_TAB='seguradoras';
