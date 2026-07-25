@@ -332,6 +332,110 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+<!-- pdf.js (leitor de propostas) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+/* ==========================================================================
+   LEITOR DE PROPOSTAS — motor de extração por seguradora
+   Cada seguradora tem um "template". Se o padrão mudar e faltarem campos,
+   o parser devolve avisos (warnings) em vez de dados errados.
+   ========================================================================== */
+(function(root){
+  const NUM = s => { if(s==null) return null; s=String(s).replace(/\./g,'').replace(',', '.').replace(/[^\d.]/g,''); const n=parseFloat(s); return isNaN(n)?null:n; };
+  const clean = s => (s||'').replace(/\s+/g,' ').trim();
+  const COMB = 'Gasolina|Flex|Álcool|Alcool|Diesel|Etanol|Híbrido|Hibrido|Elétrico|Eletrico|Tetrafuel|Gás Natural|GNV';
+  const COBERTURAS_CONHECIDAS = [
+    'Colisão, Incêndio e Roubo/Furto','Despesa extraordinária','RCF-V - Danos Materiais','RCF-V - Danos Corporais',
+    'RCF-V - Danos Morais','APP - Morte (por passageiro)','APP - Invalidez permanente (por passageiro)','APP - DMHO (por passageiro)',
+    'Assistência 24 horas','Km adicional de reboque','Kit Gás','Blindagem','Extensão para Garantia de 0Km',
+    'Carta Verde - Danos Materiais','Carta Verde - Danos Corporais'
+  ];
+
+  /* ---------- Template: TOKIO MARINE AUTO ---------- */
+  function tokioMarineAuto(t){
+    const r={ seguradora:'Tokio Marine', ramo:'Auto', warnings:[] };
+    const pick=(re,g=1)=>{ const m=re.exec(t); return m?clean(m[g]):null; };
+
+    r.nrCotacao   = pick(/Cota[çc][ãa]o:\s*(\d+)/i);
+    r.nrProposta  = pick(/Neg[óo]cio:\s*(\d+)/i);
+
+    // Segurado + CPF (o nome é a sequência em MAIÚSCULAS imediatamente antes do CPF)
+    const mSeg = /([A-ZÀ-Ÿ][A-ZÀ-Ÿ'’.\- ]{3,70}?)\s+(\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/.exec(t);
+    if(mSeg){ r.segurado=clean(mSeg[1]); r.cpfCnpj=mSeg[2]; } else { r.warnings.push('nome do segurado / CPF'); }
+
+    // Veículo: placa + chassi(17) + ano + fabricante + modelo + combustível
+    const mV = new RegExp(`([A-Z]{3}-?\\d[A-Z0-9]\\d{2})\\s+([A-HJ-NPR-Z0-9]{17})\\s+(\\d{4})\\s+([A-ZÀ-Ÿ]+)\\s+(.+?)\\s+(${COMB})\\b`,'i').exec(t);
+    if(mV){ r.placa=mV[1]; r.chassi=mV[2]; r.anoModelo=mV[3]; r.fabricante=clean(mV[4]); r.modelo=clean(mV[5]); r.combustivel=clean(mV[6]); }
+    else { r.warnings.push('dados do veículo (placa/chassi/modelo)'); }
+    r.codigoFipe = pick(/\b(\d{6}-\d)\b/);
+    const mVig = /(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/.exec(t);
+    if(mVig){ r.vigenciaInicio=mVig[1]; r.vigenciaFim=mVig[2]; } else { r.warnings.push('vigência'); }
+    r.tipoSeguro = pick(/(Seguro Novo|Renova[çc][ãa]o Cong[êe]nere|Renova[çc][ãa]o)/i);
+
+    // Prêmios
+    r.premioLiquido = NUM(pick(/Pr[êe]mio L[íi]quido total\s*R\$\s*([\d.]+,\d{2})/i));
+    if(r.premioLiquido==null) r.warnings.push('prêmio líquido total');
+    // linha de pagamento: PL, Juros, IOF, Prêmio Total, forma, parcelas, 1ª parcela
+    const mPag = /R\$\s*([\d.]+,\d{2})\s+R\$\s*([\d.]+,\d{2})\s+R\$\s*([\d.]+,\d{2})\s+R\$\s*([\d.]+,\d{2})\s+([A-Za-zÀ-ÿ]+)\s+(\d+)\s+R\$\s*([\d.]+,\d{2})/.exec(t);
+    if(mPag){ r.juros=NUM(mPag[2]); r.iof=NUM(mPag[3]); r.premioTotal=NUM(mPag[4]); r.formaPagamento=mPag[5]; r.parcelas=parseInt(mPag[6]); r.valorParcela=NUM(mPag[7]); }
+
+    // COMISSÃO — código embutido: TSNC#### => #### / 100 = % sobre o prêmio líquido
+    const mCom = /TSNC(\d{4})/.exec(t);
+    if(mCom){ r.comissaoPct = parseInt(mCom[1])/100; r.comissaoCodigo='TSNC'+mCom[1]; }
+    else { r.warnings.push('comissão (código TSNC)'); }
+    if(r.comissaoPct!=null && r.premioLiquido!=null) r.comissaoValor = Math.round(r.premioLiquido*r.comissaoPct)/100;
+
+    // Corretora
+    const mCor=/(\d{6})\s+(RETORNO[^\n]*?CORRETORA[^\n]*?)(?:\s{2,}|$)/i.exec(t) || /(\d{6})\s+(RETORNO)/i.exec(t);
+    if(mCor){ r.corretoraCodigo=mCor[1]; r.corretora=clean(mCor[2]).slice(0,60); }
+
+    // Coberturas
+    r.coberturas = extrairCoberturas(t);
+
+    return r;
+  }
+
+  function extrairCoberturas(t){
+    const ini=t.indexOf('Descrição'); if(ini<0) return [];
+    const fim=t.indexOf('Prêmio Líquido total', ini);
+    const bloco = fim>ini ? t.slice(ini, fim) : t.slice(ini, ini+1500);
+    const out=[];
+    for(let i=0;i<COBERTURAS_CONHECIDAS.length;i++){
+      const nome=COBERTURAS_CONHECIDAS[i];
+      const p=bloco.indexOf(nome); if(p<0) continue;
+      const prox = COBERTURAS_CONHECIDAS.slice(i+1).map(n=>bloco.indexOf(n,p+nome.length)).filter(x=>x>0).sort((a,b)=>a-b)[0] || bloco.length;
+      const trecho = bloco.slice(p+nome.length, prox);
+      const mPremio = /R\$\s*([\d.]+,\d{2})/g; let last=null,mm; while((mm=mPremio.exec(trecho))) last=mm[1];
+      const lmi = clean(trecho.replace(/R\$\s*[\d.]+,\d{2}\s*$/,'').replace(/\s+$/,'')) || '-';
+      out.push({ nome, lmi: lmi||'-', premio: last? NUM(last):0 });
+    }
+    return out;
+  }
+
+  /* ---------- Detecção de seguradora + roteamento ---------- */
+  const TEMPLATES=[
+    { nome:'Tokio Marine', ramo:'Auto', teste:t=>/Tokio Marine/i.test(t)&&/Auto/i.test(t), parse:tokioMarineAuto },
+  ];
+
+  function parseProposta(texto){
+    const t = texto || '';
+    const tpl = TEMPLATES.find(x=>x.teste(t));
+    if(!tpl){
+      return { reconhecido:false, seguradora:null,
+        warnings:['Formato não reconhecido. O sistema conhece: '+TEMPLATES.map(x=>x.nome+' ('+x.ramo+')').join(', ')+'. Se for uma seguradora nova ou o layout mudou, me avise para eu ensinar o padrão.'],
+        textoBruto:t.slice(0,4000) };
+    }
+    const r = tpl.parse(t);
+    r.reconhecido = true;
+    r.confianca = r.warnings.length===0 ? 'alta' : (r.warnings.length<=2?'média':'baixa');
+    return r;
+  }
+
+  root.parseProposta = parseProposta;
+  root.__PROPOSTA_TEMPLATES = TEMPLATES;
+})(typeof window!=='undefined'?window:globalThis);
+
+</script>
 <script>
 /* ==========================================================================
    CRM RETORNO SEGUROS — app.js (Protótipo Fase 1)
@@ -359,6 +463,7 @@ const MENU = [
   ]},
   { sec:'Carteira de Clientes', items:[
     { id:'clientes', icon:'fa-users', label:'Clientes' },
+    { id:'propostas', icon:'fa-file-invoice', label:'Ler propostas' },
     { id:'apolices', icon:'fa-file-contract', label:'Apólices' },
     { id:'indicacoes', icon:'fa-share-nodes', label:'Indicações' },
     { id:'renovacoes', icon:'fa-rotate', label:'Renovações', badge:'renov' },
@@ -396,6 +501,7 @@ const EXPLAIN = {
   empresas:'Empresas clientes cujos beneficiários você administra — com dados de acesso ao portal da seguradora.',
   movimentacoes:'Inclusões e exclusões de beneficiários enviadas pelas empresas. Organize por empresa, aprove e leve ao portal da seguradora.',
   importar:'Importe listas de beneficiários em massa a partir de planilhas.',
+  propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
   parceiros:'Empresas parceiras que trazem leads e indicações.',
   resgates:'Resgates de recompensas solicitados pelos parceiros.',
   instagram:'Campanhas e captação de seguidores no Instagram.',
@@ -432,7 +538,7 @@ const STATUS_PIPELINE = {
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
 let CACHE={ leads:[], movimentacoes:[], empresas:[], beneficiarios:[],
-  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[] };
+  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[] };
 let LISTENERS=[];
 let _leadsKnown=null; // p/ detectar leads novos e disparar notificação
 
@@ -617,6 +723,7 @@ function bootstrap(){
   listen('admins_crm','admins',['funcionarios','relatorios']);
   listen('seguradoras','seguradoras',['configuracoes']);
   listen('interacoes_crm','interacoes',[]);
+  listen('propostas','propostas',['propostas']);
   atualizarNotificacoes();
 
   router();
@@ -1548,6 +1655,157 @@ async function confirmarImport(){ const empId=document.getElementById('impEmpres
     toast(total+' beneficiário(s) importado(s) para '+(emp?.nomeEmpresa||'a empresa')+'.','ok','Concluído');
   }catch(e){ console.error(e); toast('Erro ao importar. Tente um lote menor.','err'); }
 }
+
+/* ---------- LER PROPOSTAS (PDF → dados) ---------- */
+let PROP_RESULTS=[]; // resultados lidos na sessão (ainda não salvos)
+VIEWS.propostas=function(){
+  let html=head('propostas');
+  const salvas=CACHE.propostas.slice().sort((a,b)=>(toDate(b.criadoEm)||0)-(toDate(a.criadoEm)||0));
+  const templates=(window.__PROPOSTA_TEMPLATES||[]).map(t=>t.nome+' ('+t.ramo+')').join(', ')||'—';
+  html+=`<div class="card" style="margin-bottom:18px"><div class="card-pad">
+    <div id="dropZone" style="border:2px dashed var(--border-2);border-radius:14px;padding:34px 20px;text-align:center;cursor:pointer;transition:.15s"
+      onclick="document.getElementById('propFile').click()">
+      <div style="width:60px;height:60px;border-radius:16px;background:var(--brand-50);color:var(--brand);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 12px"><i class="fas fa-file-arrow-up"></i></div>
+      <h4 style="font-size:1.05rem;margin-bottom:4px">Arraste os PDFs aqui ou clique para selecionar</h4>
+      <p style="color:var(--text-2);font-size:.85rem">Leitura automática · pode subir vários de uma vez</p>
+      <input type="file" id="propFile" accept="application/pdf" multiple style="display:none" onchange="processarPropostas(this.files)">
+    </div>
+    <p style="font-size:.78rem;color:var(--text-3);margin-top:12px"><i class="fas fa-robot"></i> Seguradoras reconhecidas hoje: <b>${esc(templates)}</b>. Para ensinar uma nova, me mande uma proposta dela.</p>
+  </div></div>
+  <div id="propResults"></div>`;
+
+  // propostas salvas
+  html+=`<div class="card" style="margin-top:18px"><div class="card-head"><h3><i class="fas fa-folder-open"></i> Propostas salvas</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Segurado</th><th>Seguradora</th><th>Placa</th><th>Prêmio líquido</th><th>Comissão</th><th>Proposta</th><th>Lida em</th></tr></thead><tbody>
+    ${salvas.length?salvas.map(p=>`<tr>
+      <td><b>${esc(p.segurado||'-')}</b></td><td>${esc(p.seguradora||'-')}${p.ramo?' · '+esc(p.ramo):''}</td><td>${esc(p.placa||'-')}</td>
+      <td>${money(p.premioLiquido)}</td><td><b style="color:var(--ok)">${p.comissaoPct!=null?p.comissaoPct+'% · '+money(p.comissaoValor):'-'}</b></td>
+      <td>${esc(p.nrProposta||'-')}</td><td style="color:var(--text-3)">${fmtData(p.criadoEm)}</td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-file-invoice"></i></div><h4>Nenhuma proposta salva</h4><p>Suba um PDF acima para começar.</p></div></td></tr>`}
+    </tbody></table></div></div>`;
+  document.getElementById('viewRoot').innerHTML=html;
+  // render resultados da sessão (se houver)
+  renderPropResults();
+  // drag & drop
+  const dz=document.getElementById('dropZone');
+  if(dz){ ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.style.borderColor='var(--brand)';dz.style.background='var(--brand-50)';}));
+    ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.style.borderColor='';dz.style.background='';}));
+    dz.addEventListener('drop',e=>{ if(e.dataTransfer.files.length) processarPropostas(e.dataTransfer.files); }); }
+};
+
+async function extrairTextoPDF(file){
+  if(!window.pdfjsLib){ throw new Error('pdf.js não carregou (verifique a conexão).'); }
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf=await file.arrayBuffer();
+  const doc=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+  let out='';
+  for(let i=1;i<=doc.numPages;i++){ const pg=await doc.getPage(i); const c=await pg.getTextContent(); out+=c.items.map(it=>it.str).join(' ')+'\n'; }
+  return out;
+}
+async function processarPropostas(files){
+  const arr=[...files].filter(f=>/pdf$/i.test(f.name)||f.type==='application/pdf');
+  if(!arr.length){ toast('Selecione arquivos PDF.','err'); return; }
+  toast('Lendo '+arr.length+' proposta(s)...','info','Aguarde');
+  for(const f of arr){
+    try{
+      const texto=await extrairTextoPDF(f);
+      const r=parseProposta(texto);
+      r.arquivo=f.name; r.__texto=texto; r.__id='p'+(PROP_RESULTS.length+1)+'_'+Date.now();
+      PROP_RESULTS.unshift(r);
+    }catch(e){ console.error(e); PROP_RESULTS.unshift({arquivo:f.name,reconhecido:false,warnings:['Erro ao ler o PDF: '+e.message]}); }
+  }
+  if((location.hash||'').slice(1)==='propostas') renderPropResults();
+}
+function renderPropResults(){
+  const el=document.getElementById('propResults'); if(!el) return;
+  if(!PROP_RESULTS.length){ el.innerHTML=''; return; }
+  el.innerHTML=`<div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+      <b style="font-size:.95rem">Propostas lidas nesta sessão (${PROP_RESULTS.length})</b>
+      <button class="btn btn-ghost btn-sm" onclick="PROP_RESULTS=[];renderPropResults()"><i class="fas fa-xmark"></i> Limpar</button></div>`
+    + PROP_RESULTS.map(cardProposta).join('');
+}
+function cardProposta(r){
+  const confCor={alta:'var(--ok)','média':'var(--warn)',baixa:'var(--danger)'}[r.confianca]||'var(--text-3)';
+  if(!r.reconhecido){
+    return `<div class="card" style="margin-bottom:14px;border-left:4px solid var(--danger)"><div class="card-pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <b><i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i> ${esc(r.arquivo||'Proposta')}</b>
+        <span class="badge" style="background:var(--danger-bg);color:var(--danger)">Não reconhecida</span></div>
+      <div style="background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:12px 14px;margin-top:12px;font-size:.85rem">
+        ${(r.warnings||[]).map(w=>'⚠️ '+esc(w)).join('<br>')}</div></div></div>`;
+  }
+  const f=(lbl,val)=>`<div class="mov-f"><div class="k">${lbl}</div><div class="v">${val||'<span style=color:var(--text-3)>—</span>'}</div></div>`;
+  return `<div class="card" style="margin-bottom:14px;border-left:4px solid ${confCor}"><div class="card-pad">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <div><b style="font-size:1.05rem">${esc(r.segurado||'Segurado não identificado')}</b>
+        <div style="font-size:.82rem;color:var(--text-2)">${esc(r.arquivo||'')}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="badge" style="background:var(--brand-50);color:var(--brand-dark)"><i class="fas fa-shield"></i> ${esc(r.seguradora)} · ${esc(r.ramo)}</span>
+        <span class="badge" style="background:${confCor}22;color:${confCor}">Confiança ${r.confianca}</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 18px;margin-bottom:14px">
+      ${f('CPF/CNPJ',esc(r.cpfCnpj))}
+      ${f('Nº Proposta',esc(r.nrProposta))}
+      ${f('Nº Cotação',esc(r.nrCotacao))}
+      ${f('Veículo',esc([r.fabricante,r.modelo].filter(Boolean).join(' ')))}
+      ${f('Placa',esc(r.placa))}
+      ${f('Ano',esc(r.anoModelo))}
+      ${f('Chassi',esc(r.chassi))}
+      ${f('FIPE',esc(r.codigoFipe))}
+      ${f('Vigência',r.vigenciaInicio?esc(r.vigenciaInicio+' a '+r.vigenciaFim):null)}
+      ${f('Prêmio líquido',r.premioLiquido!=null?money(r.premioLiquido):null)}
+      ${f('Prêmio total',r.premioTotal!=null?money(r.premioTotal):null)}
+      ${f('Pagamento',r.formaPagamento?esc(r.formaPagamento+' · '+r.parcelas+'x '+money(r.valorParcela)):null)}
+    </div>
+
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;background:var(--ok-bg);border-radius:12px;padding:14px 18px;margin-bottom:14px">
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--ok);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px"><i class="fas fa-hand-holding-dollar"></i></div>
+      <div><div style="font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;color:var(--ok);font-weight:700">Comissão (código ${esc(r.comissaoCodigo||'—')})</div>
+        <div style="font-size:1.3rem;font-weight:800;color:var(--ok)">${r.comissaoPct!=null?r.comissaoPct+'% · '+money(r.comissaoValor):'não identificada'}</div>
+        <div style="font-size:.75rem;color:var(--text-2)">sobre o prêmio líquido de ${money(r.premioLiquido)}</div></div>
+    </div>
+
+    ${r.warnings&&r.warnings.length?`<div style="background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:.83rem">
+      <b>⚠️ Não consegui ler:</b> ${r.warnings.map(esc).join(', ')}.<br>Provavelmente o layout mudou — confira no PDF e me avise para eu atualizar o padrão.</div>`:''}
+
+    <details style="margin-bottom:14px"><summary style="cursor:pointer;font-weight:600;font-size:.85rem;color:var(--brand-dark)">Ver ${(r.coberturas||[]).length} coberturas</summary>
+      <div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>Cobertura</th><th>Limite / condição</th><th>Prêmio</th></tr></thead><tbody>
+      ${(r.coberturas||[]).map(c=>`<tr><td>${esc(c.nome)}</td><td style="color:var(--text-2)">${esc(c.lmi)}</td><td>${money(c.premio)}</td></tr>`).join('')}
+      </tbody></table></div></details>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" onclick="salvarProposta('${r.__id}')"><i class="fas fa-floppy-disk"></i> Salvar no CRM</button>
+      <button class="btn btn-ghost btn-sm" onclick="gerarApoliceDaProposta('${r.__id}')"><i class="fas fa-file-contract"></i> Gerar apólice</button>
+      <button class="btn btn-ghost btn-sm" onclick="descartarProposta('${r.__id}')"><i class="fas fa-xmark"></i> Descartar</button>
+    </div>
+  </div></div>`;
+}
+function descartarProposta(id){ PROP_RESULTS=PROP_RESULTS.filter(r=>r.__id!==id); renderPropResults(); }
+function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||null, segurado:r.segurado||null, cpfCnpj:r.cpfCnpj||null,
+  nrProposta:r.nrProposta||null, nrCotacao:r.nrCotacao||null, placa:r.placa||null, chassi:r.chassi||null, anoModelo:r.anoModelo||null,
+  fabricante:r.fabricante||null, modelo:r.modelo||null, combustivel:r.combustivel||null, codigoFipe:r.codigoFipe||null,
+  vigenciaInicio:r.vigenciaInicio||null, vigenciaFim:r.vigenciaFim||null, tipoSeguro:r.tipoSeguro||null,
+  premioLiquido:r.premioLiquido??null, premioTotal:r.premioTotal??null, iof:r.iof??null, formaPagamento:r.formaPagamento||null,
+  parcelas:r.parcelas??null, valorParcela:r.valorParcela??null, comissaoPct:r.comissaoPct??null, comissaoValor:r.comissaoValor??null,
+  comissaoCodigo:r.comissaoCodigo||null, corretora:r.corretora||null, corretoraCodigo:r.corretoraCodigo||null,
+  coberturas:r.coberturas||[], arquivo:r.arquivo||null, confianca:r.confianca||null, avisos:r.warnings||[] }; }
+async function salvarProposta(id){
+  const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
+  try{ await db.collection('propostas').add({...dadosProposta(r),criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
+    descartarProposta(id); toast('Proposta salva no CRM.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+async function gerarApoliceDaProposta(id){
+  const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
+  try{ await db.collection('apolices_cliente').add({ clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
+      ramo:r.ramo||'Auto', seguradora:r.seguradora||null, numeroApolice:r.nrProposta||null,
+      dataInicioVigencia:converterData(r.vigenciaInicio), dataFimVigencia:converterData(r.vigenciaFim),
+      valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, status:'ativa',
+      veiculoPlaca:r.placa||null, veiculoModelo:r.modelo||null, veiculoAno:r.anoModelo||null,
+      origem:'proposta', criadoEm:FV.serverTimestamp() });
+    toast('Apólice criada a partir da proposta.','ok'); location.hash='#apolices';
+  }catch(e){ console.error(e); toast('Erro ao gerar apólice.','err'); }
+}
+function converterData(br){ if(!br) return null; const m=/(\d{2})\/(\d{2})\/(\d{4})/.exec(br); return m?`${m[3]}-${m[2]}-${m[1]}`:null; }
 
 /* ---------- CONFIGURAÇÕES ---------- */
 let CFG_TAB='seguradoras';
