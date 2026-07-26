@@ -486,6 +486,7 @@ const MENU = [
     { id:'clientes', icon:'fa-users', label:'Clientes' },
     { id:'propostas', icon:'fa-file-invoice', label:'Ler propostas' },
     { id:'apolices', icon:'fa-file-contract', label:'Apólices' },
+    { id:'fipe', icon:'fa-car-side', label:'FIPE da carteira' },
     { id:'indicacoes', icon:'fa-share-nodes', label:'Indicações' },
     { id:'renovacoes', icon:'fa-rotate', label:'Renovações', badge:'renov' },
   ]},
@@ -525,6 +526,7 @@ const EXPLAIN = {
   importar:'Importe listas de beneficiários em massa a partir de planilhas.',
   propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
   comissoes:'Quanto você ganhou de comissão, somado automaticamente a partir das propostas lidas — por mês e por seguradora.',
+  fipe:'O valor FIPE de todos os veículos segurados, num lugar só. Atualiza automaticamente todo mês (ou num clique) — ótimo para acompanhar valorização/desvalorização e falar com o cliente na renovação.',
   parceiros:'Empresas parceiras que trazem leads e indicações.',
   resgates:'Resgates de recompensas solicitados pelos parceiros.',
   instagram:'Campanhas e captação de seguidores no Instagram.',
@@ -562,7 +564,7 @@ const STATUS_PIPELINE = {
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
 let CACHE={ leads:[], movimentacoes:[], empresas:[], beneficiarios:[],
-  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[] };
+  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[], fipeHist:[] };
 let LISTENERS=[];
 let _leadsKnown=null; // p/ detectar leads novos e disparar notificação
 
@@ -743,7 +745,7 @@ function bootstrap(){
   // Coleções da Fase 3 (tempo real)
   const listen=(coll,key,routes)=>LISTENERS.push(db.collection(coll).onSnapshot(s=>{
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
-    if(key==='apolices') setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length);
+    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
     if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
@@ -758,6 +760,7 @@ function bootstrap(){
   listen('seguradoras','seguradoras',['configuracoes']);
   listen('interacoes_crm','interacoes',[]);
   listen('propostas','propostas',['propostas']);
+  listen('fipe_historico','fipeHist',['fipe']);
   atualizarNotificacoes();
 
   router();
@@ -2081,6 +2084,9 @@ function fipeAcharMarca(marcas,nome){ const q=fipeNorm(nome); if(!q) return null
 function fipeScore(alvo,nome){ const nt=fipeTokens(nome); let sc=0; alvo.forEach(t=>{ if(nt.includes(t)) sc+=2; else if(nt.some(x=>x.startsWith(t)||t.startsWith(x))) sc+=1; }); return sc; }
 
 const BRASIL_FIPE='https://brasilapi.com.br/api/fipe';
+const MESES_PT={janeiro:1,fevereiro:2,'março':3,marco:3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+function mesRefKey(s){ s=(s||'').toString().toLowerCase().trim(); const m=s.match(/([a-zç]+)\D+(\d{4})/) || s.match(/(\d{4})[-\/](\d{1,2})/); if(!m) return 0;
+  if(/^\d/.test(m[1])) return (+m[1])*100+(+m[2]); return (+m[2])*100+(MESES_PT[m[1]]||0); }
 async function modalFipe(ctx){ ctx=ctx||{};
   openModal(`<div class="modal-head"><h3><i class="fas fa-magnifying-glass-dollar" style="color:var(--brand)"></i> Valor FIPE${ctx.codigo?' · '+esc(ctx.codigo):''}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body" id="fipeBody"><div class="empty" style="padding:30px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Consultando a tabela FIPE...</h4><p>Buscando valor atual e histórico dos últimos meses.</p></div></div>`);
@@ -2098,7 +2104,7 @@ async function fipeViaCodigo(ctx){
   let hist=[]; try{ const tabs=await fipeGet(BRASIL_FIPE+'/tabelas/v1'); const refs=(tabs||[]).slice(0,12);
     for(const t of refs){ try{ const a=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod)+'?tabela_referencia='+t.codigo); const it=fipePorAnoComb(a,ctx.ano,ctx.comb);
       if(it) hist.push({mes:(it.mesReferencia||t.mes||'').trim(),valor:fipeNum(it.valor),label:it.valor}); }catch(e){} } }catch(e){}
-  hist=hist.filter(h=>h.valor).reverse();
+  hist=hist.filter(h=>h.valor).sort((a,b)=>mesRefKey(a.mes)-mesRefKey(b.mes));
   await fipeSalvarSnap(cod,(cur.marca||'')+' '+(cur.modelo||''),cur.valor,cur.anoModelo,(cur.mesReferencia||'').trim());
   renderFipe({Marca:cur.marca,Modelo:cur.modelo,AnoModelo:cur.anoModelo,Combustivel:cur.combustivel,Valor:cur.valor,MesReferencia:cur.mesReferencia,CodigoFipe:cur.codigoFipe||cod}, hist, hist.length?'brasil':'nova');
 }
@@ -2131,7 +2137,7 @@ async function fipeBuscarValor(marca,modelo,ctx){
 async function fipeFinalizarParallelum(d,ctx){
   const codigo=(d.CodigoFipe||ctx.codigo||'').trim(); const mesRef=(d.MesReferencia||'').trim();
   await fipeSalvarSnap(codigo,(d.Marca||'')+' '+(d.Modelo||''),d.Valor,d.AnoModelo,mesRef);
-  let hist=[]; try{ if(codigo){ const hs=await db.collection('fipe_historico').where('codigoFipe','==',codigo).get(); hist=hs.docs.map(x=>x.data()).filter(h=>h.valorNum).map(h=>({mes:h.mesReferencia,valor:h.valorNum,label:h.valor})).sort((a,b)=>(a.mes||'').localeCompare(b.mes||'')); } }catch(e){}
+  let hist=[]; try{ if(codigo){ const hs=await db.collection('fipe_historico').where('codigoFipe','==',codigo).get(); hist=hs.docs.map(x=>x.data()).filter(h=>h.valorNum).map(h=>({mes:h.mesReferencia,valor:h.valorNum,label:h.valor})).sort((a,b)=>mesRefKey(a.mes)-mesRefKey(b.mes)); } }catch(e){}
   renderFipe({...d,CodigoFipe:codigo}, hist, 'parallelum');
 }
 async function fipeSalvarSnap(codigo,marcaModelo,valor,ano,mesRef){ try{ const docId=((codigo||marcaModelo)+'_'+mesRef).replace(/[^\w]+/g,'_');
@@ -2142,6 +2148,87 @@ function fipeEscolherModelo(ranked,ctx){ const el=document.getElementById('fipeB
 function fipePick(i){ const s=window.__fipePick; if(!s) return;
   document.getElementById('fipeBody').innerHTML='<div class="empty" style="padding:24px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Buscando valor...</h4></div>';
   fipeBuscarValor(s.marca,s.top[i].m,s.ctx).then(d=>fipeFinalizarParallelum(d,s.ctx)).catch(fipeErro); }
+/* Obtém só o VALOR ATUAL (sem renderizar) — usado no lote e na automação */
+async function fipeObterAtual(ctx){
+  if(ctx.codigo){ try{ const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(ctx.codigo)); const it=fipePorAnoComb(arr,ctx.ano,ctx.comb);
+    if(it&&it.valor) return {codigo:ctx.codigo, valor:it.valor, valorNum:fipeNum(it.valor), marcaModelo:((it.marca||'')+' '+(it.modelo||'')).trim(), ano:it.anoModelo, mes:(it.mesReferencia||'').trim()}; }catch(e){} }
+  if(ctx.marca&&ctx.modelo){ try{ const marcas=await fipeGet(FIPE_BASE+'/marcas'); const marca=fipeAcharMarca(marcas,ctx.marca);
+    if(marca){ const mr=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos'); const modelos=mr.modelos||[]; const alvo=fipeTokens(ctx.modelo);
+      const ranked=modelos.map(m=>({m,sc:fipeScore(alvo,m.nome)})).sort((a,b)=>b.sc-a.sc).filter(x=>x.sc>0).slice(0,6);
+      for(const c of ranked){ try{ const d=await fipeBuscarValor(marca,c.m,ctx);
+        if(!ctx.codigo || (d.CodigoFipe||'').replace(/\D/g,'')===String(ctx.codigo).replace(/\D/g,'')) return {codigo:d.CodigoFipe||ctx.codigo||'', valor:d.Valor, valorNum:fipeNum(d.Valor), marcaModelo:((d.Marca||'')+' '+(d.Modelo||'')).trim(), ano:d.AnoModelo, mes:(d.MesReferencia||'').trim()}; }catch(e){} }
+      if(ranked.length){ const d=await fipeBuscarValor(marca,ranked[0].m,ctx); return {codigo:d.CodigoFipe||'', valor:d.Valor, valorNum:fipeNum(d.Valor), marcaModelo:((d.Marca||'')+' '+(d.Modelo||'')).trim(), ano:d.AnoModelo, mes:(d.MesReferencia||'').trim()}; }
+    } }catch(e){} }
+  return null;
+}
+function apoliceCtxFipe(a){ return {codigo:a.codigoFipe, marca:a.veiculoFabricante||((a.veiculoModelo||'').split(' ')[0]), modelo:a.veiculoModelo, ano:a.veiculoAno, comb:a.combustivel}; }
+let FIPE_BATCH_RUNNING=false;
+async function atualizarFipeTodas(silencioso){
+  if(FIPE_BATCH_RUNNING) return;
+  const aps=CACHE.apolices.filter(a=>a.status!=='cancelada' && (a.codigoFipe||a.veiculoModelo));
+  if(!aps.length){ if(!silencioso) toast('Nenhuma apólice com veículo para atualizar.','info'); return; }
+  FIPE_BATCH_RUNNING=true;
+  if(!silencioso) toast('Atualizando a FIPE de '+aps.length+' veículo(s) ao vivo. Pode levar um minuto...','info','FIPE');
+  let ok=0;
+  for(let i=0;i<aps.length;i++){ const a=aps[i];
+    try{ const v=await fipeObterAtual(apoliceCtxFipe(a));
+      if(v&&v.valorNum){ await fipeSalvarSnap(v.codigo||a.codigoFipe||'', v.marcaModelo||a.veiculoModelo||'', v.valor, v.ano||a.veiculoAno, v.mes);
+        await db.collection('apolices_cliente').doc(a.id).update({ fipeAtual:v.valor, fipeAtualNum:v.valorNum, fipeMes:v.mes||null, fipeAtualizadoEm:FV.serverTimestamp() }); ok++; }
+    }catch(e){ console.warn('fipe lote',a.id,e); }
+    const prog=document.getElementById('fipeBatchProg'); if(prog) prog.style.width=Math.round((i+1)/aps.length*100)+'%';
+    const cnt=document.getElementById('fipeBatchCnt'); if(cnt) cnt.textContent=(i+1)+' / '+aps.length;
+  }
+  try{ await db.collection('configuracoes').doc('fipe_auto').set({ ultimoMes:new Date().toISOString().slice(0,7), atualizadoEm:FV.serverTimestamp(), total:ok },{merge:true}); }catch(e){}
+  FIPE_BATCH_RUNNING=false;
+  if(!silencioso) toast('FIPE atualizada em '+ok+' de '+aps.length+' veículo(s).','ok','Concluído');
+  if(((location.hash||'').slice(1))==='fipe') VIEWS.fipe();
+}
+/* Automático: roda sozinho quando você abre o CRM num mês ainda não capturado */
+let _fipeAutoChecked=false;
+async function checarFipeAuto(){
+  if(_fipeAutoChecked || !CACHE.apolices.length) return; _fipeAutoChecked=true;
+  try{ const doc=await db.collection('configuracoes').doc('fipe_auto').get();
+    const mes=doc.exists?(doc.data().ultimoMes||null):null; const atual=new Date().toISOString().slice(0,7);
+    if(mes!==atual){ atualizarFipeTodas(true); } }catch(e){ console.warn('fipe auto',e); }
+}
+
+/* ---------- FIPE DA CARTEIRA ---------- */
+VIEWS.fipe=function(){
+  const aps=CACHE.apolices.filter(a=>a.status!=='cancelada' && (a.codigoFipe||a.veiculoModelo));
+  const actions=`<button class="btn btn-primary btn-sm" onclick="atualizarFipeTodas()"${FIPE_BATCH_RUNNING?' disabled':''}><i class="fas fa-rotate"></i> Atualizar todas agora</button>`;
+  let html=head('fipe',{actions});
+  // barra de progresso do lote
+  html+=`<div id="fipeBatchBar" style="${FIPE_BATCH_RUNNING?'':'display:none'}margin-bottom:14px"><div style="font-size:.82rem;color:var(--text-2);margin-bottom:4px">Atualizando... <span id="fipeBatchCnt"></span></div><div style="height:6px;background:var(--surface-3);border-radius:6px;overflow:hidden"><div id="fipeBatchProg" style="height:100%;width:0;background:var(--brand);transition:.3s"></div></div></div>`;
+  const histPorCodigo={}; CACHE.fipeHist.forEach(h=>{ if(!h.codigoFipe) return; (histPorCodigo[h.codigoFipe]=histPorCodigo[h.codigoFipe]||[]).push(h); });
+  const linhas=aps.map(a=>{ const hs=(histPorCodigo[a.codigoFipe]||[]).slice().sort((x,y)=>mesRefKey(x.mesReferencia)-mesRefKey(y.mesReferencia));
+    const atualNum=a.fipeAtualNum ?? (hs.length?hs[hs.length-1].valorNum:null);
+    const atualStr=a.fipeAtual || (hs.length?hs[hs.length-1].valor:null);
+    const prev=hs.length>=2?hs[hs.length-2].valorNum:null;
+    const dif=(atualNum!=null&&prev!=null)?atualNum-prev:null;
+    return {a,atualStr,atualNum,dif,mes:a.fipeMes||(hs.length?hs[hs.length-1].mesReferencia:null)}; });
+  const comValor=linhas.filter(l=>l.atualNum!=null).length;
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-car-side"></i></div><div class="val">${aps.length}</div><div class="lbl">Veículos na carteira</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${comValor}</div><div class="lbl">Com valor FIPE lido</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-clock-rotate-left"></i></div><div class="val" style="font-size:1rem">${fipeAutoLabel()}</div><div class="lbl">Última atualização geral</div></div>
+  </div>`;
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-car-side"></i> Valor FIPE por veículo</h3>
+      <span style="font-size:.78rem;color:var(--text-3)">atualiza sozinho todo mês ao abrir o CRM</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Veículo</th><th>Placa</th><th>Valor FIPE</th><th>Variação (mês)</th><th>Referência</th><th></th></tr></thead><tbody>
+    ${linhas.length?linhas.map(l=>`<tr>
+      <td><b>${esc(l.a.clienteNome||'-')}</b></td>
+      <td>${esc([l.a.veiculoFabricante,l.a.veiculoModelo].filter(Boolean).join(' ')||l.a.veiculoModelo||'-')}${l.a.veiculoAno?' · '+esc(l.a.veiculoAno):''}</td>
+      <td>${esc(l.a.veiculoPlaca||'-')}</td>
+      <td><b>${esc(l.atualStr)||'<span style=color:var(--text-3)>—</span>'}</b></td>
+      <td>${l.dif!=null?`<span style="color:${l.dif>=0?'var(--ok)':'var(--danger)'};font-weight:600"><i class="fas fa-arrow-trend-${l.dif>=0?'up':'down'}"></i> ${l.dif>=0?'+':''}${money(l.dif)}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+      <td style="color:var(--text-3)">${esc((l.mes||'').trim())||'-'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick='modalFipe(${JSON.stringify(apoliceCtxFipe(l.a))})'><i class="fas fa-chart-line"></i> histórico</button></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-car-side"></i></div><h4>Nenhum veículo com FIPE</h4><p>Gere apólices a partir das propostas (o código FIPE vem junto) ou informe o código na apólice.</p></div></td></tr>`}
+    </tbody></table></div></div>
+    <p style="font-size:.76rem;color:var(--text-3);margin-top:12px"><i class="fas fa-robot"></i> Atualização automática: toda vez que você abre o CRM num mês novo, ele busca sozinho o valor FIPE de todos os veículos. Quer forçar agora? Use "Atualizar todas agora".</p>`;
+  document.getElementById('viewRoot').innerHTML=html;
+};
+function fipeAutoLabel(){ const c=CACHE.apolices.find(a=>a.fipeMes); return c?esc(c.fipeMes):'—'; }
+
 function fipeErro(e){ const el=document.getElementById('fipeBody'); if(!el) return; console.error(e);
   el.innerHTML=`<div class="empty" style="padding:24px"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div>
     <h4>Não consegui consultar agora</h4><p>${esc(e.message||'Erro')}<br>A FIPE é consultada ao vivo pela internet; tente de novo em instantes.</p></div>`; }
