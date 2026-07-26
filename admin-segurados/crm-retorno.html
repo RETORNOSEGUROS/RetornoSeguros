@@ -218,6 +218,7 @@ tbody tr:last-child td{border-bottom:none}
 .modal-bg{position:fixed;inset:0;background:rgba(8,18,28,.55);backdrop-filter:blur(3px);z-index:1500;
   display:none;align-items:center;justify-content:center;padding:20px}
 .modal-bg.open{display:flex}
+.modal.wide{max-width:820px}
 .modal{background:var(--surface);border-radius:var(--radius);width:100%;max-width:520px;max-height:90vh;
   overflow-y:auto;box-shadow:var(--shadow-lg);animation:pop .18s}
 @keyframes pop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
@@ -250,6 +251,18 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
 .toast b{font-size:.88rem}.toast span{font-size:.8rem;color:var(--text-2);display:block}
 @keyframes slidein{from{transform:translateX(120%)}to{transform:translateX(0)}}
 
+/* KANBAN */
+.kanban{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(230px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px}
+.kb-col{background:var(--surface-2);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;min-height:120px}
+.kb-head{display:flex;justify-content:space-between;align-items:center;padding:11px 13px;font-weight:700;font-size:.82rem;border-bottom:1px solid var(--border)}
+.kb-cnt{background:var(--surface-3);border-radius:20px;padding:1px 9px;font-size:.72rem;color:var(--text-2)}
+.kb-body{padding:9px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:64vh}
+.kb-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 11px;cursor:pointer;box-shadow:var(--shadow-sm);transition:.12s}
+.kb-card:hover{border-color:var(--brand);box-shadow:var(--shadow);transform:translateY(-1px)}
+.kb-resp{width:24px;height:24px;border-radius:50%;background:var(--brand);color:#fff;font-size:.62rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.kb-resp.vazio{background:var(--surface-3);color:var(--text-3)}
+.kb-mv{width:24px;height:24px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text-2);font-size:.7rem}
+.kb-mv:hover{background:var(--brand);color:#fff;border-color:var(--brand)}
 .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
 .filters input,.filters select{padding:9px 12px;border:1px solid var(--border-2);border-radius:var(--radius-xs);
   background:var(--surface);color:var(--text);font-size:.85rem}
@@ -560,6 +573,19 @@ const STATUS_PIPELINE = {
   negocio_perdido:{label:'Perdido',cor:'#dc2626'},
   cliente:{label:'Cliente',cor:'#0891b2'},
 };
+/* Origem do lead */
+const ORIGENS={ site:'Site', site_indicado:'Site (indicado)', indicacao_cliente:'Indicação de cliente', renovacao:'Renovação', manual:'Manual', proposta:'Proposta', apolice:'Apólice' };
+/* Fases do funil (kanban) */
+const KANBAN=[
+  {key:'pre_cadastro',label:'Lead novo',cor:'#64748b',icon:'fa-bolt'},
+  {key:'contato_realizado',label:'Primeiro contato',cor:'#2563eb',icon:'fa-phone'},
+  {key:'cotacao_enviada',label:'Cotação enviada',cor:'#7c3aed',icon:'fa-paper-plane'},
+  {key:'negocio_fechado',label:'Fechada',cor:'#16a34a',icon:'fa-trophy'},
+  {key:'negocio_perdido',label:'Perdida',cor:'#dc2626',icon:'fa-xmark'},
+];
+function faseDoLead(l){ const s=l.status||'pre_cadastro'; if(KANBAN.some(k=>k.key===s)) return s;
+  if(s==='pendente_documentos') return 'contato_realizado'; if(s==='recusada_seguradora') return 'cotacao_enviada'; return 'pre_cadastro'; }
+const MOTIVOS_PERDA={preco:'Preço/valor',concorrencia:'Fechou com concorrente',sem_resposta:'Sumiu / sem resposta',desistiu:'Desistiu do seguro',ja_tinha:'Já tinha seguro',outro:'Outro'};
 
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
@@ -848,49 +874,62 @@ VIEWS.dashboard=function(){
   document.getElementById('viewRoot').innerHTML=html;
 };
 
-/* ---------- LEADS ---------- */
-let LEADS_FILTER={busca:'',status:''};
+/* ---------- LEADS (lista + kanban) ---------- */
+let LEADS_FILTER={busca:''};
+let LEADS_VIEW='kanban';
+function leadsAbertos(){ let l=CACHE.leads.filter(x=>!isClienteLead(x));
+  if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''}`.toLowerCase().includes(q)); }
+  return l; }
 VIEWS.leads=function(){
-  const actions=`<a href="#leads" class="btn btn-primary btn-sm" onclick="toast('Novo lead: disponível ao migrar a tela completa.','info','Em breve')"><i class="fas fa-plus"></i> Novo lead</a>`;
+  const actions=`<div class="tabs" style="margin-right:6px"><button class="tab ${LEADS_VIEW==='kanban'?'active':''}" onclick="LEADS_VIEW='kanban';VIEWS.leads()"><i class="fas fa-columns"></i> Kanban</button><button class="tab ${LEADS_VIEW==='lista'?'active':''}" onclick="LEADS_VIEW='lista';VIEWS.leads()"><i class="fas fa-list"></i> Lista</button></div>
+    <button class="btn btn-primary btn-sm" onclick="novoLead()"><i class="fas fa-plus"></i> Novo lead</button>`;
   let html=head('leads',{actions});
-
-  let list=CACHE.leads.filter(l=>!isClienteLead(l)); // clientes ficam na aba Clientes
-  if(LEADS_FILTER.status) list=list.filter(l=>(l.status||'pre_cadastro')===LEADS_FILTER.status);
-  if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase();
-    list=list.filter(l=>`${l.nome||''} ${l.nomeEmpresa||''} ${l.email||''} ${l.whatsapp||''} ${l.telefone||''}`.toLowerCase().includes(q)); }
-
   const prospects=CACHE.leads.filter(l=>!isClienteLead(l));
-  const novos=prospects.filter(isLeadNovo).length;
-  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-    <div class="kpi"><div class="ico i-brand"><i class="fas fa-bolt"></i></div><div class="val">${novos}</div><div class="lbl">Novos p/ contato</div></div>
-    <div class="kpi"><div class="ico i-info"><i class="fas fa-users"></i></div><div class="val">${prospects.length}</div><div class="lbl">Leads em aberto</div></div>
-    <div class="kpi"><div class="ico i-ok"><i class="fas fa-user-check"></i></div><div class="val">${CACHE.leads.filter(isClienteLead).length}</div><div class="lbl">Já são clientes</div></div>
-  </div>`;
-
-  html+=`<div class="card"><div class="card-head">
-      <h3><i class="fas fa-list"></i> Todos os leads</h3>
-      <div class="filters" style="margin:0">
-        <input type="text" placeholder="Buscar nome, telefone..." value="${esc(LEADS_FILTER.busca)}" oninput="LEADS_FILTER.busca=this.value;VIEWS.leads()">
-        <select onchange="LEADS_FILTER.status=this.value;VIEWS.leads()">
-          <option value="">Todos os status</option>
-          ${Object.entries(STATUS_PIPELINE).map(([k,v])=>`<option value="${k}" ${LEADS_FILTER.status===k?'selected':''}>${v.label}</option>`).join('')}
-        </select>
-      </div></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Contato</th><th>Ramo</th><th>Status</th><th>Entrada</th><th></th></tr></thead><tbody>
-    ${list.length?list.map(l=>{
-      const st=STATUS_PIPELINE[l.status]||STATUS_PIPELINE.pre_cadastro;
-      return `<tr>
-        <td><b>${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${l.nomeEmpresa&&l.nome?`<br><small style="color:var(--text-3)">${esc(l.nome)}</small>`:''}</td>
-        <td>${esc(l.whatsapp||l.telefone||l.email||'-')}</td>
-        <td>${esc(l.ramo||l.tipoSeguro||'-')}</td>
-        <td><span class="badge" style="background:${st.cor}22;color:${st.cor}"><span class="dot-b" style="background:${st.cor}"></span>${st.label}</span></td>
-        <td style="color:var(--text-3)">${fmtData(l.criadoEm)}</td>
-        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.')}<button class="btn btn-ghost btn-sm" onclick="fichaCliente('${l.id}')"><i class="fas fa-eye"></i></button></td>
-      </tr>`;
-    }).join(''):`<tr><td colspan="6"><div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum lead encontrado</h4><p>Ajuste os filtros ou aguarde novos cadastros do site.</p></div></td></tr>`}
-    </tbody></table></div></div>`;
+  html+=`<div class="filters"><input type="text" placeholder="Buscar nome, telefone, e-mail..." value="${esc(LEADS_FILTER.busca)}" oninput="LEADS_FILTER.busca=this.value;VIEWS.leads()" style="min-width:280px"></div>`;
+  html+= LEADS_VIEW==='kanban' ? renderKanban() : renderLeadsLista();
   document.getElementById('viewRoot').innerHTML=html;
 };
+function renderKanban(){
+  const leads=leadsAbertos();
+  return `<div class="kanban">${KANBAN.map(col=>{
+    const items=leads.filter(l=>faseDoLead(l)===col.key);
+    return `<div class="kb-col">
+      <div class="kb-head" style="border-top:3px solid ${col.cor}"><span><i class="fas ${col.icon}" style="color:${col.cor}"></i> ${col.label}</span><span class="kb-cnt">${items.length}</span></div>
+      <div class="kb-body">
+        ${items.map(l=>kanbanCard(l,col)).join('')||`<div style="text-align:center;color:var(--text-3);font-size:.78rem;padding:16px 0">—</div>`}
+      </div></div>`;
+  }).join('')}</div>`;
+}
+function kanbanCard(l,col){
+  const idx=KANBAN.findIndex(k=>k.key===col.key);
+  const orig=ORIGENS[l.origem]||l.origem;
+  const resp=l.responsavelNome?`<span class="kb-resp" title="Responsável">${esc(initials(l.responsavelNome))}</span>`:`<span class="kb-resp vazio" title="Sem responsável">?</span>`;
+  return `<div class="kb-card" onclick="abrirLead('${l.id}')">
+    <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
+      <b style="font-size:.86rem">${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${resp}</div>
+    <div style="font-size:.76rem;color:var(--text-2);margin:3px 0">${esc(l.ramo||l.tipoSeguro||'—')}${l.valorFipe?' · '+esc(l.valorFipe):''}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+      ${orig?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);font-size:.66rem">${esc(orig)}</span>`:'<span></span>'}
+      <div onclick="event.stopPropagation()" style="display:flex;gap:2px">
+        ${idx>0?`<button class="kb-mv" title="Voltar fase" onclick="moverFase('${l.id}','${KANBAN[idx-1].key}')"><i class="fas fa-chevron-left"></i></button>`:''}
+        ${idx<KANBAN.length-1?`<button class="kb-mv" title="Avançar fase" onclick="moverFase('${l.id}','${KANBAN[idx+1].key}')"><i class="fas fa-chevron-right"></i></button>`:''}
+      </div></div></div>`;
+}
+function renderLeadsLista(){
+  const list=leadsAbertos();
+  return `<div class="card"><div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Contato</th><th>Ramo</th><th>Origem</th><th>Responsável</th><th>Fase</th><th></th></tr></thead><tbody>
+    ${list.length?list.map(l=>{ const st=STATUS_PIPELINE[l.status]||STATUS_PIPELINE.pre_cadastro;
+      return `<tr>
+        <td><b>${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b></td>
+        <td>${esc(l.whatsapp||l.telefone||l.email||'-')}</td>
+        <td>${esc(l.ramo||l.tipoSeguro||'-')}</td>
+        <td>${esc(ORIGENS[l.origem]||l.origem||'-')}</td>
+        <td>${esc(l.responsavelNome||'—')}</td>
+        <td><span class="badge" style="background:${st.cor}22;color:${st.cor}">${st.label}</span></td>
+        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-eye"></i></button></td>
+      </tr>`; }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum lead em aberto</h4></div></td></tr>`}
+    </tbody></table></div></div>`;
+}
 
 /* ---------- EMPRESAS (clientes cujos beneficiários você administra) ---------- */
 let EMP_FILTER={busca:''};
@@ -1162,7 +1201,7 @@ function exportarBenef(){
 /* =========================================================================
    MODAIS de movimentação
    ========================================================================= */
-function openModal(html){ const r=document.getElementById('modalRoot'); r.innerHTML=`<div class="modal">${html}</div>`; r.classList.add('open'); }
+function openModal(html,cls){ const r=document.getElementById('modalRoot'); r.innerHTML=`<div class="modal ${cls||''}">${html}</div>`; r.classList.add('open'); }
 function closeModal(){ document.getElementById('modalRoot').classList.remove('open'); FICHA_LEAD=null; }
 document.getElementById('modalRoot').addEventListener('click',e=>{ if(e.target.id==='modalRoot') closeModal(); });
 
@@ -1305,37 +1344,129 @@ VIEWS.clientes=function(){
       return `<tr><td><b>${esc(c.nomeEmpresa||c.nome||'Sem nome')}</b>${c.nomeEmpresa&&c.nome?`<br><small style="color:var(--text-3)">${esc(c.nome)}</small>`:''}</td>
       <td>${esc(c.whatsapp||c.telefone||c.email||'-')}</td><td>${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</td>
       <td>${esc(c.ramo||'-')}</td><td><b>${qa}</b></td><td>${statusBadge(st.label,st.cor)}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="fichaCliente('${c.id}')"><i class="fas fa-eye"></i></button></td></tr>`;
+      <td style="white-space:nowrap">${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${c.id}')" title="Abrir"><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirCliente('${c.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`;
     }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum cliente</h4></div></td></tr>`}
     </tbody></table></div></div>`;
   document.getElementById('viewRoot').innerHTML=html;
 };
-function fichaCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; const aps=apolicesDoCliente(c); const st=STATUS_PIPELINE[c.status]||STATUS_PIPELINE.pre_cadastro;
-  openModal(`<div class="modal-head"><h3><i class="fas fa-id-badge" style="color:var(--brand)"></i> ${esc(c.nomeEmpresa||c.nome||'Cliente')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+function fichaCliente(id){ return abrirLead(id); }
+let FICHA_LEAD=null;
+function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; const aps=apolicesDoCliente(c);
+  const fase=faseDoLead(c); const ehCli=isClienteLead(c);
+  const opt=(sel,arr,val)=>arr.map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v}</option>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fas fa-id-badge" style="color:var(--brand)"></i> ${esc(c.nomeEmpresa||c.nome||'Contato')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:14px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
-        <div class="mov-f"><div class="k">Status</div><div class="v">${statusBadge(st.label,st.cor)}</div></div>
         <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'} ${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}</div></div>
         <div class="mov-f"><div class="k">E-mail</div><div class="v">${esc(c.email)||'-'}</div></div>
-        <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
         <div class="mov-f"><div class="k">CPF/CNPJ</div><div class="v">${esc(c.cpf||c.cnpj)||'-'}</div></div>
+        <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
+        <div class="mov-f"><div class="k">Entrada</div><div class="v">${fmtData(c.criadoEm)}</div></div>
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+        <div class="form-row" style="margin:0"><label>Fase</label><select onchange="moverFase('${c.id}',this.value)">${opt('',KANBAN.map(k=>[k.key,k.label]),fase)}</select></div>
+        <div class="form-row" style="margin:0"><label>Responsável</label><select onchange="setLeadCampo('${c.id}','responsavelId',this.value)"><option value="">— ninguém —</option>${CACHE.admins.map(a=>`<option value="${a.id}" ${c.responsavelId===a.id?'selected':''}>${esc(a.nome||a.email)}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Origem</label><select onchange="setLeadCampo('${c.id}','origem',this.value)"><option value="">—</option>${opt('',Object.entries(ORIGENS),c.origem)}</select></div>
+      </div>
+      ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
       ${aps.length?aps.map(a=>`<div class="cred"><div style="flex:1"><b>${esc(a.ramo||'Apólice')}</b> · ${esc(a.seguradora||'')} <br><small style="color:var(--text-3)">Nº ${esc(a.numeroApolice||'-')} · vence ${fmtData(a.dataFimVigencia)}</small></div><div style="font-weight:700">${money(a.valorPremio)}</div></div>`).join(''):`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}
-      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Histórico de interações</div>
+      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Contatos / interações</div>
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
-        <div style="display:flex;gap:8px;margin-bottom:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <select id="tlTipo" style="width:auto">${Object.entries(TIPO_INTERACAO).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('')}</select>
-          <input type="text" id="tlTexto" placeholder="O que aconteceu? (ex.: liguei, cliente pediu cotação)" style="flex:1">
+          <input type="text" id="tlTexto" placeholder="Registrar contato (ex.: liguei, cliente pediu cotação)" style="flex:1;min-width:160px">
           <button class="btn btn-primary btn-sm" onclick="addInteracao('${c.id}')"><i class="fas fa-plus"></i> Registrar</button>
         </div>
       </div>
       ${renderTimeline(c.id)}
-    </div>`);
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="${ehCli?`excluirCliente`:`excluirLead`}('${c.id}')"><i class="fas fa-trash"></i> Excluir</button>
+      <button class="btn btn-success" onclick="modalFechar('${c.id}')"><i class="fas fa-trophy"></i> Fechada</button>
+      <button class="btn btn-ghost" onclick="modalPerder('${c.id}')"><i class="fas fa-xmark"></i> Perdida</button>
+    </div>`,'wide');
   FICHA_LEAD=c.id;
 }
-let FICHA_LEAD=null;
+async function setLeadCampo(id,campo,valor){ try{ const upd={[campo]:valor||null,atualizadoEm:FV.serverTimestamp()};
+  if(campo==='responsavelId'){ const f=CACHE.admins.find(a=>a.id===valor); upd.responsavelNome=f?(f.nome||f.email):null; }
+  await db.collection('leads_crm').doc(id).update(upd); toast('Atualizado.','ok'); }catch(e){ console.error(e); toast('Erro ao atualizar.','err'); } }
+async function moverFase(id,fase){
+  if(fase==='negocio_fechado') return modalFechar(id);
+  if(fase==='negocio_perdido') return modalPerder(id);
+  try{ await db.collection('leads_crm').doc(id).update({status:fase,atualizadoEm:FV.serverTimestamp()}); toast('Movido para "'+(KANBAN.find(k=>k.key===fase)||{}).label+'".','ok'); }catch(e){ toast('Erro.','err'); }
+}
+function novoLead(){ openModal(`<div class="modal-head"><h3><i class="fas fa-plus" style="color:var(--brand)"></i> Novo lead</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+  <div class="modal-body">
+    <div class="form-row"><label>Nome *</label><input type="text" id="nlNome"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="form-row"><label>WhatsApp</label><input type="text" id="nlWhats" placeholder="(00) 00000-0000"></div>
+      <div class="form-row"><label>E-mail</label><input type="email" id="nlEmail"></div>
+      <div class="form-row"><label>Ramo</label><select id="nlRamo">${RAMO_OPCOES.map(r=>`<option>${r}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Origem</label><select id="nlOrigem">${Object.entries(ORIGENS).map(([k,v])=>`<option value="${k}" ${k==='manual'?'selected':''}>${v}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row"><label>Responsável</label><select id="nlResp"><option value="">— ninguém —</option>${CACHE.admins.map(a=>`<option value="${a.id}">${esc(a.nome||a.email)}</option>`).join('')}</select></div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarNovoLead()"><i class="fas fa-check"></i> Criar lead</button></div>`); }
+async function salvarNovoLead(){ const nome=document.getElementById('nlNome').value.trim(); if(!nome){ toast('Informe o nome.','err'); return; }
+  const respId=document.getElementById('nlResp').value; const f=CACHE.admins.find(a=>a.id===respId);
+  try{ await db.collection('leads_crm').add({ nome, whatsapp:document.getElementById('nlWhats').value.replace(/\D/g,'')||null, email:document.getElementById('nlEmail').value.trim()||null,
+    ramo:document.getElementById('nlRamo').value, origem:document.getElementById('nlOrigem').value, status:'pre_cadastro',
+    responsavelId:respId||null, responsavelNome:f?(f.nome||f.email):null, criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
+    closeModal(); toast('Lead criado.','ok'); }catch(e){ console.error(e); toast('Erro ao criar.','err'); } }
+function modalPerder(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-circle-xmark" style="color:var(--danger)"></i> Negócio perdido</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>Motivo da perda</label><select id="mpMotivo">${Object.entries(MOTIVOS_PERDA).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Observação (opcional)</label><textarea id="mpObs" rows="2"></textarea></div>
+      <label class="ck" style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" id="mpReag" checked> <span>Reagendar contato para o próximo ano (retomar na renovação)</span></label>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-danger" onclick="confirmarPerda('${id}')"><i class="fas fa-check"></i> Marcar como perdida</button></div>`); }
+async function confirmarPerda(id){ const motivo=document.getElementById('mpMotivo').value; const obs=document.getElementById('mpObs').value.trim();
+  const reag=document.getElementById('mpReag').checked; let reagendarEm=null;
+  if(reag){ const d=new Date(); d.setFullYear(d.getFullYear()+1); reagendarEm=d.toISOString().slice(0,10); }
+  try{ await db.collection('leads_crm').doc(id).update({status:'negocio_perdido',motivoPerda:motivo,obsPerda:obs||null,reagendarEm,atualizadoEm:FV.serverTimestamp()});
+    await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',texto:'Negócio perdido — '+(MOTIVOS_PERDA[motivo]||motivo)+(obs?': '+obs:'')+(reagendarEm?' · reagendado p/ '+reagendarEm.split('-').reverse().join('/'):''),autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
+    closeModal(); toast('Marcado como perdido'+(reag?' e reagendado para o próximo ano':'')+'.','ok'); }catch(e){ console.error(e); toast('Erro.','err'); } }
+function modalFechar(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> Negócio fechado!</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);margin-bottom:14px">Parabéns! Marque como fechado e, se quiser, <b>anexe o PDF da proposta</b> — eu leio os dados na hora e já gero a apólice.</p>
+      <div id="fecharDrop" style="border:2px dashed var(--border-2);border-radius:12px;padding:24px;text-align:center;cursor:pointer" onclick="document.getElementById('fecharFile').click()">
+        <i class="fas fa-file-arrow-up" style="font-size:22px;color:var(--brand)"></i>
+        <div style="font-weight:600;margin-top:6px">Anexar proposta (PDF) e ler</div>
+        <div style="font-size:.78rem;color:var(--text-3)">opcional — você também pode só marcar como fechado</div>
+        <input type="file" id="fecharFile" accept="application/pdf" style="display:none" onchange="fecharComProposta('${id}',this.files[0])">
+      </div>
+      <div id="fecharStatus" style="margin-top:12px"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-success" onclick="fecharSemProposta('${id}')"><i class="fas fa-check"></i> Só marcar fechado</button></div>`); }
+async function fecharSemProposta(id){ try{ await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',atualizadoEm:FV.serverTimestamp()}); closeModal(); toast('Negócio marcado como fechado.','ok'); }catch(e){ toast('Erro.','err'); } }
+async function fecharComProposta(id,file){ if(!file) return; const c=CACHE.leads.find(x=>x.id===id);
+  const st=document.getElementById('fecharStatus'); if(st) st.innerHTML='<div style="color:var(--text-2);font-size:.85rem"><i class="fas fa-spinner fa-spin"></i> Lendo a proposta...</div>';
+  try{ const texto=await extrairTextoPDF(file); const r=parseProposta(texto); r.arquivo=file.name; r.__file=file;
+    await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',atualizadoEm:FV.serverTimestamp()});
+    const pdfId=await salvarPdfArquivo(file,'proposta',null);
+    if(!propostaDup(r)) await db.collection('propostas').add({...dadosProposta(r),leadId:id,pdfArquivoId:pdfId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
+    await gerarApoliceReg(r,id,pdfId);
+    closeModal(); toast('Fechado! Proposta lida e apólice gerada.','ok','Pronto');
+  }catch(e){ console.error(e); if(st) st.innerHTML='<div style="color:var(--danger);font-size:.85rem">Não consegui ler o PDF: '+esc(e.message)+'. O negócio foi marcado como fechado mesmo assim.</div>'; }
+}
+async function excluirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-trash" style="color:var(--danger)"></i> Excluir lead</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p>Excluir o lead <b>${esc(c.nome||c.nomeEmpresa||'')}</b>? Esta ação não pode ser desfeita.</p></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
+async function confirmarExcluirLead(id){ try{ await db.collection('leads_crm').doc(id).delete(); closeModal(); toast('Lead excluído.','ok'); }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
+function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  const aps=apolicesDoCliente(c).filter(a=>a.status!=='cancelada');
+  if(aps.length){ openModal(`<div class="modal-head"><h3><i class="fas fa-shield" style="color:var(--warn)"></i> Não é possível excluir</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p>O cliente <b>${esc(c.nome||'')}</b> tem <b>${aps.length} apólice(s) ativa(s)</b>. Cancele ou exclua as apólices antes de excluir o cliente.</p></div>
+    <div class="modal-foot"><button class="btn btn-primary" onclick="abrirLead('${id}')">Voltar</button></div>`); return; }
+  openModal(`<div class="modal-head"><h3><i class="fas fa-trash" style="color:var(--danger)"></i> Excluir cliente</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p>Excluir o cliente <b>${esc(c.nome||'')}</b>? Não há apólices ativas. Esta ação não pode ser desfeita.</p></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
 
 /* ---------- APÓLICES ---------- */
 let AP_FILTER={busca:''};
@@ -1396,13 +1527,36 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
           <td style="color:${(e.valor||0)<0?'var(--danger)':'var(--ok)'}">${e.valor?((e.valor<0?'restituir ':'a pagar ')+money(Math.abs(e.valor))):'-'}</td>
           <td>${e.comissaoDevolvida?'−'+money(e.comissaoDevolvida):'-'}</td><td style="color:var(--text-3)">${esc((e.data||'').slice(0,10).split('-').reverse().join('/'))}</td></tr>`).join('')}
         </tbody></table></div></div>`:''}
+      ${id?`<div class="form-row"><label>Anexos (apólice, carteirinha, boleto...)</label>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="file" id="apAnexoFile" accept="application/pdf,image/*" style="flex:1">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="anexarNaApolice('${id}')"><i class="fas fa-paperclip"></i> Anexar</button></div>
+        <div id="apAnexosList"><span style="font-size:.8rem;color:var(--text-3)">Carregando anexos...</span></div></div>`:'<p style="font-size:.78rem;color:var(--text-3)">Salve a apólice para poder anexar arquivos (apólice, carteirinha...).</p>'}
     </div>
     <div class="modal-foot">
       ${id?`<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="excluirApolice('${id}')"><i class="fas fa-trash"></i> Excluir</button>
       <button class="btn btn-ghost" onclick="modalEndosso('${id}')"><i class="fas fa-file-pen"></i> Incluir endosso</button>`:''}
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="salvarApolice()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`);
+      <button class="btn btn-primary" onclick="salvarApolice()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+  if(id) carregarAnexos(id);
 }
+async function carregarAnexos(apoliceId){ const el=document.getElementById('apAnexosList'); if(!el) return;
+  try{ const snap=await db.collection('arquivos').where('refId','==',apoliceId).get();
+    const arr=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // inclui o PDF da proposta, se houver
+    const a=CACHE.apolices.find(x=>x.id===apoliceId); const extra=a&&a.anexoPropostaPdf?[{id:a.anexoPropostaPdf,nome:'Proposta (PDF)',_proposta:true}]:[];
+    const todos=[...extra,...arr];
+    el.innerHTML= todos.length? todos.map(x=>`<div class="cred"><span class="cred-v" style="flex:1">${esc(x.nome||'arquivo')}${x.tamanho?` <span style="color:var(--text-3);font-weight:400">(${Math.round(x.tamanho/1024)} KB)</span>`:''}</span>
+        <button class="cp" onclick="baixarArquivo('${x.id}')" title="Baixar"><i class="fas fa-download"></i></button>
+        ${x._proposta?'':`<button class="cp" style="background:var(--danger-bg);color:var(--danger)" onclick="excluirAnexo('${x.id}','${apoliceId}')" title="Excluir"><i class="fas fa-trash"></i></button>`}</div>`).join('')
+      : '<span style="font-size:.8rem;color:var(--text-3)">Nenhum anexo ainda.</span>';
+  }catch(e){ console.warn(e); el.innerHTML='<span style="font-size:.8rem;color:var(--danger)">Erro ao carregar anexos.</span>'; } }
+async function anexarNaApolice(apoliceId){ const inp=document.getElementById('apAnexoFile'); const file=inp&&inp.files[0];
+  if(!file){ toast('Selecione um arquivo.','info'); return; }
+  toast('Anexando...','info');
+  const id=await salvarPdfArquivo(file,'apolice',apoliceId);
+  if(id){ toast('Anexo salvo.','ok'); inp.value=''; carregarAnexos(apoliceId); }
+}
+async function excluirAnexo(id,apoliceId){ try{ await db.collection('arquivos').doc(id).delete(); toast('Anexo removido.','ok'); carregarAnexos(apoliceId); }catch(e){ toast('Erro.','err'); } }
 const ENDOSSO_TIPOS={alteracao_veiculo:'Troca de veículo',alteracao_cobertura:'Alteração de cobertura',inclusao:'Inclusão',exclusao:'Exclusão',cancelamento:'Cancelamento',outro:'Outro'};
 function modalEndosso(id){ const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
   openModal(`<div class="modal-head"><h3><i class="fas fa-file-pen" style="color:var(--brand)"></i> Incluir endosso</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
@@ -1868,7 +2022,7 @@ async function processarPropostas(files){
     try{
       const texto=await extrairTextoPDF(f);
       const r=parseProposta(texto);
-      r.arquivo=f.name; r.__texto=texto; r.__id='p'+(PROP_RESULTS.length+1)+'_'+Date.now();
+      r.arquivo=f.name; r.__texto=texto; r.__file=f; r.__id='p'+(PROP_RESULTS.length+1)+'_'+Date.now();
       PROP_RESULTS.unshift(r);
     }catch(e){ console.error(e); PROP_RESULTS.unshift({arquivo:f.name,reconhecido:false,warnings:['Erro ao ler o PDF: '+e.message]}); }
   }
@@ -1893,9 +2047,9 @@ function cardProposta(r){
         ${(r.warnings||[]).map(w=>'⚠️ '+esc(w)).join('<br>')}</div></div></div>`;
   }
   const f=(lbl,val)=>`<div class="mov-f"><div class="k">${lbl}</div><div class="v">${val||'<span style=color:var(--text-3)>—</span>'}</div></div>`;
-  return `<div class="card" style="margin-bottom:14px;border-left:4px solid ${confCor}"><div class="card-pad">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-      <div><b style="font-size:1.05rem">${esc(r.segurado||'Segurado não identificado')}</b>
+  return `<div class="card" style="margin-bottom:14px;border-left:4px solid ${confCor}"><div class="card-pad" style="padding:24px 26px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:18px">
+      <div><b style="font-size:1.15rem">${esc(r.segurado||'Segurado não identificado')}</b>
         <div style="font-size:.82rem;color:var(--text-2)">${esc(r.arquivo||'')}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <span class="badge" style="background:var(--brand-50);color:var(--brand-dark)"><i class="fas fa-shield"></i> ${esc(r.seguradora)} · ${esc(r.ramo)}</span>
@@ -1903,7 +2057,7 @@ function cardProposta(r){
         <span class="badge" style="background:${confCor}22;color:${confCor}">Confiança ${r.confianca}</span></div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 18px;margin-bottom:14px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px 26px;margin-bottom:16px">
       ${f('CPF/CNPJ',esc(r.cpfCnpj))}
       ${f('Celular',esc(r.celular||r.telefone))}
       ${f('E-mail',esc(r.email))}
@@ -1968,14 +2122,37 @@ function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||
   comissaoCodigo:r.comissaoCodigo||null, corretora:r.corretora||null, corretoraCodigo:r.corretoraCodigo||null,
   coberturas:r.coberturas||[], arquivo:r.arquivo||null, confianca:r.confianca||null, avisos:r.warnings||[] }; }
 function propostaDup(r){ if(!r||!r.nrProposta) return null; return CACHE.propostas.find(p=>p.nrProposta&&String(p.nrProposta)===String(r.nrProposta)); }
+/* ---- Arquivos (PDF/imagem) guardados em base64 no Firestore, coleção 'arquivos' ---- */
+function fileToB64(file){ return new Promise((res,rej)=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=rej; rd.readAsDataURL(file); }); }
+async function salvarPdfArquivo(file,tipo,refId){ try{
+  if(!file) return null;
+  if(file.size>950000){ toast('Arquivo grande demais para guardar no plano gratuito ('+Math.round(file.size/1024)+' KB, limite ~950 KB). Guardei os dados lidos, mas não o arquivo em si.','info','Aviso'); return null; }
+  const dados=await fileToB64(file);
+  const ref=await db.collection('arquivos').add({ tipo, refId:refId||null, nome:file.name, mime:file.type||'application/pdf', dados, tamanho:file.size, criadoEm:FV.serverTimestamp(), por:CURRENT_USER?.email||'admin' });
+  return ref.id; }catch(e){ console.warn('salvarArquivo',e); return null; } }
+function baixarArquivoB64(nome,mime,dados){ const a=document.createElement('a'); a.href=dados; a.download=nome||'arquivo'; document.body.appendChild(a); a.click(); a.remove(); }
+async function baixarArquivo(id){ try{ const d=await db.collection('arquivos').doc(id).get(); if(!d.exists){ toast('Arquivo não encontrado.','err'); return; } const x=d.data(); baixarArquivoB64(x.nome,x.mime,x.dados); }catch(e){ toast('Erro ao baixar.','err'); } }
+function apoliceDocFromProposta(r,pdfId){ return { clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
+  clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
+  principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
+  ramo:r.ramo||'Auto', seguradora:r.seguradora||null, numeroApolice:r.nrProposta||null,
+  dataInicioVigencia:converterData(r.vigenciaInicio), dataFimVigencia:converterData(r.vigenciaFim),
+  valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, comissaoValor:r.comissaoValor||0, status:'ativa',
+  veiculoPlaca:r.placa||null, veiculoFabricante:r.fabricante||null, veiculoModelo:r.modelo||null, veiculoAno:r.anoModelo||null,
+  veiculoChassi:r.chassi||null, codigoFipe:r.codigoFipe||null, combustivel:r.combustivel||null,
+  franquia:r.franquia||null, carroReserva:r.carroReserva||null, assistencias:r.assistencias||[],
+  coberturas:r.coberturas||[], premioTotal:r.premioTotal||null, formaPagamento:r.formaPagamento||null, parcelas:r.parcelas||null, valorParcela:r.valorParcela||null,
+  anexoPropostaPdf:pdfId||null, origem:'proposta', criadoEm:FV.serverTimestamp() }; }
+async function gerarApoliceReg(r,leadId,pdfId){ await db.collection('apolices_cliente').add(apoliceDocFromProposta(r,pdfId)); }
 async function salvarProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
   if(propostaDup(r)){ toast('A proposta nº '+r.nrProposta+' já está salva — não dupliquei.','info','Duplicada'); descartarProposta(id); return; }
   try{
     const leadId=await vincularClienteProposta(r);
-    await db.collection('propostas').add({...dadosProposta(r),leadId:leadId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
+    const pdfId=r.__file?await salvarPdfArquivo(r.__file,'proposta',null):null;
+    await db.collection('propostas').add({...dadosProposta(r),leadId:leadId||null,pdfArquivoId:pdfId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
     descartarProposta(id);
-    toast('Proposta salva'+(leadId?' e o cliente foi para a aba Clientes':'')+'.','ok');
+    toast('Proposta salva'+(pdfId?' (com o PDF)':'')+(leadId?' — cliente na aba Clientes':'')+'.','ok');
   }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 
@@ -2008,21 +2185,12 @@ async function gerarApoliceDaProposta(id){
   const doSaved=String(id).startsWith('saved_'); // veio de uma proposta já salva
   try{
     await vincularClienteProposta(r); // dados pessoais vão para Clientes
+    const pdfId=r.__file?await salvarPdfArquivo(r.__file,'proposta',null):null;
     if(!doSaved && !propostaDup(r)){ // também salva a proposta no CRM (salvar + apólice num clique)
-      await db.collection('propostas').add({...dadosProposta(r),criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin',virouApolice:true}); }
-    await db.collection('apolices_cliente').add({ clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
-      clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
-      principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
-      ramo:r.ramo||'Auto', seguradora:r.seguradora||null, numeroApolice:r.nrProposta||null,
-      dataInicioVigencia:converterData(r.vigenciaInicio), dataFimVigencia:converterData(r.vigenciaFim),
-      valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, comissaoValor:r.comissaoValor||0, status:'ativa',
-      veiculoPlaca:r.placa||null, veiculoFabricante:r.fabricante||null, veiculoModelo:r.modelo||null, veiculoAno:r.anoModelo||null,
-      veiculoChassi:r.chassi||null, codigoFipe:r.codigoFipe||null, combustivel:r.combustivel||null,
-      franquia:r.franquia||null, carroReserva:r.carroReserva||null, assistencias:r.assistencias||[],
-      coberturas:r.coberturas||[], premioTotal:r.premioTotal||null, formaPagamento:r.formaPagamento||null, parcelas:r.parcelas||null, valorParcela:r.valorParcela||null,
-      origem:'proposta', criadoEm:FV.serverTimestamp() });
+      await db.collection('propostas').add({...dadosProposta(r),pdfArquivoId:pdfId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin',virouApolice:true}); }
+    await gerarApoliceReg(r,null,pdfId);
     if(!doSaved) descartarProposta(id); // sai da lista de "lidas", permanece na página
-    toast('Apólice criada'+(doSaved?'':' e proposta salva')+'. O cliente está na aba Clientes.','ok','Pronto');
+    toast('Apólice criada'+(doSaved?'':' e proposta salva')+(pdfId?' com o PDF':'')+'. O cliente está na aba Clientes.','ok','Pronto');
   }catch(e){ console.error(e); toast('Erro ao gerar apólice.','err'); }
 }
 function converterData(br){ if(!br) return null; const m=/(\d{2})\/(\d{2})\/(\d{4})/.exec(br); return m?`${m[3]}-${m[2]}-${m[1]}`:null; }
@@ -2064,8 +2232,9 @@ function verProposta(id){
       </tbody></table></div>
     </div>
     <div class="modal-foot">${waBtn(p.celular||p.telefone,'Olá '+((p.segurado||'').split(' ')[0]||'')+'! Sua proposta '+(p.seguradora||'')+' foi transmitida.','WhatsApp')}
+      ${p.pdfArquivoId?`<button class="btn btn-ghost" onclick="baixarArquivo('${p.pdfArquivoId}')"><i class="fas fa-file-pdf"></i> Baixar PDF</button>`:''}
       <button class="btn btn-ghost" onclick="gerarApoliceDaPropostaSalva('${id}')"><i class="fas fa-file-contract"></i> Gerar apólice</button>
-      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`);
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
 }
 async function gerarApoliceDaPropostaSalva(id){ const p=CACHE.propostas.find(x=>x.id===id); if(!p) return;
   PROP_RESULTS.push({...p,__id:'saved_'+id,warnings:p.avisos||[]}); await gerarApoliceDaProposta('saved_'+id); PROP_RESULTS=PROP_RESULTS.filter(x=>x.__id!=='saved_'+id); }
