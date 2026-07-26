@@ -691,6 +691,14 @@ function setBadge(key,n){
   }
 }
 const isLeadNovo=l=>l.status==='pre_cadastro'||!l.status;
+/* É cliente (fechou conosco) se: status cliente/fechado, ou tem apólice, ou tem proposta salva */
+function isClienteLead(l){
+  if(l.status==='cliente'||l.status==='negocio_fechado') return true;
+  const cpf=(l.cpf||'').replace(/\D/g,''); const f=(l.whatsapp||l.telefone||'').replace(/\D/g,''); const nm=(l.nome||'').toLowerCase();
+  const hasAp=CACHE.apolices.some(a=>(cpf&&(a.clienteCpf||'').replace(/\D/g,'')===cpf)||(f&&(a.clienteWhatsapp||'').replace(/\D/g,'')===f)||(nm&&(a.clienteNome||'').toLowerCase()===nm));
+  if(hasAp) return true;
+  return CACHE.propostas.some(p=>(p.leadId&&p.leadId===l.id)||(cpf&&(p.cpfCnpj||'').replace(/\D/g,'')===cpf)||(f&&(p.celular||'').replace(/\D/g,'')===f));
+}
 
 /* =========================================================================
    BOOTSTRAP: listeners em tempo real p/ badges + cache
@@ -843,17 +851,17 @@ VIEWS.leads=function(){
   const actions=`<a href="#leads" class="btn btn-primary btn-sm" onclick="toast('Novo lead: disponível ao migrar a tela completa.','info','Em breve')"><i class="fas fa-plus"></i> Novo lead</a>`;
   let html=head('leads',{actions});
 
-  let list=CACHE.leads.slice();
+  let list=CACHE.leads.filter(l=>!isClienteLead(l)); // clientes ficam na aba Clientes
   if(LEADS_FILTER.status) list=list.filter(l=>(l.status||'pre_cadastro')===LEADS_FILTER.status);
   if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase();
     list=list.filter(l=>`${l.nome||''} ${l.nomeEmpresa||''} ${l.email||''} ${l.whatsapp||''} ${l.telefone||''}`.toLowerCase().includes(q)); }
 
-  const novos=CACHE.leads.filter(isLeadNovo).length;
-  const fechados=CACHE.leads.filter(l=>l.status==='negocio_fechado').length;
+  const prospects=CACHE.leads.filter(l=>!isClienteLead(l));
+  const novos=prospects.filter(isLeadNovo).length;
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-brand"><i class="fas fa-bolt"></i></div><div class="val">${novos}</div><div class="lbl">Novos p/ contato</div></div>
-    <div class="kpi"><div class="ico i-info"><i class="fas fa-users"></i></div><div class="val">${CACHE.leads.length}</div><div class="lbl">Total de leads</div></div>
-    <div class="kpi"><div class="ico i-ok"><i class="fas fa-trophy"></i></div><div class="val">${fechados}</div><div class="lbl">Fechados</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-users"></i></div><div class="val">${prospects.length}</div><div class="lbl">Leads em aberto</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-user-check"></i></div><div class="val">${CACHE.leads.filter(isClienteLead).length}</div><div class="lbl">Já são clientes</div></div>
   </div>`;
 
   html+=`<div class="card"><div class="card-head">
@@ -1279,7 +1287,7 @@ let CLI_FILTER={busca:''};
 function apolicesDoCliente(c){ return CACHE.apolices.filter(a=>(a.clienteWhatsapp&&a.clienteWhatsapp===c.whatsapp)||(a.clienteNome&&c.nome&&a.clienteNome.toLowerCase()===(c.nome||'').toLowerCase())); }
 VIEWS.clientes=function(){
   let html=head('clientes');
-  let clientes=CACHE.leads.filter(l=>l.nome||l.whatsapp||l.telefone||l.email);
+  let clientes=CACHE.leads.filter(l=>(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
   if(CLI_FILTER.busca){ const q=CLI_FILTER.busca.toLowerCase(); clientes=clientes.filter(c=>`${c.nome||''} ${c.nomeEmpresa||''} ${c.whatsapp||''} ${c.email||''} ${c.cidade||''}`.toLowerCase().includes(q)); }
   const comApolice=clientes.filter(c=>apolicesDoCliente(c).length>0).length;
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
@@ -1827,7 +1835,8 @@ VIEWS.propostas=function(){
       <td><b>${esc(p.segurado||'-')}</b></td><td>${esc(p.seguradora||'-')}${p.ramo?' · '+esc(p.ramo):''}</td><td>${esc(p.placa||'-')}</td>
       <td>${money(p.premioLiquido)}</td><td><b style="color:var(--ok)">${p.comissaoPct!=null?p.comissaoPct+'% · '+money(p.comissaoValor):'-'}</b></td>
       <td>${esc(p.nrProposta||'-')}</td><td style="color:var(--text-3)">${fmtData(p.criadoEm)}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="verProposta('${p.id}')"><i class="fas fa-eye"></i></button></td></tr>`).join(''):`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-file-invoice"></i></div><h4>Nenhuma proposta salva</h4><p>Suba um PDF acima para começar.</p></div></td></tr>`}
+      <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="verProposta('${p.id}')" title="Ver"><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirPropostaSalva('${p.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`).join(''):`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-file-invoice"></i></div><h4>Nenhuma proposta salva</h4><p>Suba um PDF acima para começar.</p></div></td></tr>`}
     </tbody></table></div></div>`;
   document.getElementById('viewRoot').innerHTML=html;
   // render resultados da sessão (se houver)
@@ -1887,6 +1896,7 @@ function cardProposta(r){
         <div style="font-size:.82rem;color:var(--text-2)">${esc(r.arquivo||'')}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <span class="badge" style="background:var(--brand-50);color:var(--brand-dark)"><i class="fas fa-shield"></i> ${esc(r.seguradora)} · ${esc(r.ramo)}</span>
+        ${propostaDup(r)?`<span class="badge" style="background:var(--warn-bg);color:var(--warn)"><i class="fas fa-copy"></i> Já salva (nº ${esc(r.nrProposta)})</span>`:''}
         <span class="badge" style="background:${confCor}22;color:${confCor}">Confiança ${r.confianca}</span></div>
     </div>
 
@@ -1937,6 +1947,12 @@ function cardProposta(r){
   </div></div>`;
 }
 function descartarProposta(id){ PROP_RESULTS=PROP_RESULTS.filter(r=>r.__id!==id); renderPropResults(); }
+function excluirPropostaSalva(id){ const p=CACHE.propostas.find(x=>x.id===id); if(!p) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-trash" style="color:var(--danger)"></i> Excluir proposta</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p>Excluir a proposta de <b>${esc(p.segurado||'')}</b> (nº ${esc(p.nrProposta||'-')})? Isso não apaga a apólice, se já houver.</p></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-danger" onclick="confirmarExcluirProposta('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
+async function confirmarExcluirProposta(id){ try{ await db.collection('propostas').doc(id).delete(); closeModal(); toast('Proposta excluída.','ok'); }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
 function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||null, segurado:r.segurado||null, cpfCnpj:r.cpfCnpj||null,
   email:r.email||null, celular:r.celular||null, telefone:r.telefone||null,
   principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
@@ -1948,13 +1964,15 @@ function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||
   parcelas:r.parcelas??null, valorParcela:r.valorParcela??null, comissaoPct:r.comissaoPct??null, comissaoValor:r.comissaoValor??null,
   comissaoCodigo:r.comissaoCodigo||null, corretora:r.corretora||null, corretoraCodigo:r.corretoraCodigo||null,
   coberturas:r.coberturas||[], arquivo:r.arquivo||null, confianca:r.confianca||null, avisos:r.warnings||[] }; }
+function propostaDup(r){ if(!r||!r.nrProposta) return null; return CACHE.propostas.find(p=>p.nrProposta&&String(p.nrProposta)===String(r.nrProposta)); }
 async function salvarProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
+  if(propostaDup(r)){ toast('A proposta nº '+r.nrProposta+' já está salva — não dupliquei.','info','Duplicada'); descartarProposta(id); return; }
   try{
     const leadId=await vincularClienteProposta(r);
     await db.collection('propostas').add({...dadosProposta(r),leadId:leadId||null,criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin'});
     descartarProposta(id);
-    toast('Proposta salva'+(leadId?' e vinculada ao cliente':'')+'.','ok');
+    toast('Proposta salva'+(leadId?' e o cliente foi para a aba Clientes':'')+'.','ok');
   }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 
@@ -1964,14 +1982,15 @@ async function vincularClienteProposta(r){
   let lead=(cpf&&CACHE.leads.find(l=>(l.cpf||'').replace(/\D/g,'')===cpf)) || (fone&&CACHE.leads.find(l=>(l.whatsapp||l.telefone||'').replace(/\D/g,'')===fone)) || null;
   try{
     let leadId;
-    if(lead){ leadId=lead.id; const upd={};
+    if(lead){ leadId=lead.id; const upd={status:'cliente'};
       if(!lead.email&&r.email) upd.email=r.email;
       if(!lead.whatsapp&&fone) upd.whatsapp=fone;
+      if(!lead.cpf&&r.cpfCnpj) upd.cpf=r.cpfCnpj;
       if(!lead.ramo&&r.ramo) upd.ramo=r.ramo;
-      if(Object.keys(upd).length){ upd.atualizadoEm=FV.serverTimestamp(); await db.collection('leads_crm').doc(lead.id).update(upd); }
+      upd.atualizadoEm=FV.serverTimestamp(); await db.collection('leads_crm').doc(lead.id).update(upd);
     } else {
       const ref=await db.collection('leads_crm').add({ nome:r.segurado||null, cpf:r.cpfCnpj||null, whatsapp:fone||null, email:r.email||null,
-        ramo:r.ramo||null, status:'cotacao_enviada', origem:'proposta', temperatura:'quente',
+        ramo:r.ramo||null, status:'cliente', origem:'proposta',
         criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
       leadId=ref.id;
     }
@@ -1983,8 +2002,11 @@ async function vincularClienteProposta(r){
 }
 async function gerarApoliceDaProposta(id){
   const r=PROP_RESULTS.find(x=>x.__id===id); if(!r) return;
+  const doSaved=String(id).startsWith('saved_'); // veio de uma proposta já salva
   try{
     await vincularClienteProposta(r); // dados pessoais vão para Clientes
+    if(!doSaved && !propostaDup(r)){ // também salva a proposta no CRM (salvar + apólice num clique)
+      await db.collection('propostas').add({...dadosProposta(r),criadoEm:FV.serverTimestamp(),lidoPor:CURRENT_USER?.email||'admin',virouApolice:true}); }
     await db.collection('apolices_cliente').add({ clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
       clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
       principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
@@ -1996,7 +2018,8 @@ async function gerarApoliceDaProposta(id){
       franquia:r.franquia||null, carroReserva:r.carroReserva||null, assistencias:r.assistencias||[],
       coberturas:r.coberturas||[], premioTotal:r.premioTotal||null, formaPagamento:r.formaPagamento||null, parcelas:r.parcelas||null, valorParcela:r.valorParcela||null,
       origem:'proposta', criadoEm:FV.serverTimestamp() });
-    toast('Apólice criada a partir da proposta.','ok'); location.hash='#apolices';
+    if(!doSaved) descartarProposta(id); // sai da lista de "lidas", permanece na página
+    toast('Apólice criada'+(doSaved?'':' e proposta salva')+'. O cliente está na aba Clientes.','ok','Pronto');
   }catch(e){ console.error(e); toast('Erro ao gerar apólice.','err'); }
 }
 function converterData(br){ if(!br) return null; const m=/(\d{2})\/(\d{2})\/(\d{4})/.exec(br); return m?`${m[3]}-${m[2]}-${m[1]}`:null; }
@@ -2057,48 +2080,77 @@ function fipeAcharMarca(marcas,nome){ const q=fipeNorm(nome); if(!q) return null
     marcas.find(m=>fipeNorm(m.nome).split(/[\s\-]+/).some(tk=>tk.length>2&&q.includes(tk))); }
 function fipeScore(alvo,nome){ const nt=fipeTokens(nome); let sc=0; alvo.forEach(t=>{ if(nt.includes(t)) sc+=2; else if(nt.some(x=>x.startsWith(t)||t.startsWith(x))) sc+=1; }); return sc; }
 
+const BRASIL_FIPE='https://brasilapi.com.br/api/fipe';
 async function modalFipe(ctx){ ctx=ctx||{};
   openModal(`<div class="modal-head"><h3><i class="fas fa-magnifying-glass-dollar" style="color:var(--brand)"></i> Valor FIPE${ctx.codigo?' · '+esc(ctx.codigo):''}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <div class="modal-body" id="fipeBody"><div class="empty" style="padding:30px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Consultando a tabela FIPE...</h4><p>Buscando ${esc([ctx.marca,ctx.modelo].filter(Boolean).join(' '))||'o veículo'}.</p></div></div>`);
-  try{
-    if(!ctx.marca||!ctx.modelo) throw new Error('Faltam marca e modelo para consultar a FIPE.');
-    const marcas=await fipeGet(FIPE_BASE+'/marcas');
-    const marca=fipeAcharMarca(marcas,ctx.marca);
-    if(!marca) throw new Error('Marca "'+esc(ctx.marca)+'" não localizada na FIPE.');
-    const mr=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos');
-    const modelos=mr.modelos||[]; const alvo=fipeTokens(ctx.modelo);
-    const ranked=modelos.map(m=>({m,sc:fipeScore(alvo,m.nome)})).sort((a,b)=>b.sc-a.sc).filter(x=>x.sc>0).slice(0,8);
-    if(!ranked.length) throw new Error('Modelo não encontrado automaticamente. Confira o veículo.');
-    if(ranked.length>1 && (ranked[0].sc-(ranked[1]?ranked[1].sc:0))<2){ window.__fipePick={marca,top:ranked,ctx}; return fipeEscolherModelo(ranked,ctx); }
-    await fipeConcluir(marca,ranked[0].m,ctx);
-  }catch(e){ fipeErro(e); }
+    <div class="modal-body" id="fipeBody"><div class="empty" style="padding:30px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Consultando a tabela FIPE...</h4><p>Buscando valor atual e histórico dos últimos meses.</p></div></div>`);
+  // Caminho 1: pelo CÓDIGO da proposta (traz o veículo exato + histórico automático dos últimos meses)
+  if(ctx.codigo){ try{ await fipeViaCodigo(ctx); return; }catch(e){ console.warn('FIPE por código falhou, tentando por marca/modelo:',e&&e.message); } }
+  // Caminho 2: por marca/modelo (fallback) — casa pelo código quando possível p/ não trazer o errado
+  try{ await fipeViaModelo(ctx); }catch(e){ fipeErro(e); }
 }
+/* Consulta por código (BrasilAPI): valor atual + últimos meses automaticamente */
+async function fipeViaCodigo(ctx){
+  const cod=ctx.codigo;
+  const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod));
+  const cur=fipePorAnoComb(arr,ctx.ano,ctx.comb); if(!cur) throw new Error('código sem retorno');
+  // histórico: últimas ~12 tabelas de referência
+  let hist=[]; try{ const tabs=await fipeGet(BRASIL_FIPE+'/tabelas/v1'); const refs=(tabs||[]).slice(0,12);
+    for(const t of refs){ try{ const a=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod)+'?tabela_referencia='+t.codigo); const it=fipePorAnoComb(a,ctx.ano,ctx.comb);
+      if(it) hist.push({mes:(it.mesReferencia||t.mes||'').trim(),valor:fipeNum(it.valor),label:it.valor}); }catch(e){} } }catch(e){}
+  hist=hist.filter(h=>h.valor).reverse();
+  await fipeSalvarSnap(cod,(cur.marca||'')+' '+(cur.modelo||''),cur.valor,cur.anoModelo,(cur.mesReferencia||'').trim());
+  renderFipe({Marca:cur.marca,Modelo:cur.modelo,AnoModelo:cur.anoModelo,Combustivel:cur.combustivel,Valor:cur.valor,MesReferencia:cur.mesReferencia,CodigoFipe:cur.codigoFipe||cod}, hist, hist.length?'brasil':'nova');
+}
+function fipePorAnoComb(arr,ano,comb){ if(!Array.isArray(arr)||!arr.length) return null; let c=arr;
+  if(ano){ const f=c.filter(x=>String(x.anoModelo)===String(ano)); if(f.length) c=f; }
+  if(comb){ const cc=comb.toLowerCase(); const f=c.filter(x=>(x.combustivel||'').toLowerCase().includes(cc)); if(f.length) c=f; }
+  return c[0]; }
+/* Consulta por marca/modelo (parallelum) — confirma pelo código da proposta */
+async function fipeViaModelo(ctx){
+  if(!ctx.marca||!ctx.modelo) throw new Error('Faltam marca e modelo para consultar a FIPE.');
+  const marcas=await fipeGet(FIPE_BASE+'/marcas');
+  const marca=fipeAcharMarca(marcas,ctx.marca); if(!marca) throw new Error('Marca "'+esc(ctx.marca)+'" não localizada.');
+  const mr=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos'); const modelos=mr.modelos||[]; const alvo=fipeTokens(ctx.modelo);
+  const ranked=modelos.map(m=>({m,sc:fipeScore(alvo,m.nome)})).sort((a,b)=>b.sc-a.sc).filter(x=>x.sc>0).slice(0,8);
+  if(!ranked.length) throw new Error('Modelo não encontrado automaticamente.');
+  // se temos o código, testamos os candidatos e escolhemos o que bate o código exato
+  if(ctx.codigo){
+    for(const c of ranked){ try{ const d=await fipeBuscarValor(marca,c.m,ctx);
+      if(d && (d.CodigoFipe||'').replace(/\D/g,'')===String(ctx.codigo).replace(/\D/g,'')){ return fipeFinalizarParallelum(d,ctx); } }catch(e){} }
+  }
+  // sem código ou nenhum bateu: se ambíguo, deixa escolher; senão usa o melhor
+  if(ranked.length>1 && (ranked[0].sc-(ranked[1]?ranked[1].sc:0))<2){ window.__fipePick={marca,top:ranked,ctx}; return fipeEscolherModelo(ranked,ctx); }
+  const d=await fipeBuscarValor(marca,ranked[0].m,ctx); return fipeFinalizarParallelum(d,ctx);
+}
+async function fipeBuscarValor(marca,modelo,ctx){
+  const anos=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos/'+modelo.codigo+'/anos');
+  const ano=anos.find(a=>String(a.nome).startsWith(String(ctx.ano||''))) || anos.find(a=>String(a.codigo).startsWith(String(ctx.ano||''))) || anos[0];
+  return fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos/'+modelo.codigo+'/anos/'+ano.codigo);
+}
+async function fipeFinalizarParallelum(d,ctx){
+  const codigo=(d.CodigoFipe||ctx.codigo||'').trim(); const mesRef=(d.MesReferencia||'').trim();
+  await fipeSalvarSnap(codigo,(d.Marca||'')+' '+(d.Modelo||''),d.Valor,d.AnoModelo,mesRef);
+  let hist=[]; try{ if(codigo){ const hs=await db.collection('fipe_historico').where('codigoFipe','==',codigo).get(); hist=hs.docs.map(x=>x.data()).filter(h=>h.valorNum).map(h=>({mes:h.mesReferencia,valor:h.valorNum,label:h.valor})).sort((a,b)=>(a.mes||'').localeCompare(b.mes||'')); } }catch(e){}
+  renderFipe({...d,CodigoFipe:codigo}, hist, 'parallelum');
+}
+async function fipeSalvarSnap(codigo,marcaModelo,valor,ano,mesRef){ try{ const docId=((codigo||marcaModelo)+'_'+mesRef).replace(/[^\w]+/g,'_');
+  await db.collection('fipe_historico').doc(docId).set({ codigoFipe:codigo||null, marcaModelo, valor, valorNum:fipeNum(valor), anoModelo:ano||null, mesReferencia:mesRef, atualizadoEm:FV.serverTimestamp() },{merge:true}); }catch(e){} }
 function fipeEscolherModelo(ranked,ctx){ const el=document.getElementById('fipeBody'); if(!el) return;
-  el.innerHTML=`<p style="color:var(--text-2);margin-bottom:12px">Confirme o modelo exato de <b>${esc(ctx.modelo||'')}</b>:</p>`+
+  el.innerHTML=`<p style="color:var(--text-2);margin-bottom:12px">Não consegui confirmar pelo código. Escolha o modelo exato de <b>${esc(ctx.modelo||'')}</b>:</p>`+
     ranked.map((x,i)=>`<div class="emp-row" onclick="fipePick(${i})"><div class="nm" style="flex:1"><b>${esc(x.m.nome)}</b></div><i class="fas fa-chevron-right" style="color:var(--text-3)"></i></div>`).join(''); }
 function fipePick(i){ const s=window.__fipePick; if(!s) return;
   document.getElementById('fipeBody').innerHTML='<div class="empty" style="padding:24px"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Buscando valor...</h4></div>';
-  fipeConcluir(s.marca,s.top[i].m,s.ctx).catch(fipeErro); }
-async function fipeConcluir(marca,modelo,ctx){
-  const anos=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos/'+modelo.codigo+'/anos');
-  const ano=anos.find(a=>String(a.nome).startsWith(String(ctx.ano||''))) || anos.find(a=>String(a.codigo).startsWith(String(ctx.ano||''))) || anos[0];
-  const d=await fipeGet(FIPE_BASE+'/marcas/'+marca.codigo+'/modelos/'+modelo.codigo+'/anos/'+ano.codigo);
-  const codigo=ctx.codigo||d.CodigoFipe||''; const mesRef=(d.MesReferencia||'').trim();
-  try{ const docId=((codigo||modelo.codigo+'_'+ano.codigo)+'_'+mesRef).replace(/[^\w]+/g,'_');
-    await db.collection('fipe_historico').doc(docId).set({ codigoFipe:codigo||null, marcaModelo:(d.Marca||'')+' '+(d.Modelo||''), valor:d.Valor, valorNum:fipeNum(d.Valor),
-      anoModelo:d.AnoModelo||null, mesReferencia:mesRef, atualizadoEm:FV.serverTimestamp() },{merge:true}); }catch(e){}
-  let hist=[]; try{ if(codigo){ const hs=await db.collection('fipe_historico').where('codigoFipe','==',codigo).get(); hist=hs.docs.map(x=>x.data()).filter(h=>h.valorNum); } }catch(e){}
-  const histT=hist.map(h=>({mes:h.mesReferencia,valor:h.valorNum,label:h.valor})).sort((a,b)=>(a.mes||'').localeCompare(b.mes||''));
-  renderFipe(d, histT);
-}
+  fipeBuscarValor(s.marca,s.top[i].m,s.ctx).then(d=>fipeFinalizarParallelum(d,s.ctx)).catch(fipeErro); }
 function fipeErro(e){ const el=document.getElementById('fipeBody'); if(!el) return; console.error(e);
   el.innerHTML=`<div class="empty" style="padding:24px"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div>
     <h4>Não consegui consultar agora</h4><p>${esc(e.message||'Erro')}<br>A FIPE é consultada ao vivo pela internet; tente de novo em instantes.</p></div>`; }
-function renderFipe(d, hist){
+function renderFipe(d, hist, fonte){
   const el=document.getElementById('fipeBody'); if(!el) return;
   let variacao='';
   if(hist.length>=2){ const ini=hist[0].valor, fim=hist[hist.length-1].valor; if(ini&&fim){ const dif=fim-ini; const pct=(dif/ini*100);
     variacao=`<span style="color:${dif>=0?'var(--ok)':'var(--danger)'};font-weight:700"><i class="fas fa-arrow-trend-${dif>=0?'up':'down'}"></i> ${dif>=0?'+':''}${money(dif)} (${dif>=0?'+':''}${pct.toFixed(1)}%)</span>`; } }
+  const tituloHist = fonte==='brasil' ? 'Evolução — últimos meses' : 'Evolução ('+hist.length+' consultas)';
   el.innerHTML=`
     <div style="display:flex;gap:14px;align-items:center;background:var(--brand-50);border-radius:12px;padding:16px 18px;margin-bottom:16px">
       <div style="width:46px;height:46px;border-radius:12px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px"><i class="fas fa-car"></i></div>
@@ -2106,13 +2158,13 @@ function renderFipe(d, hist){
         <div style="font-size:1.5rem;font-weight:800;color:var(--brand-dark)">${esc(d.Valor||'-')}</div>
         <div style="font-size:.75rem;color:var(--text-3)">Referência: ${esc((d.MesReferencia||'').trim())}${d.CodigoFipe?' · FIPE '+esc(d.CodigoFipe):''}</div></div>
     </div>
-    ${hist.length>=2?`<div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><b style="font-size:.9rem">Evolução (${hist.length} consultas)</b>${variacao}</div>
+    ${hist.length>=2?`<div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><b style="font-size:.9rem">${tituloHist}</b>${variacao}</div>
       ${sparkline(hist)}
       <div class="tbl-wrap" style="margin-top:12px;max-height:180px;overflow-y:auto"><table><thead><tr><th>Referência</th><th>Valor</th></tr></thead><tbody>
       ${hist.slice().reverse().map(h=>`<tr><td>${esc((h.mes||'').trim())}</td><td>${esc(h.label)}</td></tr>`).join('')}
       </tbody></table></div>`
-    :`<div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;font-size:.82rem;color:var(--text-2)"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Este é o primeiro retrato deste veículo. A cada consulta guardamos o valor, e a evolução mês a mês vai aparecendo aqui — ótimo para mostrar ao cliente na renovação.</div>`}
-    <p style="font-size:.72rem;color:var(--text-3);margin-top:12px"><i class="fas fa-circle-info"></i> Fonte: Tabela FIPE (parallelum), consultada ao vivo por marca/modelo.</p>`;
+    :`<div style="background:var(--surface-2);border-radius:10px;padding:12px 14px;font-size:.82rem;color:var(--text-2)"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Mostrando o valor atual. O histórico dos meses anteriores nem sempre está disponível ao vivo — quando não vem, vamos guardando um retrato a cada consulta e a evolução aparece aqui.</div>`}
+    <p style="font-size:.72rem;color:var(--text-3);margin-top:12px"><i class="fas fa-circle-info"></i> Fonte: Tabela FIPE${fonte==='brasil'?' (BrasilAPI, por código)':' (parallelum, por marca/modelo)'}, ao vivo.</p>`;
 }
 function sparkline(hist){
   const vals=hist.map(h=>h.valor).filter(v=>v!=null); if(vals.length<2) return '';
