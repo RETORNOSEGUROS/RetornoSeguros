@@ -388,6 +388,16 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
     else { const one=/(\(\d{2}\)\s?\d{4,5}-?\d{4})\s+[\w.+-]+@/.exec(t); if(one) r.celular=clean(one[1]); }
     const mMail=/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/.exec(t); if(mMail) r.email=mMail[0];
 
+    // Endereço completo + CEP (vem logo após o CPF/CNPJ do proponente)
+    const mAdr=/(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\s+(.+?)\s+([A-Z]{2})\s+(\d{5}-?\d{3})\b/.exec(t);
+    if(mAdr){ r.estado=mAdr[2]; r.cep=mAdr[3].replace(/^(\d{5})(\d{3})$/,'$1-$2');
+      const parts=mAdr[1].split(/\s{2,}/).map(x=>clean(x)).filter(Boolean);
+      if(parts.length>=3){ r.logradouro=parts[0]; r.numero=parts[1]; r.cidade=parts[parts.length-1]; r.bairro=parts.slice(2,parts.length-1).join(' ')||null; }
+      else if(parts.length===2){ r.logradouro=parts[0]; r.numero=parts[1]; }
+      else { r.logradouro=clean(mAdr[1]); }
+      r.enderecoCompleto=[ (r.logradouro||'')+(r.numero?', '+r.numero:''), r.bairro||'', (r.cidade||'')+(r.estado?'/'+r.estado:''), r.cep?'CEP '+r.cep:'' ].filter(x=>x&&x!=='/').join(' · ');
+    }
+
     // Principal condutor + estado civil (vêm logo após o e-mail)
     const mC=new RegExp('@[\\w.-]+\\.[A-Za-z]{2,}\\s+(Pr[óo]prio Segurado|[A-ZÀ-Ÿ][A-ZÀ-Ÿ\'’ ]{4,60}?)\\s+(Casado\\(a\\)(?: ou vive em uni[ãa]o est[áa]vel)?|Solteiro\\(a\\)|Divorciado\\(a\\)|Vi[úu]vo\\(a\\)|Separado\\(a\\)[^]{0,25}?|Uni[ãa]o est[áa]vel)').exec(t);
     if(mC){ const pc=clean(mC[1]); r.estadoCivil=clean(mC[2]);
@@ -1362,7 +1372,9 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
         <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'} ${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}</div></div>
         <div class="mov-f"><div class="k">E-mail</div><div class="v">${esc(c.email)||'-'}</div></div>
         <div class="mov-f"><div class="k">CPF/CNPJ</div><div class="v">${esc(c.cpf||c.cnpj)||'-'}</div></div>
+        <div class="mov-f"><div class="k">CEP</div><div class="v">${esc(c.cep)||'-'}</div></div>
         <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
+        <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc(c.endereco||c.enderecoCompleto)||'-'}</div></div>
         <div class="mov-f"><div class="k">Entrada</div><div class="v">${fmtData(c.criadoEm)}</div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:14px">
@@ -2069,6 +2081,9 @@ function cardProposta(r){
       ${f('Chassi',esc(r.chassi))}
       ${f('Principal condutor',r.principalCondutor?esc(r.principalCondutor)+(r.condutorProprio===false?' <span style="color:var(--warn);font-weight:700">(≠ segurado)</span>':''):null)}
       ${f('Estado civil',esc(r.estadoCivil))}
+      ${f('CEP',esc(r.cep))}
+      ${f('Cidade/UF',r.cidade?esc(r.cidade)+(r.estado?'/'+esc(r.estado):''):null)}
+      ${f('Endereço',esc(r.enderecoCompleto))}
       ${f('Franquia',esc(r.franquia))}
       ${f('Carro reserva',esc(r.carroReserva))}
       ${f('Código FIPE',r.codigoFipe?`${esc(r.codigoFipe)} ${fipeBtn({codigo:r.codigoFipe,marca:r.fabricante,modelo:r.modelo,ano:r.anoModelo,comb:r.combustivel})}`:null)}
@@ -2113,6 +2128,7 @@ async function confirmarExcluirProposta(id){ try{ await db.collection('propostas
 function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||null, segurado:r.segurado||null, cpfCnpj:r.cpfCnpj||null,
   email:r.email||null, celular:r.celular||null, telefone:r.telefone||null,
   principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
+  cep:r.cep||null, cidade:r.cidade||null, estado:r.estado||null, bairro:r.bairro||null, logradouro:r.logradouro||null, numero:r.numero||null, enderecoCompleto:r.enderecoCompleto||null,
   franquia:r.franquia||null, carroReserva:r.carroReserva||null, assistencias:r.assistencias||[],
   nrProposta:r.nrProposta||null, nrCotacao:r.nrCotacao||null, placa:r.placa||null, chassi:r.chassi||null, anoModelo:r.anoModelo||null,
   fabricante:r.fabricante||null, modelo:r.modelo||null, combustivel:r.combustivel||null, codigoFipe:r.codigoFipe||null,
@@ -2135,6 +2151,7 @@ async function baixarArquivo(id){ try{ const d=await db.collection('arquivos').d
 function apoliceDocFromProposta(r,pdfId){ return { clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
   clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
   principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
+  cep:r.cep||null, cidade:r.cidade||null, estado:r.estado||null, endereco:r.enderecoCompleto||null,
   ramo:r.ramo||'Auto', seguradora:r.seguradora||null, numeroApolice:r.nrProposta||null,
   dataInicioVigencia:converterData(r.vigenciaInicio), dataFimVigencia:converterData(r.vigenciaFim),
   valorPremio:r.premioLiquido||0, comissao:r.comissaoPct||0, comissaoValor:r.comissaoValor||0, status:'ativa',
@@ -2167,10 +2184,15 @@ async function vincularClienteProposta(r){
       if(!lead.whatsapp&&fone) upd.whatsapp=fone;
       if(!lead.cpf&&r.cpfCnpj) upd.cpf=r.cpfCnpj;
       if(!lead.ramo&&r.ramo) upd.ramo=r.ramo;
+      if(!lead.cep&&r.cep) upd.cep=r.cep;
+      if(!lead.cidade&&r.cidade) upd.cidade=r.cidade;
+      if(!lead.estado&&r.estado) upd.estado=r.estado;
+      if(!lead.endereco&&r.enderecoCompleto){ upd.endereco=r.enderecoCompleto; upd.bairro=r.bairro||null; }
       upd.atualizadoEm=FV.serverTimestamp(); await db.collection('leads_crm').doc(lead.id).update(upd);
     } else {
       const ref=await db.collection('leads_crm').add({ nome:r.segurado||null, cpf:r.cpfCnpj||null, whatsapp:fone||null, email:r.email||null,
         ramo:r.ramo||null, status:'cliente', origem:'proposta',
+        cep:r.cep||null, cidade:r.cidade||null, estado:r.estado||null, bairro:r.bairro||null, endereco:r.enderecoCompleto||null,
         criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
       leadId=ref.id;
     }
@@ -2219,8 +2241,9 @@ function verProposta(id){
         ${f('Principal condutor',p.principalCondutor?esc(p.principalCondutor)+(p.condutorProprio===false?' <span style="color:var(--warn);font-weight:700">(≠ segurado)</span>':''):null)}${f('Estado civil',esc(p.estadoCivil))}${f('Pagamento',p.formaPagamento?esc(p.formaPagamento+' · '+p.parcelas+'x'):null)}
         ${f('Veículo',esc([p.fabricante,p.modelo].filter(Boolean).join(' ')))}${f('Placa',esc(p.placa))}${f('Ano',esc(p.anoModelo))}
         ${f('Franquia',esc(p.franquia))}${f('Carro reserva',esc(p.carroReserva))}${f('Código FIPE',p.codigoFipe?`${esc(p.codigoFipe)} ${fipeBtn({codigo:p.codigoFipe,marca:p.fabricante,modelo:p.modelo,ano:p.anoModelo,comb:p.combustivel})}`:null)}
-        ${f('Prêmio líquido',money(p.premioLiquido))}${f('Prêmio total',money(p.premioTotal))}
+        ${f('Prêmio líquido',money(p.premioLiquido))}${f('Prêmio total',money(p.premioTotal))}${f('CEP',esc(p.cep))}
       </div>
+      ${p.enderecoCompleto?`<div class="mov-f" style="margin-bottom:14px"><div class="k">Endereço</div><div class="v">${esc(p.enderecoCompleto)}</div></div>`:''}
       <div style="background:var(--ok-bg);border-radius:10px;padding:12px 16px;margin-bottom:14px">
         <b style="color:var(--ok)">Comissão: ${p.comissaoPct!=null?p.comissaoPct+'% · '+money(p.comissaoValor):'—'}</b>
         <span style="font-size:.78rem;color:var(--text-2)"> (código ${esc(p.comissaoCodigo||'—')}, sobre o líquido)</span></div>
