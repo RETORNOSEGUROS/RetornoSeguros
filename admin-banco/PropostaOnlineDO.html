@@ -116,7 +116,14 @@
 <div class="modal" id="modal">
   <div class="modal-cx">
     <div class="rot" id="mTit">Confirmar interesse</div>
+    <div id="mOpcoes" style="display:none; margin-bottom:14px;">
+      <button class="btn btn-2" style="width:100%; margin-bottom:8px; text-align:left;" onclick="escolherDuvida('valor')">💰 O valor ficou acima do esperado</button>
+      <button class="btn btn-2" style="width:100%; margin-bottom:8px; text-align:left;" onclick="escolherDuvida('socio')">🤝 Preciso alinhar com meu sócio / diretoria</button>
+      <button class="btn btn-2" style="width:100%; margin-bottom:8px; text-align:left;" onclick="escolherDuvida('comparar')">⚖️ Quero comparar com outra proposta</button>
+      <button class="btn btn-2" style="width:100%; text-align:left;" onclick="escolherDuvida('outra')">💬 É outra coisa</button>
+    </div>
     <div style="font-size:14px; color:#475569; line-height:1.6; margin-bottom:16px;" id="mTxt"></div>
+    <div id="mForm" style="display:none;">
     <label class="lbl">Seu nome</label>
     <input class="campo" id="mNome" placeholder="Nome completo">
     <label class="lbl">Telefone / WhatsApp</label>
@@ -124,6 +131,7 @@
     <label class="lbl">Mensagem <span style="font-weight:400;">(opcional)</span></label>
     <textarea class="campo" id="mMsg" rows="3" placeholder="Alguma dúvida ou observação?"></textarea>
     <button class="btn btn-ok" id="mOk">Enviar</button>
+    </div>
     <button class="btn btn-2" style="margin-top:9px;" onclick="fecharModal()">Cancelar</button>
   </div>
 </div>
@@ -135,7 +143,7 @@
    limites, prêmio e parcelamento de forma legível. Produto-agnóstico:
    serve para D&O, frota, empresarial e o que vier.
    ══════════════════════════════════════════════════════════════════ */
-const ARQ_VERSAO = '2';
+const ARQ_VERSAO = '3';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cProposta Online v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 
@@ -272,16 +280,22 @@ function render() {
     </div></div>
 
     <div class="corpo">
+      ${P.lmiTotal ? `<div class="card" style="border:1.5px solid #86efac; background:linear-gradient(160deg,#f0fdf4,#ecfdf5);">
+        <div class="rot" style="color:#166534;">Proteção contratada para quem decide</div>
+        <div class="valorao" style="color:#065f46;">${fmtC(P.lmiTotal)}</div>
+        <div class="sub" style="color:#166534;">É o limite que esta apólice coloca entre um processo e o patrimônio pessoal dos administradores${P.empresaNome ? ' da ' + P.empresaNome : ''}.</div>
+      </div>` : ''}
+
       <div class="card">
-        <div class="rot">Prêmio total do seguro</div>
+        <div class="rot">Investimento no seguro</div>
         <div class="valorao">${fmt(P.premioTotal)}</div>
         <div class="sub">
           ${P.premioLiquido ? `Prêmio líquido ${fmt(P.premioLiquido)}` : ''}
           ${P.iof ? ` · IOF ${fmt(P.iof)}` : ''}
           ${P.custoApolice ? ` · custo de apólice ${fmt(P.custoApolice)}` : ''}
         </div>
+        ${(P.premioTotal && P.premioTotal > 0) ? `<div class="sub" style="margin-top:8px; color:#0f766e; font-weight:700;">Equivale a ${fmt(P.premioTotal / 365)} por dia${P.lmiTotal ? ` — protegendo ${fmtC(P.lmiTotal)}` : ''}.</div>` : ''}
         <div class="grade">
-          ${P.lmiTotal ? `<div class="mini"><b>Limite máximo</b><span>${fmtC(P.lmiTotal)}</span></div>` : ''}
           ${P.vigenciaInicio ? `<div class="mini"><b>Vigência</b><span style="font-size:13px;">${P.vigenciaInicio} a ${P.vigenciaFim || ''}</span></div>` : ''}
           ${P.ambito ? `<div class="mini"><b>Âmbito</b><span style="font-size:13px;">${P.ambito}</span></div>` : ''}
         </div>
@@ -501,16 +515,43 @@ window.baixarPDF = baixarPDF;
 
 /* ---- interesse ---- */
 let acaoAtual = null;
+let duvidaTipo = null;
 function abrirModal(tipo) {
   acaoAtual = tipo;
-  $('mTit').textContent = tipo === 'contratar' ? 'Quero contratar' : 'Tenho uma dúvida';
-  $('mTxt').textContent = tipo === 'contratar'
-    ? 'Perfeito! Deixe seu contato que o corretor dá sequência na emissão.'
-    : 'Conte o que ficou em aberto — o corretor responde em seguida.';
+  duvidaTipo = null;
+  if (tipo === 'contratar') {
+    $('mTit').textContent = 'Quero contratar';
+    $('mTxt').textContent = 'Perfeito! Deixe seu contato que o corretor dá sequência na emissão.';
+    $('mOpcoes').style.display = 'none';
+    $('mForm').style.display = 'block';
+    $('modal').classList.add('on');
+    setTimeout(() => $('mNome').focus(), 120);
+    return;
+  }
+  // Dúvida: primeiro entender QUAL é a dúvida — cada objeção tem um caminho
+  $('mTit').textContent = 'O que ficou em aberto?';
+  $('mTxt').textContent = '';
+  $('mOpcoes').style.display = 'block';
+  $('mForm').style.display = 'none';
   $('modal').classList.add('on');
-  setTimeout(() => $('mNome').focus(), 120);
 }
 window.abrirModal = abrirModal;
+
+// Resposta sob medida para cada objeção — e o corretor recebe qual foi a trava
+const RESPOSTAS_DUVIDA = {
+  valor: 'Entendido — e é mais comum do que parece. Muitas vezes dá para ajustar o limite, a franquia ou o parcelamento e chegar num valor que faça sentido. Deixe seu contato que o corretor te mostra as alternativas.',
+  socio: 'Faz todo sentido decidir junto. Use o botão "Baixar em PDF" para levar a proposta à conversa — e, se quiser, o corretor participa para responder as perguntas técnicas. Deixe seu contato:',
+  comparar: 'Ótimo sinal — comparar é o certo. Uma dica do ofício: compare limites, franquias e coberturas, não só o preço final. Se quiser, o corretor monta um comparativo lado a lado para você. Deixe seu contato:',
+  outra: 'Conte o que ficou em aberto — o corretor responde em seguida.'
+};
+function escolherDuvida(tp) {
+  duvidaTipo = tp;
+  $('mTxt').textContent = RESPOSTAS_DUVIDA[tp] || RESPOSTAS_DUVIDA.outra;
+  $('mOpcoes').style.display = 'none';
+  $('mForm').style.display = 'block';
+  setTimeout(() => $('mNome').focus(), 120);
+}
+window.escolherDuvida = escolherDuvida;
 function fecharModal() { $('modal').classList.remove('on'); }
 window.fecharModal = fecharModal;
 
@@ -518,7 +559,7 @@ $('mOk').onclick = async () => {
   const nome = $('mNome').value.trim();
   if (!nome) return $('mNome').focus();
   $('mOk').disabled = true; $('mOk').textContent = 'Enviando…';
-  await registrar(acaoAtual, { nome, telefone: $('mTel').value.trim(), mensagem: $('mMsg').value.trim() });
+  await registrar(acaoAtual, { nome, telefone: $('mTel').value.trim(), mensagem: $('mMsg').value.trim(), tipoDuvida: duvidaTipo || null });
   $('modal').innerHTML = `<div class="modal-cx" style="text-align:center;">
       <div style="font-size:48px;">✅</div>
       <div style="font-size:19px; font-weight:800; margin:10px 0 6px;">Recebemos!</div>
