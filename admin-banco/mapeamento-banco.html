@@ -4604,7 +4604,8 @@
         <p class="step-hint">Comece digitando o nome — a empresa já existe na carteira.</p>
         <div class="form-group">
           <label class="form-label">Empresa</label>
-          <input type="text" class="form-control" id="visitaEmpresa" placeholder="Digite o nome da empresa...">
+          <input type="text" class="form-control" id="visitaEmpresa" list="listaEmpresasVisita" autocomplete="off" placeholder="Comece a digitar e escolha da lista...">
+          <datalist id="listaEmpresasVisita"></datalist>
         </div>
         <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 9px; padding: 10px 12px; font-size: 13px; color: #166534; display: flex; align-items: center; gap: 8px;">
           <i data-lucide="check-circle" class="w-4 h-4"></i>
@@ -7468,6 +7469,9 @@
     _setPill('pillPtsPres', 'visita_presencial');
     _setPill('pillPtsReun', 'visita_reuniao');
     _setPill('pillPtsDig', 'visita_digital');
+    // Autocomplete: as empresas da carteira aparecem conforme você digita
+    const _dlEmp = document.getElementById('listaEmpresasVisita');
+    if (_dlEmp) _dlEmp.innerHTML = (EMPRESAS || []).map(x => `<option value="${(x.nome || '').replace(/"/g, '&quot;')}"></option>`).join('');
     // Data padrão: hoje (horário local, não UTC)
     const _vd = document.getElementById('visitaData');
     if (_vd) { const _n = new Date(); _vd.value = _n.getFullYear() + '-' + String(_n.getMonth() + 1).padStart(2, '0') + '-' + String(_n.getDate()).padStart(2, '0'); }
@@ -8595,6 +8599,42 @@
     return n;
   }
 
+  // ============= DATAS NO FUSO LOCAL =============
+  // "Hoje" no relógio do usuário (não em UTC): depois das 21h no Brasil,
+  // toISOString() já devolve o dia seguinte — estes helpers evitam isso.
+  function hojeLocalISO() {
+    const n = new Date();
+    return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+  }
+  function isoLocalDe(d) {
+    if (!d) return null;
+    const n = (d instanceof Date) ? d : (d && d.toDate ? d.toDate() : new Date(d));
+    if (isNaN(n)) return null;
+    return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+  }
+  // Vigência tolerante: aceita dd/mm/aaaa E aaaa-mm-dd; devolve no formato do exec antigo [_, dia, mês, ano]
+  function _vigMatch(sv) {
+    const t = (sv || '').toString().trim();
+    let m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
+    if (m) return m;
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
+    if (m) return [m[0], m[3], m[2], m[1]];
+    return null;
+  }
+  // Data tolerante: Timestamp do Firestore, Date, dd/mm/aaaa ou ISO → Date (ou null)
+  function _dataDe(v) {
+    if (!v) return null;
+    if (v.toDate) { const d = v.toDate(); return isNaN(d) ? null : d; }
+    if (v instanceof Date) return isNaN(v) ? null : v;
+    const t = String(v).trim();
+    let m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
+    if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0);
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+    const d = new Date(t);
+    return isNaN(d) ? null : d;
+  }
+
   // ============= FORMATAÇÃO BRASILEIRA =============
   function fmtBR(v, decimais) {
     if (decimais === undefined) decimais = 2;
@@ -9290,7 +9330,7 @@
           // Só conta como produção DO ANO se a vigência começou neste ano (igual ao Relatório de Metas).
           // Clientes antigos (vigência de anos anteriores) não inflam a produção do ano corrente.
           let anoProd = new Date().getFullYear();
-          const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+          const mVi = _vigMatch(pd.vigenciaInicio);
           if (mVi) anoProd = parseInt(mVi[3]);
           if (anoProd !== ano) return;
           prodReal += premio;
@@ -9312,9 +9352,13 @@
         : 0;
       document.getElementById('metaAnoPct').textContent = pctMedio.toFixed(0) + '%';
 
+      // Régua do "ideal" respeita o ANO selecionado: ano passado = régua cheia,
+      // ano futuro = régua no zero, ano corrente = proporcional a hoje.
       const hoje = new Date();
-      const diasDoAno = Math.floor((hoje - inicioAno) / (1000*60*60*24));
-      const pctIdeal = (diasDoAno / 365) * 100;
+      const fimAnoSel = new Date(ano, 11, 31);
+      const diasNoAno = Math.round((fimAnoSel - inicioAno) / 86400000) + 1;
+      const diasDoAno = Math.min(Math.max(Math.floor((hoje - inicioAno) / 86400000), 0), diasNoAno);
+      const pctIdeal = (diasDoAno / diasNoAno) * 100;
       const elRitmo = document.getElementById('metaAnoRitmo');
       const elRitmoSub = document.getElementById('metaAnoRitmoSub');
       if (meta.producao > 0 || meta.cotacoes > 0) {
@@ -9784,10 +9828,12 @@
   }
 
   // ============= PRAZOS POR ETAPA =============
+  let PRAZOS_AGENCIA = null; // o que o admin salvou em Config → Prazos (fonte da verdade)
   async function carregarPrazos() {
     if (!CTX.agenciaId) return PRAZOS_DEFAULT;
     try {
       const snap = await db.collection('mb_prazos').doc(CTX.agenciaId).get();
+      PRAZOS_AGENCIA = snap.exists ? snap.data() : {};
       if (snap.exists) PRAZOS_CACHE = { ...PRAZOS_DEFAULT, ...snap.data() };
       else PRAZOS_CACHE = { ...PRAZOS_DEFAULT };
     } catch(e) { PRAZOS_CACHE = { ...PRAZOS_DEFAULT }; }
@@ -9849,6 +9895,7 @@
     try {
       await db.collection('mb_prazos').doc(CTX.agenciaId).set(dados, { merge: true });
       PRAZOS_CACHE = dados;
+      PRAZOS_AGENCIA = { ...(PRAZOS_AGENCIA || {}), ...dados };
       alert('✅ Prazos atualizados');
     } catch(e) { alert('Erro: ' + e.message); }
   }
@@ -9861,11 +9908,10 @@
     else if (c.status === 'cotando') dataInicio = c.dataCotacao || c.dataSolicitacao;
     else if (c.status === 'enviada') dataInicio = c.dataEnvio || c.dataCotacao || c.dataSolicitacao;
     else if (c.status === 'reuniao_agendada') {
-      // Se tem dataReuniao (string dd/mm/aaaa), conta a partir dela
-      if (c.dataReuniao && /^\d{2}\/\d{2}\/\d{4}$/.test(c.dataReuniao)) {
-        const [d, m, a] = c.dataReuniao.split('/').map(Number);
-        const dtReuniao = new Date(a, m - 1, d);
-        return Math.floor((Date.now() - dtReuniao.getTime()) / 86400000);
+      // Se tem dataReuniao, conta a partir dela (qualquer formato)
+      const _dtReu = _dataDe(c.dataReuniao);
+      if (_dtReu) {
+        return Math.floor((Date.now() - _dtReu.getTime()) / 86400000);
       }
       dataInicio = c.atualizadoEm;
     }
@@ -9979,8 +10025,8 @@
       // pré-preenche com o ano corrente se estiver vazio
       const di = document.getElementById('relDataIni'), df = document.getElementById('relDataFim');
       const hj = new Date();
-      if (di && !di.value) di.value = new Date(hj.getFullYear(), 0, 1).toISOString().slice(0, 10);
-      if (df && !df.value) df.value = hj.toISOString().slice(0, 10);
+      if (di && !di.value) di.value = hj.getFullYear() + '-01-01';
+      if (df && !df.value) df.value = hojeLocalISO();
     }
     renderRelatorio();
   }
@@ -10137,7 +10183,7 @@
             if (premio <= 0) return;
             if (fProduto && rid !== fProduto) return;
             let d = new Date();
-            const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+            const mVi = _vigMatch(pd.vigenciaInicio);
             if (mVi) d = new Date(+mVi[3], +mVi[2] - 1, +mVi[1]);
             if (d < inicio) return; // fora do período
             if (jaTem.has(e.id + '|' + rid + '|' + d.getFullYear())) return;
@@ -10693,7 +10739,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '209';
+  const APP_VERSAO = '210';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12428,7 +12474,7 @@
         if (premio <= 0) return;
         if (_jaContadas.has(e.id + '|' + rid)) return;   // já entrou como fechamento
         let anoProd = new Date().getFullYear();
-        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+        const mVi = _vigMatch(pd.vigenciaInicio);
         if (mVi) anoProd = parseInt(mVi[3]);
         if (anoProd !== ano) return;
         const gid = ramoGrupo[rid] || 'outros';
@@ -12592,7 +12638,7 @@
           const c = d.data();
           if (c.status !== 'fechada' || !c.comissaoPct) return;
           const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-          if (!dt) return; const iso = dt.toISOString().slice(0, 10);
+          if (!dt) return; const iso = isoLocalDe(dt);
           if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return;
           if (CAMPANHA.fim && iso > CAMPANHA.fim) return;
           const base = (c.valor || 0) * (c.comissaoPct / 100);
@@ -12603,7 +12649,7 @@
       } catch (e) {}
       // pontos do próprio e total (dentro da campanha)
       const acoesSim = await _carregarAcoes(true).catch(() => []);
-      const _dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+      const _dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = isoLocalDe(dt); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
       let meusPontos = 0, totalPontosAg = 0, nApoiadores = 0;
       const setApoiadores = new Set();
       (EQUIPE_REAL || []).forEach(p => { if (p.ativo !== false && ['assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) setApoiadores.add(p.uid); });
@@ -12687,7 +12733,7 @@
     const dentroCampanha = a => {
       const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
       if (!dt) return true; // sem data, conta (retrocompat)
-      const iso = dt.toISOString().slice(0, 10);
+      const iso = isoLocalDe(dt);
       if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return false;
       if (CAMPANHA.fim && iso > CAMPANHA.fim) return false;
       return true;
@@ -12736,7 +12782,7 @@
         if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
         if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
         let dt = null;
-        if (c.dataDecisao && c.dataDecisao.toDate) dt = c.dataDecisao.toDate().toISOString().slice(0, 10);
+        if (c.dataDecisao && c.dataDecisao.toDate) dt = isoLocalDe(c.dataDecisao.toDate());
         else if (c.dataFechamento) dt = c.dataFechamento;
         if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
         if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
@@ -12927,7 +12973,7 @@
     try { acoes = await _carregarAcoes(true); } catch (e) {}
     box._carregado = true;
 
-    const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+    const dentro = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = isoLocalDe(dt); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
     const daAgencia = a => !CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId;
     const validas = acoes.filter(a => dentro(a) && daAgencia(a) && (a.pontos || 0) !== 0);
 
@@ -13193,7 +13239,7 @@
         if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
         if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
         let dt = null;
-        if (c.dataDecisao && c.dataDecisao.toDate) dt = c.dataDecisao.toDate().toISOString().slice(0, 10);
+        if (c.dataDecisao && c.dataDecisao.toDate) dt = isoLocalDe(c.dataDecisao.toDate());
         else if (c.dataFechamento) dt = c.dataFechamento;
         if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
         if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
@@ -13376,7 +13422,7 @@
         if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (!dt) return;
-        const iso = dt.toISOString().slice(0, 10);
+        const iso = isoLocalDe(dt);
         if (CAMPANHA.inicio && iso < CAMPANHA.inicio) return;
         if (CAMPANHA.fim && iso > CAMPANHA.fim) return;
         fechados.push(c);
@@ -13396,7 +13442,7 @@
 
     // ---- Pontos da campanha (pro pote do ranking) ----
     const acoesCamp = await _carregarAcoes(true).catch(() => []);
-    const _dentroCamp = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = dt.toISOString().slice(0, 10); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
+    const _dentroCamp = a => { const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null; if (!dt) return true; const iso = isoLocalDe(dt); return (!CAMPANHA.inicio || iso >= CAMPANHA.inicio) && (!CAMPANHA.fim || iso <= CAMPANHA.fim); };
     const pontosPorUid = {};
     (EQUIPE_REAL || []).forEach(p => { if (p.ativo !== false && ['rm', 'assistente', 'estagiario'].includes(p.perfil) && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId)) pontosPorUid[p.uid] = { nome: p.nome, perfil: p.perfil, cor: p.cor || '#6366f1', pontos: 0 }; });
     acoesCamp.forEach(a => { if (_dentroCamp(a) && (!CTX.agenciaId || !a.agenciaId || a.agenciaId === CTX.agenciaId) && pontosPorUid[a.usuarioId]) pontosPorUid[a.usuarioId].pontos += (a.pontos || 0); });
@@ -15280,16 +15326,15 @@
         // qualquer cotação que tenha passado por "reunião agendada" entra
         if (c.dataReuniao || c.status === 'reuniao_agendada' || c.status === 'fechada') {
           if (c.dataReuniao) {
-            // parse dd/mm/aaaa
-            const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(c.dataReuniao);
-            if (m) {
-              const dataReu = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+            // aceita dd/mm/aaaa, ISO e Timestamp — a reunião não some por formato
+            const dataReu = _dataDe(c.dataReuniao);
+            if (dataReu) {
               reunioes.push({
                 id: d.id, _origem: 'reuniao',
                 empresaId: c.empresaId, empresaNome: c.empresaNome,
                 produtoNome: c.produtoNome, produtoIcon: c.produtoIcon,
                 rmUid: c.solicitadoPorUid, rmNome: c.solicitadoPorNome,
-                dataReuniao: dataReu, dataReuniaoStr: c.dataReuniao,
+                dataReuniao: dataReu, dataReuniaoStr: (typeof c.dataReuniao === 'string' ? c.dataReuniao : dataReu.toLocaleDateString('pt-BR')),
                 statusFinal: c.status, valor: c.valor, valorProposto: c.valorProposto
               });
             }
@@ -16366,7 +16411,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!el) return;
     if (!CAMPANHA.inicio || !CAMPANHA.fim) { el.innerHTML = '<div style="font-size:12px;color:#94a3b8;">Defina as datas para ativar a campanha.</div>'; return; }
     const fmt = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; };
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = hojeLocalISO();
     const dentro = hoje >= CAMPANHA.inicio && hoje <= CAMPANHA.fim;
     el.innerHTML = `<div style="padding:12px 14px; background:${CAMPANHA.ativa ? '#f0fdf4' : '#f8fafc'}; border:1px solid ${CAMPANHA.ativa ? '#bbf7d0' : '#e2e8f0'}; border-radius:8px; font-size:13px; color:#334155;">
       <strong>Campanha ${CAMPANHA.ano}</strong> · ${fmt(CAMPANHA.inicio)} até ${fmt(CAMPANHA.fim)}
@@ -16752,7 +16797,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       snapB.forEach(d => {
         const a = { id: d.id, ...d.data() };
         if (!a.empresaId) return;
-        const dia = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().toISOString().slice(0, 10) : 'sd';
+        const dia = a.criadoEm && a.criadoEm.toDate ? isoLocalDe(a.criadoEm.toDate()) : 'sd';
         const sub = a.subtipo || '';
         const k = a.empresaId + '||' + a.tipo + '||' + sub + '||' + (a.tipo === 'dados_base' && sub ? 'unico' : dia);
         (porEmpTipo[k] = porEmpTipo[k] || []).push(a);
@@ -18959,13 +19004,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const selE = document.getElementById('relMetasEscopo');
     const podeVerTodos = CTX.isAdmin || perfilEfetivo() === 'chefe';
     const gerentes = (EQUIPE_REAL || []).filter(p => p.ativo && (p.perfil === 'rm' || p.perfil === 'chefe'));
-    if (selE && selE.options.length === 0) {
+    if (selE) {
+      // Reconstrói SEMPRE (trocar de agência troca os gerentes); mantém a escolha se ela ainda existir
+      const _valAnt = selE.value;
       let opts = '';
       if (podeVerTodos) opts += '<option value="agencia">Agência (soma de todos)</option>';
       opts += gerentes.map(p => `<option value="${p.uid}">${p.nome}</option>`).join('');
       if (!gerentes.some(p => p.uid === CTX.uid)) opts = `<option value="${CTX.uid}">${CTX.nome} (eu)</option>` + opts;
       selE.innerHTML = opts;
-      selE.value = podeVerTodos ? 'agencia' : CTX.uid;
+      const _aindaExiste = _valAnt && Array.prototype.some.call(selE.options, o => o.value === _valAnt);
+      selE.value = _aindaExiste ? _valAnt : (podeVerTodos ? 'agencia' : CTX.uid);
     }
     if (selE && !podeVerTodos) selE.value = CTX.uid;
     const escopo = selE ? selE.value : CTX.uid;
@@ -18975,7 +19023,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     // Meta doc
     let metaDoc = {};
-    try { const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get(); metaDoc = snap.exists ? snap.data() : {}; } catch (e) {}
+    try { if (CTX.agenciaId) { const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get(); metaDoc = snap.exists ? snap.data() : {}; } } catch (e) {}
     const porGer = metaDoc.porGerente || {};
     const metaGrupo = {};
     if (escopo === 'agencia') {
@@ -19027,7 +19075,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (premio <= 0) return;
         if (fechadasNoAno.has(e.id + '|' + rid)) return;   // já contado como fechamento (funil/backfill)
         let anoProd = new Date().getFullYear(), mesProd = new Date().getMonth();
-        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+        const mVi = _vigMatch(pd.vigenciaInicio);
         if (mVi) { anoProd = parseInt(mVi[3]); mesProd = parseInt(mVi[2]) - 1; }
         if (anoProd !== ano) return;
         const gid = ramoGrupo[rid] || 'outros';
@@ -19810,7 +19858,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         empresaId: a.empresaId, empresaNome: a.empresaNome,
         agenciaId: a.agenciaId || CTX.agenciaId,
         usuarioId: a.gerenteUid, usuarioNome: a.gerenteNome,
-        usuarioPerfil: 'rm',
+        usuarioPerfil: ((EQUIPE_REAL || []).find(pp => pp.uid === a.gerenteUid) || {}).perfil || 'rm',
         pontos: pts,
         tipoVisita: a.tipo,
         agendamentoRef: a.id,
@@ -19880,7 +19928,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     const primeiroDiaSemana = new Date(ano, mes, 1).getDay(); // 0=dom
     const diasNoMes = new Date(ano, mes + 1, 0).getDate();
-    const hojeStr = new Date().toISOString().slice(0, 10);
+    const hojeStr = hojeLocalISO();
 
     let celulas = '';
     const nomesDias = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
@@ -20052,7 +20100,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ---------- Presença do corretor na agência ----------
   function abrirPresencaAgencia() {
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = hojeLocalISO();
     document.getElementById('paData').value = hoje;
     document.getElementById('paHoraInicio').value = '';
     document.getElementById('paHoraFim').value = '';
@@ -20972,8 +21020,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ============= SALVAR VISITA REAL =============
   async function salvarVisitaReal() {
     const empresaNome = document.getElementById('visitaEmpresa').value.trim();
-    const empresa = EMPRESAS.find(e => e.nome === empresaNome) || EMPRESAS[0];
-    if (!empresa) return alert('Empresa não encontrada');
+    // Nunca chutar: se o nome não bate com nenhuma empresa da carteira, avisa e para
+    // (antes, um erro de digitação caía silenciosamente na primeira empresa da lista).
+    const _nomeBusca = empresaNome.toLowerCase();
+    const empresa = EMPRESAS.find(e => (e.nome || '').trim().toLowerCase() === _nomeBusca);
+    if (!empresa) return alert('Não encontrei a empresa "' + (empresaNome || '—') + '" na carteira.\n\nComece a digitar o nome e escolha uma das opções que aparecem na lista — assim a visita cai na empresa certa.');
+    // Anti duplo-clique: mesma empresa em <5s salva uma visita só
+    if (salvarVisitaReal._ult && salvarVisitaReal._ult.k === empresa.id && (Date.now() - salvarVisitaReal._ult.t) < 5000) return;
+    salvarVisitaReal._ult = { k: empresa.id, t: Date.now() };
 
     // Dados do contato
     const contato = {
@@ -21387,7 +21441,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const antesEraZero = (e.funcionarios || 0) === 0;
       // IDs determinísticos: salvar de novo não duplica pontos (1ª vez por empresa,
       // edições no máximo uma por dia por empresa).
-      const _diaK = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const _diaK = hojeLocalISO().replace(/-/g, '');
       if (antesEraZero && qtd > 0) {
         await db.collection('mb_acoes').doc('fnc_' + e.id).set({
           tipo: 'dados_base', subtipo: 'funcionarios',
@@ -21534,7 +21588,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }, { merge: true });
       } else {
         // edições posteriores: uma por dia por empresa (evita farm ao salvar repetido)
-        const diaKey = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const diaKey = hojeLocalISO().replace(/-/g, '');
         await db.collection('mb_acoes').doc('socedit_' + e.id + '_' + diaKey).set({
           tipo: 'editou_socios',
           empresaId: e.id, empresaNome: e.nome,
@@ -21750,7 +21804,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const bfRef = db.collection('mb_cotacoes').doc('bf_' + e.id + '_' + p.id);
       if (statusVisual === 'conosco' && premioInformado > 0) {
         const vi = (document.getElementById('vigInicio').value || '').trim();
-        const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(vi);
+        const mVi = _vigMatch(vi);
         const temFechadaReal = (COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === p.id && c.status === 'fechada' && c.origem !== 'backfill_cliente');
         if (mVi && !temFechadaReal) {
           const dataInicio = new Date(parseInt(mVi[3]), parseInt(mVi[2]) - 1, parseInt(mVi[1]));
@@ -21849,6 +21903,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const pen = (PRAZOS_CACHE && PRAZOS_CACHE.penalidade) || (typeof PRAZOS_DEFAULT !== 'undefined' ? PRAZOS_DEFAULT.penalidade : 20);
     const novo = { penalidade: pen };
     ETAPAS_FUNIL.forEach(e => { novo[e.id] = e.prazoDias || 7; });
+    // O que o admin salvou POR AGÊNCIA (Config → Prazos) vence os padrões das etapas
+    // — antes, recarregar o funil descartava os prazos salvos.
+    if (PRAZOS_AGENCIA) Object.keys(PRAZOS_AGENCIA).forEach(k => {
+      if (typeof PRAZOS_AGENCIA[k] === 'number' && PRAZOS_AGENCIA[k] > 0) novo[k] = PRAZOS_AGENCIA[k];
+    });
     PRAZOS_CACHE = novo;
   }
   // ação (modal) que cada status-destino dispara
@@ -24204,7 +24263,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             const premio = pd.premioAnual || pd.valorFechado || 0;
             if (premio <= 0) return;
             let d = new Date();
-            const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+            const mVi = _vigMatch(pd.vigenciaInicio);
             if (mVi) d = new Date(+mVi[3], +mVi[2] - 1, +mVi[1]);
             if (jaTem.has(e.id + '|' + rid + '|' + d.getFullYear())) return; // já contado por um fechamento
             const prod = (PRODUTOS || []).find(p => p.id === rid) || {};
@@ -24254,7 +24313,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           const premio = pd.premioAnual || pd.valorFechado || 0;
           if (premio <= 0) return;
           let d = new Date();
-          const mVi = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(pd.vigenciaInicio || '');
+          const mVi = _vigMatch(pd.vigenciaInicio);
           if (mVi) d = new Date(+mVi[3], +mVi[2] - 1, +mVi[1]);
           if (_jaTemAg.has(e.id + '|' + rid + '|' + d.getFullYear())) return;
           if (fAno && d.getFullYear() !== fAno) return;
@@ -24285,8 +24344,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // ===== Meta anual: da agência e do RM (total ou do grupo selecionado) =====
       let metaAgencia = 0, metaMinhaRM = 0;
       try {
-        const metaDoc = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${fAno}`).get();
-        if (metaDoc.exists) {
+        const metaDoc = CTX.agenciaId ? await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${fAno}`).get() : null;
+        if (metaDoc && metaDoc.exists) {
           const md = metaDoc.data();
           const _valGrupo = obj => (obj && typeof obj === 'object') ? (obj.prod || 0) : (obj || 0);
           if (fGrupo) {
