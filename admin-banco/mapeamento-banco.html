@@ -8900,20 +8900,38 @@
         zeradoPorUid: CTX.uid, zeradoPorNome: CTX.nome
       }, { merge: true });
 
-      // Estorno de pontos
-      if (jaPontuou && dados.ultimoAutorUid) {
-        await db.collection('mb_acoes').add({
-          tipo: 'mapeamento_estorno',
-          empresaId, empresaNome: (EMPRESAS.find(e=>e.id===empresaId) || {}).nome || '—',
-          produto: produtoId, produtoNome,
-          agenciaId: CTX.agenciaId,
-          usuarioId: dados.ultimoAutorUid,
-          usuarioNome: dados.ultimoAutorNome || 'desconhecido',
-          pontos: -getPonto('mapear_produto'),
-          motivo: `Mapeamento zerado pelo admin (${CTX.nome})`,
-          canceladoPorUid: CTX.uid, canceladoPorNome: CTX.nome,
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        });
+      // Estorno de pontos: lê as ações REAIS deste produto e devolve exatamente o que
+      // cada pessoa ganhou — mesmo que a tabela de pontos tenha mudado desde então.
+      // Estornos anteriores entram negativos na soma (zerar duas vezes não estorna em dobro).
+      if (jaPontuou) {
+        try {
+          const TIPOS_MAP = ['mapeamento', 'mapeou_produto', 'mapeamento_via_link', 'mapeamento_estorno'];
+          const snapEst = await db.collection('mb_acoes').where('empresaId', '==', empresaId).get();
+          const porUid = {};
+          snapEst.forEach(d => {
+            const a = d.data();
+            if (!TIPOS_MAP.includes(a.tipo)) return;
+            if ((a.produto || a.produtoId) !== produtoId) return;
+            if (!a.usuarioId) return;
+            if (!porUid[a.usuarioId]) porUid[a.usuarioId] = { nome: a.usuarioNome || '—', pontos: 0 };
+            porUid[a.usuarioId].pontos += (a.pontos || 0);
+          });
+          for (const [uid, pu] of Object.entries(porUid)) {
+            if (pu.pontos <= 0) continue; // nada líquido a devolver desta pessoa
+            await db.collection('mb_acoes').add({
+              tipo: 'mapeamento_estorno',
+              empresaId, empresaNome: (EMPRESAS.find(e => e.id === empresaId) || {}).nome || '—',
+              produto: produtoId, produtoNome,
+              agenciaId: CTX.agenciaId,
+              usuarioId: uid, usuarioNome: pu.nome,
+              pontos: -pu.pontos,
+              estornoExato: true, // espelha o que foi pago; o recálculo não recarimba
+              motivo: `Mapeamento zerado pelo admin (${CTX.nome}) — devolvido o que a ação pagou`,
+              canceladoPorUid: CTX.uid, canceladoPorNome: CTX.nome,
+              criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } catch (eEst) { console.warn('estorno mapeamento', eEst); }
       }
 
       alert('✅ Mapeamento zerado.' + (jaPontuou ? ' Pontos estornados.' : ''));
@@ -10675,7 +10693,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '208';
+  const APP_VERSAO = '209';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12885,7 +12903,12 @@
     contato_decisor: { icon: '📧', txt: 'Cadastrou contato do decisor' },
     contato_rh: { icon: '🧑‍💼', txt: 'Cadastrou contato do RH' },
     checklist_item: { icon: '✓', txt: 'Marcou item de checklist' },
-    visita: { icon: '📍', txt: 'Registrou visita' }
+    visita: { icon: '📍', txt: 'Registrou visita' },
+    pesquisa_gerada: { icon: '📋', txt: 'Gerou pesquisa de benefícios' },
+    pesquisa_resposta: { icon: '🗳️', txt: 'Resposta recebida na pesquisa' },
+    pesquisa_bonus10: { icon: '🎉', txt: 'Bônus: pesquisa com 10+ respostas' },
+    mapeamento_estorno: { icon: '↩️', txt: 'Mapeamento zerado (estorno)' },
+    fechamento_estorno: { icon: '↩️', txt: 'Produção cancelada (estorno)' }
   };
 
   const _PERFIL_LBL = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', chefe: 'Gerente-chefe', corretor: 'Corretor', admin: 'Corretor' };
@@ -13063,6 +13086,11 @@
         criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
       };
+      // Anti duplo-clique: assumir a mesma oportunidade em <5s grava uma vez só
+      const _kAss = empresaId + '|' + produtoId + '|assumir';
+      if (assumirOportunidade._ult && assumirOportunidade._ult.k === _kAss && (Date.now() - assumirOportunidade._ult.t) < 5000) return;
+      assumirOportunidade._ult = { k: _kAss, t: Date.now() };
+
       const ref = await db.collection('mb_cotacoes').add(cot);
 
       // pontua quem assumiu, com peso temporal (assumir cedo vale mais)
@@ -15737,9 +15765,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         });
 
         for (const resp of naoProcessadas) {
+          // ID determinístico: se duas pessoas abrirem a aba ao mesmo tempo,
+          // os dois "pagamentos" caem no MESMO registro — nunca duplica.
           // 1 ponto pra quem gerou
           if (p.geradoPorUid) {
-            await db.collection('mb_acoes').add({
+            await db.collection('mb_acoes').doc('pesqresp_' + p.id + '_' + resp.id + '_' + p.geradoPorUid).set({
               tipo: 'pesquisa_resposta',
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, respostaId: resp.id,
@@ -15747,11 +15777,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               usuarioId: p.geradoPorUid, usuarioNome: p.geradoPorNome,
               pontos: getPonto('pesquisa_resposta'), motivo: 'Resposta recebida (gerador da pesquisa)',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            }, { merge: true });
           }
           // 1 ponto pro RM (se diferente de quem gerou)
           if (p.rmUid && p.rmUid !== p.geradoPorUid) {
-            await db.collection('mb_acoes').add({
+            await db.collection('mb_acoes').doc('pesqresp_' + p.id + '_' + resp.id + '_' + p.rmUid).set({
               tipo: 'pesquisa_resposta',
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, respostaId: resp.id,
@@ -15759,7 +15789,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               usuarioId: p.rmUid, usuarioNome: p.rmNome,
               pontos: getPonto('pesquisa_resposta'), motivo: 'Resposta recebida (RM da empresa)',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            }, { merge: true });
           }
           await db.collection('mb_pesquisas_colaboradores').doc(p.id).collection('respostas').doc(resp.id)
             .update({ pontuacaoProcessada: true });
@@ -15768,24 +15798,24 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         // Conferir bônus de 10
         if (!p.bonus10Dado && (p.totalRespostas || 0) >= 10) {
           if (p.geradoPorUid) {
-            await db.collection('mb_acoes').add({
+            await db.collection('mb_acoes').doc('pesqb10_' + p.id + '_' + p.geradoPorUid).set({
               tipo: 'pesquisa_bonus10',
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, agenciaId: p.agenciaId,
               usuarioId: p.geradoPorUid, usuarioNome: p.geradoPorNome,
               pontos: getPonto('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            }, { merge: true });
           }
           if (p.rmUid && p.rmUid !== p.geradoPorUid) {
-            await db.collection('mb_acoes').add({
+            await db.collection('mb_acoes').doc('pesqb10_' + p.id + '_' + p.rmUid).set({
               tipo: 'pesquisa_bonus10',
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, agenciaId: p.agenciaId,
               usuarioId: p.rmUid, usuarioNome: p.rmNome,
               pontos: getPonto('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            }, { merge: true });
           }
           await db.collection('mb_pesquisas_colaboradores').doc(p.id).update({ bonus10Dado: true });
         }
@@ -16534,7 +16564,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       case 'mapeamento':
       case 'mapeou_produto':       return getPonto('mapear_produto');
       case 'mapeamento_via_link':  return getPonto('mapear_produto') + getPonto('mapear_extra_link');
-      case 'mapeamento_estorno':   return -getPonto('mapear_produto');
+      case 'mapeamento_estorno':   return a.estornoExato ? null : -getPonto('mapear_produto');
 
       // --- Cadastro ---
       case 'dados_base':           return getPonto('funcionarios_primeira');
@@ -16545,6 +16575,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       case 'pesquisa_gerada':      return getPonto('pesquisa_gerada');
       case 'pesquisa_resposta':    return getPonto('pesquisa_resposta');
       case 'pesquisa_bonus10':     return getPonto('pesquisa_bonus10');
+      case 'agenda_com_corretor':    return getPonto('agenda_com_corretor');
+      case 'checklist_ultimo_etapa': return getPonto('checklist_ultimo_etapa');
+      case 'percurso_completo':      return (a.itensMarcados || 1) * getPonto('percurso_completo_item');
       case 'apresentacao_enviada':   return getPonto('apresentacao_enviada');
       case 'apresentacao_interesse': return getPonto('apresentacao_interesse');
       case 'proposta_publicada':     return getPonto('proposta_publicada');
@@ -19625,6 +19658,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const novaHora = prompt('Confirmar/ajustar horário (HH:MM) para travar a agenda:', a ? (a.hora || '') : '');
     if (novaHora === null) return; // cancelou
     try {
+      // Revalida NO BANCO antes de gravar: se o pedido já foi tratado (ou dois
+      // cliques ao mesmo tempo), não cria agendamento nem ponto de novo.
+      const _snapAg = await db.collection('mb_agenda').doc(id).get();
+      const _stAtual = _snapAg.exists ? _snapAg.data().status : null;
+      if (_stAtual && _stAtual !== 'pendente') {
+        flashSalvo('Este pedido já foi tratado (' + _stAtual + ').');
+        renderAgendaCorretor();
+        return;
+      }
       await db.collection('mb_agenda').doc(id).set({
         status: 'aprovado', hora: novaHora || (a ? a.hora : '') || '',
         aprovadoEm: firebase.firestore.FieldValue.serverTimestamp()
@@ -19665,7 +19707,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (a && a.tipo !== 'bloqueio' && a.solicitanteUid && a.solicitanteUid !== CTX.uid) {
         try {
           const _pts = getPonto('agenda_com_corretor');
-          if (_pts > 0) await db.collection('mb_acoes').add({
+          // ID derivado do pedido: aprovar duas vezes não paga duas vezes
+          if (_pts > 0) await db.collection('mb_acoes').doc('agcorr_' + id).set({
             tipo: 'agenda_com_corretor',
             empresaId: a.empresaId, empresaNome: a.empresaNome,
             agenciaId: CTX.agenciaId || null,
@@ -19675,7 +19718,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             motivo: `Chamou ${CTX.nome} para a visita e teve confirmação`,
             agendaId: id,
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-          });
+          }, { merge: true });
           _ACOES_CACHE = null;
           _refrescarCampanhaSeAberta();
         } catch (ePt) { console.warn('ponto do convite', ePt); }
@@ -21918,6 +21961,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // histórico inicial (entrada no funil)
       cot.historico = [{ status: 'solicitada', label: 'Iniciada · ' + (ORIGEM_INFO[origem] || {}).label, obs: opts.observacoes || null, por: creditoNome || null, em: new Date().toISOString() }];
 
+      // Anti duplo-clique: mesma empresa+produto em <5s cria uma cotação só
+      const _kCot = empresa.id + '|' + produto.id;
+      if (criarCotacao._ult && criarCotacao._ult.k === _kCot && (Date.now() - criarCotacao._ult.t) < 5000) return;
+      criarCotacao._ult = { k: _kCot, t: Date.now() };
+
       const ref = await db.collection('mb_cotacoes').add(cot);
 
       // Pontuar quem foi creditado (não o admin se ele atribuiu)
@@ -22700,6 +22748,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function toggleChecklist(cotacaoId, itemKey, marcado) {
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
+    // DESMARCAR é só com o admin: o RM avisa, o admin desmarca (os pontos saem)
+    // e aí o item pode ser marcado de novo. Evita marca-desmarca no placar.
+    if (!marcado && !CTX.isAdmin) {
+      flashSalvo('Desmarcar um item é com o admin — avise ele para ajustar.');
+      try { abrirNegociacao(cotacaoId); } catch (e) {}  // redesenha, desfaz o clique visual
+      return;
+    }
     // TRAVA DE SEGURANÇA: confere a responsabilidade do item antes de gravar.
     // A UI já desabilita, mas isto impede burlar pelo console.
     try {
