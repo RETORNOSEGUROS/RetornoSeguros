@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '214';
+  const APP_VERSAO = '215';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17019,7 +17019,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       cont.innerHTML = Object.entries(porProd).map(([pid, lista]) => {
         const nCotar = lista.filter(x => x.ultimoInteresse === 'cotar' || x.questionarioCompleto).length;
-        const nAlta = lista.filter(x => x.respostas && x.respostas._risco && x.respostas._risco.nivel === 'ALTA').length;
+        const nAlta = lista.filter(x => { const g = x.respostas && (x.respostas._risco || x.respostas._grau); return g && (g.nivel === 'ALTA' || g.nivel === 'ALTO'); }).length;
         return `<div style="margin-bottom:12px;">
           <div onclick="var d=document.getElementById('gp_${pid}'); var ab=d.style.display==='none'; d.style.display=ab?'block':'none'; this.querySelector('.gseta').textContent=ab?'▾':'▸';"
                style="cursor:pointer; background:white; border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -17045,18 +17045,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // Card de uma visita
   function _apCard(a) {
-    const corNivel = { ALTA: '#dc2626', MODERADA: '#d97706', CONTROLADA: '#16a34a' };
+    const corNivel = { ALTA: '#dc2626', MODERADA: '#d97706', CONTROLADA: '#16a34a',
+                       ALTO: '#dc2626', MODERADO: '#d97706', BAIXO: '#16a34a' };
     const rotInteresse = { cotar: ['💎 Pediu cotação', '#16a34a', '#dcfce7'], contato: ['📞 Pediu contato', '#1d4ed8', '#dbeafe'], pdf: ['📄 Baixou o PDF', '#7c3aed', '#ede9fe'] };
     const ts = a.atualizadoEm || a.criadoEm;
     const dt = ts && ts.toDate ? ts.toDate() : null;
     const quando = dt ? dt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
     const r = a.respostas || {}, q = a.questionario || {}, ct = q.contato || {};
-    const nivel = (r._risco && r._risco.nivel) || null;
+    // D&O mede exposição; Garantia mede imobilização de capital. Mesma barra, rótulo diferente.
+    const _term = r._risco || r._grau || null;
+    const nivel = (_term && _term.nivel) || null;
+    const rotTerm = r._grau && !r._risco ? 'IMOBILIZAÇÃO' : 'EXPOSIÇÃO';
     const int = a.ultimoInteresse ? rotInteresse[a.ultimoInteresse] : null;
     const quem = ct.nome || a.destinatario || a.empresaNome || 'Visitante sem identificação';
     const empresa = q.empresa || a.empresaNome || '';
 
-    const linhas = Object.entries(r).filter(([k]) => k !== '_risco')
+    const linhas = Object.entries(r).filter(([k]) => k.charAt(0) !== '_')
       .map(([k, v]) => {
         const t = (v && v.texto) || (v && Array.isArray(v.textos) ? v.textos.join(' · ') : '') || '—';
         return `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${_apLabel(k)}:</span> <strong style="color:#334155;">${t}</strong></div>`;
@@ -17065,7 +17069,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    return `<div style="background:white; border-radius:14px; padding:16px 18px; margin-bottom:9px; border:1px solid ${nivel === 'ALTA' ? '#fecaca' : '#f1f5f9'};">
+    const blocoGar = _apGarantia(a);
+
+    return `<div style="background:white; border-radius:14px; padding:16px 18px; margin-bottom:9px; border:1px solid ${(nivel === 'ALTA' || nivel === 'ALTO') ? '#fecaca' : '#f1f5f9'};">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
         <div style="min-width:0;">
           <div style="font-size:14.5px; font-weight:800; color:#0f172a;">${quem}${ct.cargo ? `<span style="font-weight:500; color:#94a3b8; font-size:12px;"> · ${ct.cargo}</span>` : ''}</div>
@@ -17075,7 +17081,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           </div>
         </div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-          ${nivel ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:${corNivel[nivel]}18; color:${corNivel[nivel]};">EXPOSIÇÃO ${nivel}</span>` : ''}
+          ${nivel ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:${corNivel[nivel]}18; color:${corNivel[nivel]};">${rotTerm} ${nivel}</span>` : ''}
           ${int ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:${int[2]}; color:${int[1]};">${int[0]}</span>` : ''}
           ${a.questionarioCompleto ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:#fef3c7; color:#92400e;">📋 questionário completo</span>` : ''}
           ${(!a.concluiu && !a.questionarioCompleto) ? `<span style="font-size:10px; font-weight:700; padding:3px 9px; border-radius:100px; background:#f1f5f9; color:#94a3b8;">parou na etapa ${a.cenasVistas || a.passo || 1}</span>` : ''}
@@ -17087,6 +17093,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       ${(linhas || linhasQ) ? `<div onclick="var d=this.nextElementSibling; var ab=d.style.display==='none'; d.style.display=ab?'grid':'none'; this.textContent=ab?'▲ ocultar respostas':'▾ ver as respostas';"
            style="cursor:pointer; font-size:11.5px; color:#4338ca; font-weight:700;">▾ ver as respostas</div>
         <div style="display:none; gap:3px; margin-top:7px; background:#fafbfc; border-radius:8px; padding:10px 12px;">${linhas}${(linhas && linhasQ) ? '<div style="height:8px;"></div>' : ''}${linhasQ}</div>` : ''}
+      ${blocoGar}
     </div>`;
   }
 
@@ -17506,6 +17513,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function _detectarProdutoId(nome) {
     const n = (nome || '').toLowerCase();
     if (/d&o|administradores|diretores/.test(n)) return 'do';
+    if (/garantia/.test(n)) return 'garantia';
     if (/frota|autom[óo]vel|ve[íi]culo/.test(n)) return 'frota';
     if (/empresarial|patrimonial/.test(n)) return 'empresarial';
     return 'do';
@@ -17672,7 +17680,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   const APRESENTACOES_DEFAULT = [
     { id: 'do', nome: 'D&O — Responsabilidade de Administradores',
       arq: 'ApresentacaoDO.html', arqQ: 'QuestionarioDO.html', arqProp: 'PropostaOnlineDO.html',
-      desc: 'Protege o patrimônio pessoal de diretores, sócios e gerentes com poder de decisão.' }
+      desc: 'Protege o patrimônio pessoal de diretores, sócios e gerentes com poder de decisão.' },
+    { id: 'garantia', nome: 'Seguro Garantia',
+      arq: 'ApresentacaoGarantia.html', arqQ: null, arqProp: null,
+      desc: 'Substitui dinheiro parado — depósito judicial, caução, fiança bancária — por uma apólice, e devolve o caixa para a empresa.' }
   ];
   let APRESENTACOES = APRESENTACOES_DEFAULT.slice();
   let VISUALIZADOR_PROPOSTA = { do: 'PropostaOnlineDO.html' };
@@ -17904,6 +17915,46 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.gerarLinkApresentacao = gerarLinkApresentacao;
 
+  // Seguro Garantia: o ouro não é cobertura removida, é ONDE a apólice entra.
+  // Os códigos vêm do analitico.linhas da apresentação; aqui viram nome legível.
+  const _LINHAS_GARANTIA = {
+    jud_recursal: 'Depósito recursal trabalhista', jud_trab: 'Execução trabalhista',
+    jud_fiscal: 'Execução fiscal e tributário', jud_civel: 'Processo cível',
+    jud_parcel: 'Parcelamento administrativo fiscal', fianca_sub: 'Substituição de fiança bancária',
+    lic_bid: 'Garantia de proposta em licitação', lic_exec: 'Execução de contrato público',
+    ctr_forn: 'Fornecimento / prestação de serviço', ctr_adiant: 'Adiantamento de pagamento',
+    ctr_reten: 'Retenção de pagamentos', ctr_obra: 'Obra e construção',
+    ctr_pedir: 'Exigir garantia dos fornecedores', energia: 'Compra e venda de energia',
+    aduaneira: 'Aduaneira', recebiveis: 'Antecipação de recebíveis',
+    imobiliaria: 'Incorporação e imobiliária', concessao: 'Concessão e PPP'
+  };
+
+  const _fxC = n => {
+    if (n === null || n === undefined) return null;
+    if (n >= 1e6) return 'R$ ' + (n / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi';
+    if (n >= 1e3) return 'R$ ' + (n / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) + ' mil';
+    return 'R$ ' + Number(n).toLocaleString('pt-BR');
+  };
+
+  // Bloco extra no card, só para o Garantia: a pauta pronta da próxima conversa.
+  function _apGarantia(a) {
+    const an = a.analitico;
+    if (!an || an.produto !== 'garantia') return '';
+    const linhas = (an.linhas || []).filter(c => _LINHAS_GARANTIA[c]);
+    const min = an.caixaPresoMin, max = an.caixaPresoMax;
+    const faixa = (min === null || min === undefined) && (max === null || max === undefined) ? null
+      : (max === null || max === undefined) ? 'acima de ' + _fxC(min)
+      : (!min ? 'até ' + _fxC(max) : _fxC(min) + ' a ' + _fxC(max));
+    if (!linhas.length && !faixa) return '';
+    return `<div style="margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">
+      ${faixa ? `<div style="font-size:11.5px; color:#64748b; margin-bottom:5px;"><span style="color:#94a3b8;">Caixa que ele diz ter imobilizado em garantia:</span> <strong style="color:#166534;">${faixa}</strong></div>` : ''}
+      ${linhas.length ? `<div style="font-size:11.5px; color:#64748b;">
+        <div style="color:#1d4ed8; margin-bottom:3px;">Onde o Seguro Garantia entra (${linhas.length}) — a pauta da conversa:</div>
+        <div style="color:#1e3a6d; background:#eff6ff; border-radius:7px; padding:7px 9px; font-weight:600;">${linhas.map(c => _LINHAS_GARANTIA[c]).join(' · ')}</div>
+      </div>` : ''}
+    </div>`;
+  }
+
   // Campos internos que não são resposta do cliente — não vão para a tela.
   const _AP_OCULTOS = ['contato', 'cobPorBloco', '_dados', 'sondasCod'];
 
@@ -17963,6 +18014,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       conhecia: 'Já conhecia o produto', decisoesDia: 'Decisões por dia', jaProcessado: 'Já foi citado em processo',
       dependentes: 'Dependentes', equipe: 'Pessoas sob gestão', regulado: 'Setor regulado', percepcao: 'Percepção do risco',
       oQueMudaria: 'O que mudaria para ele',
+      // apresentação — Seguro Garantia
+      comoGarante: 'Como garante hoje', valorParado: 'Tem valor parado em processo',
+      valorParadoFaixa: 'Quanto está parado', execFiscal: 'Execução fiscal / penhora',
+      nFiancas: 'Fianças bancárias em vigor', sabeTaxa: 'Sabe a taxa da fiança',
+      licita: 'Licitações / contrato público', contratual: 'Situações contratuais',
+      especificas: 'Linhas específicas', fazSentido: 'Faz sentido aprovar o limite',
+      alinhamento: 'Alinhamento no fim',
       // questionário
       empresa: 'Empresa', receitaLiquida: 'Receita líquida', patrimonio: 'Patrimônio líquido',
       totalAtivos: 'Total de ativos', nAdmins: 'Cargos de gestão', setor: 'Setor',
