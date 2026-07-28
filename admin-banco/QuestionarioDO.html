@@ -54,6 +54,13 @@
   .op:hover,.op:focus { background:rgba(56,189,248,.14); border-color:var(--ciano); transform:translateY(-2px); outline:none; }
   @keyframes pulsar { 0%,100%{box-shadow:0 0 0 0 rgba(56,189,248,.28);} 50%{box-shadow:0 0 0 7px rgba(56,189,248,0);} }
   .op:nth-child(2){animation-delay:.2s;} .op:nth-child(3){animation-delay:.4s;} .op:nth-child(4){animation-delay:.6s;}
+  .op.sel { background:rgba(56,189,248,.2); border-color:var(--ciano); animation:none; }
+  .op.sel::after { content:' ✓'; color:var(--ciano); }
+  .sonda-p { font-size:15px; line-height:1.6; color:#dbe6ff; font-weight:600; margin-bottom:14px; }
+  .sonda-r { font-size:13.5px; line-height:1.6; color:#bfe3ff; background:rgba(56,189,248,.1);
+    border-left:2px solid var(--ciano); padding:11px 14px; border-radius:0 12px 12px 0; margin-bottom:16px; }
+  .cont-cob { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--dourado);
+    font-weight:700; margin-bottom:10px; }
   .campo { width:100%; padding:15px 17px; border-radius:14px; font-size:16px; font-family:inherit; background:rgba(255,255,255,.05);
     border:1.5px solid rgba(147,164,200,.28); color:#fff; animation:pulsar 2.6s ease-in-out infinite; transition:all .22s; }
   .campo:focus { outline:none; border-color:var(--ciano); background:rgba(56,189,248,.1); animation:none; }
@@ -113,29 +120,75 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'do', nome: 'D&O — Responsabilidade Civil de Administradores' };
-let SESSAO = null, LINK = null, QRESP = {}, iQ = 0;
+let SESSAO = null, LINK = null, QRESP = { coberturas: [], coberturasRemovidas: [], sondas: {} }, iQ = 0;
 const historico = [];
 
 /* ─── COBERTURAS REAIS (base: apólice Swiss Re) ─── */
 const COBERTURAS = [
-  { g: 'Coberturas básicas', itens: [
+  { g: 'Coberturas básicas',
+    sonda: {
+      p: 'Antes de marcar: se amanhã chegasse um processo contra um dos administradores, <strong>quem pagaria a conta da defesa</strong>?',
+      opcoes: [
+        { t: 'A empresa pagaria', r: 'Na prática nem sempre ela pode — em muitos casos a lei e o estatuto impedem a empresa de bancar a defesa do administrador. É exatamente para isso que existe a cobertura básica.' },
+        { t: 'O próprio administrador, do bolso', r: 'É o cenário mais comum quando não há apólice. E o bolso é sempre o mesmo: o pessoal.' },
+        { t: 'Sinceramente, nunca parei para pensar', r: 'Você não está sozinho — é a resposta da maioria dos gestores. E é justamente por isso que a conversa costuma acontecer tarde demais.' }
+      ]
+    },
+    itens: [
     { t: 'Cobertura Básica "A" — pagamento direto', d: 'A seguradora paga diretamente ao administrador a indenização e os custos, quando a empresa não puder ou não dever arcar.' },
     { t: 'Cobertura Básica "B" — reembolso à empresa', d: 'Quando a empresa adianta a defesa ou a indenização do administrador, ela é reembolsada.' }
   ]},
-  { g: 'Defesa e investigação', itens: [
+  { g: 'Defesa e investigação',
+    sonda: {
+      p: 'Um administrador raramente é condenado — mas quase sempre é <strong>chamado a se explicar</strong>. Isso já passou perto de você?',
+      multi: true,
+      opcoes: [
+        { t: 'Já aconteceu comigo' },
+        { t: 'Aconteceu com um sócio ou diretor daqui' },
+        { t: 'Vi acontecer com alguém que conheço' },
+        { t: 'Nunca aconteceu por aqui' }
+      ],
+      r: 'A defesa começa no dia seguinte à notificação — muito antes de existir qualquer decisão. É a fase que mais consome dinheiro e é a que estas coberturas cobrem.'
+    },
+    itens: [
     { t: 'Custos de defesa em investigação', d: 'Cobre a defesa já na fase de inquérito ou investigação, antes mesmo de virar processo.' },
     { t: 'Custos de defesa emergenciais', d: 'Libera recursos para defesa imediata sem aguardar a aprovação prévia da seguradora.' },
     { t: 'Multas e penalidades', d: 'Cobre multas civis aplicadas ao administrador, nos limites que a lei permite segurar.' },
     { t: 'Processo de inabilitação', d: 'Defesa quando há pedido de afastamento do administrador do cargo.' },
     { t: 'Processos de extradição', d: 'Custos de defesa em procedimentos de extradição decorrentes de atos de gestão.' }
   ]},
-  { g: 'Proteção do patrimônio pessoal e da família', itens: [
+  { g: 'Proteção do patrimônio pessoal e da família',
+    sonda: {
+      p: 'Se uma decisão de gestão virasse bloqueio judicial, <strong>o que seria atingido primeiro</strong>? Marque tudo que se aplica:',
+      multi: true,
+      opcoes: [
+        { t: 'Minha conta pessoal' },
+        { t: 'Os bens do casal' },
+        { t: 'O que eu pretendo deixar para a família' },
+        { t: 'Nada — está tudo separado da empresa' }
+      ],
+      r: 'A separação entre empresa e pessoa física funciona no papel; num bloqueio judicial ela costuma ser atravessada. Estas coberturas existem para que a conta não chegue em casa.'
+    },
+    itens: [
     { t: 'Penhora online e bloqueio de bens', d: 'Adianta a última remuneração líquida mensal enquanto durar o bloqueio judicial das contas.' },
     { t: 'Cônjuges ou companheiros', d: 'Estende a proteção a quem responde junto pelo patrimônio do casal.' },
     { t: 'Espólio, herdeiros e representantes legais', d: 'Se o administrador falecer, a família não herda o processo desprotegida.' },
     { t: 'Segurados aposentados', d: 'Continua protegendo quem já saiu, por atos praticados enquanto estava na gestão.' }
   ]},
-  { g: 'Riscos do dia a dia da gestão', itens: [
+  { g: 'Riscos do dia a dia da gestão',
+    sonda: {
+      p: 'Quais destes assuntos passam pela sua mesa — <strong>ou pela mesa de outro diretor</strong> da empresa?',
+      multi: true,
+      opcoes: [
+        { t: 'Demissões e questões trabalhistas' },
+        { t: 'Impostos e autuações fiscais' },
+        { t: 'Meio ambiente e licenças' },
+        { t: 'Contratos e entregas a clientes' },
+        { t: 'Órgãos reguladores e fiscalização' }
+      ],
+      r: 'Cada um desses assuntos tem um caminho que termina no nome de uma pessoa física. Deixei as coberturas correspondentes marcadas — inclusive as que hoje são de outro diretor, porque a apólice é uma só para todos.'
+    },
+    itens: [
     { t: 'Práticas trabalhistas indevidas', d: 'Quando o administrador é incluído pessoalmente em reclamação trabalhista.' },
     { t: 'Responsabilidade tributária', d: 'Defesa em autuações fiscais que atingem o administrador pessoalmente.' },
     { t: 'Danos morais', d: 'Indenização por dano moral decorrente de ato de gestão.' },
@@ -144,7 +197,20 @@ const COBERTURAS = [
     { t: 'Erros e omissões em serviços profissionais', d: 'Falha técnica na prestação de serviço que gere prejuízo a terceiro.' },
     { t: 'Eventos extraordinários com reguladores', d: 'Procedimentos de órgãos reguladores e agências fiscalizadoras.' }
   ]},
-  { g: 'Alcance da apólice', itens: [
+  { g: 'Alcance da apólice',
+    sonda: {
+      p: 'Além de você, <strong>quem mais precisa estar protegido</strong> por esta apólice?',
+      multi: true,
+      opcoes: [
+        { t: 'Meus sócios' },
+        { t: 'Conselheiros' },
+        { t: 'Outras empresas do grupo' },
+        { t: 'Contador, jurídico e auditoria interna' },
+        { t: 'Quem já saiu da gestão' }
+      ],
+      r: 'Boa — o alcance é o ponto que mais gera surpresa depois. Uma apólice bem desenhada cobre o grupo inteiro sem precisar de uma apólice por pessoa.'
+    },
+    itens: [
     { t: 'Controladas e subsidiárias', d: 'Estende a proteção aos administradores das empresas do grupo.' },
     { t: 'Novas controladas e subsidiárias', d: 'Empresas adquiridas durante a vigência entram automaticamente.' },
     { t: 'Coligadas', d: 'Alcança administradores de empresas coligadas.' },
@@ -176,7 +242,7 @@ const PERGUNTAS = [
     opcoes: ['Não, capital fechado','Sim, capital aberto','Pretendemos abrir'] },
   { fala: 'Tem <strong>operações, filiais ou faturamento no exterior</strong>?<br><span style="font-size:12.5px;color:#93a4c8;">Se houver nos EUA, a seguradora precisa saber — muda bastante a análise.</span>', campo: 'exterior', tipo: 'opcoes',
     opcoes: ['Não, só Brasil','Sim, exceto EUA','Sim, incluindo EUA'] },
-  { fala: 'Agora as três perguntas que <strong>toda seguradora faz</strong>. São elas que definem a aceitação do risco.', campo: null },
+  { fala: 'Agora as <strong>quatro perguntas de aceitação</strong> — toda seguradora faz exatamente estas. São elas que definem se o risco é aceito e em que condições.', campo: null },
   { fala: 'Nos <strong>últimos 5 anos</strong>, algum administrador — atual ou de gestões anteriores — foi alvo de investigação, processo judicial ou inquérito administrativo?', campo: 'q1_investigacoes', tipo: 'opcoes',
     opcoes: ['Não','Sim'] },
   { fala: 'Existe hoje <strong>algum fato conhecido</strong> que possa vir a gerar uma reclamação contra os administradores?<br><span style="font-size:12.5px;color:#93a4c8;">Vale para a empresa e as subsidiárias. Omitir isso pode invalidar a apólice depois — na dúvida, marque "Sim" e converse com o corretor.</span>', campo: 'q2_fatoConhecido', tipo: 'opcoes',
@@ -186,7 +252,8 @@ const PERGUNTAS = [
   { fala: 'A empresa passa por <strong>auditoria externa independente</strong> nas demonstrações financeiras?', campo: 'auditoria', tipo: 'opcoes',
     opcoes: ['Sim, auditoria independente','Não','Apenas contabilidade interna'] },
   { fala: 'Qual <strong>limite de indenização</strong> você gostaria de avaliar?<br><span style="font-size:12.5px;color:#93a4c8;">É o valor máximo que a apólice paga no total.</span>', campo: 'limite', tipo: 'opcoes', opcoes: LIMITES },
-  { fala: 'Marque as <strong>coberturas</strong> que fazem sentido para vocês. Não precisa decidir tudo agora — o corretor ajusta na conversa.', campo: 'coberturas', tipo: 'coberturas' },
+  { fala: 'Agora a parte que define a sua apólice: <strong>o que ela precisa cobrir</strong>.<br><span style="font-size:12.5px;color:#93a4c8;">São 5 blocos rápidos. Em cada um faço uma pergunta curta e as coberturas já vêm marcadas — você só desmarca o que não fizer sentido.</span>', campo: null },
+  ...COBERTURAS.map((gr, gi) => ({ fala: `Bloco ${gi + 1} de ${COBERTURAS.length} — <strong>${gr.g}</strong>`, campo: 'bloco' + gi, tipo: 'bloco', gi })),
   { fala: 'Por último: qual o <strong>melhor contato</strong> para o corretor retornar com a proposta?', campo: 'contato', tipo: 'contato' }
 ];
 
@@ -282,32 +349,78 @@ async function render() {
     if (q.campo === 'empresa' && LINK && LINK.empresaNome) $('tx').value = LINK.empresaNome;
     $('tx').focus();
   }
-  else if (q.tipo === 'coberturas') {
-    z.innerHTML = `<div class="caixa-cob" id="cx">
-        ${COBERTURAS.map((gr, gi) => `
-          <div class="grupo-cob">${gr.g}</div>
-          ${gr.itens.map((c, ci) => `
-            <label class="qcheck" data-g="${gi}" data-c="${ci}">
-              <input type="checkbox" ${gi === 0 ? 'checked' : ''}>
-              <span class="qcheck-txt"><b>${c.t}</b><span>${c.d}</span></span>
-            </label>`).join('')}`).join('')}
-      </div>
-      <button class="btn" id="ok">Continuar →</button>
-      <div class="nota">As duas coberturas básicas vêm marcadas porque formam a estrutura da apólice. As demais são extensões que o corretor ajusta conforme o perfil da empresa.</div>`;
-    z.querySelectorAll('.qcheck').forEach(l => {
-      if (l.querySelector('input').checked) l.classList.add('on');
-      l.onclick = e => {
-        if (e.target.tagName !== 'INPUT') { const i = l.querySelector('input'); i.checked = !i.checked; }
-        l.classList.toggle('on', l.querySelector('input').checked);
+  else if (q.tipo === 'bloco') {
+    const gr = COBERTURAS[q.gi], S = gr.sonda;
+    const lista = `
+      <div class="cont-cob" id="contCob"></div>
+      <div class="caixa-cob">${gr.itens.map((c, ci) => `
+        <label class="qcheck on" data-c="${ci}">
+          <input type="checkbox" checked>
+          <span class="qcheck-txt"><b>${c.t}</b><span>${c.d}</span></span>
+        </label>`).join('')}</div>
+      <div class="nota">Já deixei tudo deste bloco marcado — é assim que a cotação sai completa. Desmarque apenas o que você tiver certeza de que não se aplica a ninguém da gestão.</div>
+      <button class="btn" id="ok">Continuar →</button>`;
+
+    z.innerHTML = `<div class="sonda-p">${S.p}</div>
+      <div class="opcoes" id="sop">${S.opcoes.map((o, k) => `<button class="op" data-k="${k}">${o.t}</button>`).join('')}</div>
+      <div id="btSondaOk" style="margin-top:14px; display:none;"><button class="btn">Continuar →</button></div>
+      <div id="zCob" style="display:none;"></div>`;
+
+    const escolhidos = new Set();
+
+    function atualizarContador() {
+      const n = [...z.querySelectorAll('.qcheck input')].filter(i => i.checked).length;
+      const el = $('contCob');
+      if (el) el.textContent = `${n} de ${gr.itens.length} coberturas mantidas neste bloco`;
+    }
+
+    function revelar() {
+      const textos = [...escolhidos].map(k => S.opcoes[k].t);
+      QRESP.sondas = QRESP.sondas || {};
+      QRESP.sondas[gr.g] = textos;
+      const eco = S.multi ? S.r : (S.opcoes[[...escolhidos][0]] || {}).r || S.r || '';
+      $('sop').style.display = 'none';
+      $('btSondaOk').style.display = 'none';
+      const zc = $('zCob');
+      zc.innerHTML = (eco ? `<div class="sonda-r">${eco}</div>` : '') + lista;
+      zc.style.display = 'block';
+      zc.querySelectorAll('.qcheck').forEach(l => {
+        l.onclick = e => {
+          if (e.target.tagName !== 'INPUT') { const i = l.querySelector('input'); i.checked = !i.checked; }
+          l.classList.toggle('on', l.querySelector('input').checked);
+          atualizarContador();
+        };
+      });
+      atualizarContador();
+      irAoFim(true);
+      $('ok').onclick = () => {
+        const mantidas = [], removidas = [];
+        zc.querySelectorAll('.qcheck').forEach(l => {
+          const t = gr.itens[Number(l.dataset.c)].t;
+          (l.querySelector('input').checked ? mantidas : removidas).push(t);
+        });
+        QRESP.coberturas = (QRESP.coberturas || []).concat(mantidas);
+        QRESP.coberturasRemovidas = (QRESP.coberturasRemovidas || []).concat(removidas);
+        const resp = (textos.length ? textos.join(' · ') + ' — ' : '') +
+          `${mantidas.length} de ${gr.itens.length} coberturas mantidas`;
+        historico.push({ p: q.fala + '<br><span style="font-size:13px;color:#93a4c8;">' + S.p + '</span>', r: resp });
+        salvar(); iQ++; render();
       };
+    }
+
+    z.querySelectorAll('.op').forEach(b => b.onclick = () => {
+      const k = Number(b.dataset.k);
+      if (S.multi) {
+        if (escolhidos.has(k)) escolhidos.delete(k); else escolhidos.add(k);
+        b.classList.toggle('sel', escolhidos.has(k));
+        $('btSondaOk').style.display = escolhidos.size ? 'block' : 'none';
+      } else {
+        escolhidos.clear(); escolhidos.add(k);
+        b.classList.add('sel');
+        revelar();
+      }
     });
-    $('ok').onclick = () => {
-      const sel = [...z.querySelectorAll('.qcheck')].filter(l => l.querySelector('input').checked)
-        .map(l => COBERTURAS[Number(l.dataset.g)].itens[Number(l.dataset.c)].t);
-      QRESP.coberturas = sel;
-      historico.push({ p: q.fala, r: `${sel.length} coberturas escolhidas` });
-      salvar(); iQ++; render();
-    };
+    $('btSondaOk').querySelector('button').onclick = revelar;
   }
   else if (q.tipo === 'contato') {
     z.innerHTML = `
@@ -359,7 +472,7 @@ async function salvar(finalizou) {
 }
 
 /* ─── INÍCIO ─── */
-const ARQ_VERSAO = '4';
+const ARQ_VERSAO = '5';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cQuestionário D&Ov4', 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 
