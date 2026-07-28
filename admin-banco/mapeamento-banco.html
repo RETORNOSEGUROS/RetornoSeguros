@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '211';
+  const APP_VERSAO = '212';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17057,9 +17057,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const empresa = q.empresa || a.empresaNome || '';
 
     const linhas = Object.entries(r).filter(([k]) => k !== '_risco')
-      .map(([k, v]) => `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${_apLabel(k)}:</span> <strong style="color:#334155;">${(v && v.texto) || '—'}</strong></div>`).join('');
-    const linhasQ = Object.entries(q).filter(([k]) => k !== 'contato')
-      .map(([k, v]) => `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${_apLabel(k)}:</span> <strong style="color:#334155;">${Array.isArray(v) ? v.join(' · ') : v}</strong></div>`).join('');
+      .map(([k, v]) => {
+        const t = (v && v.texto) || (v && Array.isArray(v.textos) ? v.textos.join(' · ') : '') || '—';
+        return `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${_apLabel(k)}:</span> <strong style="color:#334155;">${t}</strong></div>`;
+      }).join('');
+    const linhasQ = Object.entries(q).filter(([k]) => k !== 'contato' && k !== 'cobPorBloco')
+      .map(([k, v]) => _apLinha(k, v)).join('');
 
     return `<div style="background:white; border-radius:14px; padding:16px 18px; margin-bottom:9px; border:1px solid ${nivel === 'ALTA' ? '#fecaca' : '#f1f5f9'};">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
@@ -17900,18 +17903,64 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.gerarLinkApresentacao = gerarLinkApresentacao;
 
+  // Uma linha do painel. Objetos (as sondas) e listas longas (coberturas)
+  // não podem cair no toString do JS — viravam "[object Object]".
+  function _apLinha(k, v) {
+    const rot = _apLabel(k);
+    const cx = (t, c) => `<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">${rot}:</span> <strong style="color:${c || '#334155'};">${t}</strong></div>`;
+
+    // sondas: o que o cliente respondeu em cada bloco de coberturas
+    if (k === 'sondas') {
+      const ent = Object.entries(v || {}).filter(([, x]) => x && (Array.isArray(x) ? x.length : true));
+      if (!ent.length) return '';
+      return `<div style="font-size:11.5px; color:#64748b;">
+        <div style="color:#94a3b8; margin-bottom:3px;">${rot}:</div>
+        ${ent.map(([bloco, resp]) => `<div style="padding-left:9px; border-left:2px solid #e2e8f0; margin-bottom:3px;">
+            <span style="color:#94a3b8;">${bloco}</span> — <strong style="color:#334155;">${Array.isArray(resp) ? resp.join(' · ') : String(resp)}</strong>
+          </div>`).join('')}
+      </div>`;
+    }
+
+    // coberturas desmarcadas: é a pauta da conversa, então fica destacado
+    if (k === 'coberturasRemovidas') {
+      if (!Array.isArray(v) || !v.length) return '';
+      return `<div style="font-size:11.5px; color:#64748b; margin-top:3px;">
+        <div style="color:#b45309; margin-bottom:3px;">${rot} (${v.length}) — vale entender por quê:</div>
+        <div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px;">${v.join(' · ')}</div>
+      </div>`;
+    }
+
+    if (k === 'coberturas' && Array.isArray(v)) {
+      if (!v.length) return '';
+      return `<div style="font-size:11.5px; color:#64748b;">
+        <span style="color:#94a3b8;">${rot} (${v.length}):</span>
+        <div style="color:#334155; font-weight:600;">${v.join(' · ')}</div>
+      </div>`;
+    }
+
+    if (Array.isArray(v)) return v.length ? cx(v.join(' · ')) : '';
+    if (v && typeof v === 'object') {
+      const ent = Object.entries(v).filter(([, x]) => x !== null && x !== undefined && x !== '');
+      return ent.length ? cx(ent.map(([kk, vv]) => `${kk}: ${Array.isArray(vv) ? vv.join(', ') : vv}`).join(' · ')) : '';
+    }
+    if (v === null || v === undefined || v === '') return '';
+    return cx(String(v));
+  }
+
   function _apLabel(k) {
     return ({
       // apresentação
       conhecia: 'Já conhecia o produto', decisoesDia: 'Decisões por dia', jaProcessado: 'Já foi citado em processo',
       dependentes: 'Dependentes', equipe: 'Pessoas sob gestão', regulado: 'Setor regulado', percepcao: 'Percepção do risco',
+      oQueMudaria: 'O que mudaria para ele',
       // questionário
       empresa: 'Empresa', receitaLiquida: 'Receita líquida', patrimonio: 'Patrimônio líquido',
       totalAtivos: 'Total de ativos', nAdmins: 'Cargos de gestão', setor: 'Setor',
       capitalAberto: 'Capital aberto', exterior: 'Operações no exterior',
       q1_investigacoes: 'Investigações nos últimos 5 anos', q2_fatoConhecido: 'Fato conhecido que possa gerar reclamação',
       q3_prejuizo: 'Prejuízo em +1 exercício (3 anos)', auditoria: 'Auditoria externa', limite: 'Limite desejado',
-      coberturas: 'Coberturas escolhidas'
+      coberturas: 'Coberturas mantidas', coberturasRemovidas: 'Coberturas que ele desmarcou',
+      sondas: 'O que ele respondeu em cada bloco'
     })[k] || k;
   }
 
