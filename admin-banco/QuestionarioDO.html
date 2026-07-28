@@ -58,6 +58,10 @@
   .opcoes.muitas .op { animation:none; padding:12px 13px; font-size:13.5px; min-width:0; }
   .op.sel { background:rgba(56,189,248,.2); border-color:var(--ciano); animation:none; }
   .op.sel::after { content:' ✓'; color:var(--ciano); }
+  .alt { display:block; margin-top:7px; margin-left:auto; background:none; border:none; font-family:inherit;
+    font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:700; color:rgba(255,255,255,.6);
+    cursor:pointer; padding:0; text-decoration:underline; text-underline-offset:3px; }
+  .alt:hover { color:#fff; }
   .sonda-p { font-size:15px; line-height:1.6; color:#dbe6ff; font-weight:600; margin-bottom:14px; }
   .sonda-r { font-size:13.5px; line-height:1.6; color:#bfe3ff; background:rgba(56,189,248,.1);
     border-left:2px solid var(--ciano); padding:11px 14px; border-radius:0 12px 12px 0; margin-bottom:16px; }
@@ -122,7 +126,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'do', nome: 'D&O — Responsabilidade Civil de Administradores' };
-let SESSAO = null, LINK = null, QRESP = { coberturas: [], coberturasRemovidas: [], sondas: {} }, iQ = 0;
+let SESSAO = null, LINK = null, QRESP = { coberturas: [], coberturasRemovidas: [], sondas: {}, cobPorBloco: {} }, iQ = 0;
 const historico = [];
 
 /* ─── COBERTURAS REAIS (base: apólice Swiss Re) ─── */
@@ -330,8 +334,9 @@ async function render() {
   palco.innerHTML = `
     <div class="cena">
       <div class="rotulo">Cotação de D&O · ${iQ} de ${PERGUNTAS.length - 1}</div>
-      <div id="hist">${historico.map(h => `
-        <div class="qbolha">${h.p}</div>${h.r ? `<div class="qbolha qresp">${h.r}</div>` : ''}`).join('')}</div>
+      <div id="hist">${historico.map((h, hi) => `
+        <div class="qbolha">${h.p}</div>${h.r ? `<div class="qbolha qresp">${h.r}
+          <button class="alt" onclick="voltarPara(${hi})">✏️ alterar</button></div>` : ''}`).join('')}</div>
       <div class="qbolha" id="fala"></div>
       <div class="zona" id="zona"></div>
     </div>`;
@@ -346,14 +351,14 @@ async function render() {
 
   if (!q.campo) {
     z.innerHTML = `<button class="btn" id="ok">Vamos lá →</button>`;
-    $('ok').onclick = () => { historico.push({ p: q.fala, r: null }); iQ++; render(); };
+    $('ok').onclick = () => { historico.push({ p: q.fala, r: null, i: iQ }); iQ++; render(); };
   }
   else if (q.tipo === 'opcoes') {
     z.innerHTML = `<div class="opcoes${q.opcoes.length > 6 ? ' muitas' : ''}">${q.opcoes.map((o, k) => `<button class="op" data-k="${k}">${o}</button>`).join('')}</div>${
       q.opcoes.length > 6 ? '<div class="nota">Na dúvida entre duas faixas, escolha a maior — o corretor confirma depois com o balanço.</div>' : ''}`;
     z.querySelectorAll('.op').forEach(b => b.onclick = () => {
       const v = q.opcoes[Number(b.dataset.k)];
-      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v });
+      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v, i: iQ });
       salvar(); iQ++; render();
     });
   }
@@ -362,7 +367,7 @@ async function render() {
       <button class="btn" id="ok">Continuar →</button>`;
     const enviar = () => {
       const v = $('tx').value.trim(); if (!v) return $('tx').focus();
-      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v });
+      QRESP[q.campo] = v; historico.push({ p: q.fala, r: v, i: iQ });
       salvar(); iQ++; render();
     };
     $('ok').onclick = enviar;
@@ -420,11 +425,12 @@ async function render() {
           const t = gr.itens[Number(l.dataset.c)].t;
           (l.querySelector('input').checked ? mantidas : removidas).push(t);
         });
-        QRESP.coberturas = (QRESP.coberturas || []).concat(mantidas);
-        QRESP.coberturasRemovidas = (QRESP.coberturasRemovidas || []).concat(removidas);
+        QRESP.cobPorBloco = QRESP.cobPorBloco || {};
+        QRESP.cobPorBloco[gr.g] = { mantidas, removidas };
+        recomporCoberturas();
         const resp = (textos.length ? textos.join(' · ') + ' — ' : '') +
           `${mantidas.length} de ${gr.itens.length} coberturas mantidas`;
-        historico.push({ p: q.fala + '<br><span style="font-size:13px;color:#93a4c8;">' + S.p + '</span>', r: resp });
+        historico.push({ p: q.fala + '<br><span style="font-size:13px;color:#93a4c8;">' + S.p + '</span>', r: resp, i: iQ });
         salvar(); iQ++; render();
       };
     }
@@ -481,6 +487,75 @@ function renderFim() {
     </div>`;
 }
 
+/* Remonta as listas planas a partir dos blocos, na ordem das coberturas.
+   Assim reeditar um bloco substitui, em vez de somar de novo. */
+function recomporCoberturas() {
+  const man = [], rem = [];
+  COBERTURAS.forEach(gr => {
+    const b = (QRESP.cobPorBloco || {})[gr.g];
+    if (!b) return;
+    man.push(...(b.mantidas || []));
+    rem.push(...(b.removidas || []));
+  });
+  QRESP.coberturas = man;
+  QRESP.coberturasRemovidas = rem;
+}
+
+/* ALTERAR RESPOSTA: volta a conversa até aquele ponto. O que vier depois é
+   respondido de novo — e, no caso das coberturas, substituído (não somado). */
+function voltarPara(hi) {
+  const alvo = historico[hi];
+  if (!alvo || typeof alvo.i !== 'number') return;
+  historico.length = hi;
+  iQ = alvo.i;
+  // limpa o que dependia das telas seguintes
+  const blocosDepois = PERGUNTAS.slice(iQ).filter(x => x.tipo === 'bloco').map(x => COBERTURAS[x.gi].g);
+  blocosDepois.forEach(g => { if (QRESP.cobPorBloco) delete QRESP.cobPorBloco[g]; if (QRESP.sondas) delete QRESP.sondas[g]; });
+  recomporCoberturas();
+  window.scrollTo({ top: 0, behavior: 'auto' });
+  render();
+}
+window.voltarPara = voltarPara;
+
+/* ─── RETOMAR DE ONDE PAROU ───
+   Em produtos que exigem dados de outros setores (contabilidade, RH, jurídico),
+   o cliente sai e volta. O link é o mesmo e a sessão é estável, então o que
+   falta é reconhecer o caminho já feito em vez de recomeçar. */
+function renderRetomar(d) {
+  const qs = d.questionario || {};
+  const feitas = (d.historicoQ || []).filter(h => h.r).length;
+  const totalT = PERGUNTAS.length - 1;
+  const pct = Math.min(99, Math.round((d.passo || 0) / totalT * 100));
+  $('prog').style.width = pct + '%';
+  palco.innerHTML = `
+    <div class="cena">
+      <div class="rotulo">Cotação de D&O · retomando</div>
+      <div class="qbolha">Você já tinha começado${qs.empresa ? ' a cotação da <strong>' + qs.empresa + '</strong>' : ''} e parou no meio.
+        ${feitas ? `Já tenho <strong>${feitas} ${feitas === 1 ? 'resposta' : 'respostas'}</strong> suas guardadas` : 'Guardei o seu ponto de parada'} —
+        dá para continuar exatamente de onde parou.</div>
+      <div class="zona on">
+        <div class="opcoes">
+          <button class="op" id="btSeguir">Continuar de onde parei →</button>
+          <button class="op" id="btZero">Começar do zero</button>
+        </div>
+        <div class="nota">Continuando, nada do que você já respondeu se perde — e você pode alterar qualquer resposta pelo botão “alterar” ao lado dela.</div>
+      </div>
+    </div>`;
+  $('btSeguir').onclick = () => {
+    QRESP = Object.assign({ coberturas: [], coberturasRemovidas: [], sondas: {}, cobPorBloco: {} }, qs);
+    (d.historicoQ || []).forEach(h => historico.push(h));
+    recomporCoberturas();
+    iQ = Math.max(0, Math.min(Number(d.passo) || 0, PERGUNTAS.length - 1));
+    render();
+  };
+  $('btZero').onclick = () => {
+    QRESP = { coberturas: [], coberturasRemovidas: [], sondas: {}, cobPorBloco: {} };
+    if (LINK && LINK.empresaNome) QRESP.empresa = LINK.empresaNome;
+    historico.length = 0; iQ = 0;
+    salvar(); render();
+  };
+}
+
 /* ─── PERSISTÊNCIA ─── */
 async function salvar(finalizou) {
   try {
@@ -489,15 +564,16 @@ async function salvar(finalizou) {
       questionario: QRESP,
       questionarioCompleto: !!finalizou,
       passo: iQ,
+      historicoQ: historico,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar', e); }
 }
 
 /* ─── INÍCIO ─── */
-const ARQ_VERSAO = '6';
+const ARQ_VERSAO = '7';
 window.ARQ_VERSAO = ARQ_VERSAO;
-console.log('%cQuestionário D&Ov4', 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
+console.log('%cQuestionário D&O v' + ARQ_VERSAO + '', 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 
 document.addEventListener('DOMContentLoaded', async () => {
   try { await firebase.auth().signInAnonymously(); } catch (e) {}
@@ -544,13 +620,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (iEmp >= 0) PERGUNTAS.splice(iEmp, 1);
     PERGUNTAS[0].fala = 'Olá! Sou o assistente da <strong>Retorno Seguros</strong>. Aproveitei o que você já viu na apresentação sobre a <strong>' + LINK.empresaNome + '</strong> — vamos direto ao que falta para cotar o <strong>D&O</strong>. São poucas perguntas e você responde no seu ritmo.';
   }
+  let anterior = null;
   try {
     const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
     if (!doc.exists) base.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
+    else {
+      const d = doc.data() || {};
+      // só oferece retomada se houve progresso real e o questionário não foi concluído
+      if (!d.questionarioCompleto && (Number(d.passo) || 0) > 0 && d.questionario) anterior = d;
+    }
     await db.collection('mb_apresentacoes').doc(SESSAO).set(base, { merge: true });
   } catch (e) { console.warn('sessao', e); }
 
-  render();
+  if (anterior) renderRetomar(anterior);
+  else render();
 });
 </script>
 </body>
