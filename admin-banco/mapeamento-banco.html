@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '216';
+  const APP_VERSAO = '217';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17282,6 +17282,666 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.textoDoPDF = textoDoPDF;
 
+
+  /* ══════════════════════════════════════════════════════════════════
+     DENTAL — leitura das cotações e formulário de conferência
+     Duas formas chegam aqui:
+       A) até 199 vidas → Simulação "Emissão Expressa SPG".
+          O PDF é composto por IMAGENS de página (zero texto), então a
+          leitura é por OCR em regiões fixas do layout + trava aritmética:
+          pessoas × valor por pessoa TEM que bater o total, no centavo.
+          Se não bater, o sistema NÃO publica — abre o formulário.
+       B) 200+ vidas → "Proposta Comercial Dental" (Bradesco).
+          Esse PDF tem camada de texto: leitura direta, instantânea.
+     Em qualquer falha o caminho manual continua disponível.
+     ══════════════════════════════════════════════════════════════════ */
+
+  // Nomes canônicos dos benefícios. O OCR erra acento; o reconhecimento
+  // é por padrão, e o que vai para a proposta é sempre o nome bonito.
+  // Os padrões abaixo rodam sobre o texto JÁ sem acento e em minúsculas, e usam
+  // "." no lugar da vogal acentuada: o OCR troca ó por é, ã por a, e por aí vai.
+  const DENTAL_BENEF = [
+    [/consulta|emerg.nc|urg.nc/, 'Consultas e emergências'],
+    [/restaur/, 'Restaurações'],
+    [/limpeza|profilax|fl.or|tartaro|raspagem/, 'Limpeza e aplicação de flúor'],
+    [/document/, 'Documentação ortodôntica completa'],
+    [/pr.tese/, 'Prótese dentária'],
+    [/ortodont|aparelho/, 'Ortodontia'],
+    [/implant/, 'Implante'],
+    [/tomografia/, 'Tomografia computadorizada'],
+    [/clareamento/, 'Clareamento em gel'],
+    [/radiolog|radiograf|raio/, 'Radiologia'],
+    [/endodont|canal/, 'Endodontia (tratamento de canal)'],
+    [/periodont|gengiv/, 'Periodontia'],
+    [/cirurgi|extra[cç]|siso/, 'Cirurgia oral'],
+    [/odontopediatr|infantil/, 'Odontopediatria']
+  ];
+  // tira acento e baixa a caixa — o OCR não é confiável em nenhum dos dois
+  function _semAcento(s) {
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }
+  function _dentalBenefDe(linha) {
+    const l = _semAcento(linha).trim();
+    if (l.length < 4) return null;
+    for (const [re, nome] of DENTAL_BENEF) if (re.test(l)) return nome;
+    return null;
+  }
+  // Rol ANS — usado quando a proposta comercial diz "contempla o Rol da ANS"
+  const DENTAL_ROL_ANS = ['Consultas e emergências', 'Radiologia', 'Limpeza e aplicação de flúor',
+    'Restaurações', 'Periodontia', 'Endodontia (tratamento de canal)', 'Cirurgia oral', 'Odontopediatria'];
+
+  function _dataMais(dataBR, dias) {
+    const m = /(\d{2})\/(\d{2})\/(\d{4})/.exec(dataBR || '');
+    if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    d.setDate(d.getDate() + Number(dias || 0));
+    return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear();
+  }
+
+  /* ---------- B) Proposta Comercial Dental (PDF com texto) ---------- */
+  function extrairPropostaDental(txt) {
+    const t = String(txt || '');
+    const g = (re, i) => { const m = re.exec(t); return m ? (m[i || 1] || '').trim() : null; };
+    const P = { produtoId: 'dental', produto: 'Plano Dental Empresarial', seguradora: 'Bradesco Dental', origem: 'texto' };
+
+    P.adesao = /COMPULS[ÓO]RIA/i.test(t) ? 'Compulsória' : (/OPCIONAL|ADES[ÃA]O/i.test(t) ? 'Opcional' : null);
+    P.cnpj = g(/CNPJ:?\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);
+    P.empresaNome = g(/\n\s*([A-ZÁÂÃÀÉÊÍÓÔÕÚÇ][A-ZÁÂÃÀÉÊÍÓÔÕÚÇ0-9 .,&/'-]{4,90}?)\s*\n\s*CNPJ:/);
+    P.numero = g(/\b(COT-[A-Z0-9-]+)\b/i);
+    P.dataProposta = g(/Data:\s*(\d{2}\/\d{2}\/\d{4})/i);
+    P.corretorEmissor = g(/Corretor:\s*([^\n]{3,80})/i);
+    P.registroAns = g(/\b(\d{3}\.\d{3}\/\d{2}-\d)\b/);
+
+    const vidas = g(/N[°ºo]?\s*Vidas\s*([\d.]+)/i) || g(/Grupo Eleg[íi]vel de ([\d.]+)/i);
+    P.vidas = vidas ? parseInt(String(vidas).replace(/\./g, ''), 10) : null;
+    const ge = g(/Grupo Eleg[íi]vel de ([\d.]+)/i);
+    P.grupoElegivel = ge ? parseInt(ge.replace(/\./g, ''), 10) : null;
+
+    const vv = g(/R\$\s*([\d.]+,\d{2})/);
+    P.valorVida = vv ? _num(vv) : null;
+    if (P.vidas && P.valorVida) P.mensalidade = Math.round(P.vidas * P.valorVida * 100) / 100;
+
+    P.plano = g(/\b(ESSENCIAL|PLENO|PLUS|TOP|PREMIUM|M[ÁA]STER|MASTER|CL[ÁA]SSICO|B[ÁA]SICO|ORTO[A-Z]*)\b/);
+    // "REDE" seguido do nome, na MESMA linha. \s cruzaria a quebra e colaria
+    // o cabeçalho de baixo ("REDE" + "REEMBOLSO"), que não é rede nenhuma.
+    P.redeCredenciada = g(/\b(REDE[ \t]+(?!REEMBOLSO|CREDENCIADA)[A-ZÁÂÃÉÊÍÓÔÕÚÇ]{3,})\b/)
+      || g(/\bRede Credenciada\b/i);
+    P.abrangencia = g(/\b(Nacional|Estadual|Regional|Municipal)\b/i);
+    P.coparticipacao = g(/\b((?:Sem|Com)\s*Coparticipa[çc][ãa]o)\b/i);
+    P.reembolso = g(/\b((?:Sem|Com)\s*Reembolso)\b/i);
+    const cust = g(/Sendo\s*(\d+)\s*%\s*do/i);
+    if (cust) P.custeio = cust + '% do valor subsidiado pela empresa';
+
+    const vig = g(/vig[êe]ncia do Contrato ser[áa] de\s*(\d+)\s*Meses/i);
+    P.vigenciaMeses = vig ? parseInt(vig, 10) : null;
+    P.vencimentoFatura = /Vencimento da Fatura:\s*([^\n]+)/i.test(t)
+      ? g(/Vencimento da Fatura:\s*([^\n]+)/i).replace(/\.$/, '') : null;
+
+    if (/car[êe]ncias? de 90/i.test(t)) {
+      P.carencia = /180/.test(t)
+        ? '90 dias nos procedimentos cobertos; 180 dias para prótese, ortodontia e implante. Urgência e emergência sem carência.'
+        : '90 dias nos procedimentos cobertos.';
+    }
+    const valDias = g(/Proposta v[áa]lida por\s*(\d+)\s*dias/i);
+    if (valDias && P.dataProposta) P.validade = _dataMais(P.dataProposta, valDias);
+
+    const regras = [];
+    if (/inclus[ãa]o compuls[óo]ria/i.test(t)) regras.push({ t: 'Inclusão', v: 'Compulsória para funcionários, outros vínculos admitidos e respectivos dependentes.' });
+    if (/Rol de Procedimentos/i.test(t)) regras.push({ t: 'Rol de procedimentos', v: 'Contempla integralmente o Rol de Procedimentos Odontológicos da ANS.' });
+    const multa = g(/multa equivalente a\s*(\d+)/i);
+    if (multa) regras.push({ t: 'Cancelamento antecipado', v: `Multa equivalente a ${multa} vezes o valor da última fatura, se cancelado antes do prazo contratado.` });
+    if (/N[ãa]o h[áa] taxa de implanta/i.test(t)) regras.push({ t: 'Taxa de implantação', v: 'Não há taxa de implantação.' });
+    if (/Downgrade:\s*n[ãa]o ser[áa] permitido/i.test(t)) regras.push({ t: 'Downgrade', v: 'Não permitido.' });
+    P.regras = regras;
+
+    // Benefícios: reconhece o que aparecer; se a proposta só cita o Rol da ANS, usa o Rol.
+    const achados = [];
+    t.split('\n').forEach(l => { const b = _dentalBenefDe(l); if (b && !achados.includes(b)) achados.push(b); });
+    P.procedimentos = achados.length >= 3 ? achados
+      : (/Rol de Procedimentos/i.test(t) ? DENTAL_ROL_ANS.slice() : achados);
+
+    return P;
+  }
+  window.extrairPropostaDental = extrairPropostaDental;
+
+  /* ---------- A) Simulação SPG (PDF de imagens) — OCR por região ---------- */
+
+  // Recortes em fração da página, medidos no layout fixo da Emissão Expressa SPG.
+  const DENTAL_REGIOES = [
+    { nome: 'estipulante', pag: 1, x0: .02, y0: .36, x1: 1.0, y1: .82 },
+    { nome: 'cabecalho',   pag: 2, x0: .50, y0: .050, x1: 1.0, y1: .115 },
+    { nome: 'cartao',      pag: 2, x0: .02, y0: .12, x1: .53, y1: .50 },
+    { nome: 'beneficios',  pag: 2, x0: .53, y0: .12, x1: 1.0, y1: .45 },
+    { nome: 'faixas',      pag: 2, x0: .02, y0: .50, x1: 1.0, y1: .85 }
+  ];
+
+  const TESSERACT_URLS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js',
+    'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',
+    'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.4/tesseract.min.js'
+  ];
+  function _carregarScript(src) {
+    return new Promise((ok, falha) => {
+      const s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = () => ok(src);
+      s.onerror = () => { s.remove(); falha(new Error('falhou ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  async function _garantirTesseract() {
+    if (window.Tesseract) return window.Tesseract;
+    let ultimo = null;
+    for (const u of TESSERACT_URLS) {
+      try { await _carregarScript(u); if (window.Tesseract) return window.Tesseract; }
+      catch (e) { ultimo = e; }
+    }
+    throw new Error('Não consegui carregar o leitor de imagem (precisa de internet liberada). ' + (ultimo ? ultimo.message : ''));
+  }
+
+  // Renderiza uma página do PDF num canvas com largura ~1800px (≈216 dpi, o
+  // mesmo em que os testes foram feitos) e devolve o canvas.
+  async function _paginaEmCanvas(pdf, numPag, larguraAlvo) {
+    const pag = await pdf.getPage(numPag);
+    const base = pag.getViewport({ scale: 1 });
+    const escala = (larguraAlvo || 1800) / base.width;
+    const vp = pag.getViewport({ scale: escala });
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+    return cv;
+  }
+  function _recorte(cv, r) {
+    const c2 = document.createElement('canvas');
+    const x = Math.round(r.x0 * cv.width), y = Math.round(r.y0 * cv.height);
+    c2.width = Math.round((r.x1 - r.x0) * cv.width);
+    c2.height = Math.round((r.y1 - r.y0) * cv.height);
+    c2.getContext('2d').drawImage(cv, x, y, c2.width, c2.height, 0, 0, c2.width, c2.height);
+    return c2;
+  }
+
+  async function _ocrSimulacaoDental(arquivo, aoAndar) {
+    const Tess = await _garantirTesseract();
+    if (!window.pdfjsLib) throw new Error('A biblioteca de leitura de PDF não carregou. Recarregue a página.');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: await arquivo.arrayBuffer() }).promise;
+    if (pdf.numPages < 2) throw new Error('A simulação deveria ter pelo menos 2 páginas.');
+
+    if (aoAndar) aoAndar('preparando o leitor…');
+    let worker;
+    if (typeof Tess.createWorker === 'function') {
+      worker = await Tess.createWorker('eng');           // API 5.x
+      if (typeof worker.loadLanguage === 'function') {   // API 4.x
+        try { await worker.loadLanguage('eng'); await worker.initialize('eng'); } catch (e) {}
+      }
+    } else throw new Error('Versão inesperada do leitor de imagem.');
+    try { await worker.setParameters({ tessedit_pageseg_mode: '6' }); } catch (e) {}
+
+    const canvases = {};
+    const textos = {};
+    try {
+      for (let i = 0; i < DENTAL_REGIOES.length; i++) {
+        const r = DENTAL_REGIOES[i];
+        if (!canvases[r.pag]) canvases[r.pag] = await _paginaEmCanvas(pdf, r.pag, 1800);
+        if (aoAndar) aoAndar(`lendo ${i + 1} de ${DENTAL_REGIOES.length}…`);
+        const res = await worker.recognize(_recorte(canvases[r.pag], r));
+        textos[r.nome] = (res && res.data && res.data.text) || '';
+      }
+    } finally { try { await worker.terminate(); } catch (e) {} }
+    return textos;
+  }
+
+  // Transforma o texto lido em dados. A conta é conferida em interpretarSimulacaoDental.
+  function interpretarSimulacaoDental(T) {
+    const acha = (txt, re, i) => { const m = re.exec(String(txt || '')); return m ? (m[i || 1] || '').trim() : null; };
+    const dinheiro = s => s ? _num(s) : null;
+    const cab = T.cabecalho || '', card = T.cartao || '', fx = T.faixas || '', est = T.estipulante || '';
+
+    const P = { produtoId: 'dental', produto: 'Plano Dental Empresarial', seguradora: 'Bradesco Dental', origem: 'ocr' };
+
+    const pes = acha(cab, /Pessoas:?\s*([\d.]+)/i) || acha(fx, /([\d.]+)\s*\(?Faixa/i);
+    P.vidas = pes ? parseInt(pes.replace(/\./g, ''), 10) : null;
+    P.mensalidade = dinheiro(acha(cab, /Total:?\s*R?[S$§5]?\s*([\d.]+,\d{2})/i));
+    P.plano = acha(card, /(Padr[aãáà]o Doc[\wçãáéó ]{0,14}|Premium Top[\w ]{0,14}|Priv[ií]an[\w ]{0,6})/i);
+    if (P.plano) P.plano = P.plano.replace(/\s+/g, ' ').replace(/Padrao/i, 'Padrão')
+      .replace(/[^A-Za-zÀ-ÿ]+$/, '').trim();   // o OCR gruda um "1" ou "|" no fim
+    P.valorVida = dinheiro(acha(card, /[Vv]alor por pessoa:?\s*\n?\s*R?[S$§5]?\s*([\d.]+,\d{2})/));
+    const mlt = acha(card.replace(/\|/g, '1'), /reembolso:?\s*\n?\s*([\d]+(?:[.,]\d+)?)\s*[xX]/);
+    if (mlt) P.multiploReembolso = mlt.replace(',', '.') + 'x';
+
+    // Faixas. Os intervalos e os valores vêm em linhas separadas, na mesma ordem.
+    // O OCR estraga com frequência os números do intervalo ("30-99" vira "30-9",
+    // "100 - 199" vira ruído), mas os VALORES saem limpos. Como a tabela do SPG é
+    // sempre a mesma, o intervalo lido só é aceito quando é coerente; senão vale
+    // o padrão. Os valores nunca são presumidos — esses vêm sempre da leitura.
+    const FAIXAS_PADRAO = [{ de: 3, ate: 29 }, { de: 30, ate: 99 }, { de: 100, ate: 199 }];
+    const lidos = [...fx.matchAll(/([\d.]+)\s*[-–~]+\s*([\d.]+)\s*vidas/gi)]
+      .map(m => ({ de: parseInt(m[1].replace(/\./g, ''), 10), ate: parseInt(m[2].replace(/\./g, ''), 10) }));
+    const valores = [...fx.matchAll(/R?[S$§5]\s*([\d.]+,\d{2})/g)].map(m => _num(m[1]));
+    const coerente = arr => arr.length > 0 && arr.every((f, i) =>
+      f.de > 0 && f.ate >= f.de && (i === 0 || f.de > arr[i - 1].ate));
+    let intervalos = null;
+    if (lidos.length === valores.length && coerente(lidos)) intervalos = lidos;
+    else if (valores.length === FAIXAS_PADRAO.length) intervalos = FAIXAS_PADRAO;
+    if (intervalos) P.faixas = intervalos.map((f, i) => ({ de: f.de, ate: f.ate, valor: valores[i] }));
+    // qual faixa o próprio PDF diz que é a da empresa — ex.: "199 (Faixa 3)"
+    const nFaixa = acha(fx, /\(\s*Faixa\s*(\d)\s*\)/i);
+    if (nFaixa) P.faixaIndicada = parseInt(nFaixa, 10);
+
+    P.cnpj = acha(est, /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/);
+    let nome = acha(est, /Nome da empresa\s*\n?\s*([^\n]+)/i);
+    if (nome && P.cnpj) nome = nome.replace(P.cnpj, '').trim();
+    P.empresaNome = nome || null;
+    const ad = acha(est, /(Opcional|Compuls[oó]ria)/i);
+    if (ad) P.adesao = /compuls/i.test(ad) ? 'Compulsória' : 'Opcional';
+    P.dataSimulacao = acha(est, /(\d{2}\/\d{2}\/\d{4})/) || acha(cab, /(\d{2}\/\d{2}\/\d{4})/);
+
+    const bens = [];
+    String(T.beneficios || '').split('\n').forEach(l => {
+      const b = _dentalBenefDe(l.replace(/^[^A-Za-zÀ-ÿ]+/, ''));
+      if (b && !bens.includes(b)) bens.push(b);
+    });
+    P.procedimentos = bens;
+
+    // ---- TRAVA ARITMÉTICA ----
+    // O layout é fixo, mas o OCR pode errar um dígito. Se pessoas × valor por
+    // pessoa não bater o total no centavo, a leitura não é confiável: o sistema
+    // não publica, manda para o formulário.
+    const conta = (P.vidas && P.valorVida) ? Math.round(P.vidas * P.valorVida * 100) / 100 : null;
+    P.conferencia = {
+      calculado: conta,
+      total: P.mensalidade,
+      bate: !!(conta != null && P.mensalidade != null && Math.abs(conta - P.mensalidade) < 0.05)
+    };
+    // 2ª confirmação: o valor da faixa em que a empresa cai tem que ser o mesmo
+    if (P.faixas && P.faixas.length && P.valorVida) {
+      const f = (P.faixaIndicada && P.faixas[P.faixaIndicada - 1])
+        || (P.vidas ? P.faixas.find(x => P.vidas >= x.de && P.vidas <= x.ate) : null);
+      P.conferencia.faixaConfere = !!(f && f.valor && Math.abs(f.valor - P.valorVida) < 0.02);
+    }
+    return P;
+  }
+  window.interpretarSimulacaoDental = interpretarSimulacaoDental;
+
+  /* ---------- conferência dental ---------- */
+  function conferirPropostaDental(P) {
+    const faltando = [];
+    if (!P.vidas) faltando.push('número de vidas');
+    if (!P.valorVida) faltando.push('valor por pessoa');
+    if (!P.mensalidade) faltando.push('total mensal');
+    if (!P.plano) faltando.push('nome do plano');
+    if (!P.empresaNome) faltando.push('nome da empresa');
+    if (!(P.procedimentos || []).length) faltando.push('procedimentos cobertos');
+    // crítico = sem isso não existe proposta; ou a conta não fechou
+    const contaRuim = P.conferencia && P.conferencia.bate === false;
+    const critico = !P.vidas || !P.valorVida || !P.mensalidade || contaRuim;
+    return { ok: !faltando.length && !contaRuim, critico, faltando, contaRuim: !!contaRuim };
+  }
+  window.conferirPropostaDental = conferirPropostaDental;
+
+
+  /* ---------- tela de conferência / preenchimento manual — DENTAL ---------- */
+  function _dtLinhaProc(p, k) {
+    const o = (typeof p === 'string') ? { nome: p } : (p || {});
+    return `<div class="dt-proc" style="display:flex; gap:6px; margin-bottom:5px; align-items:center;">
+      <input type="text" class="form-control dt-p-nome" value="${escAttr(o.nome || '')}" placeholder="procedimento coberto" style="flex:1; padding:6px 9px; font-size:12px;">
+      <button class="btn-mini" style="color:#ef4444;" onclick="this.parentElement.remove()">✕</button>
+    </div>`;
+  }
+  function dtAddProc() {
+    const cx = document.getElementById('dtProcs'); if (!cx) return;
+    if (!cx.querySelector('.dt-proc')) cx.innerHTML = '';
+    cx.insertAdjacentHTML('beforeend', _dtLinhaProc({ nome: '' }, 0));
+    const u = cx.querySelector('.dt-proc:last-child .dt-p-nome'); if (u) u.focus();
+  }
+  window.dtAddProc = dtAddProc;
+
+  function _dtLinhaFaixa(f) {
+    const fmtv = v => (v || v === 0) ? Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
+    return `<div class="dt-faixa" style="display:flex; gap:6px; margin-bottom:5px; align-items:center;">
+      <input type="text" class="form-control dt-f-de" value="${(f && f.de) || ''}" placeholder="de" style="width:78px; padding:6px 9px; font-size:12px;">
+      <span style="color:#94a3b8; font-size:12px;">a</span>
+      <input type="text" class="form-control dt-f-ate" value="${(f && f.ate) || ''}" placeholder="até" style="width:78px; padding:6px 9px; font-size:12px;">
+      <span style="color:#94a3b8; font-size:12px;">vidas · R$</span>
+      <input type="text" class="form-control dt-f-valor" value="${fmtv(f && f.valor)}" placeholder="por vida" style="width:100px; padding:6px 9px; font-size:12px;">
+      <button class="btn-mini" style="color:#ef4444;" onclick="this.parentElement.remove()">✕</button>
+    </div>`;
+  }
+  function dtAddFaixa() {
+    const cx = document.getElementById('dtFaixas'); if (!cx) return;
+    if (!cx.querySelector('.dt-faixa')) cx.innerHTML = '';
+    cx.insertAdjacentHTML('beforeend', _dtLinhaFaixa({}));
+  }
+  window.dtAddFaixa = dtAddFaixa;
+
+  // recalcula o total na tela conforme o corretor digita — a mesma trava da leitura
+  function dtRecalcular() {
+    const gv = id => ((document.getElementById(id) || {}).value || '').trim();
+    const vidas = parseInt(String(gv('dtVidas')).replace(/\D/g, ''), 10) || 0;
+    const vv = _num(gv('dtValorVida')) || 0;
+    const tot = _num(gv('dtMensal')) || 0;
+    const calc = Math.round(vidas * vv * 100) / 100;
+    const el = document.getElementById('dtConta'); if (!el) return;
+    if (!vidas || !vv) { el.innerHTML = '<span style="color:#94a3b8;">preencha vidas e valor por pessoa</span>'; return; }
+    const bate = tot && Math.abs(calc - tot) < 0.05;
+    const fmt = v => 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    el.innerHTML = bate
+      ? `<span style="color:#15803d; font-weight:700;">✓ confere:</span> ${vidas} × ${fmt(vv)} = <strong>${fmt(calc)}</strong>`
+      : `<span style="color:#b45309; font-weight:700;">⚠ não fecha:</span> ${vidas} × ${fmt(vv)} = <strong>${fmt(calc)}</strong>${tot ? ` — mas o total digitado é ${fmt(tot)}` : ' — falta o total mensal'}`;
+  }
+  window.dtRecalcular = dtRecalcular;
+
+  function revisarPropostaDental(chk) {
+    const P = _PROP_TMP || {};
+    const fmtv = v => (v || v === 0) ? Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
+    const parciais = (chk && chk.faltando && chk.faltando.length) ? chk.faltando : [];
+    const procs = (P.procedimentos || P.coberturas || []);
+    const faixas = (P.faixas || []);
+    const cf = P.conferencia || {};
+    const origem = P.origem === 'ocr' ? 'lido por leitura de imagem (OCR)'
+      : P.origem === 'texto' ? 'lido do texto do PDF' : 'preenchido à mão';
+
+    const m = document.createElement('div');
+    m.className = 'cad-modal open'; m.id = 'modalRevPropDental';
+    m.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:700px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+          <h2>🦷 Confira antes de publicar</h2>
+          <p>Cotação dental · ${origem}. Ajuste o que precisar.</p>
+        </div>
+        <div class="cad-modal-body">
+          ${parciais.length ? `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#92400e; margin-bottom:14px;">
+            ⚠️ Não encontrei: <strong>${parciais.join(', ')}</strong>. Preencha abaixo.
+          </div>` : ''}
+          ${cf.faixaConfere === false ? `<div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#9a3412; margin-bottom:14px;">
+            ⚠️ O valor por pessoa não bate com a faixa de vidas da tabela. Confira na cotação antes de publicar.
+          </div>` : ''}
+
+          <div id="dtConta" style="background:#f0fdfa; border:1px solid #99f6e4; border-radius:10px; padding:11px 13px; font-size:13px; color:#134e4a; margin-bottom:14px;"></div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Empresa</label>
+              <input type="text" class="form-control" id="dtEmpresa" value="${escAttr(P.empresaNome || '')}"></div>
+            <div class="form-group"><label class="form-label">CNPJ</label>
+              <input type="text" class="form-control" id="dtCnpj" value="${escAttr(P.cnpj || '')}"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Seguradora</label>
+              <input type="text" class="form-control" id="dtSeg" value="${escAttr(P.seguradora || 'Bradesco Dental')}"></div>
+            <div class="form-group"><label class="form-label">Plano</label>
+              <input type="text" class="form-control" id="dtPlano" value="${escAttr(P.plano || '')}" placeholder="ex.: Padrão Doc"></div>
+            <div class="form-group"><label class="form-label">Nº da cotação</label>
+              <input type="text" class="form-control" id="dtNumero" value="${escAttr(P.numero || '')}"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Vidas</label>
+              <input type="text" class="form-control" id="dtVidas" value="${P.vidas || ''}" oninput="dtRecalcular()"></div>
+            <div class="form-group"><label class="form-label">Valor por pessoa (R$)</label>
+              <input type="text" class="form-control" id="dtValorVida" value="${fmtv(P.valorVida)}" oninput="dtRecalcular()"></div>
+            <div class="form-group"><label class="form-label">Total mensal (R$)</label>
+              <input type="text" class="form-control" id="dtMensal" value="${fmtv(P.mensalidade)}" oninput="dtRecalcular()"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Adesão</label>
+              <select class="form-control" id="dtAdesao">
+                <option value="" ${!P.adesao ? 'selected' : ''}>—</option>
+                <option value="Compulsória" ${/compuls/i.test(P.adesao || '') ? 'selected' : ''}>Compulsória</option>
+                <option value="Opcional" ${/opcional/i.test(P.adesao || '') ? 'selected' : ''}>Opcional</option>
+              </select></div>
+            <div class="form-group"><label class="form-label">Abrangência</label>
+              <input type="text" class="form-control" id="dtAbrang" value="${escAttr(P.abrangencia || '')}" placeholder="Nacional"></div>
+            <div class="form-group"><label class="form-label">Rede credenciada</label>
+              <input type="text" class="form-control" id="dtRede" value="${escAttr(P.redeCredenciada || '')}" placeholder="ex.: Rede Nacional"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Coparticipação</label>
+              <input type="text" class="form-control" id="dtCopart" value="${escAttr(P.coparticipacao || '')}" placeholder="Sem coparticipação"></div>
+            <div class="form-group"><label class="form-label">Reembolso</label>
+              <input type="text" class="form-control" id="dtReemb" value="${escAttr(P.reembolso || '')}" placeholder="Com reembolso"></div>
+            <div class="form-group"><label class="form-label">Múltiplo de reembolso</label>
+              <input type="text" class="form-control" id="dtMult" value="${escAttr(P.multiploReembolso || '')}" placeholder="1x"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Custeio</label>
+              <input type="text" class="form-control" id="dtCusteio" value="${escAttr(P.custeio || '')}" placeholder="ex.: 100% empresa"></div>
+            <div class="form-group"><label class="form-label">Carência</label>
+              <input type="text" class="form-control" id="dtCarencia" value="${escAttr(P.carencia || '')}" placeholder="ex.: 90 e 180 dias"></div>
+            <div class="form-group"><label class="form-label">Vigência (meses)</label>
+              <input type="text" class="form-control" id="dtVigMeses" value="${P.vigenciaMeses || ''}" placeholder="12"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Vigência início</label>
+              <input type="text" class="form-control" id="dtVigIni" value="${escAttr(P.vigenciaInicio || '')}" placeholder="dd/mm/aaaa"></div>
+            <div class="form-group"><label class="form-label">Vigência fim</label>
+              <input type="text" class="form-control" id="dtVigFim" value="${escAttr(P.vigenciaFim || '')}" placeholder="dd/mm/aaaa"></div>
+            <div class="form-group"><label class="form-label">Validade da cotação</label>
+              <input type="text" class="form-control" id="dtValidade" value="${escAttr(P.validade || '')}" placeholder="dd/mm/aaaa"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+            <div class="form-group"><label class="form-label">Grupo elegível</label>
+              <input type="text" class="form-control" id="dtGrupo" value="${P.grupoElegivel || ''}"></div>
+            <div class="form-group"><label class="form-label">Vencimento da fatura</label>
+              <input type="text" class="form-control" id="dtVenc" value="${escAttr(P.vencimentoFatura || '')}"></div>
+            <div class="form-group"><label class="form-label">Registro ANS</label>
+              <input type="text" class="form-control" id="dtAns" value="${escAttr(P.registroAns || '')}"></div>
+          </div>
+
+          <label class="form-label" style="margin-top:6px;">Procedimentos cobertos <small style="color:#94a3b8; font-weight:500;">(o que o cliente vê na proposta)</small></label>
+          <div id="dtProcs" style="max-height:200px; overflow-y:auto; border:1px solid #f1f5f9; border-radius:10px; padding:8px 10px;">
+            ${procs.length ? procs.map((p, k) => _dtLinhaProc(p, k)).join('') : '<div style="font-size:12px; color:#94a3b8; padding:10px; text-align:center;">Nenhum procedimento. Adicione abaixo.</div>'}
+          </div>
+          <div style="display:flex; gap:6px; margin-top:8px;">
+            <button class="btn-mini" onclick="dtAddProc()">+ procedimento</button>
+            <button class="btn-mini" onclick="dtUsarRolAns()">↺ usar o Rol da ANS</button>
+          </div>
+
+          <label class="form-label" style="margin-top:14px;">Faixas de preço por vidas <small style="color:#94a3b8; font-weight:500;">(opcional — só aparece na proposta se houver mais de uma)</small></label>
+          <div id="dtFaixas" style="border:1px solid #f1f5f9; border-radius:10px; padding:8px 10px;">
+            ${faixas.length ? faixas.map(f => _dtLinhaFaixa(f)).join('') : '<div style="font-size:12px; color:#94a3b8; padding:10px; text-align:center;">Sem faixas.</div>'}
+          </div>
+          <button class="btn-mini" style="margin-top:8px;" onclick="dtAddFaixa()">+ faixa</button>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalRevPropDental').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="publicarProposta()">🚀 Publicar e gerar link</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+    dtRecalcular();
+  }
+  window.revisarPropostaDental = revisarPropostaDental;
+
+  function dtUsarRolAns() {
+    const cx = document.getElementById('dtProcs'); if (!cx) return;
+    cx.innerHTML = DENTAL_ROL_ANS.map(n => _dtLinhaProc({ nome: n }, 0)).join('');
+  }
+  window.dtUsarRolAns = dtUsarRolAns;
+
+  // Lê os campos da tela dental de volta para P. Chamado por publicarProposta().
+  function _coletarCamposDental(P) {
+    const v = id => ((document.getElementById(id) || {}).value || '').trim();
+    P.produtoId = 'dental';
+    P.produto = P.produto || 'Plano Dental Empresarial';
+    P.empresaNome = v('dtEmpresa') || null;
+    P.cnpj = v('dtCnpj') || null;
+    P.seguradora = v('dtSeg') || 'Bradesco Dental';
+    P.plano = v('dtPlano') || null;
+    P.numero = v('dtNumero') || null;
+    P.vidas = parseInt(String(v('dtVidas')).replace(/\D/g, ''), 10) || null;
+    P.valorVida = _num(v('dtValorVida')) || null;
+    P.mensalidade = _num(v('dtMensal')) || (P.vidas && P.valorVida ? Math.round(P.vidas * P.valorVida * 100) / 100 : null);
+    P.adesao = v('dtAdesao') || null;
+    P.abrangencia = v('dtAbrang') || null;
+    P.redeCredenciada = v('dtRede') || null;
+    P.coparticipacao = v('dtCopart') || null;
+    P.reembolso = v('dtReemb') || null;
+    P.multiploReembolso = v('dtMult') || null;
+    P.custeio = v('dtCusteio') || null;
+    P.carencia = v('dtCarencia') || null;
+    P.vigenciaMeses = parseInt(String(v('dtVigMeses')).replace(/\D/g, ''), 10) || null;
+    P.vigenciaInicio = v('dtVigIni') || null;
+    P.vigenciaFim = v('dtVigFim') || null;
+    P.validade = v('dtValidade') || null;
+    P.grupoElegivel = parseInt(String(v('dtGrupo')).replace(/\D/g, ''), 10) || null;
+    P.vencimentoFatura = v('dtVenc') || null;
+    P.registroAns = v('dtAns') || null;
+
+    const procs = [];
+    document.querySelectorAll('#dtProcs .dt-proc').forEach(l => {
+      const nome = ((l.querySelector('.dt-p-nome') || {}).value || '').trim();
+      if (nome) procs.push({ nome });
+    });
+    P.procedimentos = procs;
+    P.coberturas = procs;   // alias: a lista de propostas conta coberturas
+
+    const fx = [];
+    document.querySelectorAll('#dtFaixas .dt-faixa').forEach(l => {
+      const de = parseInt(String((l.querySelector('.dt-f-de') || {}).value || '').replace(/\D/g, ''), 10);
+      const ate = parseInt(String((l.querySelector('.dt-f-ate') || {}).value || '').replace(/\D/g, ''), 10);
+      const val = _num((l.querySelector('.dt-f-valor') || {}).value);
+      if (de && ate && val) fx.push({ de, ate, valor: val });
+    });
+    P.faixas = fx;
+
+    // refaz a trava aritmética com o que está na tela
+    const calc = (P.vidas && P.valorVida) ? Math.round(P.vidas * P.valorVida * 100) / 100 : null;
+    P.conferencia = {
+      calculado: calc, total: P.mensalidade,
+      bate: !!(calc != null && P.mensalidade != null && Math.abs(calc - P.mensalidade) < 0.05)
+    };
+    return P;
+  }
+  window._coletarCamposDental = _coletarCamposDental;
+
+  /* ---------- caminho de leitura dental (texto ou OCR) ---------- */
+  function _dtProgresso(texto) {
+    let cx = document.getElementById('dtOcrProg');
+    if (!cx) {
+      cx = document.createElement('div');
+      cx.id = 'dtOcrProg';
+      cx.className = 'cad-modal open';
+      cx.innerHTML = `
+        <div class="cad-modal-bg"></div>
+        <div class="cad-modal-panel" style="max-width:420px;">
+          <div class="cad-modal-body" style="text-align:center; padding:34px 24px;">
+            <div style="font-size:38px; margin-bottom:10px;">🦷</div>
+            <div style="font-size:14px; font-weight:800; color:#0f172a;">Lendo a cotação</div>
+            <div id="dtOcrMsg" style="font-size:12.5px; color:#64748b; margin-top:8px; line-height:1.6;"></div>
+            <div style="font-size:11.5px; color:#94a3b8; margin-top:14px;">o arquivo é lido aqui no seu navegador</div>
+          </div>
+        </div>`;
+      document.body.appendChild(cx);
+    }
+    const msg = document.getElementById('dtOcrMsg'); if (msg) msg.textContent = texto || '';
+    return cx;
+  }
+  function _dtFecharProgresso() {
+    const c = document.getElementById('dtOcrProg'); if (c) c.remove();
+  }
+
+  async function lerPropostaDental(arquivo, txt) {
+    let P = null;
+    if (txt && txt.trim().length >= 120) {
+      // caminho A: PDF com texto (proposta comercial, 200+ vidas)
+      P = extrairPropostaDental(txt);
+    } else if (arquivo) {
+      // caminho B: PDF só com imagem (simulação expressa) → OCR por regiões
+      _dtProgresso('Este PDF não tem texto — vou ler a imagem. Pode levar de 20 a 60 segundos.');
+      try {
+        const T = await _ocrSimulacaoDental(arquivo, p => _dtProgresso(p));
+        P = interpretarSimulacaoDental(T);
+      } catch (e) {
+        _dtFecharProgresso();
+        P = { produtoId: 'dental', produto: 'Plano Dental Empresarial', seguradora: 'Bradesco Dental', origem: 'manual', erroLeitura: e.message };
+      }
+      _dtFecharProgresso();
+    } else {
+      P = { produtoId: 'dental', produto: 'Plano Dental Empresarial', seguradora: 'Bradesco Dental', origem: 'manual' };
+    }
+    P.produtoId = 'dental';
+    if (txt) P.textoOriginal = txt.slice(0, 20000);
+    return P;
+  }
+  window.lerPropostaDental = lerPropostaDental;
+
+  // Qual produto o corretor escolheu no seletor (ou deduzido do texto lido)
+  function _npProdutoEscolhido(txt) {
+    const sel = document.getElementById('npProduto');
+    const escolhido = sel ? (sel.value || 'auto') : 'auto';
+    if (escolhido && escolhido !== 'auto') return escolhido;
+    const t = String(txt || '');
+    if (/dental|odontol[óo]gic|Emiss[ãa]o Expressa|Bradesco Dental/i.test(t)) return 'dental';
+    return 'auto';
+  }
+  window._npProdutoEscolhido = _npProdutoEscolhido;
+
+  // Aviso quando a leitura dental não fechou — sempre com saída manual
+  function _avisoDental(chk) {
+    const P = _PROP_TMP || {};
+    const mm = document.createElement('div');
+    mm.className = 'cad-modal open'; mm.id = 'modalAvisoDental';
+    const motivo = chk.contaRuim
+      ? 'Li os números, mas <strong>a conta não fechou</strong>: vidas × valor por pessoa não deu o total mensal. Isso quase sempre é um dígito lido errado — por segurança eu não publico assim.'
+      : `Consegui abrir o arquivo, mas não encontrei <strong>${(chk.faltando || []).join('</strong>, <strong>')}</strong>.`;
+    mm.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:520px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#f59e0b,#d97706);">
+          <h2>⚠️ Preciso da sua conferência</h2>
+          <p>Cotação dental</p>
+        </div>
+        <div class="cad-modal-body">
+          <div style="font-size:13.5px; color:#334155; line-height:1.65;">${motivo}</div>
+          <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px 14px; font-size:12.5px; color:#92400e; margin-top:14px;">
+            Na próxima tela já vai o que eu consegui ler. Corrija o que estiver errado — o total é recalculado na hora.
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalAvisoDental').remove(); abrirNovaProposta();">↩ Tentar outro arquivo</button>
+          <button class="btn-primary" onclick="document.getElementById('modalAvisoDental').remove(); revisarPropostaDental(${JSON.stringify(chk).replace(/"/g, '&quot;')});">✏️ Conferir e completar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mm);
+  }
+  window._avisoDental = _avisoDental;
+
+  // Abre direto o formulário dental em branco (sem PDF)
+  function abrirPropostaDentalManual() {
+    const m = document.getElementById('modalNovaProp'); if (m) m.remove();
+    const nomeEmp = ((document.getElementById('npEmpresa') || {}).value || '').trim();
+    const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === nomeEmp.toLowerCase());
+    _PROP_TMP = {
+      produtoId: 'dental', produto: 'Plano Dental Empresarial', seguradora: 'Bradesco Dental',
+      origem: 'manual', abrangencia: 'Nacional',
+      empresaId: emp ? emp.id : null, empresaNome: emp ? emp.nome : (nomeEmp || null),
+      procedimentos: DENTAL_ROL_ANS.map(n => ({ nome: n }))
+    };
+    revisarPropostaDental({ faltando: [], critico: false });
+  }
+  window.abrirPropostaDentalManual = abrirPropostaDentalManual;
+
+  // mostra o atalho manual e ajusta o aviso quando o produto é dental
+  function npTrocouProduto() {
+    const sel = document.getElementById('npProduto');
+    const bm = document.getElementById('npBtnManual');
+    const dica = document.getElementById('npDica');
+    const dental = sel && sel.value === 'dental';
+    if (bm) bm.style.display = dental ? '' : 'none';
+    if (dica) dica.innerHTML = dental
+      ? '🦷 A simulação de até 199 vidas é um PDF de imagem — eu leio por reconhecimento e <strong>só publico se a conta fechar</strong> (vidas × valor por pessoa = total). A proposta comercial de 200+ vidas é lida direto do texto.'
+      : '💡 O sistema identifica <strong>apenas as coberturas que existem</strong> naquela cotação. Se o formato da seguradora mudar, ele avisa e você edita à mão.';
+  }
+  window.npTrocouProduto = npTrocouProduto;
+
+
   // Confere se o extrator achou o essencial. Se não, o formato provavelmente mudou.
   function conferirProposta(P) {
     const faltando = [];
@@ -17304,9 +17964,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       <div class="cad-modal-panel" style="max-width:640px;">
         <div class="cad-modal-head">
           <h2>📄 Nova proposta online</h2>
-          <p>Cole o texto do PDF da cotação. Você confere antes de publicar.</p>
+          <p>Envie o PDF da cotação. Você confere tudo antes de publicar.</p>
         </div>
         <div class="cad-modal-body">
+          <div class="form-group">
+            <label class="form-label">Produto</label>
+            <select class="form-control" id="npProduto" onchange="npTrocouProduto()">
+              <option value="auto">Detectar automaticamente</option>
+              <option value="do">D&amp;O — Responsabilidade de Administradores</option>
+              <option value="dental">Plano Dental Empresarial</option>
+            </select>
+          </div>
           <div class="form-group">
             <label class="form-label">Empresa</label>
             <input type="text" class="form-control" id="npEmpresa" list="npEmpList" placeholder="Comece a digitar…" autocomplete="off">
@@ -17327,12 +17995,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <summary style="font-size:12px; color:#64748b; cursor:pointer;">Prefere colar o texto? Clique aqui</summary>
             <textarea class="form-control" id="npTexto" rows="6" placeholder="Abra o PDF, selecione tudo (Ctrl+A), copie (Ctrl+C) e cole aqui…" style="font-size:12px; font-family:monospace; margin-top:8px;"></textarea>
           </details>
-          <div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:11px 13px; font-size:12px; color:#166534;">
+          <div id="npDica" style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:11px 13px; font-size:12px; color:#166534;">
             💡 O sistema identifica <strong>apenas as coberturas que existem</strong> naquela cotação. Se o formato da seguradora mudar, ele avisa e você edita à mão.
           </div>
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalNovaProp').remove()">Cancelar</button>
+          <button class="btn-secondary" id="npBtnManual" style="display:none;" onclick="abrirPropostaDentalManual()">✏️ Preencher à mão</button>
           <button class="btn-primary" id="npBtn" onclick="lerProposta()">🔍 Ler cotação</button>
         </div>
       </div>`;
@@ -17352,14 +18021,31 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       try { txt = await textoDoPDF(arq[0]); }
       catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = '🔍 Ler cotação'; }
-        return alert('Não consegui ler o PDF.\n\n' + e.message + '\n\nSe for um PDF digitalizado (imagem), ele não tem texto — nesse caso cole os dados na aba de texto.');
+        if (_npProdutoEscolhido() !== 'dental')
+          return alert('Não consegui ler o PDF.\n\n' + e.message + '\n\nSe for um PDF digitalizado (imagem), ele não tem texto — nesse caso cole os dados na aba de texto.');
+        txt = '';   // dental: segue para a leitura por imagem
       }
       if (btn) { btn.disabled = false; btn.textContent = '🔍 Ler cotação'; }
     }
-    if (txt.trim().length < 40) return alert('Escolha o PDF da cotação, ou cole o texto.');
+    const _prod = _npProdutoEscolhido(txt);
+    if (_prod !== 'dental' && txt.trim().length < 40) return alert('Escolha o PDF da cotação, ou cole o texto.');
+    if (_prod === 'dental' && !(arq && arq.length) && txt.trim().length < 40)
+      return alert('Escolha o PDF da cotação — ou clique em "Preencher à mão".');
 
     const nomeEmp = ((document.getElementById('npEmpresa') || {}).value || '').trim();
     const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === nomeEmp.toLowerCase());
+
+    if (_prod === 'dental') {
+      const mDt = document.getElementById('modalNovaProp'); if (mDt) mDt.remove();
+      const Pd = await lerPropostaDental(arq && arq.length ? arq[0] : null, txt);
+      Pd.empresaId = emp ? emp.id : null;
+      Pd.empresaNome = emp ? emp.nome : (nomeEmp || Pd.empresaNome || null);
+      _PROP_TMP = Pd;
+      const chkD = conferirPropostaDental(Pd);
+      if (chkD.critico) return _avisoDental(chkD);
+      return revisarPropostaDental(chkD);
+    }
+
     const P = extrairProposta(txt);
     P.empresaId = emp ? emp.id : null;
     P.empresaNome = emp ? emp.nome : (nomeEmp || null);
@@ -17524,6 +18210,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function publicarProposta() {
     const P = _PROP_TMP; if (!P) return;
     const v = id => ((document.getElementById(id) || {}).value || '').trim();
+    const _ehDental = (P.produtoId === 'dental') && !!document.getElementById('modalRevPropDental');
+    if (_ehDental) {
+      _coletarCamposDental(P);
+      if (!P.vidas || !P.valorVida || !P.mensalidade)
+        return alert('Para publicar eu preciso de: vidas, valor por pessoa e total mensal.');
+      if (!P.conferencia.bate && !confirm('A conta não fecha: vidas × valor por pessoa não dá o total mensal digitado.\n\nPublicar mesmo assim?')) return;
+    } else {
     P.empresaNome = v('rvEmpresa') || null;
     P.produto = v('rvProduto') || 'Proposta de seguro';
     P.seguradora = v('rvSeg') || null;
@@ -17543,6 +18236,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       novas.push({ nome: nome.trim(), lmi, premio: ant ? ant.premio : 0, franquia: ant ? ant.franquia : 0 });
     });
     P.coberturas = novas;
+    }
     const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === (P.empresaNome || '').toLowerCase());
     if (emp) P.empresaId = emp.id;
     P.token = gerarTokenAleatorio(24);
@@ -17562,6 +18256,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const url = `${base}${arqProp}?t=${P.token}`;
       const msg = `Olá! Segue a proposta de ${(P.produto || 'seguro').split('—')[0].trim()}${P.empresaNome ? ' para a ' + P.empresaNome : ''}, com todas as coberturas e formas de pagamento:\n\n${url}`;
       const m = document.getElementById('modalRevProp'); if (m) m.remove();
+      const md = document.getElementById('modalRevPropDental'); if (md) md.remove();
       const mm = document.createElement('div');
       mm.className = 'cad-modal open'; mm.id = 'modalLinkProp';
       mm.innerHTML = `
@@ -17686,11 +18381,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       arq: 'ApresentacaoGarantia.html', arqQ: null, arqProp: null,
       desc: 'Substitui dinheiro parado — depósito judicial, caução, fiança bancária — por uma apólice, e devolve o caixa para a empresa.' },
     { id: 'dental', nome: 'Plano Dental Empresarial',
-      arq: 'ApresentacaoDental.html', arqQ: 'QuestionarioDental.html', arqProp: null,
+      arq: 'ApresentacaoDental.html', arqQ: 'QuestionarioDental.html', arqProp: 'PropostaOnlineDental.html',
       desc: 'O benefício de menor custo por pessoa: sem carência, rede nacional e a família do funcionário inclusa.' }
   ];
   let APRESENTACOES = APRESENTACOES_DEFAULT.slice();
-  let VISUALIZADOR_PROPOSTA = { do: 'PropostaOnlineDO.html' };
+  let VISUALIZADOR_PROPOSTA = { do: 'PropostaOnlineDO.html', dental: 'PropostaOnlineDental.html' };
 
   async function carregarCatalogoApresentacoes() {
     try {
@@ -17700,6 +18395,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         VISUALIZADOR_PROPOSTA = {};
         APRESENTACOES.forEach(a => { if (a.arqProp) VISUALIZADOR_PROPOSTA[a.id] = a.arqProp; });
         if (!VISUALIZADOR_PROPOSTA.do) VISUALIZADOR_PROPOSTA.do = 'PropostaOnlineDO.html';
+        if (!VISUALIZADOR_PROPOSTA.dental) VISUALIZADOR_PROPOSTA.dental = 'PropostaOnlineDental.html';
       }
     } catch (e) { console.warn('catálogo apresentações', e); }
   }
@@ -17713,6 +18409,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     VISUALIZADOR_PROPOSTA = {};
     APRESENTACOES.forEach(a => { if (a.arqProp) VISUALIZADOR_PROPOSTA[a.id] = a.arqProp; });
     if (!VISUALIZADOR_PROPOSTA.do) VISUALIZADOR_PROPOSTA.do = 'PropostaOnlineDO.html';
+    if (!VISUALIZADOR_PROPOSTA.dental) VISUALIZADOR_PROPOSTA.dental = 'PropostaOnlineDental.html';
   }
 
   function abrirCatalogoApresentacoes() {
