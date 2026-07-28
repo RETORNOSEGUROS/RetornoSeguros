@@ -199,7 +199,7 @@ const PRODUTO = { id: 'garantia', nome: 'Seguro Garantia' };
    Enquanto for false, o CTA principal não manda o cliente para uma página que
    não existe — ele cai no formulário de contato, que resolve a mesma coisa. */
 const TEM_QUESTIONARIO = false;
-const ARQ_VERSAO = '2';
+const ARQ_VERSAO = '3';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 let SESSAO = null;      // id do documento desta visita
@@ -215,7 +215,7 @@ const MI = 1e6, MIL = 1e3;
    quando é faixa, os números que ela representa. Os rótulos podem ser
    reescritos depois sem quebrar o histórico. Índice = índice da opção. */
 const DIC = {
-  comoGarante: [['gar_dinheiro'], ['gar_fianca'], ['gar_seguro'], ['gar_nunca'], ['gar_perdeu']],
+  comoGarante: [['gar_dinheiro'], ['gar_fianca'], ['gar_seguro'], ['gar_perdeu'], ['gar_nunca']],
   valorParado: [['par_muito'], ['par_algum'], ['par_juridico'], ['par_nao']],
   valorParadoFaixa: [
     ['vp_0_100k', 0, 100 * MIL], ['vp_100_300k', 100 * MIL, 300 * MIL], ['vp_300_500k', 300 * MIL, 500 * MIL],
@@ -227,7 +227,10 @@ const DIC = {
   nFiancas: [['fi_0'], ['fi_1_2'], ['fi_3_5'], ['fi_6_mais'], ['fi_naosei']],
   sabeTaxa: [['tx_sei'], ['tx_maisoumenos'], ['tx_naosei']],
   licita: [['lic_sempre'], ['lic_asvezes'], ['lic_perdeu'], ['lic_nao']],
-  fazSentido: [['fs_sim'], ['fs_entender']]
+  fazSentido: [['fs_sim'], ['fs_entender']],
+  contratual: [['ctt_forn'], ['ctt_adiant'], ['ctt_reten'], ['ctt_obra'], ['ctt_pedir'], ['ctt_nenhuma']],
+  especificas: [['esp_energia'], ['esp_aduaneira'], ['esp_recebiveis'], ['esp_imobiliaria'], ['esp_concessao'], ['esp_nenhuma']],
+  oQueMudaria: [['mud_giro'], ['mud_limite'], ['mud_contratos'], ['mud_tranquilidade']]
 };
 
 /* Onde o Seguro Garantia entra: cada linha tem um código fixo, um nome
@@ -262,16 +265,16 @@ const CENAS = [
     rotulo: 'Bem-vindo',
     titulo: 'Existe um seguro que <em>devolve dinheiro</em> para o caixa da sua empresa.',
     corpo: 'O <strong>Seguro Garantia</strong> é o seguro que prova, para quem cobra de você, que a sua empresa vai cumprir o que prometeu — um juiz, um órgão público, um cliente grande, um fornecedor de energia.\n\nA diferença é o que ele substitui. Hoje, quando alguém exige essa prova, a empresa costuma responder com <strong>dinheiro parado</strong> — depósito em juízo, caução, fiança bancária que come o limite no banco. A apólice ocupa esse lugar, e o dinheiro volta a trabalhar.\n\nSão poucas telas. Em cada uma eu mostro uma situação real e você me diz se ela existe aí.',
-    pergunta: 'Para começar: quando exigem uma garantia da sua empresa, o que vocês usam hoje?',
-    tipo: 'opcoes',
+    pergunta: 'Para começar: quando exigem uma garantia da sua empresa, o que vocês usam hoje? Marque tudo que já aconteceu.',
+    tipo: 'multi',
     lista: true,
     campo: 'comoGarante',
     opcoes: [
       { txt: '💸 Dinheiro parado — depósito em juízo ou caução', v: 'dinheiro' },
       { txt: '🏦 Fiança bancária', v: 'fianca', linhas: ['fianca_sub'] },
       { txt: '📄 Já usamos seguro garantia', v: 'seguro' },
-      { txt: '🤔 Nunca precisamos disso', v: 'nunca' },
-      { txt: '🚪 Já deixamos de participar de algo por não ter garantia', v: 'perdeu' }
+      { txt: '🚪 Já deixamos de participar de algo por não ter garantia', v: 'perdeu' },
+      { txt: '🤔 Nunca precisamos disso', v: 'nunca', exclusiva: true }
     ]
   },
   {
@@ -544,7 +547,8 @@ async function renderCena(i) {
   };
 
   if (c.tipo === 'multi') {
-    const iNenhuma = c.opcoes.findIndex(o => o.v === 'nenhuma');
+    // opção exclusiva: 'nenhuma dessas' e 'nunca precisamos disso' zeram o resto
+    const iNenhuma = c.opcoes.findIndex(o => o.exclusiva || o.v === 'nenhuma');
     $('ops').querySelectorAll('.op').forEach(b => {
       b.onclick = () => {
         const k = Number(b.dataset.k);
@@ -611,11 +615,17 @@ function caixaPreso() {
 function calcularGrau() {
   let p = 0;
   const v = (c, mapa) => { const r = RESP[c]; return r && mapa[r.valor] !== undefined ? mapa[r.valor] : 0; };
+  // em campo de múltipla escolha vale a opção mais pesada marcada, não a soma
+  const vMax = (c, mapa) => {
+    const r = RESP[c]; if (!r) return 0;
+    const vs = r.valores || (r.valor ? [r.valor] : []);
+    return vs.reduce((m, x) => Math.max(m, mapa[x] || 0), 0);
+  };
   p += v('valorParado', { muito: 4, algum: 3, juridico: 2, nao: 0 });
   p += v('execFiscal', { sim_agora: 3, ja_teve: 2, naosei: 1, nao: 0 });
   p += v('nFiancas', { '0': 0, '1_2': 2, '3_5': 3, '6_mais': 4, naosei: 2 });
   p += v('licita', { sempre: 3, asvezes: 2, perdeu: 3, nao: 0 });
-  p += v('comoGarante', { dinheiro: 3, fianca: 2, seguro: 0, nunca: 0, perdeu: 3 });
+  p += vMax('comoGarante', { dinheiro: 3, fianca: 2, seguro: 0, nunca: 0, perdeu: 3 });
   p += Math.min(3, ((RESP._linhas || []).length) / 3);
   const max = 20;
   const pct = Math.round(Math.min(100, p / max * 100));
@@ -732,6 +742,33 @@ async function renderResultado() {
   $('btContato').onclick = () => { registrarInteresse('contato'); renderContato(); };
 }
 
+/* Documentos da análise de crédito. Aparece quando o cliente decide seguir:
+   é informação útil (ele já vai separando) e, de quebra, é um micro-compromisso
+   — quem começa a juntar documento já decidiu. Sem promessa de prazo. */
+const DOCS = [
+  ['Últimos 3 balanços', 'Balanço patrimonial dos três últimos exercícios encerrados.'],
+  ['Últimas 3 DREs', 'Demonstração de resultado dos mesmos três exercícios.'],
+  ['Contrato social ou estatuto', 'Última alteração consolidada, com o quadro societário atual.'],
+  ['Cartão CNPJ', 'Cartão atualizado da Receita Federal.'],
+  ['A demanda, se já houver uma', 'Se você já tem algo concreto para garantir, junte o documento dela: a decisão ou o processo, a minuta do contrato, o edital, o contrato de compra e venda de energia. Não é obrigatório para aprovar o limite — mas com ele a primeira apólice sai junto.']
+];
+
+function htmlDocs(titulo) {
+  return `<div style="margin-top:18px; border:1px solid rgba(147,164,200,.22); border-radius:14px; padding:16px 18px; background:rgba(56,189,248,.05);">
+    <div style="font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--dourado); font-weight:700; margin-bottom:8px;">${titulo}</div>
+    <div style="font-size:13px; color:#93a4c8; line-height:1.6; margin-bottom:12px;">
+      A análise para aprovar o limite é de <strong style="color:#c3d0ec;">crédito da empresa</strong>, como a de um banco. Se quiser ir adiantando, é isto que vamos precisar:
+    </div>
+    ${DOCS.map(([t, d]) => `<div style="display:flex; gap:9px; margin-bottom:9px; align-items:flex-start;">
+      <span style="color:#38bdf8; font-size:14px; line-height:1.4;">📄</span>
+      <div style="font-size:13px; color:#c3d0ec; line-height:1.55;"><b style="color:#e8eefc;">${t}</b><br><span style="color:#93a4c8; font-size:12.5px;">${d}</span></div>
+    </div>`).join('')}
+    <div style="font-size:12px; color:#7b8db3; line-height:1.55; border-top:1px solid rgba(147,164,200,.16); padding-top:10px; margin-top:4px;">
+      Nada disso precisa ser enviado agora — é só para você não ser pego de surpresa. A corretora recebe os documentos por onde for mais fácil para você.
+    </div>
+  </div>`;
+}
+
 function renderContato() {
   palco.innerHTML = `
     <div class="cena">
@@ -747,6 +784,7 @@ function renderContato() {
       <label class="lbl">Telefone / WhatsApp</label>
       <input class="campo" id="cTel" type="tel" inputmode="numeric" style="width:100%;margin-bottom:16px;" placeholder="(00) 00000-0000" oninput="mascaraTel(this)">
       <button class="btn btn-ouro" id="ok" style="width:100%;">Pode me chamar →</button>
+      ${htmlDocs('confira o que vamos precisar')}
     </div>`;
   if (LINK && LINK.empresaNome) $('cEmp').value = LINK.empresaNome;
   $('ok').onclick = async () => {
@@ -779,6 +817,7 @@ function renderFim(soContato) {
           : 'Suas respostas já estão com a corretora, que começa a preparar a aprovação do seu limite. Sem compromisso da sua parte.'}
         <br><br>Obrigado pelo tempo — dinheiro parado em garantia é dinheiro que a sua empresa já ganhou e ainda não pode usar.
       </div>
+      ${htmlDocs('para você ir separando')}
       <div class="acoes-finais">
         <button class="btn btn-2" id="btPdf">📄 Baixar o mapa em PDF</button>
       </div>
@@ -864,6 +903,19 @@ function gerarPDF(g, cx, linhas) {
     });
 
     y += 4;
+    quebra(230);
+    doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+    doc.text('Documentos para a aprovacao do limite', M, y); y += 8;
+    DOCS.forEach(([t, d]) => {
+      quebra(250);
+      doc.setFontSize(10.5); doc.setFont(undefined, 'bold'); doc.setTextColor(30, 58, 109);
+      doc.text('• ' + sa(t), M, y); y += 5;
+      doc.setFontSize(9.5); doc.setFont(undefined, 'normal'); doc.setTextColor(71, 85, 105);
+      const ld = doc.splitTextToSize(sa(d), W - M * 2 - 5);
+      doc.text(ld, M + 4, y); y += ld.length * 4.4 + 4;
+    });
+
+    y += 4;
     quebra(240);
     doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
     doc.text('O que voce precisa saber antes de contratar', M, y); y += 7;
@@ -904,11 +956,21 @@ function montarAnalitico(finalizou) {
   };
   const cx = caixaPreso();
   const g = calcularGrau();
-  const multi = (campo) => (RESP[campo] && RESP[campo].valores) || [];
+  // múltiplas: guarda o CÓDIGO estável de cada opção marcada, não o valor cru
+  const cods = (campo) => {
+    const c = CENAS.find(x => x.campo === campo), r = RESP[campo];
+    if (!c || !r) return [];
+    const vs = r.valores || (r.valor ? [r.valor] : []);
+    return vs.map(val => {
+      const i = c.opcoes.findIndex(o => o.v === val);
+      const linha = (DIC[campo] || [])[i];
+      return linha ? linha[0] : val;
+    });
+  };
   return {
     esquema: 2, produto: PRODUTO.id, arqVersao: ARQ_VERSAO, etapa: 'apresentacao',
     completo: !!finalizou, passo: iCena,
-    comoGaranteCod: cod('comoGarante'),
+    comoGaranteCod: cods('comoGarante'),
     valorParadoCod: cod('valorParado'),
     caixaPresoMin: cx ? cx.min : null,
     caixaPresoMax: cx ? cx.max : null,
@@ -918,9 +980,9 @@ function montarAnalitico(finalizou) {
     sabeTaxaCod: cod('sabeTaxa'),
     licitaCod: cod('licita'),
     fazSentidoCod: cod('fazSentido'),
-    contratualCod: multi('contratual'),
-    especificasCod: multi('especificas'),
-    oQueMudariaCod: multi('oQueMudaria'),
+    contratualCod: cods('contratual'),
+    especificasCod: cods('especificas'),
+    oQueMudariaCod: cods('oQueMudaria'),
     linhas: RESP._linhas || [],
     nLinhas: (RESP._linhas || []).length,
     grauPct: g.pct, grauNivel: g.nivel,
