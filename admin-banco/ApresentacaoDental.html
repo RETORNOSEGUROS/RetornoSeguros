@@ -100,6 +100,12 @@
   .nao-cob { display:grid; grid-template-columns:repeat(auto-fit,minmax(196px,1fr)); gap:7px; margin:10px 0 4px; }
   .nao-cob div { font-size:12.5px; color:#e8b0b6; background:rgba(251,113,133,.07); border:1px solid rgba(251,113,133,.22); border-radius:10px; padding:9px 11px; }
   .eco-verde { border-color:var(--verde) !important; background:rgba(52,211,153,.08) !important; color:#bff0dc !important; }
+  .eco-verde + .eco-verde { margin-top:9px; }
+  .passos { display:flex; flex-direction:column; gap:9px; margin:18px 0 4px; }
+  .passo { display:flex; gap:13px; align-items:flex-start; background:rgba(255,255,255,.045); border:1px solid rgba(147,164,200,.18); border-radius:12px; padding:13px 15px; }
+  .passo .num { flex:none; width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg,var(--ciano),#2563eb); color:#031127; font-weight:800; font-size:15px; display:flex; align-items:center; justify-content:center; }
+  .passo .tx b { color:#fff; font-weight:650; display:block; font-size:14px; margin-bottom:2px; line-height:1.3; }
+  .passo .tx span { font-size:12.5px; color:#9fb0d4; line-height:1.45; }
   .grid4 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin:16px 0; }
   .grid4 .c { background:rgba(255,255,255,.045); border:1px solid rgba(147,164,200,.18); border-radius:12px; padding:14px 12px; text-align:center; }
   .grid4 .c.forte { border-color:rgba(52,211,153,.38); background:rgba(52,211,153,.08); }
@@ -136,12 +142,24 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'dental', nome: 'Plano Dental Empresarial' };
-const ARQ_VERSAO = '3';
+const ARQ_VERSAO = '4';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
-/* Preço real de referência (base: propostas Retorno, Bradesco Dental SPG).
-   Faixa honesta por vida/mês; o valor final depende de plano, porte e adesão. */
-const PRECO_VIDA_MIN = 14, PRECO_VIDA_MID = 15, PRECO_VIDA_MAX = 16;
+/* Preço real por FAIXA de vidas — Bradesco Dental SPG, plano Padrão Doc
+   (o de menor custo, que é o que a Retorno vende). Valores da simulação do
+   sistema; a proposta final pode ser ajustada pela seguradora. As faixas de
+   headcount abaixo (DIC.headcount) batem 1:1 com estes intervalos, então o
+   valor por pessoa é sempre o da faixa certa. */
+const FAIXAS_PRECO = [
+  { de: 3,    ate: 29,   vida: 27.42 },
+  { de: 30,   ate: 99,   vida: 24.19 },
+  { de: 100,  ate: 199,  vida: 18.15 },
+  { de: 200,  ate: 700,  vida: 14.17 },
+  { de: 701,  ate: 1000, vida: 13.89 },
+  { de: 1001, ate: null, vida: 10.82 }
+];
+const PRECO_VIDA_MENOR = 10.82, PRECO_VIDA_MAIOR = 27.42;
+function faixaPreco(vidas) { return FAIXAS_PRECO.find(f => vidas >= f.de && (f.ate === null || vidas <= f.ate)) || null; }
 
 let SESSAO = null, LINK = null, RESP = {}, QRESP = {}, iCena = 0;
 let PERFIL = null;          // 'financeiro' | 'rh'
@@ -152,8 +170,8 @@ const DIC = {
   perfil: [['perf_dono'], ['perf_financeiro'], ['perf_rh'], ['perf_outro']],
   situacao: [['sit_nenhum'], ['sit_local'], ['sit_outra'], ['sit_naosei']],
   headcount: [
-    ['hc_ate10', 3, 10, 7], ['hc_11_30', 11, 30, 20], ['hc_31_50', 31, 50, 40],
-    ['hc_51_100', 51, 100, 75], ['hc_101_199', 101, 199, 150], ['hc_200_mais', 200, null, 260]
+    ['hc_ate29', 3, 29, 20], ['hc_30_99', 30, 99, 60], ['hc_100_199', 100, 199, 150],
+    ['hc_200_700', 200, 700, 400], ['hc_701_1000', 701, 1000, 850], ['hc_1000_mais', 1001, null, 1200]
   ],
   dorDente: [['dd_falta'], ['dd_particular'], ['dd_adia'], ['dd_sus']],
   familia: [['fam_sim'], ['fam_naosabia'], ['fam_sotitular']],
@@ -183,8 +201,8 @@ const CENAS = {
     pergunta: 'Quantos funcionários a empresa tem, mais ou menos?',
     tipo: 'opcoes', muitas: true, campo: 'headcount',
     opcoes: [
-      { txt: 'Até 10', v: 'ate10' }, { txt: '11 a 30', v: '11_30' }, { txt: '31 a 50', v: '31_50' },
-      { txt: '51 a 100', v: '51_100' }, { txt: '101 a 199', v: '101_199' }, { txt: '200 ou mais', v: '200_mais' }
+      { txt: 'Até 29', v: 'ate29' }, { txt: '30 a 99', v: '30_99' }, { txt: '100 a 199', v: '100_199' },
+      { txt: '200 a 700', v: '200_700' }, { txt: '701 a 1.000', v: '701_1000' }, { txt: 'Mais de 1.000', v: '1000_mais' }
     ]
   },
   custo: {
@@ -256,18 +274,39 @@ const CENAS = {
       { txt: '👤 Prefiro só o titular', v: 'sotitular', eco: 'Tudo bem — dá para começar só com titulares e abrir para a família depois. Mas guarde essa carta: ela costuma valer muito.' }
     ]
   },
+  comoUsa: {
+    rotulo: 'Como o funcionário usa',
+    titulo: 'No dia a dia, usar o plano é simples assim:',
+    corpo: 'Sem reembolso para correr atrás, sem autorização prévia para o básico. O funcionário resolve em quatro passos:',
+    passos: [
+      ['1', 'Pesquisa a lista de dentistas credenciados na cidade dele', 'No site ou no app, filtra por cidade e especialidade.'],
+      ['2', 'Agenda a consulta ou o procedimento', 'Direto com o consultório, no horário que der para ele.'],
+      ['3', 'Leva o número da carteirinha no dia', 'Cartão digital no celular — não precisa de via física.'],
+      ['4', 'Faz o procedimento sem pagar nada', 'Desde que seja coberto pelo plano, o custo é zero para o funcionário.']
+    ],
+    pergunta: 'Fácil, não?',
+    tipo: 'opcoes', campo: 'comoUsa',
+    opcoes: [
+      { txt: '👍 Sim, bem simples', v: 'sim', eco: 'É essa a graça do dental: o funcionário se vira sozinho, sem depender do RH para marcar nada. Menos trabalho para a empresa, mais autonomia para ele.' },
+      { txt: '🤔 Tenho uma dúvida', v: 'duvida', eco: 'Sem problema — o corretor destrincha cada passo com você. Mas no fundo é isso: achar o dentista, agendar, mostrar a carteirinha e ser atendido.' }
+    ]
+  },
   gestao: {
     rotulo: 'Sem dor de cabeça',
     titulo: 'O benefício que dá menos trabalho de todos.',
-    corpo: 'A maior objeção de quem cuida de benefício não é o custo — é o medo de dar trabalho. No dental, quase tudo já vem resolvido: <strong>movimentação simples</strong> (admitiu, inclui; desligou, exclui — pelo portal, em minutos), cartão digital, app para achar dentista, implantação com equipe dedicada e ações de prevenção (SIPAT, palestras) que fazem o time realmente usar.',
+    corpo: 'A maior objeção de quem cuida de benefício não é o custo — é o medo de dar trabalho. E aqui é o contrário: ao implantar, a empresa ganha um <strong>login da corretora</strong> com a lista do time. Quem sai, um clique em "retirar". Quem entra, você manda os dados e a <strong>corretora faz</strong> a inclusão. O trabalho pesado é nosso — some com cartão digital, app para achar dentista e ações de prevenção (SIPAT, palestras) que fazem o time usar.',
+    passos: [
+      ['−', 'Saiu da empresa? Um clique em "retirar do plano".', 'Você seleciona na lista do seu login; a corretora processa a exclusão.'],
+      ['+', 'Entrou alguém? Manda os dados do novo colaborador.', 'A corretora faz toda a inclusão — sem formulário para você preencher.']
+    ],
     destaque: 'Pensa no que mais te preocuparia ao colocar um benefício novo de pé aqui dentro.',
-    pergunta: 'O que mais te preocupa em oferecer um benefício novo?',
-    tipo: 'opcoes', lista: true, campo: 'medoRH',
+    pergunta: 'O que mais te preocupa em oferecer um benefício novo? (marque quantas quiser)',
+    tipo: 'multi', mostrarEcos: true, lista: true, campo: 'medoRH',
     opcoes: [
-      { txt: '🗂️ Dar trabalho de gestão', v: 'trabalho', eco: 'Inclusão e exclusão pelo portal do RH, em minutos — sem papel e sem e-mail. Cartão digital, app e equipe de implantação dedicada. O dia a dia é mínimo.' },
+      { txt: '🗂️ Dar trabalho de gestão', v: 'trabalho', eco: 'Movimentação: você marca "retirar" para quem sai e manda os dados de quem entra — a corretora faz o resto. Sem papel, sem e-mail, sem formulário. Achou difícil?' },
       { txt: '⏱️ Carência longa', v: 'carencia', eco: 'Urgência e emergência valem em 24h. E em contratos acima de 30 vidas, quem adere nos primeiros 30 dias da vigência entra <strong>isento de carência</strong> — o time usa já no primeiro mês.' },
       { txt: '😴 O time não usar', v: 'naousa', eco: 'SIPAT, palestras e ações de prevenção puxam o uso — e o app deixa achar dentista fácil. Uso alto é o que faz o benefício ser lembrado.' },
-      { txt: '💰 O custo', v: 'custo', eco: 'É o benefício de menor custo por vida do mercado. Na próxima tela eu faço a conta com você.' }
+      { txt: '💰 O custo', v: 'custo', eco: 'É o benefício de menor custo por vida do mercado — e você já viu a conta da sua faixa na tela anterior.' }
     ]
   },
   regua: {
@@ -302,8 +341,8 @@ const CENAS = {
 };
 
 /* Ordem por perfil: o financeiro vê custo cedo; o RH vê gestão/família cedo. */
-const ORDEM_FIN = ['situacao', 'headcount', 'custo', 'limpeza', 'coberturas', 'familia', 'gestao', 'regua', 'needpayoff'];
-const ORDEM_RH  = ['situacao', 'headcount', 'gestao', 'coberturas', 'familia', 'custo', 'limpeza', 'regua', 'needpayoff'];
+const ORDEM_FIN = ['situacao', 'headcount', 'custo', 'limpeza', 'coberturas', 'comoUsa', 'familia', 'gestao', 'regua', 'needpayoff'];
+const ORDEM_RH  = ['situacao', 'headcount', 'gestao', 'coberturas', 'comoUsa', 'familia', 'custo', 'limpeza', 'regua', 'needpayoff'];
 
 /* ─── MOTOR ─── */
 const $ = id => document.getElementById(id);
@@ -374,6 +413,7 @@ async function renderCena(i) {
       <div class="rotulo">${c.rotulo}</div>
       <div class="titulo">${c.titulo}</div>
       <div class="corpo" id="corpo"></div>
+      ${c.passos ? `<div id="passos" style="display:none;"><div class="passos">${c.passos.map(pp => `<div class="passo"><div class="num">${pp[0]}</div><div class="tx"><b>${pp[1]}</b><span>${pp[2]}</span></div></div>`).join('')}</div></div>` : ''}
       ${c.grade ? `<div id="grade" style="display:none;">
         <div class="grade-cob">${c.grade.map(g => `<div class="cob"><div class="t">${g[0]} ${g[1]}</div><div class="e">${g[2]}</div></div>`).join('')}</div>
         ${c.naoCobre ? `<div class="lbl" style="margin-top:16px;">No plano padrão NÃO entram:</div>
@@ -390,6 +430,7 @@ async function renderCena(i) {
     </div>`;
   window.scrollTo(0, 0);
   await digitar($('corpo'), c.corpo, 15);
+  if (c.passos) { await espera(160); const pz = $('passos'); pz.style.display = 'block'; pz.style.animation = 'entra .5s'; }
   if (c.grade) { await espera(200); const g = $('grade'); g.style.display = 'block'; g.style.animation = 'entra .5s'; }
   if (c.destaque) { await espera(240); const d = $('dest'); d.style.display = 'block'; d.style.animation = 'entra .5s'; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
   await espera(260);
@@ -399,16 +440,18 @@ async function renderCena(i) {
   /* O eco verde e' a nossa resposta a' escolha do cliente. Antes ele sumia
      sozinho em 1,1s e ninguem terminava de ler. Agora fica na tela ate' a
      pessoa clicar em Continuar — quem le' rapido nao espera, quem le' devagar
-     nao perde. */
-  const mostrarEco = (txt, entao) => {
+     nao perde. Quando a cena e' multi (varias escolhas), mostramos UM eco
+     verde por escolha, empilhados, antes de seguir. */
+  const ecoBloco = txt => `<div class="destaque eco-verde">${txt}</div>`;
+  const mostrarEcoRaw = (html, entao) => {
     const e = $('eco');
-    if (!txt) return entao && entao();
+    if (!html) return entao && entao();
     e.style.display = 'block';
-    e.innerHTML = `<div class="destaque eco-verde">${txt}</div>
-      <button class="btn btn-ouro" id="btEcoOk" style="margin-top:14px;width:100%;">Continuar →</button>`;
+    e.innerHTML = html + `<button class="btn btn-ouro" id="btEcoOk" style="margin-top:14px;width:100%;">Continuar →</button>`;
     e.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     $('btEcoOk').onclick = () => { $('btEcoOk').disabled = true; entao && entao(); };
   };
+  const mostrarEco = (txt, entao) => mostrarEcoRaw(txt ? ecoBloco(txt) : '', entao);
   const avancar = () => { salvarParcial(); const nv = cenasVisiveis(); const pos = nv.findIndex(x => x.campo === c.campo); iCena = (pos >= 0 ? pos : i) + 1; iCena < nv.length ? renderCena(iCena) : renderResultado(); };
 
   if (c.tipo === 'multi') {
@@ -423,7 +466,10 @@ async function renderCena(i) {
       if (!sel.length) { $('btMultiOk').textContent = 'Marque ao menos uma opção →'; return; }
       RESP[c.campo] = { valores: sel.map(o => o.v), textos: sel.map(o => o.txt) };
       $('btMultiOk').style.display = 'none';
-      mostrarEco(c.eco, avancar);
+      const combinado = c.mostrarEcos
+        ? sel.filter(o => o.eco).map(o => ecoBloco(o.eco)).join('')
+        : (c.eco ? ecoBloco(c.eco) : '');
+      mostrarEcoRaw(combinado, avancar);
     };
   } else {
     $('ops').querySelectorAll('.op').forEach(b => b.onclick = () => {
@@ -438,18 +484,21 @@ async function renderCena(i) {
 }
 
 /* ─── CÁLCULOS DO RESULTADO ─── */
-const fmt = v => 'R$ ' + Number(Math.round(v)).toLocaleString('pt-BR');
+const fmt = v => 'R$ ' + Number(Math.round(v)).toLocaleString('pt-BR');                 // totais, em reais
+const fmtC = v => 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); // por pessoa, com centavos
 function headcountFaixa() { const r = RESP.headcount; if (!r || typeof r.i !== 'number') return null; return DIC.headcount[r.i] || null; }
-function headcountMid() { const f = headcountFaixa(); return f ? (f[3] || null) : null; }
-/* Faixa fechada (ex.: 31 a 50) ancora no meio. Faixa aberta (200 ou mais) ancora
-   no PISO e vira "a partir de" — chutar 260 vidas para quem tem 800 seria criar
-   uma expectativa de valor que a proposta real nao sustenta. */
+/* O valor por pessoa e' o da FAIXA (nao um chute): fechado da 100-199 => R$18,15.
+   O total da empresa e' uma faixa honesta: do piso (de x vida) ao teto (ate x
+   vida). Faixa aberta (mais de 1.000) vira "a partir de", porque a conta cai
+   por pessoa conforme cresce e prometer um teto seria mentira. */
 function custoMensal() {
   const fx = headcountFaixa(); if (!fx) return null;
   const aberta = (fx[2] === null || fx[2] === undefined);
-  const base = aberta ? fx[1] : fx[3];
-  if (!base) return null;
-  return { min: base * PRECO_VIDA_MIN, mid: base * PRECO_VIDA_MID, max: base * PRECO_VIDA_MAX, vidas: base, aberta: aberta };
+  const ancora = aberta ? fx[1] : fx[3];
+  const fp = faixaPreco(ancora); if (!fp) return null;
+  const de = fx[1], ate = aberta ? null : fx[2];
+  return { vida: fp.vida, de: de, ate: ate, aberta: aberta, vidas: ancora,
+           min: de * fp.vida, max: aberta ? null : ate * fp.vida };
 }
 /* A regra real da operadora (contrato Bradesco Dental SPG): urgencia e
    emergencia valem em 24h SEMPRE; a isencao total de carencia so' existe em
@@ -470,7 +519,7 @@ async function renderResultado() {
   RESP._perfil = PERFIL;
   salvarParcial(true);
   const cm = custoMensal();
-  const anualPorVida = PRECO_VIDA_MID * 12;
+  const anualPorVida = cm ? cm.vida * 12 : null;
   const lz = limpezaFaixa();
   const ehRH = PERFIL === 'rh';
 
@@ -480,15 +529,17 @@ async function renderResultado() {
   const cards = [];
   if (ehRH) {
     cards.push(['⚡', '<b>Carência curta.</b> ' + textoCarencia()]);
-    cards.push(['🔄', '<b>Movimentação em minutos.</b> Admitiu, inclui; desligou, exclui — pelo portal do RH, sem papel e sem e-mail. Dependente entra junto.']);
+    cards.push(['🔄', '<b>Movimentação sem trabalho.</b> Você ganha um login da corretora com a lista do time: marca "retirar" para quem sai, manda os dados de quem entra — e a corretora faz a inclusão. Sem papel, sem formulário.']);
     cards.push(['📱', '<b>Gestão mínima.</b> Cartão digital no app, busca de dentista pelo celular e equipe de implantação dedicada.']);
     if (RESP.familia && RESP.familia.valor !== 'sotitular') cards.push(['👨‍👩‍👧', '<b>Família inclusa.</b> Cônjuge, filhos até 21 (ou 29 estudando) e agregados — sem nova implantação.']);
     cards.push(['📣', '<b>Uso alto.</b> SIPAT, palestras e prevenção fazem o benefício ser lembrado e usado.']);
   } else {
-    cards.push(['💵', `<b>Menor custo por vida do mercado.</b> Cerca de ${fmt(PRECO_VIDA_MIN)} a ${fmt(PRECO_VIDA_MAX)} por pessoa/mês — ${fmt(PRECO_VIDA_MIN * 12)} a ${fmt(PRECO_VIDA_MAX * 12)} por pessoa no ano inteiro.`]);
+    cards.push(['💵', cm
+      ? `<b>Menor custo por vida do mercado.</b> Na sua faixa, ${fmtC(cm.vida)} por pessoa/mês — ${fmt(cm.vida * 12)} por pessoa no ano inteiro.`
+      : `<b>Menor custo por vida do mercado.</b> De ${fmtC(PRECO_VIDA_MENOR)} a ${fmtC(PRECO_VIDA_MAIOR)} por pessoa/mês, conforme o número de vidas.`]);
     cards.push(['📉', '<b>Despesa dedutível.</b> Entra como benefício e ajuda no imposto — não é só custo.']);
     cards.push(['🧲', '<b>Retém gente.</b> Benefício odontológico é dos mais valorizados pelo menor investimento.']);
-    cards.push(['🔄', '<b>Não dá trabalho.</b> Inclusão e exclusão pelo portal, em minutos. Ninguém do seu time vai virar despachante do plano.']);
+    cards.push(['🔄', '<b>Não dá trabalho.</b> Um login da corretora com a lista do time: quem sai, um clique em "retirar"; quem entra, você manda os dados e a corretora inclui. Ninguém vira despachante do plano.']);
     if (RESP.familia && RESP.familia.valor !== 'sotitular') cards.push(['👨‍👩‍👧', '<b>Alcança a família.</b> Muitas vezes vale mais que um aumento — e sem custo novo de implantação.']);
     cards.push(['⚡', '<b>Carência curta.</b> ' + textoCarencia()]);
   }
@@ -501,17 +552,17 @@ async function renderResultado() {
 
       ${cm ? `<div class="cartao">
         <div class="rot">Custo estimado do benefício${LINK && LINK.empresaNome ? ' · ' + LINK.empresaNome : ''}</div>
-        <div class="val">${cm.aberta ? 'a partir de ' + fmt(cm.min) : fmt(cm.min) + ' a ' + fmt(cm.max)}<span style="font-size:15px;font-weight:600;color:#9fd8c4;"> /mês</span></div>
-        <div class="exp">${cm.aberta ? 'Estimativa a partir de ' + cm.vidas + ' vidas' : 'Estimativa para cerca de ' + cm.vidas + ' vidas'}. O valor final depende do plano escolhido, do porte e da modalidade — o corretor fecha com a operadora.</div>
+        <div class="val">${fmtC(cm.vida)}<span style="font-size:15px;font-weight:600;color:#9fd8c4;"> por pessoa/mês</span></div>
+        <div class="exp">${cm.aberta ? 'Faixa de mais de 1.000 vidas' : 'Faixa de ' + cm.de + ' a ' + cm.ate + ' vidas'} — valor da tabela Bradesco Dental SPG (Padrão Doc). A proposta final pode ser ajustada pela seguradora; o corretor fecha o número exato.</div>
       </div>
       <div class="grid4">
-        <div class="c forte"><div class="n">${fmt(PRECO_VIDA_MIN)} a ${fmt(PRECO_VIDA_MAX)}</div><div class="l">por pessoa<br><strong>por mês</strong></div></div>
-        <div class="c forte"><div class="n">${fmt(PRECO_VIDA_MIN * 12)} a ${fmt(PRECO_VIDA_MAX * 12)}</div><div class="l">por pessoa<br><strong>no ano inteiro</strong></div></div>
-        <div class="c"><div class="n">${cm.aberta ? fmt(cm.min) + '+' : fmt(cm.min) + ' a ' + fmt(cm.max)}</div><div class="l">a empresa<br><strong>por mês</strong></div></div>
-        <div class="c"><div class="n">${cm.aberta ? fmt(cm.min * 12) + '+' : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12)}</div><div class="l">a empresa<br><strong>no ano inteiro</strong></div></div>
+        <div class="c forte"><div class="n">${fmtC(cm.vida)}</div><div class="l">por pessoa<br><strong>por mês</strong></div></div>
+        <div class="c forte"><div class="n">${fmt(cm.vida * 12)}</div><div class="l">por pessoa<br><strong>no ano inteiro</strong></div></div>
+        <div class="c"><div class="n">${cm.aberta ? 'a partir de ' + fmt(cm.min) : fmt(cm.min) + ' a ' + fmt(cm.max)}</div><div class="l">a empresa<br><strong>por mês</strong></div></div>
+        <div class="c"><div class="n">${cm.aberta ? 'a partir de ' + fmt(cm.min * 12) : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12)}</div><div class="l">a empresa<br><strong>no ano inteiro</strong></div></div>
       </div>` : ''}
 
-      ${lz ? `<div class="compara">
+      ${lz && anualPorVida ? `<div class="compara">
         <div class="lado destaque">
           <div class="cifra">${fmt(anualPorVida)}</div>
           <div class="cap">é o que o plano custa, em média, por pessoa no <strong>ano inteiro</strong></div>
@@ -570,7 +621,7 @@ async function renderResultado() {
     </div>`;
   window.scrollTo(0, 0);
 
-  if (lz) await digitar($('cmp'), `Ou seja: <strong>o ano inteiro de plano para uma pessoa custa quase o mesmo que UMA limpeza particular</strong> — e o plano cobre consulta, limpeza, urgência, canal, extração e muito mais, o ano todo, para essa pessoa e para a família.`, 14);
+  if (lz && anualPorVida && $('cmp')) await digitar($('cmp'), `Ou seja: <strong>o ano inteiro de plano para uma pessoa custa quase o mesmo que UMA limpeza particular</strong> — e o plano cobre consulta, limpeza, urgência, canal, extração e muito mais, o ano todo, para essa pessoa e para a família.`, 14);
 
   const cont = $('cards');
   for (const [ico, txt] of cards) {
@@ -712,18 +763,17 @@ function gerarPDF(cm, lz) {
       doc.setFillColor(236, 253, 245); doc.roundedRect(M, y - 7, W - M * 2, 42, 2, 2, 'F');
       doc.setFontSize(8.5); doc.setFont(undefined, 'bold'); doc.setTextColor(6, 95, 70);
       doc.text('CUSTO ESTIMADO DO BENEFICIO', M + 5, y);
-      doc.setFontSize(16); doc.text(sa(cm.aberta ? 'a partir de ' + fmt(cm.min) + ' / mes' : fmt(cm.min) + ' a ' + fmt(cm.max) + ' / mes'), M + 5, y + 10);
+      doc.setFontSize(16); doc.text(sa(fmtC(cm.vida) + ' por pessoa / mes'), M + 5, y + 10);
       doc.setFontSize(8); doc.setFont(undefined, 'normal'); doc.setTextColor(6, 78, 59);
-      doc.text(sa((cm.aberta ? 'A partir de ' + cm.vidas + ' vidas' : 'Para cerca de ' + cm.vidas + ' vidas') + ':'), M + 5, y + 17);
-      doc.text(sa('Por pessoa / mes: ' + fmt(PRECO_VIDA_MIN) + ' a ' + fmt(PRECO_VIDA_MAX)), M + 5, y + 23);
-      doc.text(sa('Por pessoa / ano: ' + fmt(PRECO_VIDA_MIN * 12) + ' a ' + fmt(PRECO_VIDA_MAX * 12)), M + 5, y + 29);
-      doc.text(sa('A empresa / mes: ' + (cm.aberta ? fmt(cm.min) + '+' : fmt(cm.min) + ' a ' + fmt(cm.max))
-        + '   |   A empresa / ano: ' + (cm.aberta ? fmt(cm.min * 12) + '+' : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12))), M + 5, y + 35);
+      doc.text(sa(cm.aberta ? 'Faixa de mais de 1.000 vidas (tabela Bradesco Dental SPG):' : 'Faixa de ' + cm.de + ' a ' + cm.ate + ' vidas (tabela Bradesco Dental SPG):'), M + 5, y + 17);
+      doc.text(sa('Por pessoa / mes: ' + fmtC(cm.vida) + '   |   Por pessoa / ano: ' + fmt(cm.vida * 12)), M + 5, y + 23);
+      doc.text(sa('A empresa / mes: ' + (cm.aberta ? 'a partir de ' + fmt(cm.min) : fmt(cm.min) + ' a ' + fmt(cm.max))), M + 5, y + 29);
+      doc.text(sa('A empresa / ano: ' + (cm.aberta ? 'a partir de ' + fmt(cm.min * 12) : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12))), M + 5, y + 35);
       y += 46;
     }
     if (lz) {
       doc.setFontSize(11); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
-      doc.text(sa('O ano inteiro de plano por pessoa: cerca de ' + fmt(PRECO_VIDA_MID * 12)), M, y); y += 6;
+      doc.text(sa('O ano inteiro de plano por pessoa: ' + (cm ? fmt(cm.vida * 12) : 'a partir de ' + fmt(PRECO_VIDA_MENOR * 12))), M, y); y += 6;
       doc.setFontSize(9.5); doc.setFont(undefined, 'normal'); doc.setTextColor(71, 85, 105);
       const l = doc.splitTextToSize(sa('Voce estimou ' + fmt(lz.min) + (lz.max ? ' a ' + fmt(lz.max) : '+') + ' para UMA limpeza particular. O ano inteiro de plano custa quase o mesmo - e cobre consulta, limpeza, urgencia, canal, extracao e mais, para a pessoa e a familia.'), W - M * 2);
       doc.text(l, M, y); y += l.length * 4.6 + 8;
@@ -731,10 +781,10 @@ function gerarPDF(cm, lz) {
 
     doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
     doc.text('Por que vale a pena', M, y); y += 8;
-    [['Menor custo por vida', fmt(PRECO_VIDA_MIN) + ' a ' + fmt(PRECO_VIDA_MAX) + ' por pessoa/mes (' + fmt(PRECO_VIDA_MIN * 12) + ' a ' + fmt(PRECO_VIDA_MAX * 12) + ' por pessoa no ano inteiro) - o beneficio de menor custo do mercado.'],
+    [['Menor custo por vida', (cm ? fmtC(cm.vida) + ' por pessoa/mes na sua faixa (' + fmt(cm.vida * 12) + ' por pessoa no ano inteiro)' : 'de ' + fmtC(PRECO_VIDA_MENOR) + ' a ' + fmtC(PRECO_VIDA_MAIOR) + ' por pessoa/mes conforme o numero de vidas') + ' - o beneficio de menor custo do mercado.'],
      ['Carencia curta', String(textoCarencia()).replace(/<[^>]+>/g, '')],
      ['Cobertura nacional', 'Mais de 27 mil dentistas credenciados em cerca de 2.550 municipios. O funcionario se atende em qualquer cidade do Brasil - viajando, transferido ou morando fora.'],
-     ['Movimentacao facil', 'Inclusao e exclusao pelo portal do RH, em minutos: admitiu inclui, desligou exclui. Sem papel e sem e-mail. Dependente entra junto.'],
+     ['Movimentacao facil', 'A empresa ganha um login da corretora com a lista do time: quem sai, um clique em "retirar"; quem entra, voce manda os dados e a corretora faz a inclusao. Sem papel e sem formulario.'],
      ['Familia inclusa', 'Conjuge, companheiro(a), filhos ate 21 anos (ou 29 estudando), filhos invalidos e agregados - sem nova implantacao.'],
      ['Gestao facil', 'Cartao digital no app, busca de dentista pelo celular, equipe de implantacao dedicada e acoes de prevencao (SIPAT, palestras).']
     ].forEach(([t, d]) => {
@@ -816,9 +866,10 @@ function montarAnalitico(finalizou) {
     perfil: PERFIL, perfilCod: cod('perfil'),
     situacaoCod: cod('situacao'), headcountCod: cod('headcount'),
     vidasEstimadas: cm ? cm.vidas : null, vidasFaixaAberta: cm ? !!cm.aberta : null,
+    valorVida: cm ? cm.vida : null,
     custoMensalMin: cm ? Math.round(cm.min) : null,
     custoMensalMax: (cm && !cm.aberta) ? Math.round(cm.max) : null,
-    dorDenteCod: cod('dorDente'), familiaCod: cod('familia'), medoRHCod: cod('medoRH'),
+    dorDenteCod: cod('dorDente'), familiaCod: cod('familia'), medoRH: multi('medoRH'), comoUsaCod: cod('comoUsa'),
     limpezaMin: lz ? lz.min : null, limpezaMax: lz ? lz.max : null,
     reguaTem: reguaTem(), reguaFalhas: reguaFalhas(),
     coberturasUsa: multi('coberturasUsa'),
