@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '217';
+  const APP_VERSAO = '218';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17033,7 +17033,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               ${nAlta ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:#fee2e2; color:#dc2626;">🔥 ${nAlta} exposição alta</span>` : ''}
             </div>
           </div>
-          <div id="gp_${pid}" style="display:none; padding-top:10px;">${lista.map(_apCard).join('')}</div>
+          <div id="gp_${pid}" style="display:none; padding-top:10px;">${_apPorEmpresa(lista)}</div>
         </div>`;
       }).join('');
     } catch (e) {
@@ -17042,6 +17042,84 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
   }
   window.renderApresentacoes = renderApresentacoes;
+
+  // Ordem dos perfis nas colunas da comparação
+  const _PAPEL_ORDEM = { dono: 0, financeiro: 1, rh: 2, outro: 3 };
+  function _apPapelRotulo(a) {
+    return a.perfilPapelTexto
+      || (a.respostas && a.respostas.perfil && a.respostas.perfil.texto)
+      || (a.origem === 'questionario' ? 'Pedido de proposta' : 'Respondente');
+  }
+  function _apGrupoChave(a) { return a.grupo || a.token || a.id; }
+
+  // Sub-agrupa a lista de um produto por EMPRESA (grupo). Quem está sozinho
+  // continua um card normal; empresa com 2+ perfis vira um card comparativo.
+  function _apPorEmpresa(lista) {
+    const porGrupo = {};
+    lista.forEach(a => { const g = _apGrupoChave(a); (porGrupo[g] = porGrupo[g] || []).push(a); });
+    // mantém a ordem por recência: usa a posição do primeiro item de cada grupo
+    const ordem = [];
+    lista.forEach(a => { const g = _apGrupoChave(a); if (!ordem.includes(g)) ordem.push(g); });
+    return ordem.map(g => {
+      const docs = porGrupo[g];
+      if (docs.length < 2) return _apCard(docs[0]);
+      return _apCardEmpresa(docs);
+    }).join('');
+  }
+
+  // Matriz: cada linha uma pergunta, cada coluna um perfil; destaca divergências.
+  function _apComparativo(docs) {
+    const chaves = [];
+    docs.forEach(a => Object.keys(a.respostas || {}).forEach(k => {
+      if (k.charAt(0) !== '_' && k !== 'perfil' && !chaves.includes(k)) chaves.push(k);
+    }));
+    chaves.sort((x, y) => _apOrdem(x) - _apOrdem(y));
+    if (!chaves.length) return '';
+    const val = (a, k) => { const v = (a.respostas || {})[k]; return v ? ((v.texto) || (Array.isArray(v.textos) ? v.textos.join(' · ') : '') || '') : ''; };
+    const th = '<th style="text-align:left; padding:7px 9px; font-size:10.5px; color:#94a3b8; font-weight:700; border-bottom:1px solid #e2e8f0;">Pergunta</th>'
+      + docs.map(a => `<th style="text-align:left; padding:7px 9px; font-size:10.5px; color:#4338ca; font-weight:800; border-bottom:1px solid #e2e8f0;">${_apPapelRotulo(a)}</th>`).join('');
+    const linhas = chaves.map(k => {
+      const cells = docs.map(a => val(a, k));
+      const distintos = [...new Set(cells.filter(Boolean))];
+      const divergiu = distintos.length > 1;
+      const tds = cells.map(c => `<td style="padding:7px 9px; font-size:11.5px; color:#334155; vertical-align:top; border-bottom:1px solid #f1f5f9;">${c || '<span style=\'color:#cbd5e1;\'>—</span>'}</td>`).join('');
+      return `<tr style="background:${divergiu ? '#fff7ed' : 'transparent'};">
+        <td style="padding:7px 9px; font-size:11px; color:#64748b; font-weight:600; vertical-align:top; border-bottom:1px solid #f1f5f9;">${divergiu ? '<span title="percepções diferentes" style="color:#ea580c;">◆ </span>' : ''}${_apLabel(k)}</td>${tds}</tr>`;
+    }).join('');
+    const nDiv = chaves.filter(k => { const cs = docs.map(a => val(a, k)).filter(Boolean); return [...new Set(cs)].length > 1; }).length;
+    return `<div style="overflow-x:auto; margin-top:4px;">
+      <table style="width:100%; border-collapse:collapse; min-width:${140 + docs.length * 130}px;"><thead><tr>${th}</tr></thead><tbody>${linhas}</tbody></table>
+    </div>
+    ${nDiv ? `<div style="font-size:10.5px; color:#ea580c; font-weight:700; margin-top:6px;">◆ ${nDiv} ${nDiv === 1 ? 'ponto onde as percepções divergem' : 'pontos onde as percepções divergem'}</div>` : '<div style="font-size:10.5px; color:#16a34a; font-weight:700; margin-top:6px;">✓ percepções alinhadas nas respostas em comum</div>'}`;
+  }
+
+  // Card de uma EMPRESA com vários perfis respondendo o mesmo produto.
+  function _apCardEmpresa(docs) {
+    docs = docs.slice().sort((a, b) => (_PAPEL_ORDEM[a.perfilPapel] == null ? 9 : _PAPEL_ORDEM[a.perfilPapel]) - (_PAPEL_ORDEM[b.perfilPapel] == null ? 9 : _PAPEL_ORDEM[b.perfilPapel]));
+    const emp = docs.map(d => d.empresaNome || (d.questionario && d.questionario.empresa)).find(Boolean) || 'Empresa sem nome';
+    const perfis = docs.map(_apPapelRotulo);
+    const nCotar = docs.filter(d => d.ultimoInteresse === 'cotar' || d.questionarioCompleto).length;
+    const gid = 'emp_' + _apGrupoChave(docs[0]).replace(/[^a-zA-Z0-9_]/g, '');
+    const cards = docs.map(_apCard).join('');
+    return `<div style="background:#f8fafc; border:1.5px solid #dbe3ee; border-radius:16px; padding:14px 15px; margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+        <div style="min-width:0;">
+          <div style="font-size:15px; font-weight:800; color:#0f172a;">🏢 ${emp}</div>
+          <div style="font-size:11.5px; color:#64748b; margin-top:2px;">${perfis.length} perfis responderam · ${perfis.join(' · ')}</div>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          ${nCotar ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:#dcfce7; color:#166534;">💎 ${nCotar} ${nCotar === 1 ? 'pediu' : 'pediram'} cotação</span>` : ''}
+        </div>
+      </div>
+      <div style="background:white; border:1px solid #e8edf4; border-radius:12px; padding:10px 12px;">
+        <div style="font-size:11px; font-weight:800; color:#334155; margin-bottom:4px;">Comparação — como cada um respondeu</div>
+        ${_apComparativo(docs)}
+      </div>
+      <div onclick="var d=document.getElementById('${gid}'); var ab=d.style.display==='none'; d.style.display=ab?'block':'none'; this.textContent=ab?'▲ ocultar respostas individuais':('▾ ver as ' + ${docs.length} + ' respostas completas');"
+           style="cursor:pointer; font-size:11.5px; color:#4338ca; font-weight:700; margin-top:10px;">▾ ver as ${docs.length} respostas completas</div>
+      <div id="${gid}" style="display:none; margin-top:8px;">${cards}</div>
+    </div>`;
+  }
 
   // Card de uma visita
   function _apCard(a) {
@@ -18751,10 +18829,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       perfil: 'Quem respondeu', situacao: 'Plano dental hoje', headcount: 'Tamanho do time',
       dorDente: 'O que acontece com dor de dente', limpeza: 'Quanto custa uma limpeza na região',
       familia: 'Deixaria incluir a família', medoRH: 'O que mais preocupa no benefício',
+      coberturasUsa: 'Coberturas que o time mais usaria', comoUsa: 'Achou fácil usar o plano',
       regua: 'O que o plano atual já entrega',
       // questionário — Dental
       vidas: 'Funcionários no plano', plano: 'Plano desejado', modalidade: 'Adesão',
       custeio: 'Quem paga', conjugado: 'Plano de saúde', cidades: 'Cidades com funcionários',
+      planoDiretoria: 'Plano diferenciado p/ sócios/diretores',
       // questionário
       empresa: 'Empresa', receitaLiquida: 'Receita líquida', patrimonio: 'Patrimônio líquido',
       totalAtivos: 'Total de ativos', nAdmins: 'Cargos de gestão', setor: 'Setor',
