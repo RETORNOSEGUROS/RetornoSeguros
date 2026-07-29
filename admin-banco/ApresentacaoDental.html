@@ -142,7 +142,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'dental', nome: 'Plano Dental Empresarial' };
-const ARQ_VERSAO = '4';
+const ARQ_VERSAO = '5';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 /* Preço real por FAIXA de vidas — Bradesco Dental SPG, plano Padrão Doc
@@ -162,8 +162,14 @@ const PRECO_VIDA_MENOR = 10.82, PRECO_VIDA_MAIOR = 27.42;
 function faixaPreco(vidas) { return FAIXAS_PRECO.find(f => vidas >= f.de && (f.ate === null || vidas <= f.ate)) || null; }
 
 let SESSAO = null, LINK = null, RESP = {}, QRESP = {}, iCena = 0;
-let PERFIL = null;          // 'financeiro' | 'rh'
+let PERFIL = null;          // 'financeiro' | 'rh' (trilha do roteiro)
 let ORDEM = [];            // sequência de cenas, montada após o perfil
+/* GRUPO = a "conversa da empresa": todos que abrem o MESMO link (mesmo token,
+   ou ?g= repassado) caem no mesmo grupo, mas cada PERFIL vira um documento
+   próprio (dental_<grupo>_<papel>). Assim o financeiro não apaga o RH, e o
+   painel junta os dois no mesmo card para comparar. */
+let GRUPO = null, PERFIL_PAPEL = null, BASEDOC = {};
+const PAPEL_TXT = { dono: 'Dono/Sócio', financeiro: 'Financeiro', rh: 'RH/DP', outro: 'Outro' };
 
 /* ─── DICIONÁRIO ANALÍTICO ─── */
 const DIC = {
@@ -394,11 +400,31 @@ async function renderPerfil() {
   $('ops').querySelectorAll('.op').forEach(b => b.onclick = () => {
     const k = Number(b.dataset.k);
     PERFIL = (k === 2) ? 'rh' : 'financeiro';
-    RESP.perfil = { valor: DIC.perfil[k][0], texto: b.textContent, i: k, trilha: PERFIL };
+    PERFIL_PAPEL = ['dono', 'financeiro', 'rh', 'outro'][k];
+    RESP.perfil = { valor: DIC.perfil[k][0], texto: b.textContent, i: k, trilha: PERFIL, papel: PERFIL_PAPEL };
     ORDEM = (PERFIL === 'rh' ? ORDEM_RH : ORDEM_FIN).map(id => CENAS[id]);
-    iCena = 0; salvarParcial();
+    iCena = 0;
+    SESSAO = 'dental_' + GRUPO + '_' + PERFIL_PAPEL;   // documento próprio deste perfil
+    criarDocRespondente();
     renderCena(0);
   });
+}
+
+/* Cria/atualiza o documento deste respondente (um por papel) quando o perfil
+   e' escolhido. Nao apaga registros de outros papeis do mesmo grupo. */
+async function criarDocRespondente() {
+  try {
+    if (!SESSAO) return;
+    const ref = db.collection('mb_apresentacoes').doc(SESSAO);
+    const snap = await ref.get();
+    const payload = Object.assign({}, BASEDOC, {
+      grupo: GRUPO, perfilPapel: PERFIL_PAPEL, perfilPapelTexto: PAPEL_TXT[PERFIL_PAPEL],
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (!snap.exists) payload.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
+    await ref.set(payload, { merge: true });
+  } catch (e) { console.warn('doc respondente', e); }
+  salvarParcial();
 }
 
 async function renderCena(i) {
@@ -648,7 +674,11 @@ async function renderResultado() {
   $('btCotar').onclick = async () => {
     await registrarInteresse('cotar');
     const t = new URLSearchParams(location.search).get('t');
-    location.href = 'QuestionarioDental.html' + (t ? '?t=' + encodeURIComponent(t) : '');
+    const qp = new URLSearchParams();
+    if (t) qp.set('t', t); else if (GRUPO) qp.set('g', GRUPO);
+    if (PERFIL_PAPEL) qp.set('p', PERFIL_PAPEL);
+    const qs = qp.toString();
+    location.href = 'QuestionarioDental.html' + (qs ? '?' + qs : '');
   };
   $('btRH').onclick = () => { registrarInteresse('encaminhar'); renderEncaminhar(ehRH); };
   $('btPdf').onclick = () => { registrarInteresse('pdf'); gerarPDF(cm, lz); };
@@ -681,10 +711,16 @@ function renderEncaminhar(ehRH) {
     const dig = $('rhTel').value.replace(/\D/g, '');
     if (dig.length < 10) { $('rhNota').textContent = 'Faltou o WhatsApp com DDD (10 ou 11 dígitos).'; return $('rhTel').focus(); }
     const empresa = (LINK && LINK.empresaNome) ? LINK.empresaNome : 'nossa empresa';
+    // garante um marcador de grupo no link para o RH cair na MESMA empresa
+    // (mas com o perfil dele) — sem token, usa ?g=GRUPO.
+    const sp = new URLSearchParams(location.search);
+    if (!sp.get('t') && !sp.get('g') && GRUPO) sp.set('g', GRUPO);
+    sp.delete('p');
+    const linkCompartilhar = location.origin + location.pathname + (sp.toString() ? '?' + sp.toString() : '');
     const msg = (nome ? 'Oi ' + nome + '! ' : 'Oi! ')
       + 'Recebi esta apresentação sobre plano odontológico para o time d' + (empresa === 'nossa empresa' ? 'a ' : 'a ') + empresa
       + '. São poucos minutos e no fim mostra o custo por pessoa. Dá uma olhada e me diz o que acha: '
-      + location.href;
+      + linkCompartilhar;
     try {
       if (SESSAO) await db.collection('mb_apresentacoes').doc(SESSAO).set({
         encaminhamentos: firebase.firestore.FieldValue.arrayUnion({ nome: nome || null, telefone: dig, em: new Date().toISOString() }),
@@ -884,6 +920,7 @@ async function salvarParcial(finalizou) {
   try { if (!SESSAO) return;
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
       respostas: RESP, analitico: montarAnalitico(finalizou), cenasVistas: iCena + 1,
+      grupo: GRUPO, perfilPapel: PERFIL_PAPEL, perfilPapelTexto: PAPEL_TXT[PERFIL_PAPEL] || null,
       concluiu: !!finalizou, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar parcial', e); }
@@ -912,32 +949,32 @@ async function salvarContato() {
 console.log('%cApresentação Dental v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 document.addEventListener('DOMContentLoaded', async () => {
   try { await firebase.auth().signInAnonymously(); } catch (e) {}
-  const token = new URLSearchParams(location.search).get('t');
-  if (token) SESSAO = 'dental_' + token;
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t');
+  // GRUPO: token (link da empresa) > ?g repassado num encaminhamento > gerado e guardado
+  if (token) GRUPO = token;
   else {
-    try { SESSAO = sessionStorage.getItem('sessao_ap_dental'); } catch (e) {}
-    if (!SESSAO) { SESSAO = 'ap_' + PRODUTO.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); try { sessionStorage.setItem('sessao_ap_dental', SESSAO); } catch (e) {} }
+    GRUPO = params.get('g');
+    if (!GRUPO) { try { GRUPO = sessionStorage.getItem('grupo_ap_dental'); } catch (e) {} }
+    if (!GRUPO) { GRUPO = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+    try { sessionStorage.setItem('grupo_ap_dental', GRUPO); } catch (e) {}
   }
-  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, token: token || null, origem: 'apresentacao',
-    atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), userAgent: navigator.userAgent.slice(0, 180) };
+  BASEDOC = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, token: token || null, grupo: GRUPO, origem: 'apresentacao',
+    userAgent: navigator.userAgent.slice(0, 180) };
   if (token) {
     try {
       let snap = await db.collection('mb_links_apresentacao').where('token', '==', token).limit(1).get();
       if (snap.empty) snap = await db.collection('mb_links_empresa').where('token', '==', token).limit(1).get();
       if (!snap.empty) {
         LINK = snap.docs[0].data();
-        base.linkId = snap.docs[0].id; base.empresaId = LINK.empresaId || null; base.empresaNome = LINK.empresaNome || null;
-        base.destinatario = LINK.destinatario || null; base.agenciaId = LINK.agenciaId || null;
-        base.geradoPorUid = LINK.geradoPorUid || LINK.criadoPorUid || null; base.geradoPorNome = LINK.geradoPorNome || LINK.criadoPorNome || null;
+        BASEDOC.linkId = snap.docs[0].id; BASEDOC.empresaId = LINK.empresaId || null; BASEDOC.empresaNome = LINK.empresaNome || null;
+        BASEDOC.destinatario = LINK.destinatario || null; BASEDOC.agenciaId = LINK.agenciaId || null;
+        BASEDOC.geradoPorUid = LINK.geradoPorUid || LINK.criadoPorUid || null; BASEDOC.geradoPorNome = LINK.geradoPorNome || LINK.criadoPorNome || null;
         try { await db.collection('mb_links_apresentacao').doc(snap.docs[0].id).set({ aberto: true, abertoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (e2) {}
       }
     } catch (e) { console.warn('link', e); }
   }
-  try {
-    const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
-    if (!doc.exists) base.criadoEm = firebase.firestore.FieldValue.serverTimestamp();
-    await db.collection('mb_apresentacoes').doc(SESSAO).set(base, { merge: true });
-  } catch (e) { console.warn('sessao', e); }
+  // o documento por perfil so' e' criado quando a pessoa escolhe quem esta' lendo
   renderPerfil();
 });
 </script>
