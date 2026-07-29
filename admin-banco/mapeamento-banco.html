@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '219';
+  const APP_VERSAO = '220';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17360,6 +17360,202 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.textoDoPDF = textoDoPDF;
 
+  /* ══════════════ VIDA SÓCIOS — leitura da cotação Bradesco Vida ══════════════
+     PDFs "Empresarial Flexível" (Pessoa Chave / Resgatável) têm camada de texto,
+     então lê direto (sem OCR). O portão de segurança é aritmético: a soma dos
+     prêmios de cada segurado tem de bater com o Prêmio Total da Contratação, ao
+     centavo — um número lido errado quebra a conta e barra a publicação. */
+  function _numVida(s) { if (s == null) return null; return parseFloat(String(s).replace(/\./g, '').replace(',', '.')); }
+  function _tituloVida(s) { return String(s || '').toLowerCase().replace(/\b\p{L}/gu, c => c.toUpperCase()); }
+  const _MONEY_VIDA = /\d{1,3}(?:\.\d{3})*,\d{2}/g;
+  function _cobKindVida(l) {
+    const ll = l.toLowerCase();
+    if (/doen[çc]as graves/.test(ll)) return 'Doenças Graves';
+    if (/invalidez/.test(ll)) return 'Invalidez por Acidente';
+    if (/funeral/.test(ll)) return 'Seguro Funeral';
+    if (/^\s*morte\b/.test(ll)) return 'Morte';
+    return null;
+  }
+  function extrairPropostaVida(txt) {
+    const T = String(txt || '');
+    const P = { produtoId: 'vida_socios', seguradora: 'Bradesco Vida e Previdência' };
+    P.produto = /resgat/i.test(T) ? 'Vida Resgatável' : (/pessoa chave/i.test(T) ? 'Pessoa Chave' : 'Proteção dos Sócios');
+    let m;
+    if (m = T.match(/N[ºo°]\s*da cota[çc][ãa]o:\s*([\d/]+)/i)) P.numero = m[1];
+    if (m = T.match(/Data da cota[çc][ãa]o:\s*([\d/]+)/i)) P.data = m[1];
+    if (m = T.match(/Vencimento:\s*([\d/]+)/i)) P.validade = m[1];
+    const linhas = T.split('\n').map(x => x.trim());
+    // empresa CLIENTE (bloco "CNPJ Nome da Empresa" — não a corretora do topo)
+    for (let i = 0; i < linhas.length; i++) {
+      if (/CNPJ\s+Nome da Empresa/i.test(linhas[i])) {
+        for (let j = i + 1; j <= i + 3 && j < linhas.length; j++) {
+          const mm = linhas[j].match(/^([\d.\/-]{14,20})\s+(.+)$/);
+          if (mm) { P.cnpj = mm[1]; P.empresaNome = mm[2].trim(); break; }
+        }
+        break;
+      }
+    }
+    // valores da contratação (vidas, capital total, prêmio total)
+    for (let i = 0; i < linhas.length; i++) {
+      if (/Valores da Contrata[çc][ãa]o/i.test(linhas[i])) {
+        for (let j = i + 1; j <= i + 5 && j < linhas.length; j++) {
+          const mm = linhas[j].match(/^(\d+)\s+(\d[\d.]*,\d{2})\s+(\d[\d.]*,\d{2})\s+(\d[\d.]*,\d{2})\s+(\d[\d.]*,\d{2})/);
+          if (mm) { P.vidas = parseInt(mm[1], 10); P.capitalTotal = _numVida(mm[2]); P.premioLiquido = _numVida(mm[3]); P.iof = _numVida(mm[4]); P.premioTotal = _numVida(mm[5]); break; }
+        }
+      }
+    }
+    // segurados: um por página, com suas coberturas
+    const segs = []; let cur = null, esperaCab = false;
+    for (let i = 0; i < linhas.length; i++) {
+      const l = linhas[i];
+      if (/^Nome Idade Sexo/i.test(l)) { esperaCab = true; continue; }
+      if (esperaCab) {
+        esperaCab = false;
+        const mh = l.match(/^(.+?)\s+(\d{1,3})\s+(MASCULINO|FEMININO)\b/i);
+        if (mh) { if (cur) segs.push(cur); cur = { nome: _tituloVida(mh[1].trim()), idade: parseInt(mh[2], 10), sexo: /MASC/i.test(mh[3]) ? 'M' : 'F', cob: [] }; continue; }
+      }
+      if (cur) {
+        const k = _cobKindVida(l);
+        if (k) {
+          const vals = l.match(_MONEY_VIDA);
+          if (vals && vals.length >= 2) {
+            let car = null;
+            const mc = l.match(/(\d+)\s*(Mês|Dia)/i);
+            if (mc) car = mc[1] + ' ' + (/Mês/i.test(mc[2]) ? 'meses' : 'dias');
+            else {   // resgatável: "Morte 24 1.000.000,00 …" → 24 é carência (meses), o "Mês(es)" quebrou de linha
+              const pre = l.slice(0, l.indexOf(vals[0]));
+              const mp = pre.match(/\b(\d{1,3})\b\s*$/);
+              if (mp) car = mp[1] + ' meses';
+            }
+            cur.cob.push({ nome: k, capital: _numVida(vals[0]), premioTotal: _numVida(vals[vals.length - 1]), carencia: car });
+          }
+        }
+      }
+    }
+    if (cur) segs.push(cur);
+    segs.forEach(s => {
+      s.premioTotalSeg = Math.round(s.cob.reduce((t, c) => t + (c.premioTotal || 0), 0) * 100) / 100;
+      s.capitalSeg = Math.round(s.cob.reduce((t, c) => t + (c.capital || 0), 0) * 100) / 100;
+    });
+    P.segurados = segs;
+    if (!P.vidas && segs.length) P.vidas = segs.length;
+    return P;
+  }
+  window.extrairPropostaVida = extrairPropostaVida;
+
+  // Portão: a soma dos prêmios por segurado bate com o total da contratação?
+  function conferirPropostaVida(P) {
+    const segs = P.segurados || [];
+    const faltando = [];
+    if (!segs.length) faltando.push('os segurados');
+    if (!P.premioTotal) faltando.push('o prêmio total');
+    if (!P.capitalTotal) faltando.push('o capital total');
+    const somaP = Math.round(segs.reduce((t, s) => t + (s.premioTotalSeg || 0), 0) * 100) / 100;
+    const somaC = Math.round(segs.reduce((t, s) => t + (s.capitalSeg || 0), 0) * 100) / 100;
+    const batePremio = P.premioTotal != null && Math.abs(somaP - P.premioTotal) < 0.02;
+    const bateCapital = P.capitalTotal != null && Math.abs(somaC - P.capitalTotal) < 0.02;
+    P.conferencia = { batePremio, bateCapital, somaPremio: somaP, somaCapital: somaC };
+    // crítico = não dá para confiar: sem segurados, ou a conta do prêmio não fecha
+    const critico = !segs.length || !P.premioTotal || !batePremio;
+    return { faltando, critico, batePremio, bateCapital, somaPremio: somaP, somaCapital: somaC };
+  }
+  window.conferirPropostaVida = conferirPropostaVida;
+
+  // Tela de conferência antes de publicar (dados vêm limpos do PDF de texto;
+  // o corretor confere empresa/validade e vê o portão fechar).
+  function revisarPropostaVida(chk) {
+    const P = _PROP_TMP || {};
+    const fmt = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt0 = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+    const segs = P.segurados || [];
+    const bate = P.conferencia && P.conferencia.batePremio;
+    const esc = s => String(s == null ? '' : s).replace(/"/g, '&quot;');
+    const linhasSeg = segs.map(s => `<div style="display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #f1f5f9; font-size:12.5px;">
+        <div><strong>${esc(s.nome)}</strong> <span style="color:#94a3b8;">· ${s.idade || '?'} anos · ${s.sexo === 'M' ? 'M' : s.sexo === 'F' ? 'F' : '?'}</span>
+          <div style="color:#64748b; font-size:11.5px; margin-top:2px;">${(s.cob || []).map(c => c.nome + ' ' + fmt0(c.capital)).join(' · ')}</div></div>
+        <div style="white-space:nowrap; font-weight:800; color:#1e3a8a;">${fmt(s.premioTotalSeg)}</div>
+      </div>`).join('');
+    const badge = bate
+      ? `<div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#166534;">✅ <strong>Conta conferida:</strong> a soma dos prêmios (${fmt(P.conferencia.somaPremio)}) bate com o total da cotação. Capital também confere.</div>`
+      : `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#92400e;">⚠️ <strong>A conta não fechou:</strong> a soma dos prêmios (${fmt((P.conferencia || {}).somaPremio)}) não bate com o total lido (${fmt(P.premioTotal)}). Confira o PDF — o formato da seguradora pode ter mudado.</div>`;
+    const m = document.createElement('div');
+    m.className = 'cad-modal open'; m.id = 'modalRevPropVida';
+    m.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:600px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#1d4ed8,#1e3a8a);">
+          <h2>🛡️ Conferir a proposta — Vida Sócios</h2>
+          <p>${esc(P.produto || '')}${P.numero ? ' · cotação ' + esc(P.numero) : ''}</p>
+        </div>
+        <div class="cad-modal-body">
+          ${badge}
+          <div class="form-group" style="margin-top:14px;">
+            <label class="form-label">Empresa</label>
+            <input type="text" class="form-control" id="rvvEmpresa" value="${esc(P.empresaNome || '')}" placeholder="Nome da empresa">
+          </div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap;">
+            <div class="form-group" style="flex:1; min-width:150px;">
+              <label class="form-label">Seguradora</label>
+              <input type="text" class="form-control" id="rvvSeg" value="${esc(P.seguradora || 'Bradesco Vida e Previdência')}">
+            </div>
+            <div class="form-group" style="flex:1; min-width:130px;">
+              <label class="form-label">Válida até</label>
+              <input type="text" class="form-control" id="rvvValidade" value="${esc(P.validade || '')}" placeholder="dd/mm/aaaa">
+            </div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 14px;">
+            <div style="flex:1; min-width:110px; background:#eff6ff; border-radius:10px; padding:10px 12px;"><div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">Sócios</div><div style="font-size:16px; font-weight:800; color:#1e3a8a;">${segs.length}</div></div>
+            <div style="flex:1; min-width:130px; background:#eff6ff; border-radius:10px; padding:10px 12px;"><div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">Capital total</div><div style="font-size:15px; font-weight:800; color:#1e3a8a;">${fmt0(P.capitalTotal)}</div></div>
+            <div style="flex:1; min-width:130px; background:#eff6ff; border-radius:10px; padding:10px 12px;"><div style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase;">Prêmio total</div><div style="font-size:15px; font-weight:800; color:#1e3a8a;">${fmt(P.premioTotal)}</div></div>
+          </div>
+          <label class="form-label">Segurados lidos da cotação</label>
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:6px 12px;">${linhasSeg || '<div style="padding:10px; color:#94a3b8; font-size:12px;">Nenhum segurado lido.</div>'}</div>
+          <div style="font-size:11px; color:#94a3b8; margin-top:10px; line-height:1.5;">Os capitais e prêmios vêm direto do PDF e não são editáveis aqui — se algo estiver errado, é sinal de que o formato mudou; me avise. Empresa, seguradora e validade você ajusta acima.</div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalRevPropVida').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="publicarProposta()">🚀 Publicar proposta</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+  }
+  window.revisarPropostaVida = revisarPropostaVida;
+
+  function _coletarCamposVida(P) {
+    const v = id => ((document.getElementById(id) || {}).value || '').trim();
+    P.empresaNome = v('rvvEmpresa') || P.empresaNome || null;
+    P.seguradora = v('rvvSeg') || P.seguradora || 'Bradesco Vida e Previdência';
+    P.validade = v('rvvValidade') || P.validade || null;
+  }
+  window._coletarCamposVida = _coletarCamposVida;
+
+  // Aviso quando a leitura do Vida não fechou — sempre com saída para conferir
+  function _avisoVida(chk) {
+    const mm = document.createElement('div');
+    mm.className = 'cad-modal open'; mm.id = 'modalAvisoVida';
+    const motivo = (chk.faltando && chk.faltando.length)
+      ? `Consegui abrir o arquivo, mas não encontrei <strong>${chk.faltando.join('</strong>, <strong>')}</strong>.`
+      : 'Li os números, mas <strong>a soma dos prêmios não bateu</strong> com o total da cotação. Isso quase sempre é o formato da seguradora ter mudado — por segurança eu não publico assim sem você conferir.';
+    mm.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:520px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#f59e0b,#d97706);">
+          <h2>⚠️ Preciso da sua conferência</h2><p>Cotação Vida Sócios</p>
+        </div>
+        <div class="cad-modal-body">
+          <div style="font-size:13.5px; color:#334155; line-height:1.65;">${motivo}</div>
+          <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px 14px; font-size:12.5px; color:#92400e; margin-top:14px;">Na próxima tela vai o que eu consegui ler. Confira antes de publicar.</div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalAvisoVida').remove(); abrirNovaProposta();">↩ Tentar outro arquivo</button>
+          <button class="btn-primary" onclick="document.getElementById('modalAvisoVida').remove(); revisarPropostaVida(${JSON.stringify(chk).replace(/"/g, '&quot;')});">✏️ Conferir mesmo assim</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mm);
+  }
+  window._avisoVida = _avisoVida;
+
+
 
   /* ══════════════════════════════════════════════════════════════════
      DENTAL — leitura das cotações e formulário de conferência
@@ -17957,6 +18153,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (escolhido && escolhido !== 'auto') return escolhido;
     const t = String(txt || '');
     if (/dental|odontol[óo]gic|Emiss[ãa]o Expressa|Bradesco Dental/i.test(t)) return 'dental';
+    if (/Empresarial Flex[íi]vel|Pessoa Chave|Resgat[áa]vel|Bradesco Vida/i.test(t)) return 'vida_socios';
     return 'auto';
   }
   window._npProdutoEscolhido = _npProdutoEscolhido;
@@ -18012,7 +18209,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const bm = document.getElementById('npBtnManual');
     const dica = document.getElementById('npDica');
     const dental = sel && sel.value === 'dental';
+    const vida = sel && sel.value === 'vida_socios';
     if (bm) bm.style.display = dental ? '' : 'none';
+    if (vida && dica) { dica.innerHTML = '🛡️ A cotação Bradesco Vida (Pessoa Chave ou Resgatável) é lida direto do texto do PDF. <strong>Só publico se a soma dos prêmios por sócio bater com o total da cotação</strong> — a garantia contra número lido errado.'; return; }
     if (dica) dica.innerHTML = dental
       ? '🦷 A simulação de até 199 vidas é um PDF de imagem — eu leio por reconhecimento e <strong>só publico se a conta fechar</strong> (vidas × valor por pessoa = total). A proposta comercial de 200+ vidas é lida direto do texto.'
       : '💡 O sistema identifica <strong>apenas as coberturas que existem</strong> naquela cotação. Se o formato da seguradora mudar, ele avisa e você edita à mão.';
@@ -18051,6 +18250,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <option value="auto">Detectar automaticamente</option>
               <option value="do">D&amp;O — Responsabilidade de Administradores</option>
               <option value="dental">Plano Dental Empresarial</option>
+              <option value="vida_socios">Vida Sócios — Pessoa Chave / Resgatável</option>
             </select>
           </div>
           <div class="form-group">
@@ -18112,6 +18312,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     const nomeEmp = ((document.getElementById('npEmpresa') || {}).value || '').trim();
     const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === nomeEmp.toLowerCase());
+
+    if (_prod === 'vida_socios') {
+      const mVd = document.getElementById('modalNovaProp'); if (mVd) mVd.remove();
+      const Pv = extrairPropostaVida(txt);
+      Pv.empresaId = emp ? emp.id : null;
+      Pv.empresaNome = emp ? emp.nome : (nomeEmp || Pv.empresaNome || null);
+      Pv.textoOriginal = txt.slice(0, 20000);
+      _PROP_TMP = Pv;
+      const chkV = conferirPropostaVida(Pv);
+      if (chkV.critico) return _avisoVida(chkV);
+      return revisarPropostaVida(chkV);
+    }
 
     if (_prod === 'dental') {
       const mDt = document.getElementById('modalNovaProp'); if (mDt) mDt.remove();
@@ -18289,8 +18501,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function publicarProposta() {
     const P = _PROP_TMP; if (!P) return;
     const v = id => ((document.getElementById(id) || {}).value || '').trim();
+    const _ehVida = (P.produtoId === 'vida_socios') && !!document.getElementById('modalRevPropVida');
     const _ehDental = (P.produtoId === 'dental') && !!document.getElementById('modalRevPropDental');
-    if (_ehDental) {
+    if (_ehVida) {
+      _coletarCamposVida(P);
+      if (!P.segurados || !P.segurados.length) return alert('Não achei segurados na cotação. Confira o PDF.');
+      if (P.conferencia && !P.conferencia.batePremio && !confirm('A soma dos prêmios por sócio não fechou com o total da cotação.\n\nPublicar mesmo assim?')) return;
+    } else if (_ehDental) {
       _coletarCamposDental(P);
       if (!P.vidas || !P.valorVida || !P.mensalidade)
         return alert('Para publicar eu preciso de: vidas, valor por pessoa e total mensal.');
@@ -18336,6 +18553,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const msg = `Olá! Segue a proposta de ${(P.produto || 'seguro').split('—')[0].trim()}${P.empresaNome ? ' para a ' + P.empresaNome : ''}, com todas as coberturas e formas de pagamento:\n\n${url}`;
       const m = document.getElementById('modalRevProp'); if (m) m.remove();
       const md = document.getElementById('modalRevPropDental'); if (md) md.remove();
+      const mv = document.getElementById('modalRevPropVida'); if (mv) mv.remove();
       const mm = document.createElement('div');
       mm.className = 'cad-modal open'; mm.id = 'modalLinkProp';
       mm.innerHTML = `
@@ -18463,11 +18681,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       arq: 'ApresentacaoDental.html', arqQ: 'QuestionarioDental.html', arqProp: 'PropostaOnlineDental.html',
       desc: 'O benefício de menor custo por pessoa: sem carência, rede nacional e a família do funcionário inclusa.' },
     { id: 'vida_socios', nome: 'Vida Sócios — Pessoa Chave e Resgatável',
-      arq: 'ApresentacaoVidaSocios.html', arqQ: 'QuestionarioVidaSocios.html', arqProp: null,
+      arq: 'ApresentacaoVidaSocios.html', arqQ: 'QuestionarioVidaSocios.html', arqProp: 'PropostaOnlineVidaSocios.html',
       desc: 'Sucessão entre sócios: a empresa recompra as cotas sem tocar o caixa (Pessoa Chave) e a família recebe fora do inventário (Vida Resgatável).' }
   ];
   let APRESENTACOES = APRESENTACOES_DEFAULT.slice();
-  let VISUALIZADOR_PROPOSTA = { do: 'PropostaOnlineDO.html', dental: 'PropostaOnlineDental.html' };
+  let VISUALIZADOR_PROPOSTA = { do: 'PropostaOnlineDO.html', dental: 'PropostaOnlineDental.html', vida_socios: 'PropostaOnlineVidaSocios.html' };
 
   async function carregarCatalogoApresentacoes() {
     try {
@@ -18478,6 +18696,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         APRESENTACOES.forEach(a => { if (a.arqProp) VISUALIZADOR_PROPOSTA[a.id] = a.arqProp; });
         if (!VISUALIZADOR_PROPOSTA.do) VISUALIZADOR_PROPOSTA.do = 'PropostaOnlineDO.html';
         if (!VISUALIZADOR_PROPOSTA.dental) VISUALIZADOR_PROPOSTA.dental = 'PropostaOnlineDental.html';
+        if (!VISUALIZADOR_PROPOSTA.vida_socios) VISUALIZADOR_PROPOSTA.vida_socios = 'PropostaOnlineVidaSocios.html';
       }
     } catch (e) { console.warn('catálogo apresentações', e); }
   }
@@ -18492,6 +18711,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     APRESENTACOES.forEach(a => { if (a.arqProp) VISUALIZADOR_PROPOSTA[a.id] = a.arqProp; });
     if (!VISUALIZADOR_PROPOSTA.do) VISUALIZADOR_PROPOSTA.do = 'PropostaOnlineDO.html';
     if (!VISUALIZADOR_PROPOSTA.dental) VISUALIZADOR_PROPOSTA.dental = 'PropostaOnlineDental.html';
+    if (!VISUALIZADOR_PROPOSTA.vida_socios) VISUALIZADOR_PROPOSTA.vida_socios = 'PropostaOnlineVidaSocios.html';
   }
 
   function abrirCatalogoApresentacoes() {
