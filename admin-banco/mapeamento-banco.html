@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '223';
+  const APP_VERSAO = '224';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -18255,51 +18255,88 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.abrirPropostaManual = abrirPropostaManual;
 
-  // Estado do preenchimento manual do Vida (lista de sócios editável)
+  // Estado do preenchimento manual do Vida — modos por produto, custo por modo
+  // por sócio, coberturas extras e resgate (ano 10) opcionais. Espelha o que a
+  // leitura de PDF traz, tudo opcional para fechar rápido.
+  const _VM_MODOS = { 'Vida Resgatável': ['mensal', 'anual', 'unico'], 'Pessoa Chave': ['mensal', 'anual'] };
+  const _VM_MODO_TXT = { mensal: 'Mensal', anual: 'Anual', unico: 'Único' };
+  const _VM_COBEXTRA = ['Invalidez por Acidente', 'Doenças Graves', 'Seguro Funeral'];
   window._vidaMan = null;
-  window._vmSet = (i, f, v) => { if (window._vidaMan && window._vidaMan.socios[i]) window._vidaMan.socios[i][f] = v; };
-  window._vmAdd = () => { window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }); _vmRender(); };
-  window._vmDel = (i) => { window._vidaMan.socios.splice(i, 1); if (!window._vidaMan.socios.length) window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }); _vmRender(); };
+  window._vmSet = (i, f, v) => { const s = window._vidaMan.socios[i]; if (s) s[f] = v; };
+  window._vmSetPr = (i, modo, v) => { const s = window._vidaMan.socios[i]; if (s) { s.premios = s.premios || {}; s.premios[modo] = v; } };
+  window._vmSetCob = (i, nome, v) => { const s = window._vidaMan.socios[i]; if (s) { s.cobextra = s.cobextra || {}; s.cobextra[nome] = v; } };
+  window._vmSetResg = (modo, v) => { window._vidaMan.resgate = window._vidaMan.resgate || {}; window._vidaMan.resgate[modo] = v; };
+  window._vmAdd = () => { window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premios: {}, cobextra: {} }); _vmRender(); };
+  window._vmDel = (i) => { window._vidaMan.socios.splice(i, 1); if (!window._vidaMan.socios.length) window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premios: {}, cobextra: {} }); _vmRender(); };
+  window._vmTrocaProduto = () => {
+    const st = window._vidaMan; st.produto = (document.getElementById('vmProduto') || {}).value || 'Vida Resgatável';
+    st.modos = _VM_MODOS[st.produto] || ['mensal', 'anual']; _vmRender(); _vmRenderResg();
+  };
   function _vmRender() {
-    const cont = document.getElementById('vmSocios'); if (!cont) return;
+    const cont = document.getElementById('vmSocios'); if (!cont || !window._vidaMan) return;
+    const modos = window._vidaMan.modos || ['mensal', 'anual'];
+    const ehPC = window._vidaMan.produto === 'Pessoa Chave';
     cont.innerHTML = window._vidaMan.socios.map((s, i) => `
-      <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin-bottom:8px;">
+      <div style="border:1px solid #e2e8f0; border-radius:10px; padding:11px 12px; margin-bottom:8px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <span style="font-size:11px; font-weight:700; color:#64748b;">Sócio ${i + 1}</span>
           ${window._vidaMan.socios.length > 1 ? `<button onclick="_vmDel(${i})" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">remover</button>` : ''}
         </div>
-        <div style="display:grid; grid-template-columns:1fr 66px 84px; gap:6px; margin-bottom:6px;">
+        <div style="display:grid; grid-template-columns:1fr 60px 76px; gap:6px; margin-bottom:6px;">
           <input class="form-control" placeholder="Nome" value="${(s.nome || '').replace(/"/g, '&quot;')}" oninput="_vmSet(${i},'nome',this.value)">
           <input class="form-control" placeholder="Idade" inputmode="numeric" value="${s.idade || ''}" oninput="_vmSet(${i},'idade',this.value)">
-          <select class="form-control" onchange="_vmSet(${i},'sexo',this.value)">
-            <option value="M"${s.sexo === 'M' ? ' selected' : ''}>Masc</option>
-            <option value="F"${s.sexo === 'F' ? ' selected' : ''}>Fem</option>
-          </select>
+          <select class="form-control" onchange="_vmSet(${i},'sexo',this.value)"><option value="M"${s.sexo === 'M' ? ' selected' : ''}>Masc</option><option value="F"${s.sexo === 'F' ? ' selected' : ''}>Fem</option></select>
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-          <input class="form-control" placeholder="Capital R$" inputmode="numeric" value="${s.capital || ''}" oninput="_vmSet(${i},'capital',this.value)">
-          <input class="form-control" placeholder="Prêmio R$ (opcional)" inputmode="numeric" value="${s.premio || ''}" oninput="_vmSet(${i},'premio',this.value)">
+        <input class="form-control" placeholder="Capital (Morte) R$" inputmode="numeric" value="${s.capital || ''}" oninput="_vmSet(${i},'capital',this.value)" style="margin-bottom:6px;">
+        <div style="font-size:10.5px; color:#94a3b8; margin-bottom:3px;">Custo por forma de pagamento (informe as que quiser):</div>
+        <div style="display:grid; grid-template-columns:repeat(${modos.length}, 1fr); gap:6px; margin-bottom:6px;">
+          ${modos.map(m => `<input class="form-control" placeholder="${_VM_MODO_TXT[m]} R$" inputmode="numeric" value="${(s.premios && s.premios[m]) || ''}" oninput="_vmSetPr(${i},'${m}',this.value)">`).join('')}
         </div>
+        ${ehPC ? `<details><summary style="font-size:11px; color:#64748b; cursor:pointer;">Coberturas extras (opcional)</summary>
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px;">
+            ${_VM_COBEXTRA.map(n => `<input class="form-control" placeholder="${n.split(' ')[0]} R$" inputmode="numeric" value="${(s.cobextra && s.cobextra[n]) || ''}" oninput="_vmSetCob(${i},'${n.replace(/'/g, "\\'")}',this.value)">`).join('')}
+          </div></details>` : ''}
       </div>`).join('');
   }
   window._vmRender = _vmRender;
+  function _vmRenderResg() {
+    const box = document.getElementById('vmResg'); if (!box || !window._vidaMan) return;
+    const st = window._vidaMan;
+    if (st.produto !== 'Vida Resgatável') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    box.innerHTML = `<label class="form-label" style="margin-top:6px;">Resgate no ano 10 (opcional, por modo)</label>
+      <div style="display:grid; grid-template-columns:repeat(${st.modos.length}, 1fr); gap:6px;">
+        ${st.modos.map(m => `<input class="form-control" placeholder="${_VM_MODO_TXT[m]} R$" inputmode="numeric" value="${(st.resgate && st.resgate[m]) || ''}" oninput="_vmSetResg('${m}',this.value)">`).join('')}
+      </div>
+      <div style="font-size:10.5px; color:#94a3b8; margin-top:4px;">Se informar, uso o número real da seguradora — e o slider de inflação da proposta passa a mexer só no capital.</div>`;
+  }
+  window._vmRenderResg = _vmRenderResg;
   window._vmPublicar = () => {
     const st = window._vidaMan;
     st.produto = (document.getElementById('vmProduto') || {}).value || 'Vida Resgatável';
+    st.modos = _VM_MODOS[st.produto] || ['mensal', 'anual'];
     const empNome = ((document.getElementById('vmEmpresa') || {}).value || '').trim();
     const validade = ((document.getElementById('vmValidade') || {}).value || '').trim();
     const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === empNome.toLowerCase());
-    const segs = st.socios
-      .map(s => ({ nome: (s.nome || '').trim() || null, idade: parseInt(s.idade, 10) || null, sexo: s.sexo || 'M', cap: _num(s.capital), pr: _num(s.premio) }))
-      .filter(s => s.cap > 0)
-      .map(s => ({ nome: s.nome, idade: s.idade, sexo: s.sexo, cob: [{ nome: 'Morte', capital: s.cap, premioTotal: s.pr || 0, carencia: null }], premioTotalSeg: s.pr || 0, capitalSeg: s.cap }));
+    const segs = st.socios.map(s => {
+      const cap = _num(s.capital);
+      if (!cap || cap <= 0) return null;
+      const premios = {}; st.modos.forEach(m => { const v = _num((s.premios || {})[m]); if (v > 0) premios[m] = v; });
+      const cob = [{ nome: 'Morte', capital: cap, carencia: null }];
+      _VM_COBEXTRA.forEach(n => { const c = _num((s.cobextra || {})[n]); if (c > 0) cob.push({ nome: n, capital: c, carencia: null }); });
+      const pk = Object.keys(premios);
+      const prPrim = pk.length ? premios[pk[0]] : 0;
+      return { nome: (s.nome || '').trim() || null, idade: parseInt(s.idade, 10) || null, sexo: s.sexo || 'M', cob: cob, premios: premios, premioTotalSeg: prPrim, capitalSeg: cob.reduce((t, c) => t + c.capital, 0) };
+    }).filter(Boolean);
     if (!segs.length) return alert('Adicione ao menos um sócio com capital.');
     const capTotal = segs.reduce((t, s) => t + s.capitalSeg, 0);
-    const prTotal = segs.reduce((t, s) => t + s.premioTotalSeg, 0);
+    const prTotal = segs.reduce((t, s) => t + (s.premioTotalSeg || 0), 0);
+    const resgate = {}; if (st.produto === 'Vida Resgatável' && st.resgate) st.modos.forEach(m => { const v = _num(st.resgate[m]); if (v > 0) resgate[m] = v; });
     const P = {
-      produtoId: 'vida_socios', produto: st.produto, seguradora: 'Bradesco Vida e Previdência',
-      origem: 'manual', empresaNome: emp ? emp.nome : (empNome || null), empresaId: emp ? emp.id : null,
-      validade: validade || null, segurados: segs, vidas: segs.length, capitalTotal: capTotal, premioTotal: prTotal,
+      produtoId: 'vida_socios', produto: st.produto, seguradora: 'Bradesco Vida e Previdência', origem: 'manual',
+      empresaNome: emp ? emp.nome : (empNome || null), empresaId: emp ? emp.id : null, validade: validade || null,
+      segurados: segs, vidas: segs.length, capitalTotal: capTotal, premioTotal: prTotal,
+      pagamentoModos: st.modos, resgateAno10: Object.keys(resgate).length ? resgate : null,
       conferencia: { batePremio: true, bateCapital: true, somaPremio: prTotal, somaCapital: capTotal }
     };
     _PROP_TMP = P;
@@ -18309,22 +18346,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function abrirPropostaVidaManual() {
     const m = document.getElementById('modalNovaProp'); if (m) m.remove();
     const nomeEmp = ((document.getElementById('npEmpresa') || {}).value || '').trim();
-    window._vidaMan = { produto: 'Vida Resgatável', socios: [{ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }] };
+    window._vidaMan = { produto: 'Vida Resgatável', modos: _VM_MODOS['Vida Resgatável'], socios: [{ nome: '', idade: '', sexo: 'M', capital: '', premios: {}, cobextra: {} }], resgate: {} };
     const mm = document.createElement('div'); mm.className = 'cad-modal open'; mm.id = 'modalVidaManual';
     mm.innerHTML = `
       <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
-      <div class="cad-modal-panel" style="max-width:600px;">
+      <div class="cad-modal-panel" style="max-width:620px;">
         <div class="cad-modal-head" style="background:linear-gradient(135deg,#1d4ed8,#1e3a8a);">
           <h2>✏️ Proposta à mão — Vida Sócios</h2>
-          <p>Para fechar rápido, sem PDF. Você informa os sócios; o cliente vê a proposta pronta.</p>
+          <p>Para fechar rápido, sem PDF. Tudo o que a leitura de PDF traz, aqui é opcional.</p>
         </div>
         <div class="cad-modal-body">
           <div style="display:flex; gap:12px; flex-wrap:wrap;">
             <div class="form-group" style="flex:1; min-width:180px;">
               <label class="form-label">Produto</label>
-              <select class="form-control" id="vmProduto">
-                <option value="Vida Resgatável">Vida Resgatável</option>
-                <option value="Pessoa Chave">Pessoa Chave</option>
+              <select class="form-control" id="vmProduto" onchange="_vmTrocaProduto()">
+                <option value="Vida Resgatável">Vida Resgatável (mensal · anual · único)</option>
+                <option value="Pessoa Chave">Pessoa Chave (mensal · anual)</option>
               </select>
             </div>
             <div class="form-group" style="flex:1; min-width:130px;">
@@ -18339,7 +18376,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <label class="form-label">Sócios protegidos</label>
           <div id="vmSocios"></div>
           <button class="btn-secondary" onclick="_vmAdd()" style="width:100%;">+ adicionar sócio</button>
-          <div style="font-size:11px; color:#94a3b8; margin-top:10px; line-height:1.5;">Capital é o valor de Morte (o que a família/empresa recebe). Prêmio é opcional — se informar, aparece no card do sócio. Você revisa tudo antes de publicar.</div>
+          <div id="vmResg" style="margin-top:12px;"></div>
+          <div style="font-size:11px; color:#94a3b8; margin-top:10px; line-height:1.5;">Capital é o valor de Morte (o que a família/empresa recebe). Os prêmios por modo e as coberturas extras são opcionais — informe o que tiver. Você revisa antes de publicar.</div>
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalVidaManual').remove()">Cancelar</button>
@@ -18347,7 +18385,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
       </div>`;
     document.body.appendChild(mm);
-    _vmRender();
+    _vmRender(); _vmRenderResg();
   }
   window.abrirPropostaVidaManual = abrirPropostaVidaManual;
 
