@@ -17505,6 +17505,42 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.conferirPropostaVida = conferirPropostaVida;
 
+  // Mescla vários PDFs do MESMO nº de cotação (um por forma de pagamento) numa
+  // só proposta. Detecta o modo por magnitude do prêmio (mensal < anual < único),
+  // casa os sócios por nome+idade e grava premios{mensal,anual,unico} por sócio.
+  function _mergeVidaMulti(txts) {
+    const props = txts.map(t => { const P = extrairPropostaVida(t); const chk = conferirPropostaVida(P); return { P, chk, txt: t }; });
+    const norm = n => String(n || '').replace(/\/.*/, '').trim();
+    const groups = {};
+    props.forEach((x, i) => { const k = norm(x.P.numero) || ('_sem' + i); (groups[k] = groups[k] || []).push(x); });
+    const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+    const grp = groups[keys[0]];
+    const outrosNums = keys.slice(1).map(k => (groups[k][0].P.numero || '')).filter(Boolean);
+    const ruim = grp.find(x => x.chk.critico) || null;
+    // ordena por prêmio total: menor=mensal, meio=anual, maior=único
+    const ord = grp.slice().sort((a, b) => (a.P.premioTotal || 0) - (b.P.premioTotal || 0));
+    const modosPorN = ord.length >= 3 ? ['mensal', 'anual', 'unico'] : ['mensal', 'anual'];
+    ord.forEach((x, i) => { x.modo = modosPorN[i] || 'unico'; });
+    // base = o arquivo "anual" (ou o primeiro), clonado
+    const baseX = ord.find(x => x.modo === 'anual') || ord[0];
+    const base = JSON.parse(JSON.stringify(baseX.P));
+    const keySeg = s => (String(s.nome || '').toLowerCase().trim() + '|' + (s.idade || ''));
+    const mapSeg = {}; (base.segurados || []).forEach(s => { s.premios = {}; mapSeg[keySeg(s)] = s; });
+    const modosPresentes = [];
+    ord.forEach(x => {
+      modosPresentes.push(x.modo);
+      (x.P.segurados || []).forEach(s => { const b = mapSeg[keySeg(s)]; if (b) b.premios[x.modo] = s.premioTotalSeg; });
+    });
+    base.premioTotalModo = {}; ord.forEach(x => { base.premioTotalModo[x.modo] = x.P.premioTotal; });
+    base.pagamentoModos = ['mensal', 'anual', 'unico'].filter(m => modosPresentes.indexOf(m) >= 0);
+    // base já é o clone do arquivo baseX (anual, ou o 1º) — premioTotal/premioTotalSeg
+    // vêm coerentes desse arquivo, então a conferência aritmética continua fechando.
+    base.premioTotalBase = baseX.P.premioTotal;
+    base.origem = 'multi';
+    return { P: base, ruim: ruim ? ruim.chk : null, outrosNums, modos: base.pagamentoModos, nFiles: grp.length };
+  }
+  window._mergeVidaMulti = _mergeVidaMulti;
+
   // Tela de conferência antes de publicar (dados vêm limpos do PDF de texto;
   // o corretor confere empresa/validade e vê o portão fechar).
   function revisarPropostaVida(chk) {
@@ -17522,6 +17558,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const badge = bate
       ? `<div style="background:#f0fdf4; border:1px solid #86efac; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#166534;">✅ <strong>Conta conferida:</strong> a soma dos prêmios (${fmt(P.conferencia.somaPremio)}) bate com o total da cotação. Capital também confere.</div>`
       : `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#92400e;">⚠️ <strong>A conta não fechou:</strong> a soma dos prêmios (${fmt((P.conferencia || {}).somaPremio)}) não bate com o total lido (${fmt(P.premioTotal)}). Confira o PDF — o formato da seguradora pode ter mudado.</div>`;
+    const _MTV = { mensal: 'Mensal', anual: 'Anual', unico: 'Único' };
+    const modosInfo = (P.pagamentoModos && P.pagamentoModos.length > 1)
+      ? `<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px 13px; font-size:12.5px; color:#1e3a8a; margin-top:10px;">💳 <strong>${P.pagamentoModos.length} formas de pagamento lidas:</strong> ${P.pagamentoModos.map(mo => _MTV[mo] + (P.premioTotalModo && P.premioTotalModo[mo] ? ' (' + fmt(P.premioTotalModo[mo]) + ')' : '')).join(' · ')}. Vão todas na mesma proposta online.</div>`
+      : '';
+    const avisoOutros = P._avisoOutros
+      ? `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 13px; font-size:12px; color:#92400e; margin-top:10px;">⚠️ ${esc(P._avisoOutros)}</div>`
+      : '';
     const m = document.createElement('div');
     m.className = 'cad-modal open'; m.id = 'modalRevPropVida';
     m.innerHTML = `
@@ -17533,6 +17576,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div class="cad-modal-body">
           ${badge}
+          ${modosInfo}
+          ${avisoOutros}
           <div class="form-group" style="margin-top:14px;">
             <label class="form-label">Empresa</label>
             <input type="text" class="form-control" id="rvvEmpresa" value="${esc(P.empresaNome || '')}" placeholder="Nome da empresa">
@@ -18397,7 +18442,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const dental = sel && sel.value === 'dental';
     const vida = sel && sel.value === 'vida_socios';
     if (bm) bm.style.display = (dental || vida) ? '' : 'none';
-    if (vida && dica) { dica.innerHTML = '🛡️ A cotação Bradesco Vida (Pessoa Chave ou Resgatável) é lida direto do texto do PDF. <strong>Só publico se a soma dos prêmios por sócio bater com o total da cotação</strong> — a garantia contra número lido errado.'; return; }
+    if (vida && dica) { dica.innerHTML = '🛡️ A cotação Bradesco Vida (Pessoa Chave ou Resgatável) é lida direto do texto do PDF. <strong>Pode anexar as 2–3 cotações do mesmo nº</strong> (mensal, anual e único) de uma vez — eu junto tudo numa proposta só. <strong>Só publico se a conta de cada uma bater</strong> — a garantia contra número lido errado.'; return; }
     if (dica) dica.innerHTML = dental
       ? '🦷 A simulação de até 199 vidas é um PDF de imagem — eu leio por reconhecimento e <strong>só publico se a conta fechar</strong> (vidas × valor por pessoa = total). A proposta comercial de 200+ vidas é lida direto do texto.'
       : '💡 O sistema identifica <strong>apenas as coberturas que existem</strong> naquela cotação. Se o formato da seguradora mudar, ele avisa e você edita à mão.';
@@ -18452,8 +18497,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <div style="font-size:13.5px; font-weight:700; color:#4338ca;" id="npNomeArq">Clique para escolher o PDF</div>
               <div style="font-size:11.5px; color:#94a3b8; margin-top:3px;">o arquivo é lido aqui no seu navegador, não sai do computador</div>
             </label>
-            <input type="file" id="npArquivo" accept="application/pdf,.pdf" style="display:none;"
-                   onchange="document.getElementById('npNomeArq').textContent = this.files[0] ? this.files[0].name : 'Clique para escolher o PDF'">
+            <input type="file" id="npArquivo" accept="application/pdf,.pdf" multiple style="display:none;"
+                   onchange="document.getElementById('npNomeArq').textContent = !this.files.length ? 'Clique para escolher o PDF' : (this.files.length === 1 ? this.files[0].name : this.files.length + ' PDFs selecionados')">
           </div>
           <details style="margin-bottom:12px;">
             <summary style="font-size:12px; color:#64748b; cursor:pointer;">Prefere colar o texto? Clique aqui</summary>
@@ -18501,12 +18546,25 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     if (_prod === 'vida_socios') {
       const mVd = document.getElementById('modalNovaProp'); if (mVd) mVd.remove();
-      const Pv = extrairPropostaVida(txt);
+      let Pv, chkV, merge = null;
+      if (arq && arq.length > 1) {
+        // várias cotações do mesmo nº (uma por forma de pagamento) → mescla numa só
+        const txts = [];
+        for (let i = 0; i < arq.length; i++) { try { txts.push(await textoDoPDF(arq[i])); } catch (e) { /* pula ilegível */ } }
+        merge = _mergeVidaMulti(txts);
+        Pv = merge.P;
+        Pv.textoOriginal = txts.join('\n\n──────\n\n').slice(0, 20000);
+        chkV = merge.ruim || conferirPropostaVida(Pv);
+      } else {
+        Pv = extrairPropostaVida(txt);
+        Pv.textoOriginal = txt.slice(0, 20000);
+        chkV = conferirPropostaVida(Pv);
+      }
       Pv.empresaId = emp ? emp.id : null;
       Pv.empresaNome = emp ? emp.nome : (nomeEmp || Pv.empresaNome || null);
-      Pv.textoOriginal = txt.slice(0, 20000);
       _PROP_TMP = Pv;
-      const chkV = conferirPropostaVida(Pv);
+      if (merge && merge.outrosNums && merge.outrosNums.length)
+        Pv._avisoOutros = 'Estes PDFs tinham mais de um nº de cotação. Usei o nº ' + (Pv.numero || '?') + ' (' + merge.nFiles + ' arquivo(s)); ignorei: ' + merge.outrosNums.join(', ') + '. Publique um nº de cotação por vez.';
       if (chkV.critico) return _avisoVida(chkV);
       return revisarPropostaVida(chkV);
     }
