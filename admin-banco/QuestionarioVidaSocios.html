@@ -99,7 +99,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'vida_socios', nome: 'Vida Sócios — Pessoa Chave e Resgatável' };
-const ARQ_VERSAO = '1';
+const ARQ_VERSAO = '2';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 let SESSAO = null, LINK = null, iQ = 0, PRE = null;
@@ -141,6 +141,7 @@ function montarAnalitico(finalizou) {
   const socios = (QRESP.socios || []).map(s => ({
     nome: s.nome || null,
     idadeCod: s.idadeCod || null, idadeMid: s.idadeMid === undefined ? null : s.idadeMid,
+    idade: s.idade || (s.idadeMid === undefined ? null : s.idadeMid),
     capitalCod: s.capitalCod || null, capitalMid: s.capitalMid === undefined ? null : s.capitalMid,
     sexo: s.sexo || null
   }));
@@ -155,7 +156,6 @@ function montarAnalitico(finalizou) {
     capitalTotalMid: capTotal || null,
     pagamentoCod: g('pagamento', 'cod'),
     cobVidaCod: g('cobVida', 'cod'),
-    clausulaCod: g('clausula', 'cod'),
     contatoNome: (QRESP.contato && QRESP.contato.nome) || null
   };
 }
@@ -170,8 +170,6 @@ const PERGUNTAS = [
     opcoes: ['Mensal', 'Anual', 'Único (só Resgatável — paga uma vez, protegido para sempre)', 'Quero comparar as opções'] },
   { fala: 'Quer incluir as <strong>coberturas em vida</strong> — doenças graves e invalidez por acidente, pagas ao próprio sócio?<br><span style="font-size:12.5px;color:#93a4c8;">Doenças graves tem carência de 6 meses, capital limitado e idade máxima de contratação de 65 anos.</span>', campo: 'cobVida', tipo: 'opcoes', lista: true,
     opcoes: ['Sim, quero incluir', 'Não, só a proteção principal', 'Quero a recomendação do corretor'] },
-  { fala: 'Última pergunta antes do contato: quer que o corretor leve também uma <strong>pauta sobre a cláusula de sucessão</strong> no contrato social, para você discutir com seu advogado e contador?<br><span style="font-size:12.5px;color:#93a4c8;">O seguro garante o dinheiro; a cláusula garante a regra. O desenho completo usa os dois.</span>', campo: 'clausula', tipo: 'opcoes', lista: true,
-    opcoes: ['Sim, quero essa pauta', 'Já temos a cláusula redonda', 'Não por enquanto'] },
   { fala: 'Fechamos. Qual o <strong>melhor contato</strong> para o corretor retornar com os valores?', campo: 'contato', tipo: 'contato' }
 ];
 
@@ -304,8 +302,9 @@ function coletarSocio(i, n, maisDepois, q, z) {
       <div class="socio-t">Sócio / dirigente ${i} de ${n}</div>
       <label class="lbl">Primeiro nome <span style="font-weight:400;">(opcional — ajuda o corretor a montar a proposta)</span></label>
       <input class="campo" id="sNome" style="margin-bottom:14px;" placeholder="Ex: João">
-      <label class="lbl">Faixa de idade</label>
-      <div class="opcoes muitas" id="sIdade" style="margin-bottom:14px;">${IDADES_TXT.map((t, k) => `<button class="op" data-k="${k}">${t}</button>`).join('')}</div>
+      <label class="lbl">Idade</label>
+      <input class="campo" id="sIdadeNum" inputmode="numeric" maxlength="3" placeholder="Ex: 42" style="margin-bottom:6px;">
+      <div class="aviso" id="sIdadeAv" style="margin-bottom:12px;">Informe a idade entre 18 e 90.</div>
       <label class="lbl">Capital de proteção desejado</label>
       <div class="opcoes muitas" id="sCap" style="margin-bottom:14px;">${CAPITAIS_TXT.map((t, k) => `<button class="op" data-k="${k}">${t}</button>`).join('')}</div>
       <label class="lbl">Sexo <span style="font-weight:400;">(a seguradora usa no cálculo)</span></label>
@@ -323,13 +322,23 @@ function coletarSocio(i, n, maisDepois, q, z) {
     sel[chave] = chave === 'sexo' ? b.dataset.v : Number(b.dataset.k);
     habilitar();
   });
-  grupo('sIdade', 'idade'); grupo('sCap', 'capital'); grupo('sSexo', 'sexo');
+  grupo('sCap', 'capital'); grupo('sSexo', 'sexo');
+  // idade agora é digitada (exata), não faixa
+  const _faixaIdade = a => { const i = DIC.idade.findIndex(f => a >= f[1] && a <= f[2]); return i < 0 ? (a < 18 ? 0 : DIC.idade.length - 1) : i; };
+  $('sIdadeNum').oninput = () => {
+    const a = parseInt(($('sIdadeNum').value || '').replace(/\D/g, ''), 10);
+    const ok = a && a >= 18 && a <= 90;
+    sel.idade = ok ? a : null;
+    $('sIdadeAv').classList.toggle('on', !!$('sIdadeNum').value && !ok);
+    $('sIdadeNum').classList.toggle('erro', !!$('sIdadeNum').value && !ok);
+    habilitar();
+  };
   fixarFim(true);
   $('sOk').onclick = () => {
-    const li = DIC.idade[sel.idade], lc = DIC.capital[sel.capital];
+    const idx = _faixaIdade(sel.idade), lc = DIC.capital[sel.capital];
     QRESP.socios.push({
       nome: $('sNome').value.trim() || null,
-      idadeCod: li[0], idadeMid: li[3],
+      idade: sel.idade, idadeCod: DIC.idade[idx][0], idadeMid: sel.idade,
       capitalCod: lc[0], capitalMid: lc[3],
       sexo: sel.sexo === 'depois' ? null : sel.sexo
     });
@@ -349,13 +358,12 @@ function coletarSocio(i, n, maisDepois, q, z) {
 
 function renderFim() {
   $('prog').style.width = '100%';
-  const pauta = QRESP._dados && QRESP._dados.clausula && QRESP._dados.clausula.cod === 'cl_sim';
   palco.innerHTML = `
     <div class="cena fim">
       <div class="ico">✅</div>
       <div class="titulo" style="font-size:26px; font-weight:800;">Recebemos tudo!</div>
       <div style="font-size:15px; line-height:1.65; color:#c3d0ec; margin-top:12px;">
-        Suas respostas já estão com a corretora, que monta a cotação por segurado — sem compromisso.${pauta ? ' A pauta da cláusula de sucessão vai junto.' : ''}
+        Suas respostas já estão com a corretora, que monta a cotação por segurado — sem compromisso.
       </div>
       <div class="prox">
         <b>Como funciona daqui pra frente:</b>
@@ -411,13 +419,17 @@ async function salvar(finalizou) {
 console.log('%cCotação Vida Sócios v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 document.addEventListener('DOMContentLoaded', async () => {
   try { await firebase.auth().signInAnonymously(); } catch (e) {}
-  const token = new URLSearchParams(location.search).get('t');
-  if (token) SESSAO = 'vidasocios_' + token;
-  else {
-    try { SESSAO = sessionStorage.getItem('sessao_q_vidasocios'); } catch (e) {}
-    if (!SESSAO) { SESSAO = 'q_' + PRODUTO.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); try { sessionStorage.setItem('sessao_q_vidasocios', SESSAO); } catch (e) {} }
-  }
-  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, origem: 'questionario', token: token || null, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), userAgent: navigator.userAgent.slice(0, 180) };
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t');
+  const respId = params.get('r');   // vem da apresentação: anexa ao MESMO respondente
+  const nomeParam = params.get('n') ? decodeURIComponent(params.get('n')) : null;
+  let GRUPO = token || params.get('g');
+  if (!GRUPO) { try { GRUPO = sessionStorage.getItem('grupo_q_vidasocios'); } catch (e) {} if (!GRUPO) GRUPO = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+  try { sessionStorage.setItem('grupo_q_vidasocios', GRUPO); } catch (e) {}
+  SESSAO = 'vidasocios_' + GRUPO + (respId ? '_' + respId : '');
+  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, origem: 'questionario', token: token || null,
+    grupo: GRUPO, respId: respId || null, perfilPapelTexto: nomeParam || null,
+    atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), userAgent: navigator.userAgent.slice(0, 180) };
   if (token) {
     try {
       let snap = await db.collection('mb_links_apresentacao').where('token', '==', token).limit(1).get();
