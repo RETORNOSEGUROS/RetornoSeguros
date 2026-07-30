@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '221';
+  const APP_VERSAO = '222';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -17033,7 +17033,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               ${nAlta ? `<span style="font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; background:#fee2e2; color:#dc2626;">🔥 ${nAlta} exposição alta</span>` : ''}
             </div>
           </div>
-          <div id="gp_${pid}" style="display:none; padding-top:10px;">${_apPorEmpresa(lista)}</div>
+          <div id="gp_${pid}" style="display:none; padding-top:10px;">${_apFunil(lista)}${_apPorEmpresa(lista)}</div>
         </div>`;
       }).join('');
     } catch (e) {
@@ -17055,6 +17055,49 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // Sub-agrupa a lista de um produto por EMPRESA (grupo). Quem está sozinho
   // continua um card normal; empresa com 2+ perfis vira um card comparativo.
+  // Funil: quantos passaram por cada etapa e ONDE pararam. Usa o que já é
+  // gravado ao vivo (cenasVistas, concluiu, interesse, questionarioCompleto).
+  function _apFunil(lista) {
+    const aps = lista.filter(a => a.origem !== 'questionario' || a.cenasVistas || a.respostas);
+    const N = aps.length; if (!N) return '';
+    const vistas = a => Number(a.cenasVistas || (a.analitico && a.analitico.passo) || (a.respostas ? 1 : 0)) || 0;
+    const cotou = a => a.ultimoInteresse === 'cotar' || a.questionarioCompleto;
+    const passou = k => aps.filter(a => vistas(a) >= k).length;
+    const pct = v => N ? Math.round(v / N * 100) : 0;
+    const stages = [
+      ['Abriram', N],
+      ['Passaram da 1ª tela', passou(2)],
+      ['Chegaram à 3ª tela', passou(3)],
+      ['Chegaram à 5ª tela', passou(5)],
+      ['Viram o resultado', aps.filter(a => a.concluiu).length],
+      ['Pediram cotação', aps.filter(cotou).length],
+      ['Questionário completo', aps.filter(a => a.questionarioCompleto).length]
+    ];
+    const barras = stages.map(([t, v]) => `
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:5px;">
+        <div style="width:148px; font-size:11.5px; color:#475569; flex:none;">${t}</div>
+        <div style="flex:1; background:#f1f5f9; border-radius:6px; height:18px; overflow:hidden;"><div style="height:100%; width:${pct(v)}%; background:linear-gradient(90deg,#6366f1,#4338ca);"></div></div>
+        <div style="width:70px; text-align:right; font-size:11.5px; font-weight:700; color:#334155; flex:none;">${v} · ${pct(v)}%</div>
+      </div>`).join('');
+    const naoConcl = aps.filter(a => !a.concluiu && vistas(a) > 0);
+    const dist = {}; naoConcl.forEach(a => { const v = vistas(a); dist[v] = (dist[v] || 0) + 1; });
+    const vals = Object.keys(dist).map(k => dist[k]);
+    const maxDrop = vals.length ? Math.max.apply(null, vals) : 1;
+    const drops = Object.keys(dist).map(Number).sort((x, y) => x - y).map(k => `
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px;">
+        <div style="width:64px; font-size:11px; color:#94a3b8; flex:none;">tela ${k}</div>
+        <div style="flex:1; background:#fef2f2; border-radius:5px; height:14px; overflow:hidden;"><div style="height:100%; width:${Math.round(dist[k] / maxDrop * 100)}%; background:#f87171;"></div></div>
+        <div style="width:34px; text-align:right; font-size:11px; font-weight:700; color:#dc2626;">${dist[k]}</div>
+      </div>`).join('');
+    return `<div style="background:white; border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom:12px;">
+      <div style="font-size:12px; font-weight:800; color:#0f172a; margin-bottom:10px;">📉 Funil — ${N} ${N === 1 ? 'pessoa abriu' : 'pessoas abriram'}</div>
+      ${barras}
+      ${naoConcl.length ? `<div style="font-size:11px; font-weight:700; color:#b91c1c; margin:12px 0 6px;">Onde pararam (não concluíram a apresentação) — ${naoConcl.length} ${naoConcl.length === 1 ? 'pessoa' : 'pessoas'}</div>${drops}
+      <div style="font-size:10.5px; color:#94a3b8; margin-top:6px;">A barra vermelha mais alta é a tela que mais perde gente — o ponto de fadiga a atacar.</div>` : ''}
+    </div>`;
+  }
+  window._apFunil = _apFunil;
+
   function _apPorEmpresa(lista) {
     const porGrupo = {};
     lista.forEach(a => { const g = _apGrupoChave(a); (porGrupo[g] = porGrupo[g] || []).push(a); });
