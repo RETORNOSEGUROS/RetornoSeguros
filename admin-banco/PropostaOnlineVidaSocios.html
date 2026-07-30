@@ -147,7 +147,7 @@
    com suas coberturas e prêmio, e o total anual. Sem termômetro: aqui é
    a proposta fechada, não o diagnóstico.
    ══════════════════════════════════════════════════════════════════ */
-const ARQ_VERSAO = '1';
+const ARQ_VERSAO = '2';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cProposta Online Vida Sócios v' + ARQ_VERSAO, 'background:#1d4ed8;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700');
 
@@ -194,6 +194,62 @@ const DIC_VIDA = [
 function descrever(nome) {
   for (const [re, txt] of DIC_VIDA) if (re.test(nome)) return txt;
   return '';
+}
+
+/* ── Simulador de resgate (Resgatável) — motor, com as idades e capitais REAIS
+   da cotação. Estimativa por modo; a inflação corre sobre o valor aplicado e o
+   capital, o resgate é o índice da seguradora sobre o aplicado. ── */
+const _SIM_ANC = {
+  mensal: { i36: 274.26 / 150000, i63: 761.62 / 150000 },
+  anual:  { i36: 3118.25 / 150000, i63: 8549.67 / 150000 },
+  unico:  { i36: 66926.63 / 150000, i63: 121353.85 / 150000 }
+};
+function _taxaSim(modo, idade) { const a = _SIM_ANC[modo] || _SIM_ANC.anual; const t = a.i36 + (a.i63 - a.i36) * ((idade || 45) - 36) / (63 - 36); return Math.max(a.i36 * 0.5, t); }
+const _RATIO_SIM = { mensal: i => 0.50 + Math.min(i - 1, 9) * 0.006, anual: i => 0.53 + Math.min(i - 1, 9) * 0.004, unico: i => Math.min(0.99, 0.852 + (i - 1) * 0.015) };
+const _premioSimInicial = (modo, idade, capital) => _taxaSim(modo, idade) * capital;
+const _capMorte = s => { const c = (s.cob || []).find(x => /morte/i.test(x.nome || '')); return c ? Number(c.capital || 0) : Number(s.capitalSeg || 0); };
+function projetarContrato(segs, modo, inflPct, anos) {
+  anos = anos || 10; const g = inflPct / 100, L = [];
+  const capBase = segs.reduce((t, s) => t + _capMorte(s), 0);
+  if (modo === 'unico') {
+    const aplicado = segs.reduce((t, s) => t + _premioSimInicial('unico', s.idade, _capMorte(s)), 0);
+    for (let i = 1; i <= anos; i++) L.push({ ano: i, aplicado: aplicado, cap: capBase * Math.pow(1 + g, i - 1), resg: _RATIO_SIM.unico(i) * aplicado });
+  } else {
+    const perAno = segs.reduce((t, s) => { const p = _premioSimInicial(modo, s.idade, _capMorte(s)); return t + (modo === 'mensal' ? p * 12 : p); }, 0);
+    let aplicado = 0;
+    for (let i = 1; i <= anos; i++) { aplicado += perAno * Math.pow(1 + g, i - 1); L.push({ ano: i, aplicado: aplicado, cap: capBase * Math.pow(1 + g, i - 1), resg: _RATIO_SIM[modo](i) * aplicado }); }
+  }
+  return L;
+}
+const _kfmtSim = v => v >= 1e6 ? 'R$ ' + (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi' : v >= 1e3 ? 'R$ ' + Math.round(v / 1e3) + ' mil' : 'R$ ' + Math.round(v);
+const _rfmtSim = v => 'R$ ' + Number(Math.round(v)).toLocaleString('pt-BR');
+function _svgSimL(L) {
+  const W = 340, H = 176, pl = 40, pr = 10, pt = 10, pb = 22, n = L.length;
+  const xs = L.map((_, i) => pl + (W - pl - pr) * i / (n - 1));
+  const maxV = Math.max.apply(null, L.map(r => Math.max(r.cap, r.aplicado, r.resg))) || 1;
+  const y = v => pt + (H - pt - pb) * (1 - v / maxV);
+  const linha = (k, c) => `<polyline fill="none" stroke="${c}" stroke-width="2.4" stroke-linejoin="round" points="${L.map((r, i) => xs[i].toFixed(1) + ',' + y(r[k]).toFixed(1)).join(' ')}"/>`;
+  const pts = (k, c) => L.map((r, i) => `<circle cx="${xs[i].toFixed(1)}" cy="${y(r[k]).toFixed(1)}" r="2.1" fill="${c}"/>`).join('');
+  let grid = ''; for (let k = 0; k <= 3; k++) { const gv = maxV * k / 3, gy = y(gv); grid += `<line x1="${pl}" y1="${gy.toFixed(1)}" x2="${W - pr}" y2="${gy.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/><text x="${pl - 4}" y="${(gy + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="#94a3b8">${_kfmtSim(gv)}</text>`; }
+  let xl = ''; [0, Math.floor(n / 2) - 1, n - 1].forEach(i => { if (i >= 0) xl += `<text x="${xs[i].toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="8" fill="#94a3b8">ano ${i + 1}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;">${grid}${xl}${linha('cap', '#059669')}${linha('aplicado', '#d97706')}${linha('resg', '#2563eb')}${pts('cap', '#059669')}${pts('resg', '#2563eb')}</svg>`;
+}
+function montarSimResgate(segs) {
+  const st = { modo: 'unico', inflacao: 5 };
+  const selBtn = () => document.querySelectorAll('#srModos [data-m]').forEach(b => { const on = b.dataset.m === st.modo; b.style.borderColor = on ? '#1d4ed8' : '#e2e8f0'; b.style.background = on ? '#eff6ff' : '#fff'; b.style.color = on ? '#1e3a8a' : '#334155'; });
+  const draw = () => {
+    const L = projetarContrato(segs, st.modo, st.inflacao), y10 = L[L.length - 1];
+    document.getElementById('srChart').innerHTML = _svgSimL(L);
+    document.getElementById('srTab').innerHTML = [L[0], L[4], L[9]].map(r => `<tr><td style="text-align:left;color:#64748b;padding:5px 2px;">Ano ${r.ano}</td><td style="text-align:right;color:#059669;font-weight:700;padding:5px 2px;">${_rfmtSim(r.cap)}</td><td style="text-align:right;color:#b45309;padding:5px 2px;">${_rfmtSim(r.aplicado)}</td><td style="text-align:right;color:#1d4ed8;font-weight:700;padding:5px 2px;">${_rfmtSim(r.resg)}</td></tr>`).join('');
+    const pct = Math.round(y10.resg / y10.aplicado * 100);
+    document.getElementById('srPunch').innerHTML = st.modo === 'unico'
+      ? `No <strong>único</strong>: paga <strong>${_rfmtSim(L[0].aplicado)}</strong> uma vez e nunca mais. O capital cresce para ${_rfmtSim(y10.cap)} e o resgate chega a <strong>${pct}%</strong> do que pagou.`
+      : `Você paga por ${st.modo === 'mensal' ? 'mês' : 'ano'}. Se faltar, a família/empresa recebe <strong>${_rfmtSim(L[0].cap)}</strong>; o resgate é a liberdade de reaver parte — no seguro tradicional seria zero.`;
+    selBtn();
+  };
+  document.querySelectorAll('#srModos [data-m]').forEach(b => b.onclick = () => { st.modo = b.dataset.m; draw(); });
+  const infl = document.getElementById('srInfl'); if (infl) infl.oninput = () => { st.inflacao = parseFloat(infl.value); document.getElementById('srInflVal').textContent = st.inflacao + '% a.a.'; draw(); };
+  draw();
 }
 
 /* ---- render ---- */
@@ -276,6 +332,26 @@ function render() {
         }).join('')}
       </div>` : ''}
 
+      ${resgatavel && segurados.some(s => s.idade) ? `<div class="card">
+        <div class="rot">Simulação de resgate</div>
+        <div class="sub" style="margin-top:-6px; margin-bottom:12px;">Estimativa com as idades e capitais desta cotação. Escolha a forma de pagar e chute a inflação média — o valor exato vem no contrato.</div>
+        <div id="srModos" style="display:flex; gap:8px; margin-bottom:12px;">
+          ${[['unico', 'Único'], ['anual', 'Anual'], ['mensal', 'Mensal']].map(([m, t]) => `<button data-m="${m}" style="flex:1; padding:11px; border-radius:10px; border:1.5px solid #e2e8f0; background:#fff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">${t}</button>`).join('')}
+        </div>
+        <label class="lbl" style="display:block; margin-bottom:6px; font-size:12.5px; color:#64748b;">Inflação média que você prevê: <strong id="srInflVal" style="color:#1d4ed8;">5% a.a.</strong></label>
+        <input type="range" id="srInfl" min="2" max="12" step="0.5" value="5" style="width:100%; margin-bottom:12px; accent-color:#1d4ed8;">
+        <div id="srChart" style="background:#f8fafc; border:1px solid #eef2f7; border-radius:12px; padding:10px 8px;"></div>
+        <div style="display:flex; gap:16px; justify-content:center; margin-top:8px; font-size:11.5px; font-weight:600;">
+          <span style="color:#059669;">● Se faltar, recebem</span><span style="color:#b45309;">● Você paga</span><span style="color:#1d4ed8;">● Você resgata</span>
+        </div>
+        <table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;">
+          <thead><tr style="font-size:10px; color:#94a3b8; text-transform:uppercase;"><th style="text-align:left;">&nbsp;</th><th style="text-align:right;">recebem</th><th style="text-align:right;">você paga</th><th style="text-align:right;">resgata</th></tr></thead>
+          <tbody id="srTab"></tbody>
+        </table>
+        <div id="srPunch" style="margin-top:12px; background:#eff6ff; border-radius:10px; padding:12px 14px; font-size:13px; color:#1e3a8a; line-height:1.55;"></div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.5;">Acidente tem cobertura sem carência. Estimativa; o prêmio real da sua cotação está nos cards de cada sócio acima.</div>
+      </div>` : ''}
+
       ${nomesCob.length ? `<div class="card">
         <div class="rot">O que cada cobertura garante</div>
         ${nomesCob.map(n => {
@@ -310,6 +386,7 @@ function render() {
         Retorno Administradora e Corretora de Seguros
       </div>
     </div>`;
+  if (resgatavel && segurados.some(s => s.idade)) { try { montarSimResgate(segurados); } catch (e) { console.warn('sim resgate', e); } }
   registrar('abriu');
 }
 
