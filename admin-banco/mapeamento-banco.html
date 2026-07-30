@@ -17510,12 +17510,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // casa os sócios por nome+idade e grava premios{mensal,anual,unico} por sócio.
   function _mergeVidaMulti(txts) {
     const props = txts.map(t => { const P = extrairPropostaVida(t); const chk = conferirPropostaVida(P); return { P, chk, txt: t }; });
-    const norm = n => String(n || '').replace(/\/.*/, '').trim();
+    // Agrupa por EMPRESA + PRODUTO — não pelo nº da cotação. O Patrick gera um
+    // PDF por forma de pagamento e "geralmente" (nem sempre) o nº é o mesmo, então
+    // agrupar por nº deixava o único (com nº diferente) cair de fora. Empresa+produto
+    // junta as 2–3 formas do mesmo caso mesmo com números diferentes.
+    const _prodKey = P => /resgat/i.test(P.produto || '') ? 'resgat' : (/pessoa chave/i.test(P.produto || '') ? 'pchave' : 'vida');
+    const _empKey = P => { const c = (P.cnpj || '').replace(/\D/g, ''); return c || String(P.empresaNome || '').toLowerCase().trim(); };
     const groups = {};
-    props.forEach((x, i) => { const k = norm(x.P.numero) || ('_sem' + i); (groups[k] = groups[k] || []).push(x); });
+    props.forEach((x, i) => { const k = _prodKey(x.P) + '|' + (_empKey(x.P) || ('_sem' + i)); (groups[k] = groups[k] || []).push(x); });
     const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
     const grp = groups[keys[0]];
-    const outrosNums = keys.slice(1).map(k => (groups[k][0].P.numero || '')).filter(Boolean);
+    const _MTV0 = { resgat: 'Resgatável', pchave: 'Pessoa Chave', vida: 'Vida' };
+    const outrosNums = keys.slice(1).map(k => {
+      const g = groups[k]; const p0 = g[0].P; return (_MTV0[k.split('|')[0]] || 'Vida') + (p0.numero ? ' (nº ' + p0.numero + ')' : '');
+    }).filter(Boolean);
     const ruim = grp.find(x => x.chk.critico) || null;
     // ordena por prêmio total: menor=mensal, meio=anual, maior=único
     const ord = grp.slice().sort((a, b) => (a.P.premioTotal || 0) - (b.P.premioTotal || 0));
@@ -18564,7 +18572,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       Pv.empresaNome = emp ? emp.nome : (nomeEmp || Pv.empresaNome || null);
       _PROP_TMP = Pv;
       if (merge && merge.outrosNums && merge.outrosNums.length)
-        Pv._avisoOutros = 'Estes PDFs tinham mais de um nº de cotação. Usei o nº ' + (Pv.numero || '?') + ' (' + merge.nFiles + ' arquivo(s)); ignorei: ' + merge.outrosNums.join(', ') + '. Publique um nº de cotação por vez.';
+        Pv._avisoOutros = 'Os PDFs eram de mais de um produto/empresa. Publiquei ' + (Pv.produto || 'esta cotação') + ' (' + merge.nFiles + ' arquivo(s)); ficou de fora: ' + merge.outrosNums.join(', ') + '. Publique o restante numa proposta à parte.';
       if (chkV.critico) return _avisoVida(chkV);
       return revisarPropostaVida(chkV);
     }
