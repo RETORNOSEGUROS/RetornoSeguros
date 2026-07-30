@@ -131,10 +131,11 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'vida_socios', nome: 'Vida Sócios — Pessoa Chave e Resgatável' };
-const ARQ_VERSAO = '1';
+const ARQ_VERSAO = '2';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 let SESSAO = null, LINK = null, RESP = {}, QRESP = {}, iCena = 0;
+let GRUPO = null, RESPID = null, RESP_NOME = null;   // identidade do respondente (p/ comparar sócios)
 
 /* ─── DICIONÁRIO ANALÍTICO ─── */
 const DIC = {
@@ -378,13 +379,17 @@ async function renderCena(i) {
   const zn = $('zona'); zn.classList.add('on');
   await espera(160); zn.scrollIntoView({ behavior: 'smooth', block: 'end' });
 
+  /* A resposta verde é a nossa reação à escolha do cliente. Antes sumia sozinha
+     em 1,3s e ninguém terminava de ler. Agora fica na tela até a pessoa clicar
+     em Continuar — quem lê rápido não espera, quem lê devagar não perde. */
   const mostrarEco = (txt, entao) => {
     const e = $('eco');
     if (!txt) return entao && entao();
     e.style.display = 'block';
-    e.innerHTML = `<div class="destaque" style="border-color:var(--verde);background:rgba(52,211,153,.08);color:#bff0dc;">${txt}</div>`;
+    e.innerHTML = `<div class="destaque" style="border-color:var(--verde);background:rgba(52,211,153,.08);color:#bff0dc;">${txt}</div>
+      <button class="btn btn-ouro" id="btEcoOk" style="margin-top:14px;width:100%;">Continuar →</button>`;
     e.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    setTimeout(() => entao && entao(), 1300);
+    $('btEcoOk').onclick = () => { $('btEcoOk').disabled = true; entao && entao(); };
   };
   const avancar = () => {
     salvarParcial();
@@ -504,6 +509,7 @@ async function renderResultado() {
       </div>
       <div class="acoes-finais" id="acoesFinais" style="display:none;">
         <button class="btn btn-ouro" id="btCotar">Quero cotar para os sócios →</button>
+        <button class="btn btn-2" id="btEnviarSocio">📨 Enviar para outro sócio</button>
         <button class="btn btn-2" id="btPdf">📄 Baixar este diagnóstico em PDF</button>
         <button class="btn btn-2" id="btContato">Prefiro que entrem em contato comigo</button>
       </div>
@@ -536,12 +542,64 @@ async function renderResultado() {
 
   $('btCotar').onclick = async () => {
     await registrarInteresse('cotar');
+    const qp = new URLSearchParams();
     const t = new URLSearchParams(location.search).get('t');
-    location.href = 'QuestionarioVidaSocios.html' + (t ? '?t=' + encodeURIComponent(t) : '');
+    if (t) qp.set('t', t); else if (GRUPO) qp.set('g', GRUPO);
+    if (RESPID) qp.set('r', RESPID);
+    const nm = (QRESP.contato && QRESP.contato.nome) || RESP_NOME; if (nm) qp.set('n', nm);
+    const qs = qp.toString();
+    location.href = 'QuestionarioVidaSocios.html' + (qs ? '?' + qs : '');
   };
+  $('btEnviarSocio').onclick = () => { registrarInteresse('encaminhar'); renderEncaminhar(); };
   $('btPdf').onclick = () => { registrarInteresse('pdf'); gerarPDF(r); };
   $('btContato').onclick = () => { registrarInteresse('contato'); renderContato(); };
 }
+
+/* ─── ENVIAR PARA OUTRO SÓCIO ───────────────────────────────────────
+   Cada sócio que abre o link vira um respondente próprio (mesmo GRUPO,
+   respId diferente), então o admin vê todos juntos no card da empresa e
+   compara as respostas. O link carrega ?g=GRUPO e o nome de quem vai
+   receber, para já rotular a coluna na comparação. */
+function renderEncaminhar() {
+  palco.innerHTML = `
+    <div class="cena">
+      <div class="rotulo">Enviar para outro sócio</div>
+      <div class="titulo">Sucessão se decide <em>junto</em>. Chame outro sócio para responder também.</div>
+      <div class="corpo" style="margin-bottom:20px;">Eu monto a mensagem no WhatsApp com o link desta apresentação. O sócio responde as mesmas perguntas, e você e o corretor veem as respostas de vocês <strong>lado a lado</strong> — onde cada um enxerga o risco diferente.</div>
+      <label class="lbl">Nome do sócio</label>
+      <input class="campo" id="esNome" style="margin-bottom:12px;" placeholder="Ex: Carlos">
+      <label class="lbl">WhatsApp (com DDD)</label>
+      <input class="campo" id="esTel" type="tel" inputmode="numeric" style="margin-bottom:16px;" placeholder="(00) 00000-0000" oninput="mascaraTel(this)">
+      <button class="btn btn-ouro" id="esOk" style="width:100%;">📲 Enviar pelo WhatsApp</button>
+      <div class="nota" id="esNota">Abre o WhatsApp com o texto pronto — você lê e envia. Nada é enviado sem o seu clique.</div>
+      <div class="pular"><a id="esVoltar">← voltar</a></div>
+    </div>`;
+  window.scrollTo(0, 0);
+  $('esOk').onclick = async () => {
+    const nome = ($('esNome').value || '').trim();
+    const dig = ($('esTel').value || '').replace(/\D/g, '');
+    if (dig.length < 10) { $('esNota').textContent = 'Faltou o WhatsApp com DDD (10 ou 11 dígitos).'; return $('esTel').focus(); }
+    const sp = new URLSearchParams(location.search);
+    if (!sp.get('t') && !sp.get('g') && GRUPO) sp.set('g', GRUPO);
+    sp.delete('r'); sp.delete('n');            // o sócio que recebe é um respondente NOVO
+    if (nome) sp.set('n', nome);
+    const link = location.origin + location.pathname + (sp.toString() ? '?' + sp.toString() : '');
+    const empresa = (LINK && LINK.empresaNome) ? LINK.empresaNome : 'nossa empresa';
+    const msg = (nome ? 'Oi ' + nome + '! ' : 'Oi! ')
+      + 'Recebi esta apresentação sobre a proteção dos sócios d' + (empresa === 'nossa empresa' ? 'a ' : 'a ') + empresa
+      + '. São poucos minutos e no fim mostra um diagnóstico. Dá uma olhada e me diz o que acha: ' + link;
+    try {
+      if (SESSAO) await db.collection('mb_apresentacoes').doc(SESSAO).set({
+        encaminhamentos: firebase.firestore.FieldValue.arrayUnion({ nome: nome || null, telefone: dig, em: new Date().toISOString() }),
+        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch (e) { console.warn('encaminhar', e); }
+    window.open('https://wa.me/55' + dig + '?text=' + encodeURIComponent(msg), '_blank');
+    $('esNota').innerHTML = '✅ Abri o WhatsApp com a mensagem pronta. Se não abriu, libere os pop-ups do navegador.';
+  };
+  $('esVoltar').onclick = () => renderResultado();
+}
+window.renderEncaminhar = renderEncaminhar;
 
 function renderContato() {
   palco.innerHTML = `
@@ -691,6 +749,7 @@ async function salvarParcial(finalizou) {
   try { if (!SESSAO) return;
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
       respostas: RESP, analitico: montarAnalitico(finalizou), cenasVistas: iCena + 1,
+      grupo: GRUPO, respId: RESPID, perfilPapelTexto: (QRESP.contato && QRESP.contato.nome) || RESP_NOME || null,
       concluiu: !!finalizou, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar parcial', e); }
@@ -706,7 +765,9 @@ async function registrarInteresse(tipo) {
 async function salvarQuestionario(finalizou) {
   try { if (!SESSAO) return;
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
-      questionario: QRESP, questionarioCompleto: !!finalizou, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      questionario: QRESP, questionarioCompleto: !!finalizou,
+      grupo: GRUPO, respId: RESPID, perfilPapelTexto: (QRESP.contato && QRESP.contato.nome) || RESP_NOME || null,
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar questionario', e); }
 }
@@ -715,13 +776,23 @@ async function salvarQuestionario(finalizou) {
 console.log('%cApresentação Vida Sócios v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
 document.addEventListener('DOMContentLoaded', async () => {
   try { await firebase.auth().signInAnonymously(); } catch (e) {}
-  const token = new URLSearchParams(location.search).get('t');
-  if (token) SESSAO = 'vidasocios_' + token;
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t');
+  // GRUPO = a conversa da empresa (token > ?g repassado > guardado). Cada pessoa
+  // que abre vira um RESPONDENTE próprio, para o admin comparar os sócios.
+  if (token) GRUPO = token;
   else {
-    try { SESSAO = sessionStorage.getItem('sessao_ap_vidasocios'); } catch (e) {}
-    if (!SESSAO) { SESSAO = 'ap_' + PRODUTO.id + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); try { sessionStorage.setItem('sessao_ap_vidasocios', SESSAO); } catch (e) {} }
+    GRUPO = params.get('g');
+    if (!GRUPO) { try { GRUPO = sessionStorage.getItem('grupo_ap_vidasocios'); } catch (e) {} }
+    if (!GRUPO) GRUPO = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    try { sessionStorage.setItem('grupo_ap_vidasocios', GRUPO); } catch (e) {}
   }
-  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, token: token || null, origem: 'apresentacao',
+  RESP_NOME = params.get('n') ? decodeURIComponent(params.get('n')) : null;   // nome que o remetente deu ao encaminhar
+  try { RESPID = sessionStorage.getItem('resp_ap_vidasocios_' + GRUPO); } catch (e) {}
+  if (!RESPID) { RESPID = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); try { sessionStorage.setItem('resp_ap_vidasocios_' + GRUPO, RESPID); } catch (e) {} }
+  SESSAO = 'vidasocios_' + GRUPO + '_' + RESPID;
+  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, token: token || null, grupo: GRUPO, respId: RESPID, origem: 'apresentacao',
+    perfilPapelTexto: RESP_NOME || null,
     atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), userAgent: navigator.userAgent.slice(0, 180) };
   if (token) {
     try {
