@@ -147,7 +147,7 @@
    com suas coberturas e prêmio, e o total anual. Sem termômetro: aqui é
    a proposta fechada, não o diagnóstico.
    ══════════════════════════════════════════════════════════════════ */
-const ARQ_VERSAO = '2';
+const ARQ_VERSAO = '3';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cProposta Online Vida Sócios v' + ARQ_VERSAO, 'background:#1d4ed8;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700');
 
@@ -208,16 +208,24 @@ function _taxaSim(modo, idade) { const a = _SIM_ANC[modo] || _SIM_ANC.anual; con
 const _RATIO_SIM = { mensal: i => 0.50 + Math.min(i - 1, 9) * 0.006, anual: i => 0.53 + Math.min(i - 1, 9) * 0.004, unico: i => Math.min(0.99, 0.852 + (i - 1) * 0.015) };
 const _premioSimInicial = (modo, idade, capital) => _taxaSim(modo, idade) * capital;
 const _capMorte = s => { const c = (s.cob || []).find(x => /morte/i.test(x.nome || '')); return c ? Number(c.capital || 0) : Number(s.capitalSeg || 0); };
-function projetarContrato(segs, modo, inflPct, anos) {
-  anos = anos || 10; const g = inflPct / 100, L = [];
+function projetarContrato(segs, modo, inflPct, opts) {
+  opts = opts || {}; const g = inflPct / 100, anos = 10, L = [];
   const capBase = segs.reduce((t, s) => t + _capMorte(s), 0);
-  if (modo === 'unico') {
-    const aplicado = segs.reduce((t, s) => t + _premioSimInicial('unico', s.idade, _capMorte(s)), 0);
-    for (let i = 1; i <= anos; i++) L.push({ ano: i, aplicado: aplicado, cap: capBase * Math.pow(1 + g, i - 1), resg: _RATIO_SIM.unico(i) * aplicado });
-  } else {
-    const perAno = segs.reduce((t, s) => { const p = _premioSimInicial(modo, s.idade, _capMorte(s)); return t + (modo === 'mensal' ? p * 12 : p); }, 0);
-    let aplicado = 0;
-    for (let i = 1; i <= anos; i++) { aplicado += perAno * Math.pow(1 + g, i - 1); L.push({ ano: i, aplicado: aplicado, cap: capBase * Math.pow(1 + g, i - 1), resg: _RATIO_SIM[modo](i) * aplicado }); }
+  let perAno = null, aplicadoUnico = null;
+  if (modo === 'unico') aplicadoUnico = (opts.premioReal != null) ? opts.premioReal : segs.reduce((t, s) => t + _premioSimInicial('unico', s.idade, _capMorte(s)), 0);
+  else perAno = (opts.premioReal != null) ? (modo === 'mensal' ? opts.premioReal * 12 : opts.premioReal) : segs.reduce((t, s) => { const p = _premioSimInicial(modo, s.idade, _capMorte(s)); return t + (modo === 'mensal' ? p * 12 : p); }, 0);
+  const aplic1 = (modo === 'unico') ? aplicadoUnico : perAno;      // aplicado no ano 1 (sem inflação)
+  const resg1 = _RATIO_SIM[modo](1) * aplic1;
+  let acc = 0;
+  for (let i = 1; i <= anos; i++) {
+    const cap = capBase * Math.pow(1 + g, i - 1);
+    let aplicado;
+    if (modo === 'unico') aplicado = aplicadoUnico;
+    else { acc += perAno * Math.pow(1 + g, i - 1); aplicado = acc; }
+    let resg;
+    if (opts.resgateAno10 != null) { const frac = (i - 1) / (anos - 1); resg = resg1 + (opts.resgateAno10 - resg1) * frac; }
+    else resg = _RATIO_SIM[modo](i) * aplicado;
+    L.push({ ano: i, aplicado: aplicado, cap: cap, resg: resg });
   }
   return L;
 }
@@ -235,16 +243,25 @@ function _svgSimL(L) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;">${grid}${xl}${linha('cap', '#059669')}${linha('aplicado', '#d97706')}${linha('resg', '#2563eb')}${pts('cap', '#059669')}${pts('resg', '#2563eb')}</svg>`;
 }
 function montarSimResgate(segs) {
-  const st = { modo: 'unico', inflacao: 5 };
+  const _MT = { mensal: 'Mensal', anual: 'Anual', unico: 'Único' };
+  const modosP = (P.pagamentoModos && P.pagamentoModos.length) ? P.pagamentoModos : ['mensal', 'anual', 'unico'];
+  const ordem = ['unico', 'anual', 'mensal'].filter(m => modosP.indexOf(m) >= 0);
+  const realPrem = m => { const all = segs.length && segs.every(s => s.premios && s.premios[m] > 0); return all ? segs.reduce((t, s) => t + s.premios[m], 0) : null; };
+  const resgAnc = m => (P.resgateAno10 && P.resgateAno10[m] > 0) ? P.resgateAno10[m] : null;
+  const st = { modo: ordem[0] || 'unico', inflacao: 5 };
+  const box = document.getElementById('srModos');
+  if (box) box.innerHTML = ordem.map(m => `<button data-m="${m}" style="flex:1; padding:11px; border-radius:10px; border:1.5px solid #e2e8f0; background:#fff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">${_MT[m]}</button>`).join('');
   const selBtn = () => document.querySelectorAll('#srModos [data-m]').forEach(b => { const on = b.dataset.m === st.modo; b.style.borderColor = on ? '#1d4ed8' : '#e2e8f0'; b.style.background = on ? '#eff6ff' : '#fff'; b.style.color = on ? '#1e3a8a' : '#334155'; });
   const draw = () => {
-    const L = projetarContrato(segs, st.modo, st.inflacao), y10 = L[L.length - 1];
+    const temResgReal = resgAnc(st.modo) != null;
+    const L = projetarContrato(segs, st.modo, st.inflacao, { premioReal: realPrem(st.modo), resgateAno10: resgAnc(st.modo) }), y10 = L[L.length - 1];
     document.getElementById('srChart').innerHTML = _svgSimL(L);
     document.getElementById('srTab').innerHTML = [L[0], L[4], L[9]].map(r => `<tr><td style="text-align:left;color:#64748b;padding:5px 2px;">Ano ${r.ano}</td><td style="text-align:right;color:#059669;font-weight:700;padding:5px 2px;">${_rfmtSim(r.cap)}</td><td style="text-align:right;color:#b45309;padding:5px 2px;">${_rfmtSim(r.aplicado)}</td><td style="text-align:right;color:#1d4ed8;font-weight:700;padding:5px 2px;">${_rfmtSim(r.resg)}</td></tr>`).join('');
     const pct = Math.round(y10.resg / y10.aplicado * 100);
-    document.getElementById('srPunch').innerHTML = st.modo === 'unico'
+    document.getElementById('srPunch').innerHTML = (st.modo === 'unico'
       ? `No <strong>único</strong>: paga <strong>${_rfmtSim(L[0].aplicado)}</strong> uma vez e nunca mais. O capital cresce para ${_rfmtSim(y10.cap)} e o resgate chega a <strong>${pct}%</strong> do que pagou.`
-      : `Você paga por ${st.modo === 'mensal' ? 'mês' : 'ano'}. Se faltar, a família/empresa recebe <strong>${_rfmtSim(L[0].cap)}</strong>; o resgate é a liberdade de reaver parte — no seguro tradicional seria zero.`;
+      : `Você paga por ${st.modo === 'mensal' ? 'mês' : 'ano'}. Se faltar, a família/empresa recebe <strong>${_rfmtSim(L[0].cap)}</strong>; o resgate é a liberdade de reaver parte — no seguro tradicional seria zero.`)
+      + (temResgReal ? ' <span style="color:#166534;">Resgate real informado.</span>' : '');
     selBtn();
   };
   document.querySelectorAll('#srModos [data-m]').forEach(b => b.onclick = () => { st.modo = b.dataset.m; draw(); });
@@ -322,7 +339,7 @@ function render() {
                 <div class="socio-nome">${esc(s.nome || 'Sócio')}</div>
                 <div class="socio-meta">${s.idade ? s.idade + ' anos' : ''}${s.idade && s.sexo ? ' · ' : ''}${sexoTxt(s.sexo)}</div>
               </div>
-              ${s.premioTotalSeg ? `<div class="socio-premio"><b>${fmt(s.premioTotalSeg)}</b><span>prêmio deste sócio</span></div>` : ''}
+              ${(s.premios && Object.keys(s.premios).length) ? `<div class="socio-premio">${['mensal', 'anual', 'unico'].filter(m => s.premios[m]).map(m => `<div style="margin-bottom:4px;"><b>${fmt(s.premios[m])}</b><span>${m === 'mensal' ? 'por mês' : m === 'anual' ? 'por ano' : 'único'}</span></div>`).join('')}</div>` : (s.premioTotalSeg ? `<div class="socio-premio"><b>${fmt(s.premioTotalSeg)}</b><span>prêmio deste sócio</span></div>` : '')}
             </div>
             ${cobs.map(c => `<div class="cob">
               <div class="cob-nome">${esc(c.nome || '')}${c.carencia ? `<span class="cob-car">carência ${esc(c.carencia)}</span>` : ''}</div>
@@ -335,9 +352,7 @@ function render() {
       ${resgatavel && segurados.some(s => s.idade) ? `<div class="card">
         <div class="rot">Simulação de resgate</div>
         <div class="sub" style="margin-top:-6px; margin-bottom:12px;">Estimativa com as idades e capitais desta cotação. Escolha a forma de pagar e chute a inflação média — o valor exato vem no contrato.</div>
-        <div id="srModos" style="display:flex; gap:8px; margin-bottom:12px;">
-          ${[['unico', 'Único'], ['anual', 'Anual'], ['mensal', 'Mensal']].map(([m, t]) => `<button data-m="${m}" style="flex:1; padding:11px; border-radius:10px; border:1.5px solid #e2e8f0; background:#fff; color:#334155; font-weight:700; font-size:13px; cursor:pointer;">${t}</button>`).join('')}
-        </div>
+        <div id="srModos" style="display:flex; gap:8px; margin-bottom:12px;"></div>
         <label class="lbl" style="display:block; margin-bottom:6px; font-size:12.5px; color:#64748b;">Inflação média que você prevê: <strong id="srInflVal" style="color:#1d4ed8;">5% a.a.</strong></label>
         <input type="range" id="srInfl" min="2" max="12" step="0.5" value="5" style="width:100%; margin-bottom:12px; accent-color:#1d4ed8;">
         <div id="srChart" style="background:#f8fafc; border:1px solid #eef2f7; border-radius:12px; padding:10px 8px;"></div>
