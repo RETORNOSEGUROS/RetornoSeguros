@@ -10103,7 +10103,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '222';
+  const APP_VERSAO = '223';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -18247,6 +18247,110 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.abrirPropostaDentalManual = abrirPropostaDentalManual;
 
+  // Preencher à mão — despacha por produto escolhido
+  function abrirPropostaManual() {
+    const pr = (document.getElementById('npProduto') || {}).value;
+    if (pr === 'vida_socios') return abrirPropostaVidaManual();
+    return abrirPropostaDentalManual();
+  }
+  window.abrirPropostaManual = abrirPropostaManual;
+
+  // Estado do preenchimento manual do Vida (lista de sócios editável)
+  window._vidaMan = null;
+  window._vmSet = (i, f, v) => { if (window._vidaMan && window._vidaMan.socios[i]) window._vidaMan.socios[i][f] = v; };
+  window._vmAdd = () => { window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }); _vmRender(); };
+  window._vmDel = (i) => { window._vidaMan.socios.splice(i, 1); if (!window._vidaMan.socios.length) window._vidaMan.socios.push({ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }); _vmRender(); };
+  function _vmRender() {
+    const cont = document.getElementById('vmSocios'); if (!cont) return;
+    cont.innerHTML = window._vidaMan.socios.map((s, i) => `
+      <div style="border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:11px; font-weight:700; color:#64748b;">Sócio ${i + 1}</span>
+          ${window._vidaMan.socios.length > 1 ? `<button onclick="_vmDel(${i})" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">remover</button>` : ''}
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 66px 84px; gap:6px; margin-bottom:6px;">
+          <input class="form-control" placeholder="Nome" value="${(s.nome || '').replace(/"/g, '&quot;')}" oninput="_vmSet(${i},'nome',this.value)">
+          <input class="form-control" placeholder="Idade" inputmode="numeric" value="${s.idade || ''}" oninput="_vmSet(${i},'idade',this.value)">
+          <select class="form-control" onchange="_vmSet(${i},'sexo',this.value)">
+            <option value="M"${s.sexo === 'M' ? ' selected' : ''}>Masc</option>
+            <option value="F"${s.sexo === 'F' ? ' selected' : ''}>Fem</option>
+          </select>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+          <input class="form-control" placeholder="Capital R$" inputmode="numeric" value="${s.capital || ''}" oninput="_vmSet(${i},'capital',this.value)">
+          <input class="form-control" placeholder="Prêmio R$ (opcional)" inputmode="numeric" value="${s.premio || ''}" oninput="_vmSet(${i},'premio',this.value)">
+        </div>
+      </div>`).join('');
+  }
+  window._vmRender = _vmRender;
+  window._vmPublicar = () => {
+    const st = window._vidaMan;
+    st.produto = (document.getElementById('vmProduto') || {}).value || 'Vida Resgatável';
+    const empNome = ((document.getElementById('vmEmpresa') || {}).value || '').trim();
+    const validade = ((document.getElementById('vmValidade') || {}).value || '').trim();
+    const emp = _empresasQuePossoPedir().find(e => (e.nome || '').toLowerCase() === empNome.toLowerCase());
+    const segs = st.socios
+      .map(s => ({ nome: (s.nome || '').trim() || null, idade: parseInt(s.idade, 10) || null, sexo: s.sexo || 'M', cap: _num(s.capital), pr: _num(s.premio) }))
+      .filter(s => s.cap > 0)
+      .map(s => ({ nome: s.nome, idade: s.idade, sexo: s.sexo, cob: [{ nome: 'Morte', capital: s.cap, premioTotal: s.pr || 0, carencia: null }], premioTotalSeg: s.pr || 0, capitalSeg: s.cap }));
+    if (!segs.length) return alert('Adicione ao menos um sócio com capital.');
+    const capTotal = segs.reduce((t, s) => t + s.capitalSeg, 0);
+    const prTotal = segs.reduce((t, s) => t + s.premioTotalSeg, 0);
+    const P = {
+      produtoId: 'vida_socios', produto: st.produto, seguradora: 'Bradesco Vida e Previdência',
+      origem: 'manual', empresaNome: emp ? emp.nome : (empNome || null), empresaId: emp ? emp.id : null,
+      validade: validade || null, segurados: segs, vidas: segs.length, capitalTotal: capTotal, premioTotal: prTotal,
+      conferencia: { batePremio: true, bateCapital: true, somaPremio: prTotal, somaCapital: capTotal }
+    };
+    _PROP_TMP = P;
+    const mm = document.getElementById('modalVidaManual'); if (mm) mm.remove();
+    revisarPropostaVida({ faltando: [], critico: false, batePremio: true });
+  };
+  function abrirPropostaVidaManual() {
+    const m = document.getElementById('modalNovaProp'); if (m) m.remove();
+    const nomeEmp = ((document.getElementById('npEmpresa') || {}).value || '').trim();
+    window._vidaMan = { produto: 'Vida Resgatável', socios: [{ nome: '', idade: '', sexo: 'M', capital: '', premio: '' }] };
+    const mm = document.createElement('div'); mm.className = 'cad-modal open'; mm.id = 'modalVidaManual';
+    mm.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:600px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#1d4ed8,#1e3a8a);">
+          <h2>✏️ Proposta à mão — Vida Sócios</h2>
+          <p>Para fechar rápido, sem PDF. Você informa os sócios; o cliente vê a proposta pronta.</p>
+        </div>
+        <div class="cad-modal-body">
+          <div style="display:flex; gap:12px; flex-wrap:wrap;">
+            <div class="form-group" style="flex:1; min-width:180px;">
+              <label class="form-label">Produto</label>
+              <select class="form-control" id="vmProduto">
+                <option value="Vida Resgatável">Vida Resgatável</option>
+                <option value="Pessoa Chave">Pessoa Chave</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1; min-width:130px;">
+              <label class="form-label">Válida até</label>
+              <input type="text" class="form-control" id="vmValidade" placeholder="dd/mm/aaaa">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Empresa</label>
+            <input type="text" class="form-control" id="vmEmpresa" value="${(nomeEmp || '').replace(/"/g, '&quot;')}" placeholder="Nome da empresa">
+          </div>
+          <label class="form-label">Sócios protegidos</label>
+          <div id="vmSocios"></div>
+          <button class="btn-secondary" onclick="_vmAdd()" style="width:100%;">+ adicionar sócio</button>
+          <div style="font-size:11px; color:#94a3b8; margin-top:10px; line-height:1.5;">Capital é o valor de Morte (o que a família/empresa recebe). Prêmio é opcional — se informar, aparece no card do sócio. Você revisa tudo antes de publicar.</div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalVidaManual').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="_vmPublicar()">Revisar e publicar →</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mm);
+    _vmRender();
+  }
+  window.abrirPropostaVidaManual = abrirPropostaVidaManual;
+
   // mostra o atalho manual e ajusta o aviso quando o produto é dental
   function npTrocouProduto() {
     const sel = document.getElementById('npProduto');
@@ -18254,7 +18358,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const dica = document.getElementById('npDica');
     const dental = sel && sel.value === 'dental';
     const vida = sel && sel.value === 'vida_socios';
-    if (bm) bm.style.display = dental ? '' : 'none';
+    if (bm) bm.style.display = (dental || vida) ? '' : 'none';
     if (vida && dica) { dica.innerHTML = '🛡️ A cotação Bradesco Vida (Pessoa Chave ou Resgatável) é lida direto do texto do PDF. <strong>Só publico se a soma dos prêmios por sócio bater com o total da cotação</strong> — a garantia contra número lido errado.'; return; }
     if (dica) dica.innerHTML = dental
       ? '🦷 A simulação de até 199 vidas é um PDF de imagem — eu leio por reconhecimento e <strong>só publico se a conta fechar</strong> (vidas × valor por pessoa = total). A proposta comercial de 200+ vidas é lida direto do texto.'
@@ -18323,7 +18427,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalNovaProp').remove()">Cancelar</button>
-          <button class="btn-secondary" id="npBtnManual" style="display:none;" onclick="abrirPropostaDentalManual()">✏️ Preencher à mão</button>
+          <button class="btn-secondary" id="npBtnManual" style="display:none;" onclick="abrirPropostaManual()">✏️ Preencher à mão</button>
           <button class="btn-primary" id="npBtn" onclick="lerProposta()">🔍 Ler cotação</button>
         </div>
       </div>`;
