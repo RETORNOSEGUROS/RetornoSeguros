@@ -131,7 +131,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'vida_socios', nome: 'Vida Sócios — Pessoa Chave e Resgatável' };
-const ARQ_VERSAO = '2';
+const ARQ_VERSAO = '3';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 let SESSAO = null, LINK = null, RESP = {}, QRESP = {}, iCena = 0;
@@ -293,6 +293,11 @@ const CENAS = [
     ]
   },
   {
+    rotulo: 'Simule você mesmo',
+    titulo: 'Quanto o seu dinheiro <em>protege</em> — e quanto ele devolve.',
+    tipo: 'simulador'
+  },
+  {
     rotulo: 'Pra fechar',
     titulo: 'E se esse dia já estivesse resolvido — hoje?',
     corpo: 'Imagine a sociedade com as regras combinadas em vida: se um sócio faltar, a empresa recebe o capital e compra as cotas; os herdeiros recebem o valor justo, em dias, sem virar sócios de ninguém; e cada família protegida por fora do inventário.',
@@ -348,6 +353,7 @@ async function renderCena(i) {
   const c = visiveis[i];
   if (!c) return renderResultado();
   progresso((i / (visiveis.length + 1)) * 100);
+  if (c.tipo === 'simulador') return renderSimulador(c, i);
 
   const classeOp = c.lista ? 'opcoes lista' : 'opcoes';
   palco.innerHTML = `
@@ -740,6 +746,7 @@ function montarAnalitico(finalizou) {
     dependenciaFlags: multi('dependencia'),
     oQueMudaria: multi('oQueMudaria'),
     vulnPct: vv ? vv.pct : null, vulnNivel: vv ? vv.nivel : null,
+    simulador: RESP.simulador || null,
     alinhamento: RESP.alinhamento || null
   };
 }
@@ -771,6 +778,160 @@ async function salvarQuestionario(finalizou) {
     }, { merge: true });
   } catch (e) { console.warn('salvar questionario', e); }
 }
+
+/* ══════════════ SIMULADOR DE RESGATE — Vida Resgatável ══════════════
+   Estimativa. Âncoras reais (cotações 57/63/62b: Michel 36 e Carlos 63, 150k):
+   prêmio por capital, por modo, interpolado gradualmente pela idade (sexo não
+   altera). A inflação corre sobre o VALOR APLICADO e sobre o CAPITAL; o resgate
+   é o índice da seguradora sobre o valor aplicado (nunca inflação em dobro).
+   No único, paga-se uma vez: o aplicado não cresce, o capital cresce, o resgate
+   sobe de ~85% para ~99% do que foi pago. */
+const SIM_ANC = {
+  mensal: { i36: 274.26 / 150000, i63: 761.62 / 150000 },   // por capital, por MÊS
+  anual:  { i36: 3118.25 / 150000, i63: 8549.67 / 150000 },  // por capital, por ANO
+  unico:  { i36: 66926.63 / 150000, i63: 121353.85 / 150000 }// por capital, ÚNICO
+};
+function _taxaSim(modo, idade) {
+  const a = SIM_ANC[modo] || SIM_ANC.anual;
+  const t = a.i36 + (a.i63 - a.i36) * (idade - 36) / (63 - 36);
+  return Math.max(a.i36 * 0.5, t);   // piso de segurança na extrapolação p/ idades baixas
+}
+const _RATIO_SIM = {
+  mensal: i => 0.50 + Math.min(i - 1, 9) * 0.006,          // ~50% → 55%
+  anual:  i => 0.53 + Math.min(i - 1, 9) * 0.004,           // ~53% → 57%
+  unico:  i => Math.min(0.99, 0.852 + (i - 1) * 0.015)      // ~85% → ~99%
+};
+function projetarSim(modo, idade, capital, inflPct, anos) {
+  anos = anos || 10;
+  const g = inflPct / 100, L = [];
+  if (modo === 'unico') {
+    const aplicado = _taxaSim('unico', idade) * capital;   // pago UMA vez
+    for (let i = 1; i <= anos; i++) {
+      L.push({ ano: i, aplicado: aplicado, cap: capital * Math.pow(1 + g, i - 1), resg: _RATIO_SIM.unico(i) * aplicado });
+    }
+  } else {
+    const perAno = (modo === 'mensal') ? _taxaSim('mensal', idade) * capital * 12 : _taxaSim('anual', idade) * capital;
+    let aplicado = 0;
+    for (let i = 1; i <= anos; i++) {
+      aplicado += perAno * Math.pow(1 + g, i - 1);          // o prêmio do ano acompanha a inflação
+      L.push({ ano: i, aplicado: aplicado, cap: capital * Math.pow(1 + g, i - 1), resg: _RATIO_SIM[modo](i) * aplicado });
+    }
+  }
+  return L;
+}
+function _premioSimInicial(modo, idade, capital) {
+  if (modo === 'unico') return _taxaSim('unico', idade) * capital;
+  if (modo === 'mensal') return _taxaSim('mensal', idade) * capital;      // por mês
+  return _taxaSim('anual', idade) * capital;                              // por ano
+}
+const _kfmtSim = v => v >= 1e6 ? 'R$ ' + (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi'
+  : v >= 1e3 ? 'R$ ' + Math.round(v / 1e3) + ' mil' : 'R$ ' + Math.round(v);
+const _rfmtSim = v => 'R$ ' + Number(Math.round(v)).toLocaleString('pt-BR');
+
+/* Gráfico SVG (3 linhas): capital protegido (verde), valor aplicado (dourado),
+   resgate (ciano). Sem biblioteca — desenha à mão, funciona offline. */
+function _svgSim(L) {
+  const W = 340, H = 188, pl = 40, pr = 10, pt = 12, pb = 24;
+  const n = L.length;
+  const xs = L.map((_, i) => pl + (W - pl - pr) * i / (n - 1));
+  const maxV = Math.max.apply(null, L.map(r => Math.max(r.cap, r.aplicado, r.resg))) || 1;
+  const y = v => pt + (H - pt - pb) * (1 - v / maxV);
+  const linha = (key, cor) => `<polyline fill="none" stroke="${cor}" stroke-width="2.4" stroke-linejoin="round" points="${L.map((r, i) => xs[i].toFixed(1) + ',' + y(r[key]).toFixed(1)).join(' ')}"/>`;
+  const pts = (key, cor) => L.map((r, i) => `<circle cx="${xs[i].toFixed(1)}" cy="${y(r[key]).toFixed(1)}" r="2.1" fill="${cor}"/>`).join('');
+  let grid = '';
+  for (let k = 0; k <= 3; k++) { const gv = maxV * k / 3, gy = y(gv); grid += `<line x1="${pl}" y1="${gy.toFixed(1)}" x2="${W - pr}" y2="${gy.toFixed(1)}" stroke="rgba(147,164,200,.16)" stroke-width="1"/><text x="${pl - 4}" y="${(gy + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="#5d6f95">${_kfmtSim(gv)}</text>`; }
+  let xl = ''; [0, Math.floor(n / 2) - 1, n - 1].forEach(i => { if (i >= 0) xl += `<text x="${xs[i].toFixed(1)}" y="${H - 7}" text-anchor="middle" font-size="8" fill="#5d6f95">ano ${i + 1}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block; overflow:visible;" role="img" aria-label="Projeção do resgate">
+    ${grid}${xl}${linha('cap', '#34d399')}${linha('aplicado', '#fbbf24')}${linha('resg', '#38bdf8')}${pts('cap', '#34d399')}${pts('resg', '#38bdf8')}</svg>`;
+}
+
+/* Cena interativa: idade, capital, modo de pagamento e o "chute" da inflação
+   (gamificação). Redesenha o gráfico e a leitura ao vivo. Guarda idade/capital
+   para o questionário pré-preencher o sócio que respondeu. */
+function renderSimulador(c, iPos) {
+  const CAPS = [50000, 100000, 150000, 250000, 500000, 1000000];
+  const st = Object.assign({ idade: 45, capital: 150000, modo: 'unico', inflacao: 5 }, RESP.simulador || {});
+  if (!CAPS.includes(st.capital)) st.capital = 150000;
+  progresso(88);
+  palco.innerHTML = `
+    <div class="cena">
+      <div class="rotulo">${c.rotulo || 'Simulador'}</div>
+      <div class="titulo">${c.titulo || 'Veja o dinheiro trabalhando a seu favor.'}</div>
+      <div class="corpo" style="margin-bottom:18px;">Escolha o capital, o jeito de pagar e — o jogo — <strong>chute quanto você acha que vai ser a inflação média</strong> nos próximos 10 anos. Tudo é estimativa; o valor exato vem na cotação.</div>
+
+      <label class="lbl">Sua idade</label>
+      <input class="campo" id="simIdade" inputmode="numeric" maxlength="3" value="${st.idade}" style="margin-bottom:14px;">
+
+      <label class="lbl">Capital de proteção</label>
+      <div class="opcoes muitas" id="simCaps" style="margin-bottom:16px;">${CAPS.map(v => `<button class="op" data-v="${v}" style="${v === st.capital ? 'background:rgba(56,189,248,.2);border-color:var(--ciano);' : ''}">${_kfmtSim(v)}</button>`).join('')}</div>
+
+      <label class="lbl">Como pagar</label>
+      <div class="opcoes" id="simModos" style="margin-bottom:16px;">
+        ${[['unico', 'Único'], ['anual', 'Anual'], ['mensal', 'Mensal']].map(([v, t]) => `<button class="op" data-v="${v}" style="${v === st.modo ? 'background:rgba(56,189,248,.2);border-color:var(--ciano);' : ''}">${t}</button>`).join('')}
+      </div>
+
+      <label class="lbl">Inflação média que você prevê: <strong id="simInflVal" style="color:var(--dourado);">${st.inflacao}% ao ano</strong></label>
+      <input type="range" id="simInfl" min="2" max="12" step="0.5" value="${st.inflacao}" style="width:100%; margin-bottom:18px; accent-color:#38bdf8;">
+
+      <div style="background:rgba(255,255,255,.04); border:1px solid rgba(147,164,200,.16); border-radius:14px; padding:14px 12px 10px;">
+        <div id="simChart"></div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; justify-content:center; margin-top:8px; font-size:11px; font-weight:600;">
+          <span style="color:#34d399;">● Se faltar, recebem</span>
+          <span style="color:#fbbf24;">● O que você paga</span>
+          <span style="color:#38bdf8;">● Você pode resgatar</span>
+        </div>
+      </div>
+
+      <div id="simPunch" style="margin-top:16px;"></div>
+      <div id="simLeitura" style="margin-top:14px;"></div>
+
+      <div class="acoes-finais" style="margin-top:22px;">
+        <button class="btn btn-ouro" id="simOk">Fazer uma cotação de verdade →</button>
+        <button class="btn btn-2" id="simSeguir">Continuar a apresentação</button>
+      </div>
+      <div class="pular"><a id="simPular">pular →</a></div>
+    </div>`;
+  window.scrollTo(0, 0);
+
+  const atualizar = () => {
+    const L = projetarSim(st.modo, st.idade, st.capital, st.inflacao);
+    const y10 = L[L.length - 1], y1 = L[0];
+    document.getElementById('simChart').innerHTML = _svgSim(L);
+    const premIni = _premioSimInicial(st.modo, st.idade, st.capital);
+    const comoP = st.modo === 'unico' ? 'um único pagamento de <strong>' + _rfmtSim(premIni) + '</strong> — e nunca mais paga'
+      : st.modo === 'mensal' ? '<strong>' + _rfmtSim(premIni) + '/mês</strong>'
+      : '<strong>' + _rfmtSim(premIni) + '/ano</strong>';
+    const punch = st.modo === 'unico'
+      ? `💡 No <strong>único</strong>, você faz ${comoP}. O capital protegido cresce com a inflação (de ${_rfmtSim(st.capital)} para ${_rfmtSim(y10.cap)} em 10 anos) e o resgate sobe de ${(y1.resg / y1.aplicado * 100).toFixed(0)}% para <strong>${(y10.resg / y10.aplicado * 100).toFixed(0)}%</strong> do que você pagou. É o que nenhum seguro tradicional faz: devolve quase tudo se você quiser — e protege o tempo todo.`
+      : `💡 Você paga ${comoP}. Se faltar hoje, a família/empresa já recebe <strong>${_rfmtSim(st.capital)}</strong> — muito mais do que você aplicou. O resgate é a sua liberdade de reaver parte; num seguro tradicional essa linha seria zero.`;
+    document.getElementById('simPunch').innerHTML = `<div class="destaque" style="margin:0;">${punch}</div>`;
+    const linhaAno = r => `<div style="display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid rgba(147,164,200,.12); font-size:12.5px;">
+        <span style="color:#93a4c8;">Ano ${r.ano}</span>
+        <span style="color:#34d399; font-weight:700;">${_rfmtSim(r.cap)}</span>
+        <span style="color:#fbbf24;">${_rfmtSim(r.aplicado)}</span>
+        <span style="color:#38bdf8; font-weight:700;">${_rfmtSim(r.resg)}</span>
+      </div>`;
+    document.getElementById('simLeitura').innerHTML =
+      `<div style="display:flex; justify-content:space-between; gap:8px; font-size:10px; color:#5d6f95; text-transform:uppercase; letter-spacing:.05em; font-weight:700; padding-bottom:2px;">
+        <span>&nbsp;</span><span>recebem</span><span>você paga</span><span>resgata</span></div>`
+      + [L[0], L[4], L[9]].map(linhaAno).join('')
+      + `<div style="font-size:11px; color:#7b8db3; margin-top:8px; line-height:1.5;">Acidente tem cobertura <strong>sem carência</strong> — se for amanhã, o capital sai no dia seguinte. Valores estimados; a cotação real traz o número exato.</div>`;
+  };
+
+  document.getElementById('simIdade').oninput = () => { const a = parseInt((document.getElementById('simIdade').value || '').replace(/\D/g, ''), 10); if (a && a >= 18 && a <= 90) { st.idade = a; atualizar(); } };
+  document.getElementById('simCaps').querySelectorAll('.op').forEach(b => b.onclick = () => { st.capital = Number(b.dataset.v); document.getElementById('simCaps').querySelectorAll('.op').forEach(x => { x.style.background = ''; x.style.borderColor = ''; }); b.style.background = 'rgba(56,189,248,.2)'; b.style.borderColor = 'var(--ciano)'; atualizar(); });
+  document.getElementById('simModos').querySelectorAll('.op').forEach(b => b.onclick = () => { st.modo = b.dataset.v; document.getElementById('simModos').querySelectorAll('.op').forEach(x => { x.style.background = ''; x.style.borderColor = ''; }); b.style.background = 'rgba(56,189,248,.2)'; b.style.borderColor = 'var(--ciano)'; atualizar(); });
+  document.getElementById('simInfl').oninput = () => { st.infl = document.getElementById('simInfl').value; st.inflacao = parseFloat(st.infl); document.getElementById('simInflVal').textContent = st.inflacao + '% ao ano'; atualizar(); };
+
+  const guardar = () => { RESP.simulador = { idade: st.idade, capital: st.capital, modo: st.modo, inflacao: st.inflacao }; salvarParcial(); };
+  const avancarSim = () => { guardar(); const nv = cenasVisiveis(); iCena = iPos + 1; iCena < nv.length ? renderCena(iCena) : renderResultado(); };
+  document.getElementById('simOk').onclick = async () => { guardar(); await registrarInteresse('cotar'); const qp = new URLSearchParams(); const t = new URLSearchParams(location.search).get('t'); if (t) qp.set('t', t); else if (GRUPO) qp.set('g', GRUPO); if (RESPID) qp.set('r', RESPID); const nm = (QRESP.contato && QRESP.contato.nome) || RESP_NOME; if (nm) qp.set('n', nm); const qs = qp.toString(); location.href = 'QuestionarioVidaSocios.html' + (qs ? '?' + qs : ''); };
+  document.getElementById('simSeguir').onclick = avancarSim;
+  document.getElementById('simPular').onclick = avancarSim;
+  atualizar();
+}
+window.renderSimulador = renderSimulador;
+
 
 /* ─── INÍCIO ─── */
 console.log('%cApresentação Vida Sócios v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
