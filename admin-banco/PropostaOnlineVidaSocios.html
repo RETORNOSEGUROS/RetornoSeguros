@@ -147,7 +147,7 @@
    com suas coberturas e prêmio, e o total anual. Sem termômetro: aqui é
    a proposta fechada, não o diagnóstico.
    ══════════════════════════════════════════════════════════════════ */
-const ARQ_VERSAO = '4';
+const ARQ_VERSAO = '5';
 window.ARQ_VERSAO = ARQ_VERSAO;
 console.log('%cProposta Online Vida Sócios v' + ARQ_VERSAO, 'background:#1d4ed8;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700');
 
@@ -322,6 +322,26 @@ function render() {
   const nomesCob = [];
   segurados.forEach(s => (s.cob || []).forEach(c => { const n = (c.nome || '').trim(); if (n && !nomesCob.some(x => x.toLowerCase() === n.toLowerCase())) nomesCob.push(n); }));
 
+  // custo por forma de pagamento — somando todos os participantes. Quando a
+  // cotação traz mais de um modo (mensal/anual/único), mostra uma linha por modo;
+  // senão cai no total único que já vinha da cotação.
+  const _ptm = P.premioTotalModo || {};
+  // se não veio premioTotalModo mas há premios por sócio, soma na hora
+  const _somaModo = m => segurados.length && segurados.every(s => s.premios && s.premios[m] > 0) ? segurados.reduce((t, s) => t + s.premios[m], 0) : 0;
+  ['mensal', 'anual', 'unico'].forEach(m => { if (!(_ptm[m] > 0)) { const v = _somaModo(m); if (v > 0) _ptm[m] = v; } });
+  const _labelCusto = { mensal: 'Custo total por mês · todos os participantes', anual: 'Investimento total no ano · todos os participantes', unico: 'Custo único, vitalício · todos os participantes' };
+  const _modosCusto = ['mensal', 'anual', 'unico'].filter(m => _ptm[m] > 0);
+  let custoBloco = '';
+  if (_modosCusto.length) {
+    const rows = _modosCusto.map(m => `<div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:6px 0;">
+        <span style="font-size:13px; color:#1d4ed8; font-weight:600;">${_labelCusto[m]}</span>
+        <b style="font-size:19px; font-weight:800; color:#1e3a8a; white-space:nowrap;">${fmt(_ptm[m])}${m === 'mensal' ? '<small style="font-size:12px; font-weight:600; color:#64748b;">/mês</small>' : ''}</b>
+      </div>`).join('');
+    custoBloco = `<div style="margin-top:16px; padding-top:13px; border-top:1px dashed #bfdbfe;">${rows}</div>`;
+  } else if (premioTotal > 0) {
+    custoBloco = `<div class="total-lin"><span>Investimento total do contrato${P.pagamento && /[úu]nico/i.test(P.pagamento) ? ' (pagamento único)' : ' (anual)'}</span><b>${fmt(premioTotal)}</b></div>`;
+  }
+
   $('app').innerHTML = `
     <div class="hero"><div class="hero-in">
       <div class="marca">Retorno Seguros · Proposta</div>
@@ -340,7 +360,7 @@ function render() {
         <div class="sub">${resgatavel
           ? 'Capital pago à família, fora do inventário — a renda da casa não fica travada esperando alvará.'
           : 'Capital pago à empresa para recomprar as cotas dos herdeiros pelo valor justo, sem tocar o caixa da operação.'}</div>
-        ${premioTotal > 0 ? `<div class="total-lin"><span>Investimento total do contrato${P.pagamento && /[úu]nico/i.test(P.pagamento) ? ' (pagamento único)' : ' (anual)'}</span><b>${fmt(premioTotal)}</b></div>` : ''}
+        ${custoBloco}
         <div class="grade">
           ${vidas ? `<div class="mini"><b>Sócios protegidos</b><span>${vidas}</span></div>` : ''}
           ${capitalTotal > 0 && capitalTotal !== capDestaque ? `<div class="mini"><b>Capital total (todas coberturas)</b><span style="font-size:14px;">${fmt0(capitalTotal)}</span></div>` : ''}
@@ -449,15 +469,34 @@ function baixarPDF() {
     doc.text(sa((P.seguradora || 'Bradesco Vida e Previdencia') + (P.empresaNome ? '  ·  ' + P.empresaNome : '') + '  ·  Retorno Seguros'), M, 32);
     y = 58;
 
+    // custo por forma de pagamento (soma de todos os participantes)
+    const _ptmP = Object.assign({}, P.premioTotalModo || {});
+    const _somaModoP = m => segurados.length && segurados.every(s => s.premios && s.premios[m] > 0) ? segurados.reduce((t, s) => t + s.premios[m], 0) : 0;
+    ['mensal', 'anual', 'unico'].forEach(m => { if (!(_ptmP[m] > 0)) { const v = _somaModoP(m); if (v > 0) _ptmP[m] = v; } });
+    const _lblP = { mensal: 'Custo total por mes', anual: 'Investimento total no ano', unico: 'Custo unico (vitalicio)' };
+    const _modosP = ['mensal', 'anual', 'unico'].filter(m => _ptmP[m] > 0);
+
     // capital protegido
-    doc.setFillColor(239, 246, 255); doc.roundedRect(M, y - 7, W - M * 2, 26, 2, 2, 'F');
+    const boxH = 26 + (_modosP.length ? _modosP.length * 5 + 2 : 0);
+    doc.setFillColor(239, 246, 255); doc.roundedRect(M, y - 7, W - M * 2, boxH, 2, 2, 'F');
     doc.setFontSize(8.5); doc.setFont(undefined, 'bold'); doc.setTextColor(30, 58, 138);
     doc.text('CAPITAL PROTEGIDO PARA A SOCIEDADE', M + 5, y);
     doc.setFontSize(17); doc.text(sa(fmtCap(capDestaque)), M + 5, y + 10);
     doc.setFontSize(8); doc.setFont(undefined, 'normal');
-    doc.text(sa((segurados.length ? segurados.length + ' socios/dirigentes protegidos' : '') +
-      (P.premioTotal ? '   ·   Investimento total: ' + fmt(P.premioTotal) + (resgatavel && /[uú]nico/i.test(P.pagamento || '') ? ' (unico)' : ' (anual)') : '')), M + 5, y + 16);
-    y += 30;
+    doc.text(sa(segurados.length ? segurados.length + ' socios/dirigentes protegidos' : ''), M + 5, y + 16);
+    if (_modosP.length) {
+      let yy = y + 22;
+      _modosP.forEach(m => {
+        doc.setFont(undefined, 'normal'); doc.setTextColor(71, 85, 105);
+        doc.text(sa(_lblP[m]), M + 5, yy);
+        doc.setFont(undefined, 'bold'); doc.setTextColor(30, 58, 138);
+        doc.text(sa(fmt(_ptmP[m]) + (m === 'mensal' ? '/mes' : '')), W - M - 5, yy, { align: 'right' });
+        yy += 5;
+      });
+    } else if (P.premioTotal) {
+      doc.text(sa('Investimento total: ' + fmt(P.premioTotal) + (resgatavel && /[uú]nico/i.test(P.pagamento || '') ? ' (unico)' : ' (anual)')), M + 5, y + 22);
+    }
+    y += boxH + 6;
 
     // por sócio
     doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
