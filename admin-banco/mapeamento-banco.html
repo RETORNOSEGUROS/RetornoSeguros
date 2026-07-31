@@ -3527,6 +3527,7 @@
             <option value="incompleto">Não terminaram</option>
           </select>
           <button class="btn-secondary perm-admin" onclick="abrirCatalogoApresentacoes()">⚙️ Catálogo</button>
+          <button class="btn-secondary" id="btnCovAp" onclick="toggleCoberturaAp()">📊 Cobertura da base</button>
           <button class="btn-secondary" onclick="renderApresentacoes()">🔄 Atualizar</button>
           <button class="btn-primary" onclick="abrirGerarApresentacao()"><i data-lucide="send" class="w-4 h-4 inline"></i> Enviar apresentação</button>
         </div>
@@ -3534,6 +3535,7 @@
       <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:13px 16px; font-size:12.5px; color:#3730a3; margin-bottom:16px;">
         💡 Envie o link da apresentação ao cliente. Cada visita é registrada aqui com as respostas dadas, o grau de exposição calculado e o que a pessoa pediu no final.
       </div>
+      <div id="apCobertura" style="display:none; margin-bottom:16px;"></div>
       <div id="apLista"></div>
     </div>
 
@@ -3543,11 +3545,15 @@
           <div style="font-size: 13px; color: #64748b;">Transforme a cotação da seguradora num link que o cliente entende</div>
           <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Propostas online</div>
         </div>
-        <button class="btn-primary" onclick="abrirNovaProposta()"><i data-lucide="plus" class="w-4 h-4 inline"></i> Nova proposta</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn-secondary" id="btnCovProp" onclick="toggleCoberturaProp()">📊 Cobertura da base</button>
+          <button class="btn-primary" onclick="abrirNovaProposta()"><i data-lucide="plus" class="w-4 h-4 inline"></i> Nova proposta</button>
+        </div>
       </div>
       <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:13px 16px; font-size:12.5px; color:#3730a3; margin-bottom:16px;">
         💡 Abra o PDF da cotação, selecione tudo (Ctrl+A), copie (Ctrl+C) e cole aqui. O sistema extrai coberturas, limites, prêmio e parcelamento — você confere e publica. As descrições de cada cobertura são preenchidas sozinhas.
       </div>
+      <div id="propCobertura" style="display:none; margin-bottom:16px;"></div>
       <div id="propLista"></div>
     </div>
 
@@ -19050,6 +19056,180 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     } catch (e) { alert('Erro: ' + e.message); }
   }
   window.marcarPropNegocio = marcarPropNegocio;
+
+  // ══════════════════════════════════════════════════════════════════
+  // COBERTURA DA BASE — matriz "olho a olho" (base de clientes × ramos)
+  // igual ao Relatório Inteligente, mas para apresentações e propostas.
+  // Botão em cada tela (cada um escolhe ver). Ranking por RM só p/ chefe/admin.
+  // ══════════════════════════════════════════════════════════════════
+  const APCOV_CATS = {
+    sem:        { cor: '#e2e8f0', label: 'Sem apresentação' },
+    gerada:     { cor: '#3b82f6', label: 'Apresentação gerada' },
+    incompleta: { cor: '#f59e0b', label: 'Respondida incompleta' },
+    completa:   { cor: '#4ade80', label: 'Apresentação completa' },
+    cotacao:    { cor: '#059669', label: 'Pediu cotação' }
+  };
+  const PRCOV_CATS = {
+    sem:           { cor: '#e2e8f0', label: 'Sem proposta' },
+    apresentada:   { cor: '#3b82f6', label: 'Proposta apresentada' },
+    apres_resp:    { cor: '#1e3a8a', label: 'Apresentada + respondeu a apresentação' },
+    fechada:       { cor: '#4ade80', label: 'Negócio fechado' },
+    fechada_apres: { cor: '#059669', label: 'Fechado + passou pela apresentação' }
+  };
+  let _COV = null;                 // { links, aps, props } já filtrados por visibilidade
+  const _covState = { ap: {}, prop: {} };
+  const _covNorm = s => String(s || '').toLowerCase().replace(/_/g, '-');
+
+  // colunas = todos os ramos ativos + qualquer produtoId com dado que não seja ramo
+  function _covColunas(extraIds) {
+    const cols = (PRODUTOS || []).filter(r => r.ativo !== false).map(r => ({ id: r.id, nome: r.nome, icon: r.icon || '•' }));
+    const tem = {}; cols.forEach(c => tem[_covNorm(c.id)] = true);
+    const NOMES = { do: 'D&O', garantia: 'Seguro Garantia', dental: 'Dental', vida_socios: 'Vida Sócios' };
+    const ICONS = { do: '🛡️', garantia: '📄', dental: '🦷', vida_socios: '💼' };
+    (extraIds || []).forEach(pid => { const n = _covNorm(pid); if (pid && !tem[n]) { tem[n] = true; cols.push({ id: pid, nome: NOMES[pid] || pid, icon: ICONS[pid] || '•' }); } });
+    return cols;
+  }
+  async function _covCarregar() {
+    const vazio = { forEach: () => {} };
+    const [snapL, snapA, snapP] = await Promise.all([
+      db.collection('mb_links_apresentacao').get().catch(() => vazio),
+      db.collection('mb_apresentacoes').get().catch(() => vazio),
+      db.collection('mb_propostas').get().catch(() => vazio)
+    ]);
+    const L = [], A = [], P = [];
+    snapL.forEach(d => L.push({ id: d.id, ...d.data() }));
+    snapA.forEach(d => A.push({ id: d.id, ...d.data() }));
+    snapP.forEach(d => P.push({ id: d.id, ...d.data() }));
+    _COV = { links: L.filter(_podeVerRegistro), aps: A.filter(_podeVerRegistro), props: P.filter(_podeVerRegistro) };
+    return _COV;
+  }
+  // empresas visíveis: RM só a carteira dele; chefe/admin toda a base da agência
+  function _covEmpresas() {
+    let emps = (EMPRESAS_REAIS || EMPRESAS || []).slice();
+    if (perfilEfetivo() === 'rm') { const meu = uidEfetivo(); emps = emps.filter(e => e.rm === meu); }
+    return emps.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+  }
+  function _apCovStatus(empId, colId) {
+    const n = _covNorm(colId), belongs = pid => _covNorm(pid) === n;
+    const aps = _COV.aps.filter(a => a.empresaId === empId && belongs(a.produtoId));
+    const links = _COV.links.filter(l => l.empresaId === empId && belongs(l.produtoId));
+    if (!aps.length && !links.length) return 'sem';
+    if (aps.some(a => a.ultimoInteresse === 'cotar' || a.questionarioCompleto)) return 'cotacao';
+    if (aps.some(a => a.concluiu)) return 'completa';
+    if (aps.some(a => (a.cenasVistas > 1) || a.respostas || a.questionario)) return 'incompleta';
+    return 'gerada';
+  }
+  function _prCovStatus(empId, colId) {
+    const n = _covNorm(colId), belongs = pid => _covNorm(pid) === n;
+    const props = _COV.props.filter(p => p.empresaId === empId && belongs(p.produtoId));
+    if (!props.length) return 'sem';
+    const apResp = _COV.aps.some(a => a.empresaId === empId && belongs(a.produtoId) && (a.concluiu || a.respostas || a.ultimoInteresse || a.questionarioCompleto));
+    if (props.some(p => p.negocioFechado)) return apResp ? 'fechada_apres' : 'fechada';
+    return apResp ? 'apres_resp' : 'apresentada';
+  }
+  function _covMatrizHTML(cats, statusFn, cols, emps) {
+    if (!emps.length) return '<div style="text-align:center;color:#94a3b8;padding:24px;font-size:13px;">Nenhuma empresa na sua visão.</div>';
+    const leg = Object.values(cats).map(c => `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:${c.cor};${c.cor === '#e2e8f0' ? 'box-shadow:inset 0 0 0 1px #cbd5e1;' : ''};display:inline-block;"></span>${c.label}</span>`).join('');
+    const header = `<tr>
+      <th style="position:sticky;left:0;top:0;background:#f1f5f9;z-index:5;text-align:left;padding:8px 12px;font-size:11px;color:#64748b;min-width:170px;">EMPRESA</th>
+      <th style="position:sticky;top:0;background:#f1f5f9;z-index:4;padding:8px 6px;font-size:10px;color:#475569;text-align:center;min-width:58px;">% COBERTO</th>
+      ${cols.map(c => `<th style="position:sticky;top:0;background:#f1f5f9;z-index:4;padding:8px 5px;font-size:10px;color:#475569;text-align:center;min-width:50px;"><div style="font-size:15px;">${c.icon}</div><div style="font-size:8.5px;">${c.nome.length > 9 ? c.nome.slice(0, 8) + '…' : c.nome}</div></th>`).join('')}
+    </tr>`;
+    const semCol = {}; cols.forEach(c => semCol[c.id] = 0);
+    const linhas = emps.map(e => {
+      let cob = 0;
+      const cels = cols.map(c => {
+        const cat = statusFn(e.id, c.id); const cc = cats[cat];
+        if (cat === 'sem') semCol[c.id]++; else cob++;
+        return `<td style="text-align:center;padding:5px;"><span title="${c.nome}: ${cc.label}" style="width:15px;height:15px;border-radius:50%;background:${cc.cor};${cat === 'sem' ? 'box-shadow:inset 0 0 0 1px #cbd5e1;' : ''};display:inline-block;"></span></td>`;
+      }).join('');
+      const pct = cols.length ? Math.round(cob / cols.length * 100) : 0;
+      const corPct = pct >= 60 ? '#166534' : pct >= 30 ? '#b45309' : '#991b1b', bgPct = pct >= 60 ? '#dcfce7' : pct >= 30 ? '#fef3c7' : '#fee2e2';
+      return `<tr style="border-top:1px solid #f1f5f9;">
+        <td style="position:sticky;left:0;background:#fff;z-index:1;text-align:left;padding:8px 12px;font-size:12px;font-weight:600;color:#1d4ed8;white-space:nowrap;box-shadow:2px 0 4px rgba(0,0,0,.04);">${e.nome}</td>
+        <td style="text-align:center;padding:5px;"><span style="font-size:11px;font-weight:800;color:${corPct};background:${bgPct};padding:2px 7px;border-radius:100px;">${pct}%</span></td>
+        ${cels}
+      </tr>`;
+    }).join('');
+    const rodape = `<tr style="border-top:2px solid #e2e8f0;background:#fafbfc;">
+      <td style="position:sticky;left:0;background:#fafbfc;z-index:1;padding:7px 12px;font-size:10px;font-weight:700;color:#64748b;">% SEM RESPOSTA</td><td></td>
+      ${cols.map(c => { const ps = emps.length ? Math.round(semCol[c.id] / emps.length * 100) : 0; return `<td style="text-align:center;padding:5px;font-size:10px;font-weight:800;color:${ps >= 70 ? '#991b1b' : ps >= 40 ? '#b45309' : '#166534'};">${ps}%</td>`; }).join('')}
+    </tr>`;
+    return `<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#475569;margin-bottom:10px;">${leg}</div>
+      <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:12px;-webkit-overflow-scrolling:touch;">
+        <table style="border-collapse:collapse;width:100%;"><thead>${header}</thead><tbody>${linhas}${rodape}</tbody></table>
+      </div>`;
+  }
+  // ranking por RM (só chefe/admin) — % da carteira coberta, total ou por ramo
+  function _covRankingInner(statusFn, cols, emps, selCol) {
+    const usar = selCol ? cols.filter(c => c.id === selCol) : cols;
+    const porRm = {}; emps.forEach(e => { const rm = e.rm || '_sem'; (porRm[rm] = porRm[rm] || []).push(e); });
+    const linhas = Object.entries(porRm).map(([rm, es]) => {
+      let cob = 0; const tot = es.length * usar.length;
+      es.forEach(e => usar.forEach(c => { if (statusFn(e.id, c.id) !== 'sem') cob++; }));
+      const nome = (typeof MAPA_RMS !== 'undefined' && MAPA_RMS[rm] && MAPA_RMS[rm].nome) || (es[0] && es[0].rmNome) || 'Sem RM';
+      return { nome, pct: tot ? Math.round(cob / tot * 100) : 0, carteira: es.length };
+    }).sort((a, b) => b.pct - a.pct);
+    return linhas.map((l, i) => `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;">
+      <span style="width:24px;font-weight:800;color:${i === 0 ? '#b45309' : '#94a3b8'};">${i + 1}º</span>
+      <span style="flex:1;min-width:0;font-size:13px;font-weight:700;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${l.nome}</span>
+      <span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${l.carteira} emp.</span>
+      <div style="width:110px;background:#f1f5f9;border-radius:6px;height:14px;overflow:hidden;flex:none;"><div style="height:100%;width:${l.pct}%;background:linear-gradient(90deg,#6366f1,#4338ca);"></div></div>
+      <span style="width:42px;text-align:right;font-weight:800;font-size:12px;color:#334155;flex:none;">${l.pct}%</span>
+    </div>`).join('') || '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">Sem RMs para ranquear.</div>';
+  }
+  function _covRankingHTML(prefixo, statusFn, cols, emps) {
+    if (!(CTX.isAdmin || perfilEfetivo() === 'chefe')) return '';
+    const sel = `<select onchange="_covRank('${prefixo}', this.value)" style="font-size:12px;padding:5px 8px;border:1px solid #e2e8f0;border-radius:8px;">
+      <option value="">Carteira total</option>${cols.map(c => `<option value="${c.id}">${c.nome}</option>`).join('')}</select>`;
+    return `<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:800;color:#0f172a;">🏅 Ranking por RM — % da carteira coberta <span style="font-weight:500;color:#94a3b8;">(só você e o chefe veem)</span></div>${sel}
+      </div>
+      <div id="${prefixo}RankBody">${_covRankingInner(statusFn, cols, emps, '')}</div>
+    </div>`;
+  }
+  window._covRank = function (prefixo, colId) {
+    const st = _covState[prefixo]; if (!st) return;
+    const body = document.getElementById(prefixo + 'RankBody'); if (!body) return;
+    body.innerHTML = _covRankingInner(st.statusFn, st.cols, st.emps, colId);
+  };
+  function _covRenderAp() {
+    const emps = _covEmpresas();
+    const cols = _covColunas([..._COV.aps, ..._COV.links].map(x => x.produtoId));
+    _covState.ap = { statusFn: _apCovStatus, cols, emps };
+    document.getElementById('apCobertura').innerHTML = `<div style="background:white;border:1px solid #e2e8f0;border-radius:14px;padding:16px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:3px;">📊 Cobertura de apresentações — base × ramos</div>
+      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:12px;">Cada bolinha é o melhor estado da apresentação daquele cliente naquele ramo — ${emps.length} ${emps.length === 1 ? 'empresa' : 'empresas'} na sua visão.</div>
+      ${_covMatrizHTML(APCOV_CATS, _apCovStatus, cols, emps)}
+    </div>${_covRankingHTML('ap', _apCovStatus, cols, emps)}`;
+  }
+  function _covRenderProp() {
+    const emps = _covEmpresas();
+    const cols = _covColunas([..._COV.props, ..._COV.aps].map(x => x.produtoId));
+    _covState.prop = { statusFn: _prCovStatus, cols, emps };
+    document.getElementById('propCobertura').innerHTML = `<div style="background:white;border:1px solid #e2e8f0;border-radius:14px;padding:16px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:3px;">📊 Cobertura de propostas — base × ramos</div>
+      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:12px;">Bolinha escura = interligada à apresentação (o cliente respondeu antes da proposta). ${emps.length} ${emps.length === 1 ? 'empresa' : 'empresas'} na sua visão.</div>
+      ${_covMatrizHTML(PRCOV_CATS, _prCovStatus, cols, emps)}
+    </div>${_covRankingHTML('prop', _prCovStatus, cols, emps)}`;
+  }
+  async function toggleCoberturaAp() {
+    const box = document.getElementById('apCobertura'); if (!box) return;
+    if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">Carregando cobertura…</div>';
+    try { await _covCarregar(); _covRenderAp(); } catch (e) { box.innerHTML = '<div style="color:#991b1b;padding:16px;font-size:13px;">Erro ao montar a cobertura: ' + e.message + '</div>'; }
+  }
+  async function toggleCoberturaProp() {
+    const box = document.getElementById('propCobertura'); if (!box) return;
+    if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">Carregando cobertura…</div>';
+    try { await _covCarregar(); _covRenderProp(); } catch (e) { box.innerHTML = '<div style="color:#991b1b;padding:16px;font-size:13px;">Erro ao montar a cobertura: ' + e.message + '</div>'; }
+  }
+  window.toggleCoberturaAp = toggleCoberturaAp;
+  window.toggleCoberturaProp = toggleCoberturaProp;
 
   // ===== GERAR E ENVIAR APRESENTAÇÃO =====
   // Catálogo de apresentações disponíveis. Ao criar um produto novo, basta
