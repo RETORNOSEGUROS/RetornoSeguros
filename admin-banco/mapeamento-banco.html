@@ -2330,7 +2330,7 @@
     <div class="nav-item" onclick="navTo('mapeamento')"><i data-lucide="percent" class="w-4 h-4"></i> Painel de Mapeamento</div>
     <div class="nav-item" onclick="navTo('links')"><i data-lucide="link" class="w-4 h-4"></i> Central de Links</div>
     <div class="nav-item perm-rmplus" onclick="navTo('apresentacoes')"><i data-lucide="presentation" class="w-4 h-4"></i> Apresentações</div>
-    <div class="nav-item perm-admin" onclick="navTo('propostas')"><i data-lucide="file-text" class="w-4 h-4"></i> Propostas online</div>
+    <div class="nav-item perm-rmplus" onclick="navTo('propostas')"><i data-lucide="file-text" class="w-4 h-4"></i> Propostas online</div>
     <div class="nav-item perm-rmplus" onclick="navTo('relmetas')"><i data-lucide="gauge" class="w-4 h-4"></i> Relatório de Metas</div>
     <div class="nav-item" onclick="navTo('agenda')"><i data-lucide="calendar-clock" class="w-4 h-4"></i> Agenda · Visitas</div>
     <div class="nav-item" onclick="navTo('avisos')"><i data-lucide="megaphone" class="w-4 h-4"></i> Avisos &amp; Novidades</div>
@@ -6872,6 +6872,34 @@
     const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
     return e ? e.rm : null;
   }
+
+  // Base de empresas da agência (carteira carregada). loaded=false quando ainda
+  // não carregou — aí caímos no filtro antigo por agenciaId como salvaguarda.
+  function _baseEmpresaIds() {
+    const base = (EMPRESAS_REAIS || EMPRESAS || []);
+    return { set: new Set(base.map(e => e.id)), loaded: base.length > 0 };
+  }
+  // Quem pode ver uma apresentação/proposta, por papel (respeita o "ver como"):
+  //  - admin: tudo
+  //  - chefe: todos os clientes da BASE da agência + o que ele mesmo gerou
+  //  - rm:    só os clientes da carteira dele + o que ele mesmo gerou
+  //  - assistente/estagiário: por enquanto, nada
+  // Filtra pela EMPRESA estar na base — não pelo campo agenciaId do documento,
+  // que é gravado por quem gerou o link e pode vir nulo ou de outra agência.
+  function _podeVerRegistro(d) {
+    const perf = perfilEfetivo();
+    if (perf === 'admin' || (typeof CTX !== 'undefined' && CTX.isAdmin && !CTX.perfilSimulado)) return true;
+    const meu = uidEfetivo();
+    const autor = d.geradoPorUid || d.criadoPorUid || null;
+    if (perf === 'rm') return (d.empresaId && empresaRmDe(d.empresaId) === meu) || autor === meu;
+    if (perf === 'chefe') {
+      const bm = _baseEmpresaIds();
+      if (!bm.loaded) return !CTX.agenciaId || d.agenciaId === CTX.agenciaId;   // salvaguarda
+      return (d.empresaId && bm.set.has(d.empresaId)) || autor === meu;
+    }
+    return false;   // assistente / estagiário — ainda não veem
+  }
+  window._podeVerRegistro = _podeVerRegistro;
 
   // Lista as cotações de OP de uma empresa (rodam por fora do mapeamento do produto)
   async function carregarOpsEmpresa(empresaId) {
@@ -16964,10 +16992,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const filtro = (document.getElementById('apFiltro') || {}).value || '';
     try {
       let q = db.collection('mb_apresentacoes');
-      if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+      // Com a base da agência carregada, a visibilidade é decidida pela EMPRESA
+      // (via _podeVerRegistro), então não filtramos por agenciaId na query — senão
+      // apresentações de clientes da agência com agenciaId nulo/errado sumiriam.
+      const _bmAp = _baseEmpresaIds();
+      if (!_bmAp.loaded && CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
       const snap = await q.get();
       let itens = [];
       snap.forEach(d => itens.push({ id: d.id, ...d.data() }));
+      // visibilidade por papel (chefe = todos os clientes da base; rm = os seus)
+      itens = itens.filter(a => _podeVerRegistro(a));
 
       // Interesse do cliente vira ponto para quem enviou — uma vez por apresentação.
       // Flag no doc + ID determinístico apint_<id>: duas pessoas abrindo a tela juntas não duplicam.
@@ -16992,11 +17026,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }));
       } catch (e) { console.warn('pts interesse', e); }
 
-      // RM vê só as das empresas da carteira dele
-      if (perfilEfetivo() === 'rm') {
-        const meu = uidEfetivo();
-        itens = itens.filter(a => !a.empresaId || empresaRmDe(a.empresaId) === meu || a.geradoPorUid === meu);
-      }
       itens.sort((a, b) => {
         const ta = (a.atualizadoEm || a.criadoEm), tb = (b.atualizadoEm || b.criadoEm);
         return ((tb && tb.toDate ? tb.toDate().getTime() : 0) - (ta && ta.toDate ? ta.toDate().getTime() : 0));
@@ -18840,9 +18869,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     cont.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">Carregando…</div>';
     try {
       let q = db.collection('mb_propostas');
-      if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+      const _bmProp = _baseEmpresaIds();
+      if (!_bmProp.loaded && CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
       const snap = await q.get();
       let itens = []; snap.forEach(d => itens.push({ id: d.id, ...d.data() }));
+      // mesma visibilidade das apresentações: chefe vê todos os clientes da base;
+      // rm só os seus; assistente/estagiário ainda não veem propostas.
+      itens = itens.filter(p => _podeVerRegistro(p));
 
       // "Quero contratar" vira ponto para quem publicou — uma vez por proposta (propaceite_<id>).
       try {
