@@ -142,7 +142,7 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 const PRODUTO = { id: 'dental', nome: 'Plano Dental Empresarial' };
-const ARQ_VERSAO = '9';
+const ARQ_VERSAO = '10';
 window.ARQ_VERSAO = ARQ_VERSAO;
 
 /* Preço real por FAIXA de vidas — Bradesco Dental SPG, plano Padrão Doc
@@ -205,11 +205,7 @@ const CENAS = {
     titulo: 'Quantas pessoas o benefício alcançaria?',
     corpo: 'Define o desenho do plano e me deixa fazer, no fim, uma conta de custo real com você — sem chute.',
     pergunta: 'Quantos funcionários a empresa tem, mais ou menos?',
-    tipo: 'opcoes', muitas: true, campo: 'headcount',
-    opcoes: [
-      { txt: 'Até 29', v: 'ate29' }, { txt: '30 a 99', v: '30_99' }, { txt: '100 a 199', v: '100_199' },
-      { txt: '200 a 700', v: '200_700' }, { txt: '701 a 1.000', v: '701_1000' }, { txt: 'Mais de 1.000', v: '1000_mais' }
-    ]
+    tipo: 'numero', campo: 'headcount'
   },
   custo: {
     rotulo: 'O custo que ninguém soma',
@@ -403,7 +399,7 @@ async function renderPerfil() {
         <div class="pergunta">Para eu falar a sua língua: quem está lendo?</div>
         <div class="opcoes lista" id="ops">
           <button class="op" data-k="0">👔 Sou dono / sócio</button>
-          <button class="op" data-k="1">📊 Cuido do financeiro</button>
+          <button class="op" data-k="1">📊 Financeiro</button>
           <button class="op" data-k="2">🧑‍💼 Sou do RH / DP</button>
           <button class="op" data-k="3">Outro</button>
         </div>
@@ -450,6 +446,7 @@ async function renderCena(i) {
   if (!c) return renderResultado();
   progresso(6 + (i / (visiveis.length + 1)) * 90);
   if (c.calc === 'salario') return renderCalcSalario(c, i);
+  if (c.tipo === 'numero') return renderNumero(c, i);
 
   const classeOp = c.muitas ? 'opcoes muitas' : c.lista ? 'opcoes lista' : 'opcoes';
   palco.innerHTML = `
@@ -535,8 +532,15 @@ function headcountFaixa() { const r = RESP.headcount; if (!r || typeof r.i !== '
    O total da empresa e' uma faixa honesta: do piso (de x vida) ao teto (ate x
    vida). Faixa aberta (mais de 1.000) vira "a partir de", porque a conta cai
    por pessoa conforme cresce e prometer um teto seria mentira. */
+// nº exato de colaboradores (novo input numérico); cai na âncora da faixa p/ docs antigos
+function headcountNum() { const r = RESP.headcount; if (r && typeof r.n === 'number' && r.n > 0) return r.n; const f = headcountFaixa(); return f ? f[3] : null; }
 function custoMensal() {
-  const fx = headcountFaixa(); if (!fx) return null;
+  const n = headcountNum(); const fx = headcountFaixa();
+  if (!n && !fx) return null;
+  if (n) {
+    const fp = faixaPreco(n); if (!fp) return null;
+    return { vida: fp.vida, de: n, ate: n, aberta: false, vidas: n, exato: true, min: n * fp.vida, max: n * fp.vida };
+  }
   const aberta = (fx[2] === null || fx[2] === undefined);
   const ancora = aberta ? fx[1] : fx[3];
   const fp = faixaPreco(ancora); if (!fp) return null;
@@ -549,7 +553,7 @@ function custoMensal() {
    contrato acima de 30 vidas para quem adere nos 30 primeiros dias da
    vigencia. Prometer "sem carencia" para uma empresa de 12 pessoas seria
    vender uma coisa e entregar outra. */
-function isencaoCarencia() { const f = headcountFaixa(); if (!f) return null; return f[1] >= 31; }
+function isencaoCarencia() { const n = headcountNum(); if (n) return n >= 31; const f = headcountFaixa(); if (!f) return null; return f[1] >= 31; }
 function textoCarencia() {
   const iz = isencaoCarencia();
   if (iz === true)  return 'Urgência e emergência em 24h. E como o contrato passa de 30 vidas, <b>quem aderir nos 30 primeiros dias da vigência entra isento de carência</b> — o time usa no primeiro mês.';
@@ -558,73 +562,136 @@ function textoCarencia() {
 }
 function limpezaFaixa() { const r = RESP.limpeza; if (!r || typeof r.i !== 'number') return null; const l = DIC.limpeza[r.i]; if (!l || l[0] === 'lp_naosei') return null; return { min: l[1], max: l[2] }; }
 
-/* Cena "salário invisível": cruza o nº de colaboradores que o cliente respondeu
-   com os percentuais do Censo da Odontologia (ABIMO/CFO, 2023–2024) — 68% vão
-   ao dentista/ano; desses 70% fazem limpeza e 39% restauração — e o valor de
-   referência (limpeza pela estimativa do próprio cliente; restauração por
-   mercado) para mostrar quanto o time deixaria de tirar do bolso no ano. Tudo
-   marcado como estimativa. */
+/* Input numérico (nº aproximado de colaboradores). Deriva a faixa de preço a
+   partir do número exato e guarda o número em RESP.headcount.n. */
+async function renderNumero(c, i) {
+  palco.innerHTML = `
+    <div class="cena">
+      <div class="rotulo">${c.rotulo}</div>
+      <div class="titulo">${c.titulo}</div>
+      <div class="corpo" id="corpo"></div>
+      <div class="zona-resposta on" id="zona">
+        <div class="pergunta">${c.pergunta}</div>
+        <input id="numIn" type="number" inputmode="numeric" min="1" placeholder="ex.: 80"
+          style="width:100%; padding:15px 16px; font-size:20px; font-weight:800; text-align:center; border:1.5px solid rgba(255,255,255,.18); border-radius:12px; background:rgba(255,255,255,.06); color:#fff;">
+        <div id="numErr" style="display:none; color:#fca5a5; font-size:12px; margin-top:6px;">Digite quantos colaboradores, mais ou menos.</div>
+        <button class="btn btn-ouro" id="btNumOk" style="margin-top:14px; width:100%;">Continuar →</button>
+      </div>
+      <div class="pular"><a id="lkPular">pular apresentação →</a></div>
+    </div>`;
+  window.scrollTo(0, 0);
+  await digitar($('corpo'), c.corpo, 15);
+  const inp = $('numIn'); setTimeout(() => { try { inp.focus(); } catch (e) {} }, 80);
+  const ok = () => {
+    const n = parseInt(String(inp.value || '').replace(/\D/g, ''), 10);
+    if (!n || n < 1) { $('numErr').style.display = 'block'; return; }
+    let idx = DIC.headcount.findIndex(r => n >= r[1] && (r[2] === null || n <= r[2]));
+    if (idx < 0) idx = n < DIC.headcount[0][1] ? 0 : DIC.headcount.length - 1;
+    RESP[c.campo] = { n: n, i: idx, valor: 'hc_num', texto: n + ' funcionários' };
+    salvarParcial();
+    const nv = cenasVisiveis(); iCena = i + 1;
+    iCena < nv.length ? renderCena(iCena) : renderResultado();
+  };
+  $('btNumOk').onclick = ok;
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); });
+  $('lkPular').onclick = () => renderResultado();
+}
+
+/* Cena "salário invisível": cruza o nº EXATO de colaboradores com a média de uso
+   por procedimento no Brasil e o custo de referência de mercado. Mostra, um a um,
+   quantos colaboradores fariam cada procedimento no ano e quanto gastariam — e o
+   total que a empresa poupa pro time. Limpeza e restauração alinham com o Censo
+   ABIMO/CFO 2024; os demais são referência de mercado. Tudo marcado como estimativa. */
+const PROCS_SI = [
+  { ic: '🦷', nome: 'limpeza', pct: 0.51, de: 150, ate: 350, estim: true },
+  { ic: '🛠️', nome: 'restauração', pct: 0.31, de: 200, ate: 500 },
+  { ic: '🚑', nome: 'urgência / dor', pct: 0.20, de: 150, ate: 300 },
+  { ic: '😬', nome: 'extração', pct: 0.10, de: 250, ate: 600 },
+  { ic: '🩺', nome: 'canal', pct: 0.07, de: 1200, ate: 2500 }
+];
 async function renderCalcSalario(c, i) {
-  const fx = headcountFaixa();
-  const N = fx ? fx[3] : null;
+  const N = headcountNum();
   if (!N) { iCena = i + 1; return renderCena(iCena); }
-  const pVisita = 0.68, pLimp = 0.70, pRest = 0.39;
-  const nLimp = Math.max(1, Math.round(N * pVisita * pLimp));
-  const nRest = Math.max(1, Math.round(N * pVisita * pRest));
   const lz = limpezaFaixa();
-  const limpDe = lz ? lz.min : 150, limpAte = lz ? (lz.max || lz.min + 200) : 350;
-  const restDe = 200, restAte = 500;
-  const totDe = nLimp * limpDe + nRest * restDe;
-  const totAte = nLimp * limpAte + nRest * restAte;
+  const rows = PROCS_SI.map(p => {
+    let de = p.de, ate = p.ate;
+    if (p.estim && lz) { de = lz.min; ate = lz.max || lz.min + 200; }   // limpeza: usa a estimativa do cliente
+    const mid = Math.round((de + ate) / 2);
+    const n = Math.max(1, Math.round(N * p.pct));
+    return { ...p, n, mid, total: n * mid };
+  });
+  const totalEquipe = rows.reduce((t, r) => t + r.total, 0);
+  const custoUmTodos = rows.reduce((t, r) => t + r.mid, 0);   // um colaborador que faz TODOS no ano
   const cm = custoMensal();
   const planoAno = cm ? cm.vida * 12 * N : null;
-  const media = (totDe + totAte) / 2;
-  // comparação HONESTA: só se o valor de referência supera com folga o custo do
-  // plano é que falamos em "múltiplo"; senão, o argumento é que só dois
-  // procedimentos já chegam perto — e o plano cobre muito mais.
-  const ratio = planoAno ? media / planoAno : null;
-  const cmpTxt = !planoAno ? ''
-    : ratio >= 1.5
-      ? `💰 O plano custaria cerca de <strong>${fmt(planoAno)} por ano</strong> para o time todo — e só <strong>limpeza e restauração</strong> já valem cerca de <strong>${Math.round(ratio)}× isso</strong>. E ele ainda cobre urgência em 24h, canal, extração, consultas e a família.`
-      : `💰 O plano custaria cerca de <strong>${fmt(planoAno)} por ano</strong> para o time todo. Só <strong>limpeza e restauração</strong> já chegam perto disso — e o plano ainda cobre <strong>urgência em 24h, canal, extração, consultas, raio-X e a família</strong>, o ano inteiro.`;
-  const faixaTxt = (a, b) => b && b > a ? fmt(a) + ' a ' + fmt(b) : fmt(a);
-  const linha = (ic, nome, n, de, ate) => `
-    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:11px 0; border-bottom:1px solid rgba(255,255,255,.1);">
-      <div style="min-width:0;"><div style="font-weight:800; font-size:15px;">${ic} ~${n} ${n === 1 ? 'colaborador' : 'colaboradores'}</div>
-        <div style="font-size:12px; opacity:.7;">vão fazer ${nome} no ano</div></div>
-      <div style="text-align:right; white-space:nowrap; font-weight:800; color:var(--dourado);">${faixaTxt(n * de, n * ate)}</div>
+  const ratio = planoAno ? totalEquipe / planoAno : null;
+  const linhaHTML = r => `
+    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,.1);">
+      <div style="min-width:0;"><div style="font-weight:800; font-size:14.5px;">${r.ic} ~${r.n} ${r.n === 1 ? 'colaborador' : 'colaboradores'}</div>
+        <div style="font-size:11.5px; opacity:.7;">vão fazer ${r.nome} — ~${fmt(r.mid)} cada</div></div>
+      <div style="text-align:right; white-space:nowrap; font-weight:800; color:var(--dourado);">${fmt(r.total)}</div>
     </div>`;
+  const multTxt = (Math.round(ratio * 10) / 10).toLocaleString('pt-BR');
+  const cmpTxt = planoAno
+    ? `💰 O plano custaria cerca de <strong>${fmt(planoAno)} por ano</strong> para o time todo — e devolve em procedimentos <strong>${ratio >= 1.25 ? multTxt + '× isso' : 'quase o mesmo, cobrindo tudo'}</strong>. Você poupa da equipe <strong>${fmt(totalEquipe)}/ano</strong> pagando só uma fração disso.`
+    : `Você poupa da equipe cerca de <strong>${fmt(totalEquipe)} por ano</strong>.`;
   palco.innerHTML = `
     <div class="cena">
       <div class="rotulo">${c.rotulo}</div>
       <div class="titulo">${c.titulo}</div>
       <div class="corpo" id="corpo"></div>
       <div id="siBox" style="display:none;">
-        <div class="lbl" style="margin:2px 0 10px;">Seguindo o padrão nacional, numa empresa de <strong>~${N} pessoas</strong>, em um ano:</div>
+        <div class="lbl" style="margin:2px 0 10px;">Se a realidade do país for a mesma da sua empresa, em <strong>${N} colaboradores</strong>, num ano:</div>
         <div style="background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:6px 16px 14px;">
-          ${linha('🦷', 'uma limpeza', nLimp, limpDe, limpAte)}
-          ${linha('🔧', 'uma restauração', nRest, restDe, restAte)}
+          ${rows.map(linhaHTML).join('')}
           <div style="text-align:center; padding:14px 0 4px; margin-top:6px; border-top:1px solid rgba(255,255,255,.12);">
             <div style="font-weight:700; font-size:12.5px; opacity:.8; text-transform:uppercase; letter-spacing:.04em;">Sairia do bolso do time, por ano</div>
-            <div style="font-weight:900; font-size:23px; color:var(--dourado); margin-top:4px; line-height:1.15;">${faixaTxt(totDe, totAte)}</div>
+            <div style="font-weight:900; font-size:24px; color:var(--dourado); margin-top:4px; line-height:1.15;">${fmt(totalEquipe)}</div>
           </div>
         </div>
-        ${cmpTxt ? `<div class="destaque" style="margin-top:14px;">${cmpTxt}</div>` : ''}
-        <div class="destaque" id="siPunch" style="display:none; margin-top:12px;">É um <strong>aumento que não aparece no holerite</strong>: o funcionário sente no bolso, a empresa paga uma fração. E os colaboradores de menor renda — os que hoje menos vão ao dentista — passam a ir.</div>
-        <div style="font-size:11px; opacity:.6; line-height:1.5; margin-top:10px;">Estimativa. Percentuais do Censo da Odontologia (ABIMO/CFO, 2024): 68% vão ao dentista no ano; desses, 70% fazem limpeza e 39% restauração. Limpeza pelo valor que você estimou; restauração por referência de mercado (R$ 200–500). A cobertura real segue a rede e as carências do plano.</div>
-        <button class="btn btn-ouro" id="btCalcOk" style="margin-top:16px; width:100%;">Continuar →</button>
+        <div class="destaque" style="margin-top:14px;">🧾 Se <strong>um</strong> colaborador seu precisar de tudo isso no ano, gastaria cerca de <strong>${fmt(custoUmTodos)}</strong> do próprio bolso. Com o plano, <strong>zero</strong>.</div>
+        <div class="destaque" style="margin-top:12px;">${cmpTxt}</div>
+        <div class="destaque" id="siPunch" style="display:none; margin-top:12px;">É um <strong>salário disfarçado de economia</strong>: o funcionário sente no bolso, a empresa paga uma fração. E os colaboradores de menor renda — os que hoje menos vão ao dentista — passam a ir.</div>
+        <div style="font-size:11px; opacity:.6; line-height:1.5; margin-top:10px;">Estimativa. % anual de uso por procedimento com base no comportamento do brasileiro no dentista (limpeza e restauração alinhados ao Censo ABIMO/CFO 2024; demais por referência de mercado). Custos por referência de mercado; a limpeza usa o valor que você estimou. A cobertura real segue a rede e as carências do plano.</div>
+        <div class="zona-resposta" id="zona" style="margin-top:18px;">
+          <div class="pergunta">Essa conta faz sentido pra você?</div>
+          <div class="opcoes lista" id="ops">
+            <button class="op" data-k="0">💡 Nunca tinha pensado assim</button>
+            <button class="op" data-k="1">✅ Faz total sentido</button>
+            <button class="op" data-k="2">🤔 Não sei se faz</button>
+          </div>
+          <div id="eco" style="display:none;"></div>
+        </div>
       </div>
       <div class="pular"><a id="lkPular">pular apresentação →</a></div>
     </div>`;
   window.scrollTo(0, 0);
-  await digitar($('corpo'), 'Você já me disse o tamanho do time e o que uma limpeza custa aí. Deixa eu cruzar isso com o que o brasileiro de fato faz no dentista — e você vê o benefício em número.', 14);
+  await digitar($('corpo'), 'Você me disse o tamanho do time e o que uma limpeza custa aí. Deixa eu cruzar com o que o brasileiro de fato faz no dentista — e você vê o benefício em número, procedimento por procedimento.', 14);
   await espera(200);
   const box = $('siBox'); box.style.display = 'block'; box.style.animation = 'entra .5s';
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   await espera(900);
-  const pn = $('siPunch'); if (pn) { pn.style.display = 'block'; pn.style.animation = 'entra .5s'; pn.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  const pn = $('siPunch'); if (pn) { pn.style.display = 'block'; pn.style.animation = 'entra .5s'; }
+  await espera(200);
+  const zn = $('zona'); zn.classList.add('on');
   salvarParcial();
-  $('btCalcOk').onclick = () => { $('btCalcOk').disabled = true; salvarParcial(); iCena = i + 1; iCena < cenasVisiveis().length ? renderCena(iCena) : renderResultado(); };
+  const ECOS = [
+    'É o que mais surpreende: o dental é o benefício onde a empresa paga uma fração do que o time gastaria sozinho. Um salário que o colaborador sente no bolso.',
+    'Exato — e o melhor: o custo pra empresa é pequeno e previsível perto do valor que volta pro time o ano inteiro.',
+    'Sem problema — os números são estimativa. O corretor fecha a conta real da sua empresa quando você quiser, sem compromisso.'
+  ];
+  const avancar = () => { salvarParcial(); const nv = cenasVisiveis(); iCena = i + 1; iCena < nv.length ? renderCena(iCena) : renderResultado(); };
+  $('ops').querySelectorAll('.op').forEach(b => b.onclick = () => {
+    const k = Number(b.dataset.k);
+    $('ops').querySelectorAll('.op').forEach(x => { x.classList.remove('sel'); x.style.animation = 'none'; });
+    b.classList.add('sel');
+    RESP.salarioSentido = { valor: ['nunca', 'faz', 'nao'][k], texto: b.textContent, i: k };
+    const e = $('eco');
+    e.style.display = 'block';
+    e.innerHTML = `<div class="destaque eco-verde">${ECOS[k]}</div><button class="btn btn-ouro" id="btEcoOk" style="margin-top:14px;width:100%;">Continuar →</button>`;
+    e.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    $('btEcoOk').onclick = () => { $('btEcoOk').disabled = true; avancar(); };
+  });
   $('lkPular').onclick = () => renderResultado();
 }
 
@@ -667,13 +734,13 @@ async function renderResultado() {
       ${cm ? `<div class="cartao">
         <div class="rot">Custo estimado do benefício${LINK && LINK.empresaNome ? ' · ' + LINK.empresaNome : ''}</div>
         <div class="val">${fmtC(cm.vida)}<span style="font-size:15px;font-weight:600;color:#9fd8c4;"> por pessoa/mês</span></div>
-        <div class="exp">${cm.aberta ? 'Faixa de mais de 1.000 vidas' : 'Faixa de ' + cm.de + ' a ' + cm.ate + ' vidas'} — valor da tabela Bradesco Dental SPG (Padrão Doc). A proposta final pode ser ajustada pela seguradora; o corretor fecha o número exato.</div>
+        <div class="exp">${cm.exato ? cm.vidas + ' vidas' : (cm.aberta ? 'Faixa de mais de 1.000 vidas' : 'Faixa de ' + cm.de + ' a ' + cm.ate + ' vidas')} — valor da tabela Bradesco Dental SPG (Padrão Doc). A proposta final pode ser ajustada pela seguradora; o corretor fecha o número exato.</div>
       </div>
       <div class="grid4">
         <div class="c forte"><div class="n">${fmtC(cm.vida)}</div><div class="l">por pessoa<br><strong>por mês</strong></div></div>
         <div class="c forte"><div class="n">${fmt(cm.vida * 12)}</div><div class="l">por pessoa<br><strong>no ano inteiro</strong></div></div>
-        <div class="c"><div class="n">${cm.aberta ? 'a partir de ' + fmt(cm.min) : fmt(cm.min) + ' a ' + fmt(cm.max)}</div><div class="l">a empresa<br><strong>por mês</strong></div></div>
-        <div class="c"><div class="n">${cm.aberta ? 'a partir de ' + fmt(cm.min * 12) : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12)}</div><div class="l">a empresa<br><strong>no ano inteiro</strong></div></div>
+        <div class="c"><div class="n">${cm.exato ? fmt(cm.min) : (cm.aberta ? 'a partir de ' + fmt(cm.min) : fmt(cm.min) + ' a ' + fmt(cm.max))}</div><div class="l">a empresa<br><strong>por mês</strong></div></div>
+        <div class="c"><div class="n">${cm.exato ? fmt(cm.min * 12) : (cm.aberta ? 'a partir de ' + fmt(cm.min * 12) : fmt(cm.min * 12) + ' a ' + fmt(cm.max * 12))}</div><div class="l">a empresa<br><strong>no ano inteiro</strong></div></div>
       </div>` : ''}
 
       ${lz && anualPorVida ? `<div class="compara">
