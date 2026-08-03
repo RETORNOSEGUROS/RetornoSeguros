@@ -489,6 +489,151 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
     return clean(nameToks.join(' '))||null; }
   function premioApos(t,label){ const i=t.search(new RegExp(label,'i')); if(i<0) return null;
     const m=/(\d{1,3}(?:\.\d{3})*,\d{2})/.exec(t.slice(i, i+220)); return m?NUM(m[1]):null; }
+  /* ---------- helpers compartilhados dos templates novos ---------- */
+  const VIG_PATTERNS=[
+    /das?\s*24\s*h(?:oras)?\s*(?:de|do dia)\s*(\d{2}\/\d{2}\/\d{4})\s*(?:às|ate|até|as)\s*(?:as\s*)?24\s*h(?:oras)?\s*(?:de|do dia)\s*(\d{2}\/\d{2}\/\d{4})/i,
+    /(\d{2}\/\d{2}\/\d{4})\s*(?:a|à|até|-)\s*(\d{2}\/\d{2}\/\d{4})/
+  ];
+  function acharVigencia(t,r){ for(const p of VIG_PATTERNS){ const m=p.exec(t); if(m){ r.vigenciaInicio=m[1]; r.vigenciaFim=m[2]; return; } } r.warnings.push('vigência'); }
+  function montarEndereco(r){ r.enderecoCompleto=[ (r.logradouro||'')+(r.numero?', '+r.numero:''), r.bairro||'', (r.cidade||'')+(r.estado?'/'+r.estado:''), r.cep?'CEP '+r.cep:'' ].filter(x=>x&&x!=='/').join(' · ')||null; }
+  function comissaoDe(r,pct,cod){ if(pct!=null&&pct>=1&&pct<=60){ r.comissaoPct=Math.round(pct*100)/100; r.comissaoCodigo=cod||null; r.comissaoManual=false;
+      if(r.premioLiquido!=null) r.comissaoValor=Math.round(r.premioLiquido*r.comissaoPct)/100; }
+    else { r.comissaoPct=null; r.comissaoValor=null; r.comissaoManual=true; } }
+
+  /* ---------- YELUM / ALIRO ---------- */
+  function yelumAuto(t){
+    const r=genericoAuto(t); r.seguradora=/ALIRO|Aliro/i.test(t)?'Aliro (Yelum)':'Yelum';
+    // veículo
+    const mv=/C[óo]digo FIPE\s+Marca\/Tipo do Ve[íi]culo\s+Ano Fabrica[çc][ãa]o\/Modelo\s+(\d{6}-\d)\s+(.+?)\s*\((\w+)\)\s*(\d{4})\/(\d{4})/i.exec(t);
+    if(mv){ r.codigoFipe=mv[1]; r.modelo=clean(mv[2]); r.fabricante=r.modelo.split(' ')[0]; r.combustivel=mv[3]; r.anoModelo=mv[5]; }
+    // endereço completo
+    const me=/Endere[çc]o\s+Bairro\s+CEP\s+(.+?)\s+(\d{5}-?\d{3})\s+Cidade\s+UF\s+Telefone\s+Celular\s+E-?Mail\s+(.+?)\s+([A-Z]{2})\s+(\([\d ]{2,4}\)\s*\d{7,9})\s+(\([\d ]{2,4}\)\s*\d{8,9})\s+([\w.+-]+@[\w.-]+)/i.exec(t);
+    if(me){ const blob=clean(me[1]); const toks=blob.split(' ');
+      r.bairro=toks[toks.length-1]; r.logradouro=blob.replace(/\s+\S+$/,''); r.cep=me[2].replace(/^(\d{5})(\d{3})$/,'$1-$2');
+      r.cidade=clean(me[3]); r.estado=me[4]; r.telefone=clean(me[5]); r.celular=clean(me[6]); r.email=me[7]; montarEndereco(r); }
+    // prêmios: linha após Juros(%)
+    const mp=/Pr[êe]mio L[íi]quido \(R\$\)[\s\S]{0,120}?Juros\s*\(%\)\s+((?:[\d.]+,\d{2}\s+){3,6})/i.exec(t);
+    if(mp){ const nums=mp[1].trim().split(/\s+/).map(NUM); r.premioLiquido=nums[0]; r.premioTotal=Math.max(...nums);
+      const iof=nums.find(v=>v>0&&Math.abs(r.premioLiquido+v-r.premioTotal)<2); if(iof!=null) r.iof=iof; }
+    // parcelas: 1+11(CC)
+    const mpc=/(\d)\s*\+\s*(\d{1,2})\s*\((CC|DB|FI|CP)\)[\s\S]{0,120}?([\d.]+,\d{2})/i.exec(t);
+    if(mpc){ r.parcelas=parseInt(mpc[1])+parseInt(mpc[2]); r.valorParcela=NUM(mpc[4]); r.formaPagamento=mpc[3]==='CC'?'Cartão':mpc[3]==='DB'?'Débito':'Boleto'; }
+    else { const av=/[àa] vista/i.test(t); if(av){ r.parcelas=1; r.valorParcela=r.premioTotal; } }
+    // coberturas (NOME ... LMI premio franquia)
+    r.coberturas=[]; const nomes=[['BASICA - 01-COMPREENSIVA','Compreensiva (casco)'],['DANOS MATERIAIS','RCF - Danos Materiais'],['DANOS CORPORAIS','RCF - Danos Corporais'],['DANOS MORAIS E EST','RCF - Danos Morais e Estéticos'],['ACIDENTES PESSOAIS','APP - Acidentes Pessoais'],['ASSISTENCIA','Assistência'],['VIDROS','Vidros']];
+    for(const [chave,label] of nomes){ const i=t.indexOf(chave); if(i<0) continue; const tr=t.slice(i,i+220);
+      const nums=(tr.match(/[\d.]{1,12},\d{2}/g)||[]).slice(0,3);
+      const lmi=(/VMR FIPE x [\d.,]+%/.exec(tr)||[])[0] || (nums[0]&&NUM(nums[0])>1000?('R$ '+nums[0]):'-');
+      let premio=null; if(nums.length>=2){ premio=NUM(lmi.startsWith('R$')?nums[1]:nums[0]); }
+      r.coberturas.push({nome:label,lmi,premio:premio||0}); }
+    // comissão: não impressa
+    comissaoDe(r,null,null);
+    r.warnings=r.warnings.filter(w=>w!=='vigência'||!r.vigenciaInicio);
+    return r;
+  }
+
+  /* ---------- BRADESCO ---------- */
+  function bradescoAuto(t){
+    const r=genericoAuto(t); r.seguradora='Bradesco';
+    const mv2=/das 24h de (\d{2}\/\d{2}\/\d{4}) às 24h de (\d{2}\/\d{2}\/\d{4})/i.exec(t);
+    if(mv2){ r.vigenciaInicio=mv2[1]; r.vigenciaFim=mv2[2]; }
+    const mc=/N[º°o]?\s*Cota[çc][ãa]o:?\s*(\d{6,}\/?\d*)/i.exec(t); if(mc) r.nrCotacao=mc[1];
+    const mnp=/Proposta:?\s*(\d{6,})/i.exec(t); if(mnp) r.nrProposta=mnp[1];
+    const mfipe=/C[óo]digo FIPE:?\s*[^\d]{0,20}(\d{6}-\d)/i.exec(t); if(mfipe) r.codigoFipe=mfipe[1];
+    // prêmios: sequência numérica após "Total a pagar:" — acha o trio a+b=c (líquido+IOF=total)
+    const mrun=/Total a pagar:\s*((?:[\d.]+,\d{2}\s+){3,9})/i.exec(t);
+    if(mrun){ const nums=mrun[1].trim().split(/\s+/).map(NUM).filter(v=>v!=null);
+      outer: for(const c of [...nums].sort((a,b)=>b-a)){ for(const a of nums){ for(const b of nums){
+        if(a>0&&b>0&&a!==c&&b!==c&&Math.abs(a+b-c)<0.02){ r.premioTotal=c; r.premioLiquido=Math.max(a,b); r.iof=Math.min(a,b); break outer; } } } }
+      const sobra=nums.find(v=>v>0&&v!==r.premioTotal&&v!==r.premioLiquido&&v!==r.iof);
+      if(sobra&&r.premioTotal){ r.valorParcela=sobra; r.parcelas=Math.max(1,Math.round(r.premioTotal/sobra)); }
+    }
+    // coberturas: lista com códigos (108), (006)...
+    r.coberturas=[]; const mcob=/Cobertura\s+([\s\S]{0,600}?)(?:PR[ÊE]MIO|DADOS|FRANQUIA|OBJETO)/i.exec(t);
+    if(mcob){ const linhas=mcob[1].match(/[A-ZÀ-Ÿa-zà-ÿ /-]{6,60}\(\d{3}\)/g)||[];
+      linhas.slice(0,12).forEach(l=>r.coberturas.push({nome:clean(l),lmi:'-',premio:0})); }
+    // COMISSÃO: código CPD: xxxxxx - NNNN
+    const mcpd=/CPD:?\s*\d{4,8}\s*-\s*(\d{3,5})/i.exec(t);
+    comissaoDe(r, mcpd?parseInt(mcpd[1])/100:null, mcpd?('CPD-'+mcpd[1]):null);
+    return r;
+  }
+
+  /* ---------- HDI ---------- */
+  function hdiAuto(t){
+    const r=genericoAuto(t); r.seguradora='HDI';
+    const mn=/Nome do Segurado\s*:\s*(.+?)\s+CPF/i.exec(t); if(mn) r.segurado=clean(mn[1]).toUpperCase();
+    const mv=/Modelo\s*:\s*\d*\s*-?\s*(.+?)\s+Renavam/i.exec(t); if(mv){ r.modelo=clean(mv[1]); r.fabricante=r.modelo.split(' ')[0]; }
+    const mfipe=/C[óo]digo FIPE\s*:\s*(\d{6}-\d)/i.exec(t); if(mfipe) r.codigoFipe=mfipe[1];
+    const mano=/Ano Fabr?\.?\/?Modelo\s*:\s*(\d{4})\/(\d{4})/i.exec(t); if(mano) r.anoModelo=mano[2];
+    const me=/Endere[çc]o\s*:\s*(.+?)\s+Celular\s*:\s*\(?0?(\d{2,4})\)?\s*(\d{8,9})/i.exec(t);
+    if(me){ r.logradouro=clean(me[1]); r.celular='('+me[2].slice(-2)+') '+me[3]; }
+    const mb=/Bairro\s*:\s*(.+?)\s+Cidade\s*:\s*(.+?)\s*-\s*([A-Z]{2})\s+CEP\s*:\s*(\d{5}-?\d{3})/i.exec(t);
+    if(mb){ r.bairro=clean(mb[1]); r.cidade=clean(mb[2]); r.estado=mb[3]; r.cep=mb[4].replace(/^(\d{5})(\d{3})$/,'$1-$2'); montarEndereco(r); }
+    const mpl=/Pr[êe]mio L[íi]quido\s*:\s*([\d.]+,\d{2})/i.exec(t); if(mpl) r.premioLiquido=NUM(mpl[1]);
+    const miof=/I\.?O\.?F\.?\s*:\s*([\d.]+,\d{2})/i.exec(t); if(miof) r.iof=NUM(miof[1]);
+    const mpt=/Pr[êe]mio Total\s*:\s*([\d.]+,\d{2})/i.exec(t); if(mpt) r.premioTotal=NUM(mpt[1]);
+    const mpc=/Parcela\s*:\s*([\d.]+,\d{2})\s+Forma de Pagamento\s*:\s*(\d{1,2})\s*x/i.exec(t);
+    if(mpc){ r.valorParcela=NUM(mpc[1]); r.parcelas=parseInt(mpc[2]); }
+    const mfr=/Franquia\s*:\s*([^\n]{3,45}?)\s+(?:CEP|Regi)/i.exec(t); if(mfr) r.franquia=clean(mfr[1]);
+    const mcob=/Cobertura\s*:\s*([^\n]{3,60}?)\s+Regi[ãa]o/i.exec(t); if(mcob) r.coberturas=[{nome:clean(mcob[1]),lmi:'-',premio:0}];
+    // COMISSÃO: par NNNNNNN-NNNNNNN → primeiro grupo /100
+    const mcom=/\b(\d{7})-(\d{7})\b/.exec(t);
+    comissaoDe(r, mcom?parseInt(mcom[1])/100:null, mcom?(mcom[1]+'-'+mcom[2]):null);
+    return r;
+  }
+
+  /* ---------- PORTO SEGURO / AZUL ---------- */
+  function portoAuto(t){
+    const isRcf=/PROPOSTA DE SEGUROS AUTOM[ÓO]VEL RCF-V/i.test(t);
+    const r=genericoAuto(t);
+    r.seguradora=/AZUL TRADICIONAL|Azul Tradicional|Azul Seguros/i.test(t)?'Azul':'Porto Seguro';
+    if(isRcf){
+      const mn=/Segurado(?:\(a\))?(?:\s*\/\s*Condutor)?:?\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿ'’. ]{4,55}?)\s+(?:Nascimento|CPF|CNPJ)/.exec(t)
+        || /Condutor:?\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿ'’ ]{4,55}?)\s+CPF/.exec(t);
+      if(mn) r.segurado=clean(mn[1]);
+      const mpcond=/Principal Condutor:?\s*([A-ZÀ-Ÿ][A-ZÀ-Ÿ'’. ]{4,55}?)\s+CPF/.exec(t);
+      if(mpcond){ r.principalCondutor=clean(mpcond[1]);
+        r.condutorProprio = r.segurado ? r.principalCondutor.toUpperCase()===r.segurado.toUpperCase() : null; }
+      const mv=/Ve[íi]culo\s+Ano Fabrica[çc][ãa]o\s*\/\s*Modelo\s+Portas\/Combust[íi]vel\s+\d+\s*-\s*-?\s*(.+?)\s+(\d{4})\s*\/\s*(\d{4})\s+\d\/(\w+)/i.exec(t);
+      if(mv){ r.modelo=clean(mv[1]); r.fabricante=r.modelo.split(' ')[0]; r.anoModelo=mv[3]; r.combustivel=mv[4]; }
+      const me=/Endere[çc]o Residencial\s+(.+?)\s+Complemento\s+(\S+)\s+CEP\s+(\d{5}-?\d{3})\s+U\.?F\.?\s+([A-Z]{2})\s+Bairro\s+(.+?)\s+Cidade\s+(.+?)\s+E-?mail/i.exec(t);
+      if(me){ r.logradouro=clean(me[1]); r.numero=null; r.cep=me[3].replace(/^(\d{5})(\d{3})$/,'$1-$2'); r.estado=me[4]; r.bairro=clean(me[5]); r.cidade=clean(me[6]); montarEndereco(r); }
+      const mp=/Pr[êe]mio Total L[íi]quido:\s*IOF:\s*Pr[êe]mio Total:\s*R\$\s*([\d.]+,\d{2})\s*\+\s*R\$\s*([\d.]+,\d{2})\s*R\$\s*([\d.]+,\d{2})/i.exec(t);
+      if(mp){ r.premioLiquido=NUM(mp[1]); r.iof=NUM(mp[2]); r.premioTotal=NUM(mp[3]); }
+      const mpc=/(\d{1,2})x\s+TODAS[\s\S]{0,60}?R\$\s*([\d.]+,\d{2})/i.exec(t);
+      if(mpc){ r.parcelas=parseInt(mpc[1]); r.valorParcela=(r.premioTotal&&r.parcelas)?Math.round(r.premioTotal/r.parcelas*100)/100:NUM(mpc[2]); r.formaPagamento='Cartão'; }
+      // coberturas
+      r.coberturas=[]; const mcasco=/COMPREENSIVA\s+([\d.]+,?\d*%)\s+R\$\s*([\d.]+,\d{2})[\s\S]{0,60}?R\$\s*([\d.]+,\d{2})/i.exec(t);
+      if(mcasco) r.coberturas.push({nome:'Compreensiva (casco)',lmi:'LMI R$ '+mcasco[3]+' ('+mcasco[1]+')',premio:NUM(mcasco[2])});
+      [['DANOS MATERIAIS','RCF - Danos Materiais'],['DANOS CORPORAIS','RCF - Danos Corporais'],['DANOS MORAIS','Danos Morais']].forEach(([k,lab])=>{
+        const i=t.indexOf(k); if(i<0) return; const tr=t.slice(i,i+120); const nums=tr.match(/R\$\s*[\d.]+,\d{2}/g)||[];
+        r.coberturas.push({nome:lab,lmi:nums[0]||'-',premio:nums[1]?NUM(nums[1].replace('R$','')):0}); });
+      const mfr=/Franquia:?\s*([^\n]{3,40}?)(?:\s{2,}|Var\.|LMI|$)/i.exec(t); if(mfr) r.franquia=clean(mfr[1]);
+      comissaoDe(r,null,null); // RCF não imprime comissão
+    } else {
+      const mn=/Segurado\(a\)\s+([A-ZÀ-Ÿ0-9][A-ZÀ-Ÿ0-9'’.& ]{2,55}?)\s+(?:Nascimento|CNPJ|CPF)/.exec(t); if(mn) r.segurado=clean(mn[1]);
+      const mv=/Ve[íi]culo\s+\d+\s*-\s*-?\s*(.+?)\s+Ve[íi]culo\s+([A-Z]{3}\d[A-Z0-9]\d{2})\s+Placa\s+([A-HJ-NPR-Z0-9]{17})\s+Chassi\s+(\d{4})\s*\/\s*(\d{4})/i.exec(t);
+      if(mv){ r.modelo=clean(mv[1]); r.fabricante=r.modelo.split(' ')[0]; r.placa=mv[2]; r.chassi=mv[3]; r.anoModelo=mv[5]; }
+      const me=/Endere[çc]o residencial\s+(.+?)\s+Complemento\s+(\S+)\s+CEP\s+(\d{5}-?\d{3})\s+UF\s+([A-Z]{2})\s+Bairro\s+(.+?)\s+Cidade\s+(.+?)\s+E-?mail/i.exec(t);
+      if(me){ r.logradouro=clean(me[1]); r.cep=me[3].replace(/^(\d{5})(\d{3})$/,'$1-$2'); r.estado=me[4]; r.bairro=clean(me[5]); r.cidade=clean(me[6]); montarEndereco(r); }
+      const mp=/R\$\s*([\d.]+,\d{2})\s+R\$\s*([\d.]+,\d{2})\s+R\$\s*[\d.]+,\d{2}\s+R\$\s*[\d.]+,\d{2}\s+R\$\s*([\d.]+,\d{2})\s+(\d{1,2})x\s*R\$\s*([\d.]+,\d{2})/i.exec(t);
+      if(mp){ r.premioLiquido=NUM(mp[1]); r.iof=NUM(mp[2]); r.premioTotal=NUM(mp[3]); r.parcelas=parseInt(mp[4]); r.valorParcela=NUM(mp[5]); }
+      // coberturas
+      r.coberturas=[]; const ic=t.search(/Coberturas e servi[çc]os/i);
+      if(ic>=0){ const bloco=t.slice(ic,ic+900);
+        [['Compreensiva','Compreensiva (casco)'],['Danos materiais','RCF - Danos Materiais'],['Danos corporais','RCF - Danos Corporais'],['Danos morais','Danos Morais'],['Assist','Assistência'],['Carro reserva','Carro reserva'],['Vidros','Vidros']].forEach(([k,lab])=>{
+          const i=bloco.search(new RegExp(k,'i')); if(i<0) return; const tr=bloco.slice(i,i+150);
+          const nums=tr.match(/R\$\s*[\d.]+,\d{2}|[\d.]+,?\d*%/g)||[];
+          r.coberturas.push({nome:lab,lmi:nums.slice(0,2).join(' · ')||'-',premio:0}); }); }
+      // COMISSÃO: código de uso interno YYYYMMDD.02.NNNNC.
+      const mcom=/\.0\d\.(\d{4})C\./.exec(t);
+      let pct=null; if(mcom){ const v=parseInt(mcom[1]); pct=v>=100?v/100:(v>0?v:null); }
+      comissaoDe(r,pct,mcom?('.'+mcom[1]+'C'):null);
+    }
+    r.warnings=r.warnings.filter(w=>w!=='vigência'||!r.vigenciaInicio);
+    return r;
+  }
+
   function genericoAuto(t){
     const seg=detectarSeguradora(t);
     const r={ seguradora:seg, ramo:'Auto', warnings:[], comissaoManual:true };
@@ -514,10 +659,8 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
     const mVeic=/(?:Marca\s*\/?\s*Modelo|Marca e Modelo|Ve[íi]culo\/Modelo)\s*[:\-]?\s*([A-ZÀ-Ÿ][A-ZÀ-Ÿ0-9 ./-]{4,45})/i.exec(t);
     if(mVeic){ const cand=clean(mVeic[1]);
       if(!/segurado|c[óo]digo|marca|tipo\b|ano\b|fabri|fipe|proponente|placa/i.test(cand)){ const partes=cand.split(/\s+/); r.fabricante=partes[0]; r.modelo=cand; } }
-    // Vigência (várias formas)
-    const mVig=/(\d{2}\/\d{2}\/\d{4})\s*(?:a|até|-|à|às 24)\s*(\d{2}\/\d{2}\/\d{4})/i.exec(t)
-      || /[Vv]ig[êe]ncia[^\d]{0,30}(\d{2}\/\d{2}\/\d{4})[^\d]{0,15}(\d{2}\/\d{2}\/\d{4})/.exec(t);
-    if(mVig){ r.vigenciaInicio=mVig[1]; r.vigenciaFim=mVig[2]; } else r.warnings.push('vigência');
+    // Vigência (várias formas, inclusive "das 24h do dia X às 24h do dia Y")
+    acharVigencia(t,r);
     // Prêmios
     r.premioLiquido = premioApos(t,'Pr[êe]mio\\s*L[íi]quido');
     r.premioTotal = premioApos(t,'Pr[êe]mio\\s*Total');
@@ -537,10 +680,10 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
   /* ---------- Detecção de seguradora + roteamento ---------- */
   const TEMPLATES=[
     { nome:'Tokio Marine', ramo:'Auto', teste:t=>/Tokio Marine/i.test(t)&&/Auto/i.test(t), parse:tokioMarineAuto },
-    { nome:'Yelum / Aliro', ramo:'Auto', teste:t=>/Yelum Seguros|YELUM|ALIRO|Aliro/i.test(t), parse:genericoAuto },
-    { nome:'Bradesco', ramo:'Auto', teste:t=>/Bradesco Auto\/?Re/i.test(t), parse:genericoAuto },
-    { nome:'HDI', ramo:'Auto', teste:t=>/HDI SEGUROS|HDI Auto/i.test(t), parse:genericoAuto },
-    { nome:'Porto Seguro / Azul', ramo:'Auto', teste:t=>/PROPOSTA DE SEGUROS AUTOM[ÓO]VEL RCF-V|portoseguro\.com|AZUL TRADICIONAL|Proposta de Seguro Auto/i.test(t), parse:genericoAuto },
+    { nome:'Yelum / Aliro', ramo:'Auto', teste:t=>/Yelum Seguros|YELUM|ALIRO|Aliro/i.test(t), parse:yelumAuto },
+    { nome:'Porto Seguro / Azul', ramo:'Auto', teste:t=>/PROPOSTA DE SEGUROS AUTOM[ÓO]VEL RCF-V|portoseguro\.com|AZUL TRADICIONAL|Proposta de Seguro Auto\b/i.test(t), parse:portoAuto },
+    { nome:'Bradesco', ramo:'Auto', teste:t=>/Bradesco Auto\/?Re/i.test(t), parse:bradescoAuto },
+    { nome:'HDI', ramo:'Auto', teste:t=>/HDI SEGUROS|HDI Auto/i.test(t), parse:hdiAuto },
   ];
 
   function parseProposta(texto){
@@ -553,6 +696,12 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
     }
     const r = tpl.parse(t);
     r.reconhecido = true;
+    // sanitiza avisos: remove os que foram resolvidos pelo template
+    r.warnings=(r.warnings||[]).filter(w=>{
+      if(/vig[êe]ncia/i.test(w)) return !r.vigenciaInicio;
+      if(/pr[êe]mio/i.test(w)) return r.premioLiquido==null&&r.premioTotal==null;
+      if(/nome|CPF/i.test(w)) return !r.segurado;
+      return true; });
     r.confianca = r.warnings.length===0 ? 'alta' : (r.warnings.length<=2?'média':'baixa');
     return r;
   }
