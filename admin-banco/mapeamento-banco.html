@@ -17287,12 +17287,43 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!CTX.isAdmin) return alert('Apenas o corretor pode excluir.');
     if (!confirm(`Excluir o registro de "${quem}"?\n\nIsso apaga as respostas dessa visita e não tem desfazer.`)) return;
     try {
+      // pega o token para apagar TAMBÉM o link — senão a Cobertura da base
+      // continua contando como "apresentação gerada" (azul) um teste já excluído.
+      let token = null;
+      try { const d = await db.collection('mb_apresentacoes').doc(id).get(); if (d.exists) token = (d.data() || {}).token || null; } catch (e) {}
       await db.collection('mb_apresentacoes').doc(id).delete();
+      if (token) {
+        try { const ls = await db.collection('mb_links_apresentacao').where('token', '==', token).get(); await Promise.all(ls.docs.map(x => x.ref.delete())); } catch (e) {}
+      }
+      _COV = null;   // invalida o cache da cobertura
       flashSalvo('Registro excluído.');
       renderApresentacoes();
     } catch (e) { alert('Erro ao excluir: ' + e.message); }
   }
   window.excluirApresentacao = excluirApresentacao;
+
+  // Limpeza de dados de teste: remove LINKS de apresentação que não têm mais
+  // nenhuma apresentação correspondente (o corretor excluiu a visita, ou o link
+  // nunca foi aberto). Isso tira da Cobertura da base os "gerada" fantasmas.
+  async function limparLinksTeste() {
+    if (!CTX.isAdmin) return alert('Apenas o corretor pode limpar.');
+    try {
+      const [snapA, snapL] = await Promise.all([
+        db.collection('mb_apresentacoes').get(),
+        db.collection('mb_links_apresentacao').get()
+      ]);
+      const tokens = new Set(); snapA.forEach(d => { const t = (d.data() || {}).token; if (t) tokens.add(t); });
+      const orfaos = snapL.docs.filter(x => { const t = (x.data() || {}).token; return t && !tokens.has(t); });
+      if (!orfaos.length) return alert('Nenhum link sem apresentação encontrado — a cobertura já está limpa.');
+      if (!confirm('Encontrei ' + orfaos.length + ' link(s) de apresentação SEM nenhuma visita correspondente (testes excluídos ou links nunca abertos).\n\nRemover da Cobertura da base? Não afeta apresentações nem propostas — só limpa os "gerada" fantasmas.')) return;
+      await Promise.all(orfaos.map(x => x.ref.delete()));
+      _COV = null;
+      flashSalvo(orfaos.length + ' link(s) de teste removidos.');
+      const box = document.getElementById('apCobertura');
+      if (box && box.style.display !== 'none') { await _covCarregar(); _covRenderAp(); }
+    } catch (e) { alert('Erro ao limpar: ' + e.message); }
+  }
+  window.limparLinksTeste = limparLinksTeste;
 
   // "Nova" = o cliente interagiu (concluiu / respondeu questionário / demonstrou
   // interesse) e ninguém marcou como tratada ainda. O corretor marca visto/tratado.
@@ -19081,11 +19112,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ══════════════════════════════════════════════════════════════════
   const APCOV_CATS = {
     sem:        { cor: '#e2e8f0', label: 'Sem apresentação' },
-    gerada:     { cor: '#3b82f6', label: 'Apresentação gerada' },
+    gerada:     { cor: '#3b82f6', label: 'Link gerado (aguardando)' },
+    expirada:   { cor: '#9f1239', label: 'Link expirou (sem resposta, 120h)' },
     incompleta: { cor: '#f59e0b', label: 'Respondida incompleta' },
     completa:   { cor: '#4ade80', label: 'Apresentação completa' },
     cotacao:    { cor: '#059669', label: 'Pediu cotação' }
   };
+  const _COV_EXPIRA_MS = 120 * 3600 * 1000;   // 120 horas
+  // ms do evento mais recente (link criadoEm / apresentação atualizadoEm) — pra saber se o link expirou
+  function _covTsMs(x) {
+    const c = x.criadoEm || x.atualizadoEm || x.abertoEm || null;
+    if (!c) return 0;
+    if (typeof c.toMillis === 'function') return c.toMillis();
+    if (typeof c.toDate === 'function') return c.toDate().getTime();
+    const d = new Date(c); return isNaN(d) ? 0 : d.getTime();
+  }
   const PRCOV_CATS = {
     sem:           { cor: '#e2e8f0', label: 'Sem proposta' },
     apresentada:   { cor: '#3b82f6', label: 'Proposta apresentada' },
@@ -19134,6 +19175,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (aps.some(a => a.ultimoInteresse === 'cotar' || a.questionarioCompleto)) return 'cotacao';
     if (aps.some(a => a.concluiu)) return 'completa';
     if (aps.some(a => (a.cenasVistas > 1) || a.respostas || a.questionario)) return 'incompleta';
+    // 'gerada' sem resposta: expira 120h após o LINK mais recente (abrir sem
+    // responder não conta como resposta). Gerar um link novo ressuscita (azul).
+    let ultimoLink = 0;
+    links.forEach(l => { ultimoLink = Math.max(ultimoLink, _covTsMs(l)); });
+    if (ultimoLink && (Date.now() - ultimoLink) > _COV_EXPIRA_MS) return 'expirada';
     return 'gerada';
   }
   function _prCovStatus(empId, colId) {
@@ -19216,8 +19262,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const cols = _covColunas([..._COV.aps, ..._COV.links].map(x => x.produtoId));
     _covState.ap = { statusFn: _apCovStatus, cols, emps };
     document.getElementById('apCobertura').innerHTML = `<div style="background:white;border:1px solid #e2e8f0;border-radius:14px;padding:16px;">
-      <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:3px;">📊 Cobertura de apresentações — base × ramos</div>
-      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:12px;">Cada bolinha é o melhor estado da apresentação daquele cliente naquele ramo — ${emps.length} ${emps.length === 1 ? 'empresa' : 'empresas'} na sua visão.</div>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+        <div>
+          <div style="font-size:14px;font-weight:800;color:#0f172a;margin-bottom:3px;">📊 Cobertura de apresentações — base × ramos</div>
+          <div style="font-size:11.5px;color:#94a3b8;margin-bottom:12px;">Cada bolinha é o melhor estado da apresentação daquele cliente naquele ramo — ${emps.length} ${emps.length === 1 ? 'empresa' : 'empresas'} na sua visão.</div>
+        </div>
+        ${CTX.isAdmin ? `<button title="Remove links de apresentação sem visita correspondente (testes excluídos) para a cobertura não mostrar dado fantasma" onclick="limparLinksTeste()" style="background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;border-radius:8px;padding:6px 11px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap;">🧹 Limpar dados de teste</button>` : ''}
+      </div>
       ${_covMatrizHTML(APCOV_CATS, _apCovStatus, cols, emps)}
     </div>${_covRankingHTML('ap', _apCovStatus, cols, emps)}`;
   }
