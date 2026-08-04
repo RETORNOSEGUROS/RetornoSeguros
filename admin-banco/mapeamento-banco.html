@@ -8210,7 +8210,10 @@
   }
 
   async function entrarPorLink(token) {
-    await auth.signInAnonymously();
+    // Usa a sessão já existente se houver (ex.: admin logado em outra aba) — não a substitui.
+    // Só entra anônimo se ninguém estiver logado. Evita que abrir um ?link= desconecte o admin.
+    await new Promise(r => { const off = auth.onAuthStateChanged(() => { off(); r(); }); });
+    if (!auth.currentUser) await auth.signInAnonymously();
     const snap = await db.collection('mb_links').doc(token).get();
     if (!snap.exists) throw new Error('Token não encontrado');
     const link = snap.data();
@@ -21991,12 +21994,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   function sairModoDemo() {
-    CTX.perfilSimulado = null;
-    document.getElementById('perfilSwitcher').value = 'admin';
-    atualizarUIHeader();
-    aplicarPermissoes();
-    renderEmpresas();
-    renderRanking();
+    // Sai da simulação pelo MESMO caminho do "↩ Voltar ao admin": limpa perfil,
+    // uid e nome simulados de uma vez (limpar só o perfil deixava o uid do RM
+    // ativo nos filtros — era o bug do retorno ao admin).
+    window.trocarPerfil('admin');
   }
 
   // ============= CARREGADORES REAIS =============
@@ -22499,6 +22500,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       else { CTX.perfilSimulado = val; CTX.uidSimulado = null; CTX.nomeSimulado = null; } // fallback: só papel
     }
     perfilAtual = CTX.perfilSimulado || 'admin';
+    // Mantém o seletor "Visão" do topo sempre sincronizado (entrar pela equipe ou sair pela faixa)
+    const _sw = document.getElementById('perfilSwitcher');
+    if (_sw) _sw.value = (val === 'admin' || !val) ? 'admin' : val;
     // Faixa de aviso "agindo como"
     const faixa = document.getElementById('faixaAgindoComo');
     if (faixa) {
@@ -26042,18 +26046,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!(CTX.isAdmin && !CTX.perfilSimulado)) { alert('Apenas o administrador pode entrar na visão de outro colaborador.'); return; }
     const pessoa = EQUIPE_REAL.find(p => p.uid === uid);
     if (!pessoa) return;
-
-    if (!pessoa.linkToken) {
-      if (confirm(`${nome} ainda não tem link de acesso. Gerar agora e abrir em nova aba?`)) {
-        gerarLinkPessoal(uid, perfil, nome).then(url => {
-          if (url) setTimeout(() => window.open(url, '_blank'), 600);
-        });
-      }
-      return;
-    }
-
-    const url = `${window.location.origin}${window.location.pathname}?link=${pessoa.linkToken}`;
-    window.open(url, '_blank');
+    // Ver-como interno: assume a visão e a identidade da pessoa SEM deslogar o admin.
+    // Para voltar, use "↩ Voltar ao admin" na faixa laranja ou o seletor "Visão" do topo.
+    window.trocarPerfil(uid);
+    try { navTo('home'); } catch (e) {}
+    try { window.scrollTo(0, 0); } catch (e) {}
   }
 
   window.abrirComoEstaPessoa = abrirComoEstaPessoa;
