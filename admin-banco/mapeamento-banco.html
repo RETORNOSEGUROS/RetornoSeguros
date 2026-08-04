@@ -2353,9 +2353,6 @@
     <div class="nav-section perm-chefeplus">Gestão</div>
     <div class="nav-item perm-chefeplus" onclick="navTo('equipe')"><i data-lucide="users" class="w-4 h-4"></i> Equipe da Agência</div>
     <div class="nav-item perm-admin" onclick="navTo('config')"><i data-lucide="sliders" class="w-4 h-4"></i> Configurações</div>
-
-    <div class="nav-section" id="navInstalarSec" style="display:none;">Aplicativo</div>
-    <div class="nav-item" id="navInstalarApp" style="display:none;" onclick="pwaInstalar()"><i data-lucide="download" class="w-4 h-4"></i> Instalar como app</div>
   </nav>
   <div id="seloVersao" title="Versão publicada — confira se bate com a última que você subiu"
        style="margin-top:auto; padding:10px 14px; font-size:10.5px; color:#94a3b8; border-top:1px solid rgba(148,163,184,.18); letter-spacing:.02em;">
@@ -26101,25 +26098,73 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.head.appendChild(link);
   } catch (e) { console.warn("manifest", e); }
 
-  // ---- Instalação: item no menu lateral (rola junto, sem posição fixa) ----
+  // ---- Barra azul de rodapé (só mobile): acesso ao MENU + instalar app ----
   var rodando = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
   var ua = navigator.userAgent || "";
   var isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
   var deferred = null;
+  var DISPENSOU = false;
+  try { DISPENSOU = localStorage.getItem("pwa_dispensado") === "1"; } catch(e){}
 
-  function mostrarItem(){
-    if (rodando) return; // já está instalado/aberto como app
-    var sec = document.getElementById("navInstalarSec");
-    var it = document.getElementById("navInstalarApp");
-    if (sec) sec.style.display = "";
-    if (it) it.style.display = "";
-    if (window.lucide && lucide.createIcons) { try { lucide.createIcons(); } catch(e){} }
+  // CSS da barra (mobile only) — largura total, colada embaixo, sempre visível no rodapé.
+  // z-index baixo (30) para o menu lateral (45) e o fundo (40) cobrirem a barra quando abertos.
+  var st = document.createElement("style");
+  st.textContent =
+    "#pwaBar{display:none;}" +
+    "@media (max-width:820px){" +
+    "  body{padding-bottom:calc(58px + env(safe-area-inset-bottom)) !important;}" +
+    "  .mobile-hamburger{display:none !important;}" +
+    "  .topbar{padding-left:16px !important;}" +
+    "  #pwaBar{position:fixed;left:0;right:0;bottom:0;z-index:30;" +
+    "    display:flex;align-items:stretch;" +
+    "    background:linear-gradient(90deg,#1D4ED8,#2563EB);color:#fff;" +
+    "    box-shadow:0 -6px 22px rgba(15,23,42,.28);" +
+    "    padding-bottom:env(safe-area-inset-bottom);" +
+    "    font-family:'Plus Jakarta Sans',system-ui,sans-serif;" +
+    "    -webkit-tap-highlight-color:transparent;touch-action:manipulation;}" +
+    "  #pwaBar .pwa-menu{flex:1;display:flex;align-items:center;justify-content:center;gap:9px;" +
+    "    background:transparent;border:none;color:#fff;font-weight:700;font-size:16px;" +
+    "    padding:16px 12px;cursor:pointer;}" +
+    "  #pwaBar .pwa-menu .b{font-size:21px;line-height:1;}" +
+    "  #pwaBar .pwa-cta{flex:0 0 auto;display:flex;align-items:center;gap:7px;" +
+    "    background:rgba(255,255,255,.16);border:none;border-left:1px solid rgba(255,255,255,.28);" +
+    "    color:#fff;padding:0 16px;font-weight:700;font-size:13.5px;cursor:pointer;}" +
+    "  #pwaBar .pwa-x{flex:0 0 auto;background:rgba(255,255,255,.16);border:none;" +
+    "    border-left:1px solid rgba(255,255,255,.28);color:rgba(255,255,255,.9);" +
+    "    font-size:16px;padding:0 14px;cursor:pointer;}" +
+    "}";
+  document.head.appendChild(st);
+
+  function temInstalar(){ return !rodando && !DISPENSOU; }
+
+  function montarBarra(){
+    if (document.getElementById("pwaBar")) return;
+    var bar = document.createElement("div");
+    bar.id = "pwaBar";
+    var html = '<button class="pwa-menu" id="pwaMenuBtn"><span class="b">☰</span> Menu</button>';
+    if (temInstalar()) {
+      html += '<button class="pwa-cta" id="pwaCta">📲 Instalar app</button>'
+           +  '<button class="pwa-x" id="pwaX" aria-label="Dispensar instalação">✕</button>';
+    }
+    bar.innerHTML = html;
+    document.body.appendChild(bar);
+    document.getElementById("pwaMenuBtn").onclick = function(){
+      if (typeof window.toggleSidebar === "function") window.toggleSidebar();
+    };
+    var cta = document.getElementById("pwaCta");
+    if (cta) cta.onclick = window.pwaInstalar;
+    var x = document.getElementById("pwaX");
+    if (x) x.onclick = function(){
+      DISPENSOU = true; try { localStorage.setItem("pwa_dispensado","1"); } catch(e){}
+      remontarBarra(); // reconstrói só com o Menu
+    };
   }
-  function esconderItem(){
-    var sec = document.getElementById("navInstalarSec");
-    var it = document.getElementById("navInstalarApp");
-    if (sec) sec.style.display = "none";
-    if (it) it.style.display = "none";
+  function remontarBarra(){
+    var bar = document.getElementById("pwaBar"); if (bar) bar.remove();
+    montarBarra();
+  }
+  function esconderInstalar(){ // instalou: mantém a barra, tira o botão instalar
+    rodando = true; remontarBarra();
   }
 
   function modalIOS(){
@@ -26139,12 +26184,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (ok) ok.onclick = function(){ ov.remove(); };
   }
 
-  // Função chamada pelo item do menu
+  // Ação do botão "Instalar app" da barra
   window.pwaInstalar = function(){
     if (deferred) {
       deferred.prompt();
       deferred.userChoice.then(function(r){
-        if (r && r.outcome === "accepted") esconderItem();
+        if (r && r.outcome === "accepted") esconderInstalar();
         deferred = null;
       });
     } else {
@@ -26155,13 +26200,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.addEventListener("beforeinstallprompt", function(e){
     e.preventDefault();
     deferred = e;
-    mostrarItem();
+    remontarBarra(); // garante o botão instalar presente
   });
-  window.addEventListener("appinstalled", function(){ rodando = true; esconderItem(); });
+  window.addEventListener("appinstalled", esconderInstalar);
 
-  // Mostra o item para todo mundo que ainda não instalou (Android com prompt já foi acima;
-  // iOS e demais aparecem aqui, com a instrução manual).
-  if (!rodando) setTimeout(mostrarItem, 800);
+  // A barra (com o Menu) fica sempre no mobile; o desktop esconde via CSS.
+  if (document.body) montarBarra();
+  else document.addEventListener("DOMContentLoaded", montarBarra);
 })();
 </script>
 
