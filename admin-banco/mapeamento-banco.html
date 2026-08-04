@@ -9346,6 +9346,53 @@
     return Math.floor((Date.now() - dt.getTime()) / 86400000);
   }
 
+  // ===== BÔNUS DE VELOCIDADE =====
+  // Pago quando a etapa é CONCLUÍDA, conforme quanto do prazo dela foi usado:
+  //   • até 33% do prazo  → cada item de checklist marcado vale o ponto normal + 2 de bônus
+  //   • 34% a 66%         → ponto normal + 1 de bônus por item
+  //   • 67% em diante     → só o ponto normal (sem bônus)
+  // O bônus vai para QUEM MARCOU cada item. ID determinístico: nunca paga duas vezes
+  // a mesma etapa para a mesma pessoa (reprocessar/reabrir não duplica).
+  async function pagarBonusVelocidade(c, statusSaiu) {
+    try {
+      if (!c || !ehStatusAtivo(statusSaiu)) return;
+      const prazo = (PRAZOS_CACHE && PRAZOS_CACHE[statusSaiu]) || (etapaInfo(statusSaiu) || {}).prazoDias || 0;
+      if (!prazo) return;
+      const dias = diasNaEtapa(c);   // c.status ainda é a etapa que está sendo concluída
+      // Faixas em terços exatos do prazo (ex.: prazo 15d → até 5d: +2/item; 6-10d: +1; depois: 0)
+      const bonusPorItem = (dias * 3 <= prazo) ? 2 : ((dias * 3 <= prazo * 2) ? 1 : 0);
+      if (!bonusPorItem) return;
+      const base = getPonto('checklist_item') || 1;
+      // agrupa os itens DESTA etapa por quem os marcou
+      const porUid = {};
+      Object.keys(c.checklistFeito || {}).forEach(k => {
+        if (k.indexOf(statusSaiu + '|') !== 0) return;
+        const f = c.checklistFeito[k];
+        if (!f || !f.porUid) return;
+        porUid[f.porUid] = porUid[f.porUid] || { nome: f.porNome || '—', n: 0 };
+        porUid[f.porUid].n++;
+      });
+      if (!Object.keys(porUid).length) return;
+      const etq = etapaInfo(statusSaiu);
+      for (const uid of Object.keys(porUid)) {
+        const p = porUid[uid];
+        await db.collection('mb_acoes').doc('bvel_' + c.id + '_' + statusSaiu + '_' + uid).set({
+          tipo: 'bonus_velocidade',
+          empresaId: c.empresaId, empresaNome: c.empresaNome,
+          produto: c.produtoId, produtoNome: c.produtoNome,
+          cotacaoId: c.id, agenciaId: c.agenciaId || CTX.agenciaId,
+          etapa: statusSaiu, etapaLabel: (etq && etq.label) || statusSaiu,
+          usuarioId: uid, usuarioNome: p.nome,
+          pontos: bonusPorItem * base * p.n,
+          motivo: `⚡ Etapa "${(etq && etq.label) || statusSaiu}" concluída em ${dias}d de ${prazo}d — bônus de velocidade (${p.n} ${p.n === 1 ? 'item' : 'itens'} × +${bonusPorItem * base})`,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+      _ACOES_CACHE = null;
+    } catch (e) { console.warn('bonus velocidade', e); }
+  }
+  window.pagarBonusVelocidade = pagarBonusVelocidade;
+
   async function verificarCotacoesVencidas() {
     if (!CTX.agenciaId) return;
     if (!PRAZOS_CACHE) await carregarPrazos();
@@ -12423,6 +12470,7 @@
     percurso_completo: { icon: '🔁', txt: 'Percurso completo até a transmissão' },
     ok_transmissao: { icon: '🏁', txt: 'OK para transmissão' },
     originou_transmitido: { icon: '🌱', txt: 'Negócio que você trouxe chegou na transmissão' },
+    bonus_velocidade: { icon: '⚡', txt: 'Bônus de velocidade — etapa concluída dentro do prazo' },
     penalidade_inatividade: { icon: '⏰', txt: 'Negócio parado além do prazo' },
     fechamento: { icon: '📜', txt: 'Emitiu / fechou negócio' },
     plus_originacao: { icon: '⭐', txt: 'Originou negócio que fechou' },
@@ -12446,6 +12494,7 @@
     contato_decisor: { icon: '📧', txt: 'Cadastrou contato do decisor' },
     contato_rh: { icon: '🧑‍💼', txt: 'Cadastrou contato do RH' },
     checklist_item: { icon: '✓', txt: 'Marcou item de checklist' },
+    bonus_velocidade: { icon: '⚡', txt: 'Bônus de velocidade' },
     visita: { icon: '📍', txt: 'Registrou visita' },
     pesquisa_gerada: { icon: '📋', txt: 'Gerou pesquisa de benefícios' },
     pesquisa_resposta: { icon: '🗳️', txt: 'Resposta recebida na pesquisa' },
@@ -14632,6 +14681,8 @@
   // Admin: voltar cotação para uma etapa anterior (ou reabrir uma finalizada)
   async function voltarEtapaCotacao(c, novoStatus, motivo) {
     try {
+      // Avanço sem modal (etapas sem ação própria): paga o bônus de velocidade da etapa concluída
+      if (motivo === 'Avançou de etapa') { try { await pagarBonusVelocidade(c, c.status); } catch (e) {} }
       const upd = {
         status: novoStatus,
         etapa: novoStatus,
@@ -23835,7 +23886,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                         (e.rm && MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) ||
                         pd.ultimoAutorNome || null;
         const _credito = _credUid ? { uid: _credUid, nome: _credNome || 'RM', perfil: (_credMembro && _credMembro.perfil) || 'rm' } : null;
-        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || null, observacoes: obs.join(' · '), vencimentoRef: ciclo, credito: _credito });
+        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || pd.valorAnualPago || pd.valorFechado || null, observacoes: obs.join(' · '), vencimentoRef: ciclo, credito: _credito });
         if (id) {
           try { await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(ramoId).set({ renovacaoAutoCiclo: ciclo }, { merge: true }); } catch (err) {}
           if (e.produtosDados[ramoId]) e.produtosDados[ramoId].renovacaoAutoCiclo = ciclo;
@@ -24110,6 +24161,37 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             </div>`;
           })()}
 
+          ${c.status === 'fechada' ? `
+            <div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7); border:1px solid #86efac; border-radius:11px; padding:13px 16px; margin-bottom:14px;">
+              <div style="font-size:13px; font-weight:800; color:#166534; margin-bottom:6px;">💎 Negócio emitido</div>
+              <div style="font-size:12.5px; color:#15803d; line-height:1.7;">
+                ${(c.vigenciaInicio || c.vigenciaFim) ? `📅 Vigência: <strong>${c.vigenciaInicio || '—'}</strong> → <strong>${c.vigenciaFim || '—'}</strong><br>` : ''}
+                ${c.seguradora ? `🏢 Seguradora: <strong>${c.seguradora}</strong><br>` : ''}
+                ${c.valor ? `💰 Prêmio: <strong>${fmtBR(c.valor)}</strong><br>` : ''}
+                ${c.fechadoPorNome ? `✍️ Emitido por: <strong>${c.fechadoPorNome}</strong>` : ''}
+                ${c.dataDecisao ? ` · ${fmtDataCurta(c.dataDecisao)}` : ''}
+              </div>
+            </div>` : ''}
+
+          ${(c.status === 'perdida' || c.status === 'sem_aceitacao') ? (() => {
+            const mLbl = { preco: 'Preço acima da concorrência', cobertura: 'Cobertura não atende', prazo: 'Cliente desistiu / sem prazo', confianca: 'Confia na corretora atual', sem_aceitacao: 'Seguradora não aceitou o risco', falta_interacao: 'Cancelada por falta de interação', outro: 'Outro' };
+            const rLbl = { fechou_outro: 'Renovou/fechou com outra corretora ou seguradora', reagendar: 'Não fechou com ninguém — retomada agendada', sem_interesse: 'Sem interesse em novo contato', nao_justificou: 'Cliente não justificou — sem retorno' };
+            const quem = c.declinadoPorNome || c.declinioPedidoPorNome || null;
+            return `
+            <div style="background:linear-gradient(135deg,#fef2f2,#fee2e2); border:1px solid #fca5a5; border-radius:11px; padding:13px 16px; margin-bottom:14px;">
+              <div style="font-size:13px; font-weight:800; color:#991b1b; margin-bottom:6px;">✗ Não fechou</div>
+              <div style="font-size:12.5px; color:#b91c1c; line-height:1.7;">
+                ${c.resultadoPerda && rLbl[c.resultadoPerda] ? `${rLbl[c.resultadoPerda]}<br>` : ''}
+                ${c.motivoPerda ? `📋 Motivo: <strong>${mLbl[c.motivoPerda] || c.motivoPerda}</strong><br>` : ''}
+                ${(c.reagendarMes && c.reagendarAno) ? `🔁 Retomar em: <strong>${String(c.reagendarMes).padStart(2, '0')}/${c.reagendarAno}</strong><br>` : ''}
+                ${c.seguradoraVencedora ? `🏢 Fechou com: <strong>${c.seguradoraVencedora}</strong>${c.valorConcorrente ? ' por <strong>' + fmtBR(c.valorConcorrente) + '</strong>' : ''}<br>` : ''}
+                ${(!c.seguradoraVencedora && c.seguradoraAtualCliente) ? `🏢 Está hoje com: <strong>${c.seguradoraAtualCliente}</strong><br>` : ''}
+                ${quem ? `✍️ Declinado por: <strong>${quem}</strong>` : ''}
+                ${c.dataDecisao ? ` · ${fmtDataCurta(c.dataDecisao)}` : ''}
+              </div>
+            </div>`;
+          })() : ''}
+
           ${(c.declinioPedido && ativa) ? `
             <div style="background:linear-gradient(135deg,#fef2f2,#fee2e2); border:1px solid #f87171; border-radius:11px; padding:14px 16px; margin-bottom:14px;">
               <div style="font-size:13px; font-weight:800; color:#991b1b;">🚩 Pedido de declínio</div>
@@ -24188,6 +24270,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div class="cad-modal-foot">
           ${CTX.isAdmin ? `<button class="btn-secondary" style="margin-right:auto; color:#ef4444; border-color:#fecaca;" onclick="excluirCotacaoAdmin('${c.id}')">🗑 Excluir</button>` : ''}
+          <button class="btn-secondary" style="color:#4338ca; border-color:#c7d2fe;" onclick="abrirDossieNegocio('${c.id}')">📄 Dossiê</button>
           <button class="btn-secondary" onclick="document.getElementById('modalNegociacao').remove()">Fechar</button>
         </div>
       </div>`;
@@ -24491,6 +24574,168 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.avancarEtapaNegociacao = avancarEtapaNegociacao;
   window.acaoNegociacao = acaoNegociacao;
+
+  // ===== DOSSIÊ DO NEGÓCIO =====
+  // Uma tela (e um PDF) com TUDO que aconteceu: etapas percorridas, checklist marcado
+  // e não marcado por etapa, evolução dos valores, comentários e desfecho. Pensado
+  // para negócios fechados e perdidos ("o que passou e o que ficou de fora"), mas
+  // funciona em qualquer etapa.
+  function _dossieDados(c) {
+    const feito = c.checklistFeito || {};
+    // etapas que o negócio percorreu (pelo histórico + itens marcados + status atual)
+    const passou = new Set([c.status]);
+    (Array.isArray(c.historico) ? c.historico : []).forEach(h => { if (h && h.status) passou.add(h.status); });
+    Object.keys(feito).forEach(k => { const s = k.split('|')[0]; if (s) passou.add(s); });
+    const etapas = ETAPAS_FUNIL.map(et => {
+      const padrao = (et.checklist || []).map(_normItem);
+      const extras = (((CHECKLIST_EXTRA[c.produtoId] || {})[et.id]) || []).map(_normItem);
+      const itens = padrao.map((it, i) => ({ txt: it.txt || it.texto || String(it), key: et.id + '|p' + i }))
+        .concat(extras.map((it, i) => ({ txt: (it.txt || it.texto || String(it)) + ' (extra)', key: et.id + '|e' + i })));
+      return {
+        id: et.id, label: et.label, icon: et.icon || '', percorrida: passou.has(et.id),
+        itens: itens.map(it => {
+          const m = feito[it.key];
+          return { txt: it.txt, marcado: !!m, por: m ? (m.porNome || '') : null, em: m ? m.em : null };
+        })
+      };
+    });
+    const valores = (Array.isArray(c.valorHistorico) ? c.valorHistorico : []).slice()
+      .sort((a, b) => (new Date(a.em || 0)) - (new Date(b.em || 0)));
+    const passos = (Array.isArray(c.historico) ? c.historico : []).slice()
+      .sort((a, b) => (new Date(a.em || 0)) - (new Date(b.em || 0)));
+    return { etapas, valores, passos };
+  }
+
+  async function abrirDossieNegocio(cotacaoId) {
+    const c = COTACOES.find(x => x.id === cotacaoId);
+    if (!c) return;
+    let comentarios = [];
+    try {
+      const snap = await db.collection('mb_cotacoes').doc(cotacaoId).collection('comentarios').get();
+      snap.forEach(d => comentarios.push(d.data()));
+      comentarios.sort((a, b) => (_toDate(a.em) || 0) - (_toDate(b.em) || 0));
+    } catch (e) {}
+    const D = _dossieDados(c);
+    window._DOSSIE = { c, D, comentarios };
+
+    const si = STATUS_COTACAO[c.status] || {};
+    const vIni = D.valores.length ? D.valores[0].valor : (c.valorProposto || null);
+    const vFim = c.status === 'fechada' ? (c.valor || null) : (D.valores.length ? D.valores[D.valores.length - 1].valor : (c.valorProposto || null));
+    const mLbl = { preco: 'Preço', cobertura: 'Cobertura', prazo: 'Cliente desistiu', confianca: 'Confia na atual', sem_aceitacao: 'Seguradora não aceitou', falta_interacao: 'Falta de interação', outro: 'Outro' };
+
+    const etapasHtml = D.etapas.map(et => {
+      const nOk = et.itens.filter(i => i.marcado).length;
+      const linhas = et.itens.map(i => `
+        <div style="display:flex; gap:8px; align-items:baseline; font-size:12.5px; padding:2px 0; color:${i.marcado ? '#166534' : '#b91c1c'};">
+          <span>${i.marcado ? '✅' : '⬜'}</span>
+          <span style="flex:1;">${i.txt}</span>
+          ${i.marcado ? `<span style="font-size:10.5px; color:#94a3b8;">${i.por || ''}${i.em ? ' · ' + fmtDataCurta(i.em) : ''}</span>` : '<span style="font-size:10.5px; color:#f87171;">não marcado</span>'}
+        </div>`).join('') || '<div style="font-size:12px; color:#94a3b8;">Sem itens de checklist nesta etapa.</div>';
+      return `
+        <div style="border:1px solid ${et.percorrida ? '#e2e8f0' : '#fde68a'}; border-radius:10px; padding:10px 13px; margin-bottom:8px; ${et.percorrida ? '' : 'background:#fffbeb;'}">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <div style="font-size:13px; font-weight:800; color:#0f172a;">${et.icon} ${et.label}</div>
+            <div style="font-size:11px; font-weight:700; color:${et.percorrida ? '#16a34a' : '#b45309'};">${et.percorrida ? `percorrida · ${nOk}/${et.itens.length} itens` : '⚠ não percorrida'}</div>
+          </div>
+          ${linhas}
+        </div>`;
+    }).join('');
+
+    const valoresHtml = D.valores.length ? D.valores.map(v => `
+      <div style="font-size:12.5px; color:#334155; padding:2px 0;">💰 <strong>${fmtBR(v.valor)}</strong> em "${v.etapaLabel || v.etapa}" · ${fmtDataCurta(v.em)}${v.porNome ? ' · ' + v.porNome : ''}</div>`).join('')
+      : '<div style="font-size:12px; color:#94a3b8;">Sem registros de valor.</div>';
+
+    const comentsHtml = comentarios.length ? comentarios.map(cm => `
+      <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:8px; padding:7px 10px; margin-bottom:6px;">
+        <div style="font-size:12.5px; color:#334155;">${(cm.texto || '').replace(/</g, '&lt;')}</div>
+        <div style="font-size:10.5px; color:#94a3b8; margin-top:2px;">${cm.autorNome || ''}${cm.em ? ' · ' + fmtDataCurta(cm.em) : ''}</div>
+      </div>`).join('') : '<div style="font-size:12px; color:#94a3b8;">Sem comentários.</div>';
+
+    const old = document.getElementById('modalDossie'); if (old) old.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modalDossie';
+    modal.className = 'cad-modal open';
+    modal.innerHTML = `
+      <div class="cad-modal-box" style="max-width:640px;">
+        <div class="cad-modal-head" style="background:linear-gradient(135deg,#312e81,#4338ca);">
+          <div>
+            <h3 style="color:white;">📄 Dossiê — ${c.produtoIcon || ''} ${c.produtoNome}</h3>
+            <div style="font-size:12px; color:#c7d2fe;">${c.empresaNome} · ${si.icon || ''} ${si.label || c.status}</div>
+          </div>
+          <button class="cad-modal-close" onclick="document.getElementById('modalDossie').remove()">×</button>
+        </div>
+        <div class="cad-modal-body">
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:11px 14px; margin-bottom:14px; font-size:12.5px; color:#334155; line-height:1.8;">
+            ${c.solicitadoPorNome ? `🤝 Trouxe o negócio: <strong>${c.solicitadoPorNome}</strong><br>` : ''}
+            ${vIni ? `📈 Valor: começou em <strong>${fmtBR(vIni)}</strong>${vFim && Math.abs(vFim - vIni) >= 0.01 ? ` → terminou em <strong>${fmtBR(vFim)}</strong>` : ''}<br>` : ''}
+            ${c.status === 'fechada' ? `💎 <strong>Emitido</strong>${c.seguradora ? ' na ' + c.seguradora : ''}${c.vigenciaInicio ? ' · vigência ' + c.vigenciaInicio + ' → ' + (c.vigenciaFim || '—') : ''}` : ''}
+            ${(c.status === 'perdida' || c.status === 'sem_aceitacao') ? `✗ <strong>Não fechou</strong>${c.motivoPerda ? ' — ' + (mLbl[c.motivoPerda] || c.motivoPerda) : ''}${(c.reagendarMes && c.reagendarAno) ? ' · retomar em ' + String(c.reagendarMes).padStart(2, '0') + '/' + c.reagendarAno : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}` : ''}
+          </div>
+          <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:8px;">📋 Checklist por etapa — o que passou e o que ficou de fora</div>
+          ${etapasHtml}
+          <div style="font-size:13px; font-weight:800; color:#0f172a; margin:14px 0 6px;">💰 Evolução do valor</div>
+          ${valoresHtml}
+          <div style="font-size:13px; font-weight:800; color:#0f172a; margin:14px 0 6px;">💬 Comentários (${comentarios.length})</div>
+          ${comentsHtml}
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-primary" onclick="baixarDossiePDF()">⬇ Baixar PDF</button>
+          <button class="btn-secondary" onclick="document.getElementById('modalDossie').remove()">Fechar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  window.abrirDossieNegocio = abrirDossieNegocio;
+
+  function baixarDossiePDF() {
+    if (!window._DOSSIE) return;
+    if (!window.jspdf || !window.jspdf.jsPDF) return alert('Biblioteca de PDF não carregou. Recarregue a página e tente de novo.');
+    const { c, D, comentarios } = window._DOSSIE;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W = 210, MG = 16, LW = W - MG * 2;
+    let y = 18;
+    const nl = (h) => { y += h; if (y > 278) { doc.addPage(); y = 18; } };
+    const txt = (s, size, bold, cor) => {
+      doc.setFontSize(size); doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setTextColor.apply(doc, cor || [30, 41, 59]);
+      const linhas = doc.splitTextToSize(s, LW);
+      linhas.forEach(l => { doc.text(l, MG, y); nl(size * 0.45 + 1.2); });
+    };
+    const si = STATUS_COTACAO[c.status] || {};
+    const dtStr = new Date().toLocaleDateString('pt-BR');
+    txt('DOSSIÊ DO NEGÓCIO', 16, true, [49, 46, 129]); nl(1);
+    txt(`${c.produtoNome} — ${c.empresaNome}`, 12, true);
+    txt(`Status: ${si.label || c.status} · Gerado em ${dtStr}`, 10, false, [100, 116, 139]); nl(3);
+    if (c.solicitadoPorNome) txt(`Trouxe o negócio: ${c.solicitadoPorNome}`, 10);
+    const vIni = D.valores.length ? D.valores[0].valor : (c.valorProposto || null);
+    const vFim = c.status === 'fechada' ? (c.valor || null) : (D.valores.length ? D.valores[D.valores.length - 1].valor : null);
+    if (vIni) txt(`Valor: começou em ${fmtBR(vIni)}${vFim && Math.abs(vFim - vIni) >= 0.01 ? ' — terminou em ' + fmtBR(vFim) : ''}`, 10);
+    if (c.status === 'fechada') txt(`EMITIDO${c.seguradora ? ' na ' + c.seguradora : ''}${c.vigenciaInicio ? ' · vigência ' + c.vigenciaInicio + ' a ' + (c.vigenciaFim || '—') : ''}${c.valor ? ' · prêmio ' + fmtBR(c.valor) : ''}`, 10, true, [22, 101, 52]);
+    if (c.status === 'perdida' || c.status === 'sem_aceitacao') txt(`NÃO FECHOU${c.motivoPerda ? ' — motivo: ' + c.motivoPerda : ''}${(c.reagendarMes && c.reagendarAno) ? ' · retomar em ' + String(c.reagendarMes).padStart(2, '0') + '/' + c.reagendarAno : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · declinado por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}`, 10, true, [153, 27, 27]);
+    nl(4);
+    txt('CHECKLIST POR ETAPA', 12, true, [49, 46, 129]); nl(1);
+    D.etapas.forEach(et => {
+      const nOk = et.itens.filter(i => i.marcado).length;
+      txt(`${et.label} — ${et.percorrida ? 'percorrida · ' + nOk + '/' + et.itens.length + ' itens' : 'NÃO PERCORRIDA'}`, 10.5, true, et.percorrida ? [15, 23, 42] : [180, 83, 9]);
+      et.itens.forEach(i => {
+        txt(`   ${i.marcado ? '[x]' : '[  ]'} ${i.txt}${i.marcado ? '  — ' + (i.por || '') + (i.em ? ' em ' + fmtDataCurta(i.em) : '') : '  — não marcado'}`, 9.5, false, i.marcado ? [22, 101, 52] : [153, 27, 27]);
+      });
+      nl(1.5);
+    });
+    nl(2);
+    txt('LINHA DO TEMPO', 12, true, [49, 46, 129]); nl(1);
+    D.passos.forEach(p => txt(`${fmtDataCurta(p.em)} — ${p.label || p.status}${p.por ? ' · ' + p.por : ''}${p.obs ? ' · ' + p.obs : ''}`, 9.5));
+    if (D.valores.length) {
+      nl(2); txt('EVOLUÇÃO DO VALOR', 12, true, [49, 46, 129]); nl(1);
+      D.valores.forEach(v => txt(`${fmtDataCurta(v.em)} — ${fmtBR(v.valor)} em "${v.etapaLabel || v.etapa}"${v.porNome ? ' · ' + v.porNome : ''}`, 9.5));
+    }
+    nl(2); txt(`COMENTÁRIOS (${comentarios.length})`, 12, true, [49, 46, 129]); nl(1);
+    if (!comentarios.length) txt('Sem comentários.', 9.5, false, [100, 116, 139]);
+    comentarios.forEach(cm => txt(`${fmtDataCurta(cm.em)} — ${cm.autorNome || ''}: ${cm.texto || ''}`, 9.5));
+    doc.save(`dossie-${(c.empresaNome || 'negocio').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${c.produtoId || ''}.pdf`);
+  }
+  window.baixarDossiePDF = baixarDossiePDF;
 
   function abrirTimelineNegocio(cotacaoId) {
     const c = COTACOES.find(x => x.id === cotacaoId);
@@ -25015,7 +25260,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const update = { atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() };
     // Quando o corretor CONFIRMA um declínio pedido por outra pessoa, os pontos
     // são de quem PEDIU — foi ela que trouxe a informação do cliente.
-    const _creditaA = (acao === 'perder' && CTX.isAdmin && c.declinioPedido && c.declinioPedidoPorUid)
+    const _creditaA = (acao === 'perder' && ehCorretorReal() && c.declinioPedido && c.declinioPedidoPorUid)
       ? { uid: c.declinioPedidoPorUid, nome: c.declinioPedidoPorNome || '—', perfil: c.declinioPedidoPerfil || '' }
       : { uid: autorUid(), nome: autorNome(), perfil: CTX.perfilSimulado || CTX.perfil };
     const acaoLog = {
@@ -25176,7 +25421,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const motivo = document.getElementById('acaoMotivo').value;
         // Quem não é corretor PEDE o declínio; o corretor confirma. Assim nada é
         // encerrado por engano, e o card avisa sozinho (vermelho pulsando) no kanban.
-        if (!CTX.isAdmin) {
+        if (!ehCorretorReal()) {
           update.declinioPedido = true;
           update.declinioPedidoPorUid = autorUid();
           update.declinioPedidoPorNome = autorNome();
@@ -25202,6 +25447,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         update.etapa = 9;
         update.motivoPerda = motivo;
         update.resultadoPerda = resultado;
+        // quem efetivamente declinou (quem pediu, se houve pedido; senão o corretor)
+        update.declinadoPorUid = _creditaA.uid; update.declinadoPorNome = _creditaA.nome;
+        {
+          const _rm2 = parseInt((document.getElementById('acaoReagMes') || {}).value) || null;
+          const _ra2 = parseInt((document.getElementById('acaoReagAno') || {}).value) || null;
+          if (resultado === 'reagendar' && _rm2 && _ra2) { update.reagendarMes = _rm2; update.reagendarAno = _ra2; }
+        }
         update.observacoes = obs;
         update.dataDecisao = firebase.firestore.FieldValue.serverTimestamp();
         const segV = (document.getElementById('acaoSegVencedora') || {}).value || '';
@@ -25292,6 +25544,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         por: CTX.nome || null,
         em: new Date().toISOString()
       });
+
+      // BÔNUS DE VELOCIDADE: pago no momento em que a etapa é concluída (avanço/fechamento),
+      // olhando quanto do prazo da etapa foi usado. Declínio não paga.
+      if (acao !== 'perder') { try { await pagarBonusVelocidade(c, c.status); } catch (e) {} }
 
       await db.collection('mb_cotacoes').doc(c.id).update(update);
       await db.collection('mb_acoes').add(acaoLog);
