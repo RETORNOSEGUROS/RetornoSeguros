@@ -3230,7 +3230,15 @@
 
       <!-- VISÃO KANBAN -->
       <div id="cotacoesKanbanView">
-        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">💡 Arraste os cards para a próxima etapa. Cada avanço pede as informações necessárias.</div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+          <div style="font-size: 12px; color: #94a3b8; flex:1; min-width:220px;">💡 Arraste os cards para a próxima etapa. Cada avanço pede as informações necessárias.</div>
+          <select class="form-control" id="kanFiltroRm" onchange="renderKanban()" style="width:auto; min-width:150px; font-size:12.5px; padding:6px 10px; display:none;">
+            <option value="">👥 Todos os RMs</option>
+          </select>
+          <select class="form-control" id="kanFiltroRamo" onchange="renderKanban()" style="width:auto; min-width:150px; font-size:12.5px; padding:6px 10px;">
+            <option value="">🏷 Todos os ramos</option>
+          </select>
+        </div>
         <div class="kanban" id="kanbanWrap"></div>
       </div>
 
@@ -5037,6 +5045,15 @@
     return (typeof CTX !== 'undefined' && CTX.uid) || null;
   }
   window.uidEfetivo = uidEfetivo;
+
+  // Corretor DE VERDADE: admin fora do modo "ver como". É quem valida avanços de
+  // etapa, desmarca checklist, confirma declínio etc. Usar CTX.isAdmin direto nesses
+  // portões era bug: no "ver como" o isAdmin continua true e a simulação se
+  // comportava como corretor (ex.: avançava etapa sem validação).
+  function ehCorretorReal() {
+    return !!(typeof CTX !== 'undefined' && CTX.isAdmin && !CTX.perfilSimulado);
+  }
+  window.ehCorretorReal = ehCorretorReal;
 
   // Autoria de AÇÕES: quando o admin está "agindo como" alguém, credita àquela pessoa.
   // Assim registrar visita/mapear/gerar link na visão do RM conta para o RM, não para o admin.
@@ -14383,6 +14400,35 @@
     // Admin e chefe veem o RM em cada card — ajuda a bater o olho na agência toda.
     // Pro RM não faz sentido (é tudo dele) e só ocuparia espaço.
     const _vejoRmNoCard = ['admin', 'chefe'].includes(perfilEfetivo());
+
+    // ---- Filtros do kanban (RM · ramo) ----
+    const selRm = document.getElementById('kanFiltroRm');
+    const selRamo = document.getElementById('kanFiltroRamo');
+    if (selRm) {
+      // RM: só faz sentido pra quem vê a agência toda
+      selRm.style.display = _vejoRmNoCard ? '' : 'none';
+      if (selRm.options.length <= 1) {
+        const uids = Object.keys(MAPA_RMS || {});
+        selRm.innerHTML = '<option value="">👥 Todos os RMs</option>' +
+          uids.map(u => `<option value="${u}">${(MAPA_RMS[u] || {}).nome || 'RM'}</option>`).join('');
+      }
+    }
+    if (selRamo && selRamo.options.length <= 1) {
+      // Só ramos que têm negócio no funil — lista curta e útil
+      const usados = {};
+      (COTACOES || []).forEach(c => { if (c.produtoId) usados[c.produtoId] = c.produtoIcon || ''; });
+      selRamo.innerHTML = '<option value="">🏷 Todos os ramos</option>' +
+        Object.keys(usados).map(pid => {
+          const p = (PRODUTOS || []).find(x => x.id === pid) || {};
+          return `<option value="${pid}">${p.icon || usados[pid] || ''} ${p.nome || pid}</option>`;
+        }).join('');
+    }
+    const fRm = (selRm && _vejoRmNoCard && selRm.value) || '';
+    const fRamo = (selRamo && selRamo.value) || '';
+    let LISTA_K = COTACOES || [];
+    if (fRm) LISTA_K = LISTA_K.filter(c => empresaRmDe(c.empresaId) === fRm || c.solicitadoPorUid === fRm);
+    if (fRamo) LISTA_K = LISTA_K.filter(c => c.produtoId === fRamo);
+
     const colunas = ETAPAS_FUNIL.map(e => ({ id: e.id, nome: e.label, cor: e.cor }))
       .concat([
         { id: 'fechada', nome: 'Fechada 💎', cor: '#10b981' },
@@ -14404,8 +14450,8 @@
     wrap.innerHTML = colunas.map(col => {
       // "perdida" inclui status perdida E sem_aceitacao
       const cards = col.id === 'perdida'
-        ? COTACOES.filter(c => c.status === 'perdida' || c.status === 'sem_aceitacao')
-        : COTACOES.filter(c => c.status === col.id);
+        ? LISTA_K.filter(c => c.status === 'perdida' || c.status === 'sem_aceitacao')
+        : LISTA_K.filter(c => c.status === col.id);
       const valorCol = cards.reduce((s,c) => s + (c.valor || c.valorProposto || 0), 0);
       const cardsHtml = cards.map(c => {
         const dias = diasNaEtapa(c);
@@ -14436,7 +14482,7 @@
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
             ${motivoTxt}
-            ${_pedeDecl ? '<div class="selo-validacao selo-declinio">🚩 pediu declínio</div>' : (_aguarda ? '<div class="selo-validacao">⏳ aguarda sua validação</div>' : '')}
+            ${_pedeDecl ? '<div class="selo-validacao selo-declinio">🚩 pediu declínio</div>' : (_aguarda ? (ehCorretorReal() ? '<div class="selo-validacao">⏳ aguarda sua validação</div>' : '<div class="selo-validacao">⏳ aguardando validação</div>') : '')}
             ${_vejoRmNoCard ? `<div style="font-size:10px; color:#94a3b8; margin-top:3px; display:flex; align-items:center; gap:4px;">
               <span style="width:5px; height:5px; border-radius:50%; background:#c7d2fe; display:inline-block;"></span>${_rmDaCotacao(c)}
             </div>` : ''}
@@ -14500,10 +14546,14 @@
     KANBAN_DRAG_ID = null;
     if (!c || c.status === novoStatus) return;
 
-    const isAdmin = CTX.isAdmin;
+    const isAdmin = ehCorretorReal();
 
-    // Fechar ou declinar: permitido a partir de qualquer etapa ativa
-    if (novoStatus === 'fechada') { abrirAvancarCotacao(c.id, 'fechar'); return; }
+    // Fechar (emitir): decisão do corretor. Declinar: qualquer um pode PEDIR (o fluxo
+    // de declínio já registra o pedido e o corretor confirma).
+    if (novoStatus === 'fechada') {
+      if (!isAdmin) { pedirValidacaoAvanco(c, 'arrasto'); return; }
+      abrirAvancarCotacao(c.id, 'fechar'); return;
+    }
     if (novoStatus === 'perdida') { abrirAvancarCotacao(c.id, 'perder'); return; }
 
     // Card já finalizado (fechada/perdida)
@@ -14517,13 +14567,16 @@
     const idxAtual = STATUS_ATIVOS.indexOf(c.status);
     const idxNovo  = STATUS_ATIVOS.indexOf(novoStatus);
     if (idxNovo > idxAtual) {
+      // PORTÃO: avançar é decisão do corretor. Quem não é, o arrasto vira pedido
+      // de validação — antes o arrasto avançava direto, furando a validação.
+      if (!isAdmin) { pedirValidacaoAvanco(c, 'arrasto'); return; }
       // Avançar (uma ou várias etapas de uma vez — ex.: fechou direto numa reunião)
       const acao = ACAO_POR_STATUS[novoStatus];
       if (acao) { abrirAvancarCotacao(c.id, acao); return; }
       voltarEtapaCotacao(c, novoStatus, 'Avançou de etapa');
       return;
     } else {
-      // Voltar etapa: só admin
+      // Voltar etapa: só o corretor
       if (isAdmin) { voltarEtapaCotacao(c, novoStatus, 'Voltou de etapa (admin)'); return; }
       alert('Não dá pra voltar etapas. Se a negociação não avançou, arraste para "Não fechou".');
     }
@@ -24051,7 +24104,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                 ${CTX.isAdmin ? `<button class="btn-mini" style="font-size:10px;" onclick="abrirAddChecklistItem('${c.id}')"><i data-lucide="plus" class="w-3 h-3"></i> item</button>` : ''}
               </div>
               ${linhas}
-              ${ativaMarcavel ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>' : ''}
+              ${ativaMarcavel ? (ehCorretorReal()
+                ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>'
+                : '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o corretor valida e o negócio avança.</div>') : ''}
             </div>`;
           })()}
 
@@ -24063,10 +24118,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                 ${c.declinioMotivo ? `<br>Motivo: ${String(c.declinioMotivo).replace(/_/g, ' ')}` : ''}
                 ${c.declinioResultado === 'nao_justificou' ? '<br><em>O cliente não justificou — sem retorno.</em>' : ''}
               </div>
-              ${CTX.isAdmin && c.declinioPedidoPorNome ? `<div style="font-size:11px; color:#b91c1c; margin-top:6px; background:rgba(255,255,255,.6); border-radius:6px; padding:6px 9px;">
+              ${ehCorretorReal() && c.declinioPedidoPorNome ? `<div style="font-size:11px; color:#b91c1c; margin-top:6px; background:rgba(255,255,255,.6); border-radius:6px; padding:6px 9px;">
                 Ao confirmar, os pontos do declínio vão para <strong>${c.declinioPedidoPorNome}</strong>${c.declinioResultado === 'nao_justificou' ? ' (valor reduzido, pois não houve justificativa)' : ''}.
               </div>` : ''}
-              ${CTX.isAdmin ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
+              ${ehCorretorReal() ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
                 <button class="btn-primary" style="background:#dc2626;" onclick="acaoNegociacao('${c.id}','perder')">✓ Confirmar declínio</button>
                 <button class="btn-secondary" onclick="recusarDeclinio('${c.id}')">↩ Manter em negociação</button>
               </div>` : '<div style="font-size:11px; color:#b91c1c; margin-top:8px;">Aguardando o corretor confirmar.</div>'}
@@ -24077,9 +24132,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <div style="font-size:13px; font-weight:800; color:#92400e;">⏳ Checklist completo — aguardando validação</div>
               <div style="font-size:12px; color:#a16207; margin-top:3px;">
                 ${c.validacaoPedidaPorNome ? `<strong>${c.validacaoPedidaPorNome}</strong> concluiu os itens desta etapa.` : 'Os itens desta etapa foram concluídos.'}
-                ${CTX.isAdmin ? ' Você decide se o negócio avança.' : ' O corretor vai conferir antes de avançar.'}
+                ${ehCorretorReal() ? ' Você decide se o negócio avança.' : ' O corretor vai conferir antes de avançar.'}
               </div>
-              ${CTX.isAdmin ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
+              ${ehCorretorReal() ? `<div style="display:flex; gap:8px; margin-top:11px; flex-wrap:wrap;">
                 <button class="btn-primary" onclick="validarAvanco('${c.id}')">✓ Validar e avançar</button>
                 <button class="btn-secondary" onclick="segurarNegocio('${c.id}')">⏸ Manter nesta etapa</button>
               </div>` : ''}
@@ -24089,7 +24144,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
           ${ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
             <button class="btn-primary" style="flex:1; min-width:130px;" onclick="avancarEtapaNegociacao('${c.id}')">➡ Avançar etapa</button>
-            ${CTX.isAdmin ? `<button class="btn-secondary" style="background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="acaoNegociacao('${c.id}','fechar')">📜 Emitir</button>` : ''}
+            ${ehCorretorReal() ? `<button class="btn-secondary" style="background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="acaoNegociacao('${c.id}','fechar')">📜 Emitir</button>` : ''}
             <button class="btn-secondary" style="background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Não fechou</button>
           </div>` : ''}
 
@@ -24156,6 +24211,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const upd = { observacoes: obs, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() };
     if (ehFechada) upd.valor = valor || null; else upd.valorProposto = valor || null;
     if (chance) upd.chanceFechamento = chance;
+    // REGISTRO DA EVOLUÇÃO: toda mudança de valor entra no valorHistorico (as mudanças
+    // de etapa já gravavam; editar aqui era silencioso). Assim dá pra comparar
+    // "começamos com X, fechamos com Y" na linha do tempo.
+    const _valorAntes = ehFechada ? (c.valor || 0) : (c.valorProposto || c.valorNegociacao || 0);
+    if (valor > 0 && Math.abs(valor - _valorAntes) >= 0.01) {
+      upd.valorNegociacao = valor;   // mantém o campo unificado em dia (kanban/pipeline leem daqui)
+      upd.valorHistorico = firebase.firestore.FieldValue.arrayUnion({
+        etapa: c.status, etapaLabel: (STATUS_COTACAO[c.status] || {}).label || c.status,
+        valor: valor, valorAnterior: _valorAntes || null,
+        em: new Date().toISOString(), porNome: autorNome(), via: 'edicao'
+      });
+    }
     try {
       await db.collection('mb_cotacoes').doc(id).set(upd, { merge: true });
       Object.assign(c, upd);
@@ -24187,9 +24254,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function toggleChecklist(cotacaoId, itemKey, marcado) {
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
-    // DESMARCAR é só com o admin: o RM avisa, o admin desmarca (os pontos saem)
+    // DESMARCAR é só com o corretor: o RM avisa, o corretor desmarca (os pontos saem)
     // e aí o item pode ser marcado de novo. Evita marca-desmarca no placar.
-    if (!marcado && !CTX.isAdmin) {
+    if (!marcado && !ehCorretorReal()) {
       flashSalvo('Desmarcar um item é com o admin — avise ele para ajustar.');
       try { abrirNegociacao(cotacaoId); } catch (e) {}  // redesenha, desfaz o clique visual
       return;
@@ -24298,7 +24365,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // negócio ande — por exemplo, quando o cliente já sinalizou que não vai fechar.
       // Agora, quem não é corretor deixa o negócio "aguardando validação"; o corretor
       // confere e decide se avança. Se o próprio corretor completa, avança direto.
-      if (!CTX.isAdmin) {
+      // (ehCorretorReal: no "ver como" o admin se comporta como o perfil simulado)
+      if (!ehCorretorReal()) {
         try {
           await db.collection('mb_cotacoes').doc(cotacaoId).update({
             aguardandoValidacao: true,
@@ -24331,7 +24399,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // Corretor valida: limpa o aviso e avança de fato.
   async function validarAvanco(cotacaoId) {
-    if (!CTX.isAdmin) return alert('Só o corretor pode validar o avanço.');
+    if (!ehCorretorReal()) return alert('Só o corretor pode validar o avanço.');
     try {
       await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false });
       const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.aguardandoValidacao = false;
@@ -24342,7 +24410,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // Corretor decide segurar: o negócio fica onde está, com os pontos já registrados.
   async function segurarNegocio(cotacaoId) {
-    if (!CTX.isAdmin) return;
+    if (!ehCorretorReal()) return;
     try {
       await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false, seguradoEm: firebase.firestore.FieldValue.serverTimestamp() });
       const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.aguardandoValidacao = false;
@@ -24355,7 +24423,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // Corretor decide que o negócio continua vivo, apesar do pedido de declínio.
   async function recusarDeclinio(cotacaoId) {
-    if (!CTX.isAdmin) return;
+    if (!ehCorretorReal()) return;
     try {
       await db.collection('mb_cotacoes').doc(cotacaoId).update({ declinioPedido: false });
       const c = COTACOES.find(x => x.id === cotacaoId); if (c) c.declinioPedido = false;
@@ -24388,9 +24456,28 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.abrirAddChecklistItem = abrirAddChecklistItem;
 
+  // Quem não é corretor pede o avanço; o corretor valida. Reusado pelo botão e pelo arrasto.
+  async function pedirValidacaoAvanco(c, via) {
+    try {
+      await db.collection('mb_cotacoes').doc(c.id).update({
+        aguardandoValidacao: true,
+        validacaoPedidaEm: firebase.firestore.FieldValue.serverTimestamp(),
+        validacaoPedidaPorNome: autorNome(),
+        validacaoVia: via || 'botao'
+      });
+      c.aguardandoValidacao = true;
+    } catch (e) { console.warn('pedir validacao', e); }
+    flashSalvo('Pedido registrado! O corretor valida antes de o negócio avançar.');
+    try { abrirNegociacao(c.id); } catch (e) {}
+    try { renderKanban(); } catch (e) {}
+  }
+
   function avancarEtapaNegociacao(id) {
     const c = COTACOES.find(x => x.id === id);
     if (!c) return;
+    // PORTÃO: avançar etapa é decisão do corretor. Quem não é, registra o pedido
+    // (o card fica "aguardando validação") — antes o botão avançava direto.
+    if (!ehCorretorReal()) { pedirValidacaoAvanco(c, 'botao'); return; }
     const idx = STATUS_ATIVOS.indexOf(c.status);
     const proximo = STATUS_ATIVOS[idx + 1] || 'fechada';
     const m = document.getElementById('modalNegociacao'); if (m) m.remove();
@@ -24424,6 +24511,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (c.dataReuniao) passos.push({ label: 'Reunião agendada', data: c.dataReuniao });
       add(c.dataDecisao, c.status === 'fechada' ? 'Fechada' : 'Declinada');
     }
+    // Evolução do valor: cada ajuste registrado vira um passo na linha do tempo
+    // ("começamos com X, fechamos com Y").
+    (Array.isArray(c.valorHistorico) ? c.valorHistorico : []).forEach(v => {
+      if (!v || !v.valor) return;
+      const delta = (v.valorAnterior && v.valorAnterior > 0)
+        ? ` (antes ${fmtBRcompacto(v.valorAnterior)})` : '';
+      passos.push({
+        label: '💰 ' + fmtBRcompacto(v.valor) + delta,
+        data: v.em,
+        obs: 'Valor da negociação em "' + (v.etapaLabel || v.etapa || '—') + '"',
+        por: v.porNome
+      });
+    });
     // ordena por data
     passos.sort((a, b) => (_toDate(a.data) || 0) - (_toDate(b.data) || 0));
 
@@ -24941,10 +25041,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     else if (elFech) valorNegEtapa = lerMoeda(elFech);
     if (valorNegEtapa > 0) {
       update.valorNegociacao = valorNegEtapa;
+      // Sincroniza o valorProposto (kanban, pipeline e relatórios leem dele) — antes o
+      // valor ajustado no avanço de etapa não aparecia no card.
+      if (acao !== 'fechar') update.valorProposto = valorNegEtapa;
       const labelEtapa = (STATUS_COTACAO[({ coletar: 'informacoes', cotar: 'cotando', enviar: 'enviada', reuniao: 'reuniao_agendada', analise: 'analise', transmitir: 'transmitida', fechar: 'fechada', perder: 'perdida' })[acao]] || {}).label || acao;
       update.valorHistorico = firebase.firestore.FieldValue.arrayUnion({
         etapa: acao, etapaLabel: labelEtapa, valor: valorNegEtapa,
-        em: new Date().toISOString(), porNome: CTX.nome
+        em: new Date().toISOString(), porNome: autorNome()
       });
     }
 
