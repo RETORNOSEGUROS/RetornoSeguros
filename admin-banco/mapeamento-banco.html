@@ -9857,13 +9857,45 @@
         <span style="width:8px; height:8px; border-radius:2px; background:${cores[i % cores.length]}; display:inline-block;"></span>
         ${p.nome} <strong>${p.pct.toFixed(0)}%</strong>${p.criador ? ' <span style="color:#94a3b8;">(trouxe)</span>' : ''}
       </span>`).join('');
+    // Admin pode corrigir o "quem trouxe" (ex.: renovação automática antiga creditada errado)
+    const podeCorrigir = (typeof CTX !== 'undefined') && CTX.isAdmin && !CTX.perfilSimulado && c.id;
+    const corrigir = podeCorrigir
+      ? `<button onclick="corrigirQuemTrouxe('${c.id}')" style="background:none; border:none; color:#6366f1; font-size:10.5px; font-weight:700; cursor:pointer; padding:0; margin-left:8px;">✏️ corrigir quem trouxe</button>`
+      : '';
     return `<div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
       <div style="font-size:11.5px; font-weight:800; color:#475569; margin-bottom:7px;">🤝 Participação neste negócio</div>
       <div style="display:flex; height:14px; border-radius:5px; overflow:hidden; background:#e2e8f0; margin-bottom:8px;">${barra}</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap;">${legenda}</div>
-      <div style="font-size:10px; color:#94a3b8; margin-top:7px;">Quem traz o negócio leva ${PARTIC_CRIADOR}%; o restante é dividido entre os itens de checklist concluídos.</div>
+      <div style="font-size:10px; color:#94a3b8; margin-top:7px;">Quem traz o negócio leva ${PARTIC_CRIADOR}%; o restante é dividido entre os itens de checklist concluídos.${corrigir}</div>
     </div>`;
   }
+
+  // Admin: transfere o crédito de "quem trouxe" de um negócio para outra pessoa da equipe.
+  // Útil quando a renovação automática antiga creditou quem estava logado (ex.: chefe)
+  // em vez do RM da carteira. Corrige o doc da cotação; a participação recalcula sozinha.
+  async function corrigirQuemTrouxe(cotId) {
+    if (!(CTX.isAdmin && !CTX.perfilSimulado)) return;
+    const eq = (EQUIPE_REAL || []).filter(u => u.ativo !== false);
+    if (!eq.length) return alert('Equipe ainda não carregada.');
+    const linhas = eq.map((u, i) => `${i + 1} — ${u.nome} (${u.perfil})`).join('\n');
+    const resp = prompt('Transferir o "quem trouxe" para quem?\n\n' + linhas + '\n\nDigite o número:');
+    if (!resp) return;
+    const idx = parseInt(resp, 10) - 1;
+    const p = eq[idx];
+    if (!p) return alert('Número inválido.');
+    try {
+      await db.collection('mb_cotacoes').doc(cotId).update({
+        solicitadoPorUid: p.uid, solicitadoPorNome: p.nome,
+        solicitadoPorPerfil: p.perfil || null,
+        creditoCorrigidoPor: CTX.uid, creditoCorrigidoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      const c = (COTACOES || []).find(x => x.id === cotId);
+      if (c) { c.solicitadoPorUid = p.uid; c.solicitadoPorNome = p.nome; c.solicitadoPorPerfil = p.perfil || null; }
+      flashSalvo('Crédito transferido para ' + p.nome + '.');
+      try { abrirNegociacao(cotId); } catch (e) {}
+    } catch (e) { alert('Erro ao transferir: ' + e.message); }
+  }
+  window.corrigirQuemTrouxe = corrigirQuemTrouxe;
 
   // ---- Unificação de pessoa ----
   // O mesmo ser humano pode ter registros com uids diferentes (login do admin, perfil
@@ -23319,8 +23351,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       let creditoPerfil = CTX.perfilSimulado || CTX.perfil;
       let creditoAtribuido = false;
 
+      // Crédito explícito vindo do chamador (ex.: renovação automática credita o RM da
+      // carteira / quem mapeou o vencimento — NUNCA quem por acaso estava logado quando
+      // a rotina rodou; era isso que dava o "trouxe" pro chefe em negócio do RM).
+      if (opts.credito && opts.credito.uid) {
+        creditoUid = opts.credito.uid;
+        creditoNome = opts.credito.nome || '—';
+        creditoPerfil = opts.credito.perfil || null;
+      }
+
       const selCred = document.getElementById('creditoCotacaoUid');
-      if (CTX.isAdmin && selCred && selCred.value) {
+      if (!opts.credito && CTX.isAdmin && selCred && selCred.value) {
         const [uid, nome, perfil] = selCred.value.split('|');
         creditoUid = uid;
         creditoNome = nome;
@@ -23733,7 +23774,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         if (pd.seguradoraAtual) obs.push('Seguradora atual: ' + pd.seguradoraAtual);
         if (pd.observacoes) obs.push(pd.observacoes);
         obs.push('Renovação automática · vence ' + String(pd.vencimentoMes).padStart(2, '0') + '/' + pd.vencimentoAno);
-        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || null, observacoes: obs.join(' · '), vencimentoRef: ciclo });
+        // "Quem trouxe" = RM da carteira; senão, quem registrou o mapeamento do vencimento.
+        // Nunca quem por acaso estava logado quando a rotina rodou (dava crédito errado ao chefe/admin).
+        let _credUid = e.rm || pd.ultimoAutorUid || null;
+        let _credMembro = _credUid ? (EQUIPE_REAL || []).find(u => u.uid === _credUid) : null;
+        let _credNome = (_credMembro && _credMembro.nome) ||
+                        (e.rm && MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) ||
+                        pd.ultimoAutorNome || null;
+        const _credito = _credUid ? { uid: _credUid, nome: _credNome || 'RM', perfil: (_credMembro && _credMembro.perfil) || 'rm' } : null;
+        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || null, observacoes: obs.join(' · '), vencimentoRef: ciclo, credito: _credito });
         if (id) {
           try { await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(ramoId).set({ renovacaoAutoCiclo: ciclo }, { merge: true }); } catch (err) {}
           if (e.produtosDados[ramoId]) e.produtosDados[ramoId].renovacaoAutoCiclo = ciclo;
