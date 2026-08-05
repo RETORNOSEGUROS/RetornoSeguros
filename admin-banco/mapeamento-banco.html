@@ -9328,23 +9328,63 @@
 
   // ============= AUTO-CANCELAR COTAÇÕES VENCIDAS =============
   function diasNaEtapa(c) {
-    // Define quando a cotação entrou na etapa atual
-    let dataInicio;
-    if (c.status === 'solicitada') dataInicio = c.dataSolicitacao;
-    else if (c.status === 'cotando') dataInicio = c.dataCotacao || c.dataSolicitacao;
-    else if (c.status === 'enviada') dataInicio = c.dataEnvio || c.dataCotacao || c.dataSolicitacao;
-    else if (c.status === 'reuniao_agendada') {
-      // Se tem dataReuniao, conta a partir dela (qualquer formato)
+    // Reunião agendada: conta a partir da DATA DA REUNIÃO (comportamento intencional)
+    if (c.status === 'reuniao_agendada') {
       const _dtReu = _dataDe(c.dataReuniao);
-      if (_dtReu) {
-        return Math.floor((Date.now() - _dtReu.getTime()) / 86400000);
+      if (_dtReu) return Math.floor((Date.now() - _dtReu.getTime()) / 86400000);
+    }
+    // 1) HISTÓRICO: a última entrada com o status atual marca quando ENTROU na etapa.
+    //    Vale para QUALQUER etapa (inclusive customizadas). Antes, 'informacoes',
+    //    'analise' e 'transmitida' caíam fora do mapa fixo e voltavam sempre 0 dias —
+    //    o kanban mostrava 0/60d e o bônus de velocidade pagaria o máximo indevido.
+    let dataInicio = null;
+    if (Array.isArray(c.historico)) {
+      for (let i = c.historico.length - 1; i >= 0; i--) {
+        const h = c.historico[i];
+        if (h && h.status === c.status && h.em) { dataInicio = h.em; break; }
       }
-      dataInicio = c.atualizadoEm;
+    }
+    // 2) registros antigos sem histórico: campos de data específicos
+    if (!dataInicio) {
+      const porStatus = {
+        solicitada: c.dataSolicitacao,
+        informacoes: c.dataSolicitacao,
+        cotando: c.dataCotacao || c.dataSolicitacao,
+        enviada: c.dataEnvio || c.dataCotacao || c.dataSolicitacao,
+        analise: c.dataEnvio || c.dataCotacao,
+        transmitida: c.dataTransmissao
+      };
+      dataInicio = porStatus[c.status] || c.atualizadoEm || c.dataSolicitacao;
     }
     if (!dataInicio) return 0;
     const dt = dataInicio.toDate ? dataInicio.toDate() : new Date(dataInicio);
-    return Math.floor((Date.now() - dt.getTime()) / 86400000);
+    const d = Math.floor((Date.now() - dt.getTime()) / 86400000);
+    return isNaN(d) ? 0 : d;
   }
+
+  // Reagendamento de uma cotação perdida: procura na própria cotação, no pedido de
+  // declínio e, por fim, no produto da empresa (registros antigos só gravavam lá).
+  function _reagDaCotacao(c) {
+    if (c.reagendarMes && c.reagendarAno) return { mes: c.reagendarMes, ano: c.reagendarAno };
+    if (c.declinioReagMes && c.declinioReagAno) return { mes: c.declinioReagMes, ano: c.declinioReagAno };
+    try {
+      const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
+      const pd = e && e.produtosDados && e.produtosDados[c.produtoId];
+      if (pd && pd.reagendarMes && pd.reagendarAno) return { mes: pd.reagendarMes, ano: pd.reagendarAno };
+    } catch (e) {}
+    return null;
+  }
+  window._reagDaCotacao = _reagDaCotacao;
+
+  // Idade total da negociação: há quantos dias ela foi criada (independente da etapa)
+  function diasDeNegociacao(c) {
+    const ini = c.dataSolicitacao || c.criadoEm;
+    if (!ini) return 0;
+    const dt = ini.toDate ? ini.toDate() : new Date(ini);
+    const d = Math.floor((Date.now() - dt.getTime()) / 86400000);
+    return isNaN(d) ? 0 : d;
+  }
+  window.diasDeNegociacao = diasDeNegociacao;
 
   // ===== BÔNUS DE VELOCIDADE =====
   // Pago quando a etapa é CONCLUÍDA, conforme quanto do prazo dela foi usado:
@@ -14537,7 +14577,7 @@
             </div>` : ''}
             <div class="kanban-card-foot">
               ${ativa
-                ? `<span class="kanban-card-tempo" style="color:${corTempo};">⏱ ${dias}/${limite}d</span>`
+                ? `<span class="kanban-card-tempo" style="color:${corTempo};" title="${dias} dia(s) nesta etapa (prazo ${limite}) · negociando há ${diasDeNegociacao(c)} dia(s) no total">⏱ ${dias}/${limite}d <span style="color:#94a3b8;">· 🗓 ${diasDeNegociacao(c)}d</span></span>`
                 : '<span></span>'}
               ${valor && !isEstag && !isAssist ? `<span class="kanban-card-valor" style="${col.id === 'perdida' ? 'background:#fee2e2; color:#991b1b;' : ''}">${fmtBRcompacto(valor)}</span>` : '<span></span>'}
             </div>
@@ -24120,7 +24160,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       <div class="cad-modal-panel" style="max-width:560px;">
         <div class="cad-modal-head">
           <h2>${prod.icon || ''} ${c.produtoNome || prod.nome || 'Negociação'}</h2>
-          <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span></p>
+          <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span>${ativa ? ` · <span style="opacity:.85;">⏱ ${diasNaEtapa(c)}d nesta etapa · 🗓 negociando há ${diasDeNegociacao(c)}d</span>` : ` · <span style="opacity:.85;">🗓 durou ${diasDeNegociacao(c)}d</span>`}</p>
         </div>
         <div class="cad-modal-body">
           <input type="hidden" id="negId" value="${c.id}">
@@ -24177,13 +24217,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             const mLbl = { preco: 'Preço acima da concorrência', cobertura: 'Cobertura não atende', prazo: 'Cliente desistiu / sem prazo', confianca: 'Confia na corretora atual', sem_aceitacao: 'Seguradora não aceitou o risco', falta_interacao: 'Cancelada por falta de interação', outro: 'Outro' };
             const rLbl = { fechou_outro: 'Renovou/fechou com outra corretora ou seguradora', reagendar: 'Não fechou com ninguém — retomada agendada', sem_interesse: 'Sem interesse em novo contato', nao_justificou: 'Cliente não justificou — sem retorno' };
             const quem = c.declinadoPorNome || c.declinioPedidoPorNome || null;
+            const reag = _reagDaCotacao(c);
             return `
             <div style="background:linear-gradient(135deg,#fef2f2,#fee2e2); border:1px solid #fca5a5; border-radius:11px; padding:13px 16px; margin-bottom:14px;">
               <div style="font-size:13px; font-weight:800; color:#991b1b; margin-bottom:6px;">✗ Não fechou</div>
               <div style="font-size:12.5px; color:#b91c1c; line-height:1.7;">
                 ${c.resultadoPerda && rLbl[c.resultadoPerda] ? `${rLbl[c.resultadoPerda]}<br>` : ''}
                 ${c.motivoPerda ? `📋 Motivo: <strong>${mLbl[c.motivoPerda] || c.motivoPerda}</strong><br>` : ''}
-                ${(c.reagendarMes && c.reagendarAno) ? `🔁 Retomar em: <strong>${String(c.reagendarMes).padStart(2, '0')}/${c.reagendarAno}</strong><br>` : ''}
+                ${reag ? `🔁 Retomar em: <strong>${String(reag.mes).padStart(2, '0')}/${reag.ano}</strong><br>` : ''}
                 ${c.seguradoraVencedora ? `🏢 Fechou com: <strong>${c.seguradoraVencedora}</strong>${c.valorConcorrente ? ' por <strong>' + fmtBR(c.valorConcorrente) + '</strong>' : ''}<br>` : ''}
                 ${(!c.seguradoraVencedora && c.seguradoraAtualCliente) ? `🏢 Está hoje com: <strong>${c.seguradoraAtualCliente}</strong><br>` : ''}
                 ${quem ? `✍️ Declinado por: <strong>${quem}</strong>` : ''}
@@ -24669,7 +24710,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             ${c.solicitadoPorNome ? `🤝 Trouxe o negócio: <strong>${c.solicitadoPorNome}</strong><br>` : ''}
             ${vIni ? `📈 Valor: começou em <strong>${fmtBR(vIni)}</strong>${vFim && Math.abs(vFim - vIni) >= 0.01 ? ` → terminou em <strong>${fmtBR(vFim)}</strong>` : ''}<br>` : ''}
             ${c.status === 'fechada' ? `💎 <strong>Emitido</strong>${c.seguradora ? ' na ' + c.seguradora : ''}${c.vigenciaInicio ? ' · vigência ' + c.vigenciaInicio + ' → ' + (c.vigenciaFim || '—') : ''}` : ''}
-            ${(c.status === 'perdida' || c.status === 'sem_aceitacao') ? `✗ <strong>Não fechou</strong>${c.motivoPerda ? ' — ' + (mLbl[c.motivoPerda] || c.motivoPerda) : ''}${(c.reagendarMes && c.reagendarAno) ? ' · retomar em ' + String(c.reagendarMes).padStart(2, '0') + '/' + c.reagendarAno : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}` : ''}
+            ${(c.status === 'perdida' || c.status === 'sem_aceitacao') ? (() => { const rg = _reagDaCotacao(c); return `✗ <strong>Não fechou</strong>${c.motivoPerda ? ' — ' + (mLbl[c.motivoPerda] || c.motivoPerda) : ''}${rg ? ' · retomar em ' + String(rg.mes).padStart(2, '0') + '/' + rg.ano : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}`; })() : ''}
           </div>
           <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:8px;">📋 Checklist por etapa — o que passou e o que ficou de fora</div>
           ${etapasHtml}
@@ -24712,7 +24753,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const vFim = c.status === 'fechada' ? (c.valor || null) : (D.valores.length ? D.valores[D.valores.length - 1].valor : null);
     if (vIni) txt(`Valor: começou em ${fmtBR(vIni)}${vFim && Math.abs(vFim - vIni) >= 0.01 ? ' — terminou em ' + fmtBR(vFim) : ''}`, 10);
     if (c.status === 'fechada') txt(`EMITIDO${c.seguradora ? ' na ' + c.seguradora : ''}${c.vigenciaInicio ? ' · vigência ' + c.vigenciaInicio + ' a ' + (c.vigenciaFim || '—') : ''}${c.valor ? ' · prêmio ' + fmtBR(c.valor) : ''}`, 10, true, [22, 101, 52]);
-    if (c.status === 'perdida' || c.status === 'sem_aceitacao') txt(`NÃO FECHOU${c.motivoPerda ? ' — motivo: ' + c.motivoPerda : ''}${(c.reagendarMes && c.reagendarAno) ? ' · retomar em ' + String(c.reagendarMes).padStart(2, '0') + '/' + c.reagendarAno : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · declinado por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}`, 10, true, [153, 27, 27]);
+    if (c.status === 'perdida' || c.status === 'sem_aceitacao') { const rg = _reagDaCotacao(c); txt(`NÃO FECHOU${c.motivoPerda ? ' — motivo: ' + c.motivoPerda : ''}${rg ? ' · retomar em ' + String(rg.mes).padStart(2, '0') + '/' + rg.ano : ''}${(c.declinadoPorNome || c.declinioPedidoPorNome) ? ' · declinado por ' + (c.declinadoPorNome || c.declinioPedidoPorNome) : ''}`, 10, true, [153, 27, 27]); }
     nl(4);
     txt('CHECKLIST POR ETAPA', 12, true, [49, 46, 129]); nl(1);
     D.etapas.forEach(et => {
@@ -25250,6 +25291,23 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.getElementById('modalAvancarBody').innerHTML = body;
     document.getElementById('modalAvancarCotacao').classList.add('open');
     lucide.createIcons();
+
+    // Confirmação de declínio pedido por outra pessoa: pré-preenche o que ela informou
+    // (resultado, motivo, retomada, seguradora, valor) — antes o corretor tinha que
+    // digitar tudo de novo e o reagendamento se perdia no caminho.
+    if (acao === 'perder' && c.declinioPedido) {
+      const setV = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+      setV('acaoResultado', c.declinioResultado);
+      setV('acaoMotivo', c.declinioMotivo);
+      try { perderResultadoChange(); } catch (e) {}
+      setV('acaoReagMes', c.declinioReagMes);
+      setV('acaoReagAno', c.declinioReagAno);
+      setV('acaoSegAtualReag', c.declinioSegAtual);
+      setV('acaoSegVencedora', c.declinioSeguradora);
+      setV('acaoVencMes', c.declinioVencMes);
+      setV('acaoVencAno', c.declinioVencAno);
+      if (c.declinioValorConcorrente) setV('acaoValorConcorrente', fmtBR(c.declinioValorConcorrente));
+    }
   }
 
   async function confirmarAvancarCotacao() {
@@ -25432,6 +25490,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           update.observacoes = obs;
           const _sv = ((document.getElementById('acaoSegVencedora') || {}).value || '').trim();
           if (_sv) update.declinioSeguradora = _sv;
+          // guarda TUDO que a pessoa preencheu — antes o mês/ano de retomada se perdia
+          // entre o pedido e a confirmação do corretor
+          const _prm = parseInt((document.getElementById('acaoReagMes') || {}).value) || null;
+          const _pra = parseInt((document.getElementById('acaoReagAno') || {}).value) || null;
+          if (_prm) update.declinioReagMes = _prm;
+          if (_pra) update.declinioReagAno = _pra;
+          const _psa = ((document.getElementById('acaoSegAtualReag') || {}).value || '').trim();
+          if (_psa) update.declinioSegAtual = _psa;
+          const _pvm = parseInt((document.getElementById('acaoVencMes') || {}).value) || null;
+          const _pva = parseInt((document.getElementById('acaoVencAno') || {}).value) || null;
+          if (_pvm) update.declinioVencMes = _pvm;
+          if (_pva) update.declinioVencAno = _pva;
+          const _pvc = lerMoeda(document.getElementById('acaoValorConcorrente') || { value: '' });
+          if (_pvc > 0) update.declinioValorConcorrente = _pvc;
           try {
             await db.collection('mb_cotacoes').doc(c.id).update(update);
             Object.assign(c, update);
@@ -25450,8 +25522,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         // quem efetivamente declinou (quem pediu, se houve pedido; senão o corretor)
         update.declinadoPorUid = _creditaA.uid; update.declinadoPorNome = _creditaA.nome;
         {
-          const _rm2 = parseInt((document.getElementById('acaoReagMes') || {}).value) || null;
-          const _ra2 = parseInt((document.getElementById('acaoReagAno') || {}).value) || null;
+          const _rm2 = parseInt((document.getElementById('acaoReagMes') || {}).value) || c.declinioReagMes || null;
+          const _ra2 = parseInt((document.getElementById('acaoReagAno') || {}).value) || c.declinioReagAno || null;
           if (resultado === 'reagendar' && _rm2 && _ra2) { update.reagendarMes = _rm2; update.reagendarAno = _ra2; }
         }
         update.observacoes = obs;
