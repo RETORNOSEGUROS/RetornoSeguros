@@ -2355,7 +2355,9 @@
 
     <div class="nav-section perm-chefeplus">Gestão</div>
     <div class="nav-item perm-chefeplus" onclick="navTo('equipe')"><i data-lucide="users" class="w-4 h-4"></i> Equipe da Agência</div>
+    <div class="nav-item perm-admin" onclick="navTo('comissoes')"><i data-lucide="wallet" class="w-4 h-4"></i> Comissões</div>
     <div class="nav-item perm-admin" onclick="navTo('config')"><i data-lucide="sliders" class="w-4 h-4"></i> Configurações</div>
+    <div class="nav-item perm-admin" onclick="window.open('ManualCorporateOne.html','_blank')"><i data-lucide="book-open" class="w-4 h-4"></i> Manual do sistema</div>
   </nav>
   <div id="seloVersao" title="Versão publicada — confira se bate com a última que você subiu"
        style="margin-top:auto; padding:10px 14px; font-size:10.5px; color:#94a3b8; border-top:1px solid rgba(148,163,184,.18); letter-spacing:.02em;">
@@ -2934,6 +2936,10 @@
     </div><!-- /screen-equipe -->
 
     <!-- ===================== TELA: CONFIGURAÇÕES (admin) ===================== -->
+    <div class="screen" id="screen-comissoes">
+      <div id="comissoesConteudo"></div>
+    </div>
+
     <div class="screen" id="screen-config">
 
       <!-- Tabs de configuração -->
@@ -7311,6 +7317,219 @@
   }
   window.toggleSidebar = toggleSidebar;
 
+  // ============= COMISSÕES (só o corretor/admin — nunca em ver-como) =============
+  // Controle financeiro real: por negócio fechado, % de comissão, tipo (anual = comissão
+  // cheia no mês; mensal = dividida por 12), valor recebido e a visão integralizada
+  // mês a mês. Nada disso aparece para chefe, RM, assistente ou estagiário.
+  let _COMIS_ABA = 'negocios';
+  let _COMIS_ANO = new Date().getFullYear();
+  let _COMIS_CACHE = null;
+
+  async function _comisCarregar() {
+    let q = db.collection('mb_cotacoes').where('status', '==', 'fechada');
+    const snap = await q.get();
+    const lista = [];
+    snap.forEach(d => {
+      const c = { id: d.id, ...d.data() };
+      if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
+      lista.push(c);
+    });
+    // mais recentes primeiro
+    lista.sort((a, b) => (_toDate(b.dataDecisao) || 0) - (_toDate(a.dataDecisao) || 0));
+    _COMIS_CACHE = lista;
+    return lista;
+  }
+
+  // mês/ano de referência do negócio: início de vigência manda; senão a data de emissão
+  function _comisRef(c) {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(c.vigenciaInicio || '');
+    if (m) return { mes: parseInt(m[2]), ano: parseInt(m[3]) };
+    const d = _toDate(c.dataDecisao);
+    if (d) return { mes: d.getMonth() + 1, ano: d.getFullYear() };
+    return null;
+  }
+  function _comisTotal(c) {
+    if (c.comissaoRecebida > 0) return c.comissaoRecebida;               // valor informado vence
+    if (c.valor > 0 && c.comissaoPct > 0) return c.valor * c.comissaoPct / 100;
+    return 0;
+  }
+
+  async function salvarComisCampo(id, campo, valor) {
+    if (!ehCorretorReal()) return;
+    try {
+      const upd = {};
+      if (campo === 'comissaoPct' || campo === 'comissaoRecebida') {
+        const n = parseFloat(String(valor).replace(/\./g, '').replace(',', '.'));
+        upd[campo] = (!isNaN(n) && n > 0) ? n : null;
+      } else upd[campo] = valor || null;
+      await db.collection('mb_cotacoes').doc(id).set(upd, { merge: true });
+      const c = (_COMIS_CACHE || []).find(x => x.id === id);
+      if (c) Object.assign(c, upd);
+      flashSalvo('Comissão atualizada.');
+      renderComissoes(true);
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+  window.salvarComisCampo = salvarComisCampo;
+
+  window.setComisAba = a => { _COMIS_ABA = a; renderComissoes(true); };
+  window.setComisAno = a => { _COMIS_ANO = parseInt(a) || new Date().getFullYear(); renderComissoes(true); };
+
+  async function renderComissoes(usarCache) {
+    const box = document.getElementById('comissoesConteudo');
+    if (!box) return;
+    if (!ehCorretorReal()) {
+      box.innerHTML = '<div style="background:white; border-radius:14px; padding:40px; text-align:center; color:#94a3b8;">🔒 Área exclusiva do corretor.</div>';
+      return;
+    }
+    if (!usarCache || !_COMIS_CACHE) {
+      box.innerHTML = '<div style="text-align:center; padding:40px; color:#94a3b8;">Carregando negócios fechados...</div>';
+      try { await _comisCarregar(); } catch (e) { box.innerHTML = '<div style="color:#dc2626; padding:20px;">Erro: ' + e.message + '</div>'; return; }
+    }
+    const lista = _COMIS_CACHE || [];
+    const anos = [...new Set(lista.map(c => (_comisRef(c) || {}).ano).filter(Boolean))].sort((a, b) => b - a);
+    if (!anos.includes(_COMIS_ANO) && anos.length) _COMIS_ANO = anos[0];
+    const doAno = lista.filter(c => { const r = _comisRef(c); return r && r.ano === _COMIS_ANO; });
+
+    const totAno = doAno.reduce((s, c) => s + _comisTotal(c), 0);
+    const semPct = doAno.filter(c => !_comisTotal(c)).length;
+    const nMensal = doAno.filter(c => (c.comissaoTipo || 'anual') === 'mensal').length;
+
+    const tabs = `
+      <div class="rank-tabs" style="margin-bottom:14px;">
+        <div class="rank-tab ${_COMIS_ABA === 'negocios' ? 'active' : ''}" onclick="setComisAba('negocios')">📒 Por negócio</div>
+        <div class="rank-tab ${_COMIS_ABA === 'mensal' ? 'active' : ''}" onclick="setComisAba('mensal')">📈 Integralizado mês a mês</div>
+      </div>`;
+    const cab = `
+      <div style="background:linear-gradient(135deg,#065f46,#059669); border-radius:16px; padding:20px 24px; color:white; margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div>
+            <div style="font-size:12px; opacity:.85; font-weight:700;">🔐 SÓ VOCÊ VÊ ESTA TELA</div>
+            <div style="font-size:22px; font-weight:800;">Comissões ${_COMIS_ANO}</div>
+            <div style="font-size:12px; opacity:.9; margin-top:2px;">${doAno.length} negócios · ${nMensal} de pagamento mensal${semPct ? ` · <span style="color:#fde68a;">${semPct} sem % informado</span>` : ''}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="text-align:right;">
+              <div style="font-size:11px; opacity:.85;">COMISSÃO NO ANO</div>
+              <div style="font-size:24px; font-weight:800; font-family:'JetBrains Mono',monospace;">${fmtBR(totAno)}</div>
+            </div>
+            <select class="form-control" style="width:auto; color:#0f172a;" onchange="setComisAno(this.value)">
+              ${(anos.length ? anos : [_COMIS_ANO]).map(a => `<option value="${a}" ${a === _COMIS_ANO ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>`;
+
+    let corpo = '';
+    if (_COMIS_ABA === 'negocios') {
+      const linhas = doAno.map(c => {
+        const r = _comisRef(c);
+        const total = _comisTotal(c);
+        const tipo = c.comissaoTipo || 'anual';
+        const calc = (c.valor > 0 && c.comissaoPct > 0) ? c.valor * c.comissaoPct / 100 : 0;
+        return `<tr>
+          <td style="font-weight:700; color:#0f172a;">${c.empresaNome || '—'}<div style="font-size:10.5px; color:#94a3b8; font-weight:400;">${c.produtoIcon || ''} ${c.produtoNome || ''} · ${c.seguradora || 'seguradora —'}</div></td>
+          <td style="font-size:11.5px; color:#64748b;">${c.solicitadoPorNome || '—'}</td>
+          <td style="font-size:11.5px; color:#64748b; white-space:nowrap;">${r ? String(r.mes).padStart(2, '0') + '/' + r.ano : '—'}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#334155;">${c.valor ? fmtBR(c.valor) : '—'}</td>
+          <td><input type="number" step="0.5" min="0" max="100" value="${c.comissaoPct != null ? c.comissaoPct : ''}" placeholder="%"
+                onchange="salvarComisCampo('${c.id}','comissaoPct',this.value)"
+                style="width:64px; padding:5px 7px; border:1px solid #e2e8f0; border-radius:7px; font-size:12px; text-align:right;"></td>
+          <td>
+            <select onchange="salvarComisCampo('${c.id}','comissaoTipo',this.value)" style="padding:5px 7px; border:1px solid #e2e8f0; border-radius:7px; font-size:11.5px; background:${tipo === 'mensal' ? '#eff6ff' : '#f0fdf4'};">
+              <option value="anual" ${tipo === 'anual' ? 'selected' : ''}>📅 Anual (cheia)</option>
+              <option value="mensal" ${tipo === 'mensal' ? 'selected' : ''}>🔁 Mensal (÷12)</option>
+            </select>
+          </td>
+          <td><input type="text" value="${c.comissaoRecebida > 0 ? fmtBR(c.comissaoRecebida) : ''}" placeholder="${calc > 0 ? fmtBR(calc) : 'R$'}"
+                onchange="salvarComisCampo('${c.id}','comissaoRecebida',this.value)" title="Valor efetivamente recebido no ano (deixe vazio para usar o calculado)"
+                style="width:110px; padding:5px 7px; border:1px solid #e2e8f0; border-radius:7px; font-size:12px; text-align:right;"></td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:${total > 0 ? '#059669' : '#dc2626'};">${total > 0 ? fmtBR(total) : '—'}</td>
+        </tr>`;
+      }).join('');
+      corpo = `<div style="background:white; border-radius:14px; padding:16px 18px; overflow-x:auto;">
+        <div style="font-size:11.5px; color:#64748b; margin-bottom:10px;">💡 <strong>Anual</strong>: a comissão do ano entra inteira no mês de início de vigência. <strong>Mensal</strong>: entra dividida por 12, mês a mês. O campo "recebida" (opcional) substitui o valor calculado (prêmio × %).</div>
+        <table class="cfg-table" style="min-width:880px;">
+          <thead><tr><th>NEGÓCIO</th><th>RM</th><th>INÍCIO</th><th style="text-align:right;">PRÊMIO</th><th>%</th><th>PAGAMENTO</th><th>RECEBIDA/ANO</th><th style="text-align:right;">COMISSÃO/ANO</th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="8" style="text-align:center; color:#94a3b8; padding:24px;">Nenhum negócio fechado com início em ' + _COMIS_ANO + '.</td></tr>'}</tbody>
+        </table>
+      </div>`;
+    } else {
+      // ---- INTEGRALIZADO: quanto entra efetivamente em cada mês do ano ----
+      const meses = Array.from({ length: 12 }, () => ({ anual: 0, mensal: 0 }));
+      lista.forEach(c => {
+        const r = _comisRef(c); if (!r) return;
+        const total = _comisTotal(c); if (!total) return;
+        const tipo = c.comissaoTipo || 'anual';
+        if (tipo === 'anual') {
+          if (r.ano === _COMIS_ANO) meses[r.mes - 1].anual += total;
+        } else {
+          // mensal: 12 parcelas a partir do início — parcela cai no mês i (podendo cruzar o ano)
+          for (let i = 0; i < 12; i++) {
+            const mAbs = (r.ano * 12 + (r.mes - 1)) + i;
+            const ano = Math.floor(mAbs / 12), mes = mAbs % 12;
+            if (ano === _COMIS_ANO) meses[mes].mensal += total / 12;
+          }
+        }
+      });
+      const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+      const totais = meses.map(m => m.anual + m.mensal);
+      const maxM = Math.max(...totais, 1);
+      const totalAno = totais.reduce((s, v) => s + v, 0);
+      const mesAtual = (new Date().getFullYear() === _COMIS_ANO) ? new Date().getMonth() : 11;
+      const acumHoje = totais.slice(0, mesAtual + 1).reduce((s, v) => s + v, 0);
+      const recorrencia = meses[mesAtual].mensal;
+      let acum = 0;
+      const barras = nomes.map((n, i) => {
+        acum += totais[i];
+        const hAn = Math.round(meses[i].anual / maxM * 120);
+        const hMe = Math.round(meses[i].mensal / maxM * 120);
+        const ehAtual = i === mesAtual && new Date().getFullYear() === _COMIS_ANO;
+        return `<div style="flex:1; min-width:52px; text-align:center;">
+          <div style="font-size:10px; font-weight:800; color:${totais[i] > 0 ? '#059669' : '#cbd5e1'}; font-family:'JetBrains Mono',monospace;">${totais[i] > 0 ? fmtBRcompacto(totais[i]) : ''}</div>
+          <div style="height:124px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:1px; padding-top:4px;" title="${n}: anual ${fmtBR(meses[i].anual)} + mensal ${fmtBR(meses[i].mensal)} · acumulado ${fmtBR(acum)}">
+            <div style="width:70%; height:${hAn}px; background:#059669; border-radius:4px 4px 0 0;"></div>
+            <div style="width:70%; height:${hMe}px; background:#60a5fa; border-radius:${hAn ? '0' : '4px 4px 0 0'};"></div>
+          </div>
+          <div style="font-size:10.5px; font-weight:${ehAtual ? '800' : '600'}; color:${ehAtual ? '#059669' : '#64748b'}; margin-top:4px;">${n}${ehAtual ? ' •' : ''}</div>
+        </div>`;
+      }).join('');
+      acum = 0;
+      const linhasM = nomes.map((n, i) => {
+        acum += totais[i];
+        return `<tr ${i === mesAtual && new Date().getFullYear() === _COMIS_ANO ? 'style="background:#f0fdf4;"' : ''}>
+          <td style="font-weight:700; color:#0f172a;">${n}/${_COMIS_ANO}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#334155;">${meses[i].anual > 0 ? fmtBR(meses[i].anual) : '—'}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#2563eb;">${meses[i].mensal > 0 ? fmtBR(meses[i].mensal) : '—'}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#059669;">${totais[i] > 0 ? fmtBR(totais[i]) : '—'}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#64748b;">${fmtBR(acum)}</td>
+        </tr>`;
+      }).join('');
+      corpo = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px;">
+          <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">TOTAL DO ANO</div><div style="font-size:20px; font-weight:800; color:#059669; font-family:'JetBrains Mono',monospace;">${fmtBR(totalAno)}</div></div>
+          <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">JÁ INTEGRALIZADO (ATÉ ${nomes[mesAtual].toUpperCase()})</div><div style="font-size:20px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono',monospace;">${fmtBR(acumHoje)}</div></div>
+          <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">MÉDIA MENSAL</div><div style="font-size:20px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono',monospace;">${fmtBR(totalAno / 12)}</div></div>
+          <div style="background:white; border-radius:12px; padding:14px;"><div style="font-size:11px; color:#94a3b8; font-weight:700;">RECORRÊNCIA MENSAL ATUAL</div><div style="font-size:20px; font-weight:800; color:#2563eb; font-family:'JetBrains Mono',monospace;">${fmtBR(recorrencia)}</div><div style="font-size:10px; color:#94a3b8;">parcelas dos negócios mensais ativas</div></div>
+        </div>
+        <div style="background:white; border-radius:14px; padding:18px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+            <div style="font-size:13.5px; font-weight:800; color:#0f172a;">Entrada de comissão por mês</div>
+            <div style="font-size:11px; color:#64748b;"><span style="display:inline-block; width:10px; height:10px; background:#059669; border-radius:3px; vertical-align:middle;"></span> anual (cheia) &nbsp; <span style="display:inline-block; width:10px; height:10px; background:#60a5fa; border-radius:3px; vertical-align:middle;"></span> mensal (÷12)</div>
+          </div>
+          <div style="display:flex; gap:4px; align-items:flex-end; overflow-x:auto; padding-bottom:4px;">${barras}</div>
+        </div>
+        <div style="background:white; border-radius:14px; padding:16px 18px; margin-top:12px; overflow-x:auto;">
+          <table class="cfg-table" style="min-width:560px;">
+            <thead><tr><th>MÊS</th><th style="text-align:right;">ANUAIS</th><th style="text-align:right;">MENSAIS</th><th style="text-align:right;">TOTAL</th><th style="text-align:right;">ACUMULADO</th></tr></thead>
+            <tbody>${linhasM}</tbody>
+          </table>
+        </div>`;
+    }
+    box.innerHTML = cab + tabs + corpo;
+    try { lucide.createIcons(); } catch (e) {}
+  }
+  window.renderComissoes = renderComissoes;
+
   function navTo(tela) {
     fecharSidebarMobile(); // fecha a gaveta ao navegar (mobile)
     // Gamificação zerada: telas de ranking/sprints não abrem
@@ -7321,7 +7540,7 @@
     if (event && event.currentTarget) event.currentTarget.classList.add('active');
 
     // Telas implementadas
-    const telasReais = ['home', 'empresas', 'cotacoes', 'producao', 'ranking', 'campanha', 'vencimentos', 'equipe', 'config', 'oportunidades', 'metas', 'relatorio', 'agenda', 'pesquisas', 'avisos', 'treinamentos', 'matriz', 'relmetas', 'mapeamento', 'links', 'apresentacoes', 'propostas'];
+    const telasReais = ['home', 'empresas', 'cotacoes', 'producao', 'ranking', 'campanha', 'vencimentos', 'equipe', 'config', 'oportunidades', 'metas', 'relatorio', 'agenda', 'pesquisas', 'avisos', 'treinamentos', 'matriz', 'relmetas', 'mapeamento', 'links', 'apresentacoes', 'propostas', 'comissoes'];
     if (!telasReais.includes(tela)) {
       alert(`Tela "${tela}" — em construção neste mockup.`);
       const ativa = document.querySelector('.screen.active').id.replace('screen-', '');
@@ -7363,7 +7582,8 @@
       matriz:        'Relatório Inteligente <small>· empresas × ramos</small>',
       relmetas:      'Relatório de Metas <small>· produção e projeção</small>',
       mapeamento:    'Painel de Mapeamento <small>· cobertura da carteira e onde atacar</small>',
-      links:         'Central de Links <small>· quem gerou, status e respostas</small>'
+      links:         'Central de Links <small>· quem gerou, status e respostas</small>',
+      comissoes:     'Comissões <small>· visível só para o corretor</small>'
     };
     document.getElementById('topbarTitle').innerHTML = titulos[tela] || tela;
 
@@ -7388,6 +7608,7 @@
     if (telaReal === 'mapeamento')  renderPainelMapeamento();
     if (telaReal === 'links')       renderCentralLinks();
     if (telaReal === 'apresentacoes') renderApresentacoes();
+    if (telaReal === 'comissoes')     renderComissoes();
     if (telaReal === 'propostas')     renderPropostas();
 
     lucide.createIcons();
