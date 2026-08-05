@@ -1782,6 +1782,9 @@
     }
     .cfg-input:focus { border-color: var(--primary); background: #f8fafc; }
     .cfg-suffix { color: #94a3b8; font-size: 11px; margin-left: 4px; font-weight: 500; }
+    .cfg-switch { display:inline-flex; align-items:center; gap:5px; cursor:pointer; user-select:none; }
+    .cfg-switch input { width:15px; height:15px; cursor:pointer; accent-color:#16a34a; }
+    .cfg-switch-txt { font-size:11px; font-weight:700; color:#475569; white-space:nowrap; }
 
     .cfg-icon-cell { display: flex; align-items: center; gap: 8px; }
     .cfg-icon-cell .ic { font-size: 18px; }
@@ -4772,7 +4775,13 @@
     socios_primeira:           4,
     socios_alteracao:          1,
     pesquisa_gerada:           3,
-    pesquisa_resposta:         1
+    pesquisa_resposta:         1,
+
+    // --- Funil digital (pontuação FUTURA — desligada por padrão) ---
+    apresentacao_vista:        0,
+    questionario_cliente:      0,
+    cotacao_questionario:      0,
+    proposta_online:           0
   };
 
   // Metadados pra renderizar a tela de pontos (rótulo + descrição de cada chave).
@@ -4807,8 +4816,31 @@
     { grupo: 'Cadastro', chave: 'socios_alteracao',       label: '🧑‍💼 Sócios · alteração',          desc: '' },
     { grupo: 'Cadastro', chave: 'pesquisa_gerada',        label: '📋 Gerou pesquisa de benefícios',  desc: '' },
     { grupo: 'Cadastro', chave: 'pesquisa_resposta',      label: '📋 Cada resposta da pesquisa',     desc: '' },
-    { grupo: 'Cadastro', chave: 'pesquisa_bonus10',      label: '🎉 Bônus: pesquisa com 10+ respostas', desc: 'Uma vez, para quem gerou e para o RM da empresa' }
+    { grupo: 'Cadastro', chave: 'pesquisa_bonus10',      label: '🎉 Bônus: pesquisa com 10+ respostas', desc: 'Uma vez, para quem gerou e para o RM da empresa' },
+
+    { grupo: 'Funil digital', chave: 'apresentacao_vista',   label: '📲 Apresentação vista pelo cliente', desc: 'Quando o cliente abre e percorre a apresentação', futuro: true },
+    { grupo: 'Funil digital', chave: 'questionario_cliente', label: '📝 Cliente respondeu o questionário', desc: 'Questionário do produto respondido pelo cliente', futuro: true },
+    { grupo: 'Funil digital', chave: 'cotacao_questionario', label: '📋 Questionário de cotação respondido', desc: 'Dados de cotação preenchidos pelo cliente', futuro: true },
+    { grupo: 'Funil digital', chave: 'proposta_online',      label: '💻 Proposta online apresentada',     desc: 'Proposta online publicada e aberta pelo cliente', futuro: true }
   ];
+
+  // ===== MÉTRICAS ATIVÁVEIS DA CAMPANHA =====
+  // Cada item de pontuação pode estar LIGADO ou DESLIGADO. Desligado = não aparece nas
+  // regras (Como funciona) e NÃO credita pontos. O admin liga/desliga no config.
+  // Começam desligadas: pesquisa (o Patrick ainda vai ajustar) e o "Funil digital"
+  // (apresentação/questionário/proposta online — pontuação a definir no futuro).
+  const METRICAS_OFF_DEFAULT = new Set([
+    'pesquisa_gerada', 'pesquisa_resposta', 'pesquisa_bonus10',
+    'apresentacao_vista', 'questionario_cliente', 'cotacao_questionario', 'proposta_online'
+  ]);
+  let METRICAS_ATIVAS = {};   // override por chave salvo no config: { chave: true/false }
+  function metricaAtiva(chave) {
+    if (METRICAS_ATIVAS && Object.prototype.hasOwnProperty.call(METRICAS_ATIVAS, chave)) return !!METRICAS_ATIVAS[chave];
+    return !METRICAS_OFF_DEFAULT.has(chave);
+  }
+  // Pontos para CREDITAR: zero se a métrica estiver desligada (não conta na campanha).
+  function getPontoAtivo(chave) { return metricaAtiva(chave) ? getPonto(chave) : 0; }
+  window.metricaAtiva = metricaAtiva;
 
   // Estado em memória (preenchido pelos carregadores no início do app).
   let PRODUTOS   = RAMOS_DEFAULT.filter(r => r.ativo !== false); // o resto do app usa PRODUTOS
@@ -13553,8 +13585,16 @@
     const ehAdmin = CTX.isAdmin && !CTX.perfilSimulado;
 
     const gruposPontos = PONTOS_GRUPOS.map(g => ({
-      ...g, itens: PONTOS_META.filter(m => m.grupo === g.nome && !m.pendente)
+      ...g, itens: PONTOS_META.filter(m => m.grupo === g.nome && metricaAtiva(m.chave))
     })).filter(g => g.itens.length);
+
+    // Cabeçalho colorido que separa as DUAS coisas: o Ranking de pontos (todos) e a
+    // Campanha de indicadores / premiação (gerentes). Ajuda na hora de explicar.
+    const _familia = (cor, corBg, corBorda, emoji, titulo, sub) => `
+      <div style="background:${corBg}; border:1px solid ${corBorda}; border-left:5px solid ${cor}; border-radius:12px; padding:12px 15px; margin:18px 0 10px;">
+        <div style="font-size:15px; font-weight:800; color:${cor};">${emoji} ${titulo}</div>
+        <div style="font-size:12px; color:#475569; margin-top:2px;">${sub}</div>
+      </div>`;
 
     let html = '';
 
@@ -13587,6 +13627,10 @@
       </div>
     </div>`;
 
+    // ===== FAMÍLIA 1: RANKING DE PONTOS (azul) — vale para todos =====
+    html += _familia('#4338ca', '#eef2ff', '#c7d2fe', '🏆', 'Ranking de pontos',
+      'Para TODOS (gerentes, assistentes, estagiários). Cada ação registrada soma pontos — quem mais faz, sobe no ranking.');
+
     // 1) RANKING — todos
     html += _secaoRegra('ranking', '🏆', 'O Ranking de pontos', 'Para todos: gerentes, assistentes e estagiários',
       `<div style="font-size:13px; color:#475569; line-height:1.65; margin-top:12px;">${P.introRanking}</div>${_linhasPremio(P.ranking)}`);
@@ -13609,6 +13653,10 @@
 
     // 3) INDICADORES — só rm/chefe/admin
     if (veFatores) {
+      // ===== FAMÍLIA 2: CAMPANHA DE INDICADORES / PREMIAÇÃO (dourado) — só gerentes =====
+      html += _familia('#b45309', '#fffbeb', '#fde68a', '⭐', 'Campanha de indicadores (premiação)',
+        'Só para gerentes de conta. Não é pontinho: é a premiação em dinheiro, medida pelos indicadores da sua carteira (cobertura, cotações, produção) e pelo desempenho da agência.');
+
       html += _secaoRegra('indicadores', '⭐', 'Os indicadores da campanha', 'Só para gerentes de conta',
         `<div style="font-size:13px; color:#475569; line-height:1.65; margin-top:12px;">${P.introFatores}</div>
          <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:11px 13px; font-size:12.5px; color:#3730a3; line-height:1.6; margin-top:12px;">
@@ -15228,9 +15276,9 @@
               ${opcoes}
             </select>
           </div>
-          <div style="padding: 12px 14px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 10px; font-size: 12px; color: #78350f;">
+          ${metricaAtiva('pesquisa_gerada') ? `<div style="padding: 12px 14px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 10px; font-size: 12px; color: #78350f;">
             🎯 <strong>Pontuação:</strong> ao gerar você ganha <strong>+${getPonto('pesquisa_gerada')} pts</strong>. Cada resposta vale <strong>+${getPonto('pesquisa_resposta')} pt</strong> para você e para o RM da empresa. Ao atingir <strong>10 respostas</strong>, vocês ganham bônus de <strong>+${getPonto('pesquisa_bonus10')} pts</strong>.
-          </div>
+          </div>` : ''}
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="this.closest('.cad-modal').remove()">Cancelar</button>
@@ -15273,7 +15321,7 @@
         agenciaId: CTX.agenciaId,
         usuarioId: autorUid(), usuarioNome: autorNome(),
         usuarioPerfil: perfilEfetivo(),
-        pontos: getPonto('pesquisa_gerada'),
+        pontos: getPontoAtivo('pesquisa_gerada'),
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
 
@@ -15447,7 +15495,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               pesquisaId: p.id, respostaId: resp.id,
               agenciaId: p.agenciaId,
               usuarioId: p.geradoPorUid, usuarioNome: p.geradoPorNome,
-              pontos: getPonto('pesquisa_resposta'), motivo: 'Resposta recebida (gerador da pesquisa)',
+              pontos: getPontoAtivo('pesquisa_resposta'), motivo: 'Resposta recebida (gerador da pesquisa)',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
           }
@@ -15459,7 +15507,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               pesquisaId: p.id, respostaId: resp.id,
               agenciaId: p.agenciaId,
               usuarioId: p.rmUid, usuarioNome: p.rmNome,
-              pontos: getPonto('pesquisa_resposta'), motivo: 'Resposta recebida (RM da empresa)',
+              pontos: getPontoAtivo('pesquisa_resposta'), motivo: 'Resposta recebida (RM da empresa)',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
           }
@@ -15475,7 +15523,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, agenciaId: p.agenciaId,
               usuarioId: p.geradoPorUid, usuarioNome: p.geradoPorNome,
-              pontos: getPonto('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
+              pontos: getPontoAtivo('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
           }
@@ -15485,7 +15533,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               empresaId: p.empresaId, empresaNome: p.empresaNome,
               pesquisaId: p.id, agenciaId: p.agenciaId,
               usuarioId: p.rmUid, usuarioNome: p.rmNome,
-              pontos: getPonto('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
+              pontos: getPontoAtivo('pesquisa_bonus10'), motivo: '🎉 Pesquisa atingiu 10+ respostas',
               criadoEm: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
           }
@@ -15630,7 +15678,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     try {
       const snap = await db.collection('mb_config').doc('pontos').get();
       if (snap.exists) {
-        PONTOS_CACHE = { ...PONTOS_DEFAULT, ...snap.data() };
+        const d = { ...snap.data() };
+        METRICAS_ATIVAS = d.metricasAtivas || {};   // estado liga/desliga das métricas
+        delete d.metricasAtivas;                     // não polui PONTOS_CACHE
+        PONTOS_CACHE = { ...PONTOS_DEFAULT, ...d };
       } else if (podeEditarConfig()) {
         await db.collection('mb_config').doc('pontos').set({ ...PONTOS_DEFAULT });
         PONTOS_CACHE = { ...PONTOS_DEFAULT };
@@ -15706,30 +15757,32 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     { nome: 'Visita',     icon: '📍', desc: 'Estar na frente do cliente' },
     { nome: 'Funil',      icon: '🎯', desc: 'O trabalho de tocar a negociação. Mudar de etapa não pontua: o ponto vem das ações' },
     { nome: 'Desfecho',   icon: '🏁', desc: 'Como o negócio termina' },
-    { nome: 'Cadastro',   icon: '🏢', desc: 'Informação que abre portas' }
+    { nome: 'Cadastro',   icon: '🏢', desc: 'Informação que abre portas' },
+    { nome: 'Funil digital', icon: '📲', desc: 'Interações digitais do cliente — apresentações, questionários e propostas online (pontuação em preparação)' }
   ];
   function renderCfgPontos() {
     const box = document.getElementById('cfgPontosGrupos');
     if (!box) return;
     const resumo = document.getElementById('cfgPontosResumo');
     if (resumo) {
-      const pend = PONTOS_META.filter(m => m.pendente);
+      const desl = PONTOS_META.filter(m => !metricaAtiva(m.chave));
       resumo.innerHTML = `<div style="display:flex; gap:10px; flex-wrap:wrap;">
         <div style="flex:1; min-width:150px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:10px 12px;">
-          <div style="font-size:11px; color:#15803d; font-weight:700;">VALENDO AGORA</div>
-          <div style="font-size:18px; font-weight:800; color:#166534;">${PONTOS_META.length - pend.length} <span style="font-size:12px; font-weight:500;">ações</span></div>
+          <div style="font-size:11px; color:#15803d; font-weight:700;">NA CAMPANHA</div>
+          <div style="font-size:18px; font-weight:800; color:#166534;">${PONTOS_META.length - desl.length} <span style="font-size:12px; font-weight:500;">métricas ligadas</span></div>
         </div>
-        ${pend.length ? `<div style="flex:1; min-width:150px; background:#fffbeb; border:1px solid #fde68a; border-radius:9px; padding:10px 12px;">
-          <div style="font-size:11px; color:#b45309; font-weight:700;">AINDA NÃO LIGADAS</div>
-          <div style="font-size:18px; font-weight:800; color:#92400e;">${pend.length} <span style="font-size:12px; font-weight:500;">ações</span></div>
-          <div style="font-size:10.5px; color:#b45309; margin-top:2px;">${pend.map(m => m.label.replace(/^[^\s]+\s/, '')).join(' · ')}</div>
+        ${desl.length ? `<div style="flex:1; min-width:150px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:9px; padding:10px 12px;">
+          <div style="font-size:11px; color:#64748b; font-weight:700;">DESLIGADAS</div>
+          <div style="font-size:18px; font-weight:800; color:#475569;">${desl.length} <span style="font-size:12px; font-weight:500;">métricas</span></div>
+          <div style="font-size:10.5px; color:#94a3b8; margin-top:2px;">Não aparecem nas regras nem contam pontos: ${desl.map(m => m.label.replace(/^[^\s]+\s/, '')).join(' · ')}</div>
         </div>` : ''}
-      </div>`;
+      </div>
+      <div style="font-size:11.5px; color:#64748b; margin-top:8px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:8px 11px;">💡 O botão <strong>Ligada/Desligada</strong> em cada linha controla se a métrica vale na campanha. Desligada, ela some do "Como funciona" e para de creditar pontos — útil enquanto você ainda está ajustando (ex.: pesquisa de benefícios, funil digital).</div>`;
     }
     box.innerHTML = PONTOS_GRUPOS.map(g => {
       const itens = PONTOS_META.filter(m => m.grupo === g.nome);
       if (!itens.length) return '';
-      const soma = itens.filter(m => !m.pendente).reduce((s, m) => s + getPonto(m.chave), 0);
+      const soma = itens.filter(m => metricaAtiva(m.chave)).reduce((s, m) => s + getPonto(m.chave), 0);
       return `<div style="margin-bottom:22px;">
         <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:6px;">
           <div style="font-size:14px; font-weight:800; color:#0f172a;">${g.icon} ${g.nome}</div>
@@ -15737,15 +15790,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div style="font-size:11.5px; color:#94a3b8; margin:2px 0 8px;">${g.desc}</div>
         <table class="cfg-table">
-          <thead><tr><th>AÇÃO</th><th>QUANDO ACONTECE</th><th style="width:110px; text-align:center;">PONTOS</th></tr></thead>
-          <tbody>${itens.map(m => `
-            <tr${m.pendente ? ' style="background:#fffbeb;"' : ''}>
+          <thead><tr><th>AÇÃO</th><th>QUANDO ACONTECE</th><th style="width:96px; text-align:center;">NA CAMPANHA</th><th style="width:110px; text-align:center;">PONTOS</th></tr></thead>
+          <tbody>${itens.map(m => { const _on = metricaAtiva(m.chave); return `
+            <tr${_on ? '' : ' style="background:#f8fafc; opacity:.72;"'}>
               <td style="font-weight:600; color:#0f172a;">${m.label}
-                ${m.pendente ? '<div style="display:inline-block; font-size:9.5px; font-weight:800; background:#fde68a; color:#92400e; padding:2px 7px; border-radius:5px; margin-left:6px; vertical-align:middle;">AINDA NÃO LIGADO</div>' : ''}
+                ${m.futuro ? '<div style="display:inline-block; font-size:9.5px; font-weight:800; background:#e0e7ff; color:#3730a3; padding:2px 7px; border-radius:5px; margin-left:6px; vertical-align:middle;">FUTURO</div>' : ''}
               </td>
-              <td style="color:#64748b; font-size:12px;">${m.desc || ''}${m.pendente ? '<div style="color:#b45309; font-size:11px; margin-top:3px;">Chega junto com o motor de checklist — o valor fica guardado até lá.</div>' : ''}</td>
-              <td style="text-align:center;"><input type="number" class="cfg-input cfg-pt-input" data-chave="${m.chave}" value="${getPonto(m.chave)}"><span class="cfg-suffix">pts</span></td>
-            </tr>`).join('')}</tbody>
+              <td style="color:#64748b; font-size:12px;">${m.desc || ''}</td>
+              <td style="text-align:center;">
+                <label class="cfg-switch" title="${_on ? 'Ligada — vale na campanha' : 'Desligada — fora da campanha'}">
+                  <input type="checkbox" class="cfg-metrica-toggle" data-chave="${m.chave}" ${_on ? 'checked' : ''} onchange="toggleMetricaCampanha('${m.chave}', this.checked)">
+                  <span class="cfg-switch-txt">${_on ? '✅ Ligada' : '⭘ Desligada'}</span>
+                </label>
+              </td>
+              <td style="text-align:center;"><input type="number" class="cfg-input cfg-pt-input" data-chave="${m.chave}" value="${getPonto(m.chave)}" ${_on ? '' : 'disabled'}><span class="cfg-suffix">pts</span></td>
+            </tr>`; }).join('')}</tbody>
         </table>
       </div>`;
     }).join('');
@@ -16160,6 +16219,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   // ---------- Salvar: pontos ----------
+  // Liga/desliga uma métrica na tela de config, preservando edições de pontos não salvas.
+  function toggleMetricaCampanha(chave, checked) {
+    document.querySelectorAll('.cfg-pt-input').forEach(inp => {
+      const k = inp.getAttribute('data-chave'); const v = parseInt(inp.value);
+      if (k && !isNaN(v)) PONTOS_CACHE[k] = v;
+    });
+    METRICAS_ATIVAS = { ...METRICAS_ATIVAS, [chave]: !!checked };
+    renderCfgPontos();
+  }
+  window.toggleMetricaCampanha = toggleMetricaCampanha;
+
   async function salvarPontos() {
     try {
       const dados = {};
@@ -16168,9 +16238,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const v = parseInt(inp.value);
         if (chave && !isNaN(v)) dados[chave] = v;
       });
+      // Estado liga/desliga de cada métrica (só grava o que difere do padrão)
+      const ativas = {};
+      document.querySelectorAll('.cfg-metrica-toggle').forEach(chk => {
+        const chave = chk.getAttribute('data-chave');
+        if (chave) ativas[chave] = chk.checked;
+      });
+      METRICAS_ATIVAS = ativas;
+      dados.metricasAtivas = ativas;
       await db.collection('mb_config').doc('pontos').set(dados, { merge: true });
-      PONTOS_CACHE = { ...PONTOS_DEFAULT, ...PONTOS_CACHE, ...dados };
-      flashSalvo('Pontuação salva!');
+      const _semMeta = { ...dados }; delete _semMeta.metricasAtivas;
+      PONTOS_CACHE = { ...PONTOS_DEFAULT, ...PONTOS_CACHE, ..._semMeta };
+      flashSalvo('Pontuação e métricas salvas!');
     } catch (e) { alert('Erro ao salvar pontos: ' + e.message); }
   }
 
@@ -16230,9 +16309,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       case 'editou_socios':        return getPonto('socios_alteracao');
       case 'contato_decisor':      return getPonto('contato_decisor');
       case 'contato_rh':           return getPonto('contato_rh');
-      case 'pesquisa_gerada':      return getPonto('pesquisa_gerada');
-      case 'pesquisa_resposta':    return getPonto('pesquisa_resposta');
-      case 'pesquisa_bonus10':     return getPonto('pesquisa_bonus10');
+      case 'pesquisa_gerada':      return getPontoAtivo('pesquisa_gerada');
+      case 'pesquisa_resposta':    return getPontoAtivo('pesquisa_resposta');
+      case 'pesquisa_bonus10':     return getPontoAtivo('pesquisa_bonus10');
       case 'agenda_com_corretor':    return getPonto('agenda_com_corretor');
       case 'checklist_ultimo_etapa': return getPonto('checklist_ultimo_etapa');
       case 'percurso_completo':      return (a.itensMarcados || 1) * getPonto('percurso_completo_item');
