@@ -17358,7 +17358,44 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       || (a.questionario && a.questionario.contato && a.questionario.contato.nome)
       || (a.origem === 'questionario' ? 'Pedido de proposta' : 'Respondente');
   }
-  function _apGrupoChave(a) { return a.grupo || a.token || a.id; }
+  function _apGrupoChave(a) {
+    // Empresa da BASE (link gerado com empresa): agrupa por token — vários perfis
+    // (RH × gerente) da MESMA empresa aparecem no comparativo lado a lado.
+    if (a.empresaId) return a.grupo || a.token || a.id;
+    // Link SEM empresa (redes sociais): desmembra por nome de empresa digitado —
+    // cada empresa diferente vira um card próprio, não o comparativo.
+    const emp = _normNome(a.empresaNome
+      || (a.questionario && (a.questionario.empresa || (a.questionario.contato && a.questionario.contato.empresa)))
+      || '');
+    if (emp) return (a.token || 'social') + '::' + emp;   // mesma empresa digitada + perfis → compara
+    return 'solo::' + a.id;                                 // sem empresa informada → card isolado
+  }
+
+  // Empresa de exibição de um registro (base, digitada no link solto, ou "não informada")
+  function _apEmpresaNome(a) {
+    const q = a.questionario || {}, ct = q.contato || {};
+    return q.empresa || ct.empresa || a.empresaNome || (a.empresaId ? '' : 'Empresa não informada');
+  }
+
+  // Roteiro completo (perguntas + "sem resposta") gravado pelos arquivos de funil.
+  function _apRoteiroHTML(a) {
+    const bloco = (titulo, arr) => {
+      if (!Array.isArray(arr) || !arr.length) return '';
+      const nOk = arr.filter(it => it && it.r != null && it.r !== '').length;
+      const linhas = arr.map(it => {
+        const ok = it && it.r != null && it.r !== '';
+        return `<div style="display:flex; gap:8px; align-items:baseline; padding:4px 0; border-bottom:1px solid #eef2f7;">
+          <span style="flex-shrink:0; font-size:12px;">${ok ? '✅' : '⬜'}</span>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:11px; color:#94a3b8; line-height:1.35;">${(it.p || '').replace(/</g, '&lt;')}</div>
+            <div style="font-size:12.5px; font-weight:700; color:${ok ? '#0f172a' : '#b91c1c'};">${ok ? String(it.r).replace(/</g, '&lt;') : '— sem resposta'}</div>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div style="margin-top:8px;"><div style="font-size:11px; font-weight:800; color:#4338ca; margin-bottom:2px;">${titulo} · <span style="color:#64748b;">${nOk}/${arr.length} respondidas</span></div>${linhas}</div>`;
+    };
+    return [bloco('📲 Apresentação', a.roteiroApres), bloco('📋 Questionário de cotação', a.roteiro)].filter(Boolean).join('');
+  }
 
   // Sub-agrupa a lista de um produto por EMPRESA (grupo). Quem está sozinho
   // continua um card normal; empresa com 2+ perfis vira um card comparativo.
@@ -17447,7 +17484,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Card de uma EMPRESA com vários perfis respondendo o mesmo produto.
   function _apCardEmpresa(docs) {
     docs = docs.slice().sort((a, b) => (_PAPEL_ORDEM[a.perfilPapel] == null ? 9 : _PAPEL_ORDEM[a.perfilPapel]) - (_PAPEL_ORDEM[b.perfilPapel] == null ? 9 : _PAPEL_ORDEM[b.perfilPapel]));
-    const emp = docs.map(d => d.empresaNome || (d.questionario && d.questionario.empresa)).find(Boolean) || 'Empresa sem nome';
+    const emp = docs.map(_apEmpresaNome).find(Boolean) || 'Empresa sem nome';
     const perfis = docs.map(_apPapelRotulo);
     const nCotar = docs.filter(d => d.ultimoInteresse === 'cotar' || d.questionarioCompleto).length;
     const gid = 'emp_' + _apGrupoChave(docs[0]).replace(/[^a-zA-Z0-9_]/g, '');
@@ -17487,7 +17524,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const rotTerm = r._vuln ? 'VULNERABILIDADE' : (r._grau && !r._risco ? 'IMOBILIZAÇÃO' : 'EXPOSIÇÃO');
     const int = a.ultimoInteresse ? rotInteresse[a.ultimoInteresse] : null;
     const quem = ct.nome || a.destinatario || a.empresaNome || 'Visitante sem identificação';
-    const empresa = q.empresa || a.empresaNome || '';
+    const empresa = _apEmpresaNome(a);
 
     const linhas = Object.entries(r).filter(([k]) => k.charAt(0) !== '_')
       .map(([k, v]) => {
@@ -17545,6 +17582,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       ${(linhas || linhasQ) ? `<div onclick="var d=this.nextElementSibling; var ab=d.style.display==='none'; d.style.display=ab?'grid':'none'; this.textContent=ab?'▲ ocultar respostas':'▾ ver as respostas';"
            style="cursor:pointer; font-size:11.5px; color:#4338ca; font-weight:700;">▾ ver as respostas</div>
         <div style="display:none; gap:3px; margin-top:7px; background:#fafbfc; border-radius:8px; padding:10px 12px;">${linhas}${(linhas && linhasQ) ? '<div style="height:8px;"></div>' : ''}${linhasQ}</div>` : ''}
+      ${(a.roteiroApres && a.roteiroApres.length) || (a.roteiro && a.roteiro.length) ? `<div onclick="var d=this.nextElementSibling; var ab=d.style.display==='none'; d.style.display=ab?'block':'none'; this.textContent=ab?'▲ ocultar o que faltou':'⬜ ver perguntas e o que faltou';"
+           style="cursor:pointer; font-size:11.5px; color:#b45309; font-weight:700; margin-top:6px;">⬜ ver perguntas e o que faltou</div>
+        <div style="display:none; margin-top:7px; background:#fffdf7; border:1px solid #fef3c7; border-radius:8px; padding:10px 12px;">${_apRoteiroHTML(a)}</div>` : ''}
       ${blocoGar}
     </div>`;
   }
