@@ -5539,6 +5539,7 @@ let SITE_LEADS=[];
 const SITE_COLS=[['leads_cotacao_auto','Auto'],['leads_cotacao_vida','Vida'],
   ['leads_cotacao_residencial','Residencial'],['leads_cotacao_generica','Outros']];
 function ctEscutarSite(){
+  ctEscutarCorte();
   SITE_COLS.forEach(([col,ramo])=>{
     try{
       LISTENERS.push(db.collection(col).onSnapshot(sn=>{
@@ -5550,6 +5551,48 @@ function ctEscutarSite(){
     }catch(e){ console.warn('sem acesso a '+col); }
   });
 }
+/* ---------- corte: só cotações do site a partir de uma data ---------- */
+let CT_SITE_CFG={desde:null,ignorados:[],carregado:false};
+let CT_SITE_VER_TUDO=false;
+let __ctCorteEscrito=false;
+function ctEscutarCorte(){
+  try{
+    LISTENERS.push(db.collection('configuracoes').doc('site_leads').onSnapshot(d=>{
+      const v=d.exists?(d.data()||{}):{};
+      CT_SITE_CFG={desde:v.desde||null,ignorados:v.ignorados||[],carregado:true};
+      const r=(location.hash||'').slice(1);
+      if(r==='leads'||r==='contatos') VIEWS[r]&&VIEWS[r]();
+    },e=>{ CT_SITE_CFG.carregado=true; console.warn('config site_leads',e&&e.code); }));
+  }catch(e){ CT_SITE_CFG.carregado=true; }
+}
+async function ctDefinirCorte(data){
+  try{
+    await db.collection('configuracoes').doc('site_leads')
+      .set({desde:data,atualizadoEm:FV.serverTimestamp(),
+            por:(CURRENT_USER&&CURRENT_USER.email)||'admin'},{merge:true});
+    CT_SITE_CFG.desde=data;
+    toast('Passando a considerar as cotações do site a partir de '+fmtData(data)+'.','ok');
+  }catch(e){ console.error(e); toast('Não consegui salvar a data de corte.','err'); }
+}
+async function ctIgnorarSite(id){
+  const ig=[...new Set((CT_SITE_CFG.ignorados||[]).concat([id]))];
+  try{ await db.collection('configuracoes').doc('site_leads').set({ignorados:ig},{merge:true});
+    CT_SITE_CFG.ignorados=ig; toast('Cotação dispensada.','info'); }
+  catch(e){ console.error(e); toast('Erro ao dispensar.','err'); }
+}
+/* na primeira vez, corta em hoje sozinho — o histórico de testes fica de fora */
+function ctGarantirCorte(){
+  if(__ctCorteEscrito||!CT_SITE_CFG.carregado||CT_SITE_CFG.desde) return;
+  if(!SITE_LEADS.length) return;
+  __ctCorteEscrito=true;
+  const hoje=(function(){const d=new Date(),p=n=>String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());})();
+  CT_SITE_CFG.desde=hoje;
+  db.collection('configuracoes').doc('site_leads')
+    .set({desde:hoje,definidoAutomaticamente:true,atualizadoEm:FV.serverTimestamp()},{merge:true})
+    .catch(e=>console.warn('corte',e&&e.code));
+}
+
 /* já existe no CRM? (evita importar duas vezes) */
 function ctJaImportado(s){
   const fone=ctDig(s.whatsapp||s.telefone||s.celular);
@@ -5559,15 +5602,47 @@ function ctJaImportado(s){
     (fone&&ctDig(l.whatsapp||l.telefone)===fone) ||
     (mail&&ctNorm(l.email)===mail));
 }
-function ctPendentesSite(){ return SITE_LEADS.filter(s=>!ctJaImportado(s)); }
+function ctPendentesSite(){
+  ctGarantirCorte();
+  const desde=CT_SITE_CFG.desde;
+  const ig=CT_SITE_CFG.ignorados||[];
+  return SITE_LEADS.filter(s=>{
+    if(ctJaImportado(s)) return false;
+    if(ig.includes(s.id)) return false;
+    if(!CT_SITE_VER_TUDO&&desde){ const d=strData(s.criadoEm); if(!d||d<desde) return false; }
+    return true;
+  });
+}
+function ctAntigasSite(){
+  const desde=CT_SITE_CFG.desde; if(!desde) return 0;
+  const ig=CT_SITE_CFG.ignorados||[];
+  return SITE_LEADS.filter(s=>!ctJaImportado(s)&&!ig.includes(s.id)&&
+    (function(){const d=strData(s.criadoEm);return !d||d<desde;})()).length;
+}
 function ctBlocoSite(){
   const pend=ctPendentesSite();
-  if(!pend.length) return '';
+  const antigas=ctAntigasSite();
   window.__ctSite=pend;
+  if(!pend.length){
+    if(!antigas||!CT_SITE_CFG.desde) return '';
+    return `<div class="card" style="padding:12px 16px;font-size:.82rem;color:var(--text-2);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <i class="fas fa-globe" style="color:var(--text-3)"></i>
+      Nenhuma cotação nova do site desde ${fmtData(CT_SITE_CFG.desde)}.
+      <span style="color:var(--text-3)">${antigas} anterior(es) a essa data estão ocultas.</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="CT_SITE_VER_TUDO=true;VIEWS.leads()">Ver as antigas</button></div>`;
+  }
   return `<div class="card" style="border-color:#b8e4ee;background:var(--brand-50)">
     <div class="card-head" style="border-color:#b8e4ee">
       <h3><i class="fas fa-globe"></i> ${pend.length} cotação(ões) vindas do site ainda fora do funil</h3>
       <button class="btn btn-primary btn-sm" onclick="ctImportarTodos()"><i class="fas fa-download"></i> Trazer todas</button></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface);border-radius:10px;padding:9px 13px;margin-bottom:12px;font-size:.81rem">
+      <i class="fas fa-filter" style="color:var(--brand)"></i>
+      <span>Considerando o que chegou a partir de</span>
+      <input type="date" value="${esc(CT_SITE_CFG.desde||'')}" onchange="ctDefinirCorte(this.value)" style="width:auto;padding:5px 9px">
+      ${antigas&&!CT_SITE_VER_TUDO?`<span style="color:var(--text-3)">· ${antigas} mais antiga(s) ocultas</span>
+        <button class="btn btn-ghost btn-sm" onclick="CT_SITE_VER_TUDO=true;VIEWS.leads()">ver antigas</button>`:''}
+      ${CT_SITE_VER_TUDO?`<button class="btn btn-ghost btn-sm" onclick="CT_SITE_VER_TUDO=false;VIEWS.leads()">voltar a esconder antigas</button>`:''}
+    </div>
     ${pend.slice(0,8).map((s,i)=>`<div class="sug">
       <div class="ic" style="background:var(--brand);color:#fff"><i class="fas fa-globe"></i></div>
       <div style="flex:1;min-width:0">
@@ -5575,11 +5650,15 @@ function ctBlocoSite(){
           <span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-left:6px">${esc(s.__ramo)}</span></div>
         <div style="font-size:.79rem;color:var(--text-2)">${esc(s.whatsapp||s.telefone||s.celular||'')} ${s.email?'· '+esc(s.email):''}
           ${s.criadoEm?'· '+fmtData(s.criadoEm):''}</div></div>
-      <button class="btn btn-ghost btn-sm" onclick="ctImportarUm(${i})"><i class="fas fa-plus"></i> Trazer</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="ctImportarUm(${i})"><i class="fas fa-plus"></i> Trazer</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" title="Dispensar (some da lista)" onclick="ctIgnorarSite('${esc(s.id)}')"><i class="fas fa-xmark"></i></button>
+      </div>
     </div>`).join('')}
     ${pend.length>8?`<div style="font-size:.79rem;color:var(--text-2);margin-top:10px">e mais ${pend.length-8}…</div>`:''}
     <div style="font-size:.76rem;color:var(--text-2);margin-top:12px"><i class="fas fa-circle-info"></i>
-      Essas cotações estavam gravadas pelas páginas do site e não apareciam no funil. Ao trazer, viram lead com origem "Site".</div>
+      Essas cotações estavam gravadas pelas páginas do site e não apareciam no funil. Ao trazer, viram lead com origem "Site".
+      O <b>x</b> dispensa uma cotação sem importar — útil para teste antigo que sobrou.</div>
   </div>`;
 }
 function ctDadosSite(s){
