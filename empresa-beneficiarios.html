@@ -580,6 +580,7 @@ const ABAS=[
   {k:'beneficiarios',n:'Beneficiários', i:'fa-users'},
   {k:'dependentes',  n:'Dependentes',   i:'fa-people-roof'},
   {k:'movimentacoes',n:'Movimentações', i:'fa-right-left'},
+  {k:'perfil',       n:'Perfil da equipe', i:'fa-chart-pie'},
   {k:'fatura',       n:'Fatura',        i:'fa-file-invoice-dollar'},
   {k:'plano',        n:'Meu plano',     i:'fa-book-open'}
 ];
@@ -597,7 +598,7 @@ function render(){
   let ini=null,fim=null;
   if(id){ try{ ini=a.selectionStart; fim=a.selectionEnd; }catch(e){} }
   box.innerHTML=({resumo:viewResumo,beneficiarios:viewBeneficiarios,dependentes:viewDependentes,
-                  movimentacoes:viewMovimentacoes,fatura:viewFatura,plano:viewPlano}[TAB]||viewResumo)();
+                  movimentacoes:viewMovimentacoes,perfil:viewPerfil,fatura:viewFatura,plano:viewPlano}[TAB]||viewResumo)();
   if(id){
     const n=document.getElementById(id);
     if(n){ try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
@@ -1116,6 +1117,101 @@ function pdfFatura(){
       {k:'Custo da empresa',v:money(fat.totEmpresa)},{k:'Desconto em folha',v:money(fat.totFunc)},
       {k:'TOTAL DA COMPETÊNCIA',v:money(fat.total),forte:true}],
     arquivo:'fatura-'+slug(EMP.nomeEmpresa)+'-'+fat.ano+'-'+String(fat.mes).padStart(2,'0')});
+}
+
+/* =========================================================================
+   PERFIL DA EQUIPE (visão da empresa)
+   ========================================================================= */
+const FAIXAS_ET=[[0,18,'0 a 18'],[19,23,'19 a 23'],[24,28,'24 a 28'],[29,33,'29 a 33'],[34,38,'34 a 38'],
+  [39,43,'39 a 43'],[44,48,'44 a 48'],[49,53,'49 a 53'],[54,58,'54 a 58'],[59,200,'59 ou mais']];
+const BLOCOS_TEMPO=[[0,11,'Menos de 1 ano'],[12,35,'1 a 3 anos'],[36,59,'3 a 5 anos'],[60,119,'5 a 10 anos'],[120,99999,'Mais de 10 anos']];
+function mesesDeCasa(adm){ const d=s2d(adm); if(!d) return null;
+  const h=new Date(); let m=(h.getFullYear()-d.getFullYear())*12+(h.getMonth()-d.getMonth());
+  if(h.getDate()<d.getDate()) m--; return m>=0?m:null; }
+function fmtTempoM(m){ if(m==null) return '—'; const a=Math.floor(m/12), r=m%12;
+  return a?(a+' ano'+(a>1?'s':'')+(r?' e '+r+' m':'')):(r+' mês'+(r!==1?'es':'')); }
+function barraP(rot,val,tot,cor,extra){
+  const pct=tot?Math.round(val/tot*100):0;
+  return `<div style="margin-bottom:9px">
+    <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:4px">
+      <span>${rot}${extra?` <span style="color:var(--text-3);font-size:.76rem">${extra}</span>`:''}</span>
+      <span style="font-variant-numeric:tabular-nums"><b>${val}</b> <span style="color:var(--text-3)">· ${pct}%</span></span></div>
+    <div style="background:var(--surface-3);border-radius:6px;height:10px;overflow:hidden">
+      <div style="width:${pct}%;height:100%;background:${cor||'var(--brand)'};border-radius:6px"></div></div></div>`;
+}
+function viewPerfil(){
+  const ps=pessoas();
+  const tit=ps.filter(p=>p.titularidade!=='dependente'), dep=ps.filter(p=>p.titularidade==='dependente');
+  const comIdade=ps.map(p=>({p,i:idade(p.dataNascimento)})).filter(x=>x.i!=null);
+  const semIdade=ps.length-comIdade.length;
+  const faixas={}; FAIXAS_ET.forEach(([,,r])=>faixas[r]={t:0,f:0,d:0});
+  comIdade.forEach(({p,i})=>{ const b=FAIXAS_ET.find(([a,z])=>i>=a&&i<=z); if(!b) return;
+    faixas[b[2]].t++; if(p.titularidade==='dependente') faixas[b[2]].d++; else faixas[b[2]].f++; });
+  const idades=comIdade.map(x=>x.i).sort((a,b)=>a-b);
+  const media=idades.length?Math.round(idades.reduce((s,i)=>s+i,0)/idades.length):null;
+  const tempos=tit.map(t=>mesesDeCasa(t.dataAdmissao)).filter(m=>m!=null);
+  const tMed=tempos.length?Math.round(tempos.reduce((s,m)=>s+m,0)/tempos.length):null;
+  const tDist={}; BLOCOS_TEMPO.forEach(([,,r])=>tDist[r]=0);
+  tempos.forEach(m=>{ const b=BLOCOS_TEMPO.find(([a,z])=>m>=a&&m<=z); if(b) tDist[b[2]]++; });
+  const menores=comIdade.filter(x=>x.i<18).length;
+  window.__expPerf={ps,comIdade,faixas,media,tMed,tDist,tempos};
+  return `<h2 class="page">Perfil da equipe</h2>
+  <p class="page-sub">Como está composto o time coberto pelos benefícios — idade, tempo de casa e adesão por produto.</p>
+  ${semIdade?`<div class="note warn"><i class="fas fa-triangle-exclamation"></i>
+    <div><b>${semIdade} de ${ps.length} beneficiários</b> ainda estão sem data de nascimento no cadastro, então não entram nos gráficos.
+    Fale com a ${CORRETORA.nome} no ${CORRETORA.label} para completarmos.</div></div>`:''}
+  <div class="kpis">
+    <div class="kpi"><div class="ic" style="background:var(--purple-bg);color:var(--purple)"><i class="fas fa-user-tie"></i></div>
+      <div class="val">${tit.length}</div><div class="lbl">Funcionários</div></div>
+    <div class="kpi"><div class="ic" style="background:var(--warn-bg);color:var(--warn)"><i class="fas fa-people-roof"></i></div>
+      <div class="val">${dep.length}</div><div class="lbl">Dependentes</div></div>
+    <div class="kpi"><div class="ic" style="background:var(--info-bg);color:var(--info)"><i class="fas fa-cake-candles"></i></div>
+      <div class="val">${media!=null?media:'—'}</div><div class="lbl">Idade média (anos)</div>
+      ${comIdade.length?`<div class="foot">Base de ${comIdade.length} pessoa(s)</div>`:''}</div>
+    <div class="kpi"><div class="ic" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-briefcase"></i></div>
+      <div class="val" style="font-size:1.2rem">${fmtTempoM(tMed)}</div><div class="lbl">Tempo médio de casa</div>
+      ${tempos.length?`<div class="foot">${tempos.length} func. com admissão</div>`:''}</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px">
+    <div class="card"><div class="card-head"><h3><i class="fas fa-chart-simple"></i> Faixa etária</h3>
+      <button class="btn btn-ghost btn-sm" onclick="pdfPerfil()"><i class="fas fa-file-pdf"></i> PDF</button></div>
+      ${comIdade.length?FAIXAS_ET.map(([,,r])=>{const f=faixas[r]; if(!f.t) return '';
+        return barraP(r+' anos',f.t,comIdade.length,'var(--brand)',f.d?`(${f.f} func. · ${f.d} dep.)`:'');}).join('')
+        :`<div class="empty" style="padding:26px"><div class="ic"><i class="fas fa-cake-candles"></i></div>
+          <h4>Sem datas de nascimento</h4><p>Assim que os cadastros forem completados, a distribuição aparece aqui.</p></div>`}
+      ${menores?`<div style="margin-top:12px;font-size:.8rem;color:var(--text-2)"><i class="fas fa-child" style="color:var(--info)"></i> ${menores} menor(es) de 18 anos entre os dependentes.</div>`:''}
+    </div>
+    <div class="card"><div class="card-head"><h3><i class="fas fa-briefcase"></i> Tempo de empresa</h3></div>
+      ${tempos.length?BLOCOS_TEMPO.map(([,,r])=>tDist[r]?barraP(r,tDist[r],tempos.length,'var(--ok)'):'').join('')
+        :`<div class="empty" style="padding:26px"><div class="ic"><i class="fas fa-briefcase"></i></div>
+          <h4>Sem datas de admissão</h4><p>Informe a admissão ao incluir o colaborador para acompanhar o tempo de casa.</p></div>`}
+    </div>
+  </div>
+  <div class="card"><div class="card-head"><h3><i class="fas fa-layer-group"></i> Adesão por produto</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Produto</th><th class="num">Funcionários</th><th class="num">Dependentes</th><th class="num">Vidas</th><th class="num">Adesão</th></tr></thead><tbody>
+    ${planosContratados().map(p=>{
+      const f=tit.filter(x=>x.produtos.includes(p.k)).length, d=dep.filter(x=>x.produtos.includes(p.k)).length;
+      const pct=tit.length?Math.round(f/tit.length*100):0;
+      return `<tr><td><span class="bdg ${p.k}"><i class="fas ${p.ic}"></i> ${p.nome}</span></td>
+        <td class="num">${f}</td><td class="num">${d}</td><td class="num"><b>${f+d}</b></td>
+        <td class="num">${pct}%</td></tr>`;}).join('')}
+    </tbody></table></div>
+    <p style="font-size:.78rem;color:var(--text-3);margin-top:12px">Adesão = funcionários no produto dividido pelo total de funcionários ativos.</p>
+  </div>`;
+}
+function pdfPerfil(){
+  const P=window.__expPerf; if(!P||!P.comIdade.length) return toast('Sem datas de nascimento para o relatório.','warn');
+  const linhas=[];
+  FAIXAS_ET.forEach(([,,r])=>{ const f=P.faixas[r]; if(f.t) linhas.push([r+' anos',String(f.f),String(f.d),String(f.t),
+    Math.round(f.t/P.comIdade.length*100)+'%']); });
+  BLOCOS_TEMPO.forEach(([,,r])=>{ if(P.tDist[r]) linhas.push(['Tempo de casa: '+r,String(P.tDist[r]),'',String(P.tDist[r]),
+    Math.round(P.tDist[r]/P.tempos.length*100)+'%']); });
+  gerarPDF({titulo:'Perfil da equipe',subtitulo:'Faixa etária e tempo de empresa',
+    colunas:['Faixa','Funcionários','Dependentes','Total','%'],linhas,alinhaDir:[1,2,3,4],
+    rodape:[{k:'Pessoas com data de nascimento',v:P.comIdade.length},
+      {k:'Idade média',v:(P.media!=null?P.media+' anos':'—')},
+      {k:'Tempo médio de casa',v:fmtTempoM(P.tMed),forte:true}],
+    arquivo:'perfil-equipe-'+slug(EMP.nomeEmpresa)});
 }
 
 /* =========================================================================
