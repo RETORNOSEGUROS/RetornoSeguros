@@ -590,8 +590,19 @@ function render(){
   document.getElementById('tabsbar').innerHTML=ABAS.map(a=>
     `<button class="tb ${TAB===a.k?'on':''}" onclick="irPara('${a.k}')"><i class="fas ${a.i}"></i> ${a.n}${a.k==='movimentacoes'&&p?` <span class="pill">${p}</span>`:''}</button>`).join('');
   const box=document.getElementById('panes');
+  /* guarda o campo focado e a posição do cursor: sem isso o input de busca é
+     destruído a cada tecla e o usuário só consegue digitar/apagar uma letra */
+  const a=document.activeElement;
+  const id=(a&&a.id&&box.contains(a))?a.id:null;
+  let ini=null,fim=null;
+  if(id){ try{ ini=a.selectionStart; fim=a.selectionEnd; }catch(e){} }
   box.innerHTML=({resumo:viewResumo,beneficiarios:viewBeneficiarios,dependentes:viewDependentes,
                   movimentacoes:viewMovimentacoes,fatura:viewFatura,plano:viewPlano}[TAB]||viewResumo)();
+  if(id){
+    const n=document.getElementById(id);
+    if(n){ try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
+      if(ini!=null&&n.setSelectionRange){ try{ n.setSelectionRange(ini,fim); }catch(e){} } }
+  }
 }
 
 /* =========================================================================
@@ -723,19 +734,92 @@ const rotuloStatus=s=>({pendente:'Em análise',aprovado:'Aprovado',rejeitado:'Re
    2) BENEFICIÁRIOS
    ========================================================================= */
 function viewBeneficiarios(){
-  const f=F.ben;
+  const f=F.ben; f.abertos=f.abertos||{};
   let ps=pessoas();
   if(f.prod) ps=ps.filter(p=>p.produtos.includes(f.prod));
-  if(f.tit) ps=ps.filter(p=>(p.titularidade==='dependente'?'dependente':'titular')===f.tit);
   if(f.busca){ const q=f.busca.toLowerCase(), qn=soN(f.busca);
-    ps=ps.filter(p=>(p.nome||'').toLowerCase().includes(q)||(qn&&p.cpfN.includes(qn))); }
+    const casa=p=>(p.nome||'').toLowerCase().includes(q)||(qn&&p.cpfN.includes(qn));
+    /* funcionário encontrado traz os dependentes dele;
+       dependente encontrado traz só o titular dele (não os irmãos) */
+    const achou=new Set(), titComDeps=new Set(), titContexto=new Set();
+    ps.forEach(p=>{ if(!casa(p)) return;
+      achou.add(p.cpfN||p.nome);
+      if(p.titularidade==='dependente'){ if(p.cpfTitular) titContexto.add(p.cpfTitular); }
+      else if(p.cpfN) titComDeps.add(p.cpfN);
+    });
+    ps=ps.filter(p=> achou.has(p.cpfN||p.nome)
+      || (p.titularidade!=='dependente' && titContexto.has(p.cpfN))
+      || (p.titularidade==='dependente' && titComDeps.has(p.cpfTitular)));
+  }
   ps=ps.filter(p=>passaData('ben',p.inicio));
+  if(f.tit) ps=ps.filter(p=>(p.titularidade==='dependente'?'dependente':'titular')===f.tit);
+
+  /* agrupa: dependente aparece embaixo do seu titular */
+  const titulares=ps.filter(p=>p.titularidade!=='dependente');
+  const porCpf={}; titulares.forEach(t=>{ if(t.cpfN) porCpf[t.cpfN]=t; t.deps=[]; });
+  const soltos=[];
+  ps.filter(p=>p.titularidade==='dependente').forEach(d=>{
+    const t=porCpf[d.cpfTitular]; if(t) t.deps.push(d); else soltos.push(d);
+  });
+  titulares.forEach(t=>t.deps.sort((a,b)=>(a.nome||'').localeCompare(b.nome||'')));
+  const agrupado=!f.tit;                        // filtrando por tipo, mostra lista simples
+  const totDeps=ps.filter(p=>p.titularidade==='dependente').length;
+  const algumComDep=titulares.some(t=>t.deps.length);
   window.__expBen=ps;
+
+  const acoes=p=>`<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">
+      <button class="btn btn-ghost btn-sm" title="Detalhes" onclick="modalDetalhe('${esc(p.cpfN||p.nome)}')"><i class="fas fa-eye"></i></button>
+      ${p.titularidade!=='dependente'?`<button class="btn btn-ghost btn-sm" title="Incluir dependente" onclick="modalInclusao('dep','${esc(p.cpfN)}')"><i class="fas fa-user-plus"></i></button>`:''}
+      <button class="btn btn-ghost btn-sm" style="color:var(--danger)" title="Solicitar exclusão" onclick="modalExclusao('${esc(p.cpfN||p.nome)}')"><i class="fas fa-user-minus"></i></button></td>`;
+
+  const linhaDeps=t=>`<tr class="dep-row"><td colspan="7" style="padding:0;background:var(--surface-2)">
+    <div style="padding:10px 16px 14px 40px">
+      <div style="font-size:.7rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
+        <i class="fas fa-people-roof"></i> Dependentes de ${esc((t.nome||'').split(' ')[0])}</div>
+      <table style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+        <thead><tr><th>Dependente</th><th>Parentesco</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Início</th><th></th></tr></thead>
+        <tbody>${t.deps.map(d=>{const id=idade(d.dataNascimento);return `<tr>
+          <td><b>${esc(d.nome)}</b>${d.cartao?`<div style="font-size:.72rem;color:var(--text-3)">Carteirinha ${esc(d.cartao)}</div>`:''}</td>
+          <td><span class="bdg dependente">${esc(PARENTESCOS[d.parentesco]||d.parentesco||'—')}</span></td>
+          <td style="font-variant-numeric:tabular-nums">${fmtCPF(d.cpf)||'—'}</td>
+          <td>${fmtData(d.dataNascimento)}${id!=null?` <span style="color:var(--text-3)">· ${id}a</span>`:''}</td>
+          <td>${chipsProd(d.produtos)}</td>
+          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td>
+          ${acoes(d)}</tr>`;}).join('')}</tbody></table></div></td></tr>`;
+
+  const linhaPessoa=(p,comToggle)=>{
+    const dep=p.titularidade==='dependente', n=(p.deps||[]).length;
+    const aberto=!!f.abertos[p.cpfN||p.nome] || !!f.busca;   // buscando, já abre o grupo
+    const id=idade(p.dataNascimento), tn=dep?nomeTitularDe(p.cpfTitular):null;
+    return `<tr${comToggle&&n?` style="cursor:pointer" onclick="toggleDep2('${esc(p.cpfN||p.nome)}')"`:''}>
+      <td><div style="display:flex;align-items:center;gap:9px">
+        ${comToggle?(n?`<i class="fas fa-chevron-${aberto?'down':'right'}" style="color:var(--brand);width:11px;font-size:.78rem"></i>`:'<span style="width:11px;display:inline-block"></span>'):''}
+        <div><b>${esc(p.nome)}</b>${p.cartao?`<div style="font-size:.73rem;color:var(--text-3)">Carteirinha ${esc(p.cartao)}</div>`:''}</div></div></td>
+      <td style="font-variant-numeric:tabular-nums">${fmtCPF(p.cpf)||'—'}</td>
+      <td>${fmtData(p.dataNascimento)}${id!=null?` <span style="color:var(--text-3)">· ${id}a</span>`:''}</td>
+      <td>${chipsProd(p.produtos)}</td>
+      <td>${dep?`<span class="bdg dependente">${esc(PARENTESCOS[p.parentesco]||'Dependente')}</span><div style="font-size:.72rem;color:var(--text-3);margin-top:2px">de ${esc(tn||'—')}</div>`
+             :(n?`<span class="bdg dependente"><i class="fas fa-people-roof"></i> ${n} dependente${n>1?'s':''}</span>`
+                :'<span style="color:var(--text-3)">—</span>')}</td>
+      <td style="color:var(--text-3)">${fmtData(p.inicio)}</td>
+      ${acoes(p)}</tr>
+      ${comToggle&&n&&aberto?linhaDeps(p):''}`;
+  };
+
+  const corpo = agrupado
+    ? titulares.map(t=>linhaPessoa(t,true)).join('')+
+      (soltos.length?`<tr><td colspan="7" style="background:var(--warn-bg);color:#92400e;font-size:.82rem;font-weight:600;padding:10px 12px">
+        <i class="fas fa-triangle-exclamation"></i> ${soltos.length} dependente(s) sem titular ativo — fale com a Retorno Seguros para corrigir o vínculo</td></tr>`+
+        soltos.map(d=>linhaPessoa(d,false)).join(''):'')
+    : ps.map(p=>linhaPessoa(p,false)).join('');
+
   return `<h2 class="page">Beneficiários ativos</h2>
-  <p class="page-sub">Cada pessoa aparece uma vez, com todos os produtos em que está ativa.</p>
+  <p class="page-sub">Cada funcionário aparece uma vez, com todos os produtos. Clique na linha para ver os dependentes dele.</p>
   <div class="card">
-    <div class="card-head"><h3><i class="fas fa-users"></i> ${ps.length} pessoa(s) · ${ps.reduce((s,p)=>s+p.produtos.length,0)} vida(s)</h3>
+    <div class="card-head"><h3><i class="fas fa-users"></i> ${titulares.length} funcionário(s) · ${totDeps} dependente(s)</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${agrupado&&algumComDep?`<button class="btn btn-ghost btn-sm" onclick="abrirTodosDep(true)"><i class="fas fa-angles-down"></i> Abrir todos</button>
+        <button class="btn btn-ghost btn-sm" onclick="abrirTodosDep(false)"><i class="fas fa-angles-up"></i> Fechar</button>`:''}
         <button class="btn btn-ghost btn-sm" onclick="pdfBeneficiarios()"><i class="fas fa-file-pdf"></i> Gerar PDF</button>
         <button class="btn btn-ghost btn-sm" onclick="csvBeneficiarios()"><i class="fas fa-file-csv"></i> CSV</button>
         <button class="btn btn-success btn-sm" onclick="modalInclusao()"><i class="fas fa-user-plus"></i> Incluir</button>
@@ -744,32 +828,21 @@ function viewBeneficiarios(){
       <div class="fg"><label>Produto</label><select onchange="setF('ben','prod',this.value)">
         <option value="">Todos</option>${PRODUTOS.map(p=>`<option value="${p.k}" ${f.prod===p.k?'selected':''}>${p.nome}</option>`).join('')}</select></div>
       <div class="fg"><label>Tipo</label><select onchange="setF('ben','tit',this.value)">
-        <option value="">Todos</option><option value="titular" ${f.tit==='titular'?'selected':''}>Funcionários</option>
-        <option value="dependente" ${f.tit==='dependente'?'selected':''}>Dependentes</option></select></div>
+        <option value="">Agrupado por funcionário</option><option value="titular" ${f.tit==='titular'?'selected':''}>Só funcionários</option>
+        <option value="dependente" ${f.tit==='dependente'?'selected':''}>Só dependentes</option></select></div>
       ${filtroDataHTML('ben')}
-      <div class="fg grow"><label>Buscar</label><input type="text" placeholder="Nome ou CPF..." value="${esc(f.busca)}" oninput="F.ben.busca=this.value;clearTimeout(window.__tb);window.__tb=setTimeout(render,220)"></div>
+      <div class="fg grow"><label>Buscar</label><input type="text" id="fBusBen" placeholder="Nome ou CPF..." value="${esc(f.busca)}" oninput="F.ben.busca=this.value;clearTimeout(window.__tb);window.__tb=setTimeout(render,200)"></div>
     </div>
     ${ps.length?`<div class="tbl-wrap"><table><thead><tr>
-      <th>Nome</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Tipo</th><th>Vínculo</th><th>Início</th><th style="text-align:right">Ações</th>
-    </tr></thead><tbody>${ps.map(p=>{
-      const dep=p.titularidade==='dependente', tn=dep?nomeTitularDe(p.cpfTitular):null, id=idade(p.dataNascimento);
-      return `<tr>
-        <td><b>${esc(p.nome)}</b>${p.cartao?`<div style="font-size:.74rem;color:var(--text-3)">Carteirinha ${esc(p.cartao)}</div>`:''}</td>
-        <td style="font-variant-numeric:tabular-nums">${fmtCPF(p.cpf)||'—'}</td>
-        <td>${fmtData(p.dataNascimento)}${id!=null?` <span style="color:var(--text-3)">· ${id}a</span>`:''}</td>
-        <td>${chipsProd(p.produtos)}</td>
-        <td><span class="bdg ${dep?'dependente':'titular'}">${dep?'Dependente':'Funcionário'}</span></td>
-        <td>${dep?`<div style="font-size:.82rem">${esc(tn||'—')}</div><div style="font-size:.73rem;color:var(--text-3)">${esc(PARENTESCOS[p.parentesco]||p.parentesco||'')}</div>`:'<span style="color:var(--text-3)">—</span>'}</td>
-        <td style="color:var(--text-3)">${fmtData(p.inicio)}</td>
-        <td style="text-align:right;white-space:nowrap">
-          <button class="btn btn-ghost btn-sm" title="Detalhes" onclick="modalDetalhe('${esc(p.cpfN||p.nome)}')"><i class="fas fa-eye"></i></button>
-          ${!dep?`<button class="btn btn-ghost btn-sm" title="Incluir dependente" onclick="modalInclusao('dep','${esc(p.cpfN)}')"><i class="fas fa-user-plus"></i></button>`:''}
-          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" title="Solicitar exclusão" onclick="modalExclusao('${esc(p.cpfN||p.nome)}')"><i class="fas fa-user-minus"></i></button>
-        </td></tr>`;}).join('')}</tbody></table></div>`
+      <th>Nome</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>${agrupado?'Dependentes':'Vínculo'}</th><th>Início</th><th style="text-align:right">Ações</th>
+    </tr></thead><tbody>${corpo}</tbody></table></div>`
     :`<div class="empty"><div class="ic"><i class="fas fa-users"></i></div><h4>Nenhum beneficiário encontrado</h4>
       <p>Ajuste os filtros ou inclua o primeiro colaborador.</p></div>`}
   </div>`;
 }
+function toggleDep2(k){ F.ben.abertos=F.ben.abertos||{}; F.ben.abertos[k]=!F.ben.abertos[k]; render(); }
+function abrirTodosDep(v){ F.ben.abertos=F.ben.abertos||{};
+  pessoas().filter(p=>p.titularidade!=='dependente').forEach(t=>{ F.ben.abertos[t.cpfN||t.nome]=v; }); render(); }
 function linhasBenef(ps){
   return ps.map(p=>{ const dep=p.titularidade==='dependente';
     return [p.nome||'',fmtCPF(p.cpf)||'',fmtData(p.dataNascimento),
@@ -919,7 +992,7 @@ function viewMovimentacoes(){
       <div class="fg"><label>Produto</label><select onchange="setF('mov','prod',this.value)">
         <option value="">Todos</option>${PRODUTOS.map(p=>`<option value="${p.k}" ${f.prod===p.k?'selected':''}>${p.nome}</option>`).join('')}</select></div>
       ${filtroDataHTML('mov')}
-      <div class="fg grow"><label>Buscar</label><input type="text" placeholder="Nome ou CPF..." value="${esc(f.busca)}" oninput="F.mov.busca=this.value;clearTimeout(window.__tm);window.__tm=setTimeout(render,220)"></div>
+      <div class="fg grow"><label>Buscar</label><input type="text" id="fBusMov" placeholder="Nome ou CPF..." value="${esc(f.busca)}" oninput="F.mov.busca=this.value;clearTimeout(window.__tm);window.__tm=setTimeout(render,200)"></div>
     </div>
     ${l.length?`<div class="tbl-wrap"><table><thead><tr>
       <th>Solicitado em</th><th>Tipo</th><th>Beneficiário</th><th>Tipo/vínculo</th><th>Produtos</th><th>Vigência</th><th>Situação</th><th>Retorno da corretora</th>
