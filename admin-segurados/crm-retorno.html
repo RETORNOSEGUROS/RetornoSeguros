@@ -268,6 +268,9 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
   background:var(--surface);color:var(--text);font-size:.85rem;flex:0 0 auto;max-width:100%}
 .filters select{min-width:150px;width:auto}
 .filters input{width:auto}
+.kb-card[draggable="true"]{cursor:grab}
+.kb-card.arrastando{opacity:.45;cursor:grabbing}
+.kb-col.drop{background:var(--brand-50);outline:2px dashed var(--brand);outline-offset:-3px}
 .hidden{display:none!important}
 
 /* ---------- RESPONSIVO ---------- */
@@ -830,6 +833,7 @@ const MENU = [
     { id:'agenda', icon:'fa-calendar-check', label:'Agenda', badge:'agenda' },
   ]},
   { sec:'Carteira de Clientes', items:[
+    { id:'contatos', icon:'fa-address-book', label:'Contatos' },
     { id:'clientes', icon:'fa-users', label:'Clientes' },
     { id:'propostas', icon:'fa-file-invoice', label:'Ler propostas' },
     { id:'apolices', icon:'fa-file-contract', label:'Apólices' },
@@ -1076,7 +1080,8 @@ function bootstrap(){
     detectarLeadsNovos(CACHE.leads);
     setBadge('leads',CACHE.leads.filter(isLeadNovo).length);
     atualizarNotificacoes();
-    if((location.hash||'#dashboard').slice(1)==='leads') VIEWS.leads();
+    const __r=(location.hash||'#dashboard').slice(1);
+    if(__r==='leads') VIEWS.leads(); else if(__r==='contatos'&&VIEWS.contatos) VIEWS.contatos();
     if((location.hash||'#dashboard').slice(1)==='dashboard') VIEWS.dashboard();
   },err=>console.warn('leads',err)));
   // Movimentações (tempo real → tela se atualiza sozinha ao aprovar/recusar)
@@ -1112,7 +1117,7 @@ function bootstrap(){
     if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
     reRender(routes);
   },err=>console.warn(coll,err)));
-  listen('apolices_cliente','apolices',['apolices','clientes','renovacoes','relatorios']);
+  listen('apolices_cliente','apolices',['apolices','clientes','renovacoes','relatorios','contatos','pagamentos']);
   listen('indicadores','indicadores',['indicacoes']);
   listen('empresas_parceiras','parceiros',['parceiros']);
   listen('resgates_parceiros','resgates',['resgates']);
@@ -1130,7 +1135,8 @@ function bootstrap(){
   },e=>console.error('agenda',e)));
   listen('seguradoras','seguradoras',['configuracoes']);
   listen('interacoes_crm','interacoes',[]);
-  listen('propostas','propostas',['propostas']);
+  listen('propostas','propostas',['propostas','contatos']);
+  if(typeof ctEscutarSite==='function') ctEscutarSite();
   listen('fipe_historico','fipeHist',['fipe']);
   atualizarNotificacoes();
 
@@ -1224,7 +1230,13 @@ VIEWS.dashboard=function(){
 /* ---------- LEADS (lista + kanban) ---------- */
 let LEADS_FILTER={busca:''};
 let LEADS_VIEW='kanban';
-function leadsAbertos(){ let l=CACHE.leads.filter(x=>!isClienteLead(x));
+/* O funil mostra a NEGOCIAÇÃO, não a pessoa: um cliente antigo com uma cotação
+   nova em aberto precisa aparecer aqui (é o cross-sell). Antes, quem já tinha
+   apólice sumia do kanban mesmo com cotação em andamento. */
+function leadsAbertos(){ let l=CACHE.leads.filter(x=>{
+    const st=x.status||'pre_cadastro';
+    if(st==='negocio_fechado'||st==='negocio_perdido'||st==='cliente') return false;
+    return true; });
   if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''}`.toLowerCase().includes(q)); }
   return l; }
 VIEWS.leads=function(){
@@ -1233,28 +1245,50 @@ VIEWS.leads=function(){
   let html=head('leads',{actions});
   const prospects=CACHE.leads.filter(l=>!isClienteLead(l));
   html+=`<div class="filters"><input type="text" id="fBuscaLeads" placeholder="Buscar nome, telefone, e-mail..." value="${esc(LEADS_FILTER.busca)}" oninput="LEADS_FILTER.busca=this.value;redesenhar(VIEWS.leads)" style="min-width:280px"></div>`;
+  if(typeof ctBlocoSite==='function') html+=ctBlocoSite();
   html+= LEADS_VIEW==='kanban' ? renderKanban() : renderLeadsLista();
   setView(html);
 };
 function renderKanban(){
   const leads=leadsAbertos();
-  return `<div class="kanban">${KANBAN.map(col=>{
+  const totalFunil=leads.reduce((s,l)=>s+(Number(l.valorNegociacao)||0),0);
+  return `${totalFunil?`<div style="font-size:.84rem;color:var(--text-2);margin-bottom:10px">
+      <i class="fas fa-sack-dollar" style="color:var(--brand)"></i> Funil aberto: <b>${money(totalFunil)}</b> em ${leads.length} negócio(s)
+      <span style="color:var(--text-3);margin-left:10px"><i class="fas fa-hand-pointer"></i> arraste o cartão para mudar de fase</span></div>`:''}
+    <div class="kanban">${KANBAN.map(col=>{
     const items=leads.filter(l=>faseDoLead(l)===col.key);
-    return `<div class="kb-col">
+    const soma=items.reduce((s,l)=>s+(Number(l.valorNegociacao)||0),0);
+    return `<div class="kb-col" ondragover="lkOver(event,this)" ondragleave="this.classList.remove('drop')" ondrop="lkDrop(event,this,'${col.key}')">
       <div class="kb-head" style="border-top:3px solid ${col.cor}"><span><i class="fas ${col.icon}" style="color:${col.cor}"></i> ${col.label}</span><span class="kb-cnt">${items.length}</span></div>
+      ${soma?`<div style="font-size:.76rem;color:var(--text-2);padding:0 2px 8px;font-weight:600">${money(soma)}</div>`:''}
       <div class="kb-body">
-        ${items.map(l=>kanbanCard(l,col)).join('')||`<div style="text-align:center;color:var(--text-3);font-size:.78rem;padding:16px 0">—</div>`}
+        ${items.map(l=>kanbanCard(l,col)).join('')||`<div style="text-align:center;color:var(--text-3);font-size:.78rem;padding:16px 0">arraste um cartão para cá</div>`}
       </div></div>`;
   }).join('')}</div>`;
 }
+let LK_DRAG=null;
+function lkStart(e,id){ LK_DRAG=id; e.currentTarget.classList.add('arrastando');
+  try{ e.dataTransfer.setData('text/plain',id); e.dataTransfer.effectAllowed='move'; }catch(x){} }
+function lkEnd(e){ e.currentTarget.classList.remove('arrastando'); LK_DRAG=null;
+  document.querySelectorAll('.kb-col.drop').forEach(el=>el.classList.remove('drop')); }
+function lkOver(e,el){ e.preventDefault(); el.classList.add('drop'); }
+function lkDrop(e,el,fase){ e.preventDefault(); el.classList.remove('drop');
+  const id=LK_DRAG||e.dataTransfer.getData('text/plain'); if(!id) return;
+  const l=CACHE.leads.find(x=>x.id===id); if(!l||faseDoLead(l)===fase) return;
+  moverFase(id,fase); }
 function kanbanCard(l,col){
   const idx=KANBAN.findIndex(k=>k.key===col.key);
   const orig=ORIGENS[l.origem]||l.origem;
   const resp=l.responsavelNome?`<span class="kb-resp" title="Responsável">${esc(initials(l.responsavelNome))}</span>`:`<span class="kb-resp vazio" title="Sem responsável">?</span>`;
-  return `<div class="kb-card" onclick="abrirLead('${l.id}')">
+  const retorno=l.proximoRetorno?agDiffDias?agDiffDias(l.proximoRetorno):null:null;
+  return `<div class="kb-card" draggable="true" ondragstart="lkStart(event,'${l.id}')" ondragend="lkEnd(event)" onclick="abrirLead('${l.id}')">
     <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
       <b style="font-size:.86rem">${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${resp}</div>
     <div style="font-size:.76rem;color:var(--text-2);margin:3px 0">${esc(l.ramo||l.tipoSeguro||'—')}${l.valorFipe?' · '+esc(l.valorFipe):''}</div>
+    ${l.valorNegociacao?`<div style="font-size:.86rem;font-weight:800;color:var(--brand-dark);margin:4px 0">${money(l.valorNegociacao)}
+      ${l.comissaoPct?`<span style="font-size:.7rem;font-weight:600;color:var(--text-3)">· ${l.comissaoPct}% com.</span>`:''}</div>`:''}
+    ${l.proximoRetorno?`<div style="font-size:.72rem;font-weight:600;color:${retorno!=null&&retorno<0?'var(--danger)':'var(--warn)'}">
+      <i class="fas fa-bell"></i> retornar ${fmtData(l.proximoRetorno)}</div>`:''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       ${orig?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);font-size:.66rem">${esc(orig)}</span>`:'<span></span>'}
       <div onclick="event.stopPropagation()" style="display:flex;gap:2px">
@@ -2520,15 +2554,27 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
   const opt=(sel,arr,val)=>arr.map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v}</option>`).join('');
   openModal(`<div class="modal-head"><h3><i class="fas fa-id-badge" style="color:var(--brand)"></i> ${esc(c.nomeEmpresa||c.nome||'Contato')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700;font-size:.85rem"><i class="fas fa-user" style="color:var(--brand)"></i> Dados do contato</div>
+        <button class="btn btn-ghost btn-sm" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:14px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
         <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'} ${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}</div></div>
         <div class="mov-f"><div class="k">E-mail</div><div class="v">${esc(c.email)||'-'}</div></div>
         <div class="mov-f"><div class="k">CPF/CNPJ</div><div class="v">${esc(c.cpf||c.cnpj)||'-'}</div></div>
-        <div class="mov-f"><div class="k">CEP</div><div class="v">${esc(c.cep)||'-'}</div></div>
+        <div class="mov-f"><div class="k">Nascimento</div><div class="v">${c.dataNascimento?fmtData(c.dataNascimento)+(idadeDe(c.dataNascimento)!=null?' · '+idadeDe(c.dataNascimento)+'a':''):'-'}</div></div>
         <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
-        <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc(c.endereco||c.enderecoCompleto)||'-'}</div></div>
+        <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc(c.endereco||c.enderecoCompleto)||'-'}${c.cep?' · CEP '+esc(c.cep):''}</div></div>
         <div class="mov-f"><div class="k">Entrada</div><div class="v">${fmtData(c.criadoEm)}</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+        <div class="form-row" style="margin:0"><label>Valor da negociação (prêmio)</label>
+          <input type="text" id="lkValor" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00"
+            onchange="lkSalvarValor('${c.id}')"></div>
+        <div class="form-row" style="margin:0"><label>Comissão estimada (%)</label>
+          <input type="number" step="0.01" id="lkCom" value="${c.comissaoPct||''}" placeholder="Ex.: 15" onchange="lkSalvarValor('${c.id}')"></div>
+        <div class="form-row" style="margin:0"><label>Nossa comissão</label>
+          <div id="lkComVal" style="padding:10px 0;font-weight:800;color:var(--brand-dark)">${money(((Number(c.valorNegociacao)||0)*(Number(c.comissaoPct)||0))/100)}</div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:14px">
         <div class="form-row" style="margin:0"><label>Fase</label><select onchange="moverFase('${c.id}',this.value)">${opt('',KANBAN.map(k=>[k.key,k.label]),fase)}</select></div>
@@ -2545,6 +2591,13 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
           <input type="text" id="tlTexto" placeholder="Registrar contato (ex.: liguei, cliente pediu cotação)" style="flex:1;min-width:160px">
           <button class="btn btn-primary btn-sm" onclick="addInteracao('${c.id}')"><i class="fas fa-plus"></i> Registrar</button>
         </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">
+          <span style="font-size:.79rem;color:var(--text-2);font-weight:600"><i class="fas fa-bell" style="color:var(--warn)"></i> Retornar em</span>
+          <input type="date" id="tlData" value="${esc(c.proximoRetorno||'')}" style="width:auto">
+          <input type="time" id="tlHora" value="${esc(c.proximoRetornoHora||'')}" style="width:auto">
+          <span style="font-size:.75rem;color:var(--text-3)">vira uma ação na Agenda daquele dia</span>
+          ${c.proximoRetorno?`<button class="btn btn-ghost btn-sm" style="margin-left:auto;color:var(--danger)" onclick="lkLimparRetorno('${c.id}')"><i class="fas fa-xmark"></i> tirar lembrete</button>`:''}
+        </div>
       </div>
       ${renderTimeline(c.id)}
     </div>
@@ -2555,6 +2608,94 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
     </div>`,'wide');
   FICHA_LEAD=c.id;
 }
+
+/* =========================================================================
+   LEADS — edição de dados, valor da negociação e retorno agendado
+   ========================================================================= */
+function lkEditar(id){
+  const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-user-pen" style="color:var(--brand)"></i> Dados de ${esc(c.nome||c.nomeEmpresa||'contato')}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="ldId" value="${esc(id)}">
+      <div class="form-row"><label>Nome *</label><input type="text" id="ldNome" value="${esc(c.nome||'')}"></div>
+      <div class="form-row"><label>Empresa (se PJ)</label><input type="text" id="ldEmpresa" value="${esc(c.nomeEmpresa||'')}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>WhatsApp</label><input type="text" id="ldWhats" value="${esc(c.whatsapp||c.telefone||'')}" placeholder="(00) 00000-0000"></div>
+        <div class="form-row"><label>E-mail</label><input type="email" id="ldEmail" value="${esc(c.email||'')}"></div>
+        <div class="form-row"><label>CPF / CNPJ</label><input type="text" id="ldCpf" value="${esc(c.cpf||c.cnpj||'')}"></div>
+        <div class="form-row"><label>Data de nascimento</label><input type="date" id="ldNasc" value="${esc(strData(c.dataNascimento)||'')}">
+          <div style="font-size:.74rem;color:var(--text-3);margin-top:4px">Usada no aniversário em Contatos.</div></div>
+        <div class="form-row"><label>CEP</label><input type="text" id="ldCep" value="${esc(c.cep||'')}"></div>
+        <div class="form-row"><label>Cidade</label><input type="text" id="ldCidade" value="${esc(c.cidade||'')}"></div>
+        <div class="form-row"><label>Estado</label><input type="text" id="ldUf" value="${esc(c.estado||'')}" maxlength="2"></div>
+        <div class="form-row"><label>Ramo de interesse</label><select id="ldRamo">
+          <option value="">—</option>${RAMO_OPCOES.map(r=>`<option ${((c.ramo||c.tipoSeguro)===r)?'selected':''}>${r}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row"><label>Endereço</label><input type="text" id="ldEnd" value="${esc(c.endereco||c.enderecoCompleto||'')}"></div>
+      <div style="background:var(--info-bg);border-radius:10px;padding:11px 14px;font-size:.81rem;color:#1e40af">
+        <i class="fas fa-circle-info"></i> Este é o cadastro único da pessoa: o que você editar aqui vale para as cotações, para a aba Contatos e para os avisos de aniversário.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button>
+      <button class="btn btn-primary" onclick="lkSalvarDados()"><i class="fas fa-floppy-disk"></i> Salvar dados</button></div>`,'wide');
+}
+async function lkSalvarDados(){
+  const id=document.getElementById('ldId').value;
+  const g=i=>document.getElementById(i).value.trim();
+  const nome=g('ldNome'); if(!nome){ toast('Informe o nome.','err'); return; }
+  const dados={ nome, nomeEmpresa:g('ldEmpresa')||null,
+    whatsapp:g('ldWhats').replace(/\D/g,'')||null, email:g('ldEmail')||null,
+    cpf:g('ldCpf')||null, dataNascimento:g('ldNasc')||null,
+    cep:g('ldCep')||null, cidade:g('ldCidade')||null, estado:(g('ldUf')||'').toUpperCase()||null,
+    endereco:g('ldEnd')||null, ramo:g('ldRamo')||null, atualizadoEm:FV.serverTimestamp() };
+  try{
+    await db.collection('leads_crm').doc(id).update(dados);
+    /* espelha nas apólices do mesmo contato, para não ficar dado velho por lá */
+    const c=CACHE.leads.find(x=>x.id===id)||{};
+    const aps=apolicesDoCliente(c);
+    if(aps.length){ const lote=db.batch();
+      aps.forEach(a=>lote.update(db.collection('apolices_cliente').doc(a.id),
+        {clienteNome:nome, clienteWhatsapp:dados.whatsapp, clienteEmail:dados.email, atualizadoEm:FV.serverTimestamp()}));
+      await lote.commit(); }
+    toast('Dados atualizados'+(aps.length?' (e nas '+aps.length+' apólice(s) dele)':'')+'.','ok');
+    abrirLead(id);
+  }catch(e){ console.error(e); toast('Erro ao salvar os dados.','err'); }
+}
+async function lkSalvarValor(id){
+  const v=document.getElementById('lkValor'), p=document.getElementById('lkCom');
+  const valor=(function(x){x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?null:n;})(v?v.value:'');
+  const pct=parseFloat(p?p.value:'')||null;
+  const el=document.getElementById('lkComVal');
+  if(el) el.textContent=money(((valor||0)*(pct||0))/100);
+  try{ await db.collection('leads_crm').doc(id).update({valorNegociacao:valor,comissaoPct:pct,atualizadoEm:FV.serverTimestamp()}); }
+  catch(e){ console.error(e); toast('Erro ao salvar o valor.','err'); }
+}
+async function lkLimparRetorno(id){
+  try{ await db.collection('leads_crm').doc(id).update({proximoRetorno:null,proximoRetornoHora:null,atualizadoEm:FV.serverTimestamp()});
+    toast('Lembrete removido.','info'); abrirLead(id); }
+  catch(e){ toast('Erro.','err'); }
+}
+/* cria (ou atualiza) a ação na agenda para o retorno deste lead */
+async function lkAgendarRetorno(id,data,hora,texto){
+  const c=CACHE.leads.find(x=>x.id===id)||{};
+  const nome=c.nome||c.nomeEmpresa||'contato';
+  const chave='lead-retorno:'+id;
+  try{
+    const eu=(CURRENT_USER&&CURRENT_USER.email)||'admin';
+    const existente=(typeof AGENDA!=='undefined'?AGENDA:[]).find(t=>t.sugestaoChave===chave&&t.status!=='concluida'&&t.status!=='cancelada');
+    const dados={ titulo:'Retornar para '+nome, descricao:texto||('Retorno combinado na cotação de '+(c.ramo||'seguro')+'.'),
+      data, hora:hora||null, tipo:'ligacao', prioridade:'normal',
+      vinculo:{tipo:'lead',id:id,nome:nome}, sugestaoChave:chave, origem:'lead',
+      responsaveis:c.responsavelId?[( (CACHE.admins.find(a=>a.id===c.responsavelId)||{}).email||eu)]:[eu],
+      atualizadoEm:FV.serverTimestamp() };
+    dados.responsaveisNomes=dados.responsaveis.map(x=>typeof agNomeDe==='function'?agNomeDe(x):x);
+    if(existente){ await db.collection('agenda_crm').doc(existente.id).update(dados); }
+    else { await db.collection('agenda_crm').add({...dados,status:'aberta',criadoPor:eu,criadoEm:FV.serverTimestamp()}); }
+    await db.collection('leads_crm').doc(id).update({proximoRetorno:data,proximoRetornoHora:hora||null,atualizadoEm:FV.serverTimestamp()});
+    return true;
+  }catch(e){ console.error(e); return false; }
+}
+
 async function setLeadCampo(id,campo,valor){ try{ const upd={[campo]:valor||null,atualizadoEm:FV.serverTimestamp()};
   if(campo==='responsavelId'){ const f=CACHE.admins.find(a=>a.id===valor); upd.responsavelNome=f?(f.nome||f.email):null; }
   await db.collection('leads_crm').doc(id).update(upd); toast('Atualizado.','ok'); }catch(e){ console.error(e); toast('Erro ao atualizar.','err'); } }
@@ -2586,19 +2727,44 @@ function modalPerder(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
     <div class="modal-body">
       <div class="form-row"><label>Motivo da perda</label><select id="mpMotivo">${Object.entries(MOTIVOS_PERDA).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
       <div class="form-row"><label>Observação (opcional)</label><textarea id="mpObs" rows="2"></textarea></div>
+      <div class="form-row"><label>Valor que estava em jogo (opcional)</label>
+        <input type="text" id="mpValor" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00">
+        <div style="font-size:.75rem;color:var(--text-3);margin-top:4px">Guardado para você saber quanto deixou de faturar por motivo.</div></div>
       <label class="ck" style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" id="mpReag" checked> <span>Reagendar contato para o próximo ano (retomar na renovação)</span></label>
+      <div class="form-row" style="margin-top:10px"><label>Data da retomada</label>
+        <input type="date" id="mpData" value="${(function(){const d=new Date();d.setFullYear(d.getFullYear()+1);return d.toISOString().slice(0,10);})()}">
+        <div style="font-size:.75rem;color:var(--text-3);margin-top:4px">Vira uma ação na Agenda nesse dia, para não perder a retomada.</div></div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-danger" onclick="confirmarPerda('${id}')"><i class="fas fa-check"></i> Marcar como perdida</button></div>`); }
 async function confirmarPerda(id){ const motivo=document.getElementById('mpMotivo').value; const obs=document.getElementById('mpObs').value.trim();
-  const reag=document.getElementById('mpReag').checked; let reagendarEm=null;
-  if(reag){ const d=new Date(); d.setFullYear(d.getFullYear()+1); reagendarEm=d.toISOString().slice(0,10); }
-  try{ await db.collection('leads_crm').doc(id).update({status:'negocio_perdido',motivoPerda:motivo,obsPerda:obs||null,reagendarEm,atualizadoEm:FV.serverTimestamp()});
+  const reag=document.getElementById('mpReag').checked;
+  const reagendarEm=reag?((document.getElementById('mpData')||{}).value||null):null;
+  const num=x=>{x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?null:n;};
+  const valor=num((document.getElementById('mpValor')||{}).value);
+  try{ await db.collection('leads_crm').doc(id).update({status:'negocio_perdido',motivoPerda:motivo,obsPerda:obs||null,
+      valorNegociacao:valor, reagendarEm, perdidoEmData:hojeISO(), atualizadoEm:FV.serverTimestamp()});
+    if(reagendarEm){ const c=CACHE.leads.find(x=>x.id===id)||{};
+      await lkAgendarRetorno(id,reagendarEm,null,'Retomar negociação perdida ('+(MOTIVOS_PERDA[motivo]||motivo)+')'+(valor?' — valia '+money(valor):'')); }
     await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',texto:'Negócio perdido — '+(MOTIVOS_PERDA[motivo]||motivo)+(obs?': '+obs:'')+(reagendarEm?' · reagendado p/ '+reagendarEm.split('-').reverse().join('/'):''),autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
     closeModal(); toast('Marcado como perdido'+(reag?' e reagendado para o próximo ano':'')+'.','ok'); }catch(e){ console.error(e); toast('Erro.','err'); } }
 function modalFechar(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
   openModal(`<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> Negócio fechado!</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
-      <p style="color:var(--text-2);margin-bottom:14px">Parabéns! Marque como fechado e, se quiser, <b>anexe o PDF da proposta</b> — eu leio os dados na hora e já gero a apólice.</p>
+      <p style="color:var(--text-2);margin-bottom:14px">Anexe o <b>PDF da proposta</b> que eu leio os dados e gero a apólice sozinho — ou preencha os números na mão aqui embaixo.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:13px 15px;margin-bottom:14px">
+        <div class="form-row" style="margin:0"><label>Prêmio líquido</label>
+          <input type="text" id="fcPremio" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00" oninput="fcCalc()"></div>
+        <div class="form-row" style="margin:0"><label>Comissão (%)</label>
+          <input type="number" step="0.01" id="fcCom" value="${c.comissaoPct||''}" placeholder="Ex.: 15" oninput="fcCalc()"></div>
+        <div class="form-row" style="margin:0"><label>Nossa comissão</label>
+          <div id="fcComVal" style="padding:10px 0;font-weight:800;color:var(--ok)">${money(((Number(c.valorNegociacao)||0)*(Number(c.comissaoPct)||0))/100)}</div></div>
+        <div class="form-row" style="margin:0"><label>Seguradora</label>
+          <select id="fcSeg"><option value="">—</option>${SEGURADORA_OPCOES.map(([v,l])=>`<option value="${l}">${l}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Início da vigência</label><input type="date" id="fcIni" value="${hojeISO()}"></div>
+        <div class="form-row" style="margin:0"><label>Vendedor</label>
+          <select id="fcResp"><option value="">— não definido —</option>
+            ${(CACHE.admins||[]).map(f=>`<option value="${f.id}" ${c.responsavelId===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}</select></div>
+      </div>
       <div id="fecharDrop" style="border:2px dashed var(--border-2);border-radius:12px;padding:24px;text-align:center;cursor:pointer" onclick="document.getElementById('fecharFile').click()">
         <i class="fas fa-file-arrow-up" style="font-size:22px;color:var(--brand)"></i>
         <div style="font-weight:600;margin-top:6px">Anexar proposta (PDF) e ler</div>
@@ -2607,8 +2773,42 @@ function modalFechar(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
       </div>
       <div id="fecharStatus" style="margin-top:12px"></div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-success" onclick="fecharSemProposta('${id}')"><i class="fas fa-check"></i> Só marcar fechado</button></div>`); }
-async function fecharSemProposta(id){ try{ await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',atualizadoEm:FV.serverTimestamp()}); closeModal(); toast('Negócio marcado como fechado.','ok'); }catch(e){ toast('Erro.','err'); } }
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-success" onclick="fecharSemProposta('${id}')"><i class="fas fa-check"></i> Fechar com estes dados</button></div>`); }
+function fcCalc(){ const p=(function(x){x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?0:n;})(document.getElementById('fcPremio').value);
+  const c=parseFloat(document.getElementById('fcCom').value)||0;
+  const el=document.getElementById('fcComVal'); if(el) el.textContent=money(p*c/100); }
+function hojeISO(){ const d=new Date(),p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+async function fecharSemProposta(id){
+  const c=CACHE.leads.find(x=>x.id===id)||{};
+  const num=x=>{x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?null:n;};
+  const premio=num((document.getElementById('fcPremio')||{}).value);
+  const pct=parseFloat((document.getElementById('fcCom')||{}).value)||null;
+  const seg=(document.getElementById('fcSeg')||{}).value||null;
+  const ini=(document.getElementById('fcIni')||{}).value||null;
+  const respId=(document.getElementById('fcResp')||{}).value||c.responsavelId||null;
+  const f=(CACHE.admins||[]).find(a=>a.id===respId);
+  try{
+    await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',
+      valorNegociacao:premio, comissaoPct:pct, fechadoEm:FV.serverTimestamp(), fechadoEmData:hojeISO(),
+      responsavelId:respId, responsavelNome:f?(f.nome||f.email):null, atualizadoEm:FV.serverTimestamp()});
+    /* gera a apólice já com prêmio, comissão e vendedor — é o que alimenta a folha */
+    if(premio){
+      const fim=ini?(function(d){const x=new Date(d+'T00:00:00');x.setFullYear(x.getFullYear()+1);return hojeISOde(x);})(ini):null;
+      await db.collection('apolices_cliente').add({
+        clienteNome:c.nome||c.nomeEmpresa||'', clienteWhatsapp:c.whatsapp||null, clienteEmail:c.email||null,
+        clienteCpf:c.cpf||null, ramo:c.ramo||c.tipoSeguro||null, seguradora:seg,
+        dataInicioVigencia:ini, dataFimVigencia:fim,
+        valorPremio:premio, comissao:pct||0, status:'ativa', leadId:id,
+        responsavelId:respId, responsavelNome:f?(f.nome||f.email):null,
+        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp(), origem:'fechamento_lead'});
+    }
+    await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',
+      texto:'Negócio FECHADO'+(premio?' — prêmio '+money(premio)+(pct?' · comissão '+pct+'%':''):'')+(seg?' · '+seg:''),
+      autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
+    closeModal();
+    toast(premio?('Fechado! Apólice criada com '+money(premio)+' de prêmio.'):'Negócio marcado como fechado.','ok','Parabéns');
+  }catch(e){ console.error(e); toast('Erro ao fechar o negócio.','err'); } }
+function hojeISOde(d){ const p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 async function fecharComProposta(id,file){ if(!file) return; const c=CACHE.leads.find(x=>x.id===id);
   const st=document.getElementById('fecharStatus'); if(st) st.innerHTML='<div style="color:var(--text-2);font-size:.85rem"><i class="fas fa-spinner fa-spin"></i> Lendo a proposta...</div>';
   try{ const texto=await extrairTextoPDF(file); const r=parseProposta(texto); r.arquivo=file.name; r.__file=file;
@@ -4015,11 +4215,18 @@ function renderTimeline(id){
 async function addInteracao(id){
   const tipo=document.getElementById('tlTipo').value;
   const texto=document.getElementById('tlTexto').value.trim();
-  if(!texto){ toast('Escreva o que aconteceu na interação.','err'); return; }
+  const dRet=(document.getElementById('tlData')||{}).value||'';
+  const hRet=(document.getElementById('tlHora')||{}).value||'';
+  if(!texto&&!dRet){ toast('Escreva o que aconteceu na interação.','err'); return; }
   try{
-    await db.collection('interacoes_crm').add({leadId:id,tipo,texto,autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
+    if(texto) await db.collection('interacoes_crm').add({leadId:id,tipo,texto,
+      retornoEm:dRet||null,autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
     document.getElementById('tlTexto').value='';
-    toast('Interação registrada.','ok');
+    if(dRet){
+      const ok=await lkAgendarRetorno(id,dRet,hRet,texto);
+      toast(ok?('Retorno agendado para '+dRet.split('-').reverse().join('/')+(hRet?' às '+hRet:'')+'. Já está na Agenda.')
+              :'Interação salva, mas não consegui criar a ação na agenda.',ok?'ok':'warn',ok?'Agendado':'Atenção');
+    } else toast('Interação registrada.','ok');
     // otimista: injeta na hora (o snapshot confirma logo em seguida)
     setTimeout(()=>{ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(id); },400);
   }catch(e){ console.error(e); toast('Erro ao registrar.','err'); }
@@ -5033,6 +5240,370 @@ function pgExportar(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
   a.download='folha-'+comp+'.csv'; document.body.appendChild(a); a.click(); a.remove();
   toast('CSV da folha gerado.','ok','Exportado');
+}
+
+</script>
+  <script>
+/* =========================================================================
+   CONTATOS — todo mundo que algum dia cotou com a gente
+   Junta leads (cada lead = uma cotação), apólices e propostas, agrupando
+   por pessoa. Mostra o que já cotou, o que tem conosco e o que falta.
+   ========================================================================= */
+let CT_F={ busca:'', situacao:'', ramo:'', ordem:'nome', mes:'' };
+
+const ctDig=v=>(v||'').toString().replace(/\D/g,'');
+const ctNorm=s=>(s||'').toString().trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ');
+/* identificadores fortes de um registro (CPF, telefone, e-mail) */
+function ctIds(o){
+  const ids=[];
+  const cpf=ctDig(o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj);
+  if(cpf.length===11||cpf.length===14) ids.push('cpf:'+cpf);
+  [o.whatsapp,o.telefone,o.clienteWhatsapp,o.celular].forEach(f=>{
+    const d=ctDig(f); if(d.length>=10) ids.push('fone:'+d.slice(-11)); });
+  const mail=ctNorm(o.email||o.clienteEmail);
+  if(mail&&mail.includes('@')) ids.push('mail:'+mail);
+  return [...new Set(ids)];
+}
+const ctNome=o=>o.nome||o.clienteNome||o.segurado||o.nomeCompleto||o.nomeEmpresa||'';
+
+/* monta a base unificada de pessoas (une registros que dividem qualquer identificador) */
+function ctPessoas(){
+  /* 1) junta tudo num só saco de registros */
+  const regs=[];
+  (CACHE.leads||[]).forEach(l=>regs.push({tipo:'lead',o:l}));
+  (CACHE.propostas||[]).forEach(pr=>regs.push({tipo:'proposta',o:pr}));
+  (CACHE.apolices||[]).forEach(a=>regs.push({tipo:'apolice',o:a}));
+  regs.forEach((r,i)=>{ r.i=i; r.ids=ctIds(r.o); r.nomeN=ctNorm(ctNome(r.o)); });
+
+  /* 2) union-find pelos identificadores fortes */
+  const pai=regs.map((_,i)=>i);
+  const acha=x=>{ while(pai[x]!==x){ pai[x]=pai[pai[x]]; x=pai[x]; } return x; };
+  const une=(a,b)=>{ a=acha(a); b=acha(b); if(a!==b) pai[b]=a; };
+  const porId={};
+  regs.forEach(r=>r.ids.forEach(id=>{ if(porId[id]!=null) une(porId[id],r.i); else porId[id]=r.i; }));
+  /* 3) registros SEM identificador forte: colam pelo nome, se houver um grupo com o mesmo nome */
+  const nomeDeGrupo={};
+  regs.filter(r=>r.ids.length).forEach(r=>{ const g=acha(r.i); if(r.nomeN&&nomeDeGrupo[r.nomeN]==null) nomeDeGrupo[r.nomeN]=g; });
+  regs.filter(r=>!r.ids.length&&r.nomeN).forEach(r=>{
+    if(nomeDeGrupo[r.nomeN]!=null) une(nomeDeGrupo[r.nomeN],r.i);
+    else nomeDeGrupo[r.nomeN]=acha(r.i);
+  });
+
+  /* 4) monta a pessoa de cada grupo */
+  const grupos={};
+  regs.forEach(r=>{ const g=acha(r.i); (grupos[g]=grupos[g]||[]).push(r); });
+  const enriquece=(p,o)=>{
+    const nm=ctNome(o);
+    if(!p.nome&&nm) p.nome=nm;
+    if(!p.nomeEmpresa&&o.nomeEmpresa) p.nomeEmpresa=o.nomeEmpresa;
+    if(!p.whatsapp&&(o.whatsapp||o.telefone||o.clienteWhatsapp||o.celular)) p.whatsapp=o.whatsapp||o.telefone||o.clienteWhatsapp||o.celular;
+    if(!p.email&&(o.email||o.clienteEmail)) p.email=o.email||o.clienteEmail;
+    if(!p.cpf&&(o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj)) p.cpf=o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj;
+    if(!p.dataNascimento&&o.dataNascimento) p.dataNascimento=strData(o.dataNascimento);
+    if(!p.cidade&&o.cidade) p.cidade=o.cidade;
+    if(!p.estado&&(o.estado||o.uf)) p.estado=o.estado||o.uf;
+  };
+  const lista=Object.values(grupos).map(rs=>{
+    const p={chave:'g'+acha(rs[0].i),nome:'',nomeEmpresa:'',whatsapp:'',email:'',cpf:'',
+      dataNascimento:null,cidade:'',estado:'',cotacoes:[],apolices:[],leadIds:[],primeiro:null,ultimo:null};
+    const marca=d=>{ if(!d) return; if(!p.primeiro||d<p.primeiro) p.primeiro=d; if(!p.ultimo||d>p.ultimo) p.ultimo=d; };
+    rs.forEach(r=>{
+      const o=r.o; enriquece(p,o);
+      if(r.tipo==='lead'){
+        p.leadIds.push(o.id);
+        const d=strData(o.criadoEm)||null;
+        const st=o.status==='negocio_fechado'?'fechada':o.status==='negocio_perdido'?'perdida':'aberta';
+        p.cotacoes.push({leadId:o.id,data:d,ramo:o.ramo||o.tipoSeguro||'—',valor:Number(o.valorNegociacao)||null,
+          status:st,motivo:o.motivoPerda||null,origem:o.origem||null});
+        marca(d);
+      } else if(r.tipo==='proposta'){
+        const d=strData(o.criadoEm)||null;
+        p.__props=(p.__props||[]).concat([{d,o}]);
+        marca(d);
+      } else {
+        p.apolices.push(o);
+        marca(strData(o.dataInicioVigencia)||strData(o.criadoEm));
+      }
+    });
+    /* proposta só vira "cotação" se não houver um lead do mesmo dia/ramo */
+    (p.__props||[]).forEach(({d,o})=>{
+      if(p.cotacoes.some(c=>c.leadId&&c.leadId===o.leadId)) return;
+      p.cotacoes.push({leadId:o.leadId||null,data:d,ramo:o.ramo||'Auto',
+        valor:Number(o.premioLiquido)||null,status:'proposta',seguradora:o.seguradora||null});
+    });
+    delete p.__props;
+    return p;
+  }).filter(p=>p.nome||p.nomeEmpresa);
+
+  lista.forEach(p=>{
+    p.cotacoes.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+    p.ramosCotados=[...new Set(p.cotacoes.map(c=>c.ramo).filter(r=>r&&r!=='—'))];
+    p.ramosAtivos=[...new Set(p.apolices.filter(a=>a.status!=='cancelada').map(a=>a.ramo).filter(Boolean))];
+    p.ramosFaltando=RAMO_OPCOES.filter(r=>!p.ramosAtivos.includes(r));
+    p.temApolice=p.ramosAtivos.length>0;
+    p.perdidas=p.cotacoes.filter(c=>c.status==='perdida').length;
+    p.abertas=p.cotacoes.filter(c=>c.status==='aberta').length;
+    p.premioTotal=p.apolices.filter(a=>a.status!=='cancelada').reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
+    p.situacao=p.abertas?'em_negociacao':(p.temApolice?'cliente':(p.perdidas?'perdido':'so_cotou'));
+    p.aniversario=p.dataNascimento?String(p.dataNascimento).slice(5,10):null;
+  });
+  return lista;
+}
+const CT_SIT={cliente:['Cliente','var(--ok)','var(--ok-bg)'],em_negociacao:['Em negociação','var(--info)','var(--info-bg)'],
+  perdido:['Perdido','var(--danger)','var(--danger-bg)'],so_cotou:['Só cotou','var(--text-3)','var(--surface-3)']};
+function ctDiasAniv(mmdd){
+  if(!mmdd) return null;
+  const h=new Date(), [m,d]=mmdd.split('-').map(Number);
+  let alvo=new Date(h.getFullYear(),m-1,d);
+  alvo.setHours(0,0,0,0);
+  const hoje=new Date(h.getFullYear(),h.getMonth(),h.getDate());
+  if(alvo<hoje) alvo=new Date(h.getFullYear()+1,m-1,d);
+  return Math.round((alvo-hoje)/86400000);
+}
+
+VIEWS.contatos=function(){
+  let ps=ctPessoas();
+  const total=ps.length;
+  const clientes=ps.filter(p=>p.situacao==='cliente').length;
+  const soCotou=ps.filter(p=>p.situacao==='so_cotou'||p.situacao==='perdido').length;
+  const comNasc=ps.filter(p=>p.dataNascimento).length;
+  const aniv=ps.filter(p=>p.aniversario).map(p=>({p,dias:ctDiasAniv(p.aniversario)}))
+    .filter(x=>x.dias!=null&&x.dias<=30).sort((a,b)=>a.dias-b.dias);
+
+  if(CT_F.situacao) ps=ps.filter(p=>p.situacao===CT_F.situacao);
+  if(CT_F.ramo==='__falta') ps=ps.filter(p=>p.ramosFaltando.length&&p.temApolice);
+  else if(CT_F.ramo) ps=ps.filter(p=>p.ramosCotados.includes(CT_F.ramo)||p.ramosAtivos.includes(CT_F.ramo));
+  if(CT_F.mes) ps=ps.filter(p=>p.aniversario&&p.aniversario.slice(0,2)===CT_F.mes);
+  if(CT_F.busca){ const q=ctNorm(CT_F.busca), qn=ctDig(CT_F.busca);
+    ps=ps.filter(p=>ctNorm(p.nome+' '+p.nomeEmpresa+' '+(p.cidade||'')).includes(q)
+      ||(qn&&(ctDig(p.whatsapp).includes(qn)||ctDig(p.cpf).includes(qn)))
+      ||ctNorm(p.email).includes(q)); }
+  ps.sort((a,b)=> CT_F.ordem==='recente' ? (b.ultimo||'').localeCompare(a.ultimo||'')
+    : CT_F.ordem==='premio' ? (b.premioTotal-a.premioTotal)
+    : (a.nome||a.nomeEmpresa||'').localeCompare(b.nome||b.nomeEmpresa||''));
+  window.__ctExport=ps;
+
+  const actions=`<button class="btn btn-primary btn-sm" onclick="novoLead()"><i class="fas fa-plus"></i> Nova cotação</button>`;
+  let html=head('contatos',{actions});
+
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-address-book"></i></div><div class="val">${total}</div><div class="lbl">Pessoas na base</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${clientes}</div><div class="lbl">Com apólice conosco</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-comments-dollar"></i></div><div class="val">${soCotou}</div><div class="lbl">Cotaram e não fecharam</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-cake-candles"></i></div><div class="val">${aniv.length}</div><div class="lbl">Aniversários em 30 dias</div>
+      <div class="foot">${comNasc} de ${total} com data cadastrada</div></div>
+  </div>`;
+
+  if(aniv.length) html+=`<div class="card" style="border-color:#dcd0f5;background:var(--purple-bg)">
+    <div class="card-head" style="border-color:#dcd0f5"><h3><i class="fas fa-cake-candles" style="color:var(--purple)"></i> Aniversários próximos</h3></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${aniv.slice(0,12).map(({p,dias})=>`<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 13px;min-width:190px">
+        <div style="font-weight:700;font-size:.86rem">${esc(p.nome||p.nomeEmpresa)}</div>
+        <div style="font-size:.76rem;color:var(--text-2)">${p.aniversario.split('-').reverse().join('/')} ·
+          <b style="color:${dias===0?'var(--purple)':'var(--text-2)'}">${dias===0?'é hoje!':dias===1?'amanhã':'em '+dias+' dias'}</b></div>
+        <div style="margin-top:7px;display:flex;gap:5px">
+          ${p.whatsapp?waBtn(p.whatsapp,'Feliz aniversário, '+((p.nome||'').split(' ')[0]||'')+'! Um abraço da Retorno Seguros. 🎉'):''}
+          <button class="btn btn-ghost btn-sm" onclick="ctAbrir('${esc(p.chave)}')"><i class="fas fa-eye"></i></button>
+        </div></div>`).join('')}
+    </div></div>`;
+
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-address-book"></i> ${ps.length} contato(s)</h3>
+      <button class="btn btn-ghost btn-sm" onclick="ctExportar()"><i class="fas fa-download"></i> CSV</button></div>
+    <div class="filters">
+      <select onchange="CT_F.situacao=this.value;VIEWS.contatos()">
+        <option value="">Todas as situações</option>
+        ${Object.entries(CT_SIT).map(([k,v])=>`<option value="${k}" ${CT_F.situacao===k?'selected':''}>${v[0]}</option>`).join('')}</select>
+      <select onchange="CT_F.ramo=this.value;VIEWS.contatos()">
+        <option value="">Todos os ramos</option>
+        <option value="__falta" ${CT_F.ramo==='__falta'?'selected':''}>Clientes com ramo em aberto</option>
+        ${RAMO_OPCOES.map(r=>`<option value="${r}" ${CT_F.ramo===r?'selected':''}>${r}</option>`).join('')}</select>
+      <select onchange="CT_F.mes=this.value;VIEWS.contatos()">
+        <option value="">Aniversário: todos os meses</option>
+        ${MESES_BR.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${CT_F.mes===String(i+1).padStart(2,'0')?'selected':''}>${m}</option>`).join('')}</select>
+      <select onchange="CT_F.ordem=this.value;VIEWS.contatos()">
+        <option value="nome" ${CT_F.ordem==='nome'?'selected':''}>Ordenar por nome</option>
+        <option value="recente" ${CT_F.ordem==='recente'?'selected':''}>Mais recentes</option>
+        <option value="premio" ${CT_F.ordem==='premio'?'selected':''}>Maior prêmio</option></select>
+      <input type="text" id="fBuscaCt" placeholder="Nome, telefone, CPF, e-mail..." value="${esc(CT_F.busca)}"
+        oninput="CT_F.busca=this.value;redesenhar(VIEWS.contatos)" style="min-width:230px">
+    </div>
+    ${ps.length?`<div class="tbl-wrap"><table><thead><tr>
+      <th>Contato</th><th>Contatos</th><th>Situação</th><th>Já cotou</th><th>Tem conosco</th>
+      <th>Em aberto</th><th style="text-align:right">Prêmio</th><th>Última</th><th></th>
+    </tr></thead><tbody>
+    ${ps.slice(0,300).map(p=>{ const st=CT_SIT[p.situacao];
+      const dias=ctDiasAniv(p.aniversario);
+      return `<tr>
+        <td><b>${esc(p.nome||p.nomeEmpresa)}</b>
+          ${p.nomeEmpresa&&p.nome?`<div style="font-size:.73rem;color:var(--text-3)">${esc(p.nomeEmpresa)}</div>`:''}
+          ${p.dataNascimento?`<div style="font-size:.72rem;color:${dias!=null&&dias<=7?'var(--purple)':'var(--text-3)'}">
+            <i class="fas fa-cake-candles"></i> ${fmtData(p.dataNascimento)}${idadeDe(p.dataNascimento)!=null?' · '+idadeDe(p.dataNascimento)+'a':''}</div>`:''}</td>
+        <td style="font-size:.8rem">${esc(p.whatsapp||'—')}${p.email?`<div style="font-size:.72rem;color:var(--text-3)">${esc(p.email)}</div>`:''}</td>
+        <td><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span></td>
+        <td><b>${p.cotacoes.length}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(p.ramosCotados.slice(0,3).join(', '))||'—'}</div></td>
+        <td>${p.ramosAtivos.length?p.ramosAtivos.map(r=>`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-right:3px">${esc(r)}</span>`).join(''):'<span style="color:var(--text-3)">nada</span>'}</td>
+        <td>${p.temApolice&&p.ramosFaltando.length?`<span class="badge" style="background:var(--brand-50);color:var(--brand-dark)">${p.ramosFaltando.length} ramo(s)</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="text-align:right">${p.premioTotal?money(p.premioTotal):'<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="color:var(--text-3);font-size:.8rem">${p.ultimo?fmtData(p.ultimo):'—'}</td>
+        <td style="white-space:nowrap">${p.whatsapp?waBtn(p.whatsapp,'Olá '+((p.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.'):''}
+          <button class="btn btn-ghost btn-sm" onclick="ctAbrir('${esc(p.chave)}')"><i class="fas fa-eye"></i></button></td>
+      </tr>`;}).join('')}
+    </tbody></table></div>
+    ${ps.length>300?`<div style="font-size:.8rem;color:var(--text-3);margin-top:10px">Mostrando 300 de ${ps.length}. Use a busca para refinar.</div>`:''}`
+    :`<div class="empty"><div class="em-ic"><i class="fas fa-address-book"></i></div><h4>Nenhum contato encontrado</h4>
+      <p>Ajuste os filtros — ou crie a primeira cotação.</p></div>`}
+  </div>`;
+  setView(html);
+};
+
+function ctAbrir(chave){
+  const p=ctPessoas().find(x=>x.chave===chave); if(!p) return;
+  const st=CT_SIT[p.situacao];
+  const linha=(k,v)=>v?`<div class="mov-f"><div class="k">${k}</div><div class="v">${v}</div></div>`:'';
+  openModal(`<div class="modal-head"><h3><i class="fas fa-address-card" style="color:var(--brand)"></i> ${esc(p.nome||p.nomeEmpresa)}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="margin-bottom:12px"><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span>
+        ${p.ramosAtivos.map(r=>`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-left:4px">${esc(r)}</span>`).join('')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:16px">
+        ${linha('WhatsApp',esc(p.whatsapp)+' '+(p.whatsapp?waBtn(p.whatsapp,'Olá '+((p.nome||'').split(' ')[0]||'')+'!'):''))}
+        ${linha('E-mail',esc(p.email))}
+        ${linha('CPF/CNPJ',esc(p.cpf))}
+        ${linha('Nascimento',p.dataNascimento?fmtData(p.dataNascimento)+(idadeDe(p.dataNascimento)!=null?' · '+idadeDe(p.dataNascimento)+' anos':''):'')}
+        ${linha('Cidade',esc((p.cidade||'')+(p.estado?'/'+p.estado:'')))}
+        ${linha('Primeiro contato',p.primeiro?fmtData(p.primeiro):'')}
+      </div>
+
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Histórico de cotações (${p.cotacoes.length})</div>
+      <div class="tbl-wrap" style="margin-bottom:16px"><table><thead><tr><th>Quando</th><th>Ramo</th><th style="text-align:right">Valor</th><th>Desfecho</th><th></th></tr></thead><tbody>
+      ${p.cotacoes.map(c=>{
+        const cor={fechada:['Fechada','var(--ok)','var(--ok-bg)'],perdida:['Perdida','var(--danger)','var(--danger-bg)'],
+          aberta:['Em aberto','var(--info)','var(--info-bg)'],proposta:['Proposta lida','var(--purple)','var(--purple-bg)']}[c.status];
+        return `<tr><td>${c.data?fmtData(c.data):'—'}</td><td><b>${esc(c.ramo)}</b></td>
+          <td style="text-align:right">${c.valor?money(c.valor):'<span style="color:var(--text-3)">—</span>'}</td>
+          <td><span class="badge" style="background:${cor[2]};color:${cor[1]}">${cor[0]}</span>
+            ${c.motivo?`<div style="font-size:.71rem;color:var(--text-3)">${esc(MOTIVOS_PERDA[c.motivo]||c.motivo)}</div>`:''}</td>
+          <td>${c.leadId?`<button class="btn btn-ghost btn-sm" onclick="closeModal();abrirLead('${c.leadId}')"><i class="fas fa-arrow-right"></i></button>`:''}</td></tr>`;}).join('')}
+      </tbody></table></div>
+
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices conosco (${p.apolices.length})</div>
+      ${p.apolices.length?p.apolices.map(a=>`<div class="cred"><div style="flex:1">
+        <b>${esc(a.ramo||'Apólice')}</b> · ${esc(a.seguradora||'')}<br>
+        <small style="color:var(--text-3)">Nº ${esc(a.numeroApolice||'-')} · vence ${fmtData(a.dataFimVigencia)}</small></div>
+        <div style="font-weight:700">${money(a.valorPremio)}</div></div>`).join('')
+        :`<p style="color:var(--text-3);font-size:.85rem;margin-bottom:12px">Nenhuma apólice — nunca fechou conosco.</p>`}
+
+      ${p.ramosFaltando.length?`<div style="background:var(--brand-50);border-radius:12px;padding:13px 16px;margin-top:14px">
+        <div style="font-weight:700;font-size:.83rem;color:var(--brand-dark);margin-bottom:7px"><i class="fas fa-lightbulb"></i> Ramos que ele ainda não tem conosco</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${p.ramosFaltando.map(r=>`<button class="btn btn-ghost btn-sm" onclick="ctNovaCotacao('${esc(p.chave)}','${esc(r)}')">
+            <i class="fas fa-plus"></i> ${esc(r)}</button>`).join('')}</div>
+        <div style="font-size:.75rem;color:var(--text-2);margin-top:8px">Clique num ramo para abrir uma cotação nova já com os dados dele.</div></div>`:''}
+    </div>
+    <div class="modal-foot">
+      ${p.leadIds.length?`<button class="btn btn-ghost" onclick="closeModal();abrirLead('${p.leadIds[0]}')"><i class="fas fa-id-badge"></i> Abrir ficha</button>`:''}
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+async function ctNovaCotacao(chave,ramo){
+  const p=ctPessoas().find(x=>x.chave===chave); if(!p) return;
+  try{
+    const ref=await db.collection('leads_crm').add({
+      nome:p.nome||p.nomeEmpresa||'', nomeEmpresa:p.nomeEmpresa||null,
+      whatsapp:ctDig(p.whatsapp)||null, email:p.email||null, cpf:p.cpf||null,
+      dataNascimento:p.dataNascimento||null, cidade:p.cidade||null, estado:p.estado||null,
+      ramo, origem:'renovacao', status:'pre_cadastro',
+      criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp()});
+    closeModal();
+    toast('Cotação de '+ramo+' criada para '+(p.nome||'')+'.','ok','Pronto');
+    setTimeout(()=>abrirLead(ref.id),400);
+  }catch(e){ console.error(e); toast('Erro ao criar a cotação.','err'); }
+}
+function ctExportar(){
+  const ps=window.__ctExport||[];
+  if(!ps.length){ toast('Nada para exportar.','info'); return; }
+  const cel=v=>{v=(v==null?'':String(v));return /[";\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const head=['Nome','Empresa','WhatsApp','E-mail','CPF/CNPJ','Nascimento','Cidade','Situacao','Cotacoes','Ramos cotados','Ramos ativos','Ramos em aberto','Premio total','Ultima interacao'];
+  const linhas=ps.map(p=>[p.nome,p.nomeEmpresa,p.whatsapp,p.email,p.cpf,p.dataNascimento?fmtData(p.dataNascimento):'',
+    (p.cidade||'')+(p.estado?'/'+p.estado:''),(CT_SIT[p.situacao]||[])[0],p.cotacoes.length,
+    p.ramosCotados.join(' + '),p.ramosAtivos.join(' + '),p.ramosFaltando.join(' + '),p.premioTotal,p.ultimo?fmtData(p.ultimo):'']);
+  const txt='﻿'+[head.join(';')].concat(linhas.map(x=>x.map(cel).join(';'))).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download='contatos-retorno.csv'; document.body.appendChild(a); a.click(); a.remove();
+  toast('CSV com '+ps.length+' contato(s).','ok','Exportado');
+}
+
+/* =========================================================================
+   LEADS VINDOS DO SITE — coleções leads_cotacao_* que o CRM não lia
+   ========================================================================= */
+let SITE_LEADS=[];
+const SITE_COLS=[['leads_cotacao_auto','Auto'],['leads_cotacao_vida','Vida'],
+  ['leads_cotacao_residencial','Residencial'],['leads_cotacao_generica','Outros']];
+function ctEscutarSite(){
+  SITE_COLS.forEach(([col,ramo])=>{
+    try{
+      LISTENERS.push(db.collection(col).onSnapshot(sn=>{
+        SITE_LEADS=SITE_LEADS.filter(x=>x.__col!==col)
+          .concat(sn.docs.map(d=>({id:d.id,__col:col,__ramo:ramo,...d.data()})));
+        const r=(location.hash||'').slice(1);
+        if(r==='leads'||r==='contatos') VIEWS[r]&&VIEWS[r]();
+      },e=>console.warn('site leads '+col,e && e.code)));
+    }catch(e){ console.warn('sem acesso a '+col); }
+  });
+}
+/* já existe no CRM? (evita importar duas vezes) */
+function ctJaImportado(s){
+  const fone=ctDig(s.whatsapp||s.telefone||s.celular);
+  const mail=ctNorm(s.email);
+  return (CACHE.leads||[]).some(l=>
+    (l.origemSiteId&&l.origemSiteId===s.id) ||
+    (fone&&ctDig(l.whatsapp||l.telefone)===fone) ||
+    (mail&&ctNorm(l.email)===mail));
+}
+function ctPendentesSite(){ return SITE_LEADS.filter(s=>!ctJaImportado(s)); }
+function ctBlocoSite(){
+  const pend=ctPendentesSite();
+  if(!pend.length) return '';
+  window.__ctSite=pend;
+  return `<div class="card" style="border-color:#b8e4ee;background:var(--brand-50)">
+    <div class="card-head" style="border-color:#b8e4ee">
+      <h3><i class="fas fa-globe"></i> ${pend.length} cotação(ões) vindas do site ainda fora do funil</h3>
+      <button class="btn btn-primary btn-sm" onclick="ctImportarTodos()"><i class="fas fa-download"></i> Trazer todas</button></div>
+    ${pend.slice(0,8).map((s,i)=>`<div class="sug">
+      <div class="ic" style="background:var(--brand);color:#fff"><i class="fas fa-globe"></i></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:.87rem">${esc(s.nome||s.nomeCompleto||s.email||'Sem nome')}
+          <span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-left:6px">${esc(s.__ramo)}</span></div>
+        <div style="font-size:.79rem;color:var(--text-2)">${esc(s.whatsapp||s.telefone||s.celular||'')} ${s.email?'· '+esc(s.email):''}
+          ${s.criadoEm?'· '+fmtData(s.criadoEm):''}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="ctImportarUm(${i})"><i class="fas fa-plus"></i> Trazer</button>
+    </div>`).join('')}
+    ${pend.length>8?`<div style="font-size:.79rem;color:var(--text-2);margin-top:10px">e mais ${pend.length-8}…</div>`:''}
+    <div style="font-size:.76rem;color:var(--text-2);margin-top:12px"><i class="fas fa-circle-info"></i>
+      Essas cotações estavam gravadas pelas páginas do site e não apareciam no funil. Ao trazer, viram lead com origem "Site".</div>
+  </div>`;
+}
+function ctDadosSite(s){
+  return { nome:s.nome||s.nomeCompleto||s.segurado||(s.email||'').split('@')[0]||'Contato do site',
+    whatsapp:ctDig(s.whatsapp||s.telefone||s.celular)||null, email:s.email||null,
+    cpf:s.cpf||s.cnpj||null, cidade:s.cidade||null, estado:s.estado||s.uf||null,
+    ramo:s.ramo||s.tipoSeguro||s.__ramo||null, observacoes:s.mensagem||s.observacoes||null,
+    origem:'site', origemSiteId:s.id, origemSiteCol:s.__col,
+    status:'pre_cadastro', criadoEm:s.criadoEm||FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() };
+}
+async function ctImportarUm(i){
+  const s=(window.__ctSite||[])[i]; if(!s) return;
+  try{ await db.collection('leads_crm').add(ctDadosSite(s));
+    toast('Cotação do site trazida para o funil.','ok'); }
+  catch(e){ console.error(e); toast('Erro ao importar.','err'); }
+}
+async function ctImportarTodos(){
+  const pend=ctPendentesSite(); if(!pend.length) return;
+  if(!confirm('Trazer '+pend.length+' cotação(ões) do site para o funil de leads?')) return;
+  try{ const lote=db.batch();
+    pend.forEach(s=>lote.set(db.collection('leads_crm').doc(),ctDadosSite(s)));
+    await lote.commit();
+    toast(pend.length+' cotação(ões) importadas.','ok','Pronto'); }
+  catch(e){ console.error(e); toast('Erro ao importar em lote.','err'); }
 }
 
 </script>
