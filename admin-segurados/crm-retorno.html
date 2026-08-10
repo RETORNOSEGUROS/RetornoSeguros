@@ -1638,15 +1638,17 @@ function renderMovEmpresa(){
     <button class="tab ${tab==='aprovado'?'active':''}" onclick="MOV_STATE.tab='aprovado';VIEWS.movimentacoes()"><i class="fas fa-check"></i> Aprovados <span class="cnt">${counts.aprovado}</span></button>
     <button class="tab ${tab==='rejeitado'?'active':''}" onclick="MOV_STATE.tab='rejeitado';VIEWS.movimentacoes()"><i class="fas fa-xmark"></i> Recusados <span class="cnt">${counts.rejeitado}</span></button>
     <button class="tab ${tab==='ativos'?'active':''}" onclick="MOV_STATE.tab='ativos';VIEWS.movimentacoes()"><i class="fas fa-id-card"></i> Beneficiários ativos <span class="cnt">${benef.length}</span></button>
+    <button class="tab ${tab==='perfil'?'active':''}" onclick="MOV_STATE.tab='perfil';VIEWS.movimentacoes()"><i class="fas fa-chart-pie"></i> Perfil da equipe</button>
     <button class="tab ${tab==='fatura'?'active':''}" onclick="MOV_STATE.tab='fatura';VIEWS.movimentacoes()"><i class="fas fa-file-invoice-dollar"></i> Fatura</button>
   </div>`;
 
   // busca dentro da empresa (nome / cpf)
   const q=(MOV_STATE.busca||'').toLowerCase();
   const filtra=x=>!q||`${x.nome||''} ${x.cpf||''}`.toLowerCase().includes(q);
-  if(tab!=='fatura') html+=`<div class="filters"><input type="text" id="fBuscaMov" placeholder="Buscar beneficiário por nome ou CPF..." value="${esc(MOV_STATE.busca||'')}" oninput="MOV_STATE.busca=this.value;redesenhar(VIEWS.movimentacoes)" style="min-width:280px"></div>`;
+  if(tab!=='fatura'&&tab!=='perfil') html+=`<div class="filters"><input type="text" id="fBuscaMov" placeholder="Buscar beneficiário por nome ou CPF..." value="${esc(MOV_STATE.busca||'')}" oninput="MOV_STATE.busca=this.value;redesenhar(VIEWS.movimentacoes)" style="min-width:280px"></div>`;
 
-  if(tab==='fatura'){ html+=renderFaturaEmpresa(emp,nome); }
+  if(tab==='perfil'){ html+=renderPerfilEmpresa(emp,nome,benef); }
+  else if(tab==='fatura'){ html+=renderFaturaEmpresa(emp,nome); }
   else if(tab==='ativos'){
     /* a busca casa titular OU dependente; casando o dependente, o titular vem junto */
     let lista=benef;
@@ -1730,6 +1732,384 @@ function renderMovCard(m,tab){
   </div>`;
 }
 
+/* =========================================================================
+   PERFIL DA EQUIPE — faixa etária, tempo de casa e oportunidades de venda
+   ========================================================================= */
+const FAIXAS=[[0,18,'0 a 18'],[19,23,'19 a 23'],[24,28,'24 a 28'],[29,33,'29 a 33'],[34,38,'34 a 38'],
+              [39,43,'39 a 43'],[44,48,'44 a 48'],[49,53,'49 a 53'],[54,58,'54 a 58'],[59,200,'59 ou mais']];
+const faixaDe=i=>{ if(i==null) return null; const f=FAIXAS.find(([a,b])=>i>=a&&i<=b); return f?f[2]:null; };
+function perfilEquipe(benef){
+  const {titulares,orfaos}=agruparPessoas(benef);
+  const deps=titulares.flatMap(t=>t.deps).concat(orfaos);
+  const todos=[...titulares,...deps];
+  const comIdade=todos.map(p=>({p,idade:idadeDe(p.docs[0].dataNascimento)})).filter(x=>x.idade!=null);
+  const faixas={}; FAIXAS.forEach(([,,r])=>faixas[r]={total:0,tit:0,dep:0});
+  comIdade.forEach(({p,idade})=>{ const r=faixaDe(idade); if(!r) return;
+    faixas[r].total++; if(p.dep) faixas[r].dep++; else faixas[r].tit++; });
+  const idades=comIdade.map(x=>x.idade).sort((a,b)=>a-b);
+  const media=idades.length?Math.round(idades.reduce((s,i)=>s+i,0)/idades.length):null;
+  const mediana=idades.length?idades[Math.floor(idades.length/2)]:null;
+  const tempos=titulares.map(t=>tempoDeCasa(t.docs[0].dataAdmissao)).filter(m=>m!=null);
+  const tempoMedio=tempos.length?Math.round(tempos.reduce((s,m)=>s+m,0)/tempos.length):null;
+  const blocosTempo=[[0,11,'Menos de 1 ano'],[12,35,'1 a 3 anos'],[36,59,'3 a 5 anos'],[60,119,'5 a 10 anos'],[120,10000,'Mais de 10 anos']];
+  const tempoDist={}; blocosTempo.forEach(([,,r])=>tempoDist[r]=0);
+  tempos.forEach(m=>{ const b=blocosTempo.find(([a,z])=>m>=a&&m<=z); if(b) tempoDist[b[2]]++; });
+  const porProduto={};
+  ['saude','dental','vida','previdencia'].forEach(k=>{
+    porProduto[k]={tit:titulares.filter(t=>t.produtos.includes(k)).length,
+                   dep:deps.filter(d=>d.produtos.includes(k)).length};
+  });
+  const menores=comIdade.filter(x=>x.idade<18).length;
+  const cinquentaMais=comIdade.filter(x=>x.idade>=50).length;
+  return {titulares,deps,todos,comIdade,semIdade:todos.length-comIdade.length,faixas,media,mediana,
+    tempoMedio,tempoDist,blocosTempo,porProduto,menores,cinquentaMais,tempos};
+}
+function barraPerfil(rotulo,valor,total,cor,extra){
+  const pct=total?Math.round(valor/total*100):0;
+  return `<div style="margin-bottom:9px">
+    <div style="display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:4px">
+      <span>${rotulo}${extra?` <span style="color:var(--text-3);font-size:.76rem">${extra}</span>`:''}</span>
+      <span style="font-variant-numeric:tabular-nums"><b>${valor}</b> <span style="color:var(--text-3)">· ${pct}%</span></span></div>
+    <div style="background:var(--surface-3);border-radius:6px;height:10px;overflow:hidden">
+      <div style="width:${pct}%;height:100%;background:${cor||'var(--brand)'};border-radius:6px"></div></div></div>`;
+}
+function renderPerfilEmpresa(emp,nome,benef){
+  const P=perfilEquipe(benef);
+  if(!P.todos.length) return `<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-chart-pie"></i></div>
+    <h4>Nenhum beneficiário ativo</h4><p>O perfil aparece conforme as inclusões são aprovadas.</p></div></div>`;
+  const contratados=(emp.planos||[]);
+  const faltam=['saude','dental','vida','previdencia'].filter(k=>!contratados.includes(k));
+  const totIdade=P.comIdade.length;
+  let html='';
+  if(P.semIdade) html+=`<div class="card" style="border-color:#f6dfae;background:var(--warn-bg)">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <i class="fas fa-triangle-exclamation" style="color:var(--warn);font-size:1.2rem"></i>
+      <div style="flex:1;min-width:240px;font-size:.87rem;color:#92400e">
+        <b>${P.semIdade} de ${P.todos.length} beneficiários ainda não têm data de nascimento.</b>
+        O perfil abaixo considera apenas os ${totIdade} com data preenchida.</div>
+      <button class="btn btn-primary btn-sm" onclick="modalCompletarDados('${esc(emp.id||'')}','${esc(nome)}')"><i class="fas fa-cake-candles"></i> Completar agora</button>
+    </div></div>`;
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-users"></i></div><div class="val">${P.titulares.length}</div><div class="lbl">Funcionários</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-people-roof"></i></div><div class="val">${P.deps.length}</div><div class="lbl">Dependentes</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-cake-candles"></i></div><div class="val">${P.media!=null?P.media+' anos':'—'}</div><div class="lbl">Idade média</div>
+      ${P.mediana!=null?`<div style="font-size:.74rem;color:var(--text-3);margin-top:6px">Mediana ${P.mediana} anos</div>`:''}</div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-briefcase"></i></div><div class="val" style="font-size:1.25rem">${fmtTempo(P.tempoMedio)}</div><div class="lbl">Tempo médio de casa</div>
+      ${P.tempos.length<P.titulares.length?`<div style="font-size:.74rem;color:var(--text-3);margin-top:6px">${P.tempos.length} de ${P.titulares.length} com admissão</div>`:''}</div>
+  </div>`;
+  html+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px">
+    <div class="card"><div class="card-head"><h3><i class="fas fa-chart-simple"></i> Faixa etária</h3>
+      <span style="font-size:.8rem;color:var(--text-3)">${totIdade} pessoa(s)</span></div>
+      ${totIdade?FAIXAS.map(([,,r])=>{const f=P.faixas[r]; if(!f.total) return '';
+        return barraPerfil(r+' anos',f.total,totIdade,'var(--brand)',
+          f.dep?`(${f.tit} func. · ${f.dep} dep.)`:'');}).join('')
+        :`<p style="color:var(--text-3);font-size:.85rem">Preencha as datas de nascimento para ver a distribuição.</p>`}
+      ${P.menores?`<div style="margin-top:12px;font-size:.8rem;color:var(--text-2)"><i class="fas fa-child" style="color:var(--info)"></i> ${P.menores} menor(es) de 18 anos — normalmente filhos no dental/odonto.</div>`:''}
+    </div>
+    <div class="card"><div class="card-head"><h3><i class="fas fa-briefcase"></i> Tempo de empresa</h3>
+      <span style="font-size:.8rem;color:var(--text-3)">${P.tempos.length} funcionário(s)</span></div>
+      ${P.tempos.length?P.blocosTempo.map(([,,r])=>P.tempoDist[r]?barraPerfil(r,P.tempoDist[r],P.tempos.length,'var(--ok)'):'').join('')
+        :`<p style="color:var(--text-3);font-size:.85rem">Preencha as datas de admissão dos funcionários para ver o tempo de casa.</p>`}
+    </div></div>`;
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-layer-group"></i> Cobertura por produto</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Produto</th><th style="text-align:right">Funcionários</th><th style="text-align:right">Dependentes</th><th style="text-align:right">Adesão dos funcionários</th><th>Situação</th></tr></thead><tbody>
+    ${['saude','dental','vida','previdencia'].map(k=>{
+      const x=P.porProduto[k], pct=P.titulares.length?Math.round(x.tit/P.titulares.length*100):0;
+      const tem=contratados.includes(k);
+      return `<tr><td>${chipsPlanos([k])}</td>
+        <td style="text-align:right">${x.tit}</td><td style="text-align:right">${x.dep}</td>
+        <td style="text-align:right">${tem?pct+'%':'<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${tem?'<span class="badge" style="background:var(--ok-bg);color:var(--ok)">Contratado</span>'
+                :'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">Não contratado</span>'}</td></tr>`;}).join('')}
+    </tbody></table></div></div>`;
+  if(faltam.length&&totIdade) html+=`<div class="card" style="border-color:#b8e4ee;background:var(--brand-50)">
+    <div class="card-head" style="border-color:#b8e4ee"><h3><i class="fas fa-lightbulb"></i> Oportunidades nesta conta</h3></div>
+    <div style="font-size:.88rem;color:var(--text-2);line-height:1.7">
+      ${faltam.map(k=>{
+        const nomeP=(PLANO_OPCOES.find(p=>p[0]===k)||[k,k])[1];
+        const arg={saude:`idade média de ${P.media} anos e ${P.cinquentaMais} pessoa(s) com 50+ — é o público que mais valoriza o saúde`,
+          dental:'o dental é o de menor custo por vida e o de adesão mais rápida',
+          vida:`o seguro de vida é cotado por idade e você já tem o perfil etário de ${totIdade} vidas aqui`,
+          previdencia:`tempo médio de casa de ${fmtTempo(P.tempoMedio)} — previdência costuma entrar como retenção`}[k]||'';
+        return `<div style="display:flex;gap:10px;margin-bottom:8px"><i class="fas fa-arrow-right" style="color:var(--brand);margin-top:5px"></i>
+          <div><b>${esc(nomeP)}</b> não contratado — ${arg}. Base de ${P.titulares.length} funcionários e ${P.deps.length} dependentes.</div></div>`;}).join('')}
+    </div></div>`;
+  return html;
+}
+
+/* =========================================================================
+   EDITAR DADOS PESSOAIS de um beneficiário (vale para todos os produtos dele)
+   ========================================================================= */
+function docsDaPessoa(cpfN,empId,nome){
+  return CACHE.beneficiarios.filter(b=>{
+    const mesmaEmp = empId ? b.empresaId===empId : true;
+    const mesmoCpf = soDig(b.cpf)===soDig(cpfN);
+    return mesmaEmp && (mesmoCpf || (!soDig(cpfN)&&(b.nome||'')===nome));
+  });
+}
+function idadeDe(nasc){ const d=dataObj(nasc); if(!d) return null;
+  const h=new Date(); let a=h.getFullYear()-d.getFullYear();
+  const m=h.getMonth()-d.getMonth(); if(m<0||(m===0&&h.getDate()<d.getDate())) a--;
+  return a>=0&&a<130?a:null; }
+function tempoDeCasa(adm){ const d=dataObj(adm); if(!d) return null;
+  const h=new Date(); let meses=(h.getFullYear()-d.getFullYear())*12+(h.getMonth()-d.getMonth());
+  if(h.getDate()<d.getDate()) meses--;
+  return meses>=0?meses:null; }
+function fmtTempo(meses){ if(meses==null) return '—';
+  const a=Math.floor(meses/12), m=meses%12;
+  return a?(a+' ano'+(a>1?'s':'')+(m?' e '+m+' m':'')):(m+' mês'+(m!==1?'es':'')); }
+
+function modalEditarPessoa(cpfN,empId){
+  const docs=docsDaPessoa(cpfN,empId);
+  if(!docs.length){ toast('Beneficiário não encontrado.','err'); return; }
+  const b=docs[0], dep=docs.some(d=>d.titularidade==='dependente');
+  const titulares=CACHE.beneficiarios.filter(x=>x.empresaId===b.empresaId&&x.titularidade!=='dependente'&&x.status!=='inativo');
+  const vistos={}; const listaTit=titulares.filter(t=>{ const c=soDig(t.cpf); if(!c||vistos[c]) return false; vistos[c]=1; return true; });
+  openModal(`
+    <div class="modal-head"><h3><i class="fas fa-user-pen" style="color:var(--brand)"></i> Editar dados — ${esc(b.nome)}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:var(--brand-50);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:.82rem;color:var(--brand-dark)">
+        <i class="fas fa-circle-info"></i> Os dados pessoais valem para os <b>${docs.length}</b> registro(s) desta pessoa
+        (${docs.map(d=>(d.plano||'').toUpperCase()).join(', ')}). Carteirinha e certificado são por produto, lá embaixo.</div>
+      <input type="hidden" id="edpCpfN" value="${esc(soDig(b.cpf))}">
+      <input type="hidden" id="edpEmp" value="${esc(b.empresaId||'')}">
+      <div class="form-row"><label>Nome completo</label><input type="text" id="edpNome" value="${esc(b.nome||'')}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>CPF</label><input type="text" id="edpCpf" value="${esc(b.cpf||'')}" placeholder="000.000.000-00"></div>
+        <div class="form-row"><label>Data de nascimento</label><input type="date" id="edpNasc" value="${esc(strData(b.dataNascimento)||'')}" max="${strData(new Date().toISOString())||''}">
+          <div style="font-size:.75rem;color:var(--text-3);margin-top:4px" id="edpIdade">${idadeDe(b.dataNascimento)!=null?idadeDe(b.dataNascimento)+' anos':'Preencha para calcular a idade'}</div></div>
+        <div class="form-row"><label>Sexo</label><select id="edpSexo">
+          <option value="">Não informado</option>
+          <option value="F" ${b.sexo==='F'?'selected':''}>Feminino</option>
+          <option value="M" ${b.sexo==='M'?'selected':''}>Masculino</option></select></div>
+        <div class="form-row"><label>Data de admissão</label><input type="date" id="edpAdm" value="${esc(strData(b.dataAdmissao)||'')}">
+          <div style="font-size:.75rem;color:var(--text-3);margin-top:4px">Usada para o tempo de empresa.</div></div>
+        <div class="form-row"><label>E-mail</label><input type="email" id="edpEmail" value="${esc(b.email||'')}"></div>
+        <div class="form-row"><label>Celular</label><input type="text" id="edpCel" value="${esc(b.celular||'')}" placeholder="(00) 00000-0000"></div>
+      </div>
+      <div class="form-row"><label>Nome da mãe</label><input type="text" id="edpMae" value="${esc(b.nomeMae||'')}"></div>
+      ${dep?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Titular vinculado</label><select id="edpTitular">
+          <option value="">Sem vínculo</option>
+          ${listaTit.map(t=>`<option value="${esc(t.cpf)}" ${soDig(t.cpf)===soDig(b.cpfTitular)?'selected':''}>${esc(t.nome)} — ${esc(t.cpf)}</option>`).join('')}
+        </select></div>
+        <div class="form-row"><label>Grau de parentesco</label><select id="edpParentesco">
+          <option value="">Selecione...</option>
+          ${Object.entries(PARENTESCO_LBL).map(([k,v])=>`<option value="${k}" ${b.parentesco===k?'selected':''}>${v}</option>`).join('')}
+        </select></div></div>`:''}
+      <div style="margin-top:6px"><div style="font-size:.78rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">Por produto</div>
+        ${docs.map(d=>`<div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;align-items:end;margin-bottom:10px">
+          <div style="padding-bottom:10px">${chipsPlanos([d.plano])}</div>
+          <div class="form-row" style="margin:0"><label>Carteirinha</label><input type="text" class="edpCartao" data-id="${d.id}" value="${esc(d.cartao||'')}"></div>
+          <div class="form-row" style="margin:0"><label>Certificado</label><input type="text" class="edpCert" data-id="${d.id}" value="${esc(d.certificado||'')}"></div>
+        </div>`).join('')}</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarPessoa()"><i class="fas fa-floppy-disk"></i> Salvar dados</button></div>`,'wide');
+  const n=document.getElementById('edpNasc');
+  if(n) n.addEventListener('change',()=>{ const i=idadeDe(n.value);
+    document.getElementById('edpIdade').textContent=i!=null?i+' anos':'Preencha para calcular a idade'; });
+}
+async function salvarPessoa(){
+  const cpfN=document.getElementById('edpCpfN').value, empId=document.getElementById('edpEmp').value;
+  const docs=docsDaPessoa(cpfN,empId);
+  if(!docs.length){ toast('Registro não encontrado.','err'); return; }
+  const g=i=>document.getElementById(i);
+  const comum={ nome:g('edpNome').value.trim().toUpperCase()||docs[0].nome,
+    cpf:g('edpCpf').value.trim()||null,
+    dataNascimento:g('edpNasc').value||null,
+    sexo:g('edpSexo').value||null,
+    dataAdmissao:g('edpAdm').value||null,
+    email:g('edpEmail').value.trim()||null,
+    celular:g('edpCel').value.trim()||null,
+    nomeMae:g('edpMae').value.trim()||null,
+    atualizadoEm:FV.serverTimestamp() };
+  if(g('edpTitular')) comum.cpfTitular=g('edpTitular').value||null;
+  if(g('edpParentesco')) comum.parentesco=g('edpParentesco').value||null;
+  const cart={}, cert={};
+  document.querySelectorAll('.edpCartao').forEach(i=>cart[i.dataset.id]=i.value.trim()||null);
+  document.querySelectorAll('.edpCert').forEach(i=>cert[i.dataset.id]=i.value.trim()||null);
+  try{
+    const lote=db.batch();
+    docs.forEach(d=>lote.update(db.collection('beneficiarios').doc(d.id),
+      {...comum, cartao:cart[d.id]!==undefined?cart[d.id]:(d.cartao||null), certificado:cert[d.id]!==undefined?cert[d.id]:(d.certificado||null)}));
+    await lote.commit();
+    closeModal(); toast('Dados atualizados em '+docs.length+' registro(s).','ok','Salvo');
+  }catch(e){ console.error(e); toast('Erro ao salvar os dados.','err'); }
+}
+
+/* ---------- Completar em massa quem veio da planilha sem data de nascimento ---------- */
+function modalCompletarDados(empId,nomeEmp){
+  const benef=CACHE.beneficiarios.filter(b=>b.empresaId===empId&&b.status!=='inativo');
+  const {titulares,orfaos}=agruparPessoas(benef);
+  const todos=[...titulares,...titulares.flatMap(t=>t.deps),...orfaos];
+  const faltando=todos.filter(p=>!strData(p.docs[0].dataNascimento));
+  openModal(`
+    <div class="modal-head"><h3><i class="fas fa-cake-candles" style="color:var(--brand)"></i> Completar datas de nascimento</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      ${faltando.length?`
+      <div style="background:var(--warn-bg);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:.83rem;color:#92400e">
+        <i class="fas fa-triangle-exclamation"></i> <b>${faltando.length}</b> de ${todos.length} beneficiário(s) de ${esc(nomeEmp)} estão sem data de nascimento —
+        provavelmente vieram da planilha antiga. Preencha aqui de uma vez; a idade é calculada sozinha.</div>
+      <div class="tbl-wrap" style="max-height:46vh;overflow-y:auto"><table><thead><tr>
+        <th>Beneficiário</th><th>CPF</th><th>Vínculo</th><th style="width:180px">Nascimento</th><th style="width:180px">Admissão</th></tr></thead><tbody>
+        ${faltando.map(p=>`<tr>
+          <td><b>${esc(p.nome)}</b></td><td>${esc(p.cpf||'')||'—'}</td>
+          <td>${p.dep?'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">Dependente</span>':'Titular'}</td>
+          <td><input type="date" class="ccNasc" data-cpf="${esc(p.key)}" style="padding:7px 9px;border:1px solid var(--border-2);border-radius:8px;width:100%"></td>
+          <td>${p.dep?'<span style="color:var(--text-3);font-size:.8rem">—</span>'
+            :`<input type="date" class="ccAdm" data-cpf="${esc(p.key)}" value="${esc(strData(p.docs[0].dataAdmissao)||'')}" style="padding:7px 9px;border:1px solid var(--border-2);border-radius:8px;width:100%">`}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+      <input type="hidden" id="ccEmp" value="${esc(empId)}">
+      <p style="font-size:.78rem;color:var(--text-3);margin-top:12px">Só grava as linhas que você preencher. Pode salvar em partes e voltar depois.</p>`
+      :`<div class="empty"><div class="em-ic" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-circle-check"></i></div>
+        <h4>Tudo preenchido</h4><p>Todos os ${todos.length} beneficiários de ${esc(nomeEmp)} já têm data de nascimento.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
+      ${faltando.length?`<button class="btn btn-primary" onclick="salvarCompletar()"><i class="fas fa-floppy-disk"></i> Salvar preenchidos</button>`:''}</div>`,'wide');
+}
+async function salvarCompletar(){
+  const empId=document.getElementById('ccEmp').value;
+  const nasc={}, adm={};
+  document.querySelectorAll('.ccNasc').forEach(i=>{ if(i.value) nasc[i.dataset.cpf]=i.value; });
+  document.querySelectorAll('.ccAdm').forEach(i=>{ if(i.value) adm[i.dataset.cpf]=i.value; });
+  const chaves=new Set([...Object.keys(nasc),...Object.keys(adm)]);
+  if(!chaves.size){ toast('Preencha ao menos uma data.','info'); return; }
+  try{
+    const lote=db.batch(); let n=0;
+    chaves.forEach(k=>{
+      const docs=CACHE.beneficiarios.filter(b=>b.empresaId===empId&&
+        ((soDig(b.cpf)&&soDig(b.cpf)===k)||(!soDig(b.cpf)&&('n:'+(b.nome||'').toLowerCase())===k)));
+      docs.forEach(d=>{ const up={atualizadoEm:FV.serverTimestamp()};
+        if(nasc[k]) up.dataNascimento=nasc[k];
+        if(adm[k]) up.dataAdmissao=adm[k];
+        lote.update(db.collection('beneficiarios').doc(d.id),up); n++; });
+    });
+    await lote.commit();
+    closeModal(); toast(chaves.size+' pessoa(s) atualizadas em '+n+' registro(s).','ok','Salvo');
+  }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+
+/* ---------- FATURA DA EMPRESA — histórico mês a mês + detalhe da competência ---------- */
+const MESES_BR=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const MES_CURTO=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+function temValoresContrato(emp){
+  const v=(contratoDe(emp).valores)||{};
+  return ['saude','dental','vida','previdencia'].some(k=>Number((v[k]||{}).titular)>0||Number((v[k]||{}).dependente)>0);
+}
+/* últimos N meses terminando na competência escolhida */
+function historicoFatura(emp,ano,mes,n){
+  const out=[];
+  for(let i=n-1;i>=0;i--){
+    let m=mes-i, a=ano;
+    while(m<=0){ m+=12; a--; }
+    out.push(faturaEmpresa(emp,a,m));
+  }
+  return out;
+}
+function renderFaturaEmpresa(emp,nome){
+  const hoje=new Date();
+  if(!MOV_STATE.fatMes) MOV_STATE.fatMes=hoje.getMonth()+1;
+  if(!MOV_STATE.fatAno) MOV_STATE.fatAno=hoje.getFullYear();
+  const mes=Number(MOV_STATE.fatMes), ano=Number(MOV_STATE.fatAno);
+  const sel=`<div class="filters" style="margin:0">
+      <select onchange="MOV_STATE.fatMes=+this.value;VIEWS.movimentacoes()">
+        ${MESES_BR.map((m,i)=>`<option value="${i+1}" ${mes===i+1?'selected':''}>${m}</option>`).join('')}</select>
+      <input type="number" min="2000" max="2100" value="${ano}" onchange="MOV_STATE.fatAno=+this.value;VIEWS.movimentacoes()" style="width:110px">
+      <button class="btn btn-ghost btn-sm" onclick="modalContrato('${emp.id||''}')"><i class="fas fa-sliders"></i> Valores do contrato</button>
+    </div>`;
+  if(!temValoresContrato(emp)) return `<div class="card"><div class="card-head"><h3><i class="fas fa-file-invoice-dollar"></i> Fatura — ${esc(nome)}</h3>${sel}</div>
+    <div class="empty"><div class="em-ic"><i class="fas fa-coins"></i></div><h4>Valores do contrato ainda não cadastrados</h4>
+    <p>Informe o custo por funcionário e por dependente de cada produto para o sistema calcular a fatura com pró-rata —<br>
+    e para a empresa ver a prévia no Portal da Empresa.</p>
+    <button class="btn btn-primary" style="margin-top:14px" onclick="modalContrato('${emp.id||''}')"><i class="fas fa-file-invoice-dollar"></i> Cadastrar valores</button></div></div>`;
+
+  const hist=historicoFatura(emp,ano,mes,12);
+  const f=hist[hist.length-1];
+  const maxTot=Math.max(1,...hist.map(h=>h.total));
+  const porProd={};
+  f.itens.forEach(i=>{ (porProd[i.k]=porProd[i.k]||{qtd:0,total:0}); porProd[i.k].qtd++; porProd[i.k].total=arred2(porProd[i.k].total+i.valor); });
+  const ord=f.itens.slice().sort((a,b)=>(a.b.nome||'').localeCompare(b.b.nome||''));
+  window.__fatExport={hist,f,nome};
+
+  const linhaHist=(h,idx)=>{
+    const ant=idx>0?hist[idx-1]:null;
+    const dif=ant?arred2(h.total-ant.total):null;
+    const atual=h.ano===ano&&h.mes===mes;
+    const dm=h.dm;
+    return `<tr style="cursor:pointer;${atual?'background:var(--brand-50)':''}" onclick="MOV_STATE.fatMes=${h.mes};MOV_STATE.fatAno=${h.ano};VIEWS.movimentacoes()">
+      <td><b${atual?' style="color:var(--brand-dark)"':''}>${MESES_BR[h.mes-1]}/${h.ano}</b>
+        <div style="font-size:.72rem;color:var(--text-3)">01/${String(h.mes).padStart(2,'0')} a ${dm}/${String(h.mes).padStart(2,'0')} · ${dm} dias</div></td>
+      <td style="text-align:right">${h.itens.length}</td>
+      <td style="text-align:right">${h.prorata?`<span style="color:var(--warn);font-weight:700">${h.prorata}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+      <td style="text-align:right;color:var(--text-2)">${dinheiro(h.totEmp)}</td>
+      <td style="text-align:right;color:var(--text-2)">${dinheiro(h.totFunc)}</td>
+      <td style="text-align:right"><b>${dinheiro(h.total)}</b></td>
+      <td style="text-align:right;font-size:.8rem">${dif===null?'<span style="color:var(--text-3)">—</span>'
+        :dif===0?'<span style="color:var(--text-3)">igual</span>'
+        :`<span style="color:${dif>0?'var(--danger)':'var(--ok)'};font-weight:700">${dif>0?'+':''}${dinheiro(dif)}</span>`}</td>
+      <td style="width:120px"><div style="background:var(--surface-3);border-radius:5px;height:8px;overflow:hidden">
+        <div style="width:${Math.round(h.total/maxTot*100)}%;height:100%;background:${atual?'var(--brand)':'var(--brand-light)'}"></div></div></td>
+    </tr>`;
+  };
+
+  return `<div class="card"><div class="card-head">
+      <h3><i class="fas fa-chart-column"></i> Fatura mês a mês — ${esc(nome)}</h3>
+      <button class="btn btn-ghost btn-sm" onclick="exportarFatura()"><i class="fas fa-download"></i> Exportar CSV</button></div>
+    <p style="color:var(--text-2);font-size:.84rem;margin-bottom:14px">Cada competência abre no dia 01 e fecha no último dia do mês. Clique numa linha para ver o detalhe por vida.</p>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Competência</th><th style="text-align:right">Vidas</th><th style="text-align:right">Pró-rata</th>
+      <th style="text-align:right">Empresa</th><th style="text-align:right">Desconto</th><th style="text-align:right">Total</th>
+      <th style="text-align:right">vs. mês anterior</th><th></th>
+    </tr></thead><tbody>${hist.map(linhaHist).join('')}</tbody></table></div>
+  </div>
+
+  <div class="card"><div class="card-head">
+      <h3><i class="fas fa-file-invoice-dollar"></i> Detalhe de ${MESES_BR[mes-1]}/${ano}</h3>${sel}</div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:18px">
+      <div class="kpi"><div class="ico i-brand"><i class="fas fa-sack-dollar"></i></div><div class="val">${dinheiro(f.total)}</div><div class="lbl">Total da competência</div></div>
+      <div class="kpi"><div class="ico i-info"><i class="fas fa-building"></i></div><div class="val">${dinheiro(f.totEmp)}</div><div class="lbl">Custo da empresa</div></div>
+      <div class="kpi"><div class="ico i-warn"><i class="fas fa-user-minus"></i></div><div class="val">${dinheiro(f.totFunc)}</div><div class="lbl">Desconto em folha</div></div>
+      <div class="kpi"><div class="ico i-ok"><i class="fas fa-calendar-day"></i></div><div class="val">${f.prorata}</div><div class="lbl">Itens em pró-rata (de ${f.itens.length})</div></div>
+    </div>
+    ${Object.keys(porProd).length?`<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:16px;font-size:.85rem;color:var(--text-2)">
+      ${Object.entries(porProd).map(([k,v])=>`<span>${chipsPlanos([k])} <b>${v.qtd}</b> vidas · <b>${dinheiro(v.total)}</b></span>`).join('')}</div>`:''}
+    <div class="tbl-wrap"><table><thead><tr><th>Beneficiário</th><th>Vínculo</th><th>Produto</th><th style="text-align:right">Mensal</th><th style="text-align:right">Dias</th><th style="text-align:right">Valor</th><th>Observação</th></tr></thead><tbody>
+    ${ord.length?ord.map(i=>`<tr>
+      <td><b>${esc(i.b.nome)}</b><br><small style="color:var(--text-3)">${esc(i.b.cpf||'')}</small></td>
+      <td>${i.b.titularidade==='dependente'?'Dependente':'Titular'}</td>
+      <td>${chipsPlanos([i.k])}</td>
+      <td style="text-align:right;color:var(--text-2)">${dinheiro(i.base)}</td>
+      <td style="text-align:right">${i.integral?`<span style="color:var(--text-3)">${i.dias}/${i.dm}</span>`:`<b style="color:var(--warn)">${i.dias}/${i.dm}</b>`}</td>
+      <td style="text-align:right"><b>${dinheiro(i.valor)}</b></td>
+      <td style="font-size:.8rem;color:var(--text-2)">${i.integral?'Mês integral':'Pró-rata'}${i.vFunc>0?` · desconto ${dinheiro(i.vFunc)}`:''}</td>
+    </tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhuma vida nesta competência</h4><p>Ninguém estava ativo em ${MESES_BR[mes-1]}/${ano}.</p></div></td></tr>`}
+    </tbody></table></div>
+    <div style="margin-top:12px;font-size:.78rem;color:var(--text-3)"><i class="fas fa-circle-info"></i>
+      Cálculo por dias reais do mês (${f.dm} dias), contando o dia de entrada e o dia de saída. É a mesma conta que a empresa vê no portal.</div>
+  </div>`;
+}
+function exportarFatura(){
+  const {hist,f,nome}=window.__fatExport||{};
+  if(!hist) return toast('Abra a fatura antes de exportar.','info');
+  const cell=v=>{ v=(v==null?'':String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const L=[['RESUMO MES A MES'],['Competencia','Dias','Vidas','Pro-rata','Empresa','Desconto','Total']];
+  hist.forEach(h=>L.push([MESES_BR[h.mes-1]+'/'+h.ano,h.dm,h.itens.length,h.prorata,h.totEmp,h.totFunc,h.total]));
+  L.push([]); L.push(['DETALHE DE '+MESES_BR[f.mes-1]+'/'+f.ano]);
+  L.push(['Beneficiario','CPF','Vinculo','Produto','Mensal','Dias','Base do mes','Valor','Empresa','Funcionario']);
+  f.itens.slice().sort((a,b)=>(a.b.nome||'').localeCompare(b.b.nome||'')).forEach(i=>
+    L.push([i.b.nome,i.b.cpf||'',i.b.titularidade==='dependente'?'Dependente':'Titular',(i.k||'').toUpperCase(),
+      i.base,i.dias,i.dm,i.valor,i.vEmp,i.vFunc]));
+  const txt='﻿'+L.map(l=>l.map(cell).join(';')).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download='fatura-'+(nome||'empresa').toLowerCase().replace(/[^a-z0-9]+/g,'-')+'-'+f.ano+'-'+String(f.mes).padStart(2,'0')+'.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('CSV da fatura gerado (12 meses + detalhe).','ok','Exportado');
+}
+
 /* ---------- Beneficiários ativos: dependentes ficam DENTRO do card do titular ---------- */
 const soDig=v=>(v||'').toString().replace(/\D/g,'');
 function agruparPessoas(benef){
@@ -1771,15 +2151,19 @@ function linhaDependentes(deps){
       <div style="font-size:.72rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
         <i class="fas fa-people-roof"></i> Dependentes vinculados</div>
       <table style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
-        <thead><tr><th>Dependente</th><th>Parentesco</th><th>CPF</th><th>Nascimento</th><th>Produtos</th><th>Carteirinha</th><th>Início</th></tr></thead>
-        <tbody>${deps.map(d=>`<tr>
+        <thead><tr><th>Dependente</th><th>Parentesco</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Carteirinha</th><th>Início</th><th style="text-align:right">Ações</th></tr></thead>
+        <tbody>${deps.map(d=>{const id=idadeDe(d.dataNascimento);return `<tr>
           <td><b>${esc(d.nome)}</b></td>
           <td><span class="badge" style="background:var(--warn-bg);color:var(--warn)">${esc(PARENTESCO_LBL[d.parentesco]||d.parentesco||'—')}</span></td>
           <td>${esc(d.cpf)||'-'}</td>
-          <td>${fmtData(d.dataNascimento)}</td>
+          <td>${d.dataNascimento?fmtData(d.dataNascimento)+(id!=null?` <span style="color:var(--text-3)">· ${id}a</span>`:'')
+            :'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
           <td>${chipsPlanos(d.produtos)}</td>
           <td>${esc(d.cartao)||'<span style="color:var(--text-3)">—</span>'}</td>
-          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td></tr>`).join('')}</tbody>
+          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td>
+          <td style="text-align:right" onclick="event.stopPropagation()">
+            <button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(d.cpfN||d.key)}','${esc(d.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td>
+          </tr>`;}).join('')}</tbody>
       </table></div></td></tr>`;
 }
 function renderBeneficiariosAtivos(benef,nome){
@@ -1788,6 +2172,9 @@ function renderBeneficiariosAtivos(benef,nome){
   window.__benefExport={nome,titulares,orfaos};
   const totDeps=titulares.reduce((s,t)=>s+t.deps.length,0)+orfaos.length;
   const algumComDep=titulares.some(t=>t.deps.length);
+  const todasPessoas=[...titulares,...titulares.flatMap(t=>t.deps),...orfaos];
+  const semNasc=todasPessoas.filter(p=>!strData(p.docs[0].dataNascimento)).length;
+  const empIdAtual=(todasPessoas[0]&&todasPessoas[0].docs[0].empresaId)||MOV_STATE.empresaId||'';
   const linhaTitular=t=>{
     const n=t.deps.length;
     const aberto=!!MOV_STATE.abertos[t.key] || !!(MOV_STATE.busca||'').trim();  // buscando, já abre
@@ -1797,12 +2184,14 @@ function renderBeneficiariosAtivos(benef,nome){
            :'<span style="width:12px;display:inline-block"></span>'}
         <div><b>${esc(t.nome)}</b>${t.dataNascimento?`<div style="font-size:.73rem;color:var(--text-3)">Nasc. ${fmtData(t.dataNascimento)}</div>`:''}</div></div></td>
       <td>${esc(t.cpf)||'-'}</td>
+      <td>${t.dataNascimento?fmtData(t.dataNascimento)+(idadeDe(t.dataNascimento)!=null?` <span style="color:var(--text-3)">· ${idadeDe(t.dataNascimento)}a</span>`:'')
+        :'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
       <td>${chipsPlanos(t.produtos)}</td>
-      <td>Titular</td>
       <td>${n?`<span class="badge" style="background:var(--warn-bg);color:var(--warn)"><i class="fas fa-people-roof"></i> ${n} dependente${n>1?'s':''}</span>`
             :'<span style="color:var(--text-3)">—</span>'}</td>
-      <td>${esc(t.cartao)||'<span style="color:var(--text-3)">—</span>'}</td>
-      <td style="color:var(--text-3)">${fmtData(t.inicio)}</td></tr>
+      <td style="color:var(--text-3)">${fmtData(t.inicio)}${tempoDeCasa(t.docs[0].dataAdmissao)!=null?`<div style="font-size:.72rem">${fmtTempo(tempoDeCasa(t.docs[0].dataAdmissao))} de casa</div>`:''}</td>
+      <td style="text-align:right" onclick="event.stopPropagation()">
+        <button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(t.cpfN||t.key)}','${esc(t.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td></tr>
       ${n&&aberto?linhaDependentes(t.deps):''}`;
   };
   return `<div class="card"><div class="card-head">
@@ -1811,19 +2200,23 @@ function renderBeneficiariosAtivos(benef,nome){
         <span style="font-size:.8rem;color:var(--text-3)">${titulares.length} titular(es) · ${totDeps} dependente(s)</span>
         ${algumComDep?`<button class="btn btn-ghost btn-sm" onclick="expandirTodos(true)"><i class="fas fa-angles-down"></i> Abrir todos</button>
         <button class="btn btn-ghost btn-sm" onclick="expandirTodos(false)"><i class="fas fa-angles-up"></i> Fechar</button>`:''}
+        ${semNasc?`<button class="btn btn-primary btn-sm" onclick="modalCompletarDados('${esc(empIdAtual)}','${esc(nome)}')"><i class="fas fa-cake-candles"></i> Completar ${semNasc} nascimento(s)</button>`:''}
         <button class="btn btn-ghost btn-sm" onclick="exportarBenef()"><i class="fas fa-download"></i> Exportar CSV</button></div></div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Beneficiário</th><th>CPF</th><th>Produtos</th><th>Vínculo</th><th>Dependentes</th><th>Carteirinha</th><th>Início</th>
+      <th>Beneficiário</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Dependentes</th><th>Início</th><th style="text-align:right">Ações</th>
     </tr></thead><tbody>
     ${titulares.length||orfaos.length?titulares.map(linhaTitular).join('')+
       (orfaos.length?`<tr><td colspan="7" style="background:var(--warn-bg);color:#92400e;font-size:.82rem;font-weight:600">
         <i class="fas fa-triangle-exclamation"></i> ${orfaos.length} dependente(s) sem titular ativo vinculado — confira o CPF do titular no cadastro</td></tr>`+
         orfaos.map(d=>`<tr>
-          <td><div style="display:flex;align-items:center;gap:9px"><span style="width:12px"></span><b>${esc(d.nome)}</b></div></td>
-          <td>${esc(d.cpf)||'-'}</td><td>${chipsPlanos(d.produtos)}</td>
-          <td><span class="badge" style="background:var(--warn-bg);color:var(--warn)">Dependente</span></td>
+          <td><div style="display:flex;align-items:center;gap:9px"><span style="width:12px"></span><b>${esc(d.nome)}</b>
+            <span class="badge" style="background:var(--warn-bg);color:var(--warn)">Dependente</span></div></td>
+          <td>${esc(d.cpf)||'-'}</td>
+          <td>${d.dataNascimento?fmtData(d.dataNascimento)+(idadeDe(d.dataNascimento)!=null?` <span style="color:var(--text-3)">· ${idadeDe(d.dataNascimento)}a</span>`:''):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
+          <td>${chipsPlanos(d.produtos)}</td>
           <td style="font-size:.8rem;color:var(--text-3)">titular ${esc(d.cpfTitular||'?')}</td>
-          <td>${esc(d.cartao)||'—'}</td><td style="color:var(--text-3)">${fmtData(d.inicio)}</td></tr>`).join(''):'')
+          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td>
+          <td style="text-align:right"><button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(d.cpfN||d.key)}','${esc(d.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td></tr>`).join(''):'')
     :`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum beneficiário ativo</h4><p>Os beneficiários aparecem aqui conforme as inclusões são aprovadas.</p></div></td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -2611,25 +3004,43 @@ function exportDesist(){ const rows=window.__desistExport||[]; if(!rows.length){
   a.href=URL.createObjectURL(blob); a.download='desistentes.csv'; document.body.appendChild(a); a.click(); a.remove(); toast('CSV gerado.','ok'); }
 
 /* ---------- IMPORTAR BENEFICIÁRIOS ---------- */
-let IMPORT_ROWS=[];
+let IMPORT_ROWS=[]; let IMPORT_MODO='novo';
 VIEWS.importar=function(){
   let html=head('importar');
   const opts=CACHE.empresas.slice().sort((a,b)=>(a.nomeEmpresa||'').localeCompare(b.nomeEmpresa||'')).map(e=>`<option value="${e.id}">${esc(e.nomeEmpresa)}</option>`).join('');
   html+=`<div class="card"><div class="card-pad">
-    <p style="color:var(--text-2);margin-bottom:16px">Cole a lista de beneficiários (uma pessoa por linha) ou selecione um arquivo CSV. Colunas esperadas, separadas por vírgula ou ponto e vírgula: <b>Nome, CPF, Plano, Titularidade, Nascimento</b>.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <button class="btn ${IMPORT_MODO==='novo'?'btn-primary':'btn-ghost'} btn-sm" onclick="IMPORT_MODO='novo';IMPORT_ROWS=[];VIEWS.importar()"><i class="fas fa-user-plus"></i> Cadastrar novos</button>
+      <button class="btn ${IMPORT_MODO==='atualizar'?'btn-primary':'btn-ghost'} btn-sm" onclick="IMPORT_MODO='atualizar';IMPORT_ROWS=[];VIEWS.importar()"><i class="fas fa-rotate"></i> Atualizar quem já existe (por CPF)</button>
+    </div>
+    ${IMPORT_MODO==='atualizar'
+      ? `<div style="background:var(--brand-50);border-radius:10px;padding:12px 15px;margin-bottom:16px;font-size:.85rem;color:var(--brand-dark)">
+          <i class="fas fa-circle-info"></i> Use para completar quem <b>já está cadastrado</b> — por exemplo preencher a data de nascimento de quem veio da planilha antiga.
+          O sistema procura pelo <b>CPF</b> dentro da empresa e atualiza todos os produtos daquela pessoa. Ninguém novo é criado.
+          <div style="margin-top:8px">Colunas: <b>CPF, Nascimento, Admissão</b> <span style="opacity:.75">(admissão é opcional)</span> — ex.: <code>333.444.555-66; 1990-04-12; 2021-03-15</code></div></div>`
+      : `<p style="color:var(--text-2);margin-bottom:16px">Cole a lista de beneficiários (uma pessoa por linha) ou selecione um arquivo CSV. Colunas esperadas, separadas por vírgula ou ponto e vírgula: <b>Nome, CPF, Plano, Titularidade, Nascimento</b>.</p>`}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
       <div class="form-row" style="margin:0"><label>Empresa de destino *</label><select id="impEmpresa"><option value="">Selecione...</option>${opts}</select></div>
       <div class="form-row" style="margin:0"><label>Arquivo CSV</label><input type="file" id="impFile" accept=".csv,.txt" onchange="lerArquivoImport(event)"></div>
     </div>
-    <div class="form-row"><label>Ou cole aqui</label><textarea id="impTexto" rows="6" placeholder="João da Silva, 123.456.789-00, saude, titular, 1990-05-10"></textarea></div>
+    <div class="form-row"><label>Ou cole aqui</label><textarea id="impTexto" rows="6" placeholder="${IMPORT_MODO==='atualizar'?'333.444.555-66; 1990-04-12; 2021-03-15':'João da Silva, 123.456.789-00, saude, titular, 1990-05-10'}"></textarea></div>
     <button class="btn btn-ghost" onclick="previewImport()"><i class="fas fa-eye"></i> Pré-visualizar</button>
   </div></div>
   <div id="impPreview" style="margin-top:18px"></div>`;
   setView(html);
 };
 function lerArquivoImport(ev){ const f=ev.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ document.getElementById('impTexto').value=r.result; previewImport(); }; r.readAsText(f,'utf-8'); }
+function dataBR(v){ v=(v||'').trim(); if(!v) return '';
+  let m=/^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
+  if(m) return m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0');
+  m=/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(v);
+  if(m){ let a=m[3]; if(a.length===2) a=(Number(a)>30?'19':'20')+a;
+    return a+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0'); }
+  return '';
+}
 function previewImport(){ const txt=document.getElementById('impTexto').value.trim(); if(!txt){ toast('Cole a lista ou selecione um arquivo.','info'); return; }
   const linhas=txt.split(/\r?\n/).filter(x=>x.trim());
+  if(IMPORT_MODO==='atualizar') return previewAtualizar(linhas);
   IMPORT_ROWS=linhas.map(l=>{ const c=l.split(/[;,\t]/).map(x=>x.trim());
     if(/nome/i.test(c[0])&&/cpf/i.test(c[1]||'')) return null; // pula cabeçalho
     return {nome:c[0]||'',cpf:c[1]||'',plano:(c[2]||'saude').toLowerCase(),titularidade:(c[3]||'titular').toLowerCase(),dataNascimento:c[4]||''}; }).filter(x=>x&&x.nome);
@@ -2641,6 +3052,76 @@ function previewImport(){ const txt=document.getElementById('impTexto').value.tr
     ${IMPORT_ROWS.slice(0,50).map(r=>`<tr><td>${esc(r.nome)}</td><td>${esc(r.cpf)}</td><td>${esc(r.plano.toUpperCase())}</td><td>${esc(r.titularidade)}</td><td>${esc(r.dataNascimento)}</td></tr>`).join('')}
     </tbody></table></div>${IMPORT_ROWS.length>50?`<div class="card-pad" style="color:var(--text-3);font-size:.82rem">Mostrando 50 de ${IMPORT_ROWS.length}.</div>`:''}</div>`;
 }
+
+function previewAtualizar(linhas){
+  const empId=document.getElementById('impEmpresa').value;
+  const el=document.getElementById('impPreview');
+  if(!empId){ toast('Selecione a empresa primeiro.','err'); return; }
+  const base=CACHE.beneficiarios.filter(b=>b.empresaId===empId);
+  IMPORT_ROWS=linhas.map(l=>{
+    const c=l.split(/[;,\t]/).map(x=>x.trim());
+    if(/cpf/i.test(c[0]||'')) return null;                       // cabeçalho
+    const cpf=soDig(c[0]);
+    if(cpf.length!==11) return null;
+    const nasc=dataBR(c[1]), adm=dataBR(c[2]);
+    const docs=base.filter(b=>soDig(b.cpf)===cpf);
+    return {cpf:c[0].trim(),cpfN:cpf,nasc,adm,docs,
+      nome:docs.length?docs[0].nome:'—',
+      jaTem:docs.length?!!strData(docs[0].dataNascimento):false};
+  }).filter(Boolean);
+  const achados=IMPORT_ROWS.filter(r=>r.docs.length);
+  const perdidos=IMPORT_ROWS.filter(r=>!r.docs.length);
+  const comData=achados.filter(r=>r.nasc||r.adm);
+  if(!IMPORT_ROWS.length){ el.innerHTML=`<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div>
+    <h4>Nenhuma linha com CPF válido</h4><p>Cada linha precisa começar com um CPF de 11 dígitos.</p></div></div>`; return; }
+  el.innerHTML=`<div class="card">
+    <div class="card-head"><h3><i class="fas fa-rotate"></i> Conferência (${IMPORT_ROWS.length} linha(s))</h3>
+      <button class="btn btn-primary btn-sm" ${comData.length?'':'disabled'} onclick="confirmarAtualizar()">
+        <i class="fas fa-floppy-disk"></i> Atualizar ${comData.length} pessoa(s)</button></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;font-size:.85rem">
+      <span><b style="color:var(--ok)">${achados.length}</b> encontrado(s) na empresa</span>
+      <span><b style="color:${perdidos.length?'var(--danger)':'var(--text-3)'}">${perdidos.length}</b> CPF sem cadastro</span>
+      <span><b>${comData.length}</b> com data para gravar</span>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>CPF</th><th>Beneficiário</th><th>Nascimento</th><th>Admissão</th><th>Situação</th></tr></thead><tbody>
+    ${IMPORT_ROWS.slice(0,80).map(r=>`<tr>
+      <td>${esc(r.cpf)}</td><td>${esc(r.nome)}</td>
+      <td>${r.nasc?fmtData(r.nasc)+(idadeDe(r.nasc)!=null?` <span style="color:var(--text-3)">· ${idadeDe(r.nasc)}a</span>`:''):'<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${r.adm?fmtData(r.adm):'<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${!r.docs.length?'<span class="badge" style="background:var(--danger-bg);color:var(--danger)">CPF não encontrado</span>'
+        :!r.nasc&&!r.adm?'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">sem data — será ignorada</span>'
+        :r.jaTem?`<span class="badge" style="background:var(--warn-bg);color:var(--warn)">já tinha data — será substituída</span>`
+        :`<span class="badge" style="background:var(--ok-bg);color:var(--ok)">vai preencher ${r.docs.length} registro(s)</span>`}</td>
+    </tr>`).join('')}
+    </tbody></table></div>
+    ${IMPORT_ROWS.length>80?`<div style="color:var(--text-3);font-size:.82rem;margin-top:10px">Mostrando 80 de ${IMPORT_ROWS.length}.</div>`:''}
+    ${perdidos.length?`<div style="margin-top:12px;font-size:.82rem;color:var(--danger)"><i class="fas fa-circle-exclamation"></i>
+      CPFs sem cadastro nesta empresa: ${esc(perdidos.slice(0,10).map(r=>r.cpf).join(', '))}${perdidos.length>10?' e mais '+(perdidos.length-10):''}.</div>`:''}
+  </div>`;
+}
+async function confirmarAtualizar(){
+  const alvos=IMPORT_ROWS.filter(r=>r.docs.length&&(r.nasc||r.adm));
+  if(!alvos.length){ toast('Nenhuma linha com data para gravar.','info'); return; }
+  toast('Atualizando '+alvos.length+' pessoa(s)...','info','Aguarde');
+  try{
+    let lote=db.batch(), n=0, pessoas=0, regs=0;
+    for(const r of alvos){
+      for(const d of r.docs){
+        const up={atualizadoEm:FV.serverTimestamp()};
+        if(r.nasc) up.dataNascimento=r.nasc;
+        if(r.adm&&d.titularidade!=='dependente') up.dataAdmissao=r.adm;
+        lote.update(db.collection('beneficiarios').doc(d.id),up);
+        n++; regs++;
+        if(n>=400){ await lote.commit(); lote=db.batch(); n=0; }
+      }
+      pessoas++;
+    }
+    if(n>0) await lote.commit();
+    IMPORT_ROWS=[]; document.getElementById('impPreview').innerHTML=''; document.getElementById('impTexto').value='';
+    toast(pessoas+' pessoa(s) atualizada(s) em '+regs+' registro(s).','ok','Concluído');
+  }catch(e){ console.error(e); toast('Erro ao atualizar. Tente um lote menor.','err'); }
+}
+
 async function confirmarImport(){ const empId=document.getElementById('impEmpresa').value; if(!empId){ toast('Selecione a empresa de destino.','err'); return; }
   const emp=CACHE.empresas.find(e=>e.id===empId); if(!IMPORT_ROWS.length){ toast('Nada para importar.','info'); return; }
   toast('Importando '+IMPORT_ROWS.length+' beneficiário(s)...','info','Aguarde');
