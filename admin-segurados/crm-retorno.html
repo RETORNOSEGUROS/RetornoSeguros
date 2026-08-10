@@ -853,10 +853,13 @@ const MENU = [
   { sec:'Campanhas', items:[
     { id:'instagram', icon:'fa-instagram', label:'Instagram', brands:true },
   ]},
+  { sec:'Financeiro', items:[
+    { id:'contas', icon:'fa-file-invoice-dollar', label:'Contas a pagar', badge:'contas' },
+    { id:'pagamentos', icon:'fa-money-check-dollar', label:'Pagamentos da equipe' },
+  ]},
   { sec:'Equipe & Relatórios', items:[
     { id:'comissoes', icon:'fa-hand-holding-dollar', label:'Comissões' },
     { id:'funcionarios', icon:'fa-user-tie', label:'Funcionários' },
-    { id:'pagamentos', icon:'fa-money-check-dollar', label:'Pagamentos' },
     { id:'relatorios', icon:'fa-chart-column', label:'Relatórios' },
     { id:'desistentes', icon:'fa-user-slash', label:'Desistentes' },
   ]},
@@ -885,6 +888,10 @@ const EXPLAIN = {
   funcionarios:'Equipe da corretora e suas permissões de acesso.',
   relatorios:'Relatórios de desempenho comercial e operacional.',
   desistentes:'Leads e negócios perdidos, para entender e recuperar.',
+  contas:'Contas da corretora: cadastre as fixas, lance o mês e dê baixa conforme paga.',
+  pagamentos:'Folha da equipe: salário, comissão calculada, proventos e descontos.',
+  contatos:'Todo mundo que já cotou com a gente — histórico, o que tem conosco e aniversários.',
+  agenda:'O que a equipe precisa fazer, por dia, com alertas do que está próximo ou atrasado.',
   configuracoes:'Ajustes gerais do sistema e da sua conta.',
 };
 
@@ -1123,6 +1130,15 @@ function bootstrap(){
   listen('resgates_parceiros','resgates',['resgates']);
   listen('seguidores_instagram','seguidores',['instagram']);
   listen('admins_crm','admins',['funcionarios','relatorios','agenda','pagamentos']);
+  LISTENERS.push(db.collection('contas_fixas').onSnapshot(sn=>{
+    CONTAS_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if((location.hash||'').slice(1)==='contas') VIEWS.contas();
+  },e=>console.error('contas_fixas',e)));
+  LISTENERS.push(db.collection('contas_pagar').onSnapshot(sn=>{
+    CONTAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof cpAtualizarBadge==='function') cpAtualizarBadge();
+    if((location.hash||'').slice(1)==='contas') VIEWS.contas();
+  },e=>console.error('contas_pagar',e)));
   LISTENERS.push(db.collection('folha_pagamento').onSnapshot(sn=>{
     FOLHA=sn.docs.map(d=>({id:d.id,...d.data()}));
     if((location.hash||'').slice(1)==='pagamentos') VIEWS.pagamentos();
@@ -5683,6 +5699,558 @@ async function ctImportarTodos(){
     await lote.commit();
     toast(pend.length+' cotação(ões) importadas.','ok','Pronto'); }
   catch(e){ console.error(e); toast('Erro ao importar em lote.','err'); }
+}
+
+</script>
+  <script>
+/* =========================================================================
+   CONTAS A PAGAR DA CORRETORA
+   contas_fixas       -> o cadastro de cada conta (recorrente ou não)
+   contas_pagar       -> o lançamento de cada mês (valor, vencimento, baixa)
+   Cada lançamento aberto vira uma ação na Agenda no dia do vencimento.
+   ========================================================================= */
+let CONTAS_FIXAS=[], CONTAS=[];
+let CP={ mes:null, ano:null, status:'', cat:'', busca:'', aba:'mes' };
+
+const CP_CATS={
+  imposto:{l:'Impostos e taxas',i:'fa-landmark',c:'#dc2626'},
+  aluguel:{l:'Aluguel e condomínio',i:'fa-building',c:'#7c3aed'},
+  utilidade:{l:'Água, luz, internet',i:'fa-bolt',c:'#d97706'},
+  telefone:{l:'Telefone',i:'fa-phone',c:'#0891b2'},
+  sistema:{l:'Sistemas e software',i:'fa-laptop-code',c:'#2563eb'},
+  contador:{l:'Contador',i:'fa-calculator',c:'#16a34a'},
+  marketing:{l:'Marketing',i:'fa-bullhorn',c:'#db2777'},
+  banco:{l:'Banco e tarifas',i:'fa-building-columns',c:'#65a30d'},
+  pessoal:{l:'Pessoal e encargos',i:'fa-users',c:'#ea580c'},
+  outro:{l:'Outros',i:'fa-receipt',c:'#5b6b7c'}
+};
+const CP_PERIOD={mensal:['Mensal',1],bimestral:['Bimestral',2],trimestral:['Trimestral',3],
+  semestral:['Semestral',6],anual:['Anual',12]};
+const CP_STATUS={
+  previsto:{l:'Previsto',c:'var(--text-3)',bg:'var(--surface-3)'},
+  aberto:{l:'A pagar',c:'var(--warn)',bg:'var(--warn-bg)'},
+  pago:{l:'Pago',c:'var(--ok)',bg:'var(--ok-bg)'}
+};
+
+const cpMoeda=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const cpNum=v=>{ if(typeof v==='number') return v; v=String(v||'').trim().replace(/\./g,'').replace(',','.');
+  const n=parseFloat(v); return isNaN(n)?0:n; };
+const cpComp=(a,m)=>a+'-'+String(m).padStart(2,'0');
+function cpHoje(){ const d=new Date(),p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function cpDias(data){ const d=dataObj(data); if(!d) return null;
+  const h=dataObj(cpHoje()); return Math.round((d-h)/86400000); }
+function cpVencida(c){ return c.status!=='pago'&&cpDias(c.vencimento)<0; }
+/* mês tem o dia? (dia 31 em fevereiro vira o último dia) */
+function cpDataDoMes(ano,mes,dia){
+  const ult=new Date(ano,mes,0).getDate();
+  const d=Math.min(Number(dia)||1,ult);
+  const p=n=>String(n).padStart(2,'0');
+  return ano+'-'+p(mes)+'-'+p(d);
+}
+/* a conta recorrente cai neste mês? (respeita a periodicidade a partir do mês inicial) */
+function cpCaiNoMes(f,ano,mes){
+  if(f.ativo===false) return false;
+  if(!f.recorrente) return false;
+  const passo=(CP_PERIOD[f.periodicidade]||CP_PERIOD.mensal)[1];
+  if(passo===1) return true;
+  const ini=f.mesInicial||cpComp(ano,mes);
+  const [ia,im]=ini.split('-').map(Number);
+  const diff=(ano-ia)*12+(mes-im);
+  return diff>=0&&diff%passo===0;
+}
+
+/* =========================================================================
+   TELA
+   ========================================================================= */
+VIEWS.contas=function(){
+  const h=new Date();
+  if(CP.mes===null){ CP.mes=h.getMonth()+1; CP.ano=h.getFullYear(); }
+  const ano=Number(CP.ano), mes=Number(CP.mes), comp=cpComp(ano,mes);
+  const actions=`<div class="tabs" style="margin-right:6px">
+      <button class="tab ${CP.aba==='mes'?'active':''}" onclick="CP.aba='mes';VIEWS.contas()"><i class="fas fa-calendar-check"></i> Contas do mês</button>
+      <button class="tab ${CP.aba==='fixas'?'active':''}" onclick="CP.aba='fixas';VIEWS.contas()"><i class="fas fa-repeat"></i> Cadastro de contas</button>
+      <button class="tab ${CP.aba==='hist'?'active':''}" onclick="CP.aba='hist';VIEWS.contas()"><i class="fas fa-chart-column"></i> Histórico</button>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="cpModalLanc()"><i class="fas fa-plus"></i> Nova conta</button>`;
+  let html=head('contas',{actions});
+  if(CP.aba==='fixas') html+=cpViewFixas();
+  else if(CP.aba==='hist') html+=cpViewHistorico();
+  else html+=cpViewMes(ano,mes,comp);
+  setView(html);
+};
+
+/* ---------- contas do mês ---------- */
+function cpViewMes(ano,mes,comp){
+  let lista=CONTAS.filter(c=>c.competencia===comp);
+  const previstas=cpPrevistasDoMes(ano,mes,lista);
+  const total=lista.reduce((s,c)=>s+(c.status==='pago'?cpNum(c.valorPago):cpNum(c.valor)),0);
+  const pago=lista.filter(c=>c.status==='pago').reduce((s,c)=>s+cpNum(c.valorPago||c.valor),0);
+  const aberto=total-pago;
+  const vencidas=lista.filter(cpVencida);
+  const venc7=lista.filter(c=>c.status!=='pago'&&cpDias(c.vencimento)!=null&&cpDias(c.vencimento)>=0&&cpDias(c.vencimento)<=7);
+
+  if(CP.status) lista=lista.filter(c=>c.status===CP.status);
+  if(CP.cat) lista=lista.filter(c=>c.categoria===CP.cat);
+  if(CP.busca){ const q=CP.busca.toLowerCase();
+    lista=lista.filter(c=>`${c.nome||''} ${c.fornecedor||''} ${c.observacoes||''}`.toLowerCase().includes(q)); }
+  lista.sort((a,b)=>(a.vencimento||'').localeCompare(b.vencimento||'')||(a.nome||'').localeCompare(b.nome||''));
+  window.__cpExport={lista,comp};
+
+  let html=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-file-invoice-dollar"></i></div><div class="val" style="font-size:1.35rem">${cpMoeda(total)}</div><div class="lbl">Total do mês</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-clock"></i></div><div class="val" style="font-size:1.35rem">${cpMoeda(aberto)}</div><div class="lbl">Ainda a pagar</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val" style="font-size:1.35rem">${cpMoeda(pago)}</div><div class="lbl">Já pago</div></div>
+    <div class="kpi"><div class="ico ${vencidas.length?'i-danger':'i-ok'}"><i class="fas fa-triangle-exclamation"></i></div><div class="val">${vencidas.length}</div><div class="lbl">Vencidas</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-calendar-week"></i></div><div class="val">${venc7.length}</div><div class="lbl">Vencem em 7 dias</div></div>
+  </div>`;
+
+  html+=`<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+    <select onchange="CP.mes=+this.value;VIEWS.contas()">
+      ${MESES_BR.map((m,i)=>`<option value="${i+1}" ${mes===i+1?'selected':''}>${m}</option>`).join('')}</select>
+    <input type="number" min="2000" max="2100" value="${ano}" onchange="CP.ano=+this.value;VIEWS.contas()" style="width:110px">
+    <select onchange="CP.status=this.value;VIEWS.contas()">
+      <option value="">Todas as situações</option>
+      ${Object.entries(CP_STATUS).map(([k,v])=>`<option value="${k}" ${CP.status===k?'selected':''}>${v.l}</option>`).join('')}</select>
+    <select onchange="CP.cat=this.value;VIEWS.contas()">
+      <option value="">Todas as categorias</option>
+      ${Object.entries(CP_CATS).map(([k,v])=>`<option value="${k}" ${CP.cat===k?'selected':''}>${v.l}</option>`).join('')}</select>
+    <input type="text" id="fBuscaCp" placeholder="Buscar conta..." value="${esc(CP.busca)}" oninput="CP.busca=this.value;redesenhar(VIEWS.contas)" style="min-width:190px">
+    <button class="btn btn-ghost btn-sm" onclick="cpExportar()"><i class="fas fa-download"></i> CSV</button>
+  </div></div>`;
+
+  if(previstas.length) html+=`<div class="card" style="border-color:#b8e4ee;background:var(--brand-50)">
+    <div class="card-head" style="border-color:#b8e4ee">
+      <h3><i class="fas fa-repeat"></i> ${previstas.length} conta(s) recorrente(s) ainda não lançada(s) em ${MESES_BR[mes-1]}</h3>
+      <button class="btn btn-primary btn-sm" onclick="cpGerarMes()"><i class="fas fa-wand-magic-sparkles"></i> Lançar todas</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${previstas.map(f=>{const cat=CP_CATS[f.categoria]||CP_CATS.outro;
+        return `<span class="badge" style="background:var(--surface);color:var(--text-2);border:1px solid var(--border)">
+          <i class="fas ${cat.i}" style="color:${cat.c}"></i> ${esc(f.nome)} · dia ${f.diaVencimento||1}${f.valorPadrao?' · '+cpMoeda(f.valorPadrao):''}</span>`;}).join('')}
+    </div>
+    <div style="font-size:.77rem;color:var(--text-2);margin-top:11px"><i class="fas fa-circle-info"></i>
+      Elas entram com o valor e o dia de costume, marcadas como <b>Previsto</b>. Quando a conta chegar, você ajusta o valor e o vencimento reais.</div></div>`;
+
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-list-check"></i> ${MESES_BR[mes-1]} de ${ano} — ${lista.length} conta(s)</h3></div>
+    ${lista.length?`<div class="tbl-wrap"><table><thead><tr>
+      <th>Conta</th><th>Categoria</th><th>Vencimento</th><th style="text-align:right">Valor</th>
+      <th>Situação</th><th>Pagamento</th><th style="text-align:right">Ações</th>
+    </tr></thead><tbody>
+    ${lista.map(c=>{
+      const cat=CP_CATS[c.categoria]||CP_CATS.outro, st=CP_STATUS[c.status]||CP_STATUS.previsto;
+      const d=cpDias(c.vencimento), venc=cpVencida(c);
+      return `<tr${venc?' style="background:#fff7f7"':''}>
+        <td><b>${esc(c.nome)}</b>${c.fornecedor?`<div style="font-size:.73rem;color:var(--text-3)">${esc(c.fornecedor)}</div>`:''}
+          ${c.recorrente?'<span class="badge" style="background:var(--surface-3);color:var(--text-3);font-size:.65rem"><i class="fas fa-repeat"></i> fixa</span>':''}</td>
+        <td><span class="badge" style="background:${cat.c}18;color:${cat.c}"><i class="fas ${cat.i}"></i> ${cat.l}</span></td>
+        <td>${fmtData(c.vencimento)}
+          <div style="font-size:.72rem;color:${venc?'var(--danger)':d!=null&&d<=7?'var(--warn)':'var(--text-3)'}">
+            ${c.status==='pago'?'':venc?('venceu há '+Math.abs(d)+' dia(s)'):d===0?'vence hoje':d===1?'vence amanhã':d!=null?('em '+d+' dias'):''}</div></td>
+        <td style="text-align:right"><b>${cpMoeda(c.status==='pago'?(c.valorPago||c.valor):c.valor)}</b>
+          ${c.status==='pago'&&cpNum(c.valorPago)!==cpNum(c.valor)&&c.valor?`<div style="font-size:.71rem;color:var(--text-3)">previsto ${cpMoeda(c.valor)}</div>`:''}</td>
+        <td><span class="badge" style="background:${st.bg};color:${st.c}">${st.l}</span></td>
+        <td style="font-size:.79rem;color:var(--text-2)">${c.status==='pago'
+          ? (c.pagoEmData?fmtData(c.pagoEmData):'—')+(c.formaPagamento?`<div style="font-size:.71rem;color:var(--text-3)">${esc(c.formaPagamento)}</div>`:'')
+          : '<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${c.status!=='pago'
+            ? `<button class="btn btn-success btn-sm" title="Dar baixa" onclick="cpModalBaixa('${c.id}')"><i class="fas fa-check"></i> Pagar</button>`
+            : `<button class="btn btn-ghost btn-sm" title="Desfazer baixa" onclick="cpDesfazer('${c.id}')"><i class="fas fa-rotate-left"></i></button>`}
+          <button class="btn btn-ghost btn-sm" title="Editar" onclick="cpModalLanc('${c.id}')"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" title="Excluir" onclick="cpExcluir('${c.id}')"><i class="fas fa-trash"></i></button>
+        </td></tr>`;}).join('')}
+      <tr style="background:var(--surface-2)"><td colspan="3" style="font-weight:700">Total</td>
+        <td style="text-align:right;font-weight:800;color:var(--brand-dark)">${cpMoeda(lista.reduce((s,c)=>s+(c.status==='pago'?cpNum(c.valorPago||c.valor):cpNum(c.valor)),0))}</td>
+        <td colspan="3"></td></tr>
+    </tbody></table></div>`
+    :`<div class="empty"><div class="em-ic"><i class="fas fa-file-invoice-dollar"></i></div><h4>Nenhuma conta neste mês</h4>
+      <p>Cadastre suas contas fixas na aba ao lado e lance o mês com um clique, ou crie uma conta avulsa.</p></div>`}
+  </div>`;
+  return html;
+}
+/* recorrentes que ainda não foram lançadas no mês */
+function cpPrevistasDoMes(ano,mes,lista){
+  const comp=cpComp(ano,mes);
+  const jaTem=new Set((lista||CONTAS.filter(c=>c.competencia===comp)).map(c=>c.contaFixaId).filter(Boolean));
+  return CONTAS_FIXAS.filter(f=>cpCaiNoMes(f,ano,mes)&&!jaTem.has(f.id));
+}
+async function cpGerarMes(){
+  const ano=Number(CP.ano), mes=Number(CP.mes), comp=cpComp(ano,mes);
+  const prev=cpPrevistasDoMes(ano,mes);
+  if(!prev.length){ toast('Nada novo para lançar neste mês.','info'); return; }
+  try{
+    const lote=db.batch();
+    prev.forEach(f=>{
+      lote.set(db.collection('contas_pagar').doc(),{
+        contaFixaId:f.id, nome:f.nome, categoria:f.categoria||'outro', fornecedor:f.fornecedor||null,
+        competencia:comp, vencimento:cpDataDoMes(ano,mes,f.diaVencimento||1),
+        valor:Number(f.valorPadrao)||0, valorPago:null, status:'previsto', recorrente:true,
+        avisarAgenda:f.avisarAgenda!==false, formaPagamento:f.formaPagamento||null,
+        observacoes:null, criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp(),
+        criadoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin'});
+    });
+    await lote.commit();
+    toast(prev.length+' conta(s) lançadas em '+MESES_BR[mes-1]+'.','ok','Pronto');
+    setTimeout(()=>cpSincronizarAgenda(),900);
+  }catch(e){ console.error(e); toast('Erro ao lançar as contas do mês.','err'); }
+}
+
+/* ---------- cadastro das contas fixas ---------- */
+function cpViewFixas(){
+  const fs=CONTAS_FIXAS.slice().sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const rec=fs.filter(f=>f.recorrente&&f.ativo!==false);
+  const mensal=rec.filter(f=>(f.periodicidade||'mensal')==='mensal').reduce((s,f)=>s+(Number(f.valorPadrao)||0),0);
+  return `<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-repeat"></i></div><div class="val">${rec.length}</div><div class="lbl">Contas recorrentes ativas</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.35rem">${cpMoeda(mensal)}</div><div class="lbl">Custo fixo mensal estimado</div></div>
+  </div>
+  <div class="card"><div class="card-head"><h3><i class="fas fa-repeat"></i> Contas cadastradas</h3>
+      <button class="btn btn-primary btn-sm" onclick="cpModalFixa()"><i class="fas fa-plus"></i> Nova conta fixa</button></div>
+    <p style="color:var(--text-2);font-size:.85rem;margin-bottom:14px">
+      Cadastre uma vez o nome, a categoria, o dia que costuma vencer e o valor de costume. Todo mês você lança tudo num clique e só ajusta o que mudou.</p>
+    ${fs.length?`<div class="tbl-wrap"><table><thead><tr>
+      <th>Conta</th><th>Categoria</th><th>Recorrência</th><th>Dia</th><th style="text-align:right">Valor de costume</th><th>Agenda</th><th>Status</th><th></th>
+    </tr></thead><tbody>
+    ${fs.map(f=>{const cat=CP_CATS[f.categoria]||CP_CATS.outro;
+      return `<tr>
+        <td><b>${esc(f.nome)}</b>${f.fornecedor?`<div style="font-size:.73rem;color:var(--text-3)">${esc(f.fornecedor)}</div>`:''}</td>
+        <td><span class="badge" style="background:${cat.c}18;color:${cat.c}"><i class="fas ${cat.i}"></i> ${cat.l}</span></td>
+        <td>${f.recorrente?(CP_PERIOD[f.periodicidade]||CP_PERIOD.mensal)[0]:'<span style="color:var(--text-3)">Avulsa</span>'}</td>
+        <td>${f.recorrente?('dia '+(f.diaVencimento||1)):'—'}</td>
+        <td style="text-align:right">${f.valorPadrao?cpMoeda(f.valorPadrao):'<span style="color:var(--text-3)">a informar</span>'}</td>
+        <td>${f.avisarAgenda!==false?'<i class="fas fa-bell" style="color:var(--brand)" title="Avisa na agenda"></i>':'<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${statusBadge(f.ativo===false?'Inativa':'Ativa',f.ativo===false?'var(--text-3)':'var(--ok)')}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="cpModalFixa('${f.id}')"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="cpExcluirFixa('${f.id}')"><i class="fas fa-trash"></i></button>
+        </td></tr>`;}).join('')}
+    </tbody></table></div>`
+    :`<div class="empty"><div class="em-ic"><i class="fas fa-repeat"></i></div><h4>Nenhuma conta cadastrada</h4>
+      <p>Comece pelas que você paga todo mês: imposto, aluguel, internet, contador, sistema...</p>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="cpModalFixa()"><i class="fas fa-plus"></i> Cadastrar a primeira</button></div>`}
+  </div>`;
+}
+
+/* ---------- histórico ---------- */
+function cpViewHistorico(){
+  const ano=Number(CP.ano);
+  const meses=[];
+  for(let m=1;m<=12;m++){
+    const comp=cpComp(ano,m);
+    const l=CONTAS.filter(c=>c.competencia===comp);
+    meses.push({m,comp,total:l.reduce((s,c)=>s+(c.status==='pago'?cpNum(c.valorPago||c.valor):cpNum(c.valor)),0),
+      pago:l.filter(c=>c.status==='pago').reduce((s,c)=>s+cpNum(c.valorPago||c.valor),0), qtd:l.length});
+  }
+  const max=Math.max(1,...meses.map(x=>x.total));
+  const totalAno=meses.reduce((s,x)=>s+x.total,0);
+  const porCat={};
+  CONTAS.filter(c=>(c.competencia||'').startsWith(ano+'-')).forEach(c=>{
+    const k=c.categoria||'outro';
+    porCat[k]=(porCat[k]||0)+(c.status==='pago'?cpNum(c.valorPago||c.valor):cpNum(c.valor));
+  });
+  const cats=Object.entries(porCat).sort((a,b)=>b[1]-a[1]);
+  return `<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+      <input type="number" min="2000" max="2100" value="${ano}" onchange="CP.ano=+this.value;VIEWS.contas()" style="width:110px">
+      <span style="font-size:.86rem;color:var(--text-2)">Total do ano: <b>${cpMoeda(totalAno)}</b></span></div></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px">
+    <div class="card"><div class="card-head"><h3><i class="fas fa-chart-column"></i> Mês a mês de ${ano}</h3></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Mês</th><th style="text-align:right">Contas</th><th style="text-align:right">Total</th><th style="text-align:right">Pago</th><th></th></tr></thead><tbody>
+      ${meses.filter(x=>x.qtd).map(x=>`<tr style="cursor:pointer" onclick="CP.mes=${x.m};CP.aba='mes';VIEWS.contas()">
+        <td><b>${MESES_BR[x.m-1]}</b></td><td style="text-align:right">${x.qtd}</td>
+        <td style="text-align:right"><b>${cpMoeda(x.total)}</b></td>
+        <td style="text-align:right;color:var(--ok)">${cpMoeda(x.pago)}</td>
+        <td style="width:110px"><div style="background:var(--surface-3);border-radius:5px;height:8px;overflow:hidden">
+          <div style="width:${Math.round(x.total/max*100)}%;height:100%;background:var(--brand)"></div></div></td></tr>`).join('')
+        ||`<tr><td colspan="5"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Sem contas em ${ano}</h4></div></td></tr>`}
+      </tbody></table></div></div>
+    <div class="card"><div class="card-head"><h3><i class="fas fa-chart-pie"></i> Por categoria em ${ano}</h3></div>
+      ${cats.length?cats.map(([k,v])=>{const cat=CP_CATS[k]||CP_CATS.outro, pct=totalAno?Math.round(v/totalAno*100):0;
+        return `<div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:.83rem;margin-bottom:4px">
+            <span><i class="fas ${cat.i}" style="color:${cat.c};width:16px"></i> ${cat.l}</span>
+            <span><b>${cpMoeda(v)}</b> <span style="color:var(--text-3)">· ${pct}%</span></span></div>
+          <div style="background:var(--surface-3);border-radius:6px;height:9px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${cat.c}"></div></div></div>`;}).join('')
+        :`<p style="color:var(--text-3);font-size:.85rem">Sem lançamentos em ${ano}.</p>`}
+    </div></div>`;
+}
+
+/* =========================================================================
+   MODAIS
+   ========================================================================= */
+function cpModalFixa(id){
+  const f=id?CONTAS_FIXAS.find(x=>x.id===id)||{}:{};
+  openModal(`<div class="modal-head"><h3><i class="fas fa-repeat" style="color:var(--brand)"></i> ${id?'Editar':'Nova'} conta</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="cfId" value="${esc(id||'')}">
+      <div class="form-row"><label>Nome da conta *</label>
+        <input type="text" id="cfNome" value="${esc(f.nome||'')}" placeholder="Ex.: Simples Nacional, Aluguel da sala, Internet"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Categoria</label><select id="cfCat">
+          ${Object.entries(CP_CATS).map(([k,v])=>`<option value="${k}" ${(f.categoria||'outro')===k?'selected':''}>${v.l}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Fornecedor / beneficiário</label><input type="text" id="cfForn" value="${esc(f.fornecedor||'')}" placeholder="Opcional"></div>
+      </div>
+      <div class="form-row"><label>Como é essa conta?</label>
+        <select id="cfRec" onchange="cpToggleRec()">
+          <option value="1" ${f.recorrente!==false?'selected':''}>Recorrente — repete sempre</option>
+          <option value="0" ${f.recorrente===false?'selected':''}>Avulsa — só quando acontecer</option></select></div>
+      <div id="cfBoxRec" style="display:${f.recorrente===false?'none':'block'};background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div class="form-row" style="margin:0"><label>Periodicidade</label><select id="cfPer">
+            ${Object.entries(CP_PERIOD).map(([k,v])=>`<option value="${k}" ${(f.periodicidade||'mensal')===k?'selected':''}>${v[0]}</option>`).join('')}</select></div>
+          <div class="form-row" style="margin:0"><label>Dia do vencimento</label>
+            <input type="number" min="1" max="31" id="cfDia" value="${f.diaVencimento||10}"></div>
+          <div class="form-row" style="margin:0"><label>Valor de costume</label>
+            <input type="text" id="cfValor" value="${f.valorPadrao!=null?String(f.valorPadrao).replace('.',','):''}" placeholder="0,00"></div>
+        </div>
+        <div class="form-row" style="margin:12px 0 0"><label>A partir de qual mês</label>
+          <input type="month" id="cfMesIni" value="${esc(f.mesInicial||cpComp(new Date().getFullYear(),new Date().getMonth()+1))}">
+          <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">Usado para contar trimestre, semestre e ano. Para mensal, tanto faz.</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Forma de pagamento</label>
+          <select id="cfForma">${['','Boleto','Débito automático','PIX','Transferência','Cartão','Dinheiro'].map(x=>
+            `<option value="${x}" ${(f.formaPagamento||'')===x?'selected':''}>${x||'—'}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Status</label><select id="cfAtivo">
+          <option value="1" ${f.ativo!==false?'selected':''}>Ativa</option>
+          <option value="0" ${f.ativo===false?'selected':''}>Inativa (para de lançar)</option></select></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.87rem;background:var(--surface-2);padding:11px 14px;border-radius:10px">
+        <input type="checkbox" id="cfAgenda" ${f.avisarAgenda!==false?'checked':''} style="width:auto">
+        <span><b>Avisar na Agenda</b> — cria uma ação no dia do vencimento, e dar baixa aqui conclui a ação lá.</span></label>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="cpSalvarFixa()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+}
+function cpToggleRec(){
+  const rec=document.getElementById('cfRec').value==='1';
+  document.getElementById('cfBoxRec').style.display=rec?'block':'none';
+}
+async function cpSalvarFixa(){
+  const id=document.getElementById('cfId').value;
+  const nome=document.getElementById('cfNome').value.trim();
+  if(!nome){ toast('Dê um nome para a conta.','err'); return; }
+  const rec=document.getElementById('cfRec').value==='1';
+  const dados={ nome, categoria:document.getElementById('cfCat').value,
+    fornecedor:document.getElementById('cfForn').value.trim()||null,
+    recorrente:rec,
+    periodicidade:rec?document.getElementById('cfPer').value:null,
+    diaVencimento:rec?(parseInt(document.getElementById('cfDia').value)||1):null,
+    valorPadrao:rec?cpNum(document.getElementById('cfValor').value):null,
+    mesInicial:rec?(document.getElementById('cfMesIni').value||null):null,
+    formaPagamento:document.getElementById('cfForma').value||null,
+    avisarAgenda:document.getElementById('cfAgenda').checked,
+    ativo:document.getElementById('cfAtivo').value==='1',
+    atualizadoEm:FV.serverTimestamp() };
+  try{
+    if(id) await db.collection('contas_fixas').doc(id).update(dados);
+    else { dados.criadoEm=FV.serverTimestamp(); await db.collection('contas_fixas').add(dados); }
+    closeModal(); toast('Conta salva.','ok');
+  }catch(e){ console.error(e); toast('Erro ao salvar a conta.','err'); }
+}
+async function cpExcluirFixa(id){
+  const f=CONTAS_FIXAS.find(x=>x.id===id); if(!f) return;
+  if(!confirm('Excluir a conta "'+f.nome+'" do cadastro?\n\nOs lançamentos que já existem nos meses continuam.')) return;
+  try{ await db.collection('contas_fixas').doc(id).delete(); toast('Conta removida do cadastro.','info'); }
+  catch(e){ console.error(e); toast('Erro ao excluir.','err'); }
+}
+
+/* lançamento avulso ou edição de um lançamento */
+function cpModalLanc(id){
+  const c=id?CONTAS.find(x=>x.id===id)||{}:{};
+  const ano=Number(CP.ano), mes=Number(CP.mes);
+  openModal(`<div class="modal-head"><h3><i class="fas fa-file-invoice-dollar" style="color:var(--brand)"></i> ${id?'Editar conta':'Nova conta'}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="clId" value="${esc(id||'')}">
+      ${!id&&CONTAS_FIXAS.length?`<div class="form-row"><label>Usar uma conta já cadastrada</label>
+        <select id="clFixa" onchange="cpPreencherDaFixa()">
+          <option value="">— conta avulsa —</option>
+          ${CONTAS_FIXAS.filter(f=>f.ativo!==false).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''))
+            .map(f=>`<option value="${f.id}">${esc(f.nome)}</option>`).join('')}
+        </select></div>`:''}
+      <div class="form-row"><label>Nome da conta *</label><input type="text" id="clNome" value="${esc(c.nome||'')}" placeholder="Ex.: DAS de julho"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Categoria</label><select id="clCat">
+          ${Object.entries(CP_CATS).map(([k,v])=>`<option value="${k}" ${(c.categoria||'outro')===k?'selected':''}>${v.l}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Fornecedor</label><input type="text" id="clForn" value="${esc(c.fornecedor||'')}"></div>
+        <div class="form-row"><label>Vencimento *</label>
+          <input type="date" id="clVenc" value="${esc(c.vencimento||cpDataDoMes(ano,mes,10))}"></div>
+        <div class="form-row"><label>Valor *</label>
+          <input type="text" id="clValor" value="${c.valor!=null?String(c.valor).replace('.',','):''}" placeholder="0,00"></div>
+        <div class="form-row"><label>Forma de pagamento</label>
+          <select id="clForma">${['','Boleto','Débito automático','PIX','Transferência','Cartão','Dinheiro'].map(x=>
+            `<option value="${x}" ${(c.formaPagamento||'')===x?'selected':''}>${x||'—'}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Situação</label><select id="clStatus">
+          <option value="previsto" ${(c.status||'previsto')==='previsto'?'selected':''}>Previsto (ainda não chegou)</option>
+          <option value="aberto" ${c.status==='aberto'?'selected':''}>A pagar (conta em mãos)</option>
+        </select></div>
+      </div>
+      <div class="form-row"><label>Observações</label><textarea id="clObs" rows="2" placeholder="Nº do boleto, referência, combinado...">${esc(c.observacoes||'')}</textarea></div>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.87rem;background:var(--surface-2);padding:11px 14px;border-radius:10px">
+        <input type="checkbox" id="clAgenda" ${c.avisarAgenda!==false?'checked':''} style="width:auto">
+        <span>Criar/atualizar a ação na <b>Agenda</b> no dia do vencimento</span></label>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="cpSalvarLanc()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+}
+function cpPreencherDaFixa(){
+  const id=document.getElementById('clFixa').value;
+  const f=CONTAS_FIXAS.find(x=>x.id===id); if(!f) return;
+  document.getElementById('clNome').value=f.nome||'';
+  document.getElementById('clCat').value=f.categoria||'outro';
+  document.getElementById('clForn').value=f.fornecedor||'';
+  if(f.valorPadrao) document.getElementById('clValor').value=String(f.valorPadrao).replace('.',',');
+  if(f.diaVencimento) document.getElementById('clVenc').value=cpDataDoMes(Number(CP.ano),Number(CP.mes),f.diaVencimento);
+  if(f.formaPagamento) document.getElementById('clForma').value=f.formaPagamento;
+  document.getElementById('clAgenda').checked=f.avisarAgenda!==false;
+}
+async function cpSalvarLanc(){
+  const id=document.getElementById('clId').value;
+  const nome=document.getElementById('clNome').value.trim();
+  const venc=document.getElementById('clVenc').value;
+  if(!nome){ toast('Dê um nome para a conta.','err'); return; }
+  if(!venc){ toast('Informe o vencimento.','err'); return; }
+  const fixaSel=document.getElementById('clFixa');
+  const dados={ nome, categoria:document.getElementById('clCat').value,
+    fornecedor:document.getElementById('clForn').value.trim()||null,
+    vencimento:venc, competencia:venc.slice(0,7),
+    valor:cpNum(document.getElementById('clValor').value),
+    formaPagamento:document.getElementById('clForma').value||null,
+    status:document.getElementById('clStatus').value,
+    observacoes:document.getElementById('clObs').value.trim()||null,
+    avisarAgenda:document.getElementById('clAgenda').checked,
+    atualizadoEm:FV.serverTimestamp() };
+  try{
+    let docId=id;
+    if(id) await db.collection('contas_pagar').doc(id).update(dados);
+    else {
+      if(fixaSel&&fixaSel.value){ dados.contaFixaId=fixaSel.value; dados.recorrente=true; }
+      dados.criadoEm=FV.serverTimestamp(); dados.criadoPor=(CURRENT_USER&&CURRENT_USER.email)||'admin';
+      const ref=await db.collection('contas_pagar').add(dados); docId=ref.id;
+    }
+    closeModal(); toast('Conta salva.','ok');
+    const comp=venc.slice(0,7); CP.ano=Number(comp.slice(0,4)); CP.mes=Number(comp.slice(5,7));
+    setTimeout(()=>cpSincronizarAgenda(),700);
+  }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+async function cpExcluir(id){
+  const c=CONTAS.find(x=>x.id===id); if(!c) return;
+  if(!confirm('Excluir o lançamento "'+c.nome+'" de '+fmtData(c.vencimento)+'?')) return;
+  try{ await db.collection('contas_pagar').doc(id).delete();
+    await cpFecharAcaoAgenda(id,true);
+    toast('Lançamento excluído.','info'); }
+  catch(e){ console.error(e); toast('Erro ao excluir.','err'); }
+}
+
+/* ---------- dar baixa ---------- */
+function cpModalBaixa(id){
+  const c=CONTAS.find(x=>x.id===id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-circle-check" style="color:var(--ok)"></i> Dar baixa</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:var(--surface-2);border-radius:12px;padding:13px 16px;margin-bottom:16px">
+        <div style="font-weight:700">${esc(c.nome)}</div>
+        <div style="font-size:.83rem;color:var(--text-2);margin-top:3px">
+          Vencimento ${fmtData(c.vencimento)} · previsto ${cpMoeda(c.valor)}
+          ${cpVencida(c)?`<span style="color:var(--danger);font-weight:600"> · venceu há ${Math.abs(cpDias(c.vencimento))} dia(s)</span>`:''}</div>
+      </div>
+      <input type="hidden" id="cbId" value="${esc(id)}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Valor pago *</label>
+          <input type="text" id="cbValor" value="${String(c.valor||'').replace('.',',')}" placeholder="0,00"></div>
+        <div class="form-row"><label>Data do pagamento *</label>
+          <input type="date" id="cbData" value="${cpHoje()}"></div>
+        <div class="form-row"><label>Forma</label>
+          <select id="cbForma">${['','Boleto','Débito automático','PIX','Transferência','Cartão','Dinheiro'].map(x=>
+            `<option value="${x}" ${(c.formaPagamento||'')===x?'selected':''}>${x||'—'}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Comprovante / referência</label>
+          <input type="text" id="cbComp" value="${esc(c.comprovante||'')}" placeholder="Opcional"></div>
+      </div>
+      <div class="form-row"><label>Observação</label><textarea id="cbObs" rows="2">${esc(c.observacoes||'')}</textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-success" onclick="cpConfirmarBaixa()"><i class="fas fa-check"></i> Confirmar pagamento</button></div>`);
+}
+async function cpConfirmarBaixa(){
+  const id=document.getElementById('cbId').value;
+  const valor=cpNum(document.getElementById('cbValor').value);
+  const data=document.getElementById('cbData').value;
+  if(!data){ toast('Informe a data do pagamento.','err'); return; }
+  try{
+    await db.collection('contas_pagar').doc(id).update({
+      status:'pago', valorPago:valor, pagoEm:FV.serverTimestamp(), pagoEmData:data,
+      pagoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin',
+      formaPagamento:document.getElementById('cbForma').value||null,
+      comprovante:document.getElementById('cbComp').value.trim()||null,
+      observacoes:document.getElementById('cbObs').value.trim()||null,
+      atualizadoEm:FV.serverTimestamp()});
+    await cpFecharAcaoAgenda(id);
+    closeModal(); toast('Pagamento registrado — '+cpMoeda(valor)+'.','ok','Baixa dada');
+  }catch(e){ console.error(e); toast('Erro ao dar baixa.','err'); }
+}
+async function cpDesfazer(id){
+  if(!confirm('Desfazer a baixa desta conta?')) return;
+  try{ await db.collection('contas_pagar').doc(id).update({status:'aberto',valorPago:null,pagoEm:null,
+      pagoEmData:null,pagoPor:null,atualizadoEm:FV.serverTimestamp()});
+    toast('Baixa desfeita.','info'); setTimeout(()=>cpSincronizarAgenda(),600); }
+  catch(e){ console.error(e); toast('Erro.','err'); }
+}
+
+/* =========================================================================
+   INTEGRAÇÃO COM A AGENDA
+   ========================================================================= */
+const cpChave=id=>'conta:'+id;
+function cpAcaoDe(id){
+  return (typeof AGENDA!=='undefined'?AGENDA:[]).find(t=>t.sugestaoChave===cpChave(id));
+}
+/* cria/atualiza as ações das contas em aberto que pedem aviso */
+async function cpSincronizarAgenda(){
+  if(typeof AGENDA==='undefined') return;
+  const eu=(CURRENT_USER&&CURRENT_USER.email)||'admin';
+  const pend=CONTAS.filter(c=>c.status!=='pago'&&c.avisarAgenda!==false);
+  try{
+    for(const c of pend){
+      const a=cpAcaoDe(c.id);
+      const dados={ titulo:'Pagar '+c.nome+(c.valor?' — '+cpMoeda(c.valor):''),
+        descricao:'Conta a pagar'+(c.fornecedor?' · '+c.fornecedor:'')+(c.formaPagamento?' · '+c.formaPagamento:''),
+        data:c.vencimento, tipo:'financeiro', prioridade:'normal',
+        sugestaoChave:cpChave(c.id), origem:'conta', atualizadoEm:FV.serverTimestamp() };
+      if(a){ if(a.data!==c.vencimento||a.titulo!==dados.titulo)
+        await db.collection('agenda_crm').doc(a.id).update(dados); }
+      else await db.collection('agenda_crm').add({...dados,hora:null,horaFim:null,
+        responsaveis:[eu],responsaveisNomes:[typeof agNomeDe==='function'?agNomeDe(eu):eu],
+        status:'aberta',criadoPor:eu,criadoEm:FV.serverTimestamp()});
+    }
+  }catch(e){ console.warn('sincronizar agenda das contas',e&&e.code); }
+}
+/* dar baixa conclui a ação lá */
+async function cpFecharAcaoAgenda(id,excluir){
+  const a=cpAcaoDe(id); if(!a) return;
+  try{
+    if(excluir) await db.collection('agenda_crm').doc(a.id).delete();
+    else await db.collection('agenda_crm').doc(a.id).update({status:'concluida',
+      concluidoEm:FV.serverTimestamp(), concluidoEmData:cpHoje(),
+      concluidoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin', atualizadoEm:FV.serverTimestamp()});
+  }catch(e){ console.warn('fechar acao da conta',e&&e.code); }
+}
+/* badge do menu: vencidas + vencendo hoje */
+function cpAtualizarBadge(){
+  const n=CONTAS.filter(c=>c.status!=='pago'&&cpDias(c.vencimento)!=null&&cpDias(c.vencimento)<=0).length;
+  if(typeof setBadge==='function') setBadge('contas',n);
+}
+function cpExportar(){
+  const {lista,comp}=window.__cpExport||{};
+  if(!lista||!lista.length){ toast('Nada para exportar.','info'); return; }
+  const cel=v=>{v=(v==null?'':String(v));return /[";\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const head=['Competencia','Conta','Categoria','Fornecedor','Vencimento','Valor previsto','Valor pago','Situacao','Pago em','Forma','Observacoes'];
+  const linhas=lista.map(c=>[c.competencia,c.nome,(CP_CATS[c.categoria]||CP_CATS.outro).l,c.fornecedor||'',
+    fmtData(c.vencimento),c.valor,c.valorPago||'',(CP_STATUS[c.status]||{}).l||c.status,
+    c.pagoEmData?fmtData(c.pagoEmData):'',c.formaPagamento||'',c.observacoes||'']);
+  const txt='﻿'+[head.join(';')].concat(linhas.map(x=>x.map(cel).join(';'))).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download='contas-'+comp+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+  toast('CSV das contas gerado.','ok','Exportado');
 }
 
 </script>
