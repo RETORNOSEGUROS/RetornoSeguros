@@ -852,6 +852,7 @@ const MENU = [
   { sec:'Equipe & Relatórios', items:[
     { id:'comissoes', icon:'fa-hand-holding-dollar', label:'Comissões' },
     { id:'funcionarios', icon:'fa-user-tie', label:'Funcionários' },
+    { id:'pagamentos', icon:'fa-money-check-dollar', label:'Pagamentos' },
     { id:'relatorios', icon:'fa-chart-column', label:'Relatórios' },
     { id:'desistentes', icon:'fa-user-slash', label:'Desistentes' },
   ]},
@@ -1116,7 +1117,11 @@ function bootstrap(){
   listen('empresas_parceiras','parceiros',['parceiros']);
   listen('resgates_parceiros','resgates',['resgates']);
   listen('seguidores_instagram','seguidores',['instagram']);
-  listen('admins_crm','admins',['funcionarios','relatorios','agenda']);
+  listen('admins_crm','admins',['funcionarios','relatorios','agenda','pagamentos']);
+  LISTENERS.push(db.collection('folha_pagamento').onSnapshot(sn=>{
+    FOLHA=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if((location.hash||'').slice(1)==='pagamentos') VIEWS.pagamentos();
+  },e=>console.error('folha',e)));
   LISTENERS.push(db.collection('agenda_crm').onSnapshot(sn=>{
     AGENDA=sn.docs.map(d=>({id:d.id,...d.data()}));
     if(typeof agAtualizarBadge==='function') agAtualizarBadge();
@@ -1184,6 +1189,8 @@ VIEWS.dashboard=function(){
     ${kpi('fa-building','i-orange',empresas,'Empresas clientes')}
   </div>`;
 
+  if(typeof agBlocoDashboard==='function') html+=agBlocoDashboard();
+
   // Leads recentes
   const recentes=leads.slice(0,6);
   html+=`<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:18px" class="dash-cols">
@@ -1211,7 +1218,6 @@ VIEWS.dashboard=function(){
           <i class="fas fa-chevron-right" style="color:var(--text-3)"></i></a>
       </div></div>
   </div>`;
-  if(typeof agBlocoDashboard==='function') html+=agBlocoDashboard();
   setView(html);
 };
 
@@ -2670,6 +2676,11 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
         <div class="form-row"><label>Fim vigência</label><input type="date" id="apFim" value="${a.dataFimVigencia&&toDate(a.dataFimVigencia)?toDate(a.dataFimVigencia).toISOString().slice(0,10):''}"></div>
         <div class="form-row"><label>Prêmio (R$)</label><input type="number" step="0.01" id="apPremio" value="${a.valorPremio||''}"></div>
         <div class="form-row"><label>Comissão (%)</label><input type="number" step="0.01" id="apComissao" value="${a.comissao||''}"></div>
+        <div class="form-row"><label>Vendedor / responsável</label>
+          <select id="apResp"><option value="">— não definido —</option>
+            ${(CACHE.admins||[]).slice().sort((x,y)=>(x.nome||'').localeCompare(y.nome||'')).map(f=>`<option value="${f.id}" ${a.responsavelId===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}
+          </select>
+          <div style="font-size:.74rem;color:var(--text-3);margin-top:4px">Define de quem é a comissão desta apólice na folha.</div></div>
         <div class="form-row"><label>Placa</label><input type="text" id="apPlaca" value="${esc(a.veiculoPlaca||'')}"></div>
         <div class="form-row"><label>Código FIPE</label>
           <div style="display:flex;gap:8px"><input type="text" id="apFipe" value="${esc(a.codigoFipe||'')}" placeholder="000000-0" style="flex:1">
@@ -2768,6 +2779,8 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
     valorPremio:parseFloat(document.getElementById('apPremio').value)||0, comissao:parseFloat(document.getElementById('apComissao').value)||0,
+    responsavelId:document.getElementById('apResp')?document.getElementById('apResp').value||null:null,
+    responsavelNome:(function(){const v=document.getElementById('apResp')?document.getElementById('apResp').value:'';const f=(CACHE.admins||[]).find(x=>x.id===v);return f?(f.nome||f.email):null;})(),
     veiculoPlaca:document.getElementById('apPlaca').value.trim()||null, codigoFipe:document.getElementById('apFipe').value.trim()||null,
     observacoes:document.getElementById('apObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
   try{ if(id) await db.collection('apolices_cliente').doc(id).update(dados);
@@ -2968,6 +2981,7 @@ VIEWS.funcionarios=function(){
   setView(html);
 };
 function modalFuncionario(id){ const f=id?CACHE.admins.find(x=>x.id===id)||{}:{};
+  const fer=(f.ferias||[]);
   openModal(`<div class="modal-head"><h3><i class="fas fa-user-tie" style="color:var(--brand)"></i> ${id?'Editar':'Novo'} funcionário</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body"><input type="hidden" id="fnId" value="${id||''}">
       <div class="form-row"><label>Nome *</label><input type="text" id="fnNome" value="${esc(f.nome||'')}"></div>
@@ -2975,17 +2989,173 @@ function modalFuncionario(id){ const f=id?CACHE.admins.find(x=>x.id===id)||{}:{}
         <div class="form-row"><label>E-mail *</label><input type="email" id="fnEmail" value="${esc(f.email||'')}"></div>
         <div class="form-row"><label>Telefone</label><input type="text" id="fnTel" value="${esc(f.telefone||'')}"></div>
         <div class="form-row"><label>Cargo</label><input type="text" id="fnCargo" value="${esc(f.cargo||'')}"></div>
-        <div class="form-row"><label>Comissão padrão (%)</label><input type="number" step="0.01" id="fnCom" value="${f.comissaoPadrao||''}"></div>
+        <div class="form-row"><label>CPF</label><input type="text" id="fnCpf" value="${esc(f.cpf||'')}" placeholder="000.000.000-00"></div>
+        <div class="form-row"><label>Data de admissão</label><input type="date" id="fnAdm" value="${esc(strData(f.dataAdmissao)||'')}">
+          ${f.dataAdmissao?`<div style="font-size:.74rem;color:var(--text-3);margin-top:4px">${fmtTempo(tempoDeCasa(f.dataAdmissao))} de casa</div>`:''}</div>
+        <div class="form-row"><label>Status</label><select id="fnAtivo"><option value="1" ${f.ativo!==false?'selected':''}>Ativo</option><option value="0" ${f.ativo===false?'selected':''}>Inativo</option></select></div>
       </div>
-      <div class="form-row"><label>Status</label><select id="fnAtivo"><option value="1" ${f.ativo!==false?'selected':''}>Ativo</option><option value="0" ${f.ativo===false?'selected':''}>Inativo</option></select></div>
-      <p style="font-size:.76rem;color:var(--text-3)"><i class="fas fa-circle-info"></i> O acesso ao login é criado no Firebase Authentication; aqui você gerencia o cadastro e as permissões.</p>
+
+      <div style="background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;color:var(--brand-dark);margin-bottom:10px"><i class="fas fa-money-check-dollar"></i> Remuneração</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-row" style="margin:0"><label>Salário base mensal (R$)</label><input type="text" id="fnSalario" value="${f.salarioBase!=null?String(f.salarioBase).replace('.',','):''}" placeholder="Ex.: 2500,00"></div>
+          <div class="form-row" style="margin:0"><label>Fator de comissão (%)</label><input type="number" step="0.01" id="fnCom" value="${f.comissaoPadrao||''}" placeholder="Ex.: 50">
+            <div style="font-size:.73rem;color:var(--text-2);margin-top:4px">% <b>sobre a nossa comissão</b> dos negócios que ele vender.</div></div>
+        </div>
+      </div>
+
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;margin-bottom:10px"><i class="fas fa-building-columns" style="color:var(--brand)"></i> Dados para pagamento</div>
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px">
+          <div class="form-row" style="margin:0"><label>Tipo de chave PIX</label><select id="fnPixTipo">
+            ${['','CPF','CNPJ','E-mail','Telefone','Aleatória'].map(t=>`<option value="${t}" ${(f.pixTipo||'')===t?'selected':''}>${t||'Selecione...'}</option>`).join('')}</select></div>
+          <div class="form-row" style="margin:0"><label>Chave PIX</label><input type="text" id="fnPix" value="${esc(f.pix||'')}" placeholder="Chave para o depósito"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1.5fr 1fr;gap:12px;margin-top:12px">
+          <div class="form-row" style="margin:0"><label>Banco</label><input type="text" id="fnBanco" value="${esc(f.banco||'')}" placeholder="Ex.: 341 Itaú"></div>
+          <div class="form-row" style="margin:0"><label>Agência</label><input type="text" id="fnAgencia" value="${esc(f.agencia||'')}"></div>
+          <div class="form-row" style="margin:0"><label>Conta</label><input type="text" id="fnConta" value="${esc(f.conta||'')}"></div>
+          <div class="form-row" style="margin:0"><label>Tipo</label><select id="fnContaTipo">
+            ${['','Corrente','Poupança'].map(t=>`<option value="${t}" ${(f.contaTipo||'')===t?'selected':''}>${t||'—'}</option>`).join('')}</select></div>
+        </div>
+      </div>
+
+      ${id?`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;margin-bottom:4px"><i class="fas fa-key" style="color:var(--brand)"></i> Acesso ao sistema</div>
+        <div style="font-size:.76rem;color:var(--text-2);margin-bottom:11px">O login usa o Firebase Authentication. Por segurança, nem o admin consegue ler a senha de alguém — mas dá para criar o acesso ou mandar o link de troca.</div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="resetarSenhaFunc('${esc(f.email||'')}')"><i class="fas fa-paper-plane"></i> Enviar link para trocar a senha</button>
+          <button class="btn btn-ghost btn-sm" onclick="modalCriarAcesso('${esc(f.email||'')}','${esc(f.nome||'')}')"><i class="fas fa-user-plus"></i> Criar acesso / definir senha</button>
+        </div></div>`:''}
+
+      ${id?`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="font-weight:700;font-size:.82rem"><i class="fas fa-umbrella-beach" style="color:var(--brand)"></i> Férias</div>
+          <button class="btn btn-ghost btn-sm" onclick="fnAddFerias()"><i class="fas fa-plus"></i> Lançar período</button></div>
+        ${f.dataAdmissao?feriasResumoHTML(f):'<div style="font-size:.79rem;color:var(--text-3)">Informe a data de admissão para o sistema calcular o período aquisitivo.</div>'}
+        <div id="fnFeriasLista">${fer.map((x,i)=>feriasLinhaHTML(x,i)).join('')}</div>
+      </div>`:''}
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarFuncionario()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`);
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarFuncionario()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+}
+function feriasLinhaHTML(x,i){
+  return `<div class="fnFer" style="display:grid;grid-template-columns:1fr 1fr 80px auto;gap:10px;align-items:end;margin-top:10px">
+    <div class="form-row" style="margin:0"><label style="font-size:.74rem">Início</label><input type="date" class="fnFerIni" value="${esc(x.inicio||'')}"></div>
+    <div class="form-row" style="margin:0"><label style="font-size:.74rem">Fim</label><input type="date" class="fnFerFim" value="${esc(x.fim||'')}"></div>
+    <div class="form-row" style="margin:0"><label style="font-size:.74rem">Dias</label><input type="number" class="fnFerDias" value="${x.dias||''}"></div>
+    <button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="this.closest('.fnFer').remove()"><i class="fas fa-trash"></i></button>
+  </div>`;
+}
+function fnAddFerias(){ document.getElementById('fnFeriasLista').insertAdjacentHTML('beforeend',feriasLinhaHTML({},0)); }
+/* período aquisitivo e saldo (regra prática: 30 dias por ano de casa) */
+function feriasInfo(f){
+  const adm=dataObj(strData(f.dataAdmissao)); if(!adm) return null;
+  const hoje=new Date();
+  let anos=hoje.getFullYear()-adm.getFullYear();
+  const aniv=new Date(hoje.getFullYear(),adm.getMonth(),adm.getDate());
+  if(hoje<aniv) anos--;
+  if(anos<0) anos=0;
+  const iniPeriodo=new Date(adm.getFullYear()+anos,adm.getMonth(),adm.getDate());
+  const fimPeriodo=new Date(iniPeriodo.getFullYear()+1,iniPeriodo.getMonth(),iniPeriodo.getDate()-1);
+  const limite=new Date(fimPeriodo.getFullYear()+1,fimPeriodo.getMonth(),fimPeriodo.getDate());
+  const direito=anos*30;
+  const gozados=(f.ferias||[]).reduce((s,x)=>s+(Number(x.dias)||0),0);
+  const saldo=direito-gozados;
+  const diasParaLimite=Math.round((limite-hoje)/86400000);
+  return {adm,anos,iniPeriodo,fimPeriodo,limite,direito,gozados,saldo,diasParaLimite};
+}
+function feriasResumoHTML(f){
+  const i=feriasInfo(f); if(!i) return '';
+  const alerta=i.saldo>0&&i.diasParaLimite<=90;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:6px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:9px 11px">
+      <div style="font-size:.68rem;color:var(--text-3);text-transform:uppercase;font-weight:700">Direito acumulado</div>
+      <div style="font-weight:800">${i.direito} dias</div></div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:9px 11px">
+      <div style="font-size:.68rem;color:var(--text-3);text-transform:uppercase;font-weight:700">Já gozados</div>
+      <div style="font-weight:800">${i.gozados} dias</div></div>
+    <div style="background:${i.saldo>0?'var(--brand-50)':'var(--surface)'};border:1px solid ${i.saldo>0?'#b8e4ee':'var(--border)'};border-radius:9px;padding:9px 11px">
+      <div style="font-size:.68rem;color:var(--text-3);text-transform:uppercase;font-weight:700">Saldo</div>
+      <div style="font-weight:800;color:${i.saldo>0?'var(--brand-dark)':'var(--text-2)'}">${i.saldo} dias</div></div>
+    <div style="background:${alerta?'var(--warn-bg)':'var(--surface)'};border:1px solid ${alerta?'#f6dfae':'var(--border)'};border-radius:9px;padding:9px 11px">
+      <div style="font-size:.68rem;color:var(--text-3);text-transform:uppercase;font-weight:700">Gozar até</div>
+      <div style="font-weight:800;color:${alerta?'#92400e':'var(--text-2)'}">${i.limite.toLocaleString('pt-BR').slice(0,10)}</div></div>
+  </div>
+  ${alerta?`<div style="font-size:.78rem;color:#92400e;background:var(--warn-bg);border-radius:8px;padding:8px 11px;margin-bottom:6px">
+    <i class="fas fa-triangle-exclamation"></i> Faltam ${i.diasParaLimite} dia(s) para o limite legal de concessão. Depois disso as férias viram dobradas.</div>`:''}
+  <div style="font-size:.74rem;color:var(--text-3)">Período aquisitivo atual: ${i.iniPeriodo.toLocaleDateString('pt-BR')} a ${i.fimPeriodo.toLocaleDateString('pt-BR')}</div>`;
 }
 async function salvarFuncionario(){ const id=document.getElementById('fnId').value; const nome=document.getElementById('fnNome').value.trim(); const email=document.getElementById('fnEmail').value.trim().toLowerCase();
   if(!nome||!email){ toast('Informe nome e e-mail.','err'); return; }
-  const dados={nome,email,telefone:document.getElementById('fnTel').value.trim()||null,cargo:document.getElementById('fnCargo').value.trim()||null,comissaoPadrao:parseFloat(document.getElementById('fnCom').value)||0,ativo:document.getElementById('fnAtivo').value==='1',atualizadoEm:FV.serverTimestamp()};
-  try{ if(id) await db.collection('admins_crm').doc(id).update(dados); else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('admins_crm').add(dados);} closeModal(); toast('Funcionário salvo.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+  const num=v=>{ v=String(v||'').replace(/\./g,'').replace(',','.'); const n=parseFloat(v); return isNaN(n)?null:n; };
+  const ferias=[...document.querySelectorAll('.fnFer')].map(el=>({
+    inicio:el.querySelector('.fnFerIni').value||null,
+    fim:el.querySelector('.fnFerFim').value||null,
+    dias:parseInt(el.querySelector('.fnFerDias').value)||0
+  })).filter(x=>x.inicio||x.dias);
+  const g=i=>document.getElementById(i);
+  const dados={nome,email,telefone:g('fnTel').value.trim()||null,cargo:g('fnCargo').value.trim()||null,
+    cpf:g('fnCpf').value.trim()||null,
+    dataAdmissao:g('fnAdm').value||null,
+    salarioBase:num(g('fnSalario').value),
+    comissaoPadrao:parseFloat(g('fnCom').value)||0,
+    pixTipo:g('fnPixTipo').value||null, pix:g('fnPix').value.trim()||null,
+    banco:g('fnBanco').value.trim()||null, agencia:g('fnAgencia').value.trim()||null,
+    conta:g('fnConta').value.trim()||null, contaTipo:g('fnContaTipo').value||null,
+    ativo:g('fnAtivo').value==='1', atualizadoEm:FV.serverTimestamp()};
+  if(id) dados.ferias=ferias;
+  try{ if(id) await db.collection('admins_crm').doc(id).update(dados); else{ dados.criadoEm=FV.serverTimestamp(); dados.ferias=[]; await db.collection('admins_crm').add(dados);} closeModal(); toast('Funcionário salvo.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+
+/* ---------- Acesso: criar usuário e redefinir senha (sem deslogar o admin) ---------- */
+async function resetarSenhaFunc(email){
+  if(!email){ toast('Cadastre o e-mail do funcionário primeiro.','err'); return; }
+  try{
+    await auth.sendPasswordResetEmail(email);
+    toast('Link enviado para '+email+'. A pessoa clica no e-mail e escolhe a nova senha.','ok','E-mail enviado');
+  }catch(e){
+    console.error(e);
+    const m={'auth/user-not-found':'Esse e-mail ainda não tem acesso criado. Use "Criar acesso".',
+      'auth/invalid-email':'E-mail inválido.','auth/too-many-requests':'Muitas tentativas. Tente daqui a pouco.'}[e.code];
+    toast(m||'Não consegui enviar o link.','err');
+  }
+}
+function modalCriarAcesso(email,nome){
+  openModal(`<div class="modal-head"><h3><i class="fas fa-key" style="color:var(--brand)"></i> Acesso de ${esc(nome||email)}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>E-mail de login</label><input type="email" id="acEmail" value="${esc(email||'')}"></div>
+      <div class="form-row"><label>Senha</label><input type="text" id="acSenha" placeholder="Mínimo 6 caracteres" value=""></div>
+      <div style="background:var(--info-bg);border-radius:10px;padding:11px 14px;font-size:.82rem;color:#1e40af">
+        <i class="fas fa-circle-info"></i> Isso cria o login <b>sem te deslogar</b>. Se o e-mail já tiver acesso, o Firebase não deixa
+        criar de novo nem sobrescrever a senha — nesse caso use o botão de enviar o link de troca, ou apague o usuário no
+        Firebase Console (Authentication → Users) e crie aqui de novo.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="acBtn" onclick="criarAcessoFunc()"><i class="fas fa-user-plus"></i> Criar acesso</button></div>`);
+}
+async function criarAcessoFunc(){
+  const email=document.getElementById('acEmail').value.trim().toLowerCase();
+  const senha=document.getElementById('acSenha').value;
+  if(!email){ toast('Informe o e-mail.','err'); return; }
+  if(!senha||senha.length<6){ toast('A senha precisa de pelo menos 6 caracteres.','err'); return; }
+  const btn=document.getElementById('acBtn'); btn.disabled=true;
+  let app2=null;
+  try{
+    /* app secundário: cria o usuário sem trocar a sessão do admin */
+    app2=firebase.apps.find(a=>a.name==='criarAcesso')||firebase.initializeApp(firebase.app().options,'criarAcesso');
+    await app2.auth().createUserWithEmailAndPassword(email,senha);
+    await app2.auth().signOut();
+    closeModal();
+    toast('Acesso criado. '+email+' já pode entrar com essa senha.','ok','Pronto');
+  }catch(e){
+    console.error(e);
+    if(e.code==='auth/email-already-in-use'){
+      toast('Esse e-mail já tem acesso. Use "Enviar link para trocar a senha".','warn','Já existe');
+    } else if(e.code==='auth/weak-password'){ toast('Senha fraca demais — use 6 caracteres ou mais.','err'); }
+    else toast('Não consegui criar o acesso.','err');
+    btn.disabled=false;
+  }
 }
 
 /* ---------- COMISSÕES ---------- */
@@ -4481,6 +4651,389 @@ function agChecarAvisos(){
   });
 }
 setInterval(()=>{ if(AGENDA.length) agChecarAvisos(); },60000);
+
+</script>
+  <script>
+/* =========================================================================
+   PAGAMENTOS DA EQUIPE — folha mensal com salário, comissão calculada,
+   proventos e descontos.  Coleção: folha_pagamento
+   Regra da comissão: negócios com vigência iniciada no mês ANTERIOR entram
+   no pagamento do mês corrente (1º dia útil).
+   ========================================================================= */
+let FOLHA=[];
+let PG={ mes:null, ano:null, so:'' };
+
+const pgMoeda=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const pgNum=v=>{ if(typeof v==='number') return v; v=String(v||'').trim().replace(/\./g,'').replace(',','.');
+  const n=parseFloat(v); return isNaN(n)?0:n; };
+const pgComp=(a,m)=>a+'-'+String(m).padStart(2,'0');
+function pgMesAnterior(ano,mes){ let m=mes-1,a=ano; if(m<1){m=12;a--;} return {ano:a,mes:m}; }
+/* primeiro dia útil do mês (pula sábado e domingo) */
+function pgPrimeiroDiaUtil(ano,mes){
+  const d=new Date(ano,mes-1,1);
+  while(d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
+  return d;
+}
+
+/* ---------- quem vendeu a apólice ---------- */
+function pgVendedorDa(a){
+  if(a.responsavelId) return a.responsavelId;
+  /* apólices antigas: cai no responsável do lead correspondente */
+  const cpf=(a.clienteCpf||'').replace(/\D/g,''), fone=(a.clienteWhatsapp||'').replace(/\D/g,''), nm=(a.clienteNome||'').toLowerCase();
+  const l=(CACHE.leads||[]).find(x=>
+    (cpf&&(x.cpf||'').replace(/\D/g,'')===cpf) ||
+    (fone&&((x.whatsapp||'').replace(/\D/g,'')===fone||(x.telefone||'').replace(/\D/g,'')===fone)) ||
+    (nm&&(x.nome||'').toLowerCase()===nm));
+  return (l&&l.responsavelId)||null;
+}
+/* apólices com vigência iniciando no mês de referência */
+function pgApolicesDoMes(ano,mes){
+  const ini=pgComp(ano,mes);
+  return (CACHE.apolices||[]).filter(a=>{
+    if(a.status==='cancelada') return false;
+    const d=strData(a.dataInicioVigencia)||'';
+    return d.slice(0,7)===ini;
+  });
+}
+/* comissão de um funcionário na competência de vigência */
+function pgComissaoDe(func,ano,mes){
+  const fator=Number(func.comissaoPadrao)||0;
+  const aps=pgApolicesDoMes(ano,mes).filter(a=>pgVendedorDa(a)===func.id);
+  const itens=aps.map(a=>{
+    const premio=Number(a.valorPremio)||0;
+    const pct=Number(a.comissao)||0;
+    const nossa=Math.round(premio*pct)/100;
+    const dele=Math.round(nossa*fator)/100;
+    return {a,premio,pct,nossa,dele};
+  });
+  return { fator, itens,
+    premio:Math.round(itens.reduce((s,i)=>s+i.premio,0)*100)/100,
+    nossa:Math.round(itens.reduce((s,i)=>s+i.nossa,0)*100)/100,
+    valor:Math.round(itens.reduce((s,i)=>s+i.dele,0)*100)/100 };
+}
+const pgLiquido=r=>Math.round(((Number(r.salarioBase)||0)+(Number(r.comissao)||0)
+  +(r.proventos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0)
+  -(r.descontos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0))*100)/100;
+
+/* =========================================================================
+   TELA
+   ========================================================================= */
+VIEWS.pagamentos=function(){
+  const hoje=new Date();
+  if(PG.mes===null){ PG.mes=hoje.getMonth()+1; PG.ano=hoje.getFullYear(); }
+  const ano=Number(PG.ano), mes=Number(PG.mes);
+  const comp=pgComp(ano,mes);
+  const ref=pgMesAnterior(ano,mes);
+  const diaUtil=pgPrimeiroDiaUtil(ano,mes);
+  const equipe=(CACHE.admins||[]).filter(f=>f.ativo!==false).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const daComp=FOLHA.filter(r=>r.competencia===comp);
+  const porFunc={}; daComp.forEach(r=>porFunc[r.funcionarioId]=r);
+
+  /* linhas: registro salvo, ou uma prévia calculada na hora */
+  const linhas=equipe.map(f=>{
+    const salvo=porFunc[f.id];
+    const c=pgComissaoDe(f,ref.ano,ref.mes);
+    if(salvo) return {...salvo,__func:f,__calc:c,__salvo:true};
+    return {id:null,competencia:comp,funcionarioId:f.id,funcionarioNome:f.nome||f.email,
+      salarioBase:Number(f.salarioBase)||0,comissao:c.valor,proventos:[],descontos:[],
+      status:'previsto',__func:f,__calc:c,__salvo:false};
+  });
+  const tot=linhas.reduce((s,r)=>s+pgLiquido(r),0);
+  const totBase=linhas.reduce((s,r)=>s+(Number(r.salarioBase)||0),0);
+  const totCom=linhas.reduce((s,r)=>s+(Number(r.comissao)||0),0);
+  const totDesc=linhas.reduce((s,r)=>s+(r.descontos||[]).reduce((x,d)=>x+(Number(d.valor)||0),0),0);
+  const pagos=linhas.filter(r=>r.status==='pago').length;
+  window.__pgExport={linhas,comp,ref};
+
+  const actions=`<button class="btn btn-primary btn-sm" onclick="pgGerar()"><i class="fas fa-wand-magic-sparkles"></i> Gerar folha do mês</button>`;
+  let html=head('pagamentos',{actions});
+
+  html+=`<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+    <select onchange="PG.mes=+this.value;VIEWS.pagamentos()">
+      ${MESES_BR.map((m,i)=>`<option value="${i+1}" ${mes===i+1?'selected':''}>${m}</option>`).join('')}</select>
+    <input type="number" min="2000" max="2100" value="${ano}" onchange="PG.ano=+this.value;VIEWS.pagamentos()" style="width:110px">
+    <span style="font-size:.85rem;color:var(--text-2)">
+      <i class="fas fa-calendar-check" style="color:var(--brand)"></i>
+      Pagar em <b>${diaUtil.toLocaleDateString('pt-BR')}</b> (1º dia útil) · comissão sobre a vigência de
+      <b>${MESES_BR[ref.mes-1]}/${ref.ano}</b></span>
+    <button class="btn btn-ghost btn-sm" onclick="pgExportar()"><i class="fas fa-download"></i> CSV</button>
+  </div></div>`;
+
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.35rem">${pgMoeda(tot)}</div><div class="lbl">Total a pagar</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-money-bill"></i></div><div class="val" style="font-size:1.35rem">${pgMoeda(totBase)}</div><div class="lbl">Salários base</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-hand-holding-dollar"></i></div><div class="val" style="font-size:1.35rem">${pgMoeda(totCom)}</div><div class="lbl">Comissões</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-arrow-down"></i></div><div class="val" style="font-size:1.35rem">${pgMoeda(totDesc)}</div><div class="lbl">Descontos</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-circle-check"></i></div><div class="val">${pagos}/${linhas.length}</div><div class="lbl">Já pagos</div></div>
+  </div>`;
+
+  if(!equipe.length) return setView(html+`<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-user-tie"></i></div>
+    <h4>Nenhum funcionário ativo</h4><p>Cadastre a equipe em Funcionários para montar a folha.</p></div></div>`);
+
+  html+=`<div class="card"><div class="card-head">
+      <h3><i class="fas fa-money-check-dollar"></i> Folha de ${MESES_BR[mes-1]}/${ano}</h3>
+      <span style="font-size:.8rem;color:var(--text-3)">${daComp.length?daComp.length+' lançamento(s) salvos':'nada salvo ainda — os valores abaixo são a prévia calculada'}</span></div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Funcionário</th><th style="text-align:right">Salário</th><th style="text-align:right">Comissão</th>
+      <th style="text-align:right">Proventos</th><th style="text-align:right">Descontos</th>
+      <th style="text-align:right">Líquido</th><th>Pagamento</th><th>Situação</th><th style="text-align:right">Ações</th>
+    </tr></thead><tbody>
+    ${linhas.map(r=>{
+      const prov=(r.proventos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0);
+      const desc=(r.descontos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0);
+      const f=r.__func, c=r.__calc;
+      const pix=f.pix?`${esc(f.pixTipo||'PIX')}: ${esc(f.pix)}`:(f.banco?`${esc(f.banco)} ${esc(f.agencia||'')}/${esc(f.conta||'')}`:'<span style="color:var(--danger)">sem dados</span>');
+      return `<tr>
+        <td><b>${esc(r.funcionarioNome)}</b><div style="font-size:.73rem;color:var(--text-3)">${esc(f.cargo||'')}</div></td>
+        <td style="text-align:right">${pgMoeda(r.salarioBase)}</td>
+        <td style="text-align:right">${pgMoeda(r.comissao)}
+          ${c.itens.length?`<div style="font-size:.71rem;color:var(--text-3);cursor:pointer" onclick="pgDetalheComissao('${f.id}')">
+            <u>${c.itens.length} negócio(s) · ${c.fator}%</u></div>`
+            :'<div style="font-size:.71rem;color:var(--text-3)">sem vendas no mês</div>'}</td>
+        <td style="text-align:right">${prov?pgMoeda(prov):'<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="text-align:right">${desc?'<span style="color:var(--danger)">'+pgMoeda(desc)+'</span>':'<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="text-align:right"><b style="font-size:.95rem">${pgMoeda(pgLiquido(r))}</b></td>
+        <td style="font-size:.78rem;color:var(--text-2)">${pix}</td>
+        <td>${r.status==='pago'
+          ? `<span class="badge" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-check"></i> Pago${r.pagoEmData?' '+fmtData(r.pagoEmData):''}</span>`
+          : r.__salvo?'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">Em aberto</span>'
+                     :'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">Prévia</span>'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" title="Editar lançamento" onclick="pgModal('${f.id}')"><i class="fas fa-pen"></i></button>
+          ${r.status!=='pago'?`<button class="btn btn-ghost btn-sm" style="color:var(--ok)" title="Marcar como pago" onclick="pgMarcarPago('${f.id}')"><i class="fas fa-check"></i></button>`
+            :`<button class="btn btn-ghost btn-sm" title="Desfazer pagamento" onclick="pgDesfazer('${f.id}')"><i class="fas fa-rotate-left"></i></button>`}
+        </td></tr>`;}).join('')}
+      <tr style="background:var(--surface-2)"><td style="font-weight:700">Total</td>
+        <td style="text-align:right;font-weight:700">${pgMoeda(totBase)}</td>
+        <td style="text-align:right;font-weight:700">${pgMoeda(totCom)}</td>
+        <td style="text-align:right;font-weight:700">${pgMoeda(linhas.reduce((s,r)=>s+(r.proventos||[]).reduce((x,p)=>x+(Number(p.valor)||0),0),0))}</td>
+        <td style="text-align:right;font-weight:700;color:var(--danger)">${pgMoeda(totDesc)}</td>
+        <td style="text-align:right;font-weight:800;color:var(--brand-dark)">${pgMoeda(tot)}</td>
+        <td colspan="3"></td></tr>
+    </tbody></table></div>
+    <div style="margin-top:12px;font-size:.78rem;color:var(--text-3)"><i class="fas fa-circle-info"></i>
+      A comissão soma as apólices com <b>início de vigência em ${MESES_BR[ref.mes-1]}/${ref.ano}</b>:
+      prêmio líquido × comissão da apólice × fator do funcionário. Enquanto a folha não é salva, os números são só uma prévia.</div>
+  </div>`;
+
+  /* quem ficou sem atribuição */
+  const semDono=pgApolicesDoMes(ref.ano,ref.mes).filter(a=>!pgVendedorDa(a));
+  if(semDono.length) html+=`<div class="card" style="border-color:#f6dfae;background:var(--warn-bg)">
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <i class="fas fa-triangle-exclamation" style="color:var(--warn);font-size:1.1rem;margin-top:2px"></i>
+      <div style="flex:1;min-width:260px;font-size:.86rem;color:#92400e">
+        <b>${semDono.length} apólice(s) de ${MESES_BR[ref.mes-1]} sem vendedor definido</b> — elas não entraram na comissão de ninguém.
+        <div style="margin-top:6px;font-size:.82rem">${semDono.slice(0,6).map(a=>esc(a.clienteNome||a.numeroApolice||'—')).join(' · ')}${semDono.length>6?' e mais '+(semDono.length-6):''}</div>
+        <div style="margin-top:6px;font-size:.8rem">Abra a apólice e escolha o responsável para incluir na próxima folha.</div>
+      </div></div></div>`;
+  setView(html);
+};
+
+/* ---------- gerar / salvar ---------- */
+async function pgGerar(){
+  const ano=Number(PG.ano), mes=Number(PG.mes), comp=pgComp(ano,mes);
+  const ref=pgMesAnterior(ano,mes);
+  const equipe=(CACHE.admins||[]).filter(f=>f.ativo!==false);
+  if(!equipe.length){ toast('Cadastre a equipe primeiro.','info'); return; }
+  const jaTem=FOLHA.filter(r=>r.competencia===comp);
+  const pagosTravados=jaTem.filter(r=>r.status==='pago').length;
+  if(jaTem.length&&!confirm('Já existem '+jaTem.length+' lançamento(s) em '+MESES_BR[mes-1]+'/'+ano+
+    (pagosTravados?' ('+pagosTravados+' já pago(s), que não serão tocados)':'')+
+    '.\n\nRecalcular salário e comissão dos que ainda estão em aberto?')) return;
+  try{
+    const lote=db.batch(); let n=0;
+    equipe.forEach(f=>{
+      const existente=jaTem.find(r=>r.funcionarioId===f.id);
+      if(existente&&existente.status==='pago') return;
+      const c=pgComissaoDe(f,ref.ano,ref.mes);
+      const base={competencia:comp, funcionarioId:f.id, funcionarioNome:f.nome||f.email,
+        salarioBase:Number(f.salarioBase)||0, comissao:c.valor,
+        comissaoDetalhe:{fator:c.fator,premio:c.premio,nossa:c.nossa,qtd:c.itens.length,
+          mesRef:pgComp(ref.ano,ref.mes)},
+        status:'aberto', atualizadoEm:FV.serverTimestamp()};
+      if(existente){ lote.update(db.collection('folha_pagamento').doc(existente.id),base); }
+      else { lote.set(db.collection('folha_pagamento').doc(),
+        {...base, proventos:[], descontos:[], criadoEm:FV.serverTimestamp(), criadoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin'}); }
+      n++;
+    });
+    await lote.commit();
+    toast('Folha de '+MESES_BR[mes-1]+' gerada para '+n+' funcionário(s).','ok','Pronto');
+  }catch(e){ console.error(e); toast('Erro ao gerar a folha.','err'); }
+}
+function pgRegistro(funcId){
+  const comp=pgComp(Number(PG.ano),Number(PG.mes));
+  return FOLHA.find(r=>r.competencia===comp&&r.funcionarioId===funcId)||null;
+}
+async function pgGarantir(funcId){
+  let r=pgRegistro(funcId);
+  if(r) return r;
+  const f=(CACHE.admins||[]).find(x=>x.id===funcId); if(!f) return null;
+  const ref=pgMesAnterior(Number(PG.ano),Number(PG.mes));
+  const c=pgComissaoDe(f,ref.ano,ref.mes);
+  const doc=await db.collection('folha_pagamento').add({
+    competencia:pgComp(Number(PG.ano),Number(PG.mes)), funcionarioId:f.id, funcionarioNome:f.nome||f.email,
+    salarioBase:Number(f.salarioBase)||0, comissao:c.valor,
+    comissaoDetalhe:{fator:c.fator,premio:c.premio,nossa:c.nossa,qtd:c.itens.length,mesRef:pgComp(ref.ano,ref.mes)},
+    proventos:[], descontos:[], status:'aberto',
+    criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp(),
+    criadoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin'});
+  return {id:doc.id};
+}
+
+/* ---------- modal do lançamento ---------- */
+function pgModal(funcId){
+  const f=(CACHE.admins||[]).find(x=>x.id===funcId); if(!f) return;
+  const r=pgRegistro(funcId)||{};
+  const ref=pgMesAnterior(Number(PG.ano),Number(PG.mes));
+  const c=pgComissaoDe(f,ref.ano,ref.mes);
+  const salBase=r.salarioBase!=null?r.salarioBase:(Number(f.salarioBase)||0);
+  const com=r.comissao!=null?r.comissao:c.valor;
+  const prov=r.proventos||[], desc=r.descontos||[];
+  const linha=(x,cls)=>`<div class="${cls}" style="display:grid;grid-template-columns:1fr 140px auto;gap:10px;align-items:end;margin-bottom:9px">
+    <div class="form-row" style="margin:0"><input type="text" class="${cls}D" value="${esc(x.desc||'')}" placeholder="Descrição"></div>
+    <div class="form-row" style="margin:0"><input type="text" class="${cls}V" value="${x.valor!=null?String(x.valor).replace('.',','):''}" placeholder="0,00"></div>
+    <button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="this.closest('.${cls}').remove();pgRecalc()"><i class="fas fa-trash"></i></button>
+  </div>`;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-money-check-dollar" style="color:var(--brand)"></i> ${esc(f.nome||f.email)} — ${MESES_BR[Number(PG.mes)-1]}/${PG.ano}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="pgFunc" value="${esc(funcId)}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Salário base</label><input type="text" id="pgBase" value="${String(salBase).replace('.',',')}" oninput="pgRecalc()"></div>
+        <div class="form-row"><label>Comissão</label><input type="text" id="pgCom" value="${String(com).replace('.',',')}" oninput="pgRecalc()">
+          <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">
+            ${c.itens.length?`Calculado: ${pgMoeda(c.premio)} de prêmio × comissão da apólice = ${pgMoeda(c.nossa)} · fator ${c.fator}% = <b>${pgMoeda(c.valor)}</b>
+              <button class="btn btn-ghost btn-sm" style="padding:2px 8px;margin-left:5px" onclick="pgDetalheComissao('${funcId}')">ver negócios</button>`
+              :`Sem vendas com vigência em ${MESES_BR[ref.mes-1]}/${ref.ano}.`}</div></div>
+      </div>
+      <div style="margin-top:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <b style="font-size:.83rem;color:var(--ok)"><i class="fas fa-plus"></i> Outros proventos</b>
+          <button class="btn btn-ghost btn-sm" onclick="pgAdd('pgProv')"><i class="fas fa-plus"></i> Adicionar</button></div>
+        <div id="pgProvLista">${prov.map(x=>linha(x,'pgProv')).join('')}</div>
+        <div style="font-size:.74rem;color:var(--text-3)">Ex.: bônus, prêmio por meta, ajuda de custo, reembolso.</div>
+      </div>
+      <div style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <b style="font-size:.83rem;color:var(--danger)"><i class="fas fa-minus"></i> Descontos</b>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${['INSS','IRRF','Vale transporte','Vale refeição','Adiantamento','Faltas'].map(d=>
+              `<button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:.73rem" onclick="pgAdd('pgDesc','${d}')">${d}</button>`).join('')}
+            <button class="btn btn-ghost btn-sm" onclick="pgAdd('pgDesc')"><i class="fas fa-plus"></i></button></div></div>
+        <div id="pgDescLista">${desc.map(x=>linha(x,'pgDesc')).join('')}</div>
+      </div>
+      <div class="form-row" style="margin-top:16px"><label>Observações</label>
+        <textarea id="pgObs" rows="2" placeholder="Anotação sobre este pagamento...">${esc(r.observacoes||'')}</textarea></div>
+      <div style="background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-top:6px;display:flex;justify-content:space-between;align-items:center">
+        <b style="color:var(--brand-dark)">Líquido a pagar</b>
+        <b id="pgLiq" style="font-size:1.35rem;color:var(--brand-dark)">${pgMoeda(pgLiquido({salarioBase:salBase,comissao:com,proventos:prov,descontos:desc}))}</b>
+      </div>
+      ${f.pix?`<div style="font-size:.79rem;color:var(--text-2);margin-top:10px"><i class="fas fa-qrcode"></i> PIX (${esc(f.pixTipo||'chave')}): <b>${esc(f.pix)}</b></div>`
+        :f.banco?`<div style="font-size:.79rem;color:var(--text-2);margin-top:10px"><i class="fas fa-building-columns"></i> ${esc(f.banco)} · ag. ${esc(f.agencia||'')} · c/ ${esc(f.conta||'')} ${esc(f.contaTipo||'')}</div>`
+        :`<div style="font-size:.79rem;color:var(--danger);margin-top:10px"><i class="fas fa-triangle-exclamation"></i> Sem chave PIX nem conta no cadastro deste funcionário.</div>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-success" onclick="pgSalvar(true)"><i class="fas fa-check"></i> Salvar e marcar pago</button>
+      <button class="btn btn-primary" onclick="pgSalvar(false)"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+}
+function pgAdd(cls,descricao){
+  const el=document.getElementById(cls==='pgProv'?'pgProvLista':'pgDescLista');
+  el.insertAdjacentHTML('beforeend',`<div class="${cls}" style="display:grid;grid-template-columns:1fr 140px auto;gap:10px;align-items:end;margin-bottom:9px">
+    <div class="form-row" style="margin:0"><input type="text" class="${cls}D" value="${esc(descricao||'')}" placeholder="Descrição"></div>
+    <div class="form-row" style="margin:0"><input type="text" class="${cls}V" value="" placeholder="0,00" oninput="pgRecalc()"></div>
+    <button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="this.closest('.${cls}').remove();pgRecalc()"><i class="fas fa-trash"></i></button>
+  </div>`);
+  const ins=el.querySelectorAll('.'+cls+'V'); if(ins.length) ins[ins.length-1].focus();
+}
+function pgColeta(cls){
+  return [...document.querySelectorAll('.'+cls)].map(el=>({
+    desc:el.querySelector('.'+cls+'D').value.trim()||'—',
+    valor:pgNum(el.querySelector('.'+cls+'V').value)
+  })).filter(x=>x.valor);
+}
+function pgRecalc(){
+  const el=document.getElementById('pgLiq'); if(!el) return;
+  el.textContent=pgMoeda(pgLiquido({salarioBase:pgNum(document.getElementById('pgBase').value),
+    comissao:pgNum(document.getElementById('pgCom').value),
+    proventos:pgColeta('pgProv'), descontos:pgColeta('pgDesc')}));
+}
+async function pgSalvar(marcarPago){
+  const funcId=document.getElementById('pgFunc').value;
+  const dados={ salarioBase:pgNum(document.getElementById('pgBase').value),
+    comissao:pgNum(document.getElementById('pgCom').value),
+    proventos:pgColeta('pgProv'), descontos:pgColeta('pgDesc'),
+    observacoes:document.getElementById('pgObs').value.trim()||null,
+    atualizadoEm:FV.serverTimestamp() };
+  if(marcarPago){ dados.status='pago'; dados.pagoEm=FV.serverTimestamp();
+    dados.pagoEmData=agHoje?agHoje():null; dados.pagoPor=(CURRENT_USER&&CURRENT_USER.email)||'admin'; }
+  try{
+    const r=await pgGarantir(funcId); if(!r) throw new Error('sem registro');
+    await db.collection('folha_pagamento').doc(r.id).update(dados);
+    closeModal(); toast(marcarPago?'Pagamento registrado.':'Lançamento salvo.','ok');
+  }catch(e){ console.error(e); toast('Erro ao salvar o lançamento.','err'); }
+}
+async function pgMarcarPago(funcId){
+  try{
+    const r=await pgGarantir(funcId); if(!r) return;
+    await db.collection('folha_pagamento').doc(r.id).update({status:'pago',pagoEm:FV.serverTimestamp(),
+      pagoEmData:agHoje?agHoje():null, pagoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin', atualizadoEm:FV.serverTimestamp()});
+    toast('Marcado como pago.','ok');
+  }catch(e){ console.error(e); toast('Erro ao marcar.','err'); }
+}
+async function pgDesfazer(funcId){
+  const r=pgRegistro(funcId); if(!r) return;
+  if(!confirm('Desfazer o pagamento deste funcionário?')) return;
+  try{ await db.collection('folha_pagamento').doc(r.id).update({status:'aberto',pagoEm:null,pagoEmData:null,pagoPor:null,atualizadoEm:FV.serverTimestamp()});
+    toast('Pagamento desfeito.','info'); }
+  catch(e){ console.error(e); toast('Erro.','err'); }
+}
+function pgDetalheComissao(funcId){
+  const f=(CACHE.admins||[]).find(x=>x.id===funcId); if(!f) return;
+  const ref=pgMesAnterior(Number(PG.ano),Number(PG.mes));
+  const c=pgComissaoDe(f,ref.ano,ref.mes);
+  openModal(`<div class="modal-head"><h3><i class="fas fa-hand-holding-dollar" style="color:var(--brand)"></i> Comissão de ${esc(f.nome||f.email)}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);font-size:.86rem;margin-bottom:14px">
+        Negócios com <b>início de vigência em ${MESES_BR[ref.mes-1]}/${ref.ano}</b>, que entram no pagamento de ${MESES_BR[Number(PG.mes)-1]}/${PG.ano}.</p>
+      ${c.itens.length?`<div class="tbl-wrap"><table><thead><tr>
+        <th>Cliente</th><th>Seguradora</th><th>Vigência</th><th style="text-align:right">Prêmio líquido</th>
+        <th style="text-align:right">Com. %</th><th style="text-align:right">Nossa comissão</th><th style="text-align:right">Dele (${c.fator}%)</th>
+      </tr></thead><tbody>
+      ${c.itens.map(i=>`<tr>
+        <td><b>${esc(i.a.clienteNome||'-')}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(i.a.numeroApolice||'')}</div></td>
+        <td>${esc(i.a.seguradora||'-')}</td>
+        <td style="color:var(--text-3)">${fmtData(i.a.dataInicioVigencia)}</td>
+        <td style="text-align:right">${pgMoeda(i.premio)}</td>
+        <td style="text-align:right">${i.pct}%</td>
+        <td style="text-align:right">${pgMoeda(i.nossa)}</td>
+        <td style="text-align:right"><b>${pgMoeda(i.dele)}</b></td></tr>`).join('')}
+      <tr style="background:var(--surface-2)"><td colspan="3" style="font-weight:700">Total</td>
+        <td style="text-align:right;font-weight:700">${pgMoeda(c.premio)}</td><td></td>
+        <td style="text-align:right;font-weight:700">${pgMoeda(c.nossa)}</td>
+        <td style="text-align:right;font-weight:800;color:var(--brand-dark)">${pgMoeda(c.valor)}</td></tr>
+      </tbody></table></div>`
+      :`<div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum negócio nesse mês</h4>
+        <p>Nenhuma apólice com vigência iniciando em ${MESES_BR[ref.mes-1]}/${ref.ano} está atribuída a ${esc(f.nome||'')}.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+function pgExportar(){
+  const {linhas,comp}=window.__pgExport||{};
+  if(!linhas||!linhas.length){ toast('Nada para exportar.','info'); return; }
+  const cel=v=>{v=(v==null?'':String(v));return /[";\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const head=['Competencia','Funcionario','Cargo','Salario base','Comissao','Proventos','Descontos','Liquido','PIX','Banco','Agencia','Conta','Situacao'];
+  const rows=linhas.map(r=>{const f=r.__func;
+    return [comp,r.funcionarioNome,f.cargo||'',r.salarioBase,r.comissao,
+      (r.proventos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0),
+      (r.descontos||[]).reduce((s,x)=>s+(Number(x.valor)||0),0),
+      pgLiquido(r), f.pix||'', f.banco||'', f.agencia||'', f.conta||'',
+      r.status==='pago'?'Pago':(r.__salvo?'Em aberto':'Previsto')];});
+  const txt='﻿'+[head.join(';')].concat(rows.map(x=>x.map(cel).join(';'))).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download='folha-'+comp+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+  toast('CSV da folha gerado.','ok','Exportado');
+}
 
 </script>
 </body>
