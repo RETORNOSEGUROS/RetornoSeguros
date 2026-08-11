@@ -1143,6 +1143,11 @@ function bootstrap(){
     FOLHA=sn.docs.map(d=>({id:d.id,...d.data()}));
     if((location.hash||'').slice(1)==='pagamentos') VIEWS.pagamentos();
   },e=>console.error('folha',e)));
+  LISTENERS.push(db.collection('agenda_fixas').onSnapshot(sn=>{
+    AG_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof agGerarRecorrentes==='function') agGerarRecorrentes(true);
+    if((location.hash||'').slice(1)==='agenda') VIEWS.agenda();
+  },e=>console.error('agenda_fixas',e)));
   LISTENERS.push(db.collection('agenda_crm').onSnapshot(sn=>{
     AGENDA=sn.docs.map(d=>({id:d.id,...d.data()}));
     if(typeof agAtualizarBadge==='function') agAtualizarBadge();
@@ -4356,6 +4361,7 @@ function agOrdena(l){
    TELA
    ========================================================================= */
 VIEWS.agenda=function(){
+  agGerarRecorrentes();
   const hoje=agHoje(), hd=agS2D(hoje);
   if(AG.mes===null){ AG.mes=hd.getMonth()+1; AG.ano=hd.getFullYear(); AG.dia=hoje; }
   const todas=agFiltradas();
@@ -4365,7 +4371,8 @@ VIEWS.agenda=function(){
   const semana=abertas.filter(t=>{const n=agDiffDias(t.data);return n>0&&n<=7;});
   const feitasHoje=todas.filter(t=>t.status==='concluida'&&(t.concluidoEmData===hoje||t.data===hoje));
 
-  const actions=`<button class="btn btn-primary btn-sm" onclick="agModal()"><i class="fas fa-plus"></i> Nova ação</button>`;
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="agModalRecorrentes()"><i class="fas fa-repeat"></i> Recorrentes${AG_FIXAS.filter(m=>m.ativo!==false).length?' ('+AG_FIXAS.filter(m=>m.ativo!==false).length+')':''}</button>
+    <button class="btn btn-primary btn-sm" onclick="agModal()"><i class="fas fa-plus"></i> Nova ação</button>`;
   let html=head('agenda',{actions});
 
   html+=`<div class="ag-alertas">
@@ -4510,6 +4517,7 @@ function agCard(t){
       ${t.hora?`<span><i class="fas fa-clock"></i> ${esc(t.hora)}${t.horaFim?'–'+esc(t.horaFim):''}</span>`:'<span style="color:var(--text-3)"><i class="fas fa-clock"></i> sem hora</span>'}
       <span style="color:${atras?'var(--danger)':'var(--text-3)'}">${atras?'<i class="fas fa-triangle-exclamation"></i> ':''}${agDataCurta(t.data)}</span>
       ${t.status==='andamento'?'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">Em andamento</span>':''}
+      ${t.modeloId?`<span style="color:var(--brand-dark)" title="${t.dataOriginal?'Caía em '+agDataCurta(t.dataOriginal)+' e foi movida para o dia útil':'Ação recorrente'}"><i class="fas fa-repeat"></i>${t.dataOriginal?' movida':''}</span>`:''}
       ${t.vinculo&&t.vinculo.nome?`<span style="color:var(--brand-dark)"><i class="fas fa-link"></i> ${esc(t.vinculo.nome)}</span>`:''}
       <span class="who">${resp.length?resp.slice(0,3).map(r=>avatar(r)).join('')
         :'<span style="color:var(--text-3)">sem responsável</span>'}${resp.length>3?`<span class="av mais">+${resp.length-3}</span>`:''}</span>
@@ -4680,6 +4688,14 @@ function agModal(id,diaPre,horaPre,pre){
         </select></div>
       <div class="form-row"><label>Observações</label>
         <textarea id="agDesc" rows="3" placeholder="Detalhes, combinados, o que já foi tentado...">${esc(t.descricao||'')}</textarea></div>
+      ${t.modeloId?`<div style="background:var(--brand-50);border-radius:10px;padding:11px 14px;font-size:.83rem;color:var(--brand-dark);margin-bottom:14px">
+        <i class="fas fa-repeat"></i> Esta ação faz parte de uma <b>recorrência</b>. Editar aqui muda só esta data.
+        <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="closeModal();agModalFixa('${t.modeloId}')">Editar a recorrência</button>
+        ${t.dataOriginal?`<div style="font-size:.76rem;margin-top:5px">Caía em ${agDataCurta(t.dataOriginal)} (${agPorqueMudou(t.dataOriginal,t.data)}) e foi movida para o dia útil.</div>`:''}</div>`
+      :(id?'':`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <i class="fas fa-repeat" style="color:var(--brand)"></i>
+        <span style="font-size:.85rem;flex:1;min-width:200px">É algo que <b>se repete sempre</b>? Ex.: todo dia 10 tirar o boleto do cliente.</span>
+        <button class="btn btn-ghost btn-sm" onclick="closeModal();agModalFixa()"><i class="fas fa-plus"></i> Criar como recorrente</button></div>`)}
       ${id?`<div style="font-size:.76rem;color:var(--text-3);border-top:1px solid var(--border);padding-top:10px">
         Criada por ${esc(agNomeDe(t.criadoPor))} em ${t.criadoEm?fmtDataHora(t.criadoEm):'—'}
         ${t.status==='concluida'&&t.concluidoPor?`<br>Concluída por ${esc(agNomeDe(t.concluidoPor))}${t.concluidoEm?' em '+fmtDataHora(t.concluidoEm):''}`:''}</div>`:''}
@@ -4874,6 +4890,299 @@ function agChecarAvisos(){
   });
 }
 setInterval(()=>{ if(AGENDA.length) agChecarAvisos(); },60000);
+
+/* =========================================================================
+   AÇÕES RECORRENTES — "todo dia 10, tirar o boleto do cliente X"
+   Coleção agenda_fixas guarda o modelo; as ocorrências nascem em agenda_crm.
+   Se o dia cair em fim de semana ou feriado, joga para o último dia útil antes.
+   ========================================================================= */
+let AG_FIXAS=[];
+let __agGerou=false;
+const AG_PERIOD={
+  semanal:{l:'Toda semana',dias:7},
+  quinzenal:{l:'A cada 15 dias',dias:14},
+  mensal:{l:'Todo mês',meses:1},
+  bimestral:{l:'A cada 2 meses',meses:2},
+  trimestral:{l:'A cada 3 meses',meses:3},
+  semestral:{l:'A cada 6 meses',meses:6},
+  anual:{l:'Uma vez por ano',meses:12}
+};
+const AG_AJUSTE={
+  antes:'Antecipa para o último dia útil antes',
+  depois:'Adia para o próximo dia útil',
+  manter:'Mantém no dia, mesmo sem expediente'
+};
+const DOW_NOME=['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+
+/* ---------- feriados nacionais ---------- */
+function agPascoa(y){
+  const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,
+        f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,
+        i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,
+        m=Math.floor((a+11*h+22*l)/451),
+        mes=Math.floor((h+l-7*m+114)/31),dia=((h+l-7*m+114)%31)+1;
+  return new Date(y,mes-1,dia);
+}
+const __agFer={};
+function agFeriados(ano){
+  if(__agFer[ano]) return __agFer[ano];
+  const p=agPascoa(ano), mais=n=>agD2S(new Date(p.getFullYear(),p.getMonth(),p.getDate()+n));
+  const set=new Set([ano+'-01-01',ano+'-04-21',ano+'-05-01',ano+'-09-07',
+    ano+'-10-12',ano+'-11-02',ano+'-11-15',ano+'-11-20',ano+'-12-25',
+    mais(-48),mais(-47),mais(-2),mais(60)]);   // carnaval, sexta santa, corpus christi
+  __agFer[ano]=set; return set;
+}
+function agEhDiaUtil(d,comFeriado){
+  const dw=d.getDay();
+  if(dw===0||dw===6) return false;
+  if(comFeriado!==false&&agFeriados(d.getFullYear()).has(agD2S(d))) return false;
+  return true;
+}
+function agAjustaDiaUtil(s,ajuste,comFeriado){
+  if(ajuste==='manter') return s;
+  let d=agS2D(s); if(!d) return s;
+  const passo=ajuste==='depois'?1:-1;
+  let g=0;
+  while(!agEhDiaUtil(d,comFeriado)&&g++<20) d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+passo);
+  return agD2S(d);
+}
+/* explica por que a data mudou */
+function agPorqueMudou(original,final){
+  if(original===final) return '';
+  const d=agS2D(original), dw=d.getDay();
+  if(agFeriados(d.getFullYear()).has(original)) return 'feriado';
+  if(dw===0) return 'domingo'; if(dw===6) return 'sábado';
+  return 'sem expediente';
+}
+
+/* ---------- datas de um modelo dentro de uma janela ---------- */
+function agOcorrencias(m,deISO,ateISO){
+  const de=agS2D(deISO), ate=agS2D(ateISO), out=[];
+  if(!de||!ate) return out;
+  const per=AG_PERIOD[m.periodicidade]||AG_PERIOD.mensal;
+  if(per.dias){
+    let base=agS2D(m.dataBase)||new Date(de);
+    while(base<de) base=new Date(base.getFullYear(),base.getMonth(),base.getDate()+per.dias);
+    for(let d=new Date(base); d<=ate; d=new Date(d.getFullYear(),d.getMonth(),d.getDate()+per.dias)) out.push(agD2S(d));
+  }else{
+    const passo=per.meses;
+    const ini=(m.mesInicial||agD2S(de).slice(0,7)).split('-').map(Number);
+    const p=n=>String(n).padStart(2,'0');
+    let y=de.getFullYear(), mo=de.getMonth()+1;
+    for(let k=0;k<40;k++){
+      const diff=(y-ini[0])*12+(mo-ini[1]);
+      if(diff>=0&&diff%passo===0){
+        const ult=new Date(y,mo,0).getDate();
+        const s=y+'-'+p(mo)+'-'+p(Math.min(Number(m.diaDoMes)||1,ult));
+        const d=agS2D(s);
+        if(d>=de&&d<=ate) out.push(s);
+      }
+      mo++; if(mo>12){mo=1;y++;}
+      if(new Date(y,mo-1,1)>ate) break;
+    }
+  }
+  const fim=m.ate||null;
+  return out.map(s=>({original:s,data:agAjustaDiaUtil(s,m.ajuste||'antes',m.feriados)}))
+            .filter(x=>!fim||x.data<=fim);
+}
+/* cria as ocorrências que faltam nos próximos 90 dias */
+async function agGerarRecorrentes(force){
+  if(!AG_FIXAS.length) return;
+  if(__agGerou&&!force) return;
+  __agGerou=true;
+  const hoje=agHoje();
+  const d=agS2D(hoje); const ate=agD2S(new Date(d.getFullYear(),d.getMonth(),d.getDate()+90));
+  const novos=[];
+  AG_FIXAS.filter(m=>m.ativo!==false).forEach(m=>{
+    agOcorrencias(m,hoje,ate).forEach(oc=>{
+      if(oc.data<hoje) return;
+      const existe=AGENDA.some(t=>t.modeloId===m.id&&t.data===oc.data);
+      if(!existe) novos.push({m,oc});
+    });
+  });
+  if(!novos.length) return;
+  try{
+    const eu=agEuEmail()||'admin';
+    const lote=db.batch();
+    novos.slice(0,200).forEach(({m,oc})=>{
+      lote.set(db.collection('agenda_crm').doc(),{
+        titulo:m.titulo, descricao:m.descricao||null,
+        data:oc.data, dataOriginal:oc.original!==oc.data?oc.original:null,
+        hora:m.hora||null, horaFim:m.horaFim||null,
+        tipo:m.tipo||'outro', prioridade:m.prioridade||'normal',
+        responsaveis:m.responsaveis||[eu], responsaveisNomes:(m.responsaveis||[eu]).map(agNomeDe),
+        vinculo:m.vinculo||null, modeloId:m.id, origem:'recorrente',
+        status:'aberta', criadoPor:m.criadoPor||eu,
+        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp()});
+    });
+    await lote.commit();
+    console.log('[agenda] '+novos.length+' ocorrência(s) recorrentes criadas');
+  }catch(e){ console.error('gerar recorrentes',e); __agGerou=false; }
+}
+
+/* ---------- modal: lista dos modelos ---------- */
+function agModalRecorrentes(){
+  const ms=AG_FIXAS.slice().sort((a,b)=>(a.titulo||'').localeCompare(b.titulo||''));
+  openModal(`<div class="modal-head"><h3><i class="fas fa-repeat" style="color:var(--brand)"></i> Ações recorrentes</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);font-size:.86rem;margin-bottom:14px">
+        Coisas que se repetem sempre — tirar boleto, enviar relatório, conferir fatura. O sistema lança sozinho na agenda
+        com <b>90 dias de antecedência</b> e ajusta a data quando cai em fim de semana ou feriado.</p>
+      ${ms.length?`<div class="tbl-wrap"><table><thead><tr>
+        <th>Ação</th><th>Repete</th><th>Quando</th><th>Se não for dia útil</th><th>Próxima</th><th>Status</th><th></th>
+      </tr></thead><tbody>
+      ${ms.map(m=>{
+        const tp=AG_TIPOS[m.tipo]||AG_TIPOS.outro;
+        /* janela larga para as anuais/semestrais também mostrarem a próxima */
+        const prox=agOcorrencias(m,agHoje(),agD2S(new Date(new Date().getFullYear()+2,new Date().getMonth(),1)))[0];
+        return `<tr>
+          <td><b>${esc(m.titulo)}</b><div style="font-size:.73rem;color:var(--text-3)">
+            <i class="fas ${tp.i}" style="color:${tp.c}"></i> ${tp.l}${(m.responsaveis||[]).length?' · '+(m.responsaveis||[]).map(agNomeDe).join(', '):''}</div></td>
+          <td>${(AG_PERIOD[m.periodicidade]||AG_PERIOD.mensal).l}</td>
+          <td>${(AG_PERIOD[m.periodicidade]||{}).dias
+            ? (m.dataBase?'a partir de '+agDataCurta(m.dataBase):'—')
+            : 'dia '+(m.diaDoMes||1)}${m.hora?' às '+esc(m.hora):''}</td>
+          <td style="font-size:.79rem">${esc(AG_AJUSTE[m.ajuste||'antes'])}${m.feriados!==false?'<div style="font-size:.71rem;color:var(--text-3)">considera feriados</div>':''}</td>
+          <td>${prox?`<b>${agDataCurta(prox.data)}</b>${prox.original!==prox.data?`<div style="font-size:.71rem;color:var(--warn)">era ${agDataCurta(prox.original)} (${agPorqueMudou(prox.original,prox.data)})</div>`:''}`:'<span style="color:var(--text-3)">—</span>'}</td>
+          <td>${statusBadge(m.ativo===false?'Pausada':'Ativa',m.ativo===false?'var(--text-3)':'var(--ok)')}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-ghost btn-sm" onclick="agModalFixa('${m.id}')"><i class="fas fa-pen"></i></button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="agExcluirFixa('${m.id}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;}).join('')}
+      </tbody></table></div>`
+      :`<div class="empty"><div class="em-ic"><i class="fas fa-repeat"></i></div><h4>Nenhuma ação recorrente</h4>
+        <p>Crie uma ação e marque "repetir" — ou use o botão abaixo.</p></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
+      <button class="btn btn-primary" onclick="agModalFixa()"><i class="fas fa-plus"></i> Nova ação recorrente</button></div>`,'wide');
+}
+function agModalFixa(id){
+  const m=id?AG_FIXAS.find(x=>x.id===id)||{}:{};
+  const eq=agEquipe();
+  const resp=m.responsaveis||(agEuEmail()?[agEuEmail()]:[]);
+  const per=m.periodicidade||'mensal';
+  openModal(`<div class="modal-head"><h3><i class="fas fa-repeat" style="color:var(--brand)"></i> ${id?'Editar':'Nova'} ação recorrente</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="afId" value="${esc(id||'')}">
+      <div class="form-row"><label>O que precisa ser feito? *</label>
+        <input type="text" id="afTitulo" value="${esc(m.titulo||'')}" placeholder="Ex.: Tirar o boleto do cliente Zé Comércio"></div>
+      <div style="background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-row" style="margin:0"><label>Com que frequência</label>
+            <select id="afPer" onchange="agTogglePer()">
+              ${Object.entries(AG_PERIOD).map(([k,v])=>`<option value="${k}" ${per===k?'selected':''}>${v.l}</option>`).join('')}</select></div>
+          <div class="form-row" style="margin:0" id="afBoxDia">
+            <label>Dia do mês</label><input type="number" min="1" max="31" id="afDia" value="${m.diaDoMes||10}">
+            <div style="font-size:.73rem;color:var(--text-2);margin-top:4px">Se o mês não tiver esse dia, usa o último.</div></div>
+          <div class="form-row" style="margin:0;display:none" id="afBoxBase">
+            <label>A partir de</label><input type="date" id="afBase" value="${esc(m.dataBase||agHoje())}">
+            <div style="font-size:.73rem;color:var(--text-2);margin-top:4px" id="afDiaSemana"></div></div>
+          <div class="form-row" style="margin:0" id="afBoxMesIni">
+            <label>Contando a partir de</label>
+            <input type="month" id="afMesIni" value="${esc(m.mesInicial||agHoje().slice(0,7))}">
+            <div style="font-size:.73rem;color:var(--text-2);margin-top:4px">Usado para contar bimestre, trimestre, semestre e ano.</div></div>
+        </div>
+        <div class="form-row" style="margin:12px 0 0"><label>Se o dia cair em fim de semana ou feriado</label>
+          <select id="afAjuste">
+            ${Object.entries(AG_AJUSTE).map(([k,v])=>`<option value="${k}" ${(m.ajuste||'antes')===k?'selected':''}>${v}</option>`).join('')}</select></div>
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:.85rem;margin-top:10px">
+          <input type="checkbox" id="afFeriados" ${m.feriados!==false?'checked':''} style="width:auto">
+          Considerar os feriados nacionais (Natal, Carnaval, Corpus Christi...)</label>
+        <div id="afPreview" style="margin-top:12px;font-size:.82rem;color:var(--brand-dark);background:var(--surface);border-radius:9px;padding:10px 13px"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div class="form-row"><label>Hora (opcional)</label><input type="time" id="afHora" value="${esc(m.hora||'')}"></div>
+        <div class="form-row"><label>Tipo</label><select id="afTipo">
+          ${Object.entries(AG_TIPOS).map(([k,v])=>`<option value="${k}" ${(m.tipo||'outro')===k?'selected':''}>${v.l}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Prioridade</label><select id="afPrior">
+          ${Object.entries(AG_PRIOR).map(([k,v])=>`<option value="${k}" ${(m.prioridade||'normal')===k?'selected':''}>${v}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row"><label>Responsáveis</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 0">
+          ${eq.length?eq.map(f=>{const v=f.email||f.nome;
+            return `<label style="display:flex;align-items:center;gap:7px;padding:7px 12px;border:1.5px solid ${resp.includes(v)?'var(--brand)':'var(--border-2)'};
+              border-radius:20px;cursor:pointer;font-size:.83rem;background:${resp.includes(v)?'var(--brand-50)':'var(--surface)'}">
+              <input type="checkbox" class="afResp" value="${esc(v)}" ${resp.includes(v)?'checked':''} style="width:auto;margin:0">
+              ${avatar(v)} ${esc(f.nome||v)}</label>`;}).join('')
+            :'<span style="font-size:.83rem;color:var(--text-3)">Cadastre a equipe em Funcionários para poder delegar.</span>'}
+        </div></div>
+      <div class="form-row"><label>Observações</label>
+        <textarea id="afDesc" rows="2" placeholder="Detalhes que ajudam na hora de executar...">${esc(m.descricao||'')}</textarea></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-row"><label>Repetir até (opcional)</label><input type="date" id="afAte" value="${esc(m.ate||'')}">
+          <div style="font-size:.73rem;color:var(--text-3);margin-top:4px">Vazio = para sempre.</div></div>
+        <div class="form-row"><label>Status</label><select id="afAtivo">
+          <option value="1" ${m.ativo!==false?'selected':''}>Ativa</option>
+          <option value="0" ${m.ativo===false?'selected':''}>Pausada</option></select></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="agModalRecorrentes()">Voltar</button>
+      <button class="btn btn-primary" onclick="agSalvarFixa()"><i class="fas fa-floppy-disk"></i> ${id?'Salvar':'Criar e lançar na agenda'}</button></div>`,'wide');
+  agTogglePer();
+}
+function agTogglePer(){
+  const per=document.getElementById('afPer').value;
+  const semanal=!!(AG_PERIOD[per]||{}).dias;
+  document.getElementById('afBoxDia').style.display=semanal?'none':'block';
+  document.getElementById('afBoxBase').style.display=semanal?'block':'none';
+  document.getElementById('afBoxMesIni').style.display=(!semanal&&per!=='mensal')?'block':'none';
+  if(semanal){ const b=document.getElementById('afBase').value; const d=agS2D(b);
+    const el=document.getElementById('afDiaSemana');
+    if(el&&d) el.textContent='Cai '+(per==='semanal'?'toda ':'a cada 15 dias, ')+DOW_NOME[d.getDay()].toLowerCase()+'.'; }
+  agPreviewFixa();
+}
+function agPreviewFixa(){
+  const el=document.getElementById('afPreview'); if(!el) return;
+  const m=agLerFixa(); if(!m.titulo) m.titulo='(ação)';
+  const hoje=agHoje();
+  const ocs=agOcorrencias(m,hoje,agD2S(new Date(new Date().getFullYear()+2,new Date().getMonth(),1))).slice(0,4);
+  if(!ocs.length){ el.innerHTML='<i class="fas fa-circle-info"></i> Sem datas na janela dos próximos meses — confira a periodicidade.'; return; }
+  el.innerHTML='<b><i class="fas fa-calendar-check"></i> Próximas datas:</b> '+ocs.map(o=>
+    agDataCurta(o.data)+(o.original!==o.data?` <span style="color:var(--warn)">(era ${agDataCurta(o.original)}, ${agPorqueMudou(o.original,o.data)})</span>`:'')
+  ).join(' · ');
+}
+function agLerFixa(){
+  const g=i=>document.getElementById(i);
+  const per=g('afPer').value;
+  return { titulo:g('afTitulo').value.trim(), periodicidade:per,
+    diaDoMes:parseInt(g('afDia').value)||1, dataBase:g('afBase').value||null,
+    mesInicial:g('afMesIni').value||null,
+    ajuste:g('afAjuste').value, feriados:g('afFeriados').checked,
+    hora:g('afHora').value||null, tipo:g('afTipo').value, prioridade:g('afPrior').value,
+    descricao:g('afDesc').value.trim()||null, ate:g('afAte').value||null,
+    ativo:g('afAtivo').value==='1',
+    responsaveis:[...document.querySelectorAll('.afResp:checked')].map(c=>c.value) };
+}
+async function agSalvarFixa(){
+  const id=document.getElementById('afId').value;
+  const m=agLerFixa();
+  if(!m.titulo){ toast('Escreva o que precisa ser feito.','err'); return; }
+  m.responsaveisNomes=m.responsaveis.map(agNomeDe);
+  m.atualizadoEm=FV.serverTimestamp();
+  try{
+    if(id) await db.collection('agenda_fixas').doc(id).update(m);
+    else { m.criadoPor=agEuEmail()||'admin'; m.criadoEm=FV.serverTimestamp();
+      await db.collection('agenda_fixas').add(m); }
+    closeModal();
+    toast(id?'Recorrência atualizada.':'Recorrência criada — já lancei as próximas datas na agenda.','ok','Pronto');
+    setTimeout(()=>agGerarRecorrentes(true),900);
+  }catch(e){ console.error(e); toast('Erro ao salvar a recorrência.','err'); }
+}
+async function agExcluirFixa(id){
+  const m=AG_FIXAS.find(x=>x.id===id); if(!m) return;
+  const futuras=AGENDA.filter(t=>t.modeloId===id&&t.status!=='concluida'&&t.data>=agHoje());
+  if(!confirm('Excluir a recorrência "'+m.titulo+'"?'+
+    (futuras.length?'\n\nAs '+futuras.length+' ocorrência(s) futuras ainda não concluídas também serão removidas. O histórico do que já foi feito fica.':''))) return;
+  try{
+    await db.collection('agenda_fixas').doc(id).delete();
+    if(futuras.length){ const lote=db.batch();
+      futuras.forEach(t=>lote.delete(db.collection('agenda_crm').doc(t.id)));
+      await lote.commit(); }
+    toast('Recorrência removida.','info');
+  }catch(e){ console.error(e); toast('Erro ao excluir.','err'); }
+}
 
 </script>
   <script>
