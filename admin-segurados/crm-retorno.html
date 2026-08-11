@@ -7252,6 +7252,14 @@ function ppYelum(L,txt){
   return o;
 }
 
+/* o código FIPE sai diferente em cada PDF: 52493, 0052493, 005249-3 */
+function ppFipeCod(v){
+  const d=String(v||'').replace(/\D/g,'');
+  if(d.length<5||d.length>7) return null;
+  const p=d.padStart(7,'0');
+  return p.slice(0,6)+'-'+p.slice(6);
+}
+
 /* ---------- porta de entrada ---------- */
 function ppInterpretar(linhas,nomeArquivo){
   const txt=linhas.join('\n');
@@ -7334,6 +7342,7 @@ VIEWS.orcamento=function(leadId){
       <div style="display:flex;gap:10px;flex-wrap:wrap">${actions}</div>
     </div></div>`;
   html+=ppBlocoCliente(l);
+  html+=ppBlocoFipe();
   html+=ppBlocoUpload();
   if(ORC.propostas.length){
     html+=ppBlocoPropostas();
@@ -7372,6 +7381,52 @@ function ppBlocoCliente(l){
       ${linha('CEP de pernoite',v.cepPernoite)}
     </div></div>`;
 }
+/* ---------- valor de mercado pela tabela FIPE ---------- */
+function ppBlocoFipe(){
+  const v=ORC.veiculo, cod=ppFipeCod(v.fipe);
+  if(!cod) return '';
+  const f=ORC.fipe||{};
+  let corpo;
+  if(f.buscando) corpo=`<i class="fas fa-spinner fa-spin"></i> Consultando a tabela FIPE…`;
+  else if(f.valor) corpo=`<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+      <b style="font-size:1.6rem;color:var(--brand-dark)">${ppMoeda(f.valor)}</b>
+      <span style="font-size:.82rem;color:var(--text-2)">${esc(f.modelo||'')}${f.ano?' · '+esc(String(f.ano)):''}
+        ${f.mes?' · tabela de '+esc(f.mes):''}</span></div>
+    <div style="font-size:.8rem;color:var(--text-2);margin-top:7px">
+      <i class="fas fa-circle-info"></i> É o valor que o cliente recebe numa perda total, já que todas as cotações
+      estão em 100% da FIPE. Vai junto no comparativo e no link.</div>`;
+  else if(f.erro) corpo=`<span style="color:var(--warn)"><i class="fas fa-triangle-exclamation"></i> ${esc(f.erro)}</span>`;
+  else corpo=`<span style="color:var(--text-2);font-size:.87rem">Código ${esc(cod)} — posso buscar o valor de mercado atual.</span>`;
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-magnifying-glass-dollar"></i> Valor de mercado (FIPE ${esc(cod)})</h3>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="ppBuscarFipe(true)"><i class="fas fa-rotate"></i> ${f.valor?'Atualizar':'Consultar'}</button>
+        ${f.valor&&typeof modalFipe==='function'?`<button class="btn btn-ghost btn-sm" onclick="modalFipe({codigo:'${esc(cod)}',ano:'${esc(ORC.veiculo.anoMod||'')}',modelo:'${esc(ORC.veiculo.modelo||'')}',marca:'${esc(ORC.veiculo.marca||'')}'})"><i class="fas fa-chart-line"></i> Ver histórico</button>`:''}
+        ${f.valor?`<label style="display:flex;align-items:center;gap:7px;font-size:.82rem;cursor:pointer">
+          <input type="checkbox" ${ORC.mostrarFipe!==false?'checked':''} onchange="ORC.mostrarFipe=this.checked;VIEWS.orcamento()" style="width:auto">
+          Mostrar para o cliente</label>`:''}
+      </div></div>
+    ${corpo}</div>`;
+}
+async function ppBuscarFipe(forcar){
+  const cod=ppFipeCod(ORC.veiculo.fipe); if(!cod) return;
+  if(ORC.fipe&&ORC.fipe.buscando) return;
+  if(ORC.fipe&&ORC.fipe.valor&&!forcar) return;
+  if(typeof fipeGet!=='function'||typeof BRASIL_FIPE==='undefined'){ return; }
+  ORC.fipe={buscando:true}; VIEWS.orcamento();
+  try{
+    const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod));
+    const it=fipePorAnoComb(arr,ORC.veiculo.anoMod,ORC.veiculo.combustivel)||fipePorAnoComb(arr,ORC.veiculo.anoMod)||arr[0];
+    if(!it) throw new Error('sem retorno');
+    ORC.fipe={ codigo:cod, valor:fipeNum(it.valor), valorTexto:it.valor,
+      modelo:[it.marca,it.modelo].filter(Boolean).join(' '), ano:it.anoModelo,
+      combustivel:it.combustivel||null, mes:(it.mesReferencia||'').trim() };
+    if(ORC.mostrarFipe===undefined) ORC.mostrarFipe=true;
+  }catch(e){
+    ORC.fipe={erro:'Não consegui consultar agora ('+(e.message||'erro')+'). Tente de novo em instantes.'};
+  }
+  VIEWS.orcamento();
+}
+
 function ppBlocoUpload(){
   return `<div class="card" id="ppDrop" style="border:2px dashed var(--border);text-align:center;padding:26px 18px">
     <div style="font-size:2rem;color:var(--brand);margin-bottom:8px"><i class="fas fa-file-arrow-up"></i></div>
@@ -7412,6 +7467,7 @@ async function ppReceber(files){
   __ppLendo=false;
   ppDeduzirComissoes();
   VIEWS.orcamento();
+  ppBuscarFipe();
   if(ok) toast(ok+' cotação(ões) lida(s).','ok');
   if(falhas.length) toast('Não consegui ler: '+falhas.join(' | '),'err');
 }
@@ -7714,6 +7770,8 @@ function ppOrcamentoDoc(){
   return {
     leadId:ORC.leadId||null, leadNome:ORC.leadNome||ORC.cliente.nome||null,
     cliente:ORC.cliente, veiculo:ORC.veiculo,
+    fipe:(ORC.fipe&&ORC.fipe.valor&&ORC.mostrarFipe!==false)?{valor:ORC.fipe.valor,modelo:ORC.fipe.modelo||null,
+      ano:ORC.fipe.ano||null,mes:ORC.fipe.mes||null,codigo:ORC.fipe.codigo||null}:null,
     observacoes:ORC.observacoes||null, validade:ORC.validade||ppValidadeSugerida(),
     consultor:ORC.consultor||null, mostrarLiquido:!!ORC.mostrarLiquido,
     corretora:{nome:'Retorno Seguros',whats:'5554997015000',label:'(54) 99701-5000'},
@@ -7804,6 +7862,8 @@ function ppGerarPDF(){
   const sub=[c.nome,[v.marca,v.modelo].filter(Boolean).join(' '),
     v.anoMod?(v.anoFab&&v.anoFab!==v.anoMod?v.anoFab+'/':'')+v.anoMod:'',v.placa].filter(Boolean).join('  ·  ');
   const rod=[];
+  if(ORC.fipe&&ORC.fipe.valor&&ORC.mostrarFipe!==false)
+    rod.push({k:'Valor de mercado (tabela FIPE'+(ORC.fipe.mes?' de '+ORC.fipe.mes:'')+')',v:ppMoeda(ORC.fipe.valor),forte:true});
   const melhor=ps.slice().sort((a,b)=>(a.premioTotal||0)-(b.premioTotal||0))[0];
   if(melhor) rod.push({k:'Menor prêmio total',v:melhor.seguradora+' — '+ppMoeda(melhor.premioTotal),forte:true});
   rod.push({k:'Cotação válida até',v:fmtData(ORC.validade||ppValidadeSugerida())});
@@ -7877,6 +7937,7 @@ async function ppAbrirOrcamento(id){
     ORC={ id, leadId:o.leadId||null, leadNome:o.leadNome||null, cliente:o.cliente||{}, veiculo:o.veiculo||{},
       propostas:(o.propostas||[]).map((p,i)=>Object.assign({uid:'s'+i,incluir:true,avisos:[],
         franquiasDetalhe:p.franquiasDetalhe||[],parcelas:p.parcelas||[]},p)),
+      fipe:o.fipe||null, mostrarFipe:!!o.fipe,
       observacoes:o.observacoes||'', validade:o.validade||null, consultor:o.consultor||'',
       mostrarLiquido:!!o.mostrarLiquido, publicado:true };
     location.hash='#orcamento';
