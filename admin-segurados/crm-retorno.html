@@ -1132,11 +1132,15 @@ function bootstrap(){
   listen('admins_crm','admins',['funcionarios','relatorios','agenda','pagamentos']);
   LISTENERS.push(db.collection('contas_fixas').onSnapshot(sn=>{
     CONTAS_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof CP_CARREGOU==='object') CP_CARREGOU.fixas=true;
+    if(typeof cpGerarAutomatico==='function') cpGerarAutomatico(true);
     if((location.hash||'').slice(1)==='contas') VIEWS.contas();
   },e=>console.error('contas_fixas',e)));
   LISTENERS.push(db.collection('contas_pagar').onSnapshot(sn=>{
     CONTAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof CP_CARREGOU==='object') CP_CARREGOU.contas=true;
     if(typeof cpAtualizarBadge==='function') cpAtualizarBadge();
+    if(typeof cpGerarAutomatico==='function') cpGerarAutomatico();
     if((location.hash||'').slice(1)==='contas') VIEWS.contas();
   },e=>console.error('contas_pagar',e)));
   LISTENERS.push(db.collection('folha_pagamento').onSnapshot(sn=>{
@@ -6061,17 +6065,20 @@ function cpCaiNoMes(f,ano,mes){
   if(f.ativo===false) return false;
   if(!f.recorrente) return false;
   const passo=(CP_PERIOD[f.periodicidade]||CP_PERIOD.mensal)[1];
-  if(passo===1) return true;
   const ini=f.mesInicial||cpComp(ano,mes);
   const [ia,im]=ini.split('-').map(Number);
   const diff=(ano-ia)*12+(mes-im);
-  return diff>=0&&diff%passo===0;
+  if(diff<0) return false;                 /* ainda não começou */
+  if(f.mesFinal){ const [fa,fm]=String(f.mesFinal).split('-').map(Number);
+    if((ano-fa)*12+(mes-fm)>0) return false; }
+  return passo===1||diff%passo===0;
 }
 
 /* =========================================================================
    TELA
    ========================================================================= */
 VIEWS.contas=function(){
+  cpGerarAutomatico();
   const h=new Date();
   if(CP.mes===null){ CP.mes=h.getMonth()+1; CP.ano=h.getFullYear(); }
   const ano=Number(CP.ano), mes=Number(CP.mes), comp=cpComp(ano,mes);
@@ -6203,6 +6210,68 @@ async function cpGerarMes(){
   }catch(e){ console.error(e); toast('Erro ao lançar as contas do mês.','err'); }
 }
 
+
+/* ---------- lança sozinho os próximos meses ---------- */
+let __cpGerou=false, __cpGerando=false;
+/* só posso lançar depois que as duas coleções chegaram — senão duplico */
+const CP_CARREGOU={fixas:false,contas:false};
+function cpCompetencias(f,mesesAdiante){
+  const out=[], h=new Date();
+  let y=h.getFullYear(), m=h.getMonth()+1;
+  const n=(mesesAdiante!=null?mesesAdiante:(f.mesesAdiante!=null?f.mesesAdiante:3));
+  for(let k=0;k<=n;k++){
+    if(cpCaiNoMes(f,y,m)) out.push({ano:y,mes:m});
+    m++; if(m>12){m=1;y++;}
+  }
+  return out;
+}
+/* data do lançamento já com o ajuste de dia útil, se a conta pedir */
+function cpDataLanc(f,ano,mes){
+  const bruta=cpDataDoMes(ano,mes,f.diaVencimento||1);
+  const aj=f.ajuste||'manter';
+  if(aj==='manter'||typeof agAjustaDiaUtil!=='function') return {data:bruta,original:bruta};
+  const d=agAjustaDiaUtil(bruta,aj,f.feriados!==false);
+  return {data:d,original:bruta};
+}
+async function cpGerarAutomatico(force){
+  if(!CP_CARREGOU.fixas||!CP_CARREGOU.contas) return;   /* espero os dados chegarem */
+  if(__cpGerando) return;
+  if(!CONTAS_FIXAS.length) return;
+  if(__cpGerou&&!force) return;
+  __cpGerou=true; __cpGerando=true;
+  const novas=[];
+  CONTAS_FIXAS.filter(f=>f.ativo!==false&&f.recorrente&&f.autoLancar!==false).forEach(f=>{
+    cpCompetencias(f).forEach(({ano,mes})=>{
+      const comp=cpComp(ano,mes);
+      if(CONTAS.some(c=>c.contaFixaId===f.id&&c.competencia===comp)) return;
+      novas.push({f,ano,mes,comp});
+    });
+  });
+  if(!novas.length){ __cpGerando=false; return; }
+  try{
+    const lote=db.batch();
+    novas.slice(0,150).forEach(({f,ano,mes,comp})=>{
+      const dt=cpDataLanc(f,ano,mes);
+      lote.set(db.collection('contas_pagar').doc(),{
+        contaFixaId:f.id, nome:f.nome, categoria:f.categoria||'outro', fornecedor:f.fornecedor||null,
+        competencia:comp, vencimento:dt.data, vencimentoOriginal:dt.original!==dt.data?dt.original:null,
+        valor:Number(f.valorPadrao)||0, valorPago:null, status:'previsto', recorrente:true,
+        avisarAgenda:f.avisarAgenda!==false, formaPagamento:f.formaPagamento||null,
+        observacoes:null, criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp(),
+        criadoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin', origem:'auto'});
+    });
+    await lote.commit();
+    console.log('[contas] '+novas.length+' lancamento(s) futuros criados');
+    setTimeout(()=>cpSincronizarAgenda(),900);
+  }catch(e){ console.error('gerar contas',e); __cpGerou=false; }
+  finally{ setTimeout(()=>{__cpGerando=false;},1500); }
+}
+function cpProximas(f,qtd){
+  const hoje=cpHoje();
+  return cpCompetencias(f,14).map(({ano,mes})=>cpDataLanc(f,ano,mes))
+    .filter(x=>x.data>=hoje).slice(0,qtd||4);
+}
+
 /* ---------- cadastro das contas fixas ---------- */
 function cpViewFixas(){
   const fs=CONTAS_FIXAS.slice().sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
@@ -6217,7 +6286,7 @@ function cpViewFixas(){
     <p style="color:var(--text-2);font-size:.85rem;margin-bottom:14px">
       Cadastre uma vez o nome, a categoria, o dia que costuma vencer e o valor de costume. Todo mês você lança tudo num clique e só ajusta o que mudou.</p>
     ${fs.length?`<div class="tbl-wrap"><table><thead><tr>
-      <th>Conta</th><th>Categoria</th><th>Recorrência</th><th>Dia</th><th style="text-align:right">Valor de costume</th><th>Agenda</th><th>Status</th><th></th>
+      <th>Conta</th><th>Categoria</th><th>Recorrência</th><th>Dia</th><th style="text-align:right">Valor de costume</th><th>Próximas datas</th><th>Agenda</th><th>Status</th><th></th>
     </tr></thead><tbody>
     ${fs.map(f=>{const cat=CP_CATS[f.categoria]||CP_CATS.outro;
       return `<tr>
@@ -6226,6 +6295,10 @@ function cpViewFixas(){
         <td>${f.recorrente?(CP_PERIOD[f.periodicidade]||CP_PERIOD.mensal)[0]:'<span style="color:var(--text-3)">Avulsa</span>'}</td>
         <td>${f.recorrente?('dia '+(f.diaVencimento||1)):'—'}</td>
         <td style="text-align:right">${f.valorPadrao?cpMoeda(f.valorPadrao):'<span style="color:var(--text-3)">a informar</span>'}</td>
+        <td style="font-size:.79rem">${f.recorrente?(function(){const ps=cpProximas(f,3);
+          return ps.length?ps.map(x=>fmtData(x.data)+(x.original!==x.data?'*':'')).join(' · ')+
+            (f.autoLancar===false?'<div style="font-size:.71rem;color:var(--warn)">lançamento manual</div>':'')
+          :'<span style="color:var(--text-3)">—</span>';})():'<span style="color:var(--text-3)">—</span>'}</td>
         <td>${f.avisarAgenda!==false?'<i class="fas fa-bell" style="color:var(--brand)" title="Avisa na agenda"></i>':'<span style="color:var(--text-3)">—</span>'}</td>
         <td>${statusBadge(f.ativo===false?'Inativa':'Ativa',f.ativo===false?'var(--text-3)':'var(--ok)')}</td>
         <td style="white-space:nowrap">
@@ -6312,9 +6385,22 @@ function cpModalFixa(id){
           <div class="form-row" style="margin:0"><label>Valor de costume</label>
             <input type="text" id="cfValor" value="${f.valorPadrao!=null?String(f.valorPadrao).replace('.',','):''}" placeholder="0,00"></div>
         </div>
-        <div class="form-row" style="margin:12px 0 0"><label>A partir de qual mês</label>
-          <input type="month" id="cfMesIni" value="${esc(f.mesInicial||cpComp(new Date().getFullYear(),new Date().getMonth()+1))}">
-          <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">Usado para contar trimestre, semestre e ano. Para mensal, tanto faz.</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+          <div class="form-row" style="margin:0"><label>A partir de qual mês</label>
+            <input type="month" id="cfMesIni" value="${esc(f.mesInicial||cpComp(new Date().getFullYear(),new Date().getMonth()+1))}" onchange="cpPreviewFixa()">
+            <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">Usado para contar trimestre, semestre e ano.</div></div>
+          <div class="form-row" style="margin:0"><label>Lançar com antecedência de</label>
+            <select id="cfAdiante" onchange="cpPreviewFixa()">
+              ${[1,2,3,6,12].map(n=>`<option value="${n}" ${(f.mesesAdiante!=null?f.mesesAdiante:3)===n?'selected':''}>${n} ${n===1?'mês':'meses'}</option>`).join('')}</select>
+            <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">Já deixa os próximos meses lançados e na agenda.</div></div>
+        </div>
+        <div class="form-row" style="margin:12px 0 0"><label>Se o vencimento cair em fim de semana ou feriado</label>
+          <select id="cfAjuste" onchange="cpPreviewFixa()">
+            <option value="manter" ${(f.ajuste||'manter')==='manter'?'selected':''}>Manter na data (boleto costuma aceitar no próximo dia útil)</option>
+            <option value="antes" ${f.ajuste==='antes'?'selected':''}>Antecipar para o último dia útil antes</option>
+            <option value="depois" ${f.ajuste==='depois'?'selected':''}>Adiar para o próximo dia útil</option>
+          </select></div>
+        <div id="cfPreview" style="margin-top:12px;font-size:.82rem;color:var(--brand-dark);background:var(--surface);border-radius:9px;padding:10px 13px"></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div class="form-row"><label>Forma de pagamento</label>
@@ -6324,16 +6410,42 @@ function cpModalFixa(id){
           <option value="1" ${f.ativo!==false?'selected':''}>Ativa</option>
           <option value="0" ${f.ativo===false?'selected':''}>Inativa (para de lançar)</option></select></div>
       </div>
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.87rem;background:var(--surface-2);padding:11px 14px;border-radius:10px">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.87rem;background:var(--surface-2);padding:11px 14px;border-radius:10px;margin-bottom:10px">
         <input type="checkbox" id="cfAgenda" ${f.avisarAgenda!==false?'checked':''} style="width:auto">
         <span><b>Avisar na Agenda</b> — cria uma ação no dia do vencimento, e dar baixa aqui conclui a ação lá.</span></label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.87rem;background:var(--surface-2);padding:11px 14px;border-radius:10px">
+        <input type="checkbox" id="cfAuto" ${f.autoLancar!==false?'checked':''} style="width:auto">
+        <span><b>Lançar sozinho todo mês</b> — sem isso, você lança manualmente pelo botão do mês.</span></label>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="cpSalvarFixa()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+  cpPreviewFixa();
 }
 function cpToggleRec(){
   const rec=document.getElementById('cfRec').value==='1';
   document.getElementById('cfBoxRec').style.display=rec?'block':'none';
+  cpPreviewFixa();
+}
+function cpLerFixa(){
+  const g=i=>document.getElementById(i);
+  const rec=g('cfRec').value==='1';
+  return { nome:g('cfNome').value.trim(), recorrente:rec, ativo:true,
+    periodicidade:rec?g('cfPer').value:null,
+    diaVencimento:rec?(parseInt(g('cfDia').value)||1):null,
+    valorPadrao:rec?cpNum(g('cfValor').value):null,
+    mesInicial:rec?(g('cfMesIni').value||null):null,
+    mesesAdiante:rec?(parseInt(g('cfAdiante').value)||3):3,
+    ajuste:rec?g('cfAjuste').value:'manter', feriados:true };
+}
+function cpPreviewFixa(){
+  const el=document.getElementById('cfPreview'); if(!el) return;
+  const f=cpLerFixa();
+  if(!f.recorrente){ el.innerHTML=''; return; }
+  const ps=cpProximas(f,4);
+  if(!ps.length){ el.innerHTML='<i class="fas fa-circle-info"></i> Sem datas na janela — confira a periodicidade e o mês inicial.'; return; }
+  el.innerHTML='<b><i class="fas fa-calendar-check"></i> Vou lançar em:</b> '+ps.map(x=>
+    fmtData(x.data)+(x.original!==x.data?` <span style="color:var(--warn)">(era ${fmtData(x.original)})</span>`:'')).join(' · ')
+    +(f.valorPadrao?` <span style="color:var(--text-3)">· ${cpMoeda(f.valorPadrao)} cada</span>`:'');
 }
 async function cpSalvarFixa(){
   const id=document.getElementById('cfId').value;
@@ -6348,13 +6460,18 @@ async function cpSalvarFixa(){
     valorPadrao:rec?cpNum(document.getElementById('cfValor').value):null,
     mesInicial:rec?(document.getElementById('cfMesIni').value||null):null,
     formaPagamento:document.getElementById('cfForma').value||null,
+    mesesAdiante:rec?(parseInt(document.getElementById('cfAdiante').value)||3):null,
+    ajuste:rec?document.getElementById('cfAjuste').value:null,
+    feriados:true,
+    autoLancar:document.getElementById('cfAuto').checked,
     avisarAgenda:document.getElementById('cfAgenda').checked,
     ativo:document.getElementById('cfAtivo').value==='1',
     atualizadoEm:FV.serverTimestamp() };
   try{
     if(id) await db.collection('contas_fixas').doc(id).update(dados);
     else { dados.criadoEm=FV.serverTimestamp(); await db.collection('contas_fixas').add(dados); }
-    closeModal(); toast('Conta salva.','ok');
+    closeModal(); toast('Conta salva — já lancei os próximos meses.','ok','Pronto');
+    setTimeout(()=>cpGerarAutomatico(true),900);
   }catch(e){ console.error(e); toast('Erro ao salvar a conta.','err'); }
 }
 async function cpExcluirFixa(id){
@@ -6514,13 +6631,18 @@ function cpAcaoDe(id){
   return (typeof AGENDA!=='undefined'?AGENDA:[]).find(t=>t.sugestaoChave===cpChave(id));
 }
 /* cria/atualiza as ações das contas em aberto que pedem aviso */
+let __cpAgSync=false; const __cpAgFeitas=new Set();
 async function cpSincronizarAgenda(){
   if(typeof AGENDA==='undefined') return;
+  if(__cpAgSync) return;                 /* evita criar a mesma ação duas vezes */
+  __cpAgSync=true;
   const eu=(CURRENT_USER&&CURRENT_USER.email)||'admin';
   const pend=CONTAS.filter(c=>c.status!=='pago'&&c.avisarAgenda!==false);
   try{
     for(const c of pend){
       const a=cpAcaoDe(c.id);
+      if(!a&&__cpAgFeitas.has(cpChave(c.id))) continue;   /* já pedi, o listener ainda não voltou */
+      if(!a) __cpAgFeitas.add(cpChave(c.id));
       const dados={ titulo:'Pagar '+c.nome+(c.valor?' — '+cpMoeda(c.valor):''),
         descricao:'Conta a pagar'+(c.fornecedor?' · '+c.fornecedor:'')+(c.formaPagamento?' · '+c.formaPagamento:''),
         data:c.vencimento, tipo:'financeiro', prioridade:'normal',
@@ -6532,6 +6654,7 @@ async function cpSincronizarAgenda(){
         status:'aberta',criadoPor:eu,criadoEm:FV.serverTimestamp()});
     }
   }catch(e){ console.warn('sincronizar agenda das contas',e&&e.code); }
+  finally{ __cpAgSync=false; }
 }
 /* dar baixa conclui a ação lá */
 async function cpFecharAcaoAgenda(id,excluir){
