@@ -421,6 +421,8 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
 <!-- pdf.js (leitor de propostas) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 /* ==========================================================================
    LEITOR DE PROPOSTAS — motor de extração por seguradora
@@ -1047,11 +1049,14 @@ function setActive(route){
   document.querySelectorAll('.nav-item').forEach(a=>a.classList.toggle('active',a.dataset.route===route));
 }
 function router(){
-  const route=(location.hash||'#dashboard').slice(1);
+  const bruto=(location.hash||'#dashboard').slice(1);
+  const barra=bruto.indexOf('/');
+  const route=barra<0?bruto:bruto.slice(0,barra);
+  const param=barra<0?undefined:decodeURIComponent(bruto.slice(barra+1));
   setActive(route);
   closeSidebar();
   const fn=VIEWS[route];
-  if(fn){ fn(); } else { renderPlaceholder(route); }
+  if(fn){ fn(param); } else { renderPlaceholder(route); }
 }
 window.addEventListener('hashchange',router);
 
@@ -1317,6 +1322,7 @@ function kanbanCard(l,col){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       ${orig?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);font-size:.66rem">${esc(orig)}</span>`:'<span></span>'}
       <div onclick="event.stopPropagation()" style="display:flex;gap:2px">
+        <button class="kb-mv" title="Ler propostas e montar o orçamento" onclick="ppDoLead('${l.id}')"><i class="fas fa-scale-balanced"></i></button>
         ${idx>0?`<button class="kb-mv" title="Voltar fase" onclick="moverFase('${l.id}','${KANBAN[idx-1].key}')"><i class="fas fa-chevron-left"></i></button>`:''}
         ${idx<KANBAN.length-1?`<button class="kb-mv" title="Avançar fase" onclick="moverFase('${l.id}','${KANBAN[idx+1].key}')"><i class="fas fa-chevron-right"></i></button>`:''}
       </div></div></div>`;
@@ -2581,7 +2587,9 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
     <div class="modal-body">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-weight:700;font-size:.85rem"><i class="fas fa-user" style="color:var(--brand)"></i> Dados do contato</div>
-        <button class="btn btn-ghost btn-sm" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> ${c.orcamentoId?'Ver orçamento':'Ler propostas'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:14px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
         <div class="mov-f"><div class="k">WhatsApp</div><div class="v">${esc(c.whatsapp||c.telefone)||'-'} ${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}</div></div>
@@ -6683,6 +6691,1207 @@ function cpExportar(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
   a.download='contas-'+comp+'.csv'; document.body.appendChild(a); a.click(); a.remove();
   toast('CSV das contas gerado.','ok','Exportado');
+}
+
+</script>
+  <script>
+/* =========================================================================
+   LEITURA DE PROPOSTAS (PDF) E ORÇAMENTO COMPARATIVO DA CORRETORA
+   - lê o PDF no próprio navegador (pdf.js), sem servidor e sem custo
+   - entende Porto, Azul, HDI, Bradesco, Tokio Marine e Yelum
+   - monta um comparativo, gera PDF e um link para o cliente
+   ========================================================================= */
+
+/* ---------- utilidades de texto ---------- */
+function ppNum(s){
+  if(s==null) return null;
+  s=String(s).replace(/R\$|US\$|U\$/g,'').trim();
+  if(!/\d/.test(s)) return null;
+  s=s.replace(/\s/g,'');
+  if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
+  else if((s.match(/\./g)||[]).length>1) s=s.replace(/\./g,'');
+  const n=parseFloat(s);
+  return isNaN(n)?null:n;
+}
+const ppMoeda=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+function ppData(s){                       /* dd/mm/aaaa -> aaaa-mm-dd */
+  if(!s) return null;
+  const m=String(s).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return m?`${m[3]}-${m[2]}-${m[1]}`:null;
+}
+function ppCpf(s){
+  if(!s) return null;
+  const d=String(s).replace(/\D/g,'');
+  if(d.length!==11) return null;
+  return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4');
+}
+function ppLimpa(s){ return String(s||'').replace(/\s+/g,' ').trim(); }
+/* pega todos os valores em dinheiro de uma linha */
+function ppValores(l){
+  const out=[]; const re=/(?:R\$|US\$|U\$)?\s?(\d{1,3}(?:\.\d{3})*,\d{2})/g; let m;
+  while((m=re.exec(l))){
+    if(l.charAt(m.index+m[0].length)==='%') continue;      /* 100,00% não é dinheiro */
+    out.push({txt:m[0].trim(),n:ppNum(m[1]),i:m.index});
+  }
+  return out;
+}
+
+/* ---------- reconstrói as linhas do PDF a partir do pdf.js ---------- */
+/* o pdf.js entrega pedaços soltos com coordenada; aqui eu remonto linha a
+   linha, respeitando as colunas, para os parsers lerem como se fosse texto */
+function ppLinhasDeItens(items){
+  const linhas=[];
+  items.forEach(it=>{
+    const s=it.str; if(!s||!s.trim()) return;
+    const x=it.transform[4], y=Math.round(it.transform[5]*2)/2;
+    const alt=Math.abs(it.transform[3])||10;
+    const larg=it.width||(s.length*alt*0.5);
+    let ln=linhas.find(l=>Math.abs(l.y-y)<=2.2);
+    if(!ln){ ln={y,partes:[]}; linhas.push(ln); }
+    ln.partes.push({x,fim:x+larg,s,cw:larg/Math.max(s.length,1)});
+  });
+  linhas.sort((a,b)=>b.y-a.y);
+  return linhas.map(l=>{
+    l.partes.sort((a,b)=>a.x-b.x);
+    let txt='', fim=null, cw=5;
+    l.partes.forEach(p=>{
+      if(p.cw>0.5) cw=p.cw;
+      if(fim===null){ txt=' '.repeat(Math.max(0,Math.round(p.x/cw)))+p.s; }
+      else{
+        const vao=p.x-fim, esp=Math.round(vao/cw);
+        txt+=' '.repeat(esp>0?esp:(vao>cw*0.08?1:0))+p.s;
+      }
+      fim=p.fim;
+    });
+    return txt.replace(/\s+$/,'');
+  });
+}
+
+/* ---------- de que seguradora é esse PDF? ---------- */
+function ppIdentifica(txt){
+  const t=txt.toLowerCase();
+  if(t.includes('tokio marine')) return 'tokio';
+  if(t.includes('yelum')) return 'yelum';
+  if(t.includes('hdi seguros')||t.includes('hdi auto perfil')) return 'hdi';
+  if(t.includes('bradesco auto/re')) return 'bradesco';
+  if(t.includes('azul tradicional')||t.includes('azul seguros')) return 'azul';
+  if(t.includes('porto seguro')||t.includes('portoplus')||t.includes('porto bank')) return 'porto';
+  return null;
+}
+const PP_CIAS={
+  porto:{nome:'Porto Seguro',cor:'#00539f'}, azul:{nome:'Azul Seguros',cor:'#0091d5'},
+  hdi:{nome:'HDI Seguros',cor:'#00963f'}, bradesco:{nome:'Bradesco Seguros',cor:'#cc092f'},
+  tokio:{nome:'Tokio Marine',cor:'#c8102e'}, yelum:{nome:'Yelum Seguros',cor:'#e4002b'},
+  manual:{nome:'Outra seguradora',cor:'#5b6b7c'}
+};
+
+/* ---------- comissão pelo código do orçamento ---------- */
+function ppComissao(cia,txt){
+  let m;
+  if(cia==='porto'||cia==='azul'){          /* rodapé ...02.0011C.0000A... */
+    m=txt.match(/\.\d{2}\.00(\d\d)C\./); if(m) return {pct:+m[1],fonte:'achei no código do orçamento'};
+  }
+  if(cia==='hdi'){                          /* H 2 06 05 0001100-0004500 */
+    m=txt.match(/\b(\d{7})-\d{7}\b/); if(m) return {pct:parseInt(m[1],10)/100,fonte:'achei no código do cálculo'};
+  }
+  if(cia==='bradesco'){                     /* CPD: 518594 - 1100 */
+    m=txt.match(/CPD:?\s*\d+\s*-\s*(\d{3,4})/i); if(m) return {pct:parseInt(m[1],10)/100,fonte:'achei no CPD do corretor'};
+  }
+  if(cia==='tokio'){                        /* TSNC1100ADC... */
+    m=txt.match(/TSNC(\d{4})/); if(m) return {pct:parseInt(m[1],10)/100,fonte:'achei no código da cotação'};
+  }
+  return {pct:null,fonte:null};
+}
+
+/* =========================================================================
+   NORMALIZAÇÃO DAS COBERTURAS
+   cada seguradora escreve de um jeito; aqui tudo vira a mesma linha
+   ========================================================================= */
+const PP_COB=[
+  {k:'casco',   l:'Casco (colisão, incêndio, roubo e furto)', re:/compreensiv|^casco|colis[ãa]o, inc[êe]ndio|01-compreensiva/i},
+  {k:'carta',   l:'Carta verde (Mercosul)',        re:/carta verde|extens[ãa]o de per[íi]metro|mercosul/i},
+  {k:'rcf_dm',  l:'Danos materiais a terceiros',   re:/danos materiais/i},
+  {k:'rcf_dc',  l:'Danos corporais a terceiros',   re:/danos corporais|danos pessoais/i},
+  {k:'rcf_dme', l:'Danos morais e estéticos',      re:/danos mora/i},
+  {k:'app_m',   l:'Acidentes pessoais — morte',    re:/app.*morte|morte p\/ passageiro|passageiros?.*morte/i},
+  {k:'app_i',   l:'Acidentes pessoais — invalidez',re:/invalidez/i},
+  {k:'app_dmho',l:'Despesas médicas hospitalares', re:/dmho|desp.*m[ée]dic/i},
+  {k:'app',     l:'Acidentes pessoais de passageiros', re:/acidentes pessoais passageiros/i},
+  {k:'vidros',  l:'Vidros, faróis, lanternas e retrovisores', re:/vidros?|para-?brisa/i},
+  {k:'farois',  l:'Faróis, lanternas e retrovisores', re:/far[óo]is|lanternas/i},
+  {k:'assist',  l:'Assistência 24 horas',          re:/assist[êe]nc|assist auto|assis\. dia|vip auto|km adicional|reboque/i},
+  {k:'reserva', l:'Carro reserva',                 re:/carro reserva|auto reserva|cr manual|di[áa]rias/i},
+  {k:'roda',    l:'Roda, pneu e suspensão',        re:/roda|pneu|suspens/i},
+  {k:'reparos', l:'Pequenos reparos / martelinho', re:/pequenos reparos|martelinho|repare f[áa]cil|reparo r[áa]pido|lataria|reparo abaixo da franquia/i},
+  {k:'parachoque',l:'Troca de para-choque',        re:/para-?choque/i},
+  {k:'buracos', l:'Proteção contra buracos',       re:/buraco/i},
+  {k:'defesa',  l:'Custos de defesa',              re:/custos de defesa/i},
+  {k:'extras',  l:'Despesas extraordinárias',      re:/despesa extraordin/i},
+  {k:'outros',  l:'Outras coberturas',             re:/./}
+];
+/* deixa o limite apresentável: 0,00 e vazio não são limite */
+function ppLmiTexto(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number') return v>0?ppMoeda(v):null;
+  const s=String(v).trim();
+  if(/^(0|0,00|0\.00|R\$ ?0,00|—|-)$/.test(s)) return null;
+  if(/^100[.,]00\s*%$/.test(s)||/^100\s*%$/.test(s)) return '100% da tabela FIPE';
+  const us=s.match(/^U\$?S?\$?\s*([\d.,]+)$/);
+  if(us){ let t=us[1]; let n;
+    if(/,\d{3}/.test(t)||/\.\d{2}$/.test(t)) n=parseFloat(t.replace(/,/g,''));
+    else n=parseFloat(t.replace(/\./g,'').replace(',','.'));
+    if(!isNaN(n)) return 'US$ '+n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  const n=ppNum(s);
+  if(n!=null&&!/[a-zA-Z]/.test(s)) return n>0?ppMoeda(n):null;
+  return s;
+}
+function ppChaveCob(nome){
+  const n=ppLimpa(nome);
+  for(const c of PP_COB){ if(c.re.test(n)) return c.k; }
+  return 'outros';
+}
+const ppRotuloCob=k=>(PP_COB.find(c=>c.k===k)||{}).l||k;
+
+/* =========================================================================
+   PARSERS POR SEGURADORA
+   cada um devolve o mesmo formato
+   ========================================================================= */
+function ppVazio(cia){
+  return { cia, seguradora:(PP_CIAS[cia]||PP_CIAS.manual).nome, produto:null, cotacao:null,
+    validade:null, vigenciaIni:null, vigenciaFim:null,
+    cliente:{}, veiculo:{}, franquia:{}, coberturas:[], franquiasDetalhe:[],
+    premioLiquido:null, iof:null, premioTotal:null, parcelas:[], comissaoPct:null, comissaoFonte:null, avisos:[] };
+}
+/* acha o bloco entre dois marcadores */
+function ppBloco(L,de,ate){
+  const i=L.findIndex(l=>de.test(l)); if(i<0) return [];
+  let j=L.length;
+  for(let k=i+1;k<L.length;k++){ if(ate.test(L[k])){ j=k; break; } }
+  return L.slice(i+1,j);
+}
+
+/* ---------------- PORTO / AZUL ---------------- */
+function ppPortoAzul(L,txt,cia){
+  const o=ppVazio(cia);
+  let m;
+  o.produto=ppLimpa((L[1]||'').replace(/v\d\.\d/,''))||null;
+  const iOrc=L.findIndex(l=>/Or[çc]amento\s+Oferta\s+Vers/i.test(l));
+  if(iOrc>=0&&L[iOrc+1]){
+    const d=L[iOrc+1];
+    m=d.match(/(\d{8,})/); if(m) o.cotacao=m[1];
+    const ds=d.match(/(\d{2}\/\d{2}\/\d{4})/g)||[];
+    if(ds[1]) o.validade=ppData(ds[1]);
+    if(ds[2]) o.vigenciaIni=ppData(ds[2]);
+    if(ds[3]) o.vigenciaFim=ppData(ds[3]);
+  }
+  const iSeg=L.findIndex(l=>/^\s*Segurado\(a\)/i.test(l));
+  if(iSeg>=0&&L[iSeg+1]){
+    const d=L[iSeg+1];
+    o.cliente.cpf=ppCpf((d.match(/(\d{3}\.\d{3}\.\d{3}-\d{2})/)||[])[1]);
+    o.cliente.nascimento=ppData((d.match(/(\d{2}\/\d{2}\/\d{4})/)||[])[1]);
+    o.cliente.nome=ppLimpa(d.trim().split(/\s{2,}/)[0]);
+  }
+  const iVei=L.findIndex(l=>/Placa\s+Chassi\s+Ve[íi]culo/i.test(l));
+  if(iVei>=0&&L[iVei+1]){
+    const d=L[iVei+1], p=d.trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.placa=ppLimpa(p[0]); o.veiculo.chassi=ppLimpa(p[1]);
+    let desc=ppLimpa(p.slice(2).join(' '));
+    m=desc.match(/(\d{4})\s*\/\s*(\d{4})\s*$/);
+    if(m){ o.veiculo.anoFab=m[1]; o.veiculo.anoMod=m[2]; desc=desc.slice(0,m.index); }
+    o.veiculo.modelo=ppLimpa(desc.replace(/^\d+\s*-\s*-?\s*/,''));
+  }
+  const iZ=L.findIndex(l=>/Zero km\s+Fipe/i.test(l));
+  if(iZ>=0&&L[iZ+1]){ const p=L[iZ+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.fipe=ppLimpa(p[1]); o.veiculo.cambio=ppLimpa(p[2]); o.veiculo.portas=ppLimpa(p[p.length-1]); }
+  const iC=L.findIndex(l=>/Combust[íi]vel\s*$|^\s*Combust[íi]vel\s{2,}Categoria/i.test(l));
+  if(iC>=0&&L[iC+1]) o.veiculo.combustivel=ppLimpa(L[iC+1].trim().split(/\s{2,}/)[0]);
+  const iP=L.findIndex(l=>/CEP de pernoite/i.test(l));
+  if(iP>=0&&L[iP+1]) o.veiculo.cepPernoite=(L[iP+1].match(/(\d{5}-?\d{3})/)||[])[1]||null;
+
+  /* coberturas */
+  const cob=ppBloco(L,/Coberturas e servi[çc]os autom[óo]vel/i,/^\s*(Vidros|Assist[êe]ncias|Uso Interno)/i)
+    .concat(ppBloco(L,/^\s*Vidros\s*$/i,/Franquias:|Assist[êe]ncias/i))
+    .concat(ppBloco(L,/Servi[çc]os adicionais/i,/Benef[íi]cios inclusos|Descontos|Valor do seguro/i));
+  let ult=null;
+  cob.forEach(l=>{
+    if(/^\s*Descri[çc][ãa]o|LMI \(indeniza/i.test(l)) return;
+    const v=ppValores(l);
+    const temPremio=/R\$\s?\d/.test(l)&&v.length;
+    const nome=ppLimpa(l.trim().split(/\s{2,}/)[0]);
+    if(!nome) return;
+    /* linha só com um valor solto = continuação da franquia da linha de cima */
+    if(ult&&v.length===1&&/^R\$/.test(nome)){ if(!ult.franquia) ult.franquia=nome;
+      else ult.franquia=ppLimpa(ult.franquia+' '+nome); return; }
+    if(!temPremio&&ult){ ult.nome=ppLimpa(ult.nome+' '+ppLimpa(l)); ult.chave=ppChaveCob(ult.nome); return; }
+    if(!temPremio) return;
+    const premio=v[v.length-1].n;
+    const partes=l.trim().split(/\s{2,}/).filter(Boolean);
+    let lmi=null, franq=null;
+    partes.slice(1,-1).forEach(p=>{
+      if(/%/.test(p)&&!lmi) lmi=ppLimpa(p);
+      else if(/R\$/.test(p)){ if(!lmi) lmi=ppLimpa(p); else if(!franq) franq=ppLimpa(p); }
+      else if(/Obrigat/i.test(p)&&!franq) franq=ppLimpa(p);
+    });
+    ult={nome,chave:ppChaveCob(nome),lmi,franquia:franq,premio,contratada:true};
+    o.coberturas.push(ult);
+  });
+  /* assistência costuma vir sem valor */
+  const ass=ppBloco(L,/^\s*Assist[êe]ncias\s*$/i,/Servi[çc]os adicionais|Benef[íi]cios/i);
+  ass.forEach(l=>{ if(/Descri[çc][ãa]o/i.test(l)) return;
+    if(/Gratuita|R\$/.test(l)){ const nome=ppLimpa(l.trim().split(/\s{2,}/)[0]);
+      if(nome) o.coberturas.push({nome,chave:'assist',lmi:null,franquia:null,
+        premio:/Gratuita/i.test(l)?0:(ppValores(l).pop()||{}).n,contratada:true}); }});
+  /* franquias dos vidros */
+  const iFr=L.findIndex(l=>/^\s*Franquias:/i.test(l));
+  if(iFr>=0){
+    let fr=L[iFr];
+    for(let k=iFr+1;k<L.length;k++){ if(!/R\$/.test(L[k])||/^\s*(Assist|Servi|Descri)/i.test(L[k])) break; fr+=' '+L[k]; }
+    ppLimpa(fr).replace(/^Franquias:\s*/i,'').split(' / ').forEach(p=>{
+      const mm=p.match(/(.+?):\s*R?\$?\s*([\d.,]+)/); if(!mm) return;
+      o.franquiasDetalhe.push({item:ppLimpa(mm[1]),valor:ppNum(mm[2])}); });
+  }
+  /* franquia principal */
+  const cc=o.coberturas.find(c=>c.chave==='casco');
+  if(cc&&cc.franquia){ o.franquia={tipo:/Obrigat/i.test(cc.franquia)?'Obrigatória':'',valor:ppNum(cc.franquia)}; }
+
+  const lq=L.find(l=>/Valor l[íi]quido/i.test(l)); if(lq) o.premioLiquido=(ppValores(lq).pop()||{}).n;
+  const io=L.find(l=>/^\s*.*\bIOF\b/.test(l)&&/R\$/.test(l)); if(io) o.iof=(ppValores(io).pop()||{}).n;
+  const tt=L.find(l=>/Valor total/i.test(l)); if(tt) o.premioTotal=(ppValores(tt).pop()||{}).n;
+  ppParcelasPorto(L,o);
+  return o;
+}
+function ppParcelasPorto(L,o){
+  const i=L.findIndex(l=>/1 BOLETO \/ DEMAIS C\. CORRENTE|TODAS CART[ÃA]O DE CR[ÉE]DITO - DEMAIS BANDEIRAS/i.test(l));
+  if(i<0) return;
+  for(let k=i+1;k<Math.min(i+6,L.length);k++){
+    const v=ppValores(L[k]);
+    if(v.length>=6){ v.forEach((x,idx)=>o.parcelas.push({n:idx+1,valor:x.n,juros:false})); break; }
+  }
+}
+
+/* ---------------- HDI ---------------- */
+function ppHdi(L,txt){
+  const o=ppVazio('hdi'); let m;
+  o.produto='HDI Auto Perfil';
+  m=txt.match(/C[áa]lculo\s*-\s*(\d+)/); if(m) o.cotacao=m[1];
+  m=txt.match(/COTA[ÇC][ÃA]O V[ÁA]LIDA AT[ÉE]\s*(\d{2}\/\d{2}\/\d{4})/i); if(m) o.validade=ppData(m[1]);
+  m=txt.match(/DIA\s*(\d{2}\/\d{2}\/\d{4})\s*[ÀA]S\s*24\s*HS DO DIA\s*(\d{2}\/\d{2}\/\d{4})/i);
+  if(m){ o.vigenciaIni=ppData(m[1]); o.vigenciaFim=ppData(m[2]); }
+  m=txt.match(/Proponente:\s*([^\n]*?)\s{2,}CPF:\s*(\d+)/); if(m){ o.cliente.nome=ppLimpa(m[1]); o.cliente.cpf=ppCpf(m[2]); }
+  m=txt.match(/Data de Nasc\.?:\s*(\d{2}\/\d{2}\/\d{4})/); if(m) o.cliente.nascimento=ppData(m[1]);
+  m=txt.match(/Sexo\s+(Feminino|Masculino)/i); if(m) o.cliente.sexo=m[1];
+  m=txt.match(/Estado Civil\s+([^\n]+)/); if(m) o.cliente.estadoCivil=ppLimpa(m[1]);
+  m=txt.match(/Ve[íi]culo:\s*\d+\s*-\s*([^\n]+?)\s*\(FIPE\s*([\d-]+)\)/);
+  if(m){ const p=m[1].split(' - ');
+    o.veiculo.marca=ppLimpa(p[0]); o.veiculo.modelo=ppLimpa(p.slice(1).join(' '));
+    o.veiculo.fipe=ppLimpa(m[2]); }
+  m=txt.match(/Ano\/Modelo:\s*(\d{4})\/(\d{4})/); if(m){ o.veiculo.anoFab=m[1]; o.veiculo.anoMod=m[2]; }
+  m=txt.match(/CEP Pernoite:\s*(\d+)/); if(m) o.veiculo.cepPernoite=m[1];
+  m=txt.match(/Combust[íi]vel:\s*([A-ZÇÃÕ-]+)/i); if(m) o.veiculo.combustivel=ppLimpa(m[1]);
+  m=txt.match(/Passageiros:\s*(\d+)/); if(m) o.veiculo.lotacao=m[1];
+
+  ppBloco(L,/Garantias de Auto/i,/PR[ÊE]MIO L[ÍI]QUIDO/i).forEach(l=>{
+    if(/^\s*Cobertura\s|L\.M\.I\./i.test(l)) return;
+    const nome=ppLimpa(l.trim().split(/\s{2,}/)[0]); if(!nome||nome.length<3) return;
+    if(/N[ãa]o Contratado/i.test(l)) { o.coberturas.push({nome,chave:ppChaveCob(nome),lmi:null,franquia:null,premio:0,contratada:false}); return; }
+    const v=ppValores(l); if(!v.length) return;
+    let lmi=null,premio=null,franq=null;
+    if(/^CASCO/i.test(nome)){ lmi='100% da tabela FIPE'; premio=v[0].n; franq=v[v.length-1].n; }
+    else if(v.length>=2){ lmi=v[0].n===v[1].n?null:v[0].txt; premio=v[1].n; if(v[0].n===0) { lmi=null; premio=v[1].n; } }
+    else premio=v[0].n;
+    if(/^CASCO/i.test(nome)) o.franquia={tipo:'Obrigatória',valor:franq};
+    o.coberturas.push({nome,chave:ppChaveCob(nome),lmi,franquia:franq,premio,contratada:premio>0});
+  });
+  const pl=L.find(l=>/PR[ÊE]MIO L[ÍI]QUIDO \(R\$\)/i.test(l)); if(pl) o.premioLiquido=(ppValores(pl)[0]||{}).n;
+  const io=L.find(l=>/I\.O\.F\. \(R\$\)/i.test(l)); if(io) o.iof=(ppValores(io)[0]||{}).n;
+  const tt=L.find(l=>/TOTAL [ÀA] VISTA \(R\$\)/i.test(l)); if(tt) o.premioTotal=(ppValores(tt)[0]||{}).n;
+  /* notas de franquia (*1)(*2)... */
+  L.filter(l=>/franquia de R\$/i.test(l)).forEach(l=>{
+    ppLimpa(l).split('.').forEach(p=>{ const m2=p.match(/(.+?)\s+com franquia de R\$\s*([\d.,]+)/i);
+      if(m2) o.franquiasDetalhe.push({item:ppLimpa(m2[1].replace(/^\(\*\d\)/,'')),valor:ppNum(m2[2])}); });
+  });
+  ppParcelasCol(L,o,/Cart[ãa]o de Cr[ée]dito D[ée]bito Em Conta|Plano Valor \(R\$\)/i);
+  return o;
+}
+function ppParcelasCol(L,o,re){
+  const i=L.findIndex(l=>re.test(l)); if(i<0) return;
+  for(let k=i+1;k<Math.min(i+16,L.length);k++){
+    const m=L[k].match(/^\s*(\d{1,2})\s?x\s+([\d.,]+)/);
+    if(m) o.parcelas.push({n:+m[1],valor:ppNum(m[2]),juros:false});
+  }
+}
+
+/* ---------------- BRADESCO ---------------- */
+function ppBradesco(L,txt){
+  const o=ppVazio('bradesco'); let m;
+  o.produto='Bradesco Auto — Tradicional';
+  m=txt.match(/N[ºo°]?\s*Cota[çc][ãa]o:\s*([\d/]+)/i); if(m) o.cotacao=m[1];
+  m=txt.match(/C[áa]lculo v[áa]lido at[ée]:\s*(\d{2}\/\d{2}\/\d{4})/i); if(m) o.validade=ppData(m[1]);
+  m=txt.match(/das 24h de (\d{2}\/\d{2}\/\d{4}) [àa]s 24h de (\d{2}\/\d{2}\/\d{4})/i);
+  if(m){ o.vigenciaIni=ppData(m[1]); o.vigenciaFim=ppData(m[2]); }
+  m=txt.match(/Nome:\s*([^\n]+)/); if(m) o.cliente.nome=ppLimpa(m[1].split(/\s{2,}/)[0]);
+  m=txt.match(/CPF\/CNPJ:\s*([\d.\-]{11,})/); if(m) o.cliente.cpf=ppCpf(m[1]);
+  m=txt.match(/Data Nasc\.?:\s*(\d{2}\/\d{2}\/\d{4})/); if(m) o.cliente.nascimento=ppData(m[1]);
+  m=txt.match(/Sexo:\s*(\w+)/); if(m) o.cliente.sexo=m[1];
+  m=txt.match(/Estado Civil:\s*([^\n]+)/); if(m) o.cliente.estadoCivil=ppLimpa(m[1].split(/\s{2,}/)[0]);
+  m=txt.match(/CEP de Pernoite:\s*([\d-]+)/i); if(m) o.veiculo.cepPernoite=m[1];
+  m=txt.match(/Tipo do Ve[íi]culo:\s*([^\n]+?)\s{2,}/); if(m) o.veiculo.modelo=ppLimpa(m[1]);
+  m=txt.match(/Marca:\s*([A-ZÇÃ ]+?)\s{2,}/); if(m) o.veiculo.marca=ppLimpa(m[1]);
+  m=txt.match(/Placa:\s*([A-Z0-9-]+)/); if(m) o.veiculo.placa=m[1];
+  m=txt.match(/Chassi:\s*([A-Z0-9]{10,})/); if(m) o.veiculo.chassi=m[1];
+  m=txt.match(/C[óo]digo FIPE:\s*(\d+)/i); if(m) o.veiculo.fipe=m[1];
+  m=txt.match(/Ano Fab\.?:\s*(\d{4})\s*Ano Mod\.?:\s*(\d{4})/i); if(m){ o.veiculo.anoFab=m[1]; o.veiculo.anoMod=m[2]; }
+  m=txt.match(/N[ºo°]?\s*Portas:\s*(\d+)/i); if(m) o.veiculo.portas=String(+m[1]);
+
+  /* LMI */
+  const lmi={};
+  (txt.match(/D\.M\.:\s*([\d.,]+)/)||[]).forEach&&0;
+  let x;
+  if((x=txt.match(/D\.M\.:\s*([\d.,]+)/))) lmi.rcf_dm=ppNum(x[1]);
+  if((x=txt.match(/D\.C\.:\s*([\d.,]+)/))) lmi.rcf_dc=ppNum(x[1]);
+  if((x=txt.match(/D\. ?Morais\.?:\s*([\d.,]+)/i))) lmi.rcf_dme=ppNum(x[1]);
+  if((x=txt.match(/Morte p\/ Passageiro:\s*([\d.,]+)/i))) lmi.app_m=ppNum(x[1]);
+  if((x=txt.match(/Invalidez p\/ Passageiro:\s*([\d.,]+)/i))) lmi.app_i=ppNum(x[1]);
+  /* prêmios com etiqueta */
+  const pr=[['Auto:','casco','Casco (colisão, incêndio, roubo e furto)'],
+    ['Danos Materiais:','rcf_dm','Danos materiais a terceiros'],
+    ['Danos Corporais:','rcf_dc','Danos corporais a terceiros'],
+    ['Danos Morais:','rcf_dme','Danos morais e estéticos'],
+    ['APP - Morte:','app_m','Acidentes pessoais — morte'],
+    ['APP - Invalidez:','app_i','Acidentes pessoais — invalidez'],
+    ['DMH:','app_dmho','Despesas médicas hospitalares'],
+    ['Vidros:','vidros','Vidros, faróis, lanternas e retrovisores'],
+    ['Assis. Dia Noite:','assist','Assistência 24 horas'],
+    ['Carro Reserva:','reserva','Carro reserva']];
+  pr.forEach(([et,k,rot])=>{
+    /* a etiqueta tem que abrir a coluna, senão "Máquina de Vidros:" vira "Vidros:" */
+    const r=new RegExp('(?:^|\\s{2,})'+et.replace(/[.*+?^${}()|[\]]/g,'\\$&')+'\\s*([\\d.,]+)');
+    let mm=null;
+    for(const l of L){ mm=l.match(r); if(mm) break; }
+    if(!mm) return;
+    const v=ppNum(mm[1]);
+    o.coberturas.push({nome:rot,chave:k,lmi:lmi[k]||(k==='casco'?'100% da tabela FIPE':null),
+      franquia:null,premio:v,contratada:v>0});
+  });
+  /* o "Auto (A)" do Bradesco já embute vidros, assistência e carro reserva */
+  const cAuto=o.coberturas.find(c=>c.chave==='casco');
+  if(cAuto&&cAuto.premio){
+    const embutidos=o.coberturas.filter(c=>['vidros','assist','reserva'].includes(c.chave))
+      .reduce((s2,c)=>s2+(c.premio||0),0);
+    if(embutidos>0&&embutidos<cAuto.premio) cAuto.premio=Math.round((cAuto.premio-embutidos)*100)/100;
+  }
+  /* cláusulas contratadas que não têm prêmio separado */
+  ppBloco(L,/^\s*CL[ÁA]USULAS/i,/Este c[áa]lculo n[ãa]o pressup/i).forEach(l=>{
+    (ppLimpa(l).match(/\(\d{3}\)\s*[^(]+/g)||[]).forEach(p=>{
+      const nome=ppLimpa(p.replace(/^\(\d{3}\)\s*/,''));
+      if(!nome||nome.length<4) return;
+      if(/^valor mercado|^valor determinado/i.test(nome)) return;
+      if(/acidentes pessoais/i.test(nome)&&o.coberturas.some(c=>c.chave==='app_m')) return;
+      const k=ppChaveCob(nome);
+      const ja=o.coberturas.find(c=>c.chave===k);
+      if(ja){ ja.detalhe=ppLimpa((ja.detalhe?ja.detalhe+' · ':'')+nome); ja.contratada=true; return; }
+      o.coberturas.push({nome,chave:k,lmi:null,franquia:null,premio:null,contratada:true});
+    });
+  });
+  /* franquias */
+  ppBloco(L,/^\s*FRANQUIAS \(R\$\)/i,/^\s*PR[ÊE]MIOS \(R\$\)/i).forEach(l=>{
+    (ppLimpa(l).match(/[^:]+:\s*[\d.,]+(?:\s*\(Obrigat[óo]ria\))?/g)||[]).forEach(p=>{
+      const mm=p.match(/(.+?):\s*([\d.,]+)/); if(!mm) return;
+      const item=ppLimpa(mm[1]), val=ppNum(mm[2]); if(val==null) return;
+      if(/^Ve[íi]culo/i.test(item)) o.franquia={tipo:'Obrigatória',valor:val};
+      else if(val>0) o.franquiasDetalhe.push({item,valor:val});
+    });
+  });
+  if((x=txt.match(/L[ÍI]QUIDO \(A\+B\+C\):\s*([\d.,]+)/i))) o.premioLiquido=ppNum(x[1]);
+  if((x=txt.match(/IOF:\s*([\d.,]+)/i))) o.iof=ppNum(x[1]);
+  if((x=txt.match(/TOTAL A PAGAR:\s*([\d.,]+)/i))) o.premioTotal=ppNum(x[1]);
+  else if((x=txt.match(/TOTAL:\s*([\d.,]+)/i))) o.premioTotal=ppNum(x[1]);
+  /* parcelamento — coluna do cartão de crédito */
+  ppBloco(L,/^\s*PAGAMENTO \(R\$\)/i,/QUESTION[ÁA]RIO/i).forEach(l=>{
+    const mm=l.match(/^\s*(\d{1,2})x/); if(!mm) return;
+    const v=ppValores(l); if(v.length>=6) o.parcelas.push({n:+mm[1],valor:v[4].n,juros:false});
+  });
+  return o;
+}
+
+/* ---------------- TOKIO MARINE ---------------- */
+function ppTokio(L,txt){
+  const o=ppVazio('tokio'); let m;
+  o.produto='Tokio Marine Auto';
+  m=txt.match(/N[ºo°]\s*Cota[çc][ãa]o:\s*(\d+)\s*\|\s*Validade cota[çc][ãa]o:\s*(\d{2}\/\d{2}\/\d{4})\s*\|\s*Vig[êe]ncia:\s*(\d{2}\/\d{2}\/\d{4})\s*a\s*(\d{2}\/\d{2}\/\d{4})/i);
+  if(m){ o.cotacao=m[1]; o.validade=ppData(m[2]); o.vigenciaIni=ppData(m[3]); o.vigenciaFim=ppData(m[4]); }
+  const iP=L.findIndex(l=>/^\s*Proponente\s{2,}CPF\/CNPJ/i.test(l));
+  if(iP>=0&&L[iP+1]){ const p=L[iP+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.cliente.nome=ppLimpa(p[0]); o.cliente.cpf=ppCpf(p[1]);
+    if(p[3]) o.cliente.estadoCivil=ppLimpa(p[3]); }
+  const iV=L.findIndex(l=>/Chassi decodificado\s+Placa/i.test(l));
+  if(iV>=0&&L[iV+1]){ const p=L[iV+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.placa=ppLimpa(p[3]); o.veiculo.chassi=ppLimpa(p[4]); o.veiculo.anoMod=ppLimpa(p[5]); }
+  const iF=L.findIndex(l=>/^\s*Fabricante(\s*$|\s{2,}Ve[íi]culo)/i.test(l));
+  if(iF>=0&&L[iF+1]){ const p=L[iF+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.marca=ppLimpa(p[0]); if(p[1]) o.veiculo.modelo=ppLimpa(p[1]);
+    if(!o.veiculo.modelo&&L[iF+2]&&!/Combust/i.test(L[iF+2])) o.veiculo.modelo=ppLimpa(L[iF+2]); }
+  m=txt.match(/C[óo]digo FIPE[\s\S]{0,320}?(\d{6}-\d)/); if(m) o.veiculo.fipe=m[1];
+  m=txt.match(/CEP de pernoite[\s\S]{0,320}?(\d{5}-\d{3})/i); if(m) o.veiculo.cepPernoite=m[1];
+  const iCb=L.findIndex(l=>/^\s*Combust[íi]vel\s{2,}Lota[çc][ãa]o/i.test(l));
+  if(iCb>=0&&L[iCb+1]){ const p=L[iCb+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.combustivel=ppLimpa(p[0]); o.veiculo.lotacao=ppLimpa(p[1]); }
+  if(!o.veiculo.anoFab) o.veiculo.anoFab=o.veiculo.anoMod;
+
+  ppBloco(L,/Limite M[áa]ximo Indeniza[çc][ãa]o\s+Pr[êe]mio L[íi]quido/i,/Pr[êe]mio L[íi]quido total/i)
+    .forEach(l=>{
+      const v=ppValores(l); if(!v.length&&!/N[ãa]o contratada/i.test(l)) return;
+      const p=l.trim().split(/\s{2,}/).filter(Boolean);
+      const nome=ppLimpa(p[0]); if(!nome||nome.length<3) return;
+      const contratada=!/N[ãa]o contratada/i.test(l)&&!(v.length&&v[v.length-1].n===0);
+      let lmi=p.length>=3?ppLimpa(p[p.length-2]):null;
+      if(/Valor Referenciado|VMR/i.test(l)||/Colis[ãa]o, Inc[êe]ndio/i.test(nome)) lmi='100% da tabela FIPE';
+      o.coberturas.push({nome,chave:ppChaveCob(nome),lmi:contratada?lmi:null,franquia:null,
+        premio:contratada?(v[v.length-1]||{}).n:0,contratada});
+    });
+  /* o quadro de serviços (vidros, martelinho, roda, carro reserva) vem sem preço */
+  const iS=L.findIndex(l=>/^\s*Vidros\s{2,}Martelinho e para-choque/i.test(l));
+  if(iS>=0){
+    const par=(rot,val)=>{ if(!val||/^N[ãa]o possui/i.test(val)) return;
+      const k=ppChaveCob(rot); const ja=o.coberturas.find(c=>c.chave===k);
+      if(ja){ ja.detalhe=val; ja.contratada=true; return; }
+      o.coberturas.push({nome:rot,chave:k,lmi:null,franquia:null,premio:null,contratada:true,detalhe:val}); };
+    const c1=(L[iS+1]||'').trim().split(/\s{2,}/).filter(Boolean);
+    par('Vidros',c1[0]); par('Martelinho e para-choque',c1[1]); par('Roda, pneu e suspensão',c1[2]);
+    const iS2=L.findIndex(l=>/^\s*Logomarca \(vidros\)/i.test(l));
+    if(iS2>=0){ const c2=(L[iS2+1]||'').trim().split(/\s{2,}/).filter(Boolean);
+      par('Lataria e pintura',c2[1]); par('Carro reserva',c2[2]); }
+  }
+  const pl=L.find(l=>/Pr[êe]mio L[íi]quido total/i.test(l)); if(pl) o.premioLiquido=(ppValores(pl).pop()||{}).n;
+  /* total à vista: o destaque da capa vem quebrado em duas linhas */
+  const iT=L.findIndex(l=>/^\s*[àa] vista\s*$/i.test(l));
+  if(iT>0) for(let k=iT-1;k>=Math.max(0,iT-4);k--){
+    const v=ppValores(L[k]); if(v.length){ o.premioTotal=v[v.length-1].n; break; } }
+  if(o.premioTotal==null){ const t=L.find(l=>/[àa] vista/i.test(l)&&ppValores(l).length); if(t) o.premioTotal=(ppValores(t)[0]||{}).n; }
+  if(o.premioTotal!=null&&o.premioLiquido!=null) o.iof=Math.round((o.premioTotal-o.premioLiquido)*100)/100;
+  m=txt.match(/Indeniza[çc][ãa]o Parcial\s*-?\s*([^|\n]*?)\|\s*R\$\s*([\d.,]+)/i);
+  if(m) o.franquia={tipo:ppLimpa(m[1])||'Básica',valor:ppNum(m[2])};
+  if(!o.franquia.valor){ const f=L.find(l=>/Indeniza[çc][ãa]o Parcial do Ve[íi]culo/i.test(l));
+    if(f) o.franquia={tipo:'Básica',valor:(ppValores(f).pop()||{}).n}; }
+  /* grade de franquias de vidros/faróis */
+  L.forEach(l=>{ if(!/Parabrisa|Vigia|Farol|Lanterna|Retrovisor|Martelinho|Para-choque|Roda, Pneu/i.test(l)) return;
+    (ppLimpa(l).match(/([A-Za-zÀ-ú\/()\- ]+?)\s*R\$\s*([\d.,]+)/g)||[]).forEach(p=>{
+      const mm=p.match(/(.+?)\s*R\$\s*([\d.,]+)/); if(!mm) return;
+      const item=ppLimpa(mm[1]); if(item.length<3) return;
+      o.franquiasDetalhe.push({item,valor:ppNum(mm[2])}); }); });
+  /* parcelamento no cartão */
+  const iC=L.findIndex(l=>/^\s*Cart[ãa]o\s+Parcela \(R\$\)/i.test(l));
+  if(iC>=0) for(let k=iC+1;k<Math.min(iC+14,L.length);k++){
+    const mm=L[k].match(/^\s*(\d{1,2})\s+([\d.,]+)/); if(mm) o.parcelas.push({n:+mm[1],valor:ppNum(mm[2]),juros:!/Sem Juros/i.test(L[k])});
+  }
+  return o;
+}
+
+/* ---------------- YELUM ---------------- */
+function ppYelum(L,txt){
+  const o=ppVazio('yelum'); let m;
+  o.produto='Yelum Auto Perfil';
+  m=txt.match(/Cota[çc][ãa]o N[ºo°]?\s*\n?\s*(\d{6,})/); if(m) o.cotacao=m[1];
+  const iC=L.findIndex(l=>/Cota[çc][ãa]o N[ºo°]/i.test(l));
+  if(iC>=0&&L[iC+1]){ const d=L[iC+1];
+    if(!o.cotacao){ const mm=d.match(/(\d{6,})/); if(mm) o.cotacao=mm[1]; }
+    const ds=d.match(/(\d{2}\/\d{2}\/\d{4})/g)||[];
+    if(ds[0]) o.vigenciaIni=ppData(ds[0]); if(ds[1]) o.vigenciaFim=ppData(ds[1]); }
+  m=txt.match(/t[êe]m validade at[ée] o dia\s*(\d{2}\/\d{2}\/\d{4})/i); if(m) o.validade=ppData(m[1]);
+  const iN=L.findIndex(l=>/Nome do Segurado\(a\)\s+CPF\/CNPJ/i.test(l));
+  if(iN>=0&&L[iN+1]){ const p=L[iN+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.cliente.nome=ppLimpa(p[0]); o.cliente.cpf=ppCpf(p[1]);
+    o.cliente.nascimento=ppData((L[iN+1].match(/(\d{2}\/\d{2}\/\d{4})/)||[])[1]);
+    o.cliente.sexo=/Feminino/i.test(L[iN+1])?'Feminino':(/Masculino/i.test(L[iN+1])?'Masculino':null); }
+  m=txt.match(/Estado Civil[\s\S]{0,120}?\n[^\n]*?\s{2,}(Solteiro|Casado|Divorciado|Vi[úu]vo)[^\s]*/i);
+  if(m) o.cliente.estadoCivil=ppLimpa(m[1]);
+  const iP=L.findIndex(l=>/Pr[êe]mio L[íi]quido \(R\$\)/i.test(l));
+  if(iP>=0&&L[iP+1]){ const v=ppValores(L[iP+1]);
+    if(v.length>=2){
+      o.premioLiquido=v[0].n;
+      let iMax=0; v.forEach((x,i)=>{ if(x.n>v[iMax].n) iMax=i; });
+      o.premioTotal=v[iMax].n;
+      if(iMax>0) o.iof=v[iMax-1].n;
+    } }
+  if(o.premioTotal==null){ const av=L.find(l=>/^\s*[ÀA] vista/i.test(l)); if(av) o.premioTotal=(ppValores(av)[0]||{}).n; }
+  const iV=L.findIndex(l=>/C[óo]digo FIPE\s+Marca\/Tipo/i.test(l));
+  if(iV>=0&&L[iV+1]){ const p=L[iV+1].trim().split(/\s{2,}/).filter(Boolean);
+    o.veiculo.fipe=ppLimpa(p[0]); o.veiculo.modelo=ppLimpa(p[1]);
+    const an=(p[2]||'').match(/(\d{4})\/(\d{4})/); if(an){ o.veiculo.anoFab=an[1]; o.veiculo.anoMod=an[2]; }
+    o.veiculo.chassi=ppLimpa(p[3]); o.veiculo.placa=ppLimpa(p[4]); }
+  m=txt.match(/CEP de Pernoite[\s\S]{0,200}?\b(\d{5})\b/i); if(m) o.veiculo.cepPernoite=m[1];
+  m=txt.match(/Tipo de Franquia[\s\S]{0,200}?([\d.]+\s*-\s*OBRIGAT[ÓO]RIA)/i); if(m) o.franquia.tipo='Obrigatória';
+
+  let ult=null;
+  ppBloco(L,/Coberturas Contratadas\s+LMI/i,/Classe de B[ôo]nus|INFORMA[ÇC][ÕO]ES COMPLEMENTARES/i).forEach(l=>{
+    const v=ppValores(l);
+    const nome=ppLimpa(l.trim().split(/\s{2,}/)[0]);
+    if(!nome) return;
+    if(!v.length&&ult){ ult.nome=ppLimpa(ult.nome+' '+nome); ult.chave=ppChaveCob(ult.nome); return; }
+    if(v.length<1) return;
+    const cols=l.trim().split(/\s{2,}/).filter(Boolean);
+    if(cols.length<3) return;
+    let lmi=ppLimpa(cols[1]), premio=ppNum(cols[2]), franq=cols[3]!=null?ppNum(cols[3]):null;
+    if(premio==null){ premio=v[v.length-1].n; franq=null; }
+    if(/VMR/i.test(lmi)) lmi='100% da tabela FIPE';
+    ult={nome,chave:ppChaveCob(nome),lmi,franquia:franq||null,premio,contratada:premio>0};
+    if(/COMPREENSIVA/i.test(nome)&&franq) o.franquia={tipo:'Obrigatória',valor:franq};
+    o.coberturas.push(ult);
+  });
+  L.filter(l=>/Franquia|R\$\s?\d/.test(l)&&/\//.test(l)).forEach(l=>{
+    (ppLimpa(l).match(/([A-Za-zÀ-ú\-() .]+?)\s*R\$\s?([\d.,]+)/g)||[]).forEach(p=>{
+      const mm=p.match(/(.+?)\s*R\$\s?([\d.,]+)/); if(!mm) return;
+      let item=ppLimpa(mm[1].replace(/^[\/\-\s]+/,'').replace(/^.*?Franquia\s+/i,''));
+      if(item.length<4||item.length>45||/^\(?\d/.test(item)) return;
+      o.franquiasDetalhe.push({item,valor:ppNum(mm[2])}); }); });
+  const iF=L.findIndex(l=>/^\s*[ÀA] vista/i.test(l));
+  if(iF>=0) for(let k=iF+1;k<Math.min(iF+14,L.length);k++){
+    const mm=L[k].match(/^\s*1\s*\+\s*(\d+)/); if(!mm) continue;
+    const v=ppValores(L[k]); if(v.length) o.parcelas.push({n:+mm[1]+1,valor:v[v.length-1].n,juros:false});
+  }
+  return o;
+}
+
+/* ---------- porta de entrada ---------- */
+function ppInterpretar(linhas,nomeArquivo){
+  const txt=linhas.join('\n');
+  const cia=ppIdentifica(txt);
+  if(!cia) return {erro:'Não reconheci a seguradora deste PDF.',arquivo:nomeArquivo,texto:txt};
+  let o;
+  try{
+    if(cia==='porto'||cia==='azul') o=ppPortoAzul(linhas,txt,cia);
+    else if(cia==='hdi') o=ppHdi(linhas,txt);
+    else if(cia==='bradesco') o=ppBradesco(linhas,txt);
+    else if(cia==='tokio') o=ppTokio(linhas,txt);
+    else o=ppYelum(linhas,txt);
+  }catch(e){ return {erro:'Erro ao ler o PDF: '+e.message,arquivo:nomeArquivo,cia}; }
+  const c=ppComissao(cia,txt);
+  o.comissaoPct=c.pct; o.comissaoFonte=c.fonte;
+  o.arquivo=nomeArquivo;
+  o.coberturas=o.coberturas.filter(x=>x.nome&&!/^Descri|^Cobertura$/i.test(x.nome));
+  /* tira franquias repetidas */
+  const vis=new Set();
+  o.franquiasDetalhe=o.franquiasDetalhe.filter(f=>{ const k=f.item.toLowerCase()+f.valor;
+    if(vis.has(k)||f.valor==null) return false; vis.add(k); return true; });
+  if(o.premioLiquido==null&&o.coberturas.length)
+    o.premioLiquido=Math.round(o.coberturas.reduce((s,x)=>s+(x.premio||0),0)*100)/100;
+  if(o.premioTotal==null&&o.premioLiquido!=null&&o.iof!=null) o.premioTotal=o.premioLiquido+o.iof;
+  if(o.iof==null&&o.premioTotal!=null&&o.premioLiquido!=null) o.iof=Math.round((o.premioTotal-o.premioLiquido)*100)/100;
+  if(o.comissaoPct!=null&&o.premioLiquido!=null) o.comissaoValor=Math.round(o.premioLiquido*o.comissaoPct)/100;
+  if(!o.comissaoPct) o.avisos.push('Não achei o código de comissão neste PDF — informe 11% ou 18%.');
+  if(!o.premioTotal) o.avisos.push('Não consegui ler o prêmio total.');
+  return o;
+}
+
+if(typeof module!=='undefined'&&module.exports) module.exports={ppInterpretar,ppLinhasDeItens,ppIdentifica,ppNum,ppChaveCob,PP_COB,PP_CIAS};
+
+/* =========================================================================
+   PARTE 2 — TELA DO ORÇAMENTO COMPARATIVO
+   ========================================================================= */
+const PP_CDN='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+let ORC={ id:null, leadId:null, leadNome:null, cliente:{}, veiculo:{}, propostas:[],
+  observacoes:'', validade:null, consultor:'', mostrarLiquido:false, publicado:false };
+let __ppLendo=false;
+
+/* carrega o pdf.js só quando precisa */
+function ppCarregarPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(window.__ppPdfP) return window.__ppPdfP;
+  window.__ppPdfP=new Promise((ok,err)=>{
+    const s=document.createElement('script');
+    s.src=PP_CDN+'pdf.min.js';
+    s.onload=()=>{ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc=PP_CDN+'pdf.worker.min.js'; }catch(e){}
+      ok(window.pdfjsLib); };
+    s.onerror=()=>err(new Error('Não consegui carregar o leitor de PDF. Confira a internet.'));
+    document.head.appendChild(s);
+  });
+  return window.__ppPdfP;
+}
+async function ppLerArquivo(file){
+  const lib=await ppCarregarPdfJs();
+  const buf=await file.arrayBuffer();
+  const doc=await lib.getDocument({data:new Uint8Array(buf)}).promise;
+  let linhas=[];
+  for(let i=1;i<=doc.numPages;i++){
+    const pg=await doc.getPage(i);
+    const tc=await pg.getTextContent();
+    linhas=linhas.concat(ppLinhasDeItens(tc.items));
+  }
+  return ppInterpretar(linhas,file.name);
+}
+
+/* ---------- tela ---------- */
+VIEWS.orcamento=function(leadId){
+  if(leadId&&leadId!==ORC.leadId) ppNovoOrcamento(leadId,true);
+  const l=CACHE.leads.find(x=>x.id===ORC.leadId)||{};
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="location.hash='#leads'"><i class="fas fa-arrow-left"></i> Voltar ao funil</button>
+    <button class="btn btn-ghost btn-sm" onclick="ppModalManual()"><i class="fas fa-pen-to-square"></i> Montar na mão</button>
+    <button class="btn btn-primary btn-sm" onclick="ppSalvarOrcamento()"><i class="fas fa-floppy-disk"></i> Salvar orçamento</button>`;
+  let html=`<div class="page-head"><div class="page-head-row">
+      <div><h1><i class="fas fa-scale-balanced" style="color:var(--brand)"></i> Orçamento comparativo</h1>
+      <p class="explain">Suba os PDFs das seguradoras, confira o que cada uma cobre e mande um comparativo só seu para o cliente.
+      ${ORC.leadNome?'Negócio: <b>'+esc(ORC.leadNome)+'</b>':''}</p></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">${actions}</div>
+    </div></div>`;
+  html+=ppBlocoCliente(l);
+  html+=ppBlocoUpload();
+  if(ORC.propostas.length){
+    html+=ppBlocoPropostas();
+    html+=ppBlocoComparativo();
+    html+=ppBlocoFechamento();
+  }
+  setView(html);
+  ppLigarDrop();
+};
+function ppNovoOrcamento(leadId,silencioso){
+  const l=CACHE.leads.find(x=>x.id===leadId)||{};
+  ORC={ id:null, leadId, leadNome:l.nome||null,
+    cliente:{nome:l.nome||'',cpf:l.cpf||'',nascimento:l.dataNascimento||'',
+      whatsapp:l.whatsapp||l.telefone||'',email:l.email||''},
+    veiculo:{}, propostas:[], observacoes:'', validade:null,
+    consultor:(CURRENT_USER&&(CURRENT_USER.nome||CURRENT_USER.email))||'', mostrarLiquido:false, publicado:false };
+  if(!silencioso) VIEWS.orcamento();
+}
+function ppBlocoCliente(l){
+  const c=ORC.cliente, v=ORC.veiculo;
+  const linha=(rot,val)=>`<div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.4px">${rot}</div>
+    <div style="font-weight:600">${val?esc(val):'<span style="color:var(--text-3);font-weight:400">—</span>'}</div></div>`;
+  const aviso=c.nomePdf?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:10px;padding:9px 13px;font-size:.83rem;margin-bottom:12px">
+      <i class="fas fa-circle-info"></i> No PDF o segurado é <b>${esc(c.nomePdf)}</b>, diferente do cadastro.
+      <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="ppUsarNomeDoPdf()">Usar o nome do PDF</button>
+      <button class="btn btn-ghost btn-sm" onclick="delete ORC.cliente.nomePdf;VIEWS.orcamento()">Manter como está</button></div>`:'';
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-user"></i> ${esc(c.nome||l.nome||'Cliente')}</h3>
+      ${ORC.leadId?`<button class="btn btn-ghost btn-sm" onclick="ppAtualizarLead()"><i class="fas fa-rotate"></i> Levar estes dados para o cadastro</button>`:''}</div>
+    ${aviso}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px">
+      ${linha('CPF',c.cpf)}${linha('Nascimento',c.nascimento?fmtData(c.nascimento):'')}
+      ${linha('WhatsApp',c.whatsapp)}${linha('E-mail',c.email)}
+      ${linha('Veículo',[v.marca,v.modelo].filter(Boolean).join(' '))}
+      ${linha('Ano',v.anoFab&&v.anoMod?v.anoFab+'/'+v.anoMod:(v.anoMod||''))}
+      ${linha('Placa',v.placa)}${linha('FIPE',v.fipe)}
+      ${linha('CEP de pernoite',v.cepPernoite)}
+    </div></div>`;
+}
+function ppBlocoUpload(){
+  return `<div class="card" id="ppDrop" style="border:2px dashed var(--border);text-align:center;padding:26px 18px">
+    <div style="font-size:2rem;color:var(--brand);margin-bottom:8px"><i class="fas fa-file-arrow-up"></i></div>
+    <h4 style="margin:0 0 4px">Solte aqui os PDFs das seguradoras</h4>
+    <p style="color:var(--text-2);font-size:.87rem;margin:0 0 14px">
+      Pode mandar todos de uma vez. Eu leio coberturas, franquias, prêmios e a comissão de cada um.<br>
+      Entendo Porto, Azul, HDI, Bradesco, Tokio Marine e Yelum — as outras você monta na mão.</p>
+    <input type="file" id="ppFile" accept="application/pdf" multiple style="display:none" onchange="ppReceber(this.files)">
+    <button class="btn btn-primary" onclick="document.getElementById('ppFile').click()"><i class="fas fa-folder-open"></i> Escolher arquivos</button>
+    <div id="ppStatus" style="margin-top:12px;font-size:.85rem"></div></div>`;
+}
+function ppLigarDrop(){
+  const d=document.getElementById('ppDrop'); if(!d) return;
+  ['dragenter','dragover'].forEach(e=>d.addEventListener(e,ev=>{ev.preventDefault();d.style.borderColor='var(--brand)';d.style.background='var(--brand-50)';}));
+  ['dragleave','drop'].forEach(e=>d.addEventListener(e,ev=>{ev.preventDefault();d.style.borderColor='var(--border)';d.style.background='';}));
+  d.addEventListener('drop',ev=>{ ev.preventDefault(); ppReceber(ev.dataTransfer.files); });
+}
+async function ppReceber(files){
+  if(__ppLendo) return;
+  const lista=Array.from(files||[]).filter(f=>/\.pdf$/i.test(f.name));
+  if(!lista.length){ toast('Mande arquivos PDF.','err'); return; }
+  __ppLendo=true;
+  const st=document.getElementById('ppStatus');
+  const diz=t=>{ if(st) st.innerHTML=t; };
+  let ok=0, falhas=[];
+  for(let i=0;i<lista.length;i++){
+    diz(`<i class="fas fa-spinner fa-spin"></i> Lendo ${i+1} de ${lista.length}: ${esc(lista[i].name)}`);
+    try{
+      const r=await ppLerArquivo(lista[i]);
+      if(r.erro){ falhas.push(lista[i].name+' — '+r.erro); continue; }
+      r.uid='p'+Date.now()+i;
+      r.incluir=true;
+      ORC.propostas.push(r);
+      ppAbsorverDados(r);
+      ok++;
+    }catch(e){ falhas.push(lista[i].name+' — '+e.message); }
+  }
+  __ppLendo=false;
+  ppDeduzirComissoes();
+  VIEWS.orcamento();
+  if(ok) toast(ok+' proposta(s) lida(s).','ok');
+  if(falhas.length) toast('Não consegui ler: '+falhas.join(' | '),'err');
+}
+/* aproveita os dados pessoais e do veículo que vieram do PDF */
+function ppAbsorverDados(r){
+  ['nome','cpf','nascimento','sexo','estadoCivil'].forEach(k=>{
+    if(!ORC.cliente[k]&&r.cliente&&r.cliente[k]) ORC.cliente[k]=r.cliente[k]; });
+  /* nome diferente do que está no lead? aviso, mas não troco sozinho */
+  const nPdf=(r.cliente&&r.cliente.nome)||'';
+  if(nPdf&&ORC.cliente.nome&&ppLimpa(nPdf).toLowerCase()!==ppLimpa(ORC.cliente.nome).toLowerCase())
+    ORC.cliente.nomePdf=nPdf;
+  Object.keys(r.veiculo||{}).forEach(k=>{ if(!ORC.veiculo[k]&&r.veiculo[k]) ORC.veiculo[k]=r.veiculo[k]; });
+}
+/* se vieram duas da mesma seguradora e uma não tem código, deduzo pela diferença */
+function ppDeduzirComissoes(){
+  const porCia={};
+  ORC.propostas.forEach(p=>{ (porCia[p.cia]=porCia[p.cia]||[]).push(p); });
+  Object.values(porCia).forEach(g=>{
+    if(g.length!==2) return;
+    if(g.every(p=>p.comissaoPct)) return;
+    const [a,b]=g.slice().sort((x,y)=>(x.premioLiquido||0)-(y.premioLiquido||0));
+    if(!a.premioLiquido||!b.premioLiquido) return;
+    const razao=b.premioLiquido/a.premioLiquido;
+    const esperado=(1-0.11)/(1-0.18);                       /* 1,0854 */
+    if(Math.abs(razao-esperado)>0.006) return;
+    if(!a.comissaoPct){ a.comissaoPct=11; a.comissaoFonte='deduzi comparando as duas versões'; ppRecalcComissao(a); }
+    if(!b.comissaoPct){ b.comissaoPct=18; b.comissaoFonte='deduzi comparando as duas versões'; ppRecalcComissao(b); }
+  });
+}
+function ppRecalcComissao(p){
+  p.comissaoValor=(p.comissaoPct!=null&&p.premioLiquido!=null)?Math.round(p.premioLiquido*p.comissaoPct)/100:null;
+  p.avisos=(p.avisos||[]).filter(a=>!/comiss/i.test(a));
+}
+
+/* ---------- cards das propostas lidas ---------- */
+function ppBlocoPropostas(){
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-file-invoice"></i> ${ORC.propostas.length} proposta(s) nesta comparação</h3>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.83rem;cursor:pointer">
+        <input type="checkbox" ${ORC.mostrarLiquido?'checked':''} onchange="ORC.mostrarLiquido=this.checked;VIEWS.orcamento()" style="width:auto">
+        Mostrar prêmio líquido e IOF para o cliente</label></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+    ${ORC.propostas.map(p=>{
+      const cor=(PP_CIAS[p.cia]||PP_CIAS.manual).cor;
+      return `<div style="border:1px solid var(--border);border-radius:14px;padding:14px 16px;border-top:4px solid ${cor};${p.incluir===false?'opacity:.45':''}">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+          <div><b style="font-size:1.02rem">${esc(p.seguradora)}</b>
+            <div style="font-size:.76rem;color:var(--text-3)">${esc(p.produto||'')}${p.cotacao?' · nº '+esc(p.cotacao):''}</div></div>
+          <button class="btn btn-ghost btn-sm" title="Tirar da comparação" onclick="ppRemover('${p.uid}')"><i class="fas fa-trash"></i></button>
+        </div>
+        <div style="margin:12px 0 6px;font-size:1.5rem;font-weight:700;color:${cor}">${ppMoeda(p.premioTotal)}</div>
+        <div style="font-size:.78rem;color:var(--text-2)">
+          Líquido ${ppMoeda(p.premioLiquido)} + IOF ${ppMoeda(p.iof)}<br>
+          Franquia ${p.franquia&&p.franquia.valor?ppMoeda(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?' ('+esc(p.franquia.tipo)+')':''}<br>
+          ${p.parcelas&&p.parcelas.length?'Até '+p.parcelas[p.parcelas.length-1].n+'x de '+ppMoeda(p.parcelas[p.parcelas.length-1].valor):'Parcelamento não lido'}
+        </div>
+        <div style="margin-top:12px;padding-top:11px;border-top:1px dashed var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:.78rem;color:var(--text-2)">Comissão</span>
+          <select onchange="ppSetComissao('${p.uid}',this.value)" style="width:auto;padding:4px 8px;font-size:.82rem">
+            <option value="" ${p.comissaoPct==null?'selected':''}>informar</option>
+            <option value="11" ${p.comissaoPct===11?'selected':''}>11%</option>
+            <option value="18" ${p.comissaoPct===18?'selected':''}>18%</option>
+            <option value="outro" ${p.comissaoPct!=null&&p.comissaoPct!==11&&p.comissaoPct!==18?'selected':''}>outra</option>
+          </select>
+          ${p.comissaoPct!=null&&p.comissaoPct!==11&&p.comissaoPct!==18?
+            `<input type="number" step="0.01" value="${p.comissaoPct}" onchange="ppSetComissao('${p.uid}',this.value)" style="width:70px;padding:4px 6px">`:''}
+          <b style="color:var(--ok)">${p.comissaoValor!=null?ppMoeda(p.comissaoValor):'—'}</b>
+        </div>
+        ${p.comissaoFonte?`<div style="font-size:.71rem;color:var(--text-3);margin-top:4px">${esc(p.comissaoFonte)}</div>`:''}
+        ${(p.avisos||[]).length?`<div style="font-size:.74rem;color:var(--warn);margin-top:7px"><i class="fas fa-triangle-exclamation"></i> ${p.avisos.map(esc).join('<br>')}</div>`:''}
+        <div style="margin-top:10px;display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="ppVerDetalhe('${p.uid}')"><i class="fas fa-list"></i> Detalhes</button>
+          <button class="btn btn-ghost btn-sm" onclick="ppToggleIncluir('${p.uid}')">
+            <i class="fas fa-${p.incluir===false?'eye-slash':'eye'}"></i> ${p.incluir===false?'Fora':'No comparativo'}</button>
+        </div>
+      </div>`;}).join('')}
+    </div></div>`;
+}
+function ppUsarNomeDoPdf(){ if(ORC.cliente.nomePdf){ ORC.cliente.nome=ORC.cliente.nomePdf; delete ORC.cliente.nomePdf; } VIEWS.orcamento(); }
+const ppAcha=uid=>ORC.propostas.find(p=>p.uid===uid);
+function ppRemover(uid){ ORC.propostas=ORC.propostas.filter(p=>p.uid!==uid); VIEWS.orcamento(); }
+function ppToggleIncluir(uid){ const p=ppAcha(uid); if(p) p.incluir=p.incluir===false; VIEWS.orcamento(); }
+function ppSetComissao(uid,v){
+  const p=ppAcha(uid); if(!p) return;
+  if(v===''||v==null){ p.comissaoPct=null; p.comissaoFonte=null; }
+  else if(v==='outro'){ p.comissaoPct=0; p.comissaoFonte='informada por você'; }
+  else { p.comissaoPct=parseFloat(String(v).replace(',','.')); p.comissaoFonte='informada por você'; }
+  ppRecalcComissao(p);
+  VIEWS.orcamento();
+}
+function ppVerDetalhe(uid){
+  const p=ppAcha(uid); if(!p) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-file-invoice"></i> ${esc(p.seguradora)}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="tbl-wrap"><table><thead><tr><th>Cobertura</th><th>Limite</th><th>Franquia</th><th style="text-align:right">Prêmio</th></tr></thead><tbody>
+      ${p.coberturas.map(c=>`<tr${c.contratada===false?' style="opacity:.5"':''}>
+        <td><b>${esc(c.nome)}</b>${c.detalhe?`<div style="font-size:.73rem;color:var(--text-3)">${esc(c.detalhe)}</div>`:''}</td>
+        <td>${ppLmiTexto(c.lmi)?esc(ppLmiTexto(c.lmi)):'—'}</td>
+        <td>${c.franquia!=null?esc(typeof c.franquia==='number'?ppMoeda(c.franquia):c.franquia):'—'}</td>
+        <td style="text-align:right">${c.premio==null?'<span style="color:var(--text-3)">incluída</span>':(c.premio?ppMoeda(c.premio):'—')}</td></tr>`).join('')}
+      </tbody></table></div>
+      ${p.franquiasDetalhe.length?`<h4 style="margin:18px 0 8px">Franquias por peça</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:7px">${p.franquiasDetalhe.map(f=>
+          `<span class="badge" style="background:var(--surface-2);color:var(--text-2)">${esc(f.item)}: ${ppMoeda(f.valor)}</span>`).join('')}</div>`:''}
+      ${p.parcelas.length?`<h4 style="margin:18px 0 8px">Parcelamento</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:7px">${p.parcelas.map(x=>
+          `<span class="badge" style="background:var(--surface-2);color:var(--text-2)">${x.n}x ${ppMoeda(x.valor)}</span>`).join('')}</div>`:''}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+
+/* ---------- quadro comparativo ---------- */
+function ppIncluidas(){ return ORC.propostas.filter(p=>p.incluir!==false); }
+function ppLinhasComparativo(){
+  const ps=ppIncluidas(), ordem=PP_COB.map(c=>c.k), linhas=[];
+  const chaves=[];
+  ps.forEach(p=>p.coberturas.forEach(c=>{ if(!chaves.includes(c.chave)) chaves.push(c.chave); }));
+  chaves.sort((a,b)=>ordem.indexOf(a)-ordem.indexOf(b));
+  chaves.forEach(k=>{
+    const cel=ps.map(p=>{
+      const cs=p.coberturas.filter(c=>c.chave===k);
+      if(!cs.length) return {tem:false};
+      const c=cs.reduce((a,b)=>((b.premio||0)>(a.premio||0)?b:a));
+      const contratada=cs.some(x=>x.contratada!==false);
+      return { tem:contratada, lmi:c.lmi, franquia:c.franquia, detalhe:c.detalhe||(cs.length>1?cs.map(x=>x.nome).join(' · '):null),
+        premio:cs.reduce((s,x)=>s+(x.premio||0),0), nome:c.nome };
+    });
+    if(cel.some(c=>c.tem)) linhas.push({chave:k,rotulo:ppRotuloCob(k),cel});
+  });
+  return linhas;
+}
+function ppBlocoComparativo(){
+  const ps=ppIncluidas();
+  if(!ps.length) return `<div class="card"><div class="empty"><h4>Nenhuma proposta marcada para o comparativo</h4></div></div>`;
+  const linhas=ppLinhasComparativo();
+  const cor=p=>(PP_CIAS[p.cia]||PP_CIAS.manual).cor;
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-table-columns"></i> Comparativo de coberturas</h3>
+      <span style="font-size:.79rem;color:var(--text-2)">Desmarque o que não quiser mostrar</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th style="min-width:210px">Cobertura</th>
+      ${ps.map(p=>`<th style="text-align:center;border-top:3px solid ${cor(p)}">${esc(p.seguradora)}
+        <div style="font-weight:400;font-size:.72rem;color:var(--text-3)">${esc(p.produto||'')}</div></th>`).join('')}
+    </tr></thead><tbody>
+    ${linhas.map(l=>`<tr>
+      <td><b>${esc(l.rotulo)}</b></td>
+      ${l.cel.map((c,i)=>{
+        if(!c.tem) return `<td style="text-align:center;color:var(--text-3)"><i class="fas fa-xmark"></i><div style="font-size:.7rem">não tem</div></td>`;
+        const lmi=ppLmiTexto(c.lmi);
+        return `<td style="text-align:center">
+          <i class="fas fa-check" style="color:var(--ok)"></i>
+          <div style="font-size:.79rem;font-weight:600">${lmi?esc(lmi):'<span style="font-weight:400;color:var(--text-3);font-size:.73rem">incluída</span>'}</div>
+          ${c.franquia!=null?`<div style="font-size:.71rem;color:var(--text-3)">franquia ${typeof c.franquia==='number'?ppMoeda(c.franquia):esc(c.franquia)}</div>`:''}
+          ${c.detalhe?`<div style="font-size:.71rem;color:var(--text-3)">${esc(c.detalhe)}</div>`:''}
+        </td>`;}).join('')}
+    </tr>`).join('')}
+      <tr style="background:var(--surface-2)"><td><b>Franquia do casco</b></td>
+        ${ps.map(p=>`<td style="text-align:center"><b>${p.franquia&&p.franquia.valor?ppMoeda(p.franquia.valor):'—'}</b>
+          ${p.franquia&&p.franquia.tipo?`<div style="font-size:.71rem;color:var(--text-3)">${esc(p.franquia.tipo)}</div>`:''}</td>`).join('')}</tr>
+      ${ORC.mostrarLiquido?`<tr><td>Prêmio líquido</td>${ps.map(p=>`<td style="text-align:center">${ppMoeda(p.premioLiquido)}</td>`).join('')}</tr>
+      <tr><td>IOF</td>${ps.map(p=>`<td style="text-align:center">${ppMoeda(p.iof)}</td>`).join('')}</tr>`:''}
+      <tr style="background:var(--brand-50)"><td><b>Prêmio total à vista</b></td>
+        ${ps.map(p=>`<td style="text-align:center;font-size:1.05rem;font-weight:700;color:${cor(p)}">${ppMoeda(p.premioTotal)}</td>`).join('')}</tr>
+      <tr><td>Parcelamento</td>
+        ${ps.map(p=>{ const u=p.parcelas&&p.parcelas.length?p.parcelas[p.parcelas.length-1]:null;
+          return `<td style="text-align:center;font-size:.85rem">${u?u.n+'x de '+ppMoeda(u.valor):'—'}</td>`;}).join('')}</tr>
+      <tr style="background:#fffbeb"><td><b>Comissão da corretora</b> <span style="font-size:.72rem;color:var(--text-3)">(só você vê)</span></td>
+        ${ps.map(p=>`<td style="text-align:center">${p.comissaoPct!=null?`<b>${ppMoeda(p.comissaoValor)}</b><div style="font-size:.71rem;color:var(--text-3)">${p.comissaoPct}% do líquido</div>`:'<span style="color:var(--warn)">informar</span>'}</td>`).join('')}</tr>
+    </tbody></table></div></div>`;
+}
+
+/* ---------- fechamento: observações, PDF e link ---------- */
+function ppBlocoFechamento(){
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-paper-plane"></i> Enviar para o cliente</h3></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="form-row"><label>Recomendação / observações da corretora</label>
+        <textarea id="ppObs" rows="3" placeholder="Ex.: A Porto sai um pouco mais cara, mas cobre roda e pneu com franquia menor."
+          oninput="ORC.observacoes=this.value">${esc(ORC.observacoes)}</textarea></div>
+      <div>
+        <div class="form-row"><label>Proposta válida até</label>
+          <input type="date" id="ppVal" value="${esc(ORC.validade||ppValidadeSugerida())}" onchange="ORC.validade=this.value"></div>
+        <div class="form-row"><label>Consultor responsável</label>
+          <input type="text" id="ppCons" value="${esc(ORC.consultor)}" oninput="ORC.consultor=this.value"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+      <button class="btn btn-primary" onclick="ppGerarPDF()"><i class="fas fa-file-pdf"></i> Gerar PDF comparativo</button>
+      <button class="btn btn-ghost" onclick="ppGerarLink()"><i class="fas fa-link"></i> Gerar link para o cliente</button>
+      ${ORC.id?`<button class="btn btn-ghost" onclick="ppEnviarWhats()"><i class="fab fa-whatsapp"></i> Mandar no WhatsApp</button>`:''}
+    </div>
+    <div id="ppLinkBox" style="margin-top:12px"></div></div>`;
+}
+function ppValidadeSugerida(){
+  const ds=ORC.propostas.map(p=>p.validade).filter(Boolean).sort();
+  if(ds.length) return ds[0];
+  const d=new Date(); d.setDate(d.getDate()+7);
+  const p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
+
+/* ---------- montar proposta na mão ---------- */
+function ppModalManual(uid){
+  const p=uid?ppAcha(uid):null;
+  const base=PP_COB.filter(c=>c.k!=='outros');
+  const dado=k=>{ if(!p) return null; return p.coberturas.find(c=>c.chave===k)||null; };
+  openModal(`<div class="modal-head"><h3><i class="fas fa-pen-to-square"></i> ${p?'Editar':'Montar'} proposta na mão</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);font-size:.86rem;margin-top:0">
+        Use quando o PDF não for de uma seguradora que eu leio, ou quando quiser mandar uma segunda opção
+        da mesma seguradora com menos coberturas. Desmarque o que o plano <b>não</b> cobre.</p>
+      <input type="hidden" id="mnUid" value="${esc(uid||'')}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>Seguradora *</label>
+          <input type="text" id="mnCia" value="${esc(p?p.seguradora:'')}" placeholder="Ex.: Allianz"></div>
+        <div class="form-row"><label>Produto / plano</label>
+          <input type="text" id="mnProd" value="${esc(p?p.produto||'':'')}" placeholder="Ex.: Auto Essencial"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div class="form-row"><label>Prêmio líquido</label><input type="text" id="mnLiq" value="${p&&p.premioLiquido!=null?String(p.premioLiquido).replace('.',','):''}" placeholder="0,00" oninput="ppMnTotal()"></div>
+        <div class="form-row"><label>IOF</label><input type="text" id="mnIof" value="${p&&p.iof!=null?String(p.iof).replace('.',','):''}" placeholder="0,00" oninput="ppMnTotal()"></div>
+        <div class="form-row"><label>Prêmio total</label><input type="text" id="mnTot" value="${p&&p.premioTotal!=null?String(p.premioTotal).replace('.',','):''}" placeholder="0,00"></div>
+        <div class="form-row"><label>Comissão %</label><input type="number" step="0.01" id="mnCom" value="${p&&p.comissaoPct!=null?p.comissaoPct:''}" placeholder="11"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div class="form-row"><label>Franquia do casco</label><input type="text" id="mnFr" value="${p&&p.franquia&&p.franquia.valor?String(p.franquia.valor).replace('.',','):''}" placeholder="0,00"></div>
+        <div class="form-row"><label>Tipo de franquia</label>
+          <select id="mnFrT">${['Obrigatória','Reduzida','Majorada','Básica'].map(x=>`<option ${p&&p.franquia&&p.franquia.tipo===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Nº de parcelas sem juros</label><input type="number" id="mnPar" value="${p&&p.parcelas&&p.parcelas.length?p.parcelas[p.parcelas.length-1].n:12}"></div>
+      </div>
+      <h4 style="margin:6px 0 10px">Coberturas do plano</h4>
+      <div class="tbl-wrap"><table><thead><tr><th style="width:34px"></th><th>Cobertura</th><th style="width:150px">Limite / capital</th><th style="width:130px">Franquia</th><th style="width:120px">Prêmio</th></tr></thead><tbody>
+      ${base.map(c=>{ const d=dado(c.k); const on=d?d.contratada!==false:['casco','rcf_dm','rcf_dc','assist'].includes(c.k);
+        return `<tr><td><input type="checkbox" id="mn_${c.k}" ${on?'checked':''} style="width:auto"></td>
+          <td>${esc(c.l)}</td>
+          <td><input type="text" id="mnL_${c.k}" value="${d&&d.lmi!=null?esc(String(d.lmi)):''}" placeholder="—" style="padding:5px 8px"></td>
+          <td><input type="text" id="mnF_${c.k}" value="${d&&d.franquia!=null?esc(String(d.franquia)):''}" placeholder="—" style="padding:5px 8px"></td>
+          <td><input type="text" id="mnP_${c.k}" value="${d&&d.premio!=null?String(d.premio).replace('.',','):''}" placeholder="—" style="padding:5px 8px"></td></tr>`;}).join('')}
+      </tbody></table></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="ppSalvarManual()"><i class="fas fa-check"></i> Usar no comparativo</button></div>`,'wide');
+}
+function ppMnTotal(){
+  const l=cpNum?cpNum(document.getElementById('mnLiq').value):ppNum(document.getElementById('mnLiq').value);
+  const i=ppNum(document.getElementById('mnIof').value)||0;
+  const t=document.getElementById('mnTot');
+  if(l&&!t.value) t.value=String(Math.round((l+i)*100)/100).replace('.',',');
+}
+function ppSalvarManual(){
+  const g=i=>document.getElementById(i);
+  const cia=g('mnCia').value.trim();
+  if(!cia){ toast('Diga qual é a seguradora.','err'); return; }
+  const uid=g('mnUid').value;
+  const o=ppVazio('manual');
+  o.seguradora=cia; o.produto=g('mnProd').value.trim()||null;
+  o.premioLiquido=ppNum(g('mnLiq').value); o.iof=ppNum(g('mnIof').value); o.premioTotal=ppNum(g('mnTot').value);
+  const fr=ppNum(g('mnFr').value);
+  o.franquia={tipo:g('mnFrT').value,valor:fr};
+  const com=parseFloat(String(g('mnCom').value).replace(',','.'));
+  o.comissaoPct=isNaN(com)?null:com; o.comissaoFonte=isNaN(com)?null:'informada por você';
+  PP_COB.filter(c=>c.k!=='outros').forEach(c=>{
+    if(!g('mn_'+c.k).checked) return;
+    o.coberturas.push({nome:c.l,chave:c.k,lmi:g('mnL_'+c.k).value.trim()||null,
+      franquia:g('mnF_'+c.k).value.trim()||null,premio:ppNum(g('mnP_'+c.k).value),contratada:true});
+  });
+  const np=parseInt(g('mnPar').value)||0;
+  if(np&&o.premioTotal) o.parcelas=[{n:np,valor:Math.round(o.premioTotal/np*100)/100,juros:false}];
+  if(o.premioLiquido==null&&o.coberturas.length) o.premioLiquido=Math.round(o.coberturas.reduce((s,x)=>s+(x.premio||0),0)*100)/100;
+  if(o.premioTotal==null&&o.premioLiquido!=null) o.premioTotal=Math.round((o.premioLiquido+(o.iof||0))*100)/100;
+  ppRecalcComissao(o);
+  o.incluir=true; o.arquivo='montada na mão';
+  if(uid){ const i=ORC.propostas.findIndex(p=>p.uid===uid); o.uid=uid; ORC.propostas[i]=o; }
+  else { o.uid='m'+Date.now(); ORC.propostas.push(o); }
+  closeModal(); VIEWS.orcamento();
+  toast('Proposta adicionada ao comparativo.','ok');
+}
+
+/* ---------- levar os dados do PDF para o cadastro do lead ---------- */
+async function ppAtualizarLead(){
+  if(!ORC.leadId){ toast('Este orçamento não está ligado a um lead.','err'); return; }
+  const c=ORC.cliente, v=ORC.veiculo;
+  const dados={atualizadoEm:FV.serverTimestamp()};
+  if(c.nome) dados.nome=c.nome;
+  if(c.cpf) dados.cpf=c.cpf;
+  if(c.nascimento) dados.dataNascimento=c.nascimento;
+  if(v.placa) dados.placa=v.placa;
+  if(v.chassi) dados.chassi=v.chassi;
+  if(v.marca||v.modelo) dados.veiculo=[v.marca,v.modelo].filter(Boolean).join(' ');
+  if(v.anoMod) dados.anoVeiculo=(v.anoFab&&v.anoFab!==v.anoMod?v.anoFab+'/':'')+v.anoMod;
+  if(v.fipe) dados.codigoFipe=v.fipe;
+  if(v.cepPernoite) dados.cep=v.cepPernoite;
+  if(!dados.produto) dados.produto='auto';
+  try{
+    await db.collection('leads_crm').doc(ORC.leadId).update(dados);
+    toast('Cadastro do lead atualizado com os dados da proposta.','ok');
+  }catch(e){ toast('Não consegui atualizar o lead: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- salvar o orçamento ---------- */
+function ppOrcamentoDoc(){
+  return {
+    leadId:ORC.leadId||null, leadNome:ORC.leadNome||ORC.cliente.nome||null,
+    cliente:ORC.cliente, veiculo:ORC.veiculo,
+    observacoes:ORC.observacoes||null, validade:ORC.validade||ppValidadeSugerida(),
+    consultor:ORC.consultor||null, mostrarLiquido:!!ORC.mostrarLiquido,
+    corretora:{nome:'Retorno Seguros',whats:'5554997015000',label:'(54) 99701-5000'},
+    propostas:ppIncluidas().map(p=>({
+      cia:p.cia, seguradora:p.seguradora, produto:p.produto||null, cotacao:p.cotacao||null,
+      validade:p.validade||null, vigenciaIni:p.vigenciaIni||null, vigenciaFim:p.vigenciaFim||null,
+      franquia:p.franquia||{}, coberturas:p.coberturas.map(c=>({nome:c.nome,chave:c.chave,
+        lmi:c.lmi==null?null:c.lmi, franquia:c.franquia==null?null:c.franquia,
+        premio:c.premio==null?null:c.premio, contratada:c.contratada!==false, detalhe:c.detalhe||null})),
+      franquiasDetalhe:p.franquiasDetalhe||[], parcelas:p.parcelas||[],
+      premioLiquido:p.premioLiquido, iof:p.iof, premioTotal:p.premioTotal,
+      comissaoPct:p.comissaoPct, comissaoValor:p.comissaoValor==null?null:p.comissaoValor
+    })),
+    atualizadoEm:FV.serverTimestamp()
+  };
+}
+async function ppSalvarOrcamento(){
+  if(!ppIncluidas().length){ toast('Coloque pelo menos uma proposta no comparativo.','err'); return; }
+  const d=ppOrcamentoDoc();
+  try{
+    if(ORC.id) await db.collection('orcamentos').doc(ORC.id).set(d,{merge:true});
+    else{
+      d.criadoEm=FV.serverTimestamp();
+      d.criadoPor=(CURRENT_USER&&CURRENT_USER.email)||'admin';
+      const r=await db.collection('orcamentos').add(d);
+      ORC.id=r.id;
+    }
+    if(ORC.leadId){
+      const melhor=ppIncluidas().slice().sort((a,b)=>(a.premioTotal||0)-(b.premioTotal||0))[0];
+      await db.collection('leads_crm').doc(ORC.leadId).update({
+        orcamentoId:ORC.id, valorNegociacao:melhor?melhor.premioTotal:null,
+        ultimoOrcamentoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() }).catch(()=>{});
+    }
+    toast('Orçamento salvo.','ok');
+    VIEWS.orcamento();
+  }catch(e){ toast('Não consegui salvar: '+(e.code||e.message),'err'); }
+}
+async function ppGerarLink(){
+  if(!ORC.id) await ppSalvarOrcamento();
+  if(!ORC.id) return;
+  const base=location.href.split('#')[0].replace(/[^/]*$/,'');
+  const url=base+'proposta.html?id='+ORC.id;
+  const box=document.getElementById('ppLinkBox');
+  if(box) box.innerHTML=`<div style="background:var(--brand-50);border-radius:12px;padding:14px 16px">
+    <div style="font-size:.82rem;color:var(--text-2);margin-bottom:7px">
+      <i class="fas fa-circle-info"></i> O cliente abre este link e vê o comparativo sem precisar de senha.
+      O arquivo <b>proposta.html</b> precisa estar no mesmo endereço do CRM.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" readonly value="${esc(url)}" id="ppUrl" style="flex:1;min-width:260px;font-size:.85rem">
+      <button class="btn btn-primary btn-sm" onclick="ppCopiar('${esc(url)}')"><i class="fas fa-copy"></i> Copiar</button>
+      <a class="btn btn-ghost btn-sm" href="${esc(url)}" target="_blank"><i class="fas fa-up-right-from-square"></i> Abrir</a>
+    </div></div>`;
+}
+function ppCopiar(t){
+  if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>toast('Link copiado.','ok'),()=>{});
+  else{ const i=document.getElementById('ppUrl'); if(i){ i.select(); document.execCommand('copy'); toast('Link copiado.','ok'); } }
+}
+function ppEnviarWhats(){
+  const base=location.href.split('#')[0].replace(/[^/]*$/,'');
+  const url=base+'proposta.html?id='+ORC.id;
+  const nome=(ORC.cliente.nome||'').split(' ')[0];
+  const t=`Oi ${nome}! Preparei o comparativo do seu seguro de auto. É só abrir: ${url}`;
+  const fone=(ORC.cliente.whatsapp||'').replace(/\D/g,'');
+  window.open('https://wa.me/'+(fone?('55'+fone.replace(/^55/,'')):'')+'?text='+encodeURIComponent(t),'_blank');
+}
+
+/* ---------- PDF comparativo da corretora ---------- */
+function ppPdfDisponivel(){ return !!(window.jspdf&&window.jspdf.jsPDF&&window.jspdf.jsPDF.API&&window.jspdf.jsPDF.API.autoTable); }
+function ppGerarPDF(){
+  const ps=ppIncluidas();
+  if(!ps.length){ toast('Nenhuma proposta no comparativo.','err'); return; }
+  const linhas=ppLinhasComparativo();
+  const colunas=['Cobertura'].concat(ps.map(p=>p.seguradora));
+  const corpo=linhas.map(l=>[l.rotulo].concat(l.cel.map(c=>{
+    if(!c.tem) return 'não tem';
+    const lmi=ppLmiTexto(c.lmi)||'incluída';
+    return lmi+(c.franquia!=null?'\nfranquia '+(typeof c.franquia==='number'?ppMoeda(c.franquia):c.franquia):'');
+  })));
+  corpo.push(['Franquia do casco'].concat(ps.map(p=>p.franquia&&p.franquia.valor?ppMoeda(p.franquia.valor):'—')));
+  if(ORC.mostrarLiquido){
+    corpo.push(['Prêmio líquido'].concat(ps.map(p=>ppMoeda(p.premioLiquido))));
+    corpo.push(['IOF'].concat(ps.map(p=>ppMoeda(p.iof))));
+  }
+  corpo.push(['PRÊMIO TOTAL À VISTA'].concat(ps.map(p=>ppMoeda(p.premioTotal))));
+  corpo.push(['Parcelamento'].concat(ps.map(p=>{ const u=p.parcelas&&p.parcelas.length?p.parcelas[p.parcelas.length-1]:null;
+    return u?u.n+'x de '+ppMoeda(u.valor):'—'; })));
+  const v=ORC.veiculo, c=ORC.cliente;
+  const sub=[c.nome,[v.marca,v.modelo].filter(Boolean).join(' '),
+    v.anoMod?(v.anoFab&&v.anoFab!==v.anoMod?v.anoFab+'/':'')+v.anoMod:'',v.placa].filter(Boolean).join('  ·  ');
+  const rod=[];
+  const melhor=ps.slice().sort((a,b)=>(a.premioTotal||0)-(b.premioTotal||0))[0];
+  if(melhor) rod.push({k:'Menor prêmio total',v:melhor.seguradora+' — '+ppMoeda(melhor.premioTotal),forte:true});
+  rod.push({k:'Proposta válida até',v:fmtData(ORC.validade||ppValidadeSugerida())});
+  if(ORC.consultor) rod.push({k:'Consultor',v:ORC.consultor});
+  if(ORC.observacoes) rod.push({k:'Observações',v:ORC.observacoes});
+  ppPDF({titulo:'Comparativo de seguro auto',subtitulo:sub,colunas,linhas:corpo,rodape:rod,
+    arquivo:'comparativo-'+(c.nome||'cliente').toLowerCase().replace(/[^a-z0-9]+/g,'-'),paisagem:ps.length>2});
+}
+function ppPDF(cfg){
+  if(!ppPdfDisponivel()){ ppImprimir(cfg); return; }
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({orientation:cfg.paisagem?'landscape':'portrait',unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth();
+  doc.setFillColor(0,136,170); doc.rect(0,0,W,64,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(15);
+  doc.text(cfg.titulo,40,29);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  doc.text('Retorno Seguros  ·  (54) 99701-5000',40,47);
+  doc.setTextColor(90,105,120); doc.setFontSize(9);
+  doc.text((cfg.subtitulo||'')+'   ·   Emitido em '+new Date().toLocaleDateString('pt-BR'),40,82);
+  doc.autoTable({
+    head:[cfg.colunas], body:cfg.linhas, startY:95, theme:'grid',
+    styles:{font:'helvetica',fontSize:8.2,cellPadding:5,textColor:[35,48,62],lineColor:[228,234,241],lineWidth:.5,valign:'middle'},
+    headStyles:{fillColor:[0,136,170],textColor:[255,255,255],fontStyle:'bold',fontSize:8.5,halign:'center'},
+    alternateRowStyles:{fillColor:[250,251,253]},
+    columnStyles:Object.fromEntries(cfg.colunas.map((_,i)=>[i,i===0?{cellWidth:'auto',fontStyle:'bold'}:{halign:'center'}])),
+    margin:{left:34,right:34,bottom:56},
+    didParseCell:d=>{ if(d.section==='body'&&/PR[ÊE]MIO TOTAL/.test(String(d.row.raw[0]))){
+        d.cell.styles.fillColor=[232,246,250]; d.cell.styles.fontStyle='bold'; d.cell.styles.fontSize=9.6; } },
+    didDrawPage:()=>{ const H=doc.internal.pageSize.getHeight();
+      doc.setFontSize(7.5); doc.setTextColor(150,160,172);
+      doc.text('Retorno Seguros · comparativo sem valor de apólice — sujeito a análise da seguradora',34,H-24);
+      doc.text('Página '+doc.internal.getNumberOfPages(),W-34,H-24,{align:'right'}); }
+  });
+  let y=doc.lastAutoTable.finalY+18;
+  (cfg.rodape||[]).forEach(l=>{
+    if(y>doc.internal.pageSize.getHeight()-70){ doc.addPage(); y=60; }
+    doc.setFont('helvetica',l.forte?'bold':'normal'); doc.setFontSize(l.forte?10.5:9);
+    doc.setTextColor(l.forte?0:90,l.forte?107:105,l.forte?134:120);
+    const t=doc.splitTextToSize(String(l.v),W-260);
+    doc.text(l.k,34,y); doc.text(t,W-34,y,{align:'right'}); y+=16*t.length;
+  });
+  doc.save((cfg.arquivo||'comparativo')+'.pdf');
+  toast('PDF gerado.','ok','Comparativo pronto');
+}
+function ppImprimir(cfg){
+  const w=window.open('','_blank'); if(!w){ toast('Libere os pop-ups para gerar o PDF.','err'); return; }
+  w.document.write(`<html><head><title>${esc(cfg.titulo)}</title><style>
+    body{font-family:Arial,sans-serif;color:#233;padding:24px}
+    h1{font-size:17px;margin:0 0 4px;color:#0088aa} .sub{font-size:11px;color:#667;margin-bottom:14px}
+    table{width:100%;border-collapse:collapse;font-size:10.5px}
+    th,td{border:1px solid #dde;padding:5px 7px;text-align:center} th:first-child,td:first-child{text-align:left;font-weight:bold}
+    th{background:#0088aa;color:#fff} tr:nth-child(even) td{background:#fafbfd}
+    .tot{margin-top:14px;font-size:12px} .tot div{display:flex;justify-content:space-between;padding:3px 0}
+    </style></head><body>
+    <h1>${esc(cfg.titulo)}</h1>
+    <div class="sub">Retorno Seguros · (54) 99701-5000 · ${esc(cfg.subtitulo||'')} · ${new Date().toLocaleDateString('pt-BR')}</div>
+    <table><thead><tr>${cfg.colunas.map(c=>'<th>'+esc(c)+'</th>').join('')}</tr></thead>
+    <tbody>${cfg.linhas.map(l=>'<tr>'+l.map(c=>'<td>'+esc(String(c)).replace(/\n/g,'<br>')+'</td>').join('')+'</tr>').join('')}</tbody></table>
+    <div class="tot">${(cfg.rodape||[]).map(r=>`<div><span>${esc(r.k)}</span><b>${esc(r.v)}</b></div>`).join('')}</div>
+    </body></html>`);
+  w.document.close(); setTimeout(()=>w.print(),350);
+}
+
+/* ---------- abrir um orçamento já salvo ---------- */
+async function ppAbrirOrcamento(id){
+  try{
+    const d=await db.collection('orcamentos').doc(id).get();
+    if(!d.exists){ toast('Orçamento não encontrado.','err'); return; }
+    const o=d.data();
+    ORC={ id, leadId:o.leadId||null, leadNome:o.leadNome||null, cliente:o.cliente||{}, veiculo:o.veiculo||{},
+      propostas:(o.propostas||[]).map((p,i)=>Object.assign({uid:'s'+i,incluir:true,avisos:[],
+        franquiasDetalhe:p.franquiasDetalhe||[],parcelas:p.parcelas||[]},p)),
+      observacoes:o.observacoes||'', validade:o.validade||null, consultor:o.consultor||'',
+      mostrarLiquido:!!o.mostrarLiquido, publicado:true };
+    location.hash='#orcamento';
+    VIEWS.orcamento();
+  }catch(e){ toast('Não consegui abrir: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- entrada pelo funil ---------- */
+function ppDoLead(leadId){
+  if(typeof closeModal==='function') closeModal();
+  const l=CACHE.leads.find(x=>x.id===leadId)||{};
+  if(l.orcamentoId){ ppAbrirOrcamento(l.orcamentoId); return; }
+  ppNovoOrcamento(leadId,true);
+  location.hash='#orcamento/'+leadId;
+  VIEWS.orcamento();
 }
 
 </script>
