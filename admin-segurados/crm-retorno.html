@@ -3941,8 +3941,19 @@ async function modalFipe(ctx){ ctx=ctx||{};
 /* Consulta por código (BrasilAPI): valor atual + últimos meses automaticamente */
 async function fipeViaCodigo(ctx){
   const cod=ctx.codigo;
-  const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod));
-  const cur=fipePorAnoComb(arr,ctx.ano,ctx.comb); if(!cur) throw new Error('código sem retorno');
+  let cur=null;
+  /* primeiro a consulta nova (parallelum v2 + BrasilAPI com nova tentativa) */
+  if(typeof ppFipePorCodigo==='function'){
+    try{ const r=await ppFipePorCodigo(cod,ctx.ano,ctx.comb);
+      cur={ marca:r.marca||'', modelo:r.modeloCurto||r.modelo, valor:r.valorTexto,
+        anoModelo:r.ano, combustivel:r.combustivel, mesReferencia:r.mes, codigoFipe:r.codigo };
+    }catch(e){ console.warn('FIPE v2 falhou:',e&&e.message); }
+  }
+  if(!cur){
+    const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod));
+    cur=fipePorAnoComb(arr,ctx.ano,ctx.comb);
+  }
+  if(!cur) throw new Error('código sem retorno');
   // histórico: últimas ~12 tabelas de referência
   let hist=[]; try{ const tabs=await fipeGet(BRASIL_FIPE+'/tabelas/v1'); const refs=(tabs||[]).slice(0,12);
     for(const t of refs){ try{ const a=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod)+'?tabela_referencia='+t.codigo); const it=fipePorAnoComb(a,ctx.ano,ctx.comb);
@@ -3994,6 +4005,8 @@ function fipePick(i){ const s=window.__fipePick; if(!s) return;
   fipeBuscarValor(s.marca,s.top[i].m,s.ctx).then(d=>fipeFinalizarParallelum(d,s.ctx)).catch(fipeErro); }
 /* Obtém só o VALOR ATUAL (sem renderizar) — usado no lote e na automação */
 async function fipeObterAtual(ctx){
+  if(ctx.codigo&&typeof ppFipePorCodigo==='function'){ try{ const r=await ppFipePorCodigo(ctx.codigo,ctx.ano,ctx.comb);
+    if(r&&r.valor) return {codigo:r.codigo, valor:r.valorTexto, valorNum:r.valor, marcaModelo:r.modelo, ano:r.ano, mes:r.mes}; }catch(e){} }
   if(ctx.codigo){ try{ const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(ctx.codigo)); const it=fipePorAnoComb(arr,ctx.ano,ctx.comb);
     if(it&&it.valor) return {codigo:ctx.codigo, valor:it.valor, valorNum:fipeNum(it.valor), marcaModelo:((it.marca||'')+' '+(it.modelo||'')).trim(), ano:it.anoModelo, mes:(it.mesReferencia||'').trim()}; }catch(e){} }
   if(ctx.marca&&ctx.modelo){ try{ const marcas=await fipeGet(FIPE_BASE+'/marcas'); const marca=fipeAcharMarca(marcas,ctx.marca);
@@ -7381,6 +7394,79 @@ function ppBlocoCliente(l){
       ${linha('CEP de pernoite',v.cepPernoite)}
     </div></div>`;
 }
+/* =========================================================================
+   CONSULTA FIPE PELO CÓDIGO — com plano A, B e C
+   A) parallelum v2 (aceita o código direto e é a mais estável)
+   B) BrasilAPI (a que vinha dando erro 500, agora com nova tentativa)
+   C) devolve o erro para a tela avisar
+   ========================================================================= */
+const PP_FIPE_V2='https://parallelum.com.br/fipe/api/v2';
+const PP_FIPE_TIPOS=['cars','motorcycles','trucks'];
+function ppEspera(ms){ return new Promise(r=>setTimeout(r,ms)); }
+async function ppJson(url,tentativas){
+  let ultimo;
+  for(let i=0;i<(tentativas||1);i++){
+    try{
+      const r=await fetch(url);
+      if(r.ok) return r.json();
+      ultimo=new Error('respondeu '+r.status); ultimo.status=r.status;
+      if(r.status===404) break;                 /* não adianta insistir */
+    }catch(e){ ultimo=e; }
+    await ppEspera(400*(i+1));
+  }
+  throw ultimo||new Error('sem resposta');
+}
+/* escolhe o ano certo na lista que a API devolve */
+function ppEscolherAno(anos,ano,comb){
+  if(!Array.isArray(anos)||!anos.length) return null;
+  const alvo=String(ano||'').replace(/\D/g,'').slice(-4);
+  let c=anos;
+  if(alvo){ const f=anos.filter(a=>String(a.code||'').startsWith(alvo)||String(a.name||'').startsWith(alvo));
+    if(f.length) c=f; else return {item:null,lista:anos}; }
+  if(comb&&c.length>1){ const q=ppLimpa(comb).toLowerCase().slice(0,4);
+    const f=c.filter(a=>ppLimpa(a.name||'').toLowerCase().includes(q)); if(f.length) c=f; }
+  return {item:c[0],lista:anos};
+}
+async function ppFipePorCodigo(cod,ano,comb){
+  if(!cod) throw new Error('sem código FIPE');
+  let erroA;
+  /* --- A: parallelum v2 --- */
+  for(const tipo of PP_FIPE_TIPOS){
+    try{
+      const anos=await ppJson(PP_FIPE_V2+'/'+tipo+'/'+encodeURIComponent(cod)+'/years',2);
+      const esc2=ppEscolherAno(anos,ano,comb);
+      if(!esc2) continue;
+      let aviso=null, item=esc2.item;
+      if(!item){                                  /* o ano do PDF não está na tabela */
+        const alvo=parseInt(String(ano).slice(-4),10);
+        item=esc2.lista.slice().sort((x,y)=>Math.abs(parseInt(x.code)-alvo)-Math.abs(parseInt(y.code)-alvo))[0];
+        aviso='O ano '+ano+' não aparece na tabela deste código; usei '+(item&&item.name||'o mais próximo')+'.';
+      }
+      const d=await ppJson(PP_FIPE_V2+'/'+tipo+'/'+encodeURIComponent(cod)+'/years/'+encodeURIComponent(item.code),2);
+      if(!d||!d.price) continue;
+      return { codigo:d.codeFipe||cod, valor:ppNum(d.price), valorTexto:d.price,
+        marca:d.brand||null, modeloCurto:d.model||null,
+        modelo:[d.brand,d.model].filter(Boolean).join(' '), ano:d.modelYear,
+        combustivel:d.fuel||null, mes:ppLimpa(d.referenceMonth), aviso, fonte:'parallelum' };
+    }catch(e){ erroA=e;
+      /* 404 = código não é desse tipo de veículo, tento o próximo.
+         erro de servidor = a API está fora, não adianta tentar moto e caminhão. */
+      if(e&&e.status&&e.status>=500) break;
+    }
+  }
+  /* --- B: BrasilAPI --- */
+  try{
+    const base=(typeof BRASIL_FIPE!=='undefined'?BRASIL_FIPE:'https://brasilapi.com.br/api/fipe');
+    const arr=await ppJson(base+'/preco/v1/'+encodeURIComponent(cod),3);
+    const it=(typeof fipePorAnoComb==='function')?(fipePorAnoComb(arr,ano,comb)||fipePorAnoComb(arr,ano)||arr[0]):arr[0];
+    if(it&&it.valor) return { codigo:it.codigoFipe||cod, valor:ppNum(it.valor), valorTexto:it.valor,
+      marca:it.marca||null, modeloCurto:it.modelo||null,
+      modelo:[it.marca,it.modelo].filter(Boolean).join(' '), ano:it.anoModelo,
+      combustivel:it.combustivel||null, mes:ppLimpa(it.mesReferencia), aviso:null, fonte:'brasilapi' };
+  }catch(e){ throw new Error('as duas fontes da tabela deram erro'); }
+  throw erroA||new Error('código não encontrado na tabela');
+}
+
 /* ---------- valor de mercado pela tabela FIPE ---------- */
 function ppBlocoFipe(){
   const v=ORC.veiculo, cod=ppFipeCod(v.fipe);
@@ -7392,10 +7478,12 @@ function ppBlocoFipe(){
       <b style="font-size:1.6rem;color:var(--brand-dark)">${ppMoeda(f.valor)}</b>
       <span style="font-size:.82rem;color:var(--text-2)">${esc(f.modelo||'')}${f.ano?' · '+esc(String(f.ano)):''}
         ${f.mes?' · tabela de '+esc(f.mes):''}</span></div>
+    ${f.aviso?`<div style="font-size:.8rem;color:var(--warn);margin-top:7px"><i class="fas fa-triangle-exclamation"></i> ${esc(f.aviso)}</div>`:''}
     <div style="font-size:.8rem;color:var(--text-2);margin-top:7px">
       <i class="fas fa-circle-info"></i> É o valor que o cliente recebe numa perda total, já que todas as cotações
       estão em 100% da FIPE. Vai junto no comparativo e no link.</div>`;
   else if(f.erro) corpo=`<span style="color:var(--warn)"><i class="fas fa-triangle-exclamation"></i> ${esc(f.erro)}</span>`;
+  else if(false) corpo='';
   else corpo=`<span style="color:var(--text-2);font-size:.87rem">Código ${esc(cod)} — posso buscar o valor de mercado atual.</span>`;
   return `<div class="card"><div class="card-head"><h3><i class="fas fa-magnifying-glass-dollar"></i> Valor de mercado (FIPE ${esc(cod)})</h3>
       <div style="display:flex;gap:8px">
@@ -7411,18 +7499,14 @@ async function ppBuscarFipe(forcar){
   const cod=ppFipeCod(ORC.veiculo.fipe); if(!cod) return;
   if(ORC.fipe&&ORC.fipe.buscando) return;
   if(ORC.fipe&&ORC.fipe.valor&&!forcar) return;
-  if(typeof fipeGet!=='function'||typeof BRASIL_FIPE==='undefined'){ return; }
   ORC.fipe={buscando:true}; VIEWS.orcamento();
   try{
-    const arr=await fipeGet(BRASIL_FIPE+'/preco/v1/'+encodeURIComponent(cod));
-    const it=fipePorAnoComb(arr,ORC.veiculo.anoMod,ORC.veiculo.combustivel)||fipePorAnoComb(arr,ORC.veiculo.anoMod)||arr[0];
-    if(!it) throw new Error('sem retorno');
-    ORC.fipe={ codigo:cod, valor:fipeNum(it.valor), valorTexto:it.valor,
-      modelo:[it.marca,it.modelo].filter(Boolean).join(' '), ano:it.anoModelo,
-      combustivel:it.combustivel||null, mes:(it.mesReferencia||'').trim() };
+    ORC.fipe=await ppFipePorCodigo(cod,ORC.veiculo.anoMod,ORC.veiculo.combustivel);
     if(ORC.mostrarFipe===undefined) ORC.mostrarFipe=true;
+    if(typeof fipeSalvarSnap==='function')
+      fipeSalvarSnap(ORC.fipe.codigo,ORC.fipe.modelo,ORC.fipe.valorTexto,ORC.fipe.ano,ORC.fipe.mes);
   }catch(e){
-    ORC.fipe={erro:'Não consegui consultar agora ('+(e.message||'erro')+'). Tente de novo em instantes.'};
+    ORC.fipe={erro:'Não deu para consultar agora — '+(e.message||'erro')+'. Clique em Consultar de novo daqui a pouco; o resto do orçamento funciona normal sem isso.'};
   }
   VIEWS.orcamento();
 }
