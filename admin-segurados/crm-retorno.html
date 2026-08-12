@@ -5062,8 +5062,10 @@ async function agGerarRecorrentes(force){
 /* ---------- faxina: ocorrências repetidas do mesmo modelo ---------- */
 function agDuplicadas(){
   const grupos={};
-  AGENDA.filter(t=>t.modeloId).forEach(t=>{
-    const k=t.modeloId+'|'+agChaveOc(t);
+  AGENDA.forEach(t=>{
+    const k=t.modeloId ? 'rec|'+t.modeloId+'|'+agChaveOc(t)
+          : (t.sugestaoChave ? 'chave|'+t.sugestaoChave : null);   /* contas a pagar, retorno de lead... */
+    if(!k) return;
     (grupos[k]=grupos[k]||[]).push(t);
   });
   const sobrando=[];
@@ -6208,6 +6210,14 @@ VIEWS.contas=function(){
     </div>
     <button class="btn btn-primary btn-sm" onclick="cpModalLanc()"><i class="fas fa-plus"></i> Nova conta</button>`;
   let html=head('contas',{actions});
+  const dups=cpDuplicadas();
+  if(dups.length) html+=`<div class="card" style="background:var(--warn-bg);border-color:#f3d9a4;
+      display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:#7c4a03">
+    <div style="flex:1;min-width:240px"><b><i class="fas fa-clone"></i> ${dups.length} lançamento(s) repetidos.</b>
+      <div style="font-size:.83rem;margin-top:3px">A mesma conta entrou mais de uma vez no mesmo mês.
+        Posso apagar as sobras e deixar uma de cada — se alguma já estava paga, é ela que fica.</div></div>
+    <button class="btn btn-primary btn-sm" onclick="cpLimparDuplicadas()"><i class="fas fa-broom"></i> Limpar repetidas</button>
+  </div>`;
   if(CP.aba==='fixas') html+=cpViewFixas();
   else if(CP.aba==='hist') html+=cpViewHistorico();
   else html+=cpViewMes(ano,mes,comp);
@@ -6753,6 +6763,8 @@ function cpAcaoDe(id){
 let __cpAgSync=false; const __cpAgFeitas=new Set();
 async function cpSincronizarAgenda(){
   if(typeof AGENDA==='undefined') return;
+  /* se a agenda ainda não chegou do Firebase eu não sei o que já existe — e duplicaria tudo */
+  if(typeof AG_CARREGOU==='object'&&!AG_CARREGOU.agenda){ setTimeout(cpSincronizarAgenda,1500); return; }
   if(__cpAgSync) return;                 /* evita criar a mesma ação duas vezes */
   __cpAgSync=true;
   const eu=(CURRENT_USER&&CURRENT_USER.email)||'admin';
@@ -6784,6 +6796,47 @@ async function cpFecharAcaoAgenda(id,excluir){
       concluidoEm:FV.serverTimestamp(), concluidoEmData:cpHoje(),
       concluidoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin', atualizadoEm:FV.serverTimestamp()});
   }catch(e){ console.warn('fechar acao da conta',e&&e.code); }
+}
+/* ---------- faxina: lançamentos repetidos da mesma conta no mesmo mês ---------- */
+function cpDuplicadas(){
+  const grupos={}, sobrando=[];
+  CONTAS.filter(c=>c.contaFixaId&&c.competencia).forEach(c=>{
+    const k=c.contaFixaId+'|'+c.competencia;
+    (grupos[k]=grupos[k]||[]).push(c);
+  });
+  Object.values(grupos).forEach(g=>{
+    if(g.length<2) return;
+    const ordem=g.slice().sort((a,b)=>{
+      const pa=a.status==='pago'?0:1, pb=b.status==='pago'?0:1;   /* a paga fica */
+      if(pa!==pb) return pa-pb;
+      const ea=a.origem==='auto'?1:0, eb=b.origem==='auto'?1:0;   /* a que você lançou fica */
+      if(ea!==eb) return ea-eb;
+      return ((a.criadoEm&&a.criadoEm.seconds)||0)-((b.criadoEm&&b.criadoEm.seconds)||0);
+    });
+    sobrando.push(...ordem.slice(1));
+  });
+  return sobrando;
+}
+async function cpLimparDuplicadas(){
+  const extras=cpDuplicadas();
+  if(!extras.length){ toast('Nenhuma conta repetida por aqui.','info'); return; }
+  const porNome={};
+  extras.forEach(c=>{ porNome[c.nome]=(porNome[c.nome]||0)+1; });
+  const resumo=Object.entries(porNome).map(([n,q])=>'• '+n+' — '+q+' a mais').join('\n');
+  if(!confirm('Encontrei '+extras.length+' lançamento(s) repetidos:\n\n'+resumo+
+    '\n\nDeixo um de cada mês. Quando algum já estava pago, é esse que fica. Pode ir?')) return;
+  try{
+    for(let i=0;i<extras.length;i+=400){
+      const lote=db.batch();
+      extras.slice(i,i+400).forEach(c=>{
+        lote.delete(db.collection('contas_pagar').doc(c.id));
+        const a=cpAcaoDe(c.id);
+        if(a) lote.delete(db.collection('agenda_crm').doc(a.id));
+      });
+      await lote.commit();
+    }
+    toast(extras.length+' lançamento(s) repetidos removidos.','ok','Contas limpas');
+  }catch(e){ toast('Não consegui limpar: '+(e.code||e.message),'err'); }
 }
 /* badge do menu: vencidas + vencendo hoje */
 function cpAtualizarBadge(){
