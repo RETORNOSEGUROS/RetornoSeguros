@@ -9,6 +9,7 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
   <style>
     :root {
       --brand: #4f46e5; --brand-dark: #4338ca;
@@ -159,6 +160,29 @@
     .erro-container h2 { color: #991b1b; margin-bottom: 10px; }
     .erro-container p { color: var(--muted); font-size: 14px; }
 
+    .prog-fix {
+      position: sticky; top: 8px; z-index: 30;
+      display: flex; align-items: center; gap: 10px;
+      background: white; border: 1px solid var(--border); border-radius: 100px;
+      padding: 8px 16px; margin-bottom: 14px; box-shadow: 0 4px 14px rgba(15,23,42,.08);
+      font-size: 12.5px; font-weight: 700; color: #475569;
+    }
+    .prog-fix .barra { flex: 1; height: 7px; background: #eef2f7; border-radius: 100px; overflow: hidden; }
+    .prog-fix .barra > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), #7c3aed); border-radius: 100px; transition: width .25s; }
+    .anexo-btn {
+      border: 1.5px dashed #a5b4fc; background: #eef2ff; color: #4338ca;
+      border-radius: 9px; padding: 8px 13px; font-size: 12.5px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+    }
+    .anexo-btn:hover { background: #e0e7ff; }
+    .anexo-chip {
+      display: inline-flex; align-items: center; gap: 7px; background: white;
+      border: 1px solid #c7d2fe; border-radius: 8px; padding: 5px 10px;
+      font-size: 12px; color: #3730a3; margin: 6px 6px 0 0; max-width: 100%;
+    }
+    .anexo-chip .rm { cursor: pointer; color: #94a3b8; font-weight: 800; }
+    .naosei-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #92400e; margin-top: 4px; }
+    .naosei-row input { width: 14px; height: 14px; accent-color: #d97706; cursor: pointer; }
     .footer {
       text-align: center; margin-top: 24px; padding-top: 16px;
       color: var(--muted); font-size: 12px;
@@ -185,7 +209,11 @@
     <div class="hero">
       <h1>📋 Mapeamento de Seguros</h1>
       <div class="empresa-nome" id="empresaNome">—</div>
-      <p>Preencha os seguros que sua empresa <strong>tem hoje</strong>. As informações vão direto para o seu gerente.</p>
+      <p>Um retrato rápido das proteções da sua empresa — <strong>leva menos de 3 minutos</strong>, tudo de clicar.</p>
+      <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:14px;">
+        <span style="background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); border-radius:100px; padding:5px 13px; font-size:12px; font-weight:600;">🔒 Confidencial — vai direto ao seu gerente</span>
+        <span style="background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); border-radius:100px; padding:5px 13px; font-size:12px; font-weight:600;">💾 Suas respostas ficam salvas se você pausar</span>
+      </div>
     </div>
 
     <!-- Dados gerais -->
@@ -199,12 +227,17 @@
       </div>
     </div>
 
+    <div class="prog-fix" id="progFix" style="display:none;">
+      <span id="progTxt">0 de 0 respondidos</span>
+      <div class="barra"><div id="progBar"></div></div>
+    </div>
+
     <!-- Produtos -->
     <div class="card">
       <div class="card-header">🎯 Seguros que a empresa tem</div>
       <div class="card-body">
         <div style="background: #fffbeb; border: 1px solid #fcd34d; padding: 12px 14px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; color: #78350f;">
-          ℹ️ Para cada seguro, marque <strong>SIM</strong> ou <strong>NÃO</strong>. Se sim, preencha pelo menos o <strong>mês/ano de vencimento</strong>.
+          ℹ️ Para cada seguro, marque <strong>SIM</strong> ou <strong>NÃO</strong>. Se sim, informe o <strong>vencimento</strong> — e, se preferir, <strong>anexe a apólice</strong> que nós extraímos os detalhes para você.
         </div>
         <div id="produtosWrap"></div>
       </div>
@@ -325,6 +358,12 @@
 
         // Renderizar produtos
         renderProdutos();
+        restaurarRascunho();
+        atualizarProgresso();
+        // autosave leve enquanto digita (o CEO pode pausar e voltar depois)
+        document.getElementById('conteudo').addEventListener('input', () => {
+          clearTimeout(window._rasT); window._rasT = setTimeout(salvarRascunho, 600);
+        });
 
         document.getElementById('loading').style.display = 'none';
         document.getElementById('conteudo').style.display = 'block';
@@ -393,6 +432,17 @@
                 <label>Valor anual pago (R$)</label>
                 <input type="text" id="valor-${p.id}" placeholder="R$ 0,00" oninput="mascaraMoeda(this)">
               </div>
+              <div class="full naosei-row">
+                <input type="checkbox" id="naosei-${p.id}">
+                <label for="naosei-${p.id}" style="text-transform:none; font-weight:600; cursor:pointer; color:#92400e;">Não sei o vencimento de cabeça — sigam sem ele (ou vejam na apólice anexada)</label>
+              </div>
+              <div class="full">
+                <label>Apólice <small style="color:#94a3b8; font-weight:400; text-transform:none;">(opcional — PDF ou foto)</small></label>
+                <input type="file" id="anexo-${p.id}" accept="application/pdf,image/*" multiple style="display:none;" onchange="anexoSel('${p.id}', this)">
+                <button type="button" class="anexo-btn" onclick="document.getElementById('anexo-${p.id}').click()">📎 Anexar apólice</button>
+                <span style="font-size:11px; color:#94a3b8; margin-left:8px; text-transform:none; font-weight:500;">caso queira anexar, nós cuidamos do resto</span>
+                <div id="anexoLista-${p.id}"></div>
+              </div>
               <div class="full">
                 <label>Observações</label>
                 <textarea id="obs-${p.id}" rows="2" placeholder="Algo importante sobre esse seguro..."></textarea>
@@ -418,6 +468,96 @@
       });
     }
 
+    // ===== ANEXOS DE APÓLICE (opcional) =====
+    const ANEXOS = {};            // { prodId: File[] }
+    const FALHAS_ANEXO = [];
+    function anexoSel(prodId, input) {
+      const files = [...(input.files || [])];
+      ANEXOS[prodId] = ANEXOS[prodId] || [];
+      for (const f of files) {
+        if (ANEXOS[prodId].length >= 3) { alert('Máximo de 3 anexos por seguro.'); break; }
+        if (f.size > 15 * 1024 * 1024) { alert(`"${f.name}" passa de 15 MB — envie um arquivo menor.`); continue; }
+        const tipoOk = f.type === 'application/pdf' || (f.type || '').startsWith('image/');
+        if (!tipoOk) { alert(`"${f.name}" não é PDF nem imagem.`); continue; }
+        ANEXOS[prodId].push(f);
+      }
+      input.value = '';
+      renderAnexos(prodId);
+    }
+    window.anexoSel = anexoSel;
+    function renderAnexos(prodId) {
+      const box = document.getElementById('anexoLista-' + prodId);
+      if (!box) return;
+      box.innerHTML = (ANEXOS[prodId] || []).map((f, i) => `
+        <span class="anexo-chip">📄 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">${f.name}</span>
+        <span style="color:#94a3b8;">${(f.size / 1024 / 1024).toFixed(1)}MB</span>
+        <span class="rm" onclick="anexoRm('${prodId}', ${i})">✕</span></span>`).join('');
+    }
+    function anexoRm(prodId, i) { (ANEXOS[prodId] || []).splice(i, 1); renderAnexos(prodId); }
+    window.anexoRm = anexoRm;
+    async function uploadAnexos(prodId) {
+      const files = ANEXOS[prodId] || [];
+      const out = [];
+      for (const f of files) {
+        try {
+          const path = `mb_apolices/${LINK.empresaId}/${prodId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_')}`;
+          const snap = await firebase.storage().ref(path).put(f, { contentType: f.type || 'application/octet-stream' });
+          const url = await snap.ref.getDownloadURL();
+          out.push({ nome: f.name, url, tamanho: f.size, em: new Date().toISOString(), via: 'link_mapeamento' });
+        } catch (e) { console.warn('anexo falhou', f.name, e); FALHAS_ANEXO.push(f.name); }
+      }
+      return out;
+    }
+
+    // ===== PROGRESSO ("respondidos X de Y") =====
+    function atualizarProgresso() {
+      const pend = PRODUTOS.filter(p => !PROD_BLOQUEADOS.has(p.id));
+      const resp = pend.filter(p => respostas[p.id] && respostas[p.id].tem).length;
+      const fix = document.getElementById('progFix');
+      if (!fix) return;
+      fix.style.display = pend.length ? 'flex' : 'none';
+      document.getElementById('progTxt').textContent = `${resp} de ${pend.length} respondidos`;
+      document.getElementById('progBar').style.width = (pend.length ? Math.round(resp / pend.length * 100) : 0) + '%';
+    }
+
+    // ===== RASCUNHO (o CEO pode pausar e voltar sem perder nada) =====
+    function salvarRascunho() {
+      try {
+        const campos = {};
+        PRODUTOS.forEach(p => {
+          ['vencMes', 'vencAno', 'seguradora', 'valor', 'obs'].forEach(pref => {
+            const el = document.getElementById(pref + '-' + p.id);
+            if (el && el.value) campos[pref + '-' + p.id] = el.value;
+          });
+          const ns = document.getElementById('naosei-' + p.id);
+          if (ns && ns.checked) campos['naosei-' + p.id] = true;
+        });
+        const nf = document.getElementById('numFuncionarios');
+        localStorage.setItem('map_rascunho_' + LINK_ID, JSON.stringify({ respostas, campos, numFunc: nf ? nf.value : '' }));
+      } catch (e) {}
+    }
+    function restaurarRascunho() {
+      try {
+        const raw = localStorage.getItem('map_rascunho_' + LINK_ID);
+        if (!raw) return;
+        const d = JSON.parse(raw);
+        Object.keys(d.respostas || {}).forEach(pid => {
+          const r = d.respostas[pid];
+          if (r && r.tem && document.getElementById('box-' + pid)) {
+            responderProduto(pid, r.tem);
+            if (r.interesse) responderInteresse(pid, r.interesse);
+            respostas[pid].preMarcadoNao = r.preMarcadoNao === true && r.tem === 'nao';
+          }
+        });
+        Object.keys(d.campos || {}).forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          if (id.indexOf('naosei-') === 0) el.checked = true; else el.value = d.campos[id];
+        });
+        if (d.numFunc) document.getElementById('numFuncionarios').value = d.numFunc;
+      } catch (e) {}
+    }
+
     function responderProduto(prodId, resp) {
       const box = document.getElementById('box-' + prodId);
       box.classList.remove('tem-sim','tem-nao');
@@ -439,6 +579,8 @@
         const anoEl = document.getElementById('vencAno-' + prodId);
         if (anoEl && !anoEl.value) anoEl.value = new Date().getFullYear();
       }
+      atualizarProgresso();
+      salvarRascunho();
     }
     window.responderProduto = responderProduto;
 
@@ -450,6 +592,7 @@
         b.classList.add('int-' + b.getAttribute('data-int'));
         b.classList.toggle('ativa', b.getAttribute('data-int') === val);
       });
+      salvarRascunho();
     }
     window.responderInteresse = responderInteresse;
 
@@ -505,10 +648,15 @@
           if (r.tem === 'sim') {
             r.vencimentoMes = parseInt(document.getElementById('vencMes-' + p.id).value) || null;
             r.vencimentoAno = parseInt(document.getElementById('vencAno-' + p.id).value) || null;
+            const _naoSei = ((document.getElementById('naosei-' + p.id) || {}).checked) === true;
+            const _temAnexo = (ANEXOS[p.id] || []).length > 0;
             if (!r.vencimentoMes || !r.vencimentoAno) {
-              btn.disabled = false;
-              btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
-              return alert(`Preencha mês e ano de vencimento de "${p.nome}" (obrigatório quando você tem o seguro).`);
+              if (!_naoSei && !_temAnexo) {
+                btn.disabled = false;
+                btn.innerHTML = '<span>📤</span><span>Enviar mapeamento</span>';
+                return alert(`Em "${p.nome}": informe o mês/ano de vencimento — ou marque "não sei o vencimento", ou anexe a apólice.`);
+              }
+              r.vencimentoNaoInformado = true;
             }
             r.seguradora = (document.getElementById('seguradora-' + p.id).value || '').trim() || null;
             r.valorAnual = lerMoeda(document.getElementById('valor-' + p.id));
@@ -561,9 +709,16 @@
             dados.statusVisual = 'mapeada';
             dados.vencimentoMes = r.vencimentoMes;
             dados.vencimentoAno = r.vencimentoAno;
+            if (r.vencimentoNaoInformado) dados.vencimentoNaoInformado = true;
             dados.seguradoraAtual = r.seguradora;
             dados.valorAnualPago = r.valorAnual || null;
             dados.observacoes = r.observacoes;
+            // Apólices anexadas (opcional): sobem para o Storage e a referência fica no produto
+            const _anexosMeta = await uploadAnexos(p.id);
+            if (_anexosMeta.length) {
+              dados.apoliceAnexos = firebase.firestore.FieldValue.arrayUnion.apply(firebase.firestore.FieldValue, _anexosMeta);
+              r.anexos = _anexosMeta.map(a => ({ nome: a.nome, url: a.url }));
+            }
           } else {
             // Não tem o produto hoje
             dados.tem = false;
@@ -671,7 +826,13 @@
         }
 
         // Sucesso
+        try { localStorage.removeItem('map_rascunho_' + LINK_ID); } catch (e) {}
+        const _fx = document.getElementById('progFix'); if (_fx) _fx.style.display = 'none';
         document.getElementById('conteudo').querySelectorAll('.card, .btn-enviar').forEach(el => el.style.display = 'none');
+        if (FALHAS_ANEXO.length) {
+          const s = document.getElementById('sucesso');
+          s.insertAdjacentHTML('beforeend', `<p style="margin-top:10px; color:#92400e; font-size:13px;">⚠ Não conseguimos receber ${FALHAS_ANEXO.length === 1 ? 'o anexo' : 'os anexos'}: ${FALHAS_ANEXO.join(', ')}. Suas respostas foram registradas normalmente — se quiser, envie a apólice ao gerente por e-mail/WhatsApp.</p>`);
+        }
         document.getElementById('sucesso').classList.add('show');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } catch(e) {
