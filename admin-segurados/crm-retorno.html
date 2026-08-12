@@ -1154,12 +1154,15 @@ function bootstrap(){
   },e=>console.error('folha',e)));
   LISTENERS.push(db.collection('agenda_fixas').onSnapshot(sn=>{
     AG_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof AG_CARREGOU==='object') AG_CARREGOU.fixas=true;
     if(typeof agGerarRecorrentes==='function') agGerarRecorrentes(true);
     if((location.hash||'').slice(1)==='agenda') VIEWS.agenda();
   },e=>console.error('agenda_fixas',e)));
   LISTENERS.push(db.collection('agenda_crm').onSnapshot(sn=>{
     AGENDA=sn.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof AG_CARREGOU==='object') AG_CARREGOU.agenda=true;
     if(typeof agAtualizarBadge==='function') agAtualizarBadge();
+    if(typeof agGerarRecorrentes==='function') agGerarRecorrentes();
     const r=(location.hash||'#dashboard').slice(1);
     if(r==='agenda') VIEWS.agenda(); else if(r==='dashboard'&&VIEWS.dashboard) VIEWS.dashboard();
   },e=>console.error('agenda',e)));
@@ -5010,22 +5013,31 @@ function agOcorrencias(m,deISO,ateISO){
   return out.map(s=>({original:s,data:agAjustaDiaUtil(s,m.ajuste||'antes',m.feriados)}))
             .filter(x=>!fim||x.data<=fim);
 }
+/* só posso lançar depois que as duas coleções chegaram — senão duplico tudo */
+const AG_CARREGOU={fixas:false,agenda:false};
+let __agGerando=false;
+/* a data pode ter sido arrastada pelo usuário; a ocorrência original é a identidade */
+function agChaveOc(t){ return t.ocorrencia||t.dataOriginal||t.data; }
+function agJaExiste(modeloId,original,data){
+  return AGENDA.some(t=>t.modeloId===modeloId&&(agChaveOc(t)===original||agChaveOc(t)===data));
+}
 /* cria as ocorrências que faltam nos próximos 90 dias */
 async function agGerarRecorrentes(force){
+  if(!AG_CARREGOU.fixas||!AG_CARREGOU.agenda) return;   /* espero os dados chegarem */
+  if(__agGerando) return;
   if(!AG_FIXAS.length) return;
   if(__agGerou&&!force) return;
-  __agGerou=true;
+  __agGerou=true; __agGerando=true;
   const hoje=agHoje();
   const d=agS2D(hoje); const ate=agD2S(new Date(d.getFullYear(),d.getMonth(),d.getDate()+90));
   const novos=[];
   AG_FIXAS.filter(m=>m.ativo!==false).forEach(m=>{
     agOcorrencias(m,hoje,ate).forEach(oc=>{
       if(oc.data<hoje) return;
-      const existe=AGENDA.some(t=>t.modeloId===m.id&&t.data===oc.data);
-      if(!existe) novos.push({m,oc});
+      if(!agJaExiste(m.id,oc.original,oc.data)) novos.push({m,oc});
     });
   });
-  if(!novos.length) return;
+  if(!novos.length){ __agGerando=false; return; }
   try{
     const eu=agEuEmail()||'admin';
     const lote=db.batch();
@@ -5033,6 +5045,7 @@ async function agGerarRecorrentes(force){
       lote.set(db.collection('agenda_crm').doc(),{
         titulo:m.titulo, descricao:m.descricao||null,
         data:oc.data, dataOriginal:oc.original!==oc.data?oc.original:null,
+        ocorrencia:oc.original,          /* identidade da repetição — não muda se arrastar */
         hora:m.hora||null, horaFim:m.horaFim||null,
         tipo:m.tipo||'outro', prioridade:m.prioridade||'normal',
         responsaveis:m.responsaveis||[eu], responsaveisNomes:(m.responsaveis||[eu]).map(agNomeDe),
@@ -5043,6 +5056,78 @@ async function agGerarRecorrentes(force){
     await lote.commit();
     console.log('[agenda] '+novos.length+' ocorrência(s) recorrentes criadas');
   }catch(e){ console.error('gerar recorrentes',e); __agGerou=false; }
+  finally{ setTimeout(()=>{__agGerando=false;},1500); }
+}
+
+/* ---------- faxina: ocorrências repetidas do mesmo modelo ---------- */
+function agDuplicadas(){
+  const grupos={};
+  AGENDA.filter(t=>t.modeloId).forEach(t=>{
+    const k=t.modeloId+'|'+agChaveOc(t);
+    (grupos[k]=grupos[k]||[]).push(t);
+  });
+  const sobrando=[];
+  Object.values(grupos).forEach(g=>{
+    if(g.length<2) return;
+    /* fico com a melhor: concluída primeiro, senão a mais antiga */
+    const ordem=g.slice().sort((a,b)=>{
+      const ca=a.status==='concluida'?0:1, cb=b.status==='concluida'?0:1;
+      if(ca!==cb) return ca-cb;
+      const ta=(a.criadoEm&&a.criadoEm.seconds)||0, tb=(b.criadoEm&&b.criadoEm.seconds)||0;
+      return ta-tb;
+    });
+    sobrando.push(...ordem.slice(1));
+  });
+  return sobrando;
+}
+async function agLimparDuplicadas(){
+  const extras=agDuplicadas();
+  if(!extras.length){ toast('Nenhuma ação repetida por aqui.','info'); return; }
+  const porTitulo={};
+  extras.forEach(t=>{ porTitulo[t.titulo]=(porTitulo[t.titulo]||0)+1; });
+  const resumo=Object.entries(porTitulo).map(([t,n])=>'• '+t+' — '+n+' a mais').join('\n');
+  if(!confirm('Encontrei '+extras.length+' ação(ões) repetidas:\n\n'+resumo+
+    '\n\nApago as repetidas e deixo uma de cada. Quando alguma já estava concluída, é essa que fica. Pode ir?')) return;
+  try{
+    for(let i=0;i<extras.length;i+=400){
+      const lote=db.batch();
+      extras.slice(i,i+400).forEach(t=>lote.delete(db.collection('agenda_crm').doc(t.id)));
+      await lote.commit();
+    }
+    toast(extras.length+' ação(ões) repetidas removidas.','ok','Agenda limpa');
+    closeModal();
+  }catch(e){ toast('Não consegui limpar: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- encerrar a recorrência daqui para frente ---------- */
+async function agEncerrarFixa(id){
+  const m=AG_FIXAS.find(x=>x.id===id); if(!m) return;
+  const hoje=agHoje();
+  const futuras=AGENDA.filter(t=>t.modeloId===id&&t.status!=='concluida'&&t.data>hoje);
+  if(!confirm('Encerrar a recorrência "'+m.titulo+'" a partir de amanhã?\n\n'+
+    'O que já passou continua na agenda do jeito que está'+
+    (futuras.length?', e as '+futuras.length+' ocorrência(s) futuras ainda não feitas serão removidas.':'.')+
+    '\n\nEla para de lançar sozinha, mas fica guardada aqui como encerrada — dá para reativar depois.')) return;
+  try{
+    await db.collection('agenda_fixas').doc(id).update({
+      ativo:false, encerradaEm:hoje, atualizadoEm:FV.serverTimestamp() });
+    for(let i=0;i<futuras.length;i+=400){
+      const lote=db.batch();
+      futuras.slice(i,i+400).forEach(t=>lote.delete(db.collection('agenda_crm').doc(t.id)));
+      await lote.commit();
+    }
+    toast('Recorrência encerrada. O histórico ficou.','ok');
+    agModalRecorrentes();
+  }catch(e){ toast('Não consegui encerrar: '+(e.code||e.message),'err'); }
+}
+async function agReativarFixa(id){
+  const m=AG_FIXAS.find(x=>x.id===id); if(!m) return;
+  try{
+    await db.collection('agenda_fixas').doc(id).update({ativo:true,encerradaEm:null,atualizadoEm:FV.serverTimestamp()});
+    __agGerou=false;
+    toast('Recorrência reativada — já lancei os próximos meses.','ok');
+    setTimeout(()=>{ agGerarRecorrentes(true); agModalRecorrentes(); },600);
+  }catch(e){ toast('Não consegui reativar: '+(e.code||e.message),'err'); }
 }
 
 /* ---------- modal: lista dos modelos ---------- */
@@ -5053,7 +5138,16 @@ function agModalRecorrentes(){
     <div class="modal-body">
       <p style="color:var(--text-2);font-size:.86rem;margin-bottom:14px">
         Coisas que se repetem sempre — tirar boleto, enviar relatório, conferir fatura. O sistema lança sozinho na agenda
-        com <b>90 dias de antecedência</b> e ajusta a data quando cai em fim de semana ou feriado.</p>
+        com <b>90 dias de antecedência</b> e ajusta a data quando cai em fim de semana ou feriado.
+        O <i class="fas fa-stop" style="color:var(--warn)"></i> encerra daqui para frente sem apagar o histórico;
+        a lixeira apaga a recorrência inteira.</p>
+      ${(function(){ const d=agDuplicadas();
+        return d.length?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:11px;padding:12px 15px;margin-bottom:14px;
+            display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:220px;font-size:.86rem"><b><i class="fas fa-clone"></i> ${d.length} ação(ões) repetidas na agenda.</b>
+            <div style="font-size:.79rem;margin-top:3px">Versões antigas do sistema lançavam de novo a cada abertura. Posso apagar as sobras e deixar uma de cada.</div></div>
+          <button class="btn btn-primary btn-sm" onclick="agLimparDuplicadas()"><i class="fas fa-broom"></i> Limpar repetidas</button>
+        </div>`:''; })()}
       ${ms.length?`<div class="tbl-wrap"><table><thead><tr>
         <th>Ação</th><th>Repete</th><th>Quando</th><th>Se não for dia útil</th><th>Próxima</th><th>Status</th><th></th>
       </tr></thead><tbody>
@@ -5070,10 +5164,14 @@ function agModalRecorrentes(){
             : 'dia '+(m.diaDoMes||1)}${m.hora?' às '+esc(m.hora):''}</td>
           <td style="font-size:.79rem">${esc(AG_AJUSTE[m.ajuste||'antes'])}${m.feriados!==false?'<div style="font-size:.71rem;color:var(--text-3)">considera feriados</div>':''}</td>
           <td>${prox?`<b>${agDataCurta(prox.data)}</b>${prox.original!==prox.data?`<div style="font-size:.71rem;color:var(--warn)">era ${agDataCurta(prox.original)} (${agPorqueMudou(prox.original,prox.data)})</div>`:''}`:'<span style="color:var(--text-3)">—</span>'}</td>
-          <td>${statusBadge(m.ativo===false?'Pausada':'Ativa',m.ativo===false?'var(--text-3)':'var(--ok)')}</td>
+          <td>${statusBadge(m.ativo===false?(m.encerradaEm?'Encerrada':'Pausada'):'Ativa',m.ativo===false?'var(--text-3)':'var(--ok)')}
+            ${m.encerradaEm?`<div style="font-size:.71rem;color:var(--text-3)">em ${agDataCurta(m.encerradaEm)}</div>`:''}</td>
           <td style="white-space:nowrap">
-            <button class="btn btn-ghost btn-sm" onclick="agModalFixa('${m.id}')"><i class="fas fa-pen"></i></button>
-            <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="agExcluirFixa('${m.id}')"><i class="fas fa-trash"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Editar" onclick="agModalFixa('${m.id}')"><i class="fas fa-pen"></i></button>
+            ${m.ativo===false
+              ? `<button class="btn btn-ghost btn-sm" title="Voltar a lançar" style="color:var(--ok)" onclick="agReativarFixa('${m.id}')"><i class="fas fa-play"></i></button>`
+              : `<button class="btn btn-ghost btn-sm" title="Encerrar daqui para frente" style="color:var(--warn)" onclick="agEncerrarFixa('${m.id}')"><i class="fas fa-stop"></i></button>`}
+            <button class="btn btn-ghost btn-sm" title="Excluir de vez" style="color:var(--danger)" onclick="agExcluirFixa('${m.id}')"><i class="fas fa-trash"></i></button>
           </td></tr>`;}).join('')}
       </tbody></table></div>`
       :`<div class="empty"><div class="em-ic"><i class="fas fa-repeat"></i></div><h4>Nenhuma ação recorrente</h4>
@@ -7894,7 +7992,9 @@ async function ppSalvarOrcamento(){
   }catch(e){ toast('Não consegui salvar: '+(e.code||e.message),'err'); }
 }
 async function ppGerarLink(){
-  if(!ORC.id) await ppSalvarOrcamento();
+  /* salva SEMPRE — senão o que você mexeu depois do primeiro salvamento
+     (FIPE, comissão, observações) não chega na página do cliente */
+  await ppSalvarOrcamento();
   if(!ORC.id) return;
   const base=location.href.split('#')[0].replace(/[^/]*$/,'');
   const url=base+'cotacao.html?id='+ORC.id;
@@ -7907,7 +8007,10 @@ async function ppGerarLink(){
       <input type="text" readonly value="${esc(url)}" id="ppUrl" style="flex:1;min-width:260px;font-size:.85rem">
       <button class="btn btn-primary btn-sm" onclick="ppCopiar('${esc(url)}')"><i class="fas fa-copy"></i> Copiar</button>
       <a class="btn btn-ghost btn-sm" href="${esc(url)}" target="_blank"><i class="fas fa-up-right-from-square"></i> Abrir</a>
-    </div></div>`;
+    </div>
+    <div style="font-size:.78rem;color:var(--text-3);margin-top:8px">
+      Link atualizado agora com o que está na tela${ORC.fipe&&ORC.fipe.valor&&ORC.mostrarFipe!==false?', inclusive o valor FIPE':''}.
+      Mexeu em algo depois? Clique aqui de novo — o endereço continua o mesmo.</div></div>`;
 }
 function ppCopiar(t){
   if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>toast('Link copiado.','ok'),()=>{});
