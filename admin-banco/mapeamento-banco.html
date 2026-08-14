@@ -3159,7 +3159,7 @@
 
         <div class="cfg-card">
           <h3><i data-lucide="layers" class="w-5 h-5 text-violet-500"></i> Ramos de seguro</h3>
-          <p class="cfg-desc">Inclua, edite ou exclua ramos. Use <strong>Ativo</strong> pra esconder um ramo das telas sem perder o histórico. <strong>Só por OP</strong>: o ramo não aparece no questionário, no mapeamento nem nas oportunidades — só pode ser aberto por uma OP. Quando fecha, entra na produção e no calendário de renovações normalmente.<br><strong>Vira oportunidade</strong>: o que faz o ramo virar lead sozinho, pelo porte da empresa. Independente disso, todo ramo já vira oportunidade quando é mapeado como <em>"não tem"</em> ou quando tem vencimento mapeado.</p>
+          <p class="cfg-desc">Inclua, edite ou exclua ramos. Use <strong>Ativo</strong> pra esconder um ramo das telas sem perder o histórico. <strong>Só por OP</strong>: o ramo não aparece no questionário, no mapeamento nem nas oportunidades — só pode ser aberto por uma OP. Quando fecha, entra na produção e no calendário de renovações normalmente.<br><strong>Vira oportunidade</strong>: o que faz o ramo virar lead sozinho, pelo porte da empresa. Independente disso, todo ramo já vira oportunidade quando é mapeado como <em>"não tem"</em> ou quando tem vencimento mapeado.<br><strong>Func. + não tem</strong>: exige as DUAS coisas — nº de funcionários registrado <em>e</em> mapeado que não tem o produto. Nem o porte sozinho, nem o "não tem" sozinho disparam (ex.: previdência precisa das vidas para cotar).</p>
           <table class="cfg-table">
             <thead><tr><th style="width:56px;text-align:center;">ÍCONE</th><th>NOME</th><th style="width:190px;">DESCRIÇÃO (p/ cliente)</th><th style="width:140px;">GRUPO</th><th style="width:170px;text-align:center;">VIRA OPORTUNIDADE</th><th style="width:76px;text-align:center;">SÓ POR OP</th><th style="width:92px;text-align:center;" title="Se desligado: o ramo aparece no raio-x, na cobertura e no questionário do cliente, e pontua ao mapear — mas NÃO entra no indicador de Mapeamento da campanha.">NO MAPEAM. DA CAMPANHA</th><th style="width:64px;text-align:center;">ATIVO</th><th style="width:52px;text-align:center;"></th></tr></thead>
             <tbody id="cfgRamosBody"></tbody>
@@ -12065,7 +12065,9 @@
         const pd = dados[r.id] || {};
         const temCot = !!cotPorCelula[e.id + '|' + r.id];
         const reag = (typeof _reagendadoNaCampanha === 'function') && _reagendadoNaCampanha(pd);
-        const naoTem = pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem';
+        const naoTem = (typeof _naoTemDispara === 'function')
+          ? _naoTemDispara(r, e, pd)
+          : (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem');
         const porte = (typeof _porteDispara === 'function') && _porteDispara(r, e);
         if (!porte && !naoTem && !reag) return;
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, r.id) : null;
@@ -16043,6 +16045,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <option value="nenhum" ${_g.tipo === 'nenhum' ? 'selected' : ''}>—</option>
             <option value="socios" ${_g.tipo === 'socios' ? 'selected' : ''}>Sócios</option>
             <option value="funcionarios" ${_g.tipo === 'funcionarios' ? 'selected' : ''}>Funcionários</option>
+            <option value="funcionarios_naotem" ${_g.tipo === 'funcionarios_naotem' ? 'selected' : ''}>Func. + não tem</option>
           </select>
           <input type="number" min="1" step="1" class="cfg-input cfg-ramo-gatmin" title="Mínimo pra disparar" style="width:46px; ${_g.tipo === 'nenhum' ? 'visibility:hidden;' : ''}" value="${_g.min || 1}">
         </td>
@@ -24155,8 +24158,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const g = _gatilhoDe(r);
     if (g.tipo === 'socios') return _sociosCotaveis(e).length >= g.min;
     if (g.tipo === 'funcionarios') return (Number(e.funcionarios) || 0) >= g.min;
+    // 'funcionarios_naotem': porte sozinho NÃO dispara (precisa também do "não tem" —
+    // avaliado junto do status, via _naoTemDispara)
     return false;
   }
+  // "Não tem" mapeado dispara a oportunidade? Regra universal = sim; exceção é o
+  // gatilho 'funcionarios_naotem', que segura até o nº de funcionários existir.
+  function _naoTemDispara(r, e, pd) {
+    const naoTemBruto = pd && (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem');
+    if (!naoTemBruto) return false;
+    const g = _gatilhoDe(r);
+    if (g.tipo === 'funcionarios_naotem') return (Number(e.funcionarios) || 0) >= g.min;
+    return true;
+  }
+  window._naoTemDispara = _naoTemDispara;
   function _motivoPorte(r, e) {
     const g = _gatilhoDe(r);
     if (g.tipo === 'socios') return `${_sociosCotaveis(e).length} sócio(s) com dados completos`;
@@ -24209,8 +24224,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         let motivo = null;
         if (reagendado) {
           motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
-        } else if (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem') {
-          motivo = 'cliente informou que NÃO tem';
+        } else if (_naoTemDispara(r, e, pd)) {
+          motivo = _gatilhoDe(r).tipo === 'funcionarios_naotem'
+            ? `não tem o produto · ${Number(e.funcionarios) || 0} funcionários mapeados`
+            : 'cliente informou que NÃO tem';
         } else if (_porteDispara(r, e)) {
           motivo = _motivoPorte(r, e);
         }
