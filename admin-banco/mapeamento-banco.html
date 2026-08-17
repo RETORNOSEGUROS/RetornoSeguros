@@ -12516,14 +12516,19 @@
   }
   window._carregarCotacoesTodas = _carregarCotacoesTodas;
 
-  async function _dadosGrupoDoAno(ano, escopoUid) {
+  async function _dadosGrupoDoAno(ano, escopoUid, listaEmpresas) {
     const ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
     const inicioAno = new Date(ano, 0, 1), fimAno = new Date(ano, 11, 31, 23, 59, 59);
     const producaoGrupo = {}, metaGrupo = {};
+    // Lista de empresas usada na conta. IMPORTANTE: na sessão do RM, EMPRESAS_REAIS
+    // tem SÓ as empresas dele (privacidade) — para a conta da AGÊNCIA a campanha
+    // precisa passar a lista completa em listaEmpresas, senão as apólices "já nosso"
+    // dos outros RMs ficam de fora e o % da agência aparece menor do que é.
+    const _EMPS = listaEmpresas || EMPRESAS_REAIS || EMPRESAS || [];
     // empresa|produto já contados como fechamento — evita contar a MESMA apólice
     // duas vezes (uma como negócio fechado no funil, outra como "já é nosso").
     const _jaContadas = new Set();
-    const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
+    const _empresaRM = {}; _EMPS.forEach(e => _empresaRM[e.id] = e.rm);
 
     // ---- Produção realizada por grupo (fechamentos do ano) ----
     // MESMA CONTA do Relatório de Metas: soma cada fechada do ano (sem dedup por
@@ -12549,7 +12554,7 @@
     // ---- Já-nosso: apólices que JÁ eram suas e NÃO passaram pelo funil ----
     // (mesma regra do Relatório de Metas — sem isso, um negócio fechado no funil
     //  era contado outra vez aqui, inflando o % da campanha)
-    (EMPRESAS_REAIS || []).forEach(e => {
+    _EMPS.forEach(e => {
       if (escopoUid && e.rm !== escopoUid) return;
       const dados = e.produtosDados || {};
       Object.keys(dados).forEach(rid => {
@@ -12670,8 +12675,10 @@
     // RMs válidos = os que estão na equipe da agência atual (EQUIPE_REAL já vem filtrado por agência)
     const uidsEquipe = new Set((EQUIPE_REAL || []).filter(p => ['rm', 'chefe'].includes(p.perfil)).map(p => p.uid));
 
-    // Produção e meta por grupo (ano todo) — para a diversificação do fator
-    const dadosGrupoAg = await _dadosGrupoDoAno(CAMPANHA.ano, null).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
+    // Produção e meta por grupo (ano todo) — para a diversificação do fator.
+    // Passa empresasAg (agência COMPLETA): na sessão do RM, EMPRESAS_REAIS só tem
+    // as empresas dele e a conta da agência sairia menor (vida/dental do print).
+    const dadosGrupoAg = await _dadosGrupoDoAno(CAMPANHA.ano, null, empresasAg).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
     const _somaVals = o => Object.values(o || {}).reduce((s, v) => s + (v || 0), 0);
     // Meta ajustada: cada grupo conta pela meta × alvo% (o mínimo que você definiu por grupo).
     // Ex: saúde meta 100k com alvo 50% → conta 50k. Assim "produção vs meta" respeita o alvo por carteira.
@@ -12696,7 +12703,7 @@
     const rmsCov = [];
     for (const uid of Object.keys(porRM)) {
       const cotDoRm = cotAtivas.filter(c => porRM[uid].some(e => e.id === c.empresaId));
-      const dg = await _dadosGrupoDoAno(CAMPANHA.ano, uid).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
+      const dg = await _dadosGrupoDoAno(CAMPANHA.ano, uid, empresasAg).catch(() => ({ producaoGrupo: {}, metaGrupo: {} }));
       const assumidasRm = cotDoRm.filter(c => ehStatusAtivoSafe(c.status)).length;
       const cov = calcularCobertura(porRM[uid], cotDoRm, {
         producaoGrupo: dg.producaoGrupo, metaGrupo: dg.metaGrupo,
