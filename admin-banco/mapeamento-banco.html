@@ -3276,7 +3276,7 @@
         </div>
         <div style="display: flex; gap: 6px; background: #f1f5f9; padding: 4px; border-radius: 10px;">
           <button class="cot-view-btn active" id="btnViewKanban" onclick="setCotacaoView('kanban')" style="border:none; background:white; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.08);">🗂 Kanban</button>
-          <button class="cot-view-btn" id="btnViewLista" onclick="setCotacaoView('lista')" style="border:none; background:transparent; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; color:#64748b;">☰ Lista</button>
+          <button class="cot-view-btn perm-admin" id="btnViewLista" onclick="setCotacaoView('lista')" style="border:none; background:transparent; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; color:#64748b;">☰ Lista</button>
           <button class="cot-view-btn" id="btnViewRamo" onclick="setCotacaoView('ramo')" style="border:none; background:transparent; padding:7px 14px; border-radius:7px; font-size:13px; font-weight:700; cursor:pointer; color:#64748b;">🏷 Por ramo</button>
         </div>
       </div>
@@ -3311,7 +3311,20 @@
 
       <!-- VISÃO POR RAMO -->
       <div id="cotacoesRamoView" style="display: none;">
-        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">🏷 Todas as negociações agrupadas por ramo (abertas, fechadas e perdidas). Clique numa negociação pra ver a linha do tempo completa.</div>
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">🏷 Negociações agrupadas por ramo. Use os filtros — os cards do topo acompanham o que você escolher.</div>
+        <div class="filter-bar" style="margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+          <select class="filter-select" id="fRamoGrupo" onchange="renderCotacoesPorRamo()">
+            <option value="">📁 Todos os grupos</option>
+          </select>
+          <select class="filter-select" id="fRamoRamo" onchange="renderCotacoesPorRamo()">
+            <option value="">🏷 Todos os ramos</option>
+          </select>
+          <select class="filter-select" id="fRamoRm" onchange="renderCotacoesPorRamo()">
+            <option value="">👥 Todos os RMs</option>
+          </select>
+          <button class="btn-secondary" style="padding:6px 12px; font-size:12px;" onclick="limparFiltrosRamo()">Limpar</button>
+        </div>
+        <div id="fRamoStatusWrap" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;"></div>
         <div id="cotacoesRamoContainer"></div>
       </div>
 
@@ -24944,8 +24957,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }
       }
 
+      if (COTACAO_VIEW === 'lista' && !ehCorretorReal()) COTACAO_VIEW = 'kanban';
       atualizarKpiCotacoes();
       if (COTACAO_VIEW === 'kanban') renderKanban();
+      else if (COTACAO_VIEW === 'ramo') renderCotacoesPorRamo();
       else renderCotacoes();
     } catch (e) {
       console.warn('Erro carregar cotações:', e);
@@ -24953,16 +24968,23 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
   }
 
-  function atualizarKpiCotacoes() {
-    const ativas = COTACOES.filter(c => STATUS_ATIVOS.includes(c.status));
-    document.getElementById('kpiCotSolic').textContent = COTACOES.filter(c => c.status === 'solicitada').length;
-    document.getElementById('kpiCotCotando').textContent = COTACOES.filter(c => c.status === 'cotando').length;
-    document.getElementById('kpiCotEnviadas').textContent = COTACOES.filter(c => ['enviada','reuniao_agendada'].includes(c.status)).length;
+  function atualizarKpiCotacoes(listaOpt) {
+    // Sem argumento: usa todas. Com argumento (visão Por ramo filtrada): os
+    // cards do topo passam a refletir os filtros escolhidos.
+    const L = listaOpt || COTACOES;
+    const ativas = L.filter(c => STATUS_ATIVOS.includes(c.status));
+    document.getElementById('kpiCotSolic').textContent = L.filter(c => c.status === 'solicitada').length;
+    document.getElementById('kpiCotCotando').textContent = L.filter(c => c.status === 'cotando').length;
+    document.getElementById('kpiCotEnviadas').textContent = L.filter(c => ['enviada','reuniao_agendada'].includes(c.status)).length;
     document.getElementById('kpiCotTotal').textContent = ativas.length;
   }
 
   let COTACAO_VIEW = 'kanban';
   function setCotacaoView(v) {
+    // A visão LISTA é exclusiva do admin: tem botões de ação (Enviar ao cliente,
+    // editar proposto) e não acompanha as etapas atuais do funil. Todo o resto
+    // (RM, chefe, assistente, seguradora) usa Kanban e Por ramo.
+    if (v === 'lista' && !ehCorretorReal()) v = 'kanban';
     COTACAO_VIEW = v;
     document.getElementById('cotacoesKanbanView').style.display = (v === 'kanban') ? '' : 'none';
     document.getElementById('cotacoesListaView').style.display = (v === 'lista') ? '' : 'none';
@@ -24980,6 +25002,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (v === 'kanban') renderKanban();
     else if (v === 'ramo') renderCotacoesPorRamo();
     else renderCotacoes();
+    // Saindo da visão Por ramo, os KPIs do topo voltam ao total geral
+    if (v !== 'ramo') { try { atualizarKpiCotacoes(); } catch (e) {} }
   }
   window.setCotacaoView = setCotacaoView;
 
@@ -24998,6 +25022,59 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   // ---------- Visão: Negociações por ramo ----------
+  // Filtros da visão Por ramo: grupo, ramo, RM e status (checks)
+  function _ramoStatusChecks() {
+    // etapas ativas do funil + fechada + perdida (perdida engloba sem_aceitacao)
+    const base = (ETAPAS_FUNIL || []).map(e => ({ id: e.id, label: e.label, cor: e.cor || '#64748b' }));
+    base.push({ id: 'fechada', label: 'Fechada 💎', cor: '#10b981' });
+    base.push({ id: 'perdida', label: 'Não fechou', cor: '#ef4444' });
+    return base;
+  }
+  function _prepararFiltrosRamo() {
+    // Grupo
+    const selG = document.getElementById('fRamoGrupo');
+    if (selG && selG.options.length <= 1) {
+      selG.innerHTML = '<option value="">📁 Todos os grupos</option>' +
+        (GRUPOS || []).map(g => `<option value="${g.id}">${g.nome || g.id}</option>`).join('');
+    }
+    // Ramo (só os que têm negócio)
+    const selR = document.getElementById('fRamoRamo');
+    if (selR && selR.options.length <= 1) {
+      const usados = {};
+      (COTACOES || []).forEach(c => { if (c.produtoId) usados[c.produtoId] = true; });
+      selR.innerHTML = '<option value="">🏷 Todos os ramos</option>' +
+        Object.keys(usados).map(pid => {
+          const p = (PRODUTOS || []).find(x => x.id === pid) || {};
+          return `<option value="${pid}">${p.icon || ''} ${p.nome || pid}</option>`;
+        }).join('');
+    }
+    // RM (só para quem enxerga a agência toda)
+    const selRm = document.getElementById('fRamoRm');
+    if (selRm) {
+      const _vejoRm = ['admin', 'chefe', 'seguradora'].includes(perfilEfetivo());
+      selRm.style.display = _vejoRm ? '' : 'none';
+      if (_vejoRm && selRm.options.length <= 1) {
+        selRm.innerHTML = '<option value="">👥 Todos os RMs</option>' +
+          Object.keys(MAPA_RMS || {}).map(u => `<option value="${u}">${(MAPA_RMS[u] || {}).nome || 'RM'}</option>`).join('');
+      }
+    }
+    // Checks de status (montados uma vez; estado vive no próprio DOM)
+    const wrap = document.getElementById('fRamoStatusWrap');
+    if (wrap && !wrap.dataset.pronto) {
+      wrap.dataset.pronto = '1';
+      wrap.innerHTML = _ramoStatusChecks().map(st => `
+        <label style="display:flex; align-items:center; gap:5px; font-size:11.5px; font-weight:700; color:${st.cor}; background:${st.cor}12; border:1px solid ${st.cor}33; border-radius:100px; padding:4px 10px; cursor:pointer; user-select:none;">
+          <input type="checkbox" class="framo-st" value="${st.id}" checked onchange="renderCotacoesPorRamo()" style="width:13px; height:13px; accent-color:${st.cor};"> ${st.label}
+        </label>`).join('');
+    }
+  }
+  function limparFiltrosRamo() {
+    ['fRamoGrupo', 'fRamoRamo', 'fRamoRm'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    document.querySelectorAll('.framo-st').forEach(cb => cb.checked = true);
+    renderCotacoesPorRamo();
+  }
+  window.limparFiltrosRamo = limparFiltrosRamo;
+
   function renderCotacoesPorRamo() {
     const cont = document.getElementById('cotacoesRamoContainer');
     if (!cont) return;
@@ -25005,10 +25082,39 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       cont.innerHTML = `<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:40px; text-align:center; color:#94a3b8;">Nenhuma negociação registrada ainda.</div>`;
       return;
     }
+    _prepararFiltrosRamo();
+    const _seg = perfilEfetivo() === 'seguradora';
+
+    // ---- aplica os filtros ----
+    const fG = (document.getElementById('fRamoGrupo') || {}).value || '';
+    const fR = (document.getElementById('fRamoRamo') || {}).value || '';
+    const fRm = (document.getElementById('fRamoRm') || {}).value || '';
+    const stMarcados = new Set([...document.querySelectorAll('.framo-st:checked')].map(cb => cb.value));
+    const _grupoDe = {}; (PRODUTOS || []).forEach(p => _grupoDe[p.id] = p.grupoId);
+    const _stOk = (c) => {
+      if (c.status === 'perdida' || c.status === 'sem_aceitacao') return stMarcados.has('perdida');
+      return stMarcados.has(c.status);
+    };
+    let LISTA = (COTACOES || []).filter(c => {
+      if (fG && _grupoDe[c.produtoId] !== fG) return false;
+      if (fR && c.produtoId !== fR) return false;
+      if (fRm && !(empresaRmDe(c.empresaId) === fRm || c.solicitadoPorUid === fRm)) return false;
+      if (!_stOk(c)) return false;
+      return true;
+    });
+
+    // KPIs do topo acompanham os filtros
+    try { atualizarKpiCotacoes(LISTA); } catch (e) {}
+
+    if (LISTA.length === 0) {
+      cont.innerHTML = `<div style="background:white; border:1px dashed #cbd5e1; border-radius:12px; padding:40px; text-align:center; color:#94a3b8;">Nenhuma negociação com estes filtros. <a onclick="limparFiltrosRamo()" style="color:#4f46e5; cursor:pointer; text-decoration:underline;">Limpar filtros</a></div>`;
+      return;
+    }
+
     // agrupa por ramo (produtoId), respeitando a ordem dos ramos cadastrados
     const ordemRamos = (PRODUTOS || []).map(p => p.id);
     const grupos = {};
-    COTACOES.forEach(c => {
+    LISTA.forEach(c => {
       const k = c.produtoId || 'outros';
       (grupos[k] = grupos[k] || []).push(c);
     });
@@ -25031,15 +25137,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const valor = c.valor || c.valorProposto;
         const dataRef = c.dataDecisao || c.atualizadoEm || c.dataSolicitacao;
         return `
-          <div onclick="abrirTimelineNegocio('${c.id}')" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid #f1f5f9; cursor:pointer;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
+          <div ${_seg ? '' : `onclick="abrirTimelineNegocio('${c.id}')"`} style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid #f1f5f9; cursor:${_seg ? 'default' : 'pointer'};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
             <div style="flex:1; min-width:0;">
               <div style="font-size:13px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.empresaNome}</div>
               <div style="font-size:11px; color:#94a3b8;">${fmtDataCurta(dataRef)}${ch ? ` · <span style="color:${ch.cor};font-weight:700;">${ch.emoji} ${ch.label}</span>` : ''}</div>
             </div>
             ${valor ? `<div style="font-size:12px; font-weight:700; color:#166534; font-family:'JetBrains Mono';">${fmtBRcompacto(valor)}</div>` : ''}
             <div style="font-size:11px; font-weight:700; color:${si.cor}; background:${si.cor}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon} ${si.label}</div>
-            ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação e seus pontos" style="border:none; background:#fef2f2; color:#ef4444; width:24px; height:24px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; flex-shrink:0;">🗑</button>` : ''}
-            <i data-lucide="chevron-right" class="w-4 h-4" style="color:#cbd5e1;"></i>
+            ${(CTX.isAdmin && !_seg) ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação e seus pontos" style="border:none; background:#fef2f2; color:#ef4444; width:24px; height:24px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; flex-shrink:0;">🗑</button>` : ''}
+            ${_seg ? '' : '<i data-lucide="chevron-right" class="w-4 h-4" style="color:#cbd5e1;"></i>'}
           </div>`;
       }).join('');
 
@@ -25811,6 +25917,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.baixarDossiePDF = baixarDossiePDF;
 
   function abrirTimelineNegocio(cotacaoId) {
+    if (perfilEfetivo() === 'seguradora') return; // seguradora vê a lista, não os detalhes internos
     const c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) return;
 
