@@ -1585,11 +1585,13 @@
     .pessoa-contrib .pc-lbl strong { color: #475569; font-weight: 700; }
     .pessoa-acoes {
       display: flex; gap: 5px;
+      flex-wrap: wrap; /* muitos botões (link, entrar como, saiu, desativar) quebram linha em vez de estourar o card */
       padding-top: 10px;
       border-top: 1px dashed #e2e8f0;
     }
     .pessoa-btn {
-      flex: 1;
+      flex: 1 1 calc(50% - 5px);
+      min-width: 0;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       padding: 6px 8px;
@@ -1602,6 +1604,11 @@
     .pessoa-btn:hover { background: #f1f5f9; color: #1e293b; }
     .pessoa-btn.danger { color: #b91c1c; }
     .pessoa-btn.danger:hover { background: #fee2e2; }
+    /* Ex-membros: card apagado, sem ações de link */
+    .pessoa-card.ex { opacity: 0.72; background: #f8fafc; }
+    .pessoa-card.ex .pessoa-status { background: #f1f5f9; color: #64748b; }
+    /* Visão da seguradora: esconde tudo que for de operação */
+    body.perfil-seguradora .seg-hide { display: none !important; }
 
     .btn-add-pessoa {
       background: var(--primary);
@@ -3272,7 +3279,7 @@
         </div>
       </div>
 
-      <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:14px;">
+      <div class="seg-hide" style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:14px;">
         <button class="btn-secondary" onclick="abrirRelatorioCotacoes()"><i data-lucide="file-text" class="w-3.5 h-3.5 inline"></i> Relatório PDF</button>
         <button class="btn-secondary" onclick="abrirOpBancaria()"><i data-lucide="landmark" class="w-3.5 h-3.5 inline"></i> Nova OP</button>
         <button class="btn-primary" onclick="abrirPedirCotacao()"><i data-lucide="plus" class="w-3.5 h-3.5 inline"></i> Pedir cotação</button>
@@ -4520,7 +4527,7 @@
   <div class="cad-modal-panel">
     <div class="cad-modal-head">
       <h2>👤 Cadastrar Nova Pessoa</h2>
-      <p>Assistentes e Estagiários acessam por link pessoal (sem senha)</p>
+      <p>Assistentes, Estagiários e Seguradora acessam por link pessoal (sem senha)</p>
     </div>
     <div class="cad-modal-body">
       <div class="form-group">
@@ -4528,7 +4535,13 @@
         <div class="pill-group">
           <div class="pill-option selected" onclick="selPill(this, 'perfil')">🌱 Estagiário</div>
           <div class="pill-option" onclick="selPill(this, 'perfil')">📋 Assistente</div>
+          <div class="pill-option perm-admin" onclick="selPill(this, 'perfil')">🏢 Seguradora</div>
         </div>
+      </div>
+      <div class="form-group" id="cadAgenciasBox" style="display:none;">
+        <label class="form-label">Agências que a seguradora pode ver</label>
+        <div id="cadAgenciasLista" style="max-height:180px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:9px; padding:8px;"></div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:5px;">A pessoa da seguradora só enxerga as agências marcadas — funil, vencimentos e relatório de metas, sem editar nada.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Nome completo</label>
@@ -5162,6 +5175,8 @@
 
   // Gamificação zerada (a ser redesenhada). Vire true para reativar as telas de pontos/ranking/sprints/streak.
   let GAMIFICACAO_ATIVA = false;
+  // Visão da SEGURADORA: só estas telas, tudo somente leitura
+  const TELAS_SEGURADORA = ['cotacoes', 'vencimentos', 'relmetas'];
   function aplicarPermissoes() {
     const ativo = perfilEfetivo();
     perfilAtual = ativo; // sincroniza para funções legadas
@@ -5170,12 +5185,18 @@
     const isRM = ativo === 'rm';
     const isAssist = ativo === 'assistente';
     const isEstag = ativo === 'estagiario';
+    const isSeg = ativo === 'seguradora';
+    document.body.classList.toggle('perfil-seguradora', isSeg);
 
     const showRmPlus = isAdmin || isChefe || isRM;
     const showChefePlus = isAdmin || isChefe;
     const showAdmin = isAdmin;
     const showNaoEstag = !isEstag;
     const showEstagOnly = isEstag;
+
+    // Reseta o menu antes de aplicar as regras — sem isto, sair do modo "ver como
+    // seguradora" deixava o menu inteiro escondido (o bloco isSeg esconde tudo).
+    document.querySelectorAll('.sidebar nav .nav-item, .sidebar nav .nav-grupo').forEach(el => el.style.display = '');
 
     document.querySelectorAll('.perm-rmplus').forEach(el => el.style.display = showRmPlus ? '' : 'none');
     document.querySelectorAll('.perm-chefeplus').forEach(el => el.style.display = showChefePlus ? '' : 'none');
@@ -5192,27 +5213,67 @@
         if (PERM_USER[t.id] === false) document.querySelectorAll(`[onclick*="navTo('${t.id}')"]`).forEach(el => el.style.display = 'none');
       });
     }
+
+    // SEGURADORA: menu enxuto — esconde tudo e reexibe só o que ela pode ver
+    if (isSeg) {
+      document.querySelectorAll('.sidebar nav .nav-item, .sidebar nav .nav-grupo').forEach(el => el.style.display = 'none');
+      TELAS_SEGURADORA.forEach(id => {
+        document.querySelectorAll(`.sidebar nav [onclick*="navTo('${id}')"]`).forEach(el => el.style.display = '');
+      });
+      // grupos que abrigam as telas liberadas ficam visíveis e abertos
+      ['ng_negocios', 'ng_metas'].forEach(gid => {
+        const g = document.getElementById(gid);
+        if (g) { g.style.display = ''; g.classList.add('aberto'); g.querySelectorAll('.nav-grupo-head').forEach(h => h.style.display = ''); }
+      });
+      // dentro dos grupos visíveis, esconde os irmãos não liberados (já cobertos acima, garante)
+      document.querySelectorAll('#ng_negocios .nav-subitem, #ng_metas .nav-subitem').forEach(el => {
+        const oc = el.getAttribute('onclick') || '';
+        const liberado = TELAS_SEGURADORA.some(id => oc.includes(`navTo('${id}')`));
+        el.style.display = liberado ? '' : 'none';
+      });
+    }
   }
 
   // ============= PERMISSÕES POR USUÁRIO =============
-  const TELAS_PERMISSAO = [
-    { id: 'empresas', label: 'Empresas da Agência' },
-    { id: 'cotacoes', label: 'Cotações em Andamento' },
-    { id: 'producao', label: 'Produção (Fechados)' },
-    { id: 'vencimentos', label: 'Vencimentos' },
-    { id: 'oportunidades', label: 'Oportunidades Quentes' },
-    { id: 'apresentacoes', label: 'Apresentações' },
-    { id: 'propostas', label: 'Propostas online' },
-    { id: 'relatorio', label: 'Relatório Completo' },
-    { id: 'matriz', label: 'Relatório Inteligente' },
-    { id: 'relmetas', label: 'Relatório de Metas' },
-    { id: 'agenda', label: 'Agenda · Visitas' },
-    { id: 'pesquisas', label: 'Pesquisas Colaboradores' },
-    { id: 'metas', label: 'Metas' },
-    { id: 'avisos', label: 'Avisos & Novidades' },
-    { id: 'treinamentos', label: 'Treinamentos' },
-    { id: 'equipe', label: 'Equipe da Agência' }
+  // Espelha o menu lateral: grupos e submenus, com o que dá para ver em cada tela.
+  // "Hoje" fica de fora de propósito (é a tela-refúgio quando algo é bloqueado).
+  // Comissões, Configurações e Manual são exclusivos do admin e não entram na matriz.
+  const TELAS_GRUPOS = [
+    { grupo: '🏠 Acesso direto', telas: [
+      { id: 'empresas',      label: 'Empresas da Agência',     desc: 'carteira, raio-x e mapeamento de cada empresa' },
+      { id: 'agenda',        label: 'Agenda · Visitas',        desc: 'visitas e reuniões agendadas' },
+      { id: 'campanha',      label: 'Campanha',                desc: 'cobertura, indicadores e pontos' }
+    ]},
+    { grupo: '💼 Negócios', telas: [
+      { id: 'cotacoes',      label: 'Cotações em Andamento',   desc: 'funil kanban com as negociações abertas' },
+      { id: 'vencimentos',   label: 'Vencimentos',             desc: 'mapa de renovações do ano, mês a mês' },
+      { id: 'oportunidades', label: 'Oportunidades Quentes',   desc: 'gatilhos de porte e produtos que a empresa não tem' }
+    ]},
+    { grupo: '🖥 Apresentações', telas: [
+      { id: 'apresentacoes', label: 'Apresentações',           desc: 'quem viu cada apresentação e o que respondeu' },
+      { id: 'propostas',     label: 'Propostas online',        desc: 'cotações em formato de cliente' },
+      { id: 'links',         label: 'Central de Links',        desc: 'links gerados, status e respostas' },
+      { id: 'pesquisas',     label: 'Pesquisas Colaboradores', desc: 'pesquisas de benefícios nas empresas' }
+    ]},
+    { grupo: '🎯 Metas e Produção', telas: [
+      { id: 'producao',      label: 'Produção (Fechados)',     desc: 'negócios fechados no período' },
+      { id: 'relmetas',      label: 'Relatório de Metas',      desc: 'produção × objetivo e projeção do ano' },
+      { id: 'metas',         label: 'Metas (semanal / anual)', desc: 'definição de metas — padrão: chefe e admin' }
+    ]},
+    { grupo: '📊 Relatórios', telas: [
+      { id: 'relatorio',     label: 'Relatório Completo',      desc: 'análise consolidada da agência' },
+      { id: 'matriz',        label: 'Relatório Inteligente',   desc: 'matriz empresas × ramos' },
+      { id: 'mapeamento',    label: 'Painel de Mapeamento',    desc: 'cobertura da carteira e onde atacar' }
+    ]},
+    { grupo: '📣 Comunicação', telas: [
+      { id: 'avisos',        label: 'Avisos & Novidades',      desc: 'mural da equipe' },
+      { id: 'treinamentos',  label: 'Treinamentos',            desc: 'capacitação da equipe' }
+    ]},
+    { grupo: '⚙️ Gestão', telas: [
+      { id: 'equipe',        label: 'Equipe da Agência',       desc: 'pessoas, links e permissões — padrão: chefe e admin' }
+    ]}
   ];
+  const TELAS_PERMISSAO = TELAS_GRUPOS.reduce((acc, g) => acc.concat(g.telas), []);
   let PERM_USER = null;   // permissões do usuário logado (null = vê tudo)
   let PERM_CACHE = {};    // uid -> telas (para o painel do admin)
 
@@ -5237,8 +5298,8 @@
     } catch (e) { PERM_CACHE = {}; }
     const users = (EQUIPE_REAL || []).filter(p => p.ativo && p.perfil !== 'admin');
     panel.innerHTML = `
-      <h3 style="margin:0 0 4px; font-size:15px; font-weight:800; color:#0f172a;">🔒 Permissões de acesso <small style="font-weight:500; color:#94a3b8;">· o que cada usuário enxerga</small></h3>
-      <p style="font-size:12px; color:#64748b; margin:0 0 14px;">Admin sempre vê tudo. Defina abaixo, por pessoa, quais telas ficam visíveis.</p>
+      <h3 style="margin:0 0 4px; font-size:15px; font-weight:800; color:#0f172a;">👁 Editar visão de cada pessoa <small style="font-weight:500; color:#94a3b8;">· menus e submenus que cada um enxerga</small></h3>
+      <p style="font-size:12px; color:#64748b; margin:0 0 14px;">Admin sempre vê tudo. Abra a visão de uma pessoa para marcar, menu a menu, o que fica visível para ela.</p>
       ${users.length ? users.map(u => {
         const perms = PERM_CACHE[u.uid] || {};
         const bloqueadas = TELAS_PERMISSAO.filter(t => perms[t.id] === false).length;
@@ -5246,7 +5307,7 @@
           <div><span style="font-weight:700; color:#0f172a;">${u.nome}</span> <span style="font-size:11px; color:#94a3b8;">· ${u.perfil}</span></div>
           <div style="display:flex; align-items:center; gap:10px;">
             <span style="font-size:12px; color:${bloqueadas ? '#b45309' : '#059669'};">${bloqueadas ? bloqueadas + ' tela(s) bloqueada(s)' : 'vê tudo'}</span>
-            <button class="btn-secondary" style="padding:5px 12px;" onclick="abrirPermissoesUsuario('${u.uid}','${(u.nome || '').replace(/'/g, '')}')">Editar</button>
+            <button class="btn-secondary" style="padding:5px 12px;" onclick="abrirPermissoesUsuario('${u.uid}','${(u.nome || '').replace(/'/g, '')}')">Editar visão</button>
           </div>
         </div>`;
       }).join('') : '<div style="font-size:13px; color:#94a3b8;">Nenhum usuário real carregado nesta agência.</div>'}`;
@@ -5261,18 +5322,25 @@
     modal.className = 'cad-modal open';
     modal.innerHTML = `
       <div class="cad-modal-bg" onclick="document.getElementById('modalPermUsuario').remove()"></div>
-      <div class="cad-modal-panel">
-        <div class="cad-modal-head"><h2>🔒 Permissões — ${nome}</h2><p>Marque as telas que esta pessoa pode acessar</p></div>
+      <div class="cad-modal-panel" style="max-width: 560px;">
+        <div class="cad-modal-head"><h2>👁 Editar visão — ${nome}</h2><p>Os mesmos menus e submenus do sistema. Marque o que esta pessoa pode ver.</p></div>
         <div class="cad-modal-body">
           <div style="display:flex; gap:8px; margin-bottom:10px;">
             <button class="btn-secondary" style="padding:5px 10px;" onclick="permMarcarTodas(true)">Marcar todas</button>
             <button class="btn-secondary" style="padding:5px 10px;" onclick="permMarcarTodas(false)">Desmarcar todas</button>
           </div>
           <input type="hidden" id="permUid" value="${uid}">
-          ${TELAS_PERMISSAO.map(t => `
-            <label style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:6px; cursor:pointer; font-size:13px;">
-              <input type="checkbox" class="perm-cb" id="perm_${t.id}" ${perms[t.id] === false ? '' : 'checked'} style="width:16px; height:16px;"> ${t.label}
-            </label>`).join('')}
+          ${TELAS_GRUPOS.map(g => `
+            <div style="font-size:11px; font-weight:800; color:#64748b; letter-spacing:.04em; text-transform:uppercase; margin:14px 0 6px;">${g.grupo}</div>
+            ${g.telas.map(t => `
+              <label style="display:flex; align-items:flex-start; gap:10px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:6px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="perm-cb" id="perm_${t.id}" ${perms[t.id] === false ? '' : 'checked'} style="width:16px; height:16px; margin-top:2px; flex-shrink:0;">
+                <span><strong>${t.label}</strong><br><span style="font-size:11.5px; color:#94a3b8;">${t.desc}</span></span>
+              </label>`).join('')}
+          `).join('')}
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; font-size:11.5px; color:#64748b; margin-top:10px;">
+            "Hoje" fica sempre visível (é a tela para onde a pessoa volta quando algo é bloqueado). Comissões, Configurações e Manual são exclusivos do admin. As restrições padrão do perfil (ex.: estagiário não vê valores) continuam valendo por cima desta lista.
+          </div>
         </div>
         <div class="cad-modal-foot">
           <button class="btn-secondary" onclick="document.getElementById('modalPermUsuario').remove()">Cancelar</button>
@@ -6381,6 +6449,7 @@
 
   // ============= RAIO-X DA EMPRESA =============
   function abrirRaioX(empresaId) {
+    if (perfilEfetivo() === 'seguradora') return; // seguradora não acessa o raio-x das empresas
     const e = EMPRESAS.find(x => x.id === empresaId);
     if (!e) return;
 
@@ -7260,6 +7329,28 @@
   function selPill(el, grupo) {
     el.parentElement.querySelectorAll('.pill-option').forEach(p => p.classList.remove('selected'));
     el.classList.add('selected');
+    // Cadastro de pessoa: perfil Seguradora mostra a escolha de agências
+    if (grupo === 'perfil') {
+      const box = document.getElementById('cadAgenciasBox');
+      if (box) {
+        const ehSeg = (el.textContent || '').toLowerCase().includes('seguradora');
+        box.style.display = ehSeg ? '' : 'none';
+        if (ehSeg) preencherCadAgencias();
+      }
+    }
+  }
+  // Lista de agências (checkboxes) no cadastro do perfil Seguradora
+  function preencherCadAgencias() {
+    const cont = document.getElementById('cadAgenciasLista');
+    if (!cont) return;
+    const ags = (typeof LISTA_AGENCIAS !== 'undefined' && LISTA_AGENCIAS.length) ? LISTA_AGENCIAS : [];
+    if (!ags.length) { cont.innerHTML = '<div style="font-size:12px; color:#94a3b8;">Nenhuma agência carregada — entre como admin para cadastrar seguradora.</div>'; return; }
+    cont.innerHTML = ags.map(a => {
+      const sub = [a.banco, a.cidade].filter(Boolean).join(' · ');
+      return `<label style="display:flex; align-items:center; gap:8px; padding:6px 4px; cursor:pointer; font-size:13px; border-bottom:1px solid #f8fafc;">
+        <input type="checkbox" class="cad-ag-cb" value="${a.id}" style="width:15px; height:15px;"> ${a.nome}${sub ? ` <span style="color:#94a3b8; font-size:11px;">· ${sub}</span>` : ''}
+      </label>`;
+    }).join('');
   }
 
   function renderProdutosMapeamento() {
@@ -7613,6 +7704,10 @@
     if (!GAMIFICACAO_ATIVA && (tela === 'ranking')) tela = 'home';
     // Permissão por usuário: bloqueia telas não liberadas (admin nunca bloqueado)
     if (PERM_USER && PERM_USER[tela] === false) { alert('Você não tem acesso a esta tela.'); tela = 'home'; }
+    // Seguradora: visão restrita — só funil, vencimentos e relatório de metas
+    if (perfilEfetivo() === 'seguradora' && !TELAS_SEGURADORA.includes(tela)) {
+      tela = 'cotacoes';
+    }
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     if (event && event.currentTarget) event.currentTarget.classList.add('active');
 
@@ -8078,16 +8173,17 @@
           const extras = [];
           if (q.seguradora) extras.push(`🏢 ${q.seguradora}`);
           if (q.premio) extras.push(`💰 ${fmtBR(q.premio)}`);
+          const _seg = perfilEfetivo() === 'seguradora';
           return `
-            <div class="quente-card" onclick="abrirRaioX('${q.empresaId}')">
+            <div class="quente-card" ${_seg ? 'style="cursor:default;"' : `onclick="abrirRaioX('${q.empresaId}')"`}>
               <div class="qc-empresa">${q.empresa}</div>
               <div class="qc-produto">${prod.icon} ${prod.nome}</div>
               <div class="qc-data">Vence em <strong>${mesNome}/${q.ano}</strong> · ${diasTxt}</div>
               ${extras.length ? `<div class="qc-data" style="color:#94a3b8;">${extras.join(' · ')}</div>` : ''}
-              <div class="qc-actions">
+              ${_seg ? '' : `<div class="qc-actions">
                 <button class="qc-btn" onclick="event.stopPropagation(); iniciarTratativa('${q.empresaId}','${q.produto}','renovacao')">Iniciar Tratativa</button>
                 <button class="qc-btn outline" onclick="event.stopPropagation(); abrirRaioX('${q.empresaId}')">Ver Empresa</button>
-              </div>
+              </div>`}
             </div>
           `;
         }).join('');
@@ -8184,8 +8280,9 @@
       const sub = [`RM: ${rmNome}`];
       if (v.seguradora) sub.push(`🏢 ${v.seguradora}`);
       if (v.premio) sub.push(`💰 ${fmtBR(v.premio)}`);
+      const _segLinha = perfilEfetivo() === 'seguradora';
       return `
-        <div onclick="document.getElementById('modalDetalheMes').remove(); abrirRaioX('${v.empresaId}')" style="display:grid; grid-template-columns: 2fr 1.3fr 1fr 1fr; gap: 10px; padding: 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer; align-items: center; ${quente ? 'background:#fffbeb;' : ''}">
+        <div ${_segLinha ? '' : `onclick="document.getElementById('modalDetalheMes').remove(); abrirRaioX('${v.empresaId}')"`} style="display:grid; grid-template-columns: 2fr 1.3fr 1fr 1fr; gap: 10px; padding: 12px; border-bottom: 1px solid #f1f5f9; cursor: ${_segLinha ? 'default' : 'pointer'}; align-items: center; ${quente ? 'background:#fffbeb;' : ''}">
           <div>
             <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${v.empresa}</div>
             <div style="font-size: 11px; color: #64748b;">${sub.join(' · ')}</div>
@@ -8349,6 +8446,7 @@
     if (n === 'rm' || n === 'rm (gerente de conta)' || n.startsWith('rm ')) return 'rm';
     if (n === 'assistente') return 'assistente';
     if (n === 'estagiario' || n === 'estagiário') return 'estagiario';
+    if (n === 'seguradora') return 'seguradora';
     return n;
   }
 
@@ -8575,6 +8673,7 @@
     if (!userDoc.exists) throw new Error('Usuário do link não encontrado');
     const d = userDoc.data();
     if (d.status === 'inativo') throw new Error('Link revogado');
+    if (d.status === 'ex' || d.exMembro === true || d.ativo === false) throw new Error('Acesso encerrado — esta pessoa saiu da agência ou foi desativada.');
 
     CTX.uid = link.uid; // uid do dono do link, não o anônimo
     CTX.uidAnonimo = auth.currentUser.uid;
@@ -8583,6 +8682,12 @@
     CTX.perfil = normalizarPerfil(d.perfil);
     CTX.agenciaId = d.agenciaId;
     CTX.viaLink = true;
+    // Seguradora: só enxerga as agências definidas no cadastro
+    if (CTX.perfil === 'seguradora') {
+      CTX.agencias = (d.agencias && d.agencias.length) ? d.agencias : (d.agenciaId ? [d.agenciaId] : []);
+      if (!CTX.agencias.length) throw new Error('Nenhuma agência liberada para este acesso — fale com o corretor.');
+      CTX.agenciaId = CTX.agencias.includes(d.agenciaId) ? d.agenciaId : CTX.agencias[0];
+    }
 
     if (CTX.agenciaId) {
       const agDoc = await db.collection('agencias_banco').doc(CTX.agenciaId).get();
@@ -14852,9 +14957,9 @@
   function renderKanban() {
     const wrap = document.getElementById('kanbanWrap');
     if (!wrap) return;
-    // Admin e chefe veem o RM em cada card — ajuda a bater o olho na agência toda.
+    // Admin, chefe e seguradora veem o RM em cada card — ajuda a bater o olho na agência toda.
     // Pro RM não faz sentido (é tudo dele) e só ocuparia espaço.
-    const _vejoRmNoCard = ['admin', 'chefe'].includes(perfilEfetivo());
+    const _vejoRmNoCard = ['admin', 'chefe', 'seguradora'].includes(perfilEfetivo());
 
     // ---- Filtros do kanban (RM · ramo) ----
     const selRm = document.getElementById('kanFiltroRm');
@@ -14892,6 +14997,7 @@
 
     const isEstag = perfilEfetivo() === 'estagiario';
     const isAssist = perfilEfetivo() === 'assistente';
+    const isSeg = perfilEfetivo() === 'seguradora';
 
     // Grid acompanha o nº de colunas do funil
     wrap.style.gridTemplateColumns = `repeat(${colunas.length}, minmax(200px, 1fr))`;
@@ -14922,7 +15028,7 @@
         const _pedeTransm = ativa && c.transmissaoPedida && c.status !== 'transmitida';
         if (_pedeDecl) cls += ' pede-declinio';
         else if (_pedeTransm || _aguarda) cls += ' aguarda-validacao';
-        const podeArrastar = !isEstag && !isAssist && (ativa || CTX.isAdmin);
+        const podeArrastar = !isEstag && !isAssist && !isSeg && (ativa || CTX.isAdmin);
         const motivoTxt = (c.status === 'perdida' || c.status === 'sem_aceitacao') && c.motivoPerda
           ? `<div style="font-size:10px; color:#ef4444; margin-top:4px; font-weight:600;">${motivosLabel[c.motivoPerda] || c.motivoPerda}</div>` : '';
         const ch = c.chanceFechamento && CHANCE_INFO[c.chanceFechamento];
@@ -14930,7 +15036,7 @@
         const chanceTxt = (ativa && ch)
           ? `<div style="font-size:10px; margin-top:4px; font-weight:700; color:${ch.cor};">${ch.emoji} Chance ${ch.label}</div>` : '';
         return `
-          <div class="kanban-card ${cls}" style="position:relative;" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} onclick="abrirNegociacao('${c.id}')">
+          <div class="kanban-card ${cls}" style="position:relative;${isSeg ? ' cursor:default;' : ''}" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} ${isSeg ? '' : `onclick="abrirNegociacao('${c.id}')"`}>
             ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação" style="position:absolute; top:5px; right:5px; border:none; background:#fef2f2; color:#ef4444; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">🗑</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
@@ -14998,6 +15104,7 @@
   async function kanbanDrop(ev, novoStatus) {
     ev.preventDefault();
     ev.currentTarget.classList.remove('drag-over');
+    if (perfilEfetivo() === 'seguradora') { KANBAN_DRAG_ID = null; return; } // somente leitura
     const c = COTACOES.find(x => x.id === KANBAN_DRAG_ID);
     KANBAN_DRAG_ID = null;
     if (!c || c.status === novoStatus) return;
@@ -21035,9 +21142,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       cont.innerHTML = '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px;color:#78350f;font-size:13px;">⚠ Selecione uma agência específica no topo para ver o relatório de metas.</div>';
       return;
     }
-    // Escopo (RM vê só ele; chefe/admin vê agência + cada gerente)
+    // Escopo (RM vê só ele; chefe/admin/seguradora vê agência + cada gerente)
     const selE = document.getElementById('relMetasEscopo');
-    const podeVerTodos = CTX.isAdmin || perfilEfetivo() === 'chefe';
+    const podeVerTodos = CTX.isAdmin || perfilEfetivo() === 'chefe' || perfilEfetivo() === 'seguradora';
     const gerentes = (EQUIPE_REAL || []).filter(p => p.ativo && (p.perfil === 'rm' || p.perfil === 'chefe'));
     if (selE) {
       // Reconstrói SEMPRE (trocar de agência troca os gerentes); mantém a escolha se ela ainda existir
@@ -22509,8 +22616,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function iniciarApp() {
     mostrarLoading('Carregando empresas e equipe...');
     try {
-      // Admin carrega lista de agências para o seletor
-      if (CTX.isAdmin) {
+      // Admin carrega lista de agências para o seletor.
+      // Seguradora também — mas o seletor mostra só as agências liberadas no cadastro.
+      if (CTX.isAdmin || CTX.perfil === 'seguradora') {
         await carregarListaAgencias();
       }
 
@@ -22544,6 +22652,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Carregar prazos (pra home e kanban) e renderizar a home (tela inicial)
       await carregarPrazos();
       renderHome();
+
+      // Seguradora não tem "Hoje": cai direto no funil de cotações
+      if (CTX.perfil === 'seguradora') {
+        try { navTo('cotacoes'); } catch (e) {}
+      }
 
       lucide.createIcons();
 
@@ -22581,15 +22694,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       });
       LISTA_AGENCIAS.sort((a, b) => a.nome.localeCompare(b.nome));
 
-      // Preencher dropdown
+      // Seguradora: a lista encolhe para as agências liberadas no cadastro dela
+      const ehSeg = CTX.perfil === 'seguradora' && !CTX.isAdmin;
+      if (ehSeg) {
+        LISTA_AGENCIAS = LISTA_AGENCIAS.filter(a => (CTX.agencias || []).includes(a.id));
+      }
+
+      // Preencher dropdown (seguradora não tem a opção "Todas")
       const sel = document.getElementById('agPicker');
-      sel.innerHTML = '<option value="">— Todas as agências —</option>' +
+      sel.innerHTML = (ehSeg ? '' : '<option value="">— Todas as agências —</option>') +
         LISTA_AGENCIAS.map(a => {
           const sub = [a.banco, a.cidade, a.estado].filter(Boolean).join(' · ');
           return `<option value="${a.id}" ${a.id === CTX.agenciaId ? 'selected' : ''}>${a.nome}${sub ? ' — ' + sub : ''}</option>`;
         }).join('');
 
-      // Mostrar seletor (visível só pra admin)
+      // Mostrar seletor (admin e seguradora)
       document.getElementById('agSelector').style.display = '';
     } catch (e) {
       console.warn('Erro ao carregar agências:', e);
@@ -22597,6 +22716,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   async function trocarAgencia(agenciaId) {
+    // Seguradora nunca sai das agências liberadas
+    if (CTX.perfil === 'seguradora' && !CTX.isAdmin) {
+      if (!agenciaId || !(CTX.agencias || []).includes(agenciaId)) {
+        agenciaId = (CTX.agencias || [])[0] || CTX.agenciaId;
+        const sel = document.getElementById('agPicker');
+        if (sel) sel.value = agenciaId;
+      }
+    }
     CTX.agenciaId = agenciaId || null;
     if (agenciaId) {
       const ag = LISTA_AGENCIAS.find(a => a.id === agenciaId);
@@ -22807,38 +22934,55 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const data = d.data();
       const perfilN = normalizarPerfil(data.perfil);
       if (!['chefe', 'rm', 'admin'].includes(perfilN)) return; // ignora outros
-      if (data.ativo === false) return; // ignora inativos
+      const ehEx = data.exMembro === true; // saiu da agência: vira ex-membro (histórico preservado)
+      if (data.ativo === false && !ehEx) return; // desativado de vez: some das listas
 
       const cor = CORES_RM[i % CORES_RM.length]; i++;
       const pessoa = {
         uid: d.id, nome: data.nome || data.email, email: data.email,
         perfil: perfilN, papel: perfilN === 'chefe' ? 'Gerente Chefe' : 'RM · Gerente de Conta',
-        agenciaId: data.agenciaId, ativo: true,
+        agenciaId: data.agenciaId, ativo: !ehEx,
         cor: cor, linkToken: data.mbLinkToken || null,
-        categoria: perfilN, origem: 'banco'
+        categoria: ehEx ? 'ex' : perfilN, origem: 'banco',
+        saiuEm: data.saiuEm || null
       };
       EQUIPE_REAL.push(pessoa);
+      // Ex-membros continuam no MAPA_RMS: negócios antigos precisam mostrar o nome deles
       if (perfilN === 'rm' || perfilN === 'chefe') MAPA_RMS[d.id] = { nome: pessoa.nome, cor: cor };
     });
 
-    // 2. mb_usuarios (Assistentes e Estagiários)
+    // 2. mb_usuarios (Assistentes, Estagiários e Seguradora)
     try {
       let q2 = db.collection('mb_usuarios');
       if (CTX.agenciaId) q2 = q2.where('agenciaId', '==', CTX.agenciaId);
       const snap2 = await q2.get();
-      snap2.forEach(d => {
+      const _addMb = (d) => {
         const data = d.data();
         if (data.status === 'inativo') return;
+        if (EQUIPE_REAL.some(p => p.uid === d.id)) return;
+        const pN = normalizarPerfil(data.perfil);
+        const ehEx = data.status === 'ex';
+        const papeis = { estagiario: 'Estagiário', assistente: 'Assistente', seguradora: 'Seguradora' };
+        const cores = { estagiario: '#f59e0b', assistente: '#10b981', seguradora: '#6366f1' };
         EQUIPE_REAL.push({
           uid: d.id, nome: data.nome, email: data.email,
-          perfil: normalizarPerfil(data.perfil),
-          papel: data.perfil === 'estagiario' ? 'Estagiário' : 'Assistente',
-          agenciaId: data.agenciaId, ativo: true,
-          cor: data.perfil === 'estagiario' ? '#f59e0b' : '#10b981',
+          perfil: pN,
+          papel: papeis[pN] || 'Assistente',
+          agenciaId: data.agenciaId, agencias: data.agencias || null, ativo: !ehEx,
+          cor: cores[pN] || '#10b981',
           linkToken: data.linkToken,
-          categoria: normalizarPerfil(data.perfil), origem: 'mb'
+          categoria: ehEx ? 'ex' : pN, origem: 'mb',
+          saiuEm: data.saiuEm || null
         });
-      });
+      };
+      snap2.forEach(_addMb);
+      // Seguradora cobre VÁRIAS agências: busca também quem tem a agência atual na lista
+      if (CTX.agenciaId) {
+        try {
+          const snapSeg = await db.collection('mb_usuarios').where('agencias', 'array-contains', CTX.agenciaId).get();
+          snapSeg.forEach(_addMb);
+        } catch (e) { /* índice pode não existir ainda */ }
+      }
     } catch(e) { /* mb_usuarios pode não existir ainda */ }
 
     // 3. O CORRETOR/ADMIN não mora em usuarios_banco — ele é reconhecido pelo e-mail no
@@ -22930,7 +23074,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ============= GERAR LINK PESSOAL =============
   async function gerarLinkPessoal(uid, perfilDestino, nomeDestino) {
     const token = gerarToken();
-    const tipo = (perfilDestino === 'assistente' || perfilDestino === 'estagiario') ? 'mb' : 'banco';
+    const tipo = (perfilDestino === 'assistente' || perfilDestino === 'estagiario' || perfilDestino === 'seguradora') ? 'mb' : 'banco';
 
     try {
       await db.collection('mb_links').doc(token).set({
@@ -22997,15 +23141,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ============= CADASTRAR ASSISTENTE/ESTAGIÁRIO REAL =============
   async function salvarPessoaReal() {
-    if (!CTX.agenciaId) {
-      return alert('⚠ Selecione uma agência específica no topo (não pode estar em "Todas as agências") antes de cadastrar a pessoa. Sem isso, ela ficaria órfã.');
-    }
-
     const modal = document.getElementById('cadModal');
     const perfilSel = modal.querySelector('.pill-option.selected');
     const perfilTxt = perfilSel ? perfilSel.textContent.toLowerCase() : 'estagiário';
-    const perfil = perfilTxt.includes('estag') ? 'estagiario' : 'assistente';
-    const inputs = modal.querySelectorAll('input');
+    const perfil = perfilTxt.includes('seguradora') ? 'seguradora' : (perfilTxt.includes('estag') ? 'estagiario' : 'assistente');
+
+    // Seguradora escolhe as agências no próprio modal; os demais usam a agência do topo
+    let agenciasSeg = [];
+    if (perfil === 'seguradora') {
+      if (!(CTX.isAdmin && !CTX.perfilSimulado)) return alert('Apenas o admin cadastra o perfil Seguradora.');
+      agenciasSeg = [...modal.querySelectorAll('.cad-ag-cb:checked')].map(cb => cb.value);
+      if (!agenciasSeg.length) return alert('Marque ao menos 1 agência que a seguradora pode ver.');
+    } else if (!CTX.agenciaId) {
+      return alert('⚠ Selecione uma agência específica no topo (não pode estar em "Todas as agências") antes de cadastrar a pessoa. Sem isso, ela ficaria órfã.');
+    }
+
+    const inputs = modal.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"]');
     const nome = inputs[0].value.trim();
     const email = inputs[1].value.trim();
     const tel = inputs[2].value.trim();
@@ -23016,14 +23167,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const novoRef = db.collection('mb_usuarios').doc();
       const token = gerarToken();
 
-      await novoRef.set({
+      const dadosNovo = {
         nome, email, telefone: tel,
-        perfil, agenciaId: CTX.agenciaId,
+        perfil, agenciaId: perfil === 'seguradora' ? agenciasSeg[0] : CTX.agenciaId,
         status: 'ativo',
         linkToken: token,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         criadoPorUid: CTX.uid
-      });
+      };
+      if (perfil === 'seguradora') dadosNovo.agencias = agenciasSeg;
+      await novoRef.set(dadosNovo);
 
       await db.collection('mb_links').doc(token).set({
         uid: novoRef.id, tipo: 'mb', perfilSnapshot: perfil,
@@ -23207,7 +23360,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const faixa = document.getElementById('faixaAgindoComo');
     if (faixa) {
       if (CTX.uidSimulado || (CTX.perfilSimulado && CTX.perfilSimulado !== 'admin')) {
-        const papelLbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
+        const papelLbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', seguradora: 'Seguradora' };
         const nome = CTX.nomeSimulado || (papelLbl[CTX.perfilSimulado] || CTX.perfilSimulado);
         document.getElementById('faixaAgindoTexto').innerHTML = `👁️ Você está vendo e agindo como <u>${nome}</u> — tudo que registrar será creditado a ${(CTX.nomeSimulado || 'este perfil').split(' ')[0]}`;
         faixa.style.display = 'flex';
@@ -23229,7 +23382,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function popularSwitcherEquipe() {
     const sel = document.getElementById('perfilSwitcher');
     if (!sel || !CTX.isAdmin) return;
-    const papelLbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', admin: 'Admin' };
+    const papelLbl = { chefe: 'Gerente Chefe', rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário', seguradora: 'Seguradora', admin: 'Admin' };
     const membros = (EQUIPE_REAL || []).filter(u => u.ativo !== false && u.uid !== CTX.uid);
     sel.innerHTML = `<option value="admin">Eu (${CTX.nome || 'Admin'})</option>` +
       membros.map(m => `<option value="${m.uid}">${m.nome} (${papelLbl[m.perfil] || m.perfil})</option>`).join('');
@@ -23252,25 +23405,35 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       { id: 'chefe', titulo: '👔 GERENTE CHEFE', icon: 'star' },
       { id: 'rm', titulo: '💼 GERENTES DE CONTA (RMs)', icon: 'briefcase' },
       { id: 'assistente', titulo: '📋 ASSISTENTES', icon: 'clipboard-list' },
-      { id: 'estagiario', titulo: '🌱 ESTAGIÁRIOS', icon: 'sprout' }
+      { id: 'estagiario', titulo: '🌱 ESTAGIÁRIOS', icon: 'sprout' },
+      { id: 'seguradora', titulo: '🏢 SEGURADORA', icon: 'building' },
+      { id: 'ex', titulo: '🚪 EX-MEMBROS', icon: 'archive' }
     ];
 
     const html = categorias.map(cat => {
-      const pessoas = EQUIPE_REAL.filter(p => p.categoria === cat.id && p.ativo);
+      const pessoas = cat.id === 'ex'
+        ? EQUIPE_REAL.filter(p => p.categoria === 'ex')
+        : EQUIPE_REAL.filter(p => p.categoria === cat.id && p.ativo);
+      // Seguradora só é gerida pelo admin; ex-membros só aparecem se existirem
+      if (cat.id === 'seguradora' && pessoas.length === 0 && !(CTX.isAdmin && !CTX.perfilSimulado)) return '';
+      if (cat.id === 'ex' && pessoas.length === 0) return '';
       if (pessoas.length === 0 && !podeGerenciar) return '';
 
       const cardsHtml = pessoas.map(p => renderPessoaCardReal(p, podeGerenciar)).join('');
-      const addBtn = (podeGerenciar && (cat.id === 'assistente' || cat.id === 'estagiario'))
+      const podeAdd = cat.id === 'seguradora'
+        ? (CTX.isAdmin && !CTX.perfilSimulado)
+        : (podeGerenciar && (cat.id === 'assistente' || cat.id === 'estagiario'));
+      const addBtn = podeAdd
         ? `<div class="pessoa-card" style="border-style:dashed; display:flex; align-items:center; justify-content:center; cursor:pointer; min-height: 240px; color:#64748b;" onclick="abrirCadastroPessoa()">
             <div style="text-align:center;">
               <div style="font-size:32px; margin-bottom:8px;">+</div>
-              <div style="font-size:13px; font-weight:700;">Cadastrar ${cat.id === 'assistente' ? 'Assistente' : 'Estagiário'}</div>
-              <div style="font-size:11px; margin-top:4px;">Link pessoal será gerado</div>
+              <div style="font-size:13px; font-weight:700;">Cadastrar ${cat.id === 'assistente' ? 'Assistente' : (cat.id === 'seguradora' ? 'Seguradora' : 'Estagiário')}</div>
+              <div style="font-size:11px; margin-top:4px;">${cat.id === 'seguradora' ? 'Visão limitada: funil, vencimentos e metas' : 'Link pessoal será gerado'}</div>
             </div>
           </div>`
         : '';
 
-      const _fecha = window.innerWidth <= 768;   // no mobile começa recolhida
+      const _fecha = window.innerWidth <= 768 || cat.id === 'ex';   // mobile e ex-membros começam recolhidos
       return `
         <div class="equipe-categoria${_fecha ? ' cat-collapsed' : ''}">
           <h3 onclick="this.parentElement.classList.toggle('cat-collapsed')">
@@ -23293,6 +23456,41 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function renderPessoaCardReal(p, podeGerenciar) {
     const iniciais = (p.nome || '').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
     const lider = p.perfil === 'chefe' || p.perfil === 'admin';
+    const ehEx = p.categoria === 'ex' || !p.ativo;
+    const souCorretor = CTX.isAdmin && !CTX.perfilSimulado;
+
+    // Seguradora: mostra no card quais agências ela enxerga
+    const agenciasTxt = (p.perfil === 'seguradora' && p.agencias && p.agencias.length)
+      ? `<div style="font-size:11px; color:#64748b; margin: 4px 0 6px;">🏦 Vê ${p.agencias.length} agência${p.agencias.length > 1 ? 's' : ''}: ${p.agencias.map(id => { const a = (LISTA_AGENCIAS || []).find(x => x.id === id); return a ? a.nome : id; }).join(', ')}</div>`
+      : '';
+
+    // Data de saída (ex-membros)
+    const saiuTxt = ehEx
+      ? `<div style="font-size:11px; color:#94a3b8; margin: 4px 0 6px;">Saiu da agência${p.saiuEm && p.saiuEm.toDate ? ' em ' + p.saiuEm.toDate().toLocaleDateString('pt-BR') : ''} · histórico e pontos preservados</div>`
+      : '';
+
+    if (ehEx) {
+      // Card enxuto do ex-membro: sem link, sem entrar como — só reativar (e excluir, se admin)
+      return `
+        <div class="pessoa-card ex">
+          <div class="pessoa-status">SAIU</div>
+          <div class="pessoa-head">
+            <div class="pessoa-avatar" style="background: linear-gradient(135deg, #94a3b8, #64748b);">${iniciais || '?'}</div>
+            <div>
+              <div class="pessoa-nome">${p.nome}</div>
+              <div class="pessoa-papel">${p.papel}</div>
+            </div>
+          </div>
+          ${saiuTxt}
+          ${podeGerenciar ? `
+            <div class="pessoa-acoes">
+              ${(p.origem === 'mb' || souCorretor) ? `<button class="pessoa-btn" style="background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="reativarPessoa('${p.uid}', '${(p.nome || '').replace(/'/g, '')}', '${p.origem}')"><i data-lucide="user-check" class="w-3 h-3"></i> Reativar</button>` : ''}
+              ${(p.origem === 'mb') ? `<button class="pessoa-btn danger" onclick="desativarPessoa('${p.uid}', '${(p.nome || '').replace(/'/g, '')}')"><i data-lucide="user-x" class="w-3 h-3"></i> Excluir de vez</button>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
 
     return `
       <div class="pessoa-card ${lider ? 'lider' : ''}">
@@ -23304,6 +23502,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <div class="pessoa-papel">${p.papel}</div>
           </div>
         </div>
+        ${agenciasTxt}
         ${p.linkToken ? `
           <div style="font-size: 11px; color: #64748b; padding: 6px 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9; margin: 6px 0 10px;">
             <span style="color:#10b981; font-weight: 700;">✓ Link ativo</span> · Token: <span class="font-mono">${p.linkToken.substring(0, 8)}...</span>
@@ -23324,10 +23523,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               <i data-lucide="${p.linkToken ? 'refresh-cw' : 'link'}" class="w-3 h-3"></i>
               ${p.linkToken ? 'Renovar link' : 'Gerar link'}
             </button>
-            ${(CTX.isAdmin && !CTX.perfilSimulado) ? `<button class="pessoa-btn" style="background:#eef2ff; color:#4338ca; border-color:#c7d2fe;" onclick="abrirComoEstaPessoa('${p.uid}', '${p.perfil}', '${p.nome.replace(/'/g, '')}')">
+            ${souCorretor ? `<button class="pessoa-btn" style="background:#eef2ff; color:#4338ca; border-color:#c7d2fe;" onclick="abrirComoEstaPessoa('${p.uid}', '${p.perfil}', '${p.nome.replace(/'/g, '')}')">
               <i data-lucide="log-in" class="w-3 h-3"></i> Entrar como
             </button>` : ''}
-            ${(p.perfil === 'assistente' || p.perfil === 'estagiario') ? `
+            ${(p.origem === 'mb' || souCorretor) && p.perfil !== 'admin' ? `
+              <button class="pessoa-btn" style="color:#b45309;" onclick="sairDaAgencia('${p.uid}', '${(p.nome || '').replace(/'/g, '')}', '${p.origem}')"><i data-lucide="door-open" class="w-3 h-3"></i> Saiu da agência</button>
+            ` : ''}
+            ${(p.perfil === 'assistente' || p.perfil === 'estagiario' || p.perfil === 'seguradora') ? `
               <button class="pessoa-btn danger" onclick="desativarPessoa('${p.uid}', '${p.nome.replace(/'/g, '')}')"><i data-lucide="user-x" class="w-3 h-3"></i> Desativar</button>
             ` : ''}
           </div>
@@ -23337,7 +23539,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
 
   async function desativarPessoa(uid, nome) {
-    if (!confirm(`Desativar ${nome}? Pontos e histórico serão preservados, mas ela some das listas ativas.`)) return;
+    if (!confirm(`Desativar ${nome}? A pessoa some das listas (inclusive dos ex-membros). Pontos e histórico ficam guardados no banco. Se ela apenas saiu da agência, use "Saiu da agência".`)) return;
     try {
       await db.collection('mb_usuarios').doc(uid).update({
         status: 'inativo',
@@ -23349,7 +23551,57 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     } catch(e) { alert('Erro: ' + e.message); }
   }
 
+  // "Saiu da agência": vira EX-MEMBRO — histórico e pontos visíveis, link revogado.
+  // RMs/chefes moram em usuarios_banco (só o corretor logado consegue gravar lá);
+  // assistentes/estagiários/seguradora moram em mb_usuarios.
+  async function sairDaAgencia(uid, nome, origem) {
+    if (!confirm(`${nome} saiu da agência? A pessoa vai para "Ex-membros", o link de acesso deixa de funcionar e o histórico fica preservado. Dá para reativar depois.`)) return;
+    try {
+      if (origem === 'banco') {
+        if (!ehCorretorReal()) return alert('Marcar saída de RM/Gerente Chefe: apenas o corretor (admin) consegue, pelas regras de segurança.');
+        await db.collection('usuarios_banco').doc(uid).update({
+          exMembro: true,
+          saiuEm: firebase.firestore.FieldValue.serverTimestamp(),
+          saiuPorUid: CTX.uid
+        });
+      } else {
+        await db.collection('mb_usuarios').doc(uid).update({
+          status: 'ex',
+          saiuEm: firebase.firestore.FieldValue.serverTimestamp(),
+          saiuPorUid: CTX.uid
+        });
+      }
+      await carregarEquipeReal();
+      renderEquipe();
+      flashSalvo(`${nome} movido(a) para Ex-membros.`);
+    } catch(e) { alert('Erro: ' + e.message); }
+  }
+
+  // Reativar ex-membro (voltou para a agência)
+  async function reativarPessoa(uid, nome, origem) {
+    if (!confirm(`Reativar ${nome}? A pessoa volta para a equipe ativa (o link antigo volta a funcionar, se existir).`)) return;
+    try {
+      if (origem === 'banco') {
+        if (!ehCorretorReal()) return alert('Reativar RM/Gerente Chefe: apenas o corretor (admin) consegue.');
+        await db.collection('usuarios_banco').doc(uid).update({
+          exMembro: false,
+          reativadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        await db.collection('mb_usuarios').doc(uid).update({
+          status: 'ativo',
+          reativadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      await carregarEquipeReal();
+      renderEquipe();
+      flashSalvo(`${nome} reativado(a)!`);
+    } catch(e) { alert('Erro: ' + e.message); }
+  }
+
   window.desativarPessoa = desativarPessoa;
+  window.sairDaAgencia = sairDaAgencia;
+  window.reativarPessoa = reativarPessoa;
   window.gerarLinkPessoal = gerarLinkPessoal;
 
   // Copia o link de acesso ATUAL da pessoa (sem renovar / sem invalidar o que ela já tem)
@@ -24387,6 +24639,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // "Iniciar tratativas" abre a mesma tela da cotação rápida (com o ramo já escolhido),
   // pra você decidir ali se é OP ou não.
   function iniciarTratativa(empresaId, ramoId) {
+    if (perfilEfetivo() === 'seguradora') return; // somente leitura
     abrirCotacaoRapida(empresaId, ramoId);
   }
   window.iniciarTratativa = iniciarTratativa;
@@ -24500,7 +24753,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Garantir que os prazos estão carregados
       if (!PRAZOS_CACHE) await carregarPrazos();
       // Verificar e cancelar automaticamente as vencidas (antes de carregar a lista)
-      await verificarCotacoesVencidas();
+      // — a seguradora é só visita: não dispara motores que gravam no funil
+      const _somenteLeituraSeg = perfilEfetivo() === 'seguradora';
+      if (!_somenteLeituraSeg) await verificarCotacoesVencidas();
 
       let query = db.collection('mb_cotacoes');
       if (CTX.agenciaId) query = query.where('agenciaId', '==', CTX.agenciaId);
@@ -24524,7 +24779,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       });
 
       // Renovações automáticas (roda 1x por sessão; recarrega e renderiza se criar alguma)
-      if (!RENOVACOES_AUTO_RAN) {
+      if (!RENOVACOES_AUTO_RAN && !_somenteLeituraSeg) {
         RENOVACOES_AUTO_RAN = true;
         const criadas = await verificarRenovacoesAutomaticas();
         if (criadas > 0) {
@@ -24652,6 +24907,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ---------- Linha do tempo (checklist) de um negócio ----------
   // ============= TELA DA NEGOCIAÇÃO (editar valores + comentários) =============
   async function abrirNegociacao(cotacaoId) {
+    if (perfilEfetivo() === 'seguradora') return; // seguradora vê só os cards, sem abrir detalhes
     let c = COTACOES.find(x => x.id === cotacaoId);
     if (!c) {
       try { const d = await db.collection('mb_cotacoes').doc(cotacaoId).get(); if (d.exists) c = { id: d.id, ...d.data() }; } catch (e) {}
