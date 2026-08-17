@@ -12525,23 +12525,25 @@
     const _jaContadas = new Set();
     const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
 
-    // ---- Produção realizada por grupo (fechamentos do ano, dedup por empresa|produto) ----
+    // ---- Produção realizada por grupo (fechamentos do ano) ----
+    // MESMA CONTA do Relatório de Metas: soma cada fechada do ano (sem dedup por
+    // maior valor) e credita ao RM dono da empresa (fallback solicitou/registrou).
+    // Antes esta função deduplicava por empresa|produto e usava fechadoPorUid —
+    // a campanha mostrava % diferente do Relatório de Metas para a MESMA agência.
     try {
       const _cotsAno = await _carregarCotacoesTodas();
-      const fechadosAno = {};
       _cotsAno.forEach(c => {
         if (c.status !== 'fechada') return;
         const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
         if (!dt || dt < inicioAno || dt > fimAno) return;
-        const uid = _empresaRM[c.empresaId] || c.fechadoPorUid;
+        // marca ANTES do filtro de escopo (igual ao Relatório de Metas):
+        // a apólice já entrou como fechamento no ano, não pode voltar como "já-nosso"
+        _jaContadas.add((c.empresaId || '') + '|' + (c.produtoId || ''));
+        const uid = _empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
         if (escopoUid && uid !== escopoUid) return;
-        const chave = (c.empresaId || '') + '|' + (c.produtoId || '');
-        const ant = fechadosAno[chave];
-        if (!ant || (c.valor || 0) > ant.valor) fechadosAno[chave] = { valor: c.valor || 0, gid: ramoGrupo[c.produtoId] || 'outros' };
+        const gid = ramoGrupo[c.produtoId] || 'outros';
+        producaoGrupo[gid] = (producaoGrupo[gid] || 0) + (c.valor || 0);
       });
-      Object.values(fechadosAno).forEach(f => { producaoGrupo[f.gid] = (producaoGrupo[f.gid] || 0) + f.valor; });
-      // guarda as chaves empresa|produto já contadas como fechamento, para não somar de novo
-      Object.keys(fechadosAno).forEach(k => _jaContadas.add(k));
     } catch (e) { console.warn('produção grupo', e); }
 
     // ---- Já-nosso: apólices que JÁ eram suas e NÃO passaram pelo funil ----
@@ -12566,6 +12568,10 @@
     });
 
     // ---- Metas por grupo ----
+    // MESMA CONTA do Relatório de Metas: a meta da AGÊNCIA é a SOMA das metas por
+    // gerente (fallback: metas por grupo da agência, só se não houver por gerente).
+    // Antes usava direto meta.grupos — quando os dois não batiam, a campanha
+    // dividia por uma meta diferente da do Relatório de Metas.
     try {
       const docId = `${CTX.agenciaId}_${ano}`;
       const snap = await db.collection('mb_metas_anuais').doc(docId).get();
@@ -12574,8 +12580,12 @@
         if (escopoUid && meta.porGerente && meta.porGerente[escopoUid]) {
           // meta do RM por grupo
           Object.entries(meta.porGerente[escopoUid]).forEach(([gid, v]) => { metaGrupo[gid] = (metaGrupo[gid] || 0) + (v || 0); });
-        } else if (!escopoUid && meta.grupos) {
-          Object.entries(meta.grupos).forEach(([gid, obj]) => { metaGrupo[gid] = (obj && obj.prod != null) ? obj.prod : (typeof obj === 'number' ? obj : 0); });
+        } else if (!escopoUid) {
+          const porGer = meta.porGerente || {};
+          Object.keys(porGer).forEach(uid => Object.entries(porGer[uid] || {}).forEach(([gid, v]) => { metaGrupo[gid] = (metaGrupo[gid] || 0) + (v || 0); }));
+          if (Object.keys(metaGrupo).length === 0 && meta.grupos) {
+            Object.entries(meta.grupos).forEach(([gid, obj]) => { metaGrupo[gid] = (obj && obj.prod != null) ? obj.prod : (typeof obj === 'number' ? obj : 0); });
+          }
         }
       }
     } catch (e) { console.warn('meta grupo', e); }
