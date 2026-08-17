@@ -4960,7 +4960,7 @@
 
   const FATOR_DEFAULT = {
     pesos: {
-      cotacao_iniciada: 3,   // negócios que entraram no funil (etapa 2+) — o que mais importa
+      cotacao_iniciada: 3,   // negócios que entraram no funil (qualquer etapa, ou decididos na campanha)
       produtos_mapeados: 2,  // % de produtos com status conhecido
       funcionarios: 1.5,     // % de empresas com nº de funcionários
       socios: 1,             // % de empresas com sócios mapeados
@@ -5024,7 +5024,7 @@
   ];
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
   const FATOR_DIM_META = [
-    { chave: 'cotacao_iniciada', label: 'Cotação iniciada (funil etapa 2+)', desc: 'O que mais vira negócio' },
+    { chave: 'cotacao_iniciada', label: 'Cotação iniciada (foi pro funil)', desc: 'Ativas em qualquer etapa + fechadas/perdidas na campanha' },
     { chave: 'produtos_mapeados', label: 'Produtos mapeados', desc: 'Status conhecido (tem / não tem / nosso)' },
     { chave: 'funcionarios', label: 'Nº de funcionários mapeado', desc: 'Gera oportunidade de dental, vida...' },
     { chave: 'socios', label: 'Sócios mapeados', desc: 'Do contrato social' },
@@ -12238,14 +12238,27 @@
       });
     });
 
-    // ---- Cotação iniciada (funil etapa 2+) — denominador AMPLIADO ----
+    // ---- Cotação iniciada — denominador AMPLIADO ----
     // Denominador = potencial de negócio da janela: produtos elegíveis =
     //   (a) qualquer produto com vencimento dentro da campanha (nosso ou de mercado), OU
     //   (b) produto respondido "não tem" (oportunidade de nova venda).
-    // Numerador: desses, quantos têm cotação ativa etapa 2+.
-    const etapasContam = (typeof STATUS_ATIVOS !== 'undefined' ? STATUS_ATIVOS : []).filter(s => s !== 'solicitada');
+    // Numerador: desses, quantos FORAM PRO FUNIL — cotação ativa (em qualquer etapa,
+    // inclusive recém-solicitada) OU já DECIDIDA dentro da campanha (fechada/perdida).
+    // Antes só contava ativa em etapa 2+: quem fechava ou declinava PERDIA o crédito
+    // do indicador justamente por ter trabalhado a oportunidade (bug relatado 17/08).
+    const _iniCamp = CAMPANHA && CAMPANHA.inicio ? new Date(CAMPANHA.inicio + 'T00:00:00') : new Date(anoCamp, 0, 1);
+    const etapasContam = (typeof STATUS_ATIVOS !== 'undefined' ? STATUS_ATIVOS : []);
     const noFunil = new Set();
-    cotacoes.forEach(c => { if (etapasContam.includes(c.status)) noFunil.add(c.empresaId + '|' + c.produtoId); });
+    cotacoes.forEach(c => {
+      if (c.origem === 'backfill_cliente') return; // lançamento de "já é nosso" não é trabalho de funil
+      const k = c.empresaId + '|' + c.produtoId;
+      if (etapasContam.includes(c.status)) { noFunil.add(k); return; }
+      // decidida (fechada/perdida) DENTRO da campanha: o trabalho foi feito, o crédito fica
+      if (['fechada', 'perdida', 'sem_aceitacao'].includes(c.status)) {
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (dt && dt >= _iniCamp) noFunil.add(k);
+      }
+    });
     let totalElegiveis = 0, okCotIniciada = 0;
     const listaOportunidades = [];
     const nomeRamo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => nomeRamo[r.id] = r.nome);
@@ -12254,7 +12267,7 @@
       const vAno = parseInt(ano), vMes = parseInt(mes) - 1;
       return (vAno === anoCamp) && (anoCamp > anoAtual || vMes >= mesAtual);
     };
-    // Um par empresa|produto já está sendo trabalhado (em cotação no funil)?
+    // Um par empresa|produto já foi trabalhado (funil ativo ou decidido na campanha)?
     const jaNoFunil = (empId, ramoId) => noFunil.has(empId + '|' + ramoId);
 
     empresas.forEach(e => {
@@ -12268,8 +12281,11 @@
         const pd = dados[ramoId];
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, ramoId) : null;
 
-        // já é nosso: só conta se vence DENTRO da campanha (renovação a trabalhar)
+        // já é nosso: se foi FECHADO durante a campanha, a célula continua contando
+        // (e como atendida) — sem isto, fechar o negócio APAGAVA a oportunidade do
+        // indicador e o RM perdia o crédito por ter fechado (bug relatado 17/08).
         if (cat === 'nosso' || getMapeamento(pd) === 'cliente') {
+          if (jaNoFunil(e.id, ramoId)) { registrar(e, ramoId, 'Fechada na campanha 💎', true); return; }
           if (pd && _ehNaCampanha(pd.vencimentoMes, pd.vencimentoAno)) {
             registrar(e, ramoId, 'Nosso — renova ' + String(pd.vencimentoMes).padStart(2,'0') + '/' + pd.vencimentoAno);
           }
@@ -12327,6 +12343,7 @@
     const cotPorCelula = {};
     cotacoes.forEach(c => {
       if (c.origem === 'renovacao') return;             // renovação não conta como base
+      if (c.origem === 'backfill_cliente') return;      // lançar apólice antiga não é movimento
       cotPorCelula[c.empresaId + '|' + c.produtoId] = true;
     });
     let totalBase = 0, okBase = 0;
