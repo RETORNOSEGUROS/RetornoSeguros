@@ -7358,12 +7358,21 @@
             ${venc ? `<span style="color:#94a3b8; font-size:12px;">· ${venc}</span>` : ''}
           </div>
           ${detalhes.length ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">${detalhes.join(' · ')}</div>` : ''}
+          ${(dadosProduto.apolices || []).length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;">
+            ${dadosProduto.apolices.map(apx => {
+              const mesesAb = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+              const vtx = (apx.vencimentoMes && apx.vencimentoAno) ? ` · vence ${mesesAb[apx.vencimentoMes - 1]}/${apx.vencimentoAno}` : '';
+              const nossa = apx.statusVisual === 'conosco' || apx.statusVisual === 'fechada';
+              return `<span onclick="${podeEditar ? `event.stopPropagation(); abrirApoliceExtra('${empresaId}','${p.id}','${apx.ap}')` : ''}" style="font-size:10.5px; font-weight:700; color:${nossa ? '#0369a1' : '#6d28d9'}; background:${nossa ? '#e0f2fe' : '#f5f3ff'}; border:1px solid ${nossa ? '#bae6fd' : '#ddd6fe'}; border-radius:100px; padding:2px 9px; ${podeEditar ? 'cursor:pointer;' : ''}">🏷 ${apx.apelido || 'apólice'}${vtx}${nossa ? ' · 💎' : ''}</span>`;
+            }).join('')}
+          </div>` : ''}
           <div class="produto-pipeline">${pipeline}</div>
         </div>
         <div class="produto-actions">
           ${podeEditar ? `<button class="btn-mini" onclick="abrirMapearProduto('${empresaId}', '${p.id}')">
             ${st === 'vazia' ? 'Mapear' : 'Editar'}
           </button>` : ''}
+          ${podeEditar && st !== 'vazia' ? `<button class="btn-mini" title="Registrar outra apólice deste mesmo ramo (a empresa pode ter mais de uma)" style="color:#6d28d9;" onclick="event.stopPropagation(); abrirApoliceExtra('${empresaId}', '${p.id}', null)">+ apólice</button>` : ''}
           ${CTX.isAdmin && st !== 'vazia' ? `<button class="btn-mini" title="Zerar mapeamento (admin)" style="color:#ef4444; padding: 6px 8px;" onclick="event.stopPropagation(); zerarMapeamento('${empresaId}', '${p.id}', '${p.nome.replace(/'/g, '')}')">🗑</button>` : ''}
         </div>
       </div>
@@ -8235,6 +8244,33 @@
           observacoes: d.observacoes || ''
         });
       });
+
+      // ---- APÓLICES ADICIONAIS: cada uma tem vencimento próprio no calendário ----
+      // (uma empresa pode ter 3 empresariais vencendo em meses diferentes)
+      PRODUTOS.forEach(prod => {
+        const d = pd[prod.id];
+        if (!d || !Array.isArray(d.apolices)) return;
+        d.apolices.forEach(apx => {
+          if (!apx) return;
+          const apCliente = apx.statusVisual === 'conosco' || apx.statusVisual === 'fechada';
+          let mesX = null, anoX = null;
+          if (apCliente && apx.vigenciaFim && /^\d{2}\/\d{2}\/\d{4}$/.test(apx.vigenciaFim)) {
+            const pt = apx.vigenciaFim.split('/').map(Number); mesX = pt[1]; anoX = pt[2];
+          } else if (apx.vencimentoMes && apx.vencimentoAno) {
+            mesX = apx.vencimentoMes; anoX = apx.vencimentoAno;
+          }
+          if (!mesX || !anoX) return;
+          VENCIMENTOS.push({
+            empresaId: e.id, empresa: e.nome,
+            produto: prod.id, mes: mesX, ano: anoX,
+            rm: e.rm, conosco: apCliente,
+            statusVisual: apx.statusVisual || 'mapeada',
+            seguradora: apx.seguradora || '', premio: apx.premioAnual || 0,
+            apRef: apx.ap, apelido: apx.apelido || 'apólice adicional',
+            observacoes: apx.observacoes || ''
+          });
+        });
+      });
     });
   }
 
@@ -8244,7 +8280,7 @@
   }
   function ehQuente(v) {
     if (v.conosco) return false;
-    if (_temCotacaoAtiva(v.empresaId, v.produto)) return false; // já foi pro funil → sai da janela
+    if (_temCotacaoAtivaAp(v.empresaId, v.produto, v.apRef || null)) return false; // ESTA apólice já foi pro funil → sai da janela
     const dias = diasAteVencimento(v);
     const janela = JANELAS[v.produto] || 60;
     // inclui o mês corrente (o cálculo usa dia 1, então o mês atual pode dar dias levemente negativos)
@@ -8304,7 +8340,7 @@
           return `
             <div class="quente-card" ${_seg ? 'style="cursor:default;"' : `onclick="abrirRaioX('${q.empresaId}')"`}>
               <div class="qc-empresa">${q.empresa}</div>
-              <div class="qc-produto">${prod.icon} ${prod.nome}</div>
+              <div class="qc-produto">${prod.icon} ${prod.nome}${q.apelido ? ` <span style="font-size:10px; color:#6d28d9; background:#f5f3ff; padding:1px 7px; border-radius:100px; font-weight:700;">🏷 ${q.apelido}</span>` : ''}</div>
               <div class="qc-data">Vence em <strong>${mesNome}/${q.ano}</strong> · ${diasTxt}</div>
               ${extras.length ? `<div class="qc-data" style="color:#94a3b8;">${extras.join(' · ')}</div>` : ''}
               ${_seg ? '' : `<div class="qc-actions">
@@ -8414,7 +8450,7 @@
             <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${v.empresa}</div>
             <div style="font-size: 11px; color: #64748b;">${sub.join(' · ')}</div>
           </div>
-          <div style="font-size: 13px;">${p ? p.icon : ''} ${p ? p.nome : v.produto}</div>
+          <div style="font-size: 13px;">${p ? p.icon : ''} ${p ? p.nome : v.produto}${v.apelido ? ` <div style="font-size:10px; color:#6d28d9; font-weight:700;">🏷 ${v.apelido}</div>` : ''}</div>
           <div>
             <span style="background:${st.cor}22; color:${st.cor}; padding:3px 9px; border-radius:100px; font-size:11px; font-weight:700;">${v.conosco ? '💎 Nosso' : st.txt}</span>
           </div>
@@ -12556,7 +12592,7 @@
         if (!dt || dt < inicioAno || dt > fimAno) return;
         // marca ANTES do filtro de escopo (igual ao Relatório de Metas):
         // a apólice já entrou como fechamento no ano, não pode voltar como "já-nosso"
-        _jaContadas.add((c.empresaId || '') + '|' + (c.produtoId || ''));
+        _jaContadas.add((c.empresaId || '') + '|' + (c.produtoId || '') + (c.apoliceRef ? '|' + c.apoliceRef : ''));
         const uid = _empresaRM[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
         if (escopoUid && uid !== escopoUid) return;
         const gid = ramoGrupo[c.produtoId] || 'outros';
@@ -15216,7 +15252,7 @@
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
-            <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
+            <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${c.apoliceApelido ? ` <span style="font-size:9px; color:#6d28d9; background:#f5f3ff; border:1px solid #ddd6fe; padding:1px 6px; border-radius:100px; font-weight:700;">🏷 ${c.apoliceApelido}</span>` : ''}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
             ${motivoTxt}
             ${_pedeDecl ? '<div class="selo-validacao selo-declinio">🚩 pediu declínio</div>' : (_pedeTransm ? '<div class="selo-validacao" style="background:#cffafe; color:#155e75;">📤 pediu transmissão</div>' : (_aguarda ? (ehCorretorReal() ? '<div class="selo-validacao">⏳ aguarda sua validação</div>' : '<div class="selo-validacao">⏳ aguardando validação</div>') : ''))}
@@ -17670,15 +17706,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const obs = (document.getElementById('crObs').value || '').trim();
     const ehOp = !!(document.getElementById('crEhOp') || {}).checked;
     if (r.somenteOp && !ehOp) return alert(`${r.nome} só pode ser aberto como OP.`);
-    // Bloqueia duplicar: já existe negociação ativa deste produto nesta empresa?
+    // Já existe negociação ativa deste produto nesta empresa? Pode abrir OUTRA,
+    // mas precisa de um apelido que diferencie a apólice (decisão do Patrick 17/08).
+    let _apoliceExtraOpts = null;
     if (typeof _temCotacaoAtiva === 'function' && _temCotacaoAtiva(e.id, r.id)) {
-      return alert(`Já existe uma negociação de ${r.nome} em andamento para ${e.nome}.\n\nEla já está no funil — continue por lá em vez de abrir outra.`);
+      const ap = prompt(`Já existe uma negociação de ${r.nome} em andamento para ${e.nome}.\n\nPara abrir OUTRA apólice do mesmo ramo, dê um apelido que identifique este seguro (ex.: "Galpão B", "Frota leve", "Unidade Matriz").\n\nPara acompanhar a negociação que já está no funil, cancele.`);
+      if (ap === null) return;
+      const apelido = (ap || '').trim();
+      if (!apelido) return alert('Sem apelido não dá para diferenciar as duas negociações — cadastro cancelado.');
+      _apoliceExtraOpts = { apoliceApelido: apelido, apoliceRef: 'ap_' + Date.now().toString(36) };
     }
     const seguradora = ehOp ? ((document.getElementById('crSeguradora') || {}).value || 'Bradesco').trim() : null;
     try {
       const optsCot = ehOp
         ? { origem: 'op', valorOperacao: valor || null, seguradora: seguradora || null, observacoes: obs || null, silent: true }
         : { origem: 'mapeamento', valorProposto: valor || null, observacoes: obs || null, silent: true };
+      if (_apoliceExtraOpts) Object.assign(optsCot, _apoliceExtraOpts);
       const id = await criarCotacao(e, r, optsCot);
       if (id) {
         const m = document.getElementById('modalCotacaoRapida'); if (m) m.remove();
@@ -21369,7 +21412,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (c.status !== 'fechada') return;
       const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
       if (!dt || dt.getFullYear() !== ano) return;
-      fechadasNoAno.add(c.empresaId + '|' + c.produtoId);
+      fechadasNoAno.add(c.empresaId + '|' + c.produtoId + (c.apoliceRef ? '|' + c.apoliceRef : ''));
       const rmDono = empresaRm[c.empresaId] || c.solicitadoPorUid || c.registradoPorUid;
       if (escopo !== 'agencia' && rmDono !== escopo) return;
       const gid = ramoGrupo[c.produtoId] || 'outros';
@@ -24504,11 +24547,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (opts.valorProposto) cot.valorProposto = opts.valorProposto;
       if (opts.vencimentoRef) cot.vencimentoRef = opts.vencimentoRef;
       if (opts.observacoes) cot.observacoes = opts.observacoes;
+      // Apólice adicional: a cotação carrega a referência e o apelido (aparece nos cards)
+      if (opts.apoliceRef) cot.apoliceRef = opts.apoliceRef;
+      if (opts.apoliceApelido) cot.apoliceApelido = opts.apoliceApelido;
       // histórico inicial (entrada no funil)
       cot.historico = [{ status: 'solicitada', label: 'Iniciada · ' + (ORIGEM_INFO[origem] || {}).label, obs: opts.observacoes || null, por: creditoNome || null, em: new Date().toISOString() }];
 
-      // Anti duplo-clique: mesma empresa+produto em <5s cria uma cotação só
-      const _kCot = empresa.id + '|' + produto.id;
+      // Anti duplo-clique: mesma empresa+produto+apólice em <5s cria uma cotação só
+      const _kCot = empresa.id + '|' + produto.id + '|' + (opts.apoliceRef || opts.apoliceApelido || '');
       if (criarCotacao._ult && criarCotacao._ult.k === _kCot && (Date.now() - criarCotacao._ult.t) < 5000) return;
       criarCotacao._ult = { k: _kCot, t: Date.now() };
 
@@ -24533,7 +24579,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Sincronizar produto da empresa pra status "cotando".
       // EXCEÇÃO: cotação de OP roda "por fora" — não toca no mapeamento de mercado do produto
       // (o cliente pode ter esse produto no mercado com outro corretor, e essa info é preservada).
-      if (origem !== 'op' && origem !== 'op_bancaria') {
+      // Cotação de APÓLICE ADICIONAL também não mexe no mapeamento principal.
+      if (origem !== 'op' && origem !== 'op_bancaria' && !opts.apoliceRef && !opts.apoliceApelido) {
         await db.collection('empresas').doc(empresa.id).collection('mb_produtos').doc(produto.id).set({
           statusVisual: 'cotando',
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
@@ -24561,6 +24608,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   function _temCotacaoAtiva(empresaId, ramoId) {
     return (COTACOES || []).some(c => c.empresaId === empresaId && c.produtoId === ramoId && ehStatusAtivo(c.status));
+  }
+  // Mesma checagem, mas POR APÓLICE: a negociação da apólice "Galpão B" não bloqueia
+  // nem esconde o vencimento da apólice principal (e vice-versa).
+  function _temCotacaoAtivaAp(empresaId, ramoId, apRef) {
+    return (COTACOES || []).some(c => c.empresaId === empresaId && c.produtoId === ramoId && ehStatusAtivo(c.status) && (c.apoliceRef || null) === (apRef || null));
   }
   // Já houve cotação (ativa, fechada ou perdida) DESTE produto no ano corrente?
   // Se sim, não é mais "oportunidade nova" — já mexemos nela neste ciclo.
@@ -24888,6 +24940,40 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const dados = e.produtosDados || {};
       for (const ramoId of Object.keys(dados)) {
         const pd = dados[ramoId] || {};
+
+        // ---- APÓLICES ADICIONAIS: cada uma renova no próprio ciclo ----
+        if (Array.isArray(pd.apolices) && pd.apolices.length) {
+          const ramoX = (PRODUTOS || []).find(r => r.id === ramoId);
+          if (ramoX) {
+            let mudouLista = false;
+            const listaAp = pd.apolices.slice();
+            for (let i = 0; i < listaAp.length; i++) {
+              const apx = listaAp[i];
+              if (!apx || !apx.vencimentoMes || !apx.vencimentoAno) continue;
+              if (!['mapeada', 'conosco', 'fechada'].includes(apx.statusVisual || 'mapeada')) continue;
+              const vencX = new Date(apx.vencimentoAno, apx.vencimentoMes - 1, 1);
+              const diasX = Math.floor((vencX - hoje) / 86400000);
+              if (diasX < 0 || diasX > JANELA_DIAS) continue;
+              if ((COTACOES || []).some(c => c.empresaId === e.id && c.produtoId === ramoId && ehStatusAtivo(c.status) && (c.apoliceRef || null) === apx.ap)) continue;
+              const cicloX = apx.vencimentoAno + '-' + apx.vencimentoMes;
+              if (apx.renovacaoAutoCiclo === cicloX) continue;
+              let _cUid = e.rm || pd.ultimoAutorUid || null;
+              let _cMem = _cUid ? (EQUIPE_REAL || []).find(u => u.uid === _cUid) : null;
+              const _cred = _cUid ? { uid: _cUid, nome: (_cMem && _cMem.nome) || (e.rm && MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) || 'RM', perfil: (_cMem && _cMem.perfil) || 'rm' } : null;
+              const obsX = ['Renovação automática · ' + (apx.apelido || 'apólice adicional') + ' · vence ' + String(apx.vencimentoMes).padStart(2, '0') + '/' + apx.vencimentoAno];
+              if (apx.seguradora) obsX.unshift('Seguradora atual: ' + apx.seguradora);
+              const idX = await criarCotacao(e, ramoX, { origem: 'renovacao', silent: true, valorProposto: apx.premioAnual || null, observacoes: obsX.join(' · '), vencimentoRef: cicloX, credito: _cred, apoliceRef: apx.ap, apoliceApelido: apx.apelido || 'apólice adicional' });
+              if (idX) { listaAp[i] = Object.assign({}, apx, { renovacaoAutoCiclo: cicloX }); mudouLista = true; criadas++; }
+            }
+            if (mudouLista) {
+              try {
+                await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(ramoId).set({ apolices: listaAp }, { merge: true });
+                pd.apolices = listaAp;
+              } catch (err) {}
+            }
+          }
+        }
+
         if (!pd.vencimentoMes || !pd.vencimentoAno) continue;
         if (!['mapeada', 'conosco', 'quente', 'fechada'].includes(pd.statusVisual)) continue; // mapeados/nossos/fechados
         const venc = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
@@ -25149,7 +25235,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         return `
           <div ${_seg ? '' : `onclick="abrirTimelineNegocio('${c.id}')"`} style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid #f1f5f9; cursor:${_seg ? 'default' : 'pointer'};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
             <div style="flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.empresaNome}</div>
+              <div style="font-size:13px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.empresaNome}${c.apoliceApelido ? ` <span style="font-size:10px; color:#6d28d9; background:#f5f3ff; padding:1px 7px; border-radius:100px; font-weight:700;">🏷 ${c.apoliceApelido}</span>` : ''}</div>
               <div style="font-size:11px; color:#94a3b8;">${fmtDataCurta(dataRef)}${ch ? ` · <span style="color:${ch.cor};font-weight:700;">${ch.emoji} ${ch.label}</span>` : ''}</div>
             </div>
             ${valor ? `<div style="font-size:12px; font-weight:700; color:#166534; font-family:'JetBrains Mono';">${fmtBRcompacto(valor)}</div>` : ''}
@@ -25877,6 +25963,182 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     document.body.appendChild(modal);
   }
   window.abrirDossieNegocio = abrirDossieNegocio;
+
+  // ============= APÓLICES ADICIONAIS (mesmo ramo, vários vencimentos) =============
+  // Uma empresa pode ter 3 empresariais vencendo em meses diferentes. O mapeamento
+  // principal continua único (campanha conta o ramo 1x, sem pontos extras aqui);
+  // cada apólice adicional tem vencimento próprio no calendário e renova sozinha.
+  function abrirApoliceExtra(empresaId, produtoId, apId) {
+    const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
+    const p = (PRODUTOS || []).find(x => x.id === produtoId);
+    if (!e || !p) return;
+    const pd = (e.produtosDados || {})[produtoId] || {};
+    const apx = apId ? ((pd.apolices || []).find(a => a && a.ap === apId) || {}) : {};
+    const editando = !!apId;
+    const old = document.getElementById('modalApoliceExtra'); if (old) old.remove();
+    const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    const modal = document.createElement('div');
+    modal.id = 'modalApoliceExtra';
+    modal.className = 'cad-modal open';
+    modal.style.zIndex = '70';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="document.getElementById('modalApoliceExtra').remove()"></div>
+      <div class="cad-modal-panel" style="max-width:480px;">
+        <div class="cad-modal-head">
+          <h2>🏷 ${editando ? 'Editar apólice' : 'Nova apólice'} — ${p.icon || ''} ${p.nome}</h2>
+          <p>${e.nome} · além da apólice principal já mapeada</p>
+        </div>
+        <div class="cad-modal-body">
+          <input type="hidden" id="apxEmpresa" value="${empresaId}">
+          <input type="hidden" id="apxProduto" value="${produtoId}">
+          <input type="hidden" id="apxId" value="${apId || ''}">
+          <div class="form-group">
+            <label class="form-label">Apelido (identifica esta apólice)</label>
+            <input type="text" class="form-control" id="apxApelido" maxlength="40" placeholder='Ex: "Galpão B", "Frota leve", "Unidade Matriz"' value="${(apx.apelido || '').replace(/"/g, '&quot;')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Situação</label>
+            <select class="form-control" id="apxStatus">
+              <option value="mapeada" ${apx.statusVisual !== 'conosco' ? 'selected' : ''}>🌎 No mercado (com concorrente)</option>
+              <option value="conosco" ${apx.statusVisual === 'conosco' ? 'selected' : ''}>💎 Conosco (nossa apólice)</option>
+            </select>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Seguradora</label>
+              <input type="text" class="form-control" id="apxSeguradora" value="${(apx.seguradora || '').replace(/"/g, '&quot;')}" placeholder="Ex: Porto Seguro">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Prêmio anual (R$)</label>
+              <input type="text" class="form-control" id="apxPremio" value="${apx.premioAnual ? fmtBR(apx.premioAnual) : ''}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Vencimento · mês</label>
+              <select class="form-control" id="apxVencMes"><option value="">— mês —</option>${meses.map((m, i) => `<option value="${i + 1}" ${apx.vencimentoMes === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Vencimento · ano</label>
+              <input type="number" class="form-control" id="apxVencAno" min="2024" max="2035" value="${apx.vencimentoAno || ''}" placeholder="${new Date().getFullYear()}">
+            </div>
+          </div>
+          <div id="apxVigWrap" style="display:${apx.statusVisual === 'conosco' ? 'grid' : 'none'}; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label class="form-label">Vigência início</label>
+              <input type="text" class="form-control" id="apxVigIni" maxlength="10" value="${apx.vigenciaInicio || ''}" placeholder="dd/mm/aaaa" oninput="formatarData(this)">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Vigência fim</label>
+              <input type="text" class="form-control" id="apxVigFim" maxlength="10" value="${apx.vigenciaFim || ''}" placeholder="dd/mm/aaaa" oninput="formatarData(this)">
+            </div>
+          </div>
+          <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:9px 12px; font-size:11.5px; color:#4338ca;">
+            💡 O vencimento desta apólice entra no calendário e renova sozinha no funil (com o apelido no card). Não pontua na campanha — o ramo já pontuou no mapeamento principal.
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          ${editando ? `<button class="btn-secondary" style="color:#b91c1c; margin-right:auto;" onclick="excluirApoliceExtra()">Excluir</button>` : ''}
+          <button class="btn-secondary" onclick="document.getElementById('modalApoliceExtra').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="salvarApoliceExtra()">Salvar apólice</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const selSt = document.getElementById('apxStatus');
+    selSt.onchange = () => { document.getElementById('apxVigWrap').style.display = selSt.value === 'conosco' ? 'grid' : 'none'; };
+  }
+
+  async function salvarApoliceExtra() {
+    const empresaId = document.getElementById('apxEmpresa').value;
+    const produtoId = document.getElementById('apxProduto').value;
+    const apId = document.getElementById('apxId').value || null;
+    const apelido = (document.getElementById('apxApelido').value || '').trim();
+    const statusVisual = document.getElementById('apxStatus').value;
+    const seguradora = (document.getElementById('apxSeguradora').value || '').trim() || null;
+    const premio = lerMoeda(document.getElementById('apxPremio')) || null;
+    const vencMes = parseInt(document.getElementById('apxVencMes').value) || null;
+    const vencAno = parseInt(document.getElementById('apxVencAno').value) || null;
+    const vigIni = (document.getElementById('apxVigIni').value || '').trim() || null;
+    const vigFim = (document.getElementById('apxVigFim').value || '').trim() || null;
+    if (!apelido) return alert('Dê um apelido para esta apólice — é ele que diferencia as apólices do mesmo ramo.');
+    if (!vencMes || !vencAno) return alert('Informe mês e ano de vencimento — sem isso a apólice não entra no calendário de renovações.');
+    if (vigIni && !/^\d{2}\/\d{2}\/\d{4}$/.test(vigIni)) return alert('Vigência início inválida. Use dd/mm/aaaa.');
+    if (vigFim && !/^\d{2}\/\d{2}\/\d{4}$/.test(vigFim)) return alert('Vigência fim inválida. Use dd/mm/aaaa.');
+    try {
+      const ref = db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(produtoId);
+      const snap = await ref.get();
+      const dados = snap.exists ? snap.data() : {};
+      const lista = Array.isArray(dados.apolices) ? dados.apolices.slice() : [];
+      const id = apId || ('ap_' + Date.now().toString(36));
+      const entry = {
+        ap: id, apelido, statusVisual, seguradora, premioAnual: premio,
+        vencimentoMes: vencMes, vencimentoAno: vencAno,
+        vigenciaInicio: statusVisual === 'conosco' ? vigIni : null,
+        vigenciaFim: statusVisual === 'conosco' ? vigFim : null,
+        renovacaoAutoCiclo: apId ? ((lista.find(a => a && a.ap === apId) || {}).renovacaoAutoCiclo || null) : null,
+        atualizadoEm: new Date().toISOString(), atualizadoPorNome: autorNome()
+      };
+      const idx = lista.findIndex(a => a && a.ap === id);
+      if (idx >= 0) lista[idx] = entry; else lista.push(entry);
+      await ref.set({ apolices: lista, ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+      // Apólice CONOSCO com prêmio e vigência: entra na produção do ano da vigência
+      // (mesmo mecanismo do "já é nosso" principal — some do kanban se for de ano antigo)
+      const bfId = 'bf_' + empresaId + '_' + produtoId + '_' + id;
+      const mVi = vigIni ? vigIni.match(/^(\d{2})\/(\d{2})\/(\d{4})$/) : null;
+      const temFechadaReal = (COTACOES || []).some(c => c.empresaId === empresaId && c.produtoId === produtoId && c.status === 'fechada' && (c.apoliceRef || null) === id && c.origem !== 'backfill_cliente');
+      if (statusVisual === 'conosco' && premio > 0 && mVi && !temFechadaReal) {
+        const eObj = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId) || {};
+        const pObj = (PRODUTOS || []).find(x => x.id === produtoId) || {};
+        await db.collection('mb_cotacoes').doc(bfId).set({
+          empresaId, empresaNome: eObj.nome || '—',
+          produtoId, produtoNome: pObj.nome || produtoId, produtoIcon: pObj.icon || '📦',
+          agenciaId: eObj.agenciaId || CTX.agenciaId || null,
+          status: 'fechada', etapa: 10, origem: 'backfill_cliente',
+          apoliceRef: id, apoliceApelido: apelido,
+          valor: premio, seguradora,
+          dataDecisao: new Date(parseInt(mVi[3]), parseInt(mVi[2]) - 1, parseInt(mVi[1])),
+          solicitadoPorUid: eObj.rm || CTX.uid, registradoPorUid: autorUid(), registradoPorNome: autorNome(),
+          observacoes: 'Apólice adicional já fechada fora do funil — lançada no mapeamento (início de vigência).',
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+          atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      } else {
+        try { await db.collection('mb_cotacoes').doc(bfId).delete(); } catch (err) {}
+      }
+
+      // atualiza memória local e telas
+      const eLocal = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
+      if (eLocal) { eLocal.produtosDados = eLocal.produtosDados || {}; eLocal.produtosDados[produtoId] = Object.assign({}, eLocal.produtosDados[produtoId], { apolices: lista }); }
+      document.getElementById('modalApoliceExtra').remove();
+      flashSalvo('Apólice "' + apelido + '" salva!');
+      try { abrirRaioX(empresaId); } catch (err) {}
+    } catch (err) { alert('Erro ao salvar apólice: ' + err.message); }
+  }
+
+  async function excluirApoliceExtra() {
+    const empresaId = document.getElementById('apxEmpresa').value;
+    const produtoId = document.getElementById('apxProduto').value;
+    const apId = document.getElementById('apxId').value;
+    if (!apId) return;
+    if (!confirm('Excluir esta apólice adicional? O vencimento dela sai do calendário. Negociações já abertas no funil não são afetadas.')) return;
+    try {
+      const ref = db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(produtoId);
+      const snap = await ref.get();
+      const dados = snap.exists ? snap.data() : {};
+      const lista = (Array.isArray(dados.apolices) ? dados.apolices : []).filter(a => a && a.ap !== apId);
+      await ref.set({ apolices: lista }, { merge: true });
+      try { await db.collection('mb_cotacoes').doc('bf_' + empresaId + '_' + produtoId + '_' + apId).delete(); } catch (err) {}
+      const eLocal = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === empresaId);
+      if (eLocal && eLocal.produtosDados && eLocal.produtosDados[produtoId]) eLocal.produtosDados[produtoId].apolices = lista;
+      document.getElementById('modalApoliceExtra').remove();
+      flashSalvo('Apólice removida.');
+      try { abrirRaioX(empresaId); } catch (err) {}
+    } catch (err) { alert('Erro: ' + err.message); }
+  }
+  window.abrirApoliceExtra = abrirApoliceExtra;
+  window.salvarApoliceExtra = salvarApoliceExtra;
+  window.excluirApoliceExtra = excluirApoliceExtra;
 
   function baixarDossiePDF() {
     if (!window._DOSSIE) return;
@@ -26835,20 +27097,56 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         } catch (eOrig) { console.warn('credito de origem', eOrig); }
       }
 
-      // Se fechou de verdade pelo funil, remove eventual backfill manual do mesmo produto (evita produção em dobro)
-      if (acao === 'fechar') { try { await db.collection('mb_cotacoes').doc('bf_' + c.empresaId + '_' + c.produtoId).delete(); } catch (err) {} }
+      // Se fechou de verdade pelo funil, remove eventual backfill manual da MESMA apólice (evita produção em dobro)
+      if (acao === 'fechar') { try { await db.collection('mb_cotacoes').doc('bf_' + c.empresaId + '_' + c.produtoId + (c.apoliceRef ? '_' + c.apoliceRef : '')).delete(); } catch (err) {} }
 
       // Sincronizar produto da empresa
       // OP roda por fora do mapeamento: não sobrescreve o que o cliente tem no mercado.
       // MAS, se não há mapeamento nenhum (ex.: auto individual, que só nasce de OP),
       // ela registra normalmente — assim o negócio fechado entra no calendário de renovações.
       const _ehOP = (c.origem === 'op' || c.origem === 'op_bancaria');
-      let _podeEscrever = !_ehOP;
-      if (_ehOP) {
-        const _eObj = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
-        const _pdAtual = (_eObj && _eObj.produtosDados && _eObj.produtosDados[c.produtoId]) || {};
-        const _temMapa = _pdAtual.statusVisual && _pdAtual.statusVisual !== 'vazia';
-        _podeEscrever = !_temMapa;   // só escreve se o produto está em branco
+      const _eObjA = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
+      const _pdAtualA = (_eObjA && _eObjA.produtosDados && _eObjA.produtosDados[c.produtoId]) || {};
+      const _temMapaA = _pdAtualA.statusVisual && _pdAtualA.statusVisual !== 'vazia';
+
+      // NEGÓCIO DE APÓLICE ADICIONAL (tem apoliceRef/apelido) — ou OP fechada com o
+      // produto JÁ mapeado no mercado: grava numa APÓLICE ADICIONAL do produto, sem
+      // tocar no mapeamento principal. Assim o seguro que segue no mercado continua
+      // registrado, e o negócio fechado entra no calendário de renovações (decisão 17/08).
+      const _ehNegocioDeApolice = !!(c.apoliceRef || c.apoliceApelido) || (_ehOP && _temMapaA && acao === 'fechar');
+      if (novoStatusVisual && updateProdutoEmpresa && _ehNegocioDeApolice) {
+        try {
+          const _refP = db.collection('empresas').doc(c.empresaId).collection('mb_produtos').doc(c.produtoId);
+          const _snapP = await _refP.get();
+          const _dadosP = _snapP.exists ? _snapP.data() : {};
+          const _listaAp = Array.isArray(_dadosP.apolices) ? _dadosP.apolices.slice() : [];
+          const _apId = c.apoliceRef || ('ap_' + Date.now().toString(36));
+          const _idx = _listaAp.findIndex(a => a && a.ap === _apId);
+          const u = updateProdutoEmpresa || {};
+          const _ant = _idx >= 0 ? _listaAp[_idx] : {};
+          const entry = {
+            ap: _apId,
+            apelido: c.apoliceApelido || _ant.apelido || (_ehOP ? 'OP' : 'apólice adicional'),
+            statusVisual: acao === 'fechar' ? 'conosco' : (_ant.statusVisual || 'mapeada'),
+            seguradora: u.seguradora || u.seguradoraAtual || _ant.seguradora || null,
+            premioAnual: u.premioAnual || _ant.premioAnual || null,
+            vigenciaInicio: u.vigenciaInicio || _ant.vigenciaInicio || null,
+            vigenciaFim: u.vigenciaFim || _ant.vigenciaFim || null,
+            vencimentoMes: u.vencimentoMes || u.reagendarMes || _ant.vencimentoMes || null,
+            vencimentoAno: u.vencimentoAno || u.reagendarAno || _ant.vencimentoAno || null,
+            renovacaoAutoCiclo: null, // novo ciclo: renovação automática volta a valer
+            atualizadoEm: new Date().toISOString()
+          };
+          if (_idx >= 0) _listaAp[_idx] = Object.assign({}, _ant, entry); else _listaAp.push(entry);
+          await _refP.set({ apolices: _listaAp, ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          // se o negócio nasceu sem apoliceRef (OP), carimba a cotação para o vínculo ficar rastreável
+          if (!c.apoliceRef) { try { await db.collection('mb_cotacoes').doc(c.id).update({ apoliceRef: _apId, apoliceApelido: entry.apelido }); } catch (err) {} }
+        } catch (err) { console.warn('apolice extra fechar', err); }
+      }
+
+      let _podeEscrever = !_ehOP && !c.apoliceRef && !c.apoliceApelido && !_ehNegocioDeApolice;
+      if (_ehOP && !_ehNegocioDeApolice) {
+        _podeEscrever = !_temMapaA;   // só escreve se o produto está em branco
       }
       if (novoStatusVisual && _podeEscrever) {
         const prodUpdate = {
