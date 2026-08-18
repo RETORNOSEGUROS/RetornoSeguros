@@ -5019,7 +5019,7 @@
   const IND_META = [
     { chave: 'cadastro',   icon: '🧑‍💼', label: 'Cadastro',              desc: 'Média entre % de sócios e % de funcionários mapeados na carteira' },
     { chave: 'mapeamento', icon: '🗺️', label: 'Mapeamento de seguros', desc: 'Percentual dos seguros com status conhecido' },
-    { chave: 'cotacoes',   icon: '🎯', label: 'Cotações de oportunidades', desc: 'Das oportunidades da base, quantas viraram cotação (renovações não entram)' },
+    { chave: 'cotacoes',   icon: '🎯', label: 'Cotações de oportunidades', desc: 'Das oportunidades da base, quantas chegaram à etapa 2 do funil — fechadas e declinadas na campanha contam; renovações não' },
     { chave: 'producao',   icon: '💰', label: 'Produção retorno',       desc: 'Grupos que bateram o alvo de produção ÷ total de grupos' }
   ];
   let FATOR_CFG = JSON.parse(JSON.stringify(FATOR_DEFAULT));
@@ -10882,7 +10882,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '224';
+  const APP_VERSAO = '226';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12340,11 +12340,24 @@
     // Renovações (vencimento mapeado) NÃO entram aqui — são outra seção.
     // Importante: um negócio que virou nosso NA CAMPANHA continua contando (senão quem
     // fecha perderia o crédito justamente por ter fechado).
-    const cotPorCelula = {};
+    // REGRA DO PATRICK (17/08): a oportunidade da base conta como TRABALHADA quando a
+    // negociação chegou à ETAPA 2 do funil (mesmo via OP), ou quando foi FECHADA ou
+    // DECLINADA dentro da campanha. Recém-solicitada (parada na etapa 1) ainda não
+    // conta. Renovação mapeada nunca conta neste indicador.
+    const _iniCampB = (typeof CAMPANHA !== 'undefined' && CAMPANHA.inicio) ? new Date(CAMPANHA.inicio + 'T00:00:00') : new Date(anoCamp, 0, 1);
+    const celBase = {};   // k -> { env, so1, renov } (envolvida · só etapa 1 · tem renovação)
     cotacoes.forEach(c => {
-      if (c.origem === 'renovacao') return;             // renovação não conta como base
+      const kCel = c.empresaId + '|' + c.produtoId;
+      const o = celBase[kCel] = celBase[kCel] || {};
       if (c.origem === 'backfill_cliente') return;      // lançar apólice antiga não é movimento
-      cotPorCelula[c.empresaId + '|' + c.produtoId] = true;
+      if (c.origem === 'renovacao') { o.renov = true; return; } // renovação não conta como base
+      const ativa = (typeof STATUS_ATIVOS !== 'undefined' ? STATUS_ATIVOS : []).includes(c.status);
+      if (ativa && c.status !== 'solicitada') { o.env = true; return; }   // etapa 2+ no funil
+      if (ativa) { o.so1 = true; return; }                                // etapa 1 (ainda não conta)
+      if (['fechada', 'perdida', 'sem_aceitacao'].includes(c.status)) {
+        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+        if (dt && dt >= _iniCampB) o.env = true;                          // decidida NA campanha: trabalho feito
+      }
     });
     let totalBase = 0, okBase = 0;
     const listaBase = [];
@@ -12353,7 +12366,8 @@
       (PRODUTOS || []).forEach(r => {
         if (r.somenteOp) return;
         const pd = dados[r.id] || {};
-        const temCot = !!cotPorCelula[e.id + '|' + r.id];
+        const cel = celBase[e.id + '|' + r.id] || {};
+        const temCot = !!(cel.env || cel.so1);   // há trabalho no funil (mesmo que ainda na etapa 1)
         const reag = (typeof _reagendadoNaCampanha === 'function') && _reagendadoNaCampanha(pd);
         const naoTem = (typeof _naoTemDispara === 'function')
           ? _naoTemDispara(r, e, pd)
@@ -12361,16 +12375,20 @@
         const porte = (typeof _porteDispara === 'function') && _porteDispara(r, e);
         if (!porte && !naoTem && !reag) return;
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, r.id) : null;
-        if (cat === 'nosso' && !temCot) return;         // já era nosso antes → não é oportunidade
+        if (cat === 'nosso' && !cel.env) return;        // já era nosso antes da campanha → não é oportunidade
         totalBase++;
-        if (temCot) okBase++;
+        if (cel.env) okBase++;
         let motivo = 'oportunidade da base';
         if (reag) motivo = `retomar em ${String(pd.reagendarMes).padStart(2, '0')}/${pd.reagendarAno}`;
         else if (naoTem) motivo = 'cliente informou que NÃO tem';
         else if (porte && typeof _motivoPorte === 'function') motivo = _motivoPorte(r, e);
+        // Diagnósticos no "ver" — cada célula explica por que contou ou não:
+        if (cat === 'nosso' && cel.env) motivo += ' · 💎 fechada na campanha';
+        else if (!cel.env && cel.so1) motivo += ' · no funil (conta ao chegar na etapa 2)';
+        else if (!cel.env && !cel.so1 && cel.renov) motivo += ' · ⚠ tem renovação no funil (renovação não conta aqui)';
         listaBase.push({
           empresaId: e.id, empresa: e.nome, produtoId: r.id,
-          produto: r.nome, motivo, cotada: temCot
+          produto: r.nome, motivo, cotada: !!cel.env
         });
       });
     });
@@ -12730,7 +12748,11 @@
       let qc = db.collection('mb_cotacoes');
       if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
       const snapC = await qc.get();
-      snapC.forEach(d => { const c = d.data(); if (ehStatusAtivo(c.status)) cotAtivas.push(c); });
+      // TODAS as cotações — inclusive fechadas e declinadas. Antes só entravam as
+      // ATIVAS, então quem fechava/declinava sumia do indicador "Cotações de
+      // oportunidades" (o mistério do 3 de 92 do Pedro, 17/08). Os pontos que
+      // precisam só das ativas (assumidas) filtram por status adiante.
+      snapC.forEach(d => cotAtivas.push(d.data()));
     } catch (e) { console.warn('campanha dados', e); }
 
     // ISOLAMENTO DE AGÊNCIA: se uma agência está selecionada, descarta empresas/cotações de fora.
