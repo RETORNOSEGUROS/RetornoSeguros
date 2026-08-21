@@ -10882,7 +10882,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '226';
+  const APP_VERSAO = '227';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -13041,8 +13041,10 @@
     // não só a do RM logado. Por isso buscamos direto do banco — o COTACOES em
     // memória é filtrado por carteira (privacidade do funil) e zeraria na visão de um RM.
     let baseHoje = 0;
+    const _basePorRm = {};   // base própria de cada RM — mesma atribuição do painel do gestor
     try {
       const _cotsHoje = await _carregarCotacoesTodas();
+      const _empRmB = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empRmB[e.id] = e.rm);
       _cotsHoje.forEach(c => {
         if (c.status !== 'fechada' || !c.comissaoPct || c.comissaoPct <= 0) return;
         if (CTX.agenciaId && c.agenciaId && c.agenciaId !== CTX.agenciaId) return;
@@ -13051,10 +13053,14 @@
         else if (c.dataFechamento) dt = c.dataFechamento;
         if (dt && CAMPANHA.inicio && dt < CAMPANHA.inicio) return;
         if (dt && CAMPANHA.fim && dt > CAMPANHA.fim) return;
-        baseHoje += (c.valor || 0) * (c.comissaoPct / 100);
+        const _bc = (c.valor || 0) * (c.comissaoPct / 100);
+        baseHoje += _bc;
+        const _dono = _empRmB[c.empresaId] || c.fechadoPorUid;
+        if (_dono) _basePorRm[_dono] = (_basePorRm[_dono] || 0) + _bc;
       });
     } catch (e) { console.warn('baseHoje ranking', e); }
-    window._CAMP_BASE_HOJE = baseHoje;   // a comissão real já fechada — usada no simulador
+    window._CAMP_BASE_HOJE = baseHoje;   // comissão da AGÊNCIA — pote do ranking e cenários do admin
+    window._CAMP_BASE_POR_RM = _basePorRm; // base PRÓPRIA de cada RM — simulador da carteira
 
     const perfilLabel = { rm: 'RM', assistente: 'Assistente', estagiario: 'Estagiário' };
     const fmtPt = n => n.toLocaleString('pt-BR');
@@ -13513,11 +13519,21 @@
         baseReal += (c.valor || 0) * (c.comissaoPct / 100);
       });
     }
-    if (baseReal > 0 && ehRM && indMeu) {
+    // BASE DO RM = só os negócios da carteira DELE — é exatamente assim que o
+    // painel do gestor paga (piso/indicadores/plus sobre a base própria). Usar a
+    // base da agência aqui mostrava ao RM um número ~centenas de vezes maior que
+    // o pagamento real (auditoria do Daniel, 21/08: banner 689 pts × R$ 3 pagos).
+    let baseRMsim = baseReal;
+    if (ehRM) {
+      const _mapa = window._CAMP_BASE_POR_RM;
+      // fallback: sem o mapa, usa o cálculo local (COTACOES do RM já vem filtrado pela carteira dele)
+      baseRMsim = _mapa ? (_mapa[uidEfetivo()] || 0) : baseReal;
+    }
+    if (baseRMsim > 0 && ehRM && indMeu) {
       const partTotal = indMeu.ganhoRM;                 // carteira + plus da agência
       const tetoTotal = indMeu.somaTetosProprios + indMeu.somaPlus;
-      const ganhoAgora = pontos(baseReal, partTotal);
-      const ganhoTeto = pontos(baseReal, tetoTotal);
+      const ganhoAgora = pontos(baseRMsim, partTotal);
+      const ganhoTeto = pontos(baseRMsim, tetoTotal);
       html += `<div style="background:linear-gradient(135deg,#065f46,#047857); border-radius:14px; padding:18px 20px; margin-bottom:16px; color:white;">
         <div style="font-size:11.5px; font-weight:700; opacity:.85; letter-spacing:.03em;">🏁 COM OS NEGÓCIOS JÁ FECHADOS NA CAMPANHA</div>
         <div style="display:flex; align-items:baseline; gap:8px; margin-top:8px; flex-wrap:wrap;">
@@ -13541,7 +13557,7 @@
         <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
           Só o que depende de você: hoje <strong style="color:${_corFator(teto > 0 ? hoje / teto * 100 : 0)};">${fmtFator(hoje)}</strong> de ${fmtFator(teto)} possíveis. <span style="color:#94a3b8;">(o plus da agência vem na tabela abaixo)</span>
         </div>
-        ${_tabelaSimulador('carteira', baseReal, { hojePart: hoje, tetoPart: teto, hojeLabel: fmtFator(hoje), tetoLabel: fmtFator(teto) }, fmtPt, pontos)}
+        ${_tabelaSimulador('carteira', baseRMsim, { hojePart: hoje, tetoPart: teto, hojeLabel: fmtFator(hoje), tetoLabel: fmtFator(teto) }, fmtPt, pontos)}
       </div>`;
 
       // ---- Comparativo da agência: quanto o plus da agência rende ----
@@ -13551,7 +13567,7 @@
         <div style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
           Hoje a agência te dá <strong>${fmtFator(plusHoje)}</strong> de plus. Se ela chegasse no teto, seriam <strong>${fmtFator(plusTeto)}</strong>.
         </div>
-        ${_tabelaSimulador('plus', baseReal, { hojePart: plusHoje, tetoPart: plusTeto, hojeLabel: fmtFator(plusHoje), tetoLabel: fmtFator(plusTeto) }, fmtPt, pontos)}
+        ${_tabelaSimulador('plus', baseRMsim, { hojePart: plusHoje, tetoPart: plusTeto, hojeLabel: fmtFator(plusHoje), tetoLabel: fmtFator(plusTeto) }, fmtPt, pontos)}
         <div style="margin-top:12px; padding:11px 13px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; font-size:12.5px; color:#166534;">
           Por isso vale puxar o time junto: quando a agência inteira melhora, <strong>todo mundo</strong> leva mais.
         </div>
@@ -13566,7 +13582,7 @@
           <strong style="color:white;">${fmtFator(somaHoje)}</strong> de ${fmtFator(somaTeto)} possíveis.
         </div>
         <div style="background:white; border-radius:10px; padding:10px;">
-        ${_tabelaSimulador('total', baseReal, { hojePart: somaHoje, tetoPart: somaTeto, hojeLabel: fmtFator(somaHoje), tetoLabel: fmtFator(somaTeto) }, fmtPt, pontos)}
+        ${_tabelaSimulador('total', baseRMsim, { hojePart: somaHoje, tetoPart: somaTeto, hojeLabel: fmtFator(somaHoje), tetoLabel: fmtFator(somaTeto) }, fmtPt, pontos)}
         </div>
       </div>`;
     }
