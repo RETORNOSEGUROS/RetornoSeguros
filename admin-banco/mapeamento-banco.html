@@ -2493,7 +2493,7 @@
         <div class="pipe-card" style="border-left: 4px solid #8b5cf6;">
           <div class="pc-label">🤝 Perto de fechar</div>
           <div class="pc-value" id="pipeQuente">R$ 0</div>
-          <div class="pc-sub" id="pipeQuenteSub">enviadas + reuniões</div>
+          <div class="pc-sub" id="pipeQuenteSub">em análise + em transmissão</div>
         </div>
         <div class="pipe-card" style="border-left: 4px solid #10b981;">
           <div class="pc-label">💎 Fechado no mês</div>
@@ -4038,9 +4038,16 @@
             <label class="form-label">Cidade do cliente</label>
             <input type="text" class="form-control" id="avCidade" placeholder="Ex: Passo Fundo/RS">
           </div>
-          <div class="form-group perm-chefeplus" id="avGerenteWrap">
-            <label class="form-label">Gerente responsável</label>
+          <div class="form-group" id="avGerenteWrap" style="display:none;">
+            <label class="form-label">Gerente responsável <small style="color:#94a3b8;">(de quem é a visita)</small></label>
             <select class="form-control" id="avGerente"></select>
+            <div id="avRegistroDica" style="display:none; font-size:11px; color:#0e7490; background:#ecfeff; border:1px solid #a5f3fc; border-radius:7px; padding:6px 9px; margin-top:6px;">🖊 Registrando pela(o) gerente: os pontos da visita são dele(a) — e você ganha os pontos do registro.</div>
+          </div>
+          <div class="form-group" id="avEuVouWrap">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:9px 12px;">
+              <input type="checkbox" id="avEuVou" style="width:16px; height:16px; flex-shrink:0;">
+              <span id="avEuVouTexto">Eu vou participar desta visita</span>
+            </label>
           </div>
           <div class="form-group">
             <label class="form-label">Quem vai junto <small style="color:#94a3b8;">(equipe da agência)</small></label>
@@ -4662,7 +4669,7 @@
     </div>
     <div class="cad-modal-foot">
       <button class="btn-secondary" onclick="document.getElementById('modalSocios').classList.remove('open')">Cancelar</button>
-      <button class="btn-primary" onclick="salvarSocios()">Salvar sócios</button>
+      <button class="btn-primary" onclick="salvarSocios()">✅ Concluir</button>
     </div>
   </div>
 </div>
@@ -4841,6 +4848,7 @@
     visita_reuniao:            5,   // reunião formal (só sobre seguro)
     visita_digital:            3,   // mandou o link e o cliente respondeu
     agenda_com_corretor:       3,   // convidou o corretor pra ir junto e ele confirmou
+    visita_registro:           2,   // registrou a visita EM NOME de um colega (ex.: assistente pelo RM)
 
     // --- Funil (por ação, não por etapa) ---
     funil_iniciar_inicio:      10,  // colocar no funil: vale isso no 1º dia da campanha...
@@ -4883,7 +4891,8 @@
     { grupo: 'Visita', chave: 'visita_presencial', label: '📍 Visita presencial ou online', desc: '' },
     { grupo: 'Visita', chave: 'visita_reuniao',    label: '📅 Reunião formal',              desc: 'Encontro só sobre seguro' },
     { grupo: 'Visita', chave: 'visita_digital',    label: '💻 Visita digital',              desc: 'Mandou o link e o cliente respondeu' },
-    { grupo: 'Visita', chave: 'agenda_com_corretor', label: '🤝 Chamou o corretor junto',    desc: 'Pra quem convidou, quando o corretor confirma que vai — some ao ponto da visita' },
+    { grupo: 'Visita', chave: 'agenda_com_corretor', label: '🤝 Chamou o corretor junto',    desc: 'Pra quem levou o corretor: quem registrou, se participa da visita; senão o gerente dela' },
+    { grupo: 'Visita', chave: 'visita_registro',     label: '🖊 Registrou a visita de um colega', desc: 'Pra quem registra a visita em nome de outro (ex.: assistente pelo RM) — o gerente segue ganhando os pontos da visita' },
 
     { grupo: 'Funil', chave: 'funil_iniciar_inicio',   label: '🚀 Colocar no funil · início da campanha', desc: 'Quanto vale trazer um negócio no 1º dia' },
     { grupo: 'Funil', chave: 'funil_iniciar_fim',      label: '🚀 Colocar no funil · fim da campanha',    desc: 'Quanto vale no último dia — cai linearmente entre os dois' },
@@ -10882,7 +10891,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '228';
+  const APP_VERSAO = '229';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -10987,6 +10996,11 @@
         : todas.filter(c => rankCot(c) >= idx).length
     }));
     const topo = etapas[0].count || 1;
+    // Declinadas do período: perdidas + sem aceitação — mostradas junto do funil
+    // pra ler de uma vez "quantas iniciamos × quantas foram declinadas" (Patrick 24/08).
+    const declinadas = todas.filter(c => ['perdida', 'sem_aceitacao'].includes(c.status)).length;
+    const wDecl = Math.min(100, declinadas / topo * 100);
+    const pctDecl = topo > 0 ? (declinadas / topo * 100).toFixed(0) : 0;
     document.getElementById('relatorioFunil').innerHTML = etapas.map((e, i) => {
       const w = (e.count / topo * 100);
       const pctTopo = topo > 0 ? (e.count / topo * 100).toFixed(0) : 0;
@@ -11004,7 +11018,22 @@
           </div>
         </div>
       `;
-    }).join('');
+    }).join('') + `
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed #e2e8f0;">
+          <div style="display:flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+            <span style="font-weight: 600; color: #991b1b;">✗ Declinadas <small style="color:#94a3b8;">(perdidas + sem aceitação)</small></span>
+            <span style="font-weight: 800; color: #ef4444;">${declinadas} <small style="color:#94a3b8;">(${pctDecl}% das iniciadas)</small></span>
+          </div>
+          <div style="background:#fef2f2; border-radius: 100px; height: 22px; overflow: hidden;">
+            <div style="background:linear-gradient(90deg, #ef4444aa, #ef4444); height: 100%; width: ${wDecl}%; border-radius: 100px; transition: width 0.6s;"></div>
+          </div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 8px;">
+            De <strong>${etapas[0].count}</strong> iniciada${etapas[0].count !== 1 ? 's' : ''} no período:
+            <strong style="color:#10b981;">${etapas[etapas.length - 1].count} fechada${etapas[etapas.length - 1].count !== 1 ? 's' : ''}</strong> ·
+            <strong style="color:#ef4444;">${declinadas} declinada${declinadas !== 1 ? 's' : ''}</strong> ·
+            <strong style="color:#3b82f6;">${Math.max(0, etapas[0].count - etapas[etapas.length - 1].count - declinadas)} em andamento</strong>
+          </div>
+        </div>`;
   }
 
   function renderChartProduto(cotacoes) {
@@ -11804,7 +11833,8 @@
 
       // ===== Pipeline em R$ =====
       const ativas = cotacoes.filter(c => STATUS_ATIVOS.includes(c.status));
-      const quentesNeg = cotacoes.filter(c => ['enviada','reuniao_agendada'].includes(c.status));
+      // Perto de fechar = o fim do funil: Em análise (cliente) + Em transmissão (decisão do Patrick 24/08)
+      const quentesNeg = cotacoes.filter(c => ['analise','transmitida'].includes(c.status));
 
       // valor de cada cotação: usa valorProposto, ou estimativa por ticket médio
       const valorCot = c => c.valor || c.valorProposto || 0;
@@ -13190,7 +13220,8 @@
   // Rótulos amigáveis por tipo de ação (para o extrato)
   const EXTRATO_LABELS = {
     penalizacao: { icon: '⚖️', txt: 'Penalização' },
-    agenda_com_corretor: { icon: '🤝', txt: 'Chamou o corretor para a visita' },
+    agenda_com_corretor: { icon: '🤝', txt: 'Levou o corretor para a visita' },
+    visita_registrada: { icon: '🖊', txt: 'Registrou a visita de um colega' },
     visita_estorno: { icon: '🗑️', txt: 'Visita excluída' },
     checklist_ultimo_etapa: { icon: '🏅', txt: 'Fechou a etapa' },
     declinio_com_agendamento: { icon: '📆', txt: 'Declínio com agendamento' },
@@ -17087,6 +17118,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       case 'pesquisa_resposta':    return getPontoAtivo('pesquisa_resposta');
       case 'pesquisa_bonus10':     return getPontoAtivo('pesquisa_bonus10');
       case 'agenda_com_corretor':    return getPonto('agenda_com_corretor');
+      case 'visita_registrada':      return getPonto('visita_registro');
       case 'checklist_ultimo_etapa': return getPonto('checklist_ultimo_etapa');
       case 'percurso_completo':      return (a.itensMarcados || 1) * getPonto('percurso_completo_item');
       case 'apresentacao_enviada':   return getPonto('apresentacao_enviada');
@@ -22192,8 +22224,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }
       }
 
-      // ---- Vale para os DOIS caminhos: quem chamou o corretor e teve confirmação leva o plus.
-      if (a && a.tipo !== 'bloqueio' && a.solicitanteUid && a.solicitanteUid !== CTX.uid) {
+      // ---- Vale para os DOIS caminhos: quem LEVA o corretor ganha o plus quando ele
+      // confirma. Beneficiário: quem registrou, se participa da visita; senão o gerente
+      // dela (conviteBeneficiario* gravado no pedido; pedidos antigos caem no solicitante).
+      const _benefUid = (a && (a.conviteBeneficiarioUid || a.solicitanteUid)) || null;
+      const _benefNome = (a && (a.conviteBeneficiarioNome || a.solicitanteNome)) || '';
+      if (a && a.tipo !== 'bloqueio' && _benefUid && _benefUid !== CTX.uid) {
         try {
           const _pts = getPonto('agenda_com_corretor');
           // ID derivado do pedido: aprovar duas vezes não paga duas vezes
@@ -22201,10 +22237,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             tipo: 'agenda_com_corretor',
             empresaId: a.empresaId, empresaNome: a.empresaNome,
             agenciaId: CTX.agenciaId || null,
-            usuarioId: a.solicitanteUid, usuarioNome: a.solicitanteNome,
-            usuarioPerfil: (EQUIPE_REAL.find(p => p.uid === a.solicitanteUid) || {}).perfil || 'rm',
+            usuarioId: _benefUid, usuarioNome: _benefNome,
+            usuarioPerfil: (EQUIPE_REAL.find(p => p.uid === _benefUid) || {}).perfil || 'rm',
             pontos: _pts,
-            motivo: `Chamou ${CTX.nome} para a visita e teve confirmação`,
+            motivo: `Levou ${CTX.nome} para a visita e teve confirmação`,
             agendaId: id,
             criadoEm: firebase.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
@@ -22213,7 +22249,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         } catch (ePt) { console.warn('ponto do convite', ePt); }
 
         await criarNotificacao({
-          paraUid: a.solicitanteUid,
+          paraUid: a.solicitanteUid || _benefUid,
           tipo: 'visita_confirmada',
           titulo: `${CTX.nome} confirmou`,
           corpo: `${a.empresaNome || 'cliente'}${a.cidade ? ' · ' + a.cidade : ''} · ${a.data}${(novaHora || a.hora) ? ' às ' + (novaHora || a.hora) : ''} — ele vai com você ✅`,
@@ -22417,12 +22453,29 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function abrirAgendarVisita(dataISO) {
     const dl = document.getElementById('avEmpresaList');
     if (dl) dl.innerHTML = (EMPRESAS || []).map(e => `<option value="${e.nome}"></option>`).join('');
-    // gerentes (admin/chefe escolhe; RM fica implícito)
+    // gerentes: admin/chefe E ASSISTENTE escolhem de quem é a visita (a assistente
+    // registra PELO RM — decisão do Patrick 24/08); RM/estagiário ficam implícitos
+    const _podeEscolherGerente = CTX.isAdmin || ['chefe', 'assistente'].includes(perfilEfetivo());
     const selG = document.getElementById('avGerente');
+    const gWrap = document.getElementById('avGerenteWrap');
+    if (gWrap) gWrap.style.display = _podeEscolherGerente ? '' : 'none';
     if (selG) {
       const gerentes = (EQUIPE_REAL || []).filter(p => p.ativo);
       selG.innerHTML = gerentes.map(p => `<option value="${p.uid}|${p.nome}" ${p.uid === CTX.uid ? 'selected' : ''}>${p.nome}</option>`).join('') || `<option value="${CTX.uid}|${CTX.nome}">${CTX.nome}</option>`;
+      selG.onchange = () => {
+        const dica = document.getElementById('avRegistroDica');
+        if (dica) dica.style.display = (selG.value || '').split('|')[0] !== CTX.uid ? '' : 'none';
+      };
+      const dica = document.getElementById('avRegistroDica'); if (dica) dica.style.display = 'none';
     }
+    // "Eu vou participar": para o corretor confirma a presença dele na hora (pontua
+    // pro gerente); para assistente/chefe define quem leva o corretor no convite
+    const euVou = document.getElementById('avEuVou');
+    const euVouTxt = document.getElementById('avEuVouTexto');
+    if (euVou) euVou.checked = false;
+    if (euVouTxt) euVouTxt.innerHTML = ehCorretorReal()
+      ? '🎯 <strong>Eu (corretor) vou participar</strong> — já confirma a presença e pontua pro gerente da visita'
+      : 'Eu vou participar desta visita junto com o gerente';
     document.getElementById('avEmpresa').value = '';
     document.getElementById('avData').value = dataISO || '';
     document.getElementById('avHora').value = '';
@@ -22463,13 +22516,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const hora = document.getElementById('avHora').value || '';
     let gerenteUid = CTX.uid, gerenteNome = CTX.nome;
     const selG = document.getElementById('avGerente');
-    if ((CTX.isAdmin || perfilEfetivo() === 'chefe') && selG && selG.value) {
+    if ((CTX.isAdmin || ['chefe', 'assistente'].includes(perfilEfetivo())) && selG && selG.value) {
       const [uid, gnome] = selG.value.split('|'); gerenteUid = uid; gerenteNome = gnome;
     }
     // Equipe que vai junto
     const equipe = Array.from(document.querySelectorAll('.avEquipeChk:checked')).map(chk => {
       const [uid, n] = chk.value.split('|'); return { uid, nome: n };
     });
+    // "Eu vou participar" de quem está registrando (se não for o próprio gerente)
+    const _euVou = !!(document.getElementById('avEuVou') || {}).checked;
+    if (_euVou && CTX.uid !== gerenteUid && !equipe.some(x => x.uid === CTX.uid)) equipe.push({ uid: CTX.uid, nome: CTX.nome });
+    // Corretor real registrando e indo junto: presença já confirmada por ele mesmo
+    const _corretorConfirmaJa = _euVou && ehCorretorReal();
+    // Quem "leva o corretor" (ganha o agenda_com_corretor): quem registrou, se
+    // participa da visita e não é o próprio corretor; senão, o gerente dela.
+    const _benefConvite = (_euVou && !ehCorretorReal() && CTX.uid !== gerenteUid)
+      ? { uid: CTX.uid, nome: CTX.nome } : { uid: gerenteUid, nome: gerenteNome };
     const respNome = (document.getElementById('avRespNome') || {}).value || '';
     const respEmail = (document.getElementById('avRespEmail') || {}).value || '';
     const obs = (document.getElementById('avObs') || {}).value || '';
@@ -22488,8 +22550,54 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         agenciaId: CTX.agenciaId || null,
         status: 'agendada',
         token,
+        registradoPorUid: CTX.uid, registradoPorNome: CTX.nome,
+        registradorParticipa: _euVou || CTX.uid === gerenteUid,
+        corretorConfirmado: _corretorConfirmaJa || null,
+        corretorConfirmadoEm: _corretorConfirmaJa ? firebase.firestore.FieldValue.serverTimestamp() : null,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       });
+
+      // Registrou a visita EM NOME de um colega (ex.: assistente pelo RM)?
+      // Quem registrou ganha os pontos do registro — o gerente segue ganhando os
+      // pontos da visita quando ela acontece. (decisão do Patrick 24/08)
+      if (gerenteUid !== CTX.uid) {
+        try {
+          const _ptsReg = getPonto('visita_registro');
+          if (_ptsReg > 0) await db.collection('mb_acoes').doc('visreg_' + ref.id).set({
+            tipo: 'visita_registrada',
+            empresaId: e.id, empresaNome: e.nome,
+            agenciaId: CTX.agenciaId || null,
+            usuarioId: autorUid(), usuarioNome: autorNome(),
+            usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+            pontos: _ptsReg,
+            motivo: `Registrou a visita de ${gerenteNome}`,
+            agendamentoRef: ref.id,
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          _ACOES_CACHE = null;
+        } catch (eReg) { console.warn('ponto do registro', eReg); }
+      }
+
+      // Corretor registrou e marcou que VAI: pontua o convite na hora pro gerente
+      // (não precisa de pedido — o próprio corretor está confirmando a presença).
+      if (_corretorConfirmaJa && gerenteUid !== CTX.uid) {
+        try {
+          const _ptsC = getPonto('agenda_com_corretor');
+          if (_ptsC > 0) await db.collection('mb_acoes').doc('agcorr_' + ref.id).set({
+            tipo: 'agenda_com_corretor',
+            empresaId: e.id, empresaNome: e.nome,
+            agenciaId: CTX.agenciaId || null,
+            usuarioId: gerenteUid, usuarioNome: gerenteNome,
+            usuarioPerfil: ((EQUIPE_REAL || []).find(pp => pp.uid === gerenteUid) || {}).perfil || 'rm',
+            pontos: _ptsC,
+            motivo: `${CTX.nome} (corretor) confirmou presença na visita ao agendar`,
+            agendamentoRef: ref.id,
+            criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          _ACOES_CACHE = null;
+          _refrescarCampanhaSeAberta();
+        } catch (eCf) { console.warn('ponto corretor junto', eCf); }
+      }
 
       // Marcou o corretor/admin na equipe? Isso vira um PEDIDO na agenda dele.
       // O convite só conta (e só pontua) quando ele confirma — ninguém marca a
@@ -22509,7 +22617,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             cidade: document.getElementById('avCidade').value.trim() || e.cidade || null,
             obs: obs.trim() || null,
             status: 'pendente',
-            solicitanteUid: gerenteUid, solicitanteNome: gerenteNome,
+            solicitanteUid: CTX.uid, solicitanteNome: CTX.nome,
+            conviteBeneficiarioUid: _benefConvite.uid, conviteBeneficiarioNome: _benefConvite.nome,
             agendamentoId: ref.id,          // já existe no calendário: não criar outro ao aprovar
             paraUid: c.uid,
             agenciaId: CTX.agenciaId || null,
@@ -22518,9 +22627,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           await criarNotificacao({
             paraUid: c.uid,
             tipo: 'visita_solicitada',
-            titulo: `${gerenteNome} quer você numa visita`,
+            titulo: `${CTX.nome} quer você numa visita`,
             corpo: `${e.nome}${e.cidade ? ' · ' + e.cidade : ''} · ${dd}/${mm}${hora ? ' às ' + hora : ''} — confirme para entrar na sua agenda`,
-            agendaId: refPedido.id, empresaId: e.id, deUid: gerenteUid, deNome: gerenteNome
+            agendaId: refPedido.id, empresaId: e.id, deUid: CTX.uid, deNome: CTX.nome
           });
         } catch (eCv) { console.warn('convite ao corretor', eCv); }
       }
@@ -22627,7 +22736,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // Pontos a estornar: só os que existem POR CAUSA da visita.
     // O mapeamento feito nela NÃO é estornado — aquele dado continua valendo
     // na empresa, então o ponto dele foi merecido mesmo que a visita saia da agenda.
-    const TIPOS_DA_VISITA = ['visita', 'agenda_com_corretor'];
+    const TIPOS_DA_VISITA = ['visita', 'agenda_com_corretor', 'visita_registrada'];
     let acoesLigadas = [];
     try {
       const snap = await db.collection('mb_acoes').where('empresaId', '==', a.empresaId || '').get();
@@ -24065,6 +24174,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e) return;
     EMPRESA_ATUAL_RX = e;
     SOCIOS_EDITOR = JSON.parse(JSON.stringify(e.socios || []));
+    // quem veio do banco já está salvo — aparece como cartão compacto, não como formulário
+    SOCIOS_EDITOR.forEach(sx => { sx._salvo = true; });
     if (SOCIOS_EDITOR.length === 0) SOCIOS_EDITOR.push({ nome: '', nasc: '', percentual: '' });
     document.getElementById('modalSociosEmpresa').textContent = e.nome;
     renderSociosEditor();
@@ -24083,10 +24194,28 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.toggleSemSocios = toggleSemSocios;
 
+  const _escAttr = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   function renderSociosEditor() {
     const cont = document.getElementById('sociosListEditor');
-    cont.innerHTML = SOCIOS_EDITOR.map((s, i) => `
-      <div class="socio-card" style="background:white; border:1.5px solid #e2e8f0; flex-direction: column; align-items: stretch; padding: 14px; margin-bottom: 8px;">
+    cont.innerHTML = SOCIOS_EDITOR.map((s, i) => {
+      // Cartão SALVO: compacto, só leitura — cada sócio é gravado na hora em que
+      // é cadastrado (decisão do Patrick 24/08), nada fica pendurado pro final.
+      if (s._salvo) {
+        return `
+      <div class="socio-card" style="background:#f0fdf4; border:1.5px solid #bbf7d0; flex-direction:row; align-items:center; justify-content:space-between; gap:10px; padding:10px 14px; margin-bottom:8px;">
+        <div style="min-width:0;">
+          <div style="font-size:13px; font-weight:700; color:#14532d;">✅ ${_escAttr(s.nome)}</div>
+          <div style="font-size:11.5px; color:#166534;">${_escAttr(s.nasc)}${s.nasc && s.nasc.length === 10 ? ' · ' + calcularIdade(s.nasc) + ' anos' : ''}${s.percentual ? ' · ' + s.percentual + '%' : ''} <span style="color:#16a34a; font-weight:700;">· salvo</span></div>
+        </div>
+        <div style="display:flex; gap:6px; flex-shrink:0;">
+          <button class="pessoa-btn" style="padding:4px 9px; font-size:11px;" onclick="editarSocio(${i})">✏️ Editar</button>
+          <button class="pessoa-btn danger" style="padding:4px 9px; font-size:11px;" onclick="removerSocio(${i})">🗑</button>
+        </div>
+      </div>`;
+      }
+      // Cartão EM EDIÇÃO: formulário + botão de salvar SÓ este sócio
+      return `
+      <div class="socio-card" style="background:white; border:1.5px solid #c7d2fe; flex-direction: column; align-items: stretch; padding: 14px; margin-bottom: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <strong style="font-size: 13px; color: #475569;">Sócio ${i + 1}</strong>
           <button class="pessoa-btn danger" style="padding: 4px 9px; font-size: 11px;" onclick="removerSocio(${i})">
@@ -24094,32 +24223,130 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           </button>
         </div>
         <div style="display: grid; gap: 8px;">
-          <input type="text" class="form-control" placeholder="Nome completo" value="${s.nome || ''}" oninput="atualizarSocio(${i}, 'nome', this.value)">
+          <input type="text" class="form-control" placeholder="Nome completo" value="${_escAttr(s.nome)}" oninput="atualizarSocio(${i}, 'nome', this.value)">
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <input type="text" class="form-control" placeholder="dd/mm/aaaa" value="${s.nasc || ''}" maxlength="10" oninput="formatarData(this); atualizarSocio(${i}, 'nasc', this.value)">
+            <input type="text" class="form-control" placeholder="dd/mm/aaaa" value="${_escAttr(s.nasc)}" maxlength="10" oninput="formatarData(this); atualizarSocio(${i}, 'nasc', this.value)">
             <input type="number" class="form-control" placeholder="% sociedade" value="${s.percentual || ''}" min="0" max="100" oninput="atualizarSocio(${i}, 'percentual', parseFloat(this.value) || 0)">
           </div>
-          ${s.nasc && s.nasc.length === 10 ? `<div style="font-size: 11px; color: #64748b;">Idade: <strong>${calcularIdade(s.nasc)} anos</strong></div>` : ''}
+          <div id="socioIdade${i}" style="font-size: 11px; color: #64748b;">${s.nasc && s.nasc.length === 10 ? 'Idade: <strong>' + calcularIdade(s.nasc) + ' anos</strong>' : ''}</div>
+          <button class="btn-primary" style="width:100%;" onclick="salvarSocioIndividual(${i})">💾 Salvar este sócio</button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
     lucide.createIcons();
   }
 
   function atualizarSocio(idx, campo, valor) {
     SOCIOS_EDITOR[idx][campo] = valor;
-    if (campo === 'nasc' && valor.length === 10) {
-      renderSociosEditor(); // re-renderiza pra mostrar idade
+    // Idade: atualiza SÓ o aviso, sem re-renderizar o editor inteiro —
+    // o re-render no meio da digitação roubava o foco do campo (causa do
+    // "travou no 2º sócio") e agora não acontece mais.
+    if (campo === 'nasc') {
+      const el = document.getElementById('socioIdade' + idx);
+      if (el) el.innerHTML = (valor && valor.length === 10 && /^\d{2}\/\d{2}\/\d{4}$/.test(valor)) ? 'Idade: <strong>' + calcularIdade(valor) + ' anos</strong>' : '';
     }
   }
 
   function adicionarSocioForm() {
+    // um formulário aberto por vez: pede pra salvar o pendente antes de abrir outro
+    const pendente = SOCIOS_EDITOR.findIndex(x => !x._salvo && ((x.nome || '').trim() || (x.nasc || '').trim()));
+    if (pendente >= 0) return alert('Salve primeiro o sócio que está em edição (botão "💾 Salvar este sócio") antes de adicionar outro.');
+    // remove formulários vazios sobrando e abre um novo
+    for (let i = SOCIOS_EDITOR.length - 1; i >= 0; i--) { const x = SOCIOS_EDITOR[i]; if (!x._salvo && !(x.nome || '').trim() && !(x.nasc || '').trim()) SOCIOS_EDITOR.splice(i, 1); }
     SOCIOS_EDITOR.push({ nome: '', nasc: '', percentual: '' });
     renderSociosEditor();
   }
 
-  function removerSocio(idx) {
+  function editarSocio(idx) {
+    SOCIOS_EDITOR[idx]._salvo = false;
+    renderSociosEditor();
+  }
+
+  function _validarSocio(sx) {
+    if (!(sx.nome || '').trim()) return 'Preencha o nome do sócio.';
+    if (!(sx.nasc || '').trim()) return 'Preencha a data de nascimento (dd/mm/aaaa).';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(sx.nasc)) return 'Data de nascimento inválida: ' + sx.nasc + '. Use dd/mm/aaaa.';
+    return null;
+  }
+
+  // Grava a lista de sócios no banco AGORA (usado pelo salvar individual e pelo Concluir).
+  // Pontos: 1ª vez que a empresa ganha informação de sócios → socios_primeira;
+  // depois, edições pontuam 1x por dia (doc determinístico — sem farm).
+  async function _persistirSocios(listaSalvos, semSocios) {
+    const e = EMPRESA_ATUAL_RX;
+    if (!e) throw new Error('Empresa não encontrada.');
+    const limpos = listaSalvos.map(sx => ({ nome: sx.nome, nasc: sx.nasc, percentual: sx.percentual || 0 }));
+    const jaEstavaMapeado = (e.socios || []).length > 0 || e.semSociosConfirmado;
+    await db.collection('empresas').doc(e.id).update({
+      socios: semSocios ? [] : limpos,
+      semSociosConfirmado: !!semSocios,
+      sociosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      sociosAtualizadoPor: CTX.uid,
+      sociosAtualizadoPorNome: CTX.nome
+    });
+    if (!jaEstavaMapeado) {
+      await db.collection('mb_acoes').doc('soc_' + e.id).set({
+        tipo: 'dados_base', subtipo: 'socios',
+        empresaId: e.id, empresaNome: e.nome,
+        agenciaId: CTX.agenciaId,
+        usuarioId: autorUid(), usuarioNome: autorNome(),
+        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+        pontos: getPonto('socios_primeira'),
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } else {
+      const diaKey = hojeLocalISO().replace(/-/g, '');
+      await db.collection('mb_acoes').doc('socedit_' + e.id + '_' + diaKey).set({
+        tipo: 'editou_socios',
+        empresaId: e.id, empresaNome: e.nome,
+        agenciaId: CTX.agenciaId,
+        usuarioId: autorUid(), usuarioNome: autorNome(),
+        usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+        pontos: getPonto('socios_alteracao'),
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+    _ACOES_CACHE = null;
+    e.socios = semSocios ? [] : limpos;
+    e.semSociosConfirmado = !!semSocios;
+  }
+
+  // Salva UM sócio na hora — nada se perde se algo der errado depois.
+  async function salvarSocioIndividual(idx) {
+    const sx = SOCIOS_EDITOR[idx];
+    if (!sx) return;
+    const erro = _validarSocio(sx);
+    if (erro) return alert(erro);
+    sx._salvo = true;
+    try {
+      await _persistirSocios(SOCIOS_EDITOR.filter(x => x._salvo), false);
+      const chk = document.getElementById('chkSemSocios');
+      if (chk && chk.checked) { chk.checked = false; toggleSemSocios(false); }
+      renderSociosEditor();
+      flashSalvo('Sócio salvo! Pode cadastrar o próximo.');
+      _refrescarCampanhaSeAberta();
+    } catch (err) {
+      sx._salvo = false;
+      renderSociosEditor();
+      if (/permission|insufficient/i.test(err.message || '')) {
+        alert('O banco de dados recusou este salvamento (regra de segurança bloqueando a atualização dos sócios pela sessão de link). Avise o administrador — os dados digitados NÃO foram salvos.');
+      } else {
+        alert('Erro ao salvar sócio: ' + err.message);
+      }
+    }
+  }
+  window.salvarSocioIndividual = salvarSocioIndividual;
+  window.editarSocio = editarSocio;
+
+  async function removerSocio(idx) {
+    const sx = SOCIOS_EDITOR[idx];
+    const eraSalvo = !!(sx && sx._salvo);
+    if (eraSalvo && !confirm('Remover o sócio ' + (sx.nome || '') + '? A remoção é gravada na hora.')) return;
     SOCIOS_EDITOR.splice(idx, 1);
+    if (eraSalvo) {
+      try { await _persistirSocios(SOCIOS_EDITOR.filter(x => x._salvo), false); flashSalvo('Sócio removido.'); }
+      catch (err) { alert('Erro ao remover: ' + err.message); }
+    }
     if (SOCIOS_EDITOR.length === 0) SOCIOS_EDITOR.push({ nome: '', nasc: '', percentual: '' });
     renderSociosEditor();
   }
@@ -24131,63 +24358,29 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     input.value = v;
   }
 
+  // Botão do rodapé — CONCLUIR: salva o que ainda estiver pendente e fecha.
+  // (Cada sócio já foi gravado no seu próprio "💾 Salvar este sócio".)
   async function salvarSocios() {
     const e = EMPRESA_ATUAL_RX;
     if (!e) return;
     const semSocios = !!(document.getElementById('chkSemSocios') || {}).checked;
-
-    let sociosValidos = [];
-    if (!semSocios) {
-      // fluxo normal: precisa de ao menos 1 sócio válido
-      sociosValidos = SOCIOS_EDITOR.filter(s => (s.nome || '').trim() && (s.nasc || '').trim());
-      if (sociosValidos.length === 0) return alert('Cadastre pelo menos 1 sócio com nome e data de nascimento — ou marque "Esta empresa não tem sócios".');
-      for (const s of sociosValidos) {
-        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s.nasc)) return alert(`Data de nascimento inválida: ${s.nasc}. Use dd/mm/aaaa.`);
-      }
-    }
-
     try {
-      // "não tem sócios" = mapeado (semSociosConfirmado:true) porém lista vazia.
-      // Conta como mapeamento na campanha, mas não gera oportunidade de produtos de sócios.
-      const jaEstavaMapeado = (e.socios || []).length > 0 || e.semSociosConfirmado;
-      await db.collection('empresas').doc(e.id).update({
-        socios: semSocios ? [] : sociosValidos,
-        semSociosConfirmado: semSocios,
-        sociosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
-        sociosAtualizadoPor: CTX.uid,
-        sociosAtualizadoPorNome: CTX.nome
-      });
-
-      // Só pontua "1ª vez" se antes não havia nenhuma informação de sócios.
-      // ID determinístico: salvar de novo a MESMA empresa sobrescreve o registro,
-      // em vez de criar outro. Antes, tentar duas vezes duplicava os pontos.
-      if (!jaEstavaMapeado) {
-        await db.collection('mb_acoes').doc('soc_' + e.id).set({
-          tipo: 'dados_base', subtipo: 'socios',
-          empresaId: e.id, empresaNome: e.nome,
-          agenciaId: CTX.agenciaId,
-          usuarioId: autorUid(), usuarioNome: autorNome(),
-          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
-          pontos: getPonto('socios_primeira'),
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+      if (semSocios) {
+        // "não tem sócios" = mapeado (semSociosConfirmado:true) porém lista vazia.
+        // Conta como mapeamento na campanha, mas não gera oportunidade de produtos de sócios.
+        await _persistirSocios([], true);
       } else {
-        // edições posteriores: uma por dia por empresa (evita farm ao salvar repetido)
-        const diaKey = hojeLocalISO().replace(/-/g, '');
-        await db.collection('mb_acoes').doc('socedit_' + e.id + '_' + diaKey).set({
-          tipo: 'editou_socios',
-          empresaId: e.id, empresaNome: e.nome,
-          agenciaId: CTX.agenciaId,
-          usuarioId: autorUid(), usuarioNome: autorNome(),
-          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
-          pontos: getPonto('socios_alteracao'),
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+        // formulário aberto com conteúdo? valida e salva junto — nada se perde
+        const pendentes = SOCIOS_EDITOR.filter(x => !x._salvo && ((x.nome || '').trim() || (x.nasc || '').trim()));
+        for (const sx of pendentes) {
+          const erro = _validarSocio(sx);
+          if (erro) return alert('Sócio "' + (sx.nome || 'sem nome') + '": ' + erro + '\n\nSalve ou remova este cartão antes de concluir.');
+        }
+        pendentes.forEach(sx => { sx._salvo = true; });
+        const salvos = SOCIOS_EDITOR.filter(x => x._salvo);
+        if (salvos.length === 0) return alert('Cadastre pelo menos 1 sócio com nome e data de nascimento — ou marque "Esta empresa não tem sócios".');
+        if (pendentes.length) await _persistirSocios(salvos, false);
       }
-      _ACOES_CACHE = null;
-
-      e.socios = semSocios ? [] : sociosValidos;
-      e.semSociosConfirmado = semSocios;
       document.getElementById('modalSocios').classList.remove('open');
       abrirRaioX(e.id);
       confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
