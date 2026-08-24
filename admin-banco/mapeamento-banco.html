@@ -2367,6 +2367,7 @@
         <div class="nav-item nav-subitem" onclick="navTo('cotacoes')"><i data-lucide="file-text" class="w-4 h-4"></i> Cotações em Andamento</div>
         <div class="nav-item nav-subitem perm-rmplus" onclick="navTo('vencimentos')"><i data-lucide="calendar-clock" class="w-4 h-4"></i> Vencimentos</div>
         <div class="nav-item nav-subitem perm-rmplus" onclick="navTo('oportunidades')"><i data-lucide="flame" class="w-4 h-4"></i> Oportunidades Quentes</div>
+        <div class="nav-item nav-subitem perm-rmplus" onclick="navTo('garantia')"><i data-lucide="shield-check" class="w-4 h-4"></i> Garantia · Limites</div>
       </div>
     </div>
 
@@ -4178,6 +4179,37 @@
       </div>
     </div><!-- /screen-links -->
 
+    <!-- ===================== TELA: SEGURO GARANTIA · LIMITES ===================== -->
+    <div class="screen" id="screen-garantia">
+      <div class="equipe-actions" style="flex-wrap: wrap; gap: 10px;">
+        <div>
+          <div style="font-size: 13px; color: #64748b; font-weight: 600;">Limite de crédito aprovado pela seguradora · por tomador</div>
+          <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-top: 2px;">Seguro Garantia · Limites</div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <select class="form-control" id="garFiltro" style="width: auto; min-width: 165px;" onchange="renderGarantiaLimites()">
+            <option value="">Todos os tomadores</option>
+            <option value="disponivel">💚 Com limite disponível</option>
+            <option value="ccg">⚠ CCG pendente</option>
+            <option value="vencendo">⏰ Validade vencendo (90d)</option>
+            <option value="vencido">🚫 Cadastro vencido</option>
+          </select>
+          <input class="form-control" id="garBusca" placeholder="Buscar tomador..." style="width: 170px;" oninput="renderGarantiaLimites()">
+          <button class="btn-primary perm-chefeplus" onclick="abrirGarantiaLimite()"><i data-lucide="plus" class="w-4 h-4"></i> Novo limite aprovado</button>
+        </div>
+      </div>
+
+      <div style="background: linear-gradient(135deg, #eef2ff, #faf5ff); border: 1px solid #c7d2fe; border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; font-size: 13px; color: #4338ca;">
+        💡 Os sub-limites <strong>não somam</strong>: o teto é sempre o limite total. O disponível de cada modalidade é o <strong>menor</strong> entre "total − acúmulo geral" e "sub-limite − acúmulo da modalidade". No cadastro, dá pra <strong>colar a carta de aprovação</strong> e o sistema preenche tudo sozinho.
+      </div>
+
+      <div class="equipe-kpis" id="garKpis"></div>
+
+      <div id="garLista">
+        <div style="text-align:center; padding:30px; color:#94a3b8; font-size: 13px;">Carregando...</div>
+      </div>
+    </div><!-- /screen-garantia -->
+
     <!-- ===================== TELA: PESQUISAS COLABORADORES ===================== -->
     <div class="screen" id="screen-pesquisas">
       <div class="equipe-actions">
@@ -4639,6 +4671,151 @@
     <div class="cad-modal-foot">
       <button class="btn-secondary" onclick="document.getElementById('modalFuncionarios').classList.remove('open')">Cancelar</button>
       <button class="btn-primary" onclick="salvarFuncionarios()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: LIMITE DE CRÉDITO — SEGURO GARANTIA -->
+<div class="cad-modal" id="modalGarantia">
+  <div class="cad-modal-bg" onclick="document.getElementById('modalGarantia').classList.remove('open')"></div>
+  <div class="cad-modal-panel" style="max-width: 720px;">
+    <div class="cad-modal-head">
+      <h2>🛡 Limite de crédito · Seguro Garantia</h2>
+      <p id="glTitulo">Cadastro da aprovação da seguradora</p>
+    </div>
+    <div class="cad-modal-body">
+      <input type="hidden" id="glDocId">
+
+      <!-- Colar a carta e preencher sozinho -->
+      <div style="background:#f0fdfa; border:1px solid #99f6e4; border-radius:10px; padding:12px 14px; margin-bottom:16px;">
+        <label class="form-label" style="color:#0f766e;">✨ Colar a aprovação da seguradora <small style="color:#5eead4;">(opcional — preenche o formulário sozinho)</small></label>
+        <textarea class="form-control" id="glColar" rows="4" placeholder="Cole aqui o texto que a seguradora enviou (Tomador, CNPJ, limites, sub-limites, taxas, validade...)" style="font-size:12px;"></textarea>
+        <button class="btn-secondary" type="button" style="margin-top:8px; width:100%;" onclick="glLerAprovacao()">📥 Ler e preencher os campos</button>
+        <div id="glLeituraAviso" style="display:none; font-size:11.5px; margin-top:8px; padding:7px 10px; border-radius:7px;"></div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:2fr 1fr; gap:10px;">
+        <div class="form-group">
+          <label class="form-label">Tomador (empresa da carteira)</label>
+          <input type="text" class="form-control" id="glEmpresa" list="glEmpresaList" placeholder="Comece a digitar o nome..." oninput="glPreencherCnpj()">
+          <datalist id="glEmpresaList"></datalist>
+        </div>
+        <div class="form-group">
+          <label class="form-label">CNPJ</label>
+          <input type="text" class="form-control" id="glCnpj" placeholder="00.000.000/0001-00">
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+        <div class="form-group">
+          <label class="form-label">Seguradora</label>
+          <input type="text" class="form-control" id="glSeguradora" list="glSeguradoraList" placeholder="Quem aprovou">
+          <datalist id="glSeguradoraList"></datalist>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Limite de crédito TOTAL</label>
+          <input type="text" class="form-control" id="glLimiteTotal" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Validade do cadastro</label>
+          <input type="date" class="form-control" id="glValidade">
+        </div>
+      </div>
+
+      <div style="border-top:1px dashed #e2e8f0; margin:6px 0 14px; padding-top:12px;">
+        <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:4px;">Sub-limites, taxas e acúmulo por modalidade</div>
+        <div style="font-size:11.5px; color:#94a3b8; margin-bottom:10px;">Deixe zerada a modalidade que não foi aprovada. O <strong>acúmulo</strong> é o que o tomador já usou — você atualiza aqui conforme emite as apólices.</div>
+        <div id="glModalidades"></div>
+      </div>
+
+      <div style="border-top:1px dashed #e2e8f0; padding-top:12px;">
+        <label style="display:flex; align-items:flex-start; gap:9px; cursor:pointer; font-size:12.5px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:11px 13px;">
+          <input type="checkbox" id="glCcgAtiva" style="width:16px; height:16px; margin-top:1px; flex-shrink:0;" onchange="glToggleCcg(this.checked)">
+          <span><strong>CCG verificada e ativa</strong> (Contrato de Contragarantia assinado e vigente)<br>
+          <span style="color:#94a3b8; font-size:11.5px;">Sem CCG ativa o tomador não emite: fica marcado como pendência na lista.</span></span>
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 2fr; gap:10px; margin-top:10px;">
+          <div class="form-group">
+            <label class="form-label">Verificada em</label>
+            <input type="date" class="form-control" id="glCcgData">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Observação da CCG</label>
+            <input type="text" class="form-control" id="glCcgObs" placeholder="Ex: CCG com aval dos sócios, assinada em cartório">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Observações da aprovação</label>
+        <textarea class="form-control" id="glObs" rows="2" placeholder="Condições especiais, exigências da seguradora..."></textarea>
+      </div>
+    </div>
+    <div class="cad-modal-foot">
+      <button class="btn-secondary" onclick="document.getElementById('modalGarantia').classList.remove('open')">Cancelar</button>
+      <button class="btn-primary" onclick="salvarGarantiaLimite()"><i data-lucide="check" class="w-3.5 h-3.5 inline"></i> Salvar limite</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: SIMULADOR DE SEGURO GARANTIA -->
+<div class="cad-modal" id="modalGarantiaSim">
+  <div class="cad-modal-bg" onclick="document.getElementById('modalGarantiaSim').classList.remove('open')"></div>
+  <div class="cad-modal-panel" style="max-width: 620px;">
+    <div class="cad-modal-head">
+      <h2>🧮 Simulador de Seguro Garantia</h2>
+      <p id="gsTomador">—</p>
+    </div>
+    <div class="cad-modal-body">
+      <input type="hidden" id="gsDocId">
+      <div class="form-group">
+        <label class="form-label">Modalidade</label>
+        <select class="form-control" id="gsModalidade" onchange="gsCalcular()"></select>
+      </div>
+      <div id="gsRecursalWrap" style="display:none; margin-bottom:12px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:#475569; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:9px 12px;">
+          <input type="checkbox" id="gsRecursal" style="width:16px; height:16px; flex-shrink:0;" onchange="gsCalcular()">
+          <span>É <strong>Recursal Trabalhista</strong> <span id="gsRecursalTxt" style="color:#92400e;"></span></span>
+        </label>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div class="form-group">
+          <label class="form-label">Valor garantido (IS)</label>
+          <input type="text" class="form-control" id="gsIS" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this); gsCalcular()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prazo</label>
+          <div style="display:flex; gap:6px;">
+            <input type="number" class="form-control" id="gsPrazo" placeholder="12" min="1" oninput="gsCalcular()">
+            <select class="form-control" id="gsPrazoUn" style="width:110px;" onchange="gsCalcular()">
+              <option value="m">meses</option>
+              <option value="d">dias</option>
+              <option value="a">anos</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div class="form-group">
+          <label class="form-label">Taxa aplicada (% a.a.)</label>
+          <input type="text" class="form-control" id="gsTaxa" placeholder="0,2100" oninput="gsCalcular()">
+          <div style="font-size:11px; color:#94a3b8; margin-top:3px;" id="gsTaxaDica">taxa indicativa aprovada</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prêmio mínimo <small style="color:#94a3b8;">(opcional)</small></label>
+          <input type="text" class="form-control" id="gsPremioMin" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this); gsCalcular()">
+        </div>
+      </div>
+      <div class="perm-admin" id="gsComissaoWrap" style="display:none;">
+        <div class="form-group">
+          <label class="form-label">Comissão da corretora (%)</label>
+          <input type="number" class="form-control" id="gsComissao" value="20" min="0" max="100" step="0.5" oninput="gsCalcular()">
+        </div>
+      </div>
+      <div id="gsResultado"></div>
+    </div>
+    <div class="cad-modal-foot">
+      <button class="btn-secondary" onclick="document.getElementById('modalGarantiaSim').classList.remove('open')">Fechar</button>
+      <button class="btn-secondary" onclick="gsCopiar()">📋 Copiar resumo</button>
     </div>
   </div>
 </div>
@@ -5273,7 +5450,8 @@
     { grupo: '💼 Negócios', telas: [
       { id: 'cotacoes',      label: 'Cotações em Andamento',   desc: 'funil kanban com as negociações abertas',       min: 'todos' },
       { id: 'vencimentos',   label: 'Vencimentos',             desc: 'mapa de renovações do ano, mês a mês',          min: 'rmplus' },
-      { id: 'oportunidades', label: 'Oportunidades Quentes',   desc: 'gatilhos de porte e produtos que a empresa não tem', min: 'rmplus' }
+      { id: 'oportunidades', label: 'Oportunidades Quentes',   desc: 'gatilhos de porte e produtos que a empresa não tem', min: 'rmplus' },
+      { id: 'garantia',      label: 'Garantia · Limites',      desc: 'limite de crédito aprovado, taxas por modalidade e simulador', min: 'rmplus' }
     ]},
     { grupo: '🖥 Apresentações', telas: [
       { id: 'apresentacoes', label: 'Apresentações',           desc: 'quem viu cada apresentação e o que respondeu',  min: 'rmplus' },
@@ -7856,7 +8034,7 @@
     if (event && event.currentTarget) event.currentTarget.classList.add('active');
 
     // Telas implementadas
-    const telasReais = ['home', 'empresas', 'cotacoes', 'producao', 'ranking', 'campanha', 'vencimentos', 'equipe', 'config', 'oportunidades', 'metas', 'relatorio', 'agenda', 'pesquisas', 'avisos', 'treinamentos', 'matriz', 'relmetas', 'mapeamento', 'links', 'apresentacoes', 'propostas', 'comissoes'];
+    const telasReais = ['home', 'empresas', 'cotacoes', 'producao', 'ranking', 'campanha', 'vencimentos', 'equipe', 'config', 'oportunidades', 'metas', 'relatorio', 'agenda', 'pesquisas', 'avisos', 'treinamentos', 'matriz', 'relmetas', 'mapeamento', 'links', 'apresentacoes', 'propostas', 'comissoes', 'garantia'];
     if (!telasReais.includes(tela)) {
       alert(`Tela "${tela}" — em construção neste mockup.`);
       const ativa = document.querySelector('.screen.active').id.replace('screen-', '');
@@ -7899,7 +8077,8 @@
       relmetas:      'Relatório de Metas <small>· produção e projeção</small>',
       mapeamento:    'Painel de Mapeamento <small>· cobertura da carteira e onde atacar</small>',
       links:         'Central de Links <small>· quem gerou, status e respostas</small>',
-      comissoes:     'Comissões <small>· visível só para o corretor</small>'
+      comissoes:     'Comissões <small>· visível só para o corretor</small>',
+      garantia:      'Seguro Garantia · Limites <small>· crédito aprovado por tomador</small>'
     };
     document.getElementById('topbarTitle').innerHTML = titulos[tela] || tela;
 
@@ -7926,6 +8105,7 @@
     if (telaReal === 'apresentacoes') renderApresentacoes();
     if (telaReal === 'comissoes')     renderComissoes();
     if (telaReal === 'propostas')     renderPropostas();
+    if (telaReal === 'garantia')      renderGarantiaLimites();
 
     lucide.createIcons();
     aplicarSubvisoes(); // esconde as seções desmarcadas no "Editar visão" desta pessoa
@@ -10891,7 +11071,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '229';
+  const APP_VERSAO = '230';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -24393,6 +24573,544 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }
     }
   }
+
+
+  /* ══════════════════════════════════════════════════════════════════
+     SEGURO GARANTIA — LIMITES DE CRÉDITO POR TOMADOR (v230)
+     A seguradora aprova um limite TOTAL e sub-limites por modalidade.
+     Regra de ouro: os sub-limites NÃO somam — o teto é sempre o total.
+     Disponível da modalidade = menor( total − acúmulo geral , sub-limite − acúmulo da modalidade ).
+     Acúmulo é manual (o Patrick atualiza conforme emite as apólices).
+     Coleção: mb_garantia_limites/{empresaId}_{slug da seguradora}
+     ══════════════════════════════════════════════════════════════════ */
+  const MODALIDADES_GARANTIA = [
+    { id: 'tradicional',    nome: 'Tradicional',            icon: '📄', cor: '#3b82f6' },
+    { id: 'judicial',       nome: 'Judicial',               icon: '⚖️', cor: '#8b5cf6' },
+    { id: 'administrativa', nome: 'Administrativa',         icon: '🏛', cor: '#0891b2' },
+    { id: 'energia',        nome: 'Compra de Energia',      icon: '⚡', cor: '#f59e0b' }
+  ];
+  let GARANTIA_LIMITES = [];
+
+  const _garNum = v => Number(v) || 0;
+  const _garSlug = s => String(s || 'seguradora').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'seguradora';
+  // "80.000.000,00" → 80000000 · "0,2100" → 0.21
+  function _garParseBR(txt) {
+    if (txt === null || txt === undefined) return 0;
+    const s = String(txt).replace(/[^\d.,]/g, '').replace(/\./g, '').replace(',', '.');
+    return parseFloat(s) || 0;
+  }
+  function _garTaxaTxt(t) {
+    const n = Number(t) || 0;
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + '% a.a.';
+  }
+  function _garDiasAte(iso) {
+    if (!iso) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (!m) return null;
+    const alvo = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    return Math.round((alvo - hoje) / 86400000);
+  }
+  function _garDataBR(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : '—';
+  }
+  // Só quem pode ver: admin tudo · chefe a base da agência · RM a carteira dele
+  function _garPodeVer(g) {
+    const perf = perfilEfetivo();
+    if (perf === 'admin' || (CTX.isAdmin && !CTX.perfilSimulado)) return true;
+    if (perf === 'chefe') { const bm = _baseEmpresaIds(); return !bm.loaded || bm.set.has(g.empresaId); }
+    if (perf === 'rm') return empresaRmDe(g.empresaId) === uidEfetivo();
+    return false;
+  }
+  const _garPodeEditar = () => CTX.isAdmin || perfilEfetivo() === 'chefe';
+
+  // Acúmulo total do tomador = soma dos acúmulos das modalidades
+  function _garTotais(g) {
+    const mods = g.modalidades || {};
+    let acumulo = 0, aprovadoMods = 0;
+    MODALIDADES_GARANTIA.forEach(m => {
+      const d = mods[m.id] || {};
+      acumulo += _garNum(d.acumulo);
+      aprovadoMods += _garNum(d.sublimite);
+    });
+    const total = _garNum(g.limiteTotal);
+    return { total, acumulo, disponivel: Math.max(0, total - acumulo), aprovadoMods };
+  }
+  // Disponível de UMA modalidade: respeita o teto total E o sub-limite
+  function _garDispModalidade(g, modId) {
+    const t = _garTotais(g);
+    const d = (g.modalidades || {})[modId] || {};
+    const sub = _garNum(d.sublimite);
+    if (sub <= 0) return 0;
+    return Math.max(0, Math.min(t.disponivel, sub - _garNum(d.acumulo)));
+  }
+
+  async function carregarGarantiaLimites() {
+    try {
+      const snap = await db.collection('mb_garantia_limites').get();
+      GARANTIA_LIMITES = [];
+      snap.forEach(d => GARANTIA_LIMITES.push({ id: d.id, ...d.data() }));
+    } catch (e) { console.warn('limites de garantia', e); GARANTIA_LIMITES = []; }
+  }
+
+  async function renderGarantiaLimites() {
+    const cont = document.getElementById('garLista');
+    if (!cont) return;
+    if (!GARANTIA_LIMITES.length) { cont.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">Carregando...</div>'; await carregarGarantiaLimites(); }
+    const busca = (document.getElementById('garBusca') || {}).value || '';
+    const filtro = (document.getElementById('garFiltro') || {}).value || '';
+    const bq = busca.trim().toLowerCase();
+
+    let lista = GARANTIA_LIMITES.filter(_garPodeVer);
+    // KPIs sempre sobre o que a pessoa PODE ver (antes dos filtros de tela)
+    const kTot = lista.reduce((s, g) => s + _garTotais(g).total, 0);
+    const kAcu = lista.reduce((s, g) => s + _garTotais(g).acumulo, 0);
+    const kCcg = lista.filter(g => !g.ccgAtiva).length;
+    const kVenc = lista.filter(g => { const d = _garDiasAte(g.validade); return d !== null && d >= 0 && d <= 90; }).length;
+    const kpis = document.getElementById('garKpis');
+    if (kpis) kpis.innerHTML = `
+      <div class="kpi-card"><div class="label">Tomadores com limite</div><div class="value">${lista.length}</div></div>
+      <div class="kpi-card"><div class="label">Limite total aprovado</div><div class="value" style="font-size:19px;">${fmtBRcompacto(kTot)}</div></div>
+      <div class="kpi-card"><div class="label">Disponível para emitir</div><div class="value" style="font-size:19px; color:#16a34a;">${fmtBRcompacto(Math.max(0, kTot - kAcu))}</div></div>
+      <div class="kpi-card"><div class="label">CCG pendente</div><div class="value" style="color:${kCcg ? '#dc2626' : '#16a34a'};">${kCcg}</div></div>
+      <div class="kpi-card"><div class="label">Validade em 90 dias</div><div class="value" style="color:${kVenc ? '#d97706' : '#16a34a'};">${kVenc}</div></div>`;
+
+    if (bq) lista = lista.filter(g => (g.empresaNome || '').toLowerCase().includes(bq) || (g.cnpj || '').includes(bq) || (g.seguradora || '').toLowerCase().includes(bq));
+    if (filtro === 'disponivel') lista = lista.filter(g => _garTotais(g).disponivel > 0);
+    if (filtro === 'ccg') lista = lista.filter(g => !g.ccgAtiva);
+    if (filtro === 'vencendo') lista = lista.filter(g => { const d = _garDiasAte(g.validade); return d !== null && d >= 0 && d <= 90; });
+    if (filtro === 'vencido') lista = lista.filter(g => { const d = _garDiasAte(g.validade); return d !== null && d < 0; });
+    lista.sort((a, b) => _garTotais(b).total - _garTotais(a).total);
+
+    if (!lista.length) {
+      cont.innerHTML = `<div style="background:white; border-radius:12px; padding:34px; text-align:center; color:#94a3b8; font-size:13px;">
+        ${GARANTIA_LIMITES.length ? 'Nenhum tomador com esse filtro.' : 'Nenhum limite cadastrado ainda.' }
+        ${_garPodeEditar() && !GARANTIA_LIMITES.length ? '<br><br><button class="btn-primary" onclick="abrirGarantiaLimite()">+ Cadastrar o primeiro limite</button>' : ''}
+      </div>`;
+      return;
+    }
+
+    cont.innerHTML = lista.map(g => {
+      const t = _garTotais(g);
+      const usoPct = t.total > 0 ? Math.min(100, t.acumulo / t.total * 100) : 0;
+      const dias = _garDiasAte(g.validade);
+      const chipVal = dias === null ? '<span style="color:#94a3b8;">sem validade informada</span>'
+        : dias < 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 9px; border-radius:100px; font-weight:700;">🚫 cadastro vencido em ${_garDataBR(g.validade)}</span>`
+        : dias <= 90 ? `<span style="background:#fef3c7; color:#92400e; padding:3px 9px; border-radius:100px; font-weight:700;">⏰ vence em ${dias}d · ${_garDataBR(g.validade)}</span>`
+        : `<span style="background:#f1f5f9; color:#475569; padding:3px 9px; border-radius:100px; font-weight:600;">válido até ${_garDataBR(g.validade)}</span>`;
+      const chipCcg = g.ccgAtiva
+        ? `<span style="background:#dcfce7; color:#166534; padding:3px 9px; border-radius:100px; font-weight:700;">✅ CCG ativa${g.ccgVerificadaEm ? ' · ' + _garDataBR(g.ccgVerificadaEm) : ''}</span>`
+        : `<span style="background:#fee2e2; color:#991b1b; padding:3px 9px; border-radius:100px; font-weight:700;">⚠ CCG pendente — enviar questionário ao cliente</span>`;
+
+      const linhas = MODALIDADES_GARANTIA.map(m => {
+        const d = (g.modalidades || {})[m.id] || {};
+        const sub = _garNum(d.sublimite);
+        if (sub <= 0) return '';
+        const disp = _garDispModalidade(g, m.id);
+        const acu = _garNum(d.acumulo);
+        const pct = sub > 0 ? Math.min(100, acu / sub * 100) : 0;
+        const travadoPeloTeto = disp < (sub - acu) - 0.005;
+        const cel = (rot, val, cor) => `<div style="min-width:0;">
+            <div style="font-size:9.5px; color:#94a3b8; text-transform:uppercase; letter-spacing:.3px;">${rot}</div>
+            <div style="font-size:12.5px; font-weight:800; color:${cor}; white-space:nowrap;">${fmtBRcompacto(val)}</div>
+          </div>`;
+        return `<div style="border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px;">
+          <div style="font-size:12.5px; font-weight:800; color:${m.cor};">${m.icon} ${m.nome}</div>
+          <div style="font-size:11px; color:#64748b; margin-top:2px;">taxa <strong style="color:#0f172a;">${_garTaxaTxt(d.taxa)}</strong></div>
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px;">
+            ${cel('sub-limite', sub, '#334155')}${cel('usado', acu, acu > 0 ? '#b45309' : '#94a3b8')}${cel('livre', disp, '#16a34a')}
+          </div>
+          <div style="background:#f1f5f9; border-radius:100px; height:7px; overflow:hidden; margin-top:6px;">
+            <div style="background:${m.cor}; height:100%; width:${pct}%;"></div>
+          </div>
+          ${travadoPeloTeto ? '<div style="font-size:10.5px; color:#d97706; margin-top:5px;">↑ limitado pelo teto total do tomador</div>' : ''}
+          ${m.id === 'judicial' && _garNum(d.recursalPct) > 0 ? `<div style="font-size:10.5px; color:#7c3aed; margin-top:5px;">até ${_garNum(d.recursalPct)}% (${fmtBRcompacto(sub * _garNum(d.recursalPct) / 100)}) para Recursal Trabalhista</div>` : ''}
+        </div>`;
+      }).filter(Boolean).join('');
+
+      return `<div style="background:white; border-radius:12px; padding:16px 18px; margin-bottom:14px; border-left:4px solid ${dias !== null && dias < 0 ? '#ef4444' : g.ccgAtiva ? '#10b981' : '#f59e0b'};">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+          <div style="min-width:0;">
+            <div style="font-size:15.5px; font-weight:800; color:#0f172a;">${(g.empresaNome || '—').replace(/</g, '&lt;')}</div>
+            <div style="font-size:11.5px; color:#94a3b8; margin-top:2px;">${g.cnpj || 'sem CNPJ'}${g.seguradora ? ' · aprovado por <strong style="color:#475569;">' + String(g.seguradora).replace(/</g, '&lt;') + '</strong>' : ''}</div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn-secondary" style="padding:6px 12px; font-size:12px;" onclick="abrirSimuladorGarantia('${g.id}')">🧮 Simular</button>
+            ${_garPodeEditar() ? `<button class="btn-secondary" style="padding:6px 12px; font-size:12px;" onclick="abrirGarantiaLimite('${g.id}')">✏️ Editar</button>` : ''}
+            ${CTX.isAdmin ? `<button class="btn-secondary" style="padding:6px 10px; font-size:12px; color:#b91c1c; border-color:#fecaca;" onclick="excluirGarantiaLimite('${g.id}')">🗑</button>` : ''}
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; font-size:11.5px; margin:10px 0 12px;">${chipVal}${chipCcg}</div>
+        <div style="background:#f8fafc; border-radius:10px; padding:12px 14px; margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
+            <span style="color:#64748b;">Limite total <strong style="color:#0f172a; font-size:13px;">${fmtBR(t.total)}</strong></span>
+            <span style="color:#64748b;">Acúmulo vigente <strong style="color:#b45309;">${fmtBR(t.acumulo)}</strong></span>
+            <span style="color:#64748b;">Disponível <strong style="color:#16a34a; font-size:13px;">${fmtBR(t.disponivel)}</strong></span>
+          </div>
+          <div style="background:#e2e8f0; border-radius:100px; height:12px; overflow:hidden;">
+            <div style="background:linear-gradient(90deg,#f59e0baa,#f59e0b); height:100%; width:${usoPct}%;"></div>
+          </div>
+          <div style="font-size:10.5px; color:#94a3b8; margin-top:5px;">${usoPct.toFixed(0)}% do limite total já comprometido</div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:10px;">${linhas || '<div style="font-size:12px; color:#94a3b8;">Nenhuma modalidade com sub-limite aprovado.</div>'}</div>
+        ${g.observacoes ? `<div style="font-size:11.5px; color:#64748b; margin-top:10px; border-top:1px dashed #e2e8f0; padding-top:8px;">📝 ${String(g.observacoes).replace(/</g, '&lt;')}</div>` : ''}
+        ${g.atualizadoPorNome ? `<div style="font-size:10.5px; color:#cbd5e1; margin-top:6px;">última atualização por ${g.atualizadoPorNome}</div>` : ''}
+      </div>`;
+    }).join('');
+    if (window.lucide) lucide.createIcons();
+  }
+  window.renderGarantiaLimites = renderGarantiaLimites;
+
+  /* ---------- Cadastro ---------- */
+  function _garLinhaModalidadeHTML(m, d) {
+    d = d || {};
+    return `<div style="border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; margin-bottom:8px;">
+      <div style="font-size:12.5px; font-weight:800; color:${m.cor}; margin-bottom:8px;">${m.icon} ${m.nome}</div>
+      <div style="display:grid; grid-template-columns:1.4fr 1fr 1.4fr; gap:8px;">
+        <div>
+          <label class="form-label" style="font-size:11px;">Sub-limite</label>
+          <input type="text" class="form-control" id="glSub_${m.id}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)" value="${_garNum(d.sublimite) ? fmtBR(_garNum(d.sublimite)) : ''}" style="padding:7px;">
+        </div>
+        <div>
+          <label class="form-label" style="font-size:11px;">Taxa (% a.a.)</label>
+          <input type="text" class="form-control" id="glTaxa_${m.id}" placeholder="0,2100" value="${_garNum(d.taxa) ? String(_garNum(d.taxa)).replace('.', ',') : ''}" style="padding:7px;">
+        </div>
+        <div>
+          <label class="form-label" style="font-size:11px;">Acúmulo (já usado)</label>
+          <input type="text" class="form-control" id="glAcu_${m.id}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)" value="${_garNum(d.acumulo) ? fmtBR(_garNum(d.acumulo)) : ''}" style="padding:7px;">
+        </div>
+      </div>
+      ${m.id === 'judicial' ? `<div style="margin-top:8px;">
+        <label class="form-label" style="font-size:11px;">% do sub-limite judicial liberado para Recursal Trabalhista</label>
+        <input type="number" class="form-control" id="glRecursal" placeholder="20" min="0" max="100" value="${d.recursalPct != null ? d.recursalPct : 20}" style="padding:7px; max-width:120px;">
+      </div>` : ''}
+    </div>`;
+  }
+
+  function abrirGarantiaLimite(docId) {
+    if (!_garPodeEditar()) return alert('Só o corretor ou o chefe da agência cadastram limites de crédito.');
+    const g = docId ? GARANTIA_LIMITES.find(x => x.id === docId) : null;
+    document.getElementById('glDocId').value = docId || '';
+    document.getElementById('glTitulo').textContent = g ? ('Editando: ' + (g.empresaNome || '')) : 'Cadastro da aprovação da seguradora';
+    const dl = document.getElementById('glEmpresaList');
+    if (dl) dl.innerHTML = (EMPRESAS || []).map(e => `<option value="${(e.nome || '').replace(/"/g, '&quot;')}"></option>`).join('');
+    const dls = document.getElementById('glSeguradoraList');
+    if (dls) dls.innerHTML = (SEGURADORAS || []).map(x => `<option value="${x}"></option>`).join('');
+    document.getElementById('glColar').value = '';
+    const aviso = document.getElementById('glLeituraAviso'); if (aviso) aviso.style.display = 'none';
+    document.getElementById('glEmpresa').value = g ? (g.empresaNome || '') : '';
+    document.getElementById('glCnpj').value = g ? (g.cnpj || '') : '';
+    document.getElementById('glSeguradora').value = g ? (g.seguradora || '') : '';
+    document.getElementById('glLimiteTotal').value = g && _garNum(g.limiteTotal) ? fmtBR(_garNum(g.limiteTotal)) : '';
+    document.getElementById('glValidade').value = g ? (g.validade || '') : '';
+    document.getElementById('glObs').value = g ? (g.observacoes || '') : '';
+    document.getElementById('glCcgAtiva').checked = !!(g && g.ccgAtiva);
+    document.getElementById('glCcgData').value = g ? (g.ccgVerificadaEm || '') : '';
+    document.getElementById('glCcgObs').value = g ? (g.ccgObs || '') : '';
+    document.getElementById('glModalidades').innerHTML = MODALIDADES_GARANTIA
+      .map(m => _garLinhaModalidadeHTML(m, (g && g.modalidades) ? g.modalidades[m.id] : null)).join('');
+    document.getElementById('modalGarantia').classList.add('open');
+    if (window.lucide) lucide.createIcons();
+  }
+  window.abrirGarantiaLimite = abrirGarantiaLimite;
+
+  function glToggleCcg(marcado) {
+    const dt = document.getElementById('glCcgData');
+    if (marcado && dt && !dt.value) dt.value = hojeLocalISO();
+  }
+  window.glToggleCcg = glToggleCcg;
+
+  function glPreencherCnpj() {
+    const nome = (document.getElementById('glEmpresa').value || '').trim().toLowerCase();
+    const e = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome);
+    const campo = document.getElementById('glCnpj');
+    if (e && e.cnpj && campo && !campo.value) campo.value = e.cnpj;
+  }
+  window.glPreencherCnpj = glPreencherCnpj;
+
+  /* Lê a carta de aprovação colada e preenche o formulário.
+     O texto da seguradora vem sempre no mesmo formato — cada linha é um regex. */
+  function glLerAprovacao() {
+    const txt = (document.getElementById('glColar').value || '');
+    const aviso = document.getElementById('glLeituraAviso');
+    const dizer = (ok, msg) => {
+      if (!aviso) return;
+      aviso.style.display = '';
+      aviso.style.background = ok ? '#dcfce7' : '#fef3c7';
+      aviso.style.color = ok ? '#166534' : '#92400e';
+      aviso.style.border = '1px solid ' + (ok ? '#bbf7d0' : '#fde68a');
+      aviso.innerHTML = msg;
+    };
+    if (!txt.trim()) return dizer(false, 'Cole primeiro o texto da aprovação.');
+    const achou = [];
+    const pega = re => { const m = re.exec(txt); return m ? m[1] : null; };
+
+    const tomador = pega(/Tomador:\s*(.+)/i);
+    if (tomador) {
+      const nomeCarta = tomador.trim();
+      // casa com a empresa da carteira ignorando acento, pontuação e caixa
+      const norm = x => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      const alvo = norm(nomeCarta);
+      const emp = (EMPRESAS || []).find(e => norm(e.nome) === alvo)
+        || (EMPRESAS || []).find(e => norm(e.nome).startsWith(alvo.slice(0, 12)) || alvo.startsWith(norm(e.nome).slice(0, 12)));
+      document.getElementById('glEmpresa').value = emp ? emp.nome : nomeCarta;
+      achou.push(emp ? 'tomador (casou com a carteira)' : 'tomador (⚠ não achei na carteira — confira o nome)');
+    }
+    const cnpj = pega(/CNPJ:\s*([\d.\/-]+)/i);
+    if (cnpj) { document.getElementById('glCnpj').value = cnpj.trim(); achou.push('CNPJ'); }
+
+    const total = pega(/Limite de Cr[ée]dito Total:\s*R\$\s*([\d.,]+)/i);
+    if (total) { document.getElementById('glLimiteTotal').value = fmtBR(_garParseBR(total)); achou.push('limite total'); }
+
+    const val = pega(/Validade do cadastro:\s*(\d{2}\/\d{2}\/\d{4})/i);
+    if (val) { const [d, m2, a] = val.split('/'); document.getElementById('glValidade').value = `${a}-${m2}-${d}`; achou.push('validade'); }
+
+    // Sub-limites e taxas por modalidade (o rótulo da carta → id interno)
+    const rotulos = {
+      tradicional: /Sub-limite para Seguro Garantia Tradicional:\s*R\$\s*([\d.,]+)/i,
+      judicial: /Sub-limite para Seguro Garantia Judicial:\s*R\$\s*([\d.,]+)/i,
+      administrativa: /Sub-limite para Seguro Garantia Administrativ[ao]:\s*R\$\s*([\d.,]+)/i,
+      energia: /Sub-limite para Seguro Garantia de Pagamento de Compra de Energia:\s*R\$\s*([\d.,]+)/i
+    };
+    const taxas = {
+      tradicional: /Taxa indicativa aprovada para modalidades de Seguro Garantia Tradicional:\s*([\d.,]+)\s*%/i,
+      judicial: /Taxa indicativa aprovada para modalidades de Seguro Garantia Judicial:\s*([\d.,]+)\s*%/i,
+      administrativa: /Taxa indicativa aprovada para modalidades de Seguro Garantia Administrativ[ao]:\s*([\d.,]+)\s*%/i,
+      energia: /Taxa indicativa aprovada para modalidades de Seguro Garantia de Pagamento de Compra de Energia:\s*([\d.,]+)\s*%/i
+    };
+    let nMod = 0, nTaxa = 0;
+    MODALIDADES_GARANTIA.forEach(m => {
+      const v = pega(rotulos[m.id]);
+      if (v) { const el = document.getElementById('glSub_' + m.id); if (el) { el.value = fmtBR(_garParseBR(v)); nMod++; } }
+      const t = pega(taxas[m.id]);
+      if (t) { const el = document.getElementById('glTaxa_' + m.id); if (el) { el.value = String(t).trim(); nTaxa++; } }
+    });
+    if (nMod) achou.push(nMod + ' sub-limite(s)');
+    if (nTaxa) achou.push(nTaxa + ' taxa(s)');
+
+    const rec = pega(/(\d{1,3})\s*%\s*poder[áa] ser utilizado para demandas Recursais Trabalhistas/i);
+    if (rec) { const el = document.getElementById('glRecursal'); if (el) { el.value = rec; achou.push('% recursal trabalhista'); } }
+
+    // Acúmulo: a carta traz o TOTAL do tomador; se for > 0 avisamos pra distribuir
+    let notaAcumulo = '';
+    const acu = pega(/Ac[úu]mulo vigente do Tomador:\s*R\$\s*([\d.,]+)/i);
+    if (acu) {
+      const vAcu = _garParseBR(acu);
+      achou.push('acúmulo');
+      if (vAcu > 0) notaAcumulo = `<br><strong>⚠ Acúmulo informado na carta: ${fmtBR(vAcu)}</strong> — a carta traz só o total, então distribua esse valor nos campos "Acúmulo" das modalidades certas.`;
+      else MODALIDADES_GARANTIA.forEach(m => { const el = document.getElementById('glAcu_' + m.id); if (el && !el.value) el.value = ''; });
+    }
+    if (!achou.length) return dizer(false, 'Não reconheci o formato. Preencha os campos à mão — ou me mande esse texto que eu ajusto o leitor.');
+    dizer(true, '✅ Li da carta: ' + achou.join(', ') + '. <strong>Confira antes de salvar.</strong>' + notaAcumulo);
+  }
+  window.glLerAprovacao = glLerAprovacao;
+
+  async function salvarGarantiaLimite() {
+    if (!_garPodeEditar()) return alert('Sem permissão para cadastrar limites.');
+    const nome = (document.getElementById('glEmpresa').value || '').trim();
+    const emp = (EMPRESAS || []).find(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
+    if (!emp) return alert('Selecione uma empresa válida da carteira.\n\nComece a digitar o nome e escolha uma das opções da lista — o limite precisa ficar amarrado à empresa certa.');
+    const seguradora = (document.getElementById('glSeguradora').value || '').trim();
+    if (!seguradora) return alert('Informe a seguradora que aprovou o limite.');
+    const limiteTotal = lerMoeda(document.getElementById('glLimiteTotal'));
+    if (limiteTotal <= 0) return alert('Informe o limite de crédito total aprovado.');
+
+    const modalidades = {};
+    let algumSub = 0;
+    MODALIDADES_GARANTIA.forEach(m => {
+      const sub = lerMoeda(document.getElementById('glSub_' + m.id));
+      const taxa = _garParseBR((document.getElementById('glTaxa_' + m.id) || {}).value);
+      const acu = lerMoeda(document.getElementById('glAcu_' + m.id));
+      algumSub += sub;
+      modalidades[m.id] = { sublimite: sub, taxa: taxa, acumulo: acu };
+      if (m.id === 'judicial') modalidades[m.id].recursalPct = parseFloat((document.getElementById('glRecursal') || {}).value) || 0;
+    });
+    if (algumSub <= 0) return alert('Informe pelo menos um sub-limite de modalidade.');
+    // Acúmulo total nunca pode passar o teto — barra antes de gravar número impossível
+    const acuTotal = MODALIDADES_GARANTIA.reduce((s, m) => s + _garNum(modalidades[m.id].acumulo), 0);
+    if (acuTotal > limiteTotal + 0.005) return alert(`O acúmulo somado (${fmtBR(acuTotal)}) passou o limite total aprovado (${fmtBR(limiteTotal)}). Confira os valores.`);
+    MODALIDADES_GARANTIA.forEach(m => {
+      const d = modalidades[m.id];
+      if (_garNum(d.acumulo) > _garNum(d.sublimite) + 0.005 && _garNum(d.sublimite) > 0) {
+        d._alerta = true;
+      }
+    });
+    const excedeu = MODALIDADES_GARANTIA.filter(m => modalidades[m.id]._alerta).map(m => m.nome);
+    MODALIDADES_GARANTIA.forEach(m => { delete modalidades[m.id]._alerta; });
+    if (excedeu.length && !confirm(`O acúmulo passou o sub-limite em: ${excedeu.join(', ')}.\n\nSalvar mesmo assim?`)) return;
+
+    const docId = (document.getElementById('glDocId').value || '') || (emp.id + '_' + _garSlug(seguradora));
+    const ccgAtiva = !!document.getElementById('glCcgAtiva').checked;
+    const dados = {
+      empresaId: emp.id, empresaNome: emp.nome,
+      cnpj: (document.getElementById('glCnpj').value || '').trim() || emp.cnpj || null,
+      seguradora, limiteTotal, modalidades,
+      validade: document.getElementById('glValidade').value || null,
+      ccgAtiva, ccgVerificadaEm: ccgAtiva ? (document.getElementById('glCcgData').value || hojeLocalISO()) : null,
+      ccgObs: (document.getElementById('glCcgObs').value || '').trim() || null,
+      observacoes: (document.getElementById('glObs').value || '').trim() || null,
+      agenciaId: CTX.agenciaId || null,
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
+      atualizadoPorUid: CTX.uid, atualizadoPorNome: CTX.nome
+    };
+    try {
+      const ref = db.collection('mb_garantia_limites').doc(docId);
+      const snap = await ref.get();
+      if (!snap.exists) { dados.criadoEm = firebase.firestore.FieldValue.serverTimestamp(); dados.criadoPorNome = CTX.nome; }
+      await ref.set(dados, { merge: true });
+      document.getElementById('modalGarantia').classList.remove('open');
+      flashSalvo(snap.exists ? 'Limite atualizado!' : 'Limite cadastrado!');
+      await carregarGarantiaLimites();
+      renderGarantiaLimites();
+    } catch (err) {
+      if (/permission|insufficient/i.test(err.message || '')) alert('O banco recusou a gravação (regra de segurança para mb_garantia_limites). Avise o administrador — nada foi salvo.');
+      else alert('Erro ao salvar: ' + err.message);
+    }
+  }
+  window.salvarGarantiaLimite = salvarGarantiaLimite;
+
+  async function excluirGarantiaLimite(docId) {
+    if (!CTX.isAdmin) return alert('Só o corretor exclui um limite aprovado.');
+    const g = GARANTIA_LIMITES.find(x => x.id === docId);
+    if (!g) return;
+    if (!confirm(`Excluir o limite de ${g.empresaNome} (${g.seguradora || 'seguradora'})?\n\nO histórico de acúmulo cadastrado será perdido.`)) return;
+    try {
+      await db.collection('mb_garantia_limites').doc(docId).delete();
+      flashSalvo('Limite excluído.');
+      await carregarGarantiaLimites();
+      renderGarantiaLimites();
+    } catch (e) { alert('Erro ao excluir: ' + e.message); }
+  }
+  window.excluirGarantiaLimite = excluirGarantiaLimite;
+
+  /* ---------- Simulador ---------- */
+  function abrirSimuladorGarantia(docId) {
+    const g = GARANTIA_LIMITES.find(x => x.id === docId);
+    if (!g) return;
+    document.getElementById('gsDocId').value = docId;
+    const t = _garTotais(g);
+    document.getElementById('gsTomador').innerHTML = `${(g.empresaNome || '').replace(/</g, '&lt;')} · ${g.seguradora || ''} — disponível <strong style="color:#16a34a;">${fmtBR(t.disponivel)}</strong>`;
+    const sel = document.getElementById('gsModalidade');
+    sel.innerHTML = MODALIDADES_GARANTIA
+      .filter(m => _garNum(((g.modalidades || {})[m.id] || {}).sublimite) > 0)
+      .map(m => `<option value="${m.id}">${m.icon} ${m.nome}</option>`).join('');
+    document.getElementById('gsIS').value = '';
+    document.getElementById('gsPrazo').value = '12';
+    document.getElementById('gsPrazoUn').value = 'm';
+    document.getElementById('gsPremioMin').value = '';
+    document.getElementById('gsRecursal').checked = false;
+    const cw = document.getElementById('gsComissaoWrap');
+    if (cw) cw.style.display = ehCorretorReal() ? '' : 'none';
+    document.getElementById('modalGarantiaSim').classList.add('open');
+    gsCalcular(true);
+  }
+  window.abrirSimuladorGarantia = abrirSimuladorGarantia;
+
+  function gsCalcular(resetTaxa) {
+    const g = GARANTIA_LIMITES.find(x => x.id === document.getElementById('gsDocId').value);
+    if (!g) return;
+    const modId = document.getElementById('gsModalidade').value;
+    const mDef = MODALIDADES_GARANTIA.find(m => m.id === modId) || MODALIDADES_GARANTIA[0];
+    const d = (g.modalidades || {})[modId] || {};
+    const campoTaxa = document.getElementById('gsTaxa');
+    // ao trocar de modalidade a taxa indicativa volta a valer
+    if (resetTaxa || campoTaxa.dataset.mod !== modId) {
+      campoTaxa.value = _garNum(d.taxa) ? String(_garNum(d.taxa)).replace('.', ',') : '';
+      campoTaxa.dataset.mod = modId;
+    }
+    document.getElementById('gsTaxaDica').textContent = _garNum(d.taxa)
+      ? 'taxa indicativa aprovada: ' + _garTaxaTxt(d.taxa) : 'sem taxa cadastrada nesta modalidade';
+
+    // Recursal trabalhista: teto próprio dentro do sub-limite judicial
+    const recPct = _garNum(d.recursalPct);
+    const wrap = document.getElementById('gsRecursalWrap');
+    const ehJud = modId === 'judicial' && recPct > 0;
+    wrap.style.display = ehJud ? '' : 'none';
+    if (ehJud) document.getElementById('gsRecursalTxt').textContent = `— teto de ${recPct}% do sub-limite judicial (${fmtBRcompacto(_garNum(d.sublimite) * recPct / 100)})`;
+    const usaRecursal = ehJud && document.getElementById('gsRecursal').checked;
+
+    const IS = lerMoeda(document.getElementById('gsIS'));
+    const prazoN = parseFloat(document.getElementById('gsPrazo').value) || 0;
+    const un = document.getElementById('gsPrazoUn').value;
+    const anos = un === 'd' ? prazoN / 365 : un === 'a' ? prazoN : prazoN / 12;
+    const dias = un === 'd' ? prazoN : Math.round(anos * 365);
+    const taxa = _garParseBR(campoTaxa.value);
+    const premioMin = lerMoeda(document.getElementById('gsPremioMin'));
+    const premioBruto = IS * (taxa / 100) * anos;
+    const premio = Math.max(premioBruto, premioMin);
+
+    // Teto que vale para esta emissão
+    const dispMod = _garDispModalidade(g, modId);
+    const tetoRecursal = usaRecursal ? Math.max(0, (_garNum(d.sublimite) * recPct / 100) - _garNum(d.acumulo)) : null;
+    const teto = usaRecursal ? Math.min(dispMod, tetoRecursal) : dispMod;
+    const cabe = IS <= teto + 0.005;
+    const sobra = teto - IS;
+
+    const comissaoPct = ehCorretorReal() ? (parseFloat((document.getElementById('gsComissao') || {}).value) || 0) : 0;
+    const comissao = premio * comissaoPct / 100;
+
+    const out = document.getElementById('gsResultado');
+    if (!IS || !prazoN || !taxa) {
+      out.innerHTML = `<div style="background:#f8fafc; border:1px dashed #cbd5e1; border-radius:10px; padding:16px; text-align:center; font-size:12.5px; color:#94a3b8;">
+        Informe valor garantido, prazo e taxa para ver o prêmio.<br>
+        <span style="color:#cbd5e1;">Disponível nesta modalidade: <strong>${fmtBR(teto)}</strong></span></div>`;
+      return;
+    }
+    out.innerHTML = `
+      <div style="background:${cabe ? '#f0fdf4' : '#fef2f2'}; border:1px solid ${cabe ? '#bbf7d0' : '#fecaca'}; border-radius:11px; padding:14px 16px;">
+        <div style="font-size:11.5px; font-weight:800; color:${cabe ? '#166534' : '#991b1b'}; text-transform:uppercase; letter-spacing:.4px;">
+          ${cabe ? '✅ cabe no limite' : '🚫 excede o limite disponível'}
+        </div>
+        <div style="font-size:12px; color:${cabe ? '#166534' : '#991b1b'}; margin-top:5px;">
+          ${cabe
+            ? `Após esta emissão sobram <strong>${fmtBR(sobra)}</strong> ${usaRecursal ? 'no teto recursal' : 'nesta modalidade'}.`
+            : `Faltam <strong>${fmtBR(IS - teto)}</strong>. Disponível hoje: <strong>${fmtBR(teto)}</strong>.`}
+        </div>
+      </div>
+      <div style="background:white; border:1px solid #e2e8f0; border-radius:11px; padding:14px 16px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+          <span style="font-size:12.5px; color:#64748b; font-weight:700;">Prêmio estimado</span>
+          <span style="font-size:24px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono', monospace;">${fmtBR(premio)}</span>
+        </div>
+        <div style="font-size:11.5px; color:#64748b; line-height:1.7; border-top:1px dashed #e2e8f0; padding-top:9px;">
+          ${fmtBR(IS)} × ${_garTaxaTxt(taxa)} × ${anos.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ano(s) = <strong>${fmtBR(premioBruto)}</strong>
+          ${premioMin > 0 && premio > premioBruto ? `<br><span style="color:#b45309;">↑ elevado ao prêmio mínimo de ${fmtBR(premioMin)}</span>` : ''}
+          <br>Prazo: ${Math.round(dias)} dias · Modalidade: ${mDef.icon} ${mDef.nome}${usaRecursal ? ' (Recursal Trabalhista)' : ''}
+          ${comissaoPct > 0 ? `<br><span class="perm-admin" style="color:#4338ca;">Comissão da corretora (${comissaoPct}%): <strong>${fmtBR(comissao)}</strong></span>` : ''}
+        </div>
+      </div>
+      <div style="font-size:10.5px; color:#94a3b8; margin-top:8px;">Cálculo indicativo pela taxa aprovada — a seguradora confirma prêmio, IOF e condições na emissão.</div>`;
+  }
+  window.gsCalcular = gsCalcular;
+
+  function gsCopiar() {
+    const g = GARANTIA_LIMITES.find(x => x.id === document.getElementById('gsDocId').value);
+    if (!g) return;
+    const modId = document.getElementById('gsModalidade').value;
+    const mDef = MODALIDADES_GARANTIA.find(m => m.id === modId) || {};
+    const IS = lerMoeda(document.getElementById('gsIS'));
+    const prazoN = parseFloat(document.getElementById('gsPrazo').value) || 0;
+    const un = document.getElementById('gsPrazoUn').value;
+    const unTxt = un === 'd' ? 'dias' : un === 'a' ? 'anos' : 'meses';
+    const anos = un === 'd' ? prazoN / 365 : un === 'a' ? prazoN : prazoN / 12;
+    const taxa = _garParseBR(document.getElementById('gsTaxa').value);
+    const premio = Math.max(IS * (taxa / 100) * anos, lerMoeda(document.getElementById('gsPremioMin')));
+    const txt = [
+      `Simulação — Seguro Garantia ${mDef.nome || ''}`,
+      `Tomador: ${g.empresaNome}${g.cnpj ? ' (' + g.cnpj + ')' : ''}`,
+      `Valor garantido: ${fmtBR(IS)}`,
+      `Prazo: ${prazoN} ${unTxt}`,
+      `Taxa: ${_garTaxaTxt(taxa)}`,
+      `Prêmio estimado: ${fmtBR(premio)}`,
+      '',
+      'Valores indicativos, sujeitos à confirmação da seguradora na emissão.'
+    ].join('\n');
+    const done = () => flashSalvo('Resumo copiado!');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, () => alert(txt));
+    else alert(txt);
+  }
+  window.gsCopiar = gsCopiar;
 
   // PRODUTO (mapear / editar)
   function abrirMapearProduto(empresaId, produtoId) {
