@@ -2606,6 +2606,7 @@
         <option value="ambos">⚠ Falta sócio E funcionários</option>
         <option value="semqualquermap">◻ Nenhum produto mapeado</option>
         <option value="incompleto">◻ Mapeamento incompleto</option>
+        <option value="comanexo">📎 Com apólice anexada pelo cliente</option>
       </select>
       <button class="filter-select" onclick="limparFiltrosEmpresas()" style="cursor:pointer; background:#f1f5f9; border-color:#cbd5e1; color:#475569; font-weight:600;">Limpar</button>
       <button class="filter-select" onclick="gerarPdfCarteira()" style="cursor:pointer; background:linear-gradient(135deg,#4f46e5,#7c3aed); border:none; color:white; font-weight:700;">📄 PDF da carteira</button>
@@ -6634,6 +6635,10 @@
         if (fFalta === 'ambos' && !(semSocio && semFunc)) return false;
         if (fFalta === 'semqualquermap' && mapeados > 0) return false;
         if (fFalta === 'incompleto' && (mapeados === 0 || mapeados === ramosAll.length)) return false;
+        if (fFalta === 'comanexo') {
+          const _tem = Object.values(e.produtosDados || {}).some(pd => pd && Array.isArray(pd.apoliceAnexos) && pd.apoliceAnexos.some(a => a && a.url));
+          if (!_tem) return false;
+        }
       }
       return true;
     });
@@ -6747,13 +6752,21 @@
       if (partes.length > 0) linhaInfo = `<div style="font-size: 11px; margin-top: 2px;">${partes.join(' · ')}</div>`;
     }
 
+    // Apólices que o CLIENTE anexou pelo link de mapeamento — selo na lista para
+    // não precisar abrir empresa por empresa e produto por produto para descobrir.
+    let _nAnexos = 0;
+    Object.values(e.produtosDados || {}).forEach(pd => {
+      if (pd && Array.isArray(pd.apoliceAnexos)) _nAnexos += pd.apoliceAnexos.filter(a => a && a.url).length;
+    });
+    const seloAnexos = _nAnexos ? `<span title="O cliente anexou ${_nAnexos} apólice(s) pelo link — abra o raio-x para ver" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:800;display:inline-block;">📎 ${_nAnexos} APÓLICE${_nAnexos > 1 ? 'S' : ''}</span>` : '';
+
     return `
       <div class="empresa-card ${pendenteCadastro ? 'empresa-pendente' : (dadosCompletos ? 'empresa-completa' : '')}" onclick="abrirRaioX('${e.id}')">
         <div class="empresa-info">
           <div class="empresa-logo">${inicial}</div>
           <div style="min-width:0;">
             <div class="empresa-nome">${e.nome}</div>
-            ${badgeDados ? `<div style="margin-top:4px;">${badgeDados}</div>` : ''}
+            ${badgeDados || seloAnexos ? `<div style="margin-top:4px; display:flex; gap:5px; flex-wrap:wrap;">${badgeDados}${seloAnexos}</div>` : ''}
             <div class="empresa-meta">${mascararCNPJ(e.cnpj) || 'sem CNPJ'} · ${e.cidade || 'sem cidade'}</div>
             ${linhaInfo}
           </div>
@@ -7564,6 +7577,9 @@
     const funilK = getFunilProduto(empresaId, p.id);
     const mi = MAPEAMENTO_INFO[mapaK] || MAPEAMENTO_INFO.nao_mapeado;
     const fi = funilK ? FUNIL_INFO[funilK] : null;
+    // Apólices que o CLIENTE anexou pelo link de mapeamento: viram chip clicável
+    // aqui no card — antes só apareciam abrindo o modal do produto, um por um.
+    const _axAnexos = (Array.isArray(dadosProduto.apoliceAnexos) ? dadosProduto.apoliceAnexos : []).filter(a => a && a.url);
 
     return `
       <div class="produto-card">
@@ -7576,6 +7592,9 @@
             ${venc ? `<span style="color:#94a3b8; font-size:12px;">· ${venc}</span>` : ''}
           </div>
           ${detalhes.length ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">${detalhes.join(' · ')}</div>` : ''}
+          ${_axAnexos.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;">
+            ${_axAnexos.map(ax => `<a href="${ax.url}" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Apólice enviada pelo cliente — clique para abrir" style="display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; color:#3730a3; background:#eef2ff; border:1px solid #c7d2fe; border-radius:100px; padding:2px 9px; text-decoration:none; max-width:230px;">📎 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${String(ax.nome || 'apólice').replace(/</g, '&lt;')}</span></a>`).join('')}
+          </div>` : ''}
           ${(dadosProduto.apolices || []).length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;">
             ${dadosProduto.apolices.map(apx => {
               const mesesAb = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -11102,7 +11121,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '231';
+  const APP_VERSAO = '232';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
