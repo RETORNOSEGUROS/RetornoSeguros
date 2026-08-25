@@ -20,6 +20,7 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
   <!-- Chart.js para gráficos do relatório analítico -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -4953,10 +4954,15 @@
         <textarea class="form-control" id="produtoObs" rows="3" placeholder="Ex: tem frota com 12 veículos, descontente com a Porto..."></textarea>
       </div>
 
-      <!-- Apólices anexadas pelo cliente (via link de mapeamento) -->
-      <div class="form-group" id="produtoAnexosBox" style="display:none;">
-        <label class="form-label">📎 Apólices anexadas pelo cliente</label>
+      <!-- Apólices do produto: anexadas pelo cliente (link) OU pela equipe aqui -->
+      <div class="form-group" id="produtoAnexosBox">
+        <label class="form-label">📎 Apólices deste seguro</label>
         <div id="produtoAnexosLista" style="display:flex; flex-direction:column; gap:6px;"></div>
+        <div id="produtoAnexoVazio" style="font-size:12px; color:#94a3b8; padding:4px 0;">Nenhuma apólice anexada ainda.</div>
+        <input type="file" id="produtoAnexoInput" accept="application/pdf,image/*" multiple style="display:none;" onchange="pxAnexoSel(this)">
+        <button type="button" class="btn-secondary" style="margin-top:8px; width:100%; border-style:dashed; color:#4338ca; border-color:#a5b4fc; background:#eef2ff;" onclick="document.getElementById('produtoAnexoInput').click()">📎 Anexar apólice (PDF ou foto)</button>
+        <div id="produtoAnexoPend" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:5px;">Recebeu a apólice por e-mail ou WhatsApp? Anexe aqui — sobe junto quando você salvar.</div>
       </div>
 
       <!-- Detalhes extras por produto -->
@@ -11121,7 +11127,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '232';
+  const APP_VERSAO = '234';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -13290,10 +13296,6 @@
 
     // ---- Pote: fatia do total da agência dividida pela participação em pontos ----
     const potePct = (FATOR_CFG.poteRanking != null ? FATOR_CFG.poteRanking : 2);
-    // valor de simulação que o usuário informa (padrão: 100 mil). Guardado entre re-render.
-    if (window._RANK_SIM_BASE == null) window._RANK_SIM_BASE = 100000;
-    const simBase = window._RANK_SIM_BASE;
-    const fmtBaseR = v => v >= 1000000 ? (v / 1000000).toFixed(1).replace('.0', '').replace('.', ',') + ' mi' : Math.round(v / 1000) + ' mil';
     const ptsDoPote = (base, share) => Math.round(base * (potePct / 100) * share);
 
     // "Hoje": comissão real dos negócios FECHADOS na campanha, da AGÊNCIA TODA.
@@ -13363,11 +13365,6 @@
       <div style="flex:1; min-width:130px;">Participante</div>
       <div style="display:flex; gap:5px; align-items:center;">
         <div style="width:64px; text-align:center;">Hoje</div>
-        <div style="width:120px; text-align:center;">
-          <div style="font-size:9.5px; margin-bottom:3px;">Simular com base</div>
-          <input type="text" id="rankSimInput" value="${fmtBaseR(simBase)}" onchange="aplicarSimRank(this.value)" onkeydown="if(event.key==='Enter')aplicarSimRank(this.value)"
-            style="width:104px; text-align:center; font-size:12px; font-weight:700; padding:4px 6px; border:1px solid #c7d2fe; border-radius:7px; color:#4338ca; background:#eef2ff;">
-        </div>
       </div>
       <div style="width:62px; text-align:right;">Pontos</div>
     </div>`;
@@ -13378,9 +13375,10 @@
       const shareF = totalPontos > 0 ? (p.pontos / totalPontos) : 0;
       const share = Math.round(shareF * 100);
       const larg = Math.max((p.pontos / maxPontos) * 100, 1.5);
+      // Só o cenário REAL de hoje. A coluna "Simular com base" foi retirada em v234:
+      // não estava servindo e confundia quem lia o ranking (decisão do Patrick).
       const cenarios = [
-        { v: ptsDoPote(baseHoje, shareF), hoje: true, w: 64 },
-        { v: ptsDoPote(simBase, shareF), hoje: false, w: 120 }
+        { v: ptsDoPote(baseHoje, shareF), hoje: true, w: 64 }
       ];
 
       html += `<div style="display:flex; align-items:center; gap:10px; padding:9px 6px; border-radius:10px; ${souEu ? 'background:#f5f3ff;' : ''} ${i < listaVisivel.length - 1 ? 'border-bottom:1px solid #f4f6fa;' : ''}">
@@ -13421,14 +13419,6 @@
     box.innerHTML = html;
   }
   window.renderRankingPontos = renderRankingPontos;
-
-  // Interpreta o valor digitado no simulador do ranking e re-renderiza.
-  // Aceita "100 mil", "1 mi", "1,5 mi", "70000", "R$ 450.000".
-  function aplicarSimRank(txt) {
-    const base = _parseValorBR(txt);
-    if (base && base > 0) { window._RANK_SIM_BASE = base; renderRankingPontos(); }
-  }
-  window.aplicarSimRank = aplicarSimRank;
 
   // Parser tolerante de valores em reais/abreviados → número
   function _parseValorBR(txt) {
@@ -25320,18 +25310,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       venc._handlerInstalado = true;
     }
 
-    // Apólices anexadas pelo cliente (link de mapeamento): mostra com link para abrir
-    const _axBox = document.getElementById('produtoAnexosBox');
-    const _axLista = document.getElementById('produtoAnexosLista');
-    if (_axBox && _axLista) {
-      const anexos = Array.isArray(dadosExistentes.apoliceAnexos) ? dadosExistentes.apoliceAnexos : [];
-      _axBox.style.display = anexos.length ? '' : 'none';
-      _axLista.innerHTML = anexos.map(a => `
-        <a href="${a.url}" target="_blank" rel="noopener" style="display:flex; align-items:center; gap:8px; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:7px 11px; font-size:12.5px; color:#3730a3; text-decoration:none;">
-          📄 <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${(a.nome || 'apólice').replace(/</g, '&lt;')}</span>
-          <span style="color:#94a3b8; font-size:11px;">${a.em ? new Date(a.em).toLocaleDateString('pt-BR') : ''}</span>
-        </a>`).join('');
-    }
+    // Apólices do produto: as que o cliente mandou pelo link + as que a equipe anexa aqui
+    PX_ANEXOS_SALVOS = Array.isArray(dadosExistentes.apoliceAnexos) ? dadosExistentes.apoliceAnexos.slice() : [];
+    PX_ANEXOS_NOVOS = [];
+    renderPxAnexos();
 
     const _pmp = document.getElementById('ptsMapearProduto');
     if (_pmp) _pmp.textContent = getPonto('mapear_produto');
@@ -25373,6 +25355,93 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       document.getElementById('blocoConosco').style.display = 'none';
       document.getElementById('blocoVencimento').style.display = 'none';
     }
+  }
+
+  /* ═══ Apólices no painel (v233) ═══
+     Antes só o CLIENTE conseguia anexar, pelo link de mapeamento. Agora a equipe
+     também anexa aqui — o caso real: a apólice chegou depois, por e-mail. Mesmo
+     caminho no Storage (mb_apolices/{empresa}/{produto}/), mesmo campo no produto
+     (apoliceAnexos[]), com a origem gravada para o histórico ficar honesto. */
+  let PX_ANEXOS_SALVOS = [];   // já no banco
+  let PX_ANEXOS_NOVOS = [];    // escolhidos agora, sobem ao salvar
+
+  function renderPxAnexos() {
+    const lista = document.getElementById('produtoAnexosLista');
+    const vazio = document.getElementById('produtoAnexoVazio');
+    const pend = document.getElementById('produtoAnexoPend');
+    if (!lista) return;
+    const _esc = t => String(t == null ? '' : t).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    lista.innerHTML = PX_ANEXOS_SALVOS.map((a, i) => {
+      const viaTxt = a.via === 'link_mapeamento' ? 'enviada pelo cliente' : (a.porNome ? 'anexada por ' + _esc(a.porNome) : 'anexada pela equipe');
+      return `<div style="display:flex; align-items:center; gap:8px; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:7px 11px; font-size:12.5px;">
+        <a href="${_esc(a.url)}" target="_blank" rel="noopener" style="flex:1; min-width:0; color:#3730a3; text-decoration:none; display:flex; align-items:center; gap:7px;">
+          📄 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(a.nome || 'apólice')}</span>
+        </a>
+        <span style="color:#94a3b8; font-size:10.5px; white-space:nowrap;">${viaTxt}${a.em ? ' · ' + new Date(a.em).toLocaleDateString('pt-BR') : ''}</span>
+        ${CTX.isAdmin ? `<span onclick="pxAnexoRemover(${i})" title="Remover esta apólice" style="cursor:pointer; color:#cbd5e1; font-weight:800;">✕</span>` : ''}
+      </div>`;
+    }).join('');
+    if (vazio) vazio.style.display = (PX_ANEXOS_SALVOS.length || PX_ANEXOS_NOVOS.length) ? 'none' : '';
+    if (pend) pend.innerHTML = PX_ANEXOS_NOVOS.map((f, i) => `
+      <div style="display:flex; align-items:center; gap:8px; background:#fffbeb; border:1px dashed #fcd34d; border-radius:8px; padding:7px 11px; font-size:12.5px; color:#92400e;">
+        ⏳ <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(f.name)}</span>
+        <span style="color:#b45309; font-size:10.5px; white-space:nowrap;">${(f.size / 1024 / 1024).toFixed(1)}MB · sobe ao salvar</span>
+        <span onclick="pxAnexoTirar(${i})" style="cursor:pointer; color:#d97706; font-weight:800;">✕</span>
+      </div>`).join('');
+  }
+
+  function pxAnexoSel(input) {
+    const files = [...(input.files || [])];
+    for (const f of files) {
+      if (PX_ANEXOS_SALVOS.length + PX_ANEXOS_NOVOS.length >= 6) { alert('Máximo de 6 apólices por seguro.'); break; }
+      if (f.size > 15 * 1024 * 1024) { alert(`"${f.name}" passa de 15 MB — envie um arquivo menor.`); continue; }
+      const tipoOk = f.type === 'application/pdf' || (f.type || '').startsWith('image/');
+      if (!tipoOk) { alert(`"${f.name}" não é PDF nem imagem.`); continue; }
+      PX_ANEXOS_NOVOS.push(f);
+    }
+    input.value = '';
+    renderPxAnexos();
+  }
+  window.pxAnexoSel = pxAnexoSel;
+  function pxAnexoTirar(i) { PX_ANEXOS_NOVOS.splice(i, 1); renderPxAnexos(); }
+  window.pxAnexoTirar = pxAnexoTirar;
+
+  // Remove do produto (só admin). O arquivo some do Storage também — se falhar,
+  // a referência já saiu do sistema e o aviso é honesto.
+  async function pxAnexoRemover(i) {
+    const a = PX_ANEXOS_SALVOS[i];
+    if (!a) return;
+    if (!confirm(`Remover a apólice "${a.nome || 'arquivo'}"?\n\nO arquivo será excluído do sistema.`)) return;
+    PX_ANEXOS_SALVOS.splice(i, 1);
+    renderPxAnexos();
+    try {
+      const e = EMPRESA_ATUAL_RX, p = PRODUTO_ATUAL;
+      if (e && p) {
+        await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(p.id)
+          .set({ apoliceAnexos: PX_ANEXOS_SALVOS }, { merge: true });
+        if (e.produtosDados && e.produtosDados[p.id]) e.produtosDados[p.id].apoliceAnexos = PX_ANEXOS_SALVOS.slice();
+      }
+      if (a.caminho && firebase.storage) { try { await firebase.storage().ref(a.caminho).delete(); } catch (e2) { console.warn('storage delete', e2); } }
+      flashSalvo('Apólice removida.');
+    } catch (err) { alert('Erro ao remover: ' + err.message); }
+  }
+  window.pxAnexoRemover = pxAnexoRemover;
+
+  // Sobe os arquivos pendentes e devolve os metadados para gravar no produto
+  async function pxSubirAnexos(empresaId, produtoId) {
+    if (!PX_ANEXOS_NOVOS.length) return { novos: [], falhas: [] };
+    if (!firebase.storage) return { novos: [], falhas: PX_ANEXOS_NOVOS.map(f => f.name) };
+    const novos = [], falhas = [];
+    for (const f of PX_ANEXOS_NOVOS) {
+      try {
+        const caminho = `mb_apolices/${empresaId}/${produtoId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_')}`;
+        const snap = await firebase.storage().ref(caminho).put(f, { contentType: f.type || 'application/octet-stream' });
+        const url = await snap.ref.getDownloadURL();
+        novos.push({ nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(),
+                     via: 'painel', porUid: CTX.uid, porNome: CTX.nome });
+      } catch (err) { console.warn('upload anexo', f.name, err); falhas.push(f.name); }
+    }
+    return { novos, falhas };
   }
 
   async function salvarMapeamentoProduto() {
@@ -25452,7 +25521,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const vaiPontuar = !jaPontuou && statusVisual !== 'vazia';
       if (vaiPontuar) dados.jaPontuouMapeamento = true;
 
+      // Apólices anexadas aqui no painel: sobem agora e entram na lista do produto.
+      // Grava a lista COMPLETA (salvos + novos) porque a remoção também passa por aqui.
+      const _ax = await pxSubirAnexos(e.id, p.id);
+      if (_ax.novos.length || PX_ANEXOS_SALVOS.length) {
+        dados.apoliceAnexos = PX_ANEXOS_SALVOS.concat(_ax.novos);
+      }
+
       await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(p.id).set(dados, { merge: true });
+      if (_ax.novos.length) { PX_ANEXOS_SALVOS = dados.apoliceAnexos.slice(); PX_ANEXOS_NOVOS = []; }
+      if (_ax.falhas.length) alert('Não consegui enviar: ' + _ax.falhas.join(', ') + '.\n\nO resto do mapeamento foi salvo normalmente. Tente anexar de novo.');
 
       // PRODUÇÃO de "já é cliente" fechado FORA do funil:
       // conta como produção no mês de INÍCIO da vigência (backfill de negócios já fechados no ano).
