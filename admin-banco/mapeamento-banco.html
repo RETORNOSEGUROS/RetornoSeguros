@@ -6695,6 +6695,16 @@
       const rm = MAPA_RMS[rmKey] || { nome: empresas[0].rmNome || 'Sem RM atribuído', cor: '#94a3b8' };
       const ehMinhaCarteira = (CTX.perfil === 'rm' && rmKey === CTX.uid);
       const inicial = (rm.nome || '?').charAt(0).toUpperCase();
+      // Cobertura dos dados-base da carteira deste RM.
+      // "Não tem sócios" (semSociosConfirmado) CONTA como mapeado — a informação foi
+      // levantada, só que o resultado é que a empresa não tem sócios (decisão Patrick).
+      const _nEmp = empresas.length;
+      const _okSoc = empresas.filter(x => ((x.socios || []).length > 0) || x.semSociosConfirmado).length;
+      const _okFun = empresas.filter(x => (x.funcionarios || 0) > 0).length;
+      const _pctSoc = _nEmp ? Math.round(_okSoc / _nEmp * 100) : 0;
+      const _pctFun = _nEmp ? Math.round(_okFun / _nEmp * 100) : 0;
+      const _corPct = v => v >= 80 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
+      const _selo = (emoji, rot, pct, ok) => `<span title="${ok} de ${_nEmp} empresas com ${rot} mapeado" style="display:inline-flex; align-items:center; gap:4px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:100px; padding:2px 9px; font-size:11px; font-weight:700; color:#64748b; white-space:nowrap;">${emoji} <strong style="color:${_corPct(pct)};">${pct}%</strong> ${rot}</span>`;
       // No mobile, começa fechado — menos a carteira do próprio usuário. Menos poluição ao abrir.
       const _fechaInicio = window.innerWidth <= 768 && !ehMinhaCarteira;
       return `
@@ -6703,6 +6713,10 @@
             <div class="rm-avatar" style="background: ${rm.cor};">${inicial}</div>
             <div>
               <h2>${rm.nome} ${ehMinhaCarteira ? '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700;margin-left:6px;">SUA CARTEIRA</span>' : ''}</h2>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
+              ${_selo('🧑‍💼', 'sócios', _pctSoc, _okSoc)}
+              ${_selo('👥', 'funcionários', _pctFun, _okFun)}
             </div>
             <span class="count">${empresas.length} empresas</span>
             <i data-lucide="chevron-down" class="chevron w-4 h-4"></i>
@@ -6734,6 +6748,14 @@
     // Mapeamento incompleto = nenhum produto mapeado
     const algumMapeado = Object.values(e.produtos || {}).some(s => s !== 'vazia');
 
+    // % mapeado da empresa: denominador = os ramos que realmente entram no
+    // mapeamento (os "só por OP" ficam de fora, igual às bolinhas do card).
+    const _ramosCard = (PRODUTOS || []).filter(pp => !pp.somenteOp);
+    const _totRamos = _ramosCard.length;
+    const _mapRamos = _ramosCard.filter(pp => (e.produtos || {})[pp.id] && e.produtos[pp.id] !== 'vazia').length;
+    const _pctMap = _totRamos ? Math.round(_mapRamos / _totRamos * 100) : 0;
+    const _corMap = _pctMap >= 80 ? '#16a34a' : _pctMap >= 40 ? '#d97706' : _pctMap > 0 ? '#dc2626' : '#cbd5e1';
+
     // (Botão "Visitar" removido do card — ações agora são só Cotação rápida e Link.
     //  O cadastro de dados-base segue acessível pelo Raio-X ao clicar no card.)
 
@@ -6751,10 +6773,12 @@
     // Linha de informações: nº funcionários (sempre) + nº sócios (apenas se RM+)
     const podeVerSocios = !isEstag; // assistente vê quantidade mas não nomes
     let linhaInfo = '';
-    if (e.funcionarios > 0 || (e.socios && e.socios.length > 0)) {
+    if (e.funcionarios > 0 || (e.socios && e.socios.length > 0) || e.semSociosConfirmado) {
       const partes = [];
       if (e.funcionarios > 0) partes.push(`<span style="color:#475569;"><i data-lucide="users" class="w-3 h-3 inline" style="vertical-align:-2px;"></i> <strong>${e.funcionarios}</strong> colab.</span>`);
       if (podeVerSocios && e.socios && e.socios.length > 0) partes.push(`<span style="color:#475569;"><i data-lucide="user-check" class="w-3 h-3 inline" style="vertical-align:-2px;"></i> <strong>${e.socios.length}</strong> sócio${e.socios.length > 1 ? 's' : ''}</span>`);
+      // Confirmado que não tem sócios (só diretores): é mapeamento feito, não lacuna
+      else if (podeVerSocios && e.semSociosConfirmado) partes.push(`<span style="color:#475569;"><i data-lucide="user-check" class="w-3 h-3 inline" style="vertical-align:-2px;"></i> <strong>não tem sócios</strong></span>`);
       if (partes.length > 0) linhaInfo = `<div style="font-size: 11px; margin-top: 2px;">${partes.join(' · ')}</div>`;
     }
 
@@ -6777,13 +6801,21 @@
             ${linhaInfo}
           </div>
         </div>
-        <div class="produtos-bolinhas">
-          ${PRODUTOS.filter(p => !p.somenteOp).map(p => {
-            const st = e.produtos[p.id] || 'vazia';
-            return `<div class="bolinha ${st}" title="${p.nome}: ${getStatusLabel(st)}">
-              <div class="tooltip">${p.icon} ${p.nome} · ${getStatusLabel(st)}</div>
-            </div>`;
-          }).join('')}
+        <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
+          <div class="produtos-bolinhas">
+            ${_ramosCard.map(p => {
+              const st = e.produtos[p.id] || 'vazia';
+              return `<div class="bolinha ${st}" title="${p.nome}: ${getStatusLabel(st)}">
+                <div class="tooltip">${p.icon} ${p.nome} · ${getStatusLabel(st)}</div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div title="${_mapRamos} de ${_totRamos} produtos mapeados" style="display:flex; align-items:center; gap:7px;">
+            <div style="flex:1; min-width:52px; height:5px; background:#f1f5f9; border-radius:100px; overflow:hidden;">
+              <div style="height:100%; width:${_pctMap}%; background:${_corMap}; border-radius:100px;"></div>
+            </div>
+            <span style="font-size:10.5px; font-weight:800; color:${_corMap}; white-space:nowrap;">${_pctMap}% <span style="color:#94a3b8; font-weight:600;">· ${_mapRamos}/${_totRamos}</span></span>
+          </div>
         </div>
         <div class="empresa-actions" style="display: flex; gap: 6px;">
           <button class="btn-visita" style="background: linear-gradient(135deg, #eef2ff, #e0e7ff); border-color: #c7d2fe; color: #4338ca;" onclick="event.stopPropagation(); abrirCotacaoRapida('${e.id}')" title="Cotação rápida no funil">
@@ -11127,7 +11159,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '234';
+  const APP_VERSAO = '235';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
