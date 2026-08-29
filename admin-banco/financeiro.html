@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Análise Financeira Inteligente – Retorno Seguros (v36)</title>
+  <title>Análise Financeira Inteligente – Retorno Seguros (v37)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- Firebase v8 -->
@@ -1389,6 +1389,9 @@
             🔄 <span class="btn-txt">Recarregar</span>
           </button>
           <input type="file" id="inputUploadPdf" accept=".pdf" style="display:none" onchange="processarUploadPdf(event)">
+          <button class="btn btn-outline" id="btnPrompt360" onclick="abrirModalPrompt()" title="Copiar o prompt do Consultor 360 para usar no Claude" style="border-color:#0284c7; color:#075985; background:linear-gradient(135deg,#e0f2fe,#bae6fd)">
+            📋 <span class="btn-txt">Prompt Consultor 360</span>
+          </button>
           <button class="btn btn-outline btn-importar" id="btnUploadPdf"
             onclick="document.getElementById('inputUploadPdf').click()">
             📤 <span class="btn-txt">Importar PDF</span>
@@ -2130,6 +2133,27 @@
     </div>
   </div>
 
+  <!-- Modal: Prompt Consultor 360 (v37) -->
+  <div id="modalPrompt" class="modal">
+    <div class="modal-content" style="max-width:900px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">📋 Prompt Consultor 360</div>
+          <div style="font-size:13px; color:var(--text-muted); margin-top:4px">Cole uma vez nas <b>instruções do Projeto</b> no Claude. Depois, em cada conversa: anexe contrato social + balanços/DREs/notas e escreva <b>"analise"</b>. Volta o parecer e o arquivo JSON para o botão 📥 Importar JSON.</div>
+        </div>
+        <button class="btn btn-outline" style="padding:8px 12px" onclick="document.getElementById('modalPrompt').style.display='none'">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="copiarPrompt()">📋 Copiar prompt</button>
+          <button class="btn btn-outline" onclick="baixarPrompt()">⬇️ Baixar .md</button>
+          <span id="promptStatus" style="font-size:12px; color:var(--success); align-self:center"></span>
+        </div>
+        <textarea id="promptTexto" readonly style="width:100%; height:60vh; font-family:'JetBrains Mono',monospace; font-size:12px; border:1px solid var(--border); border-radius:8px; padding:12px; resize:vertical"></textarea>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Análise Detalhada -->
   <div id="modalDet" class="modal">
     <div class="modal-content" id="modalDetBox">
@@ -2180,6 +2204,10 @@
           <button class="tab-btn" data-tab="roteiro">
             <span class="tab-icon">🗺️</span>
             <span>Roteiro Visita</span>
+          </button>
+          <button class="tab-btn" data-tab="parecer">
+            <span class="tab-icon">📑</span>
+            <span>Parecer 360</span>
           </button>
           <button class="tab-btn" data-tab="contexto">
             <span class="tab-icon">📄</span>
@@ -2315,6 +2343,9 @@
         </div>
 
         <!-- ABA 6: Contexto Qualitativo -->
+        <div class="tab-content" id="tab-parecer">
+          <div id="parecerContent"></div>
+        </div>
         <div class="tab-content" id="tab-contexto">
           <div id="contextoContent">
             <div style="text-align:center; padding:40px; color:var(--text-muted)">
@@ -2654,13 +2685,24 @@
       // ---- v36: metadados do período que vão junto para o Firestore (auditoria da origem) ----
       function metaParaFirestore(p){
         const m = p.meta || {}; const conf = {}, fontes = {};
+        // v37: blocos descritivos e ajustes analíticos
+        const extras = {};
+        const ajustes = Array.isArray(p.ajustesLiquidez) ? p.ajustesLiquidez : [];
+        extras.ajustesLiquidez = ajustes.map(a=>({descricao:a.descricao||'', valor:Number(a.valor)||0, fonte:a.fonte||''}));
+        extras.naoRealizaveis = ajustes.reduce((t,a)=>t+(Number(a.valor)||0),0);
+        if(p.jurosEmprestimos != null) extras.jurosEmprestimos = Number(valorDe(p.jurosEmprestimos))||0;
+        if(p.contexto && typeof p.contexto==='object') extras.contexto = Object.assign({}, p.contexto, {origem:'consultor360', importadoEm:new Date().toISOString()});
+        // o parecer (da empresa) vai no período mais recente do pacote
+        const ultimo = periodosDoPacote().slice(-1)[0];
+        if(PACOTE.parecer && ultimo && ultimo.meta && ultimo.meta.ano === m.ano) extras.parecer = PACOTE.parecer;
         Object.keys(p).forEach(k=>{ if(!k.startsWith('fin')) return; const c=p[k]; if(c && typeof c==='object' && 'c' in c){ conf[k]=c.c; if(c.f) fontes[k]=c.f + (c.o? ' | '+c.o : ''); } });
         return {
           periodoTipo: m.tipo || 'anual', periodoMeses: Number(m.meses||12), dataBase: m.dataBase || null,
           fonteDocumento: m.documento || null, auditado: !!m.auditado, auditor: m.auditor || null, opiniaoAuditoria: m.opiniao || null,
           importadoDe: 'consultor360', importadoEm: new Date().toISOString(), importVersao: PACOTE.versao || null,
           confiancaCampos: conf, fontesCampos: fontes,
-          travasImportacao: Array.isArray(p.travas) ? p.travas.map(t=>({trava:t.trava, ok:!!t.ok, calculado:t.calculado, documento:t.documento})) : null
+          travasImportacao: Array.isArray(p.travas) ? p.travas.map(t=>({trava:t.trava, ok:!!t.ok, calculado:t.calculado, documento:t.documento})) : null,
+          ...extras
         };
       }
 
@@ -2686,6 +2728,13 @@
             IMPORTADOS[ano] = true; okN++;
           }catch(e){ console.error('[import]', ano, e); errs.push(ano+': '+e.message); }
         }
+        // v37: ficha societária/cadastral da empresa (contrato social) no documento da empresa
+        try{
+          if(okN && PACOTE.empresa && typeof db !== 'undefined'){
+            const e = PACOTE.empresa;
+            await db.collection('empresas').doc(empresaId).update({ fichaConsultor360: Object.assign({}, e, {atualizadoEm: new Date().toISOString()}), qtdSocios: Array.isArray(e.socios)? e.socios.length : null, cnpjConsultor360: e.cnpj || null });
+          }
+        }catch(e){ console.warn('[import] ficha da empresa não gravada:', e); }
         if(btn){ btn.disabled = false; btn.textContent = '⚡ Gravar todos os períodos no banco'; }
         renderPainel();
         $('jiStatus').innerHTML = (okN? '✅ '+okN+' período(s) gravado(s) no banco. ' : '') + (errs.length? '❌ Erros: '+errs.join(' · ') : '') + ' <button type="button" class="btn btn-primary" style="padding:4px 10px; font-size:12px; margin-left:6px" onclick="document.getElementById(\'modalFin\').style.display=\'none\'; if(window.carregarGrid) carregarGrid();">Fechar e atualizar painel</button>';
@@ -2811,6 +2860,7 @@
        · EBIT não subtrai a D&A (já embutida no CMV/despesas); EBITDA = EBIT + D&A
        · calcularIndicadores usa só a depreciação ACUMULADA para o imobilizado líquido
        · salvarFinanceiro dividido em coletarDadosFormulario() + persistirFinanceiro() (reutilizados pelo Importar JSON em lote)
+       v37: períodos parciais anualizados nos índices; liquidez ajustada e cobertura de juros puros; aba Parecer 360; prompt embutido
   -->
   <script>
 // ================== BOOT ==================
@@ -3138,6 +3188,8 @@ function wireUi(){
         renderRoteiroVisita(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "contexto" && CURRENT_ANALYSIS_DATA){
         renderContexto(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "parecer" && CURRENT_ANALYSIS_DATA){
+        renderParecer360(CURRENT_ANALYSIS_DATA);
       }
     });
   });
@@ -3844,7 +3896,16 @@ function calcularIndicadores(d){
   const intangivel = getNum(d.intangivel);
   const capitalSocial = getNum(d.capitalSocial);
   const funcionarios = getNum(d.funcionarios);
-  
+
+  // === v37: PERÍODO PARCIAL (semestre/trimestre) — fluxos são anualizados nos índices estoque×fluxo ===
+  const meses = getNum(d.periodoMeses) || 12;
+  const fa = 12 / meses;                       // fator de anualização (1 para ano cheio)
+  const parcial = meses < 12;
+  // === v37: ativos do circulante que não viram caixa em 12 meses (direito de compra, IR diferido, crédito com sócio...) ===
+  const naoRealizaveis = getNum(d.naoRealizaveis);
+  // === v37: juros puros de empréstimos (sem variação cambial/hedge) ===
+  const jurosEmprestimos = getNum(d.jurosEmprestimos);
+
   // === EMPRÉSTIMOS ===
   const emprestimosCP = getNum(d.emprestimosCP);
   const emprestimosLP = getNum(d.emprestimosLP);
@@ -3893,7 +3954,7 @@ function calcularIndicadores(d){
   const margemOperacional = safeDiv(ebit, receita);
   
   // === ENDIVIDAMENTO ===
-  const alav = safeDiv(dl, ebitda);
+  const alav = safeDiv(dl, ebitda * fa);   // v37: anualizado
   const dlSobrePL = safeDiv(dl, pl);
   const endividamento = safeDiv(dividaBrutaCalc, ativo);
   const composicaoEnd = safeDiv(dividaBrutaCalc, (dividaBrutaCalc + pl));
@@ -3906,19 +3967,20 @@ function calcularIndicadores(d){
   const liqSeca = safeDiv(caixa + cr, cp || passivoCirc);
   const liqImediata = safeDiv(disponiveis, cp || passivoCirc);
   const liqCorrente = safeDiv(ativoCirc, passivoCirc) || liq;
+  const liqAjustada = safeDiv(ativoCirc - naoRealizaveis, passivoCirc); // v37
   const liqGeral = safeDiv(ativoCirc + realizavelLP, passivoTotal);
   
   // === RENTABILIDADE ===
-  const roe = safeDiv(lucroLiq, pl);
-  const roa = safeDiv(lucroLiq, ativo);
-  const nopat = ebit * 0.66; // EBIT * (1 - 34% imposto)
+  const roe = safeDiv(lucroLiq * fa, pl);   // v37: anualizado
+  const roa = safeDiv(lucroLiq * fa, ativo);
+  const nopat = ebit * fa * 0.66; // EBIT * (1 - 34% imposto)
   const capitalInvestido = pl + dividaBrutaCalc;
   const roic = safeDiv(nopat, capitalInvestido);
   
   // === EFICIÊNCIA / GIRO ===
-  const giroAtv = safeDiv(receita, ativo);
-  const giroPL = safeDiv(receita, pl);
-  const giroEstoque = safeDiv(receita, estoques);
+  const giroAtv = safeDiv(receita * fa, ativo);
+  const giroPL = safeDiv(receita * fa, pl);
+  const giroEstoque = safeDiv(receita * fa, estoques);
   const alavFin = safeDiv(ativo, pl);
   const gaf = safeDiv(roe, roa); // Grau Alavancagem Financeira
   
@@ -3927,24 +3989,25 @@ function calcularIndicadores(d){
   const imobRecursosNC = safeDiv(ativoNaoCirc, (pl + passivoNaoCirc));
   
   // === CICLO OPERACIONAL E FINANCEIRO ===
-  const cmvUsar = cmv || receita * 0.7; // Estimar CMV se não tiver
+  const cmvUsar = (cmv || receita * 0.7) * fa; // Estimar CMV se não tiver; anualizado (v37)
   const giroEst = safeDiv(cmvUsar, estoques);
   const diasEst = safeDiv(365, giroEst); // PME
-  const pmr = safeDiv(cr * 360, receita);
+  const pmr = safeDiv(cr * 360, receita * fa);
   const pmp = safeDiv(cp * 360, cmvUsar);
   const cicloOp = (diasEst || 0) + (pmr || 0);
   const ciclo = cicloOp - (pmp || 0);
   
   // === COBERTURA ===
-  const juros = safeDiv(ebitda, despFin); // Cobertura de juros
-  const coberturaDiv = safeDiv(ebitda, dividaBrutaCalc);
+  const juros = safeDiv(ebitda, despFin); // Cobertura de juros (total: inclui câmbio/hedge)
+  const coberturaJurosPuros = safeDiv(ebit, jurosEmprestimos); // v37: EBIT / juros de empréstimos
+  const coberturaDiv = safeDiv(ebitda * fa, dividaBrutaCalc);
   const resultadoFin = recFin - despFin;
   
   // === CAPITAL DE GIRO ===
   const capGiro = (disponiveis + cr + estoques) - cp;
   const ccl = ativoCirc - passivoCirc; // Capital Circulante Líquido
   const ncg = (cr + estoques) - cp; // Necessidade de Capital de Giro
-  const ncgRec = safeDiv(ncg, receita);
+  const ncgRec = safeDiv(ncg, receita * fa);
   
   // === ANÁLISE DUPONT ===
   // ROE = Margem Líquida × Giro do Ativo × Alavancagem Financeira
@@ -3976,6 +4039,8 @@ function calcularIndicadores(d){
                  (1.0 * (receitaAtivo || 0));
 
   return {
+    // v37
+    meses, fatorAnualizacao: fa, parcial, naoRealizaveis, liqAjustada, jurosEmprestimos, coberturaJurosPuros,
     // Dados brutos
     receita, receitaBruta, ebitda, ebit, lucroBruto, lucroLiq, 
     dividaBruta: dividaBrutaCalc, caixa, disponiveis, dl,
@@ -4954,6 +5019,108 @@ async function abrirModalDetalhes(empresaId){
   }
 }
 window.abrirModalDetalhes = abrirModalDetalhes;
+
+
+// ================== v37: ABA PARECER 360 (análise descritiva importada do Consultor 360) ==================
+function renderParecer360(data){
+  const box = document.getElementById("parecerContent");
+  if(!box) return;
+  const rows = (data.rows || []).slice().sort((a,b)=> b.ano - a.ano);
+  const comParecer = rows.filter(r => r.parecer && typeof r.parecer === 'object');
+  const esc = escapeHtml;
+  const fmtN = v => (v==null || v==='' ? '—' : (typeof v==='number' ? toBRL(v) : esc(v)));
+  const x2 = v => (v==null ? '—' : clamp2(v)+'x');
+  const p2 = v => (v==null ? '—' : clamp2(v));
+
+  // ---- tabela de indicadores ajustados (todos os períodos) ----
+  let tabInd = `<div class="card" style="margin-bottom:16px"><h4 style="margin-bottom:10px">📐 Indicadores ajustados por período</h4>
+    <div class="table-container"><table><thead><tr>
+      <th>Período</th><th>Liq. corrente</th><th>Liq. ajustada</th><th>Não realizáveis</th><th>DL/EBITDA (anualizado)</th><th>Cobertura juros (total)</th><th>Cobertura juros puros</th><th>ROE (anualizado)</th><th>Ciclo fin. (dias)</th>
+    </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    tabInd += `<tr><td><b>${r.ano}</b>${r.parcial? ' <small style="color:#b45309">('+r.meses+'m)</small>':''}</td>
+      <td>${p2(r.liqCorrente)}</td>
+      <td style="font-weight:700; color:${r.liqAjustada!=null && r.liqAjustada<1.1 ? '#dc2626' : '#166534'}">${r.naoRealizaveis? p2(r.liqAjustada) : p2(r.liqCorrente)}</td>
+      <td>${r.naoRealizaveis? toBRL(r.naoRealizaveis) : '—'}</td>
+      <td>${x2(r.alav)}</td><td>${x2(r.juros)}</td><td>${r.jurosEmprestimos? x2(r.coberturaJurosPuros) : '—'}</td>
+      <td>${toPct(r.roe)}</td><td>${r.ciclo!=null? Math.round(r.ciclo) : '—'}</td></tr>`;
+  });
+  tabInd += `</tbody></table></div>
+    <div style="font-size:11px; color:var(--text-muted); margin-top:6px">Liquidez ajustada = (AC − ativos que não viram caixa em 12 meses) ÷ PC. Cobertura de juros puros = EBIT ÷ juros de empréstimos (sem variação cambial/hedge). Períodos parciais têm fluxos anualizados.</div></div>`;
+
+  if(!comParecer.length){
+    box.innerHTML = tabInd + `<div class="alert alert-info">Nenhum parecer importado para esta empresa. Gere o parecer no Consultor 360 (botão <b>📋 Prompt Consultor 360</b> no painel), suba o JSON pelo <b>📥 Importar JSON</b> e o parecer aparece aqui.</div>`;
+    return;
+  }
+  const r = comParecer[0]; const P = r.parecer;
+  const nivelCor = { critico:'#dc2626', atencao:'#d97706', oportunidade:'#2563eb' };
+  const nivelIc  = { critico:'🔴', atencao:'🟡', oportunidade:'🔵' };
+  const lista = (arr, fn) => (Array.isArray(arr) && arr.length) ? '<ul style="margin:6px 0 0 18px; line-height:1.55">' + arr.map(fn).join('') + '</ul>' : '<div style="color:var(--text-muted)">—</div>';
+  const sec = (titulo, html) => `<div class="card" style="margin-bottom:16px"><h4 style="margin-bottom:8px">${titulo}</h4>${html}</div>`;
+
+  let h = `<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px">
+      <div><div style="font-size:16px; font-weight:800">📑 Parecer 360 — ${esc(data.empresaNome||'')}</div>
+      <div style="font-size:12px; color:var(--text-muted)">Base: ${esc(String(r.ano))}${r.parcial? ' ('+r.meses+' meses)':''} · gerado em ${esc(P.geradoEm||'')} · períodos analisados: ${esc((P.periodosAnalisados||[]).join(', '))}${P.documentos? ' · docs: '+esc(P.documentos.join('; ')) : ''}</div></div>
+      <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="copiarParecerTexto()">📋 Copiar texto</button></div>`;
+  h += tabInd;
+  if(P.resumoExecutivo) h += sec('🧭 Resumo executivo', `<div style="line-height:1.6">${esc(P.resumoExecutivo)}</div>`);
+  if(P.alertas) h += sec('🚨 Alertas', (P.alertas||[]).map((a,i)=>`
+      <div style="border-left:4px solid ${nivelCor[a.nivel]||'#94a3b8'}; background:var(--bg-primary); border-radius:8px; padding:10px 12px; margin-bottom:8px">
+        <div style="font-weight:700">${nivelIc[a.nivel]||'•'} ${i+1}. ${esc(a.titulo||'')}</div>
+        <div style="font-size:13px; margin-top:4px"><b>O quê:</b> ${esc(a.oque||'')}</div>
+        ${a.porque? `<div style="font-size:13px"><b>Por que importa:</b> ${esc(a.porque)}</div>`:''}
+        ${a.acao? `<div style="font-size:13px"><b>O que fazer:</b> ${esc(a.acao)}</div>`:''}
+      </div>`).join(''));
+  if(P.ficha){
+    const f = P.ficha;
+    h += sec('🏢 Ficha da empresa (contrato social e notas)', `<div class="table-container"><table><tbody>
+      ${Object.entries(f).filter(([k,v])=>typeof v!=='object').map(([k,v])=>`<tr><td style="font-weight:600; width:220px">${esc(k)}</td><td>${esc(String(v))}</td></tr>`).join('')}
+      ${f.socios? `<tr><td style="font-weight:600">Sócios</td><td>${lista(f.socios, s=>`<li>${esc(s.nome||'')} — ${esc(String(s.participacao||''))}%${s.administrador? ' · administrador':''}${s.cpf? ' · CPF '+esc(s.cpf):''}${s.residencia? ' · '+esc(s.residencia):''}</li>`)}</td></tr>`:''}
+    </tbody></table></div>`);
+  }
+  if(P.contrato){
+    const c = P.contrato;
+    h += sec('📜 Contrato social — o que pesa na análise', `
+      ${c.clausulas? '<div style="font-weight:600; margin-bottom:4px">Cláusulas relevantes</div>'+lista(c.clausulas, k=>`<li><b>${esc(k.clausula||'')}</b>: ${esc(k.texto||'')}${k.implicacao? ' <span style="color:#b45309">→ '+esc(k.implicacao)+'</span>':''}</li>`):''}
+      ${c.sugestoes? '<div style="font-weight:600; margin:10px 0 4px">Sugestões de ajuste (levar ao advogado)</div>'+lista(c.sugestoes, s=>`<li>${esc(s)}</li>`):''}`);
+  }
+  if(P.inconsistencias) h += sec('🔎 Auditoria de consistência dos documentos', `<div class="table-container"><table><thead><tr><th>Onde</th><th>O que</th><th>Gravidade</th></tr></thead><tbody>
+      ${(P.inconsistencias||[]).map(i=>`<tr><td>${esc(i.onde||'')}</td><td>${esc(i.oque||'')}</td><td>${esc(i.gravidade||'')}</td></tr>`).join('')}</tbody></table></div>`);
+  if(P.analise){
+    const A = P.analise; const nomes = {receita:'Receita', margens:'Margens', qualidadeLucro:'Qualidade do lucro', liquidez:'Liquidez', capitalGiro:'Capital de giro', endividamento:'Endividamento', patrimonio:'Estrutura patrimonial', notas:'Notas explicativas', tendencia:'Tendência'};
+    h += sec('📊 Análise financeira', Object.keys(nomes).filter(k=>A[k]).map(k=>`<div style="margin-bottom:8px"><b>${nomes[k]}.</b> ${esc(A[k])}</div>`).join(''));
+  }
+  if(P.estrategia){
+    const E = P.estrategia;
+    h += sec('🎯 Estratégia', `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px">
+      <div><div style="font-weight:700; color:#dc2626">Curto prazo (90 dias)</div>${lista(E.curtoPrazo, s=>`<li>${esc(s)}</li>`)}</div>
+      <div><div style="font-weight:700; color:#d97706">Médio prazo (12 meses)</div>${lista(E.medioPrazo, s=>`<li>${esc(s)}</li>`)}</div>
+      <div><div style="font-weight:700; color:#2563eb">Longo prazo (3 anos)</div>${lista(E.longoPrazo, s=>`<li>${esc(s)}</li>`)}</div></div>`);
+  }
+  if(P.bancos){
+    const B = P.bancos;
+    h += sec('🏦 Negociação com bancos / defesa de limite', `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px">
+        <div><div style="font-weight:700; color:#166534">Pontos fortes (defesa)</div>${lista(B.defesa, s=>`<li>${esc(s)}</li>`)}</div>
+        <div><div style="font-weight:700; color:#dc2626">Objeções que virão → resposta</div>${lista(B.objecoes, o=>`<li><b>${esc(o.objecao||'')}</b> → ${esc(o.resposta||'')}</li>`)}</div>
+      </div>
+      ${B.pedidos? '<div style="font-weight:700; margin-top:10px">O que pedir, nesta ordem</div>'+lista(B.pedidos, s=>`<li>${esc(s)}</li>`):''}
+      ${B.mapaCredores? `<div style="font-weight:700; margin-top:10px">Mapa de credores</div><div class="table-container"><table><thead><tr><th>Credor</th><th>Modalidade</th><th>Saldo</th><th>Taxa</th><th>Vencimento</th></tr></thead><tbody>
+        ${B.mapaCredores.map(c=>`<tr><td>${esc(c.banco||'')}</td><td>${esc(c.modalidade||'')}</td><td>${fmtN(c.saldo)}</td><td>${esc(c.taxa||'')}</td><td>${esc(c.vencimento||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`);
+  }
+  if(P.seguros) h += sec('🛡️ Mapa de riscos e seguros', `<div class="table-container"><table><thead><tr><th>Risco visto no balanço</th><th>Exposição</th><th>Produto</th><th>Argumento para o cliente</th><th>Status</th></tr></thead><tbody>
+      ${(P.seguros||[]).map(s=>`<tr><td>${esc(s.risco||'')}</td><td>${fmtN(s.exposicao)}</td><td><b>${esc(s.produto||'')}</b></td><td style="font-style:italic">${esc(s.argumento||'')}</td><td>${esc(s.status||'a cotar')}</td></tr>`).join('')}</tbody></table></div>
+      ${P.naoRecomendar? '<div style="font-weight:700; margin-top:10px">O que NÃO recomendar agora</div>'+lista(P.naoRecomendar, s=>`<li>${esc(s)}</li>`):''}`);
+  if(P.perguntas) h += sec('❓ Perguntas para o cliente / contador', lista(P.perguntas, q=>`<li>${esc(q.pergunta||q)}${q.status? ' <span class="chip '+(q.status==='respondida'?'chip-success':'chip-warning')+'" style="font-size:10px">'+esc(q.status)+'</span>':''}${q.resposta? '<div style="color:#166534; font-size:12px">↳ '+esc(q.resposta)+'</div>':''}</li>`));
+  h += `<div style="font-size:11px; color:var(--text-muted); font-style:italic; margin-top:8px">Análise preliminar elaborada a partir dos documentos anexados, para fins comerciais e de gestão — não substitui parecer contábil, jurídico ou de auditoria.</div>`;
+  box.innerHTML = h;
+  window.__PARECER_TXT = box.innerText;
+}
+function copiarParecerTexto(){
+  const t = window.__PARECER_TXT || document.getElementById('parecerContent')?.innerText || '';
+  navigator.clipboard?.writeText(t).then(()=>alert('Parecer copiado.')).catch(()=>alert('Não foi possível copiar.'));
+}
+window.renderParecer360 = renderParecer360; window.copiarParecerTexto = copiarParecerTexto;
 
 // ================== DASHBOARD DE SAÚDE FINANCEIRA ==================
 function renderHealthDashboard(rows){
@@ -7090,7 +7257,7 @@ function renderTabelaDetalhes(rows, empresaId){
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td style="font-weight:600">${row.ano}</td>
+      <td style="font-weight:600">${row.ano}${row.parcial ? ' <small style="color:#b45309; font-weight:600" title="Período parcial: DL/EBITDA, ROE e prazos anualizados">('+row.meses+'m)</small>' : ''}</td>
       <td>${toBRL(row.receita)}</td>
       <td>${toBRL(row.ebitda)}</td>
       <td>
@@ -16551,6 +16718,22 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
   else instalar();
 
 })();
+
+// ================== v37: PROMPT CONSULTOR 360 embutido (botão 📋 no painel) ==================
+const PROMPT_CONSULTOR360 = "# Prompt — Consultor 360 v3 (análise + arquivo de importação para o Financeiro)\n\n**Como usar.** Cole o texto abaixo da linha nas instruções do Projeto (ou no início da conversa). Em cada conversa, anexe os documentos da empresa — contrato social/alterações, balanços, DREs, DFC, DMPL, notas explicativas, balancetes, relatórios de auditoria, o que houver — e escreva **\"analise\"**.\nComandos curtos: **\"só o json\"** (gera só o arquivo de importação) · **\"só o parecer\"** (sem planilha) · **\"atualize\"** (anexou documento novo numa conversa antiga) · **\"defesa de limite\"** (foco em seguro garantia/crédito).\n\nO que você recebe, nesta ordem: (1) resumo executivo, (2) alertas, (3) **arquivo `EMPRESA_consultor360_import.json`** pronto para o botão **📥 Importar JSON** do Financeiro — ele leva os números ano a ano **e** o parecer descritivo inteiro (aba Parecer 360 do sistema), (4) planilha de conferência, (5) travas e cruzamentos, (6) análise completa, (7) mapa de riscos e seguros, (8) perguntas para o cliente.\n\n---\n\nVocê é o consultor de empresas da Retorno Seguros. Patrick, o corretor, usa suas análises para se posicionar diante do cliente como consultor completo do negócio — finanças, riscos e seguros — indo além do que o gerente do banco entrega. Sua matéria-prima são os documentos que ele anexa: contrato social e alterações, balanços patrimoniais, DREs, DFCs, DMPLs, notas explicativas, balancetes, relatórios de auditoria, em qualquer formato e nível de detalhe. Sua postura é a de um **auditor rigoroso**: você desconfia de todo número até conferi-lo, e reporta o que não fecha — inclusive erros do próprio auditor da empresa.\n\n## REGRAS DE OURO (valem para tudo, sempre)\n\n1. Todo número que você apresentar tem que existir nos documentos anexados, com fonte citada: documento · página · linha/nota (ex.: \"BFL 2025-2024 · DRE p.6 · LUCRO BRUTO\"). Nenhum valor estimado, nenhum número de memória, nenhum dado de mercado inventado.\n2. O que não estiver nos documentos é declarado como **não consta** — nunca preenchido por dedução. Se um dado externo ajudaria (limite bancário, nº de funcionários, folha), vira pergunta, não número.\n3. Valor que você **somou ou interpretou** (juntar duas linhas, líquido em vez de bruto, reclassificar) é sempre marcado com \"!\" e explicado em uma linha.\n4. As travas aritméticas são obrigatórias em todos os períodos. Trava que não fecha é reportada com destaque — mesmo quando o erro é do documento auditado. Nunca ajuste um número para a conta fechar.\n5. Períodos parciais (semestre, trimestre) nunca se misturam com anos cheios sem aviso: indicadores do período são apresentados como do período; qualquer anualização é explícita (\"anualizado ×2\").\n6. Documento ilegível, coluna cortada, nota que não veio: diga exatamente o que falta e o que deixou de ser possível por causa disso.\n7. Leia **todos** os documentos antes de concluir qualquer coisa. O contrato social manda sobre sócios e administração (não a capa do balanço); a nota explicativa manda sobre a composição de uma linha (não o nome da linha). Quando dois documentos divergem para o mesmo período, mostre os dois valores e diga qual você usou e por quê.\n8. Linguagem: português direto, de consultor experiente falando com corretor — sem jargão desnecessário, mas sem simplificar número.\n\n## ETAPA 0 — FICHA DA EMPRESA (do contrato social e das notas)\n\nRazão social, CNPJ, NIRE, sede, data de fundação, objeto social resumido, natureza jurídica, **quadro societário atual** (nome, CPF, % de quotas, quem administra, onde reside), alterações contratuais relevantes (entrada/saída de sócio, valor das quotas cedidas, forma de pagamento), contador e auditor (nome, CRC, data da assinatura, tipo de opinião). Marque toda informação que veio de documento antigo e pode estar desatualizada.\n\n**Leitura do contrato social — o que procurar e o que sugerir** (cada item vira linha em `parecer.contrato.clausulas` com a implicação, e sugestões em `parecer.contrato.sugestoes`):\n- *Poderes e administração*: quem assina sozinho, limites de alçada, aval/fiança em nome da empresa, garantia real sem autorização — quem pode endividar a empresa e com que teto (bancos e seguradoras de garantia perguntam).\n- *Sucessão e continuidade*: cláusula de morte/interdição/retirada, prazo e forma de pagamento de haveres (36 parcelas? balanço especial?), ingresso de herdeiros, direito de preferência, dissolução com sócio único (texto antigo em empresa que virou unipessoal), administrador substituto. Cruzar com a dívida: se os haveres vencem em N parcelas e a dívida bancária vence em 12 meses, a conta não fecha sem seguro de vida ou acordo de sócios.\n- *Dinheiro dos sócios*: pró-labore (fixado? por quem?), distribuição desproporcional permitida, JSCP, mútuo com sócios previsto ou não — cruzar com \"créditos/obrigações com sócios\" do balanço e com distribuições acima do lucro.\n- *Objeto social × operação*: atividades no objeto que não aparecem na receita (transporte, armazenagem para terceiros) e vice-versa — cada atividade é um ramo de seguro (RC transportador, depositário) e um risco tributário.\n- *Capital social × porte*: capital de R$ 2 mi numa empresa de R$ 900 mi/ano é fragilidade de garantia; sugerir aumento de capital com reservas/lucros quando o PL permitir.\n- *Regime de bens, residência e idade dos sócios* (quando constar): comunhão parcial e sócio residente em outro estado afetam sucessão, foro e vida.\n- *Foro, prazo, filiais, cláusulas ausentes* (acordo de sócios, não-concorrência, tag/drag, conselho consultivo, auditoria obrigatória).\nSugestões típicas: atualizar cláusula de unipessoalidade; acordo de sócios ou plano de sucessão com seguro de vida atrelado à dívida; limite de alçada para endividamento; holding patrimonial; aumento de capital; administrador substituto formal.\n\n## ETAPA 1 — ARQUIVO DE IMPORTAÇÃO (o que o Financeiro lê)\n\nGere um arquivo **`<EMPRESA>_consultor360_import.json`** (nome curto da empresa, sem espaços) exatamente neste formato. É esse arquivo que Patrick sobe no botão **📥 Importar JSON** do sistema — um clique por período, sem digitar nada.\n\n```json\n{\n  \"formato\": \"consultor360-import\",\n  \"versao\": \"1.0\",\n  \"geradoEm\": \"AAAA-MM-DD\",\n  \"empresa\": {\n    \"nome\": \"Razão social\", \"cnpj\": \"00.000.000/0001-00\", \"nire\": \"\", \"cidade\": \"Cidade/UF\",\n    \"fundacao\": \"AAAA-MM-DD\", \"naturezaJuridica\": \"\", \"atividade\": \"\", \"setorSistema\": \"industria|comercio|servicos|agronegocio|tecnologia|construcao|saude|transporte|educacao|varejo\",\n    \"socios\": [{\"nome\": \"\", \"cpf\": \"\", \"participacao\": 100, \"administrador\": true}],\n    \"contador\": \"\", \"auditor\": \"\", \"fonteContrato\": \"\"\n  },\n  \"periodos\": [\n    {\n      \"meta\": {\"ano\": 2025, \"tipo\": \"anual|semestral|trimestral\", \"meses\": 12, \"dataBase\": \"2025-12-31\", \"documento\": \"nome do PDF\", \"auditado\": true, \"auditor\": \"\", \"opiniao\": \"sem ressalva|com ressalva|adversa|abstenção|não auditado\", \"aviso\": \"só se período parcial\"},\n      \"finReceitaLiq\": {\"v\": 360804358, \"c\": \"v\", \"f\": \"BFL 2025-2024 · DRE p.6 · RECEITA OPERACIONAL LÍQUIDA\"},\n      \"finDespAdm\": {\"v\": 19927105, \"c\": \"!\", \"f\": \"DRE p.6\", \"o\": \"Administrativas 19.910.787 + Tributárias 16.318\"},\n      \"finFuncionarios\": {\"v\": null, \"c\": \"x\", \"f\": \"não consta nos documentos\"},\n      \"travas\": [{\"trava\": \"1 Ativo Total = PC + PNC + PL\", \"calculado\": 0, \"documento\": 0, \"ok\": true}]\n    }\n  ],\n  \"documentosLidos\": [\"...\"]\n}\n```\n\nRegras do arquivo:\n- **Um objeto por período** encontrado (inclusive colunas comparativas de balanços mais antigos). Ano fiscal em `meta.ano`; período parcial recebe `tipo`, `meses`, `dataBase` e `aviso`. Nunca invente um período que não esteja nos documentos.\n- Cada campo é `{\"v\": valor, \"c\": confiança, \"f\": fonte, \"o\": observação}` — `c` = **\"v\"** (achado direto), **\"!\"** (somado/interpretado; `o` obrigatório), **\"x\"** (não consta; `v` = null). Valores em reais, sem separador, sem centavos quando o documento não tiver.\n- **Sinais**: despesas, custos e deduções entram **positivas** (o sistema subtrai). Resultado financeiro e IR/CS seguem o sinal econômico: `finResultadoFin` negativo quando despesa > receita; `finIRCS` negativo quando houver **crédito** de imposto (receita de IR diferido). `finOutrasReceitas` e `finOutrasDesp`: uma linha \"outras receitas e despesas\" positiva vai em receitas, negativa vai em despesas (a outra fica 0).\n- **Campos do sistema** (use exatamente estes nomes):\n  - DRE: finReceitaBruta, finDeducoes, finReceitaLiq, finCMV, finLucroBruto, finDespVendas, finDespAdm, finOutrasReceitas, finOutrasDesp, finEBIT, **finDepAmort** (depreciação/amortização do período — DRE, nota de despesas por natureza ou DFC), finEbitda, finReceitaFin, finDespesaFin, finResultadoFin, finLAIR, finIRCS, finLucroLiq\n  - Ativo circulante: finACCaixa (caixa e bancos), finACAplicacoes (aplicações financeiras CP), finCR (clientes), finACPDD (PDD, positiva), finEstoques, finACImpostos, finACAdiantFornec, finACDespAntecip, finACOutros, finAtivoCirc\n  - Ativo não circulante: finANCRealizavel, finANCInvest, **finImobilizado** (bruto; se o documento só der o líquido, lance o líquido e `finDepreciacao` = 0 com \"!\"), **finDepreciacao** (depreciação ACUMULADA do balanço — não confundir com finDepAmort), finANCIntangivel, finAtivoNaoCirc, finAtivoTotal\n  - Passivo circulante: finCP (fornecedores), finPCEmprestimos, finPCSalarios, finPCImpostos (obrigações fiscais + IR/CS a pagar), finPCAdiantClientes, finPCDividendos, finPCProvisoes, finPCOutros, finPassivoCirc\n  - Passivo não circulante: finPNCEmprestimos, finPNCDebentures, finPNCProvisoes, finPNCOutros, finPassivoNaoCirc, **finPassivoTotal** (= PC + PNC + PL, o \"TOTAL DO PASSIVO\" do balanço)\n  - PL: finPLCapital, finPLReservasCapital, finPLReservasLucro (inclui reserva de subvenção/legal/estatutária — dizer qual em `o`), finPLLucrosAcum (negativo se prejuízo), finPLAjustes, finPL\n  - Complementares: finDividaBruta (empréstimos CP + LP + debêntures, conferido com a nota), finDistribLucro (dividendos/lucros pagos no período — JSCP à parte), finValorImoveis, finValorMaquinas, finValorVeiculos, finQtdSocios (do contrato social), finSetor, finProvisaoContingencias, finDepJudiciais\n  - Só se constar (senão \"x\"): finFuncionarios, finProLabore, finQtdProcessos, finProcessosTrab, finProcessosCiv, finProcessosTrib, finProcessosAmb, finPassivoContingente, finTaxaMedia, finLimiteTotal, finLimiteUsado, finScoreExterno, finInadimplencia\n- Os totais (finLucroBruto, finEBIT, finEbitda, finLAIR, finLucroLiq, finAtivoCirc, finAtivoNaoCirc, finAtivoTotal, finPassivoCirc, finPassivoNaoCirc, finPL) devem ser os **do documento**: o sistema recalcula a partir das contas e mostra OK/ERRO contra eles — é a conferência automática.\n- Linhas do balanço sem campo próprio vão para \"Outros\" da sua seção, sempre com `o` listando o que foi somado (ex.: \"Direito de compra 41.769.025 + Outros créditos 1.307.186\"). Nada some.\n- `travas`: resultado das 14 travas da Etapa 3 para o período.\n- **Blocos analíticos por período (v3)**:\n  - `ajustesLiquidez`: `[{\"descricao\": \"Direito de compra (planta em leilão)\", \"valor\": 42783492, \"fonte\": \"Nota 9\"}]` — tudo do circulante que não vira caixa em 12 meses. O sistema calcula a liquidez ajustada a partir daqui.\n  - `jurosEmprestimos`: `{\"v\": 4363957, \"c\": \"v\", \"f\": \"Nota 15 · Juros de empréstimos\"}` — juros puros (sem variação cambial/hedge/descontos), para a cobertura de juros em duas versões.\n  - `contexto`: o que os documentos permitem preencher da aba Contexto do sistema: `{\"eventos\": [\"saída de sócio\", \"expansão\", ...], \"justificativa\": \"texto curto sobre o ano\", \"perspectiva\": \"crescimento|estavel|retracao\", \"observacoes\": \"texto\", \"funcionariosAtual\": null}` (nulo quando não consta).\n- **Bloco `parecer` (uma vez, no nível do pacote — o sistema grava no período mais recente e mostra na aba Parecer 360)**:\n```json\n\"parecer\": {\n  \"geradoEm\": \"AAAA-MM-DD\", \"periodosAnalisados\": [2023, 2024, 2025, 2026], \"documentos\": [\"...\"],\n  \"resumoExecutivo\": \"5 linhas\",\n  \"alertas\": [{\"nivel\": \"critico|atencao|oportunidade\", \"titulo\": \"\", \"oque\": \"número + fonte\", \"porque\": \"\", \"acao\": \"\"}],\n  \"ficha\": {\"Razão social\": \"\", \"CNPJ\": \"\", \"Sede\": \"\", \"Fundação\": \"\", \"Objeto\": \"\", \"Capital social\": \"\", \"Contador\": \"\", \"Auditor\": \"\", \"socios\": [{\"nome\": \"\", \"cpf\": \"\", \"participacao\": 100, \"administrador\": true, \"residencia\": \"\"}]},\n  \"contrato\": {\"clausulas\": [{\"clausula\": \"Cl. 15\", \"texto\": \"\", \"implicacao\": \"\"}], \"sugestoes\": [\"...\"]},\n  \"inconsistencias\": [{\"onde\": \"\", \"oque\": \"\", \"gravidade\": \"erro de impressão|reclassificação|indício de número forçado|classificação distorce indicador|omissão\"}],\n  \"analise\": {\"receita\": \"\", \"margens\": \"\", \"qualidadeLucro\": \"\", \"liquidez\": \"\", \"capitalGiro\": \"\", \"endividamento\": \"\", \"patrimonio\": \"\", \"notas\": \"\", \"tendencia\": \"\"},\n  \"estrategia\": {\"curtoPrazo\": [\"...\"], \"medioPrazo\": [\"...\"], \"longoPrazo\": [\"...\"]},\n  \"bancos\": {\"defesa\": [\"...\"], \"objecoes\": [{\"objecao\": \"\", \"resposta\": \"\"}], \"pedidos\": [\"...\"], \"mapaCredores\": [{\"banco\": \"\", \"modalidade\": \"\", \"saldo\": 0, \"taxa\": \"\", \"vencimento\": \"\"}]},\n  \"seguros\": [{\"risco\": \"\", \"exposicao\": 0, \"produto\": \"\", \"argumento\": \"\", \"status\": \"a cotar|em vigor|recusado\"}],\n  \"naoRecomendar\": [\"...\"],\n  \"perguntas\": [{\"pergunta\": \"\", \"status\": \"aberta\"}]\n}\n```\nTextos do parecer em português direto, sem markdown dentro das strings (o sistema mostra como texto). Números dentro dos textos sempre com fonte.\n\nEntregue o JSON como **arquivo anexado** (não só colado no chat).\n\n## ETAPA 2 — PLANILHA DE CONFERÊNCIA\n\nTabela com **uma coluna por período** e uma linha por campo, com a marca de confiança (✓ verde / ! amarelo / ✕ vermelho) e a fonte abaixo de cada valor. É o que Patrick lê no celular para conferir antes de salvar.\n\n## ETAPA 3 — TRAVAS E CRUZAMENTOS\n\nAplique em cada período e mostre a tabela OK/ERRO (tolerância R$ 2):\n\n1. Ativo Total = PC + PNC + PL · 2. AC + ANC = Ativo Total · 2a–2d. Soma das contas de cada grupo = total do grupo · 3. RL = RB − Deduções · 4. LB = RL − CMV · 5. EBIT = LB − Adm − Vendas − Outras Desp + Outras Rec · 6. ResFin = RecFin − DespFin · 7. LAIR = EBIT + ResFin · 8. LL = LAIR − IR/CS · 9. PL = Capital + Reservas + Lucros Acum + Ajustes · 10. Dívida bruta = Empr CP + Empr LP + Debêntures (= total da nota de empréstimos).\n\nDepois **cruze os documentos**: coluna comparativa de um balanço × balanço do ano anterior (linha a linha); DMPL × BP (saldo final de cada conta do PL); DFC × BP (variação de caixa **e** cada variação de ativo/passivo operacional — sinal e valor); DFC de período parcial × balanço de encerramento anterior (se a DFC \"abre\" com o saldo de 12 meses atrás enquanto a DRE é de 6 meses, é erro); nota de empréstimos × linhas do BP; nota de receitas × DRE; IR/CS da DRE × nota tributária × DFC; comparativos de período parcial que repetem valores de ano cheio (indício de copiar/colar). Reporte **toda** divergência, por menor que seja, com os dois valores. Verifique também: auditor e contador são a mesma firma? Relatório de auditoria menciona \"exercício\" para um semestre? Opinião tem ressalva ou parágrafo de ênfase? Data de assinatura compatível?\n\n## ETAPA 4 — ANÁLISE FINANCEIRA COMPLETA\n\nPonto a ponto, sempre com número junto da conclusão:\n\n1. **Crescimento e qualidade da receita** — ano a ano; preço × volume × mix quando as notas permitirem; receita bruta × líquida (peso de devoluções e impostos).\n2. **Margens** — bruta, EBITDA e líquida por período; o que explica cada variação. Despesas não segregadas (fretes dentro de administrativas) que inflam ou distorcem margem bruta: dizer.\n3. **Qualidade do lucro** — operação × efeitos não recorrentes: créditos fiscais diferidos, subvenções, reversões, venda de ativo, variação cambial. Responder: *a empresa ganha dinheiro com a operação ou com efeitos contábeis?* Onde a linha de resultado financeiro estiver aberta na nota, **separe juros puros de variação cambial/hedge/descontos** e calcule a cobertura de juros nas duas versões (total e \"juros efetivos\").\n4. **Liquidez** — corrente, seca, geral e **ajustada** (expurgando do circulante o que não vira caixa em 12 meses: direitos sem mercado, créditos com sócios, tributos diferidos, mercadorias de terceiros com contrapartida no passivo). Dizer qual versão representa a empresa.\n5. **Capital de giro** — NCG, PMR/PME/PMP, ciclo financeiro, quem financia o giro, e o que acontece com o caixa se a receita continuar no ritmo atual. Mercadorias de terceiros em estoque (com obrigação equivalente no passivo) devem ser lidas pelo líquido.\n6. **Endividamento** — bruta, líquida, DL/EBITDA (anualizado se parcial), cobertura de juros (total e juros puros), perfil CP × LP, custo aparente (juros ÷ dívida média — e se der estranho, o que mais está na linha), **mapa de bancos** quando a nota abrir por credor (banco, modalidade, taxa, vencimento, saldo), concentração por credor, obrigações fora da dívida bancária (direito de uso, arrendamento, obrigações com terceiros).\n7. **Estrutura patrimonial** — PL, alavancagem, ROE (e a leitura honesta sobre PL magro), quanto do PL é lucro retido × reserva de subvenção × capital.\n8. **Notas explicativas** — partes relacionadas e créditos com sócios, ativos de liquidez duvidosa, garantias, subvenções, contingências (ou ausência suspeita), quem audita e com que independência.\n9. **Auditoria de consistência** — tudo o que as travas e cruzamentos acharam, dito sem rodeio, classificado por gravidade: erro de digitação/impressão · inconsistência de classificação · indício de número forçado · omissão relevante. **Nunca acuse fraude**: descreva o indício, o valor, e o que precisa ser esclarecido.\n10. **Estratégia** — 3 horizontes: **curto prazo (90 dias)** — caixa, renegociação, alongamento, corte; **médio (12 meses)** — margem, giro, estrutura de capital; **longo (3 anos)** — ativos, sucessão, governança. Cada item com o número que o justifica e o efeito esperado no indicador.\n11. **Negociação com bancos** — argumentos de defesa (pontos fortes com números), objeções que o analista vai levantar (e a resposta preparada), o que pedir (prazo, taxa, garantia, limite) e em que ordem.\n12. **Tendência** — para onde a empresa vai se nada mudar e os 2–3 vetores que decidem.\n13. **Olhar de auditor forense (indícios, nunca acusação)** — receita sem caixa (clientes crescendo mais que receita), estoque que não gira, fornecedores caindo com CMV subindo, \"outras receitas\" recorrentes, resultado financeiro que sustenta o lucro, despesas que somem de um ano para outro, PL que cresce sem lucro, distribuição acima do lucro, créditos com sócios, saldos redondos, DFC que fecha só no total, comparativos copiados, notas que desaparecem entre um ano e outro, auditor sem independência. Cada indício com valor, fonte e a pergunta que o esclarece.\n14. **Olhar de estrategista** — onde a empresa ganha dinheiro de verdade (produto/canal/cliente quando as notas abrem), o que a torna dependente (um fornecedor, um cliente, um banco, um ativo alheio, uma pessoa), 3 alavancas de margem com valor estimado só quando derivável dos documentos (senão como pergunta), estrutura de capital alvo (CP × LP, nº de bancos, caixa mínimo), e o que precisa estar pronto antes da próxima safra/ciclo/renovação de limite.\n\n## ETAPA 5 — MAPA DE RISCOS E SEGUROS\n\nCruze os números com os ramos da corretora — Frota, Empresarial/Patrimonial (incêndio, lucros cessantes), Saúde Sócios, Saúde Colaboradores, Vida em Grupo, Vida Sócios, Dental, Transporte de Cargas, RC Geral/RC Depositário, D&O, Cyber, Seguro Garantia, Crédito, Rural/Penhor quando couber — e produza o mapa:\n\n- Cada recomendação **nasce de um número**: estoque em armazém → patrimonial + depositário; veículos no imobilizado → frota (se não há, RC do embarcador); folha e funcionários → vida em grupo/saúde/dental; dívida sobre N sócios → vida sócios no valor que protege a sucessão (use o quadro societário **do contrato social**, não a impressão do balanço); porte/governança/subvenção/hedge → D&O; operação embarcada → transporte; imóvel de terceiros → quem segura prédio × conteúdo × lucros cessantes; limite de garantia → argumentos de defesa e objeções, com números.\n- Passe pela lista inteira e diga, para cada ramo, **recomendar agora / depois / não**: patrimonial e lucros cessantes (imóvel próprio × alugado × de massa falida; conteúdo, máquinas, estoques, benfeitorias em imóvel de terceiros; quem é o segurado e o beneficiário), RC geral / produtos / depositário / ambiental (objeto social: armazenagem, indústria de alimentos, defensivos), transporte (RCTR-C, RCF-DC, embarque internacional quando houver ACC/exportação), frota (só com veículos no imobilizado), vida sócios (sucessão × dívida × haveres), D&O (governança, subvenções, hedge, sócio-administrador único), vida em grupo/saúde/dental/acidentes (folha e funcionários), garantia (limite, contragarantias, argumentos), crédito (PMR, PDD, concentração), rural/penhor/CPR (grão como lastro), cyber (ERP, EDI, exportação), equipamentos (máquinas > R$ 1 mi), responsabilidade do transportador terceirizado.\n- **Oportunidades**: além do que falta, o que está caro ou mal desenhado — apólice em nome do locador que não cobre o conteúdo do locatário, LMI abaixo do estoque de pico (safra), franquia que anula o sinistro provável, vida sócios com capital antigo, garantia com contragarantia que trava limite bancário. Ordene as oportunidades por (exposição em R$ × chance de fechar).\n- Diga o que **não** recomendar agora e por quê.\n- Para cada risco: exposição em R$ (do balanço), produto, e a frase-argumento para a conversa com o cliente.\n\n## ETAPA 6 — ALERTAS (no máximo 10, ranqueados)\n\n🔴 crítico (muda a decisão) · 🟡 atenção (precisa de resposta ou monitoramento) · 🔵 oportunidade (comercial ou de gestão). Cada um em 3 linhas: **o quê** (número + fonte) · **por que importa** · **o que fazer**.\n\n## ETAPA 7 — PERGUNTAS PARA O CLIENTE/CONTADOR\n\nNo máximo 8, cada uma citando o número que a motivou.\n\n## FORMATO DE SAÍDA (nesta ordem)\n\n1. **Resumo executivo** (5 linhas) · 2. **Alertas** · 3. **Ficha da empresa** (Etapa 0) · 4. **Arquivo JSON anexado** + instrução de 1 linha (\"abra a empresa no Financeiro → Lançar dados → 📥 Importar JSON → ⚡ Gravar todos os períodos no banco → aba Parecer 360\") · 5. **Planilha de conferência** · 6. **Travas e cruzamentos** · 7. **Análise financeira** · 8. **Mapa de riscos e seguros** · 9. **Perguntas**.\n\nEncerre sempre com: *\"Análise preliminar elaborada a partir dos documentos anexados, para fins comerciais e de gestão — não substitui parecer contábil, jurídico ou de auditoria.\"*\n";
+function abrirModalPrompt(){
+  const m = document.getElementById('modalPrompt'); const ta = document.getElementById('promptTexto');
+  if(ta) ta.value = PROMPT_CONSULTOR360;
+  if(m) m.style.display = 'block';
+}
+function copiarPrompt(){
+  navigator.clipboard?.writeText(PROMPT_CONSULTOR360).then(()=>{ const s=document.getElementById('promptStatus'); if(s){ s.textContent='✅ Prompt copiado — cole nas instruções do Projeto no Claude (uma vez) ou no início da conversa.'; } }).catch(()=>alert('Não foi possível copiar; selecione o texto e copie manualmente.'));
+}
+function baixarPrompt(){
+  const blob = new Blob([PROMPT_CONSULTOR360], {type:'text/markdown;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'PROMPT_consultor360.md'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+}
+window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; window.baixarPrompt = baixarPrompt;
 
   </script>
 </body>
