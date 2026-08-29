@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Análise Financeira Inteligente – Retorno Seguros</title>
+  <title>Análise Financeira Inteligente – Retorno Seguros (v35)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- Firebase v8 -->
@@ -1554,6 +1554,10 @@
           <div id="finEmpresaAlvo" style="font-size:13px; color:var(--text-muted); margin-top:4px"></div>
         </div>
         <div style="display:flex; gap:8px; align-items:center">
+          <input type="file" id="inputImportJson" accept=".json,application/json" style="display:none">
+          <button class="btn btn-outline" id="btnImportarJson" style="padding:8px 14px; background:linear-gradient(135deg, #e0f2fe, #bae6fd); border-color:#0284c7; color:#075985; font-size:12px" title="Importar arquivo JSON gerado pelo Consultor 360 (Claude) — preenche todos os campos de um período">
+            📥 Importar JSON
+          </button>
           <button class="btn btn-outline" id="btnImportarPdfEdicao" style="padding:8px 14px; background:linear-gradient(135deg, #f5f3ff, #ede9fe); border-color:#7c3aed; color:#5b21b6; font-size:12px" title="Importar PDF preenchido pelo cliente">
             📤 Importar PDF
           </button>
@@ -1572,6 +1576,21 @@
           <button class="form-tab-btn" data-formtab="ativo" style="padding:8px 16px; border:none; background:var(--border); color:var(--text-secondary); border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">💼 Ativo</button>
           <button class="form-tab-btn" data-formtab="passivo" style="padding:8px 16px; border:none; background:var(--border); color:var(--text-secondary); border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">💳 Passivo</button>
           <button class="form-tab-btn" data-formtab="outros" style="padding:8px 16px; border:none; background:var(--border); color:var(--text-secondary); border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">📈 Outros</button>
+        </div>
+
+        <!-- Painel do importador JSON (Consultor 360) -->
+        <div id="jsonImportPanel" style="display:none; margin:-8px 0 18px; border:1px solid #7dd3fc; background:linear-gradient(135deg,#f0f9ff,#e0f2fe); border-radius:10px; padding:12px 14px">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap">
+            <div>
+              <div style="font-size:13px; font-weight:700; color:#075985">📥 Importação Consultor 360 — <span id="jiEmpresa"></span></div>
+              <div id="jiSub" style="font-size:12px; color:#0369a1; margin-top:2px"></div>
+            </div>
+            <button type="button" class="btn btn-outline" id="jiFechar" style="padding:4px 10px; font-size:12px">fechar</button>
+          </div>
+          <div id="jiPeriodos" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px"></div>
+          <div id="jiStatus" style="font-size:12px; color:#0c4a6e; margin-top:10px"></div>
+          <div id="jiTravas" style="display:none; margin-top:10px; background:#fff; border:1px solid #bae6fd; border-radius:8px; padding:10px; font-size:12px"></div>
+          <div id="jiNotas" style="display:none; margin-top:8px; font-size:11.5px; color:#334155; max-height:160px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px"></div>
         </div>
 
         <!-- ==================== ABA BÁSICO ==================== -->
@@ -2348,8 +2367,23 @@
         ['finLucroLiqDRE', 'finLucroLiq'],
         ['finAtivoTotal',  'finAtivo'],
         ['finPLTotal',     'finPL'],
-        ['finACCaixa',     'finCaixa']
       ];
+
+      // v35: "Caixa e Equivalentes" do Básico = Caixa e Bancos + Aplicações Financeiras CP
+      // (antes espelhava só Caixa e Bancos, o que distorcia a dívida líquida quando a empresa
+      //  mantinha o grosso do caixa em aplicações — caso típico de balanço auditado)
+      function parseBRL(v){
+        if(v == null) return 0;
+        v = String(v).trim(); if(!v) return 0;
+        const neg = /^-|\(/.test(v);
+        v = v.replace(/[^0-9,\.]/g,'');
+        if(v.indexOf(',')>=0){ v = v.replace(/\./g,'').replace(',','.'); }
+        else if((v.match(/\./g)||[]).length>1){ v = v.replace(/\./g,''); }
+        else if(/\.\d{3}$/.test(v)){ v = v.replace(/\./g,''); }
+        const n = parseFloat(v)||0; return neg ? -n : n;
+      }
+      function fmtBRL(n){ return (Math.round(n*100)/100).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+      window.__parseBRL = parseBRL; window.__fmtBRL = fmtBRL;
 
       function espelharBasico(){
         mirrorFields.forEach(([origem, espelho]) => {
@@ -2357,6 +2391,10 @@
           const e = document.getElementById(espelho);
           if(o && e && o.value !== '') e.value = o.value;
         });
+        const cx = document.getElementById('finACCaixa'), ap = document.getElementById('finACAplicacoes'), alvo = document.getElementById('finCaixa');
+        if(cx && alvo && (cx.value !== '' || (ap && ap.value !== ''))){
+          alvo.value = fmtBRL(parseBRL(cx.value) + parseBRL(ap ? ap.value : 0));
+        }
       }
 
       // espelha quando qualquer bruto muda (e logo após o recálculo do autocálculo)
@@ -2539,6 +2577,184 @@
         new MutationObserver(()=>{ setTimeout(montarTimeline, 60); }).observe(alvo, {childList:true, characterData:true, subtree:true});
       }
       window.montarTimelineAnos = montarTimeline;
+    })();
+  </script>
+
+  <!-- v35: Importador JSON do Consultor 360 (Claude) -->
+  <script>
+    (function(){
+      const $ = id => document.getElementById(id);
+      let PACOTE = null;       // JSON carregado
+      let IMPORTADOS = {};     // ano -> true
+      const MONEY = new Set(); // ids de campos money
+
+      const CAMPOS_TEXTO = ['finQtdSocios','finFuncionarios','finQtdProcessos','finMarketShare','finCrescSetor','finMargemSetor','finRankingSetor','finInadimplencia','finTaxaMedia','finScoreExterno'];
+      const CAMPOS_CALCULADOS = ['finReceita','finEbitda','finLucroLiq','finPL','finAtivo','finLucroBruto','finEBIT','finEbitdaDRE','finResultadoFin','finLAIR','finLucroLiqDRE','finAtivoCirc','finAtivoNaoCirc','finAtivoTotal','finPassivoCirc','finPassivoNaoCirc','finPLTotal','finPassivoTotal'];
+      const ALIAS = { finLucroLiq:'finLucroLiqDRE', finPL:'finPLTotal', finEbitda:'finEbitdaDRE', finDepreciacaoDRE:'finDepAmort' };
+
+      const fmt = n => window.__fmtBRL ? window.__fmtBRL(n) : String(n);
+      const parse = v => window.__parseBRL ? window.__parseBRL(v) : (parseFloat(v)||0);
+      const fmtMi = n => 'R$ ' + (n/1e6).toLocaleString('pt-BR',{minimumFractionDigits:1, maximumFractionDigits:1}) + ' mi';
+
+      function setCampo(id, valor){
+        const el = $(id); if(!el) return false;
+        if(el.tagName === 'SELECT'){ el.value = valor; }
+        else if(el.classList.contains('money')){ el.value = (valor===null||valor===undefined||valor==='') ? '' : fmt(Number(valor)); }
+        else { el.value = (valor===null||valor===undefined) ? '' : valor; }
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+        return true;
+      }
+
+      function valorDe(campo){ // aceita {v,c,f,o} ou valor cru
+        if(campo && typeof campo === 'object' && 'v' in campo) return campo.v;
+        return campo;
+      }
+
+      function periodosDoPacote(){
+        const ps = PACOTE.periodos || [];
+        return ps.slice().sort((a,b)=>(a.meta?.ano||0)-(b.meta?.ano||0));
+      }
+
+      function renderPainel(){
+        $('jsonImportPanel').style.display = 'block';
+        $('jiEmpresa').textContent = (PACOTE.empresa && PACOTE.empresa.nome) || 'empresa';
+        const e = PACOTE.empresa || {};
+        $('jiSub').textContent = [e.cnpj ? 'CNPJ '+e.cnpj : '', e.cidade||'', e.socios ? e.socios.length+' sócio(s)' : '', PACOTE.geradoEm ? 'gerado em '+PACOTE.geradoEm : ''].filter(Boolean).join(' · ');
+        const wrap = $('jiPeriodos'); wrap.innerHTML = '';
+        periodosDoPacote().forEach(p => {
+          const m = p.meta || {}; const ano = m.ano;
+          const b = document.createElement('button'); b.type='button';
+          const parcial = m.tipo && m.tipo !== 'anual';
+          b.className = 'btn btn-outline';
+          b.style.cssText = 'padding:6px 12px; font-size:12px;' + (IMPORTADOS[ano] ? 'background:#dcfce7; border-color:#16a34a; color:#166534' : (parcial ? 'background:#fef3c7; border-color:#f59e0b; color:#92400e' : ''));
+          b.innerHTML = (IMPORTADOS[ano] ? '✓ ' : '') + ano + (parcial ? ' <small>('+(m.tipo||'parcial')+' · '+(m.meses||'?')+'m)</small>' : '') + (m.auditado ? ' <small>🔏</small>' : '');
+          b.title = (m.documento||'') + (parcial ? ' — PERÍODO PARCIAL: use com cautela na comparação com anos cheios' : '');
+          b.onclick = () => importarPeriodo(p);
+          wrap.appendChild(b);
+        });
+        const st = $('jiStatus');
+        st.innerHTML = 'Clique em um período para preencher o formulário. Confira, depois clique em <b>💾 Salvar Dados</b>. Repita para cada período (o ano muda sozinho).';
+      }
+
+      function importarPeriodo(p){
+        const m = p.meta || {}; const ano = m.ano;
+        const anoEl = $('finAno');
+        const trocaAno = anoEl && String(anoEl.value) !== String(ano);
+        if(trocaAno){
+          anoEl.value = ano;
+          anoEl.dispatchEvent(new Event('input',{bubbles:true}));
+          anoEl.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        // dá tempo para o sistema principal (re)carregar/limpar o formulário do ano escolhido
+        setTimeout(()=>preencher(p), trocaAno ? 900 : 50);
+      }
+
+      function preencher(p){
+        const m = p.meta || {}; const ano = m.ano;
+        let ok=0, faltam=[], naoConsta=[], interpretados=[];
+        Object.keys(p).forEach(k => {
+          if(k==='meta' || k==='travas' || !k.startsWith('fin')) return;
+          let id = ALIAS[k] || k;
+          if(CAMPOS_CALCULADOS.includes(id)) return; // o sistema calcula
+          const c = p[k]; const val = valorDe(c);
+          if(val === null || val === undefined || val === ''){ if(c && c.c==='x') naoConsta.push(k); return; }
+          if(setCampo(id, val)){ ok++; if(c && c.c==='!') interpretados.push(k+': '+(c.o||'interpretado')); }
+          else faltam.push(k);
+        });
+        // setor
+        if(!p.finSetor && PACOTE.empresa && PACOTE.empresa.setorSistema) setCampo('finSetor', PACOTE.empresa.setorSistema);
+        if(window.espelharResumoBasico) setTimeout(window.espelharResumoBasico, 30);
+        IMPORTADOS[ano] = true;
+        // aviso de período parcial
+        const info = $('finInfo');
+        if(info){
+          let txt = '📥 Período '+ano+' importado do Consultor 360 ('+(m.documento||'documento')+'). '+ok+' campos preenchidos.';
+          if(m.tipo && m.tipo !== 'anual') txt += ' ⚠️ PERÍODO PARCIAL ('+m.meses+' meses, base '+(m.dataBase||'')+'): margens e prazos valem para o período; DL/EBITDA e ROE anualizados só na análise.';
+          if(naoConsta.length) txt += ' Não constam nos documentos: '+naoConsta.map(x=>x.replace(/^fin/,'')).join(', ')+'.';
+          info.textContent = txt; info.style.display='block';
+        }
+        // travas: o que o sistema calculou × o que o documento diz
+        setTimeout(()=>mostrarTravas(p), 250);
+        // notas dos campos interpretados
+        const nt = $('jiNotas');
+        if(nt){
+          if(interpretados.length){ nt.style.display='block'; nt.innerHTML = '<b>Campos somados/interpretados (!):</b><br>' + interpretados.map(x=>'• '+x).join('<br>'); }
+          else nt.style.display='none';
+        }
+        renderPainel();
+        $('jiStatus').innerHTML = '<b>'+ano+'</b> preenchido ('+ok+' campos'+(faltam.length?', sem campo no sistema: '+faltam.join(', '):'')+'). Confira as abas e clique em <b>💾 Salvar Dados</b>. Depois clique no próximo período.';
+      }
+
+      function mostrarTravas(p){
+        const box = $('jiTravas'); if(!box) return;
+        const doc = k => { const c=p[k]; const v=valorDe(c); return (v===null||v===undefined)?null:Number(v); };
+        const sys = id => parse(($(id)||{}).value);
+        const linhas = [
+          ['Lucro Bruto','finLucroBruto','finLucroBruto'],
+          ['EBIT','finEBIT','finEBIT'],
+          ['EBITDA','finEbitda','finEbitdaDRE'],
+          ['Resultado Financeiro','finResultadoFin','finResultadoFin'],
+          ['LAIR','finLAIR','finLAIR'],
+          ['Lucro Líquido','finLucroLiq','finLucroLiqDRE'],
+          ['Ativo Circulante','finAtivoCirc','finAtivoCirc'],
+          ['Ativo Não Circulante','finAtivoNaoCirc','finAtivoNaoCirc'],
+          ['Ativo Total','finAtivoTotal','finAtivoTotal'],
+          ['Passivo Circulante','finPassivoCirc','finPassivoCirc'],
+          ['Passivo Não Circulante','finPassivoNaoCirc','finPassivoNaoCirc'],
+          ['Patrimônio Líquido','finPL','finPLTotal'],
+        ];
+        let html = '<b>🔎 Conferência: sistema × documento</b> (tolerância R$ 2)<table style="width:100%; border-collapse:collapse; margin-top:6px">';
+        let erros=0, n=0;
+        linhas.forEach(([nome,kd,ks])=>{
+          const d = doc(kd); if(d===null) return;
+          const s = sys(ks); n++;
+          const ok = Math.abs(s-d) <= 2; if(!ok) erros++;
+          html += '<tr style="border-top:1px solid #e2e8f0"><td style="padding:3px 4px">'+nome+'</td><td style="text-align:right; padding:3px 4px">'+fmt(s)+'</td><td style="text-align:right; padding:3px 4px; color:#64748b">'+fmt(d)+'</td><td style="text-align:center; padding:3px 4px">'+(ok?'<span style="color:#16a34a; font-weight:700">OK</span>':'<span style="color:#dc2626; font-weight:700">ERRO Δ '+fmt(s-d)+'</span>')+'</td></tr>';
+        });
+        html += '</table>';
+        if(n===0) html += '<div style="color:#64748b">O arquivo não trouxe totais do documento para conferir.</div>';
+        else html += '<div style="margin-top:6px; color:'+(erros?'#dc2626':'#166534')+'">'+(erros? erros+' trava(s) com diferença — confira o lançamento ou o documento.' : 'Todas as '+n+' travas fecharam com o documento.')+'</div>';
+        box.innerHTML = html; box.style.display='block';
+      }
+
+      function carregarArquivo(file){
+        const r = new FileReader();
+        r.onload = () => {
+          try{
+            const j = JSON.parse(r.result);
+            if(!j || !Array.isArray(j.periodos)) throw new Error('Arquivo sem a lista "periodos".');
+            PACOTE = j; IMPORTADOS = {};
+            // alerta se o nome da empresa não bate com a empresa aberta
+            const alvo = ($('finEmpresaAlvo')||{}).textContent || '';
+            const nome = (j.empresa && j.empresa.nome) || '';
+            if(alvo && nome && !alvo.toLowerCase().includes(nome.split(' ')[0].toLowerCase())){
+              $('jiStatus').innerHTML = '⚠️ O arquivo é de <b>'+nome+'</b> e o formulário aberto é de <b>'+alvo+'</b>. Confirme antes de salvar.';
+            }
+            renderPainel();
+            if(alvo && nome && !alvo.toLowerCase().includes(nome.split(' ')[0].toLowerCase())) $('jiStatus').innerHTML = '⚠️ O arquivo é de <b>'+nome+'</b> e o formulário aberto é de <b>'+alvo+'</b>. Confirme antes de salvar. ' + $('jiStatus').innerHTML;
+          }catch(err){
+            const e = $('finErro'); if(e){ e.textContent = 'Não foi possível ler o JSON: '+err.message; e.style.display='block'; }
+          }
+        };
+        r.readAsText(file, 'utf-8');
+      }
+
+      document.addEventListener('DOMContentLoaded', ()=>{
+        const btn = $('btnImportarJson'), inp = $('inputImportJson');
+        if(btn && inp){
+          btn.addEventListener('click', ()=> inp.click());
+          inp.addEventListener('change', ()=>{ if(inp.files && inp.files[0]) carregarArquivo(inp.files[0]); inp.value=''; });
+        }
+        const f = $('jiFechar'); if(f) f.addEventListener('click', ()=>{ $('jsonImportPanel').style.display='none'; });
+        // arrastar e soltar o JSON sobre o modal
+        const modal = $('modalFin');
+        if(modal){
+          modal.addEventListener('dragover', e=>{ e.preventDefault(); });
+          modal.addEventListener('drop', e=>{ const f=e.dataTransfer?.files?.[0]; if(f && /\.json$/i.test(f.name)){ e.preventDefault(); carregarArquivo(f); } });
+        }
+      });
+      window.importarJsonConsultor360 = carregarArquivo;
     })();
   </script>
 
