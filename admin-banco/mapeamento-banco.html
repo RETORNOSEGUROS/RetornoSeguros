@@ -5003,8 +5003,8 @@
         <label class="form-label">📎 Apólices deste seguro</label>
         <div id="produtoAnexosLista" style="display:flex; flex-direction:column; gap:6px;"></div>
         <div id="produtoAnexoVazio" style="font-size:12px; color:#94a3b8; padding:4px 0;">Nenhuma apólice anexada ainda.</div>
-        <input type="file" id="produtoAnexoInput" accept="application/pdf,image/*" multiple style="display:none;" onchange="pxAnexoSel(this)">
-        <button type="button" class="btn-secondary" style="margin-top:8px; width:100%; border-style:dashed; color:#4338ca; border-color:#a5b4fc; background:#eef2ff;" onclick="document.getElementById('produtoAnexoInput').click()">📎 Anexar apólice (PDF ou foto)</button>
+        <input type="file" id="produtoAnexoInput" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="pxAnexoSel(this)">
+        <button type="button" class="btn-secondary" style="margin-top:8px; width:100%; border-style:dashed; color:#4338ca; border-color:#a5b4fc; background:#eef2ff;" onclick="document.getElementById('produtoAnexoInput').click()">📎 Anexar arquivo (PDF, foto, Word ou Excel)</button>
         <div id="produtoAnexoPend" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
         <div style="font-size:11px; color:#94a3b8; margin-top:5px;">Recebeu a apólice por e-mail ou WhatsApp? Anexe aqui — sobe junto quando você salvar.</div>
       </div>
@@ -8904,13 +8904,16 @@
     apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
     authDomain: "retorno-seguros.firebaseapp.com",
     projectId: "retorno-seguros",
-    storageBucket: "retorno-seguros.appspot.com",
+    storageBucket: "retorno-seguros.firebasestorage.app",
     messagingSenderId: "495712392972",
     appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
   };
   if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
   const auth = firebase.auth();
+  // Uploads de apólice: sem isso o SDK insiste por até 10 min quando o Storage está
+  // inacessível e o salvar fica preso — com 30s a falha aparece e o resto é salvo.
+  try { if (firebase.storage) { const _st = firebase.storage(); _st.setMaxUploadRetryTime(30000); _st.setMaxOperationRetryTime(30000); } } catch (e) {}
 
   // Contexto global do usuário logado
   const CTX = {
@@ -11207,7 +11210,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '236';
+  const APP_VERSAO = '237';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -25788,13 +25791,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       </div>`).join('');
   }
 
+  // PDF e foto (apólices) + Word e Excel (relação de veículos, locais de risco, vidas).
+  // Alguns navegadores mandam type vazio para .docx/.xlsx — a extensão também vale.
+  function _tipoAnexoOk(f) {
+    const t = f.type || '';
+    if (t === 'application/pdf' || t.startsWith('image/')) return true;
+    if (t === 'application/msword' || t === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return true;
+    if (t === 'application/vnd.ms-excel' || t === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return true;
+    return /\.(pdf|doc|docx|xls|xlsx|png|jpe?g|heic|webp)$/i.test(f.name || '');
+  }
   function pxAnexoSel(input) {
     const files = [...(input.files || [])];
     for (const f of files) {
-      if (PX_ANEXOS_SALVOS.length + PX_ANEXOS_NOVOS.length >= 6) { alert('Máximo de 6 apólices por seguro.'); break; }
+      if (PX_ANEXOS_SALVOS.length + PX_ANEXOS_NOVOS.length >= 6) { alert('Máximo de 6 anexos por seguro.'); break; }
       if (f.size > 15 * 1024 * 1024) { alert(`"${f.name}" passa de 15 MB — envie um arquivo menor.`); continue; }
-      const tipoOk = f.type === 'application/pdf' || (f.type || '').startsWith('image/');
-      if (!tipoOk) { alert(`"${f.name}" não é PDF nem imagem.`); continue; }
+      if (!_tipoAnexoOk(f)) { alert(`"${f.name}" não é um tipo aceito — envie PDF, foto, Word ou Excel.`); continue; }
       PX_ANEXOS_NOVOS.push(f);
     }
     input.value = '';
@@ -25825,6 +25836,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.pxAnexoRemover = pxAnexoRemover;
 
+  // Rede de segurança: nenhum arquivo pode prender o salvamento — passou do tempo,
+  // o anexo falha sozinho e o resto do produto é salvo normalmente.
+  const _pxComTimeout = (promessa, ms) => Promise.race([
+    promessa,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio do arquivo')), ms))
+  ]);
   // Sobe os arquivos pendentes e devolve os metadados para gravar no produto
   async function pxSubirAnexos(empresaId, produtoId) {
     if (!PX_ANEXOS_NOVOS.length) return { novos: [], falhas: [] };
@@ -25833,8 +25850,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     for (const f of PX_ANEXOS_NOVOS) {
       try {
         const caminho = `mb_apolices/${empresaId}/${produtoId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_')}`;
-        const snap = await firebase.storage().ref(caminho).put(f, { contentType: f.type || 'application/octet-stream' });
-        const url = await snap.ref.getDownloadURL();
+        const snap = await _pxComTimeout(firebase.storage().ref(caminho).put(f, { contentType: f.type || 'application/octet-stream' }), 120000);
+        const url = await _pxComTimeout(snap.ref.getDownloadURL(), 20000);
         novos.push({ nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(),
                      via: 'painel', porUid: CTX.uid, porNome: CTX.nome });
       } catch (err) { console.warn('upload anexo', f.name, err); falhas.push(f.name); }
