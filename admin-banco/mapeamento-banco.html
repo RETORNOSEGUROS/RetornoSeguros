@@ -4929,6 +4929,25 @@
 </div>
 
 <!-- MODAL: MAPEAR / EDITAR PRODUTO -->
+<!-- Pré-visualização de anexo (abre o arquivo DENTRO do sistema, antes de baixar) -->
+<div class="cad-modal" id="modalAnexoPreview">
+  <div class="cad-modal-bg" onclick="fecharAnexoPreview()"></div>
+  <div class="cad-modal-panel" style="max-width: 860px;">
+    <div class="cad-modal-head">
+      <h2 id="apvNome" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Documento</h2>
+      <p id="apvMeta">—</p>
+    </div>
+    <div class="cad-modal-body" style="max-height: 72vh; overflow:auto;">
+      <div id="apvConteudo"></div>
+    </div>
+    <div class="cad-modal-foot" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+      <button type="button" class="btn-secondary" onclick="fecharAnexoPreview()">Fechar</button>
+      <a id="apvAbrir" href="#" target="_blank" rel="noopener" class="btn-secondary" style="text-decoration:none;">↗ Abrir em nova aba</a>
+      <a id="apvBaixar" href="#" download class="btn-primary" style="text-decoration:none;">⬇ Baixar</a>
+    </div>
+  </div>
+</div>
+
 <div class="cad-modal" id="modalProduto">
   <div class="cad-modal-bg" onclick="document.getElementById('modalProduto').classList.remove('open')"></div>
   <div class="cad-modal-panel" style="max-width: 520px;">
@@ -7675,7 +7694,7 @@
           </div>
           ${detalhes.length ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">${detalhes.join(' · ')}</div>` : ''}
           ${_axAnexos.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;">
-            ${_axAnexos.map(ax => `<a href="${ax.url}" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Apólice enviada pelo cliente — clique para abrir" style="display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; color:#3730a3; background:#eef2ff; border:1px solid #c7d2fe; border-radius:100px; padding:2px 9px; text-decoration:none; max-width:230px;">📎 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${String(ax.nome || 'apólice').replace(/</g, '&lt;')}</span></a>`).join('')}
+            ${_axAnexos.map(ax => `<span onclick="event.stopPropagation(); abrirAnexoPreview(this.getAttribute('data-u'),this.getAttribute('data-n'),this.getAttribute('data-v'),this.getAttribute('data-e'))" data-u="${_axAttr(ax.url)}" data-n="${_axAttr(ax.nome || 'apólice')}" data-v="${_axAttr(ax.via || '')}" data-e="${_axAttr(ax.em || '')}" title="Clique para pré-visualizar sem baixar" style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; color:#3730a3; background:#eef2ff; border:1px solid #c7d2fe; border-radius:100px; padding:2px 9px; max-width:230px;">📎 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_axAttr(ax.nome || 'apólice')}</span></span>`).join('')}
           </div>` : ''}
           ${(dadosProduto.apolices || []).length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:5px;">
             ${dadosProduto.apolices.map(apx => {
@@ -11210,7 +11229,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '237';
+  const APP_VERSAO = '238';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -25766,6 +25785,49 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   let PX_ANEXOS_SALVOS = [];   // já no banco
   let PX_ANEXOS_NOVOS = [];    // escolhidos agora, sobem ao salvar
 
+  // Escapa valor para caber num atributo HTML (usado nos chips de anexo).
+  const _axAttr = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const _axExt = nome => ((nome || '').split('.').pop() || '').toLowerCase();
+
+  // Pré-visualização do anexo DENTRO do sistema (antes de baixar para a máquina).
+  // PDF e imagem abrem no visualizador do próprio navegador (isolado); Word/Excel
+  // não têm visualização nativa — mostramos os dados do arquivo e o alerta de macros.
+  function abrirAnexoPreview(url, nome, via, em) {
+    const ext = _axExt(nome);
+    const cont = document.getElementById('apvConteudo');
+    const esc = t => String(t == null ? '' : t).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    document.getElementById('apvNome').textContent = nome || 'Documento';
+    const viaTxt = via === 'link_mapeamento' ? 'enviada pelo cliente' : (via === 'painel' ? 'anexada pela equipe' : '');
+    document.getElementById('apvMeta').textContent = [viaTxt, em ? new Date(em).toLocaleDateString('pt-BR') : ''].filter(Boolean).join(' · ') || '—';
+    document.getElementById('apvAbrir').href = url;
+    const bx = document.getElementById('apvBaixar');
+    bx.href = url; bx.setAttribute('download', nome || 'documento');
+    if (ext === 'pdf') {
+      cont.innerHTML = `<iframe src="${esc(url)}#toolbar=1" style="width:100%; height:64vh; border:1px solid #e2e8f0; border-radius:8px; background:#fff;"></iframe>`;
+    } else if (['png', 'jpg', 'jpeg', 'webp', 'heic', 'gif', 'bmp'].includes(ext)) {
+      cont.innerHTML = `<div style="text-align:center;"><img src="${esc(url)}" alt="${esc(nome)}" style="max-width:100%; max-height:64vh; border-radius:8px;"></div>`;
+    } else {
+      const ehExcel = ext === 'xlsx' || ext === 'xls';
+      const ehWord = ext === 'docx' || ext === 'doc';
+      const rotulo = ehWord ? 'Este documento do Word' : (ehExcel ? 'Esta planilha do Excel' : 'Este arquivo');
+      cont.innerHTML = `<div style="text-align:center; padding:30px 20px; color:#475569;">
+        <div style="font-size:44px; margin-bottom:10px;">${ehExcel ? '📊' : (ehWord ? '📝' : '📎')}</div>
+        <div style="font-weight:700; font-size:15px; margin-bottom:6px;">${esc(nome)}</div>
+        <div style="font-size:13px; max-width:440px; margin:0 auto;">${rotulo} não tem pré-visualização aqui no navegador — só PDF e imagem abrem direto.</div>
+        <div style="font-size:12.5px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:11px 13px; max-width:470px; margin:16px auto 0; text-align:left;">
+          ⚠ Ao baixar e abrir no Word/Excel, <strong>não clique em "Habilitar edição/conteúdo"</strong> se o programa pedir — é aí que uma macro maliciosa rodaria. Para ver sem risco nenhum, suba o arquivo no seu Google Drive e abra no Google Planilhas/Docs: lá ele abre isolado, sem executar nada na sua máquina.
+        </div>
+      </div>`;
+    }
+    document.getElementById('modalAnexoPreview').classList.add('open');
+  }
+  window.abrirAnexoPreview = abrirAnexoPreview;
+  function fecharAnexoPreview() {
+    const m = document.getElementById('modalAnexoPreview');
+    if (m) { m.classList.remove('open'); document.getElementById('apvConteudo').innerHTML = ''; } // limpa o iframe
+  }
+  window.fecharAnexoPreview = fecharAnexoPreview;
+
   function renderPxAnexos() {
     const lista = document.getElementById('produtoAnexosLista');
     const vazio = document.getElementById('produtoAnexoVazio');
@@ -25775,9 +25837,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     lista.innerHTML = PX_ANEXOS_SALVOS.map((a, i) => {
       const viaTxt = a.via === 'link_mapeamento' ? 'enviada pelo cliente' : (a.porNome ? 'anexada por ' + _esc(a.porNome) : 'anexada pela equipe');
       return `<div style="display:flex; align-items:center; gap:8px; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:7px 11px; font-size:12.5px;">
-        <a href="${_esc(a.url)}" target="_blank" rel="noopener" style="flex:1; min-width:0; color:#3730a3; text-decoration:none; display:flex; align-items:center; gap:7px;">
+        <span onclick="abrirAnexoPreview(this.getAttribute('data-u'),this.getAttribute('data-n'),this.getAttribute('data-v'),this.getAttribute('data-e'))" data-u="${_axAttr(a.url)}" data-n="${_axAttr(a.nome || 'apólice')}" data-v="${_axAttr(a.via || '')}" data-e="${_axAttr(a.em || '')}" title="Clique para pré-visualizar sem baixar" style="flex:1; min-width:0; cursor:pointer; color:#3730a3; display:flex; align-items:center; gap:7px;">
           📄 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_esc(a.nome || 'apólice')}</span>
-        </a>
+        </span>
         <span style="color:#94a3b8; font-size:10.5px; white-space:nowrap;">${viaTxt}${a.em ? ' · ' + new Date(a.em).toLocaleDateString('pt-BR') : ''}</span>
         ${CTX.isAdmin ? `<span onclick="pxAnexoRemover(${i})" title="Remover esta apólice" style="cursor:pointer; color:#cbd5e1; font-weight:800;">✕</span>` : ''}
       </div>`;
