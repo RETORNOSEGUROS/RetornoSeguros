@@ -123,21 +123,24 @@
     .hub-check path{ stroke:var(--verde); stroke-width:4; fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:48; stroke-dashoffset:48; animation:traco .35s .5s forwards; }
     .hub-top h1{ font-size:23px; letter-spacing:-.4px; margin-bottom:8px; }
     .hub-top p{ font-size:14.5px; color:var(--b70); line-height:1.5; max-width:340px; margin:0 auto; }
-    .hub-card{ border:1px solid var(--vidro-bd); border-radius:16px; padding:14px 15px; margin-bottom:11px; background:var(--vidro); }
-    .hub-head{ display:flex; align-items:center; gap:12px; }
-    .hub-head .ic{ width:44px; height:44px; border-radius:13px; display:flex; align-items:center; justify-content:center; font-size:23px; flex:0 0 auto; background:rgba(255,255,255,.08); }
-    .hub-head .nm{ font-weight:800; font-size:15.5px; }
-    .hub-head .dt{ font-size:12px; color:var(--b70); margin-top:1px; }
-    .tag{ display:inline-block; font-size:11px; font-weight:800; padding:2px 9px; border-radius:100px; margin-top:3px; }
+    .hub-card{ border:1px solid var(--vidro-bd); border-radius:16px; padding:15px 16px; margin-bottom:12px; background:var(--vidro); }
+    .hub-head{ display:flex; align-items:center; gap:13px; }
+    .hub-head .ic{ width:50px; height:50px; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:27px; flex:0 0 auto; background:rgba(255,255,255,.1); }
+    .hub-nomewrap{ min-width:0; }
+    .hub-head .nm{ font-weight:800; font-size:18.5px; letter-spacing:-.3px; line-height:1.15; color:#fff; }
+    .hub-head .dt{ font-size:12px; color:var(--b70); margin-top:3px; }
+    .hub-div{ height:1px; background:var(--vidro-bd); margin:14px 0 0; }
+    .hub-label{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--b50); margin:12px 0 2px; }
+    .tag{ display:inline-block; font-size:11px; font-weight:800; padding:2px 9px; border-radius:100px; margin-top:5px; }
     .tag-tem{ background:rgba(52,211,153,.18); color:var(--verde); }
     .tag-cotar{ background:rgba(251,191,36,.18); color:var(--ouro2); }
     .tag-nao{ background:rgba(255,255,255,.1); color:var(--b70); }
     .hub-linha{ display:flex; align-items:center; gap:11px; padding:11px 12px; border-radius:12px; cursor:pointer; background:rgba(255,255,255,.05); border:1px solid var(--vidro-bd); margin-top:8px; transition:transform .12s; }
     .hub-linha:active{ transform:scale(.98); }
     .hub-linha.destaque{ background:rgba(251,191,36,.12); border-color:rgba(251,191,36,.35); }
-    .hub-linha .hl-ic{ font-size:20px; flex:0 0 auto; }
+    .hub-linha .hl-ic{ font-size:19px; flex:0 0 auto; }
     .hl-txt{ flex:1; min-width:0; }
-    .hl-t{ font-size:14px; font-weight:800; color:#fff; }
+    .hl-t{ font-size:13.5px; font-weight:700; color:#e9e7f7; }
     .hub-linha.destaque .hl-t{ color:var(--ouro2); }
     .hl-s{ font-size:11.5px; color:var(--b70); margin-top:1px; line-height:1.35; }
     .hl-seta{ font-size:22px; color:var(--b50); font-weight:700; flex:0 0 auto; }
@@ -384,6 +387,7 @@
       if (ANEXOS[prodId].length >= 3) { alert('Máximo de 3 anexos por seguro.'); break; }
       if (f.size > 15 * 1024 * 1024) { alert('"' + f.name + '" passa de 15 MB — envie um arquivo menor.'); continue; }
       if (!tipoAnexoOk(f)) { alert('"' + f.name + '" não é um tipo aceito — envie PDF, foto, Word ou Excel.'); continue; }
+      if (ANEXOS[prodId].some(x => x.name === f.name && x.size === f.size)) continue; // já anexado nesta sessão
       ANEXOS[prodId].push(f);
     }
     input.value = '';
@@ -411,6 +415,18 @@
       } catch (e) { console.warn('anexo falhou', f.name, e); FALHAS_ANEXO.push(f.name); }
     }
     return out;
+  }
+  // Junta os anexos novos aos já existentes SEM duplicar por nome (idempotente:
+  // reenviar "apolice.pdf" substitui, não acumula). Devolve o array final p/ gravar.
+  async function anexosMesclados(empresaId, prodId, novos) {
+    let existentes = [];
+    try {
+      const cur = await db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(prodId).get();
+      if (cur.exists && Array.isArray(cur.data().apoliceAnexos)) existentes = cur.data().apoliceAnexos;
+    } catch (e) {}
+    const nomesNovos = new Set(novos.map(a => (a.nome || '').toLowerCase()));
+    const mantidos = existentes.filter(a => a && a.url && !nomesNovos.has((a.nome || '').toLowerCase()));
+    return mantidos.concat(novos);
   }
 
   /* ============ dinheiro ============ */
@@ -646,7 +662,7 @@
             const _axCong = await uploadAnexos(p.id);
             if (_axCong.length) {
               await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set({
-                apoliceAnexos: firebase.firestore.FieldValue.arrayUnion.apply(firebase.firestore.FieldValue, _axCong),
+                apoliceAnexos: await anexosMesclados(LINK.empresaId, p.id, _axCong),
                 apoliceAnexadaEm: firebase.firestore.FieldValue.serverTimestamp(),
                 apoliceAnexadaViaLink: LINK_ID
               }, { merge: true });
@@ -681,7 +697,7 @@
           dados.valorAnualPago = r.valorAnual || null;
           dados.observacoes = r.observacoes || null;
           const _anexosMeta = await uploadAnexos(p.id);
-          if (_anexosMeta.length) { dados.apoliceAnexos = firebase.firestore.FieldValue.arrayUnion.apply(firebase.firestore.FieldValue, _anexosMeta); }
+          if (_anexosMeta.length) { dados.apoliceAnexos = await anexosMesclados(LINK.empresaId, p.id, _anexosMeta); }
         } else {
           dados.tem = false; dados.naoTemProduto = true;
           if (r.interesse === 'sim') { dados.statusVisual = 'cotando'; dados.interesseCotar = true; cotacoesParaCriar.push(p); }
@@ -811,17 +827,19 @@
     if (cat){
       var beneficio = /dental|saude|sa[úu]de|vida|previd/i.test(p.id + ' ' + (p.nome||''));
       var estudoSub = beneficio ? 'conte sua necessidade e receba uma proposta sob medida' : 'queremos entender sua operação e fazer um estudo sob medida';
+      var linhas = '';
       if (cat.arq){
-        acoes += '<div class="hub-linha" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">'+
+        linhas += '<div class="hub-linha" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">'+
           '<div class="hl-ic">📖</div><div class="hl-txt"><div class="hl-t">Conhecer o produto</div><div class="hl-s">veja as coberturas de um jeito simples</div></div><div class="hl-seta">›</div></div>';
       }
       if (cat.arqQ){
-        acoes += '<div class="hub-linha destaque" onclick="abrirDestino(\''+p.id+'\',\'questionario\')">'+
+        linhas += '<div class="hub-linha destaque" onclick="abrirDestino(\''+p.id+'\',\'questionario\')">'+
           '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">Quero um estudo personalizado</div><div class="hl-s">'+estudoSub+'</div></div><div class="hl-seta">›</div></div>';
       }
+      if (linhas) acoes = '<div class="hub-div"></div><div class="hub-label">O que você quer fazer com este seguro?</div>' + linhas;
     }
     return '<div class="hub-card"><div class="hub-head"><div class="ic">'+(p.icon||'📦')+'</div>'+
-      '<div><div class="nm">'+p.nome+'</div>'+tag+det+'</div></div>'+acoes+'</div>';
+      '<div class="hub-nomewrap"><div class="nm">'+p.nome+'</div>'+tag+det+'</div></div>'+acoes+'</div>';
   }
 
   function sucesso(){
