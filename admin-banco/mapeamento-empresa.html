@@ -237,7 +237,8 @@
       <div class="card-header">🎯 Seguros que a empresa tem</div>
       <div class="card-body">
         <div style="background: #fffbeb; border: 1px solid #fcd34d; padding: 12px 14px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; color: #78350f;">
-          ℹ️ Para cada seguro, marque <strong>SIM</strong> ou <strong>NÃO</strong>. Se sim, informe o <strong>vencimento</strong> — e, se preferir, <strong>anexe a apólice</strong> que nós extraímos os detalhes para você.
+          ℹ️ Para cada seguro, marque <strong>SIM</strong> ou <strong>NÃO</strong>. Se sim, informe o <strong>vencimento</strong> — e, se preferir, <strong>anexe a apólice</strong> que nós extraímos os detalhes para você.<br>
+          <span style="display:inline-block; margin-top:6px;">📎 Nos seguros marcados como <strong>“já informado”</strong> você não precisa responder de novo, mas pode anexar a apólice se tiver em mãos.</span>
         </div>
         <div id="produtosWrap"></div>
       </div>
@@ -263,12 +264,15 @@
       apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
       authDomain: "retorno-seguros.firebaseapp.com",
       projectId: "retorno-seguros",
-      storageBucket: "retorno-seguros.appspot.com",
+      storageBucket: "retorno-seguros.firebasestorage.app",
       messagingSenderId: "979966947706",
       appId: "1:979966947706:web:b8b6a8a85d0a3f9e6f9f9e"
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+    // Uploads: sem isso o SDK insiste por até 10 min quando o Storage está inacessível
+    // e o botão fica preso no "Enviando..." — com 30s a falha aparece e o envio segue sem o anexo.
+    try { const _st = firebase.storage(); _st.setMaxUploadRetryTime(30000); _st.setMaxOperationRetryTime(30000); } catch (e) {}
 
     // Espelho dos defaults do sistema — o valor real vem de mb_config/pontos
     let PONTOS_CFG = { mapear_produto: 2, mapear_extra_link: 1 };
@@ -350,6 +354,13 @@
           }
         } catch (e) { console.warn('ramos dinâmicos falhou, usando padrão', e); }
 
+        // Empresa confirmada como SEM SÓCIOS no raio-x: os seguros voltados a sócios
+        // não aparecem para o cliente (nem congelados) — evita o "por que estão me
+        // oferecendo seguro de sócios se eu disse que não tem?".
+        if (EMPRESA.semSociosConfirmado === true && !((EMPRESA.socios || []).length)) {
+          PRODUTOS = PRODUTOS.filter(p => !(p.id === 'vida-socios' || p.id === 'saude-socios' || /s[óo]cios?/i.test(p.nome || '')));
+        }
+
         // Pontuação vem da configuração da corretora (mesma fonte do sistema do banco)
         try {
           const cfgSnap = await db.collection('mb_config').doc('pontos').get();
@@ -392,12 +403,20 @@
         // CONGELADO: já mapeado no sistema. Mostra só "já informado" — nenhum detalhe
         // (seguradora, valor, vencimento) trafega para esta página pública.
         if (PROD_BLOQUEADOS.has(p.id)) {
+          // Mapeamento travado (já informado antes), MAS a apólice segue aceita:
+          // muita gente responde o questionário sem o documento em mãos.
           return `
         <div class="produto-box congelado" id="box-${p.id}">
           <div class="produto-head" style="cursor: default;">
             <span class="produto-icon">${p.icon}</span>
             <span class="produto-label">${p.nome}</span>
             <span class="badge-congelado">✓ Já informado</span>
+          </div>
+          <div style="padding: 0 18px 14px;">
+            <input type="file" id="anexo-${p.id}" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="anexoSel('${p.id}', this)">
+            <button type="button" class="anexo-btn" onclick="document.getElementById('anexo-${p.id}').click()">📎 Anexar apólice ou planilha deste seguro</button>
+            <span style="font-size:11px; color:#94a3b8; margin-left:8px;">opcional — PDF, foto, Word ou Excel</span>
+            <div id="anexoLista-${p.id}"></div>
           </div>
         </div>`;
         }
@@ -437,10 +456,10 @@
                 <label for="naosei-${p.id}" style="text-transform:none; font-weight:600; cursor:pointer; color:#92400e;">Não sei o vencimento de cabeça — sigam sem ele (ou vejam na apólice anexada)</label>
               </div>
               <div class="full">
-                <label>Apólice <small style="color:#94a3b8; font-weight:400; text-transform:none;">(opcional — PDF ou foto)</small></label>
-                <input type="file" id="anexo-${p.id}" accept="application/pdf,image/*" multiple style="display:none;" onchange="anexoSel('${p.id}', this)">
-                <button type="button" class="anexo-btn" onclick="document.getElementById('anexo-${p.id}').click()">📎 Anexar apólice</button>
-                <span style="font-size:11px; color:#94a3b8; margin-left:8px; text-transform:none; font-weight:500;">caso queira anexar, nós cuidamos do resto</span>
+                <label>Apólice e documentos <small style="color:#94a3b8; font-weight:400; text-transform:none;">(opcional — PDF, foto, Word ou Excel)</small></label>
+                <input type="file" id="anexo-${p.id}" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="anexoSel('${p.id}', this)">
+                <button type="button" class="anexo-btn" onclick="document.getElementById('anexo-${p.id}').click()">📎 Anexar apólice ou planilha</button>
+                <span style="font-size:11px; color:#94a3b8; margin-left:8px; text-transform:none; font-weight:500;">vale planilha de veículos, locais ou vidas — nós cuidamos do resto</span>
                 <div id="anexoLista-${p.id}"></div>
               </div>
               <div class="full">
@@ -468,17 +487,25 @@
       });
     }
 
-    // ===== ANEXOS DE APÓLICE (opcional) =====
+    // ===== ANEXOS DE APÓLICE E DOCUMENTOS (opcional) =====
     const ANEXOS = {};            // { prodId: File[] }
     const FALHAS_ANEXO = [];
+    // PDF e foto (apólices) + Word e Excel (relações de veículos, locais de risco, vidas).
+    // Alguns navegadores mandam type vazio para .docx/.xlsx — por isso a extensão também vale.
+    function tipoAnexoOk(f) {
+      const t = f.type || '';
+      if (t === 'application/pdf' || t.startsWith('image/')) return true;
+      if (t === 'application/msword' || t === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return true;
+      if (t === 'application/vnd.ms-excel' || t === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return true;
+      return /\.(pdf|doc|docx|xls|xlsx|png|jpe?g|heic|webp)$/i.test(f.name || '');
+    }
     function anexoSel(prodId, input) {
       const files = [...(input.files || [])];
       ANEXOS[prodId] = ANEXOS[prodId] || [];
       for (const f of files) {
         if (ANEXOS[prodId].length >= 3) { alert('Máximo de 3 anexos por seguro.'); break; }
         if (f.size > 15 * 1024 * 1024) { alert(`"${f.name}" passa de 15 MB — envie um arquivo menor.`); continue; }
-        const tipoOk = f.type === 'application/pdf' || (f.type || '').startsWith('image/');
-        if (!tipoOk) { alert(`"${f.name}" não é PDF nem imagem.`); continue; }
+        if (!tipoAnexoOk(f)) { alert(`"${f.name}" não é um tipo aceito — envie PDF, foto, Word ou Excel.`); continue; }
         ANEXOS[prodId].push(f);
       }
       input.value = '';
@@ -495,14 +522,20 @@
     }
     function anexoRm(prodId, i) { (ANEXOS[prodId] || []).splice(i, 1); renderAnexos(prodId); }
     window.anexoRm = anexoRm;
+    // Rede de segurança: nenhum arquivo pode prender o envio — se passar do tempo,
+    // o anexo falha sozinho e as RESPOSTAS seguem normalmente (o aviso de falha aparece no fim).
+    const _comTimeout = (promessa, ms) => Promise.race([
+      promessa,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio do arquivo')), ms))
+    ]);
     async function uploadAnexos(prodId) {
       const files = ANEXOS[prodId] || [];
       const out = [];
       for (const f of files) {
         try {
           const path = `mb_apolices/${LINK.empresaId}/${prodId}/${Date.now()}_${f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_')}`;
-          const snap = await firebase.storage().ref(path).put(f, { contentType: f.type || 'application/octet-stream' });
-          const url = await snap.ref.getDownloadURL();
+          const snap = await _comTimeout(firebase.storage().ref(path).put(f, { contentType: f.type || 'application/octet-stream' }), 120000);
+          const url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
           out.push({ nome: f.name, url, tamanho: f.size, em: new Date().toISOString(), via: 'link_mapeamento' });
         } catch (e) { console.warn('anexo falhou', f.name, e); FALHAS_ANEXO.push(f.name); }
       }
@@ -635,8 +668,13 @@
         let temPeloMenosUm = false;
         let pendencias = [];
 
+        // Anexo em produto já mapeado conta como envio válido (o cliente pode ter
+        // vindo só para mandar a apólice que faltava).
+        const _anexosEmCongelado = [...PROD_BLOQUEADOS].some(id => (ANEXOS[id] || []).length > 0);
+        if (_anexosEmCongelado) temPeloMenosUm = true;
+
         for (const p of PRODUTOS) {
-          if (PROD_BLOQUEADOS.has(p.id)) continue; // congelado: nunca coleta nem valida
+          if (PROD_BLOQUEADOS.has(p.id)) continue; // congelado: mapeamento não muda
           const r = respostas[p.id];
           if (!r || !r.tem) {
             pendencias.push(p.nome);
@@ -676,7 +714,22 @@
         const produtosSalvos = [];   // ids efetivamente gravados nesta resposta
         const produtosPontuar = [];  // só produtos SEM mapeamento prévio geram pontos
         for (const p of PRODUTOS) {
-          if (PROD_BLOQUEADOS.has(p.id)) continue; // congelado: nada a gravar
+          // Congelado: o mapeamento fica como está, mas se o cliente anexou a apólice
+          // ela é gravada mesmo assim (só o campo dos anexos — nada mais é tocado).
+          if (PROD_BLOQUEADOS.has(p.id)) {
+            if ((ANEXOS[p.id] || []).length) {
+              const _axCong = await uploadAnexos(p.id);
+              if (_axCong.length) {
+                await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set({
+                  apoliceAnexos: firebase.firestore.FieldValue.arrayUnion.apply(firebase.firestore.FieldValue, _axCong),
+                  apoliceAnexadaEm: firebase.firestore.FieldValue.serverTimestamp(),
+                  apoliceAnexadaViaLink: LINK_ID
+                }, { merge: true });
+                respostas[p.id] = Object.assign({}, respostas[p.id], { somenteAnexo: true, anexos: _axCong.map(a => ({ nome: a.nome, url: a.url })) });
+              }
+            }
+            continue;
+          }
           const r = respostas[p.id];
           if (!r || !r.tem) continue;
           if (r.preMarcadoNao === true && r.tem === 'nao' && !r.interesse) continue; // intocado: mantém como está
