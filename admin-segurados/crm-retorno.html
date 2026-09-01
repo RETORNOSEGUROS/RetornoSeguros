@@ -1327,6 +1327,7 @@ function kanbanCard(l,col){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       ${orig?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);font-size:.66rem">${esc(orig)}</span>`:'<span></span>'}
       <div onclick="event.stopPropagation()" style="display:flex;gap:2px">
+        <button class="kb-mv" title="Excluir este negócio do funil" style="color:var(--danger)" onclick="excluirNegocio('${l.id}')"><i class="fas fa-trash"></i></button>
         <button class="kb-mv" title="Ler cotações e montar o orçamento" onclick="ppDoLead('${l.id}')"><i class="fas fa-scale-balanced"></i></button>
         ${idx>0?`<button class="kb-mv" title="Voltar fase" onclick="moverFase('${l.id}','${KANBAN[idx-1].key}')"><i class="fas fa-chevron-left"></i></button>`:''}
         ${idx<KANBAN.length-1?`<button class="kb-mv" title="Avançar fase" onclick="moverFase('${l.id}','${KANBAN[idx+1].key}')"><i class="fas fa-chevron-right"></i></button>`:''}
@@ -2599,6 +2600,48 @@ VIEWS.clientes=function(){
 };
 function fichaCliente(id){ return abrirLead(id); }
 let FICHA_LEAD=null;
+/* ficha do lead: bloco com tudo que a pessoa respondeu na cotação do site */
+function leadCotacaoSite(c){
+  if(!(c.veiculo||c.utilizacao||c.etapaSite||c.temSeguro)) return '';
+  const M={
+    uso:{particular:'Particular',profissional:'Profissional',transporte:'Aplicativo/táxi'},
+    cond:{eu:'O próprio',outro:'Outra pessoa'},
+    gar:{fechada:'Garagem fechada',aberta:'Estacionamento aberto',rua:'Na rua'},
+    reb:{'200km':'até 200 km','400km':'até 400 km','600km':'até 600 km',ilimitado:'km ilimitado'},
+    ter:{'100mil':'R$ 100 mil','200mil':'R$ 200 mil','300mil':'R$ 300 mil','500mil':'R$ 500 mil','800mil':'R$ 800 mil'},
+    cr:{nao:'não quer','7dias':'7 diárias','15dias':'15 diárias','30dias':'30 diárias'},
+    fr:{basica:'Básica',reduzida:'Reduzida (50%)','super-reduzida':'Super reduzida (25%)'},
+    ex:{vidros:'Vidros',martelinho:'Martelinho',parachoque:'Para-choque',pintura:'Pintura e lataria',pneu:'Pneu, roda e suspensão'} };
+  const ACAO={salvou_whatsapp:['deixou o WhatsApp','var(--info)'],em_preenchimento:['respondendo o perfil','var(--info)'],
+    saiu_da_pagina:['saiu da página no meio','var(--warn)'],completou_perfil:['completou o perfil ✓','var(--ok)'],
+    whatsapp_direto:['completou e chamou no WhatsApp ★','var(--ok)']};
+  const ETAPA={mesVencimento:'mês de vencimento',garagem:'pernoite',bonus:'bônus',sinistro:'sinistro',utilizacao:'uso do carro',
+    condutor:'condutor',idade:'idade',reboque:'guincho',terceiros:'terceiros',carroReserva:'carro reserva',extras:'assistências',
+    pneu:'pneu/roda',vidros:'vidros',martelinho:'martelinho',parachoque:'para-choque',pintura:'pintura',franquia:'franquia',
+    whatsapp:'WhatsApp',resumo:'resumo final'};
+  const f=(k,v)=>v?`<div class="mov-f"><div class="k">${k}</div><div class="v">${v}</div></div>`:'';
+  const ac=ACAO[c.acao]; const ext=Array.isArray(c.extras)&&c.extras.length?c.extras.map(e=>M.ex[e]||e).join(', '):null;
+  return `<div style="background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+      <div style="font-weight:700;font-size:.85rem"><i class="fas fa-globe" style="color:var(--brand)"></i> Cotação do site — o que a pessoa respondeu</div>
+      ${ac?`<span class="badge" style="background:${ac[1]};color:#fff;font-size:.68rem">${ac[0]}${c.acao!=='completou_perfil'&&c.acao!=='whatsapp_direto'&&c.etapaSite?` · parou em: ${ETAPA[c.etapaSite]||esc(c.etapaSite)}`:''}</span>`:''}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 14px">
+      ${f('Veículo',esc(c.veiculo)+(c.anoVeiculo?' · '+esc(c.anoVeiculo):''))}
+      ${f('Valor FIPE',esc(c.valorFipe))}
+      ${f('Tem seguro hoje',c.temSeguro==='sim'?'Sim'+(c.mesVencimento?' · vence em '+esc(c.mesVencimento):''):(c.temSeguro==='nao'?'Não':null))}
+      ${f('Uso',M.uso[c.utilizacao])}
+      ${f('Condutor',(M.cond[c.condutor]||'')+(c.idadeCondutor?' · '+esc(c.idadeCondutor):''))}
+      ${f('Pernoite',(M.gar[c.pernoite]||'')+(c.cep?' · CEP '+esc(c.cep):''))}
+      ${f('Bônus',c.bonus==='nao-sei'?'não sabe':(c.bonus?'classe '+esc(c.bonus):null))}
+      ${f('Sinistro 12m',c.sinistro==='sim'?'teve':(c.sinistro==='nao'?'não teve':null))}
+      ${f('Guincho',M.reb[c.reboque])}
+      ${f('Terceiros',M.ter[c.terceiros])}
+      ${f('Carro reserva',M.cr[c.carroReserva])}
+      ${f('Franquia',M.fr[c.franquia])}
+      ${ext?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Assistências que quer</div><div class="v">${esc(ext)}</div></div>`:''}
+    </div></div>`;
+}
 function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; const aps=apolicesDoCliente(c);
   const fase=faseDoLead(c); const ehCli=isClienteLead(c);
   const opt=(sel,arr,val)=>arr.map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v}</option>`).join('');
@@ -2634,6 +2677,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
         <div class="form-row" style="margin:0"><label>Origem</label><select onchange="setLeadCampo('${c.id}','origem',this.value)"><option value="">—</option>${opt('',Object.entries(ORIGENS),c.origem)}</select></div>
       </div>
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
+      ${leadCotacaoSite(c)}
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
       ${aps.length?aps.slice().sort((x,y)=>{
           const ax=apEhAtiva(x)?0:1, ay=apEhAtiva(y)?0:1; if(ax!==ay) return ax-ay;
@@ -2947,11 +2991,15 @@ async function excluirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) r
     <div class="modal-body"><p>Excluir o lead <b>${esc(c.nome||c.nomeEmpresa||'')}</b>? Esta ação não pode ser desfeita.</p></div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
 async function confirmarExcluirLead(id){ try{ await db.collection('leads_crm').doc(id).delete(); closeModal(); toast('Lead excluído.','ok'); }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
+function excluirNegocio(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  if(isClienteLead(c)) excluirCliente(id); else excluirLead(id); }
 function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
   const aps=apolicesDoCliente(c).filter(a=>a.status!=='cancelada');
-  if(aps.length){ openModal(`<div class="modal-head"><h3><i class="fas fa-shield" style="color:var(--warn)"></i> Não é possível excluir</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <div class="modal-body"><p>O cliente <b>${esc(c.nome||'')}</b> tem <b>${aps.length} apólice(s) ativa(s)</b>. Cancele ou exclua as apólices antes de excluir o cliente.</p></div>
-    <div class="modal-foot"><button class="btn btn-primary" onclick="abrirLead('${id}')">Voltar</button></div>`); return; }
+  if(aps.length){ openModal(`<div class="modal-head"><h3><i class="fas fa-shield" style="color:var(--warn)"></i> Este contato tem apólices</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p><b>${esc(c.nome||'')}</b> está ligado a <b>${aps.length} apólice(s)</b> (pelo CPF, telefone ou nome — pode ser um teste com dados de um cliente real).</p>
+    <p style="margin-top:8px">Você pode <b>excluir só este card do funil</b>: as apólices, o histórico e os demais cadastros ficam intactos.</p></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button>
+      <button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir só o card do funil</button></div>`); return; }
   openModal(`<div class="modal-head"><h3><i class="fas fa-trash" style="color:var(--danger)"></i> Excluir cliente</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body"><p>Excluir o cliente <b>${esc(c.nome||'')}</b>? Não há apólices ativas. Esta ação não pode ser desfeita.</p></div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
