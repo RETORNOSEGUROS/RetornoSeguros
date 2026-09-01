@@ -3362,7 +3362,17 @@ function excluirApolice(id){ const a=CACHE.apolices.find(x=>x.id===id); if(!a) r
     <div class="modal-foot"><button class="btn btn-ghost" onclick="modalApolice('${id}')">Cancelar</button>
       <button class="btn btn-danger" onclick="confirmarExcluirApolice('${id}')"><i class="fas fa-trash"></i> Excluir definitivamente</button></div>`);
 }
-async function confirmarExcluirApolice(id){ try{ await db.collection('apolices_cliente').doc(id).delete(); closeModal(); toast('Apólice excluída.','ok'); }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
+async function confirmarExcluirApolice(id){
+  const a=CACHE.apolices.find(x=>x.id===id);
+  try{
+    /* se veio da planilha, guardo a marca: numa nova importação ela NÃO volta */
+    if(a&&a.importKey){
+      await db.collection('configuracoes').doc('import_carteira')
+        .set({ignorados:{[a.importKey.replace(/[.\/#$\[\]]/g,'_')]:true}},{merge:true}).catch(()=>{});
+    }
+    await db.collection('apolices_cliente').doc(id).delete();
+    closeModal(); toast('Apólice excluída'+(a&&a.importKey?' — e não volta se você importar a planilha de novo.':'.'),'ok');
+  }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
 async function salvarApolice(){ const id=document.getElementById('apId').value;
   const cliente=document.getElementById('apCliente').value.trim(); if(!cliente){ toast('Informe o cliente.','err'); return; }
   const dados={ clienteNome:cliente, clienteWhatsapp:document.getElementById('apWhats').value.replace(/\D/g,'')||null,
@@ -5703,7 +5713,9 @@ async function agExcluirFixa(id){
    no pagamento do mês corrente (1º dia útil).
    ========================================================================= */
 let FOLHA=[];
-let PG={ mes:null, ano:null, so:'' };
+let PG={ mes:null, ano:null, so:'', aba:'folha', anoCom:null, prodCom:'' };
+function pgAndarMes(n){ let m=Number(PG.mes)+n, a=Number(PG.ano);
+  if(m<1){m=12;a--;} if(m>12){m=1;a++;} PG.mes=m; PG.ano=a; VIEWS.pagamentos(); }
 
 const pgMoeda=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const pgNum=v=>{ if(typeof v==='number') return v; v=String(v||'').trim().replace(/\./g,'').replace(',','.');
@@ -5790,13 +5802,20 @@ VIEWS.pagamentos=function(){
   const pagos=linhas.filter(r=>r.status==='pago').length;
   window.__pgExport={linhas,comp,ref};
 
-  const actions=`<button class="btn btn-primary btn-sm" onclick="pgGerar()"><i class="fas fa-wand-magic-sparkles"></i> Gerar folha do mês</button>`;
+  const actions=`<div class="tabs" style="margin-right:6px">
+      <button class="tab ${PG.aba!=='comissoes'?'active':''}" onclick="PG.aba='folha';VIEWS.pagamentos()"><i class="fas fa-money-check-dollar"></i> Folha do mês</button>
+      <button class="tab ${PG.aba==='comissoes'?'active':''}" onclick="PG.aba='comissoes';VIEWS.pagamentos()"><i class="fas fa-hand-holding-dollar"></i> Comissões por período</button>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="pgGerar()"><i class="fas fa-wand-magic-sparkles"></i> Gerar folha do mês</button>`;
   let html=head('pagamentos',{actions});
+  if(PG.aba==='comissoes'){ setView(html+pgViewComissoes()); return; }
 
   html+=`<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+    <button class="btn btn-ghost btn-sm" title="Mês anterior" onclick="pgAndarMes(-1)"><i class="fas fa-chevron-left"></i></button>
     <select onchange="PG.mes=+this.value;VIEWS.pagamentos()">
       ${MESES_BR.map((m,i)=>`<option value="${i+1}" ${mes===i+1?'selected':''}>${m}</option>`).join('')}</select>
     <input type="number" min="2000" max="2100" value="${ano}" onchange="PG.ano=+this.value;VIEWS.pagamentos()" style="width:110px">
+    <button class="btn btn-ghost btn-sm" title="Próximo mês" onclick="pgAndarMes(1)"><i class="fas fa-chevron-right"></i></button>
     <span style="font-size:.85rem;color:var(--text-2)">
       <i class="fas fa-calendar-check" style="color:var(--brand)"></i>
       Pagar em <b>${diaUtil.toLocaleDateString('pt-BR')}</b> (1º dia útil) · comissão sobre a vigência de
@@ -6078,6 +6097,80 @@ function pgExportar(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
   a.download='folha-'+comp+'.csv'; document.body.appendChild(a); a.click(); a.remove();
   toast('CSV da folha gerado.','ok','Exportado');
+}
+
+
+/* =========================================================================
+   COMISSÕES POR PERÍODO — mês a mês do ano, por produtor, com totais
+   Organizado pelo MÊS DE INÍCIO DA VIGÊNCIA (a folha paga no mês seguinte).
+   ========================================================================= */
+function pgViewComissoes(){
+  if(PG.anoCom===null) PG.anoCom=new Date().getFullYear();
+  const ano=Number(PG.anoCom);
+  const equipe=(CACHE.admins||[]).filter(f=>f.ativo!==false).sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const anos=[...new Set((CACHE.apolices||[]).map(a=>String(strData(a.dataInicioVigencia)||'').slice(0,4)).filter(x=>/^\d{4}$/.test(x)))].sort();
+
+  /* célula [funcionário][mês] e também o total da corretora por mês */
+  const porMes=[]; let anoNossa=0, anoDele={}, anoPremio=0, qtdAno=0;
+  for(let m=1;m<=12;m++){
+    const aps=pgApolicesDoMes(ano,m).filter(a=>!PG.prodCom||pgVendedorDa(a)===PG.prodCom);
+    let nossa=0, premio=0; const dele={};
+    aps.forEach(a=>{
+      const base=Number(a.premioLiquido)||Number(a.valorPremio)||0;
+      const v=(a.comissaoValor!=null&&a.comissaoValor!=='')?Number(a.comissaoValor):Math.round(base*(Number(a.comissao)||0))/100;
+      nossa+=v; premio+=Number(a.valorPremio)||0;
+      const quem=pgVendedorDa(a); if(quem) dele[quem]=(dele[quem]||0)+v;
+    });
+    porMes.push({mes:m,qtd:aps.length,premio,nossa,dele});
+    anoNossa+=nossa; anoPremio+=premio; qtdAno+=aps.length;
+    Object.entries(dele).forEach(([k,v])=>anoDele[k]=(anoDele[k]||0)+v);
+  }
+
+  let html=`<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+    <button class="btn btn-ghost btn-sm" onclick="PG.anoCom=Number(PG.anoCom)-1;VIEWS.pagamentos()"><i class="fas fa-chevron-left"></i></button>
+    <select onchange="PG.anoCom=+this.value;VIEWS.pagamentos()" style="width:auto">
+      ${(anos.length?anos:[String(ano)]).map(a2=>`<option ${Number(a2)===ano?'selected':''}>${a2}</option>`).join('')}</select>
+    <button class="btn btn-ghost btn-sm" onclick="PG.anoCom=Number(PG.anoCom)+1;VIEWS.pagamentos()"><i class="fas fa-chevron-right"></i></button>
+    <select onchange="PG.prodCom=this.value;VIEWS.pagamentos()" style="min-width:180px">
+      <option value="">Todos os produtores</option>
+      ${equipe.map(f=>`<option value="${f.id}" ${PG.prodCom===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}</select>
+    <span style="font-size:.8rem;color:var(--text-2)"><i class="fas fa-circle-info"></i>
+      Contado pelo mês de <b>início da vigência</b> — o pagamento da equipe cai na folha do mês seguinte.</span>
+  </div></div>`;
+
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-file-contract"></i></div><div class="val">${qtdAno}</div><div class="lbl">Negócios com vigência iniciada em ${ano}</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.3rem">${pgMoeda(anoPremio)}</div><div class="lbl">Prêmio emitido no ano</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-hand-holding-dollar"></i></div><div class="val" style="font-size:1.3rem">${pgMoeda(anoNossa)}</div><div class="lbl">Comissão da corretora no ano</div></div>
+  </div>`;
+
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-table"></i> ${ano}, mês a mês</h3>
+      <span style="font-size:.78rem;color:var(--text-3)">clique num mês para abrir a folha correspondente</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Mês da vigência</th><th style="text-align:right">Negócios</th>
+      <th style="text-align:right">Prêmio emitido</th><th style="text-align:right">Comissão da corretora</th>
+      ${equipe.map(f=>`<th style="text-align:right">${esc((f.nome||f.email||'').split(' ')[0])}</th>`).join('')}
+    </tr></thead><tbody>
+    ${porMes.map(r=>{
+      const fol=r.mes===12?{a:ano+1,m:1}:{a:ano,m:r.mes+1};
+      return `<tr style="cursor:pointer" onclick="PG.aba='folha';PG.ano=${fol.a};PG.mes=${fol.m};VIEWS.pagamentos()">
+      <td><b>${MESES_BR[r.mes-1]}</b><div style="font-size:.7rem;color:var(--text-3)">folha de ${MESES_BR[fol.m-1]}</div></td>
+      <td style="text-align:right">${r.qtd||'—'}</td>
+      <td style="text-align:right">${r.premio?pgMoeda(r.premio):'—'}</td>
+      <td style="text-align:right;font-weight:600;color:var(--ok)">${r.nossa?pgMoeda(r.nossa):'—'}</td>
+      ${equipe.map(f=>{ const v=r.dele[f.id]; const fator=Number(f.comissaoPadrao)||0;
+        return `<td style="text-align:right">${v?`${pgMoeda(Math.round(v*fator)/100)}<div style="font-size:.68rem;color:var(--text-3)">de ${pgMoeda(v)}</div>`:'—'}</td>`;}).join('')}
+    </tr>`;}).join('')}
+      <tr style="background:var(--surface-2)"><td style="font-weight:800">Total de ${ano}</td>
+        <td style="text-align:right;font-weight:700">${qtdAno}</td>
+        <td style="text-align:right;font-weight:800">${pgMoeda(anoPremio)}</td>
+        <td style="text-align:right;font-weight:800;color:var(--ok)">${pgMoeda(anoNossa)}</td>
+        ${equipe.map(f=>{ const v=anoDele[f.id]||0; const fator=Number(f.comissaoPadrao)||0;
+          return `<td style="text-align:right;font-weight:700">${v?pgMoeda(Math.round(v*fator)/100):'—'}</td>`;}).join('')}
+      </tr>
+    </tbody></table></div>
+    <p style="font-size:.75rem;color:var(--text-3);margin-top:10px">Nas colunas da equipe: em cima o que a pessoa recebe (fator dela sobre a nossa comissão);
+      embaixo, a comissão cheia dos negócios que ela produziu. Quem tem fator 0% aparece com — mesmo produzindo.</p></div>`;
+  return html;
 }
 
 </script>
@@ -8799,9 +8892,14 @@ function icProcessar(linhas){
 
   /* apólices que já foram importadas antes (roda de novo sem medo) */
   const jaTem=new Set((CACHE.apolices||[]).map(a=>a.importKey).filter(Boolean));
-  let repetidas=0;
-  apolices.forEach(a=>{ if(jaTem.has(a.importKey)){ a.__pular=true; repetidas++; } });
+  const ignoradas=IC.ignoradas||{};
+  let repetidas=0, excluidas=0;
+  apolices.forEach(a=>{
+    if(jaTem.has(a.importKey)){ a.__pular=true; repetidas++; return; }
+    if(ignoradas[a.importKey.replace(/[.\/#$\[\]]/g,'_')]){ a.__pular=true; a.__excluida=true; excluidas++; }
+  });
   resumo.repetidas=repetidas;
+  resumo.excluidas=excluidas;
 
   return { clientes:Object.values(clientes), apolices, avisos, produtores, mapaProdutor:mapa, resumo };
 }
@@ -8826,11 +8924,16 @@ function icTela(){
   if(p) html+=icPreviewHTML(p);
   return html;
 }
+async function icIgnoradas(){
+  try{ const d=await db.collection('configuracoes').doc('import_carteira').get();
+    return (d.exists&&d.data().ignorados)||{}; }catch(e){ return {}; }
+}
 async function icReceber(files){
   const f=files&&files[0]; if(!f) return;
   const st=document.getElementById('icStatus');
   if(st) st.innerHTML='<i class="fas fa-spinner fa-spin"></i> Lendo '+esc(f.name)+'…';
   try{
+    IC.ignoradas=await icIgnoradas();
     IC.linhas=await icLerArquivo(f);
     IC.arquivo=f.name;
     IC.plano=icProcessar(IC.linhas);
@@ -8851,7 +8954,8 @@ function icPreviewHTML(p){
   </div>`;
   html+=`<div class="card" style="padding:14px 18px"><b style="font-size:.9rem"><i class="fas fa-sack-dollar" style="color:var(--ok)"></i>
     Prêmio das ativas: ${(r.premioAtivo||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</b>
-    ${r.repetidas?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-left:10px">${r.repetidas} já importadas antes — vou pular</span>`:''}</div>`;
+    ${r.repetidas?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-left:10px">${r.repetidas} já importadas antes — vou pular</span>`:''}
+    ${r.excluidas?`<span class="badge" style="background:var(--danger-bg);color:var(--danger);margin-left:6px">${r.excluidas} que você excluiu de propósito — não voltam</span>`:''}</div>`;
 
   /* produtores */
   const prods=Object.keys(p.produtores);
