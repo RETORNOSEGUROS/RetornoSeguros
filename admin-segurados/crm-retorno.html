@@ -2557,12 +2557,18 @@ const statusBadge=(txt,cor)=>`<span class="badge" style="background:${cor}22;col
 
 /* ---------- CLIENTES ---------- */
 let CLI_FILTER={busca:''};
-function apolicesDoCliente(c){ return CACHE.apolices.filter(a=>(a.clienteWhatsapp&&a.clienteWhatsapp===c.whatsapp)||(a.clienteNome&&c.nome&&a.clienteNome.toLowerCase()===(c.nome||'').toLowerCase())); }
+function apolicesDoCliente(c){
+  const dig=((c.cpf||c.cnpj||'')+'').replace(/\D/g,'');
+  return CACHE.apolices.filter(a=>
+    (c.id&&a.leadId&&a.leadId===c.id)||
+    (dig&&a.clienteCpf&&a.clienteCpf.replace(/\D/g,'')===dig)||
+    (a.clienteWhatsapp&&a.clienteWhatsapp===c.whatsapp)||
+    (a.clienteNome&&c.nome&&a.clienteNome.toLowerCase()===(c.nome||'').toLowerCase())); }
 VIEWS.clientes=function(){
   let html=head('clientes');
   let clientes=CACHE.leads.filter(l=>(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
   if(CLI_FILTER.busca){ const q=CLI_FILTER.busca.toLowerCase(); clientes=clientes.filter(c=>`${c.nome||''} ${c.nomeEmpresa||''} ${c.whatsapp||''} ${c.email||''} ${c.cidade||''}`.toLowerCase().includes(q)); }
-  const comApolice=clientes.filter(c=>apolicesDoCliente(c).length>0).length;
+  const comApolice=clientes.filter(c=>apolicesDoCliente(c).some(a=>!a.status||a.status==='ativa')).length;
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-brand"><i class="fas fa-users"></i></div><div class="val">${clientes.length}</div><div class="lbl">Clientes na base</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${comApolice}</div><div class="lbl">Com apólice ativa</div></div>
@@ -2870,27 +2876,38 @@ function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
 
 /* ---------- APÓLICES ---------- */
-let AP_FILTER={busca:''};
+let AP_FILTER={busca:'',situacao:''};
+const apEhAtiva=a=>!a.status||a.status==='ativa';
 VIEWS.apolices=function(){
   const actions=`<button class="btn btn-primary btn-sm" onclick="modalApolice()"><i class="fas fa-plus"></i> Nova apólice</button>`;
   let html=head('apolices',{actions});
   let list=CACHE.apolices.slice().sort((a,b)=>(toDate(b.dataInicioVigencia)||0)-(toDate(a.dataInicioVigencia)||0));
-  if(AP_FILTER.busca){ const q=AP_FILTER.busca.toLowerCase(); list=list.filter(a=>`${a.clienteNome||''} ${a.seguradora||''} ${a.numeroApolice||''} ${a.ramo||''}`.toLowerCase().includes(q)); }
-  const ativas=CACHE.apolices.filter(a=>a.status!=='cancelada'&&a.status!=='inativa').length;
-  const premioTotal=CACHE.apolices.reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
+  if(AP_FILTER.busca){ const q=AP_FILTER.busca.toLowerCase(); list=list.filter(a=>`${a.clienteNome||''} ${a.seguradora||''} ${a.numeroApolice||''} ${a.ramo||''} ${a.veiculoPlaca||''}`.toLowerCase().includes(q)); }
+  if(AP_FILTER.situacao) list=list.filter(a=>AP_FILTER.situacao==='ativa'?apEhAtiva(a):a.status===AP_FILTER.situacao);
+  const ativas=CACHE.apolices.filter(apEhAtiva);
+  const premioAtivo=ativas.reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-    <div class="kpi"><div class="ico i-brand"><i class="fas fa-file-contract"></i></div><div class="val">${CACHE.apolices.length}</div><div class="lbl">Apólices no total</div></div>
-    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${ativas}</div><div class="lbl">Ativas</div></div>
-    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.4rem">${money(premioTotal)}</div><div class="lbl">Prêmio total</div></div>
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-file-contract"></i></div><div class="val">${CACHE.apolices.length}</div><div class="lbl">Apólices no total (com histórico)</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${ativas.length}</div><div class="lbl">Com vigência ativa</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.4rem">${money(premioAtivo)}</div><div class="lbl">Prêmio das ativas</div></div>
   </div>`;
   html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-list"></i> Apólices</h3>
-    <div class="filters" style="margin:0"><input type="text" id="fBuscaAp" placeholder="Buscar cliente, seguradora, nº..." value="${esc(AP_FILTER.busca)}" oninput="AP_FILTER.busca=this.value;redesenhar(VIEWS.apolices)"></div></div>
+    <div class="filters" style="margin:0"><input type="text" id="fBuscaAp" placeholder="Buscar cliente, seguradora, placa, nº..." value="${esc(AP_FILTER.busca)}" oninput="AP_FILTER.busca=this.value;redesenhar(VIEWS.apolices)">
+      <select onchange="AP_FILTER.situacao=this.value;VIEWS.apolices()">
+        <option value="">Todas as situações</option>
+        <option value="ativa" ${AP_FILTER.situacao==='ativa'?'selected':''}>Ativas</option>
+        <option value="vencida" ${AP_FILTER.situacao==='vencida'?'selected':''}>Vencidas (reconquista)</option>
+        <option value="renovada" ${AP_FILTER.situacao==='renovada'?'selected':''}>Renovadas (histórico)</option>
+        <option value="encerrada" ${AP_FILTER.situacao==='encerrada'?'selected':''}>Encerradas (histórico)</option>
+        <option value="cancelada" ${AP_FILTER.situacao==='cancelada'?'selected':''}>Canceladas</option>
+      </select></div></div>
     <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Ramo</th><th>Seguradora</th><th>Nº apólice</th><th>Vigência</th><th>Prêmio</th><th>Status</th><th></th></tr></thead><tbody>
     ${list.length?list.map(a=>{ const dias=diasAte(a.dataFimVigencia); const venc=dias!=null&&dias<0; const perto=dias!=null&&dias<=60&&dias>=0;
       const cor=venc?'var(--danger)':perto?'var(--warn)':'var(--ok)';
       return `<tr><td><b>${esc(a.clienteNome||'-')}</b></td><td>${esc(a.ramo||'-')}</td><td>${esc(a.seguradora||'-')}</td>
       <td>${esc(a.numeroApolice||'-')}</td><td>${fmtData(a.dataInicioVigencia)} → ${fmtData(a.dataFimVigencia)}${dias!=null?`<br><small style="color:${cor}">${venc?'vencida':perto?dias+' dias':''}</small>`:''}</td>
-      <td>${money(a.valorPremio)}</td><td>${statusBadge(a.status||'ativa',a.status==='cancelada'?'var(--danger)':'var(--ok)')}</td>
+      <td>${money(a.valorPremio)}</td><td>${statusBadge(a.status||'ativa',
+        {cancelada:'var(--danger)',vencida:'var(--warn)',renovada:'var(--info)',encerrada:'var(--text-3)'}[a.status]||'var(--ok)')}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i></button></td></tr>`;
     }).join(''):`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-file-contract"></i></div><h4>Nenhuma apólice</h4><p>Cadastre a primeira apólice de cliente.</p></div></td></tr>`}
     </tbody></table></div></div>`;
@@ -3038,7 +3055,7 @@ async function upsertCliente({nome,cpf,whatsapp,email}){
 /* ---------- RENOVAÇÕES (antes era um TODO — agora funciona) ---------- */
 VIEWS.renovacoes=function(){
   let html=head('renovacoes');
-  const comVenc=CACHE.apolices.filter(a=>toDate(a.dataFimVigencia)&&a.status!=='cancelada').map(a=>({...a,dias:diasAte(a.dataFimVigencia)}));
+  const comVenc=CACHE.apolices.filter(a=>toDate(a.dataFimVigencia)&&!['cancelada','renovada','encerrada'].includes(a.status)).map(a=>({...a,dias:diasAte(a.dataFimVigencia)}));
   const vencidas=comVenc.filter(a=>a.dias<0).sort((a,b)=>a.dias-b.dias);
   const proximas=comVenc.filter(a=>a.dias>=0&&a.dias<=60).sort((a,b)=>a.dias-b.dias);
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
@@ -3493,10 +3510,21 @@ let IMPORT_ROWS=[]; let IMPORT_MODO='novo';
 VIEWS.importar=function(){
   let html=head('importar');
   const opts=CACHE.empresas.slice().sort((a,b)=>(a.nomeEmpresa||'').localeCompare(b.nomeEmpresa||'')).map(e=>`<option value="${e.id}">${esc(e.nomeEmpresa)}</option>`).join('');
+  if(IMPORT_MODO==='carteira'){
+    html+=`<div class="card" style="padding:14px 18px"><div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="IMPORT_MODO='novo';VIEWS.importar()"><i class="fas fa-user-plus"></i> Cadastrar novos</button>
+      <button class="btn btn-ghost btn-sm" onclick="IMPORT_MODO='atualizar';VIEWS.importar()"><i class="fas fa-rotate"></i> Atualizar quem já existe</button>
+      <button class="btn btn-primary btn-sm"><i class="fas fa-boxes-packing"></i> Carteira antiga (Excel do gerenciador)</button>
+    </div></div>`;
+    html+=icTela();
+    setView(html);
+    return;
+  }
   html+=`<div class="card"><div class="card-pad">
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
       <button class="btn ${IMPORT_MODO==='novo'?'btn-primary':'btn-ghost'} btn-sm" onclick="IMPORT_MODO='novo';IMPORT_ROWS=[];VIEWS.importar()"><i class="fas fa-user-plus"></i> Cadastrar novos</button>
       <button class="btn ${IMPORT_MODO==='atualizar'?'btn-primary':'btn-ghost'} btn-sm" onclick="IMPORT_MODO='atualizar';IMPORT_ROWS=[];VIEWS.importar()"><i class="fas fa-rotate"></i> Atualizar quem já existe (por CPF)</button>
+      <button class="btn ${IMPORT_MODO==='carteira'?'btn-primary':'btn-ghost'} btn-sm" onclick="IMPORT_MODO='carteira';VIEWS.importar()"><i class="fas fa-boxes-packing"></i> Carteira antiga (Excel do gerenciador)</button>
     </div>
     ${IMPORT_MODO==='atualizar'
       ? `<div style="background:var(--brand-50);border-radius:10px;padding:12px 15px;margin-bottom:16px;font-size:.85rem;color:var(--brand-dark)">
@@ -8193,6 +8221,399 @@ function ppDoLead(leadId){
   ppNovoOrcamento(leadId,true);
   location.hash='#orcamento/'+leadId;
   VIEWS.orcamento();
+}
+
+</script>
+  <script>
+/* =========================================================================
+   IMPORTAÇÃO DA CARTEIRA ANTIGA (sistema gerenciador, export .xlsx)
+   - lê a planilha no navegador (SheetJS), sem servidor
+   - cria/completa clientes e importa todas as apólices, ativas e históricas
+   - separa a situação: ativa / renovada / vencida (reconquista) / encerrada
+   - vincula o produtor ao funcionário para o cálculo de comissão
+   ========================================================================= */
+let IC={ linhas:null, plano:null, arquivo:null, mapProd:{}, rodando:false };
+const IC_CDN='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+
+/* ---------- utilidades ---------- */
+function icNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9%]/g,''); }
+function icTxt(v){ if(v==null) return null; const s=String(v).trim(); return s&&s.toLowerCase()!=='nan'?s:null; }
+function icNum(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number') return isNaN(v)?null:v;
+  let s=String(v).trim(); if(!/\d/.test(s)) return null;
+  if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
+  const n=parseFloat(s.replace(/[^\d.-]/g,'')); return isNaN(n)?null:n;
+}
+function icData(v){
+  if(v==null||v==='') return null;
+  if(v instanceof Date&&!isNaN(v)) { const p=n=>String(n).padStart(2,'0'); return v.getFullYear()+'-'+p(v.getMonth()+1)+'-'+p(v.getDate()); }
+  if(typeof v==='number'){ const d=new Date(Math.round((v-25569)*86400000)); /* serial do Excel */
+    if(!isNaN(d)) { const p=n=>String(n).padStart(2,'0'); return d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate()); } return null; }
+  const s=String(v).trim(); let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return m[1]+'-'+m[2]+'-'+m[3];
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return null;
+}
+/* o export tira os zeros à esquerda; recomponho pelo tipo de pessoa */
+function icDoc(v,pessoa){
+  const d=String(v==null?'':v).replace(/\D/g,''); if(!d) return {cpf:null,digitos:null};
+  const cnpj=(pessoa==='J')||d.length>11;
+  const p=d.padStart(cnpj?14:11,'0');
+  const fmt=cnpj? p.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5')
+                : p.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4');
+  return {cpf:fmt,digitos:p};
+}
+function icFipe(v){
+  const d=String(v==null?'':v).replace(/\D/g,''); if(d.length<5||d.length>7) return null;
+  const p=d.padStart(7,'0'); return p.slice(0,6)+'-'+p.slice(6);
+}
+function icCep(v){
+  const d=String(v==null?'':v).replace(/\D/g,'');
+  if(d.length<7||d.length>8) return null;          /* o export perde o zero à esquerda */
+  const p=d.padStart(8,'0');
+  return p.slice(0,5)+'-'+p.slice(5);
+}
+function icFone(...vs){
+  for(const v of vs){ const d=String(v==null?'':v).replace(/\D/g,''); if(d.length>=10) return d; }
+  return null;
+}
+const IC_SEGURADORAS={ 'tokiomarineseguros':'Tokio Marine','bradescoseguros':'Bradesco Seguros',
+  'hdiseguros':'HDI Seguros','azulcompanhiadesegurosgerais':'Azul Seguros','libertyseguros':'Liberty Seguros',
+  'portoseguro':'Porto Seguro','yasudamaritimasegurossa':'Yasuda Marítima','sulamericaseguros':'SulAmérica',
+  'allianzseguros':'Allianz','mitsuisumitomosegurossa':'Mitsui Sumitomo','mapfreseguros':'Mapfre','suhai':'Suhai' };
+function icSeguradora(v){ const s=icTxt(v); if(!s) return null; return IC_SEGURADORAS[icNorm(s)]||s; }
+function icRamo(v){ const n=icNorm(v);
+  if(n.includes('automovel')||n.includes('autofrota')||n==='auto') return 'Auto';
+  if(n.includes('vida')) return 'Vida'; if(n.includes('resid')) return 'Residencial';
+  if(n.includes('saude')) return 'Saúde'; if(n.includes('empres')) return 'Empresarial';
+  if(n.includes('odonto')||n.includes('dental')) return 'Odontológico'; if(n.includes('previd')) return 'Previdência';
+  return icTxt(v)||'Outros';
+}
+function icHoje(){ const d=new Date(),p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+
+/* ---------- carregar o SheetJS só quando precisar ---------- */
+function icCarregarXLSX(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  if(window.__icXP) return window.__icXP;
+  window.__icXP=new Promise((ok,err)=>{
+    const s=document.createElement('script'); s.src=IC_CDN;
+    s.onload=()=>ok(window.XLSX);
+    s.onerror=()=>err(new Error('Não consegui carregar o leitor de planilhas. Confira a internet.'));
+    document.head.appendChild(s);
+  });
+  return window.__icXP;
+}
+async function icLerArquivo(file){
+  const X=await icCarregarXLSX();
+  const wb=X.read(new Uint8Array(await file.arrayBuffer()),{type:'array',cellDates:true});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  return X.utils.sheet_to_json(ws,{defval:null});
+}
+
+/* ---------- da linha crua para o plano de importação ---------- */
+function icCampo(row,...nomes){
+  for(const n of nomes){ for(const k of Object.keys(row)){ if(icNorm(k)===icNorm(n)) return row[k]; } }
+  return null;
+}
+function icProcessar(linhas){
+  const hoje=icHoje();
+  const umAnoAtras=(function(){ const d=new Date(); d.setFullYear(d.getFullYear()-1);
+    const p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); })();
+  const avisos=[], apolices=[], clientes={}, produtores={};
+
+  linhas.forEach((row,i)=>{
+    const nome=icTxt(icCampo(row,'Cliente'));
+    if(!nome){ avisos.push('Linha '+(i+2)+': sem nome de cliente — pulei.'); return; }
+    const pessoa=icTxt(icCampo(row,'Pessoa'))==='J'?'J':'F';
+    const doc=icDoc(icCampo(row,'CPF/CNPJ'),pessoa);
+    const ini=icData(icCampo(row,'Início Vig.','Inicio Vig.'));
+    const fim=icData(icCampo(row,'Fim Vig.'));
+    if(!ini||!fim){ avisos.push('Linha '+(i+2)+' ('+nome+'): vigência ilegível — pulei.'); return; }
+
+    /* cliente (uma entrada por documento; sem doc, por nome) */
+    const chaveCli=doc.digitos||('nome:'+icNorm(nome));
+    if(!clientes[chaveCli]) clientes[chaveCli]={
+      chave:chaveCli, nome, cpf:doc.cpf, pessoa,
+      nomeEmpresa:pessoa==='J'?nome:null,
+      dataNascimento:icData(icCampo(row,'Dt. Nasc.')),
+      sexo:(function(){const s=icTxt(icCampo(row,'Sexo'));return s==='M'?'Masculino':s==='F'?'Feminino':null;})(),
+      estadoCivil:icTxt(icCampo(row,'Estado Civil')),
+      email:(icTxt(icCampo(row,'E-mail'))||'').toLowerCase()||null,
+      whatsapp:icFone(icCampo(row,'Celular'),icCampo(row,'Tel. Residencial'),icCampo(row,'Tel. Comercial')),
+      telefone:icFone(icCampo(row,'Tel. Residencial'),icCampo(row,'Tel. Comercial')),
+      endereco:[icTxt(icCampo(row,'Logradouro')),icTxt(icCampo(row,'Número','Numero')),icTxt(icCampo(row,'Complemento'))].filter(Boolean).join(', ')||null,
+      bairro:icTxt(icCampo(row,'Bairro')), cidade:icTxt(icCampo(row,'Cidade')),
+      estado:icTxt(icCampo(row,'Estado')), cep:icCep(icCampo(row,'CEP')),
+      apolices:0, ativas:0 };
+    const cli=clientes[chaveCli];
+    /* completa o cadastro com o que aparecer nas outras linhas do mesmo cliente */
+    ['dataNascimento','email','whatsapp','telefone','endereco','bairro','cidade','estado','cep','sexo','estadoCivil'].forEach(k=>{
+      if(!cli[k]){ const m={dataNascimento:()=>icData(icCampo(row,'Dt. Nasc.')),email:()=>(icTxt(icCampo(row,'E-mail'))||'').toLowerCase()||null};
+        if(m[k]) cli[k]=m[k](); }
+    });
+
+    const produtorBruto=icTxt(icCampo(row,'Agente - Produtor'))||'';
+    const produtor=produtorBruto.replace(/^[A-Z]{2,6}\s*-\s*/,'').trim()||null;
+    if(produtor) produtores[produtor]=(produtores[produtor]||0)+1;
+
+    const placa=icTxt(icCampo(row,'Placa'));
+    const chassi=icTxt(icCampo(row,'Chassi'));
+    const renovadoFlag=icNorm(icCampo(row,'Renovado'))==='sim';
+    const premioTotal=icNum(icCampo(row,'Pr. Total'));
+    const comPct=icNum(icCampo(row,'% Comissão','% Comissao'));
+
+    apolices.push({
+      __linha:i+2, __cliChave:chaveCli, __veiculoChave:chaveCli+'|'+(placa||chassi||('lin'+i)),
+      __produtor:produtor, __renovadoFlag:renovadoFlag,
+      clienteNome:nome, clienteCpf:doc.cpf,
+      clienteWhatsapp:cli.whatsapp, clienteEmail:cli.email,
+      ramo:icRamo(icCampo(row,'Ramo')), seguradora:icSeguradora(icCampo(row,'Seguradora')),
+      numeroApolice:null,
+      dataInicioVigencia:ini, dataFimVigencia:fim,
+      valorPremio:premioTotal||0, premioLiquido:icNum(icCampo(row,'Pr. Líquido','Pr. Liquido')),
+      premioIof:icNum(icCampo(row,'Pr.  IOF','Pr. IOF')),
+      comissao:comPct||0, comissaoValor:icNum(icCampo(row,'Vl. Comissão','Vl. Comissao')),
+      veiculoPlaca:placa, chassi,
+      veiculoModelo:(function(){ const v=icTxt(icCampo(row,'Veículo','Veiculo')); if(!v) return null;
+        return v.replace(/^[\s\-]+/,'').trim()||null; })(),
+      veiculoFabricante:(function(){ const v=icTxt(icCampo(row,'Veículo','Veiculo')); if(!v) return null;
+        const m=v.match(/^([A-ZÀ-Ü]+)[\s\-]/); return m?m[1]:null; })(),
+      veiculoAnoMod:icTxt(icCampo(row,'Ano Mod.')), veiculoAnoFab:icTxt(icCampo(row,'Ano Fab.')),
+      codigoFipe:icFipe(icCampo(row,'FIPE')),
+      valorMercado:icNum(icCampo(row,'Vl. Mercado - R$'))||null,
+      percValorMercado:icNum(icCampo(row,'% Vl. Mercado'))||null,
+      bonusClasse:icTxt(icCampo(row,'Classe de Bônus','Classe de Bonus')),
+      franquia:icNum(icCampo(row,'Franquia')),
+      lmi:{ dm:icNum(icCampo(row,'DM'))||0, dc:icNum(icCampo(row,'DC'))||0,
+            app:icNum(icCampo(row,'APP'))||0, dmo:icNum(icCampo(row,'DMO'))||0 },
+      assist24h:icNorm(icCampo(row,'Assist. 24h'))==='sim',
+      vidros:icNorm(icCampo(row,'Vidros'))==='sim',
+      observacoes:icTxt(icCampo(row,'Obs. - Item')),
+      cepPernoite:icCep(icCampo(row,'CEP Pernoite')),
+      origem:'carteira_antiga',
+      importKey:(doc.digitos||icNorm(nome))+'|'+(placa||chassi||'s'+i)+'|'+ini
+    });
+    cli.apolices++;
+  });
+
+  /* situação: quem tem sucessora no mesmo veículo foi renovada */
+  const porVeiculo={};
+  apolices.forEach(a=>{ (porVeiculo[a.__veiculoChave]=porVeiculo[a.__veiculoChave]||[]).push(a); });
+  Object.values(porVeiculo).forEach(g=>{
+    g.sort((a,b)=>a.dataInicioVigencia.localeCompare(b.dataInicioVigencia));
+    g.forEach((a,i)=>{
+      const temSucessora=i<g.length-1;
+      if(a.dataFimVigencia>=hoje){ a.status='ativa'; clientes[a.__cliChave].ativas++; }
+      else if(temSucessora||a.__renovadoFlag) a.status='renovada';
+      else if(a.dataFimVigencia>=umAnoAtras) a.status='vencida';
+      else a.status='encerrada';
+    });
+  });
+
+  /* produtor -> funcionário (palpite pelo nome) */
+  const mapa={};
+  Object.keys(produtores).forEach(p=>{
+    const alvo=icNorm(p.split(' ')[0]);
+    const f=(CACHE.admins||[]).find(x=>icNorm((x.nome||x.email||'').split(' ')[0])===alvo)||
+            (CACHE.admins||[]).find(x=>icNorm(x.nome||'').includes(alvo));
+    mapa[p]=f?f.id:'';
+  });
+
+  const resumo={ total:apolices.length,
+    ativas:apolices.filter(a=>a.status==='ativa').length,
+    renovadas:apolices.filter(a=>a.status==='renovada').length,
+    vencidas:apolices.filter(a=>a.status==='vencida').length,
+    encerradas:apolices.filter(a=>a.status==='encerrada').length,
+    clientes:Object.keys(clientes).length,
+    clientesNovos:0, clientesExistentes:0,
+    premioAtivo:apolices.filter(a=>a.status==='ativa').reduce((s,a)=>s+(a.valorPremio||0),0) };
+
+  /* quem já está no CRM? */
+  Object.values(clientes).forEach(c=>{
+    const dig=(c.cpf||'').replace(/\D/g,'');
+    const lead=(dig&&(CACHE.leads||[]).find(l=>(l.cpf||l.cnpj||'').replace(/\D/g,'')===dig))||
+      (c.whatsapp&&(CACHE.leads||[]).find(l=>(l.whatsapp||l.telefone||'').replace(/\D/g,'')===c.whatsapp))||null;
+    c.__leadId=lead?lead.id:null;
+    if(lead) resumo.clientesExistentes++; else resumo.clientesNovos++;
+  });
+
+  /* apólices que já foram importadas antes (roda de novo sem medo) */
+  const jaTem=new Set((CACHE.apolices||[]).map(a=>a.importKey).filter(Boolean));
+  let repetidas=0;
+  apolices.forEach(a=>{ if(jaTem.has(a.importKey)){ a.__pular=true; repetidas++; } });
+  resumo.repetidas=repetidas;
+
+  return { clientes:Object.values(clientes), apolices, avisos, produtores, mapaProdutor:mapa, resumo };
+}
+
+/* ---------- tela ---------- */
+function icTela(){
+  const p=IC.plano;
+  let html=`<div class="card" id="icDrop" style="border:2px dashed var(--border);text-align:center;padding:24px 18px">
+    <div style="font-size:1.8rem;color:var(--brand);margin-bottom:6px"><i class="fas fa-boxes-packing"></i></div>
+    <h4 style="margin:0 0 4px">Traga a carteira do sistema antigo</h4>
+    <p style="color:var(--text-2);font-size:.86rem;margin:0 0 12px">
+      Solte aqui o Excel exportado do gerenciador (aquele "Exporta itens"). Eu leio clientes, apólices,
+      vigências, prêmios, comissões e o veículo de cada uma — e separo o que está ativo do que é histórico.<br>
+      Pode rodar mais de uma vez: o que já entrou não entra de novo.</p>
+    <input type="file" id="icFile" accept=".xlsx,.xls" style="display:none" onchange="icReceber(this.files)">
+    <button class="btn btn-primary" onclick="document.getElementById('icFile').click()"><i class="fas fa-folder-open"></i> Escolher o Excel</button>
+    <div id="icStatus" style="margin-top:10px;font-size:.85rem">${IC.arquivo?'<i class="fas fa-file-excel" style="color:var(--ok)"></i> '+esc(IC.arquivo):''}</div>
+  </div>`;
+  if(p) html+=icPreviewHTML(p);
+  return html;
+}
+async function icReceber(files){
+  const f=files&&files[0]; if(!f) return;
+  const st=document.getElementById('icStatus');
+  if(st) st.innerHTML='<i class="fas fa-spinner fa-spin"></i> Lendo '+esc(f.name)+'…';
+  try{
+    IC.linhas=await icLerArquivo(f);
+    IC.arquivo=f.name;
+    IC.plano=icProcessar(IC.linhas);
+    IC.mapProd=IC.plano.mapaProdutor;
+    VIEWS.importar();
+  }catch(e){ toast('Não consegui ler a planilha: '+e.message,'err'); if(st) st.innerHTML=''; }
+}
+function icPreviewHTML(p){
+  const r=p.resumo;
+  const kpi=(v,l,cor)=>`<div class="kpi"><div class="ico" style="background:${cor}22;color:${cor}"><i class="fas fa-file-contract"></i></div>
+    <div class="val">${v}</div><div class="lbl">${l}</div></div>`;
+  let html=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+    ${kpi(r.clientes,'Clientes ('+r.clientesNovos+' novos, '+r.clientesExistentes+' já no CRM)','var(--brand)')}
+    ${kpi(r.ativas,'Apólices ativas','var(--ok)')}
+    ${kpi(r.vencidas,'Vencidas há menos de 1 ano (reconquista)','var(--warn)')}
+    ${kpi(r.renovadas,'Renovadas (histórico)','var(--info)')}
+    ${kpi(r.encerradas,'Encerradas (histórico)','var(--text-3)')}
+  </div>`;
+  html+=`<div class="card" style="padding:14px 18px"><b style="font-size:.9rem"><i class="fas fa-sack-dollar" style="color:var(--ok)"></i>
+    Prêmio das ativas: ${(r.premioAtivo||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</b>
+    ${r.repetidas?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);margin-left:10px">${r.repetidas} já importadas antes — vou pular</span>`:''}</div>`;
+
+  /* produtores */
+  const prods=Object.keys(p.produtores);
+  if(prods.length) html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-user-tie"></i> Quem produziu cada negócio</h3></div>
+    <p style="color:var(--text-2);font-size:.84rem;margin-top:0">Vinculo cada apólice ao funcionário para o cálculo de comissão da equipe. Confira se acertei:</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+    ${prods.map(nome=>`<div style="display:flex;align-items:center;gap:10px;background:var(--surface-2);border-radius:10px;padding:10px 13px">
+      <div style="flex:1;min-width:0"><b style="font-size:.85rem">${esc(nome)}</b>
+        <div style="font-size:.73rem;color:var(--text-3)">${p.produtores[nome]} apólice(s)</div></div>
+      <select onchange="IC.mapProd[${JSON.stringify(nome).replace(/"/g,'&quot;')}]=this.value" style="width:auto;font-size:.83rem;padding:5px 8px">
+        <option value="">não vincular</option>
+        ${(CACHE.admins||[]).map(f=>`<option value="${f.id}" ${IC.mapProd[nome]===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}
+      </select></div>`).join('')}
+    </div></div>`;
+
+  if(p.avisos.length) html+=`<div class="card" style="background:var(--warn-bg);border-color:#f3d9a4;color:#7c4a03">
+    <b><i class="fas fa-triangle-exclamation"></i> ${p.avisos.length} aviso(s)</b>
+    <div style="font-size:.8rem;margin-top:6px">${p.avisos.slice(0,10).map(esc).join('<br>')}${p.avisos.length>10?'<br>…':''}</div></div>`;
+
+  /* amostra */
+  const amostra=p.apolices.filter(a=>!a.__pular).slice(0,10);
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-eye"></i> Conferência (10 primeiras)</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>CPF/CNPJ</th><th>Seguradora</th><th>Vigência</th><th style="text-align:right">Prêmio</th><th>Comissão</th><th>Veículo</th><th>Situação</th></tr></thead><tbody>
+    ${amostra.map(a=>{
+      const cor=a.status==='ativa'?'var(--ok)':a.status==='vencida'?'var(--warn)':a.status==='renovada'?'var(--info)':'var(--text-3)';
+      return `<tr><td><b>${esc(a.clienteNome)}</b></td><td style="font-size:.78rem">${esc(a.clienteCpf||'—')}</td>
+      <td>${esc(a.seguradora||'—')}</td><td style="font-size:.8rem">${fmtData(a.dataInicioVigencia)} → ${fmtData(a.dataFimVigencia)}</td>
+      <td style="text-align:right">${(a.valorPremio||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</td>
+      <td>${a.comissao?a.comissao+'%':'—'}</td>
+      <td style="font-size:.78rem">${esc(a.veiculoPlaca||'')} ${esc((a.veiculoModelo||'').slice(0,24))}</td>
+      <td>${statusBadge(a.status,cor)}</td></tr>`;}).join('')}
+    </tbody></table></div>
+    <div style="display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary" id="icBotao" onclick="icImportar()"><i class="fas fa-cloud-arrow-up"></i>
+        Importar ${p.apolices.filter(a=>!a.__pular).length} apólice(s) e ${p.resumo.clientes} cliente(s)</button>
+      <span style="font-size:.8rem;color:var(--text-2)">As renovações ativas já caem sozinhas na tela de Renovações e nas sugestões da Agenda.</span>
+    </div>
+    <div id="icProg" style="margin-top:10px;font-size:.85rem"></div></div>`;
+  return html;
+}
+
+/* ---------- gravação ---------- */
+async function icImportar(){
+  if(IC.rodando||!IC.plano) return;
+  IC.rodando=true;
+  const btn=document.getElementById('icBotao'); if(btn) btn.disabled=true;
+  const prog=t=>{ const el=document.getElementById('icProg'); if(el) el.innerHTML=t; };
+  const p=IC.plano;
+  try{
+    /* 1) clientes: novos ganham id na hora; existentes só completam o que falta */
+    prog('<i class="fas fa-spinner fa-spin"></i> Gravando clientes…');
+    const idPorChave={};
+    let loteC=db.batch(), nc=0;
+    for(const c of p.clientes){
+      const campos={ nome:c.nome, cpf:c.cpf, dataNascimento:c.dataNascimento, sexo:c.sexo,
+        estadoCivil:c.estadoCivil, email:c.email, whatsapp:c.whatsapp, telefone:c.telefone,
+        endereco:c.endereco, bairro:c.bairro, cidade:c.cidade, estado:c.estado, cep:c.cep,
+        nomeEmpresa:c.nomeEmpresa, tipoPessoa:c.pessoa };
+      if(c.__leadId){
+        idPorChave[c.chave]=c.__leadId;
+        const lead=(CACHE.leads||[]).find(l=>l.id===c.__leadId)||{};
+        const upd={};
+        Object.entries(campos).forEach(([k,v])=>{ if(v!=null&&v!==''&&(lead[k]==null||lead[k]==='')) upd[k]=v; });
+        if(lead.status!=='cliente'&&lead.status!=='negocio_fechado') upd.status='cliente';
+        if(Object.keys(upd).length){ upd.atualizadoEm=FV.serverTimestamp();
+          loteC.update(db.collection('leads_crm').doc(c.__leadId),upd); nc++; }
+      }else{
+        const ref=db.collection('leads_crm').doc();
+        idPorChave[c.chave]=ref.id;
+        const doc={};
+        Object.entries(campos).forEach(([k,v])=>{ if(v!=null&&v!=='') doc[k]=v; });
+        doc.status='cliente'; doc.origem='carteira_antiga'; doc.produto='auto';
+        doc.criadoEm=FV.serverTimestamp(); doc.atualizadoEm=FV.serverTimestamp();
+        loteC.set(ref,doc); nc++;
+      }
+      if(nc>=350){ await loteC.commit(); loteC=db.batch(); nc=0; }
+    }
+    if(nc) await loteC.commit();
+
+    /* 2) apólices */
+    const fila=p.apolices.filter(a=>!a.__pular);
+    let feito=0, loteA=db.batch(), na=0;
+    for(const a of fila){
+      const funcId=IC.mapProd[a.__produtor]||null;
+      const func=funcId?(CACHE.admins||[]).find(f=>f.id===funcId):null;
+      const doc={ clienteNome:a.clienteNome, clienteCpf:a.clienteCpf,
+        clienteWhatsapp:a.clienteWhatsapp, clienteEmail:a.clienteEmail,
+        leadId:idPorChave[a.__cliChave]||null,
+        ramo:a.ramo, seguradora:a.seguradora, numeroApolice:a.numeroApolice, status:a.status,
+        dataInicioVigencia:a.dataInicioVigencia, dataFimVigencia:a.dataFimVigencia,
+        valorPremio:a.valorPremio, premioLiquido:a.premioLiquido, premioIof:a.premioIof,
+        comissao:a.comissao, comissaoValor:a.comissaoValor,
+        responsavelId:funcId, responsavelNome:func?(func.nome||func.email):(a.__produtor||null),
+        produtorOriginal:a.__produtor||null,
+        veiculoPlaca:a.veiculoPlaca, chassi:a.chassi, veiculoModelo:a.veiculoModelo,
+        veiculoFabricante:a.veiculoFabricante||null,
+        veiculoAnoMod:a.veiculoAnoMod, veiculoAnoFab:a.veiculoAnoFab, veiculoAno:a.veiculoAnoMod,
+        codigoFipe:a.codigoFipe, valorMercado:a.valorMercado, percValorMercado:a.percValorMercado,
+        bonusClasse:a.bonusClasse, franquia:a.franquia, lmi:a.lmi,
+        assist24h:a.assist24h, vidros:a.vidros, cepPernoite:a.cepPernoite,
+        observacoes:a.observacoes, origem:'carteira_antiga', importKey:a.importKey,
+        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() };
+      Object.keys(doc).forEach(k=>{ if(doc[k]===undefined) doc[k]=null; });
+      loteA.set(db.collection('apolices_cliente').doc(),doc);
+      na++; feito++;
+      if(na>=350){ await loteA.commit(); loteA=db.batch(); na=0;
+        prog('<i class="fas fa-spinner fa-spin"></i> Gravando apólices… '+feito+' de '+fila.length); }
+    }
+    if(na) await loteA.commit();
+
+    prog('<i class="fas fa-circle-check" style="color:var(--ok)"></i> <b>Pronto!</b> '+
+      p.resumo.clientes+' cliente(s) e '+fila.length+' apólice(s) importadas. '+
+      'Veja em <a href="#clientes" style="color:var(--brand)">Clientes</a>, '+
+      '<a href="#apolices" style="color:var(--brand)">Apólices</a> e '+
+      '<a href="#renovacoes" style="color:var(--brand)">Renovações</a>.');
+    toast('Carteira importada: '+fila.length+' apólices de '+p.resumo.clientes+' clientes.','ok','Importação concluída');
+    IC.plano=null; IC.linhas=null;
+  }catch(e){
+    console.error('importar carteira',e);
+    prog('<span style="color:var(--danger)"><i class="fas fa-circle-xmark"></i> Parou no meio: '+esc(e.message||e.code||'erro')+
+      '. Pode rodar de novo — o que já entrou não duplica.</span>');
+    toast('A importação parou: '+(e.code||e.message),'err');
+  }
+  IC.rodando=false;
+  if(btn) btn.disabled=false;
 }
 
 </script>
