@@ -2961,9 +2961,30 @@ let AP_FILTER={busca:'',situacao:'',ramo:'',seguradora:'',produtor:'',ord:'fim',
 const apEhAtiva=a=>!a.status||a.status==='ativa';
 /* comissão da apólice: valor exato da seguradora, senão % sobre o líquido */
 function apComissaoValor(a){
-  if(a.comissaoValor!=null&&a.comissaoValor!=='') return Number(a.comissaoValor)||0;
+  /* valor exato da seguradora só vale quando é de verdade (>0);
+     um zero perdido não pode calar o cálculo % sobre o líquido */
+  if(a.comissaoValor!=null&&a.comissaoValor!==''&&Number(a.comissaoValor)>0) return Number(a.comissaoValor);
   const base=Number(a.premioLiquido)||Number(a.valorPremio)||0;
   return Math.round(base*(Number(a.comissao)||0))/100;
+}
+/* aceita 1341.75, "1.341,75", "1341,75", "R$ 1.341,75" */
+function apNum(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number') return isNaN(v)?null:v;
+  let s=String(v).trim().replace(/[R$\s]/g,'');
+  if(!/\d/.test(s)) return null;
+  if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
+  const n=parseFloat(s); return isNaN(n)?null:n;
+}
+const apBR=v=>(v==null||v==='')?'':String(v).replace('.',',');
+function apCalcular(){
+  const g=i=>document.getElementById(i);
+  const liq=apNum(g('apLiquido')&&g('apLiquido').value);
+  const tot=apNum(g('apPremio')&&g('apPremio').value);
+  const pct=apNum(g('apComissao')&&g('apComissao').value);
+  const el=g('apComCalc'); if(!el) return;
+  const base=liq||tot||0;
+  el.textContent=(pct&&base)?('Calculada: '+money(Math.round(base*pct)/100)+' ('+pct+'% sobre '+(liq?'o líquido':'o total')+')'):'';
 }
 function apOrdenar(campo){
   if(AP_FILTER.ord===campo) AP_FILTER.dir=-AP_FILTER.dir;
@@ -3264,10 +3285,13 @@ function modalApolice(id){
         <div class="form-row"><label>Status</label><select id="apStatus"><option value="ativa" ${a.status!=='cancelada'?'selected':''}>Ativa</option><option value="cancelada" ${a.status==='cancelada'?'selected':''}>Cancelada</option></select></div>
         <div class="form-row"><label>Início vigência</label><input type="date" id="apIni" value="${a.dataInicioVigencia&&toDate(a.dataInicioVigencia)?toDate(a.dataInicioVigencia).toISOString().slice(0,10):''}"></div>
         <div class="form-row"><label>Fim vigência</label><input type="date" id="apFim" value="${a.dataFimVigencia&&toDate(a.dataFimVigencia)?toDate(a.dataFimVigencia).toISOString().slice(0,10):''}"></div>
-        <div class="form-row"><label>Prêmio total (R$)</label><input type="number" step="0.01" id="apPremio" value="${a.valorPremio||''}"></div>
-        <div class="form-row"><label>Prêmio líquido (R$)</label><input type="number" step="0.01" id="apLiquido" value="${a.premioLiquido||''}">
-          <div style="font-size:.72rem;color:var(--text-3);margin-top:3px">A comissão é calculada sobre o líquido.</div></div>
-        <div class="form-row"><label>Comissão (%)</label><input type="number" step="0.01" id="apComissao" value="${a.comissao||''}"></div>
+        <div class="form-row"><label>Prêmio total (R$)</label><input type="text" inputmode="decimal" id="apPremio" value="${apBR(a.valorPremio)}" placeholder="0,00" oninput="apCalcular()"></div>
+        <div class="form-row"><label>Prêmio líquido (R$)</label><input type="text" inputmode="decimal" id="apLiquido" value="${apBR(a.premioLiquido)}" placeholder="0,00" oninput="apCalcular()">
+          <div style="font-size:.72rem;color:var(--text-3);margin-top:3px">Pode digitar com vírgula: 1.341,75. A comissão incide sobre o líquido.</div></div>
+        <div class="form-row"><label>Comissão (%)</label><input type="text" inputmode="decimal" id="apComissao" value="${apBR(a.comissao)}" placeholder="0" oninput="apCalcular()"></div>
+        <div class="form-row"><label>Comissão (R$) — valor exato, se souber</label>
+          <input type="text" inputmode="decimal" id="apComValor" value="${a.comissaoValor!=null&&Number(a.comissaoValor)>0?apBR(a.comissaoValor):''}" placeholder="deixe vazio para calcular">
+          <div style="font-size:.72rem;color:var(--brand-dark);margin-top:3px" id="apComCalc"></div></div>
         <div class="form-row"><label>Vendedor / responsável</label>
           <select id="apResp"><option value="">— não definido —</option>
             ${(CACHE.admins||[]).slice().sort((x,y)=>(x.nome||'').localeCompare(y.nome||'')).map(f=>`<option value="${f.id}" ${a.responsavelId===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}
@@ -3299,6 +3323,7 @@ function modalApolice(id){
       <button class="btn btn-ghost" onclick="modalEndosso('${id}')"><i class="fas fa-file-pen"></i> Incluir endosso</button>`:''}
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="salvarApolice()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`,'wide');
+  setTimeout(apCalcular,60);
   if(id) carregarAnexos(id);
 }
 async function carregarAnexos(apoliceId){ const el=document.getElementById('apAnexosList'); if(!el) return;
@@ -3380,9 +3405,11 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     ramo:document.getElementById('apRamo').value, seguradora:document.getElementById('apSeg').value.trim()||null,
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
-    valorPremio:parseFloat(document.getElementById('apPremio').value)||0,
-    premioLiquido:parseFloat(document.getElementById('apLiquido').value)||null,
-    comissao:parseFloat(document.getElementById('apComissao').value)||0,
+    valorPremio:apNum(document.getElementById('apPremio').value)||0,
+    premioLiquido:apNum(document.getElementById('apLiquido').value)||null,
+    comissao:apNum(document.getElementById('apComissao').value)||0,
+    comissaoValor:(function(){ const v=apNum(document.getElementById('apComValor').value);
+      return (v&&v>0)?v:null; })(),   /* vazio ou zero = calcula % sobre o líquido */
     responsavelId:document.getElementById('apResp')?document.getElementById('apResp').value||null:null,
     responsavelNome:(function(){const v=document.getElementById('apResp')?document.getElementById('apResp').value:'';const f=(CACHE.admins||[]).find(x=>x.id===v);return f?(f.nome||f.email):null;})(),
     veiculoPlaca:document.getElementById('apPlaca').value.trim()||null, codigoFipe:document.getElementById('apFipe').value.trim()||null,
@@ -5736,7 +5763,7 @@ function pgComissaoDe(func,ano,mes){
     const premio=Number(a.valorPremio)||0;                 /* total, para mostrar */
     const base=Number(a.premioLiquido)||premio;            /* comissão é sobre o líquido */
     const pct=Number(a.comissao)||0;
-    const nossa=(a.comissaoValor!=null&&a.comissaoValor!=='')
+    const nossa=(a.comissaoValor!=null&&a.comissaoValor!==''&&Number(a.comissaoValor)>0)
       ? Math.round(Number(a.comissaoValor)*100)/100        /* valor exato vindo da seguradora */
       : Math.round(base*pct)/100;
     const dele=Math.round(nossa*fator)/100;
@@ -6096,7 +6123,7 @@ function pgViewComissoes(){
     let nossa=0, premio=0; const dele={};
     aps.forEach(a=>{
       const base=Number(a.premioLiquido)||Number(a.valorPremio)||0;
-      const v=(a.comissaoValor!=null&&a.comissaoValor!=='')?Number(a.comissaoValor):Math.round(base*(Number(a.comissao)||0))/100;
+      const v=(a.comissaoValor!=null&&a.comissaoValor!==''&&Number(a.comissaoValor)>0)?Number(a.comissaoValor):Math.round(base*(Number(a.comissao)||0))/100;
       nossa+=v; premio+=Number(a.valorPremio)||0;
       const quem=pgVendedorDa(a); if(quem) dele[quem]=(dele[quem]||0)+v;
     });
