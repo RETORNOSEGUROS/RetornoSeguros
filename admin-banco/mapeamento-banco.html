@@ -11267,7 +11267,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '240';
+  const APP_VERSAO = '241';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -25366,7 +25366,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           '</div>'+
           '<div style="background:linear-gradient(135deg,#eef2ff,#faf5ff); border:1px solid #c7d2fe; border-radius:12px; padding:13px 15px; margin-top:16px;">'+
             '<div style="font-weight:800; font-size:13px; color:#4338ca; margin-bottom:6px;">🤖 Preencher tudo com IA (grátis, pelo claude.ai)</div>'+
-            '<div style="font-size:12px; color:#64748b; line-height:1.5; margin-bottom:9px;">1) Copie o prompt · 2) No claude.ai, anexe o PDF da apólice/proposta e cole o prompt · 3) Cole aqui o JSON que ele devolver — o formulário se preenche sozinho, com descrição de cada cobertura, resumo e o que NÃO cobre.</div>'+
+            '<div style="font-size:12px; color:#64748b; line-height:1.5; margin-bottom:9px;">1) Copie o prompt · 2) No claude.ai, anexe o PDF da apólice/proposta e cole o prompt · 3) Copie o texto JSON que ele devolver (não precisa ser arquivo) e cole aqui — o formulário se preenche sozinho, com descrição de cada cobertura, resumo e o que NÃO cobre.</div>'+
             '<div style="display:flex; gap:7px; flex-wrap:wrap; margin-bottom:8px;">'+
               '<button class="btn-mini" style="background:#4f46e5; color:#fff; border-color:#4f46e5;" onclick="cobCopiarPromptIA(\''+_esc(rm.nome)+'\', this)">📋 Copiar prompt</button>'+
             '</div>'+
@@ -25468,7 +25468,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 '2. Dinheiro sempre no padrão "R$ 1.234,56". Datas sempre AAAA-MM-DD.\n' +
 '3. Em "valor" vai o limite/capital segurado (LMI/IS) da cobertura; em "franquia" a franquia ou POS como estiver escrito; em "custo" o prêmio daquela cobertura, apenas se o documento discriminar por cobertura.\n' +
 '4. "naoCobre": as exclusões que um dono de empresa mais precisa saber, sem juridiquês.\n' +
-'5. Liste TODAS as coberturas contratadas, na ordem do documento. Não liste coberturas recusadas/não contratadas em "coberturas" — o que for relevante delas vai em "naoCobre".';
+'5. Liste TODAS as coberturas contratadas, na ordem do documento. Não liste coberturas recusadas/não contratadas em "coberturas" — o que for relevante delas vai em "naoCobre".\n' +
+'6. IMPORTANTE: NUNCA use aspas duplas DENTRO dos textos — se o documento tiver algo como Cobertura Básica "A", escreva Cobertura Básica \'A\' (aspas simples). O JSON precisa passar num validador.\n' +
+'7. Devolva o JSON dentro de um bloco de código (```json), para eu copiar com um clique.';
   }
   function cobCopiarPromptIA(ramoNome, btn){
     const txt = _promptApolice(ramoNome);
@@ -25485,14 +25487,39 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); // aceita DD/MM/AAAA
     return m ? (m[3] + '-' + m[2] + '-' + m[1]) : '';
   }
+  // Conserta os deslizes mais comuns de JSON vindo de IA: aspas duplas SEM escape
+  // dentro dos textos (ex.: Cobertura Básica "A") e vírgula sobrando antes de } ].
+  // Regra: uma aspa só FECHA a string se o próximo caractere útil for , } ] ou :
+  function _repararJson(raw){
+    let s = raw.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+    let out = '', inStr = false;
+    for (let i = 0; i < s.length; i++){
+      const ch = s[i];
+      if (!inStr){ if (ch === '"') inStr = true; out += ch; continue; }
+      if (ch === '\\'){ out += ch + (s[i+1] || ''); i++; continue; }
+      if (ch === '"'){
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        const nx = s[j];
+        if (nx === ',' || nx === '}' || nx === ']' || nx === ':' || j >= s.length){ inStr = false; out += ch; }
+        else { out += '\\"'; }
+        continue;
+      }
+      out += ch;
+    }
+    return out.replace(/,\s*([}\]])/g, '$1');
+  }
   function cobImportarJson(){
     const msg = document.getElementById('cobJsonMsg');
     const dizer = function(t, cor){ if (msg) { msg.textContent = t; msg.style.color = cor || '#059669'; } };
     try {
       let raw = (document.getElementById('cobJsonIn').value || '').trim();
-      raw = raw.replace(/^```(json)?/i, '').replace(/```$/, '').trim(); // tolera cerca de código
-      const j = JSON.parse(raw);
+      raw = raw.replace(/^[^{]*/, '').replace(/[^}]*$/, ''); // fica só do primeiro { ao último } (tira cercas e texto em volta)
+      let j, reparado = false;
+      try { j = JSON.parse(raw); }
+      catch (e1) { j = JSON.parse(_repararJson(raw)); reparado = true; }
       COB_IMPORT = j;
+      COB_IMPORT.__reparado = reparado;
       if (j.seguradora) document.getElementById('cobSeguradora').value = j.seguradora;
       if (j.numeroApolice) document.getElementById('cobNumero').value = j.numeroApolice;
       const vi = _cobDataISO(j.vigenciaInicio), vf = _cobDataISO(j.vigenciaFim);
@@ -25502,16 +25529,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (j.resumo) document.getElementById('cobResumo').value = j.resumo;
       if (Array.isArray(j.naoCobre) && j.naoCobre.length) document.getElementById('cobNaoCobre').value = j.naoCobre.join('\n');
       let casadas = 0, novas = 0;
+      const _claimed = new Set(); // 2 coberturas do JSON nunca caem na MESMA linha (D&O tem dezenas de extensões parecidas)
       (Array.isArray(j.coberturas) ? j.coberturas : []).forEach(function(c){
         if (!c || !c.nome) return;
         const alvoN = _normCob(c.nome).replace(/[^a-z0-9]/g, '');
-        let row = null;
+        let row = null, rowExato = null;
         document.querySelectorAll('#cobLinhas .cob-row').forEach(function(r){
-          if (row) return;
+          if (rowExato || _claimed.has(r)) return;
           const chk = r.querySelector('.cob-chk');
           const n = _normCob(chk ? (chk.getAttribute('data-nome') || '') : '').replace(/[^a-z0-9]/g, '');
-          if (n && (n === alvoN || n.includes(alvoN) || alvoN.includes(n))) row = r;
+          if (!n) return;
+          if (n === alvoN) { rowExato = r; return; }
+          if (!row && (n.includes(alvoN) || alvoN.includes(n))) row = r;
         });
+        row = rowExato || row;
+        if (row) _claimed.add(row);
         if (row) {
           const chk = row.querySelector('.cob-chk');
           chk.checked = true; if (chk.onchange) chk.onchange.call(chk);
@@ -25542,10 +25574,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         });
         if (!achou) { document.getElementById('cobAssNova').value = a; cobAddAssistencia(); }
       });
-      dizer('✓ Importado: ' + casadas + ' cobertura(s) do catálogo + ' + novas + ' nova(s). Confira e salve.');
+      dizer('✓ Importado: ' + casadas + ' cobertura(s) do catálogo + ' + novas + ' nova(s).' + (COB_IMPORT.__reparado ? ' (corrigi aspas do JSON automaticamente)' : '') + ' Confira e salve.');
     } catch (e) {
       COB_IMPORT = null;
-      dizer('JSON inválido — cole exatamente o que o Claude devolveu. (' + e.message.slice(0, 60) + ')', '#dc2626');
+      dizer('JSON inválido mesmo após tentar corrigir — me mande esse JSON que eu ajusto o leitor. (' + e.message.slice(0, 60) + ')', '#dc2626');
     }
   }
   window.cobImportarJson = cobImportarJson;
