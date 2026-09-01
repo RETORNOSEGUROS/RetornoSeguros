@@ -605,40 +605,55 @@ function fetchComTempo(url,ms){
   if(c) setTimeout(()=>c.abort(),ms||15000);
   return fetch(url,c?{signal:c.signal}:undefined);
 }
-let __fipeDiag='';
+let __fipeDiag='', __fipe429=false;
 function __regErro(rot,e){ __fipeDiag+=(__fipeDiag?' · ':'')+rot+': '+
   (e&&e.name==='AbortError'?'demorou demais (15s)':(e&&e.message)||String(e)); }
 async function fipeTenta(urlV1,urlV2,normalizaV2){
-  __fipeDiag='';
+  __fipeDiag=''; __fipe429=false;
   try{ const r=await fetchComTempo(urlV1);
     if(r.ok){ const d=await r.json(); if(d&&!d.erro) return d; __regErro('API 1','resposta com erro'); }
-    else __regErro('API 1','HTTP '+r.status);
+    else { if(r.status===429) __fipe429=true; __regErro('API 1','HTTP '+r.status); }
   }catch(e){ __regErro('API 1',e); }
   try{ const r=await fetchComTempo(urlV2);
     if(r.ok){ const d=await r.json(); if(d) return normalizaV2(d); }
-    else __regErro('API 2','HTTP '+r.status);
+    else { if(r.status===429) __fipe429=true; __regErro('API 2','HTTP '+r.status); }
   }catch(e){ __regErro('API 2',e); }
   console.warn('FIPE indisponível — '+__fipeDiag);
   return null;
 }
+/* cache no navegador: cada visitante consulta a tabela uma vez só (evita o limite HTTP 429) */
+function fipeCacheLe(k,horas){ try{ const o=JSON.parse(localStorage.getItem(k));
+  if(o&&o.t&&(Date.now()-o.t)<horas*3600000) return o.d; }catch(e){} return null; }
+function fipeCacheGrava(k,d){ try{ localStorage.setItem(k,JSON.stringify({t:Date.now(),d:d})); }catch(e){} }
+async function fipeComCache(chave,horas,busca){
+  const c=fipeCacheLe(chave,horas); if(c) return c;
+  const d=await busca(); if(d) fipeCacheGrava(chave,d);
+  return d;
+}
 const v2Lista=d=>(Array.isArray(d)?d:[]).map(x=>({codigo:String(x.code),nome:x.name}));
-function fipeMarcas(){ return fipeTenta(FIPE_API+'/marcas',FIPE_V2+'/brands',v2Lista); }
-function fipeModelos(m){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos',FIPE_V2+'/brands/'+m+'/models',
-  d=>({modelos:v2Lista(d)})); }
-function fipeAnos(m,mo){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos',
-  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years',v2Lista); }
-function fipeValor(m,mo,a){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos/'+a,
-  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years/'+a,d=>({Valor:d.price||''})); }
+function fipeMarcas(){ return fipeComCache('fipe_marcas',168,
+  ()=>fipeTenta(FIPE_API+'/marcas',FIPE_V2+'/brands',v2Lista)); }
+function fipeModelos(m){ return fipeComCache('fipe_mod_'+m,168,
+  ()=>fipeTenta(FIPE_API+'/marcas/'+m+'/modelos',FIPE_V2+'/brands/'+m+'/models',
+  d=>({modelos:v2Lista(d)}))); }
+function fipeAnos(m,mo){ return fipeComCache('fipe_anos_'+m+'_'+mo,168,
+  ()=>fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos',
+  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years',v2Lista)); }
+function fipeValor(m,mo,a){ return fipeComCache('fipe_val_'+m+'_'+mo+'_'+a,24,
+  ()=>fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos/'+a,
+  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years/'+a,d=>({Valor:d.price||''}))); }
 
 /* marcas carregam já na abertura da página (como na versão anterior), com re-tentativa */
-let __marcasPromessa=null;
+let __marcasPromessa=null, __fipePausaAte=0;
 function carregarMarcas(){
   if(marcasFipe.length) return Promise.resolve(true);
+  if(Date.now()<__fipePausaAte){ __fipe429=true; return Promise.resolve(false); }
   if(__marcasPromessa) return __marcasPromessa;
   __marcasPromessa=(async()=>{
     for(let t=0;t<3;t++){
       const d=await fipeMarcas();
       if(d&&d.length){ marcasFipe=d; return true; }
+      if(__fipe429){ __fipePausaAte=Date.now()+60000; break; } /* limite de consultas: insistir só piora */
       await new Promise(ok=>setTimeout(ok,1200*(t+1)));
     }
     __marcasPromessa=null; return false;
@@ -655,9 +670,11 @@ async function tentarMarcasDeNovo(){
       if(inp2.value.trim()) inp2.dispatchEvent(new Event('input')); }
     if(erro2) erro2.classList.remove('show'); }
   else if(erro2){
-    erro2.innerHTML='Não consegui falar com a tabela FIPE agora'+
-      (__fipeDiag?'<br><small style="opacity:.8">Motivo técnico: '+esc(__fipeDiag)+'</small><br>':'. ')+
-      '<b style="cursor:pointer;text-decoration:underline" onclick="tentarMarcasDeNovo()">Tentar de novo</b>';
+    erro2.innerHTML=(__fipe429
+      ?'A tabela FIPE recebeu muitas consultas seguidas e pediu uma pausa. <b>Espere 1&ndash;2 minutos</b> e toque em Tentar de novo &mdash; suas respostas continuam salvas.'
+      :'Não consegui falar com a tabela FIPE agora'+
+       (__fipeDiag?'<br><small style="opacity:.8">Motivo técnico: '+esc(__fipeDiag)+'</small>':'.'))+
+      '<br><b style="cursor:pointer;text-decoration:underline" onclick="tentarMarcasDeNovo()">Tentar de novo</b>';
     erro2.classList.add('show');
     if(inp2) inp2.placeholder='Toque em "Tentar de novo" acima';
   }
