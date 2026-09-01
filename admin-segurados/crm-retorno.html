@@ -1270,7 +1270,7 @@ let LEADS_VIEW='kanban';
    apólice sumia do kanban mesmo com cotação em andamento. */
 function leadsAbertos(){ let l=CACHE.leads.filter(x=>{
     const st=x.status||'pre_cadastro';
-    if(st==='negocio_fechado'||st==='negocio_perdido'||st==='cliente') return false;
+    if(st==='negocio_fechado'||st==='negocio_perdido'||st==='cliente'||st==='contato') return false;
     return true; });
   if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''}`.toLowerCase().includes(q)); }
   return l; }
@@ -3276,7 +3276,15 @@ function modalApolice(id){
     <div class="modal-body">
       <input type="hidden" id="apId" value="${id||''}">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div class="form-row"><label>Cliente *</label><input type="text" id="apCliente" value="${esc(a.clienteNome||'')}" placeholder="Nome do cliente"></div>
+        <div class="form-row" style="grid-column:1/-1"><label>Cliente * <span style="font-weight:400;color:var(--text-3)">— digite e escolha da lista, ou escreva um nome novo</span></label>
+          <div style="position:relative">
+            <input type="text" id="apCliente" value="${esc(a.clienteNome||'')}" placeholder="Nome, CPF ou telefone..." autocomplete="off" oninput="apProcurarCliente(this.value)">
+            <div id="apCliLista" style="position:absolute;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border-2);border-radius:0 0 10px 10px;max-height:220px;overflow:auto;z-index:60;display:none;box-shadow:var(--shadow)"></div>
+          </div>
+          <input type="hidden" id="apLeadId" value="${esc(a.leadId||'')}">
+          <input type="hidden" id="apCpf" value="${esc(a.clienteCpf||'')}">
+          <div id="apCliEscolhido" style="display:${a.leadId?'block':'none'};background:var(--ok-bg);border-radius:9px;padding:7px 12px;font-size:.8rem;margin-top:6px">
+            <i class="fas fa-circle-check" style="color:var(--ok)"></i> Ligada ao cadastro${a.clienteCpf?' de CPF '+esc(a.clienteCpf):''} — sem duplicar contato.</div></div>
         <div class="form-row"><label>WhatsApp do cliente</label><input type="text" id="apWhats" value="${esc(a.clienteWhatsapp||'')}"></div>
         <div class="form-row"><label>E-mail do cliente</label><input type="email" id="apEmail" value="${esc(a.clienteEmail||'')}"></div>
         <div class="form-row"><label>Ramo</label><select id="apRamo">${RAMO_OPCOES.map(r=>`<option ${a.ramo===r?'selected':''}>${r}</option>`).join('')}</select></div>
@@ -3398,10 +3406,45 @@ async function confirmarExcluirApolice(id){
     await db.collection('apolices_cliente').doc(id).delete();
     closeModal(); toast('Apólice excluída'+(a&&a.importKey?' — e não volta se você importar a planilha de novo.':'.'),'ok');
   }catch(e){ console.error(e); toast('Erro ao excluir.','err'); } }
+function apProcurarCliente(q){
+  const box=document.getElementById('apCliLista'); if(!box) return;
+  document.getElementById('apLeadId').value=''; document.getElementById('apCpf').value='';
+  const marc=document.getElementById('apCliEscolhido'); if(marc) marc.style.display='none';
+  q=(q||'').trim().toLowerCase();
+  if(q.length<3){ box.style.display='none'; return; }
+  const dig=q.replace(/\D/g,'');
+  const achados=(CACHE.leads||[]).filter(l=>{
+    if((l.nome||l.nomeEmpresa||'').toLowerCase().includes(q)) return true;
+    if(dig.length>=4&&((l.cpf||l.cnpj||'')+'').replace(/\D/g,'').includes(dig)) return true;
+    if(dig.length>=4&&((l.whatsapp||l.telefone||'')+'').replace(/\D/g,'').includes(dig)) return true;
+    return false; }).slice(0,7);
+  if(!achados.length){ box.style.display='none'; return; }
+  box.innerHTML=achados.map(l=>`<div onclick='apUsarCliente(${JSON.stringify(l.id)})'
+      style="padding:9px 13px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px"
+      onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
+    <span><b style="font-size:.85rem">${esc(l.nome||l.nomeEmpresa||'—')}</b>
+      <small style="color:var(--text-3)"> ${esc(l.cpf||'')} ${esc(l.whatsapp||l.telefone||'')}</small></span>
+    <small style="color:var(--text-3)">${isClienteLead(l)?'cliente':'contato'}</small></div>`).join('');
+  box.style.display='block';
+}
+function apUsarCliente(id){
+  const l=(CACHE.leads||[]).find(x=>x.id===id); if(!l) return;
+  document.getElementById('apCliente').value=l.nome||l.nomeEmpresa||'';
+  document.getElementById('apLeadId').value=l.id;
+  document.getElementById('apCpf').value=l.cpf||l.cnpj||'';
+  const w=document.getElementById('apWhats'); if(w&&!w.value) w.value=l.whatsapp||l.telefone||'';
+  const e=document.getElementById('apEmail'); if(e&&!e.value) e.value=l.email||'';
+  document.getElementById('apCliLista').style.display='none';
+  const marc=document.getElementById('apCliEscolhido');
+  if(marc){ marc.style.display='block';
+    marc.innerHTML='<i class="fas fa-circle-check" style="color:var(--ok)"></i> Ligada ao cadastro de <b>'+esc(l.nome||'')+'</b>'+(l.cpf?' · '+esc(l.cpf):'')+' — sem duplicar contato.'; }
+}
 async function salvarApolice(){ const id=document.getElementById('apId').value;
   const cliente=document.getElementById('apCliente').value.trim(); if(!cliente){ toast('Informe o cliente.','err'); return; }
   const dados={ clienteNome:cliente, clienteWhatsapp:document.getElementById('apWhats').value.replace(/\D/g,'')||null,
     clienteEmail:document.getElementById('apEmail').value.trim()||null,
+    leadId:document.getElementById('apLeadId').value||null,
+    clienteCpf:document.getElementById('apCpf').value||null,
     ramo:document.getElementById('apRamo').value, seguradora:document.getElementById('apSeg').value.trim()||null,
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
@@ -3416,7 +3459,7 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     observacoes:document.getElementById('apObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
   try{ if(id) await db.collection('apolices_cliente').doc(id).update(dados);
     else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('apolices_cliente').add(dados); }
-    await upsertCliente({nome:cliente,whatsapp:dados.clienteWhatsapp,email:dados.clienteEmail});
+    if(!dados.leadId) await upsertCliente({nome:cliente,cpf:dados.clienteCpf,whatsapp:dados.clienteWhatsapp,email:dados.clienteEmail});
     if(!id&&window.__renovandoDe){
       await db.collection('apolices_cliente').doc(window.__renovandoDe)
         .update({status:'renovada',atualizadoEm:FV.serverTimestamp()}).catch(()=>{});
@@ -4322,7 +4365,9 @@ function NUMBR(s){ const n=parseFloat(s); return isNaN(n)?null:n; }
 function fipeNum(v){ return NUMBR(String(v||'').replace(/[R$\s.]/g,'').replace(',','.')); }
 function fipeNorm(s){ return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 function fipeTokens(s){ return fipeNorm(s).replace(/[^\w.\s]/g,' ').split(/\s+/).filter(x=>x.length>1); }
-async function fipeGet(u){ const r=await fetch(u); if(!r.ok) throw new Error('API FIPE respondeu '+r.status); return r.json(); }
+let FIPE_429=false; /* a API limitou as consultas deste IP — parar de insistir */
+async function fipeGet(u){ const r=await fetch(u); if(!r.ok){ if(r.status===429) FIPE_429=true; throw new Error('API FIPE respondeu '+r.status); } return r.json(); }
+const fipePausa=ms=>new Promise(ok=>setTimeout(ok,ms));
 function fipeBtn(ctx,label){ const j=encodeURIComponent(JSON.stringify(ctx||{})); return `<button class="btn btn-ghost btn-sm" style="padding:3px 9px" onclick="modalFipe(JSON.parse(decodeURIComponent(this.dataset.ctx)))" data-ctx="${j}"><i class="fas fa-magnifying-glass-dollar"></i>${label===undefined?' consultar':(label?' '+label:'')}</button>`; }
 function fipeAcharMarca(marcas,nome){ const q=fipeNorm(nome); if(!q) return null;
   return marcas.find(m=>fipeNorm(m.nome)===q) || marcas.find(m=>fipeNorm(m.nome).includes(q)||q.includes(fipeNorm(m.nome))) ||
@@ -4423,13 +4468,24 @@ async function fipeObterAtual(ctx){
 }
 function apoliceCtxFipe(a){ return {codigo:a.codigoFipe, marca:a.veiculoFabricante||((a.veiculoModelo||'').split(' ')[0]), modelo:a.veiculoModelo, ano:a.veiculoAno, comb:a.combustivel}; }
 let FIPE_BATCH_RUNNING=false;
+function fipeAtualizadoNesteMes(a){
+  /* já buscamos o valor deste veículo neste mês? então não gasta consulta de novo */
+  try{ if(!a.fipeAtualizadoEm) return false;
+    const d=a.fipeAtualizadoEm.toDate?a.fipeAtualizadoEm.toDate():new Date(a.fipeAtualizadoEm);
+    return d.toISOString().slice(0,7)===new Date().toISOString().slice(0,7);
+  }catch(e){ return false; }
+}
 async function atualizarFipeTodas(silencioso){
   if(FIPE_BATCH_RUNNING) return;
-  const aps=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
-  if(!aps.length){ if(!silencioso) toast('Nenhuma apólice com veículo para atualizar.','info'); return; }
+  FIPE_429=false;
+  const todas=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
+  const aps=todas.filter(a=>!fipeAtualizadoNesteMes(a));
+  const jaNoMes=todas.length-aps.length;
+  if(!todas.length){ if(!silencioso) toast('Nenhuma apólice com veículo para atualizar.','info'); return; }
+  if(!aps.length){ if(!silencioso) toast('Todos os '+todas.length+' veículos já estão com a FIPE deste mês. Nada a consultar.','ok','FIPE em dia'); return; }
   FIPE_BATCH_RUNNING=true;
-  if(!silencioso) toast('Atualizando a FIPE de '+aps.length+' veículo(s) ao vivo. Pode levar um minuto...','info','FIPE');
-  let ok=0;
+  if(!silencioso) toast('Atualizando a FIPE de '+aps.length+' veículo(s)'+(jaNoMes?' ('+jaNoMes+' já estavam em dia)':'')+'. Vou com calma para a API não bloquear...','info','FIPE');
+  let ok=0, parou429=false;
   for(let i=0;i<aps.length;i++){ const a=aps[i];
     try{ const v=await fipeObterAtual(apoliceCtxFipe(a));
       if(v&&v.valorNum){ await fipeSalvarSnap(v.codigo||a.codigoFipe||'', v.marcaModelo||a.veiculoModelo||'', v.valor, v.ano||a.veiculoAno, v.mes);
@@ -4437,11 +4493,48 @@ async function atualizarFipeTodas(silencioso){
     }catch(e){ console.warn('fipe lote',a.id,e); }
     const prog=document.getElementById('fipeBatchProg'); if(prog) prog.style.width=Math.round((i+1)/aps.length*100)+'%';
     const cnt=document.getElementById('fipeBatchCnt'); if(cnt) cnt.textContent=(i+1)+' / '+aps.length;
+    if(FIPE_429){ parou429=true; break; }          /* limite atingido: insistir só prolonga o bloqueio */
+    if(i<aps.length-1) await fipePausa(900);       /* pausa entre veículos: evita o 429 */
   }
-  try{ await db.collection('configuracoes').doc('fipe_auto').set({ ultimoMes:new Date().toISOString().slice(0,7), atualizadoEm:FV.serverTimestamp(), total:ok },{merge:true}); }catch(e){}
+  if(!parou429){ try{ await db.collection('configuracoes').doc('fipe_auto').set({ ultimoMes:new Date().toISOString().slice(0,7), atualizadoEm:FV.serverTimestamp(), total:ok },{merge:true}); }catch(e){} }
   FIPE_BATCH_RUNNING=false;
-  if(!silencioso) toast('FIPE atualizada em '+ok+' de '+aps.length+' veículo(s).','ok','Concluído');
+  if(parou429) toast('A tabela FIPE limitou as consultas por agora (atualizei '+ok+' antes de parar). Espere uns minutos e clique de novo — continuo de onde parei, sem repetir os já feitos.','warn','FIPE pediu pausa');
+  else if(!silencioso) toast('FIPE atualizada em '+ok+' de '+aps.length+' veículo(s).','ok','Concluído');
   if(((location.hash||'').slice(1))==='fipe') VIEWS.fipe();
+}
+/* ===== CATÁLOGO FIPE DO SITE =====
+   1x por mês o CRM baixa marcas + modelos e grava na coleção `site` (leitura pública).
+   A página de cotação lê de lá: carrega na hora e quase não consulta a API. */
+let CATALOGO_RUNNING=false;
+async function atualizarCatalogoFipe(forcar){
+  if(CATALOGO_RUNNING) return; CATALOGO_RUNNING=true; FIPE_429=false;
+  const el=()=>document.getElementById('catFipeInfo');
+  try{
+    const atual=new Date().toISOString().slice(0,7);
+    if(!forcar){ try{ const d=await db.collection('site').doc('fipe_marcas').get();
+      if(d.exists && d.data().mes===atual){ CATALOGO_RUNNING=false; if(el()) el().textContent='Catálogo do site já está no mês '+atual+'.'; return; } }catch(e){} }
+    if(el()) el().textContent='Baixando marcas...';
+    const marcas=await fipeGet(FIPE_BASE+'/marcas');
+    let gravadas=0;
+    for(let i=0;i<marcas.length;i++){ const m=marcas[i];
+      try{ const mr=await fipeGet(FIPE_BASE+'/marcas/'+m.codigo+'/modelos');
+        await db.collection('site').doc('fipe_modelos_'+m.codigo).set({ lista:(mr.modelos||[]).map(x=>({codigo:String(x.codigo),nome:x.nome})), atualizadoEm:FV.serverTimestamp() });
+        gravadas++;
+      }catch(e){ console.warn('catalogo',m.nome,e); }
+      if(el()) el().textContent='Catálogo: '+(i+1)+' / '+marcas.length+' marcas ('+esc(m.nome)+')';
+      if(FIPE_429) break;
+      await fipePausa(700);
+    }
+    if(!FIPE_429){
+      await db.collection('site').doc('fipe_marcas').set({ lista:marcas.map(x=>({codigo:String(x.codigo),nome:x.nome})), mes:atual, totalMarcas:gravadas, atualizadoEm:FV.serverTimestamp() });
+      if(el()) el().textContent='Catálogo do site atualizado: '+gravadas+' marcas com modelos.';
+      toast('Catálogo FIPE do site atualizado ('+gravadas+' marcas). A página de cotação agora carrega das nossas cópias.','ok','Catálogo');
+    } else {
+      toast('A FIPE limitou as consultas no meio do catálogo ('+gravadas+' marcas gravadas). Espere uns minutos e clique de novo.','warn','FIPE pediu pausa');
+      if(el()) el().textContent='Parou no limite da API — '+gravadas+' marcas gravadas. Tente de novo em alguns minutos.';
+    }
+  }catch(e){ console.warn('catalogo fipe',e); toast('Não consegui montar o catálogo agora: '+(e.message||e),'err'); }
+  CATALOGO_RUNNING=false;
 }
 /* Automático: roda sozinho quando você abre o CRM num mês ainda não capturado */
 let _fipeAutoChecked=false;
@@ -4449,14 +4542,18 @@ async function checarFipeAuto(){
   if(_fipeAutoChecked || !CACHE.apolices.length) return; _fipeAutoChecked=true;
   try{ const doc=await db.collection('configuracoes').doc('fipe_auto').get();
     const mes=doc.exists?(doc.data().ultimoMes||null):null; const atual=new Date().toISOString().slice(0,7);
-    if(mes!==atual){ atualizarFipeTodas(true); } }catch(e){ console.warn('fipe auto',e); }
+    if(mes!==atual){ await atualizarFipeTodas(true); }
+    /* depois da carteira, confere o catálogo do site (marcas+modelos) do mês */
+    if(!FIPE_429) atualizarCatalogoFipe(false);
+  }catch(e){ console.warn('fipe auto',e); }
 }
 
 /* ---------- FIPE DA CARTEIRA ---------- */
 VIEWS.fipe=function(){
   /* só os veículos com seguro vigente — histórico não precisa de FIPE viva */
   const aps=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
-  const actions=`<button class="btn btn-primary btn-sm" onclick="atualizarFipeTodas()"${FIPE_BATCH_RUNNING?' disabled':''}><i class="fas fa-rotate"></i> Atualizar todas agora</button>`;
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="atualizarCatalogoFipe(true)"${CATALOGO_RUNNING?' disabled':''} title="Baixa marcas e modelos da FIPE e grava no nosso banco — a página de cotação do site passa a carregar daí, sem depender da API"><i class="fas fa-book"></i> Atualizar catálogo do site</button>
+    <button class="btn btn-primary btn-sm" onclick="atualizarFipeTodas()"${FIPE_BATCH_RUNNING?' disabled':''}><i class="fas fa-rotate"></i> Atualizar todas agora</button>`;
   let html=head('fipe',{actions});
   // barra de progresso do lote
   html+=`<div id="fipeBatchBar" style="${FIPE_BATCH_RUNNING?'':'display:none'}margin-bottom:14px"><div style="font-size:.82rem;color:var(--text-2);margin-bottom:4px">Atualizando... <span id="fipeBatchCnt"></span></div><div style="height:6px;background:var(--surface-3);border-radius:6px;overflow:hidden"><div id="fipeBatchProg" style="height:100%;width:0;background:var(--brand);transition:.3s"></div></div></div>`;
@@ -4485,7 +4582,7 @@ VIEWS.fipe=function(){
       <td style="color:var(--text-3)">${esc((l.mes||'').trim())||'-'}</td>
       <td><button class="btn btn-ghost btn-sm" onclick='modalFipe(${JSON.stringify(apoliceCtxFipe(l.a))})'><i class="fas fa-chart-line"></i> histórico</button></td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-car-side"></i></div><h4>Nenhum veículo com FIPE</h4><p>Gere apólices a partir das propostas (o código FIPE vem junto) ou informe o código na apólice.</p></div></td></tr>`}
     </tbody></table></div></div>
-    <p style="font-size:.76rem;color:var(--text-3);margin-top:12px"><i class="fas fa-robot"></i> Atualização automática: toda vez que você abre o CRM num mês novo, ele busca sozinho o valor FIPE de todos os veículos. Quer forçar agora? Use "Atualizar todas agora".</p>`;
+    <p style="font-size:.76rem;color:var(--text-3);margin-top:12px"><i class="fas fa-robot"></i> Atualização automática: toda vez que você abre o CRM num mês novo, ele busca sozinho o valor FIPE dos veículos (com pausa entre consultas, pulando os já feitos no mês) e depois renova o catálogo de marcas/modelos que a página de cotação do site usa. <span id="catFipeInfo"></span></p>`;
   setView(html);
 };
 function fipeAutoLabel(){ const c=CACHE.apolices.find(a=>a.fipeMes); return c?esc(c.fipeMes):'—'; }
@@ -6320,7 +6417,8 @@ VIEWS.contatos=function(){
     : (a.nome||a.nomeEmpresa||'').localeCompare(b.nome||b.nomeEmpresa||''));
   window.__ctExport=ps;
 
-  const actions=`<button class="btn btn-primary btn-sm" onclick="novoLead()"><i class="fas fa-plus"></i> Nova cotação</button>`;
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="ctNovoContato()"><i class="fas fa-user-plus"></i> Novo contato</button>
+    <button class="btn btn-primary btn-sm" onclick="novoLead()"><i class="fas fa-plus"></i> Nova cotação</button>`;
   let html=head('contatos',{actions});
 
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
@@ -6620,6 +6718,71 @@ async function ctImportarTodos(){
     await lote.commit();
     toast(pend.length+' cotação(ões) importadas.','ok','Pronto'); }
   catch(e){ console.error(e); toast('Erro ao importar em lote.','err'); }
+}
+
+
+/* =========================================================================
+   NOVO CONTATO — cadastro puro, sem entrar no funil
+   O que distingue um contato: CPF (o mais forte), telefone e e-mail.
+   ========================================================================= */
+function ctNovoContato(){
+  openModal(`<div class="modal-head"><h3><i class="fas fa-user-plus" style="color:var(--brand)"></i> Novo contato</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);font-size:.85rem;margin-top:0">Só o cadastro da pessoa — <b>não abre negócio no funil</b>.
+        Quando ela cotar, você cria o negócio em Leads e escolhe este contato. O CPF é o que evita duplicar depois.</p>
+      <div id="ncAviso"></div>
+      <div class="form-row"><label>Nome *</label><input type="text" id="ncNome" autocomplete="off"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-row"><label>CPF/CNPJ</label><input type="text" id="ncCpf" placeholder="000.000.000-00" oninput="ctChecarDuplicado()"></div>
+        <div class="form-row"><label>Nascimento</label><input type="date" id="ncNasc"></div>
+        <div class="form-row"><label>WhatsApp</label><input type="text" id="ncWhats" placeholder="(00) 00000-0000" oninput="ctChecarDuplicado()"></div>
+        <div class="form-row"><label>E-mail</label><input type="email" id="ncEmail" oninput="ctChecarDuplicado()"></div>
+        <div class="form-row"><label>Cidade</label><input type="text" id="ncCidade"></div>
+        <div class="form-row"><label>UF</label><input type="text" id="ncUf" maxlength="2" style="text-transform:uppercase"></div>
+      </div>
+      <div class="form-row"><label>Observações</label><textarea id="ncObs" rows="2" placeholder="Ex.: indicado pelo João, tem 2 carros..."></textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="ctSalvarContato()"><i class="fas fa-check"></i> Salvar contato</button></div>`);
+}
+function ctAchaExistente(cpf,fone,email){
+  const dc=(cpf||'').replace(/\D/g,''), df=(fone||'').replace(/\D/g,''), de=(email||'').toLowerCase().trim();
+  return (CACHE.leads||[]).find(l=>
+    (dc&&dc.length>=11&&((l.cpf||l.cnpj||'')+'').replace(/\D/g,'')===dc) ||
+    (df&&df.length>=10&&((l.whatsapp||l.telefone||'')+'').replace(/\D/g,'')===df) ||
+    (de&&(l.email||'').toLowerCase()===de))||null;
+}
+function ctChecarDuplicado(){
+  const g=i=>document.getElementById(i);
+  const j=ctAchaExistente(g('ncCpf').value,g('ncWhats').value,g('ncEmail').value);
+  const av=g('ncAviso'); if(!av) return;
+  av.innerHTML=j?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:10px;padding:9px 13px;font-size:.82rem;margin-bottom:12px">
+    <i class="fas fa-triangle-exclamation"></i> Já existe <b>${esc(j.nome||j.nomeEmpresa||'')}</b> com esse dado
+    ${j.cpf?' · '+esc(j.cpf):''} — salvar vai <b>completar</b> o cadastro dele, sem criar outro.</div>`:'';
+}
+async function ctSalvarContato(){
+  const g=i=>document.getElementById(i);
+  const nome=g('ncNome').value.trim();
+  if(!nome){ toast('Informe o nome.','err'); return; }
+  const dados={ nome, cpf:g('ncCpf').value.trim()||null, dataNascimento:g('ncNasc').value||null,
+    whatsapp:g('ncWhats').value.replace(/\D/g,'')||null, email:g('ncEmail').value.trim().toLowerCase()||null,
+    cidade:g('ncCidade').value.trim()||null, estado:g('ncUf').value.trim().toUpperCase()||null,
+    observacoes:g('ncObs').value.trim()||null };
+  const jaTem=ctAchaExistente(dados.cpf,dados.whatsapp,dados.email);
+  try{
+    if(jaTem){
+      const upd={atualizadoEm:FV.serverTimestamp()};
+      Object.entries(dados).forEach(([k,v])=>{ if(v&&(jaTem[k]==null||jaTem[k]==='')) upd[k]=v; });
+      await db.collection('leads_crm').doc(jaTem.id).update(upd);
+      toast('Esse contato já existia — completei o cadastro de '+(jaTem.nome||nome)+'.','ok');
+    }else{
+      await db.collection('leads_crm').add({ ...dados, status:'contato', origem:'manual',
+        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
+      toast('Contato salvo. Ele aparece aqui em Contatos, fora do funil.','ok');
+    }
+    closeModal();
+  }catch(e){ console.error(e); toast('Não consegui salvar: '+(e.code||e.message),'err'); }
 }
 
 </script>
