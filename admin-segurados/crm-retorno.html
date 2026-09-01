@@ -2568,11 +2568,19 @@ function apolicesDoCliente(c){
     (a.clienteNome&&c.nome&&a.clienteNome.toLowerCase()===(c.nome||'').toLowerCase())); }
 VIEWS.clientes=function(){
   let html=head('clientes');
+  if(CLI_FILTER.soAtivas===undefined) CLI_FILTER.soAtivas=true;
   let clientes=CACHE.leads.filter(l=>(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
+  if(CLI_FILTER.soAtivas) clientes=clientes.filter(c=>apolicesDoCliente(c).some(x=>apEhAtiva(x)));
   if(CLI_FILTER.busca){ const q=CLI_FILTER.busca.toLowerCase(); clientes=clientes.filter(c=>`${c.nome||''} ${c.nomeEmpresa||''} ${c.whatsapp||''} ${c.email||''} ${c.cidade||''}`.toLowerCase().includes(q)); }
   const comApolice=clientes.filter(c=>apolicesDoCliente(c).some(a=>!a.status||a.status==='ativa')).length;
-  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-    <div class="kpi"><div class="ico i-brand"><i class="fas fa-users"></i></div><div class="val">${clientes.length}</div><div class="lbl">Clientes na base</div></div>
+   html+=`<div class="card" style="padding:11px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem">
+      <input type="checkbox" ${CLI_FILTER.soAtivas?'checked':''} onchange="CLI_FILTER.soAtivas=this.checked;VIEWS.clientes()" style="width:auto">
+      <b>Só quem tem apólice com vigência ativa</b></label>
+    <span style="font-size:.78rem;color:var(--text-3)">Quem não renovou ou só cotou continua em <a href="#contatos" style="color:var(--brand)">Contatos</a>.</span>
+  </div>`;
+ html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-users"></i></div><div class="val">${clientes.length}</div><div class="lbl">${CLI_FILTER.soAtivas?'Clientes com seguro vigente':'Clientes na base'}</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${comApolice}</div><div class="lbl">Com apólice ativa</div></div>
     <div class="kpi"><div class="ico i-info"><i class="fas fa-share-nodes"></i></div><div class="val">${CACHE.indicadores.length}</div><div class="lbl">Indicadores</div></div>
   </div>`;
@@ -2627,7 +2635,15 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
       </div>
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
-      ${aps.length?aps.map(a=>`<div class="cred"><div style="flex:1"><b>${esc(a.ramo||'Apólice')}</b> · ${esc(a.seguradora||'')} <br><small style="color:var(--text-3)">Nº ${esc(a.numeroApolice||'-')} · vence ${fmtData(a.dataFimVigencia)}</small></div><div style="font-weight:700">${money(a.valorPremio)}</div></div>`).join(''):`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}
+      ${aps.length?aps.slice().sort((x,y)=>{
+          const ax=apEhAtiva(x)?0:1, ay=apEhAtiva(y)?0:1; if(ax!==ay) return ax-ay;
+          return String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')); })
+        .map(a=>`<div class="cred"><div style="flex:1"><b>${esc(a.ramo||'Apólice')}</b> · ${esc(a.seguradora||'')}
+          ${statusBadge(a.status||'ativa',{cancelada:'var(--danger)',vencida:'var(--warn)',renovada:'var(--info)',encerrada:'var(--text-3)'}[a.status]||'var(--ok)')}
+          <br><small style="color:var(--text-3)">${a.veiculoPlaca?esc(a.veiculoPlaca)+' · ':''}${fmtData(a.dataInicioVigencia)} a ${fmtData(a.dataFimVigencia)}</small></div>
+          <div style="text-align:right"><div style="font-weight:700">${money(a.valorPremio)}</div>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.72rem" onclick="modalVerApolice('${a.id}')"><i class="fas fa-eye"></i></button></div></div>`).join('')
+        :`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}
       <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Contatos / interações</div>
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2748,8 +2764,15 @@ async function moverFase(id,fase){
   if(fase==='negocio_perdido') return modalPerder(id);
   try{ await db.collection('leads_crm').doc(id).update({status:fase,atualizadoEm:FV.serverTimestamp()}); toast('Movido para "'+(KANBAN.find(k=>k.key===fase)||{}).label+'".','ok'); }catch(e){ toast('Erro.','err'); }
 }
-function novoLead(){ openModal(`<div class="modal-head"><h3><i class="fas fa-plus" style="color:var(--brand)"></i> Novo lead</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+function novoLead(){ openModal(`<div class="modal-head"><h3><i class="fas fa-plus" style="color:var(--brand)"></i> Novo negócio</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
   <div class="modal-body">
+    <div class="form-row"><label>Quem é? Digite para procurar em tudo que já temos</label>
+      <input type="text" id="nlBusca" placeholder="Nome, CPF ou telefone de quem já está no sistema..." autocomplete="off"
+        oninput="nlProcurar(this.value)">
+      <div id="nlResultados"></div>
+      <input type="hidden" id="nlLeadId" value="">
+      <div id="nlEscolhido" style="display:none;background:var(--ok-bg);border-radius:10px;padding:9px 13px;font-size:.83rem;margin-top:8px"></div>
+    </div>
     <div class="form-row"><label>Nome *</label><input type="text" id="nlNome"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div class="form-row"><label>WhatsApp</label><input type="text" id="nlWhats" placeholder="(00) 00000-0000"></div>
@@ -2760,12 +2783,68 @@ function novoLead(){ openModal(`<div class="modal-head"><h3><i class="fas fa-plu
     <div class="form-row"><label>Responsável</label><select id="nlResp"><option value="">— ninguém —</option>${CACHE.admins.map(a=>`<option value="${a.id}">${esc(a.nome||a.email)}</option>`).join('')}</select></div>
   </div>
   <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarNovoLead()"><i class="fas fa-check"></i> Criar lead</button></div>`); }
+/* procura nos contatos que já existem (leads, clientes, importados) */
+function nlProcurar(q){
+  const box=document.getElementById('nlResultados'); if(!box) return;
+  q=(q||'').trim().toLowerCase();
+  if(q.length<3){ box.innerHTML=''; return; }
+  const dig=q.replace(/\D/g,'');
+  const achados=CACHE.leads.filter(l=>{
+    if((l.nome||'').toLowerCase().includes(q)) return true;
+    if(dig.length>=4&&((l.cpf||l.cnpj||'')+'').replace(/\D/g,'').includes(dig)) return true;
+    if(dig.length>=4&&((l.whatsapp||l.telefone||'')+'').replace(/\D/g,'').includes(dig)) return true;
+    return false;
+  }).slice(0,6);
+  box.innerHTML=achados.length?`<div style="border:1px solid var(--border);border-radius:10px;margin-top:6px;overflow:hidden">
+    ${achados.map(l=>`<div onclick="nlUsar('${l.id}')" style="padding:9px 13px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
+      <span><b style="font-size:.85rem">${esc(l.nome||l.nomeEmpresa||'—')}</b>
+        <small style="color:var(--text-3)"> ${esc(l.cpf||'')} ${esc(l.whatsapp||l.telefone||'')}</small></span>
+      <small style="color:var(--text-3)">${isClienteLead(l)?'cliente':'contato'}</small></div>`).join('')}
+    </div>`
+  :`<div style="font-size:.78rem;color:var(--text-3);margin-top:6px">Ninguém com esse nome — preencha abaixo que eu crio um contato novo.</div>`;
+}
+function nlUsar(id){
+  const l=CACHE.leads.find(x=>x.id===id); if(!l) return;
+  document.getElementById('nlLeadId').value=id;
+  document.getElementById('nlNome').value=l.nome||l.nomeEmpresa||'';
+  document.getElementById('nlWhats').value=l.whatsapp||l.telefone||'';
+  document.getElementById('nlEmail').value=l.email||'';
+  document.getElementById('nlResultados').innerHTML='';
+  document.getElementById('nlBusca').value='';
+  const e=document.getElementById('nlEscolhido');
+  e.style.display='block';
+  e.innerHTML='<i class="fas fa-circle-check" style="color:var(--ok)"></i> Vou usar o cadastro de <b>'+esc(l.nome||'')+'</b> — nada é duplicado, o histórico dele continua junto. '+
+    '<a href="#" onclick="document.getElementById(\'nlLeadId\').value=\'\';this.parentElement.style.display=\'none\';return false" style="color:var(--brand)">trocar</a>';
+}
 async function salvarNovoLead(){ const nome=document.getElementById('nlNome').value.trim(); if(!nome){ toast('Informe o nome.','err'); return; }
   const respId=document.getElementById('nlResp').value; const f=CACHE.admins.find(a=>a.id===respId);
-  try{ await db.collection('leads_crm').add({ nome, whatsapp:document.getElementById('nlWhats').value.replace(/\D/g,'')||null, email:document.getElementById('nlEmail').value.trim()||null,
+  const leadId=document.getElementById('nlLeadId').value;
+  const whats=document.getElementById('nlWhats').value.replace(/\D/g,'')||null;
+  const email=document.getElementById('nlEmail').value.trim()||null;
+  /* já existe alguém com esse telefone/e-mail e você não escolheu? aviso antes de duplicar */
+  if(!leadId){
+    const jaTem=CACHE.leads.find(l=>(whats&&((l.whatsapp||l.telefone||'')+'').replace(/\D/g,'')===whats)||(email&&(l.email||'').toLowerCase()===email.toLowerCase()));
+    if(jaTem&&!confirm('Já existe "'+(jaTem.nome||'')+'" com esse '+(whats&&((jaTem.whatsapp||jaTem.telefone||'')+'').replace(/\D/g,'')===whats?'telefone':'e-mail')+'.\n\nOK = usar o cadastro que já existe (recomendado)\nCancelar = criar um novo mesmo assim')){}
+    else if(jaTem){ document.getElementById('nlLeadId').value=jaTem.id; return salvarNovoLeadCom(jaTem.id,nome,whats,email,respId,f); }
+  }
+  if(leadId) return salvarNovoLeadCom(leadId,nome,whats,email,respId,f);
+  try{ await db.collection('leads_crm').add({ nome, whatsapp:whats, email,
     ramo:document.getElementById('nlRamo').value, origem:document.getElementById('nlOrigem').value, status:'pre_cadastro',
     responsavelId:respId||null, responsavelNome:f?(f.nome||f.email):null, criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
-    closeModal(); toast('Lead criado.','ok'); }catch(e){ console.error(e); toast('Erro ao criar.','err'); } }
+    closeModal(); toast('Negócio criado no funil.','ok'); }catch(e){ console.error(e); toast('Erro ao criar.','err'); } }
+/* reaproveita o cadastro existente: só reabre o funil para um novo negócio */
+async function salvarNovoLeadCom(leadId,nome,whats,email,respId,f){
+  try{
+    const upd={ status:'pre_cadastro', ramo:document.getElementById('nlRamo').value,
+      origem:document.getElementById('nlOrigem').value, atualizadoEm:FV.serverTimestamp() };
+    const l=CACHE.leads.find(x=>x.id===leadId)||{};
+    if(!l.whatsapp&&whats) upd.whatsapp=whats;
+    if(!l.email&&email) upd.email=email;
+    if(respId){ upd.responsavelId=respId; upd.responsavelNome=f?(f.nome||f.email):null; }
+    await db.collection('leads_crm').doc(leadId).update(upd);
+    closeModal(); toast('Novo negócio aberto para '+nome+' — mesmo cadastro, sem duplicar.','ok');
+  }catch(e){ console.error(e); toast('Erro ao criar.','err'); }
+}
 function modalPerder(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
   openModal(`<div class="modal-head"><h3><i class="fas fa-circle-xmark" style="color:var(--danger)"></i> Negócio perdido</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
@@ -2878,23 +2957,106 @@ function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
 
 /* ---------- APÓLICES ---------- */
-let AP_FILTER={busca:'',situacao:''};
+let AP_FILTER={busca:'',situacao:'',ramo:'',seguradora:'',produtor:'',ord:'fim',dir:1,resumo:false};
 const apEhAtiva=a=>!a.status||a.status==='ativa';
+/* comissão da apólice: valor exato da seguradora, senão % sobre o líquido */
+function apComissaoValor(a){
+  if(a.comissaoValor!=null&&a.comissaoValor!=='') return Number(a.comissaoValor)||0;
+  const base=Number(a.premioLiquido)||Number(a.valorPremio)||0;
+  return Math.round(base*(Number(a.comissao)||0))/100;
+}
+function apOrdenar(campo){
+  if(AP_FILTER.ord===campo) AP_FILTER.dir=-AP_FILTER.dir;
+  else { AP_FILTER.ord=campo; AP_FILTER.dir=1; }
+  VIEWS.apolices();
+}
+/* apólices duplicadas: mesmo cliente + mesmo veículo + mesmo início de vigência */
+function apDuplicadas(){
+  const grupos={};
+  CACHE.apolices.forEach(a=>{
+    const cli=((a.clienteCpf||'').replace(/\D/g,''))||((a.clienteNome||'').toLowerCase().trim());
+    const vei=(a.veiculoPlaca||a.chassi||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    const ini=a.dataInicioVigencia&&toDate(a.dataInicioVigencia)?toDate(a.dataInicioVigencia).toISOString().slice(0,10):'';
+    if(!cli||!ini) return;
+    const k=cli+'|'+vei+'|'+ini;
+    (grupos[k]=grupos[k]||[]).push(a);
+  });
+  const sobrando=[];
+  Object.values(grupos).forEach(g=>{
+    if(g.length<2) return;
+    /* fica a mais completa: com nº de apólice primeiro, depois a que você criou na mão, depois a mais antiga */
+    const ordem=g.slice().sort((x,y)=>{
+      const nx=x.numeroApolice?0:1, ny=y.numeroApolice?0:1; if(nx!==ny) return nx-ny;
+      const mx=x.origem==='carteira_antiga'?1:0, my=y.origem==='carteira_antiga'?1:0; if(mx!==my) return mx-my;
+      return ((x.criadoEm&&x.criadoEm.seconds)||0)-((y.criadoEm&&y.criadoEm.seconds)||0);
+    });
+    sobrando.push(...ordem.slice(1));
+  });
+  return sobrando;
+}
+async function apLimparDuplicadas(){
+  const extras=apDuplicadas();
+  if(!extras.length){ toast('Nenhuma apólice repetida.','info'); return; }
+  const resumo={};
+  extras.forEach(x=>{ resumo[x.clienteNome]=(resumo[x.clienteNome]||0)+1; });
+  if(!confirm('Encontrei '+extras.length+' apólice(s) repetidas (mesmo cliente, veículo e início de vigência):\n\n'+
+    Object.entries(resumo).map(([n,q])=>'• '+n+' — '+q+' a mais').join('\n')+
+    '\n\nApago as repetidas e deixo uma de cada — fica a que tem nº de apólice, ou a que você lançou na mão. Pode ir?')) return;
+  try{
+    for(let i=0;i<extras.length;i+=400){
+      const lote=db.batch();
+      extras.slice(i,i+400).forEach(x=>lote.delete(db.collection('apolices_cliente').doc(x.id)));
+      await lote.commit();
+    }
+    toast(extras.length+' apólice(s) repetidas removidas.','ok','Limpou');
+  }catch(e){ toast('Não consegui limpar: '+(e.code||e.message),'err'); }
+}
 VIEWS.apolices=function(){
-  const actions=`<button class="btn btn-primary btn-sm" onclick="modalApolice()"><i class="fas fa-plus"></i> Nova apólice</button>`;
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="AP_FILTER.resumo=!AP_FILTER.resumo;VIEWS.apolices()"><i class="fas fa-chart-pie"></i> ${AP_FILTER.resumo?'Esconder resumo':'Resumo gerencial'}</button>
+    <button class="btn btn-primary btn-sm" onclick="modalApolice()"><i class="fas fa-plus"></i> Nova apólice</button>`;
   let html=head('apolices',{actions});
-  let list=CACHE.apolices.slice().sort((a,b)=>(toDate(b.dataInicioVigencia)||0)-(toDate(a.dataInicioVigencia)||0));
-  if(AP_FILTER.busca){ const q=AP_FILTER.busca.toLowerCase(); list=list.filter(a=>`${a.clienteNome||''} ${a.seguradora||''} ${a.numeroApolice||''} ${a.ramo||''} ${a.veiculoPlaca||''}`.toLowerCase().includes(q)); }
+
+  const dups=apDuplicadas();
+  if(dups.length) html+=`<div class="card" style="background:var(--warn-bg);border-color:#f3d9a4;color:#7c4a03;
+      display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px"><b><i class="fas fa-clone"></i> ${dups.length} apólice(s) repetidas</b>
+      <div style="font-size:.82rem;margin-top:3px">Mesmo cliente, mesmo veículo e mesmo início de vigência — normalmente sobra de importação rodada mais de uma vez.</div></div>
+    <button class="btn btn-primary btn-sm" onclick="apLimparDuplicadas()"><i class="fas fa-broom"></i> Limpar repetidas</button></div>`;
+
+  /* filtros */
+  let list=CACHE.apolices.slice();
+  if(AP_FILTER.busca){ const q=AP_FILTER.busca.toLowerCase(); list=list.filter(a=>`${a.clienteNome||''} ${a.seguradora||''} ${a.numeroApolice||''} ${a.ramo||''} ${a.veiculoPlaca||''} ${a.veiculoModelo||''} ${a.clienteCpf||''}`.toLowerCase().includes(q)); }
   if(AP_FILTER.situacao) list=list.filter(a=>AP_FILTER.situacao==='ativa'?apEhAtiva(a):a.status===AP_FILTER.situacao);
+  if(AP_FILTER.ramo) list=list.filter(a=>(a.ramo||'')===AP_FILTER.ramo);
+  if(AP_FILTER.seguradora) list=list.filter(a=>(a.seguradora||'')===AP_FILTER.seguradora);
+  if(AP_FILTER.produtor) list=list.filter(a=>(a.responsavelId||'')===AP_FILTER.produtor||(a.responsavelNome||'')===AP_FILTER.produtor);
+
+  /* ordenação */
+  const val={ cliente:a=>(a.clienteNome||'').toLowerCase(), seguradora:a=>(a.seguradora||'').toLowerCase(),
+    produtor:a=>(a.responsavelNome||'').toLowerCase(), ini:a=>a.dataInicioVigencia||'',
+    fim:a=>a.dataFimVigencia||'', premio:a=>Number(a.valorPremio)||0, comissao:a=>apComissaoValor(a) };
+  const f=val[AP_FILTER.ord]||val.fim;
+  list.sort((x,y)=>{ const vx=f(x),vy=f(y); return (vx<vy?-1:vx>vy?1:0)*AP_FILTER.dir; });
+
   const ativas=CACHE.apolices.filter(apEhAtiva);
   const premioAtivo=ativas.reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
-  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+  const comAtivo=ativas.reduce((s,a)=>s+apComissaoValor(a),0);
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr))">
     <div class="kpi"><div class="ico i-brand"><i class="fas fa-file-contract"></i></div><div class="val">${CACHE.apolices.length}</div><div class="lbl">Apólices no total (com histórico)</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${ativas.length}</div><div class="lbl">Com vigência ativa</div></div>
-    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.4rem">${money(premioAtivo)}</div><div class="lbl">Prêmio das ativas</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.35rem">${money(premioAtivo)}</div><div class="lbl">Prêmio das ativas</div></div>
+    <div class="kpi"><div class="ico i-ok" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-hand-holding-dollar"></i></div><div class="val" style="font-size:1.35rem">${money(comAtivo)}</div><div class="lbl">Nossa comissão (ativas)</div></div>
   </div>`;
-  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-list"></i> Apólices</h3>
-    <div class="filters" style="margin:0"><input type="text" id="fBuscaAp" placeholder="Buscar cliente, seguradora, placa, nº..." value="${esc(AP_FILTER.busca)}" oninput="AP_FILTER.busca=this.value;redesenhar(VIEWS.apolices)">
+
+  if(AP_FILTER.resumo) html+=apResumoGerencial(list);
+
+  const opcoes=(arr)=>arr.filter(Boolean).sort().map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  const segs=[...new Set(CACHE.apolices.map(a=>a.seguradora))];
+  const ramos=[...new Set(CACHE.apolices.map(a=>a.ramo))];
+  const prods=[...new Set(CACHE.apolices.map(a=>a.responsavelNome).filter(Boolean))];
+  html+=`<div class="card" style="padding:14px 16px">
+    <div class="filters" style="margin:0">
+      <input type="text" id="fBuscaAp" placeholder="Buscar cliente, CPF, placa, seguradora..." value="${esc(AP_FILTER.busca)}" oninput="AP_FILTER.busca=this.value;redesenhar(VIEWS.apolices)" style="min-width:220px">
       <select onchange="AP_FILTER.situacao=this.value;VIEWS.apolices()">
         <option value="">Todas as situações</option>
         <option value="ativa" ${AP_FILTER.situacao==='ativa'?'selected':''}>Ativas</option>
@@ -2902,20 +3064,193 @@ VIEWS.apolices=function(){
         <option value="renovada" ${AP_FILTER.situacao==='renovada'?'selected':''}>Renovadas (histórico)</option>
         <option value="encerrada" ${AP_FILTER.situacao==='encerrada'?'selected':''}>Encerradas (histórico)</option>
         <option value="cancelada" ${AP_FILTER.situacao==='cancelada'?'selected':''}>Canceladas</option>
-      </select></div></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Ramo</th><th>Seguradora</th><th>Nº apólice</th><th>Vigência</th><th>Prêmio</th><th>Status</th><th></th></tr></thead><tbody>
+      </select>
+      <select onchange="AP_FILTER.ramo=this.value;VIEWS.apolices()"><option value="">Todos os ramos</option>${ramos.map(r=>`<option ${AP_FILTER.ramo===r?'selected':''}>${esc(r)}</option>`).join('')}</select>
+      <select onchange="AP_FILTER.seguradora=this.value;VIEWS.apolices()"><option value="">Todas as seguradoras</option>${segs.map(r=>`<option ${AP_FILTER.seguradora===r?'selected':''}>${esc(r)}</option>`).join('')}</select>
+      <select onchange="AP_FILTER.produtor=this.value;VIEWS.apolices()"><option value="">Todos os produtores</option>${prods.map(r=>`<option ${AP_FILTER.produtor===r?'selected':''}>${esc(r)}</option>`).join('')}</select>
+      <span style="font-size:.8rem;color:var(--text-2)">${list.length} apólice(s)</span>
+    </div></div>`;
+
+  const th=(rot,campo)=>`<th style="cursor:pointer;white-space:nowrap" onclick="apOrdenar('${campo}')">${rot}
+    ${AP_FILTER.ord===campo?`<i class="fas fa-caret-${AP_FILTER.dir>0?'up':'down'}" style="color:var(--brand)"></i>`:'<i class="fas fa-sort" style="color:var(--text-3);font-size:.7rem"></i>'}</th>`;
+  const somaP=list.reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
+  const somaC=list.reduce((s,a)=>s+apComissaoValor(a),0);
+  html+=`<div class="card">
+    <div class="tbl-wrap"><table><thead><tr>
+      ${th('Cliente','cliente')}${th('Seguradora','seguradora')}${th('Produtor','produtor')}
+      ${th('Início','ini')}${th('Fim','fim')}${th('Prêmio','premio')}${th('Comissão','comissao')}<th>Situação</th><th style="text-align:right"></th>
+    </tr></thead><tbody>
     ${list.length?list.map(a=>{ const dias=diasAte(a.dataFimVigencia); const venc=dias!=null&&dias<0; const perto=dias!=null&&dias<=60&&dias>=0;
       const cor=venc?'var(--danger)':perto?'var(--warn)':'var(--ok)';
-      return `<tr><td><b>${esc(a.clienteNome||'-')}</b></td><td>${esc(a.ramo||'-')}</td><td>${esc(a.seguradora||'-')}</td>
-      <td>${esc(a.numeroApolice||'-')}</td><td>${fmtData(a.dataInicioVigencia)} → ${fmtData(a.dataFimVigencia)}${dias!=null?`<br><small style="color:${cor}">${venc?'vencida':perto?dias+' dias':''}</small>`:''}</td>
-      <td>${money(a.valorPremio)}</td><td>${statusBadge(a.status||'ativa',
+      return `<tr><td><b>${esc(a.clienteNome||'-')}</b>${a.veiculoPlaca?`<div style="font-size:.72rem;color:var(--text-3)">${esc(a.veiculoPlaca)}${a.veiculoModelo?' · '+esc(String(a.veiculoModelo).slice(0,26)):''}</div>`:''}</td>
+      <td>${esc(a.seguradora||'-')}<div style="font-size:.72rem;color:var(--text-3)">${esc(a.ramo||'')}${a.numeroApolice?' · nº '+esc(a.numeroApolice):''}</div></td>
+      <td style="font-size:.82rem">${esc(a.responsavelNome||'—')}</td>
+      <td style="font-size:.82rem">${fmtData(a.dataInicioVigencia)}</td>
+      <td style="font-size:.82rem">${fmtData(a.dataFimVigencia)}${apEhAtiva(a)&&dias!=null&&dias<=60?`<br><small style="color:${cor}">${venc?'vencida':dias+' dias'}</small>`:''}</td>
+      <td style="font-weight:600">${money(a.valorPremio)}</td>
+      <td style="color:var(--ok);font-weight:600">${money(apComissaoValor(a))}${a.comissao?`<div style="font-size:.7rem;color:var(--text-3);font-weight:400">${a.comissao}%</div>`:''}</td>
+      <td>${statusBadge(a.status||'ativa',
         {cancelada:'var(--danger)',vencida:'var(--warn)',renovada:'var(--info)',encerrada:'var(--text-3)'}[a.status]||'var(--ok)')}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i></button></td></tr>`;
-    }).join(''):`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-file-contract"></i></div><h4>Nenhuma apólice</h4><p>Cadastre a primeira apólice de cliente.</p></div></td></tr>`}
+      <td style="white-space:nowrap;text-align:right">
+        <button class="btn btn-ghost btn-sm" title="Ver tudo" onclick="modalVerApolice('${a.id}')"><i class="fas fa-eye"></i></button>
+        <button class="btn btn-ghost btn-sm" title="Editar" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i></button>
+      </td></tr>`;
+    }).join('')+`<tr style="background:var(--surface-2)"><td colspan="5" style="font-weight:700">Total do filtro (${list.length})</td>
+      <td style="font-weight:800">${money(somaP)}</td><td style="font-weight:800;color:var(--ok)">${money(somaC)}</td><td colspan="2"></td></tr>`
+    :`<tr><td colspan="9"><div class="empty"><div class="em-ic"><i class="fas fa-file-contract"></i></div><h4>Nenhuma apólice</h4><p>Cadastre a primeira apólice de cliente.</p></div></td></tr>`}
     </tbody></table></div></div>`;
   setView(html);
 };
-function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
+/* totalizadores por seguradora, ramo e produtor — do filtro atual */
+function apResumoGerencial(list){
+  const grupo=(campo)=>{
+    const g={};
+    list.forEach(a=>{ const k=a[campo]||'—';
+      const o=(g[k]=g[k]||{qtd:0,premio:0,com:0,ativas:0});
+      o.qtd++; o.premio+=Number(a.valorPremio)||0; o.com+=apComissaoValor(a);
+      if(apEhAtiva(a)) o.ativas++; });
+    return Object.entries(g).sort((x,y)=>y[1].premio-x[1].premio);
+  };
+  const bloco=(titulo,dados)=>`<div>
+    <div style="font-weight:700;font-size:.85rem;margin-bottom:8px">${titulo}</div>
+    <div class="tbl-wrap"><table style="font-size:.82rem"><thead><tr><th></th><th style="text-align:right">Apólices</th><th style="text-align:right">Ativas</th><th style="text-align:right">Prêmio</th><th style="text-align:right">Comissão</th></tr></thead><tbody>
+    ${dados.map(([k,v])=>`<tr><td><b>${esc(k)}</b></td><td style="text-align:right">${v.qtd}</td><td style="text-align:right">${v.ativas}</td>
+      <td style="text-align:right">${money(v.premio)}</td><td style="text-align:right;color:var(--ok);font-weight:600">${money(v.com)}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-chart-pie"></i> Resumo gerencial <span style="font-size:.75rem;color:var(--text-3);font-weight:400">— respeita os filtros escolhidos abaixo</span></h3></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px">
+      ${bloco('Por seguradora',grupo('seguradora'))}
+      ${bloco('Por ramo',grupo('ramo'))}
+      ${bloco('Por produtor',grupo('responsavelNome'))}
+    </div></div>`;
+}
+function modalVerApolice(id){
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  const dado=(k,v)=>v!=null&&v!==''?`<div class="mov-f"><div class="k">${k}</div><div class="v">${esc(String(v))}</div></div>`:'';
+  const dinheiro=v=>v!=null&&v!==''?money(Number(v)):null;
+  const lmi=a.lmi||{};
+  const docs=a.docsLinks||[];
+  openModal(`<div class="modal-head"><h3><i class="fas fa-file-contract" style="color:var(--brand)"></i> ${esc(a.clienteNome||'Apólice')}
+      <span style="font-size:.72rem;font-weight:400;color:var(--text-3);margin-left:8px">${esc(a.seguradora||'')} · ${esc(a.ramo||'')}${a.numeroApolice?' · nº '+esc(a.numeroApolice):''}</span></h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px 14px;margin-bottom:14px">
+        ${dado('CPF/CNPJ',a.clienteCpf)}${dado('WhatsApp',a.clienteWhatsapp)}${dado('E-mail',a.clienteEmail)}
+        ${dado('Produtor',a.responsavelNome)}${dado('Situação',a.status||'ativa')}
+        ${dado('Vigência',fmtData(a.dataInicioVigencia)+' a '+fmtData(a.dataFimVigencia))}
+      </div>
+      <div style="background:var(--brand-50);border-radius:12px;padding:13px 16px;margin-bottom:14px;
+          display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 14px">
+        ${dado('Prêmio líquido',dinheiro(a.premioLiquido))}${dado('IOF',dinheiro(a.premioIof))}
+        ${dado('Prêmio total',dinheiro(a.valorPremio))}
+        ${dado('Comissão',(a.comissao?a.comissao+'%':'')+(apComissaoValor(a)?' = '+money(apComissaoValor(a)):''))}
+      </div>
+      ${(a.veiculoModelo||a.veiculoPlaca||a.chassi)?`<h4 style="margin:0 0 8px"><i class="fas fa-car" style="color:var(--brand)"></i> Veículo</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px;margin-bottom:14px">
+        ${dado('Modelo',a.veiculoModelo)}${dado('Placa',a.veiculoPlaca)}${dado('Chassi',a.chassi)}
+        ${dado('Ano',a.veiculoAnoFab&&a.veiculoAnoMod&&a.veiculoAnoFab!==a.veiculoAnoMod?a.veiculoAnoFab+'/'+a.veiculoAnoMod:(a.veiculoAnoMod||a.veiculoAno))}
+        ${dado('Código FIPE',a.codigoFipe)}${dado('Valor de mercado',dinheiro(a.valorMercado))}
+        ${dado('% da tabela',a.percValorMercado?a.percValorMercado+'%':null)}${dado('Classe de bônus',a.bonusClasse)}
+        ${dado('CEP de pernoite',a.cepPernoite)}
+      </div>`:''}
+      ${(lmi.dm||lmi.dc||a.franquia||a.assist24h||a.vidros)?`<h4 style="margin:0 0 8px"><i class="fas fa-shield-halved" style="color:var(--brand)"></i> Coberturas</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px;margin-bottom:14px">
+        ${dado('Danos materiais',dinheiro(lmi.dm))}${dado('Danos corporais',dinheiro(lmi.dc))}
+        ${dado('APP',dinheiro(lmi.app))}${dado('Danos morais',dinheiro(lmi.dmo))}
+        ${dado('Franquia',dinheiro(a.franquia))}
+        ${dado('Assistência 24h',a.assist24h!=null?(a.assist24h?'Sim':'Não'):null)}
+        ${dado('Vidros',a.vidros!=null?(a.vidros?'Sim':'Não'):null)}
+      </div>`:''}
+      ${a.observacoes?`<h4 style="margin:0 0 8px"><i class="fas fa-note-sticky" style="color:var(--brand)"></i> Observações</h4>
+        <div style="background:var(--surface-2);border-radius:10px;padding:11px 14px;font-size:.82rem;white-space:pre-wrap;margin-bottom:14px">${esc(a.observacoes)}</div>`:''}
+      <h4 style="margin:0 0 8px"><i class="fas fa-paperclip" style="color:var(--brand)"></i> Documentos (links)</h4>
+      <div style="font-size:.76rem;color:var(--text-2);margin-bottom:8px">Cole o link da apólice ou proposta no seu Drive/nuvem — guardo o endereço aqui, sem custo de armazenamento.</div>
+      ${docs.length?docs.map((d,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <a href="${esc(d.url)}" target="_blank" style="color:var(--brand);font-size:.85rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="fas fa-up-right-from-square"></i> ${esc(d.nome||d.url)}</a>
+        <button class="btn btn-ghost btn-sm" onclick="apRemoverDoc('${a.id}',${i})"><i class="fas fa-trash"></i></button></div>`).join('')
+      :'<div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Nenhum documento anexado.</div>'}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="text" id="apDocNome" placeholder="Nome (ex.: Apólice PDF)" style="flex:1;min-width:130px">
+        <input type="text" id="apDocUrl" placeholder="https://..." style="flex:2;min-width:200px">
+        <button class="btn btn-ghost btn-sm" onclick="apAddDoc('${a.id}')"><i class="fas fa-plus"></i> Guardar link</button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
+      ${apEhAtiva(a)||a.status==='vencida'?`<button class="btn btn-ghost" onclick="modalRenovar('${a.id}')"><i class="fas fa-rotate"></i> Renovar</button>`:''}
+      <button class="btn btn-primary" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i> Editar</button>
+    </div>`,'wide');
+}
+async function apAddDoc(id){
+  const nome=document.getElementById('apDocNome').value.trim();
+  const url=document.getElementById('apDocUrl').value.trim();
+  if(!url||!/^https?:\/\//.test(url)){ toast('Cole um link começando com http.','err'); return; }
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  const docs=(a.docsLinks||[]).concat([{nome:nome||null,url}]);
+  try{ await db.collection('apolices_cliente').doc(id).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
+    a.docsLinks=docs; toast('Link guardado.','ok'); modalVerApolice(id);
+  }catch(e){ toast('Não consegui guardar: '+(e.code||e.message),'err'); }
+}
+async function apRemoverDoc(id,i){
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  const docs=(a.docsLinks||[]).slice(); docs.splice(i,1);
+  try{ await db.collection('apolices_cliente').doc(id).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
+    a.docsLinks=docs; modalVerApolice(id);
+  }catch(e){ toast('Não consegui remover: '+(e.code||e.message),'err'); }
+}
+/* ---------- renovar: para o funil ou lançando a nova apólice ---------- */
+function modalRenovar(id){
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-rotate" style="color:var(--brand)"></i> Renovar — ${esc(a.clienteNome||'')}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <p style="color:var(--text-2);font-size:.88rem;margin-top:0">${esc(a.seguradora||'')} · vence ${fmtData(a.dataFimVigencia)} · prêmio ${money(a.valorPremio)}</p>
+      <div style="display:grid;gap:12px">
+        <button class="btn btn-ghost" style="justify-content:flex-start;padding:14px 16px;text-align:left" onclick="apRenovarFunil('${id}')">
+          <i class="fas fa-bullseye" style="color:var(--brand);font-size:1.2rem"></i>
+          <span><b>Mandar para o funil</b><br><small style="color:var(--text-2)">Vira um negócio no kanban de Leads para você cotar nas seguradoras — dá até para usar o "Ler cotações" com os PDFs.</small></span></button>
+        <button class="btn btn-ghost" style="justify-content:flex-start;padding:14px 16px;text-align:left" onclick="apRenovarDireto('${id}')">
+          <i class="fas fa-file-circle-plus" style="color:var(--ok);font-size:1.2rem"></i>
+          <span><b>Já renovei — lançar a nova apólice</b><br><small style="color:var(--text-2)">Abre o cadastro preenchido com o cliente e o veículo, vigência empurrada em 1 ano. Ao salvar, a antiga vira "renovada".</small></span></button>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button></div>`);
+}
+async function apRenovarFunil(id){
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  const dig=(a.clienteCpf||'').replace(/\D/g,'');
+  let lead=(a.leadId&&CACHE.leads.find(l=>l.id===a.leadId))||
+    (dig&&CACHE.leads.find(l=>((l.cpf||l.cnpj||'')+'').replace(/\D/g,'')===dig))||
+    (a.clienteWhatsapp&&CACHE.leads.find(l=>(l.whatsapp||l.telefone||'')===a.clienteWhatsapp))||null;
+  const dados={ status:'pre_cadastro', ramo:a.ramo||'Auto', origem:'renovacao',
+    valorNegociacao:Number(a.valorPremio)||null, comissaoPct:Number(a.comissao)||null,
+    veiculo:a.veiculoModelo||null, placa:a.veiculoPlaca||null, chassi:a.chassi||null,
+    codigoFipe:a.codigoFipe||null, apoliceRenovacaoId:id,
+    responsavelId:a.responsavelId||null, responsavelNome:a.responsavelNome||null,
+    atualizadoEm:FV.serverTimestamp() };
+  try{
+    if(lead) await db.collection('leads_crm').doc(lead.id).update(dados);
+    else await db.collection('leads_crm').add({ nome:a.clienteNome||null, cpf:a.clienteCpf||null,
+      whatsapp:a.clienteWhatsapp||null, email:a.clienteEmail||null, criadoEm:FV.serverTimestamp(), ...dados });
+    closeModal();
+    toast('Renovação de '+(a.clienteNome||'')+' está no funil de Leads.','ok');
+    location.hash='#leads';
+  }catch(e){ toast('Não consegui mandar para o funil: '+(e.code||e.message),'err'); }
+}
+function apRenovarDireto(id){
+  const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+  window.__renovandoDe=id;
+  const nova={...a}; delete nova.id;
+  const mais1=s=>{ const d=toDate(s); if(!d) return ''; d.setFullYear(d.getFullYear()+1); return d.toISOString().slice(0,10); };
+  nova.dataInicioVigencia=a.dataFimVigencia&&toDate(a.dataFimVigencia)?toDate(a.dataFimVigencia).toISOString().slice(0,10):'';
+  nova.dataFimVigencia=mais1(a.dataFimVigencia);
+  nova.numeroApolice=''; nova.status='ativa';
+  CACHE.__apoliceRenovacao=nova;
+  modalApolice('__renovacao');
+}
+function modalApolice(id){
+  let a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
+  if(id==='__renovacao'){ a=CACHE.__apoliceRenovacao||{}; id=''; }
   openModal(`<div class="modal-head"><h3><i class="fas fa-file-contract" style="color:var(--brand)"></i> ${id?'Editar apólice':'Nova apólice'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
       <input type="hidden" id="apId" value="${id||''}">
@@ -2929,7 +3264,9 @@ function modalApolice(id){ const a=id?CACHE.apolices.find(x=>x.id===id)||{}:{};
         <div class="form-row"><label>Status</label><select id="apStatus"><option value="ativa" ${a.status!=='cancelada'?'selected':''}>Ativa</option><option value="cancelada" ${a.status==='cancelada'?'selected':''}>Cancelada</option></select></div>
         <div class="form-row"><label>Início vigência</label><input type="date" id="apIni" value="${a.dataInicioVigencia&&toDate(a.dataInicioVigencia)?toDate(a.dataInicioVigencia).toISOString().slice(0,10):''}"></div>
         <div class="form-row"><label>Fim vigência</label><input type="date" id="apFim" value="${a.dataFimVigencia&&toDate(a.dataFimVigencia)?toDate(a.dataFimVigencia).toISOString().slice(0,10):''}"></div>
-        <div class="form-row"><label>Prêmio (R$)</label><input type="number" step="0.01" id="apPremio" value="${a.valorPremio||''}"></div>
+        <div class="form-row"><label>Prêmio total (R$)</label><input type="number" step="0.01" id="apPremio" value="${a.valorPremio||''}"></div>
+        <div class="form-row"><label>Prêmio líquido (R$)</label><input type="number" step="0.01" id="apLiquido" value="${a.premioLiquido||''}">
+          <div style="font-size:.72rem;color:var(--text-3);margin-top:3px">A comissão é calculada sobre o líquido.</div></div>
         <div class="form-row"><label>Comissão (%)</label><input type="number" step="0.01" id="apComissao" value="${a.comissao||''}"></div>
         <div class="form-row"><label>Vendedor / responsável</label>
           <select id="apResp"><option value="">— não definido —</option>
@@ -3033,7 +3370,9 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     ramo:document.getElementById('apRamo').value, seguradora:document.getElementById('apSeg').value.trim()||null,
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
-    valorPremio:parseFloat(document.getElementById('apPremio').value)||0, comissao:parseFloat(document.getElementById('apComissao').value)||0,
+    valorPremio:parseFloat(document.getElementById('apPremio').value)||0,
+    premioLiquido:parseFloat(document.getElementById('apLiquido').value)||null,
+    comissao:parseFloat(document.getElementById('apComissao').value)||0,
     responsavelId:document.getElementById('apResp')?document.getElementById('apResp').value||null:null,
     responsavelNome:(function(){const v=document.getElementById('apResp')?document.getElementById('apResp').value:'';const f=(CACHE.admins||[]).find(x=>x.id===v);return f?(f.nome||f.email):null;})(),
     veiculoPlaca:document.getElementById('apPlaca').value.trim()||null, codigoFipe:document.getElementById('apFipe').value.trim()||null,
@@ -3041,7 +3380,13 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
   try{ if(id) await db.collection('apolices_cliente').doc(id).update(dados);
     else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('apolices_cliente').add(dados); }
     await upsertCliente({nome:cliente,whatsapp:dados.clienteWhatsapp,email:dados.clienteEmail});
-    closeModal(); toast('Apólice salva.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+    if(!id&&window.__renovandoDe){
+      await db.collection('apolices_cliente').doc(window.__renovandoDe)
+        .update({status:'renovada',atualizadoEm:FV.serverTimestamp()}).catch(()=>{});
+      window.__renovandoDe=null; CACHE.__apoliceRenovacao=null;
+      toast('Nova apólice salva — a anterior ficou como renovada.','ok');
+    } else toast('Apólice salva.','ok');
+    closeModal(); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 /* Garante o cliente no menu Clientes (só dados pessoais), sem duplicar */
 async function upsertCliente({nome,cpf,whatsapp,email}){
@@ -3054,26 +3399,46 @@ async function upsertCliente({nome,cpf,whatsapp,email}){
   }catch(e){ console.warn('upsertCliente',e); }
 }
 
-/* ---------- RENOVAÇÕES (antes era um TODO — agora funciona) ---------- */
+/* ---------- RENOVAÇÕES ---------- */
+let REN_FILTER={busca:'',seguradora:'',produtor:'',ramo:''};
 VIEWS.renovacoes=function(){
   let html=head('renovacoes');
-  const comVenc=CACHE.apolices.filter(a=>toDate(a.dataFimVigencia)&&!['cancelada','renovada','encerrada'].includes(a.status)).map(a=>({...a,dias:diasAte(a.dataFimVigencia)}));
-  const vencidas=comVenc.filter(a=>a.dias<0).sort((a,b)=>a.dias-b.dias);
+  let comVenc=CACHE.apolices.filter(a=>toDate(a.dataFimVigencia)&&!['cancelada','renovada','encerrada'].includes(a.status)).map(a=>({...a,dias:diasAte(a.dataFimVigencia)}));
+  if(REN_FILTER.busca){ const q=REN_FILTER.busca.toLowerCase(); comVenc=comVenc.filter(a=>`${a.clienteNome||''} ${a.seguradora||''} ${a.veiculoPlaca||''}`.toLowerCase().includes(q)); }
+  if(REN_FILTER.seguradora) comVenc=comVenc.filter(a=>(a.seguradora||'')===REN_FILTER.seguradora);
+  if(REN_FILTER.produtor) comVenc=comVenc.filter(a=>(a.responsavelNome||'')===REN_FILTER.produtor);
+  if(REN_FILTER.ramo) comVenc=comVenc.filter(a=>(a.ramo||'')===REN_FILTER.ramo);
+  const vencidas=comVenc.filter(a=>a.dias<0).sort((a,b)=>b.dias-a.dias);
   const proximas=comVenc.filter(a=>a.dias>=0&&a.dias<=60).sort((a,b)=>a.dias-b.dias);
+  const futuras=comVenc.filter(a=>a.dias>60).sort((a,b)=>a.dias-b.dias);
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-    <div class="kpi"><div class="ico i-danger"><i class="fas fa-triangle-exclamation"></i></div><div class="val">${vencidas.length}</div><div class="lbl">Vencidas</div></div>
     <div class="kpi"><div class="ico i-warn"><i class="fas fa-hourglass-half"></i></div><div class="val">${proximas.length}</div><div class="lbl">Vencem em até 60 dias</div></div>
-    <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${comVenc.length}</div><div class="lbl">Apólices com vigência</div></div>
+    <div class="kpi"><div class="ico i-danger"><i class="fas fa-triangle-exclamation"></i></div><div class="val">${vencidas.length}</div><div class="lbl">Vencidas sem renovar</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${comVenc.length}</div><div class="lbl">Apólices acompanhadas</div></div>
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.3rem">${money(proximas.reduce((s,a)=>s+(Number(a.valorPremio)||0),0))}</div><div class="lbl">Prêmio a renovar (60 dias)</div></div>
   </div>`;
+  const segs=[...new Set(CACHE.apolices.map(x=>x.seguradora).filter(Boolean))].sort();
+  const prods=[...new Set(CACHE.apolices.map(x=>x.responsavelNome).filter(Boolean))].sort();
+  const ramos=[...new Set(CACHE.apolices.map(x=>x.ramo).filter(Boolean))].sort();
+  html+=`<div class="card" style="padding:14px 16px"><div class="filters" style="margin:0">
+    <input type="text" id="fBuscaRen" placeholder="Buscar cliente, placa..." value="${esc(REN_FILTER.busca)}" oninput="REN_FILTER.busca=this.value;redesenhar(VIEWS.renovacoes)" style="min-width:200px">
+    <select onchange="REN_FILTER.seguradora=this.value;VIEWS.renovacoes()"><option value="">Todas as seguradoras</option>${segs.map(x=>`<option ${REN_FILTER.seguradora===x?'selected':''}>${esc(x)}</option>`).join('')}</select>
+    <select onchange="REN_FILTER.produtor=this.value;VIEWS.renovacoes()"><option value="">Todos os produtores</option>${prods.map(x=>`<option ${REN_FILTER.produtor===x?'selected':''}>${esc(x)}</option>`).join('')}</select>
+    <select onchange="REN_FILTER.ramo=this.value;VIEWS.renovacoes()"><option value="">Todos os ramos</option>${ramos.map(x=>`<option ${REN_FILTER.ramo===x?'selected':''}>${esc(x)}</option>`).join('')}</select>
+  </div></div>`;
   const linha=a=>{ const venc=a.dias<0; const cor=venc?'var(--danger)':a.dias<=15?'var(--warn)':'var(--info)';
-    return `<tr><td><b>${esc(a.clienteNome||'-')}</b></td><td>${esc(a.ramo||'-')} · ${esc(a.seguradora||'')}</td><td>Nº ${esc(a.numeroApolice||'-')}</td>
+    return `<tr><td><b>${esc(a.clienteNome||'-')}</b>${a.veiculoPlaca?`<div style="font-size:.72rem;color:var(--text-3)">${esc(a.veiculoPlaca)}${a.veiculoModelo?' · '+esc(String(a.veiculoModelo).slice(0,24)):''}</div>`:''}</td>
+    <td>${esc(a.ramo||'-')} · ${esc(a.seguradora||'')}</td><td style="font-size:.82rem">${esc(a.responsavelNome||'—')}</td>
     <td>${fmtData(a.dataFimVigencia)}</td><td>${statusBadge(venc?Math.abs(a.dias)+' dias vencida':'em '+a.dias+' dias',cor)}</td><td>${money(a.valorPremio)}</td>
-    <td><button class="btn btn-ghost btn-sm" onclick="modalApolice('${a.id}')"><i class="fas fa-rotate"></i> Renovar</button></td></tr>`; };
-  const tabela=(titulo,arr,ic)=>`<div class="card" style="margin-bottom:18px"><div class="card-head"><h3><i class="fas ${ic}"></i> ${titulo}</h3></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Apólice</th><th>Número</th><th>Vencimento</th><th>Prazo</th><th>Prêmio</th><th></th></tr></thead><tbody>
-    ${arr.length?arr.map(linha).join(''):`<tr><td colspan="7"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-check"></i></div><h4>Nada aqui</h4></div></td></tr>`}
+    <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" title="Ver tudo" onclick="modalVerApolice('${a.id}')"><i class="fas fa-eye"></i></button>
+      <button class="btn btn-primary btn-sm" onclick="modalRenovar('${a.id}')"><i class="fas fa-rotate"></i> Renovar</button></td></tr>`; };
+  const tabela=(titulo,arr,ic,vazio)=>`<div class="card" style="margin-bottom:18px"><div class="card-head"><h3><i class="fas ${ic}"></i> ${titulo}</h3></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Apólice</th><th>Produtor</th><th>Vencimento</th><th>Prazo</th><th>Prêmio</th><th></th></tr></thead><tbody>
+    ${arr.length?arr.map(linha).join(''):`<tr><td colspan="7"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-check"></i></div><h4>${vazio||'Nada aqui'}</h4></div></td></tr>`}
     </tbody></table></div></div>`;
-  html+=tabela('Vencidas',vencidas,'fa-triangle-exclamation')+tabela('Próximas de vencer (60 dias)',proximas,'fa-hourglass-half');
+  html+=tabela('Próximas de vencer (60 dias) — a prioridade',proximas,'fa-hourglass-half');
+  html+=tabela('Vencidas sem renovar — reconquista',vencidas,'fa-triangle-exclamation','Ninguém para reconquistar');
+  if(futuras.length) html+=tabela('Mais adiante (depois de 60 dias)',futuras.slice(0,30),'fa-calendar');
   setView(html);
 };
 
@@ -4044,7 +4409,7 @@ function apoliceCtxFipe(a){ return {codigo:a.codigoFipe, marca:a.veiculoFabrican
 let FIPE_BATCH_RUNNING=false;
 async function atualizarFipeTodas(silencioso){
   if(FIPE_BATCH_RUNNING) return;
-  const aps=CACHE.apolices.filter(a=>a.status!=='cancelada' && (a.codigoFipe||a.veiculoModelo));
+  const aps=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
   if(!aps.length){ if(!silencioso) toast('Nenhuma apólice com veículo para atualizar.','info'); return; }
   FIPE_BATCH_RUNNING=true;
   if(!silencioso) toast('Atualizando a FIPE de '+aps.length+' veículo(s) ao vivo. Pode levar um minuto...','info','FIPE');
@@ -4073,7 +4438,8 @@ async function checarFipeAuto(){
 
 /* ---------- FIPE DA CARTEIRA ---------- */
 VIEWS.fipe=function(){
-  const aps=CACHE.apolices.filter(a=>a.status!=='cancelada' && (a.codigoFipe||a.veiculoModelo));
+  /* só os veículos com seguro vigente — histórico não precisa de FIPE viva */
+  const aps=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
   const actions=`<button class="btn btn-primary btn-sm" onclick="atualizarFipeTodas()"${FIPE_BATCH_RUNNING?' disabled':''}><i class="fas fa-rotate"></i> Atualizar todas agora</button>`;
   let html=head('fipe',{actions});
   // barra de progresso do lote
@@ -5376,11 +5742,14 @@ function pgComissaoDe(func,ano,mes){
   const fator=Number(func.comissaoPadrao)||0;
   const aps=pgApolicesDoMes(ano,mes).filter(a=>pgVendedorDa(a)===func.id);
   const itens=aps.map(a=>{
-    const premio=Number(a.valorPremio)||0;
+    const premio=Number(a.valorPremio)||0;                 /* total, para mostrar */
+    const base=Number(a.premioLiquido)||premio;            /* comissão é sobre o líquido */
     const pct=Number(a.comissao)||0;
-    const nossa=Math.round(premio*pct)/100;
+    const nossa=(a.comissaoValor!=null&&a.comissaoValor!=='')
+      ? Math.round(Number(a.comissaoValor)*100)/100        /* valor exato vindo da seguradora */
+      : Math.round(base*pct)/100;
     const dele=Math.round(nossa*fator)/100;
-    return {a,premio,pct,nossa,dele};
+    return {a,premio,base,pct,nossa,dele};
   });
   return { fator, itens,
     premio:Math.round(itens.reduce((s,i)=>s+i.premio,0)*100)/100,
@@ -5578,7 +5947,7 @@ function pgModal(funcId){
         <div class="form-row"><label>Salário base</label><input type="text" id="pgBase" value="${String(salBase).replace('.',',')}" oninput="pgRecalc()"></div>
         <div class="form-row"><label>Comissão</label><input type="text" id="pgCom" value="${String(com).replace('.',',')}" oninput="pgRecalc()">
           <div style="font-size:.74rem;color:var(--text-2);margin-top:4px">
-            ${c.itens.length?`Calculado: ${pgMoeda(c.premio)} de prêmio × comissão da apólice = ${pgMoeda(c.nossa)} · fator ${c.fator}% = <b>${pgMoeda(c.valor)}</b>
+            ${c.itens.length?`Calculado: comissão sobre o prêmio líquido = ${pgMoeda(c.nossa)} · fator ${c.fator}% = <b>${pgMoeda(c.valor)}</b>
               <button class="btn btn-ghost btn-sm" style="padding:2px 8px;margin-left:5px" onclick="pgDetalheComissao('${funcId}')">ver negócios</button>`
               :`Sem vendas com vigência em ${MESES_BR[ref.mes-1]}/${ref.ano}.`}</div></div>
       </div>
