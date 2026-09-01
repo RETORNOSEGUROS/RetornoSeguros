@@ -15,6 +15,7 @@
 <meta name="description" content="Cotação de seguro auto com consultoria de verdade: entenda seus riscos enquanto cota. Retorno Seguros, Passo Fundo - RS.">
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 <style>
 /* ===== Identidade Retorno: navy #1b2c5c · azul #3b82f6 · âmbar #f59e0b ===== */
@@ -183,6 +184,8 @@ body{font-family:'Open Sans',-apple-system,sans-serif;background:var(--bg);color
 <script>
 const firebaseConfig={apiKey:"AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",authDomain:"retorno-seguros.firebaseapp.com",projectId:"retorno-seguros",storageBucket:"retorno-seguros.appspot.com",messagingSenderId:"495712392972",appId:"1:495712392972:web:e1e78aedc48bdeea48db29",measurementId:"G-C6E44WXLPW"};
 firebase.initializeApp(firebaseConfig);const db=firebase.firestore();
+/* sessão anônima: sem ela o Firestore recusa as ATUALIZAÇÕES do lead (criar é público, atualizar não) */
+const authPronta=firebase.auth().signInAnonymously().catch(function(e){ console.warn('auth anon',e); });
 const FIPE_API='https://parallelum.com.br/fipe/api/v1/carros';
 const FIPE_V2='https://fipe.parallelum.com.br/api/v2/cars';
 const AVATAR='/img/pamelacotacoes.png';
@@ -215,11 +218,13 @@ function dadosLead(extra){
 }
 async function salvarProgresso(etapa,acao){
   if(!formData._leadId) return;                 /* antes do WhatsApp fica só aqui */
-  try{ await db.collection('leads_crm').doc(formData._leadId).update(dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'})); }
-  catch(e){}
+  try{ await authPronta;
+    await db.collection('leads_crm').doc(formData._leadId).update(dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'})); }
+  catch(e){ console.warn('progresso',e); }
 }
 async function criarLead(){
   try{
+    await authPronta;
     const ref=await db.collection('leads_crm').add(dadosLead({
       status:'pre_cadastro', acao:'salvou_whatsapp', etapaSite:'whatsapp',
       criadoEm:firebase.firestore.FieldValue.serverTimestamp()
@@ -269,7 +274,7 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;',
 const primeiroNome=()=>esc((formData.nome||'').split(' ')[0]);
 
 /* capítulos + radar */
-const CAP_DE={nome:'voce',temSeguro:'voce',carro:'carro',whatsapp:'carro',utilizacao:'rotina',condutor:'rotina',idade:'rotina',garagem:'rotina',bonus:'rotina',sinistro:'rotina',reboque:'protecao',terceiros:'protecao',carroReserva:'protecao',extras:'protecao',franquia:'protecao',fim:'fim'};
+const CAP_DE={nome:'voce',temSeguro:'voce',carro:'carro',whatsapp:'carro',utilizacao:'rotina',condutor:'rotina',idade:'rotina',garagem:'rotina',sinistro:'rotina',reboque:'protecao',terceiros:'protecao',carroReserva:'protecao',pneuRoda:'protecao',vidros:'protecao',martelinho:'protecao',parachoque:'protecao',pintura:'protecao',franquia:'protecao',fim:'fim'};
 function marcaCapitulo(passo){
   const alvo=CAP_DE[passo]||'voce';
   const ordem=['voce','carro','rotina','protecao','fim']; const i=ordem.indexOf(alvo);
@@ -279,7 +284,7 @@ function marcaCapitulo(passo){
     el.classList.toggle('done',j<i);
   });
 }
-let radarPts=0; const RADAR_TOTAL=14;
+let radarPts=0; const RADAR_TOTAL=19;
 function radarMais(n){
   radarPts=Math.min(RADAR_TOTAL,radarPts+(n||1));
   const p=Math.round(radarPts/RADAR_TOTAL*100);
@@ -434,27 +439,11 @@ async garagem(){
     const rot=window.__rotGaragem||'';
     fecharArea(); bolhaEco(rot+(formData.cepPernoite?' · CEP '+esc(formData.cepPernoite):''));
     radarMais(1); salvarProgresso('garagem');
-    passo(formData.temSeguro==='sim'?'bonus':'reboque');
+    passo(formData.temSeguro==='sim'?'sinistro':'reboque');
   });
 },
 
-/* ---------- 9. BÔNUS ---------- */
-async bonus(){
-  await digitando(800);
-  bolhaPamela('Qual sua <strong>classe de bônus</strong>? É o desconto que você acumulou por anos sem sinistro — <span class="hl">um patrimônio seu</span>, que vai junto quando troca de seguradora.');
-  const ops=['0','1','2','3','4','5','6','7','8','9','10'];
-  areaResposta('<div class="ig"><select class="sf" id="selBonus"><option value="">Selecione</option>'+
-    ops.map(b=>'<option value="'+b+'">Classe '+b+(b==='0'?' (primeiro seguro)':'')+'</option>').join('')+
-    '<option value="nao-sei">Não sei — a Pamela verifica</option></select></div>'+
-    '<div class="br"><button class="bn bp" id="btBonus" disabled>Enviar &rarr;</button></div>');
-  const s=areaAtual.querySelector('#selBonus'), bt=areaAtual.querySelector('#btBonus');
-  s.addEventListener('change',()=>bt.disabled=!s.value);
-  bt.addEventListener('click',()=>{ formData.bonus=s.value; fecharArea();
-    bolhaEco(s.value==='nao-sei'?'Não sei o bônus':'Bônus '+esc(s.value));
-    radarMais(1); salvarProgresso('bonus'); passo('sinistro'); });
-},
-
-/* ---------- 10. SINISTRO ---------- */
+/* ---------- 9. SINISTRO ---------- */
 async sinistro(){
   await digitando(700);
   bolhaPamela('Precisou <strong>acionar o seguro</strong> nos últimos 12 meses?');
@@ -496,36 +485,48 @@ async carroReserva(){
   bolhaPamela('<strong>Cenário 3:</strong> seu carro entrou na oficina e o conserto vai levar <strong>12 dias</strong>. Como fica a rotina — trabalho, escola das crianças?');
   bolhaFato('Carro reserva <b>não vem automático</b> no seguro: é uma cobertura que se contrata, em <b>7, 15 ou 30 diárias</b>, com ar-condicionado e direção. Quem descobre isso só na oficina, descobre tarde.');
   areaResposta('<div class="og c2">'+
-    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'nao\',\'Sem carro reserva\',\'extras\',0)"><div class="ott">Não preciso</div><div class="os">Me viro sem carro</div></div>'+
-    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'7dias\',\'Carro reserva 7 dias\',\'extras\',1)"><div class="ott">7 dias</div></div>'+
-    '<div class="oc rec" onclick="respOpcao(\'carroReserva\',\'15dias\',\'Carro reserva 15 dias\',\'extras\',1)"><div class="ott">15 dias</div><div class="os">Cobre a maioria dos reparos</div></div>'+
-    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'30dias\',\'Carro reserva 30 dias\',\'extras\',2)"><div class="ott">30 dias</div></div>'+
+    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'nao\',\'Sem carro reserva\',\'pneuRoda\',0)"><div class="ott">Não preciso</div><div class="os">Me viro sem carro</div></div>'+
+    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'7dias\',\'Carro reserva 7 dias\',\'pneuRoda\',1)"><div class="ott">7 dias</div></div>'+
+    '<div class="oc rec" onclick="respOpcao(\'carroReserva\',\'15dias\',\'Carro reserva 15 dias\',\'pneuRoda\',1)"><div class="ott">15 dias</div><div class="os">Cobre a maioria dos reparos</div></div>'+
+    '<div class="oc" onclick="respOpcao(\'carroReserva\',\'30dias\',\'Carro reserva 30 dias\',\'pneuRoda\',2)"><div class="ott">30 dias</div></div>'+
     '</div>');
 },
 
-/* ---------- 14. EXTRAS ---------- */
-async extras(){
+/* ---------- 14-18. ASSISTÊNCIAS: um cenário para cada, escolha sim/não ---------- */
+async pneuRoda(){
   await digitando(1100);
-  bolhaPamela('<strong>Cenário 4:</strong> chove forte, o asfalto esconde um buraco e... <em>tum</em>. Pneu rasgado, roda trincada. A assistência comum te troca pelo <strong>estepe</strong> e pronto — o pneu novo, a roda e o amortecedor <span class="hl">saem do seu bolso</span>, a não ser que você tenha marcado a cobertura certa.<br><br>Esses aqui são os <strong>quebra-galhos que mais se usam na prática</strong> — cada um resolve um perrengue real, com participação pequena, sem acionar a franquia cheia do seguro:');
-  bolhaFato('O queridinho: <b>vidros</b>. Sem a cobertura, um para-brisa com sensor passa de R$ 3 mil; com ela, você paga só uma <b>franquia pequena</b> (na casa dos R$ 300). E a de <b>pneus, rodas e suspensão</b> cobre até peças como <b>amortecedor, mola e terminal de direção</b> danificados no mesmo buraco.');
-  areaResposta('<div class="cg2">'+
-    '<div class="ck" onclick="alternaExtra(\'vidros\',this)"><div class="ci">&#129695;</div><div class="cn"><div class="ct">Vidros, faróis e retrovisores</div><div class="cd2">Pedrinha na estrada, trinca no para-brisa — o nº 1 em uso</div></div><div class="cc2">&#10003;</div></div>'+
-    '<div class="ck" onclick="alternaExtra(\'martelinho\',this)"><div class="ci">&#128296;</div><div class="cn"><div class="ct">Martelinho de ouro</div><div class="cd2">Porta amassada no estacionamento — até 4 chamados por ano, sem repintura</div></div><div class="cc2">&#10003;</div></div>'+
-    '<div class="ck" onclick="alternaExtra(\'parachoque\',this)"><div class="ci">&#128737;&#65039;</div><div class="cn"><div class="ct">Para-choque</div><div class="cd2">A encostada na vaga ou no pilar da garagem, sem franquia cheia</div></div><div class="cc2">&#10003;</div></div>'+
-    '<div class="ck" onclick="alternaExtra(\'pintura\',this)"><div class="ci">&#127912;</div><div class="cn"><div class="ct">Pintura e lataria</div><div class="cd2">Risco de chave, de galho, de carrinho de mercado — pintura de alta qualidade</div></div><div class="cc2">&#10003;</div></div>'+
-    '<div class="ck" onclick="alternaExtra(\'pneu\',this)"><div class="ci">&#128734;</div><div class="cn"><div class="ct">Pneu, roda e suspensão</div><div class="cd2">O buraco da chuva: pneu novo, roda e até amortecedor por conta do seguro</div></div><div class="cc2">&#10003;</div></div>'+
-    '</div><div class="br"><button class="bn bp" onclick="fimExtras()">Pronto &rarr;</button></div>');
+  bolhaPamela('<strong>Cenário 4:</strong> chove forte, o asfalto esconde um buraco e... <em>tum</em>. Pneu rasgado, roda trincada. A assistência comum te troca pelo <strong>estepe</strong> e pronto — o pneu novo, a roda e até o <strong>amortecedor</strong> <span class="hl">saem do seu bolso</span>, a não ser que você tenha a cobertura certa.<br><br>Quer incluir a proteção de <strong>pneu, roda e suspensão</strong>?');
+  areaExtra('pneu','vidros','Pneu, roda e suspensão');
+},
+async vidros(){
+  await digitando(1000);
+  bolhaPamela('<strong>Cenário 5:</strong> caminhão na frente solta uma pedrinha e ela <strong>trinca o para-brisa</strong> — o item que mais se usa em qualquer seguro. A cobertura de vidros vale pra <span class="hl">para-brisa, vidros laterais, faróis, lanternas, retrovisores e teto solar</span>.<br><br>Quer levar a proteção de <strong>vidros</strong>?');
+  areaExtra('vidros','martelinho','Vidros, faróis, lanternas e retrovisores');
+},
+async martelinho(){
+  await digitando(1000);
+  bolhaPamela('<strong>Cenário 6:</strong> você volta ao estacionamento e... a porta do vizinho deixou <strong>aquele amassadinho</strong>. Com o <strong>martelinho de ouro</strong> você tem até <span class="hl">4 chamados por ano</span> pra desamassar porta, capô, teto e para-lama — sem repintura, o carro segue original.<br><br>Faz sentido pra você?');
+  areaExtra('martelinho','parachoque','Martelinho de ouro');
+},
+async parachoque(){
+  await digitando(900);
+  bolhaPamela('<strong>Cenário 7:</strong> a vaga apertada, o pilar da garagem traiçoeiro... e o <strong>para-choque</strong> paga a conta. Existe cobertura só pra ele: <span class="hl">reparo ou troca sem mexer no resto do seguro</span>.<br><br>Quer incluir a proteção de <strong>para-choque</strong>?');
+  areaExtra('parachoque','pintura','Para-choque');
+},
+async pintura(){
+  await digitando(900);
+  bolhaPamela('<strong>Cenário 8:</strong> risco de chave, galho na estrada, carrinho de mercado... A cobertura de <strong>pintura e lataria</strong> repara arranhões e riscos com <span class="hl">pintura de alta qualidade</span>, deixando a peça como saiu da loja.<br><br>Fecha essa também?');
+  areaExtra('pintura','franquia','Pintura e lataria');
 },
 
-/* ---------- 15. FRANQUIA ---------- */
+/* ---------- 19. FRANQUIA ---------- */
 async franquia(){
   await digitando(1000);
-  bolhaPamela('Última decisão, e é das importantes: a <strong>franquia</strong> — sua parte no custo de um conserto grande.');
-  bolhaFato('Duas coisas que quase ninguém te conta: a franquia só existe no <b>conserto parcial</b> — em roubo sem recuperação ou perda total (dano acima de <b>75% do valor</b>), você recebe os 100% da FIPE <b>sem pagar franquia</b>. E vidros/para-choque têm franquias próprias, bem menores.');
+  bolhaPamela('Última decisão, e é das importantes: a <strong>franquia</strong> — a sua parte no custo quando o conserto do <em>seu</em> carro é grande. A regra é simples: <span class="hl">franquia menor deixa o seguro um pouco mais caro no ano, mas pesa bem menos no bolso no dia do aperto</span>. Franquia maior faz o contrário.<br><br>Olhando pro seu momento: <strong>qual das franquias te atrai mais?</strong>');
   areaResposta('<div class="og">'+
-    '<div class="oc" onclick="respOpcao(\'franquia\',\'basica\',\'Franquia básica\',\'fim\',1)"><div class="ott">Básica</div><div class="os">Seguro mais barato; paga mais se usar</div></div>'+
-    '<div class="oc rec" onclick="respOpcao(\'franquia\',\'reduzida\',\'Franquia reduzida\',\'fim\',1)"><div class="ott">Reduzida (50%)</div><div class="os">O meio-termo que mais recomendo</div></div>'+
-    '<div class="oc" onclick="respOpcao(\'franquia\',\'super-reduzida\',\'Franquia super reduzida\',\'fim\',1)"><div class="ott">Super reduzida (25%)</div><div class="os">Paga pouco quando precisar</div></div>'+
+    '<div class="oc" onclick="respOpcao(\'franquia\',\'basica\',\'Franquia básica\',\'fim\',1)"><div class="ott">Básica</div><div class="os">Mensalidade mais leve; se precisar usar, sua parte é maior</div></div>'+
+    '<div class="oc rec" onclick="respOpcao(\'franquia\',\'reduzida\',\'Franquia reduzida (50%)\',\'fim\',1)"><div class="ott">Reduzida (50%)</div><div class="os">O meio-termo que mais recomendo</div></div>'+
+    '<div class="oc" onclick="respOpcao(\'franquia\',\'super-reduzida\',\'Franquia super reduzida\',\'fim\',1)"><div class="ott">Super reduzida (25%)</div><div class="os">Paga bem pouco quando precisar</div></div>'+
     '</div>');
 },
 
@@ -546,7 +547,6 @@ async fim(){
     '<div class="si"><div class="sl">Uso</div><div class="sv">'+L.uso+'</div></div>'+
     '<div class="si"><div class="sl">Condutor</div><div class="sv">'+L.cond+' · '+esc(formData.idade)+'</div></div>'+
     '<div class="si"><div class="sl">Pernoite</div><div class="sv">'+L.gar+'</div></div>'+
-    (formData.temSeguro==='sim'?'<div class="si"><div class="sl">Bônus</div><div class="sv">'+(formData.bonus==='nao-sei'?'A verificar':'Classe '+esc(formData.bonus))+'</div></div>':'')+
     '</div></div>'+
     '<div class="ss"><div class="st2">&#128737;&#65039; Suas proteções</div><div class="sg">'+
     '<div class="si"><div class="sl">Guincho</div><div class="sv">'+L.reb+'</div></div>'+
@@ -585,18 +585,21 @@ function marcaGaragem(v,rot){
   event.currentTarget.style.borderColor='var(--ok)';
   areaAtual.querySelector('#btGaragem').disabled=false;
 }
-function alternaExtra(nome,el){
-  el.classList.toggle('chk');
-  if(el.classList.contains('chk')){ if(!formData.extras.includes(nome)) formData.extras.push(nome); }
-  else formData.extras=formData.extras.filter(e=>e!==nome);
+/* pergunta padrão das assistências: quero / agora não */
+function areaExtra(chave,proximo,rotulo){
+  areaResposta('<div class="og c2">'+
+    '<div class="oc rec" onclick="respExtra(\''+chave+'\',true,\''+proximo+'\',\''+rotulo.replace(/'/g,'')+'\')"><div class="oi">&#9989;</div><div class="ott">Quero essa</div></div>'+
+    '<div class="oc" onclick="respExtra(\''+chave+'\',false,\''+proximo+'\',\''+rotulo.replace(/'/g,'')+'\')"><div class="oi">&#128075;</div><div class="ott">Agora não</div></div>'+
+    '</div>');
 }
-function fimExtras(){
-  const EL={vidros:'Vidros',martelinho:'Martelinho',parachoque:'Para-choque',pintura:'Pintura',pneu:'Pneu e roda'};
+function respExtra(chave,quer,proximo,rotulo){
+  if(quer){ if(!formData.extras.includes(chave)) formData.extras.push(chave); }
+  else formData.extras=formData.extras.filter(e=>e!==chave);
   fecharArea();
-  bolhaEco(formData.extras.length?formData.extras.map(e=>EL[e]).join(', '):'Sem extras por agora');
-  radarMais(Math.min(3,formData.extras.length));
-  salvarProgresso('extras');
-  passo('franquia');
+  bolhaEco((quer?'Quero: ':'Sem ')+rotulo);
+  radarMais(1);
+  salvarProgresso(chave);
+  passo(proximo);
 }
 
 /* ---------- FIPE (tenta v1, cai pra v2 se falhar) ---------- */
@@ -794,7 +797,7 @@ function montarLinkWhats(){
   else m.push('• Estou *sem seguro* no momento');
   m.push('• Condutor: '+L.cond+' ('+formData.idade+')');
   m.push('• Pernoite: '+L.gar+(formData.cepPernoite?' • CEP '+formData.cepPernoite:''));
-  if(temAp){m.push('• Bônus: '+(formData.bonus==='nao-sei'?'não sei':'classe '+formData.bonus));m.push('• Sinistro: '+(formData.sinistro==='sim'?'tive':'não tive'))}
+  if(temAp){m.push('• Sinistro nos últimos 12 meses: '+(formData.sinistro==='sim'?'tive':'não tive'))}
   m.push('');
   m.push('🛡️ *Proteções que escolhi:*');
   m.push('• Guincho: '+L.reb);m.push('• Terceiros: '+L.ter);m.push('• Carro reserva: '+L.cr);
