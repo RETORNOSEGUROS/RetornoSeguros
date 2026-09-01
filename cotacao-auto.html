@@ -184,6 +184,7 @@ body{font-family:'Open Sans',-apple-system,sans-serif;background:var(--bg);color
 const firebaseConfig={apiKey:"AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",authDomain:"retorno-seguros.firebaseapp.com",projectId:"retorno-seguros",storageBucket:"retorno-seguros.appspot.com",messagingSenderId:"495712392972",appId:"1:495712392972:web:e1e78aedc48bdeea48db29",measurementId:"G-C6E44WXLPW"};
 firebase.initializeApp(firebaseConfig);const db=firebase.firestore();
 const FIPE_API='https://parallelum.com.br/fipe/api/v1/carros';
+const FIPE_V2='https://fipe.parallelum.com.br/api/v2/cars';
 const AVATAR='/img/pamelacotacoes.png';
 const urlParams=new URLSearchParams(window.location.search);
 const indicadorCodigo=urlParams.get('ref')||null;
@@ -340,17 +341,17 @@ async carro(){
   await digitando(900);
   bolhaPamela('Agora a estrela da conversa: <strong>seu carro</strong> &#128663;&#10024;<br><br>Digite a marca que eu busco o modelo exato na <span class="hl">tabela FIPE oficial</span> — é ela que define quanto você recebe se acontecer o pior.');
   areaResposta(
-    '<div id="fipeErro" class="eb">Não consegui carregar a tabela agora. Recarrega a página que resolve.</div>'+
-    '<div class="ig"><label>Marca</label><div class="aw"><input type="text" class="if" id="inMarca" placeholder="Ex: Fiat, Volkswagen, Toyota..." autocomplete="off"><div class="ad" id="ddMarca"></div></div></div>'+
+    '<div id="fipeErro" class="eb">Não consegui falar com a tabela FIPE agora. <b style="cursor:pointer;text-decoration:underline" onclick="tentarMarcasDeNovo()">Tentar de novo</b></div>'+
+    '<div class="ig"><label>Marca</label><div class="aw"><input type="text" class="if" id="inMarca" placeholder="Carregando marcas..." autocomplete="off"><div class="ad" id="ddMarca"></div></div></div>'+
     '<div class="ig"><label>Modelo</label><div class="aw"><input type="text" class="if" id="inModelo" placeholder="Escolha a marca primeiro" autocomplete="off" disabled><div class="ad" id="ddModelo"></div></div></div>'+
     '<div class="ig"><label>Ano</label><select class="sf" id="selAno" disabled><option value="">Escolha o modelo primeiro</option></select></div>'+
     '<div class="fb" id="fipeBox"><div class="fl">Seu carro vale hoje (FIPE)</div><div class="fv" id="fipeVal">--</div>'+
     '<div class="fnote">É por 100% desse valor que ele fica protegido em roubo ou perda total.</div></div>'+
     '<div class="br"><button class="bn bp" id="btCarro" disabled>É esse! &rarr;</button></div>');
-  if(!marcasFipe.length){ try{ const r=await fetch(FIPE_API+'/marcas'); marcasFipe=await r.json(); }catch(e){ areaAtual.querySelector('#fipeErro').classList.add('show'); } }
   montaAutocomplete('inMarca','ddMarca',()=>marcasFipe,aoEscolherMarca);
   montaAutocomplete('inModelo','ddModelo',()=>modelosFipe,aoEscolherModelo);
   areaAtual.querySelector('#selAno').addEventListener('change',aoEscolherAno);
+  tentarMarcasDeNovo();
   areaAtual.querySelector('#btCarro').addEventListener('click',()=>{
     fecharArea();
     bolhaEco(esc(formData.marcaNome+' '+formData.modeloNome+' · '+formData.anoNome));
@@ -598,7 +599,47 @@ function fimExtras(){
   passo('franquia');
 }
 
-/* ---------- FIPE ---------- */
+/* ---------- FIPE (tenta v1, cai pra v2 se falhar) ---------- */
+async function fipeTenta(urlV1,urlV2,normalizaV2){
+  try{ const r=await fetch(urlV1); if(r.ok){ const d=await r.json(); if(d&&!d.erro) return d; } }catch(e){}
+  try{ const r=await fetch(urlV2); if(r.ok){ const d=await r.json(); if(d) return normalizaV2(d); } }catch(e){}
+  return null;
+}
+const v2Lista=d=>(Array.isArray(d)?d:[]).map(x=>({codigo:String(x.code),nome:x.name}));
+function fipeMarcas(){ return fipeTenta(FIPE_API+'/marcas',FIPE_V2+'/brands',v2Lista); }
+function fipeModelos(m){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos',FIPE_V2+'/brands/'+m+'/models',
+  d=>({modelos:v2Lista(d)})); }
+function fipeAnos(m,mo){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos',
+  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years',v2Lista); }
+function fipeValor(m,mo,a){ return fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos/'+a,
+  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years/'+a,d=>({Valor:d.price||''})); }
+
+/* marcas carregam já na abertura da página (como na versão anterior), com re-tentativa */
+let __marcasPromessa=null;
+function carregarMarcas(){
+  if(marcasFipe.length) return Promise.resolve(true);
+  if(__marcasPromessa) return __marcasPromessa;
+  __marcasPromessa=(async()=>{
+    for(let t=0;t<3;t++){
+      const d=await fipeMarcas();
+      if(d&&d.length){ marcasFipe=d; return true; }
+      await new Promise(ok=>setTimeout(ok,1200*(t+1)));
+    }
+    __marcasPromessa=null; return false;
+  })();
+  return __marcasPromessa;
+}
+async function tentarMarcasDeNovo(){
+  const inp=document.getElementById('inMarca'), erro=document.getElementById('fipeErro');
+  if(erro) erro.classList.remove('show');
+  if(inp&&!marcasFipe.length) inp.placeholder='Carregando marcas...';
+  const ok=await carregarMarcas();
+  const inp2=document.getElementById('inMarca'), erro2=document.getElementById('fipeErro');
+  if(ok){ if(inp2){ inp2.placeholder='Ex: Fiat, Volkswagen, Toyota...';
+      if(inp2.value.trim()) inp2.dispatchEvent(new Event('input')); } }
+  else if(erro2) erro2.classList.add('show');
+}
+
 function montaAutocomplete(inputId,ddId,getData,aoEscolher){
   const input=document.getElementById(inputId),dd=document.getElementById(ddId);let hi=-1;
   input.addEventListener('input',()=>{const val=input.value.trim().toLowerCase(),data=getData();
@@ -631,9 +672,9 @@ async function aoEscolherMarca(cod,nome){
   sa.innerHTML='<option value="">Escolha o modelo primeiro</option>';sa.disabled=true;
   document.getElementById('fipeBox').classList.remove('show');
   document.getElementById('btCarro').disabled=true;
-  try{const r=await fetch(FIPE_API+'/marcas/'+cod+'/modelos');const d=await r.json();
-    modelosFipe=d.modelos||[];im.disabled=false;im.placeholder='Digite o modelo...';im.focus();
-  }catch(e){im.placeholder='Erro ao carregar'}
+  const d=await fipeModelos(cod);
+  if(d){ modelosFipe=d.modelos||[];im.disabled=false;im.placeholder='Digite o modelo...';im.focus(); }
+  else im.placeholder='Erro ao carregar — toque na marca de novo';
 }
 async function aoEscolherModelo(cod,nome){
   formData.modeloCodigo=cod;formData.modeloNome=nome;
@@ -642,22 +683,22 @@ async function aoEscolherModelo(cod,nome){
   sa.innerHTML='<option value="">Carregando...</option>';sa.disabled=true;
   document.getElementById('fipeBox').classList.remove('show');
   document.getElementById('btCarro').disabled=true;
-  try{const r=await fetch(FIPE_API+'/marcas/'+formData.marcaCodigo+'/modelos/'+cod+'/anos');
-    anosFipe=await r.json();
+  const d=await fipeAnos(formData.marcaCodigo,cod);
+  if(d){ anosFipe=d;
     sa.innerHTML='<option value="">Escolha o ano</option>'+anosFipe.map(a=>'<option value="'+a.codigo+'">'+a.nome+'</option>').join('');
     sa.disabled=false;
-  }catch(e){sa.innerHTML='<option value="">Erro</option>'}
+  } else sa.innerHTML='<option value="">Erro — escolha o modelo de novo</option>'
 }
 async function aoEscolherAno(){
   const sa=document.getElementById('selAno');if(!sa.value)return;
   formData.anoCodigo=sa.value;formData.anoNome=sa.options[sa.selectedIndex].text;
   const fb=document.getElementById('fipeBox'),fv=document.getElementById('fipeVal');
   fv.textContent='Buscando...';fb.classList.add('show');
-  try{const r=await fetch(FIPE_API+'/marcas/'+formData.marcaCodigo+'/modelos/'+formData.modeloCodigo+'/anos/'+sa.value);
-    const d=await r.json();formData.valorFipe=d.Valor||'';
-    fv.textContent=formData.valorFipe;
+  const d=await fipeValor(formData.marcaCodigo,formData.modeloCodigo,sa.value);
+  if(d&&d.Valor){ formData.valorFipe=d.Valor; fv.textContent=formData.valorFipe;
     document.getElementById('btCarro').disabled=false;
-  }catch(e){fv.textContent='Não encontrado'}
+  } else { fv.textContent='Não encontrado — pode seguir mesmo assim';
+    document.getElementById('btCarro').disabled=false; }
 }
 
 /* ---------- resumo / whatsapp ---------- */
@@ -715,6 +756,7 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 
 /* começa */
 document.addEventListener('DOMContentLoaded',()=>{
+  carregarMarcas();   /* marcas já vêm carregando enquanto a pessoa conversa */
   setTimeout(()=>document.getElementById('pageLoader').classList.add('h'),500);
   setTimeout(()=>passo('nome'),700);
 });
