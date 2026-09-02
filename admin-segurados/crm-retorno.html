@@ -1132,7 +1132,7 @@ function bootstrap(){
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
     if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
-    if(key==='assistencias'||key==='sinistros') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[]).filter(a=>!a.status||a.status==='novo').length);
+    if(key==='assistencias'||key==='sinistros'||key==='solicitacoes') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[],CACHE.solicitacoes||[]).filter(a=>!a.status||a.status==='novo').length);
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
     if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
     reRender(routes);
@@ -1144,6 +1144,7 @@ function bootstrap(){
   listen('seguidores_instagram','seguidores',['instagram']);
   listen('assistencias','assistencias',['atendimentos']);
   listen('sinistros','sinistros',['atendimentos']);
+  listen('solicitacoes_portal','solicitacoes',['atendimentos']);
   listen('admins_crm','admins',['funcionarios','relatorios','agenda','pagamentos']);
   LISTENERS.push(db.collection('contas_fixas').onSnapshot(sn=>{
     CONTAS_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
@@ -2746,7 +2747,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
       </div>
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
       ${leadCotacaoSite(c)}
-      ${typeof fichaPortal==='function'?fichaPortal(c):''}
+      ${typeof fichaPortal==='function'?fichaPortal(c):''}${typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
       ${aps.length?aps.slice().sort((x,y)=>{
           const ax=apEhAtiva(x)?0:1, ay=apEhAtiva(y)?0:1; if(ax!==ay) return ax-ay;
@@ -3314,7 +3315,9 @@ function modalVerApolice(id){
         <input type="text" id="apDocNome" placeholder="Nome (ex.: Apólice PDF)" style="flex:1;min-width:130px">
         <input type="text" id="apDocUrl" placeholder="https://..." style="flex:2;min-width:200px">
         <button class="btn btn-ghost btn-sm" onclick="apAddDoc('${a.id}')"><i class="fas fa-plus"></i> Guardar link</button>
+        <button class="btn btn-primary btn-sm" onclick="apEnviarArquivo('${a.id}')" title="Envia o PDF para o nosso Storage e mostra na área do cliente"><i class="fas fa-upload"></i> Enviar arquivo (PDF)</button>
       </div>
+      <div style="font-size:.74rem;color:var(--text-3);margin-top:6px"><i class="fas fa-eye"></i> Tudo o que estiver aqui aparece para o cliente em "Apólice e documentos" na área dele.</div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
@@ -3329,14 +3332,14 @@ async function apAddDoc(id){
   const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
   const docs=(a.docsLinks||[]).concat([{nome:nome||null,url}]);
   try{ await db.collection('apolices_cliente').doc(id).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
-    a.docsLinks=docs; toast('Link guardado.','ok'); modalVerApolice(id);
+    a.docsLinks=docs; toast('Link guardado.','ok'); modalVerApolice(id); { const l=CACHE.leads.find(x=>x.id===a.leadId)||CACHE.leads.find(x=>atDigitos(x.cpf)&&atDigitos(x.cpf)===atDigitos(a.clienteCpf)); if(l) portalAtualizar(l.id); }
   }catch(e){ toast('Não consegui guardar: '+(e.code||e.message),'err'); }
 }
 async function apRemoverDoc(id,i){
   const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
   const docs=(a.docsLinks||[]).slice(); docs.splice(i,1);
   try{ await db.collection('apolices_cliente').doc(id).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
-    a.docsLinks=docs; modalVerApolice(id);
+    a.docsLinks=docs; modalVerApolice(id); { const l=CACHE.leads.find(x=>x.id===a.leadId)||CACHE.leads.find(x=>atDigitos(x.cpf)&&atDigitos(x.cpf)===atDigitos(a.clienteCpf)); if(l) portalAtualizar(l.id); }
   }catch(e){ toast('Não consegui remover: '+(e.code||e.message),'err'); }
 }
 /* ---------- renovar: para o funil ou lançando a nova apólice ---------- */
@@ -9407,20 +9410,21 @@ VIEWS.atendimentos=function(){
   const q=AT_FILTER.busca.toLowerCase();
   const rows=lista.filter(a=>AT_FILTER.status==='todos'||(AT_FILTER.status==='abertos'?atEhAberto(a):a.status===AT_FILTER.status))
     .filter(a=>!q||[a.nome,a.placa,a.cpf,a.celular,a.veiculo].some(v=>String(v||'').toLowerCase().includes(q)));
-  const nAss=(CACHE.assistencias||[]).filter(atEhAberto).length, nSin=(CACHE.sinistros||[]).filter(atEhAberto).length;
+  const nAss=(CACHE.assistencias||[]).filter(atEhAberto).length, nSin=(CACHE.sinistros||[]).filter(atEhAberto).length, nSol=(CACHE.solicitacoes||[]).filter(solAberta).length;
   const aba=(k,l,n)=>`<button class="btn ${AT_FILTER.aba===k?'btn-primary':'btn-ghost'} btn-sm" onclick="AT_FILTER.aba='${k}';VIEWS.atendimentos()">${l}${n?` <span class="badge" style="background:rgba(255,255,255,.25);color:inherit;margin-left:4px">${n}</span>`:''}</button>`;
   let html=head('atendimentos');
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-danger"><i class="fas fa-truck-pickup"></i></div><div class="val">${nAss}</div><div class="lbl">Assistências abertas</div></div>
     <div class="kpi"><div class="ico i-warn"><i class="fas fa-car-burst"></i></div><div class="val">${nSin}</div><div class="lbl">Sinistros abertos</div></div>
+    <div class="kpi" style="cursor:pointer" onclick="AT_FILTER.aba='solicitacoes';VIEWS.atendimentos()"><div class="ico i-info"><i class="fas fa-user-pen"></i></div><div class="val">${nSol}</div><div class="lbl">Solicitações do portal</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${(CACHE.assistencias||[]).concat(CACHE.sinistros||[]).filter(a=>a.status==='concluido').length}</div><div class="lbl">Concluídos</div></div>
   </div>`;
-  html+=`<div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px"><div style="display:flex;gap:6px">${aba('assistencias','<i class="fas fa-truck-pickup"></i> Assistências',nAss)}${aba('sinistros','<i class="fas fa-car-burst"></i> Sinistros',nSin)}</div>
+  html+=`<div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px"><div style="display:flex;gap:6px">${aba('assistencias','<i class="fas fa-truck-pickup"></i> Assistências',nAss)}${aba('sinistros','<i class="fas fa-car-burst"></i> Sinistros',nSin)}${aba('solicitacoes','<i class="fas fa-user-pen"></i> Solicitações',nSol)}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <select onchange="AT_FILTER.status=this.value;VIEWS.atendimentos()" style="width:auto"><option value="abertos" ${AT_FILTER.status==='abertos'?'selected':''}>Abertos</option><option value="todos" ${AT_FILTER.status==='todos'?'selected':''}>Todos</option>${Object.entries(AT_STATUS).map(([k,v])=>`<option value="${k}" ${AT_FILTER.status===k?'selected':''}>${v[0]}</option>`).join('')}</select>
         <input type="text" placeholder="Nome, placa, CPF..." value="${esc(AT_FILTER.busca)}" oninput="AT_FILTER.busca=this.value;VIEWS.atendimentos()" style="width:200px">
       </div></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Quando</th><th>Cliente</th><th>Veículo</th><th>${col==='assistencias'?'Situação':'Ocorrência'}</th><th>Fotos</th><th>Vínculo</th><th>Status</th><th></th></tr></thead><tbody>
+    ${col==='solicitacoes'?solTabela():`<div class="tbl-wrap"><table><thead><tr><th>Quando</th><th>Cliente</th><th>Veículo</th><th>${col==='assistencias'?'Situação':'Ocorrência'}</th><th>Fotos</th><th>Vínculo</th><th>Status</th><th></th></tr></thead><tbody>
     ${rows.length?rows.map(a=>{ const v=atVincular(a); const st=AT_STATUS[a.status||'novo']||AT_STATUS.novo; const nf=Object.keys(a.fotos||{}).length;
       return `<tr style="cursor:pointer" onclick="atAbrir('${col}','${a.id}')">
         <td style="white-space:nowrap">${atQuando(a)}<br><small style="color:var(--text-3)">${atTipoLabel(a,col)}</small></td>
@@ -9432,7 +9436,7 @@ VIEWS.atendimentos=function(){
         <td>${statusBadge(st[0],st[1])}</td>
         <td onclick="event.stopPropagation()">${waBtn(a.celular,'Olá '+((a.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos seu '+(col==='assistencias'?'pedido de assistência':'aviso de sinistro')+'.')}</td></tr>`; }).join('')
       :`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-life-ring"></i></div><h4>Nenhum ${col==='assistencias'?'pedido de assistência':'sinistro'} ${AT_FILTER.status==='abertos'?'aberto':''}</h4><p>Os pedidos feitos no site (abrir-assistencia, aviso-sinistro, momento-acidente) e no portal do cliente aparecem aqui na hora.</p></div></td></tr>`}
-    </tbody></table></div></div>`;
+    </tbody></table></div>`}</div>`;
   setView(html);
 };
 
@@ -9581,8 +9585,14 @@ function ptRetrato(lead){
   const tem=new Set(aps.filter(a=>a.vigente).map(a=>a.ramo));
   const sugeridos=PT_PRODUTOS.filter(p=>!tem.has(p.ramo)).map(p=>({ramo:p.ramo,nome:p.nome,pagina:p.pagina,icone:p.icone,frase:p.frase}));
   const cpf=ptDig(lead.cpf);
+  const pp=lead.perfilPortal||{};
+  const apAuto=apolicesDoCliente(lead).find(a=>apEhAtiva(a)&&(a.cepPernoite||a.veiculoPlaca));
+  const nasc=strData(lead.dataNascimento)||null;
   return { leadId:lead.id, nome:lead.nome||'', primeiroNome:(lead.nome||'').trim().split(' ')[0], cpfMascarado:cpf?cpf.slice(0,3)+'.***.***-'+cpf.slice(-2):'',
-    whatsapp:ptDig(lead.whatsapp||lead.telefone), email:lead.email||'', cidade:lead.cidade||'', estado:lead.estado||'',
+    whatsapp:ptDig(lead.whatsapp||lead.telefone), email:lead.email||'', cidade:pp.cidade||lead.cidade||'', estado:lead.estado||'',
+    nascimento:nasc, idade:idadeDe(lead.dataNascimento), profissao:pp.profissao||lead.profissao||'',
+    endereco:{ cep:pp.cep||lead.cep||(apAuto&&apAuto.cepPernoite)||'', logradouro:pp.endereco||lead.endereco||lead.enderecoCompleto||'', cidade:pp.cidade||lead.cidade||'', estado:lead.estado||'', origem:pp.cep?'perfil':(lead.cep?'cadastro':(apAuto&&apAuto.cepPernoite?'auto':'')) },
+    familia:{ estadoCivil:pp.estadoCivil||'', conjuge:pp.conjugeNome||'', filhos:(pp.filhos||[]).length },
     codigoIndicacao:lead.codigoIndicacao||'', apolices:aps, indicados, pontos, sugeridos, produtos:PT_PRODUTOS,
     ativo:true, atualizadoEm:FV.serverTimestamp() };
 }
@@ -9666,6 +9676,142 @@ function ptResumoPrograma(){
       ${indicadores.map(r=>`<tr><td><b>${esc(r.l.nome)}</b></td><td>${esc(r.l.codigoIndicacao)}</td><td>${r.ind.length}</td><td>${r.fechados}</td><td><b>${r.pontos.toLocaleString('pt-BR')}</b></td><td><button class="btn btn-ghost btn-sm" onclick="abrirLead('${r.l.id}')"><i class="fas fa-id-badge"></i></button></td></tr>`).join('')}</tbody></table></div>`
       :`<p style="color:var(--text-3);font-size:.85rem;padding:6px 0">Nenhuma indicação de cliente ainda. Gere as áreas dos clientes ativos e envie o link pelo WhatsApp — cada cliente ganha o próprio código de indicação.</p>`}
   </div>`;
+}
+
+</script>
+  <script>
+/* =========================================================================
+   SOLICITAÇÕES DO PORTAL — "Revisar meu perfil", coberturas e cancelamentos
+   que o cliente envia pela área dele (cliente.html) → coleção solicitacoes_portal.
+   Também: perfil preenchido pelo cliente (leads_crm.perfilPortal) na ficha,
+   e upload de documentos da apólice para o Storage (aparecem na área do cliente).
+   ========================================================================= */
+const SOL_TIPO={revisao:['Revisão de perfil','fa-user-pen','var(--info)'],cobertura:['Aumentar coberturas','fa-shield-halved','var(--ok)'],cancelamento:['Pedido de cancelamento','fa-ban','var(--danger)']};
+const SOL_STATUS={novo:['Nova','var(--danger)'],em_atendimento:['Em atendimento','var(--warn)'],aguardando:['Aguardando seguradora','var(--info)'],concluido:['Concluída','var(--ok)'],cancelado:['Cancelada','var(--text-3)']};
+const solAberta=s=>!s.status||s.status==='novo'||s.status==='em_atendimento'||s.status==='aguardando';
+const SOL_ROT={endereco:'Mudou de endereço',condutor:'Mudou o condutor principal',uso:'Mudou o uso do veículo',residencia:'Tipo de residência',garagemTrab:'Garagem no trabalho',veiculo:'Trocou de veículo',terceiros:'Aumentar terceiros',coberturas:'Incluir/aumentar coberturas',reforma:'Reforma/ampliação',seguranca:'Alarme/câmeras',conteudo:'Valor dos bens',beneficiarios:'Beneficiários',profissao:'Profissão',capital:'Aumentar capital',dados:'Dados/endereço',cancelar:'Cancelar apólice'};
+const SOL_CAMPO={cep:'CEP',cidade:'Cidade',endereco:'Endereço',condutorNome:'Condutor',condutorNasc:'Nascimento',uso:'Uso',residencia:'Residência',garagemTrab:'Garagem trabalho',placa:'Placa',chassi:'Chassi',modelo:'Modelo/ano',valorConteudo:'Valor dos bens',beneficiarios:'Beneficiários',profissao:'Profissão',detalhe:'Detalhe',motivo:'Motivo'};
+
+function solLead(s){ return (s.leadId&&CACHE.leads.find(l=>l.id===s.leadId))||CACHE.leads.find(l=>s.whatsapp&&atDigitos(l.whatsapp||l.telefone)===atDigitos(s.whatsapp))||null; }
+function solApolice(s){ return (s.apoliceId&&CACHE.apolices.find(a=>a.id===s.apoliceId))||null; }
+function solResumo(s){ return (s.itens||[]).map(k=>SOL_ROT[k]||k).join(' · ')||(s.observacao?'Observação':'-'); }
+function solDetalhe(s){
+  const r=s.respostas||{};
+  return (s.itens||[]).map(k=>{ const x=r[k]||{}; const campos=Object.keys(x).filter(c=>c!=='titulo'&&x[c]).map(c=>`<span style="color:var(--text-2)">${esc(SOL_CAMPO[c]||c)}:</span> <b>${esc(x[c])}</b>`).join(' · ');
+    return `<div style="padding:6px 0;border-top:1px dashed var(--border);font-size:.84rem"><i class="fas fa-check" style="color:var(--brand)"></i> ${esc(x.titulo||SOL_ROT[k]||k)}${campos?'<br><span style="margin-left:18px">'+campos+'</span>':''}</div>`; }).join('')
+    +(s.observacao?`<div style="padding:6px 0;border-top:1px dashed var(--border);font-size:.84rem"><i class="fas fa-comment" style="color:var(--brand)"></i> <i>${esc(s.observacao)}</i></div>`:'');
+}
+
+/* tabela dentro de Atendimentos (aba "Solicitações") */
+function solTabela(){
+  const q=AT_FILTER.busca.toLowerCase();
+  const rows=(CACHE.solicitacoes||[]).slice().sort((x,y)=>(y.criadoEm?.seconds||0)-(x.criadoEm?.seconds||0))
+    .filter(s=>AT_FILTER.status==='todos'||(AT_FILTER.status==='abertos'?solAberta(s):s.status===AT_FILTER.status))
+    .filter(s=>!q||[s.nome,s.placa,s.ramo,s.seguradora].some(v=>String(v||'').toLowerCase().includes(q)));
+  return `<div class="tbl-wrap"><table><thead><tr><th>Quando</th><th>Cliente</th><th>Apólice</th><th>Tipo</th><th>O que mudou</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.length?rows.map(s=>{ const t=SOL_TIPO[s.tipo]||SOL_TIPO.revisao; const st=SOL_STATUS[s.status||'novo']||SOL_STATUS.novo; const l=solLead(s);
+      return `<tr style="cursor:pointer" onclick="solAbrir('${s.id}')">
+        <td style="white-space:nowrap">${s.criadoEm?fmtDataHora(s.criadoEm):'-'}<br><small style="color:var(--text-3)">pela área do cliente</small></td>
+        <td><b>${esc(s.nome||'-')}</b><br><small style="color:var(--text-3)">${esc(s.whatsapp||'')}</small></td>
+        <td>${esc(s.ramo||'')}${s.seguradora?' · '+esc(s.seguradora):''}${s.placa?'<br><small style="color:var(--text-3)">'+esc(s.placa)+'</small>':''}</td>
+        <td><span class="badge" style="background:${t[2]}22;color:${t[2]}"><i class="fas ${t[1]}"></i> ${t[0]}</span></td>
+        <td style="max-width:280px;font-size:.82rem">${esc(solResumo(s))}</td>
+        <td>${statusBadge(st[0],st[1])}</td>
+        <td onclick="event.stopPropagation()">${waBtn(s.whatsapp,'Oi '+((s.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos sua solicitação pela sua área e já estamos cuidando.')}${l?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-id-badge"></i></button>`:''}</td></tr>`; }).join('')
+      :`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-pen"></i></div><h4>Nenhuma solicitação ${AT_FILTER.status==='abertos'?'aberta':''}</h4><p>Quando o cliente usa "Revisar meu perfil", pede coberturas ou cancelamento na área dele, aparece aqui na hora.</p></div></td></tr>`}
+  </tbody></table></div>`;
+}
+function solAbrir(id){
+  const s=(CACHE.solicitacoes||[]).find(x=>x.id===id); if(!s) return;
+  const t=SOL_TIPO[s.tipo]||SOL_TIPO.revisao; const st=s.status||'novo'; const l=solLead(s); const ap=solApolice(s);
+  openModal(`<div class="modal-head"><h3><i class="fas ${t[1]}" style="color:${t[2]}"></i> ${t[0]} — ${esc(s.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${statusBadge(SOL_STATUS[st][0],SOL_STATUS[st][1])}<span style="color:var(--text-3);font-size:.82rem">recebida em ${s.criadoEm?fmtDataHora(s.criadoEm):'-'} pela área do cliente</span>
+        <div style="margin-left:auto;display:flex;gap:6px">${waBtn(s.whatsapp,'Oi '+((s.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos sua solicitação pela sua área e já estamos cuidando.','WhatsApp')}</div></div>
+      <div style="background:${ap?'var(--ok)11':'var(--warn)11'};border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:.85rem">
+        ${ap?`<b><i class="fas fa-file-contract"></i> Apólice:</b> ${esc(ap.ramo||'')} · ${esc(ap.seguradora||'')} · nº ${esc(ap.numeroApolice||'-')} · vigência ${fmtData(ap.dataInicioVigencia)} a ${fmtData(ap.dataFimVigencia)} <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="modalVerApolice('${ap.id}')"><i class="fas fa-eye"></i></button>`:`<b><i class="fas fa-triangle-exclamation"></i> Apólice não localizada</b> (${esc(s.ramo||'')}${s.seguradora?' · '+esc(s.seguradora):''}${s.numeroApolice?' · nº '+esc(s.numeroApolice):''})`}
+        ${l?`<br><b><i class="fas fa-user"></i> Cliente:</b> ${esc(l.nome)} <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="abrirLead('${l.id}')"><i class="fas fa-id-badge"></i> ficha</button>`:''}</div>
+      ${s.tipo==='cancelamento'?`<div style="background:var(--danger)11;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:.84rem"><b style="color:var(--danger)"><i class="fas fa-ban"></i> Pedido de cancelamento</b>${s.respostas?.cancelar?.motivo?' — motivo: <b>'+esc(s.respostas.cancelar.motivo)+'</b>':''}. Antes de cancelar, tente retenção: franquia, coberturas, forma de pagamento ou outra seguradora.</div>`:''}
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:4px">O que o cliente informou</div>
+      <div style="margin-bottom:14px">${solDetalhe(s)||'<span style="color:var(--text-3);font-size:.84rem">Sem itens.</span>'}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px">
+        <div class="form-row" style="margin:0"><label>Status</label><select id="solStatus">${Object.entries(SOL_STATUS).map(([k,x])=>`<option value="${k}" ${st===k?'selected':''}>${x[0]}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Protocolo / endosso</label><input type="text" id="solProtocolo" value="${esc(s.protocolo||'')}" placeholder="Nº do endosso na seguradora"></div>
+        <div class="form-row" style="margin:0;grid-column:1/-1"><label>Anotação interna</label><input type="text" id="solNota" value="${esc(s.notaInterna||'')}" placeholder="Ex.: endosso solicitado à Porto em 03/09"></div>
+      </div></div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ghost" onclick="solAgendar('${id}')"><i class="fas fa-calendar-plus"></i> Ação na agenda</button>
+      ${l?`<button class="btn btn-ghost" onclick="solRegistrarFicha('${id}')"><i class="fas fa-clock-rotate-left"></i> Registrar na ficha</button>`:''}
+      <button class="btn btn-primary" style="margin-left:auto" onclick="solSalvar('${id}')"><i class="fas fa-check"></i> Salvar</button></div>`,'wide');
+}
+async function solSalvar(id){
+  const status=document.getElementById('solStatus').value, protocolo=document.getElementById('solProtocolo').value.trim(), nota=document.getElementById('solNota').value.trim();
+  try{ await db.collection('solicitacoes_portal').doc(id).update({status,protocolo:protocolo||null,notaInterna:nota||null,atualizadoEm:FV.serverTimestamp(),atualizadoPor:CURRENT_USER?.email||'admin'}); toast('Solicitação atualizada.','ok'); closeModal(); }
+  catch(e){ console.error(e); toast('Não consegui salvar.','err'); }
+}
+async function solAgendar(id){
+  const s=(CACHE.solicitacoes||[]).find(x=>x.id===id); if(!s) return; const l=solLead(s); const t=SOL_TIPO[s.tipo]||SOL_TIPO.revisao;
+  const hoje=new Date(); const p=x=>String(x).padStart(2,'0'); const data=hoje.getFullYear()+'-'+p(hoje.getMonth()+1)+'-'+p(hoje.getDate());
+  try{ await db.collection('agenda_crm').add({ titulo:t[0]+': '+(s.nome||'')+(s.ramo?' · '+s.ramo:''), data, hora:null, horaFim:null, tipo:'ligacao', prioridade:s.tipo==='cancelamento'?'alta':'media', responsaveis:[], responsaveisNomes:[],
+      descricao:'Pedido feito pela área do cliente: '+solResumo(s)+(s.observacao?'. Obs.: '+s.observacao:''), vinculo:l?{tipo:'lead',id:l.id,nome:l.nome||''}:null, status:'aberta', origem:'solicitacao', atendimentoRef:'solicitacoes_portal/'+id,
+      criadoEm:FV.serverTimestamp(), criadoPor:CURRENT_USER?.email||'admin' });
+    toast('Ação criada na agenda de hoje.','ok'); }catch(e){ console.error(e); toast('Não consegui agendar.','err'); }
+}
+async function solRegistrarFicha(id){
+  const s=(CACHE.solicitacoes||[]).find(x=>x.id===id); if(!s) return; const l=solLead(s); if(!l) return; const t=SOL_TIPO[s.tipo]||SOL_TIPO.revisao;
+  try{ await db.collection('interacoes_crm').add({ leadId:l.id, tipo:'outro', titulo:t[0]+' pela área do cliente', descricao:solResumo(s)+(s.observacao?'. Obs.: '+s.observacao:''), data:FV.serverTimestamp(), criadoEm:FV.serverTimestamp(), autor:CURRENT_USER?.email||'admin', origem:'solicitacao' });
+    toast('Registrado na ficha.','ok'); }catch(e){ console.error(e); toast('Não consegui registrar.','err'); }
+}
+
+/* ---------- na ficha do lead: perfil preenchido pelo cliente + solicitações dele ---------- */
+function fichaPerfilPortal(c){
+  const p=c.perfilPortal; const sols=(CACHE.solicitacoes||[]).filter(s=>s.leadId===c.id).sort((x,y)=>(y.criadoEm?.seconds||0)-(x.criadoEm?.seconds||0));
+  if(!p&&!sols.length) return '';
+  const f=(k,v)=>v?`<div class="mov-f"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`:'';
+  let html='';
+  if(p){
+    const dif=[]; if(p.whatsapp&&atDigitos(p.whatsapp)!==atDigitos(c.whatsapp||c.telefone)) dif.push('WhatsApp'); if(p.email&&p.email!==(c.email||'')) dif.push('e-mail'); if(p.cep&&p.cep!==(c.cep||'')) dif.push('CEP'); if(p.endereco&&p.endereco!==(c.endereco||'')) dif.push('endereço'); if(p.cidade&&p.cidade!==(c.cidade||'')) dif.push('cidade');
+    html+=`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px"><div style="font-weight:700;font-size:.85rem"><i class="fas fa-user-pen" style="color:var(--brand)"></i> Perfil preenchido pelo cliente <span style="font-weight:400;color:var(--text-3);font-size:.76rem">${p.atualizadoEm?fmtDataHora(p.atualizadoEm):''}</span></div>
+        ${dif.length?`<button class="btn btn-ghost btn-sm" onclick="perfilAplicar('${c.id}')" title="Copia ${dif.join(', ')} para o cadastro"><i class="fas fa-arrow-down"></i> Aplicar ${dif.join(', ')} ao cadastro</button>`:'<span class="badge" style="background:var(--ok)22;color:var(--ok)">contato em dia</span>'}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 14px">
+        ${f('WhatsApp',p.whatsapp)}${f('E-mail',p.email)}${f('CEP',p.cep)}${f('Endereço',p.endereco)}${f('Cidade',p.cidade)}${f('Profissão',p.profissao)}${f('Cargo',p.cargo)}${f('Estado civil',p.estadoCivil)}
+        ${f('Cônjuge',p.conjugeNome?p.conjugeNome+(p.conjugeNasc?' · '+fmtData(p.conjugeNasc)+(idadeDe(p.conjugeNasc)!=null?' ('+idadeDe(p.conjugeNasc)+'a)':''):''):'')}
+        ${(p.filhos||[]).length?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Filhos (${p.filhos.length})</div><div class="v">${p.filhos.map(x=>esc(x.nome)+(x.nasc?' · '+fmtData(x.nasc)+(idadeDe(x.nasc)!=null?' ('+idadeDe(x.nasc)+'a)':''):'')).join(' · ')}</div></div>`:''}
+        ${p.obs?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Observação do cliente</div><div class="v"><i>${esc(p.obs)}</i></div></div>`:''}
+      </div>
+      ${(p.filhos||[]).length||p.conjugeNome?`<div style="font-size:.78rem;color:var(--brand-dark);margin-top:8px"><i class="fas fa-lightbulb"></i> Família informada: bom gancho para seguro de vida${(p.filhos||[]).length?' e plano de saúde':''}.</div>`:''}
+    </div>`;
+  }
+  if(sols.length){
+    html+=`<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:6px"><i class="fas fa-inbox" style="color:var(--brand)"></i> Solicitações pela área do cliente (${sols.length})</div>
+      ${sols.map(s=>{ const t=SOL_TIPO[s.tipo]||SOL_TIPO.revisao; const st=SOL_STATUS[s.status||'novo']||SOL_STATUS.novo; return `<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;padding:5px 0;border-top:1px dashed var(--border);cursor:pointer" onclick="solAbrir('${s.id}')"><span style="color:var(--text-3);white-space:nowrap">${s.criadoEm?fmtData(s.criadoEm):''}</span><b style="color:${t[2]}">${t[0]}</b><span style="flex:1;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(solResumo(s))}</span>${statusBadge(st[0],st[1])}</div>`; }).join('')}</div>`;
+  }
+  return html;
+}
+async function perfilAplicar(leadId){
+  const c=CACHE.leads.find(x=>x.id===leadId); if(!c||!c.perfilPortal) return; const p=c.perfilPortal;
+  const up={atualizadoEm:FV.serverTimestamp()}; if(p.whatsapp) up.whatsapp=p.whatsapp; if(p.email) up.email=p.email; if(p.cep) up.cep=p.cep; if(p.endereco) up.endereco=p.endereco; if(p.cidade) up.cidade=p.cidade; if(p.profissao) up.profissao=p.profissao;
+  try{ await db.collection('leads_crm').doc(leadId).update(up); Object.assign(c,up); toast('Cadastro atualizado com os dados do cliente.','ok'); portalAtualizar(leadId); abrirLead(leadId); }catch(e){ toast('Não consegui aplicar.','err'); }
+}
+
+/* ---------- upload de documento da apólice (Storage, pasta site/) ---------- */
+function apEnviarArquivo(id){
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.pdf,image/*';
+  inp.onchange=async()=>{ const file=inp.files[0]; if(!file) return;
+    if(file.size>15*1024*1024){ toast('Arquivo acima de 15 MB. Comprima o PDF antes.','warn'); return; }
+    const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+    const nome=(document.getElementById('apDocNome')||{}).value?.trim()||file.name.replace(/\.[^.]+$/,'');
+    const ext=(file.name.match(/\.[a-z0-9]+$/i)||['.pdf'])[0].toLowerCase();
+    toast('Enviando '+file.name+'…','info');
+    try{ const ref=firebase.storage().ref('site/doc_'+id+'_'+Date.now()+ext); await ref.put(file,{contentType:file.type||'application/pdf'}); const url=await ref.getDownloadURL();
+      const docs=(a.docsLinks||[]).concat([{nome,url,storage:true,enviadoEm:new Date().toISOString()}]);
+      await db.collection('apolices_cliente').doc(id).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()}); a.docsLinks=docs;
+      const lead=a.leadId&&CACHE.leads.find(l=>l.id===a.leadId); if(lead) portalAtualizar(lead.id); else { const l2=CACHE.leads.find(l=>atDigitos(l.cpf)&&atDigitos(l.cpf)===atDigitos(a.clienteCpf)); if(l2) portalAtualizar(l2.id); }
+      toast('Documento anexado — já aparece na área do cliente.','ok'); modalVerApolice(id);
+    }catch(e){ console.error(e); toast('Não consegui enviar: '+(e.code||e.message),'err'); } };
+  inp.click();
 }
 
 </script>
