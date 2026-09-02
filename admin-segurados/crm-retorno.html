@@ -2605,19 +2605,30 @@ let FICHA_LEAD=null;
 const SITE_ROT={
   idade:'Idade',sexo:'Sexo',dataNascimento:'Nascimento',profissao:'Profissão',ocupacaoTipo:'Ocupação',renda:'Renda',familia:'Família',capital:'Capital escolhido',capitalSugerido:'Sugestão da Pamela',temSeguroVida:'Seguro de vida hoje',
   tipoImovel:'Imóvel',tipoConstrucao:'Construção',usoImovel:'Uso',padraoAcabamento:'Padrão',metros:'Área (m²)',valorImovel:'Valor do imóvel',valorConteudo:'Bens (conteúdo)',cidade:'Cidade',estado:'UF',bairro:'Bairro',cep:'CEP',mesVencimento:'Vence em',temSeguro:'Tem seguro hoje',
-  nomeEmpresa:'Empresa',cnpj:'CNPJ',vidas:'Vidas',funcionarios:'Funcionários',segmento:'Segmento',faturamento:'Faturamento',quantidadeVeiculos:'Veículos'};
+  nomeEmpresa:'Empresa',cnpj:'CNPJ',totalVidas:'Vidas',qtdFuncionarios:'Funcionários',qtdSocios:'Sócios',funcionarios:'Vidas (titulares)',dependentes:'Dependentes',perfilIdades:'Perfil de idade',
+  temPlano:'Tem plano hoje',operadoraAtual:'Operadora atual',acomodacao:'Acomodação',cobertura:'Abrangência',coparticipacao:'Coparticipação',planoDiferenciado:'Sócios com plano superior',
+  planoNivel:'Cobertura dental',quemPaga:'Custeio',valorCotacao:'Referência por vida',valorPremio:'Estimativa mensal',tipoBeneficiario:'Quem entra',capitalBase:'Capital por vida',
+  segmento:'Segmento',faturamento:'Faturamento',quantidadeVeiculos:'Veículos'};
 const SITE_VAL={sexo:{M:'Masculino',F:'Feminino'},familia:{solteiro:'Sem dependentes',casal:'Cônjuge',filhosMenores:'Filhos menores',filhosAdultos:'Filhos adultos'},
+  perfilIdades:{jovem:'Maioria até 33',meio:'Entre 34 e 48',senior:'Acima de 49',misto:'Bem misturado'},temPlano:{sim:'Sim',nao:'Não'},dependentes:{sim:'Sim',nao:'Não'},
+  acomodacao:{enfermaria:'Enfermaria',apartamento:'Apartamento'},cobertura:{regional:'Regional',nacional:'Nacional'},coparticipacao:{sim:'Com',nao:'Sem'},planoDiferenciado:{sim:'Sim',nao:'Não'},
+  planoNivel:{basico:'Rol ANS',ampliado:'Ampliado',ortodontia:'Com ortodontia'},quemPaga:{empresa:'Empresa paga',dividido:'Dividido',colaborador:'Desconto em folha'},
+  tipoBeneficiario:{funcionarios:'Só funcionários',ambos:'Sócios e funcionários'},capital:{salario:'Múltiplo do salário'},
   ocupacaoTipo:{clt:'CLT',autonomo:'Autônomo',empresario:'Empresário',servidor:'Servidor público',aposentado:'Aposentado'},
   temSeguroVida:{sim:'Tem o próprio',trabalho:'Só pela empresa',nao:'Não tem'},temSeguro:{sim:'Sim',nao:'Não'},
   tipoImovel:{apartamento:'Apartamento',casa:'Casa',casa_condominio:'Casa em condomínio',sobrado:'Sobrado'},tipoConstrucao:{alvenaria:'Alvenaria',mista:'Mista',madeira:'Madeira'},
   usoImovel:{residencia:'Moradia habitual',veraneio:'Veraneio',alugado:'Inquilino'},padraoAcabamento:{baixo:'Simples',medio:'Médio',alto:'Alto padrão'}};
-const COB_ROT_SITE={morte:'Morte',ipa:'Invalidez por acidente',doencasGraves:'Doenças graves',dit:'Diária por afastamento',funeral:'Assistência funeral',
+const COB_ROT_SITE={morte:'Morte',morteAcidental:'Morte acidental',ipa:'Invalidez por acidente',ifpd:'Invalidez por doença',doencasGraves:'Doenças graves',dit:'Diária por afastamento',funeral:'Assistência funeral',
   incendio:'Incêndio/raio/explosão',danosEletricos:'Danos elétricos',roubo:'Roubo e furto',vendaval:'Vendaval e granizo',rcFamiliar:'RC familiar',assistencia24h:'Assistência 24h'};
 function leadCotacaoOutrosRamos(c){
   const chaves=Object.keys(SITE_ROT).filter(k=>c[k]!==undefined&&c[k]!==null&&c[k]!=='');
-  const cobs=c.coberturas&&typeof c.coberturas==='object'?Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&c.coberturas[k].ativo):[];
+  let cobs=[];
+  if(Array.isArray(c.coberturas)) cobs=c.coberturas.map(x=>(x&&x.nome)||'').filter(Boolean);          /* vida empresarial: [{nome,capital}] */
+  else if(c.coberturas&&typeof c.coberturas==='object') cobs=Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&(c.coberturas[k].ativo||c.coberturas[k].selecionada));
   if(!chaves.length&&!cobs.length) return '';
-  const val=(k,v)=>{ if(SITE_VAL[k]&&SITE_VAL[k][v]) return SITE_VAL[k][v]; if(k==='capital'||k==='capitalSugerido') return money(Number(v)||0); if(k==='dataNascimento') return fmtData(v); return esc(String(v)); };
+  const val=(k,v)=>{ if(SITE_VAL[k]&&SITE_VAL[k][v]) return SITE_VAL[k][v];
+    if(k==='capital'||k==='capitalSugerido'||k==='capitalBase'||k==='valorCotacao'||k==='valorPremio') return isNaN(Number(v))?esc(String(v)):money(Number(v));
+    if(k==='dataNascimento') return fmtData(v); if(typeof v==='object') return esc(JSON.stringify(v)); return esc(String(v)); };
   return chaves.map(k=>`<div class="mov-f"><div class="k">${SITE_ROT[k]}</div><div class="v">${val(k,c[k])}</div></div>`).join('')+
     (cobs.length?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Coberturas que quer</div><div class="v">${cobs.map(k=>COB_ROT_SITE[k]||k).join(', ')}</div></div>`:'');
 }
@@ -2638,7 +2649,12 @@ function leadCotacaoSite(c){
   const ETAPA={mesVencimento:'mês de vencimento',garagem:'pernoite',bonus:'bônus',sinistro:'sinistro',utilizacao:'uso do carro',
     condutor:'condutor',idade:'idade',reboque:'guincho',terceiros:'terceiros',carroReserva:'carro reserva',extras:'assistências',
     pneu:'pneu/roda',vidros:'vidros',martelinho:'martelinho',parachoque:'para-choque',pintura:'pintura',franquia:'franquia',
-    whatsapp:'WhatsApp',resumo:'resumo final'};
+    whatsapp:'WhatsApp',resumo:'resumo final',
+    nascimento:'nascimento',sexo:'sexo',profissao:'profissão',ocupacao:'ocupação',renda:'renda',familia:'família',capital:'capital',ipa:'invalidez',doencasGraves:'doenças graves',dit:'diária',funeral:'funeral',
+    tipoImovel:'tipo do imóvel',usoImovel:'uso do imóvel',cep:'CEP',construcao:'construção',padrao:'padrão',metros:'metragem',valorImovel:'valor do imóvel',valorConteudo:'bens',
+    danosEletricos:'danos elétricos',roubo:'roubo',vendaval:'vendaval',rcFamiliar:'RC familiar',assistencia24h:'assistência 24h',
+    empresa:'nome da empresa',operadora:'operadora atual',vidas:'nº de vidas',perfil:'perfil de idade',acomodacao:'acomodação',cobertura:'abrangência',coparticipacao:'coparticipação',socios:'sócios',cnpj:'CNPJ',
+    funcionarios:'nº de funcionários',dependentes:'dependentes',nivel:'nível do plano',quemPaga:'custeio',tipo:'quem entra',morteAcidental:'morte acidental',temPlano:'tem plano',temSeguro:'tem seguro',temSeguroVida:'tem seguro'};
   const f=(k,v)=>v?`<div class="mov-f"><div class="k">${k}</div><div class="v">${v}</div></div>`:'';
   const ac=ACAO[c.acao]; const ext=Array.isArray(c.extras)&&c.extras.length?c.extras.map(e=>M.ex[e]||e).join(', '):null;
   return `<div style="background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
