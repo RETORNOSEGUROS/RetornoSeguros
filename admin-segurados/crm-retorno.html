@@ -843,6 +843,7 @@ const MENU = [
     { id:'carteira', icon:'fa-boxes-packing', label:'Importar carteira' },
     { id:'indicacoes', icon:'fa-share-nodes', label:'Indicações' },
     { id:'renovacoes', icon:'fa-rotate', label:'Renovações', badge:'renov' },
+    { id:'atendimentos', icon:'fa-life-ring', label:'Atendimentos', badge:'atend' },
   ]},
   { sec:'Beneficiários', items:[
     { id:'empresas', icon:'fa-building', label:'Empresas' },
@@ -885,6 +886,7 @@ const EXPLAIN = {
   propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
   comissoes:'A comissão da corretora calculada da carteira inteira, ano a ano e mês a mês — inclusive o que veio do sistema antigo — e quanto cada um da equipe recebe.',
   carteira:'Traga tudo do sistema gerenciador antigo: solte o Excel exportado e eu cadastro os clientes, importo as apólices (ativas e históricas), separo o que precisa renovar e vinculo quem produziu cada negócio.',
+  atendimentos:'Pedidos de assistência 24h e avisos de sinistro que o cliente abre pelo site (com fotos, localização e relato). Cada um chega aqui na hora, já ligado à apólice pela placa ou CPF — mude o status, anote o protocolo, crie a ação na agenda e registre na ficha.',
   fipe:'O valor FIPE de todos os veículos segurados, num lugar só. Atualiza automaticamente todo mês (ou num clique) — ótimo para acompanhar valorização/desvalorização e falar com o cliente na renovação.',
   parceiros:'Empresas parceiras que trazem leads e indicações.',
   resgates:'Resgates de recompensas solicitados pelos parceiros.',
@@ -940,7 +942,7 @@ const MOTIVOS_PERDA={preco:'Preço/valor',concorrencia:'Fechou com concorrente',
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
 let CACHE={ leads:[], movimentacoes:[], empresas:[], beneficiarios:[],
-  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[], fipeHist:[] };
+  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[], fipeHist:[], assistencias:[], sinistros:[] };
 let LISTENERS=[];
 let _leadsKnown=null; // p/ detectar leads novos e disparar notificação
 
@@ -1127,6 +1129,7 @@ function bootstrap(){
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
     if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
+    if(key==='assistencias'||key==='sinistros') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[]).filter(a=>!a.status||a.status==='novo').length);
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
     if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
     reRender(routes);
@@ -1136,6 +1139,8 @@ function bootstrap(){
   listen('empresas_parceiras','parceiros',['parceiros']);
   listen('resgates_parceiros','resgates',['resgates']);
   listen('seguidores_instagram','seguidores',['instagram']);
+  listen('assistencias','assistencias',['atendimentos']);
+  listen('sinistros','sinistros',['atendimentos']);
   listen('admins_crm','admins',['funcionarios','relatorios','agenda','pagamentos']);
   LISTENERS.push(db.collection('contas_fixas').onSnapshot(sn=>{
     CONTAS_FIXAS=sn.docs.map(d=>({id:d.id,...d.data()}));
@@ -4840,7 +4845,7 @@ function detectarLeadsNovos(leads){
    ========================================================================= */
 const TIPO_INTERACAO={ligacao:['Ligação','fa-phone','var(--info)'],whatsapp:['WhatsApp','fa-whatsapp','var(--ok)'],
   email:['E-mail','fa-envelope','var(--purple)'],reuniao:['Reunião','fa-handshake','var(--orange)'],
-  nota:['Observação','fa-note-sticky','var(--text-2)']};
+  nota:['Observação','fa-note-sticky','var(--text-2)'],assistencia:['Assistência 24h','fa-truck-pickup','var(--danger)'],sinistro:['Sinistro','fa-car-burst','var(--warn)']};
 function interacoesDoLead(id){ return CACHE.interacoes.filter(i=>i.leadId===id).sort((a,b)=>(toDate(b.criadoEm)||0)-(toDate(a.criadoEm)||0)); }
 function renderTimeline(id){
   const its=interacoesDoLead(id);
@@ -9342,6 +9347,141 @@ async function icImportar(){
   }
   IC.rodando=false;
   if(btn) btn.disabled=false;
+}
+
+</script>
+  <script>
+/* =========================================================================
+   ATENDIMENTOS — assistência 24h e sinistros abertos pelo site (ou pelo portal)
+   Lê as coleções `assistencias` e `sinistros` que as páginas do site já gravam
+   (com fotos no Storage), vincula ao cliente/apólice por CPF, telefone ou placa,
+   controla status e cria ação na agenda + interação na ficha.
+   ========================================================================= */
+const AT_STATUS={novo:['Novo','var(--danger)'],em_atendimento:['Em atendimento','var(--warn)'],aguardando:['Aguardando seguradora','var(--info)'],concluido:['Concluído','var(--ok)'],cancelado:['Cancelado','var(--text-3)']};
+const AT_FOTO={frente:'Frente',traseira:'Traseira',lateral:'Lateral',painel:'Painel',documento:'Documento',cnh:'CNH',bo:'B.O.',local:'Local',dano:'Dano',outro:'Outra'};
+let AT_FILTER={aba:'assistencias',status:'abertos',busca:''};
+const atDigitos=s=>String(s||'').replace(/\D/g,'');
+const atPlaca=s=>String(s||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+const atEhAberto=a=>!a.status||a.status==='novo'||a.status==='em_atendimento'||a.status==='aguardando';
+
+/* quem é esse cliente? por CPF, telefone ou placa */
+function atVincular(a){
+  const cpf=atDigitos(a.cpf), fone=atDigitos(a.celular||a.whatsapp), placa=atPlaca(a.placa);
+  const ap=CACHE.apolices.find(x=>placa&&atPlaca(x.veiculoPlaca)===placa&&apEhAtiva(x))
+        ||CACHE.apolices.find(x=>placa&&atPlaca(x.veiculoPlaca)===placa)
+        ||CACHE.apolices.find(x=>cpf&&atDigitos(x.clienteCpf)===cpf&&apEhAtiva(x));
+  const lead=CACHE.leads.find(l=>(cpf&&atDigitos(l.cpf)===cpf)||(fone&&atDigitos(l.whatsapp||l.telefone)===fone)||(ap&&ap.leadId&&l.id===ap.leadId));
+  return {lead,ap};
+}
+function atQuando(a){ return a.criadoEm?fmtDataHora(a.criadoEm):'-'; }
+function atTipoLabel(a,col){ if(col==='assistencias') return 'Assistência / guincho'; return a.etapa==='momento'?'Acidente agora (momento)':'Aviso de sinistro'; }
+
+VIEWS.atendimentos=function(){
+  const col=AT_FILTER.aba; const lista=(CACHE[col]||[]).slice().sort((x,y)=>(y.criadoEm?.seconds||0)-(x.criadoEm?.seconds||0));
+  const q=AT_FILTER.busca.toLowerCase();
+  const rows=lista.filter(a=>AT_FILTER.status==='todos'||(AT_FILTER.status==='abertos'?atEhAberto(a):a.status===AT_FILTER.status))
+    .filter(a=>!q||[a.nome,a.placa,a.cpf,a.celular,a.veiculo].some(v=>String(v||'').toLowerCase().includes(q)));
+  const nAss=(CACHE.assistencias||[]).filter(atEhAberto).length, nSin=(CACHE.sinistros||[]).filter(atEhAberto).length;
+  const aba=(k,l,n)=>`<button class="btn ${AT_FILTER.aba===k?'btn-primary':'btn-ghost'} btn-sm" onclick="AT_FILTER.aba='${k}';VIEWS.atendimentos()">${l}${n?` <span class="badge" style="background:rgba(255,255,255,.25);color:inherit;margin-left:4px">${n}</span>`:''}</button>`;
+  let html=head('atendimentos');
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-danger"><i class="fas fa-truck-pickup"></i></div><div class="val">${nAss}</div><div class="lbl">Assistências abertas</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-car-burst"></i></div><div class="val">${nSin}</div><div class="lbl">Sinistros abertos</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${(CACHE.assistencias||[]).concat(CACHE.sinistros||[]).filter(a=>a.status==='concluido').length}</div><div class="lbl">Concluídos</div></div>
+  </div>`;
+  html+=`<div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px"><div style="display:flex;gap:6px">${aba('assistencias','<i class="fas fa-truck-pickup"></i> Assistências',nAss)}${aba('sinistros','<i class="fas fa-car-burst"></i> Sinistros',nSin)}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <select onchange="AT_FILTER.status=this.value;VIEWS.atendimentos()" style="width:auto"><option value="abertos" ${AT_FILTER.status==='abertos'?'selected':''}>Abertos</option><option value="todos" ${AT_FILTER.status==='todos'?'selected':''}>Todos</option>${Object.entries(AT_STATUS).map(([k,v])=>`<option value="${k}" ${AT_FILTER.status===k?'selected':''}>${v[0]}</option>`).join('')}</select>
+        <input type="text" placeholder="Nome, placa, CPF..." value="${esc(AT_FILTER.busca)}" oninput="AT_FILTER.busca=this.value;VIEWS.atendimentos()" style="width:200px">
+      </div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Quando</th><th>Cliente</th><th>Veículo</th><th>${col==='assistencias'?'Situação':'Ocorrência'}</th><th>Fotos</th><th>Vínculo</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.length?rows.map(a=>{ const v=atVincular(a); const st=AT_STATUS[a.status||'novo']||AT_STATUS.novo; const nf=Object.keys(a.fotos||{}).length;
+      return `<tr style="cursor:pointer" onclick="atAbrir('${col}','${a.id}')">
+        <td style="white-space:nowrap">${atQuando(a)}<br><small style="color:var(--text-3)">${atTipoLabel(a,col)}</small></td>
+        <td><b>${esc(a.nome||'-')}</b><br><small style="color:var(--text-3)">${esc(a.celular||'')}${a.cpf?' · '+esc(a.cpf):''}</small></td>
+        <td>${esc(a.placa||'-')}${a.veiculo?'<br><small style="color:var(--text-3)">'+esc(a.veiculo)+'</small>':''}</td>
+        <td style="max-width:260px">${col==='assistencias'?esc([a.podeRodar,a.localVeiculo,a.transito==='Sim, está atrapalhando'?'atrapalhando o trânsito':''].filter(Boolean).join(' · ')):esc([a.tipo,a.feridos&&a.feridos.startsWith('Sim')?'⚠ feridos':'',a.terceiro==='Sim'?'com terceiro':''].filter(Boolean).join(' · '))||'-'}${a.mapsLink?` <a href="${esc(a.mapsLink)}" target="_blank" onclick="event.stopPropagation()" title="Ver no mapa"><i class="fas fa-location-dot"></i></a>`:''}</td>
+        <td>${nf?`<span class="badge" style="background:var(--surface-3)"><i class="fas fa-camera"></i> ${nf}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${v.ap?`<span class="badge" style="background:var(--ok)22;color:var(--ok)"><i class="fas fa-file-contract"></i> ${esc(v.ap.seguradora||'apólice')}</span>`:(v.lead?`<span class="badge" style="background:var(--info)22;color:var(--info)">contato</span>`:`<span class="badge" style="background:var(--warn)22;color:var(--warn)">não identificado</span>`)}</td>
+        <td>${statusBadge(st[0],st[1])}</td>
+        <td onclick="event.stopPropagation()">${waBtn(a.celular,'Olá '+((a.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos seu '+(col==='assistencias'?'pedido de assistência':'aviso de sinistro')+'.')}</td></tr>`; }).join('')
+      :`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-life-ring"></i></div><h4>Nenhum ${col==='assistencias'?'pedido de assistência':'sinistro'} ${AT_FILTER.status==='abertos'?'aberto':''}</h4><p>Os pedidos feitos no site (abrir-assistencia, aviso-sinistro, momento-acidente) e no portal do cliente aparecem aqui na hora.</p></div></td></tr>`}
+    </tbody></table></div></div>`;
+  setView(html);
+};
+
+function atAbrir(col,id){
+  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return;
+  const v=atVincular(a); const st=a.status||'novo';
+  const f=(k,val)=>val?`<div class="mov-f"><div class="k">${k}</div><div class="v">${val}</div></div>`:'';
+  const fotos=Object.entries(a.fotos||{});
+  const ehAss=col==='assistencias';
+  openModal(`<div class="modal-head"><h3><i class="fas ${ehAss?'fa-truck-pickup':'fa-car-burst'}" style="color:var(--brand)"></i> ${atTipoLabel(a,col)} — ${esc(a.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        ${statusBadge(AT_STATUS[st][0],AT_STATUS[st][1])}<span style="color:var(--text-3);font-size:.82rem">recebido em ${atQuando(a)} · canal ${esc(a.canal||'site')}</span>
+        <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+          ${waBtn(a.celular,'Olá '+((a.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos seu '+(ehAss?'pedido de assistência':'aviso de sinistro')+' e já estamos cuidando.','WhatsApp')}
+          ${a.mapsLink?`<a class="btn btn-ghost btn-sm" href="${esc(a.mapsLink)}" target="_blank"><i class="fas fa-location-dot"></i> Mapa</a>`:''}
+        </div></div>
+      <div style="background:${v.ap?'var(--ok)11':'var(--warn)11'};border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:.85rem">
+        ${v.ap?`<b><i class="fas fa-file-contract"></i> Apólice:</b> ${esc(v.ap.ramo||'')} · ${esc(v.ap.seguradora||'')} · nº ${esc(v.ap.numeroApolice||'-')} · vigência ${fmtData(v.ap.dataInicioVigencia)} a ${fmtData(v.ap.dataFimVigencia)} ${apEhAtiva(v.ap)?'<span class="badge" style="background:var(--ok)22;color:var(--ok)">vigente</span>':'<span class="badge" style="background:var(--danger)22;color:var(--danger)">não vigente</span>'}
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="modalVerApolice('${v.ap.id}')"><i class="fas fa-eye"></i></button>`
+          :`<b><i class="fas fa-triangle-exclamation"></i> Nenhuma apólice encontrada</b> pela placa ${esc(a.placa||'-')} ou CPF ${esc(a.cpf||'-')}. Confira se é cliente antes de acionar a seguradora.`}
+        ${v.lead?`<br><b><i class="fas fa-user"></i> Contato:</b> ${esc(v.lead.nome)} <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="abrirLead('${v.lead.id}')"><i class="fas fa-id-badge"></i> ficha</button>`:''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 14px;margin-bottom:12px">
+        ${f('Nome',esc(a.nome))}${f('Celular',esc(a.celular))}${f('CPF',esc(a.cpf))}${f('Placa',esc(a.placa))}${f('Veículo',esc(a.veiculo))}
+        ${ehAss?f('Consegue rodar?',esc(a.podeRodar))+f('Onde está parado',esc(a.localVeiculo))+f('Atrapalha o trânsito',esc(a.transito))+f('Táxi/transporte',a.taxi?esc(a.taxi)+(a.taxiPessoas?' · '+esc(a.taxiPessoas)+' pessoa(s)':'')+(a.taxiDestino?' · destino: '+esc(a.taxiDestino):''):null)
+             :f('Tipo',esc(a.tipo))+f('Quando',a.data?esc(a.data.split('-').reverse().join('/'))+(a.hora?' às '+esc(a.hora):''):null)+f('Onde',esc(a.ondeLocal))+f('Feridos',esc(a.feridos))
+              +f('Quem dirigia',a.condutor?esc(a.condutor)+(a.condutorNome?' — '+esc(a.condutorNome)+(a.condutorParentesco?' ('+esc(a.condutorParentesco)+')':''):''):null)+f('CPF do condutor',esc(a.condutorCpf))+f('Nasc. condutor',esc(a.condutorNasc))
+              +f('Terceiro envolvido',a.terceiro?esc(a.terceiro)+(a.terceiroNome?' — '+esc(a.terceiroNome):'')+(a.terceiroTel?' · '+esc(a.terceiroTel):'')+(a.terceiroPlaca?' · placa '+esc(a.terceiroPlaca):''):null)
+              +f('Culpa',esc(a.culpa))+f('B.O.',a.bo?esc(a.bo)+(a.boNumero?' nº '+esc(a.boNumero):''):null)+f('Guarda no local',esc(a.guarda))}
+        ${f('Endereço / referência',esc(a.endereco))}
+        ${a.relato?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Relato</div><div class="v" style="white-space:pre-wrap">${esc(a.relato)}</div></div>`:''}
+        ${a.obs?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Observações</div><div class="v" style="white-space:pre-wrap">${esc(a.obs)}</div></div>`:''}
+      </div>
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-camera" style="color:var(--brand)"></i> Fotos e documentos (${fotos.length})</div>
+      ${fotos.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:14px">${fotos.map(([k,u])=>`<a href="${esc(u)}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit"><img src="${esc(u)}" alt="${esc(k)}" style="width:100%;height:110px;object-fit:cover;display:block" loading="lazy"><div style="font-size:.74rem;padding:5px 8px;background:var(--surface-2)">${esc(AT_FOTO[k]||k)}</div></a>`).join('')}</div>`
+        :`<p style="color:var(--text-3);font-size:.85rem;margin-bottom:14px">Nenhuma foto enviada.</p>`}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px">
+        <div class="form-row" style="margin:0"><label>Status</label><select id="atStatus">${Object.entries(AT_STATUS).map(([k,x])=>`<option value="${k}" ${st===k?'selected':''}>${x[0]}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Protocolo / seguradora</label><input type="text" id="atProtocolo" value="${esc(a.protocolo||'')}" placeholder="Nº do protocolo na seguradora"></div>
+        <div class="form-row" style="margin:0;grid-column:1/-1"><label>Anotação interna</label><input type="text" id="atNota" value="${esc(a.notaInterna||'')}" placeholder="Ex.: guincho acionado às 14h, previsão 40 min"></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ghost" onclick="atAgendar('${col}','${id}')"><i class="fas fa-calendar-plus"></i> Ação na agenda</button>
+      ${v.lead?`<button class="btn btn-ghost" onclick="atRegistrarFicha('${col}','${id}')"><i class="fas fa-clock-rotate-left"></i> Registrar na ficha</button>`:''}
+      <button class="btn btn-primary" style="margin-left:auto" onclick="atSalvar('${col}','${id}')"><i class="fas fa-check"></i> Salvar</button>
+    </div>`,'wide');
+}
+async function atSalvar(col,id){
+  const status=document.getElementById('atStatus').value, protocolo=document.getElementById('atProtocolo').value.trim(), nota=document.getElementById('atNota').value.trim();
+  try{ await db.collection(col).doc(id).update({status,protocolo:protocolo||null,notaInterna:nota||null,atualizadoEm:FV.serverTimestamp(),atualizadoPor:CURRENT_USER?.email||'admin'});
+    toast('Atendimento atualizado.','ok'); closeModal(); }
+  catch(e){ console.error(e); toast('Não consegui salvar.','err'); }
+}
+async function atAgendar(col,id){
+  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return; const v=atVincular(a);
+  const hoje=new Date(); const p=x=>String(x).padStart(2,'0'); const data=hoje.getFullYear()+'-'+p(hoje.getMonth()+1)+'-'+p(hoje.getDate());
+  const ehAss=col==='assistencias';
+  try{ await db.collection('agenda_crm').add({ titulo:(ehAss?'Assistência: ':'Sinistro: ')+(a.nome||'')+(a.placa?' · '+a.placa:''), data, hora:null, horaFim:null,
+      tipo:ehAss?'ligacao':'outro', prioridade:'alta', responsaveis:[], responsaveisNomes:[],
+      descricao:(ehAss?'Pedido de assistência pelo site. ':'Aviso de sinistro pelo site. ')+(a.celular?'Cel '+a.celular+'. ':'')+(a.mapsLink?'Local: '+a.mapsLink:''),
+      vinculo:v.lead?{tipo:'lead',id:v.lead.id,nome:v.lead.nome||''}:null, status:'aberta', origem:'atendimento', atendimentoRef:col+'/'+id,
+      criadoPor:CURRENT_USER?.email||'admin', criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
+    toast('Ação criada na agenda de hoje com prioridade alta.','ok','Agendado'); }
+  catch(e){ console.error(e); toast('Não consegui criar a ação.','err'); }
+}
+async function atRegistrarFicha(col,id){
+  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return; const v=atVincular(a); if(!v.lead) return;
+  const ehAss=col==='assistencias';
+  try{ await db.collection('interacoes_crm').add({ leadId:v.lead.id, tipo:ehAss?'assistencia':'sinistro',
+      texto:(ehAss?'Pedido de assistência/guincho pelo site':'Aviso de sinistro pelo site')+(a.placa?' — placa '+a.placa:'')+(a.tipo?' — '+a.tipo:'')+(a.podeRodar?' — '+a.podeRodar:''),
+      autor:CURRENT_USER?.email?.split('@')[0]||'admin', criadoEm:FV.serverTimestamp() });
+    toast('Registrado na linha do tempo de '+(v.lead.nome||'cliente')+'.','ok'); }
+  catch(e){ console.error(e); toast('Não consegui registrar.','err'); }
 }
 
 </script>
