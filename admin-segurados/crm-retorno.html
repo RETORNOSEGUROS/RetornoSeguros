@@ -3045,6 +3045,8 @@ function apNum(v){
   let s=String(v).trim().replace(/[R$\s]/g,'');
   if(!/\d/.test(s)) return null;
   if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
+  /* sem vírgula, "4.800" e "1.341.750" são milhares (não decimais) — "4.8" continua 4,8 */
+  else if(/^-?\d{1,3}(\.\d{3})+$/.test(s)) s=s.replace(/\./g,'');
   const n=parseFloat(s); return isNaN(n)?null:n;
 }
 const apBR=v=>(v==null||v==='')?'':String(v).replace('.',',');
@@ -3389,15 +3391,20 @@ function modalApolice(id){
           </select>
           <div style="font-size:.74rem;color:var(--text-3);margin-top:4px">Define de quem é a comissão desta apólice na folha.</div></div>
         <div class="form-row"><label>Placa</label><input type="text" id="apPlaca" value="${esc(a.veiculoPlaca||'')}"></div>
+        <div class="form-row"><label>Veículo (modelo)</label><input type="text" id="apModelo" value="${esc(a.veiculoModelo||'')}" placeholder="Ex.: Toyota Corolla XEi 2.0"></div>
+        <div class="form-row"><label>Ano fab./modelo</label><input type="text" id="apAno" value="${esc(a.veiculoAno||'')}" placeholder="2022/2023"></div>
+        <div class="form-row"><label>Valor de mercado (FIPE)</label><input type="text" inputmode="decimal" id="apValorMerc" value="${apBR(a.valorMercado)}" placeholder="0,00"></div>
         <div class="form-row"><label>Código FIPE</label>
           <div style="display:flex;gap:8px"><input type="text" id="apFipe" value="${esc(a.codigoFipe||'')}" placeholder="000000-0" style="flex:1">
+          ${typeof fipeModalBusca==='function'?`<button type="button" class="btn btn-ghost btn-sm" onclick="apBuscarFipe('${id||''}')" title="Buscar marca, modelo, ano e valor na FIPE"><i class="fas fa-car"></i> Buscar</button>`:''}
           ${(a.codigoFipe||a.veiculoModelo)?fipeBtn({codigo:a.codigoFipe,marca:a.veiculoFabricante||((a.veiculoModelo||'').split(' ')[0]),modelo:a.veiculoModelo,ano:a.veiculoAno,comb:a.combustivel},''):''}</div></div>
       </div>
       <div class="form-row"><label>Observações</label><textarea id="apObs" rows="2">${esc(a.observacoes||'')}</textarea></div>
-      ${a.coberturas&&a.coberturas.length?`<div class="form-row"><label>Coberturas da proposta (${a.coberturas.length})</label>
-        <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table><thead><tr><th>Cobertura</th><th>Limite / condição</th><th>Prêmio</th></tr></thead><tbody>
+      ${typeof apEditarCoberturas==='function'?apEditarCoberturas(a):''}
+      ${a.coberturas&&a.coberturas.length?`<details style="margin-bottom:14px"><summary style="cursor:pointer;font-weight:600;font-size:.85rem;color:var(--text-2)">Coberturas lidas do PDF da proposta (${a.coberturas.length})</summary>
+        <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px;margin-top:8px"><table><thead><tr><th>Cobertura</th><th>Limite / condição</th><th>Prêmio</th></tr></thead><tbody>
         ${a.coberturas.map(c=>`<tr><td>${esc(c.nome)}</td><td style="color:var(--text-2)">${esc(c.lmi)}</td><td>${money(c.premio)}</td></tr>`).join('')}
-        </tbody></table></div></div>`:''}
+        </tbody></table></div></details>`:''}
       ${(a.endossos&&a.endossos.length)?`<div class="form-row"><label>Endossos (${a.endossos.length})</label>
         <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table><thead><tr><th>Tipo</th><th>Descrição</th><th>Financeiro</th><th>Comissão</th><th>Data</th></tr></thead><tbody>
         ${a.endossos.map(e=>`<tr><td>${esc(ENDOSSO_TIPOS[e.tipo]||e.tipo)}</td><td style="color:var(--text-2)">${esc(e.descricao||'-')}</td>
@@ -3528,6 +3535,7 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     clienteEmail:document.getElementById('apEmail').value.trim()||null,
     leadId:document.getElementById('apLeadId').value||null,
     clienteCpf:document.getElementById('apCpf').value||null,
+    ...(typeof apColherCoberturas==='function'?apColherCoberturas():{}),
     ramo:document.getElementById('apRamo').value,
     seguradora:(typeof segValor==='function'&&document.getElementById('apSegSel'))?segValor('apSegSel','apSeg'):(document.getElementById('apSeg').value.trim()||null),
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
@@ -10041,12 +10049,18 @@ function fcAbaHtml(c,orc){
       <div class="form-row"><label>CEP</label><input type="text" id="fcCep" value="${esc(fcMem('fcCep',c.cep||''))}" placeholder="00000-000"></div>
       <div class="form-row"><label>Observações do risco</label><textarea id="fcObs" rows="3" placeholder="Tudo que ajuda na renovação do ano que vem">${esc(fcMem('fcObs',''))}</textarea></div>`;
     const a=FC.ehRenovacao&&FC.anterior?FC.anterior:{};
-    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+    return `<div style="background:var(--brand-50);border-radius:12px;padding:11px 14px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <i class="fas fa-magnifying-glass-dollar" style="color:var(--brand)"></i>
+        <span style="flex:1;min-width:210px;font-size:.85rem">Não quer digitar o veículo? Busque na tabela FIPE — eu preencho modelo, ano, código e valor de mercado.</span>
+        <button class="btn btn-primary btn-sm" onclick="fcBuscarFipe()"><i class="fas fa-car"></i> Buscar na FIPE</button></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
         <div class="form-row" style="margin:0;grid-column:1/-1"><label>Modelo do veículo</label><input type="text" id="fcModelo" value="${esc(fcMem('fcModelo',a.veiculoModelo||c.veiculoModelo||c.carroModelo||''))}" placeholder="Ex.: VW Polo Highline 1.0 TSI"></div>
         <div class="form-row" style="margin:0"><label>Ano fab./modelo</label><input type="text" id="fcAno" value="${esc(fcMem('fcAno',a.veiculoAno||c.carroAno||''))}" placeholder="2022/2023"></div>
         <div class="form-row" style="margin:0"><label>Placa</label><input type="text" id="fcPlaca" value="${esc(fcMem('fcPlaca',a.veiculoPlaca||''))}" placeholder="ABC1D23"></div>
         <div class="form-row" style="margin:0"><label>Chassi</label><input type="text" id="fcChassi" value="${esc(fcMem('fcChassi',a.chassi||''))}" placeholder="opcional"></div>
-        <div class="form-row" style="margin:0"><label>Código FIPE</label><input type="text" id="fcFipeCod" value="${esc(fcMem('fcFipeCod',a.codigoFipe||c.codigoFipe||''))}" placeholder="000000-0"></div>
+        <div class="form-row" style="margin:0"><label>Código FIPE</label>
+          <div style="display:flex;gap:6px"><input type="text" id="fcFipeCod" value="${esc(fcMem('fcFipeCod',a.codigoFipe||c.codigoFipe||''))}" placeholder="000000-0" style="flex:1">
+            <button class="btn btn-ghost btn-sm" onclick="fcBuscarFipe()" title="Buscar na FIPE"><i class="fas fa-magnifying-glass-dollar"></i></button></div></div>
         <div class="form-row" style="margin:0"><label>Valor de mercado (FIPE)</label><input type="text" inputmode="decimal" id="fcFipeVal" value="${esc(fcMem('fcFipeVal',''))}" placeholder="0,00"></div>
         <div class="form-row" style="margin:0"><label>% da tabela contratado</label><input type="text" inputmode="decimal" id="fcPercTab" value="${esc(fcMem('fcPercTab','100'))}" placeholder="100"></div>
         <div class="form-row" style="margin:0"><label>CEP de pernoite</label><input type="text" id="fcCep" value="${esc(fcMem('fcCep',a.cepPernoite||c.cep||''))}" placeholder="00000-000"></div>
@@ -10216,6 +10230,195 @@ function modalComparativo(id){
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="modalVerApolice('${ant.id}')">Ver apólice anterior</button>
       <button class="btn btn-primary" onclick="modalVerApolice('${nova.id}')">Ver apólice atual</button></div>`,'wide');
+}
+
+/* =========================================================================
+   SELETOR FIPE — marca → modelo → ano, ou direto pelo código
+   Usa primeiro o catálogo que já está no Firestore (site/fipe_marcas e
+   site/fipe_modelos_XX, atualizado uma vez por mês em "FIPE da carteira"),
+   e só cai na API quando o catálogo ainda não foi montado.
+   ========================================================================= */
+let FS={alvo:null,marcas:[],modelos:[],anos:[],marca:null,modelo:null,ano:null,carregando:'',erro:'',res:null};
+
+async function fsMarcas(){
+  try{ const d=await db.collection('site').doc('fipe_marcas').get();
+    if(d.exists&&(d.data().lista||[]).length) return d.data().lista; }catch(e){}
+  return await fipeGet(FIPE_BASE+'/marcas');
+}
+async function fsModelos(codMarca){
+  try{ const d=await db.collection('site').doc('fipe_modelos_'+codMarca).get();
+    if(d.exists&&(d.data().lista||[]).length) return d.data().lista; }catch(e){}
+  const r=await fipeGet(FIPE_BASE+'/marcas/'+codMarca+'/modelos'); return r.modelos||[];
+}
+
+/* alvo = {modelo:'idInput', ano:'idInput', codigo:'idInput', valor:'idInput', marca:'idInput'} */
+async function fipeEscolher(alvo){
+  FS={alvo,marcas:[],modelos:[],anos:[],marca:null,modelo:null,ano:null,carregando:'marcas',erro:'',res:null};
+  const cod=(document.getElementById(alvo.codigo)||{}).value||'';
+  fsRender();
+  if(cod.replace(/\D/g,'').length>=6){ fsPorCodigo(cod); return; }
+  try{ FS.marcas=await fsMarcas(); FS.carregando=''; }
+  catch(e){ FS.carregando=''; FS.erro='Não consegui abrir a lista de marcas agora'+(FIPE_429?' (a FIPE limitou as consultas deste IP — tente daqui a pouco)':'')+'. Você pode escrever o modelo na mão.'; }
+  fsRender();
+}
+async function fsPorCodigo(cod){
+  FS.carregando='codigo'; fsRender();
+  try{
+    const r=(typeof ppFipePorCodigo==='function')?await ppFipePorCodigo(cod,null,null):null;
+    if(!r||!r.valorTexto) throw new Error('sem retorno');
+    FS.res={marca:r.marca||'',modelo:r.modeloCurto||r.modelo||'',ano:r.ano||'',valor:r.valorTexto,codigo:r.codigo||cod,mes:r.mes||''};
+    FS.carregando='';
+  }catch(e){ FS.carregando=''; FS.erro='Esse código não retornou nada. Escolha pela marca e pelo modelo.';
+    try{ FS.marcas=await fsMarcas(); }catch(x){} }
+  fsRender();
+}
+async function fsMarca(codigo){
+  FS.marca=FS.marcas.find(m=>String(m.codigo)===String(codigo))||null; FS.modelo=null; FS.ano=null; FS.anos=[]; FS.modelos=[]; FS.erro='';
+  if(!FS.marca) return fsRender();
+  FS.carregando='modelos'; fsRender();
+  try{ FS.modelos=await fsModelos(FS.marca.codigo); }catch(e){ FS.erro='Não consegui trazer os modelos desta marca agora.'; }
+  FS.carregando=''; fsRender();
+}
+async function fsModelo(codigo){
+  FS.modelo=FS.modelos.find(m=>String(m.codigo)===String(codigo))||null; FS.ano=null; FS.anos=[]; FS.erro='';
+  if(!FS.modelo) return fsRender();
+  FS.carregando='anos'; fsRender();
+  try{ FS.anos=await fipeGet(FIPE_BASE+'/marcas/'+FS.marca.codigo+'/modelos/'+FS.modelo.codigo+'/anos'); }
+  catch(e){ FS.erro='A lista de anos não veio'+(FIPE_429?' (limite da FIPE)':'')+'. Pode escolher o ano na mão depois — o importante é o modelo.'; }
+  FS.carregando=''; fsRender();
+}
+async function fsAno(codigo){
+  FS.ano=FS.anos.find(a=>String(a.codigo)===String(codigo))||null; if(!FS.ano) return fsRender();
+  FS.carregando='valor'; fsRender();
+  try{ const v=await fipeGet(FIPE_BASE+'/marcas/'+FS.marca.codigo+'/modelos/'+FS.modelo.codigo+'/anos/'+FS.ano.codigo);
+    FS.res={marca:v.Marca,modelo:v.Modelo,ano:v.AnoModelo,valor:v.Valor,codigo:v.CodigoFipe,mes:v.MesReferencia,combustivel:v.Combustivel};
+  }catch(e){ FS.erro='Não consegui o valor agora — mas já dá para usar marca, modelo e ano.';
+    FS.res={marca:FS.marca.nome,modelo:FS.modelo.nome,ano:(FS.ano.nome||'').split(' ')[0],valor:'',codigo:''}; }
+  FS.carregando=''; fsRender();
+}
+function fsRender(){
+  const box=document.getElementById('fsBox'); if(!box) return;
+  const sel=(id,rot,lista,val,fn,chaveNome)=>`<div class="form-row" style="margin:0"><label>${rot}</label>
+    <select onchange="${fn}(this.value)"><option value="">— escolha —</option>
+    ${lista.map(x=>`<option value="${esc(String(x.codigo))}" ${String(val)===String(x.codigo)?'selected':''}>${esc(x[chaveNome||'nome'])}</option>`).join('')}</select></div>`;
+  const carreg=t=>`<div style="font-size:.82rem;color:var(--text-2);padding:6px 0"><i class="fas fa-spinner fa-spin"></i> ${t}</div>`;
+  box.innerHTML=`
+    ${FS.erro?`<div style="background:var(--warn)15;border-radius:10px;padding:9px 12px;font-size:.83rem;margin-bottom:10px"><i class="fas fa-triangle-exclamation" style="color:var(--warn)"></i> ${esc(FS.erro)}</div>`:''}
+    ${FS.carregando==='codigo'?carreg('Buscando o veículo pelo código FIPE...'):''}
+    ${FS.res?`<div style="background:var(--ok)11;border-radius:12px;padding:12px 15px">
+        <div style="font-weight:700">${esc(FS.res.marca||'')} ${esc(FS.res.modelo||'')}</div>
+        <div style="font-size:.84rem;color:var(--text-2);margin-top:3px">${esc(String(FS.res.ano||''))}${FS.res.combustivel?' · '+esc(FS.res.combustivel):''}${FS.res.codigo?' · código '+esc(FS.res.codigo):''}${FS.res.mes?' · tabela de '+esc(FS.res.mes):''}</div>
+        ${FS.res.valor?`<div style="font-size:1.5rem;font-weight:800;color:var(--brand-dark);margin-top:6px">${esc(FS.res.valor)}</div>`:''}</div>`:''}
+    ${!FS.res?`<div style="display:grid;grid-template-columns:1fr;gap:10px">
+      ${FS.carregando==='marcas'?carreg('Carregando as marcas...'):(FS.marcas.length?sel('fsMarca','Marca',FS.marcas,FS.marca&&FS.marca.codigo,'fsMarca'):'')}
+      ${FS.carregando==='modelos'?carreg('Carregando os modelos...'):(FS.modelos.length?sel('fsModelo','Modelo',FS.modelos,FS.modelo&&FS.modelo.codigo,'fsModelo'):'')}
+      ${FS.carregando==='anos'?carreg('Carregando os anos...'):(FS.anos.length?sel('fsAno','Ano / combustível',FS.anos,FS.ano&&FS.ano.codigo,'fsAno'):'')}
+      ${FS.carregando==='valor'?carreg('Consultando o valor...'):''}
+    </div>`:''}`;
+  const bt=document.getElementById('fsUsar'); if(bt) bt.style.display=FS.res?'inline-flex':'none';
+}
+function fipeModalBusca(alvo){
+  openModal(`<div class="modal-head"><h3><i class="fas fa-car" style="color:var(--brand)"></i> Buscar o veículo na FIPE</h3><button class="modal-close" onclick="fsFechar()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-size:.84rem;color:var(--text-2);margin-bottom:12px">Escolha marca, modelo e ano — eu trago a descrição, o código e o valor de mercado.
+        Se você já tem o <b>código FIPE</b> preenchido, eu busco direto por ele.</div>
+      <div id="fsBox"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="fsFechar()">Cancelar</button>
+      <button class="btn btn-ghost" onclick="fipeEscolher(FS.alvo)"><i class="fas fa-rotate"></i> Recomeçar</button>
+      <button class="btn btn-primary" id="fsUsar" style="display:none" onclick="fsUsar()"><i class="fas fa-check"></i> Usar este veículo</button></div>`);
+  fipeEscolher(alvo);
+}
+function fsFechar(){ const v=FS.voltar; closeModal(); if(typeof v==='function') setTimeout(v,60); }
+function fsUsar(){
+  const a=FS.alvo||{}, r=FS.res||{}; const set=(id,v)=>{ const el=id&&document.getElementById(id); if(el&&v!=null&&v!=='') el.value=v; };
+  const desc=[r.marca,r.modelo].filter(Boolean).join(' ');
+  /* guarda também no que fica em memória, porque o modal é redesenhado por aba */
+  const memo={}; if(a.modelo) memo[a.modelo]=desc; if(a.ano) memo[a.ano]=String(r.ano||''); if(a.codigo) memo[a.codigo]=r.codigo||'';
+  if(a.valor) memo[a.valor]=r.valor?String(fipeNum(r.valor)).replace('.',','):'';
+  if(typeof FC_MEM==='object') Object.assign(FC_MEM,memo);
+  const v=FS.voltar; closeModal();
+  setTimeout(()=>{ if(typeof v==='function') v();
+    setTimeout(()=>{ set(a.modelo,desc); set(a.ano,String(r.ano||'')); set(a.codigo,r.codigo||'');
+      if(a.valor&&r.valor) set(a.valor,String(fipeNum(r.valor)).replace('.',','));
+      if(a.marca) set(a.marca,r.marca||''); toast('Veículo preenchido pela FIPE.','ok'); },120); },60);
+}
+
+/* fotografa e devolve o que estava preenchido no modal (o modal é reconstruído) */
+function fsSnapshot(){
+  const out={}; document.querySelectorAll('.modal-body [id]').forEach(el=>{
+    if(el.type==='checkbox'||el.type==='radio') out[el.id]={c:el.checked};
+    else if('value' in el && el.tagName!=='DIV') out[el.id]={v:el.value}; });
+  return out;
+}
+function fsRestaurar(campos){
+  Object.entries(campos||{}).forEach(([i,o])=>{ const el=document.getElementById(i); if(!el) return;
+    if(o.c!==undefined) el.checked=o.c; else if(o.v!=null&&o.v!=='') el.value=o.v; });
+}
+
+/* volta para o modal de fechamento depois da busca FIPE */
+function fcBuscarFipe(){
+  fcGuardar();
+  const c=CACHE.leads.find(x=>x.id===FC.leadId)||{};
+  const voltar=()=>{ FC.aba='veiculo'; openModal(fcHtml(c,null),'wide'); setTimeout(fcCalc,60); };
+  fipeModalBusca({modelo:'fcModelo',ano:'fcAno',codigo:'fcFipeCod',valor:'fcFipeVal'});
+  FS.voltar=voltar;
+}
+
+/* =========================================================================
+   EDIÇÃO DE COBERTURAS NA APÓLICE — para completar as apólices antigas
+   (as que vieram da planilha entram sem coberturas; aqui você preenche
+    e elas passam a valer no comparativo de renovação e na área do cliente)
+   ========================================================================= */
+function apEditarCoberturas(a){
+  const ramo=a.ramo||'Auto'; const cat=fcCatalogo(ramo);
+  const cob=k=>{ const x=(a.coberturasEstr||[]).find(y=>y.k===k); return x?(x.lmi||''):''; };
+  const ass=k=>(a.assistencias||[]).find(y=>y.k===k)||null;
+  const doPdf=k=>{ /* sugestão do que já foi lido do PDF, quando existir */
+    const x=(a.coberturas||[]).find(y=>y.chave===k); return x&&x.lmi?String(x.lmi):''; };
+  return `<div style="border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+      <h4 style="margin:0"><i class="fas fa-shield-halved" style="color:var(--brand)"></i> Coberturas, franquia e assistências</h4>
+      <span style="font-size:.76rem;color:var(--text-3)">Ramo: ${esc(ramo)} — o quadro muda conforme o ramo</span></div>
+    <div style="font-size:.8rem;color:var(--text-2);margin-bottom:12px">Preencha o que a apólice tem. É isso que aparece na área do cliente e no comparativo <b>antes × agora</b> da próxima renovação.</div>
+    <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px;margin-bottom:14px"><table>
+      <thead><tr><th>Cobertura</th><th style="width:200px">Limite / capital (R$)</th></tr></thead><tbody>
+      ${cat.cob.map(x=>{ const v=cob(x.k)||doPdf(x.k); return `<tr><td>${esc(x.l)}</td>
+        <td><input type="text" id="apC_${x.k}" value="${esc(v)}" placeholder="${esc(x.ph||'—')}" style="padding:6px 9px"></td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+      <div class="form-row" style="margin:0"><label>Franquia (R$)</label><input type="text" inputmode="decimal" id="apFranq" value="${apBR(a.franquia)}" placeholder="0,00"></div>
+      <div class="form-row" style="margin:0"><label>Tipo de franquia</label>
+        <select id="apFranqTipo">${['Obrigatória','Reduzida','Majorada','Básica','Sem franquia'].map(o=>`<option ${(a.franquiaTipo||'Obrigatória')===o?'selected':''}>${o}</option>`).join('')}</select></div>
+    </div>
+    <div style="font-weight:700;font-size:.85rem;margin-bottom:6px">Assistências e serviços contratados</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px">
+      ${cat.assist.map(x=>{ const s=ass(x.k); return `<label style="display:flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:10px;padding:8px 11px;cursor:pointer">
+        <input type="checkbox" id="apA_${x.k}" ${s?'checked':''} style="width:auto">
+        <span style="flex:1;font-size:.83rem">${esc(x.l)}</span>
+        <input type="text" id="apAd_${x.k}" value="${esc(s&&s.detalhe||'')}" placeholder="${esc(x.ph||'detalhe')}" style="width:105px;padding:5px 8px;font-size:.78rem"></label>`; }).join('')}
+    </div></div>`;
+}
+function apColherCoberturas(){
+  const ramoEl=document.getElementById('apRamo'); if(!ramoEl||!document.getElementById('apFranq')) return {};
+  const cat=fcCatalogo(ramoEl.value); const g=i=>document.getElementById(i);
+  const coberturasEstr=cat.cob.map(x=>{ const el=g('apC_'+x.k); return el&&el.value.trim()?{k:x.k,nome:x.l,lmi:el.value.trim()}:null; }).filter(Boolean);
+  const assistencias=cat.assist.map(x=>{ const el=g('apA_'+x.k); if(!el||!el.checked) return null;
+    const d=g('apAd_'+x.k); return {k:x.k,nome:x.l,detalhe:(d&&d.value.trim())||null}; }).filter(Boolean);
+  const out={coberturasEstr,assistencias,franquia:apNum(g('apFranq')&&g('apFranq').value),franquiaTipo:(g('apFranqTipo')||{}).value||null};
+  const mod=g('apModelo'), ano=g('apAno'), vm=g('apValorMerc');
+  if(mod) out.veiculoModelo=mod.value.trim()||null;
+  if(ano) out.veiculoAno=ano.value.trim()||null;
+  if(vm) out.valorMercado=apNum(vm.value);
+  return out;
+}
+/* busca FIPE de dentro da edição da apólice, voltando para o mesmo modal */
+function apBuscarFipe(id){
+  /* guarda TUDO o que já foi preenchido no modal (inclusive coberturas e assistências) */
+  const campos=fsSnapshot();
+  const voltar=()=>{ modalApolice(id||''); setTimeout(()=>fsRestaurar(campos),140); };
+  fipeModalBusca({modelo:'apModelo',ano:'apAno',codigo:'apFipe',valor:'apValorMerc'});
+  FS.voltar=voltar;
 }
 
 </script>
