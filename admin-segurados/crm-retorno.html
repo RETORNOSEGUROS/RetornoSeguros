@@ -988,6 +988,30 @@ function copiar(txt,ok){ navigator.clipboard.writeText(txt).then(()=>toast(ok||'
 function fmtMotivo(m){ const map={demissao:'Demissão',pedido:'A pedido',obito:'Óbito',outro:'Outro'}; return map[m]||m||'-'; }
 function waNum(f){ f=(f||'').replace(/\D/g,''); if(!f) return null; if(f.length<=11) f='55'+f; return f; }
 function waBtn(fone,msg,label){ const n=waNum(fone); if(!n) return ''; return `<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/${n}${msg?('?text='+encodeURIComponent(msg)):''}" style="color:var(--ok)" title="Abrir no WhatsApp"><i class="fab fa-whatsapp"></i>${label?' '+label:''}</a>`; }
+/* telefone bonito e máscaras — (54) 99999-9999 */
+function foneBR(v){ const d=String(v||'').replace(/\D/g,'').replace(/^55(?=\d{10,11}$)/,'');
+  if(d.length===11) return '('+d.slice(0,2)+') '+d.slice(2,7)+'-'+d.slice(7);
+  if(d.length===10) return '('+d.slice(0,2)+') '+d.slice(2,6)+'-'+d.slice(6);
+  return v||''; }
+function mascaraFone(el){ let d=el.value.replace(/\D/g,'').slice(0,11);
+  el.value = d.length>6 ? '('+d.slice(0,2)+') '+d.slice(2,d.length>10?7:6)+'-'+d.slice(d.length>10?7:6)
+    : d.length>2 ? '('+d.slice(0,2)+') '+d.slice(2) : d; }
+function mascaraCep(el){ let d=el.value.replace(/\D/g,'').slice(0,8); el.value=d.length>5?d.slice(0,5)+'-'+d.slice(5):d; }
+async function ldBuscarCep(){
+  const cep=(document.getElementById('ldCep')||{}).value||''; const d=cep.replace(/\D/g,'');
+  const info=document.getElementById('ldCepInfo'); const end=document.getElementById('ldEnd');
+  if(d.length!==8||!end) return;
+  if(end.value.trim()){ if(info) info.textContent='Endereço já preenchido — não mexi.'; return; }
+  if(info) info.innerHTML='<i class="fas fa-spinner fa-spin"></i> Buscando o endereço...';
+  try{ const r=await (await fetch('https://viacep.com.br/ws/'+d+'/json/')).json();
+    if(r&&!r.erro){
+      end.value=[r.logradouro,r.bairro].filter(Boolean).join(', ');
+      const ci=document.getElementById('ldCidade'), uf=document.getElementById('ldUf');
+      if(ci&&!ci.value.trim()) ci.value=r.localidade||''; if(uf&&!uf.value.trim()) uf.value=r.uf||'';
+      if(info) info.innerHTML='<i class="fas fa-check" style="color:var(--ok)"></i> Endereço preenchido pelo CEP — ajuste o número.';
+    } else if(info) info.textContent='CEP não encontrado. Pode escrever o endereço na mão.';
+  }catch(e){ if(info) info.textContent='Não consegui consultar o CEP agora.'; }
+}
 function money(v){ v=Number(v)||0; return v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
 function toDate(v){ if(!v) return null; if(v.toDate) return v.toDate(); const d=new Date(v); return isNaN(d)?null:d; }
 function diasAte(v){ const d=toDate(v); if(!d) return null; const h=new Date(); h.setHours(0,0,0,0); return Math.round((d-h)/86400000); }
@@ -1040,17 +1064,49 @@ function logout(){ auth.signOut(); }
 /* =========================================================================
    MENU + ROTEADOR
    ========================================================================= */
+/* o menu abre recolhido: só "Principal" aberto — cada um abre o que precisa.
+   A escolha fica salva neste navegador. */
+const MENU_ABERTO_PADRAO=['Principal'];
+function menuAbertos(){
+  try{ const j=JSON.parse(localStorage.getItem('menuAbertos')||'null'); if(Array.isArray(j)) return j; }catch(e){}
+  return MENU_ABERTO_PADRAO.slice();
+}
+function menuAlternar(sec){
+  const abertos=menuAbertos(); const i=abertos.indexOf(sec);
+  if(i<0) abertos.push(sec); else abertos.splice(i,1);
+  try{ localStorage.setItem('menuAbertos',JSON.stringify(abertos)); }catch(e){}
+  renderMenu(); setActive((location.hash||'#dashboard').slice(1).split('/')[0]);
+}
 function renderMenu(){
-  const nav=document.getElementById('navMenu');
-  nav.innerHTML=MENU.map(sec=>`
-    <div class="nav-sec">
-      <div class="nav-sec-title">${sec.sec}</div>
+  const nav=document.getElementById('navMenu'); const abertos=menuAbertos();
+  const rotaAtual=(location.hash||'#dashboard').slice(1).split('/')[0];
+  nav.innerHTML=MENU.map(sec=>{
+    const temRota=sec.items.some(it=>it.id===rotaAtual);
+    const aberto=abertos.includes(sec.sec)||temRota;
+    const pend=sec.items.filter(it=>it.badge).map(it=>it.badge);
+    return `<div class="nav-sec ${aberto?'aberta':''}">
+      <div class="nav-sec-title" onclick="menuAlternar('${sec.sec.replace(/'/g,"\\'")}')" style="cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none">
+        <i class="fas fa-chevron-${aberto?'down':'right'}" style="font-size:.62rem;opacity:.6;width:9px"></i>
+        <span style="flex:1">${sec.sec}</span>
+        ${pend.length?`<span class="nav-sec-dot" id="secdot-${sec.sec.replace(/[^\w]/g,'')}" style="display:none;width:7px;height:7px;border-radius:50%;background:var(--danger)"></span>`:''}
+      </div>
+      <div style="display:${aberto?'block':'none'}">
       ${sec.items.map(it=>`
         <a class="nav-item" data-route="${it.id}" href="#${it.id}">
           <i class="fa${it.brands?'b':'s'} ${it.icon}"></i><span>${it.label}</span>
           ${it.badge?`<span class="nav-badge zero" id="badge-${it.badge}">0</span>`:''}
         </a>`).join('')}
-    </div>`).join('');
+      </div></div>`;}).join('');
+  if(typeof atualizarPontosMenu==='function') atualizarPontosMenu();
+}
+/* bolinha vermelha no título da seção fechada quando há algo esperando lá dentro */
+function atualizarPontosMenu(){
+  MENU.forEach(sec=>{
+    const dot=document.getElementById('secdot-'+sec.sec.replace(/[^\w]/g,'')); if(!dot) return;
+    const tem=sec.items.some(it=>{ if(!it.badge) return false; const b=document.getElementById('badge-'+it.badge);
+      return b&&!b.classList.contains('zero')&&(+b.textContent>0); });
+    dot.style.display=tem?'inline-block':'none';
+  });
 }
 function setActive(route){
   document.querySelectorAll('.nav-item').forEach(a=>a.classList.toggle('active',a.dataset.route===route));
@@ -1060,7 +1116,7 @@ function router(){
   const barra=bruto.indexOf('/');
   const route=barra<0?bruto:bruto.slice(0,barra);
   const param=barra<0?undefined:decodeURIComponent(bruto.slice(barra+1));
-  setActive(route);
+  renderMenu(); setActive(route);
   closeSidebar();
   const fn=VIEWS[route];
   if(fn){ fn(param); } else { renderPlaceholder(route); }
@@ -1071,6 +1127,7 @@ window.addEventListener('hashchange',router);
 function setBadge(key,n){
   const el=document.getElementById('badge-'+key); if(!el) return;
   el.textContent=n; el.classList.toggle('zero',!n);
+  if(typeof atualizarPontosMenu==='function') atualizarPontosMenu();
   if(key==='leads'||key==='mov'){
     const anyNotif=(CACHE.leads.filter(isLeadNovo).length + CACHE.movimentacoes.filter(m=>m.status==='pendente').length)>0;
     document.getElementById('notifDot').classList.toggle('hidden',!anyNotif);
@@ -1130,7 +1187,7 @@ function bootstrap(){
   // Coleções da Fase 3 (tempo real)
   const listen=(coll,key,routes)=>LISTENERS.push(db.collection(coll).onSnapshot(s=>{
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
-    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); }
+    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); if(typeof checarRenovacaoAuto==='function') checarRenovacaoAuto(); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
     if(key==='assistencias'||key==='sinistros'||key==='solicitacoes') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[],CACHE.solicitacoes||[]).filter(a=>!a.status||a.status==='novo').length);
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
@@ -1334,7 +1391,7 @@ function kanbanCard(l,col){
   const orig=ORIGENS[l.origem]||l.origem;
   const resp=l.responsavelNome?`<span class="kb-resp" title="Responsável">${esc(initials(l.responsavelNome))}</span>`:`<span class="kb-resp vazio" title="Sem responsável">?</span>`;
   const retorno=l.proximoRetorno?agDiffDias?agDiffDias(l.proximoRetorno):null:null;
-  return `<div class="kb-card" draggable="true" ondragstart="lkStart(event,'${l.id}')" ondragend="lkEnd(event)" onclick="abrirLead('${l.id}')">
+  return `<div class="kb-card" draggable="true" ondragstart="lkStart(event,'${l.id}')" ondragend="lkEnd(event)" onclick="abrirLead('${l.id}','funil')">
     <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
       <b style="font-size:.86rem">${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${resp}</div>
     <div style="font-size:.76rem;color:var(--text-2);margin:3px 0">${esc(l.ramo||l.tipoSeguro||'—')}${l.valorFipe?' · '+esc(l.valorFipe):''}</div>
@@ -1362,7 +1419,7 @@ function renderLeadsLista(){
         <td>${esc(ORIGENS[l.origem]||l.origem||'-')}</td>
         <td>${esc(l.responsavelNome||'—')}</td>
         <td><span class="badge" style="background:${st.cor}22;color:${st.cor}">${st.label}</span></td>
-        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-eye"></i></button></td>
+        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+', tudo bem? Aqui é da Retorno Seguros.')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}','funil')"><i class="fas fa-eye"></i></button></td>
       </tr>`; }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum lead em aberto</h4></div></td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -2626,7 +2683,7 @@ VIEWS.clientes=function(){
       return `<tr><td><b>${esc(c.nomeEmpresa||c.nome||'Sem nome')}</b>${c.nomeEmpresa&&c.nome?`<br><small style="color:var(--text-3)">${esc(c.nome)}</small>`:''}</td>
       <td>${esc(c.whatsapp||c.telefone||c.email||'-')}</td><td>${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</td>
       <td>${esc(c.ramo||'-')}</td><td><b>${qa}</b></td><td>${portal}</td>
-      <td style="white-space:nowrap">${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${c.id}')" title="Abrir"><i class="fas fa-eye"></i></button>
+      <td style="white-space:nowrap">${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${c.id}','cliente')" title="Abrir"><i class="fas fa-eye"></i></button>
         <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirCliente('${c.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`;
     }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum cliente</h4></div></td></tr>`}
     </tbody></table></div></div>`;
@@ -2720,8 +2777,11 @@ function leadCotacaoSite(c){
       ${c.veiculo?'':leadCotacaoOutrosRamos(c)}
     </div></div>`;
 }
-function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; const aps=apolicesDoCliente(c);
+function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; const aps=apolicesDoCliente(c);
   const fase=faseDoLead(c); const ehCli=isClienteLead(c);
+  /* ficha de CLIENTE é diferente da ficha do funil: aqui não se negocia, se atende */
+  const vFunil=(modo||FICHA_MODO||((c.status==='cliente'||c.status==='negocio_fechado')?'cliente':'funil'))!=='cliente';
+  FICHA_MODO=vFunil?'funil':'cliente';
   const opt=(sel,arr,val)=>arr.map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v}</option>`).join('');
   openModal(`<div class="modal-head"><h3><i class="fas fa-id-badge" style="color:var(--brand)"></i> ${esc(c.nomeEmpresa||c.nome||'Contato')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
@@ -2740,7 +2800,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
         <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc(c.endereco||c.enderecoCompleto)||'-'}${c.cep?' · CEP '+esc(c.cep):''}</div></div>
         <div class="mov-f"><div class="k">Entrada</div><div class="v">${fmtData(c.criadoEm)}</div></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      ${vFunil?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
         <div class="form-row" style="margin:0"><label>Valor da negociação (prêmio)</label>
           <input type="text" id="lkValor" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00"
             onchange="lkSalvarValor('${c.id}')"></div>
@@ -2753,11 +2813,13 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
         <div class="form-row" style="margin:0"><label>Fase</label><select onchange="moverFase('${c.id}',this.value)">${opt('',KANBAN.map(k=>[k.key,k.label]),fase)}</select></div>
         <div class="form-row" style="margin:0"><label>Responsável</label><select onchange="setLeadCampo('${c.id}','responsavelId',this.value)"><option value="">— ninguém —</option>${CACHE.admins.map(a=>`<option value="${a.id}" ${c.responsavelId===a.id?'selected':''}>${esc(a.nome||a.email)}</option>`).join('')}</select></div>
         <div class="form-row" style="margin:0"><label>Origem</label><select onchange="setLeadCampo('${c.id}','origem',this.value)"><option value="">—</option>${opt('',Object.entries(ORIGENS),c.origem)}</select></div>
-      </div>
+      </div>`:''}
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
       ${leadCotacaoSite(c)}
       ${typeof fichaPortal==='function'?fichaPortal(c):''}${typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
-      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
+      <details ${aps.length&&aps.length<=3&&vFunil?'open':''} style="margin-bottom:12px">
+        <summary style="cursor:pointer;font-weight:700;font-size:.85rem;list-style:none;padding:8px 0"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices — ${aps.filter(apEhAtiva).length} em vigor de ${aps.length}
+          <span style="font-weight:400;color:var(--text-3);font-size:.78rem">(clique para ver)</span></summary>
       ${aps.length?aps.slice().sort((x,y)=>{
           const ax=apEhAtiva(x)?0:1, ay=apEhAtiva(y)?0:1; if(ax!==ay) return ax-ay;
           return String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')); })
@@ -2766,7 +2828,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
           <br><small style="color:var(--text-3)">${a.veiculoPlaca?esc(a.veiculoPlaca)+' · ':''}${fmtData(a.dataInicioVigencia)} a ${fmtData(a.dataFimVigencia)}</small></div>
           <div style="text-align:right"><div style="font-weight:700">${money(a.valorPremio)}</div>
           <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.72rem" onclick="modalVerApolice('${a.id}')"><i class="fas fa-eye"></i></button></div></div>`).join('')
-        :`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}
+        :`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}</details>
       <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Contatos / interações</div>
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2786,10 +2848,20 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="${ehCli?`excluirCliente`:`excluirLead`}('${c.id}')"><i class="fas fa-trash"></i> Excluir</button>
-      <button class="btn btn-success" onclick="modalFechar('${c.id}')"><i class="fas fa-trophy"></i> Fechada</button>
-      <button class="btn btn-ghost" onclick="modalPerder('${c.id}')"><i class="fas fa-xmark"></i> Perdida</button>
+      ${vFunil?`<button class="btn btn-success" onclick="modalFechar('${c.id}')"><i class="fas fa-trophy"></i> Fechada</button>
+      <button class="btn btn-ghost" onclick="modalPerder('${c.id}')"><i class="fas fa-xmark"></i> Perdida</button>`
+      :`<button class="btn btn-ghost" onclick="modalApoliceNovaDoCliente('${c.id}')"><i class="fas fa-plus"></i> Nova apólice</button>
+        <button class="btn btn-primary" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button>`}
     </div>`,'wide');
   FICHA_LEAD=c.id;
+}
+let FICHA_MODO=null;
+/* nova apólice já ligada a este cliente */
+function modalApoliceNovaDoCliente(leadId){
+  const c=CACHE.leads.find(x=>x.id===leadId); if(!c) return;
+  CACHE.__apoliceRenovacao={clienteNome:c.nome||c.nomeEmpresa||'',clienteCpf:c.cpf||c.cnpj||'',clienteWhatsapp:c.whatsapp||c.telefone||'',
+    clienteEmail:c.email||'',leadId:c.id,ramo:c.ramo||'Auto'};
+  modalApolice('__renovacao');
 }
 
 /* =========================================================================
@@ -2804,16 +2876,16 @@ function lkEditar(id){
       <div class="form-row"><label>Nome *</label><input type="text" id="ldNome" value="${esc(c.nome||'')}"></div>
       <div class="form-row"><label>Empresa (se PJ)</label><input type="text" id="ldEmpresa" value="${esc(c.nomeEmpresa||'')}"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div class="form-row"><label>WhatsApp</label><input type="text" id="ldWhats" value="${esc(c.whatsapp||c.telefone||'')}" placeholder="(00) 00000-0000"></div>
+        <div class="form-row"><label>WhatsApp</label><input type="text" id="ldWhats" value="${esc(foneBR(c.whatsapp||c.telefone))}" placeholder="(54) 99999-9999" oninput="mascaraFone(this)"></div>
         <div class="form-row"><label>E-mail</label><input type="email" id="ldEmail" value="${esc(c.email||'')}"></div>
         <div class="form-row"><label>CPF / CNPJ</label><input type="text" id="ldCpf" value="${esc(c.cpf||c.cnpj||'')}"></div>
         <div class="form-row"><label>Data de nascimento</label><input type="date" id="ldNasc" value="${esc(strData(c.dataNascimento)||'')}">
           <div style="font-size:.74rem;color:var(--text-3);margin-top:4px">Usada no aniversário em Contatos.</div></div>
-        <div class="form-row"><label>CEP</label><input type="text" id="ldCep" value="${esc(c.cep||'')}"></div>
+        <div class="form-row"><label>CEP</label><input type="text" id="ldCep" value="${esc(c.cep||'')}" placeholder="00000-000" oninput="mascaraCep(this)" onblur="ldBuscarCep()">
+          <div style="font-size:.73rem;color:var(--text-3);margin-top:4px" id="ldCepInfo">Digite o CEP que eu completo o endereço.</div></div>
         <div class="form-row"><label>Cidade</label><input type="text" id="ldCidade" value="${esc(c.cidade||'')}"></div>
         <div class="form-row"><label>Estado</label><input type="text" id="ldUf" value="${esc(c.estado||'')}" maxlength="2"></div>
-        <div class="form-row"><label>Ramo de interesse</label><select id="ldRamo">
-          <option value="">—</option>${RAMO_OPCOES.map(r=>`<option ${((c.ramo||c.tipoSeguro)===r)?'selected':''}>${r}</option>`).join('')}</select></div>
+
       </div>
       <div class="form-row"><label>Endereço</label><input type="text" id="ldEnd" value="${esc(c.endereco||c.enderecoCompleto||'')}"></div>
       <div style="background:var(--info-bg);border-radius:10px;padding:11px 14px;font-size:.81rem;color:#1e40af">
@@ -2830,7 +2902,7 @@ async function lkSalvarDados(){
     whatsapp:g('ldWhats').replace(/\D/g,'')||null, email:g('ldEmail')||null,
     cpf:g('ldCpf')||null, dataNascimento:g('ldNasc')||null,
     cep:g('ldCep')||null, cidade:g('ldCidade')||null, estado:(g('ldUf')||'').toUpperCase()||null,
-    endereco:g('ldEnd')||null, ramo:g('ldRamo')||null, atualizadoEm:FV.serverTimestamp() };
+    endereco:g('ldEnd')||null, atualizadoEm:FV.serverTimestamp() };
   try{
     await db.collection('leads_crm').doc(id).update(dados);
     /* espelha nas apólices do mesmo contato, para não ficar dado velho por lá */
@@ -3266,6 +3338,7 @@ function modalVerApolice(id){
       </div>`:''}
       <h4 style="margin:0 0 8px"><i class="fas fa-paperclip" style="color:var(--brand)"></i> Documentos (links)</h4>
       <div style="font-size:.76rem;color:var(--text-2);margin-bottom:8px">Cole o link da apólice ou proposta no seu Drive/nuvem — guardo o endereço aqui, sem custo de armazenamento.</div>
+      <div id="apVerAnexos" style="font-size:.8rem;color:var(--text-3);margin-bottom:8px"><i class="fas fa-spinner fa-spin"></i> procurando anexos enviados...</div>
       ${docs.length?docs.map((d,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <a href="${esc(d.url)}" target="_blank" style="color:var(--brand);font-size:.85rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="fas fa-up-right-from-square"></i> ${esc(d.nome||d.url)}</a>
         <button class="btn btn-ghost btn-sm" onclick="apRemoverDoc('${a.id}',${i})"><i class="fas fa-trash"></i></button></div>`).join('')
@@ -3284,6 +3357,35 @@ function modalVerApolice(id){
       ${apEhAtiva(a)||a.status==='vencida'?`<button class="btn btn-ghost" onclick="modalRenovar('${a.id}')"><i class="fas fa-rotate"></i> Renovar</button>`:''}
       <button class="btn btn-primary" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i> Editar</button>
     </div>`,'wide');
+  apVerAnexosCarregar(a);
+}
+/* anexos enviados (Storage ou antigos em base64) aparecem também na visualização */
+async function apVerAnexosCarregar(a){
+  const el=document.getElementById('apVerAnexos'); if(!el) return;
+  try{
+    let arr=[];
+    try{ const snap=await db.collection('arquivos').where('refId','==',a.id).get(); arr=snap.docs.map(d=>({id:d.id,...d.data()})); }catch(e){}
+    if(a.anexoPropostaPdf&&!arr.some(x=>x.id===a.anexoPropostaPdf)) arr.unshift({id:a.anexoPropostaPdf,nome:'Proposta (PDF)',_proposta:true});
+    const jaNoLink=new Set((a.docsLinks||[]).map(d=>d.arquivoId).filter(Boolean));
+    arr=arr.filter(x=>!jaNoLink.has(x.id));
+    if(!arr.length){ el.style.display='none'; return; }
+    el.style.color='var(--text-2)';
+    el.innerHTML=arr.map(x=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <a href="#" onclick="baixarArquivo('${x.id}');return false" style="color:var(--brand);font-size:.85rem;flex:1"><i class="fas fa-file-pdf"></i> ${esc(x.nome||'arquivo')}${x.tamanho?` <span style="color:var(--text-3)">(${Math.round(x.tamanho/1024)} KB)</span>`:''}</a>
+      ${x.url?`<button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="apPublicarAnexo('${a.id}','${x.id}')" title="Mostrar este arquivo na área do cliente"><i class="fas fa-share"></i> mostrar ao cliente</button>`:'<span style="font-size:.72rem;color:var(--text-3)">arquivo antigo — só interno</span>'}</div>`).join('');
+  }catch(e){ el.style.display='none'; }
+}
+async function apPublicarAnexo(apoliceId,arquivoId){
+  const a=CACHE.apolices.find(x=>x.id===apoliceId); if(!a) return;
+  try{ const d=await db.collection('arquivos').doc(arquivoId).get(); const x=d.data()||{};
+    if(!x.url){ toast('Este anexo antigo não tem link público. Reenvie o arquivo.','warn'); return; }
+    const docs=(a.docsLinks||[]).concat([{nome:x.nome||'Documento',url:x.url,storage:true,arquivoId,enviadoEm:new Date().toISOString()}]);
+    await db.collection('apolices_cliente').doc(apoliceId).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
+    a.docsLinks=docs;
+    const l=CACHE.leads.find(z=>z.id===a.leadId)||CACHE.leads.find(z=>atDigitos(z.cpf)&&atDigitos(z.cpf)===atDigitos(a.clienteCpf));
+    if(l&&typeof portalAtualizar==='function') portalAtualizar(l.id);
+    toast('Pronto — o cliente já vê este arquivo na área dele.','ok'); modalVerApolice(apoliceId);
+  }catch(e){ toast('Não consegui publicar.','err'); }
 }
 async function apAddDoc(id){
   const nome=document.getElementById('apDocNome').value.trim();
@@ -3437,9 +3539,17 @@ async function carregarAnexos(apoliceId){ const el=document.getElementById('apAn
   }catch(e){ console.warn(e); el.innerHTML='<span style="font-size:.8rem;color:var(--danger)">Erro ao carregar anexos.</span>'; } }
 async function anexarNaApolice(apoliceId){ const inp=document.getElementById('apAnexoFile'); const file=inp&&inp.files[0];
   if(!file){ toast('Selecione um arquivo.','info'); return; }
-  toast('Anexando...','info');
+  toast('Enviando '+file.name+'…','info');
   const id=await salvarPdfArquivo(file,'apolice',apoliceId);
-  if(id){ toast('Anexo salvo.','ok'); inp.value=''; carregarAnexos(apoliceId); }
+  if(!id){ return; }
+  /* se foi para o Storage, o cliente também passa a ver na área dele */
+  try{ const d=await db.collection('arquivos').doc(id).get(); const x=d.data()||{};
+    if(x.url){ const a=CACHE.apolices.find(y=>y.id===apoliceId);
+      const docs=((a&&a.docsLinks)||[]).concat([{nome:file.name.replace(/\.[^.]+$/,''),url:x.url,storage:true,arquivoId:id,enviadoEm:new Date().toISOString()}]);
+      await db.collection('apolices_cliente').doc(apoliceId).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
+      if(a){ a.docsLinks=docs; const l=CACHE.leads.find(z=>z.id===a.leadId)||CACHE.leads.find(z=>atDigitos(z.cpf)&&atDigitos(z.cpf)===atDigitos(a.clienteCpf)); if(l&&typeof portalAtualizar==='function') portalAtualizar(l.id); }
+    } }catch(e){ console.warn('docsLinks',e); }
+  toast('Anexo salvo — o cliente já vê na área dele.','ok'); inp.value=''; carregarAnexos(apoliceId);
 }
 async function excluirAnexo(id,apoliceId){ try{ await db.collection('arquivos').doc(id).delete(); toast('Anexo removido.','ok'); carregarAnexos(apoliceId); }catch(e){ toast('Erro.','err'); } }
 const ENDOSSO_TIPOS={alteracao_veiculo:'Troca de veículo',alteracao_cobertura:'Alteração de cobertura',inclusao:'Inclusão',exclusao:'Exclusão',cancelamento:'Cancelamento',outro:'Outro'};
@@ -3613,6 +3723,7 @@ VIEWS.renovacoes=function(){
     <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Apólice</th><th>Produtor</th><th>Vencimento</th><th>Prazo</th><th>Prêmio</th><th></th></tr></thead><tbody>
     ${arr.length?arr.map(linha).join(''):`<tr><td colspan="7"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-check"></i></div><h4>${vazio||'Nada aqui'}</h4></div></td></tr>`}
     </tbody></table></div></div>`;
+  if(typeof renBlocoRenovadas==='function') html+=renBlocoRenovadas();
   html+=tabela('Próximas de vencer (60 dias) — a prioridade',proximas,'fa-hourglass-half');
   html+=tabela('Vencidas sem renovar — reconquista',vencidas,'fa-triangle-exclamation','Ninguém para reconquistar');
   if(futuras.length) html+=tabela('Mais adiante (depois de 60 dias)',futuras.slice(0,30),'fa-calendar');
@@ -3621,40 +3732,47 @@ VIEWS.renovacoes=function(){
 
 /* ---------- INDICAÇÕES ---------- */
 VIEWS.indicacoes=function(){
-  const actions=`<button class="btn btn-primary btn-sm" onclick="modalIndicador()"><i class="fas fa-plus"></i> Novo indicador</button>`;
+  const actions=`<button class="btn btn-ghost btn-sm" onclick="portalGerarLote()"><i class="fas fa-key"></i> Gerar áreas dos clientes ativos</button>
+    <button class="btn btn-primary btn-sm" onclick="modalIndicador()"><i class="fas fa-plus"></i> Indicador externo</button>`;
   let html=head('indicacoes',{actions});
-  html+=(typeof ptResumoPrograma==='function'?ptResumoPrograma():'');
-  const inds=CACHE.indicadores.slice().sort((a,b)=>(b.indicacoesConvertidas||0)-(a.indicacoesConvertidas||0));
-  const indicados=CACHE.leads.filter(l=>l.indicadoPorCodigo);
-  const totalConv=inds.reduce((s,i)=>s+(Number(i.indicacoesConvertidas)||0),0);
-  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-    <div class="kpi"><div class="ico i-brand"><i class="fas fa-user-group"></i></div><div class="val">${inds.length}</div><div class="lbl">Indicadores</div></div>
-    <div class="kpi"><div class="ico i-info"><i class="fas fa-share-nodes"></i></div><div class="val">${indicados.length}</div><div class="lbl">Leads indicados</div></div>
-    <div class="kpi"><div class="ico i-ok"><i class="fas fa-trophy"></i></div><div class="val">${totalConv}</div><div class="lbl">Convertidos</div></div>
-  </div>`;
-  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-user-group"></i> Indicadores</h3></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Nome</th><th>Telefone</th><th>Indicações</th><th>Convertidas</th><th>Valor gerado</th><th>Origem</th></tr></thead><tbody>
-    ${inds.length?inds.map(i=>`<tr><td><b>${esc(i.codigoIndicacao||'-')}</b></td><td>${esc(i.nome||'-')}</td><td>${esc(i.telefoneFormatado||i.telefone||'-')}</td>
-      <td>${i.totalIndicacoes||0}</td><td><b>${i.indicacoesConvertidas||0}</b></td><td>${money(i.valorGerado)}</td><td>${esc(i.origem||'-')}</td></tr>`).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-share-nodes"></i></div><h4>Nenhum indicador</h4></div></td></tr>`}
-    </tbody></table></div></div>`;
+  html+=(typeof ptPainelIndicacoes==='function'?ptPainelIndicacoes():'');
+  /* parceiros/indicadores externos cadastrados na mão continuam aqui, mas discretos */
+  const inds=(CACHE.indicadores||[]).slice().sort((a,b)=>(b.indicacoesConvertidas||0)-(a.indicacoesConvertidas||0));
+  html+=`<details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 18px;font-weight:700;font-size:.9rem;list-style:none">
+      <i class="fas fa-handshake" style="color:var(--brand)"></i> Indicadores externos cadastrados na mão (${inds.length})
+      <span style="font-weight:400;color:var(--text-3);font-size:.8rem">— parceiros que não são clientes</span></summary>
+    <div style="padding:0 18px 16px">
+    ${inds.length?`<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Nome</th><th>Telefone</th><th>Indicações</th><th>Convertidas</th><th>Valor gerado</th><th></th></tr></thead><tbody>
+      ${inds.map(i=>`<tr><td><b>${esc(i.codigoIndicacao||'-')}</b></td><td>${esc(i.nome||'-')}</td><td>${esc(foneBR(i.telefoneFormatado||i.telefone))||'-'}</td>
+        <td>${i.totalIndicacoes||0}</td><td><b>${i.indicacoesConvertidas||0}</b></td><td>${money(i.valorGerado)}</td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="modalIndicador('${i.id}')"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirIndicador('${i.id}')"><i class="fas fa-trash"></i></button></td></tr>`).join('')}
+      </tbody></table></div>`:`<p style="color:var(--text-3);font-size:.85rem;padding:4px 0">Nenhum indicador externo cadastrado.</p>`}
+    </div></details>`;
   setView(html);
 };
 function modalIndicador(id){ const i=id?CACHE.indicadores.find(x=>x.id===id)||{}:{};
-  openModal(`<div class="modal-head"><h3><i class="fas fa-share-nodes" style="color:var(--brand)"></i> ${id?'Editar':'Novo'} indicador</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+  openModal(`<div class="modal-head"><h3><i class="fas fa-share-nodes" style="color:var(--brand)"></i> ${id?'Editar':'Novo'} indicador externo</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body"><input type="hidden" id="inId" value="${id||''}">
+      <p style="font-size:.83rem;color:var(--text-2);margin-top:0">Para <b>clientes</b>, o código sai sozinho junto com a área do cliente. Este cadastro é para parceiros de fora (oficina, despachante, amigo da casa).</p>
       <div class="form-row"><label>Nome *</label><input type="text" id="inNome" value="${esc(i.nome||'')}"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div class="form-row"><label>Telefone</label><input type="text" id="inTel" value="${esc(i.telefone||'')}"></div>
-        <div class="form-row"><label>Código de indicação</label><input type="text" id="inCod" value="${esc(i.codigoIndicacao||'')}" placeholder="Ex.: JOAO2026"></div>
+        <div class="form-row"><label>Telefone</label><input type="text" id="inTel" value="${esc(foneBR(i.telefone))}" oninput="mascaraFone(this)"></div>
+        <div class="form-row"><label>Código de indicação</label><input type="text" id="inCod" value="${esc(i.codigoIndicacao||'')}" placeholder="Ex.: OFICINA10"></div>
       </div>
-      <div class="form-row"><label>Origem</label><input type="text" id="inOrig" value="${esc(i.origem||'')}" placeholder="Cliente, parceiro, campanha..."></div>
+      <div class="form-row"><label>Origem</label><input type="text" id="inOrig" value="${esc(i.origem||'')}" placeholder="Parceiro, campanha..."></div>
     </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarIndicador()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`);
+    <div class="modal-foot">${id?`<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="excluirIndicador('${id}')"><i class="fas fa-trash"></i> Excluir</button>`:''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="salvarIndicador()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`);
 }
 async function salvarIndicador(){ const id=document.getElementById('inId').value; const nome=document.getElementById('inNome').value.trim();
   if(!nome){ toast('Informe o nome.','err'); return; }
-  const dados={nome,telefone:document.getElementById('inTel').value.trim()||null,codigoIndicacao:document.getElementById('inCod').value.trim()||null,origem:document.getElementById('inOrig').value.trim()||null,atualizadoEm:FV.serverTimestamp()};
+  const dados={nome,telefone:document.getElementById('inTel').value.replace(/\D/g,'')||null,codigoIndicacao:document.getElementById('inCod').value.trim().toUpperCase()||null,origem:document.getElementById('inOrig').value.trim()||null,atualizadoEm:FV.serverTimestamp()};
   try{ if(id) await db.collection('indicadores').doc(id).update(dados); else{ dados.totalIndicacoes=0;dados.indicacoesConvertidas=0;dados.valorGerado=0;dados.criadoEm=FV.serverTimestamp(); await db.collection('indicadores').add(dados);} closeModal(); toast('Indicador salvo.','ok'); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
+}
+async function excluirIndicador(id){
+  if(!confirm('Excluir este indicador externo? As indicações que ele já trouxe continuam no funil.')) return;
+  try{ await db.collection('indicadores').doc(id).delete(); closeModal(); toast('Indicador excluído.','ok'); }catch(e){ toast('Erro ao excluir.','err'); }
 }
 
 /* ---------- PARCEIROS ---------- */
@@ -4334,14 +4452,33 @@ function dadosProposta(r){ return { seguradora:r.seguradora||null, ramo:r.ramo||
 function propostaDup(r){ if(!r||!r.nrProposta) return null; return CACHE.propostas.find(p=>p.nrProposta&&String(p.nrProposta)===String(r.nrProposta)); }
 /* ---- Arquivos (PDF/imagem) guardados em base64 no Firestore, coleção 'arquivos' ---- */
 function fileToB64(file){ return new Promise((res,rej)=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=rej; rd.readAsDataURL(file); }); }
+/* Arquivos: vão para o Storage (sem o limite de 1 MB do Firestore).
+   Só cai no antigo base64 se o Storage não estiver disponível. */
+async function arqParaStorage(file,prefixo){
+  const ext=(String(file.name||'').match(/\.[a-z0-9]+$/i)||['.pdf'])[0].toLowerCase();
+  const ref=firebase.storage().ref('site/'+(prefixo||'doc')+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+ext);
+  await ref.put(file,{contentType:file.type||'application/pdf'});
+  return await ref.getDownloadURL();
+}
 async function salvarPdfArquivo(file,tipo,refId){ try{
   if(!file) return null;
-  if(file.size>950000){ toast('Arquivo grande demais para guardar no plano gratuito ('+Math.round(file.size/1024)+' KB, limite ~950 KB). Guardei os dados lidos, mas não o arquivo em si.','info','Aviso'); return null; }
-  const dados=await fileToB64(file);
-  const ref=await db.collection('arquivos').add({ tipo, refId:refId||null, nome:file.name, mime:file.type||'application/pdf', dados, tamanho:file.size, criadoEm:FV.serverTimestamp(), por:CURRENT_USER?.email||'admin' });
-  return ref.id; }catch(e){ console.warn('salvarArquivo',e); return null; } }
+  if(file.size>20*1024*1024){ toast('Arquivo acima de 20 MB. Comprima o PDF e tente de novo.','warn','Muito grande'); return null; }
+  try{
+    const url=await arqParaStorage(file,tipo||'doc');
+    const ref=await db.collection('arquivos').add({ tipo, refId:refId||null, nome:file.name, mime:file.type||'application/pdf',
+      url, storage:true, tamanho:file.size, criadoEm:FV.serverTimestamp(), por:CURRENT_USER?.email||'admin' });
+    return ref.id;
+  }catch(e){ console.warn('storage',e);
+    if(file.size>950000){ toast('Não consegui enviar o arquivo ('+(e.code||e.message)+'). Guardei os dados lidos, mas não o arquivo.','warn','Aviso'); return null; }
+    const dados=await fileToB64(file);
+    const ref=await db.collection('arquivos').add({ tipo, refId:refId||null, nome:file.name, mime:file.type||'application/pdf', dados, tamanho:file.size, criadoEm:FV.serverTimestamp(), por:CURRENT_USER?.email||'admin' });
+    return ref.id; }
+  }catch(e){ console.warn('salvarArquivo',e); return null; } }
 function baixarArquivoB64(nome,mime,dados){ const a=document.createElement('a'); a.href=dados; a.download=nome||'arquivo'; document.body.appendChild(a); a.click(); a.remove(); }
-async function baixarArquivo(id){ try{ const d=await db.collection('arquivos').doc(id).get(); if(!d.exists){ toast('Arquivo não encontrado.','err'); return; } const x=d.data(); baixarArquivoB64(x.nome,x.mime,x.dados); }catch(e){ toast('Erro ao baixar.','err'); } }
+async function baixarArquivo(id){ try{ const d=await db.collection('arquivos').doc(id).get(); if(!d.exists){ toast('Arquivo não encontrado.','err'); return; }
+  const x=d.data(); if(x.url){ window.open(x.url,'_blank'); return; }
+  if(x.dados) baixarArquivoB64(x.nome,x.mime,x.dados); else toast('Este anexo não tem arquivo guardado.','warn');
+ }catch(e){ toast('Erro ao baixar.','err'); } }
 function apoliceDocFromProposta(r,pdfId){ return { clienteNome:r.segurado||null, clienteCpf:r.cpfCnpj||null,
   clienteWhatsapp:(r.celular||r.telefone||'').replace(/\D/g,'')||null, clienteEmail:r.email||null,
   principalCondutor:r.principalCondutor||null, condutorProprio:r.condutorProprio??null, estadoCivil:r.estadoCivil||null,
@@ -6523,6 +6660,10 @@ function ctPessoas(){
     p.jaFoiCliente=p.apolices.some(a=>a.status==='renovada'||a.status==='vencida'||a.status==='cancelada');
     p.perdidas=p.cotacoes.filter(c=>c.status==='perdida').length;
     p.abertas=p.cotacoes.filter(c=>c.status==='aberta').length;
+    /* cotação aberta no MESMO ramo que ele já tem em vigor é o cartão do funil que gerou a apólice
+       (ou a renovação em andamento) — só mostramos quando é um ramo novo, aí sim é venda em aberto */
+    p.abertasOutroRamo=[...new Set(p.cotacoes.filter(c=>c.status==='aberta'&&c.ramo&&c.ramo!=='—'
+      &&!p.ramosAtivos.includes(c.ramo)).map(c=>c.ramo))];
     p.premioTotal=p.ativas.reduce((s,a)=>s+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0);
     /* quem tem apólice em vigor é CLIENTE, mesmo com uma cotação rolando em outro ramo */
     /* quem tem apólice em vigor é cliente; quem já teve e não renovou é ex-cliente (ouro para retomar) */
@@ -6626,7 +6767,7 @@ VIEWS.contatos=function(){
             <i class="fas fa-cake-candles"></i> ${fmtData(p.dataNascimento)}${idadeDe(p.dataNascimento)!=null?' · '+idadeDe(p.dataNascimento)+'a':''}</div>`:''}</td>
         <td style="font-size:.8rem">${esc(p.whatsapp||'—')}${p.email?`<div style="font-size:.72rem;color:var(--text-3)">${esc(p.email)}</div>`:''}</td>
         <td><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span>
-          ${p.situacao==='cliente'&&p.abertas?`<div style="font-size:.7rem;color:var(--info);margin-top:3px"><i class="fas fa-comments-dollar"></i> ${p.abertas} cotação(ões) em aberto</div>`:''}
+          ${p.situacao==='cliente'&&p.abertasOutroRamo?`<div style="font-size:.7rem;color:var(--info);margin-top:3px"><i class="fas fa-comments-dollar"></i> cotando ${esc(p.abertasOutroRamo.join(', '))}</div>`:''}
           ${p.temPortal?`<div style="font-size:.7rem;color:var(--brand-dark);margin-top:3px" title="O cliente atualizou os dados na área dele"><i class="fas fa-user-pen"></i> perfil do cliente</div>`:''}</td>
         <td><b>${p.cotacoes.length}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(p.ramosCotados.slice(0,3).join(', '))||'—'}</div></td>
         <td>${p.ramosAtivos.length?p.ramosAtivos.map(r=>`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-right:3px">${esc(r)}</span>`).join(''):'<span style="color:var(--text-3)">nada</span>'}</td>
@@ -9510,6 +9651,24 @@ function atVincular(a){
   return {lead,ap};
 }
 function atQuando(a){ return a.criadoEm?fmtDataHora(a.criadoEm):'-'; }
+/* há quanto tempo ninguém mexe nisso */
+function atParadoDias(a){ const d=toDate(a.atualizadoEm)||toDate(a.criadoEm); if(!d) return null; return Math.floor((new Date()-d)/86400000); }
+function atParadoBadge(a){
+  if(!atEhAberto(a)) return '';
+  const d=atParadoDias(a); if(d==null) return '';
+  if(d>=3) return `<span class="badge" style="background:var(--danger)22;color:var(--danger)" title="Sem atualização há ${d} dias"><i class="fas fa-clock"></i> parado ${d}d</span>`;
+  if(d>=1) return `<span class="badge" style="background:var(--warn)22;color:var(--warn)"><i class="fas fa-clock"></i> ${d}d sem atualizar</span>`;
+  return '<span class="badge" style="background:var(--ok)22;color:var(--ok)">hoje</span>';
+}
+async function atExcluir(col,id){
+  const a=(CACHE[col]||[]).find(x=>x.id===id)||{};
+  if(col==='solicitacoes'&&!a.id){ const s=(CACHE.solicitacoes||[]).find(x=>x.id===id); if(s) Object.assign(a,s); }
+  const rot=col==='assistencias'?'este pedido de assistência':col==='sinistros'?'este aviso de sinistro':'esta solicitação';
+  if(!confirm('Excluir '+rot+' de '+(a.nome||'—')+'?\n\nSó faça isso para registros de teste ou duplicados — o histórico do cliente some junto.')) return;
+  try{ await db.collection(col==='solicitacoes'?'solicitacoes_portal':col).doc(id).delete();
+    toast('Registro excluído.','ok'); closeModal(); VIEWS.atendimentos(); }
+  catch(e){ console.error(e); toast('Não consegui excluir: '+(e.code||e.message),'err'); }
+}
 function atTipoLabel(a,col){ if(col==='assistencias') return 'Assistência / guincho'; return a.etapa==='momento'?'Acidente agora (momento)':'Aviso de sinistro'; }
 
 VIEWS.atendimentos=function(){
@@ -9519,7 +9678,7 @@ VIEWS.atendimentos=function(){
     .filter(a=>!q||[a.nome,a.placa,a.cpf,a.celular,a.veiculo].some(v=>String(v||'').toLowerCase().includes(q)));
   const nAss=(CACHE.assistencias||[]).filter(atEhAberto).length, nSin=(CACHE.sinistros||[]).filter(atEhAberto).length, nSol=(CACHE.solicitacoes||[]).filter(solAberta).length;
   const aba=(k,l,n)=>`<button class="btn ${AT_FILTER.aba===k?'btn-primary':'btn-ghost'} btn-sm" onclick="AT_FILTER.aba='${k}';VIEWS.atendimentos()">${l}${n?` <span class="badge" style="background:rgba(255,255,255,.25);color:inherit;margin-left:4px">${n}</span>`:''}</button>`;
-  let html=head('atendimentos');
+  let html=head('atendimentos',{actions:`<button class="btn btn-primary btn-sm" onclick="atNovo()"><i class="fas fa-plus"></i> Abrir atendimento</button>`});
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-danger"><i class="fas fa-truck-pickup"></i></div><div class="val">${nAss}</div><div class="lbl">Assistências abertas</div></div>
     <div class="kpi"><div class="ico i-warn"><i class="fas fa-car-burst"></i></div><div class="val">${nSin}</div><div class="lbl">Sinistros abertos</div></div>
@@ -9540,15 +9699,16 @@ VIEWS.atendimentos=function(){
         <td style="max-width:260px">${col==='assistencias'?esc([a.podeRodar,a.localVeiculo,a.transito==='Sim, está atrapalhando'?'atrapalhando o trânsito':''].filter(Boolean).join(' · ')):esc([a.tipo,a.feridos&&a.feridos.startsWith('Sim')?'⚠ feridos':'',a.terceiro==='Sim'?'com terceiro':''].filter(Boolean).join(' · '))||'-'}${a.mapsLink?` <a href="${esc(a.mapsLink)}" target="_blank" onclick="event.stopPropagation()" title="Ver no mapa"><i class="fas fa-location-dot"></i></a>`:''}</td>
         <td>${nf?`<span class="badge" style="background:var(--surface-3)"><i class="fas fa-camera"></i> ${nf}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
         <td>${v.ap?`<span class="badge" style="background:var(--ok)22;color:var(--ok)"><i class="fas fa-file-contract"></i> ${esc(v.ap.seguradora||'apólice')}</span>`:(v.lead?`<span class="badge" style="background:var(--info)22;color:var(--info)">contato</span>`:`<span class="badge" style="background:var(--warn)22;color:var(--warn)">não identificado</span>`)}</td>
-        <td>${statusBadge(st[0],st[1])}</td>
-        <td onclick="event.stopPropagation()">${waBtn(a.celular,'Olá '+((a.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos seu '+(col==='assistencias'?'pedido de assistência':'aviso de sinistro')+'.')}</td></tr>`; }).join('')
+        <td>${statusBadge(st[0],st[1])}<div style="margin-top:4px">${atParadoBadge(a)}</div></td>
+        <td onclick="event.stopPropagation()">${waBtn(a.celular,'Olá '+((a.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos seu '+(col==='assistencias'?'pedido de assistência':'aviso de sinistro')+'.')}
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="atExcluir('${col}','${a.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`; }).join('')
       :`<tr><td colspan="8"><div class="empty"><div class="em-ic"><i class="fas fa-life-ring"></i></div><h4>Nenhum ${col==='assistencias'?'pedido de assistência':'sinistro'} ${AT_FILTER.status==='abertos'?'aberto':''}</h4><p>Os pedidos feitos no site (abrir-assistencia, aviso-sinistro, momento-acidente) e no portal do cliente aparecem aqui na hora.</p></div></td></tr>`}
     </tbody></table></div>`}</div>`;
   setView(html);
 };
 
 function atAbrir(col,id){
-  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return;
+  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return; a.__col=col;
   const v=atVincular(a); const st=a.status||'novo';
   const f=(k,val)=>val?`<div class="mov-f"><div class="k">${k}</div><div class="v">${val}</div></div>`:'';
   const fotos=Object.entries(a.fotos||{});
@@ -9581,6 +9741,7 @@ function atAbrir(col,id){
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-camera" style="color:var(--brand)"></i> Fotos e documentos (${fotos.length})</div>
       ${fotos.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:14px">${fotos.map(([k,u])=>`<a href="${esc(u)}" target="_blank" rel="noopener" style="display:block;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit"><img src="${esc(u)}" alt="${esc(k)}" style="width:100%;height:110px;object-fit:cover;display:block" loading="lazy"><div style="font-size:.74rem;padding:5px 8px;background:var(--surface-2)">${esc(AT_FOTO[k]||k)}</div></a>`).join('')}</div>`
         :`<p style="color:var(--text-3);font-size:.85rem;margin-bottom:14px">Nenhuma foto enviada.</p>`}
+      ${atLinhaTempo(a)}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 14px">
         <div class="form-row" style="margin:0"><label>Status</label><select id="atStatus">${Object.entries(AT_STATUS).map(([k,x])=>`<option value="${k}" ${st===k?'selected':''}>${x[0]}</option>`).join('')}</select></div>
         <div class="form-row" style="margin:0"><label>Protocolo / seguradora</label><input type="text" id="atProtocolo" value="${esc(a.protocolo||'')}" placeholder="Nº do protocolo na seguradora"></div>
@@ -9588,6 +9749,7 @@ function atAbrir(col,id){
       </div>
     </div>
     <div class="modal-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ghost" style="color:var(--danger)" onclick="atExcluir('${col}','${id}')"><i class="fas fa-trash"></i></button>
       <button class="btn btn-ghost" onclick="atAgendar('${col}','${id}')"><i class="fas fa-calendar-plus"></i> Ação na agenda</button>
       ${v.lead?`<button class="btn btn-ghost" onclick="atRegistrarFicha('${col}','${id}')"><i class="fas fa-clock-rotate-left"></i> Registrar na ficha</button>`:''}
       <button class="btn btn-primary" style="margin-left:auto" onclick="atSalvar('${col}','${id}')"><i class="fas fa-check"></i> Salvar</button>
@@ -9595,7 +9757,13 @@ function atAbrir(col,id){
 }
 async function atSalvar(col,id){
   const status=document.getElementById('atStatus').value, protocolo=document.getElementById('atProtocolo').value.trim(), nota=document.getElementById('atNota').value.trim();
-  try{ await db.collection(col).doc(id).update({status,protocolo:protocolo||null,notaInterna:nota||null,atualizadoEm:FV.serverTimestamp(),atualizadoPor:CURRENT_USER?.email||'admin'});
+  const a=(CACHE[col]||[]).find(x=>x.id===id)||{};
+  const mudou=(a.status||'novo')!==status;
+  const up={status,protocolo:protocolo||null,notaInterna:nota||null,atualizadoEm:FV.serverTimestamp(),atualizadoPor:CURRENT_USER?.email||'admin'};
+  if(mudou) up.acompanhamento=(a.acompanhamento||[]).concat([{quando:new Date().toISOString().slice(0,16),
+    texto:'Status alterado para "'+((AT_STATUS[status]||[status])[0])+'"'+(protocolo?' · protocolo '+protocolo:'')+(nota?' — '+nota:''),
+    status,por:((CURRENT_USER&&CURRENT_USER.email)||'admin').split('@')[0]}]);
+  try{ await db.collection(col).doc(id).update(up);
     toast('Atendimento atualizado.','ok'); closeModal(); }
   catch(e){ console.error(e); toast('Não consegui salvar.','err'); }
 }
@@ -9619,6 +9787,145 @@ async function atRegistrarFicha(col,id){
       autor:CURRENT_USER?.email?.split('@')[0]||'admin', criadoEm:FV.serverTimestamp() });
     toast('Registrado na linha do tempo de '+(v.lead.nome||'cliente')+'.','ok'); }
   catch(e){ console.error(e); toast('Não consegui registrar.','err'); }
+}
+
+/* =========================================================================
+   ABRIR ATENDIMENTO PELO CRM (quando o cliente liga em vez de usar o portal)
+   ========================================================================= */
+const AT_TIPOS_ASSIST=[
+  {k:'guincho',l:'Guincho / reboque',i:'&#128667;'},{k:'pane_seca',l:'Pane seca (combustível)',i:'&#9981;'},
+  {k:'pane_eletrica',l:'Pane elétrica / bateria',i:'&#128267;'},{k:'pneu',l:'Troca de pneu',i:'&#128371;'},
+  {k:'chaveiro',l:'Chaveiro / chave trancada',i:'&#128273;'},{k:'vidros',l:'Vidros e para-brisa',i:'&#129691;'},
+  {k:'residencial',l:'Assistência residencial',i:'&#127968;'},{k:'taxi',l:'Táxi / transporte',i:'&#128662;'},
+  {k:'carro_reserva',l:'Carro reserva',i:'&#128665;'},{k:'outro',l:'Outra',i:'&#8505;&#65039;'}];
+const AT_TIPOS_SIN=[
+  {k:'colisao',l:'Colisão',i:'&#128165;'},{k:'roubo',l:'Roubo ou furto',i:'&#128683;'},
+  {k:'incendio',l:'Incêndio',i:'&#128293;'},{k:'vidro',l:'Quebra de vidro',i:'&#129691;'},
+  {k:'granizo',l:'Granizo / enchente',i:'&#127786;'},{k:'terceiro',l:'Danos a terceiros',i:'&#129309;'},
+  {k:'residencial',l:'Sinistro residencial',i:'&#127968;'},{k:'outro',l:'Outro',i:'&#8505;&#65039;'}];
+let AT_NOVO={col:'assistencias',leadId:'',apoliceId:'',tipo:''};
+function atNovo(col){
+  AT_NOVO={col:col||AT_FILTER.aba==='sinistros'?'sinistros':'assistencias',leadId:'',apoliceId:'',tipo:''};
+  if(col) AT_NOVO.col=col;
+  atNovoRender();
+}
+function atNovoRender(){
+  const ehAss=AT_NOVO.col==='assistencias';
+  const tipos=ehAss?AT_TIPOS_ASSIST:AT_TIPOS_SIN;
+  const lead=CACHE.leads.find(l=>l.id===AT_NOVO.leadId);
+  const aps=lead?apolicesDoCliente(lead).filter(apEhAtiva):[];
+  /* uma apólice só? já vem escolhida — ninguém precisa clicar no óbvio */
+  if(aps.length===1&&!AT_NOVO.apoliceId) AT_NOVO.apoliceId=aps[0].id;
+  const ap=aps.find(a=>a.id===AT_NOVO.apoliceId)||null;
+  openModal(`<div class="modal-head"><h3><i class="fas ${ehAss?'fa-truck-pickup':'fa-car-burst'}" style="color:var(--brand)"></i> Abrir ${ehAss?'assistência':'sinistro'} pelo CRM</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="tabs" style="margin-bottom:14px">
+        <button class="tab ${ehAss?'active':''}" onclick="AT_NOVO.col='assistencias';AT_NOVO.tipo='';atNovoRender()"><i class="fas fa-truck-pickup"></i> Assistência 24h</button>
+        <button class="tab ${!ehAss?'active':''}" onclick="AT_NOVO.col='sinistros';AT_NOVO.tipo='';atNovoRender()"><i class="fas fa-car-burst"></i> Sinistro</button></div>
+      <div class="form-row"><label>Qual cliente? <span style="font-weight:400;color:var(--text-3)">— digite o nome, CPF ou placa</span></label>
+        <input type="text" id="anBusca" value="${esc(lead?(lead.nome||''):'')}" placeholder="Buscar na carteira..." autocomplete="off" oninput="atBuscarCliente(this.value)">
+        <div id="anLista"></div></div>
+      ${lead?`<div style="background:var(--ok)11;border-radius:10px;padding:9px 13px;font-size:.83rem;margin-bottom:12px">
+        <i class="fas fa-user-check" style="color:var(--ok)"></i> <b>${esc(lead.nome||'')}</b>
+        ${lead.whatsapp||lead.telefone?' · '+esc(foneBR(lead.whatsapp||lead.telefone)):''}${lead.cpf?' · CPF '+esc(lead.cpf):''}</div>`:''}
+      ${lead?(aps.length?`<div class="form-row"><label>Para qual apólice?</label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px">
+        ${aps.map(a=>`<div onclick="AT_NOVO.apoliceId='${a.id}';atNovoRender()" style="cursor:pointer;border:2px solid ${AT_NOVO.apoliceId===a.id?'var(--brand)':'var(--border)'};border-radius:12px;padding:10px 12px;background:${AT_NOVO.apoliceId===a.id?'var(--brand-50)':'var(--surface)'}">
+          <b style="font-size:.85rem">${esc(a.ramo||'')}</b> · ${esc(a.seguradora||'')}
+          <div style="font-size:.76rem;color:var(--text-3)">${a.veiculoPlaca?esc(a.veiculoPlaca)+' · ':''}${esc(String(a.veiculoModelo||'').slice(0,28))}${a.numeroApolice?' · nº '+esc(a.numeroApolice):''}</div>
+          <div style="font-size:.73rem;color:var(--text-3)">vigência até ${fmtData(a.dataFimVigencia)}</div></div>`).join('')}
+        </div></div>`:`<div style="background:var(--warn)15;border-radius:10px;padding:9px 13px;font-size:.83rem;margin-bottom:12px">
+          <i class="fas fa-triangle-exclamation" style="color:var(--warn)"></i> Este cliente não tem apólice vigente no CRM. Confira antes de acionar a seguradora.</div>`):''}
+      <div class="form-row"><label>${ehAss?'Qual assistência ele precisa?':'O que aconteceu?'}</label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+        ${tipos.map(t=>`<div onclick="AT_NOVO.tipo='${t.k}';atNovoRender()" style="cursor:pointer;text-align:center;border:2px solid ${AT_NOVO.tipo===t.k?'var(--brand)':'var(--border)'};border-radius:12px;padding:10px 8px;background:${AT_NOVO.tipo===t.k?'var(--brand-50)':'var(--surface)'}">
+          <div style="font-size:1.3rem">${t.i}</div><div style="font-size:.8rem;font-weight:600">${esc(t.l)}</div></div>`).join('')}
+        </div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-row" style="margin:0"><label>Onde está / onde aconteceu</label><input type="text" id="anLocal" placeholder="Endereço ou referência" value="${esc(ap&&ap.cepPernoite?'':'')}"></div>
+        <div class="form-row" style="margin:0"><label>Celular de contato</label><input type="text" id="anFone" value="${esc(foneBR(lead?(lead.whatsapp||lead.telefone):''))}" oninput="mascaraFone(this)"></div>
+        <div class="form-row" style="margin:0"><label>Placa / bem</label><input type="text" id="anPlaca" value="${esc(ap?(ap.veiculoPlaca||''):'')}"></div>
+        <div class="form-row" style="margin:0"><label>Quando aconteceu</label><input type="datetime-local" id="anQuando" value="${new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)}"></div>
+      </div>
+      <div class="form-row"><label>O que o cliente contou</label><textarea id="anRelato" rows="3" placeholder="Ex.: carro não liga no estacionamento do trabalho, precisa de guincho até a oficina X"></textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="atSalvarNovo()"><i class="fas fa-check"></i> Abrir atendimento</button></div>`,'wide');
+}
+function atBuscarCliente(q){
+  const box=document.getElementById('anLista'); if(!box) return;
+  q=(q||'').trim().toLowerCase(); if(q.length<3){ box.innerHTML=''; return; }
+  const dig=q.replace(/\D/g,''); const placa=q.replace(/[^a-z0-9]/g,'').toUpperCase();
+  const achados=CACHE.leads.filter(l=>{
+    if((l.nome||'').toLowerCase().includes(q)) return true;
+    if(dig.length>=4&&((l.cpf||'').replace(/\D/g,'').includes(dig)||(l.whatsapp||l.telefone||'').replace(/\D/g,'').includes(dig))) return true;
+    if(placa.length>=5&&apolicesDoCliente(l).some(a=>atPlaca(a.veiculoPlaca)===placa)) return true;
+    return false; }).slice(0,8);
+  box.innerHTML=achados.length?achados.map(l=>{ const n=apolicesDoCliente(l).filter(apEhAtiva).length;
+    return `<div onclick="AT_NOVO.leadId='${l.id}';AT_NOVO.apoliceId='';atNovoRender()" style="cursor:pointer;padding:8px 11px;border:1px solid var(--border);border-radius:9px;margin-top:5px;font-size:.85rem">
+      <b>${esc(l.nome||'')}</b> <span style="color:var(--text-3)">${esc(foneBR(l.whatsapp||l.telefone))||''}${l.cpf?' · '+esc(l.cpf):''}</span>
+      ${n?`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-left:6px">${n} apólice(s)</span>`:'<span class="badge" style="background:var(--surface-3);color:var(--text-3);margin-left:6px">sem apólice</span>'}</div>`; }).join('')
+    :'<div style="font-size:.82rem;color:var(--text-3);padding:6px 2px">Ninguém encontrado. Confira o nome, o CPF ou a placa.</div>';
+}
+async function atSalvarNovo(){
+  const g=i=>(document.getElementById(i)||{}).value||'';
+  const lead=CACHE.leads.find(l=>l.id===AT_NOVO.leadId);
+  if(!lead){ toast('Escolha o cliente.','err'); return; }
+  if(!AT_NOVO.tipo){ toast('Diga qual é o atendimento.','err'); return; }
+  const ehAss=AT_NOVO.col==='assistencias';
+  const tipos=ehAss?AT_TIPOS_ASSIST:AT_TIPOS_SIN; const t=tipos.find(x=>x.k===AT_NOVO.tipo)||{};
+  const ap=CACHE.apolices.find(a=>a.id===AT_NOVO.apoliceId);
+  const quando=g('anQuando');
+  const doc={ nome:lead.nome||'', celular:g('anFone').replace(/\D/g,'')||lead.whatsapp||lead.telefone||'', cpf:lead.cpf||'',
+    placa:(g('anPlaca')||'').toUpperCase()||null, veiculo:ap?[ap.veiculoModelo,ap.veiculoAno].filter(Boolean).join(' '):null,
+    leadId:lead.id, apoliceId:ap?ap.id:null, seguradora:ap?ap.seguradora:null, ramo:ap?ap.ramo:null,
+    tipoAtendimento:AT_NOVO.tipo, tipo:t.l||null, endereco:g('anLocal')||null, relato:g('anRelato')||null,
+    data:quando?quando.slice(0,10):null, hora:quando?quando.slice(11,16):null,
+    status:'novo', canal:'crm', abertoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin',
+    criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() };
+  if(!ehAss) doc.etapa='aviso';
+  try{ const ref=await db.collection(AT_NOVO.col).add(doc);
+    await db.collection('interacoes_crm').add({leadId:lead.id,tipo:ehAss?'assistencia':'sinistro',
+      titulo:(ehAss?'Assistência aberta: ':'Sinistro avisado: ')+(t.l||''), descricao:doc.relato||'',
+      data:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),autor:((CURRENT_USER&&CURRENT_USER.email)||'admin').split('@')[0],origem:'crm'});
+    closeModal(); toast('Atendimento aberto. Agora é acompanhar.','ok');
+    AT_FILTER.aba=AT_NOVO.col; AT_FILTER.status='abertos'; VIEWS.atendimentos();
+    setTimeout(()=>atAbrir(AT_NOVO.col,ref.id),400);
+  }catch(e){ console.error(e); toast('Não consegui abrir: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- acompanhamento: linha do tempo dentro do atendimento ---------- */
+function atLinhaTempo(a){
+  const ev=(a.acompanhamento||[]).slice().sort((x,y)=>String(y.quando||'').localeCompare(String(x.quando||'')));
+  return `<div style="margin-bottom:14px">
+    <div style="font-weight:700;font-size:.85rem;margin-bottom:6px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Acompanhamento (${ev.length})
+      ${atEhAberto(a)?atParadoBadge(a):''}</div>
+    <div style="display:grid;grid-template-columns:150px 1fr 120px auto;gap:8px;margin-bottom:8px">
+      <input type="datetime-local" id="acQuando" value="${new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)}">
+      <input type="text" id="acTexto" placeholder="Ex.: guincho acionado, previsão 40 min · protocolo 8891">
+      <input type="text" id="acValor" placeholder="Valor R$" inputmode="decimal">
+      <button class="btn btn-primary btn-sm" onclick="atAddAcompanhamento('${a.__col}','${a.id}')"><i class="fas fa-plus"></i> Registrar</button>
+    </div>
+    ${ev.length?ev.map(x=>`<div style="display:flex;gap:10px;font-size:.83rem;padding:6px 0;border-top:1px dashed var(--border)">
+        <span style="color:var(--text-3);white-space:nowrap;min-width:112px">${esc(String(x.quando||'').replace('T',' ').slice(0,16).split('-').reverse().join('/').replace(/^(\d{2}) (\d{2})\/(\d{2})\/(\d{4})/,'$4'))}</span>
+        <span style="flex:1">${esc(x.texto||'')}${x.status?` <span class="badge" style="background:var(--surface-3);color:var(--text-2)">${esc((AT_STATUS[x.status]||[x.status])[0])}</span>`:''}</span>
+        ${x.valor?`<b style="color:var(--brand-dark)">${money(x.valor)}</b>`:''}
+        <span style="color:var(--text-3);font-size:.74rem">${esc(x.por||'')}</span></div>`).join('')
+      :'<div style="font-size:.82rem;color:var(--text-3)">Nada registrado ainda. Cada ligação, protocolo ou previsão anotada aqui vira histórico do cliente.</div>'}
+  </div>`;
+}
+async function atAddAcompanhamento(col,id){
+  const a=(CACHE[col]||[]).find(x=>x.id===id); if(!a) return;
+  const q=(document.getElementById('acQuando')||{}).value||new Date().toISOString().slice(0,16);
+  const txt=((document.getElementById('acTexto')||{}).value||'').trim();
+  const val=apNum((document.getElementById('acValor')||{}).value);
+  if(!txt){ toast('Escreva o que aconteceu.','err'); return; }
+  const ev={quando:q,texto:txt,valor:val||null,status:(document.getElementById('atStatus')||{}).value||null,por:((CURRENT_USER&&CURRENT_USER.email)||'admin').split('@')[0]};
+  try{ const lista=(a.acompanhamento||[]).concat([ev]);
+    await db.collection(col).doc(id).update({acompanhamento:lista,atualizadoEm:FV.serverTimestamp()});
+    a.acompanhamento=lista; toast('Registrado.','ok'); atAbrir(col,id);
+  }catch(e){ toast('Não consegui registrar.','err'); }
 }
 
 </script>
@@ -9773,6 +10080,131 @@ function fichaPortal(c){
   </div>`;
 }
 
+/* =========================================================================
+   PAINEL DO PROGRAMA DE INDICAÇÃO (menu Indicações)
+   Mostra TODO cliente que já tem código/área — mesmo os que ainda não
+   indicaram ninguém — com o link, o status e o card de cada indicação.
+   ========================================================================= */
+let PT_FILTRO='todos';
+function ptIndicadoresLista(){
+  return CACHE.leads.filter(l=>l.codigoIndicacao||l.portalToken).map(l=>{
+    const ind=ptIndicadosDe(l);
+    const fechados=ind.filter(x=>ptStatusIndicado(x)==='fechado');
+    return { l, ind, fechados:fechados.length, cotando:ind.filter(x=>ptStatusIndicado(x)==='cotando').length,
+      pontos:Math.round(ind.reduce((s,x)=>s+ptPontosDoIndicado(x),0)),
+      ativo:!!l.portalToken&&l.indicacaoInativa!==true };
+  }).sort((a,b)=>b.pontos-a.pontos||b.ind.length-a.ind.length||String(a.l.nome||'').localeCompare(String(b.l.nome||'')));
+}
+function ptPainelIndicacoes(){
+  const todos=ptIndicadoresLista();
+  const comInd=todos.filter(r=>r.ind.length);
+  const totalInd=todos.reduce((s,r)=>s+r.ind.length,0);
+  const totalFech=todos.reduce((s,r)=>s+r.fechados,0);
+  const totalPts=todos.reduce((s,r)=>s+r.pontos,0);
+  const semLink=CACHE.leads.filter(l=>apolicesDoCliente(l).some(apEhAtiva)&&!l.portalToken).length;
+  let lista=todos;
+  if(PT_FILTRO==='comIndicacao') lista=comInd;
+  else if(PT_FILTRO==='semIndicacao') lista=todos.filter(r=>!r.ind.length);
+  else if(PT_FILTRO==='inativos') lista=todos.filter(r=>!r.ativo);
+  const NIV=f=>f>=3?['Embaixador','var(--amber)']:f>=1?['Indicador','var(--brand)']:['Cliente','var(--text-3)'];
+  return `<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr))">
+      <div class="kpi"><div class="ico i-brand"><i class="fas fa-key"></i></div><div class="val">${todos.length}</div><div class="lbl">Clientes com área e código</div>
+        ${semLink?`<div class="foot"><a href="#clientes" style="color:var(--warn)">${semLink} cliente(s) ativos ainda sem link</a></div>`:''}</div>
+      <div class="kpi"><div class="ico i-info"><i class="fas fa-share-nodes"></i></div><div class="val">${totalInd}</div><div class="lbl">Pessoas indicadas</div>
+        <div class="foot">${comInd.length} cliente(s) já indicaram alguém</div></div>
+      <div class="kpi"><div class="ico i-ok"><i class="fas fa-trophy"></i></div><div class="val">${totalFech}</div><div class="lbl">Indicações que fecharam</div></div>
+      <div class="kpi"><div class="ico i-purple"><i class="fas fa-star"></i></div><div class="val">${totalPts.toLocaleString('pt-BR')}</div><div class="lbl">Pontos distribuídos</div></div>
+    </div>
+    <div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px">
+      <h3><i class="fas fa-user-group"></i> Clientes indicadores</h3>
+      <select onchange="PT_FILTRO=this.value;VIEWS.indicacoes()" style="width:auto">
+        ${[['todos','Todos'],['comIndicacao','Só quem já indicou'],['semIndicacao','Ainda não indicaram'],['inativos','Link inativo/revogado']]
+          .map(([k,r])=>`<option value="${k}" ${PT_FILTRO===k?'selected':''}>${r}</option>`).join('')}</select></div>
+    ${lista.length?`<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Código</th><th>Nível</th><th>Indicações</th><th>Fecharam</th><th>Pontos</th><th>Situação</th><th></th></tr></thead><tbody>
+      ${lista.map(r=>{ const n=NIV(r.fechados); return `<tr style="cursor:pointer" onclick="ptCardIndicador('${r.l.id}')">
+        <td><b>${esc(r.l.nome||'-')}</b><div style="font-size:.73rem;color:var(--text-3)">${esc(foneBR(r.l.whatsapp||r.l.telefone))||''}</div></td>
+        <td><span class="badge" style="background:var(--brand-50);color:var(--brand-dark)">${esc(r.l.codigoIndicacao||'—')}</span></td>
+        <td><span style="color:${n[1]};font-weight:700;font-size:.82rem">${n[0]}</span></td>
+        <td><b>${r.ind.length}</b>${r.cotando?`<div style="font-size:.72rem;color:var(--info)">${r.cotando} cotando</div>`:''}</td>
+        <td><b>${r.fechados}</b></td>
+        <td><b>${r.pontos.toLocaleString('pt-BR')}</b></td>
+        <td>${r.ativo?'<span class="badge" style="background:var(--ok-bg);color:var(--ok)">ativo</span>':'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">inativo</span>'}</td>
+        <td style="white-space:nowrap" onclick="event.stopPropagation()">
+          ${r.l.portalToken?`<button class="btn btn-ghost btn-sm" onclick="ptCopiar('${portalLink(r.l)}')" title="Copiar o link da área"><i class="fas fa-copy"></i></button>
+            ${waBtn(r.l.whatsapp||r.l.telefone,portalMsgWhats(r.l),'')}`:''}
+          <button class="btn btn-ghost btn-sm" onclick="ptCardIndicador('${r.l.id}')" title="Ver indicações"><i class="fas fa-eye"></i></button></td></tr>`; }).join('')}
+      </tbody></table></div>`
+      :`<div class="empty"><div class="em-ic"><i class="fas fa-share-nodes"></i></div><h4>Nenhum cliente neste filtro</h4>
+        <p>Gere as áreas dos clientes ativos: cada um ganha o próprio código de indicação.</p></div>`}
+    </div>`;
+}
+/* card da pessoa: tudo que ela indicou, com status, valor e data */
+function ptCardIndicador(leadId){
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  const ind=ptIndicadosDe(l); const fechados=ind.filter(x=>ptStatusIndicado(x)==='fechado').length;
+  const pontos=Math.round(ind.reduce((s,x)=>s+ptPontosDoIndicado(x),0));
+  const nivel=fechados>=3?'Embaixador Retorno':fechados>=1?'Indicador Retorno':'Cliente Retorno';
+  const ST={cotando:['Cotando','var(--info)'],fechado:['Fechou','var(--ok)'],perdido:['Não avançou','var(--text-3)']};
+  const ativo=!!l.portalToken&&l.indicacaoInativa!==true;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-share-nodes" style="color:var(--brand)"></i> ${esc(l.nome||'')}
+      <span class="badge" style="background:var(--brand-50);color:var(--brand-dark);margin-left:8px">${esc(l.codigoIndicacao||'sem código')}</span></h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;background:var(--surface-2);border-radius:12px;padding:12px 15px;margin-bottom:14px">
+        <div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase">Nível</div><b>${nivel}</b></div>
+        <div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase">Indicações</div><b>${ind.length}</b></div>
+        <div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase">Fecharam</div><b>${fechados}</b></div>
+        <div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase">Pontos</div><b style="color:var(--brand-dark)">${pontos.toLocaleString('pt-BR')}</b></div>
+        <div><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase">Situação</div>
+          <b style="color:${ativo?'var(--ok)':'var(--text-3)'}">${ativo?'link ativo':'inativo'}</b></div>
+      </div>
+      ${l.portalToken?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="btn btn-ghost btn-sm" onclick="ptCopiar('${portalLink(l)}')"><i class="fas fa-copy"></i> Copiar link da área</button>
+        ${waBtn(l.whatsapp||l.telefone,portalMsgWhats(l),'Enviar no WhatsApp')}
+        <button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}','cliente')"><i class="fas fa-id-badge"></i> Ficha</button></div>`:''}
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px">Quem ${esc((l.nome||'').split(' ')[0])} indicou</div>
+      ${ind.length?`<div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
+        <thead><tr><th>Pessoa</th><th>Produto</th><th>Quando</th><th>Status</th><th style="text-align:right">Prêmio / pontos</th><th></th></tr></thead><tbody>
+        ${ind.map(x=>{ const st=ST[ptStatusIndicado(x)]; const pts=Math.round(ptPontosDoIndicado(x));
+          return `<tr><td><b>${esc(x.nome||'-')}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(foneBR(x.whatsapp||x.telefone))||''}</div></td>
+          <td>${esc(ptRamoDe(x)||x.ramo||'—')}</td>
+          <td style="color:var(--text-3);font-size:.82rem">${x.criadoEm?fmtData(x.criadoEm):'—'}</td>
+          <td>${statusBadge(st[0],st[1])}</td>
+          <td style="text-align:right">${pts?'<b>'+money(pts)+'</b><div style="font-size:.72rem;color:var(--brand-dark)">'+pts.toLocaleString('pt-BR')+' pts</div>':'<span style="color:var(--text-3)">—</span>'}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="abrirLead('${x.id}')"><i class="fas fa-eye"></i></button></td></tr>`; }).join('')}
+        </tbody></table></div>`
+        :`<p style="color:var(--text-3);font-size:.85rem">Ainda não indicou ninguém. Um lembrete no WhatsApp com o link costuma resolver.</p>`}
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="ptExcluirIndicador('${l.id}')"><i class="fas fa-trash"></i> Excluir do programa</button>
+      ${ativo?`<button class="btn btn-ghost" onclick="ptInativar('${l.id}',true)"><i class="fas fa-pause"></i> Inativar</button>`
+        :`<button class="btn btn-ghost" onclick="ptInativar('${l.id}',false)"><i class="fas fa-play"></i> Reativar</button>`}
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+async function ptInativar(leadId,inativar){
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  try{
+    await db.collection('leads_crm').doc(leadId).update({indicacaoInativa:!!inativar,atualizadoEm:FV.serverTimestamp()});
+    l.indicacaoInativa=!!inativar;
+    if(l.portalToken){ try{ await db.collection('portal_clientes').doc(l.portalToken).set({ativo:!inativar},{merge:true}); }catch(e){} }
+    toast(inativar?'Área e indicações pausadas — o link para de abrir.':'Reativado. O link volta a funcionar.','ok');
+    closeModal(); VIEWS.indicacoes();
+  }catch(e){ toast('Não consegui alterar.','err'); }
+}
+async function ptExcluirIndicador(leadId){
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  const ind=ptIndicadosDe(l);
+  if(!confirm('Tirar '+(l.nome||'este cliente')+' do programa de indicação?\n\nO link da área para de funcionar e o código é apagado.'
+    +(ind.length?'\nAs '+ind.length+' pessoa(s) que ele indicou continuam no funil, mas perdem o vínculo com ele.':''))) return;
+  try{
+    if(l.portalToken){ try{ await db.collection('portal_clientes').doc(l.portalToken).delete(); }catch(e){} }
+    await db.collection('leads_crm').doc(leadId).update({portalToken:null,codigoIndicacao:null,indicacaoInativa:FV.delete?FV.delete():false,atualizadoEm:FV.serverTimestamp()});
+    l.portalToken=null; l.codigoIndicacao=null;
+    toast('Cliente removido do programa.','ok'); closeModal(); VIEWS.indicacoes();
+  }catch(e){ console.warn(e); toast('Não consegui remover.','err'); }
+}
+
+/* visão geral do programa (dentro do menu Indicações) */
 /* visão geral do programa (dentro do menu Indicações) */
 function ptResumoPrograma(){
   const indicadores=CACHE.leads.filter(l=>l.codigoIndicacao&&ptIndicadosDe(l).length).map(l=>{ const ind=ptIndicadosDe(l); return {l,ind,pontos:Math.round(ind.reduce((s,x)=>s+ptPontosDoIndicado(x),0)),fechados:ind.filter(x=>ptStatusIndicado(x)==='fechado').length}; }).sort((a,b)=>b.pontos-a.pontos||b.ind.length-a.ind.length);
@@ -9823,8 +10255,9 @@ function solTabela(){
         <td>${esc(s.ramo||'')}${s.seguradora?' · '+esc(s.seguradora):''}${s.placa?'<br><small style="color:var(--text-3)">'+esc(s.placa)+'</small>':''}</td>
         <td><span class="badge" style="background:${t[2]}22;color:${t[2]}"><i class="fas ${t[1]}"></i> ${t[0]}</span></td>
         <td style="max-width:280px;font-size:.82rem">${esc(solResumo(s))}</td>
-        <td>${statusBadge(st[0],st[1])}</td>
-        <td onclick="event.stopPropagation()">${waBtn(s.whatsapp,'Oi '+((s.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos sua solicitação pela sua área e já estamos cuidando.')}${l?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-id-badge"></i></button>`:''}</td></tr>`; }).join('')
+        <td>${statusBadge(st[0],st[1])}<div style="margin-top:4px">${typeof atParadoBadge==='function'&&solAberta(s)?atParadoBadge(s):''}</div></td>
+        <td onclick="event.stopPropagation()">${waBtn(s.whatsapp,'Oi '+((s.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros, recebemos sua solicitação pela sua área e já estamos cuidando.')}${l?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}','cliente')"><i class="fas fa-id-badge"></i></button>`:''}
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="atExcluir('solicitacoes','${s.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`; }).join('')
       :`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-pen"></i></div><h4>Nenhuma solicitação ${AT_FILTER.status==='abertos'?'aberta':''}</h4><p>Quando o cliente usa "Revisar meu perfil", pede coberturas ou cancelamento na área dele, aparece aqui na hora.</p></div></td></tr>`}
   </tbody></table></div>`;
 }
@@ -9847,6 +10280,7 @@ function solAbrir(id){
         <div class="form-row" style="margin:0;grid-column:1/-1"><label>Anotação interna</label><input type="text" id="solNota" value="${esc(s.notaInterna||'')}" placeholder="Ex.: endosso solicitado à Porto em 03/09"></div>
       </div></div>
     <div class="modal-foot" style="flex-wrap:wrap;gap:6px">
+      <button class="btn btn-ghost" style="color:var(--danger)" onclick="atExcluir('solicitacoes','${id}')"><i class="fas fa-trash"></i></button>
       <button class="btn btn-ghost" onclick="solAgendar('${id}')"><i class="fas fa-calendar-plus"></i> Ação na agenda</button>
       ${l?`<button class="btn btn-ghost" onclick="solRegistrarFicha('${id}')"><i class="fas fa-clock-rotate-left"></i> Registrar na ficha</button>`:''}
       <button class="btn btn-primary" style="margin-left:auto" onclick="solSalvar('${id}')"><i class="fas fa-check"></i> Salvar</button></div>`,'wide');
@@ -10512,6 +10946,99 @@ function apBuscarFipe(id){
   const voltar=()=>{ modalApolice(id||''); setTimeout(()=>fsRestaurar(campos),140); };
   fipeModalBusca({modelo:'apModelo',ano:'apAno',codigo:'apFipe',valor:'apValorMerc'});
   FS.voltar=voltar;
+}
+
+/* =========================================================================
+   RENOVAÇÃO AUTOMÁTICA — o sistema percebe sozinho
+   Se o mesmo cliente fechou uma apólice nova do mesmo ramo (e, quando há,
+   do mesmo veículo) começando por volta do fim da anterior, a anterior vira
+   "renovada": sai das próximas renovações e vai para a aba "Renovadas".
+   ========================================================================= */
+const renDig=v=>String(v||'').replace(/\D/g,'');
+const renPlaca=v=>String(v||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+function renMesmoCliente(a,b){
+  const ca=renDig(a.clienteCpf), cb=renDig(b.clienteCpf);
+  if(a.leadId&&b.leadId&&a.leadId===b.leadId) return true;
+  if(ca&&cb) return ca===cb;
+  const fa=renDig(a.clienteWhatsapp), fb=renDig(b.clienteWhatsapp);
+  if(fa&&fb&&fa.slice(-10)===fb.slice(-10)) return true;
+  return !!(a.clienteNome&&b.clienteNome&&a.clienteNome.toLowerCase().trim()===b.clienteNome.toLowerCase().trim());
+}
+/* a nova apólice "b" substitui a antiga "a"? */
+function renSubstitui(a,b){
+  if(a.id===b.id) return false;
+  if(['cancelada','renovada','encerrada'].includes(a.status)) return false;
+  if(b.status==='cancelada') return false;
+  if(String(a.ramo||'').toLowerCase()!==String(b.ramo||'').toLowerCase()) return false;
+  if(!renMesmoCliente(a,b)) return false;
+  const pa=renPlaca(a.veiculoPlaca), pb=renPlaca(b.veiculoPlaca);
+  if(pa&&pb&&pa!==pb) return false;                    /* outro veículo = seguro novo, não renovação */
+  const fimA=toDate(a.dataFimVigencia), iniB=toDate(b.dataInicioVigencia);
+  if(!fimA||!iniB) return false;
+  if(iniB<toDate(a.dataInicioVigencia||0)) return false; /* a nova começa antes da antiga: não é sucessora */
+  const dif=(iniB-fimA)/86400000;
+  return dif>=-75 && dif<=120;                          /* começou perto do vencimento da anterior */
+}
+function renParesRenovacao(){
+  const aps=CACHE.apolices||[]; const pares=[];
+  aps.forEach(b=>{ if(b.status==='cancelada') return;
+    aps.forEach(a=>{ if(renSubstitui(a,b)) pares.push({antiga:a,nova:b}); }); });
+  return pares;
+}
+let REN_AUTO_RODOU=false;
+async function renAplicarAutomatico(silencioso){
+  const pares=renParesRenovacao(); if(!pares.length) return 0;
+  let n=0;
+  for(const {antiga,nova} of pares){
+    try{ await db.collection('apolices_cliente').doc(antiga.id).update({status:'renovada',renovadaPor:nova.id,
+        renovadaEm:FV.serverTimestamp(),renovadaAuto:true,atualizadoEm:FV.serverTimestamp()});
+      antiga.status='renovada'; antiga.renovadaPor=nova.id; antiga.renovadaAuto=true;
+      if(!nova.renovacaoDe){ try{ await db.collection('apolices_cliente').doc(nova.id).update({renovacaoDe:antiga.id,tipoNegocio:'renovacao'}); nova.renovacaoDe=antiga.id; }catch(e){} }
+      n++;
+    }catch(e){ console.warn('renov auto',e); }
+  }
+  if(n&&!silencioso) toast(n+' apólice(s) marcadas como renovadas — saíram das próximas renovações e estão na aba Renovadas.','ok','Renovação identificada');
+  return n;
+}
+function checarRenovacaoAuto(){
+  if(REN_AUTO_RODOU) return; if(!(CACHE.apolices||[]).length) return;
+  REN_AUTO_RODOU=true;
+  setTimeout(()=>{ renAplicarAutomatico(false).then(n=>{ if(n&&(location.hash||'').includes('renovacoes')) VIEWS.renovacoes(); }); },1500);
+}
+/* apólices renovadas: a aba de conferência */
+function renBlocoRenovadas(){
+  const renovadas=(CACHE.apolices||[]).filter(a=>a.status==='renovada')
+    .map(a=>({a,nova:(CACHE.apolices||[]).find(x=>x.id===a.renovadaPor)||null}))
+    .sort((x,y)=>String(y.a.dataFimVigencia||'').localeCompare(String(x.a.dataFimVigencia||'')));
+  const q=(REN_FILTER.busca||'').toLowerCase();
+  const lista=q?renovadas.filter(r=>`${r.a.clienteNome||''} ${r.a.seguradora||''} ${r.a.veiculoPlaca||''}`.toLowerCase().includes(q)):renovadas;
+  return `<div class="card" style="margin-bottom:18px"><div class="card-head"><h3><i class="fas fa-circle-check" style="color:var(--ok)"></i> Renovadas — conferência (${lista.length})</h3>
+      <span style="font-size:.78rem;color:var(--text-3)">saíram da fila porque o cliente fechou a nova apólice</span></div>
+    ${lista.length?`<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Antes</th><th>Agora</th><th>Prêmio</th><th>Como</th><th></th></tr></thead><tbody>
+      ${lista.slice(0,200).map(({a,nova})=>{ const la=Number(a.premioLiquido)||Number(a.valorPremio)||0, ln=nova?(Number(nova.premioLiquido)||Number(nova.valorPremio)||0):0;
+        const d=ln-la, pc=la&&ln?Math.round(d/la*1000)/10:null;
+        return `<tr><td><b>${esc(a.clienteNome||'-')}</b>${a.veiculoPlaca?`<div style="font-size:.72rem;color:var(--text-3)">${esc(a.veiculoPlaca)}</div>`:''}</td>
+        <td style="font-size:.82rem">${esc(a.seguradora||'—')}<div style="color:var(--text-3);font-size:.75rem">até ${fmtData(a.dataFimVigencia)}</div></td>
+        <td style="font-size:.82rem">${nova?esc(nova.seguradora||'—'):'<span style="color:var(--warn)">apólice nova não encontrada</span>'}
+          ${nova?`<div style="color:var(--text-3);font-size:.75rem">${fmtData(nova.dataInicioVigencia)} a ${fmtData(nova.dataFimVigencia)}</div>`:''}</td>
+        <td>${la?money(la):'—'} ${ln?`&rarr; <b>${money(ln)}</b>`:''}
+          ${pc!=null?`<div style="font-size:.74rem;color:${d>0?'var(--danger)':'var(--ok)'}">${d>0?'+':''}${pc}%</div>`:''}</td>
+        <td>${a.renovadaAuto?'<span class="badge" style="background:var(--info-bg);color:var(--info)">automática</span>':'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">manual</span>'}</td>
+        <td style="white-space:nowrap">
+          ${nova?`<button class="btn btn-ghost btn-sm" onclick="modalComparativo('${nova.id}')" title="Antes × agora"><i class="fas fa-scale-balanced"></i></button>`:''}
+          <button class="btn btn-ghost btn-sm" onclick="modalVerApolice('${a.id}')" title="Ver a antiga"><i class="fas fa-eye"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--warn)" onclick="renDesfazer('${a.id}')" title="Não era renovação"><i class="fas fa-rotate-left"></i></button></td></tr>`; }).join('')}
+      </tbody></table></div>`
+      :`<div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-rotate"></i></div><h4>Nenhuma renovação registrada ainda</h4>
+        <p>Quando você fechar a nova apólice de um cliente, a anterior aparece aqui automaticamente.</p></div>`}
+  </div>`;
+}
+async function renDesfazer(id){
+  const a=(CACHE.apolices||[]).find(x=>x.id===id); if(!a) return;
+  if(!confirm('Marcar esta apólice como ATIVA de novo? Ela volta para a fila de renovações.')) return;
+  try{ await db.collection('apolices_cliente').doc(id).update({status:'ativa',renovadaPor:null,renovadaAuto:false,naoRenovar:true,atualizadoEm:FV.serverTimestamp()});
+    a.status='ativa'; a.renovadaPor=null; a.renovadaAuto=false; a.naoRenovar=true;
+    toast('Voltou para a fila de renovações.','ok'); VIEWS.renovacoes(); }catch(e){ toast('Não consegui alterar.','err'); }
 }
 
 </script>
