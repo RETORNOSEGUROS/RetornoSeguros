@@ -419,6 +419,7 @@ textarea:focus,select:focus,.modal input:focus{outline:none;border-color:var(--b
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
 <!-- pdf.js (leitor de propostas) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -869,6 +870,7 @@ const MENU = [
   ]},
   { sec:'Sistema', items:[
     { id:'configuracoes', icon:'fa-gear', label:'Configurações' },
+    { id:'imagens', icon:'fa-images', label:'Imagens do site' },
   ]},
 ];
 
@@ -886,6 +888,7 @@ const EXPLAIN = {
   propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
   comissoes:'A comissão da corretora calculada da carteira inteira, ano a ano e mês a mês — inclusive o que veio do sistema antigo — e quanto cada um da equipe recebe.',
   carteira:'Traga tudo do sistema gerenciador antigo: solte o Excel exportado e eu cadastro os clientes, importo as apólices (ativas e históricas), separo o que precisa renovar e vinculo quem produziu cada negócio.',
+  imagens:'As artes do site (fundo do topo, logo, foto da Pamela, foto da equipe) trocadas por aqui, sem código: cada imagem diz onde aparece e o tamanho ideal, o CRM ajusta e publica na hora.',
   atendimentos:'Pedidos de assistência 24h e avisos de sinistro que o cliente abre pelo site (com fotos, localização e relato). Cada um chega aqui na hora, já ligado à apólice pela placa ou CPF — mude o status, anote o protocolo, crie a ação na agenda e registre na ficha.',
   fipe:'O valor FIPE de todos os veículos segurados, num lugar só. Atualiza automaticamente todo mês (ou num clique) — ótimo para acompanhar valorização/desvalorização e falar com o cliente na renovação.',
   parceiros:'Empresas parceiras que trazem leads e indicações.',
@@ -9647,6 +9650,120 @@ function ptResumoPrograma(){
       ${indicadores.map(r=>`<tr><td><b>${esc(r.l.nome)}</b></td><td>${esc(r.l.codigoIndicacao)}</td><td>${r.ind.length}</td><td>${r.fechados}</td><td><b>${r.pontos.toLocaleString('pt-BR')}</b></td><td><button class="btn btn-ghost btn-sm" onclick="abrirLead('${r.l.id}')"><i class="fas fa-id-badge"></i></button></td></tr>`).join('')}</tbody></table></div>`
       :`<p style="color:var(--text-3);font-size:.85rem;padding:6px 0">Nenhuma indicação de cliente ainda. Gere as áreas dos clientes ativos e envie o link pelo WhatsApp — cada cliente ganha o próprio código de indicação.</p>`}
   </div>`;
+}
+
+</script>
+  <script>
+/* =========================================================================
+   IMAGENS DO SITE — troca as artes do site pelo CRM, sem mexer em código.
+   Cada "slot" tem descrição, onde aparece e tamanho recomendado. A imagem é
+   redimensionada aqui mesmo (no navegador) para o tamanho certo, sobe para o
+   Storage do Firebase e a URL fica em site/imagens — que as páginas leem.
+   ========================================================================= */
+const IMG_SLOTS=[
+  { id:'hero_home', nome:'Fundo do topo da página inicial', onde:'Faixa azul do topo da home (atrás de "Protegendo pessoas, empresas e patrimônios").',
+    w:1920, h:640, formato:'jpg', dica:'O texto fica na metade esquerda: deixe a arte principal (pessoas, carro, casa) no lado direito. A página escurece um pouco a imagem para o texto continuar legível. Nada de texto dentro da arte.', proporcao:'3 : 1' },
+  { id:'hero_produtos', nome:'Fundo do topo das páginas de produto', onde:'Topo de seguro-auto, seguro-vida, plano-saude e todas as outras páginas de produto.',
+    w:1920, h:520, formato:'jpg', dica:'Mesma regra da home: arte à direita, texto à esquerda. Uma imagem só vale para todas as páginas de produto.', proporcao:'3,7 : 1' },
+  { id:'logo_menu', nome:'Logo do menu', onde:'Cabeçalho de todas as páginas (home, produtos, cotações, área do cliente).',
+    w:800, h:220, formato:'png', dica:'PNG com fundo transparente, logo horizontal. Escolha abaixo a altura que ele aparece no menu — hoje está em 42 px.', proporcao:'3,6 : 1', altura:true },
+  { id:'pamela_avatar', nome:'Foto da Pamela (consultora)', onde:'Balão redondo nas 8 cotações em conversa e no cabeçalho delas.',
+    w:400, h:400, formato:'jpg', dica:'Quadrada, rosto centralizado, fundo limpo. Aparece com 38 a 46 px de diâmetro — sorriso e enquadramento fechado funcionam melhor.', proporcao:'1 : 1' },
+  { id:'pamela_patrick', nome:'Foto da equipe (Quem Somos)', onde:'Seção "Nossa história / Quem Somos" da página inicial.',
+    w:1200, h:800, formato:'jpg', dica:'Horizontal, 3:2. Foto real da equipe converte mais que ilustração.', proporcao:'3 : 2' },
+  { id:'hero_cliente', nome:'Fundo do topo da área do cliente', onde:'Topo da página cliente.html ("Olá, Fulano!").',
+    w:1920, h:420, formato:'jpg', dica:'Arte discreta, à direita; o texto de boas-vindas fica à esquerda.', proporcao:'4,6 : 1' },
+];
+let IMG_CFG=null;
+async function imgCarregar(){ try{ const d=await db.collection('site').doc('imagens').get(); IMG_CFG=d.exists?d.data():{}; }catch(e){ IMG_CFG={}; } return IMG_CFG; }
+
+VIEWS.imagens=async function(){
+  let html=head('imagens');
+  html+=`<div class="card" style="margin-bottom:14px"><p style="font-size:.86rem;color:var(--text-2);margin:0">Troque as artes do site sem mexer em código: escolha o arquivo, o CRM ajusta para o tamanho recomendado, mostra a prévia no formato real e publica na hora. <b>Dica:</b> peça as artes ao designer já nas medidas indicadas — assim nada é cortado.</p></div>`;
+  html+=`<div id="imgSlots"><div class="empty"><div class="em-ic"><i class="fas fa-spinner fa-spin"></i></div><h4>Carregando imagens atuais...</h4></div></div>`;
+  setView(html);
+  await imgCarregar();
+  const box=document.getElementById('imgSlots'); if(box) box.innerHTML=IMG_SLOTS.map(imgCard).join('');
+};
+function imgCard(s){
+  const c=(IMG_CFG||{})[s.id]||{}; const ratio=(s.h/s.w*100).toFixed(2);
+  return `<div class="card" id="slot_${s.id}" style="margin-bottom:14px">
+    <div style="display:grid;grid-template-columns:minmax(220px,1.2fr) minmax(280px,1fr);gap:18px;align-items:start">
+      <div>
+        <div style="font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3)">Prévia no formato real (${s.proporcao})</div>
+        <div style="margin-top:6px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:${s.id==='logo_menu'?'#fff':'linear-gradient(135deg,#0f172a,#14274e 55%,#1e3a8a)'};position:relative;width:100%;padding-top:${s.id==='logo_menu'?'20%':ratio+'%'}">
+          ${c.url?(s.id==='logo_menu'
+            ?`<img src="${esc(c.url)}" style="position:absolute;left:16px;top:50%;transform:translateY(-50%);height:${c.altura||42}px;width:auto" alt="">`
+            :s.id==='pamela_avatar'
+            ?`<img src="${esc(c.url)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" alt="">`
+            :`<div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(15,23,42,.94) 0%,rgba(15,23,42,.8) 40%,rgba(15,23,42,.3) 70%,rgba(15,23,42,.15) 100%),url('${esc(c.url)}') right center/cover no-repeat"></div>
+              <div style="position:absolute;left:6%;top:50%;transform:translateY(-50%);color:#fff;font-weight:800;font-size:1rem;text-shadow:0 1px 3px rgba(0,0,0,.5);max-width:45%">Texto da página fica aqui</div>`)
+            :`<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:${s.id==='logo_menu'?'var(--text-3)':'rgba(255,255,255,.55)'};font-size:.82rem">Usando a imagem padrão do site</div>`}
+        </div>
+        ${c.url?`<div style="font-size:.74rem;color:var(--text-3);margin-top:6px">Publicada ${c.atualizadoEm?fmtDataHora(c.atualizadoEm):''} · ${c.largura||'?'}×${c.altura_px||c.alturaImg||'?'} px · ${c.kb?c.kb+' KB':''}</div>`:''}
+      </div>
+      <div>
+        <h3 style="margin:0 0 4px;font-size:1rem"><i class="fas fa-image" style="color:var(--brand)"></i> ${esc(s.nome)}</h3>
+        <div style="font-size:.82rem;color:var(--text-2);margin-bottom:8px"><b>Onde aparece:</b> ${esc(s.onde)}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <span class="badge" style="background:var(--brand-50);color:var(--brand-dark)"><i class="fas fa-ruler-combined"></i> ${s.w} × ${s.h} px</span>
+          <span class="badge" style="background:var(--surface-3);color:var(--text-2)">${s.formato.toUpperCase()}${s.formato==='png'?' transparente':''}</span>
+          <span class="badge" style="background:var(--surface-3);color:var(--text-2)">até ${s.id==='logo_menu'?'150':'400'} KB</span>
+        </div>
+        <div style="font-size:.8rem;color:var(--text-2);background:var(--surface-2);border-radius:10px;padding:8px 10px;margin-bottom:10px"><i class="fas fa-lightbulb" style="color:var(--warn)"></i> ${esc(s.dica)}</div>
+        ${s.altura?`<div class="form-row" style="margin:0 0 10px"><label>Altura do logo no menu</label><select id="alt_${s.id}" onchange="imgSalvarAltura('${s.id}',this.value)">${[42,48,54,60,66,72].map(a=>`<option value="${a}" ${(c.altura||42)==a?'selected':''}>${a} px${a===42?' (atual do site)':''}</option>`).join('')}</select></div>`:''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <label class="btn btn-primary btn-sm" style="cursor:pointer"><i class="fas fa-upload"></i> Escolher imagem<input type="file" accept="image/*" style="display:none" onchange="imgEscolher('${s.id}',this.files[0])"></label>
+          ${c.url?`<a class="btn btn-ghost btn-sm" href="${esc(c.url)}" target="_blank"><i class="fas fa-up-right-from-square"></i> Abrir</a><button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="imgRestaurar('${s.id}')"><i class="fas fa-rotate-left"></i> Voltar ao padrão</button>`:''}
+          <span id="st_${s.id}" style="font-size:.78rem;color:var(--text-3)"></span>
+        </div>
+      </div>
+    </div></div>`;
+}
+/* redimensiona no navegador para o tamanho do slot (cover) */
+function imgAjustar(file,slot){
+  return new Promise((ok,err)=>{
+    const img=new Image(); const url=URL.createObjectURL(file);
+    img.onload=()=>{ URL.revokeObjectURL(url);
+      const png=slot.formato==='png';
+      let W=slot.w,H=slot.h;
+      if(png){ /* logo: mantém proporção dentro da caixa, sem cortar */
+        const r=Math.min(slot.w/img.width,slot.h/img.height,1); W=Math.round(img.width*r); H=Math.round(img.height*r); }
+      const cv=document.createElement('canvas'); cv.width=W; cv.height=H; const cx=cv.getContext('2d');
+      if(png){ cx.drawImage(img,0,0,W,H); }
+      else{ /* cover: preenche a caixa cortando o excesso, ancorado no centro */
+        const r=Math.max(W/img.width,H/img.height); const sw=W/r, sh=H/r; const sx=(img.width-sw)/2, sy=(img.height-sh)/2;
+        cx.drawImage(img,sx,sy,sw,sh,0,0,W,H); }
+      const cortou=!png&&Math.abs(img.width/img.height-slot.w/slot.h)>0.08;
+      cv.toBlob(b=>ok({blob:b,w:W,h:H,cortou,origW:img.width,origH:img.height}),png?'image/png':'image/jpeg',0.86);
+    };
+    img.onerror=()=>err(new Error('Não consegui ler essa imagem.')); img.src=url;
+  });
+}
+async function imgEscolher(id,file){
+  if(!file) return; const slot=IMG_SLOTS.find(s=>s.id===id); const st=document.getElementById('st_'+id);
+  try{
+    st.textContent='Ajustando...';
+    const r=await imgAjustar(file,slot);
+    if(r.cortou&&!confirm('A imagem tem proporção diferente do recomendado ('+r.origW+'×'+r.origH+'). Vou cortar as bordas para caber em '+slot.w+'×'+slot.h+'. Confere na prévia depois. Continuar?')){ st.textContent=''; return; }
+    st.textContent='Enviando ('+Math.round(r.blob.size/1024)+' KB)...';
+    if(!firebase.storage){ throw new Error('Storage não carregado — atualize a página do CRM.'); }
+    const ref=firebase.storage().ref('site/imagens/'+id+'_'+Date.now()+(slot.formato==='png'?'.png':'.jpg'));
+    await ref.put(r.blob,{contentType:slot.formato==='png'?'image/png':'image/jpeg',cacheControl:'public,max-age=86400'});
+    const url=await ref.getDownloadURL();
+    const dados={}; dados[id]={url,largura:r.w,altura_px:r.h,kb:Math.round(r.blob.size/1024),atualizadoEm:FV.serverTimestamp(),atualizadoPor:CURRENT_USER?.email||'admin'};
+    if(slot.altura){ const sel=document.getElementById('alt_'+id); dados[id].altura=sel?+sel.value:42; }
+    await db.collection('site').doc('imagens').set(dados,{merge:true});
+    toast('Imagem publicada. O site já mostra a nova arte (pode levar até 1 min pelo cache).','ok','Imagens do site');
+    VIEWS.imagens();
+  }catch(e){ console.error(e); st.textContent=''; toast('Não consegui publicar: '+(e.message||e),'err'); }
+}
+async function imgSalvarAltura(id,v){
+  try{ const d={}; d[id]={altura:+v}; await db.collection('site').doc('imagens').set(d,{merge:true}); toast('Altura do logo: '+v+' px.','ok'); VIEWS.imagens(); }catch(e){ toast('Erro ao salvar.','err'); }
+}
+async function imgRestaurar(id){
+  if(!confirm('Voltar para a imagem padrão do site?')) return;
+  try{ const d={}; d[id]=FV.delete(); await db.collection('site').doc('imagens').update(d); toast('Voltou ao padrão.','info'); VIEWS.imagens(); }catch(e){ toast('Erro.','err'); }
 }
 
 </script>
