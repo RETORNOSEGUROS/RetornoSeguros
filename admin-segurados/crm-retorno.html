@@ -1277,9 +1277,18 @@ let LEADS_VIEW='kanban';
 /* O funil mostra a NEGOCIAÇÃO, não a pessoa: um cliente antigo com uma cotação
    nova em aberto precisa aparecer aqui (é o cross-sell). Antes, quem já tinha
    apólice sumia do kanban mesmo com cotação em andamento. */
+const KB_DIAS_FECHADOS=60;  /* quanto tempo o cartão ganho/perdido fica visível no funil */
+function kbRecente(l){
+  const d=l.fechadoEmData||l.perdidoEmData||null;
+  const t=toDate(d)||toDate(l.fechadoEm)||toDate(l.perdidoEm)||toDate(l.atualizadoEm);
+  if(!t) return true;                       /* sem data: mostra, melhor do que sumir */
+  return (new Date()-t)/86400000<=KB_DIAS_FECHADOS;
+}
 function leadsAbertos(){ let l=CACHE.leads.filter(x=>{
     const st=x.status||'pre_cadastro';
-    if(st==='negocio_fechado'||st==='negocio_perdido'||st==='cliente'||st==='contato') return false;
+    if(st==='cliente'||st==='contato') return false;
+    /* fechados e perdidos continuam no funil por um tempo — as colunas existem para isso */
+    if(st==='negocio_fechado'||st==='negocio_perdido') return kbRecente(x);
     return true; });
   if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''}`.toLowerCase().includes(q)); }
   return l; }
@@ -2719,7 +2728,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-weight:700;font-size:.85rem"><i class="fas fa-user" style="color:var(--brand)"></i> Dados do contato</div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> ${c.orcamentoId?'Ver orçamento':'Ler cotações'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> ${c.orcamentoId?'Ver orçamento':'Registrar cotação'}</button>
           <button class="btn btn-ghost btn-sm" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:14px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
@@ -2986,68 +2995,9 @@ async function confirmarPerda(id){ const motivo=document.getElementById('mpMotiv
       await lkAgendarRetorno(id,reagendarEm,null,'Retomar negociação perdida ('+(MOTIVOS_PERDA[motivo]||motivo)+')'+(valor?' — valia '+money(valor):'')); }
     await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',texto:'Negócio perdido — '+(MOTIVOS_PERDA[motivo]||motivo)+(obs?': '+obs:'')+(reagendarEm?' · reagendado p/ '+reagendarEm.split('-').reverse().join('/'):''),autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
     closeModal(); toast('Marcado como perdido'+(reag?' e reagendado para o próximo ano':'')+'.','ok'); }catch(e){ console.error(e); toast('Erro.','err'); } }
-function modalFechar(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
-  openModal(`<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> Negócio fechado!</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <div class="modal-body">
-      <p style="color:var(--text-2);margin-bottom:14px">Anexe o <b>PDF da proposta</b> que eu leio os dados e gero a apólice sozinho — ou preencha os números na mão aqui embaixo.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--surface-2);border-radius:12px;padding:13px 15px;margin-bottom:14px">
-        <div class="form-row" style="margin:0"><label>Prêmio líquido</label>
-          <input type="text" id="fcPremio" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00" oninput="fcCalc()"></div>
-        <div class="form-row" style="margin:0"><label>Comissão (%)</label>
-          <input type="number" step="0.01" id="fcCom" value="${c.comissaoPct||''}" placeholder="Ex.: 15" oninput="fcCalc()"></div>
-        <div class="form-row" style="margin:0"><label>Nossa comissão</label>
-          <div id="fcComVal" style="padding:10px 0;font-weight:800;color:var(--ok)">${money(((Number(c.valorNegociacao)||0)*(Number(c.comissaoPct)||0))/100)}</div></div>
-        <div class="form-row" style="margin:0"><label>Seguradora</label>
-          <select id="fcSeg"><option value="">—</option>${SEGURADORA_OPCOES.map(([v,l])=>`<option value="${l}">${l}</option>`).join('')}</select></div>
-        <div class="form-row" style="margin:0"><label>Início da vigência</label><input type="date" id="fcIni" value="${hojeISO()}"></div>
-        <div class="form-row" style="margin:0"><label>Vendedor</label>
-          <select id="fcResp"><option value="">— não definido —</option>
-            ${(CACHE.admins||[]).map(f=>`<option value="${f.id}" ${c.responsavelId===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}</select></div>
-      </div>
-      <div id="fecharDrop" style="border:2px dashed var(--border-2);border-radius:12px;padding:24px;text-align:center;cursor:pointer" onclick="document.getElementById('fecharFile').click()">
-        <i class="fas fa-file-arrow-up" style="font-size:22px;color:var(--brand)"></i>
-        <div style="font-weight:600;margin-top:6px">Anexar proposta (PDF) e ler</div>
-        <div style="font-size:.78rem;color:var(--text-3)">opcional — você também pode só marcar como fechado</div>
-        <input type="file" id="fecharFile" accept="application/pdf" style="display:none" onchange="fecharComProposta('${id}',this.files[0])">
-      </div>
-      <div id="fecharStatus" style="margin-top:12px"></div>
-    </div>
-    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button><button class="btn btn-success" onclick="fecharSemProposta('${id}')"><i class="fas fa-check"></i> Fechar com estes dados</button></div>`); }
-function fcCalc(){ const p=(function(x){x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?0:n;})(document.getElementById('fcPremio').value);
-  const c=parseFloat(document.getElementById('fcCom').value)||0;
-  const el=document.getElementById('fcComVal'); if(el) el.textContent=money(p*c/100); }
+/* modalFechar, fcCalc e fecharSemProposta agora vivem em fechamento.js
+   (fechamento completo, com renovação, coberturas e assistências) */
 function hojeISO(){ const d=new Date(),p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
-async function fecharSemProposta(id){
-  const c=CACHE.leads.find(x=>x.id===id)||{};
-  const num=x=>{x=String(x||'').replace(/\./g,'').replace(',','.');const n=parseFloat(x);return isNaN(n)?null:n;};
-  const premio=num((document.getElementById('fcPremio')||{}).value);
-  const pct=parseFloat((document.getElementById('fcCom')||{}).value)||null;
-  const seg=(document.getElementById('fcSeg')||{}).value||null;
-  const ini=(document.getElementById('fcIni')||{}).value||null;
-  const respId=(document.getElementById('fcResp')||{}).value||c.responsavelId||null;
-  const f=(CACHE.admins||[]).find(a=>a.id===respId);
-  try{
-    await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',
-      valorNegociacao:premio, comissaoPct:pct, fechadoEm:FV.serverTimestamp(), fechadoEmData:hojeISO(),
-      responsavelId:respId, responsavelNome:f?(f.nome||f.email):null, atualizadoEm:FV.serverTimestamp()});
-    setTimeout(()=>portalAtualizarRelacionados(id),2500);
-    /* gera a apólice já com prêmio, comissão e vendedor — é o que alimenta a folha */
-    if(premio){
-      const fim=ini?(function(d){const x=new Date(d+'T00:00:00');x.setFullYear(x.getFullYear()+1);return hojeISOde(x);})(ini):null;
-      await db.collection('apolices_cliente').add({
-        clienteNome:c.nome||c.nomeEmpresa||'', clienteWhatsapp:c.whatsapp||null, clienteEmail:c.email||null,
-        clienteCpf:c.cpf||null, ramo:c.ramo||c.tipoSeguro||null, seguradora:seg,
-        dataInicioVigencia:ini, dataFimVigencia:fim,
-        valorPremio:premio, comissao:pct||0, status:'ativa', leadId:id,
-        responsavelId:respId, responsavelNome:f?(f.nome||f.email):null,
-        criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp(), origem:'fechamento_lead'});
-    }
-    await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',
-      texto:'Negócio FECHADO'+(premio?' — prêmio '+money(premio)+(pct?' · comissão '+pct+'%':''):'')+(seg?' · '+seg:''),
-      autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
-    closeModal();
-    toast(premio?('Fechado! Apólice criada com '+money(premio)+' de prêmio.'):'Negócio marcado como fechado.','ok','Parabéns');
-  }catch(e){ console.error(e); toast('Erro ao fechar o negócio.','err'); } }
 function hojeISOde(d){ const p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 async function fecharComProposta(id,file){ if(!file) return; const c=CACHE.leads.find(x=>x.id===id);
   const st=document.getElementById('fecharStatus'); if(st) st.innerHTML='<div style="color:var(--text-2);font-size:.85rem"><i class="fas fa-spinner fa-spin"></i> Lendo a proposta...</div>';
@@ -3305,6 +3255,13 @@ function modalVerApolice(id){
       </div>`:''}
       ${a.observacoes?`<h4 style="margin:0 0 8px"><i class="fas fa-note-sticky" style="color:var(--brand)"></i> Observações</h4>
         <div style="background:var(--surface-2);border-radius:10px;padding:11px 14px;font-size:.82rem;white-space:pre-wrap;margin-bottom:14px">${esc(a.observacoes)}</div>`:''}
+      ${(a.coberturasEstr&&a.coberturasEstr.length)||(a.assistencias&&a.assistencias.length)?`
+      <h4 style="margin:0 0 8px"><i class="fas fa-shield-halved" style="color:var(--brand)"></i> O que ele contratou</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div>${(a.coberturasEstr||[]).map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;font-size:.83rem;padding:4px 0;border-bottom:1px dashed var(--border)"><span style="color:var(--text-2)">${esc(x.nome)}</span><b>${esc(x.lmi||'-')}</b></div>`).join('')||'<span style="font-size:.82rem;color:var(--text-3)">Sem coberturas detalhadas.</span>'}
+          ${a.franquia?`<div style="display:flex;justify-content:space-between;gap:10px;font-size:.83rem;padding:6px 0"><span style="color:var(--text-2)">Franquia${a.franquiaTipo?' ('+esc(a.franquiaTipo)+')':''}</span><b>${money(a.franquia)}</b></div>`:''}</div>
+        <div>${(a.assistencias||[]).map(x=>`<div style="font-size:.83rem;padding:3px 0"><i class="fas fa-check" style="color:var(--ok)"></i> ${esc(x.nome)}${x.detalhe?' <span style="color:var(--text-3)">· '+esc(x.detalhe)+'</span>':''}</div>`).join('')||'<span style="font-size:.82rem;color:var(--text-3)">Nenhuma assistência marcada.</span>'}</div>
+      </div>`:''}
       <h4 style="margin:0 0 8px"><i class="fas fa-paperclip" style="color:var(--brand)"></i> Documentos (links)</h4>
       <div style="font-size:.76rem;color:var(--text-2);margin-bottom:8px">Cole o link da apólice ou proposta no seu Drive/nuvem — guardo o endereço aqui, sem custo de armazenamento.</div>
       ${docs.length?docs.map((d,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -3321,6 +3278,7 @@ function modalVerApolice(id){
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
+      ${typeof apAnteriorDe==='function'&&apAnteriorDe(a)?`<button class="btn btn-ghost" onclick="modalComparativo('${a.id}')"><i class="fas fa-scale-balanced"></i> Antes × agora</button>`:''}
       ${apEhAtiva(a)||a.status==='vencida'?`<button class="btn btn-ghost" onclick="modalRenovar('${a.id}')"><i class="fas fa-rotate"></i> Renovar</button>`:''}
       <button class="btn btn-primary" onclick="modalApolice('${a.id}')"><i class="fas fa-pen"></i> Editar</button>
     </div>`,'wide');
@@ -3411,7 +3369,9 @@ function modalApolice(id){
         <div class="form-row"><label>WhatsApp do cliente</label><input type="text" id="apWhats" value="${esc(a.clienteWhatsapp||'')}"></div>
         <div class="form-row"><label>E-mail do cliente</label><input type="email" id="apEmail" value="${esc(a.clienteEmail||'')}"></div>
         <div class="form-row"><label>Ramo</label><select id="apRamo">${RAMO_OPCOES.map(r=>`<option ${a.ramo===r?'selected':''}>${r}</option>`).join('')}</select></div>
-        <div class="form-row"><label>Seguradora</label><input type="text" id="apSeg" value="${esc(a.seguradora||'')}"></div>
+        <div class="form-row"><label>Seguradora</label>
+          ${typeof segSelect==='function'?segSelect('apSegSel',a.seguradora||'','onchange="segTrocou(this,\'apSeg\')"')+`<input type="text" id="apSeg" value="${esc(a.seguradora||'')}" placeholder="Nome da seguradora" style="display:none;margin-top:6px">`
+            :`<input type="text" id="apSeg" value="${esc(a.seguradora||'')}">`}</div>
         <div class="form-row"><label>Nº da apólice</label><input type="text" id="apNum" value="${esc(a.numeroApolice||'')}"></div>
         <div class="form-row"><label>Status</label><select id="apStatus"><option value="ativa" ${a.status!=='cancelada'?'selected':''}>Ativa</option><option value="cancelada" ${a.status==='cancelada'?'selected':''}>Cancelada</option></select></div>
         <div class="form-row"><label>Início vigência</label><input type="date" id="apIni" value="${a.dataInicioVigencia&&toDate(a.dataInicioVigencia)?toDate(a.dataInicioVigencia).toISOString().slice(0,10):''}"></div>
@@ -3568,7 +3528,8 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
     clienteEmail:document.getElementById('apEmail').value.trim()||null,
     leadId:document.getElementById('apLeadId').value||null,
     clienteCpf:document.getElementById('apCpf').value||null,
-    ramo:document.getElementById('apRamo').value, seguradora:document.getElementById('apSeg').value.trim()||null,
+    ramo:document.getElementById('apRamo').value,
+    seguradora:(typeof segValor==='function'&&document.getElementById('apSegSel'))?segValor('apSegSel','apSeg'):(document.getElementById('apSeg').value.trim()||null),
     numeroApolice:document.getElementById('apNum').value.trim()||null, status:document.getElementById('apStatus').value,
     dataInicioVigencia:document.getElementById('apIni').value||null, dataFimVigencia:document.getElementById('apFim').value||null,
     valorPremio:apNum(document.getElementById('apPremio').value)||0,
@@ -8281,6 +8242,7 @@ VIEWS.orcamento=function(leadId){
       <div style="display:flex;gap:10px;flex-wrap:wrap">${actions}</div>
     </div></div>`;
   html+=ppBlocoCliente(l);
+  html+=ppBlocoVeiculo();
   html+=ppBlocoFipe();
   html+=ppBlocoUpload();
   if(ORC.propostas.length){
@@ -8299,6 +8261,35 @@ function ppNovoOrcamento(leadId,silencioso){
     veiculo:{}, propostas:[], observacoes:'', validade:null,
     consultor:(CURRENT_USER&&(CURRENT_USER.nome||CURRENT_USER.email))||'', mostrarLiquido:false, publicado:false };
   if(!silencioso) VIEWS.orcamento();
+}
+
+/* ---------- dados do bem/veículo: editáveis mesmo sem PDF ---------- */
+function ppSetVeic(campo,v){ ORC.veiculo[campo]=v; }
+function ppBlocoVeiculo(){
+  const v=ORC.veiculo||{};
+  const f=(id,rot,campo,ph,largo)=>`<div class="form-row" style="margin:0${largo?';grid-column:1/-1':''}"><label>${rot}</label>
+    <input type="text" id="pv_${id}" value="${esc(v[campo]||'')}" placeholder="${esc(ph||'')}" oninput="ppSetVeic('${campo}',this.value)"></div>`;
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-car"></i> Dados do veículo</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:.78rem;color:var(--text-3)">Vão no comparativo, no PDF e no link do cliente</span>
+        ${ppFipeCod(v.fipe)?`<button class="btn btn-ghost btn-sm" onclick="ppBuscarFipe(true)"><i class="fas fa-magnifying-glass-dollar"></i> Buscar FIPE</button>`:''}
+      </div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+      ${f('marca','Marca','marca','Ex.: Volkswagen')}
+      ${f('modelo','Modelo','modelo','Ex.: Polo Highline 1.0 TSI',true)}
+      ${f('anoFab','Ano de fabricação','anoFab','2022')}
+      ${f('anoMod','Ano do modelo','anoMod','2023')}
+      ${f('placa','Placa','placa','ABC1D23')}
+      ${f('chassi','Chassi','chassi','opcional')}
+      ${f('fipe','Código FIPE','fipe','000000-0')}
+      ${f('combustivel','Combustível','combustivel','Gasolina / Flex')}
+      ${f('cepPernoite','CEP de pernoite','cepPernoite','00000-000')}
+      ${f('uso','Uso do veículo','uso','Particular / trabalho / app')}
+      ${f('condutor','Condutor principal','condutor','Nome · idade')}
+      ${f('garagem','Garagem','garagem','Fechada / rua / prédio')}
+    </div>
+    <div style="font-size:.78rem;color:var(--text-3);margin-top:10px"><i class="fas fa-circle-info"></i>
+      Preencheu o código FIPE? Eu busco o valor de mercado e mostro no comparativo do cliente.</div></div>`;
 }
 function ppBlocoCliente(l){
   const c=ORC.cliente, v=ORC.veiculo;
@@ -8677,9 +8668,14 @@ function ppValidadeSugerida(){
 }
 
 /* ---------- montar cotação na mão ---------- */
+const PP_ASSIST=[{k:'assist',l:'Assistência 24h / guincho',ph:'400 km'},{k:'reserva',l:'Carro reserva',ph:'15 dias'},
+  {k:'vidros',l:'Vidros, faróis e retrovisores',ph:'franquia'},{k:'reparos',l:'Martelinho / pequenos reparos',ph:'3 peças'},
+  {k:'parachoque',l:'Troca de para-choque',ph:''},{k:'roda',l:'Pneu, roda e suspensão',ph:''},
+  {k:'carta',l:'Carta verde (Mercosul)',ph:''},{k:'buracos',l:'Proteção contra buracos',ph:''}];
+const PP_ASSIST_K=PP_ASSIST.map(x=>x.k);
 function ppModalManual(uid){
   const p=uid?ppAcha(uid):null;
-  const base=PP_COB.filter(c=>c.k!=='outros');
+  const base=PP_COB.filter(c=>c.k!=='outros'&&!PP_ASSIST_K.includes(c.k));
   const dado=k=>{ if(!p) return null; return p.coberturas.find(c=>c.chave===k)||null; };
   openModal(`<div class="modal-head"><h3><i class="fas fa-pen-to-square"></i> ${p?'Editar':'Montar'} cotação na mão</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button></div>
@@ -8705,6 +8701,14 @@ function ppModalManual(uid){
         <div class="form-row"><label>Tipo de franquia</label>
           <select id="mnFrT">${['Obrigatória','Reduzida','Majorada','Básica'].map(x=>`<option ${p&&p.franquia&&p.franquia.tipo===x?'selected':''}>${x}</option>`).join('')}</select></div>
         <div class="form-row"><label>Nº de parcelas sem juros</label><input type="number" id="mnPar" value="${p&&p.parcelas&&p.parcelas.length?p.parcelas[p.parcelas.length-1].n:12}"></div>
+      </div>
+      <h4 style="margin:6px 0 10px">Assistências e serviços do plano</h4>
+      <div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Marque o que essa cotação inclui — vai no comparativo do cliente com esse nome.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-bottom:16px">
+        ${PP_ASSIST.map(x=>{ const d=dado(x.k); return `<label style="display:flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:10px;padding:8px 11px;cursor:pointer">
+          <input type="checkbox" id="mnA_${x.k}" ${d?'checked':''} style="width:auto">
+          <span style="flex:1;font-size:.83rem">${esc(x.l)}</span>
+          <input type="text" id="mnAd_${x.k}" value="${d&&d.lmi?esc(String(d.lmi)):''}" placeholder="${esc(x.ph||'detalhe')}" style="width:100px;padding:5px 8px;font-size:.78rem"></label>`; }).join('')}
       </div>
       <h4 style="margin:6px 0 10px">Coberturas do plano</h4>
       <div class="tbl-wrap"><table><thead><tr><th style="width:34px"></th><th>Cobertura</th><th style="width:150px">Limite / capital</th><th style="width:130px">Franquia</th><th style="width:120px">Prêmio</th></tr></thead><tbody>
@@ -8737,7 +8741,10 @@ function ppSalvarManual(){
   o.franquia={tipo:g('mnFrT').value,valor:fr};
   const com=parseFloat(String(g('mnCom').value).replace(',','.'));
   o.comissaoPct=isNaN(com)?null:com; o.comissaoFonte=isNaN(com)?null:'informada por você';
-  PP_COB.filter(c=>c.k!=='outros').forEach(c=>{
+  PP_ASSIST.forEach(x=>{ const ck=g('mnA_'+x.k); if(!ck||!ck.checked) return;
+    const det=(g('mnAd_'+x.k)||{}).value||''; 
+    o.coberturas.push({nome:x.l,chave:x.k,lmi:det.trim()||'contratada',franquia:null,premio:null,contratada:true}); });
+  PP_COB.filter(c=>c.k!=='outros'&&!PP_ASSIST_K.includes(c.k)).forEach(c=>{
     if(!g('mn_'+c.k).checked) return;
     o.coberturas.push({nome:c.l,chave:c.k,lmi:g('mnL_'+c.k).value.trim()||null,
       franquia:g('mnF_'+c.k).value.trim()||null,premio:ppNum(g('mnP_'+c.k).value),contratada:true});
@@ -9812,6 +9819,403 @@ function apEnviarArquivo(id){
       toast('Documento anexado — já aparece na área do cliente.','ok'); modalVerApolice(id);
     }catch(e){ console.error(e); toast('Não consegui enviar: '+(e.code||e.message),'err'); } };
   inp.click();
+}
+
+</script>
+  <script>
+/* =========================================================================
+   FECHAMENTO DE NEGÓCIO — completo, com renovação, coberturas e assistências
+   - Reconhece que é RENOVAÇÃO quando o cliente já tem apólice do mesmo ramo
+     e deixa copiar tudo do ano anterior num clique.
+   - Pede prêmio líquido, IOF, total, comissão % e R$, franquia, coberturas
+     (LMI) e assistências contratadas — é isso que alimenta o comparativo
+     de renovação do ano que vem.
+   - Seguradoras vêm do cadastro (Configurações → Seguradoras).
+   ========================================================================= */
+
+/* ---------- seguradoras do cadastro (com as antigas como reserva) ---------- */
+const SEG_RESERVA=['Allianz','Alfa Seguradora','Amil','Azul Seguros','Bradesco Seguros','Bradesco Saúde','Capemisa','Excelsior','HDI Seguros','Itaú Seguros','Liberty Seguros','Mapfre','MetLife','Porto Seguro','SulAmérica','Suhai','Tokio Marine','Unimed','Yelum (Liberty)','Zurich'];
+function segNomes(){
+  const doCadastro=(CACHE.seguradoras||[]).filter(s=>s.ativo!==false).map(s=>s.nome).filter(n=>n&&String(n).trim()&&String(n).trim()!=='-');
+  const usadas=(CACHE.apolices||[]).map(a=>a.seguradora).filter(Boolean);
+  const todas=[...new Set([...doCadastro,...usadas,...SEG_RESERVA].map(s=>String(s).trim()))];
+  return todas.sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}
+function segSelect(id,valor,extra){
+  const nomes=segNomes(); const v=valor||''; const conhecida=!v||nomes.some(n=>n.toLowerCase()===v.toLowerCase());
+  return `<select id="${id}" ${extra||''}><option value="">— escolha —</option>
+    ${nomes.map(n=>`<option ${v.toLowerCase()===n.toLowerCase()?'selected':''}>${esc(n)}</option>`).join('')}
+    ${!conhecida?`<option selected>${esc(v)}</option>`:''}
+    <option value="__outra">Outra (digitar)…</option></select>`;
+}
+function segTrocou(sel,inputId){
+  const inp=document.getElementById(inputId); if(!inp) return;
+  const outra=sel.value==='__outra';
+  inp.style.display=outra?'block':'none'; if(outra) inp.focus();
+}
+function segValor(selId,inputId){
+  const s=document.getElementById(selId); if(!s) return null;
+  if(s.value==='__outra'){ const i=document.getElementById(inputId); return (i&&i.value.trim())||null; }
+  return s.value||null;
+}
+
+/* ---------- coberturas e assistências que a gente controla ---------- */
+const FC_COB_AUTO=[
+  {k:'casco',l:'Casco (colisão, incêndio, roubo e furto)',tipo:'casco'},
+  {k:'rcf_dm',l:'Danos materiais a terceiros (RCF-DM)',ph:'100.000'},
+  {k:'rcf_dc',l:'Danos corporais a terceiros (RCF-DC)',ph:'100.000'},
+  {k:'rcf_dme',l:'Danos morais / estéticos',ph:'10.000'},
+  {k:'app_m',l:'APP — morte',ph:'10.000'},
+  {k:'app_i',l:'APP — invalidez',ph:'10.000'},
+  {k:'app_dmho',l:'Despesas médicas hospitalares',ph:'5.000'}];
+const FC_ASSIST_AUTO=[
+  {k:'assist',l:'Assistência 24h / guincho',d:'km',ph:'Ex.: 400 km'},
+  {k:'reserva',l:'Carro reserva',d:'dias',ph:'Ex.: 15 dias'},
+  {k:'vidros',l:'Vidros, faróis e retrovisores',d:'obs',ph:'Ex.: com franquia de 20%'},
+  {k:'reparos',l:'Martelinho / pequenos reparos',d:'obs',ph:'Ex.: 3 peças'},
+  {k:'parachoque',l:'Troca de para-choque',d:'obs',ph:''},
+  {k:'roda',l:'Pneu, roda e suspensão',d:'obs',ph:''},
+  {k:'pintura',l:'Pintura e lataria',d:'obs',ph:''},
+  {k:'carta',l:'Carta verde (Mercosul)',d:'obs',ph:''},
+  {k:'chaveiro',l:'Chaveiro / perda de chaves',d:'obs',ph:''},
+  {k:'residencia',l:'Assistência residencial',d:'obs',ph:''}];
+const FC_COB_RES=[
+  {k:'incendio',l:'Incêndio, raio e explosão',ph:'200.000'},
+  {k:'eletricos',l:'Danos elétricos',ph:'5.000'},
+  {k:'roubo',l:'Roubo e furto de bens',ph:'20.000'},
+  {k:'vendaval',l:'Vendaval, granizo e fumaça',ph:'50.000'},
+  {k:'rc_familiar',l:'Responsabilidade civil familiar',ph:'50.000'},
+  {k:'aluguel',l:'Perda de aluguel',ph:'10.000'}];
+const FC_ASSIST_RES=[{k:'assist24',l:'Assistência 24h (chaveiro, encanador, eletricista)',d:'obs',ph:''},
+  {k:'vidros_res',l:'Vidros e espelhos',d:'obs',ph:''},{k:'mudanca',l:'Mudança e guarda-móveis',d:'obs',ph:''}];
+const FC_COB_VIDA=[
+  {k:'morte',l:'Morte (qualquer causa)',ph:'200.000'},
+  {k:'morte_ac',l:'Morte acidental',ph:'200.000'},
+  {k:'ipa',l:'Invalidez por acidente (IPA)',ph:'100.000'},
+  {k:'itp',l:'Invalidez por doença',ph:'100.000'},
+  {k:'dg',l:'Doenças graves',ph:'50.000'},
+  {k:'dit',l:'Diária por incapacidade (DIT)',ph:'100/dia'},
+  {k:'funeral',l:'Auxílio funeral',ph:'10.000'}];
+const FC_ASSIST_VIDA=[{k:'funeral_serv',l:'Assistência funeral (serviço)',d:'obs',ph:''},
+  {k:'telemedicina',l:'Telemedicina',d:'obs',ph:''},{k:'sorteios',l:'Sorteios mensais',d:'obs',ph:''}];
+
+const fcEhAuto=r=>/auto|frota|moto|caminh/i.test(String(r||''));
+const fcEhRes=r=>/resid|empres|patrim|condom/i.test(String(r||''));
+const fcEhVida=r=>/vida|acidentes/i.test(String(r||''));
+function fcCatalogo(ramo){
+  if(fcEhAuto(ramo)) return {cob:FC_COB_AUTO,assist:FC_ASSIST_AUTO,rot:'Coberturas do casco e de terceiros'};
+  if(fcEhVida(ramo)) return {cob:FC_COB_VIDA,assist:FC_ASSIST_VIDA,rot:'Capitais segurados'};
+  if(fcEhRes(ramo)) return {cob:FC_COB_RES,assist:FC_ASSIST_RES,rot:'Coberturas contratadas'};
+  return {cob:[{k:'principal',l:'Cobertura principal',ph:''},{k:'adicional',l:'Coberturas adicionais',ph:''}],assist:[{k:'assist24',l:'Assistência 24h',d:'obs',ph:''}],rot:'Coberturas contratadas'};
+}
+const fcRotuloCob=k=>{ for(const L of [FC_COB_AUTO,FC_COB_RES,FC_COB_VIDA]){ const x=L.find(c=>c.k===k); if(x) return x.l; } return k; };
+const fcRotuloAss=k=>{ for(const L of [FC_ASSIST_AUTO,FC_ASSIST_RES,FC_ASSIST_VIDA]){ const x=L.find(c=>c.k===k); if(x) return x.l; } return k; };
+
+/* ---------- renovação: qual apólice esta substitui? ---------- */
+function fcApoliceAnterior(lead,ramo){
+  const r=String(ramo||lead.ramo||lead.tipoSeguro||'').toLowerCase();
+  const aps=apolicesDoCliente(lead).filter(a=>a.status!=='cancelada'&&String(a.ramo||'').toLowerCase().slice(0,4)===r.slice(0,4));
+  if(!aps.length) return null;
+  /* a que está vencendo é a que interessa: fim já passou ou está nos próximos 120 dias.
+     Entre elas, a de fim mais perto de hoje. Se nenhuma está vencendo, a mais recente. */
+  const venc=aps.map(a=>({a,d:fcDiasPara(a.dataFimVigencia)})).filter(x=>x.d!=null&&x.d<=120)
+    .sort((x,y)=>Math.abs(x.d)-Math.abs(y.d));
+  if(venc.length) return venc[0].a;
+  return aps.slice().sort((x,y)=>String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')))[0];
+}
+function fcDiasPara(d){ if(!d) return null; const x=toDate(d); if(!x) return null; return Math.round((x-new Date())/86400000); }
+
+/* ---------- estado do modal ---------- */
+let FC={leadId:null,ramo:'',anterior:null,ehRenovacao:false,cob:{},assist:{},aba:'contrato'};
+
+function modalFechar(id){
+  const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
+  const ramo=c.ramo||c.tipoSeguro||'Auto';
+  const ant=fcApoliceAnterior(c,ramo);
+  FC={leadId:id,ramo,anterior:ant,ehRenovacao:!!ant,cob:{},assist:{},aba:'contrato'};
+  Object.keys(FC_MEM).forEach(k=>delete FC_MEM[k]);   /* cada fechamento começa limpo */
+  if(ant){ /* já começa com o retrato do ano anterior — você só confere e ajusta */
+    (ant.coberturasEstr||[]).forEach(x=>FC.cob[x.k]={lmi:x.lmi||''});
+    (ant.assistencias||[]).forEach(x=>FC.assist[x.k]={on:true,d:x.detalhe||''});
+  }
+  const orc=CACHE.orcamentos&&c.orcamentoId?CACHE.orcamentos.find(o=>o.id===c.orcamentoId):null;
+  openModal(fcHtml(c,orc),'wide');
+  setTimeout(fcCalc,60);
+}
+function fcHtml(c,orc){
+  const ant=FC.anterior; const dias=ant?fcDiasPara(ant.dataFimVigencia):null;
+  const cat=fcCatalogo(FC.ramo);
+  const ini=ant&&FC.ehRenovacao&&ant.dataFimVigencia?String(toDate(ant.dataFimVigencia).toISOString().slice(0,10)):hojeISO();
+  return `<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> ${FC.ehRenovacao?'Renovação fechada!':'Negócio fechado!'} — ${esc(c.nome||c.nomeEmpresa||'')}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      ${ant?`<div style="background:${FC.ehRenovacao?'var(--brand-50)':'var(--surface-2)'};border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <i class="fas fa-rotate" style="color:var(--brand)"></i>
+          <div style="flex:1;min-width:220px;font-size:.86rem">Este cliente já tem <b>${esc(ant.ramo||'')}</b> na <b>${esc(ant.seguradora||'—')}</b>${ant.numeroApolice?' (apólice '+esc(ant.numeroApolice)+')':''},
+            vigência até <b>${fmtData(ant.dataFimVigencia)}</b>${dias!=null?` <span style="color:${dias<0?'var(--danger)':dias<=60?'var(--warn)':'var(--text-3)'}">(${dias<0?Math.abs(dias)+' dias vencida':'vence em '+dias+' dias'})</span>`:''}
+            ${ant.premioLiquido||ant.valorPremio?` · prêmio anterior <b>${money(ant.premioLiquido||ant.valorPremio)}</b>`:''}</div>
+          <div style="display:flex;gap:6px">
+            <button class="btn ${FC.ehRenovacao?'btn-primary':'btn-ghost'} btn-sm" onclick="fcTipo(true)"><i class="fas fa-rotate"></i> É renovação</button>
+            <button class="btn ${FC.ehRenovacao?'btn-ghost':'btn-primary'} btn-sm" onclick="fcTipo(false)"><i class="fas fa-plus"></i> Seguro novo</button>
+          </div></div>
+        ${FC.ehRenovacao?`<div style="font-size:.79rem;color:var(--text-2);margin-top:8px"><i class="fas fa-wand-magic-sparkles"></i> Já trouxe as coberturas e assistências do ano passado abaixo — confira e ajuste o que mudou.
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;margin-left:6px" onclick="fcCopiarAnterior()">Copiar valores do ano anterior</button></div>`:''}
+      </div>`:''}
+
+      <div class="tabs" style="margin-bottom:14px">
+        ${[['contrato','fa-file-signature','Contrato e valores'],['veiculo','fa-car','Bem segurado'],['coberturas','fa-shield-halved','Coberturas e assistências']]
+          .map(([k,i,l])=>`<button class="tab ${FC.aba===k?'active':''}" onclick="fcAba('${k}')"><i class="fas ${i}"></i> ${l}</button>`).join('')}
+      </div>
+
+      <div id="fcCorpo">${fcAbaHtml(c,orc)}</div>
+      <div id="fecharStatus" style="margin-top:12px"></div>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:8px">
+      <button class="btn btn-ghost" onclick="abrirLead('${FC.leadId}')">Voltar</button>
+      <span style="font-size:.78rem;color:var(--text-3);margin-left:auto" id="fcResumoFoot"></span>
+      <button class="btn btn-success" onclick="fcSalvar()"><i class="fas fa-check"></i> ${FC.ehRenovacao?'Fechar renovação':'Fechar com estes dados'}</button></div>`;
+}
+function fcAba(k){ fcGuardar(); FC.aba=k; const c=CACHE.leads.find(x=>x.id===FC.leadId)||{};
+  document.querySelectorAll('.modal-body .tabs .tab').forEach((b,i)=>b.classList.toggle('active',['contrato','veiculo','coberturas'][i]===k));
+  document.getElementById('fcCorpo').innerHTML=fcAbaHtml(c,null); setTimeout(fcCalc,40); }
+function fcTipo(ren){ fcGuardar(); FC.ehRenovacao=ren;
+  if(ren&&FC.anterior){ (FC.anterior.coberturasEstr||[]).forEach(x=>{ if(!FC.cob[x.k]) FC.cob[x.k]={lmi:x.lmi||''}; });
+    (FC.anterior.assistencias||[]).forEach(x=>{ if(!FC.assist[x.k]) FC.assist[x.k]={on:true,d:x.detalhe||''}; }); }
+  const c=CACHE.leads.find(x=>x.id===FC.leadId)||{}; openModal(fcHtml(c,null),'wide'); setTimeout(fcCalc,60); }
+
+/* guarda o que está na tela antes de trocar de aba (o HTML é redesenhado) */
+const FC_MEM={};
+function fcGuardar(){
+  ['fcSegSel','fcSegOutra','fcNum','fcIni','fcFim','fcLiq','fcIof','fcTot','fcComPct','fcComVal','fcResp','fcParc','fcFormaPg',
+   'fcModelo','fcAno','fcPlaca','fcChassi','fcFipeCod','fcFipeVal','fcPercTab','fcCep','fcCondutor','fcObs','fcFranq','fcFranqTipo','fcCascoTipo','fcBem']
+   .forEach(i=>{ const el=document.getElementById(i); if(el) FC_MEM[i]=el.value; });
+  const cat=fcCatalogo(FC.ramo);
+  cat.cob.forEach(x=>{ const el=document.getElementById('fcC_'+x.k); if(el) FC.cob[x.k]={lmi:el.value}; });
+  cat.assist.forEach(x=>{ const el=document.getElementById('fcA_'+x.k); if(el){ const d=document.getElementById('fcAd_'+x.k);
+    FC.assist[x.k]={on:el.checked,d:d?d.value:''}; } });
+}
+const fcMem=(id,padrao)=>FC_MEM[id]!=null&&FC_MEM[id]!==''?FC_MEM[id]:(padrao==null?'':padrao);
+
+function fcAbaHtml(c,orc){
+  const ant=FC.anterior, cat=fcCatalogo(FC.ramo);
+  if(FC.aba==='contrato'){
+    const iniPadrao=(FC.ehRenovacao&&ant&&ant.dataFimVigencia&&toDate(ant.dataFimVigencia))?toDate(ant.dataFimVigencia).toISOString().slice(0,10):hojeISO();
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;background:var(--surface-2);border-radius:12px;padding:14px 16px;margin-bottom:14px">
+        <div class="form-row" style="margin:0"><label>Ramo</label>
+          <select id="fcRamo" onchange="fcTrocarRamo(this.value)">${RAMO_OPCOES.map(r=>`<option ${FC.ramo===r?'selected':''}>${esc(r)}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Seguradora *</label>
+          ${segSelect('fcSegSel',fcMem('fcSegSel',(FC.ehRenovacao&&ant)?ant.seguradora:''),'onchange="segTrocou(this,\'fcSegOutra\')"')}
+          <input type="text" id="fcSegOutra" placeholder="Nome da seguradora" style="display:none;margin-top:6px" value="${esc(fcMem('fcSegOutra',''))}"></div>
+        <div class="form-row" style="margin:0"><label>Nº da apólice / proposta</label><input type="text" id="fcNum" value="${esc(fcMem('fcNum',''))}" placeholder="opcional"></div>
+        <div class="form-row" style="margin:0"><label>Início da vigência</label><input type="date" id="fcIni" value="${esc(fcMem('fcIni',iniPadrao))}" onchange="fcFimAuto()"></div>
+        <div class="form-row" style="margin:0"><label>Fim da vigência</label><input type="date" id="fcFim" value="${esc(fcMem('fcFim',fcMais1Ano(iniPadrao)))}"></div>
+        <div class="form-row" style="margin:0"><label>Vendedor</label>
+          <select id="fcResp"><option value="">— não definido —</option>
+            ${(CACHE.admins||[]).map(f=>`<option value="${f.id}" ${(fcMem('fcResp',c.responsavelId||''))===f.id?'selected':''}>${esc(f.nome||f.email)}</option>`).join('')}</select></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;background:var(--brand-50);border-radius:12px;padding:14px 16px;margin-bottom:6px">
+        <div class="form-row" style="margin:0"><label>Prêmio líquido *</label><input type="text" inputmode="decimal" id="fcLiq" value="${esc(fcMem('fcLiq',c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''))}" placeholder="0,00" oninput="fcCalc()"></div>
+        <div class="form-row" style="margin:0"><label>IOF</label><input type="text" inputmode="decimal" id="fcIof" value="${esc(fcMem('fcIof',''))}" placeholder="0,00" oninput="fcCalc()"></div>
+        <div class="form-row" style="margin:0"><label>Prêmio total</label><input type="text" inputmode="decimal" id="fcTot" value="${esc(fcMem('fcTot',''))}" placeholder="líquido + IOF" oninput="fcCalc(true)"></div>
+        <div class="form-row" style="margin:0"><label>Comissão (%)</label><input type="text" inputmode="decimal" id="fcComPct" value="${esc(fcMem('fcComPct',c.comissaoPct||''))}" placeholder="Ex.: 15" oninput="fcCalc()"></div>
+        <div class="form-row" style="margin:0"><label>Comissão (R$)</label><input type="text" inputmode="decimal" id="fcComVal" value="${esc(fcMem('fcComVal',''))}" placeholder="calculo automático" oninput="fcCalc(false,true)">
+          <div style="font-size:.72rem;color:var(--brand-dark);margin-top:3px" id="fcComDica"></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:6px">
+        <div class="form-row" style="margin:0"><label>Forma de pagamento</label>
+          <select id="fcFormaPg">${['','Boleto','Cartão de crédito','Débito em conta','Carnê','À vista'].map(o=>`<option ${fcMem('fcFormaPg','')===o?'selected':''}>${o}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Parcelas</label><input type="number" id="fcParc" value="${esc(fcMem('fcParc',''))}" placeholder="Ex.: 12"></div>
+      </div>
+      ${ant&&FC.ehRenovacao?`<div style="font-size:.8rem;color:var(--text-2);background:var(--surface-2);border-radius:10px;padding:9px 12px" id="fcVariacao">
+        Prêmio anterior: <b>${money(ant.premioLiquido||ant.valorPremio||0)}</b> — preencha o líquido e eu mostro a variação.</div>`:''}
+      <div id="fecharDrop" style="border:2px dashed var(--border-2);border-radius:12px;padding:18px;text-align:center;cursor:pointer;margin-top:14px" onclick="document.getElementById('fecharFile').click()">
+        <i class="fas fa-file-arrow-up" style="font-size:20px;color:var(--brand)"></i>
+        <div style="font-weight:600;margin-top:5px">Tem o PDF da proposta? Anexe que eu leio e preencho tudo</div>
+        <div style="font-size:.78rem;color:var(--text-3)">opcional — Porto, Azul, HDI, Bradesco, Tokio e Yelum</div>
+        <input type="file" id="fecharFile" accept="application/pdf" style="display:none" onchange="fecharComProposta('${FC.leadId}',this.files[0])"></div>`;
+  }
+  if(FC.aba==='veiculo'){
+    if(!fcEhAuto(FC.ramo)) return `<div class="form-row"><label>O que está segurado</label>
+        <input type="text" id="fcBem" value="${esc(fcMem('fcBem',''))}" placeholder="Ex.: casa em Passo Fundo · Rua X, 100 / vida do titular / empresa XYZ"></div>
+      <div class="form-row"><label>CEP</label><input type="text" id="fcCep" value="${esc(fcMem('fcCep',c.cep||''))}" placeholder="00000-000"></div>
+      <div class="form-row"><label>Observações do risco</label><textarea id="fcObs" rows="3" placeholder="Tudo que ajuda na renovação do ano que vem">${esc(fcMem('fcObs',''))}</textarea></div>`;
+    const a=FC.ehRenovacao&&FC.anterior?FC.anterior:{};
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+        <div class="form-row" style="margin:0;grid-column:1/-1"><label>Modelo do veículo</label><input type="text" id="fcModelo" value="${esc(fcMem('fcModelo',a.veiculoModelo||c.veiculoModelo||c.carroModelo||''))}" placeholder="Ex.: VW Polo Highline 1.0 TSI"></div>
+        <div class="form-row" style="margin:0"><label>Ano fab./modelo</label><input type="text" id="fcAno" value="${esc(fcMem('fcAno',a.veiculoAno||c.carroAno||''))}" placeholder="2022/2023"></div>
+        <div class="form-row" style="margin:0"><label>Placa</label><input type="text" id="fcPlaca" value="${esc(fcMem('fcPlaca',a.veiculoPlaca||''))}" placeholder="ABC1D23"></div>
+        <div class="form-row" style="margin:0"><label>Chassi</label><input type="text" id="fcChassi" value="${esc(fcMem('fcChassi',a.chassi||''))}" placeholder="opcional"></div>
+        <div class="form-row" style="margin:0"><label>Código FIPE</label><input type="text" id="fcFipeCod" value="${esc(fcMem('fcFipeCod',a.codigoFipe||c.codigoFipe||''))}" placeholder="000000-0"></div>
+        <div class="form-row" style="margin:0"><label>Valor de mercado (FIPE)</label><input type="text" inputmode="decimal" id="fcFipeVal" value="${esc(fcMem('fcFipeVal',''))}" placeholder="0,00"></div>
+        <div class="form-row" style="margin:0"><label>% da tabela contratado</label><input type="text" inputmode="decimal" id="fcPercTab" value="${esc(fcMem('fcPercTab','100'))}" placeholder="100"></div>
+        <div class="form-row" style="margin:0"><label>CEP de pernoite</label><input type="text" id="fcCep" value="${esc(fcMem('fcCep',a.cepPernoite||c.cep||''))}" placeholder="00000-000"></div>
+        <div class="form-row" style="margin:0"><label>Condutor principal</label><input type="text" id="fcCondutor" value="${esc(fcMem('fcCondutor',''))}" placeholder="Nome · idade"></div>
+      </div>
+      <div class="form-row" style="margin-top:12px"><label>Observações do risco (uso, garagem, jovem condutor…)</label>
+        <textarea id="fcObs" rows="2" placeholder="Tudo que ajuda na renovação do ano que vem">${esc(fcMem('fcObs',''))}</textarea></div>`;
+  }
+  /* coberturas + assistências */
+  const antCob=k=>{ if(!FC.anterior) return null; const x=(FC.anterior.coberturasEstr||[]).find(y=>y.k===k); return x?x.lmi:null; };
+  return `<div style="font-size:.82rem;color:var(--text-2);margin-bottom:10px"><i class="fas fa-circle-info"></i>
+      É isso que vai virar o <b>comparativo da renovação</b>: no ano que vem você vê lado a lado o que ele tinha, o que foi oferecido e o que fechou.</div>
+    <h4 style="margin:0 0 8px">${cat.rot}</h4>
+    <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px;margin-bottom:16px"><table><thead><tr><th>Cobertura</th><th style="width:180px">Limite / capital (R$)</th>${FC.ehRenovacao&&FC.anterior?'<th style="width:150px">Ano anterior</th>':''}</tr></thead><tbody>
+      ${cat.cob.map(x=>`<tr><td>${esc(x.l)}</td>
+        <td><input type="text" inputmode="decimal" id="fcC_${x.k}" value="${esc((FC.cob[x.k]||{}).lmi||'')}" placeholder="${esc(x.ph||'—')}" style="padding:6px 9px"></td>
+        ${FC.ehRenovacao&&FC.anterior?`<td style="color:var(--text-3);font-size:.82rem">${esc(antCob(x.k)||'—')}</td>`:''}</tr>`).join('')}
+    </tbody></table></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="form-row" style="margin:0"><label>Franquia do casco (R$)</label><input type="text" inputmode="decimal" id="fcFranq" value="${esc(fcMem('fcFranq',FC.ehRenovacao&&FC.anterior?apBR(FC.anterior.franquia):''))}" placeholder="0,00"></div>
+      <div class="form-row" style="margin:0"><label>Tipo de franquia</label>
+        <select id="fcFranqTipo">${['Obrigatória','Reduzida','Majorada','Básica','Sem franquia'].map(o=>`<option ${fcMem('fcFranqTipo',(FC.anterior||{}).franquiaTipo||'Obrigatória')===o?'selected':''}>${o}</option>`).join('')}</select></div>
+    </div>
+    <h4 style="margin:0 0 8px">Assistências e serviços que ele contratou</h4>
+    <div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Marque o que está na apólice. Na renovação, isso é o que evita o cliente perder cobertura sem perceber.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">
+      ${cat.assist.map(x=>{ const s=FC.assist[x.k]||{}; return `<label style="display:flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:10px;padding:8px 11px;cursor:pointer">
+        <input type="checkbox" id="fcA_${x.k}" ${s.on?'checked':''} style="width:auto" onchange="document.getElementById('fcAd_${x.k}').style.opacity=this.checked?1:.4">
+        <span style="flex:1;font-size:.84rem">${esc(x.l)}</span>
+        <input type="text" id="fcAd_${x.k}" value="${esc(s.d||'')}" placeholder="${esc(x.ph||'detalhe')}" style="width:110px;padding:5px 8px;font-size:.78rem;opacity:${s.on?1:.4}">
+      </label>`; }).join('')}
+    </div>`;
+}
+function fcTrocarRamo(r){ fcGuardar(); FC.ramo=r; FC.anterior=fcApoliceAnterior(CACHE.leads.find(x=>x.id===FC.leadId)||{},r);
+  const c=CACHE.leads.find(x=>x.id===FC.leadId)||{}; openModal(fcHtml(c,null),'wide'); setTimeout(fcCalc,60); }
+function fcMais1Ano(d){ if(!d) return ''; const x=new Date(d+'T00:00:00'); if(isNaN(x)) return ''; x.setFullYear(x.getFullYear()+1);
+  const p=n=>String(n).padStart(2,'0'); return x.getFullYear()+'-'+p(x.getMonth()+1)+'-'+p(x.getDate()); }
+function fcFimAuto(){ const i=document.getElementById('fcIni'), f=document.getElementById('fcFim'); if(i&&f&&i.value) f.value=fcMais1Ano(i.value); }
+function fcCopiarAnterior(){
+  const a=FC.anterior; if(!a) return; fcGuardar();
+  FC_MEM.fcLiq=apBR(a.premioLiquido||a.valorPremio||''); FC_MEM.fcComPct=apBR(a.comissao||''); FC_MEM.fcFranq=apBR(a.franquia||'');
+  FC_MEM.fcModelo=a.veiculoModelo||''; FC_MEM.fcPlaca=a.veiculoPlaca||''; FC_MEM.fcChassi=a.chassi||''; FC_MEM.fcFipeCod=a.codigoFipe||''; FC_MEM.fcCep=a.cepPernoite||'';
+  (a.coberturasEstr||[]).forEach(x=>FC.cob[x.k]={lmi:x.lmi||''});
+  (a.assistencias||[]).forEach(x=>FC.assist[x.k]={on:true,d:x.detalhe||''});
+  const c=CACHE.leads.find(x=>x.id===FC.leadId)||{}; openModal(fcHtml(c,null),'wide'); setTimeout(fcCalc,60);
+  toast('Copiei o ano anterior. Ajuste o que mudou.','ok');
+}
+function fcCalc(totalManual,comManual){
+  const g=i=>document.getElementById(i);
+  const liq=apNum(g('fcLiq')&&g('fcLiq').value)||0, iof=apNum(g('fcIof')&&g('fcIof').value)||0;
+  const tot=g('fcTot'); if(tot&&!totalManual&&(liq||iof)) tot.value=apBR(Math.round((liq+iof)*100)/100);
+  const pct=apNum(g('fcComPct')&&g('fcComPct').value)||0;
+  const cv=g('fcComVal');
+  if(cv&&!comManual&&pct&&liq) cv.value=apBR(Math.round(liq*pct)/100);
+  const dica=g('fcComDica'); if(dica) dica.textContent=(pct&&liq)?(pct+'% sobre o líquido = '+money(Math.round(liq*pct)/100)):'';
+  const foot=g('fcResumoFoot'); if(foot) foot.textContent=liq?('Líquido '+money(liq)+(pct?' · comissão '+money(apNum(cv&&cv.value)||liq*pct/100):'')):'';
+  const va=g('fcVariacao');
+  if(va&&FC.anterior){ const antv=Number(FC.anterior.premioLiquido)||Number(FC.anterior.valorPremio)||0;
+    if(antv&&liq){ const d=liq-antv, p=Math.round(d/antv*1000)/10;
+      va.innerHTML='Prêmio anterior <b>'+money(antv)+'</b> → agora <b>'+money(liq)+'</b> · <b style="color:'+(d>0?'var(--danger)':'var(--ok)')+'">'+(d>0?'+':'')+money(d)+' ('+(d>0?'+':'')+p+'%)</b>'; } }
+}
+async function fcSalvar(){
+  fcGuardar();
+  const c=CACHE.leads.find(x=>x.id===FC.leadId)||{}; const g=i=>(document.getElementById(i)||{}).value;
+  const m=id=>FC_MEM[id]!=null?FC_MEM[id]:'';
+  const seg=segValor('fcSegSel','fcSegOutra')||m('fcSegSel')||null;
+  const liq=apNum(m('fcLiq')), iof=apNum(m('fcIof')), tot=apNum(m('fcTot'))||((liq||0)+(iof||0))||null;
+  const pct=apNum(m('fcComPct')), comVal=apNum(m('fcComVal'));
+  const ini=m('fcIni')||hojeISO(), fim=m('fcFim')||fcMais1Ano(ini);
+  const respId=m('fcResp')||c.responsavelId||null; const f=(CACHE.admins||[]).find(a=>a.id===respId);
+  if(!liq){ toast('Informe pelo menos o prêmio líquido — é ele que alimenta a comissão e a folha.','err','Falta o valor'); FC.aba='contrato'; fcAba('contrato'); return; }
+  const cat=fcCatalogo(FC.ramo);
+  const coberturasEstr=cat.cob.map(x=>({k:x.k,nome:x.l,lmi:(FC.cob[x.k]||{}).lmi||null})).filter(x=>x.lmi);
+  const assistencias=cat.assist.filter(x=>(FC.assist[x.k]||{}).on).map(x=>({k:x.k,nome:x.l,detalhe:(FC.assist[x.k]||{}).d||null}));
+  const dados={
+    clienteNome:c.nome||c.nomeEmpresa||'', clienteWhatsapp:c.whatsapp||c.telefone||null, clienteEmail:c.email||null, clienteCpf:c.cpf||c.cnpj||null,
+    ramo:FC.ramo, seguradora:seg, numeroApolice:m('fcNum')||null,
+    dataInicioVigencia:ini, dataFimVigencia:fim,
+    premioLiquido:liq, premioIof:iof||null, valorPremio:tot, comissao:pct||0, comissaoValor:comVal||null,
+    formaPagamento:m('fcFormaPg')||null, parcelas:parseInt(m('fcParc'))||null,
+    franquia:apNum(m('fcFranq')), franquiaTipo:m('fcFranqTipo')||null,
+    coberturasEstr, assistencias,
+    veiculoModelo:m('fcModelo')||null, veiculoAno:m('fcAno')||null, veiculoPlaca:(m('fcPlaca')||'').toUpperCase()||null,
+    chassi:(m('fcChassi')||'').toUpperCase()||null, codigoFipe:m('fcFipeCod')||null, valorMercado:apNum(m('fcFipeVal')),
+    percValorMercado:apNum(m('fcPercTab')), cepPernoite:m('fcCep')||null, condutorPrincipal:m('fcCondutor')||null,
+    bemSegurado:m('fcBem')||null, observacoes:m('fcObs')||null,
+    status:'ativa', leadId:FC.leadId, responsavelId:respId, responsavelNome:f?(f.nome||f.email):null,
+    tipoNegocio:FC.ehRenovacao?'renovacao':'novo',
+    renovacaoDe:FC.ehRenovacao&&FC.anterior?FC.anterior.id:null,
+    atualizadoEm:FV.serverTimestamp()
+  };
+  try{
+    const ref=await db.collection('apolices_cliente').add({...dados,criadoEm:FV.serverTimestamp(),origem:'fechamento_lead'});
+    /* a apólice anterior vira "renovada" — sai das renovações pendentes sem sumir do histórico */
+    if(FC.ehRenovacao&&FC.anterior){
+      try{ await db.collection('apolices_cliente').doc(FC.anterior.id).update({status:'renovada',renovadaPor:ref.id,atualizadoEm:FV.serverTimestamp()}); }catch(e){ console.warn('ant',e); }
+    }
+    await db.collection('leads_crm').doc(FC.leadId).update({status:'negocio_fechado',
+      valorNegociacao:liq, comissaoPct:pct||null, ramo:FC.ramo, apoliceId:ref.id,
+      fechadoEm:FV.serverTimestamp(), fechadoEmData:hojeISO(),
+      responsavelId:respId, responsavelNome:f?(f.nome||f.email):null, atualizadoEm:FV.serverTimestamp()});
+    await db.collection('interacoes_crm').add({leadId:FC.leadId,tipo:'nota',
+      texto:(FC.ehRenovacao?'RENOVAÇÃO fechada':'Negócio FECHADO')+' — '+(seg||'')+' · prêmio líquido '+money(liq)+(pct?' · comissão '+pct+'%':'')
+        +(assistencias.length?' · assistências: '+assistencias.map(a=>a.nome).join(', '):''),
+      autor:(CURRENT_USER&&CURRENT_USER.email||'admin').split('@')[0],criadoEm:FV.serverTimestamp()});
+    setTimeout(()=>portalAtualizarRelacionados(FC.leadId),2500);
+    closeModal();
+    toast((FC.ehRenovacao?'Renovação fechada! ':'Fechado! ')+'Apólice criada com '+money(liq)+' de prêmio líquido.','ok','Parabéns');
+  }catch(e){ console.error(e); toast('Erro ao fechar: '+(e.code||e.message),'err'); }
+}
+
+/* =========================================================================
+   COMPARATIVO DE RENOVAÇÃO — o que tinha × o que ficou
+   ========================================================================= */
+function apAnteriorDe(a){
+  if(a.renovacaoDe) return CACHE.apolices.find(x=>x.id===a.renovacaoDe)||null;
+  const mesmo=CACHE.apolices.filter(x=>x.id!==a.id&&String(x.ramo||'').toLowerCase()===String(a.ramo||'').toLowerCase()
+    &&((a.leadId&&x.leadId===a.leadId)||(a.clienteCpf&&x.clienteCpf&&x.clienteCpf.replace(/\D/g,'')===String(a.clienteCpf).replace(/\D/g,''))
+      ||(a.clienteNome&&x.clienteNome&&x.clienteNome.toLowerCase()===a.clienteNome.toLowerCase())));
+  if(!mesmo.length) return null;
+  const ini=String(a.dataInicioVigencia||'');
+  return mesmo.filter(x=>String(x.dataFimVigencia||'')<=ini||!ini).sort((x,y)=>String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')))[0]
+    ||mesmo.sort((x,y)=>String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')))[0];
+}
+function modalComparativo(id){
+  const nova=CACHE.apolices.find(x=>x.id===id); if(!nova) return;
+  const ant=apAnteriorDe(nova);
+  if(!ant){ toast('Não achei uma apólice anterior deste cliente neste ramo para comparar.','info'); return; }
+  const linha=(rot,a,b,fmt)=>{ const va=fmt?fmt(a):a, vb=fmt?fmt(b):b;
+    const dif=String(va||'—')!==String(vb||'—');
+    return `<tr><td>${esc(rot)}</td><td style="color:var(--text-2)">${esc(va||'—')}</td>
+      <td style="${dif?'font-weight:700;color:var(--brand-dark)':''}">${esc(vb||'—')}</td>
+      <td style="text-align:center">${dif?'<i class="fas fa-arrow-right-arrow-left" style="color:var(--warn)" title="mudou"></i>':'<i class="fas fa-equals" style="color:var(--text-3)"></i>'}</td></tr>`; };
+  const chaves=[...new Set([...(ant.coberturasEstr||[]).map(x=>x.k),...(nova.coberturasEstr||[]).map(x=>x.k)])];
+  const cobDe=(ap,k)=>{ const x=(ap.coberturasEstr||[]).find(y=>y.k===k); return x?x.lmi:null; };
+  const assDe=ap=>(ap.assistencias||[]).map(x=>x.k);
+  const assChaves=[...new Set([...assDe(ant),...assDe(nova)])];
+  const assNome=(ap,k)=>{ const x=(ap.assistencias||[]).find(y=>y.k===k); return x?(x.nome+(x.detalhe?' ('+x.detalhe+')':'')):null; };
+  const perdidas=assChaves.filter(k=>assDe(ant).includes(k)&&!assDe(nova).includes(k));
+  const ganhas=assChaves.filter(k=>!assDe(ant).includes(k)&&assDe(nova).includes(k));
+  const la=Number(ant.premioLiquido)||Number(ant.valorPremio)||0, ln=Number(nova.premioLiquido)||Number(nova.valorPremio)||0;
+  const dif=ln-la, pc=la?Math.round(dif/la*1000)/10:null;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-scale-balanced" style="color:var(--brand)"></i> Renovação — antes × agora</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-size:.86rem;color:var(--text-2);margin-bottom:12px"><b>${esc(nova.clienteNome||'')}</b> · ${esc(nova.ramo||'')}</div>
+      ${la&&ln?`<div style="background:${dif>0?'var(--danger)11':'var(--ok)11'};border-radius:12px;padding:12px 15px;margin-bottom:14px;font-size:.9rem">
+        Prêmio líquido: <b>${money(la)}</b> → <b>${money(ln)}</b> ·
+        <b style="color:${dif>0?'var(--danger)':'var(--ok)'}">${dif>0?'+':''}${money(dif)}${pc!=null?' ('+(dif>0?'+':'')+pc+'%)':''}</b></div>`:''}
+      ${perdidas.length?`<div style="background:var(--warn)15;border-radius:10px;padding:10px 13px;margin-bottom:12px;font-size:.85rem">
+        <i class="fas fa-triangle-exclamation" style="color:var(--warn)"></i> <b>Saiu da apólice:</b> ${perdidas.map(k=>esc(assNome(ant,k)||fcRotuloAss(k))).join(' · ')} — vale avisar o cliente.</div>`:''}
+      ${ganhas.length?`<div style="background:var(--ok)15;border-radius:10px;padding:10px 13px;margin-bottom:12px;font-size:.85rem">
+        <i class="fas fa-plus" style="color:var(--ok)"></i> <b>Entrou:</b> ${ganhas.map(k=>esc(assNome(nova,k)||fcRotuloAss(k))).join(' · ')}</div>`:''}
+      <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
+        <thead><tr><th></th><th>Antes (${fmtData(ant.dataInicioVigencia)})</th><th>Agora (${fmtData(nova.dataInicioVigencia)})</th><th style="width:40px"></th></tr></thead><tbody>
+        ${linha('Seguradora',ant.seguradora,nova.seguradora)}
+        ${linha('Prêmio líquido',ant.premioLiquido||ant.valorPremio,nova.premioLiquido||nova.valorPremio,v=>v?money(v):null)}
+        ${linha('Prêmio total',ant.valorPremio,nova.valorPremio,v=>v?money(v):null)}
+        ${linha('Comissão',ant.comissao,nova.comissao,v=>v?v+'%':null)}
+        ${linha('Franquia',ant.franquia,nova.franquia,v=>v?money(v):null)}
+        ${linha('Tipo de franquia',ant.franquiaTipo,nova.franquiaTipo)}
+        ${nova.veiculoPlaca||ant.veiculoPlaca?linha('Veículo',[ant.veiculoModelo,ant.veiculoPlaca].filter(Boolean).join(' · '),[nova.veiculoModelo,nova.veiculoPlaca].filter(Boolean).join(' · ')):''}
+        ${chaves.map(k=>linha(fcRotuloCob(k),cobDe(ant,k),cobDe(nova,k))).join('')}
+        ${assChaves.map(k=>linha(fcRotuloAss(k),assNome(ant,k)?'contratada'+((( ant.assistencias||[]).find(y=>y.k===k)||{}).detalhe?' ('+((ant.assistencias||[]).find(y=>y.k===k)||{}).detalhe+')':''):'não tinha',
+          assNome(nova,k)?'contratada'+((((nova.assistencias||[]).find(y=>y.k===k)||{}).detalhe)?' ('+((nova.assistencias||[]).find(y=>y.k===k)||{}).detalhe+')':''):'não tem')).join('')}
+      </tbody></table></div>
+      <div style="font-size:.78rem;color:var(--text-3);margin-top:10px">As linhas em destaque mudaram de um ano para o outro. Isso só fica completo para apólices fechadas pelo CRM com as coberturas preenchidas.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="modalVerApolice('${ant.id}')">Ver apólice anterior</button>
+      <button class="btn btn-primary" onclick="modalVerApolice('${nova.id}')">Ver apólice atual</button></div>`,'wide');
 }
 
 </script>
