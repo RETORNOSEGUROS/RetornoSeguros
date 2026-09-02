@@ -193,7 +193,7 @@ const firebaseConfig={apiKey:"AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",authDomai
 firebase.initializeApp(firebaseConfig);const db=firebase.firestore();
 /* sessão anônima: sem ela o Firestore recusa as ATUALIZAÇÕES do lead (criar é público, atualizar não) */
 const authPronta=firebase.auth().signInAnonymously().catch(function(e){ console.warn('auth anon',e); });
-const AVATAR='/img/pamelacotacoes.png';
+let AVATAR='/img/pamelacotacoes.png'; window.__setAvatar=function(u){ AVATAR=u; };
 const urlParams=new URLSearchParams(window.location.search);
 const indicadorCodigo=urlParams.get('ref')||sessionStorage.getItem('indicacao_codigo')||null;
 const empresaParceiraCodigo=urlParams.get('emp')||urlParams.get('codigo')||sessionStorage.getItem('parceiro_codigo')||null;
@@ -206,6 +206,7 @@ function dadosLead(extra){
     nome:formData.nome, whatsapp:(formData.whatsapp||'').replace(/\D/g,''),
     ramo:ROTEIRO.ramo, tipo:ROTEIRO.tipo||'individual', origem:'site',
     indicadoPorCodigo:indicadorCodigo?String(indicadorCodigo).toUpperCase():null,
+    clienteLeadId:formData._clienteLeadId||null, viaPortal:!!formData._clienteLeadId,
     empresaParceiraCodigo:empresaParceiraCodigo?String(empresaParceiraCodigo).toUpperCase():null,
     atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()
   },ROTEIRO.campos(),extra||{});
@@ -311,6 +312,12 @@ const PASSOS={
     areaTexto('inNome','Seu nome...','Enviar &rarr;',v=>{ formData.nome=v; fecharArea(); bolhaEco(esc(v)); radarMais(1); passo(ROTEIRO.depoisDoNome); });
   },
   async whatsapp(){
+    if(formData._clienteLeadId&&formData.whatsapp){   /* cliente da casa: já sei o WhatsApp */
+      await digitando(900);
+      bolhaPamela(ROTEIRO.pedidoWhats().replace(/(Antes d|<br><br>Me deixa)[^]*$/,'')+'Como você já é da casa, não preciso pedir seu WhatsApp de novo &#128522; — já deixei tudo guardado aqui.');
+      const ok=await criarLead(); if(ok) try{ if(window.gtag) gtag('event','lead_whatsapp',{ramo:ROTEIRO.ramo,origem:'portal'}); }catch(e){}
+      radarMais(2); setTimeout(()=>passo(ROTEIRO.depoisDoWhats),400); return;
+    }
     await digitando(1000);
     bolhaPamela(ROTEIRO.pedidoWhats());
     const a=areaResposta('<div class="ig"><input type="tel" class="if" id="inWhats" placeholder="(00) 00000-0000" inputmode="tel"></div>'+
@@ -349,8 +356,21 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('capitulos').innerHTML=ROTEIRO.capitulos.map((c,i)=>'<span class="cap'+(i===0?' on':'')+'" data-cap="'+c.key+'">'+(i+1)+' &middot; '+c.label+'</span>').join('');
   if(ROTEIRO.init) ROTEIRO.init();
   setTimeout(()=>document.getElementById('pageLoader').classList.add('h'),500);
-  setTimeout(()=>passo('nome'),700);
+  const t=urlParams.get('t');
+  if(t){ portalPrefill(t).then(ok=>{ if(ok){ bolhaPamela('Oi, <strong>'+primeiroNome()+'</strong>! Que bom te ver por aqui de novo &#128522; Como você já é da casa, vou direto ao que interessa.'+(ROTEIRO.portalExtra?ROTEIRO.portalExtra(formData._portal)||'':'')); radarMais(1); setTimeout(()=>passo(ROTEIRO.depoisDoNome),600); } else setTimeout(()=>passo('nome'),300); }); }
+  else setTimeout(()=>passo('nome'),700);
 });
+/* cliente que veio da própria área (cliente.html?t=...): nome e WhatsApp já conhecidos */
+async function portalPrefill(t){
+  try{ await authPronta; const s=await db.collection('portal_clientes').doc(t).get(); if(!s.exists) return false; const p=s.data();
+    formData.nome=p.nome||''; formData.whatsapp=p.whatsapp||''; formData._clienteLeadId=p.leadId||null; formData._portal=p;
+    /* o que a área do cliente já sabe: idade, endereço, profissão — cada roteiro usa o que precisa */
+    if(p.idade!=null){ formData._idadePortal=p.idade; if(p.nascimento){ formData.dataNascimento=p.nascimento; formData.idade=p.idade; } }
+    if(p.endereco&&(p.endereco.cep||p.endereco.cidade)) formData._enderecoPortal=p.endereco;
+    if(p.profissao) formData._profissaoPortal=p.profissao;
+    return !!formData.nome;
+  }catch(e){ return false; }
+}
 
 </script>
 <script>
@@ -438,6 +458,45 @@ function mascaraCnpj(i){ let v=i.value.replace(/\D/g,'').slice(0,14);
   else if(v.length>5) v=v.replace(/(\d{2})(\d{3})(\d{0,3})/,'$1.$2.$3');
   else if(v.length>2) v=v.replace(/(\d{2})(\d{0,3})/,'$1.$2');
   i.value=v; }
+
+</script>
+<script>
+/* Imagens do site controladas pelo CRM (menu "Imagens do site").
+   Lê o documento público site/imagens pela API REST do Firestore — sem carregar o SDK. */
+(function(){
+  var URL='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/site/imagens';
+  function val(f){ if(!f) return null; if('stringValue' in f) return f.stringValue; if('integerValue' in f) return +f.integerValue; if('doubleValue' in f) return f.doubleValue; if('booleanValue' in f) return f.booleanValue;
+    if(f.mapValue){ var o={}; var ff=f.mapValue.fields||{}; for(var k in ff) o[k]=val(ff[k]); return o; } return null; }
+  function aplicar(cfg){
+    var q=function(s){ return document.querySelector(s); };
+    /* logo do menu / cabeçalho */
+    var lg=cfg.logo_menu||{};
+    document.querySelectorAll('img.logo, .wh-lg, .top img.logo-site').forEach(function(img){
+      if(lg.url) img.src=lg.url;
+      if(lg.altura) img.style.height=lg.altura+'px';
+      if(lg.url||lg.altura) img.style.maxWidth='none';
+    });
+    /* fundo do topo da home */
+    var h=q('.hero'); if(h&&h.dataset.slot==='hero_home'&&cfg.hero_home&&cfg.hero_home.url){
+      h.style.backgroundImage='linear-gradient(90deg,rgba(15,23,42,.94) 0%,rgba(15,23,42,.82) 38%,rgba(15,23,42,.35) 70%,rgba(15,23,42,.15) 100%),url("'+cfg.hero_home.url+'")';
+      h.style.backgroundSize='cover'; h.style.backgroundPosition=(cfg.hero_home.posicao||'right center'); h.classList.add('com-imagem'); }
+    /* fundo do topo das páginas de produto */
+    if(h&&h.dataset.slot==='hero_produtos'&&cfg.hero_produtos&&cfg.hero_produtos.url){
+      h.style.backgroundImage='linear-gradient(90deg,rgba(15,23,42,.94) 0%,rgba(15,23,42,.8) 45%,rgba(15,23,42,.3) 100%),url("'+cfg.hero_produtos.url+'")';
+      h.style.backgroundSize='cover'; h.style.backgroundPosition=(cfg.hero_produtos.posicao||'right center'); }
+    /* topo da área do cliente */
+    var t=q('.top'); if(t&&cfg.hero_cliente&&cfg.hero_cliente.url){
+      t.style.backgroundImage='linear-gradient(90deg,rgba(22,37,78,.95) 0%,rgba(27,44,92,.85) 50%,rgba(30,58,138,.55) 100%),url("'+cfg.hero_cliente.url+'")'; t.style.backgroundSize='cover'; t.style.backgroundPosition='right center'; }
+    /* foto da Pamela (cotações) */
+    if(cfg.pamela_avatar&&cfg.pamela_avatar.url){ window.AVATAR_URL=cfg.pamela_avatar.url;
+      document.querySelectorAll('img.ma, img.wh-av').forEach(function(i){ i.src=cfg.pamela_avatar.url; });
+      if(typeof window.__setAvatar==='function') window.__setAvatar(cfg.pamela_avatar.url); }
+    /* foto da equipe (Quem somos) */
+    if(cfg.pamela_patrick&&cfg.pamela_patrick.url){ document.querySelectorAll('img[src*="pamelapatrick"]').forEach(function(i){ i.src=cfg.pamela_patrick.url; }); }
+    window.SITE_IMAGENS=cfg;
+  }
+  try{ fetch(URL).then(function(r){ return r.ok?r.json():null; }).then(function(d){ if(!d||!d.fields) return; var cfg={}; for(var k in d.fields) cfg[k]=val(d.fields[k]); aplicar(cfg); }).catch(function(){}); }catch(e){}
+})();
 
 </script>
 </body></html>
