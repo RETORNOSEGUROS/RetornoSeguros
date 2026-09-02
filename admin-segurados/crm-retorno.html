@@ -3552,6 +3552,10 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
   try{ if(id) await db.collection('apolices_cliente').doc(id).update(dados);
     else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('apolices_cliente').add(dados); }
     if(!dados.leadId) await upsertCliente({nome:cliente,cpf:dados.clienteCpf,whatsapp:dados.clienteWhatsapp,email:dados.clienteEmail});
+    /* apólice ligada a um cadastro: o que ela sabe e a ficha não tem, a ficha passa a ter */
+    else if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(dados.leadId,
+      {clienteCpf:dados.clienteCpf,clienteWhatsapp:dados.clienteWhatsapp,clienteEmail:dados.clienteEmail,
+       cep:dados.cepPernoite,ramo:dados.ramo},'apólice');
     if(!id&&window.__renovandoDe){
       await db.collection('apolices_cliente').doc(window.__renovandoDe)
         .update({status:'renovada',atualizadoEm:FV.serverTimestamp()}).catch(()=>{});
@@ -6394,56 +6398,103 @@ function ctIds(o){
 }
 const ctNome=o=>o.nome||o.clienteNome||o.segurado||o.nomeCompleto||o.nomeEmpresa||'';
 
-/* monta a base unificada de pessoas (une registros que dividem qualquer identificador) */
+/* =========================================================================
+   Base unificada de pessoas — leads + propostas + apólices
+   Regras de segurança para NÃO juntar duas pessoas diferentes:
+   - CPF junta sempre (é o identificador forte);
+   - telefone/e-mail só juntam quando não há CPF diferente dos dois lados
+     e os nomes são compatíveis — telefone de casa e e-mail compartilhado
+     eram o que fazia um cliente sumir dentro do cadastro de outro.
+   ========================================================================= */
+const CT_RANK={portal:5,lead:4,proposta:3,apolice:2};
+function ctTokens(n){ return ctNorm(n).split(' ').filter(x=>x.length>2); }
+/* mesmo nome? primeiro nome igual e algum sobrenome em comum (ou um contém o outro) */
+function ctNomeCompativel(a,b){
+  if(!a||!b) return true;
+  const A=ctNorm(a), B=ctNorm(b);
+  if(A===B||A.includes(B)||B.includes(A)) return true;
+  const ta=ctTokens(a), tb=ctTokens(b);
+  if(!ta.length||!tb.length) return true;
+  if(ta[0]!==tb[0]) return false;
+  return ta.slice(1).some(x=>tb.slice(1).includes(x));
+}
 function ctPessoas(){
   /* 1) junta tudo num só saco de registros */
   const regs=[];
-  (CACHE.leads||[]).forEach(l=>regs.push({tipo:'lead',o:l}));
+  (CACHE.leads||[]).forEach(l=>{
+    regs.push({tipo:'lead',o:l});
+    if(l.perfilPortal) regs.push({tipo:'portal',o:Object.assign({},l.perfilPortal,{id:l.id,__lead:l.id}),leadId:l.id});
+  });
   (CACHE.propostas||[]).forEach(pr=>regs.push({tipo:'proposta',o:pr}));
   (CACHE.apolices||[]).forEach(a=>regs.push({tipo:'apolice',o:a}));
-  regs.forEach((r,i)=>{ r.i=i; r.ids=ctIds(r.o); r.nomeN=ctNorm(ctNome(r.o)); });
+  regs.forEach((r,i)=>{ r.i=i; r.ids=ctIds(r.o); r.nomeN=ctNorm(ctNome(r.o)); r.cpf=ctDig(r.o.cpf||r.o.cnpj||r.o.clienteCpf||r.o.cpfCnpj); });
 
-  /* 2) union-find pelos identificadores fortes */
+  /* 2) união com trava: CPF sempre; telefone/e-mail só se não brigar */
   const pai=regs.map((_,i)=>i);
   const acha=x=>{ while(pai[x]!==x){ pai[x]=pai[pai[x]]; x=pai[x]; } return x; };
-  const une=(a,b)=>{ a=acha(a); b=acha(b); if(a!==b) pai[b]=a; };
+  const gCpf={}, gNome={};       /* CPFs e nomes de cada grupo */
+  const cpfsDo=g=>gCpf[g]||[];
+  const nomesDo=g=>gNome[g]||[];
+  function une(a,b){ a=acha(a); b=acha(b); if(a===b) return true;
+    pai[b]=a; gCpf[a]=[...new Set([...cpfsDo(a),...cpfsDo(b)])]; gNome[a]=[...new Set([...nomesDo(a),...nomesDo(b)])];
+    delete gCpf[b]; delete gNome[b]; return true; }
+  function podeUnir(a,b){ a=acha(a); b=acha(b); if(a===b) return true;
+    const ca=cpfsDo(a), cb=cpfsDo(b);
+    if(ca.length&&cb.length&&!ca.some(x=>cb.includes(x))) return false;      /* CPFs diferentes: pessoas diferentes */
+    const na=nomesDo(a), nb=nomesDo(b);
+    if(na.length&&nb.length&&!na.some(x=>nb.some(y=>ctNomeCompativel(x,y)))) return false;
+    return true; }
+  regs.forEach(r=>{ const g=acha(r.i); if(r.cpf.length===11||r.cpf.length===14) gCpf[g]=[...new Set([...cpfsDo(g),r.cpf])];
+    if(r.nomeN) gNome[g]=[...new Set([...nomesDo(g),r.nomeN])]; });
+  /* 2a) CPF: identificador forte, une sempre */
+  const porCpf={};
+  regs.forEach(r=>{ if(r.cpf.length!==11&&r.cpf.length!==14) return;
+    if(porCpf[r.cpf]!=null) une(porCpf[r.cpf],r.i); else porCpf[r.cpf]=r.i; });
+  /* 2b) telefone e e-mail: só quando não conflita com CPF nem com o nome */
   const porId={};
-  regs.forEach(r=>r.ids.forEach(id=>{ if(porId[id]!=null) une(porId[id],r.i); else porId[id]=r.i; }));
-  /* 3) registros SEM identificador forte: colam pelo nome, se houver um grupo com o mesmo nome */
+  regs.forEach(r=>r.ids.filter(id=>!id.startsWith('cpf:')).forEach(id=>{
+    if(porId[id]==null){ porId[id]=r.i; return; }
+    if(podeUnir(porId[id],r.i)) une(porId[id],r.i); }));
+  /* 2c) registros sem nenhum identificador colam pelo nome exato */
   const nomeDeGrupo={};
-  regs.filter(r=>r.ids.length).forEach(r=>{ const g=acha(r.i); if(r.nomeN&&nomeDeGrupo[r.nomeN]==null) nomeDeGrupo[r.nomeN]=g; });
+  regs.filter(r=>r.ids.length&&r.nomeN).forEach(r=>{ const g=acha(r.i); if(nomeDeGrupo[r.nomeN]==null) nomeDeGrupo[r.nomeN]=g; });
   regs.filter(r=>!r.ids.length&&r.nomeN).forEach(r=>{
-    if(nomeDeGrupo[r.nomeN]!=null) une(nomeDeGrupo[r.nomeN],r.i);
-    else nomeDeGrupo[r.nomeN]=acha(r.i);
-  });
+    if(nomeDeGrupo[r.nomeN]!=null&&podeUnir(nomeDeGrupo[r.nomeN],r.i)) une(nomeDeGrupo[r.nomeN],r.i);
+    else nomeDeGrupo[r.nomeN]=acha(r.i); });
 
-  /* 4) monta a pessoa de cada grupo */
+  /* 3) monta a pessoa de cada grupo — o dado mais confiável vence
+        (portal do cliente > cadastro do lead > proposta > apólice) */
   const grupos={};
   regs.forEach(r=>{ const g=acha(r.i); (grupos[g]=grupos[g]||[]).push(r); });
-  const enriquece=(p,o)=>{
-    const nm=ctNome(o);
-    if(!p.nome&&nm) p.nome=nm;
-    if(!p.nomeEmpresa&&o.nomeEmpresa) p.nomeEmpresa=o.nomeEmpresa;
-    if(!p.whatsapp&&(o.whatsapp||o.telefone||o.clienteWhatsapp||o.celular)) p.whatsapp=o.whatsapp||o.telefone||o.clienteWhatsapp||o.celular;
-    if(!p.email&&(o.email||o.clienteEmail)) p.email=o.email||o.clienteEmail;
-    if(!p.cpf&&(o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj)) p.cpf=o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj;
-    if(!p.dataNascimento&&o.dataNascimento) p.dataNascimento=strData(o.dataNascimento);
-    if(!p.cidade&&o.cidade) p.cidade=o.cidade;
-    if(!p.estado&&(o.estado||o.uf)) p.estado=o.estado||o.uf;
-  };
+  const CAMPOS=[['nome',o=>ctNome(o)],['nomeEmpresa',o=>o.nomeEmpresa],
+    ['whatsapp',o=>o.whatsapp||o.telefone||o.clienteWhatsapp||o.celular],
+    ['email',o=>o.email||o.clienteEmail],['cpf',o=>o.cpf||o.cnpj||o.clienteCpf||o.cpfCnpj],
+    ['dataNascimento',o=>strData(o.dataNascimento)],['cidade',o=>o.cidade],['estado',o=>o.estado||o.uf],
+    ['profissao',o=>o.profissao],['endereco',o=>o.endereco||o.enderecoCompleto],['cep',o=>o.cep]];
   const lista=Object.values(grupos).map(rs=>{
     const p={chave:'g'+acha(rs[0].i),nome:'',nomeEmpresa:'',whatsapp:'',email:'',cpf:'',
-      dataNascimento:null,cidade:'',estado:'',cotacoes:[],apolices:[],leadIds:[],primeiro:null,ultimo:null};
+      dataNascimento:null,cidade:'',estado:'',profissao:'',endereco:'',cep:'',
+      cotacoes:[],apolices:[],leadIds:[],temPortal:false,primeiro:null,ultimo:null,fontes:{}};
+    const melhor={};
+    rs.forEach(r=>{ const rank=CT_RANK[r.tipo]||1;
+      CAMPOS.forEach(([campo,pega])=>{ let v=null; try{ v=pega(r.o); }catch(e){}
+        if(v==null||v==='') return;
+        if(!melhor[campo]||rank>melhor[campo].rank){ melhor[campo]={v,rank,tipo:r.tipo}; } }); });
+    Object.entries(melhor).forEach(([campo,x])=>{ p[campo]=x.v; p.fontes[campo]=x.tipo; });
     const marca=d=>{ if(!d) return; if(!p.primeiro||d<p.primeiro) p.primeiro=d; if(!p.ultimo||d>p.ultimo) p.ultimo=d; };
     rs.forEach(r=>{
-      const o=r.o; enriquece(p,o);
+      const o=r.o;
       if(r.tipo==='lead'){
         p.leadIds.push(o.id);
+        if(o.portalToken) p.portalToken=o.portalToken;
+        if(o.codigoIndicacao) p.codigoIndicacao=o.codigoIndicacao;
         const d=strData(o.criadoEm)||null;
         const st=o.status==='negocio_fechado'?'fechada':o.status==='negocio_perdido'?'perdida':'aberta';
         p.cotacoes.push({leadId:o.id,data:d,ramo:o.ramo||o.tipoSeguro||'—',valor:Number(o.valorNegociacao)||null,
           status:st,motivo:o.motivoPerda||null,origem:o.origem||null});
         marca(d);
+      } else if(r.tipo==='portal'){
+        p.temPortal=true; marca(strData(o.atualizadoEm)||null);
       } else if(r.tipo==='proposta'){
         const d=strData(o.criadoEm)||null;
         p.__props=(p.__props||[]).concat([{d,o}]);
@@ -6453,7 +6504,6 @@ function ctPessoas(){
         marca(strData(o.dataInicioVigencia)||strData(o.criadoEm));
       }
     });
-    /* proposta só vira "cotação" se não houver um lead do mesmo dia/ramo */
     (p.__props||[]).forEach(({d,o})=>{
       if(p.cotacoes.some(c=>c.leadId&&c.leadId===o.leadId)) return;
       p.cotacoes.push({leadId:o.leadId||null,data:d,ramo:o.ramo||'Auto',
@@ -6466,18 +6516,23 @@ function ctPessoas(){
   lista.forEach(p=>{
     p.cotacoes.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
     p.ramosCotados=[...new Set(p.cotacoes.map(c=>c.ramo).filter(r=>r&&r!=='—'))];
-    p.ramosAtivos=[...new Set(p.apolices.filter(a=>a.status!=='cancelada').map(a=>a.ramo).filter(Boolean))];
+    p.ativas=p.apolices.filter(a=>!a.status||a.status==='ativa');
+    p.ramosAtivos=[...new Set(p.ativas.map(a=>a.ramo).filter(Boolean))];
     p.ramosFaltando=RAMO_OPCOES.filter(r=>!p.ramosAtivos.includes(r));
     p.temApolice=p.ramosAtivos.length>0;
+    p.jaFoiCliente=p.apolices.some(a=>a.status==='renovada'||a.status==='vencida'||a.status==='cancelada');
     p.perdidas=p.cotacoes.filter(c=>c.status==='perdida').length;
     p.abertas=p.cotacoes.filter(c=>c.status==='aberta').length;
-    p.premioTotal=p.apolices.filter(a=>a.status!=='cancelada').reduce((s,a)=>s+(Number(a.valorPremio)||0),0);
-    p.situacao=p.abertas?'em_negociacao':(p.temApolice?'cliente':(p.perdidas?'perdido':'so_cotou'));
+    p.premioTotal=p.ativas.reduce((s,a)=>s+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0);
+    /* quem tem apólice em vigor é CLIENTE, mesmo com uma cotação rolando em outro ramo */
+    /* quem tem apólice em vigor é cliente; quem já teve e não renovou é ex-cliente (ouro para retomar) */
+    p.situacao=p.temApolice?'cliente':(p.abertas?'em_negociacao':(p.jaFoiCliente?'ex_cliente':(p.perdidas?'perdido':'so_cotou')));
     p.aniversario=p.dataNascimento?String(p.dataNascimento).slice(5,10):null;
   });
   return lista;
 }
 const CT_SIT={cliente:['Cliente','var(--ok)','var(--ok-bg)'],em_negociacao:['Em negociação','var(--info)','var(--info-bg)'],
+  ex_cliente:['Ex-cliente','var(--warn)','var(--warn-bg)'],
   perdido:['Perdido','var(--danger)','var(--danger-bg)'],so_cotou:['Só cotou','var(--text-3)','var(--surface-3)']};
 function ctDiasAniv(mmdd){
   if(!mmdd) return null;
@@ -6494,6 +6549,7 @@ VIEWS.contatos=function(){
   const total=ps.length;
   const clientes=ps.filter(p=>p.situacao==='cliente').length;
   const soCotou=ps.filter(p=>p.situacao==='so_cotou'||p.situacao==='perdido').length;
+  const exClientes=ps.filter(p=>p.situacao==='ex_cliente').length;
   const comNasc=ps.filter(p=>p.dataNascimento).length;
   const aniv=ps.filter(p=>p.aniversario).map(p=>({p,dias:ctDiasAniv(p.aniversario)}))
     .filter(x=>x.dias!=null&&x.dias<=30).sort((a,b)=>a.dias-b.dias);
@@ -6518,7 +6574,8 @@ VIEWS.contatos=function(){
   html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-brand"><i class="fas fa-address-book"></i></div><div class="val">${total}</div><div class="lbl">Pessoas na base</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${clientes}</div><div class="lbl">Com apólice conosco</div></div>
-    <div class="kpi"><div class="ico i-warn"><i class="fas fa-comments-dollar"></i></div><div class="val">${soCotou}</div><div class="lbl">Cotaram e não fecharam</div></div>
+    <div class="kpi"><div class="ico i-warn"><i class="fas fa-comments-dollar"></i></div><div class="val">${soCotou}</div><div class="lbl">Cotaram e não fecharam</div>
+      ${exClientes?`<div class="foot"><a href="#" onclick="CT_F.situacao='ex_cliente';VIEWS.contatos();return false" style="color:var(--warn)">+ ${exClientes} ex-cliente(s) para retomar</a></div>`:''}</div>
     <div class="kpi"><div class="ico i-purple"><i class="fas fa-cake-candles"></i></div><div class="val">${aniv.length}</div><div class="lbl">Aniversários em 30 dias</div>
       <div class="foot">${comNasc} de ${total} com data cadastrada</div></div>
   </div>`;
@@ -6568,7 +6625,9 @@ VIEWS.contatos=function(){
           ${p.dataNascimento?`<div style="font-size:.72rem;color:${dias!=null&&dias<=7?'var(--purple)':'var(--text-3)'}">
             <i class="fas fa-cake-candles"></i> ${fmtData(p.dataNascimento)}${idadeDe(p.dataNascimento)!=null?' · '+idadeDe(p.dataNascimento)+'a':''}</div>`:''}</td>
         <td style="font-size:.8rem">${esc(p.whatsapp||'—')}${p.email?`<div style="font-size:.72rem;color:var(--text-3)">${esc(p.email)}</div>`:''}</td>
-        <td><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span></td>
+        <td><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span>
+          ${p.situacao==='cliente'&&p.abertas?`<div style="font-size:.7rem;color:var(--info);margin-top:3px"><i class="fas fa-comments-dollar"></i> ${p.abertas} cotação(ões) em aberto</div>`:''}
+          ${p.temPortal?`<div style="font-size:.7rem;color:var(--brand-dark);margin-top:3px" title="O cliente atualizou os dados na área dele"><i class="fas fa-user-pen"></i> perfil do cliente</div>`:''}</td>
         <td><b>${p.cotacoes.length}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(p.ramosCotados.slice(0,3).join(', '))||'—'}</div></td>
         <td>${p.ramosAtivos.length?p.ramosAtivos.map(r=>`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-right:3px">${esc(r)}</span>`).join(''):'<span style="color:var(--text-3)">nada</span>'}</td>
         <td>${p.temApolice&&p.ramosFaltando.length?`<span class="badge" style="background:var(--brand-50);color:var(--brand-dark)">${p.ramosFaltando.length} ramo(s)</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
@@ -6877,6 +6936,35 @@ async function ctSalvarContato(){
     }
     closeModal();
   }catch(e){ console.error(e); toast('Não consegui salvar: '+(e.code||e.message),'err'); }
+}
+
+/* =========================================================================
+   MANTER O CADASTRO EM DIA — sem sobrescrever o que já está preenchido.
+   Chamado quando salvamos apólice, fechamos negócio ou salvamos orçamento:
+   o que a gente descobre no caminho volta para a ficha da pessoa.
+   ========================================================================= */
+async function ctCompletarCadastro(leadId,dados,fonte){
+  if(!leadId||!dados) return;
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  const up={};
+  const por=(campo,valor)=>{ if(valor==null||valor==='') return;
+    const atual=l[campo]; if(atual!=null&&String(atual).trim()!=='') return; up[campo]=valor; };
+  por('cpf',dados.cpf||dados.clienteCpf);
+  por('whatsapp',(dados.whatsapp||dados.clienteWhatsapp||'').toString().replace(/\D/g,'')||null);
+  por('email',dados.email||dados.clienteEmail);
+  por('dataNascimento',strData(dados.dataNascimento));
+  por('cidade',dados.cidade); por('estado',dados.estado||dados.uf);
+  por('cep',dados.cep||dados.cepPernoite); por('endereco',dados.endereco);
+  por('profissao',dados.profissao);
+  por('ramo',dados.ramo);
+  if(!Object.keys(up).length) return;
+  up.atualizadoEm=FV.serverTimestamp(); up.cadastroCompletadoPor=fonte||'sistema';
+  try{ await db.collection('leads_crm').doc(leadId).update(up); Object.assign(l,up);
+    if(typeof portalAtualizar==='function') portalAtualizar(leadId);
+    const rotulos={cpf:'CPF',whatsapp:'WhatsApp',email:'e-mail',dataNascimento:'nascimento',cidade:'cidade',estado:'estado',cep:'CEP',endereco:'endereço',profissao:'profissão',ramo:'ramo'};
+    const lista=Object.keys(up).filter(k=>rotulos[k]).map(k=>rotulos[k]);
+    if(lista.length) toast('Cadastro de '+(l.nome||'cliente').split(' ')[0]+' completado com '+lista.join(', ')+'.','info','Ficha atualizada');
+  }catch(e){ console.warn('ctCompletarCadastro',e); }
 }
 
 </script>
@@ -8825,6 +8913,10 @@ async function ppSalvarOrcamento(){
       ORC.id=r.id;
     }
     if(ORC.leadId){
+      /* o que veio do PDF/da cotação completa a ficha do cliente sem apagar nada */
+      if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(ORC.leadId,
+        {cpf:ORC.cliente.cpf,whatsapp:ORC.cliente.whatsapp,email:ORC.cliente.email,
+         dataNascimento:ORC.cliente.nascimento,cep:(ORC.veiculo||{}).cepPernoite},'cotação');
       const melhor=ppIncluidas().slice().sort((a,b)=>(a.premioTotal||0)-(b.premioTotal||0))[0];
       await db.collection('leads_crm').doc(ORC.leadId).update({
         orcamentoId:ORC.id, valorNegociacao:melhor?melhor.premioTotal:null,
@@ -10166,6 +10258,7 @@ async function fcSalvar(){
       texto:(FC.ehRenovacao?'RENOVAÇÃO fechada':'Negócio FECHADO')+' — '+(seg||'')+' · prêmio líquido '+money(liq)+(pct?' · comissão '+pct+'%':'')
         +(assistencias.length?' · assistências: '+assistencias.map(a=>a.nome).join(', '):''),
       autor:(CURRENT_USER&&CURRENT_USER.email||'admin').split('@')[0],criadoEm:FV.serverTimestamp()});
+    if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(FC.leadId,{ramo:FC.ramo,cep:dados.cepPernoite},'fechamento');
     setTimeout(()=>portalAtualizarRelacionados(FC.leadId),2500);
     closeModal();
     toast((FC.ehRenovacao?'Renovação fechada! ':'Fechado! ')+'Apólice criada com '+money(liq)+' de prêmio líquido.','ok','Parabéns');
