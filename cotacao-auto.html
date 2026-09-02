@@ -188,7 +188,7 @@ firebase.initializeApp(firebaseConfig);const db=firebase.firestore();
 const authPronta=firebase.auth().signInAnonymously().catch(function(e){ console.warn('auth anon',e); });
 const FIPE_API='https://parallelum.com.br/fipe/api/v1/carros';
 const FIPE_V2='https://fipe.parallelum.com.br/api/v2/cars';
-const AVATAR='/img/pamelacotacoes.png';
+let AVATAR='/img/pamelacotacoes.png'; window.__setAvatar=function(u){ AVATAR=u; };
 const urlParams=new URLSearchParams(window.location.search);
 const indicadorCodigo=urlParams.get('ref')||null;
 const empresaParceiraCodigo=urlParams.get('emp')||null;
@@ -419,6 +419,14 @@ async condutor(){
 /* ---------- 7. IDADE ---------- */
 async idade(){
   await digitando(800);
+  if(formData._idadePortal!=null&&!formData._idadeConfirmada){
+    formData._idadeConfirmada=true; const i=formData._idadePortal; const faixa=i<=25?'18-25':i<=35?'26-35':i<=45?'36-45':i<=60?'46-60':'60+';
+    bolhaPamela('Quem mais dirige é <strong>você</strong>, com <strong>'+i+' anos</strong>? Ou outra pessoa?');
+    areaResposta('<div class="og c2">'+
+      '<div class="oc" onclick="respOpcao(\'idade\',\''+faixa+'\',\'Eu mesmo(a), '+i+' anos\',\'garagem\',1)"><div class="oi">&#9989;</div><div class="ott">Sou eu</div><div class="os">'+i+' anos</div></div>'+
+      '<div class="oc" onclick="fecharArea();passo(\'idade\')"><div class="oi">&#128100;</div><div class="ott">Outra pessoa</div><div class="os">Informar a idade</div></div>'+
+      '</div>');
+    return; }
   bolhaPamela('E a <strong>idade</strong> de quem mais dirige?<br><br><small style="color:var(--mut)">Se alguém de 18 a 25 anos que mora com você também pega o carro, me conta depois no WhatsApp — sem essa informação na apólice, <b>não há cobertura</b> quando essa pessoa estiver dirigindo.</small>');
   areaResposta('<div class="og">'+
     ['18-25','26-35','36-45','46-60','60+'].map(f=>'<div class="oc" onclick="respOpcao(\'idade\',\''+f+'\',\''+(f==='60+'?'Acima de 60':f+' anos')+'\',\'garagem\',1)"><div class="ott">'+(f==='60+'?'Acima de 60':f+' anos')+'</div></div>').join('')+
@@ -438,6 +446,7 @@ async garagem(){
     '<input type="text" class="if" id="inCep" placeholder="00000-000" inputmode="numeric"></div>'+
     '<div class="br"><button class="bn bp" id="btGaragem" disabled>Enviar &rarr;</button></div>');
   const cep=areaAtual.querySelector('#inCep');
+  if(formData._cepPortal){ cep.value=String(formData._cepPortal).replace(/\D/g,'').replace(/^(\d{5})(\d{3})$/,'$1-$2'); }
   cep.addEventListener('input',()=>{ let v=cep.value.replace(/\D/g,'').slice(0,8);
     cep.value=v.length>5?v.slice(0,5)+'-'+v.slice(5):v; });
   areaAtual.querySelector('#btGaragem').addEventListener('click',()=>{
@@ -831,14 +840,57 @@ document.addEventListener('DOMContentLoaded',()=>{
   carregarMarcas();   /* marcas já vêm carregando enquanto a pessoa conversa */
   setTimeout(()=>document.getElementById('pageLoader').classList.add('h'),500);
   const t=urlParams.get('t');
-  if(t){ portalPrefill(t).then(ok=>{ if(ok){ bolhaPamela('Oi, <strong>'+primeiroNome()+'</strong>! Que bom te ver por aqui de novo &#128522; Como você já é da casa, vou direto ao que interessa.'); radarMais(1); setTimeout(()=>passo('temSeguro'),600); } else setTimeout(()=>passo('nome'),300); }); }
+  if(t){ portalPrefill(t).then(ok=>{ if(ok){ bolhaPamela('Oi, <strong>'+primeiroNome()+'</strong>! Que bom te ver por aqui de novo &#128522; Como você já é da casa, vou direto ao que interessa'+(formData._idadePortal!=null?' — e já sei sua idade e onde o carro dorme, então vou pular o que não precisa repetir':'')+'.'); radarMais(1); setTimeout(()=>passo('temSeguro'),600); } else setTimeout(()=>passo('nome'),300); }); }
   else setTimeout(()=>passo('nome'),700);
 });
 /* cliente que veio da própria área (cliente.html?t=...): nome e WhatsApp já conhecidos */
 async function portalPrefill(t){
   try{ await authPronta; const s=await db.collection('portal_clientes').doc(t).get(); if(!s.exists) return false; const p=s.data();
-    formData.nome=p.nome||''; formData.whatsapp=p.whatsapp||''; formData._clienteLeadId=p.leadId||null; return !!formData.nome;
+    formData.nome=p.nome||''; formData.whatsapp=p.whatsapp||''; formData._clienteLeadId=p.leadId||null; formData._portal=p;
+    if(p.idade!=null) formData._idadePortal=p.idade;
+    if(p.endereco&&p.endereco.cep) formData._cepPortal=p.endereco.cep;
+    return !!formData.nome;
   }catch(e){ return false; }
 }
+</script>
+
+<script>
+/* Imagens do site controladas pelo CRM (menu "Imagens do site").
+   Lê o documento público site/imagens pela API REST do Firestore — sem carregar o SDK. */
+(function(){
+  var URL='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/site/imagens';
+  function val(f){ if(!f) return null; if('stringValue' in f) return f.stringValue; if('integerValue' in f) return +f.integerValue; if('doubleValue' in f) return f.doubleValue; if('booleanValue' in f) return f.booleanValue;
+    if(f.mapValue){ var o={}; var ff=f.mapValue.fields||{}; for(var k in ff) o[k]=val(ff[k]); return o; } return null; }
+  function aplicar(cfg){
+    var q=function(s){ return document.querySelector(s); };
+    /* logo do menu / cabeçalho */
+    var lg=cfg.logo_menu||{};
+    document.querySelectorAll('img.logo, .wh-lg, .top img.logo-site').forEach(function(img){
+      if(lg.url) img.src=lg.url;
+      if(lg.altura) img.style.height=lg.altura+'px';
+      if(lg.url||lg.altura) img.style.maxWidth='none';
+    });
+    /* fundo do topo da home */
+    var h=q('.hero'); if(h&&h.dataset.slot==='hero_home'&&cfg.hero_home&&cfg.hero_home.url){
+      h.style.backgroundImage='linear-gradient(90deg,rgba(15,23,42,.94) 0%,rgba(15,23,42,.82) 38%,rgba(15,23,42,.35) 70%,rgba(15,23,42,.15) 100%),url("'+cfg.hero_home.url+'")';
+      h.style.backgroundSize='cover'; h.style.backgroundPosition=(cfg.hero_home.posicao||'right center'); h.classList.add('com-imagem'); }
+    /* fundo do topo das páginas de produto */
+    if(h&&h.dataset.slot==='hero_produtos'&&cfg.hero_produtos&&cfg.hero_produtos.url){
+      h.style.backgroundImage='linear-gradient(90deg,rgba(15,23,42,.94) 0%,rgba(15,23,42,.8) 45%,rgba(15,23,42,.3) 100%),url("'+cfg.hero_produtos.url+'")';
+      h.style.backgroundSize='cover'; h.style.backgroundPosition=(cfg.hero_produtos.posicao||'right center'); }
+    /* topo da área do cliente */
+    var t=q('.top'); if(t&&cfg.hero_cliente&&cfg.hero_cliente.url){
+      t.style.backgroundImage='linear-gradient(90deg,rgba(22,37,78,.95) 0%,rgba(27,44,92,.85) 50%,rgba(30,58,138,.55) 100%),url("'+cfg.hero_cliente.url+'")'; t.style.backgroundSize='cover'; t.style.backgroundPosition='right center'; }
+    /* foto da Pamela (cotações) */
+    if(cfg.pamela_avatar&&cfg.pamela_avatar.url){ window.AVATAR_URL=cfg.pamela_avatar.url;
+      document.querySelectorAll('img.ma, img.wh-av').forEach(function(i){ i.src=cfg.pamela_avatar.url; });
+      if(typeof window.__setAvatar==='function') window.__setAvatar(cfg.pamela_avatar.url); }
+    /* foto da equipe (Quem somos) */
+    if(cfg.pamela_patrick&&cfg.pamela_patrick.url){ document.querySelectorAll('img[src*="pamelapatrick"]').forEach(function(i){ i.src=cfg.pamela_patrick.url; }); }
+    window.SITE_IMAGENS=cfg;
+  }
+  try{ fetch(URL).then(function(r){ return r.ok?r.json():null; }).then(function(d){ if(!d||!d.fields) return; var cfg={}; for(var k in d.fields) cfg[k]=val(d.fields[k]); aplicar(cfg); }).catch(function(){}); }catch(e){}
+})();
+
 </script>
 </body></html>
