@@ -2727,6 +2727,7 @@ function abrirLead(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return; c
       </div>
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
       ${leadCotacaoSite(c)}
+      ${typeof fichaPortal==='function'?fichaPortal(c):''}
       <div style="font-weight:700;font-size:.85rem;margin-bottom:8px"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices (${aps.length})</div>
       ${aps.length?aps.slice().sort((x,y)=>{
           const ax=apEhAtiva(x)?0:1, ay=apEhAtiva(y)?0:1; if(ax!==ay) return ax-ay;
@@ -2811,6 +2812,7 @@ async function lkSalvarDados(){
         {clienteNome:nome, clienteWhatsapp:dados.whatsapp, clienteEmail:dados.email, atualizadoEm:FV.serverTimestamp()}));
       await lote.commit(); }
     toast('Dados atualizados'+(aps.length?' (e nas '+aps.length+' apólice(s) dele)':'')+'.','ok');
+    setTimeout(()=>portalAtualizarRelacionados(id),1500);
     abrirLead(id);
   }catch(e){ console.error(e); toast('Erro ao salvar os dados.','err'); }
 }
@@ -2855,7 +2857,7 @@ async function setLeadCampo(id,campo,valor){ try{ const upd={[campo]:valor||null
 async function moverFase(id,fase){
   if(fase==='negocio_fechado') return modalFechar(id);
   if(fase==='negocio_perdido') return modalPerder(id);
-  try{ await db.collection('leads_crm').doc(id).update({status:fase,atualizadoEm:FV.serverTimestamp()}); toast('Movido para "'+(KANBAN.find(k=>k.key===fase)||{}).label+'".','ok'); }catch(e){ toast('Erro.','err'); }
+  try{ await db.collection('leads_crm').doc(id).update({status:fase,atualizadoEm:FV.serverTimestamp()}); toast('Movido para "'+(KANBAN.find(k=>k.key===fase)||{}).label+'".','ok'); setTimeout(()=>portalAtualizarRelacionados(id),1500); }catch(e){ toast('Erro.','err'); }
 }
 function novoLead(){ openModal(`<div class="modal-head"><h3><i class="fas fa-plus" style="color:var(--brand)"></i> Novo negócio</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
   <div class="modal-body">
@@ -2959,6 +2961,7 @@ async function confirmarPerda(id){ const motivo=document.getElementById('mpMotiv
   const valor=num((document.getElementById('mpValor')||{}).value);
   try{ await db.collection('leads_crm').doc(id).update({status:'negocio_perdido',motivoPerda:motivo,obsPerda:obs||null,
       valorNegociacao:valor, reagendarEm, perdidoEmData:hojeISO(), atualizadoEm:FV.serverTimestamp()});
+    setTimeout(()=>portalAtualizarRelacionados(id),1500);
     if(reagendarEm){ const c=CACHE.leads.find(x=>x.id===id)||{};
       await lkAgendarRetorno(id,reagendarEm,null,'Retomar negociação perdida ('+(MOTIVOS_PERDA[motivo]||motivo)+')'+(valor?' — valia '+money(valor):'')); }
     await db.collection('interacoes_crm').add({leadId:id,tipo:'nota',texto:'Negócio perdido — '+(MOTIVOS_PERDA[motivo]||motivo)+(obs?': '+obs:'')+(reagendarEm?' · reagendado p/ '+reagendarEm.split('-').reverse().join('/'):''),autor:CURRENT_USER?.email?.split('@')[0]||'admin',criadoEm:FV.serverTimestamp()});
@@ -3007,6 +3010,7 @@ async function fecharSemProposta(id){
     await db.collection('leads_crm').doc(id).update({status:'negocio_fechado',
       valorNegociacao:premio, comissaoPct:pct, fechadoEm:FV.serverTimestamp(), fechadoEmData:hojeISO(),
       responsavelId:respId, responsavelNome:f?(f.nome||f.email):null, atualizadoEm:FV.serverTimestamp()});
+    setTimeout(()=>portalAtualizarRelacionados(id),2500);
     /* gera a apólice já com prêmio, comissão e vendedor — é o que alimenta a folha */
     if(premio){
       const fim=ini?(function(d){const x=new Date(d+'T00:00:00');x.setFullYear(x.getFullYear()+1);return hojeISOde(x);})(ini):null;
@@ -3563,6 +3567,7 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
       window.__renovandoDe=null; CACHE.__apoliceRenovacao=null;
       toast('Nova apólice salva — a anterior ficou como renovada.','ok');
     } else toast('Apólice salva.','ok');
+    if(dados.leadId) setTimeout(()=>portalAtualizarRelacionados(dados.leadId),1500);
     closeModal(); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 /* Garante o cliente no menu Clientes (só dados pessoais), sem duplicar */
@@ -3623,6 +3628,7 @@ VIEWS.renovacoes=function(){
 VIEWS.indicacoes=function(){
   const actions=`<button class="btn btn-primary btn-sm" onclick="modalIndicador()"><i class="fas fa-plus"></i> Novo indicador</button>`;
   let html=head('indicacoes',{actions});
+  html+=(typeof ptResumoPrograma==='function'?ptResumoPrograma():'');
   const inds=CACHE.indicadores.slice().sort((a,b)=>(b.indicacoesConvertidas||0)-(a.indicacoesConvertidas||0));
   const indicados=CACHE.leads.filter(l=>l.indicadoPorCodigo);
   const totalConv=inds.reduce((s,i)=>s+(Number(i.indicacoesConvertidas)||0),0);
@@ -9367,7 +9373,8 @@ const atEhAberto=a=>!a.status||a.status==='novo'||a.status==='em_atendimento'||a
 /* quem é esse cliente? por CPF, telefone ou placa */
 function atVincular(a){
   const cpf=atDigitos(a.cpf), fone=atDigitos(a.celular||a.whatsapp), placa=atPlaca(a.placa);
-  const ap=CACHE.apolices.find(x=>placa&&atPlaca(x.veiculoPlaca)===placa&&apEhAtiva(x))
+  const ap=(a.apoliceId&&CACHE.apolices.find(x=>x.id===a.apoliceId))
+        ||CACHE.apolices.find(x=>placa&&atPlaca(x.veiculoPlaca)===placa&&apEhAtiva(x))
         ||CACHE.apolices.find(x=>placa&&atPlaca(x.veiculoPlaca)===placa)
         ||CACHE.apolices.find(x=>cpf&&atDigitos(x.clienteCpf)===cpf&&apEhAtiva(x));
   const lead=CACHE.leads.find(l=>(cpf&&atDigitos(l.cpf)===cpf)||(fone&&atDigitos(l.whatsapp||l.telefone)===fone)||(ap&&ap.leadId&&l.id===ap.leadId));
@@ -9482,6 +9489,164 @@ async function atRegistrarFicha(col,id){
       autor:CURRENT_USER?.email?.split('@')[0]||'admin', criadoEm:FV.serverTimestamp() });
     toast('Registrado na linha do tempo de '+(v.lead.nome||'cliente')+'.','ok'); }
   catch(e){ console.error(e); toast('Não consegui registrar.','err'); }
+}
+
+</script>
+  <script>
+/* =========================================================================
+   PORTAL DO CLIENTE + PROGRAMA DE INDICAÇÃO
+   - Cada cliente com nome, CPF, nascimento e WhatsApp ganha um link próprio
+     (cliente.html?t=TOKEN) — sem senha. O token é a única chave.
+   - O CRM grava um "retrato" em portal_clientes/{token}: apólices, indicações,
+     pontos, produtos sugeridos. Atualiza a cada mudança relevante.
+   - Indicação: o cliente compartilha links com ?ref=CODIGO; o indicado entra
+     no funil com indicadoPorCodigo = CODIGO, para sempre. Pontos = prêmio
+     líquido das apólices fechadas dos indicados. Só pontos, sem recompensa.
+   ========================================================================= */
+const PORTAL_URL='https://retornoseguros.com/cliente.html';
+const PT_PRODUTOS=[
+  {ramo:'Auto',nome:'Seguro Auto',pagina:'cotacao-auto.html',icone:'🚗',frase:'proteger o carro'},
+  {ramo:'Residencial',nome:'Seguro Residencial',pagina:'cotacao-residencial.html',icone:'🏠',frase:'proteger a casa'},
+  {ramo:'Vida',nome:'Seguro de Vida',pagina:'cotacao-vida.html',icone:'❤️',frase:'proteger quem ama'},
+  {ramo:'Empresarial',nome:'Seguro Empresarial',pagina:'cotacao-empresarial.html',icone:'🏢',frase:'proteger a empresa'},
+  {ramo:'Frota',nome:'Seguro de Frota',pagina:'cotacao-frota.html',icone:'🚚',frase:'proteger a frota'},
+  {ramo:'Saúde',nome:'Plano de Saúde Empresarial',pagina:'cotacao-saude.html',icone:'🩺',frase:'cuidar do time'},
+  {ramo:'Dental',nome:'Plano Dental Empresarial',pagina:'cotacao-dental.html',icone:'🦷',frase:'sorrir junto com o time'},
+  {ramo:'Vida em Grupo',nome:'Vida em Grupo',pagina:'cotacao-vida-empresarial.html',icone:'👥',frase:'proteger a equipe'}];
+
+const ptNorm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase();
+const ptDig=s=>String(s||'').replace(/\D/g,'');
+function ptToken(n){ const a='abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s=''; const r=new Uint32Array(n); (window.crypto||{}).getRandomValues?crypto.getRandomValues(r):r.forEach((_,i)=>r[i]=Math.random()*1e9); for(let i=0;i<n;i++) s+=a[r[i]%a.length]; return s; }
+function ptCodigo(lead){
+  const base=ptNorm((lead.nome||'').split(' ')[0]).replace(/[^A-Z]/g,'').slice(0,8)||'RETORNO';
+  const usados=new Set(CACHE.leads.map(l=>l.codigoIndicacao).filter(Boolean));
+  for(let i=0;i<50;i++){ const c=base+String(100+Math.floor(Math.random()*900)); if(!usados.has(c)) return c; }
+  return base+Date.now().toString().slice(-4);
+}
+function ptFaltando(l){ const f=[]; if(!(l.nome||'').trim()) f.push('nome'); if(ptDig(l.cpf).length<11) f.push('CPF'); if(!l.dataNascimento) f.push('data de nascimento'); if(ptDig(l.whatsapp||l.telefone).length<10) f.push('WhatsApp'); return f; }
+
+/* ramo "canônico" de um lead/apólice para bater com PT_PRODUTOS */
+function ptRamoDe(x){
+  const r=ptNorm(x.ramo||x.tipoSeguro||''); const t=ptNorm(x.tipo||'');
+  if(t==='FROTA'||r==='FROTA') return 'Frota';
+  if(r.startsWith('AUTO')) return 'Auto';
+  if(r.startsWith('RESID')) return 'Residencial';
+  if(r.startsWith('VIDA')) return (t==='EMPRESARIAL'||r.includes('GRUPO'))?'Vida em Grupo':'Vida';
+  if(r.startsWith('SAUDE')) return 'Saúde';
+  if(r.startsWith('DENTAL')||r.startsWith('ODONTO')) return 'Dental';
+  if(r.startsWith('EMPRES')) return 'Empresarial';
+  return x.ramo||'';
+}
+/* situação de um indicado, do jeito que o indicador vê */
+function ptStatusIndicado(l){
+  const aps=apolicesDoCliente(l);
+  if(aps.length||l.status==='negocio_fechado'||l.status==='cliente') return 'fechado';
+  if(l.status==='negocio_perdido') return 'perdido';
+  return 'cotando';
+}
+function ptPontosDoIndicado(l){ return apolicesDoCliente(l).reduce((s,a)=>s+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0); }
+function ptIndicadosDe(lead){ if(!lead.codigoIndicacao) return []; return CACHE.leads.filter(l=>l.id!==lead.id&&(l.indicadoPorCodigo||'').toUpperCase()===lead.codigoIndicacao.toUpperCase()); }
+function ptIndicadorDe(lead){ if(!lead.indicadoPorCodigo) return null; return CACHE.leads.find(l=>(l.codigoIndicacao||'').toUpperCase()===String(lead.indicadoPorCodigo).toUpperCase())||null; }
+
+/* o retrato que a página cliente.html lê */
+function ptRetrato(lead){
+  const aps=apolicesDoCliente(lead).map(a=>({ id:a.id, ramo:ptRamoDe(a), ramoOriginal:a.ramo||'', seguradora:a.seguradora||'', numero:a.numeroApolice||'',
+    inicio:a.dataInicioVigencia||null, fim:a.dataFimVigencia||null, status:a.status||'ativa', vigente:apEhAtiva(a),
+    placa:a.veiculoPlaca||null, veiculo:[a.veiculoFabricante,a.veiculoModelo].filter(Boolean).join(' ')||a.veiculoModelo||null, ano:a.veiculoAno||null,
+    fipe:a.fipeAtual||null, premio:Number(a.valorPremio)||null, docs:(a.docsLinks||[]).map(d=>({nome:d.nome||'Documento',url:d.url})) }))
+    .sort((x,y)=>(x.vigente===y.vigente?String(y.fim||'').localeCompare(String(x.fim||'')):(x.vigente?-1:1)));
+  const indicados=ptIndicadosDe(lead).map(l=>({ nome:(l.nome||'').trim().split(' ')[0]||'Alguém', produto:ptRamoDe(l)||'Seguro', status:ptStatusIndicado(l), pontos:Math.round(ptPontosDoIndicado(l)),
+    quando:l.criadoEm&&l.criadoEm.toDate?l.criadoEm.toDate().toISOString().slice(0,10):null }))
+    .sort((a,b)=>String(b.quando||'').localeCompare(String(a.quando||'')));
+  const pontos=indicados.reduce((s,i)=>s+i.pontos,0);
+  const tem=new Set(aps.filter(a=>a.vigente).map(a=>a.ramo));
+  const sugeridos=PT_PRODUTOS.filter(p=>!tem.has(p.ramo)).map(p=>({ramo:p.ramo,nome:p.nome,pagina:p.pagina,icone:p.icone,frase:p.frase}));
+  const cpf=ptDig(lead.cpf);
+  return { leadId:lead.id, nome:lead.nome||'', primeiroNome:(lead.nome||'').trim().split(' ')[0], cpfMascarado:cpf?cpf.slice(0,3)+'.***.***-'+cpf.slice(-2):'',
+    whatsapp:ptDig(lead.whatsapp||lead.telefone), email:lead.email||'', cidade:lead.cidade||'', estado:lead.estado||'',
+    codigoIndicacao:lead.codigoIndicacao||'', apolices:aps, indicados, pontos, sugeridos, produtos:PT_PRODUTOS,
+    ativo:true, atualizadoEm:FV.serverTimestamp() };
+}
+async function portalGerar(leadId,silencioso){
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return null;
+  const falta=ptFaltando(l); if(falta.length){ if(!silencioso) toast('Para gerar o link o cadastro precisa de: '+falta.join(', ')+'.','warn','Faltam dados'); return null; }
+  const token=l.portalToken||ptToken(28); const codigo=l.codigoIndicacao||ptCodigo(l);
+  if(!l.portalToken||!l.codigoIndicacao){ await db.collection('leads_crm').doc(leadId).update({portalToken:token,codigoIndicacao:codigo,portalGeradoEm:FV.serverTimestamp()}); l.portalToken=token; l.codigoIndicacao=codigo; }
+  await db.collection('portal_clientes').doc(token).set(ptRetrato(l));
+  return token;
+}
+async function portalAtualizar(leadId){
+  try{ const l=CACHE.leads.find(x=>x.id===leadId); if(!l||!l.portalToken) return;
+    await db.collection('portal_clientes').doc(l.portalToken).set(ptRetrato(l)); }catch(e){ console.warn('portal',e); }
+}
+/* quando algo muda num indicado, o retrato do INDICADOR também muda (pontos/status) */
+async function portalAtualizarRelacionados(leadId){
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  await portalAtualizar(leadId);
+  const ind=ptIndicadorDe(l); if(ind) await portalAtualizar(ind.id);
+}
+async function portalRegerar(leadId){
+  if(!confirm('Gerar um link novo? O link antigo deixa de funcionar na hora.')) return;
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+  try{ if(l.portalToken) await db.collection('portal_clientes').doc(l.portalToken).delete(); }catch(e){}
+  const token=ptToken(28); await db.collection('leads_crm').doc(leadId).update({portalToken:token,portalGeradoEm:FV.serverTimestamp()}); l.portalToken=token;
+  await db.collection('portal_clientes').doc(token).set(ptRetrato(l)); toast('Link novo gerado. O anterior foi revogado.','ok'); abrirLead(leadId);
+}
+async function portalRevogar(leadId){
+  if(!confirm('Revogar o acesso? O cliente deixa de abrir a área dele até você gerar um link novo.')) return;
+  const l=CACHE.leads.find(x=>x.id===leadId); if(!l||!l.portalToken) return;
+  try{ await db.collection('portal_clientes').doc(l.portalToken).delete(); await db.collection('leads_crm').doc(leadId).update({portalToken:null}); l.portalToken=null; toast('Acesso revogado.','info'); abrirLead(leadId); }catch(e){ toast('Não consegui revogar.','err'); }
+}
+async function portalGerarLote(){
+  const alvo=CACHE.leads.filter(l=>apolicesDoCliente(l).some(apEhAtiva)&&!ptFaltando(l).length);
+  if(!alvo.length){ toast('Nenhum cliente com apólice vigente e cadastro completo (nome, CPF, nascimento, WhatsApp).','info'); return; }
+  if(!confirm('Gerar/atualizar a área do cliente para '+alvo.length+' cliente(s) com apólice vigente?')) return;
+  let ok=0; for(const l of alvo){ try{ if(await portalGerar(l.id,true)) ok++; }catch(e){ console.warn(e); } }
+  toast('Área do cliente pronta para '+ok+' cliente(s).','ok','Portais');
+  const incompletos=CACHE.leads.filter(l=>apolicesDoCliente(l).some(apEhAtiva)&&ptFaltando(l).length).length;
+  if(incompletos) toast(incompletos+' cliente(s) com apólice vigente ainda sem CPF, nascimento ou WhatsApp — complete o cadastro para liberar o link deles.','warn','Faltam dados');
+}
+function portalLink(l){ return l.portalToken?PORTAL_URL+'?t='+l.portalToken:''; }
+function portalMsgWhats(l){ const p=(l.nome||'').split(' ')[0];
+  return 'Oi '+p+'! Aqui é da Retorno Seguros 😊\n\nCriamos uma área só sua: nela ficam as suas apólices, a assistência 24h com um toque, e o seu link pra indicar quem você gosta.\n\nÉ só abrir — sem senha, sem cadastro:\n'+portalLink(l)+'\n\nGuarda esse link, ele é seu.'; }
+function ptCopiar(txt){ try{ navigator.clipboard.writeText(txt); toast('Copiado.','ok'); }catch(e){ prompt('Copie o link:',txt); } }
+
+/* bloco na ficha do lead */
+function fichaPortal(c){
+  const falta=ptFaltando(c); const link=portalLink(c); const indicados=ptIndicadosDe(c); const indicador=ptIndicadorDe(c);
+  const pontos=Math.round(indicados.reduce((s,l)=>s+ptPontosDoIndicado(l),0));
+  const ST={cotando:['Cotando','var(--info)'],fechado:['Fechado','var(--ok)'],perdido:['Não avançou','var(--text-3)']};
+  return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+      <div style="font-weight:700;font-size:.85rem"><i class="fas fa-key" style="color:var(--brand)"></i> Área do cliente ${c.codigoIndicacao?`<span class="badge" style="background:var(--brand-50);color:var(--brand-dark);margin-left:6px">código ${esc(c.codigoIndicacao)}</span>`:''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${link?`<button class="btn btn-ghost btn-sm" onclick="ptCopiar('${link}')"><i class="fas fa-copy"></i> Copiar link</button>
+          ${waBtn(c.whatsapp||c.telefone,portalMsgWhats(c),'Enviar link')}
+          <button class="btn btn-ghost btn-sm" onclick="portalAtualizar('${c.id}').then(()=>toast('Área atualizada.','ok'))" title="Reenvia apólices, indicações e pontos para a página do cliente"><i class="fas fa-rotate"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="portalRegerar('${c.id}')" title="Gera um link novo e cancela o antigo"><i class="fas fa-arrows-rotate"></i> Novo link</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="portalRevogar('${c.id}')"><i class="fas fa-ban"></i></button>`
+        :`<button class="btn btn-primary btn-sm" onclick="portalGerar('${c.id}').then(t=>{ if(t){ toast('Link criado. Envie pelo WhatsApp.','ok'); abrirLead('${c.id}'); } })" ${falta.length?'disabled':''}><i class="fas fa-link"></i> Gerar link do cliente</button>`}
+      </div></div>
+    ${link?`<div style="font-size:.78rem;color:var(--text-2);word-break:break-all;margin-bottom:8px"><i class="fas fa-lock" style="color:var(--text-3)"></i> ${esc(link)}</div>`
+      :(falta.length?`<div style="font-size:.8rem;color:var(--warn)"><i class="fas fa-triangle-exclamation"></i> Para liberar o link, complete: <b>${falta.join(', ')}</b> (Editar dados).</div>`:'')}
+    ${c.clienteLeadId&&c.clienteLeadId!==c.id&&CACHE.leads.find(x=>x.id===c.clienteLeadId)?`<div style="font-size:.82rem;margin-top:6px"><i class="fas fa-user-check" style="color:var(--ok)"></i> Cotação aberta pela área do cliente de <b><a href="#" onclick="abrirLead('${c.clienteLeadId}');return false">${esc(CACHE.leads.find(x=>x.id===c.clienteLeadId).nome)}</a></b> — é a mesma pessoa, já cadastrada.</div>`:''}
+    ${indicador?`<div style="font-size:.82rem;margin-top:6px"><i class="fas fa-share-nodes" style="color:var(--brand)"></i> Indicado por <b><a href="#" onclick="abrirLead('${indicador.id}');return false">${esc(indicador.nome)}</a></b> (código ${esc(c.indicadoPorCodigo)})</div>`
+      :(c.indicadoPorCodigo?`<div style="font-size:.82rem;margin-top:6px;color:var(--text-2)"><i class="fas fa-share-nodes"></i> Veio com o código de indicação <b>${esc(c.indicadoPorCodigo)}</b> (indicador não encontrado no CRM)</div>`:'')}
+    ${indicados.length?`<div style="margin-top:10px"><div style="font-size:.8rem;font-weight:700;margin-bottom:4px">Indicações feitas por ${esc((c.nome||'').split(' ')[0])}: ${indicados.length} · <span style="color:var(--brand-dark)">${pontos.toLocaleString('pt-BR')} pontos</span></div>
+      ${indicados.map(l=>{ const s=ST[ptStatusIndicado(l)]; return `<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;padding:4px 0;border-top:1px dashed var(--border)"><a href="#" onclick="abrirLead('${l.id}');return false"><b>${esc(l.nome||'-')}</b></a><span style="color:var(--text-3)">${esc(ptRamoDe(l)||l.ramo||'')}</span>${statusBadge(s[0],s[1])}<span style="margin-left:auto;color:var(--text-2)">${ptStatusIndicado(l)==='fechado'?Math.round(ptPontosDoIndicado(l)).toLocaleString('pt-BR')+' pts':''}</span></div>`; }).join('')}</div>`:''}
+  </div>`;
+}
+
+/* visão geral do programa (dentro do menu Indicações) */
+function ptResumoPrograma(){
+  const indicadores=CACHE.leads.filter(l=>l.codigoIndicacao&&ptIndicadosDe(l).length).map(l=>{ const ind=ptIndicadosDe(l); return {l,ind,pontos:Math.round(ind.reduce((s,x)=>s+ptPontosDoIndicado(x),0)),fechados:ind.filter(x=>ptStatusIndicado(x)==='fechado').length}; }).sort((a,b)=>b.pontos-a.pontos||b.ind.length-a.ind.length);
+  const comPortal=CACHE.leads.filter(l=>l.portalToken).length;
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-share-nodes"></i> Programa de indicação dos clientes</h3>
+      <div style="display:flex;gap:6px"><span style="font-size:.78rem;color:var(--text-3);align-self:center">${comPortal} cliente(s) com área própria</span><button class="btn btn-ghost btn-sm" onclick="portalGerarLote()"><i class="fas fa-key"></i> Gerar/atualizar áreas dos clientes ativos</button></div></div>
+    ${indicadores.length?`<div class="tbl-wrap"><table><thead><tr><th>Cliente indicador</th><th>Código</th><th>Indicações</th><th>Fechadas</th><th>Pontos</th><th></th></tr></thead><tbody>
+      ${indicadores.map(r=>`<tr><td><b>${esc(r.l.nome)}</b></td><td>${esc(r.l.codigoIndicacao)}</td><td>${r.ind.length}</td><td>${r.fechados}</td><td><b>${r.pontos.toLocaleString('pt-BR')}</b></td><td><button class="btn btn-ghost btn-sm" onclick="abrirLead('${r.l.id}')"><i class="fas fa-id-badge"></i></button></td></tr>`).join('')}</tbody></table></div>`
+      :`<p style="color:var(--text-3);font-size:.85rem;padding:6px 0">Nenhuma indicação de cliente ainda. Gere as áreas dos clientes ativos e envie o link pelo WhatsApp — cada cliente ganha o próprio código de indicação.</p>`}
+  </div>`;
 }
 
 </script>
