@@ -850,6 +850,7 @@ const MENU = [
     { id:'empresas', icon:'fa-building', label:'Empresas' },
     { id:'movimentacoes', icon:'fa-right-left', label:'Movimentações', badge:'mov' },
     { id:'importar', icon:'fa-file-import', label:'Importar' },
+    { id:'indicacoes_empresas', icon:'fa-share-nodes', label:'Indicações das empresas' },
   ]},
   { sec:'Parceiros', items:[
     { id:'parceiros', icon:'fa-handshake', label:'Parceiros' },
@@ -881,6 +882,7 @@ const EXPLAIN = {
   clientes:'Cadastro completo dos clientes — dados da pessoa, histórico de interações e indicações.',
   apolices:'Apólices ativas dos clientes, com ramo, vigência e valores.',
   indicacoes:'Quem indicou quem: rede de indicações e recompensas.',
+  indicacoes_empresas:'As empresas de benefícios indicam os colaboradores para vida, residencial e auto — aqui você vê o que cada uma trouxe.',
   renovacoes:'Apólices que estão perto do vencimento e precisam de atenção.',
   empresas:'Empresas clientes cujos beneficiários você administra — com dados de acesso ao portal da seguradora.',
   movimentacoes:'Inclusões e exclusões de beneficiários enviadas pelas empresas. Organize por empresa, aprove e leve ao portal da seguradora.',
@@ -1169,6 +1171,7 @@ function bootstrap(){
   // Empresas clientes
   LISTENERS.push(db.collection('empresas_clientes').onSnapshot(s=>{
     CACHE.empresas=s.docs.map(d=>({id:d.id,...d.data()}));
+    if(typeof eiChecarAuto==='function') eiChecarAuto();
     const r=(location.hash||'#dashboard').slice(1);
     if(r==='movimentacoes') VIEWS.movimentacoes();
     if(r==='empresas') VIEWS.empresas();
@@ -2866,6 +2869,9 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
         <div class="form-row" style="margin:0"><label>Origem</label><select onchange="setLeadCampo('${c.id}','origem',this.value)"><option value="">—</option>${opt('',Object.entries(ORIGENS),c.origem)}</select></div>
       </div>`:''}
       ${c.status==='negocio_perdido'?`<div style="background:var(--danger-bg);color:var(--danger);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.83rem"><b>Perdido:</b> ${esc(MOTIVOS_PERDA[c.motivoPerda]||c.motivoPerda||'-')}${c.reagendarEm?` · reagendado p/ ${fmtData(c.reagendarEm)}`:''}</div>`:''}
+      ${c.indicadoPorEmpresaCodigo?`<div style="background:var(--brand-50);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.84rem">
+        <i class="fas fa-building" style="color:var(--brand)"></i> Indicado pela empresa <b>${esc(c.indicadoPorEmpresaNome||c.indicadoPorEmpresaCodigo)}</b>
+        <span style="color:var(--text-3)">— veio pelo link de benefícios que o RH compartilhou (código ${esc(c.indicadoPorEmpresaCodigo)})</span></div>`:''}
       ${leadCotacaoSite(c)}
       ${typeof fichaPortal==='function'?fichaPortal(c):''}${typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
       <details ${aps.length&&aps.length<=3&&vFunil?'open':''} style="margin-bottom:12px">
@@ -11331,6 +11337,186 @@ async function renDesfazer(id){
   try{ await db.collection('apolices_cliente').doc(id).update({status:'ativa',renovadaPor:null,renovadaAuto:false,naoRenovar:true,atualizadoEm:FV.serverTimestamp()});
     a.status='ativa'; a.renovadaPor=null; a.renovadaAuto=false; a.naoRenovar=true;
     toast('Voltou para a fila de renovações.','ok'); VIEWS.renovacoes(); }catch(e){ toast('Não consegui alterar.','err'); }
+}
+
+</script>
+  <script>
+/* =========================================================================
+   INDICAÇÃO PELAS EMPRESAS (benefícios)
+   Toda empresa com contrato ativo de benefícios ganha um código próprio.
+   Ela indica os colaboradores para Vida, Residencial e Auto pelo portal dela;
+   o lead cai no nosso funil já marcado com a empresa que indicou.
+   ========================================================================= */
+const EI_RAMOS=[
+  {ramo:'Vida',   pagina:'cotacao-vida.html',        icone:'fa-heart',      cor:'var(--danger)', frase:'proteger quem eles amam'},
+  {ramo:'Residencial', pagina:'cotacao-residencial.html', icone:'fa-house', cor:'var(--info)',   frase:'proteger a casa'},
+  {ramo:'Auto',   pagina:'cotacao-auto.html',        icone:'fa-car',        cor:'var(--brand)',  frase:'proteger o carro'}];
+const EI_SITE='https://retornoseguros.com/';
+const eiNorm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase();
+
+function eiCodigoNovo(emp){
+  const base=eiNorm(emp.nomeEmpresa||emp.razaoSocial||'EMPRESA').replace(/[^A-Z]/g,'').slice(0,7)||'EMPRESA';
+  const usados=new Set((CACHE.empresas||[]).map(e=>e.codigoIndicacao).filter(Boolean));
+  for(let i=0;i<60;i++){ const c=base+String(100+Math.floor(Math.random()*900)); if(!usados.has(c)) return c; }
+  return base+Date.now().toString().slice(-4);
+}
+const eiAtiva=e=>e.status!=='inativo'&&e.status!=='cancelado';
+function eiLeadsDe(emp){
+  const cod=String(emp.codigoIndicacao||'').toUpperCase(); if(!cod) return [];
+  return (CACHE.leads||[]).filter(l=>String(l.indicadoPorEmpresaCodigo||'').toUpperCase()===cod);
+}
+function eiStatusLead(l){
+  if(l.status==='negocio_fechado'||l.status==='cliente'||apolicesDoCliente(l).some(apVigente)) return 'fechado';
+  if(l.status==='negocio_perdido') return 'perdido';
+  return 'cotando';
+}
+const EI_ST={cotando:['Cotando','var(--info)'],fechado:['Fechou','var(--ok)'],perdido:['Não avançou','var(--text-3)']};
+
+/* gera o código de quem ainda não tem e publica o índice que o site lê */
+async function eiGerarCodigos(silencioso){
+  const alvo=(CACHE.empresas||[]).filter(e=>eiAtiva(e)&&!e.codigoIndicacao);
+  if(!alvo.length){ if(!silencioso) toast('Todas as empresas ativas já têm código de indicação.','info'); return 0; }
+  if(!silencioso&&!confirm('Gerar o código de indicação para '+alvo.length+' empresa(s)?\n\nCada uma passa a ver a aba "Indique colaboradores" no portal dela.')) return 0;
+  let n=0;
+  for(const e of alvo){
+    try{ const cod=eiCodigoNovo(e);
+      await db.collection('empresas_clientes').doc(e.id).update({codigoIndicacao:cod,indicacaoAtiva:true,indicacaoDesde:FV.serverTimestamp()});
+      e.codigoIndicacao=cod; e.indicacaoAtiva=true; n++;
+    }catch(err){ console.warn('ei gerar',e.id,err); }
+  }
+  await eiPublicarIndice();
+  if(!silencioso&&n) toast(n+' empresa(s) com código criado. O portal delas já mostra a aba de indicação.','ok','Pronto');
+  return n;
+}
+/* índice público (coleção `site`, leitura liberada): o site usa para dizer
+   "a empresa XYZ se preocupa com a sua proteção" na abertura da cotação */
+async function eiPublicarIndice(){
+  const mapa={};
+  (CACHE.empresas||[]).forEach(e=>{ const c=String(e.codigoIndicacao||'').trim().toUpperCase(); if(!c) return;
+    if(e.indicacaoAtiva===false||!eiAtiva(e)) return;
+    mapa[c]={nome:e.nomeEmpresa||e.razaoSocial||'', empresaId:e.id}; });
+  try{ await db.collection('site').doc('empresas_indicacao').set({empresas:mapa,atualizadoEm:FV.serverTimestamp()});
+  }catch(e){ console.warn('ei indice',e); }
+}
+let EI_AUTO=false;
+function eiChecarAuto(){
+  if(EI_AUTO) return; if(!(CACHE.empresas||[]).length) return; EI_AUTO=true;
+  setTimeout(async()=>{ const n=await eiGerarCodigos(true);
+    if(n) toast(n+' empresa(s) de benefícios ganharam link de indicação para os colaboradores.','info','Indicação por empresa');
+    else await eiPublicarIndice();
+    if(((location.hash||'').slice(1))==='indicacoes_empresas') VIEWS.indicacoes_empresas();
+  },5000);
+}
+function eiLink(emp,ramo){
+  const r=EI_RAMOS.find(x=>x.ramo===ramo);
+  return EI_SITE+(r?r.pagina:'')+'?emp='+encodeURIComponent(emp.codigoIndicacao||'');
+}
+
+/* ---------- tela: Indicações das empresas ---------- */
+let EI_F={busca:'',empresa:'',status:''};
+VIEWS.indicacoes_empresas=function(){
+  const empresas=(CACHE.empresas||[]).filter(eiAtiva);
+  const comCodigo=empresas.filter(e=>e.codigoIndicacao);
+  const linhas=[];
+  comCodigo.forEach(e=>eiLeadsDe(e).forEach(l=>linhas.push({e,l,st:eiStatusLead(l)})));
+  const fechados=linhas.filter(x=>x.st==='fechado');
+  const premio=fechados.reduce((s,x)=>s+apolicesDoCliente(x.l).filter(apVigente).reduce((t,a)=>t+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0),0);
+  const actions=`<button class="btn btn-primary btn-sm" onclick="eiGerarCodigos()"><i class="fas fa-key"></i> Gerar códigos das empresas</button>`;
+  let html=head('indicacoes_empresas',{actions});
+  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="kpi"><div class="ico i-brand"><i class="fas fa-building"></i></div><div class="val">${comCodigo.length}</div><div class="lbl">Empresas indicando</div>
+      ${empresas.length-comCodigo.length?`<div class="foot" style="color:var(--warn)">${empresas.length-comCodigo.length} ainda sem código</div>`:''}</div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-user-plus"></i></div><div class="val">${linhas.length}</div><div class="lbl">Colaboradores indicados</div></div>
+    <div class="kpi"><div class="ico i-ok"><i class="fas fa-trophy"></i></div><div class="val">${fechados.length}</div><div class="lbl">Fecharam seguro</div>
+      <div class="foot">${linhas.length?Math.round(fechados.length/linhas.length*100):0}% de conversão</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.3rem">${money(premio)}</div><div class="lbl">Prêmio vindo daqui</div></div>
+  </div>`;
+
+  /* ranking das empresas */
+  const rank=comCodigo.map(e=>{ const ls=eiLeadsDe(e);
+    return {e,n:ls.length,f:ls.filter(l=>eiStatusLead(l)==='fechado').length,c:ls.filter(l=>eiStatusLead(l)==='cotando').length}; })
+    .sort((a,b)=>b.f-a.f||b.n-a.n||String(a.e.nomeEmpresa||'').localeCompare(String(b.e.nomeEmpresa||'')));
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-building"></i> Empresas e seus códigos</h3>
+      <span style="font-size:.78rem;color:var(--text-3)">o link fica na aba "Indique colaboradores" do portal de cada uma</span></div>
+    ${rank.length?`<div class="tbl-wrap"><table><thead><tr><th>Empresa</th><th>Código</th><th>Indicados</th><th>Cotando</th><th>Fecharam</th><th>Situação</th><th></th></tr></thead><tbody>
+      ${rank.map(r=>`<tr>
+        <td><b>${esc(r.e.nomeEmpresa||r.e.razaoSocial||'-')}</b>${r.e.cnpj?`<div style="font-size:.73rem;color:var(--text-3)">${esc(fmtCNPJ(r.e.cnpj))}</div>`:''}</td>
+        <td><span class="badge" style="background:var(--brand-50);color:var(--brand-dark)">${esc(r.e.codigoIndicacao)}</span></td>
+        <td><b>${r.n}</b></td><td>${r.c||'—'}</td><td><b style="color:var(--ok)">${r.f||'—'}</b></td>
+        <td>${r.e.indicacaoAtiva===false?'<span class="badge" style="background:var(--surface-3);color:var(--text-3)">pausada</span>':'<span class="badge" style="background:var(--ok-bg);color:var(--ok)">ativa</span>'}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="eiCardEmpresa('${r.e.id}')" title="Ver indicações"><i class="fas fa-eye"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="eiCopiarLinks('${r.e.id}')" title="Copiar os links dessa empresa"><i class="fas fa-copy"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="eiAlternar('${r.e.id}')" title="${r.e.indicacaoAtiva===false?'Reativar':'Pausar'}"><i class="fas fa-${r.e.indicacaoAtiva===false?'play':'pause'}"></i></button></td></tr>`).join('')}
+      </tbody></table></div>`
+      :`<div class="empty"><div class="em-ic"><i class="fas fa-share-nodes"></i></div><h4>Nenhuma empresa com código ainda</h4>
+        <p>Clique em "Gerar códigos das empresas" — cada empresa de benefícios passa a ter a aba de indicação no portal dela.</p></div>`}</div>`;
+
+  /* leads indicados */
+  let lista=linhas.slice().sort((a,b)=>(b.l.criadoEm?.seconds||0)-(a.l.criadoEm?.seconds||0));
+  if(EI_F.empresa) lista=lista.filter(x=>x.e.id===EI_F.empresa);
+  if(EI_F.status) lista=lista.filter(x=>x.st===EI_F.status);
+  if(EI_F.busca){ const q=EI_F.busca.toLowerCase(); lista=lista.filter(x=>`${x.l.nome||''} ${x.l.whatsapp||''} ${x.l.ramo||''}`.toLowerCase().includes(q)); }
+  html+=`<div class="card"><div class="card-head" style="flex-wrap:wrap;gap:8px"><h3><i class="fas fa-user-plus"></i> Colaboradores indicados (${lista.length})</h3>
+    <div class="filters" style="margin:0">
+      <input type="text" placeholder="Buscar nome, telefone..." value="${esc(EI_F.busca)}" oninput="EI_F.busca=this.value;redesenhar(VIEWS.indicacoes_empresas)" style="min-width:190px">
+      <select onchange="EI_F.empresa=this.value;VIEWS.indicacoes_empresas()" style="width:auto"><option value="">Todas as empresas</option>
+        ${comCodigo.map(e=>`<option value="${e.id}" ${EI_F.empresa===e.id?'selected':''}>${esc(e.nomeEmpresa||e.razaoSocial||'')}</option>`).join('')}</select>
+      <select onchange="EI_F.status=this.value;VIEWS.indicacoes_empresas()" style="width:auto"><option value="">Todos os status</option>
+        ${Object.entries(EI_ST).map(([k,v])=>`<option value="${k}" ${EI_F.status===k?'selected':''}>${v[0]}</option>`).join('')}</select>
+    </div></div>
+    ${lista.length?`<div class="tbl-wrap"><table><thead><tr><th>Colaborador</th><th>Empresa que indicou</th><th>Ramo</th><th>Quando</th><th>Status</th><th></th></tr></thead><tbody>
+      ${lista.slice(0,300).map(({e,l,st})=>`<tr>
+        <td><b>${esc(l.nome||'-')}</b><div style="font-size:.73rem;color:var(--text-3)">${esc(foneBR(l.whatsapp||l.telefone))||''}</div></td>
+        <td>${esc(e.nomeEmpresa||e.razaoSocial||'')}</td>
+        <td>${esc(l.ramo||l.tipoSeguro||'—')}</td>
+        <td style="color:var(--text-3);font-size:.82rem">${l.criadoEm?fmtData(l.criadoEm):'—'}</td>
+        <td>${statusBadge(EI_ST[st][0],EI_ST[st][1])}</td>
+        <td style="white-space:nowrap">${waBtn(l.whatsapp||l.telefone,'Olá '+((l.nome||'').split(' ')[0]||'')+'! Aqui é da Retorno Seguros — a '+(e.nomeEmpresa||'sua empresa')+' pediu para falarmos com você sobre a sua proteção.')}
+          <button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-eye"></i></button></td></tr>`).join('')}
+      </tbody></table></div>`
+      :`<div class="empty"><div class="em-ic"><i class="fas fa-user-plus"></i></div><h4>Nenhum colaborador indicado ainda</h4>
+        <p>Assim que uma empresa compartilhar o link dela, o colaborador que abrir a cotação aparece aqui e no funil.</p></div>`}</div>`;
+  setView(html);
+};
+function eiCardEmpresa(id){
+  const e=(CACHE.empresas||[]).find(x=>x.id===id); if(!e) return;
+  const ls=eiLeadsDe(e);
+  openModal(`<div class="modal-head"><h3><i class="fas fa-building" style="color:var(--brand)"></i> ${esc(e.nomeEmpresa||e.razaoSocial||'')}
+      <span class="badge" style="background:var(--brand-50);color:var(--brand-dark);margin-left:8px">${esc(e.codigoIndicacao||'sem código')}</span></h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:8px">Links que a empresa compartilha</div>
+      ${EI_RAMOS.map(r=>`<div style="display:flex;gap:8px;align-items:center;margin-bottom:7px;font-size:.83rem">
+        <i class="fas ${r.icone}" style="color:${r.cor};width:16px"></i><b style="width:92px">${r.ramo}</b>
+        <input type="text" readonly value="${esc(eiLink(e,r.ramo))}" style="flex:1;font-size:.78rem" onclick="this.select()">
+        <button class="btn btn-ghost btn-sm" onclick="ptCopiar('${esc(eiLink(e,r.ramo))}')"><i class="fas fa-copy"></i></button></div>`).join('')}
+      <div style="font-weight:700;font-size:.85rem;margin:16px 0 8px">Quem essa empresa já indicou (${ls.length})</div>
+      ${ls.length?`<div class="tbl-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
+        <thead><tr><th>Colaborador</th><th>Ramo</th><th>Quando</th><th>Status</th><th></th></tr></thead><tbody>
+        ${ls.map(l=>{ const st=EI_ST[eiStatusLead(l)];
+          return `<tr><td><b>${esc(l.nome||'-')}</b></td><td>${esc(l.ramo||'—')}</td>
+          <td style="color:var(--text-3);font-size:.82rem">${l.criadoEm?fmtData(l.criadoEm):'—'}</td>
+          <td>${statusBadge(st[0],st[1])}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="abrirLead('${l.id}')"><i class="fas fa-eye"></i></button></td></tr>`; }).join('')}
+        </tbody></table></div>`:`<p style="color:var(--text-3);font-size:.85rem">Ainda ninguém. Vale lembrar o RH de compartilhar no grupo da equipe.</p>`}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="eiCopiarLinks('${e.id}')"><i class="fas fa-copy"></i> Copiar mensagem pronta</button>
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+function eiMensagem(e){
+  return 'Pessoal, um benefício a mais da '+(e.nomeEmpresa||'empresa')+': a Retorno Seguros, que cuida do nosso plano, preparou condições para vocês e para a família.\n\n'
+    +EI_RAMOS.map(r=>'• '+r.ramo+' — '+eiLink(e,r.ramo)).join('\n')
+    +'\n\nÉ uma conversa de 2 minutos, sem compromisso. Quem quiser, é só abrir o link.';
+}
+function eiCopiarLinks(id){ const e=(CACHE.empresas||[]).find(x=>x.id===id); if(!e) return; ptCopiar(eiMensagem(e)); }
+async function eiAlternar(id){
+  const e=(CACHE.empresas||[]).find(x=>x.id===id); if(!e) return;
+  try{ await db.collection('empresas_clientes').doc(id).update({indicacaoAtiva:e.indicacaoAtiva===false,atualizadoEm:FV.serverTimestamp()});
+    e.indicacaoAtiva=e.indicacaoAtiva===false; await eiPublicarIndice();
+    toast(e.indicacaoAtiva?'Indicação reativada para esta empresa.':'Indicação pausada — a aba some do portal dela.','ok');
+    VIEWS.indicacoes_empresas();
+  }catch(err){ toast('Não consegui alterar.','err'); }
 }
 
 </script>
