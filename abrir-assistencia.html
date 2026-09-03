@@ -426,7 +426,7 @@
       podeRodar:val('rodar'), localVeiculo:val('local'), transito:val('transito'),
       taxi:val('taxi'), taxiPessoas:(val('taxi')==='Sim'?document.getElementById('taxiPessoas').value.trim():''), taxiDestino:(val('taxi')==='Sim'?document.getElementById('taxiDestino').value.trim():''),
       obs:document.getElementById('obs').value.trim(),
-      fotos:{}, status:'novo', canal:'site'
+      fotos:{}, status:'novo', canal:(window.PORTAL?'portal':'site'), portalToken:(window.PORTAL?window.PORTAL.token:null), apoliceId:(window.PORTAL?window.PORTAL.apoliceId:null)
     };
     // upload fotos (em paralelo e com tempo limite — nunca trava)
     if(fbOk && storage){
@@ -485,5 +485,88 @@
     ok.scrollIntoView({behavior:'smooth',block:'start'});
   }
 </script>
+
+<script>
+/* =======================================================================
+   Cliente veio da própria área (cliente.html?t=...): não pedimos de novo
+   o que já sabemos. Busca o retrato do portal, preenche e recolhe os
+   passos "Seus dados" e "Veículo" num cartão de conferência.
+   ======================================================================= */
+(function(){
+  var q=new URLSearchParams(location.search); var t=q.get('t'); if(!t) return;
+  window.PORTAL={token:t,apoliceId:q.get('ap')||null};
+  function el(id){ return document.getElementById(id); }
+  function set(id,v){ var e=el(id); if(e&&v&&!e.value){ e.value=v; try{ e.dispatchEvent(new Event('input',{bubbles:true})); }catch(x){} } }
+  /* 1) o que veio na URL já entra na hora */
+  set('nome',q.get('nome')); set('celular',q.get('celular')); set('cpf',q.get('cpf'));
+  set('placa',q.get('placa')); set('veiculo',q.get('veiculo'));
+
+  var REST='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/portal_clientes/'+encodeURIComponent(t);
+  function val(f){ if(!f) return null;
+    if('stringValue' in f) return f.stringValue; if('integerValue' in f) return +f.integerValue;
+    if('doubleValue' in f) return f.doubleValue; if('booleanValue' in f) return f.booleanValue;
+    if(f.arrayValue) return (f.arrayValue.values||[]).map(val);
+    if(f.mapValue){ var o={},ff=f.mapValue.fields||{}; for(var k in ff) o[k]=val(ff[k]); return o; }
+    return null; }
+
+  function cartao(p,ap){
+    var box=document.createElement('div'); box.className='portal-box'; box.id='portalBox';
+    var partes=[];
+    if(ap){ partes.push('<b>'+(ap.ramoOriginal||ap.ramo||'Apólice')+'</b>'+(ap.seguradora?' · '+ap.seguradora:'')+(ap.numero?' · nº '+ap.numero:'')); 
+      if(ap.veiculo||ap.placa) partes.push((ap.veiculo||'')+(ap.placa?' · '+ap.placa:'')); 
+      if(ap.fim) partes.push('vigente até '+String(ap.fim).slice(0,10).split('-').reverse().join('/')); }
+    box.innerHTML='<div class="pb-h"><span class="pb-ic">🛡️</span><div><b>Oi, '+(p.primeiroNome||'')+'! Já sei quem você é.</b>'
+      +'<div class="pb-s">'+(partes.length?partes.join(' · '):'Seus dados vieram da sua área — confira abaixo.')+'</div></div></div>'
+      +'<div class="pb-d"><span>'+(p.nome||'')+'</span><span>'+(p.whatsapp?fone(p.whatsapp):'')+'</span>'
+      +(ap&&ap.placa?'<span>placa '+ap.placa+'</span>':'')+'</div>'
+      +'<button type="button" class="pb-b" onclick="portalCorrigir()">Algum dado mudou? Corrigir</button>';
+    return box;
+  }
+  function fone(d){ d=String(d||'').replace(/\D/g,'').replace(/^55/,'');
+    return d.length>=10?('('+d.slice(0,2)+') '+d.slice(2,d.length>10?7:6)+'-'+d.slice(d.length>10?7:6)):d; }
+  window.portalCorrigir=function(){
+    document.querySelectorAll('[data-portal-oculto]').forEach(function(s){ s.style.display=''; });
+    var b=document.querySelector('#portalBox .pb-b'); if(b) b.style.display='none';
+  };
+  function esconderPasso(campoId){
+    var e=el(campoId); if(!e) return null;
+    var sec=e.closest('section')||e.closest('.bloco')||e.closest('.card');
+    if(sec){ sec.setAttribute('data-portal-oculto','1'); sec.style.display='none'; }
+    return sec;
+  }
+  var css=document.createElement('style');
+  css.textContent='.portal-box{background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:16px;padding:16px 18px;margin:0 0 18px}'
+    +'.pb-h{display:flex;gap:12px;align-items:flex-start}.pb-ic{font-size:1.6rem;line-height:1}'
+    +'.pb-h b{color:#1b2c5c;font-size:1rem}.pb-s{font-size:.86rem;color:#334155;margin-top:3px}'
+    +'.pb-d{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}'
+    +'.pb-d span{background:#fff;border:1px solid #dbeafe;border-radius:20px;padding:4px 12px;font-size:.8rem;color:#1e3a8a;font-weight:600}'
+    +'.pb-b{margin-top:10px;background:none;border:none;color:#0284c7;font-weight:700;font-size:.82rem;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline}';
+  document.head.appendChild(css);
+
+  fetch(REST).then(function(r){ return r.ok?r.json():null; }).then(function(d){
+    if(!d||!d.fields) return;
+    var p={}; for(var k in d.fields) p[k]=val(d.fields[k]);
+    if(p.ativo===false) return;
+    var ap=null; var aps=p.apolices||[];
+    if(window.PORTAL.apoliceId) ap=aps.filter(function(a){ return a.id===window.PORTAL.apoliceId; })[0]||null;
+    if(!ap) ap=aps.filter(function(a){ return a.vigente; })[0]||null;
+    set('nome',p.nome); set('celular',fone(p.whatsapp)); set('cpf',p.cpfCompleto||'');
+    if(ap){ set('placa',ap.placa); set('veiculo',[ap.veiculo,ap.ano].filter(Boolean).join(' ')); }
+    window.PORTAL.apolice=ap; window.PORTAL.pessoa=p;
+    var alvo=document.getElementById('form')||document.querySelector('main')||document.body;
+    alvo.parentNode.insertBefore(cartao(p,ap),alvo);
+    /* recolhe os passos que já estão preenchidos */
+    if(el('nome')&&el('nome').value&&el('celular')&&el('celular').value) esconderPasso('nome');
+    if(ap&&el('placa')&&el('placa').value) esconderPasso('placa');
+    /* renumera os passos visíveis para não ficar "1, 3, 4" */
+    setTimeout(function(){ var n=1;
+      Array.prototype.forEach.call(document.querySelectorAll('.n'),function(sp){
+        if(sp.offsetParent===null) return;            /* dentro de um passo escondido */
+        if(!/^\s*\d+\s*$/.test(sp.textContent)) return;
+        sp.textContent=n++; }); },30);
+  }).catch(function(){});
+})();
+</script>
+
 </body>
 </html>
