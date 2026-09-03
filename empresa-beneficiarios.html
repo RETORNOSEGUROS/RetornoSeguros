@@ -563,12 +563,22 @@ function escutarDados(){
     render();
   },e=>console.error('movimentacoes',e)));
   // acompanha mudanças de contrato/valores feitas pela corretora
+  /* colaboradores que abriram cotação pelo nosso link */
+  if(EMP&&EMP.codigoIndicacao){
+    UNSUB.push(db.collection('leads_crm').where('indicadoPorEmpresaCodigo','==',EMP.codigoIndicacao).onSnapshot(s=>{
+      INDIC=s.docs.map(d=>({id:d.id,...d.data()}));
+      INDIC.sort((a,b)=>{const x=a.criadoEm&&a.criadoEm.toDate?a.criadoEm.toDate():new Date(0);
+                         const y=b.criadoEm&&b.criadoEm.toDate?b.criadoEm.toDate():new Date(0); return y-x;});
+      render();
+    },e=>console.warn('indicacoes',e)));
+  }
   UNSUB.push(db.collection('empresas_clientes').doc(EMP_ID).onSnapshot(d=>{
     if(d.exists){ EMP={id:d.id,...d.data()};
       document.getElementById('empNome').textContent=EMP.nomeEmpresa||'Empresa'; render(); }
   },e=>console.error('empresa',e)));
   render();
 }
+let INDIC=[];
 const ativos=()=>BENEF.filter(b=>b.status!=='inativo');
 const pendentes=()=>MOVS.filter(m=>m.status==='pendente');
 
@@ -582,13 +592,15 @@ const ABAS=[
   {k:'movimentacoes',n:'Movimentações', i:'fa-right-left'},
   {k:'perfil',       n:'Perfil da equipe', i:'fa-chart-pie'},
   {k:'fatura',       n:'Fatura',        i:'fa-file-invoice-dollar'},
-  {k:'plano',        n:'Meu plano',     i:'fa-book-open'}
+  {k:'plano',        n:'Meu plano',     i:'fa-book-open'},
+  {k:'indicar',      n:'Indique colaboradores', i:'fa-share-nodes'}
 ];
 function irPara(k){ TAB=k; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 function render(){
   if(!EMP) return;
   const p=pendentes().length;
-  document.getElementById('tabsbar').innerHTML=ABAS.map(a=>
+  const podeIndicar=!!(EMP&&EMP.codigoIndicacao&&EMP.indicacaoAtiva!==false);
+  document.getElementById('tabsbar').innerHTML=ABAS.filter(a=>a.k!=='indicar'||podeIndicar).map(a=>
     `<button class="tb ${TAB===a.k?'on':''}" onclick="irPara('${a.k}')"><i class="fas ${a.i}"></i> ${a.n}${a.k==='movimentacoes'&&p?` <span class="pill">${p}</span>`:''}</button>`).join('');
   const box=document.getElementById('panes');
   /* guarda o campo focado e a posição do cursor: sem isso o input de busca é
@@ -598,7 +610,7 @@ function render(){
   let ini=null,fim=null;
   if(id){ try{ ini=a.selectionStart; fim=a.selectionEnd; }catch(e){} }
   box.innerHTML=({resumo:viewResumo,beneficiarios:viewBeneficiarios,dependentes:viewDependentes,
-                  movimentacoes:viewMovimentacoes,perfil:viewPerfil,fatura:viewFatura,plano:viewPlano}[TAB]||viewResumo)();
+                  movimentacoes:viewMovimentacoes,perfil:viewPerfil,fatura:viewFatura,plano:viewPlano,indicar:viewIndicar}[TAB]||viewResumo)();
   if(id){
     const n=document.getElementById(id);
     if(n){ try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
@@ -1212,6 +1224,109 @@ function pdfPerfil(){
       {k:'Idade média',v:(P.media!=null?P.media+' anos':'—')},
       {k:'Tempo médio de casa',v:fmtTempoM(P.tMed),forte:true}],
     arquivo:'perfil-equipe-'+slug(EMP.nomeEmpresa)});
+}
+
+
+/* =========================================================================
+   7) INDIQUE COLABORADORES — a empresa leva proteção para a vida pessoal do time
+   ========================================================================= */
+const IND_RAMOS=[
+  {ramo:'Vida',pagina:'cotacao-vida.html',ic:'fa-heart',cor:'var(--danger)',bg:'var(--danger-bg)',
+   titulo:'Seguro de Vida individual',
+   texto:'O seguro de vida em grupo da empresa protege enquanto a pessoa trabalha aqui. O individual acompanha o colaborador para o resto da vida — e cobre o que o coletivo não cobre.'},
+  {ramo:'Residencial',pagina:'cotacao-residencial.html',ic:'fa-house',cor:'var(--info)',bg:'var(--info-bg)',
+   titulo:'Seguro Residencial',
+   texto:'Incêndio, vendaval, danos elétricos e roubo — mais chaveiro, encanador e eletricista 24h. É o seguro mais barato que existe e quase ninguém tem.'},
+  {ramo:'Auto',pagina:'cotacao-auto.html',ic:'fa-car',cor:'var(--brand)',bg:'var(--brand-50)',
+   titulo:'Seguro Auto',
+   texto:'Colisão, roubo, terceiros e guincho 24h. Para quem depende do carro para trabalhar, é o que evita um prejuízo que consome meses de salário.'}];
+const SITE_RET='https://retornoseguros.com/';
+function indLink(ramo){ const r=IND_RAMOS.find(x=>x.ramo===ramo)||{};
+  return SITE_RET+(r.pagina||'')+'?emp='+encodeURIComponent(EMP.codigoIndicacao||''); }
+function indStatus(l){
+  if(l.status==='negocio_fechado'||l.status==='cliente') return ['Protegido','var(--ok)','var(--ok-bg)'];
+  if(l.status==='negocio_perdido') return ['Não avançou','var(--text-3)','var(--surface-3)'];
+  return ['Cotando','var(--info)','var(--info-bg)'];
+}
+function indMensagem(){
+  return 'Pessoal, um benefício a mais da '+(EMP.nomeEmpresa||'empresa')+':\n\n'
+    +'A Retorno Seguros, que cuida do nosso plano de saúde e dos nossos benefícios, preparou condições para vocês e para a família — seguro de vida individual, residencial e auto.\n\n'
+    +IND_RAMOS.map(r=>'• '+r.ramo+': '+indLink(r.ramo)).join('\n')
+    +'\n\nÉ uma conversa de 2 minutos pelo celular, sem compromisso. A empresa não tem acesso aos seus dados nem paga nada por isso — é só um cuidado a mais com vocês.';
+}
+function indCopiar(t){ if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>toast('Copiado!'),()=>{}); else prompt('Copie:',t); }
+function indWhats(t){ window.open('https://wa.me/?text='+encodeURIComponent(t),'_blank'); }
+function viewIndicar(){
+  const total=INDIC.length;
+  const fechados=INDIC.filter(l=>l.status==='negocio_fechado'||l.status==='cliente').length;
+  const cotando=INDIC.filter(l=>!['negocio_fechado','cliente','negocio_perdido'].includes(l.status)).length;
+  return `
+  <div class="card" style="background:linear-gradient(135deg,var(--brand-50),#fff);border-color:var(--brand-light)">
+    <h3 style="margin:0 0 8px;color:var(--brand-dark)"><i class="fas fa-share-nodes"></i> Um benefício a mais para o seu time</h3>
+    <p style="color:var(--text-2);font-size:.92rem;max-width:70ch;margin:0 0 10px">
+      A ${esc(EMP.nomeEmpresa||'sua empresa')} já cuida da saúde e dos benefícios do time com a Retorno Seguros.
+      Agora dá para estender esse cuidado para a <b>vida pessoal</b> de cada colaborador: seguro de vida individual, residencial e auto,
+      com atendimento humano e condições que a empresa ajudou a abrir.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px">
+      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+        <div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:700">Como funciona</div>
+        <div style="font-size:.86rem;margin-top:5px">Você compartilha o link no grupo da equipe. Quem quiser, abre e conversa com a Pamela em 2 minutos.</div></div>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+        <div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:700">Custo para a empresa</div>
+        <div style="font-size:.86rem;margin-top:5px"><b>Nenhum.</b> Cada colaborador decide sozinho e contrata em nome dele, se quiser.</div></div>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px">
+        <div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:700">Privacidade</div>
+        <div style="font-size:.86rem;margin-top:5px">A empresa vê quem abriu e em que pé está — nunca valores, dados pessoais ou de saúde.</div></div>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="ic" style="background:var(--brand-50);color:var(--brand)"><i class="fas fa-key"></i></div>
+      <div class="val" style="font-size:1.35rem">${esc(EMP.codigoIndicacao||'—')}</div><div class="lbl">Código da ${esc(EMP.nomeEmpresa||'empresa')}</div></div>
+    <div class="kpi"><div class="ic" style="background:var(--info-bg);color:var(--info)"><i class="fas fa-user-plus"></i></div>
+      <div class="val">${total}</div><div class="lbl">Colaboradores que abriram</div></div>
+    <div class="kpi"><div class="ic" style="background:var(--warn-bg);color:var(--warn)"><i class="fas fa-comments"></i></div>
+      <div class="val">${cotando}</div><div class="lbl">Em conversa agora</div></div>
+    <div class="kpi"><div class="ic" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-shield-heart"></i></div>
+      <div class="val">${fechados}</div><div class="lbl">Já estão protegidos</div></div>
+  </div>
+
+  <div class="card"><h3 style="margin:0 0 4px"><i class="fas fa-link"></i> Os links para compartilhar</h3>
+    <p style="color:var(--text-2);font-size:.86rem;margin:0 0 14px">Cada link já avisa que a indicação veio da ${esc(EMP.nomeEmpresa||'sua empresa')} — o colaborador é recebido pelo nome da casa.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+      ${IND_RAMOS.map(r=>`<div style="border:1px solid var(--border);border-radius:14px;padding:16px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px">
+          <span style="width:34px;height:34px;border-radius:10px;background:${r.bg};color:${r.cor};display:flex;align-items:center;justify-content:center"><i class="fas ${r.ic}"></i></span>
+          <b style="font-size:.95rem">${r.titulo}</b></div>
+        <p style="font-size:.84rem;color:var(--text-2);margin:0 0 12px;min-height:62px">${r.texto}</p>
+        <input type="text" readonly value="${esc(indLink(r.ramo))}" onclick="this.select()"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:9px;font-size:.76rem;color:var(--text-2);margin-bottom:9px">
+        <div style="display:flex;gap:7px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="indWhats('${esc(('Olha o que a '+(EMP.nomeEmpresa||'empresa')+' preparou para a gente: '+r.titulo.toLowerCase()+' com a Retorno Seguros. É rapidinho: ').replace(/'/g,"\\'"))}'+'${esc(indLink(r.ramo))}')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+          <button class="btn btn-ghost" onclick="indCopiar('${esc(indLink(r.ramo))}')"><i class="fas fa-copy"></i> Copiar</button>
+        </div></div>`).join('')}
+    </div>
+    <div style="margin-top:16px;background:var(--surface-2);border-radius:12px;padding:14px 16px">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:6px"><i class="fas fa-comment-dots" style="color:var(--brand)"></i> Mensagem pronta para o grupo da equipe</div>
+      <div style="font-size:.84rem;color:var(--text-2);white-space:pre-wrap;line-height:1.6">${esc(indMensagem())}</div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="indWhats(indMensagem())"><i class="fab fa-whatsapp"></i> Enviar no WhatsApp</button>
+        <button class="btn btn-ghost" onclick="indCopiar(indMensagem())"><i class="fas fa-copy"></i> Copiar mensagem</button>
+      </div></div>
+  </div>
+
+  <div class="card"><h3 style="margin:0 0 4px"><i class="fas fa-list-check"></i> Suas indicações (${total})</h3>
+    <p style="color:var(--text-2);font-size:.86rem;margin:0 0 14px">Quem abriu a cotação pelo link da empresa. Você acompanha o andamento — sem ver valores nem dados pessoais.</p>
+    ${total?`<div class="tbl-wrap"><table><thead><tr><th>Colaborador</th><th>Proteção</th><th>Quando</th><th>Situação</th></tr></thead><tbody>
+      ${INDIC.map(l=>{ const st=indStatus(l);
+        return `<tr><td><b>${esc((l.nome||'—').split(' ').slice(0,2).join(' '))}</b></td>
+        <td>${esc(l.ramo||l.tipoSeguro||'—')}</td>
+        <td style="color:var(--text-3)">${l.criadoEm&&l.criadoEm.toDate?l.criadoEm.toDate().toLocaleDateString('pt-BR'):'—'}</td>
+        <td><span class="bdg" style="background:${st[2]};color:${st[1]}">${st[0]}</span></td></tr>`; }).join('')}
+      </tbody></table></div>`
+      :`<div class="empty"><div class="ic"><i class="fas fa-user-plus"></i></div><h4>Ninguém abriu ainda</h4>
+        <p>Compartilhe a mensagem acima no grupo da equipe — costuma ser o empurrão que falta.</p></div>`}
+  </div>`;
 }
 
 /* =========================================================================
