@@ -2379,12 +2379,12 @@ function expandirTodos(v){ MOV_STATE.abertos=MOV_STATE.abertos||{};
   VIEWS.movimentacoes(); }
 
 function linhaDependentes(deps){
-  return `<tr class="dep-row"><td colspan="7" style="padding:0;background:var(--surface-2)">
+  return `<tr class="dep-row"><td colspan="9" style="padding:0;background:var(--surface-2)">
     <div style="padding:10px 16px 14px 46px">
       <div style="font-size:.72rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
         <i class="fas fa-people-roof"></i> Dependentes vinculados</div>
       <table style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
-        <thead><tr><th>Dependente</th><th>Parentesco</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Carteirinha</th><th>Início</th><th style="text-align:right">Ações</th></tr></thead>
+        <thead><tr><th>Dependente</th><th>Parentesco</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Carteirinha</th><th>Cadastro</th><th style="text-align:right">Ações</th></tr></thead>
         <tbody>${deps.map(d=>{const id=idadeDe(d.dataNascimento);return `<tr>
           <td><b>${esc(d.nome)}</b></td>
           <td><span class="badge" style="background:var(--warn-bg);color:var(--warn)">${esc(PARENTESCO_LBL[d.parentesco]||d.parentesco||'—')}</span></td>
@@ -2392,12 +2392,27 @@ function linhaDependentes(deps){
           <td>${d.dataNascimento?fmtData(d.dataNascimento)+(id!=null?` <span style="color:var(--text-3)">· ${id}a</span>`:'')
             :'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
           <td>${chipsPlanos(d.produtos)}</td>
-          <td>${esc(d.cartao)||'<span style="color:var(--text-3)">—</span>'}</td>
-          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td>
+          <td>${String(d.cartao||'').trim()?esc(d.cartao):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
+          <td>${benefStatusCadastro(d)}</td>
           <td style="text-align:right" onclick="event.stopPropagation()">
             <button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(d.cpfN||d.key)}','${esc(d.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td>
           </tr>`;}).join('')}</tbody>
       </table></div></td></tr>`;
+}
+/* o que falta no cadastro de cada pessoa para a operadora aceitar.
+   Titular precisa de nascimento, admissão e carteirinha; dependente não tem admissão. */
+function benefFaltando(p){
+  const f=[];
+  if(!strData(p.dataNascimento)) f.push('nascimento');
+  if(!(p.cpfN&&p.cpfN.length>=11)) f.push('CPF');
+  if(!p.dep){ const adm=p.docs.map(d=>d.dataAdmissao).find(Boolean); if(!strData(adm)) f.push('admissão'); }
+  if(!String(p.cartao||'').trim()) f.push('carteirinha');
+  return f;
+}
+function benefStatusCadastro(p){
+  const f=benefFaltando(p);
+  if(!f.length) return `<span class="badge" style="background:var(--ok-bg);color:var(--ok)"><i class="fas fa-circle-check"></i> completo</span>`;
+  return `<span class="badge" style="background:var(--warn-bg);color:var(--warn)" title="Falta: ${esc(f.join(', '))}"><i class="fas fa-triangle-exclamation"></i> falta ${esc(f.join(', '))}</span>`;
 }
 function renderBeneficiariosAtivos(benef,nome){
   const {titulares,orfaos}=agruparPessoas(benef);
@@ -2416,17 +2431,33 @@ function renderBeneficiariosAtivos(benef,nome){
         ${n?`<i class="fas fa-chevron-${aberto?'down':'right'}" style="color:var(--brand);width:12px;font-size:.8rem"></i>`
            :'<span style="width:12px;display:inline-block"></span>'}
         <div><b>${esc(t.nome)}</b>${t.dataNascimento?`<div style="font-size:.73rem;color:var(--text-3)">Nasc. ${fmtData(t.dataNascimento)}</div>`:''}</div></div></td>
-      <td>${esc(t.cpf)||'-'}</td>
+      <td>${(t.cpfN&&t.cpfN.length>=11)?esc(t.cpf):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
       <td>${t.dataNascimento?fmtData(t.dataNascimento)+(idadeDe(t.dataNascimento)!=null?` <span style="color:var(--text-3)">· ${idadeDe(t.dataNascimento)}a</span>`:'')
         :'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
+      <td>${(function(){const a=t.docs.map(d=>d.dataAdmissao).find(Boolean);return a?fmtData(a)+(tempoDeCasa(a)!=null?` <span style="color:var(--text-3)">· ${fmtTempo(tempoDeCasa(a))}</span>`:''):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>';})()}</td>
+      <td>${String(t.cartao||'').trim()?esc(t.cartao):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
       <td>${chipsPlanos(t.produtos)}</td>
+      <td>${benefStatusCadastro(t)}</td>
       <td>${n?`<span class="badge" style="background:var(--warn-bg);color:var(--warn)"><i class="fas fa-people-roof"></i> ${n} dependente${n>1?'s':''}</span>`
             :'<span style="color:var(--text-3)">—</span>'}</td>
-      <td style="color:var(--text-3)">${fmtData(t.inicio)}${tempoDeCasa(t.docs[0].dataAdmissao)!=null?`<div style="font-size:.72rem">${fmtTempo(tempoDeCasa(t.docs[0].dataAdmissao))} de casa</div>`:''}</td>
       <td style="text-align:right" onclick="event.stopPropagation()">
         <button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(t.cpfN||t.key)}','${esc(t.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td></tr>
       ${n&&aberto?linhaDependentes(t.deps):''}`;
   };
+  const todosP=[...titulares,...titulares.flatMap(t=>t.deps),...orfaos];
+  const incompletos=todosP.filter(p=>benefFaltando(p).length).length;
+  const filtro=MOV_STATE.benefFiltro||'todos';
+  /* filtra mantendo o titular quando um dependente dele está incompleto (e vice-versa) */
+  let titF=titulares, orfF=orfaos;
+  if(filtro==='incompletos'){
+    titF=titulares.filter(t=>benefFaltando(t).length||t.deps.some(d=>benefFaltando(d).length))
+      .map(t=>Object.assign({},t,{deps:t.deps}));
+    orfF=orfaos.filter(d=>benefFaltando(d).length);
+  }else if(filtro==='completos'){
+    titF=titulares.filter(t=>!benefFaltando(t).length&&t.deps.every(d=>!benefFaltando(d).length));
+    orfF=orfaos.filter(d=>!benefFaltando(d).length);
+  }
+  const chip=(k,l)=>`<button class="btn ${filtro===k?'btn-primary':'btn-ghost'} btn-sm" onclick="MOV_STATE.benefFiltro='${k}';VIEWS.movimentacoes()">${l}</button>`;
   return `<div class="card"><div class="card-head">
       <h3><i class="fas fa-id-card"></i> Beneficiários ativos — ${esc(nome)}</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -2435,37 +2466,47 @@ function renderBeneficiariosAtivos(benef,nome){
         <button class="btn btn-ghost btn-sm" onclick="expandirTodos(false)"><i class="fas fa-angles-up"></i> Fechar</button>`:''}
         ${semNasc?`<button class="btn btn-primary btn-sm" onclick="modalCompletarDados('${esc(empIdAtual)}','${esc(nome)}')"><i class="fas fa-cake-candles"></i> Completar ${semNasc} nascimento(s)</button>`:''}
         <button class="btn btn-ghost btn-sm" onclick="exportarBenef()"><i class="fas fa-download"></i> Exportar CSV</button></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 2px 12px">
+      ${chip('todos','Todos ('+todosP.length+')')}
+      ${chip('incompletos','<i class=\'fas fa-triangle-exclamation\'></i> Cadastro incompleto ('+incompletos+')')}
+      ${chip('completos','Completos ('+(todosP.length-incompletos)+')')}
+      ${incompletos?`<span style="font-size:.78rem;color:var(--text-2);margin-left:4px">${incompletos} de ${todosP.length} precisam de nascimento, admissão ou carteirinha.</span>`:'<span style="font-size:.78rem;color:var(--ok);margin-left:4px"><i class="fas fa-circle-check"></i> Todos os cadastros estão completos.</span>'}</div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Beneficiário</th><th>CPF</th><th>Nasc. / idade</th><th>Produtos</th><th>Dependentes</th><th>Início</th><th style="text-align:right">Ações</th>
+      <th>Beneficiário</th><th>CPF</th><th>Nasc. / idade</th><th>Admissão</th><th>Carteirinha</th><th>Produtos</th><th>Cadastro</th><th>Dependentes</th><th style="text-align:right">Ações</th>
     </tr></thead><tbody>
-    ${titulares.length||orfaos.length?titulares.map(linhaTitular).join('')+
-      (orfaos.length?`<tr><td colspan="7" style="background:var(--warn-bg);color:#92400e;font-size:.82rem;font-weight:600">
+    ${titF.length||orfF.length?titF.map(linhaTitular).join('')+
+      (orfF.length?`<tr><td colspan="9" style="background:var(--warn-bg);color:#92400e;font-size:.82rem;font-weight:600">
         <i class="fas fa-triangle-exclamation"></i> ${orfaos.length} dependente(s) sem titular ativo vinculado — confira o CPF do titular no cadastro</td></tr>`+
-        orfaos.map(d=>`<tr>
+        orfF.map(d=>`<tr>
           <td><div style="display:flex;align-items:center;gap:9px"><span style="width:12px"></span><b>${esc(d.nome)}</b>
             <span class="badge" style="background:var(--warn-bg);color:var(--warn)">Dependente</span></div></td>
-          <td>${esc(d.cpf)||'-'}</td>
+          <td>${(d.cpfN&&d.cpfN.length>=11)?esc(d.cpf):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
           <td>${d.dataNascimento?fmtData(d.dataNascimento)+(idadeDe(d.dataNascimento)!=null?` <span style="color:var(--text-3)">· ${idadeDe(d.dataNascimento)}a</span>`:''):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
+          <td style="color:var(--text-3)">—</td>
+          <td>${String(d.cartao||'').trim()?esc(d.cartao):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
           <td>${chipsPlanos(d.produtos)}</td>
+          <td>${benefStatusCadastro(d)}</td>
           <td style="font-size:.8rem;color:var(--text-3)">titular ${esc(d.cpfTitular||'?')}</td>
-          <td style="color:var(--text-3)">${fmtData(d.inicio)}</td>
           <td style="text-align:right"><button class="btn btn-ghost btn-sm" title="Editar dados" onclick="modalEditarPessoa('${esc(d.cpfN||d.key)}','${esc(d.docs[0].empresaId||'')}')"><i class="fas fa-user-pen"></i></button></td></tr>`).join(''):'')
-    :`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum beneficiário ativo</h4><p>Os beneficiários aparecem aqui conforme as inclusões são aprovadas.</p></div></td></tr>`}
+    :`<tr><td colspan="9"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum beneficiário ${MOV_STATE.benefFiltro==='incompletos'?'com cadastro incompleto — tudo em dia! 🎉':(MOV_STATE.benefFiltro==='completos'?'com cadastro completo ainda':'ativo')}</h4><p>Os beneficiários aparecem aqui conforme as inclusões são aprovadas.</p></div></td></tr>`}
     </tbody></table></div></div>`;
 }
 window.__benefExport={nome:'',titulares:[],orfaos:[]};
 function exportarBenef(){
   const {nome,titulares,orfaos}=window.__benefExport||{};
   const linhas=[];
+  const adm=p=>{const a=(p.docs||[]).map(d=>d.dataAdmissao).find(Boolean);return a?fmtData(a):'';};
+  const falt=p=>(typeof benefFaltando==='function'?benefFaltando(p).join(' / '):'');
   (titulares||[]).forEach(t=>{
-    linhas.push([t.nome,t.cpf||'',t.produtos.map(p=>p.toUpperCase()).join(' + '),'Titular','','',t.cartao||'',fmtData(t.inicio)]);
+    linhas.push([t.nome,t.cpf||'',t.produtos.map(p=>p.toUpperCase()).join(' + '),'Titular','','',
+      t.dataNascimento?fmtData(t.dataNascimento):'',adm(t),t.cartao||'',fmtData(t.inicio),falt(t)]);
     t.deps.forEach(d=>linhas.push([d.nome,d.cpf||'',d.produtos.map(p=>p.toUpperCase()).join(' + '),'Dependente',
-      t.nome,PARENTESCO_LBL[d.parentesco]||d.parentesco||'',d.cartao||'',fmtData(d.inicio)]));
+      t.nome,PARENTESCO_LBL[d.parentesco]||d.parentesco||'',d.dataNascimento?fmtData(d.dataNascimento):'','',d.cartao||'',fmtData(d.inicio),falt(d)]));
   });
   (orfaos||[]).forEach(d=>linhas.push([d.nome,d.cpf||'',d.produtos.map(p=>p.toUpperCase()).join(' + '),'Dependente',
-    'SEM TITULAR VINCULADO',PARENTESCO_LBL[d.parentesco]||d.parentesco||'',d.cartao||'',fmtData(d.inicio)]));
+    'SEM TITULAR VINCULADO',PARENTESCO_LBL[d.parentesco]||d.parentesco||'',d.dataNascimento?fmtData(d.dataNascimento):'','',d.cartao||'',fmtData(d.inicio),falt(d)]));
   if(!linhas.length){ toast('Nenhum beneficiário para exportar.','info'); return; }
-  const head=['Nome','CPF','Produtos','Vinculo','Titular','Parentesco','Carteirinha','Inicio'];
+  const head=['Nome','CPF','Produtos','Vinculo','Titular','Parentesco','Nascimento','Admissao','Carteirinha','Inicio','Falta'];
   const cell=v=>{ v=(v==null?'':String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const txt='﻿'+[head.join(';')].concat(linhas.map(l=>l.map(cell).join(';'))).join('\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
