@@ -945,7 +945,7 @@ const MOTIVOS_PERDA={preco:'Preço/valor',concorrencia:'Fechou com concorrente',
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
 let CACHE={ leads:[], movimentacoes:[], empresas:[], beneficiarios:[],
-  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], interacoes:[], propostas:[], fipeHist:[], assistencias:[], sinistros:[] };
+  apolices:[], indicadores:[], parceiros:[], resgates:[], seguidores:[], admins:[], seguradoras:[], ramos:[], interacoes:[], propostas:[], fipeHist:[], assistencias:[], sinistros:[] };
 let LISTENERS=[];
 let _leadsKnown=null; // p/ detectar leads novos e disparar notificação
 
@@ -1070,49 +1070,44 @@ function logout(){ auth.signOut(); }
 /* =========================================================================
    MENU + ROTEADOR
    ========================================================================= */
-/* o menu abre recolhido: só "Principal" aberto — cada um abre o que precisa.
-   A escolha fica salva neste navegador. */
-const MENU_ABERTO_PADRAO=['Principal'];
+/* O menu abre TODO recolhido — cada um abre o que precisa.
+   A escolha fica salva neste navegador; as pendências aparecem como
+   número vermelho no título da seção, mesmo com ela fechada. */
+const MENU_ABERTO_PADRAO=[];
+let BADGES={};                       /* contagem viva de cada badge, sobrevive ao re-render */
 function menuAbertos(){
-  try{ const j=JSON.parse(localStorage.getItem('menuAbertos')||'null'); if(Array.isArray(j)) return j; }catch(e){}
+  try{ const j=JSON.parse(sessionStorage.getItem('menuAbertos')||'null'); if(Array.isArray(j)) return j; }catch(e){}
   return MENU_ABERTO_PADRAO.slice();
 }
+function menuGravar(arr){ try{ sessionStorage.setItem('menuAbertos',JSON.stringify(arr)); }catch(e){} }
 function menuAlternar(sec){
   const abertos=menuAbertos(); const i=abertos.indexOf(sec);
   if(i<0) abertos.push(sec); else abertos.splice(i,1);
-  try{ localStorage.setItem('menuAbertos',JSON.stringify(abertos)); }catch(e){}
-  renderMenu(); setActive((location.hash||'#dashboard').slice(1).split('/')[0]);
+  menuGravar(abertos); renderMenu();
 }
+const secId=s=>'sec_'+String(s).replace(/[^\w]/g,'');
+function secPendencias(sec){ return sec.items.reduce((n,it)=>n+(it.badge?(BADGES[it.badge]||0):0),0); }
 function renderMenu(){
-  const nav=document.getElementById('navMenu'); const abertos=menuAbertos();
-  const rotaAtual=(location.hash||'#dashboard').slice(1).split('/')[0];
+  const nav=document.getElementById('navMenu'); if(!nav) return;
+  const abertos=menuAbertos();
+  const rota=(location.hash||'#dashboard').slice(1).split('/')[0];
   nav.innerHTML=MENU.map(sec=>{
-    const temRota=sec.items.some(it=>it.id===rotaAtual);
-    const aberto=abertos.includes(sec.sec)||temRota;
-    const pend=sec.items.filter(it=>it.badge).map(it=>it.badge);
+    const aberto=abertos.includes(sec.sec);
+    const pend=secPendencias(sec);
     return `<div class="nav-sec ${aberto?'aberta':''}">
-      <div class="nav-sec-title" onclick="menuAlternar('${sec.sec.replace(/'/g,"\\'")}')" style="cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none">
-        <i class="fas fa-chevron-${aberto?'down':'right'}" style="font-size:.62rem;opacity:.6;width:9px"></i>
+      <div class="nav-sec-title" onclick="menuAlternar(${JSON.stringify(sec.sec).replace(/"/g,'&quot;')})"
+           style="cursor:pointer;display:flex;align-items:center;gap:7px;user-select:none">
+        <i class="fas fa-chevron-${aberto?'down':'right'}" style="font-size:.6rem;opacity:.55;width:9px"></i>
         <span style="flex:1">${sec.sec}</span>
-        ${pend.length?`<span class="nav-sec-dot" id="secdot-${sec.sec.replace(/[^\w]/g,'')}" style="display:none;width:7px;height:7px;border-radius:50%;background:var(--danger)"></span>`:''}
+        ${pend?`<span class="nav-badge" style="background:var(--danger);color:#fff" title="${pend} pendência(s) nesta seção">${pend}</span>`:''}
       </div>
-      <div style="display:${aberto?'block':'none'}">
+      <div id="${secId(sec.sec)}" style="display:${aberto?'block':'none'}">
       ${sec.items.map(it=>`
-        <a class="nav-item" data-route="${it.id}" href="#${it.id}">
+        <a class="nav-item ${it.id===rota?'active':''}" data-route="${it.id}" href="#${it.id}">
           <i class="fa${it.brands?'b':'s'} ${it.icon}"></i><span>${it.label}</span>
-          ${it.badge?`<span class="nav-badge zero" id="badge-${it.badge}">0</span>`:''}
+          ${it.badge?`<span class="nav-badge ${BADGES[it.badge]?'':'zero'}" id="badge-${it.badge}">${BADGES[it.badge]||0}</span>`:''}
         </a>`).join('')}
       </div></div>`;}).join('');
-  if(typeof atualizarPontosMenu==='function') atualizarPontosMenu();
-}
-/* bolinha vermelha no título da seção fechada quando há algo esperando lá dentro */
-function atualizarPontosMenu(){
-  MENU.forEach(sec=>{
-    const dot=document.getElementById('secdot-'+sec.sec.replace(/[^\w]/g,'')); if(!dot) return;
-    const tem=sec.items.some(it=>{ if(!it.badge) return false; const b=document.getElementById('badge-'+it.badge);
-      return b&&!b.classList.contains('zero')&&(+b.textContent>0); });
-    dot.style.display=tem?'inline-block':'none';
-  });
 }
 function setActive(route){
   document.querySelectorAll('.nav-item').forEach(a=>a.classList.toggle('active',a.dataset.route===route));
@@ -1122,7 +1117,7 @@ function router(){
   const barra=bruto.indexOf('/');
   const route=barra<0?bruto:bruto.slice(0,barra);
   const param=barra<0?undefined:decodeURIComponent(bruto.slice(barra+1));
-  renderMenu(); setActive(route);
+  setActive(route);
   closeSidebar();
   const fn=VIEWS[route];
   if(fn){ fn(param); } else { renderPlaceholder(route); }
@@ -1131,14 +1126,10 @@ window.addEventListener('hashchange',router);
 
 /* Barra de badges (leads novos / mov pendentes) */
 function setBadge(key,n){
-  const el=document.getElementById('badge-'+key); if(!el) return;
-  el.textContent=n; el.classList.toggle('zero',!n);
-  if(typeof atualizarPontosMenu==='function') atualizarPontosMenu();
-  if(key==='leads'||key==='mov'){
-    const anyNotif=(CACHE.leads.filter(isLeadNovo).length + CACHE.movimentacoes.filter(m=>m.status==='pendente').length)>0;
-    document.getElementById('notifDot').classList.toggle('hidden',!anyNotif);
-  }
+  BADGES[key]=Number(n)||0;
+  renderMenu();                       /* redesenha com os números e mantém as seções como estão */
 }
+
 const isLeadNovo=l=>l.status==='pre_cadastro'||!l.status;
 /* É cliente (fechou conosco) se: status cliente/fechado, ou tem apólice, ou tem proposta salva */
 function isClienteLead(l){
@@ -1193,7 +1184,8 @@ function bootstrap(){
   // Coleções da Fase 3 (tempo real)
   const listen=(coll,key,routes)=>LISTENERS.push(db.collection(coll).onSnapshot(s=>{
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
-    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); if(typeof checarRenovacaoAuto==='function') checarRenovacaoAuto(); }
+    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); if(typeof checarRenovacaoAuto==='function') checarRenovacaoAuto();
+      if(typeof portalRefrescarDesatualizados==='function') setTimeout(portalRefrescarDesatualizados,4000); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
     if(key==='assistencias'||key==='sinistros'||key==='solicitacoes') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[],CACHE.solicitacoes||[]).filter(a=>!a.status||a.status==='novo').length);
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
@@ -1241,6 +1233,7 @@ function bootstrap(){
     if(r==='agenda') VIEWS.agenda(); else if(r==='dashboard'&&VIEWS.dashboard) VIEWS.dashboard();
   },e=>console.error('agenda',e)));
   listen('seguradoras','seguradoras',['configuracoes']);
+  listen('ramos_crm','ramos',['configuracoes']);
   listen('interacoes_crm','interacoes',[]);
   listen('propostas','propostas',['propostas','contatos']);
   if(typeof ctEscutarSite==='function') ctEscutarSite();
@@ -2636,11 +2629,18 @@ function revelarSenha(){ const el=document.getElementById('crSenha'),eye=documen
 /* =========================================================================
    FASE 3 — DEMAIS TELAS (dados reais)
    ========================================================================= */
-const RAMO_OPCOES=['Auto','Vida','Saúde','Residencial','Empresarial','Odontológico','Previdência','Viagem','Outros'];
+const RAMO_PADRAO=['Auto','Vida','Saúde','Residencial','Empresarial','Odontológico','Previdência','Viagem','Outros'];
+/* ramos do cadastro (Configurações → Ramos) + os que já aparecem nas apólices */
+Object.defineProperty(window,'RAMO_OPCOES',{get(){
+  const cad=(CACHE.ramos||[]).filter(r=>r.ativo!==false).map(r=>String(r.nome||'').trim()).filter(Boolean);
+  const usados=(CACHE.apolices||[]).map(a=>String(a.ramo||'').trim()).filter(Boolean);
+  const base=cad.length?cad:RAMO_PADRAO;
+  return [...new Set([...base,...usados])].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}});
 const statusBadge=(txt,cor)=>`<span class="badge" style="background:${cor}22;color:${cor}"><span class="dot-b" style="background:${cor}"></span>${txt}</span>`;
 
 /* ---------- CLIENTES ---------- */
-let CLI_FILTER={busca:''};
+let CLI_FILTER={busca:'',ramo:'',cidade:'',ord:'nome',dir:1,portal:''};
 function apolicesDoCliente(c){
   const dig=((c.cpf||c.cnpj||'')+'').replace(/\D/g,'');
   return CACHE.apolices.filter(a=>
@@ -2652,9 +2652,27 @@ VIEWS.clientes=function(){
   let html=head('clientes');
   if(CLI_FILTER.soAtivas===undefined) CLI_FILTER.soAtivas=true;
   let clientes=CACHE.leads.filter(l=>(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
-  if(CLI_FILTER.soAtivas) clientes=clientes.filter(c=>apolicesDoCliente(c).some(x=>apEhAtiva(x)));
+  if(CLI_FILTER.soAtivas) clientes=clientes.filter(c=>apolicesDoCliente(c).some(x=>apVigente(x)));
+  const apsAtivasDe=c=>apolicesDoCliente(c).filter(apVigente);
+  const ramosDe=c=>[...new Set(apsAtivasDe(c).map(a=>String(a.ramo||'').trim()).filter(Boolean))];
+  if(CLI_FILTER.ramo) clientes=clientes.filter(c=>ramosDe(c).includes(CLI_FILTER.ramo));
+  if(CLI_FILTER.cidade) clientes=clientes.filter(c=>String(c.cidade||'').trim()===CLI_FILTER.cidade);
   if(CLI_FILTER.busca){ const q=CLI_FILTER.busca.toLowerCase(); clientes=clientes.filter(c=>`${c.nome||''} ${c.nomeEmpresa||''} ${c.whatsapp||''} ${c.email||''} ${c.cidade||''}`.toLowerCase().includes(q)); }
-  const comApolice=clientes.filter(c=>apolicesDoCliente(c).some(a=>!a.status||a.status==='ativa')).length;
+  const comApolice=clientes.filter(c=>apsAtivasDe(c).length).length;
+  const totalApolices=clientes.reduce((n,c)=>n+apsAtivasDe(c).length,0);
+  const premioTotal=clientes.reduce((n,c)=>n+apsAtivasDe(c).reduce((s,a)=>s+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0),0);
+  /* totalizadores por ramo e por cidade — em cima do que está filtrado */
+  const porRamo={}; const porCidade={};
+  clientes.forEach(c=>{ ramosDe(c).forEach(r=>{ porRamo[r]=porRamo[r]||{clientes:0,apolices:0,premio:0}; porRamo[r].clientes++; });
+    apsAtivasDe(c).forEach(a=>{ const r=String(a.ramo||'').trim()||'—'; porRamo[r]=porRamo[r]||{clientes:0,apolices:0,premio:0};
+      porRamo[r].apolices++; porRamo[r].premio+=(Number(a.premioLiquido)||Number(a.valorPremio)||0); });
+    const ci=String(c.cidade||'').trim()||'—'; porCidade[ci]=(porCidade[ci]||0)+1; });
+  const ordenar=(a,b)=>{ const d=CLI_FILTER.dir||1;
+    if(CLI_FILTER.ord==='apolices') return d*(apsAtivasDe(b).length-apsAtivasDe(a).length);
+    if(CLI_FILTER.ord==='cidade') return d*String(a.cidade||'').localeCompare(String(b.cidade||''));
+    if(CLI_FILTER.ord==='premio') return d*(apsAtivasDe(b).reduce((s,x)=>s+(Number(x.premioLiquido)||Number(x.valorPremio)||0),0)-apsAtivasDe(a).reduce((s,x)=>s+(Number(x.premioLiquido)||Number(x.valorPremio)||0),0));
+    return d*String(a.nomeEmpresa||a.nome||'').localeCompare(String(b.nomeEmpresa||b.nome||'')); };
+  clientes=clientes.slice().sort(ordenar);
    html+=`<div class="card" style="padding:11px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem">
       <input type="checkbox" ${CLI_FILTER.soAtivas?'checked':''} onchange="CLI_FILTER.soAtivas=this.checked;VIEWS.clientes()" style="width:auto">
@@ -2664,8 +2682,25 @@ VIEWS.clientes=function(){
  html+=`<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
     <div class="kpi"><div class="ico i-brand"><i class="fas fa-users"></i></div><div class="val">${clientes.length}</div><div class="lbl">${CLI_FILTER.soAtivas?'Clientes com seguro vigente':'Clientes na base'}</div></div>
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-file-contract"></i></div><div class="val">${comApolice}</div><div class="lbl">Com apólice ativa</div></div>
-    <div class="kpi"><div class="ico i-info"><i class="fas fa-share-nodes"></i></div><div class="val">${CACHE.indicadores.length}</div><div class="lbl">Indicadores</div></div>
+    <div class="kpi"><div class="ico i-info"><i class="fas fa-file-contract"></i></div><div class="val">${totalApolices}</div><div class="lbl">Apólices vigentes</div></div>
+    <div class="kpi"><div class="ico i-purple"><i class="fas fa-sack-dollar"></i></div><div class="val" style="font-size:1.3rem">${money(premioTotal)}</div><div class="lbl">Prêmio líquido vigente</div></div>
   </div>`;
+  const ramosOrd=Object.entries(porRamo).sort((a,b)=>b[1].apolices-a[1].apolices);
+  const cidadesOrd=Object.entries(porCidade).sort((a,b)=>b[1]-a[1]);
+  html+=`<details class="card" style="padding:0"><summary style="cursor:pointer;padding:13px 17px;font-weight:700;font-size:.88rem;list-style:none">
+      <i class="fas fa-chart-simple" style="color:var(--brand)"></i> Totais por ramo e por cidade
+      <span style="font-weight:400;color:var(--text-3);font-size:.8rem">— ${ramosOrd.length} ramo(s) · ${cidadesOrd.length} cidade(s)</span></summary>
+    <div style="padding:0 17px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+      <div><div style="font-size:.76rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:700;margin-bottom:6px">Por ramo</div>
+        ${ramosOrd.length?ramosOrd.map(([r,v])=>`<div style="display:flex;justify-content:space-between;gap:10px;font-size:.83rem;padding:5px 0;border-bottom:1px dashed var(--border);cursor:pointer" onclick="CLI_FILTER.ramo=CLI_FILTER.ramo==='${esc(r)}'?'':'${esc(r)}';VIEWS.clientes()">
+          <span style="color:${CLI_FILTER.ramo===r?'var(--brand)':'var(--text-2)'};font-weight:${CLI_FILTER.ramo===r?700:400}">${esc(r)}</span>
+          <span><b>${v.apolices}</b> apólice(s) · ${v.clientes} cliente(s) · ${money(v.premio)}</span></div>`).join('')
+          :'<span style="font-size:.82rem;color:var(--text-3)">Nada aqui.</span>'}</div>
+      <div><div style="font-size:.76rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-3);font-weight:700;margin-bottom:6px">Por cidade</div>
+        ${cidadesOrd.slice(0,15).map(([ci,n])=>`<div style="display:flex;justify-content:space-between;gap:10px;font-size:.83rem;padding:5px 0;border-bottom:1px dashed var(--border);cursor:pointer" onclick="CLI_FILTER.cidade=CLI_FILTER.cidade==='${esc(ci)}'?'':'${esc(ci)}';VIEWS.clientes()">
+          <span style="color:${CLI_FILTER.cidade===ci?'var(--brand)':'var(--text-2)'};font-weight:${CLI_FILTER.cidade===ci?700:400}">${esc(ci)}</span><b>${n}</b></div>`).join('')}
+        ${cidadesOrd.length>15?`<div style="font-size:.76rem;color:var(--text-3);margin-top:6px">+ ${cidadesOrd.length-15} cidade(s)</div>`:''}</div>
+    </div></details>`;
   const comLink=clientes.filter(c=>c.portalToken).length, semDados=clientes.filter(c=>!c.portalToken&&ptFaltando(c).length).length;
   html+=`<div class="card" style="padding:11px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--brand-50)">
     <i class="fas fa-key" style="color:var(--brand)"></i><b style="font-size:.85rem">Área do cliente:</b>
@@ -2677,9 +2712,18 @@ VIEWS.clientes=function(){
   if(CLI_FILTER.portal==='sem') clientes=clientes.filter(c=>!c.portalToken);
   if(CLI_FILTER.portal==='faltam') clientes=clientes.filter(c=>ptFaltando(c).length);
   html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-address-book"></i> Clientes</h3>
-    <div class="filters" style="margin:0"><input type="text" id="fBuscaCli" placeholder="Buscar nome, contato, cidade..." value="${esc(CLI_FILTER.busca)}" oninput="CLI_FILTER.busca=this.value;redesenhar(VIEWS.clientes)"></div></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Contato</th><th>Cidade/UF</th><th>Ramo</th><th>Apólices</th><th>Área do cliente</th><th></th></tr></thead><tbody>
-    ${clientes.length?clientes.map(c=>{ const qa=apolicesDoCliente(c).length; const falta=ptFaltando(c);
+    <div class="filters" style="margin:0;flex-wrap:wrap">
+      <input type="text" id="fBuscaCli" placeholder="Buscar nome, contato, cidade..." value="${esc(CLI_FILTER.busca)}" oninput="CLI_FILTER.busca=this.value;redesenhar(VIEWS.clientes)">
+      <select onchange="CLI_FILTER.ramo=this.value;VIEWS.clientes()" style="width:auto"><option value="">Todos os ramos</option>
+        ${ramosOrd.map(([r,v])=>`<option value="${esc(r)}" ${CLI_FILTER.ramo===r?'selected':''}>${esc(r)} (${v.apolices})</option>`).join('')}</select>
+      <select onchange="CLI_FILTER.cidade=this.value;VIEWS.clientes()" style="width:auto"><option value="">Todas as cidades</option>
+        ${cidadesOrd.map(([ci,n])=>`<option value="${esc(ci)}" ${CLI_FILTER.cidade===ci?'selected':''}>${esc(ci)} (${n})</option>`).join('')}</select>
+      <select onchange="CLI_FILTER.ord=this.value;VIEWS.clientes()" style="width:auto">
+        ${[['nome','Ordenar por nome'],['apolices','Mais apólices'],['premio','Maior prêmio'],['cidade','Cidade']].map(([k,r])=>`<option value="${k}" ${(CLI_FILTER.ord||'nome')===k?'selected':''}>${r}</option>`).join('')}</select>
+      ${(CLI_FILTER.ramo||CLI_FILTER.cidade)?`<button class="btn btn-ghost btn-sm" onclick="CLI_FILTER.ramo='';CLI_FILTER.cidade='';VIEWS.clientes()"><i class="fas fa-xmark"></i> limpar filtros</button>`:''}
+    </div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Contato</th><th>Cidade/UF</th><th>Ativas</th><th>Total</th><th>Área do cliente</th><th></th></tr></thead><tbody>
+    ${clientes.length?clientes.map(c=>{ const qa=apolicesDoCliente(c).length; const ativas=apsAtivasDe(c); const falta=ptFaltando(c);
       const portal=c.portalToken
         ?`<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap"><span class="badge" style="background:var(--ok)22;color:var(--ok)"><i class="fas fa-link"></i> ${esc(c.codigoIndicacao||'link')}</span>
             <button class="btn btn-ghost btn-sm" style="padding:2px 8px" title="Copiar link" onclick="ptCopiar('${portalLink(c)}')"><i class="fas fa-copy"></i></button>
@@ -2688,7 +2732,8 @@ VIEWS.clientes=function(){
           :`<button class="btn btn-primary btn-sm" style="padding:3px 10px" onclick="portalGerar('${c.id}').then(t=>{ if(t){ toast('Link criado para '+${JSON.stringify((c.nome||'').split(' ')[0])}+'.','ok'); VIEWS.clientes(); } })"><i class="fas fa-key"></i> Gerar link</button>`);
       return `<tr><td><b>${esc(c.nomeEmpresa||c.nome||'Sem nome')}</b>${c.nomeEmpresa&&c.nome?`<br><small style="color:var(--text-3)">${esc(c.nome)}</small>`:''}</td>
       <td>${esc(c.whatsapp||c.telefone||c.email||'-')}</td><td>${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</td>
-      <td>${esc(c.ramo||'-')}</td><td><b>${qa}</b></td><td>${portal}</td>
+      <td>${ativas.length?`<b>${ativas.length}</b> <span style="font-size:.74rem;color:var(--text-3)">${esc([...new Set(ativas.map(a=>String(a.ramo||'').trim()).filter(Boolean))].join(' · '))||''}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+      <td><span style="color:var(--text-3)">${qa}</span></td><td>${portal}</td>
       <td style="white-space:nowrap">${waBtn(c.whatsapp||c.telefone,'Olá '+((c.nome||'').split(' ')[0]||'')+'!')}<button class="btn btn-ghost btn-sm" onclick="abrirLead('${c.id}','cliente')" title="Abrir"><i class="fas fa-eye"></i></button>
         <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirCliente('${c.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`;
     }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-user-group"></i></div><h4>Nenhum cliente</h4></div></td></tr>`}
@@ -3106,7 +3151,7 @@ function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
     <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`); }
 
 /* ---------- APÓLICES ---------- */
-let AP_FILTER={busca:'',situacao:'',ramo:'',seguradora:'',produtor:'',ord:'fim',dir:1,resumo:false};
+let AP_FILTER={busca:'',situacao:'ativa',ramo:'',seguradora:'',produtor:'',ord:'fim',dir:1,resumo:false};
 const apEhAtiva=a=>!a.status||a.status==='ativa';
 /* "vigente" é mais estrito que "ativa": a data de fim precisa não ter passado.
    Uma apólice que venceu ontem e ninguém renovou continua 'ativa' no cadastro,
@@ -3348,17 +3393,18 @@ function modalVerApolice(id){
         <div>${(a.assistencias||[]).map(x=>`<div style="font-size:.83rem;padding:3px 0"><i class="fas fa-check" style="color:var(--ok)"></i> ${esc(x.nome)}${x.detalhe?' <span style="color:var(--text-3)">· '+esc(x.detalhe)+'</span>':''}</div>`).join('')||'<span style="font-size:.82rem;color:var(--text-3)">Nenhuma assistência marcada.</span>'}</div>
       </div>`:''}
       <h4 style="margin:0 0 8px"><i class="fas fa-paperclip" style="color:var(--brand)"></i> Documentos (links)</h4>
-      <div style="font-size:.76rem;color:var(--text-2);margin-bottom:8px">Cole o link da apólice ou proposta no seu Drive/nuvem — guardo o endereço aqui, sem custo de armazenamento.</div>
+      <div style="font-size:.76rem;color:var(--text-2);margin-bottom:8px">Anexe a apólice, a proposta ou qualquer documento (PDF ou imagem, até 20 MB). Fica guardado com segurança e o cliente vê na área dele.</div>
       <div id="apVerAnexos" style="font-size:.8rem;color:var(--text-3);margin-bottom:8px"><i class="fas fa-spinner fa-spin"></i> procurando anexos enviados...</div>
       ${docs.length?docs.map((d,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
         <a href="${esc(d.url)}" target="_blank" style="color:var(--brand);font-size:.85rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="fas fa-up-right-from-square"></i> ${esc(d.nome||d.url)}</a>
         <button class="btn btn-ghost btn-sm" onclick="apRemoverDoc('${a.id}',${i})"><i class="fas fa-trash"></i></button></div>`).join('')
       :'<div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Nenhum documento anexado.</div>'}
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input type="text" id="apDocNome" placeholder="Nome (ex.: Apólice PDF)" style="flex:1;min-width:130px">
-        <input type="text" id="apDocUrl" placeholder="https://..." style="flex:2;min-width:200px">
-        <button class="btn btn-ghost btn-sm" onclick="apAddDoc('${a.id}')"><i class="fas fa-plus"></i> Guardar link</button>
-        <button class="btn btn-primary btn-sm" onclick="apEnviarArquivo('${a.id}')" title="Envia o PDF para o nosso Storage e mostra na área do cliente"><i class="fas fa-upload"></i> Enviar arquivo (PDF)</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input type="text" id="apDocNome" placeholder="Nome do documento (ex.: Apólice 2026)" style="flex:1;min-width:190px">
+        <button class="btn btn-primary btn-sm" onclick="apEnviarArquivo('${a.id}')"><i class="fas fa-upload"></i> Anexar apólice / proposta</button>
+        <details style="width:100%"><summary style="cursor:pointer;font-size:.76rem;color:var(--text-3);list-style:none">ou guardar só o link de um arquivo que está no seu Drive</summary>
+          <div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="apDocUrl" placeholder="https://..." style="flex:1">
+            <button class="btn btn-ghost btn-sm" onclick="apAddDoc('${a.id}')"><i class="fas fa-plus"></i> Guardar link</button></div></details>
       </div>
       <div style="font-size:.74rem;color:var(--text-3);margin-top:6px"><i class="fas fa-eye"></i> Tudo o que estiver aqui aparece para o cliente em "Apólice e documentos" na área dele.</div>
     </div>
@@ -3745,10 +3791,16 @@ VIEWS.renovacoes=function(){
     <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Apólice</th><th>Produtor</th><th>Vencimento</th><th>Prazo</th><th>Prêmio</th><th></th></tr></thead><tbody>
     ${arr.length?arr.map(linha).join(''):`<tr><td colspan="7"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-check"></i></div><h4>${vazio||'Nada aqui'}</h4></div></td></tr>`}
     </tbody></table></div></div>`;
-  if(typeof renBlocoRenovadas==='function') html+=renBlocoRenovadas();
+  /* ordem de trabalho: o que vence agora vem primeiro; o resto fica recolhido */
   html+=tabela('Próximas de vencer (60 dias) — a prioridade',proximas,'fa-hourglass-half');
-  html+=tabela('Vencidas sem renovar — reconquista',vencidas,'fa-triangle-exclamation','Ninguém para reconquistar');
-  if(futuras.length) html+=tabela('Mais adiante (depois de 60 dias)',futuras.slice(0,30),'fa-calendar');
+  const recolhido=(titulo,ic,corpo,n)=>`<details class="card" style="padding:0;margin-bottom:18px"><summary style="cursor:pointer;padding:14px 18px;font-weight:700;font-size:.92rem;list-style:none">
+      <i class="fas ${ic}" style="color:var(--brand)"></i> ${titulo} <span style="color:var(--text-3);font-weight:400">(${n})</span></summary>
+    <div style="padding:0 4px 4px">${corpo}</div></details>`;
+  const tabelaCrua=arr=>`<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Apólice</th><th>Produtor</th><th>Vencimento</th><th>Prazo</th><th>Prêmio</th><th></th></tr></thead><tbody>${arr.map(linha).join('')}</tbody></table></div>`;
+  if(futuras.length) html+=recolhido('Mais adiante (depois de 60 dias)','fa-calendar',tabelaCrua(futuras.slice(0,60)),futuras.length);
+  if(typeof renBlocoRenovadas==='function') html+=renBlocoRenovadas(true);
+  html+=recolhido('Vencidas sem renovar — reconquista','fa-triangle-exclamation',
+    vencidas.length?tabelaCrua(vencidas):'<div class="empty" style="padding:20px"><h4>Ninguém para reconquistar</h4></div>',vencidas.length);
   setView(html);
 };
 
@@ -3796,6 +3848,44 @@ async function excluirIndicador(id){
   if(!confirm('Excluir este indicador externo? As indicações que ele já trouxe continuam no funil.')) return;
   try{ await db.collection('indicadores').doc(id).delete(); closeModal(); toast('Indicador excluído.','ok'); }catch(e){ toast('Erro ao excluir.','err'); }
 }
+
+/* ---------- Cadastro de ramos e seguradoras ---------- */
+function modalRamo(id){ const r=id?(CACHE.ramos||[]).find(x=>x.id===id)||{}:{};
+  openModal(`<div class="modal-head"><h3><i class="fas fa-layer-group" style="color:var(--brand)"></i> ${id?'Editar':'Novo'} ramo</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><input type="hidden" id="rmId" value="${id||''}">
+      <div class="form-row"><label>Nome do ramo *</label><input type="text" id="rmNome" value="${esc(r.nome||'')}" placeholder="Ex.: Auto, Vida, RC Profissional"></div>
+      <div class="form-row"><label>Observação</label><input type="text" id="rmObs" value="${esc(r.obs||'')}" placeholder="opcional"></div>
+    </div>
+    <div class="modal-foot">${id?`<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="excluirRamo('${id}')"><i class="fas fa-trash"></i> Excluir</button>`:''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarRamo()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`); }
+async function salvarRamo(){ const id=document.getElementById('rmId').value; const nome=document.getElementById('rmNome').value.trim();
+  if(!nome){ toast('Informe o nome do ramo.','err'); return; }
+  const dados={nome,obs:document.getElementById('rmObs').value.trim()||null,atualizadoEm:FV.serverTimestamp()};
+  try{ if(id) await db.collection('ramos_crm').doc(id).update(dados);
+    else { dados.ativo=true; dados.criadoEm=FV.serverTimestamp(); await db.collection('ramos_crm').add(dados); }
+    closeModal(); toast('Ramo salvo.','ok'); }catch(e){ toast('Erro ao salvar.','err'); } }
+async function ramoAlternar(id){ const r=(CACHE.ramos||[]).find(x=>x.id===id); if(!r) return;
+  try{ await db.collection('ramos_crm').doc(id).update({ativo:r.ativo===false,atualizadoEm:FV.serverTimestamp()}); }catch(e){ toast('Erro.','err'); } }
+async function excluirRamo(id){ const r=(CACHE.ramos||[]).find(x=>x.id===id)||{};
+  const n=(CACHE.apolices||[]).filter(a=>String(a.ramo||'').trim()===String(r.nome||'').trim()).length;
+  if(!confirm('Excluir o ramo "'+(r.nome||'')+'"?'+(n?'\n\nAtenção: '+n+' apólice(s) usam esse ramo. Elas continuam como estão, mas o ramo some das listas.':''))) return;
+  try{ await db.collection('ramos_crm').doc(id).delete(); closeModal(); toast('Ramo excluído.','ok'); }catch(e){ toast('Erro ao excluir.','err'); } }
+async function ramoImportarPadrao(){ if(!confirm('Cadastrar os '+RAMO_PADRAO.length+' ramos padrão para você editar?')) return;
+  try{ for(const n of RAMO_PADRAO) await db.collection('ramos_crm').add({nome:n,ativo:true,criadoEm:FV.serverTimestamp()});
+    toast('Lista padrão cadastrada.','ok'); }catch(e){ toast('Erro.','err'); } }
+async function ramoImportarUsados(){
+  const usados=[...new Set((CACHE.apolices||[]).map(a=>String(a.ramo||'').trim()).filter(Boolean))];
+  const faltando=usados.filter(r=>!(CACHE.ramos||[]).some(x=>String(x.nome||'').trim().toLowerCase()===r.toLowerCase()));
+  if(!faltando.length) return;
+  try{ for(const n of faltando) await db.collection('ramos_crm').add({nome:n,ativo:true,criadoEm:FV.serverTimestamp(),origem:'apolices'});
+    toast(faltando.length+' ramo(s) cadastrados.','ok'); }catch(e){ toast('Erro.','err'); } }
+async function segAlternarStatus(id){ const s=(CACHE.seguradoras||[]).find(x=>x.id===id); if(!s) return;
+  try{ await db.collection('seguradoras').doc(id).update({status:s.status==='inativo'?'ativo':'inativo',atualizadoEm:FV.serverTimestamp()}); }catch(e){ toast('Erro.','err'); } }
+async function excluirSeguradora(id){ const s=(CACHE.seguradoras||[]).find(x=>x.id===id)||{};
+  const n=(CACHE.apolices||[]).filter(a=>String(a.seguradora||'').trim()===String(s.nome||'').trim()).length;
+  if(!confirm('Excluir a seguradora "'+(s.nome||'')+'"?'+(n?'\n\nAtenção: '+n+' apólice(s) usam essa seguradora. Elas continuam como estão.':''))) return;
+  try{ await db.collection('seguradoras').doc(id).delete(); closeModal(); toast('Seguradora excluída.','ok'); }catch(e){ toast('Erro ao excluir.','err'); } }
 
 /* ---------- PARCEIROS ---------- */
 VIEWS.parceiros=function(){
@@ -4732,7 +4822,7 @@ function fipeAtualizadoNesteMes(a){
     return d.toISOString().slice(0,7)===new Date().toISOString().slice(0,7);
   }catch(e){ return false; }
 }
-async function atualizarFipeTodas(silencioso){
+async function atualizarFipeTodas(silencioso,janela){
   if(FIPE_BATCH_RUNNING) return;
   FIPE_429=false;
   const todas=CACHE.apolices.filter(a=>apEhAtiva(a) && (a.codigoFipe||a.veiculoModelo));
@@ -4753,9 +4843,13 @@ async function atualizarFipeTodas(silencioso){
     if(FIPE_429){ parou429=true; break; }          /* limite atingido: insistir só prolonga o bloqueio */
     if(i<aps.length-1) await fipePausa(900);       /* pausa entre veículos: evita o 429 */
   }
-  if(!parou429){ try{ await db.collection('configuracoes').doc('fipe_auto').set({ ultimoMes:new Date().toISOString().slice(0,7), atualizadoEm:FV.serverTimestamp(), total:ok },{merge:true}); }catch(e){} }
+  /* mês fechado só quando terminou tudo; se a FIPE cortou, fica "parcial"
+     e o domingo (ou a próxima abertura) retoma apenas o que faltou */
+  try{ await db.collection('configuracoes').doc('fipe_auto').set({
+      ultimoMes:new Date().toISOString().slice(0,7), parcial:!!parou429, atualizadoEm:FV.serverTimestamp(),
+      total:ok, restantes:parou429?(aps.length-ok):0, janela:janela||'manual' },{merge:true}); }catch(e){}
   FIPE_BATCH_RUNNING=false;
-  if(parou429) toast('A tabela FIPE limitou as consultas por agora (atualizei '+ok+' antes de parar). Espere uns minutos e clique de novo — continuo de onde parei, sem repetir os já feitos.','warn','FIPE pediu pausa');
+  if(parou429) toast('A tabela FIPE limitou as consultas por agora (atualizei '+ok+' antes de parar). '+(janela==='sabado'?'Retomo sozinho amanhã, no domingo, só com os que faltaram.':'Espere uns minutos e clique de novo — continuo de onde parei, sem repetir os já feitos.'),'warn','FIPE pediu pausa');
   else if(!silencioso) toast('FIPE atualizada em '+ok+' de '+aps.length+' veículo(s).','ok','Concluído');
   if(((location.hash||'').slice(1))==='fipe') VIEWS.fipe();
 }
@@ -4795,15 +4889,42 @@ async function atualizarCatalogoFipe(forcar){
 }
 /* Automático: roda sozinho quando você abre o CRM num mês ainda não capturado */
 let _fipeAutoChecked=false;
+/* ---------- janela automática da FIPE ----------
+   A tabela nova sai no começo do mês. Rodamos no PRIMEIRO SÁBADO do mês
+   (a partir de 00:01) porque no fim de semana ninguém está cotando e um
+   bloqueio por excesso de consultas não atrapalha o atendimento.
+   Se o sábado for interrompido (limite da API), o domingo retoma só o que faltou. */
+function primeiroSabadoDoMes(d){ const x=new Date(d.getFullYear(),d.getMonth(),1);
+  while(x.getDay()!==6) x.setDate(x.getDate()+1); return x; }
+function fipeJanelaAberta(agora){
+  const d=agora||new Date(); const sab=primeiroSabadoDoMes(d);
+  const dom=new Date(sab); dom.setDate(sab.getDate()+1);
+  const mesmoDia=(a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+  if(mesmoDia(d,sab)) return 'sabado';
+  if(mesmoDia(d,dom)) return 'domingo';
+  /* passou a janela e o mês ainda não foi lido? faz na próxima abertura do CRM */
+  return d>dom?'atrasado':null;
+}
 async function checarFipeAuto(){
   if(_fipeAutoChecked || !CACHE.apolices.length) return; _fipeAutoChecked=true;
   try{ const doc=await db.collection('configuracoes').doc('fipe_auto').get();
-    const mes=doc.exists?(doc.data().ultimoMes||null):null; const atual=new Date().toISOString().slice(0,7);
-    if(mes!==atual){ await atualizarFipeTodas(true); }
-    /* depois da carteira, confere o catálogo do site (marcas+modelos) do mês */
+    const cfg=doc.exists?doc.data():{};
+    if(cfg.automatico===false) return;
+    const mes=cfg.ultimoMes||null; const atual=new Date().toISOString().slice(0,7);
+    if(mes===atual&&!cfg.parcial) return;            /* mês já lido por inteiro */
+    const janela=fipeJanelaAberta();
+    if(!janela) return;                              /* fora da janela: espera o primeiro sábado */
+    await atualizarFipeTodas(true,janela);
     if(!FIPE_429) atualizarCatalogoFipe(false);
   }catch(e){ console.warn('fipe auto',e); }
 }
+
+async function fipeAlternarAuto(){
+  try{ const d=await db.collection('configuracoes').doc('fipe_auto').get();
+    const on=!(d.exists&&d.data().automatico===false);
+    await db.collection('configuracoes').doc('fipe_auto').set({automatico:!on,atualizadoEm:FV.serverTimestamp()},{merge:true});
+    toast(!on?'Atualização automática ligada — primeiro sábado de cada mês.':'Atualização automática desligada. Você atualiza pelo botão quando quiser.','ok');
+  }catch(e){ toast('Não consegui alterar.','err'); } }
 
 /* ---------- FIPE DA CARTEIRA ---------- */
 VIEWS.fipe=function(){
@@ -4827,8 +4948,21 @@ VIEWS.fipe=function(){
     <div class="kpi"><div class="ico i-ok"><i class="fas fa-circle-check"></i></div><div class="val">${comValor}</div><div class="lbl">Com valor FIPE lido</div></div>
     <div class="kpi"><div class="ico i-info"><i class="fas fa-clock-rotate-left"></i></div><div class="val" style="font-size:1rem">${fipeAutoLabel()}</div><div class="lbl">Última atualização geral</div></div>
   </div>`;
+  const proxSab=primeiroSabadoDoMes(new Date(new Date().getFullYear(),new Date().getMonth()+ (new Date()>primeiroSabadoDoMes(new Date())?1:0),1));
+  html+=`<div class="card" style="padding:14px 17px;font-size:.84rem;color:var(--text-2)">
+    <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <i class="fas fa-circle-info" style="color:var(--brand);margin-top:3px"></i>
+      <div style="flex:1;min-width:260px">
+        <b style="color:var(--text)">Atualizar todas agora</b> — lê o valor FIPE de cada veículo com seguro vigente e guarda no CRM (é o que alimenta esta tabela e a área do cliente).<br>
+        <b style="color:var(--text)">Atualizar catálogo do site</b> — baixa a lista de <b>marcas e modelos</b> da FIPE e grava no nosso banco. A página de cotação do site passa a montar as listas a partir daí, sem bater na API da FIPE a cada visitante — é isso que evita o bloqueio por excesso de consultas.
+      </div></div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <i class="fas fa-calendar-check" style="color:var(--ok)"></i>
+      <span>Atualização automática no <b>primeiro sábado de cada mês</b>, a partir de 00h01 — e se a FIPE bloquear no meio, o <b>domingo retoma só o que faltou</b>. Próxima janela: <b>${proxSab.toLocaleDateString('pt-BR')}</b>.</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="fipeAlternarAuto()"><i class="fas fa-toggle-on"></i> ligar/desligar automático</button>
+    </div></div>`;
   html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-car-side"></i> Valor FIPE por veículo</h3>
-      <span style="font-size:.78rem;color:var(--text-3)">atualiza sozinho todo mês ao abrir o CRM</span></div>
+      <span style="font-size:.78rem;color:var(--text-3)">o CRM só roda sozinho na janela do primeiro fim de semana do mês</span></div>
     <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Veículo</th><th>Placa</th><th>Valor FIPE</th><th>Variação (mês)</th><th>Referência</th><th></th></tr></thead><tbody>
     ${linhas.length?linhas.map(l=>`<tr>
       <td><b>${esc(l.a.clienteNome||'-')}</b></td>
@@ -4888,6 +5022,7 @@ VIEWS.configuracoes=function(){
   let html=head('configuracoes');
   html+=`<div class="tabs" style="margin-bottom:16px">
     <button class="tab ${CFG_TAB==='seguradoras'?'active':''}" onclick="CFG_TAB='seguradoras';VIEWS.configuracoes()"><i class="fas fa-shield"></i> Seguradoras</button>
+    <button class="tab ${CFG_TAB==='ramos'?'active':''}" onclick="CFG_TAB='ramos';VIEWS.configuracoes()"><i class="fas fa-layer-group"></i> Ramos</button>
     <button class="tab ${CFG_TAB==='conta'?'active':''}" onclick="CFG_TAB='conta';VIEWS.configuracoes()"><i class="fas fa-user"></i> Minha conta</button>
     <button class="tab ${CFG_TAB==='sistema'?'active':''}" onclick="CFG_TAB='sistema';VIEWS.configuracoes()"><i class="fas fa-circle-info"></i> Sistema</button></div>`;
   if(CFG_TAB==='seguradoras'){
@@ -4895,7 +5030,29 @@ VIEWS.configuracoes=function(){
     html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-shield"></i> Seguradoras</h3><button class="btn btn-primary btn-sm" onclick="modalSeguradora()"><i class="fas fa-plus"></i> Nova</button></div>
       <div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>Código SUSEP</th><th>Status</th><th></th></tr></thead><tbody>
       ${segs.length?segs.map(s=>`<tr><td><b>${esc(s.nome||'-')}</b></td><td>${esc(s.codigo||s.susep||'-')}</td><td>${statusBadge(s.status==='inativo'?'Inativo':'Ativo',s.status==='inativo'?'var(--text-3)':'var(--ok)')}</td>
-        <td><button class="btn btn-ghost btn-sm" onclick="modalSeguradora('${s.id}')"><i class="fas fa-pen"></i></button></td></tr>`).join(''):`<tr><td colspan="4"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-shield"></i></div><h4>Nenhuma seguradora</h4></div></td></tr>`}
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="modalSeguradora('${s.id}')" title="Editar"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="segAlternarStatus('${s.id}')" title="${s.status==='inativo'?'Reativar':'Desativar'}"><i class="fas fa-${s.status==='inativo'?'play':'pause'}"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirSeguradora('${s.id}')" title="Excluir"><i class="fas fa-trash"></i></button></td></tr>`).join(''):`<tr><td colspan="4"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-shield"></i></div><h4>Nenhuma seguradora</h4></div></td></tr>`}
+      </tbody></table></div></div>`;
+  }else if(CFG_TAB==='ramos'){
+    const usados={}; (CACHE.apolices||[]).forEach(a=>{ const r=String(a.ramo||'').trim(); if(r) usados[r]=(usados[r]||0)+1; });
+    const ramos=(CACHE.ramos||[]).slice().sort((a,b)=>String(a.nome||'').localeCompare(String(b.nome||'')));
+    const faltando=Object.keys(usados).filter(r=>!ramos.some(x=>String(x.nome||'').trim().toLowerCase()===r.toLowerCase()));
+    html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-layer-group"></i> Ramos de seguro</h3>
+        <button class="btn btn-primary btn-sm" onclick="modalRamo()"><i class="fas fa-plus"></i> Novo ramo</button></div>
+      <p style="font-size:.82rem;color:var(--text-2);margin:0 0 12px">Estes são os ramos que aparecem nas apólices, nas cotações e nos filtros de Clientes. Sem cadastro, o sistema usa a lista padrão.</p>
+      ${faltando.length?`<div style="background:var(--warn)15;border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:12px">
+        <i class="fas fa-triangle-exclamation" style="color:var(--warn)"></i> Já existem apólices com ramos fora do cadastro: <b>${faltando.map(esc).join(', ')}</b>.
+        <button class="btn btn-ghost btn-sm" onclick="ramoImportarUsados()"><i class="fas fa-file-import"></i> Cadastrar esses</button></div>`:''}
+      <div class="tbl-wrap"><table><thead><tr><th>Ramo</th><th>Apólices usando</th><th>Status</th><th></th></tr></thead><tbody>
+      ${ramos.length?ramos.map(r=>{ const n=usados[String(r.nome||'').trim()]||0;
+        return `<tr><td><b>${esc(r.nome||'-')}</b></td><td>${n||'<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${statusBadge(r.ativo===false?'Inativo':'Ativo',r.ativo===false?'var(--text-3)':'var(--ok)')}</td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="modalRamo('${r.id}')"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="ramoAlternar('${r.id}')" title="${r.ativo===false?'Reativar':'Desativar'}"><i class="fas fa-${r.ativo===false?'play':'pause'}"></i></button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirRamo('${r.id}')"><i class="fas fa-trash"></i></button></td></tr>`;}).join('')
+        :`<tr><td colspan="4"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-layer-group"></i></div><h4>Usando a lista padrão</h4>
+          <p>${RAMO_PADRAO.join(' · ')}</p><button class="btn btn-primary btn-sm" onclick="ramoImportarPadrao()"><i class="fas fa-file-import"></i> Trazer a lista padrão para editar</button></div></td></tr>`}
       </tbody></table></div></div>`;
   }else if(CFG_TAB==='conta'){
     html+=`<div class="card"><div class="card-pad">
@@ -6648,7 +6805,12 @@ function ctPessoas(){
         if(o.portalToken) p.portalToken=o.portalToken;
         if(o.codigoIndicacao) p.codigoIndicacao=o.codigoIndicacao;
         const d=strData(o.criadoEm)||null;
-        const st=o.status==='negocio_fechado'?'fechada':o.status==='negocio_perdido'?'perdida':'aberta';
+        /* só é cotação EM ABERTO quem está de fato numa etapa do funil.
+           Cartão de cliente já convertido não é negociação em andamento. */
+        const ABERTAS=['pre_cadastro','contato_realizado','cotacao_enviada','pendente_documentos','recusada_seguradora'];
+        const st=(o.status==='negocio_fechado'||o.status==='cliente')?'fechada'
+          :o.status==='negocio_perdido'?'perdida'
+          :ABERTAS.includes(o.status||'pre_cadastro')?'aberta':'fechada';
         p.cotacoes.push({leadId:o.id,data:d,ramo:o.ramo||o.tipoSeguro||'—',valor:Number(o.valorNegociacao)||null,
           status:st,motivo:o.motivoPerda||null,origem:o.origem||null});
         marca(d);
@@ -6675,21 +6837,31 @@ function ctPessoas(){
   lista.forEach(p=>{
     p.cotacoes.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
     p.ramosCotados=[...new Set(p.cotacoes.map(c=>c.ramo).filter(r=>r&&r!=='—'))];
-    p.ativas=p.apolices.filter(a=>!a.status||a.status==='ativa');
-    p.ramosAtivos=[...new Set(p.ativas.map(a=>a.ramo).filter(Boolean))];
+    /* vigente de verdade: status ativo E a data de fim ainda não passou */
+    p.ativas=p.apolices.filter(a=>typeof apVigente==='function'?apVigente(a):(!a.status||a.status==='ativa'));
+    p.ramosAtivos=[...new Set(p.ativas.map(a=>String(a.ramo||'').trim()).filter(Boolean))];
     p.ramosFaltando=RAMO_OPCOES.filter(r=>!p.ramosAtivos.includes(r));
-    p.temApolice=p.ramosAtivos.length>0;
-    p.jaFoiCliente=p.apolices.some(a=>a.status==='renovada'||a.status==='vencida'||a.status==='cancelada');
+    p.temApolice=p.ativas.length>0;
+    /* já teve apólice conosco e hoje não tem nenhuma em vigor = ex-cliente */
+    p.jaFoiCliente=p.apolices.length>0;
     p.perdidas=p.cotacoes.filter(c=>c.status==='perdida').length;
     p.abertas=p.cotacoes.filter(c=>c.status==='aberta').length;
     /* cotação aberta no MESMO ramo que ele já tem em vigor é o cartão do funil que gerou a apólice
        (ou a renovação em andamento) — só mostramos quando é um ramo novo, aí sim é venda em aberto */
+    const norm=r=>String(r||'').trim().toLowerCase();
     p.abertasOutroRamo=[...new Set(p.cotacoes.filter(c=>c.status==='aberta'&&c.ramo&&c.ramo!=='—'
-      &&!p.ramosAtivos.includes(c.ramo)).map(c=>c.ramo))];
+      &&!p.ramosAtivos.some(r=>norm(r)===norm(c.ramo))).map(c=>String(c.ramo).trim()))];
+    p.ultimaApolice=p.apolices.map(a=>strData(a.dataFimVigencia)).filter(Boolean).sort().pop()||null;
     p.premioTotal=p.ativas.reduce((s,a)=>s+(Number(a.premioLiquido)||Number(a.valorPremio)||0),0);
     /* quem tem apólice em vigor é CLIENTE, mesmo com uma cotação rolando em outro ramo */
     /* quem tem apólice em vigor é cliente; quem já teve e não renovou é ex-cliente (ouro para retomar) */
-    p.situacao=p.temApolice?'cliente':(p.abertas?'em_negociacao':(p.jaFoiCliente?'ex_cliente':(p.perdidas?'perdido':'so_cotou')));
+    /* Cliente > Ex-cliente > Em negociação > Perdido > Só cotou.
+       Quem já foi cliente e voltou a cotar continua como ex-cliente (com a marca de "cotando"),
+       porque a conversa com ele é de retomada, não de prospecção fria. */
+    p.situacao=p.temApolice?'cliente'
+      :p.jaFoiCliente?'ex_cliente'
+      :p.abertas?'em_negociacao'
+      :p.perdidas?'perdido':'so_cotou';
     p.aniversario=p.dataNascimento?String(p.dataNascimento).slice(5,10):null;
   });
   return lista;
@@ -6697,6 +6869,12 @@ function ctPessoas(){
 const CT_SIT={cliente:['Cliente','var(--ok)','var(--ok-bg)'],em_negociacao:['Em negociação','var(--info)','var(--info-bg)'],
   ex_cliente:['Ex-cliente','var(--warn)','var(--warn-bg)'],
   perdido:['Perdido','var(--danger)','var(--danger-bg)'],so_cotou:['Só cotou','var(--text-3)','var(--surface-3)']};
+const CT_SIT_EXPLICA={
+  cliente:'Tem pelo menos uma apólice em vigor com a Retorno hoje.',
+  ex_cliente:'Já teve apólice conosco, mas hoje não tem nenhuma em vigor (não renovou, cancelou ou venceu). É a melhor lista para retomar.',
+  em_negociacao:'Nunca teve apólice conosco e tem cotação em aberto no funil agora.',
+  perdido:'Cotou, não fechou e o negócio foi marcado como perdido no funil.',
+  so_cotou:'Cotou em algum momento, não fechou e o negócio não foi nem marcado como perdido — está parado.'};
 function ctDiasAniv(mmdd){
   if(!mmdd) return null;
   const h=new Date(), [m,d]=mmdd.split('-').map(Number);
@@ -6756,12 +6934,16 @@ VIEWS.contatos=function(){
         </div></div>`).join('')}
     </div></div>`;
 
+  html+=`<div class="card" style="padding:12px 16px;font-size:.79rem;color:var(--text-2)">
+      <b style="color:var(--text)">Como leio essas situações:</b>
+      ${Object.entries(CT_SIT_EXPLICA).map(([k,txt])=>`<div style="margin-top:5px"><span class="badge" style="background:${CT_SIT[k][2]};color:${CT_SIT[k][1]}">${CT_SIT[k][0]}</span> ${esc(txt)}</div>`).join('')}
+    </div>`;
   html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-address-book"></i> ${ps.length} contato(s)</h3>
       <button class="btn btn-ghost btn-sm" onclick="ctExportar()"><i class="fas fa-download"></i> CSV</button></div>
     <div class="filters">
       <select onchange="CT_F.situacao=this.value;VIEWS.contatos()">
         <option value="">Todas as situações</option>
-        ${Object.entries(CT_SIT).map(([k,v])=>`<option value="${k}" ${CT_F.situacao===k?'selected':''}>${v[0]}</option>`).join('')}</select>
+        ${Object.entries(CT_SIT).map(([k,v])=>`<option value="${k}" ${CT_F.situacao===k?'selected':''} title="${esc(CT_SIT_EXPLICA[k]||'')}">${v[0]}</option>`).join('')}</select>
       <select onchange="CT_F.ramo=this.value;VIEWS.contatos()">
         <option value="">Todos os ramos</option>
         <option value="__falta" ${CT_F.ramo==='__falta'?'selected':''}>Clientes com ramo em aberto</option>
@@ -6789,7 +6971,8 @@ VIEWS.contatos=function(){
             <i class="fas fa-cake-candles"></i> ${fmtData(p.dataNascimento)}${idadeDe(p.dataNascimento)!=null?' · '+idadeDe(p.dataNascimento)+'a':''}</div>`:''}</td>
         <td style="font-size:.8rem">${esc(p.whatsapp||'—')}${p.email?`<div style="font-size:.72rem;color:var(--text-3)">${esc(p.email)}</div>`:''}</td>
         <td><span class="badge" style="background:${st[2]};color:${st[1]}">${st[0]}</span>
-          ${p.situacao==='cliente'&&p.abertasOutroRamo?`<div style="font-size:.7rem;color:var(--info);margin-top:3px"><i class="fas fa-comments-dollar"></i> cotando ${esc(p.abertasOutroRamo.join(', '))}</div>`:''}
+          ${(p.situacao==='cliente'||p.situacao==='ex_cliente')&&p.abertasOutroRamo&&p.abertasOutroRamo.length?`<div style="font-size:.7rem;color:var(--info);margin-top:3px"><i class="fas fa-comments-dollar"></i> cotando ${esc(p.abertasOutroRamo.join(', '))}</div>`:''}
+          ${p.situacao==='ex_cliente'&&p.ultimaApolice?`<div style="font-size:.7rem;color:var(--warn);margin-top:3px">sem proteção desde ${fmtData(p.ultimaApolice)}</div>`:''}
           ${p.temPortal?`<div style="font-size:.7rem;color:var(--brand-dark);margin-top:3px" title="O cliente atualizou os dados na área dele"><i class="fas fa-user-pen"></i> perfil do cliente</div>`:''}</td>
         <td><b>${p.cotacoes.length}</b><div style="font-size:.72rem;color:var(--text-3)">${esc(p.ramosCotados.slice(0,3).join(', '))||'—'}</div></td>
         <td>${p.ramosAtivos.length?p.ramosAtivos.map(r=>`<span class="badge" style="background:var(--ok-bg);color:var(--ok);margin-right:3px">${esc(r)}</span>`).join(''):'<span style="color:var(--text-3)">nada</span>'}</td>
@@ -10069,6 +10252,23 @@ async function portalRevogar(leadId){
   const l=CACHE.leads.find(x=>x.id===leadId); if(!l||!l.portalToken) return;
   try{ await db.collection('portal_clientes').doc(l.portalToken).delete(); await db.collection('leads_crm').doc(leadId).update({portalToken:null}); l.portalToken=null; toast('Acesso revogado.','info'); abrirLead(leadId); }catch(e){ toast('Não consegui revogar.','err'); }
 }
+/* mantém os retratos em dia sozinho: quem tem apólice que venceu (ou renovou) desde a
+   última gravação recebe um retrato novo, senão o cliente continua vendo o que era ontem */
+let PT_REFRESH_RODOU=false;
+async function portalRefrescarDesatualizados(){
+  if(PT_REFRESH_RODOU) return; if(!(CACHE.apolices||[]).length||!(CACHE.leads||[]).length) return;
+  PT_REFRESH_RODOU=true;
+  const hoje=new Date().toISOString().slice(0,10);
+  const alvo=CACHE.leads.filter(l=>{
+    if(!l.portalToken) return false;
+    const aps=apolicesDoCliente(l);
+    /* venceu ou vence hoje, ou virou renovada: o retrato precisa ser reescrito */
+    return aps.some(a=>{ const f=strData(a.dataFimVigencia); return (f&&f<=hoje)||a.status==='renovada'; });
+  });
+  let n=0;
+  for(const l of alvo){ try{ await portalAtualizar(l.id); n++; await new Promise(r=>setTimeout(r,120)); }catch(e){} }
+  if(n) console.log('[portal] retratos atualizados:',n);
+}
 async function portalGerarLote(){
   const alvo=CACHE.leads.filter(l=>apolicesDoCliente(l).some(apEhAtiva)&&!ptFaltando(l).length);
   if(!alvo.length){ toast('Nenhum cliente com apólice vigente e cadastro completo (nome, CPF, nascimento, WhatsApp).','info'); return; }
@@ -11036,20 +11236,32 @@ function checarRenovacaoAuto(){
   setTimeout(()=>{ renAplicarAutomatico(false).then(n=>{ if(n&&(location.hash||'').includes('renovacoes')) VIEWS.renovacoes(); }); },1500);
 }
 /* apólices renovadas: a aba de conferência */
-function renBlocoRenovadas(){
+/* acha a apólice que veio depois desta (mesmo cliente, ramo e placa) mesmo sem vínculo salvo —
+   é o caso das renovadas importadas ano a ano, que nunca tiveram renovadaPor */
+function renSucessoraDe(a){
+  const aps=CACHE.apolices||[];
+  const cands=aps.filter(b=>b.id!==a.id&&b.status!=='cancelada'
+    &&String(b.ramo||'').toLowerCase()===String(a.ramo||'').toLowerCase()&&renMesmoCliente(a,b));
+  const pa=renPlaca(a.veiculoPlaca);
+  const comPlaca=pa?cands.filter(b=>renPlaca(b.veiculoPlaca)===pa):cands;
+  const fimA=toDate(a.dataFimVigencia);
+  const depois=(comPlaca.length?comPlaca:cands).filter(b=>{ const ib=toDate(b.dataInicioVigencia);
+    return ib&&fimA&&(ib-fimA)/86400000>=-75; });
+  return depois.sort((x,y)=>String(x.dataInicioVigencia||'').localeCompare(String(y.dataInicioVigencia||'')))[0]||null;
+}
+function renBlocoRenovadas(recolher){
   const renovadas=(CACHE.apolices||[]).filter(a=>a.status==='renovada')
-    .map(a=>({a,nova:(CACHE.apolices||[]).find(x=>x.id===a.renovadaPor)||null}))
+    .map(a=>({a,nova:(CACHE.apolices||[]).find(x=>x.id===a.renovadaPor)||renSucessoraDe(a)}))
     .sort((x,y)=>String(y.a.dataFimVigencia||'').localeCompare(String(x.a.dataFimVigencia||'')));
   const q=(REN_FILTER.busca||'').toLowerCase();
   const lista=q?renovadas.filter(r=>`${r.a.clienteNome||''} ${r.a.seguradora||''} ${r.a.veiculoPlaca||''}`.toLowerCase().includes(q)):renovadas;
-  return `<div class="card" style="margin-bottom:18px"><div class="card-head"><h3><i class="fas fa-circle-check" style="color:var(--ok)"></i> Renovadas — conferência (${lista.length})</h3>
-      <span style="font-size:.78rem;color:var(--text-3)">saíram da fila porque o cliente fechou a nova apólice</span></div>
+  const corpo=`
     ${lista.length?`<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Antes</th><th>Agora</th><th>Prêmio</th><th>Como</th><th></th></tr></thead><tbody>
       ${lista.slice(0,200).map(({a,nova})=>{ const la=Number(a.premioLiquido)||Number(a.valorPremio)||0, ln=nova?(Number(nova.premioLiquido)||Number(nova.valorPremio)||0):0;
         const d=ln-la, pc=la&&ln?Math.round(d/la*1000)/10:null;
         return `<tr><td><b>${esc(a.clienteNome||'-')}</b>${a.veiculoPlaca?`<div style="font-size:.72rem;color:var(--text-3)">${esc(a.veiculoPlaca)}</div>`:''}</td>
         <td style="font-size:.82rem">${esc(a.seguradora||'—')}<div style="color:var(--text-3);font-size:.75rem">até ${fmtData(a.dataFimVigencia)}</div></td>
-        <td style="font-size:.82rem">${nova?esc(nova.seguradora||'—'):'<span style="color:var(--warn)">apólice nova não encontrada</span>'}
+        <td style="font-size:.82rem">${nova?esc(nova.seguradora||'—')+(a.renovadaPor?'':' <span class="badge" style="background:var(--info-bg);color:var(--info)" title="Encontrada pelo cruzamento de cliente, ramo e placa">deduzida</span>'):'<span style="color:var(--warn)">apólice seguinte não encontrada</span>'}
           ${nova?`<div style="color:var(--text-3);font-size:.75rem">${fmtData(nova.dataInicioVigencia)} a ${fmtData(nova.dataFimVigencia)}</div>`:''}</td>
         <td>${la?money(la):'—'} ${ln?`&rarr; <b>${money(ln)}</b>`:''}
           ${pc!=null?`<div style="font-size:.74rem;color:${d>0?'var(--danger)':'var(--ok)'}">${d>0?'+':''}${pc}%</div>`:''}</td>
@@ -11060,8 +11272,12 @@ function renBlocoRenovadas(){
           <button class="btn btn-ghost btn-sm" style="color:var(--warn)" onclick="renDesfazer('${a.id}')" title="Não era renovação"><i class="fas fa-rotate-left"></i></button></td></tr>`; }).join('')}
       </tbody></table></div>`
       :`<div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-rotate"></i></div><h4>Nenhuma renovação registrada ainda</h4>
-        <p>Quando você fechar a nova apólice de um cliente, a anterior aparece aqui automaticamente.</p></div>`}
-  </div>`;
+        <p>Quando você fechar a nova apólice de um cliente, a anterior aparece aqui automaticamente.</p></div>`}`;
+  if(!recolher) return `<div class="card" style="margin-bottom:18px"><div class="card-head"><h3><i class="fas fa-circle-check" style="color:var(--ok)"></i> Renovadas — conferência (${lista.length})</h3></div>${corpo}</div>`;
+  return `<details class="card" style="padding:0;margin-bottom:18px"><summary style="cursor:pointer;padding:14px 18px;font-weight:700;font-size:.92rem;list-style:none">
+      <i class="fas fa-circle-check" style="color:var(--ok)"></i> Renovadas — conferência <span style="color:var(--text-3);font-weight:400">(${lista.length})</span>
+      <span style="display:block;font-weight:400;font-size:.78rem;color:var(--text-3);margin-top:2px">saíram da fila porque o cliente fechou a apólice seguinte</span></summary>
+    <div style="padding:0 4px 4px">${corpo}</div></details>`;
 }
 async function renDesfazer(id){
   const a=(CACHE.apolices||[]).find(x=>x.id===id); if(!a) return;
