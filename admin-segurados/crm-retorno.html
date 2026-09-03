@@ -3854,6 +3854,9 @@ function modalRamo(id){ const r=id?(CACHE.ramos||[]).find(x=>x.id===id)||{}:{};
   openModal(`<div class="modal-head"><h3><i class="fas fa-layer-group" style="color:var(--brand)"></i> ${id?'Editar':'Novo'} ramo</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body"><input type="hidden" id="rmId" value="${id||''}">
       <div class="form-row"><label>Nome do ramo *</label><input type="text" id="rmNome" value="${esc(r.nome||'')}" placeholder="Ex.: Auto, Vida, RC Profissional"></div>
+      <div class="form-row"><label>Página de cotação no site</label>
+        <input type="text" id="rmPagina" value="${esc(r.paginaSite||'')}" placeholder="Ex.: cotacao-auto.html">
+        <div style="font-size:.74rem;color:var(--text-3);margin-top:4px">Quando o lead chega por essa página, o negócio já nasce com este ramo.</div></div>
       <div class="form-row"><label>Observação</label><input type="text" id="rmObs" value="${esc(r.obs||'')}" placeholder="opcional"></div>
     </div>
     <div class="modal-foot">${id?`<button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="excluirRamo('${id}')"><i class="fas fa-trash"></i> Excluir</button>`:''}
@@ -3861,7 +3864,8 @@ function modalRamo(id){ const r=id?(CACHE.ramos||[]).find(x=>x.id===id)||{}:{};
       <button class="btn btn-primary" onclick="salvarRamo()"><i class="fas fa-floppy-disk"></i> Salvar</button></div>`); }
 async function salvarRamo(){ const id=document.getElementById('rmId').value; const nome=document.getElementById('rmNome').value.trim();
   if(!nome){ toast('Informe o nome do ramo.','err'); return; }
-  const dados={nome,obs:document.getElementById('rmObs').value.trim()||null,atualizadoEm:FV.serverTimestamp()};
+  const dados={nome,paginaSite:(document.getElementById('rmPagina')||{}).value?.trim()||null,
+    obs:document.getElementById('rmObs').value.trim()||null,atualizadoEm:FV.serverTimestamp()};
   try{ if(id) await db.collection('ramos_crm').doc(id).update(dados);
     else { dados.ativo=true; dados.criadoEm=FV.serverTimestamp(); await db.collection('ramos_crm').add(dados); }
     closeModal(); toast('Ramo salvo.','ok'); }catch(e){ toast('Erro ao salvar.','err'); } }
@@ -3871,6 +3875,16 @@ async function excluirRamo(id){ const r=(CACHE.ramos||[]).find(x=>x.id===id)||{}
   const n=(CACHE.apolices||[]).filter(a=>String(a.ramo||'').trim()===String(r.nome||'').trim()).length;
   if(!confirm('Excluir o ramo "'+(r.nome||'')+'"?'+(n?'\n\nAtenção: '+n+' apólice(s) usam esse ramo. Elas continuam como estão, mas o ramo some das listas.':''))) return;
   try{ await db.collection('ramos_crm').doc(id).delete(); closeModal(); toast('Ramo excluído.','ok'); }catch(e){ toast('Erro ao excluir.','err'); } }
+/* os ramos que já têm página de cotação no site — o lead que chega por lá
+   entra no funil vinculado a este ramo automaticamente */
+async function ramoImportarDoSite(){
+  const doSite=(typeof PT_PRODUTOS!=='undefined'?PT_PRODUTOS:[]);
+  const novos=doSite.filter(p=>!(CACHE.ramos||[]).some(x=>String(x.nome||'').trim().toLowerCase()===p.ramo.toLowerCase()));
+  if(!novos.length){ toast('Todos os ramos do site já estão cadastrados.','info'); return; }
+  if(!confirm('Cadastrar '+novos.length+' ramo(s) do site?\n\n'+novos.map(p=>'• '+p.ramo+'  ('+p.pagina+')').join('\n'))) return;
+  try{ for(const p of novos) await db.collection('ramos_crm').add({nome:p.ramo,paginaSite:p.pagina,ativo:true,origem:'site',criadoEm:FV.serverTimestamp()});
+    toast(novos.length+' ramo(s) do site cadastrados. Os leads dessas páginas já entram com o ramo certo.','ok');
+  }catch(e){ toast('Erro ao cadastrar.','err'); } }
 async function ramoImportarPadrao(){ if(!confirm('Cadastrar os '+RAMO_PADRAO.length+' ramos padrão para você editar?')) return;
   try{ for(const n of RAMO_PADRAO) await db.collection('ramos_crm').add({nome:n,ativo:true,criadoEm:FV.serverTimestamp()});
     toast('Lista padrão cadastrada.','ok'); }catch(e){ toast('Erro.','err'); } }
@@ -4832,11 +4846,15 @@ async function atualizarFipeTodas(silencioso,janela){
   if(!aps.length){ if(!silencioso) toast('Todos os '+todas.length+' veículos já estão com a FIPE deste mês. Nada a consultar.','ok','FIPE em dia'); return; }
   FIPE_BATCH_RUNNING=true;
   if(!silencioso) toast('Atualizando a FIPE de '+aps.length+' veículo(s)'+(jaNoMes?' ('+jaNoMes+' já estavam em dia)':'')+'. Vou com calma para a API não bloquear...','info','FIPE');
-  let ok=0, parou429=false;
+  let ok=0, parou429=false; const tocados=new Set();
   for(let i=0;i<aps.length;i++){ const a=aps[i];
     try{ const v=await fipeObterAtual(apoliceCtxFipe(a));
       if(v&&v.valorNum){ await fipeSalvarSnap(v.codigo||a.codigoFipe||'', v.marcaModelo||a.veiculoModelo||'', v.valor, v.ano||a.veiculoAno, v.mes);
-        await db.collection('apolices_cliente').doc(a.id).update({ fipeAtual:v.valor, fipeAtualNum:v.valorNum, fipeMes:v.mes||null, fipeAtualizadoEm:FV.serverTimestamp() }); ok++; }
+        const up={ fipeAtual:v.valor, fipeAtualNum:v.valorNum, fipeMes:v.mes||null, fipeAtualizadoEm:FV.serverTimestamp() };
+        /* apólice sem valor de mercado preenchido passa a usar a FIPE lida */
+        if(!(Number(a.valorMercado)>0)) up.valorMercado=v.valorNum;
+        await db.collection('apolices_cliente').doc(a.id).update(up);
+        Object.assign(a,up); ok++; tocados.add(a.leadId||a.clienteCpf||a.clienteNome); }
     }catch(e){ console.warn('fipe lote',a.id,e); }
     const prog=document.getElementById('fipeBatchProg'); if(prog) prog.style.width=Math.round((i+1)/aps.length*100)+'%';
     const cnt=document.getElementById('fipeBatchCnt'); if(cnt) cnt.textContent=(i+1)+' / '+aps.length;
@@ -4849,6 +4867,11 @@ async function atualizarFipeTodas(silencioso,janela){
       ultimoMes:new Date().toISOString().slice(0,7), parcial:!!parou429, atualizadoEm:FV.serverTimestamp(),
       total:ok, restantes:parou429?(aps.length-ok):0, janela:janela||'manual' },{merge:true}); }catch(e){}
   FIPE_BATCH_RUNNING=false;
+  /* o cliente também precisa ver o valor novo na área dele */
+  if(ok&&typeof portalAtualizar==='function'){
+    const leads=CACHE.leads.filter(l=>l.portalToken&&apolicesDoCliente(l).some(x=>tocados.has(x.leadId||x.clienteCpf||x.clienteNome)));
+    for(const l of leads){ try{ await portalAtualizar(l.id); await fipePausa(120); }catch(e){} }
+  }
   if(parou429) toast('A tabela FIPE limitou as consultas por agora (atualizei '+ok+' antes de parar). '+(janela==='sabado'?'Retomo sozinho amanhã, no domingo, só com os que faltaram.':'Espere uns minutos e clique de novo — continuo de onde parei, sem repetir os já feitos.'),'warn','FIPE pediu pausa');
   else if(!silencioso) toast('FIPE atualizada em '+ok+' de '+aps.length+' veículo(s).','ok','Concluído');
   if(((location.hash||'').slice(1))==='fipe') VIEWS.fipe();
@@ -5041,17 +5064,26 @@ VIEWS.configuracoes=function(){
     html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-layer-group"></i> Ramos de seguro</h3>
         <button class="btn btn-primary btn-sm" onclick="modalRamo()"><i class="fas fa-plus"></i> Novo ramo</button></div>
       <p style="font-size:.82rem;color:var(--text-2);margin:0 0 12px">Estes são os ramos que aparecem nas apólices, nas cotações e nos filtros de Clientes. Sem cadastro, o sistema usa a lista padrão.</p>
+      ${(function(){ const doSite=(typeof PT_PRODUTOS!=='undefined'?PT_PRODUTOS:[]).map(p=>p.ramo);
+        const semCadastro=doSite.filter(r=>!ramos.some(x=>String(x.nome||'').trim().toLowerCase()===r.toLowerCase()));
+        return semCadastro.length?`<div style="background:var(--brand-50);border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:12px">
+          <i class="fas fa-globe" style="color:var(--brand)"></i> O site tem página de cotação para <b>${semCadastro.map(esc).join(', ')}</b>.
+          Cadastrando aqui, todo lead que chega por essas páginas já entra vinculado ao ramo certo.
+          <button class="btn btn-primary btn-sm" style="margin-left:8px" onclick="ramoImportarDoSite()"><i class="fas fa-download"></i> Trazer os ramos do site</button></div>`:''; })()}
       ${faltando.length?`<div style="background:var(--warn)15;border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:12px">
         <i class="fas fa-triangle-exclamation" style="color:var(--warn)"></i> Já existem apólices com ramos fora do cadastro: <b>${faltando.map(esc).join(', ')}</b>.
         <button class="btn btn-ghost btn-sm" onclick="ramoImportarUsados()"><i class="fas fa-file-import"></i> Cadastrar esses</button></div>`:''}
-      <div class="tbl-wrap"><table><thead><tr><th>Ramo</th><th>Apólices usando</th><th>Status</th><th></th></tr></thead><tbody>
+      <div class="tbl-wrap"><table><thead><tr><th>Ramo</th><th>Página no site</th><th>Apólices usando</th><th>Status</th><th></th></tr></thead><tbody>
       ${ramos.length?ramos.map(r=>{ const n=usados[String(r.nome||'').trim()]||0;
-        return `<tr><td><b>${esc(r.nome||'-')}</b></td><td>${n||'<span style="color:var(--text-3)">—</span>'}</td>
+        const pg=r.paginaSite||((typeof PT_PRODUTOS!=='undefined'?PT_PRODUTOS:[]).find(p=>p.ramo.toLowerCase()===String(r.nome||'').trim().toLowerCase())||{}).pagina;
+        return `<tr><td><b>${esc(r.nome||'-')}</b></td>
+        <td>${pg?`<a href="https://retornoseguros.com/${esc(pg)}" target="_blank" style="color:var(--brand);font-size:.82rem"><i class="fas fa-up-right-from-square"></i> ${esc(pg)}</a>`:'<span style="color:var(--text-3)">—</span>'}</td>
+        <td>${n||'<span style="color:var(--text-3)">—</span>'}</td>
         <td>${statusBadge(r.ativo===false?'Inativo':'Ativo',r.ativo===false?'var(--text-3)':'var(--ok)')}</td>
         <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="modalRamo('${r.id}')"><i class="fas fa-pen"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="ramoAlternar('${r.id}')" title="${r.ativo===false?'Reativar':'Desativar'}"><i class="fas fa-${r.ativo===false?'play':'pause'}"></i></button>
           <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="excluirRamo('${r.id}')"><i class="fas fa-trash"></i></button></td></tr>`;}).join('')
-        :`<tr><td colspan="4"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-layer-group"></i></div><h4>Usando a lista padrão</h4>
+        :`<tr><td colspan="5"><div class="empty" style="padding:26px"><div class="em-ic"><i class="fas fa-layer-group"></i></div><h4>Usando a lista padrão</h4>
           <p>${RAMO_PADRAO.join(' · ')}</p><button class="btn btn-primary btn-sm" onclick="ramoImportarPadrao()"><i class="fas fa-file-import"></i> Trazer a lista padrão para editar</button></div></td></tr>`}
       </tbody></table></div></div>`;
   }else if(CFG_TAB==='conta'){
@@ -10190,6 +10222,16 @@ function ptPontosDoIndicado(l){ return apolicesDoCliente(l).reduce((s,a)=>s+(Num
 function ptIndicadosDe(lead){ if(!lead.codigoIndicacao) return []; return CACHE.leads.filter(l=>l.id!==lead.id&&(l.indicadoPorCodigo||'').toUpperCase()===lead.codigoIndicacao.toUpperCase()); }
 function ptIndicadorDe(lead){ if(!lead.indicadoPorCodigo) return null; return CACHE.leads.find(l=>(l.codigoIndicacao||'').toUpperCase()===String(lead.indicadoPorCodigo).toUpperCase())||null; }
 
+/* quanto o carro variou de um mês para o outro, pelos retratos que já guardamos */
+function ptFipeVariacao(a){
+  const cod=a.codigoFipe; if(!cod) return null;
+  const hs=(CACHE.fipeHist||[]).filter(h=>h.codigoFipe===cod&&h.valorNum)
+    .slice().sort((x,y)=>mesRefKey(x.mesReferencia)-mesRefKey(y.mesReferencia));
+  if(hs.length<2) return null;
+  const atual=hs[hs.length-1], antes=hs[hs.length-2];
+  const dif=atual.valorNum-antes.valorNum; if(!antes.valorNum) return null;
+  return { valor:Math.round(dif), pct:Math.round(dif/antes.valorNum*1000)/10, mesAnterior:antes.mesReferencia||null };
+}
 /* o retrato que a página cliente.html lê */
 function ptRetrato(lead){
   const vig=a=>(typeof apVigente==='function'?apVigente(a):apEhAtiva(a));
@@ -10197,7 +10239,11 @@ function ptRetrato(lead){
     inicio:a.dataInicioVigencia||null, fim:a.dataFimVigencia||null, status:vig(a)?(a.status||'ativa'):(a.status==='renovada'?'renovada':(apEhAtiva(a)?'vencida':a.status)),
     vigente:vig(a),
     placa:a.veiculoPlaca||null, veiculo:[a.veiculoFabricante,a.veiculoModelo].filter(Boolean).join(' ')||a.veiculoModelo||null, ano:a.veiculoAno||null,
-    fipe:a.fipeAtual||null, premio:Number(a.valorPremio)||null,
+    /* valor de mercado (FIPE) que o CRM leu, com o mês da tabela e a variação do mês anterior */
+    fipe:a.fipeAtual||null, fipeMes:a.fipeMes||null, fipeNum:Number(a.fipeAtualNum)||Number(a.valorMercado)||null,
+    fipeVariacao:ptFipeVariacao(a),
+    premio:Number(a.valorPremio)||null, premioLiquido:Number(a.premioLiquido)||null,
+    parcelas:a.parcelas||null, formaPagamento:a.formaPagamento||null,
     /* o que ele contratou — o cliente tem direito de ver isso na área dele */
     coberturas:(a.coberturasEstr||[]).map(c=>({nome:c.nome,limite:c.lmi||null})),
     assistencias:(a.assistencias||[]).map(x=>({nome:x.nome,detalhe:x.detalhe||null})),
