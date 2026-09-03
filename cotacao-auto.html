@@ -214,6 +214,9 @@ function dadosLead(extra){
     extras:formData.extras, franquia:formData.franquia,
     indicadoPorCodigo:indicadorCodigo, empresaParceiraCodigo:empresaParceiraCodigo,
     clienteLeadId:formData._clienteLeadId||null, viaPortal:!!formData._clienteLeadId,
+    indicadoPorEmpresaCodigo:(EMPRESA_IND&&EMPRESA_IND.codigo)||null,
+    indicadoPorEmpresaNome:(EMPRESA_IND&&EMPRESA_IND.nome)||null,
+    indicadoPorEmpresaId:(EMPRESA_IND&&EMPRESA_IND.empresaId)||null,
     atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()
   },extra||{});
 }
@@ -308,7 +311,9 @@ const PASSOS={
 /* ---------- 1. NOME ---------- */
 async nome(){
   await digitando(800);
-  bolhaPamela('Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>Meu trabalho não é te vender qualquer seguro — é montar a <span class="hl">proteção certa pro seu momento</span>, sem pagar por aquilo que você não precisa.<br><br>Pra começar: <strong>como posso te chamar?</strong>');
+  bolhaPamela((EMPRESA_IND&&EMPRESA_IND.nome)
+    ? 'Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>A <strong>'+esc(EMPRESA_IND.nome)+'</strong> cuida dos benefícios do time com a gente e pediu para eu falar com você — a ideia é levar essa mesma proteção para o <span class="hl">seu carro e a sua família</span>.<br><br>Pra começar: <strong>como posso te chamar?</strong>'
+    : 'Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>Meu trabalho não é te vender qualquer seguro — é montar a <span class="hl">proteção certa pro seu momento</span>, sem pagar por aquilo que você não precisa.<br><br>Pra começar: <strong>como posso te chamar?</strong>');
   const a=areaResposta('<div class="ig"><input type="text" class="if" id="inNome" placeholder="Seu nome..." autocomplete="given-name"></div><div class="br"><button class="bn bp" id="btNome" disabled>Enviar &rarr;</button></div>');
   const inp=a.querySelector('#inNome'), bt=a.querySelector('#btNome');
   inp.addEventListener('input',()=>bt.disabled=inp.value.trim().length<2);
@@ -840,10 +845,38 @@ document.addEventListener('DOMContentLoaded',()=>{
   carregarMarcas();   /* marcas já vêm carregando enquanto a pessoa conversa */
   setTimeout(()=>document.getElementById('pageLoader').classList.add('h'),500);
   const t=urlParams.get('t');
+  const emp=urlParams.get('emp'); if(emp) empresaIndicou(emp);
   if(t){ portalPrefill(t).then(ok=>{ if(ok){ bolhaPamela('Oi, <strong>'+primeiroNome()+'</strong>! Que bom te ver por aqui de novo &#128522; Como você já é da casa, vou direto ao que interessa'+(formData._idadePortal!=null?' — e já sei sua idade e onde o carro dorme, então vou pular o que não precisa repetir':'')+'.'); radarMais(1); setTimeout(()=>passo('temSeguro'),600); } else setTimeout(()=>passo('nome'),300); }); }
   else setTimeout(()=>passo('nome'),700);
 });
 /* cliente que veio da própria área (cliente.html?t=...): nome e WhatsApp já conhecidos */
+let EMPRESA_IND=null;
+async function empresaIndicou(codigo){
+  const cod=String(codigo||'').trim().toUpperCase(); if(!cod) return;
+  EMPRESA_IND={codigo:cod,nome:''};
+  try{
+    const r=await fetch('https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/site/empresas_indicacao');
+    if(!r.ok) return; const d=await r.json();
+    const f=((d.fields||{}).empresas||{}).mapValue; if(!f) return;
+    const e=(f.fields||{})[cod]; if(!e||!e.mapValue) return;
+    const c=e.mapValue.fields||{};
+    EMPRESA_IND={codigo:cod,nome:(c.nome&&c.nome.stringValue)||'',empresaId:(c.empresaId&&c.empresaId.stringValue)||''};
+    empresaBanner();
+  }catch(e){}
+}
+function empresaBanner(){
+  if(!EMPRESA_IND||!EMPRESA_IND.nome) return;
+  const feed=document.getElementById('feed'); if(!feed) return;
+  const d=document.createElement('div'); d.className='emp-ind';
+  d.innerHTML='<span class="ei-ic">&#127970;</span><div><b>A '+esc(EMPRESA_IND.nome)+' se preocupa com a sua proteção.</b>'
+    +'<div class="ei-s">Ela cuida dos benefícios do time com a Retorno Seguros e abriu essa conversa para você e sua família. '
+    +'Sem custo para a empresa, sem compromisso para você — e a empresa não vê seus dados.</div></div>';
+  feed.insertBefore(d,feed.firstChild);
+  const css=document.createElement('style');
+  css.textContent='.emp-ind{display:flex;gap:12px;align-items:flex-start;background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:16px;padding:14px 16px;margin-bottom:16px}'
+    +'.ei-ic{font-size:1.5rem;line-height:1}.emp-ind b{color:#1b2c5c;font-size:.95rem}.ei-s{font-size:.84rem;color:#334155;margin-top:4px;line-height:1.5}';
+  document.head.appendChild(css);
+}
 async function portalPrefill(t){
   try{ await authPronta; const s=await db.collection('portal_clientes').doc(t).get(); if(!s.exists) return false; const p=s.data();
     formData.nome=p.nome||''; formData.whatsapp=p.whatsapp||''; formData._clienteLeadId=p.leadId||null; formData._portal=p;
