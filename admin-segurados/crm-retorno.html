@@ -981,8 +981,14 @@ function toast(msg, tipo='ok', titulo){
    ========================================================================= */
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const initials=s=>(s||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
-function fmtData(v){ if(!v) return '-'; if(v.toDate) v=v.toDate(); const d=(v instanceof Date)?v:new Date(v); if(isNaN(d)) return esc(v); return d.toLocaleDateString('pt-BR'); }
-function fmtDataHora(v){ if(!v) return '-'; if(v.toDate) v=v.toDate(); const d=(v instanceof Date)?v:new Date(v); if(isNaN(d)) return '-'; return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+/* "2026-09-02" é 2 de setembro aqui, não 1º às 21h de Londres:
+   datas puras entram como meio-dia local para não escorregar de fuso. */
+function dataLocal(v){ if(!v) return null; if(v.toDate) return v.toDate(); if(v instanceof Date) return v;
+  const s=String(v); const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s.slice(0,10));
+  if(m&&s.length<=10) return new Date(+m[1],+m[2]-1,+m[3],12,0,0);
+  const d=new Date(s); return isNaN(d)?null:d; }
+function fmtData(v){ if(!v) return '-'; const d=dataLocal(v); if(!d||isNaN(d)) return esc(v); return d.toLocaleDateString('pt-BR'); }
+function fmtDataHora(v){ if(!v) return '-'; const d=dataLocal(v); if(!d||isNaN(d)) return '-'; return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
 function fmtCNPJ(c){ c=(c||'').replace(/\D/g,''); return c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,'$1.$2.$3/$4-$5')||c; }
 function copiar(txt,ok){ navigator.clipboard.writeText(txt).then(()=>toast(ok||'Copiado para a área de transferência.','ok','Copiado')); }
 function fmtMotivo(m){ const map={demissao:'Demissão',pedido:'A pedido',obito:'Óbito',outro:'Outro'}; return map[m]||m||'-'; }
@@ -1013,7 +1019,7 @@ async function ldBuscarCep(){
   }catch(e){ if(info) info.textContent='Não consegui consultar o CEP agora.'; }
 }
 function money(v){ v=Number(v)||0; return v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
-function toDate(v){ if(!v) return null; if(v.toDate) return v.toDate(); const d=new Date(v); return isNaN(d)?null:d; }
+function toDate(v){ return dataLocal(v); }
 function diasAte(v){ const d=toDate(v); if(!d) return null; const h=new Date(); h.setHours(0,0,0,0); return Math.round((d-h)/86400000); }
 function reRender(routes){ const r=(location.hash||'#dashboard').slice(1); if(routes.includes(r)&&VIEWS[r]) VIEWS[r](); }
 
@@ -3102,6 +3108,11 @@ function excluirCliente(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
 /* ---------- APÓLICES ---------- */
 let AP_FILTER={busca:'',situacao:'',ramo:'',seguradora:'',produtor:'',ord:'fim',dir:1,resumo:false};
 const apEhAtiva=a=>!a.status||a.status==='ativa';
+/* "vigente" é mais estrito que "ativa": a data de fim precisa não ter passado.
+   Uma apólice que venceu ontem e ninguém renovou continua 'ativa' no cadastro,
+   mas não é mais uma proteção — nem no CRM nem na área do cliente. */
+function apVigente(a){ if(!apEhAtiva(a)) return false; const f=toDate(a.dataFimVigencia);
+  if(!f) return true; const h=new Date(); h.setHours(0,0,0,0); return f>=h; }
 /* comissão da apólice: valor exato da seguradora, senão % sobre o líquido */
 function apComissaoValor(a){
   /* valor exato da seguradora só vale quando é de verdade (>0);
@@ -3372,13 +3383,22 @@ async function apVerAnexosCarregar(a){
     el.style.color='var(--text-2)';
     el.innerHTML=arr.map(x=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <a href="#" onclick="baixarArquivo('${x.id}');return false" style="color:var(--brand);font-size:.85rem;flex:1"><i class="fas fa-file-pdf"></i> ${esc(x.nome||'arquivo')}${x.tamanho?` <span style="color:var(--text-3)">(${Math.round(x.tamanho/1024)} KB)</span>`:''}</a>
-      ${x.url?`<button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="apPublicarAnexo('${a.id}','${x.id}')" title="Mostrar este arquivo na área do cliente"><i class="fas fa-share"></i> mostrar ao cliente</button>`:'<span style="font-size:.72rem;color:var(--text-3)">arquivo antigo — só interno</span>'}</div>`).join('');
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="apPublicarAnexo('${a.id}','${x.id}')" title="Mostrar este arquivo na área do cliente"><i class="fas fa-share"></i> mostrar ao cliente</button></div>`).join('');
   }catch(e){ el.style.display='none'; }
 }
 async function apPublicarAnexo(apoliceId,arquivoId){
   const a=CACHE.apolices.find(x=>x.id===apoliceId); if(!a) return;
   try{ const d=await db.collection('arquivos').doc(arquivoId).get(); const x=d.data()||{};
-    if(!x.url){ toast('Este anexo antigo não tem link público. Reenvie o arquivo.','warn'); return; }
+    /* anexo antigo (guardado em base64): sobe para o Storage agora para virar link */
+    if(!x.url&&x.dados){ toast('Preparando o arquivo para o cliente…','info');
+      try{
+        const resp=await fetch(x.dados); const blob=await resp.blob();
+        const arq=new File([blob],x.nome||'documento.pdf',{type:x.mime||blob.type||'application/pdf'});
+        x.url=await arqParaStorage(arq,'apolice');
+        await db.collection('arquivos').doc(arquivoId).update({url:x.url,storage:true});
+      }catch(e){ console.warn('migrar anexo',e); }
+    }
+    if(!x.url){ toast('Não consegui gerar o link deste anexo. Reenvie o arquivo pelo botão "Enviar arquivo (PDF)".','warn'); return; }
     const docs=(a.docsLinks||[]).concat([{nome:x.nome||'Documento',url:x.url,storage:true,arquivoId,enviadoEm:new Date().toISOString()}]);
     await db.collection('apolices_cliente').doc(apoliceId).update({docsLinks:docs,atualizadoEm:FV.serverTimestamp()});
     a.docsLinks=docs;
@@ -3673,6 +3693,8 @@ async function salvarApolice(){ const id=document.getElementById('apId').value;
       toast('Nova apólice salva — a anterior ficou como renovada.','ok');
     } else toast('Apólice salva.','ok');
     if(dados.leadId) setTimeout(()=>portalAtualizarRelacionados(dados.leadId),1500);
+    /* acabou de entrar uma apólice: confere se ela renova alguma anterior */
+    if(typeof renAplicarAutomatico==='function') setTimeout(()=>renAplicarAutomatico(false),1200);
     closeModal(); }catch(e){ console.error(e); toast('Erro ao salvar.','err'); }
 }
 /* Garante o cliente no menu Clientes (só dados pessoais), sem duplicar */
@@ -9987,10 +10009,17 @@ function ptIndicadorDe(lead){ if(!lead.indicadoPorCodigo) return null; return CA
 
 /* o retrato que a página cliente.html lê */
 function ptRetrato(lead){
+  const vig=a=>(typeof apVigente==='function'?apVigente(a):apEhAtiva(a));
   const aps=apolicesDoCliente(lead).map(a=>({ id:a.id, ramo:ptRamoDe(a), ramoOriginal:a.ramo||'', seguradora:a.seguradora||'', numero:a.numeroApolice||'',
-    inicio:a.dataInicioVigencia||null, fim:a.dataFimVigencia||null, status:a.status||'ativa', vigente:apEhAtiva(a),
+    inicio:a.dataInicioVigencia||null, fim:a.dataFimVigencia||null, status:vig(a)?(a.status||'ativa'):(a.status==='renovada'?'renovada':(apEhAtiva(a)?'vencida':a.status)),
+    vigente:vig(a),
     placa:a.veiculoPlaca||null, veiculo:[a.veiculoFabricante,a.veiculoModelo].filter(Boolean).join(' ')||a.veiculoModelo||null, ano:a.veiculoAno||null,
-    fipe:a.fipeAtual||null, premio:Number(a.valorPremio)||null, docs:(a.docsLinks||[]).map(d=>({nome:d.nome||'Documento',url:d.url})) }))
+    fipe:a.fipeAtual||null, premio:Number(a.valorPremio)||null,
+    /* o que ele contratou — o cliente tem direito de ver isso na área dele */
+    coberturas:(a.coberturasEstr||[]).map(c=>({nome:c.nome,limite:c.lmi||null})),
+    assistencias:(a.assistencias||[]).map(x=>({nome:x.nome,detalhe:x.detalhe||null})),
+    franquia:a.franquia!=null&&a.franquia!==''?Number(a.franquia):null, franquiaTipo:a.franquiaTipo||null,
+    docs:(a.docsLinks||[]).map(d=>({nome:d.nome||'Documento',url:d.url})) }))
     .sort((x,y)=>(x.vigente===y.vigente?String(y.fim||'').localeCompare(String(x.fim||'')):(x.vigente?-1:1)));
   const indicados=ptIndicadosDe(lead).map(l=>({ nome:(l.nome||'').trim().split(' ')[0]||'Alguém', produto:ptRamoDe(l)||'Seguro', status:ptStatusIndicado(l), pontos:Math.round(ptPontosDoIndicado(l)),
     quando:l.criadoEm&&l.criadoEm.toDate?l.criadoEm.toDate().toISOString().slice(0,10):null }))
@@ -10693,6 +10722,7 @@ async function fcSalvar(){
         +(assistencias.length?' · assistências: '+assistencias.map(a=>a.nome).join(', '):''),
       autor:(CURRENT_USER&&CURRENT_USER.email||'admin').split('@')[0],criadoEm:FV.serverTimestamp()});
     if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(FC.leadId,{ramo:FC.ramo,cep:dados.cepPernoite},'fechamento');
+    setTimeout(()=>renAplicarAutomatico(true),1200);
     setTimeout(()=>portalAtualizarRelacionados(FC.leadId),2500);
     closeModal();
     toast((FC.ehRenovacao?'Renovação fechada! ':'Fechado! ')+'Apólice criada com '+money(liq)+' de prêmio líquido.','ok','Parabéns');
@@ -10985,7 +11015,7 @@ function renParesRenovacao(){
     aps.forEach(a=>{ if(renSubstitui(a,b)) pares.push({antiga:a,nova:b}); }); });
   return pares;
 }
-let REN_AUTO_RODOU=false;
+let REN_AUTO_RODOU=false;   /* só a varredura inicial roda uma vez; depois é sob demanda */
 async function renAplicarAutomatico(silencioso){
   const pares=renParesRenovacao(); if(!pares.length) return 0;
   let n=0;
