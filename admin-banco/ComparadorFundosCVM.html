@@ -501,8 +501,10 @@ function comparar(){
           ${graf}
           <p class="note">Simulação sobre a rentabilidade real das cotas (CVM), mesma janela de meses. Rentabilidade passada não é garantia de rentabilidade futura.</p>`;
       }
+      window.__CEN = { cnpj, nome, jan, rec: recomendado ? {cnpj:recomendado.cnpj, nome:recomendado.nome, perfil:recomendado.perfil} : null };
       parecer = `
         <div class="sec-title" style="margin-top:6px">Parecer consultivo<span class="line"></span>
+          <button class="btn ghost" style="padding:6px 12px;font-size:12.5px;margin-right:6px" onclick="copiarDadosCenarios(this)">🤖 Copiar dados p/ análise no chat</button>
           <button class="btn ghost" style="padding:6px 12px;font-size:12.5px" onclick="window.print()">🖨️ Imprimir / PDF</button></div>
         ${acCdi?`<div class="rec-head">No período de <b>${jan.length} meses</b> (${mesLabel(jan[0])}→${mesLabel(jan[jan.length-1])}), o CDI rendeu <b>${pct(acCdi.ret)}</b>. É a régua para julgar cada fundo.</div>`:''}
         ${blocoRec}`;
@@ -540,6 +542,26 @@ function comparar(){
 }
 $("#btnBuscar").addEventListener("click",comparar);
 $("#cnpjInput").addEventListener("keydown",e=>{ if(e.key==="Enter") comparar(); });
+
+// Copia os dados do fundo (cliente + grade + CDI, mês a mês) para colar no chat com o prompt de cenários
+window.copiarDadosCenarios=function(btn){
+  const C=window.__CEN; if(!C){ return; }
+  const mm=C.jan;
+  const linhaSerie=(cnpj)=>mm.map(m=>{const r=DB.base[cnpj]&&DB.base[cnpj].r[m]; return r==null?"—":r.toFixed(2).replace(".",",")+"%";}).join(" | ");
+  const cab="Mês: "+mm.map(mesLabel).join(" | ");
+  let txt="DADOS PARA ANÁLISE DE CENÁRIOS (rentabilidade mensal real, fonte CVM)\n";
+  txt+="Período: "+mesLabel(mm[0])+" a "+mesLabel(mm[mm.length-1])+"\n\n";
+  txt+=cab+"\n";
+  txt+="CDI | "+mm.map(m=>{const c=DB.cdi&&DB.cdi[m]; return c==null?"—":c.toFixed(2).replace(".",",")+"%";}).join(" | ")+"\n\n";
+  txt+="FUNDO ATUAL DO CLIENTE\n"+C.nome+" ("+C.cnpj+")\n"+linhaSerie(C.cnpj)+"\n\n";
+  if(C.rec) txt+="FUNDO SUGERIDO (nossa grade, mesmo perfil)\n"+C.rec.nome+" — perfil "+(C.rec.perfil||"—")+"\n"+linhaSerie(C.rec.cnpj)+"\n\n";
+  txt+="GRADE BRADESCO COMPLETA (nome — perfil — série mensal)\n";
+  GRADE.forEach(g=>{ if(DB.base[g.cnpj]) txt+="- "+g.nome+" ("+(g.perfil||"—")+"): "+linhaSerie(g.cnpj)+"\n"; });
+  txt+="\nUse o prompt 'Análise de cenários de fundos' com estes dados.";
+  const ok=()=>{ if(btn){const o=btn.textContent; btn.textContent="✓ copiado!"; setTimeout(()=>btn.textContent=o,1800);} };
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok).catch(()=>prompt("Copie:",txt));
+  else prompt("Copie:",txt);
+};
 
 /* ---- atualizar: inf_diario ---- */
 async function importarInf(files){
