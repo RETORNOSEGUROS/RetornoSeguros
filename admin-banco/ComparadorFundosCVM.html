@@ -90,6 +90,8 @@ progress{width:100%;height:8px}
 .rec-nome{font-size:15px;font-weight:700;line-height:1.25;margin-bottom:4px}
 .rec-ac{font-family:"IBM Plex Mono",monospace;font-size:24px;font-weight:700;margin-bottom:8px}
 .rec-ac span{font-family:inherit;font-size:11px;color:var(--ink-3);font-weight:600}
+.rec-tx{font-size:12.5px;color:var(--ink-2);margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+.rec-tx.muted{color:var(--ink-3)}
 .ins-list{list-style:none;margin:0;padding:0}
 .ins{font-size:12.5px;line-height:1.5;padding:5px 0 5px 20px;position:relative;color:var(--ink-2);border-top:1px solid var(--line)}
 .ins:before{position:absolute;left:0;top:5px;font-size:12px}
@@ -205,6 +207,7 @@ function fmtCnpj(d){ d=norm(d); if(d.length!==14) return d;
 function pct(v){ return v==null?"—":(v>=0?"+":"")+v.toFixed(2).replace(".",",")+"%"; }
 function clsv(v){ return v==null?"":v>=0?"pos":"neg"; }
 function fmtTaxa(t){ if(t==null||t==="")return "—"; if(typeof t==="number")return t.toString().replace(".",",")+"%"; return t; }
+function taxaNum(t){ if(t==null||t==="")return null; const x=parseFloat(String(t).replace("%","").replace(",",".")); return isNaN(x)?null:x; }
 function fmtMoedaCents(s){ const v=parseFloat(s); if(isNaN(v))return "—";
   return "R$ "+v.toLocaleString("pt-BR",{maximumFractionDigits:0}); }
 
@@ -421,7 +424,7 @@ function comparar(){
   // KPIs
   let kpis = `<div class="kpi"><div class="l">Rentab. ${mesLabel(ultimoMes)}</div><div class="v ${clsv(retUltimo)}">${pct(retUltimo)}</div></div>`;
   if(acCliente) kpis += `<div class="kpi"><div class="l">Acumulado ${jan.length} meses</div><div class="v ${clsv(acCliente.ret)}">${pct(acCliente.ret)}</div></div>`;
-  kpis += `<div class="kpi"><div class="l">Taxa adm</div><div class="v">${fmtTaxa(taxa)}</div></div>`;
+  kpis += `<div class="kpi"><div class="l">Taxa adm</div><div class="v">${fmtTaxa(taxa===0?null:taxa)}</div></div>`;
   kpis += `<div class="kpi"><div class="l">Cotistas</div><div class="v">${b.cot||"—"}</div></div>`;
   kpis += `<div class="kpi"><div class="l">Patrimônio</div><div class="v" style="font-size:16px">${fmtMoedaCents(b.pl)}</div></div>`;
 
@@ -482,24 +485,43 @@ function comparar(){
           {nome:"CDI", cor:"#c99700", cdi:true}
         ]);
         const dif = (acRec&&rc!=null)? (acRec.ret-rc) : null;
+        // taxa de administração (0% no fundo do cliente = artefato de "classe" na CVM → tratamos como não informada)
+        let txCli = taxaNum(taxa); if(txCli===0) txCli=null;
+        const txRec = taxaNum(recomendado.taxa);
+        const linhaTx = (v)=> v==null ? `<div class="rec-tx muted">taxa adm — não informada</div>` : `<div class="rec-tx">taxa adm <b>${v.toString().replace('.',',')}% a.a.</b></div>`;
+        // bloco "peso da taxa": diferença anual em R$ por R$100 mil
+        let blocoTaxa="";
+        if(txCli!=null && txRec!=null){
+          const d=txCli-txRec;
+          if(Math.abs(d)>=0.05){
+            const reaisAno=Math.round(Math.abs(d)/100*100000);
+            const quemMenos = d>0 ? "o nosso" : "o do cliente";
+            blocoTaxa = `<div class="rec-head" style="border-left-color:var(--gold)">💰 <b>Peso da taxa:</b> ${quemMenos} cobra <b>${Math.abs(d).toFixed(2).replace('.',',')} ponto(s) a menos</b> de taxa (${txRec.toString().replace('.',',')}% vs ${txCli.toString().replace('.',',')}%). A cada <b>R$ 100 mil</b>, isso é cerca de <b>R$ ${reaisAno.toLocaleString("pt-BR")} por ano</b> a menos em taxa — e cresce conforme o saldo aumenta.${dif!=null&&Math.abs(dif)<1?` Como os dois renderam parecido no período, a <b>taxa vira o desempate</b>.`:''}</div>`;
+          }
+        } else if(txCli==null){
+          blocoTaxa = `<div class="note">A CVM não informa a taxa de administração desse fundo do cliente (comum em "classes" novas, que cobram no fundo-mestre). Vale pedir o número no extrato para comparar.</div>`;
+        }
         blocoRec = `
           <div class="rec-grid">
             <div class="rec-col">
               <div class="rec-tag" style="background:#eef4fb;color:var(--brand)">Fundo do cliente${aCli?` · perfil ${aCli.risco.toLowerCase()}`:''}</div>
               <div class="rec-nome">${nome}</div>
               <div class="rec-ac ${clsv(rc)}">${pct(rc)} <span>no período</span></div>
+              ${linhaTx(txCli)}
               <ul class="ins-list">${liCli}</ul>
             </div>
             <div class="rec-col rec-dest">
               <div class="rec-tag" style="background:#fdf4dc;color:#8a6b00">Sugestão da nossa grade${mesmoRisco?' · mesmo perfil':''}</div>
               <div class="rec-nome">${recomendado.nome}</div>
               <div class="rec-ac ${clsv(acRec?acRec.ret:null)}">${pct(acRec?acRec.ret:null)} <span>no período</span></div>
+              ${linhaTx(txRec)}
               <ul class="ins-list">${liRec}</ul>
             </div>
           </div>
           ${dif!=null&&dif>0?`<div class="rec-head">Trocando de fundo, no mesmo período o cliente teria rendido <b>${(dif).toFixed(2).replace('.',',')} p.p. a mais</b> — de ${pct(rc)} para ${pct(acRec.ret)}.</div>`:''}
+          ${blocoTaxa}
           ${graf}
-          <p class="note">Simulação sobre a rentabilidade real das cotas (CVM), mesma janela de meses. Rentabilidade passada não é garantia de rentabilidade futura.</p>`;
+          <p class="note">A rentabilidade acima <b>já é líquida da taxa de administração</b> (a cota da CVM é divulgada com a taxa descontada) — ou seja, já é o que sobrou para o cliente. Rentabilidade passada não é garantia de rentabilidade futura.</p>`;
       }
       window.__CEN = { cnpj, nome, jan, rec: recomendado ? {cnpj:recomendado.cnpj, nome:recomendado.nome, perfil:recomendado.perfil} : null };
       parecer = `
