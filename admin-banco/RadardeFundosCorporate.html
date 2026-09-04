@@ -721,11 +721,11 @@ const COLS=[
   {k:"m12",label:"12m / ano"},
   {k:"m24",label:"24m"},
   {k:"m36",label:"36m"},
-  {k:"vcdi",label:"vs CDI 12m"},
+  {k:"vcdi",label:"% do CDI 12m"},
   {k:"taxa",label:"Taxa adm"},
   {k:"pl",label:"PL Médio (R$ mi)"}
 ];
-function vcdi(f){const c=benchOf("CDI");if(!c||f.m12==null)return null;return f.m12-c.m12;}
+function vcdi(f){const c=benchOf("CDI");if(!c||f.m12==null||!c.m12)return null;return f.m12/c.m12*100;}
 function renderThead(){
   const mm=meses3();
   $("#theadRow").innerHTML=COLS.map(c=>{
@@ -792,7 +792,7 @@ function renderTable(){
         <td class="tnum ${cls(f.m12)}">${fmtPct(f.m12)}</td>
         <td class="tnum ${cls(f.m24)}">${fmtPct(f.m24)}</td>
         <td class="tnum ${cls(f.m36)}">${fmtPct(f.m36)}</td>
-        <td>${vc==null?'<span class="muted-cell">—</span>':'<span class="chip '+(vc>=0?'pos':'neg')+'">'+(vc>=0?'+':'')+vc.toFixed(1).replace(".",",")+' pp</span>'}</td>
+        <td>${vc==null?'<span class="muted-cell">—</span>':'<span class="chip '+(vc>=100?'pos':'neg')+'">'+Math.round(vc)+'% do CDI</span>'}</td>
         <td class="taxa-cell">${f.taxa||"—"}</td>
         <td class="tnum">${f.pl==null?'<span class="muted-cell">—</span>':f.pl.toLocaleString("pt-BR",{maximumFractionDigits:1})}</td>
       </tr>`;
@@ -843,12 +843,12 @@ function renderClient(){
     const top=pool.sort((a,b)=>b.m12-a.m12).slice(0,4);
     html+=`<div class="pres-section-title"><span class="pbadge" style="width:12px;height:12px;background:${PCOLOR[p]}"></span><h3>Perfil ${p}</h3><span class="line"></span><span style="font-size:12px;color:var(--ink-3)">destaques em 12 meses</span></div>`;
     html+=`<div class="cards">`+top.map(f=>{
-      const vc=cdi?f.m12-cdi.m12:null;
+      const vc=(cdi&&cdi.m12)?f.m12/cdi.m12*100:null;
       return `<div class="fcard" data-fund="${encodeURIComponent(f.nome)}" style="border-top-color:${PCOLOR[f.perfil]};cursor:pointer">
         <div class="fc-cat">${f.cat.replace("Previdência ","")}${f.ficha?' · <span style="color:var(--brand)">ficha ›</span>':''}</div>
         <div class="fc-name">${f.nome.replace(/^BVP /,"")}</div>
         <div class="fc-big"><b>${fmtPct(f.m12)}</b><span>em 12 meses</span></div>
-        ${vc!=null?'<div style="font-size:12px;color:var(--ink-2)"><span class="chip '+(vc>=0?'pos':'neg')+'">'+(vc>=0?'+':'')+vc.toFixed(1).replace(".",",")+' pp vs CDI</span></div>':''}
+        ${vc!=null?'<div style="font-size:12px;color:var(--ink-2)"><span class="chip '+(vc>=100?'pos':'neg')+'">'+Math.round(vc)+'% do CDI</span></div>':''}
         <div class="fc-meta">
           <div>Mês<br><b class="${cls(f.m1)}">${fmtPct(f.m1)}</b></div>
           <div>Taxa adm<br><b>${f.taxa||"—"}</b></div>
@@ -975,6 +975,38 @@ function renderVendas(){
   </div>
   ${quote("Use a portabilidade como diagnóstico. O cliente pode descobrir oportunidades que ainda não tinha percebido — sem custo e sem IR entre planos.")}
 
+  <div class="v-h">Comparar o plano atual do cliente (pelo CNPJ do fundo)</div>
+  <div class="vcard" style="margin-bottom:14px">
+    <div class="vch">Diagnóstico de portabilidade</div>
+    <p style="font-size:13px;color:var(--ink-2);line-height:1.55;margin-bottom:10px">Peça ao cliente o <b>CNPJ do fundo atual</b> (está no extrato da previdência dele). Todo fundo brasileiro reporta as cotas diárias à CVM, então dá para levantar a rentabilidade real dele. Informe o CNPJ abaixo e copie o prompt: cole no claude.ai (com busca na web ligada) e ele pesquisa o fundo na CVM/comparadores e devolve o comparativo pronto contra a nossa grade.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="cnpjComp" class="mono" placeholder="CNPJ do fundo do cliente — ex.: 00.000.000/0001-00" style="flex:1;min-width:230px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font-size:13px">
+      <input id="cnpjValor" class="mono" placeholder="Valor acumulado (opcional)" style="width:190px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);font-size:13px">
+      <button class="filebtn" type="button" onclick="radarCopiarComparacao(this)">🔎 Copiar prompt de comparação</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--ink-3);margin-top:8px">Fontes que o prompt manda consultar: dados abertos da CVM (informes diários por CNPJ) e comparadores públicos de fundos. A resposta volta com tabela comparativa e argumento pronto para a conversa.</div>
+  </div>
+
+  <div class="v-h">Domine a técnica: PGBL × VGBL (o cliente sempre pergunta)</div>
+  <div class="v-two">
+    <div class="vcard vgood"><div class="vch">PGBL — declaração completa do IR</div><ul><li>Deduz até <b>12% da renda bruta anual</b> na declaração — parte do imposto vira patrimônio do cliente.</li><li>No resgate, o IR incide sobre o <b>valor total</b> (aporte + rendimento).</li><li>Pergunta de qualificação: <i>"Você declara no modelo completo e contribui para o INSS?"</i></li></ul></div>
+    <div class="vcard vgood"><div class="vch">VGBL — simplificada ou acima dos 12%</div><ul><li>Sem dedução, mas o IR no resgate incide <b>só sobre o rendimento</b>.</li><li>Indicado para declaração simplificada, isentos e para o excedente dos 12%.</li><li>Argumento forte: repasse direto aos beneficiários — organização sucessória.</li></ul></div>
+  </div>
+  <div class="v-note">Jogada clássica: <b>combinar os dois</b> — PGBL até os 12% da renda bruta e VGBL para o que passar disso.</div>
+
+  <div class="v-h">Regime de imposto: regressiva × progressiva</div>
+  <div class="v-two">
+    <div class="vcard"><div class="vch">Tabela regressiva</div><ul><li>Alíquota cai com o tempo <b>de cada aporte</b>: 35% → <b>10% após 10 anos</b>.</li><li>Menos da metade do teto dos investimentos comuns — o argumento do longo prazo.</li><li>A portabilidade <b>não zera a contagem</b>: o prazo cumprido vai junto.</li></ul></div>
+    <div class="vcard"><div class="vch">Tabela progressiva</div><ul><li>Resgate entra como renda tributável (0% a 27,5%).</li><li>Vale para valores menores ou pouca renda tributável no futuro.</li><li>Tira a pressão da mesa: pela regra atual, o cliente pode <b>decidir o regime só no primeiro resgate</b>.</li></ul></div>
+  </div>
+
+  <div class="v-h">Empresarial: averbado × instituído</div>
+  <div class="v-two">
+    <div class="vcard"><div class="vch">Averbado — porta de entrada</div><ul><li>A empresa só averba e desconta em folha; quem contribui é o funcionário/sócio.</li><li><b>Custo zero para a empresa</b>, condições de grupo — fácil de aprovar com o dono.</li></ul></div>
+    <div class="vcard"><div class="vch">Instituído — retenção de talentos</div><ul><li>A empresa também contribui (ex.: R$ 1 para cada R$ 1 do funcionário), com regras de carência/vesting.</li><li>Contribuição da empresa <b>dedutível até 20% da folha</b> — argumento direto para o financeiro.</li></ul></div>
+  </div>
+  <div class="v-note">Roteiro de upgrade: entre com o averbado (custo zero) e, com o benefício rodando, evolua a conversa para o instituído como ferramenta de retenção.</div>
+
   <div class="v-h">Canais de apoio</div>
   <div class="v-two">
     <div class="vcard"><div class="vch">Suporte ao corretor</div><div class="vchan">4004-2780 <span>capitais e regiões metropolitanas</span></div><div class="vchan">0800 701 2781 <span>demais localidades</span></div><div class="vchan">suportehdcorretor@bradescoseguros.com.br</div></div>
@@ -1065,7 +1097,7 @@ function openFicha(nome){
   const tags=[];
   if(fi.benchmark)tags.push(`<span class="tag">Benchmark: <b style="color:var(--ink)">${fi.benchmark}</b></span>`);
   const vc=vcdi(f);
-  if(vc!=null)tags.push(`<span class="tag perf" style="background:${vc>=0?'var(--pos)':'var(--neg)'}">${vc>=0?'+':''}${vc.toFixed(1).replace(".",",")} pp vs CDI (12m)</span>`);
+  if(vc!=null)tags.push(`<span class="tag perf" style="background:${vc>=100?'var(--pos)':'var(--neg)'}">${Math.round(vc)}% do CDI (12m)</span>`);
   $("#fhTags").innerHTML=tags.join("");
   $("#fhSobre").textContent=fi.sobre||"Ficha descritiva desta lâmina ainda não disponível — os dados de rentabilidade abaixo vêm da planilha do mês.";
   // consistency line
@@ -1310,6 +1342,23 @@ function radarCopiar(txt,btn,rot){
   else prompt("Copie:",txt);
 }
 window.radarCopiarModelo=function(btn){ radarCopiar(JSON.stringify(DATA,null,1),btn,"📋 Copiar JSON atual (modelo)"); };
+window.radarCopiarComparacao=function(btn){
+  const cnpj=(document.getElementById("cnpjComp")?.value||"").trim();
+  const valor=(document.getElementById("cnpjValor")?.value||"").trim();
+  if(!cnpj){ alert("Informe o CNPJ do fundo atual do cliente."); return; }
+  const cdi=benchOf("CDI");
+  const resumo=DATA.funds.filter(f=>f.m12!=null).map(f=>
+    f.nome+" | perfil "+f.perfil+" | 12m "+String(f.m12).replace(".",",")+"% | 24m "+(f.m24==null?"-":String(f.m24).replace(".",",")+"%")+" | 36m "+(f.m36==null?"-":String(f.m36).replace(".",",")+"%")+" | taxa adm "+(f.taxa||"-")
+  ).join("\n");
+  const p="Você é analista de investimentos de uma corretora de seguros e previdência.\n\n"+
+    "TAREFA: um cliente tem previdência em outra instituição e estuda PORTABILIDADE. Pesquise na internet o fundo dele e compare com a nossa grade.\n\n"+
+    "FUNDO ATUAL DO CLIENTE:\n- CNPJ: "+cnpj+(valor?"\n- Valor acumulado aproximado: R$ "+valor:"")+"\n\n"+
+    "ONDE PESQUISAR:\n1. Dados abertos da CVM (dados.cvm.gov.br — informes diários de fundos, busque pelo CNPJ) para nome oficial, classe e rentabilidade das cotas.\n2. Comparadores públicos (Mais Retorno, comparadores de fundos) para taxa de administração e histórico 12/24/36 meses.\n\n"+
+    "COMPARE COM A NOSSA GRADE (Bradesco Vida e Previdência, dados de "+(DATA.ref||"-")+", CDI 12m = "+(cdi?String(cdi.m12).replace(".",",")+"%":"-")+"):\n"+resumo+"\n\n"+
+    "ME DEVOLVA:\n1. Ficha do fundo atual: nome oficial, gestor, classe, taxa de administração, rentabilidade 12/24/36m e % do CDI em cada janela.\n2. Tabela comparativa: fundo atual vs os 3 fundos da nossa grade mais adequados ao MESMO perfil de risco (rentabilidade nas 3 janelas, % do CDI, taxa adm).\n3. Se houver valor acumulado: quanto o cliente teria hoje em cada alternativa se tivesse feito a portabilidade há 12, 24 e 36 meses.\n4. Veredito honesto: a portabilidade compensa? Em qual fundo? Se o fundo atual for melhor, diga claramente.\n5. Três frases prontas, em linguagem de cliente, para eu usar na conversa — sem prometer rentabilidade futura.\n\n"+
+    "REGRAS: use apenas dados que encontrar de fato (se não encontrar, diga o que faltou); rentabilidade passada não garante futura; nada de recomendação formal de investimento — é material de apoio comercial.";
+  radarCopiar(p,btn,"🔎 Copiar prompt de comparação");
+};
 window.radarCopiarPrompt=function(btn){
   const p="Você é analista de investimentos de uma corretora. Em anexo estão: (1) as LÂMINAS/planilha de rentabilidade dos fundos de previdência do NOVO mês e (2) o JSON do mês anterior do nosso Radar de Fundos.\n\nTAREFA: devolva o JSON COMPLETO atualizado para o novo mês, no MESMO formato do JSON anterior, dentro de um bloco de código ```json.\n\nREGRAS:\n1. Atualize ref (ex.: \"ago-26\") e meses3 (desloca a janela dos 3 últimos meses).\n2. Em cada fundo: m1 = rentabilidade do novo mês; m2 e m3 deslocam; ano/m12/m24/m36/pl conforme a lâmina nova.\n3. Na ficha: acrescente o novo mês em h2026 e pctcdi2026 (posição do mês, demais meses null); atualize vol12/sharpe12/pctbench12/bench12/bench24/bench36/pl_atual; mantenha sobre/gestor/carencias/composicao/mercados a menos que a lâmina mostre mudança.\n4. Atualize os 4 índices em bench (CDI, Ibovespa, Poupança, IPCA) e seus hist2025/hist2026.\n5. Inclua TODOS os fundos (os do JSON anterior + qualquer fundo novo da lâmina; fundo encerrado, remova e me avise fora do JSON).\n6. Fundo sem dado no mês: m1 = null (NUNCA invente número).\n7. Formatos idênticos aos do JSON anterior (números com ponto decimal, textos como estão). NUNCA use aspas duplas dentro de textos — use aspas simples.\n8. Antes de devolver, confira: mesmo nº de campos por fundo e JSON válido.";
   radarCopiar(p,btn,"🤖 Copiar prompt de atualização");
