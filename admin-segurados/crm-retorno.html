@@ -1180,7 +1180,7 @@ function bootstrap(){
   LISTENERS.push(db.collection('beneficiarios').onSnapshot(s=>{
     CACHE.beneficiarios=s.docs.map(d=>({id:d.id,...d.data()}));
     const r=(location.hash||'#dashboard').slice(1);
-    if(r==='movimentacoes' && MOV_STATE.empresaId) VIEWS.movimentacoes();
+    if(r==='movimentacoes') VIEWS.movimentacoes();
     if(r==='empresas') VIEWS.empresas();
   },err=>console.warn('benef',err)));
 
@@ -1807,10 +1807,14 @@ VIEWS.movimentacoes=function(){
 /* Passo 1: lista de empresas com nº de pendências (separado por empresa) */
 function renderMovEmpresasLista(){
   const movs=CACHE.movimentacoes;
-  // agrupa por empresa (usa empresaId; cai p/ empresaNome)
+  const benef=CACHE.beneficiarios||[];
+  const nomeEmp=id=>{ const e=CACHE.empresas.find(x=>x.id===id); return e&&e.nomeEmpresa; };
+  // agrupa por empresa: tanto quem tem movimentação quanto quem só tem beneficiários (ex.: acabou de importar)
   const grupos={};
-  movs.forEach(m=>{ const k=m.empresaId||('nome:'+(m.empresaNome||'—')); (grupos[k]=grupos[k]||{nome:m.empresaNome||'Empresa',id:m.empresaId,pend:0,total:0}); grupos[k].total++; if(m.status==='pendente') grupos[k].pend++; });
-  let arr=Object.values(grupos).sort((a,b)=>b.pend-a.pend||a.nome.localeCompare(b.nome));
+  const garante=(k,nome,id)=>{ if(!grupos[k]) grupos[k]={nome:nome||'Empresa',id:id||'',pend:0,total:0,benef:0}; else if(nome&&grupos[k].nome==='Empresa') grupos[k].nome=nome; return grupos[k]; };
+  movs.forEach(m=>{ const k=m.empresaId||('nome:'+(m.empresaNome||'—')); const g=garante(k,nomeEmp(m.empresaId)||m.empresaNome,m.empresaId); g.total++; if(m.status==='pendente') g.pend++; });
+  benef.forEach(b=>{ if(b.status==='inativo'||b.status==='excluido') return; const k=b.empresaId||('nome:'+(b.empresaNome||'—')); const g=garante(k,nomeEmp(b.empresaId)||b.empresaNome,b.empresaId); g.benef++; });
+  let arr=Object.values(grupos).sort((a,b)=>b.pend-a.pend||(b.total+b.benef)-(a.total+a.benef)||a.nome.localeCompare(b.nome));
 
   const totPend=movs.filter(m=>m.status==='pendente').length;
   let html=head('movimentacoes');
@@ -1826,7 +1830,7 @@ function renderMovEmpresasLista(){
     ${arr.length?arr.map(g=>`
       <div class="emp-row" onclick="abrirEmpresaMov('${g.id||''}','${esc(g.nome).replace(/'/g,"\\'")}')">
         <div class="logo">${initials(g.nome)}</div>
-        <div class="nm"><b>${esc(g.nome)}</b><span>${g.total} movimentação(ões) no histórico</span></div>
+        <div class="nm"><b>${esc(g.nome)}</b><span>${(()=>{const p=[];if(g.total)p.push(g.total+' movimentação(ões)');if(g.benef)p.push(g.benef+' beneficiário(s) ativo(s)');return p.join(' · ')||'sem registros ainda';})()}</span></div>
         <span class="pend ${g.pend?'':'zero'}">${g.pend?g.pend+' pendente(s)':'em dia'}</span>
         <i class="fas fa-chevron-right" style="color:var(--text-3)"></i>
       </div>`).join(''):`<div class="empty"><div class="em-ic"><i class="fas fa-check"></i></div><h4>Nenhuma movimentação por aqui</h4><p>Quando as empresas enviarem inclusões ou exclusões, elas aparecem aqui organizadas por empresa.</p></div>`}
