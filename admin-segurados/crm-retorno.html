@@ -2797,8 +2797,8 @@ const SITE_ROT={
   tipoEstabelecimento:'Tipo de estabelecimento',alvenaria:'Alvenaria',valorTotal:'Patrimônio total',temApolice:'Tem seguro hoje',vencimentoApolice:'Vence em',teveSinistro:'Sinistro 12m',
   qtdVeiculos:'Veículos',tipoFrota:'Tipo de frota',usoFrota:'Uso da frota',coberturaDesejada:'Cobertura',qtdCoberturaTotal:'Com cobertura total',qtdCoberturaRCF:'Só RCF',qtdSinistros:'Sinistros 12m',seguradoraAtual:'Seguradora atual',vidros:'Vidros',
   segmento:'Segmento',faturamento:'Faturamento',quantidadeVeiculos:'Veículos',
-  tipoViagem:'Motivo da viagem',destinos:'Destino(s)',dataIda:'Ida',dataVolta:'Volta',diasViagem:'Duração (dias)',
-  qtdViajantes:'Viajantes',idadeMaisVelho:'Idade do mais velho',dmhNivel:'Despesas médicas',gestante:'Viaja grávida',
+  tipoViagem:'Motivo da viagem',destinos:'Destino(s)',cruzeiro:'Cruzeiro',dataIda:'Saída da cidade',dataVolta:'Retorno à cidade',diasViagem:'Duração (dias)',
+  qtdViajantes:'Viajantes',viajantesFaixas:'Faixas etárias',dmhNivel:'Despesas médicas',gestante:'Viaja grávida',
   preexistencia:'Pré-existência',esportesAventura:'Esporte / aventura'};
 const SITE_VAL={sexo:{M:'Masculino',F:'Feminino'},familia:{solteiro:'Sem dependentes',casal:'Cônjuge',filhosMenores:'Filhos menores',filhosAdultos:'Filhos adultos'},
   perfilIdades:{jovem:'Maioria até 33',meio:'Entre 34 e 48',senior:'Acima de 49',misto:'Bem misturado'},temPlano:{sim:'Sim',nao:'Não'},dependentes:{sim:'Sim',nao:'Não'},
@@ -2813,8 +2813,7 @@ const SITE_VAL={sexo:{M:'Masculino',F:'Feminino'},familia:{solteiro:'Sem depende
   tipoImovel:{apartamento:'Apartamento',casa:'Casa',casa_condominio:'Casa em condomínio',sobrado:'Sobrado'},tipoConstrucao:{alvenaria:'Alvenaria',mista:'Mista',madeira:'Madeira'},
   usoImovel:{residencia:'Moradia habitual',veraneio:'Veraneio',alugado:'Inquilino'},padraoAcabamento:{baixo:'Simples',medio:'Médio',alto:'Alto padrão'},
   tipoViagem:{lazer:'Lazer / turismo',trabalho:'Trabalho / negócios',estudo:'Intercâmbio / estudo',mochilao:'Mochilão',visita:'Visitar família'},
-  qtdViajantes:{'1':'Só o titular','2':'2 pessoas','3':'3 pessoas',familia:'Família (4+)',grupo:'Grupo grande'},
-  idadeMaisVelho:{ate64:'Até 64 anos','65a70':'65 a 70 anos','71a75':'71 a 75 anos','76a85':'76 a 85 anos','86mais':'86 anos ou mais'},
+  cruzeiro:{sim:'Sim',nao:'Não'},
   dmhNivel:{'30':'US$ 30 mil','60':'US$ 60 mil','100':'US$ 100 mil','250':'US$ 250 mil ou +',nao_sei:'A definir'},
   gestante:{sim:'Sim',nao:'Não'},preexistencia:{sim:'Sim',nao:'Não'},esportesAventura:{sim:'Sim',nao:'Não'}};
 const COB_ROT_SITE={morte:'Morte',morteAcidental:'Morte acidental',ipa:'Invalidez por acidente',ifpd:'Invalidez por doença',doencasGraves:'Doenças graves',dit:'Diária por afastamento',funeral:'Assistência funeral',
@@ -4330,6 +4329,85 @@ function exportDesist(){ const rows=window.__desistExport||[]; if(!rows.length){
 
 /* ---------- IMPORTAR BENEFICIÁRIOS ---------- */
 let IMPORT_ROWS=[]; let IMPORT_MODO='novo';
+let IMPORT_COLS=[], IMPORT_LINHAS=[], IMPORT_MAP={}, IMPORT_HEADER=false;
+/* dicionário de sinônimos de coluna — a planilha de cada operadora usa um nome diferente */
+const IMP_ALVOS=[
+  {k:'nome',rot:'Nome',req:true},
+  {k:'cpf',rot:'CPF'},
+  {k:'cartao',rot:'Nº carteirinha'},
+  {k:'dataNascimento',rot:'Nascimento'},
+  {k:'dataAdmissao',rot:'Admissão'},
+  {k:'plano',rot:'Plano'},
+  {k:'titularidade',rot:'Titularidade'}
+];
+const IMP_EXCLUI_NOME=['contratante','estipulante','empresa','fantasia','razao','social','operadora','seguradora','sub'];
+function normHdr(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function impPontua(alvo,h){
+  // devolve uma pontuação de quão bem o cabeçalho "h" (normalizado) casa com o campo "alvo"
+  if(alvo==='nome'){ if(IMP_EXCLUI_NOME.some(x=>h.includes(x))) return 0;
+    if(/(^| )beneficiari/.test(h)) return 9; if(h.includes('colaborador')) return 8; if(h.includes('segurado')) return 7;
+    if(h==='nome') return 6; if(h.includes('nome')) return 4; return 0; }
+  if(alvo==='cpf') return h==='cpf'?9:(h.includes('cpf')?6:0);
+  if(alvo==='cartao'){ if(h.includes('carteirinha')) return 9; if(h.includes('cartao')) return 8; if(h.includes('matricula')) return 6; if(h.includes('carteira')) return 6; if(h.includes('numero do cartao')) return 9; return 0; }
+  if(alvo==='dataNascimento') return h.includes('nasc')?9:0;
+  if(alvo==='dataAdmissao') return h.includes('admiss')?9:0;
+  if(alvo==='plano'){ if(h==='plano') return 9; if(h.includes('plano')) return 7; if(h.includes('produto')) return 6; return 0; }
+  if(alvo==='titularidade'){ if(h.includes('titularidade')) return 9; if(h.includes('parentesco')) return 8; if(h.includes('titular')) return 6; if(h.includes('vinculo')) return 5; if(h==='tipo') return 4; return 0; }
+  return 0;
+}
+function impDetectaDelim(l){ const c=(x)=>((l.match(new RegExp('\\'+x,'g'))||[]).length);
+  const cont={';':c(';'),'\t':(l.match(/\t/g)||[]).length,',':c(',')}; let best=';',bv=-1;
+  for(const d in cont){ if(cont[d]>bv){ bv=cont[d]; best=d; } } return bv>0?best:';'; }
+function impEhCabecalho(cels){ return cels.some(c=>{ const h=normHdr(c); return IMP_ALVOS.some(a=>impPontua(a.k,h)>=6); }); }
+function impAutoMap(cols){ const map={}; const usados={};
+  IMP_ALVOS.forEach(a=>{ let melhor=-1,mp=0;
+    cols.forEach((c,i)=>{ if(usados[i]) return; const p=impPontua(a.k,normHdr(c)); if(p>mp){ mp=p; melhor=i; } });
+    if(melhor>=0&&mp>0){ map[a.k]=melhor; usados[melhor]=1; } else map[a.k]=-1; });
+  return map;
+}
+function impTitular(v){ const h=normHdr(v); if(!h) return 'titular';
+  if(/(depend|conjuge|filh|companh|agregad|esposa|marido|dep$)/.test(h)) return 'dependente'; return 'titular'; }
+function impAplicarMap(){
+  const padrao=(document.getElementById('impPlano')||{}).value||'saude';
+  IMPORT_ROWS=IMPORT_LINHAS.map(c=>{
+    const g=k=>{ const i=IMPORT_MAP[k]; return (i==null||i<0)?'':String(c[i]==null?'':c[i]).trim(); };
+    const nome=g('nome'); if(!nome) return null;
+    const tit=IMPORT_MAP.titularidade>=0?impTitular(g('titularidade')):'titular';
+    return { nome, cpf:g('cpf'), cartao:g('cartao'),
+      dataNascimento:dataBR(g('dataNascimento')), dataAdmissao:dataBR(g('dataAdmissao')),
+      plano:(g('plano')||padrao).toLowerCase(), titularidade:tit }; }).filter(Boolean);
+}
+function remapImport(k,v){ if(k){ IMPORT_MAP[k]=+v; } renderMapImport(); }
+function renderMapImport(){
+  impAplicarMap();
+  const el=document.getElementById('impPreview'); if(!el) return;
+  const optCols=(sel)=>['<option value="-1">— não usar —</option>'].concat(
+    IMPORT_COLS.map((c,i)=>`<option value="${i}" ${sel===i?'selected':''}>${esc(c)||('Coluna '+(i+1))}</option>`)).join('');
+  const mapUI=`<div class="card" style="margin-bottom:14px"><div class="card-pad">
+    <div style="font-weight:700;margin-bottom:4px"><i class="fas fa-diagram-project"></i> De qual coluna vem cada informação</div>
+    <div style="font-size:.8rem;color:var(--text-3);margin-bottom:12px">Reconheci automaticamente pelas colunas da planilha. Se algo estiver na coluna errada, é só trocar aqui.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+    ${IMP_ALVOS.map(a=>`<div class="form-row" style="margin:0"><label>${a.rot}${a.req?' *':''}</label>
+      <select onchange="remapImport('${a.k}',this.value)">${optCols(IMPORT_MAP[a.k])}</select></div>`).join('')}
+    </div></div></div>`;
+  if(!IMPORT_ROWS.length){ el.innerHTML=mapUI+`<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div>
+    <h4>Nada reconhecido</h4><p>Confira se a coluna <b>Nome</b> está apontada certo acima.</p></div></div>`; return; }
+  const semCpf=IMPORT_ROWS.filter(r=>soDig(r.cpf).length!==11).length;
+  const semNasc=IMPORT_ROWS.filter(r=>!r.dataNascimento).length;
+  const semCart=IMPORT_ROWS.filter(r=>!String(r.cartao||'').trim()).length;
+  const semAdm=IMPORT_ROWS.filter(r=>r.titularidade!=='dependente'&&!r.dataAdmissao).length;
+  const chip=(n,txt)=>`<span style="font-size:.8rem"><b style="color:${n?'var(--warn)':'var(--ok)'}">${n}</b> ${txt}</span>`;
+  el.innerHTML=mapUI+`<div class="card"><div class="card-head"><h3><i class="fas fa-table-list"></i> Pré-visualização (${IMPORT_ROWS.length})</h3>
+    <button class="btn btn-primary btn-sm" onclick="confirmarImport()"><i class="fas fa-file-import"></i> Importar ${IMPORT_ROWS.length}</button></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;padding:0 16px 10px">${chip(semCpf,'sem CPF')} ${chip(semNasc,'sem nascimento')} ${chip(semCart,'sem carteirinha')} ${chip(semAdm,'sem admissão')}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>CPF</th><th>Carteirinha</th><th>Nascimento</th><th>Admissão</th><th>Plano</th><th>Titular.</th></tr></thead><tbody>
+    ${IMPORT_ROWS.slice(0,60).map(r=>`<tr><td>${esc(r.nome)}</td><td>${esc(r.cpf)||'<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${esc(r.cartao)||'<span style="color:var(--text-3)">—</span>'}</td>
+      <td>${r.dataNascimento?fmtData(r.dataNascimento):'<span style="color:var(--warn)">—</span>'}</td>
+      <td>${r.dataAdmissao?fmtData(r.dataAdmissao):(r.titularidade==='dependente'?'<span style="color:var(--text-3)">n/a</span>':'<span style="color:var(--warn)">—</span>')}</td>
+      <td>${esc((r.plano||'').toUpperCase())}</td><td>${esc(r.titularidade)}</td></tr>`).join('')}
+    </tbody></table></div>${IMPORT_ROWS.length>60?`<div class="card-pad" style="color:var(--text-3);font-size:.82rem">Mostrando 60 de ${IMPORT_ROWS.length}.</div>`:''}</div>`;
+}
 VIEWS.importar=function(){
   let html=head('importar');
   const opts=CACHE.empresas.slice().sort((a,b)=>(a.nomeEmpresa||'').localeCompare(b.nomeEmpresa||'')).map(e=>`<option value="${e.id}">${esc(e.nomeEmpresa)}</option>`).join('');
@@ -4343,9 +4421,11 @@ VIEWS.importar=function(){
           <i class="fas fa-circle-info"></i> Use para completar quem <b>já está cadastrado</b> — por exemplo preencher a data de nascimento de quem veio da planilha antiga.
           O sistema procura pelo <b>CPF</b> dentro da empresa e atualiza todos os produtos daquela pessoa. Ninguém novo é criado.
           <div style="margin-top:8px">Colunas: <b>CPF, Nascimento, Admissão</b> <span style="opacity:.75">(admissão é opcional)</span> — ex.: <code>333.444.555-66; 1990-04-12; 2021-03-15</code></div></div>`
-      : `<p style="color:var(--text-2);margin-bottom:16px">Cole a lista de beneficiários (uma pessoa por linha) ou selecione um arquivo CSV. Colunas esperadas, separadas por vírgula ou ponto e vírgula: <b>Nome, CPF, Plano, Titularidade, Nascimento</b>.</p>`}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      : `<p style="color:var(--text-2);margin-bottom:16px">Cole a lista ou selecione o arquivo (CSV/TXT). <b>Pode ter uma linha de cabeçalho</b> — eu reconheço as colunas pelo nome (Nome/Beneficiário, CPF, Nº do Cartão/Carteirinha, Data Nasc., Admissão…) e você confere o de-para antes de importar. Aceita separação por vírgula, ponto e vírgula ou tabulação.</p>`}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
       <div class="form-row" style="margin:0"><label>Empresa de destino *</label><select id="impEmpresa"><option value="">Selecione...</option>${opts}</select></div>
+      ${IMPORT_MODO==='novo'?`<div class="form-row" style="margin:0"><label>Plano padrão <span style="font-weight:400;color:var(--text-3)">(se a planilha não tiver a coluna)</span></label>
+        <select id="impPlano" onchange="if(IMPORT_LINHAS.length)renderMapImport()"><option value="dental">Dental</option><option value="saude">Saúde</option><option value="vida">Vida</option><option value="odonto">Odonto</option><option value="outro">Outro</option></select></div>`:''}
       <div class="form-row" style="margin:0"><label>Arquivo CSV</label><input type="file" id="impFile" accept=".csv,.txt" onchange="lerArquivoImport(event)"></div>
     </div>
     <div class="form-row"><label>Ou cole aqui</label><textarea id="impTexto" rows="6" placeholder="${IMPORT_MODO==='atualizar'?'333.444.555-66; 1990-04-12; 2021-03-15':'João da Silva, 123.456.789-00, saude, titular, 1990-05-10'}"></textarea></div>
@@ -4366,16 +4446,18 @@ function dataBR(v){ v=(v||'').trim(); if(!v) return '';
 function previewImport(){ const txt=document.getElementById('impTexto').value.trim(); if(!txt){ toast('Cole a lista ou selecione um arquivo.','info'); return; }
   const linhas=txt.split(/\r?\n/).filter(x=>x.trim());
   if(IMPORT_MODO==='atualizar') return previewAtualizar(linhas);
-  IMPORT_ROWS=linhas.map(l=>{ const c=l.split(/[;,\t]/).map(x=>x.trim());
-    if(/nome/i.test(c[0])&&/cpf/i.test(c[1]||'')) return null; // pula cabeçalho
-    return {nome:c[0]||'',cpf:c[1]||'',plano:(c[2]||'saude').toLowerCase(),titularidade:(c[3]||'titular').toLowerCase(),dataNascimento:c[4]||''}; }).filter(x=>x&&x.nome);
-  const el=document.getElementById('impPreview');
-  if(!IMPORT_ROWS.length){ el.innerHTML=`<div class="card"><div class="empty"><div class="em-ic"><i class="fas fa-triangle-exclamation"></i></div><h4>Nada reconhecido</h4><p>Confira o formato das linhas.</p></div></div>`; return; }
-  el.innerHTML=`<div class="card"><div class="card-head"><h3><i class="fas fa-table-list"></i> Pré-visualização (${IMPORT_ROWS.length})</h3>
-    <button class="btn btn-primary btn-sm" onclick="confirmarImport()"><i class="fas fa-file-import"></i> Importar ${IMPORT_ROWS.length}</button></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>CPF</th><th>Plano</th><th>Titularidade</th><th>Nascimento</th></tr></thead><tbody>
-    ${IMPORT_ROWS.slice(0,50).map(r=>`<tr><td>${esc(r.nome)}</td><td>${esc(r.cpf)}</td><td>${esc(r.plano.toUpperCase())}</td><td>${esc(r.titularidade)}</td><td>${esc(r.dataNascimento)}</td></tr>`).join('')}
-    </tbody></table></div>${IMPORT_ROWS.length>50?`<div class="card-pad" style="color:var(--text-3);font-size:.82rem">Mostrando 50 de ${IMPORT_ROWS.length}.</div>`:''}</div>`;
+  // ---- Cadastrar novos: detecta separador, cabeçalho e mapeia coluna -> campo ----
+  const delim=impDetectaDelim(linhas[0]);
+  const parsed=linhas.map(l=>l.split(delim).map(x=>x.trim()));
+  if(impEhCabecalho(parsed[0])){
+    IMPORT_HEADER=true; IMPORT_COLS=parsed[0]; IMPORT_LINHAS=parsed.slice(1); IMPORT_MAP=impAutoMap(IMPORT_COLS);
+  } else {
+    IMPORT_HEADER=false; IMPORT_LINHAS=parsed;
+    const nc=Math.max.apply(null,parsed.map(r=>r.length));
+    IMPORT_COLS=Array.from({length:nc},(_,i)=>'Coluna '+(i+1));
+    IMPORT_MAP={nome:0,cpf:1,plano:2,titularidade:3,dataNascimento:4,dataAdmissao:-1,cartao:-1};
+  }
+  renderMapImport();
 }
 
 function previewAtualizar(linhas){
@@ -4452,7 +4534,10 @@ async function confirmarImport(){ const empId=document.getElementById('impEmpres
   toast('Importando '+IMPORT_ROWS.length+' beneficiário(s)...','info','Aguarde');
   try{ let batch=db.batch(),n=0,total=0;
     for(const r of IMPORT_ROWS){ const ref=db.collection('beneficiarios').doc();
-      batch.set(ref,{empresaId:empId,empresaNome:emp?.nomeEmpresa||null,nome:r.nome,cpf:r.cpf||null,plano:r.plano,titularidade:r.titularidade,dataNascimento:r.dataNascimento||null,status:'ativo',dataInicio:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),origem:'importacao'});
+      const dep=r.titularidade==='dependente';
+      batch.set(ref,{empresaId:empId,empresaNome:emp?.nomeEmpresa||null,nome:r.nome,cpf:r.cpf||null,cartao:(r.cartao||'').trim()||null,
+        plano:r.plano,titularidade:r.titularidade,dataNascimento:r.dataNascimento||null,dataAdmissao:dep?null:(r.dataAdmissao||null),
+        status:'ativo',dataInicio:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),origem:'importacao'});
       n++;total++; if(n>=400){ await batch.commit(); batch=db.batch(); n=0; } }
     if(n>0) await batch.commit();
     IMPORT_ROWS=[]; document.getElementById('impPreview').innerHTML=''; document.getElementById('impTexto').value='';
