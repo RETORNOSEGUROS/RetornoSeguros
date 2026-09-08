@@ -1688,9 +1688,9 @@ async function salvarEmpresa(){
       }catch(e){ console.warn('contratoArquivo',e); } }
     }
     closeModal(); toast('Empresa salva com sucesso.','ok');
-    /* mantém a apresentação publicada em dia com os perfis/coberturas atuais */
-    if((CACHE.empresas||[]).some(x=>x.apresentacaoCodigo) && typeof apresPublicarTodas==='function')
-      setTimeout(()=>{ apresPublicarTodas().catch(()=>{}); },1500);
+    /* mantém a apresentação publicada em dia com os perfis/coberturas atuais (só desta empresa) */
+    if(id && typeof apresPublicarPorId==='function')
+      setTimeout(()=>{ const e=(CACHE.empresas||[]).find(x=>x.id===id); if(e&&e.apresentacaoToken) apresPublicarPorId(id).catch(()=>{}); },1600);
   }catch(e){ console.error(e); toast('Erro ao salvar empresa.','err'); }
 }
 
@@ -12086,15 +12086,18 @@ async function eiAlternar(id){
 
 /* =========================================================================
    APRESENTAÇÃO DO PLANO — link digital + PDF, moldado por empresa/perfil
-   Publica um doc público (site/apresentacoes) só com dados NÃO sensíveis:
-   nome da empresa, perfis contratados, coberturas e nº de vidas (sem CPF/nomes).
+   SEGURANÇA: cada empresa vira um documento próprio em `apresentacoes/{token}`,
+   com um token LONGO e ALEATÓRIO (link não-listado). A regra do Firestore libera
+   só o GET por id (quem tem o link) e PROÍBE listar a coleção — ninguém consegue
+   varrer as empresas nem os valores. Dados publicados: nome da empresa, perfis,
+   coberturas e nº de colaboradores. Nunca CPF nem nome de colaborador.
    ========================================================================= */
-const APRES_SITE='https://retornoseguros.com/';
-function apresCodigoNovo(emp){
-  const base=eiNorm(emp.nomeEmpresa||'EMPRESA').replace(/[^A-Z0-9]/g,'').slice(0,8)||'EMPRESA';
-  const usados=new Set((CACHE.empresas||[]).map(e=>e.apresentacaoCodigo).filter(Boolean));
-  for(let i=0;i<60;i++){ const c=base+String(100+Math.floor(Math.random()*900)); if(!usados.has(c)) return c; }
-  return base+Date.now().toString().slice(-4);
+const APRES_SITE='https://retornoseguros.com/admin-segurados/dentalboasvindas.html';
+function apresTokenNovo(){
+  const abc='abcdefghijkmnpqrstuvwxyz23456789'; let t='';
+  const rnd=(window.crypto&&crypto.getRandomValues)?crypto.getRandomValues(new Uint32Array(24)):null;
+  for(let i=0;i<24;i++){ const v=rnd?rnd[i]:Math.floor(Math.random()*1e9); t+=abc[v%abc.length]; }
+  return t; // 24 caracteres aleatórios ~ impossível de adivinhar
 }
 function apresVidas(emp){
   return CACHE.beneficiarios.filter(b=>b.empresaId===emp.id && b.status!=='inativo' && b.titularidade!=='dependente').length;
@@ -12119,27 +12122,27 @@ function apresDados(emp){
     vidas:apresVidas(emp), perfis:apresPerfisData(emp)
   };
 }
-/* (re)publica o índice público com TODAS as empresas que já têm código de apresentação */
-async function apresPublicarTodas(){
-  const mapa={};
-  (CACHE.empresas||[]).forEach(e=>{ const c=String(e.apresentacaoCodigo||'').trim().toUpperCase(); if(!c) return;
-    if((e.perfis||[]).filter(p=>p.chave).length) mapa[c]=apresDados(e); });
-  await db.collection('site').doc('apresentacoes').set({empresas:mapa,atualizadoEm:FV.serverTimestamp()});
+/* publica SÓ o documento desta empresa (nunca lê/expõe as outras) */
+async function apresPublicarEmp(emp){
+  if(!emp||!emp.apresentacaoToken) return;
+  await db.collection('apresentacoes').doc(emp.apresentacaoToken)
+    .set(Object.assign({},apresDados(emp),{empresaId:emp.id,atualizadoEm:FV.serverTimestamp()}));
 }
+async function apresPublicarPorId(empId){ const e=(CACHE.empresas||[]).find(x=>x.id===empId); if(e&&e.apresentacaoToken) await apresPublicarEmp(e); }
 async function modalApresentacao(empId){
   const e=CACHE.empresas.find(x=>x.id===empId); if(!e){ toast('Empresa não encontrada.','err'); return; }
   if(!((e.perfis||[]).filter(p=>p.chave).length)){
     toast('Cadastre os perfis contratados no cadastro da empresa para gerar a apresentação com as coberturas certas.','info','Faltam os perfis'); return; }
   toast('Gerando apresentação...','info');
   try{
-    if(!e.apresentacaoCodigo){ const cod=apresCodigoNovo(e);
-      await db.collection('empresas_clientes').doc(e.id).update({apresentacaoCodigo:cod, atualizadoEm:FV.serverTimestamp()});
-      e.apresentacaoCodigo=cod; }
-    await apresPublicarTodas();
+    if(!e.apresentacaoToken){ const tk=apresTokenNovo();
+      await db.collection('empresas_clientes').doc(e.id).update({apresentacaoToken:tk, atualizadoEm:FV.serverTimestamp()});
+      e.apresentacaoToken=tk; }
+    await apresPublicarEmp(e);
   }catch(err){ console.warn('apres',err); toast('Não consegui publicar a apresentação.','err'); return; }
-  const cod=e.apresentacaoCodigo;
-  const linkColab=APRES_SITE+'apresentacao.html?e='+cod+'&tipo=colaborador';
-  const linkEmp=APRES_SITE+'apresentacao.html?e='+cod+'&tipo=empresa';
+  const cod=e.apresentacaoToken;
+  const linkColab=APRES_SITE+'?e='+cod+'&tipo=colaborador';
+  const linkEmp=APRES_SITE+'?e='+cod+'&tipo=empresa';
   const d=apresDados(e);
   const perfilLinha=d.perfis.map(p=>`<span class="badge" style="background:var(--brand-50);color:var(--brand-dark);margin:0 4px 4px 0;display:inline-block">${esc(p.nome)}${p.padrao?' (padrão)':''}</span>`).join('');
   const linkBox=(titulo,sub,url,ic)=>`
@@ -12159,6 +12162,8 @@ async function modalApresentacao(empId){
     <div class="modal-body">
       <div style="background:var(--brand-50);border-radius:10px;padding:12px 15px;margin-bottom:16px;font-size:.83rem;color:var(--brand-dark)">
         <i class="fas fa-circle-info"></i> A apresentação vem <b>moldada com os perfis contratados</b> desta empresa e suas coberturas — sem CPF nem nome de colaborador. Cada link abre a página; o botão <b>Baixar PDF</b> fica dentro dela.</div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:.8rem;color:var(--text-2)">
+        <i class="fas fa-lock" style="color:var(--ok)"></i> <b>Link privado:</b> o endereço tem um código secreto e longo. Só quem recebe o link vê — e cada link abre <b>apenas esta empresa</b>. Ninguém consegue listar as outras.</div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:.85rem;color:var(--text-2);margin-bottom:16px">
         <span><b>${d.vidas}</b> colaborador(es)</span>
         <span>Perfis: ${perfilLinha||'—'}</span>
@@ -12171,7 +12176,7 @@ async function modalApresentacao(empId){
       <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
 }
 async function apresRepublicar(empId){
-  try{ await apresPublicarTodas(); toast('Dados da apresentação atualizados com o que está cadastrado agora.','ok','Atualizado'); }
+  try{ await apresPublicarPorId(empId); toast('Dados da apresentação atualizados com o que está cadastrado agora.','ok','Atualizado'); }
   catch(e){ console.warn(e); toast('Erro ao atualizar.','err'); }
 }
 
