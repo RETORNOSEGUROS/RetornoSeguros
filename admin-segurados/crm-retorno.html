@@ -850,6 +850,7 @@ const MENU = [
     { id:'empresas', icon:'fa-building', label:'Empresas' },
     { id:'movimentacoes', icon:'fa-right-left', label:'Movimentações', badge:'mov' },
     { id:'importar', icon:'fa-file-import', label:'Importar' },
+    { id:'planos', icon:'fa-tooth', label:'Planos dental' },
     { id:'indicacoes_empresas', icon:'fa-share-nodes', label:'Indicações das empresas' },
   ]},
   { sec:'Parceiros', items:[
@@ -887,6 +888,7 @@ const EXPLAIN = {
   empresas:'Empresas clientes cujos beneficiários você administra — com dados de acesso ao portal da seguradora.',
   movimentacoes:'Inclusões e exclusões de beneficiários enviadas pelas empresas. Organize por empresa, aprove e leve ao portal da seguradora.',
   importar:'Importe listas de beneficiários em massa a partir de planilhas.',
+  planos:'Comparativo das linhas de plano dental Bradesco — SPG (Emissão Expressa) e Empresarial (Cardápio) — com as coberturas de cada perfil. Só para consulta, sem valores.',
   propostas:'Suba os PDFs das propostas e o sistema lê os dados sozinho — segurado, veículo, coberturas, prêmio e a comissão. Se o layout da seguradora mudar, ele avisa o que não conseguiu ler.',
   comissoes:'A comissão da corretora calculada da carteira inteira, ano a ano e mês a mês — inclusive o que veio do sistema antigo — e quanto cada um da equipe recebe.',
   carteira:'Traga tudo do sistema gerenciador antigo: solte o Excel exportado e eu cadastro os clientes, importo as apólices (ativas e históricas), separo o que precisa renovar e vinculo quem produziu cada negócio.',
@@ -1515,6 +1517,22 @@ function modalEmpresa(id){
             <div style="font-size:.78rem;color:var(--text-3);padding-top:10px">Hoje o RH entra com: <b>${esc(e.senhaPortal||e.senha||(e.cnpj||'').slice(-6)||'—')}</b></div></div>
         </div>
       </div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;margin-bottom:4px"><i class="fas fa-tooth" style="color:var(--brand)"></i> Perfis de plano contratados (dental)</div>
+        <div style="font-size:.75rem;color:var(--text-2);margin-bottom:10px">A empresa pode ter <b>mais de um perfil</b> na apólice. Marque quais foram contratados e o valor por vida. O perfil <b>padrão</b> é o que todo colaborador recebe ao ser cadastrado — depois você muda individualmente na ficha de cada um. <a href="#planos" onclick="closeModal()" style="color:var(--brand)">Ver diferença entre os planos</a>.</div>
+        <div id="empPerfisBox"></div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="empAddPerfil()"><i class="fas fa-plus"></i> Adicionar perfil</button>
+      </div>
+
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:.82rem;margin-bottom:4px"><i class="fas fa-file-signature" style="color:var(--brand)"></i> Contrato assinado (PDF)</div>
+        <div id="empContratoAtual" style="font-size:.8rem;margin-bottom:8px">${e.contratoArquivo&&e.contratoArquivo.url
+          ? `<a href="${esc(e.contratoArquivo.url)}" target="_blank" style="color:var(--brand);font-weight:600"><i class="fas fa-file-pdf"></i> ${esc(e.contratoArquivo.nome||'contrato.pdf')}</a> <span style="color:var(--text-3)">· anexado</span>`
+          : '<span style="color:var(--text-3)">Nenhum contrato anexado ainda.</span>'}</div>
+        <input type="file" id="empContratoFile" accept="application/pdf" style="font-size:.82rem">
+        <div style="font-size:.74rem;color:var(--text-3);margin-top:6px">${id?'Selecione o PDF e clique em Salvar empresa — o arquivo fica de fácil acesso aqui.':'Você pode anexar o contrato agora ou depois de salvar a empresa.'}</div>
+      </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div class="form-row"><label>Status</label><select id="empStatus">
           <option value="ativo" ${e.status!=='inativo'?'selected':''}>Ativo</option>
@@ -1526,6 +1544,46 @@ function modalEmpresa(id){
       <button class="btn btn-primary" onclick="salvarEmpresa()"><i class="fas fa-floppy-disk"></i> Salvar empresa</button></div>`);
   const c=document.getElementById('empCnpj'); if(c) c.addEventListener('input',()=>{ let v=c.value.replace(/\D/g,'').slice(0,14);
     c.value=v.replace(/^(\d{2})(\d{3})?(\d{3})?(\d{4})?(\d{2})?$/,(m,a,b,d,f,g)=>[a,b&&'.'+b,d&&'.'+d,f&&'/'+f,g&&'-'+g].filter(Boolean).join('')); });
+  EMP_PERFIS=JSON.parse(JSON.stringify((e.perfis||[]))); empRenderPerfis();
+}
+/* -------- Perfis de plano (dental) no cadastro da empresa -------- */
+let EMP_PERFIS=[];
+function empCapturarPerfis(){
+  const box=document.getElementById('empPerfisBox'); if(!box) return;
+  [...box.querySelectorAll('[data-perfil]')].forEach(row=>{
+    const i=+row.dataset.perfil;
+    const fam=row.querySelector('.pfFam').value, chave=row.querySelector('.pfPlano').value;
+    const valor=Number(String(row.querySelector('.pfValor').value).replace(/\./g,'').replace(',','.'))||0;
+    const padrao=row.querySelector('.pfPad').checked;
+    EMP_PERFIS[i]={familia:fam,chave,valor,padrao};
+  });
+}
+function empAddPerfil(){ empCapturarPerfis(); EMP_PERFIS.push({familia:'spg',chave:'',valor:0,padrao:EMP_PERFIS.length===0}); empRenderPerfis(); }
+function empRemovePerfil(i){ empCapturarPerfis(); const eraPad=EMP_PERFIS[i]&&EMP_PERFIS[i].padrao; EMP_PERFIS.splice(i,1);
+  if(eraPad&&EMP_PERFIS.length) EMP_PERFIS[0].padrao=true; empRenderPerfis(); }
+function empPerfilFam(i){ empCapturarPerfis(); EMP_PERFIS[i].chave=''; empRenderPerfis(); }
+function empSetPadrao(i){ empCapturarPerfis(); EMP_PERFIS.forEach((p,j)=>p.padrao=(j===i)); empRenderPerfis(); }
+function empRenderPerfis(){
+  const box=document.getElementById('empPerfisBox'); if(!box) return;
+  if(!EMP_PERFIS.length){ box.innerHTML='<div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Nenhum perfil ainda — clique em "Adicionar perfil".</div>'; return; }
+  const planosDe=fam=>(fam==='empresarial'?DENTAL_EMP:DENTAL_SPG);
+  box.innerHTML=EMP_PERFIS.map((p,i)=>{
+    const opts=planosDe(p.familia).map(pl=>`<option value="${pl.chave}" ${p.chave===pl.chave?'selected':''}>${esc(pl.nome)}${pl.eventos?(' ('+pl.eventos+' ev.)'):(pl.reembolso?(' · reemb. '+pl.reembolso):'')}</option>`).join('');
+    return `<div data-perfil="${i}" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface)">
+      <div style="display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px">
+        <select class="sf pfFam" style="padding:8px" onchange="empPerfilFam(${i})">
+          <option value="spg" ${p.familia==='spg'?'selected':''}>SPG</option>
+          <option value="empresarial" ${p.familia==='empresarial'?'selected':''}>Empresarial</option></select>
+        <select class="sf pfPlano" style="padding:8px;min-width:0"><option value="">Selecione o plano...</option>${opts}</select>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:8px">
+        <div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;color:var(--text-3)">R$</span>
+          <input class="if pfValor" style="padding:8px;width:120px" placeholder="Valor/vida" value="${p.valor?String(p.valor).replace('.',','):''}"></div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;white-space:nowrap;cursor:pointer"><input type="radio" name="empPad" class="pfPad" ${p.padrao?'checked':''} onchange="empSetPadrao(${i})"> perfil padrão</label>
+        <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="empRemovePerfil(${i})" title="Remover"><i class="fas fa-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
 }
 async function salvarEmpresa(){
   const id=document.getElementById('empId').value;
@@ -1534,17 +1592,30 @@ async function salvarEmpresa(){
   const planos=[...document.querySelectorAll('.empPlano:checked')].map(x=>x.value);
   if(!nome||!cnpj){ toast('Preencha nome e CNPJ.','err'); return; }
   if(!planos.length){ toast('Selecione ao menos um plano.','err'); return; }
+  empCapturarPerfis();
+  const perfis=EMP_PERFIS.filter(p=>p.chave).map((p,i)=>({
+    id:p.id||('pf_'+Date.now().toString(36)+i), familia:p.familia, chave:p.chave,
+    nome:dentalNome(p.familia,p.chave), valor:p.valor||0, padrao:!!p.padrao }));
+  if(perfis.length && !perfis.some(p=>p.padrao)) perfis[0].padrao=true;
   const dados={ nomeEmpresa:nome, cnpj, responsavel:document.getElementById('empResp').value.trim()||null,
     email:document.getElementById('empEmail').value.trim()||null, whatsapp:document.getElementById('empWhats').value.replace(/\D/g,'')||null,
-    planos, seguradora:document.getElementById('empSeg').value||null, apolice:document.getElementById('empApolice').value.trim()||null,
+    planos, perfis, seguradora:document.getElementById('empSeg').value||null, apolice:document.getElementById('empApolice').value.trim()||null,
     loginPortal:document.getElementById('empLogin').value.trim()||null, cpfPortal:document.getElementById('empCpf').value.trim()||null,
     senhaSeguradora:document.getElementById('empSenha').value.trim()||null,
     senhaPortal:document.getElementById('empSenhaPortal').value.trim()||null,
     urlPortal:document.getElementById('empUrl').value.trim()||null, status:document.getElementById('empStatus').value,
     observacoes:document.getElementById('empObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
+  const fileInp=document.getElementById('empContratoFile'); const contratoFile=fileInp&&fileInp.files[0];
   try{
+    let docId=id;
     if(id){ await db.collection('empresas_clientes').doc(id).update(dados); }
-    else{ dados.criadoEm=FV.serverTimestamp(); await db.collection('empresas_clientes').add(dados); }
+    else{ dados.criadoEm=FV.serverTimestamp(); const ref=await db.collection('empresas_clientes').add(dados); docId=ref.id; }
+    if(contratoFile){ toast('Enviando contrato…','info');
+      const arqId=await salvarPdfArquivo(contratoFile,'contrato_empresa',docId);
+      if(arqId){ try{ const d=await db.collection('arquivos').doc(arqId).get(); const x=d.data()||{};
+        await db.collection('empresas_clientes').doc(docId).update({contratoArquivo:{arquivoId:arqId,url:x.url||null,nome:contratoFile.name,enviadoEm:new Date().toISOString()},atualizadoEm:FV.serverTimestamp()});
+      }catch(e){ console.warn('contratoArquivo',e); } }
+    }
     closeModal(); toast('Empresa salva com sucesso.','ok');
   }catch(e){ console.error(e); toast('Erro ao salvar empresa.','err'); }
 }
@@ -2100,6 +2171,8 @@ function modalEditarPessoa(cpfN,empId){
   const docs=docsDaPessoa(cpfN,empId);
   if(!docs.length){ toast('Beneficiário não encontrado.','err'); return; }
   const b=docs[0], dep=docs.some(d=>d.titularidade==='dependente');
+  const empDaPessoa=CACHE.empresas.find(x=>x.id===b.empresaId)||{}; const perfisEmp=empDaPessoa.perfis||[];
+  const perfilPadraoId=(perfisEmp.find(p=>p.padrao)||perfisEmp[0]||{}).id||'';
   const titulares=CACHE.beneficiarios.filter(x=>x.empresaId===b.empresaId&&x.titularidade!=='dependente'&&x.status!=='inativo');
   const vistos={}; const listaTit=titulares.filter(t=>{ const c=soDig(t.cpf); if(!c||vistos[c]) return false; vistos[c]=1; return true; });
   openModal(`
@@ -2136,11 +2209,15 @@ function modalEditarPessoa(cpfN,empId){
           ${Object.entries(PARENTESCO_LBL).map(([k,v])=>`<option value="${k}" ${b.parentesco===k?'selected':''}>${v}</option>`).join('')}
         </select></div></div>`:''}
       <div style="margin-top:6px"><div style="font-size:.78rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px">Por produto</div>
-        ${docs.map(d=>`<div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;align-items:end;margin-bottom:10px">
+        ${docs.map(d=>{const mostraPerfil=d.plano==='dental'&&perfisEmp.length;return `<div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;align-items:end;margin-bottom:10px">
           <div style="padding-bottom:10px">${chipsPlanos([d.plano])}</div>
           <div class="form-row" style="margin:0"><label>Carteirinha</label><input type="text" class="edpCartao" data-id="${d.id}" value="${esc(d.cartao||'')}"></div>
           <div class="form-row" style="margin:0"><label>Certificado</label><input type="text" class="edpCert" data-id="${d.id}" value="${esc(d.certificado||'')}"></div>
-        </div>`).join('')}</div>
+          ${mostraPerfil?`<div class="form-row" style="margin:0;grid-column:2 / span 2"><label>Perfil do plano <span style="font-weight:400;color:var(--text-3)">(padrão da empresa vem marcado; pode trocar)</span></label>
+            <select class="edpPerfil" data-id="${d.id}"><option value="">— usar padrão da empresa —</option>
+            ${perfisEmp.map(p=>`<option value="${esc(p.id)}" ${(d.perfilId||perfilPadraoId)===p.id?'selected':''}>${esc(dentalLabelFam(p.familia))} · ${esc(p.nome)}${p.padrao?' (padrão)':''}</option>`).join('')}
+            </select></div>`:''}
+        </div>`;}).join('')}</div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="salvarPessoa()"><i class="fas fa-floppy-disk"></i> Salvar dados</button></div>`,'wide');
@@ -2164,13 +2241,15 @@ async function salvarPessoa(){
     atualizadoEm:FV.serverTimestamp() };
   if(g('edpTitular')) comum.cpfTitular=g('edpTitular').value||null;
   if(g('edpParentesco')) comum.parentesco=g('edpParentesco').value||null;
-  const cart={}, cert={};
+  const cart={}, cert={}, perf={};
   document.querySelectorAll('.edpCartao').forEach(i=>cart[i.dataset.id]=i.value.trim()||null);
   document.querySelectorAll('.edpCert').forEach(i=>cert[i.dataset.id]=i.value.trim()||null);
+  document.querySelectorAll('.edpPerfil').forEach(i=>perf[i.dataset.id]=i.value||null);
   try{
     const lote=db.batch();
     docs.forEach(d=>lote.update(db.collection('beneficiarios').doc(d.id),
-      {...comum, cartao:cart[d.id]!==undefined?cart[d.id]:(d.cartao||null), certificado:cert[d.id]!==undefined?cert[d.id]:(d.certificado||null)}));
+      {...comum, cartao:cart[d.id]!==undefined?cart[d.id]:(d.cartao||null), certificado:cert[d.id]!==undefined?cert[d.id]:(d.certificado||null),
+        ...(perf[d.id]!==undefined?{perfilId:perf[d.id]}:{})}));
     await lote.commit();
     closeModal(); toast('Dados atualizados em '+docs.length+' registro(s).','ok','Salvo');
   }catch(e){ console.error(e); toast('Erro ao salvar os dados.','err'); }
@@ -2376,6 +2455,13 @@ function agruparPessoas(benef){
   titulares.forEach(t=>t.deps.sort((a,b)=>(a.nome||'').localeCompare(b.nome||'')));
   return {titulares,orfaos:orfaos.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''))};
 }
+function perfilBenefLabel(p){
+  const doc=(p.docs||[]).find(d=>d.plano==='dental'&&d.perfilId)||(p.docs||[]).find(d=>d.perfilId);
+  if(!doc||!doc.perfilId) return '';
+  const emp=CACHE.empresas.find(e=>e.id===doc.empresaId); if(!emp||!emp.perfis) return '';
+  const pf=emp.perfis.find(x=>x.id===doc.perfilId);
+  return pf?(dentalLabelFam(pf.familia)+' · '+pf.nome):'';
+}
 function toggleDeps(k){ MOV_STATE.abertos=MOV_STATE.abertos||{};
   MOV_STATE.abertos[k]=!MOV_STATE.abertos[k]; VIEWS.movimentacoes(); }
 function expandirTodos(v){ MOV_STATE.abertos=MOV_STATE.abertos||{};
@@ -2434,7 +2520,7 @@ function renderBeneficiariosAtivos(benef,nome){
       <td><div style="display:flex;align-items:center;gap:9px">
         ${n?`<i class="fas fa-chevron-${aberto?'down':'right'}" style="color:var(--brand);width:12px;font-size:.8rem"></i>`
            :'<span style="width:12px;display:inline-block"></span>'}
-        <div><b>${esc(t.nome)}</b>${t.dataNascimento?`<div style="font-size:.73rem;color:var(--text-3)">Nasc. ${fmtData(t.dataNascimento)}</div>`:''}</div></div></td>
+        <div><b>${esc(t.nome)}</b>${(function(){const pf=perfilBenefLabel(t);return pf?`<div style="font-size:.72rem;color:var(--brand)"><i class="fas fa-tooth"></i> ${esc(pf)}</div>`:'';})()}${t.dataNascimento?`<div style="font-size:.73rem;color:var(--text-3)">Nasc. ${fmtData(t.dataNascimento)}</div>`:''}</div></div></td>
       <td>${(t.cpfN&&t.cpfN.length>=11)?esc(t.cpf):'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
       <td>${t.dataNascimento?fmtData(t.dataNascimento)+(idadeDe(t.dataNascimento)!=null?` <span style="color:var(--text-3)">· ${idadeDe(t.dataNascimento)}a</span>`:'')
         :'<span class="badge" style="background:var(--warn-bg);color:var(--warn)">a informar</span>'}</td>
@@ -4535,12 +4621,14 @@ async function confirmarAtualizar(){
 
 async function confirmarImport(){ const empId=document.getElementById('impEmpresa').value; if(!empId){ toast('Selecione a empresa de destino.','err'); return; }
   const emp=CACHE.empresas.find(e=>e.id===empId); if(!IMPORT_ROWS.length){ toast('Nada para importar.','info'); return; }
+  const perfilPadrao=((emp&&emp.perfis)||[]).find(p=>p.padrao)||((emp&&emp.perfis)||[])[0]||null;
   toast('Importando '+IMPORT_ROWS.length+' beneficiário(s)...','info','Aguarde');
   try{ let batch=db.batch(),n=0,total=0;
     for(const r of IMPORT_ROWS){ const ref=db.collection('beneficiarios').doc();
       const dep=r.titularidade==='dependente';
       batch.set(ref,{empresaId:empId,empresaNome:emp?.nomeEmpresa||null,nome:r.nome,cpf:r.cpf||null,cartao:(r.cartao||'').trim()||null,
         plano:r.plano,titularidade:r.titularidade,dataNascimento:r.dataNascimento||null,dataAdmissao:dep?null:(r.dataAdmissao||null),
+        perfilId:(r.plano==='dental'&&perfilPadrao)?perfilPadrao.id:null,
         status:'ativo',dataInicio:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),origem:'importacao'});
       n++;total++; if(n>=400){ await batch.commit(); batch=db.batch(); n=0; } }
     if(n>0) await batch.commit();
@@ -5374,6 +5462,130 @@ async function addInteracao(id){
    ========================================================================= */
 function openSidebar(){ document.getElementById('sidebar').classList.add('open'); document.getElementById('overlay').classList.add('show'); }
 function closeSidebar(){ document.getElementById('sidebar').classList.remove('open'); document.getElementById('overlay').classList.remove('show'); }
+
+</script>
+  <script>
+/* =========================================================================
+   CATÁLOGO DENTAL — Bradesco Dental (SPG e Empresarial)
+   Fonte: Cardápio de planos Empresarial + Catálogo SPG + simulação Emissão Expressa SPG.
+   Usado por: (1) menu "Planos dental" (comparativo, sem valores)
+              (2) escolha de perfis no cadastro da empresa
+              (3) perfil do colaborador
+   ========================================================================= */
+
+/* Coberturas que TODOS os planos têm (padrão) */
+const DENTAL_BASE_EMP=['Consulta','Limpeza','Emergência diurna e noturna (24h)','Radiografias (Raio-X)','Aplicação de flúor'];
+const DENTAL_BASE_SPG=['Consultas e emergências','Restaurações','Limpeza e aplicação de flúor'];
+
+/* ---- SPG (Emissão Expressa) — o que você cota hoje pela Bradesco Dental SPG ---- */
+const DENTAL_SPG=[
+  {chave:'padrao_doc_1',   nome:'Padrão Doc 1',    reembolso:'1x',
+    extra:['Documentação ortodôntica completa','Prótese dentária']},
+  {chave:'padrao_doc_white',nome:'Padrão Doc White',reembolso:'1x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Clareamento em gel']},
+  {chave:'premium_top_1',  nome:'Premium Top 1',   reembolso:'1x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Ortodontia']},
+  {chave:'premium_top_3',  nome:'Premium Top 3',   reembolso:'3x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Ortodontia']},
+  {chave:'premium_top_4',  nome:'Premium Top 4',   reembolso:'4x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Ortodontia']},
+  {chave:'premium_top_mais',nome:'Premium Top Mais',reembolso:'5x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Ortodontia','Tomografia computadorizada','Clareamento em gel']},
+  {chave:'privian_ii',     nome:'Privian II',      reembolso:'1.33x',
+    extra:['Documentação ortodôntica completa','Prótese dentária','Ortodontia','Tomografia computadorizada','Clareamento em gel']}
+];
+
+/* ---- EMPRESARIAL (cardápio Bradesco Dental) — nº de eventos cobertos + adicionais ---- */
+const DENTAL_EMP_BASE=['Restaurações em resina','Extrações de siso','Tratamento e retratamento de canal','Odontopediatria','Tratamento gengival','Prótese do Rol'];
+const DENTAL_EMP=[
+  {chave:'essencial',        nome:'Essencial',          eventos:183, extra:[]},
+  {chave:'essencial_plus',   nome:'Essencial Plus',     eventos:199, extra:['Consulta para clareamento']},
+  {chave:'stilo',            nome:'Stilo',              eventos:201, extra:['Consulta para clareamento','Placa de mordida e placa de clareamento']},
+  {chave:'essencial_plus_doc',nome:'Essencial Plus Doc',eventos:211, extra:['Consulta para clareamento','Documentação ortodôntica completa']},
+  {chave:'stilo_doc',        nome:'Stilo Doc',          eventos:213, extra:['Consulta para clareamento','Documentação ortodôntica completa','Placa de mordida e placa de clareamento']},
+  {chave:'essencial_top',    nome:'Essencial Top',      eventos:265, extra:['Consulta para clareamento','Documentação ortodôntica completa','Tratamento ortodôntico']},
+  {chave:'premium',          nome:'Premium',            eventos:217, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial']},
+  {chave:'premium_plus',     nome:'Premium Plus',       eventos:229, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Documentação ortodôntica completa']},
+  {chave:'seleto',           nome:'Seleto',             eventos:221, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Placa de mordida e placa de clareamento','Próteses em resina']},
+  {chave:'seleto_pro',       nome:'Seleto Pro',         eventos:236, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Placa de mordida e placa de clareamento','Próteses em resina','Próteses em cerômero','Próteses em cerâmica']},
+  {chave:'premium_top_emp',  nome:'Premium Top',        eventos:303, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Placa de mordida e placa de clareamento','Próteses em resina','Próteses em cerômero','Próteses em cerâmica','Documentação ortodôntica completa','Tratamento ortodôntico']},
+  {chave:'complete_white',   nome:'Complete White',     eventos:306, extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Placa de mordida','Próteses em resina','Próteses em cerômero','Próteses em cerâmica','Documentação ortodôntica completa','Tratamento ortodôntico','Tomografia computadorizada','Clareamento estético com gel']},
+  {chave:'complete_white_plus',nome:'Complete White Plus',eventos:330,extra:['Consulta para clareamento','Prótese removível total (dentadura)','Prótese removível parcial','Placa de mordida','Próteses em resina','Próteses em cerômero','Próteses em cerâmica','Documentação ortodôntica completa','Tratamento ortodôntico','Tomografia computadorizada','Clareamento estético com gel','Implante']}
+];
+
+/* ---- helpers usados também no cadastro da empresa e do colaborador ---- */
+function dentalFamilias(){ return [
+  {fam:'spg',nome:'SPG (Emissão Expressa)',planos:DENTAL_SPG,base:DENTAL_BASE_SPG,ic:'fa-bolt'},
+  {fam:'empresarial',nome:'Empresarial (Cardápio)',planos:DENTAL_EMP,base:DENTAL_BASE_EMP.concat(DENTAL_EMP_BASE),ic:'fa-briefcase'}
+]; }
+function dentalPlano(fam,chave){ const arr=fam==='spg'?DENTAL_SPG:DENTAL_EMP; return arr.find(p=>p.chave===chave)||null; }
+function dentalNome(fam,chave){ const p=dentalPlano(fam,chave); return p?p.nome:(chave||''); }
+function dentalCoberturas(fam,chave){ const p=dentalPlano(fam,chave); if(!p) return [];
+  const base=fam==='spg'?DENTAL_BASE_SPG:DENTAL_BASE_EMP.concat(DENTAL_EMP_BASE);
+  return base.concat(p.extra||[]); }
+function dentalLabelFam(fam){ return fam==='spg'?'SPG':'Empresarial'; }
+
+/* =========================================================================
+   MENU: comparativo entre planos (sem valores)
+   ========================================================================= */
+VIEWS.planos=function(){
+  let html=head('planos');
+  html+=`<div class="card"><div class="card-pad">
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px;background:linear-gradient(135deg,#fdf2f8,#fce7f3);border:1px solid #fbcfe8;border-radius:14px;padding:16px">
+        <div style="font-weight:800;color:#9d174d;font-size:.95rem;margin-bottom:4px"><i class="fas fa-bolt"></i> SPG — Emissão Expressa</div>
+        <div style="font-size:.84rem;color:#831843;line-height:1.5">A linha que você <b>cota e emite na hora</b> pelo sistema Emissão Expressa SPG (a simulação da Atitus é desta linha). Planos organizados por <b>múltiplo de reembolso</b> e pelo que adicionam além do básico: documentação ortodôntica, prótese, ortodontia, tomografia e clareamento.</div></div>
+      <div style="flex:1;min-width:260px;background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:14px;padding:16px">
+        <div style="font-weight:800;color:#1e3a8a;font-size:.95rem;margin-bottom:4px"><i class="fas fa-briefcase"></i> Empresarial — Cardápio</div>
+        <div style="font-size:.84rem;color:#1e3a8a;line-height:1.5">A linha do <b>cardápio Bradesco Dental Empresarial</b>, medida pelo <b>número de eventos cobertos</b> (de 183 a 330). Vai do Essencial ao Complete White Plus, agregando próteses, ortodontia, tomografia, clareamento e até implante.</div></div>
+    </div>
+    <div style="font-size:.78rem;color:var(--text-3);margin-top:12px"><i class="fas fa-circle-info"></i> Este menu é só para consulta e comparação — não envolve valores. Todos os planos incluem a <b>cobertura padrão</b> (consulta, limpeza, emergência 24h, raio-X e flúor).</div>
+  </div></div>`;
+
+  // -------- SPG --------
+  const spgFeat=[
+    ['docOrto','Documentação ortodôntica completa'],
+    ['prot','Prótese dentária'],
+    ['orto','Ortodontia'],
+    ['tomo','Tomografia computadorizada'],
+    ['clareia','Clareamento em gel']
+  ];
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-bolt" style="color:#db2777"></i> Planos SPG</h3>
+    <span style="color:var(--text-3);font-size:.82rem">ordenados do mais enxuto ao mais completo</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Plano</th><th>Reembolso</th>
+      ${spgFeat.map(f=>`<th style="text-align:center">${f[1]}</th>`).join('')}</tr></thead><tbody>
+    ${DENTAL_SPG.map(p=>`<tr>
+      <td><b>${esc(p.nome)}</b></td>
+      <td><span class="badge" style="background:var(--brand-50);color:var(--brand-dark)">${esc(p.reembolso)}</span></td>
+      ${spgFeat.map(f=>`<td style="text-align:center">${(p.extra||[]).some(x=>ehFeature(x,f[0]))?'<i class="fas fa-check" style="color:var(--ok)"></i>':'<span style="color:var(--border-2)">—</span>'}</td>`).join('')}
+    </tr>`).join('')}
+    </tbody></table></div>
+    <div class="card-pad" style="font-size:.8rem;color:var(--text-3)">Base de todos: consultas e emergências, restaurações, limpeza e flúor. O <b>múltiplo de reembolso</b> multiplica o valor de referência pago em procedimentos fora da rede credenciada.</div></div>`;
+
+  // -------- Empresarial --------
+  html+=`<div class="card"><div class="card-head"><h3><i class="fas fa-briefcase" style="color:#2563eb"></i> Planos Empresarial (Cardápio)</h3>
+    <span style="color:var(--text-3);font-size:.82rem">${DENTAL_EMP.length} planos · ordenados por eventos cobertos</span></div>
+    <div class="card-pad" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">
+    ${DENTAL_EMP.slice().sort((a,b)=>a.eventos-b.eventos).map(p=>`
+      <div style="border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--surface)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <b style="color:var(--brand);font-size:.95rem">${esc(p.nome)}</b>
+          <span class="badge" style="background:var(--brand-50);color:var(--brand-dark);white-space:nowrap">${p.eventos} eventos</span></div>
+        <div style="margin-top:10px;font-size:.8rem;color:var(--text-2);line-height:1.7">
+          ${(DENTAL_EMP_BASE.concat(p.extra||[])).map(c=>`<div><i class="fas fa-circle-check" style="color:var(--ok);font-size:.7rem;margin-right:5px"></i>${esc(c)}</div>`).join('')}
+        </div></div>`).join('')}
+    </div>
+    <div class="card-pad" style="font-size:.8rem;color:var(--text-3)">Além da cobertura padrão (consulta, limpeza, emergência 24h, raio-X, flúor). O número de <b>eventos cobertos</b> é o total de procedimentos do plano segundo o cardápio.</div></div>`;
+
+  setView(html);
+};
+function ehFeature(txt,feat){ const t=txt.toLowerCase();
+  if(feat==='docOrto') return t.includes('documenta');
+  if(feat==='prot') return t.includes('prótese')||t.includes('protese');
+  if(feat==='orto') return t.includes('ortodontia');
+  if(feat==='tomo') return t.includes('tomografia');
+  if(feat==='clareia') return t.includes('clareamento');
+  return false; }
 
 </script>
   <script>
