@@ -1521,7 +1521,10 @@ function modalEmpresa(id){
         <div style="font-weight:700;font-size:.82rem;margin-bottom:4px"><i class="fas fa-tooth" style="color:var(--brand)"></i> Perfis de plano contratados (dental)</div>
         <div style="font-size:.75rem;color:var(--text-2);margin-bottom:10px">A empresa pode ter <b>mais de um perfil</b> na apólice. Marque quais foram contratados e o valor por vida. O perfil <b>padrão</b> é o que todo colaborador recebe ao ser cadastrado — depois você muda individualmente na ficha de cada um. <a href="#planos" onclick="closeModal()" style="color:var(--brand)">Ver diferença entre os planos</a>.</div>
         <div id="empPerfisBox"></div>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="empAddPerfil()"><i class="fas fa-plus"></i> Adicionar perfil</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="empAddPerfil()"><i class="fas fa-plus"></i> Adicionar perfil</button>
+          ${id?`<button type="button" class="btn btn-ghost btn-sm" onclick="modalReajuste('${id}')"><i class="fas fa-arrow-trend-up"></i> Aplicar reajuste</button>`:''}
+        </div>
       </div>
 
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px">
@@ -1546,19 +1549,67 @@ function modalEmpresa(id){
     c.value=v.replace(/^(\d{2})(\d{3})?(\d{3})?(\d{4})?(\d{2})?$/,(m,a,b,d,f,g)=>[a,b&&'.'+b,d&&'.'+d,f&&'/'+f,g&&'-'+g].filter(Boolean).join('')); });
   EMP_PERFIS=JSON.parse(JSON.stringify((e.perfis||[]))); empRenderPerfis();
 }
+/* -------- Reajuste de valores dos perfis (vale a partir de uma data) -------- */
+function modalReajuste(empId){
+  const e=CACHE.empresas.find(x=>x.id===empId)||{}; const perfis=(e.perfis||[]).filter(p=>p.chave);
+  if(!perfis.length){ toast('Cadastre e salve os perfis antes de reajustar.','info'); return; }
+  const hoje=strData(new Date().toISOString());
+  openModal(`
+    <div class="modal-head"><h3><i class="fas fa-arrow-trend-up" style="color:var(--brand)"></i> Aplicar reajuste — ${esc(e.nomeEmpresa||'')}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="rjEmp" value="${empId}">
+      <div style="background:var(--brand-50);border-radius:10px;padding:11px 14px;margin-bottom:16px;font-size:.82rem;color:var(--brand-dark)">
+        <i class="fas fa-circle-info"></i> Informe a <b>data em que o novo valor passa a valer</b> e os valores reajustados. As faturas até a véspera continuam com o valor antigo; a partir dessa data usam o novo — sem mexer nas competências já fechadas.</div>
+      <div class="form-row" style="max-width:240px"><label>Vigente a partir de</label>
+        <input type="date" id="rjDesde" value="${hoje}"></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Perfil</th><th>Valor atual (tit. / dep.)</th><th style="text-align:right">Novo titular</th><th style="text-align:right">Novo dependente</th></tr></thead><tbody>
+      ${perfis.map(p=>{const vt=perfilValorAtual(p,false),vd=perfilValorAtual(p,true);
+        return `<tr data-rj="${esc(p.id)}">
+          <td><b>${esc(p.nome)}</b><br><small style="color:var(--text-3)">${esc(dentalLabelFam(p.familia))}</small></td>
+          <td style="color:var(--text-2)">${dinheiro(vt)} / ${dinheiro(vd)}</td>
+          <td style="text-align:right"><input class="if rjT" style="padding:7px;width:110px;text-align:right" value="${String(vt).replace('.',',')}"></td>
+          <td style="text-align:right"><input class="if rjD" style="padding:7px;width:110px;text-align:right" value="${String(vd).replace('.',',')}"></td>
+        </tr>`;}).join('')}
+      </tbody></table></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarReajuste()"><i class="fas fa-check"></i> Aplicar reajuste</button></div>`,'wide');
+}
+async function salvarReajuste(){
+  const empId=document.getElementById('rjEmp').value; const desde=document.getElementById('rjDesde').value;
+  if(!desde){ toast('Informe a data de vigência.','err'); return; }
+  const e=CACHE.empresas.find(x=>x.id===empId); if(!e){ toast('Empresa não encontrada.','err'); return; }
+  const perfis=JSON.parse(JSON.stringify(e.perfis||[]));
+  let mudou=0;
+  document.querySelectorAll('[data-rj]').forEach(row=>{
+    const pf=perfis.find(p=>p.id===row.dataset.rj); if(!pf) return;
+    const t=numBR(row.querySelector('.rjT').value), d=numBR(row.querySelector('.rjD').value);
+    const atualT=perfilValorAtual(pf,false), atualD=perfilValorAtual(pf,true);
+    if(t===atualT && d===atualD) return;
+    pf.reajustes=(pf.reajustes||[]).filter(r=>String(r.desde).slice(0,10)!==desde);
+    pf.reajustes.push({desde, valorTitular:t, valorDependente:d}); mudou++;
+  });
+  if(!mudou){ toast('Nenhum valor foi alterado.','info'); return; }
+  try{ await db.collection('empresas_clientes').doc(empId).update({perfis, atualizadoEm:FV.serverTimestamp()});
+    closeModal(); toast('Reajuste aplicado a '+mudou+' perfil(is), vigente a partir de '+fmtData(desde)+'.','ok','Reajustado');
+  }catch(err){ console.error(err); toast('Erro ao aplicar o reajuste.','err'); }
+}
 /* -------- Perfis de plano (dental) no cadastro da empresa -------- */
 let EMP_PERFIS=[];
+const numBR=s=>Number(String(s==null?'':s).replace(/\./g,'').replace(',','.'))||0;
 function empCapturarPerfis(){
   const box=document.getElementById('empPerfisBox'); if(!box) return;
   [...box.querySelectorAll('[data-perfil]')].forEach(row=>{
     const i=+row.dataset.perfil;
     const fam=row.querySelector('.pfFam').value, chave=row.querySelector('.pfPlano').value;
-    const valor=Number(String(row.querySelector('.pfValor').value).replace(/\./g,'').replace(',','.'))||0;
+    const valorTitular=numBR(row.querySelector('.pfValorT').value);
+    const valorDependente=numBR(row.querySelector('.pfValorD').value);
     const padrao=row.querySelector('.pfPad').checked;
-    EMP_PERFIS[i]={familia:fam,chave,valor,padrao};
+    EMP_PERFIS[i]=Object.assign({},EMP_PERFIS[i],{familia:fam,chave,valorTitular,valorDependente,padrao});
   });
 }
-function empAddPerfil(){ empCapturarPerfis(); EMP_PERFIS.push({familia:'spg',chave:'',valor:0,padrao:EMP_PERFIS.length===0}); empRenderPerfis(); }
+function empAddPerfil(){ empCapturarPerfis(); EMP_PERFIS.push({familia:'spg',chave:'',valorTitular:0,valorDependente:0,padrao:EMP_PERFIS.length===0}); empRenderPerfis(); }
 function empRemovePerfil(i){ empCapturarPerfis(); const eraPad=EMP_PERFIS[i]&&EMP_PERFIS[i].padrao; EMP_PERFIS.splice(i,1);
   if(eraPad&&EMP_PERFIS.length) EMP_PERFIS[0].padrao=true; empRenderPerfis(); }
 function empPerfilFam(i){ empCapturarPerfis(); EMP_PERFIS[i].chave=''; empRenderPerfis(); }
@@ -1567,8 +1618,11 @@ function empRenderPerfis(){
   const box=document.getElementById('empPerfisBox'); if(!box) return;
   if(!EMP_PERFIS.length){ box.innerHTML='<div style="font-size:.8rem;color:var(--text-3);margin-bottom:8px">Nenhum perfil ainda — clique em "Adicionar perfil".</div>'; return; }
   const planosDe=fam=>(fam==='empresarial'?DENTAL_EMP:DENTAL_SPG);
+  const vfmt=v=>(v!=null&&v!=='')?String(v).replace('.',','):'';
   box.innerHTML=EMP_PERFIS.map((p,i)=>{
     const opts=planosDe(p.familia).map(pl=>`<option value="${pl.chave}" ${p.chave===pl.chave?'selected':''}>${esc(pl.nome)}${pl.eventos?(' ('+pl.eventos+' ev.)'):(pl.reembolso?(' · reemb. '+pl.reembolso):'')}</option>`).join('');
+    const vt=p.valorTitular!=null?p.valorTitular:p.valor, vd=p.valorDependente;
+    const nRej=(p.reajustes||[]).length;
     return `<div data-perfil="${i}" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface)">
       <div style="display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px">
         <select class="sf pfFam" style="padding:8px" onchange="empPerfilFam(${i})">
@@ -1576,12 +1630,15 @@ function empRenderPerfis(){
           <option value="empresarial" ${p.familia==='empresarial'?'selected':''}>Empresarial</option></select>
         <select class="sf pfPlano" style="padding:8px;min-width:0"><option value="">Selecione o plano...</option>${opts}</select>
       </div>
-      <div style="display:flex;gap:12px;align-items:center;margin-top:8px">
-        <div style="display:flex;align-items:center;gap:6px"><span style="font-size:.8rem;color:var(--text-3)">R$</span>
-          <input class="if pfValor" style="padding:8px;width:120px" placeholder="Valor/vida" value="${p.valor?String(p.valor).replace('.',','):''}"></div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;white-space:nowrap;cursor:pointer"><input type="radio" name="empPad" class="pfPad" ${p.padrao?'checked':''} onchange="empSetPadrao(${i})"> perfil padrão</label>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:6px"><span style="font-size:.76rem;color:var(--text-3);width:58px">Titular R$</span>
+          <input class="if pfValorT" style="padding:8px;width:100px" placeholder="0,00" value="${vfmt(vt)}"></div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="font-size:.76rem;color:var(--text-3);width:78px">Dependente R$</span>
+          <input class="if pfValorD" style="padding:8px;width:100px" placeholder="0,00" value="${vfmt(vd)}"></div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;white-space:nowrap;cursor:pointer"><input type="radio" name="empPad" class="pfPad" ${p.padrao?'checked':''} onchange="empSetPadrao(${i})"> padrão</label>
         <button type="button" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="empRemovePerfil(${i})" title="Remover"><i class="fas fa-trash"></i></button>
       </div>
+      ${nRej?`<div style="font-size:.72rem;color:var(--brand);margin-top:6px"><i class="fas fa-arrow-trend-up"></i> ${nRej} reajuste(s) registrado(s) — último desde ${esc(fmtData((p.reajustes[p.reajustes.length-1]||{}).desde)||'—')}</div>`:''}
     </div>`;
   }).join('');
 }
@@ -1595,7 +1652,10 @@ async function salvarEmpresa(){
   empCapturarPerfis();
   const perfis=EMP_PERFIS.filter(p=>p.chave).map((p,i)=>({
     id:p.id||('pf_'+Date.now().toString(36)+i), familia:p.familia, chave:p.chave,
-    nome:dentalNome(p.familia,p.chave), valor:p.valor||0, padrao:!!p.padrao }));
+    nome:dentalNome(p.familia,p.chave),
+    valorTitular:Number(p.valorTitular!=null?p.valorTitular:p.valor)||0,
+    valorDependente:Number(p.valorDependente)||0,
+    padrao:!!p.padrao, reajustes:p.reajustes||[] }));
   if(perfis.length && !perfis.some(p=>p.padrao)) perfis[0].padrao=true;
   const dados={ nomeEmpresa:nome, cnpj, responsavel:document.getElementById('empResp').value.trim()||null,
     email:document.getElementById('empEmail').value.trim()||null, whatsapp:document.getElementById('empWhats').value.replace(/\D/g,'')||null,
@@ -1788,10 +1848,35 @@ function renderContrato(){
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="salvarContrato()"><i class="fas fa-floppy-disk"></i> Salvar contrato</button></div>`,'wide');
 }
+/* monta as coberturas a partir dos perfis dentais que a empresa contratou */
+function coberturasDosPerfis(emp){
+  const perfis=((emp&&emp.perfis)||[]).filter(p=>p.chave);
+  if(!perfis.length) return [];
+  const ordem=[], mapa={};
+  perfis.forEach(pf=>{ dentalCoberturas(pf.familia,pf.chave).forEach(cob=>{
+    const key=cob.trim(); if(!mapa[key]){ mapa[key]={nome:key,perfis:[]}; ordem.push(key); }
+    const rot=pf.nome; if(!mapa[key].perfis.includes(rot)) mapa[key].perfis.push(rot);
+  }); });
+  const todos=perfis.length;
+  return ordem.map(key=>{ const c=mapa[key];
+    const nota=c.perfis.length===todos?'todos os perfis':('perfis: '+c.perfis.join(', '));
+    return c.nome+' | '+nota; });
+}
 function ctPadrao(){
-  const k=CT.tab, p=COB_PADRAO[k]; if(!p) return;
-  const g=i=>document.getElementById(i);
+  const k=CT.tab; const g=i=>document.getElementById(i);
+  const emp=CACHE.empresas.find(x=>x.id===CT.id)||{};
   const temAlgo=(g('ctCob').value.trim()||g('ctNaoCob').value.trim()||g('ctPassos').value.trim());
+  if(k==='dental' && ((emp.perfis||[]).filter(p=>p.chave).length)){
+    if(temAlgo && !confirm('Isso substitui as coberturas desta aba pelas coberturas dos perfis contratados. Continuar?')) return;
+    g('ctCob').value=coberturasDosPerfis(emp).join('\n');
+    const p=COB_PADRAO.dental;
+    if(p){ if(!g('ctNaoCob').value.trim()) g('ctNaoCob').value=(p.naoCobre||[]).join('\n');
+      if(!g('ctPassos').value.trim()) g('ctPassos').value=p.passos||'';
+      if(p.obs && !g('ctObs').value.trim()) g('ctObs').value=p.obs; }
+    toast('Coberturas carregadas dos perfis contratados.','ok');
+    return;
+  }
+  const p=COB_PADRAO[k]; if(!p) return;
   if(temAlgo && !confirm('Isso substitui as coberturas, o que não cobre e o passo a passo desta aba pelo padrão da Retorno. Continuar?')) return;
   g('ctCob').value=(p.cobre||[]).join('\n');
   g('ctNaoCob').value=(p.naoCobre||[]).join('\n');
@@ -1824,20 +1909,79 @@ function diasCobradosN(ano,mes,ini,fim){
   return Math.max(0,Math.min(dm,Math.round((ate-de)/86400000)+1));
 }
 const arred2=n=>Math.round((Number(n)||0)*100)/100;
+/* ---------- Perfis: valor efetivo por data (reajustes) e troca de plano ---------- */
+function perfilVigencias(pf){
+  const baseT=Number(pf.valorTitular!=null?pf.valorTitular:pf.valor)||0;
+  const baseD=Number(pf.valorDependente!=null?pf.valorDependente:pf.valor)||0;
+  const base={desde:'0000-00-00',titular:baseT,dependente:baseD};
+  const rej=(pf.reajustes||[]).map(r=>({desde:String(r.desde||'').slice(0,10),
+      titular:Number(r.valorTitular)||0,dependente:Number(r.valorDependente)||0}))
+    .filter(r=>r.desde).sort((a,b)=>a.desde.localeCompare(b.desde));
+  return [base].concat(rej);
+}
+function perfilValorEm(pf,dep,dataISO){
+  if(!pf) return 0; const vs=perfilVigencias(pf); let cur=vs[0];
+  for(const v of vs){ if(v.desde<=dataISO) cur=v; else break; }
+  return dep?cur.dependente:cur.titular;
+}
+function perfilValorAtual(pf,dep){ const hoje=strData(new Date().toISOString()); return perfilValorEm(pf,dep,hoje); }
+function empPerfil(emp,perfilId){ return ((emp&&emp.perfis)||[]).find(p=>p.id===perfilId)||null; }
+/* perfilId efetivo do beneficiário numa data — considera o histórico de trocas de plano */
+function benefPerfilIdEm(b,dataISO){
+  const h=(b.perfilHistorico||[]).map(x=>({perfilId:x.perfilId,desde:String(x.desde||'').slice(0,10)}))
+    .filter(x=>x.desde).sort((a,b)=>a.desde.localeCompare(b.desde));
+  if(h.length){ let cur=h[0].perfilId; for(const x of h){ if(x.desde<=dataISO) cur=x.perfilId; else break; } return cur; }
+  return b.perfilId||null;
+}
+/* dependente segue o perfil do titular quando ele não tem um próprio;
+   sem perfil definido, cai no perfil padrão da empresa (todos vêm com o padrão) */
+function benefPerfilResolvido(emp,b,dataISO){
+  let pid=benefPerfilIdEm(b,dataISO);
+  if(!pid && b.titularidade==='dependente' && b.cpfTitular){
+    const tit=CACHE.beneficiarios.find(x=>x.empresaId===b.empresaId&&x.titularidade!=='dependente'&&soDig(x.cpf)===soDig(b.cpfTitular)&&x.plano===b.plano);
+    if(tit) pid=benefPerfilIdEm(tit,dataISO);
+  }
+  if(!pid){ const pad=((emp&&emp.perfis)||[]).find(p=>p.padrao)||((emp&&emp.perfis)||[])[0]; if(pad) pid=pad.id; }
+  return pid;
+}
+function isoDe(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
 function faturaEmpresa(emp,ano,mes){
   const c=contratoDe(emp), dm=diasNoMesN(ano,mes), itens=[];
+  const temPerfis=((emp&&emp.perfis)||[]).length>0;
+  const mesIni=new Date(ano,mes-1,1), mesFim=new Date(ano,mes-1,dm);
   const lista=CACHE.beneficiarios.filter(b=>(emp.id&&b.empresaId===emp.id)||((b.empresaNome||'').toLowerCase()===(emp.nomeEmpresa||'').toLowerCase()));
   lista.forEach(b=>{
     const k=b.plano; if(!k) return;
-    const dias=diasCobradosN(ano,mes,benefIni(b),benefFim(b)); if(dias<=0) return;
-    const vv=(c.valores||{})[k]||{};
-    const base=Number(b.titularidade==='dependente'?vv.dependente:vv.titular)||0;
-    const valor=arred2(base*dias/dm);
-    const pct=b.titularidade==='dependente'
+    const dep=b.titularidade==='dependente';
+    const usaPerfil = temPerfis && k==='dental';
+    let dias=0, valor=0, base=0, perfilNome='';
+    if(usaPerfil){
+      const iniB=dataObj(benefIni(b)), fimB=dataObj(benefFim(b));
+      if(iniB&&iniB>mesFim) return; if(fimB&&fimB<mesIni) return;
+      const de=(iniB&&iniB>mesIni)?iniB:mesIni, ate=(fimB&&fimB<mesFim)?fimB:mesFim;
+      if(ate<de) return;
+      let ultimoPf=null;
+      for(let d=new Date(de); d<=ate; d.setDate(d.getDate()+1)){
+        const iso=isoDe(d);
+        const pf=empPerfil(emp,benefPerfilResolvido(emp,b,iso));
+        valor+=perfilValorEm(pf,dep,iso)/dm; dias++; ultimoPf=pf;
+      }
+      valor=arred2(valor);
+      base=ultimoPf?perfilValorEm(ultimoPf,dep,isoDe(ate)):0;
+      perfilNome=ultimoPf?(dentalLabelFam(ultimoPf.familia)+' · '+ultimoPf.nome):'';
+      if(dias<=0) return;
+    } else {
+      dias=diasCobradosN(ano,mes,benefIni(b),benefFim(b)); if(dias<=0) return;
+      const vv=(c.valores||{})[k]||{};
+      base=Number(dep?vv.dependente:vv.titular)||0;
+      valor=arred2(base*dias/dm);
+    }
+    const pct=dep
       ? ((c.rateioDepEmpresaPct||{})[k]==null?0:Number((c.rateioDepEmpresaPct||{})[k])||0)
       : ((c.rateioTitEmpresaPct||{})[k]==null?100:Number((c.rateioTitEmpresaPct||{})[k])||0);
     const vEmp=arred2(valor*pct/100);
-    itens.push({b,k,dias,dm,base,valor,vEmp,vFunc:arred2(valor-vEmp),integral:dias>=dm});
+    itens.push({b,k,dias,dm,base,valor,vEmp,vFunc:arred2(valor-vEmp),integral:dias>=dm,perfilNome});
   });
   return { ano,mes,dm,itens,
     total:arred2(itens.reduce((s,i)=>s+i.valor,0)),
@@ -2213,10 +2357,14 @@ function modalEditarPessoa(cpfN,empId){
           <div style="padding-bottom:10px">${chipsPlanos([d.plano])}</div>
           <div class="form-row" style="margin:0"><label>Carteirinha</label><input type="text" class="edpCartao" data-id="${d.id}" value="${esc(d.cartao||'')}"></div>
           <div class="form-row" style="margin:0"><label>Certificado</label><input type="text" class="edpCert" data-id="${d.id}" value="${esc(d.certificado||'')}"></div>
-          ${mostraPerfil?`<div class="form-row" style="margin:0;grid-column:2 / span 2"><label>Perfil do plano <span style="font-weight:400;color:var(--text-3)">(padrão da empresa vem marcado; pode trocar)</span></label>
-            <select class="edpPerfil" data-id="${d.id}"><option value="">— usar padrão da empresa —</option>
-            ${perfisEmp.map(p=>`<option value="${esc(p.id)}" ${(d.perfilId||perfilPadraoId)===p.id?'selected':''}>${esc(dentalLabelFam(p.familia))} · ${esc(p.nome)}${p.padrao?' (padrão)':''}</option>`).join('')}
-            </select></div>`:''}
+          ${mostraPerfil?`<div style="grid-column:2 / span 2;display:grid;grid-template-columns:1fr 170px;gap:12px">
+            <div class="form-row" style="margin:0"><label>Perfil do plano <span style="font-weight:400;color:var(--text-3)">(troca vale a partir da data ao lado)</span></label>
+              <select class="edpPerfil" data-id="${d.id}" data-atual="${esc(d.perfilId||perfilPadraoId||'')}" onchange="edpPerfilTrocou(this)"><option value="">— usar padrão da empresa —</option>
+              ${perfisEmp.map(p=>`<option value="${esc(p.id)}" ${(d.perfilId||perfilPadraoId)===p.id?'selected':''}>${esc(dentalLabelFam(p.familia))} · ${esc(p.nome)}${p.padrao?' (padrão)':''}</option>`).join('')}
+              </select></div>
+            <div class="form-row" style="margin:0"><label>Vigente a partir de</label>
+              <input type="date" class="edpPerfilDesde" data-id="${d.id}" value="" placeholder="só se trocar"></div>
+          </div>`:''}
         </div>`;}).join('')}</div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -2224,6 +2372,11 @@ function modalEditarPessoa(cpfN,empId){
   const n=document.getElementById('edpNasc');
   if(n) n.addEventListener('change',()=>{ const i=idadeDe(n.value);
     document.getElementById('edpIdade').textContent=i!=null?i+' anos':'Preencha para calcular a idade'; });
+}
+function edpPerfilTrocou(sel){
+  const trocou=sel.value!==(sel.dataset.atual||'');
+  const dt=document.querySelector('.edpPerfilDesde[data-id="'+sel.dataset.id+'"]');
+  if(dt){ if(trocou && !dt.value){ dt.value=strData(new Date().toISOString()); } if(!trocou){ dt.value=''; } }
 }
 async function salvarPessoa(){
   const cpfN=document.getElementById('edpCpfN').value, empId=document.getElementById('edpEmp').value;
@@ -2241,15 +2394,28 @@ async function salvarPessoa(){
     atualizadoEm:FV.serverTimestamp() };
   if(g('edpTitular')) comum.cpfTitular=g('edpTitular').value||null;
   if(g('edpParentesco')) comum.parentesco=g('edpParentesco').value||null;
-  const cart={}, cert={}, perf={};
+  const cart={}, cert={}, perf={}, perfDesde={};
   document.querySelectorAll('.edpCartao').forEach(i=>cart[i.dataset.id]=i.value.trim()||null);
   document.querySelectorAll('.edpCert').forEach(i=>cert[i.dataset.id]=i.value.trim()||null);
   document.querySelectorAll('.edpPerfil').forEach(i=>perf[i.dataset.id]=i.value||null);
+  document.querySelectorAll('.edpPerfilDesde').forEach(i=>perfDesde[i.dataset.id]=i.value||null);
+  const hojeISO=strData(new Date().toISOString());
   try{
     const lote=db.batch();
-    docs.forEach(d=>lote.update(db.collection('beneficiarios').doc(d.id),
-      {...comum, cartao:cart[d.id]!==undefined?cart[d.id]:(d.cartao||null), certificado:cert[d.id]!==undefined?cert[d.id]:(d.certificado||null),
-        ...(perf[d.id]!==undefined?{perfilId:perf[d.id]}:{})}));
+    docs.forEach(d=>{
+      const up={...comum, cartao:cart[d.id]!==undefined?cart[d.id]:(d.cartao||null), certificado:cert[d.id]!==undefined?cert[d.id]:(d.certificado||null)};
+      if(perf[d.id]!==undefined){
+        const novo=perf[d.id]||null, atual=d.perfilId||null;
+        if(novo!==atual){
+          const desde=perfDesde[d.id]||hojeISO;
+          const hist=(d.perfilHistorico||[]).slice();
+          if(!hist.length && atual) hist.push({perfilId:atual, desde:(benefIni(d)||'2000-01-01').slice(0,10)});
+          hist.push({perfilId:novo, desde});
+          up.perfilId=novo; up.perfilDesde=desde; up.perfilHistorico=hist;
+        } else { up.perfilId=novo; }
+      }
+      lote.update(db.collection('beneficiarios').doc(d.id),up);
+    });
     await lote.commit();
     closeModal(); toast('Dados atualizados em '+docs.length+' registro(s).','ok','Salvo');
   }catch(e){ console.error(e); toast('Erro ao salvar os dados.','err'); }
@@ -2314,7 +2480,8 @@ const MESES_BR=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','A
 const MES_CURTO=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 function temValoresContrato(emp){
   const v=(contratoDe(emp).valores)||{};
-  return ['saude','dental','vida','previdencia'].some(k=>Number((v[k]||{}).titular)>0||Number((v[k]||{}).dependente)>0);
+  if(['saude','dental','vida','previdencia'].some(k=>Number((v[k]||{}).titular)>0||Number((v[k]||{}).dependente)>0)) return true;
+  return ((emp.perfis)||[]).some(p=>Number(p.valorTitular!=null?p.valorTitular:p.valor)>0||Number(p.valorDependente)>0);
 }
 /* últimos N meses terminando na competência escolhida */
 function historicoFatura(emp,ano,mes,n){
@@ -2397,7 +2564,7 @@ function renderFaturaEmpresa(emp,nome){
     ${ord.length?ord.map(i=>`<tr>
       <td><b>${esc(i.b.nome)}</b><br><small style="color:var(--text-3)">${esc(i.b.cpf||'')}</small></td>
       <td>${i.b.titularidade==='dependente'?'Dependente':'Titular'}</td>
-      <td>${chipsPlanos([i.k])}</td>
+      <td>${chipsPlanos([i.k])}${i.perfilNome?`<div style="font-size:.72rem;color:var(--brand);margin-top:3px">${esc(i.perfilNome)}</div>`:''}</td>
       <td style="text-align:right;color:var(--text-2)">${dinheiro(i.base)}</td>
       <td style="text-align:right">${i.integral?`<span style="color:var(--text-3)">${i.dias}/${i.dm}</span>`:`<b style="color:var(--warn)">${i.dias}/${i.dm}</b>`}</td>
       <td style="text-align:right"><b>${dinheiro(i.valor)}</b></td>
