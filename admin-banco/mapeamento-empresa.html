@@ -822,16 +822,18 @@
         linhas += '<div class="hub-linha" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">'+
           '<div class="hl-ic">📖</div><div class="hl-txt"><div class="hl-t">Ver a apresentação</div><div class="hl-s">as coberturas de um jeito simples — abre em outra aba</div></div><div class="hl-seta">›</div></div>';
       }
-      if (cat.arqQ){
+      // estudo/questionário (leva a cotação) só nos que NÃO tem — nos que tem fica só a apresentação
+      if (cat.arqQ && !tem){
         linhas += '<div class="hub-linha destaque" onclick="abrirDestino(\''+p.id+'\',\'questionario\')">'+
-          '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">'+(tem ? 'Pedir cotação para comparar' : 'Quero um estudo personalizado')+'</div><div class="hl-s">'+(tem ? 'responda o questionário e receba uma proposta para colocar lado a lado' : estudoSub)+'</div></div><div class="hl-seta">›</div></div>';
+          '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">Quero um estudo personalizado</div><div class="hl-s">'+estudoSub+'</div></div><div class="hl-seta">›</div></div>';
       }
     }
+    // "quero cotar" só nos que o cliente NÃO tem
     var cotar = '';
-    if (!bloq){
+    if (!bloq && r.tem === 'nao'){
       var ja = COTACOES_ENVIADAS.has(p.id);
       var on = ja || r.interesse === 'sim';
-      var perg = ja ? 'Cotação já pedida ao seu gerente' : (tem ? 'Quer uma cotação para comparar com a atual?' : 'Quer que seu gerente cote este seguro?');
+      var perg = ja ? 'Cotação já pedida ao seu gerente' : 'Quer que seu gerente cote este seguro?';
       cotar = '<div class="hub-cotar"><span>'+perg+'</span>'+
         '<button class="tg-btn'+(on?' on':'')+'" id="tg-'+p.id+'" '+(ja?'disabled':'')+' onclick="toggleCotar(\''+p.id+'\')">'+(on ? '✓ quero cotar' : 'quero cotar')+'</button></div>';
     }
@@ -857,8 +859,8 @@
     var html = '<div class="hub-top">'+
       '<div class="hub-check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recemEnviado ? 'Dados enviados! 🎉' : 'Bem-vindo de volta 👋')+'</h1>'+
-      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices</b> dos seguros que você tem, <b>veja a apresentação</b> de qualquer um deles e marque os que quer <b>cotar</b>.</p></div>';
-    if (temos.length){ html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div><div class="gb-t">Seguros que você tem</div><div class="gb-s">anexe a apólice, veja a apresentação ou peça uma cotação para comparar</div></div></div>'; temos.forEach(function(p){ html += _cardHub(p); }); }
+      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices</b> dos seguros que você tem, <b>veja a apresentação</b> de qualquer um, e marque os que <b>não tem</b> e quer <b>cotar</b>.</p></div>';
+    if (temos.length){ html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div><div class="gb-t">Seguros que você tem</div><div class="gb-s">anexe a apólice ou veja a apresentação de cada um</div></div></div>'; temos.forEach(function(p){ html += _cardHub(p); }); }
     if (naoTem.length){ html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div><div class="gb-t">Seguros para conhecer</div><div class="gb-s">veja o que cada um faz pela empresa — e marque os que quer cotar</div></div></div>'; naoTem.forEach(function(p){ html += _cardHub(p); }); }
     html += '<div class="t1-envio"><div class="t1-falta" id="falta2"></div>'+
       '<button class="btn-g btn-sim" id="btnEnviar2" onclick="enviarSegundo()">Enviar ao meu gerente</button>'+
@@ -869,7 +871,7 @@
   function atualizarEnvio2(){
     var el = document.getElementById('falta2'), btn = document.getElementById('btnEnviar2'); if (!el || !btn) return;
     var nAx = Object.keys(ANEXOS).reduce(function(n,k){ return n + (ANEXOS[k]||[]).length; }, 0);
-    var nCot = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem && respostas[p.id].interesse === 'sim' && !COTACOES_ENVIADAS.has(p.id); }).length;
+    var nCot = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'nao' && respostas[p.id].interesse === 'sim' && !COTACOES_ENVIADAS.has(p.id); }).length;
     var partes = []; if (nAx) partes.push(nAx + (nAx===1?' apólice':' apólices')); if (nCot) partes.push(nCot + (nCot===1?' cotação':' cotações'));
     el.textContent = partes.length ? 'Pronto para enviar: ' + partes.join(' + ') : 'Nada novo para enviar por enquanto';
     btn.disabled = !partes.length;
@@ -898,12 +900,11 @@
         }
         ANEXOS[p.id] = [];
       }
-      // cotações dos "quero cotar" — nos que NÃO tem (oportunidade) e nos que TEM (comparar/renovar)
+      // cotações dos "quero cotar" — só nos que o cliente NÃO tem (regra do sistema)
       const novas = [];
       for (const p of PRODUTOS) {
         const r = respostas[p.id];
-        if (PROD_BLOQUEADOS.has(p.id) || !r || !r.tem || r.interesse !== 'sim' || COTACOES_ENVIADAS.has(p.id)) continue;
-        const jaTem = r.tem === 'sim';
+        if (PROD_BLOQUEADOS.has(p.id) || !r || r.tem !== 'nao' || r.interesse !== 'sim' || COTACOES_ENVIADAS.has(p.id)) continue;
         await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set({
           statusVisual: 'cotando', interesseCotar: true, ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
@@ -913,11 +914,8 @@
           agenciaId: LINK.agenciaId || EMPRESA.agenciaId || null,
           status: 'solicitada', etapa: 'solicitada', origem: 'oportunidade', chanceFechamento: 'media',
           solicitadoPorUid: LINK.geradoPorUid || null, solicitadoPorNome: LINK.geradoPorNome || 'Cliente (link)',
-          observacoes: jaTem
-            ? ('Cliente JÁ TEM este seguro' + (r.seguradora ? ' (' + r.seguradora + ')' : '') + (r.vencimentoMes ? ', vence ' + MESES_AB[r.vencimentoMes-1] + '/' + (r.vencimentoAno||'') : '') + ' e quer uma cotação para COMPARAR (via link).')
-            : 'Cliente informou que NÃO tem, mas tem INTERESSE em cotar (via link).',
-          interesseViaLink: true, clienteJaTem: jaTem,
-          historico: [{ status: 'solicitada', label: 'Iniciada', obs: jaTem ? 'Cliente já tem e quer comparar — via link' : 'Interesse em cotar via link do cliente', por: 'Cliente', em: new Date().toISOString() }],
+          observacoes: 'Cliente informou que NÃO tem, mas tem INTERESSE em cotar (via link).', interesseViaLink: true,
+          historico: [{ status: 'solicitada', label: 'Iniciada', obs: 'Interesse em cotar via link do cliente', por: 'Cliente', em: new Date().toISOString() }],
           dataSolicitacao: firebase.firestore.FieldValue.serverTimestamp(),
           atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
