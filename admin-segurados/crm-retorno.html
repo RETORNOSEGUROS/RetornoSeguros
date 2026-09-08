@@ -1462,6 +1462,7 @@ VIEWS.empresas=function(){
         <td style="white-space:nowrap">
           <button class="btn btn-ghost btn-sm" onclick="modalEmpresa('${e.id}')" title="Editar cadastro"><i class="fas fa-pen"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="modalContrato('${e.id}')" title="Contrato: valores, coberturas e como usar"><i class="fas fa-file-invoice-dollar"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="modalApresentacao('${e.id}')" title="Apresentação do plano (link + PDF)"><i class="fas fa-file-powerpoint"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="verBenefEmpresa('${e.id}')" title="Beneficiários"><i class="fas fa-users"></i></button>
         </td></tr>`;
     }).join(''):`<tr><td colspan="7"><div class="empty"><div class="em-ic"><i class="fas fa-building"></i></div><h4>Nenhuma empresa</h4><p>Cadastre a primeira empresa cliente para administrar seus beneficiários.</p></div></td></tr>`}
@@ -1687,6 +1688,9 @@ async function salvarEmpresa(){
       }catch(e){ console.warn('contratoArquivo',e); } }
     }
     closeModal(); toast('Empresa salva com sucesso.','ok');
+    /* mantém a apresentação publicada em dia com os perfis/coberturas atuais */
+    if((CACHE.empresas||[]).some(x=>x.apresentacaoCodigo) && typeof apresPublicarTodas==='function')
+      setTimeout(()=>{ apresPublicarTodas().catch(()=>{}); },1500);
   }catch(e){ console.error(e); toast('Erro ao salvar empresa.','err'); }
 }
 
@@ -12078,6 +12082,97 @@ async function eiAlternar(id){
     toast(e.indicacaoAtiva?'Indicação reativada para esta empresa.':'Indicação pausada — a aba some do portal dela.','ok');
     VIEWS.indicacoes_empresas();
   }catch(err){ toast('Não consegui alterar.','err'); }
+}
+
+/* =========================================================================
+   APRESENTAÇÃO DO PLANO — link digital + PDF, moldado por empresa/perfil
+   Publica um doc público (site/apresentacoes) só com dados NÃO sensíveis:
+   nome da empresa, perfis contratados, coberturas e nº de vidas (sem CPF/nomes).
+   ========================================================================= */
+const APRES_SITE='https://retornoseguros.com/';
+function apresCodigoNovo(emp){
+  const base=eiNorm(emp.nomeEmpresa||'EMPRESA').replace(/[^A-Z0-9]/g,'').slice(0,8)||'EMPRESA';
+  const usados=new Set((CACHE.empresas||[]).map(e=>e.apresentacaoCodigo).filter(Boolean));
+  for(let i=0;i<60;i++){ const c=base+String(100+Math.floor(Math.random()*900)); if(!usados.has(c)) return c; }
+  return base+Date.now().toString().slice(-4);
+}
+function apresVidas(emp){
+  return CACHE.beneficiarios.filter(b=>b.empresaId===emp.id && b.status!=='inativo' && b.titularidade!=='dependente').length;
+}
+function apresPerfisData(emp){
+  const perfis=((emp.perfis)||[]).filter(p=>p.chave).map(p=>({
+    nome:p.nome||(typeof dentalNome==='function'?dentalNome(p.familia,p.chave):p.chave),
+    familia:(typeof dentalLabelFam==='function'?dentalLabelFam(p.familia):p.familia),
+    padrao:!!p.padrao,
+    valorTitular:Number(p.valorTitular!=null?p.valorTitular:p.valor)||0,
+    valorDependente:Number(p.valorDependente)||0,
+    diferenciais:((typeof dentalPlano==='function'&&dentalPlano(p.familia,p.chave))||{}).extra||[],
+    naoCobre:(typeof dentalNaoCobre==='function'?dentalNaoCobre([p]):[])
+  }));
+  perfis.sort((a,b)=>(b.padrao?1:0)-(a.padrao?1:0));  // o perfil padrão do contrato aparece primeiro
+  return perfis;
+}
+function apresDados(emp){
+  return {
+    empresa:emp.nomeEmpresa||'', cidade:emp.cidade||'',
+    operadora:'Bradesco Dental', site:'retornoseguros.com', whatsappRetorno:'5554996454300',
+    vidas:apresVidas(emp), perfis:apresPerfisData(emp)
+  };
+}
+/* (re)publica o índice público com TODAS as empresas que já têm código de apresentação */
+async function apresPublicarTodas(){
+  const mapa={};
+  (CACHE.empresas||[]).forEach(e=>{ const c=String(e.apresentacaoCodigo||'').trim().toUpperCase(); if(!c) return;
+    if((e.perfis||[]).filter(p=>p.chave).length) mapa[c]=apresDados(e); });
+  await db.collection('site').doc('apresentacoes').set({empresas:mapa,atualizadoEm:FV.serverTimestamp()});
+}
+async function modalApresentacao(empId){
+  const e=CACHE.empresas.find(x=>x.id===empId); if(!e){ toast('Empresa não encontrada.','err'); return; }
+  if(!((e.perfis||[]).filter(p=>p.chave).length)){
+    toast('Cadastre os perfis contratados no cadastro da empresa para gerar a apresentação com as coberturas certas.','info','Faltam os perfis'); return; }
+  toast('Gerando apresentação...','info');
+  try{
+    if(!e.apresentacaoCodigo){ const cod=apresCodigoNovo(e);
+      await db.collection('empresas_clientes').doc(e.id).update({apresentacaoCodigo:cod, atualizadoEm:FV.serverTimestamp()});
+      e.apresentacaoCodigo=cod; }
+    await apresPublicarTodas();
+  }catch(err){ console.warn('apres',err); toast('Não consegui publicar a apresentação.','err'); return; }
+  const cod=e.apresentacaoCodigo;
+  const linkColab=APRES_SITE+'apresentacao.html?e='+cod+'&tipo=colaborador';
+  const linkEmp=APRES_SITE+'apresentacao.html?e='+cod+'&tipo=empresa';
+  const d=apresDados(e);
+  const perfilLinha=d.perfis.map(p=>`<span class="badge" style="background:var(--brand-50);color:var(--brand-dark);margin:0 4px 4px 0;display:inline-block">${esc(p.nome)}${p.padrao?' (padrão)':''}</span>`).join('');
+  const linkBox=(titulo,sub,url,ic)=>`
+    <div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><i class="fas ${ic}" style="color:var(--brand)"></i>
+        <b style="color:var(--text)">${titulo}</b></div>
+      <div style="font-size:.8rem;color:var(--text-3);margin-bottom:10px">${sub}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input readonly value="${esc(url)}" style="flex:1;min-width:200px;font-size:.82rem;padding:9px 11px;border:1.5px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text-2)" onclick="this.select()">
+        <button class="btn btn-primary btn-sm" onclick="copiar('${esc(url)}','Link copiado!')"><i class="fas fa-copy"></i> Copiar</button>
+        <a class="btn btn-ghost btn-sm" href="${esc(url)}" target="_blank"><i class="fas fa-arrow-up-right-from-square"></i> Abrir</a>
+      </div>
+    </div>`;
+  openModal(`
+    <div class="modal-head"><h3><i class="fas fa-file-powerpoint" style="color:var(--brand)"></i> Apresentação do plano — ${esc(e.nomeEmpresa||'')}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:var(--brand-50);border-radius:10px;padding:12px 15px;margin-bottom:16px;font-size:.83rem;color:var(--brand-dark)">
+        <i class="fas fa-circle-info"></i> A apresentação vem <b>moldada com os perfis contratados</b> desta empresa e suas coberturas — sem CPF nem nome de colaborador. Cada link abre a página; o botão <b>Baixar PDF</b> fica dentro dela.</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:.85rem;color:var(--text-2);margin-bottom:16px">
+        <span><b>${d.vidas}</b> colaborador(es)</span>
+        <span>Perfis: ${perfilLinha||'—'}</span>
+      </div>
+      ${linkBox('Para os colaboradores','Guia completo: coberturas, como usar, carências, cartão/app e rede.',linkColab,'fa-users')}
+      ${linkBox('Boas-vindas para a empresa (RH)','Foco na gestão: coberturas contratadas e como fazer movimentações pela Retorno.',linkEmp,'fa-building')}
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="apresRepublicar('${e.id}')"><i class="fas fa-rotate"></i> Atualizar dados publicados</button>
+      <button class="btn btn-primary" onclick="closeModal()">Fechar</button></div>`,'wide');
+}
+async function apresRepublicar(empId){
+  try{ await apresPublicarTodas(); toast('Dados da apresentação atualizados com o que está cadastrado agora.','ok','Atualizado'); }
+  catch(e){ console.warn(e); toast('Erro ao atualizar.','err'); }
 }
 
 </script>
