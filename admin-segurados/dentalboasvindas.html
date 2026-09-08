@@ -261,7 +261,9 @@ body[data-tipo="colaborador"] .only-colab{display:block}
       <div class="card"><div style="font-size:1.5rem">&#10134;</div><b style="color:var(--navy)">Excluir colaborador</b><p style="font-size:.85rem;color:var(--mut);margin:6px 0 0">Avise o desligamento e fazemos a exclusão, com a fatura ajustada por dias (pró-rata).</p></div>
       <div class="card"><div style="font-size:1.5rem">&#128203;</div><b style="color:var(--navy)">Fatura e relatórios</b><p style="font-size:.85rem;color:var(--mut);margin:6px 0 0">Acompanhe a prévia da fatura, o rateio e a lista de vidas ativas pelo portal da empresa.</p></div>
     </div>
-    <div class="note info" style="margin-top:16px"><span>&#128273;</span><span>Acesse o portal da sua empresa em <b id="siteRetorno">retornoseguros.com</b> com o CNPJ e a senha que a Retorno cadastrou. Toda movimentação fica registrada e organizada por lá.</span></div>
+    <div class="note info" style="margin-top:16px"><span>&#128273;</span><span>As movimentações são feitas no <b>Portal da Empresa</b>:<br>
+      <a href="https://retornoseguros.com/empresa-beneficiarios.html" target="_blank" style="font-weight:700">retornoseguros.com/empresa-beneficiarios.html</a><br>
+      O <b>login e a senha são informados pela Retorno Seguros</b>. Toda movimentação fica registrada e organizada por lá.</span></div>
     <div class="card" style="margin-top:16px;background:#f8fbff;border-color:#cfe6ff">
       <b style="color:var(--navy)">&#128233; Apresente o plano aos seus colaboradores</b>
       <p style="font-size:.88rem;color:var(--mut);margin:6px 0 12px">Compartilhe a versão para colaboradores desta apresentação — mostra os benefícios, coberturas e como usar.</p>
@@ -349,10 +351,11 @@ const NAO_COBRE_GERAL=[
   'Tratamentos experimentais não reconhecidos pelo CFO'
 ];
 
-/* dados de exemplo — substituídos pelo doc publicado quando abrir com ?e=CODIGO */
+/* dados de EXEMPLO — só aparecem em pré-visualização (sem ?e=token na URL).
+   Nome propositalmente genérico para nunca ser confundido com uma empresa real. */
 const SAMPLE={
-  empresa:'Sementes Butiá Ltda', cidade:'Passo Fundo/RS', operadora:'Bradesco Dental',
-  vidas:142, whatsappRetorno:'5554996454300', site:'retornoseguros.com',
+  empresa:'Empresa Exemplo (pré-visualização)', cidade:'', operadora:'Bradesco Dental',
+  vidas:0, whatsappRetorno:'5554996454300', site:'retornoseguros.com',
   perfis:[
     {nome:'SPG Padrão Doc 1', familia:'SPG', valorTitular:18.15, valorDependente:15,
      diferenciais:['Documentação ortodôntica completa','Prótese dentária'],
@@ -382,7 +385,6 @@ function render(){
   $('#cardAns').textContent=op.ans||'';
   $('#hcOper').innerHTML=esc(d.operadora)+' <small>'+esc(op.ans||'')+'</small>';
   $('#redeCidade').textContent=d.cidade?('— '+d.cidade):'';
-  $('#siteRetorno').textContent=d.site||'retornoseguros.com';
 
   // perfis tabs
   if(d.perfis.length>1){ $('#secPerfil').style.display='block';
@@ -424,19 +426,34 @@ async function carregar(){
   const tipo=p.get('tipo'); if(tipo==='empresa'||tipo==='colaborador') document.body.dataset.tipo=tipo;
   document.querySelectorAll('#segTipo button').forEach(b=>b.classList.toggle('on',b.dataset.tipo===document.body.dataset.tipo));
   const cod=(p.get('e')||p.get('emp')||'').trim();
-  if(cod && /^[a-z0-9]{8,60}$/i.test(cod)){
-    try{
-      /* link privado: busca SÓ o documento desta empresa (get por id).
-         A regra do Firestore proíbe listar a coleção, então não dá pra varrer as outras. */
-      const url='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/apresentacoes/'+encodeURIComponent(cod);
-      const r=await fetch(url);
-      if(r.ok){ const j=await r.json();
-        const e=j.fields?fromFS({fields:j.fields}):null;
-        if(e&&e.perfis) DADOS=Object.assign({},SAMPLE,e);
-      } else { document.body.classList.add('nolink'); }
-    }catch(err){ console.warn('apresentacao',err); }
+  if(cod){
+    // Tem token na URL: SÓ mostra se carregar os dados reais desta empresa.
+    // Nunca cai no exemplo — para não exibir outra empresa por engano.
+    let ok=false;
+    if(/^[a-z0-9]{8,60}$/i.test(cod)){
+      try{
+        const url='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/apresentacoes/'+encodeURIComponent(cod);
+        const r=await fetch(url);
+        if(r.ok){ const j=await r.json();
+          const e=j.fields?fromFS({fields:j.fields}):null;
+          if(e&&e.empresa&&e.perfis&&e.perfis.length){ DADOS=Object.assign({},SAMPLE,e); ok=true; }
+        }
+      }catch(err){ console.warn('apresentacao',err); }
+    }
+    if(!ok){ mostrarErro(); return; }
   }
   render();
+}
+function mostrarErro(){
+  document.body.innerHTML=
+    '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:30px;font-family:\'Open Sans\',system-ui,sans-serif;background:#eef2f7">'+
+    '<div style="max-width:460px;text-align:center;background:#fff;border:1px solid #e6ebf2;border-radius:16px;padding:34px;box-shadow:0 10px 30px rgba(19,42,78,.08)">'+
+    '<div style="font-size:2.4rem">&#128274;</div>'+
+    '<h2 style="color:#132a4e;margin:12px 0 6px">Apresentação indisponível</h2>'+
+    '<p style="color:#5b6b82;font-size:.95rem;line-height:1.6">Não foi possível abrir esta apresentação. O link pode ter expirado ou ainda não estar publicado.</p>'+
+    '<p style="color:#5b6b82;font-size:.9rem">Peça um link atualizado à <b>Retorno Seguros</b>.</p>'+
+    '<a href="https://www.retornoseguros.com" style="display:inline-block;margin-top:12px;color:#2563eb;font-weight:700;text-decoration:none">retornoseguros.com</a>'+
+    '</div></div>';
 }
 /* converte um mapValue do Firestore REST em objeto JS simples */
 function fromFS(mv){ const o={}; const f=mv.fields||{};
