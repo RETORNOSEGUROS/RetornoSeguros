@@ -1657,6 +1657,15 @@ async function salvarEmpresa(){
     valorDependente:Number(p.valorDependente)||0,
     padrao:!!p.padrao, reajustes:p.reajustes||[] }));
   if(perfis.length && !perfis.some(p=>p.padrao)) perfis[0].padrao=true;
+  /* coberturas do contrato (aba Dental) montadas automaticamente a partir dos perfis */
+  const empAtual=id?(CACHE.empresas.find(x=>x.id===id)||{}):{};
+  let contratoAtual=empAtual.contrato||{};
+  if(perfis.length){
+    const cobD=coberturasDosPerfis({perfis}); const naoD=dentalNaoCobre(perfis);
+    contratoAtual=Object.assign({}, contratoAtual,
+      { coberturas:Object.assign({}, contratoAtual.coberturas||{}, {dental:cobD}),
+        naoCobre:Object.assign({}, contratoAtual.naoCobre||{}, {dental:naoD}) });
+  }
   const dados={ nomeEmpresa:nome, cnpj, responsavel:document.getElementById('empResp').value.trim()||null,
     email:document.getElementById('empEmail').value.trim()||null, whatsapp:document.getElementById('empWhats').value.replace(/\D/g,'')||null,
     planos, perfis, seguradora:document.getElementById('empSeg').value||null, apolice:document.getElementById('empApolice').value.trim()||null,
@@ -1665,6 +1674,7 @@ async function salvarEmpresa(){
     senhaPortal:document.getElementById('empSenhaPortal').value.trim()||null,
     urlPortal:document.getElementById('empUrl').value.trim()||null, status:document.getElementById('empStatus').value,
     observacoes:document.getElementById('empObs').value.trim()||null, atualizadoEm:FV.serverTimestamp() };
+  if(perfis.length) dados.contrato=contratoAtual;
   const fileInp=document.getElementById('empContratoFile'); const contratoFile=fileInp&&fileInp.files[0];
   try{
     let docId=id;
@@ -1821,10 +1831,13 @@ function renderContrato(){
         </div>
       </div>
 
-      <div style="background:var(--ok-bg);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:.8rem;color:#14532d;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      ${(function(){ const perfisEmp=(e.perfis||[]).filter(x=>x.chave); const usaPerfil=k==='dental'&&perfisEmp.length;
+        return `<div style="background:var(--ok-bg);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:.8rem;color:#14532d;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <i class="fas fa-wand-magic-sparkles"></i>
-        <div style="flex:1;min-width:220px">Carregue o padrão da Retorno para ${esc(nomeP)} (${padrao.cobre.length} coberturas + o que não cobre + passo a passo) e depois ajuste só o que este contrato tem de diferente.</div>
-        <button class="btn btn-success btn-sm" onclick="ctPadrao()"><i class="fas fa-download"></i> Carregar padrão</button></div>
+        <div style="flex:1;min-width:220px">${usaPerfil
+          ? 'Carregue as coberturas dos <b>perfis contratados</b> ('+perfisEmp.map(x=>esc(x.nome)).join(', ')+') — o que cobre e o que não cobre já vêm prontos do catálogo. As coberturas também são atualizadas sozinhas quando você salva os perfis no cadastro da empresa.'
+          : 'Carregue o padrão da Retorno para '+esc(nomeP)+' ('+padrao.cobre.length+' coberturas + o que não cobre + passo a passo) e depois ajuste só o que este contrato tem de diferente.'}</div>
+        <button class="btn btn-success btn-sm" onclick="ctPadrao()"><i class="fas fa-download"></i> ${usaPerfil?'Recarregar dos perfis':'Carregar padrão'}</button></div>`; })()}
 
       <div class="form-row"><label>Coberturas deste plano <span style="font-weight:400;color:var(--text-3)">— uma por linha, no formato <b>Nome | explicação</b></span></label>
         <textarea id="ctCob" rows="9" placeholder="Prevenção | Limpeza, aplicação de flúor e orientação de higiene">${esc(cob)}</textarea>
@@ -1867,13 +1880,13 @@ function ctPadrao(){
   const emp=CACHE.empresas.find(x=>x.id===CT.id)||{};
   const temAlgo=(g('ctCob').value.trim()||g('ctNaoCob').value.trim()||g('ctPassos').value.trim());
   if(k==='dental' && ((emp.perfis||[]).filter(p=>p.chave).length)){
-    if(temAlgo && !confirm('Isso substitui as coberturas desta aba pelas coberturas dos perfis contratados. Continuar?')) return;
+    if(temAlgo && !confirm('Isso substitui as coberturas e o "não cobre" desta aba pelo que os perfis contratados oferecem. Continuar?')) return;
     g('ctCob').value=coberturasDosPerfis(emp).join('\n');
+    g('ctNaoCob').value=dentalNaoCobre(emp.perfis).join('\n');
     const p=COB_PADRAO.dental;
-    if(p){ if(!g('ctNaoCob').value.trim()) g('ctNaoCob').value=(p.naoCobre||[]).join('\n');
-      if(!g('ctPassos').value.trim()) g('ctPassos').value=p.passos||'';
+    if(p){ if(!g('ctPassos').value.trim()) g('ctPassos').value=p.passos||'';
       if(p.obs && !g('ctObs').value.trim()) g('ctObs').value=p.obs; }
-    toast('Coberturas carregadas dos perfis contratados.','ok');
+    toast('Coberturas e "não cobre" carregados dos perfis contratados.','ok');
     return;
   }
   const p=COB_PADRAO[k]; if(!p) return;
@@ -5691,6 +5704,37 @@ function dentalCoberturas(fam,chave){ const p=dentalPlano(fam,chave); if(!p) ret
   const base=fam==='spg'?DENTAL_BASE_SPG:DENTAL_BASE_EMP.concat(DENTAL_EMP_BASE);
   return base.concat(p.extra||[]); }
 function dentalLabelFam(fam){ return fam==='spg'?'SPG':'Empresarial'; }
+
+/* Diferenciais de cada linha — usados para deduzir "o que o plano NÃO cobre"
+   (o que falta em relação aos planos maiores da mesma linha). kw = trecho para casar. */
+const DENTAL_CAPS_SPG=[
+  {rot:'Documentação ortodôntica completa',kw:'documenta'},
+  {rot:'Prótese dentária',kw:'prótese'},
+  {rot:'Ortodontia (aparelho)',kw:'ortodontia'},
+  {rot:'Tomografia computadorizada',kw:'tomografia'},
+  {rot:'Clareamento em gel',kw:'clareamento'}
+];
+const DENTAL_CAPS_EMP=[
+  {rot:'Consulta para clareamento',kw:'consulta para clareamento'},
+  {rot:'Placa de mordida / clareamento',kw:'placa de mordida'},
+  {rot:'Documentação ortodôntica completa',kw:'documenta'},
+  {rot:'Tratamento ortodôntico (aparelho)',kw:'tratamento ortodônt'},
+  {rot:'Prótese removível (dentadura e parcial)',kw:'removível'},
+  {rot:'Próteses em resina',kw:'próteses em resina'},
+  {rot:'Próteses em cerômero',kw:'cerômero'},
+  {rot:'Próteses em cerâmica',kw:'cerâmica'},
+  {rot:'Tomografia computadorizada',kw:'tomografia'},
+  {rot:'Clareamento estético com gel',kw:'clareamento estético'},
+  {rot:'Implante',kw:'implante'}
+];
+/* o que NENHUM dos perfis contratados cobre (deduzido dos diferenciais da linha) */
+function dentalNaoCobre(perfis){
+  perfis=(perfis||[]).filter(p=>p.chave); if(!perfis.length) return [];
+  const covered=[]; perfis.forEach(p=>dentalCoberturas(p.familia,p.chave).forEach(c=>covered.push(String(c).toLowerCase())));
+  const caps=[], seen={};
+  perfis.forEach(p=>{ (p.familia==='empresarial'?DENTAL_CAPS_EMP:DENTAL_CAPS_SPG).forEach(c=>{ if(!seen[c.rot]){ seen[c.rot]=1; caps.push(c); } }); });
+  return caps.filter(c=>!covered.some(cv=>cv.includes(c.kw))).map(c=>c.rot);
+}
 
 /* =========================================================================
    MENU: comparativo entre planos (sem valores)
