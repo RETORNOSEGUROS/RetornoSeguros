@@ -207,6 +207,9 @@ function dadosLead(extra){
     ramo:ROTEIRO.ramo, tipo:ROTEIRO.tipo||'individual', origem:'site',
     indicadoPorCodigo:indicadorCodigo?String(indicadorCodigo).toUpperCase():null,
     clienteLeadId:formData._clienteLeadId||null, viaPortal:!!formData._clienteLeadId,
+    indicadoPorEmpresaCodigo:(EMPRESA_IND&&EMPRESA_IND.codigo)||null,
+    indicadoPorEmpresaNome:(EMPRESA_IND&&EMPRESA_IND.nome)||null,
+    indicadoPorEmpresaId:(EMPRESA_IND&&EMPRESA_IND.empresaId)||null,
     empresaParceiraCodigo:empresaParceiraCodigo?String(empresaParceiraCodigo).toUpperCase():null,
     atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()
   },ROTEIRO.campos(),extra||{});
@@ -308,7 +311,11 @@ function areaSelect(id,lista,botao,onOk,label){
 const PASSOS={
   async nome(){
     await digitando(800);
-    bolhaPamela(ROTEIRO.abertura);
+    bolhaPamela((EMPRESA_IND&&EMPRESA_IND.nome
+      ? 'Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>'
+        +'A <strong>'+esc(EMPRESA_IND.nome)+'</strong> cuida dos benefícios do time com a gente e pediu para eu falar com você — '
+        +'a ideia é levar essa mesma proteção para a <span class="hl">sua vida fora do trabalho</span>.<br><br>Pra começar: <strong>como posso te chamar?</strong>'
+      : ROTEIRO.abertura));
     areaTexto('inNome','Seu nome...','Enviar &rarr;',v=>{ formData.nome=v; fecharArea(); bolhaEco(esc(v)); radarMais(1); passo(ROTEIRO.depoisDoNome); });
   },
   async whatsapp(){
@@ -356,6 +363,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('capitulos').innerHTML=ROTEIRO.capitulos.map((c,i)=>'<span class="cap'+(i===0?' on':'')+'" data-cap="'+c.key+'">'+(i+1)+' &middot; '+c.label+'</span>').join('');
   if(ROTEIRO.init) ROTEIRO.init();
   setTimeout(()=>document.getElementById('pageLoader').classList.add('h'),500);
+  /* indicação de uma empresa de benefícios: ?emp=CODIGO */
+  const emp=urlParams.get('emp');
+  if(emp) empresaIndicou(emp);
   const t=urlParams.get('t');
   if(t){ portalPrefill(t).then(ok=>{ if(ok){ bolhaPamela('Oi, <strong>'+primeiroNome()+'</strong>! Que bom te ver por aqui de novo &#128522; Como você já é da casa, vou direto ao que interessa.'+(ROTEIRO.portalExtra?ROTEIRO.portalExtra(formData._portal)||'':'')); radarMais(1); setTimeout(()=>passo(ROTEIRO.depoisDoNome),600); } else setTimeout(()=>passo('nome'),300); }); }
   else setTimeout(()=>passo('nome'),700);
@@ -372,6 +382,43 @@ async function portalPrefill(t){
   }catch(e){ return false; }
 }
 
+
+/* =========================================================================
+   INDICADO PELA EMPRESA — "a XYZ se preocupa com a sua proteção"
+   Lê o índice público site/empresas_indicacao pela API REST (sem SDK).
+   ========================================================================= */
+let EMPRESA_IND=null;
+async function empresaIndicou(codigo){
+  const cod=String(codigo||'').trim().toUpperCase(); if(!cod) return;
+  EMPRESA_IND={codigo:cod,nome:''};
+  try{
+    const url='https://firestore.googleapis.com/v1/projects/retorno-seguros/databases/(default)/documents/site/empresas_indicacao';
+    const r=await fetch(url); if(!r.ok) return;
+    const d=await r.json();
+    const f=((d.fields||{}).empresas||{}).mapValue; if(!f) return;
+    const e=(f.fields||{})[cod]; if(!e||!e.mapValue) return;
+    const campos=e.mapValue.fields||{};
+    EMPRESA_IND={codigo:cod, nome:(campos.nome&&campos.nome.stringValue)||'', empresaId:(campos.empresaId&&campos.empresaId.stringValue)||''};
+    empresaBanner();
+  }catch(e){ console.warn('empresa indicacao',e); }
+}
+function empresaBanner(){
+  if(!EMPRESA_IND||!EMPRESA_IND.nome) return;
+  const feed=document.getElementById('feed'); if(!feed) return;
+  const d=document.createElement('div');
+  d.className='emp-ind';
+  d.innerHTML='<span class="ei-ic">&#127970;</span><div><b>A '+esc(EMPRESA_IND.nome)+' se preocupa com a sua proteção.</b>'
+    +'<div class="ei-s">Ela cuida dos benefícios do time com a Retorno Seguros e abriu essa conversa para você e sua família. '
+    +'Sem custo para a empresa, sem compromisso para você — e a empresa não vê seus dados.</div></div>';
+  feed.insertBefore(d,feed.firstChild);
+  const css=document.createElement('style');
+  css.textContent='.emp-ind{display:flex;gap:12px;align-items:flex-start;background:linear-gradient(135deg,#eff6ff,#dbeafe);'
+    +'border:1px solid #bfdbfe;border-radius:16px;padding:14px 16px;margin-bottom:16px}'
+    +'.ei-ic{font-size:1.5rem;line-height:1}.emp-ind b{color:#1b2c5c;font-size:.95rem}'
+    +'.ei-s{font-size:.84rem;color:#334155;margin-top:4px;line-height:1.5}';
+  document.head.appendChild(css);
+}
+
 </script>
 <script>
 // @title: Cotação Plano Dental Empresarial | Retorno Seguros — Consultoria em Benefícios
@@ -383,6 +430,11 @@ Object.assign(formData,{nomeEmpresa:'',cnpj:'',temPlano:'',funcionarios:0,depend
 
 /* tabela de referência por vida (mesma da página anterior) */
 function precoDental(n){ return n<=29?27.42:n<=99?24.19:n<=199?18.15:14.16; }
+/* "salário invisível": uso médio anual por pessoa no dentista particular.
+   limpeza e restauração alinham com o Censo ABIMO/CFO 2024; os demais por referência de mercado — tudo estimativa.
+   soma de (% que faz no ano × custo médio): limpeza 51%·R$250 + restauração 31%·R$350 + urgência 20%·R$225 + extração 10%·R$425 + canal 7%·R$1850 ≈ R$453/pessoa/ano */
+const USO_ANO_VIDA=453;
+function economiaTime(n){ return Math.round((n*USO_ANO_VIDA)/50)*50; }  // arredonda pra um número "redondo"
 const BRL2=n=>'R$ '+n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const NIVEL_ROT={basico:'Rol completo da ANS',ampliado:'Ampliado (clareamento e próteses)',ortodontia:'Com ortodontia'};
 const PAGA_ROT={empresa:'A empresa paga',dividido:'Dividido com o colaborador',colaborador:'Desconto em folha'};
@@ -418,12 +470,15 @@ Object.assign(PASSOS,{
   async temPlano(){
     await digitando(800);
     bolhaPamela('A <strong>'+esc(formData.nomeEmpresa)+'</strong> já oferece plano dental hoje?');
-    areaResposta(opcoes('temPlano','funcionarios',[{v:'sim',t:'Já temos',s:'Quero comparar',i:'&#129463;'},{v:'nao',t:'Ainda não',s:'Seria o primeiro',i:'&#127793;'}],2));
+    areaResposta(opcoes('temPlano','funcionarios',[{v:'sim',t:'Já temos',s:'Quero comparar',i:'&#9989;'},{v:'nao',t:'Ainda não',s:'Seria o primeiro',i:'&#10060;'}],2));
   },
   async funcionarios(){
     await digitando(900);
     bolhaPamela('Quantas <strong>pessoas</strong> entrariam no plano? (sócios e funcionários — a partir de 2 vidas já é plano empresarial)');
-    areaTexto('inFunc','Ex.: 15','Enviar &rarr;',v=>{ formData.funcionarios=+v.replace(/\D/g,''); fecharArea(); bolhaEco(formData.funcionarios+' vida'+(formData.funcionarios>1?'s':'')); radarMais(1); salvarProgresso('funcionarios'); passo('dependentes'); },{inputmode:'numeric',valida:v=>+v.replace(/\D/g,'')>=1});
+    areaTexto('inFunc','Ex.: 15','Enviar &rarr;',v=>{ formData.funcionarios=+v.replace(/\D/g,''); fecharArea(); bolhaEco(formData.funcionarios+' vida'+(formData.funcionarios>1?'s':''));
+      const n=formData.funcionarios, eco=economiaTime(n), plano=Math.round(precoDental(n)*n*12);
+      bolhaFato('Pelo uso médio do brasileiro no dentista, um time de <b>'+n+' pessoa'+(n>1?'s':'')+'</b> deixaria de tirar cerca de <b>'+BRL(eco)+' por ano</b> do próprio bolso em limpezas, consultas, urgência e tratamentos. É esse <b>“salário invisível”</b> que o plano devolve pro seu pessoal — e sai por volta de '+BRL(plano)+' no ano todo pra empresa.<br><span style="opacity:.7;font-size:.9em">Estimativa · limpeza e restauração pelo Censo ABIMO/CFO 2024, demais por referência de mercado.</span>');
+      radarMais(1); salvarProgresso('funcionarios'); passo('dependentes'); },{inputmode:'numeric',valida:v=>+v.replace(/\D/g,'')>=1});
   },
   async dependentes(){
     await digitando(900);
@@ -433,6 +488,7 @@ Object.assign(PASSOS,{
   },
   async nivel(){
     await digitando(1000);
+    bolhaFato('Você sabia? O ideal são <b>2 limpezas por ano</b>, e cada uma particular custa de <b>R$ 150 a R$ 350</b>. O plano dental de uma pessoa o <b>ano inteiro</b> custa quase o mesmo que <b>uma única limpeza</b> — e cobre consulta, limpeza, urgência, canal, extração e muito mais.');
     bolhaPamela('<strong>Cenário:</strong> um colaborador quebra um dente na sexta à noite. Com o plano, ele tem <strong>urgência 24h</strong>, consulta, limpeza, restauração e canal cobertos — isso é o <span class="hl">rol da ANS</span>, que vem em qualquer plano.<br><br>Quer ir além do básico?');
     areaResposta(opcoes('planoNivel','quemPaga',[
       {v:'basico',t:'Rol completo da ANS',s:'Urgência, limpeza, restauração, canal, extração',rec:true},
