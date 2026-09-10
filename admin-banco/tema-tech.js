@@ -142,6 +142,64 @@
     el.textContent = s < 5 ? 'agora' : s < 60 ? `há ${s}s` : `há ${Math.round(s / 60)} min`;
   }, 1000);
 
+
+  /* ---------- 8. gráficos: tema global do Chart.js (vale para todas as telas) ---------- */
+  (function graficos() {
+    if (!window.Chart) return;
+    const PAL = ['#5FB4FF', '#2DD4BF', '#F5B544', '#9B8CFF', '#F0625D', '#F472B6', '#8FCBFF', '#34D399', '#FBBF24', '#C4B5FD'];
+    const D = Chart.defaults;
+    D.color = '#98A4BA'; D.font.family = "'Plus Jakarta Sans', system-ui, sans-serif"; D.font.size = 11;
+    D.plugins.legend.labels.boxWidth = 8; D.plugins.legend.labels.boxHeight = 8; D.plugins.legend.labels.usePointStyle = true; D.plugins.legend.labels.pointStyle = 'circle';
+    D.plugins.tooltip.backgroundColor = '#111A2E'; D.plugins.tooltip.borderColor = 'rgba(148,163,184,.26)'; D.plugins.tooltip.borderWidth = 1;
+    D.plugins.tooltip.titleColor = '#E8EDF6'; D.plugins.tooltip.bodyColor = '#98A4BA'; D.plugins.tooltip.padding = 10; D.plugins.tooltip.cornerRadius = 8;
+    D.scale.grid.color = 'rgba(148,163,184,.08)'; D.scale.grid.drawTicks = false; D.scale.border = D.scale.border || {}; D.scale.border.display = false;
+    D.elements.line.tension = 0.38; D.elements.line.borderWidth = 2; D.elements.point.radius = 0; D.elements.point.hoverRadius = 5; D.elements.point.hitRadius = 12;
+    D.elements.bar.borderRadius = 6; D.elements.bar.borderSkipped = false;
+    D.animation.duration = 900; D.animation.easing = 'easeOutQuart';
+    const hex2rgba = (h, a) => { const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/i.exec(h); return m ? `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})` : h; };
+    const mapCor = c => {
+      const k = String(c || '').toLowerCase();
+      if (/4f46e5|4338ca|6366f1|7c3aed|8b5cf6|c7d2fe|a5b4fc/.test(k)) return PAL[0];
+      if (/10b981|059669|22c55e|16a34a|86efac|bbf7d0/.test(k)) return PAL[1];
+      if (/f59e0b|d97706|eab308|fbbf24|fed7aa/.test(k)) return PAL[2];
+      if (/ef4444|dc2626|f87171|fecaca/.test(k)) return PAL[4];
+      if (/0ea5e9|3b82f6|0891b2|38bdf8/.test(k)) return PAL[6];
+      if (/ec4899|db2777/.test(k)) return PAL[5];
+      if (/94a3b8|cbd5e1|e2e8f0|64748b|475569/.test(k)) return 'rgba(148,163,184,.55)';
+      return c;
+    };
+    Chart.register({
+      id: 'temaTech',
+      beforeInit(chart) {
+        const type = chart.config.type;
+        (chart.config.data.datasets || []).forEach((ds, i) => {
+          const isLine = (ds.type || type) === 'line';
+          const isPie = /doughnut|pie|polarArea/.test(ds.type || type);
+          if (Array.isArray(ds.backgroundColor)) ds.backgroundColor = ds.backgroundColor.map((c, j) => mapCor(c) === c ? PAL[j % PAL.length] : mapCor(c));
+          else if (!isLine) { const base = mapCor(ds.backgroundColor || ds.borderColor) ; ds.backgroundColor = (base && base !== ds.backgroundColor) ? base : (ds.backgroundColor || PAL[i % PAL.length]); }
+          if (typeof ds.borderColor === 'string' || !ds.borderColor) ds.borderColor = mapCor(ds.borderColor) || PAL[i % PAL.length];
+          if (isLine) {
+            const cor = typeof ds.borderColor === 'string' ? ds.borderColor : PAL[i % PAL.length];
+            ds.borderColor = cor; ds.pointBackgroundColor = cor; ds.pointBorderColor = '#070B16'; ds.pointBorderWidth = 2;
+            if (ds.borderDash && ds.borderDash.length) { ds.borderWidth = 1.5; ds.borderColor = hex2rgba(cor, .7); ds.fill = false; }
+            else if (ds.fill === undefined || ds.fill === true || ds.fill === 'origin') {
+              ds.fill = true;
+              ds.backgroundColor = ctx => {
+                const { chart: ch } = ctx; const area = ch.chartArea; if (!area) return hex2rgba(cor, .12);
+                const g = ch.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+                g.addColorStop(0, hex2rgba(cor, .28)); g.addColorStop(1, hex2rgba(cor, 0)); return g;
+              };
+            } else ds.backgroundColor = hex2rgba(cor, .15);
+          }
+          if (isPie) { ds.borderWidth = 0; ds.spacing = 3; ds.hoverOffset = 8; ds.borderRadius = 6; }
+        });
+        if (/doughnut/.test(type)) { chart.options.cutout = chart.options.cutout || '74%'; }
+        const sc = chart.options.scales || {};
+        Object.values(sc).forEach(ax => { ax.grid = Object.assign({ color: 'rgba(148,163,184,.08)', drawTicks: false }, ax.grid || {}); ax.ticks = Object.assign({ color: '#5E6A82', font: { size: 11 } }, ax.ticks || {}); ax.border = Object.assign({ display: false }, ax.border || {}); });
+      }
+    });
+  })();
+
   /* ---------- observadores ---------- */
   function observar() {
     const mo = new MutationObserver(muts => {
