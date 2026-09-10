@@ -363,24 +363,26 @@
       set('fec', 'alerta', fechMes ? `${fechMes} fechamento${fechMes > 1 ? 's' : ''} este mês` : 'nenhum fechamento este mês', fechMes ? 'ok' : 'urg');
       spark('fec', porMes(fech, 'dataDecisao'), TEAL);
 
-      /* 3 e 4. visitas e apresentações (leitura direta, mesma agência) */
+      /* 3. VISITAS: agendamentos realizados no ano (fonte igual à do calendário) */
+      const parseDataAg = str => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+      const ags = (T.agendamentos || []).filter(a => a.status === 'realizada');
+      const meu = T.meuUid, ehRm = T.perfil === 'rm';
+      const agsMostra = ehRm ? ags.filter(a => a.gerenteUid === meu) : ags;
+      const agsAno = agsMostra.filter(a => { const d = parseDataAg(a.data); return d && d >= anoIni; });
+      const empVisSet = new Set(agsAno.map(a => a.empresaId).filter(Boolean));
+      const empVis = N ? Array.from(empVisSet).filter(id => ids.has(id)).length || empVisSet.size : empVisSet.size;
+      const ultVis = agsAno.map(a => parseDataAg(a.data)).filter(Boolean).sort((a, b) => b - a)[0];
+      anel('vis', pct(empVis, N || empVisSet.size || 1));
+      set('vis', 'big', `${empVis}${N ? ' de ' + N : ''}`);
+      set('vis', 'gap', agsAno.length ? `${agsAno.length} visita${agsAno.length > 1 ? 's' : ''} realizada${agsAno.length > 1 ? 's' : ''} em ${hoje.getFullYear()}` : `nenhuma visita realizada em ${hoje.getFullYear()}`);
+      set('vis', 'alerta', ultVis ? (dias(ultVis) === 0 ? 'visita hoje' : `última visita há ${dias(ultVis)} dias`) : 'registre visitas na agenda', !ultVis || dias(ultVis) >= 7 ? 'urg' : 'ok');
+      { const s6 = new Array(6).fill(0), base = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1); agsMostra.forEach(a => { const d = parseDataAg(a.data); if (!d || d < base) return; const i = (d.getFullYear() - base.getFullYear()) * 12 + d.getMonth() - base.getMonth(); if (i >= 0 && i < 6) s6[i]++; }); spark('vis', s6, AMB); }
+
+      /* 4. APRESENTAÇÕES: leitura direta (mesma agência) */
       try {
         const db = T.db, ag = T.ctx && T.ctx.agenciaId;
-        let qv = db.collection('mb_visitas'); if (ag) qv = qv.where('agenciaId', '==', ag);
         let qa = db.collection('mb_apresentacoes'); if (ag) qa = qa.where('agenciaId', '==', ag);
-        const [sv, sa] = await Promise.all([qv.get(), qa.get()]);
-        const vis = []; sv.forEach(d => vis.push(d.data())); const aps = []; sa.forEach(d => aps.push(d.data()));
-        const visAno = vis.filter(v => { const d = toDate(v.criadoEm) || toDate(v.data) || toDate(v.dataVisita); return d && d >= anoIni; });
-        const empVisSet = new Set(visAno.map(v => v.empresaId).filter(Boolean));
-        const empVis = N ? Array.from(empVisSet).filter(id => ids.has(id)).length : empVisSet.size;
-        const empVisMostrar = empVis || empVisSet.size;   /* se não casar por id, mostra o total de empresas visitadas */
-        const ultVis = visAno.map(v => toDate(v.criadoEm) || toDate(v.data)).filter(Boolean).sort((a, b) => b - a)[0];
-        anel('vis', pct(empVisMostrar, N || empVisSet.size));
-        set('vis', 'big', `${empVisMostrar}${N ? ' de ' + N : ''}`);
-        set('vis', 'gap', visAno.length ? `${visAno.length} visita${visAno.length > 1 ? 's' : ''} registradas em ${hoje.getFullYear()}` : `nenhuma visita em ${hoje.getFullYear()}`);
-        set('vis', 'alerta', ultVis ? (dias(ultVis) === 0 ? 'visita registrada hoje' : `última visita há ${dias(ultVis)} dias`) : 'nenhuma visita registrada no ano', !ultVis || dias(ultVis) >= 7 ? 'urg' : 'ok');
-        spark('vis', porMes(vis, 'criadoEm'), AMB);
-
+        const sa = await qa.get(); const aps = []; sa.forEach(d => aps.push(d.data()));
         const apEmp = new Set(aps.filter(a => ids.has(a.empresaId)).map(a => a.empresaId)).size;
         const apInt = aps.filter(a => ids.has(a.empresaId) && (a.concluiu || a.questionarioCompleto || a.ultimoInteresse === 'cotar')).length;
         anel('apr', pct(apEmp, N));
@@ -388,7 +390,7 @@
         set('apr', 'gap', `${apInt} interagiram (concluíram ou pediram cotação)`);
         set('apr', 'alerta', N - apEmp > 0 ? `${N - apEmp} empresas nunca abriram uma apresentação` : 'toda a carteira já abriu', N - apEmp > N * 0.5 ? 'urg' : 'ok');
         spark('apr', porMes(aps, 'criadoEm'), SKY);
-      } catch (e) { console.warn('cockpit visitas/apresentações', e); set('vis', 'gap', 'sem acesso aos dados de visitas'); set('apr', 'gap', 'sem acesso às apresentações'); }
+      } catch (e) { console.warn('cockpit apresentações', e); set('apr', 'gap', 'sem acesso às apresentações'); }
 
       marcar();
     }
@@ -397,9 +399,9 @@
     function objetivos() {
       const el = g('meta'); if (!el) return;
       const T = window.__tt, det = T && T.coberturaGrupos, nomes = (T && T.nomesGrupos) || {};
-      if (!det || !Object.keys(det).length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'cadastre as metas em Campanha → Produção retorno'); anel('meta', 0); return; }
+      if (!det || !Object.keys(det).length) { set('meta', 'big', 'abra a campanha'); set('meta', 'gap', 'os objetivos aparecem após abrir Campanha uma vez'); anel('meta', 0); return; }
       const grupos = Object.keys(det).map(gid => { const d = det[gid]; return { nome: nomes[gid] || gid, rumo: d.semMeta ? null : Math.min(100, d.alvo > 0 ? (d.pctMeta / d.alvo) * 100 : 0), ok: d.ok, semMeta: d.semMeta }; }).filter(x => !x.semMeta);
-      if (!grupos.length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'nenhum ramo com meta cadastrada'); anel('meta', 0); return; }
+      if (!grupos.length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'cadastre metas por ramo em Campanha → Produção retorno'); anel('meta', 0); set('meta', 'alerta', 'nenhum ramo com meta', 'urg'); return; }
       const noAlvo = grupos.filter(x => x.ok).length, media = Math.round(grupos.reduce((s, x) => s + (x.rumo || 0), 0) / grupos.length);
       anel('meta', Math.round(noAlvo / grupos.length * 100), noAlvo === grupos.length ? 'var(--teal)' : undefined);
       set('meta', 'big', `${noAlvo} de ${grupos.length} ramos`);
