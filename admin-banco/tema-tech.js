@@ -153,7 +153,7 @@
     D.plugins.tooltip.backgroundColor = '#111A2E'; D.plugins.tooltip.borderColor = 'rgba(148,163,184,.26)'; D.plugins.tooltip.borderWidth = 1;
     D.plugins.tooltip.titleColor = '#E8EDF6'; D.plugins.tooltip.bodyColor = '#98A4BA'; D.plugins.tooltip.padding = 10; D.plugins.tooltip.cornerRadius = 8;
     D.scale.grid.color = 'rgba(148,163,184,.08)'; D.scale.grid.drawTicks = false; D.scale.border = D.scale.border || {}; D.scale.border.display = false;
-    D.elements.line.tension = 0.38; D.elements.line.borderWidth = 2; D.elements.point.radius = 0; D.elements.point.hoverRadius = 5; D.elements.point.hitRadius = 12;
+    D.elements.line.tension = 0.38; D.elements.line.borderWidth = 2.5; D.elements.line.capBezierPoints = true; D.elements.point.radius = 0; D.elements.point.hoverRadius = 6; D.elements.point.hitRadius = 14;
     D.elements.bar.borderRadius = 6; D.elements.bar.borderSkipped = false;
     D.animation.duration = 900; D.animation.easing = 'easeOutQuart';
     const hex2rgba = (h, a) => { const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})/i.exec(h); return m ? `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})` : h; };
@@ -175,21 +175,21 @@
         (chart.config.data.datasets || []).forEach((ds, i) => {
           const isLine = (ds.type || type) === 'line';
           const isPie = /doughnut|pie|polarArea/.test(ds.type || type);
-          if (Array.isArray(ds.backgroundColor)) ds.backgroundColor = ds.backgroundColor.map((c, j) => mapCor(c) === c ? PAL[j % PAL.length] : mapCor(c));
+          if (Array.isArray(ds.backgroundColor)) ds.backgroundColor = ds.backgroundColor.map(c => { const k = String(c || '').toLowerCase(); return /94a3b8|cbd5e1|e2e8f0/.test(k) ? 'rgba(148,163,184,.45)' : /4f46e5|4338ca|312e81/.test(k) ? '#818CF8' : c; });
           else if (!isLine) { const base = mapCor(ds.backgroundColor || ds.borderColor) ; ds.backgroundColor = (base && base !== ds.backgroundColor) ? base : (ds.backgroundColor || PAL[i % PAL.length]); }
           if (typeof ds.borderColor === 'string' || !ds.borderColor) ds.borderColor = mapCor(ds.borderColor) || PAL[i % PAL.length];
           if (isLine) {
             const cor = typeof ds.borderColor === 'string' ? ds.borderColor : PAL[i % PAL.length];
             ds.borderColor = cor; ds.pointBackgroundColor = cor; ds.pointBorderColor = '#070B16'; ds.pointBorderWidth = 2;
-            if (ds.borderDash && ds.borderDash.length) { ds.borderWidth = 1.5; ds.borderColor = hex2rgba(cor, .7); ds.fill = false; }
+            if (ds.borderDash && ds.borderDash.length) { ds.borderWidth = 2; ds.borderDash = [6, 5]; ds.borderColor = hex2rgba(cor, .9); ds.fill = false; }
             else if (ds.fill === undefined || ds.fill === true || ds.fill === 'origin') {
-              ds.fill = true;
+              ds.fill = true; ds.borderWidth = 2.5; ds.pointRadius = c => c.dataIndex === c.dataset.data.length - 1 ? 4 : 0;
               ds.backgroundColor = ctx => {
                 const { chart: ch } = ctx; const area = ch.chartArea; if (!area) return hex2rgba(cor, .12);
                 const g = ch.ctx.createLinearGradient(0, area.top, 0, area.bottom);
-                g.addColorStop(0, hex2rgba(cor, .28)); g.addColorStop(1, hex2rgba(cor, 0)); return g;
+                g.addColorStop(0, hex2rgba(cor, .38)); g.addColorStop(1, hex2rgba(cor, 0)); return g;
               };
-            } else ds.backgroundColor = hex2rgba(cor, .15);
+            } else { ds.backgroundColor = hex2rgba(cor, .15); ds.borderWidth = 2.5; ds.pointRadius = c => c.dataIndex === c.dataset.data.length - 1 ? 4 : 0; }
           }
           if (isPie) { ds.borderWidth = 0; ds.spacing = 3; ds.hoverOffset = 8; ds.borderRadius = 6; }
         });
@@ -216,9 +216,9 @@
     const mapBg = (v, ctx) => {
       const c = parse(v); if (!c || c.a < .9) return null; const { h, s, l } = hsl(c);
       if (ctx.fill && l > .85) return 'linear-gradient(90deg, var(--sky), #B8E0FF)';
-      if (l > .62) return s < .15 ? (l > .97 ? 'var(--bg-2)' : 'var(--bg-3)') : `hsl(${h.toFixed(0)}, 38%, 15%)`;
+      if (l > .62) return s < .15 ? (l > .97 ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.075)') : `hsla(${h.toFixed(0)}, 70%, 62%, .12)`;
       if (h >= 225 && h <= 280 && s > .4 && l > .3 && l < .65) return 'linear-gradient(135deg, var(--navy-2), #3E6FC4)';
-      if (l < .16 && s < .7) return 'var(--sky)';
+      if (l < .16 && s < .7) return 'var(--bg-3)';
       return null;
     };
     const mapFg = v => { const c = parse(v); if (!c) return null; const { h, s, l } = hsl(c); if (l >= .45) return null; if (s < .2) return l < .22 ? 'var(--ink)' : 'var(--ink-2)'; if (h >= 225 && h <= 280) return 'var(--sky-2)'; return `hsl(${h.toFixed(0)}, ${(Math.min(s, .85) * 100).toFixed(0)}%, 72%)`; };
@@ -226,7 +226,7 @@
     const mapGrad = v => {
       const stops = (v.match(/#[\da-f]{3,6}\b|rgba?\([^)]*\)/gi) || []).map(parse).filter(Boolean); if (!stops.length) return null;
       const L = stops.map(hsl);
-      if (L.every(x => x.l > .62)) return `linear-gradient(135deg, hsl(${L[0].h.toFixed(0)}, 38%, 16%), hsl(${L[L.length - 1].h.toFixed(0)}, 38%, 13%))`;
+      if (L.every(x => x.l > .62)) return `linear-gradient(135deg, hsla(${L[0].h.toFixed(0)}, 70%, 62%, .13), hsla(${L[L.length - 1].h.toFixed(0)}, 70%, 62%, .06))`;
       if (L.every(x => x.h >= 225 && x.h <= 285 && x.l < .7)) return 'linear-gradient(135deg, var(--navy-2), #3E6FC4)';
       return null;
     };
