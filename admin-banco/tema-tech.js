@@ -370,12 +370,14 @@
         let qa = db.collection('mb_apresentacoes'); if (ag) qa = qa.where('agenciaId', '==', ag);
         const [sv, sa] = await Promise.all([qv.get(), qa.get()]);
         const vis = []; sv.forEach(d => vis.push(d.data())); const aps = []; sa.forEach(d => aps.push(d.data()));
-        const visAno = vis.filter(v => { const d = toDate(v.criadoEm); return d && d >= anoIni && ids.has(v.empresaId); });
-        const empVis = new Set(visAno.map(v => v.empresaId)).size;
-        const ultVis = visAno.map(v => toDate(v.criadoEm)).sort((a, b) => b - a)[0];
-        anel('vis', pct(empVis, N));
-        set('vis', 'big', `${empVis} de ${N}`);
-        set('vis', 'gap', N - empVis > 0 ? `${N - empVis} empresas ainda não visitadas em ${hoje.getFullYear()}` : 'todas visitadas este ano');
+        const visAno = vis.filter(v => { const d = toDate(v.criadoEm) || toDate(v.data) || toDate(v.dataVisita); return d && d >= anoIni; });
+        const empVisSet = new Set(visAno.map(v => v.empresaId).filter(Boolean));
+        const empVis = N ? Array.from(empVisSet).filter(id => ids.has(id)).length : empVisSet.size;
+        const empVisMostrar = empVis || empVisSet.size;   /* se não casar por id, mostra o total de empresas visitadas */
+        const ultVis = visAno.map(v => toDate(v.criadoEm) || toDate(v.data)).filter(Boolean).sort((a, b) => b - a)[0];
+        anel('vis', pct(empVisMostrar, N || empVisSet.size));
+        set('vis', 'big', `${empVisMostrar}${N ? ' de ' + N : ''}`);
+        set('vis', 'gap', visAno.length ? `${visAno.length} visita${visAno.length > 1 ? 's' : ''} registradas em ${hoje.getFullYear()}` : `nenhuma visita em ${hoje.getFullYear()}`);
         set('vis', 'alerta', ultVis ? (dias(ultVis) === 0 ? 'visita registrada hoje' : `última visita há ${dias(ultVis)} dias`) : 'nenhuma visita registrada no ano', !ultVis || dias(ultVis) >= 7 ? 'urg' : 'ok');
         spark('vis', porMes(vis, 'criadoEm'), AMB);
 
@@ -391,17 +393,33 @@
       marcar();
     }
 
-    /* 6. meta: lê o termômetro que o sistema preenche */
+    /* 6. OBJETIVOS: atingimento por ramo, das metas de Produção retorno (campanha) */
+    function objetivos() {
+      const el = g('meta'); if (!el) return;
+      const T = window.__tt, det = T && T.coberturaGrupos, nomes = (T && T.nomesGrupos) || {};
+      if (!det || !Object.keys(det).length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'cadastre as metas em Campanha → Produção retorno'); anel('meta', 0); return; }
+      const grupos = Object.keys(det).map(gid => { const d = det[gid]; return { nome: nomes[gid] || gid, rumo: d.semMeta ? null : Math.min(100, d.alvo > 0 ? (d.pctMeta / d.alvo) * 100 : 0), ok: d.ok, semMeta: d.semMeta }; }).filter(x => !x.semMeta);
+      if (!grupos.length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'nenhum ramo com meta cadastrada'); anel('meta', 0); return; }
+      const noAlvo = grupos.filter(x => x.ok).length, media = Math.round(grupos.reduce((s, x) => s + (x.rumo || 0), 0) / grupos.length);
+      anel('meta', Math.round(noAlvo / grupos.length * 100), noAlvo === grupos.length ? 'var(--teal)' : undefined);
+      set('meta', 'big', `${noAlvo} de ${grupos.length} ramos`);
+      set('meta', 'gap', `no alvo · média de ${media}% das metas`);
+      set('meta', 'alerta', noAlvo < grupos.length ? `${grupos.length - noAlvo} ramo${grupos.length - noAlvo > 1 ? 's' : ''} abaixo da meta` : 'todos os ramos no alvo', noAlvo < grupos.length ? 'urg' : 'ok');
+      /* mini-barras por ramo no rodapé, se couber */
+      const foot = q('meta', 'foot');
+      if (foot) foot.innerHTML = grupos.slice(0, 6).map(x => `<span class="tt-ramo" title="${x.nome}: ${Math.round(x.rumo)}% do alvo"><i style="height:${Math.max(6, Math.round(x.rumo * .34))}px;background:${x.ok ? 'var(--teal)' : x.rumo >= 60 ? 'var(--sky)' : 'var(--amber)'}"></i><em>${x.nome.replace(/ .*/, '').slice(0, 4)}</em></span>`).join('');
+    }
+    /* fallback: se a campanha ainda não expôs metas, usa o termômetro */
     function meta() {
-      const bar = $('termometroBar'), falta = $('termometroFalta'); if (!bar) return;
+      if (window.__tt && window.__tt.coberturaGrupos) return objetivos();
+      const bar = $('termometroBar'); if (!bar) { objetivos(); return; }
       const p = parseFloat(bar.style.width) || 0;
       anel('meta', p, p >= 100 ? 'var(--teal)' : undefined);
       set('meta', 'big', Math.round(p) + '% da meta');
-      set('meta', 'gap', (falta && falta.textContent.trim() !== '—') ? falta.textContent.trim() : 'meta da agência ainda não definida');
-      const diaMes = hoje.getDate(), diasMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate(), ritmo = Math.round(p / diaMes * diasMes);
-      set('meta', 'alerta', p ? (ritmo >= 100 ? `no ritmo atual fecha em ${ritmo}%` : `no ritmo atual fecha em ${ritmo}% · acelerar`) : '', ritmo >= 100 ? 'ok' : 'urg');
-      set('meta', 'foot', `${diasMes - diaMes} dias restantes no mês`);
+      const falta = $('termometroFalta');
+      set('meta', 'gap', (falta && falta.textContent.trim() !== '—') ? falta.textContent.trim() : 'metas em Campanha → Produção retorno');
     }
+    window.__ttObjetivos = objetivos;
 
     function ligar() {
       root()?.querySelectorAll('.tt-gauge').forEach(el => {
@@ -410,6 +428,9 @@
         el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
       });
       document.addEventListener('tt:dados', () => { calcular(); meta(); });
+      document.addEventListener('tt:metas', () => { if (window.__ttObjetivos) window.__ttObjetivos(); });
+      /* renomeia "Meta do mês" -> "Objetivos por ramo" */
+      const hMeta = root()?.querySelector('.tt-gauge[data-k="meta"] .tt-g-head span'); if (hMeta) hMeta.textContent = 'Objetivos por ramo';
       const bar = $('termometroBar'); bar && new MutationObserver(meta).observe(bar, { attributes: true, attributeFilter: ['style'] });
       const falta = $('termometroFalta'); falta && new MutationObserver(meta).observe(falta, { childList: true, characterData: true, subtree: true });
       if (window.__tt) { calcular(); meta(); }
