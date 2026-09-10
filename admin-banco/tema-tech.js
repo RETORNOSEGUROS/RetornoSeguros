@@ -201,51 +201,91 @@
   })();
 
 
-  /* ---------- 9. normalizador de cores inline (cobre o que o JS escreve em tempo de execução,
-     inclusive hover que grava 'white'/'#f8fafc' e valores que o navegador serializa como rgb()) ---------- */
+  /* ---------- 9. normalizador genérico de cores inline (por luminosidade) + barras + estrelas + números ---------- */
   (function normalizador() {
-    const toHex = v => {
-      v = String(v || '').trim().toLowerCase();
-      const m = v.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-      if (m) return '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('');
-      if (v === 'white') return '#ffffff';
-      const h = v.match(/^#([\da-f]{3}|[\da-f]{6})$/); if (!h) return null;
-      return h[1].length === 3 ? '#' + h[1].split('').map(c => c + c).join('') : '#' + h[1];
+    const parse = v => {
+      v = String(v || '').trim().toLowerCase(); if (!v) return null;
+      if (v === 'white') v = '#ffffff';
+      let m = v.match(/^rgba?\((\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?\)/);
+      if (m) return { r: +m[1] / 255, g: +m[2] / 255, b: +m[3] / 255, a: m[4] === undefined ? 1 : +m[4] };
+      m = v.match(/^#([\da-f]{3}|[\da-f]{6})$/); if (!m) return null;
+      let h = m[1]; if (h.length === 3) h = h.split('').map(c => c + c).join('');
+      return { r: parseInt(h.slice(0, 2), 16) / 255, g: parseInt(h.slice(2, 4), 16) / 255, b: parseInt(h.slice(4, 6), 16) / 255, a: 1 };
     };
-    const BG = {
-      '#ffffff': 'var(--bg-2)', '#f8fafc': 'var(--bg-3)', '#f1f5f9': 'var(--bg-3)', '#fafbfc': 'var(--bg-2)', '#f9fafb': 'var(--bg-2)', '#e2e8f0': 'var(--bg-3)', '#f3f4f6': 'var(--bg-3)',
-      '#eef2ff': 'rgba(95,180,255,.10)', '#e0e7ff': 'rgba(95,180,255,.14)', '#eff6ff': 'rgba(95,180,255,.10)', '#dbeafe': 'rgba(95,180,255,.14)', '#f5f3ff': 'rgba(155,140,255,.12)', '#ede9fe': 'rgba(155,140,255,.14)', '#ecfeff': 'rgba(45,212,191,.09)',
-      '#f0fdf4': 'rgba(45,212,191,.09)', '#dcfce7': 'rgba(45,212,191,.13)', '#d1fae5': 'rgba(45,212,191,.13)', '#f0fdfa': 'rgba(45,212,191,.09)',
-      '#fef2f2': 'rgba(240,98,93,.10)', '#fee2e2': 'rgba(240,98,93,.14)',
-      '#fff7ed': 'rgba(245,181,68,.09)', '#fffbeb': 'rgba(245,181,68,.09)', '#fef3c7': 'rgba(245,181,68,.13)', '#fef9c3': 'rgba(245,181,68,.13)', '#fde68a': 'rgba(245,181,68,.2)',
-      '#0f172a': '#5FB4FF', '#1e293b': 'var(--bg-3)', '#4f46e5': '#3E6FC4', '#6366f1': '#3E6FC4', '#4338ca': '#3E6FC4', '#c7d2fe': 'rgba(95,180,255,.25)'
+    const hsl = c => { const { r, g, b } = c, mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2; let h = 0, s = 0; if (mx !== mn) { const d = mx - mn; s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn); h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; } return { h, s, l }; };
+    const mapBg = (v, ctx) => {
+      const c = parse(v); if (!c || c.a < .9) return null; const { h, s, l } = hsl(c);
+      if (ctx.fill && l > .85) return 'linear-gradient(90deg, var(--sky), #B8E0FF)';
+      if (l > .62) return s < .15 ? (l > .97 ? 'var(--bg-2)' : 'var(--bg-3)') : `hsl(${h.toFixed(0)}, 38%, 15%)`;
+      if (h >= 225 && h <= 280 && s > .4 && l > .3 && l < .65) return 'linear-gradient(135deg, var(--navy-2), #3E6FC4)';
+      if (l < .16 && s < .7) return 'var(--sky)';
+      return null;
     };
-    const FG = {
-      '#0f172a': 'var(--ink)', '#1e293b': 'var(--ink)', '#111827': 'var(--ink)', '#334155': 'var(--ink)', '#1f2937': 'var(--ink)',
-      '#475569': 'var(--ink-2)', '#64748b': 'var(--ink-2)', '#4b5563': 'var(--ink-2)', '#374151': 'var(--ink-2)',
-      '#94a3b8': 'var(--ink-3)', '#cbd5e1': 'var(--ink-3)', '#9ca3af': 'var(--ink-3)',
-      '#4338ca': '#8FCBFF', '#4f46e5': '#8FCBFF', '#3730a3': '#8FCBFF', '#1e40af': '#8FCBFF', '#0369a1': '#8FCBFF', '#312e81': '#8FCBFF',
-      '#166534': '#5EE0C7', '#15803d': '#5EE0C7', '#065f46': '#5EE0C7', '#047857': '#5EE0C7',
-      '#991b1b': '#FF8A86', '#b91c1c': '#FF8A86', '#7f1d1d': '#FF8A86',
-      '#92400e': '#FFCB6B', '#b45309': '#FFCB6B', '#c2410c': '#FFCB6B', '#78350f': '#FFCB6B', '#9a3412': '#FFCB6B'
+    const mapFg = v => { const c = parse(v); if (!c) return null; const { h, s, l } = hsl(c); if (l >= .45) return null; if (s < .2) return l < .22 ? 'var(--ink)' : 'var(--ink-2)'; if (h >= 225 && h <= 280) return 'var(--sky-2)'; return `hsl(${h.toFixed(0)}, ${(Math.min(s, .85) * 100).toFixed(0)}%, 72%)`; };
+    const mapBd = v => { const c = parse(v); if (!c) return null; const { h, s, l } = hsl(c); if (l <= .7) return null; return s < .2 ? 'var(--line)' : `hsl(${h.toFixed(0)}, 40%, 32%)`; };
+    const mapGrad = v => {
+      const stops = (v.match(/#[\da-f]{3,6}\b|rgba?\([^)]*\)/gi) || []).map(parse).filter(Boolean); if (!stops.length) return null;
+      const L = stops.map(hsl);
+      if (L.every(x => x.l > .62)) return `linear-gradient(135deg, hsl(${L[0].h.toFixed(0)}, 38%, 16%), hsl(${L[L.length - 1].h.toFixed(0)}, 38%, 13%))`;
+      if (L.every(x => x.h >= 225 && x.h <= 285 && x.l < .7)) return 'linear-gradient(135deg, var(--navy-2), #3E6FC4)';
+      return null;
     };
-    const BD = { '#e2e8f0': 'var(--line)', '#cbd5e1': 'var(--line-2)', '#f1f5f9': 'var(--line)', '#c7d2fe': 'rgba(95,180,255,.30)', '#bbf7d0': 'rgba(45,212,191,.30)', '#fecaca': 'rgba(240,98,93,.32)', '#fed7aa': 'rgba(245,181,68,.30)', '#e0e7ff': 'rgba(95,180,255,.25)' };
+    const ehFill = el => { const st = el.style; if (!/%$/.test(st.width || '')) return false; const p = el.parentElement; if (!p) return false; const ph = parseFloat(p.style.height) || 0; return st.height === '100%' || (ph && ph <= 28) || (p.style.overflow === 'hidden' && !el.children.length); };
+
     function fix(el) {
-      if (!el || el.nodeType !== 1 || !el.style || el.closest && el.closest('#ttBg')) return;
-      const st = el.style;
-      const bg = toHex(st.backgroundColor); if (bg && BG[bg]) { st.setProperty('background', BG[bg], 'important'); }
-      else if (st.background && /white|#f|rgb\(2[45]\d/.test(st.background) && !st.backgroundImage) { const b2 = toHex(st.background.split(' ')[0]); if (b2 && BG[b2]) st.setProperty('background', BG[b2], 'important'); }
-      const fg = toHex(st.color); if (fg && FG[fg]) st.setProperty('color', FG[fg], 'important');
-      const bc = toHex(st.borderColor || st.borderLeftColor || st.borderBottomColor); if (bc && BD[bc]) st.setProperty('border-color', BD[bc], 'important');
+      if (!el || el.nodeType !== 1 || !el.style || el.id === 'ttBg' || el.closest('#ttCockpit, .tt-flow, .tt-hero, #ttGlobe')) return;
+      const st = el.style, fill = ehFill(el);
+      /* barras de progresso: cor de destaque + animação de crescimento (uma vez) */
+      if (fill && !el.dataset.ttBar) {
+        el.dataset.ttBar = '1'; const alvo = st.width;
+        const g = mapBg(st.backgroundColor || st.background, { fill: true });
+        if (g) st.setProperty('background', g, 'important');
+        if (!reduce) { st.setProperty('transition', 'none', 'important'); st.width = '0%'; el.classList.add('tt-bar'); requestAnimationFrame(() => requestAnimationFrame(() => { st.removeProperty('transition'); st.width = alvo; })); }
+        return;
+      }
+      if (st.backgroundImage && /gradient/.test(st.backgroundImage)) { const g = mapGrad(st.backgroundImage); if (g) st.setProperty('background', g, 'important'); }
+      else { const bg = mapBg(st.backgroundColor, { fill }); if (bg) st.setProperty('background', bg, 'important'); }
+      const fg = mapFg(st.color); if (fg) st.setProperty('color', fg, 'important');
+      ['borderColor', 'borderTopColor', 'borderBottomColor', 'borderLeftColor', 'borderRightColor'].forEach(k => { const b = mapBd(st[k]); if (b) st.setProperty(k.replace(/([A-Z])/g, m => '-' + m.toLowerCase()), b, 'important'); });
+      if (st.boxShadow && /rgba\(0|rgba\(15|rgba\(79/.test(st.boxShadow)) st.setProperty('box-shadow', 'none', 'important');
+      /* números em mono (percentuais/valores) recém-inseridos: pulso suave */
+      if (!el.dataset.ttNum && /jetbrains/i.test(st.fontFamily || '') && /^\s*R?\$?\s*[\d.,]+\s*[%KM]?\s*$/.test(el.textContent || '') && el.children.length === 0 && parseFloat(st.fontSize) >= 14) { el.dataset.ttNum = '1'; el.classList.add('tt-pulse'); setTimeout(() => el.classList.remove('tt-pulse'), 6000); }
     }
-    function varrer(root) { if (root.nodeType !== 1) return; fix(root); root.querySelectorAll('[style]').forEach(fix); }
+    /* estrelas da campanha: 3D + brilho + preenchimento animado */
+    function estrelas(root) {
+      root.querySelectorAll('svg:not([data-tt-star]) linearGradient[id^="est_"]').forEach(lg => {
+        const svg = lg.closest('svg'); if (!svg) return; svg.dataset.ttStar = '1';
+        const stops = lg.querySelectorAll('stop'); if (stops.length < 2) return;
+        const alvo = parseFloat(stops[0].getAttribute('offset')) || 0, cor = stops[0].getAttribute('stop-color');
+        stops[1].setAttribute('stop-color', '#1a2438');
+        const path = svg.querySelector('path'); if (path) { path.setAttribute('stroke', 'rgba(148,163,184,.35)'); }
+        const wrap = document.createElement('span'); wrap.className = 'tt-star3d'; wrap.style.setProperty('--glow', alvo >= 100 ? cor : 'rgba(95,180,255,.35)'); wrap.dataset.full = alvo >= 100 ? '1' : '0';
+        svg.parentNode.insertBefore(wrap, svg); wrap.appendChild(svg);
+        if (reduce) return;
+        let p = 0; const t0 = performance.now();
+        (function step(now) { const r = Math.min(1, (now - t0) / 1200), e = 1 - Math.pow(1 - r, 3); p = alvo * e; stops[0].setAttribute('offset', p + '%'); stops[1].setAttribute('offset', p + '%'); if (r < 1) requestAnimationFrame(step); })(t0);
+      });
+    }
+    function varrer(root) { if (root.nodeType !== 1) return; fix(root); root.querySelectorAll('[style]').forEach(fix); estrelas(root); }
     let fila = new Set(), agendado = false;
     function agendar(el) { fila.add(el); if (agendado) return; agendado = true; requestAnimationFrame(() => { fila.forEach(varrer); fila.clear(); agendado = false; }); }
-    const mo = new MutationObserver(ms => { for (const m of ms) { if (m.type === 'attributes') agendar(m.target); else m.addedNodes.forEach(n => n.nodeType === 1 && agendar(n)); } });
+    const mo = new MutationObserver(ms => { for (const m of ms) { if (m.type === 'attributes') { if (m.target.dataset && m.target.dataset.ttBar && m.attributeName === 'style') continue; agendar(m.target); } else m.addedNodes.forEach(n => n.nodeType === 1 && agendar(n)); } });
     function start() { varrer(document.body); mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] }); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
   })();
 
+  /* ---------- 9b. gráficos: reanimam sempre que a tela deles aparece ---------- */
+  (function reanimar() {
+    if (!window.Chart) return;
+    const mo = new MutationObserver(ms => {
+      for (const m of ms) {
+        const el = m.target; if (!el.classList || !el.classList.contains('screen') || !el.classList.contains('active')) continue;
+        el.querySelectorAll('canvas').forEach(cv => { const ch = Chart.getChart ? Chart.getChart(cv) : null; if (ch && !reduce) { try { ch.reset(); ch.update(); } catch (e) {} } });
+        el.querySelectorAll('[data-tt-bar]').forEach(b => { const w = b.style.width; b.style.transition = 'none'; b.style.width = '0%'; requestAnimationFrame(() => requestAnimationFrame(() => { b.style.removeProperty('transition'); b.style.width = w; })); });
+      }
+    });
+    document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('.screen').forEach(s => mo.observe(s, { attributes: true, attributeFilter: ['class'] })));
+  })();
 
   /* ---------- 10. COCKPIT: seis medidores calculados dos dados que o sistema já carregou ---------- */
   (function cockpit() {
