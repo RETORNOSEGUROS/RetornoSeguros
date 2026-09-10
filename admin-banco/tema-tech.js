@@ -243,8 +243,9 @@
         if (!reduce) { st.setProperty('transition', 'none', 'important'); st.width = '0%'; el.classList.add('tt-bar'); requestAnimationFrame(() => requestAnimationFrame(() => { st.removeProperty('transition'); st.width = alvo; })); }
         return;
       }
-      if (st.backgroundImage && /gradient/.test(st.backgroundImage)) { const g = mapGrad(st.backgroundImage); if (g) st.setProperty('background', g, 'important'); }
-      else { const bg = mapBg(st.backgroundColor, { fill }); if (bg) st.setProperty('background', bg, 'important'); }
+      const emModal = !!el.closest('.cad-modal-panel, .visita-panel, [style*="position:fixed"], [style*="position: fixed"]') && !el.closest('.sidebar, .topbar, #ttBg');
+      if (st.backgroundImage && /gradient/.test(st.backgroundImage)) { const g = mapGrad(st.backgroundImage); if (g) st.setProperty('background', emModal ? 'var(--bg-2)' : g, 'important'); }
+      else { let bg = mapBg(st.backgroundColor, { fill }); if (bg && emModal && /rgba\(255,255,255/.test(bg)) bg = (parse(st.backgroundColor) || {}).a < .9 ? null : 'var(--bg-2)'; if (bg) st.setProperty('background', bg, 'important'); }
       const fg = mapFg(st.color); if (fg) st.setProperty('color', fg, 'important');
       ['borderColor', 'borderTopColor', 'borderBottomColor', 'borderLeftColor', 'borderRightColor'].forEach(k => { const b = mapBd(st[k]); if (b) st.setProperty(k.replace(/([A-Z])/g, m => '-' + m.toLowerCase()), b, 'important'); });
       if (st.boxShadow && /rgba\(0|rgba\(15|rgba\(79/.test(st.boxShadow)) st.setProperty('box-shadow', 'none', 'important');
