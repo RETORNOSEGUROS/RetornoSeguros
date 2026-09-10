@@ -200,6 +200,52 @@
     });
   })();
 
+
+  /* ---------- 9. normalizador de cores inline (cobre o que o JS escreve em tempo de execução,
+     inclusive hover que grava 'white'/'#f8fafc' e valores que o navegador serializa como rgb()) ---------- */
+  (function normalizador() {
+    const toHex = v => {
+      v = String(v || '').trim().toLowerCase();
+      const m = v.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (m) return '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('');
+      if (v === 'white') return '#ffffff';
+      const h = v.match(/^#([\da-f]{3}|[\da-f]{6})$/); if (!h) return null;
+      return h[1].length === 3 ? '#' + h[1].split('').map(c => c + c).join('') : '#' + h[1];
+    };
+    const BG = {
+      '#ffffff': 'var(--bg-2)', '#f8fafc': 'var(--bg-3)', '#f1f5f9': 'var(--bg-3)', '#fafbfc': 'var(--bg-2)', '#f9fafb': 'var(--bg-2)', '#e2e8f0': 'var(--bg-3)', '#f3f4f6': 'var(--bg-3)',
+      '#eef2ff': 'rgba(95,180,255,.10)', '#e0e7ff': 'rgba(95,180,255,.14)', '#eff6ff': 'rgba(95,180,255,.10)', '#dbeafe': 'rgba(95,180,255,.14)', '#f5f3ff': 'rgba(155,140,255,.12)', '#ede9fe': 'rgba(155,140,255,.14)', '#ecfeff': 'rgba(45,212,191,.09)',
+      '#f0fdf4': 'rgba(45,212,191,.09)', '#dcfce7': 'rgba(45,212,191,.13)', '#d1fae5': 'rgba(45,212,191,.13)', '#f0fdfa': 'rgba(45,212,191,.09)',
+      '#fef2f2': 'rgba(240,98,93,.10)', '#fee2e2': 'rgba(240,98,93,.14)',
+      '#fff7ed': 'rgba(245,181,68,.09)', '#fffbeb': 'rgba(245,181,68,.09)', '#fef3c7': 'rgba(245,181,68,.13)', '#fef9c3': 'rgba(245,181,68,.13)', '#fde68a': 'rgba(245,181,68,.2)',
+      '#0f172a': '#5FB4FF', '#1e293b': 'var(--bg-3)', '#4f46e5': '#3E6FC4', '#6366f1': '#3E6FC4', '#4338ca': '#3E6FC4', '#c7d2fe': 'rgba(95,180,255,.25)'
+    };
+    const FG = {
+      '#0f172a': 'var(--ink)', '#1e293b': 'var(--ink)', '#111827': 'var(--ink)', '#334155': 'var(--ink)', '#1f2937': 'var(--ink)',
+      '#475569': 'var(--ink-2)', '#64748b': 'var(--ink-2)', '#4b5563': 'var(--ink-2)', '#374151': 'var(--ink-2)',
+      '#94a3b8': 'var(--ink-3)', '#cbd5e1': 'var(--ink-3)', '#9ca3af': 'var(--ink-3)',
+      '#4338ca': '#8FCBFF', '#4f46e5': '#8FCBFF', '#3730a3': '#8FCBFF', '#1e40af': '#8FCBFF', '#0369a1': '#8FCBFF', '#312e81': '#8FCBFF',
+      '#166534': '#5EE0C7', '#15803d': '#5EE0C7', '#065f46': '#5EE0C7', '#047857': '#5EE0C7',
+      '#991b1b': '#FF8A86', '#b91c1c': '#FF8A86', '#7f1d1d': '#FF8A86',
+      '#92400e': '#FFCB6B', '#b45309': '#FFCB6B', '#c2410c': '#FFCB6B', '#78350f': '#FFCB6B', '#9a3412': '#FFCB6B'
+    };
+    const BD = { '#e2e8f0': 'var(--line)', '#cbd5e1': 'var(--line-2)', '#f1f5f9': 'var(--line)', '#c7d2fe': 'rgba(95,180,255,.30)', '#bbf7d0': 'rgba(45,212,191,.30)', '#fecaca': 'rgba(240,98,93,.32)', '#fed7aa': 'rgba(245,181,68,.30)', '#e0e7ff': 'rgba(95,180,255,.25)' };
+    function fix(el) {
+      if (!el || el.nodeType !== 1 || !el.style || el.closest && el.closest('#ttBg')) return;
+      const st = el.style;
+      const bg = toHex(st.backgroundColor); if (bg && BG[bg]) { st.setProperty('background', BG[bg], 'important'); }
+      else if (st.background && /white|#f|rgb\(2[45]\d/.test(st.background) && !st.backgroundImage) { const b2 = toHex(st.background.split(' ')[0]); if (b2 && BG[b2]) st.setProperty('background', BG[b2], 'important'); }
+      const fg = toHex(st.color); if (fg && FG[fg]) st.setProperty('color', FG[fg], 'important');
+      const bc = toHex(st.borderColor || st.borderLeftColor || st.borderBottomColor); if (bc && BD[bc]) st.setProperty('border-color', BD[bc], 'important');
+    }
+    function varrer(root) { if (root.nodeType !== 1) return; fix(root); root.querySelectorAll('[style]').forEach(fix); }
+    let fila = new Set(), agendado = false;
+    function agendar(el) { fila.add(el); if (agendado) return; agendado = true; requestAnimationFrame(() => { fila.forEach(varrer); fila.clear(); agendado = false; }); }
+    const mo = new MutationObserver(ms => { for (const m of ms) { if (m.type === 'attributes') agendar(m.target); else m.addedNodes.forEach(n => n.nodeType === 1 && agendar(n)); } });
+    function start() { varrer(document.body); mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] }); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+  })();
+
   /* ---------- observadores ---------- */
   function observar() {
     const mo = new MutationObserver(muts => {
