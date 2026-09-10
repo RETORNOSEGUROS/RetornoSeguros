@@ -233,7 +233,7 @@
     const ehFill = el => { const st = el.style; if (!/%$/.test(st.width || '')) return false; const p = el.parentElement; if (!p) return false; const ph = parseFloat(p.style.height) || 0; return st.height === '100%' || (ph && ph <= 28) || (p.style.overflow === 'hidden' && !el.children.length); };
 
     function fix(el) {
-      if (!el || el.nodeType !== 1 || !el.style || el.id === 'ttBg' || el.closest('#ttCockpit, .tt-flow, .tt-hero, #ttGlobe')) return;
+      if (!el || el.nodeType !== 1 || !el.style || el.id === 'ttBg' || el.hasAttribute('data-ignore-bg') || el.closest('#ttCockpit, .tt-flow, .tt-hero, #ttGlobe, .tt-cal-ev')) return;
       const st = el.style, fill = ehFill(el);
       /* barras de progresso: cor de destaque + animação de crescimento (uma vez) */
       if (fill && !el.dataset.ttBar) {
