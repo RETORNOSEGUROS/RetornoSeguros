@@ -413,26 +413,25 @@
       desenhaRoda(el, ramos);
     }
     function desenhaRoda(card, ramos) {
-      let host = card.querySelector('.tt-roda'); const foot = card.querySelector('.tt-g-foot');
-      if (!host) { host = document.createElement('canvas'); host.className = 'tt-roda'; host.width = 168; host.height = 168; const body = card.querySelector('.tt-g-body'); const svg = body.querySelector('svg'); if (svg) svg.style.display = 'none'; body.insertBefore(host, body.firstChild); }
-      const ctx = host.getContext('2d'), cx = 84, cy = 84, N = ramos.length;
+      const body = card.querySelector('.tt-g-body'); if (!body) return;
+      const svg = body.querySelector('svg'); if (svg) svg.style.display = 'none';
+      let grid = card.querySelector('.tt-ramos-grid');
+      if (!grid) { grid = document.createElement('div'); grid.className = 'tt-ramos-grid'; body.insertAdjacentElement('afterend', grid); }
       const CORES = { vida: '#5FB4FF', re: '#F5B544', saude: '#2DD4BF', auto: '#9B8CFF', dental: '#F472B6', prev: '#A3E635', previdencia: '#A3E635' };
       const cor = r => CORES[(r.id || '').toLowerCase()] || r.cor || '#5FB4FF';
-      let a0 = -Math.PI / 2; const gap = 0.10, arco = (Math.PI * 2 - gap * N) / N;
-      function frame(t) {
-        ctx.clearRect(0, 0, 168, 168); a0 = -Math.PI / 2;
-        ramos.forEach(r => {
-          const raio = 66, prog = Math.min(1, (r.pct / 100)) * Math.min(1, t);
-          ctx.beginPath(); ctx.arc(cx, cy, raio, a0, a0 + arco); ctx.strokeStyle = 'rgba(148,163,184,.14)'; ctx.lineWidth = 11; ctx.lineCap = 'round'; ctx.stroke();
-          ctx.beginPath(); ctx.arc(cx, cy, raio, a0, a0 + arco * prog); ctx.strokeStyle = cor(r); ctx.lineWidth = 11; ctx.lineCap = 'round'; ctx.stroke();
-          a0 += arco + gap;
-        });
-        if (t < 1 && !reduce) requestAnimationFrame(() => frame(Math.min(1, t + 0.06)));
-      }
-      frame(reduce ? 1 : 0);
-      /* legenda compacta no rodapé: sigla + % */
-      if (foot) { const legenda = foot.querySelector('[data-f="foot"]'); if (legenda) legenda.innerHTML = ramos.map(r => `<span class="tt-ramo" title="${r.nome}: ${Math.round(r.pct)}% da meta"><i style="background:${cor(r)};width:8px;height:8px;border-radius:50%"></i><em>${r.nome.replace(/ .*/, '').slice(0,4)} ${Math.round(r.pct)}%</em></span>`).join(''); }
+      grid.innerHTML = ramos.map(r => {
+        const p = Math.max(0, Math.min(100, Math.round(r.pct)));
+        return `<div class="tt-ramo-cell" title="${r.nome}: ${T_fmt(r.real)} de ${T_fmt(r.meta)}">
+          <svg viewBox="0 0 44 44"><circle class="tr" cx="22" cy="22" r="18"/><circle class="va" cx="22" cy="22" r="18" style="stroke:${cor(r)};stroke-dashoffset:113" data-off="${113 - 113 * Math.min(100, p) / 100}"/><text x="22" y="26" class="pc">${p}%</text></svg>
+          <span class="tt-ramo-nome">${r.nome.replace(/ .*/, '')}</span>
+        </div>`;
+      }).join('');
+      /* anima o preenchimento */
+      requestAnimationFrame(() => requestAnimationFrame(() => { grid.querySelectorAll('circle.va').forEach(c => { c.style.strokeDashoffset = c.dataset.off; }); }));
+      /* limpa o rodapé (a legenda agora está em cada mini-anel) */
+      const foot = card.querySelector('.tt-g-foot [data-f="foot"]'); if (foot) foot.innerHTML = '';
     }
+    function T_fmt(v) { const T = window.__tt; return T && T.fmt ? T.fmt(v) : ('R$ ' + Math.round(v || 0).toLocaleString('pt-BR')); }
     /* fallback antigo (termômetro) só se não houver dados por ramo */
     function meta() { if (window.__tt && window.__tt.metasPorGrupo && window.__tt.metasPorGrupo.length) return objetivos(); const el = g('meta'); if (el) { set('meta', 'big', 'abra Relatório de Metas'); set('meta', 'gap', 'os objetivos por ramo aparecem após carregar as metas'); } }
         window.__ttObjetivos = objetivos;
