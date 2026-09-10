@@ -246,6 +246,137 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
   })();
 
+
+  /* ---------- 10. COCKPIT: seis medidores calculados dos dados que o sistema já carregou ---------- */
+  (function cockpit() {
+    const root = () => $('ttCockpit');
+    const q = (k, f) => root()?.querySelector(`.tt-gauge[data-k="${k}"] [data-f="${f}"]`);
+    const g = k => root()?.querySelector(`.tt-gauge[data-k="${k}"]`);
+    const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+    const dias = d => Math.floor((Date.now() - d) / 864e5);
+    const toDate = v => { if (!v) return null; if (v.toDate) return v.toDate(); if (v.seconds) return new Date(v.seconds * 1000); const d = new Date(v); return isNaN(d) ? null : d; };
+    const hoje = new Date(), anoIni = new Date(hoje.getFullYear(), 0, 1);
+
+    function anel(k, valor, cor) {
+      const el = g(k); if (!el) return;
+      const c = el.querySelector('circle.va'), t = el.querySelector('text.pc');
+      const p = Math.max(0, Math.min(100, valor || 0));
+      c.style.strokeDashoffset = 264 - 264 * p / 100;
+      c.style.stroke = cor || (p >= 70 ? 'var(--teal)' : p >= 40 ? 'var(--sky)' : 'var(--amber)');
+      el.dataset.nivel = p >= 70 ? 'ok' : p >= 40 ? 'meio' : 'baixo';
+      if (reduce) { t.textContent = p + '%'; return; }
+      const t0 = performance.now(), de = parseInt(t.textContent) || 0;
+      (function step(now) { const r = Math.min(1, (now - t0) / 1100), e = 1 - Math.pow(1 - r, 3); t.textContent = Math.round(de + (p - de) * e) + '%'; if (r < 1) requestAnimationFrame(step); })(t0);
+    }
+    function set(k, f, txt, cls) { const el = q(k, f); if (!el) return; el.textContent = txt || ''; if (cls !== undefined) el.className = (el.className.replace(/\b(urg|ok)\b/g, '').trim() + ' ' + cls).trim(); }
+    function spark(k, serie, cor) {
+      const c = q(k, 'spark'); if (!c || !serie || !serie.length) return;
+      const ctx = c.getContext('2d'), W = c.width, H = c.height, max = Math.max(1, ...serie), n = serie.length;
+      ctx.clearRect(0, 0, W, H);
+      const X = i => 4 + i * (W - 8) / (n - 1), Y = v => H - 4 - (v / max) * (H - 10);
+      const grad = ctx.createLinearGradient(0, 0, 0, H); grad.addColorStop(0, cor.replace(')', ',.35)').replace('rgb', 'rgba')); grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.beginPath(); ctx.moveTo(X(0), H); serie.forEach((v, i) => ctx.lineTo(X(i), Y(v))); ctx.lineTo(X(n - 1), H); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+      ctx.beginPath(); serie.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))); ctx.strokeStyle = cor; ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.stroke();
+      ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(X(n - 1), Y(serie[n - 1]), 2.4, 0, Math.PI * 2); ctx.fill();
+    }
+    function porMes(itens, campo) {                       // últimos 6 meses (contagem)
+      const out = new Array(6).fill(0), base = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1);
+      itens.forEach(it => { const d = toDate(it[campo]); if (!d || d < base) return; const i = (d.getFullYear() - base.getFullYear()) * 12 + d.getMonth() - base.getMonth(); if (i >= 0 && i < 6) out[i]++; });
+      return out;
+    }
+    const SKY = 'rgb(95,180,255)', TEAL = 'rgb(45,212,191)', AMB = 'rgb(245,181,68)';
+
+    async function calcular() {
+      const T = window.__tt; if (!T || !root()) return;
+      const emps = T.empresas || [], cots = T.cotacoes || [], ids = new Set(emps.map(e => e.id)), N = emps.length;
+
+      /* 1. mapeamento */
+      const mapeadas = emps.filter(e => Object.values(e.produtos || {}).some(v => v && v !== 'vazia')).length;
+      const socios = emps.filter(e => (e.socios && e.socios.length) || e.semSociosConfirmado).length;
+      const func = emps.filter(e => e.funcionarios > 0).length;
+      anel('map', pct(mapeadas, N));
+      set('map', 'big', `${mapeadas} de ${N}`);
+      set('map', 'gap', N - mapeadas > 0 ? `faltam ${N - mapeadas} empresas para mapear` : 'carteira 100% mapeada');
+      set('map', 's1', pct(socios, N) + '%'); set('map', 's2', pct(func, N) + '%');
+      set('map', 'foot', N - socios > 0 ? `${N - socios} sem dados de sócios` : 'sócios completos');
+
+      /* 2. cotações */
+      const ativas = cots.filter(c => (T.statusAtivos || []).includes(c.status));
+      const ult = ativas.map(c => toDate(c.atualizadoEm) || toDate(c.criadoEm) || toDate(c.dataSolicitacao)).filter(Boolean);
+      const comMov = ativas.filter(c => { const d = toDate(c.atualizadoEm) || toDate(c.criadoEm) || toDate(c.dataSolicitacao); return d && dias(d) <= 14; }).length;
+      const novas = cots.map(c => toDate(c.criadoEm) || toDate(c.dataSolicitacao)).filter(Boolean).sort((a, b) => b - a);
+      const dSemNova = novas.length ? dias(novas[0]) : null;
+      anel('cot', pct(comMov, ativas.length));
+      set('cot', 'big', `${ativas.length} ativas`);
+      set('cot', 'gap', ativas.length ? `${comMov} com movimento nos últimos 14 dias` : 'nenhuma cotação ativa');
+      set('cot', 'alerta', dSemNova === null ? 'nenhuma cotação registrada' : dSemNova === 0 ? 'cotação nova hoje' : `sem cotação nova há ${dSemNova} dia${dSemNova > 1 ? 's' : ''}`, dSemNova === null || dSemNova >= 5 ? 'urg' : 'ok');
+      spark('cot', porMes(cots, 'criadoEm'), SKY);
+
+      /* 5. conversão do ano (fechadas x perdidas) */
+      const doAno = cots.filter(c => { const d = toDate(c.dataDecisao) || toDate(c.atualizadoEm); return d && d >= anoIni; });
+      const fech = doAno.filter(c => c.status === 'fechada'), perd = doAno.filter(c => /perd|naofech|nao_fech/i.test(c.status || ''));
+      anel('fec', pct(fech.length, fech.length + perd.length));
+      set('fec', 'big', `${fech.length} fechada${fech.length !== 1 ? 's' : ''}`);
+      set('fec', 'gap', `${perd.length} perdida${perd.length !== 1 ? 's' : ''} no ano · ${T.fmt ? T.fmt(fech.reduce((s, c) => s + (c.valor || 0), 0)) : ''} em produção`);
+      const fechMes = fech.filter(c => { const d = toDate(c.dataDecisao); return d && d.getMonth() === hoje.getMonth() && d.getFullYear() === hoje.getFullYear(); }).length;
+      set('fec', 'alerta', fechMes ? `${fechMes} fechamento${fechMes > 1 ? 's' : ''} este mês` : 'nenhum fechamento este mês', fechMes ? 'ok' : 'urg');
+      spark('fec', porMes(fech, 'dataDecisao'), TEAL);
+
+      /* 3 e 4. visitas e apresentações (leitura direta, mesma agência) */
+      try {
+        const db = T.db, ag = T.ctx && T.ctx.agenciaId;
+        let qv = db.collection('mb_visitas'); if (ag) qv = qv.where('agenciaId', '==', ag);
+        let qa = db.collection('mb_apresentacoes'); if (ag) qa = qa.where('agenciaId', '==', ag);
+        const [sv, sa] = await Promise.all([qv.get(), qa.get()]);
+        const vis = []; sv.forEach(d => vis.push(d.data())); const aps = []; sa.forEach(d => aps.push(d.data()));
+        const visAno = vis.filter(v => { const d = toDate(v.criadoEm); return d && d >= anoIni && ids.has(v.empresaId); });
+        const empVis = new Set(visAno.map(v => v.empresaId)).size;
+        const ultVis = visAno.map(v => toDate(v.criadoEm)).sort((a, b) => b - a)[0];
+        anel('vis', pct(empVis, N));
+        set('vis', 'big', `${empVis} de ${N}`);
+        set('vis', 'gap', N - empVis > 0 ? `${N - empVis} empresas ainda não visitadas em ${hoje.getFullYear()}` : 'todas visitadas este ano');
+        set('vis', 'alerta', ultVis ? (dias(ultVis) === 0 ? 'visita registrada hoje' : `última visita há ${dias(ultVis)} dias`) : 'nenhuma visita registrada no ano', !ultVis || dias(ultVis) >= 7 ? 'urg' : 'ok');
+        spark('vis', porMes(vis, 'criadoEm'), AMB);
+
+        const apEmp = new Set(aps.filter(a => ids.has(a.empresaId)).map(a => a.empresaId)).size;
+        const apInt = aps.filter(a => ids.has(a.empresaId) && (a.concluiu || a.questionarioCompleto || a.ultimoInteresse === 'cotar')).length;
+        anel('apr', pct(apEmp, N));
+        set('apr', 'big', `${apEmp} de ${N}`);
+        set('apr', 'gap', `${apInt} interagiram (concluíram ou pediram cotação)`);
+        set('apr', 'alerta', N - apEmp > 0 ? `${N - apEmp} empresas nunca abriram uma apresentação` : 'toda a carteira já abriu', N - apEmp > N * 0.5 ? 'urg' : 'ok');
+        spark('apr', porMes(aps, 'criadoEm'), SKY);
+      } catch (e) { console.warn('cockpit visitas/apresentações', e); set('vis', 'gap', 'sem acesso aos dados de visitas'); set('apr', 'gap', 'sem acesso às apresentações'); }
+
+      marcar();
+    }
+
+    /* 6. meta: lê o termômetro que o sistema preenche */
+    function meta() {
+      const bar = $('termometroBar'), falta = $('termometroFalta'); if (!bar) return;
+      const p = parseFloat(bar.style.width) || 0;
+      anel('meta', p, p >= 100 ? 'var(--teal)' : undefined);
+      set('meta', 'big', Math.round(p) + '% da meta');
+      set('meta', 'gap', (falta && falta.textContent.trim() !== '—') ? falta.textContent.trim() : 'meta da agência ainda não definida');
+      const diaMes = hoje.getDate(), diasMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate(), ritmo = Math.round(p / diaMes * diasMes);
+      set('meta', 'alerta', p ? (ritmo >= 100 ? `no ritmo atual fecha em ${ritmo}%` : `no ritmo atual fecha em ${ritmo}% · acelerar`) : '', ritmo >= 100 ? 'ok' : 'urg');
+      set('meta', 'foot', `${diasMes - diaMes} dias restantes no mês`);
+    }
+
+    function ligar() {
+      root()?.querySelectorAll('.tt-gauge').forEach(el => {
+        el.addEventListener('click', () => { const t = el.dataset.go; if (window.navTo) { try { window.event = null; } catch (e) {} navTo(t); const nav = document.querySelector(`.nav-item[onclick*="'${t}'"]`); document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active')); nav && nav.classList.add('active'); } });
+        el.setAttribute('role', 'button'); el.tabIndex = 0;
+        el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
+      });
+      document.addEventListener('tt:dados', () => { calcular(); meta(); });
+      const bar = $('termometroBar'); bar && new MutationObserver(meta).observe(bar, { attributes: true, attributeFilter: ['style'] });
+      const falta = $('termometroFalta'); falta && new MutationObserver(meta).observe(falta, { childList: true, characterData: true, subtree: true });
+      if (window.__tt) { calcular(); meta(); }
+      if (window.lucide) lucide.createIcons();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ligar); else ligar();
+  })();
+
   /* ---------- observadores ---------- */
   function observar() {
     const mo = new MutationObserver(muts => {
