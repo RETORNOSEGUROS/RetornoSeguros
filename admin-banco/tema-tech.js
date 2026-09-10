@@ -395,33 +395,47 @@
       marcar();
     }
 
-    /* 6. OBJETIVOS: atingimento por ramo, das metas de Produção retorno (campanha) */
+    /* 6. OBJETIVOS por ramo — produção × meta retorno (fonte: Relatório de Metas) */
     function objetivos() {
       const el = g('meta'); if (!el) return;
-      const T = window.__tt, det = T && T.coberturaGrupos, nomes = (T && T.nomesGrupos) || {};
-      if (!det || !Object.keys(det).length) { set('meta', 'big', 'abra a campanha'); set('meta', 'gap', 'os objetivos aparecem após abrir Campanha uma vez'); anel('meta', 0); return; }
-      const grupos = Object.keys(det).map(gid => { const d = det[gid]; return { nome: nomes[gid] || gid, rumo: d.semMeta ? null : Math.min(100, d.alvo > 0 ? (d.pctMeta / d.alvo) * 100 : 0), ok: d.ok, semMeta: d.semMeta }; }).filter(x => !x.semMeta);
-      if (!grupos.length) { set('meta', 'big', 'sem metas'); set('meta', 'gap', 'cadastre metas por ramo em Campanha → Produção retorno'); anel('meta', 0); set('meta', 'alerta', 'nenhum ramo com meta', 'urg'); return; }
-      const noAlvo = grupos.filter(x => x.ok).length, media = Math.round(grupos.reduce((s, x) => s + (x.rumo || 0), 0) / grupos.length);
-      anel('meta', Math.round(noAlvo / grupos.length * 100), noAlvo === grupos.length ? 'var(--teal)' : undefined);
-      set('meta', 'big', `${noAlvo} de ${grupos.length} ramos`);
-      set('meta', 'gap', `no alvo · média de ${media}% das metas`);
-      set('meta', 'alerta', noAlvo < grupos.length ? `${grupos.length - noAlvo} ramo${grupos.length - noAlvo > 1 ? 's' : ''} abaixo da meta` : 'todos os ramos no alvo', noAlvo < grupos.length ? 'urg' : 'ok');
-      /* mini-barras por ramo no rodapé, se couber */
-      const foot = q('meta', 'foot');
-      if (foot) foot.innerHTML = grupos.slice(0, 6).map(x => `<span class="tt-ramo" title="${x.nome}: ${Math.round(x.rumo)}% do alvo"><i style="height:${Math.max(6, Math.round(x.rumo * .34))}px;background:${x.ok ? 'var(--teal)' : x.rumo >= 60 ? 'var(--sky)' : 'var(--amber)'}"></i><em>${x.nome.replace(/ .*/, '').slice(0, 4)}</em></span>`).join('');
+      const T = window.__tt, ramos = T && T.metasPorGrupo;
+      if (!ramos || !ramos.length) { set('meta', 'big', 'sem dados'); set('meta', 'gap', 'cadastre metas em Metas → Metas Anuais'); anel('meta', 0); return; }
+      const metaTot = T.metaTotalRet || ramos.reduce((s, r) => s + r.meta, 0);
+      const realTot = T.realTotalRet || ramos.reduce((s, r) => s + r.real, 0);
+      const pctTot = metaTot > 0 ? Math.round(realTot / metaTot * 100) : 0;
+      anel('meta', pctTot, pctTot >= 100 ? 'var(--teal)' : undefined);
+      set('meta', 'big', pctTot + '% da meta');
+      const noAlvo = ramos.filter(r => r.pct >= 100).length;
+      set('meta', 'gap', `${T.fmt ? T.fmt(realTot) : realTot} de ${T.fmt ? T.fmt(metaTot) : metaTot} · ${ramos.length} ramos`);
+      const abaixo = ramos.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct)[0];
+      set('meta', 'alerta', abaixo ? `${abaixo.nome.replace(/ .*/, '')} é o mais baixo (${Math.round(abaixo.pct)}%)` : 'todos os ramos no alvo', noAlvo === ramos.length ? 'ok' : 'urg');
+      /* roda de todos os ramos, cada anel = % produção vs meta */
+      desenhaRoda(el, ramos);
     }
-    /* fallback: se a campanha ainda não expôs metas, usa o termômetro */
-    function meta() {
-      if (window.__tt && window.__tt.coberturaGrupos) return objetivos();
-      const bar = $('termometroBar'); if (!bar) { objetivos(); return; }
-      const p = parseFloat(bar.style.width) || 0;
-      anel('meta', p, p >= 100 ? 'var(--teal)' : undefined);
-      set('meta', 'big', Math.round(p) + '% da meta');
-      const falta = $('termometroFalta');
-      set('meta', 'gap', (falta && falta.textContent.trim() !== '—') ? falta.textContent.trim() : 'metas em Campanha → Produção retorno');
+    function desenhaRoda(card, ramos) {
+      let host = card.querySelector('.tt-roda'); const foot = card.querySelector('.tt-g-foot');
+      if (!host) { host = document.createElement('canvas'); host.className = 'tt-roda'; host.width = 168; host.height = 168; const body = card.querySelector('.tt-g-body'); const svg = body.querySelector('svg'); if (svg) svg.style.display = 'none'; body.insertBefore(host, body.firstChild); }
+      const ctx = host.getContext('2d'), cx = 84, cy = 84, N = ramos.length;
+      const CORES = { vida: '#5FB4FF', re: '#F5B544', saude: '#2DD4BF', auto: '#9B8CFF', dental: '#F472B6', prev: '#A3E635', previdencia: '#A3E635' };
+      const cor = r => CORES[(r.id || '').toLowerCase()] || r.cor || '#5FB4FF';
+      let a0 = -Math.PI / 2; const gap = 0.10, arco = (Math.PI * 2 - gap * N) / N;
+      function frame(t) {
+        ctx.clearRect(0, 0, 168, 168); a0 = -Math.PI / 2;
+        ramos.forEach(r => {
+          const raio = 66, prog = Math.min(1, (r.pct / 100)) * Math.min(1, t);
+          ctx.beginPath(); ctx.arc(cx, cy, raio, a0, a0 + arco); ctx.strokeStyle = 'rgba(148,163,184,.14)'; ctx.lineWidth = 11; ctx.lineCap = 'round'; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, raio, a0, a0 + arco * prog); ctx.strokeStyle = cor(r); ctx.lineWidth = 11; ctx.lineCap = 'round'; ctx.stroke();
+          a0 += arco + gap;
+        });
+        if (t < 1 && !reduce) requestAnimationFrame(() => frame(Math.min(1, t + 0.06)));
+      }
+      frame(reduce ? 1 : 0);
+      /* legenda compacta no rodapé: sigla + % */
+      if (foot) { const legenda = foot.querySelector('[data-f="foot"]'); if (legenda) legenda.innerHTML = ramos.map(r => `<span class="tt-ramo" title="${r.nome}: ${Math.round(r.pct)}% da meta"><i style="background:${cor(r)};width:8px;height:8px;border-radius:50%"></i><em>${r.nome.replace(/ .*/, '').slice(0,4)} ${Math.round(r.pct)}%</em></span>`).join(''); }
     }
-    window.__ttObjetivos = objetivos;
+    /* fallback antigo (termômetro) só se não houver dados por ramo */
+    function meta() { if (window.__tt && window.__tt.metasPorGrupo && window.__tt.metasPorGrupo.length) return objetivos(); const el = g('meta'); if (el) { set('meta', 'big', 'abra Relatório de Metas'); set('meta', 'gap', 'os objetivos por ramo aparecem após carregar as metas'); } }
+        window.__ttObjetivos = objetivos;
 
     function ligar() {
       root()?.querySelectorAll('.tt-gauge').forEach(el => {
@@ -431,6 +445,7 @@
       });
       document.addEventListener('tt:dados', () => { calcular(); meta(); });
       document.addEventListener('tt:metas', () => { if (window.__ttObjetivos) window.__ttObjetivos(); });
+      document.addEventListener('tt:metasret', () => { if (window.__ttObjetivos) window.__ttObjetivos(); });
       /* renomeia "Meta do mês" -> "Objetivos por ramo" */
       const hMeta = root()?.querySelector('.tt-gauge[data-k="meta"] .tt-g-head span'); if (hMeta) hMeta.textContent = 'Objetivos por ramo';
       const bar = $('termometroBar'); bar && new MutationObserver(meta).observe(bar, { attributes: true, attributeFilter: ['style'] });
