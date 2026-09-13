@@ -3322,6 +3322,22 @@
         </div>
         <div id="funilEtapasWrap"></div>
         <button class="btn-primary perm-admin" style="margin-top:14px;" onclick="salvarFunilConfig()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar funil</button>
+
+        <div class="cfg-card perm-admin" style="margin-top:22px;">
+          <h3><i data-lucide="mail" class="w-5 h-5 text-indigo-500"></i> Pedido de dados por produto</h3>
+          <p class="cfg-desc">O texto que o gerente envia ao cliente pelo botão <strong>"Gerar pedido de dados"</strong> do card — abertura conforme a origem (mapeamento, quente, OP, renovação), a lista do que precisamos para cotar e, quando o produto tem questionário online, o link já incluído. Os documentos viram o mini-checklist da etapa "Coletando informações" (1 ponto cada, quem marca fez).</p>
+          <div class="form-group" style="max-width:360px;">
+            <label class="form-label">Produto</label>
+            <select class="form-control" id="pdCfgProduto" onchange="renderPedidoDadosCfg()"></select>
+          </div>
+          <div id="pedidoDadosCfgWrap"></div>
+        </div>
+
+        <div class="cfg-card perm-admin" style="margin-top:14px; background:#fffbeb; border-color:#fde68a;">
+          <h3><i data-lucide="wand-2" class="w-5 h-5 text-amber-500"></i> Migração única: "Solicitar dados" para a etapa 1</h3>
+          <p class="cfg-desc">Aplica a nova estrutura das etapas 1 e 2 (spec set/2026): remove "Ok do cliente para cotar", leva "Solicitar dados" para a etapa Iniciada (marca sozinho pelo pedido de dados), liga a automação de "Apresentação enviada" e cria "Questionário respondido" na etapa 2. As marcações e os pontos das negociações existentes são <strong>realinhados</strong> — nada se perde. Roda uma vez; se já foi aplicada, avisa.</p>
+          <button class="btn-secondary" onclick="migrarFunilPedidoDados()">🪄 Aplicar migração</button>
+        </div>
       </div>
 
       <div class="cfg-section" id="cfg-pontos">
@@ -11390,7 +11406,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '244';
+  const APP_VERSAO = '245';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -15830,6 +15846,15 @@
         const oi = c.origem && ORIGEM_INFO[c.origem];
         const chanceTxt = (ativa && ch)
           ? `<div style="font-size:10px; margin-top:4px; font-weight:700; color:${ch.cor};">${ch.emoji} Chance ${ch.label}</div>` : '';
+        // Pedido de dados: mostra há quantos dias o cliente está com a bola (e se o questionário voltou)
+        let pedidoTxt = '';
+        if (ativa && c.pedidoDados && c.pedidoDados.ultimoEm) {
+          const dPd = Math.max(0, Math.floor((Date.now() - new Date(c.pedidoDados.ultimoEm).getTime()) / 86400000));
+          const respondeu = Object.keys(c.checklistFeito || {}).some(k => (c.checklistFeito[k] || {}).auto === 'questionario');
+          pedidoTxt = respondeu
+            ? '<div style="font-size:10px; margin-top:3px; font-weight:700; color:#059669;">📋 questionário respondido</div>'
+            : `<div style="font-size:10px; margin-top:3px; font-weight:700; color:${dPd >= 5 ? '#dc2626' : dPd >= 3 ? '#d97706' : '#64748b'};">📨 dados pedidos há ${dPd}d${c.pedidoDados.vezes > 1 ? ' · ' + c.pedidoDados.vezes + 'x' : ''}</div>`;
+        }
         return `
           <div class="kanban-card ${cls}" style="position:relative;${isSeg ? ' cursor:default;' : ''}" ${podeArrastar ? `draggable="true" ondragstart="kanbanDragStart(event,'${c.id}')" ondragend="kanbanDragEnd(event)"` : ''} ${isSeg ? '' : `onclick="abrirNegociacao('${c.id}')"`}>
             ${CTX.isAdmin ? `<button onclick="event.stopPropagation(); excluirCotacaoAdmin('${c.id}')" title="Excluir cotação" style="position:absolute; top:5px; right:5px; border:none; background:#fef2f2; color:#ef4444; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">🗑</button>` : ''}
@@ -15838,6 +15863,7 @@
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${c.apoliceApelido ? ` <span style="font-size:9px; color:#6d28d9; background:#f5f3ff; border:1px solid #ddd6fe; padding:1px 6px; border-radius:100px; font-weight:700;">🏷 ${c.apoliceApelido}</span>` : ''}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
+            ${pedidoTxt}
             ${motivoTxt}
             ${_pedeDecl ? '<div class="selo-validacao selo-declinio">🚩 pediu declínio</div>' : (_pedeTransm ? '<div class="selo-validacao" style="background:#cffafe; color:#155e75;">📤 pediu transmissão</div>' : (_aguarda ? (ehCorretorReal() ? '<div class="selo-validacao">⏳ aguarda sua validação</div>' : '<div class="selo-validacao">⏳ aguardando validação</div>') : ''))}
             ${_vejoRmNoCard ? `<div style="font-size:10px; color:#94a3b8; margin-top:3px; display:flex; align-items:center; gap:4px;">
@@ -18083,6 +18109,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // ============= CONFIG DO FUNIL (etapas · checklist · prazos) =============
   // Cada item de checklist pode ser uma string (formato antigo) ou {txt, resp}.
   // resp: 'todos' (qualquer um marca), 'corretor' (só corretor/admin), 'seguradora' (só corretor/admin, é da cia).
+  // Eventos que o sistema reconhece e usa para marcar um item de checklist sozinho.
+  const AUTO_ITEM_INFO = {
+    apresentacao: { label: '🔗 Link da apresentação gerado pelo card', curto: 'apresentação' },
+    pedido_dados: { label: '📨 Pedido de dados gerado pelo card',     curto: 'pedido de dados' },
+    questionario: { label: '📋 Cliente concluiu o questionário',      curto: 'questionário' }
+  };
+  const ORIGENS_ITEM = ['mapeamento', 'oportunidade', 'op', 'renovacao'];
+  const ORIGENS_ITEM_LABEL = { mapeamento: 'Mapeam.', oportunidade: '🔥 Quente', op: '🏦 OP', renovacao: '🔁 Renov.' };
+  // Origem normalizada de uma negociação (cotações antigas sem origem = mapeamento)
+  function _origemNorm(c) {
+    const o = (c && c.origem) || 'mapeamento';
+    if (o === 'op_bancaria') return 'op';
+    return ORIGENS_ITEM.includes(o) ? o : 'mapeamento';
+  }
   function _normItem(it) {
     if (typeof it === 'string') return { txt: it, resp: 'todos' };
     if (!it || typeof it !== 'object') return { txt: '', resp: 'todos' };
@@ -18094,7 +18134,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (!resp && txt.resp) resp = txt.resp;
       txt = txt.txt;
     }
-    return { txt: (typeof txt === 'string' ? txt : ''), resp: resp || 'todos' };
+    // auto: evento que marca o item sozinho ('apresentacao' | 'pedido_dados' | 'questionario' | '')
+    // origens: a que origens de negociação o item se aplica ([] ou ausente = todas)
+    const auto = (typeof it.auto === 'string' && AUTO_ITEM_INFO[it.auto]) ? it.auto : '';
+    const origens = Array.isArray(it.origens) ? it.origens.filter(o => ORIGENS_ITEM.includes(o)) : [];
+    return { txt: (typeof txt === 'string' ? txt : ''), resp: resp || 'todos', auto, origens };
   }
   const RESP_LABEL = { todos: '👥 Todos', corretor: '🎯 Corretor', seguradora: '🏢 Seguradora' };
   // Quem PODE marcar um item conforme a responsabilidade e o perfil de quem olha:
@@ -18106,6 +18150,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function abrirTabFunil() {
     FUNIL_EDIT = ETAPAS_FUNIL.map(e => ({ ...e, checklist: [...(e.checklist || [])] }));
     renderFunilConfig();
+    try { if (typeof renderPedidoDadosCfg === 'function') renderPedidoDadosCfg(); } catch (e) {}
   }
   function lerFunilEdits() {
     const wrap = document.getElementById('funilEtapasWrap');
@@ -18117,10 +18162,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       FUNIL_EDIT[i].prazoDias = parseInt((div.querySelector('.fn-prazo') || {}).value) || 7;
       FUNIL_EDIT[i].ativo = (div.querySelector('.fn-ativo') || {}).checked;
       // lê cada linha do checklist (texto + responsável); descarta linhas vazias
-      const linhas = [...div.querySelectorAll('.fn-checklist-lista > div')];
+      const linhas = [...div.querySelectorAll('.fn-checklist-lista > div.fn-cl-linha')];
       FUNIL_EDIT[i].checklist = linhas.map(l => ({
         txt: ((l.querySelector('.fn-cl-txt') || {}).value || '').trim(),
-        resp: (l.querySelector('.fn-cl-resp') || {}).value || 'todos'
+        resp: (l.querySelector('.fn-cl-resp') || {}).value || 'todos',
+        auto: (l.querySelector('.fn-cl-auto') || {}).value || '',
+        origens: [...l.querySelectorAll('.fn-cl-org')].filter(ch => ch.checked).map(ch => ch.value)
       })).filter(it => it.txt);
     });
   }
@@ -18139,24 +18186,43 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
           <label style="font-size:12px; color:#475569;">Prazo p/ cancelar: <input type="number" class="form-control fn-prazo" value="${e.prazoDias || 7}" min="1" max="180" style="width:66px; display:inline-block; padding:4px 8px; text-align:center;"> dias</label>
+          ${(() => {
+            // O que VALE de verdade é o prazo salvo em Config → Prazos (por agência); este campo é só o padrão.
+            const ef = (PRAZOS_AGENCIA && typeof PRAZOS_AGENCIA[e.id] === 'number' && PRAZOS_AGENCIA[e.id] > 0) ? PRAZOS_AGENCIA[e.id] : null;
+            return ef && ef !== (e.prazoDias || 7)
+              ? `<span style="font-size:11px; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd; padding:2px 8px; border-radius:100px;" title="Config → Prazos (por agência) vence este padrão.">valendo hoje: <strong>${ef} dias</strong> (Config → Prazos)</span>`
+              : `<span style="font-size:11px; color:#94a3b8;">${ef ? 'valendo hoje: ' + ef + ' dias' : 'valendo hoje: este padrão'}</span>`;
+          })()}
           <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="fn-ativo" ${e.ativo !== false ? 'checked' : ''} style="width:15px;height:15px;"> ativa no funil</label>
           ${ehPadrao ? '<span style="margin-left:auto; font-size:11px; color:#94a3b8;">padrão</span>' : ''}<button class="btn-mini" style="color:#ef4444; ${ehPadrao ? '' : 'margin-left:auto;'}" onclick="removerEtapaFunil(${i})">Excluir</button>
         </div>
         <label style="font-size:11px; color:#475569; font-weight:700; display:block; margin-bottom:6px;">Checklist de ações para avançar — com o responsável de cada item</label>
         <div class="fn-checklist-lista" data-etapa="${i}">
           ${(e.checklist || []).map((it, j) => { const n = _normItem(it); return `
-            <div style="display:flex; gap:6px; margin-bottom:5px; align-items:center;">
-              <input type="text" class="form-control fn-cl-txt" value="${(n.txt || '').replace(/"/g, '&quot;')}" placeholder="Ação esperada" style="flex:1; padding:6px 8px; font-size:12.5px;">
-              <select class="form-control fn-cl-resp" style="width:130px; padding:6px; font-size:12px;">
-                <option value="todos" ${n.resp === 'todos' ? 'selected' : ''}>👥 Todos</option>
-                <option value="corretor" ${n.resp === 'corretor' ? 'selected' : ''}>🎯 Corretor</option>
-                <option value="seguradora" ${n.resp === 'seguradora' ? 'selected' : ''}>🏢 Seguradora</option>
-              </select>
-              <button class="btn-mini" style="color:#ef4444;" onclick="removerChecklistLinha(${i}, ${j})">✕</button>
+            <div class="fn-cl-linha" style="margin-bottom:7px; padding:6px 8px; background:white; border:1px solid #e2e8f0; border-radius:8px;">
+              <div style="display:flex; gap:6px; align-items:center;">
+                <span style="font-size:10px; color:#94a3b8; width:18px; text-align:right;">${j + 1}.</span>
+                <input type="text" class="form-control fn-cl-txt" value="${(n.txt || '').replace(/"/g, '&quot;')}" placeholder="Ação esperada" style="flex:1; padding:6px 8px; font-size:12.5px;">
+                <select class="form-control fn-cl-resp" style="width:130px; padding:6px; font-size:12px;">
+                  <option value="todos" ${n.resp === 'todos' ? 'selected' : ''}>👥 Todos</option>
+                  <option value="corretor" ${n.resp === 'corretor' ? 'selected' : ''}>🎯 Corretor</option>
+                  <option value="seguradora" ${n.resp === 'seguradora' ? 'selected' : ''}>🏢 Seguradora</option>
+                </select>
+                <button class="btn-mini" style="color:#ef4444;" onclick="removerChecklistLinha(${i}, ${j})">✕</button>
+              </div>
+              <div style="display:flex; gap:10px; align-items:center; margin-top:5px; padding-left:24px; flex-wrap:wrap;">
+                <select class="form-control fn-cl-auto" style="width:270px; padding:4px 6px; font-size:11px;" title="Se escolher um evento, o sistema marca este item sozinho quando o evento acontecer (o ponto vai para quem causou o evento).">
+                  <option value="" ${!n.auto ? 'selected' : ''}>✋ Marcação manual</option>
+                  ${Object.keys(AUTO_ITEM_INFO).map(k => `<option value="${k}" ${n.auto === k ? 'selected' : ''}>${AUTO_ITEM_INFO[k].label}</option>`).join('')}
+                </select>
+                <span style="font-size:10.5px; color:#64748b;">Aplica-se a:</span>
+                ${ORIGENS_ITEM.map(o => `<label style="font-size:10.5px; color:#475569; display:flex; align-items:center; gap:3px; cursor:pointer;"><input type="checkbox" class="fn-cl-org" value="${o}" ${n.origens.includes(o) ? 'checked' : ''} style="width:13px; height:13px;">${ORIGENS_ITEM_LABEL[o]}</label>`).join('')}
+                <span style="font-size:10px; color:#94a3b8;">(nenhuma marcada = todas)</span>
+              </div>
             </div>`; }).join('')}
         </div>
         <button class="btn-mini" style="margin-top:2px;" onclick="adicionarChecklistLinha(${i})"><i data-lucide="plus" class="w-3 h-3"></i> item</button>
-        <div style="font-size:10.5px; color:#94a3b8; margin-top:6px;">🎯 Corretor e 🏢 Seguradora só podem ser marcados pelo corretor/admin. 👥 Todos, por qualquer um do time.</div>
+        <div style="font-size:10.5px; color:#94a3b8; margin-top:6px;">🎯 Corretor e 🏢 Seguradora só podem ser marcados pelo corretor/admin. 👥 Todos, por qualquer um do time. Item que não se aplica à origem da negociação aparece riscado, sem ponto. ⚠ As marcações são guardadas pela POSIÇÃO do item: remova ou reordene itens só quando não houver negociações ativas na etapa.</div>
       </div>`;
     }).join('');
     lucide.createIcons();
@@ -18233,7 +18299,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   window.salvarFunilConfig = salvarFunilConfig;
 
   // ============= CADASTRO RÁPIDO DE COTAÇÃO (ícone na empresa) =============
-  function abrirCotacaoRapida(empresaId, ramoId) {
+  function abrirCotacaoRapida(empresaId, ramoId, origemSugerida) {
     const e = (EMPRESAS || []).find(x => x.id === empresaId);
     if (!e) return alert('Empresa não encontrada.');
     let modal = document.getElementById('modalCotacaoRapida');
@@ -18247,6 +18313,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         <div class="cad-modal-head"><h2>⚡ Nova cotação rápida</h2><p>${e.nome}</p></div>
         <div class="cad-modal-body">
           <input type="hidden" id="crEmpresaId" value="${e.id}">
+          <input type="hidden" id="crOrigem" value="${(origemSugerida === 'oportunidade' || origemSugerida === 'renovacao') ? origemSugerida : 'mapeamento'}">
+          ${origemSugerida === 'oportunidade' ? '<div style="background:#fff7ed; border:1px solid #fdba74; border-radius:8px; padding:8px 12px; font-size:12px; color:#9a3412; margin-bottom:10px;">🔥 <strong>Oportunidade quente</strong> — o cliente respondeu que não tem este produto. A negociação nasce com essa origem.</div>' : ''}
+          ${origemSugerida === 'renovacao' ? '<div style="background:#e0f2fe; border:1px solid #7dd3fc; border-radius:8px; padding:8px 12px; font-size:12px; color:#075985; margin-bottom:10px;">🔁 <strong>Renovação</strong> — vinda da agenda de vencimentos.</div>' : ''}
           <div class="form-group">
             <label style="display:flex; align-items:center; gap:10px; cursor:pointer; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px;">
               <input type="checkbox" id="crEhOp" onchange="crToggleOp()" style="width:18px; height:18px;">
@@ -18304,10 +18373,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
     const seguradora = ehOp ? ((document.getElementById('crSeguradora') || {}).value || 'Bradesco').trim() : null;
     try {
+      const _origemSug = ((document.getElementById('crOrigem') || {}).value) || 'mapeamento';
       const optsCot = ehOp
         ? { origem: 'op', valorOperacao: valor || null, seguradora: seguradora || null, observacoes: obs || null, silent: true }
-        : { origem: 'mapeamento', valorProposto: valor || null, observacoes: obs || null, silent: true };
+        : { origem: _origemSug, valorProposto: valor || null, observacoes: obs || null, silent: true };
       if (_apoliceExtraOpts) Object.assign(optsCot, _apoliceExtraOpts);
+      // Oportunidade quente em que o cliente JÁ pediu cotação (pelo questionário/apresentação):
+      // a apresentação não se aplica — o card já sugere ir direto ao pedido de dados.
+      if (!ehOp && _origemSug === 'oportunidade') {
+        try {
+          if (!_COV) await _covCarregar();
+          const _n = _covNorm(r.id);
+          if ((_COV.aps || []).some(a => a.empresaId === e.id && _covNorm(a.produtoId) === _n && (a.ultimoInteresse === 'cotar' || a.questionarioCompleto))) optsCot.clientePediuCotar = true;
+        } catch (err) {}
+      }
       const id = await criarCotacao(e, r, optsCot);
       if (id) {
         const m = document.getElementById('modalCotacaoRapida'); if (m) m.remove();
@@ -26946,6 +27025,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       CHECKLIST_EXTRA = {};
       snapEx.forEach(d => { CHECKLIST_EXTRA[d.id] = d.data().porEtapa || {}; });
     } catch (e) { CHECKLIST_EXTRA = {}; }
+    // Pedido de dados por produto (texto padrão + documentos → mini-checklist)
+    try { if (typeof carregarPedidoDadosCfg === 'function') await carregarPedidoDadosCfg(); } catch (e) {}
     recomputarFunil();
   }
   window.carregarFunilConfig = carregarFunilConfig;
@@ -26978,7 +27059,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     op:           { label: 'OP',  emoji: '🏦', cor: '#4f46e5' },
     op_bancaria:  { label: 'OP',  emoji: '🏦', cor: '#4f46e5' }, // legado: cotações antigas
     renovacao:    { label: 'Renovação',    emoji: '🔁', cor: '#0ea5e9' },
-    oportunidade: { label: 'Oportunidade', emoji: '💡', cor: '#f59e0b' }
+    oportunidade: { label: 'Quente', emoji: '🔥', cor: '#ea580c' }   // iniciada pelo menu Oportunidades quentes
   };
 
   async function solicitarCotacaoDoMapeamento() {
@@ -27041,6 +27122,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Apólice adicional: a cotação carrega a referência e o apelido (aparece nos cards)
       if (opts.apoliceRef) cot.apoliceRef = opts.apoliceRef;
       if (opts.apoliceApelido) cot.apoliceApelido = opts.apoliceApelido;
+      if (opts.clientePediuCotar) cot.clientePediuCotar = true;
       // histórico inicial (entrada no funil)
       cot.historico = [{ status: 'solicitada', label: 'Iniciada · ' + (ORIGEM_INFO[origem] || {}).label, obs: opts.observacoes || null, por: creditoNome || null, em: new Date().toISOString() }];
 
@@ -27303,7 +27385,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               </div>
               ${_ei
                 ? `<span class="btn-mini" style="background:${_ei.bg}; color:${_ei.cor}; border:1px solid ${_ei.bd}; font-weight:700; cursor:default;" title="Esta oportunidade já foi trabalhada">${_ei.btn}</span>`
-                : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="iniciarTratativa('${o.empresaId}','${o.ramoId}')">Iniciar tratativas →</button>`}
+                : `<button class="btn-mini" style="background:#fef3c7; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="iniciarTratativa('${o.empresaId}','${o.ramoId}','oportunidade')">Iniciar tratativas →</button>`}
             </div>`; }).join('');
           return `
             <div style="margin-bottom:6px;">
@@ -27338,7 +27420,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                 </div>
                 ${r.noFunil
                   ? `<span class="btn-mini" style="background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; font-weight:700; cursor:default;">✓ no funil</span>`
-                  : `<button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}')">Iniciar renovação →</button>`}
+                  : `<button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}','renovacao')">Iniciar renovação →</button>`}
               </div>`;
           }).join('');
           return `
@@ -27359,9 +27441,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Cria a negociação no funil a partir de uma oportunidade ou renovação
   // "Iniciar tratativas" abre a mesma tela da cotação rápida (com o ramo já escolhido),
   // pra você decidir ali se é OP ou não.
-  function iniciarTratativa(empresaId, ramoId) {
+  function iniciarTratativa(empresaId, ramoId, origem) {
     if (perfilEfetivo() === 'seguradora') return; // somente leitura
-    abrirCotacaoRapida(empresaId, ramoId);
+    abrirCotacaoRapida(empresaId, ramoId, origem || null);
   }
   window.iniciarTratativa = iniciarTratativa;
   window.renderOportunidades = renderOportunidades;
@@ -27532,6 +27614,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const db_ = b.atualizadoEm && b.atualizadoEm.toDate ? b.atualizadoEm.toDate() : new Date(0);
         return db_ - da;
       });
+
+      // "Questionário respondido" marca sozinho (evento do cliente) — e o kanban passa a
+      // acompanhar as mudanças em tempo real (aprovação do corretor aparece sem F5).
+      if (!_somenteLeituraSeg) { try { await _autoQuestionarioLote(); } catch (e) {} }
+      try { _iniciarListenerCotacoes(query); } catch (e) {}
 
       // Renovações automáticas (roda 1x por sessão; recarrega e renderiza se criar alguma)
       if (!RENOVACOES_AUTO_RAN && !_somenteLeituraSeg) {
@@ -27826,39 +27913,62 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           <input type="hidden" id="negId" value="${c.id}">
           ${(() => {
             const et = etapaInfo(c.status);
-            const itensPadrao = (et && et.checklist) ? et.checklist.slice() : [];
-            // itens extras por produto+etapa (admin cadastra): CHECKLIST_EXTRA[produtoId][statusId] = [itens]
-            const extras = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
-            const todos = itensPadrao.map((t, i) => { const n = _normItem(t); return { key: c.status + '|p' + i, texto: n.txt, resp: n.resp, extra: false }; })
-              .concat(extras.map((t, i) => { const n = _normItem(t); return { key: c.status + '|e' + i, texto: n.txt, resp: n.resp, extra: true }; }));
-            if (!todos.length) return '';
+            const todos = _itensChecklistDeal(c);
+            if (!todos.length) return _htmlLinksNegocio(c, []);
             const feito = c.checklistFeito || {};
             const _perf = perfilEfetivo();
             // a permissão real é POR ITEM (podeMarcarItem); aqui só checamos se a etapa está ativa
             const ativaMarcavel = ativa;
-            const nFeitos = todos.filter(it => feito[it.key]).length;
+            const principais = todos.filter(it => it.tipo !== 'd');
+            const docs = todos.filter(it => it.tipo === 'd');
+            const contaveis = principais.filter(it => it.aplica);
+            const nFeitos = contaveis.filter(it => feito[it.key]).length;
             const selosResp = { corretor: '<span style="font-size:9px; background:#e0e7ff; color:#3730a3; padding:1px 5px; border-radius:4px;">🎯 corretor</span>', seguradora: '<span style="font-size:9px; background:#fef3c7; color:#92400e; padding:1px 5px; border-radius:4px;">🏢 seguradora</span>', todos: '' };
-            const linhas = todos.map(it => {
+            // "parado há Xd": desde a última marcação nesta etapa (ou desde a entrada na etapa)
+            let _desde = null;
+            try {
+              const entrou = (Array.isArray(c.historico) ? c.historico.slice().reverse().find(h => h && h.status === c.status && h.em) : null);
+              _desde = entrou ? new Date(entrou.em).getTime() : null;
+              todos.forEach(it => { const m = feito[it.key]; if (m && m.em) { const t = new Date(m.em).getTime(); if (!_desde || t > _desde) _desde = t; } });
+            } catch (e) {}
+            const diasParado = _desde ? Math.max(0, Math.floor((Date.now() - _desde) / 86400000)) : diasNaEtapa(c);
+            let _primeiroPendente = true;
+            const linha = it => {
               const marc = feito[it.key];
-              // trava por item: quem não é responsável não marca
+              if (!it.aplica) {
+                return `<label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#94a3b8; padding:4px 0; cursor:default;" title="${it.naoAplicaMotivo}">
+                  <input type="checkbox" disabled ${marc ? 'checked' : ''}>
+                  <span style="text-decoration:line-through; opacity:.7;">${it.texto}</span><span style="font-size:9.5px; background:#f1f5f9; color:#64748b; padding:1px 6px; border-radius:4px;">${it.naoAplicaMotivo}</span>
+                </label>`;
+              }
               const podeEste = ativaMarcavel && podeMarcarItem(it.resp || 'todos', _perf);
-              const quem = marc ? `<span style="font-size:10px; color:#94a3b8; margin-left:4px;">✓ ${marc.porNome || ''}</span>` : '';
-              const selo = (selosResp[it.resp] || '') + (it.extra ? " <span style='font-size:9px; background:#ddd6fe; color:#5b21b6; padding:1px 5px; border-radius:4px;'>extra</span>" : '');
+              const quem = marc ? `<span style="font-size:10px; color:#94a3b8; margin-left:4px;">✓ ${marc.porNome || ''}${marc.auto ? ' · ⚡ automático' : ''}</span>` : '';
+              const selo = (selosResp[it.resp] || '') + (it.extra ? " <span style='font-size:9px; background:#ddd6fe; color:#5b21b6; padding:1px 5px; border-radius:4px;'>extra</span>" : '')
+                + (it.auto && !marc ? ` <span style="font-size:9px; background:#ecfeff; color:#155e75; padding:1px 5px; border-radius:4px;" title="${(AUTO_ITEM_INFO[it.auto] || {}).label || ''}">⚡ marca sozinho</span>` : '');
+              let parado = '';
+              if (!marc && it.tipo !== 'd' && _primeiroPendente && ativa) { _primeiroPendente = false; parado = `<span style="margin-left:auto; font-size:10px; font-weight:700; color:${diasParado >= 5 ? '#dc2626' : diasParado >= 3 ? '#d97706' : '#94a3b8'}; white-space:nowrap;" title="Próximo passo — parado há ${diasParado} dia(s)">⏳ ${diasParado}d</span>`; }
               return `<label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#78350f; padding:4px 0; cursor:${podeEste ? 'pointer' : 'default'}; ${!podeEste && !marc ? 'opacity:.55;' : ''}">
                 <input type="checkbox" ${marc ? 'checked' : ''} ${podeEste ? '' : 'disabled'} onchange="toggleChecklist('${c.id}','${it.key}', this.checked)">
-                <span style="${marc ? 'text-decoration:line-through; opacity:.6;' : ''}">${it.texto} ${selo}</span>${quem}
+                <span style="${marc ? 'text-decoration:line-through; opacity:.6;' : ''}">${it.texto} ${selo}</span>${quem}${parado}
               </label>`;
-            }).join('');
+            };
+            const linhas = principais.map(linha).join('');
+            const docsFeitos = docs.filter(it => it.aplica && feito[it.key]).length, docsTotal = docs.filter(it => it.aplica).length;
+            const blocoDocs = docs.length ? `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #fcd34d;">
+                <div style="font-size:11.5px; font-weight:800; color:#92400e; margin-bottom:3px;">📎 Documentos para cotar <span style="color:#b45309;">${docsFeitos}/${docsTotal}</span> <span style="font-weight:500; color:#a16207;">· marque conforme chegar (não trava o avanço)</span></div>
+                ${docs.map(linha).join('')}
+              </div>` : '';
             return `<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:11px 13px; margin-bottom:14px;">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <div style="font-size:12px; font-weight:800; color:#92400e;">📋 Para avançar de "${et.label}": <span style="color:#b45309;">${nFeitos}/${todos.length}</span></div>
+                <div style="font-size:12px; font-weight:800; color:#92400e;">📋 Para avançar de "${et.label}": <span style="color:#b45309;">${nFeitos}/${contaveis.length}</span></div>
                 ${CTX.isAdmin ? `<button class="btn-mini" style="font-size:10px;" onclick="abrirAddChecklistItem('${c.id}')"><i data-lucide="plus" class="w-3 h-3"></i> item</button>` : ''}
               </div>
               ${linhas}
+              ${blocoDocs}
               ${ativaMarcavel ? (ehCorretorReal()
                 ? '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o negócio avança de etapa automaticamente.</div>'
                 : '<div style="font-size:10.5px; color:#a16207; margin-top:6px;">Ao marcar todos, o corretor valida e o negócio avança.</div>') : ''}
-            </div>`;
+            </div>${_htmlLinksNegocio(c, todos)}`;
           })()}
 
           ${c.status === 'fechada' ? `
@@ -28055,80 +28165,196 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!c) return;
     // DESMARCAR é só com o corretor: o RM avisa, o corretor desmarca (os pontos saem)
     // e aí o item pode ser marcado de novo. Evita marca-desmarca no placar.
+    // (vale também para item marcado automaticamente: desmarcou, o ponto sai e ele NÃO volta sozinho)
     if (!marcado && !ehCorretorReal()) {
       flashSalvo('Desmarcar um item é com o admin — avise ele para ajustar.');
       try { abrirNegociacao(cotacaoId); } catch (e) {}  // redesenha, desfaz o clique visual
       return;
     }
-    // TRAVA DE SEGURANÇA: confere a responsabilidade do item antes de gravar.
-    // A UI já desabilita, mas isto impede burlar pelo console.
+    // TRAVA DE SEGURANÇA: o item precisa existir nesta etapa, aplicar-se à origem e ser da
+    // responsabilidade de quem marca. A UI já desabilita; isto impede burlar pelo console.
+    const it = _itensChecklistDeal(c).find(x => x.key === itemKey);
+    if (!it) { flashSalvo('Item não encontrado nesta etapa.'); try { abrirNegociacao(cotacaoId); } catch (e) {} return; }
+    if (marcado && !it.aplica) { flashSalvo('Este item não se aplica a esta negociação (' + it.naoAplicaMotivo + ').'); try { abrirNegociacao(cotacaoId); } catch (e) {} return; }
+    if (marcado && !podeMarcarItem(it.resp || 'todos', perfilEfetivo())) {
+      flashSalvo('Esse item é de responsabilidade ' + (RESP_LABEL[it.resp] || it.resp) + ' — você não pode marcá-lo.');
+      try { abrirNegociacao(cotacaoId); } catch (e) {}
+      return;
+    }
     try {
-      const et0 = etapaInfo(c.status);
-      const padrao0 = (et0 && et0.checklist) ? et0.checklist : [];
-      const extras0 = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
-      const m = /\|([pe])(\d+)$/.exec(itemKey);
-      if (m) {
-        const arr = m[1] === 'p' ? padrao0 : extras0;
-        const item = _normItem(arr[parseInt(m[2])] || {});
-        if (!podeMarcarItem(item.resp || 'todos', perfilEfetivo())) {
-          flashSalvo('Esse item é de responsabilidade ' + (RESP_LABEL[item.resp] || item.resp) + ' — você não pode marcá-lo.');
-          try { abrirNegociacao(cotacaoId); } catch (e) {}  // redesenha, desfaz o clique visual
-          return;
-        }
+      if (marcado) await _gravarMarcacaoItem(c, it, { porUid: autorUid(), porNome: autorNome(), perfil: CTX.perfilSimulado || CTX.perfil });
+      else await _removerMarcacaoItem(c, itemKey);
+    } catch (e) { console.warn('checklist', e); }
+    await _aposMarcacao(c, marcado, false);
+  }
+  window.toggleChecklist = toggleChecklist;
+
+  // =====================================================================================
+  // CHECKLIST v2 — itens por origem, documentos por produto, marcação automática por evento,
+  // pedido de dados padrão, tempo real e migração. (spec: claude/funil-etapas-spec.md)
+  // =====================================================================================
+
+  // ---------- "Pedido de dados" por produto (mb_config/pedido_dados) ----------
+  let PEDIDO_DADOS_CFG = { porProduto: {} };
+  const PEDIDO_DADOS_ABERTURA_DEFAULT = {
+    mapeamento:   'Olá! Conforme conversamos, vamos preparar o estudo de {produto} para a {empresa}.',
+    oportunidade: 'Olá! Obrigado pelo interesse em conhecer o {produto} para a {empresa}. Vamos preparar um estudo sem compromisso.',
+    op:           'Olá! Conforme alinhado com o gerente {gerente}, vamos preparar a proposta de {produto} para a {empresa}.',
+    renovacao:    'Olá! Identificamos que a apólice de {produto} da {empresa} vence em {vencimento}. Gostaríamos de participar das cotações deste ano com um estudo completo.'
+  };
+  const PEDIDO_DADOS_TEXTO_DEFAULT = 'Para realizarmos o estudo, precisaremos das seguintes informações e documentos:';
+  const PEDIDO_DADOS_FECHO_DEFAULT = 'Pode enviar por aqui mesmo (e-mail ou WhatsApp). Qualquer dúvida, é só chamar.\n\n{gerente}';
+  // Documentos padrão por produto — o admin ajusta em Config → Funil → Pedido de dados.
+  // origens: a que origens o documento se aplica ([] = todas). OP não tem apólice anterior.
+  const PEDIDO_DADOS_DOCS_DEFAULT = {
+    'empresarial': [
+      { id: 'apolice', label: 'PDF da apólice atual (com as coberturas contratadas)', origens: ['mapeamento', 'oportunidade', 'renovacao'] },
+      { id: 'valores', label: 'Valores em risco: prédio, máquinas/equipamentos, estoque e móveis', origens: [] },
+      { id: 'endereco', label: 'Endereço(s) do(s) local(is) segurado(s) e atividade exercida', origens: [] },
+      { id: 'sinistros', label: 'Sinistros ocorridos nos últimos 3 anos (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] }
+    ],
+    'frota': [
+      { id: 'apolice', label: 'PDF da apólice atual', origens: ['mapeamento', 'oportunidade', 'renovacao'] },
+      { id: 'planilha', label: 'Planilha da frota: placa, modelo, ano, CEP de pernoite e uso', origens: [] },
+      { id: 'sinistros', label: 'Sinistralidade da última vigência (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] }
+    ],
+    'saude-colab': [
+      { id: 'vidas', label: 'Relação de vidas: nome, data de nascimento e dependentes', origens: [] },
+      { id: 'plano', label: 'Plano atual, operadora e valor por faixa (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] },
+      { id: 'cnpj', label: 'Cartão CNPJ e CNAE da empresa', origens: [] }
+    ],
+    'saude-socios': [
+      { id: 'vidas', label: 'Nome e data de nascimento de cada sócio/diretor e dependentes', origens: [] },
+      { id: 'plano', label: 'Plano atual e operadora (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] }
+    ],
+    'dental': [
+      { id: 'vidas', label: 'Relação de colaboradores (nome e data de nascimento)', origens: [] },
+      { id: 'plano', label: 'Plano atual e valor por vida (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] }
+    ],
+    'vida-grupo': [
+      { id: 'vidas', label: 'Relação de vidas: nome, data de nascimento e salário/capital desejado', origens: [] },
+      { id: 'apolice', label: 'PDF da apólice atual (coberturas e capitais)', origens: ['mapeamento', 'oportunidade', 'renovacao'] },
+      { id: 'convencao', label: 'Convenção coletiva (se exige seguro de vida)', origens: [] }
+    ],
+    'vida-socios': [
+      { id: 'socios', label: 'Nome, data de nascimento e participação de cada sócio', origens: [] },
+      { id: 'contrato', label: 'Contrato social (última alteração)', origens: [] },
+      { id: 'capital', label: 'Capital desejado ou valor da empresa para o cálculo', origens: [] }
+    ],
+    '*': [
+      { id: 'apolice', label: 'PDF da apólice atual (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] },
+      { id: 'dados', label: 'Dados e planilhas necessários para o estudo', origens: [] },
+      { id: 'sinistros', label: 'Sinistros na última vigência (se houver)', origens: ['mapeamento', 'oportunidade', 'renovacao'] }
+    ]
+  };
+  function _pedidoDadosDoProduto(produtoId) {
+    const salvo = (PEDIDO_DADOS_CFG.porProduto || {})[produtoId] || null;
+    const base = PEDIDO_DADOS_DOCS_DEFAULT[produtoId] || PEDIDO_DADOS_DOCS_DEFAULT['*'];
+    const docs = (salvo && Array.isArray(salvo.docs)) ? salvo.docs : base;
+    return {
+      abertura: Object.assign({}, PEDIDO_DADOS_ABERTURA_DEFAULT, (salvo && salvo.abertura) || {}),
+      texto: (salvo && typeof salvo.texto === 'string' && salvo.texto.trim()) ? salvo.texto : PEDIDO_DADOS_TEXTO_DEFAULT,
+      fecho: (salvo && typeof salvo.fecho === 'string' && salvo.fecho.trim()) ? salvo.fecho : PEDIDO_DADOS_FECHO_DEFAULT,
+      docs: docs.filter(d => d && d.label).map(d => ({ id: String(d.id || slugify(d.label)).replace(/[^a-z0-9_]/gi, '_'), label: d.label, origens: Array.isArray(d.origens) ? d.origens : [] })),
+      etapaDocs: (salvo && salvo.etapaDocs) || 'informacoes',
+      personalizado: !!salvo
+    };
+  }
+  async function carregarPedidoDadosCfg() {
+    try {
+      const snap = await db.collection('mb_config').doc('pedido_dados').get();
+      PEDIDO_DADOS_CFG = (snap.exists && snap.data()) ? { porProduto: snap.data().porProduto || {} } : { porProduto: {} };
+    } catch (e) { PEDIDO_DADOS_CFG = { porProduto: {} }; }
+  }
+
+  // Catálogo de apresentação/questionário correspondente ao ramo (ids batem via _covNorm: vida-socios ≡ vida_socios)
+  function _apresDoProduto(produtoId) {
+    const n = _covNorm(produtoId);
+    return (APRESENTACOES || []).find(a => _covNorm(a.id) === n) || null;
+  }
+
+  // ---------- Itens de checklist de uma negociação (padrão + extras + documentos), com aplicabilidade ----------
+  function _itensChecklistDeal(c) {
+    const et = etapaInfo(c.status);
+    if (!et) return [];
+    const org = _origemNorm(c);
+    const padrao = (et.checklist || []).map((t, i) => { const n = _normItem(t); return { key: c.status + '|p' + i, texto: n.txt, resp: n.resp, auto: n.auto, origens: n.origens, tipo: 'p', extra: false }; });
+    const extras = (((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || []).map((t, i) => { const n = _normItem(t); return { key: c.status + '|e' + i, texto: n.txt, resp: n.resp, auto: '', origens: [], tipo: 'e', extra: true }; });
+    let docs = [];
+    try {
+      const pd = _pedidoDadosDoProduto(c.produtoId);
+      if (pd && (pd.etapaDocs || 'informacoes') === c.status) {
+        docs = pd.docs.map(d => ({ key: c.status + '|d' + d.id, texto: d.label, resp: 'todos', auto: '', origens: d.origens || [], tipo: 'd', extra: false }));
       }
     } catch (e) {}
-    c.checklistFeito = c.checklistFeito || {};
-    // ID determinístico da ação: um item marcado = UM registro de ponto, sempre.
-    // Assim, remarcar não duplica pontos e desmarcar consegue apagar o certo.
-    const acaoId = 'chk_' + cotacaoId + '_' + itemKey.replace(/[^a-zA-Z0-9]/g, '_');
-    try {
-      if (marcado) {
-        const registro = { porUid: autorUid(), porNome: autorNome(), em: new Date().toISOString() };
-        c.checklistFeito[itemKey] = registro;
-        try {
-          await db.collection('mb_cotacoes').doc(cotacaoId).update({ checklistFeito: c.checklistFeito });
-        } catch (eUp) {
-          await db.collection('mb_cotacoes').doc(cotacaoId).set({ checklistFeito: c.checklistFeito }, { merge: true });
-        }
-        // set com ID fixo: se marcar de novo, sobrescreve em vez de criar outro ponto
-        await db.collection('mb_acoes').doc(acaoId).set({
-          tipo: 'checklist_item', empresaId: c.empresaId, empresaNome: c.empresaNome,
-          agenciaId: c.agenciaId || CTX.agenciaId, cotacaoId,
-          etapa: c.status, item: itemKey,
-          usuarioId: autorUid(), usuarioNome: autorNome(),
-          usuarioPerfil: CTX.perfilSimulado || CTX.perfil, pontos: getPonto('checklist_item'),
-          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        _ACOES_CACHE = null;
-      } else {
-        delete c.checklistFeito[itemKey];
-        // CRÍTICO: set+merge NÃO removia a chave apagada (por isso o item voltava
-        // marcado ao atualizar a página). FieldPath+delete remove a chave certa,
-        // mesmo com caracteres especiais, e sem atropelar edições simultâneas.
-        try {
-          await db.collection('mb_cotacoes').doc(cotacaoId).update(
-            new firebase.firestore.FieldPath('checklistFeito', itemKey),
-            firebase.firestore.FieldValue.delete()
-          );
-        } catch (eDel) {
-          // plano B: substitui o mapa inteiro
-          await db.collection('mb_cotacoes').doc(cotacaoId).update({ checklistFeito: c.checklistFeito });
-        }
-        // desmarcar devolve o ponto: apaga a ação de quem havia marcado
-        try { await db.collection('mb_acoes').doc(acaoId).delete(); } catch (e2) {}
-        _ACOES_CACHE = null;   // força recarregar as ações (pontos atualizam na hora)
+    const todos = padrao.concat(extras).concat(docs);
+    todos.forEach(it => {
+      let aplica = !it.origens.length || it.origens.includes(org);
+      let motivo = aplica ? '' : ('não se aplica a ' + ((ORIGEM_INFO[org] || {}).label || org));
+      if (aplica && it.auto === 'apresentacao' && c.clientePediuCotar) { aplica = false; motivo = 'cliente já pediu cotação'; }
+      // "Solicitar apresentação" (pedir ao corretor que prepare material) só faz sentido
+      // quando o produto NÃO tem apresentação online — se tem, o botão do card resolve.
+      if (aplica && it.tipo === 'p' && !it.auto && /solicitar/i.test(it.texto) && /apresenta/i.test(it.texto)) {
+        const ap = _apresDoProduto(c.produtoId);
+        if (ap && ap.arq) { aplica = false; motivo = 'produto já tem apresentação online'; }
       }
-    } catch (e) { console.warn('checklist', e); }
+      it.aplica = aplica; it.naoAplicaMotivo = motivo;
+    });
+    return todos;
+  }
+  // Itens que contam para "etapa completa": aplicáveis e que não sejam documentos (documento pode não existir)
+  function _etapaCompletaDeal(c) {
+    const itens = _itensChecklistDeal(c).filter(it => it.aplica && it.tipo !== 'd');
+    const feito = c.checklistFeito || {};
+    return itens.length > 0 && itens.every(it => feito[it.key]);
+  }
 
-    // Verifica se TODOS os itens da etapa atual foram marcados → avança automaticamente
+  // ---------- Gravação de uma marcação (manual ou automática) ----------
+  async function _gravarMarcacaoItem(c, it, quem) {
+    // quem: { porUid, porNome, perfil, auto, evidencia }
+    c.checklistFeito = c.checklistFeito || {};
+    const registro = { porUid: quem.porUid, porNome: quem.porNome, em: new Date().toISOString() };
+    if (quem.auto) { registro.auto = quem.auto; if (quem.evidencia) registro.evidencia = quem.evidencia; }
+    c.checklistFeito[it.key] = registro;
+    const upd = { checklistFeito: c.checklistFeito };
+    if (quem.auto) {
+      c.autoMarcado = c.autoMarcado || {};
+      c.autoMarcado[it.key] = { evento: quem.auto, em: registro.em };
+      upd.autoMarcado = c.autoMarcado;
+    }
+    try { await db.collection('mb_cotacoes').doc(c.id).update(upd); }
+    catch (eUp) { await db.collection('mb_cotacoes').doc(c.id).set(upd, { merge: true }); }
+    const acaoId = 'chk_' + c.id + '_' + it.key.replace(/[^a-zA-Z0-9]/g, '_');
+    const acao = {
+      tipo: 'checklist_item', empresaId: c.empresaId, empresaNome: c.empresaNome,
+      agenciaId: c.agenciaId || CTX.agenciaId, cotacaoId: c.id,
+      etapa: c.status, item: it.key, itemTexto: it.texto || null, itemTipo: it.tipo || 'p',
+      usuarioId: quem.porUid, usuarioNome: quem.porNome,
+      usuarioPerfil: quem.perfil || null, pontos: getPonto('checklist_item'),
+      criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (quem.auto) { acao.auto = quem.auto; acao.evidencia = quem.evidencia || null; acao.motivo = 'Marcado automaticamente: ' + ((AUTO_ITEM_INFO[quem.auto] || {}).label || quem.auto); }
+    await db.collection('mb_acoes').doc(acaoId).set(acao);
+    _ACOES_CACHE = null;
+  }
+  async function _removerMarcacaoItem(c, itemKey) {
+    c.checklistFeito = c.checklistFeito || {};
+    delete c.checklistFeito[itemKey];
+    try {
+      await db.collection('mb_cotacoes').doc(c.id).update(new firebase.firestore.FieldPath('checklistFeito', itemKey), firebase.firestore.FieldValue.delete());
+    } catch (eDel) {
+      await db.collection('mb_cotacoes').doc(c.id).update({ checklistFeito: c.checklistFeito });
+    }
+    const acaoId = 'chk_' + c.id + '_' + itemKey.replace(/[^a-zA-Z0-9]/g, '_');
+    try { await db.collection('mb_acoes').doc(acaoId).delete(); } catch (e2) {}
+    _ACOES_CACHE = null;
+  }
+  // Depois de marcar/desmarcar: bônus de fechar etapa, portão de validação, avanço.
+  // viaAuto = marcação por evento: NUNCA avança sozinho — sempre deixa para o corretor validar.
+  async function _aposMarcacao(c, marcado, viaAuto) {
+    const cotacaoId = c.id;
     const et = etapaInfo(c.status);
-    const itensPadrao = (et && et.checklist) ? et.checklist.slice() : [];
-    const extras = ((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || [];
-    const chaves = itensPadrao.map((_, i) => c.status + '|p' + i).concat(extras.map((_, i) => c.status + '|e' + i));
-    const etapaCompleta = chaves.length && chaves.every(k => c.checklistFeito[k]);
-
-    // Quem marca o item que FECHA a etapa leva um extra. ID derivado da etapa,
-    // para não pagar de novo se alguém desmarcar e marcar outra vez.
+    const etapaCompleta = _etapaCompletaDeal(c);
     if (marcado && etapaCompleta) {
       try {
         const pts = getPonto('checklist_ultimo_etapa');
@@ -28138,8 +28364,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           produtoId: c.produtoId, produtoNome: c.produtoNome,
           agenciaId: c.agenciaId || CTX.agenciaId, cotacaoId,
           etapa: c.status, etapaLabel: (et && et.label) || c.status,
-          usuarioId: autorUid(), usuarioNome: autorNome(),
-          usuarioPerfil: CTX.perfilSimulado || CTX.perfil,
+          usuarioId: viaAuto ? (c.solicitadoPorUid || autorUid()) : autorUid(),
+          usuarioNome: viaAuto ? (c.solicitadoPorNome || autorNome()) : autorNome(),
+          usuarioPerfil: viaAuto ? (c.solicitadoPorPerfil || null) : (CTX.perfilSimulado || CTX.perfil),
           pontos: pts,
           motivo: `Fechou a etapa "${(et && et.label) || c.status}"`,
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
@@ -28147,54 +28374,473 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         _ACOES_CACHE = null;
       } catch (e) { console.warn('ponto do ultimo item', e); }
     }
-
-    // Desmarcou e a etapa deixou de estar completa → o bônus de "fechou a etapa"
-    // some junto. Sem isso, o ponto ficaria pago por uma etapa que não está mais pronta.
     if (!marcado && !etapaCompleta) {
-      try {
-        await db.collection('mb_acoes').doc('fim_' + cotacaoId + '_' + c.status).delete();
-        _ACOES_CACHE = null;
-      } catch (e) { /* não existia, tudo bem */ }
+      try { await db.collection('mb_acoes').doc('fim_' + cotacaoId + '_' + c.status).delete(); _ACOES_CACHE = null; } catch (e) {}
     }
-
+    const modalAberto = ((document.getElementById('negId') || {}).value === cotacaoId);
     if (etapaCompleta) {
-      // ---- PORTÃO DE VALIDAÇÃO ----
-      // Antes, completar o checklist avançava a etapa sozinho. Isso causava um problema
-      // real: dá pra querer registrar as interações de uma etapa (e pontuar) sem que o
-      // negócio ande — por exemplo, quando o cliente já sinalizou que não vai fechar.
-      // Agora, quem não é corretor deixa o negócio "aguardando validação"; o corretor
-      // confere e decide se avança. Se o próprio corretor completa, avança direto.
-      // (ehCorretorReal: no "ver como" o admin se comporta como o perfil simulado)
-      if (!ehCorretorReal()) {
+      if (viaAuto || !ehCorretorReal()) {
         try {
           await db.collection('mb_cotacoes').doc(cotacaoId).update({
             aguardandoValidacao: true,
             validacaoPedidaEm: firebase.firestore.FieldValue.serverTimestamp(),
-            validacaoPedidaPorNome: autorNome()
+            validacaoPedidaPorNome: viaAuto ? 'Sistema (evento automático)' : autorNome()
           });
           c.aguardandoValidacao = true;
         } catch (e) { console.warn('validacao', e); }
-        flashSalvo('Checklist completo! O corretor vai validar antes de avançar.');
-        abrirNegociacao(cotacaoId);
+        if (!viaAuto) flashSalvo('Checklist completo! O corretor vai validar antes de avançar.');
+        if (modalAberto) abrirNegociacao(cotacaoId);
         try { renderKanban(); } catch (e) {}
         return;
       }
       flashSalvo('Checklist completo! Avançando etapa...');
       setTimeout(() => avancarEtapaNegociacao(cotacaoId), 600);
     } else {
-      // desmarcou algo: se estava aguardando validação, sai desse estado
-      if (c.aguardandoValidacao) {
+      if (!marcado && c.aguardandoValidacao) {
         try {
           await db.collection('mb_cotacoes').doc(cotacaoId).update({ aguardandoValidacao: false });
           c.aguardandoValidacao = false;
           try { renderKanban(); } catch (e) {}
         } catch (e) {}
       }
-      // só re-renderiza o modal para atualizar o contador
-      abrirNegociacao(cotacaoId);
+      if (modalAberto) abrirNegociacao(cotacaoId);
     }
   }
-  window.toggleChecklist = toggleChecklist;
+
+  // ---------- Marcação AUTOMÁTICA por evento ----------
+  // Regras: só marca item da ETAPA ATUAL; só uma vez por item (se o admin desmarcar, não volta);
+  // o ponto vai para quem causou o evento (quem gerou o link / clicou o botão).
+  async function _autoMarcarItem(c, evento, quem) {
+    if (!c || !ehStatusAtivo(c.status)) return false;
+    const it = _itensChecklistDeal(c).find(x => x.auto === evento && x.aplica);
+    if (!it) return false;
+    if ((c.checklistFeito || {})[it.key]) return false;
+    if ((c.autoMarcado || {})[it.key]) return false;   // já foi marcado uma vez (admin desmarcou de propósito)
+    try {
+      await _gravarMarcacaoItem(c, it, { porUid: quem.porUid, porNome: quem.porNome, perfil: quem.perfil || null, auto: evento, evidencia: quem.evidencia || null });
+      await _aposMarcacao(c, true, true);
+      return true;
+    } catch (e) { console.warn('auto-marcar', evento, e); return false; }
+  }
+
+  // "Questionário respondido" em lote: uma consulta (questionários concluídos) casada com as negociações ativas
+  async function _autoQuestionarioLote() {
+    try {
+      const alvo = (COTACOES || []).filter(c => ehStatusAtivo(c.status) && _itensChecklistDeal(c).some(it => it.auto === 'questionario' && it.aplica && !(c.checklistFeito || {})[it.key] && !(c.autoMarcado || {})[it.key]));
+      if (!alvo.length) return 0;
+      const snap = await db.collection('mb_apresentacoes').where('questionarioCompleto', '==', true).get();
+      const aps = []; snap.forEach(d => aps.push({ id: d.id, ...d.data() }));
+      if (!aps.length) return 0;
+      let n = 0;
+      for (const c of alvo) {
+        const nCot = _covNorm(c.produtoId);
+        const criado = _toDate(c.criadoEm) || _toDate(c.dataSolicitacao) || null;
+        const limite = criado ? (criado.getTime() - 7 * 86400000) : 0;   // questionário de até 7 dias antes da negociação ainda vale
+        const ap = aps.find(a => a.empresaId === c.empresaId && _covNorm(a.produtoId) === nCot && ((_toDate(a.atualizadoEm) || _toDate(a.criadoEm) || new Date(0)).getTime() >= limite));
+        if (!ap) continue;
+        const ok = await _autoMarcarItem(c, 'questionario', {
+          porUid: ap.geradoPorUid || c.solicitadoPorUid || autorUid(),
+          porNome: ap.geradoPorNome || c.solicitadoPorNome || autorNome(),
+          perfil: null,
+          evidencia: { apresentacaoId: ap.id, token: ap.token || null }
+        });
+        if (ok) n++;
+      }
+      return n;
+    } catch (e) { console.warn('auto questionário', e); return 0; }
+  }
+
+  // ---------- Links a partir do card: apresentação e questionário ----------
+  async function _criarLinkDoNegocio(c, formato) {
+    const prod = _apresDoProduto(c.produtoId);
+    if (!prod) return null;
+    const arq = formato === 'questionario' ? prod.arqQ : prod.arq;
+    if (!arq) return null;
+    const token = gerarTokenAleatorio(24);
+    const ref = await db.collection('mb_links_apresentacao').add({
+      token, produtoId: prod.id, produtoNome: prod.nome, formato,
+      empresaId: c.empresaId, empresaNome: c.empresaNome || null,
+      destinatario: null, agenciaId: c.agenciaId || CTX.agenciaId || null,
+      geradoPorUid: autorUid(), geradoPorNome: autorNome(),
+      cotacaoId: c.id, origem: 'card_negociacao',
+      criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    const base = window.location.href.replace(/[^/]*$/, '');
+    return { url: base + arq + '?t=' + token, linkId: ref.id, token, prodNome: prod.nome };
+  }
+
+  async function gerarApresentacaoDoCard(cotacaoId) {
+    const c = (COTACOES || []).find(x => x.id === cotacaoId);
+    if (!c) return;
+    const perfil = perfilEfetivo();
+    if (perfil === 'seguradora') return;
+    let link = null;
+    try { link = await _criarLinkDoNegocio(c, 'apresentacao'); } catch (e) { return alert('Erro ao gerar o link: ' + e.message); }
+    if (!link) return alert('Este produto ainda não tem apresentação online. Marque "Solicitar apresentação" e o corretor prepara o material.');
+    const nomeCurto = link.prodNome.split('—')[0].trim();
+    const msg = `Olá! Preparei uma apresentação rápida sobre o ${nomeCurto} para a ${c.empresaNome}. São poucos minutos e no final você recebe uma leitura da sua exposição ao risco:\n\n${link.url}`;
+    // Evento: link da apresentação gerado pelo card → marca "Apresentação enviada" (uma vez)
+    const marcou = await _autoMarcarItem(c, 'apresentacao', { porUid: autorUid(), porNome: autorNome(), perfil: CTX.perfilSimulado || CTX.perfil, evidencia: { linkId: link.linkId, token: link.token } });
+    _abrirModalLinkNegocio({ titulo: '🔗 Apresentação pronta', sub: `Para <strong>${c.empresaNome}</strong> · ${nomeCurto}`, url: link.url, msg, assunto: nomeCurto, rodape: marcou ? '✅ "Apresentação enviada" foi marcado no checklist desta negociação.' : 'Link registrado. Tudo que o cliente responder aparece em Apresentações.' });
+    if (marcou) { try { renderKanban(); } catch (e) {} }
+  }
+  function _abrirModalLinkNegocio(o) {
+    const old = document.getElementById('modalLinkNegocio'); if (old) old.remove();
+    const modal = document.createElement('div');
+    modal.className = 'cad-modal open'; modal.id = 'modalLinkNegocio';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:560px;">
+        <div class="cad-modal-head"><h2>${o.titulo}</h2><p>${o.sub || ''}</p></div>
+        <div class="cad-modal-body">
+          <label class="form-label">Link</label>
+          <div style="display:flex; gap:8px;">
+            <input type="text" class="form-control" id="lnkNegInput" value="${o.url}" readonly style="flex:1; font-size:12px;">
+            <button class="btn-primary" onclick="copiarLink('lnkNegInput', this)">📋 Copiar</button>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+            <button class="btn-secondary" style="flex:1; min-width:150px; background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="window.open('https://wa.me/?text=' + encodeURIComponent(${JSON.stringify(o.msg)}), '_blank')">💬 WhatsApp</button>
+            <button class="btn-secondary" style="flex:1; min-width:150px;" onclick="window.open('mailto:?subject=' + encodeURIComponent(${JSON.stringify(o.assunto || '')}) + '&body=' + encodeURIComponent(${JSON.stringify(o.msg)}), '_blank')">✉️ E-mail</button>
+          </div>
+          ${o.rodape ? `<div style="margin-top:14px; padding:10px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:10px; font-size:12px; color:#166534;">${o.rodape}</div>` : ''}
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalLinkNegocio').remove()">Fechar</button>
+          <button class="btn-primary" onclick="window.open('${o.url}','_blank')">👁 Ver como o cliente vê</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  window.gerarApresentacaoDoCard = gerarApresentacaoDoCard;
+
+  // ---------- PEDIDO DE DADOS (e-mail padrão por produto + link do questionário) ----------
+  function _mesExtenso(v) {
+    const d = _toDate(v); if (!d) return null;
+    return ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'][d.getMonth()] + '/' + d.getFullYear();
+  }
+  function _montarPedidoDados(c, url) {
+    const pd = _pedidoDadosDoProduto(c.produtoId);
+    const org = _origemNorm(c);
+    const venc = (c.vencimentoRef && _mesExtenso(c.vencimentoRef)) || (c.vencimentoRef && typeof c.vencimentoRef === 'string' ? c.vencimentoRef : null) || 'breve';
+    const vars = { '{empresa}': c.empresaNome || 'sua empresa', '{produto}': c.produtoNome || 'seguro', '{vencimento}': venc, '{gerente}': (c.solicitadoPorNome || autorNome() || '').trim(), '{link}': url || '' };
+    const sub = s => String(s || '').replace(/\{empresa\}|\{produto\}|\{vencimento\}|\{gerente\}|\{link\}/g, m => vars[m]);
+    const docs = pd.docs.filter(d => !d.origens.length || d.origens.includes(org));
+    const partes = [sub(pd.abertura[org] || pd.abertura.mapeamento)];
+    if (docs.length) partes.push(sub(pd.texto) + '\n' + docs.map(d => '• ' + d.label).join('\n'));
+    if (url) partes.push('Caso prefira fazer tudo online, é só responder o questionário neste link (leva poucos minutos e os anexos vão por lá mesmo):\n' + url);
+    partes.push(sub(pd.fecho));
+    return { assunto: `Documentos para cotação — ${c.produtoNome} · ${c.empresaNome}`, corpo: partes.join('\n\n'), docs };
+  }
+  async function abrirPedidoDados(cotacaoId) {
+    const c = (COTACOES || []).find(x => x.id === cotacaoId);
+    if (!c) return;
+    if (perfilEfetivo() === 'seguradora') return;
+    let link = null;
+    try { link = await _criarLinkDoNegocio(c, 'questionario'); } catch (e) { console.warn('link questionário', e); }
+    const m = _montarPedidoDados(c, link ? link.url : null);
+    const jaEnviado = c.pedidoDados && c.pedidoDados.vezes;
+    const old = document.getElementById('modalPedidoDados'); if (old) old.remove();
+    const modal = document.createElement('div');
+    modal.className = 'cad-modal open'; modal.id = 'modalPedidoDados';
+    modal.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:640px;">
+        <div class="cad-modal-head">
+          <h2>📨 ${jaEnviado ? 'Cobrar os dados de novo' : 'Pedido de dados para cotar'}</h2>
+          <p>${c.empresaNome} · ${c.produtoNome} · origem ${(ORIGEM_INFO[_origemNorm(c)] || {}).emoji || ''} ${(ORIGEM_INFO[_origemNorm(c)] || {}).label || ''}${link ? ' · link do questionário incluído' : ' · este produto não tem questionário online'}</p>
+        </div>
+        <div class="cad-modal-body">
+          <input type="hidden" id="pdCotId" value="${c.id}">
+          <input type="hidden" id="pdLinkId" value="${link ? link.linkId : ''}">
+          <label class="form-label">Assunto</label>
+          <input type="text" class="form-control" id="pdAssunto" value="${m.assunto.replace(/"/g, '&quot;')}" style="margin-bottom:10px;">
+          <label class="form-label">Mensagem (pode ajustar antes de enviar)</label>
+          <textarea class="form-control" id="pdCorpo" rows="14" style="font-size:12.5px; line-height:1.5;">${m.corpo.replace(/</g, '&lt;')}</textarea>
+          <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+            <button class="btn-primary" style="flex:1; min-width:140px;" onclick="enviarPedidoDados('copiar')">📋 Copiar texto</button>
+            <button class="btn-secondary" style="flex:1; min-width:140px; background:#f0fdf4; color:#166534; border-color:#86efac;" onclick="enviarPedidoDados('whatsapp')">💬 WhatsApp</button>
+            <button class="btn-secondary" style="flex:1; min-width:140px;" onclick="enviarPedidoDados('email')">✉️ Abrir no e-mail</button>
+          </div>
+          <div style="margin-top:12px; padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; font-size:12px; color:#92400e;">
+            ${jaEnviado
+              ? `Já enviado ${c.pedidoDados.vezes}x (último em ${fmtDataCurta(c.pedidoDados.ultimoEm)}). Cobrar de novo registra a data, sem novos pontos.`
+              : 'Ao copiar ou enviar, o item <strong>"Solicitar dados"</strong> é marcado sozinho no checklist e a data fica registrada no card.'}
+            ${m.docs.length ? `<br>Os ${m.docs.length} documentos do pedido viram um mini-checklist na etapa "Coletando informações" — marque cada um conforme chegar.` : ''}
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalPedidoDados').remove()">Fechar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  async function enviarPedidoDados(via) {
+    const id = (document.getElementById('pdCotId') || {}).value;
+    const c = (COTACOES || []).find(x => x.id === id);
+    if (!c) return;
+    const assunto = (document.getElementById('pdAssunto') || {}).value || '';
+    const corpo = (document.getElementById('pdCorpo') || {}).value || '';
+    const linkId = (document.getElementById('pdLinkId') || {}).value || null;
+    if (via === 'copiar') {
+      try { await navigator.clipboard.writeText(corpo); flashSalvo('Texto copiado!'); }
+      catch (e) { const ta = document.getElementById('pdCorpo'); if (ta) { ta.select(); try { document.execCommand('copy'); flashSalvo('Texto copiado!'); } catch (e2) {} } }
+    } else if (via === 'whatsapp') {
+      window.open('https://wa.me/?text=' + encodeURIComponent(corpo), '_blank');
+    } else {
+      window.open('mailto:?subject=' + encodeURIComponent(assunto) + '&body=' + encodeURIComponent(corpo), '_blank');
+    }
+    // registro no negócio (1º envio marca "Solicitar dados"; os seguintes só atualizam a data)
+    const agora = new Date().toISOString();
+    const pd = Object.assign({ vezes: 0 }, c.pedidoDados || {});
+    if (!pd.enviadoEm) { pd.enviadoEm = agora; pd.porUid = autorUid(); pd.porNome = autorNome(); }
+    pd.vezes = (pd.vezes || 0) + 1; pd.ultimoEm = agora; pd.ultimoPorNome = autorNome(); pd.via = via; if (linkId) pd.linkId = linkId;
+    c.pedidoDados = pd;
+    try { await db.collection('mb_cotacoes').doc(c.id).set({ pedidoDados: pd }, { merge: true }); } catch (e) { console.warn('pedidoDados', e); }
+    const marcou = await _autoMarcarItem(c, 'pedido_dados', { porUid: autorUid(), porNome: autorNome(), perfil: CTX.perfilSimulado || CTX.perfil, evidencia: { via, linkId, em: agora } });
+    if (marcou) flashSalvo('"Solicitar dados" marcado no checklist ✓');
+    try { renderKanban(); } catch (e) {}
+    if ((document.getElementById('negId') || {}).value === c.id) { try { abrirNegociacao(c.id); } catch (e) {} }
+  }
+  window.abrirPedidoDados = abrirPedidoDados;
+  window.enviarPedidoDados = enviarPedidoDados;
+
+  // Bloco "Links do cliente" que aparece no card do negócio (etapas ativas)
+  function _htmlLinksNegocio(c, itens) {
+    if (!ehStatusAtivo(c.status)) return '';
+    const perfil = perfilEfetivo();
+    if (perfil === 'seguradora' || perfil === 'estagiario') return '';
+    const itemAp = itens.find(it => it.auto === 'apresentacao');
+    const itemPd = itens.find(it => it.auto === 'pedido_dados');
+    const prod = _apresDoProduto(c.produtoId);
+    const temApres = !!(prod && prod.arq);
+    const temQuest = !!(prod && prod.arqQ);
+    const mostrarAp = temApres && itemAp && itemAp.aplica;
+    const mostrarPd = !!itemPd || c.status === 'solicitada' || c.status === 'informacoes' || !!(c.pedidoDados && c.pedidoDados.vezes);
+    if (!mostrarAp && !mostrarPd) return '';
+    const pd = c.pedidoDados || null;
+    const diasPd = pd && pd.ultimoEm ? Math.floor((Date.now() - new Date(pd.ultimoEm).getTime()) / 86400000) : null;
+    const quest = (c.checklistFeito || {})[(itens.find(it => it.auto === 'questionario') || {}).key];
+    return `<div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:10px 13px; margin-bottom:14px;">
+      <div style="font-size:12px; font-weight:800; color:#3730a3; margin-bottom:6px;">🔗 Com o cliente</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${mostrarAp ? `<button class="btn-secondary" style="flex:1; min-width:150px; background:white;" onclick="gerarApresentacaoDoCard('${c.id}')">🎬 ${(c.checklistFeito || {})[itemAp.key] ? 'Gerar outro link da apresentação' : 'Enviar apresentação'}</button>` : ''}
+        ${mostrarPd ? `<button class="btn-primary" style="flex:1; min-width:150px;" onclick="abrirPedidoDados('${c.id}')">📨 ${pd && pd.vezes ? 'Cobrar os dados de novo' : 'Gerar pedido de dados'}</button>` : ''}
+      </div>
+      <div style="font-size:11px; color:#4338ca; margin-top:7px; line-height:1.6;">
+        ${pd && pd.vezes ? `📨 Pedido enviado ${pd.vezes}x · último há <strong>${diasPd}d</strong> (${pd.ultimoPorNome || pd.porNome || ''})${quest ? ' · 📋 questionário respondido ✓' : (temQuest ? ' · aguardando o questionário' : '')}` : (mostrarPd ? `Monta o e-mail padrão de ${c.produtoNome}${temQuest ? ' já com o link do questionário' : ''} e marca "Solicitar dados" sozinho.` : '')}
+      </div>
+    </div>`;
+  }
+
+  // ---------- TEMPO REAL: o kanban acompanha as mudanças sem F5 ----------
+  let _COT_UNSUB = null, _COT_LISTEN_PRIMEIRO = true;
+  function _iniciarListenerCotacoes(query) {
+    if (_COT_UNSUB || !query || typeof query.onSnapshot !== 'function') return;
+    try {
+      _COT_UNSUB = query.onSnapshot(snap => {
+        if (_COT_LISTEN_PRIMEIRO) { _COT_LISTEN_PRIMEIRO = false; return; }
+        if (snap.metadata && snap.metadata.hasPendingWrites) return;   // escrita local: a tela já foi redesenhada
+        let mudou = false; const avisos = []; const idsMudados = [];
+        const ehRm = perfilEfetivo() === 'rm';
+        const minhas = ehRm ? new Set((EMPRESAS_REAIS || []).filter(e => e.rm === uidEfetivo()).map(e => e.id)) : null;
+        snap.docChanges().forEach(ch => {
+          const d = { id: ch.doc.id, ...ch.doc.data() };
+          const i = COTACOES.findIndex(x => x.id === d.id);
+          if (ch.type === 'removed') { if (i >= 0) { COTACOES.splice(i, 1); mudou = true; } return; }
+          if (minhas && !minhas.has(d.empresaId)) return;
+          const antes = i >= 0 ? COTACOES[i] : null;
+          if (i >= 0) COTACOES[i] = d; else COTACOES.unshift(d);
+          mudou = true; idsMudados.push(d.id);
+          const si = STATUS_COTACAO[d.status] || {};
+          if (antes && antes.status !== d.status) avisos.push(`${si.icon || '➡'} ${d.empresaNome} · ${d.produtoNome} → <strong>${si.label || d.status}</strong>`);
+          else if (antes && !antes.aguardandoValidacao && d.aguardandoValidacao && ehCorretorReal()) avisos.push(`⏳ ${d.validacaoPedidaPorNome || 'Alguém'} concluiu o checklist: ${d.empresaNome} · ${d.produtoNome}`);
+          else if (antes && !antes.transmissaoPedida && d.transmissaoPedida && ehCorretorReal()) avisos.push(`📤 ${d.transmissaoPedidaPorNome || 'Alguém'} pediu transmissão: ${d.empresaNome} · ${d.produtoNome}`);
+          else if (antes && !antes.declinioPedido && d.declinioPedido && ehCorretorReal()) avisos.push(`🚩 Pedido de declínio: ${d.empresaNome} · ${d.produtoNome}`);
+          else if (!antes && d.status === 'solicitada') avisos.push(`✨ Nova negociação: ${d.empresaNome} · ${d.produtoNome}`);
+        });
+        if (!mudou) return;
+        try {
+          atualizarKpiCotacoes();
+          if (COTACAO_VIEW === 'kanban') renderKanban(); else if (COTACAO_VIEW === 'ramo') renderCotacoesPorRamo(); else renderCotacoes();
+        } catch (e) {}
+        avisos.slice(0, 3).forEach((m, k) => setTimeout(() => { try { flashSalvo(m.replace(/<[^>]+>/g, '')); } catch (e) {} }, k * 1800));
+        // card aberto de um negócio que mudou: redesenha (a não ser que alguém esteja escrevendo um comentário)
+        const negId = (document.getElementById('negId') || {}).value;
+        const digitando = ((document.getElementById('negNovoComentario') || {}).value || '').trim();
+        if (negId && idsMudados.includes(negId) && !digitando) { try { abrirNegociacao(negId); } catch (e) {} }
+      }, err => console.warn('listener cotações', err));
+    } catch (e) { console.warn('listener', e); }
+  }
+
+  // ---------- CONFIG: Pedido de dados por produto (Config → Funil) ----------
+  function renderPedidoDadosCfg() {
+    const wrap = document.getElementById('pedidoDadosCfgWrap');
+    if (!wrap) return;
+    const sel = document.getElementById('pdCfgProduto');
+    const lista = (RAMOS_ALL || PRODUTOS || []).filter(r => r.ativo !== false);
+    if (sel && !sel.options.length) sel.innerHTML = lista.map(r => `<option value="${r.id}">${r.icon || ''} ${r.nome}</option>`).join('');
+    const pid = sel ? sel.value : (lista[0] || {}).id;
+    if (!pid) { wrap.innerHTML = '<div style="color:#94a3b8; font-size:12px;">Cadastre os ramos primeiro.</div>'; return; }
+    const pd = _pedidoDadosDoProduto(pid);
+    const esc = s => String(s || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    wrap.innerHTML = `
+      <input type="hidden" id="pdCfgPid" value="${pid}">
+      <div style="font-size:11px; color:${pd.personalizado ? '#166534' : '#94a3b8'}; margin-bottom:8px;">${pd.personalizado ? '✅ Texto personalizado salvo para este produto.' : 'Usando o texto padrão sugerido — edite e salve para personalizar.'} Variáveis: {empresa} {produto} {vencimento} {gerente}</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        ${ORIGENS_ITEM.map(o => `<div class="form-group" style="margin:0;"><label class="form-label">Abertura · ${ORIGENS_ITEM_LABEL[o]}</label><textarea class="form-control pd-cfg-abert" data-org="${o}" rows="2" style="font-size:12px;">${esc(pd.abertura[o])}</textarea></div>`).join('')}
+      </div>
+      <div class="form-group" style="margin-top:8px;"><label class="form-label">Frase antes da lista</label><input type="text" class="form-control" id="pdCfgTexto" value="${esc(pd.texto)}" style="font-size:12px;"></div>
+      <label class="form-label">Documentos / informações (viram o mini-checklist da etapa "Coletando informações")</label>
+      <div id="pdCfgDocs">
+        ${pd.docs.map(d => `
+          <div class="pd-cfg-doc" style="display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap;">
+            <input type="hidden" class="pd-cfg-doc-id" value="${esc(d.id)}">
+            <input type="text" class="form-control pd-cfg-doc-label" value="${esc(d.label)}" style="flex:1; min-width:220px; padding:5px 8px; font-size:12px;">
+            ${ORIGENS_ITEM.map(o => `<label style="font-size:10.5px; color:#475569; display:flex; align-items:center; gap:3px;"><input type="checkbox" class="pd-cfg-doc-org" value="${o}" ${d.origens.includes(o) ? 'checked' : ''} style="width:13px; height:13px;">${ORIGENS_ITEM_LABEL[o]}</label>`).join('')}
+            <button class="btn-mini" style="color:#ef4444;" onclick="this.closest('.pd-cfg-doc').remove()">✕</button>
+          </div>`).join('')}
+      </div>
+      <button class="btn-mini" onclick="adicionarDocPedidoDados()"><i data-lucide="plus" class="w-3 h-3"></i> documento</button>
+      <div style="font-size:10.5px; color:#94a3b8; margin:6px 0 8px;">Nenhuma origem marcada = pede em todas. Ex.: "apólice anterior" não se aplica a OP.</div>
+      <div class="form-group"><label class="form-label">Fecho</label><textarea class="form-control" id="pdCfgFecho" rows="2" style="font-size:12px;">${esc(pd.fecho)}</textarea></div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-primary" onclick="salvarPedidoDadosCfg()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar para este produto</button>
+        ${pd.personalizado ? `<button class="btn-secondary" onclick="restaurarPedidoDadosCfg()">↩ Voltar ao padrão</button>` : ''}
+      </div>`;
+    try { lucide.createIcons(); } catch (e) {}
+  }
+  function adicionarDocPedidoDados() {
+    const cont = document.getElementById('pdCfgDocs'); if (!cont) return;
+    const div = document.createElement('div');
+    div.className = 'pd-cfg-doc'; div.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap;';
+    div.innerHTML = `<input type="hidden" class="pd-cfg-doc-id" value=""><input type="text" class="form-control pd-cfg-doc-label" placeholder="Ex.: PDF da apólice atual" style="flex:1; min-width:220px; padding:5px 8px; font-size:12px;">` +
+      ORIGENS_ITEM.map(o => `<label style="font-size:10.5px; color:#475569; display:flex; align-items:center; gap:3px;"><input type="checkbox" class="pd-cfg-doc-org" value="${o}" style="width:13px; height:13px;">${ORIGENS_ITEM_LABEL[o]}</label>`).join('') +
+      `<button class="btn-mini" style="color:#ef4444;" onclick="this.closest('.pd-cfg-doc').remove()">✕</button>`;
+    cont.appendChild(div);
+  }
+  async function salvarPedidoDadosCfg() {
+    if (!CTX.isAdmin) return alert('Apenas admin.');
+    const pid = (document.getElementById('pdCfgPid') || {}).value; if (!pid) return;
+    const abertura = {};
+    document.querySelectorAll('.pd-cfg-abert').forEach(t => { abertura[t.getAttribute('data-org')] = (t.value || '').trim(); });
+    const usados = {};
+    const docs = [...document.querySelectorAll('#pdCfgDocs .pd-cfg-doc')].map(div => {
+      const label = ((div.querySelector('.pd-cfg-doc-label') || {}).value || '').trim();
+      if (!label) return null;
+      let id = ((div.querySelector('.pd-cfg-doc-id') || {}).value || '').trim() || slugify(label).replace(/-/g, '_').slice(0, 24);
+      id = id.replace(/[^a-z0-9_]/gi, '_') || ('doc_' + Date.now().toString(36));
+      while (usados[id]) id += '_2';
+      usados[id] = true;
+      return { id, label, origens: [...div.querySelectorAll('.pd-cfg-doc-org')].filter(ch => ch.checked).map(ch => ch.value) };
+    }).filter(Boolean);
+    const dados = {
+      abertura, texto: ((document.getElementById('pdCfgTexto') || {}).value || '').trim(),
+      fecho: ((document.getElementById('pdCfgFecho') || {}).value || '').trim(), docs, etapaDocs: 'informacoes',
+      atualizadoEm: new Date().toISOString(), porNome: autorNome()
+    };
+    try {
+      PEDIDO_DADOS_CFG.porProduto = PEDIDO_DADOS_CFG.porProduto || {};
+      PEDIDO_DADOS_CFG.porProduto[pid] = dados;
+      await db.collection('mb_config').doc('pedido_dados').set({ porProduto: { [pid]: dados } }, { merge: true });
+      flashSalvo('Pedido de dados salvo!');
+      renderPedidoDadosCfg();
+    } catch (e) { alert('Erro ao salvar: ' + e.message); }
+  }
+  async function restaurarPedidoDadosCfg() {
+    if (!CTX.isAdmin) return;
+    const pid = (document.getElementById('pdCfgPid') || {}).value; if (!pid) return;
+    if (!confirm('Voltar ao texto padrão deste produto? O texto personalizado será apagado.')) return;
+    try {
+      delete PEDIDO_DADOS_CFG.porProduto[pid];
+      await db.collection('mb_config').doc('pedido_dados').update(new firebase.firestore.FieldPath('porProduto', pid), firebase.firestore.FieldValue.delete());
+    } catch (e) {
+      try { await db.collection('mb_config').doc('pedido_dados').set({ porProduto: PEDIDO_DADOS_CFG.porProduto }, { merge: false }); } catch (e2) { return alert('Erro: ' + e2.message); }
+    }
+    renderPedidoDadosCfg();
+  }
+  window.renderPedidoDadosCfg = renderPedidoDadosCfg;
+  window.adicionarDocPedidoDados = adicionarDocPedidoDados;
+  window.salvarPedidoDadosCfg = salvarPedidoDadosCfg;
+  window.restaurarPedidoDadosCfg = restaurarPedidoDadosCfg;
+
+  // ---------- MIGRAÇÃO ÚNICA: "Solicitar dados" vai da etapa 2 para a 1 (spec v1) ----------
+  // Etapa 1 (solicitada): mantém p0..p2, remove "Ok do cliente para cotar" (último), acrescenta
+  //   "Solicitar dados" em p3 (auto: pedido de dados) e liga automação/origem nos itens de apresentação.
+  // Etapa 2 (informacoes): p0 "Solicitar dados" vira "Questionário respondido" (auto); p1 e p2 ficam.
+  // Negociações: marcações e pontos são REALINHADOS (nada se perde):
+  //   solicitada|p3 (Ok do cliente) → solicitada|x_ok_cliente (histórico, pontos mantidos)
+  //   informacoes|p0 (Solicitar dados) → solicitada|p3
+  async function migrarFunilPedidoDados() {
+    if (!CTX.isAdmin) return alert('Apenas admin.');
+    const e1 = etapaInfo('solicitada'), e2 = etapaInfo('informacoes');
+    if (!e1 || !e2) return alert('As etapas "solicitada" e "informacoes" precisam existir no funil.');
+    const l1 = (e1.checklist || []).map(_normItem), l2 = (e2.checklist || []).map(_normItem);
+    if (l1.some(it => it.auto === 'pedido_dados')) return alert('Esta migração já foi aplicada (a etapa 1 já tem o item "Solicitar dados" automático).');
+    const ultimo1 = l1[l1.length - 1];
+    const okCliente = ultimo1 && /ok\s+do\s+cliente/i.test(ultimo1.txt);
+    const solDados = l2[0] && /solicitar/i.test(l2[0].txt) && /dados/i.test(l2[0].txt);
+    if (!okCliente || !solDados) {
+      return alert('Não reconheci a estrutura esperada.\n\nEsperado: último item da etapa 1 = "Ok do cliente para cotar" e 1º item da etapa 2 = "Solicitar dados".\n\nEncontrado:\n· etapa 1, último: ' + (ultimo1 ? ultimo1.txt : '—') + '\n· etapa 2, primeiro: ' + (l2[0] ? l2[0].txt : '—') + '\n\nAjuste manualmente ou me avise.');
+    }
+    const msg = 'Aplicar a migração do funil (etapas 1 e 2)?\n\n' +
+      '• Etapa 1: remove "' + ultimo1.txt + '"; acrescenta "' + l2[0].txt + '" (marca sozinho pelo pedido de dados); "Apresentação enviada" passa a marcar sozinho pelo link e não se aplica a OP/renovação.\n' +
+      '• Etapa 2: "' + l2[0].txt + '" vira "Questionário respondido" (marca sozinho quando o cliente conclui).\n' +
+      '• Negociações existentes: marcações e pontos são realinhados — nenhum ponto é perdido.\n\nContinuar?';
+    if (!confirm(msg)) return;
+    const tag = (it, extra) => Object.assign({ txt: it.txt, resp: it.resp, auto: '', origens: [] }, extra || {});
+    const novo1 = [];
+    l1.slice(0, -1).forEach(it => {
+      if (/apresenta/i.test(it.txt) && /enviad/i.test(it.txt)) novo1.push(tag(it, { auto: 'apresentacao', origens: ['mapeamento', 'oportunidade'] }));
+      else if (/solicitar/i.test(it.txt) && /apresenta/i.test(it.txt)) novo1.push(tag(it, { origens: ['mapeamento', 'oportunidade'] }));
+      else novo1.push(tag(it));
+    });
+    const idxSolDados = novo1.length;   // posição que "Solicitar dados" vai ocupar na etapa 1
+    novo1.push(tag(l2[0], { auto: 'pedido_dados', origens: [] }));
+    const novo2 = [{ txt: 'Questionário respondido', resp: 'todos', auto: 'questionario', origens: [] }].concat(l2.slice(1).map(it => tag(it)));
+    const idxOk = l1.length - 1;
+    let nNeg = 0, nMov = 0;
+    try {
+      // 1) negociações
+      let q = db.collection('mb_cotacoes'); if (CTX.agenciaId) q = q.where('agenciaId', '==', CTX.agenciaId);
+      const snap = await q.get();
+      const docs = []; snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
+      for (const c of docs) {
+        const f = c.checklistFeito || {};
+        const kOk = 'solicitada|p' + idxOk, kSol2 = 'informacoes|p0', kSol1 = 'solicitada|p' + idxSolDados;
+        if (!f[kOk] && !f[kSol2]) continue;
+        const novoF = Object.assign({}, f);
+        const moves = [];   // [de, para]
+        if (f[kOk]) { novoF['solicitada|x_ok_cliente'] = f[kOk]; delete novoF[kOk]; moves.push([kOk, 'solicitada|x_ok_cliente']); }
+        if (f[kSol2]) { novoF[kSol1] = f[kSol2]; delete novoF[kSol2]; moves.push([kSol2, kSol1]); }
+        const upd = { checklistFeito: novoF };
+        if (c.autoMarcado) { const am = Object.assign({}, c.autoMarcado); moves.forEach(([de, para]) => { if (am[de]) { am[para] = am[de]; delete am[de]; } }); upd.autoMarcado = am; }
+        await db.collection('mb_cotacoes').doc(c.id).update(upd);
+        for (const [de, para] of moves) {
+          const idDe = 'chk_' + c.id + '_' + de.replace(/[^a-zA-Z0-9]/g, '_');
+          const idPara = 'chk_' + c.id + '_' + para.replace(/[^a-zA-Z0-9]/g, '_');
+          try {
+            const a = await db.collection('mb_acoes').doc(idDe).get();
+            if (a.exists) {
+              const dados = Object.assign({}, a.data(), { item: para, etapa: para.split('|')[0], migradoDe: de, migradoEm: new Date().toISOString() });
+              await db.collection('mb_acoes').doc(idPara).set(dados);
+              await db.collection('mb_acoes').doc(idDe).delete();
+              nMov++;
+            }
+          } catch (eA) { console.warn('migração ação', idDe, eA); }
+        }
+        nNeg++;
+      }
+      // 2) configuração das etapas
+      await db.collection('mb_funil_etapas').doc('solicitada').set({ checklist: novo1 }, { merge: true });
+      await db.collection('mb_funil_etapas').doc('informacoes').set({ checklist: novo2 }, { merge: true });
+      await carregarFunilConfig();
+      _ACOES_CACHE = null;
+      try { await carregarERenderCotacoes(); } catch (e) {}
+      try { if (typeof renderFunilConfig === 'function') { FUNIL_EDIT = ETAPAS_FUNIL.map(e => ({ ...e, checklist: [...(e.checklist || [])] })); renderFunilConfig(); } } catch (e) {}
+      alert('Migração concluída.\n\n• Negociações realinhadas: ' + nNeg + '\n• Registros de pontos movidos: ' + nMov + '\n\nEtapas 1 e 2 já estão com os itens novos.');
+    } catch (e) { alert('Erro na migração: ' + e.message + '\n\nNada mais foi alterado a partir do erro; pode rodar de novo.'); }
+  }
+  window.migrarFunilPedidoDados = migrarFunilPedidoDados;
 
   // Corretor valida: limpa o aviso e avança de fato.
   async function validarAvanco(cotacaoId) {
@@ -30287,8 +30933,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Fontes de pontos (do mês inteiro)
       const inicioMes = new Date();
       inicioMes.setDate(1); inicioMes.setHours(0,0,0,0);
-      snap.forEach(d => {
-        const a = d.data();
+      // (era `snap.forEach` — variável inexistente: o bloco inteiro abaixo nunca rodava e as
+      //  "fontes de pontos" e conquistas do dashboard ficavam zeradas em silêncio)
+      _acoesMS.forEach(a => {
         if (a.usuarioId !== CTX.uid) return;
         const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
         if (!dt || dt < inicioMes) return;
