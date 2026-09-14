@@ -5394,50 +5394,22 @@
   window.PREMIACAO_CACHE = null;
 
   const FATOR_DEFAULT = {
-    pesos: {
-      cotacao_iniciada: 3,   // negócios que entraram no funil (qualquer etapa, ou decididos na campanha)
-      produtos_mapeados: 2,  // % de produtos com status conhecido
-      funcionarios: 1.5,     // % de empresas com nº de funcionários
-      socios: 1,             // % de empresas com sócios mapeados
-      contato_decisor: 1,    // % com e-mail do decisor
-      contato_rh: 0.5        // % com e-mail do RH
-    },
-    tetoRm: 4.1, tetoChefe: 7.38,
-    pisoRm: 50, pisoAgencia: 50,
-    poteApoio: 2, poteRanking: 2,
-    // Degraus do pote de apoio (assistentes/estagiários): cresce com o fator da agência, teto = poteApoio.
-    // Cada faixa: {min: fator mínimo da agência, pct: % do pote}. Abaixo do pisoAgencia = 0.
-    apoioFaixas: [
-      { min: 50, pct: 1 },
-      { min: 65, pct: 1.5 },
-      { min: 80, pct: 2 }
-    ],
-    // Participação sobre a comissão (estavam cravadas no código como PART_RM_BASE etc.)
+    // Pote do ranking: fatia da comissão dividida pelo share de pontos de cada pessoa.
+    poteRanking: 2,
+    // Participação sobre a comissão — editável em Config → Fator & Bônus, por agência.
+    // (eram constantes cravadas no código: PART_RM_BASE / PART_CHEFE_BASE)
     partPisoRm: 24.6, partTetoRm: 4.1,
     partPisoChefe: 16.4, partTetoChefe: 7.38,
-    // ---- NOVA ESTRUTURA: fator = atividade × gate ----
-    // Atividade = pesoCotacao% cotação iniciada + pesoDiversif% produção diversificada por grupo.
-    pesoAtivCotacao: 40,   // % do fator de atividade que vem de cotação iniciada
-    pesoAtivDiversif: 60,  // % que vem de produção diversificada (fechar importa mais)
-    // Gate cadastral: abre inteiro (1,0) em gateAlvo% de cobertura; cai até gatePiso em 0%.
-    gateAlvo: 60, gatePiso: 0.5,
-    // Alvo de % da meta por GRUPO para o grupo contar como "coberto" na diversificação.
+    // Alvo de % da meta por GRUPO: mínimo para o grupo contar na diversificação (indicador
+    // Produção) e base do objetivo da Retorno mostrado na home.
     metaPorGrupo: { auto: 0.5, dental: 100, saude: 50, re: 50, vida: 100, previdencia: 50 },
-    // Peso temporal da cotação: pontos por cotação iniciada, do 1º ao último mês da campanha.
-    cotacaoPtsInicio: 10, cotacaoPtsFim: 4,
-    // Plus de originação: pontos extras divididos entre quem originou cotação de um negócio FECHADO.
-    plusOriginacao: 5,
-    // Divisão do pote de apoio por cargo (fallback: se faltar um grupo, o outro leva tudo)
-    apoioAssist: 80, apoioEstag: 20,
-    // Pesos das dimensões na média ponderada do fator (atividade pesa mais).
-    pesosFator: {
-      cotacao_iniciada: 35, diversificacao: 30, produtos_mapeados: 15,
-      funcionarios: 8, socios: 4, contato_decisor: 5, contato_rh: 3
-    },
-    // ---- MODELO DE 4 BLOCOS (legado — mantido enquanto convive com os indicadores) ----
+    // ---- "Fator" (nota 0-100 da soma de 4 blocos) ----
+    // Serve só para ORDENAR a lista de RMs na campanha e para leitura gerencial: não entra
+    // em nenhum pagamento. Por isso estes pesos saíram da tela e ficam só como padrão.
     pesosBlocos: { preparo: 20, movimento: 35, producao: 25, diversificacao: 20 },
     pesosPreparo: { produtos_mapeados: 40, funcionarios: 25, socios: 15, contato_decisor: 12, contato_rh: 8 },
     metaAssumidas: 20,  // quantas oportunidades assumidas = 100% no bloco movimento
+
 
     // ---- MODELO DE INDICADORES ----
     // Cada indicador tem um TETO em pontos de participação para o RM.
@@ -11411,7 +11383,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '252';
+  const APP_VERSAO = '253';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -14266,12 +14238,12 @@
 
   // ============= PAINEL DO GESTOR (admin/chefe) — tudo em pontos =============
   // ===== FÓRMULA FINAL: consolida bônus por pessoa (sempre em pontos) =====
-  // Junta: bônus sobre comissão (RM/chefe) + pote de apoio (assist/estag) + pote de ranking (todos).
-  // ===== PARTICIPAÇÃO (%) com porteira dos 50% e crescimento gradual =====
-  // RM: piso 24,6 → teto 28,7 (bônus 4,1), proporcional a (fatorRM × fatorAgência).
-  //   Se fatorRM < 50% → fica no piso (agência boa não salva RM que não fez a parte dele).
-  // Chefe: piso 16,4 → teto 23,78 (bônus 7,38), proporcional ao fatorAgência.
-  //   Se fatorAgência < 50% → fica no piso.
+  // Junta: piso sobre a comissão (RM/chefe) + bônus dos indicadores + pote do ranking.
+  // ===== PARTICIPAÇÃO (%) — piso + bônus proporcional =====
+  // RM: piso (padrão 24,6%) + até o teto de bônus, PROPORCIONAL aos indicadores da carteira
+  //     dele mais o plus da agência. Chefe: piso (padrão 16,4%) + bônus medido pela agência.
+  // Não existe porteira: quem atinge 20% dos indicadores leva 20% do bônus.
+  // (a antiga "porteira dos 50%" — abaixo disso ficaria só no piso — foi descartada em set/2026)
   // Agora vêm de Configurações → Fator & Bônus → "Participação sobre a comissão" (por agência).
   // Antes eram constantes cravadas aqui — o piso não aparecia em tela nenhuma.
   const _partCfg = () => {
