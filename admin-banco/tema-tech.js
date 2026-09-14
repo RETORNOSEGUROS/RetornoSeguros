@@ -395,7 +395,9 @@
       marcar();
     }
 
-    /* 6. OBJETIVOS por ramo — produção × meta retorno (fonte: Relatório de Metas) */
+    /* 6. OBJETIVOS por ramo — produção × OBJETIVO DA RETORNO (não a meta da agência).
+       Cada grupo tem um alvo (Campanha → Fator): objetivo = meta da agência × alvo%.
+       Ex.: saúde meta agência 14.484 · alvo 50% → objetivo 7.242 · produziu 14.200 = 196%. */
     function objetivos() {
       const el = g('meta'); if (!el) return;
       const T = window.__tt, ramos = T && T.metasPorGrupo;
@@ -403,13 +405,13 @@
       const metaTot = T.metaTotalRet || ramos.reduce((s, r) => s + r.meta, 0);
       const realTot = T.realTotalRet || ramos.reduce((s, r) => s + r.real, 0);
       const pctTot = metaTot > 0 ? Math.round(realTot / metaTot * 100) : 0;
-      anel('meta', pctTot, pctTot >= 100 ? 'var(--teal)' : undefined);
-      set('meta', 'big', pctTot + '% da meta');
+      anel('meta', Math.min(100, pctTot), pctTot >= 100 ? 'var(--teal)' : undefined);
+      set('meta', 'big', pctTot + '% do objetivo');
       const noAlvo = ramos.filter(r => r.pct >= 100).length;
-      set('meta', 'gap', `${T.fmt ? T.fmt(realTot) : realTot} de ${T.fmt ? T.fmt(metaTot) : metaTot} · ${ramos.length} ramos`);
+      set('meta', 'gap', `${T.fmt ? T.fmt(realTot) : realTot} de ${T.fmt ? T.fmt(metaTot) : metaTot} · objetivo Retorno · ${ramos.length} ramos`);
       const abaixo = ramos.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct)[0];
-      set('meta', 'alerta', abaixo ? `${abaixo.nome.replace(/ .*/, '')} é o mais baixo (${Math.round(abaixo.pct)}%)` : 'todos os ramos no alvo', noAlvo === ramos.length ? 'ok' : 'urg');
-      /* roda de todos os ramos, cada anel = % produção vs meta */
+      set('meta', 'alerta', abaixo ? `${abaixo.nome.replace(/ .*/, '')} é o mais baixo (${Math.round(abaixo.pct)}%)` : 'todos os ramos no objetivo', noAlvo === ramos.length ? 'ok' : 'urg');
+      /* roda de todos os ramos, cada anel = % produção vs objetivo da Retorno */
       desenhaRoda(el, ramos);
     }
     function desenhaRoda(card, ramos) {
@@ -420,10 +422,15 @@
       const CORES = { vida: '#5FB4FF', re: '#F5B544', saude: '#2DD4BF', auto: '#9B8CFF', dental: '#F472B6', prev: '#A3E635', previdencia: '#A3E635' };
       const cor = r => CORES[(r.id || '').toLowerCase()] || r.cor || '#5FB4FF';
       grid.innerHTML = ramos.map(r => {
-        const p = Math.max(0, Math.min(100, Math.round(r.pct)));
-        return `<div class="tt-ramo-cell" title="${r.nome}: ${T_fmt(r.real)} de ${T_fmt(r.meta)}">
-          <svg viewBox="0 0 44 44"><circle class="tr" cx="22" cy="22" r="18"/><circle class="va" cx="22" cy="22" r="18" style="stroke:${cor(r)};stroke-dashoffset:113" data-off="${113 - 113 * Math.min(100, p) / 100}"/><text x="22" y="26" class="pc">${p}%</text></svg>
+        const p = Math.max(0, Math.round(r.pct));              /* o número mostra o real (pode passar de 100) */
+        const anelP = Math.min(100, p);                        /* o anel enche até 100 */
+        const fonte = 113 - 113 * anelP / 100;
+        const txt = p >= 1000 ? Math.round(p / 100) * 100 + '%' : p + '%';   /* 882% cabe; 1.240% vira 1200% */
+        const dica = `${r.nome}: ${T_fmt(r.real)} de ${T_fmt(r.meta)} (objetivo Retorno` + (r.alvo != null && r.alvo !== 100 ? ` = ${r.alvo}% da meta da agência, ${T_fmt(r.metaAgencia)}` : '') + ')';
+        return `<div class="tt-ramo-cell" title="${dica}">
+          <svg viewBox="0 0 44 44"><circle class="tr" cx="22" cy="22" r="18"/><circle class="va" cx="22" cy="22" r="18" style="stroke:${cor(r)};stroke-dashoffset:113" data-off="${fonte}"/><text x="22" y="26" class="pc" style="font-size:${p >= 1000 ? 8.5 : p >= 100 ? 9.5 : 11}px">${txt}</text></svg>
           <span class="tt-ramo-nome">${r.nome.replace(/ .*/, '')}</span>
+          <span class="tt-ramo-val">${T_fmtC(r.real)} <span class="tt-ramo-sep">/</span> ${T_fmtC(r.meta)}</span>
         </div>`;
       }).join('');
       /* anima o preenchimento */
@@ -432,6 +439,14 @@
       const foot = card.querySelector('.tt-g-foot [data-f="foot"]'); if (foot) foot.innerHTML = '';
     }
     function T_fmt(v) { const T = window.__tt; return T && T.fmt ? T.fmt(v) : ('R$ ' + Math.round(v || 0).toLocaleString('pt-BR')); }
+    /* compacto para caber sob o anel: 14.200 → 14,2K · 439.392 → 439K · 1.240.000 → 1,2M */
+    function T_fmtC(v) {
+      v = Math.round(v || 0);
+      if (v >= 1e6) return (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'M';
+      if (v >= 1e5) return Math.round(v / 1e3).toLocaleString('pt-BR') + 'K';
+      if (v >= 1e3) return (v / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'K';
+      return v.toLocaleString('pt-BR');
+    }
     /* fallback antigo (termômetro) só se não houver dados por ramo */
     function meta() { if (window.__tt && window.__tt.metasPorGrupo && window.__tt.metasPorGrupo.length) return objetivos(); const el = g('meta'); if (el) { set('meta', 'big', 'abra Relatório de Metas'); set('meta', 'gap', 'os objetivos por ramo aparecem após carregar as metas'); } }
         window.__ttObjetivos = objetivos;
