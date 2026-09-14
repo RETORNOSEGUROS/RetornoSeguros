@@ -376,12 +376,15 @@
       if (!Array.isArray(T.agendamentos)) {
         set('vis', 'big', 'carregando…'); set('vis', 'gap', 'buscando as visitas da agenda'); set('vis', 'alerta', '', 'ok'); anel('vis', 0);
       } else {
-      const ags = (T.agendamentos || []).filter(a => a.status === 'realizada');
+      const ags = (T.agendamentos || []).filter(a => a.status === 'realizada')
+        /* só o que é da carteira em visão: sem isto, ao entrar numa agência pequena
+           o medidor mostrava as visitas de TODAS as agências ("21 de 2") */
+        .filter(a => !N || !a.empresaId || ids.has(a.empresaId));
       const meu = T.meuUid, ehRm = T.perfil === 'rm';
       const agsMostra = ehRm ? ags.filter(a => a.gerenteUid === meu) : ags;
       const agsAno = agsMostra.filter(a => { const d = parseDataAg(a.data); return d && d >= anoIni; });
       const empVisSet = new Set(agsAno.map(a => a.empresaId).filter(Boolean));
-      const empVis = N ? Array.from(empVisSet).filter(id => ids.has(id)).length || empVisSet.size : empVisSet.size;
+      const empVis = N ? Array.from(empVisSet).filter(id => ids.has(id)).length : empVisSet.size;
       const ultVis = agsAno.map(a => parseDataAg(a.data)).filter(Boolean).sort((a, b) => b - a)[0];
       anel('vis', pct(empVis, N || empVisSet.size || 1));
       set('vis', 'big', `${empVis}${N ? ' de ' + N : ''}`);
@@ -416,8 +419,12 @@
       if (!ramos || !ramos.length) {
         const pronto = T && T.metasProntas;
         set('meta', 'big', pronto ? 'sem metas' : 'carregando…');
-        set('meta', 'gap', pronto ? 'cadastre as metas em Metas → Metas Anuais' : 'calculando produção × objetivo');
-        set('meta', 'alerta', '', 'ok'); anel('meta', 0); return;
+        set('meta', 'gap', pronto ? 'cadastre as metas desta agência em Metas → Metas Anuais' : 'calculando produção × objetivo');
+        set('meta', 'alerta', '', 'ok'); anel('meta', 0);
+        /* limpa a roda da visão anterior — senão os anéis da outra agência ficam na tela */
+        const grid = el.querySelector('.tt-ramos-grid'); if (grid) grid.remove();
+        const svg = el.querySelector('.tt-g-body svg'); if (svg) svg.style.display = '';
+        return;
       }
       const metaTot = T.metaTotalRet || ramos.reduce((s, r) => s + r.meta, 0);
       const realTot = T.realTotalRet || ramos.reduce((s, r) => s + r.real, 0);
