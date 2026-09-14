@@ -330,6 +330,12 @@
     async function calcular() {
       const T = window.__tt; if (!T || !root()) return;
       const emps = T.empresas || [], cots = T.cotacoes || [], ids = new Set(emps.map(e => e.id)), N = emps.length;
+      /* carteira ainda não chegou: mostra "carregando" em todos os medidores em vez de zeros */
+      if (!Array.isArray(T.empresas)) {
+        ['map', 'cot', 'vis', 'apr', 'fec'].forEach(k => { set(k, 'big', 'carregando…'); set(k, 'gap', ''); set(k, 'alerta', '', 'ok'); anel(k, 0); });
+        set('map', 's1', '—'); set('map', 's2', '—'); set('map', 'foot', '');
+        return;
+      }
 
       /* 1. mapeamento */
       const mapeadas = emps.filter(e => Object.values(e.produtos || {}).some(v => v && v !== 'vazia')).length;
@@ -365,6 +371,11 @@
 
       /* 3. VISITAS: agendamentos realizados no ano (fonte igual à do calendário) */
       const parseDataAg = str => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+      /* os agendamentos chegam depois do resto: sem eles, mostra "carregando" em vez de zero
+         (antes o medidor ficava em 0 até você trocar de menu e voltar) */
+      if (!Array.isArray(T.agendamentos)) {
+        set('vis', 'big', 'carregando…'); set('vis', 'gap', 'buscando as visitas da agenda'); set('vis', 'alerta', '', 'ok'); anel('vis', 0);
+      } else {
       const ags = (T.agendamentos || []).filter(a => a.status === 'realizada');
       const meu = T.meuUid, ehRm = T.perfil === 'rm';
       const agsMostra = ehRm ? ags.filter(a => a.gerenteUid === meu) : ags;
@@ -377,6 +388,7 @@
       set('vis', 'gap', agsAno.length ? `${agsAno.length} visita${agsAno.length > 1 ? 's' : ''} realizada${agsAno.length > 1 ? 's' : ''} em ${hoje.getFullYear()}` : `nenhuma visita realizada em ${hoje.getFullYear()}`);
       set('vis', 'alerta', ultVis ? (dias(ultVis) === 0 ? 'visita hoje' : `última visita há ${dias(ultVis)} dias`) : 'registre visitas na agenda', !ultVis || dias(ultVis) >= 7 ? 'urg' : 'ok');
       { const s6 = new Array(6).fill(0), base = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1); agsMostra.forEach(a => { const d = parseDataAg(a.data); if (!d || d < base) return; const i = (d.getFullYear() - base.getFullYear()) * 12 + d.getMonth() - base.getMonth(); if (i >= 0 && i < 6) s6[i]++; }); spark('vis', s6, AMB); }
+      }
 
       /* 4. APRESENTAÇÕES: leitura direta (mesma agência) */
       try {
@@ -401,14 +413,19 @@
     function objetivos() {
       const el = g('meta'); if (!el) return;
       const T = window.__tt, ramos = T && T.metasPorGrupo;
-      if (!ramos || !ramos.length) { set('meta', 'big', 'sem dados'); set('meta', 'gap', 'cadastre metas em Metas → Metas Anuais'); anel('meta', 0); return; }
+      if (!ramos || !ramos.length) {
+        const pronto = T && T.metasProntas;
+        set('meta', 'big', pronto ? 'sem metas' : 'carregando…');
+        set('meta', 'gap', pronto ? 'cadastre as metas em Metas → Metas Anuais' : 'calculando produção × objetivo');
+        set('meta', 'alerta', '', 'ok'); anel('meta', 0); return;
+      }
       const metaTot = T.metaTotalRet || ramos.reduce((s, r) => s + r.meta, 0);
       const realTot = T.realTotalRet || ramos.reduce((s, r) => s + r.real, 0);
       const pctTot = metaTot > 0 ? Math.round(realTot / metaTot * 100) : 0;
       anel('meta', Math.min(100, pctTot), pctTot >= 100 ? 'var(--teal)' : undefined);
       set('meta', 'big', pctTot + '% do objetivo');
       const noAlvo = ramos.filter(r => r.pct >= 100).length;
-      set('meta', 'gap', `${T.fmt ? T.fmt(realTot) : realTot} de ${T.fmt ? T.fmt(metaTot) : metaTot} · objetivo Retorno · ${ramos.length} ramos`);
+      set('meta', 'gap', `${T.fmt ? T.fmt(realTot) : realTot} de ${T.fmt ? T.fmt(metaTot) : metaTot} · objetivo Retorno · ${ramos.length} ramos` + (T.metasConsolidadas ? ' · todas as agências' : ''));
       const abaixo = ramos.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct)[0];
       set('meta', 'alerta', abaixo ? `${abaixo.nome.replace(/ .*/, '')} é o mais baixo (${Math.round(abaixo.pct)}%)` : 'todos os ramos no objetivo', noAlvo === ramos.length ? 'ok' : 'urg');
       /* roda de todos os ramos, cada anel = % produção vs objetivo da Retorno */
@@ -448,7 +465,7 @@
       return v.toLocaleString('pt-BR');
     }
     /* fallback antigo (termômetro) só se não houver dados por ramo */
-    function meta() { if (window.__tt && window.__tt.metasPorGrupo && window.__tt.metasPorGrupo.length) return objetivos(); const el = g('meta'); if (el) { set('meta', 'big', 'abra Relatório de Metas'); set('meta', 'gap', 'os objetivos por ramo aparecem após carregar as metas'); } }
+    function meta() { if (window.__tt && window.__tt.metasPorGrupo) return objetivos(); const el = g('meta'); if (el) { set('meta', 'big', 'carregando…'); set('meta', 'gap', 'calculando produção × objetivo'); set('meta', 'alerta', '', 'ok'); anel('meta', 0); } }
         window.__ttObjetivos = objetivos;
 
     function ligar() {
@@ -458,7 +475,7 @@
         el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
       });
       document.addEventListener('tt:dados', () => { calcular(); meta(); });
-      document.addEventListener('tt:metas', () => { if (window.__ttObjetivos) window.__ttObjetivos(); });
+      document.addEventListener('tt:metas', () => { calcular(); if (window.__ttObjetivos) window.__ttObjetivos(); });
       document.addEventListener('tt:metasret', () => { if (window.__ttObjetivos) window.__ttObjetivos(); });
       /* renomeia "Meta do mês" -> "Objetivos por ramo" */
       const hMeta = root()?.querySelector('.tt-gauge[data-k="meta"] .tt-g-head span'); if (hMeta) hMeta.textContent = 'Objetivos por ramo';
