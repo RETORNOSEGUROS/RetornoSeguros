@@ -3236,6 +3236,9 @@
           <h3><i data-lucide="handshake" class="w-5 h-5 text-rose-500"></i> Participação sobre a comissão <span style="font-size:11px; font-weight:600; color:#b45309; background:#fef3c7; border:1px solid #fde68a; padding:2px 8px; border-radius:100px; margin-left:6px;">só o admin edita</span></h3>
           <p class="cfg-desc">O <strong>piso</strong> é o que a pessoa recebe sobre a comissão de cada negócio <strong>independente da campanha</strong> — a negociação que você tem com cada agência, fora do jogo de pontos. O <strong>teto de bônus</strong> é quanto a campanha pode acrescentar em cima disso. Os quatro números valem para <strong>a agência em visão</strong>; em "Todas as agências" você edita o padrão de quem não tem número próprio.</p>
           <div id="fbPisoEscopo" style="font-size:12px; margin-bottom:12px;"></div>
+          <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:9px; padding:10px 13px; font-size:12px; color:#1e40af; margin-bottom:14px;">
+            📅 <strong>Vale a partir da data que você informar.</strong> Negócio fechado antes dessa data continua sendo pago pelo percentual que valia no dia — mudar aqui nunca recalcula o passado.
+          </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px;">
             <div class="form-group">
               <label class="form-label">Piso do RM (% da comissão)</label>
@@ -3258,7 +3261,14 @@
               <div style="font-size:11px;color:#94a3b8;margin-top:3px;">Vem do <strong>Total do chefe</strong>, no card Indicadores da campanha.</div>
             </div>
           </div>
-          <button class="btn-primary" style="margin-top:14px;" onclick="salvarParticipacao()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar participação</button>
+          <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin-top:14px;">
+            <div class="form-group" style="margin:0; max-width:200px;">
+              <label class="form-label">Valendo a partir de</label>
+              <input type="date" class="form-control" id="fbPisoVigencia">
+            </div>
+            <button class="btn-primary" onclick="salvarParticipacao()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar participação</button>
+          </div>
+          <div id="fbPisoHist" style="margin-top:16px;"></div>
         </div>
       </div>
 
@@ -5400,6 +5410,8 @@
     // (eram constantes cravadas no código: PART_RM_BASE / PART_CHEFE_BASE)
     partPisoRm: 24.6, partTetoRm: 4.1,
     partPisoChefe: 16.4, partTetoChefe: 7.38,
+    // Histórico de vigências do piso: cada negócio é pago pelo percentual do dia em que fechou.
+    participacaoHist: [],
     // Alvo de % da meta por GRUPO: mínimo para o grupo contar na diversificação (indicador
     // Produção) e base do objetivo da Retorno mostrado na home.
     metaPorGrupo: { auto: 0.5, dental: 100, saude: 50, re: 50, vida: 100, previdencia: 50 },
@@ -11383,7 +11395,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '253';
+  const APP_VERSAO = '254';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -14246,6 +14258,31 @@
   // (a antiga "porteira dos 50%" — abaixo disso ficaria só no piso — foi descartada em set/2026)
   // Agora vêm de Configurações → Fator & Bônus → "Participação sobre a comissão" (por agência).
   // Antes eram constantes cravadas aqui — o piso não aparecia em tela nenhuma.
+  // ===== VIGÊNCIA DA PARTICIPAÇÃO =====
+  // Mudar o piso NÃO pode mexer no que já foi fechado (e possivelmente já pago). Cada
+  // alteração entra no histórico com a data em que passa a valer; cada negócio é calculado
+  // pelo percentual que valia no dia em que ELE fechou.
+  // Formato: participacaoHist = [{ de: 'AAAA-MM-DD' | null, pisoRm, pisoChefe, porNome, em }]
+  //   'de: null' = a faixa original (vale para tudo que fechou antes da 1ª alteração).
+  function _partHist() {
+    const h = (FATOR_CFG && Array.isArray(FATOR_CFG.participacaoHist)) ? FATOR_CFG.participacaoHist.slice() : [];
+    return h.filter(f => f && (f.pisoRm != null || f.pisoChefe != null))
+            .sort((a, b) => String(a.de || '').localeCompare(String(b.de || '')));
+  }
+  // participação vigente numa data ISO (AAAA-MM-DD); sem histórico, usa a configuração atual
+  function _partNaData(iso) {
+    const atual = _partCfg();
+    const hist = _partHist();
+    if (!hist.length) return atual;
+    let vig = null;
+    hist.forEach(f => { if (!f.de || (iso && String(f.de) <= iso)) vig = f; });
+    if (!vig) vig = hist[0];
+    return {
+      pisoRm: vig.pisoRm != null ? Number(vig.pisoRm) : atual.pisoRm,
+      pisoChefe: vig.pisoChefe != null ? Number(vig.pisoChefe) : atual.pisoChefe,
+      tetoRm: atual.tetoRm, tetoChefe: atual.tetoChefe, de: vig.de || null
+    };
+  }
   const _partCfg = () => {
     const f = (typeof FATOR_CFG !== 'undefined' && FATOR_CFG) || {};
     const n = (v, def) => (v != null && !isNaN(v)) ? Number(v) : def;
@@ -14289,14 +14326,22 @@
     } catch (e) { console.warn('gestor fechados', e); }
 
     const _empresaRm = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRm[e.id] = e.rm);
-    const baseRm = {};
-    let baseTotal = 0, semComissao = 0;
+    const baseRm = {}, pisoRmAcum = {};
+    let baseTotal = 0, semComissao = 0, pisoChefeAcum = 0;
+    const _vigenciasUsadas = new Set();
     fechados.forEach(c => {
       if (!c.comissaoPct || c.comissaoPct <= 0) { semComissao++; return; }
       const uid = _empresaRm[c.empresaId] || c.fechadoPorUid;
       const baseComissao = (c.valor || 0) * (c.comissaoPct / 100);
       baseRm[uid] = (baseRm[uid] || 0) + baseComissao;
       baseTotal += baseComissao;
+      // PISO PELA DATA DO FECHAMENTO: mudar o percentual hoje não altera negócio antigo
+      const _dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
+      const _iso = _dt ? isoLocalDe(_dt) : null;
+      const _p = _partNaData(_iso);
+      _vigenciasUsadas.add(_p.de || 'original');
+      pisoRmAcum[uid] = (pisoRmAcum[uid] || 0) + baseComissao * (_p.pisoRm || 0) / 100;
+      pisoChefeAcum += baseComissao * (_p.pisoChefe || 0) / 100;
     });
 
     // ---- Pontos da campanha (pro pote do ranking) ----
@@ -14324,7 +14369,7 @@
       if (p.perfil === 'rm' && rmCov) {
         base = baseRm[uid] || 0;
         const ind = calcularIndicadores(rmCov.cov, covAg);
-        piso = base * _PART.pisoRm / 100;
+        piso = pisoRmAcum[uid] || 0;   // já somado negócio a negócio, pela vigência de cada um
         proprio = base * ind.ganhoProprio / 100;
         plus = base * ind.ganhoPlus / 100;
       }
@@ -14333,7 +14378,7 @@
     // Gerente-chefe: medido pela agência, sobre a base total
     const chefes = (EQUIPE_REAL || []).filter(p => normalizarPerfil(p.perfil) === 'chefe' && p.ativo !== false && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
     chefes.forEach(p => {
-      const piso = baseTotal * _PART.pisoChefe / 100;
+      const piso = pisoChefeAcum;    // idem: somado por negócio, pela vigência de cada um
       const proprio = baseTotal * indAgObj.ganhoChefe / 100;
       linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, total: piso + proprio });
     });
@@ -17124,6 +17169,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const n = (v, def) => (v != null && !isNaN(v)) ? Number(v) : def;
     return {
       metaPorGrupo: d.metaPorGrupo || base.metaPorGrupo,
+      participacaoHist: Array.isArray(d.participacaoHist) ? d.participacaoHist : (base.participacaoHist || []),
       pesosBlocos: d.pesosBlocos || base.pesosBlocos,
       pesosPreparo: d.pesosPreparo || base.pesosPreparo,
       metaAssumidas: n(d.metaAssumidas, base.metaAssumidas),
@@ -17170,6 +17216,23 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     set('fbPisoRm', FATOR_CFG.partPisoRm); set('fbPisoChefe', FATOR_CFG.partPisoChefe);
     const _ic = indCfg();   // o teto de bônus é o "Total do RM/chefe" dos indicadores (fonte única)
     set('fbTetoRm', _ic.totalRM); set('fbTetoChefe', _ic.totalChefe);
+    const elVig = document.getElementById('fbPisoVigencia');
+    if (elVig && !elVig.value) elVig.value = isoLocalDe(new Date());
+    const elHist = document.getElementById('fbPisoHist');
+    if (elHist) {
+      const h = _partHist();
+      elHist.innerHTML = !h.length
+        ? '<div style="font-size:11.5px; color:#94a3b8;">Sem alterações registradas — os percentuais acima valem para todo o período.</div>'
+        : `<div style="font-size:12px; font-weight:700; color:#334155; margin-bottom:6px;">Histórico de vigências</div>
+           <table class="cfg-table"><thead><tr><th>VALENDO A PARTIR DE</th><th style="text-align:center;">PISO RM</th><th style="text-align:center;">PISO CHEFE</th><th>QUEM ALTEROU</th></tr></thead><tbody>
+           ${h.slice().reverse().map(f => `<tr>
+             <td><strong>${f.de ? f.de.split('-').reverse().join('/') : 'desde o início'}</strong></td>
+             <td style="text-align:center; font-family:'JetBrains Mono',monospace;">${f.pisoRm != null ? f.pisoRm + '%' : '—'}</td>
+             <td style="text-align:center; font-family:'JetBrains Mono',monospace;">${f.pisoChefe != null ? f.pisoChefe + '%' : '—'}</td>
+             <td style="color:#64748b;">${f.porNome || '—'}</td>
+           </tr>`).join('')}</tbody></table>
+           <div style="font-size:11px; color:#94a3b8; margin-top:6px;">Cada negócio é pago pelo percentual vigente no dia em que ele foi fechado.</div>`;
+    }
     const esc = document.getElementById('fbPisoEscopo');
     if (esc) {
       const proprio = ['partPisoRm', 'partTetoRm', 'partPisoChefe', 'partTetoChefe'].some(_fatorProprio);
@@ -17220,6 +17283,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const num = id => { const v = parseFloat((document.getElementById(id) || {}).value); return isNaN(v) ? null : v; };
     const patch = { partPisoRm: num('fbPisoRm'), partPisoChefe: num('fbPisoChefe') };
     if (Object.values(patch).some(v => v === null || v < 0)) return alert('Preencha os dois pisos com números válidos.');
+    const vig = ((document.getElementById('fbPisoVigencia') || {}).value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vig)) return alert('Informe a partir de que data os novos percentuais passam a valer.');
+    // Monta o histórico: a 1ª alteração guarda o que valia antes como faixa "desde o início",
+    // para que nenhum negócio já fechado mude de valor.
+    const histAtual = _partHist();
+    const atual = _partCfg();
+    const novoHist = histAtual.filter(f => (f.de || '') !== vig);   // salvar de novo na mesma data substitui
+    if (!histAtual.length) novoHist.push({ de: null, pisoRm: atual.pisoRm, pisoChefe: atual.pisoChefe, porNome: 'configuração anterior' });
+    novoHist.push({ de: vig, pisoRm: patch.partPisoRm, pisoChefe: patch.partPisoChefe, porNome: autorNome(), em: new Date().toISOString() });
+    novoHist.sort((a, b) => String(a.de || '').localeCompare(String(b.de || '')));
+    patch.participacaoHist = novoHist;
+    const _hoje = isoLocalDe(new Date());
+    if (vig > _hoje && !confirm('Os novos percentuais só passam a valer em ' + vig.split('-').reverse().join('/') + '. Até lá continua valendo o percentual atual. Confirma?')) return;
     const ic = indCfg();
     const soma = patch.partPisoRm + patch.partPisoChefe + ic.totalRM + ic.totalChefe + (Number(FATOR_CFG.poteRanking) || 0);
     if (soma >= 100 && !confirm('Somando pisos, tetos de bônus e pote do ranking dá ' + soma.toFixed(2) + '% da comissão — no melhor cenário não sobraria nada para a corretora. Salvar mesmo assim?')) return;
