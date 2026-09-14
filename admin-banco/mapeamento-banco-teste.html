@@ -2286,7 +2286,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="tema-tech.css?v=22">
+  <link rel="stylesheet" href="tema-tech.css?v=23">
 </head>
 <body class="dark tema-tech">
 
@@ -3377,7 +3377,7 @@
       <div class="cfg-section" id="cfg-janelas">
         <div class="cfg-card">
           <h3><i data-lucide="hourglass" class="w-5 h-5 text-rose-500"></i> Prazos das etapas do funil</h3>
-          <p class="cfg-desc">Quantos dias um negócio pode ficar parado em cada etapa antes de <strong>declinar por inatividade</strong> (vira "perdida" e penaliza a agência). Este é o prazo que vale na campanha.</p>
+          <p class="cfg-desc">Quantos dias um negócio pode ficar parado em cada etapa antes de <strong>declinar por inatividade</strong> (vira "perdida" e penaliza a agência). Este é o prazo que vale na campanha. A lista abaixo segue <strong>as etapas do seu funil</strong> (Configurações → Etapas do Funil) — renomeou ou criou uma etapa, ela aparece aqui.</p>
           <div id="prazosGrid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px;"></div>
           <div style="margin-top:16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
             <div class="form-group" style="margin:0;">
@@ -10404,20 +10404,37 @@
       aviso.innerHTML = '⚠ <strong>Selecione uma agência específica no topo</strong> para editar e salvar os prazos (eles são definidos por agência). Os valores abaixo são os padrões.';
       grid.parentNode.insertBefore(aviso, grid);
     }
-    const etapas = [
-      { id: 'solicitada',        label: '⏳ Solicitada → Cotando', desc: 'Tempo máximo que pode ficar aguardando o corretor cotar.', cor: '#f59e0b' },
-      { id: 'cotando',           label: '🔍 Cotando → Enviada',    desc: 'Tempo máximo que o corretor pode ficar com a cotação em mãos.', cor: '#3b82f6' },
-      { id: 'enviada',           label: '📧 Enviada → Reunião',    desc: 'Tempo máximo que o cliente tem para responder após receber.', cor: '#0ea5e9' },
-      { id: 'reuniao_agendada',  label: '📅 Reunião → Decisão',    desc: 'Tempo máximo após a reunião para fechar ou descartar.', cor: '#8b5cf6' },
-      { id: 'analise',           label: '🤔 Em análise → Transmitir', desc: 'Tempo máximo que o cliente pode ficar analisando a proposta.', cor: '#a855f7' },
-      { id: 'transmitida',       label: '📤 Transmitido → Emissão', desc: 'Tempo máximo aguardando a seguradora emitir após transmitir.', cor: '#0891b2' }
-    ];
+    // As janelas seguem AS ETAPAS DO FUNIL DE VERDADE (Config → Etapas do Funil).
+    // Antes esta lista era fixa no código e não batia com o funil configurado: etapas
+    // renomeadas apareciam com o nome velho e etapas novas (ex.: "Coletando informações")
+    // não tinham onde informar o prazo — e o negócio ficava sem janela nenhuma.
+    const _descPadrao = {
+      solicitada:  'Tempo máximo desde a entrada no funil até avançar.',
+      informacoes: 'Tempo máximo esperando o cliente enviar os dados e documentos.',
+      cotando:     'Tempo máximo que o corretor pode ficar com a cotação em mãos.',
+      enviada:     'Tempo máximo que o cliente tem para responder após receber a proposta.',
+      reuniao_agendada: 'Tempo máximo após a reunião para fechar ou descartar.',
+      analise:     'Tempo máximo que o cliente pode ficar analisando a proposta.',
+      transmitida: 'Tempo máximo aguardando a seguradora emitir após transmitir.'
+    };
+    const _ativas = (typeof ETAPAS_FUNIL !== 'undefined' && ETAPAS_FUNIL.length) ? ETAPAS_FUNIL : [];
+    const etapas = _ativas.map((et, i) => {
+      const prox = _ativas[i + 1];
+      return {
+        id: et.id,
+        label: `${et.icon || '📍'} ${et.label} → ${prox ? prox.label : 'fechamento'}`,
+        desc: _descPadrao[et.id] || `Tempo máximo parado em "${et.label}" antes de declinar por inatividade.`,
+        cor: et.cor || '#64748b',
+        padrao: et.prazoDias || 7
+      };
+    });
+    if (!etapas.length) { grid.innerHTML = '<div style="color:#94a3b8;font-size:13px;">Cadastre as etapas em Configurações → Etapas do Funil.</div>'; return; }
     grid.innerHTML = etapas.map(e => `
       <div style="background: #f8fafc; border: 1.5px solid ${e.cor}33; border-radius: 10px; padding: 14px;">
         <div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">${e.label}</div>
         <div style="font-size: 11px; color: #64748b; margin-bottom: 10px; line-height: 1.4;">${e.desc}</div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <input type="number" class="form-control" id="prazo_${e.id}" value="${PRAZOS_CACHE[e.id] || PRAZOS_DEFAULT[e.id]}" min="1" max="180" style="padding: 6px 10px; font-size: 14px; font-weight: 700; max-width: 80px; text-align: center;">
+          <input type="number" class="form-control prazo-etapa" data-etapa="${e.id}" id="prazo_${e.id}" value="${(PRAZOS_CACHE && PRAZOS_CACHE[e.id]) || PRAZOS_DEFAULT[e.id] || e.padrao}" min="1" max="180" style="padding: 6px 10px; font-size: 14px; font-weight: 700; max-width: 80px; text-align: center;">
           <span style="font-size: 12px; color: #64748b;">dias</span>
         </div>
       </div>
@@ -10429,18 +10446,19 @@
   async function salvarPrazos() {
     if (!CTX.isAdmin) return alert('Apenas admin.');
     if (!CTX.agenciaId) return alert('⚠ Selecione uma agência específica no topo (não "Todas as agências") para configurar os prazos — eles são definidos por agência.');
+    // Salva o prazo de CADA etapa que está na tela — a lista vem do funil configurado,
+    // então etapas novas/renomeadas entram automaticamente.
     const dados = {
       agenciaId: CTX.agenciaId,
-      solicitada: parseInt(document.getElementById('prazo_solicitada').value) || PRAZOS_DEFAULT.solicitada,
-      cotando: parseInt(document.getElementById('prazo_cotando').value) || PRAZOS_DEFAULT.cotando,
-      enviada: parseInt(document.getElementById('prazo_enviada').value) || PRAZOS_DEFAULT.enviada,
-      reuniao_agendada: parseInt(document.getElementById('prazo_reuniao_agendada').value) || PRAZOS_DEFAULT.reuniao_agendada,
-      analise: parseInt((document.getElementById('prazo_analise') || {}).value) || PRAZOS_DEFAULT.analise,
-      transmitida: parseInt((document.getElementById('prazo_transmitida') || {}).value) || PRAZOS_DEFAULT.transmitida,
       penalidade: parseInt(document.getElementById('prazoPenalidade').value) || PRAZOS_DEFAULT.penalidade,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
       atualizadoPorUid: CTX.uid
     };
+    document.querySelectorAll('#prazosGrid .prazo-etapa').forEach(inp => {
+      const id = inp.getAttribute('data-etapa'); if (!id) return;
+      const v = parseInt(inp.value);
+      if (v > 0) dados[id] = v;
+    });
     try {
       await db.collection('mb_prazos').doc(CTX.agenciaId).set(dados, { merge: true });
       PRAZOS_CACHE = dados;
@@ -11407,7 +11425,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '249';
+  const APP_VERSAO = '250';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -23023,7 +23041,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     try {
       const snap = await db.collection('mb_agendamentos').get();
       AGENDAMENTOS = [];
-      snap.forEach(d => AGENDAMENTOS.push({ id: d.id, ...d.data() }));
+      // FILTRO DE AGÊNCIA: com uma agência em visão, visita de outra agência não entra.
+      // (registros antigos sem agenciaId continuam aparecendo — não dá pra saber de quem são)
+      snap.forEach(d => {
+        const a = { id: d.id, ...d.data() };
+        if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) return;
+        AGENDAMENTOS.push(a);
+      });
       // Auto-conclusão: visita agendada cujo horário já passou +1h vira "realizada" (vai pro histórico)
       const agora = Date.now();
       for (const a of AGENDAMENTOS) {
@@ -31482,6 +31506,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 </script>
 
 <script>document.addEventListener("DOMContentLoaded",()=>{document.body.classList.add("dark","tema-tech");});</script>
-<script src="tema-tech.js?v=22"></script>
+<script src="tema-tech.js?v=23"></script>
 </body>
 </html>
