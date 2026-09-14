@@ -2286,7 +2286,7 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="tema-tech.css?v=21">
+  <link rel="stylesheet" href="tema-tech.css?v=22">
 </head>
 <body class="dark tema-tech">
 
@@ -10379,7 +10379,7 @@
   // ============= PRAZOS POR ETAPA =============
   let PRAZOS_AGENCIA = null; // o que o admin salvou em Config → Prazos (fonte da verdade)
   async function carregarPrazos() {
-    if (!CTX.agenciaId) return PRAZOS_DEFAULT;
+    if (!CTX.agenciaId) { PRAZOS_AGENCIA = null; PRAZOS_CACHE = { ...PRAZOS_DEFAULT }; return PRAZOS_CACHE; }
     try {
       const snap = await db.collection('mb_prazos').doc(CTX.agenciaId).get();
       PRAZOS_AGENCIA = snap.exists ? snap.data() : {};
@@ -11407,7 +11407,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '248';
+  const APP_VERSAO = '249';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -12612,9 +12612,8 @@
   async function projecaoMetaRM() {
     try {
       const ano = new Date().getFullYear();
-      const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get();
-      if (!snap.exists) return null;
-      const metaDoc = snap.data();
+      const metaDoc = await metasAnuaisDoAno(ano);   // consolida quando não há agência escolhida
+      if (!metaDoc || !Object.keys(metaDoc.porGerente || {}).length) return null;
       const meuUid = uidEfetivo();
       const porGer = metaDoc.porGerente || {};
       const metaGrupo = {};
@@ -13163,6 +13162,51 @@
   }
   window._carregarCotacoesTodas = _carregarCotacoesTodas;
 
+  // ===== METAS ANUAIS: um leitor só, que entende a visão "Todas as agências" =====
+  // Com uma agência escolhida, lê o doc dela. Sem agência (admin vendo tudo), CONSOLIDA:
+  // lê todos os docs do ano e soma. Antes, cada tela fazia `if (CTX.agenciaId)` e, na visão
+  // consolidada, a meta vinha vazia — os objetivos da home apareciam zerados.
+  const _METAS_ANO_CACHE = {};
+  async function metasAnuaisDoAno(ano) {
+    const chave = (CTX.agenciaId || '*') + '_' + ano;
+    if (_METAS_ANO_CACHE[chave]) return _METAS_ANO_CACHE[chave];
+    let dados = { porGerente: {}, grupos: {}, producao: 0, agencias: 0, consolidado: false };
+    try {
+      if (CTX.agenciaId) {
+        const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get();
+        if (snap.exists) { const d = snap.data(); dados = { porGerente: d.porGerente || {}, grupos: d.grupos || {}, producao: d.producao || 0, agencias: 1, consolidado: false }; }
+      } else {
+        // visão consolidada: soma o ano inteiro de todas as agências
+        const snap = await db.collection('mb_metas_anuais').get();
+        const sufixo = '_' + ano;
+        snap.forEach(doc => {
+          if (doc.id.slice(-sufixo.length) !== sufixo) return;
+          const d = doc.data() || {};
+          dados.agencias++;
+          dados.producao += (d.producao || 0);
+          // metas por gerente: o uid é único por pessoa, então basta reunir
+          Object.entries(d.porGerente || {}).forEach(([uid, porGrupo]) => {
+            dados.porGerente[uid] = dados.porGerente[uid] || {};
+            Object.entries(porGrupo || {}).forEach(([gid, v]) => { dados.porGerente[uid][gid] = (dados.porGerente[uid][gid] || 0) + (v || 0); });
+          });
+          // metas por grupo da agência (fallback quando não há meta por gerente): soma
+          Object.entries(d.grupos || {}).forEach(([gid, obj]) => {
+            const v = (obj && typeof obj === 'object') ? (obj.prod || 0) : (obj || 0);
+            const atual = dados.grupos[gid];
+            const base = (atual && typeof atual === 'object') ? (atual.prod || 0) : (atual || 0);
+            dados.grupos[gid] = { prod: base + v };
+          });
+        });
+        dados.consolidado = true;
+      }
+    } catch (e) { console.warn('metas anuais', e); }
+    _METAS_ANO_CACHE[chave] = dados;
+    return dados;
+  }
+  function limparCacheMetasAno() { Object.keys(_METAS_ANO_CACHE).forEach(k => delete _METAS_ANO_CACHE[k]); }
+  window.metasAnuaisDoAno = metasAnuaisDoAno;
+  window.limparCacheMetasAno = limparCacheMetasAno;
+
   async function _dadosGrupoDoAno(ano, escopoUid, listaEmpresas) {
     const ramoGrupo = {}; (RAMOS_ALL || PRODUTOS || []).forEach(r => ramoGrupo[r.id] = r.grupoId);
     const inicioAno = new Date(ano, 0, 1), fimAno = new Date(ano, 11, 31, 23, 59, 59);
@@ -13225,10 +13269,8 @@
     // Antes usava direto meta.grupos — quando os dois não batiam, a campanha
     // dividia por uma meta diferente da do Relatório de Metas.
     try {
-      const docId = `${CTX.agenciaId}_${ano}`;
-      const snap = await db.collection('mb_metas_anuais').doc(docId).get();
-      if (snap.exists) {
-        const meta = snap.data();
+      const meta = await metasAnuaisDoAno(ano);
+      if (meta) {
         if (escopoUid && meta.porGerente && meta.porGerente[escopoUid]) {
           // meta do RM por grupo
           Object.entries(meta.porGerente[escopoUid]).forEach(([gid, v]) => { metaGrupo[gid] = (metaGrupo[gid] || 0) + (v || 0); });
@@ -22057,11 +22099,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const kpis = document.getElementById('rmKpis');
     const cont = document.getElementById('rmConteudo');
     if (!kpis || !cont) return;
-    if (!CTX.agenciaId) {
-      kpis.innerHTML = '';
-      cont.innerHTML = '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px;color:#78350f;font-size:13px;">⚠ Selecione uma agência específica no topo para ver o relatório de metas.</div>';
-      return;
-    }
+    // Sem agência escolhida NÃO é mais um beco sem saída: a visão vira CONSOLIDADA
+    // (todas as agências somadas). Antes esta função desistia aqui — e como é ela que
+    // alimenta o card "Objetivos por ramo" da home, os objetivos ficavam zerados até
+    // escolher uma agência no topo.
+    const _consolidado = !CTX.agenciaId;
     // Escopo (RM vê só ele; chefe/admin/seguradora vê agência + cada gerente)
     const selE = document.getElementById('relMetasEscopo');
     const podeVerTodos = CTX.isAdmin || perfilEfetivo() === 'chefe' || perfilEfetivo() === 'seguradora';
@@ -22070,7 +22112,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // Reconstrói SEMPRE (trocar de agência troca os gerentes); mantém a escolha se ela ainda existir
       const _valAnt = selE.value;
       let opts = '';
-      if (podeVerTodos) opts += '<option value="agencia">Agência (soma de todos)</option>';
+      if (podeVerTodos) opts += `<option value="agencia">${_consolidado ? 'Todas as agências (consolidado)' : 'Agência (soma de todos)'}</option>`;
       opts += gerentes.map(p => `<option value="${p.uid}">${p.nome}</option>`).join('');
       if (!gerentes.some(p => p.uid === CTX.uid)) opts = `<option value="${CTX.uid}">${CTX.nome} (eu)</option>` + opts;
       selE.innerHTML = opts;
@@ -22084,8 +22126,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (RM_PERIODO === 'mensal') document.getElementById('rmMesLabel').textContent = `${MESES_PT[RM_MES.getMonth()]} ${RM_MES.getFullYear()}`;
 
     // Meta doc
+    // Sem agência escolhida (admin vendo tudo), as metas vêm CONSOLIDADAS de todas as agências.
     let metaDoc = {};
-    try { if (CTX.agenciaId) { const snap = await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${ano}`).get(); metaDoc = snap.exists ? snap.data() : {}; } } catch (e) {}
+    try { metaDoc = await metasAnuaisDoAno(ano); } catch (e) { metaDoc = {}; }
     const porGer = metaDoc.porGerente || {};
     const metaGrupo = {};
     if (escopo === 'agencia') {
@@ -22273,12 +22316,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         metasPorGrupo: _porGrupo,
         metaTotalRet: _metaRetTot,                                             // objetivo Retorno somado
         realTotalRet: _realTot,
-        metaTotalAgencia: Object.values(metaGrupo).reduce((s, v) => s + v, 0)   // referência (meta da agência)
+        metaTotalAgencia: Object.values(metaGrupo).reduce((s, v) => s + v, 0),  // referência (meta da agência)
+        metasProntas: true,                                                    // já calculou (vazio = não há metas mesmo)
+        metasConsolidadas: !CTX.agenciaId                                      // visão "Todas as agências"
       });
       document.dispatchEvent(new CustomEvent('tt:metasret'));
     } catch (e) { console.warn('tema-tech metasret', e); }
+    if (_consolidado) html += `<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:12.5px;color:#3730a3;">
+      🏦 <strong>Visão consolidada</strong> — somando as metas e a produção de todas as agências. Escolha uma agência no topo para ver só ela.
+    </div>`;
     html += `<div style="background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;">
-      <h3 style="margin:0 0 14px;font-size:15px;font-weight:800;color:#0f172a;">Meta × realizado por grupo <small style="font-weight:500;color:#94a3b8;">· ano ${ano}</small></h3>`;
+      <h3 style="margin:0 0 14px;font-size:15px;font-weight:800;color:#0f172a;">Meta × realizado por grupo <small style="font-weight:500;color:#94a3b8;">· ano ${ano}${_consolidado ? ' · todas as agências' : ''}</small></h3>`;
     let algum = false;
     (GRUPOS || []).forEach(g => { const m = metaGrupo[g.id] || 0, r = realGrupo[g.id] || 0; if (m === 0 && r === 0) return; algum = true; html += barra(g.nome, g.cor, m, r); });
     // Grupos não cadastrados (ex.: previdência sem grupo) → "Outros"
@@ -23767,7 +23815,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     }
 
     mostrarLoading('Recarregando dados da agência...');
+    // caches que são POR AGÊNCIA — sem limpar, a nova visão herdava números da anterior
     try {
+      if (typeof limparCacheMetasAno === 'function') limparCacheMetasAno();
+      if (typeof _ACOES_CACHE !== 'undefined') _ACOES_CACHE = null;
+      if (typeof _COV !== 'undefined') _COV = null;
+      if (typeof _COMPARATIVO_CACHE !== 'undefined') _COMPARATIVO_CACHE = null;
+      if (typeof _COTS_CACHE !== 'undefined') _COTS_CACHE = null;
+      window._CAMP_COVAG = null; window._CAMP_COVMINHA = null;
+      AGENDAMENTOS = [];
+    } catch (e) {}
+    try {
+      await carregarPrazos();
       await carregarEquipeReal();
       await Promise.all([
         carregarEmpresasReais(),
@@ -23780,8 +23839,22 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       renderRanking();
       atualizarMetaSemana();
       atualizarKpisEquipe();
-      const equipeAtiva = document.getElementById('screen-equipe').classList.contains('active');
-      if (equipeAtiva) renderEquipe();
+      // A tela aberta precisa ser redesenhada com os dados da nova visão — antes só
+      // empresas/ranking eram atualizados e a home continuava mostrando a agência anterior
+      // (ou os zeros da carga inicial) até você trocar de menu e voltar.
+      try {
+        const ativa = (document.querySelector('.screen.active') || {}).id || '';
+        const tela = ativa.replace('screen-', '');
+        if (tela === 'home' && typeof renderHome === 'function') renderHome();
+        else if (tela === 'cotacoes' && typeof carregarERenderCotacoes === 'function') carregarERenderCotacoes();
+        else if (tela === 'campanha' && typeof renderCampanha === 'function') renderCampanha();
+        else if (tela === 'relmetas' && typeof renderRelMetas === 'function') renderRelMetas();
+        else if (tela === 'equipe' && typeof renderEquipe === 'function') renderEquipe();
+        else if (tela === 'oportunidades' && typeof renderOportunidades === 'function') renderOportunidades();
+        else if (tela === 'producao' && typeof carregarERenderProducao === 'function') carregarERenderProducao();
+        // a home alimenta o cockpit; recalcula as metas/objetivos da nova visão
+        if (typeof renderRelMetasDados === 'function') renderRelMetasDados().catch(() => {});
+      } catch (e) { console.warn('trocarAgencia render', e); }
       lucide.createIcons();
     } catch (e) {
       console.error(e);
@@ -30876,9 +30949,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // ===== Meta anual: da agência e do RM (total ou do grupo selecionado) =====
       let metaAgencia = 0, metaMinhaRM = 0;
       try {
-        const metaDoc = CTX.agenciaId ? await db.collection('mb_metas_anuais').doc(`${CTX.agenciaId}_${fAno}`).get() : null;
-        if (metaDoc && metaDoc.exists) {
-          const md = metaDoc.data();
+        const md = await metasAnuaisDoAno(fAno);   // consolida quando não há agência escolhida
+        if (md && (Object.keys(md.porGerente || {}).length || Object.keys(md.grupos || {}).length)) {
           const _valGrupo = obj => (obj && typeof obj === 'object') ? (obj.prod || 0) : (obj || 0);
           if (fGrupo) {
             metaAgencia = _valGrupo(md.grupos && md.grupos[fGrupo]);
@@ -31410,6 +31482,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 </script>
 
 <script>document.addEventListener("DOMContentLoaded",()=>{document.body.classList.add("dark","tema-tech");});</script>
-<script src="tema-tech.js?v=21"></script>
+<script src="tema-tech.js?v=22"></script>
 </body>
 </html>
