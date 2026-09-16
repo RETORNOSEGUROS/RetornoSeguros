@@ -11430,7 +11430,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '259';
+  const APP_VERSAO = '260';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -25640,6 +25640,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   let COBERTURAS_DOCS = [];
   let COB_OK = false;
   const COB_ABERTOS = new Set();   // ramos expandidos na tela Clientes & Coberturas
+  let COB_FECHADOS_FUNIL = [];     // mb_cotacoes com status 'fechada' (rede de segurança da tela)
 
   const CAT_COBERTURAS = {
     empresarial: { cob: ['Incêndio, raio e explosão (básica)','Danos elétricos','Vendaval, furacão e granizo','Roubo e furto qualificado de bens','Roubo e furto de valores','Quebra de vidros','Equipamentos eletrônicos','Equipamentos móveis','Lucros cessantes','Perda ou pagamento de aluguel','RC operações','Despesas fixas','Tumultos e greves','Impacto de veículos','Desmoronamento','Vazamento de tubulações e sprinklers'],
@@ -25678,17 +25679,46 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return 'generico';
   }
 
-  // Negócios fechados = produto com statusVisual fechada/conosco em alguma empresa
+  // Negócios fechados — TRÊS fontes, para nenhuma apólice ficar de fora:
+  //  1) o mapeamento do produto (statusVisual fechada/conosco);
+  //  2) cada APÓLICE ADICIONAL do produto (OP, 2ª apólice do mesmo ramo) — o fechamento
+  //     grava nelas e NÃO carimba o mapeamento principal;
+  //  3) os negócios fechados no funil (mb_cotacoes status 'fechada') — rede de segurança
+  //     para quando o carimbo no mapeamento não aconteceu por qualquer motivo.
+  // A chave é empresa|ramo|apólice: a mesma apólice nunca aparece duas vezes.
   function _cobFechados(){
-    const out = [];
+    const out = [], vistos = new Set();
     const ramos = (typeof RAMOS_ALL !== 'undefined' && RAMOS_ALL.length ? RAMOS_ALL : PRODUTOS);
+    const _add = (e, rm, pd, apRef, apelido, origem) => {
+      const k = e.id + '|' + rm.id + '|' + (apRef || '');
+      if (vistos.has(k)) return;
+      vistos.add(k);
+      out.push({ empresa: e, ramo: rm, pd: pd || {}, apRef: apRef || null, apelido: apelido || null, origem: origem });
+    };
+    const _nosso = st => st === 'fechada' || st === 'conosco';
     (EMPRESAS || []).forEach(e => {
+      const dados = e.produtosDados || {};
       ramos.forEach(rm => {
-        const pd = (e.produtosDados || {})[rm.id];
-        if (pd && (pd.statusVisual === 'fechada' || pd.statusVisual === 'conosco')) {
-          out.push({ empresa: e, ramo: rm, pd: pd });
-        }
+        const pd = dados[rm.id];
+        if (!pd) return;
+        if (_nosso(pd.statusVisual)) _add(e, rm, pd, null, null, 'mapa');
+        (Array.isArray(pd.apolices) ? pd.apolices : []).forEach(apx => {
+          if (apx && apx.ap && _nosso(apx.statusVisual)) _add(e, rm, apx, apx.ap, apx.apelido || 'apólice adicional', 'apolice');
+        });
       });
+    });
+    (COB_FECHADOS_FUNIL || []).forEach(c => {
+      const e = (EMPRESAS || []).find(x => x.id === c.empresaId);
+      if (!e) return;
+      const rm = ramos.find(r => r.id === c.produtoId);
+      if (!rm) return;
+      const apRef = c.apoliceRef || null;
+      const base = apRef ? {} : Object.assign({}, (e.produtosDados || {})[c.produtoId] || {});
+      if (c.seguradora) base.seguradora = c.seguradora;
+      if (c.vigenciaInicio) base.vigenciaInicio = c.vigenciaInicio;
+      if (c.vigenciaFim) base.vigenciaFim = c.vigenciaFim;
+      if (c.valor) { base.premioAnual = c.valor; base.valorFechado = c.valor; }
+      _add(e, rm, base, apRef, c.apoliceApelido || null, 'funil');
     });
     return out;
   }
@@ -25708,8 +25738,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return '';
   }
   window._isoData = _isoData;
-  function _cobDocsDe(empresaId, prodId){
-    return COBERTURAS_DOCS.filter(d => d.empresaId === empresaId && d.produtoId === prodId)
+  // apRef separa as apólices do mesmo ramo (a principal tem apRef null)
+  function _cobDocsDe(empresaId, prodId, apRef){
+    const alvo = apRef || null;
+    return COBERTURAS_DOCS.filter(d => d.empresaId === empresaId && d.produtoId === prodId && ((d.apRef || null) === alvo))
       .sort((a,b) => String(_isoData(b.vigenciaFim)||'').localeCompare(String(_isoData(a.vigenciaFim)||'')));
   }
   function _vigStatus(fim){
@@ -25728,6 +25760,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       snap.forEach(d => COBERTURAS_DOCS.push({ id: d.id, ...d.data() }));
       COB_OK = true;
     } catch (e) { console.warn('coberturas', e); }
+    // Negócios fechados direto do funil: garante que a apólice apareça aqui mesmo quando
+    // o fechamento gravou numa apólice adicional ou não carimbou o mapeamento.
+    try {
+      const sf = await db.collection('mb_cotacoes').where('status', '==', 'fechada').get();
+      COB_FECHADOS_FUNIL = [];
+      sf.forEach(d => COB_FECHADOS_FUNIL.push({ id: d.id, ...d.data() }));
+    } catch (e) { console.warn('fechados do funil', e); COB_FECHADOS_FUNIL = []; }
   }
 
   async function renderCoberturas(){
@@ -25748,13 +25787,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     // anota cada fechado com o cadastro mais recente
     const linhas = fechados.map(f => {
-      const docs = _cobDocsDe(f.empresa.id, f.ramo.id);
+      const docs = _cobDocsDe(f.empresa.id, f.ramo.id, f.apRef);
       const atual = docs[0] || null;
       const vigFim = _isoData((atual && atual.vigenciaFim) || f.pd.vigenciaFim || '');
       return { ...f, docs, atual, vigFim, vigSt: _vigStatus(vigFim) };
     }).filter(l => {
       if (fRamo && l.ramo.id !== fRamo) return false;
-      if (busca && !_normCob(l.empresa.nome).includes(busca)) return false;
+      if (busca && !_normCob(l.empresa.nome + ' ' + (l.apelido || '')).includes(busca)) return false;
       if (fSt === 'pendente' && l.atual) return false;
       if (fSt === 'cadastrada' && !l.atual) return false;
       if (fSt === 'vencendo' && l.vigSt !== 'vencendo') return false;
@@ -25764,8 +25803,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     // KPIs
     const tot = fechados.length;
-    const cad = fechados.filter(f => _cobDocsDe(f.empresa.id, f.ramo.id).length).length;
-    const venc60 = fechados.filter(f => { const d=_cobDocsDe(f.empresa.id,f.ramo.id)[0]; const fim=(d&&d.vigenciaFim)||f.pd.vigenciaFim; return _vigStatus(fim)==='vencendo'; }).length;
+    const cad = fechados.filter(f => _cobDocsDe(f.empresa.id, f.ramo.id, f.apRef).length).length;
+    const venc60 = fechados.filter(f => { const d=_cobDocsDe(f.empresa.id,f.ramo.id,f.apRef)[0]; const fim=(d&&d.vigenciaFim)||f.pd.vigenciaFim; return _vigStatus(fim)==='vencendo'; }).length;
     const kpis = document.getElementById('cobKpis');
     if (kpis) kpis.innerHTML = [
       ['💼','Negócios fechados', tot, '#4f46e5'],
@@ -25821,15 +25860,16 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const segTxt = (l.atual && l.atual.seguradora) || l.pd.seguradora || l.pd.seguradoraAtual || '';
         return '<div style="display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid #f1f5f9; flex-wrap:wrap;">'+
           '<div style="flex:1; min-width:200px;">'+
-            '<div style="font-weight:800; font-size:14.5px; color:#0f172a;">'+_esc(l.empresa.nome)+'</div>'+
+            '<div style="font-weight:800; font-size:14.5px; color:#0f172a;">'+_esc(l.empresa.nome)+
+              (l.apelido ? ' <span style="background:#eef2ff; color:#4338ca; font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:100px; vertical-align:middle;">'+_esc(l.apelido)+'</span>' : '')+'</div>'+
             '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:3px;">'+stVig+(segTxt?'<span style="font-size:11.5px; color:#64748b;">'+_esc(segTxt)+'</span>':'')+'</div>'+
             '<div style="margin-top:3px;">'+stCad+'</div>'+
           '</div>'+
           '<div style="display:flex; gap:7px; flex-wrap:wrap;">'+
             (l.atual
               ? '<button class="btn-mini" style="color:#4338ca;" onclick="verCobertura(\''+l.atual.id+'\')">👁 Ver coberturas</button>'
-              : '<button class="btn-mini" style="background:#4f46e5; color:#fff; border-color:#4f46e5;" onclick="abrirCobertura(\''+l.empresa.id+'\',\''+l.ramo.id+'\')">➕ Cadastrar apólice</button>')+
-            (l.atual ? '<button class="btn-mini" onclick="abrirCobertura(\''+l.empresa.id+'\',\''+l.ramo.id+'\')" title="Nova vigência (renovação)">↻ Nova vigência</button>' : '')+
+              : '<button class="btn-mini" style="background:#4f46e5; color:#fff; border-color:#4f46e5;" onclick="abrirCobertura(\''+l.empresa.id+'\',\''+l.ramo.id+'\',\'\',\''+(l.apRef||'')+'\')">➕ Cadastrar apólice</button>')+
+            (l.atual ? '<button class="btn-mini" onclick="abrirCobertura(\''+l.empresa.id+'\',\''+l.ramo.id+'\',\'\',\''+(l.apRef||'')+'\')" title="Nova vigência (renovação)">↻ Nova vigência</button>' : '')+
             '<button class="btn-mini" disabled title="Leitura automática do PDF — em breve" style="opacity:.45; cursor:not-allowed;">📄 Ler PDF · em breve</button>'+
           '</div>'+
         '</div>';
@@ -26079,13 +26119,18 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     try { return 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
     catch (e) { return 'R$ ' + v; }
   }
-  function abrirCobertura(empresaId, prodId, docId){
+  function abrirCobertura(empresaId, prodId, docId, apRef){
     if (!ehCorretorReal()) return;
     const e = EMPRESAS.find(x => x.id === empresaId); if (!e) return;
     const ramos = (typeof RAMOS_ALL !== 'undefined' && RAMOS_ALL.length ? RAMOS_ALL : PRODUTOS);
     const rm = ramos.find(x => x.id === prodId) || { id: prodId, nome: prodId, icon: '📦' };
-    const pd = (e.produtosDados || {})[prodId] || {};
     const doc = docId ? COBERTURAS_DOCS.find(d => d.id === docId) : null;
+    apRef = apRef || (doc && doc.apRef) || null;
+    // pega a MESMA linha da lista — assim o pré-preenchimento vem da apólice certa
+    // (principal, adicional ou direto do negócio fechado no funil)
+    const linha = _cobFechados().find(l => l.empresa.id === empresaId && l.ramo.id === prodId && (l.apRef || null) === apRef);
+    const pd = (linha && linha.pd) || (e.produtosDados || {})[prodId] || {};
+    const apelido = (linha && linha.apelido) || (doc && doc.apelido) || null;
     const cat = CAT_COBERTURAS[_cobKey(rm)] || CAT_COBERTURAS.generico;
     COBX_NOVOS = []; COB_IMPORT = null;
     const _esc = t => String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -26102,7 +26147,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     m.className = 'cad-modal open'; m.id = 'modalCobertura';
     m.innerHTML = '<div class="cad-modal-bg" onclick="document.getElementById(\'modalCobertura\').remove()"></div>'+
       '<div class="cad-modal-panel" style="max-width:640px;">'+
-        '<div class="cad-modal-head"><h2>'+(rm.icon||'📦')+' '+_esc(rm.nome)+' — '+(doc?'editar apólice':'cadastrar apólice')+'</h2><p>'+_esc(e.nome)+'</p></div>'+
+        '<div class="cad-modal-head"><h2>'+(rm.icon||'📦')+' '+_esc(rm.nome)+(apelido ? ' · '+_esc(apelido) : '')+' — '+(doc?'editar apólice':'cadastrar apólice')+'</h2><p>'+_esc(e.nome)+'</p></div>'+
         '<div class="cad-modal-body" style="max-height:68vh; overflow-y:auto;">'+
           (!doc && (pd.seguradora || pd.vigenciaFim || pd.premioAnual || pd.valorFechado)
             ? '<div style="background:#ecfeff; border:1px solid #67e8f9; border-radius:10px; padding:10px 13px; font-size:12px; color:#155e75; margin-bottom:14px;">✓ <strong>Já preenchemos o que veio do funil</strong> — seguradora, vigência e prêmio do negócio fechado. Confira e complete o resto.</div>'
@@ -26159,7 +26204,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         '</div>'+
         '<div class="cad-modal-foot">'+
           '<button class="btn-secondary" onclick="document.getElementById(\'modalCobertura\').remove()">Cancelar</button>'+
-          '<button class="btn-primary" id="cobSalvarBtn" onclick="salvarCobertura(\''+empresaId+'\',\''+prodId+'\','+(doc?('\''+doc.id+'\''):'null')+')">💾 Salvar apólice</button>'+
+          '<button class="btn-primary" id="cobSalvarBtn" onclick="salvarCobertura(\''+empresaId+'\',\''+prodId+'\','+(doc?('\''+doc.id+'\''):'null')+',\''+(apRef||'')+'\',\''+_esc(apelido||'')+'\')">💾 Salvar apólice</button>'+
         '</div>'+
       '</div>';
     document.body.appendChild(m);
@@ -26359,7 +26404,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.cobTirarAnexoSalvo = cobTirarAnexoSalvo;
 
-  async function salvarCobertura(empresaId, prodId, docId){
+  async function salvarCobertura(empresaId, prodId, docId, apRef, apelido){
     const e = EMPRESAS.find(x => x.id === empresaId);
     const ramos = (typeof RAMOS_ALL !== 'undefined' && RAMOS_ALL.length ? RAMOS_ALL : PRODUTOS);
     const rm = ramos.find(x => x.id === prodId) || { id: prodId, nome: prodId };
@@ -26412,6 +26457,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const dados = {
         empresaId: empresaId, empresaNome: e ? e.nome : '',
         produtoId: prodId, produtoNome: rm.nome, produtoIcon: rm.icon || '📦',
+        apRef: apRef || null, apelido: apelido || null,
         agenciaId: (e && e.agenciaId) || CTX.agenciaId || null,
         seguradora: (document.getElementById('cobSeguradora').value || '').trim() || null,
         numeroApolice: (document.getElementById('cobNumero').value || '').trim() || null,
@@ -26477,7 +26523,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         '<div class="cad-modal-foot">'+
           '<button class="btn-secondary" style="color:#dc2626;" onclick="excluirCobertura(\''+doc.id+'\')">🗑 Excluir</button>'+
           '<button class="btn-secondary" onclick="document.getElementById(\'modalVerCob\').remove()">Fechar</button>'+
-          '<button class="btn-primary" onclick="document.getElementById(\'modalVerCob\').remove(); abrirCobertura(\''+doc.empresaId+'\',\''+doc.produtoId+'\',\''+doc.id+'\')">✏️ Editar</button>'+
+          '<button class="btn-primary" onclick="document.getElementById(\'modalVerCob\').remove(); abrirCobertura(\''+doc.empresaId+'\',\''+doc.produtoId+'\',\''+doc.id+'\',\''+(doc.apRef||'')+'\')">✏️ Editar</button>'+
         '</div>'+
       '</div>';
     document.body.appendChild(m);
