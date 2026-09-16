@@ -11395,7 +11395,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '256';
+  const APP_VERSAO = '257';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -25655,16 +25655,33 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     });
     return out;
   }
+  // Normaliza qualquer data do sistema para ISO (aaaa-mm-dd).
+  // O funil grava dd/mm/aaaa e o <input type="date"> devolve aaaa-mm-dd — sem isto
+  // a comparação de string dava "vencida" para apólices futuras (ex.: 18/03/2027).
+  function _isoData(v){
+    if (!v) return '';
+    if (v && typeof v.toDate === 'function') { try { v = v.toDate(); } catch(e){} }
+    if (v instanceof Date && !isNaN(v)) {
+      return v.getFullYear() + '-' + String(v.getMonth()+1).padStart(2,'0') + '-' + String(v.getDate()).padStart(2,'0');
+    }
+    const t = String(v).trim();
+    let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);        if (m) return m[1]+'-'+m[2]+'-'+m[3];
+    m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t);     if (m) return m[3]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0');
+    m = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(t);       if (m) return m[3]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0');
+    return '';
+  }
+  window._isoData = _isoData;
   function _cobDocsDe(empresaId, prodId){
     return COBERTURAS_DOCS.filter(d => d.empresaId === empresaId && d.produtoId === prodId)
-      .sort((a,b) => String(b.vigenciaFim||'').localeCompare(String(a.vigenciaFim||'')));
+      .sort((a,b) => String(_isoData(b.vigenciaFim)||'').localeCompare(String(_isoData(a.vigenciaFim)||'')));
   }
   function _vigStatus(fim){
-    if (!fim) return 'sem';
+    const iso = _isoData(fim);
+    if (!iso) return 'sem';
     const hoje = new Date().toISOString().slice(0,10);
-    if (fim < hoje) return 'vencida';
+    if (iso < hoje) return 'vencida';
     const em60 = new Date(Date.now() + 60*86400000).toISOString().slice(0,10);
-    return fim <= em60 ? 'vencendo' : 'ativa';
+    return iso <= em60 ? 'vencendo' : 'ativa';
   }
 
   async function carregarCoberturas(){
@@ -25696,7 +25713,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const linhas = fechados.map(f => {
       const docs = _cobDocsDe(f.empresa.id, f.ramo.id);
       const atual = docs[0] || null;
-      const vigFim = (atual && atual.vigenciaFim) || f.pd.vigenciaFim || '';
+      const vigFim = _isoData((atual && atual.vigenciaFim) || f.pd.vigenciaFim || '');
       return { ...f, docs, atual, vigFim, vigSt: _vigStatus(vigFim) };
     }).filter(l => {
       if (fRamo && l.ramo.id !== fRamo) return false;
@@ -25727,7 +25744,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const porRamo = {};
     linhas.forEach(l => { (porRamo[l.ramo.id] = porRamo[l.ramo.id] || { ramo: l.ramo, itens: [] }).itens.push(l); });
     const _esc = t => String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-    const _dBR = d => d ? d.split('-').reverse().join('/') : '—';
+    const _dBR = d => { const i = _isoData(d); return i ? i.split('-').reverse().join('/') : '—'; };
 
     cont.innerHTML = Object.values(porRamo).map(g => {
       g.itens.sort((a,b) => (peso[a.vigSt]-peso[b.vigSt]) || String(a.empresa.nome).localeCompare(String(b.empresa.nome)));
@@ -25739,7 +25756,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const stCad = l.atual
           ? '<span style="font-size:11px; color:#059669; font-weight:700;">✅ apólice cadastrada'+(l.docs.length>1 ? ' · '+(l.docs.length-1)+' vigência(s) anterior(es)' : '')+'</span>'
           : '<span style="font-size:11px; color:#d97706; font-weight:700;">📝 sem cadastro de coberturas</span>';
-        const segTxt = (l.atual && l.atual.seguradora) || l.pd.seguradoraAtual || '';
+        const segTxt = (l.atual && l.atual.seguradora) || l.pd.seguradora || l.pd.seguradoraAtual || '';
         return '<div style="display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid #f1f5f9; flex-wrap:wrap;">'+
           '<div style="flex:1; min-width:200px;">'+
             '<div style="font-weight:800; font-size:14.5px; color:#0f172a;">'+_esc(l.empresa.nome)+'</div>'+
@@ -25764,6 +25781,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
   // ---------- cadastro / edição ----------
   let COBX_NOVOS = [];   // PDFs pendentes deste cadastro
+  // Prêmio que veio do funil (valor fechado), já formatado para o campo em R$
+  function _cobPremioDoFunil(pd){
+    const v = Number((pd && (pd.premioAnual != null ? pd.premioAnual : pd.valorFechado)) || 0);
+    if (!v || isNaN(v)) return '';
+    try { return 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    catch (e) { return 'R$ ' + v; }
+  }
   function abrirCobertura(empresaId, prodId, docId){
     if (!ehCorretorReal()) return;
     const e = EMPRESAS.find(x => x.id === empresaId); if (!e) return;
@@ -25789,12 +25813,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       '<div class="cad-modal-panel" style="max-width:640px;">'+
         '<div class="cad-modal-head"><h2>'+(rm.icon||'📦')+' '+_esc(rm.nome)+' — '+(doc?'editar apólice':'cadastrar apólice')+'</h2><p>'+_esc(e.nome)+'</p></div>'+
         '<div class="cad-modal-body" style="max-height:68vh; overflow-y:auto;">'+
+          (!doc && (pd.seguradora || pd.vigenciaFim || pd.premioAnual || pd.valorFechado)
+            ? '<div style="background:#ecfeff; border:1px solid #67e8f9; border-radius:10px; padding:10px 13px; font-size:12px; color:#155e75; margin-bottom:14px;">✓ <strong>Já preenchemos o que veio do funil</strong> — seguradora, vigência e prêmio do negócio fechado. Confira e complete o resto.</div>'
+            : '')+
           '<div class="subcampos-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">'+
-            '<div class="form-group" style="margin:0;"><label class="form-label">Seguradora</label><input class="form-control" id="cobSeguradora" value="'+_esc((doc&&doc.seguradora)||pd.seguradoraAtual||'')+'" placeholder="Ex: Porto, Tokio…"></div>'+
+            '<div class="form-group" style="margin:0;"><label class="form-label">Seguradora</label><input class="form-control" id="cobSeguradora" value="'+_esc((doc&&doc.seguradora)||pd.seguradora||pd.seguradoraAtual||'')+'" placeholder="Ex: Porto, Tokio…"></div>'+
             '<div class="form-group" style="margin:0;"><label class="form-label">Nº da apólice</label><input class="form-control" id="cobNumero" value="'+_esc((doc&&doc.numeroApolice)||'')+'" placeholder="opcional"></div>'+
-            '<div class="form-group" style="margin:0;"><label class="form-label">Vigência — início</label><input type="date" class="form-control" id="cobVigIni" value="'+_esc((doc&&doc.vigenciaInicio)||pd.vigenciaInicio||'')+'"></div>'+
-            '<div class="form-group" style="margin:0;"><label class="form-label">Vigência — fim</label><input type="date" class="form-control" id="cobVigFim" value="'+_esc((doc&&doc.vigenciaFim)||pd.vigenciaFim||'')+'"></div>'+
-            '<div class="form-group" style="margin:0; grid-column:1/-1;"><label class="form-label">Prêmio total (R$)</label><input class="form-control" id="cobPremio" value="'+_esc((doc&&doc.premio)||'')+'" placeholder="Ex: R$ 3.200,00" onblur="cobFmtMoeda(this)"></div>'+
+            '<div class="form-group" style="margin:0;"><label class="form-label">Vigência — início</label><input type="date" class="form-control" id="cobVigIni" value="'+_esc(_isoData((doc&&doc.vigenciaInicio)||pd.vigenciaInicio||''))+'"></div>'+
+            '<div class="form-group" style="margin:0;"><label class="form-label">Vigência — fim</label><input type="date" class="form-control" id="cobVigFim" value="'+_esc(_isoData((doc&&doc.vigenciaFim)||pd.vigenciaFim||''))+'"></div>'+
+            '<div class="form-group" style="margin:0; grid-column:1/-1;"><label class="form-label">Prêmio total (R$)</label><input class="form-control" id="cobPremio" value="'+_esc((doc&&doc.premio)||_cobPremioDoFunil(pd))+'" placeholder="Ex: R$ 3.200,00" onblur="cobFmtMoeda(this)"></div>'+
           '</div>'+
           '<div style="background:linear-gradient(135deg,#eef2ff,#faf5ff); border:1px solid #c7d2fe; border-radius:12px; padding:13px 15px; margin-top:16px;">'+
             '<div style="font-weight:800; font-size:13px; color:#4338ca; margin-bottom:6px;">🤖 Preencher tudo com IA (grátis, pelo claude.ai)</div>'+
@@ -26132,7 +26159,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function verCobertura(docId){
     const doc = COBERTURAS_DOCS.find(d => d.id === docId); if (!doc) return;
     const _esc = t => String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-    const _dBR = d => d ? d.split('-').reverse().join('/') : '—';
+    const _dBR = d => { const i = _isoData(d); return i ? i.split('-').reverse().join('/') : '—'; };
     const outras = _cobDocsDe(doc.empresaId, doc.produtoId).filter(d => d.id !== docId);
     const antigo = document.getElementById('modalVerCob'); if (antigo) antigo.remove();
     const m = document.createElement('div');
