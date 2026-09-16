@@ -243,7 +243,13 @@
         if (!reduce) { st.setProperty('transition', 'none', 'important'); st.width = '0%'; el.classList.add('tt-bar'); requestAnimationFrame(() => requestAnimationFrame(() => { st.removeProperty('transition'); st.width = alvo; })); }
         return;
       }
-      const emModal = !!el.closest('.cad-modal-panel, .visita-panel, [style*="position:fixed"], [style*="position: fixed"]') && !el.closest('.sidebar, .topbar, #ttBg');
+      /* Superfície FLUTUANTE (menu/popover solto no body com z-index alto): precisa ser opaca,
+         senão o "background: white" inline vira um branco de 4% e enxerga-se a tela por trás
+         — era o caso do seletor de ícones dos ramos. */
+      const _z = parseInt(st.zIndex) || 0;
+      const flutuante = (st.position === 'absolute' || st.position === 'fixed') && _z >= 50;
+      const emModal = flutuante || (!!el.closest('.cad-modal-panel, .visita-panel, [style*="position:fixed"], [style*="position: fixed"]') && !el.closest('.sidebar, .topbar, #ttBg'));
+      if (flutuante) { st.setProperty('background', 'var(--bg-2)', 'important'); st.setProperty('border-color', 'var(--line-2)', 'important'); }
       if (st.backgroundImage && /gradient/.test(st.backgroundImage)) { const g = mapGrad(st.backgroundImage); if (g) st.setProperty('background', emModal ? 'var(--bg-2)' : g, 'important'); }
       else { let bg = mapBg(st.backgroundColor, { fill }); if (bg && emModal && /rgba\(255,255,255/.test(bg)) bg = (parse(st.backgroundColor) || {}).a < .9 ? null : 'var(--bg-2)'; if (bg) st.setProperty('background', bg, 'important'); }
       const fg = mapFg(st.color); if (fg) st.setProperty('color', fg, 'important');
