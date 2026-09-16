@@ -11395,7 +11395,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '255';
+  const APP_VERSAO = '256';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -18550,9 +18550,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function _empresasQuePossoPedir() {
     const lista = (EMPRESAS || []);
     const perf = perfilEfetivo();
-    if (['admin', 'chefe'].includes(perf)) return lista;
-    const meu = uidEfetivo();
-    return lista.filter(e => e.rm === meu);
+    // Só o RM é restrito à própria carteira (privacidade). Assistente e estagiário apoiam a
+    // agência inteira e não têm empresas no nome deles — a regra antiga devolvia lista vazia
+    // e o botão "Pedir cotação" ficava impossível de usar para eles, mesmo podendo criar
+    // pelo ⚡ da tela de empresas e pela OP.
+    if (perf === 'rm') { const meu = uidEfetivo(); return lista.filter(e => e.rm === meu); }
+    return lista;
   }
   window._empresasQuePossoPedir = _empresasQuePossoPedir;
 
@@ -18601,7 +18604,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       // pode ser que a empresa exista, mas não seja da carteira de quem está pedindo
       const existe = (EMPRESAS || []).some(x => (x.nome || '').toLowerCase() === nome.toLowerCase());
       return alert(existe
-        ? 'Essa empresa não está na sua carteira. Você só pode pedir cotação para empresas suas.'
+        ? (perfilEfetivo() === 'rm'
+            ? 'Essa empresa não está na sua carteira. Você só pode pedir cotação para empresas suas.'
+            : 'Essa empresa não é desta agência. Escolha a agência dela no topo da tela.')
         : 'Selecione uma empresa válida da lista (digite o nome e escolha).');
     }
     const ramoId = document.getElementById('pcProduto').value;
@@ -27308,7 +27313,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       // Anti duplo-clique: mesma empresa+produto+apólice em <5s cria uma cotação só
       const _kCot = empresa.id + '|' + produto.id + '|' + (opts.apoliceRef || opts.apoliceApelido || '');
-      if (criarCotacao._ult && criarCotacao._ult.k === _kCot && (Date.now() - criarCotacao._ult.t) < 5000) return;
+      if (criarCotacao._ult && criarCotacao._ult.k === _kCot && (Date.now() - criarCotacao._ult.t) < 5000) {
+        // antes retornava calado: a tela não mudava e a pessoa achava que o sistema não gravou
+        try { flashSalvo('Essa negociação já acabou de ser criada — confira no funil.'); } catch (e) {}
+        return;
+      }
       criarCotacao._ult = { k: _kCot, t: Date.now() };
 
       const ref = await db.collection('mb_cotacoes').add(cot);
