@@ -225,6 +225,19 @@
     .hub-cotar{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; padding-top:10px; border-top:1px solid var(--vidro-bd); font-size:12.5px; color:var(--b70); }
     .tg-btn:disabled{ opacity:.7; cursor:default; }
     .anexo-lista{ margin-top:6px; }
+
+    /* ===== LINK PADRÃO (sem token) — identificação da empresa ===== */
+    .ident-box{ background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.35); border-radius:16px; padding:14px 13px; margin-top:14px; }
+    .ident-box .rotulo{ margin-bottom:8px; }
+    .ident-box .inp{ margin-bottom:8px; }
+    .ident-box .inp.inv{ box-shadow:0 0 0 3px rgba(248,113,113,.55); }
+    .ident-err{ font-size:12px; color:#fca5a5; font-weight:700; margin:-2px 0 8px 3px; min-height:14px; }
+    .ident-ok{ font-size:12px; color:var(--verde); font-weight:700; margin:-2px 0 8px 3px; }
+    .ident-nota{ font-size:11.5px; color:var(--b50); line-height:1.4; margin-top:2px; }
+    .fim-lista{ width:100%; max-width:340px; margin-top:18px; text-align:left; }
+    .fim-lista .cotar-item{ padding:10px 13px; }
+    .fim-lista .cotar-item .nm{ font-weight:700; font-size:14px; }
+    .fim-lista .cotar-item .ic{ font-size:20px; }
   </style>
 
   <style id="tt-refino">
@@ -392,6 +405,94 @@
   let LINK = null, LINK_ID = null, EMPRESA = null;
   let respostas = {};                 // { [prodId]: { tem, vencimentoMes, vencimentoAno, seguradora, valorAnual, observacoes, interesse, preMarcadoNao } }
   let dadosEmpresa = { funcionarios: '' };
+
+  /* ============ LINK PADRÃO (sem token) ============
+     mapeamento-empresa.html?padrao=1  →  qualquer empresa responde; pede CNPJ (obrigatório),
+     nome e celular do contato (opcionais). Grava em mb_questionario_padrao e NÃO toca em
+     empresas/mb_produtos nem pontua ninguém — o corretor identifica e vincula no painel. */
+  let MODO_PADRAO = false;
+  let PADRAO_DOC_ID = null;           // id do doc gravado (para marcar "quero cotar" depois)
+  let ident = { cnpj: '', nome: '', celular: '' };
+  const PADRAO_LS = 'map_padrao_v1';
+  const PADRAO_LS_ENV = 'map_padrao_enviado_v1';
+
+  function soDigitos(s){ return String(s || '').replace(/\D/g, ''); }
+  function fmtCNPJ(d){
+    d = soDigitos(d).slice(0, 14);
+    return d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+            .replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2');
+  }
+  function fmtCel(d){
+    d = soDigitos(d).slice(0, 11);
+    if (d.length <= 10) return d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d)/, '$1-$2');
+    return d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2');
+  }
+  // validação oficial (dígitos verificadores) — rejeita 00000000000000 etc.
+  function cnpjValido(v){
+    const d = soDigitos(v);
+    if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+    const calc = (base, pesos) => { let s = 0; for (let i = 0; i < pesos.length; i++) s += Number(base[i]) * pesos[i]; const r = s % 11; return r < 2 ? 0 : 11 - r; };
+    const p1 = [5,4,3,2,9,8,7,6,5,4,3,2], p2 = [6,5,4,3,2,9,8,7,6,5,4,3,2];
+    return calc(d, p1) === Number(d[12]) && calc(d, p2) === Number(d[13]);
+  }
+  function mascCNPJ(el){ el.value = fmtCNPJ(el.value); ident.cnpj = el.value; validarIdent(false); salvarRascunho(); }
+  function mascCel(el){ el.value = fmtCel(el.value); ident.celular = el.value; salvarRascunho(); }
+  window.mascCNPJ = mascCNPJ; window.mascCel = mascCel;
+  // devolve true se ok; com `forte` mostra o erro mesmo com campo vazio (usado no envio)
+  function validarIdent(forte){
+    const el = document.getElementById('idCnpj'), err = document.getElementById('idCnpjErr'), ok = document.getElementById('idCnpjOk');
+    if (!el) return false;
+    const d = soDigitos(el.value);
+    let msg = '';
+    if (!d.length) msg = forte ? 'Informe o CNPJ da empresa para enviar.' : '';
+    else if (d.length < 14) msg = forte ? 'CNPJ incompleto — são 14 números.' : '';
+    else if (!cnpjValido(d)) msg = 'Esse CNPJ não confere — revise os números.';
+    const valido = d.length === 14 && cnpjValido(d);
+    el.classList.toggle('inv', !!msg);
+    if (err) err.textContent = msg;
+    if (ok) ok.style.display = valido ? '' : 'none';
+    return valido;
+  }
+  function blocoIdent(){
+    return '<div class="bloco ident-box">'+
+      '<label class="rotulo">🏢 Sobre a empresa</label>'+
+      '<input class="inp" id="idCnpj" inputmode="numeric" placeholder="CNPJ da empresa (obrigatório)" maxlength="18" value="'+_esc(ident.cnpj || '')+'" oninput="mascCNPJ(this)" onblur="validarIdent(false)">'+
+      '<div class="ident-err" id="idCnpjErr"></div>'+
+      '<div class="ident-ok" id="idCnpjOk" style="display:none;">✓ CNPJ confere</div>'+
+      '<input class="inp" id="idNome" placeholder="Seu nome (opcional)" maxlength="80" value="'+_esc(ident.nome || '')+'" oninput="ident.nome=this.value; salvarRascunho();">'+
+      '<input class="inp" id="idCel" inputmode="tel" placeholder="Seu celular / WhatsApp (opcional)" maxlength="16" value="'+_esc(ident.celular || '')+'" oninput="mascCel(this)">'+
+      '<div class="ident-nota">Usamos o CNPJ só para identificar a empresa no nosso estudo. Nada é publicado.</div>'+
+    '</div>';
+  }
+  async function bootPadrao(){
+    MODO_PADRAO = true;
+    document.title = 'Mapeamento de Seguros · Retorno';
+    try { await firebase.auth().signInAnonymously(); } catch (e) { console.warn('auth anônima falhou:', e); }
+    try {
+      const ramosSnap = await db.collection('mb_ramos').get();
+      if (!ramosSnap.empty) {
+        const arr = [];
+        ramosSnap.forEach(d => { const r = d.data(); if (r.ativo !== false && !r.somenteOp) arr.push({ id: d.id, nome: r.nome, icon: r.icon || '📦', ordem: r.ordem || 0, desc: (r.descCliente || '').trim() }); });
+        if (arr.length) { arr.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); PRODUTOS = arr; }
+      }
+    } catch (e) { console.warn('ramos dinâmicos falhou, usando padrão', e); }
+    // um envio recente neste aparelho → mostra o "obrigado" de novo em vez de um formulário em branco
+    try {
+      const env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || 'null');
+      if (env && env.id && env.em && (Date.now() - env.em) < 30 * 86400000) {
+        PADRAO_DOC_ID = env.id; respostas = env.respostas || {}; ident = env.ident || ident;
+        return telaFimPadrao(false, env.interesse || []);
+      }
+    } catch (e) {}
+    restaurarRascunho();
+    tela1();
+  }
+  function novoPadrao(){
+    try { localStorage.removeItem(PADRAO_LS_ENV); localStorage.removeItem(PADRAO_LS); } catch (e) {}
+    PADRAO_DOC_ID = null; respostas = {}; ident = { cnpj: '', nome: '', celular: '' }; dadosEmpresa = { funcionarios: '' };
+    tela1();
+  }
+  window.novoPadrao = novoPadrao;
   let FLUXO = [];                     // produtos que aparecem no fluxo (já mapeados NÃO entram)
   let PROD_BLOQUEADOS = new Set();    // já mapeados → NÃO aparecem
   let PROD_PRE_NAO = new Set();       // respondidos "não tem" antes
@@ -407,6 +508,7 @@
       const token = params.get('t');
       document.getElementById('app').style.display = 'flex';
       document.getElementById('loading').style.display = 'none';
+      if (!token && params.get('padrao')) return bootPadrao();
       if (!token) return mostrarErro();
 
       try { await firebase.auth().signInAnonymously(); } catch (e) { console.warn('auth anônima falhou:', e); }
@@ -485,14 +587,16 @@
   }
 
   /* ============ RASCUNHO (pausar e voltar, no aparelho do cliente) ============ */
-  function salvarRascunho(){ try { localStorage.setItem('map_v2_' + LINK_ID, JSON.stringify({ respostas, dadosEmpresa })); } catch (e) {} }
+  function _rascunhoKey(){ return MODO_PADRAO ? PADRAO_LS : ('map_v2_' + LINK_ID); }
+  function salvarRascunho(){ try { localStorage.setItem(_rascunhoKey(), JSON.stringify({ respostas, dadosEmpresa, ident: MODO_PADRAO ? ident : undefined })); } catch (e) {} }
   function restaurarRascunho(){
     try {
-      const raw = localStorage.getItem('map_v2_' + LINK_ID);
+      const raw = localStorage.getItem(_rascunhoKey());
       if (!raw) return;
       const d = JSON.parse(raw);
       if (d && d.respostas) { Object.keys(d.respostas).forEach(k => { respostas[k] = Object.assign({}, respostas[k], d.respostas[k]); }); }
       if (d && d.dadosEmpresa && d.dadosEmpresa.funcionarios) dadosEmpresa.funcionarios = d.dadosEmpresa.funcionarios;
+      if (MODO_PADRAO && d && d.ident) ident = Object.assign({}, ident, d.ident);
     } catch (e) {}
   }
 
@@ -621,8 +725,13 @@
     var blocos = BLOCOS_DEF.map(function(b){ return { def:b, itens: PRODUTOS.filter(function(p){ return blocoDe(p) === b.id; }) }; })
                            .filter(function(b){ return b.itens.length; });
     var html = '<div class="t1-top"><div class="selo-topo">MAPEAMENTO DE PROTEÇÕES</div>'+
-      '<h1 class="t1-h1">Olá, <span class="ouro">'+_esc(LINK.empresaNome || (EMPRESA && EMPRESA.nome) || '')+'</span></h1>'+
-      '<p class="t1-sub">Marque o que a empresa <b>tem</b> ou <b>não tem</b> hoje. Leva uns 3 minutos — e você recebe um raio-x com o que dá para economizar e proteger.</p></div>';
+      (MODO_PADRAO
+        ? '<h1 class="t1-h1">Olá! <span class="ouro">Vamos mapear os seguros da sua empresa</span></h1>'+
+          '<p class="t1-sub">Marque o que a empresa <b>tem</b> ou <b>não tem</b> hoje. Leva uns 3 minutos — e nossa equipe devolve um raio-x com o que dá para economizar e proteger.</p>'
+        : '<h1 class="t1-h1">Olá, <span class="ouro">'+_esc(LINK.empresaNome || (EMPRESA && EMPRESA.nome) || '')+'</span></h1>'+
+          '<p class="t1-sub">Marque o que a empresa <b>tem</b> ou <b>não tem</b> hoje. Leva uns 3 minutos — e você recebe um raio-x com o que dá para economizar e proteger.</p>')+
+      '</div>';
+    if (MODO_PADRAO) html += blocoIdent();
     blocos.forEach(function(b){
       html += '<div class="bloco"><div class="bloco-h"><div class="bloco-n">'+b.def.nome+'</div><div class="bloco-s">'+b.def.sub+'</div></div>'+
         b.itens.map(linhaProduto).join('')+'</div>';
@@ -630,13 +739,101 @@
     html += '<div class="bloco colab-box"><label class="rotulo">👥 Quantos colaboradores a empresa tem hoje?</label>'+
       '<input class="inp" id="colab" inputmode="numeric" placeholder="ex: 25" value="'+_esc(dadosEmpresa.funcionarios || '')+'" oninput="dadosEmpresa.funcionarios=this.value; salvarRascunho();"></div>';
     html += '<div class="t1-envio"><div class="t1-falta" id="falta"></div>'+
-      '<button class="btn-g btn-sim" id="btnEnviar" onclick="submeter()">Enviar para meu gerente</button></div>';
+      '<button class="btn-g btn-sim" id="btnEnviar" onclick="'+(MODO_PADRAO ? 'submeterPadrao()' : 'submeter()')+'">'+(MODO_PADRAO ? 'Enviar para a Retorno' : 'Enviar para meu gerente')+'</button></div>';
     trocar(html, 'frente', 't1');
     setTimeout(function(){
       PRODUTOS.forEach(function(p){ if (!PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'sim') abrirCampos(p.id); });
+      if (MODO_PADRAO && ident.cnpj) validarIdent(false);
       atualizarFalta();
     }, 30);
   }
+
+  /* ============ ENVIO — LINK PADRÃO (grava só em mb_questionario_padrao) ============ */
+  async function submeterPadrao(){
+    const btn = document.getElementById('btnEnviar');
+    if (!validarIdent(true)) {
+      const el = document.getElementById('idCnpj'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
+      return;
+    }
+    if (btn){ btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
+    try {
+      const numFunc = parseInt(dadosEmpresa.funcionarios) || null;
+      const resp = {};
+      const nomes = {};
+      PRODUTOS.forEach(function(p){
+        const r = respostas[p.id];
+        if (!r || !r.tem) return;
+        nomes[p.id] = { nome: p.nome, icon: p.icon || '📦' };
+        resp[p.id] = r.tem === 'sim'
+          ? { tem: true, vencimentoMes: r.vencimentoMes || null, vencimentoAno: r.vencimentoAno || null,
+              seguradora: r.seguradora || null, valorAnual: r.valorAnual || null }
+          : { tem: false };
+      });
+      const cnpjDig = soDigitos(ident.cnpj);
+      const doc = {
+        cnpj: cnpjDig, cnpjFmt: fmtCNPJ(cnpjDig),
+        nomeContato: (ident.nome || '').trim() || null,
+        celular: soDigitos(ident.celular) || null, celularFmt: (ident.celular || '').trim() || null,
+        numFuncionarios: numFunc,
+        respostas: resp, produtos: nomes,
+        interesseCotar: [],
+        status: 'novo',                 // novo | vinculado | nao_cliente | descartado
+        vinculadoEmpresaId: null, vinculadoEmpresaNome: null,
+        origem: 'link_padrao', versaoForm: 15,
+        criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      const ref = await db.collection('mb_questionario_padrao').add(doc);
+      PADRAO_DOC_ID = ref.id;
+      try { localStorage.removeItem(PADRAO_LS); localStorage.setItem(PADRAO_LS_ENV, JSON.stringify({ id: ref.id, em: Date.now(), respostas: JSON.parse(JSON.stringify(respostas)), ident: ident, interesse: [] })); } catch (e) {}
+      telaFimPadrao(true, []);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao enviar: ' + e.message);
+      if (btn){ btn.disabled = false; btn.textContent = 'Enviar para a Retorno'; }
+    }
+  }
+  window.submeterPadrao = submeterPadrao;
+
+  // tela final do link padrão: agradece e deixa marcar "quero cotar" nos que NÃO tem
+  let PADRAO_INTERESSE = new Set();
+  function telaFimPadrao(recem, interesseSalvo){
+    document.getElementById('topo').hidden = true;
+    var _s = document.getElementById('salvoTag'); if (_s) _s.classList.remove('on');
+    PADRAO_INTERESSE = new Set(interesseSalvo || []);
+    var naoTem = PRODUTOS.filter(function(p){ return respostas[p.id] && respostas[p.id].tem === 'nao'; });
+    var html = '<div class="ok" style="flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center;">'+
+      '<div class="check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
+      '<h1>'+(recem ? 'Recebemos, obrigado! 🎉' : 'Já recebemos o seu mapeamento 👋')+'</h1>'+
+      '<p>Nossa equipe vai analisar e entrar em contato'+(ident.nome ? ', '+_esc(ident.nome.split(' ')[0]) : '')+'. '+
+      (ident.celular ? 'Falamos pelo WhatsApp <b>'+_esc(ident.celular)+'</b>.' : 'Se quiser, deixe um telefone com quem te enviou o link.')+'</p>';
+    if (naoTem.length){
+      html += '<div class="fim-lista"><div class="grupo-tit">Quer que a gente cote algum destes?</div>'+
+        naoTem.map(function(p){
+          var on = PADRAO_INTERESSE.has(p.id);
+          return '<div class="cotar-item"><div class="ic">'+(p.icon||'📦')+'</div><div class="nm">'+_esc(p.nome)+'</div>'+
+            '<button class="tg-btn'+(on?' on':'')+'" id="tg-'+p.id+'" onclick="togglePadrao(\''+p.id+'\')">'+(on ? '✓ quero cotar' : 'quero cotar')+'</button></div>';
+        }).join('')+
+        '<div class="t1-nota" id="padraoMsg" style="text-align:center;">toque em "quero cotar" — salva na hora</div></div>';
+    }
+    html += '<div class="t1-nota" style="margin-top:22px;">Pode fechar a página. <span onclick="novoPadrao()" style="text-decoration:underline; cursor:pointer;">Responder por outra empresa</span></div></div>';
+    trocar(html, 'frente', 'fimp');
+  }
+  async function togglePadrao(id){
+    if (!PADRAO_DOC_ID) return;
+    if (PADRAO_INTERESSE.has(id)) PADRAO_INTERESSE.delete(id); else PADRAO_INTERESSE.add(id);
+    var b = document.getElementById('tg-'+id);
+    if (b){ b.classList.toggle('on', PADRAO_INTERESSE.has(id)); b.textContent = PADRAO_INTERESSE.has(id) ? '✓ quero cotar' : 'quero cotar'; }
+    var msg = document.getElementById('padraoMsg');
+    try {
+      await db.collection('mb_questionario_padrao').doc(PADRAO_DOC_ID).update({ interesseCotar: Array.from(PADRAO_INTERESSE), interesseEm: firebase.firestore.FieldValue.serverTimestamp() });
+      try { const env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || '{}'); env.interesse = Array.from(PADRAO_INTERESSE); localStorage.setItem(PADRAO_LS_ENV, JSON.stringify(env)); } catch (e) {}
+      if (msg) msg.textContent = PADRAO_INTERESSE.size ? '✓ Anotado — vamos cotar ' + PADRAO_INTERESSE.size + (PADRAO_INTERESSE.size === 1 ? ' seguro' : ' seguros') : 'toque em "quero cotar" — salva na hora';
+    } catch (e) {
+      console.warn(e);
+      if (msg) msg.textContent = 'Não consegui salvar agora — tente de novo em instantes.';
+    }
+  }
+  window.togglePadrao = togglePadrao;
 
   function linhaProduto(p){
     var sub = descDe(p);
