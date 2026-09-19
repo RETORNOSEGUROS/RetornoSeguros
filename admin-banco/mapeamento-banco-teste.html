@@ -19087,7 +19087,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21490,6 +21490,102 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     </div>`;
   }
 
+
+  // ══════════ EMPRESARIAL — bloco do card + pacote de análise para o Claude ══════════
+  // Lê: respostas (apresentação v3: _mapa, _vuln, _retrato, m_*, mudancas),
+  //     analiticoQ + questionario._dados (questionário v2: locais, VR, rota, alertas).
+  const _EMP_COB = {"incendio_raio_explosao":"Incêndio, raio e explosão","fumaca":"Fumaça","queimadas_rurais":"Incêndio por queimadas em zona rural","queda_aeronave":"Queda de aeronaves e engenhos aéreos","despesas_salvamento":"Despesas de salvamento","vendaval_granizo":"Vendaval, furacão, ciclone, tornado e granizo","alagamento":"Alagamento e inundação","desmoronamento":"Desmoronamento","impacto_veiculos":"Impacto de veículos","tumultos":"Tumultos, greves e lockout","danos_eletricos":"Danos elétricos","quebra_maquinas":"Quebra de máquinas","equip_eletronicos":"Equipamentos eletrônicos","equip_portateis":"Equipamentos portáteis (inclui home office)","movimentacao_interna":"Movimentação interna","roubo_bens":"Roubo e furto qualificado de bens","valores_interior":"Valores no interior do estabelecimento","valores_portadores":"Valores em mãos de portadores","fidelidade":"Fidelidade de empregados","vidros_luminosos":"Vidros, fachadas e anúncios luminosos","rc_estabelecimento":"RC do estabelecimento","rc_empregador":"RC do empregador","rc_guarda_veiculos":"RC guarda de veículos de terceiros","danos_morais":"Danos morais","lucros_cessantes":"Lucros cessantes / despesas fixas","instalacao_novo_local":"Despesas de instalação em novo local","perda_aluguel":"Perda ou pagamento de aluguel","despesas_extraordinarias":"Despesas extraordinárias","ruptura_tubulacoes":"Ruptura de tubulações","derrame_sprinklers":"Derrame de sprinklers","deterioracao_frigorificados":"Deterioração de mercadorias refrigeradas","equip_moveis_estacionarios":"Equipamentos móveis, estacionários e arrendados","assistencia_24h":"Assistência 24h","recomposicao_documentos":"Recomposição de registros e documentos","honorarios_peritos":"Honorários de peritos"};
+  const _EMP_ROTA = { ate_15mi: 'Local a local · até R$ 15 mi', acima_15mi: 'Acima de R$ 15 mi por local', lmi_unico: 'LMI único / limite global' };
+  const _EMP_MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  function _empCub(L) { return L.cub === 'outro' ? (L.cubOutro || null) : (L.cub ? Number(L.cub) : null); }
+  function _empVrPredio(L) { const c = _empCub(L); return (L.m2 && c) ? L.m2 * c + (typeof L.valorInstalacoes === 'number' ? L.valorInstalacoes : 0) : null; }
+  function _empVrDM(L) { return (_empVrPredio(L) || 0) + (typeof L.mmu === 'number' ? L.mmu : 0) + (typeof L.estoquePico === 'number' ? L.estoquePico : (typeof L.estoqueMedio === 'number' ? L.estoqueMedio : 0)); }
+  function _apEmpresarial(a) {
+    if (_covNorm(a.produtoId) !== _covNorm('empresarial') && a.produtoId !== 'empresarial') return '';
+    const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+    const r = a.respostas || {}, aq = a.analiticoQ || null, S = (a.questionario && a.questionario._dados) || null;
+    const mapa = r._mapa || {}, ret = r._retrato || null;
+    if (!ret && !aq && !Object.keys(mapa).length) return '';
+    const nm = id => _EMP_COB[id] || id;
+    const por = (f) => Object.keys(mapa).filter(id => f(mapa[id])).map(nm);
+    const crit = por(m => m.i === 'pararia' && m.s !== 'tem'), defas = por(m => m.s === 'defasada'), nao = por(m => m.s === 'nao' && m.i !== 'pararia'), ns = por(m => m.s === 'naosei' && m.i !== 'pararia');
+    const mem = [['m_clima','temporais em 5 anos'],['m_eletrico','quedas de energia em 12 meses'],['m_parada','para retomar a operação'],['m_terceiros','pessoas de fora por dia'],['m_fogo','onde o fogo começaria'],['m_roubo','o que fica na empresa à noite']]
+      .filter(([k]) => r[k] && r[k].texto).map(([k, l]) => '<strong style="color:#334155;">' + esc(r[k].texto) + '</strong> ' + l);
+    const mud = ((r.mudancas || {}).textos || []).filter((t, i) => ((r.mudancas || {}).valores || [])[i] !== 'nada');
+    const linha = (rot, val, cor) => val ? '<div style="font-size:11.5px; color:#64748b; margin-bottom:3px;"><span style="color:#94a3b8;">' + rot + ':</span> <strong style="color:' + (cor || '#334155') + ';">' + val + '</strong></div>' : '';
+    const caixa = (tit, itens, cF, cB, cT) => itens.length ? '<div style="font-size:11.5px; margin-top:5px;"><div style="color:' + cT + '; margin-bottom:3px;">' + tit + ' (' + itens.length + '):</div><div style="color:' + cF + '; background:' + cB + '; border-radius:7px; padding:7px 9px; font-weight:600;">' + itens.map(esc).join(' · ') + '</div></div>' : '';
+
+    let html = '<div style="margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">';
+    if (ret || Object.keys(mapa).length) {
+      html += '<div style="font-size:11px; font-weight:800; color:#7c3aed; margin-bottom:5px;">🏢 APRESENTAÇÃO — o que ELE marcou' + (r.caminho ? ' · ' + esc(r.caminho.texto) : '') + '</div>';
+      if (ret) html += linha('Retrato', ret.vistas + ' coberturas vistas · ' + ret.tem + ' protegidas · ' + ret.defasada + ' defasadas · ' + ret.nao + ' em aberto · ' + ret.naosei + ' não sei');
+      html += caixa('🛑 "Pararia a empresa" e sem cobertura confirmada — abra a conversa por aqui', crit, '#991b1b', '#fef2f2', '#b91c1c');
+      html += caixa('Marcou como defasadas', defas, '#92400e', '#fffbeb', '#b45309');
+      html += caixa('Não tem', nao, '#334155', '#f1f5f9', '#64748b');
+      html += caixa('Não sabe', ns, '#5b21b6', '#f5f3ff', '#7c3aed');
+      if (mem.length) html += '<div style="font-size:11.5px; color:#64748b; margin-top:6px;"><span style="color:#94a3b8;">Nas palavras dele:</span> ' + mem.join(' · ') + '</div>';
+      if (mud.length) html += linha('Mudou desde a última revisão', mud.map(esc).join(' · '), '#b45309');
+    }
+    if (aq) {
+      html += '<div style="font-size:11px; font-weight:800; color:#1d4ed8; margin:10px 0 5px;">📋 LEVANTAMENTO' + (aq.completo ? '' : ' (em andamento)') + '</div>';
+      const chips = [aq.rotaCod ? '🧭 ' + _EMP_ROTA[aq.rotaCod] : null, aq.vrTotal ? 'VR total ' + _fxC(aq.vrTotal) : null, (aq.nLocais > 1 && aq.vrMaiorLocal) ? 'maior local ' + _fxC(aq.vrMaiorLocal) : null,
+        aq.nLocais ? aq.nLocais + (aq.nLocais === 1 ? ' local' : ' locais') + (aq.nLocaisLevantados < aq.nLocais ? ' (' + aq.nLocaisLevantados + ' levantados)' : '') : null,
+        aq.renovacaoMes ? '📅 renova em ' + _EMP_MESES[aq.renovacaoMes - 1] : null, aq.seguradoraAtual ? 'hoje: ' + esc(aq.seguradoraAtual) : null, aq.piSugeridoMeses ? 'PI sugerido ' + aq.piSugeridoMeses + ' meses' : null,
+        aq.temSinistro ? '⚠ teve sinistro' : null, aq.nNaoSei ? aq.nNaoSei + ' "não sei"' : null].filter(Boolean);
+      html += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + chips.map(c => '<span style="font-size:11px; font-weight:700; color:#1e3a6d; background:#eff6ff; border-radius:20px; padding:3px 9px;">' + c + '</span>').join('') + '</div>';
+      if (aq.defasagemPredio) html += linha('Defasagem de prédio apurada', '+' + _fxC(aq.defasagemPredio) + ' acima do que a apólice declara', '#b91c1c');
+      if ((aq.rubricasCod || []).length && S) html += linha('Rubricas sugeridas (validar)', (S.atividades || []).map(x => esc(x.codigo + ' ' + x.descricao)).join(' · '));
+      if (S && S.atividadeLivre) html += linha('Atividade nas palavras dele', esc(S.atividadeLivre));
+      if (S && (S.locais || []).length) html += S.locais.map((L, i) => {
+        const p = _empVrPredio(L), q = Object.keys(L.cobs || {}).filter(id => L.cobs[id].quer), t = Object.keys(L.cobs || {}).filter(id => L.cobs[id].tem);
+        const prot = Object.keys(L.prot || {}).filter(k => L.prot[k] !== 'nao').map(k => k + (L.prot[k] === 'tem' ? '?' : '')), ex = Object.keys(L.expo || {}).filter(k => L.expo[k] === 'sim');
+        return '<div style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; margin-top:6px; background:#fafbff;">' +
+          '<div style="font-size:12px; font-weight:800; color:#0f172a;">' + esc(L.apelido || ('Local ' + (i + 1))) + ' <span style="font-weight:600; color:#64748b;">' + esc(L.cidade ? '· ' + L.cidade + '/' + L.uf : '') + (L.cep ? ' · ' + esc(L.cep) : '') + '</span> <span style="float:right; color:#166534;">VR ' + _fxC(_empVrDM(L)) + '</span></div>' +
+          '<div style="font-size:11.5px; color:#475569; line-height:1.55; margin-top:3px;">' +
+            [L.m2 ? L.m2.toLocaleString('pt-BR') + ' m² × ' + _fxC(_empCub(L)) + ' = prédio <b>' + _fxC(p) + '</b>' + (typeof L.predioApolice === 'number' ? ' (apólice: ' + _fxC(L.predioApolice) + ')' : '') : 'prédio a levantar',
+             typeof L.mmu === 'number' ? 'MMU ' + _fxC(L.mmu) : (L.mmuFaixa ? 'MMU faixa ' + esc(L.mmuFaixa) : null),
+             L.estoqueTem === 'sim' ? 'estoque ' + _fxC(typeof L.estoqueMedio === 'number' ? L.estoqueMedio : null) + ' / pico ' + _fxC(typeof L.estoquePico === 'number' ? L.estoquePico : null) : null,
+             [L.estrutura, L.telhado && 'telhado ' + L.telhado, L.ocupacao].filter(Boolean).map(esc).join(', ') || null,
+             L.maquinaCritica === 'sim' ? 'máquina crítica ' + _fxC(typeof L.maiorMaquina === 'number' ? L.maiorMaquina : null) + ' · reposição ' + esc(L.prazoReposicao || '?') + ' m' : null,
+             prot.length ? 'proteções: ' + prot.map(esc).join(', ') : null, ex.length ? '<span style="color:#b45309;">exposições: ' + ex.map(esc).join(', ') + '</span>' : null,
+             L.sinistros && L.sinistros !== '0' ? '<span style="color:#b91c1c;">sinistros: ' + esc(L.sinistros) + ((L.sinTipos || []).length ? ' (' + L.sinTipos.map(esc).join(', ') + ')' : '') + '</span>' : null
+            ].filter(Boolean).join(' · ') + '</div>' +
+          (q.length ? '<div style="font-size:11.5px; color:#1e3a6d; margin-top:4px;"><span style="color:#94a3b8;">Quer avaliar (' + q.length + '):</span> ' + q.map(id => esc(nm(id)) + (L.cobs[id].valor ? ' <b>' + _fxC(L.cobs[id].valor) + '</b>' : '')).join(' · ') + '</div>' : '') +
+          (t.length ? '<div style="font-size:11.5px; color:#166534; margin-top:2px;"><span style="color:#94a3b8;">Tem hoje (' + t.length + '):</span> ' + t.map(id => esc(nm(id))).join(' · ') + '</div>' : '') + '</div>'; }).join('');
+      if ((aq.alertas || []).length) html += '<div style="font-size:11.5px; margin-top:8px;"><div style="color:#b45309; margin-bottom:3px;">⚠ Alertas para a cotação (' + aq.alertas.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + aq.alertas.map(x => '• ' + esc(x)).join('<br>') + '</div></div>';
+    }
+    html += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:700;" onclick="event.stopPropagation(); empCopiarPacote(\'' + a.id + '\', this)" title="Copia o prompt + todos os dados deste cliente. Cole no Claude e anexe o PDF da apólice, se houver.">🧠 Copiar análise de risco para o Claude</button></div>';
+    return html + '</div>';
+  }
+  const _EMP_PROMPT = "# ANÁLISE COMPLETA DE RISCO — SEGURO EMPRESARIAL (Retorno Seguros)\n\nVocê vai atuar, ao mesmo tempo, como (1) engenheiro de risco / subscritor sênior de ramos elementares, (2) corretor consultivo especialista em seguro empresarial compreensivo e (3) analista que prepara o corretor para a conversa com o dono da empresa. O leitor desta análise é o CORRETOR. A Parte B, no fim, é o único trecho escrito para o cliente.\n\n## O que você recebe\n1. **DADOS DO CLIENTE** (bloco JSON no fim desta mensagem): o que o próprio cliente respondeu na apresentação (como avaliou cada cobertura, o que disse que \"pararia a empresa\", as lembranças dele sobre temporais, quedas de energia, tempo de retomada, o que mudou desde a última revisão) e no questionário (atividade e rubricas sugeridas, cada local com endereço, construção, metragem, valor do prédio calculado por m², conteúdo, estoque, protecionais, exposições, coberturas que tem e que quer avaliar, sinistros, continuidade do negócio) + alertas automáticos do sistema.\n2. **APÓLICE(S) ATUAL(IS) em PDF**, se eu anexar. Pode haver mais de uma (uma por local). Se eu anexar também condições gerais ou proposta, use-as.\nSe não houver PDF anexado, faça tudo o que for possível sem ele e diga, na seção de pendências, exatamente o que pedir ao cliente.\n\n## Regras que valem para a análise inteira\n- **Nunca invente.** Todo dado deve ter origem marcada: [CLIENTE] respondeu, [APÓLICE] página/trecho, [FONTE] pública com nome do veículo/órgão, data e link, ou [INFERÊNCIA] sua — sempre rotulada como tal e com o raciocínio.\n- \"Não sei\" do cliente é informação: liste como ponto a levantar, não preencha por conta própria.\n- Os valores de prédio vieram de **m² × custo de reconstrução por m² escolhido pelo cliente**: trate como estimativa orientativa e diga se o custo/m² escolhido parece coerente com o padrão construtivo e a região.\n- Rubrica e classe construtiva no JSON são **sugestões**; o enquadramento formal depende do manual da seguradora. Aponte divergências e riscos de enquadramento, não decrete.\n- Não prometa preço nem desconto. A régua da casa é: \"mais cobertura pelo mesmo valor, ou o mesmo por menos\" — com a conta na mesa.\n- Se você **não tiver acesso à busca na web** nesta conversa, diga isso logo no início da Seção 3, não simule notícias, e entregue a lista de buscas que eu devo fazer.\n- Seja direto. Tabelas onde houver comparação; texto curto no resto. Sem juridiquês.\n\n## PARTE A — Parecer para o corretor\n\n### 1. Retrato do risco (meia página)\nQuem é a empresa, o que faz de fato, quantos locais, valor em risco total e por local (prédio / máquinas-móveis-utensílios / estoque no PICO), onde está a concentração de valor e de faturamento, e a rota provável (local a local até R$ 15 mi de VR por local; acima disso; ou limite único/LMI único para vários locais — neste caso, confira se o limite pretendido cobre o MAIOR local).\n\n### 2. Enquadramento — o risco está bem enquadrado?\nPor local:\n- **Atividade/rubrica**: a(s) rubrica(s) sugerida(s) representa(m) o que acontece no endereço? Há mais de uma atividade (produção + depósito + loja)? Qual tende a prevalecer para tarifação? Há processo agravante não refletido (inflamáveis, processo a quente, pintura, pó combustível, câmara fria, isopainel com núcleo PU/EPS, carregamento de baterias/veículos elétricos)?\n- **Construção**: classe provável (superior / sólida / mista / inferior) a partir de estrutura, telhado, elementos combustíveis e idade; o que pode derrubar a classe.\n- **Protecionais**: o que pode ser declarado com segurança (marcado \"em dia\") e o que NÃO deve ser declarado sem evidência (marcado \"tem, não sei se em dia\"). Que documentos pedir (AVCB, laudo SPDA, projeto de sprinklers, manutenção de extintores/hidrantes).\n- **Perguntas que a seguradora/inspeção vai fazer** e que ainda não têm resposta.\n- Se houver apólice: a atividade, a construção e os protecionais DECLARADOS na apólice batem com o que o cliente respondeu agora? Divergência aqui é risco de negativa — destaque.\n\n### 3. A cidade e o entorno (pesquise na web)\nPara CADA cidade/UF dos locais, pesquise e resuma com fonte, data e link:\n- **Clima severo nos últimos 5 anos**: vendavais, granizo, ciclones, alagamentos/enchentes; decretos de situação de emergência (Defesa Civil / S2ID), alertas INMET, notícias locais. Se possível, o bairro/região do CEP (proximidade de rio, área de alagamento).\n- **Incêndios e sinistros em empresas** da cidade e região, principalmente do MESMO SETOR do cliente (ex.: fábricas de móveis, metalúrgicas, depósitos): o que queimou, causa divulgada, tamanho da perda, tempo parado.\n- **Roubo/furto a empresas e cargas** na região, se houver dado público.\n- **Infraestrutura**: distância/tempo de resposta do Corpo de Bombeiros, qualidade do fornecimento de energia (ocorrências relevantes de apagão/oscilação).\nDepois **cruze com a memória do cliente**: ele disse que lembrava de X temporais / Y quedas de energia — os registros confirmam, superam ou ficam abaixo? Use isso como argumento (\"você lembrou de 3; os registros públicos mostram 6\").\nFeche com: o que desses achados muda a recomendação de cobertura, limite ou franquia.\n\n### 4. Leitura da apólice atual (só se houver PDF)\nExtraia em tabela, por apólice e por local: seguradora, vigência, segurado, endereço, atividade/rubrica declarada, classe construtiva, protecionais declarados, **forma de contratação da básica** (1º risco absoluto, 1º risco relativo, risco total — é o que define se há rateio), **VR declarado** (prédio / MMU / MMP), e para CADA cobertura: LMI, franquia/POS (percentual E mínimo em reais), observações. Liste cláusulas particulares, bens não compreendidos relevantes, exclusões que o dono precisa conhecer, período indenitário e modalidade de lucros cessantes, e assistência 24h incluída. Aponte o que estiver ilegível ou ausente em vez de supor.\n\n### 5. Lado a lado — o que ele respondeu × o que a apólice tem × o que recomendo\nUma tabela por local, uma linha por cobertura relevante (as que ele TEM, as que QUER AVALIAR e as que o risco pede mesmo que ele não tenha marcado), com colunas: cobertura · o que o cliente disse (apresentação + questionário) · apólice atual (LMI / franquia) · recomendação (LMI sugerido em faixa, com o raciocínio) · prioridade.\nInclua sempre:\n- **VR levantado × VR/LMI da apólice**: diferença em R$ e %. Se a forma de contratação permitir rateio, faça a conta ilustrativa com um sinistro parcial plausível (\"sinistro de R$ X → indenização de R$ Y\"). Se for 1º risco absoluto, explique que não há rateio mas o limite pode ser insuficiente para perda total.\n- **Estoque**: apólice olha média ou pico?\n- **Franquias que surpreendem**: mínimos altos (ex.: vendaval) frente ao tipo de sinistro provável.\n- **Coberturas pagas e possivelmente sem uso**, se houver.\n- **Concorrência de seguros**, bens de terceiros, bens ao ar livre, obras: estão tratados?\n\n### 6. As preocupações DELE — responda uma por uma\nListe tudo o que o cliente marcou como \"pararia a empresa\", \"defasada\", \"não temos\" e \"não sei\", mais as memórias e as mudanças desde a última revisão. Para cada item: o que ele disse (use as palavras dele) → o que a apólice diz hoje → o tamanho do buraco → o que fazer. Esta é a seção mais importante para a venda: ele precisa se reconhecer nela.\n\n### 7. Continuidade do negócio (lucros cessantes)\nPeríodo indenitário sugerido pelo sistema × prazo de retomada informado × prazo de reposição da máquina crítica × o que a apólice tem. O PI é suficiente? Modalidade mais adequada (despesas fixas × lucro bruto) e que números pedir ao financeiro. Coberturas de apoio que fazem sentido (instalação em novo local, despesas extraordinárias, perda de aluguel).\n\n### 8. Recomendações priorizadas\nTrês blocos — **Essencial** (sem isso a empresa pode não sobreviver a um sinistro), **Importante**, **Desejável** — cada item com: o que fazer, por quê (ligando ao que ele respondeu e ao que a cidade mostra), e impacto esperado (protege o quê). Inclua também recomendações de **melhoria de risco** que ajudam na aceitação e na taxa (revisão elétrica, separação produção/estoque, exaustão de pó, regularização de AVCB/SPDA, monitoramento).\n\n### 9. Pendências e documentos\nO que falta para cotar bem: respostas \"não sei\", documentos (fotos, planta, AVCB, laudos, relação de imobilizado, DRE para LC, contrato de locação, outra apólice), e o que confirmar na visita.\n\n### 10. Roteiro da conversa\nTrês frases de abertura que usam as PRÓPRIAS respostas do cliente; as 3 objeções mais prováveis e como responder sem falar de preço; qual o melhor momento (mês de renovação) e o próximo passo concreto.\n\n## PARTE B — Devolutiva para o cliente (1 página)\nTexto que eu possa enviar ao dono da empresa: tom sério e respeitoso, sem jargão, sem citar nome de seguradora, sem prometer preço. Estrutura: o que levantamos juntos · os 3 pontos que merecem atenção primeiro (ligados ao que ELE marcou) · o que já está bem cuidado · próximo passo. No máximo 250 palavras.\n\n---\n## DADOS DO CLIENTE\n";
+  function _empPacote(a) {
+    const r = a.respostas || {}, S = (a.questionario && a.questionario._dados) || null, nm = id => _EMP_COB[id] || id, tx = k => (r[k] && (r[k].texto || (r[k].textos || []).join(' · '))) || null;
+    const mapa = {}; Object.keys(r._mapa || {}).forEach(id => { const m = r._mapa[id]; mapa[nm(id)] = { status: m.s, prejuizo: m.i || null }; });
+    const locais = ((S && S.locais) || []).map((L, i) => { const o = JSON.parse(JSON.stringify(L)); delete o.feitas; Object.keys(o).forEach(k => { if (k.charAt(0) === '_') delete o[k]; });
+      const cobs = {}; Object.keys(o.cobs || {}).forEach(id => { const c = o.cobs[id]; if (c.tem || c.quer) cobs[nm(id)] = { temHoje: !!c.tem, querAvaliar: !!c.quer, limiteDesejado: c.valor || null }; }); o.cobs = cobs;
+      o.nome = L.apelido || ('Local ' + (i + 1)); o.custoReconstrucaoM2 = _empCub(L); o.vrPredioCalculado = _empVrPredio(L); o.vrDanosMateriais = _empVrDM(L); return o; });
+    const dados = { empresa: (S && S.emp && S.emp.nome) || a.empresaNome || null, geradoEm: new Date().toISOString().slice(0, 10),
+      legenda: { status: 'tem | defasada | nao | naosei (quem não tem seguro: tem = "não se aplica", nao = "precisamos disso")', prejuizo: 'pequeno | serio | pararia (a empresa)', protecionais: 'em_dia | tem (não sabe se em dia) | nao' },
+      apresentacao: Object.keys(r).length ? { caminho: tx('caminho'), atividade: tx('atividade'), temSeguroHoje: tx('situacao'), retrato: r._retrato || null, vulnerabilidade: r._vuln || null,
+        memorias: { temporaisEm5Anos: tx('m_clima'), quedasEnergia12Meses: tx('m_eletrico'), tempoParaRetomar: tx('m_parada'), pessoasDeForaPorDia: tx('m_terceiros'), ondeOFogoComecaria: tx('m_fogo'), oQueFicaNaEmpresaANoite: tx('m_roubo'), riscosEspecificos: tx('m_especificos'), assistencia24h: tx('m_apoio') },
+        avaliacaoPorCobertura: mapa, mudouDesdeUltimaRevisao: tx('mudancas'), fazSentidoRever: r.alinhamento || null } : null,
+      questionario: S ? { empresa: S.emp, rubricasSugeridas: S.atividades, atividadeNasPalavrasDoCliente: S.atividadeLivre || null, locais, continuidadeDoNegocio: S.parada, contato: S.contato } : null,
+      analiticoDoSistema: a.analiticoQ || null };
+    return _EMP_PROMPT + '\n```json\n' + JSON.stringify(dados, null, 1) + '\n```\n';
+  }
+  async function empCopiarPacote(id, btn) {
+    const rot = btn ? btn.textContent : '';
+    try {
+      if (btn) btn.textContent = 'montando…';
+      const d = await db.collection('mb_apresentacoes').doc(id).get(); if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _empPacote({ id: d.id, ...d.data() });
+      const ok = () => { if (btn) { btn.textContent = '✓ copiado — cole no Claude e anexe a apólice'; setTimeout(() => { btn.textContent = rot; }, 3200); } };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); });
+      else { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); }
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar o pacote: ' + e.message); }
+  }
+  window.empCopiarPacote = empCopiarPacote;
+
   const _REGUA_DENTAL = { fora: 'Usar dentista fora da cidade', orto: 'Documentação ortodôntica completa',
                           app: 'Achar dentista por app', reembolso: 'Reembolso de dentista particular' };
 
@@ -21617,7 +21713,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       especificas: 'Linhas específicas', fazSentido: 'Faz sentido aprovar o limite',
       alinhamento: 'Alinhamento no fim',
       // apresentação — Dental
-      perfil: 'Quem respondeu', situacao: 'Plano dental hoje', headcount: 'Tamanho do time',
+      perfil: 'Quem respondeu', situacao: 'Situação hoje (plano / seguro)', headcount: 'Tamanho do time',
       dorDente: 'O que acontece com dor de dente', limpeza: 'Quanto custa uma limpeza na região',
       familia: 'Deixaria incluir a família', medoRH: 'O que mais preocupa no benefício',
       coberturasUsa: 'Coberturas que o time mais usaria', comoUsa: 'Achou fácil usar o plano',
@@ -21637,6 +21733,17 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       capitalAberto: 'Capital aberto', exterior: 'Operações no exterior',
       q1_investigacoes: 'Investigações nos últimos 5 anos', q2_fatoConhecido: 'Fato conhecido que possa gerar reclamação',
       q3_prejuizo: 'Prejuízo em +1 exercício (3 anos)', auditoria: 'Auditoria externa', limite: 'Limite desejado',
+      // Empresarial — apresentação v3
+      caminho: 'Caminho escolhido', atividade: 'Atividade', m_fogo: 'Onde o fogo começaria', m_clima: 'Temporais fortes em 5 anos (memória dele)',
+      m_eletrico: 'Quedas de energia em 12 meses', m_roubo: 'O que fica na empresa fora do expediente', m_terceiros: 'Pessoas de fora por dia',
+      m_parada: 'Tempo para retomar a operação', m_especificos: 'Perecível / sprinklers / tubulação', m_apoio: 'Quem chama para chaveiro/eletricista',
+      fam_fogo: 'Fogo e explosão', fam_clima: 'Clima e impactos externos', fam_eletrico: 'Elétrico e máquinas', fam_roubo: 'Roubo, valores e fraude',
+      fam_terceiros: 'Responsabilidade com terceiros', fam_parada: 'Parada do negócio', fam_especificos: 'Água interna e mercadorias sensíveis', fam_apoio: 'Despesas e assistência',
+      mudancas: 'Mudou desde a última revisão',
+      // Empresarial — questionário v2
+      cnpj: 'CNPJ', locaisQtd: 'Nº de locais', estruturaDesejada: 'Estrutura de limites desejada', seguradoraAtual: 'Seguradora atual', renovacaoMes: 'Mês de renovação',
+      premioAtual: 'Prêmio atual', vrTotal: 'Valor em risco total apurado', periodoIndenitarioSugerido: 'Período indenitário sugerido',
+      local1: 'Local 1', local2: 'Local 2', local3: 'Local 3', local4: 'Local 4', local5: 'Local 5', local6: 'Local 6', local7: 'Local 7', local8: 'Local 8',
       coberturas: 'Coberturas mantidas', coberturasRemovidas: 'Coberturas que ele desmarcou',
       sondas: 'O que ele respondeu em cada bloco'
     })[k] || k;
