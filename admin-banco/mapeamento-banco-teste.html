@@ -21559,9 +21559,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             ].filter(Boolean).join(' · ') + '</div>' +
           (q.length ? '<div style="font-size:11.5px; color:#1e3a6d; margin-top:4px;"><span style="color:#94a3b8;">Quer avaliar (' + q.length + '):</span> ' + q.map(id => esc(nm(id)) + (L.cobs[id].valor ? ' <b>' + _fxC(L.cobs[id].valor) + '</b>' : '')).join(' · ') + '</div>' : '') +
           (t.length ? '<div style="font-size:11.5px; color:#166534; margin-top:2px;"><span style="color:#94a3b8;">Tem hoje (' + t.length + '):</span> ' + t.map(id => esc(nm(id))).join(' · ') + '</div>' : '') + '</div>'; }).join('');
-      const anx = (a.apoliceAnexos || []).filter(x => x && x.url);
-    if (anx.length) html += '<div style="font-size:11.5px; margin-top:8px;"><div style="color:#166534; margin-bottom:3px;">📎 Apólice(s) que o cliente anexou (' + anx.length + '):</div>' +
-      anx.map(x => '<a href="' + esc(x.url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="display:inline-block; color:#1d4ed8; font-weight:700; text-decoration:none; background:#eff6ff; border-radius:7px; padding:5px 9px; margin:0 5px 5px 0;">' + esc(x.nome || 'arquivo') + '</a>').join('') + '</div>';
+      html += _apAnexosHTML(a);
     if ((aq.alertas || []).length) html += '<div style="font-size:11.5px; margin-top:8px;"><div style="color:#b45309; margin-bottom:3px;">⚠ Alertas para a cotação (' + aq.alertas.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + aq.alertas.map(x => '• ' + esc(x)).join('<br>') + '</div></div>';
     }
     html += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:700;" onclick="event.stopPropagation(); empCopiarPacote(\'' + a.id + '\', this)" title="Copia o prompt + todos os dados deste cliente. Cole no Claude e anexe o PDF da apólice, se houver.">🧠 Copiar análise de risco para o Claude</button></div>';
@@ -21651,8 +21649,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const info = (aq.alertas || []).filter(x => x.c === 'info');
       if (info.length) h += '<div style="font-size:11.5px; margin-top:7px;"><div style="color:#b45309; margin-bottom:3px;">Cláusulas e pontos a avaliar (' + info.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + info.map(x => '• Eq. ' + x.eq + ': ' + esc(x.t)).join('<br>') + '</div></div>';
     }
-    const anx = (a.apoliceAnexos || []).filter(x => x && x.url);
-    if (anx.length) h += '<div style="font-size:11.5px; margin-top:8px;"><div style="color:#166534; margin-bottom:3px;">📎 Arquivos que o cliente anexou (' + anx.length + '):</div>' + anx.map(x => '<a href="' + esc(x.url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="display:inline-block; color:#1d4ed8; font-weight:700; text-decoration:none; background:#eff6ff; border-radius:7px; padding:5px 9px; margin:0 5px 5px 0;">' + esc(x.nome || 'arquivo') + '</a>').join('') + '</div>';
+    h += _apAnexosHTML(a);
     if (aq && S && (S.equips || []).length) h += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#fff7ed; border-color:#fed7aa; color:#9a3412; font-weight:700;" onclick="event.stopPropagation(); eqCopiarFicha(\'' + a.id + '\', this)" title="Copia os dados na ordem dos campos do cotador">📋 Copiar ficha para o cotador</button></div>';
     return h + '</div>';
   }
@@ -21687,6 +21684,101 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
     } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
   window.eqCopiarFicha = eqCopiarFicha;
+
+
+  // ══════════ DOCUMENTOS ENVIADOS PELO CLIENTE NOS QUESTIONÁRIOS ══════════
+  // Ficam no registro da apresentação (mb_apresentacoes/<id>.apoliceAnexos). Só vão para o raio-x
+  // quando o corretor VINCULA — mesmo padrão do questionário padrão: sugere a empresa da carteira
+  // (pelo link, pelo CNPJ ou pelo nome), permite buscar outra e desfazer. Nem todo documento é
+  // apólice e nem todo cliente está cadastrado: sem vínculo, o arquivo fica só aqui.
+  const _apAnxEsc = x => String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const _apNomeNorm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\b(ltda|me|epp|eireli|s\.?\/?a\.?|sa|cia|companhia)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  function _apCnpjDoRegistro(a) { const d = (a.questionario && a.questionario._dados) || {}, e = d.emp || {};
+    return String(e.cnpj || (e.tipoPessoa !== 'pf' ? e.doc : '') || '').replace(/\D/g, ''); }
+  function _apSugestaoEmpresa(a) {
+    const L = EMPRESAS || [];
+    if (a.empresaId) { const e = L.find(x => x.id === a.empresaId); if (e) return { id: e.id, nome: e.nome, por: 'empresa do link' }; }
+    const cnpj = _apCnpjDoRegistro(a);
+    if (cnpj.length === 14) { const e = L.find(x => String(x.cnpj || '').replace(/\D/g, '') === cnpj); if (e) return { id: e.id, nome: e.nome, por: 'mesmo CNPJ na carteira' }; }
+    const d = (a.questionario && a.questionario._dados) || {}, nome = _apNomeNorm((d.emp && d.emp.nome) || (a.questionario && a.questionario.empresa) || a.empresaNome);
+    if (nome.length > 3) { const e = L.find(x => _apNomeNorm(x.nome) === nome); if (e) return { id: e.id, nome: e.nome, por: 'mesmo nome na carteira' }; }
+    return null;
+  }
+  function _apAnexosHTML(a) {
+    const anx = (a.apoliceAnexos || []).filter(x => x && x.url); if (!anx.length) return '';
+    const v = a.anexosVinculados || null, feitos = new Set((v && v.caminhos) || []), novos = anx.filter(x => !feitos.has(x.caminho));
+    const lista = anx.map(x => '<a href="' + _apAnxEsc(x.url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="display:inline-block; color:#1d4ed8; font-weight:700; text-decoration:none; background:#eff6ff; border-radius:7px; padding:5px 9px; margin:0 5px 5px 0;">📄 ' + _apAnxEsc(x.nome || 'arquivo') + '</a>').join('');
+    let acao = '';
+    if (v && v.empresaId) {
+      acao = '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:8px 11px;">' +
+        '✅ No raio-x de <strong>' + _apAnxEsc(v.empresaNome || '') + '</strong>' + (novos.length ? ' <span style="color:#b45309; font-weight:700;">· ' + novos.length + ' novo(s) ainda não levado(s)</span>' : '') +
+        '<span style="flex:1;"></span>' +
+        (novos.length ? '<button class="btn-mini" style="background:#0891b2; color:#fff; border-color:#0891b2;" onclick="event.stopPropagation(); apVincularAnexos(\'' + a.id + '\',\'' + v.empresaId + '\', this)">🔗 Levar os novos</button>' : '') +
+        '<button class="btn-mini" onclick="event.stopPropagation(); (window.qpAbrirRaioX || window.abrirRaioX)(\'' + v.empresaId + '\')">🔎 Abrir raio-x</button>' +
+        '<button class="btn-mini" onclick="event.stopPropagation(); apDesvincularAnexos(\'' + a.id + '\', this)">↩ Desfazer</button></div>';
+    } else {
+      const sug = _apSugestaoEmpresa(a);
+      acao = (sug
+        ? '<div style="background:#ecfeff; border:1px solid #67e8f9; border-radius:9px; padding:8px 11px; font-size:12px; color:#155e75; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">' +
+            '<span>🎯 <strong>' + _apAnxEsc(sug.nome) + '</strong> <span style="color:#0e7490;">(' + sug.por + ')</span></span><span style="flex:1;"></span>' +
+            '<button class="btn-mini" style="background:#0891b2; color:#fff; border-color:#0891b2;" onclick="event.stopPropagation(); apVincularAnexos(\'' + a.id + '\',\'' + sug.id + '\', this)">🔗 Vincular ao raio-x</button></div>'
+        : '<div style="font-size:11.5px; color:#64748b;">Empresa não encontrada na carteira — os documentos ficam aqui. Se for cliente, procure pelo nome:</div>') +
+        '<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:6px;" onclick="event.stopPropagation();">' +
+          '<input class="form-control" style="width:220px; font-size:12px; padding:5px 9px;" placeholder="' + (sug ? 'Ou vincular a outra empresa…' : 'Nome da empresa…') + '" oninput="apBuscarEmpresaAnexo(\'' + a.id + '\', this.value)">' +
+          '<div id="apAnxSug-' + a.id + '" style="display:flex; gap:6px; flex-wrap:wrap;"></div></div>';
+    }
+    return '<div id="apAnx-' + a.id + '" style="font-size:11.5px; margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">' +
+      '<div style="color:#166534; margin-bottom:4px; font-weight:700;">📎 Documentos enviados pelo cliente (' + anx.length + ')</div>' + lista + '<div style="margin-top:4px;">' + acao + '</div></div>';
+  }
+  function apBuscarEmpresaAnexo(apId, txt) {
+    const box = document.getElementById('apAnxSug-' + apId); if (!box) return;
+    const q = _apNomeNorm(txt); if (q.length < 2) { box.innerHTML = ''; return; }
+    const hits = (EMPRESAS || []).filter(e => _apNomeNorm(e.nome).includes(q)).slice(0, 5);
+    box.innerHTML = hits.length ? hits.map(e => '<button class="btn-mini" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca;" onclick="event.stopPropagation(); apVincularAnexos(\'' + apId + '\',\'' + e.id + '\', this)">🔗 ' + _apAnxEsc(e.nome) + '</button>').join('')
+      : '<span style="font-size:11px; color:#94a3b8;">nada com esse nome' + (CTX.agenciaId ? ' nesta agência' : '') + '</span>';
+  }
+  async function apVincularAnexos(apId, empresaId, btn) {
+    const emp = (EMPRESAS || []).find(x => x.id === empresaId); if (!emp) return alert('Empresa não encontrada nesta agência.');
+    try {
+      const snapA = await db.collection('mb_apresentacoes').doc(apId).get(); if (!snapA.exists) throw new Error('registro não encontrado');
+      const a = { id: apId, ...snapA.data() }, anx = (a.apoliceAnexos || []).filter(x => x && x.url && x.caminho);
+      const jaLevados = new Set(((a.anexosVinculados && a.anexosVinculados.empresaId === empresaId) ? a.anexosVinculados.caminhos : []) || []);
+      const levar = anx.filter(x => !jaLevados.has(x.caminho)); if (!levar.length) return flashSalvo('Nada novo para levar.');
+      if (!confirm('Levar ' + levar.length + ' documento(s) para o raio-x de "' + emp.nome + '"?\n\nEles aparecem junto dos anexos do seguro ' + (a.produtoNome || a.produtoId) + '.')) return;
+      if (btn) { btn.disabled = true; btn.textContent = 'vinculando…'; }
+      const prodId = _covNorm(a.produtoId);
+      const ref = db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(prodId);
+      const s = await ref.get(), atuais = (s.exists && Array.isArray((s.data() || {}).apoliceAnexos)) ? s.data().apoliceAnexos : [];
+      const noRaioX = new Set(atuais.map(x => x && x.caminho).filter(Boolean));
+      const novos = levar.filter(x => !noRaioX.has(x.caminho)).map(x => ({ nome: x.nome || 'arquivo', url: x.url, caminho: x.caminho, tamanho: x.tamanho || null, em: x.em || new Date().toISOString(),
+        via: 'questionario', porNome: x.porNome || null, protocolo: x.protocolo || null, apresentacaoId: apId, vinculadoPorNome: CTX.nome || null }));
+      const lista = atuais.concat(novos);
+      if (novos.length) await ref.set({ apoliceAnexos: lista }, { merge: true });
+      const caminhos = [...new Set([...jaLevados, ...levar.map(x => x.caminho)])];
+      const vinc = { empresaId, empresaNome: emp.nome || null, caminhos, em: new Date().toISOString(), porNome: CTX.nome || null };
+      await db.collection('mb_apresentacoes').doc(apId).set({ anexosVinculados: vinc }, { merge: true });
+      try { emp.produtosDados = emp.produtosDados || {}; emp.produtosDados[prodId] = Object.assign({}, emp.produtosDados[prodId] || {}, { apoliceAnexos: lista }); } catch (e2) {}
+      a.anexosVinculados = vinc; const box = document.getElementById('apAnx-' + apId); if (box) box.outerHTML = _apAnexosHTML(a);
+      flashSalvo(levar.length + (levar.length === 1 ? ' documento levado' : ' documentos levados') + ' ao raio-x de ' + emp.nome);
+    } catch (err) { if (btn) { btn.disabled = false; btn.textContent = '🔗 Vincular ao raio-x'; } alert('Não consegui vincular: ' + err.message); }
+  }
+  async function apDesvincularAnexos(apId, btn) {
+    try {
+      const snapA = await db.collection('mb_apresentacoes').doc(apId).get(); if (!snapA.exists) return;
+      const a = { id: apId, ...snapA.data() }, v = a.anexosVinculados; if (!v || !v.empresaId) return;
+      if (!confirm('Tirar estes documentos do raio-x de "' + (v.empresaNome || '') + '"?\n\nEles continuam guardados aqui na apresentação.')) return;
+      if (btn) { btn.disabled = true; btn.textContent = 'desfazendo…'; }
+      const ref = db.collection('empresas').doc(v.empresaId).collection('mb_produtos').doc(_covNorm(a.produtoId));
+      const s = await ref.get(), sair = new Set(v.caminhos || []);
+      if (s.exists) { const lista = ((s.data() || {}).apoliceAnexos || []).filter(x => !(x && x.via === 'questionario' && sair.has(x.caminho)));
+        await ref.set({ apoliceAnexos: lista }, { merge: true });
+        try { const emp = (EMPRESAS || []).find(x => x.id === v.empresaId); if (emp && emp.produtosDados && emp.produtosDados[_covNorm(a.produtoId)]) emp.produtosDados[_covNorm(a.produtoId)].apoliceAnexos = lista; } catch (e2) {} }
+      await db.collection('mb_apresentacoes').doc(apId).set({ anexosVinculados: null }, { merge: true });
+      a.anexosVinculados = null; const box = document.getElementById('apAnx-' + apId); if (box) box.outerHTML = _apAnexosHTML(a);
+      flashSalvo('Vínculo desfeito — os documentos continuam na apresentação.');
+    } catch (err) { if (btn) btn.disabled = false; alert('Não consegui desfazer: ' + err.message); }
+  }
+  window.apBuscarEmpresaAnexo = apBuscarEmpresaAnexo; window.apVincularAnexos = apVincularAnexos; window.apDesvincularAnexos = apDesvincularAnexos;
 
   const _REGUA_DENTAL = { fora: 'Usar dentista fora da cidade', orto: 'Documentação ortodôntica completa',
                           app: 'Achar dentista por app', reembolso: 'Reembolso de dentista particular' };
