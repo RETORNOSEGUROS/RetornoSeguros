@@ -803,7 +803,7 @@ const ARQ_MAX = 6, ARQ_MB = 15;
 const ARQ_TIPOS = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', heic: 'image/heic' };
-const _mimeArq = f => f.type || ARQ_TIPOS[((f.name || '').split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
+const _mimeArq = f => ARQ_TIPOS[((f.name || '').split('.').pop() || '').toLowerCase()] || f.type || 'application/octet-stream';   // extensão primeiro: é o que as regras do Storage comparam
 const _tipoOk = f => { const e = ((f.name || '').split('.').pop() || '').toLowerCase(); return !!ARQ_TIPOS[e]; };
 const _tam = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
 const _comTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio')), ms))]);
@@ -821,38 +821,34 @@ async function subirApolice(f, aoProgresso) {
 async function gravarAnexos() {
   if (!SESSAO) return;
   try { await db.collection('mb_apresentacoes').doc(SESSAO).set({ apoliceAnexos: S.emp.anexos || [], atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (e) { console.warn('anexos', e); }
-  /* espelha no raio-x da empresa, quando o link identifica a empresa. Se a regra
-     não permitir gravar ali pelo cliente, o anexo continua no registro acima. */
-  if (LINK && LINK.empresaId) {
-    try { await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc('empresarial')
-      .set({ apoliceAnexos: firebase.firestore.FieldValue.arrayUnion.apply(null, (S.emp.anexos || []).map(a => JSON.parse(JSON.stringify(a)))) }, { merge: true }); } catch (e) { console.warn('espelho raio-x', e); }
-  }
+  /* O espelho no raio-x da empresa é feito pelo PAINEL (_espelharAnexosNoRaioX), autenticado como
+     corretor: o cliente anônimo não tem permissão de gravar na ficha da empresa. */
 }
 
 function renderFim() {
   progresso(100); barra(null);
-  const temApolice = S.emp.temSeguro === 'sim' || S.emp.temSeguro === 'naosei';
+  const temApolice = S.emp.temSeguro === 'sim' || S.emp.temSeguro === 'naosei', mostrarAnexo = true;
   const wa = 'https://wa.me/' + CONTATO_DESTINO.whats + '?text=' + encodeURIComponent(msgApolice());
   const mail = CONTATO_DESTINO.email ? 'mailto:' + CONTATO_DESTINO.email + '?subject=' + encodeURIComponent('Apólice atual — ' + (S.emp.nome || 'levantamento') + ' (protocolo ' + protocolo() + ')') + '&body=' + encodeURIComponent(msgApolice() + '\n\n(anexe aqui a apólice ou apólices)') : null;
   S.emp.anexos = S.emp.anexos || [];
   palco.innerHTML = `<div class="cena fim"><div class="ico">✅</div><div class="titulo">Recebido.</div>
     <div class="intro" style="max-width:560px; margin:0 auto;">O levantamento já está com a Retorno. Poucas empresas chegam a uma seguradora com esse nível de informação — isso <strong>melhora a aceitação e a negociação</strong>. O corretor retorna com o estudo, sem compromisso e sem mexer em nada do que existe hoje.</div>
     <div class="intro" style="max-width:560px; margin:10px auto 0; font-size:13px; color:var(--suave);">Protocolo <strong style="color:#fff;">${protocolo()}</strong> — guarde se precisar falar sobre este levantamento.</div>
-    ${temApolice ? `<div class="campo-bx" style="text-align:left; max-width:560px; margin:30px auto 0;">
-      <div class="campo-lb"><span class="tx">Falta uma coisa só: a sua apólice atual</span></div>
-      <div class="campo-sub">Com ela em mãos, a Retorno compara valores, coberturas e franquias ponto a ponto com o que você levantou aqui — é assim que a defasagem aparece em número. Se houver mais de uma apólice, envie todas. É opcional.</div>
-      <label class="zona-arq" id="zonaArq">📎 Anexar apólice agora<small>PDF, foto, Word ou Excel · até ${ARQ_MAX} arquivos de ${ARQ_MB} MB</small>
+    ${mostrarAnexo ? `<div class="campo-bx" style="text-align:left; max-width:560px; margin:30px auto 0;">
+      <div class="campo-lb"><span class="tx">${temApolice ? 'Falta uma coisa só: a sua apólice atual' : 'Quer adiantar? Anexe o que tiver à mão'}</span></div>
+      <div class="campo-sub">${temApolice ? 'Com ela em mãos, a Retorno compara valores, coberturas e franquias ponto a ponto com o que você levantou aqui. Se houver mais de uma, envie todas.' : 'Fotos do local, planta, laudos (AVCB, para-raios), relação de máquinas — o que ajudar a Retorno a conhecer o risco.'} Pode ser qualquer documento — e é opcional.</div>
+      <label class="zona-arq" id="zonaArq">📎 Anexar documentos<small>PDF, foto, Word ou Excel · até ${ARQ_MAX} arquivos de ${ARQ_MB} MB</small>
         <input type="file" id="arqIn" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx" style="display:none;"></label>
       <div id="listaArq"></div>
       <div class="campo-sub" style="margin:16px 0 6px;">Ou, se preferir:</div>
       <div class="ops col">
         <a class="op" id="opWa" href="${wa}" target="_blank" rel="noopener" style="display:block; text-decoration:none;">Enviar pelo WhatsApp<small>abre a conversa com a Retorno ${esc(CORRETORA.whatsLabel)}</small></a>
         ${mail ? `<a class="op" id="opMail" href="${mail}" style="display:block; text-decoration:none;">Enviar por e-mail<small>mensagem já pronta, é só anexar</small></a>` : ''}
-        <button class="op" data-v="pedir" type="button">Peçam ao meu corretor atual ou ao financeiro<small>a Retorno cuida disso, sem envolver você</small></button>
+        ${temApolice ? `<button class="op" data-v="pedir" type="button">Peçam ao meu corretor atual ou ao financeiro<small>a Retorno cuida disso, sem envolver você</small></button>` : ''}
         <button class="op" data-v="depois" type="button">Depois — pode me lembrar</button>
       </div></div>` : ''}</div>`;
   window.scrollTo(0, 0);
-  if (!temApolice) return;
+  if (!mostrarAnexo) return;
   const marcar = (v, txt) => { S.emp.apoliceEnvio = v; S.emp.apoliceEnvioEm = new Date().toISOString(); salvar(true); if (txt) eco(txt); };
 
   const pintar = () => {
