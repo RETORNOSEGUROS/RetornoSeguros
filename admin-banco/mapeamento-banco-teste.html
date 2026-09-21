@@ -19087,7 +19087,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21187,6 +21187,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     { id: 'previdencia', nome: 'Previdência — Radar de Fundos',
       arq: 'RadarPrevidenciaCliente.html', arqQ: null, arqProp: null,
       desc: 'Rentabilidade dos fundos de previdência, mês a mês, em linguagem de cliente — atualizada pelo admin a cada lâmina nova.' },
+    { id: 'equipamentos', nome: 'Seguro de Equipamentos',
+      arq: 'ApresentacaoEquipamentos.html', arqQ: 'QuestionarioEquipamentos.html', arqProp: null,
+      desc: 'A máquina que não pode parar: mostra onde o empresarial não chega (fora do endereço, tombamento, rateio do patrimônio inteiro) e levanta cada equipamento no formato do cotador.' },
     { id: 'transporte', nome: 'Transporte de Cargas',
       arq: 'ApresentacaoTransporte.html', arqQ: 'QuestionarioTransporte.html', arqProp: null,
       desc: 'Raio-X da operação de transporte: embarcador ou transportadora, o questionário ramifica pelo perfil e recomenda as coberturas certas (RCTR-C, RC-DC, avulso, internacional) com o perfil completo pronto para cotar.' }
@@ -21599,6 +21602,92 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.empCopiarPacote = empCopiarPacote;
 
+
+  // ══════════ EQUIPAMENTOS — bloco do card + ficha para o cotador ══════════
+  // Lê: respostas (apresentação: eqTipo, eqValor, eqReposicao, eqParada, eqOnde, quiz_*, _cob, _risco, _quiz)
+  //     analiticoQ + questionario._dados (questionário: emp, locais, equips, anexos).
+  const _EQ_GRUPO = { ccic: 'Equipamento Construção Civil / Industrial / Comercial', agricola: 'Equipamento Agrícola', florestal: 'Equipamento Florestal',
+    medico: 'Equipamento Médico / Estético / Veterinário', musical: 'Equipamento Musical', portatil: 'Equipamento Portátil (validar no cotador)' };
+  const _EQ_MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const _eqBrl = n => (n == null || isNaN(n)) ? '—' : 'R$ ' + Math.round(n).toLocaleString('pt-BR');
+  const _eqNome = e => e.enq || (e.descricao ? '[descrição] ' + e.descricao : 'sem enquadramento');
+  const _eqVal = e => (typeof e.valor === 'number' ? e.valor : 0) * (e.qtd || 1);
+  function _eqLocal(S, e) { const L = (S.locais || []).find(x => x.id === e.localId);
+    const end = L ? [L.logradouro, L.numero, L.bairro, L.cidade && (L.cidade + (L.uf ? '/' + L.uf : '')), L.cep].filter(Boolean).join(', ') : '';
+    return { nome: L ? (L.apelido || 'Local') : null, end, mapa: end ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(end) : null }; }
+  function _eqCobs(e) { const c = e.cob || {}, v = e.valor || null, out = [['Cobertura básica', v ? _eqBrl(v) : 'valor do bem']];
+    if (c.roubo) out.push(['Roubo e/ou furto qualificado', (v ? _eqBrl(v) : 'valor do bem') + (c.furtoSimples ? ' + cl. 105 furto simples' : '')]);
+    if (c.eletrico) out.push(['Danos elétricos', c.eletricoModo === 'valor' && c.eletricoValor ? _eqBrl(c.eletricoValor) : 'recomendação do corretor']);
+    if (c.aluguel) out.push(['Perda ou pagamento de aluguel', c.aluguelLimite ? _eqBrl(c.aluguelLimite) + ' (' + c.aluguelMeses + ' m × ' + _eqBrl(c.aluguelMensal) + ')' : (c.aluguelMeses ? c.aluguelMeses + ' meses, valor mensal a levantar' : 'a dimensionar')]);
+    if (c.rc) out.push(['RC equipamentos', c.rcValor && c.rcValor !== 'rec' ? _eqBrl(Number(c.rcValor)) : 'recomendação do corretor']);
+    return out; }
+  function _apEquipamentos(a) {
+    if (_covNorm(a.produtoId) !== 'equipamentos') return '';
+    const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+    const r = a.respostas || {}, aq = a.analiticoQ || null, S = (a.questionario && a.questionario._dados) || null;
+    if (!r.eqTipo && !aq) return '';
+    const chip = t => '<span style="font-size:11px; font-weight:700; color:#1e3a6d; background:#eff6ff; border-radius:20px; padding:3px 9px;">' + t + '</span>';
+    let h = '<div style="margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">';
+    if (r.eqTipo) {
+      const cq = Object.keys(r._cob || {}).filter(k => r._cob[k] === 'sim'), nome = { roubo: 'Roubo', eletrico: 'Danos elétricos', aluguel: 'Aluguel de substituta', rc: 'RC' };
+      h += '<div style="font-size:11px; font-weight:800; color:#b45309; margin-bottom:5px;">🏗️ APRESENTAÇÃO — a máquina em que ele pensou</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [r.eqTipo && esc(r.eqTipo.texto), r.eqValor && esc(r.eqValor.texto), r.eqReposicao && 'repor: ' + esc(r.eqReposicao.texto),
+        r.eqParada && 'para ' + esc(r.eqParada.texto) + '/mês', r.eqOnde && esc(r.eqOnde.texto), r.eqQtd && esc(r.eqQtd.texto) + ' máquinas', r.eqFinanciada && esc(r.eqFinanciada.texto)].filter(Boolean).map(chip).join('') + '</div>';
+      if (r._quiz) h += '<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">Cenários:</span> <strong style="color:#334155;">surpreendeu-se em ' + r._quiz.surpresas + ' de ' + r._quiz.total + '</strong> (achava que o empresarial cobria)</div>';
+      if (cq.length) h += '<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">Marcou "faz sentido":</span> <strong style="color:#166534;">' + cq.map(k => nome[k] || k).join(' · ') + '</strong></div>';
+    }
+    if (aq && S) {
+      h += '<div style="font-size:11px; font-weight:800; color:#1d4ed8; margin:10px 0 5px;">📋 SIMULAÇÃO' + (aq.completo ? '' : ' (em andamento)') + '</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [aq.nEquipamentos ? aq.nEquipamentos + ' equipamento' + (aq.nEquipamentos > 1 ? 's' : '') : null, aq.valorTotal ? 'total ' + _eqBrl(aq.valorTotal) : null,
+        aq.nNacional ? aq.nNacional + ' em todo o Brasil' : null, aq.renovacaoMes ? '📅 renova em ' + _EQ_MESES[aq.renovacaoMes - 1] : null,
+        { nao: 'sem seguro hoje', empresarial: 'hoje só no empresarial', propria: 'tem apólice própria' }[aq.seguroHoje] || null, aq.criticos ? '⛔ ' + aq.criticos + ' crítico' + (aq.criticos > 1 ? 's' : '') : null].filter(Boolean).map(chip).join('') + '</div>';
+      h += (S.equips || []).map((e, i) => { const L = _eqLocal(S, e), fl = (aq.alertas || []).filter(x => x.eq === i + 1 && x.c !== 'info');
+        return '<div style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; margin-top:6px; background:#fafbff;">' +
+          '<div style="font-size:12px; font-weight:800; color:#0f172a;">' + esc(_eqNome(e)) + (e.qtd > 1 ? ' × ' + e.qtd : '') + '<span style="float:right; color:#166534;">' + (_eqVal(e) ? _eqBrl(_eqVal(e)) : (e.valorFaixa ? 'faixa ' + esc(e.valorFaixa) : '—')) + '</span></div>' +
+          '<div style="font-size:11.5px; color:#475569; line-height:1.55; margin-top:2px;">' + [[e.marca, e.modelo, e.ano].filter(Boolean).map(esc).join(' · '), e.serie ? 'série ' + esc(e.serie) : null, e.situacao, e.nf === 'sim' ? 'NF ' + esc(e.nfNumero || 'sim') : null, e.financiado === 'sim' ? 'financiado' + (e.banco ? ' (' + esc(e.banco) + ')' : '') : null].filter(Boolean).join(' · ') + '</div>' +
+          '<div style="font-size:11.5px; color:#475569;">' + (e.abrangencia === 'nacional' ? '🌎 Todo o território nacional' : '📍 ' + esc(L.nome || 'local a definir')) + (L.mapa ? ' <a href="' + L.mapa + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="color:#1d4ed8; font-weight:700; text-decoration:none;">🗺️ mapa</a>' : '') + '</div>' +
+          '<div style="font-size:11.5px; color:#1e3a6d; margin-top:3px;">' + _eqCobs(e).map(c => c[0].replace(' e/ou furto qualificado', '').replace('Perda ou pagamento de aluguel', 'Aluguel').replace('Cobertura básica', 'Básica')).join(' · ') + '</div>' +
+          (fl.length ? '<div style="font-size:11.5px; color:#b91c1c; margin-top:3px; font-weight:700;">' + fl.map(x => '⚠ ' + esc(x.t)).join('<br>') + '</div>' : '') + '</div>'; }).join('');
+      const info = (aq.alertas || []).filter(x => x.c === 'info');
+      if (info.length) h += '<div style="font-size:11.5px; margin-top:7px;"><div style="color:#b45309; margin-bottom:3px;">Cláusulas e pontos a avaliar (' + info.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + info.map(x => '• Eq. ' + x.eq + ': ' + esc(x.t)).join('<br>') + '</div></div>';
+    }
+    const anx = (a.apoliceAnexos || []).filter(x => x && x.url);
+    if (anx.length) h += '<div style="font-size:11.5px; margin-top:8px;"><div style="color:#166534; margin-bottom:3px;">📎 Arquivos que o cliente anexou (' + anx.length + '):</div>' + anx.map(x => '<a href="' + esc(x.url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="display:inline-block; color:#1d4ed8; font-weight:700; text-decoration:none; background:#eff6ff; border-radius:7px; padding:5px 9px; margin:0 5px 5px 0;">' + esc(x.nome || 'arquivo') + '</a>').join('') + '</div>';
+    if (aq && S && (S.equips || []).length) h += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#fff7ed; border-color:#fed7aa; color:#9a3412; font-weight:700;" onclick="event.stopPropagation(); eqCopiarFicha(\'' + a.id + '\', this)" title="Copia os dados na ordem dos campos do cotador">📋 Copiar ficha para o cotador</button></div>';
+    return h + '</div>';
+  }
+  function _eqFicha(a) { const S = (a.questionario && a.questionario._dados) || {}, E = S.emp || {}, aq = a.analiticoQ || {}, L = [], sim = v => v === 'sim' ? 'Sim' : v === 'nao' ? 'Não' : (v || '—');
+    L.push('FICHA DE COTAÇÃO — SEGURO DE EQUIPAMENTOS', 'Protocolo ' + (aq.protocolo || '—') + ' · gerada em ' + new Date().toLocaleDateString('pt-BR'), '');
+    L.push('SEGURADO', '  Tipo: ' + (E.tipoPessoa === 'pf' ? 'Pessoa Física' : 'Pessoa Jurídica'), '  ' + (E.tipoPessoa === 'pf' ? 'CPF' : 'CNPJ') + ': ' + (E.doc || '—'), '  Nome/Razão social: ' + (E.nome || a.empresaNome || '—'),
+      '  Atividade: ' + (E.atividade || '—'), '  Contato: ' + [S.contato && S.contato.nome, S.contato && S.contato.telefone, S.contato && S.contato.email].filter(Boolean).join(' · '),
+      '  Seguro hoje: ' + ({ nao: 'não têm', empresarial: 'só pelo empresarial', propria: 'apólice própria', naosei: 'não sabe' }[E.seguroHoje] || '—') + (E.renovacao && E.renovacao !== 'naosei' ? ' · renova em ' + _EQ_MESES[Number(E.renovacao) - 1] : ''), '');
+    (S.equips || []).forEach((e, i) => { const Lc = _eqLocal(S, e), ac = e.aceit || {};
+      L.push('════ EQUIPAMENTO ' + (i + 1) + ' de ' + S.equips.length + (e.qtd > 1 ? ' (× ' + e.qtd + ' unidades iguais)' : '') + ' ════',
+        '  Grupo: ' + (_EQ_GRUPO[e.grupo] || '—'), '  Equipamento/enquadramento: ' + (e.enq || '— (sem opção na lista) ' + (e.descricao || '')),
+        '  Marca: ' + (e.marca || '—') + '  |  Modelo: ' + (e.modelo || '—') + '  |  Ano (fabricação): ' + (e.ano || '—'),
+        '  Chassi: ' + (e.chassi || '—') + '  |  Série: ' + (e.serie || '—'),
+        '  Situação: ' + (e.situacao === 'usado' ? 'Usado' : e.situacao === 'novo' ? 'Novo' : '—') + (e.conjunto === 'sim' ? '  |  CONJUNTO: ' + (e.conjuntoDesc || 'sim — pedir composição') : ''),
+        '  Possui nota fiscal? ' + sim(e.nf) + (e.nf === 'sim' ? '  |  Nº: ' + (e.nfNumero || '—') + '  |  Emissora: ' + (e.nfEmissor || '—') + '  |  Data saída revenda: ' + (e.nfData ? e.nfData.split('-').reverse().join('/') : '—') : ''),
+        '  Valor do equipamento' + (e.qtd > 1 ? ' (unitário)' : '') + ': ' + (e.valor ? _eqBrl(e.valor) : (e.valorFaixa ? 'não informado — faixa ' + e.valorFaixa : '—')) + (e.valorNovo ? '  |  novo equivalente: ' + _eqBrl(e.valorNovo) : ''),
+        '  Financiado: ' + sim(e.financiado) + (e.banco ? ' — ' + e.banco + ' (beneficiário?)' : ''),
+        '  Local de risco: ' + (Lc.end ? (Lc.nome ? Lc.nome + ' — ' : '') + Lc.end : '—') + '  |  Permanece neste endereço? ' + (e.abrangencia === 'nacional' ? 'Não (circula)' : 'Sim'),
+        '  COBERTURAS (LMGCC):'); _eqCobs(e).forEach(c => L.push('    • ' + c[0] + ': ' + c[1]));
+      L.push('  QUESTIONÁRIO:', '    Emplacado? ' + sim(ac.emplacado) + (ac.placa ? ' — placa ' + ac.placa : ''), '    Instalado em veículo terrestre? ' + sim(ac.veiculo),
+        '    Bem litigioso / de falidos / massa falida / leilão? ' + sim(ac.leilao), '    Deseja a cobertura para: ' + (e.abrangencia === 'nacional' ? 'Todo Território Nacional' : 'Local Determinado'),
+        '    Operado por terceiros? ' + sim(ac.terceiros) + (ac.terceirosQuem ? ' — ' + ac.terceirosQuem : ''));
+      const al = (aq.alertas || []).filter(x => x.eq === i + 1); if (al.length) { L.push('  ATENÇÃO:'); al.forEach(x => L.push('    ' + (x.c === 'critico' ? '⛔ ' : x.c === 'aviso' ? '⚠ ' : '• ') + x.t)); }
+      L.push(''); });
+    L.push('TOTAL: ' + _eqBrl(aq.valorTotal) + ' em ' + (aq.nEquipamentos || 0) + ' equipamento(s)');
+    const anx = (a.apoliceAnexos || []).filter(x => x && x.url); if (anx.length) { L.push('', 'ANEXOS DO CLIENTE:'); anx.forEach(x => L.push('  ' + x.nome + ' — ' + x.url)); }
+    return L.join('\n'); }
+  async function eqCopiarFicha(id, btn) { const rot = btn ? btn.textContent : '';
+    try { if (btn) btn.textContent = 'montando…'; const d = await db.collection('mb_apresentacoes').doc(id).get(); if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _eqFicha({ id: d.id, ...d.data() }); const ok = () => { if (btn) { btn.textContent = '✓ ficha copiada'; setTimeout(() => { btn.textContent = rot; }, 2600); } };
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
+  window.eqCopiarFicha = eqCopiarFicha;
+
   const _REGUA_DENTAL = { fora: 'Usar dentista fora da cidade', orto: 'Documentação ortodôntica completa',
                           app: 'Achar dentista por app', reembolso: 'Reembolso de dentista particular' };
 
@@ -21757,6 +21846,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       cnpj: 'CNPJ', locaisQtd: 'Nº de locais', estruturaDesejada: 'Estrutura de limites desejada', seguradoraAtual: 'Seguradora atual', renovacaoMes: 'Mês de renovação',
       premioAtual: 'Prêmio atual', vrTotal: 'Valor em risco total apurado', periodoIndenitarioSugerido: 'Período indenitário sugerido',
       local1: 'Local 1', local2: 'Local 2', local3: 'Local 3', local4: 'Local 4', local5: 'Local 5', local6: 'Local 6', local7: 'Local 7', local8: 'Local 8',
+      // Equipamentos — apresentação
+      eqTipo: 'Máquina mais importante', eqValor: 'Valor de reposição', eqReposicao: 'Tempo para repor', eqParada: 'Faturamento que para por mês',
+      eqOnde: 'Onde a máquina trabalha', eqQtd: 'Equipamentos desse porte', eqFinanciada: 'Financiadas', eqCoberturas: 'Coberturas que marcou',
+      quiz_tombamento: 'Cenário: empilhadeira tomba', quiz_roubo_fora: 'Cenário: retro roubada fora da empresa', quiz_raio: 'Cenário: raio queima o painel',
+      quiz_rateio: 'Cenário: incêndio com valor defasado', quiz_quebra: 'Cenário: quebra interna por desgaste',
+      // Equipamentos — questionário
+      documento: 'CPF/CNPJ', atividadeEquip: 'Atividade', seguroHojeEquip: 'Seguro hoje dos equipamentos', renovacaoEquip: 'Renovação',
+      nEquipamentos: 'Nº de equipamentos', valorTotalEquip: 'Valor total dos equipamentos',
       coberturas: 'Coberturas mantidas', coberturasRemovidas: 'Coberturas que ele desmarcou',
       sondas: 'O que ele respondeu em cada bloco'
     })[k] || k;
