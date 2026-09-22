@@ -233,13 +233,65 @@ function renderEmpresa() {
   $('bk').onclick = renderAbertura;
   barra([{ t: 'Continuar →', f: renderLocais }]);
 }
-async function buscarCNPJ(d) { const E = S.emp; try { const r = await fetch('https://brasilapi.com.br/api/cnpj/v1/' + d); if (!r.ok) throw 0; const j = await r.json();
-  E.razao = j.razao_social || ''; E.cnae = j.cnae_fiscal_descricao || ''; E.cnpjOk = true;
-  if (!E.nome || E.nome === (LINK && LINK.empresaNome)) { E.nome = j.razao_social || E.nome; const el = $('nome'); if (el) el.value = E.nome; }
-  if (!E.atividade && j.cnae_fiscal_descricao) { E.atividade = j.cnae_fiscal_descricao; const el = $('atv'); if (el) el.value = E.atividade; }
-  if (!S.locais.length && j.cep) S.locais.push({ id: 'l1', cep: String(j.cep).replace(/(\d{5})(\d{3})/, '$1-$2'), logradouro: j.logradouro ? titulo(j.logradouro) : '', numero: j.numero || '', bairro: j.bairro ? titulo(j.bairro) : '', cidade: j.municipio ? titulo(j.municipio) : '', uf: j.uf || '', apelido: 'Sede', daReceita: true });
-  const el = $('docIns'); if (el) el.innerHTML = `<div class="insight"><b>${esc(j.razao_social)}</b>${j.cnae_fiscal_descricao ? '<br>' + esc(j.cnae_fiscal_descricao) : ''}</div>`;
-  } catch (e) { E.cnpjOk = false; const el = $('docIns'); if (el) el.innerHTML = '<div class="insight alerta">Não consegui consultar esse CNPJ agora — siga em frente, sem problema.</div>'; } salvar(); }
+/* ─── CONSULTA DE CNPJ — três fontes públicas, com fallback ───
+   A BrasilAPI limita consultas por IP (quando estoura, devolve 429) e às vezes
+   fica fora do ar. Então tentamos, em ordem: BrasilAPI → Minha Receita → CNPJ.ws.
+   Cada uma é normalizada para o mesmo formato. Nada trava: se todas falharem,
+   o cliente digita o nome e segue. a.cnpjMotivo guarda o porquê, para a tela. */
+const _CNPJ_FONTES = [
+  { n: 'brasilapi', u: d => 'https://brasilapi.com.br/api/cnpj/v1/' + d, m: j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cnaePrinc: { codigo: j.cnae_fiscal, descricao: j.cnae_fiscal_descricao },
+      sec: (j.cnaes_secundarios || []).map(c => ({ codigo: c.codigo, descricao: c.descricao })), cidade: j.municipio, uf: j.uf, cep: j.cep,
+      logradouro: [j.descricao_tipo_de_logradouro, j.logradouro].filter(Boolean).join(' '), numero: j.numero, bairro: j.bairro }) },
+  { n: 'minhareceita', u: d => 'https://minhareceita.org/' + d, m: j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cnaePrinc: { codigo: j.cnae_fiscal, descricao: j.cnae_fiscal_descricao },
+      sec: (j.cnaes_secundarios || []).map(c => ({ codigo: c.codigo, descricao: c.descricao })), cidade: j.municipio, uf: j.uf, cep: j.cep,
+      logradouro: [j.descricao_tipo_de_logradouro, j.logradouro].filter(Boolean).join(' '), numero: j.numero, bairro: j.bairro }) },
+  { n: 'cnpjws', u: d => 'https://publica.cnpj.ws/cnpj/' + d, m: j => { const e = j.estabelecimento || {};
+      return { razao: j.razao_social, fantasia: e.nome_fantasia, cnaePrinc: { codigo: (e.atividade_principal || {}).id, descricao: (e.atividade_principal || {}).descricao },
+        sec: (e.atividades_secundarias || []).map(c => ({ codigo: c.id, descricao: c.descricao })), cidade: (e.cidade || {}).nome, uf: (e.estado || {}).sigla, cep: e.cep,
+        logradouro: [e.tipo_logradouro, e.logradouro].filter(Boolean).join(' '), numero: e.numero, bairro: e.bairro }; } }
+];
+function _cnpjFetch(url, ms) { const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const t = setTimeout(() => { try { ctl && ctl.abort(); } catch (e) {} }, ms || 9000);
+  return fetch(url, ctl ? { signal: ctl.signal } : undefined).finally(() => clearTimeout(t)); }
+async function _cnpjConsulta(d) {
+  let achou = null, invalido = false, limite = false;
+  for (const f of _CNPJ_FONTES) {
+    for (let tent = 0; tent < 2 && !achou; tent++) {
+      try { const r = await _cnpjFetch(f.u(d));
+        if (r.status === 429) { limite = true; if (tent === 0) { await new Promise(x => setTimeout(x, 1400)); continue; } break; }
+        if (r.status === 404 || r.status === 400) { invalido = true; break; }
+        if (!r.ok) break;
+        const j = await r.json(); const o = f.m(j); if (!o || !o.razao) break; o._fonte = f.n; achou = o;
+      } catch (e) { console.warn('cnpj', f.n, e && e.message); break; }
+    }
+    if (achou) break;
+  }
+  return { dados: achou, motivo: achou ? null : invalido ? 'naoencontrado' : limite ? 'limite' : 'offline' };
+}
+async function buscarCNPJ(d, a, cb) {
+  a.cnpjOk = null; a.cnpjMotivo = null; if (cb) cb();
+  const { dados: achou, motivo } = await _cnpjConsulta(d);
+  if (achou) {
+    a.razao = achou.razao || ''; a.fantasia = achou.fantasia || ''; a.cnae = (achou.cnaePrinc || {}).descricao || '';
+    a.cnpjCidade = (achou.cidade || '') + (achou.uf ? '/' + achou.uf : ''); a.cnpjCep = achou.cep || ''; a.cnpjFonte = achou._fonte; a.cnpjOk = true; a.cnpjMotivo = null;
+    a.cnaes = [(achou.cnaePrinc || {}).descricao ? { codigo: String(achou.cnaePrinc.codigo || ''), descricao: achou.cnaePrinc.descricao, principal: true } : null]
+      .concat((achou.sec || []).map(c => ({ codigo: String(c.codigo || ''), descricao: c.descricao || '', principal: false }))).filter(x => x && x.descricao);
+    if (!a.nome) { a.nome = a.fantasia || a.razao; const el = palco.querySelector('[data-in="nome"]'); if (el) el.value = a.nome; }
+  } else { a.cnpjOk = false; a.cnpjMotivo = motivo; }
+  if (cb) cb(); salvar();
+}
+const CNPJ_MSG = { naoencontrado: 'Não encontrei esse CNPJ na base da Receita — confira o número, ou siga em frente e escreva o nome.', limite: 'A consulta pública está no limite de acessos agora — sem problema, escreva o nome e siga em frente.', offline: 'Não consegui consultar esse CNPJ agora — sem problema, siga em frente.' };
+const cnpjMsg = a => CNPJ_MSG[a && a.cnpjMotivo] || CNPJ_MSG.offline;
+async function buscarCNPJ(d) { const E = S.emp; const ins = t => { const el = $('docIns'); if (el) el.innerHTML = t; };
+  ins('<div class="insight">Consultando o CNPJ…</div>');
+  const { dados: j, motivo } = await _cnpjConsulta(d);
+  if (!j) { E.cnpjOk = false; E.cnpjMotivo = motivo; ins('<div class="insight alerta">' + cnpjMsg(E) + '</div>'); salvar(); return; }
+  E.razao = j.razao || ''; E.cnae = (j.cnaePrinc || {}).descricao || ''; E.cnpjOk = true; E.cnpjMotivo = null; E.cnpjFonte = j._fonte;
+  if (!E.nome || E.nome === (LINK && LINK.empresaNome)) { E.nome = j.razao || E.nome; const el = $('nome'); if (el) el.value = E.nome; }
+  if (!E.atividade && E.cnae) { E.atividade = E.cnae; const el = $('atv'); if (el) el.value = E.atividade; }
+  if (!S.locais.length && j.cep) S.locais.push({ id: 'l1', cep: String(j.cep).replace(/\D/g, '').replace(/(\d{5})(\d{3})/, '$1-$2'), logradouro: j.logradouro ? titulo(j.logradouro) : '', numero: j.numero || '', bairro: j.bairro ? titulo(j.bairro) : '', cidade: j.cidade ? titulo(j.cidade) : '', uf: j.uf || '', apelido: 'Sede', daReceita: true });
+  ins('<div class="insight"><b>' + esc(E.razao) + '</b>' + (E.cnae ? '<br>' + esc(E.cnae) : '') + (j.cidade ? '<br>' + esc(titulo(j.cidade) + (j.uf ? '/' + j.uf : '')) : '') + '</div>');
+  salvar(); }
 
 /* ══════════ 2 · LOCAIS ══════════ */
 function renderLocais() {
