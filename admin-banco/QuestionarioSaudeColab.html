@@ -8,6 +8,7 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -169,10 +170,12 @@
    ══════════════════════════════════════════════════════════════════ */
 const firebaseConfig = {
   apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0", authDomain: "retorno-seguros.firebaseapp.com", projectId: "retorno-seguros",
-  storageBucket: "retorno-seguros.appspot.com", messagingSenderId: "979966947706", appId: "1:979966947706:web:b8b6a8a85d0a3f9e6f9f9e"
+  storageBucket: "retorno-seguros.firebasestorage.app", messagingSenderId: "495712392972", appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+/* Upload: se a rede/Storage não responder, desiste em 45s (antes ficava tentando por até 10 min e o cliente via "carregando"). */
+try { firebase.storage().setMaxUploadRetryTime(45000); firebase.storage().setMaxOperationRetryTime(20000); } catch (e) {}
 const PRODUTO = { id: 'saude_colab', nome: 'Plano de Saúde Colaboradores' };
 const PASTA_STORAGE = 'saude-colab';               // mesmo id do produto no CRM (o raio-x lê mb_produtos/saude-colab)
 const ARQ_VERSAO = '1'; window.ARQ_VERSAO = ARQ_VERSAO;
@@ -527,7 +530,8 @@ function msgWa() { return 'Olá! Enviei a cotação do plano de saúde da ' + (S
 const ARQ_MAX = 10, ARQ_MB = 15;
 const ARQ_TIPOS = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', heic: 'image/heic' };
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', heic: 'image/heic',
+  csv: 'application/vnd.ms-excel' };   // CSV sobe como Excel: a regra do Storage não aceita text/csv
 const _ext = f => ((f.name || '').split('.').pop() || '').toLowerCase();
 const _mimeArq = f => ARQ_TIPOS[_ext(f)] || f.type || 'application/octet-stream';
 const _tipoOk = f => !!ARQ_TIPOS[_ext(f)];
@@ -535,15 +539,20 @@ const _tam = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, 
 const _comTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio')), ms))]);
 function storageOk() { try { return !!(firebase && firebase.storage); } catch (e) { return false; } }
 async function subir(f, tipo, prog) {
+  try { if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously(); } catch (e) {}   // a regra exige sessão (anônima serve)
   const emp = (LINK && LINK.empresaId) || 'sem_empresa';
   const caminho = 'mb_apolices/' + emp + '/' + PASTA_STORAGE + '/' + SESSAO + '/' + Date.now() + '_' + String(f.name).replace(/[^a-zA-Z0-9_.\-]/g, '_');
   const t = firebase.storage().ref(caminho).put(f, { contentType: _mimeArq(f) });
-  t.on('state_changed', sn => { if (prog && sn.totalBytes) prog(Math.round(sn.bytesTransferred / sn.totalBytes * 100)); });
-  const snap = await _comTimeout(t, 180000); const url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
-  return { nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(), via: 'questionario', tipo: tipo || 'documento', porNome: S.contato.nome || null, protocolo: protocolo() };
+  /* vigia: sem nenhum avanço em 40s, cancela — o cliente vê o aviso e usa o WhatsApp em vez de ficar olhando o "carregando" */
+  let ultimo = Date.now(); const vigia = setInterval(() => { if (Date.now() - ultimo > 40000) { clearInterval(vigia); try { t.cancel(); } catch (e) {} } }, 2000);
+  t.on('state_changed', sn => { ultimo = Date.now(); if (prog && sn.totalBytes) prog(Math.round(sn.bytesTransferred / sn.totalBytes * 100)); });
+  try { const snap = await _comTimeout(t, 180000); const url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
+    return { nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(), via: 'questionario', tipo: tipo || 'documento', porNome: S.contato.nome || null, protocolo: protocolo() };
+  } catch (e) { const c = e && e.code; throw new Error(c === 'storage/canceled' ? 'sem resposta do servidor' : c === 'storage/unauthorized' ? 'permissão negada' : (e && e.message) || 'falha no envio'); }
+  finally { clearInterval(vigia); }
 }
 async function gravarAnexos() { if (!SESSAO) return; try { await db.collection('mb_apresentacoes').doc(SESSAO).set({ apoliceAnexos: S.anexos, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (e) { console.warn('anexos', e); } }
-function htmlUpload(id, titulo, sub) { return `<label class="zona-arq" id="${id}_z">${titulo}<small>${sub}</small><input type="file" id="${id}_in" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx" style="display:none;"></label><div id="${id}_l"></div>`; }
+function htmlUpload(id, titulo, sub) { return `<label class="zona-arq" id="${id}_z">${titulo}<small>${sub}</small><input type="file" id="${id}_in" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv" style="display:none;"></label><div id="${id}_l"></div>`; }
 function ligarUpload(id, tipo) {
   const inp = $(id + '_in'); if (!inp) return;
   const pintar = () => { const l = $(id + '_l'); if (!l) return; const meus = S.anexos.map((a, i) => [a, i]).filter(([a]) => !tipo || a.tipo === tipo);
@@ -555,7 +564,7 @@ function ligarUpload(id, tipo) {
   inp.onchange = async ev => { const fs = [...(ev.target.files || [])]; ev.target.value = '';
     for (const f of fs) {
       if (S.anexos.length >= ARQ_MAX) { eco('Chegamos ao limite de ' + ARQ_MAX + ' arquivos. Se faltar algo, mande pelo WhatsApp com o protocolo ' + protocolo() + '.'); break; }
-      if (!_tipoOk(f)) { eco('<b>' + esc(f.name) + '</b> não é um tipo aceito — envie PDF, foto, Word ou Excel.'); continue; }
+      if (!_tipoOk(f)) { eco('<b>' + esc(f.name) + '</b> não é um tipo aceito — envie PDF, foto, Word, Excel ou CSV.'); continue; }
       if (f.size > ARQ_MB * 1048576) { eco('<b>' + esc(f.name) + '</b> passa de ' + ARQ_MB + ' MB. Envie um arquivo menor, ou mande pelo WhatsApp.'); continue; }
       if (!storageOk()) { eco('Não consegui abrir o envio de arquivos agora. Use o WhatsApp — a mensagem já vai com o protocolo.'); break; }
       const box = document.createElement('div'); box.className = 'anx anx-wrap'; box.innerHTML = `<span class="nm">⏳ ${esc(f.name)}</span><span class="sz" data-pc>0%</span><i class="bar" style="width:0"></i>`; $(id + '_l').appendChild(box);
@@ -575,6 +584,7 @@ function renderFim() {
   palco.innerHTML = `<div class="cena fim"><div class="ico">✅</div><div class="titulo">Recebido.</div>
     <div class="intro" style="max-width:560px; margin:0 auto;">A cotação já está com a Retorno. O corretor prepara o estudo${(S.d.comparar || []).filter(x => x !== 'nada').length ? ' com as alternativas que você pediu lado a lado' : ''} e retorna — sem compromisso e sem mexer em nada do que existe hoje.</div>
     <div class="intro" style="max-width:560px; margin:10px auto 0; font-size:13px; color:var(--suave);">Protocolo <strong style="color:#fff;">${protocolo()}</strong></div>
+    <button class="btn btn-2" id="btPdf" type="button" style="max-width:420px; margin:18px auto 0; display:block;">📄 Baixar o resumo da cotação em PDF</button>
     <div class="campo-bx" style="text-align:left; max-width:560px; margin:30px auto 0;">
       <div class="campo-lb"><span class="tx">${pede.length ? 'Para adiantar, anexe o que tiver' : 'Quer anexar algum documento?'}</span></div>
       <div class="campo-sub">${pede.length ? 'Ajuda muito: ' + pede.join('; ') + '.' : 'Lista de vidas, fatura, contrato atual — o que ajudar.'} Tudo opcional.</div>
@@ -585,11 +595,88 @@ function renderFim() {
         <a class="op" id="opMail" href="${mail}" style="display:block; text-decoration:none;">Enviar por e-mail<small>mensagem já pronta, é só anexar</small></a>
         <button class="op" data-v="depois" type="button">Depois — pode me lembrar</button></div></div></div>`;
   window.scrollTo(0, 0);
-  ligarUpload('upFim', null);
+  ligarUpload('upFim', null); $('btPdf').onclick = baixarResumo;
   const marcar = (v, t) => { S.docEnvio = v; salvar(true); if (t) eco(t); };
   $('opWa').onclick = () => marcar('whatsapp', 'Combinado. Se a conversa não abrir, o WhatsApp da Retorno é <b>' + esc(CORRETORA.whatsLabel) + '</b> — protocolo <b>' + protocolo() + '</b>.');
   $('opMail').onclick = () => marcar('email', 'Combinado — a mensagem já vai com o protocolo ' + protocolo() + '.');
   palco.querySelector('[data-v="depois"]').onclick = e => { e.currentTarget.classList.add('sel'); marcar('depois', 'Sem problema. O estudo segue com o que você informou.'); };
+}
+
+/* ─── PDF KIT (jsPDF) — mesmo desenho em apresentação, questionário e painel ───
+   A4, faixa azul no topo, seções numeradas, pares rótulo/valor em 2 colunas,
+   tabelas, caixas de destaque e rodapé com contato e página. Fontes padrão do
+   jsPDF (Latin-1): acentos saem certos; emoji e símbolos fora do Latin-1 são trocados. */
+function pdfKit(titulo, subtitulo, opt) {
+  if (!window.jspdf || !window.jspdf.jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return null; }
+  const { jsPDF } = window.jspdf; const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210, H = 297, M = 16, CW = W - M * 2; let y = 0;
+  const cor = (opt && opt.cor) || [56, 189, 248];
+  const t = s => String(s == null ? '' : s).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/[–—]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/×/g, 'x').replace(/≥/g, '>=').replace(/≤/g, '<=').replace(/…/g, '...')
+    .replace(/[→←]/g, '->').replace(/•/g, '-').replace(/[^\x00-\xFF\n]/g, '').replace(/[ \t]+/g, ' ').trim();
+  const cab = (primeira) => {
+    doc.setFillColor(5, 14, 36); doc.rect(0, 0, W, primeira ? 38 : 14, 'F'); doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(0, primeira ? 38 : 14, W, 1.2, 'F');
+    doc.setTextColor(255, 255, 255);
+    if (primeira) { doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text(t(titulo), M, 18); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(170, 186, 214); doc.text(doc.splitTextToSize(t(subtitulo), CW - 40), M, 26);
+      doc.setFontSize(8); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 12, { align: 'right' }); y = 48; }
+    else { doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text(t(titulo), M, 9); doc.setFont('helvetica', 'normal'); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 9, { align: 'right' }); y = 24; }
+  };
+  const espaco = (h) => { if (y + h > H - 18) { doc.addPage(); cab(false); } };
+  cab(true);
+  const K = {
+    doc, t,
+    secao(txt) { espaco(16); y += 2; doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(M, y - 4, 1.4, 6, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(15, 23, 42); doc.text(t(txt), M + 4, y + 0.6); y += 7; },
+    par(txt, o) { const fs = (o && o.fs) || 9.5; doc.setFont('helvetica', (o && o.b) ? 'bold' : 'normal'); doc.setFontSize(fs); doc.setTextColor.apply(doc, (o && o.cor) || [51, 65, 85]);
+      const ls = doc.splitTextToSize(t(txt), (o && o.w) || CW); ls.forEach(l => { espaco(fs * 0.5); doc.text(l, (o && o.x) || M, y); y += fs * 0.45; }); y += (o && o.after != null) ? o.after : 2; },
+    kv(pares) { const cols = 2, cw = CW / cols; const lin = pares.filter(p => p && p[1] != null && p[1] !== ''); for (let i = 0; i < lin.length; i += cols) {
+        const grupo = lin.slice(i, i + cols); const alturas = grupo.map(([, v]) => doc.splitTextToSize(t(v), cw - 6).length); const h = 5 + Math.max(...alturas) * 4.3; espaco(h + 2);
+        grupo.forEach(([k, v], j) => { const x = M + j * cw; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120, 132, 156); doc.text(t(k).toUpperCase(), x, y);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(9.8); doc.setTextColor(15, 23, 42); doc.text(doc.splitTextToSize(t(v), cw - 6), x, y + 4.6); });
+        y += h + 1.5; } },
+    tabela(cab2, linhas, o) { const n = cab2.length, ws = (o && o.ws) || cab2.map(() => CW / n); const al = (o && o.al) || [];
+      const linha = (cells, head, zebra) => { const alt = Math.max(...cells.map((c, i) => doc.splitTextToSize(t(c), ws[i] - 4).length)) * 4 + 3.2; espaco(alt);
+        if (head) { doc.setFillColor(235, 241, 250); doc.rect(M, y - 3.6, CW, alt, 'F'); } else if (zebra) { doc.setFillColor(248, 250, 253); doc.rect(M, y - 3.6, CW, alt, 'F'); }
+        let x = M; cells.forEach((c, i) => { doc.setFont('helvetica', head ? 'bold' : (i === 0 ? 'normal' : 'bold')); doc.setFontSize(head ? 8 : 9); doc.setTextColor(head ? 71 : 30, head ? 85 : 41, head ? 105 : 59);
+          const ls = doc.splitTextToSize(t(c), ws[i] - 4); if (al[i] === 'r') doc.text(ls, x + ws[i] - 2, y, { align: 'right' }); else doc.text(ls, x + 1.5, y); x += ws[i]; });
+        y += alt; };
+      linha(cab2, true); linhas.forEach((l, i) => linha(l, false, i % 2)); y += 3; },
+    caixa(titulo2, itens, tipo) { const pal = { alerta: [[255, 247, 237], [194, 65, 12]], ok: [[236, 253, 245], [4, 120, 87]], info: [[239, 246, 255], [29, 78, 216]] }[tipo || 'info'];
+      const ls = []; itens.forEach(s => doc.splitTextToSize('- ' + t(s), CW - 10).forEach(l => ls.push(l)));
+      const h = 9 + ls.length * 4.3; espaco(Math.min(h, 60)); const y0 = y; doc.setFillColor.apply(doc, pal[0]); doc.roundedRect(M, y - 4, CW, Math.min(h, H - 22 - y + 4), 2, 2, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor.apply(doc, pal[1]); doc.text(t(titulo2).toUpperCase(), M + 4, y + 1); y += 6.5;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); ls.forEach(l => { if (y > H - 22) { doc.addPage(); cab(false); } doc.setTextColor.apply(doc, pal[1]); doc.text(l, M + 5, y); y += 4.3; }); y += 4; void y0; },
+    destaque(rot, valor, sub) { espaco(24); doc.setFillColor(5, 14, 36); doc.roundedRect(M, y - 4, CW, 20, 2, 2, 'F'); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(150, 170, 205); doc.text(t(rot).toUpperCase(), M + 5, y + 1);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(255, 255, 255); doc.text(t(valor), M + 5, y + 9); if (sub) { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(150, 170, 205); doc.text(doc.splitTextToSize(t(sub), CW - 10)[0], M + 5, y + 14); } y += 22; },
+    pular(h) { y += h || 3; },
+    salvar(nome) { const n = doc.getNumberOfPages(); for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(140, 150, 170);
+        doc.text('Retorno Seguros  ·  (54) 99701-5000  ·  retorno@retornoseguros.com.br  ·  gerado em ' + new Date().toLocaleDateString('pt-BR'), M, H - 8); doc.text(i + ' / ' + n, W - M, H - 8, { align: 'right' }); }
+      doc.save(nome); return doc; }
+  };
+  return K;
+}
+
+/* ─── PDF DO QUESTIONÁRIO (o modelo escolhido, para o cliente guardar) ─── */
+function baixarResumo() {
+  const d = S.d, K = pdfKit('Plano de Saúde — sua cotação', 'O que ' + (S.emp.nome || 'a empresa') + ' escolheu · protocolo ' + protocolo(), { cor: [52, 211, 153] }); if (!K) return;
+  K.destaque('Vidas no plano', vidasTotal() ? vidasTotal() + ' vidas' : 'a informar', [S.pes.nTit && S.pes.nTit !== 'naosei' ? S.pes.nTit + ' titulares' : null, S.pes.modo === 'aqui' && idadeMedia() ? 'idade média ' + idadeMedia() + ' anos' : null].filter(Boolean).join(' · '));
+  K.secao('Empresa'); K.kv([['Empresa', S.emp.razao || S.emp.nome], ['CNPJ', S.emp.cnpj], ['Sede', S.emp.cnpjCidade || S.emp.cidade], ['Atividade (Receita)', S.emp.cnae]]);
+  K.secao('O desenho do plano');
+  K.kv([['Cobertura', D_TXT[d.seg] || 'A definir'], ['Acomodação', D_TXT[d.acom] || 'A definir'], ['Coparticipação', d.seg === 'hospitalar' ? 'Não se aplica (só hospitalar)' : (D_TXT[d.copart] || 'A definir')],
+    ['Adesão', (D_TXT[d.adesao] || 'A definir') + (d.adesao === 'opcional' && d.adesaoEst ? ' · adesão ' + { ate50: 'até metade', '50_75': 'metade a 3/4', '75_mais': 'quase todos', naosei: '?' }[d.adesaoEst] : '')],
+    ['Reembolso', D_TXT[d.reembolso] || 'A definir'], ['Dependentes', DEP_TXT[d.dependentes] || 'A definir'], ['Colaborador contribui', { sim: 'Sim', nao: 'Não', naosei: 'Não sabe' }[d.contribui]], ['Abrangência', 'Nacional']]);
+  const cmp = (d.comparar || []).filter(x => x !== 'nada'); if (cmp.length) K.par('Comparar lado a lado: ' + cmp.map(x => ({ copart: 'com × sem coparticipação', acom: 'enfermaria × quarto', seg: 'completo × hospitalar', adesao: 'compulsório × opcional' }[x])).join(' · '), { fs: 9 });
+  K.secao('As pessoas');
+  const jov = Object.keys(S.pes.jovens).map(Number).sort((a, b) => a - b), sen = Object.keys(S.pes.seniores).map(Number).sort((a, b) => a - b), fx = FAIXAS_S.filter(([k]) => Number(S.pes.faixas[k]));
+  const linhas = jov.map(a => [a + (a === 1 ? ' ano' : ' anos'), 'idade exata', String(S.pes.jovens[a])]).concat(fx.map(([k, t]) => [t + ' anos', 'faixa', String(S.pes.faixas[k])])).concat(sen.map(a => [a + (a === 90 ? '+' : '') + ' anos', 'idade exata', String(S.pes.seniores[a])]));
+  if (linhas.length) K.tabela(['Idade', 'Como', 'Pessoas'], linhas, { ws: [80, 60, 38], al: ['', '', 'r'] });
+  else K.par(S.pes.modo === 'planilha' ? 'Idades pela lista de vidas enviada.' : 'Idades a informar (o RH envia a lista).', { fs: 9 });
+  K.secao('Como está hoje');
+  K.kv([['Plano atual', S.sit.temPlano === 'sim' ? (S.sit.operadora || 'Sim') : { nao: 'Não tem', naosei: 'Não sabe' }[S.sit.temPlano]], ['Aniversário', S.sit.aniversario && S.sit.aniversario !== 'naosei' ? MESES[Number(S.sit.aniversario) - 1] : null],
+    ['Gasto mensal hoje', typeof S.sit.gasto === 'number' ? brl(S.sit.gasto) : null], ['Último reajuste', { ate10: 'Até 10%', '10_20': '10% a 20%', '20_mais': 'Mais de 20%', naosei: 'Não sabe' }[S.sit.ultimoReajuste]],
+    ['Cidades do time', S.cidades.join(' · ')], ['Hospitais de preferência', S.sit.hospitais]]);
+  K.caixa('Próximos passos', ['A Retorno prepara o estudo' + (cmp.length ? ' com as alternativas lado a lado' : '') + ' e retorna com a proposta.', 'Carências: 24h urgência, 180 dias demais casos, 300 dias parto — com 30 vidas ou mais, quem entra nos primeiros 30 dias fica isento.',
+    S.anexos.length ? 'Documentos recebidos: ' + S.anexos.map(a => a.nome).join(', ') + '.' : 'Se puder, envie a lista de vidas e a última fatura do plano atual — pelo link ou pelo WhatsApp (54) 99701-5000.'], 'info');
+  K.salvar('Cotacao_Plano_de_Saude_' + protocolo() + '.pdf');
 }
 
 /* ══════════ PERSISTÊNCIA ══════════ */
