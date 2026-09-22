@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Levantamento da Frota | Retorno Seguros</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  :root { --azul-fundo:#050e24; --ciano:#38bdf8; --dourado:#fbbf24; --verde:#34d399; --laranja:#fb923c; --vermelho:#f87171; --texto:#e8eeff; --suave:#93a4c8; }
+  body { font-family:'Inter',system-ui,sans-serif; background:var(--azul-fundo); color:var(--texto); min-height:100vh; min-height:100dvh; overflow-x:hidden; }
+  .fumaca { position:fixed; inset:0; z-index:0; overflow:hidden; pointer-events:none; }
+  .fumaca span { position:absolute; border-radius:50%; filter:blur(70px); opacity:.45; animation:flutuar 22s ease-in-out infinite; }
+  .f1 { width:56vw; height:56vw; background:radial-gradient(circle,#1e40af,transparent 70%); top:-14%; left:-12%; }
+  .f2 { width:46vw; height:46vw; background:radial-gradient(circle,#0ea5e9,transparent 70%); bottom:-16%; right:-10%; animation-delay:-7s; }
+  @keyframes flutuar { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(4vw,-3vh) scale(1.1);} 66%{transform:translate(-3vw,4vh) scale(.95);} }
+  .grao { position:fixed; inset:0; z-index:1; pointer-events:none; opacity:.035; background-image:radial-gradient(circle,#fff 1px,transparent 1px); background-size:3px 3px; }
+  .palco { position:relative; z-index:2; padding:64px 20px calc(110px + env(safe-area-inset-bottom)); max-width:760px; margin:0 auto; }
+  .marca { position:fixed; top:calc(14px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); font-size:11px; letter-spacing:.22em; color:#4b5f8a; font-weight:700; z-index:3; text-transform:uppercase; white-space:nowrap; }
+  .progresso { position:fixed; top:0; left:0; height:2px; background:linear-gradient(90deg,var(--ciano),var(--dourado)); z-index:5; transition:width .5s; width:0; box-shadow:0 0 12px rgba(56,189,248,.6); }
+  .cena { animation:entra .45s cubic-bezier(.16,1,.3,1); }
+  @keyframes entra { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
+  .trilha { display:flex; gap:5px; margin-bottom:18px; }
+  .trilha i { flex:1; height:3px; border-radius:3px; background:rgba(147,164,200,.2); } .trilha i.ok { background:var(--ciano); } .trilha i.at { background:var(--dourado); }
+  .rotulo { font-size:11px; letter-spacing:.16em; color:var(--ciano); font-weight:700; text-transform:uppercase; margin-bottom:12px; }
+  .titulo { font-size:clamp(21px,4.8vw,30px); font-weight:800; line-height:1.25; margin-bottom:12px; letter-spacing:-.02em; }
+  .titulo em { color:var(--dourado); font-style:normal; }
+  .intro { font-size:15px; line-height:1.65; color:#c3d0ec; font-weight:300; margin-bottom:8px; } .intro strong { color:#fff; font-weight:600; }
+  .voltar { background:none; border:none; color:var(--suave); font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; padding:0; margin-bottom:14px; } .voltar:hover { color:#fff; }
+
+  .campo-bx { margin-top:24px; animation:entra .35s; }
+  .campo-lb { display:flex; align-items:flex-start; gap:8px; font-size:15.5px; font-weight:600; color:#fff; line-height:1.45; margin-bottom:4px; }
+  .campo-lb .tx { flex:1; }
+  .campo-sub { font-size:12.5px; color:var(--suave); line-height:1.5; margin-bottom:10px; }
+  .inf { width:22px; height:22px; border-radius:50%; border:1.5px solid rgba(56,189,248,.6); color:var(--ciano); font-size:12px; font-weight:800; cursor:pointer; background:none;
+    display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; font-style:italic; font-family:Georgia,serif; margin-top:1px; }
+  .inf-tx { display:none; font-size:13px; line-height:1.6; color:#cfe6f7; background:rgba(56,189,248,.08); border-left:2px solid var(--ciano); padding:10px 13px; border-radius:0 10px 10px 0; margin:6px 0 10px; }
+  .inf-tx.on { display:block; animation:entra .3s; }
+  .inf-tx .ex { margin-top:7px; color:#f3d9d3; } .inf-tx .ex b { color:#fca5a5; font-size:10px; letter-spacing:.12em; text-transform:uppercase; display:block; }
+  .ent { width:100%; padding:14px 16px; border-radius:13px; font-size:16px; font-family:inherit; background:rgba(255,255,255,.05); border:1.5px solid rgba(147,164,200,.28); color:#fff; transition:all .2s; margin-top:6px; }
+  .ent:focus { outline:none; border-color:var(--ciano); background:rgba(56,189,248,.1); } .ent::placeholder { color:#5d6f95; }
+  .ent-linha { display:flex; gap:9px; align-items:stretch; } .ent-linha .ent { flex:1; }
+  .ops { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .op { flex:1; min-width:120px; padding:12px 13px; border-radius:12px; cursor:pointer; background:rgba(255,255,255,.05); border:1.5px solid rgba(147,164,200,.26); color:var(--texto);
+    font-size:13.5px; font-weight:600; font-family:inherit; transition:all .18s; text-align:center; line-height:1.35; }
+  .op:hover { border-color:var(--ciano); background:rgba(56,189,248,.1); }
+  .op.sel { background:rgba(56,189,248,.2); border-color:var(--ciano); color:#fff; }
+  .op small { display:block; font-weight:400; color:var(--suave); font-size:11.5px; margin-top:3px; }
+  .ops.col .op { min-width:100%; text-align:left; }
+  .op.leve { flex:0 0 auto; min-width:0; background:none; border-style:dashed; color:var(--suave); font-weight:500; }
+  .insight { margin-top:10px; border-left:3px solid var(--verde); background:rgba(52,211,153,.08); padding:12px 15px; border-radius:0 12px 12px 0; font-size:13.5px; line-height:1.6; color:#d5f5e6; animation:entra .35s; }
+  .insight.alerta { border-color:var(--laranja); background:rgba(251,146,60,.09); color:#fde4cf; }
+  .insight b, .insight strong { color:#fff; }
+  .insight .grande { display:block; font-size:clamp(24px,6vw,34px); font-weight:800; color:#fff; letter-spacing:-.02em; margin:4px 0 2px; }
+  .lembrete { font-size:12.5px; line-height:1.5; color:#fde9b8; background:rgba(251,191,36,.08); border-radius:9px; padding:8px 11px; margin-top:8px; }
+  .lembrete b { color:var(--dourado); }
+
+  .mtz { border:1.5px solid rgba(147,164,200,.18); border-radius:13px; background:rgba(255,255,255,.035); padding:12px 13px; margin-top:9px; }
+  .mtz .nm { display:flex; gap:8px; align-items:flex-start; font-size:14px; font-weight:600; line-height:1.4; } .mtz .nm .tx { flex:1; }
+  .mtz .ops { margin-top:9px; } .mtz .op { min-width:0; padding:9px 8px; font-size:12.5px; }
+
+  .fam-h { display:flex; align-items:center; gap:9px; font-size:12px; letter-spacing:.12em; text-transform:uppercase; font-weight:800; color:var(--dourado); margin:24px 0 4px; }
+  .cob { border:1.5px solid rgba(147,164,200,.18); border-radius:13px; background:rgba(255,255,255,.035); padding:12px 13px; margin-top:9px; transition:border-color .2s; }
+  .cob.quer { border-color:rgba(56,189,248,.55); background:rgba(56,189,248,.06); } .cob.tem { border-color:rgba(52,211,153,.4); } .cob.quer.tem { border-color:rgba(56,189,248,.55); }
+  .cob .nm { display:flex; gap:8px; align-items:flex-start; font-size:14px; font-weight:600; line-height:1.4; } .cob .nm .tx { flex:1; }
+  .cob .rec { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; font-weight:800; color:#031127; background:var(--dourado); padding:2px 7px; border-radius:20px; white-space:nowrap; }
+  .cob .tg { display:flex; gap:8px; margin-top:10px; }
+  .tgl { flex:1; padding:9px 8px; border-radius:10px; font-family:inherit; font-size:12.5px; font-weight:700; cursor:pointer; background:rgba(255,255,255,.05); border:1.5px solid rgba(147,164,200,.25); color:#c3d0ec; }
+  .tgl.on.t { background:rgba(52,211,153,.2); border-color:var(--verde); color:#d1fae5; } .tgl.on.q { background:rgba(56,189,248,.22); border-color:var(--ciano); color:#fff; }
+  .cob .vl { display:none; margin-top:9px; } .cob.quer .vl { display:block; }
+  .cob .rara { font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; font-weight:800; color:#c4b5fd; background:rgba(167,139,250,.18); border:1px solid rgba(167,139,250,.45); padding:2px 7px; border-radius:20px; white-space:nowrap; }
+  .cob.nova { animation:revela .5s cubic-bezier(.16,1,.3,1); }
+  @keyframes revela { 0% { opacity:0; transform:translateY(-6px); box-shadow:0 0 0 0 rgba(167,139,250,.5); }
+    60% { opacity:1; transform:none; box-shadow:0 0 0 7px rgba(167,139,250,.14); } 100% { box-shadow:0 0 0 0 rgba(167,139,250,0); } }
+  .fam-h .qtd { font-size:10px; color:#c4b5fd; background:rgba(167,139,250,.16); border-radius:20px; padding:2px 7px; letter-spacing:0; text-transform:none; font-weight:700; }
+  .cob .vl .ent { margin-top:0; padding:11px 13px; font-size:14.5px; } .cob .vl .dica { font-size:11.5px; color:var(--suave); margin-top:5px; line-height:1.45; }
+  .mais { width:100%; margin-top:14px; padding:12px; border-radius:12px; background:none; border:1.5px dashed rgba(147,164,200,.35); color:var(--suave); font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+
+  .hub { display:grid; gap:11px; margin-top:20px; }
+  .lc { text-align:left; padding:16px 17px; border-radius:15px; cursor:pointer; font-family:inherit; color:var(--texto); background:rgba(255,255,255,.05); border:1.5px solid rgba(147,164,200,.24); transition:all .2s; width:100%; }
+  .lc:hover { border-color:var(--ciano); transform:translateY(-2px); } .lc.ok { border-color:rgba(52,211,153,.45); }
+  .lc .l1 { display:flex; justify-content:space-between; gap:10px; align-items:baseline; } .lc .n { font-size:16px; font-weight:800; } .lc .st { font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--suave); }
+  .lc.ok .st { color:var(--verde); } .lc .e { font-size:12.5px; color:var(--suave); margin-top:4px; line-height:1.45; } .lc .vr { font-size:13px; color:#d5f5e6; margin-top:7px; font-weight:600; }
+  .lc .bar { height:4px; border-radius:4px; background:rgba(147,164,200,.18); margin-top:11px; overflow:hidden; } .lc .bar i { display:block; height:100%; background:linear-gradient(90deg,var(--ciano),var(--verde)); }
+
+  .busca-res { margin-top:8px; display:grid; gap:6px; max-height:300px; overflow-y:auto; }
+  .busca-res button { text-align:left; padding:11px 13px; border-radius:10px; background:rgba(255,255,255,.05); border:1px solid rgba(147,164,200,.2); color:var(--texto); font-family:inherit; font-size:13.5px; line-height:1.4; cursor:pointer; }
+  .busca-res button:hover { border-color:var(--ciano); background:rgba(56,189,248,.1); }
+  .tags { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+  .tag { display:inline-flex; gap:7px; align-items:center; padding:8px 11px; border-radius:20px; background:rgba(56,189,248,.18); border:1px solid rgba(56,189,248,.5); font-size:12.5px; font-weight:600; line-height:1.3; }
+  .tag button { background:none; border:none; color:#fff; cursor:pointer; font-size:14px; line-height:1; }
+
+  .rev { border:1px solid rgba(147,164,200,.18); border-radius:14px; background:rgba(255,255,255,.035); padding:15px 16px; margin-top:12px; }
+  .rev h4 { font-size:14.5px; font-weight:800; margin-bottom:8px; display:flex; justify-content:space-between; gap:10px; } .rev h4 a { color:var(--ciano); font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .rev .ln { display:flex; justify-content:space-between; gap:14px; font-size:13px; padding:5px 0; border-bottom:1px solid rgba(147,164,200,.1); } .rev .ln:last-child { border:none; }
+  .rev .ln span:first-child { color:var(--suave); } .rev .ln span:last-child { color:#fff; font-weight:600; text-align:right; } .rev .ln .ns { color:#c4b5fd !important; }
+
+  .barra { position:fixed; left:0; right:0; bottom:0; z-index:8; padding:12px 20px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(180deg,rgba(5,14,36,0),rgba(5,14,36,.96) 35%); }
+  .barra .in { max-width:760px; margin:0 auto; display:flex; gap:10px; }
+  .btn { flex:1; padding:15px 22px; border-radius:14px; border:none; cursor:pointer; background:linear-gradient(135deg,var(--ciano),#2563eb); color:#031127; font-size:15px; font-weight:800; font-family:inherit; transition:all .2s; }
+  .btn:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(56,189,248,.32); }
+  .btn-2 { background:rgba(255,255,255,.08); color:var(--texto); border:1.5px solid rgba(147,164,200,.3); flex:0 0 auto; } .btn-ouro { background:linear-gradient(135deg,var(--dourado),#f59e0b); color:#2a1a00; }
+  .eco { position:fixed; left:50%; bottom:calc(84px + env(safe-area-inset-bottom)); transform:translate(-50%,20px); z-index:9; width:min(720px,calc(100vw - 28px)); background:rgba(8,28,48,.97);
+    border:1px solid rgba(52,211,153,.45); border-left:3px solid var(--verde); border-radius:4px 14px 14px 4px; padding:12px 16px 14px; font-size:13.5px; line-height:1.55; color:#d5f5e6; opacity:0; pointer-events:none;
+    transition:all .4s cubic-bezier(.16,1,.3,1); cursor:pointer; box-shadow:0 14px 40px rgba(0,0,0,.45); overflow:hidden; }
+  .eco.on { opacity:1; transform:translate(-50%,0); pointer-events:auto; } .eco i { position:absolute; left:0; bottom:0; height:2px; background:var(--verde); width:100%; transform-origin:left; }
+  @keyframes ecoBar { from{transform:scaleX(1);} to{transform:scaleX(0);} }
+  .fim { text-align:center; padding:40px 0 10px; } .fim .ico { font-size:56px; margin-bottom:14px; }
+  .anx { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; background:rgba(255,255,255,.05); border:1.5px solid rgba(147,164,200,.22); margin-top:8px; font-size:13.5px; }
+  .anx .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff; font-weight:600; }
+  .anx .sz { font-size:11.5px; color:var(--suave); white-space:nowrap; }
+  .anx .x { background:none; border:none; color:var(--suave); font-size:17px; cursor:pointer; padding:0 2px; line-height:1; }
+  .anx .x:hover { color:#f87171; }
+  .anx.ok { border-color:rgba(52,211,153,.45); } .anx.erro { border-color:rgba(248,113,113,.5); }
+  .anx .bar { position:absolute; left:0; bottom:0; height:2px; background:var(--ciano); transition:width .25s; }
+  .anx-wrap { position:relative; overflow:hidden; border-radius:12px; }
+  .zona-arq { display:block; text-align:center; padding:18px 16px; border-radius:13px; border:1.5px dashed rgba(56,189,248,.5); background:rgba(56,189,248,.06); cursor:pointer; font-size:14px; font-weight:600; color:#cfe6f7; }
+  .zona-arq:hover { background:rgba(56,189,248,.12); border-color:var(--ciano); } .zona-arq small { display:block; font-weight:400; color:var(--suave); font-size:11.5px; margin-top:4px; }
+  @media (max-width:560px) { .palco { padding:58px 16px calc(110px + env(safe-area-inset-bottom)); } .op { min-width:calc(50% - 4px); } .ops.col .op { min-width:100%; } }
+
+  /* frota: planilha e cartões de veículo */
+  .up-box { margin-top:16px; } .up-alt { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; } .up-alt .op { font-size:13px; padding:9px 13px; }
+  .vres { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:20px; }
+  .vres > div:not(.tipos) { background:rgba(13,32,68,.65); border:1px solid rgba(99,132,190,.25); border-radius:13px; padding:11px 12px; }
+  .vres b { display:block; font-size:20px; font-weight:800; color:#fff; letter-spacing:-.01em; } .vres span { font-size:11.5px; color:var(--suave); }
+  .vres .pend b { color:var(--laranja); } .vres .ok b { color:var(--verde); }
+  .tipos { grid-column:1/-1; display:flex; gap:6px; flex-wrap:wrap; } .tipos span { font-size:12.5px; color:#c3d0ec; background:rgba(255,255,255,.05); border:1px solid rgba(147,164,200,.2); border-radius:20px; padding:4px 10px; }
+  .lote { margin-top:12px; background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.25); border-radius:13px; padding:11px 12px; }
+  .lote-t { font-size:13px; font-weight:700; color:#bae6fd; margin-bottom:8px; } .lote-t small { font-weight:400; color:var(--suave); }
+  .lote-g { display:grid; grid-template-columns:1fr 1.3fr 1.3fr auto; gap:8px; align-items:end; } .lote-g label { font-size:11px; color:var(--suave); display:flex; flex-direction:column; gap:3px; }
+  .lote-g .op { flex:0 0 auto; min-width:0; padding:9px 14px; }
+  .vbusca { display:flex; gap:8px; margin-top:12px; align-items:center; } .vbusca .ent { margin-top:0; flex:1; padding:11px 14px; font-size:14.5px; } .vbusca .op { flex:0 0 auto; font-size:13px; }
+  .vlista { margin-top:10px; display:flex; flex-direction:column; gap:7px; }
+  .vc { border:1.5px solid rgba(99,132,190,.25); border-radius:13px; background:rgba(13,32,68,.55); overflow:hidden; } .vc.tem-pend { border-left:3px solid var(--laranja); } .vc.aberto { border-color:var(--ciano); }
+  .vc-h { display:flex; align-items:center; gap:9px; padding:10px 12px; cursor:pointer; font-size:13.5px; }
+  .vc-h .ti { font-size:18px; } .vc-h .pl { font-family:ui-monospace,Menlo,monospace; font-weight:800; color:#fff; letter-spacing:.04em; background:rgba(255,255,255,.07); border-radius:6px; padding:2px 7px; white-space:nowrap; }
+  .vc-h .md { flex:1; min-width:0; color:#c3d0ec; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .vc-h .vl { color:#fde68a; font-weight:700; white-space:nowrap; }
+  .vc-h .bp { font-size:11px; font-weight:800; color:#2a1200; background:var(--laranja); border-radius:20px; padding:2px 8px; white-space:nowrap; } .vc-h .bo { color:var(--verde); font-weight:800; } .vc-h .st { color:var(--suave); }
+  .vc-b { padding:4px 12px 12px; border-top:1px solid rgba(99,132,190,.18); animation:entra .25s; }
+  .vgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; margin-top:8px; } .vgrid label { font-size:11px; color:var(--suave); display:flex; flex-direction:column; gap:3px; }
+  .vf { width:100%; padding:9px 10px; border-radius:9px; font-size:14px; font-family:inherit; background:rgba(255,255,255,.05); border:1.3px solid rgba(147,164,200,.28); color:#fff; }
+  .vf:focus { outline:none; border-color:var(--ciano); } select.vf option { background:#0b1a38; color:#fff; }
+  .vext { margin-top:10px; font-size:12px; color:var(--suave); line-height:1.7; } .vext span { display:inline-block; margin-right:10px; } .vext b { color:#c3d0ec; font-weight:600; }
+  .vac { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; } .vac .op { flex:0 0 auto; min-width:0; padding:8px 14px; font-size:13px; }
+  .vac .rm { color:#fca5a5; border-color:rgba(248,113,113,.45); }
+  .vazio { text-align:center; padding:18px; font-size:13.5px; color:var(--suave); border:1px dashed rgba(147,164,200,.25); border-radius:13px; margin-top:12px; }
+  @media (max-width:600px) { .lote-g { grid-template-columns:1fr 1fr; } .vc-h .vl { display:none; } .vres b { font-size:17px; } }
+</style>
+</head>
+<body>
+<div class="fumaca"><span class="f1"></span><span class="f2"></span></div>
+<div class="grao"></div>
+<div class="progresso" id="prog"></div>
+<div class="marca">Retorno Seguros</div>
+<div class="palco"><div id="palco"></div></div>
+<div class="barra" id="barra" style="display:none;"><div class="in" id="barraIn"></div></div>
+<div class="eco" id="eco"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   LEVANTAMENTO — SEGURO DE FROTA v1 (QuestionarioFrota.html)
+   Detalhista, mas sem digitar à toa: o cliente informa o crucial (empresa,
+   seguro atual, questionário da frota = QAR do cotador, coberturas padrão)
+   e SOBE A PLANILHA DE VEÍCULOS QUE JÁ TEM (Excel/CSV — inclusive a relação
+   de itens da apólice ou a planilha-modelo da seguradora). O leitor
+   reconhece as colunas (placa, chassi, modelo, anos, FIPE, valor, uso,
+   CEP, bônus, sinistros, cobertura…), mostra cada veículo num cartão
+   editável, aponta pendências e permite ajustar em lote. O corretor
+   recebe tudo estruturado — e, no painel, baixa a planilha no layout de
+   importação do cotador.
+   Mesmo registro da apresentação (frota_<token>). Regras da casa: nenhuma
+   seguradora citada nas telas, nenhum preço; nada trava; "não sei" vale.
+   ══════════════════════════════════════════════════════════════════ */
+const firebaseConfig = {
+  apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0", authDomain: "retorno-seguros.firebaseapp.com", projectId: "retorno-seguros",
+  storageBucket: "retorno-seguros.firebasestorage.app", messagingSenderId: "495712392972", appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+try { firebase.storage().setMaxUploadRetryTime(45000); firebase.storage().setMaxOperationRetryTime(20000); } catch (e) {}
+const PRODUTO = { id: 'frota', nome: 'Seguro de Frota' };
+const PASTA_STORAGE = 'frota';
+const ARQ_VERSAO = '1'; window.ARQ_VERSAO = ARQ_VERSAO;
+const CORRETORA = { whats: '5554997015000', whatsLabel: '(54) 99701-5000', email: 'retorno@retornoseguros.com.br' };
+let CONTATO_DESTINO = Object.assign({}, CORRETORA);
+const MAX_VEIC = 600;
+/* ─── BASE FROTA — cartilha Auto Frota (jun/26), guia Assistência Dia e Noite (jun/26),
+   Manual do QAR Frota, Manual QAR Carga, Manual Endosso Online Frota e planilha-modelo
+   de importação (81 colunas + glossário). Nas telas do cliente nenhuma seguradora é citada;
+   os códigos da planilha ficam só no painel do corretor. */
+
+/* QAR FROTA — exatamente as perguntas do cotador (capa frota) */
+const QAR = {
+  medidas: ['Consulta a Cadastro de Motorista', 'Monitoramento / Rastreamento por Satélite', 'Escolta Armada', 'Rotograma', 'Uso de Iscas Eletrônicas', 'Certificação de Motorista Profissional'],
+  propriedade: ['Empresa / O Próprio', 'Sócios', 'Agregados', 'Funcionários', 'Locado', 'Outros'],
+  regioes: ['Rio de Janeiro e São Paulo', 'Demais Regiões do Sudeste', 'Região Sul', 'Norte, Nordeste e Centro-Oeste'],
+  pernoite: ['Posto de Atendimento Autorizado', 'Posto de Gasolina/Rodoviário', 'Estacionamento Fechado', 'Não Viaja'],
+  cargas: ['Água (Caminhão Pipa)', 'Auto Peças', 'Brinquedos', 'Canavieiro', 'Carga Viva', 'Cigarro', 'Combustível / Inflamável / Produto Químico / Corrosivos / Óleo (Carroceria Tanque)',
+    'Eletrodomésticos / Eletro-eletrônico / Celular e Acessórios', 'Gênero Alimentício / Bebidas (exceto frigorificado)', 'Gênero Alimentício Frigorificado', 'Indivisível', 'Madeira / Móveis / Papel',
+    'Material de Construção / Medicamento / Cosmético', 'Minério', 'Munição / Armas', 'Outros', 'Pneu / Câmara de Ar / Plástico / Polietileno', 'Veículos', 'Vestuário / Confecções / Tecidos', 'Vidros'],
+  cargasIsoladas: ['Gênero Alimentício Frigorificado', 'Veículos', 'Indivisível'],
+  cargaEx: { 'Madeira / Móveis / Papel': 'mudança, papel, adesivos', 'Eletrodomésticos / Eletro-eletrônico / Celular e Acessórios': 'baterias, telefonia, equipamentos industriais', 'Gênero Alimentício / Bebidas (exceto frigorificado)': 'não perecíveis, padaria, ração, grama, feirante',
+    'Veículos': 'embarcações, tratores, máquinas, bicicletas', 'Vestuário / Confecções / Tecidos': 'colchões, calçados, bijuterias', 'Material de Construção / Medicamento / Cosmético': 'aço, cerâmica, tubos, ferramentas, granito',
+    'Pneu / Câmara de Ar / Plástico / Polietileno': 'borracha, embalagens, filme', 'Carga Viva': 'animais', 'Gênero Alimentício Frigorificado': 'sorvete, carnes', 'Minério': 'ardósia, carvão', 'Canavieiro': 'bagaço de cana',
+    'Outros': 'carga mista, recicláveis, entulho, defensivo agrícola' }
+};
+/* domínio da planilha-modelo */
+const DOM = {
+  combustivel: ['GASOLINA / ALCOOL', 'DIESEL', 'GASOLINA', 'ALCOOL', 'ELETRICO', 'GASOLINA / GNV', 'ALCOOL / GNV', 'GASOLINA/ALCOOL/GNV', 'GNV', 'OUTROS'],
+  uso: ['COMERCIAL/PROFISSIONAL', 'TRANSPORTE DE CARGAS', 'PARTICULAR', 'TRANSPORTE DE FUNCIONARIOS', 'VIAGEM ENTREGA', 'CARGA MISTA', 'LOCADO', 'TRANSP. URBANO DE PASSAGEIROS', 'TRANSP. RODOV. DE PASSAGEIROS',
+    'TRANSPORTE ESCOLAR', 'GUINCHO/PLATAFORMA', 'MUNCK', 'AMBULANCIA', 'AUTO ESCOLA', 'FOOD TRUCK', 'COLETOR LIXO/LIMPEZA URBANA', 'POLICIAMENTO/SEGURANCA', 'TRANSPORTE VALORES', 'FIM PUBLICITARIO', 'APLICATIVO DE TRANSPORTE', 'OUTROS'],
+  produto: ['COMPREENSIVA', 'INCENDIO E ROUBO', 'RCF'],
+  franquia: ['OBRIGATÓRIA', 'FACULTATIVA I', 'FACULTATIVA II', 'FRANQUIA REDUZIDA'],
+  carroceria: ['BAU', 'ABERTA', 'BASCULANTE', 'GRANELEIRA', 'TANQUE', 'BETONEIRA', 'COLETOR DE LIXO', 'OUTROS'],
+  semireboque: ["SEMI BOIADEIRO", "REB CANAVIEIRO-CANA INTEIRA", "REB CARGA SECA", "REB CEGONHEIRA", "REB FURGAO FRIGORIFICO", "REB GRANELEIRO", "REB TANQUE", "RODOTREM BASCULANTE", "RODOTREM CARGA SECA", "RODOTREM CARREGA TUDO", "RODOTREM FURGAO FRIGORIFICO", "RODOTREM FURGAO(ALUMINIO)", "RODOTREM FURGAO(ISOTERMICO)", "RODOTREM FURGAO(LONADO)", "RODOTREM PORTA CONTEINER", "RODOTREM TANQUE", "SEMIREB CANAVIEIRO-CANA INTEIRA", "SEMIREB CANAVIEIRO-CANA PICADA", "SEMIREB CARGA SECA", "SEMIREB CARREGA TUDO", "SEMIREB CEGONHEIRA", "REB DOLLY", "SEMIREB FURGAO FRIGORIFICO", "SEMIREB FURGAO(ALUMINIO)", "SEMIREB FURGAO(ISOTERMICO)", "SEMIREB GRANELEIRO", "SEMIREB PORTA CONTEINER", "SEMIREB SILO RODOVIARIO", "SEMIREB TANQUE", "BITREM CARGA SECA", "BITREM FURGAO(ALUMINIO)", "BITREM GRANELEIRA", "BITREM TANQUE", "REB CANAVIEIRO-CANA PICADA", "REB FURGAO(Aluminio)", "SEMIREB PRANCHA"]
+};
+const TIPOS_VEIC = [{ v: 'passeio', t: 'Passeio', ic: '🚗' }, { v: 'utilitario', t: 'Utilitário / pick-up', ic: '🛻' }, { v: 'caminhao', t: 'Caminhão', ic: '🚚' }, { v: 'cavalo', t: 'Cavalo mecânico', ic: '🚛' },
+  { v: 'reboque', t: 'Reboque / semirreboque', ic: '🚜' }, { v: 'onibus', t: 'Ônibus / van', ic: '🚌' }, { v: 'moto', t: 'Moto', ic: '🏍️' }];
+const eCarga = t => ['caminhao', 'cavalo', 'reboque'].includes(t);
+/* pacotes de serviço (códigos da planilha) — o cliente escolhe o km; o código vai para o corretor */
+const ASSIST = {
+  passeio: [['63', '100 km'], ['43', '200 km'], ['113', '400 km'], ['108', 'Ilimitada']],
+  moto: [['41', '100 km'], ['15', '200 km'], ['16', '400 km'], ['116', 'Ilimitada']],
+  carga: [['64', '200 km'], ['73', '400 km'], ['120', '600 km'], ['74', '800 km'], ['165', '1.000 km'], ['167', '2.000 km']],
+  cargaPane: [['132', '200 km (pane limitada)'], ['133', '400 km (pane limitada)'], ['130', '600 km (pane limitada)'], ['134', '800 km (pane limitada)'], ['169', '1.000 km (pane limitada)'], ['171', '2.000 km (pane limitada)']]
+};
+const RESERVA = [['60', '7 dias'], ['101', '10 dias'], ['59', '15/30 dias'], ['61', '30 dias'], ['30', 'Plus 7 dias'], ['102', 'Plus 10 dias'], ['85', 'Plus 30 dias'], ['144', 'Premium 7 dias'], ['145', 'Premium 15 dias'], ['146', 'Premium 30 dias']];
+const VIDROS = { passeio: [['25', 'Vidro protegido'], ['24', 'Vidro protegido plus'], ['158', 'Vidro protegido premium'], ['98', 'Só reparo de para-brisa']], carga: [['83', 'Vidro protegido carga'], ['155', 'Vidro protegido plus carga'], ['160', 'Vidro protegido carga premium']],
+  logo: { '25': '150', '24': '151', '83': '153', '155': '154', '158': '159', '160': '161' } };
+/* colunas da tabela de veículos */
+const COLS = [
+  { k: 'placa', t: 'Placa', w: 92 }, { k: 'chassi', t: 'Chassi', w: 170 }, { k: 'tipo', t: 'Tipo', w: 130, op: TIPOS_VEIC.map(x => [x.v, x.t]) }, { k: 'descricao', t: 'Marca / modelo', w: 210 },
+  { k: 'anoFab', t: 'Ano fab.', w: 66, num: 1 }, { k: 'anoMod', t: 'Ano mod.', w: 66, num: 1 }, { k: 'fipe', t: 'Cód. FIPE', w: 92 }, { k: 'valor', t: 'Valor (R$)', w: 108, moeda: 1 },
+  { k: 'combustivel', t: 'Combustível', w: 150, op: DOM.combustivel.map(x => [x, x]) }, { k: 'uso', t: 'Uso', w: 190, op: DOM.uso.map(x => [x, x]) }, { k: 'cep', t: 'CEP pernoite', w: 96 },
+  { k: 'zeroKm', t: '0 km?', w: 64, op: [['nao', 'Não'], ['sim', 'Sim']] }, { k: 'rastreador', t: 'Rastreador', w: 88, op: [['nao', 'Não'], ['sim', 'Sim']] },
+  { k: 'produto', t: 'Cobertura', w: 150, op: DOM.produto.map(x => [x, x === 'COMPREENSIVA' ? 'Completa' : x === 'RCF' ? 'Só terceiros (RCF)' : 'Incêndio e roubo']) },
+  { k: 'carroceria', t: 'Carroceria', w: 120, op: [['', '—']].concat(DOM.carroceria.map(x => [x, x])) }, { k: 'valorCarroceria', t: 'Valor carroceria / equip.', w: 130, moeda: 1 },
+  { k: 'bonus', t: 'Bônus (classe)', w: 86, op: [['', '—']].concat(Array.from({ length: 11 }, (_, i) => [String(i), String(i)])) }, { k: 'sinistros', t: 'Sinistros (12m)', w: 86, num: 1 },
+  { k: 'item', t: 'Item na apólice', w: 80 }, { k: 'obs', t: 'Observação', w: 180 }
+];
+/* leitor de planilha: cabeçalho do cliente → coluna nossa */
+const SINON_COL = {
+  placa: ['placa'], chassi: ['chassi', 'chassis', 'vin'], descricao: ['descricao do veiculo', 'descricao', 'veiculo', 'modelo', 'marca/modelo', 'marca modelo', 'marca e modelo'],
+  anoFab: ['ano fabricacao', 'ano fab', 'ano de fabricacao', 'fabricacao'], anoMod: ['ano modelo', 'ano mod', 'modelo ano', 'ano/modelo', 'ano'], fipe: ['codigo fipe', 'cod fipe', 'fipe', 'cod. fipe'],
+  valor: ['valor do veiculo', 'valor fipe', 'valor', 'lmi', 'is', 'importancia segurada', 'valor segurado', 'casco'], combustivel: ['combustivel'], uso: ['uso do veiculo', 'uso', 'utilizacao'],
+  cep: ['cep de risco', 'cep pernoite', 'cep'], zeroKm: ['e zero km', 'zero km', '0km', '0 km'], produto: ['tipo de produto', 'cobertura', 'produto', 'tipo de cobertura'],
+  franquia: ['tipo de franquia', 'franquia'], carroceria: ['descricao carroceria', 'carroceria'], valorCarroceria: ['valor carroceria'], bonus: ['bonus anterior', 'bonus', 'classe de bonus', 'classe bonus', 'cb'],
+  sinistros: ['qtde sinistro', 'sinistros', 'qtd sinistros', 'quantidade de sinistros', 'sinistro'], item: ['item'], apolice: ['apolice'], eixos: ['eixos'], portas: ['portas'],
+  rastreador: ['rastreador', 'antifurto', 'codigo de antifurto'], dmat: ['valor danos materiais', 'danos materiais', 'rcf dm'], dcorp: ['valor danos corporais', 'danos corporais', 'rcf dc'],
+  dmor: ['valor danos morais', 'danos morais'], obs: ['observacao', 'obs', 'observacoes']
+};
+/* consultoria da Retorno (apresentação) — o que o Patrick descreveu */
+const SERVICOS_RETORNO = [
+  { id: 'painel', ic: '🖥️', n: 'A frota inteira num painel', r: 'Sistema próprio da Retorno: todas as placas, item da apólice, coberturas, valores e vencimentos num lugar só — sem planilha perdida no e-mail.' },
+  { id: 'movimenta', ic: '🔁', n: 'Incluir, excluir e trocar veículo sem burocracia', r: 'Comprou, vendeu ou trocou? Você avisa, a Retorno faz o endosso e acompanha até sair — com o registro de tudo no painel.' },
+  { id: 'fipe', ic: '📈', n: 'Valor segurado sempre em dia com a FIPE', r: 'Revisão periódica do valor de cada veículo e do percentual de ajuste — para não pagar a mais nem ficar descoberto numa perda total.' },
+  { id: 'sinistro', ic: '🛠️', n: 'Sinistro acompanhado de perto', r: 'Do aviso à oficina: orientação na hora, despachante e vistoria por imagem, e alguém da Retorno cobrando o andamento por você.' },
+  { id: 'renovacao', ic: '📊', n: 'Renovação estudada, não repetida', r: 'Histórico de bônus e sinistros de cada item, cotação com a planilha pronta e comparação com o mercado antes de renovar.' },
+  { id: 'consultoria', ic: '🧭', n: 'Coberturas do tamanho da operação', r: 'Terceiros (RCF) do porte certo, carroceria e equipamentos, assistência pelo tipo de veículo, carro reserva, diárias de paralisação.' }
+];
+/* coberturas que a frota costuma esquecer (apresentação) */
+const ESQUECIDAS = [
+  ['👥', 'Terceiros do tamanho certo', 'Danos materiais e corporais a terceiros — com um caminhão, uma batida em carro de luxo ou com vítima passa fácil de R$ 100 mil. Opção de <b>garantia única</b> (um limite só para os dois).'],
+  ['⚖️', 'Danos morais', 'Um processo por dano moral após acidente não é raro. Pode ser contratado junto com terceiros.'],
+  ['🧍', 'Passageiros (APP)', 'Indenização por morte ou invalidez de quem estava no veículo — importante em transporte de funcionários.'],
+  ['🏗️', 'Carroceria e equipamentos', 'Baú, frigorífico, munck, guincho, plataforma: <b>não fazem parte do valor FIPE</b> — se não forem declarados, ficam de fora.'],
+  ['⬇️', 'Carga e descarga', 'Acidentes na operação de carga e descarga, basculamento e içamento.'],
+  ['📅', 'Diárias de paralisação', 'Um valor por dia com o veículo parado por sinistro (15 ou 30 dias) — o caminhão parado para de faturar.'],
+  ['🆕', 'Garantia de valor de 0 km', 'Veículo novo indenizado pelo valor de zero km por 90, 180 ou 365 dias.'],
+  ['🌎', 'Extensão para a América do Sul', 'Para quem roda fora do país.'],
+  ['🧾', 'Despesas extraordinárias', 'Um valor extra para as despesas que aparecem depois de um sinistro (até R$ 2 mil).']
+];
+const REGRAS_FROTA = [
+  ['🚗', 'A partir de 2 veículos', 'Pessoa física ou jurídica, passeio ou carga — tudo numa apólice, com um item por veículo.'],
+  ['🧑‍✈️', 'Sem perfil de condutor', 'O seguro frota avalia a <b>empresa</b> (o questionário da frota), não cada motorista. Por isso as respostas do questionário valem para todos os veículos.'],
+  ['🗺️', 'Excluir região barateia — mas tem consequência', 'Se a frota não circula numa região, ela pode ser excluída. Sinistro na região excluída <b>não é indenizado</b>.'],
+  ['📦', 'Carga declarada é carga coberta', 'Veículo que transporta carga precisa estar com o uso "transporte de cargas" e o tipo de carga informado. Carga não declarada pode levar à recusa do sinistro.'],
+  ['🔑', 'Veículos de terceiros', 'Na empresa, entram veículos de sócios, agregados e terceiros que trabalham para ela. Na pessoa física, só os que estão no nome do segurado.'],
+  ['📈', 'Valor pela FIPE (VMR)', 'A indenização integral segue a FIPE do mês do sinistro, com o percentual de ajuste contratado. Carroceria e equipamentos se declaram à parte.']
+];
+
+
+let SESSAO = null, LINK = null, PRES = null;
+let S = novoEstado();
+function novoEstado() { return { emp: {}, hoje: {}, qar: {}, cob: {}, veic: [], lote: {}, planilha: null, contato: {}, anexos: [], pos: { etapa: 'abertura' }, enviado: false }; }
+
+/* ─── UTIL ─── */
+const $ = id => document.getElementById(id);
+const palco = $('palco');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const brl = n => (n == null || isNaN(n)) ? '—' : 'R$ ' + Math.round(n).toLocaleString('pt-BR');
+const brlC = n => n == null ? '—' : n >= 1e6 ? 'R$ ' + (n / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' mi' : n >= 1e3 ? 'R$ ' + (n / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mil' : brl(n);
+const soNum = s => { const d = String(s || '').replace(/\D/g, ''); return d ? Number(d) : null; };
+const dataBR = s => s ? String(s).split('-').reverse().join('/') : '';
+function progresso(p) { $('prog').style.width = Math.min(100, Math.max(0, p)) + '%'; }
+let _ecoT = null;
+function eco(txt) { const e = $('eco'); if (!txt) return; clearTimeout(_ecoT);
+  const ms = Math.min(9000, Math.max(3800, txt.replace(/<[^>]+>/g, '').length * 55));
+  e.innerHTML = txt + `<i style="animation:ecoBar ${ms}ms linear forwards;"></i>`; e.classList.add('on'); e.onclick = () => e.classList.remove('on');
+  _ecoT = setTimeout(() => e.classList.remove('on'), ms); }
+function barra(botoes) { const b = $('barra'); if (!botoes) { b.style.display = 'none'; return; }
+  b.style.display = 'block'; $('barraIn').innerHTML = botoes.map((x, i) => `<button class="btn ${x.cls || ''}" data-i="${i}">${x.t}</button>`).join('');
+  $('barraIn').querySelectorAll('button').forEach(el => el.onclick = () => botoes[Number(el.dataset.i)].f()); }
+
+/* ══════════ MOTOR DE PÁGINAS (mesmo do Empresarial) ══════════ */
+const TRI = [{ v: 'sim', t: 'Sim' }, { v: 'nao', t: 'Não' }, { v: 'naosei', t: 'Não sei' }];
+const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+function opsDe(c) { return c.tipo === 'tri' ? TRI : c.tipo === 'mes' ? MESES.map((m, i) => ({ v: String(i + 1), t: m })).concat([{ v: 'naosei', t: 'Não sei' }]) : (c.opcoes || []); }
+function htmlInfo(c) { return c.info ? `<div class="inf-tx" data-inf="${c.id}">${c.info}</div>` : ''; }
+function htmlCampo(c, a) {
+  const lb = `<div class="campo-lb"><span class="tx">${c.label}</span>${c.info ? `<button class="inf" data-abre="${c.id}" type="button">i</button>` : ''}</div>${htmlInfo(c)}${c.sub ? `<div class="campo-sub">${c.sub}</div>` : ''}`;
+  let corpo = ''; const v = a[c.id];
+  if (['texto', 'numero', 'moeda', 'cnpj'].includes(c.tipo)) {
+    const val = v == null || v === 'naosei' ? '' : c.tipo === 'moeda' ? brl(v) : c.tipo === 'numero' ? Number(v).toLocaleString('pt-BR') : v;
+    corpo = `<div class="ent-linha"><input class="ent" data-in="${c.id}" ${c.tipo !== 'texto' ? 'inputmode="numeric"' : ''} placeholder="${esc(c.ph || '')}" value="${esc(val)}" autocomplete="off">
+      ${c.naosei ? `<button class="op leve ${v === 'naosei' ? 'sel' : ''}" data-ns="${c.id}" type="button" style="margin-top:6px;">Não sei</button>` : ''}</div>`;
+  } else {
+    const multi = c.tipo === 'multi', sel = x => multi ? (v || []).includes(x) : v === x;
+    corpo = `<div class="ops ${c.col ? 'col' : ''}">${opsDe(c).map(o => `<button class="op ${sel(o.v) ? 'sel' : ''}" data-op="${c.id}" data-v="${esc(o.v)}" type="button">${o.t}${o.d ? `<small>${o.d}</small>` : ''}</button>`).join('')}</div>`;
+  }
+  return `<div class="campo-bx" data-campo="${c.id}">${lb}${corpo}<div data-ins="${c.id}"></div></div>`;
+}
+function pagina(cfg) {
+  const a = cfg.alvo, campos = cfg.campos;
+  palco.innerHTML = `<div class="cena">${cfg.trilha ? trilha(cfg.trilha) : ''}${cfg.voltar ? `<button class="voltar" id="pgVoltar">← ${cfg.voltarTxt || 'voltar'}</button>` : ''}
+    <div class="rotulo">${cfg.rotulo || ''}</div><div class="titulo">${cfg.titulo}</div>${cfg.intro ? `<div class="intro">${cfg.intro}</div>` : ''}
+    ${cfg.topo || ''}<div id="pgCampos">${campos.map(c => htmlCampo(c, a)).join('')}</div>${cfg.rodape || ''}</div>`;
+  window.scrollTo(0, 0);
+  if (cfg.voltar) $('pgVoltar').onclick = cfg.voltar;
+  const atualizar = () => {
+    campos.forEach(c => {
+      const bx = palco.querySelector(`[data-campo="${c.id}"]`); if (!bx) return;
+      bx.style.display = (!c.visivel || c.visivel(a)) ? '' : 'none';
+      const ins = palco.querySelector(`[data-ins="${c.id}"]`); const h = c.insight ? c.insight(a) : null; ins.innerHTML = h || '';
+    });
+    cfg.aoAtualizar && cfg.aoAtualizar();
+  };
+  const mudou = (c) => { atualizar(); cfg.aoMudar && cfg.aoMudar(c); salvar(); };
+  palco.querySelectorAll('[data-abre]').forEach(b => b.onclick = () => { const t = palco.querySelector(`[data-inf="${b.dataset.abre}"]`); if (t) t.classList.toggle('on'); });
+  palco.querySelectorAll('[data-op]').forEach(b => b.onclick = () => {
+    const c = campos.find(x => x.id === b.dataset.op); if (!c) return; const val = b.dataset.v;
+    if (c.tipo === 'multi') { let arr = (a[c.id] || []).slice(); const o = opsDe(c).find(x => x.v === val);
+      if (o && o.excl) arr = arr.includes(val) ? [] : [val]; else { arr = arr.filter(x => !(opsDe(c).find(y => y.v === x) || {}).excl); arr = arr.includes(val) ? arr.filter(x => x !== val) : arr.concat(val); }
+      a[c.id] = arr; palco.querySelectorAll(`[data-op="${c.id}"]`).forEach(x => x.classList.toggle('sel', arr.includes(x.dataset.v)));
+    } else { a[c.id] = val; palco.querySelectorAll(`[data-op="${c.id}"]`).forEach(x => x.classList.toggle('sel', x === b)); }
+    mudou(c);
+  });
+  palco.querySelectorAll('[data-ns]').forEach(b => b.onclick = () => { const c = campos.find(x => x.id === b.dataset.ns); const on = a[c.id] !== 'naosei'; a[c.id] = on ? 'naosei' : null;
+    b.classList.toggle('sel', on); palco.querySelector(`[data-in="${c.id}"]`).value = ''; mudou(c); });
+  palco.querySelectorAll('[data-in]').forEach(el => { const c = campos.find(x => x.id === el.dataset.in); if (!c) return;
+    el.oninput = () => {
+      if (c.tipo === 'moeda') { const n = soNum(el.value); a[c.id] = n; el.value = n == null ? '' : brl(n); const ns = palco.querySelector(`[data-ns="${c.id}"]`); if (ns) ns.classList.remove('sel'); }
+      else if (c.tipo === 'numero') { const n = soNum(el.value); a[c.id] = n; el.value = n == null ? '' : n.toLocaleString('pt-BR'); const ns = palco.querySelector(`[data-ns="${c.id}"]`); if (ns) ns.classList.remove('sel'); }
+      else if (c.tipo === 'cnpj') { const d = el.value.replace(/\D/g, '').slice(0, 14); el.value = d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2'); a[c.id] = el.value; if (d.length === 14) buscarCNPJ(d, a, atualizar); }
+      else a[c.id] = el.value;
+      atualizar(); cfg.aoMudar && cfg.aoMudar(c); salvar();
+    }; });
+  atualizar();
+  barra(cfg.botoes);
+  return atualizar;
+}
+/* ─── CONSULTA DE CNPJ — três fontes públicas, com fallback ───
+   A BrasilAPI limita consultas por IP (quando estoura, devolve 429) e às vezes
+   fica fora do ar. Então tentamos, em ordem: BrasilAPI → Minha Receita → CNPJ.ws.
+   Cada uma é normalizada para o mesmo formato. Nada trava: se todas falharem,
+   o cliente digita o nome e segue. a.cnpjMotivo guarda o porquê, para a tela. */
+const _CNPJ_FONTES = [
+  { n: 'brasilapi', u: d => 'https://brasilapi.com.br/api/cnpj/v1/' + d, m: j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cnaePrinc: { codigo: j.cnae_fiscal, descricao: j.cnae_fiscal_descricao },
+      sec: (j.cnaes_secundarios || []).map(c => ({ codigo: c.codigo, descricao: c.descricao })), cidade: j.municipio, uf: j.uf, cep: j.cep,
+      logradouro: [j.descricao_tipo_de_logradouro, j.logradouro].filter(Boolean).join(' '), numero: j.numero, bairro: j.bairro }) },
+  { n: 'minhareceita', u: d => 'https://minhareceita.org/' + d, m: j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cnaePrinc: { codigo: j.cnae_fiscal, descricao: j.cnae_fiscal_descricao },
+      sec: (j.cnaes_secundarios || []).map(c => ({ codigo: c.codigo, descricao: c.descricao })), cidade: j.municipio, uf: j.uf, cep: j.cep,
+      logradouro: [j.descricao_tipo_de_logradouro, j.logradouro].filter(Boolean).join(' '), numero: j.numero, bairro: j.bairro }) },
+  { n: 'cnpjws', u: d => 'https://publica.cnpj.ws/cnpj/' + d, m: j => { const e = j.estabelecimento || {};
+      return { razao: j.razao_social, fantasia: e.nome_fantasia, cnaePrinc: { codigo: (e.atividade_principal || {}).id, descricao: (e.atividade_principal || {}).descricao },
+        sec: (e.atividades_secundarias || []).map(c => ({ codigo: c.id, descricao: c.descricao })), cidade: (e.cidade || {}).nome, uf: (e.estado || {}).sigla, cep: e.cep,
+        logradouro: [e.tipo_logradouro, e.logradouro].filter(Boolean).join(' '), numero: e.numero, bairro: e.bairro }; } }
+];
+function _cnpjFetch(url, ms) { const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const t = setTimeout(() => { try { ctl && ctl.abort(); } catch (e) {} }, ms || 9000);
+  return fetch(url, ctl ? { signal: ctl.signal } : undefined).finally(() => clearTimeout(t)); }
+async function _cnpjConsulta(d) {
+  let achou = null, invalido = false, limite = false;
+  for (const f of _CNPJ_FONTES) {
+    for (let tent = 0; tent < 2 && !achou; tent++) {
+      try { const r = await _cnpjFetch(f.u(d));
+        if (r.status === 429) { limite = true; if (tent === 0) { await new Promise(x => setTimeout(x, 1400)); continue; } break; }
+        if (r.status === 404 || r.status === 400) { invalido = true; break; }
+        if (!r.ok) break;
+        const j = await r.json(); const o = f.m(j); if (!o || !o.razao) break; o._fonte = f.n; achou = o;
+      } catch (e) { console.warn('cnpj', f.n, e && e.message); break; }
+    }
+    if (achou) break;
+  }
+  return { dados: achou, motivo: achou ? null : invalido ? 'naoencontrado' : limite ? 'limite' : 'offline' };
+}
+async function buscarCNPJ(d, a, cb) {
+  a.cnpjOk = null; a.cnpjMotivo = null; if (cb) cb();
+  const { dados: achou, motivo } = await _cnpjConsulta(d);
+  if (achou) {
+    a.razao = achou.razao || ''; a.fantasia = achou.fantasia || ''; a.cnae = (achou.cnaePrinc || {}).descricao || '';
+    a.cnpjCidade = (achou.cidade || '') + (achou.uf ? '/' + achou.uf : ''); a.cnpjCep = achou.cep || ''; a.cnpjFonte = achou._fonte; a.cnpjOk = true; a.cnpjMotivo = null;
+    a.cnaes = [(achou.cnaePrinc || {}).descricao ? { codigo: String(achou.cnaePrinc.codigo || ''), descricao: achou.cnaePrinc.descricao, principal: true } : null]
+      .concat((achou.sec || []).map(c => ({ codigo: String(c.codigo || ''), descricao: c.descricao || '', principal: false }))).filter(x => x && x.descricao);
+    if (!a.nome) { a.nome = a.fantasia || a.razao; const el = palco.querySelector('[data-in="nome"]'); if (el) el.value = a.nome; }
+  } else { a.cnpjOk = false; a.cnpjMotivo = motivo; }
+  if (cb) cb(); salvar();
+}
+const CNPJ_MSG = { naoencontrado: 'Não encontrei esse CNPJ na base da Receita — confira o número, ou siga em frente e escreva o nome.', limite: 'A consulta pública está no limite de acessos agora — sem problema, escreva o nome e siga em frente.', offline: 'Não consegui consultar esse CNPJ agora — sem problema, siga em frente.' };
+const cnpjMsg = a => CNPJ_MSG[a && a.cnpjMotivo] || CNPJ_MSG.offline;
+
+const ETAPAS = ['empresa', 'hoje', 'qar', 'coberturas', 'veiculos', 'revisao'];
+function trilha(et) { const k = ETAPAS.indexOf(et); return `<div class="trilha">${ETAPAS.map((_, i) => `<i class="${i < k ? 'ok' : i === k ? 'at' : ''}"></i>`).join('')}</div>`; }
+const presV = k => PRES && PRES[k] ? PRES[k].valor : null;
+const nf = n => Number(n || 0).toLocaleString('pt-BR');
+
+/* ══════════ ABERTURA ══════════ */
+function renderAbertura() {
+  progresso(2); S.pos = { etapa: 'abertura' };
+  const emp = LINK && LINK.empresaNome;
+  palco.innerHTML = `<div class="cena"><div class="rotulo">Levantamento da frota</div>
+    <div class="titulo">${emp ? esc(emp) + ': ' : ''}a frota <em>do jeito que ela é</em> — para a Retorno cotar sem ida e volta.</div>
+    <div class="intro">São 5 etapas: <strong>a empresa</strong>, <strong>o seguro de hoje</strong>, <strong>o questionário da frota</strong> (as mesmas perguntas que a seguradora faz), <strong>as coberturas</strong> e <strong>os veículos</strong>.</div>
+    <div class="insight" style="margin-top:18px;"><b>Não precisa digitar veículo por veículo.</b> Na etapa dos veículos você sobe a planilha que já tem (Excel ou CSV — pode ser a relação de itens da apólice atual). A gente lê as colunas, mostra cada veículo na tela e você só confere e ajusta.</div>
+    <div class="intro" style="margin-top:12px; font-size:13.5px;">Tudo é salvo automaticamente — dá para parar e voltar pelo mesmo link, ou encaminhar para quem cuida da frota.</div></div>`;
+  window.scrollTo(0, 0); barra([{ t: 'Começar →', f: renderEmpresa }]);
+}
+
+/* ══════════ 1 · EMPRESA ══════════ */
+function renderEmpresa() {
+  progresso(8); S.pos = { etapa: 'empresa' };
+  if (LINK && LINK.empresaNome && !S.emp.nome) S.emp.nome = LINK.empresaNome;
+  if (!S.emp.pessoa) S.emp.pessoa = 'pj';
+  pagina({ trilha: 'empresa', rotulo: 'Etapa 1 · O segurado', titulo: 'Quem é o dono da frota?', alvo: S.emp, voltar: renderAbertura,
+    campos: [
+      { id: 'pessoa', tipo: 'escolha', label: 'A frota está em nome de', opcoes: [{ v: 'pj', t: 'Empresa (CNPJ)' }, { v: 'pf', t: 'Pessoa física (CPF)' }],
+        insight: a => a.pessoa === 'pf' ? `<div class="lembrete">Na pessoa física, <b>todos os veículos precisam estar no nome do segurado</b> — veículos de cônjuge ou filhos não entram na frota.</div>` : null },
+      { id: 'cnpj', tipo: 'cnpj', label: 'CNPJ', ph: '00.000.000/0000-00', visivel: a => a.pessoa !== 'pf',
+        insight: a => a.cnpjOk ? `<div class="insight"><b>${esc(a.razao)}</b>${a.cnae ? '<br>' + esc(a.cnae) : ''}${a.cnpjCidade ? '<br>' + esc(a.cnpjCidade) : ''}</div>` : a.cnpjOk === false ? `<div class="insight alerta">${cnpjMsg(a)}</div>` : null },
+      { id: 'cpf', tipo: 'texto', label: 'CPF', ph: '000.000.000-00', visivel: a => a.pessoa === 'pf' },
+      { id: 'nome', tipo: 'texto', label: 'Nome / razão social', ph: 'Como aparece nos documentos' },
+      { id: 'proposta', tipo: 'escolha', label: 'É…', opcoes: [{ v: 'renovacao', t: 'Renovação', d: 'a frota já tem seguro' }, { v: 'novo', t: 'Seguro novo', d: 'primeira apólice de frota' }, { v: 'naosei', t: 'Não sei' }] }
+    ], botoes: [{ t: 'Continuar →', f: renderHoje }] });
+}
+
+/* ══════════ 2 · O SEGURO DE HOJE ══════════ */
+function renderHoje() {
+  progresso(18); S.pos = { etapa: 'hoje' };
+  pagina({ trilha: 'hoje', rotulo: 'Etapa 2 · O seguro de hoje', titulo: 'Como a frota está segurada hoje?', alvo: S.hoje, voltar: renderEmpresa,
+    intro: 'O bônus e o histórico de sinistros são o que mais pesa na renovação — por isso vale caprichar aqui.',
+    campos: [
+      { id: 'tem', tipo: 'escolha', col: true, label: 'Hoje os veículos estão…', opcoes: [{ v: 'frota', t: 'Numa apólice de frota' }, { v: 'individual', t: 'Em seguros individuais, um por veículo' }, { v: 'parte', t: 'Parte segurada, parte não' }, { v: 'nao', t: 'Sem seguro' }] },
+      { id: 'seguradora', tipo: 'texto', label: 'Seguradora atual', ph: 'Nome da seguradora', visivel: a => ['frota', 'individual', 'parte'].includes(a.tem) },
+      { id: 'apolice', tipo: 'texto', label: 'Número da apólice (se tiver à mão)', ph: 'Opcional', visivel: a => a.tem === 'frota' },
+      { id: 'vencimento', tipo: 'texto', label: 'Vencimento', ph: 'dd/mm/aaaa', visivel: a => ['frota', 'individual', 'parte'].includes(a.tem) },
+      { id: 'bonus', tipo: 'escolha', label: 'Classe de bônus da frota (se souber)', visivel: a => a.tem === 'frota', opcoes: Array.from({ length: 11 }, (_, i) => ({ v: String(i), t: String(i) })).concat([{ v: 'naosei', t: 'Não sei' }]),
+        info: 'O bônus é o desconto acumulado por anos sem sinistro (classe 0 a 10). Na frota, costuma estar na apólice ou na relação de itens. Se cada veículo tiver o seu, informe na planilha.' },
+      { id: 'sinistros', tipo: 'escolha', label: 'Sinistros nos últimos 12 meses (a frota toda)', opcoes: [{ v: '0', t: 'Nenhum' }, { v: '1', t: '1' }, { v: '2_3', t: '2 ou 3' }, { v: '4_mais', t: '4 ou mais' }, { v: 'naosei', t: 'Não sei' }] },
+      { id: 'sinDesc', tipo: 'texto', label: 'Conte rapidamente o que aconteceu', ph: 'Ex.: 1 colisão com terceiro em mar/26; 1 roubo de carga', visivel: a => ['1', '2_3', '4_mais'].includes(a.sinistros) },
+      { id: 'incomoda', tipo: 'multi', col: true, label: 'O que mais incomoda hoje? (opcional)', opcoes: [{ v: 'preco', t: 'O preço / reajuste' }, { v: 'atendimento', t: 'O atendimento no sinistro' }, { v: 'controle', t: 'Controlar inclusões e exclusões' }, { v: 'fipe', t: 'Valor segurado defasado' }, { v: 'nada', t: 'Nada — só quero comparar', excl: true }] }
+    ], botoes: [{ t: 'Continuar →', f: renderQar }] });
+}
+
+/* ══════════ 3 · QUESTIONÁRIO DA FROTA (QAR) ══════════ */
+function renderQar() {
+  progresso(30); S.pos = { etapa: 'qar' };
+  const o = arr => arr.map(x => ({ v: x, t: x, d: QAR.cargaEx[x] }));
+  pagina({ trilha: 'qar', rotulo: 'Etapa 3 · Questionário da frota', titulo: 'As perguntas que a seguradora faz <em>para a frota toda</em>.', alvo: S.qar, voltar: renderHoje,
+    intro: 'No seguro frota, o preço leva em conta a operação da empresa — não o perfil de cada motorista. Estas respostas valem para todos os veículos.',
+    campos: [
+      { id: 'gerencia', tipo: 'escolha', label: 'A frota faz parte de algum programa de gerenciamento de risco?', opcoes: [{ v: 'sim', t: 'Sim' }, { v: 'nao', t: 'Não' }] },
+      { id: 'medidas', tipo: 'multi', col: true, label: 'Quais medidas vocês usam?', sub: 'Marque ao menos uma.', visivel: a => a.gerencia === 'sim', opcoes: QAR.medidas.map(x => ({ v: x, t: x })),
+        insight: a => (a.medidas || []).some(x => /Rastreamento/.test(x)) ? `<div class="lembrete">Com rastreamento marcado, pelo menos um veículo precisa ter rastreador — dá para marcar na lista de veículos.</div>` : null },
+      { id: 'propriedade', tipo: 'multi', col: true, label: 'Em nome de quem estão os veículos?', sub: 'Pode marcar mais de uma.', opcoes: QAR.propriedade.map(x => ({ v: x, t: x })),
+        info: 'Na empresa, entram veículos da própria empresa, dos sócios, de agregados e de terceiros que trabalham para ela. Veículos de funcionários ou parentes dos sócios só se estiverem a serviço da empresa. Na pessoa física, só os que estão no nome do segurado.' },
+      { id: 'logotipo', tipo: 'escolha', label: 'Algum veículo tem logotipo adesivado?', opcoes: [{ v: 'sim', t: 'Sim' }, { v: 'nao', t: 'Não' }] },
+      { id: 'regioes', tipo: 'multi', col: true, label: 'Deseja excluir a cobertura para alguma região?', info: 'Se a frota nunca circula numa região, dá para excluí-la e o preço cai. Mas, se houver sinistro na região excluída, <b>não há indenização</b>. Não é possível excluir a região onde algum veículo pernoita.',
+        opcoes: QAR.regioes.map(x => ({ v: x, t: x })).concat([{ v: 'nao', t: 'Não desejo excluir', excl: true }]),
+        insight: a => (a.regioes || []).filter(x => x !== 'nao').length ? `<div class="lembrete">Excluída = <b>sem indenização</b> se algo acontecer lá. Confira se nenhum veículo viaja para essas regiões.</div>` : null },
+      { id: 'pernoite', tipo: 'escolha', col: true, label: 'Em viagem, onde o veículo pernoita com mais frequência?', opcoes: QAR.pernoite.map(x => ({ v: x, t: x })) },
+      { id: 'carga', tipo: 'escolha', label: 'Algum veículo transporta carga?', opcoes: [{ v: 'sim', t: 'Sim' }, { v: 'nao', t: 'Não' }],
+        info: 'Veículo que transporta carga precisa estar com o uso "transporte de cargas" — e esse uso só vale para caminhão, cavalo mecânico, reboque e semirreboque.' },
+      { id: 'cargas', tipo: 'multi', col: true, label: 'Principais tipos de carga (até 3)', visivel: a => a.carga === 'sim', opcoes: o(QAR.cargas),
+        sub: 'Frigorificado, veículos e carga indivisível só podem ser informados sozinhos.',
+        insight: a => (a.cargas || []).length ? `<div class="insight">Carga declarada é carga coberta. Carga transportada e não informada pode levar à <b>recusa do sinistro</b>.</div>` : null }
+    ], aoMudar: c => { if (c.id === 'cargas') ajustarCargas(); },
+    botoes: [{ t: 'Continuar →', f: renderCoberturas }] });
+}
+function ajustarCargas() { let a = S.qar.cargas || []; const iso = a.filter(x => QAR.cargasIsoladas.includes(x));
+  if (iso.length) { const ult = iso[iso.length - 1]; if (a.length > 1) { a = [ult]; eco('<b>' + esc(ult) + '</b> só pode ser informado sozinho — deixei só ele marcado.'); } }
+  if (a.length > 3) { a = a.slice(-3); eco('No máximo 3 tipos de carga — ficaram os 3 últimos que você marcou.'); }
+  if (a.length !== (S.qar.cargas || []).length) { S.qar.cargas = a; renderQar(); } }
+
+/* ══════════ 4 · COBERTURAS PADRÃO DA FROTA ══════════ */
+const temTipo = f => S.veic.some(v => f(v.tipo)) || (S.veic.length === 0);
+function renderCoberturas() {
+  progresso(44); S.pos = { etapa: 'coberturas' };
+  const c = S.cob; if (!c.produto) c.produto = 'COMPREENSIVA'; if (!c.franquia) c.franquia = 'OBRIGATÓRIA'; if (!c.ajuste) c.ajuste = '100';
+  const perfil = presV('ftPerfil');
+  pagina({ trilha: 'coberturas', rotulo: 'Etapa 4 · Coberturas', titulo: 'O padrão da frota.', alvo: c, voltar: renderQar,
+    intro: 'Vale para todos os veículos. Se algum for diferente (por exemplo, só terceiros), você ajusta no cartão dele na próxima etapa. Na dúvida, "a Retorno recomenda" é resposta válida.',
+    campos: [
+      { id: 'produto', tipo: 'escolha', col: true, label: 'Cobertura do veículo', opcoes: [{ v: 'COMPREENSIVA', t: 'Completa', d: 'colisão, roubo, furto, incêndio e alagamento' }, { v: 'INCENDIO E ROUBO', t: 'Incêndio e roubo', d: 'sem colisão' }, { v: 'RCF', t: 'Só terceiros (RCF)', d: 'o veículo não tem cobertura' }] },
+      { id: 'franquia', tipo: 'escolha', label: 'Franquia', visivel: a => a.produto === 'COMPREENSIVA', opcoes: [{ v: 'OBRIGATÓRIA', t: 'Obrigatória', d: 'a padrão' }, { v: 'FRANQUIA REDUZIDA', t: 'Reduzida', d: 'paga menos no sinistro, prêmio maior' }, { v: 'FACULTATIVA I', t: 'Facultativa I' }, { v: 'FACULTATIVA II', t: 'Facultativa II' }, { v: 'recomendar', t: 'A Retorno recomenda' }] },
+      { id: 'ajuste', tipo: 'escolha', label: 'Percentual da FIPE para indenização', visivel: a => a.produto !== 'RCF', info: 'Na perda total, o veículo é indenizado pela FIPE do mês multiplicada por este percentual. 100% é o padrão; acima disso o prêmio sobe.', opcoes: ['90', '95', '100', '105', '110'].map(x => ({ v: x, t: x + '%' })) },
+      { id: 'dm', tipo: 'escolha', label: 'Terceiros — danos materiais', info: 'Paga os danos que o seu veículo causar no patrimônio de terceiros (carro, muro, poste). Com caminhão, um acidente com veículo de luxo ou com várias partes passa fácil de R$ 100 mil.', opcoes: ['100000', '200000', '300000', '500000', '1000000'].map(x => ({ v: x, t: brlC(Number(x)) })).concat([{ v: 'recomendar', t: 'Recomendação' }]) },
+      { id: 'dc', tipo: 'escolha', label: 'Terceiros — danos corporais', info: 'Despesas médicas e indenizações a pessoas feridas ou mortas no acidente (fora do veículo segurado).', opcoes: ['100000', '200000', '300000', '500000', '1000000'].map(x => ({ v: x, t: brlC(Number(x)) })).concat([{ v: 'recomendar', t: 'Recomendação' }]) },
+      { id: 'dmor', tipo: 'escolha', label: 'Danos morais', opcoes: ['0', '10000', '20000', '50000', '100000'].map(x => ({ v: x, t: x === '0' ? 'Não contratar' : brlC(Number(x)) })) },
+      { id: 'garantiaUnica', tipo: 'escolha', label: 'Terceiros em limite único (garantia única)?', info: 'Em vez de um limite para danos materiais e outro para corporais, um limite só que serve para os dois — mais flexível num acidente grave.', opcoes: [{ v: 'nao', t: 'Não, limites separados' }, { v: 'sim', t: 'Sim, limite único' }, { v: 'recomendar', t: 'Recomendação' }] },
+      { id: 'app', tipo: 'escolha', label: 'Passageiros (APP) — por pessoa', info: 'Indenização por morte ou invalidez de quem estava dentro do veículo. Importante para transporte de funcionários.', opcoes: ['0', '10000', '20000', '50000'].map(x => ({ v: x, t: x === '0' ? 'Não contratar' : brlC(Number(x)) })) },
+      { id: 'assistPasseio', tipo: 'escolha', label: 'Assistência 24h — carros e utilitários (reboque)', visivel: () => perfil !== 'carga', opcoes: ASSIST.passeio.map(([c2, t]) => ({ v: c2, t })).concat([{ v: 'NAO CONTRATAR', t: 'Não contratar' }]),
+        info: 'Reboque, socorro mecânico, chaveiro, táxi, troca de pneu, motorista substituto. Sem assistência contratada, o reboque após sinistro (exceto pane) é limitado a 100 km para passeio.' },
+      { id: 'assistCarga', tipo: 'escolha', label: 'Assistência 24h — caminhões (reboque)', visivel: () => perfil !== 'passeio', opcoes: ASSIST.carga.map(([c2, t]) => ({ v: c2, t })).concat(ASSIST.cargaPane.map(([c2, t]) => ({ v: c2, t }))).concat([{ v: 'NAO CONTRATAR', t: 'Não contratar' }]),
+        info: 'Para carga, a quilometragem vai de 200 a 2.000 km. A versão com <b>pane limitada</b> (exclusiva de frota) guincha a pane até 200 km e o sinistro até a quilometragem contratada — e custa menos. Sem assistência, o reboque após sinistro é limitado a 200 km para carga.' },
+      { id: 'vidros', tipo: 'escolha', label: 'Vidros, faróis, lanternas e retrovisores', opcoes: [{ v: 'sim', t: 'Contratar' }, { v: 'logo', t: 'Contratar — tem vidro com logomarca' }, { v: 'NAO CONTRATAR', t: 'Não contratar' }] },
+      { id: 'reserva', tipo: 'escolha', label: 'Carro reserva (só veículos de passeio)', visivel: () => perfil !== 'carga', opcoes: [{ v: '60', t: '7 dias' }, { v: '59', t: '15/30 dias' }, { v: '61', t: '30 dias' }, { v: '144', t: 'Premium 7 dias' }, { v: 'NAO CONTRATAR', t: 'Não contratar' }] },
+      { id: 'paralisacao', tipo: 'escolha', label: 'Diárias de paralisação (caminhões)', visivel: () => perfil !== 'passeio', info: 'Um valor por dia com o caminhão parado por sinistro: 15 ou 30 dias, de R$ 100 a R$ 200 por dia.',
+        opcoes: [{ v: '0', t: 'Não contratar' }, { v: '15_100', t: '15 dias × R$ 100' }, { v: '15_200', t: '15 dias × R$ 200' }, { v: '30_100', t: '30 dias × R$ 100' }, { v: '30_200', t: '30 dias × R$ 200' }] },
+      { id: 'extras', tipo: 'multi', col: true, label: 'Mais alguma?', opcoes: [{ v: 'despesas', t: 'Despesas extraordinárias', d: 'até R$ 2 mil após um sinistro' }, { v: 'america', t: 'Extensão para a América do Sul' }, { v: 'zerokm', t: 'Garantia de valor de 0 km', d: '90, 180 ou 365 dias para veículos novos' }, { v: 'nenhuma', t: 'Nenhuma', excl: true }] }
+    ], botoes: [{ t: 'Continuar para os veículos →', f: renderVeiculos }] });
+}
+
+/* ══════════ 5 · VEÍCULOS ══════════ */
+const novoVeic = () => ({ id: 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+function normPlaca(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7); }
+function numBR(v) { if (typeof v === 'number') return v; const s = String(v || '').replace(/[^\d,.-]/g, ''); if (!s) return null;
+  const n = s.includes(',') ? Number(s.replace(/\./g, '').replace(',', '.')) : Number(s.replace(/\.(?=\d{3}(\D|$))/g, '')); return isNaN(n) ? null : n; }
+function melhor(valor, lista) { const n = norm(valor).replace(/[^a-z0-9]/g, ''); if (!n) return null; let best = null, bs = 0;
+  lista.forEach(x => { const m = norm(x).replace(/[^a-z0-9]/g, ''); let s = m === n ? 100 : (m.includes(n) || n.includes(m)) ? 60 - Math.abs(m.length - n.length) : 0; if (s > bs) { bs = s; best = x; } }); return bs >= 30 ? best : null; }
+function inferirTipo(v) { const d = norm((v.descricao || '') + ' ' + (v.uso || '') + ' ' + (v.carroceria || ''));
+  if (/semi ?reb|semirreb|reboque|carreta|bitrem|rodotrem|dolly|randon|facchini|librelato|noma |guerra /.test(d)) return 'reboque';
+  if (/cavalo|trator rodov|\b(fh|fm|r ?4\d0|g ?4\d0|actros|axor ?20|stralis|constellation 2\d\.|tgx|xf)\b/.test(d)) return 'cavalo';
+  if (/caminh|cargo|atego|accelo|axor|constellation|delivery|worker|tector|daily 7|vm ?2|vm ?3|1718|2426|1319|24\.2|17\.1|13\.1|10\.1|11\.1|9\.1|8\.1|scania|volvo|iveco|transporte de cargas|bau|basculante|graneleir|munck|betoneira/.test(d)) return 'caminhao';
+  if (/moto|cg ?1|cb ?\d|fan |biz|pop ?1|factor|fazer|ybr|nxr|bros|xre|pcx|titan/.test(d)) return 'moto';
+  if (/onibus|micro|van |sprinter|ducato|master|boxer|jumper|transit|marcopolo|comil|neobus/.test(d)) return /sprinter|ducato|master|boxer|jumper|transit/.test(d) ? 'utilitario' : 'onibus';
+  if (/strada|saveiro|toro|hilux|s10|s-10|ranger|amarok|frontier|l200|triton|montana|oroch|maverick|fiorino|kangoo|partner|doblo|courier|hr |bongo|expert|jumpy|rampage|titano/.test(d)) return 'utilitario';
+  return 'passeio'; }
+function mapearProduto(v) { const n = norm(v); if (!n) return null; if (/rcf|terceir/.test(n)) return 'RCF'; if (/incend|roubo|i\/r|ir$/.test(n) && !/compre|complet/.test(n)) return 'INCENDIO E ROUBO'; if (/compre|complet|casco|total|colis/.test(n)) return 'COMPREENSIVA'; return null; }
+function detectarCabecalho(linhas) { let melhorI = 0, melhorS = 0, melhorMapa = {};
+  for (let i = 0; i < Math.min(15, linhas.length); i++) { const mapa = {}; let s = 0;
+    (linhas[i] || []).forEach((h, j) => { const n = norm(h).replace(/[?:()]/g, '').replace(/\s+/g, ' ').trim(); if (!n) return;
+      for (const [k, sin] of Object.entries(SINON_COL)) { if (mapa[k] != null) continue; if (sin.some(x => n === x || (x.length > 3 && n.startsWith(x)))) { mapa[k] = j; s++; break; } } });
+    if (s > melhorS) { melhorS = s; melhorI = i; melhorMapa = mapa; } }
+  return { i: melhorI, mapa: melhorMapa, score: melhorS }; }
+function lerLinhas(linhas) {
+  const cab = detectarCabecalho(linhas); if (cab.score < 2 || (cab.mapa.placa == null && cab.mapa.chassi == null && cab.mapa.descricao == null)) return { erro: 'Não reconheci as colunas desta planilha. Ela precisa ter pelo menos placa ou chassi e o modelo do veículo.' };
+  const hdr = linhas[cab.i] || [], usados = new Set(Object.values(cab.mapa)), out = [];
+  for (let r = cab.i + 1; r < linhas.length; r++) { const L = linhas[r] || []; const g = k => cab.mapa[k] != null ? L[cab.mapa[k]] : null;
+    if (!L.some(x => String(x == null ? '' : x).trim())) continue;
+    const v = novoVeic();
+    v.placa = normPlaca(g('placa')); v.chassi = String(g('chassi') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17); v.descricao = String(g('descricao') || '').trim().slice(0, 90);
+    if (!v.placa && !v.chassi && !v.descricao) continue;
+    const af = numBR(g('anoFab')), am = numBR(g('anoMod')); if (af) v.anoFab = af; if (am) v.anoMod = am;
+    v.fipe = String(g('fipe') || '').trim(); const val = numBR(g('valor')); if (val) v.valor = Math.round(val);
+    const comb = melhor(g('combustivel'), DOM.combustivel); if (comb) v.combustivel = comb; const uso = melhor(g('uso'), DOM.uso); if (uso) v.uso = uso;
+    const cep = String(g('cep') || '').replace(/\D/g, ''); if (cep.length >= 8) v.cep = cep.slice(0, 5) + '-' + cep.slice(5, 8);
+    const zk = norm(g('zeroKm')); if (zk) v.zeroKm = /^s|x|1|true/.test(zk) ? 'sim' : 'nao';
+    const prod = mapearProduto(g('produto')); if (prod) v.produto = prod; const fr = melhor(g('franquia'), DOM.franquia); if (fr) v.franquia = fr;
+    const carr = melhor(g('carroceria'), DOM.carroceria); if (carr) v.carroceria = carr; const vc = numBR(g('valorCarroceria')); if (vc) v.valorCarroceria = Math.round(vc);
+    const b = numBR(g('bonus')); if (b != null && b >= 0 && b <= 10) v.bonus = String(Math.round(b)); const si = numBR(g('sinistros')); if (si != null) v.sinistros = Math.round(si);
+    const it = g('item'); if (it != null && it !== '') v.item = String(it).trim(); const rs = norm(g('rastreador')); if (rs) v.rastreador = /^(n|nao|0|-)$/.test(rs) ? 'nao' : 'sim';
+    const ob = g('obs'); if (ob) v.obs = String(ob).slice(0, 140);
+    ['dmat', 'dcorp', 'dmor', 'eixos', 'portas'].forEach(k => { const x = numBR(g(k)); if (x) v[k] = x; });
+    const extras = {}; hdr.forEach((h, j) => { if (!usados.has(j) && h != null && String(h).trim() && L[j] != null && String(L[j]).trim()) extras[String(h).trim().slice(0, 40)] = String(L[j]).trim().slice(0, 80); });
+    if (Object.keys(extras).length) v.extras = extras;
+    v.tipo = inferirTipo(v); out.push(v); }
+  return { veic: out, cols: Object.keys(cab.mapa), linhaCab: cab.i + 1, total: out.length }; }
+const ROT_EXTRA = { eixos: 'Eixos', portas: 'Portas', franquia: 'Franquia', dmat: 'Danos materiais', dcorp: 'Danos corporais', dmor: 'Danos morais', apolice: 'Apólice' };
+const rotColuna = c => (COLS.find(x => x.k === c) || { t: ROT_EXTRA[c] || c }).t;
+function pendencias(v) { const p = [];
+  if (!v.placa && !v.chassi) p.push('placa ou chassi'); else if (v.placa && !/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(v.placa)) p.push('placa inválida');
+  if (!v.descricao) p.push('modelo'); if (!v.anoMod && !v.anoFab) p.push('ano'); if (!v.cep && !S.lote.cep) p.push('CEP de pernoite');
+  if (v.uso === 'TRANSPORTE DE CARGAS' && !eCarga(v.tipo)) p.push('uso "transporte de cargas" só para caminhão/reboque');
+  if (eCarga(v.tipo) && v.tipo !== 'cavalo' && !v.carroceria) p.push('carroceria'); return p; }
+function resumoFrota() { const tot = S.veic.length, val = S.veic.reduce((s, v) => s + (Number(v.valor) || 0) + (Number(v.valorCarroceria) || 0), 0), pend = S.veic.filter(v => pendencias(v).length).length;
+  const porTipo = {}; S.veic.forEach(v => { porTipo[v.tipo] = (porTipo[v.tipo] || 0) + 1; }); return { tot, val, pend, porTipo }; }
+let FILTRO_V = '', SO_PEND = false, ABERTO = null;
+function renderVeiculos() {
+  progresso(60); S.pos = { etapa: 'veiculos' };
+  palco.innerHTML = `<div class="cena">${trilha('veiculos')}<button class="voltar" id="bk">← coberturas</button>
+    <div class="rotulo">Etapa 5 · Os veículos</div><div class="titulo">A lista da frota — <em>suba a planilha que você já tem</em>.</div>
+    <div class="intro">Excel ou CSV: a relação de itens da apólice, o controle interno, a planilha do financeiro. A gente reconhece as colunas e mostra cada veículo aqui para você conferir.</div>
+    <div class="up-box">
+      <label class="zona-arq" id="zonaPlan">📥 Subir a planilha de veículos<small>Excel (.xlsx, .xls) ou CSV · até ${MAX_VEIC} veículos</small><input type="file" id="planIn" accept=".xlsx,.xls,.csv" style="display:none;"></label>
+      <div class="up-alt"><a class="op leve" id="baixarModelo" style="text-decoration:none; cursor:pointer;">⬇ Baixar planilha modelo</a><button class="op leve" id="addV" type="button">+ Adicionar veículo à mão</button></div>
+      <div id="planInfo"></div></div>
+    <div id="vPainel"></div></div>`;
+  window.scrollTo(0, 0);
+  $('bk').onclick = renderCoberturas; $('addV').onclick = () => { const v = novoVeic(); v.tipo = presV('ftPerfil') === 'carga' ? 'caminhao' : 'passeio'; v.produto = S.cob.produto; S.veic.unshift(v); ABERTO = v.id; salvar(); pintarVeic(); };
+  $('baixarModelo').onclick = baixarModelo;
+  $('planIn').onchange = ev => { const f = (ev.target.files || [])[0]; ev.target.value = ''; if (f) importarPlanilha(f); };
+  pintarPlanInfo(); pintarVeic();
+  barra([{ t: 'Revisar e enviar →', f: renderRevisao }]);
+}
+function pintarPlanInfo() { const el = $('planInfo'); if (!el) return; const P = S.planilha;
+  el.innerHTML = P ? `<div class="insight" style="margin-top:12px;">📄 <b>${esc(P.nome)}</b> — ${P.lidos} ${P.lidos === 1 ? 'veículo lido' : 'veículos lidos'}${(S.planilhas || []).length > 1 ? ' · ' + S.planilhas.length + ' planilhas somadas, ' + nf(S.veic.length) + ' veículos na lista' : ''} · colunas reconhecidas: ${P.cols.map(rotColuna).join(', ')}${P.extras ? '<br>As demais colunas foram guardadas e seguem para o corretor.' : ''}${P.enviado ? '<br>✅ Arquivo original guardado para a Retorno.' : P.envioErro ? '<br>⚠️ O arquivo original não subiu (' + esc(P.envioErro) + ') — os dados lidos já estão salvos.' : ''}</div>` : ''; }
+function carregarXLSX() { return new Promise((res, rej) => { if (window.XLSX) return res(window.XLSX); const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload = () => res(window.XLSX); s.onerror = () => rej(new Error('leitor de planilha não carregou')); document.head.appendChild(s); }); }
+async function importarPlanilha(f) {
+  const ext = (f.name.split('.').pop() || '').toLowerCase(); if (!['xlsx', 'xls', 'csv'].includes(ext)) return eco('Envie a planilha em Excel (.xlsx ou .xls) ou CSV.');
+  $('planInfo').innerHTML = `<div class="insight" style="margin-top:12px;">⏳ Lendo <b>${esc(f.name)}</b>…</div>`;
+  try { const XLSX = await carregarXLSX(); const buf = await f.arrayBuffer(); let wb;
+    if (ext === 'csv') { let txt = ''; try { txt = new TextDecoder('utf-8').decode(buf); } catch (e2) { txt = ''; }
+      if (!txt || /\uFFFD/.test(txt)) { try { txt = new TextDecoder('windows-1252').decode(buf); } catch (e2) {} }
+      wb = XLSX.read(txt, { type: 'string', raw: true }); }
+    else wb = XLSX.read(buf, { type: 'array', cellDates: false });
+    let melhorR = null; wb.SheetNames.forEach(n => { const linhas = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }); const r = lerLinhas(linhas); if (!r.erro && (!melhorR || r.total > melhorR.total)) melhorR = Object.assign(r, { aba: n }); });
+    if (!melhorR) { $('planInfo').innerHTML = `<div class="insight alerta" style="margin-top:12px;">Não reconheci as colunas desta planilha. Ela precisa ter pelo menos <b>placa ou chassi</b> e o <b>modelo</b>. Você pode baixar a planilha modelo, ou mandar o arquivo assim mesmo — ele segue para a Retorno.</div>`; enviarOriginal(f, 0); return; }
+    let novos = []; const vistos = new Map(); let repet = 0;
+    melhorR.veic.forEach(v => { const ch = v.placa || v.chassi; if (ch && vistos.has(ch)) { Object.assign(vistos.get(ch), Object.fromEntries(Object.entries(v).filter(([k, x]) => k !== 'id' && x != null && x !== ''))); repet++; } else { if (ch) vistos.set(ch, v); novos.push(v); } });
+    const corte = novos.length > MAX_VEIC; if (corte) novos = novos.slice(0, MAX_VEIC);
+    novos.forEach(v => { if (!v.produto) v.produto = S.cob.produto || 'COMPREENSIVA'; });
+    const existentes = new Set(S.veic.map(v => v.placa || v.chassi)); const dup = novos.filter(v => existentes.has(v.placa || v.chassi)).length;
+    S.veic = S.veic.filter(v => !novos.some(n => (n.placa && n.placa === v.placa) || (n.chassi && n.chassi === v.chassi))).concat(novos);
+    S.planilha = { nome: f.name, lidos: novos.length, cols: melhorR.cols, aba: melhorR.aba, extras: novos.some(v => v.extras), em: new Date().toISOString() };
+    S.planilhas = (S.planilhas || []).concat([{ nome: f.name, lidos: novos.length, aba: melhorR.aba, em: S.planilha.em }]);
+    salvar(); pintarPlanInfo(); pintarVeic();
+    eco('<b>' + novos.length + (novos.length === 1 ? ' veículo</b> lido' : ' veículos</b> lidos') + (dup ? ' (' + dup + ' já estavam na lista e foram atualizados)' : '') + (repet ? ' — ' + repet + ' linha(s) repetida(s) na planilha foram juntadas' : '') + (corte ? '. Acima de ' + MAX_VEIC + ', o restante vai pelo arquivo original.' : '') + '. Confira os que têm pendência.');
+    enviarOriginal(f, novos.length);
+  } catch (e) { console.warn('planilha', e); $('planInfo').innerHTML = `<div class="insight alerta" style="margin-top:12px;">Não consegui ler o arquivo (${esc(e.message || 'formato não suportado')}). Ele segue assim mesmo para a Retorno — ou adicione os veículos à mão.</div>`; enviarOriginal(f, 0); } }
+async function enviarOriginal(f, lidos) { if (!storageOk()) return; const P = lidos ? S.planilha : null;
+  try { const meta = await subir(f, 'planilha_veiculos'); meta.lidos = lidos; S.anexos.push(meta); await gravarAnexos(); if (P) { P.enviado = true; delete P.envioErro; } salvar(); if (P) pintarPlanInfo(); else eco('O arquivo <b>' + esc(f.name) + '</b> foi guardado para a Retorno, mesmo sem leitura automática.'); }
+  catch (e) { if (P) { P.envioErro = e.message; pintarPlanInfo(); } else eco('O arquivo não subiu (' + esc(e.message) + ').'); } }
+async function baixarModelo() { try { const XLSX = await carregarXLSX(); const cab = ['Placa', 'Chassi', 'Marca / modelo', 'Ano fabricação', 'Ano modelo', 'Código FIPE', 'Valor do veículo', 'Combustível', 'Uso do veículo', 'CEP de pernoite', 'Zero km (S/N)', 'Rastreador (S/N)', 'Cobertura (completa / incêndio e roubo / RCF)', 'Carroceria', 'Valor carroceria / equipamento', 'Bônus (classe 0-10)', 'Sinistros 12 meses', 'Item na apólice', 'Observação'];
+    const ex = ['ABC1D23', '9BWZZZ377VT004251', 'VW Saveiro Robust 1.6', 2022, 2023, '005440-3', 78000, 'GASOLINA / ALCOOL', 'COMERCIAL/PROFISSIONAL', '95700-000', 'N', 'S', 'completa', '', '', 5, 0, 1, 'exemplo — apague esta linha'];
+    const ws = XLSX.utils.aoa_to_sheet([cab, ex]); ws['!cols'] = cab.map(c => ({ wch: Math.max(12, c.length + 2) })); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Veículos'); XLSX.writeFile(wb, 'modelo_frota_retorno.xlsx'); }
+  catch (e) { eco('Não consegui gerar o modelo agora. Pode subir a planilha que você já tem.'); } }
+function campoVeic(v, c) { const val = v[c.k] == null ? '' : v[c.k];
+  if (c.op) return `<select class="vf" data-v="${v.id}" data-k="${c.k}">${c.op.some(o => o[0] === '') ? '' : `<option value=""${val === '' ? ' selected' : ''}>—</option>`}${c.op.map(([o, t]) => `<option value="${esc(o)}"${String(val) === String(o) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  return `<input class="vf" data-v="${v.id}" data-k="${c.k}" value="${esc(c.moeda && val !== '' ? brl(val) : val)}" ${c.num || c.moeda ? 'inputmode="numeric"' : ''} placeholder="${c.k === 'cep' && S.lote.cep ? esc(S.lote.cep) : ''}" autocomplete="off">`; }
+function pintarVeic() { const el = $('vPainel'); if (!el) return; const R = resumoFrota();
+  if (!R.tot) { el.innerHTML = `<div class="vazio">Nenhum veículo ainda. Suba a planilha ou adicione à mão.</div>`; return; }
+  const f = norm(FILTRO_V), lista = S.veic.filter(v => (!SO_PEND || pendencias(v).length) && (!f || norm((v.placa || '') + ' ' + (v.chassi || '') + ' ' + (v.descricao || '')).includes(f)));
+  const tipoIc = t => (TIPOS_VEIC.find(x => x.v === t) || { ic: '🚗' }).ic;
+  el.innerHTML = `<div class="vres"><div><b>${nf(R.tot)}</b><span>veículos</span></div><div><b>${brlC(R.val)}</b><span>valor total</span></div><div class="${R.pend ? 'pend' : 'ok'}"><b>${R.pend}</b><span>com pendência</span></div>
+      <div class="tipos">${Object.entries(R.porTipo).map(([t, n]) => `<span>${tipoIc(t)} ${n}</span>`).join('')}</div></div>
+    <div class="lote"><div class="lote-t">⚙️ Ajustar todos de uma vez <small>(preenche só onde está vazio)</small></div>
+      <div class="lote-g"><label>CEP de pernoite<input class="vf" id="lCep" placeholder="00000-000" value="${esc(S.lote.cep || '')}" inputmode="numeric"></label>
+      <label>Uso<select class="vf" id="lUso"><option value="">—</option>${DOM.uso.map(u => `<option>${u}</option>`).join('')}</select></label>
+      <label>Combustível<select class="vf" id="lComb"><option value="">—</option>${DOM.combustivel.map(u => `<option>${u}</option>`).join('')}</select></label>
+      <button class="op" id="lAplicar" type="button">Aplicar</button></div></div>
+    <div class="vbusca"><input class="ent" id="vBusca" placeholder="🔎 Buscar placa, chassi ou modelo" value="${esc(FILTRO_V)}"><button class="op leve ${SO_PEND ? 'sel' : ''}" id="vPend" type="button">Só pendências</button></div>
+    <div class="vlista">${lista.slice(0, 200).map(v => { const p = pendencias(v), ab = ABERTO === v.id;
+      return `<div class="vc ${p.length ? 'tem-pend' : ''} ${ab ? 'aberto' : ''}" data-vc="${v.id}"><div class="vc-h" data-tg="${v.id}"><span class="ti">${tipoIc(v.tipo)}</span>
+        <span class="pl">${esc(v.placa || (v.chassi ? '…' + v.chassi.slice(-6) : 'sem placa'))}</span><span class="md">${esc(v.descricao || 'modelo a informar')}${v.anoMod ? ' · ' + v.anoMod : ''}</span>
+        <span class="vl">${v.valor ? brlC(v.valor) : ''}</span>${p.length ? `<span class="bp" title="${esc(p.join(', '))}">${p.length} pend.</span>` : '<span class="bo">✓</span>'}<span class="st">▾</span></div>
+        ${ab ? `<div class="vc-b">${p.length ? `<div class="lembrete" style="margin:0 0 10px;">Falta: <b>${esc(p.join(' · '))}</b></div>` : ''}<div class="vgrid">${COLS.map(c => `<label>${c.t}${campoVeic(v, c)}</label>`).join('')}</div>
+          ${v.extras ? `<div class="vext">Outras colunas da planilha: ${Object.entries(v.extras).map(([k, x]) => `<span><b>${esc(k)}:</b> ${esc(x)}</span>`).join('')}</div>` : ''}
+          <div class="vac"><button class="op leve" data-dup="${v.id}" type="button">Duplicar</button><button class="op leve rm" data-rm="${v.id}" type="button">Remover</button><button class="op" data-tg="${v.id}" type="button">Fechar</button></div></div>` : ''}</div>`; }).join('')}
+      ${lista.length > 200 ? `<div class="vazio">Mostrando 200 de ${lista.length} — use a busca para achar os demais.</div>` : ''}${!lista.length ? '<div class="vazio">Nenhum veículo com esse filtro.</div>' : ''}</div>`;
+  el.querySelectorAll('[data-tg]').forEach(b => b.onclick = () => { ABERTO = ABERTO === b.dataset.tg ? null : b.dataset.tg; pintarVeic(); const c = el.querySelector(`[data-vc="${b.dataset.tg}"]`); if (c && ABERTO) c.scrollIntoView({ block: 'nearest' }); });
+  el.querySelectorAll('.vc-b .vf').forEach(inp => { const ev = inp.tagName === 'SELECT' ? 'onchange' : 'onchange'; inp[ev] = () => { const v = S.veic.find(x => x.id === inp.dataset.v), c = COLS.find(x => x.k === inp.dataset.k); let val = inp.value.trim();
+    if (c.k === 'placa') val = normPlaca(val); else if (c.k === 'chassi') val = val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17); else if (c.moeda) val = soNum(val); else if (c.num) val = val === '' ? null : Number(val.replace(/\D/g, '')); else if (c.k === 'cep') { const d = val.replace(/\D/g, ''); val = d.length >= 8 ? d.slice(0, 5) + '-' + d.slice(5, 8) : d; }
+    if (val === '' || val == null) delete v[c.k]; else v[c.k] = val; if (c.k === 'descricao' || c.k === 'uso') { if (!v._tipoManual) v.tipo = inferirTipo(v); } if (c.k === 'tipo') v._tipoManual = true; salvar(); pintarVeic(); }; });
+  el.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirmarDupla(b)) return; S.veic = S.veic.filter(x => x.id !== b.dataset.rm); ABERTO = null; salvar(); pintarVeic(); });
+  el.querySelectorAll('[data-dup]').forEach(b => b.onclick = () => { const o = S.veic.find(x => x.id === b.dataset.dup), n = Object.assign({}, o, novoVeic()); delete n.placa; delete n.chassi; const i = S.veic.indexOf(o); S.veic.splice(i + 1, 0, n); ABERTO = n.id; salvar(); pintarVeic(); eco('Cópia criada — informe a placa e o chassi dela.'); });
+  $('vBusca').oninput = () => { FILTRO_V = $('vBusca').value; const pos = $('vBusca').selectionStart; pintarVeic(); const b = $('vBusca'); b.focus(); b.setSelectionRange(pos, pos); };
+  $('vPend').onclick = () => { SO_PEND = !SO_PEND; pintarVeic(); };
+  $('lCep').oninput = () => { const d = $('lCep').value.replace(/\D/g, '').slice(0, 8); $('lCep').value = d.length > 5 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
+  $('lAplicar').onclick = () => { const cep = $('lCep').value.trim(), uso = $('lUso').value, comb = $('lComb').value; let n = 0;
+    if (cep.replace(/\D/g, '').length === 8) S.lote.cep = cep;
+    S.veic.forEach(v => { let m = false; if (cep.replace(/\D/g, '').length === 8 && !v.cep) { v.cep = cep; m = true; } if (uso && !v.uso) { v.uso = uso; m = true; } if (comb && !v.combustivel) { v.combustivel = comb; m = true; } if (m) n++; });
+    salvar(); pintarVeic(); eco(n ? n + ' veículos atualizados.' : 'Nenhum veículo estava com esses campos vazios.'); };
+}
+let _rmArm = null;
+function confirmarDupla(b) { if (_rmArm === b.dataset.rm) { _rmArm = null; return true; } _rmArm = b.dataset.rm; b.textContent = 'Toque de novo para remover'; setTimeout(() => { if (_rmArm === b.dataset.rm) _rmArm = null; }, 4000); return false; }
+
+/* ══════════ 6 · REVISÃO ══════════ */
+const TXT_TEM = { frota: 'Apólice de frota', individual: 'Seguros individuais', parte: 'Parte segurada', nao: 'Sem seguro' };
+function rotCob(k, v) { if (v == null || v === '') return null; if (v === 'recomendar') return 'Retorno recomenda'; if (v === 'NAO CONTRATAR' || v === '0') return 'Não contratar';
+  if (['dm', 'dc', 'dmor', 'app'].includes(k)) return brl(Number(v)); if (k === 'assistPasseio' || k === 'assistCarga') { const a = ASSIST.passeio.concat(ASSIST.carga, ASSIST.cargaPane).find(x => x[0] === v); return a ? a[1] : v; }
+  if (k === 'reserva') { const r = RESERVA.find(x => x[0] === v); return r ? r[1] : v; } if (k === 'paralisacao') { const [d, r] = String(v).split('_'); return d + ' dias × R$ ' + r; }
+  if (k === 'vidros') return v === 'logo' ? 'Contratar (com logomarca)' : 'Contratar'; if (k === 'produto') return { COMPREENSIVA: 'Completa', 'INCENDIO E ROUBO': 'Incêndio e roubo', RCF: 'Só terceiros' }[v] || v; if (k === 'ajuste') return v + '% da FIPE';
+  if (k === 'garantiaUnica') return v === 'sim' ? 'Limite único' : 'Limites separados'; return String(v); }
+function coberturasTxt() { const c = S.cob, L = [['Cobertura', rotCob('produto', c.produto)], ['Franquia', c.produto === 'COMPREENSIVA' ? rotCob('f', c.franquia) : null], ['Indenização', c.produto !== 'RCF' ? rotCob('ajuste', c.ajuste) : null],
+  ['Terceiros — materiais', rotCob('dm', c.dm)], ['Terceiros — corporais', rotCob('dc', c.dc)], ['Danos morais', rotCob('dmor', c.dmor)], ['Garantia única', rotCob('garantiaUnica', c.garantiaUnica)], ['Passageiros (APP)', rotCob('app', c.app)],
+  ['Assistência — passeio', rotCob('assistPasseio', c.assistPasseio)], ['Assistência — carga', rotCob('assistCarga', c.assistCarga)], ['Vidros', rotCob('vidros', c.vidros)], ['Carro reserva', rotCob('reserva', c.reserva)], ['Diárias de paralisação', rotCob('paralisacao', c.paralisacao)],
+  ['Adicionais', (c.extras || []).filter(x => x !== 'nenhuma').map(x => ({ despesas: 'Despesas extraordinárias', america: 'América do Sul', zerokm: 'Garantia 0 km' }[x])).join(', ') || null]]; return L.filter(x => x[1]); }
+function renderRevisao() {
+  progresso(86); S.pos = { etapa: 'revisao' };
+  const ln = (a, b, n) => `<div class="ln"><span>${a}</span><span class="${n ? 'ns' : ''}">${b}</span></div>`, R = resumoFrota(), q = S.qar;
+  if (LINK && LINK.empresaNome && !S.contato.empresa) S.contato.empresa = LINK.empresaNome;
+  palco.innerHTML = `<div class="cena">${trilha('revisao')}<button class="voltar" id="bk">← veículos</button>
+    <div class="rotulo">Etapa 6 · Revisão</div><div class="titulo">A frota, <em>como vai para a cotação</em>.</div>
+    <div class="insight">Frota<span class="grande">${nf(R.tot)} veículos · ${brlC(R.val)}</span>${R.pend ? `<b>${R.pend}</b> com pendência — tudo bem, a Retorno completa com você.` : 'Sem pendências.'}</div>
+    <div class="rev"><h4>Segurado <a data-ir="empresa">editar</a></h4>${ln('Nome', esc(S.emp.nome || S.emp.razao || '—'))}${ln(S.emp.pessoa === 'pf' ? 'CPF' : 'CNPJ', esc((S.emp.pessoa === 'pf' ? S.emp.cpf : S.emp.cnpj) || '—'))}${ln('Proposta', { renovacao: 'Renovação', novo: 'Seguro novo', naosei: 'Não sabe' }[S.emp.proposta] || '—')}</div>
+    <div class="rev"><h4>Hoje <a data-ir="hoje">editar</a></h4>${ln('Situação', TXT_TEM[S.hoje.tem] || '—')}${S.hoje.seguradora ? ln('Seguradora', esc(S.hoje.seguradora)) : ''}${S.hoje.vencimento ? ln('Vencimento', esc(S.hoje.vencimento)) : ''}
+      ${ln('Bônus', S.hoje.bonus && S.hoje.bonus !== 'naosei' ? 'classe ' + S.hoje.bonus : 'não informado', !S.hoje.bonus || S.hoje.bonus === 'naosei')}${ln('Sinistros 12 meses', { '0': 'Nenhum', '1': '1', '2_3': '2 ou 3', '4_mais': '4 ou mais', naosei: 'Não sabe' }[S.hoje.sinistros] || '—')}</div>
+    <div class="rev"><h4>Questionário da frota <a data-ir="qar">editar</a></h4>${ln('Gerenciamento de risco', q.gerencia === 'sim' ? (q.medidas || []).join(', ') || 'sim' : q.gerencia === 'nao' ? 'Não' : '—', !q.gerencia)}
+      ${ln('Propriedade', (q.propriedade || []).join(', ') || '—', !(q.propriedade || []).length)}${ln('Logotipo', { sim: 'Sim', nao: 'Não' }[q.logotipo] || '—')}${ln('Excluir região', (q.regioes || []).filter(x => x !== 'nao').join(', ') || ((q.regioes || []).includes('nao') ? 'Não' : '—'))}
+      ${ln('Pernoite em viagem', esc(q.pernoite || '—'))}${ln('Carga', q.carga === 'sim' ? (q.cargas || []).join(', ') || 'sim — tipo a informar' : q.carga === 'nao' ? 'Não transporta' : '—', q.carga === 'sim' && !(q.cargas || []).length)}</div>
+    <div class="rev"><h4>Coberturas <a data-ir="coberturas">editar</a></h4>${coberturasTxt().map(([a, b]) => ln(a, esc(b))).join('')}</div>
+    <div class="campo-bx"><div class="campo-lb"><span class="tx">Para quem o corretor retorna?</span></div>
+      <input class="ent" id="cNome" placeholder="Seu nome" value="${esc(S.contato.nome || '')}"><input class="ent" id="cCargo" placeholder="Cargo (sócio, gestor de frota, financeiro…)" value="${esc(S.contato.cargo || '')}">
+      <input class="ent" id="cMail" type="email" placeholder="E-mail" value="${esc(S.contato.email || '')}"><input class="ent" id="cTel" type="tel" inputmode="numeric" placeholder="Telefone / WhatsApp" value="${esc(S.contato.telefone || '')}"></div></div>`;
+  window.scrollTo(0, 0);
+  const cap = () => { S.contato = { nome: $('cNome').value.trim(), cargo: $('cCargo').value.trim(), email: $('cMail').value.trim(), telefone: $('cTel').value.trim(), empresa: S.emp.nome || '' }; salvar(); };
+  ['cNome', 'cCargo', 'cMail'].forEach(x => $(x).oninput = cap);
+  $('cTel').oninput = () => { const t = $('cTel').value.replace(/\D/g, '').slice(0, 11); $('cTel').value = t.length > 7 ? `(${t.slice(0, 2)}) ${t.slice(2, 7)}-${t.slice(7)}` : t.length > 2 ? `(${t.slice(0, 2)}) ${t.slice(2)}` : t; cap(); };
+  $('bk').onclick = renderVeiculos;
+  palco.querySelectorAll('[data-ir]').forEach(a => a.onclick = () => ({ empresa: renderEmpresa, hoje: renderHoje, qar: renderQar, coberturas: renderCoberturas }[a.dataset.ir])());
+  barra([{ t: 'Finalizar e enviar para a Retorno →', cls: 'btn-ouro', f: async () => { cap(); if (!S.contato.nome) { $('cNome').focus(); return eco('Só falta o seu nome, para o corretor saber a quem retornar.'); }
+    S.enviado = true; S.pos = { etapa: 'fim' }; await salvar(true); renderFim(); } }]);
+}
+function protocolo() { const b = String(SESSAO || '').replace(/^frota_|^q_frota_/, ''); return (b.slice(0, 6) || 'RETORNO').toUpperCase(); }
+function msgWa() { return 'Olá! Enviei o levantamento da frota da ' + (S.emp.nome || (LINK && LINK.empresaNome) || 'minha empresa') + ' (protocolo ' + protocolo() + ')' + (S.contato.nome ? '. Aqui é ' + S.contato.nome : '') + '. Seguem os documentos.'; }
+
+/* ─── ANEXOS (Storage) ───
+   Mesmo padrão do Empresarial/Equipamentos: mb_apolices/<empresa|sem_empresa>/vida-grupo/<SESSAO>/…
+   Metadados em apoliceAnexos do registro — o painel mostra em Apresentações e, se a empresa
+   for cadastrada, o corretor VINCULA ao raio-x. Se o envio falhar, nada trava. */
+const ARQ_MAX = 10, ARQ_MB = 15;
+const ARQ_TIPOS = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', heic: 'image/heic',
+  csv: 'application/vnd.ms-excel' };   // CSV sobe como Excel: a regra do Storage não aceita text/csv
+const _ext = f => ((f.name || '').split('.').pop() || '').toLowerCase();
+const _mimeArq = f => ARQ_TIPOS[_ext(f)] || f.type || 'application/octet-stream';
+const _tipoOk = f => !!ARQ_TIPOS[_ext(f)];
+const _tam = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+const _comTimeout = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio')), ms))]);
+function storageOk() { try { return !!(firebase && firebase.storage); } catch (e) { return false; } }
+async function subir(f, tipo, prog) {
+  try { if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously(); } catch (e) {}   // a regra exige sessão (anônima serve)
+  const emp = (LINK && LINK.empresaId) || 'sem_empresa';
+  const caminho = 'mb_apolices/' + emp + '/' + PASTA_STORAGE + '/' + SESSAO + '/' + Date.now() + '_' + String(f.name).replace(/[^a-zA-Z0-9_.\-]/g, '_');
+  const t = firebase.storage().ref(caminho).put(f, { contentType: _mimeArq(f) });
+  /* vigia: sem nenhum avanço em 40s, cancela — o cliente vê o aviso e usa o WhatsApp em vez de ficar olhando o "carregando" */
+  let ultimo = Date.now(); const vigia = setInterval(() => { if (Date.now() - ultimo > 40000) { clearInterval(vigia); try { t.cancel(); } catch (e) {} } }, 2000);
+  t.on('state_changed', sn => { ultimo = Date.now(); if (prog && sn.totalBytes) prog(Math.round(sn.bytesTransferred / sn.totalBytes * 100)); });
+  try { const snap = await _comTimeout(t, 180000); const url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
+    return { nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(), via: 'questionario', tipo: tipo || 'documento', porNome: S.contato.nome || null, protocolo: protocolo() };
+  } catch (e) { const c = e && e.code; throw new Error(c === 'storage/canceled' ? 'sem resposta do servidor' : c === 'storage/unauthorized' ? 'permissão negada' : (e && e.message) || 'falha no envio'); }
+  finally { clearInterval(vigia); }
+}
+async function gravarAnexos() { if (!SESSAO) return; try { await db.collection('mb_apresentacoes').doc(SESSAO).set({ apoliceAnexos: S.anexos, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (e) { console.warn('anexos', e); } }
+function htmlUpload(id, titulo, sub) { return `<label class="zona-arq" id="${id}_z">${titulo}<small>${sub}</small><input type="file" id="${id}_in" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv" style="display:none;"></label><div id="${id}_l"></div>`; }
+function ligarUpload(id, tipo) {
+  const inp = $(id + '_in'); if (!inp) return;
+  const pintar = () => { const l = $(id + '_l'); if (!l) return; const meus = S.anexos.map((a, i) => [a, i]).filter(([a]) => !tipo || a.tipo === tipo);
+    l.innerHTML = meus.map(([a, i]) => `<div class="anx ok"><span class="nm">📄 ${esc(a.nome)}</span><span class="sz">${_tam(a.tamanho)}</span><button class="x" data-rm="${i}" type="button" title="remover">✕</button></div>`).join('');
+    l.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { const a = S.anexos.splice(Number(b.dataset.rm), 1)[0]; pintar();
+      try { if (a && a.caminho && storageOk()) await firebase.storage().ref(a.caminho).delete(); } catch (e) {} await gravarAnexos(); salvar(); });
+    const z = $(id + '_z'); if (z) z.style.display = S.anexos.length >= ARQ_MAX ? 'none' : ''; };
+  pintar();
+  inp.onchange = async ev => { const fs = [...(ev.target.files || [])]; ev.target.value = '';
+    for (const f of fs) {
+      if (S.anexos.length >= ARQ_MAX) { eco('Chegamos ao limite de ' + ARQ_MAX + ' arquivos. Se faltar algo, mande pelo WhatsApp com o protocolo ' + protocolo() + '.'); break; }
+      if (!_tipoOk(f)) { eco('<b>' + esc(f.name) + '</b> não é um tipo aceito — envie PDF, foto, Word, Excel ou CSV.'); continue; }
+      if (f.size > ARQ_MB * 1048576) { eco('<b>' + esc(f.name) + '</b> passa de ' + ARQ_MB + ' MB. Envie um arquivo menor, ou mande pelo WhatsApp.'); continue; }
+      if (!storageOk()) { eco('Não consegui abrir o envio de arquivos agora. Use o WhatsApp — a mensagem já vai com o protocolo.'); break; }
+      const box = document.createElement('div'); box.className = 'anx anx-wrap'; box.innerHTML = `<span class="nm">⏳ ${esc(f.name)}</span><span class="sz" data-pc>0%</span><i class="bar" style="width:0"></i>`; $(id + '_l').appendChild(box);
+      try { const meta = await subir(f, tipo || (/\.(xlsx?|csv)$/i.test(f.name) ? 'planilha' : 'documento'), pc => { const a = box.querySelector('[data-pc]'), b = box.querySelector('.bar'); if (a) a.textContent = pc + '%'; if (b) b.style.width = pc + '%'; });
+        box.remove(); S.anexos.push(meta); pintar(); await gravarAnexos(); salvar(); eco('<b>' + esc(f.name) + '</b> recebido.');
+      } catch (err) { console.warn('upload', err); box.className = 'anx erro'; box.innerHTML = `<span class="nm">⚠️ ${esc(f.name)}</span><span class="sz">não enviou</span>`; setTimeout(() => box.remove(), 5000);
+        eco('Não consegui enviar <b>' + esc(f.name) + '</b> (' + esc(err.message || 'falha na conexão') + '). Sem problema: use o WhatsApp abaixo, com o protocolo ' + protocolo() + '.'); }
+    } };
+}
+function renderFim() {
+  progresso(100); barra(null);
+  const pede = []; if (['frota', 'individual', 'parte'].includes(S.hoje.tem)) pede.push('a <b>apólice atual</b> (ou a relação de itens)'); if (!S.planilha) pede.push('a <b>planilha de veículos</b>, se tiver'); pede.push('os <b>CRLVs</b> dos veículos novos ou que não estão na planilha');
+  const wa = 'https://wa.me/' + CONTATO_DESTINO.whats + '?text=' + encodeURIComponent(msgWa());
+  const mail = 'mailto:' + CONTATO_DESTINO.email + '?subject=' + encodeURIComponent('Frota — ' + (S.emp.nome || 'levantamento') + ' (protocolo ' + protocolo() + ')') + '&body=' + encodeURIComponent(msgWa() + '\n\n(anexe aqui os documentos)');
+  palco.innerHTML = `<div class="cena fim"><div class="ico">✅</div><div class="titulo">Recebido.</div>
+    <div class="intro" style="max-width:560px; margin:0 auto;">O levantamento da frota já está com a Retorno — com os ${nf(S.veic.length)} veículos organizados. O corretor prepara o estudo e retorna, sem compromisso.</div>
+    <div class="intro" style="max-width:560px; margin:10px auto 0; font-size:13px; color:var(--suave);">Protocolo <strong style="color:#fff;">${protocolo()}</strong></div>
+    <button class="btn btn-2" id="btPdf" type="button" style="max-width:420px; margin:18px auto 0; display:block;">📄 Baixar o resumo em PDF</button>
+    <div class="campo-bx" style="text-align:left; max-width:560px; margin:30px auto 0;">
+      <div class="campo-lb"><span class="tx">Para adiantar, anexe o que tiver</span></div>
+      <div class="campo-sub">Ajuda muito: ${pede.join('; ')}. Tudo opcional.</div>
+      ${htmlUpload('upFim', '📎 Anexar documentos', 'PDF, foto, Word, Excel ou CSV · até ' + ARQ_MAX + ' arquivos de ' + ARQ_MB + ' MB')}
+      <div class="campo-sub" style="margin:16px 0 6px;">Ou, se preferir:</div>
+      <div class="ops col"><a class="op" id="opWa" href="${wa}" target="_blank" rel="noopener" style="display:block; text-decoration:none;">Enviar pelo WhatsApp<small>abre a conversa com a Retorno ${esc(CORRETORA.whatsLabel)}</small></a>
+        <a class="op" id="opMail" href="${mail}" style="display:block; text-decoration:none;">Enviar por e-mail<small>mensagem já pronta, é só anexar</small></a>
+        <button class="op" data-v="depois" type="button">Depois — pode me lembrar</button></div></div></div>`;
+  window.scrollTo(0, 0);
+  ligarUpload('upFim', null); $('btPdf').onclick = baixarResumo;
+  const marcar = (v, t) => { S.docEnvio = v; salvar(true); if (t) eco(t); };
+  $('opWa').onclick = () => marcar('whatsapp', 'Combinado. Se a conversa não abrir, o WhatsApp da Retorno é <b>' + esc(CORRETORA.whatsLabel) + '</b> — protocolo <b>' + protocolo() + '</b>.');
+  $('opMail').onclick = () => marcar('email', 'Combinado — a mensagem já vai com o protocolo ' + protocolo() + '.');
+  palco.querySelector('[data-v="depois"]').onclick = e => { e.currentTarget.classList.add('sel'); marcar('depois', 'Sem problema. O estudo segue com o que você informou.'); };
+}
+function baixarResumo() {
+  const R = resumoFrota(), q = S.qar, K = pdfKit('Seguro de Frota — levantamento', (S.emp.nome || 'Frota') + ' · protocolo ' + protocolo(), { cor: [251, 191, 36] }); if (!K) return;
+  K.destaque('Frota', nf(R.tot) + ' veículos · ' + brlC(R.val), Object.entries(R.porTipo).map(([t, n]) => n + ' ' + (TIPOS_VEIC.find(x => x.v === t) || { t }).t.toLowerCase()).join(' · '));
+  K.secao('Segurado e seguro atual'); K.kv([['Segurado', S.emp.razao || S.emp.nome], [S.emp.pessoa === 'pf' ? 'CPF' : 'CNPJ', S.emp.pessoa === 'pf' ? S.emp.cpf : S.emp.cnpj], ['Proposta', { renovacao: 'Renovação', novo: 'Seguro novo' }[S.emp.proposta]], ['Hoje', TXT_TEM[S.hoje.tem]],
+    ['Seguradora atual', S.hoje.seguradora], ['Vencimento', S.hoje.vencimento], ['Bônus da frota', S.hoje.bonus && S.hoje.bonus !== 'naosei' ? 'classe ' + S.hoje.bonus : null], ['Sinistros 12 meses', { '0': 'Nenhum', '1': '1', '2_3': '2 ou 3', '4_mais': '4 ou mais' }[S.hoje.sinistros]]]);
+  K.secao('Questionário da frota'); K.kv([['Gerenciamento de risco', q.gerencia === 'sim' ? (q.medidas || []).join(', ') : { nao: 'Não' }[q.gerencia]], ['Propriedade dos veículos', (q.propriedade || []).join(', ')], ['Logotipo adesivado', { sim: 'Sim', nao: 'Não' }[q.logotipo]],
+    ['Região excluída', (q.regioes || []).filter(x => x !== 'nao').join(', ') || ((q.regioes || []).includes('nao') ? 'Nenhuma' : null)], ['Pernoite em viagem', q.pernoite], ['Transporte de carga', q.carga === 'sim' ? (q.cargas || []).join(', ') || 'Sim' : { nao: 'Não' }[q.carga]]]);
+  K.secao('Coberturas padrão'); K.tabela(['Cobertura', 'Escolha'], coberturasTxt(), { ws: [80, 98] });
+  K.secao('Veículos'); K.tabela(['Placa', 'Modelo', 'Ano', 'Valor', 'Uso'], S.veic.map(v => [v.placa || (v.chassi ? '...' + v.chassi.slice(-6) : '-'), v.descricao || '-', v.anoMod || v.anoFab || '-', v.valor ? brl(v.valor) : '-', v.uso || '-']), { ws: [24, 70, 16, 28, 40], al: ['', '', '', 'r', ''] });
+  K.salvar('Levantamento_Frota_' + protocolo() + '.pdf');
+}
+
+/* ─── PDF KIT (jsPDF) — mesmo desenho em apresentação, questionário e painel ───
+   A4, faixa azul no topo, seções numeradas, pares rótulo/valor em 2 colunas,
+   tabelas, caixas de destaque e rodapé com contato e página. Fontes padrão do
+   jsPDF (Latin-1): acentos saem certos; emoji e símbolos fora do Latin-1 são trocados. */
+function pdfKit(titulo, subtitulo, opt) {
+  if (!window.jspdf || !window.jspdf.jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return null; }
+  const { jsPDF } = window.jspdf; const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210, H = 297, M = 16, CW = W - M * 2; let y = 0;
+  const cor = (opt && opt.cor) || [56, 189, 248];
+  const t = s => String(s == null ? '' : s).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/[–—]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/×/g, 'x').replace(/≥/g, '>=').replace(/≤/g, '<=').replace(/…/g, '...')
+    .replace(/[→←]/g, '->').replace(/•/g, '-').replace(/[^\x00-\xFF\n]/g, '').replace(/[ \t]+/g, ' ').trim();
+  const cab = (primeira) => {
+    doc.setFillColor(5, 14, 36); doc.rect(0, 0, W, primeira ? 38 : 14, 'F'); doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(0, primeira ? 38 : 14, W, 1.2, 'F');
+    doc.setTextColor(255, 255, 255);
+    if (primeira) { doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text(t(titulo), M, 18); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(170, 186, 214); doc.text(doc.splitTextToSize(t(subtitulo), CW - 40), M, 26);
+      doc.setFontSize(8); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 12, { align: 'right' }); y = 48; }
+    else { doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text(t(titulo), M, 9); doc.setFont('helvetica', 'normal'); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 9, { align: 'right' }); y = 24; }
+  };
+  const espaco = (h) => { if (y + h > H - 18) { doc.addPage(); cab(false); } };
+  cab(true);
+  const K = {
+    doc, t,
+    secao(txt) { espaco(16); y += 2; doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(M, y - 4, 1.4, 6, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(15, 23, 42); doc.text(t(txt), M + 4, y + 0.6); y += 7; },
+    par(txt, o) { const fs = (o && o.fs) || 9.5; doc.setFont('helvetica', (o && o.b) ? 'bold' : 'normal'); doc.setFontSize(fs); doc.setTextColor.apply(doc, (o && o.cor) || [51, 65, 85]);
+      const ls = doc.splitTextToSize(t(txt), (o && o.w) || CW); ls.forEach(l => { espaco(fs * 0.5); doc.text(l, (o && o.x) || M, y); y += fs * 0.45; }); y += (o && o.after != null) ? o.after : 2; },
+    kv(pares) { const cols = 2, cw = CW / cols; const lin = pares.filter(p => p && p[1] != null && p[1] !== ''); for (let i = 0; i < lin.length; i += cols) {
+        const grupo = lin.slice(i, i + cols); const alturas = grupo.map(([, v]) => doc.splitTextToSize(t(v), cw - 6).length); const h = 5 + Math.max(...alturas) * 4.3; espaco(h + 2);
+        grupo.forEach(([k, v], j) => { const x = M + j * cw; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120, 132, 156); doc.text(t(k).toUpperCase(), x, y);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(9.8); doc.setTextColor(15, 23, 42); doc.text(doc.splitTextToSize(t(v), cw - 6), x, y + 4.6); });
+        y += h + 1.5; } },
+    tabela(cab2, linhas, o) { const n = cab2.length, ws = (o && o.ws) || cab2.map(() => CW / n); const al = (o && o.al) || [];
+      const linha = (cells, head, zebra) => { const alt = Math.max(...cells.map((c, i) => doc.splitTextToSize(t(c), ws[i] - 4).length)) * 4.2 + 3.4; espaco(alt);
+        if (head) { doc.setFillColor(235, 241, 250); doc.rect(M, y - 3.6, CW, alt, 'F'); } else if (zebra) { doc.setFillColor(248, 250, 253); doc.rect(M, y - 3.6, CW, alt, 'F'); }
+        let x = M; cells.forEach((c, i) => { doc.setFont('helvetica', head ? 'bold' : (i === 0 ? 'normal' : 'bold')); doc.setFontSize(head ? 8 : 9); doc.setTextColor(head ? 71 : 30, head ? 85 : 41, head ? 105 : 59);
+          const ls = doc.splitTextToSize(t(c), ws[i] - 4); if (al[i] === 'r') doc.text(ls, x + ws[i] - 2, y, { align: 'right' }); else doc.text(ls, x + 1.5, y); x += ws[i]; });
+        y += alt; };
+      linha(cab2, true); linhas.forEach((l, i) => linha(l, false, i % 2)); y += 3; },
+    caixa(titulo2, itens, tipo) { const pal = { alerta: [[255, 247, 237], [194, 65, 12]], ok: [[236, 253, 245], [4, 120, 87]], info: [[239, 246, 255], [29, 78, 216]] }[tipo || 'info'];
+      const ls = []; itens.forEach(s => doc.splitTextToSize('- ' + t(s), CW - 10).forEach(l => ls.push(l)));
+      const h = 9 + ls.length * 4.3; espaco(Math.min(h, 60)); const y0 = y; doc.setFillColor.apply(doc, pal[0]); doc.roundedRect(M, y - 4, CW, Math.min(h, H - 22 - y + 4), 2, 2, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor.apply(doc, pal[1]); doc.text(t(titulo2).toUpperCase(), M + 4, y + 1); y += 6.5;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); ls.forEach(l => { if (y > H - 22) { doc.addPage(); cab(false); } doc.setTextColor.apply(doc, pal[1]); doc.text(l, M + 5, y); y += 4.3; }); y += 4; void y0; },
+    destaque(rot, valor, sub) { espaco(24); doc.setFillColor(5, 14, 36); doc.roundedRect(M, y - 4, CW, 20, 2, 2, 'F'); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(150, 170, 205); doc.text(t(rot).toUpperCase(), M + 5, y + 1);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(255, 255, 255); doc.text(t(valor), M + 5, y + 9); if (sub) { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(150, 170, 205); doc.text(doc.splitTextToSize(t(sub), CW - 10)[0], M + 5, y + 14); } y += 22; },
+    pular(h) { y += h || 3; },
+    salvar(nome) { const n = doc.getNumberOfPages(); for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(140, 150, 170);
+        doc.text('Retorno Seguros  ·  (54) 99701-5000  ·  retorno@retornoseguros.com.br  ·  gerado em ' + new Date().toLocaleDateString('pt-BR'), M, H - 8); doc.text(i + ' / ' + n, W - M, H - 8, { align: 'right' }); }
+      doc.save(nome); return doc; }
+  };
+  return K;
+}
+
+/* ══════════ PERSISTÊNCIA ══════════ */
+function montarQuestionario() { const R = resumoFrota(); const q = { empresa: S.emp.nome || S.emp.razao || (LINK && LINK.empresaNome) || null, cnpj: S.emp.cnpj || S.emp.cpf || null, veiculosFrota: R.tot || null, valorFrota: R.val ? brl(R.val) : null,
+    seguroAtualFrota: TXT_TEM[S.hoje.tem] ? TXT_TEM[S.hoje.tem] + (S.hoje.seguradora ? ' · ' + S.hoje.seguradora : '') + (S.hoje.vencimento ? ' · vence ' + S.hoje.vencimento : '') : null, planilhaFrota: (S.planilhas || []).length ? S.planilhas.map(x => x.nome + ' (' + x.lidos + (x.lidos === 1 ? ' veículo' : ' veículos') + ')').join(' · ') : null };
+  if (S.contato && S.contato.nome) q.contato = S.contato; q._dados = S; return q; }
+function montarRoteiro() { const r = [], add = (k, p, v) => r.push({ k, p, r: v == null || v === '' ? null : String(v) }), q = S.qar, R = resumoFrota();
+  add('empresa', 'Segurado', S.emp.razao || S.emp.nome); add('doc', 'CNPJ/CPF', S.emp.cnpj || S.emp.cpf); add('proposta', 'Tipo de proposta', S.emp.proposta);
+  add('tem', 'Seguro hoje', TXT_TEM[S.hoje.tem]); add('seguradora', 'Seguradora atual', S.hoje.seguradora); add('apolice', 'Apólice', S.hoje.apolice); add('vencimento', 'Vencimento', S.hoje.vencimento); add('bonus', 'Bônus da frota', S.hoje.bonus);
+  add('sinistros', 'Sinistros 12m', S.hoje.sinistros); add('sinDesc', 'Descrição dos sinistros', S.hoje.sinDesc); add('incomoda', 'O que incomoda', (S.hoje.incomoda || []).join(', '));
+  add('gerencia', 'QAR · gerenciamento de risco', q.gerencia); add('medidas', 'QAR · medidas', (q.medidas || []).join(', ')); add('propriedade', 'QAR · propriedade', (q.propriedade || []).join(', ')); add('logotipo', 'QAR · logotipo', q.logotipo);
+  add('regioes', 'QAR · excluir região', (q.regioes || []).join(', ')); add('pernoite', 'QAR · pernoite em viagem', q.pernoite); add('carga', 'QAR · transporta carga', q.carga); add('cargas', 'QAR · tipos de carga', (q.cargas || []).join(', '));
+  coberturasTxt().forEach(([a, b], i) => add('cob' + i, 'Cobertura · ' + a, b)); add('veiculos', 'Veículos', R.tot); add('valor', 'Valor total', R.val ? brl(R.val) : null); add('pendencias', 'Veículos com pendência', R.pend);
+  add('planilha', 'Planilhas enviadas', (S.planilhas || []).map(x => x.nome).join(' · ') || null); add('protocolo', 'Protocolo', protocolo()); add('anexos', 'Anexos', S.anexos.map(a => a.nome).join(' · ')); return r; }
+function alertasCorretor() { const out = [], q = S.qar, R = resumoFrota();
+  if (q.gerencia === 'sim' && !(q.medidas || []).length) out.push('QAR: gerenciamento de risco "sim" sem medida marcada — obrigatório ao menos uma.');
+  if ((q.medidas || []).some(x => /Rastreamento/.test(x)) && !S.veic.some(v => v.rastreador === 'sim')) out.push('QAR: rastreamento marcado, mas nenhum veículo com rastreador — o cotador exige ao menos um item com antifurto.');
+  if (q.carga === 'sim' && !(q.cargas || []).length) out.push('QAR: transporta carga, mas o tipo de carga não foi informado.');
+  if (q.carga === 'sim' && !S.veic.some(v => v.uso === 'TRANSPORTE DE CARGAS')) out.push('QAR: transporta carga, mas nenhum veículo está com uso "transporte de cargas".');
+  const usoErrado = S.veic.filter(v => v.uso === 'TRANSPORTE DE CARGAS' && !eCarga(v.tipo)); if (usoErrado.length) out.push(usoErrado.length + ' veículo(s) com uso "transporte de cargas" que não são caminhão/reboque: ' + usoErrado.slice(0, 5).map(v => v.placa || v.descricao).join(', ') + '.');
+  if ((q.regioes || []).filter(x => x !== 'nao').length) out.push('Cliente quer excluir região: ' + q.regioes.filter(x => x !== 'nao').join(', ') + ' — conferir CEPs de pernoite.');
+  if (S.emp.pessoa === 'pf' && (q.propriedade || []).some(x => x !== 'Empresa / O Próprio')) out.push('Pessoa física com veículos de terceiros — não aceito na frota PF.');
+  if (R.pend) out.push(R.pend + ' veículo(s) com pendência de cadastro (placa/chassi, modelo, ano, CEP ou carroceria).');
+  const semCarr = S.veic.filter(v => ['caminhao', 'reboque'].includes(v.tipo) && !v.valorCarroceria).length; if (semCarr) out.push(semCarr + ' caminhão(ões)/reboque(s) sem valor de carroceria/equipamento — confirmar se há baú, munck, frigorífico etc.');
+  const sin = S.veic.filter(v => Number(v.sinistros) > 0).length; if (sin) out.push(sin + ' veículo(s) com sinistro nos últimos 12 meses na planilha.');
+  if (S.hoje.bonus === 'naosei' || (!S.hoje.bonus && S.hoje.tem === 'frota')) out.push('Bônus não informado — pedir apólice atual / relação de itens.');
+  if (S.veic.length < 2 && S.veic.length) out.push('Menos de 2 veículos — frota exige no mínimo 2.');
+  return out; }
+function montarAnalitico(fim) { const R = resumoFrota(), q = S.qar; return { esquema: 1, produto: PRODUTO.id, arqVersao: ARQ_VERSAO, etapa: 'cotacao', completo: !!fim, posEtapa: S.pos.etapa, veioDaApresentacao: !!PRES,
+    pessoa: S.emp.pessoa || null, propostaCod: S.emp.proposta || null, seguroHojeCod: S.hoje.tem || null, seguradoraAtual: S.hoje.seguradora || null, vencimento: S.hoje.vencimento || null, bonusFrota: S.hoje.bonus || null, sinistrosCod: S.hoje.sinistros || null,
+    nVeiculos: R.tot, valorTotal: R.val || null, porTipo: R.porTipo, nPendencias: R.pend, nComSinistro: S.veic.filter(v => Number(v.sinistros) > 0).length,
+    bonusMedio: (() => { const b = S.veic.map(v => Number(v.bonus)).filter(x => !isNaN(x) && x >= 0); return b.length ? Math.round(b.reduce((a, c) => a + c, 0) / b.length * 10) / 10 : null; })(),
+    qar: { gerencia: q.gerencia || null, medidas: q.medidas || [], propriedade: q.propriedade || [], logotipo: q.logotipo || null, regioes: q.regioes || [], pernoite: q.pernoite || null, carga: q.carga || null, cargas: q.cargas || [] },
+    cob: S.cob, planilha: S.planilha || null, planilhas: S.planilhas || [], protocolo: protocolo(), nAnexos: S.anexos.length, docEnvio: S.docEnvio || null, alertas: alertasCorretor() }; }
+function unidades() { const tot = ETAPAS.length + 1; let ok = ETAPAS.indexOf(S.pos.etapa); ok = ok < 0 ? (S.pos.etapa === 'fim' ? tot : 0) : ok; if (S.enviado) ok = tot; return { ok: Math.max(1, ok), tot }; }
+let _salvT = null;
+function salvar(fim) { if (fim) { clearTimeout(_salvT); return _gravar(true); } clearTimeout(_salvT); _salvT = setTimeout(() => _gravar(false), 800); }
+async function _gravar(fim) { try { if (!SESSAO) return; const u = unidades();
+    await db.collection('mb_apresentacoes').doc(SESSAO).set({ questionario: JSON.parse(JSON.stringify(montarQuestionario())), analiticoQ: JSON.parse(JSON.stringify(montarAnalitico(fim || S.enviado))), roteiro: JSON.parse(JSON.stringify(montarRoteiro())),
+      questionarioCompleto: !!(fim || S.enviado), passo: u.ok, questTotal: u.tot, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) { console.warn('salvar', e); } }
+
+/* ══════════ RETOMADA ══════════ */
+function retomar() { const p = S.pos || {}; if (S.enviado || p.etapa === 'fim') return renderFim();
+  ({ empresa: renderEmpresa, hoje: renderHoje, qar: renderQar, coberturas: renderCoberturas, veiculos: renderVeiculos, revisao: renderRevisao }[p.etapa] || renderAbertura)(); }
+function renderRetomar() { const u = unidades(); progresso(u.ok / u.tot * 100); barra(null);
+  palco.innerHTML = `<div class="cena"><div class="rotulo">Levantamento em andamento</div><div class="titulo">Bem-vindo de volta${S.emp.nome ? ', ' + esc(S.emp.nome) : ''}.</div>
+    <div class="intro">Está tudo guardado: <strong>${Math.round(u.ok / u.tot * 100)}% concluído</strong>${S.veic.length ? ' · ' + S.veic.length + ' veículos na lista' : ''}. Você continua de onde parou.</div>
+    <div class="ops col" style="margin-top:22px;"><button class="op" id="r1">Continuar de onde parei →</button><button class="op leve" id="r2" style="flex:1;">Começar do zero</button></div></div>`;
+  $('r1').onclick = retomar; $('r2').onclick = () => { S = novoEstado(); salvar(); renderAbertura(); }; }
+
+/* ══════════ INÍCIO ══════════ */
+console.log('%cQuestionário Frota v' + ARQ_VERSAO, 'background:#38bdf8;color:#031127;padding:2px 8px;border-radius:4px;font-weight:700');
+document.addEventListener('DOMContentLoaded', async () => {
+  try { await new Promise(r => { const off = firebase.auth().onAuthStateChanged(() => { off(); r(); }); }); if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously(); } catch (e) {}
+  const token = new URLSearchParams(location.search).get('t');
+  if (token) SESSAO = 'frota_' + token;
+  else { try { SESSAO = sessionStorage.getItem('sessao_q_frota') || sessionStorage.getItem('sessao_ap_frota'); } catch (e) {}
+    if (!SESSAO) SESSAO = 'q_frota_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); try { sessionStorage.setItem('sessao_q_frota', SESSAO); } catch (e) {} }
+  const base = { produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, token: token || null, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), userAgent: navigator.userAgent.slice(0, 180) };
+  if (token) { try { let snap = await db.collection('mb_links_apresentacao').where('token', '==', token).limit(1).get(); if (snap.empty) snap = await db.collection('mb_links_empresa').where('token', '==', token).limit(1).get();
+      if (!snap.empty) { LINK = snap.docs[0].data(); base.empresaId = LINK.empresaId || null; base.empresaNome = LINK.empresaNome || null; base.destinatario = LINK.destinatario || null; base.agenciaId = LINK.agenciaId || null;
+        base.geradoPorUid = LINK.geradoPorUid || LINK.criadoPorUid || null; base.geradoPorNome = LINK.geradoPorNome || LINK.criadoPorNome || null;
+        if (LINK.geradoPorWhats) CONTATO_DESTINO.whats = String(LINK.geradoPorWhats).replace(/\D/g, '');
+        if (LINK.geradoPorEmail) CONTATO_DESTINO.email = LINK.geradoPorEmail; } } catch (e) { console.warn('link', e); } }
+  let anterior = null;
+  try { const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
+    if (!doc.exists) { base.criadoEm = firebase.firestore.FieldValue.serverTimestamp(); base.origem = 'questionario'; }
+    else { const d = doc.data() || {}; if (d.respostas && (d.respostas.ftTamanho || d.respostas.ftPerfil)) PRES = d.respostas; if (Array.isArray(d.apoliceAnexos)) S.anexos = d.apoliceAnexos.slice();
+      const sd = d.questionario && d.questionario._dados; if (sd && sd.pos && sd.pos.etapa && sd.pos.etapa !== 'abertura') anterior = sd; }
+    await db.collection('mb_apresentacoes').doc(SESSAO).set(base, { merge: true }); } catch (e) { console.warn('sessao', e); }
+  if (anterior) { S = Object.assign(novoEstado(), anterior); S.anexos = S.anexos || []; renderRetomar(); } else renderAbertura();
+});
+
+</script>
+</body>
+</html>
