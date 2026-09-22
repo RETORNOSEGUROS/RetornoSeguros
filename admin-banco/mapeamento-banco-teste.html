@@ -19087,7 +19087,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21187,6 +21187,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     { id: 'previdencia', nome: 'Previdência — Radar de Fundos',
       arq: 'RadarPrevidenciaCliente.html', arqQ: null, arqProp: null,
       desc: 'Rentabilidade dos fundos de previdência, mês a mês, em linguagem de cliente — atualizada pelo admin a cada lâmina nova.' },
+    { id: 'vida_grupo', nome: 'Vida em Grupo — Colaboradores',
+      arq: 'ApresentacaoVidaGrupo.html', arqQ: 'QuestionarioVidaGrupo.html', arqProp: null,
+      desc: 'O cliente conhece as duas formas (Global pela GFIP e Específica com lista de nomes), cada cobertura explicada e as assistências; no questionário escolhe a sua realidade: atividade, pessoas ou faixas etárias, afastados, coberturas com valores e capital de morte.' },
     { id: 'equipamentos', nome: 'Seguro de Equipamentos',
       arq: 'ApresentacaoEquipamentos.html', arqQ: 'QuestionarioEquipamentos.html', arqProp: null,
       desc: 'A máquina que não pode parar: mostra onde o empresarial não chega (fora do endereço, tombamento, rateio do patrimônio inteiro) e levanta cada equipamento no formato do cotador.' },
@@ -21780,6 +21783,87 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.apBuscarEmpresaAnexo = apBuscarEmpresaAnexo; window.apVincularAnexos = apVincularAnexos; window.apDesvincularAnexos = apDesvincularAnexos;
 
+  // ══════════ VIDA EM GRUPO — bloco do card + ficha para a cotação ══════════
+  // Lê: respostas (apresentação: vgPorte, vgSituacao, vgCCT, vgModalidade, _interesse, _assist, _vuln)
+  //     analiticoQ + questionario._dados (questionário: modalidade, pessoas, faixas, afastados, coberturas, capital).
+  const _VG_MOD = { global: 'Global (GFIP)', especifica: 'Específica (lista de nomes)', comparar: 'Comparar Global × Específica' };
+  const _VG_FX = [['ate18','até 18'],['19_23','19–23'],['24_28','24–28'],['29_33','29–33'],['34_38','34–38'],['39_43','39–43'],['44_48','44–48'],['49_53','49–53'],['54_58','54–58'],['59_64','59–64'],['65_70','65–70'],['71_75','71–75'],['76_mais','76+']];
+  const _VG_RISCO = { altura: 'trabalho em altura', eletricidade: 'eletricidade', direcao: 'direção/entregas/viagens', maquinas: 'máquinas e prensas', quimicos: 'químicos/inflamáveis', obras: 'obras', seguranca: 'segurança/vigilância', extremo: 'mineração/offshore/mergulho/explosivos', escritorio: 'só escritório/comércio' };
+  const _VG_MOT = { doenca: 'doença', acid_trab: 'acidente de trabalho', acid: 'outro acidente', naosei: 'motivo ?' };
+  const _VG_MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const _vgBrl = n => (n == null || isNaN(n)) ? '—' : 'R$ ' + Math.round(n).toLocaleString('pt-BR');
+  const _vgData = s => s ? String(s).split('-').reverse().join('/') : '—';
+  function _vgValor(c, base) { if (c.val == null || c.val === 'sug') return 'a sugerir';
+    if (c.tipo === 'pct') return c.val + '%' + (base ? ' = ' + _vgBrl(base * c.val / 100) : ' do capital');
+    if (c.tipo === 'dia') return _vgBrl(c.val) + '/dia'; if (c.tipo === 'vida') return _vgBrl(c.val) + '/pessoa';
+    if (c.val === 'familiar') return 'familiar (titular + 3)'; if (c.val === 'individual') return 'individual';
+    return typeof c.val === 'number' ? _vgBrl(c.val) : String(c.val); }
+  function _vgCapital(aq) { if (!aq) return '—'; if (aq.capitalModo === 'salario') return (aq.capitalMult && aq.capitalMult !== 'sug' ? aq.capitalMult + ' salários' : 'múltiplo do salário');
+    if (aq.capitalCod === 'cct') return 'mínimo da convenção'; if (aq.capitalIndividual) return _vgBrl(aq.capitalIndividual) + '/pessoa'; return 'a sugerir'; }
+  function _apVidaGrupo(a) {
+    if (_covNorm(a.produtoId) !== 'vida-grupo') return '';
+    const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+    const r = a.respostas || {}, aq = a.analiticoQ || null, S = (a.questionario && a.questionario._dados) || null;
+    if (!r.vgPorte && !aq) return '';
+    const chip = (t, cor) => '<span style="font-size:11px; font-weight:700; color:' + (cor || '#1e3a6d') + '; background:' + (cor ? '#fef2f2' : '#eff6ff') + '; border-radius:20px; padding:3px 9px;">' + t + '</span>';
+    let h = '<div style="margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">';
+    if (r.vgPorte) {
+      h += '<div style="font-size:11px; font-weight:800; color:#be123c; margin-bottom:5px;">❤️ APRESENTAÇÃO — o time</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [r.vgPorte && esc(r.vgPorte.texto) + ' colaboradores', r.vgSituacao && 'seguro hoje: ' + esc(r.vgSituacao.texto).toLowerCase(),
+        r.vgCCT && (r.vgCCT.valor === 'sim' ? chip('⚖️ convenção exige', '#b91c1c') : 'convenção: ' + esc(r.vgCCT.texto).toLowerCase()), r.vgModalidade && esc(r.vgModalidade.texto.split(' — ')[0])].filter(Boolean).map(x => x.startsWith('<span') ? x : chip(x)).join('') + '</div>';
+      if (r.vgInteresses) h += '<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">Marcou ⭐:</span> <strong style="color:#92400e;">' + (r.vgInteresses.textos || []).map(esc).join(' · ') + '</strong></div>';
+      if (r.vgAssist) h += '<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">Assistências ⭐:</span> <strong style="color:#92400e;">' + (r.vgAssist.textos || []).map(esc).join(' · ') + '</strong></div>';
+      if (r.vgClareza && r.vgClareza.valor === 'duvida') h += '<div style="font-size:11.5px; color:#b45309; font-weight:700;">💬 Pediu para conversar sobre as regras antes dos números</div>';
+    }
+    if (aq && S) {
+      const base = aq.capitalIndividual || null, fx = aq.faixas || {};
+      h += '<div style="font-size:11px; font-weight:800; color:#1d4ed8; margin:10px 0 5px;">📋 COTAÇÃO' + (aq.completo ? '' : ' (em andamento)') + '</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [_VG_MOD[aq.modalidadeCod], aq.vidasTotal ? aq.vidasTotal.toLocaleString('pt-BR') + ' vidas' : null, aq.idadeMedia ? 'idade média ' + aq.idadeMedia : null,
+        'morte ' + _vgCapital(aq), aq.capitalSocios && aq.incluiSocios === 'sim' ? 'sócios ' + _vgBrl(aq.capitalSocios) : null,
+        (aq.capitalGlobalFunc || aq.capitalGlobalSocios) && aq.modalidadeCod !== 'especifica' ? 'global ' + _vgBrl((aq.capitalGlobalFunc || 0) + (aq.capitalGlobalSocios || 0)) : null,
+        aq.renovacaoMes ? '📅 vence em ' + _VG_MESES[aq.renovacaoMes - 1] : null, aq.nAfastados ? '🩺 ' + aq.nAfastados + ' afastado' + (aq.nAfastados > 1 ? 's' : '') : null].filter(Boolean).map(x => chip(x)).join('') + '</div>';
+      const fxTxt = _VG_FX.filter(([k]) => fx[k]).map(([k, t]) => t + ': <b>' + fx[k] + '</b>').join(' · ');
+      if (fxTxt) h += '<div style="font-size:11.5px; color:#475569; margin-bottom:4px;"><span style="color:#94a3b8;">Faixas:</span> ' + fxTxt + '</div>';
+      if ((aq.coberturasQuer || []).length) h += '<div style="font-size:11.5px; color:#1e3a6d; line-height:1.6;">' + aq.coberturasQuer.filter(c => c.id !== 'morte').map(c => '• ' + esc(c.n) + ': <b>' + esc(_vgValor(c, base)) + '</b>').join('<br>') + '</div>';
+      if ((aq.assistQuer || []).length) h += '<div style="font-size:11.5px; color:#1e3a6d; margin-top:3px;">🤝 ' + aq.assistQuer.map(x => esc(x.n) + (x.val && x.val !== 'sug' ? ' (' + esc(_vgValor(x)) + ')' : '')).join(' · ') + '</div>';
+      if ((S.afast || []).length) h += '<div style="font-size:11.5px; margin-top:6px;"><div style="color:#94a3b8;">Afastados:</div>' + S.afast.map((x, i) => '<div style="color:#334155;">' + (i + 1) + '. CID <b>' + esc(x.cid || '?') + '</b> · nasc. ' + _vgData(x.nasc) + ' · afastado desde ' + _vgData(x.desde) + (x.motivo ? ' · ' + esc(_VG_MOT[x.motivo] || x.motivo) : '') + '</div>').join('') + '</div>';
+      if ((aq.alertas || []).length) h += '<div style="font-size:11.5px; margin-top:7px;"><div style="color:#b45309; margin-bottom:3px;">Pontos de atenção (' + aq.alertas.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + aq.alertas.map(x => '• ' + esc(x)).join('<br>') + '</div></div>';
+    }
+    h += _apAnexosHTML(a);
+    if (aq && S) h += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#fff1f2; border-color:#fecdd3; color:#9f1239; font-weight:700;" onclick="event.stopPropagation(); vgCopiarFicha(\'' + a.id + '\', this)" title="Copia os dados organizados para montar a cotação">📋 Copiar ficha para a cotação</button></div>';
+    return h + '</div>';
+  }
+  function _vgFicha(a) { const S = (a.questionario && a.questionario._dados) || {}, E = S.emp || {}, aq = a.analiticoQ || {}, P = S.pes || {}, L = [];
+    L.push('FICHA DE COTAÇÃO — SEGURO DE VIDA EM GRUPO', 'Protocolo ' + (aq.protocolo || '—') + ' · gerada em ' + new Date().toLocaleDateString('pt-BR'), '');
+    L.push('ESTIPULANTE', '  Razão social/nome: ' + (E.razao || E.nome || a.empresaNome || '—'), '  CNPJ: ' + (E.cnpj || '—'),
+      '  Atividade: ' + ((S.atividades || []).map(x => (x.cnae ? 'CNAE ' + x.cnae + ' ' : '') + x.descricao).join(' · ') || S.atividadeLivre || '—'),
+      '  Rotina do time (exposição): ' + ((aq.riscos || []).map(x => _VG_RISCO[x] || x).join(', ') || '—'),
+      '  Convenção exige seguro: ' + ({ sim: 'SIM', nao: 'não', naosei: 'não sabe' }[aq.cctCod] || '—') + (E.sindicato ? ' — ' + E.sindicato : ''),
+      '  Contato: ' + [S.contato && S.contato.nome, S.contato && S.contato.cargo, S.contato && S.contato.telefone, S.contato && S.contato.email].filter(Boolean).join(' · '), '');
+    L.push('MODALIDADE: ' + (_VG_MOD[aq.modalidadeCod] || '—') + (aq.custeioCod ? '  |  custeio: ' + aq.custeioCod : ''), '');
+    if (aq.modalidadeCod !== 'especifica') L.push('GRUPO (GLOBAL)', '  Empregados na GFIP: ' + (aq.nFuncionarios || '—'), '  Sócios/diretores: ' + (aq.incluiSocios === 'sim' ? (aq.nSocios || '?') : 'não incluídos'),
+      '  Capital individual empregados: ' + (aq.capitalIndividual ? _vgBrl(aq.capitalIndividual) : _vgCapital(aq)) + (aq.capitalGlobalFunc ? '  →  capital global ' + _vgBrl(aq.capitalGlobalFunc) : ''),
+      aq.incluiSocios === 'sim' ? '  Capital individual sócios: ' + (aq.capitalSocios ? _vgBrl(aq.capitalSocios) + (aq.capitalGlobalSocios ? '  →  capital global ' + _vgBrl(aq.capitalGlobalSocios) : '') : '—') : '', '');
+    if (aq.modalidadeCod !== 'global') { L.push('GRUPO (ESPECÍFICA)', '  Idades por: ' + ({ faixas: 'faixa etária', planilha: 'planilha anexada', depois: 'RH envia depois' }[aq.modoIdades] || '—') + (P.nLista ? ' · ~' + P.nLista + ' pessoas' : ''));
+      const fx = aq.faixas || {}; _VG_FX.filter(([k]) => fx[k]).forEach(([k, t]) => L.push('    ' + t.padEnd(8) + fx[k]));
+      const _tf = _VG_FX.reduce((s, [k]) => s + (Number(fx[k]) || 0), 0); if (_tf || aq.vidasTotal) L.push('  Total: ' + (_tf || aq.vidasTotal) + ' vidas' + (aq.idadeMedia ? ' · idade média estimada ' + aq.idadeMedia : ''));
+      L.push('  Capital de morte: ' + _vgCapital(aq), ''); }
+    L.push('SEGURO ATUAL: ' + ({ sim: 'SIM — ' + (aq.seguradoraAtual || 'seguradora ?') + (aq.renovacaoMes ? ' · vence ' + _VG_MESES[aq.renovacaoMes - 1] : ''), nao: 'não tem', naosei: 'não sabe' }[aq.temSeguro] || '—'), '');
+    if ((S.afast || []).length || aq.afastPlanilha) { L.push('AFASTADOS' + (aq.afastPlanilha ? ' (na planilha do cliente)' : ''));
+      (S.afast || []).forEach((x, i) => L.push('  ' + (i + 1) + '. CID ' + (x.cid || '?') + ' | nascimento ' + _vgData(x.nasc) + ' | afastamento ' + _vgData(x.desde) + (x.motivo ? ' | ' + (_VG_MOT[x.motivo] || x.motivo) : ''))); L.push(''); }
+    L.push('COBERTURAS'); (aq.coberturasQuer || []).forEach(c => L.push('  • ' + c.n + ': ' + (c.id === 'morte' ? _vgCapital(aq) : _vgValor(c, aq.capitalIndividual))));
+    if ((aq.assistQuer || []).length) { L.push('', 'ASSISTÊNCIAS'); aq.assistQuer.forEach(x => L.push('  • ' + x.n + (x.val && x.val !== 'sug' ? ': ' + _vgValor(x) : ''))); }
+    if ((aq.alertas || []).length) { L.push('', 'ATENÇÃO'); aq.alertas.forEach(x => L.push('  ⚠ ' + x)); }
+    const anx = (a.apoliceAnexos || []).filter(x => x && x.url); if (anx.length) { L.push('', 'ANEXOS DO CLIENTE:'); anx.forEach(x => L.push('  ' + x.nome + (x.tipo ? ' [' + x.tipo + ']' : '') + ' — ' + x.url)); }
+    return L.join('\n'); }
+  async function vgCopiarFicha(id, btn) { const rot = btn ? btn.textContent : '';
+    try { if (btn) btn.textContent = 'montando…'; const d = await db.collection('mb_apresentacoes').doc(id).get(); if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _vgFicha({ id: d.id, ...d.data() }); const ok = () => { if (btn) { btn.textContent = '✓ ficha copiada'; setTimeout(() => { btn.textContent = rot; }, 2600); } };
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
+  window.vgCopiarFicha = vgCopiarFicha;
+
   const _REGUA_DENTAL = { fora: 'Usar dentista fora da cidade', orto: 'Documentação ortodôntica completa',
                           app: 'Achar dentista por app', reembolso: 'Reembolso de dentista particular' };
 
@@ -21938,6 +22022,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       cnpj: 'CNPJ', locaisQtd: 'Nº de locais', estruturaDesejada: 'Estrutura de limites desejada', seguradoraAtual: 'Seguradora atual', renovacaoMes: 'Mês de renovação',
       premioAtual: 'Prêmio atual', vrTotal: 'Valor em risco total apurado', periodoIndenitarioSugerido: 'Período indenitário sugerido',
       local1: 'Local 1', local2: 'Local 2', local3: 'Local 3', local4: 'Local 4', local5: 'Local 5', local6: 'Local 6', local7: 'Local 7', local8: 'Local 8',
+      // Vida em Grupo — apresentação
+      vgPorte: 'Colaboradores com carteira', vgSituacao: 'Tem seguro de vida hoje', vgCCT: 'Convenção coletiva exige', vgModalidade: 'Modalidade que combina',
+      vgClareza: 'Entendeu as regras', vgInteresses: 'Coberturas que marcou ⭐', vgAssist: 'Assistências que marcou ⭐',
+      // Vida em Grupo — questionário
+      modalidadeVida: 'Modalidade', vidasSeguradas: 'Vidas', faixasEtarias: 'Pessoas por faixa etária', idadeMedia: 'Idade média estimada', capitalMorte: 'Capital de morte',
+      coberturasVida: 'Coberturas e valores', assistenciasVida: 'Assistências', afastados: 'Afastados informados',
       // Equipamentos — apresentação
       eqTipo: 'Máquina mais importante', eqValor: 'Valor de reposição', eqReposicao: 'Tempo para repor', eqParada: 'Faturamento que para por mês',
       eqOnde: 'Onde a máquina trabalha', eqQtd: 'Equipamentos desse porte', eqFinanciada: 'Financiadas', eqCoberturas: 'Coberturas que marcou',
