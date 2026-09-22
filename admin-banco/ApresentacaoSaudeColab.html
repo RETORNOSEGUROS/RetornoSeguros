@@ -8,6 +8,7 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   :root { --azul-fundo:#050e24; --ciano:#38bdf8; --dourado:#fbbf24; --verde:#34d399; --laranja:#fb923c; --vermelho:#f87171; --roxo:#a78bfa; --rosa:#fb7185; --texto:#e8eeff; --suave:#93a4c8; }
@@ -169,7 +170,7 @@
    ══════════════════════════════════════════════════════════════════ */
 const firebaseConfig = {
   apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0", authDomain: "retorno-seguros.firebaseapp.com", projectId: "retorno-seguros",
-  storageBucket: "retorno-seguros.appspot.com", messagingSenderId: "979966947706", appId: "1:979966947706:web:b8b6a8a85d0a3f9e6f9f9e"
+  storageBucket: "retorno-seguros.firebasestorage.app", messagingSenderId: "495712392972", appId: "1:495712392972:web:e1e78aedc48bdeea48db29"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
@@ -288,9 +289,9 @@ async function renderAbertura() {
     <div class="titulo">O benefício que o time <em>mais valoriza</em> — montado do jeito da sua empresa.</div>
     <div class="corpo" id="corpo"></div>
     <div id="bt" style="opacity:0; transition:opacity .5s; pointer-events:none;"><div class="acoes"><button class="btn btn-ouro" id="ir">Entender em 3 minutos →</button></div>
-    <div class="rodape">Tudo de clicar. Nenhum dado de saúde de ninguém é pedido aqui.</div></div>`);
+    <div class="rodape"><a id="pdfAb" style="color:#7dd3fc; cursor:pointer; text-decoration:underline; text-underline-offset:3px;">Prefere ler com calma? Baixe o guia em PDF</a><br>Tudo de clicar. Nenhum dado de saúde de ninguém é pedido aqui.</div></div>`);
   await digitar($('corpo'), 'Um plano empresarial não é um pacote fechado: ele é montado em <strong>quatro escolhas</strong> — o que cobre, onde o colaborador fica internado, se tem coparticipação e quem entra. Cada uma muda o custo e a experiência do time' + emp + '.<br><br>Em poucas telas você vê as quatro, entende <strong>como funciona o reembolso</strong> — que existe em todos os planos, com cobertura nacional — e conhece as regras antes de qualquer número.');
-  $('bt').style.opacity = 1; $('bt').style.pointerEvents = 'auto'; $('ir').onclick = renderPorte;
+  $('bt').style.opacity = 1; $('bt').style.pointerEvents = 'auto'; $('pdfAb').onclick = baixarGuia; $('ir').onclick = renderPorte;
 }
 
 /* ══════════ 1 · O TIME ══════════ */
@@ -408,10 +409,11 @@ function renderResultado() {
       <div class="term-barra"><div class="term-fill" id="fill"></div></div><div class="term-leg"><span>Controlada</span><span>Moderada</span><span>Alta</span></div></div>
     <div style="margin-top:16px;">${cards.map(([c, i, x]) => `<div class="card-r ${c}"><span style="font-size:18px;">${i}</span><span>${x}</span></div>`).join('')}</div>
     <div class="corpo" style="font-size:15px; margin-top:6px;">O próximo passo é <strong>montar a cotação</strong>: quantas pessoas, as idades (exatas até 18 e a partir de 59; por faixa no meio), as cidades do time e o plano atual, se houver. Leva uns 5 minutos — e não obriga nada.</div>
-    <div class="acoes"><button class="btn btn-ouro" id="btSim">Montar a minha cotação →</button><button class="btn btn-2" id="btCont">Prefiro que entrem em contato</button></div>`, true);
+    <div class="acoes"><button class="btn btn-ouro" id="btSim">Montar a minha cotação →</button><button class="btn btn-2" id="btPdf">📄 Baixar o guia em PDF</button><button class="btn btn-2" id="btCont">Prefiro que entrem em contato</button></div>`, true);
   setTimeout(() => { const f = $('fill'); if (f) f.style.width = Math.max(8, R.pct) + '%'; }, 200);
   $('btSim').onclick = async () => { await registrarInteresse('cotar'); const tk = new URLSearchParams(location.search).get('t'); location.href = ARQ_Q + (tk ? '?t=' + encodeURIComponent(tk) : ''); };
   $('btCont').onclick = () => { registrarInteresse('contato'); renderContato(); };
+  $('btPdf').onclick = baixarGuia;
 }
 function mascaraTel(el) { const d = el.value.replace(/\D/g, '').slice(0, 11); el.value = d.length > 7 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : d.length > 2 ? `(${d.slice(0, 2)}) ${d.slice(2)}` : d.length ? `(${d}` : ''; }
 window.mascaraTel = mascaraTel;
@@ -430,6 +432,82 @@ function renderContato() {
     $('ok').disabled = true; $('ok').textContent = 'Enviando…';
     try { await db.collection('mb_apresentacoes').doc(SESSAO).set({ questionario: { contato: QRESP.contato }, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch (e) {}
     tela(`<div style="text-align:center; padding:30px 0;"><div style="font-size:56px; margin-bottom:12px;">✅</div><div class="titulo">Recebido.</div><div class="corpo">O corretor já tem o seu desenho e vai falar com você. Sem compromisso.</div></div>`); };
+}
+
+/* ─── PDF KIT (jsPDF) — mesmo desenho em apresentação, questionário e painel ───
+   A4, faixa azul no topo, seções numeradas, pares rótulo/valor em 2 colunas,
+   tabelas, caixas de destaque e rodapé com contato e página. Fontes padrão do
+   jsPDF (Latin-1): acentos saem certos; emoji e símbolos fora do Latin-1 são trocados. */
+function pdfKit(titulo, subtitulo, opt) {
+  if (!window.jspdf || !window.jspdf.jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return null; }
+  const { jsPDF } = window.jspdf; const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210, H = 297, M = 16, CW = W - M * 2; let y = 0;
+  const cor = (opt && opt.cor) || [56, 189, 248];
+  const t = s => String(s == null ? '' : s).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/[–—]/g, '-').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/×/g, 'x').replace(/≥/g, '>=').replace(/≤/g, '<=').replace(/…/g, '...')
+    .replace(/[→←]/g, '->').replace(/•/g, '-').replace(/[^\x00-\xFF\n]/g, '').replace(/[ \t]+/g, ' ').trim();
+  const cab = (primeira) => {
+    doc.setFillColor(5, 14, 36); doc.rect(0, 0, W, primeira ? 38 : 14, 'F'); doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(0, primeira ? 38 : 14, W, 1.2, 'F');
+    doc.setTextColor(255, 255, 255);
+    if (primeira) { doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.text(t(titulo), M, 18); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(170, 186, 214); doc.text(doc.splitTextToSize(t(subtitulo), CW - 40), M, 26);
+      doc.setFontSize(8); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 12, { align: 'right' }); y = 48; }
+    else { doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text(t(titulo), M, 9); doc.setFont('helvetica', 'normal'); doc.setTextColor(120, 140, 180); doc.text('RETORNO SEGUROS', W - M, 9, { align: 'right' }); y = 24; }
+  };
+  const espaco = (h) => { if (y + h > H - 18) { doc.addPage(); cab(false); } };
+  cab(true);
+  const K = {
+    doc, t,
+    secao(txt) { espaco(16); y += 2; doc.setFillColor(cor[0], cor[1], cor[2]); doc.rect(M, y - 4, 1.4, 6, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(15, 23, 42); doc.text(t(txt), M + 4, y + 0.6); y += 7; },
+    par(txt, o) { const fs = (o && o.fs) || 9.5; doc.setFont('helvetica', (o && o.b) ? 'bold' : 'normal'); doc.setFontSize(fs); doc.setTextColor.apply(doc, (o && o.cor) || [51, 65, 85]);
+      const ls = doc.splitTextToSize(t(txt), (o && o.w) || CW); ls.forEach(l => { espaco(fs * 0.5); doc.text(l, (o && o.x) || M, y); y += fs * 0.45; }); y += (o && o.after != null) ? o.after : 2; },
+    kv(pares) { const cols = 2, cw = CW / cols; const lin = pares.filter(p => p && p[1] != null && p[1] !== ''); for (let i = 0; i < lin.length; i += cols) {
+        const grupo = lin.slice(i, i + cols); const alturas = grupo.map(([, v]) => doc.splitTextToSize(t(v), cw - 6).length); const h = 5 + Math.max(...alturas) * 4.3; espaco(h + 2);
+        grupo.forEach(([k, v], j) => { const x = M + j * cw; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120, 132, 156); doc.text(t(k).toUpperCase(), x, y);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(9.8); doc.setTextColor(15, 23, 42); doc.text(doc.splitTextToSize(t(v), cw - 6), x, y + 4.6); });
+        y += h + 1.5; } },
+    tabela(cab2, linhas, o) { const n = cab2.length, ws = (o && o.ws) || cab2.map(() => CW / n); const al = (o && o.al) || [];
+      const linha = (cells, head, zebra) => { const alt = Math.max(...cells.map((c, i) => doc.splitTextToSize(t(c), ws[i] - 4).length)) * 4 + 3.2; espaco(alt);
+        if (head) { doc.setFillColor(235, 241, 250); doc.rect(M, y - 3.6, CW, alt, 'F'); } else if (zebra) { doc.setFillColor(248, 250, 253); doc.rect(M, y - 3.6, CW, alt, 'F'); }
+        let x = M; cells.forEach((c, i) => { doc.setFont('helvetica', head ? 'bold' : (i === 0 ? 'normal' : 'bold')); doc.setFontSize(head ? 8 : 9); doc.setTextColor(head ? 71 : 30, head ? 85 : 41, head ? 105 : 59);
+          const ls = doc.splitTextToSize(t(c), ws[i] - 4); if (al[i] === 'r') doc.text(ls, x + ws[i] - 2, y, { align: 'right' }); else doc.text(ls, x + 1.5, y); x += ws[i]; });
+        y += alt; };
+      linha(cab2, true); linhas.forEach((l, i) => linha(l, false, i % 2)); y += 3; },
+    caixa(titulo2, itens, tipo) { const pal = { alerta: [[255, 247, 237], [194, 65, 12]], ok: [[236, 253, 245], [4, 120, 87]], info: [[239, 246, 255], [29, 78, 216]] }[tipo || 'info'];
+      const ls = []; itens.forEach(s => doc.splitTextToSize('- ' + t(s), CW - 10).forEach(l => ls.push(l)));
+      const h = 9 + ls.length * 4.3; espaco(Math.min(h, 60)); const y0 = y; doc.setFillColor.apply(doc, pal[0]); doc.roundedRect(M, y - 4, CW, Math.min(h, H - 22 - y + 4), 2, 2, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor.apply(doc, pal[1]); doc.text(t(titulo2).toUpperCase(), M + 4, y + 1); y += 6.5;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); ls.forEach(l => { if (y > H - 22) { doc.addPage(); cab(false); } doc.setTextColor.apply(doc, pal[1]); doc.text(l, M + 5, y); y += 4.3; }); y += 4; void y0; },
+    destaque(rot, valor, sub) { espaco(24); doc.setFillColor(5, 14, 36); doc.roundedRect(M, y - 4, CW, 20, 2, 2, 'F'); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(150, 170, 205); doc.text(t(rot).toUpperCase(), M + 5, y + 1);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(255, 255, 255); doc.text(t(valor), M + 5, y + 9); if (sub) { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(150, 170, 205); doc.text(doc.splitTextToSize(t(sub), CW - 10)[0], M + 5, y + 14); } y += 22; },
+    pular(h) { y += h || 3; },
+    salvar(nome) { const n = doc.getNumberOfPages(); for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(140, 150, 170);
+        doc.text('Retorno Seguros  ·  (54) 99701-5000  ·  retorno@retornoseguros.com.br  ·  gerado em ' + new Date().toLocaleDateString('pt-BR'), M, H - 8); doc.text(i + ' / ' + n, W - M, H - 8, { align: 'right' }); }
+      doc.save(nome); return doc; }
+  };
+  return K;
+}
+
+/* ─── PDF DA APRESENTAÇÃO (guia para o cliente guardar ou repassar) ─── */
+function baixarGuia() {
+  const emp = (LINK && LINK.empresaNome) || '';
+  const K = pdfKit('Plano de Saúde para o seu time', 'Guia' + (emp ? ' para ' + emp : '') + ': as quatro escolhas do plano, o reembolso por nível e as regras.', { cor: [52, 211, 153] }); if (!K) return;
+  const tx = c => (RESP[c] || {}).texto || null;
+  if (RESP.scSeg || RESP.scPorte) {
+    K.secao('O plano que você desenhou');
+    K.kv([['Vidas', tx('scPorte')], ['Plano hoje', tx('scSituacao')], ['Cobertura', tx('scSeg')], ['Acomodação', tx('scAcom')], ['Coparticipação', tx('scCopart')], ['Adesão', tx('scAdesao')], ['Reembolso', tx('scReembolso')], ['Abrangência', 'Nacional']]);
+  }
+  K.secao('As quatro escolhas');
+  BOTOES_SAUDE.forEach(B => { K.par(B.n + ' — ' + B.q, { b: true, fs: 10, cor: [15, 23, 42], after: 1 });
+    K.tabela(['Opção', 'Como funciona'], B.ops.map(o => [(RESP['sc' + B.id.charAt(0).toUpperCase() + B.id.slice(1)] || {}).valor === o.v ? '* ' + o.t : o.t, o.x]), { ws: [40, 138] }); });
+  K.secao('Tetos da coparticipação (por procedimento)'); K.tabela(['Procedimento', 'Teto'], COPART_TETOS, { ws: [120, 58], al: ['', 'r'] }); K.par(COPART_ISENTOS + ' O teto exato depende do nível do plano.', { fs: 8.5 });
+  K.secao('Reembolso: quanto volta em cada nível');
+  const nv = ['1x', '2x', '4x', '6x', '10x'];
+  K.tabela(['Procedimento'].concat(nv), REEMB_EX.map(r => [r.n].concat(nv.map(n => 'R$ ' + Math.round(r.v[n]).toLocaleString('pt-BR')))), { ws: [58, 24, 24, 24, 24, 24], al: ['', 'r', 'r', 'r', 'r', 'r'] });
+  K.par('Valores de referência da tabela de reembolso, provisórios e ilustrativos. Níveis de 4x para cima existem só com quarto privativo.', { fs: 8, cor: [120, 132, 156] });
+  K.secao('Regras, sem letra miúda'); REGRAS_SAUDE.forEach(([, tt, x]) => { K.par(tt, { b: true, fs: 9.5, after: 0.5, cor: [15, 23, 42] }); K.par(x, { fs: 9 }); });
+  K.pular(2); K.par('* sua escolha na apresentação. Material informativo: coberturas, carências e reembolso seguem as condições gerais e a proposta da operadora. Não é proposta nem cotação.', { fs: 7.8, cor: [120, 132, 156] });
+  K.salvar('Guia_Plano_de_Saude' + (emp ? '_' + emp.replace(/[^a-zA-Z0-9]+/g, '_') : '') + '.pdf');
+  registrarInteresse('pdf');
 }
 
 /* ══════════ PERSISTÊNCIA ══════════ */
