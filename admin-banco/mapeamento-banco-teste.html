@@ -19087,7 +19087,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a) + _apSaudeColab(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21187,6 +21187,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     { id: 'previdencia', nome: 'Previdência — Radar de Fundos',
       arq: 'RadarPrevidenciaCliente.html', arqQ: null, arqProp: null,
       desc: 'Rentabilidade dos fundos de previdência, mês a mês, em linguagem de cliente — atualizada pelo admin a cada lâmina nova.' },
+    { id: 'saude_colab', nome: 'Plano de Saúde — Colaboradores',
+      arq: 'ApresentacaoSaudeColab.html', arqQ: 'QuestionarioSaudeColab.html', arqProp: null,
+      desc: 'O cliente monta o plano em 4 escolhas (completo × hospitalar, enfermaria × quarto, com × sem coparticipação, compulsório × opcional), vê o reembolso por nível com exemplos reais e as regras; no questionário informa idades exatas (0–18 e 59+) e faixas (19–58), plano atual e cidades do time.' },
     { id: 'vida_grupo', nome: 'Vida em Grupo — Colaboradores',
       arq: 'ApresentacaoVidaGrupo.html', arqQ: 'QuestionarioVidaGrupo.html', arqProp: null,
       desc: 'O cliente conhece as duas formas (Global pela GFIP e Específica com lista de nomes), cada cobertura explicada e as assistências; no questionário escolhe a sua realidade: atividade, pessoas ou faixas etárias, afastados, coberturas com valores e capital de morte.' },
@@ -21864,6 +21867,72 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
   window.vgCopiarFicha = vgCopiarFicha;
 
+  // ══════════ SAÚDE COLABORADORES — bloco do card + ficha para a cotação ══════════
+  // Lê: respostas (apresentação: scPorte, scSituacao, scIncomoda, scSeg, scAcom, scCopart, scAdesao, scReembolso, _vuln)
+  //     analiticoQ + questionario._dados (questionário: desenho, idades exatas 0–18 e 59+, faixas 19–58, plano atual, cidades).
+  const _SC_TXT = { completo: 'Completo (amb. + hosp.)', hospitalar: 'Só hospitalar', enfermaria: 'Enfermaria', quarto: 'Quarto privativo', com: 'Com coparticipação', sem: 'Sem coparticipação',
+    nao_se_aplica: 'Copart. n/a', compulsorio: 'Compulsório', opcional: 'Opcional', basico: 'Reembolso 1x–3x', alto: 'Reembolso 4x+', comparar: 'Comparar níveis de reembolso', recomendar: 'Retorno recomenda' };
+  const _SC_FX = [['19_23','19–23'],['24_28','24–28'],['29_33','29–33'],['34_38','34–38'],['39_43','39–43'],['44_48','44–48'],['49_53','49–53'],['54_58','54–58']];
+  const _SC_MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const _scBrl = n => (n == null || isNaN(n)) ? '—' : 'R$ ' + Math.round(n).toLocaleString('pt-BR');
+  const _scIdades = o => Object.keys(o || {}).map(Number).sort((a, b) => a - b).map(a => a + (a === 90 ? '+' : '') + 'a: <b>' + o[a] + '</b>').join(' · ');
+  const _scIdadesTxt = o => Object.keys(o || {}).map(Number).sort((a, b) => a - b).map(a => (a + (a === 90 ? '+' : '') + ' anos').padEnd(10) + o[a]);
+  function _apSaudeColab(a) {
+    if (_covNorm(a.produtoId) !== 'saude-colab') return '';
+    const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+    const r = a.respostas || {}, aq = a.analiticoQ || null, S = (a.questionario && a.questionario._dados) || null;
+    if (!r.scPorte && !r.scSeg && !aq) return '';
+    const chip = (t, forte) => '<span style="font-size:11px; font-weight:700; color:' + (forte ? '#065f46' : '#1e3a6d') + '; background:' + (forte ? '#ecfdf5' : '#eff6ff') + '; border-radius:20px; padding:3px 9px;">' + t + '</span>';
+    let h = '<div style="margin-top:9px; border-top:1px dashed #e2e8f0; padding-top:9px;">';
+    if (r.scPorte || r.scSeg) {
+      h += '<div style="font-size:11px; font-weight:800; color:#047857; margin-bottom:5px;">🩺 APRESENTAÇÃO — o plano que desenhou</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [r.scPorte && esc(r.scPorte.texto) + ' vidas', r.scSituacao && 'plano hoje: ' + esc(r.scSituacao.texto).toLowerCase()].filter(Boolean).map(x => chip(x)).join('')
+        + ['scSeg', 'scAcom', 'scCopart', 'scAdesao', 'scReembolso'].filter(k => r[k]).map(k => chip(esc(_SC_TXT[r[k].valor] || r[k].texto), true)).join('') + '</div>';
+      if (r.scIncomoda) h += '<div style="font-size:11.5px; color:#64748b;"><span style="color:#94a3b8;">O que incomoda hoje:</span> <strong style="color:#92400e;">' + esc(r.scIncomoda.texto) + '</strong></div>';
+      if (r.scClareza && r.scClareza.valor === 'duvida') h += '<div style="font-size:11.5px; color:#b45309; font-weight:700;">💬 Pediu para conversar sobre as regras antes dos números</div>';
+    }
+    if (aq && S) {
+      const d = S.d || {};
+      h += '<div style="font-size:11px; font-weight:800; color:#1d4ed8; margin:10px 0 5px;">📋 COTAÇÃO' + (aq.completo ? '' : ' (em andamento)') + '</div>';
+      h += '<div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px;">' + [aq.vidasTotal ? aq.vidasTotal + ' vidas' : null, aq.nTitulares ? aq.nTitulares + ' titulares' : null, aq.idadeMedia ? 'idade média ' + aq.idadeMedia : null,
+        aq.n59mais ? aq.n59mais + ' com 59+' : null, _SC_TXT[aq.segCod], _SC_TXT[aq.acomCod], aq.copartCod && aq.copartCod !== 'nao_se_aplica' ? _SC_TXT[aq.copartCod] : null, _SC_TXT[aq.adesaoCod], _SC_TXT[aq.reembolsoCod],
+        aq.operadoraAtual ? 'hoje: ' + esc(aq.operadoraAtual) : null, aq.aniversarioMes ? '📅 aniversário ' + _SC_MESES[aq.aniversarioMes - 1] : null, aq.gastoAtual ? 'gasta ' + _scBrl(aq.gastoAtual) + '/mês' : null].filter(Boolean).map(x => chip(x)).join('') + '</div>';
+      const fx = _SC_FX.filter(([k]) => (aq.faixas || {})[k]).map(([k, t]) => t + ': <b>' + aq.faixas[k] + '</b>').join(' · ');
+      if (Object.keys(aq.idadesJovens || {}).length) h += '<div style="font-size:11.5px; color:#475569;"><span style="color:#94a3b8;">Até 18 (idade):</span> ' + _scIdades(aq.idadesJovens) + '</div>';
+      if (fx) h += '<div style="font-size:11.5px; color:#475569;"><span style="color:#94a3b8;">19–58 (faixa):</span> ' + fx + '</div>';
+      if (Object.keys(aq.idadesSeniores || {}).length) h += '<div style="font-size:11.5px; color:#475569;"><span style="color:#94a3b8;">59+ (idade):</span> ' + _scIdades(aq.idadesSeniores) + '</div>';
+      if ((aq.cidades || []).length) h += '<div style="font-size:11.5px; color:#475569; margin-top:3px;"><span style="color:#94a3b8;">Cidades:</span> ' + aq.cidades.map(esc).join(' · ') + (S.sit && S.sit.hospitais ? ' · 🏥 ' + esc(S.sit.hospitais) : '') + '</div>';
+      if ((aq.alertas || []).length) h += '<div style="font-size:11.5px; margin-top:7px;"><div style="color:#b45309; margin-bottom:3px;">Pontos de atenção (' + aq.alertas.length + '):</div><div style="color:#92400e; background:#fffbeb; border-radius:7px; padding:7px 9px; line-height:1.55;">' + aq.alertas.map(x => '• ' + esc(x)).join('<br>') + '</div></div>';
+    }
+    h += _apAnexosHTML(a);
+    if (aq && S) h += '<div style="margin-top:9px;"><button class="btn-mini" style="background:#ecfdf5; border-color:#a7f3d0; color:#065f46; font-weight:700;" onclick="event.stopPropagation(); scCopiarFicha(\'' + a.id + '\', this)" title="Copia os dados organizados para o cotador">📋 Copiar ficha para a cotação</button></div>';
+    return h + '</div>';
+  }
+  function _scFicha(a) { const S = (a.questionario && a.questionario._dados) || {}, E = S.emp || {}, aq = a.analiticoQ || {}, d = S.d || {}, L = [];
+    L.push('FICHA DE COTAÇÃO — PLANO DE SAÚDE COLABORADORES', 'Protocolo ' + (aq.protocolo || '—') + ' · gerada em ' + new Date().toLocaleDateString('pt-BR'), '');
+    L.push('ESTIPULANTE', '  Razão social/nome: ' + (E.razao || E.nome || a.empresaNome || '—'), '  CNPJ: ' + (E.cnpj || '—'), '  Atividade (Receita): ' + (E.cnae || '—'), '  Sede: ' + (aq.sede || '—'),
+      '  Contato: ' + [S.contato && S.contato.nome, S.contato && S.contato.cargo, S.contato && S.contato.telefone, S.contato && S.contato.email].filter(Boolean).join(' · '), '');
+    L.push('DESENHO', '  Segmentação: ' + (_SC_TXT[aq.segCod] || '—'), '  Acomodação: ' + (_SC_TXT[aq.acomCod] || '—'), '  Coparticipação: ' + (aq.copartCod === 'nao_se_aplica' ? 'não se aplica (só hospitalar)' : (_SC_TXT[aq.copartCod] || '—')),
+      '  Adesão: ' + (_SC_TXT[aq.adesaoCod] || '—') + (aq.adesaoEstCod ? ' · adesão estimada ' + aq.adesaoEstCod : ''), '  Reembolso: ' + (_SC_TXT[aq.reembolsoCod] || '—'), '  Abrangência: nacional',
+      '  Dependentes: ' + ({ sim: 'sim', titular: 'só titulares', escolha: 'cada colaborador decide', naosei: 'a definir' }[aq.dependentesCod] || '—') + '  |  Colaborador contribui: ' + ({ sim: 'SIM', nao: 'não', naosei: 'não sabe' }[aq.contribuiCod] || '—'),
+      (aq.comparar || []).length ? '  Comparar: ' + aq.comparar.map(x => ({ copart: 'com × sem coparticipação', acom: 'enfermaria × quarto', seg: 'completo × hospitalar', adesao: 'compulsório × opcional' }[x] || x)).join(' · ') : '', '');
+    L.push('VIDAS: ' + (aq.vidasTotal || '—') + (aq.nTitulares ? '  (titulares: ' + aq.nTitulares + ')' : '') + (aq.idadeMedia ? '  · idade média estimada ' + aq.idadeMedia : '') + '  · informado por: ' + ({ aqui: 'idades no questionário', planilha: 'lista anexada', depois: 'RH envia depois' }[aq.modoIdades] || '—'));
+    if (Object.keys(aq.idadesJovens || {}).length) { L.push('  0 a 18 anos (idade exata):'); _scIdadesTxt(aq.idadesJovens).forEach(x => L.push('    ' + x)); }
+    const fx = _SC_FX.filter(([k]) => (aq.faixas || {})[k]); if (fx.length) { L.push('  19 a 58 anos (faixa):'); fx.forEach(([k, t]) => L.push('    ' + t.padEnd(10) + aq.faixas[k])); }
+    if (Object.keys(aq.idadesSeniores || {}).length) { L.push('  59 anos ou mais (idade exata):'); _scIdadesTxt(aq.idadesSeniores).forEach(x => L.push('    ' + x)); }
+    L.push('', 'PLANO ATUAL: ' + (aq.temPlano === 'sim' ? (aq.operadoraAtual || 'sim') + (aq.aniversarioMes ? ' · aniversário ' + _SC_MESES[aq.aniversarioMes - 1] : '') + (aq.gastoAtual ? ' · ' + _scBrl(aq.gastoAtual) + '/mês' : '') + (aq.ultimoReajusteCod ? ' · último reajuste ' + ({ ate10: 'até 10%', '10_20': '10% a 20%', '20_mais': 'mais de 20%', naosei: '?' }[aq.ultimoReajusteCod] || aq.ultimoReajusteCod) : '') : ({ nao: 'não tem', naosei: 'não sabe' }[aq.temPlano] || '—')),
+      'GESTANTES/TRATAMENTOS EM CURSO: ' + ({ sim: 'SIM', nao: 'não', naosei: 'não sabe' }[aq.tratamentosCod] || '—'), 'CIDADES DO TIME: ' + ((aq.cidades || []).join(' · ') || '—') + (S.sit && S.sit.hospitais ? '  |  hospitais: ' + S.sit.hospitais : ''));
+    if ((aq.alertas || []).length) { L.push('', 'ATENÇÃO'); aq.alertas.forEach(x => L.push('  ⚠ ' + x)); }
+    const anx = (a.apoliceAnexos || []).filter(x => x && x.url); if (anx.length) { L.push('', 'ANEXOS DO CLIENTE:'); anx.forEach(x => L.push('  ' + x.nome + (x.tipo ? ' [' + x.tipo + ']' : '') + ' — ' + x.url)); }
+    return L.join('\n'); }
+  async function scCopiarFicha(id, btn) { const rot = btn ? btn.textContent : '';
+    try { if (btn) btn.textContent = 'montando…'; const d = await db.collection('mb_apresentacoes').doc(id).get(); if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _scFicha({ id: d.id, ...d.data() }); const ok = () => { if (btn) { btn.textContent = '✓ ficha copiada'; setTimeout(() => { btn.textContent = rot; }, 2600); } };
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
+  window.scCopiarFicha = scCopiarFicha;
+
   const _REGUA_DENTAL = { fora: 'Usar dentista fora da cidade', orto: 'Documentação ortodôntica completa',
                           app: 'Achar dentista por app', reembolso: 'Reembolso de dentista particular' };
 
@@ -22022,6 +22091,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       cnpj: 'CNPJ', locaisQtd: 'Nº de locais', estruturaDesejada: 'Estrutura de limites desejada', seguradoraAtual: 'Seguradora atual', renovacaoMes: 'Mês de renovação',
       premioAtual: 'Prêmio atual', vrTotal: 'Valor em risco total apurado', periodoIndenitarioSugerido: 'Período indenitário sugerido',
       local1: 'Local 1', local2: 'Local 2', local3: 'Local 3', local4: 'Local 4', local5: 'Local 5', local6: 'Local 6', local7: 'Local 7', local8: 'Local 8',
+      // Saúde Colaboradores — apresentação
+      scPorte: 'Vidas (colaboradores + dependentes)', scSituacao: 'Tem plano hoje', scIncomoda: 'O que incomoda no plano atual', scSeg: 'Cobertura', scAcom: 'Acomodação',
+      scCopart: 'Coparticipação', scAdesao: 'Adesão', scReembolso: 'Nível de reembolso', scClareza: 'Entendeu as regras',
+      // Saúde Colaboradores — questionário
+      cidadeSede: 'Sede', desenhoPlano: 'Desenho do plano', titulares: 'Titulares', vidasSaude: 'Vidas', idadesAte18: 'Até 18 anos (idade exata)', faixasSaude: '19 a 58 anos (faixa)',
+      idades59mais: '59+ (idade exata)', idadeMediaSaude: 'Idade média estimada', planoAtual: 'Plano atual', gastoAtual: 'Gasto mensal atual', cidadesTime: 'Cidades do time',
       // Vida em Grupo — apresentação
       vgPorte: 'Colaboradores com carteira', vgSituacao: 'Tem seguro de vida hoje', vgCCT: 'Convenção coletiva exige', vgModalidade: 'Modalidade que combina',
       vgClareza: 'Entendeu as regras', vgInteresses: 'Coberturas que marcou ⭐', vgAssist: 'Assistências que marcou ⭐',
