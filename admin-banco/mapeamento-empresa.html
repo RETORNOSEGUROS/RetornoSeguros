@@ -256,6 +256,16 @@
       padding:11px 8px; font-size:13px; font-weight:800; cursor:pointer; font-family:inherit; transition:.12s;
       display:flex; align-items:center; justify-content:center; gap:6px; line-height:1.2; }
     .fp-btn:active{ transform:scale(.97); }
+    .fp-btn-largo{ width:100%; flex:none; }
+    .fp-anexo{ margin-top:8px; }
+    .fp-tag{ font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:100px; vertical-align:middle;
+      background:rgba(56,189,248,.16); color:#7dd3fc; margin-left:6px; }
+    .fp-anx{ margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+    .fp-anx-item{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--b70);
+      background:rgba(255,255,255,.05); border:1px solid var(--vidro-bd); border-radius:9px; padding:7px 10px; }
+    .fp-anx-item b{ color:#fff; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .fp-anx-ok{ color:var(--verde); font-weight:800; }
+    .fp-anx-erro{ color:#fca5a5; }
   </style>
 
   <style id="tema-c1">
@@ -584,6 +594,7 @@
       const env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || 'null');
       if (env && env.id && env.em && (Date.now() - env.em) < 30 * 86400000) {
         PADRAO_DOC_ID = env.id; respostas = env.respostas || {}; ident = env.ident || ident;
+        PADRAO_ANEXOS = Array.isArray(env.anexos) ? env.anexos : [];
         return telaFimPadrao(false, env.interesse || []);
       }
     } catch (e) {}
@@ -922,7 +933,7 @@
         interesseCotar: [],
         status: 'novo',                 // novo | vinculado | nao_cliente | descartado
         vinculadoEmpresaId: null, vinculadoEmpresaNome: null,
-        origem: 'link_padrao', versaoForm: 17,
+        origem: 'link_padrao', versaoForm: 18,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       };
       const ref = await db.collection('mb_questionario_padrao').add(doc);
@@ -944,12 +955,19 @@
     document.getElementById('topo').hidden = true;
     var _s = document.getElementById('salvoTag'); if (_s) _s.classList.remove('on');
     PADRAO_INTERESSE = new Set(interesseSalvo || []);
+    var temSeg = PRODUTOS.filter(function(p){ return respostas[p.id] && respostas[p.id].tem === 'sim'; });
     var naoTem = PRODUTOS.filter(function(p){ return respostas[p.id] && respostas[p.id].tem === 'nao'; });
     var html = '<div class="fimp-top">'+
       '<div class="check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recem ? 'Recebemos, obrigado!' : 'Já recebemos o seu mapeamento')+'</h1>'+
       '<p>Nossa equipe vai analisar e entrar em contato'+(ident.nome ? ', '+_esc(String(ident.nome).split(' ')[0]) : '')+'. '+
       (ident.celular ? 'Falamos pelo WhatsApp <b>'+_esc(ident.celular)+'</b>.' : 'Se quiser, deixe um telefone com quem te enviou o link.')+'</p></div>';
+    if (temSeg.length){
+      html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div>'+
+        '<div class="gb-t">Os seguros que você tem</div>'+
+        '<div class="gb-s">anexe a apólice — com ela a gente estuda a renovação sem precisar te perguntar mais nada</div></div></div>'+
+        temSeg.map(_cardFimPadrao).join('');
+    }
     if (naoTem.length){
       html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div>'+
         '<div class="gb-t">Seguros para conhecer</div>'+
@@ -960,20 +978,37 @@
     }
     html += '<div class="t1-nota" style="margin-top:20px; text-align:center;">Pode fechar a página — seu mapeamento já foi entregue.</div>';
     trocar(html, 'frente', 'fimp');
+    setTimeout(function(){ PRODUTOS.forEach(function(p){ _renderAnexoPadrao(p.id); }); }, 40);
   }
   function _cardFimPadrao(p){
     var cat = catDoProduto(p);
+    var r = respostas[p.id] || {};
+    var tem = r.tem === 'sim';
     var pedido = PADRAO_INTERESSE.has(p.id);
     var bts = '';
     if (cat && cat.arq){
       bts += '<button class="fp-btn" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">📖 Conhecer mais</button>';
     }
-    bts += '<button class="fp-btn'+(pedido ? ' feito' : ' destaque')+'" id="tg-'+p.id+'" onclick="quereCotarPadrao(\''+p.id+'\')">'+
-           (pedido ? '✓ Cotação pedida' : '✍️ Quero cotar')+'</button>';
+    if (cat && cat.arqQ){
+      bts += '<button class="fp-btn'+(pedido ? ' feito' : ' destaque')+'" id="tg-'+p.id+'" onclick="quereCotarPadrao(\''+p.id+'\')">'+
+             (pedido ? (tem ? '✓ Questionário aberto' : '✓ Cotação pedida') : (tem ? '✍️ Preencher questionário' : '✍️ Quero cotar'))+'</button>';
+    } else if (!tem) {
+      bts += '<button class="fp-btn'+(pedido ? ' feito' : ' destaque')+'" id="tg-'+p.id+'" onclick="quereCotarPadrao(\''+p.id+'\')">'+
+             (pedido ? '✓ Cotação pedida' : '✍️ Quero cotar')+'</button>';
+    }
+    // Só quem TEM o seguro anexa — quem não tem não tem apólice para mandar.
+    var anexo = '';
+    if (tem){
+      anexo = '<div class="fp-anexo">'+
+        '<button class="fp-btn fp-btn-largo" onclick="document.getElementById(\'axp-'+p.id+'\').click()">📎 Anexar a apólice</button>'+
+        '<input type="file" id="axp-'+p.id+'" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="anexoPadraoSel(\''+p.id+'\', this)">'+
+        '<div class="fp-anx" id="axLista-'+p.id+'"></div></div>';
+    }
     return '<div class="fp-card" id="fp-'+p.id+'">'+
       '<div class="fp-cab"><div class="fp-ic prod-ico">'+iconeDe(p)+'</div>'+
-        '<div><div class="fp-nm">'+_esc(p.nome)+'</div><div class="fp-ds">'+_esc(descDe(p))+'</div></div></div>'+
-      '<div class="fp-bts">'+bts+'</div></div>';
+        '<div><div class="fp-nm">'+_esc(p.nome)+(tem ? ' <span class="fp-tag">você tem</span>' : '')+'</div>'+
+        '<div class="fp-ds">'+_esc(descDe(p))+'</div></div></div>'+
+      (bts ? '<div class="fp-bts">'+bts+'</div>' : '')+anexo+'</div>';
   }
   // "Quero cotar": abre o questionário do produto (quando existe) e anota o interesse.
   // O window.open acontece ANTES de qualquer await — senão o navegador bloqueia o pop-up.
@@ -1000,6 +1035,54 @@
     }
   }
   window.quereCotarPadrao = quereCotarPadrao;
+
+  /* ===== ANEXO DE APÓLICE NO LINK PADRÃO =====
+     Aqui não existe empresa ainda, então o arquivo vai para uma pasta da própria
+     resposta (mb_apolices/padrao/<id>/<produto>/) e a lista fica no doc do
+     questionário padrão. Quando o corretor vincular a resposta a uma empresa,
+     o painel leva esses anexos para o raio-x dela. */
+  let PADRAO_ANEXOS = [];
+  function _anexosDoProduto(prodId){ return PADRAO_ANEXOS.filter(function(a){ return a.produtoId === prodId; }); }
+  function _renderAnexoPadrao(prodId, msg){
+    var box = document.getElementById('axLista-' + prodId); if (!box) return;
+    var itens = _anexosDoProduto(prodId).map(function(a){
+      return '<div class="fp-anx-item"><span class="fp-anx-ok">✓</span><b>' + _esc(a.nome) + '</b></div>';
+    }).join('');
+    box.innerHTML = itens + (msg || '');
+  }
+  window._renderAnexoPadrao = _renderAnexoPadrao;
+
+  async function anexoPadraoSel(prodId, input){
+    var files = [].slice.call(input.files || []);
+    input.value = '';
+    if (!files.length) return;
+    if (!PADRAO_DOC_ID) { alert('Envie o mapeamento primeiro — aí o anexo fica junto da sua resposta.'); return; }
+    var p = (PRODUTOS || []).find(function(x){ return x.id === prodId; }) || { id: prodId, nome: prodId };
+    var falhas = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (_anexosDoProduto(prodId).length >= 3) { falhas.push('máximo de 3 arquivos por seguro'); break; }
+      if (f.size > 15 * 1024 * 1024) { falhas.push('"' + f.name + '" passa de 15 MB'); continue; }
+      if (!tipoAnexoOk(f)) { falhas.push('"' + f.name + '" não é PDF, foto, Word ou Excel'); continue; }
+      _renderAnexoPadrao(prodId, '<div class="fp-anx-item">⏳ enviando ' + _esc(f.name) + '…</div>');
+      try {
+        var caminho = 'mb_apolices/padrao/' + PADRAO_DOC_ID + '/' + prodId + '/' + Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_');
+        var snap = await _comTimeout(firebase.storage().ref(caminho).put(f, { contentType: _mimeArquivo(f) }), 120000);
+        var url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
+        PADRAO_ANEXOS.push({ produtoId: prodId, produtoNome: p.nome || prodId, nome: f.name, url: url,
+          caminho: caminho, tamanho: f.size, em: new Date().toISOString() });
+      } catch (e) { console.warn('anexo padrão', e); falhas.push('"' + f.name + '" não subiu — tente de novo'); }
+    }
+    try {
+      await db.collection('mb_questionario_padrao').doc(PADRAO_DOC_ID).update({
+        anexos: JSON.parse(JSON.stringify(PADRAO_ANEXOS)),
+        anexosEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      try { var env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || '{}'); env.anexos = PADRAO_ANEXOS; localStorage.setItem(PADRAO_LS_ENV, JSON.stringify(env)); } catch (e) {}
+    } catch (e) { console.warn(e); falhas.push('não consegui salvar agora — tente de novo em instantes'); }
+    _renderAnexoPadrao(prodId, falhas.length ? '<div class="fp-anx-item fp-anx-erro">⚠ ' + _esc(falhas[0]) + '</div>' : '');
+  }
+  window.anexoPadraoSel = anexoPadraoSel;
 
   function linhaProduto(p){
     var sub = descDe(p);
@@ -1268,10 +1351,11 @@
         linhas += '<div class="hub-linha" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">'+
           '<div class="hl-ic">📖</div><div class="hl-txt"><div class="hl-t">Ver a apresentação</div><div class="hl-s">as coberturas de um jeito simples — abre em outra aba</div></div><div class="hl-seta">›</div></div>';
       }
-      // estudo/questionário (leva a cotação) só nos que NÃO tem — nos que tem fica só a apresentação
-      if (cat.arqQ && !tem){
+      // vale para os dois: quem não tem pede estudo, quem tem prepara a renovação
+      if (cat.arqQ){
         linhas += '<div class="hub-linha destaque" onclick="abrirDestino(\''+p.id+'\',\'questionario\')">'+
-          '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">Quero um estudo personalizado</div><div class="hl-s">'+estudoSub+'</div></div><div class="hl-seta">›</div></div>';
+          '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">'+(tem ? 'Preencher o questionário' : 'Quero um estudo personalizado')+'</div>'+
+          '<div class="hl-s">'+(tem ? 'as informações que a seguradora pede para a renovação' : estudoSub)+'</div></div><div class="hl-seta">›</div></div>';
       }
     }
     // "quero cotar" só nos que o cliente NÃO tem
