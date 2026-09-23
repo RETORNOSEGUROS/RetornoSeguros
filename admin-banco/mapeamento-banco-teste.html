@@ -11430,7 +11430,7 @@
   // ===== VERSÃO DO ARQUIVO =====
   // Sobe junto com cada publicação. Serve pra saber, num relance, se o que está
   // no ar é mesmo a última versão (evita depurar um arquivo antigo sem perceber).
-  const APP_VERSAO = '261';
+  const APP_VERSAO = '262';
   window.APP_VERSAO = APP_VERSAO;
   function _pintarVersao() {
     try {
@@ -26836,10 +26836,27 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         '</div>'+
         '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">'+tem.map(k => chip(k, true)).join('')+nao.map(k => chip(k, false)).join('')+
           (!tem.length && !nao.length ? '<span style="font-size:12px; color:#94a3b8;">não marcou nenhum seguro</span>' : '')+'</div>'+
+        _qpAnexosHTML(d)+
         acoes+'</div>';
     }).join('');
   }
   window.renderQPadrao = renderQPadrao;
+
+  // Apólices que a empresa anexou pelo link padrão (ficam na pasta da resposta até o vínculo)
+  function _qpAnexosHTML(d){
+    const lista = Array.isArray(d.anexos) ? d.anexos.filter(a => a && a.url) : [];
+    if (!lista.length) return '';
+    const porProd = {};
+    lista.forEach(a => { const k = a.produtoNome || a.produtoId || 'apólice'; (porProd[k] = porProd[k] || []).push(a); });
+    return '<div style="margin-top:11px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'+
+      '<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#64748b; margin-bottom:7px;">📎 Apólices anexadas pelo cliente · '+lista.length+'</div>'+
+      Object.keys(porProd).map(function(nome){
+        return '<div style="margin-bottom:5px;"><span style="font-size:12px; font-weight:800; color:#0f172a;">'+_qpEsc(nome)+'</span> '+
+          porProd[nome].map(function(a){
+            return '<a href="'+_qpEsc(a.url)+'" target="_blank" rel="noopener" style="display:inline-block; font-size:11.5px; color:#4338ca; font-weight:700; background:#eef2ff; border:1px solid #c7d2fe; border-radius:7px; padding:3px 9px; margin:2px 4px 2px 0;">📄 '+_qpEsc(a.nome || 'arquivo')+'</a>';
+          }).join('')+'</div>';
+      }).join('')+'</div>';
+  }
 
   function qpBuscarEmpresa(docId, txt){
     const box = document.getElementById('qpSug-' + docId); if (!box) return;
@@ -26852,17 +26869,101 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   }
   window.qpBuscarEmpresa = qpBuscarEmpresa;
 
+  // ---------- VINCULAR: leva mapeamento, vencimentos e anexos para o raio-x ----------
+  const QP_MES_AB = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  function _qpMesAno(m, a){ return m ? (QP_MES_AB[m-1] + (a ? '/' + a : '')) : '—'; }
+  function _qpMoeda(v){ const n = Number(v||0); return n ? 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '—'; }
+  // Status de negócio NUNCA é rebaixado por resposta de cliente: fechado, já é nosso
+  // ou em cotação ficam intactos (senão um "não tem" do RH apagaria a venda).
+  const QP_INTOCAVEIS = ['fechada', 'conosco', 'cotando'];
+
+  // Monta o que seria gravado em cada produto + o diff contra o que já está lá.
+  async function _qpPlano(doc, empresaId){
+    const resp = doc.respostas || {}, prods = doc.produtos || {};
+    const ramos = (typeof RAMOS_ALL !== 'undefined' && RAMOS_ALL.length ? RAMOS_ALL : PRODUTOS);
+    const plano = [];
+    for (const rid of Object.keys(resp)) {
+      const r = resp[rid] || {};
+      const rm = ramos.find(x => x.id === rid) || { id: rid, nome: (prods[rid] && prods[rid].nome) || rid };
+      let atual = {};
+      try { const sn = await db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(rid).get(); if (sn.exists) atual = sn.data() || {}; }
+      catch (e) { /* produto ainda não existe */ }
+      if (QP_INTOCAVEIS.includes(atual.statusVisual)) { plano.push({ rid, nome: rm.nome, preservado: atual.statusVisual, mudancas: [], dados: null }); continue; }
+      const dados = r.tem
+        ? { tem: true, statusVisual: 'mapeada', mapeamento: 'mercado',
+            vencimentoMes: r.vencimentoMes || null, vencimentoAno: r.vencimentoAno || null,
+            seguradoraAtual: r.seguradora || null, valorAnualPago: r.valorAnual || null }
+        : { tem: false, naoTemProduto: true, statusVisual: 'nao_tem' };
+      const cmp = [
+        ['vencimento', _qpMesAno(atual.vencimentoMes, atual.vencimentoAno), _qpMesAno(dados.vencimentoMes, dados.vencimentoAno)],
+        ['seguradora', atual.seguradoraAtual || atual.seguradora || '—', dados.seguradoraAtual || '—'],
+        ['valor/ano', _qpMoeda(atual.valorAnualPago || atual.premioAnual), _qpMoeda(dados.valorAnualPago)],
+        ['situação', atual.statusVisual || '—', dados.statusVisual]
+      ];
+      const mudancas = cmp.filter(c => c[1] !== '—' && c[2] !== '—' && c[1] !== c[2]).map(c => ({ campo: c[0], de: c[1], para: c[2] }));
+      const novos = cmp.filter(c => c[1] === '—' && c[2] !== '—').length;
+      plano.push({ rid, nome: rm.nome, preservado: null, mudancas, novos, dados });
+    }
+    return plano;
+  }
+
   async function qpVincular(docId, empresaId){
+    const d = QP_DOCS.find(x => x.id === docId); if (!d) return;
     const e = (EMPRESAS || []).find(x => x.id === empresaId) || (QP_SUG[docId] && QP_SUG[docId].id === empresaId ? QP_SUG[docId] : null);
     if (!e) return alert('Empresa não encontrada.');
-    if (!confirm('Vincular esta resposta à empresa "' + e.nome + '"?\n\nNada é gravado no raio-x — você preenche lá o que quiser aproveitar.')) return;
+    let plano;
+    try { plano = await _qpPlano(d, empresaId); }
+    catch (err) { return alert('Não consegui ler o raio-x agora: ' + err.message); }
+    const comMudanca = plano.filter(p => p.mudancas.length);
+    const preservados = plano.filter(p => p.preservado);
+    const nAnexos = (Array.isArray(d.anexos) ? d.anexos.filter(a => a && a.url) : []).length;
+    const novosTotal = plano.reduce((n, p) => n + (p.novos || 0), 0);
+    // Sem conflito → aplica direto. Com conflito → mostra o que vai ser substituído.
+    if (comMudanca.length) {
+      const nSub = comMudanca.reduce((n, p) => n + p.mudancas.length, 0);
+      const txt = 'Vincular a "' + e.nome + '"?\n\n' +
+        nSub + (nSub === 1 ? ' campo vai ser SUBSTITUÍDO:\n' : ' campos vão ser SUBSTITUÍDOS:\n') +
+        comMudanca.map(p => p.mudancas.map(m => '  · ' + p.nome + ' — ' + m.campo + ': ' + m.de + ' → ' + m.para).join('\n')).join('\n') +
+        (novosTotal ? '\n\n' + novosTotal + ' campo(s) entram novos (estavam vazios).' : '') +
+        (preservados.length ? '\n\nMantidos como estão (negócio em andamento): ' + preservados.map(p => p.nome).join(', ') : '') +
+        (nAnexos ? '\n\n' + nAnexos + ' apólice(s) anexada(s) vão para o raio-x.' : '') +
+        '\n\nConfirma?';
+      if (!confirm(txt)) return;
+    } else if (!confirm('Vincular esta resposta a "' + e.nome + '"?\n\n' +
+        'O mapeamento entra no raio-x e no mapa de vencimentos' + (nAnexos ? ', junto com ' + nAnexos + ' apólice(s) anexada(s)' : '') + '.' +
+        (preservados.length ? '\n\nMantidos como estão (negócio em andamento): ' + preservados.map(p => p.nome).join(', ') : ''))) return;
     try {
+      // 1) mapeamento + vencimentos, produto a produto
+      for (const p of plano) {
+        if (!p.dados) continue;
+        await db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(p.rid).set(Object.assign({}, p.dados, {
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
+          ultimoAutorNome: 'Questionário padrão (vinculado por ' + (CTX.nome || 'admin') + ')',
+          origemQuestionarioPadrao: docId
+        }), { merge: true });
+      }
+      // 2) anexos: entram na lista de apólices do produto, sem duplicar por nome
+      const anexos = Array.isArray(d.anexos) ? d.anexos.filter(a => a && a.url) : [];
+      const porProd = {};
+      anexos.forEach(a => { (porProd[a.produtoId] = porProd[a.produtoId] || []).push({ nome: a.nome, url: a.url, caminho: a.caminho || null, tamanho: a.tamanho || null, em: a.em || null, via: 'questionario_padrao' }); });
+      for (const rid of Object.keys(porProd)) {
+        const ref = db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(rid);
+        let existentes = [];
+        try { const sn = await ref.get(); if (sn.exists && Array.isArray(sn.data().apoliceAnexos)) existentes = sn.data().apoliceAnexos; } catch (err) {}
+        const nomesNovos = new Set(porProd[rid].map(a => (a.nome || '').toLowerCase()));
+        const mantidos = existentes.filter(a => a && a.url && !nomesNovos.has((a.nome || '').toLowerCase()));
+        await ref.set({ apoliceAnexos: mantidos.concat(porProd[rid]), apoliceAnexadaEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+      // 3) marca a resposta
       await db.collection('mb_questionario_padrao').doc(docId).update({
         status: 'vinculado', vinculadoEmpresaId: empresaId, vinculadoEmpresaNome: e.nome || null,
-        vinculadoEm: firebase.firestore.FieldValue.serverTimestamp(), vinculadoPorNome: CTX.nome || null
+        vinculadoEm: firebase.firestore.FieldValue.serverTimestamp(), vinculadoPorNome: CTX.nome || null,
+        aplicadoNoRaioX: true, camposSubstituidos: comMudanca.reduce((n, p) => n + p.mudancas.length, 0)
       });
-      const d = QP_DOCS.find(x => x.id === docId); if (d) { d.status = 'vinculado'; d.vinculadoEmpresaId = empresaId; d.vinculadoEmpresaNome = e.nome; d.vinculadoEm = new Date(); }
-      flashSalvo('Vinculada a ' + e.nome);
+      const loc = QP_DOCS.find(x => x.id === docId);
+      if (loc) { loc.status = 'vinculado'; loc.vinculadoEmpresaId = empresaId; loc.vinculadoEmpresaNome = e.nome; loc.vinculadoEm = new Date(); loc.aplicadoNoRaioX = true; }
+      try { await carregarEmpresasReais(); } catch (err) {}
+      flashSalvo('Vinculada a ' + e.nome + ' — raio-x atualizado.');
       renderQPadrao();
     } catch (err) { alert('Não consegui vincular: ' + err.message); }
   }
