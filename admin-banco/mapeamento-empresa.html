@@ -441,6 +441,8 @@
 
   // Catálogo de apresentações/questionários por produto (mesmo do painel).
   // O real vem de mb_config/apresentacoes; este é o fallback.
+  // Espelha o APRESENTACOES_DEFAULT do painel. Só é usado se mb_config/apresentacoes
+  // estiver vazio ou desatualizado — assim um produto novo nunca fica sem material.
   let APRESENTACOES = [
     { id:'do', nome:'D&O', arq:'ApresentacaoDO.html', arqQ:'QuestionarioDO.html' },
     { id:'garantia', nome:'Seguro Garantia', arq:'ApresentacaoGarantia.html', arqQ:null },
@@ -448,17 +450,53 @@
     { id:'vida_socios', nome:'Vida Sócios', arq:'ApresentacaoVidaSocios.html', arqQ:'QuestionarioVidaSocios.html' },
     { id:'empresarial', nome:'Empresarial', arq:'CheckupEmpresarial.html', arqQ:'QuestionarioEmpresarial.html' },
     { id:'saude_socios', nome:'Saúde Sócios', arq:'ApresentacaoSaudeSocios.html', arqQ:'QuestionarioSaudeSocios.html' },
-    { id:'transporte', nome:'Transporte de Cargas', arq:'ApresentacaoTransporte.html', arqQ:'QuestionarioTransporte.html' }
+    { id:'transporte', nome:'Transporte de Cargas', arq:'ApresentacaoTransporte.html', arqQ:'QuestionarioTransporte.html' },
+    { id:'frota', nome:'Frota', arq:'ApresentacaoFrota.html', arqQ:'QuestionarioFrota.html' },
+    { id:'saude_colab', nome:'Saúde Colaboradores', arq:'ApresentacaoSaudeColab.html', arqQ:'QuestionarioSaudeColab.html' },
+    { id:'vida_grupo', nome:'Vida em Grupo', arq:'ApresentacaoVidaGrupo.html', arqQ:'QuestionarioVidaGrupo.html' },
+    { id:'equipamentos', nome:'Equipamentos', arq:'ApresentacaoEquipamentos.html', arqQ:'QuestionarioEquipamentos.html' },
+    { id:'previdencia', nome:'Previdência', arq:'RadarPrevidenciaCliente.html', arqQ:null }
   ];
+  // Quando o catálogo salvo no Firestore não traz um produto novo, completa com o
+  // padrão acima em vez de deixar o cliente sem "Conhecer mais" (mesma regra do painel).
+  function _mesclarCatalogo(salvo){
+    if (!Array.isArray(salvo) || !salvo.length) return APRESENTACOES;
+    const out = salvo.slice();
+    APRESENTACOES.forEach(function(d){ if (!out.some(function(a){ return a && a.id === d.id; })) out.push(d); });
+    return out;
+  }
   // normaliza id/nome para casar ramo × catálogo (trata - _ e acentos)
   function _norm(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,''); }
+  // Cada material vale para vários jeitos de nomear o ramo. Sem isto, um ramo chamado
+  // "maquinas" ou "prev-socios" não acha o material de Equipamentos/Previdência.
+  const SINONIMOS_CAT = {
+    frota:        [/frota/, /\bauto(movel|moveis)?\b/, /veicul/],
+    empresarial:  [/empresarial/, /patrimoni/, /incendio/, /compreensiv/],
+    saude_colab:  [/saude.*(colab|funcion|equipe|empresa)/, /(colab|funcion).*saude/, /plano.*saude.*colab/],
+    saude_socios: [/saude.*socio/, /socio.*saude/],
+    vida_grupo:   [/vida.*(grupo|colab|funcion|equipe)/, /(grupo|colab).*vida/],
+    vida_socios:  [/vida.*socio/, /socio.*vida/, /pessoachave/],
+    dental:       [/dental/, /odonto/],
+    equipamentos: [/equipament/, /maquin/],
+    previdencia:  [/previd/, /pgbl/, /vgbl/],
+    transporte:   [/transporte/, /carga/, /rctrc/],
+    do:           [/\bdo\b/, /d&o/, /diretor/, /administrador/],
+    garantia:     [/garantia/, /fianca/, /caucao/]
+  };
   function catDoProduto(p){
     if (!p) return null;
     var rid = _norm(p.id), rnome = _norm((p.nome||'').split('—')[0].split('-')[0]);
-    // 1) por id  2) por primeiro termo do nome
-    return APRESENTACOES.find(a => _norm(a.id) === rid)
-        || APRESENTACOES.find(a => _norm(a.id) === rnome || _norm((a.nome||'').split('—')[0]) === rnome)
-        || null;
+    var achou = APRESENTACOES.find(a => _norm(a.id) === rid)
+             || APRESENTACOES.find(a => _norm(a.id) === rnome || _norm((a.nome||'').split('—')[0]) === rnome);
+    if (achou) return achou;
+    // fallback por sinônimo: usa id + nome COMPLETOS do ramo
+    var alvo = _norm((p.id || '') + ' ' + (p.nome || ''));
+    for (var k in SINONIMOS_CAT) {
+      if (!SINONIMOS_CAT[k].some(function(rx){ return rx.test(alvo); })) continue;
+      var c = APRESENTACOES.find(function(a){ return _norm(a.id) === _norm(k); });
+      if (c) return c;
+    }
+    return null;
   }
 
   let LINK = null, LINK_ID = null, EMPRESA = null;
@@ -535,6 +573,12 @@
         if (arr.length) { arr.sort((a, b) => (a.ordem || 0) - (b.ordem || 0)); PRODUTOS = arr; }
       }
     } catch (e) { console.warn('ramos dinâmicos falhou, usando padrão', e); }
+    // Catálogo de apresentações/questionários — sem isto a tela final do link padrão
+    // ficava só com o catálogo embutido e os produtos novos não tinham "Conhecer mais".
+    try {
+      const apSnap = await db.collection('mb_config').doc('apresentacoes').get();
+      if (apSnap.exists) APRESENTACOES = _mesclarCatalogo(apSnap.data().itens);
+    } catch (e) { console.warn('catálogo apresentações falhou, usando padrão', e); }
     // um envio recente neste aparelho → mostra o "obrigado" de novo em vez de um formulário em branco
     try {
       const env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || 'null');
@@ -616,7 +660,7 @@
       // Catálogo de apresentações/questionários por produto (mesmo do painel)
       try {
         const apSnap = await db.collection('mb_config').doc('apresentacoes').get();
-        if (apSnap.exists && Array.isArray(apSnap.data().itens) && apSnap.data().itens.length) APRESENTACOES = apSnap.data().itens;
+        if (apSnap.exists) APRESENTACOES = _mesclarCatalogo(apSnap.data().itens);
       } catch (e) { console.warn('catálogo apresentações falhou, usando padrão', e); }
 
       // Já mapeados aparecem BLOQUEADOS (só anexo). Pré-marcados "não" entram como "Não temos" (podem mudar).
@@ -878,7 +922,7 @@
         interesseCotar: [],
         status: 'novo',                 // novo | vinculado | nao_cliente | descartado
         vinculadoEmpresaId: null, vinculadoEmpresaNome: null,
-        origem: 'link_padrao', versaoForm: 15,
+        origem: 'link_padrao', versaoForm: 17,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       };
       const ref = await db.collection('mb_questionario_padrao').add(doc);
