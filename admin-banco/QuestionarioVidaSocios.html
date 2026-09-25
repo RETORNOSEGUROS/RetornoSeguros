@@ -5,13 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Cotação Vida Sócios | Retorno Seguros</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<!-- Firebase 8.10.1 (compat). Configuração vem do /__/firebase/init.js do Firebase Hosting (sem chave no HTML).
-     Aberto fora do Hosting, roda em modo demonstração (não grava nem envia arquivos). -->
+<!-- Firebase 8.10.1 (compat). Configuração igual à das demais páginas da corretora.
+     Sem conexão com o Firebase, roda em modo demonstração (não grava nem envia arquivos). -->
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
-<script src="/__/firebase/init.js"></script>
+<script>
+/* FIREBASE — mesma configuração das demais páginas da corretora.
+   (Antes usava /__/firebase/init.js, que só funciona quando a página é servida
+   pelo Firebase Hosting. Fora dele o firebase nunca inicializava e a página
+   entrava em "modo demonstração · respostas não são salvas".) */
+var firebaseConfig = {
+  apiKey: "AIzaSyDlbEZfA_uAR1aoPZIr8T9B6KNcrwfMxm0",
+  authDomain: "retorno-seguros.firebaseapp.com",
+  projectId: "retorno-seguros",
+  storageBucket: "retorno-seguros.firebasestorage.app",
+  messagingSenderId: "979966947706",
+  appId: "1:979966947706:web:b8b6a8a85d0a3f9e6f9f9e"
+};
+try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch (e) { console.warn('firebase init', e); }
+</script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   :root { --fundo:#050e24; --ciano:#38bdf8; --dourado:#fbbf24; --verde:#34d399; --verm:#f87171; --texto:#e8eeff; --suave:#93a4c8; --apagado:#5d6f95; --card:rgba(255,255,255,.045); --borda:rgba(147,164,200,.22); }
@@ -516,6 +530,29 @@ function analitico(final) {
       capitalPc: capitalPc(s), pcEscolha: s.pc, capitalRg: capitalRg(s), rgEscolha: s.rg, elegivelVida: s.idade != null && s.idade <= 65 })),
     versaoRg: temRg() ? Q.versao : null, coberturasVida: Q.dg, pagPc: temPc() ? Q.pagPc : null, pagRg: temRg() ? Q.pagRg : null, documentos: Q.docs, nAnexos: Q.anexos.length };
 }
+/* Espelho do analítico no formato que o card do painel já sabe desenhar
+   (_apVidaSocios lê `analitico` com os códigos pe_/pg_/cv_). Sem isto, o bloco
+   Vida Sócios some do card. O analiticoQ completo continua sendo gravado. */
+const _VS_PROD = { pc: 'pe_pessoa_chave', rg: 'pe_resgatavel', ambas: 'pe_ambos', rec: 'pe_recomendacao' };
+const _VS_COB  = { sim: 'cv_sim', nao: 'cv_nao', rec: 'cv_recomendacao' };
+const _VS_PAG  = { anual: 'pg_anual', mensal: 'pg_mensal', unico: 'pg_unico', comparar: 'pg_comparar' };
+function analiticoPainel() {
+  const a = analitico(false);
+  const pag = temPc() ? Q.pagPc : Q.pagRg;
+  return {
+    produto: 'vida_socios',
+    produtoEscolhaCod: _VS_PROD[Q.produtos] || null,
+    cobVidaCod: _VS_COB[Q.dg] || null,
+    pagamentoCod: _VS_PAG[pag] || null,
+    nSegurados: a.nSegurados || null,
+    capitalTotalMid: ((a.capitalPcTotal || 0) + (a.capitalRgTotal || 0)) || null,
+    socios: (a.socios || []).map(s => ({
+      nome: s.nome, idade: s.idade, sexo: s.sexo,
+      capitalMid: ((s.capitalPc || 0) + (s.capitalRg || 0)) || null
+    }))
+  };
+}
+
 const protocolo = () => String(TOKEN || GRUPO || '').replace(/^g_/, '').slice(0, 6).toUpperCase();
 
 /* ─── anexos (Storage, mesmo padrão dos outros questionários) ─── */
@@ -553,6 +590,10 @@ async function salvar(final) {
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
       questionario: JSON.parse(JSON.stringify(Q)), analiticoQ: analitico(final),
       questionarioCompleto: !!final, passoQ: atual, arqVersaoQ: ARQ_VERSAO,
+      // Campos que o PAINEL lê no card (bloco Vida Sócios + 📋 perguntas). Não renomear.
+      analitico: analiticoPainel(),
+      passo: Math.max(0, etapas().indexOf(atual) + 1),
+      questTotal: etapas().length,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar', e); }
