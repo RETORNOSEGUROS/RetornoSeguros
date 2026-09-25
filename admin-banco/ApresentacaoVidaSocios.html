@@ -163,6 +163,13 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
     #imprimir h1 { font-size:20px; margin-bottom:8px; } #imprimir h2 { font-size:15px; margin:16px 0 6px; } #imprimir p, #imprimir li { font-size:12.5px; line-height:1.5; }
   }
   @media (max-width:380px) { .ops.grade { grid-template-columns:repeat(4,1fr); } .quadro .q-tag { width:70px; } }
+  /* compartilhar com nome */
+  .sh-cx{border:1px solid rgba(255,255,255,.13); border-radius:12px; padding:13px 14px; margin-top:10px; background:rgba(255,255,255,.04)}
+  .sh-ok{font-size:13.5px; font-weight:700; color:#34d399; margin-top:12px}
+  .sh-txt{white-space:pre-wrap; font-size:13px; line-height:1.5; border:1px solid rgba(255,255,255,.13); border-radius:10px; padding:11px 12px; margin-top:8px; max-height:190px; overflow:auto; opacity:.9}
+  .sh-bts{display:flex; gap:8px; flex-wrap:wrap; margin-top:9px}
+  .sh-bts .btn{flex:1; min-width:150px; margin-top:0}
+  .sh-lista{font-size:12.5px; margin-top:9px; opacity:.75}
 </style>
 </head>
 <body>
@@ -758,12 +765,14 @@ const TELAS = {
         <label class="lbl">WhatsApp (opcional)</label><input class="campo" id="cTel" type="tel" inputmode="numeric" placeholder="(00) 00000-0000" maxlength="16" value="${esc(mascTel(c.tel))}">
         <p class="pergunta" style="font-size:15px">Também enviar para (opcional)</p>
         <div class="ops grade2"><button class="op" id="shSocio">Outro sócio</button><button class="op" id="shAdv">Meu contador ou advogado</button></div>
+        <div id="shBox"></div><div id="shEnviados"></div>
         <p class="nota">Sucessão se decide junto. Quem receber o link responde a própria versão, e as respostas ficam lado a lado.</p>
         <button class="btn ouro" id="btCont" disabled>Enviar o diagnóstico →</button>` });
     const valida = () => { el('btCont').disabled = !(el('cNome').value.trim() && (el('cMail').value.includes('@') || el('cTel').value.replace(/\D/g, '').length >= 10)); };
     ['cNome', 'cMail', 'cTel'].forEach(k => el(k).oninput = valida); valida();
     el('cTel').oninput = function () { const p = this.selectionStart === this.value.length; this.value = mascTel(this.value); if (p) this.selectionStart = this.selectionEnd = this.value.length; valida(); };
-    el('shSocio').onclick = () => compartilhar('socio'); el('shAdv').onclick = () => compartilhar('assessor');
+    el('shSocio').onclick = () => abrirCompartilhar('socio'); el('shAdv').onclick = () => abrirCompartilhar('assessor');
+    desenharEnviados();
     el('btCont').onclick = () => { R.contato = { nome: el('cNome').value.trim(), email: el('cMail').value.trim(), tel: el('cTel').value.trim() }; go('D4'); };
   },
   D4() {
@@ -829,21 +838,81 @@ function mascTel(v) {
   return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7);
 }
 
+/* Link pessoal: cada convidado ganha o próprio identificador, para o corretor
+   saber de quem é cada resposta em vez de ver "respondeu sem se identificar". */
+function novoRespId() { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function linkPessoal(rid) {
+  const qp = new URLSearchParams(); if (TOKEN) qp.set('t', TOKEN); else if (GRUPO) qp.set('g', GRUPO);
+  if (rid) qp.set('r', rid);
+  return location.origin + location.pathname + (qp.toString() ? '?' + qp : '');
+}
+
 function linkParaOutro() {
   const qp = new URLSearchParams(); if (TOKEN) qp.set('t', TOKEN); else if (GRUPO) qp.set('g', GRUPO);
   return location.origin + location.pathname + (qp.toString() ? '?' + qp : '');
 }
 /* Mensagens escritas na voz de quem está compartilhando — o sócio do outro lado
    precisa entender em duas linhas o que é e por que veio dele, não da corretora. */
-function textoCompartilhar(quem) {
+function textoCompartilhar(quem, paraNome) {
   const eu = (R.contato && R.contato.nome ? R.contato.nome.split(' ')[0] : '').trim();
   const ass = eu ? '\n\n— ' + eu : '';
+  const ola = paraNome ? String(paraNome).trim().split(/\s+/)[0] + ', ' : '';
+  if (paraNome && quem === 'socio')
+    return ola.charAt(0).toUpperCase() + ola.slice(1) + 'respondi um diagnóstico sobre o que aconteceria com a nossa sociedade se um de nós faltasse — contrato, haveres, herdeiros. Leva 3 minutos e é sobre a nossa empresa, não é propaganda.\n\nResponde a sua parte? Depois as respostas aparecem lado a lado e a gente compara o que cada um entendeu.' + ass;
+  if (paraNome && quem === 'assessor')
+    return ola.charAt(0).toUpperCase() + ola.slice(1) + 'queria a sua opinião técnica sobre este diagnóstico de sucessão da empresa. São os pontos do contrato social e o impacto no caixa se um sócio faltar. Leva 3 minutos:' + ass;
   if (quem === 'preencher')
     return 'Estamos cotando a proteção dos sócios da empresa e falta a sua parte. São seus dados básicos, leva 1 minuto:' + ass;
   if (quem === 'socio')
     return 'Respondi um diagnóstico sobre o que aconteceria com a nossa sociedade se um de nós faltasse — contrato, haveres, herdeiros. Leva 3 minutos e é sobre a nossa empresa, não é propaganda.\n\nResponde a sua parte? Depois as respostas aparecem lado a lado e a gente compara o que cada um entendeu.' + ass;
   return 'Queria a sua opinião técnica sobre este diagnóstico de sucessão da empresa. São os pontos do contrato social e o impacto no caixa se um sócio faltar. Leva 3 minutos:' + ass;
 }
+/* ─── compartilhar com nome: digita quem é, gera o link dele e entrega o texto pronto ─── */
+const SH_ROT = { socio: 'sócio', assessor: 'contador ou advogado', preencher: 'sócio' };
+function abrirCompartilhar(quem) {
+  const cx = el('shBox'); if (!cx) return;
+  if (cx.dataset.aberto === quem) { cx.innerHTML = ''; cx.dataset.aberto = ''; return; }
+  cx.dataset.aberto = quem;
+  cx.innerHTML = `<div class="sh-cx">
+      <label class="lbl">Nome do ${SH_ROT[quem]}</label>
+      <input class="campo" id="shNome" placeholder="Ex.: Arizoli" autocomplete="off">
+      <button class="btn sec" id="shGerar" style="margin-top:8px">Gerar o link para ele</button>
+      <div id="shSaida"></div>
+    </div>`;
+  const gerar = () => {
+    const nome = (el('shNome').value || '').trim();
+    if (!nome) { el('shNome').focus(); return; }
+    const rid = novoRespId(), url = linkPessoal(rid), txt = textoCompartilhar(quem, nome);
+    R.compartilhadoEm = (R.compartilhadoEm || []).concat([{ quem: quem, nome: nome, respId: rid, em: new Date().toISOString() }]);
+    R.compartilhou = (R.compartilhou || []).concat(quem);
+    salvar();
+    el('shSaida').innerHTML = `<div class="sh-ok">✓ Link criado para <b>${esc(nome)}</b></div>
+      <div class="sh-txt" id="shMsg">${esc(txt + '\n\n' + url)}</div>
+      <div class="sh-bts">
+        <button class="btn sec" id="shCopy">Copiar texto e link</button>
+        <button class="btn" id="shWa">Abrir no WhatsApp</button>
+      </div>`;
+    el('shCopy').onclick = async () => {
+      const t = txt + '\n\n' + url;
+      try { await navigator.clipboard.writeText(t); } catch (e) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
+      el('shCopy').textContent = '✓ Copiado';
+      setTimeout(() => { if (el('shCopy')) el('shCopy').textContent = 'Copiar texto e link'; }, 2000);
+    };
+    el('shWa').onclick = () => window.open('https://wa.me/?text=' + encodeURIComponent(txt + '\n\n' + url), '_blank');
+    el('shNome').value = '';
+    desenharEnviados();
+  };
+  el('shGerar').onclick = gerar;
+  el('shNome').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); gerar(); } };
+  el('shNome').focus();
+}
+function desenharEnviados() {
+  const lista = (R.compartilhadoEm || []).filter(x => x && x.nome);
+  const el2 = el('shEnviados'); if (!el2) return;
+  el2.innerHTML = lista.length
+    ? '<div class="sh-lista">Link já criado para: <b>' + lista.map(x => esc(x.nome)).join(', ') + '</b></div>' : '';
+}
+
 async function compartilhar(quem) {
   const url = linkParaOutro();
   const txt = textoCompartilhar(quem);
@@ -897,8 +966,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   GRUPO = TOKEN || params.get('g');
   try { if (!GRUPO) GRUPO = sessionStorage.getItem('grupo_vs3'); } catch (e) {}
   if (!GRUPO) GRUPO = 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  try { sessionStorage.setItem('grupo_vs3', GRUPO); RESPID = sessionStorage.getItem('resp_vs3_' + GRUPO); } catch (e) {}
-  if (!RESPID) { RESPID = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); try { sessionStorage.setItem('resp_vs3_' + GRUPO, RESPID); } catch (e) {} }
+  let _meuResp = null;
+  try { sessionStorage.setItem('grupo_vs3', GRUPO); _meuResp = sessionStorage.getItem('resp_vs3_' + GRUPO); } catch (e) {}
+  // Link pessoal (?r=): o corretor sabe que aquela resposta é do sócio convidado.
+  // Se este navegador já respondeu com outro id, o dele continua valendo — assim
+  // quem abre o link de um colega para conferir não sobrescreve a própria resposta.
+  const _rConvite = params.get('r');
+  RESPID = _meuResp || _rConvite || null;
+  if (!RESPID) RESPID = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  try { sessionStorage.setItem('resp_vs3_' + GRUPO, RESPID); } catch (e) {}
   SESSAO = 'vidasocios_' + GRUPO + '_' + RESPID;
 
   const fbOk = typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0;
