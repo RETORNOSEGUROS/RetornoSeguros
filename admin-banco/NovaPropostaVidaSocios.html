@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nova proposta Vida Sócios | Corretor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- Uso interno do corretor. Firebase 8.10.1 (compat) com config do /__/firebase/init.js (sem chave no HTML).
+     Aproveita o login do painel (mesmo domínio). Fora do Hosting: só valida e pré-visualiza. -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+<script src="/__/firebase/init.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --fundo:#050e24; --ciano:#38bdf8; --dourado:#fbbf24; --verde:#34d399; --verm:#f87171; --texto:#e8eeff; --suave:#93a4c8; --card:rgba(255,255,255,.045); --borda:rgba(147,164,200,.22); }
+  body { background:var(--fundo); font-family:'Inter',system-ui,sans-serif; color:var(--texto); }
+  .palco { max-width:860px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:24px; font-weight:800; margin-bottom:6px; }
+  h2 { font-size:17px; font-weight:800; margin:26px 0 8px; }
+  p, li { font-size:14.5px; line-height:1.55; color:#c3d0ec; }
+  .aviso { margin:12px 0; font-size:13.5px; line-height:1.5; padding:10px 12px; border-radius:10px; background:rgba(251,191,36,.08); border-left:3px solid var(--dourado); color:#fde68a; }
+  textarea, input { width:100%; padding:12px; border-radius:12px; background:rgba(255,255,255,.05); border:1.5px solid var(--borda); color:#fff; font:500 13px ui-monospace,Menlo,monospace; }
+  textarea { min-height:380px; line-height:1.45; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  button, a.b { padding:12px 16px; border-radius:11px; border:none; font:800 14px 'Inter',sans-serif; cursor:pointer; background:linear-gradient(135deg,var(--ciano),#2563eb); color:#031127; text-decoration:none; }
+  button.sec { background:transparent; border:1.5px solid var(--borda); color:var(--texto); }
+  button.ouro { background:linear-gradient(135deg,var(--dourado),#f59e0b); color:#2a1a00; }
+  .caixa { margin-top:12px; padding:14px; border-radius:12px; background:var(--card); border:1px solid var(--borda); font-size:14px; line-height:1.55; }
+  .ok { color:var(--verde); } .er { color:#fca5a5; } .al { color:var(--dourado); }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin-top:6px; }
+  td, th { padding:7px 6px; border-bottom:1px solid rgba(147,164,200,.15); text-align:left; vertical-align:top; }
+  th { color:var(--suave); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
+  .link { word-break:break-all; font-family:ui-monospace,monospace; font-size:12.5px; color:#bfe3ff; }
+</style>
+</head>
+<body>
+<main class="palco">
+  <h1>Proposta Vida Sócios</h1>
+  <p>Cole aqui o JSON da <b>Parte C</b> da análise (prompt Vida Sócios). Valide, pré-visualize e salve para gerar o link do sócio principal.</p>
+  <div class="aviso" id="authAviso" hidden></div>
+  <label style="display:block;margin:16px 0 6px;font-weight:700;font-size:13px;color:var(--suave)">ID da proposta (em branco = nova)</label>
+  <div class="btns" style="margin-top:0"><input id="pid" style="flex:1;min-width:220px" placeholder="vs_..."><button class="sec" onclick="carregar()">Carregar</button></div>
+  <label style="display:block;margin:16px 0 6px;font-weight:700;font-size:13px;color:var(--suave)">JSON da proposta</label>
+  <textarea id="json" spellcheck="false"></textarea>
+  <div class="btns">
+    <button class="sec" onclick="modelo()">Inserir modelo</button>
+    <button class="sec" onclick="validar(true)">Validar</button>
+    <button class="sec" onclick="previa()">Pré-visualizar</button>
+    <button class="ouro" onclick="salvar()">Salvar e gerar link</button>
+  </div>
+  <div id="saida"></div>
+  <div id="acomp"></div>
+</main>
+<script>
+const CAMPOS = ['empresa', 'sessaoOrigem', 'empresaId', 'dataCotacao', 'validade', 'destinatario', 'socios', 'pessoaChave', 'resgatavel', 'analise', 'casos'];
+const CASOS_IDS = [...Array(20)].flatMap((_, i) => ['pc' + (i + 1), 'rg' + (i + 1)]);
+let db = null, USER = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 });
+const token = (n = 20) => { const a = 'abcdefghijkmnpqrstuvwxyz23456789'; let s = ''; for (const x of crypto.getRandomValues(new Uint8Array(n))) s += a[x % a.length]; return s; };
+const base = () => location.origin + location.pathname.replace(/[^/]*$/, '');
+const dias = iso => iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null;
+const dh = iso => iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+const MODELO = {
+  empresa: { nome: 'Empresa Exemplo Ltda.', cnpj: '00.000.000/0001-00', cidade: 'Cidade/UF' },
+  sessaoOrigem: 'vidasocios_GRUPO_RESPID', empresaId: null,
+  dataCotacao: new Date().toISOString().slice(0, 10), validade: '',
+  destinatario: { nome: 'Nome do sócio principal', socioId: 's1' },
+  socios: [{ id: 's1', nome: 'Sócio Um', nascimento: '1970-01-31', pct: 60, papel: 'Administra' }, { id: 's2', nome: 'Sócio Dois', nascimento: '1980-06-15', pct: 40, papel: 'Trabalha na empresa' }],
+  pessoaChave: { pagamento: 'anual', itens: [{ socioId: 's1', capital: 3000000, dg: true, ipa: true, premioAnual: 0, premioMensal: null }], projecao: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }], nota: '' },
+  resgatavel: { pagamento: 'unico', versao: 'dps', itens: [{ socioId: 's2', capital: 1000000, dg: false, premioUnico: 0, resgate: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }, { ano: 20, valor: 0 }] }] },
+  analise: { resumo: '', pontos: [{ titulo: '', texto: '', fonte: 'CONTRATO' }], gaps: [{ titulo: '', risco: '', sugestao: '' }] },
+  casos: ['pc1', 'pc5', 'pc11', 'rg1', 'rg2', 'rg18']
+};
+function modelo() { $('json').value = JSON.stringify(MODELO, null, 2); }
+function ler() { try { return JSON.parse($('json').value); } catch (e) { $('saida').innerHTML = `<div class="caixa er">JSON inválido: ${esc(e.message)}</div>`; return null; } }
+
+function validar(mostrar) {
+  const P = ler(); if (!P) return null;
+  const er = [], al = [];
+  if (!P.empresa || !P.empresa.nome) er.push('empresa.nome é obrigatório');
+  if (!Array.isArray(P.socios) || !P.socios.length) er.push('socios precisa ter pelo menos um sócio');
+  const ids = new Set((P.socios || []).map(s => s.id));
+  (P.socios || []).forEach((s, i) => { if (!s.id || !s.nome) er.push(`socios[${i}] precisa de id e nome`); if (!s.nascimento) al.push(`${s.nome || 'sócio ' + i}: sem data de nascimento (aviso de aniversário não aparece)`); });
+  if (!P.destinatario || !ids.has(P.destinatario.socioId)) er.push('destinatario.socioId precisa ser o id de um sócio');
+  const pc = (P.pessoaChave && P.pessoaChave.itens) || [], rg = (P.resgatavel && P.resgatavel.itens) || [];
+  if (!pc.length && !rg.length) er.push('nenhum item em pessoaChave.itens nem em resgatavel.itens');
+  const mensal = P.pessoaChave && P.pessoaChave.pagamento === 'mensal';
+  pc.forEach(i => { if (!ids.has(i.socioId)) er.push(`Pessoa Chave: socioId ${i.socioId} não existe`); if (!(i.capital >= 200000 && i.capital <= 12000000)) er.push(`Pessoa Chave ${i.socioId}: capital fora de R$ 200 mil a R$ 12 milhões`); if (!(mensal ? i.premioMensal : i.premioAnual)) er.push(`Pessoa Chave ${i.socioId}: sem prêmio ${mensal ? 'mensal' : 'anual'} (use o valor da cotação)`); });
+  rg.forEach(i => { if (!ids.has(i.socioId)) er.push(`Resgatável: socioId ${i.socioId} não existe`); if (!(i.capital >= 200000 && i.capital <= 12000000)) er.push(`Resgatável ${i.socioId}: capital fora de R$ 200 mil a R$ 12 milhões`); if (!i.premioUnico && !i.premio) er.push(`Resgatável ${i.socioId}: sem prêmio`); if (!(i.resgate || []).length) al.push(`Resgatável ${i.socioId}: sem tabela de resgate (a seção não aparece)`); (i.resgate || []).forEach(x => { if (!x.valor) er.push(`Resgatável ${i.socioId}: resgate do ano ${x.ano} vazio`); }); });
+  (P.pessoaChave && P.pessoaChave.projecao || []).forEach(x => { if (!x.valor) er.push(`Projeção da Pessoa Chave do ano ${x.ano} vazia (apague a projeção ou preencha)`); });
+  if (!P.validade) al.push('sem validade: a capa não mostra "válida até"'); else if (new Date(P.validade) < new Date()) er.push('validade já passou');
+  (P.casos || []).forEach(c => { if (!CASOS_IDS.includes(c)) er.push(`caso desconhecido: ${c}`); });
+  if (!P.analise || !P.analise.resumo) al.push('análise sem resumo');
+  if (mostrar || er.length) $('saida').innerHTML = `<div class="caixa">${er.length ? `<b class="er">${er.length} erro(s):</b><ul style="padding-left:18px">${er.map(e => `<li class="er">${esc(e)}</li>`).join('')}</ul>` : '<b class="ok">Sem erros.</b>'}${al.length ? `<br><b class="al">Avisos:</b><ul style="padding-left:18px">${al.map(e => `<li class="al">${esc(e)}</li>`).join('')}</ul>` : ''}
+    <br>${pc.length ? `Pessoa Chave: ${pc.length} sócio(s), total ${brl(pc.reduce((a, i) => a + (Number(mensal ? i.premioMensal : i.premioAnual) || 0), 0))} ${mensal ? '/mês' : '/ano'}<br>` : ''}${rg.length ? `Resgatável: ${rg.length} sócio(s), total ${brl(rg.reduce((a, i) => a + (Number(i.premioUnico || i.premio) || 0), 0))}` : ''}</div>`;
+  return er.length ? null : P;
+}
+function previa() { const P = validar(false) || ler(); if (!P) return; const b = btoa(unescape(encodeURIComponent(JSON.stringify(P)))); window.open(base() + 'PropostaOnlineVidaSocios.html#dados=' + b, '_blank'); }
+
+function _premioTotal(P) {
+  const pc = (P.pessoaChave && P.pessoaChave.itens) || [], rg = (P.resgatavel && P.resgatavel.itens) || [];
+  const mensal = P.pessoaChave && P.pessoaChave.pagamento === 'mensal';
+  const a = pc.reduce((s, i) => s + (Number(mensal ? i.premioMensal : i.premioAnual) || 0), 0) * (mensal ? 12 : 1);
+  const b = rg.reduce((s, i) => s + (Number(i.premioUnico || i.premio) || 0), 0);
+  return Math.round((a + b) * 100) / 100 || null;
+}
+
+async function salvar() {
+  const P = validar(true); if (!P) return;
+  if (!db) { $('saida').innerHTML += `<div class="caixa al">Sem conexão com o Firebase (fora do Hosting). Use a pré-visualização.</div>`; return; }
+  const campos = {}; CAMPOS.forEach(k => { if (P[k] !== undefined) campos[k] = P[k]; });
+  let pid = $('pid').value.trim();
+  try {
+    if (pid) {
+      const ref = db.collection('mb_propostas').doc(pid); const d = await ref.get();
+      if (!d.exists) { $('saida').innerHTML += `<div class="caixa er">Proposta ${esc(pid)} não existe.</div>`; return; }
+      campos.atualizadoEm = firebase.firestore.FieldValue.serverTimestamp();
+      await ref.update(campos);
+    } else {
+      pid = 'vs_' + token(16); const tok = token();
+      // Campos que o PAINEL lê na lista de Propostas (não mexer nos nomes):
+      // token (link ?t=), produtoId, produto, empresaNome, criadoPorUid, corretorNome, criadoEm.
+      const tokPainel = token(24);
+      Object.assign(campos, {
+        token: tokPainel, produtoId: 'vida_socios', produto: 'Vida Sócios',
+        empresaNome: (P.empresa && P.empresa.nome) || null,
+        premioTotal: _premioTotal(P),
+        criadoPorUid: USER ? USER.uid : null,
+        corretorNome: USER ? (USER.displayName || USER.email || '') : '',
+        aberta: false, interesse: null });
+      Object.assign(campos, { produtoLegado: 'vida-socios', status: 'enviada', criadoEm: firebase.firestore.FieldValue.serverTimestamp(), atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(), criadoPor: USER ? (USER.email || USER.uid) : null,
+        convidados: { [tok]: { nome: P.destinatario.nome, papel: 'principal', socioId: P.destinatario.socioId, criadoEm: new Date().toISOString(), aberturas: 0 } }, checklist: {}, aceites: {} });
+      await db.collection('mb_propostas').doc(pid).set(campos);
+      $('pid').value = pid;
+    }
+  } catch (e) { $('saida').innerHTML += `<div class="caixa er">Erro ao salvar: ${esc(e.message)}</div>`; return; }
+  $('saida').innerHTML += `<div class="caixa ok">Salvo: ${esc(pid)}</div>`;
+  carregar();
+}
+
+async function carregar() {
+  const pid = $('pid').value.trim(); if (!pid || !db) return;
+  const d = await db.collection('mb_propostas').doc(pid).get();
+  if (!d.exists) { $('acomp').innerHTML = `<div class="caixa er">Não encontrada.</div>`; return; }
+  const P = d.data();
+  if (!$('json').value.trim()) { const c = {}; CAMPOS.forEach(k => { if (P[k] !== undefined) c[k] = P[k]; }); $('json').value = JSON.stringify(c, null, 2); }
+  const conv = Object.entries(P.convidados || {});
+  const princ = conv.find(([, c]) => c.papel === 'principal');
+  const link = t => base() + 'PropostaOnlineVidaSocios.html?p=' + pid + '&v=' + t;
+  const val = P.validade ? new Date(P.validade + 'T12:00:00').toLocaleDateString('pt-BR') : '';
+  const msg = princ ? `Olá, ${String(princ[1].nome).split(' ')[0]}. Como combinamos, preparei a proposta Vida Sócios da ${P.empresa.nome} com base no que você respondeu, no contrato social e nos números da empresa.\n\nNela você encontra a proposta, um checklist para a sociedade, a nossa análise, a projeção de resgate e os fundamentos para o seu contador e o seu advogado confirmarem${val ? '. Ela vale até ' + val : ''}.\n\n${link(princ[0])}` : '';
+  const du = dias(P.ultimoAcesso);
+  const aceites = Object.entries(P.aceites || {});
+  $('acomp').innerHTML = `<h2>Acompanhamento</h2>
+    <div class="caixa">
+      <b>Última abertura:</b> ${P.ultimoAcesso ? `${dh(P.ultimoAcesso)} por ${esc(P.ultimoAcessoPor && P.ultimoAcessoPor.nome || '')} — <span class="${du >= 7 ? 'er' : du >= 3 ? 'al' : 'ok'}">há ${du} dia(s)</span>` : '<span class="al">nunca aberta</span>'}
+      ${princ ? `<br><br><b>Link do sócio principal:</b><div class="link">${esc(link(princ[0]))}</div>
+      <div class="btns"><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(link(princ[0])))})">Copiar link</button><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(msg))})">Copiar mensagem</button><a class="b" target="_blank" href="https://wa.me/?text=${encodeURIComponent(msg)}">WhatsApp</a></div>` : ''}
+    </div>
+    <div class="caixa"><b>Quem recebeu o link</b><table><tr><th>Nome</th><th>Papel</th><th>Aberturas</th><th>Última</th><th>Situação</th></tr>
+      ${conv.map(([t, c]) => `<tr><td>${esc(c.nome)}${c.email ? '<br><small>' + esc(c.email) + '</small>' : ''}</td><td>${esc(c.papel)}</td><td>${c.aberturas || 0}</td><td>${c.ultimo ? dh(c.ultimo) + ` <small>(${dias(c.ultimo)}d)</small>` : '—'}</td><td>${c.parecer ? `<b class="${c.parecer.status === 'confere' ? 'ok' : 'al'}">${esc(c.parecer.status)}</b> ${esc(c.parecer.texto || '')}` : (P.checklist && P.checklist[t] && P.checklist[t].r ? '<span class="ok">respondeu o checklist</span>' : '')}</td></tr>`).join('')}
+    </table></div>
+    <div class="caixa"><b>Contratação</b> ${P.contratar ? `— pedida em ${dh(P.contratar.em)} por ${esc(P.contratar.por || '')}` : '— ainda não'}
+      ${aceites.length ? `<table><tr><th>Sócio</th><th>Produtos</th><th>Status</th><th></th></tr>${aceites.map(([t, a]) => `<tr><td>${esc(a.nome)}</td><td>${[a.pc ? 'PC' : '', a.rg ? 'RG' : ''].filter(Boolean).join(' + ')}</td><td class="${a.status === 'preenchido' ? 'ok' : 'al'}">${esc(a.status || 'enviado')}${a.em ? ' · ' + dh(a.em) : ''}</td><td>${a.status === 'preenchido' ? `<button class="sec" onclick="verAceite('${pid}','${t}')">Dados</button>` : ''}</td></tr>`).join('')}</table>` : ''}
+      <div id="aceiteOut"></div></div>`;
+}
+async function verAceite(pid, t) {
+  try {
+    const d = await db.collection('mb_aceites').doc(pid + '__' + t).get();
+    if (!d.exists) { $('aceiteOut').innerHTML = '<p class="er">Sem dados.</p>'; return; }
+    const txt = JSON.stringify(d.data().dados, null, 2);
+    $('aceiteOut').innerHTML = `<p style="margin-top:10px">Dados pessoais e declaração de saúde — use para preencher a proposta oficial da seguradora. Não repasse a terceiros.</p><textarea readonly style="min-height:260px">${esc(txt)}</textarea>`;
+  } catch (e) { $('aceiteOut').innerHTML = `<p class="er">Sem permissão para ler (${esc(e.message)}). Entre no painel com o seu usuário.</p>`; }
+}
+
+(async function () {
+  const p = new URLSearchParams(location.search).get('p'); if (p) $('pid').value = p;
+  const fbOk = typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0;
+  if (!fbOk) { $('authAviso').hidden = false; $('authAviso').textContent = 'Fora do Firebase Hosting: dá para validar e pré-visualizar, mas não salvar.'; return; }
+  await new Promise(r => { const off = firebase.auth().onAuthStateChanged(u => { USER = u; off(); r(); }); });
+  if (!USER || USER.isAnonymous) { $('authAviso').hidden = false; $('authAviso').textContent = 'Você não está logado no painel neste navegador. Salvar e ver dados de aceite dependem das regras do Firestore — entre no painel primeiro.'; if (!USER) { try { await firebase.auth().signInAnonymously(); } catch (e) { } } }
+  db = firebase.firestore();
+  if (p) carregar();
+})();
+</script>
+</body>
+</html>
