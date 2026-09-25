@@ -254,14 +254,24 @@ async function _cnpjConsulta(d) {
     ['minhareceita', 'https://minhareceita.org/' + d, j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf })],
     ['cnpjws', 'https://publica.cnpj.ws/cnpj/' + d, j => ({ razao: j.razao_social, fantasia: j.estabelecimento && j.estabelecimento.nome_fantasia, cidade: j.estabelecimento && j.estabelecimento.cidade && j.estabelecimento.cidade.nome, uf: j.estabelecimento && j.estabelecimento.estado && j.estabelecimento.estado.sigla })]
   ];
-  let motivo = 'offline';
-  for (const [nome, url, norm] of fontes) {
-    let r = await _fetchJson(url);
-    if (r.status === 429) { motivo = 'limite'; await espera(1400); r = await _fetchJson(url); }
-    if (r.status === 404 || r.status === 400) return { ok: false, motivo: 'inexistente' };
+  // As três fontes são consultadas AO MESMO TEMPO: a primeira resposta válida vence.
+  // (Em série, com 9s de espera cada, duas fontes fora do ar travavam a tela por ~20s.)
+  let motivo = 'offline', inexistente = false;
+  const tentativa = ([nome, url, norm]) => _fetchJson(url).then(async r => {
+    if (r.status === 429) { motivo = 'limite'; await espera(1200); r = await _fetchJson(url); }
+    if (r.status === 404 || r.status === 400) { inexistente = true; throw new Error('inexistente'); }
     if (r.json && r.json.razao_social) return Object.assign({ ok: true, fonte: nome }, norm(r.json));
-    if (r.status === 429) motivo = 'limite';
-  }
+    throw new Error('vazio');
+  });
+  try {
+    const corrida = fontes.map(tentativa);
+    // Promise.any não existe em navegadores antigos — o mesmo efeito, à mão.
+    const vencedor = await new Promise((resolve, reject) => {
+      let faltam = corrida.length;
+      corrida.forEach(pr => pr.then(resolve, () => { if (--faltam === 0) reject(new Error('todas falharam')); }));
+    });
+    if (vencedor) return vencedor;
+  } catch (e) { if (inexistente) return { ok: false, motivo: 'inexistente' }; }
   return { ok: false, motivo };
 }
 const CNPJ_MSG = { inexistente: 'Não encontrei esse CNPJ — confira o número ou escreva o nome da empresa.', limite: 'A consulta pública está no limite agora. Escreva o nome da empresa e seguimos.', offline: 'Não consegui consultar agora. Escreva o nome da empresa e seguimos.' };
@@ -341,7 +351,7 @@ const TELAS = {
   Q2() {
     if (Q.valorFaixa == null && R.b3faixa != null) Q.valorFaixa = R.b3faixa;
     montar({ rotulo: rotuloEtapa('Q2'), titulo: 'Sobre a empresa, três cliques.',
-      corpo: `<p class="pergunta">Tipo de sociedade</p>${grupoOps('gTipo', [['ltda', 'Ltda'], ['sa', 'S.A.'], ['naosei', 'Não sei']], Q.tipo, 'grade2')}
+      corpo: `<p class="pergunta">Tipo de sociedade</p>${grupoOps('gTipo', [['ltda', 'Ltda'], ['slu', 'Ltda unipessoal <small>SLU</small>'], ['sa', 'S.A.'], ['simples', 'Sociedade Simples'], ['eireli', 'EIRELI'], ['coop', 'Cooperativa'], ['ei', 'Empresário individual'], ['outra', 'Outra'], ['naosei', 'Não sei']], Q.tipo, 'grade2')}
         <p class="pergunta">Existe acordo de sócios ou valuation recente?</p>${grupoOps('gAc', [['acordo', 'Acordo de sócios'], ['valuation', 'Valuation recente'], ['ambos', 'Os dois'], ['nao', 'Nenhum'], ['naosei', 'Não sei']], Q.acordo, 'grade2')}
         <p class="pergunta">Quanto vale a empresa hoje?</p>
         <div class="ops grade2" id="gVal">${VALORES_TXT.map((t, i) => `<button class="op ${Q.valorFaixa === i && !Q.valorExato ? 'sel' : ''}" data-v="${i}">${t}</button>`).join('')}</div>
