@@ -313,7 +313,20 @@ const SOCIOS = () => {
   if (Array.isArray(a) && a.length) return a;
   return (Q().socios || []).filter(s => s.incluir).map(s => ({ nome: s.nome, pct: s.pct, idade: s.idade, nasc: s.nasc, sexo: s.sexo, atua: s.atua, porSocio: s.porSocio, capitalPc: null, capitalRg: null }));
 };
-const ANEXOS = () => (D && D.apoliceAnexos) || [];
+/* O anexo é registrado em DOIS lugares no mesmo momento: na raiz (apoliceAnexos,
+   que é o que o painel e a ficha usam) e dentro de questionario.anexos. Junta os
+   dois e tira repetido, para nenhum arquivo sumir se uma das gravações falhar. */
+const ANEXOS = () => {
+  const a = (D && D.apoliceAnexos) || [];
+  const b = (D && D.questionario && D.questionario.anexos) || [];
+  const vistos = {}, out = [];
+  a.concat(b).forEach(x => {
+    if (!x) return;
+    const ch = (x.path || x.url || '') + '|' + (x.nome || '');
+    if (vistos[ch]) return; vistos[ch] = 1; out.push(x);
+  });
+  return out;
+};
 const CONTATO = () => R().contato || {};
 const temPC = () => ['pc', 'ambas', 'rec'].includes(Q().produtos);
 const temRG = () => ['rg', 'ambas', 'rec'].includes(Q().produtos);
@@ -325,7 +338,10 @@ function pendencias() {
 
   if (!D.questionarioCompleto) {
     const p = D.passo || 0, t = D.questTotal || 0;
-    add(true, 'Questionário não foi concluído' + (t ? ` — parou na etapa ${p} de ${t}` : '') + '. Os capitais podem mudar.');
+    const abriu = !!(D.questionarioAberto || D.passoQ || D.questionario);
+    add(true, !abriu ? 'Ele não abriu o questionário de cotação — sem ele não há sócios nem capitais.'
+      : p ? `Questionário não foi concluído — parou na etapa ${p} de ${t || '?'}. Os capitais podem mudar.`
+      : 'Questionário aberto mas sem avançar da primeira tela. Os capitais podem mudar.');
   }
   if (!so(q.cnpj)) add(true, 'CNPJ não informado.');
   if (!ss.length) add(true, 'Nenhum sócio marcado para entrar no seguro.');
@@ -349,8 +365,11 @@ function pendencias() {
   const holding = (R().perfil || []).includes && (R().perfil || []).includes('holding');
   if (holding) add(false, 'Ele marcou que um sócio participa por holding — esse sócio não entra; a holding contrata no CNPJ dela.');
 
-  const comp = (R().compartilhadoEm || []).length || (R().compartilhou || []).length;
-  if (comp && GRUPO_DOCS.filter(d => d.id !== SESSAO).length === 0)
+  const compl = R().compartilhadoEm || [];
+  const irmaos = GRUPO_DOCS.filter(d => d.id !== SESSAO);
+  const faltam = compl.filter(x => x.nome && x.respId && !irmaos.some(d => d.respId === x.respId)).map(x => x.nome);
+  if (faltam.length) add(false, 'Recebeu o link e ainda não respondeu: ' + faltam.join(', ') + '.');
+  else if (!compl.length && (R().compartilhou || []).length && !irmaos.length)
     add(false, 'Ele passou o link para outra pessoa, mas ninguém mais respondeu.');
   if (!c.email && !c.tel) add(true, 'Sem e-mail nem telefone de contato.');
   if (!ANEXOS().length) add(false, 'Nenhum documento anexado — sem contrato social e balanço, a análise fica limitada.');
@@ -382,8 +401,11 @@ function blocoSemaforo() {
   const pApres = D.concluiu || D.apresentacaoCompleta ? 'ok' : vistas ? 'meio' : 'nao';
   const tApres = D.concluiu || D.apresentacaoCompleta ? 'Apresentação vista até o fim' : vistas ? `Apresentação: ${vistas}${total ? ' de ' + total : ''} telas` : 'Não viu a apresentação';
 
-  const pQ = D.questionarioCompleto ? 'ok' : (D.passo ? 'meio' : 'nao');
-  const tQ = D.questionarioCompleto ? `Questionário completo${D.questTotal ? ' (' + D.questTotal + ' perguntas)' : ''}` : (D.passo ? `Questionário: ${D.passo}${D.questTotal ? ' de ' + D.questTotal : ''}` : 'Não abriu o questionário');
+  const abriuQ = !!(D.questionarioAberto || D.passo || D.passoQ || D.questionario);
+  const pQ = D.questionarioCompleto ? 'ok' : (abriuQ ? 'meio' : 'nao');
+  const tQ = D.questionarioCompleto ? `Questionário completo${D.questTotal ? ' (' + D.questTotal + ' perguntas)' : ''}`
+    : abriuQ ? (D.passo ? `Questionário: ${D.passo}${D.questTotal ? ' de ' + D.questTotal : ''}` : 'Questionário começado, sem avançar')
+    : 'Não abriu o questionário';
 
   const n = ANEXOS().length;
   const pA = n ? 'ok' : 'nao';
@@ -469,13 +491,23 @@ function blocoGrupo() {
   const antigos = (R().compartilhou || []).filter(x => !comp.length);
   if (!comp.length && !antigos.length && GRUPO_DOCS.length < 2) return '';
 
+  const outrosDocs = GRUPO_DOCS.filter(d => d.id !== SESSAO);
+  const respondeu = rid => outrosDocs.find(d => d.respId === rid);
   const enviados = comp.length
-    ? comp.map(x => `<li><b>${esc(COMPART_TXT[x.quem] || x.quem)}</b> — link gerado em ${dataHora(x.em)}</li>`).join('')
-    : antigos.map(x => `<li><b>${esc(COMPART_TXT[x] || x)}</b> — link gerado (data não registrada)</li>`).join('');
+    ? comp.map(x => {
+        const d = x.respId ? respondeu(x.respId) : null;
+        const st = d
+          ? `<span style="color:#166534;font-weight:700"> · respondeu</span>`
+          : `<span style="color:#b45309;font-weight:700"> · ainda não abriu</span>`;
+        return `<li><b>${esc(x.nome || COMPART_TXT[x.quem] || x.quem)}</b>${x.nome ? ' <span style="color:#94a3b8">(' + esc(COMPART_TXT[x.quem] || x.quem) + ')</span>' : ''} — link criado em ${dataHora(x.em)}${x.respId ? st : ''}</li>`;
+      }).join('')
+    : antigos.map(x => `<li><b>${esc(COMPART_TXT[x] || x)}</b> — link gerado (sem nome nem data registrados)</li>`).join('');
 
-  const outros = GRUPO_DOCS.filter(d => d.id !== SESSAO);
+  const outros = outrosDocs;
+  const nomeConvite = rid => { const x = comp.find(y => y.respId === rid); return x && x.nome; };
   const lista = outros.map(d => {
     const c = (d.respostas && d.respostas.contato) || {};
+    const conv = nomeConvite(d.respId);
     const q = d.questionario || {};
     const st = [];
     if (d.concluiu || d.apresentacaoCompleta) st.push('viu a apresentação');
@@ -484,7 +516,7 @@ function blocoGrupo() {
     else if (d.passo) st.push('questionário na etapa ' + d.passo);
     return `<div class="anexo">
       <div class="ic">👤</div>
-      <div class="n">${esc(c.nome || q.empresa || 'Respondeu sem se identificar')}
+      <div class="n">${esc(c.nome || conv || q.empresa || 'Respondeu sem se identificar')}${conv && c.nome && c.nome !== conv ? ' <span style="font-weight:500;color:#94a3b8">(convidado como ' + esc(conv) + ')</span>' : ''}
         <div style="font-weight:500;font-size:11.5px;color:#94a3b8">${esc(st.join(' · ') || 'abriu o link')} · ${dataHora(d.atualizadoEm || d.criadoEm)}</div></div>
       <a class="bt" style="padding:6px 12px" href="FichaVidaSocios.html?s=${encodeURIComponent(d.id)}">Ver ficha</a>
     </div>`;
