@@ -362,8 +362,13 @@ function pergunta(cfg) {
     const v = b.dataset.v;
     if (cfg.multi) {
       const arr = R[cfg.campo] = R[cfg.campo] || [];
-      const i = arr.indexOf(v); i >= 0 ? arr.splice(i, 1) : arr.push(v);
-      b.classList.toggle('sel'); mostrarReac(); return;
+      const ex = cfg.exclusivos || [];          // ex.: "não lembro" desmarca o resto
+      const i = arr.indexOf(v);
+      if (i >= 0) arr.splice(i, 1);
+      else if (ex.indexOf(v) >= 0) { arr.length = 0; arr.push(v); }
+      else { for (let k = arr.length - 1; k >= 0; k--) if (ex.indexOf(arr[k]) >= 0) arr.splice(k, 1); arr.push(v); }
+      document.querySelectorAll('.ops .op').forEach(x => x.classList.toggle('sel', arr.indexOf(x.dataset.v) >= 0));
+      mostrarReac(); return;
     }
     R[cfg.campo] = v;
     document.querySelectorAll('.ops .op').forEach(x => x.classList.toggle('sel', x === b));
@@ -591,7 +596,10 @@ const TELAS = {
   },
   C3() {
     pergunta({ rotulo: 'Resgatável Único', titulo: 'Se você faltasse, quanto do seu patrimônio a família conseguiria usar no mês seguinte?', info: 'inventario', campo: 'c3',
-      ops: [{ v: 'tudo', t: 'Quase tudo' }, { v: 'parte', t: 'Uma parte' }, { v: 'nada', t: 'Quase nada — está na empresa e em imóveis' }, { v: 'naosei', t: 'Não sei' }],
+      ops: [{ v: 'tudo', t: 'Quase tudo <small>há dinheiro em conta ou aplicação que a família alcança</small>', largo: true },
+            { v: 'parte', t: 'Uma parte <small>dá para alguns meses; depois depende da empresa</small>', largo: true },
+            { v: 'nada', t: 'Quase nada <small>está na empresa e em imóveis — trava até a partilha</small>', largo: true },
+            { v: 'naosei', t: 'Não sei <small>nunca parei para fazer essa conta</small>', largo: true }],
       reac: v => ({ tudo: 'Aplicações, ações e fundos também entram no inventário e ficam travados até a partilha. O seguro de vida não entra.',
         parte: 'O patrimônio existe, mas no dia em que mais se precisa de dinheiro, ele está travado.',
         nada: 'O patrimônio existe, mas no dia em que mais se precisa de dinheiro, ele está travado.',
@@ -600,10 +608,17 @@ const TELAS = {
   },
   C4() {
     pergunta({ rotulo: 'Resgatável Único', titulo: 'Quem está hoje como beneficiário no seu seguro de vida?', campo: 'c4',
-      ops: [{ v: 'conjuge', t: 'Cônjuge' }, { v: 'filhos', t: 'Filhos' }, { v: 'naolembro', t: 'Não lembro' }, { v: 'naotenho', t: 'Não tenho seguro de vida' }],
+      texto: 'Pode marcar mais de um.', multi: true, exclusivos: ['naolembro', 'naotenho'],
+      ops: [{ v: 'conjuge', t: 'Cônjuge' }, { v: 'filhos', t: 'Filhos' },
+            { v: 'outros', t: 'Outros <small>pais, irmãos, companheira, afilhados</small>', largo: true },
+            { v: 'herdeiros', t: 'Herdeiros legais, sem nome indicado', largo: true },
+            { v: 'naolembro', t: 'Não lembro', largo: true },
+            { v: 'naotenho', t: 'Não tenho seguro de vida', largo: true }],
       reac: v => ({ conjuge: 'Foi atualizado depois do último casamento, divórcio ou filho? Indicação antiga continua valendo até ser trocada por escrito.',
         filhos: 'Foi atualizado depois do último casamento, divórcio ou filho? Indicação antiga continua valendo até ser trocada por escrito.',
-        naolembro: 'Sem indicação válida, metade vai ao cônjuge e metade aos herdeiros — que pode não ser o que você quer.',
+        outros: 'Quem está fora da ordem legal de herança só recebe se estiver indicado por escrito na apólice.',
+        herdeiros: 'Sem nome indicado, metade vai ao cônjuge e metade aos herdeiros, na ordem da lei — pode não ser o que você quer.',
+        naolembro: 'Vale conferir: sem indicação válida, metade vai ao cônjuge e metade aos herdeiros — que pode não ser o que você quer.',
         naotenho: 'Então a próxima tela é feita para você.' })[v],
       next: () => 'C5' });
   },
@@ -740,13 +755,14 @@ const TELAS = {
     montar({ rotulo: 'Diagnóstico completo', titulo: 'Para onde envio o diagnóstico completo?',
       corpo: `<label class="lbl">Seu nome</label><input class="campo" id="cNome" value="${esc(c.nome)}" autocomplete="name">
         <label class="lbl">E-mail</label><input class="campo" id="cMail" type="email" value="${esc(c.email)}" autocomplete="email">
-        <label class="lbl">WhatsApp (opcional)</label><input class="campo" id="cTel" type="tel" inputmode="numeric" value="${esc(c.tel)}">
+        <label class="lbl">WhatsApp (opcional)</label><input class="campo" id="cTel" type="tel" inputmode="numeric" placeholder="(00) 00000-0000" maxlength="16" value="${esc(mascTel(c.tel))}">
         <p class="pergunta" style="font-size:15px">Também enviar para (opcional)</p>
         <div class="ops grade2"><button class="op" id="shSocio">Outro sócio</button><button class="op" id="shAdv">Meu contador ou advogado</button></div>
         <p class="nota">Sucessão se decide junto. Quem receber o link responde a própria versão, e as respostas ficam lado a lado.</p>
         <button class="btn ouro" id="btCont" disabled>Enviar o diagnóstico →</button>` });
     const valida = () => { el('btCont').disabled = !(el('cNome').value.trim() && (el('cMail').value.includes('@') || el('cTel').value.replace(/\D/g, '').length >= 10)); };
     ['cNome', 'cMail', 'cTel'].forEach(k => el(k).oninput = valida); valida();
+    el('cTel').oninput = function () { const p = this.selectionStart === this.value.length; this.value = mascTel(this.value); if (p) this.selectionStart = this.selectionEnd = this.value.length; valida(); };
     el('shSocio').onclick = () => compartilhar('socio'); el('shAdv').onclick = () => compartilhar('assessor');
     el('btCont').onclick = () => { R.contato = { nome: el('cNome').value.trim(), email: el('cMail').value.trim(), tel: el('cTel').value.trim() }; go('D4'); };
   },
@@ -802,16 +818,41 @@ async function irParaCotacao() {
 }
 
 /* ─── compartilhar e PDF ─── */
+/* Telefone brasileiro: aceita digitado corrido, colado ou com +55 e devolve (xx) 9xxxx-xxxx. */
+function mascTel(v) {
+  let d = String(v == null ? '' : v).replace(/\D/g, '');
+  if (d.length > 11 && d.slice(0, 2) === '55') d = d.slice(2);
+  d = d.slice(0, 11);
+  if (d.length <= 2) return d.length ? '(' + d : '';
+  if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
+  if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
+  return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7);
+}
+
 function linkParaOutro() {
   const qp = new URLSearchParams(); if (TOKEN) qp.set('t', TOKEN); else if (GRUPO) qp.set('g', GRUPO);
   return location.origin + location.pathname + (qp.toString() ? '?' + qp : '');
 }
+/* Mensagens escritas na voz de quem está compartilhando — o sócio do outro lado
+   precisa entender em duas linhas o que é e por que veio dele, não da corretora. */
+function textoCompartilhar(quem) {
+  const eu = (R.contato && R.contato.nome ? R.contato.nome.split(' ')[0] : '').trim();
+  const ass = eu ? '\n\n— ' + eu : '';
+  if (quem === 'preencher')
+    return 'Estamos cotando a proteção dos sócios da empresa e falta a sua parte. São seus dados básicos, leva 1 minuto:' + ass;
+  if (quem === 'socio')
+    return 'Respondi um diagnóstico sobre o que aconteceria com a nossa sociedade se um de nós faltasse — contrato, haveres, herdeiros. Leva 3 minutos e é sobre a nossa empresa, não é propaganda.\n\nResponde a sua parte? Depois as respostas aparecem lado a lado e a gente compara o que cada um entendeu.' + ass;
+  return 'Queria a sua opinião técnica sobre este diagnóstico de sucessão da empresa. São os pontos do contrato social e o impacto no caixa se um sócio faltar. Leva 3 minutos:' + ass;
+}
 async function compartilhar(quem) {
   const url = linkParaOutro();
-  const txt = quem === 'preencher' ? 'Estamos cotando a proteção dos sócios da empresa. Preencha os seus dados aqui (leva 1 minuto):' : quem === 'socio' ? 'Respondi em 3 minutos um diagnóstico sobre a sucessão da nossa sociedade. Vale você responder também:' : 'Queria sua opinião sobre este diagnóstico de sucessão da empresa:';
-  R.compartilhou = (R.compartilhou || []).concat(quem); salvar();
+  const txt = textoCompartilhar(quem);
+  R.compartilhou = (R.compartilhou || []).concat(quem);
+  // Registro com data, para o corretor ver na ficha para quem o link foi gerado.
+  R.compartilhadoEm = (R.compartilhadoEm || []).concat([{ quem: quem, em: new Date().toISOString() }]);
+  salvar();
   try { if (navigator.share) { await navigator.share({ text: txt, url }); return; } } catch (e) { return; }
-  window.open('https://wa.me/?text=' + encodeURIComponent(txt + ' ' + url), '_blank');
+  window.open('https://wa.me/?text=' + encodeURIComponent(txt + '\n\n' + url), '_blank');
 }
 function imprimir() {
   const b = diagnostico();
