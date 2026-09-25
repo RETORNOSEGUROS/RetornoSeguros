@@ -218,7 +218,7 @@ Seu trabalho: analisar tudo e me devolver um **desenho de coberturas** fundament
 
 const params = new URLSearchParams(location.search);
 const SESSAO = params.get('s') || params.get('id') || params.get('sessao');
-let D = null, db = null;
+let D = null, db = null, GRUPO_DOCS = [];
 
 /* ---------- utilidades ---------- */
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -277,7 +277,7 @@ const APRES = [
   { k: 'c1', p: 'Os filhos entrariam na empresa?', ops: { todos: 'Todos vão', alguns: 'Alguns sim, outros não', nenhum: 'Nenhum quer', pequenos: 'Ainda são pequenos', semfilhos: 'Não tenho filhos' } },
   { k: 'c2', p: 'Idade de quem respondeu', ops: { ate39: 'Até 39', '40a49': '40 a 49', '50a59': '50 a 59', '60a70': '60 a 70', mais70: 'Acima de 70' } },
   { k: 'c3', p: 'Quanto do patrimônio a família conseguiria usar no mês seguinte?', ops: { tudo: 'Quase tudo', parte: 'Uma parte', nada: 'Quase nada — está na empresa e em imóveis', naosei: 'Não sei' } },
-  { k: 'c4', p: 'Quem está hoje como beneficiário no seguro de vida dele?', ops: { conjuge: 'Cônjuge', filhos: 'Filhos', naolembro: 'Não lembro', naotenho: 'Não tem seguro de vida' } },
+  { k: 'c4', p: 'Quem está hoje como beneficiário no seguro de vida dele?', multi: true, ops: { conjuge: 'Cônjuge', filhos: 'Filhos', outros: 'Outros (pais, irmãos, companheira, afilhados)', herdeiros: 'Herdeiros legais, sem nome indicado', naolembro: 'Não lembro', naotenho: 'Não tem seguro de vida' } },
   { k: 'c6', p: 'Idade que ele simulou no Resgatável', idx: IDADES_EX_TXT },
   { k: 'd1', p: 'Hoje ele tem seguro de vida?', ops: { nao: 'Não', pessoal: 'Sim, pessoal', empresa: 'Sim, pago pela empresa', naosei: 'Não sei' } },
   { k: 'd1cap', p: 'Capital do seguro de vida atual', idx: CAP_ATUAL_TXT },
@@ -349,6 +349,9 @@ function pendencias() {
   const holding = (R().perfil || []).includes && (R().perfil || []).includes('holding');
   if (holding) add(false, 'Ele marcou que um sócio participa por holding — esse sócio não entra; a holding contrata no CNPJ dela.');
 
+  const comp = (R().compartilhadoEm || []).length || (R().compartilhou || []).length;
+  if (comp && GRUPO_DOCS.filter(d => d.id !== SESSAO).length === 0)
+    add(false, 'Ele passou o link para outra pessoa, mas ninguém mais respondeu.');
   if (!c.email && !c.tel) add(true, 'Sem e-mail nem telefone de contato.');
   if (!ANEXOS().length) add(false, 'Nenhum documento anexado — sem contrato social e balanço, a análise fica limitada.');
   if (q.valorFaixa == null && !cap0(q.valorExato)) add(false, 'Valor da empresa não informado.');
@@ -457,6 +460,42 @@ function blocoSocios() {
         <tr class="tot"><td colspan="4">Capital total</td><td class="num">${totPc ? brl(totPc) : '—'}</td><td class="num">${totRg ? brl(totRg) : '—'}</td></tr>
       </tbody>
     </table></div>
+  </div>`;
+}
+
+const COMPART_TXT = { socio: 'Outro sócio', assessor: 'Contador ou advogado', preencher: 'Sócio, para preencher os dados' };
+function blocoGrupo() {
+  const comp = R().compartilhadoEm || [];
+  const antigos = (R().compartilhou || []).filter(x => !comp.length);
+  if (!comp.length && !antigos.length && GRUPO_DOCS.length < 2) return '';
+
+  const enviados = comp.length
+    ? comp.map(x => `<li><b>${esc(COMPART_TXT[x.quem] || x.quem)}</b> — link gerado em ${dataHora(x.em)}</li>`).join('')
+    : antigos.map(x => `<li><b>${esc(COMPART_TXT[x] || x)}</b> — link gerado (data não registrada)</li>`).join('');
+
+  const outros = GRUPO_DOCS.filter(d => d.id !== SESSAO);
+  const lista = outros.map(d => {
+    const c = (d.respostas && d.respostas.contato) || {};
+    const q = d.questionario || {};
+    const st = [];
+    if (d.concluiu || d.apresentacaoCompleta) st.push('viu a apresentação');
+    else if (d.cenasVistas) st.push(d.cenasVistas + ' telas');
+    if (d.questionarioCompleto) st.push('questionário completo');
+    else if (d.passo) st.push('questionário na etapa ' + d.passo);
+    return `<div class="anexo">
+      <div class="ic">👤</div>
+      <div class="n">${esc(c.nome || q.empresa || 'Respondeu sem se identificar')}
+        <div style="font-weight:500;font-size:11.5px;color:#94a3b8">${esc(st.join(' · ') || 'abriu o link')} · ${dataHora(d.atualizadoEm || d.criadoEm)}</div></div>
+      <a class="bt" style="padding:6px 12px" href="FichaVidaSocios.html?s=${encodeURIComponent(d.id)}">Ver ficha</a>
+    </div>`;
+  }).join('');
+
+  return `<div class="bloco">
+    <div class="rot">Compartilhamento</div>
+    <h2>Para quem este link foi passado</h2>
+    ${enviados ? `<ul style="margin:0 0 12px; padding-left:18px; color:#334155;">${enviados}</ul>` : '<p class="vazio" style="margin-top:0">Ele não usou os botões de compartilhar.</p>'}
+    ${outros.length ? `<h2 style="margin-top:14px">Quem mais respondeu pelo mesmo link · ${outros.length}</h2>${lista}`
+      : (enviados ? '<p class="vazio">Ninguém mais respondeu ainda — o link foi passado, mas só esta resposta chegou.</p>' : '')}
   </div>`;
 }
 
@@ -595,6 +634,7 @@ function render() {
     ${blocoPedido()}
     ${blocoSocios()}
     ${blocoAnexos()}
+    ${blocoGrupo()}
     ${blocoRespostas()}
     ${blocoDiagnostico()}
     <p style="text-align:center; font-size:11.5px; color:#94a3b8; margin-top:16px;">
@@ -619,6 +659,13 @@ function erro(t) {
     const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
     if (!doc.exists) { erro('Não encontrei este registro.'); return; }
     D = doc.data();
+    // Quem mais respondeu pelo mesmo link (cada pessoa vira um registro no mesmo grupo).
+    if (D.grupo) {
+      try {
+        const q = await db.collection('mb_apresentacoes').where('grupo', '==', D.grupo).limit(20).get();
+        GRUPO_DOCS = q.docs.map(x => Object.assign({ id: x.id }, x.data()));
+      } catch (e) { console.warn('grupo', e); }
+    }
   } catch (e) { console.warn('ficha', e); erro('Não consegui abrir a ficha agora.'); return; }
   render();
 })();
