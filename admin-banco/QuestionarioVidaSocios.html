@@ -496,7 +496,7 @@ const TELAS = {
       for (const f of el('arq').files) {
         const linha = document.createElement('div'); linha.className = 'nota'; linha.textContent = 'Enviando ' + f.name + '…'; el('lista').appendChild(linha);
         const r = await enviarArquivo(f, p => { linha.textContent = `Enviando ${f.name}… ${p}%`; });
-        if (r.ok) { Q.anexos.push(r.anexo); Q.docs = 'enviou'; salvar(); desenharLista(); }
+        if (r.ok) { Q.anexos.push(r.anexo); Q.docs = 'enviou'; salvar(JA_CONCLUIU); desenharLista(); }
         else linha.textContent = `${f.name}: ${r.msg}`;
       }
       el('arq').value = '';
@@ -594,16 +594,24 @@ function compartilharPreencher() {
 }
 
 /* ─── persistência (mesmo registro da apresentação) ─── */
+let JA_CONCLUIU = false;   // uma vez concluído, nenhum salvamento posterior desmarca
 async function salvar(final) {
+  if (final) JA_CONCLUIU = true;
+  const feito = !!final || JA_CONCLUIU || atual === 'FIM';
   if (!db || !SESSAO) return;
+  // Numeração honesta: FIM conta como a última etapa; Q0 (o CNPJ) é a etapa 1 do
+  // ponto de vista de quem responde, mesmo não estando na lista dinâmica.
+  const _et = etapas(), _i = _et.indexOf(atual);
+  const _passo = atual === 'FIM' ? _et.length : (_i >= 0 ? _i + 1 : 0);
   try {
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
-      questionario: JSON.parse(JSON.stringify(Q)), analiticoQ: analitico(final),
-      questionarioCompleto: !!final, passoQ: atual, arqVersaoQ: ARQ_VERSAO,
+      questionario: JSON.parse(JSON.stringify(Q)), analiticoQ: analitico(feito),
+      questionarioCompleto: feito, passoQ: atual, arqVersaoQ: ARQ_VERSAO,
       // Campos que o PAINEL lê no card (bloco Vida Sócios + 📋 perguntas). Não renomear.
       analitico: analiticoPainel(),
-      passo: Math.max(0, etapas().indexOf(atual) + 1),
-      questTotal: etapas().length,
+      questionarioAberto: true,
+      passo: _passo,
+      questTotal: _et.length,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) { console.warn('salvar', e); }
