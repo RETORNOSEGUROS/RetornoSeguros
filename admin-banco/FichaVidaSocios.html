@@ -622,6 +622,7 @@ function blocoSocios() {
       <td><b>${esc(s.nome || '—')}</b>${s.porSocio ? '<span class="tag al">capital escolhido por ele</span>' : ''}${alerta}
         ${s.nasc ? `<div style="font-size:11.5px;color:#94a3b8">nasc. ${esc(String(s.nasc).split('-').reverse().join('/'))}</div>` : ''}</td>
       <td class="num">${id != null ? id : '—'}</td>
+      <td>${s.sexo === 'M' ? 'M' : s.sexo === 'F' ? 'F' : '—'}</td>
       <td class="num">${s.pct != null && s.pct !== '' ? Number(s.pct).toLocaleString('pt-BR') + '%' : '—'}</td>
       <td>${esc(Q_ATUA[s.atua] || '—')}</td>
       <td class="num">${brl(s.capitalPc)}</td>
@@ -632,9 +633,9 @@ function blocoSocios() {
     <div class="rot">Sócios · ${ss.length} ${ss.length === 1 ? 'pessoa' : 'pessoas'}</div>
     <h2>É esta tabela que vai para a cotação</h2>
     <div class="rolagem"><table>
-      <thead><tr><th>Sócio</th><th style="text-align:right">Idade</th><th style="text-align:right">%</th><th>Papel</th><th style="text-align:right">Pessoa Chave</th><th style="text-align:right">Resgatável</th></tr></thead>
+      <thead><tr><th>Sócio</th><th style="text-align:right">Idade</th><th>Sexo</th><th style="text-align:right">%</th><th>Papel</th><th style="text-align:right">Pessoa Chave</th><th style="text-align:right">Resgatável</th></tr></thead>
       <tbody>${linhas}
-        <tr class="tot"><td colspan="4">Capital total</td><td class="num">${totPc ? brl(totPc) : '—'}</td><td class="num">${totRg ? brl(totRg) : '—'}</td></tr>
+        <tr class="tot"><td colspan="5">Capital total</td><td class="num">${totPc ? brl(totPc) : '—'}</td><td class="num">${totRg ? brl(totRg) : '—'}</td></tr>
       </tbody>
     </table></div>
   </div>`;
@@ -772,10 +773,56 @@ function dadosParaIA() {
   };
 }
 
+/* Documentos que o corretor conseguiu por outro caminho (gerente, junta comercial,
+   contador). A análise pode usá-los inteiros, mas nada que o CLIENTE lê pode
+   revelar que ele os viu — senão queima a fonte e a relação. */
+const REGRA_SIGILO = `
+## ATENÇÃO — documentos de origem reservada (regra que se sobrepõe às demais)
+
+Os documentos que eu vou anexar (contrato social, balanço, DRE) **não vieram do cliente**. Ele não sabe que eu os tenho e não pode saber.
+
+- Use os documentos **integralmente** no seu raciocínio: elegibilidade, dimensionamento de capital, conta dos haveres, risco de caixa, conclusões.
+- Na **Parte A (só para mim)**: cite tudo normalmente, com [CONTRATO], [BALANÇO], [DRE] e o número da cláusula ou da conta. Preciso saber de onde veio cada número.
+- Na **Parte B e na Parte C (que o cliente lê)**: nunca cite, mencione, insinue nem deixe deduzir que eu vi esses documentos. Nada de "seu balanço mostra", "a cláusula 12ª do seu contrato", "sua dívida de R$ X".
+- Todo achado desses documentos vira **pergunta ou hipótese** na Parte B/C, não afirmação:
+  - em vez de "sua cláusula 12ª manda pagar em 6 parcelas a partir de 30 dias" → "em contratos desse porte é comum o pagamento dos haveres ser parcelado em poucas vezes, começando em 30 dias. Vale conferir o que o de vocês diz — se for o caso, a conta fica assim:"
+  - em vez de "seu caixa é de R$ 240 mil" → "para uma operação desse tamanho, o caixa costuma cobrir poucos meses de folha. Se for o caso, esse prazo aperta."
+- Nenhum valor tirado dos documentos aparece como número exato na Parte B/C — use faixas, proporções ou "da ordem de".
+- No fim da **Parte A**, liste **o que eu preciso pedir ao cliente** para poder falar abertamente de cada ponto, com a frase que eu uso para pedir. O objetivo é que ele me entregue o documento e a conversa passe a ser aberta.
+`;
+
 function copiarIA() {
   const prompt = document.getElementById('promptIA').textContent.trim();
-  copiar(prompt + '\n\n```json\n' + JSON.stringify(dadosParaIA(), null, 2) + '\n```\n',
-    'Prompt + dados copiados. Cole no Claude e anexe contrato social, balanço e cotações.');
+  const sig = document.getElementById('sigiloso');
+  const extra = (sig && sig.checked) ? '\n\n' + REGRA_SIGILO.trim() : '';
+  copiar(prompt + extra + '\n\n```json\n' + JSON.stringify(dadosParaIA(), null, 2) + '\n```\n',
+    (sig && sig.checked)
+      ? 'Copiado em modo reservado — a análise usa os documentos, mas o cliente não vê a fonte.'
+      : 'Prompt + dados copiados. Cole no Claude e anexe contrato social, balanço e cotações.');
+}
+
+/* Só o que a tela de cotação da seguradora pede, na ordem em que ela pede.
+   O corretor digita olhando isto — não precisa caçar no meio da ficha. */
+function copiarParaCotar() {
+  const q = Q(), ss = SOCIOS(), L = [];
+  L.push('CNPJ: ' + (q.cnpj ? mCNPJ(q.cnpj) : 'NÃO INFORMADO'));
+  L.push('Empresa: ' + (q.empresa || (q.cnpjDados || {}).razao || D.empresaNome || '—'));
+  L.push('');
+  ss.forEach((s, i) => {
+    const id = s.idade != null ? s.idade : idadeDe(s.nasc);
+    L.push((i + 1) + ') ' + (s.nome || 'SEM NOME'));
+    L.push('   idade: ' + (id != null ? id + ' anos' : 'NÃO INFORMADA') +
+      (s.nasc ? '  (nasc. ' + String(s.nasc).split('-').reverse().join('/') + ')' : ''));
+    L.push('   sexo: ' + (s.sexo === 'M' ? 'Masculino' : s.sexo === 'F' ? 'Feminino' : 'NÃO INFORMADO'));
+    if (cap0(s.capitalPc)) L.push('   Pessoa Chave: ' + brl(s.capitalPc));
+    if (cap0(s.capitalRg)) L.push('   Resgatável: ' + brl(s.capitalRg));
+    L.push('');
+  });
+  const dg = q.dg === 'sim' ? 'incluir doenças graves e invalidez para quem tem até 65' : q.dg === 'nao' ? 'sem doenças graves nem invalidez' : 'coberturas em vida: a definir';
+  L.push('Coberturas: ' + dg);
+  if (temPC()) L.push('Pessoa Chave — pagamento ' + (Q_PAGPC[q.pagPc] || 'a definir'));
+  if (temRG()) L.push('Resgatável — ' + (Q_PAGRG[q.pagRg] || 'a definir') + ' · ' + (Q_VERSAO[q.versao] || 'versão a definir'));
+  copiar(L.join('\n'), 'Dados de cotação copiados');
 }
 
 function copiarResumo() {
@@ -811,7 +858,11 @@ function render() {
   document.getElementById('app').innerHTML = `
     <div class="acoes">
       <button class="bt primario" onclick="copiarIA()">🧠 Copiar para a IA</button>
+      <label class="bt" style="display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:600;" title="Marque quando você tiver contrato social, balanço ou DRE que o cliente NÃO enviou. A análise usa os documentos, mas nada que o cliente lê revela que você os viu.">
+        <input type="checkbox" id="sigiloso" style="width:15px;height:15px;accent-color:#1d4ed8;cursor:pointer"> documentos por fora
+      </label>
       <button class="bt" onclick="window.print()">📄 Gerar PDF</button>
+      <button class="bt" onclick="copiarParaCotar()">⌨️ Copiar para cotar</button>
       <button class="bt" onclick="copiarResumo()">📋 Copiar resumo</button>
       <button class="bt" onclick="window.open('NovaPropostaVidaSocios.html?s=' + encodeURIComponent(SESSAO), '_blank')" title="Abre o editor para colar o JSON da Parte C e gerar o link da proposta">🧾 Montar a proposta</button>
       <span class="espaco"></span>
