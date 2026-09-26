@@ -92,9 +92,84 @@ const MODELO = {
 function modelo() { $('json').value = JSON.stringify(MODELO, null, 2); }
 function ler() { try { return JSON.parse($('json').value); } catch (e) { $('saida').innerHTML = `<div class="caixa er">JSON inválido: ${esc(e.message)}</div>`; return null; } }
 
+/* Confere o FORMATO antes de olhar o conteúdo. Se a IA devolver a Parte C em
+   outro desenho (caso clássico: "casos" como objeto em vez de lista), a tela
+   explica o que veio errado em vez de travar sem dizer nada. */
+function conferirFormato(P) {
+  const f = [];
+  const tipo = v => Array.isArray(v) ? 'lista' : v === null ? 'vazio' : typeof v === 'object' ? 'bloco' : typeof v === 'string' ? 'texto' : typeof v;
+  const exigeLista = (v, nome) => { if (v !== undefined && !Array.isArray(v)) f.push(`"${nome}" tem que ser uma lista — veio como ${tipo(v)}`); };
+  const exigeBloco = (v, nome) => { if (v !== undefined && (typeof v !== 'object' || Array.isArray(v) || v === null)) f.push(`"${nome}" tem que ser um bloco — veio como ${tipo(v)}`); };
+  const exigeData = (v, nome) => { if (v !== undefined && v !== null && v !== '' && !(typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v))) f.push(`"${nome}" tem que ser uma data no formato AAAA-MM-DD — veio ${typeof v === 'string' ? '"' + v + '"' : 'como ' + tipo(v)}`); };
+  if (!P || typeof P !== 'object' || Array.isArray(P)) { f.push('o conteúdo colado não é um bloco JSON'); return f; }
+  exigeBloco(P.empresa, 'empresa');
+  exigeLista(P.socios, 'socios');
+  exigeBloco(P.destinatario, 'destinatario');
+  exigeBloco(P.pessoaChave, 'pessoaChave');
+  if (P.pessoaChave && typeof P.pessoaChave === 'object' && !Array.isArray(P.pessoaChave)) {
+    exigeLista(P.pessoaChave.itens, 'pessoaChave.itens');
+    exigeLista(P.pessoaChave.projecao, 'pessoaChave.projecao');
+  }
+  exigeBloco(P.resgatavel, 'resgatavel');
+  if (P.resgatavel && typeof P.resgatavel === 'object' && !Array.isArray(P.resgatavel)) exigeLista(P.resgatavel.itens, 'resgatavel.itens');
+  exigeBloco(P.analise, 'analise');
+  if (P.analise && typeof P.analise === 'object' && !Array.isArray(P.analise)) {
+    exigeLista(P.analise.pontos, 'analise.pontos');
+    exigeLista(P.analise.gaps, 'analise.gaps');
+  }
+  exigeLista(P.casos, 'casos');
+  exigeData(P.validade, 'validade');
+  exigeData(P.dataCotacao, 'dataCotacao');
+  (Array.isArray(P.socios) ? P.socios : []).forEach((x, i) => { if (x && x.nascimento) exigeData(x.nascimento, `socios[${i}].nascimento`); });
+  return f;
+}
+
+/* Data: aceita o jeito brasileiro (16/10/1988) e o jeito que o banco guarda
+   (1988-10-16). Quem digita é gente; converter é trabalho do sistema. */
+function _dataISO(v) {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  let m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(t);
+  if (m) return m[3] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+  m = /^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/.exec(t);
+  if (m) return m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0');
+  return t;
+}
+function normalizarDatas(P) {
+  const mudou = [];
+  const fix = (obj, k, rot) => {
+    if (!obj || typeof obj[k] !== 'string') return;
+    const n = _dataISO(obj[k]);
+    if (n !== obj[k]) { mudou.push(`${rot}: ${obj[k]} → ${n}`); obj[k] = n; }
+  };
+  fix(P, 'validade', 'validade da proposta');
+  fix(P, 'dataCotacao', 'data da cotação');
+  (Array.isArray(P.socios) ? P.socios : []).forEach((x, i) => fix(x, 'nascimento', (x && x.nome) || ('sócio ' + (i + 1))));
+  return mudou;
+}
+
 function validar(mostrar) {
+  try { return _validar(mostrar); }
+  catch (e) {
+    console.warn('validar', e);
+    $('saida').innerHTML = `<div class="caixa"><b class="er">Não consegui ler este JSON.</b><br>${esc(e.message)}
+      <br><br>Provavelmente ele veio em outro formato. Clique em <b>Inserir modelo</b> para ver o desenho que esta tela espera e peça à IA a <b>Parte C exatamente nesse formato</b>.</div>`;
+    return null;
+  }
+}
+
+function _validar(mostrar) {
   const P = ler(); if (!P) return null;
   const er = [], al = [];
+  const datasConvertidas = normalizarDatas(P);
+  if (datasConvertidas.length) al.push('data no formato brasileiro, convertida sozinha — ' + datasConvertidas.join('; '));
+  const formato = conferirFormato(P);
+  if (formato.length) {
+    $('saida').innerHTML = `<div class="caixa"><b class="er">O JSON veio em outro formato (${formato.length} ${formato.length === 1 ? 'diferença' : 'diferenças'}):</b>
+      <ul style="padding-left:18px">${formato.map(x => `<li class="er">${esc(x)}</li>`).join('')}</ul>
+      <br><b>O que fazer:</b> clique em <b>Inserir modelo</b>, copie aquele desenho e peça à IA: <i>"refaça a Parte C exatamente neste formato, sem inventar campos novos"</i>.</div>`;
+    return null;
+  }
   if (!P.empresa || !P.empresa.nome) er.push('empresa.nome é obrigatório');
   if (!Array.isArray(P.socios) || !P.socios.length) er.push('socios precisa ter pelo menos um sócio');
   const ids = new Set((P.socios || []).map(s => s.id));
