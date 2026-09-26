@@ -54,7 +54,8 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   <p>Cole aqui o JSON da <b>Parte C</b> da análise (prompt Vida Sócios). Valide, pré-visualize e salve para gerar o link do sócio principal.</p>
   <div class="aviso" id="authAviso" hidden></div>
   <label style="display:block;margin:16px 0 6px;font-weight:700;font-size:13px;color:var(--suave)">ID da proposta (em branco = nova)</label>
-  <div class="btns" style="margin-top:0"><input id="pid" style="flex:1;min-width:220px" placeholder="vs_..."><button class="sec" onclick="carregar()">Carregar</button></div>
+  <div class="btns" style="margin-top:0"><input id="pid" style="flex:1;min-width:220px" placeholder="vs_..."><button class="sec" onclick="carregar()">Carregar</button><button class="sec" onclick="listarPropostas()">📂 Minhas propostas</button></div>
+  <div id="lista"></div>
   <label style="display:block;margin:16px 0 6px;font-weight:700;font-size:13px;color:var(--suave)">JSON da proposta</label>
   <textarea id="json" spellcheck="false"></textarea>
   <div class="btns">
@@ -232,6 +233,42 @@ async function salvar() {
   $('saida').innerHTML += `<div class="caixa ok">Salvo: ${esc(pid)}</div>`;
   carregar();
 }
+
+/* Lista as propostas Vida Sócios já salvas, com o andamento dos aceites.
+   Responde de um lugar só a pergunta "quem já preencheu a declaração de saúde?". */
+async function listarPropostas() {
+  const cx = $('lista');
+  if (!db) { cx.innerHTML = '<div class="caixa al">Sem conexão com o Firebase.</div>'; return; }
+  cx.innerHTML = '<div class="caixa">Carregando…</div>';
+  try {
+    // Ordena só por data (índice simples) e filtra o produto aqui, para não
+    // exigir índice composto no Firestore.
+    const snap = await db.collection('mb_propostas').orderBy('criadoEm', 'desc').limit(40).get();
+    const itens = [];
+    snap.forEach(d => {
+      const x = d.data();
+      if (x.produtoId !== 'vida_socios' && x.produto !== 'Vida Sócios' && x.produtoLegado !== 'vida-socios') return;
+      itens.push({ id: d.id, ...x });
+    });
+    if (!itens.length) { cx.innerHTML = '<div class="caixa al">Nenhuma proposta Vida Sócios salva ainda.</div>'; return; }
+    cx.innerHTML = `<div class="caixa"><b>${itens.length} proposta(s) Vida Sócios</b><table>
+      <tr><th>Empresa</th><th>Criada</th><th>Declarações de saúde</th><th></th></tr>
+      ${itens.map(x => {
+        const ac = Object.values(x.aceites || {});
+        const ok = ac.filter(a => a.status === 'preenchido').length;
+        const ini = ac.filter(a => a.status === 'iniciado').length;
+        const dt = x.criadoEm && x.criadoEm.toDate ? x.criadoEm.toDate().toLocaleDateString('pt-BR') : '—';
+        const st = !ac.length ? '<span class="al">ainda não pedida</span>'
+          : ok === ac.length ? `<b class="ok">✓ ${ok} de ${ac.length} — todas preenchidas</b>`
+          : `<b class="al">${ok} de ${ac.length} preenchidas${ini ? ' · ' + ini + ' em andamento' : ''}</b>`;
+        return `<tr><td><b>${esc((x.empresa && x.empresa.nome) || x.empresaNome || 'Sem nome')}</b>${x.aberta ? '' : '<br><small class="al">ainda não aberta pelo cliente</small>'}</td>
+          <td>${dt}</td><td>${st}</td>
+          <td><button class="sec" onclick="abrirProposta('${x.id}')">Abrir</button></td></tr>`;
+      }).join('')}
+    </table></div>`;
+  } catch (e) { cx.innerHTML = `<div class="caixa er">Não consegui listar: ${esc(e.message)}</div>`; }
+}
+function abrirProposta(id) { $('pid').value = id; $('json').value = ''; $('lista').innerHTML = ''; carregar(); }
 
 async function carregar() {
   const pid = $('pid').value.trim(); if (!pid || !db) return;
