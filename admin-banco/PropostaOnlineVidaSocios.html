@@ -597,7 +597,23 @@ function secConvidarSocio() {
     ${conv.length ? `<h3 class="sub">Convidados</h3>${conv.map(([t, c]) => linhaStatus(t, c)).join('')}` : ''}
   </div>`;
 }
+/* Na pré-visualização não existe proposta salva, então qualquer link gerado
+   aqui nasce morto (?p=demo). Em vez de entregar um link que vai dar erro na
+   mão do cliente, a tela explica o que fazer. */
+const AVISO_PREVIEW = `<div class="gerado" style="border-color:#f59e0b; background:rgba(245,158,11,.10)">
+    <b>Esta é a pré-visualização.</b><br>Aqui nada é gravado, então não dá para gerar links que funcionem.
+    <br><br>No editor, clique em <b>Salvar e gerar link</b>. Abra a proposta salva e os convites, os pareceres
+    e os aceites passam a funcionar de verdade.</div>`;
+function bloqueadoNoPreview(idSaida) {
+  if (!DEMO) return false;
+  const el = document.getElementById(idSaida);
+  if (el) el.innerHTML = AVISO_PREVIEW;
+  toast('Pré-visualização: salve a proposta primeiro');
+  return true;
+}
+
 async function convidarSocio(sid) {
+  if (bloqueadoNoPreview('convOut')) return;
   const s = sid ? socio(sid) : null;
   const nome = s ? s.nome : (document.getElementById('convNome').value || '').trim();
   if (!nome) { toast('Informe o nome'); return; }
@@ -712,6 +728,7 @@ function mensagemConsultor(nome, pap, link) {
   return L.join('\n');
 }
 async function gerarConvite() {
+  if (bloqueadoNoPreview('cOut')) return;
   const nome = document.getElementById('cNome').value.trim();
   const email = document.getElementById('cEmail').value.trim();
   if (!nome) { toast('Informe o nome'); return; }
@@ -751,6 +768,7 @@ function secContratar() {
 }
 function alternar(id, k) { escolha[id][k] = !escolha[id][k]; const y = window.scrollY; render(); window.scrollTo(0, y); }
 async function confirmarContratar() {
+  if (DEMO) { alert('Esta é a pré-visualização — aqui nada é gravado e os links de aceite não funcionariam.\n\nNo editor, clique em "Salvar e gerar link", abra a proposta salva e a contratação funciona normalmente.'); return; }
   const marcados = Object.entries(escolha).filter(([, v]) => v.pc || v.rg);
   if (!marcados.length) { toast('Marque pelo menos um sócio'); return; }
   P.aceites = P.aceites || {};
@@ -814,6 +832,10 @@ function pararErro(t) { document.getElementById('app').innerHTML = `<div class="
         await new Promise(r => { const off = firebase.auth().onAuthStateChanged(() => { off(); r(); }); });
         if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously();
         db = firebase.firestore();
+        if (PID === 'demo') {
+          pararErro('Este link saiu de uma <b>pré-visualização</b>, então não existe proposta salva por trás dele.<br><br>No editor, clique em <b>Salvar e gerar link</b> e use o link da proposta salva.');
+          return;
+        }
         if (!PID && TOKP) {   // link gerado pelo painel: acha a proposta pelo campo token
           const q = await db.collection('mb_propostas').where('token', '==', TOKP).limit(1).get();
           if (q.empty) { pararErro('Não encontramos esta proposta. Confira o link.'); return; }
