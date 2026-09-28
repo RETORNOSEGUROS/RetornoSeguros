@@ -258,6 +258,10 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   .cen-porque{font-size:12px; opacity:.72; margin:9px 0 0; line-height:1.45}
   .cen .btn{margin-top:11px; padding:9px}
   @media print{ .cen-grade{grid-template-columns:repeat(3,1fr)} .cen{break-inside:avoid} }
+  .caminho{background:rgba(56,189,248,.09); border:1px solid rgba(56,189,248,.35); border-radius:11px; padding:13px 15px}
+  .caminho b{font-size:15px; display:block; margin-bottom:5px; color:var(--ciano)}
+  .caminho p{margin:0; font-size:13.5px; opacity:.85; line-height:1.55}
+  .mini.nao{border-color:rgba(248,113,113,.55); color:#fca5a5; opacity:1}
 </style>
 </head>
 <body>
@@ -1044,6 +1048,18 @@ function secAcompanhamento() {
   passos += li(!!E.boletoPago, 'Pagamento confirmado', E.boletoPago, null, !!E.boletoEnviado && !E.boletoPago);
   if (E.teleentrevista) passos += li(!!E.teleentrevista.feita, 'Tele-entrevista da seguradora', E.teleentrevista.feita,
     E.teleentrevista.quem ? 'com ' + esc(E.teleentrevista.quem) : 'a seguradora liga para confirmar dados de saúde', !E.teleentrevista.feita);
+  /* Resultado por sócio: o cliente vê aceito / não aceito, NUNCA o motivo.
+     O motivo é saúde, e os sócios não têm que saber a saúde uns dos outros. */
+  const rs = E.resultadoSocios || {};
+  if (Object.keys(rs).length) {
+    const linha = aceites.map(([t, a]) => {
+      const r = rs[a.socioId] || {}; const n = primeiro(socio(a.socioId).nome) || a.nome;
+      const cl = r.tipo === 'aceito' ? 'ok' : r.tipo === 'agravo' ? 'ok' : r.tipo === 'declinado' ? 'nao' : '';
+      const mk = r.tipo === 'aceito' ? '✓' : r.tipo === 'agravo' ? '✓' : r.tipo === 'declinado' ? '✕' : '·';
+      return `<span class="mini ${cl}">${esc(n)} ${mk}</span>`;
+    }).join(' ');
+    passos += li(true, 'Resposta da seguradora, sócio a sócio', null, linha);
+  }
   passos += li(!!fim, 'Apólice', E.resultado && E.resultado.em,
     fim === 'emitida' ? 'emitida' + (E.resultado.apolice ? ' · nº ' + esc(E.resultado.apolice) : '')
       : fim === 'agravo' ? 'emitida com condições especiais' : fim === 'declinada' ? 'não aceita pela seguradora' : null, !!E.boletoPago && !fim);
@@ -1059,6 +1075,8 @@ function secAcompanhamento() {
         <span class="pill al">pedido em ${dataBR(x.em)}</span></div>`).join('')}
       <p class="nota">Enquanto a pendência não é resolvida, a seguradora não conclui a análise.</p></div>` : ''}
 
+    ${secCaminhoRecusa(E, aceites)}
+
     ${precisaAceite ? `<h3 class="sub">Como fazer o aceite digital</h3><div class="painel">
       <p class="texto" style="font-size:14px">Cada pessoa faz o seu, pelo celular, e leva uns 2 minutos.</p>
       <ul class="passos">${PASSOS_ACEITE.map((t, i) => `<li><span class="n">${i + 1}</span><span>${t}</span></li>`).join('')}</ul>
@@ -1068,6 +1086,29 @@ function secAcompanhamento() {
         <button class="btn sec" onclick="copiarPassosAceite()">Copiar as instruções</button>
       </div></div>` : ''}
   </section>`;
+}
+/* Quando a seguradora recusa alguém, o pior desfecho é a empresa ficar sem nada
+   porque ninguém deu o próximo passo. O caminho escolhido pela corretora aparece
+   aqui, em linguagem de dono — sem motivo de saúde de ninguém. */
+const CAMINHO_TXT = {
+  seguir: ['Vamos seguir com quem foi aceito',
+    'A apólice sai para os sócios aceitos, e a inclusão de quem faltou é tratada à parte. Ninguém fica descoberto enquanto isso.'],
+  recotar: ['Vamos tentar um valor menor',
+    'Para quem não foi aceito, uma cobertura menor costuma passar. A corretora está refazendo essa parte e volta com o número.'],
+  carencia: ['Vamos pela versão sem questionário de saúde',
+    'Existe uma versão que dispensa o questionário. Em troca, a cobertura por doença começa a valer depois de 24 meses — acidente vale desde o primeiro dia. A corretora explica antes de qualquer decisão.']
+};
+function secCaminhoRecusa(E, aceites) {
+  const sr = E.saidaRecusa; if (!sr || !CAMINHO_TXT[sr.tipo]) return '';
+  const rs = E.resultadoSocios || {};
+  const fora = aceites.filter(([, a]) => (rs[a.socioId] || {}).tipo === 'declinado').map(([, a]) => primeiro(socio(a.socioId).nome));
+  const dentro = aceites.filter(([, a]) => ['aceito', 'agravo'].includes((rs[a.socioId] || {}).tipo)).map(([, a]) => primeiro(socio(a.socioId).nome));
+  const t = CAMINHO_TXT[sr.tipo];
+  return `<h3 class="sub">O caminho daqui</h3><div class="painel">
+    ${fora.length ? `<p class="texto" style="font-size:14px">A seguradora não aceitou a inclusão de <b>${esc(listaNomes(fora))}</b>${dentro.length ? ` e aceitou <b>${esc(listaNomes(dentro))}</b>` : ''}.</p>` : ''}
+    <div class="caminho"><b>${esc(t[0])}</b><p>${esc(t[1])}</p></div>
+    <p class="nota">A seguradora avalia caso a caso e não informa o motivo a terceiros. Quem quiser entender a própria análise fala direto com a corretora.</p>
+  </div>`;
 }
 function copiarPassosAceite() {
   const L = ['Aceite digital da proposta — leva 2 minutos, pelo celular.', ''];
