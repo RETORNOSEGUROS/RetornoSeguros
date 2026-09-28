@@ -220,6 +220,23 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
     .fund blockquote { color:#1c2945; }
     .aviso, .aviso.ouro { background:#f3f7fc; color:#1c2945; }
   }
+  /* linha do tempo do acompanhamento */
+  .linha-tempo{list-style:none; margin:0; padding:0}
+  .etapa{display:flex; gap:12px; padding:11px 0; border-bottom:1px solid rgba(255,255,255,.07); opacity:.45}
+  .etapa:last-child{border-bottom:none}
+  .etapa.ok,.etapa.agora{opacity:1}
+  .etapa .marca{width:22px; height:22px; border-radius:50%; flex:0 0 22px; display:flex; align-items:center;
+    justify-content:center; font-size:12px; font-weight:800; border:1.5px solid rgba(255,255,255,.22); margin-top:1px}
+  .etapa.ok .marca{background:#16a34a; border-color:#16a34a; color:#fff}
+  .etapa.agora .marca{border-color:var(--dourado); color:var(--dourado)}
+  .etapa b{font-size:14.5px; display:block}
+  .etapa small{display:block; font-size:12px; opacity:.65; margin-top:1px}
+  .mini{display:inline-block; font-size:11.5px; padding:2px 9px; border-radius:100px; margin:2px 3px 0 0;
+    border:1px solid rgba(255,255,255,.16); opacity:.6}
+  .mini.ok{border-color:#16a34a; color:#4ade80; opacity:1}
+  .aviso-tempo{background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.4); color:#fbbf24;
+    border-radius:10px; padding:10px 13px; font-size:13px; margin-top:10px}
+  .pill.al{background:rgba(245,158,11,.15); color:#fbbf24; border:1px solid rgba(245,158,11,.4)}
 </style>
 </head>
 <body>
@@ -447,7 +464,7 @@ function render() {
   } else {
     partes.push(secIndice());
     if (ehConsultor()) partes.push(secFundamentos(), secProposta(), secAnalise(), secResgate());
-    else partes.push(secProposta(), secChecklist(), secAnalise(), secResgate(), secCasos(), secFundamentos(), secContratar(), secProximos());
+    else partes.push(secProposta(), secChecklist(), secAnalise(), secResgate(), secCasos(), secFundamentos(), secContratar(), secResponsavel(), secAcompanhamento(), secProximos());
   }
   partes.push(`<div class="rodape">${esc(CORRETORA.nome)} · corretora de seguros<br>Proposta sujeita à aceitação da seguradora. Valores da cotação de ${dataBR(P.dataCotacao)}.<br><a href="#" onclick="falarCorretora();return false">Falar com a corretora</a></div>`);
   app.innerHTML = partes.join('');
@@ -475,7 +492,8 @@ function secCapa() {
 function secIndice() {
   const l = ehConsultor()
     ? [['fundamentos', 'Fundamentos'], ['proposta', 'Proposta'], ['analise', 'Análise'], ['resgate', 'Resgate']]
-    : [['proposta', 'Proposta'], ['checklist', 'Checklist'], ['analise', 'Análise'], ['resgate', 'Resgate'], ['casos', 'Casos'], ['fundamentos', 'Contador e advogado'], ['contratar', 'Contratar']];
+    : [['proposta', 'Proposta'], ['checklist', 'Checklist'], ['analise', 'Análise'], ['resgate', 'Resgate'], ['casos', 'Casos'], ['fundamentos', 'Contador e advogado'], ['contratar', 'Contratar']]
+        .concat((P.contratar || (P.etapas && P.etapas.transmitida)) ? [['acompanhamento', 'Acompanhamento']] : []);
   return `<nav class="indice nao-imprime">${l.filter(([id]) => id !== 'resgate' || itensRG().some(i => (i.resgate || []).length)).map(([id, t]) => `<a href="#${id}">${t}</a>`).join('')}</nav>`;
 }
 
@@ -539,7 +557,11 @@ function secProposta() {
     <div class="total"><span>${unico ? 'Total, uma vez só' : 'Total'}</span><strong>${brlc(totRG)}</strong></div>
     <p class="nota">Sem reajuste pela idade; capital corrigido pelo IPCA todo ano. Pode ser resgatado a partir do 7º mês (veja a projeção abaixo). ${P.resgatavel.versao === 'sem_dps' ? 'Versão sem questionário de saúde: 24 meses de carência para morte por doença; acidente coberto desde o primeiro dia.' : 'Versão com questionário de saúde: sem carência.'}</p>
   </div>`;
-  if (pc.length && P.pessoaChave.projecao && P.pessoaChave.projecao.length) {
+  /* A projeção de custo ao longo do tempo saiu da tela do cliente (decisão de
+     25/09): mostrar o custo acumulado convida o empresário a fazer a conta do
+     "e se eu não morrer", que joga contra. O dado continua no JSON para uso
+     interno. A regra do reajuste por idade fica dita em uma linha, acima. */
+  if (false) {
     h += `<div class="painel"><h3 class="sub" style="margin-top:0">Quanto a Pessoa Chave deve custar ao longo do tempo</h3>
     <table class="t"><tr><th>Ano</th><th class="num">Estimativa por ano</th></tr>${P.pessoaChave.projecao.map(x => `<tr><td>${x.ano}º ano</td><td class="num">${brl(x.valor)}</td></tr>`).join('')}</table>
     <p class="nota">Estimativa com o reajuste por idade das condições do produto e IPCA de 5% ao ano (exemplo). O valor real depende do IPCA de cada ano.</p></div>`;
@@ -555,7 +577,7 @@ function secChecklist() {
   let h = `<section class="secao" id="checklist"><div class="rotulo">Para a empresa pensar</div>`;
   if (ehSocio() && !jaRespondeu()) {
     h += `<h2 class="titulo">Dez perguntas. <em>Responda o que você acredita hoje.</em></h2>
-    <p class="texto">${papel() === 'socio' ? 'Suas respostas aparecem ao lado das dos outros sócios só depois que você responder. ' : 'Depois, você pode pedir a visão de outro sócio — as respostas aparecem lado a lado. '}Leva uns 2 minutos.</p>
+    <p class="texto">${papel() === 'socio' ? 'Suas respostas vão para a corretora. ' : 'Depois, você pode pedir a visão de outro sócio — cada um responde a sua, em separado. '}Não existe resposta certa: é o retrato de hoje. Leva uns 2 minutos.</p>
     <div class="painel">${CHECK.map((c, i) => `<div class="perg"><p>${i + 1}. ${esc(c.t)}</p><div class="tri">${['s', 'n', 'q'].map(k => `<button class="op ${rascunhoCheck[c.id] === k ? 'sel ' + k : ''}" onclick="marcarCheck('${c.id}','${k}')">${RLAB[k]}</button>`).join('')}</div></div>`).join('')}</div>
     <button class="btn" id="btnCheck" onclick="salvarCheck()" ${Object.keys(rascunhoCheck).length < CHECK.length ? 'disabled' : ''}>Ver o resultado</button>
     <p class="nota">Pode pular: <a href="#" style="color:var(--suave)" onclick="pularCheck();return false">ver a proposta sem responder</a>.</p>`;
@@ -567,13 +589,32 @@ function secChecklist() {
   }
   const cols = respondentes.map(([k, v]) => ({ k, nome: primeiro(v.nome) || 'Sócio', r: v.r }));
   const alertas = CHECK.filter(c => cols.some(x => x.r[c.id] !== 's'));
-  const diverg = CHECK.filter(c => new Set(cols.map(x => x.r[c.id])).size > 1);
-  h += `<h2 class="titulo">${cols.length > 1 ? 'O que cada sócio respondeu, <em>lado a lado</em>' : 'O que você respondeu'}</h2>
-    <p class="texto">${alertas.length ? `<b>${alertas.length} de ${CHECK.length}</b> pontos têm pelo menos um "não" ou "não sei".` : 'Todos os pontos marcados como resolvidos.'}${cols.length > 1 && diverg.length ? ` Em <b>${diverg.length}</b> vocês responderam diferente — é por eles que vale começar a conversa.` : ''}</p>
-    <div class="painel" style="overflow-x:auto"><table class="matriz"><tr><th>Pergunta</th>${cols.map(c => `<th>${esc(c.nome)}</th>`).join('')}</tr>
-    ${CHECK.map((c, i) => `<tr class="${cols.length > 1 && new Set(cols.map(x => x.r[c.id])).size > 1 ? 'diverge' : ''}"><td>${i + 1}. ${esc(c.t)}</td>${cols.map(x => `<td><span class="r ${x.r[c.id] || 'q'}" title="${RLAB[x.r[c.id]] || ''}">${RICO[x.r[c.id]] || '·'}</span></td>`).join('')}</tr>`).join('')}
-    </table><p class="nota">✓ sim · ✕ não · ? não sei</p></div>`;
-  if (alertas.length) h += `<h3 class="sub">Onde esta proposta responde</h3><div class="painel">${alertas.map(c => `<div class="resposta-item"><b>${esc(c.t)}</b>${esc(c.r)}</div>`).join('')}</div>`;
+  const souEu = cols.length === 1;
+
+  /* Com mais de um respondente, o resultado é CONSOLIDADO e sem dono.
+     Sociedade em que os sócios não se dão bem é a regra, não a exceção: expor
+     "fulano respondeu não e você respondeu sim" pode estourar a relação e o
+     negócio junto. A divergência continua visível para o corretor, na ficha. */
+  if (souEu) {
+    h += `<h2 class="titulo">O que você respondeu</h2>
+      <p class="texto">${alertas.length ? `<b>${alertas.length} de ${CHECK.length}</b> pontos ainda não estão resolvidos.` : 'Todos os pontos marcados como resolvidos.'}</p>
+      <div class="painel">${CHECK.map((c, i) => {
+        const r = cols[0].r[c.id];
+        return `<div class="perg" style="padding:9px 0"><p style="margin:0">${i + 1}. ${esc(c.t)} <span class="r ${r || 'q'}" style="margin-left:6px">${RICO[r] || '·'}</span></p></div>`;
+      }).join('')}<p class="nota">✓ sim · ✕ não · ? não sei</p></div>`;
+  } else {
+    h += `<h2 class="titulo">O retrato da sociedade, <em>somando as respostas</em></h2>
+      <p class="texto"><b>${cols.length} pessoas</b> responderam. ${alertas.length
+        ? `Em <b>${alertas.length} de ${CHECK.length}</b> pontos, pelo menos uma resposta foi "não" ou "não sei" — são esses que valem uma conversa entre vocês.`
+        : 'Todos os pontos aparecem como resolvidos nas respostas de todos.'}</p>
+      <p class="nota">As respostas individuais não aparecem aqui: cada um respondeu em separado, e o que importa para a proposta é o retrato do conjunto.</p>
+      <div class="painel">${CHECK.map((c, i) => {
+        const aberto = cols.some(x => x.r[c.id] !== 's');
+        return `<div class="perg" style="padding:9px 0"><p style="margin:0">${i + 1}. ${esc(c.t)}
+          <span class="r ${aberto ? 'n' : 's'}" style="margin-left:6px">${aberto ? '!' : '✓'}</span></p></div>`;
+      }).join('')}<p class="nota">✓ resolvido para todos · ! ponto aberto</p></div>`;
+  }
+  if (alertas.length) h += `<h3 class="sub">Pontos que valem uma conversa entre vocês antes de assinar</h3><div class="painel">${alertas.map(c => `<div class="resposta-item"><b>${esc(c.t)}</b>${esc(c.r)}</div>`).join('')}</div>`;
   return h + (ehSocio() ? secConvidarSocio() : '') + `</section>`;
 }
 function marcarCheck(id, k) { rascunhoCheck[id] = k; const y = window.scrollY; render(); window.scrollTo(0, y); }
@@ -798,6 +839,158 @@ function secProximos() {
     <button class="btn sec nao-imprime" onclick="falarCorretora()">Falar com a corretora</button>
     <p class="so-impressao nota">A versão online desta proposta tem o checklist, o envio ao contador e ao advogado e a contratação. Peça o link à corretora.</p>
   </section>`;
+}
+
+
+/* ═══════════════ RESPONSÁVEL PELA ASSINATURA ═══════════════
+   O aceite digital da seguradora é feito por CPF + data de nascimento + sexo.
+   Quem assina pela empresa pode ser um sócio segurado, outro sócio, ou um
+   diretor/procurador que não é sócio — e nesse caso ninguém tinha coletado
+   os dados dele em lugar nenhum. */
+const RESP_TIPOS = [
+  ['segurado', 'Um dos sócios que vão ser segurados'],
+  ['socio', 'Outro sócio, que não entra no seguro'],
+  ['terceiro', 'Um diretor ou procurador que não é sócio']
+];
+let respRascunho = null;
+
+function secResponsavel() {
+  if (!P.contratar) return '';
+  const R = P.responsavel;
+  if (R && !respRascunho) {
+    return `<section class="secao" id="responsavel"><div class="rotulo">Assinatura</div>
+      <h2 class="titulo">Quem assina pela empresa</h2>
+      <div class="painel">
+        <div class="status"><div><b>${esc(R.nome)}</b><small>${esc(R.cargo || '')}${R.cpf ? ' · CPF ' + esc(R.cpf) : ''}</small></div>
+          <span class="pill ok">definido</span></div>
+        <p class="nota">É esta pessoa que vai fazer o aceite digital da proposta da empresa no site da seguradora.
+        ${R.tipo === 'segurado' ? ' Ela também assina o próprio aceite, como segurada.' : ''}</p>
+        <button class="btn sec nao-imprime" onclick="editarResponsavel()">Trocar a pessoa</button>
+      </div></section>`;
+  }
+  const d = respRascunho || { tipo: null };
+  const segurados = Object.entries(P.aceites || {}).map(([t, a]) => ({ t, id: a.socioId, nome: socio(a.socioId).nome }));
+  let campos = '';
+  if (d.tipo === 'segurado') {
+    campos = `<p class="pergunta">Qual deles?</p><div class="ops">${segurados.map(x =>
+      `<button class="op ${d.socioId === x.id ? 'sel' : ''}" onclick="respSet('socioId','${x.id}')">${esc(x.nome)}</button>`).join('')}</div>
+      ${d.socioId ? `<p class="nota">Os dados dele vêm do aceite que ele já preenche. Falta só confirmar o cargo e o contato.</p>
+      <label class="lbl">Cargo na empresa</label><input class="campo" id="rCargo" value="${esc(d.cargo || '')}" placeholder="Ex.: sócio-administrador" oninput="respSet('cargo',this.value,1)">` : ''}`;
+  } else if (d.tipo === 'socio' || d.tipo === 'terceiro') {
+    campos = `<p class="nota">O aceite digital pede CPF, data de nascimento e sexo de quem assina. Sem isso a seguradora não libera o acesso.</p>
+      <label class="lbl">Nome completo</label><input class="campo" id="rNome" value="${esc(d.nome || '')}" oninput="respSet('nome',this.value,1)">
+      <label class="lbl">CPF</label><input class="campo" id="rCpf" inputmode="numeric" value="${esc(d.cpf || '')}" oninput="respSet('cpf',mCPFr(this.value),1);this.value=mCPFr(this.value)">
+      <label class="lbl">Data de nascimento</label><input class="campo" id="rNasc" type="date" value="${esc(d.nasc || '')}" oninput="respSet('nasc',this.value,1)">
+      <p class="pergunta">Sexo</p><div class="ops"><button class="op ${d.sexo === 'M' ? 'sel' : ''}" onclick="respSet('sexo','M')">Masculino</button><button class="op ${d.sexo === 'F' ? 'sel' : ''}" onclick="respSet('sexo','F')">Feminino</button></div>
+      <label class="lbl">Cargo na empresa</label><input class="campo" id="rCargo" value="${esc(d.cargo || '')}" placeholder="${d.tipo === 'terceiro' ? 'Ex.: diretor, procurador' : 'Ex.: sócio'}" oninput="respSet('cargo',this.value,1)">
+      <label class="lbl">E-mail</label><input class="campo" id="rEmail" type="email" value="${esc(d.email || '')}" oninput="respSet('email',this.value,1)">
+      <label class="lbl">Celular</label><input class="campo" id="rCel" inputmode="tel" value="${esc(d.cel || '')}" oninput="respSet('cel',mTelr(this.value),1);this.value=mTelr(this.value)">`;
+  }
+  const pronto = d.tipo === 'segurado' ? !!d.socioId
+    : (d.tipo === 'socio' || d.tipo === 'terceiro') ? !!(d.nome && String(d.cpf || '').replace(/\D/g, '').length === 11 && d.nasc && d.sexo && d.cel) : false;
+  return `<section class="secao nao-imprime" id="responsavel"><div class="rotulo">Assinatura</div>
+    <h2 class="titulo">Quem vai assinar a proposta <em>pela empresa</em>?</h2>
+    <p class="texto">Uma pessoa assina em nome da empresa. Pode ser um dos sócios segurados ou alguém com poderes para assinar.</p>
+    <div class="painel">
+      <div class="ops">${RESP_TIPOS.map(([v, t]) => `<button class="op largo ${d.tipo === v ? 'sel' : ''}" onclick="respSet('tipo','${v}')">${t}</button>`).join('')}</div>
+      ${campos}
+      ${d.tipo ? `<button class="btn ouro" ${pronto ? '' : 'disabled'} onclick="salvarResponsavel()">Confirmar quem assina</button>` : ''}
+    </div></section>`;
+}
+const mCPFr = v => String(v || '').replace(/\D/g, '').slice(0, 11).replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+const mTelr = v => { const d = String(v || '').replace(/\D/g, '').slice(0, 11); return d.length > 10 ? d.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3') : d.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3'); };
+function respSet(k, v, semRender) {
+  respRascunho = respRascunho || { tipo: null };
+  respRascunho[k] = v;
+  if (k === 'tipo') { respRascunho = { tipo: v }; }
+  if (!semRender) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+  else { const b = document.querySelector('#responsavel .btn.ouro'); if (b) b.disabled = !(respRascunho.nome && String(respRascunho.cpf || '').replace(/\D/g, '').length === 11 && respRascunho.nasc && respRascunho.sexo && respRascunho.cel) && respRascunho.tipo !== 'segurado'; }
+}
+function editarResponsavel() { respRascunho = Object.assign({}, P.responsavel); render(); const el = document.getElementById('responsavel'); if (el) el.scrollIntoView(); }
+async function salvarResponsavel() {
+  const d = respRascunho || {};
+  const R = { tipo: d.tipo, cargo: (d.cargo || '').trim(), definidoPor: (EU && EU.nome) || '', em: new Date().toISOString() };
+  if (d.tipo === 'segurado') { R.socioId = d.socioId; R.nome = socio(d.socioId).nome; R.dadosDoAceite = true; }
+  else { Object.assign(R, { nome: (d.nome || '').trim(), cpf: d.cpf, nasc: d.nasc, sexo: d.sexo, email: (d.email || '').trim(), cel: d.cel }); }
+  P.responsavel = R; respRascunho = null;
+  try { await gravar({ responsavel: R }); toast('Anotado'); } catch (e) { toast('Não foi possível gravar agora'); console.warn(e); }
+  render(); const el = document.getElementById('responsavel'); if (el) el.scrollIntoView();
+}
+
+/* ═══════════════ ACOMPANHAMENTO ═══════════════
+   Da transmissão à apólice. Quem marca cada etapa é a corretora, pelo editor —
+   a seguradora não conversa com este sistema. O cliente só lê. */
+const ACEITE_LINK = 'https://www.bradescoseguros.com.br/clientes/produtos/seguro-de-vida/aceite-digital-de-propostas';
+const PASSOS_ACEITE = [
+  'Abrir o link do aceite digital',
+  'Informar CPF, data de nascimento e sexo e clicar em acessar',
+  'Receber por SMS o código de acesso, no celular de quem está assinando',
+  'Informar o código e entrar — aparecem as propostas sob sua responsabilidade',
+  'Clicar no 👁 para abrir o documento e escolher o aceite digital',
+  'Clicar em aceitar e finalizar — e conferir se todas as propostas foram assinadas'
+];
+
+function secAcompanhamento() {
+  const E = P.etapas || {};
+  if (!P.contratar && !E.transmitida) return '';
+  const aceites = Object.entries(P.aceites || {});
+  const preenchidos = aceites.filter(([, a]) => a.status === 'preenchido').length;
+  const fim = E.resultado && E.resultado.tipo;
+
+  const li = (feito, titulo, quando, detalhe, atual) => `<li class="etapa ${feito ? 'ok' : atual ? 'agora' : ''}">
+      <span class="marca">${feito ? '✓' : atual ? '•' : ''}</span>
+      <div><b>${titulo}</b>${quando ? `<small>${dataHoraBR(quando)}</small>` : ''}${detalhe ? `<small>${detalhe}</small>` : ''}</div>
+    </li>`;
+
+  const pend = (E.pendencias || []).filter(x => !x.resolvidoEm);
+  const listaAceites = aceites.map(([t, a]) => {
+    const n = primeiro(socio(a.socioId).nome) || a.nome;
+    const ok = (E.aceiteSegurados || {})[a.socioId];
+    return `<span class="mini ${ok ? 'ok' : ''}">${esc(n)} ${ok ? '✓' : '·'}</span>`;
+  }).join(' ');
+
+  let passos = '';
+  passos += li(preenchidos === aceites.length && aceites.length, 'Dados e declaração de saúde', null,
+    `${preenchidos} de ${aceites.length} ${aceites.length === 1 ? 'sócio preencheu' : 'sócios preencheram'}`, preenchidos < aceites.length);
+  passos += li(!!E.transmitida, 'Proposta transmitida à seguradora', E.transmitida, null, preenchidos === aceites.length && !E.transmitida);
+  passos += li(!!E.aceiteEmpresa, 'Aceite digital da empresa', E.aceiteEmpresa,
+    P.responsavel ? 'por ' + esc(P.responsavel.nome) : 'falta definir quem assina', !!E.transmitida && !E.aceiteEmpresa);
+  const todosAceites = aceites.length && aceites.every(([, a]) => (E.aceiteSegurados || {})[a.socioId]);
+  passos += li(!!todosAceites, 'Aceite digital de cada segurado', null, listaAceites, !!E.aceiteEmpresa && !todosAceites);
+  passos += li(!!E.boletoEnviado, 'Boleto gerado e enviado', E.boletoEnviado, 'um boleto único para a empresa', !!todosAceites && !E.boletoEnviado);
+  passos += li(!!E.boletoPago, 'Pagamento confirmado', E.boletoPago, null, !!E.boletoEnviado && !E.boletoPago);
+  if (E.teleentrevista) passos += li(!!E.teleentrevista.feita, 'Tele-entrevista da seguradora', E.teleentrevista.feita,
+    E.teleentrevista.quem ? 'com ' + esc(E.teleentrevista.quem) : 'a seguradora liga para confirmar dados de saúde', !E.teleentrevista.feita);
+  passos += li(!!fim, 'Apólice', E.resultado && E.resultado.em,
+    fim === 'emitida' ? 'emitida' + (E.resultado.apolice ? ' · nº ' + esc(E.resultado.apolice) : '')
+      : fim === 'agravo' ? 'emitida com condições especiais' : fim === 'declinada' ? 'não aceita pela seguradora' : null, !!E.boletoPago && !fim);
+
+  const precisaAceite = !!E.transmitida && !(E.aceiteEmpresa && todosAceites);
+
+  return `<section class="secao" id="acompanhamento"><div class="rotulo">Acompanhamento</div>
+    <h2 class="titulo">Em que pé está</h2>
+    <div class="painel"><ul class="linha-tempo">${passos}</ul></div>
+
+    ${pend.length ? `<h3 class="sub">Pendências da seguradora</h3><div class="painel">
+      ${pend.map(x => `<div class="status"><div><b>${esc(x.socioId ? socio(x.socioId).nome : 'Empresa')}</b><small>${esc(x.texto)}</small></div>
+        <span class="pill al">pedido em ${dataBR(x.em)}</span></div>`).join('')}
+      <p class="nota">Enquanto a pendência não é resolvida, a seguradora não conclui a análise.</p></div>` : ''}
+
+    ${precisaAceite ? `<h3 class="sub">Como fazer o aceite digital</h3><div class="painel">
+      <p class="texto" style="font-size:14px">Cada pessoa faz o seu, pelo celular, e leva uns 2 minutos.</p>
+      <ul class="passos">${PASSOS_ACEITE.map((t, i) => `<li><span class="n">${i + 1}</span><span>${t}</span></li>`).join('')}</ul>
+      <div class="aviso-tempo">⏱ O código do SMS vale <b>5 minutos</b>. Só peça quando estiver com o celular na mão — se expirar, é só pedir outro.</div>
+      <div class="linha-btns nao-imprime">
+        <a class="btn" target="_blank" rel="noopener" href="${ACEITE_LINK}">Abrir o aceite digital</a>
+        <button class="btn sec" onclick="copiarPassosAceite()">Copiar as instruções</button>
+      </div></div>` : ''}
+  </section>`;
+}
+function copiarPassosAceite() {
+  const L = ['Aceite digital da proposta — leva 2 minutos, pelo celular.', ''];
+  PASSOS_ACEITE.forEach((t, i) => L.push((i + 1) + '. ' + t.replace(/<[^>]+>/g, '')));
+  L.push('', 'O código do SMS vale 5 minutos. Se expirar, peça outro.', '', ACEITE_LINK);
+  copiar(L.join('\n'), 'Instruções copiadas');
 }
 
 /* ═══════════════════ INÍCIO ═══════════════════ */
