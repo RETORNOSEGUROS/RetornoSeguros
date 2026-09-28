@@ -9130,6 +9130,8 @@
     viaLink: false,
     perfilSimulado: null // para modo "ver como" do admin
   };
+  // Referências vivas para o Radar de novidades (bloco no fim do arquivo).
+  try { window.__mbDb = db; window.__mbCtx = CTX; } catch (e) {}
 
   const ADMIN_EMAILS = ['patrick@retornoseguros.com.br', 'admin@retornoseguros.com.br', 'pchemis@gmail.com'];
 
@@ -32809,6 +32811,173 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // A barra (com o Menu) fica sempre no mobile; o desktop esconde via CSS.
   if (document.body) montarBarra();
   else document.addEventListener("DOMContentLoaded", montarBarra);
+})();
+</script>
+
+
+<!-- ════════════════════════════════════════════════════════════════
+     RADAR DE NOVIDADES — avisa o corretor sem ele precisar procurar.
+     Roda sozinho enquanto o painel estiver aberto: a cada 90 segundos
+     procura o que mudou desde a última vez que ele olhou, mostra um
+     cartão no canto e, se ele autorizar, um aviso do sistema (que
+     aparece mesmo com a aba escondida). Bloco isolado de propósito:
+     se falhar, não derruba nada do painel.
+     ════════════════════════════════════════════════════════════════ -->
+<style>
+  #radarCard{position:fixed; right:16px; bottom:16px; z-index:9998; width:330px; max-width:calc(100vw - 24px);
+    background:#0f172a; border:1px solid #1e3a8a; border-radius:14px; box-shadow:0 18px 44px rgba(0,0,0,.5);
+    color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+    font-size:13px; overflow:hidden; display:none;}
+  #radarCard.on{display:block}
+  #radarCard .cab{display:flex; align-items:center; gap:8px; padding:11px 13px; background:#1d4ed8; font-weight:800; font-size:13px}
+  #radarCard .cab .x{margin-left:auto; cursor:pointer; opacity:.85; font-size:17px; line-height:1}
+  #radarCard .corpo{max-height:320px; overflow:auto; padding:4px 0}
+  #radarCard .it{padding:9px 13px; border-bottom:1px solid #1e293b; display:flex; gap:9px; align-items:flex-start}
+  #radarCard .it:last-child{border-bottom:none}
+  #radarCard .it .ic{font-size:15px; line-height:1.2}
+  #radarCard .it b{display:block; font-size:13px; color:#fff}
+  #radarCard .it small{display:block; color:#94a3b8; font-size:11.5px; margin-top:1px}
+  #radarCard .it a{color:#93c5fd; font-size:11.5px; font-weight:700; text-decoration:none; white-space:nowrap}
+  #radarCard .pe{padding:9px 13px; display:flex; gap:7px; background:#0b1220; border-top:1px solid #1e293b}
+  #radarCard .pe button{flex:1; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:8px;
+    padding:7px 9px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit}
+  #radarCard .pe button:hover{background:#243044}
+  #radarCard .pe button.ok{background:#1d4ed8; border-color:#1d4ed8; color:#fff}
+</style>
+<div id="radarCard">
+  <div class="cab"><span>🔔</span><span id="radarTit">Novidades</span><span class="x" onclick="document.getElementById('radarCard').classList.remove('on')">×</span></div>
+  <div class="corpo" id="radarCorpo"></div>
+  <div class="pe">
+    <button id="radarPerm" style="display:none" onclick="radarPedirPermissao()">🔔 Avisar na tela</button>
+    <button class="ok" onclick="radarMarcarVisto()">Marcar como visto</button>
+  </div>
+</div>
+<script>
+(function () {
+  var K_VISTO = 'mb_radar_visto_v1';
+  var INTERVALO = 90000;
+  var tituloOriginal = document.title;
+  var achados = [];
+
+  function visto() {
+    try { var v = localStorage.getItem(K_VISTO); if (v) return v; } catch (e) {}
+    // primeira vez: olha só as últimas 24h, para não despejar o histórico inteiro
+    return new Date(Date.now() - 86400000).toISOString();
+  }
+  function marcarVisto() { try { localStorage.setItem(K_VISTO, new Date().toISOString()); } catch (e) {} }
+  window.radarMarcarVisto = function () {
+    marcarVisto(); achados = [];
+    document.getElementById('radarCard').classList.remove('on');
+    document.title = tituloOriginal;
+  };
+  window.radarPedirPermissao = function () {
+    if (!('Notification' in window)) return;
+    Notification.requestPermission().then(function () { desenhar(); });
+  };
+
+  var dt = function (x) {
+    try { var d = x && x.toDate ? x.toDate() : new Date(x); return isNaN(d) ? null : d; } catch (e) { return null; }
+  };
+  var quando = function (d) {
+    if (!d) return '';
+    var m = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (m < 1) return 'agora';
+    if (m < 60) return 'há ' + m + ' min';
+    var h = Math.floor(m / 60); if (h < 24) return 'há ' + h + 'h';
+    return d.toLocaleDateString('pt-BR');
+  };
+  var esc = function (t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+
+  /* O que vale acordar o corretor. Movimento de leitura não entra — só compromisso. */
+  function lerApresentacao(d, x) {
+    var nome = (x.respostas && x.respostas.contato && x.respostas.contato.nome)
+      || (x.questionario && x.questionario.empresa) || x.empresaNome || 'Alguém';
+    var emp = (x.questionario && x.questionario.empresa) || x.empresaNome || '';
+    var prod = x.produtoNome || x.produtoId || 'produto';
+    var t = null, ic = '📋';
+    if (x.respostas && x.respostas.saida === 'cotacao') { t = 'pediu a cotação'; ic = '🔥'; }
+    else if (x.questionarioCompleto) { t = 'concluiu o questionário'; ic = '✅'; }
+    else if ((x.apoliceAnexos || []).length) { t = 'anexou ' + x.apoliceAnexos.length + ' documento(s)'; ic = '📎'; }
+    else if (x.concluiu || x.apresentacaoCompleta) { t = 'viu a apresentação até o fim'; ic = '📋'; }
+    if (!t) return null;
+    return { ic: ic, titulo: nome + ' — ' + t, sub: [emp, prod].filter(Boolean).join(' · '),
+      em: dt(x.atualizadoEm), link: x.produtoId === 'vida_socios' ? 'FichaVidaSocios.html?s=' + encodeURIComponent(d.id) : null, rot: 'ver ficha' };
+  }
+  function lerProposta(d, x) {
+    if (x.produtoId !== 'vida_socios') return null;
+    var emp = (x.empresa && x.empresa.nome) || x.empresaNome || 'Empresa';
+    var ac = [], k; for (k in (x.aceites || {})) ac.push(x.aceites[k]);
+    var ok = ac.filter(function (a) { return a.status === 'preenchido'; }).length;
+    var t = null, ic = '📄';
+    if (x.escolhaCenario) { t = 'escolheu o cenário "' + (x.escolhaCenario.nome || x.escolhaCenario.id) + '"'; ic = '⭐'; }
+    else if (x.contratar) { t = 'pediu para contratar'; ic = '🔥'; }
+    else if (ac.length && ok === ac.length) { t = 'todas as declarações de saúde preenchidas'; ic = '✅'; }
+    else if (ok) { t = ok + ' de ' + ac.length + ' declarações preenchidas'; ic = '✍️'; }
+    else if (x.interesse === 'duvida') { t = 'ficou com uma dúvida na proposta'; ic = '❓'; }
+    if (!t) return null;
+    return { ic: ic, titulo: emp + ' — ' + t, sub: 'proposta Vida Sócios', em: dt(x.atualizadoEm),
+      link: 'NovaPropostaVidaSocios.html?p=' + encodeURIComponent(d.id), rot: 'abrir' };
+  }
+
+  function desenhar() {
+    var card = document.getElementById('radarCard');
+    if (!achados.length) { card.classList.remove('on'); document.title = tituloOriginal; return; }
+    achados.sort(function (a, b) { return (b.em ? b.em.getTime() : 0) - (a.em ? a.em.getTime() : 0); });
+    document.getElementById('radarTit').textContent = achados.length === 1 ? '1 novidade' : achados.length + ' novidades';
+    document.getElementById('radarCorpo').innerHTML = achados.map(function (a) {
+      return '<div class="it"><div class="ic">' + a.ic + '</div><div style="flex:1;min-width:0">'
+        + '<b>' + esc(a.titulo) + '</b><small>' + esc(a.sub) + (a.em ? ' · ' + quando(a.em) : '') + '</small></div>'
+        + (a.link ? '<a href="' + a.link + '" target="_blank">' + a.rot + ' ›</a>' : '') + '</div>';
+    }).join('');
+    var pede = ('Notification' in window) && Notification.permission === 'default';
+    document.getElementById('radarPerm').style.display = pede ? '' : 'none';
+    card.classList.add('on');
+    document.title = '(' + achados.length + ') ' + tituloOriginal;
+  }
+
+  function avisarSistema(novos) {
+    try {
+      if (!('Notification' in window) || Notification.permission !== 'granted' || !novos.length) return;
+      var t = novos.length === 1 ? novos[0].titulo : novos.length + ' novidades no painel';
+      var c = novos.length === 1 ? novos[0].sub : novos.slice(0, 3).map(function (a) { return a.titulo; }).join('\n');
+      new Notification('Retorno Seguros · ' + t, { body: c, tag: 'mb-radar' });
+    } catch (e) {}
+  }
+
+  async function varrer() {
+    var db = window.__mbDb, CTX = window.__mbCtx;
+    if (!db || !CTX || !CTX.uid || document.hidden) return;
+    var desde = new Date(visto());
+    var novos = [];
+    var minhaAg = CTX.isAdmin ? null : CTX.agenciaId;
+    async function ler(col, fn) {
+      try {
+        var snap = await db.collection(col).orderBy('atualizadoEm', 'desc').limit(30).get();
+        snap.forEach(function (d) {
+          var x = d.data(); var em = dt(x.atualizadoEm);
+          if (!em || em <= desde) return;
+          if (minhaAg && x.agenciaId && x.agenciaId !== minhaAg) return;
+          var it = fn(d, x); if (it) { it.chave = col + ':' + d.id; novos.push(it); }
+        });
+      } catch (e) { console.warn('radar ' + col, e && e.message); }
+    }
+    await ler('mb_apresentacoes', lerApresentacao);
+    await ler('mb_propostas', lerProposta);
+    if (!novos.length) return;
+    var jaTem = {}; achados.forEach(function (a) { jaTem[a.chave] = 1; });
+    var ineditos = novos.filter(function (a) { return !jaTem[a.chave]; });
+    achados = achados.filter(function (a) { return !novos.some(function (b) { return b.chave === a.chave; }); }).concat(novos);
+    desenhar();
+    avisarSistema(ineditos);
+  }
+
+  function iniciar() {
+    if (!window.__mbDb || !window.__mbCtx || !window.__mbCtx.uid) { setTimeout(iniciar, 2500); return; }
+    varrer();
+    setInterval(varrer, INTERVALO);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(varrer, 800); });
+  }
+  setTimeout(iniciar, 4000);
 })();
 </script>
 
