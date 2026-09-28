@@ -87,19 +87,12 @@ const MODELO = {
   dataCotacao: new Date().toISOString().slice(0, 10), validade: '',
   destinatario: { nome: 'Nome do sócio principal', socioId: 's1' },
   socios: [{ id: 's1', nome: 'Sócio Um', nascimento: '1970-01-31', pct: 60, papel: 'Administra' }, { id: 's2', nome: 'Sócio Dois', nascimento: '1980-06-15', pct: 40, papel: 'Trabalha na empresa' }],
-  pessoaChave: { pagamento: 'anual', itens: [{ socioId: 's1', capital: 3000000, dg: true, ipa: true, premioAnual: 0, premioMensal: null }], projecao: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }], nota: '' },
-  resgatavel: { pagamento: 'unico', versao: 'dps', itens: [{ socioId: 's2', capital: 1000000, dg: false, premioUnico: 0, resgate: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }, { ano: 20, valor: 0 }] }] },
+  pessoaChave: { pagamento: 'anual', itens: [{ socioId: 's1', capital: 3000000, dg: true, ipa: true, premioAnual: 0, premioMensal: null }], projecao: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }], nota: '',
+    sugestao: { porque: '', itens: [{ socioId: 's1', capital: 3000000, premioAnual: 0, premioMensal: null }] } },
+  resgatavel: { pagamento: 'unico', versao: 'dps', itens: [{ socioId: 's2', capital: 1000000, dg: false, premioUnico: 0, resgate: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }, { ano: 20, valor: 0 }] }],
+    sugestao: { porque: '', itens: [{ socioId: 's2', capital: 1000000, premioUnico: 0 }] } },
   analise: { resumo: '', pontos: [{ titulo: '', texto: '', fonte: 'CONTRATO' }], gaps: [{ titulo: '', risco: '', sugestao: '' }] },
   casos: ['pc1', 'pc5', 'pc11', 'rg1', 'rg2', 'rg18'],
-  cenarios: [
-    { id: 'minimo', nome: 'Piso', porque: 'O menor capital que a seguradora aceita, para ver o custo de entrada.',
-      itens: [{ socioId: 's1', capital: 200000, premioAnual: 0 }] },
-    { id: 'escolhido', nome: 'O que vocês pediram', porque: 'O capital que você marcou no questionário.',
-      itens: [{ socioId: 's1', capital: 1000000, premioAnual: 0 }] },
-    { id: 'recomendado', nome: 'Nossa recomendação', destaque: true,
-      porque: 'Cobre a parte do sócio no prazo que o contrato social exige, sem tirar do caixa da operação.',
-      itens: [{ socioId: 's1', capital: 3000000, premioAnual: 0 }] }
-  ]
 };
 function modelo() { $('json').value = JSON.stringify(MODELO, null, 2); }
 function ler() { try { return JSON.parse($('json').value); } catch (e) { $('saida').innerHTML = `<div class="caixa er">JSON inválido: ${esc(e.message)}</div>`; return null; } }
@@ -131,6 +124,11 @@ function conferirFormato(P) {
   }
   exigeLista(P.casos, 'casos');
   exigeLista(P.cenarios, 'cenarios');
+  ['pessoaChave', 'resgatavel'].forEach(k => {
+    const b = P[k]; if (!b || typeof b !== 'object') return;
+    exigeBloco(b.sugestao, `${k}.sugestao`);
+    if (b.sugestao && typeof b.sugestao === 'object') exigeLista(b.sugestao.itens, `${k}.sugestao.itens`);
+  });
   (Array.isArray(P.cenarios) ? P.cenarios : []).forEach((c, i) => { if (c) exigeLista(c.itens, `cenarios[${i}].itens`); });
   exigeData(P.validade, 'validade');
   exigeData(P.dataCotacao, 'dataCotacao');
@@ -197,19 +195,26 @@ function _validar(mostrar) {
   (P.pessoaChave && P.pessoaChave.projecao || []).forEach(x => { if (!x.valor) er.push(`Projeção da Pessoa Chave do ano ${x.ano} vazia (apague a projeção ou preencha)`); });
   if (!P.validade) al.push('sem validade: a capa não mostra "válida até"'); else if (new Date(P.validade) < new Date()) er.push('validade já passou');
   (P.casos || []).forEach(c => { if (!CASOS_IDS.includes(c)) er.push(`caso desconhecido: ${c}`); });
-  const cens = Array.isArray(P.cenarios) ? P.cenarios : [];
-  if (cens.length === 1) al.push('só um cenário — com menos de dois, a seção de alternativas não aparece');
-  if (cens.length > 1 && !cens.some(c => c && c.destaque)) al.push('nenhum cenário marcado como "destaque": o cliente não vê qual é a recomendação');
-  cens.forEach((c, i) => {
-    if (!c || !c.id) { er.push(`cenarios[${i}] precisa de id`); return; }
-    if (!c.nome) al.push(`cenário ${c.id}: sem nome`);
-    (c.itens || []).forEach((x, k) => {
-      if (!ids.has(x.socioId)) er.push(`cenarios[${i}].itens[${k}]: socioId "${x.socioId}" não existe`);
-      if (!Number(x.capital)) er.push(`cenarios[${i}].itens[${k}]: sem capital`);
+  /* A proposta mostra, por produto, o que o cliente pediu e a nossa sugestão.
+     Cenários lado a lado saíram em 28/09; propostas antigas com `cenarios`
+     continuam abrindo, então o campo ainda é aceito. */
+  [['pessoaChave', 'Pessoa Chave', 'premioAnual'], ['resgatavel', 'Resgatável', 'premioUnico']].forEach(([k, nome, campo]) => {
+    const bloco = P[k] || {}; const base = (bloco.itens || []).filter(i => i && i.capital);
+    if (!base.length) return;
+    const sg = bloco.sugestao;
+    if (!sg || !(sg.itens || []).length) { al.push(`${nome}: sem sugestão da corretora — o cliente vê só o que ele pediu`); return; }
+    if (!sg.porque) al.push(`${nome}: sugestão sem "porque" — o cliente não sabe de onde veio o número`);
+    sg.itens.forEach((x, i) => {
+      if (!ids.has(x.socioId)) er.push(`${k}.sugestao.itens[${i}]: socioId "${x.socioId}" não existe`);
+      if (!(Number(x.capital) >= 200000 && Number(x.capital) <= 12000000)) er.push(`${k}.sugestao.itens[${i}]: capital fora de R$ 200 mil a R$ 12 milhões`);
     });
-    const temPreco = (c.itens || []).some(x => Number(x.premioAnual) || Number(x.premioMensal) || Number(x.premioUnico));
-    if (!temPreco) al.push(`cenário ${c.id}: sem prêmio — vai aparecer como "valor a cotar"`);
+    const chave = l => l.map(i => i.socioId + ':' + Number(i.capital || 0)).sort().join('|');
+    if (chave(base) !== chave(sg.itens) && !sg.itens.some(x => Number(x[campo]) || Number(x.premioMensal))) {
+      al.push(`${nome}: a sugestão tem capital diferente do pedido mas nenhum prêmio cotado — vai aparecer como "a cotar"`);
+    }
   });
+  const cens = Array.isArray(P.cenarios) ? P.cenarios : [];
+  cens.forEach((c, i) => { if (c && !c.id) er.push(`cenarios[${i}] precisa de id`); });
   if (!P.analise || !P.analise.resumo) al.push('análise sem resumo');
   if (mostrar || er.length) $('saida').innerHTML = `<div class="caixa">${er.length ? `<b class="er">${er.length} erro(s):</b><ul style="padding-left:18px">${er.map(e => `<li class="er">${esc(e)}</li>`).join('')}</ul>` : '<b class="ok">Sem erros.</b>'}${al.length ? `<br><b class="al">Avisos:</b><ul style="padding-left:18px">${al.map(e => `<li class="al">${esc(e)}</li>`).join('')}</ul>` : ''}
     <br>${pc.length ? `Pessoa Chave: ${pc.length} sócio(s), total ${brl(pc.reduce((a, i) => a + (Number(mensal ? i.premioMensal : i.premioAnual) || 0), 0))} ${mensal ? '/mês' : '/ano'}<br>` : ''}${rg.length ? `Resgatável: ${rg.length} sócio(s), total ${brl(rg.reduce((a, i) => a + (Number(i.premioUnico || i.premio) || 0), 0))}` : ''}</div>`;
