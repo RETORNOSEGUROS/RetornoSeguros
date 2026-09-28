@@ -70,7 +70,7 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   <div id="acomp"></div>
 </main>
 <script>
-const CAMPOS = ['empresa', 'sessaoOrigem', 'empresaId', 'dataCotacao', 'validade', 'destinatario', 'socios', 'pessoaChave', 'resgatavel', 'analise', 'casos'];
+const CAMPOS = ['empresa', 'sessaoOrigem', 'empresaId', 'dataCotacao', 'validade', 'destinatario', 'socios', 'pessoaChave', 'resgatavel', 'analise', 'casos', 'cenarios'];
 const CASOS_IDS = [...Array(20)].flatMap((_, i) => ['pc' + (i + 1), 'rg' + (i + 1)]);
 let db = null, USER = null;
 const $ = id => document.getElementById(id);
@@ -90,7 +90,16 @@ const MODELO = {
   pessoaChave: { pagamento: 'anual', itens: [{ socioId: 's1', capital: 3000000, dg: true, ipa: true, premioAnual: 0, premioMensal: null }], projecao: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }], nota: '' },
   resgatavel: { pagamento: 'unico', versao: 'dps', itens: [{ socioId: 's2', capital: 1000000, dg: false, premioUnico: 0, resgate: [{ ano: 1, valor: 0 }, { ano: 5, valor: 0 }, { ano: 10, valor: 0 }, { ano: 20, valor: 0 }] }] },
   analise: { resumo: '', pontos: [{ titulo: '', texto: '', fonte: 'CONTRATO' }], gaps: [{ titulo: '', risco: '', sugestao: '' }] },
-  casos: ['pc1', 'pc5', 'pc11', 'rg1', 'rg2', 'rg18']
+  casos: ['pc1', 'pc5', 'pc11', 'rg1', 'rg2', 'rg18'],
+  cenarios: [
+    { id: 'minimo', nome: 'Piso', porque: 'O menor capital que a seguradora aceita, para ver o custo de entrada.',
+      itens: [{ socioId: 's1', capital: 200000, premioAnual: 0 }] },
+    { id: 'escolhido', nome: 'O que vocês pediram', porque: 'O capital que você marcou no questionário.',
+      itens: [{ socioId: 's1', capital: 1000000, premioAnual: 0 }] },
+    { id: 'recomendado', nome: 'Nossa recomendação', destaque: true,
+      porque: 'Cobre a parte do sócio no prazo que o contrato social exige, sem tirar do caixa da operação.',
+      itens: [{ socioId: 's1', capital: 3000000, premioAnual: 0 }] }
+  ]
 };
 function modelo() { $('json').value = JSON.stringify(MODELO, null, 2); }
 function ler() { try { return JSON.parse($('json').value); } catch (e) { $('saida').innerHTML = `<div class="caixa er">JSON inválido: ${esc(e.message)}</div>`; return null; } }
@@ -121,6 +130,8 @@ function conferirFormato(P) {
     exigeLista(P.analise.gaps, 'analise.gaps');
   }
   exigeLista(P.casos, 'casos');
+  exigeLista(P.cenarios, 'cenarios');
+  (Array.isArray(P.cenarios) ? P.cenarios : []).forEach((c, i) => { if (c) exigeLista(c.itens, `cenarios[${i}].itens`); });
   exigeData(P.validade, 'validade');
   exigeData(P.dataCotacao, 'dataCotacao');
   (Array.isArray(P.socios) ? P.socios : []).forEach((x, i) => { if (x && x.nascimento) exigeData(x.nascimento, `socios[${i}].nascimento`); });
@@ -186,6 +197,19 @@ function _validar(mostrar) {
   (P.pessoaChave && P.pessoaChave.projecao || []).forEach(x => { if (!x.valor) er.push(`Projeção da Pessoa Chave do ano ${x.ano} vazia (apague a projeção ou preencha)`); });
   if (!P.validade) al.push('sem validade: a capa não mostra "válida até"'); else if (new Date(P.validade) < new Date()) er.push('validade já passou');
   (P.casos || []).forEach(c => { if (!CASOS_IDS.includes(c)) er.push(`caso desconhecido: ${c}`); });
+  const cens = Array.isArray(P.cenarios) ? P.cenarios : [];
+  if (cens.length === 1) al.push('só um cenário — com menos de dois, a seção de alternativas não aparece');
+  if (cens.length > 1 && !cens.some(c => c && c.destaque)) al.push('nenhum cenário marcado como "destaque": o cliente não vê qual é a recomendação');
+  cens.forEach((c, i) => {
+    if (!c || !c.id) { er.push(`cenarios[${i}] precisa de id`); return; }
+    if (!c.nome) al.push(`cenário ${c.id}: sem nome`);
+    (c.itens || []).forEach((x, k) => {
+      if (!ids.has(x.socioId)) er.push(`cenarios[${i}].itens[${k}]: socioId "${x.socioId}" não existe`);
+      if (!Number(x.capital)) er.push(`cenarios[${i}].itens[${k}]: sem capital`);
+    });
+    const temPreco = (c.itens || []).some(x => Number(x.premioAnual) || Number(x.premioMensal) || Number(x.premioUnico));
+    if (!temPreco) al.push(`cenário ${c.id}: sem prêmio — vai aparecer como "valor a cotar"`);
+  });
   if (!P.analise || !P.analise.resumo) al.push('análise sem resumo');
   if (mostrar || er.length) $('saida').innerHTML = `<div class="caixa">${er.length ? `<b class="er">${er.length} erro(s):</b><ul style="padding-left:18px">${er.map(e => `<li class="er">${esc(e)}</li>`).join('')}</ul>` : '<b class="ok">Sem erros.</b>'}${al.length ? `<br><b class="al">Avisos:</b><ul style="padding-left:18px">${al.map(e => `<li class="al">${esc(e)}</li>`).join('')}</ul>` : ''}
     <br>${pc.length ? `Pessoa Chave: ${pc.length} sócio(s), total ${brl(pc.reduce((a, i) => a + (Number(mensal ? i.premioMensal : i.premioAnual) || 0), 0))} ${mensal ? '/mês' : '/ano'}<br>` : ''}${rg.length ? `Resgatável: ${rg.length} sócio(s), total ${brl(rg.reduce((a, i) => a + (Number(i.premioUnico || i.premio) || 0), 0))}` : ''}</div>`;
@@ -294,6 +318,7 @@ async function carregar() {
     <div class="caixa"><b>Quem recebeu o link</b><table><tr><th>Nome</th><th>Papel</th><th>Aberturas</th><th>Última</th><th>Situação</th></tr>
       ${conv.map(([t, c]) => `<tr><td>${esc(c.nome)}${c.email ? '<br><small>' + esc(c.email) + '</small>' : ''}</td><td>${esc(c.papel)}</td><td>${c.aberturas || 0}</td><td>${c.ultimo ? dh(c.ultimo) + ` <small>(${dias(c.ultimo)}d)</small>` : '—'}</td><td>${c.parecer ? `<b class="${c.parecer.status === 'confere' ? 'ok' : 'al'}">${esc(c.parecer.status)}</b> ${esc(c.parecer.texto || '')}` : (P.checklist && P.checklist[t] && P.checklist[t].r ? '<span class="ok">respondeu o checklist</span>' : '')}</td></tr>`).join('')}
     </table></div>
+    ${P.escolhaCenario ? `<div class="caixa ok" style="border-color:#16a34a"><b>O cliente escolheu o cenário: ${esc(P.escolhaCenario.nome || P.escolhaCenario.id)}</b><br><small>por ${esc(P.escolhaCenario.por || '')} em ${dh(P.escolhaCenario.em)} — recote com esses capitais e republique a proposta.</small></div>` : ''}
     <div class="caixa"><b>Contratação</b> ${P.contratar ? `— pedida em ${dh(P.contratar.em)} por ${esc(P.contratar.por || '')}` : '— ainda não'}
       ${aceites.length ? `<div class="btns" style="margin-top:8px"><button class="b" onclick="window.open('DadosVidaSocios.html?p=${pid}','_blank')">📄 Dados de todos os sócios (PDF)</button></div>` : ''}
       ${aceites.length ? `<table><tr><th>Sócio</th><th>Produtos</th><th>Status</th><th></th></tr>${aceites.map(([t, a]) => `<tr><td>${esc(a.nome)}</td><td>${[a.pc ? 'PC' : '', a.rg ? 'RG' : ''].filter(Boolean).join(' + ')}</td><td class="${a.status === 'preenchido' ? 'ok' : 'al'}">${esc(a.status || 'enviado')}${a.em ? ' · ' + dh(a.em) : ''}</td><td>${a.status === 'preenchido' ? `<button class="sec" onclick="window.open('DadosVidaSocios.html?p=${pid}#${t}','_blank')">Dados</button>` : ''}</td></tr>`).join('')}</table>` : ''}
