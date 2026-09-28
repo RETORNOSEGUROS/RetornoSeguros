@@ -378,7 +378,22 @@ function blocoEtapas(pid, P) {
       <button class="sec" onclick="addPend()">+ pendência</button>
     </div>
 
-    <label class="lbl2">Resultado</label>
+    <label class="lbl2">Resultado por sócio</label>
+    <p style="font-size:12px; opacity:.7; margin:0 0 7px">A seguradora responde sócio a sócio. O cliente vê só aceito / não aceito — o motivo fica aqui, com você.</p>
+    ${aceites.length ? `<table><tr><th>Sócio</th><th>Como voltou</th><th>Anotação</th></tr>
+      ${aceites.map(([t, a]) => { const r = (E.resultadoSocios || {})[a.socioId] || {}; return `<tr>
+        <td><b>${esc(nomeSocio(a.socioId))}</b></td>
+        <td class="btns" style="margin:0; border:none; padding:4px 9px">
+          <button class="${r.tipo === 'aceito' ? 'sec' : 'b'}" onclick="resSocio('${a.socioId}','aceito')">${r.tipo === 'aceito' ? '✓ ' : ''}Aceito</button>
+          <button class="${r.tipo === 'agravo' ? 'sec' : 'b'}" onclick="resSocio('${a.socioId}','agravo')">${r.tipo === 'agravo' ? '✓ ' : ''}Agravo</button>
+          <button class="${r.tipo === 'declinado' ? 'sec' : 'b'}" onclick="resSocio('${a.socioId}','declinado')">${r.tipo === 'declinado' ? '✓ ' : ''}Não aceito</button>
+          ${r.tipo ? `<button class="sec" onclick="resSocio('${a.socioId}',null)">limpar</button>` : ''}
+        </td>
+        <td style="font-size:12px; opacity:.8">${esc(r.obs || '')}${r.em ? '<br><small>' + _dh(r.em) + '</small>' : ''}</td></tr>`; }).join('')}</table>` : ''}
+
+    ${_temRecusa(E) ? blocoSaidaRecusa(E, aceites, nomeSocio) : ''}
+
+    <label class="lbl2">Resultado da proposta</label>
     <div class="btns">
       <button class="${res.tipo === 'emitida' ? 'sec' : 'b'}" onclick="resultado('emitida')">${res.tipo === 'emitida' ? '✓ ' : ''}Emitida</button>
       <button class="${res.tipo === 'agravo' ? 'sec' : 'b'}" onclick="resultado('agravo')">${res.tipo === 'agravo' ? '✓ ' : ''}Emitida com agravo</button>
@@ -417,6 +432,57 @@ function resolverPend(i) {
   lista[i] = Object.assign({}, lista[i], { resolvidoEm: _hoje() });
   _gravarEtapas({ pendencias: lista });
 }
+function _temRecusa(E) {
+  const r = E.resultadoSocios || {};
+  return Object.keys(r).some(k => r[k] && r[k].tipo === 'declinado');
+}
+/* Recusa não pode matar o negócio. Na prática a seguradora recusa UM sócio, e
+   a empresa fica sem nada porque ninguém deu o próximo passo. Estas são as três
+   saídas reais — a primeira resolve a maioria dos casos. */
+const SAIDAS = [
+  ['seguir', 'Seguir só com os aceitos',
+   'Emite a apólice de quem passou e trata a inclusão do recusado à parte. É o caminho da maioria dos casos — o pior desfecho é a empresa ficar sem nada porque um sócio não passou.'],
+  ['recotar', 'Recotar o recusado com capital menor',
+   'Capital menor às vezes passa, ou passa com agravo aceitável. Vale antes de desistir, principalmente quando a participação dele é pequena.'],
+  ['carencia', 'Trocar para a versão sem questionário de saúde',
+   'Só no Resgatável: até 70 anos, com 24 meses de carência para morte por doença (acidente cobre desde o 1º dia) e cerca de 6% mais caro. Resolve recusa por saúde — mas explique a carência antes.']
+];
+function blocoSaidaRecusa(E, aceites, nomeSocio) {
+  const r = E.resultadoSocios || {};
+  const fora = aceites.filter(([, a]) => (r[a.socioId] || {}).tipo === 'declinado').map(([, a]) => nomeSocio(a.socioId));
+  const dentro = aceites.filter(([, a]) => ['aceito', 'agravo'].includes((r[a.socioId] || {}).tipo)).map(([, a]) => nomeSocio(a.socioId));
+  const esc0 = E.saidaRecusa || {};
+  return `<div class="caixa al" style="border-color:#f59e0b; margin-top:12px">
+    <b>A seguradora não aceitou ${fora.length === 1 ? 'um sócio' : fora.length + ' sócios'}: ${esc(fora.join(', '))}</b>
+    <p style="font-size:12.5px; margin:6px 0 10px">${dentro.length
+      ? `${esc(dentro.join(', '))} ${dentro.length === 1 ? 'passou' : 'passaram'}. Não deixe a empresa ficar sem nada — escolha o caminho e o cliente vê na proposta dele.`
+      : 'Nenhum sócio passou. Ainda assim há caminho: capital menor ou a versão sem questionário de saúde.'}</p>
+    ${SAIDAS.map(([id, t, d]) => `<div style="border:1px solid ${esc0.tipo === id ? '#16a34a' : '#334155'}; border-radius:10px; padding:10px 12px; margin-bottom:7px; background:${esc0.tipo === id ? 'rgba(22,163,74,.10)' : 'transparent'}">
+      <div style="display:flex; gap:9px; align-items:flex-start">
+        <div style="flex:1"><b style="font-size:13px">${esc0.tipo === id ? '✓ ' : ''}${t}</b>
+          <div style="font-size:12px; opacity:.75; margin-top:3px; line-height:1.45">${d}</div></div>
+        <button class="${esc0.tipo === id ? 'sec' : 'b'}" onclick="escolherSaida('${id}')" style="white-space:nowrap">${esc0.tipo === id ? 'escolhido' : 'seguir por aqui'}</button>
+      </div></div>`).join('')}
+    ${esc0.tipo ? `<p style="font-size:12px; opacity:.8; margin:4px 0 0">Marcado em ${_dh(esc0.em)}${esc0.obs ? ' · ' + esc(esc0.obs) : ''} · <a href="#" onclick="escolherSaida(null);return false" style="color:#93c5fd">desfazer</a></p>` : ''}
+  </div>`;
+}
+function resSocio(sid, tipo) {
+  const E = (PROP_ATUAL.P.etapas || {}), m = Object.assign({}, E.resultadoSocios || {});
+  if (!tipo) { delete m[sid]; }
+  else {
+    const obs = tipo === 'aceito' ? '' : (prompt(tipo === 'declinado'
+      ? 'Motivo da recusa, para o seu registro (o cliente NÃO vê):'
+      : 'Qual o agravo, para o seu registro (o cliente NÃO vê):') || '');
+    m[sid] = { tipo, obs: obs.trim(), em: _hoje() };
+  }
+  _gravarEtapas({ resultadoSocios: m });
+}
+function escolherSaida(tipo) {
+  if (!tipo) { _gravarEtapas({ saidaRecusa: null }); return; }
+  const obs = prompt('Alguma anotação sobre este caminho? (opcional, só para você)') || '';
+  _gravarEtapas({ saidaRecusa: { tipo, em: _hoje(), obs: obs.trim() } });
+}
+
 function resultado(tipo) {
   if (!tipo) { _gravarEtapas({ resultado: null }); return; }
   const apolice = tipo === 'declinada' ? '' : (prompt('Número da apólice (pode deixar em branco):') || '');
