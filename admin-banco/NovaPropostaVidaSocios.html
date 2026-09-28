@@ -46,6 +46,8 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   td, th { padding:7px 6px; border-bottom:1px solid rgba(147,164,200,.15); text-align:left; vertical-align:top; }
   th { color:var(--suave); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
   .link { word-break:break-all; font-family:ui-monospace,monospace; font-size:12.5px; color:#bfe3ff; }
+  .lbl2{display:block; margin:14px 0 6px; font-weight:700; font-size:12px; color:var(--suave)}
+  .caixa select,.caixa input{background:#0f172a; border:1px solid #334155; color:#e2e8f0; border-radius:8px; padding:8px 10px; font-family:inherit; font-size:13px}
 </style>
 </head>
 <body>
@@ -295,8 +297,108 @@ async function carregar() {
     <div class="caixa"><b>Contratação</b> ${P.contratar ? `— pedida em ${dh(P.contratar.em)} por ${esc(P.contratar.por || '')}` : '— ainda não'}
       ${aceites.length ? `<div class="btns" style="margin-top:8px"><button class="b" onclick="window.open('DadosVidaSocios.html?p=${pid}','_blank')">📄 Dados de todos os sócios (PDF)</button></div>` : ''}
       ${aceites.length ? `<table><tr><th>Sócio</th><th>Produtos</th><th>Status</th><th></th></tr>${aceites.map(([t, a]) => `<tr><td>${esc(a.nome)}</td><td>${[a.pc ? 'PC' : '', a.rg ? 'RG' : ''].filter(Boolean).join(' + ')}</td><td class="${a.status === 'preenchido' ? 'ok' : 'al'}">${esc(a.status || 'enviado')}${a.em ? ' · ' + dh(a.em) : ''}</td><td>${a.status === 'preenchido' ? `<button class="sec" onclick="window.open('DadosVidaSocios.html?p=${pid}#${t}','_blank')">Dados</button>` : ''}</td></tr>`).join('')}</table>` : ''}
-      <div id="aceiteOut"></div></div>`;
+      <div id="aceiteOut"></div></div>
+    ${P.contratar ? blocoEtapas(pid, P) : ''}`;
 }
+
+/* ═══════════════ ETAPAS — o que o cliente vê no acompanhamento ═══════════════
+   A seguradora não conversa com este sistema, então quem marca é o corretor.
+   Cada marcação aparece na hora na proposta que o cliente já tem em mãos. */
+let PROP_ATUAL = null;
+
+function _hoje() { return new Date().toISOString(); }
+const _dh = iso => iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+function blocoEtapas(pid, P) {
+  PROP_ATUAL = { pid, P };
+  const E = P.etapas || {};
+  const aceites = Object.entries(P.aceites || {});
+  const nomeSocio = sid => { const x = (P.socios || []).find(s => s.id === sid); return x ? x.nome : sid; };
+  const bt = (campo, rot) => E[campo]
+    ? `<button class="sec" onclick="desmarcar('${campo}')" title="marcado em ${_dh(E[campo])} — clique para desfazer"><span class="ok">✓</span> ${rot} <small>${_dh(E[campo])}</small></button>`
+    : `<button class="b" onclick="marcar('${campo}')">${rot}</button>`;
+
+  const btSeg = aceites.map(([t, a]) => {
+    const ok = (E.aceiteSegurados || {})[a.socioId];
+    return ok
+      ? `<button class="sec" onclick="marcarSegurado('${a.socioId}',0)"><span class="ok">✓</span> ${esc(nomeSocio(a.socioId))}</button>`
+      : `<button class="b" onclick="marcarSegurado('${a.socioId}',1)">${esc(nomeSocio(a.socioId))}</button>`;
+  }).join(' ');
+
+  const pend = (E.pendencias || []);
+  const res = E.resultado || {};
+
+  return `<div class="caixa">
+    <b>Etapas — o cliente vê isto na proposta dele</b>
+    <p style="margin:6px 0 10px; font-size:12px; opacity:.7">Clique para marcar com a data de agora. Clicar de novo desfaz.</p>
+
+    <div class="btns" style="margin-top:0">${bt('transmitida', '1 · Transmitida à seguradora')}</div>
+    <div class="btns">${bt('aceiteEmpresa', '2 · Aceite digital da empresa')}</div>
+    ${P.responsavel ? `<p style="font-size:12px; opacity:.75; margin:2px 0 8px">assina: <b>${esc(P.responsavel.nome || '')}</b>${P.responsavel.cargo ? ' · ' + esc(P.responsavel.cargo) : ''}${P.responsavel.cpf ? ' · CPF ' + esc(P.responsavel.cpf) : ''}${P.responsavel.nasc ? ' · nasc. ' + esc(String(P.responsavel.nasc).split('-').reverse().join('/')) : ''}${P.responsavel.sexo ? ' · ' + (P.responsavel.sexo === 'M' ? 'Masculino' : 'Feminino') : ''}${P.responsavel.cel ? ' · ' + esc(P.responsavel.cel) : ''}</p>`
+      : '<p class="al" style="font-size:12px; margin:2px 0 8px">o cliente ainda não definiu quem assina pela empresa</p>'}
+
+    ${aceites.length ? `<label class="lbl2">3 · Aceite digital de cada segurado</label><div class="btns">${btSeg}</div>` : ''}
+    <div class="btns">${bt('boletoEnviado', '4 · Boleto enviado')} ${bt('boletoPago', '5 · Pagamento confirmado')}</div>
+    <div class="btns">${E.teleentrevista && E.teleentrevista.feita
+      ? `<button class="sec" onclick="teleEntrevista(0)"><span class="ok">✓</span> Tele-entrevista feita <small>${_dh(E.teleentrevista.feita)}</small></button>`
+      : `<button class="b" onclick="teleEntrevista(1)">Tele-entrevista feita</button>`}</div>
+
+    <label class="lbl2">Pendências da seguradora</label>
+    ${pend.length ? `<table><tr><th>Quem</th><th>O quê</th><th>Pedido</th><th></th></tr>
+      ${pend.map((x, i) => `<tr class="${x.resolvidoEm ? '' : 'al'}"><td>${esc(x.socioId ? nomeSocio(x.socioId) : 'Empresa')}</td><td>${esc(x.texto)}</td><td>${_dh(x.em)}</td>
+        <td>${x.resolvidoEm ? '<span class="ok">resolvida</span>' : `<button class="sec" onclick="resolverPend(${i})">Resolver</button>`}</td></tr>`).join('')}</table>` : '<p style="font-size:12px; opacity:.6">nenhuma</p>'}
+    <div class="btns">
+      <select id="pendQuem" style="flex:0 0 auto"><option value="">Empresa</option>${(P.socios || []).map(x => `<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select>
+      <input id="pendTxt" style="flex:1; min-width:200px" placeholder="Ex.: exame de sangue e eletrocardiograma">
+      <button class="sec" onclick="addPend()">+ pendência</button>
+    </div>
+
+    <label class="lbl2">Resultado</label>
+    <div class="btns">
+      <button class="${res.tipo === 'emitida' ? 'sec' : 'b'}" onclick="resultado('emitida')">${res.tipo === 'emitida' ? '✓ ' : ''}Emitida</button>
+      <button class="${res.tipo === 'agravo' ? 'sec' : 'b'}" onclick="resultado('agravo')">${res.tipo === 'agravo' ? '✓ ' : ''}Emitida com agravo</button>
+      <button class="${res.tipo === 'declinada' ? 'sec' : 'b'}" onclick="resultado('declinada')">${res.tipo === 'declinada' ? '✓ ' : ''}Declinada</button>
+      ${res.tipo ? `<button class="sec" onclick="resultado(null)">desfazer</button>` : ''}
+    </div>
+    ${res.tipo ? `<p style="font-size:12px; opacity:.75">${esc(res.tipo)} em ${_dh(res.em)}${res.apolice ? ' · apólice ' + esc(res.apolice) : ''}${res.obs ? ' · ' + esc(res.obs) : ''}</p>` : ''}
+  </div>`;
+}
+
+async function _gravarEtapas(mudanca) {
+  if (!db || !PROP_ATUAL) return;
+  try {
+    await db.collection('mb_propostas').doc(PROP_ATUAL.pid).set({ etapas: mudanca, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) { alert('Não consegui gravar: ' + e.message); return; }
+  carregar();
+}
+function marcar(campo) { const o = {}; o[campo] = _hoje(); _gravarEtapas(o); }
+function desmarcar(campo) { const o = {}; o[campo] = null; _gravarEtapas(o); }
+function marcarSegurado(sid, ligar) {
+  const E = (PROP_ATUAL.P.etapas || {}), m = Object.assign({}, E.aceiteSegurados || {});
+  m[sid] = ligar ? _hoje() : null;
+  _gravarEtapas({ aceiteSegurados: m });
+}
+function teleEntrevista(ligar) { _gravarEtapas({ teleentrevista: ligar ? { feita: _hoje() } : null }); }
+function addPend() {
+  const txt = ($('pendTxt').value || '').trim(); if (!txt) { $('pendTxt').focus(); return; }
+  const quem = $('pendQuem').value || null;
+  const lista = ((PROP_ATUAL.P.etapas || {}).pendencias || []).concat([{ socioId: quem, texto: txt, em: _hoje(), resolvidoEm: null }]);
+  $('pendTxt').value = '';
+  _gravarEtapas({ pendencias: lista });
+}
+function resolverPend(i) {
+  const lista = ((PROP_ATUAL.P.etapas || {}).pendencias || []).slice();
+  if (!lista[i]) return;
+  lista[i] = Object.assign({}, lista[i], { resolvidoEm: _hoje() });
+  _gravarEtapas({ pendencias: lista });
+}
+function resultado(tipo) {
+  if (!tipo) { _gravarEtapas({ resultado: null }); return; }
+  const apolice = tipo === 'declinada' ? '' : (prompt('Número da apólice (pode deixar em branco):') || '');
+  const obs = tipo === 'declinada' ? (prompt('Motivo, para o seu registro (o cliente não vê):') || '') : '';
+  _gravarEtapas({ resultado: { tipo, em: _hoje(), apolice: apolice.trim(), obs: obs.trim() } });
+}
+
 async function verAceite(pid, t) {
   try {
     const d = await db.collection('mb_aceites').doc(pid + '__' + t).get();
