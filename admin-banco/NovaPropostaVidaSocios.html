@@ -339,10 +339,31 @@ let PROP_ATUAL = null;
 function _hoje() { return new Date().toISOString(); }
 const _dh = iso => iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 
+/* Pessoa Chave e Resgatável são DUAS propostas na seguradora: dois aceites,
+   dois boletos, duas análises que podem terminar diferente. Por isso as etapas
+   são marcadas por produto (`etapas.pc` / `etapas.rg`). Marcação antiga, solta
+   na raiz de `etapas`, continua valendo quando só há um produto contratado. */
+let PROD_ETAPA = 'pc';
+function _prodsProposta(P) {
+  const c = (P.contratar && P.contratar.itens) || null;
+  const temItem = k => ((k === 'pc' ? (P.pessoaChave && P.pessoaChave.itens) : (P.resgatavel && P.resgatavel.itens)) || []).some(i => i && i.capital);
+  const marcado = k => !c || Object.values(c).some(v => v && v[k]);
+  return [['pc', 'Pessoa Chave'], ['rg', 'Resgatável']].filter(([k]) => temItem(k) && marcado(k));
+}
+function _etapasDe(P, k) {
+  const E = P.etapas || {};
+  if (E[k]) return E[k];
+  const legado = Object.keys(E).some(x => x !== 'pc' && x !== 'rg');
+  return (legado && _prodsProposta(P).length === 1) ? E : {};
+}
+function trocarProdEtapa(k) { PROD_ETAPA = k; carregar(); }
 function blocoEtapas(pid, P) {
   PROP_ATUAL = { pid, P };
-  const E = P.etapas || {};
-  const aceites = Object.entries(P.aceites || {});
+  const prods = _prodsProposta(P);
+  if (prods.length && !prods.some(([k]) => k === PROD_ETAPA)) PROD_ETAPA = prods[0][0];
+  const E = _etapasDe(P, PROD_ETAPA);
+  const legadoMisto = Object.keys(P.etapas || {}).some(x => x !== 'pc' && x !== 'rg') && prods.length > 1;
+  const aceites = Object.entries(P.aceites || {}).filter(([, a]) => a[PROD_ETAPA]);
   const nomeSocio = sid => { const x = (P.socios || []).find(s => s.id === sid); return x ? x.nome : sid; };
   const bt = (campo, rot) => E[campo]
     ? `<button class="sec" onclick="desmarcar('${campo}')" title="marcado em ${_dh(E[campo])} — clique para desfazer"><span class="ok">✓</span> ${rot} <small>${_dh(E[campo])}</small></button>`
@@ -361,6 +382,12 @@ function blocoEtapas(pid, P) {
   return `<div class="caixa">
     <b>Etapas — o cliente vê isto na proposta dele</b>
     <p style="margin:6px 0 10px; font-size:12px; opacity:.7">Clique para marcar com a data de agora. Clicar de novo desfaz.</p>
+    ${prods.length > 1 ? `<div class="btns" style="margin-top:0">
+      <span style="font-size:12px; opacity:.7; align-self:center; margin-right:4px">Proposta:</span>
+      ${prods.map(([k, n]) => `<button class="${PROD_ETAPA === k ? 'sec' : 'b'}" onclick="trocarProdEtapa('${k}')">${PROD_ETAPA === k ? '● ' : ''}${n}</button>`).join('')}
+    </div>
+    <p style="margin:2px 0 10px; font-size:12px; opacity:.7">São duas propostas na seguradora. Marque cada uma no seu próprio ritmo.</p>` : ''}
+    ${legadoMisto ? `<p class="al" style="font-size:12px; margin:0 0 10px">Esta proposta tem etapas marcadas antes da separação por produto. Elas não aparecem mais aqui — remarque no produto certo.</p>` : ''}
 
     <div class="btns" style="margin-top:0">${bt('transmitida', '1 · Transmitida à seguradora')}</div>
     <div class="btns">${bt('aceiteEmpresa', '2 · Aceite digital da empresa')}</div>
@@ -412,14 +439,15 @@ function blocoEtapas(pid, P) {
 async function _gravarEtapas(mudanca) {
   if (!db || !PROP_ATUAL) return;
   try {
-    await db.collection('mb_propostas').doc(PROP_ATUAL.pid).set({ etapas: mudanca, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const dentro = {}; dentro[PROD_ETAPA] = mudanca;
+    await db.collection('mb_propostas').doc(PROP_ATUAL.pid).set({ etapas: dentro, atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
   } catch (e) { alert('Não consegui gravar: ' + e.message); return; }
   carregar();
 }
 function marcar(campo) { const o = {}; o[campo] = _hoje(); _gravarEtapas(o); }
 function desmarcar(campo) { const o = {}; o[campo] = null; _gravarEtapas(o); }
 function marcarSegurado(sid, ligar) {
-  const E = (PROP_ATUAL.P.etapas || {}), m = Object.assign({}, E.aceiteSegurados || {});
+  const E = _etapasDe(PROP_ATUAL.P, PROD_ETAPA), m = Object.assign({}, E.aceiteSegurados || {});
   m[sid] = ligar ? _hoje() : null;
   _gravarEtapas({ aceiteSegurados: m });
 }
@@ -427,12 +455,12 @@ function teleEntrevista(ligar) { _gravarEtapas({ teleentrevista: ligar ? { feita
 function addPend() {
   const txt = ($('pendTxt').value || '').trim(); if (!txt) { $('pendTxt').focus(); return; }
   const quem = $('pendQuem').value || null;
-  const lista = ((PROP_ATUAL.P.etapas || {}).pendencias || []).concat([{ socioId: quem, texto: txt, em: _hoje(), resolvidoEm: null }]);
+  const lista = (_etapasDe(PROP_ATUAL.P, PROD_ETAPA).pendencias || []).concat([{ socioId: quem, texto: txt, em: _hoje(), resolvidoEm: null }]);
   $('pendTxt').value = '';
   _gravarEtapas({ pendencias: lista });
 }
 function resolverPend(i) {
-  const lista = ((PROP_ATUAL.P.etapas || {}).pendencias || []).slice();
+  const lista = (_etapasDe(PROP_ATUAL.P, PROD_ETAPA).pendencias || []).slice();
   if (!lista[i]) return;
   lista[i] = Object.assign({}, lista[i], { resolvidoEm: _hoje() });
   _gravarEtapas({ pendencias: lista });
@@ -472,7 +500,7 @@ function blocoSaidaRecusa(E, aceites, nomeSocio) {
   </div>`;
 }
 function resSocio(sid, tipo) {
-  const E = (PROP_ATUAL.P.etapas || {}), m = Object.assign({}, E.resultadoSocios || {});
+  const E = _etapasDe(PROP_ATUAL.P, PROD_ETAPA), m = Object.assign({}, E.resultadoSocios || {});
   if (!tipo) { delete m[sid]; }
   else {
     const obs = tipo === 'aceito' ? '' : (prompt(tipo === 'declinado'
