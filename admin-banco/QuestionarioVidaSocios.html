@@ -195,6 +195,7 @@ const ARQ_VERSAO = '3';
 
 let R = { visto: {} };        // respostas da apresentação (só leitura)
 let Q = { produtos: null, empresa: null, cnpj: null, tipo: null, acordo: null, valorFaixa: null, valorExato: null,
+          famCusto: null, famPatrim: null,
           socios: [], versao: 'dps', dg: null, pagPc: 'anual', pagRg: 'unico', docs: null, anexos: [] };
 let atual = null; const pilha = [];
 let db = null, st = null, SESSAO = null, GRUPO = null, RESPID = null, LINK = null, TOKEN = null;
@@ -203,6 +204,12 @@ const VALORES = [[0, 5], [5, 20], [20, 50], [50, 100], [100, 300], [300, null]];
 const VALORES_TXT = ['Até R$ 5 mi', 'R$ 5 a 20 mi', 'R$ 20 a 50 mi', 'R$ 50 a 100 mi', 'R$ 100 a 300 mi', 'Acima de R$ 300 mi'];
 
 const INFO = {
+  contaFamilia: ['De onde sai o capital sugerido',
+    'São duas contas somadas. <b>Primeira:</b> o custo fixo da família multiplicado por <b>18 meses</b> — o tempo que um inventário com empresa no meio costuma levar até a família voltar a ter acesso ao patrimônio.',
+    '<b>Segunda:</b> o custo de transmitir o patrimônio, estimado em <b>11%</b> — ITCMD 4% (varia de 2% a 8% conforme o estado), honorários advocatícios 6% (variam de 6% a 10%) e custas, cartório e documentos 1%.',
+    'Do total a gente <b>desconta o seguro de vida que você já tem</b>, para não sugerir cobertura em duplicidade.',
+    'Quando você escolhe uma faixa, a conta usa o <b>teto da faixa</b>, para não ficar otimista. O resultado é arredondado para cima, de R$ 100 mil em R$ 100 mil.',
+    'É uma estimativa para dar ordem de grandeza. A alíquota do seu estado e os honorários reais, o seu advogado confirma.'],
   capital: ['Como sugerimos o capital', 'Na Pessoa Chave, o capital sugerido é a parte do sócio: participação × valor da empresa, arredondado para baixo.', 'Mínimo de R$ 200 mil e máximo de R$ 12 milhões por sócio. Os capitais podem ser diferentes entre os sócios, e nem todos precisam entrar.'],
   versoes: ['As duas versões do Resgatável', 'Com questionário de saúde: sem carência, com doenças graves. Nas cotações, sai cerca de 6% mais barata.', 'Sem questionário: só morte, até 70 anos. A carência de 24 meses vale só para morte natural (por doença). Morte por acidente é coberta desde o primeiro dia, nas duas versões.'],
   pagamento: ['Anual ou mensal', 'Nas cotações reais da Pessoa Chave, 12 parcelas mensais saíram cerca de 20% mais caras que o pagamento anual.', 'O prêmio da Pessoa Chave é recalculado a cada aniversário pela idade, além da inflação.'],
@@ -216,6 +223,7 @@ const espera = ms => new Promise(r => setTimeout(r, ms));
 const temPc = () => Q.produtos === 'pc' || Q.produtos === 'ambas' || Q.produtos === 'rec';
 const temRg = () => Q.produtos === 'rg' || Q.produtos === 'ambas' || Q.produtos === 'rec';
 const reais = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+const brlCap = v => v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 function fmtCap(v) { if (v == null) return '—'; return v >= 1e6 ? 'R$ ' + (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' mi' : 'R$ ' + Math.round(v / 1e3) + ' mil'; }
 function mascaraData(v) { const d = v.replace(/\D/g, '').slice(0, 8); return d.length > 4 ? d.slice(0, 2) + '/' + d.slice(2, 4) + '/' + d.slice(4) : d.length > 2 ? d.slice(0, 2) + '/' + d.slice(2) : d; }
 function idadeDe(txt) {
@@ -225,6 +233,7 @@ function idadeDe(txt) {
   const h = new Date(); let a = h.getFullYear() - ano; if (h.getMonth() < mes - 1 || (h.getMonth() === mes - 1 && h.getDate() < dia)) a--;
   return a;
 }
+const mascaraTel = v => { const d = String(v || '').replace(/\D/g, '').slice(0, 11); return d.length > 10 ? d.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3') : d.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3').replace(/-$/, ''); };
 const mascaraReais = v => { const d = String(v).replace(/\D/g, '').slice(0, 12); return d ? 'R$ ' + Number(d).toLocaleString('pt-BR') : ''; };
 const numReais = v => Number(String(v || '').replace(/\D/g, '')) || null;
 const numPct = v => { const n = parseFloat(String(v || '').replace(',', '.')); return isNaN(n) ? null : n; };
@@ -234,6 +243,37 @@ function valorBase() {
   if (Q.valorExato) return Q.valorExato;
   if (Q.valorFaixa == null) return null;
   const [a, b] = VALORES[Q.valorFaixa]; return (b == null ? a : (a + b) / 2) * 1e6;
+}
+/* ═══════════ A CONTA DA FAMÍLIA (capital sugerido no Resgatável) ═══════════
+   Enquanto o inventário corre, a família precisa viver — e, no fim dele, ainda
+   precisa de dinheiro para pagar o imposto e os custos de transmitir o
+   patrimônio. Duas contas somadas, menos o que ele já tem de cobertura.
+   Toda premissa está no "i" da tela, e cada número pode ser conferido. */
+/* As faixas usam o TETO, não o meio: é a mesma conta que a apresentação mostra
+   ao cliente, e quem marca "até R$ 10 mil" não se protege com 6. A ordem dos
+   itens é a mesma da conversa, de propósito — o índice que vem de lá entra
+   direto aqui. */
+const CUSTO_FAIXAS = [['ate10', 'Até R$ 10 mil', 10000], ['10a25', 'R$ 10 a 25 mil', 25000],
+  ['25a50', 'R$ 25 a 50 mil', 50000], ['mais50', 'Acima de R$ 50 mil', 50000], ['naosei', 'Não sei somar', null]];
+const PATRIM_FAIXAS = [['0', 'Até R$ 1 milhão', 1000000], ['1', 'R$ 1 a 3 milhões', 3000000],
+  ['2', 'R$ 3 a 10 milhões', 10000000], ['3', 'R$ 10 a 30 milhões', 30000000],
+  ['4', 'Acima de R$ 30 milhões', 30000000], ['5', 'Não sei somar', null]];
+const CAP_ATUAL_VAL = [250000, 1250000, 3500000, 6500000, 0];   // o que ele já tem de seguro, pelo meio da faixa
+const MESES_INVENTARIO = 18;
+const TX_ITCMD = 0.04, TX_ADV = 0.06, TX_CUSTAS = 0.01;         // ver INFO.contaFamilia
+const TX_SUCESSAO = TX_ITCMD + TX_ADV + TX_CUSTAS;
+const _faixaVal = (lista, v) => { const x = lista.find(f => f[0] === String(v)); return x ? x[2] : null; };
+function contaFamilia() {
+  const mensal = _faixaVal(CUSTO_FAIXAS, Q.famCusto);
+  const patr = _faixaVal(PATRIM_FAIXAS, Q.famPatrim);
+  if (mensal == null && patr == null) return null;
+  const sustento = (mensal || 0) * MESES_INVENTARIO;
+  const sucessao = (patr || 0) * TX_SUCESSAO;
+  const jaTem = (R.d1cap != null && CAP_ATUAL_VAL[R.d1cap] != null) ? CAP_ATUAL_VAL[R.d1cap] : 0;
+  const bruto = sustento + sucessao;
+  const liquido = Math.max(0, bruto - jaTem);
+  const cap = Math.max(2e5, Math.min(12e6, Math.ceil(liquido / 1e5) * 1e5));
+  return { mensal, patr, sustento, sucessao, jaTem, bruto, cap, parcial: mensal == null || patr == null };
 }
 function capitalSugerido(s) {
   const base = valorBase(), p = numPct(s.pct);
@@ -250,9 +290,9 @@ async function _fetchJson(url) {
 }
 async function _cnpjConsulta(d) {
   const fontes = [
-    ['brasilapi', 'https://brasilapi.com.br/api/cnpj/v1/' + d, j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf })],
-    ['minhareceita', 'https://minhareceita.org/' + d, j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf })],
-    ['cnpjws', 'https://publica.cnpj.ws/cnpj/' + d, j => ({ razao: j.razao_social, fantasia: j.estabelecimento && j.estabelecimento.nome_fantasia, cidade: j.estabelecimento && j.estabelecimento.cidade && j.estabelecimento.cidade.nome, uf: j.estabelecimento && j.estabelecimento.estado && j.estabelecimento.estado.sigla })]
+    ['brasilapi', 'https://brasilapi.com.br/api/cnpj/v1/' + d, j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf, natureza: j.natureza_juridica, natCod: j.codigo_natureza_juridica })],
+    ['minhareceita', 'https://minhareceita.org/' + d, j => ({ razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf, natureza: j.natureza_juridica, natCod: j.codigo_natureza_juridica })],
+    ['cnpjws', 'https://publica.cnpj.ws/cnpj/' + d, j => ({ razao: j.razao_social, fantasia: j.estabelecimento && j.estabelecimento.nome_fantasia, cidade: j.estabelecimento && j.estabelecimento.cidade && j.estabelecimento.cidade.nome, uf: j.estabelecimento && j.estabelecimento.estado && j.estabelecimento.estado.sigla, natureza: j.natureza_juridica && (j.natureza_juridica.descricao || j.natureza_juridica), natCod: j.natureza_juridica && j.natureza_juridica.id })]
   ];
   // As três fontes são consultadas AO MESMO TEMPO: a primeira resposta válida vence.
   // (Em série, com 9s de espera cada, duas fontes fora do ar travavam a tela por ~20s.)
@@ -274,12 +314,85 @@ async function _cnpjConsulta(d) {
   } catch (e) { if (inexistente) return { ok: false, motivo: 'inexistente' }; }
   return { ok: false, motivo };
 }
+/* A Receita já diz o tipo societário na natureza jurídica — perguntar de novo
+   é pedir ao cliente que repita o que o CNPJ acabou de informar. Quando a
+   consulta não resolve (fonte fora do ar, CNPJ não informado), fica 'naosei'
+   e o corretor confere no contrato social, que ele pede logo adiante. */
+const NATUREZAS = [
+  [/cooperativ/i, 'coop'],
+  [/empres(a|á)ri[ao].*individual.*responsabilidade|eireli/i, 'eireli'],
+  [/sociedade\s+an(ô|o)nima|^s\.?a\.?$/i, 'sa'],
+  [/sociedade\s+simples/i, 'simples'],
+  [/empres(á|a)rio\s*\(?\s*individual/i, 'ei'],
+  [/limitada/i, 'ltda']
+];
+const NAT_COD = { '2062': 'ltda', '2054': 'sa', '2046': 'sa', '2305': 'eireli', '2313': 'eireli',
+  '2135': 'ei', '2143': 'coop', '2240': 'simples', '2232': 'simples', '2259': 'simples', '2267': 'simples' };
+function tipoDaNatureza(txt, cod) {
+  const c = String(cod || '').replace(/\D/g, '');
+  if (NAT_COD[c]) return NAT_COD[c];
+  const t = String(txt || '');
+  for (const [re, v] of NATUREZAS) if (re.test(t)) return v;
+  return null;
+}
 const CNPJ_MSG = { inexistente: 'Não encontrei esse CNPJ — confira o número ou escreva o nome da empresa.', limite: 'A consulta pública está no limite agora. Escreva o nome da empresa e seguimos.', offline: 'Não consegui consultar agora. Escreva o nome da empresa e seguimos.' };
+
+/* ═══ QUEM ESTÁ RESPONDENDO: o dono do pedido ou um sócio convidado ═══
+   O sócio 1 compartilha o link; quem abre entra no MESMO grupo, com um respId
+   próprio. Se o pedido da empresa já foi aberto, este segundo sócio não refaz
+   o pedido inteiro — ele completa os dados DELE no mesmo documento. A cotação
+   continua saindo uma só, por sócio, que é como a seguradora devolve. */
+let PEDIDO = null;        // { respId, questionario, contato } do dono, quando existe
+const modoSocio = () => !!PEDIDO;
+function herdarDoPedido() {
+  if (!PEDIDO || !PEDIDO.questionario) return;
+  const d = PEDIDO.questionario;
+  ['produtos', 'tipo', 'acordo', 'valorFaixa', 'valorExato', 'versao', 'dg', 'pagPc', 'pagRg', 'empresa', 'cnpj', 'cnpjDados'].forEach(k => {
+    if (Q[k] == null || Q[k] === '') Q[k] = d[k] != null ? d[k] : Q[k];
+  });
+  if (!Q.socios.length) Q.socios = [novoSocio(0)];
+  Q.socios = Q.socios.slice(0, 1);
+  const meu = (R.contato && R.contato.nome) || R.cNome;
+  if (meu && !Q.socios[0].nome) Q.socios[0].nome = String(meu).trim().split(/\s+/)[0];
+}
+const donoNome = () => {
+  const c = (PEDIDO && PEDIDO.contato) || {};
+  return (c.nome && String(c.nome).trim().split(/\s+/)[0]) || 'o seu sócio';
+};
+
+/* ═══ o que a apresentação já respondeu ═══
+   A conversa guarda as duas faixas pelo ÍNDICE da lista dela, e as listas aqui
+   estão na mesma ordem — então o índice vira chave direto. Se as duas vieram
+   com valor de verdade, o passo Q3b não aparece: a conta já foi feita na
+   frente do cliente, e refazê-la é desconfiar dele. */
+/* O que a apresentação já respondeu, aplicado de uma vez só. */
+function semearInicial() {
+  if (!Q.produtos) Q.produtos = (R.visto && R.visto.pc && R.visto.rg) ? 'ambas' : (R.visto && R.visto.pc) ? 'pc' : (R.visto && R.visto.rg) ? 'rg' : null;
+  if (Q.valorFaixa == null && R.b3faixa != null) Q.valorFaixa = R.b3faixa;
+  semearFamilia();
+}
+function semearFamilia() {
+  if (Q.famCusto == null && R.famCusto != null && CUSTO_FAIXAS[Number(R.famCusto)]) Q.famCusto = CUSTO_FAIXAS[Number(R.famCusto)][0];
+  if (Q.famPatrim == null && R.famPatrim != null && PATRIM_FAIXAS[Number(R.famPatrim)]) Q.famPatrim = PATRIM_FAIXAS[Number(R.famPatrim)][0];
+}
+function familiaVeioDaConversa() {
+  semearFamilia();
+  return _faixaVal(CUSTO_FAIXAS, Q.famCusto) != null && _faixaVal(PATRIM_FAIXAS, Q.famPatrim) != null;
+}
 
 /* ─── etapas visíveis (a numeração acompanha o que aparece) ─── */
 function etapas() {
+  /* O sócio convidado responde só o que é dele: a conta da família (que é a
+     família DELE, não a do sócio 1) e o próprio cartão. Produto, valor da
+     empresa, versão e documentos vieram com o pedido. */
+  if (modoSocio()) {
+    const Ls = [];
+    if (temRg() && !familiaVeioDaConversa()) Ls.push('Q3b');
+    Ls.push('Q3', 'Q8');
+    return Ls;
+  }
   const L = ['Q1', 'Q2', 'Q3'];
-  if (temRg()) L.push('Q4');
+  if (temRg()) { if (!familiaVeioDaConversa()) L.push('Q3b'); L.push('Q4'); }
   if (Q.socios.some(s => s.incluir && !s.porSocio && s.idade != null && s.idade <= 65)) L.push('Q5');
   L.push('Q6', 'Q7', 'Q8');
   return L;
@@ -314,6 +427,34 @@ function novoSocio(k) { return { nome: '', pct: '', nasc: '', idade: null, sexo:
 /* ═════════════ TELAS ═════════════ */
 const TELAS = {
   Q0() {
+    if (modoSocio()) {
+      const emp = Q.empresa || (LINK && LINK.empresaNome) || 'a empresa';
+      montar({ rotulo: 'Cotação', titulo: `${donoNome()} já abriu o pedido.`,
+        texto: `A cotação da <b>${esc(emp)}</b> sai num documento só, com um valor por sócio. Falta a sua parte dela.`,
+        corpo: `<div class="painel">
+            <div class="linha">Empresa: <b>${esc(emp)}</b></div>
+            <div class="linha">Pedido aberto por: <b>${esc(((PEDIDO.contato || {}).nome) || 'outro sócio')}</b></div>
+            <div class="linha">Protocolo: <b>${protocolo()}</b></div>
+          </div>
+          <p class="nota">São os seus dados e o seu capital — nada sobre a parte dos outros. Leva menos de 2 minutos, e nenhuma pergunta é sobre saúde.</p>`
+          + btnContinuar('Completar os meus dados →') });
+      el('btCont').onclick = () => go(etapas()[0]);
+      return;
+    }
+    const jaTem = !(LINK && LINK.empresaNome) && !!(Q.empresa && Q.cnpj) && !Q.trocarEmpresa;
+    if (jaTem) {
+      montar({ rotulo: 'Cotação', titulo: 'Aproveitei o que você já me contou.',
+        texto: 'Leva uns 3 minutos, e nenhuma pergunta é sobre saúde: essas a seguradora faz depois, direto com cada sócio.',
+        corpo: `<div class="painel">
+            <div class="linha">Empresa: <b>${esc(Q.empresa)}</b></div>
+            <div class="linha">CNPJ: <b>${esc(Q.cnpj)}</b></div>
+          </div>
+          <p class="nota">Foi o que você informou na conversa. Se não for essa, dá para trocar.</p>`
+          + btnContinuar('Começar →') + `<button class="btn sec" id="btTrocar">Não é essa empresa</button>` });
+      el('btCont').onclick = () => go('Q1');
+      el('btTrocar').onclick = () => { Q.trocarEmpresa = true; go('Q0', true); };
+      return;
+    }
     const precisaEmpresa = !(LINK && LINK.empresaNome);
     montar({ rotulo: 'Cotação', titulo: 'Aproveitei o que você já me contou.',
       texto: 'Leva uns 3 minutos, e nenhuma pergunta é sobre saúde: essas a seguradora faz depois, direto com cada sócio.',
@@ -329,9 +470,15 @@ const TELAS = {
       const d = el('cnpj').value.replace(/\D/g, ''); if (d.length !== 14 || d === ultima) return;
       ultima = d; el('cnpjRes').innerHTML = '<p class="nota">Consultando o CNPJ…</p>';
       const r = await _cnpjConsulta(d);
+      /* A consulta leva segundos; nesse meio-tempo a pessoa pode já ter seguido
+         para a próxima tela. Sem este guarda, a resposta chega num campo que
+         não existe mais e estoura. Os dados do CNPJ, esses, a gente guarda. */
+      if (!el('cnpj') || !el('cnpjRes')) { if (r.ok) { Q.cnpjFonte = r.fonte; Q.tipo = tipoDaNatureza(r.natureza, r.natCod) || Q.tipo || null; } return; }
       if (d !== el('cnpj').value.replace(/\D/g, '')) return;
-      if (r.ok) { Q.cnpjFonte = r.fonte; Q.cnpjDados = { razao: r.razao, fantasia: r.fantasia || null, cidade: r.cidade || null, uf: r.uf || null };
-        el('emp').value = r.fantasia || r.razao; el('cnpjRes').innerHTML = `<div class="reac">✓ <b>${esc(r.razao)}</b>${r.cidade ? '<br>' + esc(r.cidade) + (r.uf ? ' · ' + esc(r.uf) : '') : ''}</div>`; }
+      if (r.ok) { Q.cnpjFonte = r.fonte; Q.cnpjDados = { razao: r.razao, fantasia: r.fantasia || null, cidade: r.cidade || null, uf: r.uf || null, natureza: r.natureza || null };
+        Q.tipo = tipoDaNatureza(r.natureza, r.natCod) || Q.tipo || null;
+        if (!Q.tipo && R.nSocios === '1') Q.tipo = 'slu';
+        el('emp').value = r.fantasia || r.razao; el('cnpjRes').innerHTML = `<div class="reac">✓ <b>${esc(r.razao)}</b>${r.cidade ? '<br>' + esc(r.cidade) + (r.uf ? ' · ' + esc(r.uf) : '') : ''}${r.natureza ? '<br>' + esc(r.natureza) : ''}</div>`; }
       else { Q.cnpjFonte = null; el('cnpjRes').innerHTML = `<p class="nota">${CNPJ_MSG[r.motivo]}</p>`; }
       ok();
     };
@@ -350,15 +497,13 @@ const TELAS = {
 
   Q2() {
     if (Q.valorFaixa == null && R.b3faixa != null) Q.valorFaixa = R.b3faixa;
-    montar({ rotulo: rotuloEtapa('Q2'), titulo: 'Sobre a empresa, três cliques.',
-      corpo: `<p class="pergunta">Tipo de sociedade</p>${grupoOps('gTipo', [['ltda', 'Ltda'], ['slu', 'Ltda unipessoal <small>SLU</small>'], ['sa', 'S.A.'], ['simples', 'Sociedade Simples'], ['eireli', 'EIRELI'], ['coop', 'Cooperativa'], ['ei', 'Empresário individual'], ['outra', 'Outra'], ['naosei', 'Não sei']], Q.tipo, 'grade2')}
-        <p class="pergunta">Existe acordo de sócios ou valuation recente?</p>${grupoOps('gAc', [['acordo', 'Acordo de sócios'], ['valuation', 'Valuation recente'], ['ambos', 'Os dois'], ['nao', 'Nenhum'], ['naosei', 'Não sei']], Q.acordo, 'grade2')}
+    montar({ rotulo: rotuloEtapa('Q2'), titulo: 'Sobre a empresa, dois cliques.',
+      corpo: `<p class="pergunta">Existe acordo de sócios ou valuation recente?</p>${grupoOps('gAc', [['acordo', 'Acordo de sócios'], ['valuation', 'Valuation recente'], ['ambos', 'Os dois'], ['nao', 'Nenhum'], ['naosei', 'Não sei']], Q.acordo, 'grade2')}
         <p class="pergunta">Quanto vale a empresa hoje?</p>
         <div class="ops grade2" id="gVal">${VALORES_TXT.map((t, i) => `<button class="op ${Q.valorFaixa === i && !Q.valorExato ? 'sel' : ''}" data-v="${i}">${t}</button>`).join('')}</div>
         <label class="lbl">Ou o valor aproximado (opcional)</label><input class="campo" id="vEx" inputmode="numeric" placeholder="R$ 0" value="${Q.valorExato ? mascaraReais(Q.valorExato) : ''}">
         <p class="nota">Serve só para sugerir o capital de cada sócio. Pode ser valuation, proposta de compra ou patrimônio líquido — nunca o capital social.</p>` + btnContinuar() });
-    const valida = () => { el('btCont').disabled = !(Q.tipo && Q.acordo && (Q.valorFaixa != null || Q.valorExato)); };
-    ligarGrupo('gTipo', v => { Q.tipo = v; valida(); });
+    const valida = () => { el('btCont').disabled = !(Q.acordo && (Q.valorFaixa != null || Q.valorExato)); };
     ligarGrupo('gAc', v => { Q.acordo = v; valida(); });
     ligarGrupo('gVal', v => { Q.valorFaixa = Number(v); Q.valorExato = null; el('vEx').value = ''; valida(); });
     el('vEx').oninput = () => { el('vEx').value = mascaraReais(el('vEx').value); Q.valorExato = numReais(el('vEx').value); if (Q.valorExato) el('gVal').querySelectorAll('.op').forEach(x => x.classList.remove('sel')); valida(); };
@@ -367,14 +512,24 @@ const TELAS = {
   },
 
   Q3() {
-    if (!Q.socios.length) { const n = R.nSocios === '10+' ? 10 : Number(R.nSocios || 2); for (let k = 0; k < n; k++) Q.socios.push(novoSocio(k)); }
+    if (!Q.socios.length) {
+      const n = R.nSocios === '10+' ? 10 : Number(R.nSocios || 2);
+      for (let k = 0; k < n; k++) Q.socios.push(novoSocio(k));
+      // quem respondeu a conversa é o sócio 1: o nome dele já veio
+      const meu = (R.contato && R.contato.nome) || R.cNome;
+      if (meu && Q.socios[0]) Q.socios[0].nome = String(meu).trim().split(/\s+/)[0];
+      /* A conta da família já rodou na apresentação, com ele olhando. Chegar
+         aqui com o capital em branco faria o cliente escolher duas vezes. */
+      if (temRg() && familiaVeioDaConversa() && Q.socios[0]) Q.socios[0].rg = 'rec';
+    }
     const avisos = [];
     if (R.perfil && R.perfil.includes('holding')) avisos.push('Sócio que participa por holding não entra neste seguro; a holding pode contratar o dela, em separado.');
     if (R.morte === 'andamento') avisos.push('Se algum sócio é um espólio, não o inclua agora: quando os herdeiros entrarem na sociedade, eles podem ser incluídos.');
-    montar({ rotulo: rotuloEtapa('Q3'), titulo: 'Quem vamos proteger?', info: 'capital',
-      texto: 'Um cartão por sócio. O capital da Pessoa Chave é sugerido pela participação de cada um; você pode mudar.',
+    montar({ rotulo: rotuloEtapa('Q3'), titulo: modoSocio() ? 'Os seus dados.' : 'Quem vamos proteger?', info: 'capital',
+      texto: modoSocio() ? 'Só o seu cartão. O capital da Pessoa Chave é sugerido pela sua participação; você pode mudar.'
+        : 'Um cartão por sócio. O capital da Pessoa Chave é sugerido pela participação de cada um; você pode mudar.',
       corpo: (avisos.length ? `<div class="reac">${avisos.join('<br><br>')}</div>` : '') + `<div id="lista"></div>
-        <button class="btn sec" id="btAdd">+ Adicionar sócio</button>
+        <button class="btn sec" id="btAdd" ${modoSocio() ? 'style="display:none"' : ''}>+ Adicionar sócio</button>
         <button class="btn sec" id="btEnviar" style="display:none">📨 Enviar o link para os sócios preencherem</button>` + btnContinuar() });
     const chips = (campo, opcoes, s) => `<div class="mini">${opcoes.map(([v, t]) => `<button class="op ${s[campo] === v ? 'sel' : ''}" data-campo="${campo}" data-v="${v}">${t}</button>`).join('')}</div>`;
     const notas = s => {
@@ -388,12 +543,12 @@ const TELAS = {
     const card = (s, k) => {
       const sug = capitalSugerido(s);
       return `<div class="socio ${s.incluir ? '' : 'fora'}" data-k="${k}">
-        <div class="socio-t"><span>${k === 0 ? 'Você' : 'Sócio ' + (k + 1)}</span><button data-acao="tog">${s.incluir ? 'Não incluir' : 'Incluir de novo'}</button></div>
+        <div class="socio-t"><span>${k === 0 ? 'Você' : 'Sócio ' + (k + 1)}</span>${modoSocio() ? '' : `<button data-acao="tog">${s.incluir ? 'Não incluir' : 'Incluir de novo'}</button>`}</div>
         ${s.incluir && k > 0 ? `<button class="op ${s.porSocio ? 'sel' : ''}" data-acao="proprio" style="margin-top:10px;padding:10px 12px;font-size:13px">Ele mesmo preenche os próprios dados</button>` : ''}
         ${s.incluir && s.porSocio ? `<p class="nota">Ele recebe o link e informa os próprios dados. A cotação dele entra no mesmo documento.</p>` : ''}
         ${s.incluir && !s.porSocio ? `
         <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:8px">
-          <div><label class="lbl">Primeiro nome (opcional)</label><input class="campo" data-in="nome" value="${esc(s.nome)}"></div>
+          <div><label class="lbl">Primeiro nome</label><input class="campo" data-in="nome" value="${esc(s.nome)}"></div>
           <div><label class="lbl">Participação %</label><input class="campo" data-in="pct" inputmode="decimal" placeholder="ex.: 16,13" value="${esc(s.pct)}"></div>
         </div>
         <label class="lbl">Data de nascimento <span class="idade-txt" style="color:var(--verde);font-weight:700">${s.idade != null ? '· ' + s.idade + ' anos' : ''}</span></label>
@@ -404,7 +559,8 @@ const TELAS = {
         ${temPc() ? `<label class="lbl">Pessoa Chave · capital</label>${chips('pc', [...(sug ? [['sug', 'Sugerido: ' + fmtCap(sug)]] : []), ['outro', 'Outro valor'], ['rec', 'Recomendação'], ['nao', 'Não incluir']], s)}
           ${s.pc === 'outro' ? `<input class="campo" data-in="pcOutro" inputmode="numeric" placeholder="R$ 0" style="margin-top:8px" value="${s.pcOutro ? mascaraReais(s.pcOutro) : ''}"><div class="nota">De R$ 200 mil a R$ 12 milhões.</div>` : ''}
           ${!sug && !numPct(s.pct) ? `<div class="nota">Informe a participação para ver o capital sugerido.</div>` : ''}` : ''}
-        ${temRg() ? `<label class="lbl">Resgatável Único · capital para a família</label>${chips('rg', [['nao', 'Não incluir'], ['500k', 'R$ 500 mil'], ['1mi', 'R$ 1 mi'], ['outro', 'Outro valor'], ['rec', 'Recomendação']], s)}
+        ${temRg() ? `<label class="lbl">Resgatável Único · capital para a família</label>${chips('rg', [['nao', 'Não incluir'], ['500k', 'R$ 500 mil'], ['1mi', 'R$ 1 mi'], ['outro', 'Outro valor'], ['rec', (k === 0 && contaFamilia() && !contaFamilia().parcial) ? 'Nossa conta: ' + fmtCap(contaFamilia().cap) : 'Recomendação']], s)}
+          ${k === 0 && s.rg === 'rec' && contaFamilia() && !contaFamilia().parcial ? `<div class="nota">${familiaVeioDaConversa() ? 'É a conta que você viu na apresentação: s' : 'S'}ustento de ${MESES_INVENTARIO} meses + ${Math.round(TX_SUCESSAO * 100)}% sobre o patrimônio${contaFamilia().jaTem ? ', menos o seguro que você já tem' : ''}. Toque em outro valor se quiser mudar.</div>` : ''}
           ${s.rg === 'outro' ? `<input class="campo" data-in="rgOutro" inputmode="numeric" placeholder="R$ 0" style="margin-top:8px" value="${s.rgOutro ? mascaraReais(s.rgOutro) : ''}"><div class="nota">De R$ 200 mil a R$ 12 milhões.</div>` : ''}` : ''}
         <div class="notas">${notas(s)}</div>` : ''}
       </div>`;
@@ -425,7 +581,8 @@ const TELAS = {
       el('lista').innerHTML = Q.socios.map(card).join('');
       el('lista').querySelectorAll('.socio').forEach(c => {
         const s = Q.socios[Number(c.dataset.k)];
-        c.querySelector('[data-acao="tog"]').onclick = () => { s.incluir = !s.incluir; desenhar(); };
+        const tg = c.querySelector('[data-acao="tog"]');   // no modo sócio não existe: ele não se exclui do próprio pedido
+        if (tg) tg.onclick = () => { s.incluir = !s.incluir; desenhar(); };
         const pr = c.querySelector('[data-acao="proprio"]'); if (pr) pr.onclick = () => { s.porSocio = !s.porSocio; desenhar(); };
         c.querySelectorAll('button[data-campo]').forEach(b => b.onclick = () => { s[b.dataset.campo] = b.dataset.v; desenhar(); });
         c.querySelectorAll('input[data-in]').forEach(inp => {
@@ -458,6 +615,38 @@ const TELAS = {
     desenhar();
   },
 
+  /* A conta da família: o que o Resgatável precisa cobrir. Fica aqui, no
+     questionário, porque nem todo cliente recebe a apresentação antes — quando
+     recebe, as duas respostas já vêm preenchidas da conversa. */
+  Q3b() {
+    semearFamilia();
+    montar({ rotulo: rotuloEtapa('Q3b'), titulo: 'Agora a conta da <em>família</em>.', info: 'contaFamilia',
+      texto: 'Duas perguntas para eu sugerir o capital do Resgatável com a sua realidade, e não com um número redondo qualquer.',
+      corpo: `<p class="pergunta">Quanto a sua família gasta por mês, somando tudo?<small style="display:block;font-weight:500;color:var(--suave);margin-top:4px">Casa, escola, plano de saúde, parcelas de financiamento, fatura do cartão, gastos pessoais.</small></p>
+        ${grupoOps('gCusto', CUSTO_FAIXAS.map(f => [f[0], f[1]]), Q.famCusto, 'grade2')}
+        <p class="pergunta">E o patrimônio que entraria em inventário, somado?<small style="display:block;font-weight:500;color:var(--suave);margin-top:4px">Imóveis, veículos, aplicações e a sua participação na empresa.</small></p>
+        ${grupoOps('gPatrim', PATRIM_FAIXAS.map(f => [f[0], f[1]]), Q.famPatrim, 'grade2')}
+        <div id="contaOut"></div>` + btnContinuar() });
+    const desenhar = () => {
+      const c = contaFamilia();
+      el('btCont').disabled = !(Q.famCusto && Q.famPatrim);
+      if (!c) { el('contaOut').innerHTML = ''; return; }
+      el('contaOut').innerHTML = `<div class="painel" style="margin-top:16px">
+        <h3 class="sub" style="margin-top:0">O que essa conta dá</h3>
+        <table class="t">
+          ${c.mensal != null ? `<tr><td>Sustento por <b>${MESES_INVENTARIO} meses</b> de inventário</td><td class="num">${brlCap(c.sustento)}</td></tr>` : ''}
+          ${c.patr != null ? `<tr><td>Custo de transmitir o patrimônio <b>(${Math.round(TX_SUCESSAO * 100)}%)</b></td><td class="num">${brlCap(c.sucessao)}</td></tr>` : ''}
+          ${c.jaTem ? `<tr><td>Menos o seguro de vida que você já tem</td><td class="num">− ${brlCap(c.jaTem)}</td></tr>` : ''}
+        </table>
+        <div class="linha" style="margin-top:10px;font-size:17px"><b>Sugestão de capital: <span style="color:var(--dourado)">${fmtCap(c.cap)}</span></b></div>
+        <p class="nota">${c.parcial ? 'Faltou uma das duas faixas — a sugestão está incompleta. ' : ''}É uma estimativa para dar ordem de grandeza; toque no <b>ⓘ</b> do título para ver de onde sai cada número. Você escolhe o valor final no próximo passo.</p>
+      </div>`;
+    };
+    ligarGrupo('gCusto', v => { Q.famCusto = v; desenhar(); });
+    ligarGrupo('gPatrim', v => { Q.famPatrim = v; desenhar(); });
+    desenhar();
+    el('btCont').onclick = () => go(proxima('Q3b'));
+  },
   Q4() {
     montar({ rotulo: rotuloEtapa('Q4'), titulo: 'Qual versão do Resgatável?', info: 'versoes',
       corpo: grupoOps('g', [['dps', 'Com questionário de saúde <small>sem carência, com doenças graves — recomendada</small>'], ['carencia', 'Sem questionário, com carência <small>24 meses de carência só para morte natural; acidente coberto desde o 1º dia; até 70 anos</small>'], ['rec', 'Recomendação do corretor']], Q.versao)
@@ -512,20 +701,41 @@ const TELAS = {
   },
 
   Q8() {
-    const c = Q.contato || R.contato || {};
+    const c = Object.assign({ nome: '', email: '', tel: '' }, R.contato || {}, Q.contato || {});
+    /* Se a apresentação já colheu nome e um canal, isto é uma confirmação de um
+       toque — e não o terceiro lugar onde ele digita o próprio telefone. */
+    const completo = !!(c.nome && (c.email.includes('@') || String(c.tel).replace(/\D/g, '').length >= 10)) && !Q.editarContato;
+    if (completo) {
+      montar({ rotulo: rotuloEtapa('Q8'), titulo: 'Confirme o contato.',
+        texto: 'É o que você já me informou. Se mudou alguma coisa, dá para corrigir.',
+        corpo: `<div class="painel">
+            <div class="linha">Nome: <b>${esc(c.nome)}</b></div>
+            ${c.tel ? `<div class="linha">WhatsApp: <b>${esc(c.tel)}</b></div>` : ''}
+            ${c.email ? `<div class="linha">E-mail: <b>${esc(c.email)}</b></div>` : ''}
+          </div>
+          <button class="btn ouro" id="btCont">Enviar para o corretor →</button>
+          <button class="btn sec" id="btEditar">Corrigir os dados</button>` });
+      el('btEditar').onclick = () => { Q.editarContato = true; go('Q8', true); };
+      el('btCont').onclick = () => { Q.contato = { nome: c.nome, email: c.email, tel: c.tel }; go('FIM'); };
+      return;
+    }
     montar({ rotulo: rotuloEtapa('Q8'), titulo: 'Confirme o contato.',
       corpo: `<label class="lbl">Nome</label><input class="campo" id="cNome" value="${esc(c.nome)}">
         <label class="lbl">E-mail</label><input class="campo" id="cMail" type="email" value="${esc(c.email)}">
         <label class="lbl">WhatsApp</label><input class="campo" id="cTel" type="tel" inputmode="numeric" value="${esc(c.tel)}">
         <button class="btn ouro" id="btCont">Enviar para o corretor →</button>` });
     const valida = () => { el('btCont').disabled = !(el('cNome').value.trim() && (el('cMail').value.includes('@') || el('cTel').value.replace(/\D/g, '').length >= 10)); };
-    ['cNome', 'cMail', 'cTel'].forEach(k => el(k).oninput = valida); valida();
+    ['cNome', 'cMail', 'cTel'].forEach(k => el(k).oninput = valida);
+    el('cTel').oninput = () => { el('cTel').value = mascaraTel(el('cTel').value); valida(); };
+    valida();
     el('btCont').onclick = () => { Q.contato = { nome: el('cNome').value.trim(), email: el('cMail').value.trim(), tel: el('cTel').value.trim() }; go('FIM'); };
   },
 
   FIM() {
     montar({ corpo: `<div class="fim"><div class="ico">✅</div><h1 class="titulo">Recebemos tudo.</h1>
-      <p class="texto">A cotação vem por sócio, num documento só. Na contratação, cada sócio responde o próprio questionário de saúde, e as carências ficam destacadas antes de qualquer assinatura.</p>
+      <p class="texto">${modoSocio()
+        ? `Os seus dados entraram no mesmo pedido de ${esc(donoNome())}. A cotação vem por sócio, num documento só. Na contratação, cada sócio responde o próprio questionário de saúde, e as carências ficam destacadas antes de qualquer assinatura.`
+        : 'A cotação vem por sócio, num documento só. Na contratação, cada sócio responde o próprio questionário de saúde, e as carências ficam destacadas antes de qualquer assinatura.'}</p>
       <div class="painel"><div class="linha">Protocolo: <b>${protocolo()}</b></div>${resumoHtml()}</div></div>` });
   }
 };
@@ -540,7 +750,7 @@ function resumoHtml() {
 }
 function analitico(final) {
   const inc = Q.socios.filter(s => s.incluir);
-  return { esquema: 3, produto: PRODUTO.id, etapa: 'cotacao', completo: !!final, produtosCod: Q.produtos, tipoSocietario: Q.tipo, acordoSocios: Q.acordo,
+  return { esquema: 3, produto: PRODUTO.id, etapa: 'cotacao', completo: !!final, papel: modoSocio() ? 'socio' : 'dono', pedidoDe: modoSocio() ? PEDIDO.respId : null, produtosCod: Q.produtos, tipoSocietario: Q.tipo || 'naosei', tipoOrigem: Q.tipo ? 'cnpj' : 'nao_identificado', acordoSocios: Q.acordo,
     valorEmpresaBase: valorBase(), nSegurados: inc.length,
     capitalPcTotal: inc.reduce((t, s) => t + (capitalPc(s) || 0), 0) || null, capitalRgTotal: inc.reduce((t, s) => t + (capitalRg(s) || 0), 0) || null,
     socios: inc.map(s => ({ nome: s.nome || null, pct: numPct(s.pct), idade: s.idade, nasc: s.nasc || null, sexo: s.sexo, atua: s.atua, porSocio: !!s.porSocio,
@@ -614,6 +824,9 @@ async function salvar(final) {
     await db.collection('mb_apresentacoes').doc(SESSAO).set({
       questionario: JSON.parse(JSON.stringify(Q)), analiticoQ: analitico(feito),
       questionarioCompleto: feito, passoQ: atual, arqVersaoQ: ARQ_VERSAO,
+      // Quem é este respondente dentro do grupo: dono do pedido ou sócio convidado.
+      papelQ: modoSocio() ? 'socio' : 'dono', pedidoDe: modoSocio() ? PEDIDO.respId : null,
+      ...(modoSocio() && Q.empresa && !(LINK && LINK.empresaNome) ? { empresaNome: Q.empresa } : {}),
       // Campos que o PAINEL lê no card (bloco Vida Sócios + 📋 perguntas). Não renomear.
       analitico: analiticoPainel(),
       questionarioAberto: true,
@@ -621,6 +834,21 @@ async function salvar(final) {
       questTotal: _et.length,
       atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
+    /* A promessa ao cliente é "um documento só". Se o corretor tivesse que
+       juntar dois cards à mão, a promessa morria no painel. Então o sócio
+       convidado grava os dados dele TAMBÉM no pedido do dono, numa chave
+       própria — o card do pedido passa a ter todo mundo. */
+    if (feito && modoSocio() && PEDIDO && PEDIDO.respId) {
+      const meu = Q.socios[0] || {};
+      await db.collection('mb_apresentacoes').doc('vidasocios_' + GRUPO + '_' + PEDIDO.respId).set({
+        sociosExtras: { [RESPID]: {
+          respId: RESPID, nome: meu.nome || null, pct: numPct(meu.pct), nasc: meu.nasc || null, idade: meu.idade,
+          sexo: meu.sexo || null, atua: meu.atua || null, capitalPc: capitalPc(meu), capitalRg: capitalRg(meu),
+          contato: Q.contato || null, em: new Date().toISOString()
+        } },
+        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
   } catch (e) { console.warn('salvar', e); }
 }
 
@@ -654,6 +882,32 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       const doc = await db.collection('mb_apresentacoes').doc(SESSAO).get();
       if (doc.exists) { const d = doc.data() || {}; if (d.respostas) R = Object.assign(R, d.respostas); if (d.questionario && !d.questionarioCompleto) Q = Object.assign(Q, d.questionario); }
+      /* A versão em conversa já pergunta CNPJ, nome da empresa e nome de quem
+         responde. Repetir isso aqui é o jeito mais rápido de irritar o cliente. */
+      if (!Q.cnpj && R.cCnpj) Q.cnpj = R.cCnpj;
+      if (!Q.empresa) Q.empresa = R.cEmpresa || (R.contato && R.contato.empresa) || null;
+      /* Semear ANTES da primeira tela, e não dentro de cada etapa: é `etapas()`
+         que decide se o Q3b aparece, e ela roda já no Q0 para numerar os passos. */
+      semearInicial();
+      /* Alguém deste grupo já abriu o pedido da empresa? Então quem chega agora
+         é sócio convidado: completa a parte dele no mesmo documento, em vez de
+         abrir um segundo pedido da mesma empresa para o corretor juntar à mão.
+         Só conta como pedido quem o abriu como DONO — assim um convidado não
+         vira referência para o próximo. */
+      if (!Q.socios.length || !Q.questionarioProprio) {
+        try {
+          const gs = await db.collection('mb_apresentacoes').where('grupo', '==', GRUPO).limit(12).get();
+          gs.docs.forEach(x => {
+            const d = x.data() || {};
+            if (d.respId === RESPID || PEDIDO) return;
+            if (d.papelQ === 'socio') return;
+            const q = d.questionario;
+            if (!q || !Array.isArray(q.socios) || !q.socios.length) return;
+            PEDIDO = { respId: d.respId, questionario: q, contato: q.contato || (d.respostas && d.respostas.contato) || {} };
+          });
+        } catch (e) { console.warn('grupo', e); }
+      }
+      if (PEDIDO) herdarDoPedido(); else Q.questionarioProprio = true;
       await db.collection('mb_apresentacoes').doc(SESSAO).set(Object.assign({ produtoId: PRODUTO.id, produtoNome: PRODUTO.nome, grupo: GRUPO, respId: RESPID, token: TOKEN || null,
         atualizadoEm: firebase.firestore.FieldValue.serverTimestamp() }, doc.exists ? {} : { criadoEm: firebase.firestore.FieldValue.serverTimestamp(), origem: 'questionario' },
         LINK ? { empresaId: LINK.empresaId || null, empresaNome: LINK.empresaNome || null, agenciaId: LINK.agenciaId || null } : {}), { merge: true });
