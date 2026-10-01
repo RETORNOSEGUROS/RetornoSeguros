@@ -109,6 +109,7 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   .anexo .m{font-size:11.5px; color:var(--tenue); white-space:nowrap}
 
   .vazio{color:var(--tenue); font-size:13px; font-style:italic}
+  .nota{color:var(--tenue); font-size:12.5px; line-height:1.55; margin-top:10px}
   .carregando{text-align:center; padding:70px 20px; color:var(--fraco)}
   #toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(90px);
     background:var(--tinta); color:#fff; padding:11px 20px; border-radius:100px; font-size:13.5px; font-weight:700;
@@ -445,6 +446,10 @@ const VALORES_TXT = ['Até R$ 5 mi', 'R$ 5 a 20 mi', 'R$ 20 a 50 mi', 'R$ 50 a 1
 const PARTS_TXT = ['Até 10%', '10 a 25%', '25 a 50%', '50 a 75%', 'Acima de 75%'];
 const CAP_ATUAL_TXT = ['Até R$ 500 mil', 'R$ 500 mil a 2 mi', 'R$ 2 a 5 mi', 'Acima de R$ 5 mi', 'Não sei o total'];
 const IDADES_EX_TXT = ['30 anos', '45 anos', '50 anos', '55 anos', '62 anos'];
+/* mesmas listas, na mesma ordem, da conversa e do questionário */
+const CUSTO_FAM_TXT = ['Até R$ 10 mil', 'R$ 10 a 25 mil', 'R$ 25 a 50 mil', 'Acima de R$ 50 mil', 'Não sabe somar'];
+const PATRIM_FAM_TXT = ['Até R$ 1 mi', 'R$ 1 a 3 mi', 'R$ 3 a 10 mi', 'R$ 10 a 30 mi', 'Acima de R$ 30 mi', 'Não sabe somar'];
+const CUSTO_FAM_CHAVE = { ate10: 0, '10a25': 1, '25a50': 2, mais50: 3, naosei: 4 };
 
 const APRES = [
   { k: 'a1', p: 'Já tinha parado para pensar no que aconteceria?', ops: { ja: 'Já pensei nisso', nunca: 'Nunca parei para pensar' } },
@@ -467,6 +472,10 @@ const APRES = [
   { k: 'd1', p: 'Hoje ele tem seguro de vida?', multi: true, ops: { nao: 'Não tem', pessoal: 'Sim, pessoal', empresa: 'Sim, pago pela empresa', naosei: 'Não sei' } },
   { k: 'd1cap', p: 'Soma de todas as coberturas de vida hoje', idx: CAP_ATUAL_TXT },
   { k: 'primeira', p: 'Produto que ele quis ver primeiro', ops: { pc: 'Pessoa Chave', rg: 'Resgatável Único' } },
+  { k: 'famCusto', p: 'Quanto a família gasta por mês', idx: CUSTO_FAM_TXT },
+  { k: 'famPatrim', p: 'Patrimônio que entraria em inventário', idx: PATRIM_FAM_TXT },
+  { k: 'testePC', p: 'O que pesa para ele na Pessoa Chave', multi: true, ops: { emprestimo: 'Não precisar pegar empréstimo', comprar: 'Ter o dinheiro para comprar a parte dos herdeiros', custas: 'Pagar custas, honorários e papelada', operacao: 'Não travar a operação no inventário', herdeiro: 'Evitar herdeiro dentro da sociedade', nenhuma: 'Nenhuma dessas o preocupa' } },
+  { k: 'testeRG', p: 'O que pesa para ele no Resgatável', multi: true, ops: { padrao: 'Manter o padrão nos primeiros meses', inventario: 'Pagar o inventário sem vender nada', escolher: 'Deixar para quem escolher, fora da partilha', depender: 'Não deixar a família dependendo da empresa', resgate: 'Poder resgatar se quiser', nenhuma: 'Nenhuma dessas o preocupa' } },
   { k: 'saida', p: 'Como encerrou a apresentação', ops: { cotacao: 'Pediu a cotação', entender: 'Só queria entender por enquanto' } }
 ];
 
@@ -482,6 +491,7 @@ const Q_ATUA = { administra: 'Administra', trabalha: 'Trabalha na empresa', naoa
 
 function txtApres(item, v) {
   if (v == null || v === '') return null;
+  if (item.k === 'famCusto' && CUSTO_FAM_CHAVE[v] != null) v = CUSTO_FAM_CHAVE[v];
   if (Array.isArray(v)) { const l = v.map(x => (item.ops && item.ops[x]) || x).filter(Boolean); return l.length ? l.join(' · ') : null; }
   if (item.idx) { const i = Number(v); return item.idx[i] != null ? item.idx[i] : String(v); }
   if (item.ops && item.ops[v]) return item.ops[v];
@@ -512,7 +522,15 @@ const ANEXOS = () => {
   });
   return out;
 };
-const CONTATO = () => R().contato || {};
+/* O contato pode vir de dois lugares: a conversa colhe UM canal (ou nenhum) e o
+   questionário colhe os dois. Ler só a conversa fazia a ficha acusar "sem
+   contato" num pedido em que o cliente tinha informado telefone e e-mail.
+   O questionário é o mais recente, então ele manda — mas só onde preencheu. */
+const CONTATO = () => {
+  const a = R().contato || {}, b = Q().contato || {};
+  const pega = k => { const v = b[k]; return (v != null && String(v).trim()) ? String(v).trim() : ((a[k] != null && String(a[k]).trim()) ? String(a[k]).trim() : ''); };
+  return { nome: pega('nome'), email: pega('email'), tel: pega('tel') };
+};
 const temPC = () => ['pc', 'ambas', 'rec'].includes(Q().produtos);
 const temRG = () => ['rg', 'ambas', 'rec'].includes(Q().produtos);
 
@@ -668,6 +686,29 @@ function blocoSocios() {
         <tr class="tot"><td colspan="5">Capital total</td><td class="num">${totPc ? brl(totPc) : '—'}</td><td class="num">${totRg ? brl(totRg) : '—'}</td></tr>
       </tbody>
     </table></div>
+  </div>`;
+}
+
+/* ═══ de onde saiu o capital sugerido do Resgatável ═══
+   O corretor precisa poder abrir a conta na frente do cliente: "sustento de 18
+   meses + 11% sobre o patrimônio". Repetir o número sem a conta não sustenta
+   uma conversa de venda. */
+function blocoContaFamilia() {
+  const c = AQ().contaFamilia;
+  if (!c || (!c.sustento && !c.sucessao)) return '';
+  const pct = Math.round((c.taxaSucessao || 0.11) * 100);
+  const linhas = [
+    c.custoMensal ? ['Custo mensal da família', brl(c.custoMensal) + ' · teto da faixa marcada'] : null,
+    c.sustento ? [`Sustento por ${c.meses || 18} meses`, brl(c.sustento)] : null,
+    c.patrimonio ? ['Patrimônio em inventário', brl(c.patrimonio) + ' · teto da faixa marcada'] : null,
+    c.sucessao ? [`Custo de transmitir (${pct}%)`, brl(c.sucessao)] : null,
+    c.jaTem ? ['Menos o seguro de vida que ele já tem', '− ' + brl(c.jaTem)] : null
+  ].filter(Boolean);
+  return `<div class="bloco">
+    <div class="rot">Capital sugerido · Resgatável</div>
+    <h2>${brl(c.capitalSugerido)} para a família</h2>
+    <div class="grade">${linhas.map(([k, v]) => `<div class="caixa"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <p class="nota">${c.origem === 'apresentacao' ? 'Ele respondeu as duas faixas na apresentação e viu essa conta na tela.' : 'Ele respondeu as duas faixas no questionário de cotação.'}${c.parcial ? ' <b>Faltou uma das faixas — a conta está incompleta.</b>' : ''} Arredondado para cima, de R$ 100 mil em R$ 100 mil.</p>
   </div>`;
 }
 
@@ -902,6 +943,7 @@ function render() {
     ${blocoSemaforo()}
     ${blocoPedido()}
     ${blocoSocios()}
+    ${blocoContaFamilia()}
     ${blocoAnexos()}
     ${blocoGrupo()}
     ${blocoRespostas()}
