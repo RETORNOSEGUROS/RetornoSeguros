@@ -742,7 +742,18 @@ const TELAS = {
 
 /* ─── resumo e analítico ─── */
 function capitalPc(s) { if (!temPc() || !s.incluir || s.porSocio) return null; if (s.pc === 'sug') return capitalSugerido(s); if (s.pc === 'outro') return s.pcOutro; return null; }
-function capitalRg(s) { if (!temRg() || !s.incluir || s.porSocio) return null; return s.rg === '500k' ? 5e5 : s.rg === '1mi' ? 1e6 : s.rg === 'outro' ? s.rgOutro : null; }
+/* "Recomendação" no Resgatável deixou de ser um valor em branco: para o sócio 1
+   o chip mostra "Nossa conta: R$ X", então esse X tem que chegar na ficha do
+   corretor. Sem isto a ficha acusava "sem capital definido" num pedido que
+   tinha o número na tela. */
+function capitalRg(s) {
+  if (!temRg() || !s.incluir || s.porSocio) return null;
+  if (s.rg === '500k') return 5e5;
+  if (s.rg === '1mi') return 1e6;
+  if (s.rg === 'outro') return s.rgOutro;
+  if (s.rg === 'rec' && s === Q.socios[0]) { const c = contaFamilia(); if (c && !c.parcial) return c.cap; }
+  return null;
+}
 function resumoHtml() {
   const inc = Q.socios.filter(s => s.incluir);
   const tPc = inc.reduce((t, s) => t + (capitalPc(s) || 0), 0), tRg = inc.reduce((t, s) => t + (capitalRg(s) || 0), 0);
@@ -755,7 +766,14 @@ function analitico(final) {
     capitalPcTotal: inc.reduce((t, s) => t + (capitalPc(s) || 0), 0) || null, capitalRgTotal: inc.reduce((t, s) => t + (capitalRg(s) || 0), 0) || null,
     socios: inc.map(s => ({ nome: s.nome || null, pct: numPct(s.pct), idade: s.idade, nasc: s.nasc || null, sexo: s.sexo, atua: s.atua, porSocio: !!s.porSocio,
       capitalPc: capitalPc(s), pcEscolha: s.pc, capitalRg: capitalRg(s), rgEscolha: s.rg, elegivelVida: s.idade != null && s.idade <= 65 })),
-    versaoRg: temRg() ? Q.versao : null, coberturasVida: Q.dg, pagPc: temPc() ? Q.pagPc : null, pagRg: temRg() ? Q.pagRg : null, documentos: Q.docs, nAnexos: Q.anexos.length };
+    versaoRg: temRg() ? Q.versao : null, coberturasVida: Q.dg, pagPc: temPc() ? Q.pagPc : null, pagRg: temRg() ? Q.pagRg : null, documentos: Q.docs, nAnexos: Q.anexos.length,
+    /* A conta que gerou o capital sugerido, aberta: o corretor precisa poder
+       explicar o número ao cliente, não só repeti-lo. */
+    contaFamilia: (() => { const c = contaFamilia(); if (!c) return null;
+      return { custoFaixa: Q.famCusto || null, custoMensal: c.mensal, patrimFaixa: Q.famPatrim || null, patrimonio: c.patr,
+        meses: MESES_INVENTARIO, sustento: c.sustento, taxaSucessao: TX_SUCESSAO, sucessao: c.sucessao,
+        jaTem: c.jaTem || 0, capitalSugerido: c.cap, parcial: !!c.parcial,
+        origem: familiaVeioDaConversa() ? 'apresentacao' : 'questionario' }; })() };
 }
 /* Espelho do analítico no formato que o card do painel já sabe desenhar
    (_apVidaSocios lê `analitico` com os códigos pe_/pg_/cv_). Sem isto, o bloco
