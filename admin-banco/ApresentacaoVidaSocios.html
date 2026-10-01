@@ -642,6 +642,7 @@ const brlv = v => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
 
 async function fechar(PN) {
   PN = PN || esc(((R.contato || {}).nome || '').trim().split(/\s+/)[0] || 'você');
+  aquecerPDF();          // a biblioteca já vai chegando enquanto ele lê o fecho
   salvar(true);
   await diz('Recebido. O seu diagnóstico já está com a corretora.');
   await diz('E uma coisa que a gente aprendeu em toda sociedade: <b>sucessão nunca é decisão de uma pessoa só.</b>');
@@ -833,18 +834,39 @@ function _nomeArquivo() {
   const quem = (c.nome && c.nome.trim().split(/\s+/)[0]) || (emp ? emp.trim().split(/\s+/).slice(0, 2).join(' ') : '');
   return ((quem ? quem + ' - ' : '') + 'Diagnóstico de sucessão').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim() + '.pdf';
 }
-function carregarJsPDF() {
-  if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(true);
+/* Três espelhos, tentados em ordem. Uma CDN fora do ar, bloqueada pela rede da
+   empresa ou lenta no 4G não pode ser o motivo de o cliente não levar o PDF. */
+const JSPDF_URLS = [JSPDF_URL,
+  'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js',
+  'https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js'];
+let _jspdfProm = null;
+function _carregarUm(url) {
   return new Promise(ok => {
     let fim = false; const pronto = v => { if (!fim) { fim = true; ok(v); } };
     const t = document.createElement('script');
-    t.src = JSPDF_URL;
+    t.src = url;
     t.onload = () => pronto(!!(window.jspdf && window.jspdf.jsPDF));
     t.onerror = () => pronto(false);
     document.head.appendChild(t);
-    setTimeout(() => pronto(!!(window.jspdf && window.jspdf.jsPDF)), 12000);
+    setTimeout(() => pronto(!!(window.jspdf && window.jspdf.jsPDF)), 9000);
   });
 }
+function carregarJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(true);
+  if (_jspdfProm) return _jspdfProm;
+  _jspdfProm = (async () => {
+    for (const u of JSPDF_URLS) {
+      if (await _carregarUm(u)) return true;
+      console.warn('jsPDF não carregou de', u);
+    }
+    _jspdfProm = null;   // deixa tentar de novo num próximo clique
+    return false;
+  })();
+  return _jspdfProm;
+}
+/* Começar a baixar a biblioteca ANTES de o botão aparecer: no iPhone, um
+   download que sai muitos segundos depois do toque é bloqueado pelo Safari. */
+function aquecerPDF() { try { carregarJsPDF(); } catch (e) {} }
 /* dados usados pelos dois desenhos (vetor e HTML), para não divergirem */
 function _dadosPDF() {
   const idx = R.c6 != null ? R.c6 : (C2_PARA_EX[R.c2] != null ? C2_PARA_EX[R.c2] : 1);
@@ -1074,10 +1096,13 @@ async function imprimir(ev) {
   document.body.appendChild(capa);
   if (bt) { bt.disabled = true; bt.textContent = 'Gerando o PDF…'; }
   try {
-    if (!await carregarJsPDF()) throw new Error('biblioteca indisponível');
+    if (!await carregarJsPDF()) throw new Error('CDN');
     _desenharPDF().save(_nomeArquivo());
   } catch (e) {
-    toastConv('Não consegui gerar o PDF agora. Tente de novo em instantes.');
+    console.error('PDF', e);
+    toastConv(String(e && e.message) === 'CDN'
+      ? 'A internet daqui bloqueou a biblioteca do PDF. Tente de novo, ou peça o arquivo à corretora.'
+      : 'Deu um erro ao montar o PDF. Toque de novo — se repetir, a corretora envia por WhatsApp.');
   } finally {
     if (capa.parentNode) capa.parentNode.removeChild(capa);
     if (bt) { bt.disabled = false; bt.textContent = rotuloBt; }
