@@ -10001,14 +10001,13 @@ async function ppGerarLink(){
      (FIPE, comissão, observações) não chega na página do cliente */
   await ppSalvarOrcamento();
   if(!ORC.id) return;
-  const base=location.href.split('#')[0].replace(/[^/]*$/,'');
-  const url=base+'proposta.html?id='+ORC.id;
+  const url=location.origin+'/propostaautocli.html?id='+ORC.id;   /* página do cliente fica na RAIZ do site */
   if(typeof neMarcarCotacaoEnviada==='function') neMarcarCotacaoEnviada(ORC.leadId);
   const box=document.getElementById('ppLinkBox');
   if(box) box.innerHTML=`<div style="background:var(--brand-50);border-radius:12px;padding:14px 16px">
     <div style="font-size:.82rem;color:var(--text-2);margin-bottom:7px">
       <i class="fas fa-circle-info"></i> O cliente abre este link e vê o comparativo sem precisar de senha.
-      O arquivo <b>proposta.html</b> precisa estar no mesmo endereço do CRM. Lá ele escolhe a opção e clica em <b>Contratar</b>.</div>
+      O arquivo <b>propostaautocli.html</b> fica na raiz do site. Lá ele escolhe a opção e clica em <b>Contratar</b>.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="text" readonly value="${esc(url)}" id="ppUrl" style="flex:1;min-width:260px;font-size:.85rem">
       <button class="btn btn-primary btn-sm" onclick="ppCopiar('${esc(url)}')"><i class="fas fa-copy"></i> Copiar</button>
@@ -10023,8 +10022,7 @@ function ppCopiar(t){
   else{ const i=document.getElementById('ppUrl'); if(i){ i.select(); document.execCommand('copy'); toast('Link copiado.','ok'); } }
 }
 function ppEnviarWhats(){
-  const base=location.href.split('#')[0].replace(/[^/]*$/,'');
-  const url=base+'proposta.html?id='+ORC.id;
+  const url=location.origin+'/propostaautocli.html?id='+ORC.id;   /* página do cliente fica na RAIZ do site */
   const nome=(ORC.cliente.nome||'').split(' ')[0];
   const t=`Oi ${nome}! Preparei a proposta do seu seguro auto com as opções que cotamos para você. É só abrir, comparar e, se gostar, clicar em Contratar: ${url}`;
   if(typeof neMarcarCotacaoEnviada==='function') neMarcarCotacaoEnviada(ORC.leadId);
@@ -12543,9 +12541,10 @@ function nePinsCard(l){
 function nePagamentoHtml(ct){
   if(!ct) return '';
   const linhas=[`<b>${esc(neForma(ct.forma))}</b>${ct.parcelas?' · '+ct.parcelas+'x'+(ct.valorParcela?' de '+money(ct.valorParcela):''):''}`];
-  if(ct.forma==='cartao'&&ct.cartao) linhas.push(`${esc(ct.cartao.bandeira||'Cartão')} final <b>${esc(ct.cartao.final||'')}</b> · ${esc(ct.cartao.nome||'')}
+  if(ct.forma==='cartao'&&ct.cartao) linhas.push(`${esc(ct.cartao.bandeira||'Cartão')} final <b>${esc(ct.cartao.final||'')}</b>
      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="neVerCartao('${ct.id}')"><i class="fas fa-eye"></i> ver número</button>`);
-  if(ct.forma==='debito'&&ct.debito) linhas.push(`Banco <b>${esc(ct.debito.banco||'')}</b> · ag. <b>${esc(ct.debito.agencia||'')}</b> · conta <b>${esc(ct.debito.conta||'')}</b>${ct.debito.titular?' · '+esc(ct.debito.titular):''}`);
+  if(ct.forma==='debito') linhas.push(`Dados bancários informados pelo cliente
+     <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="neVerDebito('${ct.id}')"><i class="fas fa-eye"></i> ver banco, agência e conta</button>`);
   return linhas.join('<br>');
 }
 function nePainel(c){
@@ -13245,6 +13244,18 @@ async function neVerCartao(ctId){
         <button class="btn btn-primary" onclick="${k.leadId?`abrirLead('${esc(k.leadId)}')`:'closeModal()'}">Ok</button></div>`);
   }catch(e){ toast('Sem permissão para ler o cartão (confira as regras do Firestore).','err'); }
 }
+async function neVerDebito(ctId){
+  try{ const d=await db.collection('contratacoes').doc(ctId).get(); const x=(d.exists&&d.data().debito)||null;
+    if(!x){ toast('Dados bancários não encontrados.','info'); return; }
+    openModal(`<div class="modal-head"><h3><i class="fas fa-building-columns" style="color:var(--brand)"></i> Débito em conta</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+      <div class="modal-body"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 14px">
+        <div class="mov-f"><div class="k">Banco</div><div class="v">${esc(x.banco||'')}</div></div>
+        <div class="mov-f"><div class="k">Titular</div><div class="v">${esc(x.titular||'')}</div></div>
+        <div class="mov-f"><div class="k">Agência</div><div class="v">${esc(x.agencia||'')}</div></div>
+        <div class="mov-f"><div class="k">Conta</div><div class="v">${esc(x.conta||'')}</div></div></div></div>
+      <div class="modal-foot"><button class="btn btn-primary" onclick="${d.data().leadId?`abrirLead('${esc(d.data().leadId)}')`:'closeModal()'}">Ok</button></div>`);
+  }catch(e){ toast('Sem permissão para ler (confira as regras).','err'); }
+}
 async function neApagarCartaoAgora(ctId,leadId){
   try{ await db.collection('contratacoes_cartao').doc(ctId).delete();
     if(leadId){ try{ await db.collection('leads_crm').doc(leadId).update({'contratacao.cartaoApagado':true}); }catch(e){} }
@@ -13286,7 +13297,7 @@ async function neReceberContratacao(id,d){
       t.update(ref,{status:'recebido',recebidoEm:FV.serverTimestamp(),recebidoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin'}); return true; });
     if(!ok||!d.leadId) return;
     const ct={id,opcaoIndex:d.opcaoIndex!=null?d.opcaoIndex:null,seguradora:d.seguradora||null,produto:d.produto||null,premioTotal:d.premioTotal||null,
-      forma:d.forma||null,parcelas:d.parcelas||null,valorParcela:d.valorParcela||null,debito:d.debito||null,cartao:d.cartao||null,em:d.criadoEm||null};
+      forma:d.forma||null,parcelas:d.parcelas||null,valorParcela:d.valorParcela||null,cartao:d.cartao?{bandeira:d.cartao.bandeira||null,final:d.cartao.final||null}:null,em:d.criadoEm||null};
     await db.collection('leads_crm').doc(d.leadId).update({contratacao:ct,contratacaoId:id,atualizadoEm:FV.serverTimestamp()});
     const l=neLead(d.leadId)||{};
     await neNota(d.leadId,'★ Cliente clicou em CONTRATAR no link: '+(d.seguradora||'')+' — '+money(d.premioTotal)+' · '+neForma(d.forma)+(d.parcelas?' '+d.parcelas+'x':''));
