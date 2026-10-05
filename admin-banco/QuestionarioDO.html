@@ -311,6 +311,18 @@ function montarAnalitico(finalizou) {
     investigacoesCod: g('q1_investigacoes', 'cod'), fatoConhecidoCod: g('q2_fatoConhecido', 'cod'),
     prejuizoCod: g('q3_prejuizo', 'cod'), auditoriaCod: g('auditoria', 'cod'),
     setorTexto: QRESP.setor || null,
+    /* O que a seguradora usa para enquadrar o risco: CNPJ e CNAE. Vinha sendo
+       digitado à mão pelo cliente (ou nem vinha) — agora chega da Receita. */
+    cnpj: QRESP.cnpj || null,
+    cnaePrincipal: (QRESP.cnpjDados && QRESP.cnpjDados.atividadePrincipal && QRESP.cnpjDados.atividadePrincipal.codigo) || null,
+    cnaePrincipalTxt: (QRESP.cnpjDados && QRESP.cnpjDados.atividadePrincipal && QRESP.cnpjDados.atividadePrincipal.descricao) || null,
+    cnaesSecundarios: ((QRESP.cnpjDados && QRESP.cnpjDados.atividadesSecundarias) || []).map(x => x.codigo).filter(Boolean),
+    naturezaJuridica: (QRESP.cnpjDados && QRESP.cnpjDados.natureza) || null,
+    porteReceita: (QRESP.cnpjDados && QRESP.cnpjDados.porte) || null,
+    /* exato quando o cliente digitou o número do balanço, faixa quando escolheu */
+    receitaOrigem: g('receitaLiquida', 'origem') || 'faixa',
+    patrimonioOrigem: g('patrimonio', 'origem') || 'faixa',
+    ativosOrigem: g('totalAtivos', 'origem') || 'faixa',
     sondasCod,
     coberturasCod: mant, coberturasRemovidasCod: remov,
     nCoberturas: mant.length, nRemovidas: remov.length
@@ -320,21 +332,24 @@ function montarAnalitico(finalizou) {
 /* ─── ROTEIRO ─── */
 const PERGUNTAS = [
   { fala: 'Olá! Sou o assistente da <strong>Retorno Seguros</strong>. Vou levantar os dados que as seguradoras pedem para cotar o <strong>D&O</strong>. São poucas perguntas e você responde no seu ritmo.', campo: null },
-  { fala: 'Primeiro, o nome da <strong>empresa</strong>:', campo: 'empresa', tipo: 'texto', ph: 'Razão social ou nome fantasia' },
-  { fala: 'Vamos aos números do balanço. Qual a <strong>receita líquida</strong> do exercício atual ou do último ano fechado?<br><span style="font-size:12.5px;color:#93a4c8;">É o dado que mais pesa no cálculo do prêmio.</span>', campo: 'receitaLiquida', tipo: 'opcoes',
+  { fala: 'Primeiro, o <strong>CNPJ da empresa</strong>. Eu busco o nome e a atividade na base pública — assim você não precisa digitar.', campo: 'cnpj', tipo: 'cnpj', ph: '00.000.000/0000-00' },
+  { fala: 'Vamos aos números do balanço. Qual a <strong>receita líquida do último ano fechado</strong>?<br><span style="font-size:12.5px;color:#93a4c8;">É o dado que mais pesa no cálculo do prêmio.</span>', campo: 'receitaLiquida', tipo: 'opcoes', exato: 'receita líquida do último ano fechado',
     opcoes: ['Até R$ 5 milhões','R$ 5 a 10 milhões','R$ 10 a 20 milhões','R$ 20 a 30 milhões','R$ 30 a 50 milhões',
       'R$ 50 a 80 milhões','R$ 80 a 120 milhões','R$ 120 a 200 milhões','R$ 200 a 300 milhões','R$ 300 a 500 milhões',
       'R$ 500 a 750 milhões','R$ 750 milhões a 1 bilhão','R$ 1 a 2 bilhões','Acima de R$ 2 bilhões'] },
-  { fala: 'E o <strong>patrimônio líquido</strong> no balanço?', campo: 'patrimonio', tipo: 'opcoes',
+  { fala: 'E o <strong>patrimônio líquido</strong> no balanço do último ano fechado?', campo: 'patrimonio', tipo: 'opcoes', exato: 'patrimônio líquido',
     opcoes: ['Negativo (passivo a descoberto)','Até R$ 2 milhões','R$ 2 a 5 milhões','R$ 5 a 10 milhões','R$ 10 a 20 milhões',
       'R$ 20 a 40 milhões','R$ 40 a 70 milhões','R$ 70 a 120 milhões','R$ 120 a 250 milhões','R$ 250 a 500 milhões',
       'R$ 500 milhões a 1 bilhão','Acima de R$ 1 bilhão','Não sei informar agora'] },
-  { fala: 'Qual o <strong>total de ativos</strong> no balanço?', campo: 'totalAtivos', tipo: 'opcoes',
+  { fala: 'Qual o <strong>total de ativos</strong> no balanço do último ano fechado?', campo: 'totalAtivos', tipo: 'opcoes', exato: 'total de ativos',
     opcoes: ['Até R$ 5 milhões','R$ 5 a 10 milhões','R$ 10 a 25 milhões','R$ 25 a 50 milhões','R$ 50 a 80 milhões',
       'R$ 80 a 120 milhões','R$ 120 a 200 milhões','R$ 200 a 350 milhões','R$ 350 a 500 milhões',
       'R$ 500 milhões a 1 bilhão','R$ 1 a 2 bilhões','Acima de R$ 2 bilhões','Não sei informar agora'] },
   { fala: 'Quantas pessoas ocupam <strong>cargos de gestão</strong>?<br><span style="font-size:12.5px;color:#93a4c8;">Diretores, conselheiros, sócios administradores e gerentes com poder de decisão.</span>', campo: 'nAdmins', tipo: 'opcoes',
     opcoes: ['Até 3','De 4 a 10','De 11 a 20','De 21 a 50','Mais de 50'] },
+  /* Esta pergunta é removida do roteiro quando o CNPJ devolve a atividade
+     principal — perguntar o que a Receita acabou de dizer é pedir ao cliente
+     que repita o que o sistema já sabe. */
   { fala: 'Qual o <strong>setor de atuação</strong> da empresa?', campo: 'setor', tipo: 'texto', ph: 'Ex: indústria metalúrgica, transporte, saúde…' },
   { fala: 'A empresa tem <strong>capital aberto</strong> ou pretende abrir nos próximos 12 meses?', campo: 'capitalAberto', tipo: 'opcoes',
     opcoes: ['Não, capital fechado','Sim, capital aberto','Pretendemos abrir'] },
@@ -355,7 +370,96 @@ const PERGUNTAS = [
   { fala: 'Por último: qual o <strong>melhor contato</strong> para o corretor retornar com a proposta?', campo: 'contato', tipo: 'contato' }
 ];
 
+/* ═══════════════ CNPJ ═══════════════
+   Três fontes públicas consultadas AO MESMO TEMPO: a primeira resposta válida
+   vence. Em série, com 9s de espera cada, duas fontes fora do ar travavam a
+   tela por 20 segundos.
+   Além do nome, trazemos a NATUREZA e os CNAEs — atividade principal e
+   secundárias. O cliente não precisa ver essa lista; o corretor precisa, porque
+   é o CNAE que a seguradora usa para enquadrar o risco. */
+async function _fetchJson(url) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 9000);
+  try { const r = await fetch(url, { signal: ctl.signal }); return { status: r.status, json: r.ok ? await r.json() : null }; }
+  catch (e) { return { status: 0, json: null }; } finally { clearTimeout(t); }
+}
+const _cnae = (cod, txt) => ({ codigo: cod != null ? String(cod) : null, descricao: txt || null });
+async function consultaCNPJ(d) {
+  const fontes = [
+    ['brasilapi', 'https://brasilapi.com.br/api/cnpj/v1/' + d, j => ({
+      razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf,
+      natureza: j.natureza_juridica, porte: j.porte || j.descricao_porte,
+      abertura: j.data_inicio_atividade || null,
+      principal: _cnae(j.cnae_fiscal, j.cnae_fiscal_descricao),
+      secundarias: (j.cnaes_secundarios || []).map(x => _cnae(x.codigo, x.descricao))
+    })],
+    ['minhareceita', 'https://minhareceita.org/' + d, j => ({
+      razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf,
+      natureza: j.natureza_juridica, porte: j.porte || j.descricao_porte,
+      abertura: j.data_inicio_atividade || null,
+      principal: _cnae(j.cnae_fiscal, j.cnae_fiscal_descricao),
+      secundarias: (j.cnaes_secundarios || []).map(x => _cnae(x.codigo, x.descricao))
+    })],
+    ['cnpjws', 'https://publica.cnpj.ws/cnpj/' + d, j => {
+      const e = j.estabelecimento || {};
+      return { razao: j.razao_social, fantasia: e.nome_fantasia,
+        cidade: e.cidade && e.cidade.nome, uf: e.estado && e.estado.sigla,
+        natureza: j.natureza_juridica && (j.natureza_juridica.descricao || j.natureza_juridica),
+        porte: j.porte && (j.porte.descricao || j.porte),
+        abertura: e.data_inicio_atividade || null,
+        principal: e.atividade_principal ? _cnae(e.atividade_principal.subclasse, e.atividade_principal.descricao) : _cnae(null, null),
+        secundarias: (e.atividades_secundarias || []).map(x => _cnae(x.subclasse, x.descricao)) };
+    }]
+  ];
+  let motivo = 'offline', inexistente = false;
+  const tentativa = ([nome, url, norm]) => _fetchJson(url).then(async r => {
+    if (r.status === 429) { motivo = 'limite'; await espera(1200); r = await _fetchJson(url); }
+    if (r.status === 404 || r.status === 400) { inexistente = true; throw new Error('inexistente'); }
+    if (r.json && r.json.razao_social) return Object.assign({ ok: true, fonte: nome }, norm(r.json));
+    throw new Error('vazio');
+  });
+  try {
+    const corrida = fontes.map(tentativa);
+    const vencedor = await new Promise((resolve, reject) => {
+      let faltam = corrida.length;
+      corrida.forEach(pr => pr.then(resolve, () => { if (--faltam === 0) reject(new Error('todas falharam')); }));
+    });
+    if (vencedor) return vencedor;
+  } catch (e) { if (inexistente) return { ok: false, motivo: 'inexistente' }; }
+  return { ok: false, motivo };
+}
+const CNPJ_MSG = { inexistente: 'Não encontrei esse CNPJ — confira o número, ou escreva o nome da empresa abaixo.',
+  limite: 'A consulta pública está no limite agora. Escreva o nome da empresa e seguimos.',
+  offline: 'Não consegui consultar agora. Escreva o nome da empresa e seguimos.' };
+const mascaraCNPJ = v => { const d = String(v || '').replace(/\D/g, '').slice(0, 14);
+  return d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2'); };
+
+/* ═══ valor exato ═══
+   A faixa serve para quem não tem o balanço à mão. Quem tem o número exato
+   quer informar o número exato — e para a seguradora isso vale mais que a
+   faixa. Guardamos os dois: o valor e a faixa em que ele cai. */
+const mascaraReais = v => { const d = String(v).replace(/\D/g, '').slice(0, 15); return d ? 'R$ ' + Number(d).toLocaleString('pt-BR') : ''; };
+const numReais = v => { const d = String(v).replace(/\D/g, ''); return d ? Number(d) : null; };
+function faixaDoValor(campo, valor) {
+  const lista = DIC[campo] || [];
+  for (let i = 0; i < lista.length; i++) {
+    const [, min, max] = lista[i];
+    if (min === null && max === null) continue;              // "não sei"
+    const acima = min === null || valor >= min;
+    const abaixo = max === null || valor < max;
+    if (acima && abaixo) return i;
+  }
+  return -1;
+}
+function registrarExato(campo, valor, texto) {
+  QRESP._dados = QRESP._dados || {};
+  const i = faixaDoValor(campo, valor);
+  const linha = (DIC[campo] || [])[i];
+  QRESP._dados[campo] = { texto, i: i >= 0 ? i : null, cod: linha ? linha[0] : null,
+    exato: valor, min: valor, max: valor, mid: valor, origem: 'exato' };
+}
+
 /* ─── MOTOR ─── */
+const esc = v => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const $ = id => document.getElementById(id);
 const palco = $('palco');
 const espera = ms => new Promise(r => setTimeout(r, ms));
@@ -439,14 +543,108 @@ async function render() {
     $('ok').onclick = () => { historico.push({ p: q.fala, r: null, i: iQ }); iQ++; render(); };
   }
   else if (q.tipo === 'opcoes') {
-    z.innerHTML = `<div class="opcoes${q.opcoes.length > 6 ? ' muitas' : ''}">${q.opcoes.map((o, k) => `<button class="op" data-k="${k}">${o}</button>`).join('')}</div>${
-      q.opcoes.length > 6 ? '<div class="nota">Na dúvida entre duas faixas, escolha a maior — o corretor confirma depois com o balanço.</div>' : ''}`;
-    z.querySelectorAll('.op').forEach(b => b.onclick = () => {
-      const v = q.opcoes[Number(b.dataset.k)];
-      QRESP[q.campo] = v; registrarDado(q.campo, Number(b.dataset.k), v);
+    z.innerHTML = `<div class="opcoes${q.opcoes.length > 6 ? ' muitas' : ''}" id="ops">${q.opcoes.map((o, k) => `<button class="op" data-k="${k}">${o}</button>`).join('')}</div>${
+      q.opcoes.length > 6 ? '<div class="nota">Na dúvida entre duas faixas, escolha a maior — o corretor confirma depois com o balanço.</div>' : ''}
+      ${q.exato ? `<button class="alt" id="btExato" style="margin-left:0">tenho o número exato aqui →</button><div id="zExato"></div>` : ''}`;
+    const escolher = k => {
+      const v = q.opcoes[k];
+      QRESP[q.campo] = v; registrarDado(q.campo, k, v);
       historico.push({ p: q.fala, r: v, i: iQ });
       salvar(); iQ++; render();
-    });
+    };
+    z.querySelectorAll('#ops .op').forEach(b => b.onclick = () => escolher(Number(b.dataset.k)));
+    /* Quem tem o balanço aberto na frente não quer escolher faixa: quer digitar
+       o número. Para a seguradora o valor exato vale mais — e a faixa continua
+       sendo gravada, calculada a partir dele. */
+    if (q.exato) $('btExato').onclick = () => {
+      $('ops').style.display = 'none';
+      $('btExato').style.display = 'none';
+      $('zExato').innerHTML = `<label class="lbl" style="margin-top:4px">Valor da ${q.exato}</label>
+        <input class="campo" id="vx" inputmode="numeric" placeholder="R$ 0" autocomplete="off" style="margin-bottom:12px">
+        <div class="opcoes"><button class="btn" id="okx">Continuar →</button>
+          <button class="btn btn-2" id="voltax">Prefiro escolher a faixa</button></div>`;
+      const inp = $('vx');
+      inp.oninput = () => { inp.value = mascaraReais(inp.value); };
+      const enviar = () => {
+        const n = numReais(inp.value);
+        if (!n) { inp.focus(); return; }
+        const txt = mascaraReais(String(n));
+        QRESP[q.campo] = txt; registrarExato(q.campo, n, txt);
+        historico.push({ p: q.fala, r: txt + ' (valor exato)', i: iQ });
+        salvar(); iQ++; render();
+      };
+      $('okx').onclick = enviar;
+      inp.onkeydown = e => { if (e.key === 'Enter') enviar(); };
+      $('voltax').onclick = () => { $('zExato').innerHTML = ''; $('ops').style.display = ''; $('btExato').style.display = ''; fixarFim(true); };
+      inp.focus(); fixarFim(true);
+    };
+  }
+  /* ═══ CNPJ: a tela pergunta um número e devolve a empresa inteira ═══ */
+  else if (q.tipo === 'cnpj') {
+    z.innerHTML = `<input class="campo" id="tx" placeholder="${q.ph || ''}" inputmode="numeric" autocomplete="off" style="margin-bottom:10px;">
+      <div id="cnpjRes" style="margin-bottom:12px"></div>
+      <button class="btn" id="ok">Continuar →</button>
+      <button class="alt" id="semCnpj" style="margin-left:0">não tenho o CNPJ agora →</button>`;
+    const inp = $('tx');
+    let ultima = null, achado = null;
+    inp.oninput = async () => {
+      inp.value = mascaraCNPJ(inp.value);
+      const d = inp.value.replace(/\D/g, '');
+      if (d.length !== 14 || d === ultima) return;
+      ultima = d; achado = null;
+      $('cnpjRes').innerHTML = '<div class="nota">Consultando a base pública…</div>';
+      const r = await consultaCNPJ(d);
+      if (!$('cnpjRes') || inp.value.replace(/\D/g, '') !== d) return;
+      if (r.ok) {
+        achado = r;
+        const sec = (r.secundarias || []).length;
+        $('cnpjRes').innerHTML = `<div class="sonda-r" style="margin-bottom:0">✓ <strong>${esc(r.fantasia || r.razao)}</strong>
+          ${r.cidade ? '<br>' + esc(r.cidade) + (r.uf ? ' · ' + esc(r.uf) : '') : ''}
+          ${r.principal && r.principal.descricao ? '<br>' + esc(r.principal.descricao) : ''}
+          ${sec ? `<br><span style="opacity:.75">+ ${sec} ${sec === 1 ? 'atividade secundária' : 'atividades secundárias'}</span>` : ''}</div>`;
+      } else {
+        $('cnpjRes').innerHTML = `<div class="nota">${CNPJ_MSG[r.motivo]}</div>`;
+      }
+      fixarFim(true);
+    };
+    const seguir = () => {
+      const d = inp.value.replace(/\D/g, '');
+      if (d.length === 14) {
+        QRESP.cnpj = inp.value;
+        if (achado) {
+          QRESP.empresa = achado.fantasia || achado.razao;
+          /* Tudo isto é para o corretor, não para a tela: o CNAE é o que a
+             seguradora usa para enquadrar o risco de D&O. */
+          QRESP.cnpjDados = { fonte: achado.fonte, razao: achado.razao || null, fantasia: achado.fantasia || null,
+            cidade: achado.cidade || null, uf: achado.uf || null, natureza: achado.natureza || null,
+            porte: achado.porte || null, abertura: achado.abertura || null,
+            atividadePrincipal: achado.principal || null, atividadesSecundarias: achado.secundarias || [] };
+          if (achado.principal && achado.principal.descricao) {
+            QRESP.setor = achado.principal.descricao;
+            const iS = PERGUNTAS.findIndex(x => x.campo === 'setor');
+            if (iS > iQ) PERGUNTAS.splice(iS, 1);     // já sabemos: não perguntar
+          }
+        }
+        historico.push({ p: q.fala, r: (QRESP.empresa ? QRESP.empresa + ' · ' : '') + inp.value, i: iQ });
+        salvar(); iQ++; render(); return;
+      }
+      inp.focus();
+    };
+    $('ok').onclick = seguir;
+    inp.onkeydown = e => { if (e.key === 'Enter') seguir(); };
+    /* Sem o CNPJ à mão, volta a ser o que era: o nome escrito à mão. */
+    $('semCnpj').onclick = () => {
+      z.innerHTML = `<input class="campo" id="tx2" placeholder="Razão social ou nome fantasia" autocomplete="off" style="margin-bottom:12px;">
+        <button class="btn" id="ok2">Continuar →</button>`;
+      const i2 = $('tx2');
+      const env = () => { const v = i2.value.trim(); if (!v) return i2.focus();
+        QRESP.empresa = v; historico.push({ p: q.fala, r: v, i: iQ }); salvar(); iQ++; render(); };
+      $('ok2').onclick = env;
+      i2.onkeydown = e => { if (e.key === 'Enter') env(); };
+      i2.focus(); fixarFim(true);
+    };
+    if (LINK && LINK.empresaNome) { $('cnpjRes').innerHTML = `<div class="nota">Empresa já identificada: <strong>${esc(LINK.empresaNome)}</strong>. O CNPJ ajuda a trazer a atividade, mas é opcional.</div>`; }
+    inp.focus();
   }
   else if (q.tipo === 'texto') {
     z.innerHTML = `<input class="campo" id="tx" placeholder="${q.ph || ''}" autocomplete="off" style="margin-bottom:12px;">
