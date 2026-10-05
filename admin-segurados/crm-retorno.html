@@ -927,6 +927,7 @@ const STATUS_PIPELINE = {
   contato_realizado:{label:'Contato Realizado',cor:'#2563eb'},
   pendente_documentos:{label:'Pendente Docs',cor:'#d97706'},
   cotacao_enviada:{label:'Cotação Enviada',cor:'#7c3aed'},
+  em_transmissao:{label:'Em transmissão',cor:'#0891b2'},
   recusada_seguradora:{label:'Recusada',cor:'#ea580c'},
   negocio_fechado:{label:'Fechado',cor:'#16a34a'},
   negocio_perdido:{label:'Perdido',cor:'#dc2626'},
@@ -939,12 +940,13 @@ const KANBAN=[
   {key:'pre_cadastro',label:'Lead novo',cor:'#64748b',icon:'fa-bolt'},
   {key:'contato_realizado',label:'Primeiro contato',cor:'#2563eb',icon:'fa-phone'},
   {key:'cotacao_enviada',label:'Cotação enviada',cor:'#7c3aed',icon:'fa-paper-plane'},
+  {key:'em_transmissao',label:'Em transmissão',cor:'#0891b2',icon:'fa-tower-broadcast'},
   {key:'negocio_fechado',label:'Fechada',cor:'#16a34a',icon:'fa-trophy'},
   {key:'negocio_perdido',label:'Perdida',cor:'#dc2626',icon:'fa-xmark'},
 ];
 function faseDoLead(l){ const s=l.status||'pre_cadastro'; if(KANBAN.some(k=>k.key===s)) return s;
   if(s==='pendente_documentos') return 'contato_realizado'; if(s==='recusada_seguradora') return 'cotacao_enviada'; return 'pre_cadastro'; }
-const MOTIVOS_PERDA={preco:'Preço/valor',concorrencia:'Fechou com concorrente',sem_resposta:'Sumiu / sem resposta',desistiu:'Desistiu do seguro',ja_tinha:'Já tinha seguro',outro:'Outro'};
+const MOTIVOS_PERDA={declinada_seguradora:'Declinada pela seguradora',declinada_cliente:'Declinada pelo cliente',preco:'Preço/valor',concorrencia:'Fechou com concorrente',sem_resposta:'Sumiu / sem resposta',desistiu:'Desistiu do seguro',ja_tinha:'Já tinha seguro',outro:'Outro'};
 
 /* ---------- Estado ---------- */
 let CURRENT_USER=null;
@@ -1015,7 +1017,9 @@ async function ldBuscarCep(){
   if(info) info.innerHTML='<i class="fas fa-spinner fa-spin"></i> Buscando o endereço...';
   try{ const r=await (await fetch('https://viacep.com.br/ws/'+d+'/json/')).json();
     if(r&&!r.erro){
-      end.value=[r.logradouro,r.bairro].filter(Boolean).join(', ');
+      const ba=document.getElementById('ldBairro');
+      if(ba){ end.value=r.logradouro||''; if(!ba.value.trim()) ba.value=r.bairro||''; }
+      else end.value=[r.logradouro,r.bairro].filter(Boolean).join(', ');
       const ci=document.getElementById('ldCidade'), uf=document.getElementById('ldUf');
       if(ci&&!ci.value.trim()) ci.value=r.localidade||''; if(uf&&!uf.value.trim()) uf.value=r.uf||'';
       if(info) info.innerHTML='<i class="fas fa-check" style="color:var(--ok)"></i> Endereço preenchido pelo CEP — ajuste o número.';
@@ -1259,6 +1263,7 @@ function bootstrap(){
   listen('interacoes_crm','interacoes',[]);
   listen('propostas','propostas',['propostas','contatos']);
   if(typeof ctEscutarSite==='function') ctEscutarSite();
+  if(typeof neEscutar==='function') neEscutar();
   listen('fipe_historico','fipeHist',['fipe']);
   atualizarNotificacoes();
 
@@ -1416,6 +1421,7 @@ function kanbanCard(l,col){
     <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
       <b style="font-size:.86rem">${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${resp}</div>
     <div style="font-size:.76rem;color:var(--text-2);margin:3px 0">${esc(l.ramo||l.tipoSeguro||'—')}${l.valorFipe?' · '+esc(l.valorFipe):''}</div>
+    ${typeof nePinsCard==='function'?nePinsCard(l):''}
     ${l.valorNegociacao?`<div style="font-size:.86rem;font-weight:800;color:var(--brand-dark);margin:4px 0">${money(l.valorNegociacao)}
       ${l.comissaoPct?`<span style="font-size:.7rem;font-weight:600;color:var(--text-3)">· ${l.comissaoPct}% com.</span>`:''}</div>`:''}
     ${l.proximoRetorno?`<div style="font-size:.72rem;font-weight:600;color:${retorno!=null&&retorno<0?'var(--danger)':'var(--warn)'}">
@@ -1424,7 +1430,7 @@ function kanbanCard(l,col){
       ${orig?`<span class="badge" style="background:var(--surface-3);color:var(--text-2);font-size:.66rem">${esc(orig)}</span>`:'<span></span>'}
       <div onclick="event.stopPropagation()" style="display:flex;gap:2px">
         <button class="kb-mv" title="Excluir este negócio do funil" style="color:var(--danger)" onclick="excluirNegocio('${l.id}')"><i class="fas fa-trash"></i></button>
-        <button class="kb-mv" title="Ler cotações e montar o orçamento" onclick="ppDoLead('${l.id}')"><i class="fas fa-scale-balanced"></i></button>
+        <button class="kb-mv" title="Orçamento / proposta do cliente" onclick="ppDoLead('${l.id}')"><i class="fas fa-scale-balanced"></i></button>
         ${idx>0?`<button class="kb-mv" title="Voltar fase" onclick="moverFase('${l.id}','${KANBAN[idx-1].key}')"><i class="fas fa-chevron-left"></i></button>`:''}
         ${idx<KANBAN.length-1?`<button class="kb-mv" title="Avançar fase" onclick="moverFase('${l.id}','${KANBAN[idx+1].key}')"><i class="fas fa-chevron-right"></i></button>`:''}
       </div></div></div>`;
@@ -3160,11 +3166,13 @@ function leadCotacaoSite(c){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 14px">
       ${f('Veículo',esc(c.veiculo)+(c.anoVeiculo?' · '+esc(c.anoVeiculo):''))}
-      ${f('Valor FIPE',esc(c.valorFipe))}
+      ${f('Valor FIPE',c.valorFipe?esc(c.valorFipe)+(c.mesRefFipe?' <span style="color:var(--text-3);font-size:.75rem">('+esc(c.mesRefFipe)+')</span>':''):null)}
       ${f('Tem seguro hoje',c.temSeguro==='sim'?'Sim'+(c.mesVencimento?' · vence em '+esc(c.mesVencimento):''):(c.temSeguro==='nao'?'Não':null))}
       ${f('Uso',M.uso[c.utilizacao])}
       ${f('Condutor',(M.cond[c.condutor]||'')+(c.idadeCondutor?' · '+esc(c.idadeCondutor):''))}
-      ${f('Pernoite',(M.gar[c.pernoite]||'')+(c.cep?' · CEP '+esc(c.cep):''))}
+      ${f('Pernoite',M.gar[c.pernoite]||null)}
+      ${f('CEP do pernoite',typeof neCepHtml==='function'?neCepHtml(c):(c.cep?esc(c.cep):null))}
+      ${f('Código FIPE',c.codigoFipe?esc(c.codigoFipe)+(c.combustivel?' · '+esc(c.combustivel):''):null)}
       ${f('Bônus',c.bonus==='nao-sei'?'não sabe':(c.bonus?'classe '+esc(c.bonus):null))}
       ${f('Sinistro 12m',c.sinistro==='sim'?'teve':(c.sinistro==='nao'?'não teve':null))}
       ${f('Guincho',M.reb[c.reboque])}
@@ -3186,7 +3194,7 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-weight:700;font-size:.85rem"><i class="fas fa-user" style="color:var(--brand)"></i> Dados do contato</div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> ${c.orcamentoId?'Ver orçamento':'Registrar cotação'}</button>
+          ${typeof neBotoesTopo==='function'?neBotoesTopo(c,vFunil):''}
           <button class="btn btn-ghost btn-sm" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 14px;margin-bottom:14px">
         <div class="mov-f"><div class="k">Nome</div><div class="v">${esc(c.nome)||'-'}</div></div>
@@ -3195,11 +3203,14 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
         <div class="mov-f"><div class="k">CPF/CNPJ</div><div class="v">${esc(c.cpf||c.cnpj)||'-'}</div></div>
         <div class="mov-f"><div class="k">Nascimento</div><div class="v">${c.dataNascimento?fmtData(c.dataNascimento)+(idadeDe(c.dataNascimento)!=null?' · '+idadeDe(c.dataNascimento)+'a':''):'-'}</div></div>
         <div class="mov-f"><div class="k">Cidade/UF</div><div class="v">${esc((c.cidade||'')+(c.estado?'/'+c.estado:''))||'-'}</div></div>
-        <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc(c.endereco||c.enderecoCompleto)||'-'}${c.cep?' · CEP '+esc(c.cep):''}</div></div>
+        <div class="mov-f"><div class="k">Sexo / estado civil</div><div class="v">${esc([c.sexo==='M'?'Masculino':c.sexo==='F'?'Feminino':c.sexo,c.estadoCivil].filter(Boolean).join(' · '))||'-'}</div></div>
+        <div class="mov-f"><div class="k">Profissão</div><div class="v">${esc(c.profissao)||'-'}</div></div>
+        <div class="mov-f"><div class="k">CNH</div><div class="v">${esc(c.cnh)||'-'}</div></div>
+        <div class="mov-f" style="grid-column:1/-1"><div class="k">Endereço</div><div class="v">${esc([[c.endereco||c.enderecoCompleto,c.numero].filter(Boolean).join(', '),c.complemento,c.bairro].filter(Boolean).join(' · '))||'-'}${c.cep?' · CEP '+esc(c.cep):''}</div></div>
         <div class="mov-f"><div class="k">Entrada</div><div class="v">${fmtData(c.criadoEm)}</div></div>
       </div>
       ${vFunil?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--brand-50);border-radius:12px;padding:12px 14px;margin-bottom:14px">
-        <div class="form-row" style="margin:0"><label>Valor da negociação (prêmio)</label>
+        <div class="form-row" style="margin:0"><label>Valor da negociação (prêmio líquido)</label>
           <input type="text" id="lkValor" value="${c.valorNegociacao!=null?String(c.valorNegociacao).replace('.',','):''}" placeholder="0,00"
             onchange="lkSalvarValor('${c.id}')"></div>
         <div class="form-row" style="margin:0"><label>Comissão estimada (%)</label>
@@ -3217,6 +3228,7 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
         <i class="fas fa-building" style="color:var(--brand)"></i> Indicado pela empresa <b>${esc(c.indicadoPorEmpresaNome||c.indicadoPorEmpresaCodigo)}</b>
         <span style="color:var(--text-3)">— veio pelo link de benefícios que o RH compartilhou (código ${esc(c.indicadoPorEmpresaCodigo)})</span></div>`:''}
       ${leadCotacaoSite(c)}
+      ${vFunil&&typeof nePainel==='function'?nePainel(c):''}
       ${typeof fichaPortal==='function'?fichaPortal(c):''}${typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
       <details ${aps.length&&aps.length<=3&&vFunil?'open':''} style="margin-bottom:12px">
         <summary style="cursor:pointer;font-weight:700;font-size:.85rem;list-style:none;padding:8px 0"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices — ${aps.filter(apEhAtiva).length} em vigor de ${aps.length}
@@ -3249,8 +3261,7 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="${ehCli?`excluirCliente`:`excluirLead`}('${c.id}')"><i class="fas fa-trash"></i> Excluir</button>
-      ${vFunil?`<button class="btn btn-success" onclick="modalFechar('${c.id}')"><i class="fas fa-trophy"></i> Fechada</button>
-      <button class="btn btn-ghost" onclick="modalPerder('${c.id}')"><i class="fas fa-xmark"></i> Perdida</button>`
+      ${vFunil?(typeof neBotoesFase==='function'?neBotoesFase(c):'')
       :`<button class="btn btn-ghost" onclick="modalApoliceNovaDoCliente('${c.id}')"><i class="fas fa-plus"></i> Nova apólice</button>
         <button class="btn btn-primary" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button>`}
     </div>`,'wide');
@@ -3286,9 +3297,17 @@ function lkEditar(id){
           <div style="font-size:.73rem;color:var(--text-3);margin-top:4px" id="ldCepInfo">Digite o CEP que eu completo o endereço.</div></div>
         <div class="form-row"><label>Cidade</label><input type="text" id="ldCidade" value="${esc(c.cidade||'')}"></div>
         <div class="form-row"><label>Estado</label><input type="text" id="ldUf" value="${esc(c.estado||'')}" maxlength="2"></div>
-
+        <div class="form-row"><label>Sexo</label><select id="ldSexo"><option value="">—</option>${[['M','Masculino'],['F','Feminino']].map(([k,v])=>`<option value="${k}" ${c.sexo===k?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Estado civil</label><select id="ldEstCivil"><option value="">—</option>${['Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(v=>`<option ${c.estadoCivil===v?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="form-row"><label>Profissão</label><input type="text" id="ldProf" value="${esc(c.profissao||'')}"></div>
+        <div class="form-row"><label>Nº da CNH</label><input type="text" id="ldCnh" value="${esc(c.cnh||'')}" placeholder="opcional"></div>
       </div>
-      <div class="form-row"><label>Endereço</label><input type="text" id="ldEnd" value="${esc(c.endereco||c.enderecoCompleto||'')}"></div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px">
+        <div class="form-row"><label>Endereço (rua)</label><input type="text" id="ldEnd" value="${esc(c.endereco||c.enderecoCompleto||'')}"></div>
+        <div class="form-row"><label>Número</label><input type="text" id="ldNum" value="${esc(c.numero||'')}"></div>
+        <div class="form-row"><label>Bairro</label><input type="text" id="ldBairro" value="${esc(c.bairro||'')}"></div>
+        <div class="form-row"><label>Complemento</label><input type="text" id="ldCompl" value="${esc(c.complemento||'')}" placeholder="apto, bloco..."></div>
+      </div>
       <div style="background:var(--info-bg);border-radius:10px;padding:11px 14px;font-size:.81rem;color:#1e40af">
         <i class="fas fa-circle-info"></i> Este é o cadastro único da pessoa: o que você editar aqui vale para as cotações, para a aba Contatos e para os avisos de aniversário.</div>
     </div>
@@ -3303,7 +3322,9 @@ async function lkSalvarDados(){
     whatsapp:g('ldWhats').replace(/\D/g,'')||null, email:g('ldEmail')||null,
     cpf:g('ldCpf')||null, dataNascimento:g('ldNasc')||null,
     cep:g('ldCep')||null, cidade:g('ldCidade')||null, estado:(g('ldUf')||'').toUpperCase()||null,
-    endereco:g('ldEnd')||null, atualizadoEm:FV.serverTimestamp() };
+    endereco:g('ldEnd')||null, numero:g('ldNum')||null, bairro:g('ldBairro')||null, complemento:g('ldCompl')||null,
+    sexo:g('ldSexo')||null, estadoCivil:g('ldEstCivil')||null, profissao:g('ldProf')||null, cnh:g('ldCnh')||null,
+    atualizadoEm:FV.serverTimestamp() };
   try{
     await db.collection('leads_crm').doc(id).update(dados);
     /* espelha nas apólices do mesmo contato, para não ficar dado velho por lá */
@@ -3357,6 +3378,7 @@ async function setLeadCampo(id,campo,valor){ try{ const upd={[campo]:valor||null
   if(campo==='responsavelId'){ const f=CACHE.admins.find(a=>a.id===valor); upd.responsavelNome=f?(f.nome||f.email):null; }
   await db.collection('leads_crm').doc(id).update(upd); toast('Atualizado.','ok'); }catch(e){ console.error(e); toast('Erro ao atualizar.','err'); } }
 async function moverFase(id,fase){
+  if(typeof neGuardaFase==='function'&&neGuardaFase(id,fase)===false) return;
   if(fase==='negocio_fechado') return modalFechar(id);
   if(fase==='negocio_perdido') return modalPerder(id);
   try{ await db.collection('leads_crm').doc(id).update({status:fase,atualizadoEm:FV.serverTimestamp()}); toast('Movido para "'+(KANBAN.find(k=>k.key===fase)||{}).label+'".','ok'); setTimeout(()=>portalAtualizarRelacionados(id),1500); }catch(e){ toast('Erro.','err'); }
@@ -7496,7 +7518,7 @@ function ctPessoas(){
         const d=strData(o.criadoEm)||null;
         /* só é cotação EM ABERTO quem está de fato numa etapa do funil.
            Cartão de cliente já convertido não é negociação em andamento. */
-        const ABERTAS=['pre_cadastro','contato_realizado','cotacao_enviada','pendente_documentos','recusada_seguradora'];
+        const ABERTAS=['pre_cadastro','contato_realizado','cotacao_enviada','em_transmissao','pendente_documentos','recusada_seguradora'];
         const st=(o.status==='negocio_fechado'||o.status==='cliente')?'fechada'
           :o.status==='negocio_perdido'?'perdida'
           :ABERTAS.includes(o.status||'pre_cadastro')?'aberta':'fechada';
@@ -8858,6 +8880,9 @@ const PP_COB=[
   {k:'buracos', l:'Proteção contra buracos',       re:/buraco/i},
   {k:'defesa',  l:'Custos de defesa',              re:/custos de defesa/i},
   {k:'extras',  l:'Despesas extraordinárias',      re:/despesa extraordin/i},
+  {k:'pintura', l:'Pintura e lataria',             re:/pintura/i},
+  {k:'chaveiro',l:'Chaveiro / perda de chaves',    re:/chaveiro|perda de chave/i},
+  {k:'residencia',l:'Assistência residencial',     re:/assist[êe]ncia residencial/i},
   {k:'outros',  l:'Outras coberturas',             re:/./}
 ];
 /* deixa o limite apresentável: 0,00 e vazio não são limite */
@@ -9368,21 +9393,21 @@ VIEWS.orcamento=function(leadId){
     <button class="btn btn-primary btn-sm" onclick="ppSalvarOrcamento()"><i class="fas fa-floppy-disk"></i> Salvar orçamento</button>`;
   let html=`<div class="page-head"><div class="page-head-row">
       <div><h1><i class="fas fa-scale-balanced" style="color:var(--brand)"></i> Orçamento comparativo</h1>
-      <p class="explain">Suba os PDFs das seguradoras, confira o que cada uma cobre e mande um comparativo só seu para o cliente.
+      <p class="explain">Gere o prompt, anexe na IA as cotações das seguradoras (e a apólice atual, se for renovação), cole a resposta aqui, informe a comissão e mande a proposta para o cliente.
       ${ORC.leadNome?'Negócio: <b>'+esc(ORC.leadNome)+'</b>':''}</p></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">${actions}</div>
     </div></div>`;
   html+=ppBlocoCliente(l);
   html+=ppBlocoVeiculo();
   html+=ppBlocoFipe();
-  html+=ppBlocoUpload();
+  html+=(typeof neBlocoIA==='function'?neBlocoIA():'');
   if(ORC.propostas.length){
+    if(typeof neBlocoAnalise==='function') html+=neBlocoAnalise();
     html+=ppBlocoPropostas();
     html+=ppBlocoComparativo();
     html+=ppBlocoFechamento();
   }
   setView(html);
-  ppLigarDrop();
 };
 function ppNovoOrcamento(leadId,silencioso){
   const l=CACHE.leads.find(x=>x.id===leadId)||{};
@@ -9856,9 +9881,11 @@ function ppModalManual(uid){
 }
 function ppMnTotal(){
   const l=cpNum?cpNum(document.getElementById('mnLiq').value):ppNum(document.getElementById('mnLiq').value);
-  const i=ppNum(document.getElementById('mnIof').value)||0;
+  const iofEl=document.getElementById('mnIof');
+  let i=ppNum(iofEl.value);
+  if(l&&(i==null||iofEl.dataset.auto==='1')){ i=Math.round(l*0.0738*100)/100; iofEl.value=String(i).replace('.',','); iofEl.dataset.auto='1'; }
   const t=document.getElementById('mnTot');
-  if(l&&!t.value) t.value=String(Math.round((l+i)*100)/100).replace('.',',');
+  if(l) t.value=String(Math.round((l+(i||0))*100)/100).replace('.',',');
 }
 function ppSalvarManual(){
   const g=i=>document.getElementById(i);
@@ -9883,6 +9910,7 @@ function ppSalvarManual(){
   const np=parseInt(g('mnPar').value)||0;
   if(np&&o.premioTotal) o.parcelas=[{n:np,valor:Math.round(o.premioTotal/np*100)/100,juros:false}];
   if(o.premioLiquido==null&&o.coberturas.length) o.premioLiquido=Math.round(o.coberturas.reduce((s,x)=>s+(x.premio||0),0)*100)/100;
+  if(o.iof==null&&o.premioLiquido!=null) o.iof=Math.round(o.premioLiquido*0.0738*100)/100;
   if(o.premioTotal==null&&o.premioLiquido!=null) o.premioTotal=Math.round((o.premioLiquido+(o.iof||0))*100)/100;
   ppRecalcComissao(o);
   o.incluir=true; o.arquivo='montada na mão';
@@ -9931,8 +9959,10 @@ function ppOrcamentoDoc(){
         premio:c.premio==null?null:c.premio, contratada:c.contratada!==false, detalhe:c.detalhe||null})),
       franquiasDetalhe:p.franquiasDetalhe||[], parcelas:p.parcelas||[],
       premioLiquido:p.premioLiquido, iof:p.iof, premioTotal:p.premioTotal,
-      comissaoPct:p.comissaoPct, comissaoValor:p.comissaoValor==null?null:p.comissaoValor
+      pagamentos:p.pagamentos||[], atende:p.atende||[], destaques:p.destaques||[], obs:p.obs||null,
+      recomendada:!!p.recomendada
     })),
+    ...(typeof neCamposOrcamento==='function'?neCamposOrcamento():{}),
     atualizadoEm:FV.serverTimestamp()
   };
 }
@@ -9947,14 +9977,19 @@ async function ppSalvarOrcamento(){
       const r=await db.collection('orcamentos').add(d);
       ORC.id=r.id;
     }
+    if(typeof neSalvarPrivado==='function') await neSalvarPrivado();
     if(ORC.leadId){
       /* o que veio do PDF/da cotação completa a ficha do cliente sem apagar nada */
       if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(ORC.leadId,
         {cpf:ORC.cliente.cpf,whatsapp:ORC.cliente.whatsapp,email:ORC.cliente.email,
          dataNascimento:ORC.cliente.nascimento,cep:(ORC.veiculo||{}).cepPernoite},'cotação');
-      const melhor=ppIncluidas().slice().sort((a,b)=>(a.premioTotal||0)-(b.premioTotal||0))[0];
+      /* base da negociação = a opção de MENOR custo; comissão sempre sobre o prêmio líquido */
+      const melhor=ppIncluidas().slice().sort((a,b)=>(a.premioTotal||Infinity)-(b.premioTotal||Infinity))[0];
       await db.collection('leads_crm').doc(ORC.leadId).update({
-        orcamentoId:ORC.id, valorNegociacao:melhor?melhor.premioTotal:null,
+        orcamentoId:ORC.id, valorNegociacao:melhor?melhor.premioLiquido:null,
+        valorTotalNegociacao:melhor?melhor.premioTotal:null,
+        comissaoPct:melhor&&melhor.comissaoPct!=null?melhor.comissaoPct:null,
+        seguradoraNegociacao:melhor?melhor.seguradora:null,
         ultimoOrcamentoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() }).catch(()=>{});
     }
     toast('Orçamento salvo.','ok');
@@ -9967,12 +10002,13 @@ async function ppGerarLink(){
   await ppSalvarOrcamento();
   if(!ORC.id) return;
   const base=location.href.split('#')[0].replace(/[^/]*$/,'');
-  const url=base+'cotacao.html?id='+ORC.id;
+  const url=base+'proposta.html?id='+ORC.id;
+  if(typeof neMarcarCotacaoEnviada==='function') neMarcarCotacaoEnviada(ORC.leadId);
   const box=document.getElementById('ppLinkBox');
   if(box) box.innerHTML=`<div style="background:var(--brand-50);border-radius:12px;padding:14px 16px">
     <div style="font-size:.82rem;color:var(--text-2);margin-bottom:7px">
       <i class="fas fa-circle-info"></i> O cliente abre este link e vê o comparativo sem precisar de senha.
-      O arquivo <b>cotacao.html</b> precisa estar no mesmo endereço do CRM.</div>
+      O arquivo <b>proposta.html</b> precisa estar no mesmo endereço do CRM. Lá ele escolhe a opção e clica em <b>Contratar</b>.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="text" readonly value="${esc(url)}" id="ppUrl" style="flex:1;min-width:260px;font-size:.85rem">
       <button class="btn btn-primary btn-sm" onclick="ppCopiar('${esc(url)}')"><i class="fas fa-copy"></i> Copiar</button>
@@ -9988,9 +10024,10 @@ function ppCopiar(t){
 }
 function ppEnviarWhats(){
   const base=location.href.split('#')[0].replace(/[^/]*$/,'');
-  const url=base+'cotacao.html?id='+ORC.id;
+  const url=base+'proposta.html?id='+ORC.id;
   const nome=(ORC.cliente.nome||'').split(' ')[0];
-  const t=`Oi ${nome}! Preparei o comparativo do seu seguro de auto. É só abrir: ${url}`;
+  const t=`Oi ${nome}! Preparei a proposta do seu seguro auto com as opções que cotamos para você. É só abrir, comparar e, se gostar, clicar em Contratar: ${url}`;
+  if(typeof neMarcarCotacaoEnviada==='function') neMarcarCotacaoEnviada(ORC.leadId);
   const fone=(ORC.cliente.whatsapp||'').replace(/\D/g,'');
   window.open('https://wa.me/'+(fone?('55'+fone.replace(/^55/,'')):'')+'?text='+encodeURIComponent(t),'_blank');
 }
@@ -10097,6 +10134,7 @@ async function ppAbrirOrcamento(id){
       fipe:o.fipe||null, mostrarFipe:!!o.fipe,
       observacoes:o.observacoes||'', validade:o.validade||null, consultor:o.consultor||'',
       mostrarLiquido:!!o.mostrarLiquido, publicado:true };
+    if(typeof neAoAbrirOrcamento==='function') await neAoAbrirOrcamento(o);
     location.hash='#orcamento';
     VIEWS.orcamento();
   }catch(e){ toast('Não consegui abrir: '+(e.code||e.message),'err'); }
@@ -11400,11 +11438,13 @@ function modalFechar(id){
   const ant=fcApoliceAnterior(c,ramo);
   FC={leadId:id,ramo,anterior:ant,ehRenovacao:!!ant,cob:{},assist:{},aba:'contrato'};
   Object.keys(FC_MEM).forEach(k=>delete FC_MEM[k]);   /* cada fechamento começa limpo */
+  FC.emissao=c.status==='em_transmissao';
   if(ant){ /* já começa com o retrato do ano anterior — você só confere e ajusta */
     (ant.coberturasEstr||[]).forEach(x=>FC.cob[x.k]={lmi:x.lmi||''});
     (ant.assistencias||[]).forEach(x=>FC.assist[x.k]={on:true,d:x.detalhe||''});
   }
   const orc=CACHE.orcamentos&&c.orcamentoId?CACHE.orcamentos.find(o=>o.id===c.orcamentoId):null;
+  if(typeof nePreencherFechamento==='function') nePreencherFechamento(c);
   openModal(fcHtml(c,orc),'wide');
   setTimeout(fcCalc,60);
 }
@@ -11412,7 +11452,7 @@ function fcHtml(c,orc){
   const ant=FC.anterior; const dias=ant?fcDiasPara(ant.dataFimVigencia):null;
   const cat=fcCatalogo(FC.ramo);
   const ini=ant&&FC.ehRenovacao&&ant.dataFimVigencia?String(toDate(ant.dataFimVigencia).toISOString().slice(0,10)):hojeISO();
-  return `<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> ${FC.ehRenovacao?'Renovação fechada!':'Negócio fechado!'} — ${esc(c.nome||c.nomeEmpresa||'')}</h3>
+  return `<div class="modal-head"><h3><i class="fas fa-trophy" style="color:var(--ok)"></i> ${FC.emissao?'Apólice emitida — confirme vigência e dados':(FC.ehRenovacao?'Renovação fechada!':'Negócio fechado!')} — ${esc(c.nome||c.nomeEmpresa||'')}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
       ${ant?`<div style="background:${FC.ehRenovacao?'var(--brand-50)':'var(--surface-2)'};border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px">
@@ -11495,11 +11535,7 @@ function fcAbaHtml(c,orc){
       </div>
       ${ant&&FC.ehRenovacao?`<div style="font-size:.8rem;color:var(--text-2);background:var(--surface-2);border-radius:10px;padding:9px 12px" id="fcVariacao">
         Prêmio anterior: <b>${money(ant.premioLiquido||ant.valorPremio||0)}</b> — preencha o líquido e eu mostro a variação.</div>`:''}
-      <div id="fecharDrop" style="border:2px dashed var(--border-2);border-radius:12px;padding:18px;text-align:center;cursor:pointer;margin-top:14px" onclick="document.getElementById('fecharFile').click()">
-        <i class="fas fa-file-arrow-up" style="font-size:20px;color:var(--brand)"></i>
-        <div style="font-weight:600;margin-top:5px">Tem o PDF da proposta? Anexe que eu leio e preencho tudo</div>
-        <div style="font-size:.78rem;color:var(--text-3)">opcional — Porto, Azul, HDI, Bradesco, Tokio e Yelum</div>
-        <input type="file" id="fecharFile" accept="application/pdf" style="display:none" onchange="fecharComProposta('${FC.leadId}',this.files[0])"></div>`;
+      <div style="font-size:.78rem;color:var(--text-3);margin-top:12px"><i class="fas fa-circle-info"></i> Os valores, coberturas e assistências vieram da negociação confirmada na transmissão — confira com a apólice emitida e ajuste o que mudou.</div>`;
   }
   if(FC.aba==='veiculo'){
     if(!fcEhAuto(FC.ramo)) return `<div class="form-row"><label>O que está segurado</label>
@@ -11607,6 +11643,7 @@ async function fcSalvar(){
     bemSegurado:m('fcBem')||null, observacoes:m('fcObs')||null,
     status:'ativa', leadId:FC.leadId, responsavelId:respId, responsavelNome:f?(f.nome||f.email):null,
     tipoNegocio:FC.ehRenovacao?'renovacao':'novo',
+    ...(typeof neExtrasApolice==='function'?neExtrasApolice(c):{}),
     renovacaoDe:FC.ehRenovacao&&FC.anterior?FC.anterior.id:null,
     atualizadoEm:FV.serverTimestamp()
   };
@@ -11625,6 +11662,7 @@ async function fcSalvar(){
         +(assistencias.length?' · assistências: '+assistencias.map(a=>a.nome).join(', '):''),
       autor:(CURRENT_USER&&CURRENT_USER.email||'admin').split('@')[0],criadoEm:FV.serverTimestamp()});
     if(typeof ctCompletarCadastro==='function') await ctCompletarCadastro(FC.leadId,{ramo:FC.ramo,cep:dados.cepPernoite},'fechamento');
+    if(typeof nePosEmissao==='function') await nePosEmissao(FC.leadId,ref.id);
     setTimeout(()=>renAplicarAutomatico(true),1200);
     setTimeout(()=>portalAtualizarRelacionados(FC.leadId),2500);
     closeModal();
@@ -12381,5 +12419,886 @@ async function imgRestaurar(id){
 }
 
 </script>
+  <script>
+/* =========================================================================
+   NEGOCIAÇÃO AUTO — do lead novo à apólice emitida
+   Lead novo → Primeiro contato (mensagem padrão + prompt da IA) → Cotação
+   enviada (link/PDF da proposta) → Em transmissão (seguradora analisando) →
+   Fechada (apólice emitida) ou Perdida (declinada pela seguradora/cliente).
+   - A IA lê as cotações (e a apólice atual, na renovação) e devolve um JSON
+     no formato do sistema; o CRM monta o orçamento com ele.
+   - Comissão é informada à mão, sempre sobre o prêmio líquido, e NÃO vai no
+     documento que o cliente lê (fica em orcamentos_privado).
+   - Prêmio total = prêmio líquido + 7,38% de IOF.
+   - O cliente escolhe a opção no link e informa a forma de pagamento; o CRM
+     recebe em "contratacoes" e o número do cartão fica em
+     "contratacoes_cartao" (só equipe, apagado em até 15 dias ou na emissão).
+   ========================================================================= */
+const NE_IOF=0.0738;
+const NE_CART_DIAS=15;
+const neR2=n=>Math.round((Number(n)||0)*100)/100;
+const neTotal=liq=>liq==null?null:neR2(liq*(1+NE_IOF));
+const neLead=id=>(CACHE.leads||[]).find(x=>x.id===id)||null;
+const NE_FORMAS={cartao:'Cartão de crédito',debito:'Débito em conta',boleto:'Boleto',carne:'Carnê',avista:'À vista'};
+const neForma=f=>NE_FORMAS[f]||f||'—';
+const neHoje=()=>hojeISO();
+function neConsultor(){
+  const em=(CURRENT_USER&&CURRENT_USER.email)||'';
+  const a=(CACHE.admins||[]).find(x=>(x.email||'').toLowerCase()===em.toLowerCase());
+  return (a&&a.nome)||em.split('@')[0]||'';
+}
+async function neNota(leadId,texto,tipo){
+  try{ await db.collection('interacoes_crm').add({leadId,tipo:tipo||'nota',texto,
+    autor:((CURRENT_USER&&CURRENT_USER.email)||'admin').split('@')[0],criadoEm:FV.serverTimestamp()}); }catch(e){ console.warn('nota',e); }
+}
+function neEhRenovacao(c){
+  if(c.temSeguro==='sim') return true;
+  return apolicesDoCliente(c).some(a=>fcEhAuto(a.ramo)&&apEhAtiva(a));
+}
+function neApoliceAtual(c){
+  const aps=apolicesDoCliente(c).filter(a=>fcEhAuto(a.ramo)&&a.status!=='cancelada');
+  if(!aps.length) return null;
+  return aps.slice().sort((x,y)=>String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')))[0];
+}
+
+/* ---------- CEP do pernoite com rua, bairro e cidade ---------- */
+const NE_CEP_CACHE={};
+function neCepHtml(c){
+  const cep=String(c.cepPernoite||c.cep||'').replace(/\D/g,'');
+  if(!cep) return null;
+  const fmt=cep.length===8?cep.slice(0,5)+'-'+cep.slice(5):cep;
+  const e=c.enderecoPernoite||NE_CEP_CACHE[cep];
+  if(e&&(e.cidade||e.logradouro))
+    return esc(fmt)+'<div style="font-size:.78rem;color:var(--text-2);font-weight:400">'+esc([e.logradouro,e.bairro].filter(Boolean).join(', '))
+      +(e.cidade?' — <b>'+esc(e.cidade)+(e.uf?'/'+esc(e.uf):'')+'</b>':'')+'</div>';
+  if(cep.length===8&&!NE_CEP_CACHE[cep]){ NE_CEP_CACHE[cep]={buscando:true}; neCepCompletar(c.id,cep); }
+  return esc(fmt)+'<div style="font-size:.76rem;color:var(--text-3)" id="neCep_'+esc(c.id)+'">buscando endereço...</div>';
+}
+/* lead antigo (que só tinha o CEP): busca no ViaCEP e já completa o cadastro sem apagar nada */
+async function neCepCompletar(leadId,cep){
+  try{
+    const r=await (await fetch('https://viacep.com.br/ws/'+cep+'/json/')).json();
+    if(!r||r.erro){ NE_CEP_CACHE[cep]={}; const el=document.getElementById('neCep_'+leadId); if(el) el.textContent='CEP não encontrado'; return; }
+    const e={cep:cep.slice(0,5)+'-'+cep.slice(5),logradouro:r.logradouro||'',bairro:r.bairro||'',cidade:r.localidade||'',uf:r.uf||''};
+    NE_CEP_CACHE[cep]=e;
+    const el=document.getElementById('neCep_'+leadId);
+    if(el) el.innerHTML=esc([e.logradouro,e.bairro].filter(Boolean).join(', '))+(e.cidade?' — <b>'+esc(e.cidade)+'/'+esc(e.uf)+'</b>':'');
+    const l=neLead(leadId); if(!l) return;
+    const upd={enderecoPernoite:e};
+    if(!l.cidade) upd.cidade=e.cidade; if(!l.estado) upd.estado=e.uf;
+    if(!l.endereco&&!l.enderecoCompleto) upd.endereco=e.logradouro||null;
+    if(!l.bairro) upd.bairro=e.bairro||null;
+    if(!l.cep) upd.cep=e.cep;
+    await db.collection('leads_crm').doc(leadId).update(upd);
+  }catch(err){ NE_CEP_CACHE[cep]={}; }
+}
+
+/* ---------- botões da ficha ---------- */
+function neBotoesTopo(c,vFunil){
+  return `<button class="btn btn-ghost btn-sm" style="color:var(--ok)" onclick="neMensagemPadrao('${c.id}')"><i class="fab fa-whatsapp"></i> Mensagem padrão</button>
+    ${c.orcamentoId?`<button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> Ver proposta</button>`:''}`;
+}
+function neBotoesFase(c){
+  const f=faseDoLead(c);
+  if(f==='cotacao_enviada') return `<button class="btn btn-primary" onclick="neModalTransmitir('${c.id}')"><i class="fas fa-tower-broadcast"></i> Enviar para transmissão</button>
+      <button class="btn btn-ghost" onclick="modalPerder('${c.id}')"><i class="fas fa-xmark"></i> Perdida</button>`;
+  if(f==='em_transmissao') return `<button class="btn btn-ghost" onclick="neModalDeclinarSeg('${c.id}')"><i class="fas fa-building-circle-xmark"></i> Declinada pela seguradora</button>
+      <button class="btn btn-ghost" onclick="neModalDeclinarCli('${c.id}')"><i class="fas fa-user-xmark"></i> Declinada pelo cliente</button>
+      <button class="btn btn-success" onclick="modalFechar('${c.id}')"><i class="fas fa-file-circle-check"></i> Emitida</button>`;
+  if(f==='pre_cadastro') return `<span style="font-size:.78rem;color:var(--text-3)">Fechada/Perdida liberam em "Cotação enviada"</span>
+      <button class="btn btn-primary" onclick="moverFase('${c.id}','contato_realizado')"><i class="fas fa-phone"></i> Fiz o primeiro contato</button>`;
+  if(f==='contato_realizado') return `<span style="font-size:.78rem;color:var(--text-3)">Fechada/Perdida liberam em "Cotação enviada"</span>`;
+  return '';
+}
+/* regras de passagem entre fases (vale para o arrastar, as setas e o seletor) */
+function neGuardaFase(id,fase){
+  const l=neLead(id); if(!l) return true;
+  const cur=faseDoLead(l);
+  const nega=msg=>{ toast(msg,'info'); if(FICHA_LEAD===id) abrirLead(id); return false; };
+  if(fase==='em_transmissao'){
+    if(cur==='em_transmissao'||cur==='cotacao_enviada'||cur==='contato_realizado'){ neModalTransmitir(id); return false; }
+    return nega('Para transmitir, a cotação precisa ter sido enviada ao cliente.');
+  }
+  if(fase==='negocio_fechado'){
+    if(cur==='em_transmissao') return true;
+    return nega('Fechada só depois da transmissão: quando a seguradora emitir, use o botão "Emitida".');
+  }
+  if(fase==='negocio_perdido'){
+    if(cur==='cotacao_enviada') return true;
+    if(cur==='em_transmissao'){ neModalDeclinarCli(id); return false; }
+    return nega('Perdida só fica disponível a partir de "Cotação enviada".');
+  }
+  return true;
+}
+function nePinsCard(l){
+  const f=faseDoLead(l);
+  if(f==='em_transmissao'){ const n=l.negociacaoFinal||{};
+    return `<div style="font-size:.72rem;font-weight:700;color:#0891b2;margin:2px 0"><i class="fas fa-hourglass-half"></i> ${esc(n.seguradora||'seguradora')} analisando</div>`; }
+  if(l.contratacao&&(f==='cotacao_enviada'||f==='contato_realizado'))
+    return `<div style="font-size:.72rem;font-weight:700;color:var(--ok);margin:2px 0"><i class="fas fa-star"></i> Cliente quer contratar — conferir</div>`;
+  return '';
+}
+
+/* ---------- painel de negociação dentro da ficha ---------- */
+function nePagamentoHtml(ct){
+  if(!ct) return '';
+  const linhas=[`<b>${esc(neForma(ct.forma))}</b>${ct.parcelas?' · '+ct.parcelas+'x'+(ct.valorParcela?' de '+money(ct.valorParcela):''):''}`];
+  if(ct.forma==='cartao'&&ct.cartao) linhas.push(`${esc(ct.cartao.bandeira||'Cartão')} final <b>${esc(ct.cartao.final||'')}</b> · ${esc(ct.cartao.nome||'')}
+     <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="neVerCartao('${ct.id}')"><i class="fas fa-eye"></i> ver número</button>`);
+  if(ct.forma==='debito'&&ct.debito) linhas.push(`Banco <b>${esc(ct.debito.banco||'')}</b> · ag. <b>${esc(ct.debito.agencia||'')}</b> · conta <b>${esc(ct.debito.conta||'')}</b>${ct.debito.titular?' · '+esc(ct.debito.titular):''}`);
+  return linhas.join('<br>');
+}
+function nePainel(c){
+  const f=faseDoLead(c); const ren=neEhRenovacao(c); let h='';
+  const ct=c.contratacao;
+  if(ct&&(f==='cotacao_enviada'||f==='contato_realizado')){
+    h+=`<div style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;font-size:.88rem;color:#166534;margin-bottom:4px"><i class="fas fa-star"></i> O cliente clicou em Contratar ${ct.em?'<span style="font-weight:400;color:var(--text-3);font-size:.78rem">· '+fmtDataHora(ct.em)+'</span>':''}</div>
+      <div style="font-size:.86rem">${esc(ct.seguradora||'')}${ct.produto?' · '+esc(ct.produto):''} — <b>${money(ct.premioTotal)}</b></div>
+      <div style="font-size:.84rem;margin-top:4px">${nePagamentoHtml(ct)}</div>
+      <div style="margin-top:10px"><button class="btn btn-success btn-sm" onclick="neModalTransmitir('${c.id}')"><i class="fas fa-tower-broadcast"></i> Conferir e enviar para transmissão</button></div></div>`;
+  }
+  if(f==='em_transmissao'){
+    const n=c.negociacaoFinal||{};
+    h+=`<div style="background:#ecfeff;border:1px solid #a5f3fc;border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <div style="font-weight:700;font-size:.88rem;color:#0e7490"><i class="fas fa-tower-broadcast"></i> Em transmissão — a seguradora está analisando o risco</div>
+        <button class="btn btn-ghost btn-sm" onclick="neModalTransmitir('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 14px;margin-top:10px">
+        <div class="mov-f"><div class="k">Seguradora</div><div class="v">${esc(n.seguradora||'—')}${n.produto?' · '+esc(n.produto):''}</div></div>
+        <div class="mov-f"><div class="k">Prêmio total</div><div class="v">${money(n.premioTotal)}</div></div>
+        <div class="mov-f"><div class="k">Líquido · comissão</div><div class="v">${money(n.premioLiquido)} · ${n.comissaoPct!=null?n.comissaoPct+'% = '+money(n.comissaoValor):'—'}</div></div>
+        <div class="mov-f"><div class="k">Pagamento</div><div class="v">${esc(n.formaPagamento||'—')}${n.parcelas?' · '+n.parcelas+'x':''}</div></div>
+        <div class="mov-f"><div class="k">Início previsto</div><div class="v">${n.inicioVigencia?fmtData(n.inicioVigencia):'—'}</div></div>
+        <div class="mov-f"><div class="k">Transmitido em</div><div class="v">${c.transmissaoEm?fmtDataHora(c.transmissaoEm):'—'}</div></div>
+      </div>
+      ${ct?`<div style="font-size:.83rem;margin-top:8px;padding-top:8px;border-top:1px dashed #a5f3fc">${nePagamentoHtml(ct)}</div>`:''}
+    </div>`;
+  }
+  if(f==='contato_realizado'||f==='cotacao_enviada'){
+    h+=`<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px;background:var(--surface-2)">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:6px"><i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i> Cotação com IA ${ren?'<span class="badge" style="background:var(--brand-50);color:var(--brand-dark);font-size:.68rem">renovação</span>':''}</div>
+      <ol style="margin:0 0 10px 18px;padding:0;font-size:.82rem;color:var(--text-2);line-height:1.6">
+        <li>Clique em <b>Gerar prompt</b> e cole na IA (ChatGPT, Claude, Gemini…).</li>
+        <li>Anexe na IA os PDFs de <b>todas as cotações</b> que você fez${ren?' <b>e a apólice atual</b> do cliente':''}.</li>
+        <li>Copie a resposta da IA e clique em <b>Colar resposta</b> — o orçamento se monta sozinho.</li>
+      </ol>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="nePromptIA('${c.id}')"><i class="fas fa-robot"></i> Gerar prompt</button>
+        <button class="btn btn-ghost btn-sm" onclick="neColarIA('${c.id}')"><i class="fas fa-paste"></i> Colar resposta</button>
+        ${c.orcamentoId?`<button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-link"></i> Proposta / link / PDF</button>`:''}
+      </div></div>`;
+  }
+  if(f==='pre_cadastro') h+=`<div style="font-size:.8rem;color:var(--text-3);margin:-6px 0 14px"><i class="fas fa-circle-info"></i> Mande a <b>mensagem padrão</b> e mova para <b>Primeiro contato</b> — lá aparece o prompt da IA para montar a cotação.</div>`;
+  return h;
+}
+
+/* =========================================================================
+   MENSAGEM PADRÃO (quando o cliente não chamou no WhatsApp)
+   ========================================================================= */
+function neTextoPadrao(c,tipo,consultor,genero){
+  const nome=((c.nome||'').trim().split(' ')[0]||'tudo bem');
+  const sou=(genero==='a'?'consultora':'consultor');
+  const veic=c.veiculo?(' para o seu '+c.veiculo):'';
+  if(tipo==='renov') return `Olá, ${nome}! Tudo bem?
+
+Sou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro Automóvel e quer comparar/renovar o seguro${veic}${c.mesVencimento?' que vence em '+c.mesVencimento:''}.
+
+Para darmos continuidade ao atendimento, preciso de:
+
+• Apólice atual (PDF) — para comparar as coberturas e manter o seu bônus
+• CNH de todos os condutores que dirigem o veículo
+• Documento do veículo (CRLV), caso tenha trocado de carro desde a última apólice
+
+Pode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras e te mostro o comparativo com o que você tem hoje.`;
+  return `Olá, ${nome}! Tudo bem?
+
+Sou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro Automóvel${veic}.
+
+Para darmos continuidade ao atendimento, preciso de:
+
+• CNH de todos os condutores que dirigem o veículo
+• Documento do veículo (CRLV) — para as informações de placa, chassi e modelo correto
+
+Pode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras para você.`;
+}
+let NE_MSG={};
+function neMensagemPadrao(id){
+  const c=neLead(id); if(!c) return;
+  let gen='o'; try{ gen=localStorage.getItem('ne_genero')||'o'; }catch(e){}
+  NE_MSG={id,tipo:neEhRenovacao(c)?'renov':'novo',consultor:neConsultor(),gen};
+  neMsgRender();
+}
+function neMsgRender(){
+  const c=neLead(NE_MSG.id); if(!c) return;
+  const t=neTextoPadrao(c,NE_MSG.tipo,NE_MSG.consultor,NE_MSG.gen);
+  openModal(`<div class="modal-head"><h3><i class="fab fa-whatsapp" style="color:var(--ok)"></i> Mensagem padrão — ${esc(c.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="tabs" style="margin-bottom:12px">
+        <button class="tab ${NE_MSG.tipo==='novo'?'active':''}" onclick="NE_MSG.tipo='novo';neMsgRender()"><i class="fas fa-car"></i> Sem seguro (CNH + documento)</button>
+        <button class="tab ${NE_MSG.tipo==='renov'?'active':''}" onclick="NE_MSG.tipo='renov';neMsgRender()"><i class="fas fa-rotate"></i> Tem apólice (renovação)</button>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px">
+        <div class="form-row" style="margin:0"><label>Seu nome na mensagem</label><input type="text" id="neMsgNome" value="${esc(NE_MSG.consultor)}" oninput="NE_MSG.consultor=this.value;document.getElementById('neMsgTxt').value=neTextoPadrao(neLead(NE_MSG.id),NE_MSG.tipo,NE_MSG.consultor,NE_MSG.gen)"></div>
+        <div class="form-row" style="margin:0"><label>Tratamento</label><select onchange="NE_MSG.gen=this.value;try{localStorage.setItem('ne_genero',this.value)}catch(e){};document.getElementById('neMsgTxt').value=neTextoPadrao(neLead(NE_MSG.id),NE_MSG.tipo,NE_MSG.consultor,NE_MSG.gen)">
+          <option value="o" ${NE_MSG.gen!=='a'?'selected':''}>consultor</option><option value="a" ${NE_MSG.gen==='a'?'selected':''}>consultora</option></select></div>
+      </div>
+      <div class="form-row" style="margin-top:12px"><label>Mensagem (pode editar antes de mandar)</label>
+        <textarea id="neMsgTxt" rows="14" style="font-family:inherit;line-height:1.5">${esc(t)}</textarea></div>
+      ${(c.whatsapp||c.telefone)?'':'<div style="color:var(--warn);font-size:.82rem"><i class="fas fa-triangle-exclamation"></i> Este lead não tem WhatsApp cadastrado — copie a mensagem e mande por onde tiver.</div>'}
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${c.id}')">Voltar</button>
+      <button class="btn btn-ghost" onclick="copiar(document.getElementById('neMsgTxt').value,'Mensagem copiada.');neNota('${c.id}','Mensagem padrão copiada (${NE_MSG.tipo==='renov'?'renovação':'CNH + documento'}).','whatsapp')"><i class="fas fa-copy"></i> Copiar</button>
+      ${(c.whatsapp||c.telefone)?`<button class="btn btn-success" onclick="neMsgEnviar()"><i class="fab fa-whatsapp"></i> Abrir no WhatsApp</button>`:''}</div>`,'wide');
+}
+async function neMsgEnviar(){
+  const c=neLead(NE_MSG.id); if(!c) return;
+  const n=waNum(c.whatsapp||c.telefone); const t=document.getElementById('neMsgTxt').value;
+  window.open('https://wa.me/'+n+'?text='+encodeURIComponent(t),'_blank');
+  await neNota(c.id,'Mensagem padrão enviada pelo WhatsApp ('+(NE_MSG.tipo==='renov'?'pedido da apólice atual':'pedido de CNH e documento')+').','whatsapp');
+  if(faseDoLead(c)==='pre_cadastro'){
+    try{ await db.collection('leads_crm').doc(c.id).update({status:'contato_realizado',atualizadoEm:FV.serverTimestamp()});
+      toast('Movido para "Primeiro contato".','ok'); }catch(e){}
+  }
+}
+
+/* =========================================================================
+   PROMPT DA IA — padroniza a resposta no formato do sistema
+   ========================================================================= */
+function neRespostasSite(c){
+  const M={uso:{particular:'Particular (trabalho, lazer, família)',profissional:'Profissional / comercial',transporte:'Aplicativo / táxi'},
+    cond:{eu:'o próprio cliente',outro:'outra pessoa da casa'},gar:{fechada:'Garagem fechada',aberta:'Estacionamento aberto',rua:'Na rua'},
+    reb:{'200km':'até 200 km','400km':'até 400 km','600km':'até 600 km',ilimitado:'km ilimitado'},
+    ter:{'100mil':'R$ 100 mil','200mil':'R$ 200 mil','300mil':'R$ 300 mil','500mil':'R$ 500 mil','800mil':'R$ 800 mil'},
+    cr:{nao:'não quer','7dias':'7 diárias','15dias':'15 diárias','30dias':'30 diárias'},
+    fr:{basica:'Básica (obrigatória)',reduzida:'Reduzida (50%)','super-reduzida':'Super reduzida (25%)'},
+    ex:{vidros:'Vidros, faróis, lanternas e retrovisores',martelinho:'Martelinho de ouro',parachoque:'Para-choque',pintura:'Pintura e lataria',pneu:'Pneu, roda e suspensão'}};
+  const e=c.enderecoPernoite||NE_CEP_CACHE[String(c.cepPernoite||c.cep||'').replace(/\D/g,'')]||{};
+  const r=[];
+  const add=(k,v)=>{ if(v!=null&&v!=='') r.push([k,v]); };
+  add('Veículo',[c.veiculo,c.anoVeiculo].filter(Boolean).join(' · '));
+  add('Valor FIPE informado',c.valorFipe); add('Código FIPE',c.codigoFipe);
+  add('Tem seguro hoje',c.temSeguro==='sim'?'Sim'+(c.mesVencimento?' — vence em '+c.mesVencimento:''):(c.temSeguro==='nao'?'Não':null));
+  add('Uso do veículo',M.uso[c.utilizacao]); add('Quem mais dirige',M.cond[c.condutor]);
+  add('Idade de quem mais dirige',c.idadeCondutor);
+  add('Pernoite',M.gar[c.pernoite]);
+  add('CEP de pernoite',(c.cepPernoite||c.cep||'')+(e.cidade?' ('+[e.logradouro,e.bairro,e.cidade+'/'+e.uf].filter(Boolean).join(', ')+')':''));
+  add('Sinistro nos últimos 12 meses',c.sinistro==='sim'?'Sim':(c.sinistro==='nao'?'Não':null));
+  add('Bônus',c.bonus&&c.bonus!=='0'?c.bonus:null);
+  add('Guincho / assistência pedida',M.reb[c.reboque]); add('Terceiros (danos materiais) pedido',M.ter[c.terceiros]);
+  add('Carro reserva pedido',M.cr[c.carroReserva]); add('Franquia preferida',M.fr[c.franquia]);
+  add('Coberturas extras pedidas',Array.isArray(c.extras)&&c.extras.length?c.extras.map(x=>M.ex[x]||x).join(', '):(Array.isArray(c.extras)?'nenhuma':null));
+  return r;
+}
+/* o que o cliente pediu — vai também no link, na seção "Você pediu" */
+function nePedidoCliente(c){
+  const quer=['Guincho / assistência pedida','Terceiros (danos materiais) pedido','Carro reserva pedido','Franquia preferida','Coberturas extras pedidas','Uso do veículo','Pernoite'];
+  const rot={'Guincho / assistência pedida':'Guincho','Terceiros (danos materiais) pedido':'Danos a terceiros','Carro reserva pedido':'Carro reserva','Franquia preferida':'Franquia','Coberturas extras pedidas':'Extras'};
+  return neRespostasSite(c).filter(([k])=>quer.includes(k)).map(([k,v])=>({item:rot[k]||k,valor:String(v)}));
+}
+const NE_CHAVES_COB=[['casco','Casco (colisão, incêndio, roubo e furto)'],['rcf_dm','Danos materiais a terceiros'],['rcf_dc','Danos corporais a terceiros'],
+  ['rcf_dme','Danos morais e estéticos'],['app_m','APP — morte por passageiro'],['app_i','APP — invalidez por passageiro'],['app_dmho','Despesas médico-hospitalares'],
+  ['defesa','Custos de defesa'],['extras','Despesas extraordinárias'],['carta','Carta verde (Mercosul)'],['outros','Outra cobertura']];
+const NE_CHAVES_ASS=[['assist','Assistência 24h / guincho (detalhe: km)'],['reserva','Carro reserva (detalhe: diárias/porte)'],['vidros','Vidros, faróis, lanternas e retrovisores'],
+  ['farois','Faróis, lanternas e retrovisores (quando separado)'],['reparos','Martelinho / pequenos reparos'],['parachoque','Para-choque'],['roda','Pneu, roda e suspensão'],
+  ['pintura','Pintura e lataria'],['buracos','Proteção contra buracos'],['chaveiro','Chaveiro / perda de chaves'],['residencia','Assistência residencial'],['outros','Outra assistência/serviço']];
+function nePromptTexto(c){
+  const ren=neEhRenovacao(c); const ap=neApoliceAtual(c);
+  const resp=neRespostasSite(c).map(([k,v])=>'- '+k+': '+v).join('\n')||'- (o cliente não respondeu o questionário do site — use só os PDFs)';
+  const pessoa=[['Nome',c.nome],['CPF',c.cpf],['Nascimento',c.dataNascimento?fmtData(c.dataNascimento):null],['Sexo',c.sexo],['Estado civil',c.estadoCivil],
+    ['Profissão',c.profissao],['Cidade/UF',[c.cidade,c.estado].filter(Boolean).join('/')]].filter(x=>x[1]).map(x=>'- '+x[0]+': '+x[1]).join('\n');
+  const apTxt=ap?`\nAPÓLICE ATUAL CADASTRADA NO NOSSO SISTEMA (confira com o PDF, o PDF manda):
+- Seguradora: ${ap.seguradora||'—'} · nº ${ap.numeroApolice||'—'} · vigência ${fmtData(ap.dataInicioVigencia)} a ${fmtData(ap.dataFimVigencia)}
+- Prêmio líquido: ${ap.premioLiquido!=null?money(ap.premioLiquido):'—'} · prêmio total: ${ap.valorPremio!=null?money(ap.valorPremio):'—'} · franquia: ${ap.franquia!=null?money(ap.franquia):'—'} ${ap.franquiaTipo||''}
+- Coberturas: ${(ap.coberturasEstr||[]).map(x=>x.nome+' '+(x.lmi||'')).join('; ')||'—'}
+- Assistências: ${(ap.assistencias||[]).map(x=>x.nome+(x.detalhe?' ('+x.detalhe+')':'')).join('; ')||'—'}\n`:'';
+  return `Você é analista de seguros da corretora Retorno Seguros. Vou anexar os PDFs das COTAÇÕES DE SEGURO AUTO que fizemos para um cliente${ren?' e também a APÓLICE ATUAL dele (é uma RENOVAÇÃO)':''}.
+
+SUA TAREFA
+1. Ler TODOS os PDFs anexados com atenção (todas as páginas).
+2. Extrair de cada cotação: seguradora, produto, nº da cotação, validade, prêmio líquido, IOF, prêmio total, TODAS as formas de pagamento com parcelas e valores, franquia do casco (tipo e valor), franquias por peça (vidros, faróis etc.), TODAS as coberturas com limite (LMI) e TODAS as assistências/serviços com o detalhe (km de guincho, diárias de carro reserva…).
+3. Se houver duas versões da mesma seguradora (ex.: franquia diferente), trate cada uma como uma opção separada.
+4. Comparar cada opção com o que o cliente PEDIU no questionário (abaixo) e dizer, item a item, se entrega (ok), entrega em parte (parcial) ou não entrega (nao).${ren?`
+5. Ler a APÓLICE ATUAL e montar o comparativo "o que ele tem hoje × o que propomos" (coberturas, assistências, franquia, prêmio, bônus/classe).`:''}
+${ren?'6':'5'}. Indicar a opção que você recomenda (índice começando em 0) e explicar em linguagem simples para o cliente.
+
+REGRAS
+- Não invente nada. Se uma informação não estiver no PDF, use null.
+- Valores em número, com ponto decimal e sem "R$" (ex.: 3456.78). Datas no formato AAAA-MM-DD.
+- O prêmio total é o prêmio líquido + 7,38% de IOF. Se o PDF não trouxer o total, calcule assim; se trouxer, use o do PDF.
+- NÃO procure nem informe comissão do corretor.
+- Use exatamente as "chave" das listas abaixo. O "nome" pode ser o texto da seguradora.
+- "pagamento.forma" deve ser: "cartao", "debito", "boleto", "carne" ou "avista".
+- Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json, sem texto antes ou depois.
+
+CHAVES DE COBERTURA: ${NE_CHAVES_COB.map(x=>x[0]+' = '+x[1]).join(' | ')}
+CHAVES DE ASSISTÊNCIA: ${NE_CHAVES_ASS.map(x=>x[0]+' = '+x[1]).join(' | ')}
+
+DADOS DO CLIENTE
+${pessoa||'- Nome: '+(c.nome||'—')}
+
+O QUE O CLIENTE RESPONDEU NO QUESTIONÁRIO DO SITE (é o que ele pediu)
+${resp}
+${apTxt}
+FORMATO OBRIGATÓRIO DA RESPOSTA
+\`\`\`json
+{
+  "versao": "retorno-ia-1",
+  "cliente": { "nome": null, "cpf": null, "nascimento": null, "sexo": null, "estadoCivil": null },
+  "veiculo": { "marca": null, "modelo": null, "anoFab": null, "anoMod": null, "placa": null, "chassi": null, "fipe": null, "combustivel": null, "cepPernoite": null, "uso": null, "condutor": null, "garagem": null },
+  "apoliceAtual": ${ren?`{
+    "seguradora": null, "produto": null, "numero": null, "vigenciaIni": null, "vigenciaFim": null, "bonus": null,
+    "premioLiquido": null, "premioTotal": null,
+    "franquia": { "tipo": null, "valor": null },
+    "coberturas": [ { "chave": "casco", "nome": "", "limite": "", "franquia": null } ],
+    "assistencias": [ { "chave": "assist", "nome": "", "detalhe": "" } ]
+  }`:'null'},
+  "opcoes": [
+    {
+      "seguradora": "", "produto": "", "cotacao": "", "validade": null,
+      "premioLiquido": 0, "iof": 0, "premioTotal": 0,
+      "franquia": { "tipo": "Obrigatória|Reduzida|Majorada|Básica", "valor": 0 },
+      "franquiasDetalhe": [ { "item": "Para-brisa", "valor": 0 } ],
+      "coberturas": [ { "chave": "casco", "nome": "", "limite": "100% FIPE", "franquia": null, "premio": null } ],
+      "assistencias": [ { "chave": "assist", "nome": "", "detalhe": "400 km" } ],
+      "pagamento": [ { "forma": "cartao", "parcelas": 10, "valorParcela": 0, "juros": false, "total": 0 } ],
+      "atendeAoPedido": [ { "pedido": "Guincho km ilimitado", "entregue": "Guincho 400 km", "status": "ok|parcial|nao" } ],
+      "destaques": [ "frase curta com o ponto forte desta opção" ],
+      "observacoes": null
+    }
+  ],
+  "comparativoRenovacao": ${ren?'[ { "item": "Guincho", "hoje": "", "proposta": "", "observacao": "" } ]':'null'},
+  "analise": {
+    "recomendada": 0,
+    "motivo": "por que esta é a melhor para o perfil (uso interno)",
+    "resumoParaCliente": "3 a 5 frases simples para o cliente, sem jargão",
+    "alertas": [ "pontos de atenção para o corretor: coberturas pedidas que nenhuma opção entrega, divergências entre PDFs, perda de cobertura na renovação etc." ]
+  }
+}
+\`\`\``;
+}
+function nePromptIA(id){
+  const c=neLead(id); if(!c) return;
+  const t=nePromptTexto(c);
+  openModal(`<div class="modal-head"><h3><i class="fas fa-robot" style="color:var(--brand)"></i> Prompt para a IA — ${esc(c.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:var(--brand-50);border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:10px">
+        <b>Como usar:</b> copie o texto, cole numa conversa nova da IA e <b>anexe os PDFs de todas as cotações</b>${neEhRenovacao(c)?' <b>e a apólice atual</b>':''}. Depois copie a resposta (o bloco JSON) e clique em <b>Colar resposta</b>.</div>
+      <textarea id="nePromptTxt" rows="18" style="font-family:ui-monospace,Menlo,monospace;font-size:.76rem;line-height:1.45" readonly>${esc(t)}</textarea>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${c.id}')">Voltar</button>
+      <button class="btn btn-ghost" onclick="neColarIA('${c.id}')"><i class="fas fa-paste"></i> Já tenho a resposta</button>
+      <button class="btn btn-primary" onclick="copiar(document.getElementById('nePromptTxt').value,'Prompt copiado — agora cole na IA e anexe os PDFs.')"><i class="fas fa-copy"></i> Copiar prompt</button></div>`,'wide');
+}
+function neColarIA(id){
+  const c=neLead(id)||{};
+  openModal(`<div class="modal-head"><h3><i class="fas fa-paste" style="color:var(--brand)"></i> Colar a resposta da IA — ${esc(c.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-size:.83rem;color:var(--text-2);margin-bottom:8px">Cole aqui tudo o que a IA respondeu (pode vir com o \`\`\`json). Eu monto o orçamento: opções, coberturas, assistências, franquias e formas de pagamento.
+      ${c.orcamentoId?'<br><b>Este lead já tem uma proposta</b> — as opções serão substituídas e o link continua o mesmo.':''}</div>
+      <textarea id="neIaTxt" rows="16" style="font-family:ui-monospace,Menlo,monospace;font-size:.76rem" placeholder='{"versao":"retorno-ia-1", ...}'></textarea>
+      <div id="neIaErr" style="color:var(--danger);font-size:.83rem;margin-top:6px"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="${id?`abrirLead('${id}')`:'closeModal()'}">Voltar</button>
+      <button class="btn btn-primary" onclick="neImportarIA('${id||''}')"><i class="fas fa-wand-magic-sparkles"></i> Montar orçamento</button></div>`,'wide');
+}
+function neParseJSON(txt){
+  let t=String(txt||'').trim();
+  const bloco=t.match(/```(?:json)?\s*([\s\S]*?)```/i); if(bloco) t=bloco[1];
+  const i=t.indexOf('{'), j=t.lastIndexOf('}'); if(i<0||j<0) throw new Error('Não achei um JSON na resposta.');
+  t=t.slice(i,j+1);
+  try{ return JSON.parse(t); }catch(e){
+    const t2=t.replace(/,\s*([}\]])/g,'$1').replace(/[“”]/g,'"');
+    return JSON.parse(t2);
+  }
+}
+const neN=v=>{ if(v==null||v==='') return null; if(typeof v==='number') return isNaN(v)?null:v; return apNum(v); };
+const NE_COB_K=new Set(PP_COB.map(x=>x.k));
+function neCiaDe(nome){
+  const t=String(nome||'').toLowerCase();
+  return ppIdentifica(t)||Object.keys(PP_CIAS).find(k=>k!=='manual'&&t.includes(PP_CIAS[k].nome.toLowerCase().split(' ')[0]))||'manual';
+}
+function neOpcaoParaProposta(o,i){
+  const cia=neCiaDe(o.seguradora);
+  const p=ppVazio(cia);
+  p.seguradora=o.seguradora||(PP_CIAS[cia]||PP_CIAS.manual).nome; p.produto=o.produto||null; p.cotacao=o.cotacao||null; p.validade=o.validade||null;
+  p.premioLiquido=neN(o.premioLiquido); p.iof=neN(o.iof); p.premioTotal=neN(o.premioTotal);
+  if(p.iof==null&&p.premioLiquido!=null) p.iof=p.premioTotal!=null?neR2(p.premioTotal-p.premioLiquido):neR2(p.premioLiquido*NE_IOF);
+  if(p.premioTotal==null&&p.premioLiquido!=null) p.premioTotal=neR2(p.premioLiquido+(p.iof||0));
+  p.franquia={tipo:(o.franquia&&o.franquia.tipo)||null,valor:neN(o.franquia&&o.franquia.valor)};
+  p.franquiasDetalhe=(o.franquiasDetalhe||[]).filter(f=>f&&f.item).map(f=>({item:String(f.item),valor:neN(f.valor)}));
+  const chave=(k,nome)=>NE_COB_K.has(k)?k:ppChaveCob(nome||'');
+  p.coberturas=(o.coberturas||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
+    lmi:x.limite==null?null:x.limite,franquia:x.franquia==null?null:x.franquia,premio:neN(x.premio),contratada:true,detalhe:null}))
+    .concat((o.assistencias||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
+    lmi:x.detalhe||'contratada',franquia:null,premio:null,contratada:true,detalhe:null,assistencia:true})));
+  p.pagamentos=(o.pagamento||[]).filter(x=>x&&x.parcelas).map(x=>({forma:String(x.forma||'').toLowerCase(),n:parseInt(x.parcelas)||1,
+    valor:neN(x.valorParcela),juros:!!x.juros,total:neN(x.total)}));
+  const pref=['cartao','debito','boleto','carne','avista'].find(f=>p.pagamentos.some(x=>x.forma===f));
+  p.parcelas=p.pagamentos.filter(x=>x.forma===pref).sort((a,b)=>a.n-b.n).map(x=>({n:x.n,valor:x.valor,juros:x.juros}));
+  p.atende=(o.atendeAoPedido||[]).filter(x=>x&&x.pedido).map(x=>({pedido:String(x.pedido),entregue:x.entregue==null?null:String(x.entregue),status:['ok','parcial','nao'].includes(x.status)?x.status:'parcial'}));
+  p.destaques=(o.destaques||[]).filter(Boolean).map(String).slice(0,4);
+  p.obs=o.observacoes||null;
+  p.comissaoPct=null; p.comissaoValor=null; p.comissaoFonte=null;
+  p.avisos=['Informe a comissão (% sobre o prêmio líquido).'];
+  p.uid='ia'+Date.now()+i; p.incluir=true; p.arquivo='IA';
+  return p;
+}
+async function neImportarIA(leadId){
+  const err=document.getElementById('neIaErr');
+  let j; try{ j=neParseJSON(document.getElementById('neIaTxt').value); }
+  catch(e){ if(err) err.textContent='Não consegui ler a resposta: '+e.message+' Confira se copiou o bloco inteiro.'; return; }
+  if(!Array.isArray(j.opcoes)||!j.opcoes.length){ if(err) err.textContent='A resposta não tem nenhuma opção ("opcoes").'; return; }
+  const l=leadId?neLead(leadId):null;
+  if(l){ ppNovoOrcamento(leadId,true); ORC.id=l.orcamentoId||null; }
+  else if(!ORC.leadId&&!ORC.id) ppNovoOrcamento(null,true);
+  const cl=j.cliente||{}, ve=j.veiculo||{};
+  ['nome','cpf','nascimento','sexo','estadoCivil'].forEach(k=>{ if(!ORC.cliente[k]&&cl[k]) ORC.cliente[k]=String(cl[k]); });
+  if(cl.nome&&ORC.cliente.nome&&ppLimpa(cl.nome).toLowerCase()!==ppLimpa(ORC.cliente.nome).toLowerCase()) ORC.cliente.nomePdf=cl.nome;
+  ['marca','modelo','anoFab','anoMod','placa','chassi','fipe','combustivel','cepPernoite','uso','condutor','garagem'].forEach(k=>{
+    if(ve[k]!=null&&ve[k]!=='') ORC.veiculo[k]=String(ve[k]); });
+  if(l){ if(!ORC.veiculo.cepPernoite&&(l.cepPernoite||l.cep)) ORC.veiculo.cepPernoite=l.cepPernoite||l.cep;
+    if(!ORC.veiculo.fipe&&l.codigoFipe) ORC.veiculo.fipe=l.codigoFipe; }
+  ORC.propostas=j.opcoes.map(neOpcaoParaProposta);
+  ORC.consultor=neConsultor()||ORC.consultor;
+  const an=j.analise||{};
+  const rec=Number.isInteger(an.recomendada)&&ORC.propostas[an.recomendada]?an.recomendada:null;
+  ORC.propostas.forEach((p,i)=>p.recomendada=(i===rec));
+  ORC.analise={motivo:an.motivo||null,alertas:(an.alertas||[]).filter(Boolean).map(String),resumoParaCliente:an.resumoParaCliente||null};
+  if(an.resumoParaCliente) ORC.observacoes=an.resumoParaCliente;
+  ORC.apoliceAtual=j.apoliceAtual&&j.apoliceAtual.seguradora?neApoliceAtualNorm(j.apoliceAtual):null;
+  ORC.comparativoRenovacao=Array.isArray(j.comparativoRenovacao)?j.comparativoRenovacao.filter(x=>x&&x.item).map(x=>({item:String(x.item),hoje:x.hoje==null?null:String(x.hoje),proposta:x.proposta==null?null:String(x.proposta),observacao:x.observacao||null})):null;
+  ORC.pedido=l?nePedidoCliente(l):(ORC.pedido||[]);
+  closeModal();
+  if(leadId) neNota(leadId,'Orçamento montado pela IA com '+ORC.propostas.length+' opção(ões): '+ORC.propostas.map(p=>p.seguradora+' '+money(p.premioTotal)).join(' · '));
+  location.hash='#orcamento'+(ORC.leadId?'/'+ORC.leadId:'');
+  VIEWS.orcamento();
+  setTimeout(()=>{ if(typeof ppBuscarFipe==='function') ppBuscarFipe(); },300);
+  toast(ORC.propostas.length+' opção(ões) montada(s). Agora informe a comissão de cada uma e salve.','ok','Pronto');
+}
+function neApoliceAtualNorm(a){
+  return { seguradora:a.seguradora||null, produto:a.produto||null, numero:a.numero||null, vigenciaIni:a.vigenciaIni||null, vigenciaFim:a.vigenciaFim||null,
+    bonus:a.bonus==null?null:String(a.bonus), premioLiquido:neN(a.premioLiquido), premioTotal:neN(a.premioTotal),
+    franquia:{tipo:(a.franquia&&a.franquia.tipo)||null,valor:neN(a.franquia&&a.franquia.valor)},
+    coberturas:(a.coberturas||[]).filter(x=>x&&x.nome).map(x=>({chave:x.chave||null,nome:String(x.nome),limite:x.limite==null?null:String(x.limite)})),
+    assistencias:(a.assistencias||[]).filter(x=>x&&x.nome).map(x=>({chave:x.chave||null,nome:String(x.nome),detalhe:x.detalhe==null?null:String(x.detalhe)})) };
+}
+
+/* ---------- blocos novos na tela do orçamento ---------- */
+function neBlocoIA(){
+  const l=ORC.leadId?neLead(ORC.leadId):null;
+  return `<div class="card" style="border:2px dashed var(--border)">
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <div style="font-size:1.8rem;color:var(--brand)"><i class="fas fa-wand-magic-sparkles"></i></div>
+      <div style="flex:1;min-width:240px"><h4 style="margin:0 0 3px">Montar com a IA</h4>
+        <div style="font-size:.85rem;color:var(--text-2)">Gere o prompt, anexe na IA os PDFs das cotações${l&&neEhRenovacao(l)?' <b>e a apólice atual</b>':''}, e cole a resposta. A comissão você informa abaixo, em cada opção.</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${l?`<button class="btn btn-ghost" onclick="nePromptIA('${l.id}')"><i class="fas fa-robot"></i> Gerar prompt</button>`:''}
+        <button class="btn btn-primary" onclick="neColarIA('${l?l.id:''}')"><i class="fas fa-paste"></i> Colar resposta da IA</button>
+      </div></div></div>`;
+}
+function neBlocoAnalise(){
+  const a=ORC.analise||{}, ps=ORC.propostas||[], ap=ORC.apoliceAtual, cmp=ORC.comparativoRenovacao;
+  const temAtende=ps.some(p=>(p.atende||[]).length);
+  if(!a.motivo&&!(a.alertas||[]).length&&!ap&&!(cmp||[]).length&&!temAtende&&!ps.length) return '';
+  const st={ok:['var(--ok)','fa-check'],parcial:['var(--warn)','fa-circle-half-stroke'],nao:['var(--danger)','fa-xmark']};
+  const pedidos=[]; ps.forEach(p=>(p.atende||[]).forEach(x=>{ if(!pedidos.includes(x.pedido)) pedidos.push(x.pedido); }));
+  return `<div class="card"><div class="card-head"><h3><i class="fas fa-clipboard-check"></i> Análise — o que o cliente pediu × o que estamos entregando</h3></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <span style="font-size:.82rem;color:var(--text-2)">Opção recomendada (destaque no link):</span>
+      ${ps.map((p,i)=>`<label style="display:flex;align-items:center;gap:5px;background:var(--surface-2);border-radius:9px;padding:5px 10px;font-size:.82rem;cursor:pointer">
+        <input type="radio" name="neRec" ${p.recomendada?'checked':''} style="width:auto" onchange="ORC.propostas.forEach((x,j)=>x.recomendada=(j===${i}));VIEWS.orcamento()"> ${esc(p.seguradora)}${p.produto?' · '+esc(p.produto):''}</label>`).join('')}
+      <label style="display:flex;align-items:center;gap:5px;font-size:.8rem;color:var(--text-3);cursor:pointer"><input type="radio" name="neRec" ${ps.some(p=>p.recomendada)?'':'checked'} style="width:auto" onchange="ORC.propostas.forEach(x=>x.recomendada=false);VIEWS.orcamento()"> nenhuma</label>
+    </div>
+    ${a.motivo?`<div style="font-size:.85rem;margin-bottom:10px"><b>Por que a IA recomenda:</b> ${esc(a.motivo)}</div>`:''}
+    ${(a.alertas||[]).length?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:12px">
+      <b><i class="fas fa-triangle-exclamation"></i> Atenção (só você vê):</b><br>${a.alertas.map(esc).join('<br>')}</div>`:''}
+    ${pedidos.length?`<div class="tbl-wrap" style="margin-bottom:12px"><table><thead><tr><th>Pedido do cliente</th>${ps.map(p=>`<th style="text-align:center">${esc(p.seguradora)}</th>`).join('')}</tr></thead><tbody>
+      ${pedidos.map(pd=>`<tr><td><b>${esc(pd)}</b></td>${ps.map(p=>{ const x=(p.atende||[]).find(y=>y.pedido===pd); if(!x) return '<td style="text-align:center;color:var(--text-3)">—</td>';
+        const s=st[x.status]||st.parcial; return `<td style="text-align:center"><i class="fas ${s[1]}" style="color:${s[0]}"></i><div style="font-size:.74rem">${esc(x.entregue||'')}</div></td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div>`:''}
+    ${ap?`<div style="background:var(--surface-2);border-radius:10px;padding:10px 13px;font-size:.84rem;margin-bottom:10px">
+      <b><i class="fas fa-rotate"></i> Apólice atual:</b> ${esc(ap.seguradora||'')}${ap.produto?' · '+esc(ap.produto):''} · ${ap.premioTotal!=null?money(ap.premioTotal):'—'}${ap.vigenciaFim?' · vence '+fmtData(ap.vigenciaFim):''}${ap.bonus?' · bônus '+esc(ap.bonus):''}</div>`:''}
+    ${(cmp||[]).length?`<div class="tbl-wrap"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th>Obs.</th></tr></thead><tbody>
+      ${cmp.map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(x.hoje||'—')}</td><td>${esc(x.proposta||'—')}</td><td style="font-size:.78rem;color:var(--text-2)">${esc(x.observacao||'')}</td></tr>`).join('')}
+    </tbody></table></div>`:''}
+  </div>`;
+}
+
+/* ---------- o que vai no documento público e o que fica privado ---------- */
+function neCamposOrcamento(){
+  const l=ORC.leadId?neLead(ORC.leadId):null;
+  return {
+    cliente:{nome:ORC.cliente.nome||ORC.leadNome||null},        /* CPF e nascimento não vão para o link */
+    apoliceAtual:ORC.apoliceAtual||null,
+    comparativoRenovacao:ORC.comparativoRenovacao||null,
+    pedido:(ORC.pedido&&ORC.pedido.length?ORC.pedido:(l?nePedidoCliente(l):[])),
+    resumoCliente:(ORC.analise&&ORC.analise.resumoParaCliente)||null,
+    renovacao:!!ORC.apoliceAtual||(l?neEhRenovacao(l):false),
+    whatsappCorretora:'5554996454300'
+  };
+}
+async function neSalvarPrivado(){
+  if(!ORC.id) return;
+  const inc=ppIncluidas();
+  if(inc.some(p=>p.comissaoPct==null)) toast('Falta informar a comissão em '+inc.filter(p=>p.comissaoPct==null).length+' opção(ões).','info');
+  try{ await db.collection('orcamentos_privado').doc(ORC.id).set({ leadId:ORC.leadId||null,
+      clienteCompleto:ORC.cliente||{},
+      comissoes:inc.map(p=>({seguradora:p.seguradora,produto:p.produto||null,premioLiquido:p.premioLiquido,comissaoPct:p.comissaoPct,comissaoValor:p.comissaoValor})),
+      analise:ORC.analise||null, atualizadoEm:FV.serverTimestamp() },{merge:true});
+  }catch(e){ console.warn('orcamentos_privado',e); toast('A comissão não foi salva (confira as regras do Firestore para orcamentos_privado).','err'); }
+}
+async function neAoAbrirOrcamento(o){
+  ORC.apoliceAtual=o.apoliceAtual||null; ORC.comparativoRenovacao=o.comparativoRenovacao||null;
+  ORC.pedido=o.pedido||[]; ORC.analise={resumoParaCliente:o.resumoCliente||null,alertas:[],motivo:null};
+  try{ const d=await db.collection('orcamentos_privado').doc(ORC.id).get();
+    if(d.exists){ const pv=d.data()||{};
+      if(pv.clienteCompleto) ORC.cliente=Object.assign({},ORC.cliente,pv.clienteCompleto);
+      if(pv.analise) ORC.analise=Object.assign(ORC.analise,pv.analise);
+      (pv.comissoes||[]).forEach((c,i)=>{ const p=ORC.propostas[i]; if(p&&c&&c.comissaoPct!=null){ p.comissaoPct=c.comissaoPct; p.comissaoFonte='informada por você'; ppRecalcComissao(p); } });
+    } }catch(e){ console.warn('privado',e); }
+}
+async function neMarcarCotacaoEnviada(leadId){
+  const l=leadId?neLead(leadId):null; if(!l) return;
+  const f=faseDoLead(l);
+  if(f==='pre_cadastro'||f==='contato_realizado'){
+    try{ await db.collection('leads_crm').doc(leadId).update({status:'cotacao_enviada',cotacaoEnviadaEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()});
+      neNota(leadId,'Proposta enviada ao cliente (link/PDF) — movido para Cotação enviada.');
+      toast('Lead movido para "Cotação enviada".','ok'); }catch(e){}
+  }
+}
+
+/* =========================================================================
+   EM TRANSMISSÃO — confirmar o que foi negociado (editável à mão)
+   ========================================================================= */
+let NE_TX={};
+async function neCarregarOrcamento(id){
+  if(!id) return null;
+  try{ const d=await db.collection('orcamentos').doc(id).get(); if(!d.exists) return null; const o=d.data();
+    try{ const pv=await db.collection('orcamentos_privado').doc(id).get();
+      if(pv.exists) ((pv.data()||{}).comissoes||[]).forEach((c,i)=>{ const p=(o.propostas||[])[i]; if(p&&c){ p.comissaoPct=c.comissaoPct; } }); }catch(e){}
+    return o; }catch(e){ return null; }
+}
+async function neModalTransmitir(id){
+  const c=neLead(id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-tower-broadcast" style="color:#0891b2"></i> Enviar para transmissão</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><div style="padding:24px;text-align:center;color:var(--text-2)"><i class="fas fa-spinner fa-spin"></i> Carregando a negociação...</div></div>`,'wide');
+  const orc=await neCarregarOrcamento(c.orcamentoId);
+  const ops=(orc&&orc.propostas)||[];
+  const ct=c.contratacao||null;
+  let base=null, idx=null;
+  if(c.negociacaoFinal){ base=c.negociacaoFinal; idx=base.opcaoIndex; }
+  else{
+    idx=ct&&ct.opcaoIndex!=null&&ops[ct.opcaoIndex]?ct.opcaoIndex
+      :(ops.length?ops.map((p,i)=>[p.premioTotal||Infinity,i]).sort((a,b)=>a[0]-b[0])[0][1]:null);
+    base=neBaseDaOpcao(ops[idx],ct);
+  }
+  NE_TX={leadId:id,ops,idx,ct,veiculo:(orc&&orc.veiculo)||{},orcamentoId:c.orcamentoId||null,
+    cob:(base.coberturas||[]).map(x=>Object.assign({},x)),assist:(base.assistencias||[]).map(x=>Object.assign({},x)),base};
+  neTxRender();
+}
+function neBaseDaOpcao(p,ct){
+  p=p||{};
+  const cobs=(p.coberturas||[]);
+  const formaCt=ct&&ct.forma?neForma(ct.forma):'';
+  return { seguradora:p.seguradora||(ct&&ct.seguradora)||'', produto:p.produto||'',
+    premioLiquido:p.premioLiquido!=null?p.premioLiquido:null, iof:p.iof!=null?p.iof:null, premioTotal:p.premioTotal!=null?p.premioTotal:null,
+    comissaoPct:p.comissaoPct!=null?p.comissaoPct:null,
+    formaPagamento:formaCt, parcelas:ct&&ct.parcelas||null, valorParcela:ct&&ct.valorParcela||null,
+    franquia:{valor:p.franquia&&p.franquia.valor!=null?p.franquia.valor:null,tipo:(p.franquia&&p.franquia.tipo)||''},
+    coberturas:cobs.filter(x=>!x.assistencia&&!PP_ASSIST_K.includes(x.chave)&&!['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,lmi:x.lmi==null?'':String(x.lmi)})),
+    assistencias:cobs.filter(x=>x.assistencia||PP_ASSIST_K.includes(x.chave)||['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,detalhe:x.lmi==null||x.lmi==='contratada'?'':String(x.lmi)})),
+    inicioVigencia:neHoje(), obs:'' };
+}
+function neTxTrocarOpcao(i){
+  neTxGuardar(); i=parseInt(i); if(isNaN(i)) return;
+  const b=neBaseDaOpcao(NE_TX.ops[i],NE_TX.ct);
+  NE_TX.idx=i; NE_TX.base=Object.assign({},b,{inicioVigencia:NE_TX.base.inicioVigencia,formaPagamento:NE_TX.base.formaPagamento||b.formaPagamento,parcelas:NE_TX.base.parcelas||b.parcelas});
+  NE_TX.cob=b.coberturas; NE_TX.assist=b.assistencias; neTxRender();
+}
+function neTxGuardar(){
+  const g=i=>(document.getElementById(i)||{}).value;
+  if(!document.getElementById('txLiq')) return;
+  const b=NE_TX.base;
+  b.seguradora=segValor('txSeg','txSegOutra')||b.seguradora; b.produto=g('txProd')||'';
+  b.premioLiquido=apNum(g('txLiq')); b.iof=apNum(g('txIof')); b.premioTotal=apNum(g('txTot'));
+  b.comissaoPct=apNum(g('txComPct')); b.formaPagamento=g('txForma')||''; b.parcelas=parseInt(g('txParc'))||null; b.valorParcela=apNum(g('txValParc'));
+  b.franquia={valor:apNum(g('txFrq')),tipo:g('txFrqT')||''}; b.inicioVigencia=g('txIni')||neHoje(); b.obs=g('txObs')||'';
+  NE_TX.cob=NE_TX.cob.map((x,i)=>({chave:x.chave,nome:g('txCN_'+i)||x.nome,lmi:g('txCL_'+i)||''})).filter(x=>x.nome);
+  NE_TX.assist=NE_TX.assist.map((x,i)=>({chave:x.chave,nome:g('txAN_'+i)||x.nome,detalhe:g('txAD_'+i)||''})).filter(x=>x.nome);
+}
+function neTxCalc(origem){
+  const g=i=>document.getElementById(i);
+  const liq=apNum(g('txLiq').value);
+  if(origem==='liq'&&liq!=null){ const iof=neR2(liq*NE_IOF); g('txIof').value=apBR(iof); g('txTot').value=apBR(neR2(liq+iof)); }
+  if(origem==='iof'&&liq!=null){ g('txTot').value=apBR(neR2(liq+(apNum(g('txIof').value)||0))); }
+  const pct=apNum(g('txComPct').value), tot=apNum(g('txTot').value), n=parseInt(g('txParc').value);
+  g('txComVal').textContent=(liq&&pct!=null)?money(neR2(liq*pct/100))+' ('+String(pct).replace('.',',')+'% de '+money(liq)+')':'—';
+  if((origem==='parc'||origem==='liq'||origem==='iof')&&tot&&n&&!g('txValParc').dataset.manual) g('txValParc').value=apBR(neR2(tot/n));
+}
+function neTxRender(){
+  const c=neLead(NE_TX.leadId)||{}; const b=NE_TX.base; const ct=NE_TX.ct;
+  const formas=['','Cartão de crédito','Débito em conta','Boleto','Carnê','À vista'];
+  const tipos=['','Obrigatória','Reduzida','Majorada','Básica','Sem franquia'];
+  openModal(`<div class="modal-head"><h3><i class="fas fa-tower-broadcast" style="color:#0891b2"></i> ${faseDoLead(c)==='em_transmissao'?'Dados da transmissão':'Enviar para transmissão'} — ${esc(c.nome||'')}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-size:.83rem;color:var(--text-2);margin-bottom:12px"><i class="fas fa-circle-info"></i> Confira o que vai para a seguradora. Tudo é editável — vale para quando a negociação terminou no WhatsApp com outro modelo ou outro valor.</div>
+      ${NE_TX.ops.length?`<div class="form-row"><label>Opção da proposta</label><select onchange="neTxTrocarOpcao(this.value)">
+        ${NE_TX.ops.map((p,i)=>`<option value="${i}" ${NE_TX.idx===i?'selected':''}>${esc(p.seguradora)}${p.produto?' · '+esc(p.produto):''} — ${money(p.premioTotal)}${ct&&ct.opcaoIndex===i?' ★ escolhida pelo cliente':''}</option>`).join('')}</select></div>`:''}
+      ${ct?`<div style="background:#ecfdf5;border-radius:10px;padding:10px 13px;font-size:.83rem;margin-bottom:12px"><b><i class="fas fa-star" style="color:var(--ok)"></i> Escolha do cliente no link:</b> ${esc(ct.seguradora||'')} — ${money(ct.premioTotal)}<br>${nePagamentoHtml(ct)}</div>`:''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;background:var(--surface-2);border-radius:12px;padding:14px;margin-bottom:12px">
+        <div class="form-row" style="margin:0"><label>Seguradora *</label>${segSelect('txSeg',b.seguradora,'onchange="segTrocou(this,\'txSegOutra\')"')}
+          <input type="text" id="txSegOutra" placeholder="Nome da seguradora" style="display:none;margin-top:6px"></div>
+        <div class="form-row" style="margin:0"><label>Produto / plano</label><input type="text" id="txProd" value="${esc(b.produto||'')}"></div>
+        <div class="form-row" style="margin:0"><label>Início da vigência (previsto)</label><input type="date" id="txIni" value="${esc(b.inicioVigencia||neHoje())}"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;background:var(--brand-50);border-radius:12px;padding:14px;margin-bottom:12px">
+        <div class="form-row" style="margin:0"><label>Prêmio líquido *</label><input type="text" inputmode="decimal" id="txLiq" value="${esc(apBR(b.premioLiquido))}" oninput="neTxCalc('liq')"></div>
+        <div class="form-row" style="margin:0"><label>IOF (7,38%)</label><input type="text" inputmode="decimal" id="txIof" value="${esc(apBR(b.iof!=null?b.iof:(b.premioLiquido!=null?neR2(b.premioLiquido*NE_IOF):'')))}" oninput="neTxCalc('iof')"></div>
+        <div class="form-row" style="margin:0"><label>Prêmio total</label><input type="text" inputmode="decimal" id="txTot" value="${esc(apBR(b.premioTotal!=null?b.premioTotal:neTotal(b.premioLiquido)))}" oninput="neTxCalc('tot')"></div>
+        <div class="form-row" style="margin:0"><label>Comissão (% do líquido) *</label><input type="text" inputmode="decimal" id="txComPct" value="${esc(apBR(b.comissaoPct))}" placeholder="Ex.: 15" oninput="neTxCalc('com')"></div>
+        <div class="form-row" style="margin:0"><label>Nossa comissão</label><div id="txComVal" style="padding:10px 0;font-weight:800;color:var(--brand-dark)">—</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:12px">
+        <div class="form-row" style="margin:0"><label>Forma de pagamento</label><select id="txForma">${formas.map(o=>`<option ${b.formaPagamento===o?'selected':''}>${o}</option>`).join('')}</select></div>
+        <div class="form-row" style="margin:0"><label>Parcelas</label><input type="number" id="txParc" value="${esc(b.parcelas||'')}" oninput="neTxCalc('parc')"></div>
+        <div class="form-row" style="margin:0"><label>Valor da parcela</label><input type="text" inputmode="decimal" id="txValParc" value="${esc(apBR(b.valorParcela))}" oninput="this.dataset.manual=1"></div>
+        <div class="form-row" style="margin:0"><label>Franquia do casco (R$)</label><input type="text" inputmode="decimal" id="txFrq" value="${esc(apBR(b.franquia&&b.franquia.valor))}"></div>
+        <div class="form-row" style="margin:0"><label>Tipo de franquia</label><select id="txFrqT">${tipos.map(o=>`<option ${String((b.franquia||{}).tipo||'').toLowerCase()===o.toLowerCase()?'selected':''}>${o}</option>`).join('')}</select></div>
+      </div>
+      <h4 style="margin:8px 0">Coberturas</h4>
+      <div id="txCobs">${neTxLinhas('cob')}</div>
+      <button class="btn btn-ghost btn-sm" onclick="neTxAdd('cob')"><i class="fas fa-plus"></i> cobertura</button>
+      <h4 style="margin:14px 0 8px">Assistências e serviços</h4>
+      <div id="txAss">${neTxLinhas('assist')}</div>
+      <button class="btn btn-ghost btn-sm" onclick="neTxAdd('assist')"><i class="fas fa-plus"></i> assistência</button>
+      <div class="form-row" style="margin-top:14px"><label>Observações da transmissão</label><textarea id="txObs" rows="2" placeholder="Ex.: transmitido com condutor jovem; vistoria agendada...">${esc(b.obs||'')}</textarea></div>
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;background:var(--warn-bg);border-radius:10px;padding:10px 13px;font-size:.85rem;color:#7c4a03">
+        <input type="checkbox" id="txOk" style="width:auto"> Conferi: estes são os dados (valores, coberturas e pagamento) que estão sendo transmitidos para a seguradora.</label>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${NE_TX.leadId}')">Voltar</button>
+      <button class="btn btn-primary" onclick="neTxConfirmar()"><i class="fas fa-check"></i> ${faseDoLead(c)==='em_transmissao'?'Salvar alterações':'Confirmar e mover para Em transmissão'}</button></div>`,'wide');
+  setTimeout(()=>neTxCalc('com'),30);
+}
+function neTxLinhas(tipo){
+  const L=tipo==='cob'?NE_TX.cob:NE_TX.assist, pre=tipo==='cob'?'txC':'txA', camp=tipo==='cob'?'lmi':'detalhe';
+  if(!L.length) return `<div style="font-size:.8rem;color:var(--text-3);margin-bottom:6px">Nenhuma ${tipo==='cob'?'cobertura':'assistência'} — adicione abaixo.</div>`;
+  return L.map((x,i)=>`<div style="display:grid;grid-template-columns:2fr 1fr 34px;gap:8px;margin-bottom:6px">
+      <input type="text" id="${pre}N_${i}" value="${esc(x.nome||'')}" placeholder="${tipo==='cob'?'Cobertura':'Assistência'}" style="padding:6px 9px">
+      <input type="text" id="${pre}${tipo==='cob'?'L':'D'}_${i}" value="${esc(x[camp]||'')}" placeholder="${tipo==='cob'?'Limite':'Detalhe'}" style="padding:6px 9px">
+      <button class="btn btn-ghost btn-sm" title="Remover" onclick="neTxDel('${tipo}',${i})"><i class="fas fa-trash"></i></button></div>`).join('');
+}
+function neTxAdd(tipo){ neTxGuardar(); (tipo==='cob'?NE_TX.cob:NE_TX.assist).push(tipo==='cob'?{chave:'outros',nome:'',lmi:''}:{chave:'outros',nome:'',detalhe:''}); neTxRender(); }
+function neTxDel(tipo,i){ neTxGuardar(); (tipo==='cob'?NE_TX.cob:NE_TX.assist).splice(i,1); neTxRender(); }
+async function neTxConfirmar(){
+  neTxGuardar(); const b=NE_TX.base; const c=neLead(NE_TX.leadId); if(!c) return;
+  if(!document.getElementById('txOk').checked){ toast('Marque a confirmação de que conferiu os dados.','err'); return; }
+  if(!b.seguradora){ toast('Informe a seguradora.','err'); return; }
+  if(!b.premioLiquido){ toast('Informe o prêmio líquido.','err'); return; }
+  if(b.comissaoPct==null){ toast('Informe a comissão (% sobre o prêmio líquido).','err'); return; }
+  const tot=b.premioTotal||neTotal(b.premioLiquido);
+  const n={ seguradora:b.seguradora, produto:b.produto||null, opcaoIndex:NE_TX.idx==null?null:NE_TX.idx,
+    premioLiquido:b.premioLiquido, iof:b.iof!=null?b.iof:neR2(tot-b.premioLiquido), premioTotal:tot,
+    comissaoPct:b.comissaoPct, comissaoValor:neR2(b.premioLiquido*b.comissaoPct/100),
+    formaPagamento:b.formaPagamento||null, parcelas:b.parcelas||null, valorParcela:b.valorParcela||(b.parcelas?neR2(tot/b.parcelas):null),
+    franquia:{valor:b.franquia.valor,tipo:b.franquia.tipo||null},
+    coberturas:NE_TX.cob.map(x=>({chave:x.chave||'outros',nome:x.nome,lmi:x.lmi||null})),
+    assistencias:NE_TX.assist.map(x=>({chave:x.chave||'outros',nome:x.nome,detalhe:x.detalhe||null})),
+    inicioVigencia:b.inicioVigencia||neHoje(), obs:b.obs||null,
+    veiculo:NE_TX.veiculo||{}, orcamentoId:NE_TX.orcamentoId||null,
+    contratacaoId:(NE_TX.ct&&NE_TX.ct.id)||null,
+    confirmadoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin', confirmadoEmData:neHoje() };
+  const jaEstava=faseDoLead(c)==='em_transmissao';
+  try{
+    const upd={negociacaoFinal:n, valorNegociacao:n.premioLiquido, valorTotalNegociacao:n.premioTotal, comissaoPct:n.comissaoPct,
+      seguradoraNegociacao:n.seguradora, atualizadoEm:FV.serverTimestamp()};
+    if(!jaEstava){ upd.status='em_transmissao'; upd.transmissaoEm=FV.serverTimestamp(); }
+    await db.collection('leads_crm').doc(c.id).update(upd);
+    if(n.contratacaoId){ try{ await db.collection('contratacoes').doc(n.contratacaoId).update({status:'em_transmissao',atualizadoEm:FV.serverTimestamp()}); }catch(e){} }
+    await neNota(c.id,(jaEstava?'Dados da transmissão atualizados — ':'Enviado para TRANSMISSÃO — ')+n.seguradora+' · total '+money(n.premioTotal)+' · líquido '+money(n.premioLiquido)+' · comissão '+n.comissaoPct+'%'+(n.formaPagamento?' · '+n.formaPagamento+(n.parcelas?' '+n.parcelas+'x':''):''));
+    toast(jaEstava?'Transmissão atualizada.':'Movido para "Em transmissão". Quando a seguradora responder, use Emitida ou Declinada.','ok');
+    abrirLead(c.id);
+  }catch(e){ console.error(e); toast('Erro ao salvar: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- emitida: o fechamento já vem preenchido ---------- */
+function nePreencherFechamento(c){
+  const n=c.negociacaoFinal; if(!n) return;
+  const fx=(arr,v)=>{ const t=String(v||'').toLowerCase(); return arr.find(o=>o&&t&&(o.toLowerCase()===t||t.includes(o.toLowerCase().split(' ')[0])))||''; };
+  FC_MEM.fcSegSel=n.seguradora||''; FC_MEM.fcNum='';
+  FC_MEM.fcLiq=apBR(n.premioLiquido); FC_MEM.fcIof=apBR(n.iof); FC_MEM.fcTot=apBR(n.premioTotal);
+  FC_MEM.fcComPct=apBR(n.comissaoPct); FC_MEM.fcComVal=apBR(n.comissaoValor);
+  FC_MEM.fcFormaPg=fx(['Boleto','Cartão de crédito','Débito em conta','Carnê','À vista'],n.formaPagamento);
+  FC_MEM.fcParc=n.parcelas?String(n.parcelas):'';
+  if(n.inicioVigencia){ FC_MEM.fcIni=n.inicioVigencia; FC_MEM.fcFim=fcMais1Ano(n.inicioVigencia); }
+  FC_MEM.fcFranq=apBR(n.franquia&&n.franquia.valor); FC_MEM.fcFranqTipo=fx(['Obrigatória','Reduzida','Majorada','Básica','Sem franquia'],n.franquia&&n.franquia.tipo)||'Obrigatória';
+  const v=n.veiculo||{};
+  FC_MEM.fcModelo=[v.marca,v.modelo].filter(Boolean).join(' ')||c.veiculo||'';
+  FC_MEM.fcAno=v.anoFab&&v.anoMod?v.anoFab+'/'+v.anoMod:(v.anoMod||c.anoVeiculo||'');
+  FC_MEM.fcPlaca=v.placa||c.placa||''; FC_MEM.fcChassi=v.chassi||c.chassi||''; FC_MEM.fcFipeCod=v.fipe||c.codigoFipe||'';
+  FC_MEM.fcCep=v.cepPernoite||c.cepPernoite||c.cep||''; FC_MEM.fcCondutor=v.condutor||'';
+  FC_MEM.fcObs=[n.obs,v.uso?'Uso: '+v.uso:'',v.garagem?'Garagem: '+v.garagem:''].filter(Boolean).join(' · ');
+  if(c.responsavelId) FC_MEM.fcResp=c.responsavelId;
+  FC.cob={}; FC.assist={};
+  const kc=new Set(FC_COB_AUTO.map(x=>x.k)), ka=new Set(FC_ASSIST_AUTO.map(x=>x.k));
+  (n.coberturas||[]).forEach(x=>{ if(kc.has(x.chave)) FC.cob[x.chave]={lmi:x.lmi||''}; });
+  (n.assistencias||[]).forEach(x=>{ const k=x.chave==='farois'?'vidros':x.chave; if(ka.has(k)) FC.assist[k]={on:true,d:x.detalhe||''}; });
+}
+function neExtrasApolice(c){
+  const n=c&&c.negociacaoFinal; if(!n) return {};
+  return { produto:n.produto||null, valorParcela:n.valorParcela||null, coberturasDetalhe:n.coberturas||[], assistenciasDetalhe:n.assistencias||[],
+    orcamentoId:n.orcamentoId||c.orcamentoId||null, contratacaoId:n.contratacaoId||null, origemNegociacao:'funil',
+    transmitidaEmData:n.confirmadoEmData||null, emitidaEmData:neHoje() };
+}
+async function neApagarCartoes(leadId,contratacaoId){
+  try{
+    const ids=new Set(); if(contratacaoId) ids.add(contratacaoId);
+    const q=await db.collection('contratacoes_cartao').where('leadId','==',leadId).get();
+    q.forEach(d=>ids.add(d.id));
+    for(const id of ids){ try{ await db.collection('contratacoes_cartao').doc(id).delete(); }catch(e){} }
+  }catch(e){ console.warn('apagar cartão',e); }
+}
+async function nePosEmissao(leadId,apoliceId){
+  const c=neLead(leadId)||{}; const n=c.negociacaoFinal||{};
+  const ctId=n.contratacaoId||(c.contratacao&&c.contratacao.id)||null;
+  await neApagarCartoes(leadId,ctId);
+  if(ctId){ try{ await db.collection('contratacoes').doc(ctId).update({status:'emitida',apoliceId,atualizadoEm:FV.serverTimestamp()}); }catch(e){} }
+  try{ await db.collection('leads_crm').doc(leadId).update({emitidaEm:FV.serverTimestamp(),'contratacao.cartaoApagado':true}); }catch(e){}
+}
+
+/* ---------- declinada ---------- */
+function neModalDeclinarSeg(id){
+  const c=neLead(id); if(!c) return; const n=c.negociacaoFinal||{};
+  openModal(`<div class="modal-head"><h3><i class="fas fa-building-circle-xmark" style="color:var(--danger)"></i> Declinada pela seguradora</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div style="font-size:.86rem;margin-bottom:10px">${esc(n.seguradora||'A seguradora')} recusou o risco de <b>${esc(c.nome||'')}</b>.</div>
+      <div class="form-row"><label>Motivo informado pela seguradora *</label><textarea id="dsMotivo" rows="3" placeholder="Ex.: CEP de pernoite com restrição; perfil do condutor; vistoria reprovada..."></textarea></div>
+      <label style="display:flex;gap:9px;align-items:center;margin-bottom:8px;cursor:pointer"><input type="radio" name="dsAcao" value="voltar" checked style="width:auto"> <span>Tentar outra seguradora — voltar para <b>Cotação enviada</b></span></label>
+      <label style="display:flex;gap:9px;align-items:center;cursor:pointer"><input type="radio" name="dsAcao" value="perder" style="width:auto"> <span>Encerrar — marcar como <b>Perdida</b></span></label>
+      <div style="font-size:.77rem;color:var(--text-3);margin-top:10px"><i class="fas fa-shield-halved"></i> Os dados de cartão desta negociação são apagados.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button>
+      <button class="btn btn-danger" onclick="neConfirmarDeclinioSeg('${id}')"><i class="fas fa-check"></i> Registrar</button></div>`);
+}
+async function neConfirmarDeclinioSeg(id){
+  const c=neLead(id)||{}; const n=c.negociacaoFinal||{};
+  const motivo=document.getElementById('dsMotivo').value.trim(); if(!motivo){ toast('Informe o motivo.','err'); return; }
+  const acao=(document.querySelector('input[name=dsAcao]:checked')||{}).value||'voltar';
+  const hist=(c.declinios||[]).concat([{seguradora:n.seguradora||null,motivo,em:neHoje()}]);
+  const upd={declinios:hist,atualizadoEm:FV.serverTimestamp()};
+  if(acao==='perder') Object.assign(upd,{status:'negocio_perdido',motivoPerda:'declinada_seguradora',obsPerda:(n.seguradora?n.seguradora+': ':'')+motivo,perdidoEmData:neHoje()});
+  else Object.assign(upd,{status:'cotacao_enviada',negociacaoFinal:null,contratacao:null});
+  try{
+    await db.collection('leads_crm').doc(id).update(upd);
+    await neApagarCartoes(id,n.contratacaoId);
+    if(n.contratacaoId){ try{ await db.collection('contratacoes').doc(n.contratacaoId).update({status:'declinada_seguradora',atualizadoEm:FV.serverTimestamp()}); }catch(e){} }
+    await neNota(id,'DECLINADA pela seguradora '+(n.seguradora||'')+' — '+motivo+(acao==='perder'?' · encerrado como perdido':' · voltou para Cotação enviada'));
+    closeModal(); toast(acao==='perder'?'Registrado como perdido.':'Voltou para "Cotação enviada" — dá para transmitir em outra seguradora.','ok');
+  }catch(e){ console.error(e); toast('Erro: '+(e.code||e.message),'err'); }
+}
+function neModalDeclinarCli(id){
+  const c=neLead(id); if(!c) return;
+  const mot=[['preco','Achou caro / preço'],['concorrencia','Fechou com concorrente'],['desistiu','Desistiu do seguro'],['sem_resposta','Sumiu / sem resposta'],['outro','Outro']];
+  openModal(`<div class="modal-head"><h3><i class="fas fa-user-xmark" style="color:var(--danger)"></i> Declinada pelo cliente</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>Motivo</label><select id="dcMotivo">${mot.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Observação</label><textarea id="dcObs" rows="2"></textarea></div>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><input type="checkbox" id="dcReag" checked style="width:auto"> <span>Reagendar contato para daqui a 1 ano (renovação)</span></label>
+      <div style="font-size:.77rem;color:var(--text-3);margin-top:10px"><i class="fas fa-shield-halved"></i> Os dados de cartão desta negociação são apagados.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Voltar</button>
+      <button class="btn btn-danger" onclick="neConfirmarDeclinioCli('${id}')"><i class="fas fa-check"></i> Marcar como perdida</button></div>`);
+}
+async function neConfirmarDeclinioCli(id){
+  const c=neLead(id)||{}; const n=c.negociacaoFinal||{};
+  const sel=document.getElementById('dcMotivo'); const motTxt=sel.options[sel.selectedIndex].text;
+  const obs=document.getElementById('dcObs').value.trim(); const reag=document.getElementById('dcReag').checked;
+  const d=new Date(); d.setFullYear(d.getFullYear()+1); const reagendarEm=reag?hojeISOde(d):null;
+  try{
+    await db.collection('leads_crm').doc(id).update({status:'negocio_perdido',motivoPerda:'declinada_cliente',motivoClienteDetalhe:sel.value,
+      obsPerda:motTxt+(obs?': '+obs:''),reagendarEm,perdidoEmData:neHoje(),atualizadoEm:FV.serverTimestamp()});
+    await neApagarCartoes(id,n.contratacaoId||(c.contratacao&&c.contratacao.id));
+    if(n.contratacaoId){ try{ await db.collection('contratacoes').doc(n.contratacaoId).update({status:'declinada_cliente',atualizadoEm:FV.serverTimestamp()}); }catch(e){} }
+    if(reagendarEm) await lkAgendarRetorno(id,reagendarEm,null,'Retomar: cliente declinou ('+motTxt+')'+(c.valorTotalNegociacao?' — valia '+money(c.valorTotalNegociacao):''));
+    await neNota(id,'DECLINADA pelo cliente — '+motTxt+(obs?': '+obs:''));
+    closeModal(); toast('Marcado como perdido'+(reag?' e reagendado':'')+'.','ok');
+  }catch(e){ console.error(e); toast('Erro: '+(e.code||e.message),'err'); }
+}
+
+/* ---------- cartão: só leitura pela equipe, com prazo ---------- */
+async function neVerCartao(ctId){
+  try{
+    const d=await db.collection('contratacoes_cartao').doc(ctId).get();
+    if(!d.exists){ toast('O número do cartão já foi apagado (prazo de '+NE_CART_DIAS+' dias ou negociação encerrada).','info'); return; }
+    const k=d.data(); const num=String(k.numero||'').replace(/\D/g,'').replace(/(\d{4})(?=\d)/g,'$1 ');
+    const exp=toDate(k.expiraEm);
+    openModal(`<div class="modal-head"><h3><i class="fas fa-credit-card" style="color:var(--brand)"></i> Cartão informado pelo cliente</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+      <div class="modal-body">
+        <div style="background:linear-gradient(135deg,#1b2c5c,#1e3a8a);color:#fff;border-radius:14px;padding:18px 20px;max-width:380px">
+          <div style="font-size:.8rem;opacity:.8">${esc(k.bandeira||'Cartão')}</div>
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:1.25rem;letter-spacing:1px;margin:14px 0">${esc(num)}</div>
+          <div style="display:flex;justify-content:space-between;font-size:.85rem"><span>${esc(k.nome||'')}</span><span>${esc(k.validade||'')}</span></div></div>
+        <div style="font-size:.8rem;color:var(--text-3);margin-top:12px"><i class="fas fa-clock"></i> Apagado automaticamente ${exp?'em '+exp.toLocaleDateString('pt-BR'):'em até '+NE_CART_DIAS+' dias'} ou quando a apólice for emitida/declinada. O código de segurança (CVV) não é pedido ao cliente.</div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="neApagarCartaoAgora('${ctId}','${esc(k.leadId||'')}')"><i class="fas fa-trash"></i> Apagar agora</button>
+        <button class="btn btn-ghost" onclick="copiar('${esc(String(k.numero||'').replace(/\D/g,''))}','Número copiado.')"><i class="fas fa-copy"></i> Copiar número</button>
+        <button class="btn btn-primary" onclick="${k.leadId?`abrirLead('${esc(k.leadId)}')`:'closeModal()'}">Ok</button></div>`);
+  }catch(e){ toast('Sem permissão para ler o cartão (confira as regras do Firestore).','err'); }
+}
+async function neApagarCartaoAgora(ctId,leadId){
+  try{ await db.collection('contratacoes_cartao').doc(ctId).delete();
+    if(leadId){ try{ await db.collection('leads_crm').doc(leadId).update({'contratacao.cartaoApagado':true}); }catch(e){} }
+    toast('Número do cartão apagado.','ok'); if(leadId) abrirLead(leadId); else closeModal(); }catch(e){ toast('Erro ao apagar.','err'); }
+}
+
+/* =========================================================================
+   ESCUTAS: contratações do link, respostas do site (plano B) e limpeza
+   ========================================================================= */
+let NE_ESCUTANDO=false;
+function neEscutar(){
+  /* contratações que o cliente fez pelo link da proposta */
+  try{ LISTENERS.push(db.collection('contratacoes').where('status','==','novo').onSnapshot(sn=>{
+      sn.docChanges().forEach(ch=>{ if(ch.type==='added') neReceberContratacao(ch.doc.id,ch.doc.data()); });
+    },e=>console.warn('contratacoes',e&&e.code))); }catch(e){}
+  /* respostas do questionário que não conseguiram atualizar o lead direto */
+  try{ LISTENERS.push(db.collection('leads_site_respostas').onSnapshot(sn=>{
+      sn.docChanges().forEach(ch=>{ if(ch.type==='added') neJuntarResposta(ch.doc.id,ch.doc.data()); });
+    },e=>console.warn('leads_site_respostas',e&&e.code))); }catch(e){}
+  if(!NE_ESCUTANDO){ NE_ESCUTANDO=true; setTimeout(neLimparCartoesVencidos,8000); }
+}
+const NE_RESP_PROIBIDO=['status','criadoEm','responsavelId','responsavelNome','valorNegociacao','comissaoPct','orcamentoId','negociacaoFinal','contratacao','apoliceId'];
+async function neJuntarResposta(docId,d){
+  try{
+    if(d&&d.leadId&&d.dados){
+      const dados=Object.assign({},d.dados); NE_RESP_PROIBIDO.forEach(k=>delete dados[k]);
+      Object.keys(dados).forEach(k=>{ if(dados[k]===undefined) delete dados[k]; });
+      dados.atualizadoEm=FV.serverTimestamp();
+      await db.collection('leads_crm').doc(d.leadId).update(dados);
+    }
+    await db.collection('leads_site_respostas').doc(docId).delete();
+  }catch(e){ console.warn('juntar resposta',e&&e.code); }
+}
+async function neReceberContratacao(id,d){
+  try{
+    const ok=await db.runTransaction(async t=>{
+      const ref=db.collection('contratacoes').doc(id); const s=await t.get(ref);
+      if(!s.exists||(s.data()||{}).status!=='novo') return false;
+      t.update(ref,{status:'recebido',recebidoEm:FV.serverTimestamp(),recebidoPor:(CURRENT_USER&&CURRENT_USER.email)||'admin'}); return true; });
+    if(!ok||!d.leadId) return;
+    const ct={id,opcaoIndex:d.opcaoIndex!=null?d.opcaoIndex:null,seguradora:d.seguradora||null,produto:d.produto||null,premioTotal:d.premioTotal||null,
+      forma:d.forma||null,parcelas:d.parcelas||null,valorParcela:d.valorParcela||null,debito:d.debito||null,cartao:d.cartao||null,em:d.criadoEm||null};
+    await db.collection('leads_crm').doc(d.leadId).update({contratacao:ct,contratacaoId:id,atualizadoEm:FV.serverTimestamp()});
+    const l=neLead(d.leadId)||{};
+    await neNota(d.leadId,'★ Cliente clicou em CONTRATAR no link: '+(d.seguradora||'')+' — '+money(d.premioTotal)+' · '+neForma(d.forma)+(d.parcelas?' '+d.parcelas+'x':''));
+    toast((l.nome||'Um cliente')+' quer contratar '+(d.seguradora||'')+'! Confira e envie para transmissão.','ok','Contratação pelo link');
+    try{ if('Notification' in window&&Notification.permission==='granted') new Notification('Contratação pelo link',{body:(l.nome||'Cliente')+' escolheu '+(d.seguradora||'')+' — '+money(d.premioTotal)}); }catch(e){}
+  }catch(e){ console.warn('contratação',e); }
+}
+async function neLimparCartoesVencidos(){
+  try{ const q=await db.collection('contratacoes_cartao').where('expiraEm','<',firebase.firestore.Timestamp.now()).get();
+    q.forEach(d=>d.ref.delete().catch(()=>{})); if(q.size) console.info('cartões vencidos apagados:',q.size); }catch(e){ console.warn('limpeza cartões',e&&e.code); }
+}
+</script>
+
 </body>
 </html>
