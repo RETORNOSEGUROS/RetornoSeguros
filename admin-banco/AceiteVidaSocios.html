@@ -156,7 +156,7 @@ const CORRETORA = { nome: 'Retorno Seguros', whatsapp: '5554997015000' };
 const params = new URLSearchParams(location.search);
 const PID = params.get('p'), ATOK = params.get('a');
 let db = null, DEMO = false, P = null, A = null, S = null;
-let D = { benef: [], dps: {}, dpsDet: {}, comp: {}, entr: {}, decl: {} };
+let D = { benef: [], dps: {}, dpsDet: {}, comp: {}, entr: {}, decl: {}, nacTipo: 'br' };   // brasileira já vem marcada
 let passo = 0, historico = [];
 const FV = () => firebase.firestore.FieldValue;
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -204,8 +204,9 @@ function tela(id) {
       <label class="lbl">Data de nascimento</label><input class="campo" id="f_nasc" type="date" value="${esc(D.nasc || '')}" oninput="D.nasc=this.value">
       <label class="lbl">Sexo</label>${ops('sexo', [['M', 'Masculino'], ['F', 'Feminino']])}
       <label class="lbl">Estado civil</label>${ops('estCivil', [['solteiro', 'Solteiro(a)'], ['casado', 'Casado(a)'], ['uniao', 'União estável'], ['divorciado', 'Separado(a) / divorciado(a)'], ['viuvo', 'Viúvo(a)']])}
-      ${inp('nacionalidade', 'Nacionalidade', '', 'Brasileira')}
-      ${inp('mae', 'Nome da mãe')}
+      <label class="lbl">Nacionalidade</label>
+      ${ops('nacTipo', [['br', 'Brasileira'], ['dupla', 'Brasileira e outra'], ['outra', 'Não sou brasileiro(a)']])}
+      ${(D.nacTipo === 'dupla' || D.nacTipo === 'outra') ? inp('nacOutra', D.nacTipo === 'dupla' ? 'Qual é a outra' : 'Qual é a sua', '', 'Ex.: italiana, portuguesa') : ''}
       <div class="erro-msg" id="erro"></div><button class="btn" onclick="validar()">Continuar</button>`;
     case 'doc': return `<div class="rotulo">Seus dados</div><h2 class="titulo">Documento de identidade</h2>
       <label class="lbl">Tipo</label>${ops('docTipo', [['RG', 'RG'], ['CNH', 'CNH'], ['RNE', 'RNE / CRNM'], ['outro', 'Outro']])}
@@ -240,7 +241,7 @@ function tela(id) {
       h += D.benef.map((b, i) => `<div class="benef"><div class="benef-t">Beneficiário ${i + 1}${D.benef.length > 1 ? `<button onclick="D.benef.splice(${i},1);mostrar(false)">remover</button>` : ''}</div>
         <label class="lbl">Nome completo</label><input class="campo" value="${esc(b.nome || '')}" oninput="D.benef[${i}].nome=this.value">
         <label class="lbl">Parentesco</label><div class="ops">${['Cônjuge', 'Companheiro(a)', 'Filho(a)', 'Pai/Mãe', 'Irmão(ã)', 'Outro'].map(p => `<button class="op ${b.par === p ? 'sel' : ''}" onclick="D.benef[${i}].par='${p}';mostrar(false)">${p}</button>`).join('')}</div>
-        <div class="duas"><div><label class="lbl">CPF <i>(se tiver)</i></label><input class="campo" inputmode="numeric" value="${esc(b.cpf || '')}" oninput="this.value=mCPF(this.value);D.benef[${i}].cpf=this.value"></div><div><label class="lbl">Nascimento</label><input class="campo" type="date" value="${esc(b.nasc || '')}" oninput="D.benef[${i}].nasc=this.value"></div></div>
+        <label class="lbl">Nascimento</label><input class="campo" type="date" value="${esc(b.nasc || '')}" oninput="D.benef[${i}].nasc=this.value">
         <label class="lbl">Percentual</label><input class="campo" inputmode="decimal" value="${esc(b.pct || '')}" placeholder="%" oninput="D.benef[${i}].pct=this.value.replace(',','.');atualizaSoma()">
       </div>`).join('');
       h += `<button class="btn sec" onclick="addBenef();mostrar(false)">+ Adicionar beneficiário</button>
@@ -266,7 +267,8 @@ function tela(id) {
     }
     case 'entr': return `<div class="rotulo">Declaração de saúde</div><h2 class="titulo">Para fechar a declaração</h2>
       <div class="painel">${ENTREVISTA.slice(0, 1).map(q => `<div class="perg"><p>${esc(q.t)}</p>${simNao('entr', q.id)}</div>`).join('')}
-        <div class="perg"><p>De 0 a 10, que nota você dá para a sua franqueza ao preencher a declaração?</p><div class="grade11">${Array.from({ length: 11 }, (_, i) => `<button class="op ${D.entr.e2 === String(i) ? 'sel' : ''}" onclick="D.entr.e2='${i}';mostrar(false)">${i}</button>`).join('')}</div></div>
+        <!-- A nota de 0 a 10 para a própria franqueza saiu em 05/out: ninguém se
+             dá nota baixa, e a pergunta só plantava desconfiança no fim. -->
         ${ENTREVISTA.slice(1).map(q => `<div class="perg"><p>${esc(q.t)}</p>${simNao('entr', q.id)}</div>`).join('')}</div>
       <div class="erro-msg" id="erro"></div><button class="btn" onclick="validar()">Continuar</button>`;
     case 'revisao': {
@@ -304,7 +306,17 @@ async function buscarCEP() { try { const r = await fetch('https://viacep.com.br/
 function validar() {
   const id = telasAtivas()[passo].id; let e = '';
   const req = (k, t) => { if (!e && !String(D[k] || '').trim()) e = 'Preencha: ' + t; };
-  if (id === 'ident') { req('nome', 'nome completo'); if (!e && !cpfOk(D.cpf)) e = 'CPF inválido'; req('nasc', 'data de nascimento'); req('sexo', 'sexo'); req('estCivil', 'estado civil'); req('mae', 'nome da mãe'); if (!D.nacionalidade) D.nacionalidade = 'Brasileira'; }
+  if (id === 'ident') {
+    req('nome', 'nome completo'); if (!e && !cpfOk(D.cpf)) e = 'CPF inválido';
+    req('nasc', 'data de nascimento'); req('sexo', 'sexo'); req('estCivil', 'estado civil');
+    /* Quase todo mundo é brasileiro: a tela já vem marcada assim, e só quem não é
+       (ou tem dupla) escreve alguma coisa. O nome da mãe saiu — a seguradora
+       identifica por CPF, e era mais um campo entre a pessoa e o fim. */
+    if (!D.nacTipo) D.nacTipo = 'br';
+    if (D.nacTipo !== 'br' && !so(D.nacOutra)) e = e || 'Informe a nacionalidade';
+    D.nacionalidade = D.nacTipo === 'br' ? 'Brasileira'
+      : D.nacTipo === 'dupla' ? 'Brasileira e ' + (D.nacOutra || '') : (D.nacOutra || '');
+  }
   if (id === 'doc') { req('docTipo', 'tipo de documento'); req('docNum', 'número'); req('docOrgao', 'órgão expedidor'); req('docData', 'data de expedição'); }
   if (id === 'contato') { if (!emailOk(D.email)) e = 'E-mail inválido'; if (!e && so(D.cel).length < 10) e = 'Celular inválido'; req('cep', 'CEP'); req('rua', 'endereço'); req('numero', 'número'); req('bairro', 'bairro'); req('cidade', 'cidade'); req('uf', 'UF'); }
   if (id === 'prof') { req('profissao', 'profissão'); req('renda', 'renda'); req('pep', 'pessoa politicamente exposta'); }
@@ -316,7 +328,7 @@ function validar() {
   if (id === 'medidas') { const a = +so(D.altura), p = +so(D.peso); if (!(a >= 120 && a <= 230)) e = 'Altura em centímetros (ex.: 175)'; else if (!(p >= 35 && p <= 300)) e = 'Peso em quilos (ex.: 80)'; }
   if (id === 'comp') { if (COMPROMISSOS.some(q => !D.comp[q.id])) e = 'Responda as três perguntas'; else if (COMPROMISSOS.some(q => D.comp[q.id] !== 'sim')) e = 'Para seguir, é preciso concordar com os três pontos. Se tiver dúvida, fale com a corretora.'; }
   if (/^dps\d$/.test(id)) { const l = blocoDPS(+id.slice(3)); if (l.some(q => !D.dps[q.id])) e = 'Responda todas as perguntas desta parte'; else if (l.some(q => D.dps[q.id] === 'sim' && !String(D.dpsDet[q.id] || '').trim())) e = 'Conte os detalhes de cada "sim"'; }
-  if (id === 'entr') { if (ENTREVISTA.some(q => !D.entr[q.id]) || D.entr.e2 == null) e = 'Responda todas as perguntas'; }
+  if (id === 'entr') { if (ENTREVISTA.some(q => !D.entr[q.id])) e = 'Responda todas as perguntas'; }
   const el = document.getElementById('erro'); if (el) el.textContent = e;
   if (!e) avancar();
 }
