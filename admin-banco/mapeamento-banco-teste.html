@@ -19089,7 +19089,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a) + _apSaudeColab(a) + _apFrota(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a) + _apSaudeColab(a) + _apFrota(a) + _apDO(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21972,6 +21972,137 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
     } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); } }
   window.vgCopiarFicha = vgCopiarFicha;
+
+  // ══════════ D&O — bloco do card + ficha para a cotação ══════════
+  // O D&O era o único produto sem bloco próprio: o corretor via o texto cru das
+  // respostas e tinha que redigitar tudo no cotador. O `analitico` já trazia 26
+  // campos prontos — gravados e descartados. Agora eles viram tela e ficha.
+  const _DO_CAP = { cap_fechado: 'capital fechado', cap_aberto: 'capital aberto', cap_pretende: 'pretende abrir em 12 meses' };
+  const _DO_EXT = { ext_nao: 'só Brasil', ext_sim_sem_eua: 'exterior, sem EUA', ext_sim_com_eua: 'exterior, COM EUA' };
+  const _DO_AUD = { aud_independente: 'auditoria independente', aud_nao: 'sem auditoria', aud_interna: 'só contabilidade interna' };
+  /* Valor exato é número, não ordem de grandeza: arredondar para "R$ 47,4 mi"
+     o que o cliente digitou como 47.350.000 é jogar fora a precisão que ele
+     teve o trabalho de buscar no balanço. */
+  const _doReais = n => 'R$ ' + Number(n).toLocaleString('pt-BR');
+  const _doVal = (cod, mid, origem) => {
+    if (mid == null) return null;
+    return origem === 'exato' ? _doReais(mid) : '~' + _fxC(mid);
+  };
+  function _apDO(a) {
+    const an = a.analitico;
+    if (!an || an.produto !== 'do') return '';
+    const q = a.questionario || {};
+    const d = q.cnpjDados || {};
+    const lim = an.limiteValor ? _fxC(an.limiteValor) : (an.limiteCod === 'lmi_recomendacao' ? 'quer a recomendação' : null);
+    const sec = (d.atividadesSecundarias || []);
+    /* O que faz a seguradora recusar ou agravar vem primeiro, e em vermelho:
+       investigação nos últimos 5 anos, fato conhecido e prejuízo recorrente. */
+    const alertas = [];
+    if (an.investigacoesCod === 'sim') alertas.push('Houve investigação, processo ou inquérito contra administrador nos últimos 5 anos — a seguradora vai pedir detalhes antes de cotar.');
+    if (an.fatoConhecidoCod === 'sim') alertas.push('Existe fato conhecido que pode gerar reclamação — tem que constar na proposta, senão a apólice cai depois.');
+    if (an.prejuizoCod === 'sim') alertas.push('Prejuízo em mais de um exercício nos últimos 3 anos — costuma pesar na aceitação.');
+    if (an.exteriorCod === 'ext_sim_com_eua') alertas.push('Operação nos EUA — muda a análise e o preço; confirme se a seguradora aceita.');
+    if (an.capitalCod === 'cap_aberto' || an.capitalCod === 'cap_pretende') alertas.push('Capital aberto ou abertura prevista — exige condições específicas (oferta pública é exclusão padrão).');
+    if (an.auditoriaCod === 'aud_nao') alertas.push('Sem auditoria externa — algumas seguradoras limitam o capital nesse caso.');
+    if (an.patrimonioCod === 'pl_negativo') alertas.push('Patrimônio líquido negativo.');
+
+    const corpo =
+      _cx.tiles([
+        ['Receita líquida', _doVal(an.receitaCod, an.receitaMid, an.receitaOrigem), 'último ano fechado' + (an.receitaOrigem === 'exato' ? ' · informado' : ' · faixa')],
+        ['Patrimônio líquido', _doVal(an.patrimonioCod, an.patrimonioMid, an.patrimonioOrigem), an.patrimonioOrigem === 'exato' ? 'informado' : 'faixa'],
+        ['Total de ativos', _doVal(an.ativosCod, an.ativosMid, an.ativosOrigem), an.ativosOrigem === 'exato' ? 'informado' : 'faixa'],
+        ['Administradores', an.nAdminsMid ? Math.round(an.nAdminsMid) : null, 'com poder de decisão'],
+        ['Limite pedido', lim, null, '#ecfdf5']
+      ])
+      + _cx.sec('🏢', 'A empresa', _cx.kv([
+        ['CNPJ', an.cnpj || q.cnpj || null],
+        ['Razão social', d.razao || null],
+        ['Cidade', d.cidade ? d.cidade + (d.uf ? ' · ' + d.uf : '') : null],
+        ['Natureza jurídica', an.naturezaJuridica || null],
+        ['Atividade principal (CNAE)', an.cnaePrincipalTxt ? (an.cnaePrincipal ? an.cnaePrincipal + ' — ' : '') + an.cnaePrincipalTxt : (an.setorTexto || null)],
+        ['Capital', _DO_CAP[an.capitalCod] || null],
+        ['Exterior', _DO_EXT[an.exteriorCod] || null],
+        ['Auditoria', _DO_AUD[an.auditoriaCod] || null]
+      ]) + (sec.length ? '<div style="margin-top:8px;"><div style="font-size:10.5px; color:#94a3b8; margin-bottom:4px;">Atividades secundárias (' + sec.length + ')</div>'
+        + _cx.chips(sec.slice(0, 8).map(x => _cx.esc((x.codigo ? x.codigo + ' ' : '') + (x.descricao || ''))))
+        + (sec.length > 8 ? '<span style="font-size:11px; color:#94a3b8;">+ ' + (sec.length - 8) + '</span>' : '') + '</div>' : ''))
+      + _cx.sec('📋', 'Perguntas de aceitação', _cx.kv([
+        ['Investigação em 5 anos', an.investigacoesCod === 'sim' ? '<span style="color:#b91c1c">SIM</span>' : an.investigacoesCod === 'nao' ? 'não' : null],
+        ['Fato conhecido', an.fatoConhecidoCod === 'sim' ? '<span style="color:#b91c1c">SIM</span>' : an.fatoConhecidoCod === 'nao' ? 'não' : null],
+        ['Prejuízo recorrente', an.prejuizoCod === 'sim' ? '<span style="color:#b91c1c">SIM</span>' : an.prejuizoCod === 'nao' ? 'não' : an.prejuizoCod === 'naosei' ? 'não sabe' : null]
+      ]))
+      + _cx.sec('🛡️', 'Coberturas', '<div style="font-size:12.5px; color:#334155;"><strong>' + (an.nCoberturas || 0) + '</strong> mantidas'
+        + (an.nRemovidas ? ' · <strong style="color:#b45309;">' + an.nRemovidas + '</strong> desmarcadas pelo cliente' : ' · nenhuma desmarcada')
+        + '</div>' + ((an.coberturasRemovidasCod || []).length
+          ? '<div style="margin-top:6px;">' + _cx.chips((an.coberturasRemovidasCod || []).map(x => _cx.esc(String(x).replace(/_/g, ' '))), ['#92400e', '#fffbeb']) + '</div>' : ''))
+      + _cx.alertas(alertas)
+      + _apAnexosHTML(a)
+      + _cx.acoes([['📋 Copiar ficha para o cotador', "doCopiarFicha('" + a.id + "', this)", ['#334155', '#f8fafc', '#e2e8f0']]]);
+
+    return _cx.caixa(['#1e3a8a', '#2563eb'], '⚖️', 'D&O — dados da cotação',
+      _cx.status(a, { completo: a.questionarioCompleto }), lim ? 'Limite ' + lim : null, corpo);
+  }
+
+  /* A ficha: texto pronto para colar no e-mail da seguradora ou no cotador.
+     A ordem é a da proposta — é assim que o underwriter lê. */
+  function _doFicha(a) {
+    const an = a.analitico || {}, q = a.questionario || {}, d = q.cnpjDados || {}, c = q.contato || {};
+    const L = [];
+    L.push('COTAÇÃO D&O — ' + (q.empresa || a.empresaNome || 'empresa não identificada'));
+    if (an.cnpj || q.cnpj) L.push('CNPJ: ' + (an.cnpj || q.cnpj));
+    if (d.razao) L.push('Razão social: ' + d.razao);
+    if (d.cidade) L.push('Local: ' + d.cidade + (d.uf ? ' · ' + d.uf : ''));
+    if (an.naturezaJuridica) L.push('Natureza jurídica: ' + an.naturezaJuridica);
+    L.push('');
+    L.push('ATIVIDADE');
+    L.push('Principal: ' + (an.cnaePrincipalTxt ? (an.cnaePrincipal ? an.cnaePrincipal + ' — ' : '') + an.cnaePrincipalTxt : (an.setorTexto || q.setor || 'não informada')));
+    (d.atividadesSecundarias || []).forEach(x => L.push('  secundária: ' + (x.codigo ? x.codigo + ' — ' : '') + (x.descricao || '')));
+    L.push('');
+    L.push('NÚMEROS DO ÚLTIMO ANO FECHADO');
+    const n = (rot, cod, mid, origem) => { if (mid == null) { L.push(rot + ': não informado'); return; }
+      L.push(rot + ': ' + (origem === 'exato' ? _doReais(mid) + '  (valor informado pelo cliente)' : _fxC(mid) + '  (faixa escolhida)')); };
+    n('Receita líquida', an.receitaCod, an.receitaMid, an.receitaOrigem);
+    n('Patrimônio líquido', an.patrimonioCod, an.patrimonioMid, an.patrimonioOrigem);
+    n('Total de ativos', an.ativosCod, an.ativosMid, an.ativosOrigem);
+    L.push('Administradores com poder de decisão: ' + (an.nAdminsMid ? Math.round(an.nAdminsMid) : (q.nAdmins || 'não informado')));
+    L.push('');
+    L.push('PERFIL');
+    L.push('Capital: ' + (_DO_CAP[an.capitalCod] || q.capitalAberto || 'não informado'));
+    L.push('Exterior: ' + (_DO_EXT[an.exteriorCod] || q.exterior || 'não informado'));
+    L.push('Auditoria: ' + (_DO_AUD[an.auditoriaCod] || q.auditoria || 'não informado'));
+    L.push('');
+    L.push('PERGUNTAS DE ACEITAÇÃO');
+    L.push('1) Investigação/processo contra administrador nos últimos 5 anos: ' + (an.investigacoesCod === 'sim' ? 'SIM' : an.investigacoesCod === 'nao' ? 'Não' : 'não respondida'));
+    L.push('2) Fato conhecido que possa gerar reclamação: ' + (an.fatoConhecidoCod === 'sim' ? 'SIM' : an.fatoConhecidoCod === 'nao' ? 'Não' : 'não respondida'));
+    L.push('3) Prejuízo em mais de um exercício nos últimos 3 anos: ' + (an.prejuizoCod === 'sim' ? 'SIM' : an.prejuizoCod === 'nao' ? 'Não' : an.prejuizoCod === 'naosei' ? 'Não sabe informar' : 'não respondida'));
+    L.push('');
+    L.push('LIMITE DE INDENIZAÇÃO PEDIDO: ' + (an.limiteValor ? _fxC(an.limiteValor) : (an.limiteCod === 'lmi_recomendacao' ? 'quer a recomendação do corretor' : (q.limite || 'não informado'))));
+    L.push('');
+    L.push('COBERTURAS MANTIDAS (' + (q.coberturas || []).length + ')');
+    (q.coberturas || []).forEach(x => L.push('  • ' + x));
+    if ((q.coberturasRemovidas || []).length) {
+      L.push('');
+      L.push('DESMARCADAS PELO CLIENTE (' + q.coberturasRemovidas.length + ') — confirmar antes de cotar');
+      q.coberturasRemovidas.forEach(x => L.push('  – ' + x));
+    }
+    if (c.nome) { L.push(''); L.push('CONTATO: ' + c.nome + (c.cargo ? ' · ' + c.cargo : '') + (c.email ? ' · ' + c.email : '') + (c.telefone ? ' · ' + c.telefone : '')); }
+    L.push('');
+    L.push('Retorno Seguros · levantado em ' + new Date().toLocaleDateString('pt-BR'));
+    return L.join('\n');
+  }
+  async function doCopiarFicha(id, btn) {
+    const rot = btn ? btn.textContent : '';
+    try {
+      if (btn) btn.textContent = 'montando…';
+      const d = await db.collection('mb_apresentacoes').doc(id).get();
+      if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _doFicha({ id: d.id, ...d.data() });
+      const ok = () => { if (btn) { btn.textContent = '✓ ficha copiada'; setTimeout(() => { btn.textContent = rot; }, 2600); } };
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); }
+  }
+  window.doCopiarFicha = doCopiarFicha;
 
   // ══════════ SAÚDE COLABORADORES — bloco do card + ficha para a cotação ══════════
   // Lê: respostas (apresentação: scPorte, scSituacao, scIncomoda, scSeg, scAcom, scCopart, scAdesao, scReembolso, _vuln)
