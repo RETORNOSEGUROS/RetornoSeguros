@@ -193,7 +193,7 @@ const urlParams=new URLSearchParams(window.location.search);
 const indicadorCodigo=urlParams.get('ref')||null;
 const empresaParceiraCodigo=urlParams.get('emp')||null;
 
-let formData={nome:'',temSeguro:'',mesVencimento:'',marcaCodigo:'',marcaNome:'',modeloCodigo:'',modeloNome:'',anoCodigo:'',anoNome:'',valorFipe:'',whatsapp:'',utilizacao:'',condutor:'',idade:'',garagem:'',cepPernoite:'',bonus:'',sinistro:'',reboque:'',terceiros:'',carroReserva:'',extras:[],franquia:'',_leadId:null};
+let formData={nome:'',temSeguro:'',mesVencimento:'',marcaCodigo:'',marcaNome:'',modeloCodigo:'',modeloNome:'',anoCodigo:'',anoNome:'',valorFipe:'',whatsapp:'',utilizacao:'',condutor:'',idade:'',garagem:'',cepPernoite:'',cepInfo:null,codigoFipe:'',combustivel:'',mesRefFipe:'',bonus:'',sinistro:'',reboque:'',terceiros:'',carroReserva:'',extras:[],franquia:'',_leadId:null};
 let marcasFipe=[],modelosFipe=[],anosFipe=[];
 
 /* =========================================================================
@@ -209,6 +209,14 @@ function dadosLead(extra){
     veiculo:(formData.marcaNome+' '+formData.modeloNome).trim(), anoVeiculo:formData.anoNome,
     valorFipe:formData.valorFipe, utilizacao:formData.utilizacao, condutor:formData.condutor,
     idadeCondutor:formData.idade, pernoite:formData.garagem, cep:formData.cepPernoite||null,
+    cepPernoite:formData.cepPernoite||null,
+    enderecoPernoite:formData.cepInfo||null,
+    endereco:(formData.cepInfo&&formData.cepInfo.logradouro)||null,
+    bairro:(formData.cepInfo&&formData.cepInfo.bairro)||null,
+    cidade:(formData.cepInfo&&formData.cepInfo.cidade)||null,
+    estado:(formData.cepInfo&&formData.cepInfo.uf)||null,
+    marcaVeiculo:formData.marcaNome||null, modeloVeiculo:formData.modeloNome||null,
+    codigoFipe:formData.codigoFipe||null, combustivel:formData.combustivel||null, mesRefFipe:formData.mesRefFipe||null,
     bonus:formData.bonus, sinistro:formData.sinistro, reboque:formData.reboque,
     terceiros:formData.terceiros, carroReserva:formData.carroReserva,
     extras:formData.extras, franquia:formData.franquia,
@@ -222,9 +230,19 @@ function dadosLead(extra){
 }
 async function salvarProgresso(etapa,acao){
   if(!formData._leadId) return;                 /* antes do WhatsApp fica só aqui */
+  const dados=dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'});
   try{ await authPronta;
-    await db.collection('leads_crm').doc(formData._leadId).update(dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'})); }
-  catch(e){ console.warn('progresso',e); }
+    await db.collection('leads_crm').doc(formData._leadId).update(dados); }
+  catch(e){
+    /* plano B: se o Firestore recusar a ATUALIZAÇÃO (sessão anônima desligada ou regra),
+       as respostas não se perdem — vão para leads_site_respostas (só criação) e o CRM
+       junta tudo no lead sozinho. Era por isso que uso, garagem, CEP etc. não chegavam. */
+    console.warn('progresso (indo pelo plano B)',e&&e.code);
+    try{ const copia=Object.assign({},dados); delete copia.atualizadoEm;
+      await db.collection('leads_site_respostas').add({leadId:formData._leadId,dados:copia,
+        criadoEm:firebase.firestore.FieldValue.serverTimestamp()}); }
+    catch(e2){ console.warn('plano B também falhou',e2&&e2.code); }
+  }
 }
 async function criarLead(){
   try{
@@ -366,6 +384,7 @@ async carro(){
   areaAtual.querySelector('#btCarro').addEventListener('click',()=>{
     fecharArea();
     bolhaEco(esc(formData.marcaNome+' '+formData.modeloNome+' · '+formData.anoNome));
+    salvarProgresso('carro');
     radarMais(2);
     passo('whatsapp');
   });
@@ -448,16 +467,19 @@ async garagem(){
     '<div class="oc" onclick="marcaGaragem(\'rua\',\'Na rua\')"><div class="oi">&#128739;&#65039;</div><div class="ott">Na rua</div></div>'+
     '</div>'+
     '<div class="ig" style="margin-top:10px"><label>CEP de onde ele dorme (opcional — deixa a cotação mais precisa)</label>'+
-    '<input type="text" class="if" id="inCep" placeholder="00000-000" inputmode="numeric"></div>'+
+    '<input type="text" class="if" id="inCep" placeholder="00000-000" inputmode="numeric">'+
+    '<div id="cepEnd" style="font-size:.8rem;color:var(--mut);margin-top:6px;min-height:1em"></div></div>'+
     '<div class="br"><button class="bn bp" id="btGaragem" disabled>Enviar &rarr;</button></div>');
   const cep=areaAtual.querySelector('#inCep');
-  if(formData._cepPortal){ cep.value=String(formData._cepPortal).replace(/\D/g,'').replace(/^(\d{5})(\d{3})$/,'$1-$2'); }
+  if(formData._cepPortal){ cep.value=String(formData._cepPortal).replace(/\D/g,'').replace(/^(\d{5})(\d{3})$/,'$1-$2'); buscarCep(cep.value); }
   cep.addEventListener('input',()=>{ let v=cep.value.replace(/\D/g,'').slice(0,8);
-    cep.value=v.length>5?v.slice(0,5)+'-'+v.slice(5):v; });
+    cep.value=v.length>5?v.slice(0,5)+'-'+v.slice(5):v;
+    if(v.length===8) buscarCep(v); else { formData.cepInfo=null; const e=document.getElementById('cepEnd'); if(e) e.textContent=''; } });
   areaAtual.querySelector('#btGaragem').addEventListener('click',()=>{
     formData.cepPernoite=cep.value||'';
     const rot=window.__rotGaragem||'';
-    fecharArea(); bolhaEco(rot+(formData.cepPernoite?' · CEP '+esc(formData.cepPernoite):''));
+    const ci=formData.cepInfo;
+    fecharArea(); bolhaEco(rot+(formData.cepPernoite?' · CEP '+esc(formData.cepPernoite)+(ci&&ci.cidade?' ('+esc(ci.cidade)+'/'+esc(ci.uf)+')':''):''));
     radarMais(1); salvarProgresso('garagem');
     passo(formData.temSeguro==='sim'?'sinistro':'reboque');
   });
@@ -583,6 +605,22 @@ async fim(){
 }
 };
 
+/* ---------- CEP: rua, bairro e cidade pelo ViaCEP ---------- */
+let __cepSeq=0;
+async function buscarCep(v){
+  const d=String(v||'').replace(/\D/g,''); if(d.length!==8) return;
+  const el=document.getElementById('cepEnd'); const seq=++__cepSeq;
+  if(el) el.innerHTML='Buscando o endereço...';
+  try{
+    const r=await (await fetchComTempo('https://viacep.com.br/ws/'+d+'/json/',8000)).json();
+    if(seq!==__cepSeq) return;
+    if(r&&!r.erro){
+      formData.cepInfo={cep:d.slice(0,5)+'-'+d.slice(5),logradouro:r.logradouro||'',bairro:r.bairro||'',cidade:r.localidade||'',uf:r.uf||''};
+      if(el) el.innerHTML='&#128205; '+esc([r.logradouro,r.bairro].filter(Boolean).join(', '))+(r.logradouro||r.bairro?' — ':'')+'<b>'+esc(r.localidade)+'/'+esc(r.uf)+'</b>';
+    } else { formData.cepInfo=null; if(el) el.textContent='Não achei esse CEP — confere os números? (pode seguir mesmo assim)'; }
+  }catch(e){ if(seq===__cepSeq&&el) el.textContent=''; }
+}
+
 /* ---------- respostas genéricas ---------- */
 function respTemSeguro(v){
   formData.temSeguro=v;
@@ -674,7 +712,7 @@ function fipeAnos(m,mo){ return fipeComCache('fipe_anos_'+m+'_'+mo,168,
   FIPE_V2+'/brands/'+m+'/models/'+mo+'/years',v2Lista)); }
 function fipeValor(m,mo,a){ return fipeComCache('fipe_val_'+m+'_'+mo+'_'+a,24,
   ()=>fipeTenta(FIPE_API+'/marcas/'+m+'/modelos/'+mo+'/anos/'+a,
-  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years/'+a,d=>({Valor:d.price||''}))); }
+  FIPE_V2+'/brands/'+m+'/models/'+mo+'/years/'+a,d=>({Valor:d.price||'',CodigoFipe:d.codeFipe||'',Combustivel:d.fuel||'',MesReferencia:d.referenceMonth||''}))); }
 
 /* marcas carregam já na abertura da página (como na versão anterior), com re-tentativa */
 let __marcasPromessa=null, __fipePausaAte=0;
@@ -771,6 +809,7 @@ async function aoEscolherModelo(cod,nome){
 async function aoEscolherAno(){
   const sa=document.getElementById('selAno');if(!sa.value)return;
   formData.anoCodigo=sa.value;formData.anoNome=sa.options[sa.selectedIndex].text;
+  formData.codigoFipe='';formData.combustivel='';formData.mesRefFipe='';
   const fb=document.getElementById('fipeBox'),fv=document.getElementById('fipeVal');
   if(sa.value.indexOf('manual-')===0){ /* sem FIPE agora: segue sem o valor */
     formData.valorFipe='';
@@ -782,6 +821,7 @@ async function aoEscolherAno(){
   fv.textContent='Buscando...';fb.classList.add('show');
   const d=await fipeValor(formData.marcaCodigo,formData.modeloCodigo,sa.value);
   if(d&&d.Valor){ formData.valorFipe=d.Valor; fv.textContent=formData.valorFipe;
+    formData.codigoFipe=d.CodigoFipe||''; formData.combustivel=d.Combustivel||''; formData.mesRefFipe=d.MesReferencia||'';
     document.getElementById('btCarro').disabled=false;
   } else { fv.textContent='Não encontrado — pode seguir mesmo assim';
     document.getElementById('btCarro').disabled=false; }
@@ -816,7 +856,8 @@ function montarLinkWhats(){
   if(temAp){m.push('• Tenho seguro e quero *comparar/renovar*');if(formData.mesVencimento)m.push('• Vence em: '+formData.mesVencimento)}
   else m.push('• Estou *sem seguro* no momento');
   m.push('• Condutor: '+L.cond+' ('+formData.idade+')');
-  m.push('• Pernoite: '+L.gar+(formData.cepPernoite?' • CEP '+formData.cepPernoite:''));
+  const ci=formData.cepInfo;
+  m.push('• Pernoite: '+L.gar+(formData.cepPernoite?' • CEP '+formData.cepPernoite+(ci&&ci.cidade?' ('+ci.cidade+'/'+ci.uf+')':''):''));
   if(temAp){m.push('• Sinistro nos últimos 12 meses: '+(formData.sinistro==='sim'?'tive':'não tive'))}
   m.push('');
   m.push('🛡️ *Proteções que escolhi:*');
@@ -828,7 +869,7 @@ function montarLinkWhats(){
   return 'https://wa.me/5554996454300?text='+encodeURIComponent(m.join('\n'));
 }
 async function clicouWhats(){
-  try{ if(formData._leadId) await db.collection('leads_crm').doc(formData._leadId).update({acao:'whatsapp_direto',atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()}); }catch(e){}
+  salvarProgresso('resumo','whatsapp_direto');
 }
 function mascaraFone(input){
   let v=input.value.replace(/\D/g,'');if(v.length>11)v=v.substring(0,11);
