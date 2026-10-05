@@ -379,6 +379,9 @@ function familiaVeioDaConversa() {
   semearFamilia();
   return _faixaVal(CUSTO_FAIXAS, Q.famCusto) != null && _faixaVal(PATRIM_FAIXAS, Q.famPatrim) != null;
 }
+/* Quem respondeu a conversa como financeiro, RH ou assessor não é dono: a conta
+   da família dele não existe, e o primeiro cartão não é "você". */
+const respNaoSocio = () => !!R.papel && R.papel !== 'socio';
 
 /* ─── etapas visíveis (a numeração acompanha o que aparece) ─── */
 function etapas() {
@@ -499,7 +502,7 @@ const TELAS = {
     if (Q.valorFaixa == null && R.b3faixa != null) Q.valorFaixa = R.b3faixa;
     montar({ rotulo: rotuloEtapa('Q2'), titulo: 'Sobre a empresa, dois cliques.',
       corpo: `<p class="pergunta">Existe acordo de sócios ou valuation recente?</p>${grupoOps('gAc', [['acordo', 'Acordo de sócios'], ['valuation', 'Valuation recente'], ['ambos', 'Os dois'], ['nao', 'Nenhum'], ['naosei', 'Não sei']], Q.acordo, 'grade2')}
-        <p class="pergunta">Quanto vale a empresa hoje?</p>
+        <p class="pergunta">Na sua avaliação, quanto a empresa vale hoje?</p>
         <div class="ops grade2" id="gVal">${VALORES_TXT.map((t, i) => `<button class="op ${Q.valorFaixa === i && !Q.valorExato ? 'sel' : ''}" data-v="${i}">${t}</button>`).join('')}</div>
         <label class="lbl">Ou o valor aproximado (opcional)</label><input class="campo" id="vEx" inputmode="numeric" placeholder="R$ 0" value="${Q.valorExato ? mascaraReais(Q.valorExato) : ''}">
         <p class="nota">Serve só para sugerir o capital de cada sócio. Pode ser valuation, proposta de compra ou patrimônio líquido — nunca o capital social.</p>` + btnContinuar() });
@@ -517,7 +520,7 @@ const TELAS = {
       for (let k = 0; k < n; k++) Q.socios.push(novoSocio(k));
       // quem respondeu a conversa é o sócio 1: o nome dele já veio
       const meu = (R.contato && R.contato.nome) || R.cNome;
-      if (meu && Q.socios[0]) Q.socios[0].nome = String(meu).trim().split(/\s+/)[0];
+      if (meu && Q.socios[0] && !respNaoSocio()) Q.socios[0].nome = String(meu).trim().split(/\s+/)[0];
       /* A conta da família já rodou na apresentação, com ele olhando. Chegar
          aqui com o capital em branco faria o cliente escolher duas vezes. */
       if (temRg() && familiaVeioDaConversa() && Q.socios[0]) Q.socios[0].rg = 'rec';
@@ -527,6 +530,7 @@ const TELAS = {
     if (R.morte === 'andamento') avisos.push('Se algum sócio é um espólio, não o inclua agora: quando os herdeiros entrarem na sociedade, eles podem ser incluídos.');
     montar({ rotulo: rotuloEtapa('Q3'), titulo: modoSocio() ? 'Os seus dados.' : 'Quem vamos proteger?', info: 'capital',
       texto: modoSocio() ? 'Só o seu cartão. O capital da Pessoa Chave é sugerido pela sua participação; você pode mudar.'
+        : respNaoSocio() ? 'Um cartão por sócio. O capital da Pessoa Chave é sugerido pela participação de cada um; você pode mudar. Se faltar algum dado, deixe em branco e a corretora completa com você.'
         : 'Um cartão por sócio. O capital da Pessoa Chave é sugerido pela participação de cada um; você pode mudar.',
       corpo: (avisos.length ? `<div class="reac">${avisos.join('<br><br>')}</div>` : '') + `<div id="lista"></div>
         <button class="btn sec" id="btAdd" ${modoSocio() ? 'style="display:none"' : ''}>+ Adicionar sócio</button>
@@ -543,9 +547,9 @@ const TELAS = {
     const card = (s, k) => {
       const sug = capitalSugerido(s);
       return `<div class="socio ${s.incluir ? '' : 'fora'}" data-k="${k}">
-        <div class="socio-t"><span>${k === 0 ? 'Você' : 'Sócio ' + (k + 1)}</span>${modoSocio() ? '' : `<button data-acao="tog">${s.incluir ? 'Não incluir' : 'Incluir de novo'}</button>`}</div>
-        ${s.incluir && k > 0 ? `<button class="op ${s.porSocio ? 'sel' : ''}" data-acao="proprio" style="margin-top:10px;padding:10px 12px;font-size:13px">Ele mesmo preenche os próprios dados</button>` : ''}
-        ${s.incluir && s.porSocio ? `<p class="nota">Ele recebe o link e informa os próprios dados. A cotação dele entra no mesmo documento.</p>` : ''}
+        <div class="socio-t"><span>${k === 0 && !respNaoSocio() ? 'Você' : 'Sócio ' + (k + 1)}</span>${modoSocio() ? '' : `<button data-acao="tog">${s.incluir ? 'Não incluir' : 'Incluir de novo'}</button>`}</div>
+        <!-- "ele mesmo preenche" saiu em 05/out: quem responde conhece os sócios,
+             e a opção só adiava a cotação esperando um dado que ele já tinha. -->
         ${s.incluir && !s.porSocio ? `
         <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:8px">
           <div><label class="lbl">Primeiro nome</label><input class="campo" data-in="nome" value="${esc(s.nome)}"></div>
@@ -556,10 +560,10 @@ const TELAS = {
         <div class="nota aviso-idade">${s.nasc && s.nasc.length === 10 && s.idade == null ? 'Confira a data: o seguro aceita de 18 a 80 anos.' : ''}</div>
         <label class="lbl">Sexo (a seguradora usa no cálculo)</label>${chips('sexo', [['M', 'Masculino'], ['F', 'Feminino']], s)}
         <label class="lbl">Na empresa</label>${chips('atua', [['trabalha', 'Trabalha na empresa'], ['nao', 'Não atua'], ['aposentado', 'Aposentado(a)']], s)}
-        ${temPc() ? `<label class="lbl">Pessoa Chave · capital</label>${chips('pc', [...(sug ? [['sug', 'Sugerido: ' + fmtCap(sug)]] : []), ['outro', 'Outro valor'], ['rec', 'Recomendação'], ['nao', 'Não incluir']], s)}
+        ${temPc() ? `<label class="lbl">Pessoa Chave · capital <small style="display:block;font-weight:500;text-transform:none;letter-spacing:0;color:var(--suave);margin-top:2px">O valor da cota dele, pago à empresa</small></label>${chips('pc', [...(sug ? [['sug', 'Sugerido: ' + fmtCap(sug)]] : []), ['outro', 'Outro valor'], ['rec', 'Recomendação'], ['nao', 'Não incluir']], s)}
           ${s.pc === 'outro' ? `<input class="campo" data-in="pcOutro" inputmode="numeric" placeholder="R$ 0" style="margin-top:8px" value="${s.pcOutro ? mascaraReais(s.pcOutro) : ''}"><div class="nota">De R$ 200 mil a R$ 12 milhões.</div>` : ''}
           ${!sug && !numPct(s.pct) ? `<div class="nota">Informe a participação para ver o capital sugerido.</div>` : ''}` : ''}
-        ${temRg() ? `<label class="lbl">Resgatável Único · capital para a família</label>${chips('rg', [['nao', 'Não incluir'], ['500k', 'R$ 500 mil'], ['1mi', 'R$ 1 mi'], ['outro', 'Outro valor'], ['rec', (k === 0 && contaFamilia() && !contaFamilia().parcial) ? 'Nossa conta: ' + fmtCap(contaFamilia().cap) : 'Recomendação']], s)}
+        ${temRg() ? `<label class="lbl">Resgatável Único · capital <small style="display:block;font-weight:500;text-transform:none;letter-spacing:0;color:var(--suave);margin-top:2px">Vai para a família dele, caso venha a faltar</small></label>${chips('rg', [['nao', 'Não incluir'], ['500k', 'R$ 500 mil'], ['1mi', 'R$ 1 mi'], ['outro', 'Outro valor'], ['rec', (k === 0 && contaFamilia() && !contaFamilia().parcial) ? 'Nossa conta: ' + fmtCap(contaFamilia().cap) : 'Recomendação']], s)}
           ${k === 0 && s.rg === 'rec' && contaFamilia() && !contaFamilia().parcial ? `<div class="nota">${familiaVeioDaConversa() ? 'É a conta que você viu na apresentação: s' : 'S'}ustento de ${MESES_INVENTARIO} meses + ${Math.round(TX_SUCESSAO * 100)}% sobre o patrimônio${contaFamilia().jaTem ? ', menos o seguro que você já tem' : ''}. Toque em outro valor se quiser mudar.</div>` : ''}
           ${s.rg === 'outro' ? `<input class="campo" data-in="rgOutro" inputmode="numeric" placeholder="R$ 0" style="margin-top:8px" value="${s.rgOutro ? mascaraReais(s.rgOutro) : ''}"><div class="nota">De R$ 200 mil a R$ 12 milhões.</div>` : ''}` : ''}
         <div class="notas">${notas(s)}</div>` : ''}
