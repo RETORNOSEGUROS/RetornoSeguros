@@ -10,6 +10,7 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
 <script>
 /* FIREBASE — mesma configuração das demais páginas da corretora.
    (Antes usava /__/firebase/init.js, que só funciona quando a página é servida
@@ -36,6 +37,10 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   .aviso { margin:12px 0; font-size:13.5px; line-height:1.5; padding:10px 12px; border-radius:10px; background:rgba(251,191,36,.08); border-left:3px solid var(--dourado); color:#fde68a; }
   textarea, input { width:100%; padding:12px; border-radius:12px; background:rgba(255,255,255,.05); border:1.5px solid var(--borda); color:#fff; font:500 13px ui-monospace,Menlo,monospace; }
   textarea { min-height:380px; line-height:1.45; }
+  .btns-mini { display:flex; gap:14px; margin:8px 0 0; flex-wrap:wrap }
+  .btns-mini button { background:none; border:none; padding:0; font:600 13px inherit; color:#64748b;
+    text-decoration:underline; text-underline-offset:3px; cursor:pointer }
+  .btns-mini button:hover { color:#0f172a }
   .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   button, a.b { padding:12px 16px; border-radius:11px; border:none; font:800 14px 'Inter',sans-serif; cursor:pointer; background:linear-gradient(135deg,var(--ciano),#2563eb); color:#031127; text-decoration:none; }
   button.sec { background:transparent; border:1.5px solid var(--borda); color:var(--texto); }
@@ -60,11 +65,16 @@ try { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); } catch
   <div id="lista"></div>
   <label style="display:block;margin:16px 0 6px;font-weight:700;font-size:13px;color:var(--suave)">JSON da proposta</label>
   <textarea id="json" spellcheck="false"></textarea>
+  <!-- Um botão só manda na tela: salvar já valida por dentro, então "Validar"
+       era um passo a mais para chegar no mesmo lugar. As outras ferramentas
+       continuam aqui, menores, para quem precisar delas. -->
   <div class="btns">
-    <button class="sec" onclick="modelo()">Inserir modelo</button>
-    <button class="sec" onclick="validar(true)">Validar</button>
-    <button class="sec" onclick="previa()">Pré-visualizar</button>
     <button class="ouro" onclick="salvar()">Salvar e gerar link</button>
+  </div>
+  <div class="btns-mini">
+    <button onclick="validar(true)">Só validar</button>
+    <button onclick="previa()">Pré-visualizar</button>
+    <button onclick="modelo()">Inserir modelo</button>
   </div>
   <div id="saida"></div>
   <div id="acomp"></div>
@@ -133,7 +143,53 @@ function conferirFormato(P) {
   exigeData(P.validade, 'validade');
   exigeData(P.dataCotacao, 'dataCotacao');
   (Array.isArray(P.socios) ? P.socios : []).forEach((x, i) => { if (x && x.nascimento) exigeData(x.nascimento, `socios[${i}].nascimento`); });
+
+  /* ═══ o que não é formato, é coerência ═══
+     Um socioId que não existe deixa a proposta mostrando "—" no lugar do nome,
+     e um item sem capital deixa a linha vazia. Os dois passavam no editor e só
+     apareciam na tela do cliente. */
+  const ids = new Set((Array.isArray(P.socios) ? P.socios : []).map(x => x && x.id).filter(Boolean));
+  if (ids.size) {
+    const confN = (lista, rot) => (Array.isArray(lista) ? lista : []).forEach((i, k) => {
+      if (!i) return;
+      if (!i.socioId) f.push(`${rot}[${k}] está sem "socioId"`);
+      else if (!ids.has(i.socioId)) f.push(`${rot}[${k}] aponta para o sócio "${i.socioId}", que não está na lista de sócios`);
+    });
+    confN(P.pessoaChave && P.pessoaChave.itens, 'pessoaChave.itens');
+    confN(P.resgatavel && P.resgatavel.itens, 'resgatavel.itens');
+    confN(P.pessoaChave && P.pessoaChave.sugestao && P.pessoaChave.sugestao.itens, 'pessoaChave.sugestao.itens');
+    confN(P.resgatavel && P.resgatavel.sugestao && P.resgatavel.sugestao.itens, 'resgatavel.sugestao.itens');
+    const d = P.destinatario;
+    if (d && d.socioId && !ids.has(d.socioId)) f.push(`"destinatario.socioId" aponta para "${d.socioId}", que não está na lista de sócios`);
+  }
+  const confCap = (lista, rot) => (Array.isArray(lista) ? lista : []).forEach((i, k) => {
+    if (i && !(Number(i.capital) > 0)) f.push(`${rot}[${k}] está sem capital — a linha sairia vazia na proposta`);
+  });
+  confCap(P.pessoaChave && P.pessoaChave.itens, 'pessoaChave.itens');
+  confCap(P.resgatavel && P.resgatavel.itens, 'resgatavel.itens');
+  confCap(P.pessoaChave && P.pessoaChave.sugestao && P.pessoaChave.sugestao.itens, 'pessoaChave.sugestao.itens');
+  confCap(P.resgatavel && P.resgatavel.sugestao && P.resgatavel.sugestao.itens, 'resgatavel.sugestao.itens');
   return f;
+}
+
+/* ═══ avisos de conteúdo ═══
+   Não bloqueiam o envio: a proposta sabe lidar com os dois casos. São coisas
+   que o corretor precisa saber ANTES de mandar, não depois de o cliente ler. */
+function avisosDeConteudo(P) {
+  const a = [];
+  const semPreco = (lista, campo) => (Array.isArray(lista) ? lista : []).filter(i => i && !(Number(i[campo]) > 0)).length;
+  const campoPC = (P.pessoaChave && P.pessoaChave.pagamento === 'mensal') ? 'premioMensal' : 'premioAnual';
+  const avPC = semPreco(P.pessoaChave && P.pessoaChave.sugestao && P.pessoaChave.sugestao.itens, campoPC);
+  const avRG = semPreco(P.resgatavel && P.resgatavel.sugestao && P.resgatavel.sugestao.itens, 'premioUnico');
+  if (avPC) a.push(`${avPC} sócio(s) da sugestão da Pessoa Chave estão sem prêmio — o total sai parcial, com a ressalva "ainda a cotar". O cliente vê um número menor que o final.`);
+  if (avRG) a.push(`${avRG} sócio(s) da sugestão do Resgatável estão sem prêmio — mesma ressalva.`);
+  const foraFaixa = (lista, rot) => (Array.isArray(lista) ? lista : []).forEach(i => {
+    const c = Number(i && i.capital);
+    if (c > 0 && (c < 2e5 || c > 12e6)) a.push(`${rot}: capital de R$ ${c.toLocaleString('pt-BR')} está fora da faixa do produto (R$ 200 mil a R$ 12 milhões por sócio) — confirme com a seguradora.`);
+  });
+  foraFaixa(P.pessoaChave && P.pessoaChave.itens, 'Pessoa Chave');
+  foraFaixa(P.resgatavel && P.resgatavel.itens, 'Resgatável');
+  return a;
 }
 
 /* Data: aceita o jeito brasileiro (16/10/1988) e o jeito que o banco guarda
@@ -175,6 +231,7 @@ function _validar(mostrar) {
   const er = [], al = [];
   const datasConvertidas = normalizarDatas(P);
   if (datasConvertidas.length) al.push('data no formato brasileiro, convertida sozinha — ' + datasConvertidas.join('; '));
+  avisosDeConteudo(P).forEach(x => al.push(x));
   const formato = conferirFormato(P);
   if (formato.length) {
     $('saida').innerHTML = `<div class="caixa"><b class="er">O JSON veio em outro formato (${formato.length} ${formato.length === 1 ? 'diferença' : 'diferenças'}):</b>
@@ -294,18 +351,151 @@ async function listarPropostas() {
           : `<b class="al">${ok} de ${ac.length} preenchidas${ini ? ' · ' + ini + ' em andamento' : ''}</b>`;
         return `<tr><td><b>${esc((x.empresa && x.empresa.nome) || x.empresaNome || 'Sem nome')}</b>${x.aberta ? '' : '<br><small class="al">ainda não aberta pelo cliente</small>'}</td>
           <td>${dt}</td><td>${st}</td>
-          <td><button class="sec" onclick="abrirProposta('${x.id}')">Abrir</button></td></tr>`;
+          <td><button class="sec" onclick="abrirProposta('${x.id}')">Abrir</button>
+            <button class="sec" style="color:#b91c1c" onclick="excluirProposta('${x.id}', ${esc(JSON.stringify((x.empresa && x.empresa.nome) || x.empresaNome || 'Sem nome'))})">Excluir</button></td></tr>`;
       }).join('')}
     </table></div>`;
   } catch (e) { cx.innerHTML = `<div class="caixa er">Não consegui listar: ${esc(e.message)}</div>`; }
 }
 function abrirProposta(id) { $('pid').value = id; $('json').value = ''; $('lista').innerHTML = ''; carregar(); }
+/* Excluir apaga o link do cliente junto: por isso a confirmação pede o nome da
+   empresa na tela, e não um "tem certeza?" que ninguém lê. */
+async function excluirProposta(id, nome) {
+  if (!db) return;
+  if (!confirm(`Excluir a proposta da ${nome}?\n\nO link que o cliente tem deixa de funcionar, e as fichas de saúde já preenchidas continuam guardadas em separado.\n\nIsto não tem volta.`)) return;
+  try {
+    await db.collection('mb_propostas').doc(id).delete();
+    if ($('pid').value.trim() === id) { $('pid').value = ''; $('acomp').innerHTML = ''; $('json').value = ''; }
+    listarPropostas();
+  } catch (e) { alert('Não consegui excluir: ' + e.message); }
+}
+
+/* ═══ VALORES POR SÓCIO, EDITÁVEIS ═══
+   A negociação quase sempre sai do sistema: o cliente pede por e-mail, a
+   corretora recota, e aí era preciso remontar o JSON inteiro à mão para mudar
+   um capital. Aqui o corretor muda o número onde ele está, salva, e o link do
+   cliente — que já foi enviado — passa a mostrar o valor novo.
+   O JSON do textarea é reescrito junto, para as duas vistas nunca divergirem. */
+const RESG_PADRAO = [[1, 0.91], [6, 1.02], [10, 1.11], [20, 1.33], [30, 1.53]];
+const _n = v => { const x = Number(String(v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')); return isFinite(x) ? x : null; };
+const _f = v => (v == null || v === '') ? '' : Number(v).toLocaleString('pt-BR');
+function blocoValores(pid, P) {
+  const nome = id => { const x = (P.socios || []).find(s => s.id === id); return x ? x.nome : id; };
+  const mensal = P.pessoaChave && P.pessoaChave.pagamento === 'mensal';
+  const linhasPC = ((P.pessoaChave || {}).itens || []).map((i, k) => `<tr>
+      <td><b>${esc(nome(i.socioId))}</b><br><small>${esc(i.socioId)}</small></td>
+      <td><input data-v="pc.${k}.capital" value="${_f(i.capital)}" style="width:120px"></td>
+      <td><input data-v="pc.${k}.${mensal ? 'premioMensal' : 'premioAnual'}" value="${_f(mensal ? i.premioMensal : i.premioAnual)}" style="width:110px" placeholder="a cotar"></td>
+      <td><label><input type="checkbox" data-v="pc.${k}.dg" ${i.dg ? 'checked' : ''}> DG</label>
+          <label><input type="checkbox" data-v="pc.${k}.ipa" ${i.ipa ? 'checked' : ''}> IPA</label></td></tr>`).join('');
+  const linhasRG = ((P.resgatavel || {}).itens || []).map((i, k) => `<tr>
+      <td><b>${esc(nome(i.socioId))}</b><br><small>${esc(i.socioId)}</small></td>
+      <td><input data-v="rg.${k}.capital" value="${_f(i.capital)}" style="width:120px"></td>
+      <td><input data-v="rg.${k}.premioUnico" value="${_f(i.premioUnico)}" style="width:110px" placeholder="a cotar"></td>
+      <td><label><input type="checkbox" data-v="rg.${k}.dg" ${i.dg ? 'checked' : ''}> DG</label></td></tr>
+    <tr><td colspan="4" style="padding-top:0"><small>Resgate${i.resgateFonte === 'simulacao' ? ' <b>(simulação)</b>' : ''}:</small>
+      ${(i.resgate || RESG_PADRAO.map(([a]) => ({ ano: a, valor: null }))).map((r, j) =>
+        `<label style="font-size:12px;margin-right:9px">${r.ano}º <input data-v="rg.${k}.resgate.${j}.valor" value="${_f(r.valor)}" style="width:92px"></label>`).join('')}
+      <button class="sec" onclick="resgatePadrao(${k})">recalcular pelos percentuais padrão</button></td></tr>`).join('');
+  if (!linhasPC && !linhasRG) return '';
+  return `<div class="caixa">
+    <b>Valores por sócio</b>
+    <p style="font-size:12px; opacity:.7; margin:4px 0 8px">Para quando a negociação sai do sistema. Mude o número, salve, e o link que o cliente já tem mostra o valor novo. Deixe o prêmio em branco para a proposta dizer "a cotar".</p>
+    ${linhasPC ? `<label class="lbl2">Pessoa Chave · ${mensal ? 'prêmio mensal' : 'prêmio anual'}</label>
+      <table><tr><th>Sócio</th><th>Capital</th><th>Prêmio</th><th>Coberturas</th></tr>${linhasPC}</table>` : ''}
+    ${linhasRG ? `<label class="lbl2">Resgatável Único · pagamento único</label>
+      <table><tr><th>Sócio</th><th>Capital</th><th>Pagamento</th><th>Coberturas</th></tr>${linhasRG}</table>` : ''}
+    <div class="btns"><button class="ouro" onclick="salvarValores()">Salvar os valores</button>
+      <span id="valMsg" style="font-size:12px; opacity:.75"></span></div>
+  </div>`;
+}
+/* lê a tela e devolve pessoaChave/resgatavel novos, sem tocar no resto */
+function _colherValores() {
+  const P = JSON.parse(JSON.stringify(PROP_ATUAL.P));
+  document.querySelectorAll('[data-v]').forEach(el => {
+    const [prod, k, campo, idx, sub] = el.dataset.v.split('.');
+    const bloco = prod === 'pc' ? P.pessoaChave : P.resgatavel;
+    const it = bloco && bloco.itens && bloco.itens[Number(k)];
+    if (!it) return;
+    if (campo === 'resgate') { it.resgate = it.resgate || []; if (it.resgate[Number(idx)]) it.resgate[Number(idx)][sub] = _n(el.value); return; }
+    if (el.type === 'checkbox') { it[campo] = el.checked; return; }
+    it[campo] = _n(el.value);
+  });
+  return P;
+}
+async function resgatePadrao(k) {
+  const P = _colherValores();
+  const it = P.resgatavel && P.resgatavel.itens && P.resgatavel.itens[k];
+  const pago = it && Number(it.premioUnico);
+  if (!(pago > 0)) { $('valMsg').textContent = 'informe o pagamento único antes de simular o resgate'; return; }
+  it.resgate = RESG_PADRAO.map(([ano, f]) => ({ ano, valor: Math.round(pago * f) }));
+  it.resgateFonte = 'simulacao';
+  PROP_ATUAL.P = P;
+  /* Grava antes de redesenhar: `carregar()` relê do banco, e sem salvar a
+     simulação morria no caminho de volta. */
+  await salvarValores(P);
+  carregar();
+}
+async function salvarValores(jaColhido) {
+  if (!db || !PROP_ATUAL) return;
+  const P = jaColhido || _colherValores();
+  const msg = $('valMsg'); msg.textContent = 'salvando…';
+  try {
+    await db.collection('mb_propostas').doc(PROP_ATUAL.pid).set({
+      pessoaChave: P.pessoaChave || null, resgatavel: P.resgatavel || null,
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    /* o textarea acompanha: dois lugares mostrando números diferentes é como
+       um erro nasce na próxima vez que alguém salvar o JSON */
+    try { const j = JSON.parse($('json').value || '{}'); j.pessoaChave = P.pessoaChave; j.resgatavel = P.resgatavel; $('json').value = JSON.stringify(j, null, 2); } catch (e) {}
+    msg.textContent = '✓ salvo — o cliente já vê os valores novos';
+    PROP_ATUAL.P = P;
+  } catch (e) { msg.textContent = 'não consegui salvar: ' + e.message; }
+}
+
+/* ═══ O QUE O CLIENTE PEDIU ═══
+   O cliente marcava os motivos e escrevia o que queria mudar, a proposta
+   gravava tudo em `pedidosAjuste`… e nenhuma tela lia. O pedido morria no
+   banco. É o primeiro bloco que o corretor precisa ver ao abrir a proposta —
+   vem antes de qualquer acompanhamento, e em vermelho enquanto não for tratado. */
+const MOTIVOS_TXT = { maior: 'Quer capital maior', menor: 'Quer capital menor', incluir: 'Incluir outro sócio',
+  tirar: 'Tirar um sócio', parcelar: 'Parcelado em vez de único', unico: 'Pagamento único em vez de parcelado',
+  coberturas: 'Mudar as coberturas', conversar: 'Quer conversar antes de decidir' };
+function blocoPedidos(P) {
+  const ps = (P.pedidosAjuste || []).slice().reverse();
+  if (!ps.length) return '';
+  const abertos = ps.filter(x => !x.tratadoEm).length;
+  return `<div class="caixa ${abertos ? 'er' : ''}" style="${abertos ? 'border-color:#dc2626' : ''}">
+    <b>${abertos ? '🔴 ' : ''}O cliente pediu ${ps.length === 1 ? 'uma alteração' : ps.length + ' alterações'}${abertos ? ` · ${abertos} sem tratar` : ' · todas tratadas'}</b>
+    ${ps.map((x, i) => `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0">
+      <small>${dh(x.em)}${x.por ? ' · ' + esc(x.por) : ''}${x.papel ? ' (' + esc(x.papel) + ')' : ''}</small><br>
+      ${(x.motivos || []).length ? `<b>${(x.motivos || []).map(k => esc(MOTIVOS_TXT[k] || k)).join(' · ')}</b><br>` : ''}
+      ${x.texto ? `<span style="white-space:pre-wrap">${esc(x.texto)}</span><br>` : ''}
+      ${x.tratadoEm ? `<small class="ok">tratado em ${dh(x.tratadoEm)}</small>`
+        : `<button class="sec" style="margin-top:6px" onclick="tratarPedido(${ps.length - 1 - i})">Marcar como tratado</button>`}
+    </div>`).join('')}
+    ${abertos ? '<div class="nota" style="margin-top:10px">Depois de recotar, cole o JSON novo acima e salve — o link do cliente continua o mesmo.</div>' : ''}
+  </div>`;
+}
+async function tratarPedido(i) {
+  const pid = $('pid').value.trim(); if (!pid || !db) return;
+  const d = await db.collection('mb_propostas').doc(pid).get();
+  const ps = (d.data() || {}).pedidosAjuste || [];
+  if (!ps[i]) return;
+  ps[i].tratadoEm = new Date().toISOString();
+  await db.collection('mb_propostas').doc(pid).set({ pedidosAjuste: ps }, { merge: true });
+  carregar();
+}
 
 async function carregar() {
   const pid = $('pid').value.trim(); if (!pid || !db) return;
   const d = await db.collection('mb_propostas').doc(pid).get();
   if (!d.exists) { $('acomp').innerHTML = `<div class="caixa er">Não encontrada.</div>`; return; }
   const P = d.data();
+  /* O editor de valores também precisa da proposta em mão, e ele aparece antes
+     de existir contratação — por isso PROP_ATUAL nasce aqui, e não no bloco de
+     etapas, que só roda depois que o cliente prossegue. */
+  PROP_ATUAL = { pid, P };
   if (!$('json').value.trim()) { const c = {}; CAMPOS.forEach(k => { if (P[k] !== undefined) c[k] = P[k]; }); $('json').value = JSON.stringify(c, null, 2); }
   const conv = Object.entries(P.convidados || {});
   const princ = conv.find(([, c]) => c.papel === 'principal');
@@ -318,15 +508,25 @@ async function carregar() {
     <div class="caixa">
       <b>Última abertura:</b> ${P.ultimoAcesso ? `${dh(P.ultimoAcesso)} por ${esc(P.ultimoAcessoPor && P.ultimoAcessoPor.nome || '')} — <span class="${du >= 7 ? 'er' : du >= 3 ? 'al' : 'ok'}">há ${du} dia(s)</span>` : '<span class="al">nunca aberta</span>'}
       ${princ ? `<br><br><b>Link do sócio principal:</b><div class="link">${esc(link(princ[0]))}</div>
-      <div class="btns"><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(link(princ[0])))})">Copiar link</button><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(msg))})">Copiar mensagem</button><a class="b" target="_blank" href="https://wa.me/?text=${encodeURIComponent(msg)}">WhatsApp</a></div>` : ''}
+      <div class="btns"><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(link(princ[0])))});this.textContent='✓ copiado'">Copiar link</button><button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(msg))});this.textContent='✓ copiada'">Copiar a mensagem inteira</button></div>` : ''}
     </div>
     <div class="caixa"><b>Quem recebeu o link</b><table><tr><th>Nome</th><th>Papel</th><th>Aberturas</th><th>Última</th><th>Situação</th></tr>
       ${conv.map(([t, c]) => `<tr><td>${esc(c.nome)}${c.email ? '<br><small>' + esc(c.email) + '</small>' : ''}</td><td>${esc(c.papel)}</td><td>${c.aberturas || 0}</td><td>${c.ultimo ? dh(c.ultimo) + ` <small>(${dias(c.ultimo)}d)</small>` : '—'}</td><td>${c.parecer ? `<b class="${c.parecer.status === 'confere' ? 'ok' : 'al'}">${esc(c.parecer.status)}</b> ${esc(c.parecer.texto || '')}` : (P.checklist && P.checklist[t] && P.checklist[t].r ? '<span class="ok">respondeu o checklist</span>' : '')}</td></tr>`).join('')}
     </table></div>
     ${P.escolhaCenario ? `<div class="caixa ok" style="border-color:#16a34a"><b>O cliente escolheu o cenário: ${esc(P.escolhaCenario.nome || P.escolhaCenario.id)}</b><br><small>por ${esc(P.escolhaCenario.por || '')} em ${dh(P.escolhaCenario.em)} — recote com esses capitais e republique a proposta.</small></div>` : ''}
+    ${blocoPedidos(P)}
+    ${blocoValores(pid, P)}
     <div class="caixa"><b>Contratação</b> ${P.contratar ? `— pedida em ${dh(P.contratar.em)} por ${esc(P.contratar.por || '')}` : '— ainda não'}
       ${aceites.length ? `<div class="btns" style="margin-top:8px"><button class="b" onclick="window.open('DadosVidaSocios.html?p=${pid}','_blank')">📄 Dados de todos os sócios (PDF)</button></div>` : ''}
-      ${aceites.length ? `<table><tr><th>Sócio</th><th>Produtos</th><th>Status</th><th></th></tr>${aceites.map(([t, a]) => `<tr><td>${esc(a.nome)}</td><td>${[a.pc ? 'PC' : '', a.rg ? 'RG' : ''].filter(Boolean).join(' + ')}</td><td class="${a.status === 'preenchido' ? 'ok' : 'al'}">${esc(a.status || 'enviado')}${a.em ? ' · ' + dh(a.em) : ''}</td><td>${a.status === 'preenchido' ? `<button class="sec" onclick="window.open('DadosVidaSocios.html?p=${pid}#${t}','_blank')">Dados</button>` : ''}</td></tr>`).join('')}</table>` : ''}
+      ${aceites.length ? `<table><tr><th>Sócio</th><th>Produtos</th><th>Status</th><th>Link da ficha</th></tr>${aceites.map(([t, a]) => {
+        const la = base() + 'AceiteVidaSocios.html?p=' + pid + '&a=' + t;
+        return `<tr><td>${esc(a.nome)}</td><td>${[a.pc ? 'PC' : '', a.rg ? 'RG' : ''].filter(Boolean).join(' + ')}</td>
+          <td class="${a.status === 'preenchido' ? 'ok' : 'al'}">${esc(a.status || 'enviado')}${a.em ? ' · ' + dh(a.em) : ''}</td>
+          <td>${a.status === 'preenchido'
+            ? `<button class="sec" onclick="window.open('DadosVidaSocios.html?p=${pid}#${t}','_blank')">Dados</button>`
+            : `<button class="sec" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(la))});this.textContent='✓ copiado'">Copiar link</button>`}</td></tr>`;
+      }).join('')}</table>
+      <div class="nota">Copie o link e mande pelo canal que você quiser. A coluna de situação muda sozinha quando o sócio preenche.</div>` : ''}
       <div id="aceiteOut"></div></div>
     ${P.contratar ? blocoEtapas(pid, P) : ''}`;
 }
@@ -334,7 +534,7 @@ async function carregar() {
 /* ═══════════════ ETAPAS — o que o cliente vê no acompanhamento ═══════════════
    A seguradora não conversa com este sistema, então quem marca é o corretor.
    Cada marcação aparece na hora na proposta que o cliente já tem em mãos. */
-let PROP_ATUAL = null;
+let PROP_ATUAL = null, st = null;
 
 function _hoje() { return new Date().toISOString(); }
 const _dh = iso => iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -433,7 +633,53 @@ function blocoEtapas(pid, P) {
       ${res.tipo ? `<button class="sec" onclick="resultado(null)">desfazer</button>` : ''}
     </div>
     ${res.tipo ? `<p style="font-size:12px; opacity:.75">${esc(res.tipo)} em ${_dh(res.em)}${res.apolice ? ' · apólice ' + esc(res.apolice) : ''}${res.obs ? ' · ' + esc(res.obs) : ''}</p>` : ''}
+
+    ${(res.tipo === 'emitida' || res.tipo === 'agravo') ? `
+    <label class="lbl2">Documentos para o cliente</label>
+    <p style="font-size:12px; opacity:.7; margin:0 0 7px">A via da proposta e a apólice em PDF aparecem na página que o cliente acompanha — no fim da linha do tempo deste produto.</p>
+    ${(E.documentos || []).length ? `<table><tr><th>O quê</th><th>Arquivo</th><th>Quando</th><th></th></tr>
+      ${(E.documentos || []).map((x, i) => `<tr><td>${esc(x.rotulo || '—')}</td><td><a href="${esc(x.url)}" target="_blank">${esc(x.nome || 'abrir')}</a></td><td>${_dh(x.em)}</td>
+        <td><button class="sec" onclick="tirarDoc(${i})">Tirar</button></td></tr>`).join('')}</table>` : ''}
+    <div class="btns">
+      <select id="docRot" style="flex:0 0 auto"><option value="Apólice">Apólice</option><option value="Via da proposta">Via da proposta</option><option value="Condições gerais">Condições gerais</option><option value="Outro documento">Outro documento</option></select>
+      <label class="b" style="cursor:pointer">📎 Anexar PDF<input type="file" id="docArq" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="anexarDoc()"></label>
+      <span id="docMsg" style="font-size:12px; opacity:.75"></span>
+    </div>` : ''}
   </div>`;
+}
+
+/* ═══ anexos da apólice ═══
+   O cliente acompanhou tudo nesta página; a apólice tem que chegar nela também,
+   e não num e-mail de três meses atrás. Sobe para o Storage e entra em
+   `etapas.<produto>.documentos`, que a proposta online já sabe desenhar. */
+async function anexarDoc() {
+  const el = $('docArq'), msg = $('docMsg');
+  const f = el.files && el.files[0]; if (!f || !PROP_ATUAL) return;
+  if (!st) { msg.textContent = 'armazenamento indisponível — recarregue a página'; return; }
+  if (f.size > 20 * 1024 * 1024) { msg.textContent = 'acima de 20 MB'; el.value = ''; return; }
+  const rotulo = $('docRot').value;
+  msg.textContent = 'enviando…';
+  try {
+    const nome = f.name.replace(/[^\w.\- ]+/g, '_');
+    const path = `mb_propostas/${PROP_ATUAL.pid}/${PROD_ETAPA}/${Date.now()}_${nome}`;
+    const task = st.ref(path).put(f, { contentType: f.type || 'application/pdf' });
+    await new Promise((ok, err) => task.on('state_changed', sn => { msg.textContent = 'enviando… ' + Math.round(sn.bytesTransferred / sn.totalBytes * 100) + '%'; }, err, ok));
+    const url = await task.snapshot.ref.getDownloadURL();
+    const E = _etapasDe(PROP_ATUAL.P, PROD_ETAPA);
+    const docs = (E.documentos || []).concat([{ rotulo, nome: f.name, url, path, em: new Date().toISOString() }]);
+    await _gravarEtapas({ documentos: docs });
+    msg.textContent = '';
+  } catch (e) { msg.textContent = 'não consegui enviar: ' + e.message; console.warn(e); }
+  el.value = '';
+}
+async function tirarDoc(i) {
+  if (!PROP_ATUAL) return;
+  const E = _etapasDe(PROP_ATUAL.P, PROD_ETAPA);
+  const docs = (E.documentos || []).slice();
+  if (!docs[i]) return;
+  if (!confirm('Tirar "' + (docs[i].rotulo || docs[i].nome) + '" da página do cliente?')) return;
+  docs.splice(i, 1);
+  await _gravarEtapas({ documentos: docs });
 }
 
 async function _gravarEtapas(mudanca) {
@@ -541,6 +787,7 @@ async function verAceite(pid, t) {
   await new Promise(r => { const off = firebase.auth().onAuthStateChanged(u => { USER = u; off(); r(); }); });
   if (!USER || USER.isAnonymous) { $('authAviso').hidden = false; $('authAviso').textContent = 'Você não está logado no painel neste navegador. Salvar e ver dados de aceite dependem das regras do Firestore — entre no painel primeiro.'; if (!USER) { try { await firebase.auth().signInAnonymously(); } catch (e) { } } }
   db = firebase.firestore();
+    try { st = firebase.storage(); } catch (e) { st = null; }
   if (p) carregar();
 })();
 </script>
