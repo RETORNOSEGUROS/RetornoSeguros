@@ -119,13 +119,35 @@ const R=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL
 const fmtD=s=>{ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||'')); return m?m[3]+'/'+m[2]+'/'+m[1]:(s||''); };
 const FORMAS={cartao:'Cartão de crédito',debito:'Débito em conta',boleto:'Boleto',carne:'Carnê',avista:'À vista'};
 const ASSIST=['assist','reserva','vidros','farois','reparos','parachoque','roda','pintura','buracos','chaveiro','residencia','carta'];
+/* qualquer valor com centavos dentro de um texto vira R$ 0.000,00 (4070.49 · 4.070,49 · R$4070,49) */
+function fmtTxt(t){
+  if(t==null) return '';
+  return String(t).replace(/(R\$\s*)?(\d[\d.,]*[.,]\d{2})(?![\d%]|\s*%|[.,]\d)/g,(m,rs,num,off,str)=>{
+    const ant=str.charAt(off-1); if(/[\d\/\-]/.test(ant)) return m;          /* datas, códigos FIPE etc. */
+    const sep=num.charAt(num.length-3); const int=num.slice(0,-3).replace(/[.,]/g,'');
+    const n=parseFloat(int+'.'+num.slice(-2)); if(isNaN(n)) return m;
+    return R(n);
+  });
+}
 function lmiTxt(v){
   if(v==null||v==='') return '';
   if(typeof v==='number') return v>0?R(v):'';
   const s=String(v).trim(); if(/^(0|0,00|—|-|contratada)$/i.test(s)) return '';
   if(/^100([.,]00)?\s*%$/.test(s)) return '100% da FIPE';
-  if(/^[\d.,]+$/.test(s)){ const n=parseFloat(s.indexOf(',')>=0?s.replace(/\./g,'').replace(',','.'):s); if(!isNaN(n)&&n>0) return R(n); }
-  return s;
+  if(/^(R\$\s*)?[\d.,]+$/.test(s)){ const d=s.replace(/^R\$\s*/,'');
+    const n=/[.,]\d{2}$/.test(d)?parseFloat(d.slice(0,-3).replace(/[.,]/g,'')+'.'+d.slice(-2)):parseFloat(d.replace(/[.,]/g,''));
+    if(!isNaN(n)&&n>0) return R(n); }
+  return fmtTxt(s);
+}
+/* comparativo da renovação: só linhas de cobertura/valor — nada de nota sobre documentos */
+function cmpLinhas(){
+  return (O.comparativoRenovacao||[]).filter(x=>x&&x.item&&(x.hoje||x.proposta)
+    &&!/ap[óo]lice (usada|anexad|base)|documento|\bpdf\b|diverg|cadastro/i.test(String(x.item)+' '+(x.hoje||'')+' '+(x.proposta||'')));
+}
+function stChip(st){
+  const M={mantido:['Mantido','#475569','#f1f5f9'],melhorado:['Melhorou','#166534','#ecfdf5'],inferior:['Reduziu','#9a3412','#fff7ed']};
+  const m=M[String(st||'').toLowerCase()]; if(!m) return '';
+  return '<span style="display:inline-block;font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:20px;color:'+m[1]+';background:'+m[2]+'">'+m[0]+'</span>';
 }
 function waNum(){ return (O&&(O.whatsappCorretora||(O.corretora&&O.corretora.whats)))||'5554996454300'; }
 function waLink(msg){ return 'https://wa.me/'+waNum()+(msg?'?text='+encodeURIComponent(msg):''); }
@@ -171,8 +193,8 @@ function render(){
       ${a.bonus?`<div class="chip">Bônus: <b>${esc(a.bonus)}</b></div>`:''}
       ${a.franquia&&a.franquia.valor?`<div class="chip">Franquia: <b>${R(a.franquia.valor)}</b>${a.franquia.tipo?' ('+esc(a.franquia.tipo)+')':''}</div>`:''}</div></div>`; }
   h+=`<div class="ops">${ps.map(p=>opCard(p,ct,venc)).join('')}</div>`;
-  if((O.comparativoRenovacao||[]).length) h+=`<div class="box"><h2>Hoje × o que propomos</h2><div class="tw"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th></tr></thead><tbody>
-    ${O.comparativoRenovacao.map(x=>`<tr><td><b>${esc(x.item)}</b>${x.observacao?`<div style="font-size:.76rem;color:var(--mut)">${esc(x.observacao)}</div>`:''}</td><td>${esc(x.hoje||'—')}</td><td><b>${esc(x.proposta||'—')}</b></td></tr>`).join('')}</tbody></table></div></div>`;
+  if(cmpLinhas().length) h+=`<div class="box"><h2>Hoje × o que propomos</h2><div class="tw"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th></th></tr></thead><tbody>
+    ${cmpLinhas().map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(fmtTxt(x.hoje)||'—')}</td><td><b>${esc(fmtTxt(x.proposta)||'—')}</b></td><td>${stChip(x.status)}</td></tr>`).join('')}</tbody></table></div></div>`;
   if(ps.length>1) h+=tabela(ps);
   h+=`<div class="box noprint" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
       <div style="font-size:.88rem">${O.validade?'Cotação válida até <b>'+fmtD(O.validade)+'</b>. ':''}Valores sujeitos à análise e aceitação da seguradora.</div>
@@ -193,12 +215,11 @@ function opCard(p,ct,venc){
       <div class="parc">${parcTxt(p)}</div>
       ${O.mostrarLiquido?`<div class="liq">Líquido ${R(p.premioLiquido)} + IOF ${R(p.iof)}</div>`:''}</div>
     ${p.franquia&&p.franquia.valor?`<div class="fr">Franquia ${p.franquia.tipo?esc(String(p.franquia.tipo).toLowerCase())+' ':''}<b>${R(p.franquia.valor)}</b> <span style="color:var(--mut);font-size:.78rem">— sua parte em colisão</span></div>`:''}
-    ${(p.destaques||[]).length?`<div class="dest">${p.destaques.map(esc).join('<br>')}</div>`:''}
+    ${(p.destaques||[]).length?`<div class="dest">${p.destaques.map(x=>esc(fmtTxt(x))).join('<br>')}</div>`:''}
     <div class="lst">${prin.length?`<h4>Coberturas</h4><ul>${prin.map(c=>`<li><i>✓</i><span>${esc(c.nome)}</span><span class="v">${esc(lmiTxt(c.lmi))}</span></li>`).join('')}</ul>`:''}
       ${ass.length?`<h4>Assistências e serviços</h4><ul>${ass.map(c=>`<li><i>✓</i><span>${esc(c.nome)}</span><span class="v">${esc(lmiTxt(c.lmi))}</span></li>`).join('')}</ul>`:''}</div>
     ${(p.atende||[]).length?`<div class="atd"><h4 style="font-size:.72rem;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);margin:6px 0">O que você pediu</h4>${p.atende.map(x=>{ const s=st[x.status]||st.parcial;
-      return `<div><b style="color:${s[1]}">${s[0]}</b><span>${esc(x.pedido)}${x.entregue?' — <span style="color:var(--mut)">'+esc(x.entregue)+'</span>':''}</span></div>`; }).join('')}</div>`:''}
-    ${p.obs?`<div class="atd" style="color:var(--mut)">${esc(p.obs)}</div>`:''}
+      return `<div><b style="color:${s[1]}">${s[0]}</b><span>${esc(fmtTxt(x.pedido))}${x.entregue?' — <span style="color:var(--mut)">'+esc(fmtTxt(x.entregue))+'</span>':''}</span></div>`; }).join('')}</div>`:''}
     <div class="op-f">${escolhida?'<div class="aviso ok" style="margin:0;text-align:center"><b>Opção escolhida ✓</b></div>'
       :`<button class="btn btn-p" ${venc||ct?'disabled':''} onclick="abrirContratar(${p.__i})">Contratar esta opção</button>`}</div>
   </article>`;
@@ -221,14 +242,15 @@ function abrirContratar(i){
   const p=(O.propostas||[])[i]; if(!p) return;
   const pg=(p.pagamentos||[]).filter(x=>x.n);
   const formas=[...new Set(pg.map(x=>x.forma).filter(f=>FORMAS[f]))];
-  CT={i,p,formas:formas.length?formas.filter(f=>['cartao','debito','boleto'].includes(f)).concat(formas.filter(f=>!['cartao','debito','boleto'].includes(f))):['cartao','debito','boleto'],forma:null,pg};
+  CT={i,p,formas:formas.length?formas.filter(f=>['cartao','debito','boleto'].includes(f)).concat(formas.filter(f=>!['cartao','debito','boleto'].includes(f))):['cartao','debito','boleto'],forma:null,pg,semTabela:!formas.length};
   CT.forma=CT.formas[0]; modalRender();
 }
 function opcoesParcelas(){
-  const L=CT.pg.filter(x=>x.forma===CT.forma).sort((a,b)=>a.n-b.n);
-  if(L.length) return L.map(x=>({n:x.n,valor:x.valor||(x.total||CT.p.premioTotal)/x.n,juros:x.juros}));
-  const max=CT.forma==='boleto'?4:(CT.forma==='debito'?10:((CT.p.parcelas||[]).slice(-1)[0]||{}).n||10);
-  return Array.from({length:max},(_,k)=>({n:k+1,valor:CT.p.premioTotal/(k+1),juros:false,aprox:true}));
+  /* SÓ o parcelamento informado para esta seguradora/opção — nada inventado */
+  const vis={}; CT.pg.filter(x=>x.forma===CT.forma&&x.n>0).forEach(x=>{ if(!vis[x.n]) vis[x.n]=x; });
+  const L=Object.values(vis).sort((a,b)=>a.n-b.n);
+  if(L.length) return L.map(x=>({n:x.n,valor:x.valor||(x.total||CT.p.premioTotal)/x.n,juros:!!x.juros}));
+  return [{n:1,valor:CT.p.premioTotal,juros:false}];
 }
 function modalRender(){
   const p=CT.p; const ps=opcoesParcelas();
@@ -237,7 +259,8 @@ function modalRender(){
     <div class="resumo"><b>${esc(p.seguradora)}</b>${p.produto?' · '+esc(p.produto):''}<br>Prêmio total: <b>${R(p.premioTotal)}</b></div>
     <div class="fg"><label>Forma de pagamento</label></div>
     <div class="formas">${CT.formas.map(f=>`<div class="forma ${CT.forma===f?'on':''}" onclick="CT.forma='${f}';modalRender()">${esc(FORMAS[f])}</div>`).join('')}</div>
-    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>`<option value="${x.n}">${x.n}x de ${R(x.valor)}${x.juros?' (com juros)':''}${x.aprox?' (aprox.)':''}</option>`).join('')}</select></div>
+    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>`<option value="${x.n}">${x.n}x de ${R(x.valor)}${x.juros?' (com juros)':''}</option>`).join('')}</select>
+      ${CT.semTabela?'<div style="font-size:.78rem;color:var(--mut);margin-top:5px">O parcelamento desta opção é confirmado pelo seu consultor.</div>':''}</div>
     ${CT.forma==='cartao'?`
       <div class="fg"><label>Nome impresso no cartão</label><input id="cNome" autocomplete="cc-name" placeholder="Como está no cartão"></div>
       <div class="fg"><label>Número do cartão</label><input id="cNum" inputmode="numeric" autocomplete="cc-number" placeholder="0000 0000 0000 0000" oninput="mascNum(this)"><div id="cBand" style="font-size:.78rem;color:var(--mut);margin-top:4px"></div></div>
