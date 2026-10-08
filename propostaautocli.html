@@ -38,7 +38,7 @@ body{font-family:'Open Sans',system-ui,sans-serif;color:var(--txt);background:li
 .aviso{border-radius:12px;padding:12px 14px;font-size:.88rem;margin-bottom:16px}
 .aviso.ok{background:var(--okbg);border:1px solid #bbf7d0;color:#166534}
 .aviso.warn{background:var(--warnbg);border:1px solid #fde68a;color:#7c4a03}
-.ops{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.ops{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:16px}
 .op{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:0 4px 16px rgba(15,23,42,.07);display:flex;flex-direction:column;overflow:hidden;position:relative}
 .op.rec{border:2px solid var(--navy);box-shadow:0 12px 34px rgba(27,44,92,.18)}
 .op .rib{background:var(--navy);color:#fff;font-size:.72rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:6px 14px;text-align:center}
@@ -72,6 +72,24 @@ th:first-child,td:first-child{text-align:left}
 th{background:var(--bg);color:var(--navy);font-size:.8rem}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .no{color:var(--mut2)}
+.vars{margin:0 18px 10px}
+.vrow{margin-bottom:8px}.vlab{font-size:.7rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);margin-bottom:5px}
+.vchips{display:flex;flex-wrap:wrap;gap:6px}
+.vchip{border:1.5px solid var(--line);background:#f8fafc;border-radius:20px;padding:6px 12px;font-family:inherit;font-size:.8rem;font-weight:600;color:var(--txt);cursor:pointer}
+.vchip.on{border-color:var(--navy);background:var(--navy);color:#fff}
+.vchip.falta{opacity:.5}
+.vopt{display:flex;align-items:center;gap:8px;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;font-size:.84rem;cursor:pointer}
+.vopt.on{border-color:var(--navy);background:#eff6ff}.vopt span{flex:1}.vopt input{accent-color:var(--navy)}
+.vercob{display:block;margin:0 18px;font-size:.82rem;font-weight:600;color:var(--blue);text-decoration:none}
+.ibtn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--sky);color:var(--sky);background:#fff;font:700 .7rem/1 Georgia,serif;font-style:italic;cursor:pointer;vertical-align:1px;margin-left:4px;padding:0}
+tr.sec td{background:#f1f5f9;color:var(--navy);font-weight:700;font-size:.74rem;letter-spacing:.6px;text-transform:uppercase;text-align:left}
+tr.info td{background:#f0f9ff;color:var(--txt);font-size:.82rem;text-align:left;border-left:3px solid var(--sky)}
+details.cmp summary{list-style:none;cursor:pointer;display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+details.cmp summary::-webkit-details-marker{display:none}
+details.cmp summary h2{margin:0}
+details.cmp .ver{font-size:.82rem;font-weight:600;color:var(--blue)}
+details.cmp .ver::after{content:' ▾'}details.cmp[open] .ver::after{content:' ▴'}
+@media print{details.cmp>*{display:block}.ibtn{display:none}}
 .foot{text-align:center;color:var(--mut);font-size:.78rem;margin-top:24px}
 .load{text-align:center;padding:80px 16px;color:var(--mut)}
 /* modal */
@@ -162,17 +180,103 @@ async function carregar(){
     O=d.data(); render();
   }catch(e){ console.error(e); app.innerHTML='<div class="load">Não consegui abrir a proposta agora. Tente de novo em instantes.</div>'; }
 }
+/* ---------- normalizações ---------- */
+function formaNorm(f){
+  const t=String(f||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  if(/cart|credit/.test(t)) return 'cartao'; if(/debit|conta corrente/.test(t)) return 'debito';
+  if(/bolet|ficha/.test(t)) return 'boleto'; if(/carn/.test(t)) return 'carne'; if(/vista|pix|unica/.test(t)) return 'avista';
+  return t;
+}
+function pagamentosDe(p){
+  const vis={}; return (p.pagamentos||[]).map(x=>({forma:formaNorm(x.forma),n:parseInt(x.n||x.parcelas)||0,valor:x.valor!=null?x.valor:x.valorParcela,juros:!!x.juros,total:x.total}))
+    .filter(x=>x.n>0&&FORMAS[x.forma]).filter(x=>{ const k=x.forma+'|'+x.n; if(vis[k]) return false; vis[k]=1; return true; });
+}
+function limpaProduto(s){
+  if(!s) return '';
+  return String(s).replace(/\b(para\s+)?(mulher(es)?|homem|homens|feminino|masculino|woman|lady)\b/gi,'').replace(/\s{2,}/g,' ').replace(/[\s\-–·|]+$/,'').trim();
+}
+const ehResid=c=>c.chave==='residencia'||/resid[êe]nc|domic[íi]li/i.test(String(c.nome||''));
+const naoContratada=c=>c.contratada===false||/n[ãa]o contratad|n[ãa]o inclu/i.test(String(c.lmi||''));
+function cobsDe(p){ return (p.coberturas||[]).filter(c=>!naoContratada(c)&&!ehResid(c)); }
+
+/* nome padrão e explicação simples de cada cobertura (o "i") */
+const LABEL={casco:'Casco — colisão, incêndio, roubo e furto',rcf_dm:'Danos materiais a terceiros',rcf_dc:'Danos corporais a terceiros',
+  rcf_dme:'Danos morais e estéticos',app_m:'Acidentes pessoais — morte (por passageiro)',app_i:'Acidentes pessoais — invalidez (por passageiro)',
+  app_dmho:'Despesas médico-hospitalares',app:'Acidentes pessoais de passageiros',defesa:'Custos de defesa',extras:'Despesas extraordinárias',carta:'Carta Verde (Mercosul)',
+  assist:'Assistência 24h / guincho',reserva:'Carro reserva',vidros:'Vidros, faróis e retrovisores',farois:'Faróis, lanternas e retrovisores',
+  reparos:'Pequenos reparos / martelinho',parachoque:'Troca de para-choque',roda:'Pneu, roda e suspensão',pintura:'Pintura e lataria',
+  buracos:'Proteção contra buracos',chaveiro:'Chaveiro'};
+const INFO={
+  casco:'Paga o conserto do seu carro em batida, incêndio ou alagamento — e o valor dele se for roubado ou tiver perda total. Ex.: o carro é roubado e você recebe o valor combinado da tabela FIPE.',
+  rcf_dm:'Paga o prejuízo que você causar no carro ou no bem de outra pessoa. Ex.: você bate na traseira de outro carro e o conserto dele fica por conta do seguro.',
+  rcf_dc:'Paga despesas com ferimentos que você causar em outras pessoas fora do seu carro. Ex.: o motorista do outro carro se machuca na batida.',
+  rcf_dme:'Cobre indenização por dano moral ou estético que você causar a alguém num acidente. Ex.: uma ação na Justiça por uma cicatriz deixada na outra pessoa.',
+  app_m:'Indenização para a família de quem estava no seu carro, em caso de morte por acidente.',
+  app_i:'Indenização para quem estava no seu carro e ficou com alguma invalidez permanente depois do acidente.',
+  app_dmho:'Reembolsa atendimento médico e hospitalar de quem estava no seu carro na hora do acidente. Ex.: pronto-socorro e exames.',
+  app:'Indenização para os passageiros do seu carro em caso de acidente.',
+  defesa:'Paga advogado e custos do processo se você precisar se defender na Justiça por causa de um acidente.',
+  extras:'Ajuda com gastos extras depois de uma perda total, como documentação e transporte enquanto resolve o novo carro.',
+  carta:'Leva a cobertura para viagens de carro à Argentina, Uruguai, Paraguai e demais países do Mercosul.',
+  assist:'Socorro 24 horas: guincho, troca de pneu, pane seca, bateria. Ex.: o carro para na estrada e o guincho leva até a oficina.',
+  reserva:'Um carro emprestado enquanto o seu está na oficina por causa de um sinistro coberto. Ex.: 7 dias de carro reserva durante o conserto.',
+  vidros:'Troca ou conserto de para-brisa, vidros, faróis, lanternas e retrovisores pagando só uma franquia pequena. Ex.: uma pedra trinca o para-brisa na estrada.',
+  farois:'Troca ou conserto de faróis, lanternas e retrovisores pagando só uma franquia pequena.',
+  reparos:'Conserta amassados e arranhões pequenos sem usar o seguro principal. Ex.: amassadinho na porta feito no estacionamento, resolvido com martelinho de ouro.',
+  parachoque:'Conserta ou troca o para-choque sem acionar o seguro principal. Ex.: ralou o para-choque no pilar da garagem.',
+  roda:'Paga pneu, roda e suspensão danificados por buraco ou meio-fio. Ex.: o pneu rasga e a roda entorta num buraco.',
+  pintura:'Repara riscos e arranhões na pintura e na lataria. Ex.: um risco de chave na porta.',
+  buracos:'Cobre os estragos de cair num buraco, como pneu e roda.',
+  chaveiro:'Chaveiro quando você perde a chave ou ela fica trancada dentro do carro.'};
+const ASSIST2=new Set(['assist','reserva','vidros','farois','reparos','parachoque','roda','pintura','buracos','chaveiro','carta']);
+
+/* ---------- grupos (uma seguradora = um card, com as variações dentro) ---------- */
+let GRUPOS=[]; const SEL={};
+function montarGrupos(){
+  const ps=(O.propostas||[]).map((p,i)=>Object.assign({__i:i},p));
+  const mapa={}; GRUPOS=[];
+  ps.forEach(p=>{ const k=String(p.grupo||p.seguradora||'').trim().toLowerCase();
+    if(!mapa[k]){ mapa[k]={k,nome:p.seguradora,ops:[]}; GRUPOS.push(mapa[k]); } mapa[k].ops.push(p); });
+  GRUPOS.forEach(g=>{ if(SEL[g.k]==null){ const r=g.ops.find(p=>p.recomendada); SEL[g.k]=(r||g.ops.slice().sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9))[0]).__i; } });
+}
+const selDe=g=>g.ops.find(p=>p.__i===SEL[g.k])||g.ops[0];
+const vFr=p=>(p.variacao&&p.variacao.franquia)||(p.franquia&&p.franquia.tipo)||'';
+const vSv=p=>(p.variacao&&p.variacao.servicos)||'';
+function escolher(gk,i){ const y=window.scrollY; SEL[gk]=i; render(); window.scrollTo(0,y); }
+function escolherDim(gk,dim,val){
+  const g=GRUPOS.find(x=>x.k===gk); const at=selDe(g);
+  const outro=dim==='fr'?vSv(at):vFr(at);
+  const m=g.ops.find(p=>(dim==='fr'?vFr(p)===val&&vSv(p)===outro:vSv(p)===val&&vFr(p)===outro))
+        ||g.ops.find(p=>(dim==='fr'?vFr(p):vSv(p))===val);
+  if(m) escolher(gk,m.__i);
+}
+function seletorVariacoes(g){
+  if(g.ops.length<2) return '';
+  const sel=selDe(g);
+  const frs=[...new Set(g.ops.map(vFr).filter(Boolean))], svs=[...new Set(g.ops.map(vSv).filter(Boolean))];
+  const pares=new Set(g.ops.map(p=>vFr(p)+'|'+vSv(p)));
+  const porDim=pares.size===g.ops.length&&(frs.length>1||svs.length>1);
+  if(porDim){
+    const linha=(rot,lista,dim,atual)=>lista.length<2?'':`<div class="vrow"><div class="vlab">${rot}</div><div class="vchips">${lista.map(v=>{
+      const ok=g.ops.some(p=>(dim==='fr'?vFr(p)===v&&vSv(p)===vSv(sel):vSv(p)===v&&vFr(p)===vFr(sel)));
+      return `<button class="vchip ${atual===v?'on':''} ${ok?'':'falta'}" onclick="escolherDim('${esc(g.k)}','${dim}','${esc(v).replace(/'/g,'&#39;')}')">${esc(v)}</button>`; }).join('')}</div></div>`;
+    return `<div class="vars">${linha('Franquia',frs,'fr',vFr(sel))}${linha('Serviços',svs,'sv',vSv(sel))}</div>`;
+  }
+  return `<div class="vars"><div class="vlab">Escolha a versão</div>${g.ops.map(p=>`<label class="vopt ${p.__i===sel.__i?'on':''}">
+    <input type="radio" name="v_${esc(g.k)}" ${p.__i===sel.__i?'checked':''} onchange="escolher('${esc(g.k)}',${p.__i})">
+    <span>${esc((p.variacao&&p.variacao.nome)||[vFr(p)&&'Franquia '+vFr(p).toLowerCase(),limpaProduto(p.produto)].filter(Boolean).join(' · ')||'Versão '+(p.__i+1))}</span>
+    <b>${R(p.premioTotal)}</b></label>`).join('')}</div>`;
+}
 function parcTxt(p){
-  const pg=(p.pagamentos||[]).filter(x=>x.n); let best=null;
+  const pg=pagamentosDe(p); let best=null;
   pg.forEach(x=>{ if(!x.juros&&(!best||x.n>best.n)) best=x; });
-  if(best) return 'ou até <b>'+best.n+'x de '+R(best.valor||(best.total||p.premioTotal)/best.n)+'</b> sem juros'+(best.forma&&FORMAS[best.forma]?' no '+FORMAS[best.forma].toLowerCase():'');
-  const u=(p.parcelas||[]).slice(-1)[0]; if(u) return 'ou até <b>'+u.n+'x de '+R(u.valor||p.premioTotal/u.n)+'</b>';
+  if(best&&best.n>1) return 'ou até <b>'+best.n+'x de '+R(best.valor||(best.total||p.premioTotal)/best.n)+'</b> sem juros'+(FORMAS[best.forma]?' no '+FORMAS[best.forma].toLowerCase():'');
   return '';
 }
 function render(){
+  montarGrupos();
   const v=O.veiculo||{}, nome=((O.cliente&&O.cliente.nome)||'').split(' ')[0];
   document.getElementById('topWa').href=waLink('Olá! Estou vendo a proposta do meu seguro auto e tenho uma dúvida.');
-  const ps=(O.propostas||[]).map((p,i)=>Object.assign({__i:i},p));
   const ct=jaContratou(); const venc=vencida();
   let h=`<section class="hero"><div class="hero-in">
     <span class="tag">${O.renovacao?'Renovação do seu seguro':'Sua proposta de seguro auto'}</span>
@@ -182,20 +286,19 @@ function render(){
   </div></section><main class="wrap">`;
   if(ct) h+=`<div class="aviso ok"><b>Recebemos a sua escolha (${esc(ct.seguradora)}).</b> Seu consultor vai conferir tudo e te avisar pelo WhatsApp quando enviar para a seguradora.</div>`;
   if(venc) h+=`<div class="aviso warn"><b>Esta cotação venceu em ${fmtD(O.validade)}.</b> Os valores podem ter mudado — <a href="${waLink('Olá! Minha cotação venceu, pode atualizar para mim?')}" target="_blank" rel="noopener">fale com a gente</a> para atualizar.</div>`;
-  if(O.resumoCliente||O.observacoes) h+=`<div class="box"><h2>O que o seu consultor recomenda</h2><p style="font-size:.93rem">${esc(O.resumoCliente||O.observacoes).replace(/\n/g,'<br>')}</p>
+  if(O.resumoCliente||O.observacoes) h+=`<div class="box"><h2>O que o seu consultor recomenda</h2><p style="font-size:.93rem">${esc(fmtTxt(O.resumoCliente||O.observacoes)).replace(/\n/g,'<br>')}</p>
     ${O.consultor?`<p style="font-size:.82rem;color:var(--mut);margin-top:8px">— ${esc(O.consultor)}, Retorno Seguros</p>`:''}</div>`;
   if((O.pedido||[]).length) h+=`<div class="box"><h2>Você pediu</h2><div class="chips">${O.pedido.map(x=>`<div class="chip">${esc(x.item)}: <b>${esc(x.valor)}</b></div>`).join('')}</div></div>`;
   if(O.apoliceAtual){ const a=O.apoliceAtual;
     h+=`<div class="box"><h2>Seu seguro hoje</h2><div class="chips">
       <div class="chip">Seguradora: <b>${esc(a.seguradora||'—')}</b></div>
-      ${a.premioTotal!=null?`<div class="chip">Prêmio: <b>${R(a.premioTotal)}</b></div>`:''}
-      ${a.vigenciaFim?`<div class="chip">Vence em: <b>${fmtD(a.vigenciaFim)}</b></div>`:''}
-      ${a.bonus?`<div class="chip">Bônus: <b>${esc(a.bonus)}</b></div>`:''}
+      ${a.premioTotal!=null?`<div class="chip">Valor anual: <b>${R(a.premioTotal)}</b></div>`:''}
       ${a.franquia&&a.franquia.valor?`<div class="chip">Franquia: <b>${R(a.franquia.valor)}</b>${a.franquia.tipo?' ('+esc(a.franquia.tipo)+')':''}</div>`:''}</div></div>`; }
-  h+=`<div class="ops">${ps.map(p=>opCard(p,ct,venc)).join('')}</div>`;
-  if(cmpLinhas().length) h+=`<div class="box"><h2>Hoje × o que propomos</h2><div class="tw"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th></th></tr></thead><tbody>
-    ${cmpLinhas().map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(fmtTxt(x.hoje)||'—')}</td><td><b>${esc(fmtTxt(x.proposta)||'—')}</b></td><td>${stChip(x.status)}</td></tr>`).join('')}</tbody></table></div></div>`;
-  if(ps.length>1) h+=tabela(ps);
+  h+=`<div class="ops">${GRUPOS.map(g=>opCard(g,ct,venc)).join('')}</div>`;
+  h+=tabela();
+  if(cmpLinhas().length) h+=`<details class="box cmp"><summary><h2>Hoje × o que propomos</h2><span class="ver">ver comparação com o seu seguro atual</span></summary>
+    <div class="tw" style="margin-top:12px"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th></th></tr></thead><tbody>
+    ${cmpLinhas().map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(fmtTxt(x.hoje)||'—')}</td><td><b>${esc(fmtTxt(x.proposta)||'—')}</b></td><td>${stChip(x.status)}</td></tr>`).join('')}</tbody></table></div></details>`;
   h+=`<div class="box noprint" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
       <div style="font-size:.88rem">${O.validade?'Cotação válida até <b>'+fmtD(O.validade)+'</b>. ':''}Valores sujeitos à análise e aceitação da seguradora.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-g" onclick="window.print()">Salvar em PDF</button>
@@ -203,36 +306,50 @@ function render(){
     <p class="foot">Retorno Seguros e Benefícios · RETORNO ADMINISTRADORA E CORRETORA DE SEGUROS LTDA — CNPJ 26.430.936/0001-46 — SUSEP nº 202002040</p></main>`;
   document.getElementById('app').innerHTML=h;
 }
-function opCard(p,ct,venc){
-  const cobs=(p.coberturas||[]).filter(c=>c.contratada!==false);
-  const prin=cobs.filter(c=>!ASSIST.includes(c.chave)), ass=cobs.filter(c=>ASSIST.includes(c.chave));
-  const st={ok:['✓','var(--ok)'],parcial:['≈','var(--warn)'],nao:['✕','var(--bad)']};
-  const escolhida=ct&&ct.opcaoIndex===p.__i;
-  return `<article class="op ${p.recomendada?'rec':''}">
-    ${p.recomendada?'<div class="rib">Nossa recomendação</div>':''}
-    <div class="op-h"><div class="cia">${esc(p.seguradora)}</div><div class="prod">${esc(p.produto||'')}</div></div>
+function opCard(g,ct,venc){
+  const p=selDe(g); const rec=g.ops.some(x=>x.recomendada);
+  const escolhida=ct&&g.ops.some(x=>x.__i===ct.opcaoIndex);
+  return `<article class="op ${rec?'rec':''}">
+    ${rec?'<div class="rib">Nossa recomendação</div>':''}
+    <div class="op-h"><div class="cia">${esc(p.seguradora)}</div><div class="prod">${esc(limpaProduto(p.produto))}${g.ops.length>1?' · '+g.ops.length+' versões':''}</div></div>
     <div class="preco"><div class="tot">${R(p.premioTotal)} <small>no ano</small></div>
       <div class="parc">${parcTxt(p)}</div>
       ${O.mostrarLiquido?`<div class="liq">Líquido ${R(p.premioLiquido)} + IOF ${R(p.iof)}</div>`:''}</div>
     ${p.franquia&&p.franquia.valor?`<div class="fr">Franquia ${p.franquia.tipo?esc(String(p.franquia.tipo).toLowerCase())+' ':''}<b>${R(p.franquia.valor)}</b> <span style="color:var(--mut);font-size:.78rem">— sua parte em colisão</span></div>`:''}
-    ${(p.destaques||[]).length?`<div class="dest">${p.destaques.map(x=>esc(fmtTxt(x))).join('<br>')}</div>`:''}
-    <div class="lst">${prin.length?`<h4>Coberturas</h4><ul>${prin.map(c=>`<li><i>✓</i><span>${esc(c.nome)}</span><span class="v">${esc(lmiTxt(c.lmi))}</span></li>`).join('')}</ul>`:''}
-      ${ass.length?`<h4>Assistências e serviços</h4><ul>${ass.map(c=>`<li><i>✓</i><span>${esc(c.nome)}</span><span class="v">${esc(lmiTxt(c.lmi))}</span></li>`).join('')}</ul>`:''}</div>
-    ${(p.atende||[]).length?`<div class="atd"><h4 style="font-size:.72rem;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);margin:6px 0">O que você pediu</h4>${p.atende.map(x=>{ const s=st[x.status]||st.parcial;
-      return `<div><b style="color:${s[1]}">${s[0]}</b><span>${esc(fmtTxt(x.pedido))}${x.entregue?' — <span style="color:var(--mut)">'+esc(fmtTxt(x.entregue))+'</span>':''}</span></div>`; }).join('')}</div>`:''}
+    ${seletorVariacoes(g)}
+    <a class="vercob noprint" href="#comparar">Ver coberturas e serviços ↓</a>
     <div class="op-f">${escolhida?'<div class="aviso ok" style="margin:0;text-align:center"><b>Opção escolhida ✓</b></div>'
-      :`<button class="btn btn-p" ${venc||ct?'disabled':''} onclick="abrirContratar(${p.__i})">Contratar esta opção</button>`}</div>
+      :`<button class="btn btn-p" ${venc||ct?'disabled':''} onclick="abrirContratar(${p.__i})">Contratar ${g.ops.length>1?'esta versão':'esta opção'}</button>`}</div>
   </article>`;
 }
-function tabela(ps){
-  const linhas=[]; const vis=new Set();
-  ps.forEach(p=>(p.coberturas||[]).forEach(c=>{ const k=c.chave==='outros'?'o:'+c.nome:c.chave; if(!vis.has(k)){ vis.add(k); linhas.push({k,nome:c.nome}); } }));
-  const cel=(p,l)=>{ const c=(p.coberturas||[]).find(x=>(x.chave==='outros'?'o:'+x.nome:x.chave)===l.k&&x.contratada!==false);
-    return c?'<b style="color:var(--ok)">✓</b><div style="font-size:.76rem">'+esc(lmiTxt(c.lmi))+'</div>':'<span class="no">—</span>'; };
-  return `<div class="box"><h2>Comparar lado a lado</h2><div class="tw"><table><thead><tr><th style="min-width:170px">Cobertura</th>${ps.map(p=>`<th>${esc(p.seguradora)}${p.recomendada?'<div style="font-size:.68rem;color:var(--sky)">recomendada</div>':''}</th>`).join('')}</tr></thead><tbody>
-    ${linhas.map(l=>`<tr><td>${esc(l.nome)}</td>${ps.map(p=>`<td>${cel(p,l)}</td>`).join('')}</tr>`).join('')}
-    <tr><td><b>Franquia</b></td>${ps.map(p=>`<td>${p.franquia&&p.franquia.valor?R(p.franquia.valor):'—'}</td>`).join('')}</tr>
-    <tr style="background:#eff6ff"><td><b>Prêmio total</b></td>${ps.map(p=>`<td><b style="color:var(--navy)">${R(p.premioTotal)}</b></td>`).join('')}</tr>
+let INFO_ABERTO={};
+function abrirInfo(k){ INFO_ABERTO[k]=!INFO_ABERTO[k]; const el=document.getElementById('inf_'+k); if(el) el.style.display=INFO_ABERTO[k]?'table-row':'none'; }
+function tabela(){
+  const sels=GRUPOS.map(selDe); if(!sels.length) return '';
+  const chaveDe=c=>c.chave&&c.chave!=='outros'?c.chave:'o:'+String(c.nome||'').toLowerCase();
+  const linhas={cob:[],ass:[]}; const vis={};
+  sels.forEach(p=>cobsDe(p).forEach(c=>{ const k=chaveDe(c); if(vis[k]) return; vis[k]=1;
+    (ASSIST2.has(c.chave)||c.assistencia?linhas.ass:linhas.cob).push({k,nome:LABEL[c.chave]||c.nome,info:INFO[c.chave]||c.explicacao||null}); }));
+  const cel=(p,l)=>{ const c=cobsDe(p).find(x=>chaveDe(x)===l.k);
+    if(!c) return '<span class="no">—</span>'; const t=lmiTxt(c.lmi);
+    return '<b style="color:var(--ok)">✓</b>'+(t?'<div style="font-size:.76rem">'+esc(t)+'</div>':''); };
+  const n=sels.length+1; let idx=0;
+  const bloco=(tit,L)=>!L.length?'':`<tr class="sec"><td colspan="${n}">${tit}</td></tr>`+L.map(l=>{ const id='r'+(idx++);
+    return `<tr><td>${esc(l.nome)}${l.info?` <button class="ibtn" onclick="abrirInfo('${id}')" aria-label="O que é">i</button>`:''}</td>${sels.map(p=>`<td>${cel(p,l)}</td>`).join('')}</tr>
+      ${l.info?`<tr class="info" id="inf_${id}" style="display:${INFO_ABERTO[id]?'table-row':'none'}"><td colspan="${n}">${esc(fmtTxt(l.info))}</td></tr>`:''}`; }).join('');
+  const pedidos=[]; sels.forEach(p=>(p.atende||[]).forEach(x=>{ if(!pedidos.includes(x.pedido)) pedidos.push(x.pedido); }));
+  const st={ok:['✓','var(--ok)'],parcial:['≈','var(--warn)'],nao:['✕','var(--bad)']};
+  const pedHtml=!pedidos.length?'':`<tr class="sec"><td colspan="${n}">O que você pediu</td></tr>`+pedidos.map(pd=>`<tr><td>${esc(fmtTxt(pd))}</td>${sels.map(p=>{
+      const x=(p.atende||[]).find(y=>y.pedido===pd); if(!x) return '<td><span class="no">—</span></td>'; const s=st[x.status]||st.parcial;
+      return `<td><b style="color:${s[1]}">${s[0]}</b>${x.entregue?'<div style="font-size:.74rem;color:var(--mut)">'+esc(fmtTxt(x.entregue))+'</div>':''}</td>`; }).join('')}</tr>`).join('');
+  return `<div class="box" id="comparar"><h2>Comparar lado a lado</h2>
+    <p style="font-size:.82rem;color:var(--mut);margin:-4px 0 10px">Toque no <span class="ibtn" style="pointer-events:none">i</span> para entender cada cobertura. Mudou a versão no card? A tabela acompanha.</p>
+    <div class="tw"><table><thead><tr><th style="min-width:190px">Cobertura</th>${sels.map(p=>`<th>${esc(p.seguradora)}${p.variacao&&p.variacao.nome?`<div style="font-weight:400;font-size:.7rem;color:var(--mut)">${esc(p.variacao.nome)}</div>`:''}${p.recomendada?'<div style="font-size:.68rem;color:var(--sky)">recomendada</div>':''}</th>`).join('')}</tr></thead><tbody>
+    ${bloco('Coberturas',linhas.cob)}${bloco('Assistências e serviços',linhas.ass)}${pedHtml}
+    <tr class="sec"><td colspan="${n}">Valores</td></tr>
+    <tr><td><b>Franquia</b></td>${sels.map(p=>`<td>${p.franquia&&p.franquia.valor?R(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?'<div style="font-size:.72rem;color:var(--mut)">'+esc(p.franquia.tipo)+'</div>':''}</td>`).join('')}</tr>
+    <tr><td>Parcelamento</td>${sels.map(p=>{ const t=parcTxt(p); return `<td style="font-size:.8rem">${t?t.replace(/^ou /,''):'à vista ou a combinar'}</td>`; }).join('')}</tr>
+    <tr style="background:#eff6ff"><td><b>Prêmio total</b></td>${sels.map(p=>`<td><b style="color:var(--navy)">${R(p.premioTotal)}</b></td>`).join('')}</tr>
   </tbody></table></div></div>`;
 }
 
@@ -240,8 +357,9 @@ function tabela(ps){
 let CT={};
 function abrirContratar(i){
   const p=(O.propostas||[])[i]; if(!p) return;
-  const pg=(p.pagamentos||[]).filter(x=>x.n);
-  const formas=[...new Set(pg.map(x=>x.forma).filter(f=>FORMAS[f]))];
+  const pg=pagamentosDe(p);
+  const ORD=['cartao','debito','boleto','carne','avista'];
+  const formas=[...new Set(pg.map(x=>x.forma))].sort((a,b)=>ORD.indexOf(a)-ORD.indexOf(b));
   CT={i,p,formas:formas.length?formas.filter(f=>['cartao','debito','boleto'].includes(f)).concat(formas.filter(f=>!['cartao','debito','boleto'].includes(f))):['cartao','debito','boleto'],forma:null,pg,semTabela:!formas.length};
   CT.forma=CT.formas[0]; modalRender();
 }
@@ -250,16 +368,16 @@ function opcoesParcelas(){
   const vis={}; CT.pg.filter(x=>x.forma===CT.forma&&x.n>0).forEach(x=>{ if(!vis[x.n]) vis[x.n]=x; });
   const L=Object.values(vis).sort((a,b)=>a.n-b.n);
   if(L.length) return L.map(x=>({n:x.n,valor:x.valor||(x.total||CT.p.premioTotal)/x.n,juros:!!x.juros}));
-  return [{n:1,valor:CT.p.premioTotal,juros:false}];
+  return [{n:1,valor:CT.p.premioTotal,juros:false},{n:0,valor:null,combinar:true}];
 }
 function modalRender(){
   const p=CT.p; const ps=opcoesParcelas();
   document.getElementById('mod').innerHTML=`<div class="mod-h"><h3>Contratar ${esc(p.seguradora)}</h3><button onclick="fechar()">&times;</button></div>
   <div class="mod-b">
-    <div class="resumo"><b>${esc(p.seguradora)}</b>${p.produto?' · '+esc(p.produto):''}<br>Prêmio total: <b>${R(p.premioTotal)}</b></div>
+    <div class="resumo"><b>${esc(p.seguradora)}</b>${p.variacao&&p.variacao.nome?' · '+esc(p.variacao.nome):(p.produto?' · '+esc(limpaProduto(p.produto)):'')}<br>Prêmio total: <b>${R(p.premioTotal)}</b></div>
     <div class="fg"><label>Forma de pagamento</label></div>
     <div class="formas">${CT.formas.map(f=>`<div class="forma ${CT.forma===f?'on':''}" onclick="CT.forma='${f}';modalRender()">${esc(FORMAS[f])}</div>`).join('')}</div>
-    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>`<option value="${x.n}">${x.n}x de ${R(x.valor)}${x.juros?' (com juros)':''}</option>`).join('')}</select>
+    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>x.combinar?`<option value="0">Quero parcelar — o consultor confirma as condições</option>`:`<option value="${x.n}">${x.n}x de ${R(x.valor)}${x.juros?' (com juros)':' sem juros'}</option>`).join('')}</select>
       ${CT.semTabela?'<div style="font-size:.78rem;color:var(--mut);margin-top:5px">O parcelamento desta opção é confirmado pelo seu consultor.</div>':''}</div>
     ${CT.forma==='cartao'?`
       <div class="fg"><label>Nome impresso no cartão</label><input id="cNome" autocomplete="cc-name" placeholder="Como está no cartão"></div>
@@ -297,7 +415,7 @@ async function enviar(){
   const err=document.getElementById('cErr'), btn=document.getElementById('cBtn'); err.textContent='';
   const g=id=>(document.getElementById(id)||{}).value||'';
   if(!document.getElementById('cOk').checked){ err.textContent='Marque a autorização para continuar.'; return; }
-  const n=parseInt(g('cParc'))||1; const opc=opcoesParcelas().find(x=>x.n===n)||{};
+  const n=parseInt(g('cParc')); const opc=opcoesParcelas().find(x=>x.n===n)||{};
   const p=CT.p; let cartao=null, debito=null, num='';
   if(CT.forma==='cartao'){
     num=g('cNum').replace(/\D/g,''); const val=g('cVal'); const nome=g('cNome').trim();
@@ -316,8 +434,8 @@ async function enviar(){
     await authPronta;
     const ref=await db.collection('contratacoes').add({
       orcamentoId:ID, leadId:O.leadId||null, clienteNome:(O.cliente&&O.cliente.nome)||null,
-      opcaoIndex:CT.i, seguradora:p.seguradora||null, produto:p.produto||null, premioTotal:p.premioTotal||null,
-      forma:CT.forma, parcelas:n, valorParcela:opc.valor?Math.round(opc.valor*100)/100:null,
+      opcaoIndex:CT.i, seguradora:p.seguradora||null, produto:[limpaProduto(p.produto),p.variacao&&p.variacao.nome].filter(Boolean).join(' · ')||null, premioTotal:p.premioTotal||null,
+      forma:CT.forma, parcelas:n||null, valorParcela:opc.valor?Math.round(opc.valor*100)/100:null,
       cartao, debito, status:'novo', origem:'link_proposta',
       criadoEm:firebase.firestore.FieldValue.serverTimestamp() });
     if(cartao){
