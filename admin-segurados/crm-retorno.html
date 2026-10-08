@@ -12695,12 +12695,14 @@ function nePedidoCliente(c){
   const rot={'Guincho / assistência pedida':'Guincho','Terceiros (danos materiais) pedido':'Danos a terceiros','Carro reserva pedido':'Carro reserva','Franquia preferida':'Franquia','Coberturas extras pedidas':'Extras'};
   return neRespostasSite(c).filter(([k])=>quer.includes(k)).map(([k,v])=>({item:rot[k]||k,valor:String(v)}));
 }
-const NE_CHAVES_COB=[['casco','Casco (colisão, incêndio, roubo e furto)'],['rcf_dm','Danos materiais a terceiros'],['rcf_dc','Danos corporais a terceiros'],
-  ['rcf_dme','Danos morais e estéticos'],['app_m','APP — morte por passageiro'],['app_i','APP — invalidez por passageiro'],['app_dmho','Despesas médico-hospitalares'],
-  ['defesa','Custos de defesa'],['extras','Despesas extraordinárias'],['carta','Carta verde (Mercosul)'],['outros','Outra cobertura']];
-const NE_CHAVES_ASS=[['assist','Assistência 24h / guincho (detalhe: km)'],['reserva','Carro reserva (detalhe: diárias/porte)'],['vidros','Vidros, faróis, lanternas e retrovisores'],
-  ['farois','Faróis, lanternas e retrovisores (quando separado)'],['reparos','Martelinho / pequenos reparos'],['parachoque','Para-choque'],['roda','Pneu, roda e suspensão'],
-  ['pintura','Pintura e lataria'],['buracos','Proteção contra buracos'],['chaveiro','Chaveiro / perda de chaves'],['residencia','Assistência residencial'],['outros','Outra assistência/serviço']];
+/* SÓ estes itens entram na proposta — o resto é benefício da seguradora e fica de fora */
+const NE_CHAVES_COB=[['casco','Casco — colisão, incêndio, roubo e furto'],['rcf_dm','Danos materiais a terceiros'],['rcf_dc','Danos corporais a terceiros'],
+  ['rcf_dme','Danos morais e estéticos'],['app_m','Acidentes Pessoais Passageiros — morte'],['app_i','Acidentes Pessoais Passageiros — invalidez'],
+  ['app_dmho','Acidentes Pessoais Passageiros — despesas médico-hospitalares'],['carta','Carta Verde (Mercosul)']];
+const NE_CHAVES_ASS=[['assist','Assistência 24h / guincho (detalhe: km)'],['reserva','Carro reserva (detalhe: diárias)'],['vidros','Vidros, faróis e retrovisores'],
+  ['reparos','Pequenos reparos / martelinho'],['parachoque','Troca de para-choque'],['pintura','Pintura e lataria']];
+const NE_PERMITIDOS=new Set(['casco','rcf_dm','rcf_dc','rcf_dme','app','app_m','app_i','app_dmho','carta','assist','reserva','vidros','reparos','parachoque','pintura']);
+const NE_SAO_ASSIST=new Set(['assist','reserva','vidros','reparos','parachoque','pintura']);
 function nePromptTexto(c){
   const ren=neEhRenovacao(c); const ap=neApoliceAtual(c);
   const resp=neRespostasSite(c).map(([k,v])=>'- '+k+': '+v).join('\n')||'- (o cliente não respondeu o questionário do site — use só os PDFs)';
@@ -12740,7 +12742,12 @@ REGRAS
 - O prêmio total é o prêmio líquido + 7,38% de IOF. Se o PDF não trouxer o total, calcule assim; se trouxer, use o do PDF.
 - NÃO procure nem informe comissão do corretor.
 - Use exatamente as "chave" das listas abaixo. O "nome" pode ser o texto da seguradora.
-- "pagamento.forma" deve ser: "cartao", "debito", "boleto", "carne" ou "avista".
+- "pagamento.forma" deve ser: "cartao", "debito", "boleto" ou "avista". Boleto e carnê são a mesma coisa: use sempre "boleto".
+- CARTÃO: só parcelamento em cartão de crédito TRADICIONAL (qualquer bandeira). IGNORE condições do cartão da própria seguradora (ex.: cartão Porto, cartão de crédito da seguradora), descontos ou parcelas extras exclusivos desse cartão e qualquer benefício de fidelidade.
+- À VISTA COM DESCONTO: se o PDF oferecer desconto para pagamento à vista, inclua uma linha { "forma": "avista", "parcelas": 1, "valorParcela": <valor com desconto>, "total": <valor com desconto> }.
+- COBERTURAS E ASSISTÊNCIAS: liste SOMENTE os itens das duas listas de chaves abaixo — cada item em UMA lista só (cobertura OU assistência, nunca nas duas). Todo o resto (custos de defesa, despesas extraordinárias, leve e traz, cadeirinha, pneu/roda, chaveiro, descontos em parceiros, clube de vantagens, assistência residencial etc.) é benefício da seguradora: NÃO inclua.
+- CONDUTOR PRINCIPAL: identifique no PDF quem é o principal condutor. Se NÃO for o próprio segurado, preencha "condutor" com SOMENTE nome, idade (calcule pela data de nascimento na data da cotação; hoje é ${new Date().toLocaleDateString('pt-BR')}), estado civil e relação com o segurado. Nunca informe CPF, RG, CNH ou endereço do condutor.
+- RECOMENDAÇÃO POR SEGURADORA: em cada opção, "recomendacaoCliente" é um texto de 2 a 4 frases, para o cliente, explicando por que AQUELA seguradora é uma boa escolha para ele (o corretor escolhe qual vai na proposta). Opções da mesma seguradora podem repetir o texto.
 - Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json, sem texto antes ou depois.
 
 CHAVES DE COBERTURA: ${NE_CHAVES_COB.map(x=>x[0]+' = '+x[1]).join(' | ')}
@@ -12757,7 +12764,8 @@ FORMATO OBRIGATÓRIO DA RESPOSTA
 {
   "versao": "retorno-ia-1",
   "cliente": { "nome": null, "cpf": null, "nascimento": null, "sexo": null, "estadoCivil": null },
-  "veiculo": { "marca": null, "modelo": null, "anoFab": null, "anoMod": null, "placa": null, "chassi": null, "fipe": null, "combustivel": null, "cepPernoite": null, "uso": null, "condutor": null, "garagem": null },
+  "veiculo": { "marca": null, "modelo": null, "anoFab": null, "anoMod": null, "placa": null, "chassi": null, "fipe": null, "combustivel": null, "cepPernoite": null, "uso": null, "garagem": null },
+  "condutor": { "ehOSegurado": true, "nome": null, "idade": null, "estadoCivil": null, "relacao": null },
   "apoliceAtual": ${ren?`{
     "seguradora": null, "produto": null, "numero": null, "vigenciaIni": null, "vigenciaFim": null, "bonus": null,
     "premioLiquido": null, "premioTotal": null,
@@ -12778,8 +12786,10 @@ FORMATO OBRIGATÓRIO DA RESPOSTA
         { "forma": "cartao", "parcelas": 1, "valorParcela": 0, "juros": false },
         { "forma": "cartao", "parcelas": 2, "valorParcela": 0, "juros": false },
         { "forma": "debito", "parcelas": 1, "valorParcela": 0, "juros": false },
-        { "forma": "boleto", "parcelas": 1, "valorParcela": 0, "juros": false }
+        { "forma": "boleto", "parcelas": 1, "valorParcela": 0, "juros": false },
+        { "forma": "avista", "parcelas": 1, "valorParcela": 0, "total": 0 }
       ],
+      "recomendacaoCliente": "2 a 4 frases para o cliente sobre por que esta seguradora vale a pena",
       "atendeAoPedido": [ { "pedido": "Guincho km ilimitado", "entregue": "Guincho 400 km", "status": "ok|parcial|nao" } ],
       "destaques": [ "frase curta, para o cliente, com o ponto forte desta opção" ],
       "observacoesInternas": "conferências e divergências para o corretor (o cliente não vê)" 
@@ -12847,8 +12857,7 @@ function neFormaNorm(f){
   const t=String(f||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   if(/cart|credit/.test(t)) return 'cartao';
   if(/debit|conta corrente|dcc/.test(t)) return 'debito';
-  if(/bolet|ficha/.test(t)) return 'boleto';
-  if(/carn/.test(t)) return 'carne';
+  if(/bolet|ficha|carn/.test(t)) return 'boleto';
   if(/vista|pix|unica/.test(t)) return 'avista';
   return t||'cartao';
 }
@@ -12858,6 +12867,8 @@ function nePagamentosDaIA(lista,total){
   const addLinha=(forma,n,valor,juros,tot)=>{ if(!n||n<1||n>24) return; out.push({forma,n,valor:valor!=null?valor:(total?neR2(total/n):null),juros:!!juros,total:tot!=null?tot:null}); };
   (Array.isArray(lista)?lista:[]).forEach(x=>{
     if(!x||typeof x!=='object') return;
+    const bruto=String(x.forma||x.tipo||x.meio||'')+' '+String(x.observacao||x.obs||'');
+    if(/porto|azul|bradesco|ita[uú]|tokio|hdi|yelum|allianz|mapfre|sompo|liberty|suhai|zurich|seguradora|pr[oó]pri|private|fidelidade/i.test(bruto)) return;
     const forma=neFormaNorm(x.forma||x.tipo||x.meio);
     const juros=x.juros===true||/com juros|acr[eé]scimo/i.test(String(x.juros||x.observacao||''));
     const sub=x.parcelamento||x.opcoes||x.parcelasDetalhe;
@@ -12896,8 +12907,14 @@ function neOpcaoParaProposta(o,i){
     lmi:x.limite==null?null:x.limite,franquia:x.franquia==null?null:x.franquia,premio:neN(x.premio),contratada:true,detalhe:null,explicacao:x.explicacao||null}))
     .concat((o.assistencias||[]).filter(x=>x&&(x.nome||x.chave)&&!naoTem(x)&&!resid(x)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
     lmi:x.detalhe||'contratada',franquia:null,premio:null,contratada:true,detalhe:null,assistencia:true,explicacao:x.explicacao||null})));
+  /* só os 12 itens principais, cada um uma vez, na categoria certa */
+  { const vis={}; p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros'; return c; })
+      .filter(c=>NE_PERMITIDOS.has(c.chave)).filter(c=>{ if(vis[c.chave]){ if(!lmiOk(vis[c.chave].lmi)&&lmiOk(c.lmi)) vis[c.chave].lmi=c.lmi; return false; } vis[c.chave]=c; return true; })
+      .map(c=>Object.assign(c,{assistencia:NE_SAO_ASSIST.has(c.chave),nome:(NE_CHAVES_COB.concat(NE_CHAVES_ASS).find(x=>x[0]===c.chave)||[0,c.nome])[1].replace(/ \(detalhe:.*\)$/,'')})); }
+  function lmiOk(v){ return v!=null&&v!==''&&!/^contratad/i.test(String(v)); }
+  p.recomendacaoCliente=o.recomendacaoCliente?String(o.recomendacaoCliente):null;
   p.pagamentos=nePagamentosDaIA(o.pagamento||o.pagamentos||o.formasPagamento||[],p.premioTotal);
-  const pref=['cartao','debito','boleto','carne','avista'].find(f=>p.pagamentos.some(x=>x.forma===f));
+  const pref=['cartao','debito','boleto'].find(f=>p.pagamentos.some(x=>x.forma===f));
   p.parcelas=p.pagamentos.filter(x=>x.forma===pref).sort((a,b)=>a.n-b.n).map(x=>({n:x.n,valor:x.valor,juros:x.juros}));
   p.atende=(o.atendeAoPedido||[]).filter(x=>x&&x.pedido).map(x=>({pedido:String(x.pedido),entregue:x.entregue==null?null:String(x.entregue),status:['ok','parcial','nao'].includes(x.status)?x.status:'parcial'}));
   p.destaques=(o.destaques||[]).filter(Boolean).map(String).slice(0,4);
@@ -12926,13 +12943,20 @@ async function neImportarIA(leadId){
   ORC.consultor=neConsultor()||ORC.consultor;
   const an=j.analise||{};
   const rec=Number.isInteger(an.recomendada)&&ORC.propostas[an.recomendada]?an.recomendada:null;
-  ORC.propostas.forEach((p,i)=>p.recomendada=(i===rec));
+  ORC.propostas.forEach((p,i)=>{ p.recomendada=(i===rec); p.__recIA=(i===rec); });
   ORC.analise={motivo:an.motivo||null,alertas:(an.alertas||[]).filter(Boolean).map(String),resumoParaCliente:an.resumoParaCliente||null};
   if(an.resumoParaCliente) ORC.observacoes=an.resumoParaCliente;
   ORC.apoliceAtual=j.apoliceAtual&&j.apoliceAtual.seguradora?neApoliceAtualNorm(j.apoliceAtual):null;
   ORC.comparativoRenovacao=Array.isArray(j.comparativoRenovacao)?j.comparativoRenovacao.filter(x=>x&&x.item).map(x=>({item:String(x.item),hoje:x.hoje==null?null:String(x.hoje),proposta:x.proposta==null?null:String(x.proposta),
     status:['mantido','melhorado','inferior'].includes(String(x.status||'').toLowerCase())?String(x.status).toLowerCase():null,observacao:x.observacao||null})):null;
   ORC.pedido=l?nePedidoCliente(l):(ORC.pedido||[]);
+  const cd=j.condutor&&typeof j.condutor==='object'?j.condutor:null;
+  ORC.condutor=cd&&cd.ehOSegurado===false&&cd.nome?{nome:String(cd.nome),idade:cd.idade!=null?String(cd.idade):null,estadoCivil:cd.estadoCivil||null,relacao:cd.relacao||null}:null;
+  if(ORC.condutor) ORC.veiculo.condutor=[ORC.condutor.nome,ORC.condutor.idade?ORC.condutor.idade+' anos':'',ORC.condutor.estadoCivil].filter(Boolean).join(' · ');
+  ORC.mostrarApoliceAtual=true; ORC.mostrarComparativo=true;
+  /* sugestão do consultor: começa na recomendada pela IA */
+  const rp=ORC.propostas.find(p=>p.recomendada); ORC.sugestaoGrupo=rp?(rp.grupo||rp.seguradora):null;
+  if(rp&&rp.recomendacaoCliente) ORC.observacoes=rp.recomendacaoCliente;
   closeModal();
   if(leadId) neNota(leadId,'Orçamento montado pela IA com '+ORC.propostas.length+' opção(ões): '+ORC.propostas.map(p=>p.seguradora+' '+money(p.premioTotal)).join(' · '));
   location.hash='#orcamento'+(ORC.leadId?'/'+ORC.leadId:'');
@@ -13032,6 +13056,7 @@ async function neAoAbrirOrcamento(o){
     } }catch(e){ console.warn('privado',e); }
 }
 async function neMarcarCotacaoEnviada(leadId){
+  ORC.linkGerado=true;
   const l=leadId?neLead(leadId):null; if(!l) return;
   const f=faseDoLead(l);
   if(f==='pre_cadastro'||f==='contato_realizado'){
@@ -13388,7 +13413,8 @@ function nePgResumo(p){
   const pg=(p.pagamentos||[]).filter(x=>x.n);
   if(!pg.length) return '<span style="color:var(--warn)">sem tabela de parcelamento — o cliente verá só à vista</span>';
   const por={}; pg.forEach(x=>{ (por[x.forma]=por[x.forma]||[]).push(x); });
-  return Object.keys(por).map(f=>{ const L=por[f]; const sj=L.filter(x=>!x.juros).map(x=>x.n); const mx=Math.max(...L.map(x=>x.n));
+  return Object.keys(por).sort((a,b)=>['cartao','debito','boleto','avista'].indexOf(a)-['cartao','debito','boleto','avista'].indexOf(b)).map(f=>{ const L=por[f];
+    if(f==='avista'){ const x=L[0]; const v=x.total||x.valor; return 'À vista '+(v?money(v):'')+(v&&p.premioTotal&&v<p.premioTotal-0.5?' (desconto)':''); } const sj=L.filter(x=>!x.juros).map(x=>x.n); const mx=Math.max(...L.map(x=>x.n));
     return esc(neForma(f))+' até '+mx+'x'+(sj.length&&Math.max(...sj)<mx?' ('+Math.max(...sj)+'x sem juros)':(sj.length?' sem juros':'')); }).join(' · ');
 }
 let NE_PG={};
@@ -13440,6 +13466,282 @@ function nePgSalvar(){
   const pref=['cartao','debito','boleto','carne','avista'].find(f=>p.pagamentos.some(x=>x.forma===f));
   p.parcelas=p.pagamentos.filter(x=>x.forma===pref).sort((a,b)=>a.n-b.n).map(x=>({n:x.n,valor:x.valor,juros:x.juros}));
   closeModal(); VIEWS.orcamento(); toast('Parcelamento atualizado — salve o orçamento / gere o link de novo para o cliente ver.','ok');
+}
+</script>
+
+  <script>
+/* =========================================================================
+   TELA DO ORÇAMENTO — versão 2 (passo a passo, limpa)
+   1 Cotações (IA) → 2 Opções e comissão → 3 O que o cliente vê → 4 Enviar
+   ========================================================================= */
+(function(){
+  if(document.getElementById('orcCss')) return;
+  const st=document.createElement('style'); st.id='orcCss';
+  st.textContent=`
+  .orc{max-width:1180px}
+  .orc input[type=text],.orc input[type=number],.orc input[type=date]{width:100%;padding:9px 11px;border:1px solid var(--border-2);border-radius:var(--radius-xs);background:var(--surface-2);color:var(--text);font-size:.88rem;font-family:inherit}
+  .orc input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-50)}
+  .orc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  .orc-top h1{font-size:1.45rem;display:flex;align-items:center;gap:10px}
+  .orc-top .sub{color:var(--text-2);font-size:.88rem;margin-top:4px}
+  .orc-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
+  .orc-step{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:.82rem;color:var(--text-2);cursor:pointer;text-decoration:none}
+  .orc-step b{display:block;color:var(--text);font-size:.85rem}
+  .orc-step .n{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;background:var(--surface-3);color:var(--text-2);flex-shrink:0}
+  .orc-step.ok .n{background:var(--ok);color:#fff}.orc-step.now{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-50)}.orc-step.now .n{background:var(--brand);color:#fff}
+  .orc-sec{background:var(--surface);border:1px solid var(--border);border-radius:16px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+  .orc-sec>.hd{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--border)}
+  .orc-sec>.hd h3{font-size:1rem;display:flex;align-items:center;gap:10px}
+  .orc-sec>.hd h3 .n{width:26px;height:26px;border-radius:50%;background:var(--brand);color:#fff;font-size:.8rem;display:inline-flex;align-items:center;justify-content:center}
+  .orc-sec>.hd .dica{font-size:.8rem;color:var(--text-3)}
+  .orc-sec>.bd{padding:16px 20px}
+  .orc-vazio{text-align:center;padding:30px 16px}
+  .orc-vazio i.big{font-size:2.4rem;color:var(--brand);margin-bottom:10px}
+  .orc-grp{border:1px solid var(--border);border-radius:14px;margin-bottom:12px;overflow:hidden}
+  .orc-grp-h{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface-2);font-weight:700}
+  .orc-grp-h .dot{width:10px;height:10px;border-radius:50%}
+  .orc-op{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(130px,1fr) minmax(150px,1fr) minmax(190px,1.2fr) auto;gap:12px;align-items:center;padding:12px 14px;border-top:1px solid var(--border)}
+  .orc-op.fora{opacity:.45}
+  .orc-op .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);font-weight:700}
+  .orc-op .tot{font-size:1.25rem;font-weight:800;color:var(--brand-dark)}
+  .orc-op .mini{font-size:.76rem;color:var(--text-2)}
+  .orc-com{display:flex;align-items:center;gap:8px}
+  .orc-com input{width:78px!important;font-weight:700;text-align:right}
+  .orc-com input.falta{border-color:var(--warn);background:var(--warn-bg)}
+  .orc-com .val{font-weight:800;color:var(--ok);white-space:nowrap}
+  .orc-acts{display:flex;gap:4px;justify-content:flex-end}
+  .orc-acts button{padding:6px 9px}
+  .orc-nota{grid-column:1/-1;font-size:.78rem;background:var(--surface-2);border-radius:8px;padding:7px 10px;color:var(--text-2)}
+  .orc-sug{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:12px}
+  .orc-sug label{border:1.5px solid var(--border);border-radius:12px;padding:11px 13px;cursor:pointer;display:block;background:var(--surface)}
+  .orc-sug label.on{border-color:var(--brand);background:var(--brand-50)}
+  .orc-sug label b{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+  .orc-sug label p{font-size:.8rem;color:var(--text-2);line-height:1.45;max-height:4.4em;overflow:hidden}
+  .orc-tg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
+  .orc-tg:first-child{border-top:none}
+  .orc-tg .t b{display:block;font-size:.88rem}.orc-tg .t span{font-size:.78rem;color:var(--text-3)}
+  .sw{position:relative;width:42px;height:24px;flex-shrink:0}.sw input{opacity:0;width:0;height:0}
+  .sw span{position:absolute;inset:0;background:var(--surface-3);border-radius:24px;transition:.2s;cursor:pointer}
+  .sw span::before{content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+  .sw input:checked+span{background:var(--brand)}.sw input:checked+span::before{transform:translateX(18px)}
+  .orc-det{background:var(--surface);border:1px solid var(--border);border-radius:16px;margin-bottom:12px}
+  .orc-det>summary{list-style:none;cursor:pointer;padding:14px 20px;font-weight:700;font-size:.92rem;display:flex;align-items:center;gap:10px}
+  .orc-det>summary::-webkit-details-marker{display:none}
+  .orc-det>summary::after{content:'\\f078';font-family:'Font Awesome 6 Free';font-weight:900;margin-left:auto;color:var(--text-3);font-size:.8rem}
+  .orc-det[open]>summary::after{content:'\\f077'}
+  .orc-det>summary i{color:var(--brand)}
+  .orc-det>.bd{padding:0 20px 18px}
+  .orc-det .card{box-shadow:none}
+  .orc-cli{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 16px}
+  .orc-cli .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);font-weight:700}
+  .orc-cli .v{font-weight:600;font-size:.88rem}
+  .orc-env{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .orc-btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  @media(max-width:900px){.orc-steps{grid-template-columns:1fr 1fr}.orc-op{grid-template-columns:1fr 1fr}.orc-acts{grid-column:1/-1;justify-content:flex-start}.orc-env{grid-template-columns:1fr}}`;
+  document.head.appendChild(st);
+})();
+
+function orcGrupos(){
+  const mapa={}, L=[];
+  ORC.propostas.forEach(p=>{ const k=String(p.grupo||p.seguradora||'').trim(); if(!mapa[k]){ mapa[k]={k,nome:p.seguradora,cor:(PP_CIAS[p.cia]||PP_CIAS.manual).cor,ops:[]}; L.push(mapa[k]); } mapa[k].ops.push(p); });
+  return L;
+}
+/* a seguradora escolhida como sugestão do consultor ganha o destaque no link */
+function orcAplicarSugestao(){
+  const g=ORC.sugestaoGrupo;
+  ORC.propostas.forEach(p=>p.recomendada=false);
+  if(!g||g==='__nenhuma') return;
+  const ops=ORC.propostas.filter(p=>(p.grupo||p.seguradora)===g&&p.incluir!==false);
+  if(!ops.length) return;
+  const alvo=ops.find(p=>p.__recIA)||ops.slice().sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9))[0];
+  alvo.recomendada=true;
+}
+function orcEscolherSugestao(g){
+  ORC.sugestaoGrupo=g;
+  if(g!=='__nenhuma'){ const p=ORC.propostas.find(x=>(x.grupo||x.seguradora)===g&&x.recomendacaoCliente); ORC.observacoes=p?p.recomendacaoCliente:(ORC.observacoes||''); }
+  orcAplicarSugestao(); VIEWS.orcamento();
+}
+function orcPassos(){
+  const ps=ORC.propostas, inc=ppIncluidas();
+  const l=ORC.leadId?neLead(ORC.leadId):null; const f=l?faseDoLead(l):'';
+  const p1=ps.length>0, p2=p1&&inc.length&&inc.every(p=>p.comissaoPct!=null), p3=p2&&ORC.sugestaoGrupo!==undefined, p4=!!ORC.id&&(ORC.linkGerado||['cotacao_enviada','em_transmissao','negocio_fechado'].includes(f));
+  return [p1,p2,p3,p4];
+}
+VIEWS.orcamento=function(leadId){
+  if(leadId&&leadId!==ORC.leadId) ppNovoOrcamento(leadId,true);
+  const l=CACHE.leads.find(x=>x.id===ORC.leadId)||{};
+  orcAplicarSugestao();
+  const [p1,p2,p3,p4]=orcPassos(); const atual=!p1?1:!p2?2:!p3?3:4;
+  const passo=(n,ok,t,s)=>`<a class="orc-step ${ok?'ok':''} ${atual===n?'now':''}" href="javascript:void(0)" onclick="document.getElementById('orcS${n}').scrollIntoView({behavior:'smooth',block:'start'})">
+    <span class="n">${ok?'<i class="fas fa-check"></i>':n}</span><span><b>${t}</b>${s}</span></a>`;
+  const grupos=orcGrupos(); const inc=ppIncluidas();
+  let h=`<div class="orc">
+    <div class="orc-top"><div><h1><i class="fas fa-car-side" style="color:var(--brand)"></i> Proposta de seguro auto</h1>
+      <div class="sub">${esc(ORC.cliente.nome||ORC.leadNome||'Cliente')}${ORC.veiculo.modelo?' · '+esc([ORC.veiculo.marca,ORC.veiculo.modelo].filter(Boolean).join(' ')):''}${ORC.veiculo.placa?' · '+esc(ORC.veiculo.placa):''}</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="location.hash='#leads'"><i class="fas fa-arrow-left"></i> Voltar ao funil</button>
+        ${ORC.leadId?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${ORC.leadId}')"><i class="fas fa-id-badge"></i> Ficha do lead</button>`:''}
+        <button class="btn btn-primary btn-sm" onclick="ppSalvarOrcamento()"><i class="fas fa-floppy-disk"></i> Salvar</button></div></div>
+    <div class="orc-steps">
+      ${passo(1,p1,'Cotações','IA lê os PDFs')}${passo(2,p2,'Comissão','em cada opção')}${passo(3,p3,'O que o cliente vê','sugestão e seções')}${passo(4,p4,'Enviar','link, WhatsApp, PDF')}
+    </div>`;
+
+  /* ---- 1. cotações ---- */
+  h+=`<div class="orc-sec" id="orcS1"><div class="hd"><h3><span class="n">1</span> Cotações</h3>
+      ${p1?`<div style="display:flex;gap:6px;flex-wrap:wrap">${ORC.leadId?`<button class="btn btn-ghost btn-sm" onclick="nePromptIA('${ORC.leadId}')"><i class="fas fa-robot"></i> Gerar prompt</button>`:''}
+        <button class="btn btn-ghost btn-sm" onclick="neColarIA('${ORC.leadId||''}')"><i class="fas fa-paste"></i> Colar nova resposta</button>
+        <button class="btn btn-ghost btn-sm" onclick="ppModalManual()"><i class="fas fa-pen-to-square"></i> Adicionar na mão</button></div>`:''}</div>
+    <div class="bd">${p1?`<div style="font-size:.88rem;color:var(--text-2)"><i class="fas fa-circle-check" style="color:var(--ok)"></i>
+        <b>${ORC.propostas.length} opção(ões)</b> de <b>${grupos.length} seguradora(s)</b> montadas pela IA.${ORC.condutor?` &nbsp;·&nbsp; <i class="fas fa-user" style="color:var(--brand)"></i> Condutor principal: <b>${esc(ORC.veiculo.condutor||ORC.condutor.nome)}</b>${ORC.condutor.relacao?' ('+esc(ORC.condutor.relacao)+')':''}`:''}</div>`
+      :`<div class="orc-vazio"><i class="fas fa-wand-magic-sparkles big"></i><h3 style="margin-bottom:6px">Monte a proposta com a IA</h3>
+        <p style="color:var(--text-2);font-size:.88rem;max-width:520px;margin:0 auto 16px">Gere o prompt, cole na IA, anexe os PDFs das cotações${l&&typeof neEhRenovacao==='function'&&neEhRenovacao(l)?' <b>e a apólice atual</b>':''} e cole a resposta aqui.</p>
+        <div class="orc-btns" style="justify-content:center">${ORC.leadId?`<button class="btn btn-ghost" onclick="nePromptIA('${ORC.leadId}')"><i class="fas fa-robot"></i> 1. Gerar prompt</button>`:''}
+          <button class="btn btn-primary" onclick="neColarIA('${ORC.leadId||''}')"><i class="fas fa-paste"></i> 2. Colar resposta da IA</button>
+          <button class="btn btn-ghost" onclick="ppModalManual()"><i class="fas fa-pen-to-square"></i> Montar na mão</button></div></div>`}</div></div>`;
+
+  if(p1){
+    /* ---- 2. opções e comissão ---- */
+    h+=`<div class="orc-sec" id="orcS2"><div class="hd"><h3><span class="n">2</span> Opções e comissão</h3><span class="dica">Comissão em % sobre o prêmio líquido · só você vê</span></div><div class="bd">
+      ${grupos.map(g=>`<div class="orc-grp"><div class="orc-grp-h"><span class="dot" style="background:${g.cor}"></span>${esc(g.nome)}
+          ${g.ops.length>1?`<span class="badge" style="background:var(--surface-3);color:var(--text-2)">${g.ops.length} versões</span>`:''}
+          ${ORC.sugestaoGrupo===g.k?'<span class="badge" style="background:var(--brand);color:#fff;margin-left:auto"><i class="fas fa-star"></i> sugestão do consultor</span>':''}</div>
+        ${g.ops.map(p=>`<div class="orc-op ${p.incluir===false?'fora':''}">
+          <div><div class="k">${g.ops.length>1?'Versão':'Produto'}</div><b style="font-size:.9rem">${esc((p.variacao&&p.variacao.nome)||p.produto||'—')}</b>
+            ${g.ops.length>1&&p.produto?`<div class="mini">${esc(p.produto)}</div>`:''}</div>
+          <div><div class="k">Prêmio total</div><div class="tot">${ppMoeda(p.premioTotal)}</div><div class="mini">líquido ${ppMoeda(p.premioLiquido)}</div></div>
+          <div><div class="k">Franquia · pagamento</div><div style="font-size:.84rem;font-weight:600">${p.franquia&&p.franquia.valor?ppMoeda(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?' <span class="mini">'+esc(p.franquia.tipo)+'</span>':''}</div>
+            <div class="mini">${typeof nePgResumo==='function'?nePgResumo(p):''}</div></div>
+          <div><div class="k">Comissão</div><div class="orc-com">
+            <input type="text" inputmode="decimal" class="${p.comissaoPct==null?'falta':''}" value="${p.comissaoPct!=null?String(p.comissaoPct).replace('.',','):''}" placeholder="%"
+              onchange="ppSetComissao('${p.uid}',this.value)" onkeydown="if(event.key==='Enter')this.blur()"><span class="mini">%</span>
+            <span class="val">${p.comissaoValor!=null?ppMoeda(p.comissaoValor):''}</span></div></div>
+          <div class="orc-acts">
+            <button class="btn btn-ghost btn-sm" title="Parcelamento que o cliente vê" onclick="nePgEditar('${p.uid}')"><i class="fas fa-credit-card"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Coberturas e detalhes" onclick="ppVerDetalhe('${p.uid}')"><i class="fas fa-list"></i></button>
+            <button class="btn btn-ghost btn-sm" title="${p.incluir===false?'Fora da proposta — clique para incluir':'Na proposta — clique para tirar'}" onclick="ppToggleIncluir('${p.uid}')"><i class="fas fa-${p.incluir===false?'eye-slash':'eye'}"></i></button>
+            <button class="btn btn-ghost btn-sm" title="Excluir" style="color:var(--danger)" onclick="ppRemover('${p.uid}')"><i class="fas fa-trash"></i></button></div>
+          ${p.obsInterna?`<div class="orc-nota"><i class="fas fa-lock"></i> <b>Nota da IA:</b> ${esc(p.obsInterna)}</div>`:''}
+        </div>`).join('')}</div>`).join('')}
+      </div></div>`;
+
+    /* ---- 3. o que o cliente vê ---- */
+    const sugOps=grupos.map(g=>({g,txt:(g.ops.find(p=>p.recomendacaoCliente)||{}).recomendacaoCliente||''}));
+    const sel=ORC.sugestaoGrupo;
+    const tg=(id,on,t,s,fn)=>`<div class="orc-tg"><div class="t"><b>${t}</b><span>${s}</span></div><label class="sw"><input type="checkbox" ${on?'checked':''} onchange="${fn}"><span></span></label></div>`;
+    h+=`<div class="orc-sec" id="orcS3"><div class="hd"><h3><span class="n">3</span> O que o cliente vê</h3><span class="dica">a IA escreveu uma sugestão para cada seguradora — escolha uma</span></div><div class="bd">
+      <div style="font-weight:700;font-size:.86rem;margin-bottom:8px">Sugestão do consultor</div>
+      <div class="orc-sug">
+        ${sugOps.map(({g,txt})=>`<label class="${sel===g.k?'on':''}"><b><input type="radio" name="orcSug" ${sel===g.k?'checked':''} onchange="orcEscolherSugestao('${esc(g.k).replace(/'/g,"\\'")}')" style="width:auto"> ${esc(g.nome)}</b>
+          <p>${txt?esc(txt):'<i>Sem texto da IA para esta seguradora — escreva abaixo.</i>'}</p></label>`).join('')}
+        <label class="${sel==='__nenhuma'?'on':''}"><b><input type="radio" name="orcSug" ${sel==='__nenhuma'?'checked':''} onchange="orcEscolherSugestao('__nenhuma')" style="width:auto"> Não mostrar sugestão</b>
+          <p>O cliente vê as opções sem destaque e sem o texto do consultor.</p></label>
+      </div>
+      ${sel&&sel!=='__nenhuma'?`<div class="form-row"><label>Texto que vai para o cliente (pode ajustar)</label>
+        <textarea rows="3" oninput="ORC.observacoes=this.value">${esc(ORC.observacoes||'')}</textarea></div>`:''}
+      <div style="font-weight:700;font-size:.86rem;margin:6px 0 2px">Seções da proposta</div>
+      ${ORC.apoliceAtual?tg('tgAp',ORC.mostrarApoliceAtual!==false,'Mostrar “Seu seguro hoje”','seguradora, valor anual e franquia da apólice atual','ORC.mostrarApoliceAtual=this.checked'):''}
+      ${(ORC.comparativoRenovacao||[]).length?tg('tgCmp',ORC.mostrarComparativo!==false,'Mostrar “Hoje × o que propomos”','o que manteve, melhorou ou reduziu em relação à apólice atual','ORC.mostrarComparativo=this.checked'):''}
+      ${ORC.fipe&&ORC.fipe.valor?tg('tgFipe',ORC.mostrarFipe!==false,'Mostrar o valor FIPE','valor de mercado do veículo no topo da proposta','ORC.mostrarFipe=this.checked'):''}
+      ${tg('tgLiq',!!ORC.mostrarLiquido,'Mostrar prêmio líquido e IOF','por padrão o cliente vê só o prêmio total','ORC.mostrarLiquido=this.checked')}
+      </div></div>`;
+
+    /* ---- 4. enviar ---- */
+    const falta=inc.filter(p=>p.comissaoPct==null).length;
+    h+=`<div class="orc-sec" id="orcS4"><div class="hd"><h3><span class="n">4</span> Enviar para o cliente</h3>${falta?`<span class="dica" style="color:var(--warn)"><i class="fas fa-triangle-exclamation"></i> falta comissão em ${falta} opção(ões)</span>`:''}</div><div class="bd">
+      <div class="orc-env"><div class="form-row" style="margin:0"><label>Cotação válida até</label><input type="date" value="${esc(ORC.validade||ppValidadeSugerida())}" onchange="ORC.validade=this.value"></div>
+        <div class="form-row" style="margin:0"><label>Consultor responsável</label><input type="text" value="${esc(ORC.consultor||'')}" oninput="ORC.consultor=this.value"></div></div>
+      <div class="orc-btns" style="margin-top:14px">
+        <button class="btn btn-primary" onclick="ppGerarLink()"><i class="fas fa-link"></i> Gerar link da proposta</button>
+        ${ORC.id?`<button class="btn btn-success" onclick="ppEnviarWhats()"><i class="fab fa-whatsapp"></i> Mandar no WhatsApp</button>
+          <a class="btn btn-ghost" target="_blank" rel="noopener" href="${location.origin}/propostaautocli.html?id=${esc(ORC.id)}"><i class="fas fa-eye"></i> Ver como o cliente</a>`:''}
+        <button class="btn btn-ghost" onclick="ppGerarPDF()"><i class="fas fa-file-pdf"></i> PDF comparativo</button></div>
+      <div id="ppLinkBox" style="margin-top:12px"></div></div></div>`;
+
+    /* ---- extras recolhidos ---- */
+    const a=ORC.analise||{};
+    h+=`<details class="orc-det"><summary><i class="fas fa-user-gear"></i> Dados do cliente e do veículo</summary><div class="bd">
+        ${ORC.leadId?`<div style="text-align:right;margin-bottom:8px"><button class="btn btn-ghost btn-sm" onclick="ppAtualizarLead()"><i class="fas fa-rotate"></i> Levar estes dados para o cadastro</button></div>`:''}
+        <div class="orc-cli" style="margin-bottom:12px">${[['CPF',ORC.cliente.cpf],['Nascimento',ORC.cliente.nascimento?fmtData(ORC.cliente.nascimento):''],['WhatsApp',ORC.cliente.whatsapp],['E-mail',ORC.cliente.email],
+          ['Condutor principal',ORC.veiculo.condutor]].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v?esc(v):'—'}</div></div>`).join('')}</div>
+        ${ppBlocoVeiculo()}${ppBlocoFipe()}</div></details>
+      <details class="orc-det"><summary><i class="fas fa-lock"></i> Análise da IA <span style="font-weight:400;color:var(--text-3);font-size:.8rem">só você vê</span></summary><div class="bd">
+        ${a.motivo?`<p style="font-size:.86rem;margin-bottom:10px"><b>Por que a IA recomenda:</b> ${esc(a.motivo)}</p>`:''}
+        ${(a.alertas||[]).length?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:10px;padding:10px 13px;font-size:.84rem;margin-bottom:10px"><b><i class="fas fa-triangle-exclamation"></i> Atenção:</b><br>${a.alertas.map(esc).join('<br>')}</div>`:''}
+        ${orcAnaliseHtml()}</div></details>
+      <details class="orc-det"><summary><i class="fas fa-table-columns"></i> Comparativo completo das coberturas <span style="font-weight:400;color:var(--text-3);font-size:.8rem">com comissão</span></summary><div class="bd">${ppBlocoComparativo()}</div></details>`;
+  }
+  h+='</div>';
+  setView(h);
+};
+
+function orcAnaliseHtml(){
+  const ps=ORC.propostas, ap=ORC.apoliceAtual, cmp=ORC.comparativoRenovacao||[];
+  const st={ok:['var(--ok)','fa-check'],parcial:['var(--warn)','fa-circle-half-stroke'],nao:['var(--danger)','fa-xmark']};
+  const pedidos=[]; ps.forEach(p=>(p.atende||[]).forEach(x=>{ if(!pedidos.includes(x.pedido)) pedidos.push(x.pedido); }));
+  let h='';
+  if(pedidos.length) h+=`<div style="font-weight:700;font-size:.85rem;margin:6px 0">O que o cliente pediu × o que cada opção entrega</div>
+    <div class="tbl-wrap" style="margin-bottom:12px"><table><thead><tr><th>Pedido</th>${ps.map(p=>`<th style="text-align:center">${esc(p.seguradora)}${p.variacao&&p.variacao.nome?'<div style="font-weight:400;font-size:.7rem">'+esc(p.variacao.nome)+'</div>':''}</th>`).join('')}</tr></thead><tbody>
+    ${pedidos.map(pd=>`<tr><td><b>${esc(pd)}</b></td>${ps.map(p=>{ const x=(p.atende||[]).find(y=>y.pedido===pd); if(!x) return '<td style="text-align:center;color:var(--text-3)">—</td>';
+      const s=st[x.status]||st.parcial; return `<td style="text-align:center"><i class="fas ${s[1]}" style="color:${s[0]}"></i><div style="font-size:.74rem">${esc(x.entregue||'')}</div></td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+  if(ap) h+=`<div style="background:var(--surface-2);border-radius:10px;padding:10px 13px;font-size:.84rem;margin-bottom:10px"><b><i class="fas fa-rotate"></i> Apólice atual:</b> ${esc(ap.seguradora||'')} · ${ap.premioTotal!=null?money(ap.premioTotal):'—'}${ap.vigenciaFim?' · vence '+fmtData(ap.vigenciaFim):''}${ap.bonus?' · bônus '+esc(ap.bonus):''}</div>`;
+  if(cmp.length) h+=`<div class="tbl-wrap"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th>Status</th><th>Nota interna</th></tr></thead><tbody>
+    ${cmp.map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(x.hoje||'—')}</td><td>${esc(x.proposta||'—')}</td><td>${x.status?`<span class="badge" style="background:${x.status==='melhorado'?'var(--ok)':x.status==='inferior'?'var(--warn)':'var(--text-3)'};color:#fff">${esc(x.status)}</span>`:'—'}</td><td style="font-size:.78rem;color:var(--text-2)">${esc(x.observacao||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  return h||'<p style="color:var(--text-3);font-size:.85rem">Sem análise adicional.</p>';
+}
+/* ---------- o que vai no documento público / privado (substitui as versões anteriores) ---------- */
+function neCamposOrcamento(){
+  const l=ORC.leadId?neLead(ORC.leadId):null;
+  orcAplicarSugestao();
+  const semSug=ORC.sugestaoGrupo==='__nenhuma';
+  const cmp=(ORC.mostrarComparativo!==false&&ORC.comparativoRenovacao)?ORC.comparativoRenovacao
+      .filter(x=>!/ap[óo]lice (usada|anexad|base)|documento|\bpdf\b|diverg|cadastro/i.test(x.item+' '+(x.hoje||'')+' '+(x.proposta||'')))
+      .map(x=>({item:x.item,hoje:x.hoje||null,proposta:x.proposta||null,status:x.status||null})):null;
+  return {
+    cliente:{nome:ORC.cliente.nome||ORC.leadNome||null},
+    apoliceAtual:ORC.mostrarApoliceAtual!==false&&ORC.apoliceAtual?{seguradora:ORC.apoliceAtual.seguradora||null,premioTotal:ORC.apoliceAtual.premioTotal==null?null:ORC.apoliceAtual.premioTotal,
+      franquia:ORC.apoliceAtual.franquia||null}:null,
+    comparativoRenovacao:cmp&&cmp.length?cmp:null,
+    pedido:[],
+    resumoCliente:semSug?null:(ORC.observacoes||null),
+    observacoes:semSug?null:(ORC.observacoes||null),
+    renovacao:!!ORC.apoliceAtual||(l?neEhRenovacao(l):false),
+    whatsappCorretora:'5554996454300'
+  };
+}
+async function neSalvarPrivado(){
+  if(!ORC.id) return;
+  const inc=ppIncluidas();
+  if(inc.some(p=>p.comissaoPct==null)) toast('Falta informar a comissão em '+inc.filter(p=>p.comissaoPct==null).length+' opção(ões).','info');
+  try{ await db.collection('orcamentos_privado').doc(ORC.id).set({ leadId:ORC.leadId||null,
+      clienteCompleto:ORC.cliente||{},
+      comissoes:inc.map(p=>({seguradora:p.seguradora,produto:p.produto||null,premioLiquido:p.premioLiquido,comissaoPct:p.comissaoPct,comissaoValor:p.comissaoValor,
+        obsInterna:p.obsInterna||null,recomendacaoCliente:p.recomendacaoCliente||null,recIA:!!p.__recIA})),
+      apoliceAtualCompleta:ORC.apoliceAtual||null, comparativoCompleto:ORC.comparativoRenovacao||null,
+      mostrarApoliceAtual:ORC.mostrarApoliceAtual!==false, mostrarComparativo:ORC.mostrarComparativo!==false,
+      sugestaoGrupo:ORC.sugestaoGrupo||null, condutor:ORC.condutor||null,
+      analise:ORC.analise||null, atualizadoEm:FV.serverTimestamp() },{merge:true});
+    ORC.publicado=true;
+  }catch(e){ console.warn('orcamentos_privado',e); toast('A comissão não foi salva (confira as regras do Firestore para orcamentos_privado).','err'); }
+}
+async function neAoAbrirOrcamento(o){
+  ORC.apoliceAtual=o.apoliceAtual||null; ORC.comparativoRenovacao=o.comparativoRenovacao||null;
+  ORC.pedido=[]; ORC.analise={resumoParaCliente:o.resumoCliente||null,alertas:[],motivo:null};
+  ORC.sugestaoGrupo=(o.propostas||[]).some(p=>p.recomendada)?((o.propostas.find(p=>p.recomendada).grupo)||o.propostas.find(p=>p.recomendada).seguradora):(o.resumoCliente||o.observacoes?undefined:'__nenhuma');
+  try{ const d=await db.collection('orcamentos_privado').doc(ORC.id).get();
+    if(d.exists){ const pv=d.data()||{};
+      if(pv.clienteCompleto) ORC.cliente=Object.assign({},ORC.cliente,pv.clienteCompleto);
+      if(pv.analise) ORC.analise=Object.assign(ORC.analise,pv.analise);
+      if(pv.apoliceAtualCompleta) ORC.apoliceAtual=pv.apoliceAtualCompleta;
+      if(pv.comparativoCompleto) ORC.comparativoRenovacao=pv.comparativoCompleto;
+      if(pv.mostrarApoliceAtual===false) ORC.mostrarApoliceAtual=false;
+      if(pv.mostrarComparativo===false) ORC.mostrarComparativo=false;
+      if(pv.sugestaoGrupo) ORC.sugestaoGrupo=pv.sugestaoGrupo;
+      if(pv.condutor) ORC.condutor=pv.condutor;
+      (pv.comissoes||[]).forEach((c,i)=>{ const p=ORC.propostas[i]; if(!p||!c) return; if(c.obsInterna) p.obsInterna=c.obsInterna;
+        if(c.recomendacaoCliente) p.recomendacaoCliente=c.recomendacaoCliente; if(c.recIA) p.__recIA=true;
+        if(c.comissaoPct!=null){ p.comissaoPct=c.comissaoPct; p.comissaoFonte='informada por você'; ppRecalcComissao(p); } });
+    } }catch(e){ console.warn('privado',e); }
+  ORC.publicado=true;
 }
 </script>
 
