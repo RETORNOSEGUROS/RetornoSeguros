@@ -840,7 +840,6 @@ const MENU = [
     { id:'clientes', icon:'fa-users', label:'Clientes' },
     { id:'apolices', icon:'fa-file-contract', label:'Apólices' },
     { id:'fipe', icon:'fa-car-side', label:'FIPE da carteira' },
-    { id:'carteira', icon:'fa-boxes-packing', label:'Importar carteira' },
     { id:'indicacoes', icon:'fa-share-nodes', label:'Indicações' },
     { id:'renovacoes', icon:'fa-rotate', label:'Renovações', badge:'renov' },
     { id:'atendimentos', icon:'fa-life-ring', label:'Atendimentos', badge:'atend' },
@@ -1110,7 +1109,8 @@ function menuAlternar(sec){
   menuGravar(abertos); renderMenu();
 }
 const secId=s=>'sec_'+String(s).replace(/[^\w]/g,'');
-function secPendencias(sec){ return sec.items.reduce((n,it)=>n+(it.badge?(BADGES[it.badge]||0):0),0); }
+/* sem total por seção — o número fica só no item (pedido do Patrick: poluía o menu) */
+function secPendencias(sec){ return 0; }
 function renderMenu(){
   const nav=document.getElementById('navMenu'); if(!nav) return;
   const abertos=menuAbertos();
@@ -1155,6 +1155,25 @@ function setBadge(key,n){
 }
 
 const isLeadNovo=l=>l.status==='pre_cadastro'||!l.status;
+/* fases de negociação em aberto (fechado/perdido/contato/cliente ficam fora) */
+const FASES_ATIVAS=['pre_cadastro','contato_realizado','pendente_documentos','cotacao_enviada','em_transmissao','recusada_seguradora'];
+const leadEmNegociacao=l=>FASES_ATIVAS.includes(l.status||'pre_cadastro');
+/* renovações: só as que vencem NESTE mês e ainda não foram renovadas */
+function renovPendentesMes(){
+  const h=new Date(), ini=new Date(h.getFullYear(),h.getMonth(),1), fim=new Date(h.getFullYear(),h.getMonth()+1,1);
+  const aps=CACHE.apolices||[];
+  return aps.filter(a=>{
+    const f=toDate(a.dataFimVigencia); if(!f||f<ini||f>=fim) return false;
+    if(['cancelada','renovada','encerrada'].includes(a.status)||a.renovadaPor) return false;
+    if(aps.some(b=>b.renovacaoDe===a.id)) return false;
+    if(typeof renSubstitui==='function'&&aps.some(b=>{ try{ return renSubstitui(a,b); }catch(e){ return false; } })) return false;
+    return true; });
+}
+/* atendimentos: conta até a assistência/sinistro/solicitação ser concluída */
+function atendAbertosQtd(){
+  const ab=x=>!x.status||['novo','em_atendimento','aguardando','aberto','em_andamento','pendente'].includes(x.status);
+  return (CACHE.assistencias||[]).concat(CACHE.sinistros||[],CACHE.solicitacoes||[]).filter(ab).length;
+}
 /* É cliente (fechou conosco) se: status cliente/fechado, ou tem apólice, ou tem proposta salva */
 function isClienteLead(l){
   if(l.status==='cliente'||l.status==='negocio_fechado') return true;
@@ -1175,7 +1194,7 @@ function bootstrap(){
   LISTENERS.push(db.collection('leads_crm').orderBy('criadoEm','desc').onSnapshot(s=>{
     CACHE.leads=s.docs.map(d=>({id:d.id,...d.data()}));
     detectarLeadsNovos(CACHE.leads);
-    setBadge('leads',CACHE.leads.filter(isLeadNovo).length);
+    setBadge('leads',CACHE.leads.filter(l=>leadEmNegociacao(l)&&faseDoLead(l)==='pre_cadastro').length);
     atualizarNotificacoes();
     const __r=(location.hash||'#dashboard').slice(1);
     if(__r==='leads') VIEWS.leads(); else if(__r==='contatos'&&VIEWS.contatos) VIEWS.contatos();
@@ -1209,10 +1228,10 @@ function bootstrap(){
   // Coleções da Fase 3 (tempo real)
   const listen=(coll,key,routes)=>LISTENERS.push(db.collection(coll).onSnapshot(s=>{
     CACHE[key]=s.docs.map(d=>({id:d.id,...d.data()}));
-    if(key==='apolices'){ setBadge('renov',CACHE.apolices.filter(a=>{const d=diasAte(a.dataFimVigencia);return d!=null&&d<=60;}).length); checarFipeAuto(); if(typeof checarRenovacaoAuto==='function') checarRenovacaoAuto();
+    if(key==='apolices'){ setBadge('renov',renovPendentesMes().length); checarFipeAuto(); if(typeof checarRenovacaoAuto==='function') checarRenovacaoAuto();
       if(typeof portalRefrescarDesatualizados==='function') setTimeout(portalRefrescarDesatualizados,4000); }
     if(key==='resgates') setBadge('resg',CACHE.resgates.filter(r=>r.status==='pendente').length);
-    if(key==='assistencias'||key==='sinistros'||key==='solicitacoes') setBadge('atend',(CACHE.assistencias||[]).concat(CACHE.sinistros||[],CACHE.solicitacoes||[]).filter(a=>!a.status||a.status==='novo').length);
+    if(key==='assistencias'||key==='sinistros'||key==='solicitacoes') setBadge('atend',atendAbertosQtd());
     if(key==='apolices'||key==='resgates') atualizarNotificacoes();
     if(key==='interacoes'&&FICHA_LEAD&&document.getElementById('modalRoot').classList.contains('open')){ const c=document.getElementById('tlList'); if(c) c.outerHTML=renderTimeline(FICHA_LEAD); }
     reRender(routes);
@@ -1299,27 +1318,35 @@ const VIEWS={};
 
 /* ---------- DASHBOARD ---------- */
 VIEWS.dashboard=function(){
-  const leads=CACHE.leads, movs=CACHE.movimentacoes;
+  const movs=CACHE.movimentacoes;
+  /* só negócios em aberto no funil — excluídos, fechados, perdidos e cadastros de contato/cliente ficam fora */
+  const leads=CACHE.leads.filter(leadEmNegociacao)
+    .sort((a,b)=>(toDate(b.negocioAbertoEm||b.criadoEm)||0)-(toDate(a.negocioAbertoEm||a.criadoEm)||0));
   const hoje=new Date(); hoje.setHours(0,0,0,0);
-  const leadsHoje=leads.filter(l=>{const d=l.criadoEm?.toDate?.(); return d&&d>=hoje;}).length;
-  const leadsNovos=leads.filter(isLeadNovo).length;
-  const fechados=leads.filter(l=>l.status==='negocio_fechado').length;
-  const movPend=movs.filter(m=>m.status==='pendente').length;
   const inicioMes=new Date(hoje.getFullYear(),hoje.getMonth(),1);
+  const leadsHoje=leads.filter(l=>{const d=toDate(l.negocioAbertoEm||l.criadoEm); return d&&d>=hoje;}).length;
+  const leadsNovos=leads.filter(l=>faseDoLead(l)==='pre_cadastro').length;
+  const fechados=CACHE.leads.filter(l=>l.status==='negocio_fechado'&&(toDate(l.fechadoEmData||l.fechadoEm||l.atualizadoEm)||0)>=inicioMes).length;
+  const movPend=movs.filter(m=>m.status==='pendente').length;
   const aprovMes=movs.filter(m=>m.status==='aprovado'&&m.atualizadoEm?.toDate?.()>=inicioMes).length;
   const empresas=CACHE.empresas.length;
+  const renov=renovPendentesMes().length, atend=atendAbertosQtd();
 
-  const kpi=(ic,cls,val,lbl,trend)=>`<div class="kpi"><div class="ico ${cls}"><i class="fas ${ic}"></i></div>
-    <div class="val">${val}</div><div class="lbl">${lbl}</div>${trend?`<div class="trend up">${trend}</div>`:''}</div>`;
+  const kpi=(ic,cls,val,lbl,rota,trend)=>`<a class="kpi kpi-link" href="#${rota}" title="Abrir ${esc(lbl)}"><div class="ico ${cls}"><i class="fas ${ic}"></i></div>
+    <div class="val">${val}</div><div class="lbl">${lbl}</div>${trend?`<div class="trend up">${trend}</div>`:''}</a>`;
 
   let html=head('dashboard');
-  html+=`<div class="kpi-grid">
-    ${kpi('fa-bolt','i-brand',leadsNovos,'Leads novos aguardando contato',leadsHoje?('+'+leadsHoje+' hoje'):'')}
-    ${kpi('fa-right-left','i-warn',movPend,'Movimentações pendentes')}
-    ${kpi('fa-circle-check','i-ok',aprovMes,'Movimentações aprovadas no mês')}
-    ${kpi('fa-trophy','i-purple',fechados,'Negócios fechados')}
-    ${kpi('fa-users','i-info',leads.length,'Leads no total')}
-    ${kpi('fa-building','i-orange',empresas,'Empresas clientes')}
+  html+=`<style>.kpi-link{display:block;color:inherit;text-decoration:none;cursor:pointer;transition:transform .12s,box-shadow .12s,border-color .12s}
+    .kpi-link:hover{transform:translateY(-2px);border-color:var(--brand);box-shadow:0 6px 18px rgba(0,0,0,.08)}</style>
+  <div class="kpi-grid">
+    ${kpi('fa-bolt','i-brand',leadsNovos,'Leads novos aguardando contato','leads',leadsHoje?('+'+leadsHoje+' hoje'):'')}
+    ${kpi('fa-bullseye','i-info',leads.length,'Negócios em negociação','leads')}
+    ${kpi('fa-trophy','i-purple',fechados,'Negócios fechados no mês','leads')}
+    ${kpi('fa-rotate','i-warn',renov,'Renovações pendentes do mês','renovacoes')}
+    ${kpi('fa-life-ring','i-orange',atend,'Atendimentos em aberto','atendimentos')}
+    ${kpi('fa-right-left','i-warn',movPend,'Movimentações pendentes','movimentacoes')}
+    ${kpi('fa-circle-check','i-ok',aprovMes,'Movimentações aprovadas no mês','movimentacoes')}
+    ${kpi('fa-building','i-orange',empresas,'Empresas clientes','empresas')}
   </div>`;
 
   if(typeof agBlocoDashboard==='function') html+=agBlocoDashboard();
@@ -1327,15 +1354,15 @@ VIEWS.dashboard=function(){
   // Leads recentes
   const recentes=leads.slice(0,6);
   html+=`<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:18px" class="dash-cols">
-    <div class="card"><div class="card-head"><h3><i class="fas fa-bullseye"></i> Leads recentes</h3>
+    <div class="card"><div class="card-head"><h3><i class="fas fa-bullseye"></i> Negócios recentes no funil</h3>
       <a href="#leads" class="btn btn-ghost btn-sm">Ver todos</a></div>
       <div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Contato</th><th>Status</th><th>Entrada</th></tr></thead><tbody>
       ${recentes.length?recentes.map(l=>{
-        const st=STATUS_PIPELINE[l.status]||STATUS_PIPELINE.pre_cadastro;
-        return `<tr><td><b>${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b></td>
+        const fk=KANBAN.find(k=>k.key===faseDoLead(l))||KANBAN[0]; const st={label:fk.label,cor:fk.cor};
+        return `<tr style="cursor:pointer" onclick="abrirLead('${l.id}')"><td><b>${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${typeof neRamoCurto==='function'?`<div style="font-size:.74rem;color:var(--text-3)">${esc(neRamoCurto(l))}</div>`:''}</td>
           <td>${esc(l.whatsapp||l.telefone||l.email||'-')}</td>
           <td><span class="badge" style="background:${st.cor}22;color:${st.cor}"><span class="dot-b" style="background:${st.cor}"></span>${st.label}</span></td>
-          <td style="color:var(--text-3)">${fmtData(l.criadoEm)}</td></tr>`;
+          <td style="color:var(--text-3)">${fmtData(l.negocioAbertoEm||l.criadoEm)}</td></tr>`;
       }).join(''):`<tr><td colspan="4"><div class="empty" style="padding:30px"><div class="em-ic"><i class="fas fa-inbox"></i></div><h4>Nenhum lead ainda</h4></div></td></tr>`}
       </tbody></table></div></div>
 
@@ -14095,8 +14122,9 @@ function nlUsar(chave){
       let raiz=(p.leadIds||[]).map(id=>neLead(id)).filter(Boolean).find(x=>!x.contatoId)||null;
       if(!raiz&&(p.leadIds||[]).length){ const um=neLead(p.leadIds[0]); if(um&&um.contatoId) raiz=neLead(um.contatoId)||null; }
       let raizId=raiz&&raiz.id;
-      const pess={cpf:p.cpf||null,dataNascimento:p.dataNascimento||null,email:email||p.email||null,cidade:p.cidade||null,estado:p.estado||null,
-        endereco:p.endereco||null,cep:p.cep||null,profissao:p.profissao||null};
+      /* tudo o que já sabemos da pessoa: portal, cadastros, outros negócios, propostas e apólices */
+      const pess=(typeof neDadosConhecidos==='function')?neDadosConhecidos({id:null,contatoId:raizId||null},p):{cpf:p.cpf||null,dataNascimento:p.dataNascimento||null,cidade:p.cidade||null,estado:p.estado||null,cep:p.cep||null,profissao:p.profissao||null};
+      if(email||p.email) pess.email=email||pess.email||p.email;
       if(!raizId){ const ref=await db.collection('leads_crm').add(Object.assign({},pess,{nome,whatsapp:whats||ctDig(p.whatsapp)||null,
           status:(p.apolices||[]).some(apVigente)?'cliente':'contato',origem:'manual',vinculoChecado:true,criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()}));
         raizId=ref.id; }
@@ -14176,7 +14204,7 @@ function nePromptRamo(c,pr){
   const resp=neRespostasGenericas(c).map(([k,v])=>'- '+k+': '+v).join('\n')||'- (o cliente não respondeu o questionário do site — use só os PDFs)';
   const pessoa=[['Nome',c.nome],['Nascimento',c.dataNascimento?fmtData(c.dataNascimento)+(idadeDe(c.dataNascimento)!=null?' ('+idadeDe(c.dataNascimento)+' anos)':''):null],
     ['Sexo',c.sexo],['Estado civil',c.estadoCivil],['Profissão',c.profissao],['Cidade/UF',[c.cidade,c.estado].filter(Boolean).join('/')],
-    pr==='residencial'?['Endereço',[c.endereco,c.numero,c.bairro,c.cidade].filter(Boolean).join(', ')]:null].filter(x=>x&&x[1]).map(x=>'- '+x[0]+': '+x[1]).join('\n');
+    ['Endereço',[c.endereco,c.numero,c.bairro,c.cidade&&c.estado?c.cidade+'/'+c.estado:c.cidade,c.cep?'CEP '+c.cep:null].filter(Boolean).join(', ')]].filter(x=>x&&x[1]).map(x=>'- '+x[0]+': '+x[1]).join('\n');
   const apTxt=ap?`\nAPÓLICE ATUAL CADASTRADA (confira com o PDF, o PDF manda): ${ap.seguradora||'—'} · vigência ${fmtData(ap.dataInicioVigencia)} a ${fmtData(ap.dataFimVigencia)} · prêmio total ${ap.valorPremio!=null?money(ap.valorPremio):'—'}
 - Coberturas: ${(ap.coberturasEstr||[]).map(x=>x.nome+' '+(x.lmi||'')).join('; ')||'—'}\n`:'';
   const especifico=pr==='residencial'?`
@@ -14327,6 +14355,141 @@ function neObjetoTxt(o){ if(!o) return null; return o.descricao||[o.endereco,o.c
     FC_MEM.fcBem=(n.objeto&&neObjetoTxt(n.objeto))||'';
     FC_MEM.fcObs=n.obs||'';
   };
+})();
+</script>
+<script>
+/* =========================================================================
+   DADOS QUE JÁ TEMOS — um negócio novo (vida, residencial…) de quem já é
+   contato/cliente herda endereço, nascimento, CPF etc. de TODAS as fontes:
+   portal > cadastro > outros negócios > propostas > apólices.
+   Só preenche o que está vazio; nunca sobrescreve o que foi digitado.
+   ========================================================================= */
+const NE_END_GRUPO=['endereco','numero','bairro','complemento','cidade','estado','cep'];
+function neExtrair(o){
+  if(!o||typeof o!=='object') return {};
+  const e=(o.endereco&&typeof o.endereco==='object')?o.endereco:{};
+  const dig=v=>String(v||'').replace(/\D/g,'');
+  const cpfX=[o.cpf,o.clienteCpf,o.cpfCnpj].map(dig).find(x=>x.length===11);
+  const cnpjX=[o.cnpj,o.cpfCnpj].map(dig).find(x=>x.length===14);
+  const r={
+    cpf:cpfX?(o.cpf&&dig(o.cpf)===cpfX?o.cpf:cpfX):null, cnpj:cnpjX?(o.cnpj||cnpjX):null,
+    dataNascimento:o.dataNascimento||o.nascimento||o.seguradoNascimento||null,
+    email:o.email||o.clienteEmail||null,
+    endereco:(typeof o.endereco==='string'&&o.endereco)||o.logradouro||e.logradouro||null,
+    numero:o.numero||e.numero||null, bairro:o.bairro||e.bairro||null, complemento:o.complemento||e.complemento||null,
+    cidade:o.cidade||e.cidade||null, estado:o.estado||o.uf||e.estado||e.uf||null, cep:o.cep||e.cep||null,
+    sexo:o.sexo||null, estadoCivil:o.estadoCivil||null, profissao:o.profissao||null, cnh:o.cnh||null };
+  Object.keys(r).forEach(k=>{ if(r[k]==null||r[k]===''||typeof r[k]==='object'&&!r[k].toDate&&!r[k].seconds) delete r[k]; });
+  return r;
+}
+function nePessoaDe(c,lista){
+  const ids=new Set([c.id,neRaiz(c)].filter(Boolean));
+  try{ return (lista||ctPessoas()).find(p=>(p.leadIds||[]).some(id=>ids.has(id)))||null; }catch(e){ return null; }
+}
+function neDadosConhecidos(c,pessoa,lista){
+  c=c||{}; const raizId=neRaiz(c)||null;
+  const p=pessoa||nePessoaDe(c,lista);
+  const t=x=>toDate(x&&(x.atualizadoEm||x.criadoEm))||0;
+  const leadIds=new Set([raizId,...((p&&p.leadIds)||[])].filter(Boolean));
+  if(raizId) neDocsDaPessoa(raizId).forEach(d=>leadIds.add(d.id));
+  leadIds.delete(c.id);
+  const docs=[...leadIds].map(id=>CACHE.leads.find(x=>x.id===id)).filter(Boolean);
+  const raiz=docs.find(d=>d.id===raizId);
+  const outros=docs.filter(d=>d!==raiz).sort((a,b)=>t(b)-t(a));
+  const fontes=[];
+  [c,raiz,...outros].forEach(d=>{ if(d&&d.perfilPortal) fontes.push(d.perfilPortal); });
+  if(raiz) fontes.push(raiz);
+  outros.forEach(d=>fontes.push(d));
+  ((p&&p.__props)||[]).slice().sort((a,b)=>String(b.d||'').localeCompare(String(a.d||''))).forEach(x=>fontes.push(x.o));
+  const aps=((p&&p.apolices)||[]).slice();
+  if(raiz&&typeof apolicesDoCliente==='function') try{ apolicesDoCliente(raiz).forEach(a=>{ if(!aps.includes(a)) aps.push(a); }); }catch(e){}
+  aps.sort((a,b)=>String(b.dataFimVigencia||'').localeCompare(String(a.dataFimVigencia||''))).forEach(a=>fontes.push(a));
+  if(p) fontes.push({cpf:p.cpf,dataNascimento:p.dataNascimento,email:p.email,profissao:p.profissao,cidade:p.cidade,estado:p.estado});
+  const ex=fontes.map(neExtrair);
+  const r={};
+  /* endereço: vem inteiro da fonte mais completa (não mistura rua de um com CEP de outro) */
+  const temRua=ex.filter(x=>x.endereco);
+  if(temRua.length){ const melhor=temRua.reduce((m,x)=>NE_END_GRUPO.filter(k=>x[k]).length>NE_END_GRUPO.filter(k=>m[k]).length?x:m,temRua[0]);
+    NE_END_GRUPO.forEach(k=>{ if(melhor[k]) r[k]=melhor[k]; }); }
+  ex.forEach(x=>Object.keys(x).forEach(k=>{ if(r[k]==null) r[k]=x[k]; }));
+  return r;
+}
+/* o que falta neste negócio e já sabemos */
+function neFaltantesConhecidos(c,lista){
+  const d=neDadosConhecidos(c,null,lista), up={};
+  const vazio=v=>v==null||v===''||(typeof v==='object'&&!v.toDate&&!v.seconds&&!Object.keys(v).length);
+  /* se o negócio já tem endereço próprio, não mexe no grupo do endereço */
+  const temEnd=!vazio(c.endereco)&&typeof c.endereco==='string';
+  Object.keys(d).forEach(k=>{ if(temEnd&&NE_END_GRUPO.includes(k)&&k!=='cidade'&&k!=='estado'&&k!=='cep') return;
+    if(vazio(c[k])||(k==='endereco'&&typeof c.endereco!=='string')) up[k]=d[k]; });
+  return up;
+}
+async function neCompletarDados(c,lista){
+  if(!c||!(c.contatoId||(c.clienteLeadId&&c.clienteLeadId!==c.id))) return false;
+  if(!leadEmNegociacao(c)) return false;
+  const up=neFaltantesConhecidos(c,lista); if(!Object.keys(up).length) return false;
+  Object.assign(c,up);
+  try{ await db.collection('leads_crm').doc(c.id).update(Object.assign({},up,{dadosHerdadosEm:FV.serverTimestamp()})); }catch(e){ console.warn('completar',e); }
+  return true;
+}
+/* passa em todos os negócios abertos (uma vez por carga de leads) */
+let NE_COMPL_T=null;
+function neCompletarTodos(){
+  if(NE_COMPL_T) return;
+  NE_COMPL_T=setTimeout(async()=>{ NE_COMPL_T=null;
+    if(!CURRENT_USER||!(CACHE.leads||[]).length) return;
+    let lista; try{ lista=ctPessoas(); }catch(e){ return; }
+    for(const c of CACHE.leads.filter(l=>l.contatoId&&leadEmNegociacao(l))) await neCompletarDados(c,lista);
+  },2500);
+}
+(function(){
+  const antAbrir=abrirLead;
+  abrirLead=function(id,modo){
+    const c=CACHE.leads.find(x=>x.id===id);
+    if(c&&c.contatoId&&leadEmNegociacao(c)){ const up=neFaltantesConhecidos(c);
+      if(Object.keys(up).length){ neCompletarDados(c); } }
+    return antAbrir.apply(this,arguments);
+  };
+  /* o prompt da IA usa os dados completos, mesmo antes de gravar */
+  if(typeof nePromptTexto==='function'){ const antP=nePromptTexto;
+    nePromptTexto=function(c){ try{ if(c&&(c.contatoId||c.clienteLeadId)) c=Object.assign({},c,neFaltantesConhecidos(c)); }catch(e){}
+      return antP(c); }; }
+  /* gatilho: sempre que os leads mudam */
+  const antDet=detectarLeadsNovos;
+  detectarLeadsNovos=function(){ const r=antDet.apply(this,arguments); neCompletarTodos(); return r; };
+})();
+
+/* =========================================================================
+   AGENDA — "Primeiro contato com X" se resolve sozinho quando o negócio
+   sai de Lead novo (ou é excluído). Não fica mais pendurado no dashboard.
+   ========================================================================= */
+let AG_AUTO_T=null;
+function agFecharPrimeiroContatoResolvidos(){
+  if(AG_AUTO_T) return;               /* já agendado — não reinicia o relógio */
+  AG_AUTO_T=setTimeout(()=>{ AG_AUTO_T=null;
+    if(!CURRENT_USER||!(typeof AG_CARREGOU!=='object'||AG_CARREGOU.agenda)||!(CACHE.leads||[]).length){
+      setTimeout(agFecharPrimeiroContatoResolvidos,2500); return; }   /* dados ainda chegando: tenta de novo */
+    let mudou=0;
+    (AGENDA||[]).filter(t=>t.status!=='concluida'&&t.status!=='cancelada').forEach(t=>{
+      const ehPC=(t.sugestaoChave&&String(t.sugestaoChave).startsWith('lead:'))||/^primeiro contato/i.test(t.titulo||'');
+      if(!ehPC||!t.vinculo||t.vinculo.tipo!=='lead'||!t.vinculo.id) return;
+      const l=CACHE.leads.find(x=>x.id===t.vinculo.id);
+      const resolvido=!l||faseDoLead(l)!=='pre_cadastro'||!leadEmNegociacao(l);
+      if(!resolvido) return;
+      t.status='concluida'; mudou++;
+      db.collection('agenda_crm').doc(t.id).update({status:'concluida',concluidoEm:FV.serverTimestamp(),concluidoEmData:(typeof agHoje==='function'?agHoje():null),
+        concluidoPor:'automático',conclusaoAuto:l?'negócio saiu de Lead novo':'negócio excluído',atualizadoEm:FV.serverTimestamp()}).catch(e=>console.warn('ag auto',e));
+    });
+    if(!mudou) return;
+    if(window.__agBadgeOrig) window.__agBadgeOrig();
+    const r=(location.hash||'#dashboard').slice(1); if(r==='dashboard'&&VIEWS.dashboard) VIEWS.dashboard();
+  },1500);
+}
+(function(){
+  const antDet=detectarLeadsNovos;
+  detectarLeadsNovos=function(){ const r=antDet.apply(this,arguments); agFecharPrimeiroContatoResolvidos(); return r; };
+  if(typeof agAtualizarBadge==='function'){ const antB=agAtualizarBadge; window.__agBadgeOrig=antB;
+    agAtualizarBadge=function(){ const r=antB.apply(this,arguments); agFecharPrimeiroContatoResolvidos(); return r; }; }
 })();
 </script>
 
