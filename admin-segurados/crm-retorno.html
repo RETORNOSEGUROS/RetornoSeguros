@@ -838,7 +838,6 @@ const MENU = [
   { sec:'Carteira de Clientes', items:[
     { id:'contatos', icon:'fa-address-book', label:'Contatos' },
     { id:'clientes', icon:'fa-users', label:'Clientes' },
-    { id:'propostas', icon:'fa-file-invoice', label:'Ler propostas' },
     { id:'apolices', icon:'fa-file-contract', label:'Apólices' },
     { id:'fipe', icon:'fa-car-side', label:'FIPE da carteira' },
     { id:'carteira', icon:'fa-boxes-packing', label:'Importar carteira' },
@@ -1029,7 +1028,7 @@ async function ldBuscarCep(){
 function money(v){ v=Number(v)||0; return v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
 function toDate(v){ return dataLocal(v); }
 function diasAte(v){ const d=toDate(v); if(!d) return null; const h=new Date(); h.setHours(0,0,0,0); return Math.round((d-h)/86400000); }
-function reRender(routes){ const r=(location.hash||'#dashboard').slice(1); if(routes.includes(r)&&VIEWS[r]) VIEWS[r](); }
+function reRender(routes){ if(document.readyState!=='complete') return; const r=(location.hash||'#dashboard').slice(1); if(routes.includes(r)&&VIEWS[r]) VIEWS[r](); }
 
 /* =========================================================================
    AUTENTICAÇÃO
@@ -1267,7 +1266,8 @@ function bootstrap(){
   listen('fipe_historico','fipeHist',['fipe']);
   atualizarNotificacoes();
 
-  router();
+  /* espera todos os scripts da página carregarem antes de desenhar a primeira tela */
+  if(document.readyState==='complete') router(); else window.addEventListener('load',router,{once:true});
 }
 
 /* =========================================================================
@@ -8923,7 +8923,7 @@ function ppChaveCob(nome){
   for(const c of PP_COB){ if(c.re.test(n)) return c.k; }
   return 'outros';
 }
-const ppRotuloCob=k=>(PP_COB.find(c=>c.k===k)||{}).l||k;
+const ppRotuloCob=k=>(PP_COB.find(c=>c.k===k)||{}).l||(typeof neRotuloRamo==='function'?neRotuloRamo(k):k);
 
 /* =========================================================================
    PARSERS POR SEGURADORA
@@ -10042,7 +10042,7 @@ function ppCopiar(t){
 function ppEnviarWhats(){
   const url=location.origin+'/propostaautocli.html?id='+ORC.id;   /* página do cliente fica na RAIZ do site */
   const nome=(ORC.cliente.nome||'').split(' ')[0];
-  const t=`Oi ${nome}! Preparei a proposta do seu seguro auto com as opções que cotamos para você. É só abrir, comparar e, se gostar, clicar em Contratar: ${url}`;
+  const t=`Oi ${nome}! Preparei a proposta do seu ${(typeof NE_RAMOS!=='undefined'&&NE_RAMOS[ORC.ramo||'auto'])?NE_RAMOS[ORC.ramo||'auto'].nome.toLowerCase():'seguro auto'} com as opções que cotamos para você. É só abrir, comparar e, se gostar, clicar em Contratar: ${url}`;
   if(typeof neMarcarCotacaoEnviada==='function') neMarcarCotacaoEnviada(ORC.leadId);
   const fone=(ORC.cliente.whatsapp||'').replace(/\D/g,'');
   window.open('https://wa.me/'+(fone?('55'+fone.replace(/^55/,'')):'')+'?text='+encodeURIComponent(t),'_blank');
@@ -10079,7 +10079,7 @@ function ppGerarPDF(){
   rod.push({k:'Cotação válida até',v:fmtData(ORC.validade||ppValidadeSugerida())});
   if(ORC.consultor) rod.push({k:'Consultor',v:ORC.consultor});
   if(ORC.observacoes) rod.push({k:'Observações',v:ORC.observacoes});
-  ppPDF({titulo:'Comparativo de seguro auto',subtitulo:sub,colunas,linhas:corpo,rodape:rod,
+  ppPDF({titulo:'Comparativo de '+((typeof NE_RAMOS!=='undefined'&&NE_RAMOS[ORC.ramo||'auto'])?NE_RAMOS[ORC.ramo||'auto'].nome.toLowerCase():'seguro auto'),subtitulo:sub,colunas,linhas:corpo,rodape:rod,
     arquivo:'comparativo-'+(c.nome||'cliente').toLowerCase().replace(/[^a-z0-9]+/g,'-'),paisagem:ps.length>2});
 }
 function ppPDF(cfg){
@@ -12918,17 +12918,20 @@ function neOpcaoParaProposta(o,i){
   if(p.premioTotal==null&&p.premioLiquido!=null) p.premioTotal=neR2(p.premioLiquido+(p.iof||0));
   p.franquia={tipo:(o.franquia&&o.franquia.tipo)||null,valor:neN(o.franquia&&o.franquia.valor)};
   p.franquiasDetalhe=(o.franquiasDetalhe||[]).filter(f=>f&&f.item).map(f=>({item:String(f.item),valor:neN(f.valor)}));
-  const chave=(k,nome)=>NE_COB_K.has(k)?k:ppChaveCob(nome||'');
+  const CFG=typeof neCfgRamo==='function'?neCfgRamo(ORC.ramo):null;
+  const chave=(k,nome)=>(CFG&&CFG.perm.has(k))?k:(CFG&&CFG.k!=='auto'?(k||'outros'):(NE_COB_K.has(k)?k:ppChaveCob(nome||'')));
   const naoTem=x=>/n[ãa]o contratad|n[ãa]o inclu|n[ãa]o possui/i.test(String(x.limite||x.detalhe||''));
-  const resid=x=>x.chave==='residencia'||/resid[êe]nc|domic[íi]li|lar\b|casa/i.test(String(x.nome||''));
+  const resid=x=>(!CFG||CFG.k==='auto')&&x.chave==='residencia'||(!CFG||CFG.k==='auto')&&/resid[êe]nc|domic[íi]li|lar\b|casa/i.test(String(x.nome||''));
   p.coberturas=(o.coberturas||[]).filter(x=>x&&(x.nome||x.chave)&&!naoTem(x)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
     lmi:x.limite==null?null:x.limite,franquia:x.franquia==null?null:x.franquia,premio:neN(x.premio),contratada:true,detalhe:null,explicacao:x.explicacao||null}))
     .concat((o.assistencias||[]).filter(x=>x&&(x.nome||x.chave)&&!naoTem(x)&&!resid(x)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
     lmi:x.detalhe||'contratada',franquia:null,premio:null,contratada:true,detalhe:null,assistencia:true,explicacao:x.explicacao||null})));
   /* só os 12 itens principais, cada um uma vez, na categoria certa */
-  { const vis={}; p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros'; return c; })
-      .filter(c=>NE_PERMITIDOS.has(c.chave)).filter(c=>{ if(vis[c.chave]){ if(!lmiOk(vis[c.chave].lmi)&&lmiOk(c.lmi)) vis[c.chave].lmi=c.lmi; return false; } vis[c.chave]=c; return true; })
-      .map(c=>Object.assign(c,{assistencia:NE_SAO_ASSIST.has(c.chave),nome:(NE_CHAVES_COB.concat(NE_CHAVES_ASS).find(x=>x[0]===c.chave)||[0,c.nome])[1].replace(/ \(detalhe:.*\)$/,'')})); }
+  { const vis={}; const PERM=CFG?CFG.perm:NE_PERMITIDOS, SASS=CFG?CFG.sAss:NE_SAO_ASSIST, LST=CFG?CFG.cob.concat(CFG.ass):NE_CHAVES_COB.concat(NE_CHAVES_ASS);
+    p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros'; return c; })
+      .filter(c=>PERM.has(c.chave)).filter(c=>{ if(vis[c.chave]){ if(!lmiOk(vis[c.chave].lmi)&&lmiOk(c.lmi)) vis[c.chave].lmi=c.lmi; return false; } vis[c.chave]=c; return true; })
+      .map(c=>Object.assign(c,{assistencia:SASS.has(c.chave),nome:(LST.find(x=>x[0]===c.chave)||[0,c.nome])[1].replace(/ \(.*\)$/,'')})); }
+  p.premioMensal=neN(o.premioMensal);
   function lmiOk(v){ return v!=null&&v!==''&&!/^contratad/i.test(String(v)); }
   p.recomendacaoCliente=o.recomendacaoCliente?String(o.recomendacaoCliente):null;
   p.pagamentos=nePagamentosDaIA(o.pagamento||o.pagamentos||o.formasPagamento||[],p.premioTotal);
@@ -12950,6 +12953,9 @@ async function neImportarIA(leadId){
   const l=leadId?neLead(leadId):null;
   if(l){ ppNovoOrcamento(leadId,true); ORC.id=l.orcamentoId||null; }
   else if(!ORC.leadId&&!ORC.id) ppNovoOrcamento(null,true);
+  ORC.ramo=(typeof nePerfilRamo==='function'&&l?nePerfilRamo(l):null)||(j.ramo&&NE_RAMOS&&NE_RAMOS[j.ramo]?j.ramo:null)||ORC.ramo||'auto';
+  ORC.objeto=j.objeto&&typeof j.objeto==='object'?{descricao:typeof neObjetoTxt==='function'?neObjetoTxt(j.objeto):null,endereco:j.objeto.endereco||null,cep:j.objeto.cep||null,
+    valorDeclarado:neN(j.objeto.valorDeclarado),idade:j.objeto.idade||null,profissao:j.objeto.profissao||null}:null;
   const cl=j.cliente||{}, ve=j.veiculo||{};
   ['nome','cpf','nascimento','sexo','estadoCivil'].forEach(k=>{ if(!ORC.cliente[k]&&cl[k]) ORC.cliente[k]=String(cl[k]); });
   if(cl.nome&&ORC.cliente.nome&&ppLimpa(cl.nome).toLowerCase()!==ppLimpa(ORC.cliente.nome).toLowerCase()) ORC.cliente.nomePdf=cl.nome;
@@ -13594,8 +13600,8 @@ VIEWS.orcamento=function(leadId){
     <span class="n">${ok?'<i class="fas fa-check"></i>':n}</span><span><b>${t}</b>${s}</span></a>`;
   const grupos=orcGrupos(); const inc=ppIncluidas();
   let h=`<div class="orc">
-    <div class="orc-top"><div><h1><i class="fas fa-car-side" style="color:var(--brand)"></i> Proposta de seguro auto</h1>
-      <div class="sub">${esc(ORC.cliente.nome||ORC.leadNome||'Cliente')}${ORC.veiculo.modelo?' · '+esc([ORC.veiculo.marca,ORC.veiculo.modelo].filter(Boolean).join(' ')):''}${ORC.veiculo.placa?' · '+esc(ORC.veiculo.placa):''}</div></div>
+    <div class="orc-top"><div><h1><i class="fas fa-${ORC.ramo==='vida'?'heart':ORC.ramo==='residencial'?'house':'car-side'}" style="color:var(--brand)"></i> Proposta de ${(typeof NE_RAMOS!=='undefined'&&NE_RAMOS[ORC.ramo||'auto'])?NE_RAMOS[ORC.ramo||'auto'].nome.toLowerCase():'seguro auto'}</h1>
+      <div class="sub">${esc(ORC.cliente.nome||ORC.leadNome||'Cliente')}${(ORC.ramo||'auto')==='auto'?(ORC.veiculo.modelo?' · '+esc([ORC.veiculo.marca,ORC.veiculo.modelo].filter(Boolean).join(' ')):'')+(ORC.veiculo.placa?' · '+esc(ORC.veiculo.placa):''):(ORC.objeto&&ORC.objeto.descricao?' · '+esc(ORC.objeto.descricao):'')}</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" onclick="location.hash='#leads'"><i class="fas fa-arrow-left"></i> Voltar ao funil</button>
         ${ORC.leadId?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${ORC.leadId}')"><i class="fas fa-id-badge"></i> Ficha do lead</button>`:''}
@@ -13681,7 +13687,7 @@ VIEWS.orcamento=function(leadId){
         ${ORC.leadId?`<div style="text-align:right;margin-bottom:8px"><button class="btn btn-ghost btn-sm" onclick="ppAtualizarLead()"><i class="fas fa-rotate"></i> Levar estes dados para o cadastro</button></div>`:''}
         <div class="orc-cli" style="margin-bottom:12px">${[['CPF',ORC.cliente.cpf],['Nascimento',ORC.cliente.nascimento?fmtData(ORC.cliente.nascimento):''],['WhatsApp',ORC.cliente.whatsapp],['E-mail',ORC.cliente.email],
           ['Condutor principal',ORC.veiculo.condutor]].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v?esc(v):'—'}</div></div>`).join('')}</div>
-        ${ppBlocoVeiculo()}${ppBlocoFipe()}</div></details>
+        ${(ORC.ramo||'auto')==='auto'?ppBlocoVeiculo()+ppBlocoFipe():(ORC.objeto&&ORC.objeto.descricao?`<div class="orc-cli"><div><div class="k">${ORC.ramo==='vida'?'Segurado':'Imóvel'}</div><div class="v">${esc(ORC.objeto.descricao)}</div></div></div>`:'')}</div></details>
       <details class="orc-det"><summary><i class="fas fa-lock"></i> Análise da IA <span style="font-weight:400;color:var(--text-3);font-size:.8rem">só você vê</span></summary><div class="bd">
         ${a.motivo?`<p style="font-size:.86rem;margin-bottom:10px"><b>Por que a IA recomenda:</b> ${esc(a.motivo)}</p>`:''}
         ${(a.alertas||[]).length?`<div style="background:var(--warn-bg);color:#7c4a03;border-radius:10px;padding:10px 13px;font-size:.84rem;margin-bottom:10px"><b><i class="fas fa-triangle-exclamation"></i> Atenção:</b><br>${a.alertas.map(esc).join('<br>')}</div>`:''}
@@ -13975,5 +13981,354 @@ setTimeout(neVincularNovos,3000);
   };
 })();
 </script>
+  <script>
+/* =========================================================================
+   1) EXCLUIR COM SEGURANÇA — card de negócio × cadastro do cliente
+   ========================================================================= */
+function neTemHistorico(c){
+  if(!c||c.contatoId) return false;
+  const filhos=(CACHE.leads||[]).filter(x=>x.contatoId===c.id);
+  return apolicesDoCliente(c).length>0||filhos.length>0||c.status==='cliente'||c.status==='negocio_fechado'||!!c.portalToken||!!c.apoliceId;
+}
+function neExcluirCard(id){
+  const c=neLead(id); if(!c) return;
+  if(neTemHistorico(c)){
+    const aps=apolicesDoCliente(c);
+    openModal(`<div class="modal-head"><h3><i class="fas fa-shield-halved" style="color:var(--warn)"></i> Este card é o cadastro do cliente</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+      <div class="modal-body"><p><b>${esc(c.nome||'')}</b> tem histórico com a gente${aps.length?' ('+aps.length+' apólice(s))':''}. Apagar este card apagaria o <b>cadastro</b> da pessoa — por isso não apago.</p>
+      <p style="margin-top:8px">Posso <b>tirar o negócio do funil</b>: o cadastro, as apólices, a área do cliente e o histórico ficam intactos.</p></div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button>
+        <button class="btn btn-danger" onclick="neTirarDoFunil('${id}')"><i class="fas fa-arrow-right-from-bracket"></i> Tirar do funil</button></div>`);
+    return;
+  }
+  openModal(`<div class="modal-head"><h3><i class="fas fa-trash" style="color:var(--danger)"></i> Excluir ${c.contatoId?'negócio':'lead'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body"><p>Excluir ${c.contatoId?'o negócio de <b>'+esc(neRamoCurto(c))+'</b> de':'o lead'} <b>${esc(c.nome||c.nomeEmpresa||'')}</b>?${c.contatoId?' O cadastro da pessoa e os outros seguros dela não são afetados.':''} Esta ação não pode ser desfeita.</p></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}')">Cancelar</button><button class="btn btn-danger" onclick="confirmarExcluirLead('${id}')"><i class="fas fa-trash"></i> Excluir</button></div>`);
+}
+async function neTirarDoFunil(id){
+  const c=neLead(id)||{}; const aps=apolicesDoCliente(c);
+  const ult=aps.slice().sort((a,b)=>String(b.dataFimVigencia||'').localeCompare(String(a.dataFimVigencia||'')))[0];
+  try{ await db.collection('leads_crm').doc(id).update({status:aps.length?'cliente':'contato',ramo:(ult&&ult.ramo)||c.ramo||null,proximoRetorno:null,proximoRetornoHora:null,atualizadoEm:FV.serverTimestamp()});
+    closeModal(); toast('Tirado do funil — o cadastro continua em Contatos'+(aps.length?' e Clientes':'')+'.','ok'); }catch(e){ toast('Erro: '+(e.code||e.message),'err'); }
+}
+excluirNegocio=neExcluirCard; excluirLead=neExcluirCard; excluirCliente=neExcluirCard;
+
+/* recria o cadastro de quem tem apólice mas perdeu o card (ex.: excluído por engano) */
+function neOrfaos(){
+  try{ return ctPessoas().filter(p=>!p.leadIds.length&&(p.apolices||[]).some(apVigente)); }catch(e){ return []; }
+}
+async function neRecriarOrfaos(){
+  const L=neOrfaos(); if(!L.length) return;
+  if(!confirm('Recriar o cadastro de '+L.length+' cliente(s) que têm apólice em vigor mas estão sem cadastro?')) return;
+  let n=0;
+  for(const p of L){
+    try{ const ref=await db.collection('leads_crm').add({nome:p.nome||null,whatsapp:ctDig(p.whatsapp)||null,email:p.email||null,cpf:p.cpf||null,
+        dataNascimento:p.dataNascimento||null,cidade:p.cidade||null,estado:p.estado||null,endereco:p.endereco||null,cep:p.cep||null,profissao:p.profissao||null,
+        status:'cliente',ramo:((p.apolices||[]).find(apVigente)||{}).ramo||null,origem:'apolice',vinculoChecado:true,
+        criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()});
+      for(const a of (p.apolices||[])){ if(a.id) try{ await db.collection('apolices_cliente').doc(a.id).update({leadId:ref.id}); }catch(e){} }
+      n++; }catch(e){ console.warn('órfão',e); }
+  }
+  toast(n+' cadastro(s) recriado(s).','ok');
+}
+(function(){
+  const ant=VIEWS.clientes;
+  VIEWS.clientes=function(){ ant.apply(this,arguments);
+    const L=neOrfaos(); if(!L.length) return;
+    const root=document.getElementById('viewRoot'); if(!root) return;
+    const d=document.createElement('div');
+    d.innerHTML=`<div style="background:var(--warn-bg);border:1px solid #fde68a;border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:.86rem;color:#7c4a03">
+      <i class="fas fa-user-slash"></i><span style="flex:1;min-width:240px"><b>${L.length} cliente(s) com apólice em vigor estão sem cadastro</b> (${L.slice(0,3).map(p=>esc(p.nome||'—')).join(', ')}${L.length>3?'…':''}) — provavelmente o card foi excluído.</span>
+      <button class="btn btn-primary btn-sm" onclick="neRecriarOrfaos()"><i class="fas fa-rotate-left"></i> Recriar cadastro</button></div>`;
+    const alvo=root.querySelector('.page-head'); if(alvo&&alvo.nextSibling) root.insertBefore(d.firstElementChild,alvo.nextSibling); else root.prepend(d.firstElementChild);
+  };
+})();
+if((location.hash||'').slice(1)==='clientes'&&CURRENT_USER) setTimeout(()=>VIEWS.clientes(),0);
+
+/* =========================================================================
+   2) NOVO LEAD MANUAL — procura em TODOS os contatos (leads, propostas, apólices)
+   ========================================================================= */
+let NL_PESSOAS=null;
+function nlProcurar(q){
+  const box=document.getElementById('nlResultados'); if(!box) return;
+  const qn=ctNorm(q); const dig=String(q||'').replace(/\D/g,'');
+  if(qn.length<3&&dig.length<4){ box.innerHTML=''; return; }
+  if(!NL_PESSOAS) NL_PESSOAS=ctPessoas();
+  const achados=NL_PESSOAS.filter(p=>{
+    if(qn.length>=3&&ctNorm(p.nome+' '+(p.nomeEmpresa||'')).includes(qn)) return true;
+    if(dig.length>=4&&(ctDig(p.cpf).includes(dig)||ctDig(p.whatsapp).includes(dig))) return true;
+    return false; }).slice(0,8);
+  const tag=p=>(p.apolices||[]).some(apVigente)?['cliente','var(--ok)']:(p.apolices||[]).length?['ex-cliente','var(--warn)']:(p.cotacoes||[]).length?['já cotou','var(--info)']:['contato','var(--text-3)'];
+  box.innerHTML=achados.length?`<div style="border:1px solid var(--border);border-radius:10px;margin-top:6px;overflow:hidden">
+    ${achados.map(p=>{ const t=tag(p); return `<div onclick="nlUsar('${esc(p.chave)}')" style="padding:9px 13px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px;align-items:center" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background=''">
+      <span><b style="font-size:.85rem">${esc(p.nome||p.nomeEmpresa||'—')}</b>
+        <small style="color:var(--text-3)"> ${esc(p.cpf||'')} ${esc(foneBR(p.whatsapp)||'')}</small></span>
+      <span class="badge" style="background:${t[1]};color:#fff;font-size:.66rem">${t[0]}</span></div>`; }).join('')}</div>`
+  :`<div style="font-size:.78rem;color:var(--text-3);margin-top:6px">Ninguém encontrado — preencha abaixo que eu crio um contato novo.</div>`;
+}
+function nlUsar(chave){
+  if(!NL_PESSOAS) NL_PESSOAS=ctPessoas();
+  const p=NL_PESSOAS.find(x=>x.chave===chave); if(!p) return;
+  document.getElementById('nlLeadId').value='pessoa:'+chave;
+  document.getElementById('nlNome').value=p.nome||p.nomeEmpresa||'';
+  document.getElementById('nlWhats').value=foneBR(p.whatsapp)||'';
+  document.getElementById('nlEmail').value=p.email||'';
+  document.getElementById('nlResultados').innerHTML=''; document.getElementById('nlBusca').value='';
+  const e=document.getElementById('nlEscolhido'); e.style.display='block';
+  e.innerHTML='<i class="fas fa-circle-check" style="color:var(--ok)"></i> Vou abrir um <b>negócio novo</b> ligado ao cadastro de <b>'+esc(p.nome||'')+'</b>'+
+    (p.cpf?' — CPF, nascimento, endereço e contato já vêm junto':'')+'. '+
+    '<a href="#" onclick="document.getElementById(\'nlLeadId\').value=\'\';this.parentElement.style.display=\'none\';return false" style="color:var(--brand)">trocar</a>';
+}
+(function(){
+  const antNovo=novoLead;
+  novoLead=function(){ NL_PESSOAS=null; antNovo(); };
+  const antSalvar=salvarNovoLead;
+  salvarNovoLead=async function(){
+    const v=(document.getElementById('nlLeadId')||{}).value||'';
+    if(!v.startsWith('pessoa:')) return antSalvar();
+    const nome=document.getElementById('nlNome').value.trim(); if(!nome){ toast('Informe o nome.','err'); return; }
+    const p=(NL_PESSOAS||ctPessoas()).find(x=>x.chave===v.slice(7)); if(!p) return antSalvar();
+    const respId=document.getElementById('nlResp').value; const f=CACHE.admins.find(a=>a.id===respId);
+    const whats=document.getElementById('nlWhats').value.replace(/\D/g,'')||null, email=document.getElementById('nlEmail').value.trim()||null;
+    try{
+      /* acha (ou recria) o cadastro raiz da pessoa */
+      let raiz=(p.leadIds||[]).map(id=>neLead(id)).filter(Boolean).find(x=>!x.contatoId)||null;
+      if(!raiz&&(p.leadIds||[]).length){ const um=neLead(p.leadIds[0]); if(um&&um.contatoId) raiz=neLead(um.contatoId)||null; }
+      let raizId=raiz&&raiz.id;
+      const pess={cpf:p.cpf||null,dataNascimento:p.dataNascimento||null,email:email||p.email||null,cidade:p.cidade||null,estado:p.estado||null,
+        endereco:p.endereco||null,cep:p.cep||null,profissao:p.profissao||null};
+      if(!raizId){ const ref=await db.collection('leads_crm').add(Object.assign({},pess,{nome,whatsapp:whats||ctDig(p.whatsapp)||null,
+          status:(p.apolices||[]).some(apVigente)?'cliente':'contato',origem:'manual',vinculoChecado:true,criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()}));
+        raizId=ref.id; }
+      const base=Object.assign({},pess,neCamposPessoais(raiz||{}));
+      Object.keys(base).forEach(k=>{ if(base[k]==null||base[k]==='') delete base[k]; });
+      await db.collection('leads_crm').add(Object.assign(base,{nome,whatsapp:whats||ctDig(p.whatsapp)||null,contatoId:raizId,vinculoChecado:true,
+        status:'pre_cadastro',ramo:document.getElementById('nlRamo').value,origem:document.getElementById('nlOrigem').value,
+        responsavelId:respId||null,responsavelNome:f?(f.nome||f.email):null,negocioAbertoEm:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()}));
+      closeModal(); toast('Negócio de '+document.getElementById('nlRamo').value+' aberto para '+nome+' — com os dados que já tínhamos.','ok');
+    }catch(e){ console.error(e); toast('Erro ao criar: '+(e.code||e.message),'err'); }
+  };
+})();
+
+/* =========================================================================
+   3) PROMPT E PROPOSTA POR RAMO — Auto, Residencial e Vida
+   ========================================================================= */
+const NE_RAMOS={
+  auto:{nome:'Seguro Auto',cob:NE_CHAVES_COB,ass:NE_CHAVES_ASS},
+  residencial:{nome:'Seguro Residencial',
+    cob:[['incendio','Incêndio, queda de raio e explosão'],['eletricos','Danos elétricos'],['roubo','Roubo e furto de bens'],['vendaval','Vendaval, granizo e fumaça'],
+      ['rc_familiar','Responsabilidade civil familiar'],['aluguel','Perda ou pagamento de aluguel']],
+    ass:[['assist24','Assistência 24h (chaveiro, encanador, eletricista)'],['vidros_res','Quebra de vidros e espelhos'],['mudanca','Mudança e guarda-móveis']]},
+  vida:{nome:'Seguro de Vida',
+    cob:[['morte','Morte por qualquer causa'],['morte_ac','Morte acidental'],['ipa','Invalidez permanente por acidente'],['itp','Invalidez por doença'],
+      ['dg','Doenças graves'],['dit','Diária por incapacidade temporária'],['funeral','Auxílio funeral']],
+    ass:[['funeral_serv','Assistência funeral (serviço)'],['telemedicina','Telemedicina']]}
+};
+function nePerfilRamo(c){
+  const t=String((c&&(c.ramo||c.tipoSeguro||c.produto))||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  if(!t.trim()) return 'auto';
+  if(/frota|caminh/.test(t)) return null;
+  if(/auto|carro|moto|veic/.test(t)) return 'auto';
+  if(/resid|casa|apartament/.test(t)) return 'residencial';
+  if(/vida/.test(t)&&!/grupo|empres|socio/.test(t)) return 'vida';
+  if(/acidentes pessoais/.test(t)) return 'vida';
+  return null;
+}
+function neCfgRamo(r){ const k=r||'auto'; const c=NE_RAMOS[k]||NE_RAMOS.auto;
+  return {k,nome:c.nome,cob:c.cob,ass:c.ass,perm:new Set(c.cob.concat(c.ass).map(x=>x[0]).concat(k==='auto'?['app','app_m','app_i','app_dmho']:[])),
+    sAss:new Set(c.ass.map(x=>x[0]))}; }
+function neRotuloRamo(k){ for(const r of Object.values(NE_RAMOS)){ const x=r.cob.concat(r.ass).find(y=>y[0]===k); if(x) return x[1].replace(/ \(.*\)$/,''); } return k; }
+neEhAutoRamo=function(c){ return nePerfilRamo(c)==='auto'; };
+
+/* renovação: tem apólice do MESMO ramo ou disse no site que já tem */
+neEhRenovacao=function(c){
+  const pr=nePerfilRamo(c)||'auto';
+  if(c.temSeguro==='sim'||c.temApolice==='sim'||(pr==='vida'&&c.temSeguroVida==='sim')) return true;
+  return apolicesDoCliente(CACHE.leads.find(x=>x.id===neRaiz(c))||c).some(a=>apEhAtiva(a)&&nePerfilRamo({ramo:a.ramo})===pr);
+};
+function neApoliceAtualRamo(c){
+  const pr=nePerfilRamo(c)||'auto'; const pessoa=CACHE.leads.find(x=>x.id===neRaiz(c))||c;
+  const aps=apolicesDoCliente(pessoa).filter(a=>a.status!=='cancelada'&&nePerfilRamo({ramo:a.ramo})===pr);
+  return aps.sort((x,y)=>String(y.dataFimVigencia||'').localeCompare(String(x.dataFimVigencia||'')))[0]||null;
+}
+/* respostas do site de qualquer ramo, com rótulo */
+function neRespostasGenericas(c){
+  const r=[];
+  Object.keys(SITE_ROT).forEach(k=>{ const v=c[k]; if(v==null||v===''||NE_CAMPOS_AUTO.includes(k)) return;
+    let t=(SITE_VAL[k]&&SITE_VAL[k][v])||v; if(typeof t==='object') t=JSON.stringify(t);
+    if(/^(valor|capital)/.test(k)&&!isNaN(Number(v))) t=money(Number(v));
+    r.push([SITE_ROT[k],String(t)]); });
+  let cobs=[]; if(c.coberturas&&typeof c.coberturas==='object'&&!Array.isArray(c.coberturas)) cobs=Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&(c.coberturas[k].ativo||c.coberturas[k].selecionada));
+  if(cobs.length) r.push(['Coberturas que quer',cobs.map(k=>COB_ROT_SITE[k]||k).join(', ')]);
+  return r;
+}
+(function(){
+  const antPrompt=nePromptTexto;
+  nePromptTexto=function(c){
+    const pr=nePerfilRamo(c);
+    if(pr==='auto') return antPrompt(c);
+    if(!pr) return null;
+    return nePromptRamo(c,pr);
+  };
+})();
+function nePromptRamo(c,pr){
+  const cfg=neCfgRamo(pr); const ren=neEhRenovacao(c); const ap=neApoliceAtualRamo(c);
+  const resp=neRespostasGenericas(c).map(([k,v])=>'- '+k+': '+v).join('\n')||'- (o cliente não respondeu o questionário do site — use só os PDFs)';
+  const pessoa=[['Nome',c.nome],['Nascimento',c.dataNascimento?fmtData(c.dataNascimento)+(idadeDe(c.dataNascimento)!=null?' ('+idadeDe(c.dataNascimento)+' anos)':''):null],
+    ['Sexo',c.sexo],['Estado civil',c.estadoCivil],['Profissão',c.profissao],['Cidade/UF',[c.cidade,c.estado].filter(Boolean).join('/')],
+    pr==='residencial'?['Endereço',[c.endereco,c.numero,c.bairro,c.cidade].filter(Boolean).join(', ')]:null].filter(x=>x&&x[1]).map(x=>'- '+x[0]+': '+x[1]).join('\n');
+  const apTxt=ap?`\nAPÓLICE ATUAL CADASTRADA (confira com o PDF, o PDF manda): ${ap.seguradora||'—'} · vigência ${fmtData(ap.dataInicioVigencia)} a ${fmtData(ap.dataFimVigencia)} · prêmio total ${ap.valorPremio!=null?money(ap.valorPremio):'—'}
+- Coberturas: ${(ap.coberturasEstr||[]).map(x=>x.nome+' '+(x.lmi||'')).join('; ')||'—'}\n`:'';
+  const especifico=pr==='residencial'?`
+SOBRE RESIDENCIAL
+- "limite" de cada cobertura = Limite Máximo de Indenização (LMI) em R$.
+- Franquia: residencial costuma ter franquia POR cobertura (ex.: danos elétricos, vendaval). Coloque em "coberturas[].franquia" (texto curto, ex.: "10% dos prejuízos, mín. R$ 500,00"). Use "franquia" geral só se o PDF trouxer uma franquia única.
+- Preencha "objeto" com o imóvel: tipo (casa/apartamento), construção, uso (moradia habitual/veraneio/aluguel), endereço/CEP e valor declarado — sem dados pessoais além do endereço.`:`
+SOBRE VIDA
+- "limite" de cada cobertura = CAPITAL SEGURADO em R$ (ex.: morte R$ 300.000,00; invalidez R$ 300.000,00; DIT R$ 100,00 por dia).
+- Seguro de vida não tem franquia: use "franquia": null. Se houver CARÊNCIA relevante (ex.: doenças graves 90 dias), escreva no "limite" ("R$ 50.000,00 · carência 90 dias").
+- Preencha "objeto" com o segurado: nome, idade e profissão (sem CPF).
+- Prêmio de vida costuma ser MENSAL: informe "premioTotal" ANUAL e preencha "premioMensal" quando o PDF trouxer o valor mensal.`;
+  return `Você é analista de seguros da corretora Retorno Seguros. Vou anexar os PDFs das COTAÇÕES DE ${cfg.nome.toUpperCase()} que fizemos para um cliente${ren?' e também a APÓLICE ATUAL dele (é uma RENOVAÇÃO)':''}.
+
+SUA TAREFA
+1. Ler TODOS os PDFs anexados com atenção (todas as páginas).
+2. Extrair de cada cotação: seguradora, produto, nº da cotação, validade, prêmio líquido, IOF, prêmio total, formas de pagamento com parcelas e valores, coberturas com limite/capital e assistências com o detalhe.
+3. Se houver mais de uma versão da MESMA seguradora (capitais diferentes, plano completo × essencial), crie UMA opção para CADA versão, com o mesmo "seguradora" e "variacao" preenchida ("franquia": null ou o tipo, "servicos": nome curto do plano, ex.: "Completo", "Essencial"). Versão única: "variacao": null.
+4. Comparar cada opção com o que o cliente PEDIU no questionário (só coberturas e capitais) — ok, parcial ou nao.${ren?`
+5. Ler a APÓLICE ATUAL e montar o comparativo "o que ele tem hoje × o que propomos", item por item, marcando "mantido", "melhorado" ou "inferior".`:''}
+${ren?'6':'5'}. Escrever, para CADA seguradora, a "recomendacaoCliente" (2 a 4 frases para o cliente) e indicar a opção que você recomenda.
+${especifico}
+
+O QUE O CLIENTE VÊ × O QUE SÓ O CORRETOR VÊ
+- O cliente VÊ: "destaques", "atendeAoPedido", "comparativoRenovacao", "recomendacaoCliente" e "analise.resumoParaCliente" — linguagem simples, curta, sem jargão.
+- Nesses campos NUNCA escreva divergências entre PDFs, números de apólice, comentários sobre documentos ou análise técnica. Isso vai em "observacoesInternas" e "analise.alertas".
+
+REGRAS
+- Não invente nada. Se não estiver no PDF, use null.
+- Nome do produto neutro, sem nicho de público (nada de "Mulher", "Homem", "Sênior" etc.).
+- COBERTURAS E ASSISTÊNCIAS: liste SOMENTE os itens das listas de chaves abaixo, cada um em UMA lista só. Todo o resto (clube de vantagens, descontos em parceiros, sorteios, benefícios que não são o seguro em si) NÃO entra.
+- Em TEXTO, dinheiro no formato R$ 1.234,56. Nos campos numéricos, número puro (3456.78). Datas AAAA-MM-DD.
+- Prêmio total = prêmio líquido + 7,38% de IOF (se o PDF não trouxer o total).
+- NÃO informe comissão do corretor.
+- PAGAMENTO: transcreva a tabela do PDF DAQUELA opção, UMA LINHA POR QUANTIDADE DE PARCELAS, formas "cartao", "debito", "boleto" ou "avista" (boleto e carnê = "boleto"). Só cartão de crédito tradicional — ignore condições do cartão da própria seguradora. Desconto à vista: linha "avista" com o valor.
+- Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.
+
+CHAVES DE COBERTURA: ${cfg.cob.map(x=>x[0]+' = '+x[1]).join(' | ')}
+CHAVES DE ASSISTÊNCIA: ${cfg.ass.map(x=>x[0]+' = '+x[1]).join(' | ')}
+
+DADOS DO CLIENTE
+${pessoa||'- Nome: '+(c.nome||'—')}
+
+O QUE O CLIENTE RESPONDEU NO SITE (é o que ele pediu)
+${resp}
+${apTxt}
+FORMATO OBRIGATÓRIO DA RESPOSTA
+\`\`\`json
+{
+  "versao": "retorno-ia-1", "ramo": "${pr}",
+  "cliente": { "nome": null, "nascimento": null, "sexo": null, "estadoCivil": null },
+  "objeto": ${pr==='residencial'?'{ "descricao": "Casa em alvenaria · moradia habitual", "endereco": null, "cep": null, "valorDeclarado": null }':'{ "descricao": "Segurado: nome, 42 anos, engenheiro", "idade": null, "profissao": null }'},
+  "apoliceAtual": ${ren?'{ "seguradora": null, "premioTotal": null, "franquia": null, "coberturas": [ { "chave": "", "nome": "", "limite": "" } ] }':'null'},
+  "opcoes": [
+    {
+      "seguradora": "", "produto": "", "cotacao": "", "validade": null,
+      "variacao": null,
+      "premioLiquido": 0, "iof": 0, "premioTotal": 0${pr==='vida'?', "premioMensal": null':''},
+      "franquia": ${pr==='residencial'?'null':'null'},
+      "coberturas": [ { "chave": "${cfg.cob[0][0]}", "nome": "", "limite": "", "franquia": null, "explicacao": null } ],
+      "assistencias": [ { "chave": "${cfg.ass[0][0]}", "nome": "", "detalhe": "" } ],
+      "pagamento": [ { "forma": "cartao", "parcelas": 1, "valorParcela": 0, "juros": false }, { "forma": "cartao", "parcelas": 2, "valorParcela": 0, "juros": false } ],
+      "atendeAoPedido": [ { "pedido": "", "entregue": "", "status": "ok|parcial|nao" } ],
+      "destaques": [ "frase curta para o cliente" ],
+      "recomendacaoCliente": "2 a 4 frases para o cliente sobre esta seguradora",
+      "observacoesInternas": "só para o corretor"
+    }
+  ],
+  "comparativoRenovacao": ${ren?'[ { "item": "", "hoje": "", "proposta": "", "status": "mantido|melhorado|inferior" } ]':'null'},
+  "analise": { "recomendada": 0, "motivo": "uso interno", "resumoParaCliente": "3 a 5 frases para o cliente", "alertas": [ "só para o corretor" ] }
+}
+\`\`\``;
+}
+(function(){
+  const antIA=nePromptIA;
+  nePromptIA=function(id){
+    const c=neLead(id); if(!c) return;
+    if(!nePerfilRamo(c)){ toast('Ainda não tenho o padrão de prompt para '+neRamoCurto(c)+'. Envie o material de cotação desse ramo que eu configuro.','info','Ramo sem prompt'); return; }
+    return antIA(id);
+  };
+  /* painel: IA para auto, residencial e vida */
+  const painelAuto=nePainel;
+  nePainel=function(c){
+    const pr=nePerfilRamo(c);
+    if(pr==='auto') return painelAuto(c);
+    const f=faseDoLead(c);
+    if(f==='em_transmissao'||c.contratacao) return painelAuto(Object.assign({},c,{ramo:'auto'}));
+    if(pr&&(f==='contato_realizado'||f==='cotacao_enviada')){ const ren=neEhRenovacao(c);
+      return `<div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px;background:var(--surface-2)">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:6px"><i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i> Cotação com IA — ${esc(neRamoCurto(c))} ${ren?'<span class="badge" style="background:var(--brand-50);color:var(--brand-dark);font-size:.68rem">renovação</span>':''}</div>
+      <ol style="margin:0 0 10px 18px;padding:0;font-size:.82rem;color:var(--text-2);line-height:1.6">
+        <li>Clique em <b>Gerar prompt</b> e cole na IA.</li>
+        <li>Anexe os PDFs de <b>todas as cotações</b>${ren?' <b>e a apólice atual</b>':''}.</li>
+        <li>Copie a resposta e clique em <b>Colar resposta</b>.</li></ol>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="nePromptIA('${c.id}')"><i class="fas fa-robot"></i> Gerar prompt</button>
+        <button class="btn btn-ghost btn-sm" onclick="neColarIA('${c.id}')"><i class="fas fa-paste"></i> Colar resposta</button>
+        ${c.orcamentoId?`<button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-link"></i> Proposta / link / PDF</button>`:''}</div></div>`; }
+    if(!pr&&(f==='contato_realizado'||f==='cotacao_enviada')) return `<div style="border:1px dashed var(--border-2);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:.84rem;color:var(--text-2)">
+      <i class="fas fa-robot" style="color:var(--text-3)"></i> O prompt da IA para <b>${esc(neRamoCurto(c))}</b> ainda não está configurado — envie o material de cotação desse ramo para eu montar o padrão.</div>`;
+    return f==='pre_cadastro'?`<div style="font-size:.8rem;color:var(--text-3);margin:-6px 0 14px"><i class="fas fa-circle-info"></i> Mande a <b>mensagem padrão</b> e mova para <b>Primeiro contato</b>.</div>`:'';
+  };
+  const topoAnt=neBotoesTopo;
+  neBotoesTopo=function(c,vFunil){
+    const pr=nePerfilRamo(c); const raiz=neRaiz(c);
+    return `<button class="btn btn-ghost btn-sm" style="color:var(--ok)" onclick="neMensagemPadrao('${c.id}')"><i class="fab fa-whatsapp"></i> Mensagem padrão</button>
+      ${pr&&c.orcamentoId&&vFunil?`<button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> Ver proposta</button>`:''}
+      ${vFunil&&raiz?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${raiz}','cliente')"><i class="fas fa-id-card"></i> Perfil do contato</button>`:''}`;
+  };
+  /* mensagem padrão de cada ramo */
+  const msgAnt=neTextoPadrao;
+  neTextoPadrao=function(c,tipo,consultor,genero){
+    const pr=nePerfilRamo(c); const nome=((c.nome||'').trim().split(' ')[0]||'tudo bem'); const sou=genero==='a'?'consultora':'consultor';
+    if(pr==='auto') return msgAnt(Object.assign({},c,{ramo:'auto'}),tipo,consultor,genero);
+    if(pr==='residencial') return tipo==='renov'
+      ?`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você quer comparar/renovar o seu Seguro Residencial.\n\nPara darmos continuidade, preciso de:\n\n• Apólice atual (PDF)\n• Confirmar o endereço completo do imóvel (com CEP)\n• Se mudou algo no imóvel (reforma, piscina, placas solares, equipamentos novos)\n\nPode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras e te mostro o comparativo com o que você tem hoje.`
+      :`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro Residencial.\n\nPara darmos continuidade ao atendimento, preciso de:\n\n• Endereço completo do imóvel (com CEP)\n• Tipo do imóvel (casa, apartamento, casa em condomínio) e se é moradia habitual ou veraneio\n• Valor aproximado do imóvel e dos bens dentro dele (móveis, eletrônicos)\n\nPode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras para você.`;
+    if(pr==='vida') return tipo==='renov'
+      ?`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você quer comparar/revisar o seu Seguro de Vida.\n\nPara darmos continuidade, preciso de:\n\n• Apólice ou certificado atual (PDF)\n• Se mudou algo na sua profissão, renda ou família (filhos, casamento)\n\nPode me enviar por aqui mesmo. Assim que eu receber, monto o comparativo com o que você tem hoje.`
+      :`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro de Vida.\n\nPara darmos continuidade ao atendimento, preciso de:\n\n• Data de nascimento\n• Profissão e se é CLT, autônomo(a) ou empresário(a)\n• Renda mensal aproximada (para dimensionar o capital)\n• Se tem dependentes (cônjuge, filhos)\n\nPode me responder por aqui mesmo. Com isso eu monto as opções nas principais seguradoras.`;
+    return msgAnt(c,tipo,consultor,genero);
+  };
+})();
+
+/* importação da IA respeita o ramo */
+function neObjetoTxt(o){ if(!o) return null; return o.descricao||[o.endereco,o.cep].filter(Boolean).join(' · ')||null; }
+(function(){
+  const antCampos=neCamposOrcamento;
+  neCamposOrcamento=function(){ return Object.assign(antCampos(),{ramo:ORC.ramo||'auto',objeto:ORC.objeto||null,
+    premiosMensais:(ORC.propostas||[]).filter(p=>p.incluir!==false).map(p=>p.premioMensal||null)}); };
+  const antAbrir=neAoAbrirOrcamento;
+  neAoAbrirOrcamento=async function(o){ await antAbrir(o); ORC.ramo=o.ramo||'auto'; ORC.objeto=o.objeto||null;
+    (o.premiosMensais||[]).forEach((v,i)=>{ if(v&&ORC.propostas[i]) ORC.propostas[i].premioMensal=v; }); };
+})();
+
+/* fechamento (Emitida) preenche coberturas do ramo certo */
+(function(){
+  const ant=nePreencherFechamento;
+  nePreencherFechamento=function(c){
+    ant(c); const n=c.negociacaoFinal; if(!n) return;
+    const pr=nePerfilRamo(c); if(pr==='auto') return;
+    const cat=fcCatalogo(c.ramo||FC.ramo);
+    const kc=new Set(cat.cob.map(x=>x.k)), ka=new Set(cat.assist.map(x=>x.k));
+    FC.cob={}; FC.assist={};
+    (n.coberturas||[]).forEach(x=>{ if(kc.has(x.chave)) FC.cob[x.chave]={lmi:x.lmi||''}; });
+    (n.assistencias||[]).forEach(x=>{ if(ka.has(x.chave)) FC.assist[x.chave]={on:true,d:x.detalhe||''}; });
+    ['fcModelo','fcAno','fcPlaca','fcChassi','fcFipeCod','fcCondutor'].forEach(k=>delete FC_MEM[k]);
+    FC_MEM.fcBem=(n.objeto&&neObjetoTxt(n.objeto))||'';
+    FC_MEM.fcObs=n.obs||'';
+  };
+})();
+</script>
+
 </body>
 </html>
