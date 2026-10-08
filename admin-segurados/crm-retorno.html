@@ -12939,6 +12939,7 @@ function neOpcaoParaProposta(o,i){
   p.seguradora=o.seguradora||(PP_CIAS[cia]||PP_CIAS.manual).nome; p.produto=neLimpaProduto(o.produto); p.cotacao=o.cotacao||null; p.validade=o.validade||null;
   p.grupo=String(o.grupo||p.seguradora||'').trim()||p.seguradora;
   const va=o.variacao&&typeof o.variacao==='object'?o.variacao:null;
+  if(va&&va.nome) va.nome=String(va.nome).replace(/^\s*op[çc][ãa]o\s*\d+\s*[·\-–:|]?\s*/i,'').trim();
   p.variacao=va&&(va.nome||va.franquia||va.servicos)?{nome:neLimpaProduto(va.nome)||[va.franquia,va.servicos].filter(Boolean).join(' · '),
     franquia:va.franquia?String(va.franquia):null,servicos:va.servicos?String(va.servicos):null}:null;
   p.premioLiquido=neN(o.premioLiquido); p.iof=neN(o.iof); p.premioTotal=neN(o.premioTotal);
@@ -12959,7 +12960,9 @@ function neOpcaoParaProposta(o,i){
     lmi:x.detalhe||'contratada',franquia:null,premio:null,contratada:true,detalhe:null,assistencia:true,explicacao:x.explicacao||null})));
   /* só os 12 itens principais, cada um uma vez, na categoria certa */
   { const vis={}; const PERM=CFG?CFG.perm:NE_PERMITIDOS, SASS=CFG?CFG.sAss:NE_SAO_ASSIST, LST=CFG?CFG.cob.concat(CFG.ass):NE_CHAVES_COB.concat(NE_CHAVES_ASS);
-    p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros'; return c; })
+    p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros';
+        if(CFG&&CFG.k==='vida'&&(c.chave==='cancer'||/diagn[óo]stico de c[âa]ncer/i.test(c.nome||''))) c.chave='dg';   /* câncer entra em doenças graves */
+        return c; })
       .filter(c=>PERM.has(c.chave)).filter(c=>{ if(vis[c.chave]){ const v=vis[c.chave];
         if(!lmiOk(v.lmi)&&lmiOk(c.lmi)){ v.lmi=c.lmi; v.contratada=c.contratada; }
         ['descricao','carencia','franquia'].forEach(k=>{ if(!v[k]&&c[k]) v[k]=c[k]; }); return false; } vis[c.chave]=c; return true; })
@@ -13005,6 +13008,7 @@ async function neImportarIA(leadId){
   const an=j.analise||{};
   const rec=Number.isInteger(an.recomendada)&&ORC.propostas[an.recomendada]?an.recomendada:null;
   ORC.propostas.forEach((p,i)=>{ p.recomendada=(i===rec); p.__recIA=(i===rec); });
+  if(ORC.ramo==='vida') ORC.propostas.sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9));   /* menor custo à esquerda */
   ORC.analise={motivo:an.motivo||null,alertas:(an.alertas||[]).filter(Boolean).map(String),resumoParaCliente:an.resumoParaCliente||null};
   if(an.resumoParaCliente) ORC.observacoes=an.resumoParaCliente;
   ORC.apoliceAtual=j.apoliceAtual&&j.apoliceAtual.seguradora?neApoliceAtualNorm(j.apoliceAtual):null;
@@ -13017,7 +13021,9 @@ async function neImportarIA(leadId){
   ORC.mostrarApoliceAtual=true; ORC.mostrarComparativo=true;
   /* sugestão do consultor: começa na recomendada pela IA */
   const rp=ORC.propostas.find(p=>p.recomendada); ORC.sugestaoGrupo=rp?(rp.grupo||rp.seguradora):null;
-  if(rp&&rp.recomendacaoCliente&&!(ORC.ramo==='vida'&&ORC.analise&&ORC.analise.resumoParaCliente)) ORC.observacoes=rp.recomendacaoCliente;
+  if(ORC.ramo==='vida'&&rp) ORC.sugestaoGrupo=(ORC.analise&&ORC.analise.resumoParaCliente)?'ia:'+orcOpKey(rp):'op:'+orcOpKey(rp);
+  if(ORC.ramo==='vida'){ if(!(ORC.analise&&ORC.analise.resumoParaCliente)&&rp&&rp.recomendacaoCliente) ORC.observacoes=rp.recomendacaoCliente; }
+  else if(rp&&rp.recomendacaoCliente) ORC.observacoes=rp.recomendacaoCliente;
   closeModal();
   if(leadId) neNota(leadId,'Orçamento montado pela IA com '+ORC.propostas.length+' opção(ões): '+ORC.propostas.map(p=>p.seguradora+' '+money(p.premioTotal)).join(' · '));
   location.hash='#orcamento'+(ORC.leadId?'/'+ORC.leadId:'');
@@ -13608,10 +13614,14 @@ function orcGrupos(){
   return L;
 }
 /* a seguradora escolhida como sugestão do consultor ganha o destaque no link */
+/* vida: a sugestão é por OPÇÃO (normalmente é uma seguradora só, com várias opções) */
+function orcOpKey(p){ return [p.seguradora||'',(p.variacao&&p.variacao.nome)||p.produto||'',p.premioTotal==null?'':Math.round(p.premioTotal*100)].join('|'); }
+function orcOpsVida(){ return ORC.propostas.filter(p=>p.incluir!==false).slice().sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9)); }
 function orcAplicarSugestao(){
   const g=ORC.sugestaoGrupo;
   ORC.propostas.forEach(p=>p.recomendada=false);
   if(!g||g==='__nenhuma') return;
+  if(/^(op|ia):/.test(g)){ const k=g.slice(3); const alvo=ORC.propostas.find(p=>orcOpKey(p)===k&&p.incluir!==false); if(alvo) alvo.recomendada=true; return; }
   const ops=ORC.propostas.filter(p=>(p.grupo||p.seguradora)===g&&p.incluir!==false);
   if(!ops.length) return;
   const alvo=ops.find(p=>p.__recIA)||ops.slice().sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9))[0];
@@ -13619,6 +13629,9 @@ function orcAplicarSugestao(){
 }
 function orcEscolherSugestao(g){
   ORC.sugestaoGrupo=g;
+  if(/^(op|ia):/.test(g)){ const p=ORC.propostas.find(x=>orcOpKey(x)===g.slice(3));
+    ORC.observacoes=g.startsWith('ia:')?((ORC.analise&&ORC.analise.resumoParaCliente)||(p&&p.recomendacaoCliente)||''):((p&&p.recomendacaoCliente)||ORC.observacoes||'');
+    orcAplicarSugestao(); VIEWS.orcamento(); return; }
   if(g!=='__nenhuma'){ const p=ORC.propostas.find(x=>(x.grupo||x.seguradora)===g&&x.recomendacaoCliente);
     /* vida: a análise completa (idade, profissão, urgência) vale mais que o texto curto da opção */
     ORC.observacoes=(ORC.ramo==='vida'&&ORC.analise&&ORC.analise.resumoParaCliente)?ORC.analise.resumoParaCliente:(p?p.recomendacaoCliente:(ORC.observacoes||'')); }
@@ -13669,7 +13682,7 @@ VIEWS.orcamento=function(leadId){
           ${g.ops.length>1?`<span class="badge" style="background:var(--surface-3);color:var(--text-2)">${g.ops.length} versões</span>`:''}
           ${ORC.sugestaoGrupo===g.k?'<span class="badge" style="background:var(--brand);color:#fff;margin-left:auto"><i class="fas fa-star"></i> sugestão do consultor</span>':''}</div>
         ${g.ops.map(p=>`<div class="orc-op ${p.incluir===false?'fora':''}">
-          <div><div class="k">${g.ops.length>1?'Versão':'Produto'}</div><b style="font-size:.9rem">${esc((p.variacao&&p.variacao.nome)||p.produto||'—')}</b>
+          <div><div class="k">${g.ops.length>1?'Versão':'Produto'}${p.recomendada&&/^(op|ia):/.test(ORC.sugestaoGrupo||'')?' <span class="badge" style="background:var(--brand);color:#fff"><i class="fas fa-star"></i> sugestão</span>':''}</div><b style="font-size:.9rem">${esc((p.variacao&&p.variacao.nome)||p.produto||'—')}</b>
             ${g.ops.length>1&&p.produto?`<div class="mini">${esc(p.produto)}</div>`:''}</div>
           <div><div class="k">Prêmio total</div><div class="tot">${ppMoeda(p.premioTotal)}</div><div class="mini">líquido ${ppMoeda(p.premioLiquido)}</div></div>
           <div><div class="k">Franquia · pagamento</div><div style="font-size:.84rem;font-weight:600">${p.franquia&&p.franquia.valor?ppMoeda(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?' <span class="mini">'+esc(p.franquia.tipo)+'</span>':''}</div>
@@ -13688,14 +13701,20 @@ VIEWS.orcamento=function(leadId){
       </div></div>`;
 
     /* ---- 3. o que o cliente vê ---- */
-    const sugOps=grupos.map(g=>({g,txt:(g.ops.find(p=>p.recomendacaoCliente)||{}).recomendacaoCliente||''}));
+    const vidaSug=ORC.ramo==='vida';
+    const sugOps=vidaSug?(()=>{ const L=[]; const opsV=orcOpsVida();
+        const iaRec=ORC.propostas.find(p=>p.__recIA)||ORC.propostas.find(p=>p.recomendada);
+        if(ORC.analise&&ORC.analise.resumoParaCliente&&iaRec) L.push({g:{k:'ia:'+orcOpKey(iaRec),nome:'Análise completa da IA — destaca a Opção '+(opsV.indexOf(iaRec)+1)+' ('+((iaRec.variacao&&iaRec.variacao.nome)||iaRec.produto||iaRec.seguradora)+')'},txt:ORC.analise.resumoParaCliente});
+        opsV.forEach((p,i)=>L.push({g:{k:'op:'+orcOpKey(p),nome:'Opção '+(i+1)+' · '+((p.variacao&&p.variacao.nome)||p.produto||p.seguradora)+' — '+ppMoeda(p.premioTotal)+'/ano'},txt:p.recomendacaoCliente||''}));
+        return L; })()
+      :grupos.map(g=>({g,txt:(g.ops.find(p=>p.recomendacaoCliente)||{}).recomendacaoCliente||''}));
     const sel=ORC.sugestaoGrupo;
     const tg=(id,on,t,s,fn)=>`<div class="orc-tg"><div class="t"><b>${t}</b><span>${s}</span></div><label class="sw"><input type="checkbox" ${on?'checked':''} onchange="${fn}"><span></span></label></div>`;
-    h+=`<div class="orc-sec" id="orcS3"><div class="hd"><h3><span class="n">3</span> O que o cliente vê</h3><span class="dica">a IA escreveu uma sugestão para cada seguradora — escolha uma</span></div><div class="bd">
+    h+=`<div class="orc-sec" id="orcS3"><div class="hd"><h3><span class="n">3</span> O que o cliente vê</h3><span class="dica">${ORC.ramo==='vida'?'escolha qual opção destacar e o texto que vai junto':'a IA escreveu uma sugestão para cada seguradora — escolha uma'}</span></div><div class="bd">
       <div style="font-weight:700;font-size:.86rem;margin-bottom:8px">Sugestão do consultor</div>
       <div class="orc-sug">
         ${sugOps.map(({g,txt})=>`<label class="${sel===g.k?'on':''}"><b><input type="radio" name="orcSug" ${sel===g.k?'checked':''} onchange="orcEscolherSugestao('${esc(g.k).replace(/'/g,"\\'")}')" style="width:auto"> ${esc(g.nome)}</b>
-          <p>${txt?esc(txt):'<i>Sem texto da IA para esta seguradora — escreva abaixo.</i>'}</p></label>`).join('')}
+          <p>${txt?esc(txt):'<i>Sem texto da IA para '+(vidaSug?'esta opção':'esta seguradora')+' — escreva abaixo.</i>'}</p></label>`).join('')}
         <label class="${sel==='__nenhuma'?'on':''}"><b><input type="radio" name="orcSug" ${sel==='__nenhuma'?'checked':''} onchange="orcEscolherSugestao('__nenhuma')" style="width:auto"> Não mostrar sugestão</b>
           <p>O cliente vê as opções sem destaque e sem o texto do consultor.</p></label>
       </div>
@@ -14162,7 +14181,7 @@ const NE_RAMOS={
   vida:{nome:'Seguro de Vida',
     cob:[['morte','Morte por qualquer causa (básica)'],['morte_ac','Morte acidental'],['ipa','Invalidez permanente total ou parcial por acidente (IPA)'],
       ['ipa_maj','IPA majorada (profissões que dependem das mãos: médicos, dentistas, veterinários)'],['itp','Invalidez funcional permanente por doença (IFPD)'],
-      ['dg','Doenças graves'],['cancer','Diagnóstico de câncer'],['dih','Diária de internação hospitalar (DIH)'],['dih_uti','Diária de internação em UTI'],
+      ['dg','Doenças graves (inclui diagnóstico de câncer)'],['dih','Diária de internação hospitalar (DIH)'],['dih_uti','Diária de internação em UTI'],
       ['dmho','Despesas médicas, hospitalares e odontológicas (DMHO)'],['dit','Diária por incapacidade temporária (DIT)'],['dit_ler','DIT — LER/DORT, LTC e hérnia'],
       ['desemprego','Perda de renda por desemprego involuntário'],['funeral','Funeral individual'],['funeral_fam','Funeral familiar']],
     ass:[['funeral_serv','Assistência funeral (serviço)'],['telemedicina','Telemedicina']]}
@@ -14232,10 +14251,11 @@ SOBRE VIDA
 - TODAS AS COBERTURAS EM TODAS AS OPÇÕES: em "coberturas" de CADA opção liste TODAS as chaves de cobertura da lista abaixo, mesmo as que aquela opção não contratou. Não contratada = "contratada": false e "limite": null. Assim o cliente enxerga o que está deixando de levar.
 - FRANQUIA e CARÊNCIA: preencha SEMPRE que o PDF trouxer, por cobertura, em texto curto — "franquia": "15 dias" (comum na DIT e na DIH), "carencia": "6 meses" (comum em doenças graves, DIT, funeral). Sem informação no PDF: null.
 - DESCRIÇÃO DE CADA COBERTURA ("descricao"), para o cliente ler:
-  · Se o PDF/condições da seguradora DESCREVEM a cobertura, transcreva a descrição COMPLETA e fiel, sem resumir. Em DOENÇAS GRAVES (e diagnóstico de câncer) liste TODAS as doenças/condições cobertas que o PDF trouxer, uma por uma, separadas por "; " — não corte a lista, não escreva "entre outras". Inclua também as exclusões ou condições importantes que o PDF citar (ex.: "câncer de pele não melanoma não está coberto"). Use "descricaoGeral": false.
+  · Se o PDF/condições da seguradora DESCREVEM a cobertura, transcreva a descrição COMPLETA e fiel, sem resumir. Em DOENÇAS GRAVES liste TODAS as doenças/condições cobertas que o PDF trouxer, uma por uma, separadas por "; " — não corte a lista, não escreva "entre outras". Inclua também as exclusões ou condições importantes que o PDF citar (ex.: "câncer de pele não melanoma não está coberto"). Use "descricaoGeral": false.
   · Se a seguradora NÃO descreve, escreva você uma explicação geral, simples e correta do que aquela cobertura costuma garantir no mercado, com um exemplo do dia a dia, e use "descricaoGeral": true.
   · Descreva também as coberturas NÃO contratadas (geral, se o PDF não trouxer), para o cliente entender o que poderia incluir.
-- MESMA SEGURADORA, VÁRIAS OPÇÕES: no vida é comum apresentar UMA seguradora com várias opções (capitais/planos diferentes). Crie UMA opção para CADA uma, com "variacao.nome" curto e claro ("Opção 1 · Essencial", "Opção 2 · Completa com DIT"), para o cliente comparar lado a lado.
+- DIAGNÓSTICO DE CÂNCER não é linha separada: se a cotação trouxer, ele faz parte de DOENÇAS GRAVES (chave "dg") — some ao texto da descrição e, se tiver capital próprio, informe no "limite" (ex.: "R$ 30.000,00 · câncer R$ 30.000,00").
+- MESMA SEGURADORA, VÁRIAS OPÇÕES: no vida é comum apresentar UMA seguradora com várias opções (capitais/planos diferentes). Crie UMA opção para CADA uma, com "variacao.nome" curto dizendo o nível de proteção ("Essencial", "Intermediária", "Completa com DIT") — sem número, o sistema numera da mais barata para a mais cara.
 - Preencha "objeto" com o segurado: nome, idade e profissão (sem CPF).
 - Prêmio de vida costuma ser MENSAL: informe "premioTotal" ANUAL e preencha "premioMensal" quando o PDF trouxer o valor mensal.
 
