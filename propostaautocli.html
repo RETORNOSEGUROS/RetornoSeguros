@@ -90,6 +90,7 @@ details.cmp summary h2{margin:0}
 details.cmp .ver{font-size:.82rem;font-weight:600;color:var(--blue)}
 details.cmp .ver::after{content:' ▾'}details.cmp[open] .ver::after{content:' ▴'}
 @media print{details.cmp>*{display:block}.ibtn{display:none}}
+.desc{color:var(--ok);font-weight:600}
 .foot{text-align:center;color:var(--mut);font-size:.78rem;margin-top:24px}
 .load{text-align:center;padding:80px 16px;color:var(--mut)}
 /* modal */
@@ -135,7 +136,7 @@ let O=null;
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const R=n=>(Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtD=s=>{ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||'')); return m?m[3]+'/'+m[2]+'/'+m[1]:(s||''); };
-const FORMAS={cartao:'Cartão de crédito',debito:'Débito em conta',boleto:'Boleto',carne:'Carnê',avista:'À vista'};
+const FORMAS={cartao:'Cartão de crédito',debito:'Débito em conta',boleto:'Boleto',avista:'À vista'};
 const ASSIST=['assist','reserva','vidros','farois','reparos','parachoque','roda','pintura','buracos','chaveiro','residencia','carta'];
 /* qualquer valor com centavos dentro de um texto vira R$ 0.000,00 (4070.49 · 4.070,49 · R$4070,49) */
 function fmtTxt(t){
@@ -184,7 +185,7 @@ async function carregar(){
 function formaNorm(f){
   const t=String(f||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
   if(/cart|credit/.test(t)) return 'cartao'; if(/debit|conta corrente/.test(t)) return 'debito';
-  if(/bolet|ficha/.test(t)) return 'boleto'; if(/carn/.test(t)) return 'carne'; if(/vista|pix|unica/.test(t)) return 'avista';
+  if(/bolet|ficha|carn/.test(t)) return 'boleto'; if(/vista|pix|unica/.test(t)) return 'avista';
   return t;
 }
 function pagamentosDe(p){
@@ -197,12 +198,26 @@ function limpaProduto(s){
 }
 const ehResid=c=>c.chave==='residencia'||/resid[êe]nc|domic[íi]li/i.test(String(c.nome||''));
 const naoContratada=c=>c.contratada===false||/n[ãa]o contratad|n[ãa]o inclu/i.test(String(c.lmi||''));
-function cobsDe(p){ return (p.coberturas||[]).filter(c=>!naoContratada(c)&&!ehResid(c)); }
+const PERMIT_COB=['casco','rcf_dm','rcf_dc','rcf_dme','app','carta'], PERMIT_ASS=['assist','reserva','vidros','reparos','parachoque','pintura'];
+const APP_SUB={app_m:'Morte',app_i:'Invalidez',app_dmho:'Despesas médicas',app:''};
+function cobsDe(p){
+  const out={}; 
+  (p.coberturas||[]).filter(c=>!naoContratada(c)&&!ehResid(c)).forEach(c=>{
+    let k=c.chave==='farois'?'vidros':c.chave;
+    if(k in APP_SUB){ const t=lmiTxt(c.lmi); const parte=(APP_SUB[k]?APP_SUB[k]+(t?' '+t:''):t);
+      if(!out.app) out.app={chave:'app',nome:'Acidentes Pessoais Passageiros',partes:[]}; if(parte) out.app.partes.push(parte); return; }
+    if(!PERMIT_COB.includes(k)&&!PERMIT_ASS.includes(k)) return;
+    if(!out[k]) out[k]=Object.assign({},c,{chave:k});
+    else if(!lmiTxt(out[k].lmi)&&lmiTxt(c.lmi)) out[k].lmi=c.lmi;
+  });
+  if(out.app){ out.app.lmi=out.app.partes.join(' · ')||'Incluída'; }
+  return Object.values(out);
+}
 
 /* nome padrão e explicação simples de cada cobertura (o "i") */
 const LABEL={casco:'Casco — colisão, incêndio, roubo e furto',rcf_dm:'Danos materiais a terceiros',rcf_dc:'Danos corporais a terceiros',
   rcf_dme:'Danos morais e estéticos',app_m:'Acidentes pessoais — morte (por passageiro)',app_i:'Acidentes pessoais — invalidez (por passageiro)',
-  app_dmho:'Despesas médico-hospitalares',app:'Acidentes pessoais de passageiros',defesa:'Custos de defesa',extras:'Despesas extraordinárias',carta:'Carta Verde (Mercosul)',
+  app_dmho:'Despesas médico-hospitalares',app:'Acidentes Pessoais Passageiros',defesa:'Custos de defesa',extras:'Despesas extraordinárias',carta:'Carta Verde (Mercosul)',
   assist:'Assistência 24h / guincho',reserva:'Carro reserva',vidros:'Vidros, faróis e retrovisores',farois:'Faróis, lanternas e retrovisores',
   reparos:'Pequenos reparos / martelinho',parachoque:'Troca de para-choque',roda:'Pneu, roda e suspensão',pintura:'Pintura e lataria',
   buracos:'Proteção contra buracos',chaveiro:'Chaveiro'};
@@ -214,7 +229,7 @@ const INFO={
   app_m:'Indenização para a família de quem estava no seu carro, em caso de morte por acidente.',
   app_i:'Indenização para quem estava no seu carro e ficou com alguma invalidez permanente depois do acidente.',
   app_dmho:'Reembolsa atendimento médico e hospitalar de quem estava no seu carro na hora do acidente. Ex.: pronto-socorro e exames.',
-  app:'Indenização para os passageiros do seu carro em caso de acidente.',
+  app:'Protege quem está no seu carro: indenização em caso de morte ou invalidez e reembolso de despesas médicas depois de um acidente. Ex.: um passageiro se machuca e o atendimento no hospital é reembolsado.',
   defesa:'Paga advogado e custos do processo se você precisar se defender na Justiça por causa de um acidente.',
   extras:'Ajuda com gastos extras depois de uma perda total, como documentação e transporte enquanto resolve o novo carro.',
   carta:'Leva a cobertura para viagens de carro à Argentina, Uruguai, Paraguai e demais países do Mercosul.',
@@ -228,7 +243,7 @@ const INFO={
   pintura:'Repara riscos e arranhões na pintura e na lataria. Ex.: um risco de chave na porta.',
   buracos:'Cobre os estragos de cair num buraco, como pneu e roda.',
   chaveiro:'Chaveiro quando você perde a chave ou ela fica trancada dentro do carro.'};
-const ASSIST2=new Set(['assist','reserva','vidros','farois','reparos','parachoque','roda','pintura','buracos','chaveiro','carta']);
+const ASSIST2=new Set(PERMIT_ASS);
 
 /* ---------- grupos (uma seguradora = um card, com as variações dentro) ---------- */
 let GRUPOS=[]; const SEL={};
@@ -267,11 +282,15 @@ function seletorVariacoes(g){
     <span>${esc((p.variacao&&p.variacao.nome)||[vFr(p)&&'Franquia '+vFr(p).toLowerCase(),limpaProduto(p.produto)].filter(Boolean).join(' · ')||'Versão '+(p.__i+1))}</span>
     <b>${R(p.premioTotal)}</b></label>`).join('')}</div>`;
 }
+function avistaDesc(p){ const x=pagamentosDe(p).find(y=>y.forma==='avista'); const v=x&&(x.total||x.valor); return v&&p.premioTotal&&v<p.premioTotal-0.5?v:null; }
 function parcTxt(p){
   const pg=pagamentosDe(p); let best=null;
   pg.forEach(x=>{ if(!x.juros&&(!best||x.n>best.n)) best=x; });
-  if(best&&best.n>1) return 'ou até <b>'+best.n+'x de '+R(best.valor||(best.total||p.premioTotal)/best.n)+'</b> sem juros'+(FORMAS[best.forma]?' no '+FORMAS[best.forma].toLowerCase():'');
-  return '';
+  const av=avistaDesc(p);
+  let t='';
+  if(best&&best.n>1) t='ou até <b>'+best.n+'x de '+R(best.valor||(best.total||p.premioTotal)/best.n)+'</b> sem juros'+(FORMAS[best.forma]?' no '+FORMAS[best.forma].toLowerCase():'');
+  if(av) t+=(t?'<br>':'')+'<span class="desc">ou <b>'+R(av)+'</b> à vista com desconto</span>';
+  return t;
 }
 function render(){
   montarGrupos();
@@ -288,7 +307,7 @@ function render(){
   if(venc) h+=`<div class="aviso warn"><b>Esta cotação venceu em ${fmtD(O.validade)}.</b> Os valores podem ter mudado — <a href="${waLink('Olá! Minha cotação venceu, pode atualizar para mim?')}" target="_blank" rel="noopener">fale com a gente</a> para atualizar.</div>`;
   if(O.resumoCliente||O.observacoes) h+=`<div class="box"><h2>O que o seu consultor recomenda</h2><p style="font-size:.93rem">${esc(fmtTxt(O.resumoCliente||O.observacoes)).replace(/\n/g,'<br>')}</p>
     ${O.consultor?`<p style="font-size:.82rem;color:var(--mut);margin-top:8px">— ${esc(O.consultor)}, Retorno Seguros</p>`:''}</div>`;
-  if((O.pedido||[]).length) h+=`<div class="box"><h2>Você pediu</h2><div class="chips">${O.pedido.map(x=>`<div class="chip">${esc(x.item)}: <b>${esc(x.valor)}</b></div>`).join('')}</div></div>`;
+  if(false) h+=`<div class="box"><h2>Você pediu</h2><div class="chips">${O.pedido.map(x=>`<div class="chip">${esc(x.item)}: <b>${esc(x.valor)}</b></div>`).join('')}</div></div>`;
   if(O.apoliceAtual){ const a=O.apoliceAtual;
     h+=`<div class="box"><h2>Seu seguro hoje</h2><div class="chips">
       <div class="chip">Seguradora: <b>${esc(a.seguradora||'—')}</b></div>
@@ -296,7 +315,7 @@ function render(){
       ${a.franquia&&a.franquia.valor?`<div class="chip">Franquia: <b>${R(a.franquia.valor)}</b>${a.franquia.tipo?' ('+esc(a.franquia.tipo)+')':''}</div>`:''}</div></div>`; }
   h+=`<div class="ops">${GRUPOS.map(g=>opCard(g,ct,venc)).join('')}</div>`;
   h+=tabela();
-  if(cmpLinhas().length) h+=`<details class="box cmp"><summary><h2>Hoje × o que propomos</h2><span class="ver">ver comparação com o seu seguro atual</span></summary>
+  if(cmpLinhas().length) h+=`<details class="box cmp" ${ABERTO.hoje?'open':''} ontoggle="ABERTO.hoje=this.open"><summary><h2>Hoje × o que propomos</h2><span class="ver">ver comparação com o seu seguro atual</span></summary>
     <div class="tw" style="margin-top:12px"><table><thead><tr><th>Item</th><th>Hoje</th><th>Proposta</th><th></th></tr></thead><tbody>
     ${cmpLinhas().map(x=>`<tr><td><b>${esc(x.item)}</b></td><td>${esc(fmtTxt(x.hoje)||'—')}</td><td><b>${esc(fmtTxt(x.proposta)||'—')}</b></td><td>${stChip(x.status)}</td></tr>`).join('')}</tbody></table></div></details>`;
   h+=`<div class="box noprint" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between">
@@ -317,12 +336,12 @@ function opCard(g,ct,venc){
       ${O.mostrarLiquido?`<div class="liq">Líquido ${R(p.premioLiquido)} + IOF ${R(p.iof)}</div>`:''}</div>
     ${p.franquia&&p.franquia.valor?`<div class="fr">Franquia ${p.franquia.tipo?esc(String(p.franquia.tipo).toLowerCase())+' ':''}<b>${R(p.franquia.valor)}</b> <span style="color:var(--mut);font-size:.78rem">— sua parte em colisão</span></div>`:''}
     ${seletorVariacoes(g)}
-    <a class="vercob noprint" href="#comparar">Ver coberturas e serviços ↓</a>
+    <a class="vercob noprint" href="javascript:void(0)" onclick="ABERTO.comparar=true;const d=document.getElementById('comparar');d.open=true;d.scrollIntoView({behavior:'smooth'})">Ver coberturas e serviços ↓</a>
     <div class="op-f">${escolhida?'<div class="aviso ok" style="margin:0;text-align:center"><b>Opção escolhida ✓</b></div>'
       :`<button class="btn btn-p" ${venc||ct?'disabled':''} onclick="abrirContratar(${p.__i})">Contratar ${g.ops.length>1?'esta versão':'esta opção'}</button>`}</div>
   </article>`;
 }
-let INFO_ABERTO={};
+let INFO_ABERTO={}; const ABERTO={};
 function abrirInfo(k){ INFO_ABERTO[k]=!INFO_ABERTO[k]; const el=document.getElementById('inf_'+k); if(el) el.style.display=INFO_ABERTO[k]?'table-row':'none'; }
 function tabela(){
   const sels=GRUPOS.map(selDe); if(!sels.length) return '';
@@ -333,24 +352,24 @@ function tabela(){
   const cel=(p,l)=>{ const c=cobsDe(p).find(x=>chaveDe(x)===l.k);
     if(!c) return '<span class="no">—</span>'; const t=lmiTxt(c.lmi);
     return '<b style="color:var(--ok)">✓</b>'+(t?'<div style="font-size:.76rem">'+esc(t)+'</div>':''); };
+  const ord=k=>{ const i=PERMIT_COB.concat(PERMIT_ASS).indexOf(k); return i<0?99:i; };
+  linhas.cob.sort((a,b)=>ord(a.k)-ord(b.k)); linhas.ass.sort((a,b)=>ord(a.k)-ord(b.k));
   const n=sels.length+1; let idx=0;
   const bloco=(tit,L)=>!L.length?'':`<tr class="sec"><td colspan="${n}">${tit}</td></tr>`+L.map(l=>{ const id='r'+(idx++);
     return `<tr><td>${esc(l.nome)}${l.info?` <button class="ibtn" onclick="abrirInfo('${id}')" aria-label="O que é">i</button>`:''}</td>${sels.map(p=>`<td>${cel(p,l)}</td>`).join('')}</tr>
       ${l.info?`<tr class="info" id="inf_${id}" style="display:${INFO_ABERTO[id]?'table-row':'none'}"><td colspan="${n}">${esc(fmtTxt(l.info))}</td></tr>`:''}`; }).join('');
-  const pedidos=[]; sels.forEach(p=>(p.atende||[]).forEach(x=>{ if(!pedidos.includes(x.pedido)) pedidos.push(x.pedido); }));
-  const st={ok:['✓','var(--ok)'],parcial:['≈','var(--warn)'],nao:['✕','var(--bad)']};
-  const pedHtml=!pedidos.length?'':`<tr class="sec"><td colspan="${n}">O que você pediu</td></tr>`+pedidos.map(pd=>`<tr><td>${esc(fmtTxt(pd))}</td>${sels.map(p=>{
-      const x=(p.atende||[]).find(y=>y.pedido===pd); if(!x) return '<td><span class="no">—</span></td>'; const s=st[x.status]||st.parcial;
-      return `<td><b style="color:${s[1]}">${s[0]}</b>${x.entregue?'<div style="font-size:.74rem;color:var(--mut)">'+esc(fmtTxt(x.entregue))+'</div>':''}</td>`; }).join('')}</tr>`).join('');
-  return `<div class="box" id="comparar"><h2>Comparar lado a lado</h2>
-    <p style="font-size:.82rem;color:var(--mut);margin:-4px 0 10px">Toque no <span class="ibtn" style="pointer-events:none">i</span> para entender cada cobertura. Mudou a versão no card? A tabela acompanha.</p>
+  /* franquias por peça (vidros, faróis, retrovisores...) — aparece em seguro novo e renovação */
+  const itens=[]; sels.forEach(p=>(p.franquiasDetalhe||[]).forEach(f=>{ if(f&&f.item&&!itens.includes(f.item)) itens.push(f.item); }));
+  const frqHtml=!itens.length?'':`<tr class="sec"><td colspan="${n}">Franquias por peça</td></tr>`+itens.map(it=>`<tr><td>${esc(it)}</td>${sels.map(p=>{
+      const f=(p.franquiasDetalhe||[]).find(y=>y.item===it); return `<td>${f&&f.valor!=null?R(f.valor):'<span class="no">—</span>'}</td>`; }).join('')}</tr>`).join('');
+  return `<details class="box cmp" id="comparar" ${ABERTO.comparar?'open':''} ontoggle="ABERTO.comparar=this.open"><summary><h2>Comparar lado a lado</h2><span class="ver">ver coberturas e serviços</span></summary>
+    <p style="font-size:.82rem;color:var(--mut);margin:12px 0 10px">Toque no <span class="ibtn" style="pointer-events:none">i</span> para entender cada item. Mudou a versão no card? A tabela acompanha.</p>
     <div class="tw"><table><thead><tr><th style="min-width:190px">Cobertura</th>${sels.map(p=>`<th>${esc(p.seguradora)}${p.variacao&&p.variacao.nome?`<div style="font-weight:400;font-size:.7rem;color:var(--mut)">${esc(p.variacao.nome)}</div>`:''}${p.recomendada?'<div style="font-size:.68rem;color:var(--sky)">recomendada</div>':''}</th>`).join('')}</tr></thead><tbody>
-    ${bloco('Coberturas',linhas.cob)}${bloco('Assistências e serviços',linhas.ass)}${pedHtml}
-    <tr class="sec"><td colspan="${n}">Valores</td></tr>
-    <tr><td><b>Franquia</b></td>${sels.map(p=>`<td>${p.franquia&&p.franquia.valor?R(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?'<div style="font-size:.72rem;color:var(--mut)">'+esc(p.franquia.tipo)+'</div>':''}</td>`).join('')}</tr>
-    <tr><td>Parcelamento</td>${sels.map(p=>{ const t=parcTxt(p); return `<td style="font-size:.8rem">${t?t.replace(/^ou /,''):'à vista ou a combinar'}</td>`; }).join('')}</tr>
-    <tr style="background:#eff6ff"><td><b>Prêmio total</b></td>${sels.map(p=>`<td><b style="color:var(--navy)">${R(p.premioTotal)}</b></td>`).join('')}</tr>
-  </tbody></table></div></div>`;
+    ${bloco('Coberturas',linhas.cob)}${bloco('Assistências e serviços',linhas.ass)}
+    <tr class="sec"><td colspan="${n}">Franquia do casco</td></tr>
+    <tr><td>Valor que você paga em colisão</td>${sels.map(p=>`<td>${p.franquia&&p.franquia.valor?R(p.franquia.valor):'—'}${p.franquia&&p.franquia.tipo?'<div style="font-size:.72rem;color:var(--mut)">'+esc(p.franquia.tipo)+'</div>':''}</td>`).join('')}</tr>
+    ${frqHtml}
+  </tbody></table></div></details>`;
 }
 
 /* ---------- contratar ---------- */
@@ -377,7 +396,7 @@ function modalRender(){
     <div class="resumo"><b>${esc(p.seguradora)}</b>${p.variacao&&p.variacao.nome?' · '+esc(p.variacao.nome):(p.produto?' · '+esc(limpaProduto(p.produto)):'')}<br>Prêmio total: <b>${R(p.premioTotal)}</b></div>
     <div class="fg"><label>Forma de pagamento</label></div>
     <div class="formas">${CT.formas.map(f=>`<div class="forma ${CT.forma===f?'on':''}" onclick="CT.forma='${f}';modalRender()">${esc(FORMAS[f])}</div>`).join('')}</div>
-    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>x.combinar?`<option value="0">Quero parcelar — o consultor confirma as condições</option>`:`<option value="${x.n}">${x.n}x de ${R(x.valor)}${x.juros?' (com juros)':' sem juros'}</option>`).join('')}</select>
+    <div class="fg"><label>Parcelas</label><select id="cParc">${ps.map(x=>x.combinar?`<option value="0">Quero parcelar — o consultor confirma as condições</option>`:`<option value="${x.n}">${CT.forma==='avista'?'À vista: '+R(x.valor)+(x.valor<CT.p.premioTotal-0.5?' (com desconto)':''):x.n+'x de '+R(x.valor)+(x.juros?' (com juros)':' sem juros')}</option>`).join('')}</select>
       ${CT.semTabela?'<div style="font-size:.78rem;color:var(--mut);margin-top:5px">O parcelamento desta opção é confirmado pelo seu consultor.</div>':''}</div>
     ${CT.forma==='cartao'?`
       <div class="fg"><label>Nome impresso no cartão</label><input id="cNome" autocomplete="cc-name" placeholder="Como está no cartão"></div>
@@ -434,7 +453,7 @@ async function enviar(){
     await authPronta;
     const ref=await db.collection('contratacoes').add({
       orcamentoId:ID, leadId:O.leadId||null, clienteNome:(O.cliente&&O.cliente.nome)||null,
-      opcaoIndex:CT.i, seguradora:p.seguradora||null, produto:[limpaProduto(p.produto),p.variacao&&p.variacao.nome].filter(Boolean).join(' · ')||null, premioTotal:p.premioTotal||null,
+      opcaoIndex:CT.i, seguradora:p.seguradora||null, produto:[limpaProduto(p.produto),p.variacao&&p.variacao.nome].filter(Boolean).join(' · ')||null, premioTotal:(CT.forma==='avista'&&opc.valor)?Math.round(opc.valor*100)/100:(p.premioTotal||null),
       forma:CT.forma, parcelas:n||null, valorParcela:opc.valor?Math.round(opc.valor*100)/100:null,
       cartao, debito, status:'novo', origem:'link_proposta',
       criadoEm:firebase.firestore.FieldValue.serverTimestamp() });
