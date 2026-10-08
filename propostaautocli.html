@@ -210,7 +210,7 @@ const naoContratada=c=>c.contratada===false||/n[ãa]o contratad|n[ãa]o inclu/i.
 const RAMOS={
   auto:{nome:'seguro auto',cob:['casco','rcf_dm','rcf_dc','rcf_dme','app','carta'],ass:['assist','reserva','vidros','reparos','parachoque','pintura']},
   residencial:{nome:'seguro residencial',cob:['incendio','eletricos','roubo','vendaval','rc_familiar','aluguel'],ass:['assist24','vidros_res','mudanca']},
-  vida:{nome:'seguro de vida',cob:['morte','morte_ac','ipa','ipa_maj','itp','dg','cancer','dih','dih_uti','dmho','dit','dit_ler','desemprego','funeral','funeral_fam'],ass:['funeral_serv','telemedicina']}};
+  vida:{nome:'seguro de vida',cob:['morte','morte_ac','ipa','ipa_maj','itp','dg','dih','dih_uti','dmho','dit','dit_ler','desemprego','funeral','funeral_fam'],ass:['funeral_serv','telemedicina']}};
 let RAMO='auto';
 let PERMIT_COB=RAMOS.auto.cob, PERMIT_ASS=RAMOS.auto.ass;
 const APP_SUB={app_m:'Morte',app_i:'Invalidez',app_dmho:'Despesas médicas',app:''};
@@ -296,6 +296,7 @@ Object.assign(INFO,{
 let GRUPOS=[]; const SEL={};
 function montarGrupos(){
   const ps=(O.propostas||[]).map((p,i)=>Object.assign({__i:i},p));
+  if(RAMO==='vida') ps.sort((a,b)=>(a.premioTotal||9e9)-(b.premioTotal||9e9));   /* menor custo à esquerda */
   const mapa={}; GRUPOS=[];
   ps.forEach(p=>{ const k=RAMO==='vida'?'op'+p.__i:String(p.grupo||p.seguradora||'').trim().toLowerCase();
     if(!mapa[k]){ mapa[k]={k,nome:p.seguradora,ops:[]}; GRUPOS.push(mapa[k]); } mapa[k].ops.push(p); });
@@ -375,25 +376,26 @@ function render(){
 function opCard(g,ct,venc){
   const p=selDe(g); const rec=g.ops.some(x=>x.recomendada);
   const vidaN=RAMO==='vida'?GRUPOS.indexOf(g)+1:0;
-  const vNome=RAMO==='vida'?((p.variacao&&p.variacao.nome)||limpaProduto(p.produto)||'Opção '+vidaN):'';
+  const vNome=RAMO==='vida'?nomeOpVida(p):'';
+  const mensal=RAMO==='vida'?((O.premiosMensais&&O.premiosMensais[p.__i])||p.premioMensal||(p.premioTotal?p.premioTotal/12:null)):null;
   const escolhida=ct&&g.ops.some(x=>x.__i===ct.opcaoIndex);
   return `<article class="op ${rec?'rec':''}">
     ${rec?'<div class="rib">Nossa recomendação</div>':''}
-    ${RAMO==='vida'?`<div class="op-h"><div class="cia">${/^op[çc][ãa]o\s*\d/i.test(vNome)?esc(vNome):'Opção '+vidaN+(vNome?' · '+esc(vNome):'')}</div><div class="prod">${esc(p.seguradora)}</div></div>`
+    ${RAMO==='vida'?`<div class="op-h"><div class="cia">Opção ${vidaN}${vNome?' · '+esc(vNome):''}</div><div class="prod">${esc(p.seguradora)}</div></div>`
       :`<div class="op-h"><div class="cia">${esc(p.seguradora)}</div><div class="prod">${esc(limpaProduto(p.produto))}${g.ops.length>1?' · '+g.ops.length+' versões':''}</div></div>`}
-    <div class="preco"><div class="tot">${R(p.premioTotal)} <small>no ano</small></div>
+    ${RAMO==='vida'?`<div class="preco"><div class="tot">${R(mensal)} <small>por mês</small></div><div class="liq">${R(p.premioTotal)} no ano</div></div>`:`<div class="preco"><div class="tot">${R(p.premioTotal)} <small>no ano</small></div>
       ${O.premiosMensais&&O.premiosMensais[p.__i]?`<div class="parc">equivale a <b>${R(O.premiosMensais[p.__i])} por mês</b></div>`:''}
       <div class="parc">${parcTxt(p)}</div>
-      ${O.mostrarLiquido?`<div class="liq">Líquido ${R(p.premioLiquido)} + IOF ${R(p.iof)}</div>`:''}</div>
+      ${O.mostrarLiquido?`<div class="liq">Líquido ${R(p.premioLiquido)} + IOF ${R(p.iof)}</div>`:''}</div>`}
     ${p.franquia&&p.franquia.valor?`<div class="fr">Franquia ${p.franquia.tipo?esc(String(p.franquia.tipo).toLowerCase())+' ':''}<b>${R(p.franquia.valor)}</b> <span style="color:var(--mut);font-size:.78rem">${RAMO==='auto'?'— sua parte em colisão':''}</span></div>`:''}
     ${seletorVariacoes(g)}
-    ${RAMO==='vida'?resumoVida(p):''}
     <a class="vercob noprint" href="javascript:void(0)" onclick="ABERTO.comparar=true;const d=document.getElementById('comparar');d.open=true;d.scrollIntoView({behavior:'smooth'})">Ver coberturas e serviços ↓</a>
     <div class="op-f">${escolhida?'<div class="aviso ok" style="margin:0;text-align:center"><b>Opção escolhida ✓</b></div>'
       :`<button class="btn btn-p" ${venc||ct?'disabled':''} onclick="abrirContratar(${p.__i})">Contratar ${g.ops.length>1?'esta versão':'esta opção'}</button>`}</div>
   </article>`;
 }
 let INFO_ABERTO={}; const ABERTO={};
+const nomeOpVida=p=>String((p.variacao&&p.variacao.nome)||limpaProduto(p.produto)||'').replace(/^\s*op[çc][ãa]o\s*\d+\s*[·\-–:|]?\s*/i,'').trim();
 /* vida: as principais coberturas da opção, com o valor em destaque */
 function resumoVida(p){
   const L=cobsDe(p).filter(c=>!naoContratada(c)&&lmiTxt(c.lmi)&&!ASSIST2.has(c.chave)).slice(0,6);
@@ -445,19 +447,19 @@ function tabela(){
       const f=(p.franquiasDetalhe||[]).find(y=>y.item===it); return `<td>${f&&f.valor!=null?'<b class="vl">'+R(f.valor)+'</b>':'<span class="no">—</span>'}</td>`; }).join('')}</tr>`).join('');
   /* vida: o preço de cada opção logo no topo, para comparar lado a lado */
   const precoHtml=!vida?'':`<tr class="sec"><td colspan="${n}">Investimento</td></tr>
-    ${O.premiosMensais&&sels.some(p=>O.premiosMensais[p.__i])?`<tr class="pr"><td>Por mês</td>${sels.map(p=>`<td><b class="vl big">${O.premiosMensais[p.__i]?R(O.premiosMensais[p.__i]):'—'}</b></td>`).join('')}</tr>`:''}
+    <tr class="pr"><td>Por mês</td>${sels.map(p=>{ const m=(O.premiosMensais&&O.premiosMensais[p.__i])||p.premioMensal||(p.premioTotal?p.premioTotal/12:null); return `<td><b class="vl big">${m?R(m):'—'}</b></td>`; }).join('')}</tr>
     <tr class="pr"><td>No ano</td>${sels.map(p=>`<td><b class="vl">${R(p.premioTotal)}</b></td>`).join('')}</tr>`;
-  const cab=p=>vida?(()=>{ const i=sels.indexOf(p)+1; const vn=(p.variacao&&p.variacao.nome)||limpaProduto(p.produto)||'';
-      return `${/^op[çc][ãa]o\s*\d/i.test(vn)?esc(vn):'Opção '+i+(vn?`<div style="font-weight:600;font-size:.74rem">${esc(vn)}</div>`:'')}<div style="font-weight:400;font-size:.7rem;color:var(--mut)">${esc(p.seguradora)}</div>`; })()
+  const cab=p=>vida?(()=>{ const i=sels.indexOf(p)+1; const vn=nomeOpVida(p);
+      return `${'Opção '+i+(vn?`<div style="font-weight:600;font-size:.74rem">${esc(vn)}</div>`:'')}<div style="font-weight:400;font-size:.7rem;color:var(--mut)">${esc(p.seguradora)}</div>`; })()
     :`${esc(p.seguradora)}${p.variacao&&p.variacao.nome?`<div style="font-weight:400;font-size:.7rem;color:var(--mut)">${esc(p.variacao.nome)}</div>`:''}`;
   return `<details class="box cmp" id="comparar" ${(ABERTO.comparar!=null?ABERTO.comparar:vida)?'open':''} ontoggle="ABERTO.comparar=this.open"><summary><h2>Comparar lado a lado</h2><span class="ver">${vida?'ver todas as coberturas, valores, franquias e carências':'ver coberturas e serviços'}</span></summary>
     <p style="font-size:.82rem;color:var(--mut);margin:12px 0 10px">Toque no <span class="ibtn" style="pointer-events:none">i</span> para entender cada item.${vida?' Coberturas marcadas como "não contratada" podem ser incluídas — é só pedir ao consultor.':' Mudou a versão no card? A tabela acompanha.'}</p>
     <div class="tw"><table><thead><tr><th style="min-width:190px">Cobertura</th>${sels.map(p=>`<th>${cab(p)}${p.recomendada?'<div style="font-size:.68rem;color:var(--sky)">recomendada</div>':''}</th>`).join('')}</tr></thead><tbody>
-    ${precoHtml}
     ${bloco('Coberturas',linhas.cob)}${bloco('Assistências e serviços',linhas.ass)}
     ${RAMO!=='auto'?'':`<tr class="sec"><td colspan="${n}">Franquia do casco</td></tr>
     <tr><td>Valor que você paga em colisão</td>${sels.map(p=>`<td>${p.franquia&&p.franquia.valor?'<b class="vl">'+R(p.franquia.valor)+'</b>':'—'}${p.franquia&&p.franquia.tipo?'<div style="font-size:.72rem;color:var(--mut)">'+esc(p.franquia.tipo)+'</div>':''}</td>`).join('')}</tr>`}
     ${frqHtml}
+    ${precoHtml}
   </tbody></table></div></details>`;
 }
 
