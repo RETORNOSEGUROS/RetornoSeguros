@@ -3169,7 +3169,9 @@ function leadCotacaoOutrosRamos(c){
     if(k==='capital'||k==='capitalSugerido'||k==='capitalBase'||k==='valorCotacao'||k==='valorPremio'||k==='valorTotal') return isNaN(Number(v))?esc(String(v)):money(Number(v));
     if(k==='dataNascimento'||k==='dataIda'||k==='dataVolta') return fmtData(v); if(typeof v==='object') return esc(JSON.stringify(v)); return esc(String(v)); };
   return chaves.map(k=>`<div class="mov-f"><div class="k">${SITE_ROT[k]}</div><div class="v">${val(k,c[k])}</div></div>`).join('')+
-    (cobs.length?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Coberturas que quer</div><div class="v">${cobs.map(k=>COB_ROT_SITE[k]||k).join(', ')}</div></div>`:'');
+    (cobs.length?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Coberturas que quer</div><div class="v">${cobs.map(k=>COB_ROT_SITE[k]||k).join(', ')}</div></div>`:'')+
+    (()=>{ const nao=(c.coberturas&&typeof c.coberturas==='object'&&!Array.isArray(c.coberturas))?Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&c.coberturas[k].ativo===false):[];
+      return nao.length?`<div class="mov-f" style="grid-column:1/-1"><div class="k">Disse "agora não" para</div><div class="v" style="color:var(--warn)">${nao.map(k=>esc(COB_ROT_SITE[k]||k)).join(', ')} <span style="font-weight:400;color:var(--text-3);font-size:.78rem">— vale oferecer de novo na proposta</span></div></div>`:''; })();
 }
 function leadCotacaoSite(c){
   if(!(c.veiculo||c.utilizacao||c.etapaSite||c.temSeguro||c.dadosSite||c.coberturas)) return '';
@@ -14219,9 +14221,12 @@ function neRespostasGenericas(c){
   Object.keys(SITE_ROT).forEach(k=>{ const v=c[k]; if(v==null||v===''||NE_CAMPOS_AUTO.includes(k)) return;
     let t=(SITE_VAL[k]&&SITE_VAL[k][v])||v; if(typeof t==='object') t=JSON.stringify(t);
     if(/^(valor|capital)/.test(k)&&!isNaN(Number(v))) t=money(Number(v));
+    if(k==='dataNascimento'&&/^\d{4}-\d{2}-\d{2}$/.test(String(v))) t=String(v).split('-').reverse().join('/');
     r.push([SITE_ROT[k],String(t)]); });
   let cobs=[]; if(c.coberturas&&typeof c.coberturas==='object'&&!Array.isArray(c.coberturas)) cobs=Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&(c.coberturas[k].ativo||c.coberturas[k].selecionada));
   if(cobs.length) r.push(['Coberturas que quer',cobs.map(k=>COB_ROT_SITE[k]||k).join(', ')]);
+  let nao=[]; if(c.coberturas&&typeof c.coberturas==='object'&&!Array.isArray(c.coberturas)) nao=Object.keys(c.coberturas).filter(k=>c.coberturas[k]&&c.coberturas[k].ativo===false);
+  if(nao.length) r.push(['Disse "agora não" para',nao.map(k=>COB_ROT_SITE[k]||k).join(', ')]);
   return r;
 }
 (function(){
@@ -14237,7 +14242,7 @@ function nePromptRamo(c,pr){
   const cfg=neCfgRamo(pr); const ren=neEhRenovacao(c); const ap=neApoliceAtualRamo(c);
   const resp=neRespostasGenericas(c).map(([k,v])=>'- '+k+': '+v).join('\n')||'- (o cliente não respondeu o questionário do site — use só os PDFs)';
   const pessoa=[['Nome',c.nome],['Nascimento',c.dataNascimento?fmtData(c.dataNascimento)+(idadeDe(c.dataNascimento)!=null?' ('+idadeDe(c.dataNascimento)+' anos)':''):null],
-    ['Sexo',c.sexo],['Estado civil',c.estadoCivil],['Profissão',c.profissao],['Cidade/UF',[c.cidade,c.estado].filter(Boolean).join('/')],
+    ['Sexo',({M:'Masculino',F:'Feminino'})[c.sexo]||c.sexo],['Estado civil',c.estadoCivil],['Profissão',c.profissao],['Cidade/UF',[c.cidade,c.estado].filter(Boolean).join('/')],
     ['Endereço',[c.endereco,c.numero,c.bairro,c.cidade&&c.estado?c.cidade+'/'+c.estado:c.cidade,c.cep?'CEP '+c.cep:null].filter(Boolean).join(', ')]].filter(x=>x&&x[1]).map(x=>'- '+x[0]+': '+x[1]).join('\n');
   const apTxt=ap?`\nAPÓLICE ATUAL CADASTRADA (confira com o PDF, o PDF manda): ${ap.seguradora||'—'} · vigência ${fmtData(ap.dataInicioVigencia)} a ${fmtData(ap.dataFimVigencia)} · prêmio total ${ap.valorPremio!=null?money(ap.valorPremio):'—'}
 - Coberturas: ${(ap.coberturasEstr||[]).map(x=>x.nome+' '+(x.lmi||'')).join('; ')||'—'}\n`:'';
@@ -14371,9 +14376,23 @@ FORMATO OBRIGATÓRIO DA RESPOSTA
     if(pr==='residencial') return tipo==='renov'
       ?`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você quer comparar/renovar o seu Seguro Residencial.\n\nPara darmos continuidade, preciso de:\n\n• Apólice atual (PDF)\n• Confirmar o endereço completo do imóvel (com CEP)\n• Se mudou algo no imóvel (reforma, piscina, placas solares, equipamentos novos)\n\nPode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras e te mostro o comparativo com o que você tem hoje.`
       :`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro Residencial.\n\nPara darmos continuidade ao atendimento, preciso de:\n\n• Endereço completo do imóvel (com CEP)\n• Tipo do imóvel (casa, apartamento, casa em condomínio) e se é moradia habitual ou veraneio\n• Valor aproximado do imóvel e dos bens dentro dele (móveis, eletrônicos)\n\nPode me enviar por aqui mesmo. Assim que eu receber, coto nas principais seguradoras para você.`;
-    if(pr==='vida') return tipo==='renov'
-      ?`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você quer comparar/revisar o seu Seguro de Vida.\n\nPara darmos continuidade, preciso de:\n\n• Apólice ou certificado atual (PDF)\n• Se mudou algo na sua profissão, renda ou família (filhos, casamento)\n\nPode me enviar por aqui mesmo. Assim que eu receber, monto o comparativo com o que você tem hoje.`
-      :`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. Vi que você demonstrou interesse em nossas soluções de Seguro de Vida.\n\nPara darmos continuidade ao atendimento, preciso de:\n\n• Data de nascimento\n• Profissão e se é CLT, autônomo(a) ou empresário(a)\n• Renda mensal aproximada (para dimensionar o capital)\n• Se tem dependentes (cônjuge, filhos)\n\nPode me responder por aqui mesmo. Com isso eu monto as opções nas principais seguradoras.`;
+    if(pr==='vida'){
+      /* pede só o que ainda falta — o site já traz nascimento, profissão, renda e família */
+      const d=Object.assign({},(typeof neFaltantesConhecidos==='function'&&(c.contatoId||c.clienteLeadId))?neFaltantesConhecidos(c):{},c);
+      const falta=[];
+      if(!d.cpf) falta.push('CPF');
+      if(!d.dataNascimento) falta.push('Data de nascimento');
+      if(!d.profissao) falta.push('Profissão e se é CLT, autônomo(a) ou empresário(a)');
+      if(!d.renda) falta.push('Renda mensal aproximada (para dimensionar o capital)');
+      if(!d.familia&&!d.estadoCivil) falta.push('Se tem dependentes (cônjuge, filhos)');
+      const renov=tipo==='renov'||c.temSeguroVida==='sim';
+      if(renov) falta.unshift('Apólice ou certificado do seguro de vida atual (PDF)');
+      const doSite=!!(c.profissao||c.renda||c.capital);
+      const abre=`Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${sou} da Retorno Seguros. `+(doSite?`Recebi o perfil de proteção que você montou no nosso site — ${genero==='a'?'obrigada':'obrigado'} por responder tudo!`:(renov?`Vi que você quer comparar/revisar o seu Seguro de Vida.`:`Vi que você demonstrou interesse em nossas soluções de Seguro de Vida.`));
+      if(!falta.length) return abre+`\n\nJá tenho tudo o que preciso. Vou cotar nas principais seguradoras e te envio as opções em seguida.`;
+      return abre+`\n\nPara eu cotar nas principais seguradoras, ${falta.length===1?'só falta':'preciso de'}:\n\n`+falta.map(x=>'• '+x).join('\n')
+        +`\n\nPode me responder por aqui mesmo. ${renov?'Assim que eu receber, monto o comparativo com o que você tem hoje.':'Com isso eu monto as opções para você.'}`;
+    }
     return msgAnt(c,tipo,consultor,genero);
   };
 })();
