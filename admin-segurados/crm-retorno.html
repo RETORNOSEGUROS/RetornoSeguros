@@ -9999,7 +9999,8 @@ function ppOrcamentoDoc(){
       validade:p.validade||null, vigenciaIni:p.vigenciaIni||null, vigenciaFim:p.vigenciaFim||null,
       franquia:p.franquia||{}, coberturas:p.coberturas.map(c=>({nome:c.nome,chave:c.chave,
         lmi:c.lmi==null?null:c.lmi, franquia:c.franquia==null?null:c.franquia,
-        premio:c.premio==null?null:c.premio, contratada:c.contratada!==false, detalhe:c.detalhe||null, explicacao:c.explicacao||null, assistencia:!!c.assistencia})),
+        premio:c.premio==null?null:c.premio, contratada:c.contratada!==false, detalhe:c.detalhe||null, explicacao:c.explicacao||null, assistencia:!!c.assistencia,
+        carencia:c.carencia||null, descricao:c.descricao||null, descricaoGeral:!!c.descricaoGeral})),
       grupo:p.grupo||p.seguradora||null, variacao:p.variacao||null,
       franquiasDetalhe:p.franquiasDetalhe||[], parcelas:p.parcelas||[],
       premioLiquido:p.premioLiquido, iof:p.iof, premioTotal:p.premioTotal,
@@ -12949,15 +12950,24 @@ function neOpcaoParaProposta(o,i){
   const chave=(k,nome)=>(CFG&&CFG.perm.has(k))?k:(CFG&&CFG.k!=='auto'?(k||'outros'):(NE_COB_K.has(k)?k:ppChaveCob(nome||'')));
   const naoTem=x=>/n[ãa]o contratad|n[ãa]o inclu|n[ãa]o possui/i.test(String(x.limite||x.detalhe||''));
   const resid=x=>(!CFG||CFG.k==='auto')&&x.chave==='residencia'||(!CFG||CFG.k==='auto')&&/resid[êe]nc|domic[íi]li|lar\b|casa/i.test(String(x.nome||''));
-  p.coberturas=(o.coberturas||[]).filter(x=>x&&(x.nome||x.chave)&&!naoTem(x)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
-    lmi:x.limite==null?null:x.limite,franquia:x.franquia==null?null:x.franquia,premio:neN(x.premio),contratada:true,detalhe:null,explicacao:x.explicacao||null}))
+  const ehVida=CFG&&CFG.k==='vida';
+  const zero=x=>x.contratada===false||naoTem(x)||x.limite==null||x.limite===''||/^(r\$\s*)?0+([.,]0+)?$/i.test(String(x.limite).trim());
+  p.coberturas=(o.coberturas||[]).filter(x=>x&&(x.nome||x.chave)&&(ehVida||!naoTem(x))).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
+    lmi:ehVida&&zero(x)?null:(x.limite==null?null:x.limite),franquia:x.franquia==null?null:x.franquia,carencia:x.carencia==null?null:String(x.carencia),premio:neN(x.premio),
+    contratada:ehVida?!zero(x):true,detalhe:null,explicacao:x.explicacao||null,descricao:x.descricao?String(x.descricao):null,descricaoGeral:!!x.descricaoGeral}))
     .concat((o.assistencias||[]).filter(x=>x&&(x.nome||x.chave)&&!naoTem(x)&&!resid(x)).map(x=>({nome:x.nome||ppRotuloCob(x.chave),chave:chave(x.chave,x.nome),
     lmi:x.detalhe||'contratada',franquia:null,premio:null,contratada:true,detalhe:null,assistencia:true,explicacao:x.explicacao||null})));
   /* só os 12 itens principais, cada um uma vez, na categoria certa */
   { const vis={}; const PERM=CFG?CFG.perm:NE_PERMITIDOS, SASS=CFG?CFG.sAss:NE_SAO_ASSIST, LST=CFG?CFG.cob.concat(CFG.ass):NE_CHAVES_COB.concat(NE_CHAVES_ASS);
     p.coberturas=p.coberturas.map(c=>{ if(c.chave==='farois') c.chave='vidros'; return c; })
-      .filter(c=>PERM.has(c.chave)).filter(c=>{ if(vis[c.chave]){ if(!lmiOk(vis[c.chave].lmi)&&lmiOk(c.lmi)) vis[c.chave].lmi=c.lmi; return false; } vis[c.chave]=c; return true; })
-      .map(c=>Object.assign(c,{assistencia:SASS.has(c.chave),nome:(LST.find(x=>x[0]===c.chave)||[0,c.nome])[1].replace(/ \(.*\)$/,'')})); }
+      .filter(c=>PERM.has(c.chave)).filter(c=>{ if(vis[c.chave]){ const v=vis[c.chave];
+        if(!lmiOk(v.lmi)&&lmiOk(c.lmi)){ v.lmi=c.lmi; v.contratada=c.contratada; }
+        ['descricao','carencia','franquia'].forEach(k=>{ if(!v[k]&&c[k]) v[k]=c[k]; }); return false; } vis[c.chave]=c; return true; })
+      .map(c=>Object.assign(c,{assistencia:SASS.has(c.chave),nome:(LST.find(x=>x[0]===c.chave)||[0,c.nome])[1].replace(/ \(.*\)$/,'')}));
+    /* vida: todas as coberturas que trabalhamos aparecem, mesmo zeradas — o cliente vê o que não está levando */
+    if(CFG&&CFG.k==='vida') LST.forEach(([k,nome])=>{ if(!vis[k]&&!SASS.has(k)) p.coberturas.push({nome:nome.replace(/ \(.*\)$/,''),chave:k,lmi:null,franquia:null,carencia:null,premio:null,
+      contratada:false,detalhe:null,explicacao:null,descricao:null,assistencia:false}); });
+    if(CFG&&CFG.k==='vida'){ const ord=k=>{ const i=LST.findIndex(x=>x[0]===k); return i<0?99:i; }; p.coberturas.sort((a,b)=>ord(a.chave)-ord(b.chave)); } }
   p.premioMensal=neN(o.premioMensal);
   function lmiOk(v){ return v!=null&&v!==''&&!/^contratad/i.test(String(v)); }
   p.recomendacaoCliente=o.recomendacaoCliente?String(o.recomendacaoCliente):null;
@@ -13007,7 +13017,7 @@ async function neImportarIA(leadId){
   ORC.mostrarApoliceAtual=true; ORC.mostrarComparativo=true;
   /* sugestão do consultor: começa na recomendada pela IA */
   const rp=ORC.propostas.find(p=>p.recomendada); ORC.sugestaoGrupo=rp?(rp.grupo||rp.seguradora):null;
-  if(rp&&rp.recomendacaoCliente) ORC.observacoes=rp.recomendacaoCliente;
+  if(rp&&rp.recomendacaoCliente&&!(ORC.ramo==='vida'&&ORC.analise&&ORC.analise.resumoParaCliente)) ORC.observacoes=rp.recomendacaoCliente;
   closeModal();
   if(leadId) neNota(leadId,'Orçamento montado pela IA com '+ORC.propostas.length+' opção(ões): '+ORC.propostas.map(p=>p.seguradora+' '+money(p.premioTotal)).join(' · '));
   location.hash='#orcamento'+(ORC.leadId?'/'+ORC.leadId:'');
@@ -13155,8 +13165,8 @@ function neBaseDaOpcao(p,ct){
     comissaoPct:p.comissaoPct!=null?p.comissaoPct:null,
     formaPagamento:formaCt, parcelas:ct&&ct.parcelas||null, valorParcela:ct&&ct.valorParcela||null,
     franquia:{valor:p.franquia&&p.franquia.valor!=null?p.franquia.valor:null,tipo:(p.franquia&&p.franquia.tipo)||''},
-    coberturas:cobs.filter(x=>!x.assistencia&&!PP_ASSIST_K.includes(x.chave)&&!['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,lmi:x.lmi==null?'':String(x.lmi)})),
-    assistencias:cobs.filter(x=>x.assistencia||PP_ASSIST_K.includes(x.chave)||['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,detalhe:x.lmi==null||x.lmi==='contratada'?'':String(x.lmi)})),
+    coberturas:cobs.filter(x=>x.contratada!==false&&!x.assistencia&&!PP_ASSIST_K.includes(x.chave)&&!['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,lmi:x.lmi==null?'':String(x.lmi)})),
+    assistencias:cobs.filter(x=>x.contratada!==false).filter(x=>x.assistencia||PP_ASSIST_K.includes(x.chave)||['pintura','chaveiro','residencia','farois','buracos'].includes(x.chave)).map(x=>({chave:x.chave,nome:x.nome,detalhe:x.lmi==null||x.lmi==='contratada'?'':String(x.lmi)})),
     inicioVigencia:neHoje(), obs:'' };
 }
 function neTxTrocarOpcao(i){
@@ -13609,7 +13619,9 @@ function orcAplicarSugestao(){
 }
 function orcEscolherSugestao(g){
   ORC.sugestaoGrupo=g;
-  if(g!=='__nenhuma'){ const p=ORC.propostas.find(x=>(x.grupo||x.seguradora)===g&&x.recomendacaoCliente); ORC.observacoes=p?p.recomendacaoCliente:(ORC.observacoes||''); }
+  if(g!=='__nenhuma'){ const p=ORC.propostas.find(x=>(x.grupo||x.seguradora)===g&&x.recomendacaoCliente);
+    /* vida: a análise completa (idade, profissão, urgência) vale mais que o texto curto da opção */
+    ORC.observacoes=(ORC.ramo==='vida'&&ORC.analise&&ORC.analise.resumoParaCliente)?ORC.analise.resumoParaCliente:(p?p.recomendacaoCliente:(ORC.observacoes||'')); }
   orcAplicarSugestao(); VIEWS.orcamento();
 }
 function orcPassos(){
@@ -14148,8 +14160,11 @@ const NE_RAMOS={
       ['rc_familiar','Responsabilidade civil familiar'],['aluguel','Perda ou pagamento de aluguel']],
     ass:[['assist24','Assistência 24h (chaveiro, encanador, eletricista)'],['vidros_res','Quebra de vidros e espelhos'],['mudanca','Mudança e guarda-móveis']]},
   vida:{nome:'Seguro de Vida',
-    cob:[['morte','Morte por qualquer causa'],['morte_ac','Morte acidental'],['ipa','Invalidez permanente por acidente'],['itp','Invalidez por doença'],
-      ['dg','Doenças graves'],['dit','Diária por incapacidade temporária'],['funeral','Auxílio funeral']],
+    cob:[['morte','Morte por qualquer causa (básica)'],['morte_ac','Morte acidental'],['ipa','Invalidez permanente total ou parcial por acidente (IPA)'],
+      ['ipa_maj','IPA majorada (profissões que dependem das mãos: médicos, dentistas, veterinários)'],['itp','Invalidez funcional permanente por doença (IFPD)'],
+      ['dg','Doenças graves'],['cancer','Diagnóstico de câncer'],['dih','Diária de internação hospitalar (DIH)'],['dih_uti','Diária de internação em UTI'],
+      ['dmho','Despesas médicas, hospitalares e odontológicas (DMHO)'],['dit','Diária por incapacidade temporária (DIT)'],['dit_ler','DIT — LER/DORT, LTC e hérnia'],
+      ['desemprego','Perda de renda por desemprego involuntário'],['funeral','Funeral individual'],['funeral_fam','Funeral familiar']],
     ass:[['funeral_serv','Assistência funeral (serviço)'],['telemedicina','Telemedicina']]}
 };
 function nePerfilRamo(c){
@@ -14213,10 +14228,24 @@ SOBRE RESIDENCIAL
 - Franquia: residencial costuma ter franquia POR cobertura (ex.: danos elétricos, vendaval). Coloque em "coberturas[].franquia" (texto curto, ex.: "10% dos prejuízos, mín. R$ 500,00"). Use "franquia" geral só se o PDF trouxer uma franquia única.
 - Preencha "objeto" com o imóvel: tipo (casa/apartamento), construção, uso (moradia habitual/veraneio/aluguel), endereço/CEP e valor declarado — sem dados pessoais além do endereço.`:`
 SOBRE VIDA
-- "limite" de cada cobertura = CAPITAL SEGURADO em R$ (ex.: morte R$ 300.000,00; invalidez R$ 300.000,00; DIT R$ 100,00 por dia).
-- Seguro de vida não tem franquia: use "franquia": null. Se houver CARÊNCIA relevante (ex.: doenças graves 90 dias), escreva no "limite" ("R$ 50.000,00 · carência 90 dias").
+- "limite" de cada cobertura = CAPITAL SEGURADO em R$ (ex.: morte R$ 300.000,00; invalidez R$ 300.000,00; DIT R$ 100,00 por dia). Só o valor — franquia e carência vão nos campos próprios.
+- TODAS AS COBERTURAS EM TODAS AS OPÇÕES: em "coberturas" de CADA opção liste TODAS as chaves de cobertura da lista abaixo, mesmo as que aquela opção não contratou. Não contratada = "contratada": false e "limite": null. Assim o cliente enxerga o que está deixando de levar.
+- FRANQUIA e CARÊNCIA: preencha SEMPRE que o PDF trouxer, por cobertura, em texto curto — "franquia": "15 dias" (comum na DIT e na DIH), "carencia": "6 meses" (comum em doenças graves, DIT, funeral). Sem informação no PDF: null.
+- DESCRIÇÃO DE CADA COBERTURA ("descricao"), para o cliente ler:
+  · Se o PDF/condições da seguradora DESCREVEM a cobertura, transcreva a descrição COMPLETA e fiel, sem resumir. Em DOENÇAS GRAVES (e diagnóstico de câncer) liste TODAS as doenças/condições cobertas que o PDF trouxer, uma por uma, separadas por "; " — não corte a lista, não escreva "entre outras". Inclua também as exclusões ou condições importantes que o PDF citar (ex.: "câncer de pele não melanoma não está coberto"). Use "descricaoGeral": false.
+  · Se a seguradora NÃO descreve, escreva você uma explicação geral, simples e correta do que aquela cobertura costuma garantir no mercado, com um exemplo do dia a dia, e use "descricaoGeral": true.
+  · Descreva também as coberturas NÃO contratadas (geral, se o PDF não trouxer), para o cliente entender o que poderia incluir.
+- MESMA SEGURADORA, VÁRIAS OPÇÕES: no vida é comum apresentar UMA seguradora com várias opções (capitais/planos diferentes). Crie UMA opção para CADA uma, com "variacao.nome" curto e claro ("Opção 1 · Essencial", "Opção 2 · Completa com DIT"), para o cliente comparar lado a lado.
 - Preencha "objeto" com o segurado: nome, idade e profissão (sem CPF).
-- Prêmio de vida costuma ser MENSAL: informe "premioTotal" ANUAL e preencha "premioMensal" quando o PDF trouxer o valor mensal.`;
+- Prêmio de vida costuma ser MENSAL: informe "premioTotal" ANUAL e preencha "premioMensal" quando o PDF trouxer o valor mensal.
+
+RECOMENDAÇÃO DO CONSULTOR NO VIDA ("recomendacaoCliente" de cada opção e "analise.resumoParaCliente") — aqui está o valor do nosso trabalho:
+- Faça uma análise PERSONALIZADA usando a IDADE, a PROFISSÃO, o estado civil e a família do cliente (dados acima). Nada genérico.
+- Conecte a profissão aos riscos reais do dia a dia dela e às coberturas que protegem a RENDA. Exemplos de raciocínio: dentista, médico, cabeleireiro, músico → trabalham com as mãos: uma lesão ou um tremor tira a renda da noite para o dia (IPA majorada, DIT, LER/DORT). Motorista, representante comercial → horas de estrada (morte acidental, IPA, DIT). Autônomo/empresário → se para de trabalhar, para de ganhar (DIT, DIH, doenças graves). Pais com filhos pequenos → morte e invalidez sustentam a família e os estudos. Acima dos 40 → doenças graves e câncer pesam mais.
+- Mostre, com empatia e sem exagero, o que acontece se o imprevisto vier ANTES do seguro: o risco existe hoje, não depois. Faça o cliente pensar que a questão não é o seguro, é o TEMPO: quanto mais cedo contrata, mais barato (o preço sobe com a idade) e mais fácil a aceitação (problemas de saúde futuros podem gerar recusa ou exclusão). Carências começam a contar só depois da contratação — adiar é ficar descoberto por mais tempo.
+- Feche com um convite claro para decidir agora. Tom humano e próximo, de quem quer bem o cliente; nunca invente estatística nem prometa o que a apólice não cobre.
+- Se alguma cobertura NÃO contratada faz muito sentido para a profissão/idade dele, sugira incluir ("vale considerar incluir a DIT").
+- "recomendacaoCliente": 3 a 5 frases por opção, dizendo para quem aquela opção é ideal. "analise.resumoParaCliente": 4 a 6 frases com a análise completa e a opção que você indica.`;
   return `Você é analista de seguros da corretora Retorno Seguros. Vou anexar os PDFs das COTAÇÕES DE ${cfg.nome.toUpperCase()} que fizemos para um cliente${ren?' e também a APÓLICE ATUAL dele (é uma RENOVAÇÃO)':''}.
 
 SUA TAREFA
@@ -14225,7 +14254,7 @@ SUA TAREFA
 3. Se houver mais de uma versão da MESMA seguradora (capitais diferentes, plano completo × essencial), crie UMA opção para CADA versão, com o mesmo "seguradora" e "variacao" preenchida ("franquia": null ou o tipo, "servicos": nome curto do plano, ex.: "Completo", "Essencial"). Versão única: "variacao": null.
 4. Comparar cada opção com o que o cliente PEDIU no questionário (só coberturas e capitais) — ok, parcial ou nao.${ren?`
 5. Ler a APÓLICE ATUAL e montar o comparativo "o que ele tem hoje × o que propomos", item por item, marcando "mantido", "melhorado" ou "inferior".`:''}
-${ren?'6':'5'}. Escrever, para CADA seguradora, a "recomendacaoCliente" (2 a 4 frases para o cliente) e indicar a opção que você recomenda.
+${ren?'6':'5'}. Escrever, para CADA ${pr==='vida'?'opção':'seguradora'}, a "recomendacaoCliente" (${pr==='vida'?'3 a 5':'2 a 4'} frases para o cliente) e indicar a opção que você recomenda.
 ${especifico}
 
 O QUE O CLIENTE VÊ × O QUE SÓ O CORRETOR VÊ
@@ -14233,7 +14262,7 @@ O QUE O CLIENTE VÊ × O QUE SÓ O CORRETOR VÊ
 - Nesses campos NUNCA escreva divergências entre PDFs, números de apólice, comentários sobre documentos ou análise técnica. Isso vai em "observacoesInternas" e "analise.alertas".
 
 REGRAS
-- Não invente nada. Se não estiver no PDF, use null.
+- Não invente valores, prêmios nem condições. Se não estiver no PDF, use null${pr==='vida'?' (exceção: a "descricao" geral das coberturas que a seguradora não descreve, marcada com "descricaoGeral": true)':''}.
 - Nome do produto neutro, sem nicho de público (nada de "Mulher", "Homem", "Sênior" etc.).
 - COBERTURAS E ASSISTÊNCIAS: liste SOMENTE os itens das listas de chaves abaixo, cada um em UMA lista só. Todo o resto (clube de vantagens, descontos em parceiros, sorteios, benefícios que não são o seguro em si) NÃO entra.
 - Em TEXTO, dinheiro no formato R$ 1.234,56. Nos campos numéricos, número puro (3456.78). Datas AAAA-MM-DD.
@@ -14264,12 +14293,12 @@ FORMATO OBRIGATÓRIO DA RESPOSTA
       "variacao": null,
       "premioLiquido": 0, "iof": 0, "premioTotal": 0${pr==='vida'?', "premioMensal": null':''},
       "franquia": ${pr==='residencial'?'null':'null'},
-      "coberturas": [ { "chave": "${cfg.cob[0][0]}", "nome": "", "limite": "", "franquia": null, "explicacao": null } ],
+      "coberturas": [ ${pr==='vida'?'{ "chave": "morte", "nome": "", "limite": "R$ 100.000,00", "contratada": true, "franquia": null, "carencia": null, "descricao": "texto completo do PDF ou explicação geral", "descricaoGeral": false }, { "chave": "dit", "nome": "", "limite": null, "contratada": false, "franquia": null, "carencia": null, "descricao": "", "descricaoGeral": true }':'{ "chave": "'+cfg.cob[0][0]+'", "nome": "", "limite": "", "franquia": null, "explicacao": null }'} ],
       "assistencias": [ { "chave": "${cfg.ass[0][0]}", "nome": "", "detalhe": "" } ],
       "pagamento": [ { "forma": "cartao", "parcelas": 1, "valorParcela": 0, "juros": false }, { "forma": "cartao", "parcelas": 2, "valorParcela": 0, "juros": false } ],
       "atendeAoPedido": [ { "pedido": "", "entregue": "", "status": "ok|parcial|nao" } ],
       "destaques": [ "frase curta para o cliente" ],
-      "recomendacaoCliente": "2 a 4 frases para o cliente sobre esta seguradora",
+      "recomendacaoCliente": "${pr==='vida'?'3 a 5 frases personalizadas (idade, profissão, família, urgência)':'2 a 4 frases para o cliente sobre esta seguradora'}",
       "observacoesInternas": "só para o corretor"
     }
   ],
