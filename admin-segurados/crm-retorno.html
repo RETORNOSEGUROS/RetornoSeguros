@@ -3009,7 +3009,7 @@ function apolicesDoCliente(c){
 VIEWS.clientes=function(){
   let html=head('clientes');
   if(CLI_FILTER.soAtivas===undefined) CLI_FILTER.soAtivas=true;
-  let clientes=CACHE.leads.filter(l=>(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
+  let clientes=CACHE.leads.filter(l=>!l.contatoId&&(l.nome||l.whatsapp||l.telefone||l.email)&&isClienteLead(l));
   if(CLI_FILTER.soAtivas) clientes=clientes.filter(c=>apolicesDoCliente(c).some(x=>apVigente(x)));
   const apsAtivasDe=c=>apolicesDoCliente(c).filter(apVigente);
   const ramosDe=c=>[...new Set(apsAtivasDe(c).map(a=>String(a.ramo||'').trim()).filter(Boolean))];
@@ -3240,10 +3240,12 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
       ${c.indicadoPorEmpresaCodigo?`<div style="background:var(--brand-50);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:.84rem">
         <i class="fas fa-building" style="color:var(--brand)"></i> Indicado pela empresa <b>${esc(c.indicadoPorEmpresaNome||c.indicadoPorEmpresaCodigo)}</b>
         <span style="color:var(--text-3)">— veio pelo link de benefícios que o RH compartilhou (código ${esc(c.indicadoPorEmpresaCodigo)})</span></div>`:''}
-      ${leadCotacaoSite(c)}
+      ${vFunil&&typeof neAvisoCadastroReusado==='function'?neAvisoCadastroReusado(c):''}
+      ${vFunil&&typeof neCotacaoSiteDoRamo==='function'?neCotacaoSiteDoRamo(c):leadCotacaoSite(c)}
       ${vFunil&&typeof nePainel==='function'?nePainel(c):''}
-      ${typeof fichaPortal==='function'?fichaPortal(c):''}${typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
-      <details ${aps.length&&aps.length<=3&&vFunil?'open':''} style="margin-bottom:12px">
+      ${vFunil&&typeof neResumoContato==='function'?neResumoContato(c):''}
+      ${!vFunil&&typeof fichaPortal==='function'?fichaPortal(c):''}${!vFunil&&typeof fichaPerfilPortal==='function'?fichaPerfilPortal(c):''}
+      ${vFunil?'':`<details ${aps.length&&aps.length<=3?'open':''} style="margin-bottom:12px">
         <summary style="cursor:pointer;font-weight:700;font-size:.85rem;list-style:none;padding:8px 0"><i class="fas fa-file-contract" style="color:var(--brand)"></i> Apólices — ${aps.filter(apEhAtiva).length} em vigor de ${aps.length}
           <span style="font-weight:400;color:var(--text-3);font-size:.78rem">(clique para ver)</span></summary>
       ${aps.length?aps.slice().sort((x,y)=>{
@@ -3254,8 +3256,8 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
           <br><small style="color:var(--text-3)">${a.veiculoPlaca?esc(a.veiculoPlaca)+' · ':''}${fmtData(a.dataInicioVigencia)} a ${fmtData(a.dataFimVigencia)}</small></div>
           <div style="text-align:right"><div style="font-weight:700">${money(a.valorPremio)}</div>
           <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.72rem" onclick="modalVerApolice('${a.id}')"><i class="fas fa-eye"></i></button></div></div>`).join('')
-        :`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}</details>
-      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> Contatos / interações</div>
+        :`<p style="color:var(--text-3);font-size:.85rem">Nenhuma apólice vinculada.</p>`}</details>`}
+      <div style="font-weight:700;font-size:.85rem;margin:14px 0 8px"><i class="fas fa-clock-rotate-left" style="color:var(--brand)"></i> ${vFunil?'Interações deste negócio':'Contatos / interações'}</div>
       <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <select id="tlTipo" style="width:auto">${Object.entries(TIPO_INTERACAO).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('')}</select>
@@ -3467,14 +3469,16 @@ async function salvarNovoLead(){ const nome=document.getElementById('nlNome').va
 /* reaproveita o cadastro existente: só reabre o funil para um novo negócio */
 async function salvarNovoLeadCom(leadId,nome,whats,email,respId,f){
   try{
-    const upd={ status:'pre_cadastro', ramo:document.getElementById('nlRamo').value,
-      origem:document.getElementById('nlOrigem').value, atualizadoEm:FV.serverTimestamp() };
     const l=CACHE.leads.find(x=>x.id===leadId)||{};
-    if(!l.whatsapp&&whats) upd.whatsapp=whats;
-    if(!l.email&&email) upd.email=email;
-    if(respId){ upd.responsavelId=respId; upd.responsavelNome=f?(f.nome||f.email):null; }
-    await db.collection('leads_crm').doc(leadId).update(upd);
-    closeModal(); toast('Novo negócio aberto para '+nome+' — mesmo cadastro, sem duplicar.','ok');
+    const raiz=l.contatoId||leadId;
+    const novo=Object.assign(neCamposPessoais(CACHE.leads.find(x=>x.id===raiz)||l),{
+      nome:nome||l.nome||null, whatsapp:whats||l.whatsapp||l.telefone||null, email:email||l.email||null,
+      contatoId:raiz, vinculoChecado:true,
+      status:'pre_cadastro', ramo:document.getElementById('nlRamo').value, origem:document.getElementById('nlOrigem').value,
+      responsavelId:respId||null, responsavelNome:f?(f.nome||f.email):null,
+      negocioAbertoEm:FV.serverTimestamp(), criadoEm:FV.serverTimestamp(), atualizadoEm:FV.serverTimestamp() });
+    await db.collection('leads_crm').add(novo);
+    closeModal(); toast('Novo negócio de '+novo.ramo+' aberto para '+nome+' — ligado ao cadastro dele, separado dos seguros que já tem.','ok');
   }catch(e){ console.error(e); toast('Erro ao criar.','err'); }
 }
 function modalPerder(id){ const c=CACHE.leads.find(x=>x.id===id); if(!c) return;
@@ -13807,6 +13811,167 @@ function neChecklistDados(c){
       if(!neExigeDados(id)) return false;
     }
     return antiga(id,fase);
+  };
+})();
+</script>
+  <script>
+/* =========================================================================
+   CONTATO × NEGÓCIO
+   - O CONTATO é a pessoa (dados pessoais, apólices, área do cliente, histórico).
+   - Cada card do funil é um NEGÓCIO (um ramo, uma cotação), ligado ao contato
+     por contatoId. Ele não mostra apólices, área do cliente nem conversas de
+     outros negócios — para isso há o "Ver perfil do contato".
+   ========================================================================= */
+const NE_PESSOAIS=['cpf','cnpj','dataNascimento','email','endereco','numero','bairro','complemento','cidade','estado','cep','sexo','estadoCivil','profissao','cnh'];
+function neCamposPessoais(o){ const r={}; NE_PESSOAIS.forEach(k=>{ if(o&&o[k]!=null&&o[k]!=='') r[k]=o[k]; }); return r; }
+function neRaiz(c){ if(!c) return null; if(c.contatoId) return c.contatoId; if(c.clienteLeadId&&c.clienteLeadId!==c.id) return c.clienteLeadId; return null; }
+function neDocsDaPessoa(rootId){ return (CACHE.leads||[]).filter(x=>x.id===rootId||x.contatoId===rootId); }
+function neEhAutoRamo(c){ const r=String(c.ramo||c.tipoSeguro||'auto'); return fcEhAuto(r)||!String(c.ramo||c.tipoSeguro||'').trim(); }
+
+/* respostas do site: só as do ramo deste negócio */
+const NE_CAMPOS_AUTO=['veiculo','anoVeiculo','valorFipe','codigoFipe','combustivel','mesRefFipe','utilizacao','condutor','idadeCondutor','pernoite','cepPernoite','bonus','sinistro','reboque','terceiros','carroReserva','extras','franquia','enderecoPernoite','marcaVeiculo','modeloVeiculo'];
+function neCotacaoSiteDoRamo(c){
+  if(neEhAutoRamo(c)) return leadCotacaoSite(c);
+  const x=Object.assign({},c); NE_CAMPOS_AUTO.forEach(k=>delete x[k]);
+  return leadCotacaoSite(x);
+}
+/* resumo discreto da pessoa (sem listar apólices) */
+function neResumoContato(c){
+  const raiz=neRaiz(c)||c.id; const pessoa=CACHE.leads.find(x=>x.id===raiz)||c;
+  const aps=apolicesDoCliente(pessoa).filter(apVigente);
+  const outros=neDocsDaPessoa(raiz).filter(x=>x.id!==c.id);
+  if(!aps.length&&!outros.length&&raiz===c.id) return '';
+  const txt=aps.length?`<b>Já é cliente</b> — ${aps.length} apólice(s) em vigor (${[...new Set(aps.map(a=>a.ramo).filter(Boolean))].map(esc).join(', ')})`
+    :`<b>Já está no nosso cadastro</b> — ${outros.length} outro(s) negócio(s) / cotação(ões)`;
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:.84rem">
+    <i class="fas fa-user-check" style="color:var(--brand)"></i><span style="flex:1;min-width:200px">${txt}. Este card é um <b>negócio novo de ${esc(neRamoCurto(c))}</b>, separado do que ele já tem.</span>
+    <button class="btn btn-ghost btn-sm" onclick="abrirLead('${raiz}','cliente')"><i class="fas fa-id-card"></i> Ver perfil do contato</button></div>`;
+}
+/* cards antigos que reaproveitaram o cadastro do cliente: oferecer a separação */
+function neCadastroReusado(c){
+  if(c.contatoId||neRaiz(c)) return false;
+  const st=faseDoLead(c); if(!['pre_cadastro','contato_realizado','cotacao_enviada'].includes(st)) return false;
+  const aps=apolicesDoCliente(c); if(!aps.length) return false;
+  const r=String(c.ramo||'').toLowerCase().slice(0,4);
+  return aps.some(a=>String(a.ramo||'').toLowerCase().slice(0,4)!==r)||!!c.orcamentoId&&!neEhAutoRamo(c);
+}
+function neAvisoCadastroReusado(c){
+  if(!neCadastroReusado(c)) return '';
+  return `<div style="background:var(--warn-bg);border:1px solid #fde68a;border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:.84rem;color:#7c4a03;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <i class="fas fa-triangle-exclamation"></i><span style="flex:1;min-width:220px">Este card foi aberto <b>em cima do cadastro do cliente</b> (versão antiga do CRM) — por isso aparecem dados dos seguros que ele já tem. Separe para virar um negócio limpo de ${esc(neRamoCurto(c))}.</span>
+    <button class="btn btn-primary btn-sm" onclick="neSepararNegocio('${c.id}')"><i class="fas fa-code-branch"></i> Separar este negócio</button></div>`;
+}
+async function neSepararNegocio(id){
+  const c=neLead(id); if(!c) return;
+  if(!confirm('Criar um card NOVO de '+neRamoCurto(c)+' para '+(c.nome||'')+' e devolver este cadastro para a lista de clientes?\n\nApólices, área do cliente e histórico continuam no cadastro dele.')) return;
+  try{
+    const ref=await db.collection('leads_crm').add(Object.assign(neCamposPessoais(c),{nome:c.nome||null,whatsapp:c.whatsapp||c.telefone||null,
+      contatoId:c.id,vinculoChecado:true,status:faseDoLead(c),ramo:c.ramo||null,origem:c.origem||'manual',
+      responsavelId:c.responsavelId||null,responsavelNome:c.responsavelNome||null,proximoRetorno:c.proximoRetorno||null,proximoRetornoHora:c.proximoRetornoHora||null,
+      negocioAbertoEm:FV.serverTimestamp(),criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()}));
+    const ultima=apolicesDoCliente(c).slice().sort((a,b)=>String(b.dataFimVigencia||'').localeCompare(String(a.dataFimVigencia||'')))[0];
+    await db.collection('leads_crm').doc(id).update({status:'cliente',ramo:(ultima&&ultima.ramo)||c.ramo||null,proximoRetorno:null,proximoRetornoHora:null,atualizadoEm:FV.serverTimestamp()});
+    await neNota(ref.id,'Negócio de '+neRamoCurto(c)+' separado do cadastro do cliente.');
+    toast('Pronto! Negócio separado — o card novo já está no funil.','ok');
+    setTimeout(()=>abrirLead(ref.id,'funil'),900);
+  }catch(e){ console.error(e); toast('Erro ao separar: '+(e.code||e.message),'err'); }
+}
+
+/* interações: no funil, só deste negócio; no perfil, de todos os negócios da pessoa */
+(function(){
+  renderTimeline=function(id){
+    const c=neLead(id)||{};
+    let its;
+    if(FICHA_MODO==='cliente'){ const raiz=neRaiz(c)||id; const ids=new Set(neDocsDaPessoa(raiz).map(x=>x.id).concat([id]));
+      its=CACHE.interacoes.filter(i=>ids.has(i.leadId)); }
+    else{ its=CACHE.interacoes.filter(i=>i.leadId===id);
+      const ini=toDate(c.negocioAbertoEm); if(ini) its=its.filter(i=>{ const d=toDate(i.criadoEm); return !d||d>=ini-60000; }); }
+    its.sort((a,b)=>(toDate(b.criadoEm)||0)-(toDate(a.criadoEm)||0));
+    return `<div id="tlList">${its.length?its.map(i=>{ const t=TIPO_INTERACAO[i.tipo]||TIPO_INTERACAO.nota;
+      const outro=FICHA_MODO==='cliente'&&i.leadId!==id?(neLead(i.leadId)||{}):null;
+      return `<div style="display:flex;gap:11px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="width:30px;height:30px;border-radius:9px;background:${t[2]}22;color:${t[2]};display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa${i.tipo==='whatsapp'?'b':'s'} ${t[1]}"></i></div>
+        <div style="flex:1;min-width:0"><div style="font-size:.82rem"><b>${t[0]}</b> <span style="color:var(--text-3)">· ${fmtDataHora(i.criadoEm)}${i.autor?' · '+esc(i.autor):''}${outro?' · negócio '+esc(neRamoCurto(outro)):''}</span></div>
+        <div style="font-size:.85rem;color:var(--text-2)">${esc(i.texto||'')}</div></div></div>`; }).join('')
+      :`<p style="color:var(--text-3);font-size:.85rem;padding:8px 0">Nenhuma interação registrada ainda.</p>`}</div>`;
+  };
+})();
+
+/* botões e painel: proposta/IA só existem para negócio de auto */
+(function(){
+  const topoAnt=neBotoesTopo, painelAnt=nePainel;
+  neBotoesTopo=function(c,vFunil){
+    const raiz=neRaiz(c);
+    return `<button class="btn btn-ghost btn-sm" style="color:var(--ok)" onclick="neMensagemPadrao('${c.id}')"><i class="fab fa-whatsapp"></i> Mensagem padrão</button>
+      ${neEhAutoRamo(c)&&c.orcamentoId&&vFunil?`<button class="btn btn-ghost btn-sm" onclick="ppDoLead('${c.id}')"><i class="fas fa-scale-balanced"></i> Ver proposta</button>`:''}
+      ${vFunil&&raiz?`<button class="btn btn-ghost btn-sm" onclick="abrirLead('${raiz}','cliente')"><i class="fas fa-id-card"></i> Perfil do contato</button>`:''}`;
+  };
+  nePainel=function(c){
+    if(neEhAutoRamo(c)) return painelAnt(c);
+    const f=faseDoLead(c);
+    if(f==='em_transmissao'||c.contratacao) return painelAnt(c);
+    return f==='pre_cadastro'?`<div style="font-size:.8rem;color:var(--text-3);margin:-6px 0 14px"><i class="fas fa-circle-info"></i> Mande a <b>mensagem padrão</b> e mova para <b>Primeiro contato</b>.</div>`:'';
+  };
+})();
+
+/* mensagem padrão respeita o ramo do negócio */
+(function(){
+  const ant=neTextoPadrao;
+  neTextoPadrao=function(c,tipo,consultor,genero){
+    if(neEhAutoRamo(c)) return ant(c,tipo,consultor,genero);
+    const nome=((c.nome||'').trim().split(' ')[0]||'tudo bem');
+    return `Olá, ${nome}! Tudo bem?\n\nSou ${consultor||'—'}, ${genero==='a'?'consultora':'consultor'} da Retorno Seguros. Vi que você demonstrou interesse em ${neRamoCurto(c)}.\n\nPara darmos continuidade ao atendimento e montar a melhor proposta para você, posso te fazer algumas perguntas rápidas por aqui?`;
+  };
+})();
+
+/* pedido do site de quem já está no cadastro: liga o negócio novo à pessoa */
+function neNormFone(v){ const d=String(v||'').replace(/\D/g,'').replace(/^55(?=\d{10,11}$)/,''); return d.slice(-10); }
+function nePrimeiroNome(v){ return String(v||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim().split(/\s+/)[0]||''; }
+let NE_VINC_RODANDO=false;
+async function neVincularNovos(){
+  if(NE_VINC_RODANDO||!CURRENT_USER) return; NE_VINC_RODANDO=true;
+  try{
+    const novos=(CACHE.leads||[]).filter(l=>!l.vinculoChecado&&!l.contatoId&&faseDoLead(l)==='pre_cadastro');
+    for(const l of novos){
+      const fone=neNormFone(l.whatsapp||l.telefone), pn=nePrimeiroNome(l.nome);
+      const tl=toDate(l.criadoEm)||new Date();
+      let alvo=null;
+      if(l.clienteLeadId&&l.clienteLeadId!==l.id) alvo=CACHE.leads.find(x=>x.id===l.clienteLeadId)||null;
+      if(!alvo&&fone.length>=10&&pn){
+        alvo=(CACHE.leads||[]).filter(x=>x.id!==l.id&&neNormFone(x.whatsapp||x.telefone)===fone&&nePrimeiroNome(x.nome)===pn&&(toDate(x.criadoEm)||0)<=tl)
+          .sort((a,b)=>(toDate(a.criadoEm)||0)-(toDate(b.criadoEm)||0))[0]||null;
+      }
+      const upd={vinculoChecado:true};
+      if(alvo){ const raiz=alvo.contatoId||alvo.id; const pessoa=CACHE.leads.find(x=>x.id===raiz)||alvo;
+        upd.contatoId=raiz;
+        const p=neCamposPessoais(pessoa); Object.keys(p).forEach(k=>{ if(l[k]==null||l[k]==='') upd[k]=p[k]; });
+        if(!l.negocioAbertoEm) upd.negocioAbertoEm=l.criadoEm||FV.serverTimestamp(); }
+      try{ await db.collection('leads_crm').doc(l.id).update(upd); }catch(e){}
+    }
+  }finally{ NE_VINC_RODANDO=false; }
+}
+(function(){
+  const ant=detectarLeadsNovos;
+  detectarLeadsNovos=function(leads){ try{ ant(leads); }finally{ setTimeout(neVincularNovos,1500); } };
+})();
+setTimeout(neVincularNovos,3000);
+
+/* editar dados pessoais num negócio atualiza a pessoa e todos os negócios dela */
+(function(){
+  const ant=lkSalvarDados;
+  lkSalvarDados=async function(){
+    const id=(document.getElementById('ldId')||{}).value; const c=neLead(id)||{};
+    const g=k=>{ const el=document.getElementById(k); return el?el.value.trim():''; };
+    const dados={nome:g('ldNome'),whatsapp:g('ldWhats').replace(/\D/g,'')||null,email:g('ldEmail')||null,cpf:g('ldCpf')||null,dataNascimento:g('ldNasc')||null,
+      cep:g('ldCep')||null,cidade:g('ldCidade')||null,estado:(g('ldUf')||'').toUpperCase()||null,endereco:g('ldEnd')||null,numero:g('ldNum')||null,
+      bairro:g('ldBairro')||null,complemento:g('ldCompl')||null,sexo:g('ldSexo')||null,estadoCivil:g('ldEstCivil')||null,profissao:g('ldProf')||null,cnh:g('ldCnh')||null};
+    await ant();
+    if(!dados.nome) return;
+    const raiz=neRaiz(c)||id;
+    const irmaos=neDocsDaPessoa(raiz).filter(x=>x.id!==id);
+    if(!irmaos.length) return;
+    try{ const lote=db.batch(); irmaos.forEach(x=>lote.update(db.collection('leads_crm').doc(x.id),Object.assign({},dados,{atualizadoEm:FV.serverTimestamp()})));
+      await lote.commit(); toast('Cadastro atualizado também nos outros '+irmaos.length+' negócio(s) da pessoa.','info'); }catch(e){ console.warn('propagar',e); }
   };
 })();
 </script>
