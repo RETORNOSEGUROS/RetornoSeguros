@@ -3309,7 +3309,8 @@ function abrirLead(id,modo){ const c=CACHE.leads.find(x=>x.id===id); if(!c) retu
     <div class="modal-foot">
       <button class="btn btn-ghost" style="margin-right:auto;color:var(--danger)" onclick="${ehCli?`excluirCliente`:`excluirLead`}('${c.id}')"><i class="fas fa-trash"></i> Excluir</button>
       ${vFunil?(typeof neBotoesFase==='function'?neBotoesFase(c):'')
-      :`<button class="btn btn-ghost" onclick="modalApoliceNovaDoCliente('${c.id}')"><i class="fas fa-plus"></i> Nova apólice</button>
+      :`<button class="btn btn-ghost" onclick="apiaAbrir('','${c.id}')"><i class="fas fa-wand-magic-sparkles"></i> Apólice com IA</button>
+        <button class="btn btn-ghost" onclick="modalApoliceNovaDoCliente('${c.id}')"><i class="fas fa-plus"></i> Nova apólice</button>
         <button class="btn btn-primary" onclick="lkEditar('${c.id}')"><i class="fas fa-pen"></i> Editar dados</button>`}
     </div>`,'wide');
   FICHA_LEAD=c.id;
@@ -15338,7 +15339,10 @@ async function txpSalvar(id){
 
 /* ========== APÓLICES: cadastrar / completar apólices antigas com a IA ========== */
 let APIA_LOTE=[];
+let APIA_CLIENTE=null;   /* cadastro aberto pelo card do cliente: o vínculo é ele, sem procurar */
 function apiaPromptApolice(a){
+  const cli=!a&&APIA_CLIENTE?neLead(APIA_CLIENTE):null;
+  if(cli) return apiaPromptApoliceCliente(cli);
   const conhecido=a?`O QUE JÁ TEMOS NO SISTEMA DESTA APÓLICE (confira e complete)
 - Cliente: ${a.clienteNome||'—'}${a.clienteCpf?' · CPF '+a.clienteCpf:''}
 - ${a.seguradora||'—'} · ${a.ramo||'—'}${a.numeroApolice?' · nº '+a.numeroApolice:''} · vigência ${fmtData(a.dataInicioVigencia)} a ${fmtData(a.dataFimVigencia)}
@@ -15351,13 +15355,25 @@ ${apiaSchemaTxt(a?apiaRamo(a.ramo):null,{varias:!a})}
 
 Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.`;
 }
-function apiaAbrir(apId){
+function apiaPromptApoliceCliente(c){
+  const aps=apolicesDoCliente(c);
+  return `Você é analista de cadastro da corretora Retorno Seguros. Vou anexar o(s) PDF(s) de APÓLICE(S) do cliente ${c.nome||''}${c.cpf?' (CPF '+c.cpf+')':''} — pode ser mais de uma, de ramos diferentes. Elas vieram de outro sistema e quero o registro COMPLETO no nosso, item a item.
+${aps.length?'\nAPÓLICES DELE QUE JÁ ESTÃO NO SISTEMA (só com dados básicos):\n'+aps.map(a=>'- '+[a.seguradora,a.ramo,a.numeroApolice?'nº '+a.numeroApolice:null,a.veiculoPlaca,fmtData(a.dataInicioVigencia)+' a '+fmtData(a.dataFimVigencia)].filter(Boolean).join(' · ')).join('\n')+'\n':''}
+Leia TODAS as páginas de cada PDF e devolva UMA entrada em "apolices" para CADA apólice.
+
+${apiaSchemaTxt(null,{varias:true})}
+
+Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.`;
+}
+function apiaAbrir(apId,leadId){
   const a=apId?CACHE.apolices.find(x=>x.id===apId):null;
-  openModal(`<div class="modal-head"><h3><i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i> ${a?'Completar apólice com IA':'Cadastrar apólices com IA'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+  APIA_CLIENTE=!a&&leadId?((neLead(leadId)||{}).contatoId||leadId):null;
+  const cli=APIA_CLIENTE?neLead(APIA_CLIENTE):null;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i> ${a?'Completar apólice com IA':cli?'Apólices de '+esc(cli.nome||'')+' com IA':'Cadastrar apólices com IA'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="modal-body">
       <ol style="margin:0 0 10px 18px;font-size:.84rem;color:var(--text-2);line-height:1.6">
         <li>Copie o prompt e cole na IA junto com ${a?'o PDF da apólice':'os PDFs das apólices (pode ser mais de uma)'}.</li>
-        <li>Cole a resposta abaixo — eu ${a?'atualizo esta apólice':'acho o cliente pelo CPF/nome e mostro o que vai ser cadastrado ou atualizado'} antes de gravar.</li></ol>
+        <li>Cole a resposta abaixo — eu ${a?'atualizo esta apólice (já ligada ao cliente dela)':cli?'gravo no cadastro de <b>'+esc(cli.nome||'')+'</b> e mostro o que vai ser cadastrado ou atualizado':'acho o cliente pelo CPF/nome e mostro o que vai ser cadastrado ou atualizado'} antes de gravar.</li></ol>
       <details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:.84rem;font-weight:600">Ver o prompt</summary>
         <textarea id="apiaPrompt" rows="12" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.74rem;margin-top:6px" readonly>${esc(apiaPromptApolice(a))}</textarea></details>
       <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="copiar(document.getElementById('apiaPrompt').value,'Prompt copiado — cole na IA com os PDFs.')"><i class="fas fa-copy"></i> Copiar prompt</button>
@@ -15385,11 +15401,22 @@ function apiaExistente(dp,fixo){
       if(v.placa&&a.veiculoPlaca) return String(a.veiculoPlaca).toUpperCase()===String(v.placa).toUpperCase()&&String(a.dataInicioVigencia||'').slice(0,7)===String((dp.vigencia||{}).inicio||'').slice(0,7);
       return String(a.dataInicioVigencia||'').slice(0,7)===String((dp.vigencia||{}).inicio||'').slice(0,7); })||null;
 }
+function apiaExistenteDoCliente(dp,leadId){
+  const aps=apolicesDoCliente(neLead(leadId)||{id:leadId}); const d=dp.documento||{}, v=dp.veiculo||{};
+  const num=String(d.numeroApolice||'').replace(/\D/g,''); const ini=String((dp.vigencia||{}).inicio||'').slice(0,7);
+  return aps.find(a=>num&&String(a.numeroApolice||'').replace(/\D/g,'')===num)
+    ||aps.find(a=>apiaRamo(a.ramo)===dp.ramo&&String(a.dataInicioVigencia||'').slice(0,7)===ini&&(!v.placa||!a.veiculoPlaca||String(a.veiculoPlaca).toUpperCase()===String(v.placa).toUpperCase()))||null;
+}
 function apiaConferir(fixo){
   let j; try{ j=paExtrair(document.getElementById('apiaTxt').value); }catch(e){ toast('Não achei um JSON válido na resposta.','err'); return; }
   const lista=Array.isArray(j.apolices)?j.apolices:[j];
   const aFixa=fixo?CACHE.apolices.find(x=>x.id===fixo):null;
-  APIA_LOTE=lista.map(x=>{ const dp=apiaNorm(x,aFixa&&aFixa.ramo); const ex=apiaExistente(dp,fixo||null); const pe=apiaPessoaDe(dp);
+  const peFixo=aFixa?(aFixa.leadId?{leadId:(neLead(aFixa.leadId)||{}).contatoId||aFixa.leadId,nome:aFixa.clienteNome,fixo:true}
+      :(apiaPessoaDe({segurado:{nome:aFixa.clienteNome,cpf:aFixa.clienteCpf}})||null))
+    :APIA_CLIENTE?{leadId:APIA_CLIENTE,nome:(neLead(APIA_CLIENTE)||{}).nome,fixo:true}:null;
+  APIA_LOTE=lista.map(x=>{ const dp=apiaNorm(x,aFixa&&aFixa.ramo);
+    const ex=fixo?apiaExistente(dp,fixo):(APIA_CLIENTE?apiaExistenteDoCliente(dp,APIA_CLIENTE):apiaExistente(dp,null));
+    const pe=peFixo||apiaPessoaDe(dp);
     return {dp,ex,pe,acao:ex?'atualizar':'criar',ok:true}; }).filter(x=>x.dp.seguradora||x.dp.documento&&x.dp.documento.numeroApolice);
   if(!APIA_LOTE.length){ toast('Não encontrei apólices na resposta.','err'); return; }
   openModal(`<div class="modal-head"><h3><i class="fas fa-list-check" style="color:var(--brand)"></i> Conferir antes de gravar</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
@@ -15401,7 +15428,7 @@ function apiaConferir(fixo){
             ${v.placa?' · '+esc([v.modelo,v.placa].filter(Boolean).join(' ')):''}${cd.nome&&!/pr[oó]prio/i.test(cd.relacaoComSegurado||'')?' · condutor: '+esc(cd.nome):''}
             · ${(d.coberturas||[]).length} coberturas · ${(d.assistencias||[]).length} assistências · ${(d.franquiasDetalhe||[]).length} franquias</div>
           <div style="font-size:.8rem;margin-top:4px">${x.ex?`<span style="color:var(--info)"><i class="fas fa-pen"></i> Atualiza a apólice já cadastrada (${esc(x.ex.seguradora||'')} ${fmtData(x.ex.dataInicioVigencia)})</span>`:'<span style="color:var(--ok)"><i class="fas fa-plus"></i> Cadastra apólice nova</span>'}
-            · ${x.pe&&x.pe.leadId?`<span><i class="fas fa-link"></i> cliente: <b>${esc(x.pe.nome||'')}</b></span>`:'<span style="color:var(--warn)"><i class="fas fa-user-plus"></i> cliente não encontrado — fica só na apólice (use "Recriar cadastro" em Clientes)</span>'}</div></div></label></div>`; }).join('')}
+            · ${x.pe&&x.pe.leadId?`<span><i class="fas fa-link"></i> cliente: <b>${esc(x.pe.nome||'')}</b>${x.pe.fixo?'':' <span style="color:var(--text-3)">(achado pelo CPF/nome)</span>'}</span>`:'<span style="color:var(--warn)"><i class="fas fa-user-plus"></i> cliente não encontrado — fica só na apólice (use "Recriar cadastro" em Clientes)</span>'}</div></div></label></div>`; }).join('')}
       <div style="font-size:.78rem;color:var(--text-3)"><i class="fas fa-shield-halved"></i> Na atualização, o que já está preenchido na apólice continua; o PDF completa o que falta e a parte estruturada (coberturas, assistências, franquias) é substituída pela leitura nova.</div></div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="apiaAbrir('${fixo||''}')">Voltar</button>
       <button class="btn btn-primary" onclick="apiaGravar('${fixo||''}')"><i class="fas fa-floppy-disk"></i> Gravar</button></div>`,'wide');
@@ -15417,10 +15444,13 @@ async function apiaGravar(fixo){
         Object.keys(novo).forEach(k=>{ const atual=x.ex[k];
           const estrutural=['coberturasEstr','assistencias','itens','chavesItens','lmiPorChave','franquiaPorItem','coberturasDetalhe','assistenciasDetalhe','franquiasDetalhe','dadosProposta','estruturadaEm','lmi','condutor','proprietario','beneficiosSeguradora','beneficiarios','perfilDeclarado','clausulas','pagamentoDetalhe','premioDetalhe'].includes(k);
           if(estrutural||atual==null||atual===''||(Array.isArray(atual)&&!atual.length)) upd[k]=novo[k]; });
-        if(!x.ex.leadId&&x.pe&&x.pe.leadId) upd.leadId=x.pe.leadId;
+        if(x.pe&&x.pe.leadId&&(!x.ex.leadId||x.pe.fixo)) upd.leadId=x.pe.leadId;
         upd.atualizadoEm=FV.serverTimestamp(); upd.origemEstrutura='ia_pdf';
         await db.collection('apolices_cliente').doc(x.ex.id).update(upd); ultimo=x.ex.id;
       }else{
+        if(x.pe&&x.pe.fixo){ const l=neLead(x.pe.leadId)||{};
+          if(!novo.clienteNome) novo.clienteNome=l.nome||null; if(!novo.clienteCpf&&l.cpf) novo.clienteCpf=l.cpf;
+          if(!novo.clienteWhatsapp&&(l.whatsapp||l.telefone)) novo.clienteWhatsapp=l.whatsapp||l.telefone; if(!novo.clienteEmail&&l.email) novo.clienteEmail=l.email; }
         const ref=await db.collection('apolices_cliente').add(Object.assign(novo,{leadId:(x.pe&&x.pe.leadId)||null,status:apiaStatus(novo),origem:'importacao_ia',origemEstrutura:'ia_pdf',
           criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()})); ultimo=ref.id;
       }
