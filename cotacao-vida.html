@@ -216,10 +216,22 @@ function dadosLead(extra){
 }
 async function salvarProgresso(etapa,acao){
   if(!formData._leadId) return;
+  const dados=dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'});
   try{ await authPronta;
-    await db.collection('leads_crm').doc(formData._leadId).update(dadosLead({etapaSite:etapa,acao:acao||'em_preenchimento'})); }
-  catch(e){ console.warn('progresso',e); }
+    await db.collection('leads_crm').doc(formData._leadId).update(dados); }
+  catch(e){
+    /* plano B: se o Firestore recusar a ATUALIZAÇÃO (sessão anônima desligada ou regra),
+       as respostas vão para leads_site_respostas (só criação) e o CRM junta no lead sozinho.
+       Sem isso, tudo o que vinha depois do WhatsApp (família, capital, coberturas) se perdia. */
+    console.warn('progresso (indo pelo plano B)',e&&e.code);
+    try{ const copia=Object.assign({},dados); delete copia.atualizadoEm;
+      await db.collection('leads_site_respostas').add({leadId:formData._leadId,dados:copia,
+        criadoEm:firebase.firestore.FieldValue.serverTimestamp()}); }
+    catch(e2){ console.warn('plano B também falhou',e2&&e2.code); }
+  }
 }
+/* protocolo do negócio: o mesmo número aparece no CRM (6 primeiros caracteres do cadastro) */
+function protocolo(){ return formData._leadId?String(formData._leadId).slice(0,6).toUpperCase():''; }
 async function criarLead(){
   try{ await authPronta;
     const ref=await db.collection('leads_crm').add(dadosLead({
@@ -229,7 +241,8 @@ async function criarLead(){
   }catch(e){ console.warn('criarLead',e); return false; }
 }
 async function clicouWhats(){
-  try{ if(formData._leadId){ await authPronta; await db.collection('leads_crm').doc(formData._leadId).update({acao:'whatsapp_direto',clicouWhatsapp:true,atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()}); } }catch(e){}
+  try{ if(formData._leadId){ await authPronta; await db.collection('leads_crm').doc(formData._leadId).update({acao:'whatsapp_direto',clicouWhatsapp:true,atualizadoEm:firebase.firestore.FieldValue.serverTimestamp()}); } }
+  catch(e){ try{ await db.collection('leads_site_respostas').add({leadId:formData._leadId,dados:{acao:'whatsapp_direto',clicouWhatsapp:true},criadoEm:firebase.firestore.FieldValue.serverTimestamp()}); }catch(e2){} }
   try{ if(window.gtag) gtag('event','clique_whatsapp',{ramo:ROTEIRO.ramo}); }catch(e){}
 }
 
@@ -430,13 +443,13 @@ Object.assign(formData,{temSeguroVida:'',dataNascimento:'',idade:'',sexo:'',prof
 
 const RENDAS=[['Até R$ 2.000',2000],['R$ 2.000 a R$ 3.000',2500],['R$ 3.000 a R$ 5.000',4000],['R$ 5.000 a R$ 7.500',6250],['R$ 7.500 a R$ 10.000',8750],['R$ 10.000 a R$ 15.000',12500],['R$ 15.000 a R$ 20.000',17500],['Acima de R$ 20.000',25000]];
 const CAPITAIS=['100000','150000','200000','300000','500000','750000','1000000'];
-const COB_ROT={morte:'Morte (qualquer causa)',ipa:'Invalidez por acidente',doencasGraves:'Doenças graves',dit:'Diária por afastamento',funeral:'Assistência funeral familiar'};
+const COB_ROT={morte:'Morte (qualquer causa)',ipa:'Invalidez por acidente',doencasGraves:'Doenças graves',dit:'Diária por afastamento',internacao:'Diária de internação hospitalar',funeral:'Assistência funeral familiar'};
 
 const ROTEIRO={
-  ramo:'Vida', tipo:'individual', whatsappRetorno:'5554996454300', radarTotal:14,
+  ramo:'Vida', tipo:'individual', whatsappRetorno:'5554996454300', radarTotal:15,
   capitulos:[{key:'voce',label:'Você'},{key:'vida',label:'Sua vida'},{key:'protecao',label:'Suas proteções'},{key:'fim',label:'Cotação'}],
-  capituloDe:{nome:'voce',temSeguroVida:'voce',nascimento:'voce',sexo:'voce',profissao:'vida',ocupacao:'vida',renda:'vida',whatsapp:'vida',familia:'vida',capital:'protecao',ipa:'protecao',doencasGraves:'protecao',dit:'protecao',funeral:'protecao',fim:'fim'},
-  abertura:'Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>Seguro de vida não é sobre morrer — é sobre <span class="hl">quem fica e como fica</span>. Meu trabalho é montar a proteção certa pro seu momento, sem pagar por aquilo que você não precisa.<br><br>Pra começar: <strong>como posso te chamar?</strong>',
+  capituloDe:{nome:'voce',temSeguroVida:'voce',nascimento:'voce',sexo:'voce',profissao:'vida',ocupacao:'vida',renda:'vida',whatsapp:'vida',familia:'vida',capital:'protecao',ipa:'protecao',doencasGraves:'protecao',dit:'protecao',internacao:'protecao',funeral:'protecao',fim:'fim'},
+  abertura:'Oi! Eu sou a <strong>Pamela</strong>, consultora de riscos da Retorno Seguros &#128075;<br><br>Seguro de vida não é sobre morrer — é sobre <span class="hl">quem fica e como fica</span>. E é também sobre <span class="hl">você, em vida</span>: tem proteção que paga pra você quando um imprevisto tira você do trabalho ou muda a sua rotina.<br><br>Meu trabalho é montar a proteção certa pro seu momento, sem pagar por aquilo que você não precisa.<br><br>Pra começar: <strong>como posso te chamar?</strong>',
   depoisDoNome:'temSeguroVida',
   portalExtra:p=>{ const i=p&&p.idade; if(i==null) return ''; const f=p.familia||{};
     const fase=i<30?'Aos '+i+' anos você está no melhor momento pra contratar: o preço é o menor que vai ter na vida — e fica travado.'
@@ -469,6 +482,7 @@ const ROTEIRO={
       '💰 *Renda:* '+formData.renda,'👨‍👩‍👧 *Família:* '+FAM_ROT[formData.familia],
       (formData.temSeguroVida==='trabalho'?'📌 Tenho seguro só pela empresa':formData.temSeguroVida==='sim'?'📌 Já tenho seguro de vida e quero comparar':'📌 Estou sem seguro de vida'),'',
       '🛡️ *Capital escolhido:* '+BRL(+formData.capital),'*Coberturas:* '+ativas.join(', ')];
+    if(protocolo()) linhas.push('','📋 *Protocolo:* '+protocolo());
     if(!formData._clienteLeadId) linhas.push('','🪪 *Meu CPF para a cotação:* ');
     return linhas.join('\n'); }
 };
@@ -560,13 +574,19 @@ Object.assign(PASSOS,{
   async dit(){
     await digitando(1000);
     const aut=formData.ocupacaoTipo==='autonomo'||formData.ocupacaoTipo==='empresario';
-    bolhaPamela('<strong>Cenário 3:</strong> você quebra o braço jogando bola e fica <strong>40 dias parado</strong>. '+(aut?'Como autônomo, 40 dias parado é 40 dias sem faturar.':'Mesmo com afastamento, a renda cai e as contas não.'));
+    bolhaPamela('<strong>Cenário 3:</strong> você quebra a perna praticando um esporte e fica <strong>40 dias parado</strong>. '+(aut?'Como autônomo, 40 dias parado é 40 dias sem faturar.':'Mesmo com afastamento, a renda cai e as contas não.'));
     bolhaFato('A <b>diária por incapacidade temporária</b> paga um valor por dia de afastamento por acidente ou doença — '+(aut?'<b>é a cobertura mais importante pra quem vive do próprio trabalho</b>.':'um complemento que evita mexer na reserva.'));
-    areaCobertura('dit','funeral','Diária por afastamento');
+    areaCobertura('dit','internacao','Diária por afastamento');
+  },
+  async internacao(){
+    await digitando(1100);
+    bolhaPamela('<strong>Cenário 4:</strong> você precisa ficar <strong>internado</strong> — num quarto ou na UTI. Sem plano de saúde, ou sem querer depender do SUS, a saída é o hospital <strong>particular</strong>, e a conta chega todo dia.');
+    bolhaFato('Uma diária particular de hospital costuma passar de <b>R$ 700,00</b> — e na UTI é bem mais. A <b>diária de internação hospitalar</b> paga um valor <b>pra você, por cada dia internado</b>, pra ajudar nessa conta e nas despesas de casa enquanto você se recupera.');
+    areaCobertura('internacao','funeral','Diária de internação');
   },
   async funeral(){
     await digitando(1000);
-    bolhaPamela('<strong>Cenário 4:</strong> uma perda na família, e no meio da dor alguém precisa resolver <strong>funeral, translado e burocracia</strong> — e pagar por isso na hora.');
+    bolhaPamela('<strong>Cenário 5:</strong> uma perda na família, e no meio da dor alguém precisa resolver <strong>funeral, translado e burocracia</strong> — e pagar por isso na hora.');
     bolhaFato('A <b>assistência funeral familiar</b> cobre você, cônjuge e filhos: a seguradora organiza e paga tudo, 24h, em qualquer lugar do país. Custa pouco e tira da família a pior tarefa no pior dia.');
     areaCobertura('funeral','fim','Assistência funeral familiar');
   }
