@@ -1280,8 +1280,10 @@ function bootstrap(){
   listen('ramos_crm','ramos',['configuracoes']);
   listen('interacoes_crm','interacoes',[]);
   listen('propostas','propostas',['propostas','contatos']);
-  if(typeof ctEscutarSite==='function') ctEscutarSite();
-  if(typeof neEscutar==='function') neEscutar();
+  /* escutas que moram em scripts mais abaixo (respostas do site / plano B, contratações):
+     se o login resolver antes da página terminar de carregar, elas ainda não existem — espera o load */
+  const __escutas=()=>{ if(typeof ctEscutarSite==='function') ctEscutarSite(); if(typeof neEscutar==='function') neEscutar(); };
+  if(document.readyState==='complete') __escutas(); else window.addEventListener('load',__escutas,{once:true});
   listen('fipe_historico','fipeHist',['fipe']);
   atualizarNotificacoes();
 
@@ -1400,14 +1402,14 @@ function leadsAbertos(){ let l=CACHE.leads.filter(x=>{
     /* fechados e perdidos continuam no funil por um tempo — as colunas existem para isso */
     if(st==='negocio_fechado'||st==='negocio_perdido') return kbRecente(x);
     return true; });
-  if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''}`.toLowerCase().includes(q)); }
+  if(LEADS_FILTER.busca){ const q=LEADS_FILTER.busca.toLowerCase(); l=l.filter(x=>`${x.nome||''} ${x.nomeEmpresa||''} ${x.email||''} ${x.whatsapp||''} ${x.telefone||''} ${String(x.id||'').slice(0,6)}`.toLowerCase().includes(q.replace(/^#/,''))); }
   return l; }
 VIEWS.leads=function(){
   const actions=`<div class="tabs" style="margin-right:6px"><button class="tab ${LEADS_VIEW==='kanban'?'active':''}" onclick="LEADS_VIEW='kanban';VIEWS.leads()"><i class="fas fa-columns"></i> Kanban</button><button class="tab ${LEADS_VIEW==='lista'?'active':''}" onclick="LEADS_VIEW='lista';VIEWS.leads()"><i class="fas fa-list"></i> Lista</button></div>
     <button class="btn btn-primary btn-sm" onclick="novoLead()"><i class="fas fa-plus"></i> Novo lead</button>`;
   let html=head('leads',{actions});
   const prospects=CACHE.leads.filter(l=>!isClienteLead(l));
-  html+=`<div class="filters"><input type="text" id="fBuscaLeads" placeholder="Buscar nome, telefone, e-mail..." value="${esc(LEADS_FILTER.busca)}" oninput="LEADS_FILTER.busca=this.value;redesenhar(VIEWS.leads)" style="min-width:280px"></div>`;
+  html+=`<div class="filters"><input type="text" id="fBuscaLeads" placeholder="Buscar nome, telefone, e-mail ou protocolo..." value="${esc(LEADS_FILTER.busca)}" oninput="LEADS_FILTER.busca=this.value;redesenhar(VIEWS.leads)" style="min-width:280px"></div>`;
   if(typeof ctBlocoSite==='function') html+=ctBlocoSite();
   html+= LEADS_VIEW==='kanban' ? renderKanban() : renderLeadsLista();
   setView(html);
@@ -1459,7 +1461,7 @@ function kanbanCard(l,col){
   return `<div class="kb-card" draggable="true" ondragstart="lkStart(event,'${l.id}')" ondragend="lkEnd(event)" onclick="abrirLead('${l.id}','funil')">
     <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
       <b style="font-size:.86rem">${esc(l.nomeEmpresa||l.nome||'Sem nome')}</b>${resp}</div>
-    <div style="font-size:.76rem;color:var(--text-2);margin:3px 0"><b>${esc(typeof neRamoCurto==="function"?neRamoCurto(l):(l.ramo||l.tipoSeguro||"Cotação"))}</b> · <i class="fas fa-clock" style="opacity:.6"></i> ${fmtDataHora(l.criadoEm)}</div>
+    <div style="font-size:.76rem;color:var(--text-2);margin:3px 0"><b>${esc(typeof neRamoCurto==="function"?neRamoCurto(l):(l.ramo||l.tipoSeguro||"Cotação"))}</b> · <i class="fas fa-clock" style="opacity:.6"></i> ${fmtDataHora(l.criadoEm)}${typeof neProtocolo==='function'?` <span style="color:var(--text-3);font-family:ui-monospace,Menlo,monospace;font-size:.7rem">#${neProtocolo(l)}</span>`:''}</div>
     ${typeof nePinsCard==='function'?nePinsCard(l):''}
     ${l.valorNegociacao&&!['pre_cadastro','contato_realizado'].includes(col.key)?`<div style="font-size:.86rem;font-weight:800;color:var(--brand-dark);margin:4px 0">${money(l.valorNegociacao)}
       ${l.comissaoPct?`<span style="font-size:.7rem;font-weight:600;color:var(--text-3)">· ${l.comissaoPct}% com.</span>`:''}</div>`:''}
@@ -3157,7 +3159,7 @@ const SITE_VAL={sexo:{M:'Masculino',F:'Feminino'},familia:{solteiro:'Sem depende
   cruzeiro:{sim:'Sim',nao:'Não'},
   dmhNivel:{'30':'US$ 30 mil','60':'US$ 60 mil','100':'US$ 100 mil','250':'US$ 250 mil ou +',nao_sei:'A definir'},
   gestante:{sim:'Sim',nao:'Não'},preexistencia:{sim:'Sim',nao:'Não'},esportesAventura:{sim:'Sim',nao:'Não'}};
-const COB_ROT_SITE={morte:'Morte',morteAcidental:'Morte acidental',ipa:'Invalidez por acidente',ifpd:'Invalidez por doença',doencasGraves:'Doenças graves',dit:'Diária por afastamento',funeral:'Assistência funeral',
+const COB_ROT_SITE={morte:'Morte',morteAcidental:'Morte acidental',ipa:'Invalidez por acidente',ifpd:'Invalidez por doença',doencasGraves:'Doenças graves',dit:'Diária por afastamento',internacao:'Diária de internação hospitalar',funeral:'Assistência funeral',
   incendio:'Incêndio/raio/explosão',basica:'Incêndio/raio/explosão',danosEletricos:'Danos elétricos',roubo:'Roubo e furto',vendaval:'Vendaval e granizo',rcFamiliar:'RC familiar',rcEmpresarial:'RC empresarial',lucrosCessantes:'Despesas fixas / lucros cessantes',assistencia24h:'Assistência 24h',dmh:'Despesas médicas (DMH)',bagagem:'Extravio de bagagem',cancelamento:'Cancelamento de viagem',esportes:'Esportes e aventura'};
 function leadCotacaoOutrosRamos(c){
   const chaves=Object.keys(SITE_ROT).filter(k=>c[k]!==undefined&&c[k]!==null&&c[k]!=='');
@@ -14558,6 +14560,71 @@ function agFecharPrimeiroContatoResolvidos(){
   detectarLeadsNovos=function(){ const r=antDet.apply(this,arguments); agFecharPrimeiroContatoResolvidos(); return r; };
   if(typeof agAtualizarBadge==='function'){ const antB=agAtualizarBadge; window.__agBadgeOrig=antB;
     agAtualizarBadge=function(){ const r=antB.apply(this,arguments); agFecharPrimeiroContatoResolvidos(); return r; }; }
+})();
+</script>
+<script>
+/* =========================================================================
+   PROTOCOLO DO NEGÓCIO + MESMO WHATSAPP, PESSOAS DIFERENTES
+   - Protocolo = 6 primeiros caracteres do cadastro. O site manda o mesmo
+     número na mensagem do WhatsApp; aqui ele aparece no card e na ficha,
+     e a busca do funil acha por ele.
+   - Lead do funil SEM vínculo não "herda" apólices só porque o WhatsApp é
+     igual: precisa bater CPF ou nome. Se o telefone bate e o nome não,
+     a ficha pergunta: é a mesma pessoa ou outra?
+   ========================================================================= */
+function neProtocolo(l){ return l&&l.id?String(l.id).slice(0,6).toUpperCase():''; }
+function neNomeBate(a,b){
+  const pa=nePrimeiroNome(a), pb=nePrimeiroNome(b); if(!pa||!pb) return false;
+  if(pa===pb) return true;
+  try{ return typeof ctNomeCompativel==='function'&&ctNomeCompativel(ctNorm(a),ctNorm(b)); }catch(e){ return false; }
+}
+(function(){
+  const ant=apolicesDoCliente;
+  apolicesDoCliente=function(c){
+    const r=ant(c);
+    if(!c||c.contatoId||!c.id||typeof leadEmNegociacao!=='function'||!leadEmNegociacao(c)) return r;
+    const cpf=String(c.cpf||c.cnpj||'').replace(/\D/g,'');
+    return r.filter(a=>(a.leadId&&a.leadId===c.id)||(cpf&&String(a.clienteCpf||'').replace(/\D/g,'')===cpf)||neNomeBate(a.clienteNome,c.nome));
+  };
+})();
+/* outras pessoas com o mesmo WhatsApp e outro nome */
+function neMesmoFoneOutros(c){
+  if(!c||c.contatoId||c.mesmoFoneDecidido) return [];
+  const f=neNormFone(c.whatsapp||c.telefone); if(f.length<10) return [];
+  const vis=new Set();
+  return (CACHE.leads||[]).filter(x=>x.id!==c.id&&!x.contatoId&&neNormFone(x.whatsapp||x.telefone)===f&&!neNomeBate(x.nome,c.nome))
+    .filter(x=>{ const k=nePrimeiroNome(x.nome); if(vis.has(k)) return false; vis.add(k); return true; });
+}
+function neBlocoProtocolo(c){
+  const outros=neMesmoFoneOutros(c);
+  let h=`<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--text-2);margin-bottom:10px">
+    <i class="fas fa-hashtag" style="color:var(--brand)"></i> Protocolo do negócio: <b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--text)">${esc(neProtocolo(c))}</b>
+    <span style="color:var(--text-3)">— é o número que o cliente manda no WhatsApp</span>
+    <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="copiar('${esc(neProtocolo(c))}','Protocolo copiado.')"><i class="fas fa-copy"></i></button></div>`;
+  if(outros.length) h+=`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:.84rem">
+    <div style="margin-bottom:6px"><i class="fas fa-mobile-screen" style="color:var(--brand)"></i> <b>Mesmo WhatsApp de outra pessoa do cadastro.</b> Pode ser alguém da família usando o mesmo número. Confira pelo protocolo na conversa:</div>
+    ${outros.map(x=>`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <span style="flex:1;min-width:160px"><b>${esc(x.nome||'Sem nome')}</b> <span style="color:var(--text-3)">${isClienteLead(x)?'· cliente':'· contato'}</span></span>
+      <button class="btn btn-ghost btn-sm" onclick="neVincularA('${c.id}','${x.id}')"><i class="fas fa-link"></i> É a mesma pessoa</button></div>`).join('')}
+    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="neOutraPessoa('${c.id}')"><i class="fas fa-user-plus"></i> É outra pessoa — manter separado</button></div></div>`;
+  return h;
+}
+async function neVincularA(id,raizId){
+  const c=neLead(id), r=neLead(raizId); if(!c||!r) return;
+  const upd={contatoId:raizId,vinculoChecado:true,mesmoFoneDecidido:true,atualizadoEm:FV.serverTimestamp()};
+  const p=neCamposPessoais(r); Object.keys(p).forEach(k=>{ if(c[k]==null||c[k]==='') upd[k]=p[k]; });
+  if(!c.negocioAbertoEm) upd.negocioAbertoEm=c.criadoEm||FV.serverTimestamp();
+  try{ await db.collection('leads_crm').doc(id).update(upd); Object.assign(c,upd); toast('Negócio vinculado ao cadastro de '+(r.nome||'')+'.','ok'); abrirLead(id,'funil'); }
+  catch(e){ toast('Erro: '+(e.code||e.message),'err'); }
+}
+async function neOutraPessoa(id){
+  try{ await db.collection('leads_crm').doc(id).update({mesmoFoneDecidido:true,vinculoChecado:true,atualizadoEm:FV.serverTimestamp()});
+    const c=neLead(id); if(c) c.mesmoFoneDecidido=true; toast('Ok — fica como pessoa separada.','ok'); abrirLead(id,'funil'); }
+  catch(e){ toast('Erro: '+(e.code||e.message),'err'); }
+}
+(function(){
+  const ant=neAvisoCadastroReusado;
+  neAvisoCadastroReusado=function(c){ return neBlocoProtocolo(c)+ant(c); };
 })();
 </script>
 
