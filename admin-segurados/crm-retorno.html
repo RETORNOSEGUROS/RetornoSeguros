@@ -15012,6 +15012,7 @@ function txpResumoHtml(dp,compacto){
     ${(dp.beneficiosSeguradora||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Benefícios da seguradora:</b> ${dp.beneficiosSeguradora.map(x=>esc(x.nome)+(x.detalhe?' ('+esc(x.detalhe)+')':'')).join(' · ')}</div>`:''}
     ${(dp.beneficiarios||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Beneficiários:</b> ${dp.beneficiarios.map(x=>esc(x.nome||'')+(x.parentesco?' ('+esc(x.parentesco)+')':'')+(x.percentual!=null?' '+esc(String(x.percentual))+'%':'')).join(' · ')}</div>`:''}
     ${dp.condutor&&dp.condutor.nome?`<div style="font-size:.8rem;margin-bottom:8px"><b>Condutor principal:</b> ${esc(dp.condutor.nome)}${dp.condutor.relacao?' ('+esc(dp.condutor.relacao)+')':''}</div>`:''}
+    ${dp.proprietario&&dp.proprietario.nome?`<div style="font-size:.8rem;margin-bottom:8px"><b>Proprietário do veículo:</b> ${esc(dp.proprietario.nome)}${dp.proprietario.relacaoComSegurado?' ('+esc(dp.proprietario.relacaoComSegurado)+')':''}</div>`:''}
     ${(dp.perfil||[]).length&&!compacto?`<details style="font-size:.8rem;margin-bottom:8px"><summary style="cursor:pointer;font-weight:600">Questionário / perfil declarado</summary><ul style="margin:6px 0 0 18px">${dp.perfil.map(x=>`<li>${esc(x.pergunta)}: <b>${esc(x.resposta)}</b></li>`).join('')}</ul></details>`:''}
     ${(dp.clausulas||[]).length&&!compacto?`<div style="font-size:.78rem;color:var(--text-3);margin-bottom:6px">Cláusulas: ${dp.clausulas.map(x=>esc((x.codigo?x.codigo+' ':'')+x.nome)).join(' · ')}</div>`:''}
     ${dp.observacoes?`<div style="font-size:.78rem;color:var(--text-3)">${esc(dp.observacoes)}</div>`:''}`;
@@ -15078,6 +15079,380 @@ function txpBloco(c){
     box.innerHTML=`<h4 style="margin:0 0 8px"><i class="fas fa-file-signature" style="color:var(--brand)"></i> Registro completo da proposta</h4>
       <div style="background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:14px">${txpResumoHtml(dp,false)}</div>`;
     alvo.parentNode.insertBefore(box,alvo);
+  };
+})();
+</script>
+
+<script>
+/* =========================================================================
+   APÓLICE ESTRUTURADA — um só "dicionário" para a leitura da IA
+   (proposta transmitida no funil E apólices antigas em Apólices).
+   Tudo que tem valor vem como NÚMERO, item a item, para cruzar dados depois:
+     apolice.itens[]          → lista completa (cobertura / assistência / franquia / benefício)
+     apolice.chavesItens[]    → ['casco','rcf_dm','carta','assist',...]  (array-contains)
+     apolice.lmiPorChave{}    → { rcf_dm:200000, carta:..., dit:150 }
+     apolice.franquiaPorItem{}→ { casco:4600, parachoque:350, parabrisa:550 }
+     apolice.kmGuincho / diasCarroReserva / temCartaVerde ...
+   ========================================================================= */
+const APIA={
+  auto:{
+    cob:[['casco','Casco (colisão, incêndio, roubo e furto) — valor em % da FIPE ou R$'],['rcf_dm','Danos materiais a terceiros'],['rcf_dc','Danos corporais a terceiros'],
+      ['rcf_dme','Danos morais e estéticos'],['app_m','APP — morte por passageiro'],['app_i','APP — invalidez por passageiro'],['app_dmho','APP — despesas médico-hospitalares'],
+      ['carta','Carta Verde (Mercosul)'],['acessorios','Acessórios'],['equipamentos','Equipamentos / carroceria'],['blindagem','Blindagem'],['kit_gas','Kit gás (GNV)'],
+      ['despesas_extra','Despesas extraordinárias'],['defesa','Custos de defesa / jurídica']],
+    ass:[['assist','Assistência 24h / guincho (km)'],['reserva','Carro reserva (dias)'],['vidros','Vidros, faróis, lanternas e retrovisores'],['reparos','Pequenos reparos / martelinho'],
+      ['parachoque','Troca/reparo de para-choque'],['pintura','Pintura e lataria'],['roda','Pneu, roda e suspensão'],['chaveiro','Chaveiro / perda de chaves'],
+      ['residencia','Assistência residencial'],['leva_traz','Leva e traz'],['motorista','Motorista amigo'],['higienizacao','Higienização / martelinho de ouro'],['taxi','Táxi / transporte alternativo']],
+    franq:[['casco','Casco (colisão)'],['parabrisa','Para-brisa'],['vidro_traseiro','Vidro traseiro'],['vidro_lateral','Vidro lateral'],['farol','Farol'],['farol_led','Farol xenon/LED'],
+      ['lanterna','Lanterna'],['retrovisor','Retrovisor'],['parachoque','Para-choque'],['reparo','Pequeno reparo'],['pintura','Pintura'],['roda','Roda/pneu']]},
+  vida:{
+    cob:[['morte','Morte por qualquer causa'],['morte_ac','Morte acidental'],['ipa','Invalidez permanente total ou parcial por acidente'],['ipa_maj','IPA majorada'],
+      ['itp','Invalidez funcional permanente por doença (IFPD)'],['dg','Doenças graves'],['cancer','Diagnóstico de câncer'],['dih','Diária de internação hospitalar'],['dih_uti','Diária de internação em UTI'],
+      ['dmho','Despesas médicas, hospitalares e odontológicas'],['dit','Diária por incapacidade temporária'],['dit_ler','DIT LER/DORT'],['desemprego','Perda de renda por desemprego'],
+      ['funeral','Funeral individual'],['funeral_fam','Funeral familiar'],['conjuge','Inclusão de cônjuge'],['filhos','Inclusão de filhos']],
+    ass:[['funeral_serv','Assistência funeral (serviço)'],['telemedicina','Telemedicina'],['checkup','Check-up'],['orientacao','Orientação médica/nutricional/psicológica'],['farmacia','Desconto em farmácia']],
+    franq:[['dit','DIT (dias)'],['dih','DIH (dias)']]},
+  residencial:{
+    cob:[['incendio','Incêndio, queda de raio e explosão'],['eletricos','Danos elétricos'],['roubo','Roubo e furto de bens'],['vendaval','Vendaval, granizo e fumaça'],
+      ['rc_familiar','Responsabilidade civil familiar'],['aluguel','Perda ou pagamento de aluguel'],['vidros_res','Quebra de vidros'],['impacto','Impacto de veículos'],
+      ['desmoronamento','Desmoronamento'],['equipamentos_port','Equipamentos portáteis'],['tumultos','Tumultos']],
+    ass:[['assist24','Assistência 24h (chaveiro, encanador, eletricista)'],['mudanca','Mudança e guarda-móveis'],['reparos_res','Pequenos reparos / marido de aluguel'],['eletro','Conserto de eletrodomésticos'],
+      ['informatica','Help desk / informática'],['pet','Assistência pet']],
+    franq:[['eletricos','Danos elétricos'],['roubo','Roubo'],['vendaval','Vendaval'],['vidros_res','Vidros']]}
+};
+function apiaRamo(r){ const t=String(r||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  if(/vida|acident|funeral/.test(t)) return 'vida'; if(/resid|casa|apart|condom|empresar|patrim/.test(t)) return 'residencial'; return 'auto'; }
+function apiaLista(L){ return L.map(x=>x[0]+' = '+x[1]).join(' | '); }
+/* o bloco de regras + JSON que as duas leituras usam */
+function apiaSchemaTxt(pr,opts){
+  opts=opts||{}; const ramos=pr?[pr]:['auto','vida','residencial'];
+  const chaves=ramos.map(r=>`${ramos.length>1?'['+r.toUpperCase()+'] ':''}COBERTURAS: ${apiaLista(APIA[r].cob)}
+${ramos.length>1?'['+r.toUpperCase()+'] ':''}ASSISTÊNCIAS: ${apiaLista(APIA[r].ass)}
+${ramos.length>1?'['+r.toUpperCase()+'] ':''}FRANQUIAS POR ITEM: ${apiaLista(APIA[r].franq)}`).join('\n');
+  const um=`{
+      "ramo": "${pr||'auto|vida|residencial'}",
+      "documento": { "tipo": "proposta|apolice|endosso", "numeroProposta": null, "numeroApolice": null, "dataEmissao": null, "codigoCi": null, "renovacaoDeApolice": null },
+      "seguradora": null, "produto": null,
+      "vigencia": { "inicio": null, "fim": null },
+      "segurado": { "nome": null, "cpfCnpj": null, "nascimento": null, "sexo": null, "estadoCivil": null, "profissao": null, "email": null, "telefone": null,
+        "endereco": { "logradouro": null, "numero": null, "complemento": null, "bairro": null, "cidade": null, "uf": null, "cep": null } },
+      "veiculo": { "marca": null, "modelo": null, "versao": null, "anoFabricacao": null, "anoModelo": null, "placa": null, "chassi": null, "codigoFipe": null,
+        "valorFipe": null, "percentualFipe": null, "valorDeterminado": null, "combustivel": null, "zeroKm": null, "cepPernoite": null, "uso": null, "classeBonus": null, "antifurto": null },
+      "proprietario": { "nome": null, "cpfCnpj": null, "relacaoComSegurado": null },
+      "condutor": { "nome": null, "cpf": null, "nascimento": null, "sexo": null, "estadoCivil": null, "relacaoComSegurado": "o próprio|cônjuge|filho(a)|outro", "cnhDesde": null,
+        "condutor18a25": null, "outrosCondutores": [ { "nome": null, "idade": null } ] },
+      "beneficiarios": [ { "nome": null, "parentesco": null, "percentual": null } ],
+      "imovel": { "tipo": null, "construcao": null, "uso": null, "endereco": null, "cep": null, "valorDeclarado": null },
+      "perfil": [ { "pergunta": "Garagem na residência", "resposta": "Sim, com portão automático" } ],
+      "premio": { "liquido": 0, "iof": 0, "adicionalFracionamento": null, "custoApolice": null, "total": 0 },
+      "pagamento": { "forma": "cartao|debito|boleto|carne|avista", "parcelas": 1, "valorPrimeira": 0, "valorDemais": 0, "vencimentoPrimeira": null, "diaVencimento": null, "juros": false },
+      "comissaoPct": null,
+      "coberturas": [
+        { "chave": "rcf_dm", "nome": "Danos materiais a terceiros", "valor": 200000, "unidade": "R$", "valorTexto": "R$ 200.000,00",
+          "subValores": [], "franquiaValor": null, "franquiaPercentual": null, "franquiaDias": null, "franquiaTexto": null, "carenciaDias": null, "carenciaTexto": null, "premio": null, "descricao": null }
+      ],
+      "assistencias": [
+        { "chave": "assist", "nome": "Assistência 24h", "km": 400, "ilimitado": false, "dias": null, "quantidade": null, "valor": null,
+          "franquiaValor": null, "franquiaPercentual": null, "detalhe": "400 km" }
+      ],
+      "franquiasItens": [ { "chave": "parachoque", "item": "Para-choque", "valor": 350, "percentual": null } ],
+      "beneficiosSeguradora": [ { "nome": "", "detalhe": "" } ],
+      "clausulas": [ { "codigo": null, "nome": "" } ],
+      "observacoes": null${opts.divergencias?',\n      "divergencias": [ "o que está diferente do que transmitimos" ]':''}
+    }`;
+  return `REGRAS DE ESTRUTURA (o sistema faz contas e filtros com isso — valor em texto não serve)
+- Transcreva do PDF; não invente. O que não existir = null. Bloco que não se aplica ao ramo (ex.: veículo no vida) = null.
+- TODO valor vai como NÚMERO puro (200000 — sem R$, sem ponto de milhar) no campo numérico, e também em "valorTexto"/"detalhe" como está no PDF.
+- "unidade" da cobertura: "R$" | "%FIPE" (casco: valor 100 = 100% da FIPE) | "R$/dia" (DIT, DIH) | "R$/mes" | "incluso" (quando é só sim/não).
+- Coberturas com mais de um limite (ex.: Carta Verde DM e DC; APP morte e invalidez por passageiro): o principal em "valor" e todos em "subValores": [ { "nome": "DM", "valor": 0 } ].
+- ASSISTÊNCIAS: guincho em "km" (ilimitado = true se for sem limite), carro reserva em "dias", reparos/vidros em "quantidade" de utilizações quando houver; franquia em "franquiaValor"/"franquiaPercentual".
+- FRANQUIAS: a do casco também entra em "franquiasItens" com "chave": "casco". Cada peça/item com franquia própria (para-brisa, farol, retrovisor, para-choque, pintura...) é uma linha em "franquiasItens" com o valor em número.
+- CARÊNCIA em "carenciaDias" (6 meses = 180) e o texto em "carenciaTexto". Franquia em dias (DIT/DIH: "15 dias") vai em "franquiaDias".
+- SEGURADO × CONDUTOR × PROPRIETÁRIO (auto): são pessoas diferentes muitas vezes — preencha cada uma. Se o condutor principal for o próprio segurado, "relacaoComSegurado": "o próprio".
+- Use as CHAVES abaixo; o que não estiver na lista entra com "chave": "outros" e o nome do PDF (no registro entra tudo o que foi contratado). Benefícios (clube, descontos, sorteios, parceiros) vão em "beneficiosSeguradora".
+- Datas AAAA-MM-DD. Pagamento: forma "cartao", "debito", "boleto", "carne" ou "avista".
+
+CHAVES
+${chaves}
+
+FORMATO`+'\n'+(opts.varias?'```json\n{\n  "versao": "retorno-apolice-1",\n  "apolices": [\n    '+um+'\n  ]\n}\n```':'```json\n'+um.replace(/^\{/,'{\n      "versao": "retorno-apolice-1",')+'\n```');
+}
+/* ---------- normalização: o que a IA mandou → estrutura do sistema ---------- */
+const apiaNum=v=>{ if(v==null||v==='') return null; if(typeof v==='number') return isNaN(v)?null:v; const n=apNum(String(v)); return n==null||isNaN(n)?null:n; };
+function apiaFmt(valor,unidade){
+  if(valor==null) return unidade==='incluso'?'Incluída':null;
+  if(unidade==='%FIPE') return valor+'% da FIPE';
+  if(unidade==='R$/dia') return money(valor)+' por dia';
+  if(unidade==='R$/mes') return money(valor)+' por mês';
+  return money(valor);
+}
+function apiaNorm(j,prPadrao){
+  j=j||{}; const pr=apiaRamo(j.ramo||prPadrao); const L=APIA[pr];
+  const kc=new Set(L.cob.map(x=>x[0])), ka=new Set(L.ass.map(x=>x[0])), kf=new Set(L.franq.map(x=>x[0]));
+  const rot=(lst,k)=>(lst.find(x=>x[0]===k)||[0,k])[1].replace(/ —.*$| \(.*\)$/,'');
+  const cobs=(j.coberturas||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>{
+    const ch=kc.has(x.chave)?x.chave:'outros';
+    /* aceita também o formato antigo (lmi/franquia/carencia em texto) */
+    const lt=x.valorTexto||(typeof x.lmi==='string'?x.lmi:null);
+    let valor=apiaNum(x.valor), un=x.unidade||null;
+    if(valor==null&&lt){ const m=String(lt).match(/(\d{1,3})\s*%\s*(da\s*)?fipe/i); if(m){ valor=+m[1]; un=un||'%FIPE'; } else { const n=apiaNum(String(lt).replace(/[^\d.,]/g,'')); if(n){ valor=n; un=un||(/dia/i.test(lt)?'R$/dia':'R$'); } } }
+    un=un||(valor!=null?'R$':'incluso');
+    const ft=x.franquiaTexto||(typeof x.franquia==='string'?x.franquia:null), ct=x.carenciaTexto||(typeof x.carencia==='string'?x.carencia:null);
+    let fd=apiaNum(x.franquiaDias); if(fd==null&&ft){ const m=String(ft).match(/(\d+)\s*dias?/i); if(m) fd=+m[1]; }
+    const fv=apiaNum(x.franquiaValor)!=null?apiaNum(x.franquiaValor):(ft&&!/%|dia/i.test(ft)?apiaNum(String(ft).replace(/[^\d.,]/g,'')):null);
+    const fp=apiaNum(x.franquiaPercentual)!=null?apiaNum(x.franquiaPercentual):(ft&&/%/.test(ft)?apiaNum((String(ft).match(/([\d.,]+)\s*%/)||[])[1]):null);
+    let cd=apiaNum(x.carenciaDias); if(cd==null&&ct){ const m=String(ct).match(/(\d+)\s*(dia|m[eê]s|mes)/i); if(m) cd=/m/i.test(m[2])?+m[1]*30:+m[1]; }
+    return {chave:ch,nome:x.nome||rot(L.cob,ch),valor,unidade:un,lmi:lt||apiaFmt(valor,un),
+      subValores:(x.subValores||[]).filter(s=>s&&s.nome).map(s=>({nome:String(s.nome),valor:apiaNum(s.valor)})),
+      franquiaValor:fv,franquiaPercentual:fp,franquiaDias:fd,franquia:ft||(fv!=null?money(fv):fp!=null?fp+'%':fd!=null?fd+' dias':null),
+      carenciaDias:cd,carencia:ct||(cd!=null?cd+' dias':null),premio:apiaNum(x.premio),descricao:x.descricao||null}; });
+  const ass=(j.assistencias||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>{
+    const ch=ka.has(x.chave)?x.chave:(x.chave==='farois'?'vidros':'outros');
+    const dt=String(x.detalhe||'');
+    let km=apiaNum(x.km), dias=apiaNum(x.dias); const q=apiaNum(x.quantidade), fv=apiaNum(x.franquiaValor), fp=apiaNum(x.franquiaPercentual);
+    if(km==null){ const m=dt.match(/(\d[\d.]*)\s*km/i); if(m) km=apiaNum(m[1]); } if(dias==null){ const m=dt.match(/(\d+)\s*(dias|di[aá]rias)/i); if(m) dias=+m[1]; }
+    if(!x.ilimitado&&/ilimitad/i.test(dt)) x.ilimitado=true;
+    return {chave:ch,nome:x.nome||rot(L.ass,ch),km,ilimitado:!!x.ilimitado,dias,quantidade:q,valor:apiaNum(x.valor),franquiaValor:fv,franquiaPercentual:fp,
+      detalhe:x.detalhe||[x.ilimitado?'km ilimitado':km!=null?km+' km':null,dias!=null?dias+' dias':null,q!=null?q+' utilizações':null].filter(Boolean).join(' · ')||null}; });
+  const fr=(j.franquiasItens||j.franquiasDetalhe||[]).filter(x=>x&&(x.item||x.chave)).map(x=>({chave:kf.has(x.chave)?x.chave:'outros',item:x.item||rot(L.franq,x.chave),valor:apiaNum(x.valor),percentual:apiaNum(x.percentual)}));
+  const casco=cobs.find(c=>c.chave==='casco');
+  if(pr==='auto'&&!fr.some(f=>f.chave==='casco')){ const fv=(casco&&casco.franquiaValor)||apiaNum(j.franquia&&j.franquia.valor); if(fv!=null) fr.unshift({chave:'casco',item:'Casco (colisão)',valor:fv,percentual:null}); }
+  const s=j.segurado||{};
+  return txpLimpa({ramo:pr,documento:j.documento||{},seguradora:j.seguradora||null,produto:j.produto||null,vigencia:j.vigencia||{},
+    segurado:Object.assign({},s,{cpf:s.cpf||s.cpfCnpj||null}),veiculo:pr==='auto'?(j.veiculo||null):null,proprietario:pr==='auto'?(j.proprietario||null):null,condutor:pr==='auto'&&j.condutor?Object.assign({},j.condutor,{relacao:j.condutor.relacao||j.condutor.relacaoComSegurado||null}):null,
+    beneficiarios:pr==='vida'?(j.beneficiarios||[]).filter(x=>x&&x.nome):null,imovel:pr==='residencial'?(j.imovel||null):null,
+    perfil:(j.perfil||[]).filter(x=>x&&x.pergunta&&x.resposta),premio:j.premio||{},pagamento:j.pagamento||{},
+    franquia:{tipo:(j.franquia&&j.franquia.tipo)||null,valor:(fr.find(f=>f.chave==='casco')||{}).valor||apiaNum(j.franquia&&j.franquia.valor)},
+    franquiasDetalhe:fr,coberturas:cobs,assistencias:ass,
+    beneficiosSeguradora:(j.beneficiosSeguradora||[]).filter(x=>x&&x.nome),clausulas:(j.clausulas||[]).filter(x=>x&&x.nome),
+    comissaoPdf:apiaNum(j.comissaoPct),observacoes:j.observacoes||null,divergencias:(j.divergencias||[]).filter(Boolean).map(String)});
+}
+/* campos de análise que vão na apólice (servem para filtros e cruzamentos) */
+function apiaCamposAnalise(dp){
+  if(!dp) return {};
+  const itens=[], lmi={}, fq={};
+  (dp.coberturas||[]).forEach(c=>{ itens.push(txpLimpa({tipo:'cobertura',chave:c.chave,nome:c.nome,valor:c.valor,unidade:c.unidade,subValores:c.subValores,franquiaValor:c.franquiaValor,franquiaPercentual:c.franquiaPercentual,franquiaDias:c.franquiaDias,carenciaDias:c.carenciaDias}));
+    if(c.chave!=='outros'&&c.valor!=null&&lmi[c.chave]==null) lmi[c.chave]=c.valor; });
+  (dp.assistencias||[]).forEach(a=>itens.push(txpLimpa({tipo:'assistencia',chave:a.chave,nome:a.nome,km:a.km,ilimitado:a.ilimitado||null,dias:a.dias,quantidade:a.quantidade,valor:a.valor,franquiaValor:a.franquiaValor,franquiaPercentual:a.franquiaPercentual})));
+  (dp.franquiasDetalhe||[]).forEach(f=>{ itens.push(txpLimpa({tipo:'franquia',chave:f.chave,nome:f.item,valor:f.valor,percentual:f.percentual})); if(f.chave!=='outros'&&f.valor!=null&&fq[f.chave]==null) fq[f.chave]=f.valor; });
+  (dp.beneficiosSeguradora||[]).forEach(b=>itens.push({tipo:'beneficio',chave:'beneficio',nome:b.nome}));
+  const ass=k=>(dp.assistencias||[]).find(a=>a.chave===k);
+  const g=ass('assist'), r=ass('reserva'), carta=(dp.coberturas||[]).find(c=>c.chave==='carta');
+  const v=dp.veiculo||{}, cd=dp.condutor||{}, pr=dp.proprietario||{};
+  return txpLimpa({
+    itens, chavesItens:[...new Set(itens.filter(i=>i.tipo!=='beneficio'&&i.chave!=='outros').map(i=>i.tipo==='franquia'?'franquia_'+i.chave:i.chave))],
+    lmiPorChave:lmi, franquiaPorItem:fq,
+    kmGuincho:g?(g.ilimitado?99999:g.km):null, guinchoIlimitado:g?!!g.ilimitado:null, diasCarroReserva:r?r.dias:null,
+    temCartaVerde:carta?true:null, cartaVerdeValor:carta?carta.valor:null,
+    lmi:dp.ramo==='auto'?txpLimpa({dm:lmi.rcf_dm,dc:lmi.rcf_dc,dmo:lmi.rcf_dme,app:lmi.app_m}):null,
+    assist24h:dp.ramo==='auto'?!!g:null, vidros:dp.ramo==='auto'?!!ass('vidros'):null,
+    condutor:dp.ramo==='auto'&&cd.nome?cd:null, condutorPrincipal:cd.nome||null, condutorEhSegurado:cd.nome?/pr[oó]prio/i.test(cd.relacaoComSegurado||''):null,
+    proprietario:pr.nome?pr:null, bonusClasse:v.classeBonus||null, codigoCi:(dp.documento||{}).codigoCi||null,
+    numeroProposta:(dp.documento||{}).numeroProposta||null, beneficiosSeguradora:dp.beneficiosSeguradora||null, beneficiarios:dp.beneficiarios||null,
+    perfilDeclarado:dp.perfil||null, imovel:dp.imovel||null, clausulas:dp.clausulas||null, pagamentoDetalhe:dp.pagamento||null, premioDetalhe:dp.premio||null,
+    franquiasDetalhe:dp.franquiasDetalhe||null, coberturasDetalhe:dp.coberturas||null, assistenciasDetalhe:dp.assistencias||null,
+    dadosProposta:dp, estruturadaEm:new Date().toISOString() });
+}
+/* apólice inteira (para cadastrar/atualizar a partir do PDF) */
+function apiaParaApolice(dp){
+  const s=dp.segurado||{}, e=s.endereco||{}, v=dp.veiculo||{}, p=dp.premio||{}, pg=dp.pagamento||{}, d=dp.documento||{};
+  const fc=fcCatalogo(dp.ramo==='auto'?'Auto':dp.ramo==='vida'?'Vida':'Residencial');
+  const kc=new Set(fc.cob.map(x=>x.k)), ka=new Set(fc.assist.map(x=>x.k));
+  const ramoTxt=dp.ramo==='auto'?'Auto':dp.ramo==='vida'?'Vida':'Residencial';
+  return Object.assign(txpLimpa({
+    clienteNome:s.nome||null, clienteCpf:s.cpf||null, clienteEmail:s.email||null, clienteWhatsapp:s.telefone?String(s.telefone).replace(/\D/g,'').replace(/^55(?=\d{10,11}$)/,''):null,
+    endereco:[e.logradouro,e.numero,e.complemento].filter(Boolean).join(', ')||null, bairro:e.bairro, cidade:e.cidade, estado:e.uf, cep:e.cep, estadoCivil:s.estadoCivil,
+    ramo:ramoTxt, seguradora:dp.seguradora, produto:dp.produto, numeroApolice:d.numeroApolice,
+    dataInicioVigencia:dp.vigencia&&dp.vigencia.inicio, dataFimVigencia:dp.vigencia&&dp.vigencia.fim,
+    premioLiquido:apiaNum(p.liquido), premioIof:apiaNum(p.iof), valorPremio:apiaNum(p.total),
+    formaPagamento:TXP_FORMA[String(pg.forma||'').toLowerCase()]||null, parcelas:apiaNum(pg.parcelas), valorParcela:apiaNum(pg.valorDemais)||apiaNum(pg.valorPrimeira),
+    franquia:dp.franquia&&dp.franquia.valor, franquiaTipo:dp.franquia&&dp.franquia.tipo,
+    coberturasEstr:(dp.coberturas||[]).filter(c=>kc.has(c.chave)).map(c=>({k:c.chave,nome:c.nome,lmi:c.lmi})),
+    assistencias:(dp.assistencias||[]).filter(a=>ka.has(a.chave)).map(a=>({k:a.chave,nome:a.nome,detalhe:a.detalhe||null})),
+    veiculoModelo:[v.marca,v.modelo,v.versao].filter(Boolean).join(' ')||null, veiculoAnoFab:v.anoFabricacao, veiculoAnoMod:v.anoModelo,
+    veiculoAno:v.anoModelo?(v.anoFabricacao&&v.anoFabricacao!=v.anoModelo?v.anoFabricacao+'/'+v.anoModelo:String(v.anoModelo)):null,
+    veiculoPlaca:v.placa?String(v.placa).toUpperCase():null, chassi:v.chassi?String(v.chassi).toUpperCase():null, codigoFipe:v.codigoFipe,
+    valorMercado:apiaNum(v.valorFipe)||apiaNum(v.valorDeterminado), percValorMercado:apiaNum(v.percentualFipe), cepPernoite:v.cepPernoite,
+    bemSegurado:dp.ramo==='residencial'&&dp.imovel?[dp.imovel.tipo,dp.imovel.endereco].filter(Boolean).join(' · '):null
+  }),apiaCamposAnalise(dp));
+}
+
+/* ========== LEITURA DA PROPOSTA NO FUNIL passa a usar a mesma estrutura ========== */
+function txpPrompt(c){
+  const n=c.negociacaoFinal||{}; const pr=apiaRamo(nePerfilRamo(c)||c.ramo);
+  return `Você é analista de emissão da corretora Retorno Seguros. Vou anexar o PDF da PROPOSTA transmitida (ou da APÓLICE emitida) de ${neRamoCurto(c).toUpperCase()} do cliente ${c.nome||''}. Leia TODAS as páginas e organize TUDO na estrutura abaixo — é o registro definitivo que fica no nosso sistema para consultas, sinistros, renovação e análises da carteira.
+
+O QUE NÓS TRANSMITIMOS (confira contra o PDF e aponte qualquer diferença em "divergencias")
+- Seguradora: ${n.seguradora||'—'}${n.produto?' · '+n.produto:''}
+- Prêmio líquido ${money(n.premioLiquido)} · IOF ${money(n.iof)} · total ${money(n.premioTotal)}
+- Pagamento: ${n.formaPagamento||'—'}${n.parcelas?' · '+n.parcelas+'x'+(n.valorParcela?' de '+money(n.valorParcela):''):''}
+- Coberturas: ${(n.coberturas||[]).map(x=>x.nome+(x.lmi?' '+x.lmi:'')).join('; ')||'—'}
+- Assistências: ${(n.assistencias||[]).map(x=>x.nome+(x.detalhe?' '+x.detalhe:'')).join('; ')||'—'}
+
+${apiaSchemaTxt(pr,{divergencias:true})}
+
+Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.`;
+}
+async function txpSalvar(id){
+  const c=neLead(id); if(!c) return;
+  let j; try{ j=paExtrair(document.getElementById('txpTxt').value); }catch(e){ toast('Não achei um JSON válido na resposta.','err'); return; }
+  if(Array.isArray(j.apolices)) j=j.apolices[0]||{};
+  const aplicar=document.getElementById('txpAplicar').checked;
+  const dp=apiaNorm(j,nePerfilRamo(c)||c.ramo); dp.lidoEm=new Date().toISOString(); dp.lidoPor=(CURRENT_USER&&CURRENT_USER.email)||null;
+  const upd={dadosProposta:dp,atualizadoEm:FV.serverTimestamp()};
+  if(aplicar&&c.negociacaoFinal){
+    const n=Object.assign({},c.negociacaoFinal); const p=dp.premio||{}, pg=dp.pagamento||{};
+    if(dp.seguradora) n.seguradora=dp.seguradora; if(dp.produto) n.produto=dp.produto;
+    if(apiaNum(p.liquido)) n.premioLiquido=apiaNum(p.liquido); if(apiaNum(p.iof)!=null) n.iof=apiaNum(p.iof); if(apiaNum(p.total)) n.premioTotal=apiaNum(p.total);
+    if(n.comissaoPct!=null&&n.premioLiquido) n.comissaoValor=neR2(n.premioLiquido*n.comissaoPct/100);
+    if(pg.forma) n.formaPagamento=TXP_FORMA[String(pg.forma).toLowerCase()]||n.formaPagamento;
+    if(pg.parcelas) n.parcelas=parseInt(pg.parcelas)||n.parcelas; if(apiaNum(pg.valorDemais)||apiaNum(pg.valorPrimeira)) n.valorParcela=apiaNum(pg.valorDemais)||apiaNum(pg.valorPrimeira);
+    if(dp.franquia&&dp.franquia.valor!=null) n.franquia={valor:dp.franquia.valor,tipo:dp.franquia.tipo||(n.franquia&&n.franquia.tipo)||null};
+    if((dp.coberturas||[]).length) n.coberturas=dp.coberturas.map(x=>({chave:x.chave,nome:x.nome,lmi:x.lmi||null,valor:x.valor==null?null:x.valor,unidade:x.unidade||null}));
+    if((dp.assistencias||[]).length) n.assistencias=dp.assistencias.map(x=>({chave:x.chave,nome:x.nome,detalhe:x.detalhe||null}));
+    if(dp.vigencia&&dp.vigencia.inicio) n.inicioVigencia=dp.vigencia.inicio;
+    if(dp.documento&&dp.documento.numeroProposta) n.numeroProposta=dp.documento.numeroProposta;
+    if(dp.veiculo){ const v=dp.veiculo; n.veiculo=Object.assign({},n.veiculo||{},txpLimpa({marca:v.marca,modelo:[v.modelo,v.versao].filter(Boolean).join(' ')||null,anoFab:v.anoFabricacao,anoMod:v.anoModelo,
+      placa:v.placa,chassi:v.chassi,fipe:v.codigoFipe,cepPernoite:v.cepPernoite,uso:v.uso})); if(dp.condutor&&dp.condutor.nome) n.veiculo.condutor=dp.condutor.nome; }
+    upd.negociacaoFinal=n; upd.valorNegociacao=n.premioLiquido; upd.valorTotalNegociacao=n.premioTotal;
+  }
+  const s=dp.segurado||{}, e=s.endereco||{};
+  const pes=txpLimpa({cpf:s.cpf,dataNascimento:s.nascimento,email:s.email,estadoCivil:s.estadoCivil,profissao:s.profissao,sexo:s.sexo,
+    endereco:e.logradouro,numero:e.numero,complemento:e.complemento,bairro:e.bairro,cidade:e.cidade,estado:e.uf,cep:e.cep});
+  const falta=o=>{ const r={}; Object.keys(pes).forEach(k=>{ if(o[k]==null||o[k]==='') r[k]=pes[k]; }); return r; };
+  Object.assign(upd,falta(c));
+  try{
+    await db.collection('leads_crm').doc(id).update(upd); Object.assign(c,upd);
+    const raiz=c.contatoId&&neLead(c.contatoId); if(raiz){ const r=falta(raiz); if(Object.keys(r).length){ try{ await db.collection('leads_crm').doc(raiz.id).update(Object.assign(r,{atualizadoEm:FV.serverTimestamp()})); }catch(e){} } }
+    await neNota(id,'Proposta lida pela IA'+(dp.documento&&dp.documento.numeroProposta?' — nº '+dp.documento.numeroProposta:'')+(dp.premio&&dp.premio.total?' · total '+money(dp.premio.total):'')+((dp.divergencias||[]).length?' · ⚠ '+dp.divergencias.length+' divergência(s)':''));
+    toast((dp.divergencias||[]).length?'Guardado — confira as divergências apontadas.':'Proposta guardada. Na emissão, tudo vai para a apólice.',(dp.divergencias||[]).length?'info':'ok');
+    abrirLead(id,'funil');
+  }catch(err){ toast('Erro ao guardar: '+(err.code||err.message),'err'); }
+}
+/* na emissão pelo funil, os campos de análise entram junto */
+(function(){
+  const ant=neExtrasApolice;
+  neExtrasApolice=function(c){ const r=ant(c)||{}; const dp=c&&c.dadosProposta; if(!dp||!dp.ramo) return r;
+    const a=apiaCamposAnalise(dp); delete a.dadosProposta; return Object.assign(r,a,{dadosProposta:dp}); };
+})();
+
+/* ========== APÓLICES: cadastrar / completar apólices antigas com a IA ========== */
+let APIA_LOTE=[];
+function apiaPromptApolice(a){
+  const conhecido=a?`O QUE JÁ TEMOS NO SISTEMA DESTA APÓLICE (confira e complete)
+- Cliente: ${a.clienteNome||'—'}${a.clienteCpf?' · CPF '+a.clienteCpf:''}
+- ${a.seguradora||'—'} · ${a.ramo||'—'}${a.numeroApolice?' · nº '+a.numeroApolice:''} · vigência ${fmtData(a.dataInicioVigencia)} a ${fmtData(a.dataFimVigencia)}
+${a.veiculoPlaca||a.veiculoModelo?'- Veículo: '+[a.veiculoModelo,a.veiculoPlaca].filter(Boolean).join(' · ')+'\n':''}`:'';
+  return `Você é analista de cadastro da corretora Retorno Seguros. Vou anexar ${a?'o PDF desta apólice':'o(s) PDF(s) de APÓLICE(S) antiga(s) — pode ser mais de uma, de clientes e ramos diferentes'}. Elas vieram de outro sistema e quero o registro COMPLETO no nosso, item a item, para consultas, sinistros, renovações e análises da carteira (ex.: quem tem carta verde e de quanto, qual a franquia do para-choque, quantos km de guincho).
+
+${conhecido}Leia TODAS as páginas de cada PDF${a?'':' e devolva UMA entrada em "apolices" para CADA apólice'}.
+
+${apiaSchemaTxt(a?apiaRamo(a.ramo):null,{varias:!a})}
+
+Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.`;
+}
+function apiaAbrir(apId){
+  const a=apId?CACHE.apolices.find(x=>x.id===apId):null;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i> ${a?'Completar apólice com IA':'Cadastrar apólices com IA'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <ol style="margin:0 0 10px 18px;font-size:.84rem;color:var(--text-2);line-height:1.6">
+        <li>Copie o prompt e cole na IA junto com ${a?'o PDF da apólice':'os PDFs das apólices (pode ser mais de uma)'}.</li>
+        <li>Cole a resposta abaixo — eu ${a?'atualizo esta apólice':'acho o cliente pelo CPF/nome e mostro o que vai ser cadastrado ou atualizado'} antes de gravar.</li></ol>
+      <details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:.84rem;font-weight:600">Ver o prompt</summary>
+        <textarea id="apiaPrompt" rows="12" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.74rem;margin-top:6px" readonly>${esc(apiaPromptApolice(a))}</textarea></details>
+      <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="copiar(document.getElementById('apiaPrompt').value,'Prompt copiado — cole na IA com os PDFs.')"><i class="fas fa-copy"></i> Copiar prompt</button>
+      <textarea id="apiaTxt" rows="9" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.78rem" placeholder="Cole aqui a resposta da IA"></textarea>
+    </div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="${a?`modalVerApolice('${a.id}')`:'closeModal()'}">Cancelar</button>
+      <button class="btn btn-primary" onclick="apiaConferir('${a?a.id:''}')"><i class="fas fa-magnifying-glass"></i> Conferir</button></div>`,'wide');
+}
+function apiaPessoaDe(dp){
+  const s=dp.segurado||{}; const cpf=String(s.cpf||'').replace(/\D/g,'');
+  let ps=[]; try{ ps=ctPessoas(); }catch(e){}
+  let p=cpf?ps.find(x=>String(x.cpf||'').replace(/\D/g,'')===cpf):null;
+  if(!p&&s.nome){ const n=ctNorm(s.nome); p=ps.find(x=>x.nome&&ctNorm(x.nome)===n)||null; }
+  if(!p) return null;
+  const raiz=(p.leadIds||[]).map(id=>neLead(id)).filter(Boolean).find(x=>!x.contatoId)||((p.leadIds||[]).length?neLead(p.leadIds[0]):null);
+  return {pessoa:p,leadId:raiz?(raiz.contatoId||raiz.id):null,nome:p.nome};
+}
+function apiaExistente(dp,fixo){
+  if(fixo) return CACHE.apolices.find(x=>x.id===fixo)||null;
+  const d=dp.documento||{}, v=dp.veiculo||{}, s=dp.segurado||{}, cpf=String(s.cpf||'').replace(/\D/g,'');
+  const num=String(d.numeroApolice||'').replace(/\D/g,'');
+  return CACHE.apolices.find(a=>num&&String(a.numeroApolice||'').replace(/\D/g,'')===num)
+    ||CACHE.apolices.find(a=>{ const mesmo=(cpf&&String(a.clienteCpf||'').replace(/\D/g,'')===cpf)||(s.nome&&a.clienteNome&&ctNorm(a.clienteNome)===ctNorm(s.nome));
+      if(!mesmo||apiaRamo(a.ramo)!==dp.ramo) return false;
+      if(v.placa&&a.veiculoPlaca) return String(a.veiculoPlaca).toUpperCase()===String(v.placa).toUpperCase()&&String(a.dataInicioVigencia||'').slice(0,7)===String((dp.vigencia||{}).inicio||'').slice(0,7);
+      return String(a.dataInicioVigencia||'').slice(0,7)===String((dp.vigencia||{}).inicio||'').slice(0,7); })||null;
+}
+function apiaConferir(fixo){
+  let j; try{ j=paExtrair(document.getElementById('apiaTxt').value); }catch(e){ toast('Não achei um JSON válido na resposta.','err'); return; }
+  const lista=Array.isArray(j.apolices)?j.apolices:[j];
+  const aFixa=fixo?CACHE.apolices.find(x=>x.id===fixo):null;
+  APIA_LOTE=lista.map(x=>{ const dp=apiaNorm(x,aFixa&&aFixa.ramo); const ex=apiaExistente(dp,fixo||null); const pe=apiaPessoaDe(dp);
+    return {dp,ex,pe,acao:ex?'atualizar':'criar',ok:true}; }).filter(x=>x.dp.seguradora||x.dp.documento&&x.dp.documento.numeroApolice);
+  if(!APIA_LOTE.length){ toast('Não encontrei apólices na resposta.','err'); return; }
+  openModal(`<div class="modal-head"><h3><i class="fas fa-list-check" style="color:var(--brand)"></i> Conferir antes de gravar</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">${APIA_LOTE.map((x,i)=>{ const d=x.dp, s=d.segurado||{}, v=d.veiculo||{}, cd=d.condutor||{};
+      return `<div style="border:1px solid var(--border);border-radius:12px;padding:11px 14px;margin-bottom:10px">
+        <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" ${x.ok?'checked':''} onchange="APIA_LOTE[${i}].ok=this.checked" style="width:auto;margin-top:3px">
+        <div style="flex:1"><b>${esc(s.nome||'Sem nome')}</b> · ${esc(d.seguradora||'')} · ${esc(d.ramo)}${d.documento&&d.documento.numeroApolice?' · nº '+esc(d.documento.numeroApolice):''}
+          <div style="font-size:.8rem;color:var(--text-2);margin-top:2px">${d.vigencia&&d.vigencia.inicio?fmtData(d.vigencia.inicio)+' a '+fmtData(d.vigencia.fim):''}${d.premio&&d.premio.total?' · '+money(d.premio.total):''}
+            ${v.placa?' · '+esc([v.modelo,v.placa].filter(Boolean).join(' ')):''}${cd.nome&&!/pr[oó]prio/i.test(cd.relacaoComSegurado||'')?' · condutor: '+esc(cd.nome):''}
+            · ${(d.coberturas||[]).length} coberturas · ${(d.assistencias||[]).length} assistências · ${(d.franquiasDetalhe||[]).length} franquias</div>
+          <div style="font-size:.8rem;margin-top:4px">${x.ex?`<span style="color:var(--info)"><i class="fas fa-pen"></i> Atualiza a apólice já cadastrada (${esc(x.ex.seguradora||'')} ${fmtData(x.ex.dataInicioVigencia)})</span>`:'<span style="color:var(--ok)"><i class="fas fa-plus"></i> Cadastra apólice nova</span>'}
+            · ${x.pe&&x.pe.leadId?`<span><i class="fas fa-link"></i> cliente: <b>${esc(x.pe.nome||'')}</b></span>`:'<span style="color:var(--warn)"><i class="fas fa-user-plus"></i> cliente não encontrado — fica só na apólice (use "Recriar cadastro" em Clientes)</span>'}</div></div></label></div>`; }).join('')}
+      <div style="font-size:.78rem;color:var(--text-3)"><i class="fas fa-shield-halved"></i> Na atualização, o que já está preenchido na apólice continua; o PDF completa o que falta e a parte estruturada (coberturas, assistências, franquias) é substituída pela leitura nova.</div></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="apiaAbrir('${fixo||''}')">Voltar</button>
+      <button class="btn btn-primary" onclick="apiaGravar('${fixo||''}')"><i class="fas fa-floppy-disk"></i> Gravar</button></div>`,'wide');
+}
+async function apiaGravar(fixo){
+  const sel=APIA_LOTE.filter(x=>x.ok); if(!sel.length){ toast('Nada selecionado.','info'); return; }
+  let n=0, ultimo=null;
+  for(const x of sel){
+    const novo=apiaParaApolice(x.dp);
+    try{
+      if(x.ex){
+        const upd={};
+        Object.keys(novo).forEach(k=>{ const atual=x.ex[k];
+          const estrutural=['coberturasEstr','assistencias','itens','chavesItens','lmiPorChave','franquiaPorItem','coberturasDetalhe','assistenciasDetalhe','franquiasDetalhe','dadosProposta','estruturadaEm','lmi','condutor','proprietario','beneficiosSeguradora','beneficiarios','perfilDeclarado','clausulas','pagamentoDetalhe','premioDetalhe'].includes(k);
+          if(estrutural||atual==null||atual===''||(Array.isArray(atual)&&!atual.length)) upd[k]=novo[k]; });
+        if(!x.ex.leadId&&x.pe&&x.pe.leadId) upd.leadId=x.pe.leadId;
+        upd.atualizadoEm=FV.serverTimestamp(); upd.origemEstrutura='ia_pdf';
+        await db.collection('apolices_cliente').doc(x.ex.id).update(upd); ultimo=x.ex.id;
+      }else{
+        const ref=await db.collection('apolices_cliente').add(Object.assign(novo,{leadId:(x.pe&&x.pe.leadId)||null,status:apiaStatus(novo),origem:'importacao_ia',origemEstrutura:'ia_pdf',
+          criadoEm:FV.serverTimestamp(),atualizadoEm:FV.serverTimestamp()})); ultimo=ref.id;
+      }
+      n++;
+    }catch(e){ console.error(e); toast('Erro em '+((x.dp.segurado||{}).nome||'uma apólice')+': '+(e.code||e.message),'err'); }
+  }
+  toast(n+' apólice(s) gravada(s) com o registro completo.','ok');
+  if(fixo&&ultimo) setTimeout(()=>modalVerApolice(ultimo),400); else closeModal();
+}
+function apiaStatus(a){ const f=a.dataFimVigencia; if(!f) return 'ativa'; return String(f)>=hojeISO()?'ativa':'vencida'; }
+/* botões: no topo de Apólices e dentro de cada apólice */
+(function(){
+  const ant=VIEWS.apolices;
+  VIEWS.apolices=function(){
+    ant.apply(this,arguments);
+    const bar=document.querySelector('.page-head .page-head-row > div:last-child')||document.querySelector('.page-head');
+    const novo=[...document.querySelectorAll('.page-head button')].find(b=>/Nova apólice/.test(b.textContent));
+    if(novo&&!document.getElementById('btApia')){ const b=document.createElement('button'); b.id='btApia'; b.className='btn btn-ghost btn-sm'; b.style.marginRight='6px';
+      b.innerHTML='<i class="fas fa-wand-magic-sparkles"></i> Cadastrar com IA'; b.onclick=()=>apiaAbrir(''); novo.parentNode.insertBefore(b,novo); }
+  };
+  const antVer=modalVerApolice;
+  modalVerApolice=function(id){
+    antVer.apply(this,arguments);
+    const a=CACHE.apolices.find(x=>x.id===id); if(!a) return;
+    const h=document.querySelector('#modalRoot .modal-head h3'); if(!h||document.getElementById('btApiaAp')) return;
+    const b=document.createElement('button'); b.id='btApiaAp'; b.className='btn btn-ghost btn-sm'; b.style.marginLeft='10px';
+    b.innerHTML='<i class="fas fa-wand-magic-sparkles"></i> '+(a.estruturadaEm?'Ler PDF de novo':'Completar com IA'); b.onclick=()=>apiaAbrir(id);
+    h.appendChild(b);
+    if(!a.dadosProposta&&!a.estruturadaEm){ const alvo=[...document.querySelectorAll('#modalRoot h4')].find(x=>/Documentos/.test(x.textContent));
+      if(alvo){ const d=document.createElement('div'); d.innerHTML=`<div style="background:#f8fbff;border:1px dashed #93c5fd;border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:.84rem;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <i class="fas fa-wand-magic-sparkles" style="color:var(--brand)"></i><span style="flex:1;min-width:200px">Esta apólice veio com dados básicos. Anexe o PDF na IA e eu registro coberturas, assistências, franquias e condutor item a item.</span>
+        <button class="btn btn-primary btn-sm" onclick="apiaAbrir('${id}')">Completar com IA</button></div>`; alvo.parentNode.insertBefore(d,alvo); } }
   };
 })();
 </script>
