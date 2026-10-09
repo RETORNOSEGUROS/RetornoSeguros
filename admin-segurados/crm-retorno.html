@@ -14855,5 +14855,232 @@ ${pa.argumentos&&pa.argumentos.length?'- Argumentos que funcionam com ele: '+pa.
 })();
 </script>
 
+<script>
+/* =========================================================================
+   EM TRANSMISSÃO — LER A PROPOSTA TRANSMITIDA COM IA
+   A IA lê o PDF da proposta (ou da apólice) e devolve tudo na nossa
+   estrutura: segurado, objeto, coberturas com franquia/carência/descrição,
+   assistências, benefícios da seguradora, prêmios e pagamento.
+   Colado aqui: atualiza os dados da transmissão, completa o cadastro e,
+   na Emissão, vai inteiro para a apólice (consulta depois em Apólices).
+   ========================================================================= */
+const TXP_FORMA={cartao:'Cartão de crédito',debito:'Débito em conta',boleto:'Boleto',carne:'Carnê',carnê:'Carnê',avista:'À vista','à vista':'À vista'};
+function txpCatalogo(c){
+  const pr=nePerfilRamo(c)||'auto';
+  if(pr==='auto') return {pr,cob:NE_CHAVES_COB,ass:NE_CHAVES_ASS};
+  const cfg=neCfgRamo(pr); return {pr,cob:cfg.cob,ass:cfg.ass};
+}
+function txpPrompt(c){
+  const n=c.negociacaoFinal||{}; const cat=txpCatalogo(c); const pr=cat.pr;
+  const ja=`- Seguradora: ${n.seguradora||'—'}${n.produto?' · '+n.produto:''}
+- Prêmio líquido ${money(n.premioLiquido)} · IOF ${money(n.iof)} · total ${money(n.premioTotal)}
+- Pagamento: ${n.formaPagamento||'—'}${n.parcelas?' · '+n.parcelas+'x'+(n.valorParcela?' de '+money(n.valorParcela):''):''}
+- Coberturas: ${(n.coberturas||[]).map(x=>x.nome+(x.lmi?' '+x.lmi:'')).join('; ')||'—'}
+- Assistências: ${(n.assistencias||[]).map(x=>x.nome+(x.detalhe?' '+x.detalhe:'')).join('; ')||'—'}`;
+  const objeto=pr==='auto'
+    ?`"veiculo": { "marca": null, "modelo": null, "versao": null, "anoFabricacao": null, "anoModelo": null, "placa": null, "chassi": null, "codigoFipe": null, "valorFipe": null, "percentualFipe": null, "combustivel": null, "zeroKm": null, "cepPernoite": null, "uso": null, "classeBonus": null, "codigoIdentificacao": null, "dispositivoAntifurto": null },
+  "condutor": { "nome": null, "cpf": null, "nascimento": null, "estadoCivil": null, "relacao": null, "cnhDesde": null },
+  "perfil": [ { "pergunta": "Garagem na residência", "resposta": "Sim, com portão automático" } ],`
+    :pr==='vida'
+    ?`"beneficiarios": [ { "nome": null, "parentesco": null, "percentual": null } ],
+  "perfil": [ { "pergunta": "Profissão declarada", "resposta": "" } ],`
+    :`"imovel": { "tipo": null, "construcao": null, "uso": null, "endereco": null, "cep": null, "valorDeclarado": null },
+  "perfil": [ { "pergunta": "", "resposta": "" } ],`;
+  return `Você é analista de emissão da corretora Retorno Seguros. Vou anexar o PDF da PROPOSTA transmitida (ou da APÓLICE emitida) de ${neRamoCurto(c).toUpperCase()} do cliente ${c.nome||''}. Leia TODAS as páginas e organize TUDO na estrutura abaixo — é o registro definitivo que fica no nosso sistema para consultas, sinistros e renovação.
+
+O QUE NÓS TRANSMITIMOS (confira contra o PDF e aponte qualquer diferença em "divergencias")
+${ja}
+
+REGRAS
+- Transcreva do PDF; não invente. O que não existir no PDF = null.
+- Dinheiro em campos numéricos = número puro (3456.78). Em texto: R$ 1.234,56. Datas AAAA-MM-DD.
+- COBERTURAS e ASSISTÊNCIAS: use as chaves da lista quando corresponderem; o que não estiver na lista vai com "chave": "outros" e o nome do PDF (aqui é registro completo, entra tudo o que foi contratado). Para cada uma: limite (LMI/capital), franquia, carência, prêmio da cobertura (se houver) e a descrição/condição que o PDF trouxer (doenças graves: a lista completa de doenças).
+- FRANQUIAS: a do casco/principal em "franquia"; as por peça/cobertura (vidros, faróis, retrovisores, danos elétricos etc.) em "franquiasDetalhe".
+- BENEFÍCIOS DA SEGURADORA: clube de vantagens, descontos em parceiros, serviços extras, sorteios, programas de fidelidade — liste em "beneficiosSeguradora" (no orçamento ficam de fora, mas no registro entram).
+- PAGAMENTO: forma ("cartao", "debito", "boleto", "carne" ou "avista"), parcelas, valor da 1ª e das demais, vencimento da 1ª, dia de vencimento, juros/adicional de fracionamento, custo de apólice.
+- Comissão: só se o PDF mostrar (é só para conferência).
+- Responda SOMENTE com o JSON, dentro de um bloco \`\`\`json.
+
+CHAVES DE COBERTURA: ${cat.cob.map(x=>x[0]+' = '+x[1]).join(' | ')}
+CHAVES DE ASSISTÊNCIA: ${cat.ass.map(x=>x[0]+' = '+x[1]).join(' | ')}
+
+\`\`\`json
+{
+  "versao": "retorno-proposta-1", "ramo": "${pr}",
+  "documento": { "tipo": "proposta|apolice", "numeroProposta": null, "numeroApolice": null, "dataEmissao": null, "codigoCi": null },
+  "seguradora": null, "produto": null,
+  "vigencia": { "inicio": null, "fim": null },
+  "segurado": { "nome": null, "cpf": null, "nascimento": null, "sexo": null, "estadoCivil": null, "profissao": null, "email": null, "telefone": null,
+    "endereco": { "logradouro": null, "numero": null, "complemento": null, "bairro": null, "cidade": null, "uf": null, "cep": null } },
+  ${objeto}
+  "premio": { "liquido": 0, "iof": 0, "adicionalFracionamento": null, "custoApolice": null, "total": 0 },
+  "pagamento": { "forma": "cartao", "parcelas": 1, "valorPrimeira": 0, "valorDemais": 0, "vencimentoPrimeira": null, "diaVencimento": null, "juros": false },
+  "franquia": { "tipo": null, "valor": null },
+  "franquiasDetalhe": [ { "item": "Para-brisa", "valor": 0 } ],
+  "coberturas": [ { "chave": "", "nome": "", "lmi": "", "franquia": null, "carencia": null, "premio": null, "descricao": null } ],
+  "assistencias": [ { "chave": "", "nome": "", "detalhe": "" } ],
+  "beneficiosSeguradora": [ { "nome": "", "detalhe": "" } ],
+  "clausulas": [ { "codigo": null, "nome": "" } ],
+  "comissaoPct": null,
+  "observacoes": null,
+  "divergencias": [ "o que está diferente do que transmitimos (valor, cobertura, pagamento, dados do segurado)" ]
+}
+\`\`\``;
+}
+function txpGerarPrompt(id){
+  const c=neLead(id); if(!c) return;
+  openModal(`<div class="modal-head"><h3><i class="fas fa-file-signature" style="color:#0891b2"></i> Ler a proposta transmitida — prompt</h3><button class="modal-close" onclick="abrirLead('${id}','funil')">&times;</button></div>
+    <div class="modal-body"><p style="font-size:.84rem;color:var(--text-2);margin-bottom:8px">Cole na IA e anexe o <b>PDF da proposta</b> que foi para a seguradora (ou o da apólice, quando sair). Depois cole a resposta em <b>Colar leitura</b>.</p>
+      <textarea id="txpPromptTxt" rows="16" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.76rem" readonly>${esc(txpPrompt(c))}</textarea></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}','funil')">Voltar</button>
+      <button class="btn btn-ghost" onclick="txpColar('${id}')"><i class="fas fa-paste"></i> Colar leitura</button>
+      <button class="btn btn-primary" onclick="copiar(document.getElementById('txpPromptTxt').value,'Prompt copiado — cole na IA com o PDF.')"><i class="fas fa-copy"></i> Copiar prompt</button></div>`,'wide');
+}
+function txpColar(id){
+  openModal(`<div class="modal-head"><h3><i class="fas fa-paste" style="color:#0891b2"></i> Colar leitura da proposta</h3><button class="modal-close" onclick="abrirLead('${id}','funil')">&times;</button></div>
+    <div class="modal-body"><textarea id="txpTxt" rows="14" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:.78rem" placeholder="Cole aqui a resposta da IA"></textarea>
+      <label style="display:flex;gap:8px;align-items:center;font-size:.84rem;margin-top:8px"><input type="checkbox" id="txpAplicar" checked style="width:auto"> Atualizar os dados da transmissão (valores, coberturas, pagamento) com o que está no PDF</label></div>
+    <div class="modal-foot"><button class="btn btn-ghost" onclick="abrirLead('${id}','funil')">Cancelar</button>
+      <button class="btn btn-primary" onclick="txpSalvar('${id}')"><i class="fas fa-check"></i> Guardar</button></div>`);
+}
+function txpLimpa(o){ /* tira chaves nulas/vazias e devolve objeto pequeno */
+  if(Array.isArray(o)) return o.map(txpLimpa).filter(x=>x!=null&&!(typeof x==='object'&&!Array.isArray(x)&&!Object.keys(x).length));
+  if(o&&typeof o==='object'){ const r={}; Object.keys(o).forEach(k=>{ const v=txpLimpa(o[k]); if(v==null||v===''||(Array.isArray(v)&&!v.length)||(typeof v==='object'&&!Array.isArray(v)&&!Object.keys(v).length)) return; r[k]=v; }); return r; }
+  return o;
+}
+async function txpSalvar(id){
+  const c=neLead(id); if(!c) return;
+  let j; try{ j=paExtrair(document.getElementById('txpTxt').value); }catch(e){ toast('Não achei um JSON válido na resposta.','err'); return; }
+  const aplicar=document.getElementById('txpAplicar').checked;
+  const cat=txpCatalogo(c); const ks=new Set(cat.cob.map(x=>x[0])), ka=new Set(cat.ass.map(x=>x[0]));
+  const dp=txpLimpa({
+    documento:j.documento||{}, seguradora:j.seguradora||null, produto:j.produto||null, vigencia:j.vigencia||{}, segurado:j.segurado||{},
+    veiculo:j.veiculo||null, condutor:j.condutor||null, beneficiarios:j.beneficiarios||null, imovel:j.imovel||null, perfil:(j.perfil||[]).filter(x=>x&&x.pergunta&&x.resposta),
+    premio:j.premio||{}, pagamento:j.pagamento||{}, franquia:j.franquia||{}, franquiasDetalhe:(j.franquiasDetalhe||[]).filter(x=>x&&x.item),
+    coberturas:(j.coberturas||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>({chave:x.chave||'outros',nome:x.nome||neRotuloRamo(x.chave),lmi:x.lmi==null?null:String(x.lmi),
+      franquia:x.franquia==null?null:String(x.franquia),carencia:x.carencia==null?null:String(x.carencia),premio:neN(x.premio),descricao:x.descricao||null})),
+    assistencias:(j.assistencias||[]).filter(x=>x&&(x.nome||x.chave)).map(x=>({chave:x.chave||'outros',nome:x.nome||neRotuloRamo(x.chave),detalhe:x.detalhe||null})),
+    beneficiosSeguradora:(j.beneficiosSeguradora||[]).filter(x=>x&&x.nome), clausulas:(j.clausulas||[]).filter(x=>x&&x.nome),
+    comissaoPdf:neN(j.comissaoPct), observacoes:j.observacoes||null, divergencias:(j.divergencias||[]).filter(Boolean).map(String),
+    lidoEm:new Date().toISOString(), lidoPor:(CURRENT_USER&&CURRENT_USER.email)||null });
+  const upd={dadosProposta:dp,atualizadoEm:FV.serverTimestamp()};
+  /* transmissão atualizada com o que está no PDF (comissão continua a nossa) */
+  if(aplicar&&c.negociacaoFinal){
+    const n=Object.assign({},c.negociacaoFinal); const p=dp.premio||{}, pg=dp.pagamento||{};
+    if(dp.seguradora) n.seguradora=dp.seguradora; if(dp.produto) n.produto=dp.produto;
+    if(neN(p.liquido)) n.premioLiquido=neN(p.liquido); if(neN(p.iof)!=null) n.iof=neN(p.iof); if(neN(p.total)) n.premioTotal=neN(p.total);
+    if(n.comissaoPct!=null&&n.premioLiquido) n.comissaoValor=neR2(n.premioLiquido*n.comissaoPct/100);
+    if(pg.forma) n.formaPagamento=TXP_FORMA[String(pg.forma).toLowerCase()]||n.formaPagamento;
+    if(pg.parcelas) n.parcelas=parseInt(pg.parcelas)||n.parcelas; if(neN(pg.valorDemais)||neN(pg.valorPrimeira)) n.valorParcela=neN(pg.valorDemais)||neN(pg.valorPrimeira);
+    if(dp.franquia&&neN(dp.franquia.valor)!=null) n.franquia={valor:neN(dp.franquia.valor),tipo:dp.franquia.tipo||(n.franquia&&n.franquia.tipo)||null};
+    if((dp.coberturas||[]).length) n.coberturas=dp.coberturas.filter(x=>ks.has(x.chave)||x.chave==='outros').map(x=>({chave:x.chave,nome:x.nome,lmi:x.lmi||null}));
+    if((dp.assistencias||[]).length) n.assistencias=dp.assistencias.filter(x=>ka.has(x.chave)||x.chave==='outros').map(x=>({chave:x.chave,nome:x.nome,detalhe:x.detalhe||null}));
+    if(dp.vigencia&&dp.vigencia.inicio) n.inicioVigencia=dp.vigencia.inicio;
+    if(dp.documento&&dp.documento.numeroProposta) n.numeroProposta=dp.documento.numeroProposta;
+    if(dp.veiculo){ const v=dp.veiculo; n.veiculo=Object.assign({},n.veiculo||{},txpLimpa({marca:v.marca,modelo:[v.modelo,v.versao].filter(Boolean).join(' ')||null,anoFab:v.anoFabricacao,anoMod:v.anoModelo,
+      placa:v.placa,chassi:v.chassi,fipe:v.codigoFipe,cepPernoite:v.cepPernoite,uso:v.uso})); if(dp.condutor&&dp.condutor.nome) n.veiculo.condutor=dp.condutor.nome; }
+    upd.negociacaoFinal=n; upd.valorNegociacao=n.premioLiquido; upd.valorTotalNegociacao=n.premioTotal;
+  }
+  /* cadastro: completa o que estiver vazio com o que veio do PDF */
+  const s=dp.segurado||{}, e=s.endereco||{};
+  const pes=txpLimpa({cpf:s.cpf,dataNascimento:s.nascimento,email:s.email,estadoCivil:s.estadoCivil,profissao:s.profissao,sexo:s.sexo,
+    endereco:e.logradouro,numero:e.numero,complemento:e.complemento,bairro:e.bairro,cidade:e.cidade,estado:e.uf,cep:e.cep});
+  const falta=o=>{ const r={}; Object.keys(pes).forEach(k=>{ if(o[k]==null||o[k]==='') r[k]=pes[k]; }); return r; };
+  Object.assign(upd,falta(c));
+  try{
+    await db.collection('leads_crm').doc(id).update(upd); Object.assign(c,upd);
+    const raiz=c.contatoId&&neLead(c.contatoId); if(raiz){ const r=falta(raiz); if(Object.keys(r).length){ try{ await db.collection('leads_crm').doc(raiz.id).update(Object.assign(r,{atualizadoEm:FV.serverTimestamp()})); }catch(e){} } }
+    await neNota(id,'Proposta lida pela IA'+(dp.documento&&dp.documento.numeroProposta?' — nº '+dp.documento.numeroProposta:'')+(dp.premio&&dp.premio.total?' · total '+money(dp.premio.total):'')+((dp.divergencias||[]).length?' · ⚠ '+dp.divergencias.length+' divergência(s)':''));
+    toast((dp.divergencias||[]).length?'Guardado — confira as divergências apontadas.':'Proposta guardada. Na emissão, tudo vai para a apólice.',(dp.divergencias||[]).length?'info':'ok');
+    abrirLead(id,'funil');
+  }catch(err){ toast('Erro ao guardar: '+(err.code||err.message),'err'); }
+}
+/* resumo legível (ficha e apólice) */
+function txpResumoHtml(dp,compacto){
+  if(!dp) return '';
+  const lin=(k,v)=>v==null||v===''?'':`<div class="mov-f"><div class="k">${k}</div><div class="v">${esc(String(v))}</div></div>`;
+  const pg=dp.pagamento||{}, p=dp.premio||{}, d=dp.documento||{};
+  const cob=(dp.coberturas||[]).map(x=>`<tr><td>${esc(x.nome)}${x.descricao?`<details style="font-size:.74rem;color:var(--text-3)"><summary style="cursor:pointer">condições</summary>${esc(x.descricao)}</details>`:''}</td>
+    <td><b>${esc(x.lmi||'—')}</b></td><td>${esc(x.franquia||'')}</td><td>${esc(x.carencia||'')}</td></tr>`).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 14px;margin-bottom:10px">
+      ${lin('Nº proposta',d.numeroProposta)}${lin('Nº apólice (PDF)',d.numeroApolice)}${lin('Produto',dp.produto)}${lin('Vigência',dp.vigencia&&dp.vigencia.inicio?fmtData(dp.vigencia.inicio)+' a '+fmtData(dp.vigencia.fim):null)}
+      ${lin('Prêmio total',p.total!=null?money(p.total):null)}${lin('Pagamento',[TXP_FORMA[String(pg.forma||'').toLowerCase()]||pg.forma,pg.parcelas?pg.parcelas+'x':null,pg.valorDemais||pg.valorPrimeira?money(pg.valorDemais||pg.valorPrimeira):null].filter(Boolean).join(' · '))}
+      ${lin('1º vencimento',pg.vencimentoPrimeira?fmtData(pg.vencimentoPrimeira):null)}${lin('Franquia',dp.franquia&&dp.franquia.valor!=null?money(dp.franquia.valor)+(dp.franquia.tipo?' ('+dp.franquia.tipo+')':''):null)}</div>
+    ${cob?`<div class="tbl-wrap" style="margin-bottom:10px"><table style="font-size:.8rem"><thead><tr><th>Cobertura</th><th>Limite</th><th>Franquia</th><th>Carência</th></tr></thead><tbody>${cob}</tbody></table></div>`:''}
+    ${(dp.assistencias||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Assistências:</b> ${dp.assistencias.map(x=>esc(x.nome)+(x.detalhe?' ('+esc(x.detalhe)+')':'')).join(' · ')}</div>`:''}
+    ${(dp.franquiasDetalhe||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Franquias por item:</b> ${dp.franquiasDetalhe.map(x=>esc(x.item)+' '+(x.valor!=null?money(x.valor):'')).join(' · ')}</div>`:''}
+    ${(dp.beneficiosSeguradora||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Benefícios da seguradora:</b> ${dp.beneficiosSeguradora.map(x=>esc(x.nome)+(x.detalhe?' ('+esc(x.detalhe)+')':'')).join(' · ')}</div>`:''}
+    ${(dp.beneficiarios||[]).length?`<div style="font-size:.8rem;margin-bottom:8px"><b>Beneficiários:</b> ${dp.beneficiarios.map(x=>esc(x.nome||'')+(x.parentesco?' ('+esc(x.parentesco)+')':'')+(x.percentual!=null?' '+esc(String(x.percentual))+'%':'')).join(' · ')}</div>`:''}
+    ${dp.condutor&&dp.condutor.nome?`<div style="font-size:.8rem;margin-bottom:8px"><b>Condutor principal:</b> ${esc(dp.condutor.nome)}${dp.condutor.relacao?' ('+esc(dp.condutor.relacao)+')':''}</div>`:''}
+    ${(dp.perfil||[]).length&&!compacto?`<details style="font-size:.8rem;margin-bottom:8px"><summary style="cursor:pointer;font-weight:600">Questionário / perfil declarado</summary><ul style="margin:6px 0 0 18px">${dp.perfil.map(x=>`<li>${esc(x.pergunta)}: <b>${esc(x.resposta)}</b></li>`).join('')}</ul></details>`:''}
+    ${(dp.clausulas||[]).length&&!compacto?`<div style="font-size:.78rem;color:var(--text-3);margin-bottom:6px">Cláusulas: ${dp.clausulas.map(x=>esc((x.codigo?x.codigo+' ':'')+x.nome)).join(' · ')}</div>`:''}
+    ${dp.observacoes?`<div style="font-size:.78rem;color:var(--text-3)">${esc(dp.observacoes)}</div>`:''}`;
+}
+function txpBloco(c){
+  if(faseDoLead(c)!=='em_transmissao') return '';
+  const dp=c.dadosProposta;
+  if(!dp) return `<div style="border:1px dashed #67e8f9;border-radius:12px;padding:11px 14px;margin-bottom:14px;background:#f0fdff;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <i class="fas fa-file-signature" style="color:#0891b2"></i><span style="flex:1;min-width:220px;font-size:.84rem"><b>Ler a proposta transmitida com IA</b> — coberturas, franquias, carências, benefícios e pagamento organizados; na emissão tudo vai para a apólice.</span>
+      <button class="btn btn-ghost btn-sm" onclick="txpGerarPrompt('${c.id}')"><i class="fas fa-robot"></i> Gerar prompt</button>
+      <button class="btn btn-ghost btn-sm" onclick="txpColar('${c.id}')"><i class="fas fa-paste"></i> Colar</button></div>`;
+  const dv=dp.divergencias||[];
+  return `<details style="border:1px solid #a5f3fc;border-radius:12px;padding:10px 14px;margin-bottom:14px;background:#f0fdff" ${dv.length?'open':''}>
+    <summary style="cursor:pointer;font-weight:700;font-size:.88rem"><i class="fas fa-file-signature" style="color:#0891b2"></i> Proposta lida pela IA
+      <span style="font-weight:400;color:var(--text-3);font-size:.78rem"> · ${esc((dp.documento&&dp.documento.numeroProposta)?'nº '+dp.documento.numeroProposta:'sem nº')} · ${(dp.coberturas||[]).length} coberturas${dv.length?' · <b style="color:var(--warn)">⚠ '+dv.length+' divergência(s)</b>':''}</span></summary>
+    <div style="margin-top:10px">
+      ${dv.length?`<div style="background:var(--warn-bg);border-radius:10px;padding:9px 12px;font-size:.82rem;color:#7c4a03;margin-bottom:10px"><b>Diferenças entre o PDF e o que transmitimos:</b><ul style="margin:4px 0 0 18px">${dv.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
+      ${txpResumoHtml(dp,true)}
+      <div style="display:flex;gap:6px;margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="txpGerarPrompt('${c.id}')"><i class="fas fa-robot"></i> Prompt</button>
+        <button class="btn btn-ghost btn-sm" onclick="txpColar('${c.id}')"><i class="fas fa-paste"></i> Colar nova leitura (ex.: apólice emitida)</button></div></div></details>`;
+}
+(function(){
+  const ant=nePainel;
+  nePainel=function(c){ return txpBloco(c)+ant(c); };
+})();
+/* EMITIDA: o fechamento já vem com placa, chassi, vigência etc. do PDF */
+(function(){
+  const ant=nePreencherFechamento;
+  nePreencherFechamento=function(c){
+    ant(c); const dp=c&&c.dadosProposta; if(!dp) return;
+    const v=dp.veiculo||{}, d=dp.documento||{};
+    if(d.numeroApolice) FC_MEM.fcNum=d.numeroApolice;
+    if(dp.vigencia&&dp.vigencia.inicio){ FC_MEM.fcIni=dp.vigencia.inicio; FC_MEM.fcFim=dp.vigencia.fim||fcMais1Ano(dp.vigencia.inicio); }
+    if(nePerfilRamo(c)==='auto'){
+      if(v.modelo) FC_MEM.fcModelo=[v.marca,v.modelo,v.versao].filter(Boolean).join(' ');
+      if(v.anoModelo) FC_MEM.fcAno=v.anoFabricacao&&v.anoFabricacao!=v.anoModelo?v.anoFabricacao+'/'+v.anoModelo:String(v.anoModelo);
+      if(v.placa) FC_MEM.fcPlaca=v.placa; if(v.chassi) FC_MEM.fcChassi=v.chassi; if(v.codigoFipe) FC_MEM.fcFipeCod=v.codigoFipe;
+      if(v.cepPernoite) FC_MEM.fcCep=v.cepPernoite; if(dp.condutor&&dp.condutor.nome) FC_MEM.fcCondutor=dp.condutor.nome;
+    }
+  };
+})();
+/* e a apólice nasce com o registro completo */
+(function(){
+  const ant=neExtrasApolice;
+  neExtrasApolice=function(c){
+    const r=ant(c)||{}; const dp=c&&c.dadosProposta; if(!dp) return r;
+    const d=dp.documento||{};
+    return Object.assign(r,txpLimpa({
+      numeroProposta:d.numeroProposta||null, coberturasDetalhe:(dp.coberturas||[]).length?dp.coberturas:r.coberturasDetalhe,
+      assistenciasDetalhe:(dp.assistencias||[]).length?dp.assistencias:r.assistenciasDetalhe,
+      franquiasDetalhe:dp.franquiasDetalhe||null, beneficiosSeguradora:dp.beneficiosSeguradora||null, beneficiarios:dp.beneficiarios||null,
+      condutorPrincipal:dp.condutor||null, perfilDeclarado:dp.perfil||null, imovel:dp.imovel||null, clausulas:dp.clausulas||null,
+      pagamentoDetalhe:dp.pagamento||null, premioDetalhe:dp.premio||null, dadosProposta:dp }));
+  };
+})();
+/* na consulta da apólice: o registro completo, antes dos documentos */
+(function(){
+  const ant=modalVerApolice;
+  modalVerApolice=function(id){
+    ant.apply(this,arguments);
+    const a=CACHE.apolices.find(x=>x.id===id); const dp=a&&a.dadosProposta; if(!dp) return;
+    const alvo=[...document.querySelectorAll('#modalRoot h4')].find(h=>/Documentos/.test(h.textContent)); if(!alvo) return;
+    const box=document.createElement('div');
+    box.innerHTML=`<h4 style="margin:0 0 8px"><i class="fas fa-file-signature" style="color:var(--brand)"></i> Registro completo da proposta</h4>
+      <div style="background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:14px">${txpResumoHtml(dp,false)}</div>`;
+    alvo.parentNode.insertBefore(box,alvo);
+  };
+})();
+</script>
+
 </body>
 </html>
