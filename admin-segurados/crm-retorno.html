@@ -15487,5 +15487,114 @@ function apiaStatus(a){ const f=a.dataFimVigencia; if(!f) return 'ativa'; return
 })();
 </script>
 
+<script>
+/* =========================================================================
+   ÁREA DO CLIENTE (cliente.html) — retrato completo da apólice
+   - O retrato vai para o cadastro da PESSOA que tem o link (o negócio do
+     funil não tem link próprio: antes o anexo atualizava o negócio e o
+     cliente nunca via).
+   - Leva coberturas item a item, franquias, carências, assistências,
+     benefícios, condutor, perfil declarado e documentos. NUNCA comissão.
+   - Sempre que uma apólice muda (anexo, leitura da IA, emissão), o
+     retrato de quem é dono dela é reescrito sozinho.
+   ========================================================================= */
+function ptDonosDoLink(l){
+  if(!l) return [];
+  const raiz=l.contatoId?neLead(l.contatoId):l; const ids=new Set();
+  const docs=raiz?neDocsDaPessoa(raiz.id):[l];
+  [raiz,l].concat(docs).forEach(x=>{ if(x&&x.portalToken) ids.add(x.id); });
+  return [...ids].map(id=>neLead(id)).filter(Boolean);
+}
+function ptApolicesDaPessoa(l){
+  const raiz=l.contatoId?(neLead(l.contatoId)||l):l;
+  const ids=new Set(neDocsDaPessoa(raiz.id).map(x=>x.id).concat([raiz.id,l.id]));
+  const set=new Map(); apolicesDoCliente(raiz).forEach(a=>set.set(a.id,a));
+  CACHE.apolices.forEach(a=>{ if(a.leadId&&ids.has(a.leadId)) set.set(a.id,a); });
+  return [...set.values()];
+}
+/* o que o cliente pode ver de cada apólice (lista branca — comissão nunca entra) */
+function ptDetalheApolice(a){
+  const dp=a.dadosProposta||{};
+  const cobs=(a.coberturasDetalhe&&a.coberturasDetalhe.length?a.coberturasDetalhe:(a.coberturasEstr||[]).map(c=>({nome:c.nome,lmi:c.lmi})))
+    .map(c=>txpLimpa({nome:c.nome,limite:c.lmi||null,valor:c.valor==null?null:c.valor,unidade:c.unidade||null,
+      subValores:(c.subValores||[]).map(s=>({nome:s.nome,valor:s.valor})),franquia:c.franquia||null,carencia:c.carencia||null,descricao:c.descricao||null}));
+  const ass=(a.assistenciasDetalhe&&a.assistenciasDetalhe.length?a.assistenciasDetalhe:(a.assistencias||[]))
+    .map(x=>txpLimpa({nome:x.nome,detalhe:x.detalhe||null,km:x.km==null?null:x.km,ilimitado:x.ilimitado||null,dias:x.dias==null?null:x.dias}));
+  const fr=(a.franquiasDetalhe||[]).map(f=>txpLimpa({item:f.item,valor:f.valor==null?null:f.valor,percentual:f.percentual==null?null:f.percentual}));
+  const v=dp.veiculo||{}, cd=a.condutor||dp.condutor||null, pr=a.proprietario||dp.proprietario||null, pg=a.pagamentoDetalhe||dp.pagamento||{};
+  return txpLimpa({
+    produto:a.produto||dp.produto||null, numeroProposta:a.numeroProposta||null,
+    coberturasDet:cobs, assistenciasDet:ass, franquiasItens:fr,
+    beneficios:(a.beneficiosSeguradora||[]).map(b=>txpLimpa({nome:b.nome,detalhe:b.detalhe||null})),
+    condutor:cd&&cd.nome?txpLimpa({nome:cd.nome,relacao:cd.relacaoComSegurado||cd.relacao||null,nascimento:cd.nascimento||null}):(a.condutorPrincipal?{nome:a.condutorPrincipal}:null),
+    proprietario:pr&&pr.nome?txpLimpa({nome:pr.nome,relacao:pr.relacaoComSegurado||null}):null,
+    beneficiarios:(a.beneficiarios||[]).map(b=>txpLimpa({nome:b.nome,parentesco:b.parentesco||null,percentual:b.percentual==null?null:b.percentual})),
+    perfil:(a.perfilDeclarado||dp.perfil||[]).map(p=>({pergunta:p.pergunta,resposta:p.resposta})),
+    veiculoDet:txpLimpa({chassi:a.chassi||v.chassi||null,cepPernoite:a.cepPernoite||v.cepPernoite||null,uso:v.uso||null,classeBonus:a.bonusClasse||v.classeBonus||null,codigoFipe:a.codigoFipe||v.codigoFipe||null}),
+    imovel:a.imovel?txpLimpa({tipo:a.imovel.tipo,construcao:a.imovel.construcao,uso:a.imovel.uso,endereco:a.imovel.endereco,cep:a.imovel.cep}):null,
+    pagamentoDet:txpLimpa({forma:a.formaPagamento||TXP_FORMA[String(pg.forma||'').toLowerCase()]||null,parcelas:a.parcelas||pg.parcelas||null,
+      valorParcela:a.valorParcela||pg.valorDemais||pg.valorPrimeira||null,vencimentoPrimeira:pg.vencimentoPrimeira||null,diaVencimento:pg.diaVencimento||null}),
+    franquiaPorItem:a.franquiaPorItem||null, kmGuincho:a.kmGuincho==null?null:a.kmGuincho, diasCarroReserva:a.diasCarroReserva==null?null:a.diasCarroReserva
+  });
+}
+(function(){
+  const antRet=ptRetrato;
+  ptRetrato=function(lead){
+    const r=antRet(lead);
+    const vig=a=>(typeof apVigente==='function'?apVigente(a):apEhAtiva(a));
+    const todas=ptApolicesDaPessoa(lead); const ja=new Set((r.apolices||[]).map(a=>a.id));
+    /* apólices emitidas pelo funil (ligadas ao negócio) entram também */
+    todas.filter(a=>!ja.has(a.id)).forEach(a=>{ const tmp=antRet(Object.assign({},lead,{id:a.leadId||lead.id}));
+      (tmp.apolices||[]).filter(x=>x.id===a.id).forEach(x=>r.apolices.push(x)); });
+    r.apolices=(r.apolices||[]).map(x=>{ const a=CACHE.apolices.find(y=>y.id===x.id); return a?Object.assign(x,ptDetalheApolice(a)):x; })
+      .sort((x,y)=>(x.vigente===y.vigente?String(y.fim||'').localeCompare(String(x.fim||'')):(x.vigente?-1:1)));
+    r.apolices.forEach(x=>{ delete x.premioLiquido; });   /* cliente vê o prêmio total; líquido/comissão são da corretora */
+    const tem=new Set(r.apolices.filter(a=>a.vigente).map(a=>a.ramo));
+    r.sugeridos=PT_PRODUTOS.filter(p=>!tem.has(p.ramo)).map(p=>({ramo:p.ramo,nome:p.nome,pagina:p.pagina,icone:p.icone,frase:p.frase}));
+    return r;
+  };
+  const antAt=portalAtualizar;
+  portalAtualizar=async function(leadId){
+    const l=CACHE.leads.find(x=>x.id===leadId); if(!l) return;
+    const donos=ptDonosDoLink(l);
+    if(!donos.length) return antAt(leadId);
+    for(const d of donos){ try{ await db.collection('portal_clientes').doc(d.portalToken).set(ptRetrato(d)); }catch(e){ console.warn('portal',e); } }
+  };
+})();
+/* quem é o dono (com link) de uma apólice */
+function ptDonosDaApolice(a){
+  const out=new Map();
+  const l=a.leadId&&neLead(a.leadId); if(l) ptDonosDoLink(l).forEach(d=>out.set(d.id,d));
+  if(!out.size){ const cpf=String(a.clienteCpf||'').replace(/\D/g,'');
+    (CACHE.leads||[]).filter(x=>x.portalToken&&((cpf&&String(x.cpf||'').replace(/\D/g,'')===cpf)||apolicesDoCliente(x).some(y=>y.id===a.id))).forEach(d=>out.set(d.id,d)); }
+  return [...out.values()];
+}
+/* toda mudança em apólice reescreve o retrato do dono — anexo, IA, emissão, edição */
+let PT_ASSIN=null, PT_VISTO={};
+function ptVigiarApolices(){
+  const aps=CACHE.apolices||[]; if(!aps.length||!(CACHE.leads||[]).length) return;
+  const marca=a=>a.id+':'+((a.atualizadoEm&&a.atualizadoEm.seconds)||'')+':'+((a.docsLinks||[]).length)+':'+(a.estruturadaEm||'');
+  if(PT_ASSIN===null){ aps.forEach(a=>PT_VISTO[a.id]=marca(a)); PT_ASSIN=1; return; }
+  const mudou=aps.filter(a=>PT_VISTO[a.id]!==marca(a)); if(!mudou.length) return;
+  mudou.forEach(a=>PT_VISTO[a.id]=marca(a));
+  const donos=new Map(); mudou.forEach(a=>ptDonosDaApolice(a).forEach(d=>donos.set(d.id,d)));
+  donos.forEach(d=>portalAtualizar(d.id));
+}
+setInterval(()=>{ try{ if(CURRENT_USER) ptVigiarApolices(); }catch(e){} },4000);
+/* um botão para regravar todos os retratos de uma vez (depois de subir esta versão) */
+async function ptRegravarTodos(){
+  const alvo=CACHE.leads.filter(l=>l.portalToken); let n=0;
+  for(const l of alvo){ try{ await db.collection('portal_clientes').doc(l.portalToken).set(ptRetrato(l)); n++; }catch(e){} }
+  toast('Área do cliente atualizada para '+n+' cliente(s).','ok');
+}
+if(typeof SOL_CAMPO==='object'){ SOL_CAMPO.antes='Na apólice'; SOL_CAMPO.agora='Agora'; }
+solResumo=function(s){ return (s.itens||[]).map(k=>SOL_ROT[k]||((s.respostas||{})[k]||{}).titulo||k).join(' · ')||(s.observacao?'Observação':'-'); };
+</script>
+<script>
+/* primeira vez com esta versão: regrava os retratos (com detalhes e documentos) uma única vez */
+setTimeout(()=>{ try{ if(!CURRENT_USER) return; if(localStorage.getItem('pt_retrato_v2')) return;
+  localStorage.setItem('pt_retrato_v2','1'); ptRegravarTodos(); }catch(e){} },12000);
+</script>
+
 </body>
 </html>
