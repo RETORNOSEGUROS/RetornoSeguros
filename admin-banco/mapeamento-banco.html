@@ -14421,7 +14421,9 @@
     chefes.forEach(p => {
       const piso = pisoChefeAcum;    // idem: somado por negócio, pela vigência de cada um
       const proprio = baseTotal * indAgObj.ganhoChefe / 100;
-      linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, total: piso + proprio });
+      // o chefe é medido pela AGÊNCIA: o `ind` dele é o da agência, e o teto é
+      // o totalChefe sobre a base inteira — não existe plus, ele já é a agência
+      linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, ind: indAgObj, total: piso + proprio });
     });
     linhas.sort((a, b) => b.total - a.total);
     const totalSai = linhas.reduce((s, l) => s + l.total, 0);
@@ -14508,22 +14510,34 @@
      mas entram no total, que é o número da conversa real. */
   let _NA_MESA_ABERTO = {};
   function _blocoNaMesa(linhas, ehDonoView, fmtV) {
-    const rms = linhas.filter(l => l.perfil === 'rm' && l.ind && l.base > 0);
-    if (!rms.length) return '';
+    /* Entram RMs e o gerente-chefe. RM sem base na campanha entra também: o
+       aproveitamento dele é real e é o assunto da conversa — o que não existe
+       ainda é negócio fechado para a diferença valer dinheiro. Dizer "R$ 0 a
+       ganhar" seria mentir sobre uma cobertura que está baixa. */
+    const gente = linhas.filter(l => (l.perfil === 'rm' || l.perfil === 'chefe') && l.ind);
+    if (!gente.length) return '';
     const calc = l => {
-      const i = l.ind;
-      const tetoPart = i.somaTetosProprios + i.somaPlus;     // 100% dele + 100% da agência
-      const hojePart = i.ganhoProprio + i.ganhoPlus;
+      const i = l.ind, chefe = l.perfil === 'chefe';
+      // o chefe é medido pela agência e o teto dele é o totalChefe; o RM soma
+      // os tetos da própria carteira com o plus que a agência lhe dá
+      const tetoPart = chefe ? i.totalChefe : (i.somaTetosProprios + i.somaPlus);
+      const hojePart = chefe ? i.ganhoChefe : (i.ganhoProprio + i.ganhoPlus);
       const hojeInd = l.base * hojePart / 100;
       const tetoInd = l.base * tetoPart / 100;
-      return { hojePart, tetoPart, hojeInd, tetoInd, falta: tetoInd - hojeInd,
+      return { chefe, hojePart, tetoPart, hojeInd, tetoInd, falta: tetoInd - hojeInd,
+        semBase: !(l.base > 0),
         totalHoje: l.total, totalTeto: l.piso + tetoInd + l.ranking,
         aproveit: tetoPart > 0 ? hojePart / tetoPart * 100 : 0 };
     };
-    const dados = rms.map(l => ({ l, c: calc(l) })).sort((a, b) => b.c.falta - a.c.falta);
-    const somaFalta = dados.reduce((s, x) => s + x.c.falta, 0);
-    const somaHoje = dados.reduce((s, x) => s + x.c.totalHoje, 0);
-    const somaTeto = dados.reduce((s, x) => s + x.c.totalTeto, 0);
+    /* Ordem: quem tem mais a ganhar primeiro; quem ainda não tem base vai para o
+       fim, junto, porque a conversa com eles é outra. */
+    const dados = gente.map(l => ({ l, c: calc(l) }))
+      .sort((a, b) => (a.c.semBase - b.c.semBase) || (b.c.falta - a.c.falta));
+    const comBase = dados.filter(x => !x.c.semBase);
+    const somaFalta = comBase.reduce((s, x) => s + x.c.falta, 0);
+    const somaHoje = comBase.reduce((s, x) => s + x.c.totalHoje, 0);
+    const somaTeto = comBase.reduce((s, x) => s + x.c.totalTeto, 0);
+    const semBase = dados.filter(x => x.c.semBase);
 
     const linhasHtml = dados.map(({ l, c }) => {
       const cor = _corFator(c.aproveit);
@@ -14532,16 +14546,16 @@
           <td><div style="display:flex; align-items:center; gap:7px;">
             <span id="naMesaSeta_${l.uid}" style="color:#94a3b8; font-size:11px; width:10px; display:inline-block; transform:rotate(${aberto ? '90' : '0'}deg); transition:transform .15s;">▶</span>
             <div style="width:8px; height:8px; border-radius:50%; background:${l.cor};"></div>
-            <div><div style="font-weight:700; color:#0f172a; font-size:13px;">${l.nome}</div>
-            <div style="font-size:10.5px; color:#94a3b8;">${fmtFator(c.hojePart)}% de ${fmtFator(c.tetoPart)}% possíveis</div></div>
+            <div><div style="font-weight:700; color:#0f172a; font-size:13px;">${l.nome}${c.chefe ? ' <span style="font-size:10px; font-weight:700; color:#0e7490; background:#ecfeff; border-radius:20px; padding:1px 7px;">gerente-chefe</span>' : ''}</div>
+            <div style="font-size:10.5px; color:#94a3b8;">${fmtFator(c.hojePart)}% de ${fmtFator(c.tetoPart)}% possíveis${c.chefe ? ' · medido pela agência' : ''}</div></div>
           </div></td>
           <td style="text-align:right;"><div style="display:flex; align-items:center; gap:6px; justify-content:flex-end;">
             <span style="width:52px; height:6px; background:#f1f5f9; border-radius:5px; overflow:hidden; display:inline-block;">
               <i style="display:block; height:100%; width:${Math.max(3, Math.min(100, c.aproveit))}%; background:${cor}; border-radius:5px;"></i></span>
             <b style="font-size:12px; color:${cor}; font-family:'JetBrains Mono',monospace;">${Math.round(c.aproveit)}%</b></div></td>
           <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0f172a; font-weight:700;">${fmtV(c.totalHoje)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#16a34a; font-weight:700;">${fmtV(c.totalTeto)}</td>
-          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#dc2626; font-weight:800;">+${fmtV(c.falta)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#16a34a; font-weight:700;">${c.semBase ? '—' : fmtV(c.totalTeto)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:${c.semBase ? '#94a3b8' : '#dc2626'}; font-weight:800;">${c.semBase ? 'sem base' : '+' + fmtV(c.falta)}</td>
         </tr>
         <tr id="naMesaDet_${l.uid}" style="${aberto ? '' : 'display:none;'}"><td colspan="5" style="padding:0; background:#f8fafc;">${_naMesaDetalhe(l, fmtV)}</td></tr>`;
     }).join('');
@@ -14563,8 +14577,12 @@
         <th style="text-align:right;">LEVARIA NO TETO</th>
         <th style="text-align:right;">DIFERENÇA</th>
       </tr></thead><tbody>${linhasHtml}</tbody></table></div>
+      ${semBase.length ? `<div style="margin-top:10px; background:#f8fafc; border:1px solid #e8edf4; border-radius:10px; padding:10px 12px; font-size:11.5px; color:#475569; line-height:1.55;">
+        <strong>${semBase.map(x => x.l.nome.split(' ')[0]).join(', ')}</strong> ${semBase.length === 1 ? 'ainda não tem' : 'ainda não têm'} negócio emitido na campanha — por isso a diferença não vira dinheiro ainda.
+        O aproveitamento acima é real: no dia em que ${semBase.length === 1 ? 'fechar' : 'fecharem'} o primeiro, ${semBase.length === 1 ? 'leva' : 'levam'} essa fatia do que poderia.
+      </div>` : ''}
       <div style="font-size:11.5px; color:#94a3b8; margin-top:10px;">
-        <strong>No teto</strong> = os indicadores da carteira dele em 100% <em>e</em> os da agência em 100%.
+        <strong>No teto</strong> = os indicadores da carteira dele em 100% <em>e</em> os da agência em 100%. Para o <strong>gerente-chefe</strong>, os da agência em 100% sobre a base inteira.
         Piso e ranking entram no total mas não mudam com indicador — a <strong>diferença</strong> é só o que depende de cobertura.
         Nenhum negócio novo entra nesta conta: é o mesmo faturamento, melhor aproveitado.
       </div>
@@ -14582,7 +14600,7 @@
       const pc = teto > 0 ? ganho / teto * 100 : 0;
       return `<tr>
         <td style="padding:7px 10px;"><div style="font-size:12.5px; color:#0f172a; font-weight:600;">${ico} ${nome}
-          <span style="font-size:10.5px; font-weight:600; color:${origem === 'plus' ? '#7c3aed' : '#0891b2'}; background:${origem === 'plus' ? '#f5f3ff' : '#ecfeff'}; border-radius:20px; padding:1px 7px; margin-left:5px;">${origem === 'plus' ? 'agência' : 'carteira'}</span></div>
+          <span style="font-size:10.5px; font-weight:600; color:${origem === 'carteira' ? '#0891b2' : '#7c3aed'}; background:${origem === 'carteira' ? '#ecfeff' : '#f5f3ff'}; border-radius:20px; padding:1px 7px; margin-left:5px;">${origem === 'carteira' ? 'carteira' : 'agência'}</span></div>
           ${detalhe ? `<div style="font-size:10.5px; color:#94a3b8; margin-top:1px;">${detalhe}</div>` : ''}</td>
         <td style="text-align:right; padding:7px 10px; white-space:nowrap;">
           <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:${_corFator(pc)}; font-weight:700;">${fmtFator(ganho)}%</span>
@@ -14591,8 +14609,14 @@
         <td style="text-align:right; padding:7px 10px; font-family:'JetBrains Mono',monospace; font-size:12px; color:${falta > 0.0005 ? '#dc2626' : '#94a3b8'}; font-weight:700;">${falta > 0.0005 ? '+' + fmtV(emR(falta)) : '—'}</td>
       </tr>`;
     };
-    const carteira = (i.itens || []).map(x => linha(x.icon, x.label, x.detalhe ? x.detalhe + ' · ' + fmtFator(x.pct) + '% da meta' : fmtFator(x.pct) + '% da meta', x.ganhoRM, x.tetoRM, 'carteira')).join('');
-    const plus = (i.plus || []).map(x => linha(x.icon, x.label, (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + '% da agência', x.ganho, x.teto, 'plus')).join('');
+    /* O chefe lê a MESMA linha de indicadores, mas pelos números da agência:
+       `ganhoChefe`/`tetoChefe`, que o cálculo já devolve. Ele não tem plus —
+       o plus existe porque a agência vai bem, e ele é a agência. */
+    const chefe = l.perfil === 'chefe';
+    const carteira = (i.itens || []).map(x => linha(x.icon, x.label,
+      (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + (chefe ? '% da agência' : '% da meta'),
+      chefe ? x.ganhoChefe : x.ganhoRM, chefe ? x.tetoChefe : x.tetoRM, chefe ? 'agencia' : 'carteira')).join('');
+    const plus = chefe ? '' : (i.plus || []).map(x => linha(x.icon, x.label, (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + '% da agência', x.ganho, x.teto, 'plus')).join('');
     return `<div style="padding:12px 14px 16px;">
       <table style="width:100%; border-collapse:collapse;"><thead><tr>
         <th style="text-align:left; font-size:10px; color:#64748b; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">INDICADOR</th>
@@ -14601,8 +14625,11 @@
         <th style="text-align:right; font-size:10px; color:#64748b; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">FALTA</th>
       </tr></thead><tbody>${carteira}${plus}</tbody></table>
       <div style="font-size:11px; color:#94a3b8; margin-top:9px; padding-left:10px;">
-        Sobre a base de ${fmtV(base)} que a carteira de ${l.nome.split(' ')[0]} já gerou na campanha.
-        O que está em <span style="color:#7c3aed; font-weight:700;">agência</span> depende do time inteiro, não só dele.
+        ${chefe
+          ? `Sobre a base de ${fmtV(base)} da agência inteira — é assim que o gerente-chefe é medido e pago.`
+          : (base > 0
+            ? `Sobre a base de ${fmtV(base)} que a carteira de ${l.nome.split(' ')[0]} já gerou na campanha. O que está em <span style="color:#7c3aed; font-weight:700;">agência</span> depende do time inteiro, não só dele.`
+            : `${l.nome.split(' ')[0]} ainda não tem negócio emitido na campanha: os percentuais acima são reais, mas só viram dinheiro quando houver base.`)}
       </div>
     </div>`;
   }
