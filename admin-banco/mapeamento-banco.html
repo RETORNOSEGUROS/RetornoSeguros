@@ -6115,6 +6115,7 @@
       // candidata para um grupo se tem ao menos um ramo do grupo ainda 'vazio'
       Object.keys(ramosDoGrupo).forEach(gid => {
         const temVazio = ramosDoGrupo[gid].some(rid => {
+          if (typeof _ramoValeParaEmpresa === 'function' && !_ramoValeParaEmpresa(rid, e)) return false;
           const pd = dados[rid];
           return !pd || !pd.statusVisual || pd.statusVisual === 'vazia';
         });
@@ -12892,6 +12893,7 @@
       // avalia um ramo como oportunidade da campanha
       const avaliar = (ramoId, motivoImplicito) => {
         if (!nomeRamo[ramoId]) return;
+        if (typeof _ramoValeParaEmpresa === 'function' && !_ramoValeParaEmpresa(ramoId, e)) return;
         const pd = dados[ramoId];
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, ramoId) : null;
 
@@ -29048,6 +29050,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return leg || { tipo: 'nenhum', min: 0 };
   }
   function _porteDispara(r, e) {
+    if (!_ramoValeParaEmpresa(r, e)) return false;
     const g = _gatilhoDe(r);
     if (g.tipo === 'socios') return _sociosCotaveis(e).length >= g.min;
     if (g.tipo === 'funcionarios') return (Number(e.funcionarios) || 0) >= g.min;
@@ -29069,11 +29072,20 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e || !e.semSociosConfirmado) return false;
     return !(e.socios || []).some(s => s && (s.nome || '').trim());
   }
+  /* A REGRA, num lugar só: ramo de sócios em empresa confirmadamente sem sócios
+     não existe para aquela empresa. Não é mapeamento pendente, não é oportunidade
+     quente, não entra em sugestão. Aceita o objeto do ramo ou só o id. */
+  function _ramoValeParaEmpresa(r, e) {
+    const ramo = (typeof r === 'string') ? ((RAMOS_ALL || PRODUTOS || []).find(x => x.id === r) || { id: r }) : r;
+    if (!ramo) return true;
+    return !(_gatilhoDe(ramo).tipo === 'socios' && _semSociosDeVerdade(e));
+  }
+  window._ramoValeParaEmpresa = _ramoValeParaEmpresa;
   function _ramosDoMapeamento(e, opts) {
     const soCampanha = !!(opts && opts.campanha);
-    const base = (PRODUTOS || []).filter(p => !p.somenteOp && (!soCampanha || p.contaMapeamento !== false));
-    if (!_semSociosDeVerdade(e)) return base;
-    return base.filter(p => _gatilhoDe(p).tipo !== 'socios');
+    return (PRODUTOS || []).filter(p => !p.somenteOp
+      && (!soCampanha || p.contaMapeamento !== false)
+      && _ramoValeParaEmpresa(p, e));
   }
   window._ramosDoMapeamento = _ramosDoMapeamento;
   // "Não tem" mapeado dispara a oportunidade? Regra universal = sim; exceção é o
@@ -29081,6 +29093,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function _naoTemDispara(r, e, pd) {
     const naoTemBruto = pd && (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem');
     if (!naoTemBruto) return false;
+    /* "Não tem seguro de vida dos sócios" numa empresa que não tem sócios não é
+       oportunidade — é a descrição da empresa. Antes virava lead quente. */
+    if (!_ramoValeParaEmpresa(r, e)) return false;
     const g = _gatilhoDe(r);
     if (g.tipo === 'funcionarios_naotem') return (Number(e.funcionarios) || 0) >= g.min;
     return true;
@@ -29125,6 +29140,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
         if (r.somenteOp) return;       // ramo que só nasce de OP não é oportunidade
+        // empresa sem sócios não tem oportunidade de seguro de sócios — nem por
+        // "não tem", nem por porte, nem por reagendamento antigo
+        if (!_ramoValeParaEmpresa(r, e)) return;
         const ramoId = r.id;
         const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
