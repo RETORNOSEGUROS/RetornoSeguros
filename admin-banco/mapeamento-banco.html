@@ -4874,10 +4874,6 @@
     </div>
     <div class="cad-modal-body">
       <div class="form-group">
-        <label class="form-label">Nome do decisor</label>
-        <input type="text" class="form-control" id="inputDecisorNome" placeholder="Ex: João Silva (diretor)">
-      </div>
-      <div class="form-group">
         <label class="form-label">E-mail do decisor</label>
         <input type="email" class="form-control" id="inputEmailDecisor" placeholder="decisor@empresa.com">
       </div>
@@ -6879,9 +6875,9 @@
     });
 
     // Resumo do filtro
+    const temFiltro = !!(search || fRm || fProd || fStatus || fGrupo || fFalta);
     const resumoEl = document.getElementById('filtroResumo');
     if (resumoEl) {
-      const temFiltro = search || fRm || fProd || fStatus || fGrupo || fFalta;
       resumoEl.innerHTML = temFiltro
         ? `<strong style="color:#4338ca;">${lista.length}</strong> de ${EMPRESAS.length} empresas no filtro`
         : `${EMPRESAS.length} empresas na carteira`;
@@ -6932,10 +6928,24 @@
       const _okFun = empresas.filter(x => (x.funcionarios || 0) > 0).length;
       const _pctSoc = _nEmp ? Math.round(_okSoc / _nEmp * 100) : 0;
       const _pctFun = _nEmp ? Math.round(_okFun / _nEmp * 100) : 0;
-      const _corPct = v => v >= 80 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
-      const _selo = (emoji, rot, pct, ok) => `<span title="${ok} de ${_nEmp} empresas com ${rot} mapeado" style="display:inline-flex; align-items:center; gap:4px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:100px; padding:2px 9px; font-size:11px; font-weight:700; color:#64748b; white-space:nowrap;">${emoji} <strong style="color:${_corPct(pct)};">${pct}%</strong> ${rot}</span>`;
-      // No mobile, começa fechado — menos a carteira do próprio usuário. Menos poluição ao abrir.
-      const _fechaInicio = window.innerWidth <= 768 && !ehMinhaCarteira;
+      /* Cobertura de SEGUROS da carteira: a mesma conta da campanha, célula a
+         célula (empresa × ramo). O denominador de cada empresa vem do
+         _ramosDoMapeamento — empresa sem sócios não carrega os ramos de sócios,
+         então as bolinhas e o possível caem juntos (13 → 9). */
+      let _celTot = 0, _celOk = 0;
+      empresas.forEach(x => {
+        const _rr = _ramosDoMapeamento(x);
+        _celTot += _rr.length;
+        _rr.forEach(pp => { const st = (x.produtos || {})[pp.id]; if (st && st !== 'vazia') _celOk++; });
+      });
+      const _pctSeg = _celTot ? Math.round(_celOk / _celTot * 100) : 0;
+      const _corPct = v => v >= 80 ? '#15803d' : v >= 50 ? '#b45309' : '#dc2626';
+      const _selo = (emoji, rot, pct, tit) => `<span title="${tit}" style="display:inline-flex; align-items:center; gap:4px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:100px; padding:2px 9px; font-size:11px; font-weight:700; color:#475569; white-space:nowrap;">${emoji} <strong style="color:${_corPct(pct)};">${pct}%</strong> ${rot}</span>`;
+      /* Começa SEMPRE fechado — para o corretor que vê todos os gerentes e para o
+         RM que vê só a sua. Abrir 143 cards de empresa de uma vez é o que polui a
+         tela; o cabeçalho de cada carteira já diz o que importa. Exceção: com
+         filtro ou busca ativa, abre — senão o resultado da busca fica escondido. */
+      const _fechaInicio = !temFiltro;
       return `
         <div class="rm-group${_fechaInicio ? ' collapsed' : ''}" id="rmgroup-${rmKey}">
           <div class="rm-group-header" onclick="toggleGroup('${rmKey}')">
@@ -6944,8 +6954,9 @@
               <h2>${rm.nome} ${ehMinhaCarteira ? '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700;margin-left:6px;">SUA CARTEIRA</span>' : ''}</h2>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
-              ${_selo('🧑‍💼', 'sócios', _pctSoc, _okSoc)}
-              ${_selo('👥', 'funcionários', _pctFun, _okFun)}
+              ${_selo('🧑‍💼', 'sócios', _pctSoc, `${_okSoc} de ${_nEmp} empresas com o quadro de sócios resolvido (inclui as confirmadas como "não tem sócios")`)}
+              ${_selo('👥', 'funcionários', _pctFun, `${_okFun} de ${_nEmp} empresas com o nº de funcionários informado`)}
+              ${_selo('🛡', 'seguros', _pctSeg, `${_celOk} de ${_celTot} seguros mapeados nas ${_nEmp} empresas — é a mesma conta do indicador de mapeamento da campanha. Empresa sem sócios não conta os seguros de sócios no possível.`)}
             </div>
             <span class="count">${empresas.length} empresas</span>
             <i data-lucide="chevron-down" class="chevron w-4 h-4"></i>
@@ -6978,8 +6989,9 @@
     const algumMapeado = Object.values(e.produtos || {}).some(s => s !== 'vazia');
 
     // % mapeado da empresa: denominador = os ramos que realmente entram no
-    // mapeamento (os "só por OP" ficam de fora, igual às bolinhas do card).
-    const _ramosCard = (PRODUTOS || []).filter(pp => !pp.somenteOp);
+    // mapeamento (os "só por OP" ficam de fora, e empresa sem sócios não carrega
+    // os ramos de sócios — as bolinhas caem junto com o possível).
+    const _ramosCard = _ramosDoMapeamento(e);
     const _totRamos = _ramosCard.length;
     const _mapRamos = _ramosCard.filter(pp => (e.produtos || {})[pp.id] && e.produtos[pp.id] !== 'vazia').length;
     const _pctMap = _totRamos ? Math.round(_mapRamos / _totRamos * 100) : 0;
@@ -7011,6 +7023,16 @@
       if (partes.length > 0) linhaInfo = `<div style="font-size: 11px; margin-top: 2px;">${partes.join(' · ')}</div>`;
     }
 
+    /* CONTATOS-CHAVE NA LISTA — o pedido era conseguir ver, correndo a lista,
+       quem está sem e-mail. Então o que chama atenção é a AUSÊNCIA: e-mail
+       cadastrado aparece em cinza, discreto; faltando, vira pílula âmbar.
+       Antes disso só dava para saber abrindo o raio-x, empresa por empresa. */
+    const _escM = t => String(t == null ? '' : t).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const _slotMail = (ico, rot, mail) => mail
+      ? `<span title="${rot}: ${_escM(mail)}" style="display:inline-flex; align-items:center; gap:3px; max-width:210px; min-width:0; color:#475569; font-weight:500;">${ico} <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_escM(mail)}</span></span>`
+      : `<span title="Sem o e-mail do ${rot} — abra o card para cadastrar" style="display:inline-flex; align-items:center; gap:3px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:100px; padding:0 7px; font-weight:700; white-space:nowrap;">${ico} sem ${rot}</span>`;
+    const linhaContatos = `<div style="font-size:10.5px; margin-top:3px; display:flex; gap:9px; flex-wrap:wrap; align-items:center; min-width:0;">${_slotMail('📧', 'decisor', e.emailDecisor)}${_slotMail('🧑\u200d💼', 'RH', e.emailRh)}</div>`;
+
     // Apólices que o CLIENTE anexou pelo link de mapeamento — selo na lista para
     // não precisar abrir empresa por empresa e produto por produto para descobrir.
     let _nAnexos = 0;
@@ -7028,6 +7050,7 @@
             ${badgeDados || seloAnexos ? `<div style="margin-top:4px; display:flex; gap:5px; flex-wrap:wrap;">${badgeDados}${seloAnexos}</div>` : ''}
             <div class="empresa-meta">${mascararCNPJ(e.cnpj) || 'sem CNPJ'} · ${e.cidade || 'sem cidade'}</div>
             ${linhaInfo}
+            ${linhaContatos}
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
@@ -7149,11 +7172,11 @@
         </div>
         <div class="info-grid">
           <div class="info-item">
-            <div class="info-label">📧 Decisor ${e.decisorNome ? '· ' + e.decisorNome : ''}</div>
+            <div class="info-label">📧 E-mail do decisor</div>
             <div class="info-value">${e.emailDecisor ? `<a href="mailto:${e.emailDecisor}" style="color:#4338ca;">${e.emailDecisor}</a>` : '<span style="color:#f59e0b;">⚠ Não informado</span>'}</div>
           </div>
           <div class="info-item">
-            <div class="info-label">🧑‍💼 RH da empresa</div>
+            <div class="info-label">🧑‍💼 E-mail do RH</div>
             <div class="info-value">${e.emailRh ? `<a href="mailto:${e.emailRh}" style="color:#4338ca;">${e.emailRh}</a>` : '<span style="color:#f59e0b;">⚠ Não informado</span>'}</div>
           </div>
         </div>
@@ -12814,13 +12837,16 @@
     // "mapeado" = status conhecido: nosso, fechado, mercado, perdido, não tem. Vazio não conta.
     // Ramos com "conta no mapeamento" DESLIGADO ficam fora deste indicador (continuam no
     // raio-x, na cobertura, no questionário e pontuando — só não são obrigação de campanha).
-    const ramosMapeamento = (PRODUTOS || []).filter(p => !p.somenteOp && p.contaMapeamento !== false).map(p => p.id);
+    // O denominador é POR EMPRESA (_ramosDoMapeamento): empresa confirmada sem
+    // sócios não carrega os ramos de sócios, que ela nunca poderia preencher.
+    // Decisão do Patrick, 13/out — vale aqui e na lista de empresas, com a mesma
+    // função, para a tela e o pagamento nunca divergirem.
     let totalCelulas = 0, okMapeado = 0;
     empresas.forEach(e => {
       const dados = e.produtosDados || {};
-      ramosMapeamento.forEach(rid => {
+      _ramosDoMapeamento(e, { campanha: true }).forEach(r => {
         totalCelulas++;
-        const pd = dados[rid];
+        const pd = dados[r.id];
         const st = pd && pd.statusVisual;
         if (st && st !== 'vazia') okMapeado++; // qualquer status conhecido conta 1x
       });
@@ -26014,7 +26040,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e) return;
     EMPRESA_ATUAL_RX = e;
     document.getElementById('modalContatosEmpresa').textContent = e.nome;
-    document.getElementById('inputDecisorNome').value = e.decisorNome || '';
     document.getElementById('inputEmailDecisor').value = e.emailDecisor || '';
     document.getElementById('inputEmailRh').value = e.emailRh || '';
     document.getElementById('modalContatos').classList.add('open');
@@ -26024,7 +26049,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function salvarContatos() {
     const e = EMPRESA_ATUAL_RX;
     if (!e) return;
-    const decisorNome = (document.getElementById('inputDecisorNome').value || '').trim();
     const emailDecisor = (document.getElementById('inputEmailDecisor').value || '').trim();
     const emailRh = (document.getElementById('inputEmailRh').value || '').trim();
     const reMail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -26035,7 +26059,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const decisorNovo = !!emailDecisor && !e.emailDecisor;
       const rhNovo = !!emailRh && !e.emailRh;
       await db.collection('empresas').doc(e.id).update({
-        decisorNome, emailDecisor, emailRh,
+        emailDecisor, emailRh,
         contatosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         contatosAtualizadoPor: CTX.uid,
         contatosAtualizadoPorNome: CTX.nome
@@ -26057,7 +26081,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
-      e.decisorNome = decisorNome; e.emailDecisor = emailDecisor; e.emailRh = emailRh;
+      e.emailDecisor = emailDecisor; e.emailRh = emailRh;
       e.contatosAtualizadoPorNome = CTX.nome;
       document.getElementById('modalContatos').classList.remove('open');
       abrirRaioX(e.id);
@@ -29031,6 +29055,27 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // avaliado junto do status, via _naoTemDispara)
     return false;
   }
+  /* ═══ OS RAMOS QUE ESTA EMPRESA REALMENTE PRECISA MAPEAR ═══
+     Um ramo cujo gatilho é 'socios' (vida de sócios, saúde de sócios, previdência
+     de sócios) não tem o que mapear numa empresa que confirmadamente NÃO TEM
+     sócios. Cobrar essa célula é pedir um dado que não existe — e prende a empresa
+     abaixo de 100% para sempre, por um motivo que ninguém pode resolver.
+     O desconto só vale com o "não tem sócios" CONFIRMADO. Empresa cujos sócios
+     ainda não foram cadastrados continua com o denominador cheio: se bastasse
+     deixar em branco, não cadastrar melhoraria o indicador.
+     Usado na lista de empresas E na métrica da campanha — a mesma conta nos dois
+     lugares, senão a tela e o pagamento divergem. */
+  function _semSociosDeVerdade(e) {
+    if (!e || !e.semSociosConfirmado) return false;
+    return !(e.socios || []).some(s => s && (s.nome || '').trim());
+  }
+  function _ramosDoMapeamento(e, opts) {
+    const soCampanha = !!(opts && opts.campanha);
+    const base = (PRODUTOS || []).filter(p => !p.somenteOp && (!soCampanha || p.contaMapeamento !== false));
+    if (!_semSociosDeVerdade(e)) return base;
+    return base.filter(p => _gatilhoDe(p).tipo !== 'socios');
+  }
+  window._ramosDoMapeamento = _ramosDoMapeamento;
   // "Não tem" mapeado dispara a oportunidade? Regra universal = sim; exceção é o
   // gatilho 'funcionarios_naotem', que segura até o nº de funcionários existir.
   function _naoTemDispara(r, e, pd) {
