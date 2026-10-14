@@ -16764,12 +16764,24 @@
       } catch (e) { /* varredura é best-effort, não bloqueia a geração */ }
 
       // 2) Congela no link o que o cliente NÃO deve responder de novo:
-      //    - tem (mercado), nosso/fechado, em cotação ou perdido → BLOQUEADO (mostra "já informado", sem expor detalhes)
+      //    - ramo que não existe para a empresa (seguro de sócios sem sócios) → OCULTO, nem aparece
+      //    - OP FECHADA nossa no ramo → REABERTO com outra pergunta (ver abaixo)
+      //    - tem (mercado), nosso/fechado, em cotação ou perdido → BLOQUEADO (não aparece na tela 1;
+      //      continua na tela 2 só para o cliente anexar a apólice)
       //    - respondeu "não tem" → PRÉ-MARCADO "Não", editável (pode ter contratado depois)
       //    - sem resposta → LIBERADO (somente estes pontuam)
-      const produtosBloqueados = [], produtosNaoTem = [], produtosPermitidos = [];
+      const produtosBloqueados = [], produtosNaoTem = [], produtosPermitidos = [],
+            produtosOcultos = [], produtosOp = [];
       (PRODUTOS || []).forEach(p => {
+        if (!_ramoValeParaEmpresa(p, empresa)) { produtosOcultos.push(p.id); return; }
         const cat = statusMatriz(empresa, p.id);
+        /* A OP é quase sempre uma apólice À PARTE da que a empresa já tinha —
+           garantia de um contrato específico, por exemplo. Fechar o ramo por
+           causa dela nos fazia perder a apólice original, que é justamente a
+           que queremos disputar. Então o ramo volta a ser perguntado, com outra
+           pergunta: "existe OUTRA, com outra seguradora?". A resposta entra como
+           apólice adicional e o 💎 da OP nunca é rebaixado. */
+        if (cat === 'nosso' && _temOpFechada(empresaId, p.id)) { produtosOp.push(p.id); return; }
         if (cat === 'nao_tem') produtosNaoTem.push(p.id);
         else if (cat === 'nao_mapeado') produtosPermitidos.push(p.id);
         else produtosBloqueados.push(p.id);
@@ -16788,7 +16800,7 @@
         expiraEm: firebase.firestore.Timestamp.fromDate(expiraEm),
         expirado: false, expirouEm: null,
         preenchidoEm: null, preenchido: false,
-        produtosBloqueados, produtosNaoTem, produtosPermitidos
+        produtosBloqueados, produtosNaoTem, produtosPermitidos, produtosOcultos, produtosOp
       });
       const docId = docRef.id;
 
@@ -29096,6 +29108,13 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return !(_gatilhoDe(ramo).tipo === 'socios' && _semSociosDeVerdade(e));
   }
   window._ramoValeParaEmpresa = _ramoValeParaEmpresa;
+  /* OP já FECHADA neste ramo. Só a fechada conta: OP ainda no funil deixa o ramo
+     em 'cotacao', que o link já bloqueia por outro motivo. */
+  function _temOpFechada(empresaId, ramoId) {
+    return (COTACOES || []).some(c => c.empresaId === empresaId && c.produtoId === ramoId
+      && (c.origem === 'op' || c.origem === 'op_bancaria') && c.status === 'fechada');
+  }
+  window._temOpFechada = _temOpFechada;
   function _ramosDoMapeamento(e, opts) {
     const soCampanha = !!(opts && opts.campanha);
     return (PRODUTOS || []).filter(p => !p.somenteOp
