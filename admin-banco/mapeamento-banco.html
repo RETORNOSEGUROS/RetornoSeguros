@@ -29754,21 +29754,36 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const dias = Math.round((fimMes - hoje) / 86400000);
     return { ano: a, mes: m, dias, label: _MES_AB[m - 1] + '/' + a, curto: String(m).padStart(2, '0') + '/' + a, venceu: dias < 0 };
   }
-  /* "É nossa?" — o campo gravado na criação manda. Para as renovações criadas
-     antes desta versão, procura a prova no histórico: apólice adicional marcada
-     como conosco, ou alguma cotação FECHADA deste empresa+produto. */
+  /* "É nossa?" — devolve true, false ou NULL quando não dá para saber.
+     O null importa: chutar "mercado" porque faltou evidência é dizer uma coisa
+     errada com cara de certeza, e foi exatamente o que aconteceu no primeiro
+     teste do Patrick (Vida em Grupo marcado como NOSSO no raio-x aparecendo
+     como "hoje no mercado" no funil).
+
+     A leitura certa é o `getMapeamento` — a MESMA função que pinta o selo
+     "✅ Nosso" no raio-x, então as duas telas não podem mais divergir. Ela
+     sobrevive ao `statusVisual: 'cotando'` que o criarCotacao grava, porque lê
+     também o campo `mapeamento` legado. */
   function _renovacaoNossa(c) {
-    if (!c) return false;
+    if (!c) return null;
     if (typeof c.renovacaoNossa === 'boolean') return c.renovacaoNossa;
     try {
-      if (c.apoliceRef) {
-        const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
-        const pd = e && (e.produtosDados || {})[c.produtoId];
-        const apx = pd && (pd.apolices || []).find(a => a && a.ap === c.apoliceRef);
-        if (apx) return ['conosco', 'fechada'].includes(apx.statusVisual);
+      const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
+      const pd = e && (e.produtosDados || {})[c.produtoId];
+      // apólice adicional: a situação dela é a que vale
+      if (c.apoliceRef && pd) {
+        const apx = (pd.apolices || []).find(a => a && a.ap === c.apoliceRef);
+        if (apx && apx.statusVisual) return ['conosco', 'fechada'].includes(apx.statusVisual);
       }
-      return (COTACOES || []).some(x => x.empresaId === c.empresaId && x.produtoId === c.produtoId && x.id !== c.id && x.status === 'fechada');
-    } catch (e) { return false; }
+      if (pd) {
+        const m = getMapeamento(pd);
+        if (m === 'cliente') return true;
+        if (m === 'mercado') return false;
+      }
+      // último recurso: já fechamos esse empresa+produto alguma vez
+      if ((COTACOES || []).some(x => x.empresaId === c.empresaId && x.produtoId === c.produtoId && x.id !== c.id && x.status === 'fechada')) return true;
+      return null;   // sem evidência: não afirma nada
+    } catch (e) { return null; }
   }
   /* O selo que aparece no card do kanban e no cabeçalho da negociação. */
   function _seloRenovacao(c, compacto) {
@@ -29781,9 +29796,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const pil = (txt, c1, c2, c3, tit) => `<span title="${tit || ''}" style="display:inline-flex; align-items:center; gap:3px; font-size:${compacto ? '9.5' : '10.5'}px; font-weight:800; color:${c1}; background:${c2}; border:1px solid ${c3}; border-radius:100px; padding:1px 7px; white-space:nowrap;">${txt}</span>`;
     const partes = [];
     if (v) partes.push(pil('🗓 vence ' + v.label, cor, bg, bd, v.venceu ? 'O vencimento já passou' : 'Faltam ' + v.dias + ' dia(s) para o fim do mês de vencimento'));
-    partes.push(nossa
-      ? pil('💎 renovação nossa', '#15803d', '#f0fdf4', '#bbf7d0', 'A apólice é nossa — aqui a conversa é defender o cliente')
-      : pil('🌎 hoje no mercado', '#0369a1', '#f0f9ff', '#bae6fd', 'A apólice está com outra corretora/seguradora — aqui a conversa é conquistar'));
+    // nossa === null → nenhum selo: melhor não dizer nada do que dizer errado
+    if (nossa === true) partes.push(pil('💎 renovação nossa', '#15803d', '#f0fdf4', '#bbf7d0', 'A apólice é nossa — aqui a conversa é defender o cliente'));
+    else if (nossa === false) partes.push(pil('🌎 hoje no mercado', '#0369a1', '#f0f9ff', '#bae6fd', 'A apólice está com outra corretora/seguradora — aqui a conversa é conquistar'));
     return partes.join(' ');
   }
 
@@ -30075,7 +30090,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (org === 'renovacao') {
       const nossa = _renovacaoNossa(c);
       const seg = c.seguradoraRenovacao ? ' (hoje na ' + c.seguradoraRenovacao + ')' : '';
-      return '🔁 ' + (nossa ? 'Renovação de uma apólice NOSSA' : 'Renovação de uma apólice do mercado' + seg)
+      const dono = nossa === true ? 'Renovação de uma apólice NOSSA'
+                 : nossa === false ? 'Renovação de uma apólice do mercado' + seg
+                 : 'Renovação mapeada';
+      return '🔁 ' + dono
         + (c.apoliceApelido ? ' — "' + c.apoliceApelido + '"' : '')
         + (venc ? ' — vence ' + venc : '') + '. Entrou sozinha no funil, no prazo da renovação.';
     }
