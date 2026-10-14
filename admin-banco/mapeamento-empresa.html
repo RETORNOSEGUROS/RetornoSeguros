@@ -530,7 +530,7 @@
      empresas/mb_produtos nem pontua ninguém — o corretor identifica e vincula no painel. */
   let MODO_PADRAO = false;
   let PADRAO_DOC_ID = null;           // id do doc gravado (para marcar "quero cotar" depois)
-  let ident = { cnpj: '', nome: '', celular: '' };
+  let ident = { cnpj: '', nome: '', celular: '', email: '' };
   const PADRAO_LS = 'map_padrao_v1';
   const PADRAO_LS_ENV = 'map_padrao_enviado_v1';
 
@@ -654,7 +654,24 @@
     validarIdent(false); salvarRascunho();
     if (d.length === 14 && cnpjValido(d)) buscarEmpresaPorCNPJ();
   }
-  function mascCel(el){ el.value = fmtCel(el.value); ident.celular = el.value; salvarRascunho(); }
+  function mascCel(el){ el.value = fmtCel(el.value); ident.celular = el.value; validarContato(); salvarRascunho(); }
+  /* Nem todo mundo quer dar o celular — e quem não quer simplesmente não
+     preenchia nada, e a resposta chegava sem jeito de responder. O e-mail abre a
+     outra porta. Nenhum dos dois é obrigatório, mas a tela avisa quando os dois
+     estão vazios: sem contato nenhum, o raio-x não tem para onde ir. */
+  const _reMail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  function mascMail(el){ ident.email = el.value.trim(); validarContato(); salvarRascunho(); }
+  window.mascMail = mascMail;
+  function validarContato(){
+    const el = document.getElementById('idMail'), err = document.getElementById('idContatoErr');
+    const mail = (ident.email || '').trim(), cel = soDigitos(ident.celular);
+    const mailRuim = !!mail && !_reMail.test(mail);
+    if (el) el.classList.toggle('inv', mailRuim);
+    if (err) err.textContent = mailRuim ? 'Esse e-mail parece incompleto — confira.'
+      : (!mail && !cel ? 'Deixe um celular OU um e-mail — é por onde devolvemos o raio-x.' : '');
+    return !mailRuim;
+  }
+  window.validarContato = validarContato;
   window.mascCNPJ = mascCNPJ; window.mascCel = mascCel;
   // devolve true se ok; com `forte` mostra o erro mesmo com campo vazio (usado no envio)
   function validarIdent(forte){
@@ -682,7 +699,9 @@
         '<input class="inp" id="idNomeEmp" placeholder="Nome da empresa" maxlength="120" value="'+_esc(ident.razaoManual || '')+'" oninput="ident.razaoManual=this.value; salvarRascunho();">'+
       '</div>'+
       '<input class="inp" id="idNome" placeholder="Seu nome (opcional)" maxlength="80" value="'+_esc(ident.nome || '')+'" oninput="ident.nome=this.value; salvarRascunho();">'+
-      '<input class="inp" id="idCel" inputmode="tel" placeholder="Seu celular / WhatsApp (opcional)" maxlength="16" value="'+_esc(ident.celular || '')+'" oninput="mascCel(this)">'+
+      '<input class="inp" id="idCel" inputmode="tel" placeholder="Seu celular / WhatsApp" maxlength="16" value="'+_esc(ident.celular || '')+'" oninput="mascCel(this)">'+
+      '<input class="inp" id="idMail" inputmode="email" placeholder="Ou o seu e-mail" maxlength="100" value="'+_esc(ident.email || '')+'" oninput="mascMail(this)">'+
+      '<div class="ident-err" id="idContatoErr"></div>'+
       '<div class="ident-nota">Usamos o CNPJ só para identificar a empresa no nosso estudo. Nada é publicado.</div>'+
     '</div>';
   }
@@ -718,7 +737,7 @@
   }
   function novoPadrao(){
     try { localStorage.removeItem(PADRAO_LS_ENV); localStorage.removeItem(PADRAO_LS); } catch (e) {}
-    PADRAO_DOC_ID = null; respostas = {}; ident = { cnpj: '', nome: '', celular: '' }; dadosEmpresa = { funcionarios: '' };
+    PADRAO_DOC_ID = null; respostas = {}; ident = { cnpj: '', nome: '', celular: '', email: '' }; dadosEmpresa = { funcionarios: '' };
     tela1();
   }
   window.novoPadrao = novoPadrao;
@@ -1073,7 +1092,7 @@
     trocar(html, 'frente', 't1');
     setTimeout(function(){
       PRODUTOS.forEach(function(p){ if (!PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'sim') abrirCampos(p.id); });
-      if (MODO_PADRAO && ident.cnpj) { validarIdent(false); pintarEmpresa(); buscarEmpresaPorCNPJ(); }
+      if (MODO_PADRAO) { if (ident.cnpj) { validarIdent(false); pintarEmpresa(); buscarEmpresaPorCNPJ(); } validarContato(); }
       atualizarFalta();
     }, 30);
   }
@@ -1084,6 +1103,10 @@
     const btn = document.getElementById('btnEnviar');
     if (!validarIdent(true)) {
       const el = document.getElementById('idCnpj'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
+      return;
+    }
+    if (!validarContato()) {
+      const el = document.getElementById('idMail'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
       return;
     }
     if (btn){ btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
@@ -1112,6 +1135,7 @@
         cnpjFonte: ident.cnpjFonte || null,
         nomeContato: (ident.nome || '').trim() || null,
         celular: soDigitos(ident.celular) || null, celularFmt: (ident.celular || '').trim() || null,
+        email: (ident.email || '').trim().toLowerCase() || null,
         numFuncionarios: numFunc,
         respostas: resp, produtos: nomes,
         interesseCotar: [],
@@ -1145,7 +1169,9 @@
       '<div class="check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recem ? 'Recebemos, obrigado!' : 'Já recebemos o seu mapeamento')+'</h1>'+
       '<p>Nossa equipe vai analisar e entrar em contato'+(ident.nome ? ', '+_esc(String(ident.nome).split(' ')[0]) : '')+'. '+
-      (ident.celular ? 'Falamos pelo WhatsApp <b>'+_esc(ident.celular)+'</b>.' : 'Se quiser, deixe um telefone com quem te enviou o link.')+'</p></div>';
+      (ident.celular ? 'Falamos pelo WhatsApp <b>'+_esc(ident.celular)+'</b>.'
+        : (ident.email ? 'Respondemos no e-mail <b>'+_esc(ident.email)+'</b>.'
+                       : 'Se quiser, deixe um telefone ou e-mail com quem te enviou o link.'))+'</p></div>';
     if (temSeg.length){
       html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div>'+
         '<div class="gb-t">Os seguros que você tem</div>'+
@@ -1525,6 +1551,7 @@
       doc.cnpj = soDigitos(ident.cnpj) || null;
       doc.contatoNome = (ident.nome || '').trim() || null;
       doc.contatoCelular = soDigitos(ident.celular) || null;
+      doc.contatoEmail = (ident.email || '').trim().toLowerCase() || null;
       doc.questionarioPadraoId = PADRAO_DOC_ID || null;
     } else {
       // Cliente da carteira: o link já nasce VINCULADO à empresa (o questionário do
