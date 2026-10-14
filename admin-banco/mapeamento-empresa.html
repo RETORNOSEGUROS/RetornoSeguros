@@ -237,6 +237,12 @@
     .ident-err{ font-size:12px; color:#fca5a5; font-weight:700; margin:-2px 0 8px 3px; min-height:14px; }
     .ident-ok{ font-size:12px; color:var(--verde); font-weight:700; margin:-2px 0 8px 3px; }
     .ident-nota{ font-size:11.5px; color:var(--b50); line-height:1.4; margin-top:2px; }
+    .ident-emp{ background:rgba(16,185,129,.14); border:1px solid rgba(110,231,183,.38); border-radius:12px;
+                padding:10px 12px; margin:-2px 0 9px; }
+    .ident-emp .rz{ font-size:14px; font-weight:800; color:#fff; line-height:1.3; }
+    .ident-emp .sub{ font-size:11.5px; color:var(--b70); margin-top:3px; }
+    .ident-emp.busca{ background:rgba(255,255,255,.07); border-color:var(--vidro-bd); }
+    .ident-emp.erro{ background:rgba(248,113,113,.12); border-color:rgba(252,165,165,.4); }
     .fim-lista{ width:100%; max-width:340px; margin-top:18px; text-align:left; }
     .fim-lista .cotar-item{ padding:10px 13px; }
     .fim-lista .cotar-item .nm{ font-weight:700; font-size:14px; }
@@ -542,7 +548,107 @@
     const p1 = [5,4,3,2,9,8,7,6,5,4,3,2], p2 = [6,5,4,3,2,9,8,7,6,5,4,3,2];
     return calc(d, p1) === Number(d[12]) && calc(d, p2) === Number(d[13]);
   }
-  function mascCNPJ(el){ el.value = fmtCNPJ(el.value); ident.cnpj = el.value; validarIdent(false); salvarRascunho(); }
+  /* ═══ O CNPJ JÁ TRAZ O NOME DA EMPRESA ═══
+     Três bases públicas em paralelo; a primeira que responde ganha. O cliente
+     digita 14 números e vê a razão social — é a confirmação de que acertou o
+     número, e o corretor deixa de receber um CNPJ solto sem nome.
+     Falhou? Não trava: aparece um campo para escrever o nome à mão. */
+  let CNPJ_BUSCANDO = '';
+  function _espera(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  async function _fetchJson(url){
+    const ctl = new AbortController(); const t = setTimeout(function(){ ctl.abort(); }, 9000);
+    try { const r = await fetch(url, { signal: ctl.signal }); return { status: r.status, json: r.ok ? await r.json() : null }; }
+    catch (e) { return { status: 0, json: null }; } finally { clearTimeout(t); }
+  }
+  const _cnae = (cod, txt) => ({ codigo: cod != null ? String(cod) : null, descricao: txt || null });
+  async function consultaCNPJ(d){
+    const fontes = [
+      ['brasilapi', 'https://brasilapi.com.br/api/cnpj/v1/' + d, j => ({
+        razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf,
+        principal: _cnae(j.cnae_fiscal, j.cnae_fiscal_descricao),
+        secundarias: (j.cnaes_secundarios || []).map(x => _cnae(x.codigo, x.descricao)) })],
+      ['minhareceita', 'https://minhareceita.org/' + d, j => ({
+        razao: j.razao_social, fantasia: j.nome_fantasia, cidade: j.municipio, uf: j.uf,
+        principal: _cnae(j.cnae_fiscal, j.cnae_fiscal_descricao),
+        secundarias: (j.cnaes_secundarios || []).map(x => _cnae(x.codigo, x.descricao)) })],
+      ['cnpjws', 'https://publica.cnpj.ws/cnpj/' + d, j => {
+        const e = j.estabelecimento || {};
+        return { razao: j.razao_social, fantasia: e.nome_fantasia,
+          cidade: e.cidade && e.cidade.nome, uf: e.estado && e.estado.sigla,
+          principal: e.atividade_principal ? _cnae(e.atividade_principal.subclasse, e.atividade_principal.descricao) : _cnae(null, null),
+          secundarias: (e.atividades_secundarias || []).map(x => _cnae(x.subclasse, x.descricao)) };
+      }]
+    ];
+    let motivo = 'offline', inexistente = false;
+    const tentativa = ([nome, url, norm]) => _fetchJson(url).then(async r => {
+      if (r.status === 429) { motivo = 'limite'; await _espera(1200); r = await _fetchJson(url); }
+      if (r.status === 404 || r.status === 400) { inexistente = true; throw new Error('inexistente'); }
+      if (r.json && r.json.razao_social) return Object.assign({ ok: true, fonte: nome }, norm(r.json));
+      throw new Error('vazio');
+    });
+    try {
+      const corrida = fontes.map(tentativa);
+      const vencedor = await new Promise((resolve, reject) => {
+        let faltam = corrida.length;
+        corrida.forEach(pr => pr.then(resolve, () => { if (--faltam === 0) reject(new Error('todas falharam')); }));
+      });
+      if (vencedor) return vencedor;
+    } catch (e) { if (inexistente) return { ok: false, motivo: 'inexistente' }; }
+    return { ok: false, motivo };
+  }
+  const CNPJ_MSG = { inexistente: 'Não encontrei esse CNPJ na base pública — confira o número, ou escreva o nome da empresa abaixo.',
+    limite: 'A consulta pública está no limite agora. Escreva o nome da empresa e seguimos.',
+    offline: 'Não consegui consultar agora. Escreva o nome da empresa e seguimos.' };
+  function _boxEmpresa(){ return document.getElementById('idEmpresa'); }
+  function pintarEmpresa(){
+    const box = _boxEmpresa(); if (!box) return;
+    if (ident.razaoSocial){
+      const sub = [ident.fantasia && ident.fantasia !== ident.razaoSocial ? ident.fantasia : '',
+                   [ident.cidade, ident.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ');
+      box.className = 'ident-emp'; box.style.display = '';
+      box.innerHTML = '<div class="rz">🏢 ' + _esc(ident.razaoSocial) + '</div>' +
+        (sub ? '<div class="sub">' + _esc(sub) + '</div>' : '') +
+        '<div class="sub">Não é essa empresa? Corrija o CNPJ acima.</div>';
+      const man = document.getElementById('idNomeEmpWrap'); if (man) man.style.display = 'none';
+      return;
+    }
+    if (CNPJ_BUSCANDO){ box.className = 'ident-emp busca'; box.style.display = '';
+      box.innerHTML = '<div class="sub">🔎 procurando o nome da empresa…</div>'; return; }
+    if (ident.cnpjErro){ box.className = 'ident-emp erro'; box.style.display = '';
+      box.innerHTML = '<div class="sub">' + _esc(CNPJ_MSG[ident.cnpjErro] || CNPJ_MSG.offline) + '</div>';
+      const man = document.getElementById('idNomeEmpWrap'); if (man) man.style.display = '';
+      return; }
+    box.style.display = 'none'; box.innerHTML = '';
+  }
+  async function buscarEmpresaPorCNPJ(){
+    const d = soDigitos(ident.cnpj);
+    if (d.length !== 14 || !cnpjValido(d)) return;
+    if (CNPJ_BUSCANDO === d || ident.cnpjLido === d) return;   // já busquei este
+    CNPJ_BUSCANDO = d; ident.razaoSocial = ''; ident.cnpjErro = ''; pintarEmpresa();
+    const r = await consultaCNPJ(d);
+    if (soDigitos(ident.cnpj) !== d) { CNPJ_BUSCANDO = ''; return; }  // o cliente já mudou o número
+    CNPJ_BUSCANDO = ''; ident.cnpjLido = d;
+    if (r && r.ok){
+      ident.razaoSocial = r.razao || ''; ident.fantasia = r.fantasia || '';
+      ident.cidade = r.cidade || ''; ident.uf = r.uf || '';
+      ident.cnaePrincipal = r.principal || null; ident.cnaesSecundarios = r.secundarias || [];
+      ident.cnpjFonte = r.fonte || null; ident.cnpjErro = '';
+    } else { ident.cnpjErro = (r && r.motivo) || 'offline'; }
+    pintarEmpresa(); salvarRascunho();
+  }
+  window.buscarEmpresaPorCNPJ = buscarEmpresaPorCNPJ;
+  function mascCNPJ(el){
+    el.value = fmtCNPJ(el.value); ident.cnpj = el.value;
+    const d = soDigitos(el.value);
+    if (d.length !== 14 || ident.cnpjLido !== d){
+      // mudou o número: o nome de antes não vale mais
+      ident.razaoSocial = ''; ident.fantasia = ''; ident.cidade = ''; ident.uf = '';
+      ident.cnaePrincipal = null; ident.cnaesSecundarios = []; ident.cnpjErro = ''; ident.cnpjLido = '';
+      pintarEmpresa();
+    }
+    validarIdent(false); salvarRascunho();
+    if (d.length === 14 && cnpjValido(d)) buscarEmpresaPorCNPJ();
+  }
   function mascCel(el){ el.value = fmtCel(el.value); ident.celular = el.value; salvarRascunho(); }
   window.mascCNPJ = mascCNPJ; window.mascCel = mascCel;
   // devolve true se ok; com `forte` mostra o erro mesmo com campo vazio (usado no envio)
@@ -566,6 +672,10 @@
       '<input class="inp" id="idCnpj" inputmode="numeric" placeholder="CNPJ da empresa (obrigatório)" maxlength="18" value="'+_esc(ident.cnpj || '')+'" oninput="mascCNPJ(this)" onblur="validarIdent(false)">'+
       '<div class="ident-err" id="idCnpjErr"></div>'+
       '<div class="ident-ok" id="idCnpjOk" style="display:none;">✓ CNPJ confere</div>'+
+      '<div class="ident-emp" id="idEmpresa" style="display:none;"></div>'+
+      '<div id="idNomeEmpWrap" style="display:none;">'+
+        '<input class="inp" id="idNomeEmp" placeholder="Nome da empresa" maxlength="120" value="'+_esc(ident.razaoManual || '')+'" oninput="ident.razaoManual=this.value; salvarRascunho();">'+
+      '</div>'+
       '<input class="inp" id="idNome" placeholder="Seu nome (opcional)" maxlength="80" value="'+_esc(ident.nome || '')+'" oninput="ident.nome=this.value; salvarRascunho();">'+
       '<input class="inp" id="idCel" inputmode="tel" placeholder="Seu celular / WhatsApp (opcional)" maxlength="16" value="'+_esc(ident.celular || '')+'" oninput="mascCel(this)">'+
       '<div class="ident-nota">Usamos o CNPJ só para identificar a empresa no nosso estudo. Nada é publicado.</div>'+
@@ -715,8 +825,6 @@
   }
 
   /* ============ ANEXOS (PDF/foto/Word/Excel) — preservado ============ */
-  const ANEXOS = {};
-  const FALHAS_ANEXO = [];
   function tipoAnexoOk(f) {
     const t = f.type || '';
     if (t === 'application/pdf' || t.startsWith('image/')) return true;
@@ -732,42 +840,62 @@
       xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', webp:'image/webp', heic:'image/heic' })[ext] || 'application/octet-stream';
   }
-  function anexoSel(prodId, input) {
-    const files = [...(input.files || [])];
-    ANEXOS[prodId] = ANEXOS[prodId] || [];
-    for (const f of files) {
-      if (ANEXOS[prodId].length >= 3) { alert('Máximo de 3 anexos por seguro.'); break; }
-      if (f.size > 15 * 1024 * 1024) { alert('"' + f.name + '" passa de 15 MB — envie um arquivo menor.'); continue; }
-      if (!tipoAnexoOk(f)) { alert('"' + f.name + '" não é um tipo aceito — envie PDF, foto, Word ou Excel.'); continue; }
-      if (ANEXOS[prodId].some(x => x.name === f.name && x.size === f.size)) continue; // já anexado nesta sessão
-      ANEXOS[prodId].push(f);
-    }
-    input.value = '';
-    renderAnexos(prodId);
-    flashSalvo();
-  }
-  window.anexoSel = anexoSel;
-  function renderAnexos(prodId) {
-    const box = document.getElementById('anexoLista-' + prodId);
+  /* ═══ O ARQUIVO SOBE NA HORA ═══
+     Antes o anexo ficava guardado na memória da página e só subia no botão
+     "Enviar ao meu gerente". Quem anexava e fechava a aba perdia tudo — e nem
+     sabia. Agora cada arquivo sobe assim que é escolhido e já entra no raio-x
+     da empresa, naquele ramo. O botão de enviar continua existindo para as
+     cotações; os arquivos já chegaram antes dele.
+     Limite de 10 por seguro: planilha de vidas, apólice, endosso e aditivos
+     passavam folgado dos 3 antigos. */
+  const ANX_FEITOS = {};            // { [prodId]: [{nome, url}] } já no raio-x
+  const MAX_ANEXOS = 10;
+  function _anxBox(prodId){ return document.getElementById('anexoLista-' + prodId); }
+  function renderAnexos(prodId, extra) {
+    const box = _anxBox(prodId);
     if (!box) return;
-    box.innerHTML = (ANEXOS[prodId] || []).map((f, i) => '<span class="anexo-chip">📄 <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">' + String(f.name).replace(/</g,'&lt;') + '</span> <span class="rm" onclick="anexoRm(\'' + prodId + '\',' + i + ')">✕</span></span>').join('');
+    const feitos = (ANX_FEITOS[prodId] || []).map(a =>
+      '<span class="anexo-chip"><span class="fp-anx-ok">✓</span> <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">' +
+      String(a.nome).replace(/</g,'&lt;') + '</span></span>').join('');
+    box.innerHTML = feitos + (extra || '');
   }
-  function anexoRm(prodId, i) { (ANEXOS[prodId] || []).splice(i, 1); renderAnexos(prodId); }
-  window.anexoRm = anexoRm;
-  const _comTimeout = (promessa, ms) => Promise.race([ promessa, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio do arquivo')), ms)) ]);
-  async function uploadAnexos(prodId) {
-    const files = ANEXOS[prodId] || [];
-    const out = [];
+  async function anexoSel(prodId, input) {
+    const files = [...(input.files || [])];
+    input.value = '';
+    if (!files.length) return;
+    if (!LINK || !LINK.empresaId) { alert('Não consegui identificar a empresa deste link.'); return; }
+    ANX_FEITOS[prodId] = ANX_FEITOS[prodId] || [];
+    const falhas = [];
+    const novos = [];
     for (const f of files) {
+      if (ANX_FEITOS[prodId].length + novos.length >= MAX_ANEXOS) { falhas.push('máximo de ' + MAX_ANEXOS + ' arquivos por seguro'); break; }
+      if (f.size > 15 * 1024 * 1024) { falhas.push('"' + f.name + '" passa de 15 MB'); continue; }
+      if (!tipoAnexoOk(f)) { falhas.push('"' + f.name + '" não é PDF, foto, Word ou Excel'); continue; }
+      renderAnexos(prodId, '<span class="anexo-chip">⏳ enviando ' + String(f.name).replace(/</g,'&lt;') + '…</span>');
       try {
         const path = 'mb_apolices/' + LINK.empresaId + '/' + prodId + '/' + Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_');
         const snap = await _comTimeout(firebase.storage().ref(path).put(f, { contentType: _mimeArquivo(f) }), 120000);
         const url = await _comTimeout(snap.ref.getDownloadURL(), 20000);
-        out.push({ nome: f.name, url, tamanho: f.size, em: new Date().toISOString(), via: 'link_mapeamento' });
-      } catch (e) { console.warn('anexo falhou', f.name, e); FALHAS_ANEXO.push(f.name); }
+        novos.push({ nome: f.name, url, tamanho: f.size, em: new Date().toISOString(), via: 'link_mapeamento' });
+      } catch (e) { console.warn('anexo falhou', f.name, e); falhas.push('"' + f.name + '" não subiu — tente de novo'); }
     }
-    return out;
+    if (novos.length) {
+      try {
+        await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(prodId).set({
+          apoliceAnexos: await anexosMesclados(LINK.empresaId, prodId, novos),
+          apoliceAnexadaEm: firebase.firestore.FieldValue.serverTimestamp(),
+          apoliceAnexadaViaLink: LINK_ID
+        }, { merge: true });
+        ANX_FEITOS[prodId] = ANX_FEITOS[prodId].filter(a => !novos.some(n => n.nome === a.nome)).concat(novos);
+      } catch (e) { console.warn(e); falhas.push('não consegui salvar agora — tente de novo em instantes'); }
+    }
+    renderAnexos(prodId, falhas.length
+      ? '<span class="anexo-chip" style="color:#fca5a5;">⚠ ' + String(falhas[0]).replace(/</g,'&lt;') + '</span>'
+      : (novos.length ? '<span class="anexo-chip" style="color:var(--verde);">✓ já está com o seu gerente</span>' : ''));
+    if (novos.length) flashSalvo();
   }
+  window.anexoSel = anexoSel;
+  const _comTimeout = (promessa, ms) => Promise.race([ promessa, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo esgotado no envio do arquivo')), ms)) ]);
   // Junta os anexos novos aos já existentes SEM duplicar por nome (idempotente:
   // reenviar "apolice.pdf" substitui, não acumula). Devolve o array final p/ gravar.
   async function anexosMesclados(empresaId, prodId, novos) {
@@ -897,7 +1025,7 @@
     trocar(html, 'frente', 't1');
     setTimeout(function(){
       PRODUTOS.forEach(function(p){ if (!PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'sim') abrirCampos(p.id); });
-      if (MODO_PADRAO && ident.cnpj) validarIdent(false);
+      if (MODO_PADRAO && ident.cnpj) { validarIdent(false); pintarEmpresa(); buscarEmpresaPorCNPJ(); }
       atualizarFalta();
     }, 30);
   }
@@ -926,6 +1054,13 @@
       const cnpjDig = soDigitos(ident.cnpj);
       const doc = {
         cnpj: cnpjDig, cnpjFmt: fmtCNPJ(cnpjDig),
+        // nome da empresa: o da base pública, ou o que o cliente escreveu quando a consulta falhou
+        razaoSocial: (ident.razaoSocial || ident.razaoManual || '').trim() || null,
+        nomeFantasia: (ident.fantasia || '').trim() || null,
+        cidade: (ident.cidade || '').trim() || null, uf: (ident.uf || '').trim() || null,
+        cnaePrincipal: ident.cnaePrincipal || null,
+        cnaesSecundarios: Array.isArray(ident.cnaesSecundarios) ? ident.cnaesSecundarios.slice(0, 20) : [],
+        cnpjFonte: ident.cnpjFonte || null,
         nomeContato: (ident.nome || '').trim() || null,
         celular: soDigitos(ident.celular) || null, celularFmt: (ident.celular || '').trim() || null,
         numFuncionarios: numFunc,
@@ -933,7 +1068,7 @@
         interesseCotar: [],
         status: 'novo',                 // novo | vinculado | nao_cliente | descartado
         vinculadoEmpresaId: null, vinculadoEmpresaNome: null,
-        origem: 'link_padrao', versaoForm: 18,
+        origem: 'link_padrao', versaoForm: 19,
         criadoEm: firebase.firestore.FieldValue.serverTimestamp()
       };
       const ref = await db.collection('mb_questionario_padrao').add(doc);
@@ -965,7 +1100,7 @@
     if (temSeg.length){
       html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div>'+
         '<div class="gb-t">Os seguros que você tem</div>'+
-        '<div class="gb-s">anexe a apólice — com ela a gente estuda a renovação sem precisar te perguntar mais nada</div></div></div>'+
+        '<div class="gb-s">anexe a apólice e a planilha — pode mandar vários de uma vez, e já chegam no seu gerente</div></div></div>'+
         temSeg.map(_cardFimPadrao).join('');
     }
     if (naoTem.length){
@@ -986,6 +1121,8 @@
     var tem = r.tem === 'sim';
     var pedido = PADRAO_INTERESSE.has(p.id);
     var bts = '';
+    // Quem já tem o seguro vê só o anexo — mesma regra da tela 2 do link do cliente.
+    if (tem) cat = null;
     if (cat && cat.arq){
       bts += '<button class="fp-btn" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">📖 Conhecer mais</button>';
     }
@@ -1000,7 +1137,7 @@
     var anexo = '';
     if (tem){
       anexo = '<div class="fp-anexo">'+
-        '<button class="fp-btn fp-btn-largo" onclick="document.getElementById(\'axp-'+p.id+'\').click()">📎 Anexar a apólice</button>'+
+        '<button class="fp-btn fp-btn-largo" onclick="document.getElementById(\'axp-'+p.id+'\').click()">📎 Anexar apólices e planilhas</button>'+
         '<input type="file" id="axp-'+p.id+'" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="anexoPadraoSel(\''+p.id+'\', this)">'+
         '<div class="fp-anx" id="axLista-'+p.id+'"></div></div>';
     }
@@ -1061,7 +1198,7 @@
     var falhas = [];
     for (var i = 0; i < files.length; i++) {
       var f = files[i];
-      if (_anexosDoProduto(prodId).length >= 3) { falhas.push('máximo de 3 arquivos por seguro'); break; }
+      if (_anexosDoProduto(prodId).length >= MAX_ANEXOS) { falhas.push('máximo de ' + MAX_ANEXOS + ' arquivos por seguro'); break; }
       if (f.size > 15 * 1024 * 1024) { falhas.push('"' + f.name + '" passa de 15 MB'); continue; }
       if (!tipoAnexoOk(f)) { falhas.push('"' + f.name + '" não é PDF, foto, Word ou Excel'); continue; }
       _renderAnexoPadrao(prodId, '<div class="fp-anx-item">⏳ enviando ' + _esc(f.name) + '…</div>');
@@ -1339,11 +1476,14 @@
     var linhas = '';
     if (tem){
       linhas += '<div class="hub-linha" onclick="document.getElementById(\'ax-'+p.id+'\').click()">'+
-        '<div class="hl-ic">📎</div><div class="hl-txt"><div class="hl-t">Anexar a apólice</div><div class="hl-s">PDF, foto, Word ou Excel — a gente lê seguradora e coberturas</div></div><div class="hl-seta">›</div></div>'+
+        '<div class="hl-ic">📎</div><div class="hl-txt"><div class="hl-t">Anexar apólices e planilhas</div><div class="hl-s">pode escolher vários de uma vez — PDF, foto, Word ou Excel. Vai direto para o seu gerente.</div></div><div class="hl-seta">›</div></div>'+
         '<input type="file" id="ax-'+p.id+'" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx" multiple style="display:none;" onchange="anexoSel(\''+p.id+'\', this)">'+
         '<div id="anexoLista-'+p.id+'" class="anexo-lista"></div>';
     }
-    var cat = catDoProduto(p);
+    /* Quem JÁ TEM o seguro vê só o anexo (decisão do Patrick, 14/out): com a
+       apólice na mão o corretor estuda a renovação sozinho, e apresentação e
+       questionário ali no meio só tiravam o cliente do caminho mais curto. */
+    var cat = tem ? null : catDoProduto(p);
     if (cat){
       var beneficio = /dental|saude|sa[úu]de|vida|previd/i.test(p.id + ' ' + (p.nome||''));
       var estudoSub = beneficio ? 'conte sua necessidade e receba uma proposta sob medida' : 'queremos entender sua operação e fazer um estudo sob medida';
@@ -1389,47 +1529,38 @@
     var html = '<div class="hub-top">'+
       '<div class="hub-check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recemEnviado ? 'Dados enviados! 🎉' : 'Bem-vindo de volta')+'</h1>'+
-      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices</b> dos seguros que você tem, <b>veja a apresentação</b> de qualquer um, e marque os que <b>não tem</b> e quer <b>cotar</b>.</p></div>';
-    if (temos.length){ html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div><div class="gb-t">Seguros que você tem</div><div class="gb-s">anexe a apólice ou veja a apresentação de cada um</div></div></div>'; temos.forEach(function(p){ html += _cardHub(p); }); }
+      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices e planilhas</b> dos seguros que você tem — vão na hora, sem precisar de mais nenhum botão — e marque os que <b>não tem</b> e quer <b>cotar</b>.</p></div>';
+    if (temos.length){ html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div><div class="gb-t">Seguros que você tem</div><div class="gb-s">anexe a apólice e a planilha de cada um — é só isso que precisamos para estudar a renovação</div></div></div>'; temos.forEach(function(p){ html += _cardHub(p); }); }
     if (naoTem.length){ html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div><div class="gb-t">Seguros para conhecer</div><div class="gb-s">veja o que cada um faz pela empresa — e marque os que quer cotar</div></div></div>'; naoTem.forEach(function(p){ html += _cardHub(p); }); }
-    html += '<div class="t1-envio"><div class="t1-falta" id="falta2"></div>'+
-      '<button class="btn-g btn-sim" id="btnEnviar2" onclick="enviarSegundo()">Enviar ao meu gerente</button>'+
-      '<div class="t1-nota">Pode fechar a página a qualquer momento — o mapeamento já foi entregue.</div></div>';
+    /* O botão só existe quando há cotação a pedir. Sem nenhum "não tem", ele
+       ficaria eternamente desligado embaixo de uma tela em que tudo já foi
+       entregue — parecendo que faltou alguma coisa. */
+    html += '<div class="t1-envio">'+
+      (naoTem.length
+        ? '<div class="t1-falta" id="falta2"></div>'+
+          '<button class="btn-g btn-sim" id="btnEnviar2" onclick="enviarSegundo()">Enviar ao meu gerente</button>'
+        : '')+
+      '<div class="t1-nota">Pode fechar a página a qualquer momento — o que você anexou já está com o seu gerente.</div></div>';
     trocar(html, 'frente', 'res');
     setTimeout(function(){ PRODUTOS.forEach(function(p){ renderAnexos(p.id); }); atualizarEnvio2(); }, 30);
   }
+  /* O botão de baixo agora é só das cotações: as apólices já chegaram sozinhas.
+     Por isso o rodapé não conta mais arquivos — contar o que já foi entregue
+     faria o cliente achar que ainda falta mandar. */
   function atualizarEnvio2(){
     var el = document.getElementById('falta2'), btn = document.getElementById('btnEnviar2'); if (!el || !btn) return;
-    var nAx = Object.keys(ANEXOS).reduce(function(n,k){ return n + (ANEXOS[k]||[]).length; }, 0);
     var nCot = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'nao' && respostas[p.id].interesse === 'sim' && !COTACOES_ENVIADAS.has(p.id); }).length;
-    var partes = []; if (nAx) partes.push(nAx + (nAx===1?' apólice':' apólices')); if (nCot) partes.push(nCot + (nCot===1?' cotação':' cotações'));
-    el.textContent = partes.length ? 'Pronto para enviar: ' + partes.join(' + ') : 'Nada novo para enviar por enquanto';
-    btn.disabled = !partes.length;
+    el.textContent = nCot ? 'Pronto para enviar: ' + nCot + (nCot === 1 ? ' cotação' : ' cotações') : 'Nada novo para enviar por enquanto';
+    btn.disabled = !nCot;
   }
-  // anexos e cotações atualizam o rodapé da tela 2
-  const _anexoSelOrig = anexoSel;
-  window.anexoSel = function(prodId, input){ _anexoSelOrig(prodId, input); atualizarEnvio2(); };
-  const _anexoRmOrig = anexoRm;
-  window.anexoRm = function(prodId, i){ _anexoRmOrig(prodId, i); atualizarEnvio2(); };
 
   /* ============ ENVIO 2 — APÓLICES + COTAÇÕES (mesmo payload do sistema) ============ */
   async function enviarSegundo(){
     const btn = document.getElementById('btnEnviar2');
     if (btn){ btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
     try {
-      // apólices (inclusive dos já mapeados/bloqueados)
-      for (const p of PRODUTOS) {
-        if (!(ANEXOS[p.id] || []).length) continue;
-        const meta = await uploadAnexos(p.id);
-        if (meta.length) {
-          await db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id).set({
-            apoliceAnexos: await anexosMesclados(LINK.empresaId, p.id, meta),
-            apoliceAnexadaEm: firebase.firestore.FieldValue.serverTimestamp(),
-            apoliceAnexadaViaLink: LINK_ID
-          }, { merge: true });
-        }
-        ANEXOS[p.id] = [];
-      }
+      // As apólices já subiram no momento em que o cliente escolheu o arquivo
+      // (anexoSel) — aqui só vão as cotações.
       // cotações dos "quero cotar" — só nos que o cliente NÃO tem (regra do sistema)
       const novas = [];
       for (const p of PRODUTOS) {
@@ -1456,9 +1587,8 @@
       const upd = { respostas: respostasLimpo, segundaEtapaEm: firebase.firestore.FieldValue.serverTimestamp() };
       if (novas.length) upd.cotacoesEnviadas = firebase.firestore.FieldValue.arrayUnion.apply(null, novas);
       await db.collection('mb_links_empresa').doc(LINK_ID).update(upd);
-      var aviso = FALHAS_ANEXO.length ? ' ⚠ Não recebemos: '+FALHAS_ANEXO.join(', ')+'.' : '';
-      FALHAS_ANEXO.length = 0;
       tela2(false);
+      var aviso = '';
       setTimeout(function(){ var f = document.getElementById('falta2'); if (f) f.textContent = '✓ Enviado ao seu gerente!'+aviso; }, 60);
     } catch (e) {
       console.error(e);
