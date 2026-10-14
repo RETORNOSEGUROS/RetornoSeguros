@@ -18376,7 +18376,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       .sort((a, b) => _apOrdem(a[0]) - _apOrdem(b[0]))
       .map(([k, v]) => _apLinha(k, v)).join('');
 
-    const blocoGar = _apGarantia(a) + _apDental(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a) + _apSaudeColab(a) + _apFrota(a) + _apDO(a);
+    const blocoGar = _apGarantia(a) + _apDental(a) + _dnCard(a) + _apVidaSocios(a) + _apTransporte(a) + _apEmpresarial(a) + _apEquipamentos(a) + _apVidaGrupo(a) + _apSaudeColab(a) + _apFrota(a) + _apDO(a);
 
     const nova = _apEhNova(a);
     // Progresso individual do participante — sempre visível:
@@ -21673,6 +21673,166 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       </div>` : ''}
     </div>`;
   }
+
+
+  /* ══════════ DENTAL — card da cotação e ficha para o cotador ══════════
+     O Dental era o único produto com questionário que não tinha card próprio
+     nem ficha: as respostas caíam na lista genérica, soltas, e o corretor
+     tinha que caçar vidas, plano e custeio linha a linha para cotar. Aqui
+     vira o mesmo formato dos outros (D&O, Frota, Vida): números no topo,
+     respostas em pares, pontos de atenção e um botão que copia a ficha.
+     Lê: analitico (apresentação + questionário) e questionario._dados. */
+  const _dnR$ = v => (v === null || v === undefined) ? null
+    : 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const _DN_USA = { urgencia: 'Urgência / dor', prevencao: 'Limpeza e prevenção', restauracao: 'Restauração',
+                    canal: 'Canal', extracao: 'Extração', odontopediatria: 'Filhos (odontopediatria)' };
+  const _DN_PLANO = { pl_padrao: 'Padrão Doc', pl_white: 'Padrão Doc White', pl_premium: 'Premium Top', pl_recomendacao: 'Quer a recomendação do corretor' };
+  const _DN_DEP = { dep_todos: 'Incluir todos, junto com os titulares', dep_opcional: 'Opcional — quem quiser inclui', dep_sotitular: 'Só titulares por enquanto', dep_naosei: 'Ainda não decidiu' };
+  const _DN_MOD = { mod_compulsorio: 'Compulsória — todos entram', mod_adesao: 'Por adesão — quem quiser', mod_naosei: 'Não sabe ainda' };
+  const _DN_CUST = { cst_empresa: 'A empresa, 100%', cst_copart: 'Empresa + funcionário (coparticipação)', cst_funcionario: 'O funcionário paga', cst_naosei: 'Ainda não decidiu' };
+  const _DN_CNJ = { cnj_temsaude: 'Já tem plano de saúde', cnj_nao: 'Só o dental', cnj_interesse: 'Teria interesse no saúde também' };
+  const _DN_PD = { pd_sim: 'Sim — plano melhor para sócios/diretores', pd_mesmo: 'Não — mesmo plano para todos', pd_entender: 'Quer entender as duas opções' };
+  const _DN_SIT = { sit_nenhum: 'Nenhum plano dental hoje', sit_local: 'Convênio local / básico', sit_outra: 'Tem plano de outra seguradora', sit_naosei: 'Não soube dizer' };
+  // tabela Bradesco Dental SPG — Padrão Doc, por pessoa/mês
+  const _DN_FAIXAS = [[3, 29, 27.42], [30, 99, 24.19], [100, 199, 18.15], [200, 700, 14.17], [701, 1000, 13.89], [1001, null, 10.82]];
+  function _dnFaixa(n) { return _DN_FAIXAS.find(f => n >= f[0] && (f[1] === null || n <= f[1])) || null; }
+  function _dnVidas(a) {
+    const an = a.analitico || {};
+    return Number(an.vidasExato) || Number(an.vidasEstimadas) || null;
+  }
+  function _dnDados(a) {
+    const an = a.analitico || {}, q = a.questionario || {}, D = q._dados || {}, E = D.empresaCnpj || {};
+    const n = _dnVidas(a), fx = n ? _dnFaixa(n) : null;
+    return {
+      an, q, E, n, fx,
+      empresa: an.razaoSocial || q.empresa || a.empresaNome || null,
+      cnpj: an.cnpj || q.cnpj || null,
+      local: [an.empresaCidade || E.cidade, an.empresaUf || E.uf].filter(Boolean).join('/') || null,
+      cidades: (an.cidades && an.cidades.length) ? an.cidades : (q.cidades || null),
+      plano: _DN_PLANO[an.planoCod] || null,
+      dep: _DN_DEP[an.dependentesCod] || null,
+      mod: _DN_MOD[an.modalidadeCod] || null,
+      cust: _DN_CUST[an.custeioCod] || null,
+      cnj: _DN_CNJ[an.conjugadoCod] || null,
+      pd: _DN_PD[an.planoDiretoriaCod] || null,
+      sit: _DN_SIT[an.situacaoCod] || null,
+      falhas: (an.reguaFalhas || []).filter(c => _REGUA_DENTAL[c]).map(c => _REGUA_DENTAL[c]),
+      usaria: (an.coberturasUsa || []).map(x => _DN_USA[x] || String(x)),
+      contato: q.contato || {}
+    };
+  }
+  function _dnAlertas(d) {
+    const L = [];
+    if (!d.n) L.push('Número de funcionários não informado — sem ele não dá para fechar a faixa de preço.');
+    if (d.n && d.n < 31) L.push('Abaixo de 31 vidas: NÃO há isenção de carência. Urgência e emergência em 24h; demais procedimentos em 180 dias.');
+    if (!d.cidades || !d.cidades.length) L.push('Não informou as cidades — confirmar antes de prometer rede credenciada.');
+    if (d.an.custeioCod === 'cst_naosei') L.push('Ainda não decidiu quem paga o plano — definir antes de desenhar a proposta.');
+    if (d.an.modalidadeCod === 'mod_adesao') L.push('Adesão facultativa: a seguradora costuma exigir mínimo de adesão — conferir na cotação.');
+    if (d.an.dependentesCod === 'dep_sotitular') L.push('Só titulares por enquanto — vale cotar também com dependentes (não há custo novo de implantação).');
+    if (d.an.planoCod === 'pl_recomendacao') L.push('Pediu a recomendação do corretor — mandar as três opções com o valor de cada uma.');
+    return L;
+  }
+  function _dnCard(a) {
+    const an = a.analitico || {};
+    if (!an || an.produto !== 'dental') return '';
+    const q = a.questionario || {};
+    const temQ = !!(an.vidasExato || an.planoCod || an.dependentesCod || an.custeioCod || (q.contato && q.contato.nome));
+    if (!temQ) return '';   // só viu a apresentação: o bloco pequeno do card já basta
+    const d = _dnDados(a), e = _cx.esc;
+    const vida = d.fx ? d.fx[2] : null;
+    const mensal = (vida && d.n) ? vida * d.n : null;
+    const corpo = _cx.tiles([
+      ['Vidas (titulares)', d.n ? String(d.n) : null, d.fx ? (d.fx[1] === null ? 'faixa acima de 1.000' : 'faixa ' + d.fx[0] + ' a ' + d.fx[1]) : null],
+      ['Valor por vida', vida ? _dnR$(vida) : null, 'tabela Padrão Doc'],
+      ['A empresa / mês', mensal ? _dnR$(mensal) : null, mensal ? _dnR$(mensal * 12) + ' no ano' : null],
+      ['Carência', d.n ? (d.n >= 31 ? 'Isenta' : '180 dias') : null, d.n ? (d.n >= 31 ? 'adesão nos 30 primeiros dias' : 'urgência em 24h') : null]
+    ])
+    + _cx.sec('🏢', 'Empresa', _cx.kv([
+      ['Razão social', d.empresa ? e(d.empresa) : null],
+      ['CNPJ', d.cnpj ? e(d.cnpj) : null],
+      ['Sede', d.local ? e(d.local) : null],
+      ['Cidades com funcionários', (d.cidades && d.cidades.length) ? e(d.cidades.join(' · ')) : null]
+    ]))
+    + _cx.sec('📋', 'Desenho do plano', _cx.kv([
+      ['Plano desejado', d.plano ? e(d.plano) : null],
+      ['Dependentes', d.dep ? e(d.dep) : null],
+      ['Plano p/ sócios e diretores', d.pd ? e(d.pd) : null],
+      ['Adesão', d.mod ? e(d.mod) : null],
+      ['Quem paga', d.cust ? e(d.cust) : null],
+      ['Plano de saúde', d.cnj ? e(d.cnj) : null]
+    ]))
+    + _cx.sec('💬', 'O que ele contou na apresentação',
+      (d.sit ? '<div style="font-size:12.5px; color:#334155; margin-bottom:6px;"><span style="color:#94a3b8;">Hoje:</span> <strong>' + e(d.sit) + '</strong></div>' : '')
+      + (d.falhas.length ? '<div style="font-size:11.5px; color:#b45309; margin-bottom:3px;">O plano atual dele não entrega — a pauta:</div>' + _cx.chips(d.falhas.map(e), ['#92400e', '#fffbeb']) : '')
+      + (d.usaria.length ? '<div style="font-size:11.5px; color:#94a3b8; margin:5px 0 3px;">Coberturas que o time mais usaria:</div>' + _cx.chips(d.usaria.map(x => e(String(x))), ['#0e7490', '#ecfeff']) : ''))
+    + _cx.sec('📞', 'Contato', _cx.kv([
+      ['Nome', d.contato.nome ? e(d.contato.nome) : null],
+      ['Cargo', d.contato.cargo ? e(d.contato.cargo) : null],
+      ['E-mail', d.contato.email ? e(d.contato.email) : null],
+      ['Telefone', d.contato.telefone ? e(d.contato.telefone) : null]
+    ]))
+    + _cx.alertas(_dnAlertas(d))
+    + _cx.acoes([['📋 Copiar ficha para o cotador', "dnCopiarFicha('" + a.id + "', this)", ['#0e7490', '#ecfeff', '#a5f3fc']]]);
+    return _cx.caixa(['#0e7490', '#06b6d4'], '🦷', 'Dental — dados da cotação',
+      _cx.status(a, { completo: a.questionarioCompleto }),
+      d.n ? d.n + ' vidas' : null, corpo);
+  }
+
+  /* A ficha: texto pronto para colar no cotador da Bradesco Dental ou no
+     e-mail. A ordem é a que a cotação pede — empresa, vidas, desenho do
+     plano, cidades — e só depois o contexto da conversa. */
+  function _dnFicha(a) {
+    const d = _dnDados(a), L = [];
+    const vida = d.fx ? d.fx[2] : null, mensal = (vida && d.n) ? vida * d.n : null;
+    L.push('COTAÇÃO DENTAL — ' + (d.empresa || 'empresa não identificada'));
+    if (d.cnpj) L.push('CNPJ: ' + d.cnpj);
+    if (d.local) L.push('Sede: ' + d.local);
+    L.push('');
+    L.push('GRUPO');
+    L.push('Vidas (titulares): ' + (d.n || 'não informado')
+      + (d.fx ? '  (faixa ' + (d.fx[1] === null ? 'acima de 1.000' : d.fx[0] + ' a ' + d.fx[1]) + ' vidas)' : ''));
+    if (vida) L.push('Valor de tabela Padrão Doc: ' + _dnR$(vida) + ' por pessoa/mês'
+      + (mensal ? '  ·  empresa ' + _dnR$(mensal) + '/mês · ' + _dnR$(mensal * 12) + '/ano' : ''));
+    L.push('Dependentes: ' + (d.dep || 'não informado'));
+    L.push('Carência: ' + (d.n ? (d.n >= 31 ? 'isenta para quem aderir nos 30 primeiros dias da vigência (contrato acima de 30 vidas)' : 'urgência e emergência em 24h; demais em 180 dias (contrato abaixo de 31 vidas)') : 'depende do nº de vidas'));
+    L.push('');
+    L.push('DESENHO DO PLANO');
+    L.push('Plano desejado: ' + (d.plano || 'não informado'));
+    L.push('Plano diferenciado p/ sócios e diretores: ' + (d.pd || 'não informado'));
+    L.push('Adesão: ' + (d.mod || 'não informado'));
+    L.push('Quem paga: ' + (d.cust || 'não informado'));
+    L.push('Plano de saúde empresarial: ' + (d.cnj || 'não informado'));
+    L.push('');
+    L.push('CIDADES COM FUNCIONÁRIOS');
+    if (d.cidades && d.cidades.length) d.cidades.forEach(c => L.push('  • ' + c));
+    else L.push('  não informadas — confirmar antes de prometer rede');
+    const al = _dnAlertas(d);
+    if (al.length) { L.push(''); L.push('PONTOS DE ATENÇÃO'); al.forEach(x => L.push('  • ' + x)); }
+    if (d.sit || d.falhas.length || d.usaria.length) {
+      L.push(''); L.push('CONTEXTO DA CONVERSA (não é dado de cotação)');
+      if (d.sit) L.push('Situação hoje: ' + d.sit);
+      if (d.falhas.length) L.push('O plano atual dele não entrega: ' + d.falhas.join(' · '));
+      if (d.usaria.length) L.push('Coberturas que o time mais usaria: ' + d.usaria.join(' · '));
+    }
+    const c = d.contato;
+    if (c && c.nome) { L.push(''); L.push('CONTATO: ' + c.nome + (c.cargo ? ' · ' + c.cargo : '') + (c.email ? ' · ' + c.email : '') + (c.telefone ? ' · ' + c.telefone : '')); }
+    L.push('');
+    L.push('Retorno Seguros · levantado em ' + new Date().toLocaleDateString('pt-BR'));
+    return L.join('\n');
+  }
+  async function dnCopiarFicha(id, btn) {
+    const rot = btn ? btn.textContent : '';
+    try {
+      if (btn) btn.textContent = 'montando…';
+      const d = await db.collection('mb_apresentacoes').doc(id).get();
+      if (!d.exists) throw new Error('registro não encontrado');
+      const txt = _dnFicha({ id: d.id, ...d.data() });
+      const ok = () => { if (btn) { btn.textContent = '✓ ficha copiada'; setTimeout(() => { btn.textContent = rot; }, 2600); } };
+      const fb = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); ok(); };
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt).then(ok, fb); else fb();
+    } catch (e) { if (btn) btn.textContent = rot; alert('Não consegui montar a ficha: ' + e.message); }
+  }
+  window.dnCopiarFicha = dnCopiarFicha;
 
   // Bloco extra no card, só para o Vida Sócios: instrumento desejado, os
   // segurados com idade/capital e a pauta da cláusula — o que o corretor
