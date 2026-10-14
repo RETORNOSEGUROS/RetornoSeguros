@@ -264,18 +264,6 @@
     .acao-item-sub { font-size: 12px; color: #64748b; margin-top: 2px; }
     .acao-item-cta { font-size: 12px; font-weight: 700; color: #4f46e5; white-space: nowrap; }
 
-    /* Feed de conquistas */
-    .feed-conquistas { background: white; border-radius: 14px; padding: 18px; border: 1px solid #e2e8f0; }
-    .feed-item {
-      display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f1f5f9;
-      animation: feedIn 0.4s ease;
-    }
-    @keyframes feedIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
-    .feed-item:last-child { border-bottom: none; }
-    .feed-avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; color: white; font-size: 13px; flex-shrink: 0; }
-    .feed-texto { flex: 1; font-size: 13px; color: #334155; }
-    .feed-tempo { font-size: 11px; color: #94a3b8; white-space: nowrap; }
-
     /* ============= KANBAN ============= */
     .kanban {
       display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr));
@@ -2611,25 +2599,11 @@
         </div>
       </div>
 
+      <!-- A tela Hoje é só números (decisão do Patrick, 14/out): saíram o Radar da
+           agência, a lista "Suas negociações no funil" e a Fila de ação, com toda a
+           geração de frases que alimentava os três. O que empurra para a ação vive
+           nas telas próprias — Funil, Oportunidades e Agenda. -->
       <div class="tt-grid">
-        <div class="tt-col">
-          <!-- ===== Radar (feed ao vivo) ===== -->
-          <div class="tt-card">
-            <div class="acao-grupo-head colapsavel tt-head" onclick="toggleGrupo('feedConquistas')"><i data-lucide="radar" class="w-4 h-4"></i> Radar da agência <span class="tt-head-sub">jogadas de hoje</span></div>
-            <div class="feed-conquistas grupo-corpo tt-feed" id="feedConquistas">
-              <div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>
-            </div>
-          </div>
-
-          <!-- ===== Funil rápido ===== -->
-          <div id="homeFunilLista"></div>
-
-          <!-- ===== Fila de ação (linha do tempo) ===== -->
-          <div id="filaAcao" class="tt-fila">
-            <div style="text-align:center; padding: 30px; color: #94a3b8; font-size: 13px;">Montando sua fila de ações...</div>
-          </div>
-        </div>
-
         <div class="tt-col tt-col-side">
           <!-- ===== Termômetro de meta (anel) ===== -->
           <div class="termometro perm-naoestag tt-meta" id="termometroWrap" style="display:none;">
@@ -4874,10 +4848,6 @@
     </div>
     <div class="cad-modal-body">
       <div class="form-group">
-        <label class="form-label">Nome do decisor</label>
-        <input type="text" class="form-control" id="inputDecisorNome" placeholder="Ex: João Silva (diretor)">
-      </div>
-      <div class="form-group">
         <label class="form-label">E-mail do decisor</label>
         <input type="email" class="form-control" id="inputEmailDecisor" placeholder="decisor@empresa.com">
       </div>
@@ -6041,638 +6011,10 @@
   }
 
   // ============= ANÁLISE DA CARTEIRA EM PALAVRAS (assistente do RM) =============
-  // ============================================================================
-  // RADAR INTELIGENTE — conselheiro da carteira (v155)
-  // Cada "gerador" olha um cruzamento de dados e devolve 0..N mensagens candidatas.
-  // Juntamos tudo num balaio, embaralhamos, tiramos as da última leva e mostramos 5.
-  // Repertório grande e variado, muda a cada abertura. Tudo local, sem custo.
-  // ============================================================================
-
-  window._RADAR_ULTIMAS = [];   // ids das mensagens mostradas na última abertura (anti-repetição)
-
-  function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-  function _tomDoDia() {
-    const d = new Date();
-    const diaSem = d.getDay();           // 0 dom .. 6 sab
-    const diaMes = d.getDate();
-    const ultDia = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-    if (ultDia - diaMes <= 3) return 'reta_mes';   // últimos 3 dias do mês
-    if (diaSem === 1) return 'segunda';
-    if (diaSem === 5) return 'sexta';
-    return 'meio';
-  }
-
   // Coleta tudo que os geradores podem precisar, numa passada só pela carteira.
-  async function _radarColeta() {
-    const perfil = perfilEfetivo();
-    let lista = (EMPRESAS_REAIS || EMPRESAS || []).slice();
-    if (perfil === 'rm') lista = lista.filter(e => e.rm === uidEfetivo());
-    const nome = (CTX.nome || 'gerente').split(' ')[0];
-    const total = lista.length;
-
-    const ramoGrupo = {}, ramoNome = {};
-    (RAMOS_ALL || PRODUTOS || []).forEach(r => { ramoGrupo[r.id] = r.grupoId; ramoNome[r.id] = r.nome; });
-
-    const semFunc = [], semSocios = [], semDental = [], semVidaSocios = [], semPrev = [];
-    const vencProx = [];        // seguros vencendo nos próximos 75 dias
-    const semVenc = [];         // nossos/mercado sem data de vencimento
-    // --- novas coletas para as mensagens estruturadas ---
-    const semNadaMapeado = [];  // empresa sem NENHUM seguro mapeado
-    const semDecisor = [];      // sem e-mail/nome do decisor
-    const semRh = [];           // sem e-mail do RH
-    const funcSemBeneficio = []; // tem funcionários mas falta dental/saúde/vida em grupo
-    const semTelefone = [];
-    let mapeadasAlgo = 0;
-    const hoje = new Date();
-    // Empresas candidatas por GRUPO: têm algum ramo daquele grupo ainda não mapeado.
-    // Usado para sugerir "que tal mapear a empresa X" em vez de um chamado genérico.
-    const candidatasGrupo = {};
-    const ramosDoGrupo = {};
-    (RAMOS_ALL || PRODUTOS || []).forEach(r => { (ramosDoGrupo[r.grupoId] = ramosDoGrupo[r.grupoId] || []).push(r.id); });
-
-    lista.forEach(e => {
-      const dados = e.produtosDados || {};
-      const temAlgo = Object.values(dados).some(pd => pd && pd.statusVisual && pd.statusVisual !== 'vazia');
-      if (temAlgo) mapeadasAlgo++;
-      const func = Number(e.funcionarios || e.numFuncionarios || 0) || 0;
-      const nSoc = (e.socios || []).filter(s => s && (s.nome || s)).length;
-      if (func === 0) semFunc.push(e);
-      // "não tem sócios (só diretores)" já é mapeado — não entra como pendência
-      if (nSoc === 0 && !e.semSociosConfirmado) semSocios.push(e);
-      if (func > 0 && (!dados['dental'] || !dados['dental'].statusVisual || dados['dental'].statusVisual === 'vazia')) semDental.push({ e, func });
-      if (nSoc > 0 && (!dados['vida-socios'] || !dados['vida-socios'].statusVisual || dados['vida-socios'].statusVisual === 'vazia')) semVidaSocios.push({ e, nSoc });
-      if (nSoc > 0 && (!dados['prev-socios'] || !dados['prev-socios'].statusVisual || dados['prev-socios'].statusVisual === 'vazia')) semPrev.push({ e, nSoc });
-
-      // --- coletas novas ---
-      if (!temAlgo) semNadaMapeado.push(e);
-      if (!(e.emailDecisor || '').trim()) semDecisor.push(e);
-      if (!(e.emailRh || '').trim()) semRh.push(e);
-      if (!(e.telefone || e.whatsapp || '').toString().trim()) semTelefone.push(e);
-      // com funcionários mas sem os benefícios mapeados (dental, saúde, vida em grupo)
-      if (func > 0) {
-        const faltam = ['dental', 'saude-funcionarios', 'saude', 'vida-grupo', 'vida-funcionarios']
-          .filter(rid => ramoNome[rid] && (!dados[rid] || !dados[rid].statusVisual || dados[rid].statusVisual === 'vazia'))
-          .map(rid => ramoNome[rid]);
-        if (faltam.length) funcSemBeneficio.push({ e, func, faltam });
-      }
-
-      // candidata para um grupo se tem ao menos um ramo do grupo ainda 'vazio'
-      Object.keys(ramosDoGrupo).forEach(gid => {
-        const temVazio = ramosDoGrupo[gid].some(rid => {
-          const pd = dados[rid];
-          return !pd || !pd.statusVisual || pd.statusVisual === 'vazia';
-        });
-        if (temVazio) (candidatasGrupo[gid] = candidatasGrupo[gid] || []).push(e);
-      });
-
-      Object.entries(dados).forEach(([rid, pd]) => {
-        if (!pd || !pd.statusVisual) return;
-        if (['conosco', 'fechada', 'mercado', 'mapeada'].includes(pd.statusVisual)) {
-          if (pd.vencimentoMes && pd.vencimentoAno) {
-            const dv = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
-            const dias = Math.round((dv - hoje) / 86400000);
-            if (dias >= -5 && dias <= 75) vencProx.push({ e, rid, dias, nome: ramoNome[rid] || rid });
-          } else if (['conosco', 'fechada', 'mercado'].includes(pd.statusVisual)) {
-            semVenc.push({ e, rid, nome: ramoNome[rid] || rid });
-          }
-        }
-      });
-    });
-
-    // oportunidades quentes (vencendo/reagendadas) — usa o cache se houver
-    let quentes = 0;
-    try { quentes = (window._OPORTUNIDADES_CACHE && window._OPORTUNIDADES_CACHE.minha || []).length; } catch (e) {}
-
-    // ---- FUNIL: parados, enviadas, declínios sem justificativa, frias ----
-    // (antes usava COTACOES_CACHE, que NÃO existe — a coleta falhava silenciosamente)
-    const _meu = uidEfetivo();
-    const _minhas = c => perfil !== 'rm' || empresaRmDe(c.empresaId) === _meu || c.solicitadoPorUid === _meu;
-    let parados = [], paradosDetalhe = [], enviadasHa = [], semJustificativa = [], frias = [];
-    try {
-      const _todas = (COTACOES || []).filter(_minhas);
-      _todas.forEach(c => {
-        const ativa = ehStatusAtivoSafe(c.status);
-        const dias = diasNaEtapa(c);
-        const lim = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || 999;
-        const et = etapaInfo(c.status) || {};
-        const nomeProd = c.produtoNome || ramoNome[c.produtoId] || c.produtoId;
-
-        if (ativa && dias > lim) {
-          parados.push(c);
-          // quais itens do checklist que QUALQUER UM pode marcar ainda faltam?
-          const itens = (et.checklist || []).map(_normItem);
-          const feito = c.checklistFeito || {};
-          const pendentes = itens
-            .map((it, i) => ({ it, key: c.status + '|p' + i }))
-            .filter(x => (x.it.resp || 'todos') === 'todos' && !feito[x.key])
-            .map(x => x.it.txt);
-          paradosDetalhe.push({ c, dias, etapa: et.label || c.status, produto: nomeProd, pendentes });
-        }
-        // na etapa "enviada" há 2+ dias → hora de confirmar recebimento / tirar dúvidas
-        if (ativa && /envi/i.test(c.status) && dias >= 2) {
-          enviadasHa.push({ c, dias, produto: nomeProd });
-        }
-        // negociação fria: chance baixa ou sem chance definida, já com alguns dias
-        if (ativa && dias >= 3 && (c.chanceFechamento === 'baixa' || !c.chanceFechamento)) {
-          frias.push({ c, dias, produto: nomeProd, chance: c.chanceFechamento || null });
-        }
-        // declinado SEM saber com quem/por quanto → dá pra tentar descobrir
-        if (['perdida', 'sem_aceitacao'].includes(c.status)) {
-          const temInfo = (c.seguradoraVencedora || '').trim() || c.valorConcorrente > 0;
-          const semMotivo = !c.motivoPerda || c.declinioResultado === 'nao_justificou';
-          if (!temInfo && semMotivo) semJustificativa.push({ c, produto: nomeProd });
-        }
-      });
-    } catch (e) { console.warn('radar funil', e); }
-
-    // produção x objetivo por grupo + ticket médio por grupo
-    let prodGrupo = {}, metaGrupo = {}, ticketGrupo = {}, nFechadosGrupo = {};
-    try {
-      const ano = new Date().getFullYear();
-      const dd = await _dadosGrupoDoAno(ano, perfil === 'rm' ? uidEfetivo() : null);
-      prodGrupo = dd.producaoGrupo || {};
-      metaGrupo = dd.metaGrupo || {};
-      // ticket médio: precisa dos fechados individuais — recalcula rápido
-      let qc = db.collection('mb_cotacoes');
-      if (CTX.agenciaId) qc = qc.where('agenciaId', '==', CTX.agenciaId);
-      const snap = await qc.get();
-      const inicioAno = new Date(ano, 0, 1);
-      const _empresaRM = {}; (EMPRESAS_REAIS || EMPRESAS || []).forEach(e => _empresaRM[e.id] = e.rm);
-      const valoresPorGrupo = {};
-      snap.forEach(d => {
-        const c = d.data();
-        if (c.status !== 'fechada') return;
-        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        if (!dt || dt < inicioAno) return;
-        const uid = _empresaRM[c.empresaId] || c.fechadoPorUid;
-        if (perfil === 'rm' && uid !== uidEfetivo()) return;
-        const gid = ramoGrupo[c.produtoId] || 'outros';
-        (valoresPorGrupo[gid] = valoresPorGrupo[gid] || []).push(c.valor || 0);
-      });
-      Object.entries(valoresPorGrupo).forEach(([gid, vals]) => {
-        const validos = vals.filter(v => v > 0);
-        nFechadosGrupo[gid] = validos.length;
-        ticketGrupo[gid] = validos.length ? validos.reduce((s, v) => s + v, 0) / validos.length : 0;
-      });
-    } catch (e) { console.warn('radar grupos', e); }
-
-    // ---- MELHOR MÊS do ano (produção) ----
-    let melhorMes = null;
-    try {
-      const ano = new Date().getFullYear();
-      const porMes = {};
-      let qc2 = db.collection('mb_cotacoes');
-      if (CTX.agenciaId) qc2 = qc2.where('agenciaId', '==', CTX.agenciaId);
-      const snap2 = await qc2.get();
-      snap2.forEach(d => {
-        const c = d.data();
-        if (c.status !== 'fechada') return;
-        const dt = c.dataDecisao && c.dataDecisao.toDate ? c.dataDecisao.toDate() : null;
-        if (!dt || dt.getFullYear() !== ano) return;
-        if (perfil === 'rm' && empresaRmDe(c.empresaId) !== _meu && c.fechadoPorUid !== _meu) return;
-        porMes[dt.getMonth()] = (porMes[dt.getMonth()] || 0) + (c.valor || 0);
-      });
-      const mesesNome = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
-      const ent = Object.entries(porMes).sort((a, b) => b[1] - a[1]);
-      const mesAtual = new Date().getMonth();
-      if (ent.length && Number(ent[0][0]) !== mesAtual) {
-        melhorMes = { nome: mesesNome[Number(ent[0][0])], valor: ent[0][1] };
-      }
-    } catch (e) {}
-
-    // ---- PIPELINE em negociação e RENOVAÇÕES até o fim do ano ----
-    // "se fechar o que está em negociação, você chega a X% do objetivo"
-    let pipelineValor = 0, pipelineN = 0, renovAteDez = 0, renovN = 0;
-    try {
-      (COTACOES || []).filter(_minhas).forEach(c => {
-        if (!ehStatusAtivoSafe(c.status)) return;
-        pipelineValor += (c.valorProposto || c.valor || 0);
-        pipelineN++;
-      });
-    } catch (e) {}
-    const _fimAno = new Date(hoje.getFullYear(), 11, 31);
-    lista.forEach(e => {
-      Object.entries(e.produtosDados || {}).forEach(([rid, pd]) => {
-        if (!pd || !pd.vencimentoMes || !pd.vencimentoAno) return;
-        if (!['conosco', 'fechada', 'mercado', 'mapeada'].includes(pd.statusVisual)) return;
-        const dv = new Date(pd.vencimentoAno, pd.vencimentoMes - 1, 1);
-        if (dv >= hoje && dv <= _fimAno) {
-          renovAteDez += (pd.premioAnual || pd.valorAnualPago || pd.valorFechado || 0);
-          renovN++;
-        }
-      });
-    });
-
-    // ---- COBERTURA POR EMPRESA: quantos ramos já mapeados de cada uma ----
-    const totalRamos = Object.keys(ramoNome).length || 1;
-    const coberturaEmpresa = lista.map(e => {
-      const dados = e.produtosDados || {};
-      const com = Object.values(dados).filter(pd => pd && pd.statusVisual && pd.statusVisual !== 'vazia').length;
-      return { e, com, pct: Math.round(com / totalRamos * 100) };
-    }).filter(x => x.com > 0 && x.pct < 60).sort((a, b) => b.pct - a.pct);
-
-    // ---- % de VENCIMENTOS já mapeados, por ramo ----
-    // "já mapeamos 30% das renovações do seu seguro de frota" + quais faltam
-    const coberturaRamo = {};
-    lista.forEach(e => {
-      const dados = e.produtosDados || {};
-      Object.keys(ramoNome).forEach(rid => {
-        coberturaRamo[rid] = coberturaRamo[rid] || { com: 0, total: 0, faltam: [] };
-        coberturaRamo[rid].total++;
-        const pd = dados[rid];
-        const temVenc = pd && pd.vencimentoMes && pd.vencimentoAno;
-        if (temVenc) coberturaRamo[rid].com++;
-        else coberturaRamo[rid].faltam.push(e);
-      });
-    });
-
-    // atividade recente do próprio usuário (dias desde a última visita/mapeamento)
-    let diasSemVisita = null, mapeouSemana = 0;
-    try {
-      const acoes = await _carregarAcoes(false);
-      const meu = uidEfetivo();
-      const seteDias = Date.now() - 7 * 86400000;
-      let ultimaVisita = 0;
-      acoes.forEach(a => {
-        if (a.usuarioId !== meu) return;
-        const t = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate().getTime() : 0;
-        if (a.tipo === 'visita' && t > ultimaVisita) ultimaVisita = t;
-        if (a.tipo === 'mapeamento' && t >= seteDias) mapeouSemana++;
-      });
-      if (ultimaVisita) diasSemVisita = Math.floor((Date.now() - ultimaVisita) / 86400000);
-    } catch (e) {}
-
-    return {
-      nome, total, lista, mapeadasAlgo, perfil,
-      semFunc, semSocios, semDental, semVidaSocios, semPrev,
-      semNadaMapeado, semDecisor, semRh, semTelefone, funcSemBeneficio,
-      vencProx, semVenc, quentes, parados, paradosDetalhe, enviadasHa, semJustificativa, frias,
-      prodGrupo, metaGrupo, ticketGrupo, nFechadosGrupo, melhorMes, coberturaRamo, ramoNome,
-      pipelineValor, pipelineN, renovAteDez, renovN, coberturaEmpresa, totalRamos,
-      diasSemVisita, mapeouSemana, candidatasGrupo,
-      grupoNome: { vida: 'Vida', re: 'RE', saude: 'Saúde' }
-    };
-  }
-
   // ---- O CATÁLOGO DE GERADORES ----
   // Cada um recebe os dados coletados e devolve um array de {id, icon, tom, txt, cta?}.
   // Muitas variações de texto por gerador → o mesmo cenário nunca soa igual.
-  function _radarGeradores(D) {
-    const out = [];
-    // acoes = [{rot:'Rótulo', js:'chamada()'}] — botões que levam direto à ação
-    const add = (id, icon, tom, txt, cta, acoes) => out.push({ id, icon, tom, txt, cta, acoes });
-    const cap = s => (s || '').charAt(0).toUpperCase() + (s || '').slice(1);
-    const esc = s => String(s || '').replace(/'/g, "\\'");
-    const N = D.nome;
-
-    // ---- atalhos de ação reutilizáveis ----
-    const aRaioX = e => ({ rot: '🏢 Abrir empresa', js: `abrirRaioX('${esc(e.id)}')` });
-    const aLink  = e => ({ rot: '🔗 Gerar link do questionário', js: `gerarLinkMapeamentoEmpresa('${esc(e.id)}')` });
-    const aCotar = () => ({ rot: '⚡ Pedir cotação', js: 'abrirPedirCotacao()' });
-    const aAgenda = () => ({ rot: '📍 Agendar visita', js: 'abrirAgendarVisita()' });
-    const aEmail = (e, assunto) => (e.emailDecisor || e.emailRh)
-      ? { rot: '✉️ Enviar e-mail', js: `window.open('mailto:${esc(e.emailDecisor || e.emailRh)}?subject=${encodeURIComponent(assunto || 'Seguros — ' + (e.nome || ''))}','_blank')` }
-      : null;
-    const aWhats = e => {
-      const t = String(e.whatsapp || e.telefone || '').replace(/\D/g, '');
-      return t.length >= 10 ? { rot: '💬 WhatsApp', js: `window.open('https://wa.me/55${t}','_blank')` } : null;
-    };
-    const acoesDe = (e, extras) => [...(extras || []), aRaioX(e), aWhats(e), aEmail(e)].filter(Boolean).slice(0, 3);
-
-    // =====================================================================
-    // MENSAGEM 1 — CADASTRO E MAPEAMENTO (o que falta saber da empresa)
-    // =====================================================================
-
-    // 1a) empresa sem NENHUM seguro mapeado
-    if (D.semNadaMapeado.length) {
-      const e = _pick(D.semNadaMapeado);
-      add('m1_nada', '🗺️', 'oportunidade', _pick([
-        `A <strong>${e.nome}</strong> ainda não tem <strong>nenhum seguro mapeado</strong>. Que tal uma ligação, ou mandar o link do questionário pelo WhatsApp? Não custa nada perguntar — e cada resposta vira oportunidade aqui dentro.`,
-        `Temos <strong>${D.semNadaMapeado.length} ${D.semNadaMapeado.length === 1 ? 'empresa' : 'empresas'}</strong> sem nenhum mapeamento. Comece pela <strong>${e.nome}</strong>: gerar o link do questionário leva 10 segundos e o cliente responde quando puder.`,
-        `Descobrir que a empresa <em>não tem</em> um seguro também é informação valiosa — empresa desprotegida corre risco, e risco é conversa. A <strong>${e.nome}</strong> está totalmente em branco. Vamos abrir esse mapa?`
-      ]), null, acoesDe(e, [aLink(e)]));
-    }
-
-    // 1b) sem número de funcionários
-    if (D.semFunc.length) {
-      const e = _pick(D.semFunc);
-      const temFunc = D.total - D.semFunc.length;
-      add('m1_func', '👥', 'dica', _pick([
-        `Ainda não sabemos quantos funcionários a <strong>${e.nome}</strong> tem. Uma mensagem ou uma ligação resolvem isso — e esse dado abre a porta para <strong>dental, saúde e vida em grupo</strong>.`,
-        `Das suas <strong>${D.total} empresas</strong>, você sabe o número de colaboradores de <strong>${temFunc}</strong>. A <strong>${e.nome}</strong> é uma das que faltam. Quanto maior a empresa, maior a oportunidade em benefícios.`,
-        `<strong>${e.nome}</strong>: sem o nº de funcionários, a gente fica no escuro sobre benefícios. Pergunta rápida no WhatsApp já resolve. 😉`
-      ]), null, acoesDe(e, [aLink(e)]));
-    }
-
-    // 1c) sem e-mail do decisor
-    if (D.semDecisor.length) {
-      const e = _pick(D.semDecisor);
-      add('m1_decisor', '🎯', 'dica', _pick([
-        `Você sabe quem decide sobre seguros na <strong>${e.nome}</strong>? Cadastre o nome e o e-mail do decisor. Estamos sempre enviando oportunidades — numa dessas sai negócio.`,
-        `A <strong>${e.nome}</strong> está sem o contato do decisor. Ter esse e-mail é o que permite chegar na hora certa, com a proposta certa.`
-      ]), null, acoesDe(e));
-    }
-
-    // 1d) sem e-mail do RH
-    if (D.semRh.length) {
-      const e = _pick(D.semRh);
-      add('m1_rh', '🧑‍💼', 'dica', _pick([
-        `Você sabe o e-mail do RH da <strong>${e.nome}</strong>? Vale cadastrar. É sempre bom manter contato com quem cuida de <em>pessoas</em> nas empresas — é por ali que passa dental, saúde e vida.`,
-        `RH da <strong>${e.nome}</strong> ainda não cadastrado. Quem cuida de gente é quem abre a porta dos benefícios.`
-      ]), null, acoesDe(e));
-    }
-
-    // 1e) tem funcionários, mas falta mapear os benefícios
-    if (D.funcSemBeneficio.length) {
-      const x = _pick(D.funcSemBeneficio);
-      add('m1_benef', '🦷', 'oportunidade', _pick([
-        `A <strong>${x.e.nome}</strong> tem <strong>${x.func} funcionários</strong> e ainda não sabemos sobre ${x.faltam.slice(0, 2).join(' e ')}. Meio caminho andado — só falta perguntar se já têm.`,
-        `<strong>${x.func} colaboradores</strong> na <strong>${x.e.nome}</strong> e nenhum benefício mapeado. Se não têm, é oportunidade. Se têm, é renovação. Nos dois casos vale saber.`
-      ]), null, acoesDe(x.e, [aLink(x.e)]));
-    }
-
-    // 1f) sem sócios
-    if (D.semSocios.length) {
-      const e = _pick(D.semSocios);
-      add('m1_socios', '🧑‍💼', 'dica', `A <strong>${e.nome}</strong> está sem o quadro societário. Com nome e data de nascimento dá pra cotar <strong>vida e saúde dos sócios</strong> na hora. E se a empresa não tiver sócios, marque isso também — conta como mapeado.`,
-        null, acoesDe(e));
-    }
-
-    // =====================================================================
-    // MENSAGEM 2 — FUNIL (o que está travado, esperando você)
-    // =====================================================================
-
-    // 2a) negócio parado com itens de checklist que qualquer um pode resolver
-    const paradoComPendencia = (D.paradosDetalhe || []).filter(p => p.pendentes.length);
-    if (paradoComPendencia.length) {
-      const p = _pick(paradoComPendencia);
-      add('m2_parado', '⏳', 'alerta', _pick([
-        `O <strong>${p.produto}</strong> da <strong>${p.c.empresaNome}</strong> está há <strong>${p.dias} dias</strong> parado em "${p.etapa}". Estamos esperando: <em>${p.pendentes.slice(0, 2).join(', ')}</em>. Sua ajuda é fundamental — resolve essa pra nós?`,
-        `Travou: <strong>${p.c.empresaNome}</strong> · ${p.produto}, ${p.dias} dias em "${p.etapa}". Falta <em>${p.pendentes[0]}</em>. Um empurrãozinho e ele volta a andar. 💪`
-      ]), 'cotacoes', [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(p.c.id)}')` }]);
-    }
-
-    // 2b) cotação enviada — confirmar recebimento / tirar dúvidas
-    if ((D.enviadasHa || []).length) {
-      const x = _pick(D.enviadasHa);
-      add('m2_enviada', '📨', 'oportunidade', x.dias <= 3 ? _pick([
-        `Boa! Enviamos a cotação de <strong>${x.produto}</strong> para a <strong>${x.c.empresaNome}</strong>. Que tal confirmar se receberam? Uma mensagem simples já mantém a negociação viva.`,
-        `A proposta de <strong>${x.produto}</strong> foi pra <strong>${x.c.empresaNome}</strong> há ${x.dias} dias. Confirma o recebimento? Proposta que fica no vácuo esfria rápido.`
-      ]) : _pick([
-        `Já fazem <strong>${x.dias} dias</strong> que enviamos a cotação de ${x.produto} para a <strong>${x.c.empresaNome}</strong>. Não seria bom ligar e perguntar se entenderam, ou se ficou alguma dúvida?`,
-        `<strong>${x.c.empresaNome}</strong>: ${x.dias} dias desde o envio de ${x.produto}. Se precisar, coloque o corretor na jogada e agende uma reunião — <strong>olho no olho faz diferença</strong>. 👀`
-      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }, aAgenda()]);
-    }
-
-    // 2c) declínio sem justificativa — descobrir com quem fechou
-    if ((D.semJustificativa || []).length) {
-      const x = _pick(D.semJustificativa);
-      add('m2_semjust', '🔍', 'dica', _pick([
-        `Tentamos e não fechamos o <strong>${x.produto}</strong> na <strong>${x.c.empresaNome}</strong> — e não sabemos com quem ficou. Nos ajuda a descobrir <strong>com quem fechou e por quanto</strong>? Isso é ouro pra tentarmos de novo no ano que vem.`,
-        `<strong>${x.c.empresaNome}</strong> · ${x.produto}: perdemos sem saber o motivo. Uma conversa franca com o cliente hoje vale muito na renovação. Descobre pra gente?`
-      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }]);
-    }
-
-    // 2d) negociação fria — descobrir a concorrência
-    if ((D.frias || []).length) {
-      const x = _pick(D.frias);
-      add('m2_fria', '🧊', 'dica', _pick([
-        `O que transforma uma negociação de fria em quente é <strong>informação</strong>. A <strong>${x.c.empresaNome}</strong> (${x.produto}) está morna há ${x.dias} dias — que tal descobrir como estamos de <strong>preço e coberturas</strong> frente ao concorrente?`,
-        `<strong>${x.c.empresaNome}</strong> · ${x.produto} sem evolução. Pergunta direta costuma destravar: <em>"o que seria um empecilho para avançarmos?"</em>`
-      ]), null, [{ rot: '📋 Abrir negociação', js: `abrirNegociacao('${esc(x.c.id)}')` }]);
-    }
-
-    // 2e) nenhuma oportunidade nova iniciada há dias
-    if (!D.parados.length && D.funcSemBeneficio.length && (D.quentes || 0) === 0) {
-      const x = _pick(D.funcSemBeneficio);
-      add('m2_iniciar', '🚀', 'oportunidade', `${N}, faz alguns dias que não abrimos nenhuma oportunidade nova. Que tal tentarmos o <strong>${x.faltam[0] || 'dental'}</strong> na <strong>${x.e.nome}</strong>? Já temos os ${x.func} funcionários mapeados — meio caminho andado. Peça só a chance de cotar, não custa nada.`,
-        null, [aCotar(), aRaioX(x.e)]);
-    }
-
-    // =====================================================================
-    // MENSAGEM 3 — PRODUÇÃO, OBJETIVOS E MATEMÁTICA DA META
-    // =====================================================================
-
-    // 3a) melhor mês do ano
-    if (D.melhorMes) {
-      add('m3_melhormes', '📈', 'destaque', _pick([
-        `${N}, <strong>${D.melhorMes.nome}</strong> foi seu melhor mês do ano: ${fmtBRcompacto(D.melhorMes.valor)} de produção. Que tal olhar o que deu certo lá e trazer para este mês? 🚀`,
-        `Seu recorde do ano é <strong>${D.melhorMes.nome}</strong> (${fmtBRcompacto(D.melhorMes.valor)}). O que você fez de diferente naquele mês? Repetir a receita costuma funcionar.`
-      ]));
-    }
-
-    // 3b) ticket médio → quantos negócios faltam
-    Object.keys(D.metaGrupo).forEach(gid => {
-      const meta = D.metaGrupo[gid], prod = D.prodGrupo[gid] || 0;
-      if (!meta || meta <= 0 || prod <= 0) return;
-      const gn = D.grupoNome[gid] || cap(gid);
-      const ticket = D.ticketGrupo[gid] || 0, nF = D.nFechadosGrupo[gid] || 0;
-      const falta = meta - prod;
-      if (falta <= 0) {
-        add('m3_bateu_' + gid, '🏆', 'destaque', `Você <strong>bateu seu objetivo em ${gn}</strong> (${fmtBRcompacto(prod)} de ${fmtBRcompacto(meta)})! Aproveita o embalo e puxa mais uma. 💪`);
-        return;
-      }
-      if (nF >= 3 && ticket > 0) {
-        const W = Math.max(1, Math.ceil(falta / ticket));
-        add('m3_ticket_' + gid, '🎯', 'oportunidade', `Seu ticket médio em <strong>${gn}</strong> este ano é <strong>${fmtBRcompacto(ticket)}</strong> por negócio. Faltam ${fmtBRcompacto(falta)} pro seu objetivo — ou seja, cerca de <strong>${W} ${W === 1 ? 'negócio novo' : 'negócios novos'}</strong> nesse mesmo ritmo. Dá pra fazer!`, 'oportunidades');
-      }
-    });
-
-    // 3c) ramo zerado — com a MATEMÁTICA concreta pra chegar lá
-    const CUSTO_MEDIO = { saude: 380, dental: 25, vida: 12 };   // por pessoa/mês, referência de mercado
-    Object.keys(D.metaGrupo).forEach(gid => {
-      if ((D.prodGrupo[gid] || 0) > 0) return;
-      const meta = D.metaGrupo[gid];
-      if (!meta) return;
-      const gn = D.grupoNome[gid] || cap(gid);
-
-      if (gid === 'saude') {
-        const custo = CUSTO_MEDIO.saude;
-        const vidasAno = Math.ceil(meta / (custo * 12));
-        const grandes = (D.funcSemBeneficio || []).slice().sort((a, b) => b.func - a.func);
-        const alvo = grandes[0];
-        const variacoes = [
-          `Ainda estamos zerados em <strong>${gn}</strong>. Fazendo a conta: um plano custa em média <strong>R$ ${custo}/pessoa</strong>. Pro seu objetivo de ${fmtBRcompacto(meta)}, seriam cerca de <strong>${vidasAno} vidas</strong> no ano.${alvo ? ` A <strong>${alvo.e.nome}</strong> tem ${alvo.func} funcionários — sozinha já muda o jogo.` : ''}`,
-          `<strong>${gn}</strong> zerado. Mas olha por outro ângulo: fechando o plano para apenas <strong>3 pessoas por empresa</strong>, em 10 empresas você já constrói um resultado sólido no ano. Comece por uma. 🙂`
-        ];
-        if (alvo) variacoes.push(`Que tal apresentar <strong>saúde</strong> para a <strong>${alvo.e.nome}</strong>? São ${alvo.func} colaboradores mapeados. Mesmo que só uma parte adira, é o seu primeiro negócio no ramo.`);
-        add('m3_zero_saude', '🩺', 'alerta', _pick(variacoes), null, alvo ? [aCotar(), aRaioX(alvo.e)] : [aCotar()]);
-        return;
-      }
-
-      if (gid === 'vida' && (D.semVidaSocios || []).length) {
-        const v = _pick(D.semVidaSocios);
-        add('m3_zero_vida', '🛡️', 'alerta', `<strong>${gn}</strong> ainda zerado este ano. A <strong>${v.e.nome}</strong> tem <strong>${v.nSoc} ${v.nSoc === 1 ? 'sócio' : 'sócios'}</strong> sem seguro de vida mapeado — proteção pessoal é conversa que rende, porque fala do que a pessoa mais preza.`,
-          null, [aCotar(), aRaioX(v.e)]);
-        return;
-      }
-
-      const cands = D.candidatasGrupo[gid] || [];
-      const alvo = cands.length ? _pick(cands) : null;
-      add('m3_zero_' + gid, '🌱', 'alerta', alvo
-        ? `Seu <strong>${gn}</strong> está zerado este ano. Bora abrir o placar? Que tal começar pela <strong>${alvo.nome}</strong>? A primeira venda é a que destrava o resto. 🚀`
-        : `Seu <strong>${gn}</strong> ainda está zerado. Mas isso é oportunidade, não problema — tem carteira pra trabalhar.`,
-        null, alvo ? [aCotar(), aRaioX(alvo)] : [aCotar()]);
-    });
-
-    // 3d) seguro do carro do sócio no CNPJ
-    if ((D.semSocios || []).length < D.total && (D.prodGrupo['re'] || 0) === 0) {
-      add('m3_auto_socio', '🚗', 'dica', `Estamos zerados em <strong>RE</strong>. Uma porta que muita gente esquece: o <strong>carro do sócio no CNPJ da empresa</strong>. Consulte o corretor sobre os benefícios — costuma ser uma conversa fácil e abre o relacionamento.`, null, [aCotar()]);
-    }
-
-    // =====================================================================
-    // MENSAGEM 4 — OPORTUNIDADES, COBERTURA E RITMO
-    // =====================================================================
-
-    // 4a) oportunidades quentes
-    if (D.quentes > 0) {
-      add('m4_quentes', '🔥', 'oportunidade', _pick([
-        `Sua carteira está recheada: <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade quente' : 'oportunidades quentes'}</strong> esperando ação. Seu trabalho é só conseguir a chance de cotar — o resto a gente faz junto.`,
-        `A corretora trabalha todo dia pra identificar oportunidades na sua carteira. Você tem <strong>${D.quentes}</strong> agora. Uma interação pode ser o suficiente pra fechar um grande negócio.`,
-        `Já conferiu hoje tudo que sua carteira pode gerar? São <strong>${D.quentes} ${D.quentes === 1 ? 'oportunidade' : 'oportunidades'}</strong> quentes. Vamos juntos nessa — você é quem abre a porta. 🚪`
-      ]), 'oportunidades');
-    }
-
-    // 4b) % de vencimentos mapeados por ramo + quais faltam
-    const ramosCob = Object.entries(D.coberturaRamo || {})
-      .filter(([rid, v]) => v.total >= 5 && v.com > 0 && v.faltam.length)
-      .sort((a, b) => (b[1].com / b[1].total) - (a[1].com / a[1].total));
-    if (ramosCob.length) {
-      const [rid, v] = _pick(ramosCob.slice(0, 4));
-      const pct = Math.round(v.com / v.total * 100);
-      const alvos = v.faltam.slice(0, 3);
-      const pctNovo = Math.round((v.com + alvos.length) / v.total * 100);
-      add('m4_cobertura', '📊', 'dica', _pick([
-        `Você sabia que já mapeamos <strong>${pct}%</strong> das renovações de <strong>${D.ramoNome[rid]}</strong> da sua carteira? Mapeando mais ${alvos.length} empresas — como a <strong>${alvos[0].nome}</strong> — chegamos a <strong>${pctNovo}%</strong>.`,
-        `<strong>${D.ramoNome[rid]}</strong>: ${pct}% das renovações já mapeadas. Cada vencimento que entra vira uma oportunidade no momento certo. Falta a <strong>${alvos[0].nome}</strong>, entre outras.`
-      ]), null, [aRaioX(alvos[0]), aLink(alvos[0])]);
-    }
-
-    // 4c) vencimento próximo
-    if (D.vencProx.length) {
-      const v = _pick(D.vencProx.filter(x => x.dias >= 0)) || D.vencProx[0];
-      if (v) add('m4_venc', '⏰', 'alerta', _pick([
-        `O <strong>${v.nome}</strong> da <strong>${v.e.nome}</strong> vence em <strong>${v.dias} dias</strong>. Renovação é da corretora que se antecipa — bora preparar a cotação?`,
-        `Atenção na <strong>${v.e.nome}</strong>: ${v.nome} vencendo em ${v.dias} dias. Comece a estruturar agora e chegue antes do concorrente. 🎯`
-      ]), 'cotacoes', [aCotar(), aRaioX(v.e)]);
-    }
-
-    // 4d) vencimento a mapear
-    if (D.semVenc.length) {
-      const s = _pick(D.semVenc);
-      add('m4_semvenc', '📅', 'dica', _pick([
-        `Que tal ligar pra <strong>${s.e.nome}</strong> e perguntar quando vence o <strong>${s.nome}</strong>? Tudo que você mapeia vira oportunidade na hora certa — só precisamos da data. Se conseguir o valor, melhor ainda!`,
-        `A <strong>${s.e.nome}</strong> tem ${s.nome}, mas sem data de vencimento. É só isso que falta pra virar oportunidade automática aqui no sistema.`
-      ]), null, acoesDe(s.e, [aLink(s.e)]));
-    }
-
-    // 4e) previdência dos sócios
-    if (D.semPrev.length) {
-      const p = _pick(D.semPrev);
-      add('m4_prev', '💰', 'oportunidade', `A <strong>${p.e.nome}</strong> tem <strong>${p.nSoc} ${p.nSoc === 1 ? 'sócio' : 'sócios'}</strong> e nenhuma previdência mapeada. Que tal jogar no funil e trabalharmos juntos essa oportunidade?`,
-        null, [aCotar(), aRaioX(p.e)]);
-    }
-
-    // 4f) visita — lembrar do link e do corretor
-    if (D.diasSemVisita != null && D.diasSemVisita >= 7) {
-      add('m4_visita', '📍', 'dica', _pick([
-        `Faz <strong>${D.diasSemVisita} dias</strong> desde sua última visita registrada. Vai visitar essa semana? Informe aqui — e se puder, chame o corretor junto.`,
-        `Uma visita bem colocada vale por dez ligações. E na visita, não esqueça de gerar o <strong>link do questionário</strong>: peça pro cliente preencher, isso nos ajuda demais a criar oportunidades.`
-      ]), 'agenda', [aAgenda()]);
-    }
-    if (D.mapeouSemana >= 5) {
-      add('m4_ritmo', '🚀', 'destaque', `Você mapeou <strong>${D.mapeouSemana} seguros essa semana</strong> — que ritmo! Continua assim que o resultado vem. 👏`);
-    }
-
-    // 4h) PIPELINE x OBJETIVO — "se fechar o que está na mesa, você chega a X%"
-    const _metaTotal = Object.values(D.metaGrupo || {}).reduce((s, v) => s + (v || 0), 0);
-    const _prodTotal = Object.values(D.prodGrupo || {}).reduce((s, v) => s + (v || 0), 0);
-    if (D.pipelineValor > 0 && _metaTotal > 0) {
-      const pctHoje = Math.round(_prodTotal / _metaTotal * 100);
-      const pctCom = Math.round((_prodTotal + D.pipelineValor) / _metaTotal * 100);
-      if (pctCom > pctHoje) {
-        add('m4_pipe_meta', '📐', 'oportunidade', _pick([
-          `Olha o tamanho do que está na mesa: você tem <strong>${fmtBRcompacto(D.pipelineValor)}</strong> em ${D.pipelineN} ${D.pipelineN === 1 ? 'negociação' : 'negociações'} abertas. Hoje você está em <strong>${pctHoje}%</strong> do objetivo — fechando o que já está no funil, salta pra <strong>${pctCom}%</strong>.`,
-          `${N}, seu funil vale <strong>${fmtBRcompacto(D.pipelineValor)}</strong> agora. Não é promessa: é negócio já iniciado. Cada um que fecha te leva de ${pctHoje}% para perto de <strong>${pctCom}%</strong> do objetivo.`
-        ]), 'cotacoes');
-      }
-    }
-
-    // 4i) RENOVAÇÕES até dezembro — o salto que já está mapeado
-    if (D.renovAteDez > 0 && D.renovN >= 2) {
-      const proxima = (D.vencProx || []).filter(x => x.dias >= 0).sort((a, b) => a.dias - b.dias)[0];
-      add('m4_renov', '🔄', 'oportunidade', _pick([
-        `Você tem <strong>${fmtBRcompacto(D.renovAteDez)}</strong> em renovações mapeadas até dezembro (${D.renovN} apólices). Isso é um salto e tanto no objetivo — e já está tudo aí, esperando você chegar antes.${proxima ? ` Comece pela <strong>${proxima.e.nome}</strong>, que vence em ${proxima.dias} dias.` : ''}`,
-        `${D.renovN} renovações mapeadas até o fim do ano, somando <strong>${fmtBRcompacto(D.renovAteDez)}</strong>. Renovação não cai do céu: quem estrutura com antecedência leva. ${proxima ? `A da <strong>${proxima.e.nome}</strong> vence em ${proxima.dias} dias — bora começar por ela?` : ''}`
-      ]), 'cotacoes', proxima ? [aCotar(), aRaioX(proxima.e)] : [aCotar()]);
-    }
-
-    // 4j) COBERTURA POR EMPRESA — quanto já sabemos de uma empresa específica
-    if ((D.coberturaEmpresa || []).length) {
-      const x = _pick(D.coberturaEmpresa.slice(0, 6));
-      add('m4_cob_emp', '🧩', 'dica', _pick([
-        `Na <strong>${x.e.nome}</strong> já mapeamos <strong>${x.pct}%</strong> dos seguros possíveis (${x.com} de ${D.totalRamos}). Já temos relacionamento — que tal completar o mapa e descobrir o que mais dá pra proteger?`,
-        `<strong>${x.e.nome}</strong>: ${x.com} seguros mapeados de ${D.totalRamos} possíveis. O cliente já confia em você. Perguntar sobre os outros é o passo natural.`
-      ]), null, acoesDe(x.e, [aLink(x.e)]));
-    }
-
-    // 4g) panorama / motivacionais (sempre elegíveis, dão variedade)
-    const pctMap = D.total ? Math.round(D.mapeadasAlgo / D.total * 100) : 0;
-    add('m4_motiv', '✨', 'neutro', _pick([
-      `Você tem <strong>${D.total} empresas</strong> na carteira e ${pctMap}% já com algum mapeamento. Cada dado novo é uma semente de negócio. 🌱`,
-      `Lembra: tudo que você mapeia <strong>vira oportunidade</strong> na hora certa. Não é trabalho perdido — é colheita programada.`,
-      `O melhor vendedor não é o que fala mais — é o que aparece na hora certa. E a hora certa, aqui, o sistema te mostra. 🎯`,
-      `Grandes números no fim do ano são feitos de pequenas ações toda semana: um mapeamento, uma visita, uma cotação. Constância vence. 📈`,
-      `Seguro não é empurrar produto do banco: é um <strong>mar de oportunidades</strong> na sua carteira esperando alguém olhar. E esse alguém é você. 🌊`
-    ]));
-
-    return out;
-  }
-
-  // Monta a leva de mensagens do Radar (até 5), variando e sem repetir a última abertura.
-  async function radarMontar(maxMsgs) {
-    const D = await _radarColeta();
-    if (!D.total) return { nome: D.nome, msgs: [{ id: 'vazio', icon: '📭', tom: 'neutro', txt: 'Sua carteira ainda está vazia por aqui. Assim que houver empresas, trago as melhores jogadas. 🚀' }] };
-
-    let cands = _radarGeradores(D);
-    // remove as que apareceram na última leva (anti-repetição), a menos que sobre pouca coisa
-    const ultimas = window._RADAR_ULTIMAS || [];
-    let frescas = cands.filter(m => !ultimas.includes(m.id));
-    if (frescas.length < (maxMsgs || 5)) frescas = cands; // se não sobra variedade, libera tudo
-
-    // embaralha
-    for (let i = frescas.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [frescas[i], frescas[j]] = [frescas[j], frescas[i]]; }
-
-    // MESCLA AS ÓTICAS: pega em rodízio entre as categorias (m1 cadastro, m2 funil,
-    // m3 produção, m4 oportunidades) — assim a leva nunca vem só de um assunto.
-    const porCat = {};
-    frescas.forEach(m => { const k = (m.id || '').slice(0, 2); (porCat[k] = porCat[k] || []).push(m); });
-    const cats = Object.keys(porCat);
-    for (let i = cats.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cats[i], cats[j]] = [cats[j], cats[i]]; }
-    const mescladas = [];
-    let rodada = 0;
-    while (mescladas.length < frescas.length && rodada < 20) {
-      cats.forEach(k => { if (porCat[k][rodada]) mescladas.push(porCat[k][rodada]); });
-      rodada++;
-    }
-    frescas = mescladas.length ? mescladas : frescas;
-
-    // saudação com tom do dia sempre em 1º
-    const tom = _tomDoDia();
-    const saud = {
-      segunda: `Semana nova, ${D.nome}! Bora ver por onde começar? 👇`,
-      sexta: `Sexta chegando, ${D.nome}. Que tal garantir mais um negócio antes do fim de semana? 👇`,
-      reta_mes: `${D.nome}, reta final do mês! Cada ação agora conta dobrado. 👇`,
-      meio: `Bora, ${D.nome}? Aqui estão algumas jogadas pra hoje 👇`
-    }[tom];
-
-    const escolhidas = frescas.slice(0, (maxMsgs || 5) - 1);
-    window._RADAR_ULTIMAS = escolhidas.map(m => m.id);
-
-    return { nome: D.nome, msgs: [{ id: 'saud', icon: '👋', tom: 'destaque', txt: saud }, ...escolhidas] };
-  }
-  window.radarMontar = radarMontar;
-
   function analisarCarteira() {
     // empresas visíveis conforme o filtro de RM atual (ou toda a carteira do RM logado)
     const fRm = (document.getElementById('filtroRm') || {}).value || '';
@@ -6879,9 +6221,9 @@
     });
 
     // Resumo do filtro
+    const temFiltro = !!(search || fRm || fProd || fStatus || fGrupo || fFalta);
     const resumoEl = document.getElementById('filtroResumo');
     if (resumoEl) {
-      const temFiltro = search || fRm || fProd || fStatus || fGrupo || fFalta;
       resumoEl.innerHTML = temFiltro
         ? `<strong style="color:#4338ca;">${lista.length}</strong> de ${EMPRESAS.length} empresas no filtro`
         : `${EMPRESAS.length} empresas na carteira`;
@@ -6932,10 +6274,24 @@
       const _okFun = empresas.filter(x => (x.funcionarios || 0) > 0).length;
       const _pctSoc = _nEmp ? Math.round(_okSoc / _nEmp * 100) : 0;
       const _pctFun = _nEmp ? Math.round(_okFun / _nEmp * 100) : 0;
-      const _corPct = v => v >= 80 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
-      const _selo = (emoji, rot, pct, ok) => `<span title="${ok} de ${_nEmp} empresas com ${rot} mapeado" style="display:inline-flex; align-items:center; gap:4px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:100px; padding:2px 9px; font-size:11px; font-weight:700; color:#64748b; white-space:nowrap;">${emoji} <strong style="color:${_corPct(pct)};">${pct}%</strong> ${rot}</span>`;
-      // No mobile, começa fechado — menos a carteira do próprio usuário. Menos poluição ao abrir.
-      const _fechaInicio = window.innerWidth <= 768 && !ehMinhaCarteira;
+      /* Cobertura de SEGUROS da carteira: a mesma conta da campanha, célula a
+         célula (empresa × ramo). O denominador de cada empresa vem do
+         _ramosDoMapeamento — empresa sem sócios não carrega os ramos de sócios,
+         então as bolinhas e o possível caem juntos (13 → 9). */
+      let _celTot = 0, _celOk = 0;
+      empresas.forEach(x => {
+        const _rr = _ramosDoMapeamento(x);
+        _celTot += _rr.length;
+        _rr.forEach(pp => { const st = (x.produtos || {})[pp.id]; if (st && st !== 'vazia') _celOk++; });
+      });
+      const _pctSeg = _celTot ? Math.round(_celOk / _celTot * 100) : 0;
+      const _corPct = v => v >= 80 ? '#15803d' : v >= 50 ? '#b45309' : '#dc2626';
+      const _selo = (emoji, rot, pct, tit) => `<span title="${tit}" style="display:inline-flex; align-items:center; gap:4px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:100px; padding:2px 9px; font-size:11px; font-weight:700; color:#475569; white-space:nowrap;">${emoji} <strong style="color:${_corPct(pct)};">${pct}%</strong> ${rot}</span>`;
+      /* Começa SEMPRE fechado — para o corretor que vê todos os gerentes e para o
+         RM que vê só a sua. Abrir 143 cards de empresa de uma vez é o que polui a
+         tela; o cabeçalho de cada carteira já diz o que importa. Exceção: com
+         filtro ou busca ativa, abre — senão o resultado da busca fica escondido. */
+      const _fechaInicio = !temFiltro;
       return `
         <div class="rm-group${_fechaInicio ? ' collapsed' : ''}" id="rmgroup-${rmKey}">
           <div class="rm-group-header" onclick="toggleGroup('${rmKey}')">
@@ -6944,8 +6300,9 @@
               <h2>${rm.nome} ${ehMinhaCarteira ? '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700;margin-left:6px;">SUA CARTEIRA</span>' : ''}</h2>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;">
-              ${_selo('🧑‍💼', 'sócios', _pctSoc, _okSoc)}
-              ${_selo('👥', 'funcionários', _pctFun, _okFun)}
+              ${_selo('🧑‍💼', 'sócios', _pctSoc, `${_okSoc} de ${_nEmp} empresas com o quadro de sócios resolvido (inclui as confirmadas como "não tem sócios")`)}
+              ${_selo('👥', 'funcionários', _pctFun, `${_okFun} de ${_nEmp} empresas com o nº de funcionários informado`)}
+              ${_selo('🛡', 'seguros', _pctSeg, `${_celOk} de ${_celTot} seguros mapeados nas ${_nEmp} empresas — é a mesma conta do indicador de mapeamento da campanha. Empresa sem sócios não conta os seguros de sócios no possível.`)}
             </div>
             <span class="count">${empresas.length} empresas</span>
             <i data-lucide="chevron-down" class="chevron w-4 h-4"></i>
@@ -6978,8 +6335,9 @@
     const algumMapeado = Object.values(e.produtos || {}).some(s => s !== 'vazia');
 
     // % mapeado da empresa: denominador = os ramos que realmente entram no
-    // mapeamento (os "só por OP" ficam de fora, igual às bolinhas do card).
-    const _ramosCard = (PRODUTOS || []).filter(pp => !pp.somenteOp);
+    // mapeamento (os "só por OP" ficam de fora, e empresa sem sócios não carrega
+    // os ramos de sócios — as bolinhas caem junto com o possível).
+    const _ramosCard = _ramosDoMapeamento(e);
     const _totRamos = _ramosCard.length;
     const _mapRamos = _ramosCard.filter(pp => (e.produtos || {})[pp.id] && e.produtos[pp.id] !== 'vazia').length;
     const _pctMap = _totRamos ? Math.round(_mapRamos / _totRamos * 100) : 0;
@@ -7011,6 +6369,16 @@
       if (partes.length > 0) linhaInfo = `<div style="font-size: 11px; margin-top: 2px;">${partes.join(' · ')}</div>`;
     }
 
+    /* CONTATOS-CHAVE NA LISTA — o pedido era conseguir ver, correndo a lista,
+       quem está sem e-mail. Então o que chama atenção é a AUSÊNCIA: e-mail
+       cadastrado aparece em cinza, discreto; faltando, vira pílula âmbar.
+       Antes disso só dava para saber abrindo o raio-x, empresa por empresa. */
+    const _escM = t => String(t == null ? '' : t).replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const _slotMail = (ico, rot, mail) => mail
+      ? `<span title="${rot}: ${_escM(mail)}" style="display:inline-flex; align-items:center; gap:3px; max-width:210px; min-width:0; color:#475569; font-weight:500;">${ico} <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${_escM(mail)}</span></span>`
+      : `<span title="Sem o e-mail do ${rot} — abra o card para cadastrar" style="display:inline-flex; align-items:center; gap:3px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:100px; padding:0 7px; font-weight:700; white-space:nowrap;">${ico} sem ${rot}</span>`;
+    const linhaContatos = `<div style="font-size:10.5px; margin-top:3px; display:flex; gap:9px; flex-wrap:wrap; align-items:center; min-width:0;">${_slotMail('📧', 'decisor', e.emailDecisor)}${_slotMail('🧑\u200d💼', 'RH', e.emailRh)}</div>`;
+
     // Apólices que o CLIENTE anexou pelo link de mapeamento — selo na lista para
     // não precisar abrir empresa por empresa e produto por produto para descobrir.
     let _nAnexos = 0;
@@ -7028,6 +6396,7 @@
             ${badgeDados || seloAnexos ? `<div style="margin-top:4px; display:flex; gap:5px; flex-wrap:wrap;">${badgeDados}${seloAnexos}</div>` : ''}
             <div class="empresa-meta">${mascararCNPJ(e.cnpj) || 'sem CNPJ'} · ${e.cidade || 'sem cidade'}</div>
             ${linhaInfo}
+            ${linhaContatos}
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
@@ -7149,11 +6518,11 @@
         </div>
         <div class="info-grid">
           <div class="info-item">
-            <div class="info-label">📧 Decisor ${e.decisorNome ? '· ' + e.decisorNome : ''}</div>
+            <div class="info-label">📧 E-mail do decisor</div>
             <div class="info-value">${e.emailDecisor ? `<a href="mailto:${e.emailDecisor}" style="color:#4338ca;">${e.emailDecisor}</a>` : '<span style="color:#f59e0b;">⚠ Não informado</span>'}</div>
           </div>
           <div class="info-item">
-            <div class="info-label">🧑‍💼 RH da empresa</div>
+            <div class="info-label">🧑‍💼 E-mail do RH</div>
             <div class="info-value">${e.emailRh ? `<a href="mailto:${e.emailRh}" style="color:#4338ca;">${e.emailRh}</a>` : '<span style="color:#f59e0b;">⚠ Não informado</span>'}</div>
           </div>
         </div>
@@ -12185,54 +11554,6 @@
   };
 
   // ============= HOME / HOJE =============
-  // Lista do funil na tela Hoje: etapa, cliente, produto, valor, dias parado e prazo p/ declinar
-  function renderHomeFunilLista(ativas) {
-    const cont = document.getElementById('homeFunilLista');
-    if (!cont) return;
-    if (!ativas || !ativas.length) { cont.innerHTML = ''; return; }
-    const linhas = ativas.map(c => {
-      const dias = diasNaEtapa(c);
-      const limite = (PRAZOS_CACHE && PRAZOS_CACHE[c.status]) || (etapaInfo(c.status) || {}).prazoDias || 999;
-      return { c, dias, limite, faltam: limite - dias };
-    }).sort((a, b) => a.faltam - b.faltam);
-
-    cont.innerHTML = `
-      <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('grupoFunilCorpo')"><i data-lucide="git-branch" class="w-4 h-4 text-indigo-500"></i> Suas negociações no funil <span class="badge-count" style="background:#6366f1;">${linhas.length}</span><i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
-      <div class="grupo-corpo fechado" id="grupoFunilCorpo" style="max-height:0; display:flex; flex-direction:column; gap:8px;">
-        ${linhas.map(({ c, dias, limite, faltam }) => {
-          const si = STATUS_COTACAO[c.status] || etapaInfo(c.status) || {};
-          const pr = (PRODUTOS || []).find(p => p.id === c.produtoId) || {};
-          const valor = c.valor || c.valorProposto || 0;
-          const vencido = faltam < 0;
-          const urgente = faltam >= 0 && faltam <= 2;
-          const corPrazo = vencido ? '#ef4444' : urgente ? '#f59e0b' : '#10b981';
-          const txtPrazo = vencido ? `⚠ ${Math.abs(faltam)}d em atraso` : `faltam ${faltam}d p/ declinar`;
-          // Barra: quanto mais perto de expirar, mais cheia e mais quente (verde → amarelo → vermelho)
-          const pct = vencido ? 100 : Math.max(5, Math.min(100, Math.round((dias / limite) * 100)));
-          const corBar = (vencido || faltam <= 2) ? '#ef4444' : (faltam <= 5 ? '#f59e0b' : '#10b981');
-          return `
-            <div onclick="abrirNegociacao('${c.id}')" style="padding:11px 14px; border-radius:10px; cursor:pointer; border:1px solid ${vencido ? '#fecaca' : '#dbeafe'}; border-left:3px solid ${si.cor || '#64748b'}; background:${vencido ? '#fef2f2' : '#eff6ff'};">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <span style="font-size:11px; font-weight:700; color:${si.cor || '#64748b'}; background:${(si.cor || '#64748b')}18; padding:3px 9px; border-radius:100px; white-space:nowrap;">${si.icon || ''} ${si.label || c.status}</span>
-                <div style="flex:1; min-width:0;">
-                  <div style="font-weight:700; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${c.empresaNome || '—'}</div>
-                  <div style="font-size:11px; color:#64748b;">${pr.icon || c.produtoIcon || ''} ${c.produtoNome || ''}${valor ? ' · ' + fmtBR(valor) : ''}</div>
-                </div>
-                <div style="text-align:right; white-space:nowrap;">
-                  <div style="font-size:11px; color:#94a3b8;">⏱ parado ${dias}d</div>
-                  <div style="font-size:11px; font-weight:700; color:${corPrazo};">${txtPrazo}</div>
-                </div>
-              </div>
-              <div style="height:6px; background:#ffffff; border-radius:100px; overflow:hidden; margin-top:8px;">
-                <div style="height:100%; width:${pct}%; background:${corBar}; transition:width .3s;"></div>
-              </div>
-            </div>`;
-        }).join('')}
-      </div>`;
-    lucide.createIcons();
-    aplicarColapso('grupoFunilCorpo', false);
-  }
-
   // Colapso das seções da tela Hoje (lembra a preferência durante a sessão)
   const COLAPSO_ESTADO = {};
   function toggleGrupo(id) {
@@ -12310,6 +11631,9 @@
       snap.forEach(d => {
         const n = { id: d.id, ...d.data() };
         if (n.lida) return;
+        // Aviso de negociação nova não é mais mostrado — e os que já ficaram
+        // acumulados no banco também somem daqui, sem precisar limpar nada.
+        if (n.tipo === 'nova_negociacao') return;
         // Destinada a mim? (uid específico) OU (para o corretor e eu sou corretor/chefe)
         if (n.paraUid === meuUid || (n.para === 'corretor' && souCorretor)) minhas.push(n);
       });
@@ -12431,20 +11755,11 @@
         (esfriando.length > 0 ? ` · ${esfriando.length} esfriando` : '') +
         (reunioesPendentes.length > 0 ? ` · ${reunioesPendentes.length} reunião(ões) aguardando desfecho` : '');
 
-      // ===== Lista do funil (etapa, cliente, valor, dias parado, prazo p/ declinar) =====
-      try { renderHomeFunilLista(ativas); } catch (e) {}
-
       // ===== Streak =====
       await renderStreak();
 
       // ===== Termômetro de meta =====
       await renderTermometro(totalFechado);
-
-      // ===== Fila de ação =====
-      renderFilaAcao(cotacoes, esfriando);
-
-      // ===== Feed =====
-      await renderFeed();
 
       lucide.createIcons();
     } catch (e) {
@@ -12523,117 +11838,6 @@
     } catch(e) { console.warn(e); }
   }
 
-  function renderFilaAcao(cotacoes, esfriando) {
-    const cont = document.getElementById('filaAcao');
-    const agora = Date.now();
-    let html = '';
-
-    // GRUPO 1: Cotações esfriando (já calculado)
-    const friasOrd = esfriando.map(c => ({ ...c, dias: diasNaEtapa(c), limite: PRAZOS_CACHE[c.status] || 999 }))
-      .sort((a,b) => (b.dias/b.limite) - (a.dias/a.limite)).slice(0, 5);
-    if (friasOrd.length > 0) {
-      html += `<div class="acao-grupo">
-        <div class="acao-grupo-head">🔥 Cotações esfriando <span class="badge-count">${friasOrd.length}</span></div>`;
-      html += friasOrd.map(c => {
-        const venc = c.dias >= c.limite;
-        const cls = venc ? 'quente' : 'morna';
-        const st = STATUS_COTACAO[c.status] || {};
-        return `<div class="acao-item ${cls}" onclick="navTo('cotacoes')">
-          <div class="acao-item-icon">${c.produtoIcon || '📄'}</div>
-          <div class="acao-item-body">
-            <div class="acao-item-titulo">${c.empresaNome} · ${c.produtoNome}</div>
-            <div class="acao-item-sub">${st.label || c.status} · parada há <strong>${c.dias} dias</strong> ${venc ? '(prazo estourado!)' : `(limite ${c.limite}d)`}</div>
-          </div>
-          <div class="acao-item-cta">agir →</div>
-        </div>`;
-      }).join('');
-      html += `</div>`;
-    }
-
-    // GRUPO 2: Reuniões aguardando desfecho
-    const reunioes = cotacoes.filter(c => c.status === 'reuniao_agendada').slice(0, 5);
-    if (reunioes.length > 0) {
-      html += `<div class="acao-grupo">
-        <div class="acao-grupo-head">🤝 Reuniões aguardando desfecho <span class="badge-count">${reunioes.length}</span></div>`;
-      html += reunioes.map(c => `
-        <div class="acao-item morna" onclick="navTo('cotacoes')">
-          <div class="acao-item-icon">📅</div>
-          <div class="acao-item-body">
-            <div class="acao-item-titulo">${c.empresaNome} · ${c.produtoNome}</div>
-            <div class="acao-item-sub">Reunião${c.dataReuniao ? ' em ' + c.dataReuniao : ' agendada'} · marque fechou ou não fechou</div>
-          </div>
-          <div class="acao-item-cta">resolver →</div>
-        </div>
-      `).join('');
-      html += `</div>`;
-    }
-
-    // GRUPO 3: Vencimentos próximos sem cotação (oportunidades novas)
-    recalcularVencimentos();
-    const cotEmpresaProduto = new Set(cotacoes.map(c => c.empresaId + '_' + c.produtoId));
-    const oportunidades = VENCIMENTOS
-      .map(v => ({ ...v, dias: diasAteVencimento(v) }))
-      .filter(v => v.dias >= 0 && v.dias <= 90 && !v.conosco && !cotEmpresaProduto.has(v.empresaId + '_' + v.produto))
-      .sort((a,b) => a.dias - b.dias)
-      .slice(0, 5);
-    if (oportunidades.length > 0) {
-      html += `<div class="acao-grupo">
-        <div class="acao-grupo-head colapsavel" onclick="toggleGrupo('grupoOportCorpo')">📅 Oportunidades a cotar (vence em breve) <span class="badge-count">${oportunidades.length}</span><i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i></div>
-        <div class="grupo-corpo" id="grupoOportCorpo">`;
-      html += oportunidades.map(v => {
-        const p = PRODUTOS.find(pp => pp.id === v.produto);
-        return `<div class="acao-item nova" onclick="abrirRaioX('${v.empresaId}')">
-          <div class="acao-item-icon">${p ? p.icon : '📋'}</div>
-          <div class="acao-item-body">
-            <div class="acao-item-titulo">${v.empresa} · ${p ? p.nome : v.produto}</div>
-            <div class="acao-item-sub">Vence em <strong>${v.dias} dias</strong>${v.seguradora ? ' · hoje na ' + v.seguradora : ''} · solicite a cotação</div>
-          </div>
-          <div class="acao-item-cta">cotar →</div>
-        </div>`;
-      }).join('');
-      html += `</div></div>`;
-    }
-
-    // Conta quantos itens de ação existem (pelos badges de contagem dos grupos)
-    let totalFila = 0;
-    (html.match(/badge-count[^>]*>(\d+)/g) || []).forEach(m => {
-      const n = parseInt(m.replace(/\D/g, '')); if (!isNaN(n)) totalFila += n;
-    });
-
-    const corpoVazio = `<div style="text-align:center; padding: 28px 20px; color: #94a3b8;">
-        <div style="font-size:34px; margin-bottom:8px;">✨</div>
-        <div style="font-size:14px; font-weight:700; color:#0f172a;">Tudo em dia por aqui!</div>
-        <div style="font-size:12.5px; color:#64748b; margin-top:4px;">Nenhuma cotação parada ou vencimento urgente. Que tal mapear novas empresas?</div>
-        <button class="btn-primary" style="margin-top:12px;" onclick="navTo('empresas')">Ver empresas</button>
-      </div>`;
-
-    // Envolve tudo num grupo colapsável — começa FECHADO (a tela de entrada vem comprimida).
-    const corpo = html || corpoVazio;
-    const badgeCor = totalFila > 0 ? '#f59e0b' : '#94a3b8';
-    cont.innerHTML = `
-      <div style="margin-top:6px;">
-        <div class="acao-grupo-head colapsavel fechado" onclick="toggleGrupo('filaAcaoCorpo')">
-          <i data-lucide="list-checks" class="w-4 h-4 text-indigo-500"></i> Fila de ação
-          <span class="badge-count" style="background:${badgeCor};">${totalFila}</span>
-          <i data-lucide="chevron-down" class="seta-colapso w-4 h-4"></i>
-        </div>
-        <div class="grupo-corpo fechado" id="filaAcaoCorpo" style="max-height:0;">${corpo}</div>
-      </div>`;
-    try { lucide.createIcons(); } catch (e) {}
-  }
-
-  // ============= FEED DE AÇÃO (sugestões que empurram pra ação) =============
-  // Frases de incentivo gentis (tom leve, sem competição pesada por enquanto)
-  const FRASES_MOTIVA = [
-    'às vezes o grande resultado vem de quem a gente menos espera 😄',
-    'cada conversa plantada hoje é uma safra amanhã 🌱',
-    'quem não é visto, não é lembrado — bora aparecer! 👋',
-    'pequenos passos toda semana viram grandes números no ano 📈',
-    'a melhor cotação é a que a gente lembra de pedir 😉',
-    'oportunidade boa é a que ninguém olhou ainda 👀'
-  ];
-  function fraseMotiva(seed) { return FRASES_MOTIVA[Math.abs(seed) % FRASES_MOTIVA.length]; }
-
   // Projeção de meta POR GRUPO: objetivo, realizado, falta e valor/mês até dezembro de cada grupo
   async function projecaoMetaRM() {
     try {
@@ -12691,94 +11895,6 @@
   }
 
   // Dentro de um grupo, encontra o ramo com maior oportunidade (mais empresas mapeadas e não nossas)
-  function melhorRamoDoGrupo(gid) {
-    const meuUid = uidEfetivo();
-    const minhas = (EMPRESAS_REAIS || []).filter(e => e.rm === meuUid);
-    const ramosGrupo = (PRODUTOS || []).filter(r => r.grupoId === gid);
-    let melhor = null;
-    ramosGrupo.forEach(r => {
-      let mapeadasSemNegocio = 0, semMapear = 0;
-      minhas.forEach(e => {
-        const s = statusMatriz(e, r.id);
-        if (s === 'mercado') mapeadasSemNegocio++;          // tem no mercado, dá pra disputar
-        else if (s === 'nao_mapeado') semMapear++;          // nem sabemos ainda
-      });
-      const score = mapeadasSemNegocio * 2 + semMapear;     // prioriza quem já sabemos que tem
-      if (!melhor || score > melhor.score) melhor = { ramo: r, mapeadasSemNegocio, semMapear, score };
-    });
-    return melhor;
-  }
-
-  // Gera até `limite` sugestões de ação priorizadas, a partir dos dados do RM
-  function gerarSugestoesRM(limite) {
-    const sugestoes = [];
-    const meuUid = uidEfetivo();
-    const minhas = (EMPRESAS_REAIS || []).filter(e => e.rm === meuUid);
-    const ramos = (PRODUTOS || []);
-
-    // Helper: empresas onde o produto NÃO é nosso nem está cotando (oportunidade de cotar)
-    const semNegocio = (e, rid) => { const s = statusMatriz(e, rid); return s !== 'nosso' && s !== 'cotacao'; };
-
-    // 1) DENTAL: empresas com funcionários mapeados e sem dental cotado/nosso
-    const temDental = ramos.some(r => r.id === 'dental');
-    if (temDental) {
-      const alvos = minhas.filter(e => (e.funcionarios || 0) > 0 && semNegocio(e, 'dental'));
-      if (alvos.length >= 1) {
-        const escolhidos = alvos.slice().sort((a, b) => (b.funcionarios || 0) - (a.funcionarios || 0)).slice(0, 2);
-        sugestoes.push({
-          prio: 2, icon: '🦷', cor: '#06b6d4',
-          titulo: `${alvos.length} empresa${alvos.length > 1 ? 's' : ''} com quadro de funcionários e sem dental`,
-          corpo: `Que tal começar por <strong>${escolhidos.map(e => e.nome).join('</strong> e <strong>')}</strong>? ${fraseMotiva(alvos.length)}`,
-          cta: 'ver empresa →', acao: escolhidos[0] ? `abrirRaioX('${escolhidos[0].id}')` : `navTo('empresas')`
-        });
-      }
-    }
-
-    // 2) SÓCIOS mapeados sem cotação de saúde/vida de sócios
-    ['saude-socios', 'vida-socios'].forEach(rid => {
-      const r = ramos.find(x => x.id === rid); if (!r) return;
-      const alvos = minhas.filter(e => statusMatriz(e, rid) === 'mercado'); // tem no mercado, não é nosso
-      if (alvos.length >= 2) {
-        sugestoes.push({
-          prio: 3, icon: r.icon, cor: r.cor,
-          titulo: `${alvos.length} empresas com ${r.nome.toLowerCase()} mapeado e ainda não cotamos`,
-          corpo: `Sócio satisfeito abre portas pro resto da empresa. Vale uma tentativa. ${fraseMotiva(alvos.length + rid.length)}`,
-          cta: 'ver lista →', acao: `navTo('mapeamento')`
-        });
-      }
-    });
-
-    // 3) SÓCIOS não mapeados (oportunidade escondida)
-    const semSocios = minhas.filter(e => statusMatriz(e, 'saude-socios') === 'nao_mapeado' && statusMatriz(e, 'vida-socios') === 'nao_mapeado');
-    if (semSocios.length >= 3) {
-      sugestoes.push({
-        prio: 4, icon: '🔍', cor: '#8b5cf6',
-        titulo: `${semSocios.length} empresas suas sem os sócios mapeados`,
-        corpo: `Pode ter oportunidade boa aí escondida. Um link de mapeamento resolve rápido. ${fraseMotiva(semSocios.length)}`,
-        cta: 'ver empresas →', acao: `navTo('empresas')`
-      });
-    }
-
-    // 4) VENCIMENTOS: produto que vence em breve e não é nosso (usa VENCIMENTOS já calculado)
-    try {
-      const proximos = (VENCIMENTOS || [])
-        .map(v => ({ ...v, dias: diasAteVencimento(v) }))
-        .filter(v => v.dias >= 0 && v.dias <= 60 && !v.conosco && minhas.some(e => e.id === v.empresaId));
-      if (proximos.length >= 1) {
-        const v0 = proximos.sort((a, b) => a.dias - b.dias)[0];
-        const p = ramos.find(x => x.id === v0.produto);
-        sugestoes.push({
-          prio: 1, icon: '⏰', cor: '#f59e0b',
-          titulo: `${v0.empresa}: ${p ? p.nome : v0.produto} vence em ${v0.dias} dias`,
-          corpo: `Janela aberta pra disputar essa conta. Melhor pedir a cotação agora. ${fraseMotiva(v0.dias)}`,
-          cta: 'cotar →', acao: `abrirRaioX('${v0.empresaId}')`
-        });
-      }
-    } catch (e) {}
-
-    return sugestoes.sort((a, b) => a.prio - b.prio).slice(0, limite);
-  }
-
   // ============= COMPARATIVO RM vs AGÊNCIA (topo do Hoje) =============
   // Barras fáceis de ler: a barra do RM sobre a média da agência, + posição no ranking dos RMs.
   // Busca TODAS as empresas da agência (agrupadas por RM) só para cálculo agregado.
@@ -12814,13 +11930,16 @@
     // "mapeado" = status conhecido: nosso, fechado, mercado, perdido, não tem. Vazio não conta.
     // Ramos com "conta no mapeamento" DESLIGADO ficam fora deste indicador (continuam no
     // raio-x, na cobertura, no questionário e pontuando — só não são obrigação de campanha).
-    const ramosMapeamento = (PRODUTOS || []).filter(p => !p.somenteOp && p.contaMapeamento !== false).map(p => p.id);
+    // O denominador é POR EMPRESA (_ramosDoMapeamento): empresa confirmada sem
+    // sócios não carrega os ramos de sócios, que ela nunca poderia preencher.
+    // Decisão do Patrick, 13/out — vale aqui e na lista de empresas, com a mesma
+    // função, para a tela e o pagamento nunca divergirem.
     let totalCelulas = 0, okMapeado = 0;
     empresas.forEach(e => {
       const dados = e.produtosDados || {};
-      ramosMapeamento.forEach(rid => {
+      _ramosDoMapeamento(e, { campanha: true }).forEach(r => {
         totalCelulas++;
-        const pd = dados[rid];
+        const pd = dados[r.id];
         const st = pd && pd.statusVisual;
         if (st && st !== 'vazia') okMapeado++; // qualquer status conhecido conta 1x
       });
@@ -12866,6 +11985,7 @@
       // avalia um ramo como oportunidade da campanha
       const avaliar = (ramoId, motivoImplicito) => {
         if (!nomeRamo[ramoId]) return;
+        if (typeof _ramoValeParaEmpresa === 'function' && !_ramoValeParaEmpresa(ramoId, e)) return;
         const pd = dados[ramoId];
         const cat = (typeof statusMatriz === 'function') ? statusMatriz(e, ramoId) : null;
 
@@ -13616,9 +12736,8 @@
           </div>
           ${(souEu2 || _vTodos) ? `<div style="text-align:center; background:linear-gradient(135deg,#d1fae5,#a7f3d0); border:1px solid #6ee7b7; border-radius:8px; padding:6px 10px; flex-shrink:0;">
             <div style="font-size:13px; font-weight:800; color:#047857; font-family:'JetBrains Mono',monospace;">${fmtPt(ptsPote(share))}</div>
-            <div style="font-size:9px; color:#065f46;">pts do pote</div>
+            <div style="font-size:9px; color:#065f46;">pontos</div>
           </div>` : ''}
-          <div style="width:62px; text-align:right; font-size:17px; font-weight:800; color:#4338ca; font-family:'JetBrains Mono',monospace; flex-shrink:0;">${fmtPt(r.pontos)}</div>
         </div>`;
       });
       h += `</div>`;
@@ -13727,13 +12846,18 @@
 
     // cabeçalho das colunas de cenário (alinhado com as células de cada linha)
     html += `<div class="rank-scroll"><div class="rank-inner">`;
+    /* DUAS COLUNAS DE "PONTO" CONFUNDIAM (Patrick, 14/out).
+       A verde é o que a pessoa leva do pote — era rotulada "Hoje", e agora se
+       chama "Pontos", que é o que ela de fato significa para quem lê.
+       A antiga coluna "Pontos" era o placar bruto da campanha: ele continua
+       mandando na ordem do ranking, na % de participação e no tamanho da barra —
+       só deixou de ser exibido como número solto ao lado de outro número. */
     html += `<div style="display:flex; align-items:center; gap:10px; padding:0 12px 6px; font-size:9.5px; font-weight:700; color:#cbd5e1; letter-spacing:.04em; text-transform:uppercase;">
       <div style="width:30px;"></div>
       <div style="flex:1; min-width:130px;">Participante</div>
       <div style="display:flex; gap:5px; align-items:center;">
-        <div style="width:64px; text-align:center;">Hoje</div>
+        <div style="width:64px; text-align:center;">Pontos</div>
       </div>
-      <div style="width:62px; text-align:right;">Pontos</div>
     </div>`;
 
     html += `<div style="background:white; border-radius:14px; padding:6px;">`;
@@ -13774,9 +12898,6 @@
               <div style="font-size:14px; font-weight:800; font-family:'JetBrains Mono',monospace; color:${c.hoje ? '#047857' : '#4338ca'};">${fmtPt(c.v)}</div>
             </div>`;
           }).join('')}
-        </div>
-        <div style="width:62px; text-align:right; flex-shrink:0;">
-          <div style="font-size:17px; font-weight:800; color:#4338ca; font-family:'JetBrains Mono',monospace; line-height:1;">${fmtPt(p.pontos)}</div>
         </div>
       </div>`;
     });
@@ -14099,6 +13220,55 @@
   }
   window.aplicarSimTabela = aplicarSimTabela;
 
+  /* ═══ O CARD DO SIMULADOR ABRE FATOR A FATOR ═══
+     O total já estava no card; o que faltava era a mesma pergunta do painel do
+     gestor — "de onde vem o que falta?" — respondida na tela do próprio RM.
+     As três tabelas abaixo continuam: elas comparam BASES; esta compara
+     INDICADORES, que é o que ele consegue mexer esta semana. */
+  let _SIM_FAT_ABERTO = false;
+  function _simDetalheFatores(ind, base, pontos, fmtPt) {
+    if (!ind || !(base > 0)) return '';
+    const linha = (ico, nome, detalhe, ganho, teto, origem) => {
+      const pH = pontos(base, ganho), pT = pontos(base, teto);
+      const pc = teto > 0 ? ganho / teto * 100 : 0;
+      const falta = pT - pH;
+      return `<tr>
+        <td style="padding:8px 11px;"><div style="font-size:12.5px; color:#0f172a; font-weight:700;">${ico} ${nome}
+          <span style="font-size:10.5px; font-weight:700; color:${origem === 'carteira' ? '#0e7490' : '#6b21a8'}; background:${origem === 'carteira' ? '#ecfeff' : '#ede9fe'}; border:1px solid ${origem === 'carteira' ? '#a5f3fc' : '#ddd6fe'}; border-radius:20px; padding:1px 8px; margin-left:4px;">${origem === 'carteira' ? 'sua carteira' : 'a agência'}</span></div>
+          ${detalhe ? `<div style="font-size:10.5px; color:#64748b; margin-top:1px;">${detalhe}</div>` : ''}</td>
+        <td style="text-align:right; padding:8px 11px; white-space:nowrap;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:${_corFatorTxt(pc)};">${fmtFator(ganho)}%</span>
+          <span style="font-size:11px; color:#64748b;"> de ${fmtFator(teto)}%</span></td>
+        <td style="text-align:right; padding:8px 11px; font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:700; color:#334155;">${fmtPt(pH)}</td>
+        <td style="text-align:right; padding:8px 11px; font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:800; color:${falta > 0 ? '#4f46e5' : '#94a3b8'};">${falta > 0 ? '+' + fmtPt(falta) : '—'}</td>
+      </tr>`;
+    };
+    const carteira = (ind.itens || []).map(x => linha(x.icon, x.label,
+      (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + '% da meta', x.ganhoRM, x.tetoRM, 'carteira')).join('');
+    const plus = (ind.plus || []).map(x => linha(x.icon, x.label,
+      (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + '% da agência', x.ganho, x.teto, 'plus')).join('');
+    const faltaCart = pontos(base, ind.somaTetosProprios) - pontos(base, ind.ganhoProprio);
+    const faltaPlus = pontos(base, ind.somaPlus) - pontos(base, ind.ganhoPlus);
+    return `<table style="width:100%; border-collapse:collapse;"><thead><tr>
+        <th style="text-align:left; font-size:9.5px; color:#475569; font-weight:800; letter-spacing:.05em; padding:7px 11px; border-bottom:1px solid #e2e8f0;">INDICADOR</th>
+        <th style="text-align:right; font-size:9.5px; color:#475569; font-weight:800; letter-spacing:.05em; padding:7px 11px; border-bottom:1px solid #e2e8f0;">HOJE / POSSÍVEL</th>
+        <th style="text-align:right; font-size:9.5px; color:#475569; font-weight:800; letter-spacing:.05em; padding:7px 11px; border-bottom:1px solid #e2e8f0;">PONTOS HOJE</th>
+        <th style="text-align:right; font-size:9.5px; color:#475569; font-weight:800; letter-spacing:.05em; padding:7px 11px; border-bottom:1px solid #e2e8f0;">FALTA</th>
+      </tr></thead><tbody>${carteira}${plus}</tbody></table>
+      <div style="padding:10px 12px 12px; font-size:11.5px; color:#334155; line-height:1.55; border-top:1px solid #e8edf4;">
+        ${faltaCart > 0 ? `<strong style="color:#0e7490;">+${fmtPt(faltaCart)} pontos</strong> dependem só de você.` : 'A sua carteira já está no teto.'}
+        ${faltaPlus > 0 ? ` <strong style="color:#6b21a8;">+${fmtPt(faltaPlus)}</strong> dependem da agência inteira — vale puxar o time junto.` : ''}
+        Tudo isto sobre os negócios que <strong>já estão fechados</strong>: nenhum negócio novo entra nesta conta.
+      </div>`;
+  }
+  function _simAbrirFatores() {
+    _SIM_FAT_ABERTO = !_SIM_FAT_ABERTO;
+    const cx = document.getElementById('simFatores'), st = document.getElementById('simFatSeta');
+    if (cx) cx.style.display = _SIM_FAT_ABERTO ? '' : 'none';
+    if (st) { const se = st.querySelector('span'); if (se) se.style.transform = 'rotate(' + (_SIM_FAT_ABERTO ? 90 : 0) + 'deg)'; }
+  }
+  window._simAbrirFatores = _simAbrirFatores;
+
   function renderSimulador() {
     const box = document.getElementById('campAbaSimulador');
     if (!box) return;
@@ -14150,8 +13320,13 @@
       const tetoTotal = indMeu.somaTetosProprios + indMeu.somaPlus;
       const ganhoAgora = pontos(baseRMsim, partTotal);
       const ganhoTeto = pontos(baseRMsim, tetoTotal);
-      html += `<div style="background:linear-gradient(135deg,#065f46,#047857); border-radius:14px; padding:18px 20px; margin-bottom:16px; color:white;">
-        <div style="font-size:11.5px; font-weight:700; opacity:.85; letter-spacing:.03em;">🏁 COM OS NEGÓCIOS JÁ FECHADOS NA CAMPANHA</div>
+      /* O card dá o total; clicar abre indicador a indicador, igual ao painel do
+         gestor. Aqui a moeda é PONTO — a campanha nunca mostra R$ a RM. */
+      html += `<div onclick="_simAbrirFatores()" style="background:linear-gradient(135deg,#065f46,#047857); border-radius:14px; padding:18px 20px; margin-bottom:16px; color:white; cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div style="font-size:11.5px; font-weight:800; opacity:.95; letter-spacing:.03em;">🏁 COM OS NEGÓCIOS JÁ FECHADOS NA CAMPANHA</div>
+          <div id="simFatSeta" style="font-size:11px; opacity:.95; font-weight:600; white-space:nowrap;">ver fator a fator <span style="display:inline-block; transition:transform .15s; transform:rotate(${_SIM_FAT_ABERTO ? '90' : '0'}deg);">▶</span></div>
+        </div>
         <div style="display:flex; align-items:baseline; gap:8px; margin-top:8px; flex-wrap:wrap;">
           <div style="font-size:30px; font-weight:800; font-family:'JetBrains Mono',monospace;">${fmtPt(ganhoAgora)}</div>
           <div style="font-size:13px; opacity:.9;">pontos já são seus, com seus indicadores de hoje</div>
@@ -14159,6 +13334,9 @@
         <div style="font-size:12.5px; opacity:.9; margin-top:6px;">
           Levando seus indicadores ao teto, esses mesmos negócios te dariam <strong>${fmtPt(ganhoTeto)}</strong> pontos —
           <strong>+${fmtPt(ganhoTeto - ganhoAgora)}</strong> só por melhorar sua cobertura, sem depender de fechar nada novo.
+        </div>
+        <div id="simFatores" style="${_SIM_FAT_ABERTO ? '' : 'display:none;'} margin-top:14px; background:#fff; border-radius:11px; padding:2px 0 0;">
+          ${_simDetalheFatores(indMeu, baseRMsim, pontos, fmtPt)}
         </div>
       </div>`;
     }
@@ -14404,21 +13582,26 @@
       const ranking = poteRankingTotal * share;
       const rmCov = rmsCov.find(r => r.uid === uid);
       let piso = 0, proprio = 0, plus = 0, base = 0;
+      let ind = null;
       if (p.perfil === 'rm' && rmCov) {
         base = baseRm[uid] || 0;
-        const ind = calcularIndicadores(rmCov.cov, covAg);
+        ind = calcularIndicadores(rmCov.cov, covAg);
         piso = pisoRmAcum[uid] || 0;   // já somado negócio a negócio, pela vigência de cada um
         proprio = base * ind.ganhoProprio / 100;
         plus = base * ind.ganhoPlus / 100;
       }
-      linhas.push({ uid, ...p, base, piso, proprio, plus, ranking, share, total: piso + proprio + plus + ranking });
+      // `ind` viaja junto: é ele que permite abrir, indicador a indicador, o que
+      // cada RM está deixando na mesa — sem recalcular nada lá na frente.
+      linhas.push({ uid, ...p, base, piso, proprio, plus, ranking, share, ind, total: piso + proprio + plus + ranking });
     });
     // Gerente-chefe: medido pela agência, sobre a base total
     const chefes = (EQUIPE_REAL || []).filter(p => normalizarPerfil(p.perfil) === 'chefe' && p.ativo !== false && (!CTX.agenciaId || !p.agenciaId || p.agenciaId === CTX.agenciaId));
     chefes.forEach(p => {
       const piso = pisoChefeAcum;    // idem: somado por negócio, pela vigência de cada um
       const proprio = baseTotal * indAgObj.ganhoChefe / 100;
-      linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, total: piso + proprio });
+      // o chefe é medido pela AGÊNCIA: o `ind` dele é o da agência, e o teto é
+      // o totalChefe sobre a base inteira — não existe plus, ele já é a agência
+      linhas.push({ uid: p.uid, nome: p.nome, perfil: 'chefe', cor: p.cor || '#0891b2', base: baseTotal, piso, proprio, plus: 0, ranking: 0, share: 0, ind: indAgObj, total: piso + proprio });
     });
     linhas.sort((a, b) => b.total - a.total);
     const totalSai = linhas.reduce((s, l) => s + l.total, 0);
@@ -14468,11 +13651,11 @@
         <td><div style="display:flex; align-items:center; gap:7px;">
           <div style="width:8px; height:8px; border-radius:50%; background:${l.cor};"></div>
           <div><div style="font-weight:700; color:#0f172a; font-size:13px;">${l.nome}</div>
-          <div style="font-size:10.5px; color:#94a3b8;">${LBL[l.perfil] || l.perfil}${l.share > 0 ? ` · ${Math.round(l.share * 100)}% dos pontos` : ''}</div></div>
+          <div style="font-size:10.5px; color:#64748b;">${LBL[l.perfil] || l.perfil}${l.share > 0 ? ` · ${Math.round(l.share * 100)}% dos pontos` : ''}</div></div>
         </div></td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#64748b;">${l.piso > 0 ? fmtV(l.piso) : '—'}</td>
-        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0891b2; font-weight:600;">${l.proprio > 0 ? fmtV(l.proprio) : '—'}</td>
-        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#7c3aed; font-weight:600;">${l.plus > 0 ? fmtV(l.plus) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0e7490; font-weight:600;">${l.proprio > 0 ? fmtV(l.proprio) : '—'}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#6b21a8; font-weight:600;">${l.plus > 0 ? fmtV(l.plus) : '—'}</td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#b45309; font-weight:600;">${l.ranking > 0 ? fmtV(l.ranking) : '—'}</td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#0f172a;">${fmtV(l.total)}</td>
       </tr>`;
@@ -14480,8 +13663,8 @@
     html += `${ehDonoView ? `<tr style="border-top:2px solid #e2e8f0;">
         <td style="font-weight:800; color:#0f172a;">Total</td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#64748b;">${fmtV(linhas.reduce((s, l) => s + l.piso, 0))}</td>
-        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0891b2;">${fmtV(linhas.reduce((s, l) => s + l.proprio, 0))}</td>
-        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#7c3aed;">${fmtV(linhas.reduce((s, l) => s + l.plus, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0e7490;">${fmtV(linhas.reduce((s, l) => s + l.proprio, 0))}</td>
+        <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#6b21a8;">${fmtV(linhas.reduce((s, l) => s + l.plus, 0))}</td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#b45309;">${fmtV(linhas.reduce((s, l) => s + l.ranking, 0))}</td>
         <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#dc2626;">${fmtV(totalSai)}</td>
       </tr>` : ''}</tbody></table></div>
@@ -14490,9 +13673,156 @@
       </div>
     </div>`;
 
+    html += _blocoNaMesa(linhasVisiveis, ehDonoView, fmtV);
+
     box.innerHTML = html;
   }
   window.renderPainelGestor = renderPainelGestor;
+
+  /* ═══════════════ QUANTO CADA UM ESTÁ DEIXANDO NA MESA ═══════════════
+     O simulador já mostrava isso ao RM, na tela DELE. Para ter a mesma conversa,
+     o corretor precisava entrar na tela de cada um, um por um. Aqui a mesma
+     conta aparece do lado de quem paga: o que cada RM leva hoje, o que levaria
+     com os indicadores no teto (os dele e os da agência), e a diferença.
+     Piso e ranking não entram na diferença porque não dependem de indicador —
+     mas entram no total, que é o número da conversa real. */
+  let _NA_MESA_ABERTO = {};
+  function _blocoNaMesa(linhas, ehDonoView, fmtV) {
+    /* Entram RMs e o gerente-chefe. RM sem base na campanha entra também: o
+       aproveitamento dele é real e é o assunto da conversa — o que não existe
+       ainda é negócio fechado para a diferença valer dinheiro. Dizer "R$ 0 a
+       ganhar" seria mentir sobre uma cobertura que está baixa. */
+    const gente = linhas.filter(l => (l.perfil === 'rm' || l.perfil === 'chefe') && l.ind);
+    if (!gente.length) return '';
+    const calc = l => {
+      const i = l.ind, chefe = l.perfil === 'chefe';
+      // o chefe é medido pela agência e o teto dele é o totalChefe; o RM soma
+      // os tetos da própria carteira com o plus que a agência lhe dá
+      const tetoPart = chefe ? i.totalChefe : (i.somaTetosProprios + i.somaPlus);
+      const hojePart = chefe ? i.ganhoChefe : (i.ganhoProprio + i.ganhoPlus);
+      const hojeInd = l.base * hojePart / 100;
+      const tetoInd = l.base * tetoPart / 100;
+      return { chefe, hojePart, tetoPart, hojeInd, tetoInd, falta: tetoInd - hojeInd,
+        semBase: !(l.base > 0),
+        totalHoje: l.total, totalTeto: l.piso + tetoInd + l.ranking,
+        aproveit: tetoPart > 0 ? hojePart / tetoPart * 100 : 0 };
+    };
+    /* Ordem: quem tem mais a ganhar primeiro; quem ainda não tem base vai para o
+       fim, junto, porque a conversa com eles é outra. */
+    const dados = gente.map(l => ({ l, c: calc(l) }))
+      .sort((a, b) => (a.c.semBase - b.c.semBase) || (b.c.falta - a.c.falta));
+    const comBase = dados.filter(x => !x.c.semBase);
+    const somaFalta = comBase.reduce((s, x) => s + x.c.falta, 0);
+    const somaHoje = comBase.reduce((s, x) => s + x.c.totalHoje, 0);
+    const somaTeto = comBase.reduce((s, x) => s + x.c.totalTeto, 0);
+    const semBase = dados.filter(x => x.c.semBase);
+
+    const linhasHtml = dados.map(({ l, c }) => {
+      const cor = _corFator(c.aproveit);        // a barra é preenchimento: cor cheia
+      const corTxt = _corFatorTxt(c.aproveit);  // o número é texto: um tom abaixo
+      const aberto = !!_NA_MESA_ABERTO[l.uid];
+      return `<tr class="na-mesa-l" onclick="_naMesaAbrir('${l.uid}')" style="cursor:pointer;">
+          <td><div style="display:flex; align-items:center; gap:7px;">
+            <span id="naMesaSeta_${l.uid}" style="color:#94a3b8; font-size:11px; width:10px; display:inline-block; transform:rotate(${aberto ? '90' : '0'}deg); transition:transform .15s;">▶</span>
+            <div style="width:8px; height:8px; border-radius:50%; background:${l.cor};"></div>
+            <div><div style="font-weight:700; color:#0f172a; font-size:13px;">${l.nome}${c.chefe ? ' <span style="font-size:10px; font-weight:700; color:#0e7490; background:#ecfeff; border-radius:20px; padding:1px 7px;">gerente-chefe</span>' : ''}</div>
+            <div style="font-size:10.5px; color:#64748b;">${fmtFator(c.hojePart)}% de ${fmtFator(c.tetoPart)}% possíveis${c.chefe ? ' · medido pela agência' : ''}</div></div>
+          </div></td>
+          <td style="text-align:right;"><div style="display:flex; align-items:center; gap:6px; justify-content:flex-end;">
+            <span style="width:52px; height:6px; background:#f1f5f9; border-radius:5px; overflow:hidden; display:inline-block;">
+              <i style="display:block; height:100%; width:${Math.max(3, Math.min(100, c.aproveit))}%; background:${cor}; border-radius:5px;"></i></span>
+            <b style="font-size:12px; color:${corTxt}; font-family:'JetBrains Mono',monospace;">${Math.round(c.aproveit)}%</b></div></td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#0f172a; font-weight:700;">${fmtV(c.totalHoje)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#16a34a; font-weight:700;">${c.semBase ? '—' : fmtV(c.totalTeto)}</td>
+          <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:${c.semBase ? '#94a3b8' : '#dc2626'}; font-weight:800;">${c.semBase ? 'sem base' : '+' + fmtV(c.falta)}</td>
+        </tr>
+        <tr id="naMesaDet_${l.uid}" style="${aberto ? '' : 'display:none;'}"><td colspan="5" style="padding:0; background:#f8fafc;">${_naMesaDetalhe(l, fmtV)}</td></tr>`;
+    }).join('');
+
+    return `<div style="background:white; border-radius:14px; padding:20px; margin-bottom:14px;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">💸 Quanto cada um está deixando na mesa</div>
+      <div style="font-size:12px; color:#64748b; margin-bottom:12px;">
+        O mesmo número que o RM vê no simulador dele, agora do seu lado. ${ehDonoView ? 'Clique no nome para abrir indicador a indicador.' : 'Clique no seu nome para abrir indicador a indicador.'}
+      </div>
+      ${ehDonoView && somaFalta > 0 ? `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
+        <div style="background:#f8fafc; border:1px solid #e8edf4; border-radius:11px; padding:12px 14px;"><div style="font-size:10.5px; font-weight:800; letter-spacing:.06em; color:#64748b;">O TIME LEVA HOJE</div><div style="font-size:18px; font-weight:800; color:#0f172a; font-family:'JetBrains Mono',monospace;">${fmtV(somaHoje)}</div></div>
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:11px; padding:12px 14px;"><div style="font-size:10.5px; font-weight:800; letter-spacing:.06em; color:#15803d;">LEVARIA NO TETO</div><div style="font-size:18px; font-weight:800; color:#15803d; font-family:'JetBrains Mono',monospace;">${fmtV(somaTeto)}</div></div>
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:11px; padding:12px 14px;"><div style="font-size:10.5px; font-weight:800; letter-spacing:.06em; color:#b91c1c;">ESTÁ NA MESA</div><div style="font-size:18px; font-weight:800; color:#b91c1c; font-family:'JetBrains Mono',monospace;">${fmtV(somaFalta)}</div><div style="font-size:10.5px; color:#94a3b8;">sem fechar nada novo</div></div>
+      </div>` : ''}
+      <div style="overflow-x:auto;"><table class="cfg-table" style="min-width:620px;"><thead><tr>
+        <th>PESSOA</th>
+        <th style="text-align:right;">APROVEITAMENTO</th>
+        <th style="text-align:right;">LEVA HOJE</th>
+        <th style="text-align:right;">LEVARIA NO TETO</th>
+        <th style="text-align:right;">DIFERENÇA</th>
+      </tr></thead><tbody>${linhasHtml}</tbody></table></div>
+      ${semBase.length ? `<div style="margin-top:10px; background:#f8fafc; border:1px solid #e8edf4; border-radius:10px; padding:10px 12px; font-size:11.5px; color:#475569; line-height:1.55;">
+        <strong>${semBase.map(x => x.l.nome.split(' ')[0]).join(', ')}</strong> ${semBase.length === 1 ? 'ainda não tem' : 'ainda não têm'} negócio emitido na campanha — por isso a diferença não vira dinheiro ainda.
+        O aproveitamento acima é real: no dia em que ${semBase.length === 1 ? 'fechar' : 'fecharem'} o primeiro, ${semBase.length === 1 ? 'leva' : 'levam'} essa fatia do que poderia.
+      </div>` : ''}
+      <div style="font-size:11.5px; color:#475569; margin-top:10px; line-height:1.55;">
+        <strong>No teto</strong> = os indicadores da carteira dele em 100% <em>e</em> os da agência em 100%. Para o <strong>gerente-chefe</strong>, os da agência em 100% sobre a base inteira.
+        Piso e ranking entram no total mas não mudam com indicador — a <strong>diferença</strong> é só o que depende de cobertura.
+        Nenhum negócio novo entra nesta conta: é o mesmo faturamento, melhor aproveitado.
+      </div>
+    </div>`;
+  }
+
+  /* O detalhe: indicador a indicador, o que ele tem e o que falta.
+     É a frase que o corretor precisa na conversa — "dos 0,4 do cadastro você
+     está levando 0,30; os 0,10 que faltam valem R$ X neste mesmo faturamento". */
+  function _naMesaDetalhe(l, fmtV) {
+    const i = l.ind, base = l.base;
+    const emR = pct => base * pct / 100;
+    const linha = (ico, nome, detalhe, ganho, teto, origem) => {
+      const falta = teto - ganho;
+      const pc = teto > 0 ? ganho / teto * 100 : 0;
+      return `<tr>
+        <td style="padding:7px 10px;"><div style="font-size:12.5px; color:#0f172a; font-weight:600;">${ico} ${nome}
+          <span style="font-size:10.5px; font-weight:700; color:${origem === 'carteira' ? '#0e7490' : '#6b21a8'}; background:${origem === 'carteira' ? '#ecfeff' : '#ede9fe'}; border:1px solid ${origem === 'carteira' ? '#a5f3fc' : '#ddd6fe'}; border-radius:20px; padding:1px 8px; margin-left:5px;">${origem === 'carteira' ? 'carteira' : 'agência'}</span></div>
+          ${detalhe ? `<div style="font-size:10.5px; color:#64748b; margin-top:1px;">${detalhe}</div>` : ''}</td>
+        <td style="text-align:right; padding:7px 10px; white-space:nowrap;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:${_corFatorTxt(pc)}; font-weight:800;">${fmtFator(ganho)}%</span>
+          <span style="font-size:11px; color:#64748b;"> de ${fmtFator(teto)}%</span></td>
+        <td style="text-align:right; padding:7px 10px; font-family:'JetBrains Mono',monospace; font-size:12px; color:#0f172a;">${fmtV(emR(ganho))}</td>
+        <td style="text-align:right; padding:7px 10px; font-family:'JetBrains Mono',monospace; font-size:12px; color:${falta > 0.0005 ? '#dc2626' : '#94a3b8'}; font-weight:700;">${falta > 0.0005 ? '+' + fmtV(emR(falta)) : '—'}</td>
+      </tr>`;
+    };
+    /* O chefe lê a MESMA linha de indicadores, mas pelos números da agência:
+       `ganhoChefe`/`tetoChefe`, que o cálculo já devolve. Ele não tem plus —
+       o plus existe porque a agência vai bem, e ele é a agência. */
+    const chefe = l.perfil === 'chefe';
+    const carteira = (i.itens || []).map(x => linha(x.icon, x.label,
+      (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + (chefe ? '% da agência' : '% da meta'),
+      chefe ? x.ganhoChefe : x.ganhoRM, chefe ? x.tetoChefe : x.tetoRM, chefe ? 'agencia' : 'carteira')).join('');
+    const plus = chefe ? '' : (i.plus || []).map(x => linha(x.icon, x.label, (x.detalhe ? x.detalhe + ' · ' : '') + fmtFator(x.pct) + '% da agência', x.ganho, x.teto, 'plus')).join('');
+    return `<div style="padding:12px 14px 16px;">
+      <table style="width:100%; border-collapse:collapse;"><thead><tr>
+        <th style="text-align:left; font-size:10px; color:#475569; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">INDICADOR</th>
+        <th style="text-align:right; font-size:10px; color:#475569; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">HOJE / POSSÍVEL</th>
+        <th style="text-align:right; font-size:10px; color:#475569; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">VALE HOJE</th>
+        <th style="text-align:right; font-size:10px; color:#475569; font-weight:800; padding:4px 10px; border-bottom:1px solid #e2e8f0;">FALTA</th>
+      </tr></thead><tbody>${carteira}${plus}</tbody></table>
+      <div style="font-size:11.5px; color:#475569; margin-top:9px; padding-left:10px; line-height:1.55;">
+        ${chefe
+          ? `Sobre a base de ${fmtV(base)} da agência inteira — é assim que o gerente-chefe é medido e pago.`
+          : (base > 0
+            ? `Sobre a base de ${fmtV(base)} que a carteira de ${l.nome.split(' ')[0]} já gerou na campanha. O que está em <span style="color:#6b21a8; font-weight:700;">agência</span> depende do time inteiro, não só dele.`
+            : `${l.nome.split(' ')[0]} ainda não tem negócio emitido na campanha: os percentuais acima são reais, mas só viram dinheiro quando houver base.`)}
+      </div>
+    </div>`;
+  }
+  /* Abre e fecha no próprio DOM. Redesenhar o painel inteiro aqui significaria
+     refazer a base da campanha a cada clique — e piscar "calculando" na tela. */
+  function _naMesaAbrir(uid) {
+    const aberto = !_NA_MESA_ABERTO[uid];
+    _NA_MESA_ABERTO[uid] = aberto;
+    const det = document.getElementById('naMesaDet_' + uid);
+    const seta = document.getElementById('naMesaSeta_' + uid);
+    if (det) det.style.display = aberto ? '' : 'none';
+    if (seta) seta.style.transform = 'rotate(' + (aberto ? 90 : 0) + 'deg)';
+  }
+  window._naMesaAbrir = _naMesaAbrir;
 
   // ============= PENALIZAÇÕES =============
   // Uma penalização é uma ação de pontos NEGATIVOS em mb_acoes, apontando pra origem.
@@ -15087,6 +14417,18 @@
   }
   window.salvarRegras = salvarRegras;
 
+  /* As cores do _corFator foram feitas para PREENCHIMENTO — barra, chip, pílula —
+     onde o próprio bloco de cor carrega o significado. Como texto, em corpo
+     pequeno sobre fundo claro, elas ficam entre 2,1 e 3,8 de contraste: a pessoa
+     vê a cor e não lê o número. Esta é a mesma escala, um tom abaixo, medida
+     para texto (todas acima de 4,5 no branco). */
+  function _corFatorTxt(pct) {
+    if (pct >= 80) return '#15803d';
+    if (pct >= 60) return '#0369a1';
+    if (pct >= 40) return '#b45309';
+    if (pct >= 20) return '#c2410c';
+    return '#dc2626';
+  }
   function _corFator(pct) {
     if (pct >= 80) return '#16a34a';
     if (pct >= 60) return '#0ea5e9';
@@ -15770,93 +15112,6 @@
   }
   window.renderComparativoRM = renderComparativoRM;
 
-  async function renderFeed() {
-    const cont = document.getElementById('feedConquistas');
-    if (!cont) return;
-    const ehRM = perfilEfetivo() === 'rm';
-    const ehGestor = perfilEfetivo() === 'chefe' || (CTX.isAdmin && !CTX.perfilSimulado);
-
-    // ---- RADAR INTELIGENTE: conselhos que cruzam dados e chamam pra ação ----
-    // (para RM e gestores; assistente/estagiário veem o feed de atividades abaixo)
-    if (ehRM || ehGestor) {
-      try {
-        const { msgs } = await radarMontar(10);
-        const tomCor = { destaque: '#eef2ff', alerta: '#fef2f2', dica: '#f0fdf4', oportunidade: '#fff7ed', neutro: '#f8fafc' };
-        const tomBorda = { destaque: '#c7d2fe', alerta: '#fecaca', dica: '#bbf7d0', oportunidade: '#fed7aa', neutro: '#e2e8f0' };
-        const ctaTxt = { cotacoes: 'Pedir cotação →', oportunidades: 'Ver oportunidades →', agenda: 'Agendar visita →', empresas: 'Ver empresas →' };
-        const _btn = (rot, js, borda) => `<button onclick="event.stopPropagation(); ${js}" style="background:white; border:1px solid ${borda}; color:#4338ca; font-weight:700; font-size:12px; padding:5px 12px; border-radius:8px; cursor:pointer;">${rot}</button>`;
-        let h = '';
-        msgs.forEach(m => {
-          const bd = tomBorda[m.tom] || '#e2e8f0';
-          // acoes: lista de {rot, js} — permite vários botões (ligar, whats, e-mail, link…)
-          let cta = '';
-          if (m.acoes && m.acoes.length) {
-            cta = `<div style="margin-top:9px; display:flex; gap:6px; flex-wrap:wrap;">${m.acoes.map(a => _btn(a.rot, a.js, bd)).join('')}</div>`;
-          } else if (m.cta) {
-            const js = m.cta === 'agenda' ? 'abrirAgendarVisita()' : m.cta === 'cotacoes' ? 'abrirPedirCotacao()' : "navTo('" + m.cta + "')";
-            cta = `<div style="margin-top:8px;">${_btn(ctaTxt[m.cta] || 'Ver →', js, bd)}</div>`;
-          }
-          h += `<div style="display:flex; gap:12px; background:${tomCor[m.tom] || '#f8fafc'}; border:1px solid ${tomBorda[m.tom] || '#e2e8f0'}; border-radius:12px; padding:13px 15px; margin-bottom:9px;">
-            <div style="font-size:22px; flex-shrink:0; line-height:1.3;">${m.icon}</div>
-            <div style="flex:1; min-width:0;"><div style="font-size:13.5px; color:#334155; line-height:1.5;">${m.txt}</div>${cta}</div>
-          </div>`;
-        });
-        h += `<div style="text-align:center; margin-top:4px;"><button onclick="event.stopPropagation(); renderFeed();" style="background:none; border:none; color:#94a3b8; font-size:12px; cursor:pointer; text-decoration:underline;">🔄 Ver outras dicas</button></div>`;
-        cont.innerHTML = h;
-        aplicarColapso('feedConquistas', false);
-        return;
-      } catch (e) { console.warn('radar', e); }
-    }
-
-    // ---- Feed de atividades (assistente/estagiário, ou fallback) ----
-    try {
-      const acoes = await _carregarAcoes(false);
-      const tiposFeed = ['fechamento', 'mapeou_produto', 'mapeamento', 'visita', 'dados_base', 'cotacao_solicitada', 'mapeamento_via_link'];
-      const interessantes = acoes.filter(a => tiposFeed.includes(a.tipo)).slice(0, 12);
-
-      if (interessantes.length === 0) {
-        cont.innerHTML = '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 13px;">Sem atividades recentes ainda.</div>';
-        aplicarColapso('feedConquistas', true);
-        return;
-      }
-      const cores = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6'];
-      const textos = {
-        fechamento: a => `<strong>${a.usuarioNome}</strong> fechou ${a.produtoNome || 'um negócio'}${a.valorFechado ? ' — ' + fmtBRcompacto(a.valorFechado) : ''}${a.empresaNome ? ' na ' + a.empresaNome : ''} 🎉`,
-        mapeou_produto: a => `<strong>${a.usuarioNome}</strong> mapeou ${a.produtoNome || 'um produto'} na ${a.empresaNome}`,
-        mapeamento: a => `<strong>${a.usuarioNome}</strong> mapeou produto na ${a.empresaNome}`,
-        mapeamento_via_link: a => `<strong>${a.empresaNome || 'Uma empresa'}</strong> respondeu o mapeamento de ${a.produtoNome || 'um produto'} pelo link 🔗`,
-        visita: a => `<strong>${a.usuarioNome}</strong> registrou visita na ${a.empresaNome} 📍`,
-        dados_base: a => `<strong>${a.usuarioNome}</strong> cadastrou dados da ${a.empresaNome}`,
-        cotacao_solicitada: a => `<strong>${a.usuarioNome}</strong> pediu cotação de ${a.produtoNome || 'produto'} 🎯`
-      };
-      cont.innerHTML = interessantes.map(a => {
-        const dt = a.criadoEm && a.criadoEm.toDate ? a.criadoEm.toDate() : null;
-        const tempo = dt ? tempoRelativo(dt) : '';
-        const ini = (a.usuarioNome || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
-        const cor = cores[(a.usuarioNome || '').length % cores.length];
-        const txt = (textos[a.tipo] || (x => 'Atividade na agência'))(a);
-        return `<div class="feed-item">
-            <div class="feed-avatar" style="background: linear-gradient(135deg, ${cor}, #7c3aed);">${ini}</div>
-            <div class="feed-texto">${txt}</div>
-            <div class="feed-tempo">${tempo}</div>
-          </div>`;
-      }).join('');
-      aplicarColapso('feedConquistas', true);
-    } catch (e) {
-      console.warn('Erro feed:', e);
-    }
-  }
-
-  function tempoRelativo(dt) {
-    const seg = Math.floor((Date.now() - dt.getTime()) / 1000);
-    if (seg < 60) return 'agora';
-    if (seg < 3600) return Math.floor(seg/60) + 'min';
-    if (seg < 86400) return Math.floor(seg/3600) + 'h';
-    const dias = Math.floor(seg/86400);
-    if (dias < 7) return dias + 'd';
-    return dt.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'});
-  }
-
   window.renderHome = renderHome;
 
   // ============= KANBAN DE COTAÇÕES =============
@@ -16515,12 +15770,24 @@
       } catch (e) { /* varredura é best-effort, não bloqueia a geração */ }
 
       // 2) Congela no link o que o cliente NÃO deve responder de novo:
-      //    - tem (mercado), nosso/fechado, em cotação ou perdido → BLOQUEADO (mostra "já informado", sem expor detalhes)
+      //    - ramo que não existe para a empresa (seguro de sócios sem sócios) → OCULTO, nem aparece
+      //    - OP FECHADA nossa no ramo → REABERTO com outra pergunta (ver abaixo)
+      //    - tem (mercado), nosso/fechado, em cotação ou perdido → BLOQUEADO (não aparece na tela 1;
+      //      continua na tela 2 só para o cliente anexar a apólice)
       //    - respondeu "não tem" → PRÉ-MARCADO "Não", editável (pode ter contratado depois)
       //    - sem resposta → LIBERADO (somente estes pontuam)
-      const produtosBloqueados = [], produtosNaoTem = [], produtosPermitidos = [];
+      const produtosBloqueados = [], produtosNaoTem = [], produtosPermitidos = [],
+            produtosOcultos = [], produtosOp = [];
       (PRODUTOS || []).forEach(p => {
+        if (!_ramoValeParaEmpresa(p, empresa)) { produtosOcultos.push(p.id); return; }
         const cat = statusMatriz(empresa, p.id);
+        /* A OP é quase sempre uma apólice À PARTE da que a empresa já tinha —
+           garantia de um contrato específico, por exemplo. Fechar o ramo por
+           causa dela nos fazia perder a apólice original, que é justamente a
+           que queremos disputar. Então o ramo volta a ser perguntado, com outra
+           pergunta: "existe OUTRA, com outra seguradora?". A resposta entra como
+           apólice adicional e o 💎 da OP nunca é rebaixado. */
+        if (cat === 'nosso' && _temOpFechada(empresaId, p.id)) { produtosOp.push(p.id); return; }
         if (cat === 'nao_tem') produtosNaoTem.push(p.id);
         else if (cat === 'nao_mapeado') produtosPermitidos.push(p.id);
         else produtosBloqueados.push(p.id);
@@ -16539,7 +15806,7 @@
         expiraEm: firebase.firestore.Timestamp.fromDate(expiraEm),
         expirado: false, expirouEm: null,
         preenchidoEm: null, preenchido: false,
-        produtosBloqueados, produtosNaoTem, produtosPermitidos
+        produtosBloqueados, produtosNaoTem, produtosPermitidos, produtosOcultos, produtosOp
       });
       const docId = docRef.id;
 
@@ -25793,7 +25060,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (!e) return;
     EMPRESA_ATUAL_RX = e;
     document.getElementById('modalContatosEmpresa').textContent = e.nome;
-    document.getElementById('inputDecisorNome').value = e.decisorNome || '';
     document.getElementById('inputEmailDecisor').value = e.emailDecisor || '';
     document.getElementById('inputEmailRh').value = e.emailRh || '';
     document.getElementById('modalContatos').classList.add('open');
@@ -25803,7 +25069,6 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   async function salvarContatos() {
     const e = EMPRESA_ATUAL_RX;
     if (!e) return;
-    const decisorNome = (document.getElementById('inputDecisorNome').value || '').trim();
     const emailDecisor = (document.getElementById('inputEmailDecisor').value || '').trim();
     const emailRh = (document.getElementById('inputEmailRh').value || '').trim();
     const reMail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -25814,7 +25079,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const decisorNovo = !!emailDecisor && !e.emailDecisor;
       const rhNovo = !!emailRh && !e.emailRh;
       await db.collection('empresas').doc(e.id).update({
-        decisorNome, emailDecisor, emailRh,
+        emailDecisor, emailRh,
         contatosAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
         contatosAtualizadoPor: CTX.uid,
         contatosAtualizadoPorNome: CTX.nome
@@ -25836,7 +25101,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           criadoEm: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
-      e.decisorNome = decisorNome; e.emailDecisor = emailDecisor; e.emailRh = emailRh;
+      e.emailDecisor = emailDecisor; e.emailRh = emailRh;
       e.contatosAtualizadoPorNome = CTX.nome;
       document.getElementById('modalContatos').classList.remove('open');
       abrirRaioX(e.id);
@@ -26958,14 +26223,32 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
           '<span style="flex:1;"></span><button class="btn-mini" onclick="qpStatus(\''+d.id+'\',\'novo\')">↩ Voltar para novas</button></div>';
       }
       return '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:14px 16px; margin-bottom:12px;">'+
+        /* O nome vem da consulta pública do CNPJ feita no próprio link (ou do que
+           o cliente escreveu quando a consulta falhou). Antes a resposta chegava
+           como um CNPJ solto e só dava para saber de quem era vinculando. */
+        (d.razaoSocial
+          ? '<div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:3px;">🏢 '+_qpEsc(d.razaoSocial)+
+            (d.nomeFantasia && d.nomeFantasia !== d.razaoSocial ? ' <span style="font-size:12px; font-weight:600; color:#64748b;">('+_qpEsc(d.nomeFantasia)+')</span>' : '')+'</div>'
+          : '')+
         '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">'+
-          '<div style="font-family:ui-monospace,monospace; font-weight:800; font-size:15px; color:#0f172a;">'+_qpEsc(d.cnpjFmt || _qpFmtCNPJ(d.cnpj))+'</div>'+stPill+
+          '<div style="font-family:ui-monospace,monospace; font-weight:'+(d.razaoSocial ? '600' : '800')+'; font-size:'+(d.razaoSocial ? '13' : '15')+'px; color:'+(d.razaoSocial ? '#475569' : '#0f172a')+';">'+_qpEsc(d.cnpjFmt || _qpFmtCNPJ(d.cnpj))+'</div>'+stPill+
           '<span style="flex:1;"></span><span style="font-size:11.5px; color:#94a3b8;">'+_qpData(d.criadoEm)+'</span>'+
         '</div>'+
         '<div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:6px; font-size:12.5px; color:#475569;">'+
           '<span>👤 '+(d.nomeContato ? _qpEsc(d.nomeContato) : '<i style="color:#94a3b8;">sem nome</i>')+'</span>'+
           '<span>📱 '+(d.celularFmt ? '<a href="https://wa.me/55'+_qpDig(d.celular)+'" target="_blank" rel="noopener" style="color:#059669; font-weight:700;">'+_qpEsc(d.celularFmt)+'</a>' : '<i style="color:#94a3b8;">sem celular</i>')+'</span>'+
+          /* Nem todo cliente dá o celular. Quando ele deixa só o e-mail, é por
+             aqui que o contato acontece — então o e-mail fica clicável do lado. */
+          '<span>📧 '+(d.email ? '<a href="mailto:'+_qpEsc(d.email)+'" style="color:#4338ca; font-weight:700;">'+_qpEsc(d.email)+'</a>' : '<i style="color:#94a3b8;">sem e-mail</i>')+'</span>'+
           (d.numFuncionarios ? '<span>👥 '+d.numFuncionarios+' colaboradores</span>' : '')+
+          (d.cidade ? '<span>📍 '+_qpEsc(d.cidade)+(d.uf ? '/'+_qpEsc(d.uf) : '')+'</span>' : '')+
+          /* CNAE principal: é o que a seguradora usa para enquadrar o risco —
+             chega de graça junto do nome, então fica à mão na hora de cotar. */
+          (d.cnaePrincipal && d.cnaePrincipal.descricao
+            ? '<span title="CNAE principal'+(d.cnaePrincipal.codigo ? ' '+_qpEsc(d.cnaePrincipal.codigo) : '')+
+              ((d.cnaesSecundarios||[]).length ? ' · +'+d.cnaesSecundarios.length+' secundária(s)' : '')+
+              '">🏭 '+_qpEsc(d.cnaePrincipal.descricao)+'</span>'
+            : '')+
           (interesse.size ? '<span style="color:#b45309; font-weight:800;">🔥 quer cotar '+interesse.size+'</span>' : '')+
         '</div>'+
         '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">'+tem.map(k => chip(k, true)).join('')+nao.map(k => chip(k, false)).join('')+
@@ -28723,18 +28006,12 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         }, { merge: true });
       }
 
-      // AVISA O CORRETOR (substitui o antigo item de checklist "Pré análise / avisar corretor"):
-      // a descrição escrita no cadastro vai junto, que é a pré-análise da oportunidade.
-      if (opts.notificar && !ehCorretorReal()) {
-        try {
-          await criarNotificacao({
-            para: 'corretor', tipo: 'nova_negociacao',
-            titulo: `${(ORIGEM_INFO[origem] || {}).emoji || '✨'} Nova negociação: ${empresa.nome} · ${produto.nome}`,
-            corpo: (opts.observacoes || '').trim() || 'Sem descrição — confira o card no funil.',
-            empresaId: empresa.id
-          });
-        } catch (eN) {}
-      }
+      /* O aviso de "nova negociação" saiu (Patrick, 14/out): toda cotação criada
+         virava um card no Hoje do corretor, e eles empilhavam sem ninguém marcar
+         como lido — a tela virava uma lista de avisos em vez de números. O lugar
+         de ver negociação nova é o Funil, que já mostra todas.
+         `opts.notificar` continua aceito e ignorado, para não ter de mexer nas
+         seis chamadas que o passam. */
 
       if (silent) return ref.id; // chamadas em lote (OP/renovação/oportunidade) controlam o feedback
 
@@ -28803,6 +28080,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     return leg || { tipo: 'nenhum', min: 0 };
   }
   function _porteDispara(r, e) {
+    if (!_ramoValeParaEmpresa(r, e)) return false;
     const g = _gatilhoDe(r);
     if (g.tipo === 'socios') return _sociosCotaveis(e).length >= g.min;
     if (g.tipo === 'funcionarios') return (Number(e.funcionarios) || 0) >= g.min;
@@ -28810,11 +28088,51 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     // avaliado junto do status, via _naoTemDispara)
     return false;
   }
+  /* ═══ OS RAMOS QUE ESTA EMPRESA REALMENTE PRECISA MAPEAR ═══
+     Um ramo cujo gatilho é 'socios' (vida de sócios, saúde de sócios, previdência
+     de sócios) não tem o que mapear numa empresa que confirmadamente NÃO TEM
+     sócios. Cobrar essa célula é pedir um dado que não existe — e prende a empresa
+     abaixo de 100% para sempre, por um motivo que ninguém pode resolver.
+     O desconto só vale com o "não tem sócios" CONFIRMADO. Empresa cujos sócios
+     ainda não foram cadastrados continua com o denominador cheio: se bastasse
+     deixar em branco, não cadastrar melhoraria o indicador.
+     Usado na lista de empresas E na métrica da campanha — a mesma conta nos dois
+     lugares, senão a tela e o pagamento divergem. */
+  function _semSociosDeVerdade(e) {
+    if (!e || !e.semSociosConfirmado) return false;
+    return !(e.socios || []).some(s => s && (s.nome || '').trim());
+  }
+  /* A REGRA, num lugar só: ramo de sócios em empresa confirmadamente sem sócios
+     não existe para aquela empresa. Não é mapeamento pendente, não é oportunidade
+     quente, não entra em sugestão. Aceita o objeto do ramo ou só o id. */
+  function _ramoValeParaEmpresa(r, e) {
+    const ramo = (typeof r === 'string') ? ((RAMOS_ALL || PRODUTOS || []).find(x => x.id === r) || { id: r }) : r;
+    if (!ramo) return true;
+    return !(_gatilhoDe(ramo).tipo === 'socios' && _semSociosDeVerdade(e));
+  }
+  window._ramoValeParaEmpresa = _ramoValeParaEmpresa;
+  /* OP já FECHADA neste ramo. Só a fechada conta: OP ainda no funil deixa o ramo
+     em 'cotacao', que o link já bloqueia por outro motivo. */
+  function _temOpFechada(empresaId, ramoId) {
+    return (COTACOES || []).some(c => c.empresaId === empresaId && c.produtoId === ramoId
+      && (c.origem === 'op' || c.origem === 'op_bancaria') && c.status === 'fechada');
+  }
+  window._temOpFechada = _temOpFechada;
+  function _ramosDoMapeamento(e, opts) {
+    const soCampanha = !!(opts && opts.campanha);
+    return (PRODUTOS || []).filter(p => !p.somenteOp
+      && (!soCampanha || p.contaMapeamento !== false)
+      && _ramoValeParaEmpresa(p, e));
+  }
+  window._ramosDoMapeamento = _ramosDoMapeamento;
   // "Não tem" mapeado dispara a oportunidade? Regra universal = sim; exceção é o
   // gatilho 'funcionarios_naotem', que segura até o nº de funcionários existir.
   function _naoTemDispara(r, e, pd) {
     const naoTemBruto = pd && (pd.statusVisual === 'nao_tem' || pd.mapeamento === 'nao_tem');
     if (!naoTemBruto) return false;
+    /* "Não tem seguro de vida dos sócios" numa empresa que não tem sócios não é
+       oportunidade — é a descrição da empresa. Antes virava lead quente. */
+    if (!_ramoValeParaEmpresa(r, e)) return false;
     const g = _gatilhoDe(r);
     if (g.tipo === 'funcionarios_naotem') return (Number(e.funcionarios) || 0) >= g.min;
     return true;
@@ -28859,6 +28177,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const dados = e.produtosDados || {};
       (PRODUTOS || []).forEach(r => {
         if (r.somenteOp) return;       // ramo que só nasce de OP não é oportunidade
+        // empresa sem sócios não tem oportunidade de seguro de sócios — nem por
+        // "não tem", nem por porte, nem por reagendamento antigo
+        if (!_ramoValeParaEmpresa(r, e)) return;
         const ramoId = r.id;
         const pd = dados[ramoId] || {};
         const cat = statusMatriz(e, ramoId);
