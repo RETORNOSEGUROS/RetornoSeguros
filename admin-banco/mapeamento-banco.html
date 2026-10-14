@@ -28582,7 +28582,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
       // "Questionário respondido" marca sozinho (evento do cliente) — e o kanban passa a
       // acompanhar as mudanças em tempo real (aprovação do corretor aparece sem F5).
-      if (!_somenteLeituraSeg) { try { await _autoQuestionarioLote(); } catch (e) {} }
+      if (!_somenteLeituraSeg) {
+        try { await _autoQuestionarioLote(); } catch (e) {}
+        try { const _nq = await _autoQuestionarioEtapa2(); if (_nq > 0) return carregarERenderCotacoes(); } catch (e) {}
+      }
       try { _iniciarListenerCotacoes(query); } catch (e) {}
 
       // Renovações automáticas (roda 1x por sessão; recarrega e renderiza se criar alguma)
@@ -28836,6 +28839,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
        prêmio → comentários → participação → decisão. A decisão fica por último
        porque só faz sentido depois de ler todo o resto. */
     const ehEtapa1 = ativa && c.status === 'solicitada';
+    const ehEtapa2 = ativa && c.status === 'informacoes';
 
     // Carregar comentários
     let comentarios = [];
@@ -28889,7 +28893,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         </div>
         <div class="cad-modal-body">
           <input type="hidden" id="negId" value="${c.id}">
-          ${ehEtapa1 ? _cabecalhoEtapa1(c) : (() => {
+          ${ehEtapa1 ? _cabecalhoEtapa1(c) : ehEtapa2 ? _corpoEtapa2(c) : (() => {
             const et = etapaInfo(c.status);
             const todos = _itensChecklistDeal(c);
             if (!todos.length) return _htmlLinksNegocio(c, []);
@@ -29266,6 +29270,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   function _itensChecklistDeal(c) {
     const et = etapaInfo(c.status);
     if (!et) return [];
+    // Etapa 2 tem lista própria (ver _itensEtapa2): o que falta para cotar ESTE negócio.
+    if (c.status === 'informacoes') return _itensEtapa2(c);
     const org = _origemNorm(c);
     const padrao = (et.checklist || []).map((t, i) => { const n = _normItem(t); return { key: c.status + '|p' + i, texto: n.txt, resp: n.resp, auto: n.auto, origens: n.origens, tipo: 'p', extra: false }; });
     const extras = (((CHECKLIST_EXTRA[c.produtoId] || {})[c.status]) || []).map((t, i) => { const n = _normItem(t); return { key: c.status + '|e' + i, texto: n.txt, resp: n.resp, auto: '', origens: [], tipo: 'e', extra: true }; });
@@ -29294,6 +29300,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Itens que contam para "etapa completa": aplicáveis e que não sejam documentos (documento pode não existir)
   function _etapaCompletaDeal(c) {
     const itens = _itensChecklistDeal(c).filter(it => it.aplica && it.tipo !== 'd');
+    // (na etapa 2 todos os itens são do tipo 'r' — a lista inteira conta)
     const feito = c.checklistFeito || {};
     return itens.length > 0 && itens.every(it => feito[it.key]);
   }
@@ -29367,6 +29374,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       try { await db.collection('mb_acoes').doc('fim_' + cotacaoId + '_' + c.status).delete(); _ACOES_CACHE = null; } catch (e) {}
     }
     const modalAberto = ((document.getElementById('negId') || {}).value === cotacaoId);
+    /* ETAPA 2 AVANÇA SOZINHA (Patrick, 14/out): o compromisso já foi dado na
+       etapa 1, e segurar a coleta esperando o corretor validar só atrasava quem
+       já tinha feito o trabalho. Vale para quem marcar — gerente, assistente ou
+       corretor. As outras etapas seguem com a validação de sempre. */
+    if (etapaCompleta && c.status === 'informacoes') {
+      flashSalvo('Tudo recebido! Indo para Cotando...');
+      setTimeout(() => { try { voltarEtapaCotacao(c, 'cotando', 'Coleta concluída'); } catch (e) {} }, 500);
+      return;
+    }
     if (etapaCompleta) {
       if (viaAuto || !ehCorretorReal()) {
         try {
@@ -29429,6 +29445,55 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       }, true);
     } catch (e) { console.warn('docs completos', e); return false; }
   }
+
+
+  /* QUESTIONÁRIO RESPONDIDO NA ETAPA 2 → VAI DIRETO PARA COTANDO.
+     Pelo questionário o cliente manda tudo de uma vez, anexos inclusive: não faz
+     sentido continuar cobrando item por item. Quem gerou o link leva o ponto,
+     como levaria se tivesse marcado os itens na mão. Id determinístico
+     `qst_<cotacaoId>`: rodar a varredura de novo não paga duas vezes. */
+  async function _autoQuestionarioEtapa2() {
+    try {
+      const alvo = (COTACOES || []).filter(c => c.status === 'informacoes' && !c.questionarioOk);
+      if (!alvo.length) return 0;
+      const snap = await db.collection('mb_apresentacoes').where('questionarioCompleto', '==', true).get();
+      const aps = []; snap.forEach(d => aps.push({ id: d.id, ...d.data() }));
+      if (!aps.length) return 0;
+      let n = 0;
+      for (const c of alvo) {
+        const nCot = _covNorm(c.produtoId);
+        const criado = _toDate(c.criadoEm) || _toDate(c.dataSolicitacao) || null;
+        const limite = criado ? (criado.getTime() - 7 * 86400000) : 0;
+        const ap = aps.find(a => a.empresaId === c.empresaId && _covNorm(a.produtoId) === nCot
+          && ((_toDate(a.atualizadoEm) || _toDate(a.criadoEm) || new Date(0)).getTime() >= limite));
+        if (!ap) continue;
+        const quemUid = ap.geradoPorUid || c.solicitadoPorUid || null;
+        const quemNome = ap.geradoPorNome || c.solicitadoPorNome || '—';
+        try {
+          await db.collection('mb_cotacoes').doc(c.id).set({
+            questionarioOk: { apresentacaoId: ap.id, porUid: quemUid, porNome: quemNome, em: new Date().toISOString() }
+          }, { merge: true });
+          c.questionarioOk = { apresentacaoId: ap.id, porNome: quemNome, em: new Date().toISOString() };
+          const pts = getPonto('checklist_item');
+          if (pts > 0 && quemUid) {
+            await db.collection('mb_acoes').doc('qst_' + c.id).set({
+              tipo: 'checklist_item', empresaId: c.empresaId, empresaNome: c.empresaNome,
+              produto: c.produtoId, produtoNome: c.produtoNome,
+              agenciaId: c.agenciaId || CTX.agenciaId || null, cotacaoId: c.id,
+              usuarioId: quemUid, usuarioNome: quemNome, usuarioPerfil: null,
+              pontos: pts, motivo: 'O cliente respondeu o questionário online',
+              criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            _ACOES_CACHE = null;
+          }
+          await voltarEtapaCotacao(c, 'cotando', 'Cliente respondeu o questionário');
+          n++;
+        } catch (e) { console.warn('qst etapa2', e); }
+      }
+      return n;
+    } catch (e) { console.warn('auto questionário etapa 2', e); return 0; }
+  }
+  window._autoQuestionarioEtapa2 = _autoQuestionarioEtapa2;
 
   // "Questionário respondido" em lote: uma consulta (questionários concluídos) casada com as negociações ativas
   async function _autoQuestionarioLote() {
@@ -29543,7 +29608,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     const venc = (c.vencimentoRef && _mesExtenso(c.vencimentoRef)) || (c.vencimentoRef && typeof c.vencimentoRef === 'string' ? c.vencimentoRef : null) || 'breve';
     const vars = { '{empresa}': c.empresaNome || 'sua empresa', '{produto}': c.produtoNome || 'seguro', '{vencimento}': venc, '{gerente}': (c.solicitadoPorNome || autorNome() || '').trim(), '{link}': url || '' };
     const sub = s => String(s || '').replace(/\{empresa\}|\{produto\}|\{vencimento\}|\{gerente\}|\{link\}/g, m => vars[m]);
-    const docs = pd.docs.filter(d => !d.origens.length || d.origens.includes(org));
+    /* O e-mail lista o que o corretor montou PARA ESTE NEGÓCIO (etapa 2). Sem
+       lista montada, cai nos documentos padrão do produto, como antes. */
+    const docs = (c.status === 'informacoes')
+      ? _itensEtapa2(c).map(it => ({ label: it.texto }))
+      : pd.docs.filter(d => !d.origens.length || d.origens.includes(org));
     const partes = [sub(pd.abertura[org] || pd.abertura.mapeamento)];
     if (docs.length) partes.push(sub(pd.texto) + '\n' + docs.map(d => '• ' + d.label).join('\n'));
     if (url) partes.push('Caso prefira fazer tudo online, é só responder o questionário neste link (leva poucos minutos e os anexos vão por lá mesmo):\n' + url);
@@ -29658,6 +29727,262 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     </div>`;
   }
 
+
+
+  /* ═══════════ ETAPA 2 — A LISTA DO QUE FALTA PARA COTAR ═══════════
+     Na etapa 1 as pessoas se comprometeram. Aqui o trabalho é um só: juntar o
+     que a seguradora vai pedir. Então a etapa deixou de ser um checklist fixo do
+     produto e virou a LISTA DESTA NEGOCIAÇÃO — montada pelo corretor, que é quem
+     sabe o que falta para cotar este caso.
+
+     A lista nasce com os documentos que o produto já tem configurados (Config →
+     Pedido de dados), porque jogar fora esse cadastro seria desperdício; o
+     corretor tira o que não precisa e acrescenta o que é específico.
+
+     Cada item tem duas formas de ser cumprido: alguém marca, ou alguém anexa o
+     arquivo — e anexar marca sozinho. Completou todos, a negociação avança sem
+     passar por validação (o firme já foi dado na etapa 1). Se o cliente responder
+     o questionário online, avança na hora: ali veio tudo de uma vez.
+     (Patrick, 14/out) */
+
+  function _slugItem(t) {
+    return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || ('i' + Date.now().toString(36));
+  }
+
+  /* A lista desta negociação. Se o corretor já montou, é a dele. Se não, deriva
+     dos padrões do produto — com as MESMAS chaves de sempre, para que o que já
+     foi marcado (e pontuado) continue valendo. */
+  function _itensEtapa2(c) {
+    if (Array.isArray(c.itensCotar) && c.itensCotar.length) {
+      return c.itensCotar.map(it => ({
+        key: it.key, texto: it.label, resp: 'todos', auto: '', origens: [],
+        tipo: 'r', extra: false, aplica: true, naoAplicaMotivo: '', fonte: it.fonte || 'manual'
+      }));
+    }
+    const org = _origemNorm(c);
+    const out = [];
+    const et = etapaInfo(c.status);
+    (et && et.checklist || []).forEach((t, i) => {
+      const n = _normItem(t);
+      if (n.auto) return;                                   // evento não é requisito
+      if (n.origens && n.origens.length && !n.origens.includes(org)) return;
+      out.push({ key: c.status + '|p' + i, texto: n.txt, resp: 'todos', auto: '', origens: [], tipo: 'r', extra: false, aplica: true, naoAplicaMotivo: '', fonte: 'padrao' });
+    });
+    try {
+      const pd = _pedidoDadosDoProduto(c.produtoId);
+      if (pd && (pd.etapaDocs || 'informacoes') === c.status) {
+        pd.docs.forEach(d => {
+          if (d.origens && d.origens.length && !d.origens.includes(org)) return;
+          out.push({ key: c.status + '|d' + d.id, texto: d.label, resp: 'todos', auto: '', origens: [], tipo: 'r', extra: false, aplica: true, naoAplicaMotivo: '', fonte: 'doc' });
+        });
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  function _anexosDoItem(c, key) {
+    const m = c.anexosItem || {};
+    return Array.isArray(m[key]) ? m[key].filter(a => a && a.url) : [];
+  }
+
+
+  /* O corpo da etapa 2: a lista, os anexos e os dois caminhos de cobrança. */
+  function _corpoEtapa2(c) {
+    const itens = _itensEtapa2(c);
+    const feito = c.checklistFeito || {};
+    const nOk = itens.filter(it => feito[it.key]).length;
+    const prod = _apresDoProduto(c.produtoId);
+    const temQuest = !!(prod && prod.arqQ);
+    const pd = c.pedidoDados || null;
+    const diasPd = pd && pd.ultimoEm ? Math.floor((Date.now() - new Date(pd.ultimoEm).getTime()) / 86400000) : null;
+    const podeMarcar = ehStatusAtivo(c.status) && perfilEfetivo() !== 'seguradora';
+    const souCorretor = ehCorretorReal();
+
+    const linha = it => {
+      const marc = feito[it.key];
+      const anx = _anexosDoItem(c, it.key);
+      const sid = _slugItem(it.key);
+      return `<div style="padding:8px 0; border-bottom:1px solid #f1f5f9;">
+        <div style="display:flex; align-items:center; gap:9px;">
+          <input type="checkbox" ${marc ? 'checked' : ''} ${podeMarcar ? '' : 'disabled'} onchange="toggleChecklist('${c.id}','${it.key}', this.checked)">
+          <span style="flex:1; font-size:13px; color:#0f172a; ${marc ? 'text-decoration:line-through; opacity:.55;' : ''}">${it.texto}</span>
+          ${marc ? `<span style="font-size:10px; color:#94a3b8; white-space:nowrap;">✓ ${marc.porNome || ''}</span>` : ''}
+          ${podeMarcar ? `<button class="btn-mini" style="background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; white-space:nowrap;" onclick="document.getElementById('fi-${sid}').click()">📎 anexar</button>
+          <input type="file" id="fi-${sid}" multiple style="display:none;" accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx,.csv" onchange="anexoItemSel('${c.id}','${it.key}', this)">` : ''}
+        </div>
+        <div id="anxItem-${sid}" style="margin-left:26px; display:flex; gap:6px; flex-wrap:wrap; margin-top:${anx.length ? '5' : '0'}px;">
+          ${anx.map(a => `<a href="${a.url}" target="_blank" rel="noopener" style="font-size:11px; font-weight:700; color:#3730a3; background:#eef2ff; border:1px solid #c7d2fe; border-radius:7px; padding:2px 8px; text-decoration:none;">📄 ${String(a.nome).replace(/</g, '&lt;')}</a>`).join('')}
+        </div>
+      </div>`;
+    };
+
+    return `
+      <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:11px; padding:12px 14px; margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
+          <div style="font-size:12.5px; font-weight:800; color:#92400e;">📝 O que falta para cotar <span style="color:#b45309;">${nOk}/${itens.length}</span></div>
+          ${souCorretor ? `<button class="btn-mini" style="background:#fff; color:#92400e; border:1px solid #fcd34d; font-weight:700;" onclick="abrirMontarLista('${c.id}')">✏️ Montar a lista</button>` : ''}
+        </div>
+        <div style="font-size:11px; color:#a16207; margin-bottom:6px;">Marque, ou anexe o arquivo — anexar já marca. Quando tudo estiver aqui, a negociação vai para Cotando sozinha.</div>
+        ${itens.length ? itens.map(linha).join('') : `<div style="font-size:12.5px; color:#a16207; padding:10px 0;">A lista ainda está vazia.${souCorretor ? ' Clique em <strong>Montar a lista</strong> e diga o que você precisa receber.' : ' O corretor vai montar o que precisamos receber.'}</div>`}
+      </div>
+
+      <div style="background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:10px 13px; margin-bottom:14px;">
+        <div style="font-size:12px; font-weight:800; color:#3730a3; margin-bottom:7px;">📨 Pedir ao cliente</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn-primary" style="flex:1; min-width:150px;" onclick="abrirPedidoDados('${c.id}')">✉️ ${pd && pd.vezes ? 'Cobrar de novo' : 'Gerar o e-mail'}</button>
+          ${temQuest ? `<button class="btn-secondary" style="flex:1; min-width:150px; background:#fff;" onclick="abrirPedidoDados('${c.id}')">📋 Link do questionário</button>` : ''}
+        </div>
+        <div style="font-size:11px; color:#4338ca; margin-top:7px; line-height:1.6;">
+          ${pd && pd.vezes
+            ? `Enviado ${pd.vezes}x · último há <strong>${diasPd}d</strong> (${pd.ultimoPorNome || pd.porNome || ''})${c.questionarioOk ? ' · 📋 questionário respondido ✓' : (temQuest ? ' · aguardando o questionário' : '')}`
+            : `O e-mail sai pronto com os ${itens.length} item(ns) da lista${temQuest ? ' e o link do questionário' : ''} — é só copiar e colar.`}
+        </div>
+      </div>`;
+  }
+
+  /* ───────── montar a lista do que falta ───────── */
+  function abrirMontarLista(cotId) {
+    const c = (COTACOES || []).find(x => x.id === cotId); if (!c) return;
+    if (!ehCorretorReal()) return alert('Quem monta a lista do que falta para cotar é o corretor.');
+    const atuais = _itensEtapa2(c);
+    const feito = c.checklistFeito || {};
+    const old = document.getElementById('modalListaCotar'); if (old) old.remove();
+    const m = document.createElement('div');
+    m.className = 'cad-modal open'; m.id = 'modalListaCotar';
+    const linha = (it, i) => `<div class="lc-item" data-key="${it.key}" data-fonte="${it.fonte || 'manual'}" style="display:flex; gap:9px; align-items:center; padding:7px 0; border-bottom:1px solid #f1f5f9;">
+      <input type="text" class="form-control lc-txt" value="${String(it.texto).replace(/"/g, '&quot;')}" style="flex:1; font-size:13px;">
+      ${feito[it.key] ? '<span style="font-size:10px; font-weight:800; color:#15803d; white-space:nowrap;">✓ já recebido</span>' : ''}
+      <button class="btn-mini" style="color:#dc2626; border:1px solid #fecaca; background:#fef2f2;" onclick="this.closest('.lc-item').remove()" title="Tirar da lista">✕</button>
+    </div>`;
+    m.innerHTML = `
+      <div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>
+      <div class="cad-modal-panel" style="max-width:580px;">
+        <div class="cad-modal-head">
+          <h2>📝 O que falta para cotar</h2>
+          <p>${c.empresaNome} · ${c.produtoNome} — escreva aqui exatamente o que você precisa receber. É esta lista que vira o e-mail e o checklist.</p>
+        </div>
+        <div class="cad-modal-body">
+          <input type="hidden" id="lcCotId" value="${c.id}">
+          <div id="lcLista">${atuais.map(linha).join('')}</div>
+          <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+            <button class="btn-secondary" style="flex:1; min-width:150px;" onclick="lcAdicionar()">+ Adicionar item</button>
+            <button class="btn-secondary" style="flex:1; min-width:150px;" onclick="lcSugeridos('${c.id}')">↺ Trazer os do produto</button>
+          </div>
+          <div style="margin-top:12px; padding:10px 13px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; font-size:11.5px; color:#64748b; line-height:1.55;">
+            Item que já foi recebido não some ao editar o texto — a marcação fica.
+            Tirar um item da lista <strong>não apaga</strong> o ponto de quem já tinha marcado.
+          </div>
+        </div>
+        <div class="cad-modal-foot">
+          <button class="btn-secondary" onclick="document.getElementById('modalListaCotar').remove()">Cancelar</button>
+          <button class="btn-primary" onclick="salvarListaCotar()">Salvar lista</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+  }
+  window.abrirMontarLista = abrirMontarLista;
+
+  function lcAdicionar(texto) {
+    const box = document.getElementById('lcLista'); if (!box) return;
+    const d = document.createElement('div');
+    d.className = 'lc-item'; d.setAttribute('data-key', ''); d.setAttribute('data-fonte', 'manual');
+    d.style.cssText = 'display:flex; gap:9px; align-items:center; padding:7px 0; border-bottom:1px solid #f1f5f9;';
+    d.innerHTML = `<input type="text" class="form-control lc-txt" placeholder="Ex: Relação de veículos com placa e ano" style="flex:1; font-size:13px;" value="${String(texto || '').replace(/"/g, '&quot;')}">
+      <button class="btn-mini" style="color:#dc2626; border:1px solid #fecaca; background:#fef2f2;" onclick="this.closest('.lc-item').remove()">✕</button>`;
+    box.appendChild(d);
+    if (!texto) { const i = d.querySelector('.lc-txt'); if (i) i.focus(); }
+  }
+  window.lcAdicionar = lcAdicionar;
+
+  /* Traz os documentos que o produto já tem configurados, sem duplicar o que
+     já está na tela. É o atalho para quem limpou a lista e quer começar do padrão. */
+  function lcSugeridos(cotId) {
+    const c = (COTACOES || []).find(x => x.id === cotId); if (!c) return;
+    const box = document.getElementById('lcLista'); if (!box) return;
+    const tem = new Set([...box.querySelectorAll('.lc-txt')].map(i => _slugItem(i.value)));
+    let n = 0;
+    try {
+      const pd = _pedidoDadosDoProduto(c.produtoId);
+      const org = _origemNorm(c);
+      (pd.docs || []).forEach(d => {
+        if (d.origens && d.origens.length && !d.origens.includes(org)) return;
+        if (tem.has(_slugItem(d.label))) return;
+        lcAdicionar(d.label); n++;
+      });
+    } catch (e) {}
+    flashSalvo(n ? n + ' item(ns) do produto adicionados' : 'Os itens do produto já estão na lista');
+  }
+  window.lcSugeridos = lcSugeridos;
+
+  async function salvarListaCotar() {
+    const id = (document.getElementById('lcCotId') || {}).value;
+    const c = (COTACOES || []).find(x => x.id === id); if (!c) return;
+    const itens = [];
+    const vistos = new Set();
+    document.querySelectorAll('#lcLista .lc-item').forEach(el => {
+      const txt = ((el.querySelector('.lc-txt') || {}).value || '').trim();
+      if (!txt) return;
+      /* Chave: a antiga quando o item já existia (preserva a marcação e o ponto),
+         senão uma nova derivada do texto. Dois itens com o mesmo texto viram um. */
+      let key = el.getAttribute('data-key') || '';
+      if (!key) key = 'informacoes|r' + _slugItem(txt);
+      if (vistos.has(key)) return;
+      vistos.add(key);
+      itens.push({ key, label: txt, fonte: el.getAttribute('data-fonte') || 'manual' });
+    });
+    if (!itens.length) return alert('A lista precisa de pelo menos um item.');
+    try {
+      await db.collection('mb_cotacoes').doc(id).set({
+        itensCotar: itens,
+        itensCotarPorNome: autorNome(),
+        itensCotarEm: new Date().toISOString()
+      }, { merge: true });
+      c.itensCotar = itens; c.itensCotarPorNome = autorNome(); c.itensCotarEm = new Date().toISOString();
+      const m = document.getElementById('modalListaCotar'); if (m) m.remove();
+      flashSalvo('Lista salva — ' + itens.length + ' item(ns).');
+      if ((document.getElementById('negId') || {}).value === id) abrirNegociacao(id);
+      try { renderKanban(); } catch (e) {}
+    } catch (e) { alert('Não consegui salvar: ' + e.message); }
+  }
+  window.salvarListaCotar = salvarListaCotar;
+
+  /* ───────── anexar o arquivo de um item (e marcar o item) ───────── */
+  const _ANEXO_TIPOS = /\.(pdf|doc|docx|xls|xlsx|png|jpe?g|heic|webp|csv|txt)$/i;
+  async function anexoItemSel(cotId, key, input) {
+    const files = [...(input.files || [])]; input.value = '';
+    if (!files.length) return;
+    const c = (COTACOES || []).find(x => x.id === cotId); if (!c) return;
+    const box = document.getElementById('anxItem-' + _slugItem(key));
+    const aviso = t => { if (box) box.insertAdjacentHTML('beforeend', `<div style="font-size:11px; color:#64748b;">${t}</div>`); };
+    const novos = [];
+    for (const f of files) {
+      if (f.size > 15 * 1024 * 1024) { aviso('⚠ "' + f.name + '" passa de 15 MB'); continue; }
+      if (!(f.type || _ANEXO_TIPOS.test(f.name || ''))) { aviso('⚠ "' + f.name + '" não é um tipo aceito'); continue; }
+      aviso('⏳ enviando ' + f.name + '…');
+      try {
+        const caminho = 'mb_cotacoes/' + cotId + '/' + _slugItem(key) + '/' + Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9_.\-]/g, '_');
+        const snap = await firebase.storage().ref(caminho).put(f);
+        const url = await snap.ref.getDownloadURL();
+        novos.push({ nome: f.name, url, caminho, tamanho: f.size, em: new Date().toISOString(), porUid: autorUid(), porNome: autorNome() });
+      } catch (e) { console.warn('anexo item', e); aviso('⚠ "' + f.name + '" não subiu — tente de novo'); }
+    }
+    if (!novos.length) return;
+    const mapa = Object.assign({}, c.anexosItem || {});
+    mapa[key] = (mapa[key] || []).concat(novos);
+    try {
+      await db.collection('mb_cotacoes').doc(cotId).set({ anexosItem: mapa }, { merge: true });
+      c.anexosItem = mapa;
+    } catch (e) { console.warn(e); }
+    /* Anexar É cumprir: o item é marcado por quem anexou, e é ele quem pontua —
+       o mesmo caminho de quando alguém marca na mão. */
+    if (!(c.checklistFeito || {})[key]) {
+      try { await toggleChecklist(cotId, key, true); } catch (e) {}
+    } else if ((document.getElementById('negId') || {}).value === cotId) {
+      abrirNegociacao(cotId);
+    }
+  }
+  window.anexoItemSel = anexoItemSel;
 
   /* ═══════════ ETAPA 1 — O CARD DA ENTRADA ═══════════
      A etapa 1 não é lugar de tarefa: é lugar de DECIDIR se vale a pena.
