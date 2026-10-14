@@ -5293,6 +5293,12 @@
     funil_iniciar_fim:         2,   // ...caindo linearmente até isso no último dia
     checklist_item:            1,   // cada item de checklist concluído (em QUALQUER etapa)
     checklist_ultimo_etapa:    3,   // quem marca o último item que completa a etapa
+    /* A etapa 1 perdeu o checklist (14/out). Ela pagava 1 pt por item + 3 de fecho
+       — 5 no caso mais comum (mapeamento/oportunidade com apresentação online),
+       6 sem apresentação, 4 em OP/renovação. A avaliação herda esse valor.
+       Só paga nos graus que fazem o negócio ANDAR: "sem chances" já tem os pontos
+       de declínio, e pagar os dois faria do declínio o jeito mais rápido de pontuar. */
+    avaliacao_etapa1:          5,   // avaliou a chance e passou para a etapa 2
     percurso_completo_item:    1,   // extra por item marcado, quando o negócio passa por todas as etapas
 
     // --- Desfecho ---
@@ -5336,6 +5342,7 @@
     { grupo: 'Funil', chave: 'funil_iniciar_fim',      label: '🚀 Colocar no funil · fim da campanha',    desc: 'Quanto vale no último dia — cai linearmente entre os dois' },
     { grupo: 'Funil', chave: 'checklist_item',         label: '✅ Item de checklist concluído',            desc: 'Em qualquer etapa, inclusive na transmissão (assinatura, documento, boleto)' },
     { grupo: 'Funil', chave: 'checklist_ultimo_etapa', label: '🏅 Último item que completa a etapa',       desc: 'Extra pra quem fecha a etapa' },
+    { grupo: 'Funil', chave: 'avaliacao_etapa1',       label: '🎯 Avaliou a chance (etapa 1 → 2)',          desc: 'Substituiu o checklist da etapa 1. Só paga nos graus que fazem o negócio andar — "sem chances" tem os pontos de declínio' },
     { grupo: 'Funil', chave: 'percurso_completo_item', label: '🔁 Bônus percurso completo',                desc: 'Extra por item marcado, quando o negócio passa por todas as etapas' },
 
     { grupo: 'Desfecho', chave: 'ok_transmissao',           label: '🏁 OK para transmissão',            desc: 'O gol do time — a última etapa antes de emitir. Emitir em si não pontua: é consequência' },
@@ -8241,7 +8248,6 @@
               <div class="qc-data">Vence em <strong>${mesNome}/${q.ano}</strong> · ${diasTxt}</div>
               ${extras.length ? `<div class="qc-data" style="color:#94a3b8;">${extras.join(' · ')}</div>` : ''}
               ${_seg ? '' : `<div class="qc-actions">
-                <button class="qc-btn" onclick="event.stopPropagation(); iniciarTratativa('${q.empresaId}','${q.produto}','renovacao')">Iniciar Tratativa</button>
                 <button class="qc-btn outline" onclick="event.stopPropagation(); abrirRaioX('${q.empresaId}')">Ver Empresa</button>
               </div>`}
             </div>
@@ -12932,6 +12938,7 @@
     visita_registrada: { icon: '🖊', txt: 'Registrou a visita de um colega' },
     visita_estorno: { icon: '🗑️', txt: 'Visita excluída' },
     checklist_ultimo_etapa: { icon: '🏅', txt: 'Fechou a etapa' },
+    avaliacao_etapa1: { icon: '🎯', txt: 'Avaliou a chance e passou para a etapa 2' },
     declinio_com_agendamento: { icon: '📆', txt: 'Declínio com agendamento' },
     percurso_completo: { icon: '🔁', txt: 'Percurso completo até a transmissão' },
     ok_transmissao: { icon: '🏁', txt: 'OK para transmissão' },
@@ -13150,6 +13157,16 @@
       assumirOportunidade._ult = { k: _kAss, t: Date.now() };
 
       const ref = await db.collection('mb_cotacoes').add(cot);
+
+      /* Marca o produto como "cotando" no raio-x — o mesmo que o criarCotacao faz
+         nos outros caminhos de entrada. Sem isto, o mesmo negócio criado por dois
+         botões diferentes deixava o raio-x em estados diferentes. (Patrick, 14/out) */
+      try {
+        await db.collection('empresas').doc(empresaId).collection('mb_produtos').doc(produtoId).set({
+          statusVisual: 'cotando',
+          ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      } catch (eM) { console.warn('mapear ao assumir', eM); }
 
       // pontua quem assumiu, com peso temporal (assumir cedo vale mais)
       await db.collection('mb_acoes').add({
@@ -15231,6 +15248,7 @@
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
+            ${c.status === 'solicitada' ? `<div style="font-size:10px; color:#64748b; margin-top:3px; line-height:1.4;">${_fraseOrigemDeal(c).split('.')[0]}</div>` : ''}
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${c.apoliceApelido ? ` <span style="font-size:9px; color:#6d28d9; background:#f5f3ff; border:1px solid #ddd6fe; padding:1px 6px; border-radius:100px; font-weight:700;">🏷 ${c.apoliceApelido}</span>` : ''}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
             ${pedidoTxt}
@@ -17082,6 +17100,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       case 'reuniao_agendada':
       case 'analise_cliente':       return 0;
       case 'checklist_item':        return getPonto('checklist_item');
+      case 'avaliacao_etapa1':      return getPonto('avaliacao_etapa1');
 
       // --- Desfecho ---
       case 'transmitida':
@@ -27901,7 +27920,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     op:           { label: 'OP',  emoji: '🏦', cor: '#4f46e5' },
     op_bancaria:  { label: 'OP',  emoji: '🏦', cor: '#4f46e5' }, // legado: cotações antigas
     renovacao:    { label: 'Renovação',    emoji: '🔁', cor: '#0ea5e9' },
-    oportunidade: { label: 'Quente', emoji: '🔥', cor: '#ea580c' }   // iniciada pelo menu Oportunidades quentes
+    oportunidade: { label: 'Quente', emoji: '🔥', cor: '#ea580c' },  // iniciada pelo menu Oportunidades quentes
+    assumida_campanha: { label: 'Assumida', emoji: '🙋', cor: '#ea580c' }  // botão "Assumir" da campanha
   };
 
   async function solicitarCotacaoDoMapeamento() {
@@ -27965,6 +27985,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       if (opts.apoliceRef) cot.apoliceRef = opts.apoliceRef;
       if (opts.apoliceApelido) cot.apoliceApelido = opts.apoliceApelido;
       if (opts.clientePediuCotar) cot.clientePediuCotar = true;
+      if (opts.extra) Object.assign(cot, opts.extra);
       // histórico inicial (entrada no funil)
       cot.historico = [{ status: 'solicitada', label: 'Iniciada · ' + (ORIGEM_INFO[origem] || {}).label, obs: opts.observacoes || null, por: creditoNome || null, em: new Date().toISOString() }];
 
@@ -28317,7 +28338,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                 </div>
                 ${r.noFunil
                   ? `<span class="btn-mini" style="background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; font-weight:700; cursor:default;">✓ no funil</span>`
-                  : `<button class="btn-mini" style="background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; font-weight:700;" onclick="iniciarTratativa('${r.empresaId}','${r.ramoId}','renovacao')">Iniciar renovação →</button>`}
+                  : `<span class="btn-mini" style="background:#f8fafc; color:#64748b; border:1px solid #e2e8f0; font-weight:600; cursor:default;" title="A renovação entra sozinha no funil 45 dias antes do vencimento">⏳ entra sozinha</span>`}
               </div>`;
           }).join('');
           return `
@@ -28400,6 +28421,53 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
   // Renovações automáticas: 45 dias antes do vencimento de um seguro mapeado,
   // cria a negociação já na 1ª etapa do funil ("Iniciada"), com as infos da visita.
   // Se o gerente já antecipou e colocou no funil, a rotina NÃO duplica (checa cotação ativa).
+
+  /* ═══ O CLIENTE PEDIU COTAÇÃO NA APRESENTAÇÃO → ENTRA NO FUNIL ═══
+     Até aqui esse pedido morria numa lista: alguém tinha que ver a tela de
+     Apresentações e criar a negociação à mão. Quem não via, perdia. Agora a
+     negociação nasce na etapa 1 com a origem certa, e quem enviou a apresentação
+     leva o ponto de ter trazido o negócio — do mesmo jeito que levaria se tivesse
+     criado pelo botão. (Patrick, 14/out)
+     Roda uma vez por sessão, junto das renovações automáticas. A marca
+     `_funilCriado` no doc da apresentação impede repetir. */
+  let APRES_FUNIL_RAN = false;
+  async function verificarCotacoesDaApresentacao() {
+    if (!CTX || !CTX.agenciaId) return 0;
+    let criadas = 0;
+    let itens = [];
+    try {
+      const snap = await db.collection('mb_apresentacoes').get();
+      snap.forEach(d => itens.push({ id: d.id, ...d.data() }));
+    } catch (e) { console.warn('apres funil', e); return 0; }
+    for (const a of itens) {
+      if (a._funilCriado) continue;
+      if (!a.empresaId || !a.produtoId) continue;
+      if (CTX.agenciaId && a.agenciaId && a.agenciaId !== CTX.agenciaId) continue;
+      const pediu = a.ultimoInteresse === 'cotar' || (a.interesse || []).some(i => i && i.tipo === 'cotar');
+      if (!pediu) continue;
+      const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === a.empresaId);
+      const r = (PRODUTOS || []).find(x => x.id === a.produtoId);
+      if (!e || !r) continue;
+      if (_temCotacaoAtiva(a.empresaId, a.produtoId)) {
+        try { await db.collection('mb_apresentacoes').doc(a.id).set({ _funilCriado: true }, { merge: true }); } catch (e2) {}
+        continue;
+      }
+      const _cred = a.geradoPorUid ? { uid: a.geradoPorUid, nome: a.geradoPorNome || '—', perfil: a.geradoPorPerfil || null } : null;
+      try {
+        const id = await criarCotacao(e, r, {
+          origem: 'oportunidade', silent: true, clientePediuCotar: true,
+          credito: _cred || undefined,
+          observacoes: 'O cliente pediu esta cotação depois de ver a apresentação' + (a.questionarioCompleto ? ' e respondeu o questionário' : '') + '.',
+          extra: { viaApresentacao: true, questionarioApresentacaoId: a.id }
+        });
+        if (id) criadas++;
+        await db.collection('mb_apresentacoes').doc(a.id).set({ _funilCriado: true }, { merge: true });
+      } catch (e3) { console.warn('criar do apres', e3); }
+    }
+    return criadas;
+  }
+  window.verificarCotacoesDaApresentacao = verificarCotacoesDaApresentacao;
+
   let RENOVACOES_AUTO_RAN = false;
   async function verificarRenovacoesAutomaticas() {
     if (!CTX || !CTX.agenciaId) return 0;
@@ -28523,6 +28591,15 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
         const criadas = await verificarRenovacoesAutomaticas();
         if (criadas > 0) {
           flashSalvo(criadas + ' renovação(ões) entraram no funil automaticamente');
+          return carregarERenderCotacoes();
+        }
+      }
+      // Pedidos de cotação feitos pelo cliente na apresentação
+      if (!APRES_FUNIL_RAN && !_somenteLeituraSeg) {
+        APRES_FUNIL_RAN = true;
+        const nAp = await verificarCotacoesDaApresentacao();
+        if (nAp > 0) {
+          flashSalvo(nAp + ' cotação(ões) pedidas pelo cliente entraram no funil');
           return carregarERenderCotacoes();
         }
       }
@@ -28804,11 +28881,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       <div class="cad-modal-panel" style="max-width:560px;">
         <div class="cad-modal-head">
           <h2>${prod.icon || ''} ${c.produtoNome || prod.nome || 'Negociação'}</h2>
-          <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span>${ativa ? ` · <span style="opacity:.85;">⏱ ${diasNaEtapa(c)}d nesta etapa · 🗓 negociando há ${diasDeNegociacao(c)}d</span>` : ` · <span style="opacity:.85;">🗓 durou ${diasDeNegociacao(c)}d</span>`}</p>
+          <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span>${ativa ? ` · <span style="opacity:.85;">📅 entrou ${_dataEntradaDeal(c)} · ⏱ parado há ${diasNaEtapa(c)}d · 🗓 ${diasDeNegociacao(c)}d no funil</span>` : ` · <span style="opacity:.85;">🗓 durou ${diasDeNegociacao(c)}d</span>`}</p>
         </div>
         <div class="cad-modal-body">
           <input type="hidden" id="negId" value="${c.id}">
-          ${(() => {
+          ${(ativa && c.status === 'solicitada') ? _corpoEtapa1(c) : (() => {
             const et = etapaInfo(c.status);
             const todos = _itensChecklistDeal(c);
             if (!todos.length) return _htmlLinksNegocio(c, []);
@@ -28945,7 +29022,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
           ${_htmlParticipacao(c)}
 
-          ${ativa && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+          ${ativa && c.status !== 'solicitada' && perfilEfetivo() !== 'estagiario' && perfilEfetivo() !== 'assistente' ? `<div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
             <button class="btn-primary" style="flex:1; min-width:130px;" onclick="avancarEtapaNegociacao('${c.id}')">➡ Avançar etapa</button>
             ${c.status !== 'transmitida'
               ? `<button class="btn-secondary" style="background:#ecfeff; color:#155e75; border-color:#67e8f9;" onclick="pedirTransmissao('${c.id}')" title="Cliente deu o OK? A negociação vai para Em transmissão (o corretor confere e transmite).">📤 Transmitir</button>`
@@ -28953,21 +29030,21 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             <button class="btn-secondary" style="background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Não fechou</button>
           </div>` : ''}
 
-          ${ativa && !c.declinioPedido && (perfilEfetivo() === 'estagiario' || perfilEfetivo() === 'assistente') ? `
+          ${ativa && c.status !== 'solicitada' && !c.declinioPedido && (perfilEfetivo() === 'estagiario' || perfilEfetivo() === 'assistente') ? `
           <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
             <button class="btn-secondary" style="flex:1; min-width:150px; background:#fef2f2; color:#991b1b; border-color:#fecaca;" onclick="acaoNegociacao('${c.id}','perder')">✗ Pedir declínio</button>
           </div>
           <div style="font-size:11px; color:#94a3b8; margin:-8px 0 14px;">O corretor confirma antes de encerrar. Registrar o que o cliente disse conta pontos pra você.</div>` : ''}
 
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div style="display:grid; grid-template-columns:${(ativa && c.status === 'solicitada') ? '1fr' : '1fr 1fr'}; gap:10px;">
             <div class="form-group">
               <label class="form-label">${ehFechada ? 'Valor fechado (R$)' : 'Prêmio proposto (R$)'}</label>
               <input type="text" class="form-control" id="negValor" value="${(ehFechada ? c.valor : c.valorProposto) ? fmtBR(ehFechada ? c.valor : c.valorProposto) : ''}" placeholder="R$ 0,00" oninput="aplicarMascaraMoeda(this)" ${podeEditar ? '' : 'disabled'}>
             </div>
-            <div class="form-group">
+            ${(ativa && c.status === 'solicitada') ? '' : `<div class="form-group">
               <label class="form-label">Chance de fechamento</label>
               <select class="form-control" id="negChance" ${podeEditar && ativa ? '' : 'disabled'}>${chanceOpts}</select>
-            </div>
+            </div>`}
           </div>
           <div class="form-group">
             <label class="form-label">Observações da negociação</label>
@@ -29571,6 +29648,174 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       </div>
     </div>`;
   }
+
+
+  /* ═══════════ ETAPA 1 — O CARD DA ENTRADA ═══════════
+     A etapa 1 não é lugar de tarefa: é lugar de DECIDIR se vale a pena.
+     Quem abre precisa de quatro coisas num golpe de vista — que seguro, de que
+     empresa, desde quando, e como esse negócio chegou aqui — e de uma escolha só:
+     qual a chance de evoluir. Por isso saíram daqui o checklist, o pedido de
+     dados, o seletor de chance e os botões de transmitir/declinar: cada um deles
+     pedia uma decisão que não é desta etapa. (Patrick, 14/out) */
+
+  const GRAUS_ETAPA1 = {
+    sem:     { label: 'Sem chances de evoluir', emoji: '🚫', cor: '#b91c1c', bg: '#fef2f2', bd: '#fecaca',
+               msg: 'Vamos encerrar este negócio. Na próxima tela você registra o motivo — é ele que ensina a corretora a não repetir a tentativa.' },
+    tentar:  { label: 'Podemos tentar', emoji: '🤝', cor: '#b45309', bg: '#fffbeb', bd: '#fde68a', chance: 'media',
+               msg: 'Etapa avançada. Contamos com a sua ajuda para conseguir as informações e fazer esse negócio evoluir.' },
+    grandes: { label: 'Chances grandes', emoji: '🚀', cor: '#15803d', bg: '#f0fdf4', bd: '#bbf7d0', chance: 'alta',
+               msg: 'Vamos pra cima! A negociação avança e entra na frente na fila da corretora.' }
+  };
+
+  /* A frase de origem: "como esse negócio chegou aqui", montada com o que o
+     próprio documento já guarda. Era informação que existia e ninguém lia —
+     ficava escondida num selo de duas letras no canto do card. */
+  function _fraseOrigemDeal(c) {
+    const quem = c.solicitadoPorNome || c.registradoPorNome || null;
+    const perfilTxt = { rm: 'gerente', chefe: 'gerente-chefe', assistente: 'assistente', estagiario: 'estagiário', admin: 'corretor' };
+    const pf = perfilTxt[c.solicitadoPorPerfil] || null;
+    const porQuem = quem ? quem + (pf ? ' (' + pf + ')' : '') : null;
+    const venc = c.vencimentoRef ? (() => {
+      const [a, m] = String(c.vencimentoRef).split('-');
+      return m && a ? String(m).padStart(2, '0') + '/' + a : null;
+    })() : null;
+    const org = (c.origem || 'mapeamento');
+    if (org === 'renovacao') {
+      return '🔁 Renovação mapeada' + (c.apoliceApelido ? ' da apólice "' + c.apoliceApelido + '"' : '')
+        + (venc ? ' — vence ' + venc : '') + '. Entrou sozinha no funil, no prazo da renovação.';
+    }
+    if (org === 'op' || org === 'op_bancaria') {
+      return '🏦 OP registrada' + (porQuem ? ' por ' + porQuem : '') + '. Roda por fora do mapeamento de mercado do produto.';
+    }
+    if (org === 'assumida_campanha') {
+      return '🙋 Oportunidade quente assumida' + (porQuem ? ' por ' + porQuem : '') + ' na campanha.';
+    }
+    if (org === 'oportunidade') {
+      if (c.interesseViaLink) return '🔥 O próprio cliente pediu esta cotação, pelo link de mapeamento.';
+      if (c.viaApresentacao)  return '🔥 O próprio cliente pediu esta cotação, depois de ver a apresentação.';
+      return '🔥 Oportunidade quente' + (porQuem ? ' trabalhada por ' + porQuem : '') + '.';
+    }
+    return '🗺️ Cotação pedida' + (porQuem ? ' por ' + porQuem : '') + ', a partir do mapeamento da empresa.';
+  }
+
+  function _dataEntradaDeal(c) {
+    const d = _toDate(c.dataSolicitacao) || _toDate(c.criadoEm);
+    return d ? d.toLocaleDateString('pt-BR') : '—';
+  }
+
+  /* O corpo da etapa 1. Devolve o HTML que substitui o checklist + o bloco de links. */
+  function _corpoEtapa1(c) {
+    const aval = c.avaliacaoEtapa1 || null;
+    const temQuest = !!(c.questionarioApresentacaoId || c.viaApresentacao || c.interesseViaLink);
+    const g = (k) => {
+      const G = GRAUS_ETAPA1[k];
+      return `<button onclick="avaliarEtapa1('${c.id}','${k}')" id="grau-${k}"
+        style="flex:1; min-width:150px; background:${G.bg}; border:1.5px solid ${G.bd}; color:${G.cor};
+               border-radius:11px; padding:12px 10px; font-size:13px; font-weight:800; cursor:pointer; text-align:center;">
+        <div style="font-size:19px; line-height:1.2;">${G.emoji}</div>${G.label}</button>`;
+    };
+    return `
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px; margin-bottom:14px;">
+        <div style="font-size:12.5px; color:#334155; line-height:1.55;">${_fraseOrigemDeal(c)}</div>
+        ${c.observacoes ? `<div style="font-size:12px; color:#64748b; margin-top:7px; padding-top:7px; border-top:1px dashed #e2e8f0; white-space:pre-wrap;">“${String(c.observacoes).replace(/</g, '&lt;')}”</div>` : ''}
+        ${temQuest ? `<button class="btn-mini" style="margin-top:9px; background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; font-weight:700;" onclick="verRespostasDoCliente('${c.id}')">📋 Ver o que o cliente respondeu</button>` : ''}
+      </div>
+
+      ${aval ? `<div style="background:${(GRAUS_ETAPA1[aval.grau] || {}).bg || '#f8fafc'}; border:1px solid ${(GRAUS_ETAPA1[aval.grau] || {}).bd || '#e2e8f0'}; border-radius:11px; padding:11px 14px; margin-bottom:14px;">
+        <div style="font-size:12.5px; font-weight:800; color:${(GRAUS_ETAPA1[aval.grau] || {}).cor || '#334155'};">${(GRAUS_ETAPA1[aval.grau] || {}).emoji || ''} ${(GRAUS_ETAPA1[aval.grau] || {}).label || aval.grau}</div>
+        <div style="font-size:11.5px; color:#64748b; margin-top:2px;">avaliado por ${aval.porNome || '—'}${aval.em ? ' · ' + fmtDataCurta(aval.em) : ''}</div>
+      </div>` : `
+      <div style="border:1px solid #e2e8f0; border-radius:12px; padding:13px 14px; margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:800; color:#0f172a; margin-bottom:3px;">Qual a chance de este negócio evoluir?</div>
+        <div style="font-size:11.5px; color:#64748b; margin-bottom:11px;">É a única decisão desta etapa — e é ela que leva o negócio adiante.</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">${g('sem')}${g('tentar')}${g('grandes')}</div>
+        <div id="avalMsg"></div>
+      </div>`}`;
+  }
+
+  /* Escolheu um grau → mostra a mensagem e pede a confirmação. Duas etapas de
+     propósito: a primeira explica o que vai acontecer, a segunda é o ato. */
+  function avaliarEtapa1(id, grau) {
+    const G = GRAUS_ETAPA1[grau]; if (!G) return;
+    const box = document.getElementById('avalMsg'); if (!box) return;
+    ['sem', 'tentar', 'grandes'].forEach(k => {
+      const b = document.getElementById('grau-' + k);
+      if (b) b.style.opacity = (k === grau ? '1' : '.45');
+    });
+    box.innerHTML = `<div style="margin-top:12px; background:${G.bg}; border:1px solid ${G.bd}; border-radius:10px; padding:12px 14px;">
+      <div style="font-size:13px; color:${G.cor}; font-weight:700; line-height:1.55;">${G.emoji} ${G.msg}</div>
+      <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+        <button class="btn-primary" style="background:${G.cor};" onclick="confirmarAvaliacaoEtapa1('${id}','${grau}')">Podemos prosseguir</button>
+        <button class="btn-secondary" onclick="avaliarCancelar()">Voltar</button>
+      </div>
+    </div>`;
+  }
+  window.avaliarEtapa1 = avaliarEtapa1;
+  function avaliarCancelar() {
+    const box = document.getElementById('avalMsg'); if (box) box.innerHTML = '';
+    ['sem', 'tentar', 'grandes'].forEach(k => { const b = document.getElementById('grau-' + k); if (b) b.style.opacity = '1'; });
+  }
+  window.avaliarCancelar = avaliarCancelar;
+
+  async function confirmarAvaliacaoEtapa1(id, grau) {
+    const c = COTACOES.find(x => x.id === id); if (!c) return;
+    const G = GRAUS_ETAPA1[grau]; if (!G) return;
+    /* "Sem chances" cai no fluxo de declínio que já existe — com formulário de
+       motivo e, para quem não é corretor, virando PEDIDO de declínio. Os pontos
+       do declínio continuam sendo os de hoje; a avaliação não paga nada aqui. */
+    if (grau === 'sem') {
+      try {
+        await db.collection('mb_cotacoes').doc(id).set({
+          avaliacaoEtapa1: { grau: 'sem', porUid: autorUid(), porNome: autorNome(), em: new Date().toISOString() }
+        }, { merge: true });
+        c.avaliacaoEtapa1 = { grau: 'sem', porNome: autorNome(), em: new Date().toISOString() };
+      } catch (e) {}
+      acaoNegociacao(id, 'perder');
+      return;
+    }
+    const btn = document.querySelector('#avalMsg .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ ...'; }
+    try {
+      const registro = { grau, porUid: autorUid(), porNome: autorNome(), perfil: perfilEfetivo(), em: new Date().toISOString() };
+      await db.collection('mb_cotacoes').doc(id).set({
+        avaliacaoEtapa1: registro,
+        chanceFechamento: G.chance || c.chanceFechamento || 'media'
+      }, { merge: true });
+      c.avaliacaoEtapa1 = registro; c.chanceFechamento = G.chance;
+
+      /* O ponto que o checklist da etapa 1 pagava. ID determinístico: avaliar de
+         novo (ou dois aparelhos ao mesmo tempo) não paga duas vezes. */
+      const pts = getPonto('avaliacao_etapa1');
+      if (pts > 0) {
+        await db.collection('mb_acoes').doc('aval_' + id).set({
+          tipo: 'avaliacao_etapa1',
+          empresaId: c.empresaId, empresaNome: c.empresaNome,
+          produto: c.produtoId, produtoNome: c.produtoNome,
+          agenciaId: c.agenciaId || CTX.agenciaId || null, cotacaoId: id,
+          usuarioId: autorUid(), usuarioNome: autorNome(), usuarioPerfil: perfilEfetivo(),
+          pontos: pts, motivo: 'Avaliou a chance: ' + G.label,
+          criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        _ACOES_CACHE = null;
+      }
+      // bônus de velocidade da etapa que está sendo deixada (mesma regra do avanço normal)
+      try { await pagarBonusVelocidade(c, c.status); } catch (e) {}
+      const m = document.getElementById('modalNegociacao'); if (m) m.remove();
+      await voltarEtapaCotacao(c, 'informacoes', 'Avaliação: ' + G.label);
+    } catch (e) {
+      alert('Não consegui salvar agora: ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Podemos prosseguir'; }
+    }
+  }
+  window.confirmarAvaliacaoEtapa1 = confirmarAvaliacaoEtapa1;
+
+  /* O que o cliente respondeu: abre a apresentação/questionário de origem. */
+  function verRespostasDoCliente(id) {
+    const c = COTACOES.find(x => x.id === id); if (!c) return;
+    if (c.questionarioApresentacaoId) { navTo('apresentacoes'); return; }
+    abrirRaioX(c.empresaId);
+  }
+  window.verRespostasDoCliente = verRespostasDoCliente;
 
   // ---------- TEMPO REAL: o kanban acompanha as mudanças sem F5 ----------
   let _COT_UNSUB = null, _COT_LISTEN_PRIMEIRO = true;
