@@ -15248,6 +15248,7 @@
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirEditarFechado('${c.id}')" title="Editar informações do negócio" style="position:absolute; top:5px; right:31px; border:none; background:#eef2ff; color:#4338ca; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">✏️</button>` : ''}
             ${CTX.isAdmin && !ativa ? `<button onclick="event.stopPropagation(); abrirReabrirCotacao('${c.id}')" title="Reabrir / voltar para uma etapa" style="position:absolute; top:5px; right:57px; border:none; background:#fef9c3; color:#854d0e; width:22px; height:22px; border-radius:6px; cursor:pointer; font-size:12px; line-height:1; display:flex; align-items:center; justify-content:center; z-index:3;">↩</button>` : ''}
             <div class="kanban-card-empresa" style="padding-right:24px;">${c.empresaNome}</div>
+            ${_seloRenovacao(c, true) ? `<div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${_seloRenovacao(c, true)}</div>` : ''}
             ${c.status === 'solicitada' ? `<div style="font-size:10px; color:#64748b; margin-top:3px; line-height:1.4;">${_fraseOrigemDeal(c).split('.')[0]}</div>` : ''}
             <div class="kanban-card-produto">${c.produtoIcon || ''} ${c.produtoNome}${c.apoliceApelido ? ` <span style="font-size:9px; color:#6d28d9; background:#f5f3ff; border:1px solid #ddd6fe; padding:1px 6px; border-radius:100px; font-weight:700;">🏷 ${c.apoliceApelido}</span>` : ''}${oi ? ` <span style="font-size:9px; color:${oi.cor}; background:${oi.cor}15; padding:1px 6px; border-radius:100px; font-weight:700;">${oi.emoji} ${oi.label}</span>` : ''}</div>
             ${chanceTxt}
@@ -28500,7 +28501,11 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
               const _cred = _cUid ? { uid: _cUid, nome: (_cMem && _cMem.nome) || (e.rm && MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) || 'RM', perfil: (_cMem && _cMem.perfil) || 'rm' } : null;
               const obsX = ['Renovação automática · ' + (apx.apelido || 'apólice adicional') + ' · vence ' + String(apx.vencimentoMes).padStart(2, '0') + '/' + apx.vencimentoAno];
               if (apx.seguradora) obsX.unshift('Seguradora atual: ' + apx.seguradora);
-              const idX = await criarCotacao(e, ramoX, { origem: 'renovacao', silent: true, valorProposto: apx.premioAnual || null, observacoes: obsX.join(' · '), vencimentoRef: cicloX, credito: _cred, apoliceRef: apx.ap, apoliceApelido: apx.apelido || 'apólice adicional' });
+              /* Guarda na cotação se a apólice era NOSSA. Precisa ser agora: o
+                 próprio criarCotacao marca o produto como "cotando" e apaga a
+                 prova de que ela era conosco. (Patrick, 14/out) */
+              const _nossaX = ['conosco', 'fechada'].includes(apx.statusVisual);
+              const idX = await criarCotacao(e, ramoX, { origem: 'renovacao', silent: true, valorProposto: apx.premioAnual || null, observacoes: obsX.join(' · '), vencimentoRef: cicloX, credito: _cred, apoliceRef: apx.ap, apoliceApelido: apx.apelido || 'apólice adicional', extra: { renovacaoNossa: _nossaX, seguradoraRenovacao: apx.seguradora || null } });
               if (idX) { listaAp[i] = Object.assign({}, apx, { renovacaoAutoCiclo: cicloX }); mudouLista = true; criadas++; }
             }
             if (mudouLista) {
@@ -28536,7 +28541,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
                         (e.rm && MAPA_RMS[e.rm] && MAPA_RMS[e.rm].nome) ||
                         pd.ultimoAutorNome || null;
         const _credito = _credUid ? { uid: _credUid, nome: _credNome || 'RM', perfil: (_credMembro && _credMembro.perfil) || 'rm' } : null;
-        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || pd.valorAnualPago || pd.valorFechado || null, observacoes: obs.join(' · '), vencimentoRef: ciclo, credito: _credito });
+        // mesma coisa da apólice adicional: registra o "é nossa" antes de virar "cotando"
+        const _nossa = ['conosco', 'fechada'].includes(pd.statusVisual) || getMapeamento(pd) === 'cliente';
+        const id = await criarCotacao(e, ramo, { origem: 'renovacao', silent: true, valorProposto: pd.premioAnual || pd.valorAnualPago || pd.valorFechado || null, observacoes: obs.join(' · '), vencimentoRef: ciclo, credito: _credito, extra: { renovacaoNossa: _nossa, seguradoraRenovacao: pd.seguradoraAtual || null } });
         if (id) {
           try { await db.collection('empresas').doc(e.id).collection('mb_produtos').doc(ramoId).set({ renovacaoAutoCiclo: ciclo }, { merge: true }); } catch (err) {}
           if (e.produtosDados[ramoId]) e.produtosDados[ramoId].renovacaoAutoCiclo = ciclo;
@@ -28889,6 +28896,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       <div class="cad-modal-panel" style="max-width:560px;">
         <div class="cad-modal-head">
           <h2>${prod.icon || ''} ${c.produtoNome || prod.nome || 'Negociação'}</h2>
+          ${_seloRenovacao(c) ? `<div style="margin:6px 0 2px; display:flex; gap:5px; flex-wrap:wrap;">${_seloRenovacao(c)}</div>` : ''}
           <p>${c.empresaNome || ''} · <span style="color:${si.cor};font-weight:700;">${si.icon || ''} ${si.label || c.status}</span>${ativa ? ` · <span style="opacity:.85;">📅 entrou ${_dataEntradaDeal(c)} · ⏱ parado há ${diasNaEtapa(c)}d · 🗓 ${diasDeNegociacao(c)}d no funil</span>` : ` · <span style="opacity:.85;">🗓 durou ${diasDeNegociacao(c)}d</span>`}</p>
         </div>
         <div class="cad-modal-body">
@@ -29729,6 +29737,56 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
 
 
+
+  /* ───────── renovação: quando vence e de quem é a apólice ─────────
+     Duas informações que o card não mostrava e que mudam o comportamento de
+     quem lê: o MÊS do vencimento (é o relógio do negócio) e se a apólice é
+     NOSSA ou do mercado — defender o que já é nosso e conquistar o do
+     concorrente são conversas diferentes. (Patrick, 14/out) */
+  const _MES_AB = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  function _vencDaRenovacao(c) {
+    if (!c || !c.vencimentoRef) return null;
+    const [a, m] = String(c.vencimentoRef).split('-').map(Number);
+    if (!a || !m) return null;
+    const d = new Date(a, m - 1, 1);
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const fimMes = new Date(a, m, 0);
+    const dias = Math.round((fimMes - hoje) / 86400000);
+    return { ano: a, mes: m, dias, label: _MES_AB[m - 1] + '/' + a, curto: String(m).padStart(2, '0') + '/' + a, venceu: dias < 0 };
+  }
+  /* "É nossa?" — o campo gravado na criação manda. Para as renovações criadas
+     antes desta versão, procura a prova no histórico: apólice adicional marcada
+     como conosco, ou alguma cotação FECHADA deste empresa+produto. */
+  function _renovacaoNossa(c) {
+    if (!c) return false;
+    if (typeof c.renovacaoNossa === 'boolean') return c.renovacaoNossa;
+    try {
+      if (c.apoliceRef) {
+        const e = (EMPRESAS_REAIS || EMPRESAS || []).find(x => x.id === c.empresaId);
+        const pd = e && (e.produtosDados || {})[c.produtoId];
+        const apx = pd && (pd.apolices || []).find(a => a && a.ap === c.apoliceRef);
+        if (apx) return ['conosco', 'fechada'].includes(apx.statusVisual);
+      }
+      return (COTACOES || []).some(x => x.empresaId === c.empresaId && x.produtoId === c.produtoId && x.id !== c.id && x.status === 'fechada');
+    } catch (e) { return false; }
+  }
+  /* O selo que aparece no card do kanban e no cabeçalho da negociação. */
+  function _seloRenovacao(c, compacto) {
+    if (_origemNorm(c) !== 'renovacao') return '';
+    const v = _vencDaRenovacao(c);
+    const nossa = _renovacaoNossa(c);
+    const cor = !v ? '#64748b' : v.venceu ? '#b91c1c' : v.dias <= 30 ? '#c2410c' : v.dias <= 60 ? '#b45309' : '#0e7490';
+    const bg = !v ? '#f8fafc' : v.venceu ? '#fef2f2' : v.dias <= 30 ? '#fff7ed' : v.dias <= 60 ? '#fffbeb' : '#ecfeff';
+    const bd = !v ? '#e2e8f0' : v.venceu ? '#fecaca' : v.dias <= 30 ? '#fed7aa' : v.dias <= 60 ? '#fde68a' : '#a5f3fc';
+    const pil = (txt, c1, c2, c3, tit) => `<span title="${tit || ''}" style="display:inline-flex; align-items:center; gap:3px; font-size:${compacto ? '9.5' : '10.5'}px; font-weight:800; color:${c1}; background:${c2}; border:1px solid ${c3}; border-radius:100px; padding:1px 7px; white-space:nowrap;">${txt}</span>`;
+    const partes = [];
+    if (v) partes.push(pil('🗓 vence ' + v.label, cor, bg, bd, v.venceu ? 'O vencimento já passou' : 'Faltam ' + v.dias + ' dia(s) para o fim do mês de vencimento'));
+    partes.push(nossa
+      ? pil('💎 renovação nossa', '#15803d', '#f0fdf4', '#bbf7d0', 'A apólice é nossa — aqui a conversa é defender o cliente')
+      : pil('🌎 hoje no mercado', '#0369a1', '#f0f9ff', '#bae6fd', 'A apólice está com outra corretora/seguradora — aqui a conversa é conquistar'));
+    return partes.join(' ');
+  }
+
   /* ═══════════ ETAPA 2 — A LISTA DO QUE FALTA PARA COTAR ═══════════
      Na etapa 1 as pessoas se comprometeram. Aqui o trabalho é um só: juntar o
      que a seguradora vai pedir. Então a etapa deixou de ser um checklist fixo do
@@ -30015,7 +30073,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     })() : null;
     const org = (c.origem || 'mapeamento');
     if (org === 'renovacao') {
-      return '🔁 Renovação mapeada' + (c.apoliceApelido ? ' da apólice "' + c.apoliceApelido + '"' : '')
+      const nossa = _renovacaoNossa(c);
+      const seg = c.seguradoraRenovacao ? ' (hoje na ' + c.seguradoraRenovacao + ')' : '';
+      return '🔁 ' + (nossa ? 'Renovação de uma apólice NOSSA' : 'Renovação de uma apólice do mercado' + seg)
+        + (c.apoliceApelido ? ' — "' + c.apoliceApelido + '"' : '')
         + (venc ? ' — vence ' + venc : '') + '. Entrou sozinha no funil, no prazo da renovação.';
     }
     if (org === 'op' || org === 'op_bancaria') {
