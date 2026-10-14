@@ -237,6 +237,11 @@
     .ident-err{ font-size:12px; color:#fca5a5; font-weight:700; margin:-2px 0 8px 3px; min-height:14px; }
     .ident-ok{ font-size:12px; color:var(--verde); font-weight:700; margin:-2px 0 8px 3px; }
     .ident-nota{ font-size:11.5px; color:var(--b50); line-height:1.4; margin-top:2px; }
+    /* ramo em que já temos uma OP: a pergunta é outra, e o card avisa isso */
+    .prod.op{ border-color:rgba(147,197,253,.4); }
+    .prod.op .hint-pre{ color:#93c5fd; }
+    @keyframes piscaCard{ 0%,100%{ box-shadow:0 0 0 0 rgba(96,165,250,0); } 35%,65%{ box-shadow:0 0 0 4px rgba(96,165,250,.55); } }
+    .prod.pisca{ animation:piscaCard 1.5s ease; }
     .ident-emp{ background:rgba(16,185,129,.14); border:1px solid rgba(110,231,183,.38); border-radius:12px;
                 padding:10px 12px; margin:-2px 0 9px; }
     .ident-emp .rz{ font-size:14px; font-weight:800; color:#fff; line-height:1.3; }
@@ -718,9 +723,11 @@
   }
   window.novoPadrao = novoPadrao;
   let FLUXO = [];                     // produtos que aparecem no fluxo (já mapeados NÃO entram)
-  let PROD_BLOQUEADOS = new Set();    // já mapeados → NÃO aparecem
-  let PROD_PRE_NAO = new Set();       // respondidos "não tem" antes
+  let PROD_BLOQUEADOS = new Set();    // já mapeados → fora da tela 1 (seguem na tela 2, só para anexar)
+  let PROD_PRE_NAO   = new Set();    // respondidos "não tem" antes
   let PROD_PERMITIDOS = new Set();    // sem resposta → únicos que pontuam
+  let PROD_OCULTOS   = new Set();    // não existem para esta empresa (ex.: seguro de sócios sem sócios)
+  let PROD_OP        = new Set();    // temos OP fechada no ramo → pergunta pela OUTRA apólice
   let idx = -1;                      // -1 boas-vindas | 'colab' | 0..N | N=resumo | 'fim'
 
   const palco = document.getElementById('palco');
@@ -752,6 +759,8 @@
       PROD_BLOQUEADOS = new Set(LINK.produtosBloqueados || []);
       PROD_PRE_NAO   = new Set(LINK.produtosNaoTem || []);
       PROD_PERMITIDOS = new Set(LINK.produtosPermitidos || []);
+      PROD_OCULTOS   = new Set(LINK.produtosOcultos || []);
+      PROD_OP        = new Set(LINK.produtosOp || []);
 
       const empSnap = await db.collection('empresas').doc(LINK.empresaId).get();
       if (!empSnap.exists) return mostrarErro();
@@ -768,8 +777,16 @@
         }
       } catch (e) { console.warn('ramos dinâmicos falhou, usando padrão', e); }
 
-      // Empresa SEM sócios confirmado: seguros de sócios não aparecem (v237)
-      if (EMPRESA.semSociosConfirmado === true && !((EMPRESA.socios || []).length)) {
+      /* Ramos que não existem para esta empresa somem de vez — da tela 1 e da 2.
+         A lista vem pronta do painel (`produtosOcultos`), calculada pela MESMA
+         regra do mapeamento e das oportunidades: ramo com gatilho de sócios em
+         empresa confirmadamente sem sócios. O filtro por nome abaixo é só a rede
+         de segurança dos links gerados antes desta versão — ele acertava
+         "vida-socios" e "saúde dos sócios", mas deixava passar qualquer produto
+         de sócios com outro nome. */
+      if (PROD_OCULTOS.size) {
+        PRODUTOS = PRODUTOS.filter(p => !PROD_OCULTOS.has(p.id));
+      } else if (EMPRESA.semSociosConfirmado === true && !((EMPRESA.socios || []).length)) {
         PRODUTOS = PRODUTOS.filter(p => !(p.id === 'vida-socios' || p.id === 'saude-socios' || /s[óo]cios?/i.test(p.nome || '')));
       }
 
@@ -784,7 +801,8 @@
         if (apSnap.exists) APRESENTACOES = _mesclarCatalogo(apSnap.data().itens);
       } catch (e) { console.warn('catálogo apresentações falhou, usando padrão', e); }
 
-      // Já mapeados aparecem BLOQUEADOS (só anexo). Pré-marcados "não" entram como "Não temos" (podem mudar).
+      // Já mapeados saem da tela 1 (voltam na tela 2 só para anexar a apólice).
+      // Pré-marcados "não" entram como "Não temos" (podem mudar).
       FLUXO = PRODUTOS.filter(p => !PROD_BLOQUEADOS.has(p.id));
       FLUXO.forEach(p => { if (PROD_PRE_NAO.has(p.id)) { respostas[p.id] = { preMarcadoNao: true }; } });
 
@@ -909,6 +927,31 @@
     return mantidos.concat(novos);
   }
 
+  /* Apólice adicional de um ramo em que já temos OP. Lê a lista atual para não
+     apagar o que já existe, e marca a origem para o corretor saber que veio do
+     cliente — e não confundir com a nossa. */
+  async function salvarApoliceAdicional(p, r){
+    const ref = db.collection('empresas').doc(LINK.empresaId).collection('mb_produtos').doc(p.id);
+    let lista = [];
+    try { const cur = await ref.get(); if (cur.exists && Array.isArray(cur.data().apolices)) lista = cur.data().apolices.slice(); } catch (e) {}
+    const jaVeio = lista.findIndex(a => a && a.viaLink === LINK_ID);
+    const nova = {
+      ap: 'cli' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      apelido: 'Informada pelo cliente',
+      statusVisual: 'mapeada',
+      seguradora: r.seguradora || null,
+      premioAnual: r.valorAnual || null,
+      vencimentoMes: r.vencimentoMes || null,
+      vencimentoAno: r.vencimentoAno || null,
+      viaLink: LINK_ID, origem: 'link_mapeamento', em: new Date().toISOString()
+    };
+    if (jaVeio >= 0) { nova.ap = lista[jaVeio].ap; lista[jaVeio] = nova; } else { lista.push(nova); }
+    await ref.set({
+      apolices: lista,
+      apolicesAtualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  }
+
   /* ============ dinheiro ============ */
   function mascaraMoeda(input) {
     let v = input.value.replace(/\D/g, '');
@@ -1002,9 +1045,14 @@
   function _esc(s){ return String(s == null ? '' : s).replace(/</g,'&lt;'); }
   function tela1(){
     document.getElementById('topo').hidden = true;
-    var blocos = BLOCOS_DEF.map(function(b){ return { def:b, itens: PRODUTOS.filter(function(p){ return blocoDe(p) === b.id; }) }; })
+    /* O que já está mapeado com o gerente NÃO entra aqui. Antes aparecia como um
+       card cinza "✓ já mapeado", que ocupava espaço, contava na barra de
+       progresso e não dava nada para o cliente fazer. Ele reaparece na tela 2,
+       onde serve para alguma coisa: anexar a apólice. */
+    var VISIVEIS = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id); });
+    var blocos = BLOCOS_DEF.map(function(b){ return { def:b, itens: VISIVEIS.filter(function(p){ return blocoDe(p) === b.id; }) }; })
                            .filter(function(b){ return b.itens.length; });
-    var html = '<div class="t1-brand"><span class="logo">R</span><span>Retorno Seguros</span><span class="cnt" id="t1Cnt">0 de '+PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id); }).length+'</span></div>'+
+    var html = '<div class="t1-brand"><span class="logo">R</span><span>Retorno Seguros</span><span class="cnt" id="t1Cnt">0 de '+VISIVEIS.length+'</span></div>'+
       '<div class="t1-prog"><i id="t1Prog"></i></div>'+
       '<div class="t1-top"><div class="selo-topo">MAPEAMENTO DE PROTEÇÕES</div>'+
       (MODO_PADRAO
@@ -1032,6 +1080,7 @@
 
   /* ============ ENVIO — LINK PADRÃO (grava só em mb_questionario_padrao) ============ */
   async function submeterPadrao(){
+    if (irParaPendente()) return;          // ainda há seguro sem sim/não
     const btn = document.getElementById('btnEnviar');
     if (!validarIdent(true)) {
       const el = document.getElementById('idCnpj'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
@@ -1231,11 +1280,19 @@
     // pré-marcado "não" (respondeu antes): já vem como "Não temos", mas pode mudar
     if (PROD_PRE_NAO.has(p.id) && respostas[p.id] && !respostas[p.id].tem) respostas[p.id].tem = 'nao';
     var r = respostas[p.id] || {};
-    return '<div class="prod'+(r.tem === 'sim' ? ' tem' : r.tem === 'nao' ? ' naotem' : '')+'" id="p-'+p.id+'">'+cab+
-      (PROD_PRE_NAO.has(p.id) ? '<div class="hint-pre">antes você informou que não tinha — mudou?</div>' : '')+
+    /* RAMO COM OP NOSSA: a apólice que fizemos costuma ser à parte da que a
+       empresa já tinha. Perguntar "tem ou não tem?" seria contraditório — ele
+       tem, conosco. A pergunta certa é se existe OUTRA, e é dessa que queremos
+       o vencimento. */
+    var ehOp = PROD_OP.has(p.id);
+    var simTxt = ehOp ? '✓ Sim, tenho outra' : '✓ Temos';
+    var naoTxt = ehOp ? 'Não, só a de vocês' : 'Não temos';
+    return '<div class="prod'+(r.tem === 'sim' ? ' tem' : r.tem === 'nao' ? ' naotem' : '')+(ehOp ? ' op' : '')+'" id="p-'+p.id+'">'+cab+
+      (ehOp ? '<div class="hint-pre">já fizemos uma apólice deste seguro com você — existe <b>outra</b>, com outra seguradora?</div>'
+            : (PROD_PRE_NAO.has(p.id) ? '<div class="hint-pre">antes você informou que não tinha — mudou?</div>' : ''))+
       '<div class="pills">'+
-        '<button class="pill sim'+(r.tem === 'sim' ? ' on' : '')+'" onclick="marcar(\''+p.id+'\',\'sim\')">✓ Temos</button>'+
-        '<button class="pill nao'+(r.tem === 'nao' ? ' on' : '')+'" onclick="marcar(\''+p.id+'\',\'nao\')">Não temos</button>'+
+        '<button class="pill sim'+(r.tem === 'sim' ? ' on' : '')+'" onclick="marcar(\''+p.id+'\',\'sim\')">'+simTxt+'</button>'+
+        '<button class="pill nao'+(r.tem === 'nao' ? ' on' : '')+'" onclick="marcar(\''+p.id+'\',\'nao\')">'+naoTxt+'</button>'+
       '</div>'+
       '<div class="campos-inl" id="ci-'+p.id+'" hidden></div>'+
     '</div>';
@@ -1276,8 +1333,13 @@
   }
   window.selMes = selMes;
 
+  /* RESPONDER TUDO VIROU OBRIGATÓRIO (decisão do Patrick, 14/out).
+     Antes bastava marcar um seguro para enviar. O que ficava em branco não é
+     "não tem" nem "tem" — é lacuna, e lacuna não vira nem oportunidade nem
+     mapeamento: só volta como pergunta na visita. Como agora a tela 1 só mostra
+     o que ele PODE responder (o já mapeado saiu), exigir tudo deixou de ser
+     pedir trabalho repetido. */
   function atualizarFalta(){
-    // tema-tech: envio liberado com QUALQUER resposta. Não obriga responder todos os seguros.
     var disponiveis = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id); });
     var respondidos = disponiveis.filter(function(p){ var r = respostas[p.id]; return r && (r.tem === 'sim' || r.tem === 'nao'); });
     var pend = disponiveis.length - respondidos.length;
@@ -1286,19 +1348,31 @@
     if (cnt) cnt.textContent = respondidos.length + ' de ' + disponiveis.length;
     if (prog) prog.style.width = (disponiveis.length ? Math.round(respondidos.length / disponiveis.length * 100) : 0) + '%';
     if (!el || !btn) return;
-    if (respondidos.length === 0){
-      el.textContent = 'Marque ao menos um seguro para enviar';
+    if (pend > 0){
+      el.textContent = 'Falta responder ' + pend + (pend === 1 ? ' seguro' : ' seguros') + ' — marque sim ou não em cada um';
       btn.disabled = true;
     } else {
       btn.disabled = false;
-      el.textContent = pend > 0
-        ? '✓ Pode enviar agora — ainda dá para responder '+pend+(pend === 1 ? ' seguro' : ' seguros')+' se quiser'
-        : '✓ Tudo respondido';
+      el.textContent = '✓ Tudo respondido';
     }
+  }
+  /* Leva a tela até o primeiro card em branco e pisca — com 10 seguros, dizer
+     "falta 1" sem dizer QUAL é o mesmo que não dizer nada. */
+  function irParaPendente(){
+    var p = PRODUTOS.filter(function(x){ return !PROD_BLOQUEADOS.has(x.id); })
+                    .find(function(x){ var r = respostas[x.id]; return !(r && (r.tem === 'sim' || r.tem === 'nao')); });
+    if (!p) return false;
+    var card = document.getElementById('p-' + p.id);
+    if (card){
+      card.scrollIntoView({ behavior:'smooth', block:'center' });
+      card.classList.add('pisca'); setTimeout(function(){ card.classList.remove('pisca'); }, 1600);
+    }
+    return true;
   }
 
   /* ============ ENVIO 1 — MAPEAMENTO (cômputo IDÊNTICO ao sistema; sem cotações/anexos aqui) ============ */
   async function submeter(){
+    if (irParaPendente()) return;          // ainda há seguro sem sim/não
     const btn = document.getElementById('btnEnviar');
     if (btn){ btn.disabled = true; btn.textContent = '⏳ Enviando…'; }
     try {
@@ -1326,6 +1400,18 @@
         if (PROD_BLOQUEADOS.has(p.id)) continue;
         const r = respostas[p.id];
         if (!r || !r.tem) continue;
+        /* RAMO COM OP NOSSA: o que o cliente descreve é a OUTRA apólice, não a
+           nossa. Então ela entra como APÓLICE ADICIONAL do ramo e o statusVisual
+           não é tocado — a OP continua 💎 nossa, como o Patrick pediu. A rotina
+           de renovação automática já trata `apolices[]` uma a uma, 45 dias antes
+           de cada vencimento, então o vencimento informado aqui entra sozinho na
+           agenda e no funil. "Não, só a de vocês" não grava nada. */
+        if (PROD_OP.has(p.id)) {
+          if (r.tem !== 'sim') { produtosSalvos.push(p.id); continue; }
+          await salvarApoliceAdicional(p, r);
+          produtosSalvos.push(p.id);
+          continue;
+        }
         if (r.preMarcadoNao === true && r.tem === 'nao' && !r.interesse) continue;
         const dados = {
           ultimaAtualizacao: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1465,7 +1551,7 @@
   function _cardHub(p){
     var r = respostas[p.id] || {};
     var bloq = PROD_BLOQUEADOS.has(p.id);
-    var tem = bloq || r.tem === 'sim';
+    var tem = bloq || PROD_OP.has(p.id) || r.tem === 'sim';
     var tag = bloq ? '<span class="tag tag-tem">✓ já mapeado</span>' : tem ? '<span class="tag tag-tem">✓ você tem</span>' : '<span class="tag tag-nao">não tem hoje</span>';
     var det = '';
     if (!bloq && tem){
@@ -1524,8 +1610,11 @@
   function tela2(recemEnviado){
     document.getElementById('topo').hidden = true;
     var _s = document.getElementById('salvoTag'); if (_s) _s.classList.remove('on');
-    var temos = PRODUTOS.filter(function(p){ return PROD_BLOQUEADOS.has(p.id) || (respostas[p.id] && respostas[p.id].tem === 'sim'); });
-    var naoTem = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'nao'; });
+    // O ramo com OP nossa está no grupo "você tem" mesmo que ele tenha dito que
+    // não há outra apólice — o seguro existe, é o nosso. Oferecer "quero cotar"
+    // ali seria propor o que já vendemos.
+    var temos = PRODUTOS.filter(function(p){ return PROD_BLOQUEADOS.has(p.id) || PROD_OP.has(p.id) || (respostas[p.id] && respostas[p.id].tem === 'sim'); });
+    var naoTem = PRODUTOS.filter(function(p){ return !PROD_BLOQUEADOS.has(p.id) && !PROD_OP.has(p.id) && respostas[p.id] && respostas[p.id].tem === 'nao'; });
     var html = '<div class="hub-top">'+
       '<div class="hub-check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recemEnviado ? 'Dados enviados! 🎉' : 'Bem-vindo de volta')+'</h1>'+
