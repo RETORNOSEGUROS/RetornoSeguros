@@ -1022,7 +1022,8 @@
       nomes[p.id] = { nome: p.nome, icon: p.icon || '📦' };
       resp[p.id] = r.tem === 'sim'
         ? { tem: true, vencimentoMes: r.vencimentoMes || null, vencimentoAno: r.vencimentoAno || null,
-            seguradora: r.seguradora || null, valorAnual: r.valorAnual || null,
+            seguradora: r.seguradora || null, valorAnual: dadosFaixa(r).valorAnual,
+            valorAnualEstimado: dadosFaixa(r).estimado,
             valorFaixa: dadosFaixa(r).valorFaixa, valorFaixaTexto: dadosFaixa(r).valorFaixaTexto }
         : { tem: false };
     });
@@ -1206,7 +1207,8 @@
       apelido: 'Informada pelo cliente',
       statusVisual: 'mapeada',
       seguradora: r.seguradora || null,
-      premioAnual: r.valorAnual || null,
+      premioAnual: dadosFaixa(r).valorAnual,
+      premioEstimado: dadosFaixa(r).estimado,
       premioFaixa: dadosFaixa(r).valorFaixa, premioFaixaTexto: dadosFaixa(r).valorFaixaTexto,
       premioFaixaMin: dadosFaixa(r).valorFaixaMin, premioFaixaMax: dadosFaixa(r).valorFaixaMax,
       vencimentoMes: r.vencimentoMes || null,
@@ -1230,25 +1232,31 @@
   window.mascaraMoeda = mascaraMoeda;
   function lerMoedaStr(s) { return parseFloat((s || '').replace(/[^\d,]/g, '').replace(',', '.')) || 0; }
 
-  /* VALOR ANUAL POR FAIXA (pedido do Patrick, 18/out)
+  /* VALOR ANUAL POR FAIXA (pedido do Patrick, 18/out; número em 19/out)
      Digitar o prêmio travava o preenchimento: quem não lembra o número exato
-     parava ali. A faixa é um clique e serve para o mesmo que o corretor precisa
-     — dimensionar o negócio. Importante: a faixa NÃO vira um número no campo de
-     prêmio. `valorAnual` continua null, porque esse campo entra em somas de
-     produção no painel e um valor inventado sujaria a carteira inteira. */
+     parava ali. A faixa é um clique.
+
+     O CLIENTE vê a faixa; o CORRETOR recebe um número — o MEIO da faixa, que é
+     o palpite mais honesto quando só se sabe o intervalo. A última não tem fim,
+     então fica no teto de 500 mil em vez de inflar para um número inventado.
+     Tudo que sai daqui vai marcado com `estimado: true` e com a faixa original
+     junto, para o painel poder mostrar "~" e dizer de onde veio o número. */
   const FAIXAS_VALOR = [
-    { cod:'ate24',    curto:'até R$ 24 mil',      texto:'até R$ 24 mil por ano',             min:null,   max:24000 },
-    { cod:'24_60',    curto:'R$ 24 a 60 mil',     texto:'de R$ 24 mil a R$ 60 mil por ano',  min:24000,  max:60000 },
-    { cod:'60_150',   curto:'R$ 60 a 150 mil',    texto:'de R$ 60 mil a R$ 150 mil por ano', min:60000,  max:150000 },
-    { cod:'150_500',  curto:'R$ 150 a 500 mil',   texto:'de R$ 150 mil a R$ 500 mil por ano',min:150000, max:500000 },
-    { cod:'500_mais', curto:'acima de R$ 500 mil',texto:'acima de R$ 500 mil por ano',       min:500000, max:null }
+    { cod:'ate24',    curto:'até R$ 24 mil',      texto:'até R$ 24 mil por ano',             min:null,   max:24000,  meio:12000 },
+    { cod:'24_60',    curto:'R$ 24 a 60 mil',     texto:'de R$ 24 mil a R$ 60 mil por ano',  min:24000,  max:60000,  meio:42000 },
+    { cod:'60_150',   curto:'R$ 60 a 150 mil',    texto:'de R$ 60 mil a R$ 150 mil por ano', min:60000,  max:150000, meio:105000 },
+    { cod:'150_500',  curto:'R$ 150 a 500 mil',   texto:'de R$ 150 mil a R$ 500 mil por ano',min:150000, max:500000, meio:325000 },
+    { cod:'500_mais', curto:'acima de R$ 500 mil',texto:'acima de R$ 500 mil por ano',       min:500000, max:null,   meio:500000 }
   ];
   function faixaValor(cod){ return FAIXAS_VALOR.find(function(f){ return f.cod === cod; }) || null; }
   /* o que vai para o banco, em qualquer um dos lugares que gravam a apólice */
   function dadosFaixa(r){
     const f = faixaValor(r && r.valorFaixa);
     return { valorFaixa: f ? f.cod : null, valorFaixaTexto: f ? f.texto : null,
-             valorFaixaMin: f ? f.min : null, valorFaixaMax: f ? f.max : null };
+             valorFaixaMin: f ? f.min : null, valorFaixaMax: f ? f.max : null,
+             /* o número que o corretor vê; rascunho antigo com valor digitado continua valendo */
+             valorAnual: f ? f.meio : ((r && r.valorAnual) || null),
+             estimado: !!f };
   }
   function selFaixa(id, cod, el){
     var r = respostas[id] || (respostas[id] = {});
@@ -1397,7 +1405,8 @@
         nomes[p.id] = { nome: p.nome, icon: p.icon || '📦' };
         resp[p.id] = r.tem === 'sim'
           ? { tem: true, vencimentoMes: r.vencimentoMes || null, vencimentoAno: r.vencimentoAno || null,
-              seguradora: r.seguradora || null, valorAnual: r.valorAnual || null,
+              seguradora: r.seguradora || null, valorAnual: dadosFaixa(r).valorAnual,
+            valorAnualEstimado: dadosFaixa(r).estimado,
             valorFaixa: dadosFaixa(r).valorFaixa, valorFaixaTexto: dadosFaixa(r).valorFaixaTexto }
           : { tem: false };
       });
@@ -1753,8 +1762,9 @@
           dados.vencimentoAno = r.vencimentoAno || null;
           if (r.vencimentoNaoInformado) dados.vencimentoNaoInformado = true;
           dados.seguradoraAtual = r.seguradora || null;
-          dados.valorAnualPago = r.valorAnual || null;
           var _fx = dadosFaixa(r);
+          dados.valorAnualPago = _fx.valorAnual;
+          dados.valorAnualPagoEstimado = _fx.estimado;
           dados.valorAnualFaixa = _fx.valorFaixa; dados.valorAnualFaixaTexto = _fx.valorFaixaTexto;
           dados.valorAnualFaixaMin = _fx.valorFaixaMin; dados.valorAnualFaixaMax = _fx.valorFaixaMax;
           dados.observacoes = r.observacoes || null;
