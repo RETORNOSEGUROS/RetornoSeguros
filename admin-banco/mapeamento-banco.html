@@ -6429,6 +6429,9 @@
           <button class="btn-visita tt-btn-link" data-ignore-bg style="background: linear-gradient(135deg, #14503f, #1D9E75); border: 1px solid rgba(93,224,199,.4); color: #ffffff;" onclick="event.stopPropagation(); gerarLinkMapeamentoEmpresa('${e.id}')" title="${e.ultimoLinkMapeamento ? 'Último link: ' + new Date(e.ultimoLinkMapeamento.em).toLocaleDateString('pt-BR') + ' por ' + (e.ultimoLinkMapeamento.porNome || '?') + ' · clique para gerar novo' : 'Gerar link para cliente preencher'}">
             🔗 Link
           </button>
+          <button class="btn-visita" data-ignore-bg style="background: linear-gradient(135deg, #16324F, #2E7DBD); border: 1px solid rgba(143,203,255,.4); color: #ffffff;" onclick="event.stopPropagation(); abrirEmailMapeamento('${e.id}')" title="Gerar o e-mail de mapeamento pronto para colar no Outlook">
+            ✉️ E-mail
+          </button>
         </div>
       </div>
     `;
@@ -15767,11 +15770,13 @@
     return Math.random().toString(36).substring(2) + Date.now().toString(36);
   }
 
-  async function gerarLinkMapeamentoEmpresa(empresaId) {
+  /* O "congelamento" do link — o que o cliente NÃO deve responder de novo — é o
+     coração do mapeamento e não pode existir em duas versões. Ele mora aqui, e
+     tanto o link avulso (7 dias) quanto o e-mail (30 dias) chamam esta função.
+     `dias` é o único parâmetro que muda entre os dois. */
+  async function _criarLinkMapeamento(empresaId, dias) {
     const empresa = EMPRESAS.find(e => e.id === empresaId);
-    if (!empresa) return alert('Empresa não encontrada');
-
-    try {
+    if (!empresa) throw new Error('Empresa não encontrada');
       // 1) Varredura: marca como EXPIRADOS os links pendentes desta empresa que passaram do prazo.
       //    Guarda expirouEm; quem gerou (geradoPorUid/Nome) já está no doc — útil pra gamificação futura.
       try {
@@ -15814,7 +15819,7 @@
 
       // 3) Token SEMPRE novo — atribuição correta de quem gerou (nada de reaproveitar link de outro usuário)
       const token = gerarTokenAleatorio(24);
-      const expiraEm = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias, todos os perfis
+      const expiraEm = new Date(Date.now() + (Number(dias) || 7) * 24 * 60 * 60 * 1000);
       const docRef = await db.collection('mb_links_empresa').add({
         token, tipo: 'mapeamento',
         empresaId, empresaNome: empresa.nome,
@@ -15843,9 +15848,16 @@
       if (empLocal) empLocal.ultimoLinkMapeamento = { linkId: docId, porUid: CTX.uid, porNome: CTX.nome, em: new Date().toISOString(), status: 'pendente' };
       LINKS_CACHE = null; // força recarregar a Central de Links na próxima abertura
 
-      // Monta URL pública (mesmo diretório do app)
       const base = window.location.href.replace(/[^/]*$/, '');
       const url = `${base}mapeamento-empresa.html?t=${token}`;
+    return { empresa, token, docId, url, expiraEm };
+  }
+
+  async function gerarLinkMapeamentoEmpresa(empresaId) {
+    const empresa = EMPRESAS.find(e => e.id === empresaId);
+    if (!empresa) return alert('Empresa não encontrada');
+    try {
+      const { url, expiraEm } = await _criarLinkMapeamento(empresaId, 7);
 
       // Modal com link e opções
       const modal = document.createElement('div');
@@ -15898,6 +15910,194 @@
     setTimeout(() => { btn.innerHTML = original; btn.style.background = ''; }, 1500);
   }
   window.copiarLink = copiarLink;
+
+  /* ============= E-MAIL DE MAPEAMENTO (20/out) =============================
+     O gargalo nunca foi o link, foi o caminho: entrar no sistema, gerar o link,
+     copiar, abrir o Outlook e escrever o e-mail. Aqui vira um botão: a mensagem
+     sai pronta, com o nome do contato, o nome da empresa e o link DAQUELA
+     empresa — e vai para o clipboard JÁ FORMATADA, para colar no Outlook sem
+     virar código.
+
+     Link de 30 dias (e não 7 como o avulso): e-mail fica parado na caixa, e um
+     link morto na mão do cliente é pior do que não ter enviado.
+
+     Quem fala no texto é o GERENTE. Por isso não há assinatura nem rodapé da
+     corretora: o e-mail do banco já leva a assinatura dele, e duas assinaturas
+     na mesma mensagem enfraquecem a dele. */
+  const EMAIL_MAP_DIAS = 30;
+
+  function _emEsc(s){ return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _emPrimeiroNome(s){ return String(s || '').trim().split(/\s+/)[0] || ''; }
+  function emailMapAssunto(empresaNome){ return (empresaNome || 'Sua empresa') + ' — atualização do quadro de proteções'; }
+
+  function emailMapHTML(nome, empresaNome, url){
+    const E = _emEsc(empresaNome || 'sua empresa');
+    const saud = nome ? 'Olá, ' + _emEsc(nome) + ',' : 'Olá,';
+    const U = _emEsc(url);
+    const Utxt = _emEsc(String(url).replace(/^https?:\/\//, ''));
+    const quad = '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="15" height="15" bgcolor="#FFFFFF" style="width:15px;height:15px;background:#FFFFFF;border:2px solid #2E7DBD;border-radius:3px;font-size:0;line-height:0;">&nbsp;</td></tr></table>';
+    const mapa = (t, ultimo) => '<tr><td width="15" valign="top" style="width:15px;padding-bottom:' + (ultimo ? '0' : '9px') + ';">' + quad + '</td>'
+      + '<td style="padding:0 0 ' + (ultimo ? '0' : '9px') + ' 11px;font-family:Arial, Helvetica, sans-serif;font-size:14px;font-weight:bold;color:#16324F;line-height:1.3;">' + t + '</td></tr>';
+    const ganho = (titulo, texto) =>
+      '<tr><td width="4" bgcolor="#C8A24B" valign="top" style="width:4px;background:#C8A24B;font-size:0;line-height:0;">&nbsp;</td>'
+      + '<td style="padding:0 0 0 14px;font-family:Arial, Helvetica, sans-serif;">'
+      + '<div style="font-size:14.5px;font-weight:bold;color:#16324F;line-height:1.3;">' + titulo + '</div>'
+      + '<div style="font-size:13.5px;color:#4A5663;line-height:1.6;padding-top:4px;">' + texto + '</div></td></tr>';
+    const espaco = '<tr><td colspan="2" height="16" style="height:16px;font-size:0;line-height:0;">&nbsp;</td></tr>';
+
+    return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">'
++ '<meta name="viewport" content="width=device-width, initial-scale=1">'
++ '<meta name="x-apple-disable-message-reformatting">'
++ '<title>' + _emEsc(emailMapAssunto(empresaNome)) + '</title></head>'
++ '<body style="margin:0;padding:0;background:#EEF1F4;">'
++ '<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:#EEF1F4;">Um momento da sua atenção para atualizarmos o quadro de proteções da ' + E + '. São 4 mapas, é só marcar tem ou não tem.</div>'
++ '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#EEF1F4" style="background:#EEF1F4;">'
++ '<tr><td align="center" style="padding:24px 12px;">'
++ '<!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->'
++ '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;">'
++ '<tr><td height="5" bgcolor="#16324F" style="height:5px;font-size:0;line-height:0;background:#16324F;">&nbsp;</td></tr>'
++ '<tr><td height="3" bgcolor="#C8A24B" style="height:3px;font-size:0;line-height:0;background:#C8A24B;">&nbsp;</td></tr>'
++ '<tr><td style="padding:30px 30px 0 30px;font-family:Arial, Helvetica, sans-serif;font-size:16px;color:#16324F;font-weight:bold;">' + saud + '</td></tr>'
++ '<tr><td style="padding:14px 30px 0 30px;font-family:Arial, Helvetica, sans-serif;font-size:14.5px;color:#2B3440;line-height:1.65;">'
++ 'Estamos atualizando o quadro de proteções e benefícios das empresas que acompanhamos, e eu queria um momento da sua atenção para a <strong style="color:#16324F;">' + E + '</strong>.</td></tr>'
++ '<tr><td style="padding:14px 30px 0 30px;font-family:Arial, Helvetica, sans-serif;font-size:14.5px;color:#2B3440;line-height:1.65;">'
++ 'Entender onde a empresa está exposta — e onde já está bem protegida — faz parte de conhecer o cliente, estreitar a relação e prestar uma consultoria melhor. E para você o ganho é direto:</td></tr>'
++ '<tr><td style="padding:22px 30px 0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
++ ganho('Patrimônio e caixa', 'Já conhecemos a sua operação; o que falta é o retrato das proteções. Por trás de nós há seguradora e corretora que convivem com sinistro todo dia — o que foi coberto, o que não foi, onde faltou proteção e onde se pagou caro por uma cobertura que não resolveu. É essa leitura que aplicamos na <strong style="color:#16324F;">' + E + '</strong>, para mostrar os buracos antes que eles apareçam.')
++ espaco
++ ganho('Sócios e diretores', 'Proteções e benefícios desenhados para quem comanda — e a garantia de que a empresa não trava se faltar quem decide.')
++ espaco
++ ganho('Equipe', 'Benefício é retenção: gente satisfeita fica, falta menos e produz melhor.')
++ espaco
++ ganho('Profissionalização', 'Com o mapa na mão e os vencimentos à vista, a empresa deixa de renovar no automático e passa a enxergar os riscos a que está exposta, as falhas das proteções atuais e o que dá para melhorar. Consultoria que não custa a mais.')
++ '</table></td></tr>'
++ '<tr><td style="padding:26px 30px 0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F7FA" style="background:#F4F7FA;border:1px solid #E2E7EC;border-radius:10px;">'
++ '<tr><td style="padding:18px 20px;font-family:Arial, Helvetica, sans-serif;font-size:13.5px;color:#2B3440;line-height:1.65;">'
++ 'A <strong style="color:#16324F;">Retorno Seguros e Benefícios</strong>, parceira da agência na consultoria de proteções, faz a análise 360° da empresa: riscos, lacunas, apólices defasadas, prêmio acima do mercado e o que dá para blindar.'
++ '<br><strong style="color:#16324F;">A análise acontece mesmo que nada seja contratado conosco</strong> — é o nosso jeito de estar por perto.</td></tr></table></td></tr>'
++ '<tr><td style="padding:26px 30px 0 30px;font-family:Arial, Helvetica, sans-serif;font-size:14.5px;color:#2B3440;line-height:1.6;">'
++ 'São <strong style="color:#16324F;">4 mapas</strong>, é só marcar <strong style="color:#16324F;">tem</strong> ou <strong style="color:#16324F;">não tem</strong>:</td></tr>'
++ '<tr><td style="padding:14px 30px 0 30px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0">'
++ mapa('Patrimônio') + mapa('Benefícios') + mapa('Responsabilidades e garantias') + mapa('Sócios e diretores', true)
++ '</table></td></tr>'
++ '<tr><td style="padding:24px 30px 0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;"><tr>'
++ '<td align="center" height="48" bgcolor="#2E7DBD" style="height:48px;padding:14px 10px;mso-padding-alt:14px 10px;border-radius:8px;border:1px solid #2E7DBD;background:#2E7DBD;">'
++ '<a href="' + U + '" target="_blank" style="display:block;font-family:Arial, Helvetica, sans-serif;font-size:15.5px;font-weight:bold;color:#FFFFFF;text-decoration:none;line-height:20px;">Atualizar as proteções da ' + E + '</a>'
++ '</td></tr></table></td></tr>'
++ '<tr><td align="center" style="padding:10px 30px 0 30px;font-family:Arial, Helvetica, sans-serif;font-size:11.5px;color:#7B8794;line-height:1.5;">'
++ 'Se o botão não abrir, copie este endereço:<br><span style="color:#5A6672;">' + Utxt + '</span></td></tr>'
++ '<tr><td bgcolor="#FFFFFF" style="background:#FFFFFF;padding:24px 30px 30px 30px;font-family:Arial, Helvetica, sans-serif;font-size:14.5px;color:#16324F;line-height:1.6;font-weight:bold;border-radius:0 0 12px 12px;">'
++ 'A sua colaboração é muito importante para nós.</td></tr>'
++ '</table><!--[if mso]></td></tr></table><![endif]--></td></tr></table></body></html>';
+  }
+
+  /* Estado da janela aberta — o nome do contato é editável e redesenha a prévia. */
+  let _EMAIL_MAP = null;   // { empresaId, empresaNome, url, expiraEm }
+
+  function _emailMapPintar(){
+    if (!_EMAIL_MAP) return;
+    const nome = _emPrimeiroNome((document.getElementById('emNome') || {}).value);
+    const ifr = document.getElementById('emailMapPrev');
+    if (!ifr) return;
+    const d = ifr.contentDocument || ifr.contentWindow.document;
+    d.open(); d.write(emailMapHTML(nome, _EMAIL_MAP.empresaNome, _EMAIL_MAP.url)); d.close();
+  }
+  window._emailMapPintar = _emailMapPintar;
+
+  /* Copia a PRÉVIA, não o código: seleciona o conteúdo dentro do iframe e usa o
+     copy do navegador, que leva HTML para o clipboard. Colando no Outlook, chega
+     montado. O iframe também isola o e-mail do CSS do painel — sem isso o que é
+     copiado sai com estilos que não são do e-mail. */
+  function copiarEmailFormatado(btn){
+    const ifr = document.getElementById('emailMapPrev');
+    const rot = btn ? btn.innerHTML : '';
+    try {
+      const d = ifr.contentDocument, w = ifr.contentWindow;
+      w.focus();
+      const rng = d.createRange(); rng.selectNodeContents(d.body);
+      const sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
+      const ok = d.execCommand('copy');
+      sel.removeAllRanges();
+      if (!ok) throw new Error('o navegador recusou a cópia');
+      if (btn){ btn.innerHTML = '✓ Copiado — agora cole no Outlook'; btn.style.background = '#10b981';
+        setTimeout(() => { btn.innerHTML = rot; btn.style.background = ''; }, 2600); }
+    } catch (e) {
+      alert('Não consegui copiar sozinho.\n\nClique dentro da prévia, aperte Ctrl+A e depois Ctrl+C — dá no mesmo.');
+    }
+  }
+  window.copiarEmailFormatado = copiarEmailFormatado;
+
+  function copiarTextoSimples(id, btn){
+    const el = document.getElementById(id); if (!el) return;
+    el.select(); el.setSelectionRange(0, 99999);
+    try { document.execCommand('copy'); } catch (e) {}
+    if (btn){ const r = btn.innerHTML; btn.innerHTML = '✓'; setTimeout(() => { btn.innerHTML = r; }, 1400); }
+  }
+  window.copiarTextoSimples = copiarTextoSimples;
+
+  async function abrirEmailMapeamento(empresaId){
+    const emp = EMPRESAS.find(e => e.id === empresaId);
+    if (!emp) return alert('Empresa não encontrada');
+
+    const modal = document.createElement('div');
+    modal.className = 'cad-modal open';
+    modal.id = 'modalEmailMap';
+    modal.innerHTML = '<div class="cad-modal-bg" onclick="this.parentElement.remove()"></div>'
+      + '<div class="cad-modal-panel" style="max-width:720px;">'
+      + '<div class="cad-modal-head"><h2>✉️ E-mail de mapeamento</h2>'
+      + '<p>Montando a mensagem e o link de <strong>' + _emEsc(emp.nome) + '</strong>…</p></div>'
+      + '<div class="cad-modal-body" id="emailMapBody" style="text-align:center; padding:40px 20px; color:#64748b; font-size:13px;">⏳ gerando o link da empresa…</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+
+    let dados;
+    try {
+      dados = await _criarLinkMapeamento(empresaId, EMAIL_MAP_DIAS);
+    } catch (e) {
+      const b = document.getElementById('emailMapBody');
+      if (b) b.innerHTML = '<div style="color:#b91c1c; font-size:13px;">Não consegui gerar o link: ' + _emEsc(e.message) + '</div>';
+      return;
+    }
+
+    _EMAIL_MAP = { empresaId, empresaNome: emp.nome, url: dados.url, expiraEm: dados.expiraEm };
+    const assunto = emailMapAssunto(emp.nome);
+    const destino = emp.emailDecisor || emp.emailRh || '';
+    const nome0 = _emPrimeiroNome(emp.decisorNome);
+
+    const cab = modal.querySelector('.cad-modal-head p');
+    if (cab) cab.innerHTML = 'Pronto para <strong>' + _emEsc(emp.nome) + '</strong>. Confira o nome, copie e cole no seu e-mail.';
+    const body = document.getElementById('emailMapBody');
+    body.style.textAlign = 'left'; body.style.padding = '';
+    body.innerHTML =
+        '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">'
+      +   '<div><label class="form-label">Nome de quem vai receber</label>'
+      +     '<input type="text" class="form-control" id="emNome" value="' + _emEsc(nome0) + '" placeholder="Ex.: Marcos" oninput="_emailMapPintar()"></div>'
+      +   '<div><label class="form-label">Enviar para</label>'
+      +     '<div style="display:flex; gap:6px;">'
+      +       '<input type="text" class="form-control" id="emDest" value="' + _emEsc(destino) + '" placeholder="e-mail do contato" style="flex:1;">'
+      +       '<button class="btn-secondary" onclick="copiarTextoSimples(\'emDest\', this)" title="Copiar">📋</button></div></div>'
+      + '</div>'
+      + '<div style="margin-top:12px;"><label class="form-label">Assunto</label>'
+      +   '<div style="display:flex; gap:6px;">'
+      +     '<input type="text" class="form-control" id="emAssunto" value="' + _emEsc(assunto) + '" style="flex:1;">'
+      +     '<button class="btn-secondary" onclick="copiarTextoSimples(\'emAssunto\', this)" title="Copiar">📋</button></div></div>'
+      + '<div style="margin-top:16px;"><label class="form-label">Prévia — é exatamente isto que vai ser copiado</label>'
+      +   '<iframe id="emailMapPrev" style="width:100%; height:420px; border:1px solid #e2e8f0; border-radius:10px; background:#EEF1F4;"></iframe></div>'
+      + '<div style="margin-top:14px; padding:12px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:10px; font-size:12px; color:#166534; line-height:1.6;">'
+      +   '💡 <strong>Como enviar:</strong> clique em <strong>Copiar e-mail</strong>, abra um e-mail novo no Outlook, cole (Ctrl+V) e envie. '
+      +   'A sua assinatura entra normalmente embaixo.<br>'
+      +   '🔗 O link é <strong>só desta empresa</strong> — a resposta cai direto no raio-x da <strong>' + _emEsc(emp.nome) + '</strong>, sem ninguém vincular depois. '
+      +   'Vale até <strong>' + dados.expiraEm.toLocaleDateString('pt-BR') + '</strong>.'
+      + '</div>'
+      + '<div style="display:flex; gap:8px; margin-top:14px;">'
+      +   '<button class="btn-primary" style="flex:1;" onclick="copiarEmailFormatado(this)">📋 Copiar e-mail (formatado)</button>'
+      +   '<button class="btn-secondary" onclick="document.getElementById(\'modalEmailMap\').remove()">Fechar</button>'
+      + '</div>';
+
+    _emailMapPintar();
+  }
+  window.abrirEmailMapeamento = abrirEmailMapeamento;
 
   // ============= PESQUISAS COLABORADORES (item 5) =============
   async function abrirGerarPesquisa() {
