@@ -3270,9 +3270,12 @@
             <thead><tr><th style="width:56px;text-align:center;">ÍCONE</th><th>NOME</th><th style="width:190px;">DESCRIÇÃO (p/ cliente)</th><th style="width:140px;">GRUPO</th><th style="width:170px;text-align:center;">VIRA OPORTUNIDADE</th><th style="width:76px;text-align:center;">SÓ POR OP</th><th style="width:92px;text-align:center;" title="Se desligado: o ramo aparece no raio-x, na cobertura e no questionário do cliente, e pontua ao mapear — mas NÃO entra no indicador de Mapeamento da campanha.">NO MAPEAM. DA CAMPANHA</th><th style="width:64px;text-align:center;">ATIVO</th><th style="width:52px;text-align:center;"></th></tr></thead>
             <tbody id="cfgRamosBody"></tbody>
           </table>
+          <div id="cfgRamosSujo" style="display:none; margin-top:12px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:10px 14px; font-size:12.5px; color:#92400e; font-weight:700;">
+            ⚠️ Você mudou alguma coisa e ainda <u>não salvou</u> — nada disso vale até clicar em <strong>Salvar ramos</strong>.
+          </div>
           <div style="display:flex; gap:8px; margin-top:12px;">
             <button class="btn-secondary" onclick="adicionarRamoLinha()"><i data-lucide="plus" class="w-3.5 h-3.5 inline"></i> Adicionar ramo</button>
-            <button class="btn-primary" onclick="salvarRamos()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar ramos</button>
+            <button class="btn-primary" id="btnSalvarRamos" onclick="salvarRamos()"><i data-lucide="save" class="w-3.5 h-3.5 inline"></i> Salvar ramos</button>
             <button class="btn-secondary" onclick="abrirOrdenarRamos()"><i data-lucide="arrow-up-down" class="w-3.5 h-3.5 inline"></i> Ordenar questionário do cliente</button>
           </div>
           <div style="margin-top:14px; background:#eef2ff; border:1px solid #c7d2fe; border-radius:8px; padding:10px 14px; font-size:12px; color:#4338ca;">
@@ -6179,9 +6182,9 @@
     const anoAtual = new Date().getFullYear();
 
     // Ramos do grupo selecionado (ex: vida = vida-grupo + vida-socios)
-    const ramosDoGrupo = fGrupo ? (RAMOS_ALL || PRODUTOS || []).filter(r => r.grupoId === fGrupo).map(r => r.id) : null;
+    const ramosDoGrupo = fGrupo ? (PRODUTOS || RAMOS_ALL || []).filter(r => r.grupoId === fGrupo).map(r => r.id) : null;
     // Ramos que o filtro de status/produto deve olhar
-    const ramosAlvo = fProd ? [fProd] : (ramosDoGrupo || (RAMOS_ALL || PRODUTOS || []).map(r => r.id));
+    const ramosAlvo = fProd ? [fProd] : (ramosDoGrupo || (PRODUTOS || RAMOS_ALL || []).map(r => r.id));
 
     // Ajuda: a empresa tem algum ramo-alvo no status pedido?
     // Para "nosso", usamos ano=null (ano corrente) para incluir tanto funil fechado quanto cliente atual.
@@ -6213,7 +6216,7 @@
       if (fFalta) {
         const semSocio = !(e.socios || []).some(s => s && (s.nome || '').trim());
         const semFunc = !((e.funcionarios || 0) > 0);
-        const ramosAll = (RAMOS_ALL || PRODUTOS || []);
+        const ramosAll = (PRODUTOS || RAMOS_ALL || []);   // ramo desativado não conta para "incompleto"
         const mapeados = ramosAll.filter(r => statusMatriz(e, r.id, null) !== 'nao_mapeado').length;
         if (fFalta === 'socio' && !semSocio) return false;
         if (fFalta === 'funcionarios' && !semFunc) return false;
@@ -8478,8 +8481,24 @@
   document.addEventListener('click', function(e) {
     if (e.target.classList && e.target.classList.contains('toggle-switch')) {
       e.target.classList.toggle('on');
+      _cfgRamosMexeu(e.target);
     }
   });
+  /* Desligar um ramo é só uma classe no HTML até alguém clicar em "Salvar ramos".
+     Quem mexe no toggle e sai da tela acha que desativou — e o ramo continua
+     aparecendo para o cliente. O aviso existe para fechar esse buraco. */
+  function _cfgRamosMexeu(el) {
+    if (!el || !el.closest || !el.closest('#cfgRamosBody')) return;
+    const av = document.getElementById('cfgRamosSujo'); if (av) av.style.display = 'block';
+    const bt = document.getElementById('btnSalvarRamos');
+    if (bt) { bt.style.boxShadow = '0 0 0 3px rgba(251,191,36,.45)'; }
+  }
+  document.addEventListener('input', function(e){ _cfgRamosMexeu(e.target); });
+  document.addEventListener('change', function(e){ _cfgRamosMexeu(e.target); });
+  function _cfgRamosLimpo() {
+    const av = document.getElementById('cfgRamosSujo'); if (av) av.style.display = 'none';
+    const bt = document.getElementById('btnSalvarRamos'); if (bt) bt.style.boxShadow = '';
+  }
 
   // ============= FIREBASE BOOT =============
   const firebaseConfig = {
@@ -17186,7 +17205,9 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       PRODUTOS = RAMOS_ALL.filter(r => r.ativo !== false);
       renderCfgRamos(); renderCfgMultiplicadores();
       if (typeof renderEmpresas === 'function') renderEmpresas();
-      flashSalvo('Ramos salvos!');
+      if (typeof _cfgRamosLimpo === 'function') _cfgRamosLimpo();
+      const _off = (novos || []).filter(r => r.ativo === false).map(r => r.nome);
+      flashSalvo('Ramos salvos!' + (_off.length ? ' Desativados: ' + _off.join(', ') : ''));
     } catch (e) { alert('Erro ao salvar ramos: ' + e.message); }
   }
 
