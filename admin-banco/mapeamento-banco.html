@@ -4265,7 +4265,8 @@
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
           <select class="form-control" id="linksFiltroStatus" style="width: auto; min-width: 150px;" onchange="renderCentralLinks()">
             <option value="">Todos os status</option>
-            <option value="pendente">⏳ Pendentes</option>
+            <option value="pendente">⏳ Não abriram</option>
+            <option value="aberto">👀 Abriu e parou</option>
             <option value="respondido">✅ Respondidos</option>
             <option value="expirado">⏰ Expirados</option>
           </select>
@@ -22593,6 +22594,10 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
     if (l.preenchido === true) return 'respondido';
     const exp = l.expiraEm && l.expiraEm.toDate ? l.expiraEm.toDate() : (l.expiraEm ? new Date(l.expiraEm) : null);
     if (l.expirado === true || (exp && exp < new Date())) return 'expirado';
+    /* ABERTO: o cliente entrou e não terminou. É o estado mais quente da lista —
+       interesse já demonstrado, resposta faltando. Links antigos não têm o campo
+       e continuam caindo em 'pendente', como antes. */
+    if (l.aberto === true) return 'aberto';
     return 'pendente';
   }
 
@@ -22677,18 +22682,19 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     // KPIs (sobre o conjunto visível ao usuário, antes dos filtros de tela)
     const base = podeVerTodos ? (gerFiltro ? lista0.filter(l => l.geradoPorUid === gerFiltro) : lista0) : lista0.filter(l => l.geradoPorUid === meuUid);
-    const cont = { pendente: 0, respondido: 0, expirado: 0 };
+    const cont = { pendente: 0, aberto: 0, respondido: 0, expirado: 0 };
     base.forEach(l => cont[statusDoLink(l)]++);
     const taxa = base.length ? Math.round(cont.respondido / base.length * 100) : 0;
     const kpis = document.getElementById('linksKpis');
     if (kpis) kpis.innerHTML = `
       <div class="kpi-card"><div class="label">Links gerados</div><div class="value">${base.length}</div></div>
-      <div class="kpi-card"><div class="label">Aguardando resposta</div><div class="value">${cont.pendente}</div></div>
+      <div class="kpi-card"><div class="label">Enviado, não abriu</div><div class="value">${cont.pendente}</div></div>
+      <div class="kpi-card"><div class="label">Abriu e não terminou</div><div class="value">${cont.aberto}</div></div>
       <div class="kpi-card"><div class="label">Respondidos</div><div class="value">${cont.respondido}</div></div>
       <div class="kpi-card"><div class="label">Taxa de resposta</div><div class="value">${taxa}%</div></div>`;
 
     // Ordena: pendentes primeiro (ação!), depois respondidos, expirados por último; dentro, mais recentes no topo
-    const pesoStatus = { pendente: 0, respondido: 1, expirado: 2 };
+    const pesoStatus = { aberto: 0, pendente: 1, respondido: 2, expirado: 3 };   // quem abriu e parou vem primeiro
     links.sort((a, b) => {
       const ds = pesoStatus[statusDoLink(a)] - pesoStatus[statusDoLink(b)];
       if (ds !== 0) return ds;
@@ -22707,7 +22713,8 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
 
     const fmt = ts => ts && ts.toDate ? ts.toDate().toLocaleDateString('pt-BR') : (ts ? new Date(ts).toLocaleDateString('pt-BR') : '—');
     const badges = {
-      pendente:   '<span style="background:#fef3c7; color:#b45309; font-size:11px; font-weight:800; padding:3px 10px; border-radius:100px;">⏳ Pendente</span>',
+      pendente:   '<span style="background:#fef3c7; color:#b45309; font-size:11px; font-weight:800; padding:3px 10px; border-radius:100px;">⏳ Não abriu</span>',
+      aberto:     '<span style="background:#e0f2fe; color:#075985; font-size:11px; font-weight:800; padding:3px 10px; border-radius:100px;">👀 Abriu e parou</span>',
       respondido: '<span style="background:#dcfce7; color:#166534; font-size:11px; font-weight:800; padding:3px 10px; border-radius:100px;">✅ Respondido</span>',
       expirado:   '<span style="background:#fee2e2; color:#991b1b; font-size:11px; font-weight:800; padding:3px 10px; border-radius:100px;">⏰ Expirado</span>'
     };
@@ -22719,9 +22726,14 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
       const chips = st === 'respondido' && respondidos.length
         ? `<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:4px;">${nomesProdutos(respondidos).map(n => `<span style="background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; font-size:11px; padding:2px 8px; border-radius:6px;">${n}</span>`).join('')}${l.numFuncionariosInformado ? `<span style="background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; font-size:11px; padding:2px 8px; border-radius:6px;">👥 ${l.numFuncionariosInformado} colab.</span>` : ''}</div>`
         : '';
+      const fmtH = ts => ts && ts.toDate ? ts.toDate().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
       const validade = st === 'pendente'
         ? `<span style="color:#b45309;">expira ${fmt(l.expiraEm)}</span>`
-        : (st === 'respondido' ? `respondido ${fmt(l.preenchidoEm)}` : `${l.revogado ? 'revogado' : 'expirou'} ${fmt(l.expirouEm) !== '—' ? fmt(l.expirouEm) : fmt(l.expiraEm)}`);
+        : st === 'aberto'
+          ? `<span style="color:#075985;">abriu ${fmtH(l.abertoEm)}${(l.aberturas > 1) ? ` · ${l.aberturas}×` : ''}</span> · <span style="color:#b45309;">expira ${fmt(l.expiraEm)}</span>`
+          : (st === 'respondido'
+              ? `${l.abertoEm ? 'abriu ' + fmtH(l.abertoEm) + ' · ' : ''}respondido ${fmt(l.preenchidoEm)}`
+              : `${l.revogado ? 'revogado' : 'expirou'} ${fmt(l.expirouEm) !== '—' ? fmt(l.expirouEm) : fmt(l.expiraEm)}`);
 
       return `
       <div style="padding:12px 0; border-top:1px solid #f1f5f9;">
@@ -22737,7 +22749,7 @@ Sua resposta é importante para definirmos o melhor plano. Obrigado!`;
             ${chips}
           </div>
           <div style="display:flex; gap:6px; align-items:center;">
-            ${st === 'pendente' ? `
+            ${(st === 'pendente' || st === 'aberto') ? `
               <button class="btn-mini" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca;" title="Copiar link" onclick="navigator.clipboard.writeText('${url}'); this.innerHTML='✓ copiado'; setTimeout(()=>this.innerHTML='🔗 copiar',1500);">🔗 copiar</button>
               <button class="btn-mini" style="background:#fef2f2; border-color:#fecaca; color:#991b1b;" title="Revogar link" onclick="revogarLink('${l._id}')">revogar</button>
             ` : ''}
