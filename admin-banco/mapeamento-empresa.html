@@ -255,7 +255,7 @@
     .fim-lista .cotar-item{ padding:10px 13px; }
     .fim-lista .cotar-item .nm{ font-weight:700; font-size:14px; }
     .fim-lista .cotar-item .ic{ font-size:20px; }
-    /* tela final do link padrão: um card por seguro, com "conhecer mais" e "quero cotar" */
+    /* tela final do link padrão: um card por seguro, com o "quero conhecer" */
     .fimp-top{ text-align:center; padding-top:14px; margin-bottom:16px; }
     .fimp-top .check{ margin:0 auto 16px; }
     .fimp-top h1{ font-size:24px; letter-spacing:-.5px; margin-bottom:9px; }
@@ -915,6 +915,15 @@
         return mostrarErro('⏰ Este link expirou', 'Links de mapeamento valem por 7 dias. Peça um novo ao gerente que enviou.');
       }
 
+      try {
+        await db.collection('mb_links_empresa').doc(LINK_ID).set({
+          aberto: true,
+          abertoEm: LINK.abertoEm || firebase.firestore.FieldValue.serverTimestamp(),   // a PRIMEIRA abertura
+          ultimaAberturaEm: firebase.firestore.FieldValue.serverTimestamp(),
+          aberturas: firebase.firestore.FieldValue.increment(1)
+        }, { merge: true });
+      } catch (e) { console.warn('registro de abertura', e); }
+
       PROD_BLOQUEADOS = new Set(LINK.produtosBloqueados || []);
       PROD_PRE_NAO   = new Set(LINK.produtosNaoTem || []);
       PROD_PERMITIDOS = new Set(LINK.produtosPermitidos || []);
@@ -1463,7 +1472,7 @@
   window.submeterPadrao = submeterPadrao;
 
   // Tela final do link padrão: agradece e, para cada seguro que a empresa NÃO tem,
-  // oferece "Conhecer mais" (apresentação) e "Quero cotar" (questionário do produto).
+  // oferece o "Quero conhecer" (apresentação e questionário saíram em 20/out).
   let PADRAO_INTERESSE = new Set();
   function telaFimPadrao(recem, interesseSalvo){
     document.getElementById('topo').hidden = true;
@@ -1483,7 +1492,7 @@
     if (naoTem.length){
       html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div>'+
         '<div class="gb-t">Seguros para conhecer</div>'+
-        '<div class="gb-s">Saiba onde e por que sua empresa pode estar desprotegida, ou de que forma podemos melhorar ainda mais os benefícios aos colaboradores e diretores. Conheça mais detalhes, veja o grau de exposição da sua empresa e, se quiser nossa consultoria, peça um estudo personalizado.</div></div></div>'+
+        '<div class="gb-s">Saiba onde e por que sua empresa pode estar desprotegida, ou de que forma podemos melhorar ainda mais os benefícios aos colaboradores e diretores. Marque os que quiser conhecer e a nossa consultoria prepara um estudo sob medida para a sua empresa.</div></div></div>'+
         '<div class="cards-grid">'+naoTem.map(_cardFimPadrao).join('')+'</div>'+
         '<div class="t1-nota" id="padraoMsg" style="text-align:center;">'+
         (PADRAO_INTERESSE.size ? '✓ Anotado — vamos cotar '+PADRAO_INTERESSE.size+(PADRAO_INTERESSE.size === 1 ? ' seguro' : ' seguros') : '')+'</div>';
@@ -1500,15 +1509,9 @@
     var bts = '';
     // Quem já tem o seguro vê só o anexo — mesma regra da tela 2 do link do cliente.
     if (tem) cat = null;
-    if (cat && cat.arq){
-      bts += '<button class="fp-btn" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">📖 Conhecer mais</button>';
-    }
-    if (cat && cat.arqQ){
+    if (!tem) {
       bts += '<button class="fp-btn'+(pedido ? ' feito' : ' destaque')+'" id="tg-'+p.id+'" onclick="quereCotarPadrao(\''+p.id+'\')">'+
-             (pedido ? (tem ? '✓ Questionário aberto' : '✓ Cotação pedida') : (tem ? '✍️ Preencher questionário' : '✍️ Quero cotar'))+'</button>';
-    } else if (!tem) {
-      bts += '<button class="fp-btn'+(pedido ? ' feito' : ' destaque')+'" id="tg-'+p.id+'" onclick="quereCotarPadrao(\''+p.id+'\')">'+
-             (pedido ? '✓ Cotação pedida' : '✍️ Quero cotar')+'</button>';
+             (pedido ? '✓ Anotado' : '✍️ Quero conhecer')+'</button>';
     }
     // Só quem TEM o seguro anexa — quem não tem não tem apólice para mandar.
     var anexo = '';
@@ -1524,17 +1527,14 @@
         '<div class="fp-ds">'+_esc(descDe(p))+'</div></div></div>'+
       (bts ? '<div class="fp-bts">'+bts+'</div>' : '')+anexo+'</div>';
   }
-  // "Quero cotar": abre o questionário do produto (quando existe) e anota o interesse.
+  // "Quero conhecer": só anota o interesse — o corretor trabalha o produto depois.
   // O window.open acontece ANTES de qualquer await — senão o navegador bloqueia o pop-up.
   async function quereCotarPadrao(id){
-    var p = PRODUTOS.find(function(x){ return x.id === id; });
-    var cat = catDoProduto(p);
-    if (cat && cat.arqQ) abrirDestino(id, 'questionario');
     PADRAO_INTERESSE.add(id);
     var b = document.getElementById('tg-'+id);
-    if (b){ b.classList.remove('destaque'); b.classList.add('feito'); b.textContent = '✓ Cotação pedida'; }
+    if (b){ b.classList.remove('destaque'); b.classList.add('feito'); b.textContent = '✓ Anotado'; }
     var msg = document.getElementById('padraoMsg');
-    if (msg && !(cat && cat.arqQ)) msg.textContent = 'Anotado! Vamos preparar a cotação e te procurar.';
+    if (msg) msg.textContent = 'Anotado! Vamos te procurar para falar sobre isso.';
     if (!PADRAO_DOC_ID) return;
     try {
       await db.collection('mb_questionario_padrao').doc(PADRAO_DOC_ID).update({
@@ -1542,7 +1542,7 @@
         interesseEm: firebase.firestore.FieldValue.serverTimestamp()
       });
       try { const env = JSON.parse(localStorage.getItem(PADRAO_LS_ENV) || '{}'); env.interesse = Array.from(PADRAO_INTERESSE); localStorage.setItem(PADRAO_LS_ENV, JSON.stringify(env)); } catch (e) {}
-      if (msg && cat && cat.arqQ) msg.textContent = '✓ Anotado — vamos cotar '+PADRAO_INTERESSE.size+(PADRAO_INTERESSE.size === 1 ? ' seguro' : ' seguros');
+      if (msg) msg.textContent = '✓ Anotado — '+PADRAO_INTERESSE.size+(PADRAO_INTERESSE.size === 1 ? ' seguro' : ' seguros')+' para conversarmos';
     } catch (e) {
       console.warn(e);
       if (msg) msg.textContent = 'Não consegui salvar agora — tente de novo em instantes.';
@@ -1902,31 +1902,18 @@
         '<div id="anexoLista-'+p.id+'" class="anexo-lista"></div>';
     }
     /* Quem JÁ TEM o seguro vê só o anexo (decisão do Patrick, 14/out): com a
-       apólice na mão o corretor estuda a renovação sozinho, e apresentação e
-       questionário ali no meio só tiravam o cliente do caminho mais curto. */
-    var cat = tem ? null : catDoProduto(p);
-    if (cat){
-      var beneficio = /dental|saude|sa[úu]de|vida|previd/i.test(p.id + ' ' + (p.nome||''));
-      var estudoSub = beneficio ? 'conte sua necessidade e receba uma proposta sob medida' : 'queremos entender sua operação e fazer um estudo sob medida';
-      if (cat.arq){
-        linhas += '<div class="hub-linha" onclick="abrirDestino(\''+p.id+'\',\'apresentacao\')">'+
-          '<div class="hl-ic">📖</div><div class="hl-txt"><div class="hl-t">Ver a apresentação</div><div class="hl-s">as coberturas de um jeito simples — abre em outra aba</div></div><div class="hl-seta">›</div></div>';
-      }
-      // vale para os dois: quem não tem pede estudo, quem tem prepara a renovação
-      if (cat.arqQ){
-        linhas += '<div class="hub-linha destaque" onclick="abrirDestino(\''+p.id+'\',\'questionario\')">'+
-          '<div class="hl-ic">✍️</div><div class="hl-txt"><div class="hl-t">'+(tem ? 'Preencher o questionário' : 'Quero um estudo personalizado')+'</div>'+
-          '<div class="hl-s">'+(tem ? 'as informações que a seguradora pede para a renovação' : estudoSub)+'</div></div><div class="hl-seta">›</div></div>';
-      }
-    }
-    // "quero cotar" só nos que o cliente NÃO tem
+       apólice na mão o corretor estuda a renovação sozinho.
+       Quem NÃO tem vê só a descrição e o "quero conhecer" (20/out): apresentação
+       e questionário saíram até ficarem bons. A função `abrirDestino` e o
+       catálogo continuam aqui, prontos para voltar — é só religar as linhas. */
+    // "quero conhecer" só nos que o cliente NÃO tem
     var cotar = '';
     if (!bloq && r.tem === 'nao'){
       var ja = COTACOES_ENVIADAS.has(p.id);
       var on = ja || r.interesse === 'sim';
-      var perg = ja ? 'Cotação já pedida ao seu gerente' : 'Quer que seu gerente cote este seguro?';
+      var perg = ja ? 'Já avisamos o seu gerente' : 'Quer conhecer este seguro?';
       cotar = '<div class="hub-cotar"><span>'+perg+'</span>'+
-        '<button class="tg-btn'+(on?' on':'')+'" id="tg-'+p.id+'" '+(ja?'disabled':'')+' onclick="toggleCotar(\''+p.id+'\')">'+(on ? '✓ quero cotar' : 'quero cotar')+'</button></div>';
+        '<button class="tg-btn'+(on?' on':'')+'" id="tg-'+p.id+'" '+(ja?'disabled':'')+' onclick="toggleCotar(\''+p.id+'\')">'+(on ? '✓ quero conhecer' : 'quero conhecer')+'</button></div>';
     }
     return '<div class="hub-card"><div class="hub-head"><div class="ic">'+iconeDe(p)+'</div>'+
       '<div class="hub-nomewrap"><div class="nm">'+_esc(p.nome)+'</div>'+tag+'<div class="hub-desc">'+_esc(descDe(p))+'</div>'+det+'</div></div>'+
@@ -1937,7 +1924,7 @@
     respostas[id] = respostas[id] || {};
     respostas[id].interesse = respostas[id].interesse === 'sim' ? 'nao' : 'sim';
     var b = document.getElementById('tg-'+id);
-    if (b){ b.classList.toggle('on', respostas[id].interesse === 'sim'); b.textContent = respostas[id].interesse === 'sim' ? '✓ quero cotar' : 'quero cotar'; }
+    if (b){ b.classList.toggle('on', respostas[id].interesse === 'sim'); b.textContent = respostas[id].interesse === 'sim' ? '✓ quero conhecer' : 'quero conhecer'; }
     atualizarEnvio2();
   }
   window.toggleCotar = toggleCotar;
@@ -1953,9 +1940,9 @@
     var html = '<div class="hub-top">'+
       '<div class="hub-check"><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="27"/><path d="M18 31 l8 8 l16-18"/></svg></div>'+
       '<h1>'+(recemEnviado ? 'Recebemos, obrigado!' : 'Bem-vindo de volta')+'</h1>'+
-      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices e planilhas</b> dos seguros que você tem — vão na hora, sem precisar de mais nenhum botão — e marque os que <b>não tem</b> e quer <b>cotar</b>.</p></div>';
+      '<p>Seu gerente já recebeu o mapeamento. Se quiser, <b>anexe as apólices e planilhas</b> dos seguros que você tem — vão na hora, sem precisar de mais nenhum botão — e marque os que <b>não tem</b> e quer <b>conhecer</b>.</p></div>';
     if (temos.length){ html += '<div class="grupo-band tem"><div class="gb-ic">✓</div><div><div class="gb-t">Seguros que você tem</div><div class="gb-s">Se desejar anexe a apólice, planilhas e documentos — pode mandar vários de uma vez. Isso nos ajuda a analisar de forma completa se você está completamente protegido e oferecendo o melhor para sua equipe e empresa.</div></div></div><div class="cards-grid">'; temos.forEach(function(p){ html += _cardHub(p); }); html += '</div>'; }
-    if (naoTem.length){ html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div><div class="gb-t">Seguros para conhecer</div><div class="gb-s">Saiba onde e por que sua empresa pode estar desprotegida, ou de que forma podemos melhorar ainda mais os benefícios aos colaboradores e diretores. Conheça mais detalhes, veja o grau de exposição da sua empresa e, se quiser nossa consultoria, peça um estudo personalizado.</div></div></div><div class="cards-grid">'; naoTem.forEach(function(p){ html += _cardHub(p); }); html += '</div>'; }
+    if (naoTem.length){ html += '<div class="grupo-band conhecer"><div class="gb-ic">✨</div><div><div class="gb-t">Seguros para conhecer</div><div class="gb-s">Saiba onde e por que sua empresa pode estar desprotegida, ou de que forma podemos melhorar ainda mais os benefícios aos colaboradores e diretores. Marque os que quiser conhecer e a nossa consultoria prepara um estudo sob medida para a sua empresa.</div></div></div><div class="cards-grid">'; naoTem.forEach(function(p){ html += _cardHub(p); }); html += '</div>'; }
     /* O botão só existe quando há cotação a pedir. Sem nenhum "não tem", ele
        ficaria eternamente desligado embaixo de uma tela em que tudo já foi
        entregue — parecendo que faltou alguma coisa. */
@@ -1999,7 +1986,7 @@
           agenciaId: LINK.agenciaId || EMPRESA.agenciaId || null,
           status: 'solicitada', etapa: 'solicitada', origem: 'oportunidade', chanceFechamento: 'media',
           solicitadoPorUid: LINK.geradoPorUid || null, solicitadoPorNome: LINK.geradoPorNome || 'Cliente (link)',
-          observacoes: 'Cliente informou que NÃO tem, mas tem INTERESSE em cotar (via link).', interesseViaLink: true,
+          observacoes: 'Cliente informou que NÃO tem e marcou QUERO CONHECER no link de mapeamento.', interesseViaLink: true,
           historico: [{ status: 'solicitada', label: 'Iniciada', obs: 'Interesse em cotar via link do cliente', por: 'Cliente', em: new Date().toISOString() }],
           dataSolicitacao: firebase.firestore.FieldValue.serverTimestamp(),
           atualizadoEm: firebase.firestore.FieldValue.serverTimestamp(),
