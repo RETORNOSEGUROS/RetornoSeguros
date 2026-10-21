@@ -1566,6 +1566,40 @@
     .db-balanco-nota{ margin-top:13px; padding-top:11px; border-top:1px solid var(--border);
       font-size:12px; color:var(--text-muted); line-height:1.6; }
 
+    /* ---- v43: diagnóstico dos dados ---- */
+    .dg-resumo{ background:var(--bg-primary); border-radius:10px; padding:12px 16px;
+      font-size:13px; color:var(--text-secondary); margin-bottom:14px; }
+    .dg-alerta{ background:var(--warning-bg); border:1px solid var(--warning); color:#92400e;
+      border-radius:10px; padding:12px 16px; font-size:12.5px; line-height:1.65; margin-bottom:16px; }
+    .dg-ano{ background:#fff; border:1px solid var(--border); border-radius:11px;
+      padding:14px 16px; margin-bottom:12px; }
+    .dg-ano-h{ display:flex; align-items:flex-start; justify-content:space-between;
+      gap:14px; margin-bottom:11px; }
+    .dg-ano-n{ font-size:17px; font-weight:800; color:var(--brand);
+      font-family:'JetBrains Mono',monospace; }
+    .dg-tag{ display:inline-block; background:var(--bg-primary); color:var(--text-muted);
+      font-size:9.5px; font-weight:800; padding:2px 8px; border-radius:100px; margin-left:8px;
+      text-transform:uppercase; letter-spacing:.04em; vertical-align:middle; }
+    .dg-tag.dg-ruim{ background:var(--danger); color:#fff; }
+    .dg-ano-s{ font-size:11.5px; color:var(--text-muted); margin-top:3px; }
+    .dg-contagem{ display:flex; gap:7px; flex:0 0 auto; }
+    .dg-contagem span{ font-size:10px; font-weight:800; padding:3px 9px; border-radius:100px; }
+    .dg-ok{ background:var(--success-bg); color:#065f46; }
+    .dg-parcial{ background:var(--warning-bg); color:#92400e; }
+    .dg-vazio-c{ background:var(--danger-bg); color:#991b1b; }
+    .dg-blocos{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; }
+    .dg-bloco{ border-radius:8px; padding:9px 11px; border:1px solid var(--border); }
+    .dg-bloco.dg-ok{ background:var(--success-bg); border-color:var(--success); }
+    .dg-bloco.dg-parcial{ background:var(--warning-bg); border-color:var(--warning); }
+    .dg-bloco.dg-vazio{ background:var(--danger-bg); border-color:var(--danger); }
+    .dg-bloco-n{ font-size:12px; font-weight:800; color:var(--text-primary); }
+    .dg-bloco-d{ font-size:10.5px; color:var(--text-muted); margin-top:2px; }
+    .dg-bloco-a{ font-size:10px; color:var(--text-secondary); margin-top:4px; line-height:1.4; }
+    .dg-acoes{ display:flex; align-items:center; gap:12px; margin-top:16px; flex-wrap:wrap; }
+    .dg-status{ font-size:12.5px; color:var(--text-muted); }
+    .dg-nota{ margin-top:10px; font-size:11.5px; color:var(--text-muted); line-height:1.6; }
+    .dg-vazio{ padding:30px; text-align:center; color:var(--text-muted); font-size:13px; }
+
   </style>
 </head>
 
@@ -2655,6 +2689,22 @@
       </div>
     </div>
   </div>
+
+  <!-- v43: o que está realmente gravado, bloco por bloco -->
+  <div id="modalDiagDados" class="modal">
+    <div class="modal-content" style="max-width:980px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">🔍 O que o banco tem desta empresa</div>
+          <div style="font-size:13px; color:var(--text-muted); margin-top:4px">
+            Leitura crua da base, sem filtro nem ordenação — inclusive o que as telas normais não mostram.
+          </div>
+        </div>
+        <button class="btn btn-outline" style="padding:8px 12px" onclick="fecharDiagnostico()">✕</button>
+      </div>
+      <div class="modal-body"><div id="diagDadosCorpo"></div></div>
+    </div>
+  </div>
   <div id="modalPrompt" class="modal">
     <div class="modal-content" style="max-width:900px">
       <div class="modal-header">
@@ -2689,7 +2739,10 @@
       <div class="modal-body">
         <!-- Linha do tempo de anos mapeados (preenchida via JS) -->
         <div id="anosTimelineWrap" style="display:none; margin-bottom:18px; padding-bottom:16px; border-bottom:1px solid var(--border)">
-          <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:10px">📅 Exercícios mapeados — clique para ver o ano</div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap">
+            <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em">📅 Exercícios mapeados — clique para ver o ano</div>
+            <button class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" onclick="abrirDiagnostico()" title="Ver exatamente o que está gravado no banco, bloco por bloco">🔍 O que o banco tem</button>
+          </div>
           <div class="anos-timeline" id="anosTimeline"></div>
         </div>
         <!-- Sistema de Abas -->
@@ -3915,11 +3968,16 @@ async function carregarMaisRecenteViaEmpresas(){
       });
       
       proms.push(
-        db.collection("empresas").doc(empId).collection("financeiro")
-          .orderBy("ano","desc").limit(1).get()
+        /* v43: sem orderBy, pelo mesmo motivo — um exercício sem o campo "ano"
+           sumiria e a empresa apareceria como "sem dados financeiros". */
+        db.collection("empresas").doc(empId).collection("financeiro").get()
           .then(s=>{
             if(!s.empty){
-              const finDoc = s.docs[0];
+              const ordenados = s.docs.slice().sort((x,y)=>{
+                const ax = Number((x.data()||{}).ano), ay = Number((y.data()||{}).ano);
+                return (isFinite(ay)?ay:-Infinity) - (isFinite(ax)?ax:-Infinity);
+              });
+              const finDoc = ordenados[0];
               const fd = finDoc.data() || {};
               console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
               return {
@@ -5582,9 +5640,13 @@ async function abrirModalDetalhes(empresaId){
   document.getElementById("tab-dashboard")?.classList.add("active");
 
   try{
+    /* v43: NÃO usar orderBy("ano") aqui. No Firestore, documento sem o campo da
+       ordenação — ou com ele em outro tipo — é excluído do resultado em silêncio.
+       Um exercício gravado sem "ano" simplesmente sumia da tela, parecendo apagado.
+       Trazemos tudo e ordenamos no navegador, coagindo o ano para número. */
     const snap = await db.collection("empresas").doc(empresaId)
-      .collection("financeiro").orderBy("ano","desc").get();
-    
+      .collection("financeiro").get();
+
     // Mapear dados para formato padronizado
     const rows = snap.docs.map(doc=>{
       const fd = doc.data() || {};
@@ -5610,6 +5672,15 @@ async function abrirModalDetalhes(empresaId){
       };
     });
     
+    /* v43: ano vira número e a ordenação acontece aqui. Documento com ano ausente
+       ou em texto deixa de desaparecer — vai para o fim e fica visível para conserto. */
+    rows.forEach(r=>{ const a = Number(r.ano); r.ano = (isFinite(a) && a) ? a : r.ano; });
+    rows.sort((x,y)=>{
+      const ax = Number(x.ano), ay = Number(y.ano);
+      const vx = isFinite(ax) ? ax : -Infinity, vy = isFinite(ay) ? ay : -Infinity;
+      return vy - vx;
+    });
+
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
     
     // Detectar setor mais recente ou usar default
@@ -20600,7 +20671,8 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
                          console.log(t); });
   }
   function abrirNovaInfo(){
-    var m = document.getElementById('modalNovaInfo');
+    var m = (window._abrirModalPorCima && window._abrirModalPorCima('modalNovaInfo'))
+            || document.getElementById('modalNovaInfo');
     if (!m) return;
     document.getElementById('niData').value = new Date().toISOString().slice(0,10);
     document.getElementById('niTitulo').value = '';
@@ -20609,9 +20681,10 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     document.getElementById('niUrl').value = '';
     document.getElementById('niImpacto').value = '';
     document.getElementById('niStatus').textContent = '';
-    m.style.display = 'block';
+    if (!window._abrirModalPorCima) m.style.display = 'block';
   }
   function fecharNovaInfo(){
+    if (window._fecharModalPorCima) return window._fecharModalPorCima('modalNovaInfo');
     var m = document.getElementById('modalNovaInfo'); if (m) m.style.display='none';
   }
   async function salvarNovaInfo(){
@@ -20738,6 +20811,272 @@ function cadastrarDoBalanco(indice){
   }, 120);
 }
 window.cadastrarDoBalanco = cadastrarDoBalanco;
+
+/* ===================================================================
+   v43 — O QUE O BANCO REALMENTE TEM
+
+   Quando um indicador some da tela, a pergunta é sempre a mesma: o dado
+   não veio, veio zerado, ou veio e não está sendo lido? Este painel lê a
+   subcoleção crua, sem filtro nem ordenação, e responde bloco por bloco.
+   Também avisa quando um documento está invisível para as consultas.
+   =================================================================== */
+(function(){
+  'use strict';
+  function banco(){ try { return (typeof db !== 'undefined' && db) ? db : null; } catch(e){ return null; } }
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function R$(v){ return (v==null||!isFinite(v))?'-'
+    : v.toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+
+  /* cada bloco com os campos que o sistema espera e o que ele alimenta */
+  var BLOCOS = [
+    { id:'dre', nome:'DRE', alimenta:'margens, EBITDA, cobertura de juros',
+      campos:['receitaLiquida','cmv','despesasVendas','despesasAdm','depreciacaoAmortizacao',
+              'receitasFinanceiras','despesasFinanceiras','lucroLiquido'],
+      chave:['receitaLiquida'] },
+    { id:'ac', nome:'Ativo circulante', alimenta:'liquidez corrente e seca, capital de giro',
+      campos:['caixa','aplicacoesFinanceirasCP','contasReceber','estoques','impostosRecuperar',
+              'outrosAC','ativoCirculante'],
+      chave:['ativoCirculante','caixa','contasReceber','estoques'] },
+    { id:'anc', nome:'Ativo não circulante', alimenta:'imobilizado, garantias, patrimonial',
+      campos:['realizavelLP','investimentos','imobilizado','depreciacao','intangivel','ativoNaoCirculante'],
+      chave:['imobilizado','ativoNaoCirculante'] },
+    { id:'pc', nome:'Passivo circulante', alimenta:'LIQUIDEZ, endividamento, ciclo',
+      campos:['contasPagar','emprestimosCP','salariosPagar','impostosPagar','outrosPC','passivoCirculante'],
+      chave:['passivoCirculante','contasPagar','emprestimosCP'] },
+    { id:'pnc', nome:'Passivo não circulante', alimenta:'perfil de prazo, DL/EBITDA',
+      campos:['emprestimosLP','debentures','provisoesLP','outrosPNC','passivoNaoCirculante'],
+      chave:['passivoNaoCirculante','emprestimosLP'] },
+    { id:'pl', nome:'Patrimônio líquido', alimenta:'ROE, haveres, vida de sócios',
+      campos:['capitalSocial','reservasLucro','lucrosAcumulados','patrimonioLiquido'],
+      chave:['patrimonioLiquido'] },
+    { id:'div', nome:'Dívida', alimenta:'DL/EBITDA, custo da dívida, taxa-alvo',
+      campos:['dividaBruta','disponiveis','dividaLiquida'],
+      chave:['dividaBruta'] },
+    { id:'bancos', nome:'Dívida por banco', alimenta:'comparação de taxas, portabilidade',
+      campos:[], chave:[], lista:'bancos' },
+    { id:'folha', nome:'Folha e benefícios', alimenta:'RC empregador, benefício fiscal, rotatividade',
+      campos:['folhaAnual','encargosFolha','beneficiosAnual','funcionarios','regimeTributario'],
+      chave:['folhaAnual'] },
+    { id:'garantia', nome:'Bens em garantia', alimenta:'teto de crédito, seguro do bem onerado',
+      campos:['bensEmGarantia','avaisPrestados','fiancasBancarias'],
+      chave:['bensEmGarantia'] },
+    { id:'seguro', nome:'Seguro hoje', alimenta:'comparação prêmio × exposição',
+      campos:['premioSegurosAno'], chave:['premioSegurosAno'] },
+    { id:'conting', nome:'Contingências', alimenta:'garantia judicial, risco',
+      campos:['processosTrabalhistas','processosTributarios','processosCiveis','depositosJudiciais'],
+      chave:['processosTrabalhistas','processosTributarios','depositosJudiciais'] }
+  ];
+
+  function avaliar(d){
+    return BLOCOS.map(function(b){
+      if (b.lista){
+        var arr = Array.isArray(d[b.lista]) ? d[b.lista] : [];
+        return { id:b.id, nome:b.nome, alimenta:b.alimenta,
+                 estado: arr.length ? 'ok' : 'vazio',
+                 detalhe: arr.length ? arr.length + ' banco(s)' : 'nenhum',
+                 faltando: arr.length ? [] : ['bancos'] };
+      }
+      var preenchidos = b.campos.filter(function(c){
+        var v = d[c];
+        if (typeof v === 'string') return v.trim() !== '';
+        return n(v) !== 0;
+      });
+      var temChave = b.chave.some(function(c){ return n(d[c]) !== 0; });
+      var estado = temChave ? (preenchidos.length >= Math.ceil(b.campos.length/2) ? 'ok' : 'parcial')
+                            : 'vazio';
+      return { id:b.id, nome:b.nome, alimenta:b.alimenta, estado:estado,
+               detalhe: preenchidos.length + ' de ' + b.campos.length + ' campos',
+               faltando: b.campos.filter(function(c){ return preenchidos.indexOf(c) < 0; }) };
+    });
+  }
+
+  async function diagnosticar(empresaId){
+    var bd = banco(); if (!bd) throw new Error('Banco indisponível.');
+    /* sem orderBy e sem limit: queremos ver inclusive o que as consultas normais escondem */
+    var snap = await bd.collection('empresas').doc(empresaId).collection('financeiro').get();
+    var docs = [];
+    snap.forEach(function(doc){
+      var d = doc.data() || {};
+      var anoNum = Number(d.ano);
+      docs.push({
+        docId: doc.id,
+        ano: d.ano,
+        anoValido: isFinite(anoNum) && anoNum > 1900 && anoNum < 2200,
+        anoTipo: typeof d.ano,
+        periodoTipo: d.periodoTipo || 'anual',
+        periodoMeses: d.periodoMeses || 12,
+        fechado: d.fechado,
+        origem: d.importadoDe || (d.updatedBy ? 'manual' : ''),
+        atualizadoEm: d.importadoEm || '',
+        blocos: avaliar(d),
+        receita: n(d.receitaLiquida) || n(d.receita)
+      });
+    });
+    docs.sort(function(x,y){
+      var ax=Number(x.ano), ay=Number(y.ano);
+      return (isFinite(ay)?ay:-Infinity) - (isFinite(ax)?ax:-Infinity);
+    });
+    return docs;
+  }
+
+  var ULTIMO = [];
+
+  async function abrirDiagnostico(){
+    var D = window.CURRENT_ANALYSIS_DATA;
+    if (!D || !D.empresaId) return;
+    var corpo = document.getElementById('diagDadosCorpo');
+    var m = (window._abrirModalPorCima && window._abrirModalPorCima('modalDiagDados'))
+            || document.getElementById('modalDiagDados');
+    if (!m || !corpo) return;
+    if (!window._abrirModalPorCima) m.style.display = 'block';
+    corpo.innerHTML = '<div class="dg-vazio">Lendo o banco...</div>';
+    try{
+      var docs = await diagnosticar(D.empresaId);
+      ULTIMO = docs;
+      corpo.innerHTML = montar(docs, D);
+    }catch(e){
+      corpo.innerHTML = '<div class="dg-vazio">Não consegui ler: ' + esc(e.message) + '</div>';
+    }
+  }
+  function fecharDiagnostico(){
+    if (window._fecharModalPorCima) return window._fecharModalPorCima('modalDiagDados');
+    var m = document.getElementById('modalDiagDados'); if (m) m.style.display='none';
+  }
+
+  function montar(docs, D){
+    if (!docs.length) return '<div class="dg-vazio">Nenhum exercício gravado para esta empresa.</div>';
+    var naTela = (D.rows||[]).map(function(r){
+      return (r.ano==null || r.ano==='') ? '(sem ano)' : String(r.ano); });
+    var invisiveis = docs.filter(function(d){ return !d.anoValido; });
+
+    var h = '<div class="dg-resumo">'
+          + '<b>' + docs.length + '</b> exercício(s) gravado(s) no banco. '
+          + 'Na tela aparecem: ' + (naTela.join(', ') || 'nenhum') + '.'
+          + '</div>';
+
+    if (invisiveis.length){
+      h += '<div class="dg-alerta">⚠️ ' + invisiveis.length + ' documento(s) com o campo <b>ano</b> ausente ou '
+         + 'em formato errado (' + invisiveis.map(function(d){ return (d.ano==null ? 'campo ausente' : '"' + esc(String(d.ano)) + '" como ' + d.anoTipo); }).join(', ')
+         + '). No Firestore, consulta ordenada por um campo <b>ignora quem não tem esse campo</b> — '
+         + 'era assim que um exercício sumia da tela sem ter sido apagado. A partir desta versão eles aparecem; '
+         + 'abra o ano e grave de novo para corrigir o campo.</div>';
+    }
+
+    docs.forEach(function(d){
+      var vazios = d.blocos.filter(function(b){ return b.estado==='vazio'; });
+      var parciais = d.blocos.filter(function(b){ return b.estado==='parcial'; });
+      h += '<div class="dg-ano">'
+         + '<div class="dg-ano-h">'
+         +   '<div><span class="dg-ano-n">' + esc(String(d.ano==null?'(sem ano)':d.ano)) + '</span>'
+         +     (d.periodoTipo && d.periodoTipo!=='anual'
+                 ? '<span class="dg-tag">' + esc(d.periodoTipo) + ' · ' + esc(String(d.periodoMeses)) + 'm</span>' : '')
+         +     (!d.anoValido ? '<span class="dg-tag dg-ruim">ano inválido</span>' : '')
+         +     '<div class="dg-ano-s">' + (d.receita ? R$(d.receita) + ' de receita' : 'sem receita')
+         +       (d.origem ? ' · ' + esc(d.origem) : '') + '</div>'
+         +   '</div>'
+         +   '<div class="dg-contagem">'
+         +     '<span class="dg-ok">' + d.blocos.filter(function(b){return b.estado==='ok';}).length + ' ok</span>'
+         +     (parciais.length ? '<span class="dg-parcial">' + parciais.length + ' parcial</span>' : '')
+         +     (vazios.length ? '<span class="dg-vazio-c">' + vazios.length + ' vazio</span>' : '')
+         +   '</div>'
+         + '</div>'
+         + '<div class="dg-blocos">';
+      d.blocos.forEach(function(b){
+        h += '<div class="dg-bloco dg-' + b.estado + '">'
+           +   '<div class="dg-bloco-n">' + esc(b.nome) + '</div>'
+           +   '<div class="dg-bloco-d">' + esc(b.detalhe) + '</div>'
+           +   (b.estado!=='ok' ? '<div class="dg-bloco-a">afeta: ' + esc(b.alimenta) + '</div>' : '')
+           + '</div>';
+      });
+      h += '</div></div>';
+    });
+
+    h += '<div class="dg-acoes">'
+       + '<button class="btn btn-primary" onclick="copiarPedidoFaltante()">📋 Copiar o pedido do que falta</button>'
+       + '<span id="dgStatus" class="dg-status"></span></div>'
+       + '<div class="dg-nota">O pedido sai pronto para colar na conversa da análise. '
+       + 'A IA devolve só os blocos que faltam, sem refazer o que já está certo.</div>';
+    return h;
+  }
+
+  /* texto para pedir à IA exatamente o que falta, ano a ano */
+  function pedidoFaltante(){
+    if (!ULTIMO.length) return '';
+    var t = 'Na importação anterior, alguns blocos não chegaram ao sistema. '
+          + 'Refaça SÓ o que está listado abaixo, mantendo o que já está certo. '
+          + 'Gere um novo JSON de importação apenas com estes períodos e campos:\n\n';
+    var algo = false;
+    ULTIMO.forEach(function(d){
+      var faltam = d.blocos.filter(function(b){ return b.estado!=='ok'; });
+      if (!faltam.length) return;
+      algo = true;
+      t += 'Exercício ' + (d.ano==null?'(sem ano — preencha meta.ano)':d.ano) + ':\n';
+      faltam.forEach(function(b){
+        t += '  - ' + b.nome + ' (' + b.estado + ') — campos: ' +
+             (b.faltando.length ? b.faltando.join(', ') : b.id) + '\n';
+      });
+      if (!d.anoValido) t += '  - ATENÇÃO: este período está gravado sem o ano. Informe meta.ano.\n';
+      t += '\n';
+    });
+    if (!algo) t += '(nada faltando — todos os blocos vieram completos)\n';
+    t += 'Lembre: o passivo costuma vir nas subcontas de EMPRÉSTIMOS E FINANCIAMENTOS, '
+       + 'FORNECEDORES e OBRIGAÇÕES do balanço. Se o documento não tiver algum desses blocos, '
+       + 'diga que não tem em vez de deixar zerado.\n';
+    return t;
+  }
+  function copiarPedidoFaltante(){
+    var t = pedidoFaltante();
+    var st = document.getElementById('dgStatus');
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(function(){ if(st){ st.textContent='✅ Copiado.'; st.style.color='var(--success)'; } })
+      .catch(function(){ if(st){ st.textContent='Não consegui copiar — veja o console.'; st.style.color='var(--warning)'; }
+                         console.log(t); });
+  }
+
+  window.abrirDiagnostico      = abrirDiagnostico;
+  window.fecharDiagnostico     = fecharDiagnostico;
+  window.copiarPedidoFaltante  = copiarPedidoFaltante;
+  window._diagnosticarDados    = diagnosticar;
+  window._pedidoFaltante       = pedidoFaltante;
+})();
+
+
+/* ===================================================================
+   v43 — MODAL SOBRE MODAL
+   Todos os .modal nascem com z-index 999. Quando dois estão abertos, quem
+   ganha é o que vem depois no HTML — e o modal de análise (modalDet) é o
+   último do arquivo. Qualquer janela aberta de dentro dele abria ATRÁS e
+   parecia que o botão não funcionava. Aqui a janela que abre por último
+   sobe acima das visíveis, e volta ao normal quando fecha.
+   =================================================================== */
+(function(){
+  'use strict';
+  var BASE = 999;
+  function abrirPorCima(id){
+    var m = document.getElementById(id);
+    if (!m) return null;
+    var topo = BASE;
+    [].forEach.call(document.querySelectorAll('.modal'), function(x){
+      if (x === m) return;
+      if (getComputedStyle(x).display === 'none') return;
+      var z = parseInt(getComputedStyle(x).zIndex, 10);
+      if (isFinite(z) && z > topo) topo = z;
+    });
+    m.style.zIndex = String(topo + 10);
+    m.style.display = 'block';
+    return m;
+  }
+  function fecharPorCima(id){
+    var m = document.getElementById(id);
+    if (!m) return;
+    m.style.display = 'none';
+    m.style.zIndex = '';      /* devolve ao padrão da folha de estilo */
+  }
+  window._abrirModalPorCima = abrirPorCima;
+  window._fecharModalPorCima = fecharPorCima;
+})();
 
   </script>
 </body>
