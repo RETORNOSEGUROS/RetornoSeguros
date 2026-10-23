@@ -21996,7 +21996,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       { ate: 4354.27, aliq: 0.12 },
       { ate: 8475.55, aliq: 0.14 }
     ],
-    salarioMinimo2026: 1621.00
+    salarioMinimo2026: 1621.00,
+    proLaborePiso: 3000.00   /* piso tipico de pro-labore de diretoria, para estimar quantos sao */
   };
 
   function inssDe(salario){
@@ -22057,6 +22058,13 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var lucroLiq  = n(a.lucroLiq) || n(a.lucroLiquido);
     var setor     = a.setor || D.setor || emp.setor;
 
+    /* ---------- 1-A. o pro-labore nao e folha (v51) ----------
+       Quando o lancamento junta pro-labore com salarios, a media sai inflada e o
+       headcount estimado sai menor do que e. Tira antes de qualquer conta. */
+    var proLaboreDentroDaFolha = !!(proLabore > 0 && folha > 0 && n(a.folhaIncluiProLabore));
+    if (proLaboreDentroDaFolha) folha = folha - proLabore;
+    var folhaLimpa = folha;
+
     /* ---------- 1. quantas vidas ---------- */
     var func = n(a.funcionarios) || n(emp.funcionarios) || n(emp.qtdFuncionarios) || n(emp.numeroFuncionarios);
     var origemFunc = func ? (n(a.funcionarios) ? 'informado no exercício' : 'cadastro da empresa (raio-x)') : null;
@@ -22092,11 +22100,44 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       origemSalario = salBase.origem + ' (o calculo pela folha deu abaixo do minimo)';
     }
 
+    /* ---------- 1-B. os dirigentes (v51) ----------
+       O pro-labore nao e folha de funcionario e nunca entrou na media salarial - isso
+       ja estava certo. O que faltava e a outra metade da informacao: ele diz quantos
+       DIRIGENTES a empresa tem, e dirigente e vida obrigatoria no plano.
+
+       Nao por generosidade: a dedutibilidade de IRPJ/CSLL (Lei 9.249/95, art. 13, §1º)
+       e a nao incidencia de encargos (Lei 8.212/91, art. 28, §9º, "q") exigem que o
+       beneficio seja extensivo a todos os empregados E DIRIGENTES. Plano que deixa a
+       diretoria de fora perde os dois - e e um erro comum, porque o RH monta o plano
+       olhando so para o CLT. */
+    var dirigentes = n(a.qtdAdministradores) || n(emp.qtdAdministradores) || n(a.qtdSocios) || n(emp.qtdSocios) || 0;
+    var origemDirigentes = null;
+    var proLaboreMedio = null;
+    if (proLabore > 0){
+      if (dirigentes > 0){
+        origemDirigentes = n(a.qtdAdministradores) ? 'administradores informados'
+                         : 'sócios informados (usados como dirigentes)';
+      } else {
+        /* Sem numero declarado, estima pelo pro-labore contra um piso de diretoria.
+           O piso nao pode ser fixo: R$ 3.000 serve para uma empresa de comercio e
+           inventa sete diretores numa industria que paga dez mil para dois. Entao o
+           piso acompanha a propria empresa - diretor ganha pelo menos o dobro da
+           media da casa - e o resultado fica preso entre 1 e 10% do quadro. */
+        var pisoDir = Math.max(P.proLaborePiso, (salarioMedio || 0) * 2);
+        var tetoDir = Math.max(1, Math.round(func * 0.10));
+        dirigentes = Math.max(1, Math.min(tetoDir, Math.round(proLabore / (pisoDir * 12))));
+        origemDirigentes = 'estimado: pró-labore de ' + R$(proLabore) + ' ÷ ' + R$c(pisoDir) +
+          '/mês (o dobro do salário médio da casa) — número não declarado, confirmar';
+      }
+      proLaboreMedio = proLabore / dirigentes / 12;
+    }
+
     /* dois cenarios, porque e assim que o plano e vendido: a empresa paga o titular
        e decide depois se estende aos dependentes (com ou sem coparticipacao). */
     var dependentes = Math.round(func * P.dependentesPorTitular);
-    var vidas = func;                       /* cenario base: titulares */
-    var vidasComDep = func + dependentes;   /* cenario estendido */
+    var titulares = func + dirigentes;      /* dirigente tambem e vida, por lei */
+    var vidas = titulares;                  /* cenario base: todos os titulares */
+    var vidasComDep = titulares + dependentes;   /* cenario estendido */
 
     /* ---------- 2. o que a empresa ja faz de benefício ---------- */
     var temDentalDeclarado = /dental|odonto/i.test(String(a.beneficiosDetalhe||'')) ||
@@ -22105,7 +22146,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var beneficioPorFunc = (beneficios && func) ? beneficios/func/12 : null;
 
     /* ---------- 3. a conta do plano ---------- */
-    var custoMes  = vidas * P.ticketVida;
+    var custoMes  = vidas * P.ticketVida;   /* vidas = funcionarios + dirigentes */
     var custoAno  = custoMes * P.mesesAno;
     var custoAnoComDep = vidasComDep * P.ticketVida * P.mesesAno;
 
@@ -22184,7 +22225,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       tetoSimplificado: P.irpf2026.tetoSimplificadoAno
     };
     /* o pro-labore dos socios quase sempre esta acima do redutor */
-    var proLaboreMes = (proLabore && n(a.qtdSocios)) ? proLabore / n(a.qtdSocios) / 12 : null;
+    var proLaboreMes = proLaboreMedio;
     if (proLaboreMes){
       var inssPL = inssDe(proLaboreMes);
       var irPL = irpfMensal(proLaboreMes - inssPL, proLaboreMes);
@@ -22301,7 +22342,10 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     return {
       /* quem é */
-      func: func, dependentes: dependentes, vidas: vidas, estendido: estendido,
+      func: func, dirigentes: dirigentes, titulares: titulares, origemDirigentes: origemDirigentes,
+      proLabore: proLabore, proLaboreMedio: proLaboreMedio,
+      folhaLimpa: folhaLimpa, proLaboreDentroDaFolha: proLaboreDentroDaFolha,
+      dependentes: dependentes, vidas: vidas, estendido: estendido,
       origemFunc: origemFunc, salarioMedio: salarioMedio, origemSalario: origemSalario,
       avisoSalario: avisoSalario,
       /* a conta */
@@ -22325,6 +22369,220 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
   window.analisarDental = analisarDental;
   window._PARAM_DENTAL = P;
+  window._salarioDoSetorDental = salarioDoSetor;   /* o historico reaproveita a tabela */
+})();
+
+/* ===================================================================
+   v51 — "E SE VOCÊ JÁ TIVESSE O PLANO?" — O HISTÓRICO E O ANO QUE VEM
+
+   Mostrar o custo do plano no ano corrente convence pela ordem de
+   grandeza. Mostrar o que teria acontecido nos últimos quatro anos
+   convence por outro motivo: vira história, e história o cliente lembra.
+
+   Duas coisas que esta leitura entrega e nenhuma proposta entrega:
+
+   1. O ANO DE PREJUÍZO. Em ano sem lucro tributável não há IRPJ a pagar,
+      então os 34% não voltam — e dizer isso é o que separa uma conta
+      honesta de uma planilha de vendedor. Mas o gasto não se perde: ele
+      aumenta o prejuízo fiscal, que compensa lucro futuro até o limite
+      de 30% ao ano (Lei 8.981/95, art. 42). O sistema calcula os dois.
+
+   2. O ANO QUE VEM. Com a série projetada pela tendência, dá para pôr o
+      plano dentro do cenário do próximo exercício em vez de discutir um
+      custo solto no ar.
+   =================================================================== */
+(function(){
+  'use strict';
+
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '-'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '-' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+
+  var TRAVA_PREJUIZO = 0.30;   /* compensação limitada a 30% do lucro real do período */
+
+  /* quantas vidas aquele ano teria, com os números daquele ano */
+  function vidasDoAno(r, P, salarioDoSetor, setor){
+    var func = n(r.funcionarios);
+    var origem = func ? 'informado' : null;
+    var folha = n(r.folhaAnual);
+    if (!func && folha){
+      var base = salarioDoSetor(setor).valor;
+      func = Math.round(folha / (base * P.salariosAno));
+      origem = 'estimado pela folha';
+    }
+    var dirig = n(r.qtdAdministradores) || n(r.qtdSocios) || 0;
+    if (!dirig && n(r.proLabore) > 0) dirig = Math.max(1, Math.round(n(r.proLabore) / (P.proLaborePiso*12)));
+    return { func: func, dirigentes: dirig, titulares: func + dirig, origem: origem };
+  }
+
+  /* o ano teve lucro tributável para devolver os 34%? */
+  function houveLucroTributavel(r){
+    var ircs = n(r.ircs);
+    if (ircs > 0) return { sim: true, prova: 'IRPJ e CSLL provisionados de ' + R$(ircs) };
+    var lair = n(r.lucroAntesIR) || n(r.lair);
+    if (lair > 0) return { sim: true, prova: 'lucro antes do IR de ' + R$(lair) };
+    var ll = n(r.lucroLiq) || n(r.lucroLiquido);
+    if (lair < 0 || ll < 0) return { sim: false, prova: 'prejuízo de ' + R$(Math.abs(lair || ll)) };
+    return { sim: null, prova: 'sem resultado lançado' };
+  }
+
+  function historicoDental(rows, D){
+    if (!Array.isArray(rows) || !rows.length) return null;
+    var P = window._PARAM_DENTAL;
+    if (!P) return null;
+    var setor = (rows[0] && rows[0].setor) || (D && D.setor) || '';
+    /* reaproveita a tabela de salario do motor principal */
+    var salarioDoSetor = window._salarioDoSetorDental;
+    if (typeof salarioDoSetor !== 'function') return null;
+
+    var serie = rows.slice().sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+    var anos = [], somaCusto = 0, somaDevolvido = 0, somaLiquido = 0, creditoFiscal = 0;
+
+    serie.forEach(function(r){
+      var V = vidasDoAno(r, P, salarioDoSetor, r.setor || setor);
+      if (!V.titulares) return;
+      var custo = V.titulares * P.ticketVida * P.mesesAno;
+
+      var inf = (typeof window.inferirRegime === 'function') ? window.inferirRegime(r) : null;
+      var real = inf ? inf.lucroReal : String(r.regimeTributario||'').toLowerCase() === 'real';
+      var L = houveLucroTributavel(r);
+
+      var devolvido = 0, credito = 0, leitura = '';
+      if (!real){
+        leitura = 'Fora do lucro real — não há dedução a fazer, o custo seria integral.';
+      } else if (L.sim === true){
+        devolvido = custo * P.aliquotaIRPJCSLL;
+        leitura = 'Houve lucro tributável (' + L.prova + '), então os 34% voltariam: ' + R$(devolvido) + '.';
+      } else if (L.sim === false){
+        credito = custo * P.aliquotaIRPJCSLL;
+        leitura = 'O ano fechou com ' + L.prova + '. Sem IRPJ a pagar, os 34% não voltariam naquele ano — '
+                + 'mas o gasto aumentaria o prejuízo fiscal, que compensa lucro futuro até 30% ao ano. '
+                + 'O crédito de ' + R$(credito) + ' ficaria guardado, não perdido.';
+      } else {
+        leitura = 'Sem resultado lançado neste exercício — não dá para dizer se haveria devolução.';
+      }
+
+      var folha = n(r.folhaAnual), encargos = n(r.encargosFolha),
+          benef = n(r.beneficiosAnual), pl = n(r.proLabore);
+      var folhaTotal = folha + encargos + benef + pl;
+      var receita = n(r.receita) || n(r.receitaLiquida);
+
+      anos.push({
+        ano: Number(r.ano), titulares: V.titulares, func: V.func, dirigentes: V.dirigentes,
+        origemVidas: V.origem, custo: custo, devolvido: devolvido, creditoGuardado: credito,
+        liquido: custo - devolvido, lucroReal: real, tinhaLucro: L.sim, prova: L.prova,
+        pesoFolha: folhaTotal ? custo/folhaTotal : null,
+        pesoReceita: receita ? custo/receita : null,
+        beneficios: benef, leitura: leitura
+      });
+      somaCusto += custo; somaDevolvido += devolvido; somaLiquido += (custo - devolvido);
+      creditoFiscal += credito;
+    });
+
+    if (!anos.length) return null;
+
+    /* o credito dos anos de prejuizo so vale se houver lucro depois */
+    var ultimo = anos[anos.length-1];
+    var aproveitavel = null;
+    if (creditoFiscal > 0 && ultimo.tinhaLucro === true){
+      var lucroUltimo = 0;
+      var r0 = serie[serie.length-1];
+      lucroUltimo = n(r0.lucroAntesIR) || n(r0.lair) || n(r0.lucroLiq);
+      aproveitavel = {
+        credito: creditoFiscal,
+        tetoPorAno: lucroUltimo * TRAVA_PREJUIZO * P.aliquotaIRPJCSLL,
+        leitura: 'A empresa voltou a ter lucro em ' + ultimo.ano + ', então o crédito guardado nos anos de prejuízo '
+               + 'passa a ser compensável — respeitada a trava de 30% do lucro de cada período.'
+      };
+    }
+
+    return {
+      anos: anos, deAte: anos[0].ano + ' a ' + anos[anos.length-1].ano,
+      somaCusto: somaCusto, somaDevolvido: somaDevolvido, somaLiquido: somaLiquido,
+      creditoFiscal: creditoFiscal, aproveitavel: aproveitavel,
+      anosComLucro: anos.filter(function(x){ return x.tinhaLucro === true; }).length,
+      anosSemLucro: anos.filter(function(x){ return x.tinhaLucro === false; }).length
+    };
+  }
+
+  /* ---------- a projeção do próximo exercício ---------- */
+  function media(v){ return v.length ? v.reduce(function(a,b){ return a+b; },0)/v.length : 0; }
+
+  /* tendência simples: a reta que passa pela série, projetada um ano à frente */
+  function projetar(pontos){
+    var k = pontos.length;
+    if (!k) return null;
+    if (k === 1) return { valor: pontos[0], metodo: 'repete o único exercício' };
+    if (k === 2) return { valor: pontos[1] + (pontos[1]-pontos[0]), metodo: 'variação do último ano' };
+    var sx=0, sy=0, sxy=0, sxx=0;
+    pontos.forEach(function(v,i){ sx+=i; sy+=v; sxy+=i*v; sxx+=i*i; });
+    var den = k*sxx - sx*sx;
+    if (!den) return { valor: media(pontos), metodo: 'média da série' };
+    var incl = (k*sxy - sx*sy)/den;
+    var inter = (sy - incl*sx)/k;
+    return { valor: inter + incl*k, metodo: 'tendência de ' + k + ' exercícios', inclinacao: incl };
+  }
+
+  function projecaoDental(rows, D){
+    if (!Array.isArray(rows) || rows.length < 2) return null;
+    var P = window._PARAM_DENTAL;
+    var salarioDoSetor = window._salarioDoSetorDental;
+    if (!P || typeof salarioDoSetor !== 'function') return null;
+
+    var serie = rows.slice().sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+    var proximoAno = Number(serie[serie.length-1].ano) + 1;
+    var setor = serie[serie.length-1].setor || (D && D.setor) || '';
+
+    function col(campo){
+      return serie.map(function(r){ return n(r[campo]); }).filter(function(v,i){ return true; });
+    }
+    function proj(campo){
+      var vals = serie.map(function(r){ return n(r[campo]); });
+      if (!vals.some(function(v){ return v; })) return null;
+      return projetar(vals);
+    }
+
+    var receita = proj('receita') || proj('receitaLiquida');
+    var folha   = proj('folhaAnual');
+    var lucro   = proj('lucroLiq') || proj('lucroLiquido');
+    var benef   = proj('beneficiosAnual');
+    var encarg  = proj('encargosFolha');
+
+    /* vidas projetadas: pela folha projetada, ou pela média de headcount */
+    var vidasHoje = vidasDoAno(serie[serie.length-1], P, salarioDoSetor, setor);
+    var funcProj = vidasHoje.func;
+    if (folha && folha.valor > 0){
+      var base = salarioDoSetor(setor).valor;
+      funcProj = Math.max(1, Math.round(folha.valor / (base * P.salariosAno)));
+    }
+    var titularesProj = funcProj + vidasHoje.dirigentes;
+
+    var custo = titularesProj * P.ticketVida * P.mesesAno;
+    var inf = (typeof window.inferirRegime === 'function') ? window.inferirRegime(serie[serie.length-1]) : null;
+    var lucroReal = inf ? inf.lucroReal : false;
+    var teraLucro = lucro ? lucro.valor > 0 : null;
+    var devolve = (lucroReal && teraLucro) ? custo * P.aliquotaIRPJCSLL : 0;
+    var liquido = custo - devolve;
+
+    var folhaTotalProj = (folha?folha.valor:0) + (encarg?encarg.valor:0) + (benef?benef.valor:0);
+
+    return {
+      ano: proximoAno,
+      receita: receita, folha: folha, lucro: lucro, beneficios: benef,
+      funcionarios: funcProj, dirigentes: vidasHoje.dirigentes, titulares: titularesProj,
+      variacaoHeadcount: funcProj - vidasHoje.func,
+      custo: custo, devolve: devolve, liquido: liquido, lucroReal: lucroReal, teraLucro: teraLucro,
+      pesoFolha: folhaTotalProj ? custo/folhaTotalProj : null,
+      pesoReceita: (receita && receita.valor) ? custo/receita.valor : null,
+      pesoLucro: (lucro && lucro.valor > 0) ? liquido/lucro.valor : null,
+      lucroDepois: lucro ? lucro.valor - liquido : null,
+      base: serie.length + (serie.length===1?' exercício':' exercícios')
+    };
+  }
+
+  window.historicoDental = historicoDental;
+  window.projecaoDental  = projecaoDental;
 })();
 
 /* ===================================================================
@@ -22374,13 +22632,21 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     /* quem é */
     h += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; margin-bottom:6px">'
-      + tile('Funcionários', String(d.func), esc(d.origemFunc||''))
+      + tile('Vidas no plano', String(d.titulares),
+             d.func + ' funcionários + ' + d.dirigentes + ' dirigente(s) — '
+             + '<b>dirigente é vida obrigatória</b>, senão a dedutibilidade cai')
       + tile('Se estender aos dependentes', String(d.estendido.vidas) + ' vidas',
              '+' + d.dependentes + ' dependentes na adesão média')
       + tile('Salário médio', R$c(d.salarioMedio), esc(d.origemSalario||''),
              d.avisoSalario ? '#b45309' : null)
       + tile('Benefício hoje', d.beneficiosHoje ? R$(d.beneficiosHoje) : 'nenhum na DRE',
              d.beneficioPorFunc ? R$c(d.beneficioPorFunc) + ' por funcionário/mês' : '')
+      + '</div>';
+
+    h += '<div style="font-size:11.5px; color:#64748b; margin-top:7px; line-height:1.6">'
+      + '<b>Funcionários:</b> ' + esc(d.origemFunc||'não informado')
+      + (d.origemDirigentes ? ' · <b>Dirigentes:</b> ' + esc(d.origemDirigentes) : '')
+      + (d.proLaboreDentroDaFolha ? ' · o pró-labore foi retirado da folha antes da conta' : '')
       + '</div>';
 
     if (d.avisoSalario)
@@ -22391,7 +22657,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     h += secao('1. Quanto custa, e quanto custa depois do imposto');
     h += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px">'
       + tile('Custo do plano', R$(d.custoAno) + '<span style="font-size:12px; font-weight:600; color:#64748b">/ano</span>',
-             d.func + ' titulares × ' + R$c(d.ticket) + ' × 12 meses')
+             d.titulares + ' titulares × ' + R$c(d.ticket) + ' × 12 meses')
       + (d.lucroReal
           ? tile('O governo devolve', R$(d.devolveImposto), 'IRPJ 25% + CSLL 9% sobre despesa dedutível', '#059669')
           : tile('Sem devolução', 'R$ 0', 'fora do lucro real não há dedução', '#b45309'))
@@ -22523,6 +22789,99 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + (T.desligamentosQuePagam != null && T.desligamentosQuePagam <= 1
           ? 'basta <b>uma</b> pessoa que fique.' : 'bastam ' + Math.ceil(T.desligamentosQuePagam||1) + ' pessoas que fiquem.')
       + '</div></div>';
+
+    /* 5. o historico e a projecao */
+    var H = null, PJ = null;
+    try{
+      if (typeof window.historicoDental === 'function') H = window.historicoDental(rows, D);
+      if (typeof window.projecaoDental  === 'function') PJ = window.projecaoDental(rows, D);
+    }catch(e){ console.warn('[dental historico]', e); }
+
+    if (H && H.anos.length > 1){
+      h += secao('5. E se você já tivesse o plano?',
+        'A mesma conta aplicada a cada exercício que a empresa tem no sistema, com os números daquele ano. '
+        + 'Em ano sem lucro tributável os 34% não voltam — e isso está dito.');
+      h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px 16px; overflow-x:auto">'
+        + '<table style="width:100%; border-collapse:collapse; font-size:12.5px; table-layout:fixed; min-width:470px">'
+        + '<colgroup><col style="width:13%"><col style="width:12%"><col style="width:25%">'
+        +   '<col style="width:27%"><col style="width:23%"></colgroup>'
+        + '<tr style="color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:.3px">'
+        +   '<td style="padding:5px 0">Exercício</td>'
+        +   '<td style="padding:5px 8px; text-align:right">Vidas</td>'
+        +   '<td style="padding:5px 8px; text-align:right">Teria custado</td>'
+        +   '<td style="padding:5px 8px; text-align:right">Voltaria de IR</td>'
+        +   '<td style="padding:5px 0 5px 8px; text-align:right">Custo real</td></tr>';
+      H.anos.forEach(function(x){
+        var corIR = x.tinhaLucro === false ? '#b45309' : (x.devolvido ? '#059669' : '#94a3b8');
+        h += '<tr style="border-top:1px solid #f1f5f9">'
+          + '<td style="padding:7px 0; color:#0f172a; font-weight:700">' + x.ano + '</td>'
+          + '<td style="padding:7px 8px; text-align:right; color:#64748b">' + x.titulares + '</td>'
+          + '<td style="padding:7px 8px; text-align:right; color:#0f172a; font-weight:600">' + R$(x.custo) + '</td>'
+          + '<td style="padding:7px 8px; text-align:right; color:' + corIR + '; font-weight:600; word-break:break-word">'
+          +   (x.devolvido ? R$(x.devolvido) : (x.tinhaLucro === false ? 'nada — teve prejuízo' : '—')) + '</td>'
+          + '<td style="padding:7px 0 7px 8px; text-align:right; color:#0f766e; font-weight:700">' + R$(x.liquido) + '</td>'
+          + '</tr>'
+          + '<tr><td colspan="5" style="padding:0 0 9px; font-size:12px; color:#64748b; line-height:1.65; white-space:normal; word-break:break-word; overflow-wrap:anywhere">'
+          +   x.leitura + '</td></tr>';
+      });
+      h += '<tr style="border-top:2px solid #e2e8f0">'
+        + '<td style="padding:9px 0; color:#0f172a; font-weight:800">' + esc(H.deAte) + '</td>'
+        + '<td style="padding:9px 8px"></td>'
+        + '<td style="padding:9px 8px; text-align:right; font-weight:800; color:#0f172a">' + R$(H.somaCusto) + '</td>'
+        + '<td style="padding:9px 8px; text-align:right; font-weight:800; color:#059669">' + R$(H.somaDevolvido) + '</td>'
+        + '<td style="padding:9px 0 9px 8px; text-align:right; font-weight:800; color:#0f766e">' + R$(H.somaLiquido) + '</td>'
+        + '</tr></table>';
+      h += '<div style="font-size:12.5px; color:#475569; margin-top:11px; line-height:1.75">'
+        + 'Em ' + H.anos.length + ' exercícios o plano teria custado <b>' + R$(H.somaCusto) + '</b>, '
+        + 'com <b>' + R$(H.somaDevolvido) + '</b> devolvidos pelo governo — custo real de <b>' + R$(H.somaLiquido) + '</b>, '
+        + 'ou ' + R$(H.somaLiquido/H.anos.length) + ' por ano.'
+        + (H.anosSemLucro ? ' <b>' + H.anosSemLucro + (H.anosSemLucro===1?' ano fechou':' anos fecharam') + ' sem lucro tributável</b>, '
+            + 'e nesses a devolução não aconteceria.' : '')
+        + '</div>';
+      if (H.creditoFiscal > 0){
+        h += '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:9px; padding:11px 14px; margin-top:10px; font-size:12.5px; color:#92400e; line-height:1.75">'
+          + '<b>O que acontece com os ' + R$(H.creditoFiscal) + ' dos anos de prejuízo.</b> '
+          + 'Não somem. A despesa aumenta o prejuízo fiscal, que compensa lucro dos anos seguintes — '
+          + 'limitado a 30% do lucro real de cada período (Lei 8.981/95, art. 42). '
+          + (H.aproveitavel ? H.aproveitavel.leitura : 'Enquanto não houver lucro, o crédito fica guardado.')
+          + '</div>';
+      }
+      h += '</div>';
+    }
+
+    if (PJ){
+      h += secao('6. O ano que vem, com o plano dentro',
+        'Receita, folha e lucro projetados pela ' + esc((PJ.receita && PJ.receita.metodo) || 'série') + ' — '
+        + 'e o plano colocado nesse cenário em vez de discutido solto.');
+      h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px 16px">'
+        + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:11px; margin-bottom:12px">'
+        + (PJ.receita ? tile('Receita projetada ' + PJ.ano, R$(PJ.receita.valor), esc(PJ.receita.metodo)) : '')
+        + (PJ.folha ? tile('Folha projetada', R$(PJ.folha.valor),
+            (PJ.variacaoHeadcount > 0 ? '+' : '') + PJ.variacaoHeadcount + ' no quadro') : '')
+        + tile('Vidas no plano', String(PJ.titulares),
+            PJ.funcionarios + ' funcionários + ' + PJ.dirigentes + ' dirigente(s)')
+        + (PJ.lucro ? tile('Lucro projetado', R$(PJ.lucro.valor),
+            PJ.teraLucro ? 'há base para a devolução de 34%' : 'sem lucro, sem devolução',
+            PJ.teraLucro ? '#059669' : '#b45309') : '')
+        + '</div>'
+        + '<table style="width:100%; border-collapse:collapse; font-size:12.5px">'
+        + '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Plano em ' + PJ.ano + '</td>'
+        +   '<td style="padding:6px 0; text-align:right; color:#0f172a; font-weight:700">' + R$(PJ.custo) + '</td></tr>'
+        + (PJ.devolve ? '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Devolução de IRPJ e CSLL</td>'
+        +   '<td style="padding:6px 0; text-align:right; color:#059669; font-weight:700">− ' + R$(PJ.devolve) + '</td></tr>' : '')
+        + '<tr style="border-top:1px solid #e2e8f0"><td style="padding:7px 0; color:#0f172a; font-weight:800">Custo real no ano</td>'
+        +   '<td style="padding:7px 0; text-align:right; color:#0f766e; font-weight:800">' + R$(PJ.liquido) + '</td></tr>'
+        + (PJ.lucroDepois != null ? '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Lucro projetado depois do plano</td>'
+        +   '<td style="padding:6px 0; text-align:right; color:#0f172a; font-weight:700">' + R$(PJ.lucroDepois) + '</td></tr>' : '')
+        + '</table>'
+        + '<div style="font-size:12.5px; color:#475569; margin-top:11px; line-height:1.75">'
+        + 'No cenário projetado o plano consome '
+        + (PJ.pesoLucro != null ? '<b>' + pc(PJ.pesoLucro,1) + '</b> do lucro' : 'uma fração do resultado')
+        + (PJ.pesoReceita != null ? ' e <b>' + pc(PJ.pesoReceita,3) + '</b> da receita' : '')
+        + '. Projeção serve para dimensionar a decisão, não para prometer resultado — '
+        + 'ela repete o que a empresa vem fazendo, e a empresa pode mudar.'
+        + '</div></div>';
+    }
 
     /* alertas */
     if (d.alertas.length){
