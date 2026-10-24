@@ -3144,6 +3144,10 @@
             <span class="tab-icon">🔍</span>
             <span>Diagnóstico</span>
           </button>
+          <button class="tab-btn" data-tab="racional">
+            <span class="tab-icon">🧭</span>
+            <span>O ano que vem</span>
+          </button>
           <button class="tab-btn" data-tab="seguros">
             <span class="tab-icon">🛡️</span>
             <span>Seguros</span>
@@ -3337,6 +3341,9 @@
         </div>
         <div class="tab-content" id="tab-glossario">
           <div id="glossarioContent"></div>
+        </div>
+        <div class="tab-content" id="tab-racional">
+          <div id="racionalContent"></div>
         </div>
         <div class="tab-content" id="tab-seguros">
           <div id="segurosContent"></div>
@@ -4387,6 +4394,13 @@ function wireUi(){
         );
       } else if(tabId === "dividas" && CURRENT_ANALYSIS_DATA){
         renderDividasBancarias(CURRENT_ANALYSIS_DATA);
+        /* v64: o racional — o que cada número revela e o que dá para fazer */
+        try{
+          var _rc = document.getElementById('racionalContent');
+          if (_rc && typeof window.renderRacional === 'function')
+            _rc.innerHTML = window.renderRacional(
+              (CURRENT_ANALYSIS_DATA.rows||[])[0] || {}, CURRENT_ANALYSIS_DATA.rows || [], CURRENT_ANALYSIS_DATA);
+        }catch(eRc){ console.warn('[racional]', eRc); }
       } else if(tabId === "plano" && CURRENT_ANALYSIS_DATA){
         renderPlanoAcao(CURRENT_ANALYSIS_DATA);
       } else if(tabId === "recuperacao" && CURRENT_ANALYSIS_DATA){
@@ -11792,7 +11806,7 @@ document.addEventListener('click', (ev)=>{
 // ================================================================================
 
 // ===== BENCHMARKS POR SETOR =====
-const BENCHMARKS_SETOR = {
+const BENCHMARKS_SETOR = window.BENCHMARKS_SETOR = {
   'industria': {
     nome: 'Indústria',
     margemBruta: 0.30,
@@ -20556,7 +20570,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
 
   /* ---------- agrupamento das abas ---------- */
   var GRUPOS = [
-    { rotulo:'A empresa',  abas:['dashboard','diagnostico','trajetoria','comparativo','parecer','contexto','informacoes','glossario'] },
+    { rotulo:'A empresa',  abas:['dashboard','diagnostico','trajetoria','comparativo','racional','parecer','contexto','informacoes','glossario'] },
     { rotulo:'Seguros',    abas:['seguros'] },
     { rotulo:'Crédito',    abas:['dividas','defesa','recuperacao'] },
     { rotulo:'Ação',       abas:['planejamento','plano','roteiro'] }
@@ -23732,6 +23746,693 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   window.analisarCoberturaImport = analisarCobertura;
   window.painelCoberturaImport   = painelCobertura;
   window._PRODUTOS_COBERTURA     = PRODUTOS;
+})();
+
+/* ===================================================================
+   v64 — O RACIONAL: O QUE CADA NÚMERO REVELA, E O QUE DÁ PARA FAZER
+
+   Duas ideias do Patrick organizam este módulo.
+
+   A PRIMEIRA: "todo número revela algo, em português claro."
+   Então cada indicador sai com três leituras, nunca uma:
+     · NÍVEL      — onde está hoje contra a referência do setor;
+     · FREQUÊNCIA — em quantos dos exercícios fechados ficou fora da
+                    faixa. É o que separa solidez de sorte;
+     · DIREÇÃO    — para onde a série aponta.
+
+   A SEGUNDA, que é a mais fina: "um cenário bom pode estar mascarando
+   uma frequência de indicador ruim... e nem sempre o cenário ruim é a
+   única análise." Exatamente. Daí a matriz de veredito:
+
+     nível bom + frequência boa + direção boa   → FOLGA
+         e folga é oportunidade: o que fazer com ela.
+     nível bom + frequência ruim                → MASCARADO
+         "está bom este ano e ficou fora em 3 dos 5 — isso é
+          volatilidade, não solidez."
+     nível bom + direção caindo forte           → EROSÃO
+         "ainda está bom, mas no ritmo atual cruza a linha em N anos."
+     nível ruim + direção subindo               → ARRUMANDO
+         reconhecer o esforço é o que mantém a conversa aberta.
+     nível ruim                                 → ARRUMAR
+     abaixo do piso crítico                     → CRÍTICO
+
+   E A LINHA QUE SUSTENTA TUDO: alavanca é aritmética, projeção é
+   previsão. "Se o estoque cair de 72 para 50 dias, libera R$ 2,1 mi"
+   é conta verificável, feita com o número do próprio balanço.
+   "O faturamento vai subir 12%" é chute. O módulo faz a primeira com
+   força e marca a segunda como hipótese, sempre.
+
+   Corte de pessoal e venda de ativo entram ordenados por dor, com o
+   custo na frente — demitir CONSOME caixa antes de economizar, e
+   quem não diz isso está vendendo ilusão.
+   =================================================================== */
+(function(){
+  'use strict';
+
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function num(v){ var x=Number(v); return (v==null||v===''||isNaN(x)||!isFinite(x))?null:x; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '-'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '-' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+  function x2(v){ return (v==null||!isFinite(v)) ? '-' : v.toFixed(2).replace('.',',')+'x'; }
+  function d0(v){ return (v==null||!isFinite(v)) ? '-' : Math.round(v) + ' dias'; }
+
+  var P = {
+    freqRuim: 0.40,        /* fora da faixa em 40%+ dos exercicios = frequencia ruim */
+    r2Firme: 0.50,         /* a regressao so "aponta" com R2 acima disso */
+    incFirme: 0.03,        /* e inclinacao de 3% da media por ano */
+    rescisaoSalarios: 2.0, /* custo de rescisao, em salarios medios por pessoa (premissa) */
+    aliqGanho: 0.34,       /* IRPJ+CSLL sobre ganho de capital no lucro real (premissa) */
+    folgaCaixaMeses: 3     /* caixa de seguranca antes de considerar sobra */
+  };
+
+  /* ---------------- os indicadores, com o que cada um revela ---------------- */
+  var IND = [
+    { id:'liq', nome:'Liquidez corrente', campo:'liq', fmt:x2, maiorMelhor:true,
+      bench:'liquidezCorrente', piso:1.0,
+      oque:'quanto a empresa tem no curto prazo para cada real que vence no curto prazo',
+      bom:'sobra caixa e recebível para pagar o que vence em doze meses',
+      ruim:'o que vence em doze meses é maior do que o que entra no mesmo prazo — a diferença sai de dívida nova ou de atraso' },
+    { id:'liqSeca', nome:'Liquidez seca', campo:'liqSeca', fmt:x2, maiorMelhor:true,
+      bench:'liquidezSeca', piso:0.6,
+      oque:'a mesma conta sem contar o estoque, que é a parte que pode não virar dinheiro',
+      bom:'paga o curto prazo sem precisar vender estoque às pressas',
+      ruim:'a liquidez depende de escoar estoque — e estoque parado não paga banco' },
+    { id:'alav', nome:'Dívida líquida sobre EBITDA', campo:'alav', fmt:x2, maiorMelhor:false,
+      bench:'dlEbitda', teto:3.5,
+      oque:'quantos anos de geração de caixa a empresa precisa para quitar a dívida',
+      bom:'a dívida cabe na geração de caixa, e isso é o primeiro número que o comitê olha',
+      ruim:'a dívida está grande para o que a operação gera — acima de 3,5x a maioria dos bancos trava limite novo' },
+    { id:'cobJuros', nome:'Cobertura de juros', campo:'coberturaDiv', fmt:x2, maiorMelhor:true,
+      benchFixo:3.0, piso:1.5,
+      oque:'quantas vezes o resultado operacional paga os juros do ano',
+      bom:'o resultado paga os juros com folga e ainda sobra para investir',
+      ruim:'quase tudo que a operação gera vai para o banco — abaixo de 1,5x a empresa opera para pagar juros' },
+    { id:'margem', nome:'Margem EBITDA', campo:'margem', fmt:pc, maiorMelhor:true,
+      bench:'margemEbitda',
+      oque:'quanto sobra de cada real vendido antes de juros, impostos e depreciação',
+      bom:'a operação é rentável antes da estrutura financeira',
+      ruim:'sobra pouco da venda antes mesmo de pagar banco — o problema é de operação, não de dívida' },
+    { id:'margemLiq', nome:'Margem líquida', campo:'margemLiq', fmt:pc, maiorMelhor:true,
+      bench:'margemLiquida', piso:0,
+      oque:'quanto sobra de cada real vendido depois de tudo',
+      bom:'a empresa converte venda em lucro',
+      ruim:'o que a operação gera não chega ao lucro — o caminho some em juros, impostos ou despesa fixa' },
+    { id:'roe', nome:'Retorno sobre o patrimônio', campo:'roe', fmt:pc, maiorMelhor:true,
+      bench:'roe',
+      oque:'quanto o capital dos sócios rende por ano dentro da empresa',
+      bom:'o capital investido rende acima do que renderia aplicado',
+      ruim:'o dinheiro dos sócios rende menos na empresa do que renderia parado — e isso é uma conversa de sócio, não de contador' },
+    { id:'ciclo', nome:'Ciclo financeiro', campo:'ciclo', fmt:d0, maiorMelhor:false,
+      bench:'cicloFinanceiro',
+      oque:'quantos dias o dinheiro fica preso entre pagar fornecedor e receber do cliente',
+      bom:'o giro se financia quase sozinho',
+      ruim:'cada dia de ciclo é capital de giro preso — e capital de giro preso é dívida bancária paga com juros' },
+    { id:'plAtivo', nome:'Patrimônio sobre ativo', campo:null, fmt:pc, maiorMelhor:true,
+      benchFixo:0.30, piso:0.15,
+      calc:function(r){ var at=n(r.ativo)||n(r.ativoTotal); return at ? (n(r.pl)||n(r.patrimonioLiquido))/at : null; },
+      oque:'quanto do que a empresa tem é dela, e não de terceiros',
+      bom:'boa parte do ativo é capital próprio — é o que dá resistência a ano ruim',
+      ruim:'o ativo é quase todo financiado por terceiros. Abaixo de 15% a maioria das seguradoras nem aceita cotar D&O' },
+    { id:'imobPL', nome:'Imobilização do patrimônio', campo:'imobPL', fmt:pc, maiorMelhor:false,
+      benchFixo:0.80, teto:1.0,
+      oque:'quanto do capital próprio está parado em máquina, prédio e instalação',
+      bom:'sobra capital próprio para financiar o giro',
+      ruim:'o capital próprio todo virou ativo fixo — o giro inteiro roda com dinheiro de banco' }
+  ];
+
+  /* ---------------- a leitura de um indicador ---------------- */
+  function dentroDaFaixa(ind, v, ref){
+    if (v == null || ref == null) return null;
+    return ind.maiorMelhor ? (v >= ref * 0.95) : (v <= ref * 1.05);
+  }
+  function cruzouOPiso(ind, v){
+    if (v == null) return false;
+    if (ind.piso != null)  return ind.maiorMelhor ? v < ind.piso : v > ind.piso;
+    if (ind.teto != null)  return v > ind.teto;
+    return false;
+  }
+
+  function tendencia(serie){
+    var pts = serie.filter(function(p){ return p.v != null; });
+    if (pts.length < 3) return { firme:false, inclinacao:null, r2:null, pontos:pts.length };
+    var n0 = pts.length, sx=0, sy=0, sxy=0, sxx=0, syy=0;
+    pts.forEach(function(p,i){ sx+=i; sy+=p.v; sxy+=i*p.v; sxx+=i*i; syy+=p.v*p.v; });
+    var den = n0*sxx - sx*sx;
+    if (!den) return { firme:false, inclinacao:null, r2:null, pontos:n0 };
+    var a = (n0*sxy - sx*sy) / den;
+    var media = sy/n0;
+    var r2den = Math.sqrt((n0*sxx - sx*sx) * (n0*syy - sy*sy));
+    var r2 = r2den ? Math.pow((n0*sxy - sx*sy)/r2den, 2) : 0;
+    var rel = media ? Math.abs(a/media) : 0;
+    return { firme: r2 >= P.r2Firme && rel >= P.incFirme, inclinacao:a, r2:r2,
+             pontos:n0, media:media, relativa: media ? a/media : null };
+  }
+
+  /* -------------------------------------------------------------------
+     analisarRacional(a, rows, D)
+     ------------------------------------------------------------------- */
+  function analisarRacional(a, rows, D){
+    a = a || {}; rows = rows || []; D = D || {};
+    var setor = String(a.setor || D.setor || 'industria').toLowerCase();
+    var BM = (window.BENCHMARKS_SETOR && (window.BENCHMARKS_SETOR[setor] || window.BENCHMARKS_SETOR['industria'])) || {};
+
+    /* exercícios FECHADOS mandam na frequência e na direção; o parcial fica à parte */
+    var todos = rows.slice().sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+    var fechados = todos.filter(function(r){
+      return !r.periodoTipo || r.periodoTipo === 'anual' || n(r.periodoMeses) === 12; });
+    var parcial = todos.filter(function(r){
+      return r.periodoTipo && r.periodoTipo !== 'anual' && n(r.periodoMeses) && n(r.periodoMeses) < 12;
+    }).slice(-1)[0] || null;
+    var base = fechados.length ? fechados[fechados.length-1] : (todos[todos.length-1] || a);
+
+    /* ---------- 1. o ano corrente, apartado ---------- */
+    var anoCorrente = null;
+    if (parcial){
+      var meses = n(parcial.periodoMeses) || 6;
+      var fa = 12 / meses;
+      var ultFechado = fechados.length ? fechados[fechados.length-1] : null;
+      var recAnual = n(parcial.receita) * fa;
+      var ebitdaAnual = n(parcial.ebitda) * fa;
+      anoCorrente = {
+        ano: Number(parcial.ano), meses: meses, fator: fa,
+        /* o balanço é foto: vale como está */
+        foto: { pl: n(parcial.pl)||n(parcial.patrimonioLiquido), caixa: n(parcial.caixa),
+                dividaBruta: n(parcial.dividaBruta),
+                liq: num(parcial.liq), liqSeca: num(parcial.liqSeca),
+                plAtivo: (function(){ var at=n(parcial.ativo)||n(parcial.ativoTotal);
+                  return at ? (n(parcial.pl)||n(parcial.patrimonioLiquido))/at : null; })() },
+        /* o fluxo é anualizado, e isso é premissa */
+        fluxoAnualizado: { receita: recAnual, ebitda: ebitdaAnual,
+                           lucro: n(parcial.lucroLiq) * fa,
+                           margem: recAnual ? ebitdaAnual/recAnual : null },
+        comparaCom: ultFechado ? { ano:Number(ultFechado.ano), receita:n(ultFechado.receita),
+                                   ebitda:n(ultFechado.ebitda),
+                                   margem: n(ultFechado.receita) ? n(ultFechado.ebitda)/n(ultFechado.receita) : null } : null,
+        temParcialAnterior: todos.some(function(r){
+          return r !== parcial && r.periodoTipo && r.periodoTipo !== 'anual'; }),
+        premissa:'A anualização multiplica ' + meses + ' meses por ' + (12/meses).toFixed(2).replace('.',',')
+               + '. Isso assume que o resto do ano repete o ritmo deste período — e em negócio sazonal isso é falso. '
+               + 'O balanço, ao contrário, é foto e vale como está: liquidez, dívida e patrimônio de hoje são de hoje.',
+        oQueJaVale:'sem esperar o balanço fechar, o banco revisa limite com balancete, '
+                 + 'e a aceitação de D&O olha patrimônio sobre ativo, que é foto. Ano melhor é argumento hoje.'
+      };
+      if (anoCorrente.comparaCom){
+        var c = anoCorrente.comparaCom;
+        anoCorrente.variacao = {
+          receita: c.receita ? (recAnual - c.receita)/c.receita : null,
+          ebitda: c.ebitda ? (ebitdaAnual - c.ebitda)/c.ebitda : null,
+          margem: (anoCorrente.fluxoAnualizado.margem != null && c.margem != null)
+                  ? anoCorrente.fluxoAnualizado.margem - c.margem : null
+        };
+        anoCorrente.avisoComparacao = anoCorrente.temParcialAnterior
+          ? null
+          : 'A comparação certa seria contra os mesmos ' + meses + ' meses do ano anterior, não contra o ano cheio. '
+            + 'Sem o parcial de ' + c.ano + ' lançado, o confronto é ano anualizado contra ano fechado — e isso '
+            + 'carrega a sazonalidade inteira dentro do erro.';
+      }
+    }
+
+    /* ---------- 2. cada indicador, nas três leituras ---------- */
+    var leituras = IND.map(function(ind){
+      var valorDe = function(r){
+        if (!r) return null;
+        return ind.calc ? ind.calc(r) : num(r[ind.campo]);
+      };
+      var hoje = valorDe(base);
+      var ref = ind.benchFixo != null ? ind.benchFixo : (ind.bench ? num(BM[ind.bench]) : null);
+      var serie = fechados.map(function(r){ return { ano:Number(r.ano), v: valorDe(r) }; });
+      var comDado = serie.filter(function(p){ return p.v != null; });
+      var fora = comDado.filter(function(p){ return dentroDaFaixa(ind, p.v, ref) === false; });
+      var freq = comDado.length ? fora.length / comDado.length : null;
+      var td = tendencia(serie);
+      var melhorando = td.firme && (ind.maiorMelhor ? td.inclinacao > 0 : td.inclinacao < 0);
+      var piorando   = td.firme && (ind.maiorMelhor ? td.inclinacao < 0 : td.inclinacao > 0);
+      var ok = dentroDaFaixa(ind, hoje, ref);
+      var critico = cruzouOPiso(ind, hoje);
+
+      var veredito, leitura;
+      if (hoje == null){ veredito = 'sem_dado';
+        leitura = 'Sem o dado deste indicador não dá para dizer nada — e dizer que não dá é melhor que estimar.';
+      } else if (critico){ veredito = 'critico';
+        leitura = ind.ruim.charAt(0).toUpperCase() + ind.ruim.slice(1) + '. E já cruzou o piso que o mercado trata como limite.';
+      } else if (ok === false){
+        veredito = melhorando ? 'arrumando' : 'arrumar';
+        leitura = ind.ruim.charAt(0).toUpperCase() + ind.ruim.slice(1)
+                + (melhorando ? '. Mas vem melhorando de forma consistente na série — o caminho está certo, falta chegar.' : '.');
+      } else if (freq != null && freq >= P.freqRuim && comDado.length >= 3){
+        veredito = 'mascarado';
+        leitura = 'Está dentro da faixa neste exercício, mas ficou fora em ' + fora.length + ' dos '
+                + comDado.length + ' anos (' + fora.map(function(f){ return f.ano; }).join(', ') + '). '
+                + 'Isso é oscilação, não solidez — e um número bom num ano ruim de histórico não sustenta limite de crédito.';
+      } else if (piorando){
+        veredito = 'erosao';
+        var anosAteCruzar = null;
+        if (ref != null && td.inclinacao){
+          var dist = ind.maiorMelhor ? (hoje - ref) : (ref - hoje);
+          var vel = Math.abs(td.inclinacao);
+          if (dist > 0 && vel > 0) anosAteCruzar = dist / vel;
+        }
+        leitura = 'Ainda está dentro da faixa, mas a série vem caindo de forma consistente'
+                + (anosAteCruzar != null && anosAteCruzar < 6
+                    ? '. No ritmo dos últimos anos, cruza a referência em cerca de ' + anosAteCruzar.toFixed(1).replace('.',',') + ' ano(s)'
+                    : '')
+                + '. É o tipo de coisa que ninguém nota até virar problema.';
+      } else {
+        veredito = 'folga';
+        leitura = ind.bom.charAt(0).toUpperCase() + ind.bom.slice(1)
+                + (comDado.length >= 3 ? ', e com consistência na série' : '') + '.';
+      }
+
+      return { id:ind.id, nome:ind.nome, oque:ind.oque,
+               valor:hoje, ref:ref, fmt:ind.fmt, maiorMelhor:ind.maiorMelhor,
+               serie:serie, fora:fora.map(function(f){ return f.ano; }), frequenciaFora:freq,
+               tendencia:td, melhorando:melhorando, piorando:piorando,
+               veredito:veredito, leitura:leitura,
+               distancia: (hoje != null && ref != null) ? (ind.maiorMelhor ? ref - hoje : hoje - ref) : null };
+    });
+
+    /* ---------- 3. engenharia reversa: quanto falta, em cada caminho ---------- */
+    var metas = [];
+    var ebitda = n(base.ebitda), dividaLiq = n(base.dl) || (n(base.dividaBruta) - n(base.caixa));
+    var ac = n(base.ativoCirculante)||n(base.ativoCirc), pcirc = n(base.passivoCirculante)||n(base.passivoCirc);
+    var ativo = n(base.ativo)||n(base.ativoTotal), pl = n(base.pl)||n(base.patrimonioLiquido);
+
+    var lAlav = leituras.find(function(l){ return l.id==='alav'; });
+    if (lAlav && lAlav.ref && lAlav.valor != null && lAlav.valor > lAlav.ref && ebitda > 0){
+      var dividaAlvo = lAlav.ref * ebitda;
+      var ebitdaAlvo = dividaLiq / lAlav.ref;
+      metas.push({ id:'alav', nome:'Dívida líquida sobre EBITDA', de:lAlav.valor, para:lAlav.ref,
+        caminhos:[
+          { o:'abater dívida', quanto: dividaLiq - dividaAlvo,
+            frase:'abater ' + R$(dividaLiq - dividaAlvo) + ' de dívida líquida, mantendo o EBITDA de hoje' },
+          { o:'gerar EBITDA', quanto: ebitdaAlvo - ebitda,
+            frase:'gerar ' + R$(ebitdaAlvo - ebitda) + ' a mais de EBITDA por ano, mantendo a dívida de hoje' },
+          { o:'os dois pela metade', quanto: (dividaLiq - dividaAlvo)/2,
+            frase:'abater ' + R$((dividaLiq - dividaAlvo)/2) + ' de dívida e somar '
+                + R$((ebitdaAlvo - ebitda)/2) + ' de EBITDA — quase sempre o caminho real' }
+        ]});
+    }
+    var lLiq = leituras.find(function(l){ return l.id==='liq'; });
+    if (lLiq && lLiq.ref && lLiq.valor != null && lLiq.valor < lLiq.ref && pcirc > 0){
+      var acAlvo = lLiq.ref * pcirc;
+      var pcAlvo = ac / lLiq.ref;
+      metas.push({ id:'liq', nome:'Liquidez corrente', de:lLiq.valor, para:lLiq.ref,
+        caminhos:[
+          { o:'aumentar o ativo circulante', quanto: acAlvo - ac,
+            frase:'somar ' + R$(acAlvo - ac) + ' ao circulante — caixa que entra, não estoque que cresce' },
+          { o:'reduzir o passivo circulante', quanto: pcirc - pcAlvo,
+            frase:'tirar ' + R$(pcirc - pcAlvo) + ' do curto prazo, normalmente alongando dívida bancária' }
+        ]});
+    }
+    var lPA = leituras.find(function(l){ return l.id==='plAtivo'; });
+    if (lPA && lPA.valor != null && lPA.ref && lPA.valor < lPA.ref && ativo > 0){
+      var plAlvo = lPA.ref * ativo;
+      var aporte = (plAlvo - pl) / (1 - lPA.ref);
+      metas.push({ id:'plAtivo', nome:'Patrimônio sobre ativo', de:lPA.valor, para:lPA.ref,
+        caminhos:[
+          { o:'reter lucro', quanto: plAlvo - pl,
+            frase:'somar ' + R$(plAlvo - pl) + ' ao patrimônio retendo resultado em vez de distribuir' },
+          { o:'aporte novo', quanto: aporte,
+            frase:'aporte de ' + R$(aporte) + ' — maior que a diferença, porque dinheiro que entra também vira ativo' },
+          { o:'capitalizar AFAC e mútuo', quanto: n(base.partesRelacionadas),
+            frase: n(base.partesRelacionadas)
+                   ? 'capitalizar os ' + R$(n(base.partesRelacionadas)) + ' de mútuo com sócios e ligadas, que já estão dentro da empresa'
+                   : 'capitalizar adiantamento para futuro aumento de capital, se houver' }
+        ]});
+    }
+
+    /* ---------- 4. as alavancas, com a conta de cada uma ---------- */
+    var receita = n(base.receita)||n(base.receitaLiquida);
+    var cmv = n(base.cmv) || receita * 0.7;
+    var caixa = n(base.caixa);
+    var custoDinheiro = (function(){
+      var t = num(base.taxaMedia);
+      if (t != null && t > 0) return t > 1 ? t/100 : t;
+      var df = n(base.despesasFinanceiras)||n(base.despesaFin), db = n(base.dividaBruta);
+      return (df && db) ? df/db : 0.14;
+    })();
+
+    var alav = [];
+    function addAlav(o){ if (o && o.libera > 0) alav.push(o); }
+
+    var diasEst = num(base.diasEst) || num(base.giroEst);
+    if (diasEst != null && diasEst > 0 && cmv > 0){
+      var alvoEst = Math.max(20, Math.round(diasEst * 0.8));
+      addAlav({ id:'estoque', nome:'Reduzir estoque de ' + Math.round(diasEst) + ' para ' + alvoEst + ' dias',
+        libera: (diasEst - alvoEst) * cmv / 365, dor:2, reversivel:true, prazo:'6 a 12 meses',
+        conta: Math.round(diasEst - alvoEst) + ' dias × CMV de ' + R$(cmv) + ' ÷ 365',
+        custo:'risco de ruptura e perda de venda se cortar o item errado — a redução é por curva ABC, não linear',
+        melhora:['liq','liqSeca','ciclo','alav'] });
+    }
+    var pmr = num(base.pmr);
+    if (pmr != null && pmr > 30 && receita > 0){
+      var alvoPmr = Math.max(20, Math.round(pmr * 0.85));
+      addAlav({ id:'receber', nome:'Encurtar o prazo de recebimento de ' + Math.round(pmr) + ' para ' + alvoPmr + ' dias',
+        libera: (pmr - alvoPmr) * receita / 365, dor:3, reversivel:true, prazo:'3 a 9 meses',
+        conta: Math.round(pmr - alvoPmr) + ' dias × receita de ' + R$(receita) + ' ÷ 365',
+        custo:'exige desconto para antecipação ou mudança de política comercial — pode custar volume',
+        melhora:['ciclo','liq'] });
+    }
+    var distrib = n(base.distribuicaoLucros) || n(base.distribLucro);
+    if (distrib > 0)
+      addAlav({ id:'reter', nome:'Reter o lucro do ano em vez de distribuir',
+        libera: distrib, dor:3, reversivel:true, prazo:'imediato, na assembleia',
+        conta:'distribuição de ' + R$(distrib) + ' no último exercício',
+        custo:'o sócio recebe menos no ano — é a alavanca que depende de conversa, não de operação',
+        melhora:['plAtivo','alav','liq'],
+        bonus:'É a única alavanca que mexe direto em patrimônio sobre ativo, que é a trava de aceitação do D&O.' });
+    var mutuo = n(base.partesRelacionadas);
+    if (mutuo > 0)
+      addAlav({ id:'mutuo', nome:'Receber o mútuo com sócios e empresas ligadas',
+        libera: mutuo, dor:4, reversivel:true, prazo:'depende de acordo',
+        conta:'saldo de ' + R$(mutuo) + ' em partes relacionadas',
+        custo:'é conversa difícil dentro de casa, e o dinheiro pode não estar líquido do outro lado',
+        melhora:['liq','alav','plAtivo'],
+        bonus:'O analista de crédito já desconta isso do patrimônio antes de calcular qualquer índice — receber '
+            + 'melhora o índice duas vezes.' });
+    var naoOp = null;
+    try { if (typeof window.calcularNaoOperacional === 'function') naoOp = window.calcularNaoOperacional(base); }
+    catch(e){ naoOp = null; }
+    var valorNaoOp = naoOp ? (n(naoOp.total) - mutuo) : 0;
+    if (valorNaoOp > 0)
+      addAlav({ id:'ativo', nome:'Vender ativo que não produz receita',
+        libera: valorNaoOp * (1 - P.aliqGanho * 0.3), dor:4, reversivel:false, prazo:'6 a 18 meses',
+        conta: R$(valorNaoOp) + ' em ativo não operacional, líquido do imposto estimado sobre o ganho',
+        custo:'é irreversível, leva tempo e o preço de venda com pressa costuma ser pior que o de balanço',
+        melhora:['alav','liq'] });
+
+    /* troca de dívida cara por barata: usa as taxas que vieram da nota */
+    try {
+      var NB = (typeof window.normalizarBancos === 'function') ? window.normalizarBancos(base) : null;
+      if (NB && NB.operacoes.length >= 2){
+        var comTaxa = NB.operacoes.filter(function(o){ return o.taxa; });
+        if (comTaxa.length >= 2)
+          alav.push({ id:'trocarDivida', nome:'Migrar saldo da operação cara para a barata',
+            libera: 0, economiaAno: null, dor:2, reversivel:true, prazo:'1 a 4 meses',
+            conta:'há ' + comTaxa.length + ' operações com taxa informada — a aba de Inteligência de Crédito compara credor a credor',
+            custo:'IOF na nova operação e, às vezes, multa de liquidação antecipada',
+            melhora:['cobJuros','margemLiq'], semCaixa:true });
+      }
+    } catch(e){}
+
+    /* a alavanca dura, sempre por último e com o custo na frente */
+    var folha = n(base.folhaAnual), encargos = n(base.encargosFolha), func = n(base.funcionarios);
+    if (folha > 0){
+      var corte = 0.10;
+      var salarioMedio = func ? folha / func / 13 : null;
+      var pessoas = func ? Math.round(func * corte) : null;
+      var custoRescisao = (salarioMedio && pessoas) ? salarioMedio * P.rescisaoSalarios * pessoas : null;
+      var economia = (folha + encargos) * corte;
+      alav.push({ id:'folha', nome:'Reduzir ' + pc(corte,0) + ' da folha'
+          + (pessoas ? ' (cerca de ' + pessoas + ' pessoas)' : ''),
+        libera: 0, economiaAno: economia, custoAnoUm: custoRescisao,
+        dor:5, reversivel:false, prazo:'imediato no caixa negativo, 12 meses no positivo',
+        conta:'folha e encargos de ' + R$(folha + encargos) + ' × ' + pc(corte,0)
+            + (custoRescisao ? '; rescisão estimada em ' + R$(custoRescisao)
+               + ' (' + P.rescisaoSalarios.toFixed(1).replace('.',',') + ' salários por pessoa, premissa)' : ''),
+        custo:'demitir CONSOME caixa antes de economizar: a rescisão sai agora e a economia vem ao longo do ano. '
+            + 'E leva junto conhecimento que não volta.',
+        melhora:['margem','margemLiq','alav'],
+        alerta: custoRescisao && economia
+          ? 'O corte só se paga depois de ' + (custoRescisao/(economia/12)).toFixed(1).replace('.',',')
+            + ' meses. Antes disso, piora o caixa.'
+          : null,
+        bonus:'Mexe no dental, no vida em grupo e na conta de acidente — refazer o dimensionamento depois.' });
+    }
+
+    alav.sort(function(x,y){
+      var ix = (x.libera || x.economiaAno || 0) / (x.dor || 1);
+      var iy = (y.libera || y.economiaAno || 0) / (y.dor || 1);
+      return iy - ix;
+    });
+
+    var totalLibera = alav.filter(function(x){ return x.reversivel && x.libera; })
+                          .reduce(function(t,x){ return t + x.libera; }, 0);
+
+    /* ---------- 5. a folga: o que fazer quando está bom ---------- */
+    var folgas = leituras.filter(function(l){ return l.veredito === 'folga'; });
+    var oportunidades = [];
+    if (lAlav && lAlav.veredito === 'folga' && ebitda > 0){
+      var espaco = Math.max(0, (lAlav.ref || 2.5) * ebitda - dividaLiq);
+      if (espaco > 0) oportunidades.push({
+        o:'Espaço de dívida sem sair da faixa',
+        quanto: espaco,
+        porque:'A alavancagem está em ' + x2(lAlav.valor) + ' contra uma referência de ' + x2(lAlav.ref)
+             + '. Cabe ' + R$(espaco) + ' de dívida nova antes de chegar lá — e dívida barata tomada em ano bom '
+             + 'é investimento, não risco.',
+        cuidado:'Só faz sentido se o retorno do projeto for maior que o custo do dinheiro, hoje em '
+              + pc(custoDinheiro,1) + ' ao ano nesta empresa.' });
+    }
+    var lCob = leituras.find(function(l){ return l.id==='cobJuros'; });
+    if (lCob && lCob.veredito === 'folga' && lCob.valor > 4)
+      oportunidades.push({ o:'Folga para alongar e baratear', quanto:null,
+        porque:'O resultado operacional cobre os juros ' + x2(lCob.valor) + '. Com essa folga, a empresa negocia '
+             + 'taxa e prazo de posição de força — é o momento de trocar a dívida cara, não quando aperta.',
+        cuidado:'Taxa boa se consegue com balanço bom na mão. Esperar o ano ruim é pagar caro.' });
+    var lMarg = leituras.find(function(l){ return l.id==='margem'; });
+    if (lMarg && (lMarg.veredito === 'folga' || lMarg.veredito === 'erosao') && caixa > 0){
+      var mesesCaixa = (n(base.despesasAdm)/12) ? caixa / (n(base.despesasAdm)/12) : null;
+      if (mesesCaixa != null && mesesCaixa > P.folgaCaixaMeses)
+        oportunidades.push({ o:'Caixa acima do colchão de segurança',
+          quanto: caixa - (n(base.despesasAdm)/12) * P.folgaCaixaMeses,
+          porque:'O caixa cobre ' + mesesCaixa.toFixed(1).replace('.',',') + ' meses de despesa administrativa. '
+               + 'Acima de ' + P.folgaCaixaMeses + ' meses, o excedente rendendo menos que a dívida custa é prejuízo silencioso.',
+          cuidado:'Antes de abater dívida, conferir covenant de caixa mínimo e sazonalidade do giro.' });
+    }
+
+    /* ---------- consolidação ---------- */
+    var criticos = leituras.filter(function(l){ return l.veredito === 'critico'; });
+    var mascarados = leituras.filter(function(l){ return l.veredito === 'mascarado'; });
+    var erosoes = leituras.filter(function(l){ return l.veredito === 'erosao'; });
+    var arrumando = leituras.filter(function(l){ return l.veredito === 'arrumando'; });
+
+    var frases = [];
+    if (criticos.length)
+      frases.push(criticos.length + ' indicador(es) abaixo do piso que o mercado trata como limite: '
+        + criticos.map(function(l){ return l.nome; }).join(', ') + '.');
+    if (mascarados.length)
+      frases.push('Atenção ao que parece bom: ' + mascarados.map(function(l){ return l.nome; }).join(', ')
+        + ' está dentro da faixa hoje, mas ficou fora na maior parte da série. Número bom num ano não é solidez.');
+    if (erosoes.length)
+      frases.push(erosoes.map(function(l){ return l.nome; }).join(', ')
+        + ' ainda está na faixa, mas vem caindo de forma consistente — é o problema que ninguém vê chegando.');
+    if (arrumando.length)
+      frases.push(arrumando.map(function(l){ return l.nome; }).join(', ')
+        + ' ainda está fora da faixa, mas melhorando na série. O caminho está certo.');
+    if (totalLibera > 0)
+      frases.push('Só com as alavancas reversíveis dá para liberar ' + R$(totalLibera)
+        + ' sem vender nada e sem demitir ninguém.');
+    if (oportunidades.length)
+      frases.push('E tem o outro lado: ' + oportunidades.length + ' oportunidade(s) que só existem porque a empresa está bem.');
+
+    return {
+      semDados: !fechados.length && !parcial,
+      setor:setor, benchmark:BM, base:base,
+      exerciciosFechados: fechados.map(function(r){ return Number(r.ano); }),
+      anoCorrente: anoCorrente,
+      leituras: leituras, criticos:criticos, mascarados:mascarados, erosoes:erosoes, arrumando:arrumando,
+      folgas: folgas, oportunidades: oportunidades,
+      metas: metas, alavancas: alav, totalLibera: totalLibera,
+      custoDinheiro: custoDinheiro,
+      frases: frases, parametros: P,
+      ressalva:'Alavanca é aritmética: o valor que cada uma libera sai do número do próprio balanço e é conferível. '
+             + 'Projeção de resultado é hipótese, e está marcada como tal. As referências de setor são as do sistema, '
+             + 'editáveis — empresa boa pode operar fora delas por motivo legítimo, e o papel da análise é perguntar, não condenar.'
+    };
+  }
+
+  window.analisarRacional = analisarRacional;
+  window._P_RACIONAL = P;
+  window._IND_RACIONAL = IND;
+})();
+
+/* ===================================================================
+   v64 — A TELA DO RACIONAL
+   A ordem é a da conversa com o dono: o ano em curso (apartado), o
+   que cada número revela, quanto falta para a meta, o que dá para
+   fazer, e o que fazer com a folga quando ela existe.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function R$(v){ return (v==null||!isFinite(v)) ? '-'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '-' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+
+  var VER = {
+    critico:   { cor:'#b91c1c', fundo:'#fef2f2', borda:'#fecaca', rotulo:'crítico',        icone:'🔴' },
+    arrumar:   { cor:'#c2410c', fundo:'#fff7ed', borda:'#fed7aa', rotulo:'fora da faixa',  icone:'🟠' },
+    arrumando: { cor:'#0f766e', fundo:'#f0fdfa', borda:'#99f6e4', rotulo:'melhorando',     icone:'🔧' },
+    mascarado: { cor:'#a16207', fundo:'#fefce8', borda:'#fef08a', rotulo:'parece bom',     icone:'🎭' },
+    erosao:    { cor:'#9333ea', fundo:'#faf5ff', borda:'#e9d5ff', rotulo:'erodindo',       icone:'📉' },
+    folga:     { cor:'#15803d', fundo:'#f0fdf4', borda:'#bbf7d0', rotulo:'com folga',      icone:'🟢' },
+    sem_dado:  { cor:'#64748b', fundo:'#f8fafc', borda:'#e2e8f0', rotulo:'sem dado',       icone:'⚪' }
+  };
+  var ORDEM = ['critico','arrumar','mascarado','erosao','arrumando','folga','sem_dado'];
+
+  function secao(t, sub){
+    return '<div style="font-size:15px; font-weight:800; color:#0f172a; margin:24px 0 4px">' + t + '</div>'
+      + (sub ? '<div style="font-size:12.5px; color:#64748b; margin-bottom:11px; line-height:1.7">' + sub + '</div>'
+             : '<div style="margin-bottom:11px"></div>');
+  }
+
+  function renderRacional(a, rows, D){
+    var o = (typeof window.analisarRacional === 'function') ? window.analisarRacional(a, rows, D) : null;
+    if (!o || o.semDados) return '<div style="padding:30px; text-align:center; color:#64748b">'
+      + 'Lance pelo menos um exercício para montar o racional.</div>';
+
+    var h = '';
+
+    /* ---- abertura ---- */
+    h += '<div style="background:linear-gradient(135deg,#0f172a,#1e3a8a); border-radius:13px; padding:20px 22px; color:#fff; margin-bottom:18px">'
+      + '<div style="font-size:19px; font-weight:800">O racional — o que os números revelam e o que dá para fazer</div>'
+      + '<div style="font-size:12.5px; opacity:.9; line-height:1.75; margin-top:5px">'
+      +   'Exercícios fechados lidos: ' + (o.exerciciosFechados.join(', ') || '—')
+      +   (o.anoCorrente ? ' · ano em curso: ' + o.anoCorrente.ano + ' com ' + o.anoCorrente.meses + ' meses, apartado' : '')
+      +   '</div>';
+    if (o.frases.length)
+      h += '<div style="margin-top:11px; display:grid; gap:5px">'
+        + o.frases.map(function(f){ return '<div style="font-size:12.5px; line-height:1.7; opacity:.95">· ' + esc(f) + '</div>'; }).join('')
+        + '</div>';
+    h += '</div>';
+
+    /* ---- 1. o ano corrente, apartado ---- */
+    var AC = o.anoCorrente;
+    if (AC){
+      h += secao('O ano em curso — apartado dos exercícios fechados',
+        'O balanço é foto e vale como está. O resultado é anualizado, e isso é premissa — não previsão.');
+      h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:15px 17px">'
+        + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:12px">'
+        + ['<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:9px; padding:11px 13px">'
+           + '<div style="font-size:10.5px; font-weight:700; color:#166534; text-transform:uppercase; letter-spacing:.3px">Foto de hoje · vale</div>'
+           + '<div style="font-size:12.5px; color:#14532d; line-height:1.8; margin-top:4px">'
+           +   'Patrimônio ' + R$(AC.foto.pl) + '<br>Caixa ' + R$(AC.foto.caixa)
+           +   '<br>Dívida ' + R$(AC.foto.dividaBruta)
+           +   (AC.foto.plAtivo != null ? '<br>PL/Ativo ' + pc(AC.foto.plAtivo,1) : '') + '</div></div>',
+           '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:9px; padding:11px 13px">'
+           + '<div style="font-size:10.5px; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:.3px">Anualizado · premissa</div>'
+           + '<div style="font-size:12.5px; color:#78350f; line-height:1.8; margin-top:4px">'
+           +   'Receita ' + R$(AC.fluxoAnualizado.receita) + '<br>EBITDA ' + R$(AC.fluxoAnualizado.ebitda)
+           +   (AC.fluxoAnualizado.margem != null ? '<br>Margem ' + pc(AC.fluxoAnualizado.margem,1) : '')
+           +   '</div></div>'].join('')
+        + (AC.variacao ? '<div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:9px; padding:11px 13px">'
+            + '<div style="font-size:10.5px; font-weight:700; color:#1e40af; text-transform:uppercase; letter-spacing:.3px">Contra ' + AC.comparaCom.ano + '</div>'
+            + '<div style="font-size:12.5px; color:#1e3a8a; line-height:1.8; margin-top:4px">'
+            +   (AC.variacao.receita != null ? 'Receita ' + (AC.variacao.receita>0?'+':'') + pc(AC.variacao.receita,1) + '<br>' : '')
+            +   (AC.variacao.ebitda != null ? 'EBITDA ' + (AC.variacao.ebitda>0?'+':'') + pc(AC.variacao.ebitda,1) + '<br>' : '')
+            +   (AC.variacao.margem != null ? 'Margem ' + (AC.variacao.margem>0?'+':'') + pc(AC.variacao.margem,1) + ' p.p.' : '')
+            + '</div></div>' : '')
+        + '</div>'
+        + '<div style="font-size:12px; color:#64748b; line-height:1.75; margin-top:11px">' + esc(AC.premissa) + '</div>'
+        + (AC.avisoComparacao ? '<div style="font-size:12px; color:#b45309; line-height:1.75; margin-top:6px"><b>Sobre a comparação:</b> '
+            + esc(AC.avisoComparacao) + '</div>' : '')
+        + '<div style="background:#f0fdf4; border-radius:8px; padding:9px 11px; margin-top:10px; font-size:12.5px; color:#166534; line-height:1.75">'
+        +   '<b>O que já vale agora:</b> ' + esc(AC.oQueJaVale) + '</div>'
+        + '</div>';
+    }
+
+    /* ---- 2. cada número, em português ---- */
+    h += secao('O que cada número revela',
+      'Três leituras por indicador: onde está, com que frequência ficou fora na série, e para onde aponta. '
+      + 'Um número bom num ano não é o mesmo que um número bom sempre.');
+    var porVer = {};
+    o.leituras.forEach(function(l){ (porVer[l.veredito] = porVer[l.veredito] || []).push(l); });
+    ORDEM.forEach(function(k){
+      (porVer[k] || []).forEach(function(l){
+        var V = VER[k];
+        h += '<div style="background:' + V.fundo + '; border:1px solid ' + V.borda + '; border-radius:10px; padding:12px 15px; margin-bottom:8px">'
+          + '<div style="display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap">'
+          +   '<div style="font-size:13.5px; font-weight:800; color:' + V.cor + '">' + V.icone + ' ' + esc(l.nome)
+          +     '<span style="font-size:10.5px; font-weight:700; margin-left:7px; opacity:.8">' + V.rotulo + '</span></div>'
+          +   '<div style="font-size:15px; font-weight:800; color:' + V.cor + '; white-space:nowrap">'
+          +     l.fmt(l.valor) + (l.ref != null ? '<span style="font-size:11.5px; font-weight:600; color:#64748b"> · referência '
+                + l.fmt(l.ref) + '</span>' : '') + '</div>'
+          + '</div>'
+          + '<div style="font-size:11.5px; color:#64748b; line-height:1.6; margin-top:2px">É ' + esc(l.oque) + '.</div>'
+          + '<div style="font-size:12.5px; color:#334155; line-height:1.75; margin-top:5px">' + esc(l.leitura) + '</div>'
+          + (l.serie.filter(function(p){ return p.v != null; }).length >= 2
+              ? '<div style="font-size:11px; color:#64748b; margin-top:5px">série: '
+                + l.serie.filter(function(p){ return p.v != null; }).map(function(p){
+                    var fora = l.fora.indexOf(p.ano) >= 0;
+                    return '<span style="' + (fora ? 'color:#b91c1c; font-weight:700' : '') + '">'
+                         + p.ano + ' ' + l.fmt(p.v) + '</span>'; }).join('  ·  ')
+                + '</div>' : '')
+          + '</div>';
+      });
+    });
+
+    /* ---- 3. quanto falta ---- */
+    if (o.metas.length){
+      h += secao('Quanto falta — e por quais caminhos',
+        'A conta invertida: dado o alvo, quanto precisa mudar em cada variável. Nunca um caminho só.');
+      o.metas.forEach(function(m){
+        h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:13px 16px; margin-bottom:9px">'
+          + '<div style="font-size:13px; font-weight:800; color:#0f172a">' + esc(m.nome)
+          +   ' <span style="font-weight:600; color:#64748b">de ' + (m.de!=null ? (Math.abs(m.de)<1?pc(m.de,1):m.de.toFixed(2).replace('.',',')) : '—')
+          +   ' para ' + (m.para!=null ? (Math.abs(m.para)<1?pc(m.para,1):m.para.toFixed(2).replace('.',',')) : '—') + '</span></div>'
+          + '<div style="display:grid; gap:5px; margin-top:7px">'
+          + m.caminhos.map(function(c){
+              return '<div style="font-size:12.5px; color:#334155; line-height:1.7">'
+                + '<b style="color:#1e40af">' + esc(c.o) + ':</b> ' + esc(c.frase) + '</div>'; }).join('')
+          + '</div></div>';
+      });
+    }
+
+    /* ---- 4. as alavancas ---- */
+    if (o.alavancas.length){
+      h += secao('As alavancas, com a conta de cada uma',
+        'Ordenadas por impacto dividido por dor. <b>Isto é aritmética, não projeção</b> — cada valor sai de um número '
+        + 'do próprio balanço. ' + (o.totalLibera > 0
+          ? 'Só o que é reversível soma <b>' + R$(o.totalLibera) + '</b>, sem vender nada e sem demitir ninguém.' : ''));
+      o.alavancas.forEach(function(x){
+        var dura = !x.reversivel;
+        var cor = dura ? '#b91c1c' : x.dor >= 3 ? '#c2410c' : '#15803d';
+        h += '<div style="background:' + (dura ? '#fef2f2' : '#fff') + '; border:1px solid ' + (dura ? '#fecaca' : '#e2e8f0')
+          + '; border-radius:10px; padding:13px 16px; margin-bottom:9px">'
+          + '<div style="display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap">'
+          +   '<div style="font-size:13px; font-weight:800; color:' + cor + '">' + esc(x.nome)
+          +     '<span style="font-size:10.5px; font-weight:700; color:#64748b; margin-left:7px">'
+          +       (x.reversivel ? 'reversível' : 'IRREVERSÍVEL') + ' · dor ' + x.dor + '/5 · ' + esc(x.prazo) + '</span></div>'
+          +   '<div style="font-size:15px; font-weight:800; color:' + cor + '; white-space:nowrap">'
+          +     (x.libera ? 'libera ' + R$(x.libera) : x.economiaAno ? 'economiza ' + R$(x.economiaAno) + '/ano'
+                : x.semCaixa ? 'reduz custo' : '—') + '</div>'
+          + '</div>'
+          + '<div style="font-size:12px; color:#475569; line-height:1.7; margin-top:4px"><b>A conta:</b> ' + esc(x.conta) + '</div>'
+          + (x.custoAnoUm ? '<div style="font-size:12.5px; color:#991b1b; line-height:1.7; margin-top:3px">'
+              + '<b>Custa antes de economizar:</b> ' + R$(x.custoAnoUm) + ' de rescisão no ano um.</div>' : '')
+          + '<div style="font-size:12px; color:#78350f; line-height:1.7; margin-top:3px"><b>O preço:</b> ' + esc(x.custo) + '</div>'
+          + (x.alerta ? '<div style="font-size:12px; color:#b91c1c; line-height:1.7; margin-top:3px; font-weight:600">'
+              + esc(x.alerta) + '</div>' : '')
+          + (x.bonus ? '<div style="font-size:11.5px; color:#1e40af; line-height:1.65; margin-top:3px">' + esc(x.bonus) + '</div>' : '')
+          + '</div>';
+      });
+    }
+
+    /* ---- 5. a folga ---- */
+    if (o.oportunidades.length){
+      h += secao('O outro lado — o que a folga permite',
+        'Nem toda análise é de problema. Onde a empresa está bem, a pergunta muda: o que fazer com isso?');
+      o.oportunidades.forEach(function(op){
+        h += '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:13px 16px; margin-bottom:9px">'
+          + '<div style="display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap">'
+          +   '<div style="font-size:13px; font-weight:800; color:#15803d">' + esc(op.o) + '</div>'
+          +   (op.quanto ? '<div style="font-size:15px; font-weight:800; color:#15803d">' + R$(op.quanto) + '</div>' : '')
+          + '</div>'
+          + '<div style="font-size:12.5px; color:#14532d; line-height:1.75; margin-top:4px">' + esc(op.porque) + '</div>'
+          + '<div style="font-size:12px; color:#b45309; line-height:1.7; margin-top:4px"><b>O cuidado:</b> ' + esc(op.cuidado) + '</div>'
+          + '</div>';
+      });
+    }
+
+    h += '<div style="font-size:11.5px; color:#64748b; margin-top:16px; line-height:1.75; border-top:1px dashed #e2e8f0; padding-top:11px">'
+      + esc(o.ressalva) + '</div>';
+
+    return h;
+  }
+
+  window.renderRacional = renderRacional;
 })();
 
 /* ===================================================================
