@@ -23749,6 +23749,456 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 })();
 
 /* ===================================================================
+   v65 — BACKTEST: O SISTEMA MEDE O PRÓPRIO ERRO
+
+   A ideia é do Patrick, e é a melhor deste projeto:
+
+     "posso até fazer um teste alguma hora, colocar só balanço até
+      2024 por exemplo e não adicionar de propósito o 2025, para ver
+      se você faz uma projeção assertiva. aí depois te mandar 2025
+      para ver se acertou."
+
+   Isso não precisa ser teste manual: dá para fazer sempre, sozinho.
+   Com N exercícios fechados, o sistema esconde o último, projeta a
+   partir dos anteriores, compara com o real — e repete para cada ano
+   que dá. O resultado é a MARGEM DE ERRO MEDIDA desta empresa, não
+   uma barra de confiança inventada.
+
+   POR QUE ISSO MUDA O PRODUTO:
+
+   Projeção financeira é onde mais se mente. Um número sozinho na
+   tela ("a receita vai ser R$ 82 milhões") é indefensável: o cliente
+   pergunta "por quê?" e não há resposta. Já "a receita projetada é
+   R$ 82 milhões, e quando testamos este método contra o seu próprio
+   histórico ele errou 6,4% para menos" é uma frase que se sustenta
+   numa reunião — e que o concorrente não tem.
+
+   QUATRO MÉTODOS, E O MELHOR GANHA POR MÉTRICA:
+
+     · último      — repete o ano anterior. É o baseline, e em série
+                     curta ou volátil ele costuma ganhar de todos os
+                     outros. Quando ganhar, o sistema DIZ isso, em vez
+                     de esconder atrás de um modelo mais bonito;
+     · média       — a média dos anteriores;
+     · tendência   — regressão linear, um passo à frente;
+     · crescimento — o último valor corrigido pelo CAGR da série.
+
+   Cada métrica escolhe o seu vencedor pelo erro histórico. Receita
+   pode seguir tendência enquanto o EBITDA segue o último ano — e
+   está tudo bem, porque a escolha é medida, não opinada.
+
+   O QUE O MÓDULO NUNCA FAZ:
+
+   · não projeta com menos de três exercícios fechados — sem teste
+     possível, não há margem de erro, e sem margem de erro é chute;
+   · não esconde que um único teste não é estatística;
+   · quando o erro medido é grande, diz que a projeção não serve para
+     esta empresa em vez de imprimir um número com falsa precisão.
+   =================================================================== */
+(function(){
+  'use strict';
+
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function num(v){ var x=Number(v); return (v==null||v===''||isNaN(x)||!isFinite(x))?null:x; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '-'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '-' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+
+  var P = {
+    minExercicios: 3,      /* abaixo disso nao ha teste possivel */
+    bandaMinima: 0.05,     /* a banda nunca e mais estreita que isto */
+    limiteAlta: 0.10, limiteMedia: 0.20, limiteBaixa: 0.35
+  };
+
+  var METRICAS = [
+    { id:'receita',    nome:'Receita',          campo:'receita',       alt:'receitaLiquida' },
+    { id:'ebitda',     nome:'EBITDA',           campo:'ebitda' },
+    { id:'lucroLiq',   nome:'Lucro líquido',    campo:'lucroLiq',      alt:'lucroLiquido' },
+    { id:'dividaBruta',nome:'Dívida bruta',     campo:'dividaBruta' },
+    { id:'pl',         nome:'Patrimônio líquido', campo:'pl',          alt:'patrimonioLiquido' },
+    { id:'ativo',      nome:'Ativo total',      campo:'ativo',         alt:'ativoTotal' },
+    { id:'caixa',      nome:'Caixa',            campo:'caixa' }
+  ];
+
+  var METODOS = {
+    ultimo: { nome:'repetir o ano anterior',
+      prever: function(v){ return v[v.length-1]; } },
+    media: { nome:'média dos anteriores',
+      prever: function(v){ return v.reduce(function(a,b){ return a+b; }, 0) / v.length; } },
+    tendencia: { nome:'tendência linear',
+      prever: function(v){
+        if (v.length < 2) return v[v.length-1];
+        var N=v.length, sx=0, sy=0, sxy=0, sxx=0;
+        v.forEach(function(y,i){ sx+=i; sy+=y; sxy+=i*y; sxx+=i*i; });
+        var den = N*sxx - sx*sx;
+        if (!den) return v[v.length-1];
+        var a = (N*sxy - sx*sy)/den, b = (sy - a*sx)/N;
+        return a*N + b;
+      } },
+    crescimento: { nome:'crescimento médio da série',
+      prever: function(v){
+        if (v.length < 2) return v[v.length-1];
+        var ini = v[0], fim = v[v.length-1];
+        if (ini <= 0 || fim <= 0) return v[v.length-1];   /* CAGR nao existe com sinal trocado */
+        var g = Math.pow(fim/ini, 1/(v.length-1)) - 1;
+        return fim * (1 + g);
+      } }
+    };
+
+  function valorDe(r, m){
+    if (!r) return null;
+    var v = num(r[m.campo]);
+    if (v == null && m.alt) v = num(r[m.alt]);
+    return v;
+  }
+
+  /* -------------------------------------------------------------------
+     analisarBacktest(rows, D)
+     ------------------------------------------------------------------- */
+  function analisarBacktest(rows, D){
+    rows = rows || [];
+    var fechados = rows.slice()
+      .filter(function(r){ return !r.periodoTipo || r.periodoTipo === 'anual' || n(r.periodoMeses) === 12; })
+      .sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+
+    if (fechados.length < P.minExercicios)
+      return { semTeste:true, exercicios: fechados.map(function(r){ return Number(r.ano); }),
+               motivo:'Com ' + fechados.length + ' exercício(s) fechado(s) não há como testar a projeção. '
+                    + 'São necessários pelo menos ' + P.minExercicios + ': os primeiros para projetar e o último para conferir. '
+                    + 'Sem teste não há margem de erro medida — e projeção sem margem de erro é chute com cara de laudo.' };
+
+    /* ---------- 1. os testes: esconde o ano, projeta, compara ---------- */
+    var testes = [];
+    for (var k = 2; k < fechados.length; k++){
+      var anteriores = fechados.slice(0, k);
+      var real = fechados[k];
+      var linha = { ano: Number(real.ano), baseadoEm: anteriores.map(function(r){ return Number(r.ano); }), metricas: {} };
+      METRICAS.forEach(function(m){
+        var serie = anteriores.map(function(r){ return valorDe(r, m); });
+        var vReal = valorDe(real, m);
+        if (serie.some(function(v){ return v == null; }) || vReal == null || vReal === 0) return;
+        var prev = {};
+        Object.keys(METODOS).forEach(function(mk){
+          var p = METODOS[mk].prever(serie);
+          prev[mk] = { valor: p, erro: (p - vReal) / Math.abs(vReal) };
+        });
+        linha.metricas[m.id] = { real: vReal, previsoes: prev };
+      });
+      if (Object.keys(linha.metricas).length) testes.push(linha);
+    }
+
+    /* ---------- 2. qual método erra menos, métrica por métrica ---------- */
+    var porMetrica = {};
+    METRICAS.forEach(function(m){
+      var usados = testes.filter(function(t){ return t.metricas[m.id]; });
+      if (!usados.length) return;
+      var res = {};
+      Object.keys(METODOS).forEach(function(mk){
+        var erros = usados.map(function(t){ return Math.abs(t.metricas[m.id].previsoes[mk].erro); });
+        res[mk] = { mape: erros.reduce(function(a,b){ return a+b; }, 0) / erros.length, n: erros.length };
+      });
+      var melhor = Object.keys(res).sort(function(a,b){ return res[a].mape - res[b].mape; })[0];
+      /* o vies: errou mais para cima ou para baixo? */
+      var vies = usados.map(function(t){ return t.metricas[m.id].previsoes[melhor].erro; })
+                       .reduce(function(a,b){ return a+b; }, 0) / usados.length;
+      porMetrica[m.id] = { nome:m.nome, metodo:melhor, nomeMetodo:METODOS[melhor].nome,
+                           mape:res[melhor].mape, testes:res[melhor].n, vies:vies, todos:res };
+    });
+
+    /* ---------- 3. a confiabilidade, medida ---------- */
+    var mapes = Object.keys(porMetrica).map(function(k){ return porMetrica[k].mape; });
+    var mapeMedio = mapes.length ? mapes.reduce(function(a,b){ return a+b; },0)/mapes.length : null;
+    var nTestes = testes.length;
+    var conf;
+    if (!mapes.length) conf = 'insuficiente';
+    else if (nTestes >= 3 && mapeMedio <= P.limiteAlta) conf = 'alta';
+    else if (nTestes >= 2 && mapeMedio <= P.limiteMedia) conf = 'media';
+    else if (mapeMedio <= P.limiteBaixa) conf = 'baixa';
+    else conf = 'insuficiente';
+
+    /* ---------- 4. a projeção do próximo ano, com banda ---------- */
+    var ultimo = fechados[fechados.length-1];
+    var anoProj = Number(ultimo.ano) + 1;
+    var proj = { ano: anoProj, metricas: {} };
+    METRICAS.forEach(function(m){
+      var pm = porMetrica[m.id];
+      var serie = fechados.map(function(r){ return valorDe(r, m); });
+      if (serie.some(function(v){ return v == null; })) return;
+      var metodo = pm ? pm.metodo : 'ultimo';
+      var v = METODOS[metodo].prever(serie);
+      /* corrige o viés sistemático medido, quando ele existe e é consistente */
+      var corrigido = (pm && Math.abs(pm.vies) > 0.02) ? v / (1 + pm.vies) : v;
+      var banda = Math.max(P.bandaMinima, pm ? pm.mape : 0.25);
+      proj.metricas[m.id] = {
+        nome: m.nome, valor: corrigido, bruto: v,
+        min: corrigido * (1 - banda), max: corrigido * (1 + banda),
+        metodo: metodo, nomeMetodo: METODOS[metodo].nome,
+        erroHistorico: pm ? pm.mape : null, vies: pm ? pm.vies : null,
+        corrigiuVies: !!(pm && Math.abs(pm.vies) > 0.02),
+        ultimoReal: serie[serie.length-1]
+      };
+    });
+
+    /* os indicadores que saem da projeção */
+    function mv(id){ return proj.metricas[id] ? proj.metricas[id].valor : null; }
+    var rec = mv('receita'), eb = mv('ebitda'), db = mv('dividaBruta'),
+        cx = mv('caixa'), pl = mv('pl'), at = mv('ativo'), ll = mv('lucroLiq');
+    proj.indicadores = {
+      margem: (rec && eb != null) ? eb/rec : null,
+      margemLiq: (rec && ll != null) ? ll/rec : null,
+      alav: (eb && eb > 0 && db != null && cx != null) ? (db - cx)/eb : null,
+      plAtivo: (at && pl != null) ? pl/at : null,
+      roe: (pl && ll != null) ? ll/pl : null
+    };
+    var ultInd = {
+      margem: n(ultimo.receita) ? n(ultimo.ebitda)/n(ultimo.receita) : null,
+      margemLiq: n(ultimo.receita) ? (n(ultimo.lucroLiq)||n(ultimo.lucroLiquido))/n(ultimo.receita) : null,
+      alav: num(ultimo.alav),
+      plAtivo: (n(ultimo.ativo)||n(ultimo.ativoTotal))
+               ? (n(ultimo.pl)||n(ultimo.patrimonioLiquido))/(n(ultimo.ativo)||n(ultimo.ativoTotal)) : null,
+      roe: num(ultimo.roe)
+    };
+    proj.indicadoresHoje = ultInd;
+    proj.anoBase = Number(ultimo.ano);
+
+    /* ---------- 5. o cenário: a projeção com as alavancas aplicadas ---------- */
+    var cenario = null;
+    try {
+      var RC = (typeof window.analisarRacional === 'function')
+             ? window.analisarRacional(ultimo, rows, D) : null;
+      if (RC && RC.alavancas && RC.alavancas.length && eb){
+        var reversiveis = RC.alavancas.filter(function(x){ return x.reversivel && x.libera > 0; });
+        var liberado = reversiveis.reduce(function(t,x){ return t + x.libera; }, 0);
+        var economia = RC.alavancas.filter(function(x){ return x.reversivel && x.economiaAno; })
+                                   .reduce(function(t,x){ return t + x.economiaAno; }, 0);
+        /* o caixa liberado abate divida; a economia soma no EBITDA */
+        var dbNovo = Math.max(0, (db||0) - liberado);
+        var ebNovo = eb + economia;
+        cenario = {
+          aplicadas: reversiveis.map(function(x){ return { nome:x.nome, libera:x.libera }; }),
+          liberado: liberado, economia: economia,
+          antes: { alav: proj.indicadores.alav, plAtivo: proj.indicadores.plAtivo, margem: proj.indicadores.margem },
+          depois: {
+            alav: ebNovo > 0 ? (dbNovo - (cx||0))/ebNovo : null,
+            plAtivo: at ? (pl)/at : null,
+            margem: rec ? ebNovo/rec : null
+          },
+          jurosEconomizados: liberado * (RC.custoDinheiro || 0.14),
+          nota:'O cenário aplica só as alavancas reversíveis, e supõe que o caixa liberado abate dívida. '
+             + 'Não entra venda de ativo nem corte de pessoal — essas são decisões, não projeções.'
+        };
+      }
+    } catch(e){ cenario = null; }
+
+    /* ---------- avisos honestos ---------- */
+    var avisos = [];
+    if (nTestes === 1)
+      avisos.push('Só foi possível fazer **um** teste, com ' + testes[0].baseadoEm.length
+        + ' anos de base. Um teste não é estatística: a margem abaixo é o melhor que dá para dizer hoje, '
+        + 'e fica mais firme a cada exercício novo que entrar.');
+    if (conf === 'insuficiente' && mapes.length)
+      avisos.push('O erro medido ficou acima de ' + pc(P.limiteBaixa,0) + '. **Para esta empresa a projeção não é confiável** — '
+        + 'a série é curta demais ou volátil demais. Use os números como ordem de grandeza, nunca como meta.');
+    var naive = Object.keys(porMetrica).filter(function(k){ return porMetrica[k].metodo === 'ultimo'; });
+    if (naive.length >= Math.ceil(Object.keys(porMetrica).length/2) && Object.keys(porMetrica).length)
+      avisos.push('Para a maior parte das métricas, o melhor previsor foi simplesmente **repetir o ano anterior**. '
+        + 'Isso não é falha do método: é o que acontece quando a série é curta ou o negócio oscila. '
+        + 'Dizer isso vale mais que imprimir uma curva bonita.');
+    var comVies = Object.keys(porMetrica).filter(function(k){ return Math.abs(porMetrica[k].vies) > 0.05; });
+    if (comVies.length)
+      avisos.push('Há viés sistemático em ' + comVies.map(function(k){ return porMetrica[k].nome; }).join(', ')
+        + ': o método erra sempre para o mesmo lado. A projeção já vem corrigida por ele.');
+
+    return {
+      semTeste:false,
+      exercicios: fechados.map(function(r){ return Number(r.ano); }),
+      testes: testes, porMetrica: porMetrica,
+      mapeMedio: mapeMedio, nTestes: nTestes, confiabilidade: conf,
+      projecao: proj, cenario: cenario, avisos: avisos, parametros: P, metodos: METODOS,
+      frase: mapes.length
+        ? 'A projeção de ' + proj.ano + ' usa o método que menos errou no histórico desta empresa. '
+          + 'Testado contra ' + nTestes + ' exercício(s) real(is), o erro médio foi de ' + pc(mapeMedio,1) + '.'
+        : null,
+      ressalva:'Backtest mede o passado, não garante o futuro: um ano atípico quebra qualquer método. '
+             + 'A margem serve para dizer o quanto confiar, não para prometer. E projeção nunca substitui o balanço fechado.'
+    };
+  }
+
+  window.analisarBacktest = analisarBacktest;
+  window._P_BACKTEST = P;
+})();
+
+/* ===================================================================
+   v65 — A TELA DO BACKTEST
+   Entra no fim da aba "O ano que vem": primeiro o diagnóstico e as
+   alavancas, depois a projeção — e a projeção só aparece depois de
+   dizer quanto ela errou quando foi testada.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function mk(t){ return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
+  function R$(v){ return (v==null||!isFinite(v)) ? '-'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '-' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+  function sinal(v,c){ return (v==null||!isFinite(v)) ? '-' : (v>0?'+':'') + pc(v,c); }
+  function x2(v){ return (v==null||!isFinite(v)) ? '-' : v.toFixed(2).replace('.',',')+'x'; }
+
+  var CONF = {
+    alta:         { cor:'#15803d', fundo:'#f0fdf4', borda:'#bbf7d0', rotulo:'CONFIÁVEL' },
+    media:        { cor:'#b45309', fundo:'#fffbeb', borda:'#fde68a', rotulo:'CONFIANÇA MÉDIA' },
+    baixa:        { cor:'#c2410c', fundo:'#fff7ed', borda:'#fed7aa', rotulo:'CONFIANÇA BAIXA' },
+    insuficiente: { cor:'#b91c1c', fundo:'#fef2f2', borda:'#fecaca', rotulo:'NÃO CONFIÁVEL' }
+  };
+
+  function secao(t, sub){
+    return '<div style="font-size:15px; font-weight:800; color:#0f172a; margin:24px 0 4px">' + t + '</div>'
+      + (sub ? '<div style="font-size:12.5px; color:#64748b; margin-bottom:11px; line-height:1.7">' + sub + '</div>'
+             : '<div style="margin-bottom:11px"></div>');
+  }
+
+  function renderBacktest(rows, D){
+    var o = (typeof window.analisarBacktest === 'function') ? window.analisarBacktest(rows, D) : null;
+    if (!o) return '';
+
+    if (o.semTeste)
+      return secao('A projeção para o ano que vem')
+        + '<div style="background:#f8fafc; border:1px dashed #94a3b8; border-radius:10px; padding:14px 16px; '
+        + 'font-size:12.5px; color:#475569; line-height:1.8">'
+        + '<b>Ainda não dá para projetar com honestidade.</b> ' + esc(o.motivo)
+        + (o.exercicios.length ? '<br>Exercícios fechados hoje: ' + o.exercicios.join(', ') + '.' : '')
+        + '</div>';
+
+    var C = CONF[o.confiabilidade] || CONF.insuficiente;
+    var h = '';
+
+    /* ---- 1. o teste ---- */
+    h += secao('A calibragem — o sistema escondeu o ano e tentou acertar',
+      'Com ' + o.exercicios.length + ' exercícios fechados, dá para esconder os últimos e projetá-los a partir dos '
+      + 'anteriores. O erro que aparece aqui é o erro real desta empresa, não uma barra de confiança inventada.');
+
+    h += '<div style="background:' + C.fundo + '; border:1px solid ' + C.borda + '; border-radius:11px; padding:14px 16px">'
+      + '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">'
+      +   '<div style="font-size:11.5px; font-weight:800; letter-spacing:.4px; color:' + C.cor + '">' + C.rotulo + '</div>'
+      +   '<div style="font-size:12.5px; color:#475569">' + o.nTestes + ' teste(s) · erro médio '
+      +     '<b style="color:' + C.cor + '">' + pc(o.mapeMedio,1) + '</b></div>'
+      + '</div>';
+
+    o.testes.forEach(function(t){
+      h += '<div style="margin-top:11px; border-top:1px solid ' + C.borda + '; padding-top:9px">'
+        + '<div style="font-size:12.5px; font-weight:700; color:#0f172a">Escondeu ' + t.ano
+        +   ' <span style="font-weight:600; color:#64748b">e projetou a partir de ' + t.baseadoEm.join(', ') + '</span></div>'
+        + '<div style="overflow-x:auto; margin-top:5px"><table style="width:100%; border-collapse:collapse; font-size:12px">'
+        + '<thead><tr style="color:#64748b"><th style="text-align:left; padding:4px 6px">Métrica</th>'
+        +   '<th style="text-align:right; padding:4px 6px">Real</th>'
+        +   '<th style="text-align:right; padding:4px 6px">Projetado</th>'
+        +   '<th style="text-align:right; padding:4px 6px">Erro</th>'
+        +   '<th style="text-align:left; padding:4px 6px">Pelo método</th></tr></thead><tbody>';
+      Object.keys(t.metricas).forEach(function(k){
+        var pm = o.porMetrica[k]; if (!pm) return;
+        var p = t.metricas[k].previsoes[pm.metodo];
+        var e = Math.abs(p.erro);
+        var cor = e <= 0.05 ? '#15803d' : e <= 0.15 ? '#b45309' : '#b91c1c';
+        h += '<tr style="border-top:1px solid #f1f5f9">'
+          + '<td style="padding:4px 6px; font-weight:600; color:#0f172a">' + esc(pm.nome) + '</td>'
+          + '<td style="padding:4px 6px; text-align:right">' + R$(t.metricas[k].real) + '</td>'
+          + '<td style="padding:4px 6px; text-align:right; color:#475569">' + R$(p.valor) + '</td>'
+          + '<td style="padding:4px 6px; text-align:right; font-weight:700; color:' + cor + '">' + sinal(p.erro,1) + '</td>'
+          + '<td style="padding:4px 6px; color:#64748b">' + esc(pm.nomeMetodo) + '</td></tr>';
+      });
+      h += '</tbody></table></div></div>';
+    });
+
+    if (o.avisos.length)
+      h += '<div style="margin-top:11px; border-top:1px dashed ' + C.borda + '; padding-top:9px; display:grid; gap:6px">'
+        + o.avisos.map(function(a){
+            return '<div style="font-size:12px; color:#475569; line-height:1.75">⚠️ ' + mk(a) + '</div>'; }).join('')
+        + '</div>';
+    h += '</div>';
+
+    /* ---- 2. a projeção ---- */
+    var P = o.projecao;
+    h += secao('A projeção de ' + P.ano,
+      o.frase ? esc(o.frase) : 'Cada métrica usa o método que menos errou no teste acima.');
+
+    h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:14px 16px">'
+      + '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12.5px">'
+      + '<thead><tr style="background:#f8fafc; color:#475569">'
+      +   '<th style="text-align:left; padding:6px 8px">Métrica</th>'
+      +   '<th style="text-align:right; padding:6px 8px">' + P.anoBase + ' real</th>'
+      +   '<th style="text-align:right; padding:6px 8px">' + P.ano + ' projetado</th>'
+      +   '<th style="text-align:right; padding:6px 8px">Faixa</th>'
+      +   '<th style="text-align:left; padding:6px 8px">Método · erro medido</th>'
+      + '</tr></thead><tbody>';
+    Object.keys(P.metricas).forEach(function(k){
+      var m = P.metricas[k];
+      var dif = m.ultimoReal ? (m.valor - m.ultimoReal)/Math.abs(m.ultimoReal) : null;
+      h += '<tr style="border-top:1px solid #f1f5f9">'
+        + '<td style="padding:6px 8px; font-weight:700; color:#0f172a">' + esc(m.nome) + '</td>'
+        + '<td style="padding:6px 8px; text-align:right; color:#64748b">' + R$(m.ultimoReal) + '</td>'
+        + '<td style="padding:6px 8px; text-align:right; font-weight:800; color:#1e40af">' + R$(m.valor)
+        +   (dif != null ? '<span style="font-size:11px; font-weight:600; color:' + (dif>=0?'#15803d':'#b91c1c')
+              + '"> ' + sinal(dif,1) + '</span>' : '') + '</td>'
+        + '<td style="padding:6px 8px; text-align:right; color:#475569; font-size:11.5px">'
+        +   R$(m.min) + ' a ' + R$(m.max) + '</td>'
+        + '<td style="padding:6px 8px; color:#64748b; font-size:11.5px">' + esc(m.nomeMetodo)
+        +   (m.erroHistorico != null ? ' · ' + pc(m.erroHistorico,1) : '')
+        +   (m.corrigiuVies ? ' <span style="color:#b45309">· viés corrigido</span>' : '') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+
+    var I = P.indicadores, H = P.indicadoresHoje;
+    h += '<div style="margin-top:12px; border-top:1px solid #f1f5f9; padding-top:10px">'
+      + '<div style="font-size:12.5px; font-weight:700; color:#0f172a; margin-bottom:7px">O que isso faz com os indicadores</div>'
+      + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px">'
+      + [['Margem EBITDA','margem',pc],['Margem líquida','margemLiq',pc],['DL/EBITDA','alav',x2],
+         ['PL sobre ativo','plAtivo',pc],['ROE','roe',pc]].map(function(c){
+          var hoje = H[c[1]], dep = I[c[1]];
+          if (dep == null) return '';
+          var melhor = c[1]==='alav' ? (dep < hoje) : (dep > hoje);
+          return '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:9px 11px">'
+            + '<div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.3px">' + c[0] + '</div>'
+            + '<div style="font-size:15px; font-weight:800; color:' + (melhor?'#15803d':'#b45309') + '; margin-top:2px">'
+            +   c[2](dep) + '</div>'
+            + '<div style="font-size:11px; color:#64748b">hoje ' + c[2](hoje) + '</div></div>'; }).join('')
+      + '</div></div></div>';
+
+    /* ---- 3. o cenário com as alavancas ---- */
+    var CE = o.cenario;
+    if (CE && CE.liberado > 0){
+      h += secao('E se as alavancas reversíveis forem puxadas',
+        'A projeção acima é o que acontece sem fazer nada. Esta é a mesma projeção com o caixa das alavancas '
+        + 'reversíveis abatendo dívida — sem vender ativo e sem demitir ninguém.');
+      h += '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:11px; padding:14px 16px">'
+        + '<div style="font-size:12.5px; color:#14532d; line-height:1.75">'
+        +   '<b>' + R$(CE.liberado) + '</b> liberados por ' + CE.aplicadas.length + ' alavanca(s): '
+        +   CE.aplicadas.map(function(a){ return esc(a.nome.toLowerCase()); }).join(' · ') + '.'
+        +   (CE.jurosEconomizados ? ' Abatendo dívida, isso economiza <b>' + R$(CE.jurosEconomizados)
+              + '</b> de juros por ano.' : '')
+        + '</div>'
+        + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:11px">'
+        + [['DL/EBITDA','alav',x2],['Margem EBITDA','margem',pc],['PL sobre ativo','plAtivo',pc]].map(function(c){
+            var a = CE.antes[c[1]], d = CE.depois[c[1]];
+            if (d == null) return '';
+            return '<div style="background:#fff; border:1px solid #bbf7d0; border-radius:9px; padding:9px 11px">'
+              + '<div style="font-size:10.5px; color:#166534; font-weight:700; text-transform:uppercase; letter-spacing:.3px">' + c[0] + '</div>'
+              + '<div style="font-size:15px; font-weight:800; color:#15803d; margin-top:2px">' + c[2](d) + '</div>'
+              + '<div style="font-size:11px; color:#64748b">sem fazer nada: ' + c[2](a) + '</div></div>'; }).join('')
+        + '</div>'
+        + '<div style="font-size:11.5px; color:#166534; line-height:1.7; margin-top:9px">' + esc(CE.nota) + '</div>'
+        + '</div>';
+    }
+
+    h += '<div style="font-size:11.5px; color:#64748b; margin-top:14px; line-height:1.75; border-top:1px dashed #e2e8f0; padding-top:10px">'
+      + esc(o.ressalva) + '</div>';
+    return h;
+  }
+
+  window.renderBacktest = renderBacktest;
+})();
+
+/* ===================================================================
    v64 — O RACIONAL: O QUE CADA NÚMERO REVELA, E O QUE DÁ PARA FAZER
 
    Duas ideias do Patrick organizam este módulo.
@@ -24425,6 +24875,11 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
           + '</div>';
       });
     }
+
+    /* v65: a projeção entra depois do diagnóstico — e só depois de dizer quanto erra */
+    try {
+      if (typeof window.renderBacktest === 'function') h += window.renderBacktest(rows, D);
+    } catch(e){ console.warn('[backtest]', e); }
 
     h += '<div style="font-size:11.5px; color:#64748b; margin-top:16px; line-height:1.75; border-top:1px dashed #e2e8f0; padding-top:11px">'
       + esc(o.ressalva) + '</div>';
