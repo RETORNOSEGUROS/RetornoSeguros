@@ -2070,13 +2070,17 @@
               <div id="jiSub" style="font-size:12px; color:#0369a1; margin-top:2px"></div>
             </div>
             <div style="display:flex; gap:6px">
-              <button type="button" class="btn btn-primary" id="jiTodos" style="padding:6px 12px; font-size:12px" title="Grava todos os períodos do arquivo direto no Firestore, sem passar pelo formulário (anos já existentes são atualizados)">⚡ Gravar todos os períodos no banco</button>
+              <!-- v74: o botão de gravar mora na conferência, embaixo dos números -->
+              <button type="button" class="btn btn-primary" id="jiTodos" style="display:none">⚡ Gravar todos os períodos no banco</button>
               <button type="button" class="btn btn-outline" id="jiFechar" style="padding:4px 10px; font-size:12px">fechar</button>
             </div>
           </div>
           <div id="jiConvive" style="display:none"></div>
           <div id="jiCobertura"></div>
-          <div id="jiPeriodos" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px"></div>
+          <!-- v74: os botões por período passavam pelo formulário e por fora das travas.
+               Ficam escondidos; o caminho é a conferência abaixo. -->
+          <div id="jiPeriodos" style="display:none"></div>
+          <div id="jiConferencia"></div>
           <div id="jiStatus" style="font-size:12px; color:#0c4a6e; margin-top:10px"></div>
           <div id="jiTravas" style="display:none; margin-top:10px; background:#fff; border:1px solid #bae6fd; border-radius:8px; padding:10px; font-size:12px"></div>
           <div id="jiNotas" style="display:none; margin-top:8px; font-size:11.5px; color:#334155; max-height:160px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px"></div>
@@ -3746,7 +3750,10 @@
              nao tem o campo, e ano faltando é exatamente o caso que interessa ver */
           const snap = await db.collection('empresas').doc(empresaId).collection('financeiro').get();
           const m = {};
-          snap.forEach(d => { const a = Number((d.data()||{}).ano); if(a) m[a] = true; });
+          /* v74: guarda o exercício gravado, não só "existe". Uma correção
+             pontual (só a depreciação que faltava) precisa somar ao que já
+             está no banco para recalcular os indicadores. */
+          snap.forEach(d => { const x = d.data()||{}; const a = Number(x.ano); if(a) m[a] = Object.assign({ _docId: d.id }, x); });
           ANOS_BANCO = m;
         }catch(e){ console.warn('[import] nao consegui listar os anos ja gravados', e); }
       }
@@ -3771,6 +3778,8 @@
 
       function setCampo(id, valor){
         const el = $(id); if(!el) return false;
+        /* v74: valor que vem do arquivo é documento, não conta */
+        if (el.dataset) delete el.dataset.calc;
         if(el.tagName === 'SELECT'){ el.value = valor; }
         else if(el.classList.contains('money')){ el.value = (valor===null||valor===undefined||valor==='') ? '' : fmt(Number(valor)); }
         else { el.value = (valor===null||valor===undefined) ? '' : valor; }
@@ -3847,8 +3856,38 @@
           }
         }
         const st = $('jiStatus');
-        st.innerHTML = '<b>Opção 1:</b> clique em um período → confira → <b>💾 Salvar Dados</b> (um por vez). <b>Opção 2:</b> <b>⚡ Gravar todos os períodos no banco</b> de uma vez.';
+        if (st && !st.dataset.fixo) st.innerHTML = '';
+        renderConferencia();
       }
+
+      /* ================================================================
+         v74: UM CAMINHO SÓ.
+
+         Antes havia dois: clicar em cada período, conferir no formulário e
+         salvar um por vez; ou gravar todos de uma vez. Os dois passavam pelo
+         formulário — e o primeiro passava também por fora das travas. Era por
+         ele que um ano errado entrava sozinho enquanto os outros eram barrados.
+
+         Agora o arquivo vira uma tabela: cada exercício numa coluna, cada
+         número que vai ser gravado, e um botão. O que não fecha não grava,
+         e diz por quê, na mesma tela.
+         ================================================================ */
+      let EXERCICIOS = [];
+      function renderConferencia(){
+        const box = $('jiConferencia'); if(!box) return;
+        if (typeof window.montarExercicioFin !== 'function' || !PACOTE){ box.innerHTML = ''; return; }
+        const setor = (PACOTE.empresa && PACOTE.empresa.setorSistema) || null;
+        EXERCICIOS = periodosDoPacote().map(p => {
+          const _a = Number((p.meta||{}).ano || p.ano);
+          const r = window.montarExercicioFin(p, { setor,
+            existente: (ANOS_BANCO && typeof ANOS_BANCO[_a] === 'object') ? ANOS_BANCO[_a] : null });
+          r.periodo = p;
+          r.jaExiste = !!(ANOS_BANCO && ANOS_BANCO[r.ano]);
+          return r;
+        });
+        box.innerHTML = window.painelConferenciaImport(EXERCICIOS);
+      }
+      window.gravarPacoteConferido = () => importarTodos();
 
       async function importarPeriodo(p){
         const m = p.meta || {}; const ano = m.ano;
@@ -3954,92 +3993,35 @@
         const _preserva = _sis.filter(a=>_arq.indexOf(a)<0);
         const _atualiza = _sis.filter(a=>_arq.indexOf(a)>=0);
         const _novos    = _arq.filter(a=>_sis.indexOf(a)<0);
-        let aviso = 'Gravar '+ps.length+' período(s) de "'+(PACOTE.empresa?.nome||'')+'" direto no banco?\n';
-        if(_novos.length)    aviso += '\n+ CRIAR: '+_novos.join(', ');
-        if(_atualiza.length) aviso += '\n~ ATUALIZAR: '+_atualiza.join(', ');
-        if(_preserva.length) aviso += '\n= INTACTOS (não estão no arquivo): '+_preserva.join(', ');
-        if(!_sis.length)     aviso += '\n(nenhum exercício gravado nesta empresa ainda)';
-        aviso += '\n\nNenhum ano é apagado: o que não está no arquivo não é tocado.';
-        if(_atualiza.length) aviso += '\nNos anos atualizados, campo que o arquivo não traz fica como está — não é zerado.';
-        if(!confirm(aviso)) return;
-        const btn = $('jiTodos'); if(btn){ btn.disabled = true; btn.textContent = '⏳ gravando...'; }
+        /* v74: a tabela de conferência É a confirmação — o corretor acabou de
+           ver cada número que vai entrar. Um confirm() por cima disso é só um
+           clique a mais. */
+        renderConferencia();
+        const bons = EXERCICIOS.filter(e => !e.travas || e.travas.podeGravar);
+        const barrados = EXERCICIOS.filter(e => e.travas && !e.travas.podeGravar);
+        if(!bons.length){
+          $('jiStatus').innerHTML = '⛔ Nenhum exercício deste arquivo pode ser gravado: os números não fecham. '
+            + 'O motivo de cada um está na tabela abaixo.';
+          return;
+        }
+        const btn = $('jiGravarConferido');
+        if(btn){ btn.disabled = true; btn.textContent = '⏳ gravando...'; }
         let okN=0, errs=[], totalPreservado=0;
-        const jaTem = (a)=> !!(ANOS_BANCO && ANOS_BANCO[a]);
-        for(const p of ps){
-          const ano = p.meta?.ano;
+        for(const e of bons){
+          const ano = e.ano;
           try{
             $('jiStatus').innerHTML = '⏳ Gravando '+ano+'...';
-            const anoEl = $('finAno'); if(anoEl) anoEl.value = ano;   // sem disparar o recarregamento do modal
-            limparFormulario();
-            /* v69: a linha de base do formulário em branco. parseBRL('') devolve 0,
-               então coletar um formulário vazio dá um objeto com zero em tudo —
-               e é isso que permite saber, depois, quais campos o pacote realmente
-               trouxe e quais ficaram zerados só por estarem em branco. */
-            const vazio = coletarDadosFormulario(ano);
-            preencher(p, true);
-            const dados = coletarDadosFormulario(ano);
-
-            /* v69: ANO QUE JÁ EXISTE NÃO PODE PERDER CAMPO.
-               O caminho em lote limpa o formulário antes de preencher. Sem este
-               filtro, reimportar um ano já gravado com um pacote parcial — que é
-               exatamente o fluxo de subir um exercício por vez — gravava zero em
-               cima de todo campo que o pacote não trouxe. Firestore update()
-               preserva o que não é enviado, então basta não enviar. */
-            let preservados = 0;
-            if (jaTem(ano)){
-              Object.keys(dados).forEach(k=>{
-                if (k === 'ano') return;
-                const a = dados[k], b = vazio[k];
-                if (a === b || (a == null && b == null)){ delete dados[k]; preservados++; }
-              });
-            }
-            totalPreservado += preservados;
-
-            /* ================================================================
-               v72: AUSENTE NÃO É ZERO — e o sistema passa a saber a diferença.
-
-               coletarDadosFormulario roda tudo por parseBRL, e parseBRL('')
-               devolve 0. Depois disso, campo em branco e campo zerado são o
-               mesmo número, e nada adiante consegue distinguir "a empresa não
-               tem dívida" de "o arquivo não trouxe a dívida". Foi dessa
-               confusão que saíram os dois piores erros que este sistema já
-               cometeu, o EBITDA R$ 0 entre eles.
-
-               A linha de base do formulário em branco resolve: o que ficou
-               idêntico ao vazio é campo que ninguém preencheu. A lista vai
-               gravada junto, e a análise lê dela o que NÃO pode imprimir. */
-            const _preenchido = dadosCompletos(dados, vazio);
-            const _ausentes = Object.keys(_preenchido).filter(k => _preenchido[k] === false);
-            dados.camposAusentes = _ausentes;
-            dados.camposAusentesEm = new Date().toISOString();
-
-            Object.assign(dados, metaParaFirestore(p));
-
-            /* ================================================================
-               v72: A REGRA 2. Balanço que não fecha não entra no banco.
-
-               Um exercício com lucro maior que a receita contamina a análise
-               inteira — e, pior, contamina em silêncio, porque o número sai
-               bem formatado e com duas casas decimais. */
-            if (typeof window.travasDuras === 'function'){
-              const _T = window.travasDuras(
-                Object.assign({}, dados, {ano: ano, camposAusentes: _ausentes}));
-              if (!_T.podeGravar){
-                const _box = $('jiTravasDuras');
-                if (_box){
-                  _box.style.display = 'block';
-                  _box.innerHTML = window.painelTravasDuras(_T, {contexto:'gravar'});
-                  _box.scrollIntoView({behavior:'smooth', block:'center'});
-                }
-                errs.push(ano + ': ' + _T.impossiveis.length + ' número(s) impossível(is) — não gravei');
-                continue;
-              }
-            }
-
+            let dados = Object.assign({}, e.dados, metaParaFirestore(e.periodo));
+            /* ano que já existe: a DRE e o balanço são substituídos inteiros —
+               campo que o arquivo novo não traz é apagado, não preservado */
+            if (e.jaExiste && typeof window.paraAtualizarExercicio === 'function')
+              dados = window.paraAtualizarExercicio(dados);
             await persistirFinanceiro(empresaId, dados, null);
             IMPORTADOS[ano] = true; okN++;
-          }catch(e){ console.error('[import]', ano, e); errs.push(ano+': '+e.message); }
+          }catch(err){ console.error('[import]', ano, err); errs.push(ano+': '+err.message); }
         }
+        barrados.forEach(e => errs.push(e.ano + ': ' + e.travas.impossiveis.length
+          + ' número(s) impossível(is) — não gravei'));
         // v37: ficha societária/cadastral da empresa (contrato social) no documento da empresa
         /* v54: a ficha societaria tambem e vitrine — vale a do documento mais
            recente. Se este pacote e de anos antigos, a ficha dele vira historico
@@ -4063,8 +4045,21 @@
           }
         }catch(e){ console.warn('[import] ficha da empresa não gravada:', e); }
         await carregarAnosExistentes();
-        if(btn){ btn.disabled = false; btn.textContent = '⚡ Gravar todos os períodos no banco'; }
+        const _bt = $('jiTodos'); if(_bt){ _bt.disabled = false; }
         renderPainel();
+        /* v74: depois de gravar, a conferência vira o recibo — o que entrou */
+        const _cf = $('jiConferencia');
+        if (_cf && okN){
+          const gravados = bons.filter(e => IMPORTADOS[e.ano]);
+          _cf.innerHTML = '<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:11px; '
+            + 'padding:14px 16px; margin:12px 0; color:#166534; font-size:13px; line-height:1.8">'
+            + '<b>✅ ' + gravados.map(e => e.ano).join(', ') + ' gravado(s).</b><br>'
+            + gravados.map(e => e.ano + ': receita ' + Number(e.dados.receitaLiquida||0).toLocaleString('pt-BR',{maximumFractionDigits:0})
+                + ' · lucro líquido ' + Number(e.dados.lucroLiquido||0).toLocaleString('pt-BR',{maximumFractionDigits:0})
+                + ' · EBITDA ' + Number(e.dados.ebitda||0).toLocaleString('pt-BR',{maximumFractionDigits:0})
+                + (e.dados.ebitdaPiso ? ' (piso)' : '')).join('<br>')
+            + '</div>';
+        }
         $('jiStatus').innerHTML = (okN? '✅ '+okN+' período(s) gravado(s) no banco. ' : '') + avisoFicha
           + (_preserva.length ? ' Os exercícios de <b>'+_preserva.join(', ')+'</b> não estavam no arquivo e continuam no sistema, intactos. ' : '')
           + (totalPreservado ? ' Em anos que já existiam, <b>'+totalPreservado+' campo(s)</b> que o arquivo não trouxe foram preservados como estavam. ' : '') + (errs.length? '❌ Erros: '+errs.join(' · ') : '') + ' <button type="button" class="btn btn-primary" style="padding:4px 10px; font-size:12px; margin-left:6px" onclick="document.getElementById(\'modalFin\').style.display=\'none\'; if(window.carregarGrid) carregarGrid();">Fechar e atualizar painel</button>';
@@ -5416,6 +5411,16 @@ function renderTabela(arr){
       row.oportunidade = lead.score; // Para ordenação
       row.lead = lead;
 
+      /* v74: a lista denuncia o exercício gravado com número impossível.
+         O erro da v70 (receita bruta travada no lugar do lucro) atingiu todo
+         import feito pelo caminho antigo. O corretor precisa achar essas
+         empresas sem abrir uma por uma — e a nota delas não vale nada até
+         o arquivo ser importado de novo. */
+      let _td = null;
+      try { if (typeof window.travasDuras === 'function') _td = window.travasDuras(row, { lista:true }); } catch(_){}
+      const _quebrado = !!(_td && !_td.podeAnalisar);
+      const _ausEb = (row.camposAusentes||[]).indexOf('ebitda') >= 0;
+
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>
@@ -5425,17 +5430,24 @@ function renderTabela(arr){
         <td>${row.ano || "—"}</td>
         <td>
           <div style="display:flex; align-items:center; gap:8px">
-            <div class="score-badge ${status.classe}" style="width:50px; height:50px; font-size:16px">
-              ${row.score}
-            </div>
+            ${_quebrado
+              ? `<div title="${escapeHtml(_td.impossiveis.map(x=>x.titulo).join(' · '))}"
+                   style="font-size:11px; font-weight:800; color:#b91c1c; background:#fef2f2;
+                   border:1px solid #fecaca; border-radius:8px; padding:6px 8px; line-height:1.3; text-align:center">
+                   ⛔ número<br>impossível</div>`
+              : `<div class="score-badge ${status.classe}" style="width:50px; height:50px; font-size:16px">
+                   ${row.score}
+                 </div>`}
           </div>
         </td>
         <td>${toBRL(row.receita)}</td>
-        <td>${toBRL(row.ebitda)}</td>
+        <td>${_ausEb ? '<span style="color:#94a3b8">não veio</span>'
+             : toBRL(row.ebitda) + (row.ebitdaPiso
+                 ? '<div style="font-size:10px; color:#a16207" title="A DRE não abre a depreciação: o EBITDA foi tomado igual ao EBIT, o menor valor que ele pode ter">piso</div>' : '')}</td>
         <td>
-          <span class="chip ${row.margem>=0.15? "chip-success" : row.margem>=0.08? "chip-warning" : "chip-danger"}">
+          ${_ausEb ? '<span style="color:#94a3b8">—</span>' : `<span class="chip ${row.margem>=0.15? "chip-success" : row.margem>=0.08? "chip-warning" : "chip-danger"}">
             ${toPct(row.margem)}
-          </span>
+          </span>`}
         </td>
         <td>
           <span class="chip ${row.alav<=1.5? "chip-success" : row.alav<=3? "chip-warning" : "chip-danger"}">
@@ -5642,10 +5654,27 @@ function calcularIndicadores(d){
   const ctcp = safeDiv(passivoTotal, pl); // Capital Terceiros / Capital Próprio
   
   // === LIQUIDEZ ===
-  const liq = safeDiv(caixa + cr + estoques, cp || passivoCirc);
-  const liqSeca = safeDiv(caixa + cr, cp || passivoCirc);
-  const liqImediata = safeDiv(disponiveis, cp || passivoCirc);
-  const liqCorrente = safeDiv(ativoCirc, passivoCirc) || liq;
+  /* v74: A LIQUIDEZ DIVIDIA SÓ PELOS FORNECEDORES.
+
+     `cp || passivoCirc` — cp é contas a pagar. Sempre que a empresa tinha
+     fornecedores lançados, a "liquidez" da lista, do score, do painel de
+     saúde e dos gráficos era (caixa + clientes + estoque) ÷ FORNECEDORES,
+     ignorando empréstimo de curto prazo, salários, impostos e adiantamentos.
+     Não é índice nenhum que exista. Na AUTOMASUL dava 3,25 contra 2,50 de
+     liquidez corrente — e numa empresa com dívida bancária de curto prazo
+     pesada, a diferença esconde exatamente o risco que o banco procura,
+     e ainda somava pontos no score.
+
+     Liquidez se divide pelo passivo circulante. Os fornecedores só entram
+     no lugar dele quando o passivo circulante não foi lançado — e aí o
+     índice sai marcado como aproximado. */
+  const temAC = ativoCirc > 0, temPC = passivoCirc > 0;
+  const liqCorrente = temPC ? safeDiv(temAC ? ativoCirc : (caixa + cr + estoques), passivoCirc) : null;
+  const liqAproximada = !temPC || !temAC;
+  const liq = temPC ? liqCorrente : safeDiv(caixa + cr + estoques, cp);
+  const liqSeca = temPC ? safeDiv((temAC ? ativoCirc : (caixa + cr + estoques)) - estoques, passivoCirc)
+                        : safeDiv(caixa + cr, cp);
+  const liqImediata = safeDiv(disponiveis, temPC ? passivoCirc : cp);
   const liqAjustada = safeDiv(ativoCirc - naoRealizaveis, passivoCirc); // v37
   const liqGeral = safeDiv(ativoCirc + realizavelLP, passivoTotal);
   
@@ -5739,7 +5768,7 @@ function calcularIndicadores(d){
     endividamentoGeral, composicaoEndCP, ctcp,
     
     // Liquidez
-    liq, liqSeca, liqImediata, liqCorrente, liqGeral,
+    liq, liqSeca, liqImediata, liqCorrente, liqGeral, liqAproximada,
     
     // Rentabilidade
     roe, roa, roic,
@@ -6347,6 +6376,33 @@ async function salvarFinanceiro(){
   try{ dados = coletarDadosFormulario(ano); }
   catch(e){ console.error(e); mostrarErro("Erro ao ler o formulário: "+e.message); if(btnSalvar){btnSalvar.disabled=false; btnSalvar.textContent="💾 Salvar Dados";} return; }
 
+  /* v74: a mesma trava do import vale para quem digita. Não existe porta
+     do sistema por onde um lucro maior que a receita entre no banco. */
+  if (typeof window.travasDuras === 'function'){
+    /* EBITDA piso também para quem digita: sem depreciação, o EBIT é o mínimo */
+    if (!(dados.ebitda > 0) && dados.ebit > 0 && !(dados.depreciacaoAmortizacao > 0)){
+      dados.ebitda = dados.ebit; dados.ebitdaPiso = true;
+      if (dados.receitaLiquida > 0) dados.margemEbitda = dados.ebitda / dados.receitaLiquida;
+      if (dados.dividaLiquida != null) dados.alavancagemDivLiqEbitda = dados.dividaLiquida / dados.ebitda;
+      if (dados.despesasFinanceiras > 0) dados.coberturaJuros = dados.ebitda / dados.despesasFinanceiras;
+    } else if (dados.depreciacaoAmortizacao > 0) dados.ebitdaPiso = false;
+    const _T = window.travasDuras(dados);
+    if (!_T.podeGravar){
+      const box = document.getElementById('jiTravasDuras');
+      const painel = document.getElementById('jsonImportPanel');
+      if (box && painel){
+        painel.style.display = 'block';
+        box.style.display = 'block';
+        box.innerHTML = window.painelTravasDuras(_T, {contexto:'gravar'});
+        box.scrollIntoView({behavior:'smooth', block:'center'});
+      }
+      mostrarErro('Não gravei: ' + _T.impossiveis.map(x=>x.titulo).join(' · ')
+        + '. Confira os campos indicados.');
+      if(btnSalvar){ btnSalvar.disabled=false; btnSalvar.textContent="💾 Salvar Dados"; }
+      return;
+    }
+  }
+
   try{
     const msg = await persistirFinanceiro(empresaId, dados, EDIT_CTX.docId);
     mostrarInfo(msg);
@@ -6544,6 +6600,32 @@ function coletarDadosFormulario(ano){
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: CTX.uid
   };
+  /* v74: o campo simples de dívida entra no objeto, para que o cálculo abaixo
+     não precise voltar ao formulário */
+  dados.dividaBrutaDeclarada = getMoney("finDividaBruta");
+  return completarDadosFinanceiros(dados);
+}
+
+/* ============================================================================
+   v74 — O CÁLCULO SEPARADO DO FORMULÁRIO
+
+   Até aqui, "coletar os dados" e "calcular os indicadores" eram a mesma
+   função, e ela lia a tela. Consequência: o import em lote, para gravar um
+   exercício, PREENCHIA O FORMULÁRIO campo por campo — como se fosse uma
+   pessoa digitando — e o cálculo ao vivo da tela rodava a cada campo.
+
+   Foi assim que a receita bruta virou lucro líquido. O import punha a
+   receita bruta; o cálculo ao vivo rodava com o custo ainda vazio e
+   escrevia lucro bruto = receita bruta; o custo chegava depois, mas a
+   regra de âncora tratava o número que já estava no campo como se fosse
+   do documento — e o valor errado ficava travado. Lucro bruto, EBIT, LAIR
+   e lucro líquido: todos iguais à receita bruta.
+
+   Daqui para a frente, o cálculo recebe um objeto e devolve um objeto.
+   O formulário é um jeito de MONTAR esse objeto, para quem digita. O
+   import monta o mesmo objeto direto do arquivo, sem passar pela tela.
+   ============================================================================ */
+function completarDadosFinanceiros(dados){
 
   // ========== AUTOCÁLCULO (DRE + totais do balanço a partir dos brutos) ==========
   // Recalcula receitaLiquida, lucroBruto, ebit, ebitda, lucroLiquido e os totais
@@ -6556,8 +6638,9 @@ function coletarDadosFormulario(ano){
   // Dívida Bruta = Empréstimos CP + LP + Debêntures
   dados.dividaBruta = (dados.emprestimosCP || 0) + (dados.emprestimosLP || 0) + (dados.debentures || 0);
   if(dados.dividaBruta === 0){
-    dados.dividaBruta = getMoney("finDividaBruta"); // fallback campo simples
+    dados.dividaBruta = Number(dados.dividaBrutaDeclarada) || 0; // fallback campo simples
   }
+  delete dados.dividaBrutaDeclarada;
   
   // Disponibilidades = Caixa + Aplicações CP
   dados.disponiveis = (dados.caixa || 0) + (dados.aplicacoesFinanceirasCP || 0);
@@ -6673,6 +6756,7 @@ function coletarDadosFormulario(ano){
 
   return dados;
 }
+window.completarDadosFinanceiros = completarDadosFinanceiros;
 
 // ===== v36: persistência no Firestore (update por docId, senão por ano, senão cria) — retorna a mensagem =====
 async function persistirFinanceiro(empresaId, dados, docId){
@@ -18783,9 +18867,12 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
     const anc = n((window.ANCORAS_DOC||{})[chave]);
     if(!temSub) return { valor: anc, usouDoc: !!anc };
     if(!anc)    return { valor: soma, usouDoc: false };
+    /* v74: o documento manda SEMPRE. Antes, quando a soma das subcontas
+       ficava a menos de 0,5% do total, a soma substituía o total — e a
+       diferença (uma subconta que a IA não listou) sumia em silêncio. */
     const tol = Math.max(1, Math.abs(anc) * 0.005);
-    if(Math.abs(soma - anc) <= tol) return { valor: soma, usouDoc: false };
-    PENDENCIAS.push({ bloco: rotulo, documento: anc, lancado: soma, falta: anc - soma });
+    if(Math.abs(soma - anc) > tol)
+      PENDENCIAS.push({ bloco: rotulo, documento: anc, lancado: soma, falta: anc - soma });
     return { valor: anc, usouDoc: true };
   }
   /* ancora pelo valor que ja esta no proprio campo (DRE: o campo e de digitacao,
@@ -18793,9 +18880,10 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
   function ancorarAqui(soma, atual, rotulo){
     const a = n(atual);
     if(!a) return soma;
+    /* v74: o documento manda sempre; a diferença, se relevante, vira pendência */
     const tol = Math.max(1, Math.abs(a) * 0.005);
-    if(Math.abs(soma - a) <= tol) return soma;
-    PENDENCIAS.push({ bloco: rotulo, documento: a, lancado: soma, falta: a - soma });
+    if(Math.abs(soma - a) > tol)
+      PENDENCIAS.push({ bloco: rotulo, documento: a, lancado: soma, falta: a - soma });
     return a;
   }
   window.pendenciasDeSubcontas = () => PENDENCIAS.slice();
@@ -18817,11 +18905,12 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
     if(temComponentesDRE){
       /* v47: receita bruta e deduções a partir das subcontas, com o total do
          documento como âncora (mesma regra do balanço). */
+      /* v74: o documento manda sempre. A conta só preenche o que ele não trouxe. */
       const ancDRE = (soma, temSub, atual) => {
         const a = n(atual);
         if(!temSub) return a;
         if(!a)      return soma;
-        return (Math.abs(soma - a) <= Math.max(1, Math.abs(a)*0.005)) ? soma : a;
+        return a;
       };
       const temRec = algum([d.receitaMercadorias, d.receitaServicos, d.exportacaoAno, d.receitaOutrasVendas]);
       d.receitaBruta = ancDRE(n(d.receitaMercadorias) + n(d.receitaServicos)
@@ -18831,8 +18920,14 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
       d.deducoes = ancDRE(n(d.devolucoes) + n(d.impostoICMS) + n(d.impostoISS)
                         + n(d.impostoPIS) + n(d.impostoCOFINS) + n(d.impostoOutrosVendas),
                           temDed, d.deducoes);
-      // Se houver receita bruta informada, calcula a líquida; senão usa a líquida digitada direto
-      if(n(d.receitaBruta) !== 0) d.receitaLiquida = n(d.receitaBruta) - n(d.deducoes);
+      /* v74: receita bruta sem deduções lançadas NÃO é receita líquida. Esta linha
+         trocava a líquida do documento pela bruta sempre que as deduções não
+         vinham — e a bruta é, em média, 20% maior. A líquida só sai da conta
+         quando as deduções existem; e mesmo aí o documento é âncora. */
+      if(n(d.receitaBruta) !== 0 && n(d.deducoes) !== 0)
+        d.receitaLiquida = ancDRE(n(d.receitaBruta) - n(d.deducoes), true, d.receitaLiquida);
+      else if(!n(d.receitaLiquida) && n(d.receitaBruta) !== 0)
+        d.receitaLiquida = n(d.receitaBruta);
 
       /* === v70: O TOTAL DO DOCUMENTO É ÂNCORA TAMBÉM NA DRE ===
          O balanço já respeitava isso desde a v46; a DRE não. Resultado: num
@@ -18947,60 +19042,100 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
     'finPLCapital','finPLReservasCapital','finPLReservasIncentivos','finPLReservasLucro','finPLLucrosAcum','finPLAjustes'];
   const BRUTO_SET = new Set(BRUTO_IDS);
 
+  /* ================================================================
+     v74 — O CÁLCULO AO VIVO NÃO PODE TRATAR A PRÓPRIA CONTA COMO DOCUMENTO.
+
+     A v70 fez cada linha da DRE respeitar o número do documento: se o
+     campo já tem um valor e a conta não bate com ele, o valor do campo
+     vence. Certo — quando o valor do campo veio do documento.
+
+     Só que este cálculo roda a CADA campo preenchido. Quem digita a DRE
+     de cima para baixo (e o import, que fazia a mesma coisa) põe a receita
+     bruta antes do custo. Nesse instante a conta dá lucro bruto = receita
+     bruta, e escreve isso no campo. Quando o custo chega, a regra da v70
+     olhava o campo, via um número, e o tratava como documento. O valor de
+     passagem ficava travado — e levava junto EBIT, LAIR e lucro líquido.
+
+     Agora todo campo de resultado sabe quem escreveu nele. O que a própria
+     conta escreveu é marcado (data-calc) e NUNCA serve de âncora; o que
+     veio do documento ou da mão de alguém continua mandando. */
+  const ehDaConta = id => { const el = document.getElementById(id); return !!(el && el.dataset && el.dataset.calc === '1'); };
+  const lerDoc = (...ids) => { for (const id of ids){ if (ehDaConta(id)) continue; const v = lerUI(id); if (v) return v; } return 0; };
+  /* grava o resultado e marca quem escreveu: se o valor é o do documento,
+     o campo continua sendo do documento; se a conta mudou o valor, é da conta */
+  const fixar = (ids, v, doc) => ids.forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    setMoney(id, v);
+    const igual = doc && Math.abs(n(v) - n(doc)) <= Math.max(1, Math.abs(n(doc)) * 0.005);
+    if (igual) delete el.dataset.calc; else el.dataset.calc = '1';
+  });
+
   function previewDRE(){
     let rb=lerUI('finReceitaBruta'), ded=lerUI('finDeducoes');
     const cmv=lerUI('finCMV'),
           dv=lerUI('finDespVendas'), da=lerUI('finDespAdm'), dep=lerUI('finDepAmort'),
           od=lerUI('finOutrasDesp'), dt=lerUI('finDespTributarias'), orc=lerUI('finOutrasReceitas'),
           rf=lerUI('finReceitaFin'), df=lerUI('finDespesaFin'), ir=lerUI('finIRCS');
-    const rlDireta=lerUI('finReceitaLiq');
     /* v47: a receita bruta e as deduções passam a ter subcontas. Mesma regra do balanço:
-       a soma das partes só substitui o total do documento quando bate com ele. Quando não
-       bate, o total do documento fica e a diferença vira pendência nomeada. */
+       a soma das partes só substitui o total do documento quando bate com ele. */
     const recP = [lerUI('finRecMercadorias'), lerUI('finRecServicos'), lerUI('finExportacao'), lerUI('finRecOutras')];
     const dedP = [lerUI('finDevolucoes'), lerUI('finImpICMS'), lerUI('finImpISS'),
                   lerUI('finImpPIS'), lerUI('finImpCOFINS'), lerUI('finImpOutros')];
     if(recP.some(v=>v)){
-      const r = ancorarAqui(recP.reduce((a,b)=>a+b,0), rb, 'Receita bruta');
-      rb = r; setUI(['finReceitaBruta'], rb);
+      const docRb = lerDoc('finReceitaBruta');
+      rb = ancorarAqui(recP.reduce((a,b)=>a+b,0), docRb, 'Receita bruta');
+      fixar(['finReceitaBruta'], rb, docRb);
     }
     if(dedP.some(v=>v)){
-      const r = ancorarAqui(dedP.reduce((a,b)=>a+b,0), ded, 'Dedu\u00e7\u00f5es da receita');
-      ded = r; setUI(['finDeducoes'], ded);
+      const docDed = lerDoc('finDeducoes');
+      ded = ancorarAqui(dedP.reduce((a,b)=>a+b,0), docDed, 'Deduções da receita');
+      fixar(['finDeducoes'], ded, docDed);
     }
-    if(!(rb||ded||rlDireta||cmv||dv||da||dep||od||dt||orc||rf||df||ir)) return; // legado/vazio: não mexe
-    // Receita líquida: usa a bruta−deduções se houver bruta; senão a digitada direto
-    let rl = rlDireta;
-    if(rb){ rl = rb - ded; setUI(['finReceitaLiq'], rl); }
+    const rlDoc = lerDoc('finReceitaLiq');
+    if(!(rb||ded||rlDoc||cmv||dv||da||dep||od||dt||orc||rf||df||ir)) return; // legado/vazio: não mexe
+
+    /* Receita líquida. A bruta menos as deduções só vale quando as deduções
+       EXISTEM — receita bruta sem deduções lançadas não é receita líquida, é
+       a mesma bruta com outro nome. Sem deduções, manda a líquida do documento. */
+    let rl;
+    if (rb && ded)      rl = ancorarAqui(rb - ded, rlDoc, 'Receita líquida');
+    else if (rlDoc)     rl = rlDoc;
+    else                rl = rb;
+    fixar(['finReceitaLiq'], rl, rlDoc);
     setUI(['finReceita'], rl); // espelho no resumo (aba Básico)
-    /* v70: cada linha derivada só substitui a do documento quando há componente
-       para derivar E os dois concordam — a mesma regra que o balanço já usava.
-       Sem CMV, "receita menos CMV" não é lucro bruto: é a receita. */
-    const lb = cmv ? ancorarAqui(rl - cmv, lerUI('finLucroBruto'), 'Lucro bruto')
-                   : (lerUI('finLucroBruto') || rl - cmv);
-    setUI(['finLucroBruto'], lb);
+
+    const lbDoc = lerDoc('finLucroBruto');
+    const lb = cmv ? ancorarAqui(rl - cmv, lbDoc, 'Lucro bruto')
+                   : (lbDoc || rl);
+    fixar(['finLucroBruto'], lb, lbDoc);
 
     const temOpex = (dv||da||od||dt||orc);
-    const ebit = temOpex ? ancorarAqui(lb-dv-da-od-dt+orc, lerUI('finEBIT'), 'EBIT')
-                         : (lerUI('finEBIT') || lb-dv-da-od-dt+orc);
-    setUI(['finEBIT'], ebit); // v36: D&A não subtrai do EBIT; v46: tributárias entram
+    const ebitDoc = lerDoc('finEBIT');
+    const ebit = temOpex ? ancorarAqui(lb-dv-da-od-dt+orc, ebitDoc, 'EBIT')
+                         : (ebitDoc || lb);
+    fixar(['finEBIT'], ebit, ebitDoc); // v36: D&A não subtrai do EBIT; v46: tributárias entram
 
-    /* sem depreciação do período, o EBITDA não existe — e não é o EBIT */
-    if(dep){ const ebitda = ancorarAqui(ebit+dep, lerUI('finEbitda'), 'EBITDA');
-             setUI(['finEbitda','finEbitdaDRE'], ebitda); }
+    if(dep){
+      const ebitdaDoc = lerDoc('finEbitda','finEbitdaDRE');
+      const ebitda = ancorarAqui(ebit+dep, ebitdaDoc, 'EBITDA');
+      fixar(['finEbitda','finEbitdaDRE'], ebitda, ebitdaDoc);
+    }
 
     const temResFin = (rf||df);
-    const resFin = temResFin ? ancorarAqui(rf-df, lerUI('finResultadoFin'), 'Resultado financeiro')
-                             : (lerUI('finResultadoFin') || rf-df);
-    setUI(['finResultadoFin'], resFin);
+    const rfDoc = lerDoc('finResultadoFin');
+    const resFin = temResFin ? ancorarAqui(rf-df, rfDoc, 'Resultado financeiro')
+                             : (rfDoc || 0);
+    fixar(['finResultadoFin'], resFin, rfDoc);
 
-    const lair = ebit ? ancorarAqui(ebit+resFin, lerUI('finLAIR'), 'Resultado antes do IR')
-                      : (lerUI('finLAIR') || ebit+resFin);
-    setUI(['finLAIR'], lair);
+    const lairDoc = lerDoc('finLAIR');
+    const lair = ebit ? ancorarAqui(ebit+resFin, lairDoc, 'Resultado antes do IR')
+                      : (lairDoc || ebit+resFin);
+    fixar(['finLAIR'], lair, lairDoc);
 
-    const ll = lair ? ancorarAqui(lair-ir, lerUI('finLucroLiq'), 'Lucro líquido')
-                    : (lerUI('finLucroLiq') || lair-ir);
-    setUI(['finLucroLiq','finLucroLiqDRE'], ll);
+    const llDoc = lerDoc('finLucroLiq','finLucroLiqDRE');
+    const ll = lair ? ancorarAqui(lair-ir, llDoc, 'Lucro líquido')
+                    : (llDoc || lair-ir);
+    fixar(['finLucroLiq','finLucroLiqDRE'], ll, llDoc);
   }
 
   function previewBalanco(){
@@ -19138,6 +19273,10 @@ window.calcularNecessidadeRecuperacao = calcularNecessidadeRecuperacao;
   }
 
   function instalar(){
+    /* v74: o que a pessoa digita vira documento — sai da marca "da conta" */
+    document.addEventListener('input', e=>{
+      if (e.isTrusted && e.target && e.target.dataset) delete e.target.dataset.calc;
+    }, true);
     injetarCSS();
     document.addEventListener('input', e=>{ if(e.target && BRUTO_SET.has(e.target.id)) recalcular(); });
     document.addEventListener('blur',  e=>{ if(e.target && BRUTO_SET.has(e.target.id)) recalcular(); }, true);
@@ -20333,8 +20472,10 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
                    : ((sc == null || isNaN(sc)) ? '-' : (Math.round(sc) + ' / 100'));
       f.grade([
         ['Receita líquida', moedaA('receita'), AZUL],
-        ['EBITDA', moedaA('ebitda'), _ausente('ebitda') ? CINZA : (a.ebitda>0?VERDE:VERMELHO),
-          _ausente('ebitda') ? 'a depreciação não veio no arquivo' : ('margem ' + pct(a.margem))],
+        ['EBITDA' + (a.ebitdaPiso ? ' (piso)' : ''), moedaA('ebitda'),
+          _ausente('ebitda') ? CINZA : (a.ebitda>0?VERDE:VERMELHO),
+          _ausente('ebitda') ? 'a depreciação não veio no arquivo'
+            : ('margem ' + pct(a.margem) + (a.ebitdaPiso ? ' · igual ao EBIT, DRE sem depreciação' : ''))],
         ['Lucro líquido', moedaA('lucroLiq'), a.lucroLiq>0?VERDE:VERMELHO],
         ['Dívida bruta', moedaA('dividaBruta'), AZUL],
         ['Dívida líquida / EBITDA', (a.alav!=null && !_ausente('ebitda'))? num(a.alav)+'x' : '-',
@@ -35627,6 +35768,417 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 })();
 
 /* ===================================================================
+   v74 — O IMPORTADOR QUE NÃO PASSA PELA TELA
+
+   O caminho antigo, para gravar um exercício, preenchia o formulário
+   campo por campo e depois o lia de volta. Isso fazia do import uma
+   simulação de alguém digitando — com todos os efeitos colaterais de
+   alguém digitando, inclusive o cálculo ao vivo rodando no meio do
+   preenchimento e travando um valor de passagem como se fosse do
+   documento. Foi daí que a receita bruta virou lucro líquido.
+
+   Este importador é uma função: recebe o período do arquivo, devolve o
+   exercício pronto para gravar. Sem DOM, sem evento, sem ordem de
+   preenchimento. O mesmo arquivo dá sempre o mesmo resultado — e por
+   isso dá para testar contra o documento, número por número.
+
+   Três decisões que mudam o que o corretor vê:
+
+   1. O BALANÇO É UMA UNIDADE. Reimportar um ano substitui a DRE e o
+      balanço daquele ano inteiros. Campo que o arquivo novo não traz é
+      APAGADO, não preservado — preservar misturaria duas versões do
+      mesmo balanço e manteria no banco exatamente os números errados que
+      motivaram a reimportação. O que fica preservado é o resto: folha,
+      benefícios, processos, garantias, sucessão.
+
+   2. EBITDA SEM DEPRECIAÇÃO DECLARADA É O EBIT, MARCADO COMO PISO.
+      A depreciação é sempre maior ou igual a zero, então EBITDA ≥ EBIT,
+      sempre. Usar o EBIT é usar o menor valor que o EBITDA pode ter: a
+      alavancagem sai igual ou PIOR que a real, nunca melhor. É o que um
+      analista de crédito faz quando a DRE não abre a depreciação. "R$ 0"
+      era falso; "não informado" tornava a empresa inanalisável; o piso é
+      verdadeiro e conservador.
+
+   3. AUSENTE CONTINUA AUSENTE. Campo que o arquivo não trouxe e que não
+      dá para derivar não vira zero no banco.
+   =================================================================== */
+(function(){
+  'use strict';
+
+  /* id canônico do adaptador → chave do exercício no banco.
+     Extraído de coletarDadosFormulario, que é a fonte da verdade. */
+  var CHAVE = {
+    finReceitaBruta:'receitaBruta', finDeducoes:'deducoes',
+    finRecMercadorias:'receitaMercadorias', finRecServicos:'receitaServicos',
+    finRecOutras:'receitaOutrasVendas', finDevolucoes:'devolucoes',
+    finImpICMS:'impostoICMS', finImpISS:'impostoISS', finImpPIS:'impostoPIS',
+    finImpCOFINS:'impostoCOFINS', finImpOutros:'impostoOutrosVendas',
+    finReceitaLiq:'receitaLiquida', finReceita:'receitaLiquida',
+    finCMV:'cmv', finLucroBruto:'lucroBruto',
+    finDespVendas:'despesasVendas', finDespAdm:'despesasAdm',
+    finDepAmort:'depreciacaoAmortizacao', finOutrasDesp:'outrasDespesas',
+    finDespTributarias:'despesasTributarias', finOutrasReceitas:'outrasReceitas',
+    finEBIT:'ebit', finEbitda:'ebitda', finEbitdaDRE:'ebitda',
+    finReceitaFin:'receitasFinanceiras', finDespesaFin:'despesasFinanceiras',
+    finResultadoFin:'resultadoFinanceiro', finLAIR:'lucroAntesIR', finIRCS:'ircs',
+    finLucroLiq:'lucroLiquido', finLucroLiqDRE:'lucroLiquido',
+    finACCaixa:'caixa', finCaixa:'caixa', finACAplicacoes:'aplicacoesFinanceirasCP',
+    finCR:'contasReceber', finACPDD:'pdd', finEstoques:'estoques',
+    finACImpostos:'impostosRecuperar', finACAdiantFornec:'adiantamentoFornecedores',
+    finACDespAntecip:'despesasAntecipadas', finACOutros:'outrosAC',
+    finAtivoCirc:'ativoCirculante', finANCRealizavel:'realizavelLP',
+    finANCInvest:'investimentos', finImobilizado:'imobilizado',
+    finDepreciacao:'depreciacao', finANCIntangivel:'intangivel',
+    finAtivoNaoCirc:'ativoNaoCirculante', finAtivoTotal:'ativoTotal', finAtivo:'ativoTotal',
+    finCP:'contasPagar', finPCEmprestimos:'emprestimosCP', finPCSalarios:'salariosPagar',
+    finPCImpostos:'impostosPagar', finPCParcelamentos:'parcelamentosCP',
+    finPCAdiantClientes:'adiantamentoClientes', finPCDividendos:'dividendosPagar',
+    finPCProvisoes:'provisoesCP', finPCOutros:'outrosPC',
+    finPassivoCirc:'passivoCirculante', finPNCEmprestimos:'emprestimosLP',
+    finPNCDebentures:'debentures', finPNCProvisoes:'provisoesLP', finPNCOutros:'outrosPNC',
+    finPassivoNaoCirc:'passivoNaoCirculante',
+    finPLCapital:'capitalSocial', finPLReservasCapital:'reservasCapital',
+    finPLReservasIncentivos:'reservasIncentivos', finPLReservasLucro:'reservasLucro',
+    finPLLucrosAcum:'lucrosAcumulados', finPLAjustes:'ajustesAvaliacao',
+    finPL:'patrimonioLiquido', finPLTotal:'patrimonioLiquido',
+    finDividaBruta:'dividaBrutaDeclarada',
+    finQtdSocios:'qtdSocios', finFuncionarios:'funcionarios',
+    finDistribLucro:'distribuicaoLucros', finProLabore:'proLabore',
+    finMarketShare:'marketShare', finCrescSetor:'crescimentoSetor',
+    finMargemSetor:'margemSetor', finRankingSetor:'rankingSetor',
+    finFolhaAnual:'folhaAnual', finEncargosFolha:'encargosFolha',
+    finBeneficiosAnual:'beneficiosAnual', finBeneficioSaude:'beneficioSaude',
+    finBeneficioOdonto:'beneficioOdonto', finBeneficiosDetalhe:'beneficiosDetalhe',
+    finPremioSeguros:'premioSegurosAno', finEnergiaAnual:'energiaAnual',
+    finObrasAndamento:'obrasAndamento', finExportacao:'exportacaoAno',
+    finPartesRelacionadas:'partesRelacionadas', finAtivoNaoOperacional:'ativoNaoOperacional',
+    finDespesasFixas:'despesasFixas', finRegimeTributario:'regimeTributario',
+    finSetor:'setor',
+    finSucCriterio:'sucCriterio', finSucMetodo:'sucMetodo', finSucPrazo:'sucPrazoMeses',
+    finSucParcelas:'sucParcelas', finSucInvalidez:'sucInvalidez', finSucFonte:'sucFonte',
+    finBensGarantia:'bensEmGarantia', finRecebiveisCedidos:'recebiveisCedidos',
+    finAvaisPrestados:'avaisPrestados', finFiancasBancarias:'fiancasBancarias',
+    finRescisoes:'rescisoes', finAdmissoes:'admissoes', finProvisaoFerias13:'provisaoFerias13',
+    finFuncionariosInicio:'funcionariosInicio',
+    finValorImoveis:'valorImoveis', finValorMaquinas:'valorMaquinas',
+    finValorVeiculos:'valorVeiculos', finValorMoveis:'valorMoveis',
+    finInadimplencia:'inadimplencia', finLimiteTotal:'limiteTotal', finLimiteUsado:'limiteUsado',
+    finTaxaMedia:'taxaMedia', finScoreExterno:'scoreExterno',
+    finProcessosTrab:'processosTrabalhistas', finProcessosTrib:'processosTributarios',
+    finProcessosCiv:'processosCiveis', finProcessosAmb:'processosAmbientais',
+    finQtdProcessos:'qtdProcessos', finDepJudiciais:'depositosJudiciais',
+    finHonorariosJuridicos:'honorariosJuridicos', finMultasFiscais:'multasFiscais',
+    finMultasMora:'multasMora', finMultasRegulatorias:'multasRegulatorias',
+    finTaxasRegulatorias:'taxasRegulatorias', finProvisaoContingencias:'provisaoContingencias',
+    finPassivoContingente:'passivoContingente'
+  };
+
+  /* O NÚCLEO: a DRE e o balanço. Reimportar o ano substitui isto inteiro. */
+  var NUCLEO = ['receitaBruta','deducoes','receitaMercadorias','receitaServicos','receitaOutrasVendas',
+    'devolucoes','impostoICMS','impostoISS','impostoPIS','impostoCOFINS','impostoOutrosVendas',
+    'receitaLiquida','cmv','lucroBruto','despesasVendas','despesasAdm','depreciacaoAmortizacao',
+    'outrasDespesas','despesasTributarias','outrasReceitas','ebit','ebitda','ebitdaPiso',
+    'receitasFinanceiras','despesasFinanceiras','resultadoFinanceiro','lucroAntesIR','ircs',
+    'lucroLiquido','caixa','aplicacoesFinanceirasCP','contasReceber','pdd','estoques',
+    'impostosRecuperar','adiantamentoFornecedores','despesasAntecipadas','outrosAC',
+    'ativoCirculante','realizavelLP','investimentos','imobilizado','depreciacao','intangivel',
+    'ativoNaoCirculante','ativoTotal','contasPagar','emprestimosCP','salariosPagar',
+    'impostosPagar','parcelamentosCP','adiantamentoClientes','dividendosPagar','provisoesCP',
+    'outrosPC','passivoCirculante','emprestimosLP','debentures','provisoesLP','outrosPNC',
+    'passivoNaoCirculante','capitalSocial','reservasCapital','reservasIncentivos',
+    'reservasLucro','lucrosAcumulados','ajustesAvaliacao','patrimonioLiquido',
+    'dividaBruta','disponiveis','dividaLiquida',
+    /* os indicadores que completarDadosFinanceiros grava */
+    'margemBruta','margemEbitda','margemOperacional','margemLiquida','alavancagemDivLiqEbitda',
+    'liquidezCorrente','liquidezSeca','liquidezImediata','liquidezGeral','roe','roa','roic',
+    'giroAtivo','endividamentoGeral','composicaoEndividamento','imobilizacaoPL',
+    'coberturaJuros','ctcp','gaf'];
+
+  /* o núcleo sem o que é calculado a partir dele: é o que uma correção
+     pontual aproveita do banco */
+  var DERIVADOS = ['ebitdaPiso','dividaBruta','disponiveis','dividaLiquida','margemBruta',
+    'margemEbitda','margemOperacional','margemLiquida','alavancagemDivLiqEbitda','liquidezCorrente',
+    'liquidezSeca','liquidezImediata','liquidezGeral','roe','roa','roic','giroAtivo',
+    'endividamentoGeral','composicaoEndividamento','imobilizacaoPL','coberturaJuros','ctcp','gaf'];
+  var BRUTOS = NUCLEO.filter(function(k){ return DERIVADOS.indexOf(k) < 0; });
+
+  /* quais campos do núcleo, se ausentes, o sistema registra como ausentes
+     (a lista que o PDF, a tela e as travas consultam) */
+  var VIGIADOS = ['receitaBruta','deducoes','receitaLiquida','cmv','lucroBruto','ebit','ebitda',
+    'depreciacaoAmortizacao','despesasFinanceiras','lucroAntesIR','ircs','lucroLiquido',
+    'caixa','contasReceber','estoques','ativoCirculante','imobilizado','ativoNaoCirculante',
+    'ativoTotal','contasPagar','passivoCirculante','passivoNaoCirculante','patrimonioLiquido',
+    'dividaBruta'];
+
+  var INTEIROS = ['qtdSocios','funcionarios','funcionariosInicio','qtdProcessos','sucPrazoMeses',
+    'sucParcelas','rankingSetor'];
+
+  function temNum(v){ return typeof v === 'number' && isFinite(v); }
+
+  /* ---------------------------------------------------------------
+     MONTAR UM EXERCÍCIO
+     --------------------------------------------------------------- */
+  function montarExercicio(periodo, ctx){
+    ctx = ctx || {};
+    var meta = (periodo && periodo.meta) || {};
+    var ano = Number(meta.ano || periodo.ano);
+    var AD = window.adaptarPeriodoFin(periodo, {});
+    var d = { ano: ano };
+    var origem = {};          /* de onde veio cada chave: 'doc' ou 'derivado' */
+
+    Object.keys(AD.campos).forEach(function(id){
+      var k = CHAVE[id];
+      if (!k) return;
+      var v = AD.campos[id];
+      if (k in d && d[k] != null) return;           /* o primeiro vence (finReceitaLiq > finReceita) */
+      if (INTEIROS.indexOf(k) >= 0 && temNum(v)) v = Math.round(v);
+      d[k] = v;
+      origem[k] = (AD.derivados || []).some(function(x){ return CHAVE[x.campo] === k; })
+                  ? 'derivado' : 'doc';
+    });
+    if (!d.setor && ctx.setor) d.setor = ctx.setor;
+    if (!d.setor) d.setor = 'industria';
+
+    /* ---------------------------------------------------------------
+       CORREÇÃO PONTUAL x BALANÇO INTEIRO
+
+       Um arquivo que traz a DRE e o balanço do ano é o exercício inteiro:
+       substitui o que está no banco, como um bloco.
+
+       Um arquivo que traz SÓ alguns campos de um ano já gravado — a
+       depreciação que faltava, o detalhe da dívida — é uma correção. Ele
+       se soma ao que está gravado, e os indicadores são recalculados com
+       tudo junto. Tratar a correção como balanço inteiro apagaria o resto
+       do ano; tratar o balanço inteiro como correção manteria no banco os
+       números errados que motivaram a reimportação.
+       --------------------------------------------------------------- */
+    var existente = ctx.existente || null;
+    var trazDRE = !!(origem.receitaLiquida || origem.receitaBruta);
+    var trazBal = !!(origem.ativoTotal || origem.ativoCirculante || origem.patrimonioLiquido);
+    var parcial = !!existente && !(trazDRE && trazBal);
+    if (parcial){
+      var ausAnt = existente.camposAusentes || [];
+      BRUTOS.forEach(function(k){
+        if (k in d) return;                            /* o arquivo novo vence */
+        var v = existente[k];
+        if (v == null || typeof v !== 'number' || !isFinite(v)) return;
+        if (ausAnt.indexOf(k) >= 0) return;             /* era ausente, continua */
+        if (k === 'ebitda' && existente.ebitdaPiso) return;  /* o piso se recalcula */
+        d[k] = v; origem[k] = 'banco';
+      });
+      /* dívida que só existia como número simples */
+      if (!origem.emprestimosCP && !origem.emprestimosLP && !origem.debentures
+          && !origem.dividaBrutaDeclarada && typeof existente.dividaBruta === 'number'
+          && ausAnt.indexOf('dividaBruta') < 0){
+        d.dividaBrutaDeclarada = existente.dividaBruta; origem.dividaBrutaDeclarada = 'banco';
+      }
+    }
+
+    /* o que veio do arquivo, antes de qualquer conta — é contra isto que
+       a conferência compara depois */
+    var doDocumento = {};
+    Object.keys(d).forEach(function(k){ if (origem[k] === 'doc') doDocumento[k] = d[k]; });
+
+    /* a conta, a mesma do formulário */
+    window.completarDadosFinanceiros(d);
+
+    /* v74: EBITDA piso */
+    if (!(d.ebitda > 0) && d.ebit > 0 && !(d.depreciacaoAmortizacao > 0)){
+      d.ebitda = d.ebit;
+      d.ebitdaPiso = true;
+      if (d.receitaLiquida > 0) d.margemEbitda = d.ebitda / d.receitaLiquida;
+      if (d.dividaLiquida != null) d.alavancagemDivLiqEbitda = d.dividaLiquida / d.ebitda;
+      if (d.despesasFinanceiras > 0) d.coberturaJuros = d.ebitda / d.despesasFinanceiras;
+    } else {
+      d.ebitdaPiso = false;
+    }
+
+    /* o que está ausente: nem veio, nem deu para derivar */
+    var temDivida = ['emprestimosCP','emprestimosLP','debentures','dividaBrutaDeclarada']
+      .some(function(k){ return origem[k]; });
+    var ausentes = VIGIADOS.filter(function(k){
+      if (k === 'ebitda') return !(d.ebitda > 0) && !origem.ebitda;
+      if (k === 'dividaBruta') return !temDivida;
+      if (k === 'lucroBruto') return !origem.lucroBruto && !origem.cmv;
+      if (k === 'ebit') return !origem.ebit && !(origem.lucroBruto && (origem.despesasAdm || origem.despesasVendas))
+                            && !(origem.lucroAntesIR && origem.despesasFinanceiras);
+      if (k === 'lucroAntesIR') return !origem.lucroAntesIR && !(origem.ebit || origem.lucroBruto);
+      if (k === 'lucroLiquido') return !origem.lucroLiquido && !(origem.lucroAntesIR && origem.ircs);
+      if (k === 'ativoNaoCirculante') return !origem.ativoNaoCirculante && !origem.imobilizado
+                            && !(origem.ativoTotal && origem.ativoCirculante);
+      return !origem[k];
+    });
+    d.camposAusentes = ausentes;
+    d.camposAusentesEm = new Date().toISOString();
+
+    /* ausente não vai para o banco como zero */
+    ausentes.forEach(function(k){
+      if (k === 'ebitda' || k === 'dividaBruta') return;  /* tratados abaixo */
+      if (!origem[k]) delete d[k];
+    });
+    if (ausentes.indexOf('ebitda') >= 0){
+      delete d.ebitda; delete d.margemEbitda; delete d.alavancagemDivLiqEbitda; delete d.coberturaJuros;
+    }
+    if (ausentes.indexOf('dividaBruta') >= 0){
+      delete d.dividaBruta; delete d.dividaLiquida; delete d.alavancagemDivLiqEbitda;
+    }
+
+    /* dinheiro vai ao banco em centavos — somas de subcontas deixam ruído
+       de ponto flutuante (129649257.36000001) que não é dado de ninguém.
+       Índices e margens mantêm a precisão inteira. */
+    var RAZOES = ['margemBruta','margemEbitda','margemOperacional','margemLiquida',
+      'alavancagemDivLiqEbitda','liquidezCorrente','liquidezSeca','liquidezImediata','liquidezGeral',
+      'roe','roa','roic','giroAtivo','endividamentoGeral','composicaoEndividamento','imobilizacaoPL',
+      'coberturaJuros','ctcp','gaf','marketShare','crescimentoSetor','margemSetor','inadimplencia',
+      'taxaMedia','scoreExterno'];
+    Object.keys(d).forEach(function(k){
+      if (typeof d[k] === 'number' && isFinite(d[k]) && RAZOES.indexOf(k) < 0 && k !== 'ano'
+          && INTEIROS.indexOf(k) < 0)
+        d[k] = Math.round(d[k] * 100) / 100;
+    });
+
+    /* as travas */
+    var T = (typeof window.travasDuras === 'function')
+      ? window.travasDuras(Object.assign({}, d, { camposAusentes: ausentes })) : null;
+
+    return { ano: ano, dados: d, doDocumento: doDocumento, adaptacao: AD,
+             travas: T, ausentes: ausentes, meta: meta, parcial: parcial, origem: origem };
+  }
+
+  /* ---------------------------------------------------------------
+     O que vai para o banco num ano que JÁ EXISTE: o núcleo inteiro é
+     substituído; o que não veio é apagado.
+     --------------------------------------------------------------- */
+  function paraAtualizar(dados){
+    var apagar = (window.firebase && firebase.firestore && firebase.firestore.FieldValue)
+      ? firebase.firestore.FieldValue.delete() : null;
+    var out = Object.assign({}, dados);
+    if (!apagar) return out;
+    NUCLEO.forEach(function(k){ if (!(k in out)) out[k] = apagar; });
+    return out;
+  }
+
+  /* ---------------------------------------------------------------
+     A CONFERÊNCIA: o documento ao lado do que vai ser gravado
+     --------------------------------------------------------------- */
+  var LINHAS = [
+    ['Receita líquida',     'receitaLiquida'],
+    ['Lucro bruto',         'lucroBruto'],
+    ['EBIT',                'ebit'],
+    ['EBITDA',              'ebitda'],
+    ['Lucro líquido',       'lucroLiquido'],
+    ['Ativo total',         'ativoTotal'],
+    ['Patrimônio líquido',  'patrimonioLiquido'],
+    ['Dívida bruta',        'dividaBruta'],
+    ['Caixa',               'caixa']
+  ];
+
+  function R$(v){ return (v == null || !isFinite(v)) ? '—'
+    : Number(v).toLocaleString('pt-BR',{maximumFractionDigits:0}); }
+  function pc(v){ return (v == null || !isFinite(v)) ? '—' : (v*100).toFixed(1).replace('.',',')+'%'; }
+  function esc(t){ return String(t==null?'':t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function painelConferencia(exs, opts){
+    opts = opts || {};
+    if (!exs || !exs.length) return '';
+    var bons = exs.filter(function(e){ return !e.travas || e.travas.podeGravar; });
+    var ruins = exs.filter(function(e){ return e.travas && !e.travas.podeGravar; });
+
+    var h = '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; '
+      + 'padding:16px 18px; margin:12px 0">';
+    h += '<div style="font-size:14.5px; font-weight:800; color:#0f172a; margin-bottom:3px">'
+      +   'O que vai ser gravado — confira contra o documento</div>'
+      + '<div style="font-size:12px; color:#64748b; line-height:1.7; margin-bottom:12px">'
+      +   exs.length + ' exercício(s) no arquivo. Cada número abaixo é o que entra no sistema. '
+      +   'Se algum não bate com o balanço que você tem na mão, não grave.</div>';
+
+    h += '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12.5px">';
+    h += '<tr style="background:#f1f5f9"><th style="text-align:left; padding:7px 9px; '
+      + 'color:#475569; font-weight:700">Conta</th>'
+      + exs.map(function(e){
+          var ok = !e.travas || e.travas.podeGravar;
+          return '<th style="text-align:right; padding:7px 9px; color:' + (ok ? '#0f172a' : '#b91c1c')
+            + '; font-weight:800">' + esc(e.ano) + (ok ? '' : ' ⛔')
+            + (e.parcial ? '<div style="font-size:10px; font-weight:600; color:#2563eb">completa</div>'
+               : e.jaExiste ? '<div style="font-size:10px; font-weight:600; color:#64748b">substitui</div>'
+                            : '<div style="font-size:10px; font-weight:600; color:#15803d">novo</div>')
+            + '</th>'; }).join('')
+      + '</tr>';
+    LINHAS.forEach(function(L){
+      h += '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 9px; color:#334155">'
+        + esc(L[0]) + '</td>'
+        + exs.map(function(e){
+            var v = e.dados[L[1]];
+            var aus = (e.ausentes || []).indexOf(L[1]) >= 0;
+            var txt, cor = '#0f172a', nota = '';
+            if (aus || v == null){ txt = 'não veio'; cor = '#94a3b8'; }
+            else {
+              txt = R$(v);
+              if (L[1] === 'ebitda' && e.dados.ebitdaPiso){
+                nota = '<div style="font-size:10px; color:#a16207">piso (= EBIT)</div>'; }
+              var o = (e.origem || {})[L[1]];
+              if (!nota && o === 'banco')
+                nota = '<div style="font-size:10px; color:#64748b">já gravado</div>';
+              else if (!nota && o !== 'doc')
+                nota = '<div style="font-size:10px; color:#2563eb">calculado</div>';
+            }
+            return '<td style="text-align:right; padding:6px 9px; font-family:\'JetBrains Mono\',monospace; '
+              + 'color:' + cor + '">' + txt + nota + '</td>'; }).join('')
+        + '</tr>';
+    });
+    /* três indicadores, para o olho bater no absurdo antes de gravar */
+    [['Margem líquida', function(d){ return d.receitaLiquida > 0 && d.lucroLiquido != null
+                                         ? d.lucroLiquido / d.receitaLiquida : null; }, pc],
+     ['Liquidez corrente', function(d){ return d.liquidezCorrente; },
+        function(v){ return v == null ? '—' : v.toFixed(2).replace('.',','); }],
+     ['ROE', function(d){ return d.roe; }, pc]
+    ].forEach(function(I){
+      h += '<tr style="border-top:1px solid #e2e8f0; background:#fafafa"><td style="padding:6px 9px; '
+        + 'color:#64748b; font-style:italic">' + esc(I[0]) + '</td>'
+        + exs.map(function(e){ return '<td style="text-align:right; padding:6px 9px; color:#475569">'
+            + I[2](I[1](e.dados)) + '</td>'; }).join('')
+        + '</tr>';
+    });
+    h += '</table></div>';
+
+    if (ruins.length && typeof window.painelTravasDuras === 'function'){
+      ruins.forEach(function(e){
+        h += '<div style="margin-top:12px">'
+          + window.painelTravasDuras(e.travas, { contexto:'gravar' }) + '</div>';
+      });
+    }
+
+    var piso = exs.filter(function(e){ return e.dados.ebitdaPiso; }).map(function(e){ return e.ano; });
+    if (piso.length)
+      h += '<div style="margin-top:11px; background:#fefce8; border:1px solid #fef08a; '
+        + 'border-radius:9px; padding:10px 13px; font-size:12px; color:#713f12; line-height:1.75">'
+        + '<b>EBITDA de ' + piso.join(', ') + ' é o piso.</b> A DRE não abre a depreciação, então o '
+        + 'EBITDA foi tomado igual ao EBIT — que é o menor valor que ele pode ter. A alavancagem sai '
+        + 'igual ou pior que a real, nunca melhor. Se você tiver a DFC ou as notas, a depreciação '
+        + 'está lá e o número sobe.</div>';
+
+    h += '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px">';
+    if (bons.length)
+      h += '<button class="btn btn-primary" id="jiGravarConferido" style="padding:10px 18px; font-size:13.5px" '
+        + 'onclick="gravarPacoteConferido()">💾 Gravar ' + bons.length + ' exercício(s): '
+        + bons.map(function(e){ return e.ano; }).join(', ') + '</button>';
+    if (ruins.length)
+      h += '<span style="font-size:12.5px; color:#b91c1c">' + ruins.map(function(e){ return e.ano; }).join(', ')
+        + ' não ' + (ruins.length > 1 ? 'serão gravados' : 'será gravado')
+        + ' — os números não fecham.</span>';
+    h += '</div></div>';
+    return h;
+  }
+
+  window.montarExercicioFin = montarExercicio;
+  window.paraAtualizarExercicio = paraAtualizar;
+  window.painelConferenciaImport = painelConferencia;
+  window.NUCLEO_EXERCICIO = NUCLEO;
+  window.CHAVE_EXERCICIO = CHAVE;
+})();
+
+/* ===================================================================
    v71 — APRESENTAÇÃO DA EMPRESA: A PRIMEIRA ETAPA DO FUNIL
 
    O desenho do Patrick, e a decisão que o sustenta: a apresentação
@@ -37814,8 +38366,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         + 'custo de pessoal — e mesmo lá o custo aparece. O campo está ausente, não zerado.',
         ['cmv','lucroBruto']);
 
-    /* ---- 5. o ativo tem que fechar com as suas partes ---- */
-    if (ativoT != null && ativoC != null && ativoNC != null && ativoT > 0){
+    /* ---- 5. o ativo tem que fechar com as suas partes ----
+       (fora da lista do painel: registro antigo incompleto não é impossível) */
+    if (!opts.lista && ativoT != null && ativoC != null && ativoNC != null && ativoT > 0){
       var somaA = ativoC + ativoNC;
       if (Math.abs(somaA - ativoT) > ativoT * TOL.soma)
         imp('O ativo não fecha',
@@ -37826,12 +38379,15 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           ['ativoTotal','ativoCirculante','ativoNaoCirculante']);
     }
 
-    /* ---- 6. a equação fundamental: ativo = passivo + PL ---- */
-    if (ativoT != null && passC != null && pl != null && ativoT > 0){
-      var somaP = passC + (passNC || 0) + pl;
+    /* ---- 6. a equação fundamental: ativo = passivo + PL ----
+       v74: só confere com as quatro partes presentes. Passivo não circulante
+       AUSENTE não é zero — tratá-lo como zero acusava de "impossível" todo
+       registro antigo que nunca teve esse campo lançado. */
+    if (!opts.lista && ativoT != null && passC != null && passNC != null && pl != null && ativoT > 0){
+      var somaP = passC + passNC + pl;
       if (Math.abs(somaP - ativoT) > ativoT * TOL.soma)
         imp('O balanço não fecha',
-          'Passivo circulante ' + R$(passC) + ' mais não circulante ' + R$(passNC || 0)
+          'Passivo circulante ' + R$(passC) + ' mais não circulante ' + R$(passNC)
           + ' mais patrimônio líquido ' + R$(pl) + ' dá ' + R$(somaP)
           + ', contra um ativo total de ' + R$(ativoT)
           + ' — diferença de ' + R$(Math.abs(somaP - ativoT)) + '.',
@@ -37841,7 +38397,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     }
 
     /* ---- 7. a conta da DRE de baixo para cima ---- */
-    if (lair != null && ircs != null && lucroLiq != null && Math.abs(lair) > 0){
+    if (!opts.lista && lair != null && ircs != null && lucroLiq != null && Math.abs(lair) > 0){
       var esperado = lair - ircs;
       if (Math.abs(esperado - lucroLiq) > Math.max(Math.abs(lair) * TOL.soma, 1))
         imp('A DRE não fecha no lucro líquido',
