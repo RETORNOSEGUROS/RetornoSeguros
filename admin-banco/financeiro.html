@@ -35330,13 +35330,49 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   /* =================================================================
      O PROMPT, JÁ PREENCHIDO COM O QUE VEIO DE GRAÇA
      ================================================================= */
-  function montarPromptApresentacao(dados){
+  /* As regras do prompt completo, tiradas do próprio arquivo embutido.
+     Pega da abertura ("Você é o consultor...") até a seção de entrega —
+     o esquema do arquivo vem depois, montado aqui, para ficar colado nas
+     instruções finais em vez de no meio do texto. */
+  function regrasCompletas(){
+    var P = (typeof window !== 'undefined' && window.PROMPT_APRESENTACAO) || '';
+    if (!P) return '';
+    var i = P.indexOf('Você é o consultor');
+    if (i < 0) i = P.indexOf('## REGRAS DE OURO');
+    if (i < 0) return '';
+    var j = P.indexOf('## O QUE VOCÊ ENTREGA');
+    if (j < 0) j = P.length;
+    return P.slice(i, j).trim();
+  }
+
+  function montarPromptApresentacao(dados, opts){
     dados = dados || {};
+    opts = opts || {};
     var L = [], R = dados.receita;
     function p(s){ L.push(s == null ? '' : s); }
 
-    p('apresentação');
-    p('');
+    /* v72.1: o texto copiado tem que funcionar sozinho, numa conversa
+       limpa, em qualquer IA. Quem depende de ter colado outro prompt
+       antes recebe de volta um texto em prosa e nenhum arquivo — que foi
+       exatamente o que aconteceu na primeira vez que isto foi usado. */
+    if (opts.curto){
+      p('apresentação');
+      p('');
+    } else {
+      var regras = regrasCompletas();
+      if (regras){
+        p(regras);
+        p('');
+        p('');
+      } else {
+        p('apresentação');
+        p('');
+      }
+    }
+
+    p('========================================================');
+    p('A EMPRESA DESTA CONVERSA');
+    p('========================================================');
     p('Empresa: ' + (dados.nome || R && R.razaoSocial || '—'));
     p('CNPJ: ' + (dados.cnpj || (R && R.cnpj) || '—'));
     if (dados.site)      p('Site: ' + dados.site);
@@ -35403,10 +35439,13 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     }
 
     p('========================================================');
-    p('O QUE EU PRECISO');
+    p('O QUE EU PRECISO DE VOLTA');
     p('========================================================');
-    p('Siga o prompt de Apresentação da Empresa, da Etapa 2 em diante (o cadastro já está acima).');
-    p('Entregue as duas coisas: o texto de uma página e o arquivo <EMPRESA>_apresentacao.json.');
+    p('Duas coisas, nesta ordem:');
+    p('');
+    p('1. Um texto de uma página — o cartão da empresa, para o corretor ler antes da visita.');
+    p('2. O ARQUIVO JSON. Ele não é opcional e não é um resumo do texto: é o que entra no');
+    p('   sistema. Entregue-o num bloco de código, no formato exato da seção abaixo.');
     p('');
     p('Lembretes que importam mais nesta empresa:');
     p('  · confronte os CNAEs com o que o site mostra — divergência é informação, não erro;');
@@ -35414,9 +35453,94 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     p('  · nada de vida pessoal de sócio; só o que toca o negócio;');
     p('  · cada achado termina com o "e daí" — o que muda para seguro, para crédito ou para a conversa;');
     p('  · não estime faturamento, folha nem número de funcionários para uso em cálculo.');
+    p('');
+    p(ESQUEMA_JSON);
 
     return L.join('\n');
   }
+
+  /* =================================================================
+     O ESQUEMA, SEMPRE JUNTO
+
+     v72.1 — a correção do que aconteceu na primeira vez que o Patrick
+     usou isto de verdade: ele copiou o prompt gerado, colou na IA, e
+     recebeu de volta um texto bonito e nenhum JSON.
+
+     A culpa era do prompt gerado, que terminava com "siga o prompt de
+     Apresentação da Empresa" — ou seja, dependia de alguém ter colado
+     o prompt completo nas instruções do Projeto antes. Quem cola
+     direto numa conversa nova não tem esse contexto, e a IA faz o que
+     qualquer um faria: escreve sobre a empresa, em prosa.
+
+     Prompt que depende de outro prompt estar em algum lugar não é
+     prompt, é instrução pela metade. A partir daqui o texto copiado
+     carrega as regras e o esquema dentro dele e funciona sozinho, em
+     qualquer IA, em conversa limpa.
+     ================================================================= */
+  var ESQUEMA_JSON = [
+    '========================================================',
+    'O FORMATO DO ARQUIVO — copie esta estrutura',
+    '========================================================',
+    'Nome do arquivo: <EMPRESA>_apresentacao.json',
+    '',
+    'Regras do arquivo:',
+    '  · lista sem nenhum achado vai como [] — lista vazia é resposta honesta;',
+    '  · campo que você não descobriu vai como "" ou null, NUNCA inventado;',
+    '  · toda oportunidade precisa de "pergunta" e de "fonte" — sem elas o achado',
+    '    não vira conversa e o sistema marca como incompleto;',
+    '  · "formato" e "versao" vão exatamente como estão abaixo.',
+    '',
+    '```json',
+    '{',
+    '  "formato": "consultor360-apresentacao",',
+    '  "versao": "v1",',
+    '  "geradoEm": "AAAA-MM-DD",',
+    '  "empresa": {',
+    '    "nome": "", "nomeFantasia": "", "cnpj": "", "cidade": "", "uf": "",',
+    '    "setorSistema": "industria|comercio|servicos|agronegocio|tecnologia|construcao|saude|transporte|educacao|varejo",',
+    '    "site": "", "linkedin": "", "redes": [],',
+    '    "receita": { }',
+    '  },',
+    '  "oQueFaz": {',
+    '    "resumo": "duas ou três linhas",',
+    '    "produtos": [{ "linha": "", "itens": [], "fonte": "", "url": "" }],',
+    '    "servicos": [{ "servico": "", "comoEntrega": "", "fonte": "", "url": "" }],',
+    '    "marcasRepresentadas": [{ "marca": "", "exclusiva": null, "fonte": "" }],',
+    '    "segmentosAtendidos": [],',
+    '    "certificacoes": [{ "nome": "", "orgao": "", "fonte": "" }],',
+    '    "divergencias": [{ "oque": "", "noCnae": "", "noSite": "", "implicacao": "" }]',
+    '  },',
+    '  "ondeAtua": {',
+    '    "sede": "", "unidades": [{ "tipo": "", "municipio": "", "uf": "", "fonte": "" }],',
+    '    "abrangencia": "", "exporta": null,',
+    '    "pracasParaExplorar": [{ "praca": "", "porque": "", "fonte": "" }]',
+    '  },',
+    '  "pessoas": {',
+    '    "socios": [{ "nome": "", "papel": "", "formacao": "", "desde": "", "outrasEmpresas": [], "fonte": "" }],',
+    '    "executivos": [{ "nome": "", "cargo": "", "fonte": "" }],',
+    '    "tamanhoTimeLinkedIn": null,',
+    '    "vagasAbertas": [{ "cargo": "", "cidade": "", "oQueRevela": "", "fonte": "" }]',
+    '  },',
+    '  "historia": { "texto": "", "marcos": [{ "ano": "", "oque": "", "fonte": "", "url": "" }] },',
+    '  "mercado": {',
+    '    "comoGanhaDinheiro": "", "sazonalidade": "",',
+    '    "concorrentes": [{ "nome": "", "praca": "", "oQueFazBem": "", "fonte": "" }],',
+    '    "crescimentoSetor": null, "periodo": "", "fonteSetor": "", "urlSetor": "",',
+    '    "oQueMexeComOSetor": [{ "fator": "", "impacto": "", "fonte": "" }]',
+    '  },',
+    '  "movimentos": [{ "data": "", "tipo": "investimento|expansao|aquisicao|risco|premio|outro",',
+    '                   "titulo": "", "resumo": "", "fonte": "", "url": "", "impacto": "" }],',
+    '  "oportunidades": [{ "frente": "", "observado": "", "fonte": "", "url": "",',
+    '                      "risco": "", "produto": "", "tipo": "seguro|credito|ambos",',
+    '                      "pergunta": "", "prioridade": "alta|media|baixa" }],',
+    '  "perguntasDeAbertura": ["as três que abrem a conversa"],',
+    '  "oQueNaoAchei": ["dito com todas as letras"]',
+    '}',
+    '```',
+    '',
+    'Se você entregou só o texto e esqueceu o arquivo, entregue o arquivo agora —',
+    'é ele que entra no sistema. O texto sozinho não serve para nada lá dentro.'
+  ].join('\n');
 
   /* =================================================================
      IMPORTAR A RESPOSTA
@@ -35528,6 +35652,50 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     return L.join('\n');
   }
 
+  /* ---------------------------------------------------------------
+     O RESGATE: quando a IA devolveu só o texto
+
+     Não é erro do corretor nem trabalho perdido — a pesquisa foi feita,
+     só não veio no formato. Este pedido devolve o texto para a IA e
+     cobra o arquivo, com o esquema junto, sem refazer nada.
+     --------------------------------------------------------------- */
+  function montarPedidoJSON(texto, dados){
+    dados = dados || {};
+    var L = [];
+    function p(s){ L.push(s == null ? '' : s); }
+    p('Você me entregou a apresentação em texto, e eu preciso do ARQUIVO.');
+    p('');
+    p('Não refaça a pesquisa e não procure nada novo: converta o que está abaixo');
+    p('para o JSON do esquema, sem acrescentar fato nenhum que não esteja no texto.');
+    p('O que o texto não disser fica como "" ou [] — não complete com suposição.');
+    p('');
+    if (dados.nome) p('Empresa: ' + dados.nome);
+    if (dados.cnpj) p('CNPJ: ' + dados.cnpj);
+    p('');
+    p(ESQUEMA_JSON);
+    p('');
+    p('========================================================');
+    p('O TEXTO QUE VOCÊ ME ENTREGOU');
+    p('========================================================');
+    p(String(texto || '').trim());
+    p('');
+    p('Responda SÓ com o bloco de código do JSON. Sem introdução, sem comentário depois.');
+    return L.join('\n');
+  }
+
+  /* o que distingue um JSON malformado de um texto em prosa: se nem
+     começa com chave nem tem as chaves do esquema, é prosa */
+  function pareceTexto(bruto){
+    var s = String(bruto || '').trim();
+    if (!s) return false;
+    if (/^[\[{]/.test(s)) return false;
+    if (/```/.test(s) && /[{\[]/.test(s)) return false;
+    return !/"(formato|oportunidades|oQueFaz|empresa)"\s*:/.test(s);
+  }
+
+  window.montarPedidoJSONApresentacao = montarPedidoJSON;
+  window.pareceTextoApresentacao = pareceTexto;
+  window.esquemaApresentacaoJSON = function(){ return ESQUEMA_JSON; };
   window.buscarCNPJ = buscarCNPJ;
   window.normalizarReceitaCNPJ = normalizarReceita;
   window.montarPromptApresentacao = montarPromptApresentacao;
@@ -35938,11 +36106,15 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
     /* ---- passo 3 ---- */
     h += secao('3 · O prompt, já preenchido',
-      'Copie, cole na conversa com a IA e escreva "apresentação". Se for a primeira vez, cole antes o '
-      + 'prompt completo nas instruções do Projeto.');
+      'Copie e cole numa conversa nova com a IA. O texto vai completo — as regras, as etapas e o '
+      + 'formato do arquivo — e funciona sozinho, sem precisar de nada configurado antes.');
     h += '<div style="display:flex; gap:9px; flex-wrap:wrap; margin-bottom:9px">'
       + '<button class="btn btn-primary" style="padding:8px 14px; font-size:12.5px" '
       +   'onclick="apreGerar()">🧩 Gerar e copiar</button>'
+      + '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
+      +   'onclick="apreGerar(true)" '
+      +   'title="Só o pedido, sem as regras — para quem já colou o prompt completo nas instruções do Projeto">'
+      +   '✂️ Versão curta</button>'
       + '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
       +   'onclick="apreAbrirPromptCompleto()">📖 Ver o prompt completo</button>'
       + '<span id="aprePromptStatus" style="font-size:12px; color:#15803d; align-self:center"></span></div>';
@@ -35952,7 +36124,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
     /* ---- passo 4 ---- */
     h += secao('4 · A resposta de volta',
-      'Cole aqui o arquivo <EMPRESA>_apresentacao.json que a IA devolveu.');
+      'Cole aqui o arquivo <EMPRESA>_apresentacao.json que a IA devolveu. Se ela respondeu só com '
+      + 'texto, cole o texto mesmo assim — eu monto o pedido que cobra o arquivo sem refazer a pesquisa.');
     h += '<textarea id="apreCola" placeholder=\'{ "formato": "consultor360-apresentacao", ... }\' '
       + 'style="width:100%; height:150px; font-family:\'JetBrains Mono\',monospace; font-size:11.5px; '
       + 'border:1px solid #cbd5e1; border-radius:9px; padding:11px; resize:vertical; color:#334155"></textarea>';
@@ -36097,20 +36270,22 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     });
   };
 
-  window.apreGerar = function(){
+  window.apreGerar = function(curto){
     if (typeof window.montarPromptApresentacao !== 'function') return;
     EST.cnpj = v('apreCNPJ'); EST.links = coletarLinks();
     var t = window.montarPromptApresentacao({
       nome: EST.nome, cnpj: EST.cnpj, receita: EST.receita, motivoBusca: EST.motivo,
       site: EST.links.site, linkedin: EST.links.linkedin, instagram: EST.links.instagram,
       facebook: EST.links.facebook, outrasRedes: EST.links.outrasRedes, observacao: EST.links.observacao
-    });
+    }, { curto: !!curto });
     var ta = el('aprePromptTexto'); if (ta) ta.value = t;
     var st = el('aprePromptStatus');
     try {
       if (ta){ ta.select(); document.execCommand('copy');
         if (window.getSelection) window.getSelection().removeAllRanges(); }
-      if (st) st.textContent = '✓ copiado — cole na IA e escreva "apresentação"';
+      if (st) st.textContent = curto
+        ? '✓ copiado (versão curta — a IA precisa já ter o prompt completo)'
+        : '✓ copiado — cole numa conversa nova e envie';
     } catch(e){ if (st){ st.style.color='#92400e'; st.textContent='Gerado. Copie do campo abaixo.'; } }
     setTimeout(function(){ if (st) st.textContent=''; }, 7000);
   };
@@ -36145,6 +36320,27 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       if (m) s = m[1].trim();
       obj = JSON.parse(s);
     } catch(e){
+      /* v72.1: a IA entregou texto em prosa e nenhum arquivo.
+
+         Isso não é erro do corretor nem trabalho perdido: a pesquisa foi
+         feita, só não veio no formato. Mandar ele "tentar de novo" seria
+         jogar fora a pesquisa inteira e pagar por ela duas vezes. O que
+         falta é uma conversão, e conversão é barata — devolver o texto
+         para a IA com o esquema junto e cobrar o arquivo. */
+      if (typeof window.pareceTextoApresentacao === 'function'
+          && window.pareceTextoApresentacao(bruto)){
+        EST.textoBruto = bruto;
+        status('<b>A IA respondeu em texto e não mandou o arquivo.</b><br>'
+          + 'Acontece quando o prompt é colado numa conversa que não tem o formato — e a '
+          + 'pesquisa dela continua valendo inteira. Não refaça nada: copie o pedido abaixo, '
+          + 'cole na <b>mesma conversa</b>, e ela converte o texto que já escreveu.'
+          + '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">'
+          + '<button class="btn btn-primary" style="padding:7px 13px; font-size:12px" '
+          +   'onclick="apreCopiarPedidoJSON()">📋 Copiar o pedido do arquivo</button>'
+          + '<span id="aprePedidoStatus" style="font-size:12px; color:#15803d; align-self:center">'
+          + '</span></div>', 'aviso');
+        return;
+      }
       status('Isso não é um JSON válido: ' + esc(e.message||e)
         + '<br><span style="font-size:11.5px">Copie o arquivo inteiro, da primeira chave à última. '
         + 'Se a IA devolveu dentro de um bloco de código, pode colar com as crases mesmo.</span>', 'erro');
@@ -36255,6 +36451,25 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     b.title = tem
       ? 'O que a empresa faz, onde atua, quem são as pessoas e as oportunidades que não vêm de número nenhum'
       : 'Esta empresa tem números mas não tem apresentação: o site e o CNPJ ainda têm o que dizer';
+  };
+
+  window.apreCopiarPedidoJSON = function(){
+    if (typeof window.montarPedidoJSONApresentacao !== 'function') return;
+    var texto = EST.textoBruto || v('apreCola');
+    if (!texto) return;
+    var t = window.montarPedidoJSONApresentacao(texto,
+      { nome: EST.nome, cnpj: v('apreCNPJ') || EST.cnpj });
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    var deu = false;
+    try { deu = document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta);
+    var st = el('aprePedidoStatus');
+    if (st) st.textContent = deu
+      ? '✓ copiado — cole na mesma conversa da IA'
+      : 'não consegui copiar; o texto está no console (F12)';
+    if (!deu) console.log(t);
   };
 
   window.renderCartaoApresentacao = renderCartao;
