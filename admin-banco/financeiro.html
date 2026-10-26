@@ -25051,9 +25051,27 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
   function montarBriefing(D){
     D = D || window.CURRENT_ANALYSIS_DATA;
-    if (!D || !D.rows || !D.rows.length)
-      return 'Esta empresa ainda não tem exercício gravado. Mande os documentos para a IA sem briefing — '
-           + 'é a primeira análise.';
+
+    /* ================================================================
+       v73.1 — O ELO QUE FALTAVA ENTRE A APRESENTAÇÃO E OS NÚMEROS.
+
+       Este atalho devolvia "ainda não tem exercício gravado, mande os
+       documentos sem briefing" ANTES de olhar se a empresa tinha
+       apresentação. Ou seja: exatamente no caso para o qual o funil da
+       v71 foi feito — apresentação primeiro, balanço depois — todo o
+       trabalho de conhecer a empresa ficava preso no sistema e a IA
+       recebia os documentos sem contexto nenhum.
+
+       Empresa sem exercício e COM apresentação tem, sim, briefing. Ele
+       só é de outro tipo: não leva números, leva o que a empresa é. */
+    if (!D || !D.rows || !D.rows.length){
+      var _emp = (D && D.empresaDoc) || {};
+      var _apre = _emp.apresentacao || (D && D.apresentacao) || null;
+      if (_apre && typeof window.briefingApresentacao === 'function')
+        return primeiraAnalise(D, _apre);
+      return 'Esta empresa ainda não tem exercício gravado nem apresentação. Mande os documentos '
+           + 'para a IA sem briefing — é a primeira análise.';
+    }
 
     var S = serie(D);
     var parciais = (D.rows||[]).filter(function(r){ return !fechado(r); });
@@ -25209,6 +25227,66 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     p('');
     p('Se algum dado da seção 4 aparecer agora para um ano já gravado, mande um período adicional');
     p('SÓ com aquele ano e SÓ com os campos novos — o sistema atualiza campo a campo e preserva o resto.');
+
+    return L.join('\n');
+  }
+
+  /* ---------------------------------------------------------------
+     O briefing de quem tem apresentação e ainda não tem balanço.
+
+     Serve para a PRIMEIRA análise financeira: a IA recebe os
+     documentos já sabendo o que a empresa faz, onde atua e quais
+     oportunidades foram levantadas sem olhar número nenhum — e sai
+     procurando o que confirma ou derruba cada uma, em vez de deduzir
+     o setor a partir dos valores.
+     --------------------------------------------------------------- */
+  function primeiraAnalise(D, apre){
+    var emp = (D && D.empresaDoc) || {};
+    var nome = (D && D.empresaNome) || emp.nome || (apre.empresa && apre.empresa.nome) || 'empresa';
+    var rec = (apre.empresa && apre.empresa.receita) || {};
+    var L = [];
+    function p(s){ L.push(s == null ? '' : s); }
+
+    p('CONTEXTO DO SISTEMA — ' + nome);
+    p('Gerado em ' + hoje() + ' pelo Financeiro (Corporate One).');
+    p('');
+    p('Esta empresa ainda NÃO tem nenhum exercício gravado: é a primeira análise financeira dela.');
+    p('O que o sistema já sabe veio da apresentação, feita antes de qualquer balanço — pelo CNPJ,');
+    p('pelo site e por fontes públicas. Use como contexto e NÃO refaça essa parte.');
+    p('');
+    p('Anexe os balanços, DREs e o contrato social NESTA conversa e escreva "analise".');
+    p('');
+    p('========================================================');
+    p('1. IDENTIFICAÇÃO');
+    p('========================================================');
+    p('Razão social: ' + ((apre.empresa && apre.empresa.nome) || nome));
+    p('CNPJ: ' + ((apre.empresa && apre.empresa.cnpj) || emp.cnpj || rec.cnpj || '—'));
+    if (rec.cnaePrincipal && (rec.cnaePrincipal.codigo || rec.cnaePrincipal.descricao))
+      p('CNAE principal: ' + (rec.cnaePrincipal.codigo||'') + ' — ' + (rec.cnaePrincipal.descricao||''));
+    if (Array.isArray(rec.cnaesSecundarios) && rec.cnaesSecundarios.length)
+      p('CNAEs secundários: ' + rec.cnaesSecundarios.map(function(c){
+          return (c.codigo||'') + (c.descricao ? ' (' + c.descricao + ')' : ''); }).join(' · '));
+    if (apre.empresa && apre.empresa.setorSistema)
+      p('Setor sugerido pela apresentação: ' + apre.empresa.setorSistema
+        + ' — confirme com os documentos.');
+    if (rec.situacao && rec.situacao.status) p('Situação cadastral: ' + rec.situacao.status);
+    if (Array.isArray(rec.qsa) && rec.qsa.length){
+      p('QSA da Receita: ' + rec.qsa.map(function(x){ return x.nome; }).join(' · '));
+      p('  O percentual de cada sócio NÃO está no QSA — ele vive no contrato social.');
+    }
+    p('');
+
+    p(window.briefingApresentacao(apre));
+
+    p('========================================================');
+    p('O QUE ESTE PACOTE PRECISA TRAZER');
+    p('========================================================');
+    p('  1. Um objeto em "periodos" para CADA exercício que os documentos trouxerem.');
+    p('  2. O parecer completo, já aproveitando o que a apresentação levantou.');
+    p('  3. Para cada oportunidade da lista acima: confirmada, derrubada, ou maior do que parecia —');
+    p('     e por qual número. É isto que a apresentação existe para permitir.');
+    p('  4. O que os números revelarem e a apresentação não viu entra como achado novo.');
+    p('  5. "versao" com o número do prompt que você está usando.');
 
     return L.join('\n');
   }
@@ -36437,6 +36515,34 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         + '<button class="btn btn-outline" style="padding:7px 13px; font-size:12px" '
         +   'onclick="apreToggleForm()" id="apreBtnForm">✏️ Refazer ou atualizar</button>'
         + '<span id="apreAviso" style="font-size:12px; color:#15803d; align-self:center"></span></div>';
+
+      /* v73.1: o próximo passo, dito na tela em que o corretor está.
+
+         A apresentação e a análise financeira são duas conversas
+         diferentes com a IA, e nada na tela dizia como sair de uma para
+         a outra. Quem acabou de gravar a apresentação está exatamente
+         no ponto de pedir os balanços — e é aqui que o caminho precisa
+         estar escrito. */
+      h += '<div style="background:linear-gradient(135deg,#eff6ff,#e0e7ff); '
+        + 'border:1px solid #bfdbfe; border-radius:12px; padding:16px 18px; margin-bottom:16px">'
+        + '<div style="font-size:14px; font-weight:800; color:#1e3a8a; margin-bottom:4px">'
+        +   'Pronto. O próximo passo são os números.</div>'
+        + '<div style="font-size:12.5px; color:#1e3a8a; line-height:1.8; margin-bottom:11px">'
+        +   'A apresentação está gravada e já vale sozinha: dá para visitar, cotar patrimonial e '
+        +   'vida, e o gerente tem o que apresentar. Quando os balanços chegarem, '
+        +   '<b>não refaça nada disto</b> — abra uma conversa com o prompt do Consultor 360, '
+        +   'cole o briefing abaixo, anexe os documentos e escreva "analise". A IA começa já '
+        +   'sabendo o que a empresa faz, e sai conferindo cada oportunidade daqui contra os números.'
+        + '</div>'
+        + '<div style="display:flex; gap:9px; flex-wrap:wrap; align-items:center">'
+        +   '<button class="btn btn-primary" style="padding:8px 14px; font-size:12.5px" '
+        +     'onclick="apreCopiarBriefingFinanceiro()">📋 Copiar o briefing da análise financeira</button>'
+        +   '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
+        +     'onclick="apreAbrirPromptFinanceiro()">📖 Ver o prompt do Consultor 360</button>'
+        +   '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
+        +     'onclick="apreIrParaNumeros()">➕ Lançar os dados financeiros</button>'
+        +   '<span id="apreBriefStatus" style="font-size:12px; color:#15803d; align-self:center">'
+        +   '</span></div></div>';
       h += '<div id="apreCartao">' + renderCartao(EST.apre) + '</div>';
       h += '<div id="apreForm" style="display:none; margin-top:24px; padding-top:18px; '
         + 'border-top:2px solid #e2e8f0">';
@@ -36922,6 +37028,60 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       ? '✓ copiado — cole na mesma conversa da IA'
       : 'não consegui copiar; o texto está no console (F12)';
     if (!deu) console.log(t);
+  };
+
+  /* ---------------------------------------------------------------
+     A ponte para a análise financeira
+     --------------------------------------------------------------- */
+  function copiarTexto(t, idStatus, rotuloOk){
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    var deu = false;
+    try { deu = document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta);
+    var st = el(idStatus);
+    if (st){
+      st.style.color = deu ? '#15803d' : '#92400e';
+      st.textContent = deu ? (rotuloOk || '✓ copiado')
+                           : 'não consegui copiar; o texto está no console (F12)';
+      setTimeout(function(){ if (st) st.textContent = ''; }, 9000);
+    }
+    if (!deu) console.log(t);
+    return deu;
+  }
+
+  window.apreCopiarBriefingFinanceiro = function(){
+    if (!EST.apre || typeof window.montarBriefing !== 'function') return;
+    /* a empresa pode já ter exercícios gravados; nesse caso o briefing
+       completo (com os números) é o certo, e ele já carrega a
+       apresentação desde a v71 */
+    var D = window.CURRENT_ANALYSIS_DATA;
+    var mesmaEmpresa = D && D.empresaId === EST.id && D.rows && D.rows.length;
+    var alvo = mesmaEmpresa
+      ? D
+      : { empresaNome: EST.nome,
+          empresaDoc: { nome: EST.nome, cnpj: EST.cnpj, apresentacao: EST.apre },
+          rows: [] };
+    var t = window.montarBriefing(alvo);
+    copiarTexto(t, 'apreBriefStatus',
+      '✓ copiado (' + Math.max(1, Math.round(t.length/1000)) + ' mil caracteres) — '
+      + 'cole na conversa da IA junto com os balanços');
+  };
+
+  window.apreAbrirPromptFinanceiro = function(){
+    var m = el('modalPrompt'), ta = el('promptTexto');
+    if (!m || !ta) return;
+    ta.value = (typeof PROMPT_CONSULTOR360 !== 'undefined' && PROMPT_CONSULTOR360)
+                 ? PROMPT_CONSULTOR360 : (window.PROMPT_CONSULTOR360 || '');
+    m.style.display = 'flex';
+  };
+
+  window.apreIrParaNumeros = function(){
+    var id = EST.id;
+    if (!id) return;
+    el('modalApresentacao').style.display = 'none';
+    if (typeof window.abrirModalEdicao === 'function') window.abrirModalEdicao(id, null, null);
   };
 
   window.renderCartaoApresentacao = renderCartao;
