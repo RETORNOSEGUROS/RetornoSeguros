@@ -3755,6 +3755,12 @@
     (function(){
       const $ = id => document.getElementById(id);
       let PACOTE = null;       // JSON carregado
+      /* v77: de qual empresa o arquivo foi carregado. O painel sobrevivia de
+         uma empresa para a outra, e o botão de gravar escrevia o pacote da
+         anterior na empresa nova. */
+      let PACOTE_EMPRESA = null;
+      /* v78: motivo que impede gravar este pacote (CNPJ de outra empresa) */
+      let PACOTE_BLOQUEIO = null;
       let IMPORTADOS = {};     // ano -> true
       /* v54: o que JA existe no banco desta empresa. Sem isso, importar um
          pacote de anos antigos parece estar sobrescrevendo tudo — e o corretor
@@ -3819,7 +3825,7 @@
 
       function renderPainel(){
         $('jsonImportPanel').style.display = 'block';
-        $('jiEmpresa').textContent = (PACOTE.empresa && PACOTE.empresa.nome) || 'empresa';
+        $('jiEmpresa').textContent = (PACOTE.empresa && (PACOTE.empresa.nome || PACOTE.empresa.razaoSocial || PACOTE.empresa.nomeFantasia)) || 'empresa';
         const e = PACOTE.empresa || {};
         $('jiSub').textContent = [e.cnpj ? 'CNPJ '+e.cnpj : '', e.cidade||'', e.socios ? e.socios.length+' sócio(s)' : '', PACOTE.geradoEm ? 'gerado em '+PACOTE.geradoEm : ''].filter(Boolean).join(' · ');
         const wrap = $('jiPeriodos'); wrap.innerHTML = '';
@@ -3875,7 +3881,9 @@
           }
         }
         const st = $('jiStatus');
-        if (st && !st.dataset.fixo) st.innerHTML = '';
+        if (st && !st.dataset.fixo) st.innerHTML = PACOTE_BLOQUEIO
+          ? '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:11px 13px; color:#991b1b">⛔ '
+            + PACOTE_BLOQUEIO + ' Este arquivo não pode ser gravado aqui.</div>' : '';
         renderConferencia();
       }
 
@@ -3907,6 +3915,18 @@
         box.innerHTML = window.painelConferenciaImport(EXERCICIOS);
       }
       window.gravarPacoteConferido = () => importarTodos();
+      /* v78: a tela 🔬 Analisar sobe o arquivo direto, sem passar pelo botão */
+      window.carregarJSONFinanceiro = (file) => carregarArquivo(file);
+      /* v77: abrir outra empresa (ou lançar do zero) zera o importador inteiro */
+      window.resetarImportadorJSON = function(){
+        PACOTE = null; PACOTE_EMPRESA = null; PACOTE_BLOQUEIO = null; IMPORTADOS = {}; EXERCICIOS = []; ANOS_BANCO = null;
+        ['jiStatus','jiConferencia','jiTravas','jiNotas','jiTravasDuras','jiCobertura','jiPeriodos','jiConvive','jiEmpresa','jiSub']
+          .forEach(id => { const el = $(id); if(el) el.innerHTML = ''; });
+        ['jiTravas','jiNotas','jiTravasDuras'].forEach(id => { const el = $(id); if(el) el.style.display = 'none'; });
+        const t = $('jiTodos'); if(t) t.style.display = 'none';
+        const pn = $('jsonImportPanel'); if(pn) pn.style.display = 'none';
+        const inp = $('inputImportJson'); if(inp) inp.value = '';
+      };
 
       async function importarPeriodo(p){
         const m = p.meta || {}; const ano = m.ano;
@@ -4026,6 +4046,12 @@
       async function importarTodos(){
         const empresaId = (typeof EDIT_CTX !== 'undefined' && EDIT_CTX) ? EDIT_CTX.empresaId : null;
         if(!empresaId){ $('jiStatus').innerHTML = '⚠️ Abra o formulário pela empresa (botão Lançar/Editar) antes de importar em lote.'; return; }
+        /* v77: o arquivo pertence à empresa em que foi carregado */
+        if(!PACOTE || (PACOTE_EMPRESA && PACOTE_EMPRESA !== empresaId)){
+          $('jiStatus').innerHTML = '⛔ Este arquivo foi carregado em outra empresa. Nada foi gravado. Carregue o JSON de novo, com esta empresa aberta.';
+          return;
+        }
+        if(PACOTE_BLOQUEIO){ $('jiStatus').innerHTML = '⛔ ' + PACOTE_BLOQUEIO + ' Nada foi gravado.'; return; }
         if(typeof coletarDadosFormulario !== 'function' || typeof persistirFinanceiro !== 'function'){ $('jiStatus').innerHTML = '⚠️ Função de gravação não encontrada.'; return; }
         const ps = periodosDoPacote();
         if(ANOS_BANCO === null) await carregarAnosExistentes();
@@ -4312,6 +4338,21 @@
             } else {
               j = JSON.parse(r.result);
             }
+            /* v78: cada etapa tem o seu arquivo. A apresentação e o contrato
+               social não entram pelo importador de números. */
+            {
+              const _tipo = String((j && j.tipo) || '').toLowerCase(), _fmt = String((j && j.formato) || '').toLowerCase();
+              let _errado = null;
+              if (/apresenta/.test(_tipo + ' ' + _fmt)) _errado = 'a <b>apresentação</b> da empresa. Ela entra em 📇 Apresentação (ou na etapa 2 de 🔬 Analisar), não aqui';
+              else if (/contrato/.test(_tipo + ' ' + _fmt)) _errado = 'o <b>contrato social</b>. Ele entra na etapa do contrato, não aqui';
+              else if (_tipo && _tipo !== 'financeiro' && !/consultor360/.test(_fmt)) _errado = 'do tipo <b>' + escapeHtml(_tipo) + '</b>, não de números';
+              if (_errado){
+                const _p = $('jsonImportPanel'); if(_p) _p.style.display = 'block';
+                $('jiStatus').innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:11px 13px; color:#991b1b">'
+                  + '⛔ Este arquivo é ' + _errado + '. Nada foi carregado.</div>';
+                return;
+              }
+            }
             if(!j || !Array.isArray(j.periodos)) throw new Error('Arquivo sem a lista "periodos".');
             if(_consertos.length){
               const _bx = $('jiNotas');
@@ -4320,12 +4361,61 @@
                   + '— corrigi para conseguir ler:</b><br>'
                   + _consertos.map(c=>'• '+escapeHtml(c)).join('<br>'); }
             }
-            PACOTE = j; IMPORTADOS = {};
+            PACOTE = j; IMPORTADOS = {}; PACOTE_BLOQUEIO = null;
+            PACOTE_EMPRESA = (typeof EDIT_CTX !== 'undefined' && EDIT_CTX) ? EDIT_CTX.empresaId : null;
+            /* v78: o que a IA não soube onde pôr, e as dúvidas dela — o corretor vê antes de gravar */
+            try{
+              const _na = [], _dv = [];
+              j.periodos.forEach(p => {
+                const a = (p && p.meta && p.meta.ano) || '';
+                (Array.isArray(p && p.naoAlocado) ? p.naoAlocado : []).forEach(x => {
+                  if (x && (x.conta || x.valor != null)) _na.push(a + ': ' + (x.conta||'(sem nome)') + (x.valor != null ? ' — ' + Number(x.valor).toLocaleString('pt-BR',{minimumFractionDigits:2}) : '') + (x.fonte ? ' (' + x.fonte + ')' : ''));
+                });
+              });
+              (Array.isArray(j.duvidas) ? j.duvidas : []).forEach(d => { if (d && String(d).trim()) _dv.push(String(d)); });
+              if (_na.length || _dv.length){
+                const _bx = $('jiNotas');
+                if (_bx){
+                  _bx.style.display = 'block';
+                  _bx.innerHTML = (_bx.innerHTML ? _bx.innerHTML + '<br><br>' : '')
+                    + (_na.length ? '<b>Linhas que a IA não soube onde pôr — confira no balanço:</b><br>' + _na.map(x => '• ' + escapeHtml(x)).join('<br>') : '')
+                    + (_na.length && _dv.length ? '<br><br>' : '')
+                    + (_dv.length ? '<b>Dúvidas da IA:</b><br>' + _dv.map(x => '• ' + escapeHtml(x)).join('<br>') : '');
+                }
+              }
+            }catch(_e){}
+            /* v78: o CNPJ do arquivo contra o da empresa aberta. Raiz diferente
+               (os 8 primeiros dígitos) é outra empresa: não grava. Mesma raiz
+               e filial diferente é aviso. */
+            (async () => {
+              await new Promise(r => setTimeout(r, 0));   /* depois do painel e do aviso de nome */
+              const _cArq = String((j.empresa && j.empresa.cnpj) || '').replace(/\D/g,'');
+              if (_cArq.length !== 14 || !PACOTE_EMPRESA) return;
+              let _cEmp = '';
+              try { const ci = EMPRESAS_CACHE.get(PACOTE_EMPRESA); _cEmp = String((ci && ci.cnpj) || ''); } catch(e){}
+              if (!_cEmp && typeof db !== 'undefined'){
+                try { const s = await db.collection('empresas').doc(PACOTE_EMPRESA).get();
+                      const dd = (s && s.exists) ? (s.data()||{}) : {}; _cEmp = String(dd.cnpj || dd.cnpjConsultor360 || ''); } catch(e){}
+              }
+              _cEmp = _cEmp.replace(/\D/g,'');
+              if (_cEmp.length !== 14 || PACOTE !== j) return;
+              const fmt = c => c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+              if (_cArq.slice(0,8) !== _cEmp.slice(0,8)){
+                PACOTE_BLOQUEIO = 'O CNPJ do arquivo (' + fmt(_cArq) + ') é de outra empresa — o cadastro desta é ' + fmt(_cEmp) + '.';
+                $('jiStatus').innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:11px 13px; color:#991b1b">⛔ '
+                  + PACOTE_BLOQUEIO + ' Este arquivo não pode ser gravado aqui.</div>';
+              } else if (_cArq !== _cEmp){
+                $('jiStatus').innerHTML = '⚠️ O arquivo é da filial ' + fmt(_cArq) + ' e o cadastro é ' + fmt(_cEmp) + ' — mesma empresa, outro estabelecimento. Confira se é o balanço certo. ' + $('jiStatus').innerHTML;
+              } else {
+                /* CNPJ bate: o aviso de nome diferente (razão social × fantasia) não vale */
+                $('jiStatus').innerHTML = $('jiStatus').innerHTML.replace(/⚠️ O arquivo é de <b>[^<]*<\/b> e o formulário aberto é de <b>[^<]*<\/b>\. Confirme antes de salvar\.\s*/g, '');
+              }
+            })();
             /* v54: busca os anos ja gravados e redesenha o painel quando chegar */
             carregarAnosExistentes().then(()=>{ try{ renderPainel(); }catch(_){} });
             // alerta se o nome da empresa não bate com a empresa aberta
             const alvo = ($('finEmpresaAlvo')||{}).textContent || '';
-            const nome = (j.empresa && j.empresa.nome) || '';
+            const nome = (j.empresa && (j.empresa.nome || j.empresa.razaoSocial || j.empresa.nomeFantasia)) || '';
             if(alvo && nome && !alvo.toLowerCase().includes(nome.split(' ')[0].toLowerCase())){
               $('jiStatus').innerHTML = '⚠️ O arquivo é de <b>'+nome+'</b> e o formulário aberto é de <b>'+alvo+'</b>. Confirme antes de salvar.';
             }
@@ -4907,7 +4997,12 @@ async function carregarMaisRecenteViaEmpresas(){
            saber separar os dois degraus do funil sem uma leitura a mais */
         temApresentacao: !!empData.temApresentacao,
         apresentacaoEm: empData.apresentacaoEm || null,
-        cnpj: empData.cnpj || empData.cnpjConsultor360 || ""
+        cnpj: empData.cnpj || empData.cnpjConsultor360 || "",
+        /* v78: o número de funcionários que a base já tem (o nome do campo
+           varia). É ele que tira o dental e o RC Empregador da estimativa. */
+        funcionarios: (function(){ for (const k of Object.keys(empData)){
+          if (/funcion|colaborador|empregad|headcount/i.test(k)){ const x = Number(empData[k]); if (isFinite(x) && x > 0) return x; } }
+          return null; })()
       });
       
       proms.push(
@@ -5016,6 +5111,9 @@ function mostrarEmpresasSemDados(empresas){
         emp.temApresentacao && emp.apresentacaoEm
           ? `<div class="sd-card-em">apresentação de ${escapeHtml(emp.apresentacaoEm)}</div>` : ''}</div>
       <div class="sd-card-acoes">
+        <button class="sd-mini sd-mini-hub" onclick="abrirHubEmpresa('${id}', '${nm}')"
+          title="As etapas da empresa numa tela só: cadastro, apresentação, números, contrato e análises"
+          style="background:#4f46e5; color:#fff; border-color:#4f46e5">🔬 Analisar</button>
         <button class="sd-mini sd-mini-apre" onclick="abrirApresentacao('${id}', '${nm}')"
           title="Conhecer a empresa sem precisar de balanço: CNAEs, sócios, o que faz, onde atua e as oportunidades">
           ${emp.temApresentacao ? '📇 Ver apresentação' : '📇 Apresentação'}</button>
@@ -5156,7 +5254,12 @@ async function carregarPorAnoViaEmpresas(ano){
            saber separar os dois degraus do funil sem uma leitura a mais */
         temApresentacao: !!empData.temApresentacao,
         apresentacaoEm: empData.apresentacaoEm || null,
-        cnpj: empData.cnpj || empData.cnpjConsultor360 || ""
+        cnpj: empData.cnpj || empData.cnpjConsultor360 || "",
+        /* v78: o número de funcionários que a base já tem (o nome do campo
+           varia). É ele que tira o dental e o RC Empregador da estimativa. */
+        funcionarios: (function(){ for (const k of Object.keys(empData)){
+          if (/funcion|colaborador|empregad|headcount/i.test(k)){ const x = Number(empData[k]); if (isFinite(x) && x > 0) return x; } }
+          return null; })()
       });
       
       proms.push(
@@ -5521,6 +5624,10 @@ function renderTabela(arr){
             <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
               onclick="abrirModalDetalhes('${row.empresaId}')">
               📊 Análise
+            </button>
+            <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" title="Etapas: cadastro, apresentação, números (incluir ano), contrato"
+              onclick="abrirHubEmpresa('${row.empresaId}', '${String(row.nome||'').replace(/'/g,"\\'").replace(/"/g,'&quot;')}')">
+              🔬 Etapas
             </button>
             <button class="btn btn-outline" style="padding:6px 10px; font-size:12px" 
               onclick="abrirModalEdicao('${row.empresaId}',${row.ano},'${row.docId || ''}')">
@@ -6132,6 +6239,30 @@ async function abrirModalEdicao(empresaId, ano=null, docId=null){
     const el = document.getElementById(id);
     if(el) el.value = "";
   });
+  /* v77: a lista acima esquecia dezenas de campos (abertura da receita,
+     impostos, folha, sócios, sucessão, garantias...). Ao abrir a empresa B
+     depois de gravar a A, esses campos traziam os números da A, e o resumo
+     recalculava a receita e o lucro da A em cima deles. Agora TODO campo do
+     formulário é zerado, e com ele o que o formulário guarda por fora. */
+  document.querySelectorAll('#modalFin input, #modalFin select, #modalFin textarea').forEach(el => {
+    if(!el.id || el.id === 'finAno' || el.type === 'file' || el.type === 'button') return;
+    if(el.tagName === 'SELECT'){
+      const vazio = Array.prototype.some.call(el.options, o => o.value === '');
+      el.value = vazio ? '' : (el.options[0] ? el.options[0].value : '');
+    } else if(el.type === 'checkbox' || el.type === 'radio'){
+      el.checked = el.defaultChecked;
+    } else {
+      el.value = '';
+    }
+    if(el.dataset){ delete el.dataset.calc; delete el.dataset.fixo; }
+  });
+  if(window.ANCORAS_DOC) Object.keys(window.ANCORAS_DOC).forEach(k => { delete window.ANCORAS_DOC[k]; });
+  window.DETALHE_OUTROS = null;
+  if(typeof window.resetarImportadorJSON === 'function') window.resetarImportadorJSON();
+  { const _e = document.getElementById('finErro'); if(_e){ _e.textContent = ''; _e.style.display = 'none'; } }
+  /* o setor vem do cadastro da empresa, quando ele tem */
+  { const _s = document.getElementById('finSetor'), _set = info && (info.setor || info.segmento);
+    if(_s && _set && Array.prototype.some.call(_s.options, o => o.value === _set)) _s.value = _set; }
 
   // Definir ano atual como padrão se não houver ano
   const anoAtual = new Date().getFullYear();
@@ -24924,6 +25055,444 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   window.impactoPadrao = impactoPadrao;
   window.impactoCopiar = impactoCopiar;
 })();
+/* ===================================================================
+   v78 — O PROMPT SÓ DE NÚMEROS (financeiro v1)
+
+   O Consultor 360 tem 133 mil caracteres e lê balanço, contrato,
+   apólices e IR na mesma conversa. Este lê só balanço e DRE, com o
+   plano de contas padrão (Lei 6.404 + Referencial da Receita), e
+   termina com o CONTEXTO desta empresa montado pelo sistema:
+     - modo inicial: extrair todos os períodos dos documentos;
+     - modo novo ano: o que já está gravado, com os números-chave, e a
+       ordem de extrair só o que falta e comparar a coluna comparativa.
+   O texto-base mora em blocos/PROMPT_financeiro_v1.md.
+   =================================================================== */
+(function(){
+  'use strict';
+  var TEXTO = "# Prompt \u2014 Leitor de balan\u00e7o e DRE \u00b7 Corporate One financeiro v1\n\nVoc\u00ea \u00e9 o **leitor dos demonstrativos** de uma empresa. Recebe o balan\u00e7o patrimonial e a DRE (\u00e0s vezes notas explicativas, DFC ou balancete) e devolve **um arquivo JSON** com cada n\u00famero no campo certo do sistema.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o analisa, n\u00e3o d\u00e1 opini\u00e3o, n\u00e3o calcula indicador, n\u00e3o fala de seguro, cr\u00e9dito nem s\u00f3cio. Margens, liquidez, endividamento, seguros e o resto o sistema calcula sozinho, a partir do que voc\u00ea entregar. Por isso o que importa aqui \u00e9 uma coisa: **cada n\u00famero do documento no campo certo, com o valor exato e a fonte.**\n\nO **contexto desta empresa** (nome, CNPJ, quais anos extrair e os que o sistema j\u00e1 tem gravados) est\u00e1 **no fim deste texto**. Leia antes de abrir os documentos.\n\n---\n\n## 1 \u00b7 Antes de ler os n\u00fameros\n\nPara cada documento anexado, descubra:\n\n- **Quais exerc\u00edcios ele traz.** Um balan\u00e7o de 2025 quase sempre tem a coluna comparativa de 2024. Cada coluna \u00e9 um per\u00edodo.\n- **A escala.** \"Em milhares de reais\" ou \"R$ mil\" \u2192 multiplique tudo por 1.000. \"Em milh\u00f5es\" \u2192 por 1.000.000. Diga em `meta.escala` o que o documento dizia.\n- **Quantos meses.** Exerc\u00edcio fechado = 12. Balancete de setembro = 9 e `meta.fechado: false`.\n- **A data-base** (normalmente 31/12).\n\n**Quais anos extrair** est\u00e1 dito no contexto. Ano que o sistema j\u00e1 tem: **n\u00e3o extraia de novo** \u2014 s\u00f3 compare a coluna comparativa com o que est\u00e1 gravado e liste qualquer diferen\u00e7a em `duvidas`.\n\n---\n\n## 2 \u00b7 O plano de contas padr\u00e3o\n\nO sistema segue a estrutura da **Lei 6.404/76** (balan\u00e7o: art. 178; DRE: art. 187) e do **Plano de Contas Referencial da Receita Federal** (o que toda empresa do lucro real usa na ECF). Toda contabilidade brasileira, por mais que mude os nomes, cabe nesta estrutura.\n\nPara cada linha do documento: ache o **grupo** (ativo circulante, passivo n\u00e3o circulante, DRE\u2026), depois a **linha padr\u00e3o** dentro do grupo. A coluna \"Como pode aparecer\" s\u00e3o exemplos, n\u00e3o lista fechada \u2014 o que vale \u00e9 o **significado** da conta.\n\n### 2.1 Ativo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finACCaixa | Caixa e equivalentes de caixa | Caixa \u00b7 Bancos conta movimento \u00b7 Dispon\u00edvel \u00b7 Numer\u00e1rio em tr\u00e2nsito |\n| finACAplicacoes | Aplica\u00e7\u00f5es financeiras de curto prazo | Aplica\u00e7\u00f5es de liquidez imediata \u00b7 CDB \u00b7 Fundos \u00b7 T\u00edtulos e valores mobili\u00e1rios |\n| finCR | Clientes / contas a receber | Duplicatas a receber \u00b7 Clientes nacionais e exterior \u00b7 Cart\u00f5es a receber |\n| finACPDD | (\u2212) Perdas estimadas com cr\u00e9ditos (PDD/PECLD) | Provis\u00e3o para devedores duvidosos \u2014 **lance positivo**, o sistema subtrai |\n| finEstoques | Estoques | Mercadorias \u00b7 Mat\u00e9ria-prima \u00b7 Produtos em elabora\u00e7\u00e3o \u00b7 Produtos acabados \u00b7 Almoxarifado \u00b7 Importa\u00e7\u00f5es em andamento |\n| finACImpostos | Tributos a recuperar | ICMS, PIS, COFINS, IPI a recuperar \u00b7 IRPJ/CSLL antecipados \u00b7 Saldo negativo |\n| finACAdiantFornec | Adiantamentos a fornecedores | Adiantamento a fornecedores \u00b7 Importa\u00e7\u00f5es a liquidar |\n| finACDespAntecip | Despesas antecipadas | Seguros a apropriar \u00b7 Despesas do exerc\u00edcio seguinte |\n| finACOutros | Outros cr\u00e9ditos de curto prazo | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finAtivoCirc | **Total do ativo circulante** | |\n\n### 2.2 Ativo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finANCRealizavel | Realiz\u00e1vel a longo prazo | Cr\u00e9ditos com s\u00f3cios e ligadas \u00b7 Dep\u00f3sitos judiciais \u00b7 Tributos diferidos \u00b7 Clientes LP |\n| finDepJudiciais | Dep\u00f3sitos judiciais (se aberto) | Dep\u00f3sitos recursais \u00b7 Bloqueios judiciais \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finPartesRelacionadas | Cr\u00e9ditos com partes relacionadas (se aberto) | M\u00fatuo com s\u00f3cios \u00b7 Conta corrente de controladas \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finANCInvest | Investimentos | Participa\u00e7\u00f5es societ\u00e1rias \u00b7 Propriedades para investimento \u00b7 Cotas de cooperativa |\n| finImobilizado | **Total do imobilizado** | Imobilizado \u00b7 Bens e direitos de uso |\n| finDepreciacao | (\u2212) Deprecia\u00e7\u00e3o acumulada (se vier separada) | Deprecia\u00e7\u00f5es e amortiza\u00e7\u00f5es acumuladas \u2014 **some todas, lance positivo** |\n| finANCIntangivel | Intang\u00edvel | Marcas \u00b7 Software (quando no intang\u00edvel) \u00b7 \u00c1gio \u00b7 Direito de uso |\n| finAtivoNaoCirc | **Total do ativo n\u00e3o circulante** | |\n| finAtivoTotal | **Total do ativo** | |\n\n**O imobilizado aberto \u2014 sempre que o balan\u00e7o ou a nota abrir as linhas:**\n\n| Campo | Linha |\n|---|---|\n| finValorImoveis | Terrenos \u00b7 Edifica\u00e7\u00f5es \u00b7 Pr\u00e9dios \u00b7 Constru\u00e7\u00f5es |\n| finValorInstalacoes | Instala\u00e7\u00f5es \u00b7 Benfeitorias (inclusive em im\u00f3veis de terceiros) |\n| finValorMaquinas | M\u00e1quinas e equipamentos |\n| finValorInformatica | Equipamentos de inform\u00e1tica \u00b7 Computadores e perif\u00e9ricos \u00b7 Hardware |\n| finValorFerramentas | Ferramentas |\n| finValorVeiculos | Ve\u00edculos |\n| finValorMoveis | M\u00f3veis e utens\u00edlios |\n| finValorSoftware | Software \u00b7 Licen\u00e7as de uso (quando dentro do imobilizado) |\n| finObrasAndamento | Imobiliza\u00e7\u00f5es em andamento \u00b7 Obras em andamento \u00b7 Adiantamento para imobilizado |\n\nLance cada linha **como est\u00e1 no documento** (bruta se o documento mostra bruta e a deprecia\u00e7\u00e3o \u00e0 parte; l\u00edquida se mostra l\u00edquida \u2014 e ent\u00e3o n\u00e3o invente deprecia\u00e7\u00e3o). A soma das linhas tem que dar o total do imobilizado.\n\n### 2.3 Passivo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finCP | Fornecedores | Fornecedores nacionais e estrangeiros \u00b7 Duplicatas a pagar |\n| finPCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **curto prazo** | Capital de giro \u00b7 Conta garantida \u00b7 Desconto de duplicatas \u00b7 Antecipa\u00e7\u00e3o de receb\u00edveis \u00b7 Leasing (parcela curta) |\n| finPCSalarios | Obriga\u00e7\u00f5es trabalhistas e sociais | Sal\u00e1rios \u00b7 Pr\u00f3-labore a pagar \u00b7 INSS \u00b7 FGTS \u00b7 Provis\u00e3o de f\u00e9rias e 13\u00ba |\n| finPCImpostos | Obriga\u00e7\u00f5es tribut\u00e1rias | ICMS, ISS, PIS, COFINS, IRRF a recolher \u00b7 IRPJ/CSLL a pagar \u00b7 Simples |\n| finPCParcelamentos | Parcelamentos tribut\u00e1rios \u2014 curto prazo | REFIS \u00b7 PERT \u00b7 Parcelamento INSS/ICMS/FGTS \u00b7 Transa\u00e7\u00e3o |\n| finPCAdiantClientes | Adiantamentos de clientes | Faturamento antecipado \u00b7 Sinal de vendas |\n| finPCDividendos | Dividendos e lucros a pagar | JCP a pagar \u00b7 Lucros a distribuir |\n| finPCProvisoes | Provis\u00f5es de curto prazo | Conting\u00eancias (curta) \u00b7 Garantias |\n| finPCOutros | Outras obriga\u00e7\u00f5es | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finPassivoCirc | **Total do passivo circulante** | |\n\n### 2.4 Passivo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPNCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **longo prazo** | BNDES \u00b7 FINAME \u00b7 BRDE \u00b7 FINEP \u00b7 Badesul \u00b7 Leasing (parcela longa) |\n| finPNCDebentures | Deb\u00eantures e t\u00edtulos | Notas promiss\u00f3rias \u00b7 CCB de longo prazo |\n| finPNCProvisoes | Provis\u00f5es de longo prazo | Conting\u00eancias trabalhistas, c\u00edveis, tribut\u00e1rias |\n| finPNCOutros | Outras obriga\u00e7\u00f5es de longo prazo | Parcelamentos LP \u00b7 M\u00fatuo de s\u00f3cios \u00b7 AFAC \u2014 **com `outrosDetalhe`** |\n| finPassivoNaoCirc | **Total do passivo n\u00e3o circulante** | |\n| finPassivoTotal | **Total do passivo (sem o PL)**, quando o documento traz | |\n\n### 2.5 Patrim\u00f4nio l\u00edquido\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPLCapital | Capital social realizado | Capital subscrito \u00b7 (\u2212) Capital a integralizar (reduz) |\n| finPLReservasCapital | Reservas de capital | \u00c1gio na emiss\u00e3o \u00b7 Subven\u00e7\u00f5es (no bloco de capital) |\n| finPLReservasIncentivos | Reservas de incentivos fiscais | Subven\u00e7\u00e3o para investimento \u00b7 Fundopem \u00b7 LC 160 |\n| finPLReservasLucro | Reservas de lucros | Legal \u00b7 Estatut\u00e1ria \u00b7 Reten\u00e7\u00e3o \u00b7 Expans\u00e3o |\n| finPLLucrosAcum | Lucros ou preju\u00edzos acumulados | Preju\u00edzo acumulado entra **negativo** |\n| finPLAjustes | Ajustes de avalia\u00e7\u00e3o patrimonial e outros | Outros resultados abrangentes \u00b7 A\u00e7\u00f5es em tesouraria (negativo) |\n| finPL | **Total do patrim\u00f4nio l\u00edquido** | |\n\n### 2.6 DRE\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finReceitaBruta | Receita bruta | Receita operacional bruta \u00b7 Faturamento bruto |\n| finRecMercadorias | Venda de mercadorias/produtos (se aberto) | Vendas de produtos \u00b7 Revenda |\n| finRecServicos | Presta\u00e7\u00e3o de servi\u00e7os (se aberto) | Receita de servi\u00e7os \u00b7 Obras |\n| finRecOutras | Outras receitas operacionais brutas (se aberto) | Loca\u00e7\u00e3o \u00b7 Exporta\u00e7\u00e3o (quando separada) |\n| finDeducoes | (\u2212) **Total das dedu\u00e7\u00f5es** | Dedu\u00e7\u00f5es da receita bruta \u00b7 Impostos sobre vendas e devolu\u00e7\u00f5es |\n| finDevolucoes | Devolu\u00e7\u00f5es e abatimentos (se aberto) | Vendas canceladas \u00b7 Descontos incondicionais |\n| finImpICMS \u00b7 finImpISS \u00b7 finImpPIS \u00b7 finImpCOFINS \u00b7 finImpOutros | Tributos sobre a venda (se abertos) | IPI e outros \u2192 finImpOutros |\n| finReceitaLiq | **Receita l\u00edquida** | Receita operacional l\u00edquida |\n| finCMV | (\u2212) Custo das vendas | CMV \u00b7 CPV \u00b7 CSP \u00b7 Custo dos servi\u00e7os \u00b7 Custos da atividade |\n| finLucroBruto | **Lucro bruto** | Resultado bruto |\n| finDespVendas | Despesas com vendas | Comerciais \u00b7 Comiss\u00f5es \u00b7 Fretes sobre vendas \u00b7 Marketing |\n| finDespAdm | Despesas gerais e administrativas | Administrativas \u00b7 Gastos com pessoal (quando \u00e9 a \u00fanica linha) |\n| finDespTributarias | Despesas tribut\u00e1rias | Impostos e taxas \u00b7 IPTU \u00b7 IPVA \u00b7 IOF |\n| finDepAmort | Deprecia\u00e7\u00e3o e amortiza\u00e7\u00e3o **do per\u00edodo** | Na DRE, na nota ou na DFC \u2014 some custo e despesa |\n| finOutrasReceitas | Outras receitas operacionais | Ganho na venda de imobilizado \u00b7 Recupera\u00e7\u00e3o de despesas \u00b7 Revers\u00f5es |\n| finOutrasDesp | Outras despesas operacionais | Perdas \u00b7 Baixas \u00b7 Doa\u00e7\u00f5es |\n| finEBIT | **Resultado operacional antes do financeiro**, quando o documento traz | Lucro operacional |\n| finReceitaFin | Receitas financeiras | Rendimentos de aplica\u00e7\u00e3o \u00b7 Juros ativos \u00b7 Descontos obtidos \u00b7 Varia\u00e7\u00e3o cambial ativa |\n| finDespesaFin | Despesas financeiras | Juros \u00b7 Encargos banc\u00e1rios \u00b7 IOF \u00b7 Descontos concedidos \u00b7 Varia\u00e7\u00e3o cambial passiva |\n| finResultadoFin | Resultado financeiro (se s\u00f3 vier o l\u00edquido) | Negativo quando as despesas s\u00e3o maiores |\n| finLAIR | **Lucro antes do IR e CSLL** | Resultado antes dos tributos sobre o lucro |\n| finIRCS | (\u2212) IRPJ e CSLL | Correntes + diferidos \u2014 **some os dois**; negativo s\u00f3 se for cr\u00e9dito |\n| finLucroLiq | **Lucro (ou preju\u00edzo) l\u00edquido do exerc\u00edcio** | Resultado l\u00edquido \u2014 preju\u00edzo entra **negativo** |\n\n**Quando a DRE ou a nota abrir a folha** (despesa por natureza), lance tamb\u00e9m: finFolhaAnual (sal\u00e1rios, f\u00e9rias, 13\u00ba), finEncargosFolha (INSS, FGTS, RAT, terceiros), finBeneficiosAnual (sa\u00fade, odontol\u00f3gico, vida, VR/VA, VT), finProLabore (pr\u00f3-labore e honor\u00e1rios da diretoria). Se o documento n\u00e3o abre, **n\u00e3o estime** \u2014 deixe de fora.\n\n**Se o documento informar o n\u00famero de funcion\u00e1rios**, lance finFuncionarios.\n\n---\n\n## 3 \u00b7 Quando voc\u00ea n\u00e3o souber onde a linha entra\n\n**Nenhuma linha do documento \u00e9 descartada.** O destino \u00e9, nesta ordem:\n\n1. A linha padr\u00e3o da tabela, pelo significado.\n2. O campo \"Outros\" do grupo a que ela pertence (`finACOutros`, `finPCOutros`, `finPNCOutros`, `finRecOutras`, `finImpOutros`, `finOutrasDesp`, `finOutrasReceitas`, `finPLAjustes`), **listando em `outrosDetalhe`** o que foi para l\u00e1:\n\n```json\n\"outrosDetalhe\": {\n  \"finACOutros\": [ {\"conta\": \"Estoque de terceiros\", \"valor\": 239781.32, \"fonte\": \"BP 2025 \u00b7 p.1\"} ]\n}\n```\n\n3. Se voc\u00ea n\u00e3o sabe nem o grupo, ponha em `naoAlocado` com o nome exato da conta, o valor e onde ela aparece. O sistema mostra ao corretor, que decide.\n\nLinha que **s\u00f3 existe como t\u00edtulo** (ATIVO CIRCULANTE, DISPON\u00cdVEL\u2026) e repete o valor das contas de baixo: lance **uma vez s\u00f3**, no n\u00edvel mais detalhado que voc\u00ea consegue classificar. Somar o t\u00edtulo com a subconta dobra o valor.\n\n---\n\n## 4 \u00b7 Regras de cada n\u00famero\n\n- Formato de cada campo: `{\"v\": 1234567.89, \"c\": \"v\", \"f\": \"documento \u00b7 p\u00e1gina \u00b7 nome da linha\"}`.\n- `\"c\": \"v\"` = lido direto. `\"c\": \"!\"` = voc\u00ea somou, subtraiu ou interpretou \u2014 a\u00ed `\"o\"` \u00e9 obrigat\u00f3rio e diz a conta (`\"o\": \"11.429.206,19 + 4.192.308,44\"`).\n- Valores **em reais**, ponto como decimal, sem separador de milhar, com os centavos do documento.\n- **Custos, despesas e dedu\u00e7\u00f5es entram positivos** \u2014 o sistema subtrai. S\u00f3 s\u00e3o negativos: preju\u00edzo, preju\u00edzo acumulado, resultado financeiro negativo e IR quando \u00e9 cr\u00e9dito.\n- **Linha que o documento n\u00e3o tem fica fora do arquivo.** Nunca mande `0` nem `null` para dizer \"n\u00e3o achei\". Zero s\u00f3 quando o documento mostra zero (`{\"v\": 0, \"c\": \"v\", \"f\": \"...\"}`).\n- **Os totais s\u00e3o os do documento**, mesmo que a soma das contas d\u00ea diferente. O sistema confere.\n- Empr\u00e9stimo do circulante e do n\u00e3o circulante s\u00e3o **duas linhas diferentes**. Nunca copie o mesmo valor nos dois.\n- O que a DRE n\u00e3o traz mas \u00e9 a diferen\u00e7a entre duas linhas que ela traz (ex.: CMV = receita l\u00edquida \u2212 lucro bruto): pode lan\u00e7ar com `\"c\": \"!\"` e a conta em `\"o\"`.\n\n---\n\n## 5 \u00b7 A confer\u00eancia \u2014 fa\u00e7a antes de entregar\n\nPara cada per\u00edodo, confira e escreva o resultado em `conferencia`:\n\n| Confere | Tem que dar |\n|---|---|\n| caixa + aplica\u00e7\u00f5es + clientes \u2212 PDD + estoques + tributos + adiantamentos + despesas antecipadas + outros | total do ativo circulante |\n| realiz\u00e1vel LP + investimentos + imobilizado (\u2212 deprecia\u00e7\u00e3o, se separada) + intang\u00edvel | total do ativo n\u00e3o circulante |\n| circulante + n\u00e3o circulante | ativo total |\n| as contas do passivo circulante | total do passivo circulante |\n| as contas do passivo n\u00e3o circulante | total do passivo n\u00e3o circulante |\n| as contas do PL | total do PL |\n| passivo circulante + n\u00e3o circulante + PL | **ativo total** |\n| receita bruta \u2212 dedu\u00e7\u00f5es | receita l\u00edquida |\n| receita l\u00edquida \u2212 custo | lucro bruto |\n| lucro antes do IR \u2212 IRPJ/CSLL | lucro l\u00edquido |\n| linhas do imobilizado | total do imobilizado |\n\nSe uma soma n\u00e3o fecha, **falta uma conta**: volte ao documento e ache. Se mesmo assim n\u00e3o fechar, ponha a diferen\u00e7a no \"Outros\" do grupo com `\"c\": \"!\"` e explique. Grupo que ficou s\u00f3 com o total, sem as contas, \u00e9 erro de leitura \u2014 abra as contas.\n\n---\n\n## 6 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_financeiro.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo dez linhas** de texto: o que voc\u00ea leu, o que n\u00e3o achou, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"financeiro\",\n  \"formato\": \"corporate-one-financeiro\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"periodos\": [\n    {\n      \"meta\": { \"ano\": 2025, \"meses\": 12, \"dataBase\": \"2025-12-31\", \"fechado\": true,\n                \"documento\": \"Balan\u00e7o 2025.pdf; DRE 2025.pdf\", \"escala\": \"reais\", \"auditado\": false },\n      \"finReceitaBruta\": {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"finAtivoTotal\":   {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"outrosDetalhe\": {},\n      \"naoAlocado\": [ {\"conta\": \"\", \"valor\": 0, \"fonte\": \"\"} ],\n      \"conferencia\": { \"ativoCirculante\": \"fecha\", \"passivoMaisPL\": \"fecha \u00b7 diferen\u00e7a 0,00\" }\n    }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` v\u00e3o **exatamente** como acima \u2014 \u00e9 por eles que o sistema sabe que este arquivo \u00e9 de n\u00fameros e n\u00e3o de contrato ou apresenta\u00e7\u00e3o.\n- `empresa.cnpj` **copiado do documento** (cabe\u00e7alho do balan\u00e7o ou da DRE). O sistema compara com o CNPJ da empresa aberta e recusa arquivo de outra empresa.\n- Um objeto em `periodos` para **cada ano a extrair**, do mais antigo para o mais recente.\n- `duvidas`: tudo o que o corretor precisa conferir \u2014 linha ileg\u00edvel, total que n\u00e3o fechou, valor da coluna comparativa diferente do que o sistema tem gravado.\n";
+
+  function R$(v){ return (v==null||!isFinite(v)) ? '—'
+    : Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+  function num(v){ var x=Number(v); return (v==null||v===''||isNaN(x)||!isFinite(x))?null:x; }
+
+  /* ctx: { nome, razaoSocial, cnpj, anos:[registro gravado...] } */
+  function montarPromptFinanceiro(ctx){
+    ctx = ctx || {};
+    var anos = (ctx.anos || []).filter(function(r){ return num(r && r.ano); })
+      .sort(function(a,b){ return Number(a.ano) - Number(b.ano); });
+    var hoje = new Date().toISOString().slice(0,10);
+    var L = [];
+    L.push('');
+    L.push('---');
+    L.push('');
+    L.push('## CONTEXTO DESTA EMPRESA — gerado pelo sistema em ' + hoje);
+    L.push('');
+    L.push('- Empresa: **' + (ctx.razaoSocial || ctx.nome || '(sem nome)') + '**'
+      + (ctx.razaoSocial && ctx.nome && ctx.razaoSocial !== ctx.nome ? ' (' + ctx.nome + ')' : ''));
+    L.push('- CNPJ no cadastro: ' + (ctx.cnpj ? '**' + ctx.cnpj + '**' : 'não cadastrado — copie o do documento para `empresa.cnpj`'));
+    if (ctx.cnpj)
+      L.push('- Se o CNPJ do documento for **outro**, pare e avise: os documentos podem ser de outra empresa.');
+    L.push('');
+    if (!anos.length){
+      L.push('### O que extrair: TUDO');
+      L.push('');
+      L.push('O sistema ainda não tem nenhum exercício desta empresa. Extraia **todos os períodos** que os documentos trazem, '
+        + 'inclusive as colunas comparativas — cada coluna é um período.');
+    } else {
+      var lista = anos.map(function(r){ return String(r.ano); });
+      L.push('### O que extrair: SÓ O QUE FALTA');
+      L.push('');
+      L.push('O sistema já tem gravados os exercícios **' + lista.join(', ') + '**. Extraia **somente os períodos que não estão nesta lista**. '
+        + 'Não devolva de novo os que já estão — o arquivo ficaria maior e um ano certo poderia ser trocado por uma leitura pior.');
+      L.push('');
+      L.push('Quando o documento novo trouxer a coluna comparativa de um ano já gravado, **compare** com os números abaixo. '
+        + 'Diferença acima de R$ 1,00 vai para `duvidas`, com os dois valores — o balanço pode ter sido republicado ou reclassificado.');
+      L.push('');
+      L.push('| Ano | Receita líquida | Lucro líquido | Ativo total | Patrimônio líquido | Caixa | Imobilizado |');
+      L.push('|---|---:|---:|---:|---:|---:|---:|');
+      anos.forEach(function(r){
+        L.push('| ' + r.ano + ((num(r.periodoMeses) && r.periodoMeses < 12) ? ' (parcial, ' + r.periodoMeses + ' meses)' : '')
+          + ' | ' + R$(num(r.receitaLiquida) != null ? r.receitaLiquida : r.receita)
+          + ' | ' + R$(num(r.lucroLiquido) != null ? r.lucroLiquido : r.lucroLiq)
+          + ' | ' + R$(num(r.ativoTotal) != null ? r.ativoTotal : r.ativo)
+          + ' | ' + R$(num(r.patrimonioLiquido) != null ? r.patrimonioLiquido : r.pl)
+          + ' | ' + R$(r.caixa)
+          + ' | ' + R$(r.imobilizado) + ' |');
+      });
+      var ult = anos[anos.length-1];
+      L.push('');
+      L.push('Se um ano gravado estiver marcado como parcial e o documento trouxer o exercício **fechado**, extraia esse ano também: o fechado substitui o parcial.');
+      if (ult) L.push('O exercício mais recente gravado é **' + ult.ano + '**; o esperado é que os documentos tragam ' + (Number(ult.ano)+1) + '.');
+    }
+    L.push('');
+    L.push('Agora leia os documentos anexados e entregue o arquivo `' + String(ctx.nome || 'EMPRESA').replace(/[^A-Za-z0-9]+/g,'_').toUpperCase() + '_financeiro.json`.');
+    return TEXTO + '\n' + L.join('\n');
+  }
+
+  window.PROMPT_FINANCEIRO_V1 = TEXTO;
+  window.montarPromptFinanceiro = montarPromptFinanceiro;
+})();
+/* ===================================================================
+   v78 — ANALISAR EMPRESA: UMA TELA, AS ETAPAS EM ORDEM
+
+   Antes, cada coisa morava num botão diferente (apresentação num cartão,
+   números no ✏️ Editar, briefing dentro da análise) e o prompt era um só,
+   de 133 mil caracteres, para tudo. Agora a empresa tem uma tela com as
+   etapas, o que já foi feito em cada uma e o próximo passo:
+
+     1. Cadastro    — o que a base tem + Receita (BrasilAPI) + site/redes
+     2. Apresentação — o que a empresa faz (o módulo da v71)
+     3. Números     — prompt curto só de balanço e DRE; incluir ano
+     4. Contrato social — por enquanto pelo Consultor 360 (fase 2)
+     5. Análises    — feitas pelo sistema
+
+   A IA lê; o sistema calcula. Nenhuma etapa pede análise para a IA.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function el(id){ return document.getElementById(id); }
+  function num(v){ var x=Number(v); return (v==null||v===''||isNaN(x)||!isFinite(x))?null:x; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '—'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function mi(v){ if (v==null||!isFinite(v)) return '—';
+    var a = Math.abs(v);
+    if (a >= 1e6) return 'R$ ' + (v/1e6).toFixed(1).replace('.',',') + ' mi';
+    if (a >= 1e3) return 'R$ ' + Math.round(v/1e3) + ' mil';
+    return R$(v); }
+  function soDig(s){ return String(s||'').replace(/\D/g,''); }
+
+  var H = { id:null, nome:'', doc:{}, anos:[], receita:null, carregando:false };
+
+  /* ---------------- o que a base tem, venha com o nome que vier ---------------- */
+  var ROTULOS = [
+    [/^cnpj$|cnpjconsultor/i, 'CNPJ'],
+    [/razao/i, 'Razão social'], [/fantasia/i, 'Nome fantasia'],
+    [/^cidade$|municipio/i, 'Cidade'], [/^uf$|^estado$/i, 'UF'],
+    [/funcion|colaborador|empregad|headcount/i, 'Funcionários'],
+    [/setor|segmento|ramo|cnae/i, 'Setor'], [/porte/i, 'Porte'],
+    [/faturamento|receitaanual/i, 'Faturamento informado'],
+    [/^site$|website/i, 'Site'], [/telefone|fone/i, 'Telefone'], [/^email/i, 'E-mail'],
+    [/agencianome|^agencia$/i, 'Agência'], [/rmnome/i, 'Gerente da conta']
+  ];
+  function camposDaBase(d){
+    var out = [], vistos = {};
+    Object.keys(d || {}).forEach(function(k){
+      var v = d[k];
+      if (v == null || v === '' || typeof v === 'object') return;
+      for (var i=0;i<ROTULOS.length;i++){
+        if (ROTULOS[i][0].test(k) && !vistos[ROTULOS[i][1]]){
+          vistos[ROTULOS[i][1]] = 1; out.push([ROTULOS[i][1], String(v)]); return;
+        }
+      }
+    });
+    return out;
+  }
+  function funcionariosDaBase(d){
+    var k = Object.keys(d||{}).filter(function(x){ return /funcion|colaborador|empregad|headcount/i.test(x); })[0];
+    return k ? num(d[k]) : null;
+  }
+
+  /* ---------------- carregar ---------------- */
+  function carregar(){
+    var ref = db.collection('empresas').doc(H.id);
+    return Promise.all([
+      ref.get().then(function(s){ return (s && s.exists) ? (s.data()||{}) : {}; }).catch(function(){ return {}; }),
+      ref.collection('financeiro').get().then(function(snap){
+        var a = []; snap.forEach(function(x){ var d = x.data()||{}; d._docId = x.id; if (num(d.ano)) a.push(d); });
+        return a.sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+      }).catch(function(){ return []; })
+    ]).then(function(r){
+      H.doc = r[0]; H.anos = r[1];
+      H.receita = H.doc.dadosReceita || null;
+      if (!H.nome) H.nome = H.doc.nome || H.doc.razaoSocial || H.doc.fantasia || '';
+    });
+  }
+
+  /* ---------------- estado de cada etapa ---------------- */
+  function etapas(){
+    var d = H.doc || {};
+    var links = d.linksApresentacao || {};
+    var cnpj = d.cnpj || d.cnpjConsultor360 || '';
+    var temSocios = H.anos.some(function(r){ return r.parecer && r.parecer.ficha && Array.isArray(r.parecer.ficha.socios) && r.parecer.ficha.socios.length; })
+                 || (Array.isArray(d.socios) && d.socios.length);
+    var ultimo = H.anos[H.anos.length-1];
+    return {
+      cadastro: { ok: !!(soDig(cnpj).length === 14 && (H.receita || links.site)), cnpj: cnpj, links: links },
+      apresentacao: { ok: !!(d.temApresentacao || d.apresentacao), em: d.apresentacaoEm || null },
+      numeros: { ok: H.anos.length > 0, anos: H.anos, ultimo: ultimo },
+      contrato: { ok: !!temSocios },
+      analises: { ok: H.anos.length > 0 }
+    };
+  }
+
+  /* ---------------- peças ---------------- */
+  function chip(ok, txtOk, txtNao){
+    return ok
+      ? '<span style="background:#dcfce7; color:#166534; border-radius:999px; padding:2px 9px; font-size:11px; font-weight:700; white-space:nowrap">✓ ' + txtOk + '</span>'
+      : '<span style="background:#fef3c7; color:#92400e; border-radius:999px; padding:2px 9px; font-size:11px; font-weight:700; white-space:nowrap">' + txtNao + '</span>';
+  }
+  function cartao(n, titulo, sub, status, corpo, ativo){
+    return '<div class="hub-etapa" data-etapa="' + n + '" style="background:#fff; border:1px solid ' + (ativo ? '#6366f1' : '#e2e8f0')
+      + '; border-radius:12px; padding:14px 16px; margin-bottom:12px' + (ativo ? '; box-shadow:0 0 0 3px #eef2ff' : '') + '">'
+      + '<div style="display:flex; gap:12px; align-items:flex-start">'
+      +   '<div style="flex:0 0 28px; height:28px; border-radius:50%; background:' + (ativo ? '#4f46e5' : '#e2e8f0') + '; color:' + (ativo ? '#fff' : '#475569')
+      +     '; font-weight:800; font-size:13px; display:flex; align-items:center; justify-content:center">' + n + '</div>'
+      +   '<div style="flex:1; min-width:0">'
+      +     '<div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap">'
+      +       '<div style="font-size:14.5px; font-weight:800; color:#0f172a">' + titulo + '</div>' + status + '</div>'
+      +     (sub ? '<div style="font-size:12px; color:#64748b; margin-top:2px; line-height:1.55">' + sub + '</div>' : '')
+      +     '<div style="margin-top:10px">' + corpo + '</div>'
+      +   '</div>'
+      + '</div></div>';
+  }
+  function bt(rot, onclick, primario, extra){
+    return '<button type="button" class="btn ' + (primario ? 'btn-primary' : 'btn-outline') + '" style="padding:7px 12px; font-size:12.5px; margin:0 6px 6px 0' + (extra||'') + '" onclick="' + onclick + '">' + rot + '</button>';
+  }
+  function linha(r, v){
+    return '<div style="display:flex; justify-content:space-between; gap:10px; font-size:12.5px; padding:3px 0; border-bottom:1px solid #f1f5f9">'
+      + '<span style="color:#64748b">' + esc(r) + '</span><b style="text-align:right; overflow-wrap:anywhere">' + esc(v) + '</b></div>';
+  }
+
+  function blocoReceita(r){
+    if (!r) return '';
+    var h = '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin:8px 0">'
+      + '<div style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; margin-bottom:4px">Receita Federal'
+      + (r.consultadoEm ? ' · consultado em ' + esc(r.consultadoEm) : '') + (r.fonte ? ' · ' + esc(r.fonte) : '') + '</div>';
+    h += linha('Razão social', r.razaoSocial || '—');
+    if (r.nomeFantasia) h += linha('Nome fantasia', r.nomeFantasia);
+    if (r.situacao && r.situacao.status) h += linha('Situação', r.situacao.status);
+    if (r.aberturaEm) h += linha('Abertura', r.aberturaEm);
+    if (r.porte) h += linha('Porte', r.porte);
+    if (r.naturezaJuridica) h += linha('Natureza jurídica', r.naturezaJuridica);
+    if (r.cnaePrincipal && (r.cnaePrincipal.codigo || r.cnaePrincipal.descricao))
+      h += linha('CNAE principal', (r.cnaePrincipal.codigo||'') + ' ' + (r.cnaePrincipal.descricao||''));
+    if (r.endereco && r.endereco.municipio) h += linha('Cidade', r.endereco.municipio + (r.endereco.uf ? '/' + r.endereco.uf : ''));
+    if (r.capitalSocial) h += linha('Capital social', R$(r.capitalSocial));
+    if (r.qsa && r.qsa.length) h += linha('Sócios na Receita', r.qsa.map(function(s){ return s.nome; }).join(', '));
+    return h + '</div>';
+  }
+
+  function campoLink(id, rot, val, ph){
+    return '<label style="display:flex; flex-direction:column; gap:3px; font-size:11.5px; color:#475569; min-width:0">'
+      + '<span style="font-weight:700">' + rot + '</span>'
+      + '<input id="' + id + '" class="form-input" value="' + esc(val||'') + '" placeholder="' + esc(ph||'') + '" style="padding:6px 8px; font-size:13px; width:100%"></label>';
+  }
+
+  /* ---------------- a tela ---------------- */
+  function render(){
+    var m = el('modalHub'); if (!m) return;
+    var E = etapas();
+    var feitas = ['cadastro','apresentacao','numeros','contrato','analises'].filter(function(k){ return E[k].ok; }).length;
+    var proxima = !E.cadastro.ok ? 1 : !E.numeros.ok ? 3 : !E.apresentacao.ok ? 2 : !E.contrato.ok ? 4 : 5;
+
+    var h = '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px">'
+      + '<div><div style="font-size:18px; font-weight:800; color:#0f172a">🔬 ' + esc(H.nome || 'Empresa') + '</div>'
+      + '<div style="font-size:12.5px; color:#64748b">' + feitas + ' de 5 etapas · a IA lê os documentos, o sistema faz as contas</div></div>'
+      + '<button type="button" class="btn btn-outline" style="padding:5px 11px; font-size:12px" onclick="window.fecharHubEmpresa()">fechar</button></div>'
+      + '<div style="height:6px; background:#e2e8f0; border-radius:99px; margin:8px 0 16px; overflow:hidden">'
+      + '<div style="height:100%; width:' + (feitas*20) + '%; background:#4f46e5"></div></div>';
+
+    /* 1 · cadastro */
+    var base = camposDaBase(H.doc);
+    var corpo1 = '';
+    if (base.length){
+      corpo1 += '<div style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; margin-bottom:4px">O que a base já tem</div>';
+      base.forEach(function(x){ corpo1 += linha(x[0], x[1]); });
+    }
+    corpo1 += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-top:10px">'
+      + campoLink('hubCNPJ', 'CNPJ', E.cadastro.cnpj, '00.000.000/0000-00')
+      + campoLink('hubSite', 'Site', E.cadastro.links.site, 'empresa.com.br')
+      + campoLink('hubLinkedin', 'LinkedIn', E.cadastro.links.linkedin, 'linkedin.com/company/…')
+      + campoLink('hubInstagram', 'Instagram', E.cadastro.links.instagram, '@empresa')
+      + '</div>';
+    corpo1 += '<div style="margin-top:10px">'
+      + bt('🔎 Buscar na Receita', 'window.hubBuscarCNPJ()', !H.receita)
+      + bt('💾 Gravar no cadastro', 'window.hubGravarCadastro()', false)
+      + '<span id="hubStatus1" style="font-size:12px; margin-left:4px"></span></div>';
+    corpo1 += '<div id="hubReceita">' + blocoReceita(H.receita) + '</div>';
+    h += cartao(1, 'Cadastro', 'CNPJ, Receita Federal, site e redes. Sem IA.',
+      chip(E.cadastro.ok, 'completo', 'falta CNPJ ou site'), corpo1, proxima === 1);
+
+    /* 2 · apresentação */
+    var corpo2 = bt(E.apresentacao.ok ? '📇 Ver a apresentação' : '📇 Fazer a apresentação',
+      "window.hubAbrirApresentacao()", proxima === 2);
+    h += cartao(2, 'Apresentação', 'O que a empresa faz, onde atua, setor e serviços — pela internet, sem balanço. Prompt próprio.',
+      chip(E.apresentacao.ok, 'feita' + (E.apresentacao.em ? ' em ' + esc(E.apresentacao.em) : ''), 'pendente'), corpo2, proxima === 2);
+
+    /* 3 · números */
+    var N = E.numeros, corpo3 = '';
+    if (N.anos.length){
+      corpo3 += '<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px">'
+        + N.anos.map(function(r){
+            var parcial = num(r.periodoMeses) && r.periodoMeses < 12;
+            return '<div style="border:1px solid #e2e8f0; border-radius:9px; padding:6px 10px; background:#f8fafc; min-width:120px">'
+              + '<div style="font-weight:800; font-size:13px">' + esc(r.ano) + (parcial ? ' <span style="font-size:10.5px; color:#92400e">(' + r.periodoMeses + ' meses)</span>' : '') + '</div>'
+              + '<div style="font-size:11px; color:#64748b">receita ' + mi(num(r.receitaLiquida) != null ? r.receitaLiquida : r.receita) + '</div>'
+              + '<div style="font-size:11px; color:#64748b">lucro ' + mi(num(r.lucroLiquido) != null ? r.lucroLiquido : r.lucroLiq) + '</div>'
+              + '</div>'; }).join('')
+        + '</div>';
+    }
+    var novo = N.anos.length > 0;
+    corpo3 += '<ol style="margin:0 0 10px 18px; padding:0; font-size:12.5px; color:#334155; line-height:1.75">'
+      + '<li>' + (novo ? 'Copie o prompt de <b>ano novo</b> — ele já leva os números de ' + N.anos.map(function(r){ return r.ano; }).join(', ') + ' para a IA não refazer.' : 'Copie o prompt do balanço.') + '</li>'
+      + '<li>Numa conversa <b>nova</b> da IA: cole o prompt e anexe ' + (novo ? 'o balanço e a DRE do ano novo' : 'os balanços e as DREs') + '.</li>'
+      + '<li>Suba aqui o arquivo que voltar. A conferência mostra cada número antes de gravar.</li></ol>';
+    corpo3 += bt(novo ? '➕ Incluir ano novo — copiar o prompt' : '📋 Copiar o prompt do balanço', 'window.hubCopiarPromptFinanceiro()', proxima === 3)
+      + bt('📥 Subir o JSON da IA', "document.getElementById('hubArquivo').click()", false)
+      + bt('👁 Ver o prompt', 'window.hubVerPromptFinanceiro()', false)
+      + '<input type="file" id="hubArquivo" accept=".json,application/json,.txt" style="display:none" onchange="window.hubSubirArquivo(this)">'
+      + '<span id="hubStatus3" style="font-size:12px; margin-left:4px"></span>'
+      + '<textarea id="hubPromptTexto" readonly style="display:none; width:100%; height:220px; margin-top:8px; font-size:11.5px; font-family:monospace; border:1px solid #e2e8f0; border-radius:8px; padding:8px"></textarea>';
+    h += cartao(3, 'Números — balanço e DRE', 'Um prompt curto, só de números, com o plano de contas padrão. A IA transcreve; nenhuma análise.',
+      chip(N.ok, N.anos.length + (N.anos.length === 1 ? ' exercício' : ' exercícios'), 'nenhum ano'), corpo3, proxima === 3);
+
+    /* 4 · contrato social */
+    var corpo4 = '<div style="font-size:12.5px; color:#334155; line-height:1.6; margin-bottom:8px">O prompt próprio do contrato social chega na próxima versão. '
+      + 'Até lá, o contrato entra pelo <b>Consultor 360</b> completo (ele lê sócios, participação, nascimento e a cláusula de sucessão).</div>'
+      + bt('📖 Prompt Consultor 360', 'window.hubPromptCompleto()', false);
+    h += cartao(4, 'Contrato social', 'Sócios, participação, administração e sucessão.',
+      chip(E.contrato.ok, 'sócios lidos', 'pendente'), corpo4, proxima === 4);
+
+    /* 5 · análises */
+    var corpo5 = E.analises.ok
+      ? bt('📊 Abrir a análise', 'window.hubAbrirAnalise()', proxima === 5)
+        + '<div style="font-size:12px; color:#64748b; margin-top:2px">Indicadores, crédito, seguros e "se acontecesse" — tudo calculado pelo sistema a partir dos números gravados.</div>'
+      : '<div style="font-size:12.5px; color:#64748b">Libera quando houver pelo menos um exercício gravado.</div>';
+    h += cartao(5, 'Análises', 'O sistema calcula; a IA não entra aqui.', chip(E.analises.ok, 'disponível', 'aguardando números'), corpo5, proxima === 5);
+
+    el('hubCorpo').innerHTML = h;
+  }
+
+  function garantirModal(){
+    var m = el('modalHub');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'modalHub';
+    m.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:9000; '
+      + 'align-items:flex-start; justify-content:center; overflow-y:auto; padding:24px 12px';
+    m.innerHTML = '<div style="background:#f8fafc; border-radius:16px; width:100%; max-width:780px; padding:20px 18px; box-shadow:0 20px 50px rgba(0,0,0,.25)">'
+      + '<div id="hubCorpo"></div></div>';
+    m.addEventListener('click', function(e){ if (e.target === m) fechar(); });
+    document.body.appendChild(m);
+    return m;
+  }
+  function fechar(){ var m = el('modalHub'); if (m) m.style.display = 'none'; }
+
+  /* ---------------- abrir ---------------- */
+  window.abrirHubEmpresa = function(empresaId, nome){
+    var m = garantirModal();
+    H = { id: empresaId, nome: nome || '', doc:{}, anos:[], receita:null };
+    el('hubCorpo').innerHTML = '<div style="padding:30px; text-align:center; color:#64748b; font-size:13px">Carregando o que já existe…</div>';
+    m.style.display = 'flex';
+    return carregar().then(render).catch(function(e){
+      el('hubCorpo').innerHTML = '<div style="padding:20px; color:#b91c1c">Não consegui carregar: ' + esc(e && e.message || e) + '</div>';
+    });
+  };
+  window.fecharHubEmpresa = fechar;
+  window.recarregarHubEmpresa = function(){
+    if (!H.id || !el('modalHub') || el('modalHub').style.display === 'none') return Promise.resolve();
+    return carregar().then(render);
+  };
+
+  /* ---------------- ações da etapa 1 ---------------- */
+  function st(id, txt, cor){ var e = el(id); if (e){ e.style.color = cor || '#64748b'; e.innerHTML = txt; } }
+  window.hubBuscarCNPJ = function(){
+    var c = (el('hubCNPJ') || {}).value || '';
+    if (soDig(c).length !== 14){ st('hubStatus1', 'O CNPJ precisa ter 14 dígitos.', '#b91c1c'); return; }
+    if (typeof window.buscarCNPJ !== 'function'){ st('hubStatus1', 'Busca indisponível.', '#b91c1c'); return; }
+    st('hubStatus1', 'Consultando…');
+    return window.buscarCNPJ(c).then(function(r){
+      if (r && r.ok){
+        H.receita = r.receita;
+        if (r.receita && r.receita.cnpj && el('hubCNPJ')) el('hubCNPJ').value = r.receita.cnpj;
+        st('hubStatus1', 'Encontrado em ' + esc(r.fonte) + '. Clique em <b>Gravar no cadastro</b>.', '#15803d');
+        el('hubReceita').innerHTML = blocoReceita(H.receita);
+      } else {
+        st('hubStatus1', 'Não veio: ' + esc((r && r.motivo) || 'sem resposta') + '. Dá para seguir sem.', '#b45309');
+      }
+    });
+  };
+  window.hubGravarCadastro = function(){
+    var c = ((el('hubCNPJ') || {}).value || '').trim();
+    var links = Object.assign({}, (H.doc && H.doc.linksApresentacao) || {}, {
+      site: ((el('hubSite')||{}).value || '').trim(),
+      linkedin: ((el('hubLinkedin')||{}).value || '').trim(),
+      instagram: ((el('hubInstagram')||{}).value || '').trim()
+    });
+    /* só o que esta tela é dona: CNPJ, links e o retrato da Receita.
+       Nome, agência, gerente, campanha e pontos não são tocados. */
+    var up = { linksApresentacao: links };
+    if (c) up.cnpj = c;
+    if (H.receita){ up.dadosReceita = H.receita; up.dadosReceitaEm = new Date().toISOString().slice(0,10); }
+    st('hubStatus1', 'Gravando…');
+    return db.collection('empresas').doc(H.id).update(up).then(function(){
+      Object.assign(H.doc, up);
+      try { var ci = (typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id); if (ci && c) ci.cnpj = c; } catch(e){}
+      render(); st('hubStatus1', '✓ Gravado.', '#15803d');
+    }).catch(function(e){ st('hubStatus1', 'Não gravei: ' + esc(e && e.message || e), '#b91c1c'); });
+  };
+
+  /* ---------------- etapa 2 ---------------- */
+  window.hubAbrirApresentacao = function(){
+    fechar();
+    if (typeof window.abrirApresentacao === 'function') window.abrirApresentacao(H.id, H.nome);
+  };
+
+  /* ---------------- etapa 3 ---------------- */
+  function promptAtual(){
+    if (typeof window.montarPromptFinanceiro !== 'function') return '';
+    return window.montarPromptFinanceiro({
+      nome: H.nome, razaoSocial: (H.receita && H.receita.razaoSocial) || H.doc.razaoSocial || '',
+      cnpj: (H.doc && (H.doc.cnpj || H.doc.cnpjConsultor360)) || (H.receita && H.receita.cnpj) || '',
+      anos: H.anos
+    });
+  }
+  function copiar(t){
+    var ta = document.createElement('textarea'); ta.value = t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select(); var ok = false;
+    try { ok = document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta); return ok;
+  }
+  window.hubCopiarPromptFinanceiro = function(){
+    var t = promptAtual(); if (!t) return;
+    var ok = copiar(t);
+    window._HUB_ULTIMO_PROMPT = t;
+    st('hubStatus3', ok ? '✓ copiado (' + Math.round(t.length/1000) + ' mil caracteres) — cole numa conversa nova e anexe os documentos'
+                        : 'Não consegui copiar — use "Ver o prompt".', ok ? '#15803d' : '#b45309');
+    if (!ok) window.hubVerPromptFinanceiro();
+  };
+  window.hubVerPromptFinanceiro = function(){
+    var ta = el('hubPromptTexto'); if (!ta) return;
+    ta.value = promptAtual(); ta.style.display = ta.style.display === 'none' ? 'block' : 'none';
+    if (ta.style.display === 'block') ta.select();
+  };
+  window.hubSubirArquivo = function(inp){
+    var f = inp && inp.files && inp.files[0]; if (!f) return;
+    inp.value = '';
+    fechar();
+    var abrir = (typeof window.abrirModalEdicao === 'function') ? window.abrirModalEdicao(H.id, null, null) : Promise.resolve();
+    return Promise.resolve(abrir).then(function(){
+      if (typeof window.carregarJSONFinanceiro === 'function') window.carregarJSONFinanceiro(f);
+    });
+  };
+
+  /* ---------------- etapas 4 e 5 ---------------- */
+  window.hubPromptCompleto = function(){
+    var m = el('modalPrompt'), ta = el('promptTexto');
+    if (!m || !ta) return;
+    ta.value = (typeof PROMPT_CONSULTOR360 !== 'undefined' && PROMPT_CONSULTOR360) ? PROMPT_CONSULTOR360 : (window.PROMPT_CONSULTOR360 || '');
+    m.style.zIndex = '9500';      /* por cima desta tela */
+    m.style.display = 'flex';
+  };
+  window.hubAbrirAnalise = function(){
+    fechar();
+    if (typeof window.abrirModalDetalhes === 'function') window.abrirModalDetalhes(H.id);
+  };
+
+  window._HUB = function(){ return H; };
+})();
 
 
 /* ===================================================================
@@ -38831,7 +39400,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   /* chaves que não são campo financeiro e não devem ser varridas */
   var IGNORAR = ['meta','travas','bancos','ajustesliquidez','sociosir','outrosdetalhe','contexto',
     'parecer','seguros','informacoes','apolices','garantias','empresa','periodos','formato','versao',
-    'geradoem','documentoslidos','observacoes','fontes','notas'];
+    'geradoem','documentoslidos','observacoes','fontes','notas',
+    /* v78: o prompt só de números devolve isto por período — não é campo */
+    'naoalocado','conferencia','duvidas','tipo'];
 
   /* ---------------------------------------------------------------
      O índice reverso: sinônimo normalizado → id canônico.
