@@ -3725,6 +3725,15 @@
         /* v68: refazer a análise DESTA empresa. O escopo "só de uma empresa" já
            existia no modal de limpeza desde a v61, mas morava no painel geral —
            longe de onde a dúvida nasce, que é aqui dentro. */
+        /* v82: os registros vazios, com o botão de apagar */
+        (data.anosVazios || []).forEach(v => {
+          html += `<div class="ano-chip" style="border-color:#fde68a; background:#fffbeb; color:#92400e"
+                      title="Este registro não tem receita, lucro, ativo nem patrimônio. Provavelmente foi salvo com o formulário em branco. Clique para apagar."
+                      onclick="window.excluirExercicioVazio('${empId}', '${v.docId}', ${Number(v.ano)||0})">
+                    <span class="ano-num">${v.ano}</span>
+                    <span class="ano-tag">vazio · apagar</span>
+                  </div>`;
+        });
         html += `<div class="ano-chip add" style="border-color:#fecaca; color:#b91c1c"
                     title="Apaga os exercícios desta empresa para rodar a análise de novo. A empresa continua cadastrada."
                     onclick="window.refazerAnaliseDesta && window.refazerAnaliseDesta('${empId}')">
@@ -3919,6 +3928,7 @@
           { manterAusentes: MANTER_AUSENTES, temOpcaoManter: EXERCICIOS.some(e => e.jaExiste && e.completo) });
       }
       window.gravarPacoteConferido = () => importarTodos();
+      window.anosImportadosNestaAbertura = () => Object.keys(IMPORTADOS || {});
       /* v78: a tela 🔬 Analisar sobe o arquivo direto, sem passar pelo botão */
       window.carregarJSONFinanceiro = (file) => carregarArquivo(file);
       /* v77: abrir outra empresa (ou lançar do zero) zera o importador inteiro */
@@ -5048,8 +5058,12 @@ async function carregarMaisRecenteViaEmpresas(){
                 const ax = Number((x.data()||{}).ano), ay = Number((y.data()||{}).ano);
                 return (isFinite(ay)?ay:-Infinity) - (isFinite(ax)?ax:-Infinity);
               });
-              const finDoc = ordenados[0];
+              /* v82: o mais recente COM NÚMEROS. Um registro vazio (2026 em branco
+                 salvo por engano) não pode esconder 2023–2025 atrás de R$ 0. */
+              const vazios = ordenados.filter(x => exercicioVazio(x.data()||{})).map(x => ({ docId: x.id, ano: Number((x.data()||{}).ano) }));
+              const finDoc = ordenados.find(x => !exercicioVazio(x.data()||{})) || ordenados[0];
               const fd = finDoc.data() || {};
+              fd.anosVazios = vazios.filter(v => v.docId !== finDoc.id);
               console.log(`[OK] ${nomeEmpresa} - Ano: ${fd.ano}`);
               return {
                 empresaId: empId, 
@@ -5607,7 +5621,9 @@ function renderTabela(arr){
           <div style="font-weight:600">${escapeHtml(row.nome)}</div>
           ${CTX.perfil === 'admin' && row.rmNome ? `<div style="font-size:11px; color:var(--text-muted)">👤 ${escapeHtml(row.rmNome)}</div>` : ''}
         </td>
-        <td>${row.ano || "—"}</td>
+        <td>${row.ano || "—"}${(Array.isArray(row.anosVazios) && row.anosVazios.length)
+          ? row.anosVazios.map(v => `<div style="font-size:10px; color:#92400e; cursor:pointer; white-space:nowrap" title="Registro de ${v.ano} sem número nenhum — clique para apagar"
+                onclick="event.stopPropagation(); window.excluirExercicioVazio('${row.empresaId}', '${v.docId}', ${Number(v.ano)||0})">${v.ano} vazio · apagar</div>`).join('') : ''}</td>
         <td>
           <div style="display:flex; align-items:center; gap:8px">
             ${_quebrado
@@ -6089,6 +6105,34 @@ function criarIndicadoresVazios(){
 }
 
 // ================== SISTEMA DE SCORING ==================
+/* v82: um exercício sem receita, lucro, ativo e PL não é um exercício — é um
+   registro vazio. Não pode ser o "mais recente", não pontua e não analisa. */
+function exercicioVazio(d){
+  if (!d) return true;
+  const n = v => { const x = Number(v); return (isFinite(x) ? x : 0); };
+  return !(n(d.receitaLiquida) || n(d.receita) || n(d.receitaBruta) || n(d.lucroLiquido) || n(d.lucroLiq)
+        || n(d.ativoTotal) || n(d.ativo) || n(d.patrimonioLiquido) || n(d.pl) || n(d.ebitda) || n(d.ebit));
+}
+window.exercicioVazio = exercicioVazio;
+
+/* v82: apagar um exercício vazio — só o vazio; um ano com número não passa por aqui */
+window.excluirExercicioVazio = async function(empresaId, docId, ano){
+  if (!empresaId || !docId) return;
+  try{
+    const ref = db.collection('empresas').doc(empresaId).collection('financeiro').doc(docId);
+    const s = await ref.get();
+    const d = (s && s.exists) ? (s.data()||{}) : null;
+    if (!d){ mostrarErro('Esse registro já não existe.'); return; }
+    if (!exercicioVazio(d)){ mostrarErro('O exercício de ' + ano + ' tem números — não é um registro vazio. Use "Refazer análise" se quiser apagá-lo.'); return; }
+    if (!confirm('Apagar o registro vazio de ' + ano + ' desta empresa? Ele não tem receita, lucro, ativo nem patrimônio.')) return;
+    await ref.delete();
+    mostrarInfo('Registro vazio de ' + ano + ' apagado.');
+    if (typeof carregarGrid === 'function') carregarGrid();
+    const det = document.getElementById('modalDet');
+    if (det && det.style.display !== 'none' && typeof abrirModalDetalhes === 'function') abrirModalDetalhes(empresaId);
+  }catch(e){ console.error(e); mostrarErro('Não consegui apagar: ' + (e && e.message || e)); }
+};
+
 function calcularScore(calc){
   let pontos = 0;
   let max = 0;
@@ -6588,6 +6632,19 @@ async function salvarFinanceiro(){
   let dados;
   try{ dados = coletarDadosFormulario(ano); }
   catch(e){ console.error(e); mostrarErro("Erro ao ler o formulário: "+e.message); if(btnSalvar){btnSalvar.disabled=false; btnSalvar.textContent="💾 Salvar Dados";} return; }
+
+  /* v82: formulário vazio não vira exercício. O caso real: a importação pela
+     conferência gravou 2023–2025, o formulário continuou mostrando "2026" em
+     branco, e um clique em Salvar criou um 2026 com tudo zero — que virou o
+     "ano mais recente" na lista e na análise, com score 100 e receita R$ 0. */
+  if (typeof window.exercicioVazio === 'function' && window.exercicioVazio(dados)){
+    const _anosImp = (typeof window.anosImportadosNestaAbertura === 'function') ? window.anosImportadosNestaAbertura() : [];
+    const _imp = _anosImp.length
+      ? ' Os exercícios do arquivo (' + _anosImp.join(', ') + ') já foram gravados pela conferência — este formulário não precisa ser salvo.' : '';
+    mostrarErro('Nada para gravar: o formulário de ' + ano + ' está vazio (sem receita, lucro, ativo nem patrimônio).' + _imp);
+    if(btnSalvar){ btnSalvar.disabled=false; btnSalvar.textContent="💾 Salvar Dados"; }
+    return;
+  }
 
   /* v74: a mesma trava do import vale para quem digita. Não existe porta
      do sistema por onde um lucro maior que a receita entre no banco. */
@@ -7123,6 +7180,11 @@ async function abrirModalDetalhes(empresaId){
     /* v43: ano vira número e a ordenação acontece aqui. Documento com ano ausente
        ou em texto deixa de desaparecer — vai para o fim e fica visível para conserto. */
     rows.forEach(r=>{ const a = Number(r.ano); r.ano = (isFinite(a) && a) ? a : r.ano; });
+    /* v82: registro vazio fica fora da análise (e é apontado na linha do tempo) */
+    const anosVazios = rows.filter(r => exercicioVazio(r)).map(r => ({ ano: r.ano, docId: r.docId }));
+    if (anosVazios.length && anosVazios.length < rows.length){
+      for (let i = rows.length - 1; i >= 0; i--) if (exercicioVazio(rows[i])) rows.splice(i, 1);
+    }
     rows.sort((x,y)=>{
       const ax = Number(x.ano), ay = Number(y.ano);
       const vx = isFinite(ax) ? ax : -Infinity, vy = isFinite(ay) ? ay : -Infinity;
@@ -7149,6 +7211,7 @@ async function abrirModalDetalhes(empresaId){
       /* v49: o cadastro da empresa no raio-x vai junto. E de la que sai o numero
          de funcionarios quando o balanco nao traz, e o que ja esta vendido. */
       empresaDoc: info,
+      anosVazios: anosVazios,
       rows: rowsCalc
     };
     /* v38: o espelho em window ficava preso no valor inicial (null), porque so
