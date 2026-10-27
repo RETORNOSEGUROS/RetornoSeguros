@@ -3218,6 +3218,8 @@
           </div>
           <div class="anos-timeline" id="anosTimeline"></div>
         </div>
+        <!-- v83: o que a análise está usando, e o exportar -->
+        <div id="docsAnalise" style="display:none; margin-bottom:14px"></div>
         <!-- v72: as travas duras aparecem antes de qualquer indicador -->
         <div id="travasDurasAnalise" style="display:none; margin-bottom:18px"></div>
         <!-- Sistema de Abas -->
@@ -7222,6 +7224,8 @@ async function abrirModalDetalhes(empresaId){
     /* v71: o botão da apresentação diz se já existe uma */
     try { if (typeof window.atualizarBotaoApresentacao === 'function')
             window.atualizarBotaoApresentacao(); } catch(e){}
+    /* v83: o painel de documentos da análise */
+    try { if (typeof window.painelDocumentosAnalise === 'function') window.painelDocumentosAnalise(CURRENT_ANALYSIS_DATA); } catch(e){}
 
     /* ================================================================
        v72: A REGRA 2 NA TELA.
@@ -19818,14 +19822,21 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     /* v80: veículos saem do valor em risco do patrimonial — vão no seguro de frota,
        que tem item próprio abaixo. É a mesma conta do "Se acontecesse", para a tela
        não mostrar dois números para o mesmo LMI. */
-    var valorEmRisco = imoveis + instalac + maquinas + informat + ferram + moveis + estoques;
+    /* v83: linhas abertas que não somam o total do imobilizado — a diferença é
+       bem que existe (moldes, benfeitorias em imóveis de terceiros...) e entra
+       como "demais bens", pelo total do documento. Obras em andamento ficam
+       fora do valor em risco do patrimonial (vão no risco de engenharia). */
+    var _somaLinhas = imoveis + instalac + maquinas + informat + ferram + moveis + veiculos + software + n(a.obrasAndamento);
+    var _totalImob = n(a.imobilizado) > 0 ? n(a.imobilizado) : 0;
+    var demaisBens = (_somaLinhas > 0 && _totalImob > _somaLinhas * 1.02) ? _totalImob - _somaLinhas : 0;
+    var valorEmRisco = imoveis + instalac + maquinas + informat + ferram + moveis + demaisBens + estoques;
     if (!(imoveis + instalac + maquinas + informat + ferram + veiculos + moveis) && imobiliz > 0) valorEmRisco = imobiliz + estoques;
     if (valorEmRisco > 0){
       var premioEsperado = valorEmRisco * 0.0022;   // 0,22% a.a. e a media de patrimonial industrial
       contas.patrimonial = {
         valorEmRisco: valorEmRisco, premioEsperado: premioEsperado, premioInformado: premio,
         detalhe: { imoveis:imoveis, instalacoes:instalac, maquinas:maquinas, informatica:informat, ferramentas:ferram,
-                   veiculos:veiculos, moveis:moveis, estoques:estoques, softwareFora:software },
+                   veiculos:veiculos, moveis:moveis, estoques:estoques, softwareFora:software, demaisBens:demaisBens },
         explicacao: [
           'Valor em risco: ' + [
               imoveis  ? 'imóveis ' + R$(imoveis) : '',
@@ -19834,6 +19845,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
               informat ? 'informática ' + R$(informat) : '',
               ferram   ? 'ferramentas ' + R$(ferram) : '',
               moveis   ? 'móveis e utensílios ' + R$(moveis) : '',
+              demaisBens ? 'demais bens do imobilizado não abertos por linha ' + R$(demaisBens) : '',
               (!(imoveis+instalac+maquinas+informat+ferram+veiculos+moveis) && imobiliz > 0) ? 'imobilizado (sem abertura) ' + R$(imobiliz) : '',
               'estoques ' + R$(estoques)
             ].filter(Boolean).join(' + ') + ' = ' + R$(valorEmRisco) + '.' +
@@ -20403,7 +20415,31 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
           rendaTributavel: rendaTrib, dividas: n(d.dividasOnus),
           planoSaude: n(d.planoSaudeDeduzido), dependentes: n(d.dependentes),
           tetoPGBL: tetoPGBL, espacoPGBL: espacoPGBL, economiaIR: economiaIR,
-          fonte: d.fonte || ''
+          rendaIsenta: n(d.rendimentosIsentos), seguroVida: d.seguroVidaDeclarado || '',
+          fonte: d.fonte || '',
+          /* v83: o que cada linha da declaração significa em seguro — com o número dela */
+          leituras: (function(){
+            var L = [];
+            var rendaMes = (rendaTrib + n(d.rendimentosIsentos)) / 12;
+            if (n(d.dependentes) > 0)
+              L.push({ produto:'Vida individual', texto: n(d.dependentes) + ' dependente(s) na declaração'
+                + (rendaMes > 0 ? ' e renda de ' + R$(rendaMes) + ' por mês. Dez anos dessa renda são ' + R$(rendaMes * 120) + ' — é o capital que mantém a família sem o sócio.' : '.')
+                + (d.seguroVidaDeclarado ? ' Seguro declarado: ' + d.seguroVidaDeclarado + '.' : ' A declaração não mostra seguro de vida.') });
+            if (n(d.planoSaudeDeduzido) > 0)
+              L.push({ produto:'Saúde empresarial', texto:'Paga ' + R$(n(d.planoSaudeDeduzido)) + ' por ano de plano de saúde do próprio bolso. No plano da empresa (lucro real) a despesa é dedutível na PJ e sai do pró-labore.' });
+            if (n(d.imoveis) > 0)
+              L.push({ produto:'Residencial', texto: R$(n(d.imoveis)) + ' em imóveis declarados (valor de aquisição — o de mercado costuma ser maior). Conferir se há seguro residencial com RC familiar.' });
+            if (n(d.veiculos) > 0)
+              L.push({ produto:'Automóvel', texto: R$(n(d.veiculos)) + ' em veículos. Conferir apólice e se o RCF cobre danos a terceiros em valor compatível com o patrimônio.' });
+            if (liquido + previdencia > 0)
+              L.push({ produto:'Previdência / investimentos', texto: R$(liquido) + ' em aplicações e ' + R$(previdencia) + ' em previdência'
+                + (espacoPGBL > 0 ? '. Sobram ' + R$(espacoPGBL) + ' de espaço de PGBL (12% da renda tributável), que devolvem ' + R$(economiaIR) + ' de IR por ano.' : '. O limite de 12% em PGBL já está usado.') });
+            if (n(d.dividasOnus) > 0)
+              L.push({ produto:'Vida (quitação de dívidas)', texto:'Dívidas e ônus de ' + R$(n(d.dividasOnus)) + ' na pessoa física. Sem o sócio, a família herda a dívida junto com os bens.' });
+            if (n(d.lucrosDistribuidosRecebidos) > 0)
+              L.push({ produto:'Destino do lucro', texto:'Recebeu ' + R$(n(d.lucrosDistribuidosRecebidos)) + ' em lucros da empresa no ano. É a renda que a sucessão precisa repor — e a base de uma previdência com aporte anual.' });
+            return L;
+          })()
         };
       });
       var somaEspaco = fichas.reduce(function(t,f){ return t + f.economiaIR; }, 0);
@@ -21774,6 +21810,22 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
         }
         if (f.planoSaude > 0){
           htmlSocios += '<div class="seg-linha">Deduziu '+R$(f.planoSaude)+' de plano de saúde — paga do próprio bolso.</div>';
+        }
+        if (f.dependentes > 0 || f.dividas > 0 || f.rendaIsenta > 0){
+          htmlSocios += '<div class="seg-linha">'
+            + (f.dependentes > 0 ? '<b>'+f.dependentes+'</b> dependente(s)' : '')
+            + (f.dependentes > 0 && (f.dividas > 0 || f.rendaIsenta > 0) ? ' · ' : '')
+            + (f.rendaIsenta > 0 ? 'renda isenta <b>'+R$(f.rendaIsenta)+'</b>' : '')
+            + (f.rendaIsenta > 0 && f.dividas > 0 ? ' · ' : '')
+            + (f.dividas > 0 ? 'dívidas e ônus <b>'+R$(f.dividas)+'</b>' : '')
+            + '</div>';
+        }
+        /* v83: o que vira seguro, linha a linha da declaração */
+        if (Array.isArray(f.leituras) && f.leituras.length){
+          htmlSocios += '<div style="margin-top:8px; font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.3px">O que vira conversa de seguro</div>'
+            + '<ul style="margin:4px 0 0 16px; padding:0; font-size:12.5px; line-height:1.6">'
+            + f.leituras.map(function(l){ return '<li><b>'+esc(l.produto)+':</b> '+esc(l.texto)+'</li>'; }).join('')
+            + '</ul>';
         }
         if (f.fonte) htmlSocios += '<div class="seg-socio-f">'+esc(f.fonte)+'</div>';
         htmlSocios += '</div>';
@@ -24646,6 +24698,10 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       ['Ferramentas', n(a.valorFerramentas)],
       ['Equipamentos de informática', n(a.valorInformatica)],
       ['Móveis e utensílios', n(a.valorMoveis)],
+      ['Demais bens do imobilizado (não abertos por linha)', (function(){
+        var soma = n(a.valorImoveis)+n(a.valorInstalacoes)+n(a.valorMaquinas)+n(a.valorFerramentas)+n(a.valorInformatica)
+                 + n(a.valorMoveis)+n(a.valorVeiculos)+n(a.valorSoftware)+n(a.obrasAndamento);
+        return (soma > 0 && n(a.imobilizado) > soma * 1.02) ? n(a.imobilizado) - soma : 0; })()],
       ['Estoques', n(a.estoques)]
     ].filter(function(x){ return x[1] > 0; });
     var aberto = itens.some(function(x){ return x[0] !== 'Estoques'; });
@@ -24656,6 +24712,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var fora = [];
     if (n(a.valorVeiculos)) fora.push('veículos (' + R$(n(a.valorVeiculos)) + ') vão no seguro de frota');
     if (n(a.valorSoftware)) fora.push('software (' + R$(n(a.valorSoftware)) + ') não é bem físico');
+    if (n(a.obrasAndamento)) fora.push('obras em andamento (' + R$(n(a.obrasAndamento)) + ') vão no risco de engenharia');
 
     var contratado = P.lmiEmpresarialContratado > 0 ? P.lmiEmpresarialContratado
                    : (apolice && apolice.lmi > 0 ? apolice.lmi : 0);
@@ -26545,6 +26602,137 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   };
 
   window._HUB = function(){ return H; };
+})();
+/* ===================================================================
+   v83 — O PAINEL DE DOCUMENTOS E O EXPORTAR DA ANÁLISE
+
+   1. painelDocumentosAnalise(): no topo da análise, o que foi lido em
+      cada etapa (números, contrato, apólices, IR, parecer) e onde cada
+      um aparece — para o corretor não precisar adivinhar a aba.
+
+   2. exportarAnaliseJSON(): um arquivo com TUDO que o sistema leu e
+      tudo que calculou para esta empresa — exercícios com indicadores,
+      documentos gravados, mapa de seguros, "se acontecesse", pessoa-
+      chave, D&O, garantia, dental, o resumo do sistema e as travas.
+      É o que se manda para conferir se a conta está certa.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+
+  function docsDaEmpresa(D){
+    var e = (D && D.empresaDoc) || {};
+    return {
+      contrato: e.contratoSocial || null,
+      apolices: Array.isArray(e.apolicesEmpresa) ? e.apolicesEmpresa : (Array.isArray(e.apolices) ? e.apolices : null),
+      ir: Array.isArray(e.sociosIR) ? e.sociosIR : null,
+      parecer: e.parecerFinal || null,
+      apresentacao: e.apresentacao || null,
+      receita: e.dadosReceita || null
+    };
+  }
+
+  function painelDocumentosAnalise(D){
+    var alvo = document.getElementById('docsAnalise');
+    if (!alvo) return;
+    D = D || window.CURRENT_ANALYSIS_DATA;
+    if (!D || !D.rows || !D.rows.length){ alvo.style.display = 'none'; return; }
+    var X = docsDaEmpresa(D);
+    var anos = D.rows.map(function(r){ return r.ano; }).sort();
+    var itens = [
+      { ok: true, nome: 'Números', detalhe: anos.length + ' exercício(s): ' + anos.join(', '), onde: 'Dashboard, Diagnóstico, DRE e Balanço, Capacidade de Pagamento' },
+      { ok: !!X.apresentacao, nome: 'Apresentação', detalhe: X.apresentacao ? 'gravada' : 'não feita', onde: 'botão 📇 Apresentação, acima' },
+      { ok: !!X.contrato, nome: 'Contrato social', detalhe: X.contrato ? ((X.contrato.socios||[]).length + ' sócio(s) · lido em ' + (X.contrato.lidoEm||'')) : 'não lido', onde: 'Parecer 360 (ficha e cláusulas) · Seguros (pessoa-chave e "se acontecesse")' },
+      { ok: !!(X.apolices && X.apolices.length), nome: 'Apólices', detalhe: X.apolices && X.apolices.length ? X.apolices.length + ' apólice(s)' : 'não lidas', onde: 'Parecer 360 (achados) · Seguros (LMI contratado no "se acontecesse")' },
+      { ok: !!(X.ir && X.ir.length), nome: 'IR dos sócios', detalhe: X.ir && X.ir.length ? X.ir.length + ' declaração(ões)' : 'não lido', onde: 'Seguros → "Os sócios, pessoa física (do IR)"' },
+      { ok: !!(X.parecer && X.parecer.parecer), nome: 'Parecer final', detalhe: X.parecer && X.parecer.parecer ? 'escrito em ' + (X.parecer.lidoEm||'') : 'não feito', onde: 'Parecer 360 (resumo, pontos, roteiro e carta)' }
+    ];
+    var h = '<details style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px">'
+      + '<summary style="cursor:pointer; font-size:12px; font-weight:700; color:#334155">📂 O que esta análise está usando — '
+      + itens.filter(function(i){ return i.ok; }).length + ' de ' + itens.length + ' fontes · clique para ver onde cada uma aparece</summary>'
+      + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:8px; margin-top:10px">'
+      + itens.map(function(i){
+          return '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px">'
+            + '<div style="font-size:12.5px; font-weight:700; color:' + (i.ok ? '#166534' : '#92400e') + '">' + (i.ok ? '✓ ' : '· ') + esc(i.nome) + '</div>'
+            + '<div style="font-size:11.5px; color:#475569">' + esc(i.detalhe) + '</div>'
+            + '<div style="font-size:11px; color:#64748b; margin-top:3px">Aparece em: ' + esc(i.onde) + '</div></div>';
+        }).join('')
+      + '</div>'
+      + '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">'
+      + '<button type="button" class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" onclick="window.exportarAnaliseJSON()">⬇ Exportar tudo (JSON)</button>'
+      + '<span style="font-size:11px; color:#64748b">O arquivo traz o que o sistema leu e cada conta que fez — serve para conferir a análise fora do sistema.</span>'
+      + '<span id="exportStatus" style="font-size:11.5px"></span></div>'
+      + '</details>';
+    alvo.innerHTML = h; alvo.style.display = 'block';
+  }
+
+  /* o que o sistema calcula, módulo a módulo, sem derrubar o export se um falhar */
+  function calcularTudo(D){
+    var a = D.rows[0], rows = D.rows, out = {};
+    var mods = {
+      seguros: function(){ return window.calcularInteligenciaSeguros(a, rows, D); },
+      seAcontecesse: function(){ return window.analisarImpacto(a, rows, D); },
+      pessoaChave: function(){ return window.analisarPessoaChave(a, rows, D); },
+      dAndO: function(){ return window.analisarDO(a, rows, D); },
+      garantia: function(){ return window.analisarGarantia(a, rows, D); },
+      dental: function(){ return window.analisarDental(a, rows, D); },
+      cenarios: function(){ return window.simularCenarios(a, rows, D); },
+      consistencia: function(){ return window.analisarConsistencia(a, rows, D); },
+      macro: function(){ return window.analisarMacro(a, rows, D); },
+      stress: function(){ return window.analisarStress(a, rows, D); },
+      caixa: function(){ return window.analisarCaixa(a, rows, D); },
+      scores: function(){ return window.analisarScores(a, rows, D); },
+      raiox: function(){ return window.analisarRaioX ? window.analisarRaioX(a, rows, D) : null; },
+      racional: function(){ return window.analisarRacional ? window.analisarRacional(a, rows, D) : null; },
+      apolicesConfronto: function(){ var X = docsDaEmpresa(D); return X.apolices ? window.analisarApolices(X.apolices, a) : null; }
+    };
+    Object.keys(mods).forEach(function(k){
+      try { var fn = mods[k]; out[k] = fn(); } catch(e){ out[k] = { erro: String(e && e.message || e) }; }
+    });
+    try { out.resumoDoSistema = window.montarResumoSistema(D).texto; } catch(e){ out.resumoDoSistema = null; }
+    try { out.travasPorAno = rows.map(function(r){ return { ano: r.ano, travas: window.travasDuras(r) }; }); } catch(e){}
+    return out;
+  }
+
+  function exportarAnaliseJSON(){
+    var D = window.CURRENT_ANALYSIS_DATA;
+    var st = document.getElementById('exportStatus');
+    if (!D || !D.rows || !D.rows.length){ if (st) st.textContent = 'Abra a análise de uma empresa primeiro.'; return null; }
+    var X = docsDaEmpresa(D);
+    var pacote = {
+      tipo: 'analise-exportada', formato: 'corporate-one-analise-export', versao: 1,
+      geradoEm: new Date().toISOString(),
+      empresa: { id: D.empresaId, nome: D.empresaNome, cnpj: (D.empresaDoc && D.empresaDoc.cnpj) || '', setor: D.setor,
+                 funcionarios: (D.empresaDoc && D.empresaDoc.funcionarios) || null },
+      contemDadosPessoais: !!(X.ir && X.ir.length),
+      oQueOSistemaLeu: {
+        exercicios: D.rows.map(function(r){ var c = {}; Object.keys(r).forEach(function(k){ if (k !== 'parecer') c[k] = r[k]; }); return c; }),
+        anosVazios: D.anosVazios || [],
+        contratoSocial: X.contrato, apolices: X.apolices, sociosIR: X.ir, parecerFinal: X.parecer,
+        apresentacao: X.apresentacao, receitaFederal: X.receita,
+        parecerDeLeitura: (D.rows.filter(function(r){ return r.parecer; })[0] || {}).parecer || null
+      },
+      oQueOSistemaCalculou: calcularTudo(D),
+      premissas: { impacto: window._P_IMPACTO || null, pessoaChave: window._P_PESSOACHAVE || null, dental: window._PARAM_DENTAL || null,
+                   garantia: window._P_GARANTIA || null, cenarios: window._P_CENARIOS || null, referencias: window._credREF || null }
+    };
+    var txt = JSON.stringify(pacote, function(k, v){ return (typeof v === 'number' && !isFinite(v)) ? null : v; }, 1);
+    var nome = String(D.empresaNome || 'EMPRESA').replace(/[^A-Za-z0-9]+/g, '_').toUpperCase() + '_analise_export.json';
+    try {
+      var blob = new Blob([txt], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var aEl = document.createElement('a'); aEl.href = url; aEl.download = nome; document.body.appendChild(aEl); aEl.click();
+      setTimeout(function(){ document.body.removeChild(aEl); URL.revokeObjectURL(url); }, 500);
+      if (st){ st.style.color = '#15803d'; st.textContent = '✓ ' + nome + ' (' + Math.round(txt.length / 1024) + ' KB)'; }
+    } catch(e){ if (st){ st.style.color = '#b91c1c'; st.textContent = 'Não consegui baixar: ' + (e && e.message || e); } }
+    window._ULTIMO_EXPORT = pacote;
+    return pacote;
+  }
+
+  window.painelDocumentosAnalise = painelDocumentosAnalise;
+  window.exportarAnaliseJSON = exportarAnaliseJSON;
+  window._docsDaEmpresa = docsDaEmpresa;
 })();
 
 
@@ -41202,8 +41390,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           est('As linhas do imobilizado não somam o total',
             achou + ' linhas abertas somam ' + R$(somaL) + ' contra imobilizado de ' + R$(imob)
             + ' — diferença de ' + R$(dif) + '.',
-            'Falta alguma linha (terrenos, obras, benfeitorias) ou uma delas veio de outro ano. '
-            + 'O seguro patrimonial usa as linhas: confira antes de dimensionar o LMI.',
+            'Normalmente é uma classe que a nota traz e não tem linha própria (moldes, benfeitorias em imóveis '
+            + 'de terceiros, terrenos). Nada a fazer agora: o seguro patrimonial conta a diferença como '
+            + '"demais bens", pelo total do documento. Se quiser a abertura exata, peça a nota do imobilizado.',
             linhas.concat(['imobilizado']));
       }
     }
