@@ -4344,7 +4344,8 @@
               const _tipo = String((j && j.tipo) || '').toLowerCase(), _fmt = String((j && j.formato) || '').toLowerCase();
               let _errado = null;
               if (/apresenta/.test(_tipo + ' ' + _fmt)) _errado = 'a <b>apresentação</b> da empresa. Ela entra em 📇 Apresentação (ou na etapa 2 de 🔬 Analisar), não aqui';
-              else if (/contrato/.test(_tipo + ' ' + _fmt)) _errado = 'o <b>contrato social</b>. Ele entra na etapa do contrato, não aqui';
+              else if (/contrato/.test(_tipo + ' ' + _fmt)) _errado = 'o <b>contrato social</b>. Ele entra em 🔬 Analisar → etapa 4, não aqui';
+              else if (/apolic|ap[oó]lic/.test(_tipo + ' ' + _fmt)) _errado = 'das <b>apólices</b>. Elas entram em 🔬 Analisar → etapa 5, não aqui';
               else if (_tipo && _tipo !== 'financeiro' && !/consultor360/.test(_fmt)) _errado = 'do tipo <b>' + escapeHtml(_tipo) + '</b>, não de números';
               if (_errado){
                 const _p = $('jsonImportPanel'); if(_p) _p.style.display = 'block';
@@ -7030,14 +7031,19 @@ async function abrirModalDetalhes(empresaId){
   /* v71: a apresentação é pesada e só serve aqui dentro, então ela não viaja
      no cache da lista — é lida uma vez, quando a análise abre, e só de quem
      tem uma. Se a leitura falhar, o briefing simplesmente sai sem ela. */
-  if(info.temApresentacao && !info.apresentacao){
+  /* v79: o contrato social e as apólices moram no cadastro da empresa
+     (etapas 4 e 5 de 🔬 Analisar). São lidos aqui, uma vez por abertura. */
+  if(!info._docLido){
     try{
       const snap = await db.collection("empresas").doc(empresaId).get();
       const d = (snap && snap.exists) ? (snap.data()||{}) : {};
       info.apresentacao = d.apresentacao || null;
       info.linksApresentacao = d.linksApresentacao || null;
+      info.contratoSocial = d.contratoSocial || null;
+      info.apolicesEmpresa = Array.isArray(d.apolices) ? d.apolices : null;
+      info._docLido = true;
       EMPRESAS_CACHE.set(empresaId, info);
-    }catch(e){ console.warn("[v71] apresentação não carregou:", e && e.message); }
+    }catch(e){ console.warn("[v79] cadastro da empresa não carregou:", e && e.message); }
   }
 
   // Resetar para aba Dashboard
@@ -7088,6 +7094,11 @@ async function abrirModalDetalhes(empresaId){
       return vy - vx;
     });
 
+    /* v79: contrato e apólices entram onde os módulos sempre leram (em memória) */
+    try{
+      if(typeof window.aplicarDocumentosDaEmpresa === 'function' && (info.contratoSocial || info.apolicesEmpresa))
+        window.aplicarDocumentosDaEmpresa(rows, { contratoSocial: info.contratoSocial, apolices: info.apolicesEmpresa });
+    }catch(e){ console.warn('[v79] documentos da empresa', e); }
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
     
     // Detectar setor mais recente ou usar default
@@ -7356,6 +7367,7 @@ function renderParecer360(data){
     const c = P.contrato;
     h += sec('📜 Contrato social — o que pesa na análise', `
       ${c.clausulas? '<div style="font-weight:600; margin-bottom:4px">Cláusulas relevantes</div>'+lista(c.clausulas, k=>`<li><b>${esc(k.clausula||'')}</b>: ${esc(k.texto||'')}${k.implicacao? ' <span style="color:#b45309">→ '+esc(k.implicacao)+'</span>':''}</li>`):''}
+      ${(Array.isArray(c.mudancas) && c.mudancas.length)? '<div style="font-weight:600; margin:10px 0 4px">O que as alterações mudaram</div>'+lista(c.mudancas, m=>`<li>${esc(m.data||'')} ${esc(m.alteracao||'')}: ${esc(m.oque||'')}${m.antes||m.depois? ' <span style="color:#64748b">(antes: '+esc(m.antes||'—')+' · depois: '+esc(m.depois||'—')+')</span>':''}</li>`):''}
       ${c.sugestoes? '<div style="font-weight:600; margin:10px 0 4px">Sugestões de ajuste (levar ao advogado)</div>'+lista(c.sugestoes, s=>`<li>${esc(s)}</li>`):''}`);
   }
   if(P.inconsistencias) h += sec('🔎 Auditoria de consistência dos documentos', `<div class="table-container"><table><thead><tr><th>Onde</th><th>O que</th><th>Gravidade</th></tr></thead><tbody>
@@ -25133,6 +25145,390 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   window.montarPromptFinanceiro = montarPromptFinanceiro;
 })();
 /* ===================================================================
+   v79 — CONTRATO SOCIAL E APÓLICES: UM PROMPT E UM ARQUIVO CADA
+
+   Fase 2 do fluxo por etapas. Cada documento tem o seu prompt curto, o
+   seu tipo de arquivo e o seu lugar no banco:
+
+     contrato social → empresas/{id}.contratoSocial
+     apólices        → empresas/{id}.apolices
+
+   São fatos da EMPRESA, não do exercício: o contrato não muda porque o
+   balanço de 2026 chegou. Por isso moram no cadastro, e não dentro de
+   um ano. Na hora da análise, aplicarDocumentosDaEmpresa() coloca os
+   dois onde os módulos sempre leram (parecer.ficha, parecer.contrato,
+   parecer.apolices e os campos suc* do exercício mais recente) — sem
+   gravar nada de volta. Pessoa-chave, D&O, o parecer e o "se
+   acontecesse" passam a usar o contrato lido aqui sem mudar uma linha.
+
+   A leitura das apólices é só transcrição. Os achados — vencida,
+   beneficiário de bem em garantia, LMI abaixo do patrimônio, cobertura
+   que falta, prêmio que não bate — o sistema calcula aqui.
+   =================================================================== */
+(function(){
+  'use strict';
+  var TXT_CONTRATO = "# Prompt \u2014 Leitor do contrato social \u00b7 Corporate One contrato v1\n\nVoc\u00ea \u00e9 o **leitor do contrato social** de uma empresa. Recebe o contrato (ou a consolida\u00e7\u00e3o e as altera\u00e7\u00f5es), o estatuto e as atas quando \u00e9 S/A, o acordo de s\u00f3cios ou de acionistas quando existe, e \u00e0s vezes o cart\u00e3o CNPJ. Devolve **um arquivo JSON** com quem s\u00e3o os s\u00f3cios, quanto cada um tem, quem administra e o que o contrato diz sobre a sa\u00edda de um s\u00f3cio.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o calcula valor de quota, n\u00e3o diz quanto a empresa pagaria a herdeiros, n\u00e3o sugere seguro. O sistema faz essas contas com o que voc\u00ea entregar. O que importa: **cada s\u00f3cio com a participa\u00e7\u00e3o certa, a data de nascimento, e a cl\u00e1usula de sucess\u00e3o copiada palavra por palavra.**\n\nO **contexto desta empresa** (raz\u00e3o social, CNPJ e o que a Receita Federal lista como quadro societ\u00e1rio) est\u00e1 **no fim deste texto**.\n\n---\n\n## 1 \u00b7 Qual documento vale\n\n- Contratos de limitada mudam por **altera\u00e7\u00f5es contratuais**. Vale a **\u00faltima consolida\u00e7\u00e3o** mais as altera\u00e7\u00f5es posteriores a ela. Se vieram v\u00e1rias, leia na ordem de data e use o estado **depois da \u00faltima**.\n- Liste em `documentos` cada documento lido, com a data e o registro na Junta (n\u00famero e data), quando houver.\n- Liste em `mudancas` o que as altera\u00e7\u00f5es mudaram em s\u00f3cios, capital, administra\u00e7\u00e3o ou cl\u00e1usula de sa\u00edda \u2014 o antes e o depois.\n\n## 2 \u00b7 Os s\u00f3cios\n\nPara cada s\u00f3cio (pessoa f\u00edsica ou jur\u00eddica), no estado atual:\n\n| Campo | De onde vem | Observa\u00e7\u00e3o |\n|---|---|---|\n| `nome` | qualifica\u00e7\u00e3o | como est\u00e1 no contrato |\n| `cpf` ou `cnpj` | qualifica\u00e7\u00e3o | holding entra com `cnpj` \u2014 **pessoa jur\u00eddica n\u00e3o \u00e9 segur\u00e1vel**, o sistema precisa saber |\n| `participacao` | cl\u00e1usula do capital | **percentual de 0 a 100** (48 = 48%). Se o contrato s\u00f3 traz quotas, calcule quotas do s\u00f3cio \u00f7 total de quotas \u00d7 100 e marque `\"participacaoCalculada\": true` |\n| `quotas` e `valorQuotas` | cl\u00e1usula do capital | como est\u00e3o no documento |\n| `dataNascimento` | qualifica\u00e7\u00e3o (\"nascido em\u2026\") | formato AAAA-MM-DD. **N\u00e3o invente** \u2014 se n\u00e3o consta, deixe fora |\n| `estadoCivil` e `regimeBens` | qualifica\u00e7\u00e3o | \"casado \u2014 separa\u00e7\u00e3o total de bens\" |\n| `profissao` | qualifica\u00e7\u00e3o | |\n| `administrador` | cl\u00e1usula da administra\u00e7\u00e3o | `true` se \u00e9 administrador |\n| `cargo` | cl\u00e1usula da administra\u00e7\u00e3o | \"s\u00f3cio-administrador\", \"diretor\" |\n| `fonte` | | \"14\u00aa Altera\u00e7\u00e3o \u00b7 Cl\u00e1usula Quinta\" |\n\nA soma das participa\u00e7\u00f5es tem que dar **100**. Se n\u00e3o der, releia a cl\u00e1usula do capital; se mesmo assim n\u00e3o fechar, entregue como est\u00e1 e explique em `duvidas`.\n\n**Sociedade an\u00f4nima fechada:** o cart\u00e3o CNPJ e o QSA da Receita listam **s\u00f3 os administradores**, nunca os acionistas. Acionista e participa\u00e7\u00e3o v\u00eam do **livro de registro de a\u00e7\u00f5es**, da **lista de presen\u00e7a da \u00faltima AGO** ou das atas de subscri\u00e7\u00e3o. Se nenhum deles veio, deixe `socios: []`, liste os diretores em `administradores` e escreva em `duvidas` que o quadro acion\u00e1rio n\u00e3o foi comprovado.\n\n## 3 \u00b7 A administra\u00e7\u00e3o\n\nEm `administradores`: quem administra, mesmo que n\u00e3o seja s\u00f3cio \u2014 `nome`, `cpf`, `cargo`, `mandatoAte` (se houver), `assinaIsolado` (`true` se pode assinar sozinho), `fonte`.\n\n## 4 \u00b7 A cl\u00e1usula de sucess\u00e3o \u2014 a mais importante\n\nProcure a cl\u00e1usula sobre **falecimento, interdi\u00e7\u00e3o, incapacidade, retirada ou exclus\u00e3o de s\u00f3cio**. Preencha `sucessao`:\n\n| Campo | Valores | Como decidir |\n|---|---|---|\n| `criterio` | `contrato` \u00b7 `omisso` \u00b7 `sa_acordo` \u00b7 `sa_sem` \u00b7 `sem_contrato` | `contrato` quando h\u00e1 cl\u00e1usula que diz **como apurar** a quota; `omisso` quando a limitada n\u00e3o trata do assunto (vale a lei); `sa_acordo` S/A com acordo de acionistas que prev\u00ea compra; `sa_sem` S/A sem acordo; `sem_contrato` se o contrato n\u00e3o veio |\n| `metodo` | `patrimonial` \u00b7 `determinacao` \u00b7 `multiplo` \u00b7 `nominal` \u00b7 `outro` | `patrimonial` = valor patrimonial pelo \u00faltimo balan\u00e7o; `determinacao` = balan\u00e7o especial com ativos a valor de mercado; `multiplo` = m\u00faltiplo de lucro ou EBITDA; `nominal` = valor nominal da quota; `outro` = descreva em `texto` |\n| `prazoMeses` | n\u00famero | prazo de pagamento aos herdeiros, em meses. Em branco = a lei (90 dias) |\n| `parcelas` | n\u00famero | quantas parcelas. Em branco = parcela \u00fanica |\n| `herdeirosPodemEntrar` | `sim` \u00b7 `nao` \u00b7 `depende` | se o contrato deixa os herdeiros entrarem na sociedade |\n| `invalidez` | `sim` \u00b7 `nao` | se a cl\u00e1usula vale tamb\u00e9m para invalidez/incapacidade. **A maioria s\u00f3 fala de morte** |\n| `texto` | | **transcri\u00e7\u00e3o literal** da cl\u00e1usula |\n| `fonte` | | \"Cl\u00e1usula 12\u00aa da 3\u00aa altera\u00e7\u00e3o\" |\n\n## 5 \u00b7 Outras cl\u00e1usulas que pesam\n\nCopie em `clausulas`, **literalmente**, as cl\u00e1usulas destes temas quando existirem: `retirada`, `exclusao`, `cessao_quotas` (venda de quotas e direito de prefer\u00eancia), `administracao` (poderes e limites, inclusive para dar aval e garantia), `prolabore`, `distribuicao` (lucros), `quorum`, `nao_concorrencia`, `outro`. Formato: `{\"tema\": \"\", \"clausula\": \"Cl. 9\u00aa\", \"texto\": \"\", \"fonte\": \"\"}`. N\u00e3o explique \u2014 o sistema e o corretor leem.\n\n## 6 \u00b7 Conferir com a Receita\n\nO contexto traz o quadro societ\u00e1rio que a Receita Federal lista. Compare: s\u00f3cio que est\u00e1 no contrato e n\u00e3o na Receita (ou o contr\u00e1rio), nome diferente, s\u00f3cio que saiu. Cada diferen\u00e7a vai para `duvidas`, dizendo qual documento \u00e9 mais recente.\n\n---\n\n## 7 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_contrato.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo oito linhas**: o que leu, o que n\u00e3o achou, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"contrato\",\n  \"formato\": \"corporate-one-contrato\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\", \"tipoSocietario\": \"ltda|sa|slu|outro\", \"nire\": \"\",\n               \"sede\": \"\", \"fundacao\": \"AAAA-MM-DD\", \"objeto\": \"\", \"capitalSocial\": 0 },\n  \"documentos\": [ { \"nome\": \"14\u00aa Altera\u00e7\u00e3o Contratual\", \"data\": \"AAAA-MM-DD\", \"registro\": \"JucisRS n\u00ba \u2026 em \u2026\" } ],\n  \"socios\": [ { \"nome\": \"\", \"cpf\": \"\", \"participacao\": 0, \"quotas\": 0, \"valorQuotas\": 0,\n                \"dataNascimento\": \"AAAA-MM-DD\", \"estadoCivil\": \"\", \"regimeBens\": \"\", \"profissao\": \"\",\n                \"administrador\": true, \"cargo\": \"\", \"fonte\": \"\" } ],\n  \"administradores\": [ { \"nome\": \"\", \"cpf\": \"\", \"cargo\": \"\", \"mandatoAte\": \"\", \"assinaIsolado\": true, \"fonte\": \"\" } ],\n  \"sucessao\": { \"criterio\": \"\", \"metodo\": \"\", \"prazoMeses\": null, \"parcelas\": null,\n                \"herdeirosPodemEntrar\": \"\", \"invalidez\": \"\", \"texto\": \"\", \"fonte\": \"\" },\n  \"clausulas\": [ { \"tema\": \"\", \"clausula\": \"\", \"texto\": \"\", \"fonte\": \"\" } ],\n  \"mudancas\": [ { \"data\": \"\", \"alteracao\": \"\", \"oque\": \"\", \"antes\": \"\", \"depois\": \"\" } ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` exatamente como acima.\n- `empresa.cnpj` copiado do contrato. O sistema compara com o CNPJ da empresa aberta e recusa arquivo de outra empresa.\n- Campo que o documento n\u00e3o traz fica **fora** do arquivo (nunca `0` ou texto inventado).\n- Textos em portugu\u00eas, sem markdown dentro das strings.\n";
+  var TXT_APOLICES = "# Prompt \u2014 Leitor de ap\u00f3lices \u00b7 Corporate One ap\u00f3lices v1\n\nVoc\u00ea \u00e9 o **leitor das ap\u00f3lices de seguro** que uma empresa j\u00e1 tem. Recebe ap\u00f3lices, endossos, propostas aceitas ou a rela\u00e7\u00e3o de seguros da corretora atual. Devolve **um arquivo JSON** com cada ap\u00f3lice: o que cobre, quanto, at\u00e9 quando, em nome de quem e para quem paga.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o diz se o seguro est\u00e1 bom ou ruim, n\u00e3o compara com o balan\u00e7o, n\u00e3o sugere cobertura. O sistema faz esse confronto \u2014 LMI contra o patrim\u00f4nio, vig\u00eancia, benefici\u00e1rio de bem financiado, pr\u00eamio contra o que a empresa declara \u2014 com o que voc\u00ea entregar. O que importa: **cada cobertura com o LMI e a franquia exatos, as datas, o segurado e o benefici\u00e1rio.**\n\nO **contexto desta empresa** (raz\u00e3o social e CNPJ) est\u00e1 **no fim deste texto**.\n\n---\n\n## 1 \u00b7 Uma entrada por ap\u00f3lice\n\nEndosso n\u00e3o \u00e9 ap\u00f3lice nova: aplique o endosso \u00e0 ap\u00f3lice que ele altera e diga em `endossos` o que mudou. Renova\u00e7\u00e3o \u00e9 ap\u00f3lice nova (outro n\u00famero, outra vig\u00eancia) \u2014 se vieram as duas, entregue as duas.\n\n| Campo | O que \u00e9 |\n|---|---|\n| `ramo` | como a ap\u00f3lice chama: \"Empresarial\", \"Riscos Nomeados\", \"Equipamentos\", \"Lucros Cessantes\", \"Responsabilidade Civil Geral\", \"RC Profissional\", \"D&O\", \"Autom\u00f3vel/Frota\", \"Transporte Nacional\", \"RCTR-C\", \"RCF-DC\", \"Riscos de Engenharia\", \"Garantia\", \"Vida em Grupo\", \"Sa\u00fade\", \"Odontol\u00f3gico\", \"Cyber\", \"Ambiental\", \"Fian\u00e7a Locat\u00edcia\", \"outro\" |\n| `seguradora` | nome da seguradora |\n| `numero` | n\u00famero da ap\u00f3lice |\n| `vigenciaInicio` / `vigenciaFim` | AAAA-MM-DD |\n| `segurado` e `cnpjSegurado` | em nome de quem |\n| `beneficiario` | quem recebe a indeniza\u00e7\u00e3o. **Se houver cl\u00e1usula benefici\u00e1ria** (banco, financeira, BNDES, arrendador), copie o nome e o contrato citado |\n| `localRisco` | endere\u00e7o(s) segurado(s) |\n| `coberturas` | **uma linha por cobertura**: `{\"cobertura\": \"\", \"lmi\": 0, \"franquia\": \"\", \"posFranquia\": \"\"}` \u2014 LMI em reais; franquia **como est\u00e1 escrita** (\"10% dos preju\u00edzos, m\u00ednimo R$ 5.000,00\") |\n| `lmiTotal` | LMI da cobertura b\u00e1sica, ou o limite m\u00e1ximo de garantia da ap\u00f3lice, quando houver |\n| `premioLiquido` / `premioTotal` | em reais, por ano. Se o pr\u00eamio for de per\u00edodo diferente de 12 meses, diga em `observacao` |\n| `formaPagamento` | \"4 parcelas\", \"\u00e0 vista\" |\n| `bensSegurados` | quando a ap\u00f3lice lista bens (m\u00e1quinas, ve\u00edculos com placa/chassi, equipamentos), um item por bem: `{\"bem\": \"\", \"valor\": 0}` |\n| `clausulas` | cl\u00e1usulas particulares relevantes, **literais**: rateio, primeiro risco absoluto, valor de novo, benefici\u00e1ria, exclus\u00f5es espec\u00edficas |\n| `endossos` | `{\"numero\": \"\", \"data\": \"\", \"oque\": \"\"}` |\n| `observacao` | o que n\u00e3o coube nos campos |\n| `fonte` | \"Ap\u00f3lice 1234567 \u00b7 p.2\" |\n\n**Vida em grupo, sa\u00fade e odontol\u00f3gico:** em `coberturas`, lance tamb\u00e9m o n\u00famero de vidas e o capital (ou o plano) por vida, quando a ap\u00f3lice trouxer: `{\"cobertura\": \"Morte\", \"lmi\": 50000, \"vidas\": 120, \"observacao\": \"capital uniforme\"}`.\n\n**Frota:** um item por ve\u00edculo em `bensSegurados` (placa ou modelo e valor/FIPE), e as coberturas de RCF-V (danos materiais, corporais, morais) com o LMI de cada uma.\n\n---\n\n## 2 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_apolices.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo oito linhas**: quantas ap\u00f3lices leu, o que ficou ileg\u00edvel, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"apolices\",\n  \"formato\": \"corporate-one-apolices\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"apolices\": [\n    {\n      \"ramo\": \"\", \"seguradora\": \"\", \"numero\": \"\",\n      \"vigenciaInicio\": \"AAAA-MM-DD\", \"vigenciaFim\": \"AAAA-MM-DD\",\n      \"segurado\": \"\", \"cnpjSegurado\": \"\", \"beneficiario\": \"\", \"localRisco\": \"\",\n      \"coberturas\": [ { \"cobertura\": \"\", \"lmi\": 0, \"franquia\": \"\" } ],\n      \"lmiTotal\": 0, \"premioLiquido\": 0, \"premioTotal\": 0, \"formaPagamento\": \"\",\n      \"bensSegurados\": [ { \"bem\": \"\", \"valor\": 0 } ],\n      \"clausulas\": [ \"\" ], \"endossos\": [], \"observacao\": \"\", \"fonte\": \"\"\n    }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` exatamente como acima.\n- `empresa.cnpj` = o CNPJ do segurado principal. O sistema compara com o da empresa aberta.\n- Valores em reais, ponto como decimal, sem separador de milhar. Campo que a ap\u00f3lice n\u00e3o traz fica **fora** (nunca `0` inventado).\n- Textos em portugu\u00eas, sem markdown dentro das strings.\n";
+
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function num(v){
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    var s = String(v).replace(/R\$|\s/g,'');
+    if (/^-?[\d.]+,\d+$/.test(s)) s = s.replace(/\./g,'').replace(',','.');
+    else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g,'');
+    var x = Number(s.replace('%','')); return isFinite(x) ? x : null;
+  }
+  function R$(v){ return (v==null||!isFinite(v)) ? '—'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v){ return (v==null||!isFinite(v)) ? '—' : (v*100).toFixed(0)+'%'; }
+  function soDig(s){ return String(s||'').replace(/\D/g,''); }
+  function sem(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+  function fmtCNPJ(c){ c = soDig(c); return c.length === 14 ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : c; }
+  function hoje(){ return new Date().toISOString().slice(0,10); }
+
+  /* ---------------- o contexto que vai no fim de cada prompt ---------------- */
+  function cabecalho(ctx){
+    var L = ['', '---', '', '## CONTEXTO DESTA EMPRESA — gerado pelo sistema em ' + hoje(), ''];
+    L.push('- Empresa: **' + (ctx.razaoSocial || ctx.nome || '(sem nome)') + '**'
+      + (ctx.razaoSocial && ctx.nome && ctx.razaoSocial !== ctx.nome ? ' (' + ctx.nome + ')' : ''));
+    L.push('- CNPJ no cadastro: ' + (ctx.cnpj ? '**' + fmtCNPJ(ctx.cnpj) + '**' : 'não cadastrado — copie o do documento para `empresa.cnpj`'));
+    if (ctx.cnpj) L.push('- Se o CNPJ do documento for de **outra empresa**, pare e avise.');
+    return L;
+  }
+  function montarPromptContrato(ctx){
+    ctx = ctx || {};
+    var L = cabecalho(ctx);
+    var qsa = Array.isArray(ctx.qsa) ? ctx.qsa : [];
+    L.push('');
+    if (qsa.length){
+      L.push('### Quadro societário na Receita Federal' + (ctx.qsaEm ? ' (consultado em ' + ctx.qsaEm + ')' : ''));
+      L.push('');
+      qsa.forEach(function(s){ L.push('- ' + (s.nome || '') + (s.qualificacao ? ' — ' + s.qualificacao : '')
+        + (s.entradaEm ? ' — desde ' + s.entradaEm : '')); });
+      L.push('');
+      L.push('Compare com o contrato (seção 6). Em S/A fechada esta lista é de administradores, não de acionistas.');
+    } else {
+      L.push('O sistema não tem o quadro societário da Receita desta empresa. Se o cartão CNPJ vier anexado, use-o para a seção 6.');
+    }
+    var at = Array.isArray(ctx.sociosAtuais) ? ctx.sociosAtuais : [];
+    if (at.length){
+      L.push('');
+      L.push('### O que o sistema tem hoje (leitura anterior)');
+      L.push('');
+      at.forEach(function(s){ L.push('- ' + (s.nome||'') + (s.participacao != null ? ' — ' + s.participacao + '%' : '')); });
+      L.push('');
+      L.push('Se o contrato anexado mudar isso, diga em `mudancas` o antes e o depois.');
+    }
+    L.push('');
+    L.push('Agora leia os documentos anexados e entregue o arquivo `' + String(ctx.nome || 'EMPRESA').replace(/[^A-Za-z0-9]+/g,'_').toUpperCase() + '_contrato.json`.');
+    return TXT_CONTRATO + '\n' + L.join('\n');
+  }
+  function montarPromptApolices(ctx){
+    ctx = ctx || {};
+    var L = cabecalho(ctx);
+    L.push('');
+    L.push('Agora leia as apólices anexadas e entregue o arquivo `' + String(ctx.nome || 'EMPRESA').replace(/[^A-Za-z0-9]+/g,'_').toUpperCase() + '_apolices.json`.');
+    return TXT_APOLICES + '\n' + L.join('\n');
+  }
+
+  /* ---------------- ler o arquivo de uma etapa ---------------- */
+  var TIPOS = {
+    contrato: { re: /contrato/, nome: 'contrato social' },
+    apolices: { re: /apolic|ap[oó]lic|seguro/, nome: 'apólices' }
+  };
+  function lerDocumentoEmpresa(texto, tipo, cnpjEmpresa){
+    var r = { ok:false, obj:null, erros:[], avisos:[], consertos:[] };
+    var L = (typeof window.lerJSONTolerante === 'function') ? window.lerJSONTolerante(texto) : null;
+    if (L && !L.ok){ r.erros.push((typeof window.explicarErroJSON === 'function') ? window.explicarErroJSON(L) : 'O arquivo não é um JSON válido.'); return r; }
+    var o = L ? L.obj : (function(){ try { return JSON.parse(texto); } catch(e){ return null; } })();
+    if (!o || typeof o !== 'object'){ r.erros.push('O arquivo não é um JSON válido.'); return r; }
+    r.consertos = (L && L.consertos) || [];
+    var marca = sem(String(o.tipo||'') + ' ' + String(o.formato||''));
+    if (!TIPOS[tipo].re.test(marca)){
+      var de = /financeiro|consultor360-import/.test(marca) || Array.isArray(o.periodos) ? 'os números (balanço e DRE) — ele entra na etapa 3'
+             : /apresenta/.test(marca) ? 'a apresentação — ela entra na etapa 2'
+             : /contrato/.test(marca) ? 'o contrato social — ele entra na etapa 4'
+             : /apolic|seguro/.test(marca) ? 'as apólices — elas entram na etapa 5'
+             : 'de outro tipo (' + (o.tipo || o.formato || 'sem tipo') + ')';
+      r.erros.push('Este arquivo é ' + de + ', não ' + TIPOS[tipo].nome + '.');
+      return r;
+    }
+    var cArq = soDig(o.empresa && (o.empresa.cnpj || o.empresa.CNPJ));
+    var cEmp = soDig(cnpjEmpresa);
+    if (cArq.length === 14 && cEmp.length === 14){
+      if (cArq.slice(0,8) !== cEmp.slice(0,8)){
+        r.erros.push('O CNPJ do arquivo (' + fmtCNPJ(cArq) + ') é de outra empresa — o cadastro desta é ' + fmtCNPJ(cEmp) + '.');
+        return r;
+      }
+      if (cArq !== cEmp) r.avisos.push('O arquivo é do estabelecimento ' + fmtCNPJ(cArq) + ' e o cadastro é ' + fmtCNPJ(cEmp) + ' — mesma empresa.');
+    } else if (cArq.length !== 14){
+      r.avisos.push('O arquivo não traz o CNPJ da empresa — confira se é a empresa certa antes de gravar.');
+    }
+    r.obj = o; r.ok = true;
+    return r;
+  }
+
+  /* ---------------- conferir o contrato ---------------- */
+  var CRITERIOS = ['contrato','omisso','sa_acordo','sa_sem','sem_contrato'];
+  var METODOS = ['patrimonial','determinacao','multiplo','nominal','outro'];
+  function dataISO(s){
+    s = String(s||'').trim(); if (!s) return null;
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+    m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if (m) return m[3] + '-' + m[2] + '-' + m[1];
+    return null;
+  }
+  function conferirContrato(o){
+    o = o || {};
+    var avisos = [];
+    var socios = (Array.isArray(o.socios) ? o.socios : []).filter(function(s){ return s && s.nome; }).map(function(s){
+      var x = {}; Object.keys(s).forEach(function(k){ x[k] = s[k]; });
+      x.participacao = num(s.participacao);
+      var dn = dataISO(s.dataNascimento);
+      if (s.dataNascimento && !dn) avisos.push('Data de nascimento de ' + s.nome + ' não está no formato de data ("' + s.dataNascimento + '") — ficou de fora.');
+      if (dn) x.dataNascimento = dn; else delete x.dataNascimento;
+      x.administrador = (s.administrador === true || /^(sim|true|s)$/i.test(String(s.administrador||'')));
+      return x;
+    });
+    /* participação em fração (0,48) vira percentual (48) */
+    var soma = socios.reduce(function(t,s){ return t + (s.participacao || 0); }, 0);
+    if (socios.length && soma > 0 && soma <= 1.02 && socios.every(function(s){ return s.participacao == null || s.participacao <= 1; })){
+      socios.forEach(function(s){ if (s.participacao != null) s.participacao = Math.round(s.participacao * 10000) / 100; });
+      soma = socios.reduce(function(t,s){ return t + (s.participacao || 0); }, 0);
+    }
+    var semPart = socios.filter(function(s){ return s.participacao == null; }).length;
+    if (!socios.length) avisos.push('Nenhum sócio no arquivo. Em S/A fechada isso é esperado sem o livro de ações — peça o livro ou a ata da AGO.');
+    else if (semPart) avisos.push(semPart + ' sócio(s) sem participação: a conta de pessoa-chave usaria divisão igual.');
+    else if (Math.abs(soma - 100) > 1) avisos.push('As participações somam ' + soma.toFixed(2).replace('.',',') + '%, não 100%. Confira a cláusula do capital.');
+    var semNasc = socios.filter(function(s){ return !s.cnpj && !s.dataNascimento; }).map(function(s){ return s.nome; });
+    if (semNasc.length) avisos.push('Sem data de nascimento: ' + semNasc.join(', ') + ' — o prêmio do seguro de vida usa 50 anos como premissa.');
+
+    var su = o.sucessao || {};
+    var suc = {
+      criterio: CRITERIOS.indexOf(sem(su.criterio)) >= 0 ? sem(su.criterio) : '',
+      metodo: METODOS.indexOf(sem(su.metodo)) >= 0 ? sem(su.metodo) : '',
+      prazoMeses: num(su.prazoMeses), parcelas: num(su.parcelas),
+      invalidez: /^s/i.test(String(su.invalidez||'')) ? 'sim' : (/^n/i.test(String(su.invalidez||'')) ? 'nao' : ''),
+      herdeirosPodemEntrar: su.herdeirosPodemEntrar || '',
+      texto: su.texto || '', fonte: su.fonte || ''
+    };
+    if (su.criterio && !suc.criterio) avisos.push('Critério de sucessão "' + su.criterio + '" não é um dos previstos — ficou em branco.');
+    if (!suc.criterio) avisos.push('A cláusula de sucessão não foi classificada: a conta usa a lei (90 dias, balanço de determinação).');
+    if (suc.criterio === 'contrato' && !suc.metodo) avisos.push('O contrato prevê critério, mas o método de apuração não veio — confira o texto da cláusula.');
+
+    return { socios: socios, soma: soma, administradores: Array.isArray(o.administradores) ? o.administradores.filter(function(a){ return a && a.nome; }) : [],
+             sucessao: suc, avisos: avisos,
+             empresa: o.empresa || {}, documentos: Array.isArray(o.documentos) ? o.documentos : [],
+             clausulas: Array.isArray(o.clausulas) ? o.clausulas.filter(function(c){ return c && (c.texto || c.clausula); }) : [],
+             mudancas: Array.isArray(o.mudancas) ? o.mudancas.filter(function(m){ return m && (m.oque || m.alteracao); }) : [],
+             duvidas: Array.isArray(o.duvidas) ? o.duvidas.filter(function(d){ return d && String(d).trim(); }) : [] };
+  }
+  /* o que vai para o banco: o conferido, não o bruto */
+  function contratoParaGravar(C){
+    return { empresa: C.empresa, documentos: C.documentos, socios: C.socios, administradores: C.administradores,
+             sucessao: C.sucessao, clausulas: C.clausulas, mudancas: C.mudancas, duvidas: C.duvidas,
+             lidoEm: hoje(), versao: 1 };
+  }
+
+  /* ---------------- conferir as apólices ---------------- */
+  function ramoChave(ap){
+    var r = sem(ap && ap.ramo);
+    if (/d\s*&\s*o|d&o|diretores e administradores/.test(r)) return 'do';
+    if (/lucro.*cessant/.test(r)) return 'lc';
+    if (/equipament|quebra de maquina/.test(r)) return 'equipamentos';
+    if (/engenharia|obra/.test(r)) return 'engenharia';
+    if (/empresarial|patrimonial|multirrisco|compreensiv|riscos nomeados|riscos operacionais|incendio/.test(r)) return 'patrimonial';
+    if (/auto|frota|rcf/.test(r)) return 'auto';
+    if (/transporte|rctr|rcf-dc/.test(r)) return 'transporte';
+    if (/profissional|e&o/.test(r)) return 'rcprof';
+    if (/responsabilidade|^rc\b|rc geral/.test(r)) return 'rc';
+    if (/vida/.test(r)) return 'vida';
+    if (/odonto|dental/.test(r)) return 'odonto';
+    if (/saude/.test(r)) return 'saude';
+    if (/garantia/.test(r)) return 'garantia';
+    if (/cyber|ciber/.test(r)) return 'cyber';
+    if (/ambient/.test(r)) return 'ambiental';
+    return 'outro';
+  }
+  function conferirApolices(o){
+    var avisos = [];
+    var lista = (Array.isArray(o && o.apolices) ? o.apolices : (Array.isArray(o && o.seguros) ? o.seguros : []))
+      .filter(function(a){ return a && (a.ramo || a.numero || a.seguradora); })
+      .map(function(a){
+        var x = {}; Object.keys(a).forEach(function(k){ x[k] = a[k]; });
+        x.vigenciaInicio = dataISO(a.vigenciaInicio); x.vigenciaFim = dataISO(a.vigenciaFim);
+        if (!x.vigenciaFim && a.vigencia){
+          var ds = String(a.vigencia).match(/(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})/g) || [];
+          if (ds.length >= 2){ x.vigenciaInicio = dataISO(ds[0]); x.vigenciaFim = dataISO(ds[ds.length-1]); }
+        }
+        x.coberturas = (Array.isArray(a.coberturas) ? a.coberturas : []).map(function(c){
+          var y = {}; Object.keys(c||{}).forEach(function(k){ y[k] = c[k]; }); y.lmi = num(c && c.lmi); return y; });
+        x.lmiTotal = num(a.lmiTotal != null ? a.lmiTotal : a.lmi);
+        if (x.lmiTotal == null){
+          var bas = x.coberturas.filter(function(c){ return /b[aá]sic|inc[eê]nd|compreensiv/i.test(String(c.cobertura||'')); });
+          if (bas.length) x.lmiTotal = Math.max.apply(null, bas.map(function(c){ return c.lmi || 0; }));
+        }
+        x.premioTotal = num(a.premioTotal != null ? a.premioTotal : a.premio);
+        x.premioLiquido = num(a.premioLiquido);
+        x._ramo = ramoChave(a);
+        if (!x.vigenciaFim) avisos.push((a.ramo||'Apólice') + ' ' + (a.numero||'') + ': sem data de fim de vigência.');
+        return x;
+      });
+    if (!lista.length) avisos.push('Nenhuma apólice no arquivo.');
+    return { apolices: lista, avisos: avisos,
+             duvidas: Array.isArray(o && o.duvidas) ? o.duvidas.filter(function(d){ return d && String(d).trim(); }) : [] };
+  }
+  function apolicesParaGravar(A){
+    return A.apolices.map(function(a){ var x = {}; Object.keys(a).forEach(function(k){ if (k !== '_ramo') x[k] = a[k]; }); return x; });
+  }
+
+  /* ---------------- os achados: o sistema confronta ---------------- */
+  function analisarApolices(apolices, a, ref){
+    a = a || {}; ref = ref || hoje();
+    var lista = (apolices || []).map(function(x){ var y = {}; Object.keys(x).forEach(function(k){ y[k] = x[k]; }); y._ramo = y._ramo || ramoChave(x); return y; });
+    var hojeD = new Date(ref + 'T00:00:00');
+    function dias(d){ return d ? Math.round((new Date(d + 'T00:00:00') - hojeD) / 86400000) : null; }
+    function cobre(re){ return lista.some(function(ap){
+      return re.test(ap._ramo) || (ap.coberturas||[]).some(function(c){ return re.test(sem(c.cobertura)); }); }); }
+    var gerais = [];
+
+    lista.forEach(function(ap){
+      ap.achados = [];
+      var d = dias(ap.vigenciaFim);
+      if (d != null && d < 0) ap.achados.push({ tipo:'vigencia', oque:'Vencida desde ' + ap.vigenciaFim + '.', acao:'Confirmar se foi renovada e pedir a apólice nova.' });
+      else if (d != null && d <= 60) ap.achados.push({ tipo:'vigencia', oque:'Vence em ' + d + ' dias (' + ap.vigenciaFim + ').', acao:'É a janela da renovação: levar a cotação antes da seguradora atual.' });
+    });
+
+    /* duplicidade: mesmo ramo, vigências que se cruzam */
+    for (var i=0;i<lista.length;i++) for (var j=i+1;j<lista.length;j++){
+      var x = lista[i], y = lista[j];
+      if (x._ramo !== y._ramo || x._ramo === 'outro' || x._ramo === 'auto' || x._ramo === 'garantia') continue;
+      if (x.vigenciaInicio && x.vigenciaFim && y.vigenciaInicio && y.vigenciaFim
+          && x.vigenciaInicio <= y.vigenciaFim && y.vigenciaInicio <= x.vigenciaFim
+          && sem(x.localRisco||'') === sem(y.localRisco||''))
+        x.achados.push({ tipo:'duplicidade', oque:'Cobre o mesmo risco que a apólice ' + (y.numero||'') + ' (' + (y.seguradora||'') + ') no mesmo período.',
+                         acao:'Seguro em duplicidade paga o prêmio duas vezes e a indenização é rateada entre as seguradoras.' });
+    }
+
+    /* LMI do patrimonial contra o que o balanço mostra */
+    var vr = n(a.valorImoveis) + n(a.valorInstalacoes) + n(a.valorMaquinas) + n(a.valorFerramentas)
+           + n(a.valorInformatica) + n(a.valorMoveis) + n(a.estoques);
+    var patr = lista.filter(function(ap){ return ap._ramo === 'patrimonial'; });
+    if (vr > 0 && patr.length){
+      var lmi = patr.reduce(function(t,ap){ return t + (ap.lmiTotal || 0); }, 0);
+      if (lmi > 0 && lmi < vr * 0.8){
+        var p = lmi / vr;
+        patr[0].achados.push({ tipo:'lmi', oque:'LMI de ' + R$(lmi) + ' para ' + R$(vr) + ' de imobilizado e estoque no balanço — ' + pc(p) + '.',
+          acao:'Com cláusula de rateio, num sinistro de R$ 1 milhão a seguradora paga cerca de ' + R$(1000000 * p) + '. Rever o valor em risco (e se o contrato é a primeiro risco absoluto).' });
+      }
+    }
+
+    /* bem em garantia: o credor tem que ser beneficiário */
+    if (n(a.bensEmGarantia) > 0){
+      var comBenef = lista.some(function(ap){ return /patrimonial|equipamentos|auto/.test(ap._ramo) && ap.beneficiario && sem(ap.beneficiario) !== sem(ap.segurado||''); });
+      if (!comBenef) gerais.push({ tipo:'beneficiario', oque:'O balanço mostra ' + R$(n(a.bensEmGarantia)) + ' em bens dados em garantia, e nenhuma apólice traz o credor como beneficiário.',
+        acao:'Perguntar ao banco se o contrato exige a cláusula beneficiária — sem ela, o banco pode executar a garantia mesmo com o sinistro pago.' });
+    }
+
+    /* cobertura que falta, pelo que o balanço mostra */
+    if (n(a.valorMaquinas) > 1000000 && !cobre(/equipament|quebra de maquina/))
+      gerais.push({ tipo:'cobertura_ausente', oque:'R$ ' + Math.round(n(a.valorMaquinas)).toLocaleString('pt-BR') + ' em máquinas e nenhuma apólice ou cobertura de equipamentos / quebra de máquinas.', acao:'Cotar equipamentos: cobre a quebra interna, que o empresarial não cobre.' });
+    if (n(a.valorVeiculos) > 0 && !cobre(/^auto$|auto|frota|rcf/))
+      gerais.push({ tipo:'cobertura_ausente', oque:'O balanço tem veículos e não veio apólice de automóvel/frota.', acao:'Pedir a apólice de frota ou cotar.' });
+    if (n(a.obrasAndamento) > 0 && !cobre(/engenharia|obra/))
+      gerais.push({ tipo:'cobertura_ausente', oque:'Há imobilizações em andamento e nenhuma apólice de riscos de engenharia.', acao:'Obra em curso sem seguro: o sinistro no canteiro sai do caixa.' });
+    if (patr.length && !cobre(/^lc$|lucro.*cessant|perda de receita/))
+      gerais.push({ tipo:'cobertura_ausente', oque:'O empresarial não tem lucros cessantes.', acao:'A apólice reconstrói o prédio, mas não paga a folha e o banco durante a parada. Ver a conta em "Se acontecesse".' });
+    if (!cobre(/^rc$|responsabilidade civil|rc geral|rc operac/))
+      gerais.push({ tipo:'cobertura_ausente', oque:'Nenhuma apólice de responsabilidade civil.', acao:'Perguntar se existe; se não, é a conversa do RC Geral / Empregador.' });
+
+    /* prêmio: soma das apólices contra o declarado */
+    var soma = lista.reduce(function(t,ap){ return t + (ap.premioTotal || 0); }, 0);
+    var decl = n(a.premioSegurosAno);
+    if (soma > 0 && decl > 0 && Math.abs(soma - decl) > decl * 0.2)
+      gerais.push({ tipo:'premio_nao_bate', oque:'As apólices somam ' + R$(soma) + ' de prêmio; a empresa declara ' + R$(decl) + ' por ano em seguros.',
+        acao: soma < decl ? 'Falta apólice: há ' + R$(decl - soma) + ' de prêmio que ninguém mostrou.' : 'Há apólice que não aparece na despesa do ano — conferir.' });
+
+    return { apolices: lista, gerais: gerais, premioSoma: soma, valorEmRisco: vr };
+  }
+
+  /* ==============================================================
+     aplicarDocumentosDaEmpresa(rows, empDoc)
+     rows: exercícios em memória, do mais recente para o mais antigo.
+     Não grava nada.
+     ============================================================== */
+  function aplicarDocumentosDaEmpresa(rows, emp){
+    if (!Array.isArray(rows) || !rows.length || !emp) return rows;
+    var C = emp.contratoSocial, AP = Array.isArray(emp.apolices) ? emp.apolices : null;
+    if (!C && !AP) return rows;
+    var ord = rows.slice().sort(function(x,y){ return Number(y.ano) - Number(x.ano); });
+    var ultimo = ord[0];
+    var alvo = ord.filter(function(r){ return r.parecer && typeof r.parecer === 'object'; })[0] || ultimo;
+    var P = Object.assign({}, alvo.parecer || {});
+
+    if (C){
+      var E = C.empresa || {};
+      var f = Object.assign({}, P.ficha || {});
+      if (E.razaoSocial) f['Razão social'] = E.razaoSocial;
+      if (E.cnpj) f['CNPJ'] = E.cnpj;
+      if (E.tipoSocietario) f['Tipo societário'] = E.tipoSocietario;
+      if (E.sede) f['Sede'] = E.sede;
+      if (E.fundacao) f['Fundação'] = E.fundacao;
+      if (E.objeto) f['Objeto'] = E.objeto;
+      if (num(E.capitalSocial) != null) f['Capital social'] = R$(num(E.capitalSocial));
+      f['Contrato lido em'] = (C.lidoEm || '') + (C.documentos && C.documentos.length ? ' · ' + C.documentos.map(function(d){ return d.nome; }).filter(Boolean).join('; ') : '');
+      if (E.razaoSocial) f.razaoSocial = E.razaoSocial;
+      if (Array.isArray(C.socios) && C.socios.length) f.socios = C.socios;
+      if (Array.isArray(C.administradores) && C.administradores.length) f.administradores = C.administradores;
+      P.ficha = f;
+      var cl = (C.clausulas || []).map(function(c){ return { clausula: (c.clausula || '') + (c.tema ? ' (' + c.tema.replace(/_/g,' ') + ')' : ''), texto: c.texto || '', implicacao: '' }; });
+      if (C.sucessao && C.sucessao.texto)
+        cl.unshift({ clausula: (C.sucessao.fonte || 'Sucessão') + ' (sucessão)', texto: C.sucessao.texto, implicacao: '' });
+      P.contrato = Object.assign({}, P.contrato || {}, { clausulas: cl, mudancas: C.mudancas || [], fonte: 'etapa do contrato social' });
+      /* a cláusula de sucessão vai para o exercício mais recente, que é de onde os módulos leem */
+      var S = C.sucessao || {};
+      [ultimo, alvo].forEach(function(r){
+        if (S.criterio) r.sucCriterio = S.criterio;
+        if (S.metodo) r.sucMetodo = S.metodo;
+        if (S.prazoMeses) r.sucPrazoMeses = S.prazoMeses;
+        if (S.parcelas) r.sucParcelas = S.parcelas;
+        if (S.invalidez) r.sucInvalidez = S.invalidez;
+        if (S.fonte) r.sucFonte = S.fonte;
+        if (Array.isArray(C.socios) && C.socios.length) r.qtdSocios = C.socios.length;
+      });
+    }
+
+    if (AP){
+      var R = analisarApolices(AP, ultimo);
+      P.apolices = R.apolices.map(function(ap){
+        return { ramo: ap.ramo, seguradora: ap.seguradora, numero: ap.numero,
+                 vigencia: (ap.vigenciaInicio || '?') + ' a ' + (ap.vigenciaFim || '?'),
+                 vigenciaInicio: ap.vigenciaInicio, vigenciaFim: ap.vigenciaFim,
+                 segurado: ap.segurado, beneficiario: ap.beneficiario, lmi: ap.lmiTotal,
+                 coberturas: ap.coberturas, premio: ap.premioTotal, achados: ap.achados };
+      });
+      if (R.gerais.length) P.apolices.push({ ramo: 'Confronto com o balanço', seguradora: 'sistema', achados: R.gerais });
+      if (!(n(ultimo.premioSegurosAno) > 0) && R.premioSoma > 0){
+        ultimo.premioSegurosAno = R.premioSoma; ultimo.premioSegurosOrigem = 'soma das apólices';
+      }
+    }
+    alvo.parecer = P;
+    return rows;
+  }
+
+  window.montarPromptContrato = montarPromptContrato;
+  window.montarPromptApolices = montarPromptApolices;
+  window.lerDocumentoEmpresa = lerDocumentoEmpresa;
+  window.conferirContrato = conferirContrato;
+  window.contratoParaGravar = contratoParaGravar;
+  window.conferirApolices = conferirApolices;
+  window.apolicesParaGravar = apolicesParaGravar;
+  window.analisarApolices = analisarApolices;
+  window.aplicarDocumentosDaEmpresa = aplicarDocumentosDaEmpresa;
+  window.PROMPT_CONTRATO_V1 = TXT_CONTRATO;
+  window.PROMPT_APOLICES_V1 = TXT_APOLICES;
+})();
+/* ===================================================================
    v78 — ANALISAR EMPRESA: UMA TELA, AS ETAPAS EM ORDEM
 
    Antes, cada coisa morava num botão diferente (apresentação num cartão,
@@ -25143,8 +25539,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
      1. Cadastro    — o que a base tem + Receita (BrasilAPI) + site/redes
      2. Apresentação — o que a empresa faz (o módulo da v71)
      3. Números     — prompt curto só de balanço e DRE; incluir ano
-     4. Contrato social — por enquanto pelo Consultor 360 (fase 2)
-     5. Análises    — feitas pelo sistema
+     4. Contrato social — prompt próprio (v79)
+     5. Apólices    — prompt próprio, opcional (v79)
+     6. Análises    — feitas pelo sistema
 
    A IA lê; o sistema calcula. Nenhuma etapa pede análise para a IA.
    =================================================================== */
@@ -25222,7 +25619,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       cadastro: { ok: !!(soDig(cnpj).length === 14 && (H.receita || links.site)), cnpj: cnpj, links: links },
       apresentacao: { ok: !!(d.temApresentacao || d.apresentacao), em: d.apresentacaoEm || null },
       numeros: { ok: H.anos.length > 0, anos: H.anos, ultimo: ultimo },
-      contrato: { ok: !!temSocios },
+      contrato: { ok: !!(d.contratoSocial || temSocios), lido: d.contratoSocial || null, viaConsultor: !d.contratoSocial && !!temSocios },
+      apolices: { ok: Array.isArray(d.apolices) && d.apolices.length > 0, lista: Array.isArray(d.apolices) ? d.apolices : [] },
       analises: { ok: H.anos.length > 0 }
     };
   }
@@ -25255,6 +25653,12 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + '<span style="color:#64748b">' + esc(r) + '</span><b style="text-align:right; overflow-wrap:anywhere">' + esc(v) + '</b></div>';
   }
 
+  function passosDoc(oque){
+    return '<ol style="margin:0 0 10px 18px; padding:0; font-size:12.5px; color:#334155; line-height:1.75">'
+      + '<li>Copie o prompt.</li><li>Numa conversa <b>nova</b> da IA: cole o prompt e anexe ' + oque + '.</li>'
+      + '<li>Suba aqui o arquivo que voltar. A conferência aparece antes de gravar.</li></ol>';
+  }
+
   function blocoReceita(r){
     if (!r) return '';
     var h = '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin:8px 0">'
@@ -25284,15 +25688,15 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   function render(){
     var m = el('modalHub'); if (!m) return;
     var E = etapas();
-    var feitas = ['cadastro','apresentacao','numeros','contrato','analises'].filter(function(k){ return E[k].ok; }).length;
-    var proxima = !E.cadastro.ok ? 1 : !E.numeros.ok ? 3 : !E.apresentacao.ok ? 2 : !E.contrato.ok ? 4 : 5;
+    var feitas = ['cadastro','apresentacao','numeros','contrato','apolices','analises'].filter(function(k){ return E[k].ok; }).length;
+    var proxima = !E.cadastro.ok ? 1 : !E.numeros.ok ? 3 : !E.apresentacao.ok ? 2 : !E.contrato.ok ? 4 : 6;
 
     var h = '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px">'
       + '<div><div style="font-size:18px; font-weight:800; color:#0f172a">🔬 ' + esc(H.nome || 'Empresa') + '</div>'
-      + '<div style="font-size:12.5px; color:#64748b">' + feitas + ' de 5 etapas · a IA lê os documentos, o sistema faz as contas</div></div>'
+      + '<div style="font-size:12.5px; color:#64748b">' + feitas + ' de 6 etapas · a IA lê os documentos, o sistema faz as contas</div></div>'
       + '<button type="button" class="btn btn-outline" style="padding:5px 11px; font-size:12px" onclick="window.fecharHubEmpresa()">fechar</button></div>'
       + '<div style="height:6px; background:#e2e8f0; border-radius:99px; margin:8px 0 16px; overflow:hidden">'
-      + '<div style="height:100%; width:' + (feitas*20) + '%; background:#4f46e5"></div></div>';
+      + '<div style="height:100%; width:' + Math.round(feitas*100/6) + '%; background:#4f46e5"></div></div>';
 
     /* 1 · cadastro */
     var base = camposDaBase(H.doc);
@@ -25349,18 +25753,53 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       chip(N.ok, N.anos.length + (N.anos.length === 1 ? ' exercício' : ' exercícios'), 'nenhum ano'), corpo3, proxima === 3);
 
     /* 4 · contrato social */
-    var corpo4 = '<div style="font-size:12.5px; color:#334155; line-height:1.6; margin-bottom:8px">O prompt próprio do contrato social chega na próxima versão. '
-      + 'Até lá, o contrato entra pelo <b>Consultor 360</b> completo (ele lê sócios, participação, nascimento e a cláusula de sucessão).</div>'
-      + bt('📖 Prompt Consultor 360', 'window.hubPromptCompleto()', false);
-    h += cartao(4, 'Contrato social', 'Sócios, participação, administração e sucessão.',
-      chip(E.contrato.ok, 'sócios lidos', 'pendente'), corpo4, proxima === 4);
+    var CT = E.contrato, corpo4 = '';
+    if (CT.lido){
+      var socs = CT.lido.socios || [], su = CT.lido.sucessao || {};
+      corpo4 += '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin-bottom:10px">'
+        + socs.map(function(x){ return linha(x.nome + (x.administrador ? ' · administra' : ''),
+            (x.participacao != null ? String(x.participacao).replace('.',',') + '%' : 'sem %') + (x.dataNascimento ? ' · nasc. ' + x.dataNascimento : '')); }).join('')
+        + linha('Sucessão', [su.criterio || 'não classificada', su.metodo, su.prazoMeses ? su.prazoMeses + ' meses' : '', su.parcelas ? su.parcelas + ' parcelas' : ''].filter(Boolean).join(' · '))
+        + '</div>';
+    } else if (CT.viaConsultor){
+      corpo4 += '<div style="font-size:12.5px; color:#334155; margin-bottom:8px">Os sócios vieram pelo Consultor 360. Para ter a cláusula de sucessão transcrita e conferida, rode o prompt do contrato.</div>';
+    }
+    corpo4 += passosDoc('o contrato social (ou a última consolidação e as alterações posteriores; em S/A, estatuto, atas e livro de ações)')
+      + bt(CT.lido ? '📋 Copiar o prompt de novo' : '📋 Copiar o prompt do contrato', "window.hubCopiarPromptDoc('contrato')", proxima === 4 && !CT.lido)
+      + bt('📥 Subir o JSON do contrato', "document.getElementById('hubArqContrato').click()", false)
+      + bt('👁 Ver o prompt', "window.hubVerPromptDoc('contrato')", false)
+      + '<input type="file" id="hubArqContrato" accept=".json,application/json,.txt" style="display:none" onchange="window.hubSubirDoc(\'contrato\', this)">'
+      + '<span id="hubStatusContrato" style="font-size:12px; margin-left:4px"></span>'
+      + '<textarea id="hubPromptContrato" readonly style="display:none; width:100%; height:200px; margin-top:8px; font-size:11.5px; font-family:monospace; border:1px solid #e2e8f0; border-radius:8px; padding:8px"></textarea>'
+      + '<div id="hubConfContrato"></div>';
+    h += cartao(4, 'Contrato social', 'Sócios, participação, nascimento, administração e a cláusula de sucessão. Prompt próprio; a IA transcreve.',
+      chip(CT.ok, CT.lido ? (CT.lido.socios||[]).length + ' sócio(s) · lido em ' + esc(CT.lido.lidoEm || '') : 'sócios lidos (Consultor 360)', 'pendente'), corpo4, proxima === 4);
 
-    /* 5 · análises */
-    var corpo5 = E.analises.ok
-      ? bt('📊 Abrir a análise', 'window.hubAbrirAnalise()', proxima === 5)
-        + '<div style="font-size:12px; color:#64748b; margin-top:2px">Indicadores, crédito, seguros e "se acontecesse" — tudo calculado pelo sistema a partir dos números gravados.</div>'
+    /* 5 · apólices */
+    var AP = E.apolices, corpo5 = '';
+    if (AP.lista.length){
+      corpo5 += '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin-bottom:10px">'
+        + AP.lista.map(function(x){ return linha((x.ramo || 'Apólice') + (x.seguradora ? ' · ' + x.seguradora : ''),
+            (x.vigenciaFim ? 'até ' + x.vigenciaFim : 'vigência ?') + (x.lmiTotal ? ' · LMI ' + mi(x.lmiTotal) : '')); }).join('')
+        + '</div>';
+    }
+    corpo5 += passosDoc('as apólices vigentes (PDF da apólice, endossos ou a relação da corretora atual)')
+      + bt('📋 Copiar o prompt das apólices', "window.hubCopiarPromptDoc('apolices')", false)
+      + bt('📥 Subir o JSON das apólices', "document.getElementById('hubArqApolices').click()", false)
+      + bt('👁 Ver o prompt', "window.hubVerPromptDoc('apolices')", false)
+      + '<input type="file" id="hubArqApolices" accept=".json,application/json,.txt" style="display:none" onchange="window.hubSubirDoc(\'apolices\', this)">'
+      + '<span id="hubStatusApolices" style="font-size:12px; margin-left:4px"></span>'
+      + '<textarea id="hubPromptApolices" readonly style="display:none; width:100%; height:200px; margin-top:8px; font-size:11.5px; font-family:monospace; border:1px solid #e2e8f0; border-radius:8px; padding:8px"></textarea>'
+      + '<div id="hubConfApolices"></div>';
+    h += cartao(5, 'Apólices (opcional)', 'O que a empresa já tem. A IA transcreve; o sistema confronta com o balanço (vencimento, LMI, beneficiário, o que falta).',
+      chip(AP.ok, AP.lista.length + ' apólice(s)', 'opcional'), corpo5, false);
+
+    /* 6 · análises */
+    var corpo6 = E.analises.ok
+      ? bt('📊 Abrir a análise', 'window.hubAbrirAnalise()', proxima === 6)
+        + '<div style="font-size:12px; color:#64748b; margin-top:2px">Indicadores, crédito, seguros, pessoa-chave e "se acontecesse" — tudo calculado pelo sistema com os números, o contrato e as apólices gravados.</div>'
       : '<div style="font-size:12.5px; color:#64748b">Libera quando houver pelo menos um exercício gravado.</div>';
-    h += cartao(5, 'Análises', 'O sistema calcula; a IA não entra aqui.', chip(E.analises.ok, 'disponível', 'aguardando números'), corpo5, proxima === 5);
+    h += cartao(6, 'Análises', 'O sistema calcula; a IA não entra aqui.', chip(E.analises.ok, 'disponível', 'aguardando números'), corpo6, proxima === 6);
 
     el('hubCorpo').innerHTML = h;
   }
@@ -25478,7 +25917,154 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     });
   };
 
-  /* ---------------- etapas 4 e 5 ---------------- */
+  /* ---------------- etapas 4 e 5: contrato e apólices (v79) ---------------- */
+  var DOC = {
+    contrato: { status:'hubStatusContrato', prompt:'hubPromptContrato', conf:'hubConfContrato' },
+    apolices: { status:'hubStatusApolices', prompt:'hubPromptApolices', conf:'hubConfApolices' }
+  };
+  function cnpjEmpresa(){ return (H.doc && (H.doc.cnpj || H.doc.cnpjConsultor360)) || (H.receita && H.receita.cnpj) || ''; }
+  function promptDoc(tipo){
+    var ctx = { nome: H.nome, razaoSocial: (H.receita && H.receita.razaoSocial) || H.doc.razaoSocial || '', cnpj: cnpjEmpresa() };
+    if (tipo === 'contrato'){
+      if (typeof window.montarPromptContrato !== 'function') return '';
+      ctx.qsa = (H.receita && H.receita.qsa) || [];
+      ctx.qsaEm = H.receita && H.receita.consultadoEm;
+      var at = (H.doc.contratoSocial && H.doc.contratoSocial.socios) || [];
+      if (!at.length) H.anos.slice().reverse().some(function(r){
+        if (r.parecer && r.parecer.ficha && Array.isArray(r.parecer.ficha.socios) && r.parecer.ficha.socios.length){ at = r.parecer.ficha.socios; return true; } return false; });
+      ctx.sociosAtuais = at;
+      return window.montarPromptContrato(ctx);
+    }
+    return (typeof window.montarPromptApolices === 'function') ? window.montarPromptApolices(ctx) : '';
+  }
+  window.hubCopiarPromptDoc = function(tipo){
+    var t = promptDoc(tipo); if (!t) return;
+    var ok = copiar(t);
+    st(DOC[tipo].status, ok ? '✓ copiado (' + Math.round(t.length/1000) + ' mil caracteres) — cole numa conversa nova e anexe os documentos'
+                            : 'Não consegui copiar — use "Ver o prompt".', ok ? '#15803d' : '#b45309');
+    if (!ok) window.hubVerPromptDoc(tipo);
+  };
+  window.hubVerPromptDoc = function(tipo){
+    var ta = el(DOC[tipo].prompt); if (!ta) return;
+    ta.value = promptDoc(tipo); ta.style.display = ta.style.display === 'none' ? 'block' : 'none';
+    if (ta.style.display === 'block') ta.select();
+  };
+
+  var PEND = {};    /* o que foi lido e espera o "gravar" */
+  function lista(arr, fn){ return '<ul style="margin:4px 0 0 18px; padding:0; line-height:1.6">' + arr.map(fn).join('') + '</ul>'; }
+  function caixaAviso(itens, cor, fundo, titulo){
+    if (!itens.length) return '';
+    return '<div style="background:' + fundo + '; border-radius:9px; padding:8px 12px; margin:8px 0; font-size:12.5px; color:' + cor + '">'
+      + '<b>' + titulo + '</b>' + lista(itens, function(x){ return '<li>' + esc(x) + '</li>'; }) + '</div>';
+  }
+  function confContrato(R){
+    var C = window.conferirContrato(R.obj);
+    PEND.contrato = C;
+    var h = '<div style="border:1px solid #c7d2fe; background:#eef2ff; border-radius:10px; padding:12px 14px; margin-top:10px">'
+      + '<div style="font-weight:800; color:#3730a3; margin-bottom:6px">Conferência do contrato — confira antes de gravar</div>';
+    h += '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12.5px; background:#fff; border-radius:8px">'
+      + '<thead><tr style="background:#f8fafc; color:#475569; font-size:11px; text-transform:uppercase">'
+      + '<th style="padding:6px 8px; text-align:left">Sócio</th><th style="padding:6px 8px; text-align:right">Participação</th>'
+      + '<th style="padding:6px 8px; text-align:left">Nascimento</th><th style="padding:6px 8px; text-align:left">Administra</th></tr></thead><tbody>'
+      + C.socios.map(function(x){ return '<tr><td style="padding:5px 8px">' + esc(x.nome) + (x.cnpj ? ' <span style="color:#64748b">(PJ)</span>' : '') + '</td>'
+          + '<td style="padding:5px 8px; text-align:right; font-weight:700">' + (x.participacao != null ? String(x.participacao).replace('.',',') + '%' : '—') + '</td>'
+          + '<td style="padding:5px 8px">' + esc(x.dataNascimento || '—') + '</td>'
+          + '<td style="padding:5px 8px">' + (x.administrador ? esc(x.cargo || 'sim') : '') + '</td></tr>'; }).join('')
+      + '<tr style="border-top:2px solid #e2e8f0"><td style="padding:5px 8px; font-weight:700">Soma</td><td style="padding:5px 8px; text-align:right; font-weight:800; color:'
+      + (Math.abs(C.soma - 100) <= 1 ? '#166534' : '#b91c1c') + '">' + C.soma.toFixed(2).replace('.',',') + '%</td><td></td><td></td></tr>'
+      + '</tbody></table></div>';
+    var S = C.sucessao;
+    h += '<div style="margin-top:8px; font-size:12.5px; line-height:1.6"><b>Sucessão:</b> '
+      + esc([S.criterio || 'não classificada', S.metodo, S.prazoMeses ? S.prazoMeses + ' meses' : 'prazo da lei (90 dias)', S.parcelas ? S.parcelas + ' parcelas' : '', S.invalidez ? 'invalidez: ' + (S.invalidez === 'nao' ? 'não' : S.invalidez) : ''].filter(Boolean).join(' · '))
+      + (S.fonte ? ' <span style="color:#64748b">(' + esc(S.fonte) + ')</span>' : '')
+      + (S.texto ? '<div style="background:#fff; border-left:3px solid #6366f1; padding:6px 10px; margin-top:4px; font-size:12px; color:#334155">' + esc(S.texto.length > 600 ? S.texto.slice(0,600) + '…' : S.texto) + '</div>' : '')
+      + '</div>';
+    if (C.administradores.length) h += '<div style="margin-top:6px; font-size:12.5px"><b>Administração:</b> ' + esc(C.administradores.map(function(a){ return a.nome + (a.cargo ? ' (' + a.cargo + ')' : ''); }).join('; ')) + '</div>';
+    if (C.clausulas.length) h += '<div style="margin-top:4px; font-size:12px; color:#475569">' + C.clausulas.length + ' outra(s) cláusula(s) transcrita(s): ' + esc(C.clausulas.map(function(c){ return (c.tema||'').replace(/_/g,' ') || c.clausula; }).join(', ')) + '.</div>';
+    if (C.mudancas.length) h += '<div style="margin-top:4px; font-size:12px; color:#475569">' + C.mudancas.length + ' mudança(s) registrada(s) nas alterações.</div>';
+    h += caixaAviso(R.avisos.concat(C.avisos), '#92400e', '#fffbeb', 'Atenção');
+    h += caixaAviso(C.duvidas, '#334155', '#f1f5f9', 'Dúvidas da IA');
+    h += '<div style="margin-top:10px">' + bt('💾 Gravar o contrato', "window.hubGravarDoc('contrato')", true) + bt('cancelar', "window.hubCancelarDoc('contrato')", false) + '</div></div>';
+    return h;
+  }
+  function confApolices(R){
+    var A = window.conferirApolices(R.obj);
+    PEND.apolices = A;
+    var ult = H.anos[H.anos.length-1] || {};
+    var X = window.analisarApolices(A.apolices, ult);
+    var temAnt = Array.isArray(H.doc.apolices) && H.doc.apolices.length;
+    var h = '<div style="border:1px solid #c7d2fe; background:#eef2ff; border-radius:10px; padding:12px 14px; margin-top:10px">'
+      + '<div style="font-weight:800; color:#3730a3; margin-bottom:6px">Conferência das apólices — ' + A.apolices.length + ' lida(s)</div>'
+      + '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12.5px; background:#fff">'
+      + '<thead><tr style="background:#f8fafc; color:#475569; font-size:11px; text-transform:uppercase">'
+      + '<th style="padding:6px 8px; text-align:left">Ramo · seguradora</th><th style="padding:6px 8px; text-align:left">Vigência</th>'
+      + '<th style="padding:6px 8px; text-align:right">LMI</th><th style="padding:6px 8px; text-align:right">Prêmio</th><th style="padding:6px 8px; text-align:left">Beneficiário</th></tr></thead><tbody>'
+      + X.apolices.map(function(a){ return '<tr><td style="padding:5px 8px"><b>' + esc(a.ramo || '—') + '</b>' + (a.seguradora ? ' · ' + esc(a.seguradora) : '') + (a.numero ? '<br><span style="color:#64748b; font-size:11px">nº ' + esc(a.numero) + '</span>' : '') + '</td>'
+          + '<td style="padding:5px 8px">' + esc((a.vigenciaInicio || '?') + ' a ' + (a.vigenciaFim || '?')) + '</td>'
+          + '<td style="padding:5px 8px; text-align:right">' + (a.lmiTotal != null ? R$(a.lmiTotal) : '—') + '</td>'
+          + '<td style="padding:5px 8px; text-align:right">' + (a.premioTotal != null ? R$(a.premioTotal) : '—') + '</td>'
+          + '<td style="padding:5px 8px">' + esc(a.beneficiario || '—') + '</td></tr>'
+          + (a.achados.length ? '<tr><td colspan="5" style="padding:0 8px 6px; font-size:12px; color:#b45309">' + a.achados.map(function(x){ return '⚠ ' + esc(x.oque); }).join('<br>') + '</td></tr>' : ''); }).join('')
+      + '</tbody></table></div>';
+    h += caixaAviso(X.gerais.map(function(g){ return g.oque + ' ' + g.acao; }), '#9a3412', '#fff7ed', 'O sistema confrontou com o balanço' + (ult.ano ? ' de ' + ult.ano : ''));
+    h += caixaAviso(R.avisos.concat(A.avisos), '#92400e', '#fffbeb', 'Atenção');
+    h += caixaAviso(A.duvidas, '#334155', '#f1f5f9', 'Dúvidas da IA');
+    h += (temAnt ? '<label style="display:flex; gap:6px; align-items:center; font-size:12.5px; margin-top:8px"><input type="checkbox" id="hubApSubstituir"> '
+        + 'Substituir a lista inteira (sem marcar: as apólices deste arquivo entram no lugar das de mesmo número e as outras ' + temAnt + ' continuam)</label>' : '')
+      + '<div style="margin-top:10px">' + bt('💾 Gravar as apólices', "window.hubGravarDoc('apolices')", true) + bt('cancelar', "window.hubCancelarDoc('apolices')", false) + '</div></div>';
+    return h;
+  }
+  window.hubSubirDoc = function(tipo, inp){
+    var f = inp && inp.files && inp.files[0]; if (!f) return;
+    inp.value = '';
+    var rd = new FileReader();
+    return new Promise(function(res){
+      rd.onload = function(){
+        var R = window.lerDocumentoEmpresa(String(rd.result || ''), tipo, cnpjEmpresa());
+        var box = el(DOC[tipo].conf);
+        if (!R.ok){
+          delete PEND[tipo];
+          if (box) box.innerHTML = '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:9px; padding:10px 12px; margin-top:10px; color:#991b1b; font-size:12.5px">⛔ '
+            + R.erros.join(' ') + ' Nada foi gravado.</div>';
+          return res(false);
+        }
+        if (box) box.innerHTML = tipo === 'contrato' ? confContrato(R) : confApolices(R);
+        if (box) box.scrollIntoView({ behavior:'smooth', block:'nearest' });
+        res(true);
+      };
+      rd.readAsText(f, 'utf-8');
+    });
+  };
+  window.hubCancelarDoc = function(tipo){ delete PEND[tipo]; var b = el(DOC[tipo].conf); if (b) b.innerHTML = ''; };
+  window.hubGravarDoc = function(tipo){
+    var P = PEND[tipo]; if (!P) return Promise.resolve(false);
+    var hojeS = new Date().toISOString().slice(0,10);
+    var up = {};
+    if (tipo === 'contrato'){
+      up.contratoSocial = window.contratoParaGravar(P);
+      up.contratoSocialEm = hojeS;
+      if (H.doc.contratoSocial) up.contratoSocialAnterior = H.doc.contratoSocial;
+    } else {
+      var novas = window.apolicesParaGravar(P);
+      var subst = el('hubApSubstituir') && el('hubApSubstituir').checked;
+      var antes = Array.isArray(H.doc.apolices) ? H.doc.apolices : [];
+      var chave = function(a){ return String(a.numero || (a.ramo + '|' + a.seguradora + '|' + a.vigenciaFim)).replace(/\s/g,'').toLowerCase(); };
+      var ks = novas.map(chave);
+      up.apolices = subst ? novas : antes.filter(function(a){ return ks.indexOf(chave(a)) < 0; }).concat(novas);
+      up.apolicesEm = hojeS;
+    }
+    st(DOC[tipo].status, 'Gravando…');
+    return db.collection('empresas').doc(H.id).update(up).then(function(){
+      Object.assign(H.doc, up); delete PEND[tipo];
+      try { var ci = (typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id);
+            if (ci){ if (up.contratoSocial) ci.contratoSocial = up.contratoSocial; if (up.apolices) ci.apolicesEmpresa = up.apolices; } } catch(e){}
+      render();
+      st(DOC[tipo].status, '✓ Gravado. A análise já usa ' + (tipo === 'contrato' ? 'este contrato.' : 'estas apólices.'), '#15803d');
+      return true;
+    }).catch(function(e){ st(DOC[tipo].status, 'Não gravei: ' + esc(e && e.message || e), '#b91c1c'); return false; });
+  };
+
+  /* ---------------- etapa 6 ---------------- */
   window.hubPromptCompleto = function(){
     var m = el('modalPrompt'), ta = el('promptTexto');
     if (!m || !ta) return;
