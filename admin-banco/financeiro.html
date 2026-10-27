@@ -1847,8 +1847,8 @@
             🔄 <span class="btn-txt">Recarregar</span>
           </button>
           <input type="file" id="inputUploadPdf" accept=".pdf" style="display:none" onchange="processarUploadPdf(event)">
-          <button class="btn btn-outline" id="btnPrompt360" onclick="abrirModalPrompt()" title="Copiar o prompt do Consultor 360 para usar no Claude" style="border-color:#0284c7; color:#075985; background:linear-gradient(135deg,#e0f2fe,#bae6fd)">
-            📋 <span class="btn-txt">Prompt Consultor 360</span>
+          <button class="btn btn-outline" id="btnPrompt360" onclick="abrirModalPrompt()" title="Alternativa: o prompt completo, que lê todos os documentos numa conversa só. O caminho principal agora é 🔬 Analisar, na empresa — um prompt curto por etapa." style="border-color:#0284c7; color:#075985; background:linear-gradient(135deg,#e0f2fe,#bae6fd)">
+            📋 <span class="btn-txt">Prompt completo (360)</span>
           </button>
           <button class="btn btn-outline btn-importar" id="btnUploadPdf"
             onclick="document.getElementById('inputUploadPdf').click()">
@@ -7041,6 +7041,9 @@ async function abrirModalDetalhes(empresaId){
       info.linksApresentacao = d.linksApresentacao || null;
       info.contratoSocial = d.contratoSocial || null;
       info.apolicesEmpresa = Array.isArray(d.apolices) ? d.apolices : null;
+      info.sociosIR = Array.isArray(d.sociosIR) ? d.sociosIR : null;
+      info.parecerFinal = d.parecerFinal || null;
+      info.dadosReceita = d.dadosReceita || null;
       info._docLido = true;
       EMPRESAS_CACHE.set(empresaId, info);
     }catch(e){ console.warn("[v79] cadastro da empresa não carregou:", e && e.message); }
@@ -7096,8 +7099,9 @@ async function abrirModalDetalhes(empresaId){
 
     /* v79: contrato e apólices entram onde os módulos sempre leram (em memória) */
     try{
-      if(typeof window.aplicarDocumentosDaEmpresa === 'function' && (info.contratoSocial || info.apolicesEmpresa))
-        window.aplicarDocumentosDaEmpresa(rows, { contratoSocial: info.contratoSocial, apolices: info.apolicesEmpresa });
+      if(typeof window.aplicarDocumentosDaEmpresa === 'function' && (info.contratoSocial || info.apolicesEmpresa || info.sociosIR || info.parecerFinal))
+        window.aplicarDocumentosDaEmpresa(rows, { contratoSocial: info.contratoSocial, apolices: info.apolicesEmpresa,
+                                                  sociosIR: info.sociosIR, parecerFinal: info.parecerFinal });
     }catch(e){ console.warn('[v79] documentos da empresa', e); }
     const rowsCalc = rows.map(r=>({...r, ...calcularIndicadores(r)}));
     
@@ -7198,7 +7202,7 @@ function renderParecer360(data){
     <div style="font-size:11px; color:var(--text-muted); margin-top:6px">Liquidez ajustada = (AC − ativos que não viram caixa em 12 meses) ÷ PC. Cobertura de juros puros = EBIT ÷ juros de empréstimos (sem variação cambial/hedge). Períodos parciais têm fluxos anualizados.</div></div>`;
 
   if(!comParecer.length){
-    box.innerHTML = tabInd + `<div class="alert alert-info">Nenhum parecer importado para esta empresa. Gere o parecer no Consultor 360 (botão <b>📋 Prompt Consultor 360</b> no painel), suba o JSON pelo <b>📥 Importar JSON</b> e o parecer aparece aqui.</div>`;
+    box.innerHTML = tabInd + `<div class="alert alert-info">Nenhum parecer ainda. Em <b>🔬 Analisar</b> (na lista de empresas), a etapa 8 gera o prompt do parecer final a partir do que o sistema já calculou — sem anexar documento.</div>`;
     return;
   }
   const r = comParecer[0]; const P = r.parecer;
@@ -7212,7 +7216,24 @@ function renderParecer360(data){
       <div style="font-size:12px; color:var(--text-muted)">Base: ${esc(String(r.ano))}${r.parcial? ' ('+r.meses+' meses)':''} · gerado em ${esc(P.geradoEm||'')} · períodos analisados: ${esc((P.periodosAnalisados||[]).join(', '))}${P.documentos? ' · docs: '+esc(P.documentos.join('; ')) : ''}</div></div>
       <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="copiarParecerTexto()">📋 Copiar texto</button></div>`;
   h += tabInd;
-  if(P.resumoExecutivo) h += sec('🧭 Resumo executivo', `<div style="line-height:1.6">${esc(P.resumoExecutivo)}</div>`);
+  if(P.resumoExecutivo) h += sec('🧭 Resumo executivo', `<div style="line-height:1.6">${esc(P.resumoExecutivo)}</div>`
+    + (P.fonteParecer ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:6px">${esc(P.fonteParecer)}</div>` : ''));
+  /* v80: o parecer final (etapa 8) — pontos, roteiro e a carta */
+  if(Array.isArray(P.pontosFortes) && P.pontosFortes.length)
+    h += sec('💪 Pontos fortes', lista(P.pontosFortes, s=>`<li>${esc(s)}</li>`));
+  if(Array.isArray(P.pontosDeAtencao) && P.pontosDeAtencao.length)
+    h += sec('🔍 Pontos de atenção', P.pontosDeAtencao.map(x=>`<div style="border-left:4px solid #d97706; background:var(--bg-primary); border-radius:8px; padding:10px 12px; margin-bottom:8px">
+        <div style="font-weight:700">${esc(x.titulo||'')}</div>
+        <div style="font-size:13px; margin-top:4px">${esc(x.oque||'')}</div>
+        ${x.porque? `<div style="font-size:13px; color:var(--text-muted)">${esc(x.porque)}</div>`:''}
+        ${x.pergunta? `<div style="font-size:13px; margin-top:4px"><b>Como perguntar:</b> ${esc(x.pergunta)}</div>`:''}</div>`).join(''));
+  if(Array.isArray(P.roteiro) && P.roteiro.length)
+    h += sec('🗣️ Roteiro da conversa', '<ol style="margin:4px 0 0 18px; line-height:1.6">' + P.roteiro.map(x=>`<li style="margin-bottom:8px"><b>${esc(x.passo||'')}</b> — ${esc(x.oque||'')}${x.frase? `<div style="font-style:italic; color:#0f766e">“${esc(x.frase)}”</div>`:''}</li>`).join('') + '</ol>');
+  if(P.cartaCliente){
+    window._CARTA_CLIENTE = P.cartaCliente;
+    h += sec('✉️ Carta para o cliente', `<div style="white-space:pre-wrap; line-height:1.65; background:var(--bg-primary); border-radius:8px; padding:12px 14px">${esc(P.cartaCliente)}</div>
+      <button class="btn btn-outline" style="padding:6px 12px; font-size:12px; margin-top:8px" onclick="(function(){var t=document.createElement('textarea');t.value=window._CARTA_CLIENTE||'';document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(e){};document.body.removeChild(t);})()">📋 Copiar a carta</button>`);
+  }
   if(P.alertas) h += sec('🚨 Alertas', (P.alertas||[]).map((a,i)=>`
       <div style="border-left:4px solid ${nivelCor[a.nivel]||'#94a3b8'}; background:var(--bg-primary); border-radius:8px; padding:10px 12px; margin-bottom:8px">
         <div style="font-weight:700">${nivelIc[a.nivel]||'•'} ${i+1}. ${esc(a.titulo||'')}</div>
@@ -19699,7 +19720,10 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     }
 
     /* ---------- 3. PATRIMONIAL: O QUE ESTA EM RISCO x O QUE SE PAGA ---------- */
-    var valorEmRisco = imoveis + instalac + maquinas + informat + ferram + veiculos + moveis + estoques;
+    /* v80: veículos saem do valor em risco do patrimonial — vão no seguro de frota,
+       que tem item próprio abaixo. É a mesma conta do "Se acontecesse", para a tela
+       não mostrar dois números para o mesmo LMI. */
+    var valorEmRisco = imoveis + instalac + maquinas + informat + ferram + moveis + estoques;
     if (!(imoveis + instalac + maquinas + informat + ferram + veiculos + moveis) && imobiliz > 0) valorEmRisco = imobiliz + estoques;
     if (valorEmRisco > 0){
       var premioEsperado = valorEmRisco * 0.0022;   // 0,22% a.a. e a media de patrimonial industrial
@@ -19714,11 +19738,11 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
               maquinas ? 'máquinas ' + R$(maquinas) : '',
               informat ? 'informática ' + R$(informat) : '',
               ferram   ? 'ferramentas ' + R$(ferram) : '',
-              veiculos ? 'veículos ' + R$(veiculos) : '',
               moveis   ? 'móveis e utensílios ' + R$(moveis) : '',
               (!(imoveis+instalac+maquinas+informat+ferram+veiculos+moveis) && imobiliz > 0) ? 'imobilizado (sem abertura) ' + R$(imobiliz) : '',
               'estoques ' + R$(estoques)
             ].filter(Boolean).join(' + ') + ' = ' + R$(valorEmRisco) + '.' +
+            (veiculos ? ' Veículos (' + R$(veiculos) + ') ficam no seguro de frota.' : '') +
             (software ? ' Software (' + R$(software) + ') fica de fora: não é bem físico.' : ''),
           'Prêmio esperado a 0,22% do valor em risco: ' + R$(premioEsperado) + ' por ano.',
           temValor(premio) ? ('Prêmio informado pela empresa: ' + R$(premio) + '.')
@@ -19858,11 +19882,15 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
          dos 60% chutados sobre a despesa administrativa. */
       var _fix = (typeof window.estimarDespesasFixas === 'function') ? window.estimarDespesasFixas(a) : null;
       var fixasAno = _fix ? _fix.valor : n(a.despesasAdm) * 0.6;
-      var lcSeis = (ebitda + fixasAno) / 2;   // 6 meses de margem + fixos
+      /* v80: a base do seguro é o "lucro bruto" da apólice — lucro antes do IR mais
+         as despesas fixas —, a mesma do "Se acontecesse". Sem o LAIR, fica o EBITDA. */
+      var _lair = n(a.lucroAntesIR);
+      var _baseLC = _lair > 0 ? _lair : ebitda;
+      var lcSeis = (_baseLC + fixasAno) / 2;   // 6 meses de lucro + fixos
       contas.lucrosCessantes = {
         valor: lcSeis,
         explicacao: [
-          'Base de 6 meses: EBITDA anual ' + R$(ebitda) + ' mais ' + R$(fixasAno) + ' de despesas fixas'
+          'Base de 6 meses: ' + (_lair > 0 ? 'lucro antes do IR ' : 'EBITDA anual ') + R$(_baseLC) + ' mais ' + R$(fixasAno) + ' de despesas fixas'
             + (_fix && _fix.estimado ? ' (estimadas pela DRE)' : '') + ', dividido por 2.',
           'Resultado: ' + R$(lcSeis) + ' - e o que a empresa deixa de gerar se parar meio ano.'
         ]
@@ -19871,7 +19899,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
         produto:'Lucros Cessantes',
         titulo:'Lucros cessantes (6 meses de parada)',
         exposicao: lcSeis, prioridade: 'media',
-        conta:'EBITDA de ' + R$(ebitda) + ' + despesas fixas, em 6 meses = ' + R$(lcSeis) + '.',
+        conta:(_lair > 0 ? 'Lucro antes do IR de ' : 'EBITDA de ') + R$(_baseLC) + ' + despesas fixas, em 6 meses = ' + R$(lcSeis) + '.',
         porque:'A patrimonial reconstrói o predio. Ela não paga a folha nem o banco durante a obra.',
         argumento:'Sem lucros cessantes, o sinistro grande vira problema de caixa mesmo com a indenização paga.'
       });
@@ -24783,7 +24811,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     if (L.caixa == null) faltas.push('O caixa do exercício não veio — sem ele nenhum cenário diz de onde sai o dinheiro.');
     if (L.aplic == null) faltas.push('As aplicações financeiras não vieram: quando o caixa não cobre, a conta vai direto para empréstimo.');
     if (!n(a.valorMaquinas) && n(a.imobilizado)) faltas.push('O imobilizado veio só pelo total: abra por linha (máquinas, instalações, informática…) para o cenário de incêndio.');
-    if (!n(a.funcionarios)) faltas.push('Número de funcionários: com ele o dental e o RC Empregador viram números da empresa.');
+    if (!n(a.funcionarios) && !n((D.empresaDoc||{}).funcionarios)) faltas.push('Número de funcionários: com ele o dental e o RC Empregador viram números da empresa.');
 
     return {
       ano: L.ano, base: L, anoMenorCaixa: L2, taxas: TX, cenarios: cen, faltas: faltas,
@@ -25169,6 +25197,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   'use strict';
   var TXT_CONTRATO = "# Prompt \u2014 Leitor do contrato social \u00b7 Corporate One contrato v1\n\nVoc\u00ea \u00e9 o **leitor do contrato social** de uma empresa. Recebe o contrato (ou a consolida\u00e7\u00e3o e as altera\u00e7\u00f5es), o estatuto e as atas quando \u00e9 S/A, o acordo de s\u00f3cios ou de acionistas quando existe, e \u00e0s vezes o cart\u00e3o CNPJ. Devolve **um arquivo JSON** com quem s\u00e3o os s\u00f3cios, quanto cada um tem, quem administra e o que o contrato diz sobre a sa\u00edda de um s\u00f3cio.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o calcula valor de quota, n\u00e3o diz quanto a empresa pagaria a herdeiros, n\u00e3o sugere seguro. O sistema faz essas contas com o que voc\u00ea entregar. O que importa: **cada s\u00f3cio com a participa\u00e7\u00e3o certa, a data de nascimento, e a cl\u00e1usula de sucess\u00e3o copiada palavra por palavra.**\n\nO **contexto desta empresa** (raz\u00e3o social, CNPJ e o que a Receita Federal lista como quadro societ\u00e1rio) est\u00e1 **no fim deste texto**.\n\n---\n\n## 1 \u00b7 Qual documento vale\n\n- Contratos de limitada mudam por **altera\u00e7\u00f5es contratuais**. Vale a **\u00faltima consolida\u00e7\u00e3o** mais as altera\u00e7\u00f5es posteriores a ela. Se vieram v\u00e1rias, leia na ordem de data e use o estado **depois da \u00faltima**.\n- Liste em `documentos` cada documento lido, com a data e o registro na Junta (n\u00famero e data), quando houver.\n- Liste em `mudancas` o que as altera\u00e7\u00f5es mudaram em s\u00f3cios, capital, administra\u00e7\u00e3o ou cl\u00e1usula de sa\u00edda \u2014 o antes e o depois.\n\n## 2 \u00b7 Os s\u00f3cios\n\nPara cada s\u00f3cio (pessoa f\u00edsica ou jur\u00eddica), no estado atual:\n\n| Campo | De onde vem | Observa\u00e7\u00e3o |\n|---|---|---|\n| `nome` | qualifica\u00e7\u00e3o | como est\u00e1 no contrato |\n| `cpf` ou `cnpj` | qualifica\u00e7\u00e3o | holding entra com `cnpj` \u2014 **pessoa jur\u00eddica n\u00e3o \u00e9 segur\u00e1vel**, o sistema precisa saber |\n| `participacao` | cl\u00e1usula do capital | **percentual de 0 a 100** (48 = 48%). Se o contrato s\u00f3 traz quotas, calcule quotas do s\u00f3cio \u00f7 total de quotas \u00d7 100 e marque `\"participacaoCalculada\": true` |\n| `quotas` e `valorQuotas` | cl\u00e1usula do capital | como est\u00e3o no documento |\n| `dataNascimento` | qualifica\u00e7\u00e3o (\"nascido em\u2026\") | formato AAAA-MM-DD. **N\u00e3o invente** \u2014 se n\u00e3o consta, deixe fora |\n| `estadoCivil` e `regimeBens` | qualifica\u00e7\u00e3o | \"casado \u2014 separa\u00e7\u00e3o total de bens\" |\n| `profissao` | qualifica\u00e7\u00e3o | |\n| `administrador` | cl\u00e1usula da administra\u00e7\u00e3o | `true` se \u00e9 administrador |\n| `cargo` | cl\u00e1usula da administra\u00e7\u00e3o | \"s\u00f3cio-administrador\", \"diretor\" |\n| `fonte` | | \"14\u00aa Altera\u00e7\u00e3o \u00b7 Cl\u00e1usula Quinta\" |\n\nA soma das participa\u00e7\u00f5es tem que dar **100**. Se n\u00e3o der, releia a cl\u00e1usula do capital; se mesmo assim n\u00e3o fechar, entregue como est\u00e1 e explique em `duvidas`.\n\n**Sociedade an\u00f4nima fechada:** o cart\u00e3o CNPJ e o QSA da Receita listam **s\u00f3 os administradores**, nunca os acionistas. Acionista e participa\u00e7\u00e3o v\u00eam do **livro de registro de a\u00e7\u00f5es**, da **lista de presen\u00e7a da \u00faltima AGO** ou das atas de subscri\u00e7\u00e3o. Se nenhum deles veio, deixe `socios: []`, liste os diretores em `administradores` e escreva em `duvidas` que o quadro acion\u00e1rio n\u00e3o foi comprovado.\n\n## 3 \u00b7 A administra\u00e7\u00e3o\n\nEm `administradores`: quem administra, mesmo que n\u00e3o seja s\u00f3cio \u2014 `nome`, `cpf`, `cargo`, `mandatoAte` (se houver), `assinaIsolado` (`true` se pode assinar sozinho), `fonte`.\n\n## 4 \u00b7 A cl\u00e1usula de sucess\u00e3o \u2014 a mais importante\n\nProcure a cl\u00e1usula sobre **falecimento, interdi\u00e7\u00e3o, incapacidade, retirada ou exclus\u00e3o de s\u00f3cio**. Preencha `sucessao`:\n\n| Campo | Valores | Como decidir |\n|---|---|---|\n| `criterio` | `contrato` \u00b7 `omisso` \u00b7 `sa_acordo` \u00b7 `sa_sem` \u00b7 `sem_contrato` | `contrato` quando h\u00e1 cl\u00e1usula que diz **como apurar** a quota; `omisso` quando a limitada n\u00e3o trata do assunto (vale a lei); `sa_acordo` S/A com acordo de acionistas que prev\u00ea compra; `sa_sem` S/A sem acordo; `sem_contrato` se o contrato n\u00e3o veio |\n| `metodo` | `patrimonial` \u00b7 `determinacao` \u00b7 `multiplo` \u00b7 `nominal` \u00b7 `outro` | `patrimonial` = valor patrimonial pelo \u00faltimo balan\u00e7o; `determinacao` = balan\u00e7o especial com ativos a valor de mercado; `multiplo` = m\u00faltiplo de lucro ou EBITDA; `nominal` = valor nominal da quota; `outro` = descreva em `texto` |\n| `prazoMeses` | n\u00famero | prazo de pagamento aos herdeiros, em meses. Em branco = a lei (90 dias) |\n| `parcelas` | n\u00famero | quantas parcelas. Em branco = parcela \u00fanica |\n| `herdeirosPodemEntrar` | `sim` \u00b7 `nao` \u00b7 `depende` | se o contrato deixa os herdeiros entrarem na sociedade |\n| `invalidez` | `sim` \u00b7 `nao` | se a cl\u00e1usula vale tamb\u00e9m para invalidez/incapacidade. **A maioria s\u00f3 fala de morte** |\n| `texto` | | **transcri\u00e7\u00e3o literal** da cl\u00e1usula |\n| `fonte` | | \"Cl\u00e1usula 12\u00aa da 3\u00aa altera\u00e7\u00e3o\" |\n\n## 5 \u00b7 Outras cl\u00e1usulas que pesam\n\nCopie em `clausulas`, **literalmente**, as cl\u00e1usulas destes temas quando existirem: `retirada`, `exclusao`, `cessao_quotas` (venda de quotas e direito de prefer\u00eancia), `administracao` (poderes e limites, inclusive para dar aval e garantia), `prolabore`, `distribuicao` (lucros), `quorum`, `nao_concorrencia`, `outro`. Formato: `{\"tema\": \"\", \"clausula\": \"Cl. 9\u00aa\", \"texto\": \"\", \"fonte\": \"\"}`. N\u00e3o explique \u2014 o sistema e o corretor leem.\n\n## 6 \u00b7 Conferir com a Receita\n\nO contexto traz o quadro societ\u00e1rio que a Receita Federal lista. Compare: s\u00f3cio que est\u00e1 no contrato e n\u00e3o na Receita (ou o contr\u00e1rio), nome diferente, s\u00f3cio que saiu. Cada diferen\u00e7a vai para `duvidas`, dizendo qual documento \u00e9 mais recente.\n\n---\n\n## 7 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_contrato.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo oito linhas**: o que leu, o que n\u00e3o achou, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"contrato\",\n  \"formato\": \"corporate-one-contrato\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\", \"tipoSocietario\": \"ltda|sa|slu|outro\", \"nire\": \"\",\n               \"sede\": \"\", \"fundacao\": \"AAAA-MM-DD\", \"objeto\": \"\", \"capitalSocial\": 0 },\n  \"documentos\": [ { \"nome\": \"14\u00aa Altera\u00e7\u00e3o Contratual\", \"data\": \"AAAA-MM-DD\", \"registro\": \"JucisRS n\u00ba \u2026 em \u2026\" } ],\n  \"socios\": [ { \"nome\": \"\", \"cpf\": \"\", \"participacao\": 0, \"quotas\": 0, \"valorQuotas\": 0,\n                \"dataNascimento\": \"AAAA-MM-DD\", \"estadoCivil\": \"\", \"regimeBens\": \"\", \"profissao\": \"\",\n                \"administrador\": true, \"cargo\": \"\", \"fonte\": \"\" } ],\n  \"administradores\": [ { \"nome\": \"\", \"cpf\": \"\", \"cargo\": \"\", \"mandatoAte\": \"\", \"assinaIsolado\": true, \"fonte\": \"\" } ],\n  \"sucessao\": { \"criterio\": \"\", \"metodo\": \"\", \"prazoMeses\": null, \"parcelas\": null,\n                \"herdeirosPodemEntrar\": \"\", \"invalidez\": \"\", \"texto\": \"\", \"fonte\": \"\" },\n  \"clausulas\": [ { \"tema\": \"\", \"clausula\": \"\", \"texto\": \"\", \"fonte\": \"\" } ],\n  \"mudancas\": [ { \"data\": \"\", \"alteracao\": \"\", \"oque\": \"\", \"antes\": \"\", \"depois\": \"\" } ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` exatamente como acima.\n- `empresa.cnpj` copiado do contrato. O sistema compara com o CNPJ da empresa aberta e recusa arquivo de outra empresa.\n- Campo que o documento n\u00e3o traz fica **fora** do arquivo (nunca `0` ou texto inventado).\n- Textos em portugu\u00eas, sem markdown dentro das strings.\n";
   var TXT_APOLICES = "# Prompt \u2014 Leitor de ap\u00f3lices \u00b7 Corporate One ap\u00f3lices v1\n\nVoc\u00ea \u00e9 o **leitor das ap\u00f3lices de seguro** que uma empresa j\u00e1 tem. Recebe ap\u00f3lices, endossos, propostas aceitas ou a rela\u00e7\u00e3o de seguros da corretora atual. Devolve **um arquivo JSON** com cada ap\u00f3lice: o que cobre, quanto, at\u00e9 quando, em nome de quem e para quem paga.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o diz se o seguro est\u00e1 bom ou ruim, n\u00e3o compara com o balan\u00e7o, n\u00e3o sugere cobertura. O sistema faz esse confronto \u2014 LMI contra o patrim\u00f4nio, vig\u00eancia, benefici\u00e1rio de bem financiado, pr\u00eamio contra o que a empresa declara \u2014 com o que voc\u00ea entregar. O que importa: **cada cobertura com o LMI e a franquia exatos, as datas, o segurado e o benefici\u00e1rio.**\n\nO **contexto desta empresa** (raz\u00e3o social e CNPJ) est\u00e1 **no fim deste texto**.\n\n---\n\n## 1 \u00b7 Uma entrada por ap\u00f3lice\n\nEndosso n\u00e3o \u00e9 ap\u00f3lice nova: aplique o endosso \u00e0 ap\u00f3lice que ele altera e diga em `endossos` o que mudou. Renova\u00e7\u00e3o \u00e9 ap\u00f3lice nova (outro n\u00famero, outra vig\u00eancia) \u2014 se vieram as duas, entregue as duas.\n\n| Campo | O que \u00e9 |\n|---|---|\n| `ramo` | como a ap\u00f3lice chama: \"Empresarial\", \"Riscos Nomeados\", \"Equipamentos\", \"Lucros Cessantes\", \"Responsabilidade Civil Geral\", \"RC Profissional\", \"D&O\", \"Autom\u00f3vel/Frota\", \"Transporte Nacional\", \"RCTR-C\", \"RCF-DC\", \"Riscos de Engenharia\", \"Garantia\", \"Vida em Grupo\", \"Sa\u00fade\", \"Odontol\u00f3gico\", \"Cyber\", \"Ambiental\", \"Fian\u00e7a Locat\u00edcia\", \"outro\" |\n| `seguradora` | nome da seguradora |\n| `numero` | n\u00famero da ap\u00f3lice |\n| `vigenciaInicio` / `vigenciaFim` | AAAA-MM-DD |\n| `segurado` e `cnpjSegurado` | em nome de quem |\n| `beneficiario` | quem recebe a indeniza\u00e7\u00e3o. **Se houver cl\u00e1usula benefici\u00e1ria** (banco, financeira, BNDES, arrendador), copie o nome e o contrato citado |\n| `localRisco` | endere\u00e7o(s) segurado(s) |\n| `coberturas` | **uma linha por cobertura**: `{\"cobertura\": \"\", \"lmi\": 0, \"franquia\": \"\", \"posFranquia\": \"\"}` \u2014 LMI em reais; franquia **como est\u00e1 escrita** (\"10% dos preju\u00edzos, m\u00ednimo R$ 5.000,00\") |\n| `lmiTotal` | LMI da cobertura b\u00e1sica, ou o limite m\u00e1ximo de garantia da ap\u00f3lice, quando houver |\n| `premioLiquido` / `premioTotal` | em reais, por ano. Se o pr\u00eamio for de per\u00edodo diferente de 12 meses, diga em `observacao` |\n| `formaPagamento` | \"4 parcelas\", \"\u00e0 vista\" |\n| `bensSegurados` | quando a ap\u00f3lice lista bens (m\u00e1quinas, ve\u00edculos com placa/chassi, equipamentos), um item por bem: `{\"bem\": \"\", \"valor\": 0}` |\n| `clausulas` | cl\u00e1usulas particulares relevantes, **literais**: rateio, primeiro risco absoluto, valor de novo, benefici\u00e1ria, exclus\u00f5es espec\u00edficas |\n| `endossos` | `{\"numero\": \"\", \"data\": \"\", \"oque\": \"\"}` |\n| `observacao` | o que n\u00e3o coube nos campos |\n| `fonte` | \"Ap\u00f3lice 1234567 \u00b7 p.2\" |\n\n**Vida em grupo, sa\u00fade e odontol\u00f3gico:** em `coberturas`, lance tamb\u00e9m o n\u00famero de vidas e o capital (ou o plano) por vida, quando a ap\u00f3lice trouxer: `{\"cobertura\": \"Morte\", \"lmi\": 50000, \"vidas\": 120, \"observacao\": \"capital uniforme\"}`.\n\n**Frota:** um item por ve\u00edculo em `bensSegurados` (placa ou modelo e valor/FIPE), e as coberturas de RCF-V (danos materiais, corporais, morais) com o LMI de cada uma.\n\n---\n\n## 2 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_apolices.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo oito linhas**: quantas ap\u00f3lices leu, o que ficou ileg\u00edvel, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"apolices\",\n  \"formato\": \"corporate-one-apolices\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"apolices\": [\n    {\n      \"ramo\": \"\", \"seguradora\": \"\", \"numero\": \"\",\n      \"vigenciaInicio\": \"AAAA-MM-DD\", \"vigenciaFim\": \"AAAA-MM-DD\",\n      \"segurado\": \"\", \"cnpjSegurado\": \"\", \"beneficiario\": \"\", \"localRisco\": \"\",\n      \"coberturas\": [ { \"cobertura\": \"\", \"lmi\": 0, \"franquia\": \"\" } ],\n      \"lmiTotal\": 0, \"premioLiquido\": 0, \"premioTotal\": 0, \"formaPagamento\": \"\",\n      \"bensSegurados\": [ { \"bem\": \"\", \"valor\": 0 } ],\n      \"clausulas\": [ \"\" ], \"endossos\": [], \"observacao\": \"\", \"fonte\": \"\"\n    }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` exatamente como acima.\n- `empresa.cnpj` = o CNPJ do segurado principal. O sistema compara com o da empresa aberta.\n- Valores em reais, ponto como decimal, sem separador de milhar. Campo que a ap\u00f3lice n\u00e3o traz fica **fora** (nunca `0` inventado).\n- Textos em portugu\u00eas, sem markdown dentro das strings.\n";
+  var TXT_IR = "# Prompt \u2014 Leitor do IR dos s\u00f3cios \u00b7 Corporate One ir-socios v1\n\nVoc\u00ea \u00e9 o **leitor das declara\u00e7\u00f5es de imposto de renda (IRPF) dos s\u00f3cios** de uma empresa. Recebe o PDF da declara\u00e7\u00e3o (ou o recibo com as fichas) e devolve **um arquivo JSON** com os n\u00fameros de cada s\u00f3cio que conversam com a empresa e com seguro.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o calcula espa\u00e7o de PGBL, n\u00e3o estima imposto, n\u00e3o comenta a vida financeira de ningu\u00e9m. S\u00e3o dados pessoais: transcreva o que a declara\u00e7\u00e3o mostra e nada al\u00e9m disso.\n\nO **contexto** (a empresa e os s\u00f3cios que o contrato social lista) est\u00e1 **no fim deste texto**.\n\n---\n\n## 1 \u00b7 Um objeto por s\u00f3cio\n\nSe vierem duas declara\u00e7\u00f5es do mesmo s\u00f3cio, entregue **s\u00f3 a mais recente** (maior ano-calend\u00e1rio) e diga em `duvidas` que havia outra.\n\n| Campo | De onde vem |\n|---|---|\n| `nome`, `cpf` | identifica\u00e7\u00e3o do contribuinte |\n| `anoCalendario` | o ano-calend\u00e1rio (a declara\u00e7\u00e3o de 2026 \u00e9 do ano-calend\u00e1rio 2025) |\n| `rendimentosTributaveis` | total da ficha de rendimentos tribut\u00e1veis recebidos de PJ (inclui pr\u00f3-labore) |\n| `rendimentosIsentos` | total de rendimentos isentos e n\u00e3o tribut\u00e1veis |\n| `lucrosDistribuidosRecebidos` | linha de lucros e dividendos recebidos (isentos) |\n| `previdenciaPGBL` | contribui\u00e7\u00f5es a previd\u00eancia complementar (PGBL) no ano \u2014 ficha de pagamentos |\n| `previdenciaVGBL` | saldo de VGBL em bens e direitos |\n| `fundosInvestimento` | saldo em fundos (bens e direitos, grupo de fundos) |\n| `acoes` | a\u00e7\u00f5es e participa\u00e7\u00f5es em bolsa |\n| `aplicacoesRendaFixa` | CDB, LCI, LCA, t\u00edtulos, poupan\u00e7a |\n| `contaCorrente` | dep\u00f3sitos em conta corrente |\n| `imoveis` | soma dos im\u00f3veis em bens e direitos |\n| `veiculos` | soma dos ve\u00edculos |\n| `participacoesEmpresas` | quotas e a\u00e7\u00f5es de empresas fechadas (inclusive esta) |\n| `dividasOnus` | d\u00edvidas e \u00f4nus reais no fim do ano |\n| `dependentes` | n\u00famero de dependentes |\n| `planoSaudeDeduzido` | plano de sa\u00fade em pagamentos efetuados |\n| `seguroVidaDeclarado` | se a declara\u00e7\u00e3o mostrar seguro de vida ou VGBL com cobertura, descreva |\n| `fonte` | \"IRPF 2026 \u00b7 ano-calend\u00e1rio 2025 \u00b7 Bens e Direitos\" |\n\nValores **do fim do ano-calend\u00e1rio** (coluna \"situa\u00e7\u00e3o em 31/12\"), em reais, ponto como decimal. Campo que a declara\u00e7\u00e3o n\u00e3o mostra fica **fora** (nunca `0` inventado).\n\n---\n\n## 2 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_ir_socios.json`, num bloco de c\u00f3digo s\u00f3. Depois, no m\u00e1ximo cinco linhas: de quem leu, o que ficou ileg\u00edvel.\n\n```json\n{\n  \"tipo\": \"ir_socios\",\n  \"formato\": \"corporate-one-ir-socios\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"sociosIR\": [\n    { \"nome\": \"\", \"cpf\": \"\", \"anoCalendario\": 2025,\n      \"rendimentosTributaveis\": 0, \"rendimentosIsentos\": 0, \"lucrosDistribuidosRecebidos\": 0,\n      \"previdenciaPGBL\": 0, \"previdenciaVGBL\": 0, \"fundosInvestimento\": 0, \"acoes\": 0,\n      \"aplicacoesRendaFixa\": 0, \"contaCorrente\": 0, \"imoveis\": 0, \"veiculos\": 0,\n      \"participacoesEmpresas\": 0, \"dividasOnus\": 0, \"dependentes\": 0, \"planoSaudeDeduzido\": 0,\n      \"fonte\": \"\" }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` exatamente como acima.\n- `empresa.cnpj` = o CNPJ da empresa do contexto (\u00e9 o que o sistema usa para n\u00e3o gravar na empresa errada).\n";
+  var TXT_PARECER = "# Prompt \u2014 Redator do parecer \u00b7 Corporate One parecer v1\n\nVoc\u00ea \u00e9 o **redator** do parecer de uma empresa para um corretor de seguros que atende empresas dentro de ag\u00eancias banc\u00e1rias. Abaixo deste texto vem o **RESUMO DO SISTEMA**: os n\u00fameros, os indicadores, os cen\u00e1rios e os achados que o sistema j\u00e1 calculou e conferiu. **Voc\u00ea n\u00e3o recebe documentos e n\u00e3o calcula nada.** Seu trabalho \u00e9 transformar o resumo em texto claro, na ordem certa, para duas pessoas: o corretor (que vai conduzir a conversa) e o empres\u00e1rio (que vai ler a carta).\n\n---\n\n## As regras que n\u00e3o se quebram\n\n1. **S\u00f3 n\u00fameros do resumo.** Todo valor, percentual ou prazo que aparecer no seu texto tem que estar no resumo, **escrito do mesmo jeito** (R$ 631.326 continua R$ 631.326 \u2014 n\u00e3o vire \"R$ 0,6 milh\u00e3o\"). N\u00e3o some, n\u00e3o subtraia, n\u00e3o arredonde, n\u00e3o projete. O sistema confere cada n\u00famero do seu texto contra o resumo e marca o que n\u00e3o encontrar.\n2. **Nada que o resumo n\u00e3o diga.** N\u00e3o acrescente fato sobre a empresa, o setor, a economia ou a concorr\u00eancia. Se uma informa\u00e7\u00e3o faz falta, ela vai para `perguntas`.\n3. **Hip\u00f3tese \u00e9 hip\u00f3tese.** Quando o resumo aponta algo estranho (um n\u00famero que n\u00e3o fecha, uma margem fora do padr\u00e3o), escreva como pergunta ou possibilidade \u2014 \"vale entender\", \"pode indicar\" \u2014 **nunca como acusa\u00e7\u00e3o** ou conclus\u00e3o sobre a gest\u00e3o.\n4. **Sem promessa.** N\u00e3o prometa pre\u00e7o de seguro, aprova\u00e7\u00e3o de cr\u00e9dito, taxa ou economia que o resumo n\u00e3o traga. Cen\u00e1rio \u00e9 cen\u00e1rio: \"se acontecesse\", n\u00e3o \"vai acontecer\".\n5. **A carta \u00e9 para o empres\u00e1rio.** Na `cartaCliente`, nada sobre a rela\u00e7\u00e3o com o banco, a ag\u00eancia ou quem indicou a conversa. Tom de consultor: respeitoso, direto, sem jarg\u00e3o de seguro, sem press\u00e3o.\n6. Portugu\u00eas do Brasil, frases curtas, sem markdown dentro dos textos.\n\n## O que escrever\n\n- **`resumoExecutivo`** \u2014 at\u00e9 5 linhas: quem \u00e9 a empresa, como ela est\u00e1 (com 2 ou 3 n\u00fameros do resumo) e o que mais importa proteger.\n- **`pontosFortes`** \u2014 2 a 4 itens, cada um com o n\u00famero que o sustenta.\n- **`pontosDeAtencao`** \u2014 2 a 5 itens: `titulo`, `oque` (o fato, com o n\u00famero), `porque` (o que isso significa para o caixa ou o lucro, se o resumo disser), `pergunta` (como abrir o assunto com o empres\u00e1rio).\n- **`alertas`** \u2014 os 3 a 6 mais importantes, em ordem: `nivel` (`critico` \u00b7 `atencao` \u00b7 `oportunidade`), `titulo`, `oque`, `porque`, `acao`. Use os cen\u00e1rios \"se acontecesse\" e os achados das ap\u00f3lices do resumo; cada alerta com o n\u00famero que o resumo d\u00e1.\n- **`roteiro`** \u2014 a conversa em 4 a 7 passos, na ordem em que o corretor deve conduzir: `passo` (t\u00edtulo curto), `oque` (o que mostrar, com o n\u00famero), `frase` (uma frase pronta para dizer, natural, sem decorar produto).\n- **`cartaCliente`** \u2014 at\u00e9 20 linhas, para enviar ao empres\u00e1rio depois da visita: o que se viu, os 2 ou 3 riscos que mais pesam no caixa e no lucro (com os n\u00fameros dos cen\u00e1rios), e o pr\u00f3ximo passo proposto. Assinatura gen\u00e9rica: \"Equipe de consultoria\".\n- **`perguntas`** \u2014 o que falta saber para o parecer ficar completo, com o porqu\u00ea: `{\"pergunta\": \"\", \"porque\": \"\"}`. Use as lacunas que o resumo lista.\n\n## O que voc\u00ea entrega\n\n**S\u00f3 o arquivo** `<EMPRESA>_parecer.json`, num bloco de c\u00f3digo.\n\n```json\n{\n  \"tipo\": \"parecer\",\n  \"formato\": \"corporate-one-parecer\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"resumoDe\": \"a data que est\u00e1 no t\u00edtulo do RESUMO DO SISTEMA\",\n  \"parecer\": {\n    \"resumoExecutivo\": \"\",\n    \"pontosFortes\": [ \"\" ],\n    \"pontosDeAtencao\": [ { \"titulo\": \"\", \"oque\": \"\", \"porque\": \"\", \"pergunta\": \"\" } ],\n    \"alertas\": [ { \"nivel\": \"atencao\", \"titulo\": \"\", \"oque\": \"\", \"porque\": \"\", \"acao\": \"\" } ],\n    \"roteiro\": [ { \"passo\": \"\", \"oque\": \"\", \"frase\": \"\" } ],\n    \"cartaCliente\": \"\",\n    \"perguntas\": [ { \"pergunta\": \"\", \"porque\": \"\" } ]\n  }\n}\n```\n\n- `empresa.cnpj` copiado do resumo.\n- Encerre a `cartaCliente` com: \"An\u00e1lise feita a partir das demonstra\u00e7\u00f5es e documentos fornecidos \u2014 n\u00e3o substitui parecer cont\u00e1bil ou jur\u00eddico.\"\n";
 
   function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
   function num(v){
@@ -25232,10 +25262,209 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     return TXT_APOLICES + '\n' + L.join('\n');
   }
 
+  function montarPromptIR(ctx){
+    ctx = ctx || {};
+    var L = cabecalho(ctx);
+    var s = Array.isArray(ctx.socios) ? ctx.socios : [];
+    L.push('');
+    if (s.length){
+      L.push('### Sócios pelo contrato social');
+      L.push('');
+      s.forEach(function(x){ L.push('- ' + (x.nome||'') + (x.cpf ? ' — CPF ' + x.cpf : '') + (x.participacao != null ? ' — ' + x.participacao + '%' : '')); });
+      L.push('');
+      L.push('Declaração de quem **não** está nesta lista: transcreva, mas diga em `duvidas` que não é sócio pelo contrato.');
+    } else {
+      L.push('O sistema ainda não tem o contrato social desta empresa: transcreva as declarações anexadas e diga em `duvidas` de quem são.');
+    }
+    L.push('');
+    L.push('Agora leia as declarações anexadas e entregue o arquivo `' + String(ctx.nome || 'EMPRESA').replace(/[^A-Za-z0-9]+/g,'_').toUpperCase() + '_ir_socios.json`.');
+    return TXT_IR + '\n' + L.join('\n');
+  }
+  var CAMPOS_IR = ['rendimentosTributaveis','rendimentosIsentos','lucrosDistribuidosRecebidos','previdenciaPGBL','previdenciaVGBL',
+    'fundosInvestimento','acoes','aplicacoesRendaFixa','contaCorrente','imoveis','veiculos','participacoesEmpresas',
+    'dividasOnus','dependentes','planoSaudeDeduzido'];
+  function conferirIR(o, sociosContrato){
+    var avisos = [];
+    var bruto = (Array.isArray(o && o.sociosIR) ? o.sociosIR : []).filter(function(x){ return x && (x.nome || x.cpf); });
+    var porPessoa = {};
+    bruto.forEach(function(x){
+      var y = {}; Object.keys(x).forEach(function(k){ y[k] = x[k]; });
+      CAMPOS_IR.forEach(function(k){ if (k in y){ var v = num(y[k]); if (v == null) delete y[k]; else y[k] = v; } });
+      y.anoCalendario = num(y.anoCalendario);
+      var k = soDig(y.cpf) || sem(y.nome);
+      if (porPessoa[k] && (porPessoa[k].anoCalendario || 0) >= (y.anoCalendario || 0)){
+        avisos.push('Duas declarações de ' + (y.nome || y.cpf) + ': ficou a mais recente (' + porPessoa[k].anoCalendario + ').'); return; }
+      if (porPessoa[k]) avisos.push('Duas declarações de ' + (y.nome || y.cpf) + ': ficou a mais recente (' + y.anoCalendario + ').');
+      porPessoa[k] = y;
+    });
+    var lista = Object.keys(porPessoa).map(function(k){ return porPessoa[k]; });
+    var sc = Array.isArray(sociosContrato) ? sociosContrato : [];
+    if (sc.length) lista.forEach(function(y){
+      var acha = sc.some(function(s){ return (soDig(s.cpf) && soDig(s.cpf) === soDig(y.cpf)) || (sem(s.nome) && sem(s.nome) === sem(y.nome)); });
+      if (!acha) avisos.push((y.nome || y.cpf) + ' não está entre os sócios do contrato social.');
+    });
+    lista.forEach(function(y){ if (!y.anoCalendario) avisos.push('Sem ano-calendário: ' + (y.nome || y.cpf) + '.'); });
+    if (!lista.length) avisos.push('Nenhuma declaração no arquivo.');
+    return { socios: lista, avisos: avisos,
+             duvidas: Array.isArray(o && o.duvidas) ? o.duvidas.filter(function(d){ return d && String(d).trim(); }) : [] };
+  }
+
+  /* ==============================================================
+     O RESUMO DO SISTEMA — o que vai para o redator do parecer.
+     Só o que o sistema calculou e conferiu. Os números saem num
+     formato só (R$ 631.326 · 14,7% · 2,50x), e é contra este texto
+     que o parecer devolvido é conferido número a número.
+     ============================================================== */
+  function rs(v){ if (v == null || !isFinite(v)) return '—';
+    return (v < 0 ? '−' : '') + 'R$ ' + Math.round(Math.abs(v)).toLocaleString('pt-BR'); }
+  function pct(v){ return (v == null || !isFinite(v)) ? '—' : (v*100).toFixed(1).replace('.',',') + '%'; }
+  function vx(v){ return (v == null || !isFinite(v)) ? '—' : v.toFixed(2).replace('.',',') + 'x'; }
+  function limpa(t){ return String(t == null ? '' : t).replace(/\u00a0/g,' '); }
+  function montarResumoSistema(D){
+    D = D || {};
+    var rows = (D.rows || []).slice().sort(function(x,y){ return Number(x.ano) - Number(y.ano); });
+    var a = rows[rows.length-1] || {};
+    var emp = D.empresaDoc || {};
+    var L = [], nSec = 0;
+    function p(t){ L.push(limpa(t)); }
+    function secao(t){ nSec++; p('## ' + nSec + '. ' + t); }
+    var data = hoje();
+    p('# RESUMO DO SISTEMA — ' + (D.empresaNome || emp.nome || 'empresa') + ' — ' + data);
+    p('(números calculados e conferidos pelo sistema; o parecer usa só estes)');
+    p('');
+    secao('A empresa');
+    var rec = emp.dadosReceita || {};
+    var ficha = null;
+    rows.slice().reverse().some(function(r){ if (r.parecer && r.parecer.ficha){ ficha = r.parecer.ficha; return true; } return false; });
+    p('- Razão social: ' + ((ficha && (ficha.razaoSocial || ficha['Razão social'])) || rec.razaoSocial || D.empresaNome || '—')
+      + ' · CNPJ: ' + (emp.cnpj ? fmtCNPJ(emp.cnpj) : '—'));
+    p('- Setor: ' + (a.setor || D.setor || '—') + (rec.endereco && rec.endereco.municipio ? ' · Cidade: ' + rec.endereco.municipio + (rec.endereco.uf ? '/' + rec.endereco.uf : '') : '')
+      + ' · Funcionários: ' + (n(a.funcionarios) || n(emp.funcionarios) ? (n(a.funcionarios) || n(emp.funcionarios)) : 'não informado'));
+    var pk = null;
+    try { if (typeof window.analisarPessoaChave === 'function') pk = window.analisarPessoaChave(a, rows, D); } catch(e){}
+    if (pk && pk.socios && pk.socios.length){
+      p('- Sócios: ' + pk.socios.map(function(s){ return s.nome + ' (' + pct(s.participacao) + (s.idade ? ', ' + s.idade + ' anos' : '') + (s.administrador ? ', administra' : '') + ')'; }).join('; '));
+      if (pk.sucessao && pk.sucessao.regra) p('- Sucessão: ' + pk.sucessao.regra);
+    }
+    p('');
+    secao('Os números, ano a ano');
+    p('| Ano | Receita líquida | EBITDA | Margem EBITDA | Lucro líquido | Margem líquida | Liquidez corrente | Dívida líq./EBITDA | ROE | Patrimônio líquido | Caixa | Aplicações | Dívida bruta |');
+    p('|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    rows.forEach(function(r){
+      var rec2 = num(r.receitaLiquida) != null ? num(r.receitaLiquida) : num(r.receita);
+      var ll = num(r.lucroLiquido) != null ? num(r.lucroLiquido) : num(r.lucroLiq);
+      var eb = num(r.ebitda), pl2 = num(r.patrimonioLiquido) != null ? num(r.patrimonioLiquido) : num(r.pl);
+      p('| ' + r.ano + ((num(r.periodoMeses) && r.periodoMeses < 12) ? ' (' + r.periodoMeses + ' meses)' : '')
+        + ' | ' + rs(rec2) + ' | ' + rs(eb) + (r.ebitdaPiso ? ' (piso)' : '')
+        + ' | ' + (rec2 && eb != null ? pct(eb/rec2) : '—')
+        + ' | ' + rs(ll) + ' | ' + (rec2 && ll != null ? pct(ll/rec2) : '—')
+        + ' | ' + (num(r.liqCorrente) != null ? vx(num(r.liqCorrente)) : '—')
+        + ' | ' + (num(r.alav) != null ? vx(num(r.alav)) : '—')
+        + ' | ' + (pl2 && ll != null ? pct(ll/pl2) : '—')
+        + ' | ' + rs(pl2) + ' | ' + rs(num(r.caixa)) + ' | ' + rs(num(r.aplicacoesFinanceirasCP)) + ' | ' + rs(num(r.dividaBruta)) + ' |');
+    });
+    if (rows.some(function(r){ return r.ebitdaPiso; }))
+      p('EBITDA "piso": a DRE não abriu a depreciação; o sistema usou o EBIT, que é o mínimo do EBITDA real.');
+    p('');
+    var seg = null;
+    try { if (typeof window.calcularInteligenciaSeguros === 'function') seg = window.calcularInteligenciaSeguros(a, rows, D); } catch(e){}
+    if (seg && seg.oportunidades && seg.oportunidades.length){
+      secao('Seguros — o que o balanço mostra');
+      var peso = { alta:0, media:1, baixa:2 };
+      /* a pessoa-chave tem seção própria, com a conta do contrato — aqui sairia outro número */
+      seg.oportunidades.filter(function(o){ return !o.__pessoaChave; }).slice().sort(function(x,y){ return (peso[x.prioridade]||9) - (peso[y.prioridade]||9); }).slice(0,10).forEach(function(o){
+        p('- [' + (o.prioridade||'') + '] ' + o.produto + ' — ' + o.titulo + (o.exposicao ? ': exposição ' + rs(o.exposicao) : '') + (o.conta ? '. ' + o.conta : ''));
+      });
+      p('');
+    }
+    var im = null;
+    try { if (typeof window.analisarImpacto === 'function') im = window.analisarImpacto(a, rows, D); } catch(e){}
+    if (im && im.cenarios && im.cenarios.length){
+      secao('Se acontecesse — cenários do sistema (ano base ' + im.ano + ')');
+      im.cenarios.forEach(function(c){
+        p('### ' + c.titulo + ' (' + c.produto + ')');
+        c.frases.forEach(function(f){ p('- ' + f); });
+      });
+      p('');
+    }
+    if (pk && pk.frases && pk.frases.length){
+      secao('Pessoa-chave');
+      pk.frases.forEach(function(f){ p('- ' + f); });
+      p('');
+    }
+    var aps = null;
+    rows.slice().reverse().some(function(r){ if (r.parecer && Array.isArray(r.parecer.apolices) && r.parecer.apolices.length){ aps = r.parecer.apolices; return true; } return false; });
+    if (aps){
+      secao('Apólices que a empresa já tem e o confronto do sistema');
+      aps.forEach(function(ap){
+        p('- ' + (ap.ramo||'') + (ap.seguradora ? ' · ' + ap.seguradora : '') + (ap.vigencia ? ' · ' + ap.vigencia : '') + (ap.lmi ? ' · LMI ' + rs(ap.lmi) : ''));
+        (ap.achados||[]).forEach(function(x){ p('  - ' + (x.oque||'') + (x.acao ? ' ' + x.acao : '')); });
+      });
+      p('');
+    }
+    var faltas = [].concat((im && im.faltas) || [], (seg && seg.perguntas) || []);
+    if (faltas.length){
+      secao('O que falta saber');
+      faltas.slice(0,10).forEach(function(f){ p('- ' + f); });
+    }
+    return { texto: L.join('\n'), data: data };
+  }
+  function montarPromptParecer(D){
+    var R = montarResumoSistema(D);
+    return { texto: TXT_PARECER + '\n\n---\n\n' + R.texto, resumo: R.texto, data: R.data };
+  }
+
+  /* os números do parecer têm que estar no resumo */
+  var RE_NUM = /\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?/g;
+  function valorBR(t){ return Number(String(t).replace(/\./g,'').replace(',','.')); }
+  function numerosDe(texto){
+    var out = [], m; texto = limpa(texto); RE_NUM.lastIndex = 0;
+    while ((m = RE_NUM.exec(texto))){
+      var depois = texto.slice(m.index + m[0].length, m.index + m[0].length + 9).toLowerCase();
+      var antes = texto.slice(Math.max(0, m.index - 3), m.index);
+      out.push({ t: m[0], v: valorBR(m[0]), pct: /^\s*%/.test(depois), mi: /^\s*(mi\b|milh)/.test(depois),
+                 mil: /^\s*mil\b/.test(depois), rs: /R\$\s*$/.test(antes), x: /^x\b/.test(depois) });
+    }
+    return out;
+  }
+  function textosDe(o){
+    var t = [];
+    (function andar(x){
+      if (x == null) return;
+      if (typeof x === 'string') t.push(x);
+      else if (Array.isArray(x)) x.forEach(andar);
+      else if (typeof x === 'object') Object.keys(x).forEach(function(k){ andar(x[k]); });
+    })(o);
+    return t;
+  }
+  function conferirParecer(o, resumo){
+    var P = (o && o.parecer) || {};
+    var avisos = [];
+    var base = numerosDe(resumo).map(function(x){ return x.v; });
+    var fora = [];
+    textosDe(P).forEach(function(txt){
+      numerosDe(txt).forEach(function(x){
+        if (!isFinite(x.v)) return;
+        if (!x.pct && !x.rs && !x.mi && !x.mil && !x.x && x.v <= 31) return;    /* contagens, dias, itens */
+        if (!x.pct && !x.rs && Number.isInteger(x.v) && x.v >= 1990 && x.v <= 2100) return;   /* anos */
+        var alvo = x.mi ? x.v * 1e6 : x.mil ? x.v * 1e3 : x.v;
+        var tol = (x.mi || x.mil) ? Math.abs(alvo) * 0.01 : 0.006;
+        var ok = base.some(function(b){ return Math.abs(b - alvo) <= tol; });
+        if (!ok) fora.push(x.t + (x.pct ? '%' : x.mi ? ' mi' : x.mil ? ' mil' : '') + ' — em: "' + (txt.length > 90 ? txt.slice(0, 90) + '…' : txt) + '"');
+      });
+    });
+    if (!P.resumoExecutivo) avisos.push('O parecer veio sem resumo executivo.');
+    if (!P.cartaCliente) avisos.push('O parecer veio sem a carta para o cliente.');
+    if (/gerente|ag[eê]ncia/i.test(String(P.cartaCliente || ''))) avisos.push('A carta para o cliente menciona gerente ou agência — tire antes de enviar.');
+    return { parecer: P, fora: fora, avisos: avisos };
+  }
+
   /* ---------------- ler o arquivo de uma etapa ---------------- */
   var TIPOS = {
     contrato: { re: /contrato/, nome: 'contrato social' },
-    apolices: { re: /apolic|ap[oó]lic|seguro/, nome: 'apólices' }
+    apolices: { re: /apolic|ap[oó]lic/, nome: 'apólices' },
+    ir: { re: /ir[_-]?socios|irpf/, nome: 'IR dos sócios' },
+    parecer: { re: /parecer/, nome: 'parecer' }
   };
   function lerDocumentoEmpresa(texto, tipo, cnpjEmpresa){
     var r = { ok:false, obj:null, erros:[], avisos:[], consertos:[] };
@@ -25249,7 +25478,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       var de = /financeiro|consultor360-import/.test(marca) || Array.isArray(o.periodos) ? 'os números (balanço e DRE) — ele entra na etapa 3'
              : /apresenta/.test(marca) ? 'a apresentação — ela entra na etapa 2'
              : /contrato/.test(marca) ? 'o contrato social — ele entra na etapa 4'
-             : /apolic|seguro/.test(marca) ? 'as apólices — elas entram na etapa 5'
+             : /apolic/.test(marca) ? 'as apólices — elas entram na etapa 5'
+             : /ir[_-]?socios|irpf/.test(marca) ? 'o IR dos sócios — ele entra na etapa 6'
+             : /parecer/.test(marca) ? 'o parecer — ele entra na etapa 8'
              : 'de outro tipo (' + (o.tipo || o.formato || 'sem tipo') + ')';
       r.erros.push('Este arquivo é ' + de + ', não ' + TIPOS[tipo].nome + '.');
       return r;
@@ -25460,7 +25691,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   function aplicarDocumentosDaEmpresa(rows, emp){
     if (!Array.isArray(rows) || !rows.length || !emp) return rows;
     var C = emp.contratoSocial, AP = Array.isArray(emp.apolices) ? emp.apolices : null;
-    if (!C && !AP) return rows;
+    var IR = Array.isArray(emp.sociosIR) && emp.sociosIR.length ? emp.sociosIR : null;
+    var PF = emp.parecerFinal && emp.parecerFinal.parecer ? emp.parecerFinal : null;
+    if (!C && !AP && !IR && !PF) return rows;
     var ord = rows.slice().sort(function(x,y){ return Number(y.ano) - Number(x.ano); });
     var ultimo = ord[0];
     var alvo = ord.filter(function(r){ return r.parecer && typeof r.parecer === 'object'; })[0] || ultimo;
@@ -25512,6 +25745,16 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
         ultimo.premioSegurosAno = R.premioSoma; ultimo.premioSegurosOrigem = 'soma das apólices';
       }
     }
+    /* v80: o IR dos sócios (etapa 6) vale para o exercício mais recente */
+    if (IR) ultimo.sociosIR = IR;
+    /* v80: o parecer final (etapa 8) — só texto, por cima do texto antigo */
+    if (PF){
+      var T = PF.parecer;
+      ['resumoExecutivo','alertas','perguntas','pontosFortes','pontosDeAtencao','roteiro','cartaCliente'].forEach(function(k){
+        if (T[k] != null && !(Array.isArray(T[k]) && !T[k].length) && T[k] !== '') P[k] = T[k]; });
+      P.geradoEm = PF.lidoEm || P.geradoEm;
+      P.fonteParecer = 'parecer final (etapa 8) sobre o resumo do sistema de ' + (PF.resumoDe || PF.lidoEm || '');
+    }
     alvo.parecer = P;
     return rows;
   }
@@ -25527,6 +25770,13 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   window.aplicarDocumentosDaEmpresa = aplicarDocumentosDaEmpresa;
   window.PROMPT_CONTRATO_V1 = TXT_CONTRATO;
   window.PROMPT_APOLICES_V1 = TXT_APOLICES;
+  window.PROMPT_IR_V1 = TXT_IR;
+  window.PROMPT_PARECER_V1 = TXT_PARECER;
+  window.montarPromptIR = montarPromptIR;
+  window.conferirIR = conferirIR;
+  window.montarResumoSistema = montarResumoSistema;
+  window.montarPromptParecer = montarPromptParecer;
+  window.conferirParecer = conferirParecer;
 })();
 /* ===================================================================
    v78 — ANALISAR EMPRESA: UMA TELA, AS ETAPAS EM ORDEM
@@ -25541,7 +25791,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
      3. Números     — prompt curto só de balanço e DRE; incluir ano
      4. Contrato social — prompt próprio (v79)
      5. Apólices    — prompt próprio, opcional (v79)
-     6. Análises    — feitas pelo sistema
+     6. IR dos sócios — prompt próprio, opcional (v80)
+     7. Análises    — feitas pelo sistema
+     8. Parecer final — a IA só escreve, sobre o resumo do sistema (v80)
 
    A IA lê; o sistema calcula. Nenhuma etapa pede análise para a IA.
    =================================================================== */
@@ -25621,6 +25873,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       numeros: { ok: H.anos.length > 0, anos: H.anos, ultimo: ultimo },
       contrato: { ok: !!(d.contratoSocial || temSocios), lido: d.contratoSocial || null, viaConsultor: !d.contratoSocial && !!temSocios },
       apolices: { ok: Array.isArray(d.apolices) && d.apolices.length > 0, lista: Array.isArray(d.apolices) ? d.apolices : [] },
+      ir: { ok: Array.isArray(d.sociosIR) && d.sociosIR.length > 0, lista: Array.isArray(d.sociosIR) ? d.sociosIR : [] },
+      parecer: { ok: !!(d.parecerFinal && d.parecerFinal.parecer), pf: d.parecerFinal || null },
       analises: { ok: H.anos.length > 0 }
     };
   }
@@ -25688,15 +25942,18 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   function render(){
     var m = el('modalHub'); if (!m) return;
     var E = etapas();
-    var feitas = ['cadastro','apresentacao','numeros','contrato','apolices','analises'].filter(function(k){ return E[k].ok; }).length;
-    var proxima = !E.cadastro.ok ? 1 : !E.numeros.ok ? 3 : !E.apresentacao.ok ? 2 : !E.contrato.ok ? 4 : 6;
+    var feitas = ['cadastro','apresentacao','numeros','contrato','analises'].filter(function(k){ return E[k].ok; }).length;
+    var proxima = !E.cadastro.ok ? 1 : !E.numeros.ok ? 3 : !E.apresentacao.ok ? 2 : !E.contrato.ok ? 4 : !E.parecer.ok ? 8 : 7;
+    var opc = [['apólices', E.apolices.ok], ['IR dos sócios', E.ir.ok], ['parecer final', E.parecer.ok]]
+      .map(function(x){ return (x[1] ? '✓ ' : '· ') + x[0]; }).join('  ');
 
     var h = '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px">'
       + '<div><div style="font-size:18px; font-weight:800; color:#0f172a">🔬 ' + esc(H.nome || 'Empresa') + '</div>'
-      + '<div style="font-size:12.5px; color:#64748b">' + feitas + ' de 6 etapas · a IA lê os documentos, o sistema faz as contas</div></div>'
+      + '<div style="font-size:12.5px; color:#64748b">' + feitas + ' de 5 etapas principais · opcionais: ' + opc + '</div>'
+      + '<div style="font-size:11.5px; color:#94a3b8">A IA lê os documentos e escreve; o sistema faz todas as contas.</div></div>'
       + '<button type="button" class="btn btn-outline" style="padding:5px 11px; font-size:12px" onclick="window.fecharHubEmpresa()">fechar</button></div>'
       + '<div style="height:6px; background:#e2e8f0; border-radius:99px; margin:8px 0 16px; overflow:hidden">'
-      + '<div style="height:100%; width:' + Math.round(feitas*100/6) + '%; background:#4f46e5"></div></div>';
+      + '<div style="height:100%; width:' + Math.round(feitas*100/5) + '%; background:#4f46e5"></div></div>';
 
     /* 1 · cadastro */
     var base = camposDaBase(H.doc);
@@ -25794,12 +26051,56 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     h += cartao(5, 'Apólices (opcional)', 'O que a empresa já tem. A IA transcreve; o sistema confronta com o balanço (vencimento, LMI, beneficiário, o que falta).',
       chip(AP.ok, AP.lista.length + ' apólice(s)', 'opcional'), corpo5, false);
 
-    /* 6 · análises */
-    var corpo6 = E.analises.ok
-      ? bt('📊 Abrir a análise', 'window.hubAbrirAnalise()', proxima === 6)
-        + '<div style="font-size:12px; color:#64748b; margin-top:2px">Indicadores, crédito, seguros, pessoa-chave e "se acontecesse" — tudo calculado pelo sistema com os números, o contrato e as apólices gravados.</div>'
+    /* 6 · IR dos sócios */
+    var IRs = E.ir, corpo6 = '';
+    if (IRs.lista.length){
+      corpo6 += '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin-bottom:10px">'
+        + IRs.lista.map(function(x){ return linha(x.nome || x.cpf || 'sócio', 'ano-calendário ' + (x.anoCalendario || '?')); }).join('') + '</div>';
+    }
+    corpo6 += '<div style="font-size:12px; color:#92400e; background:#fffbeb; border-radius:8px; padding:6px 10px; margin-bottom:8px">Dado pessoal do sócio: só com a autorização dele, e para a conversa com ele.</div>'
+      + passosDoc('a declaração de IR (PDF completo) de cada sócio')
+      + bt('📋 Copiar o prompt do IR', "window.hubCopiarPromptDoc('ir')", false)
+      + bt('📥 Subir o JSON do IR', "document.getElementById('hubArqIR').click()", false)
+      + bt('👁 Ver o prompt', "window.hubVerPromptDoc('ir')", false)
+      + '<input type="file" id="hubArqIR" accept=".json,application/json,.txt" style="display:none" onchange="window.hubSubirDoc(\'ir\', this)">'
+      + '<span id="hubStatusIR" style="font-size:12px; margin-left:4px"></span>'
+      + '<textarea id="hubPromptIR" readonly style="display:none; width:100%; height:200px; margin-top:8px; font-size:11.5px; font-family:monospace; border:1px solid #e2e8f0; border-radius:8px; padding:8px"></textarea>'
+      + '<div id="hubConfIR"></div>';
+    h += cartao(6, 'IR dos sócios (opcional)', 'Patrimônio, aplicações, previdência e lucros recebidos de cada sócio. A IA transcreve; o espaço de PGBL e o resto o sistema calcula.',
+      chip(IRs.ok, IRs.lista.length + ' sócio(s)', 'opcional'), corpo6, false);
+
+    /* 7 · análises */
+    var corpo7 = E.analises.ok
+      ? bt('📊 Abrir a análise', 'window.hubAbrirAnalise()', proxima === 7)
+        + '<div style="font-size:12px; color:#64748b; margin-top:2px">Indicadores, crédito, seguros, pessoa-chave e "se acontecesse" — tudo calculado pelo sistema com os números, o contrato, as apólices e o IR gravados.</div>'
       : '<div style="font-size:12.5px; color:#64748b">Libera quando houver pelo menos um exercício gravado.</div>';
-    h += cartao(6, 'Análises', 'O sistema calcula; a IA não entra aqui.', chip(E.analises.ok, 'disponível', 'aguardando números'), corpo6, proxima === 6);
+    h += cartao(7, 'Análises', 'O sistema calcula; a IA não entra aqui.', chip(E.analises.ok, 'disponível', 'aguardando números'), corpo7, proxima === 7);
+
+    /* 8 · parecer final */
+    var PFx = E.parecer, corpo8 = '';
+    if (!E.analises.ok){
+      corpo8 = '<div style="font-size:12.5px; color:#64748b">Libera quando houver pelo menos um exercício gravado.</div>';
+    } else {
+      if (PFx.pf && PFx.pf.parecer && PFx.pf.parecer.resumoExecutivo)
+        corpo8 += '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px 12px; margin-bottom:10px; font-size:12.5px; color:#334155; line-height:1.6">'
+          + esc(PFx.pf.parecer.resumoExecutivo) + '</div>';
+      corpo8 += '<ol style="margin:0 0 10px 18px; padding:0; font-size:12.5px; color:#334155; line-height:1.75">'
+        + '<li>Copie o prompt — ele já leva o <b>resumo que o sistema calculou</b> (números, cenários, seguros, pessoa-chave, apólices).</li>'
+        + '<li>Numa conversa <b>nova</b> da IA, cole. <b>Não precisa anexar nada.</b></li>'
+        + '<li>Suba o arquivo que voltar. O sistema confere cada número do texto contra o resumo antes de gravar.</li></ol>'
+        + bt(PFx.ok ? '📋 Refazer o parecer — copiar o prompt' : '📋 Copiar o prompt do parecer', "window.hubCopiarPromptDoc('parecer')", proxima === 8)
+        + bt('📥 Subir o JSON do parecer', "document.getElementById('hubArqParecer').click()", false)
+        + bt('👁 Ver o prompt', "window.hubVerPromptDoc('parecer')", false)
+        + '<input type="file" id="hubArqParecer" accept=".json,application/json,.txt" style="display:none" onchange="window.hubSubirDoc(\'parecer\', this)">'
+        + '<span id="hubStatusParecer" style="font-size:12px; margin-left:4px"></span>'
+        + '<textarea id="hubPromptParecer" readonly style="display:none; width:100%; height:240px; margin-top:8px; font-size:11.5px; font-family:monospace; border:1px solid #e2e8f0; border-radius:8px; padding:8px"></textarea>'
+        + '<div id="hubConfParecer"></div>';
+    }
+    h += cartao(8, 'Parecer final (opcional)', 'Resumo, alertas, roteiro da conversa e a carta para o cliente. A IA só escreve — sobre os números que o sistema calculou.',
+      chip(PFx.ok, 'escrito em ' + esc((PFx.pf && PFx.pf.lidoEm) || ''), 'opcional'), corpo8, proxima === 8);
+
+    h += '<div style="font-size:11.5px; color:#94a3b8; text-align:center; margin-top:4px">Alternativa: o '
+      + '<a href="#" onclick="window.hubPromptCompleto(); return false" style="color:#64748b">prompt completo Consultor 360</a> lê tudo numa conversa só.</div>';
 
     el('hubCorpo').innerHTML = h;
   }
@@ -25920,8 +26221,25 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   /* ---------------- etapas 4 e 5: contrato e apólices (v79) ---------------- */
   var DOC = {
     contrato: { status:'hubStatusContrato', prompt:'hubPromptContrato', conf:'hubConfContrato' },
-    apolices: { status:'hubStatusApolices', prompt:'hubPromptApolices', conf:'hubConfApolices' }
+    apolices: { status:'hubStatusApolices', prompt:'hubPromptApolices', conf:'hubConfApolices' },
+    ir: { status:'hubStatusIR', prompt:'hubPromptIR', conf:'hubConfIR' },
+    parecer: { status:'hubStatusParecer', prompt:'hubPromptParecer', conf:'hubConfParecer' }
   };
+  /* os dados da análise, montados aqui mesmo — sem precisar abrir a análise */
+  function montarD(){
+    var rows = H.anos.map(function(r){ return Object.assign({}, r); })
+      .sort(function(x,y){ return Number(y.ano) - Number(x.ano); });
+    if (typeof window.aplicarDocumentosDaEmpresa === 'function') window.aplicarDocumentosDaEmpresa(rows, H.doc);
+    if (typeof calcularIndicadores === 'function') rows = rows.map(function(r){ return Object.assign({}, r, calcularIndicadores(r)); });
+    var ci = {};
+    try { ci = ((typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id)) || {}; } catch(e){}
+    var setor = (rows.filter(function(r){ return r.setor; })[0] || {}).setor || 'industria';
+    return { empresaId: H.id, empresaNome: H.nome, empresa: H.nome, setor: setor,
+             empresaDoc: Object.assign({}, ci, { nome: H.nome, cnpj: cnpjEmpresa(), funcionarios: funcionariosDaBase(H.doc) || ci.funcionarios || null,
+                                                 apresentacao: H.doc.apresentacao || null, dadosReceita: H.receita || null }),
+             rows: rows };
+  }
+  window._hubMontarD = montarD;
   function cnpjEmpresa(){ return (H.doc && (H.doc.cnpj || H.doc.cnpjConsultor360)) || (H.receita && H.receita.cnpj) || ''; }
   function promptDoc(tipo){
     var ctx = { nome: H.nome, razaoSocial: (H.receita && H.receita.razaoSocial) || H.doc.razaoSocial || '', cnpj: cnpjEmpresa() };
@@ -25935,12 +26253,22 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       ctx.sociosAtuais = at;
       return window.montarPromptContrato(ctx);
     }
+    if (tipo === 'ir'){
+      ctx.socios = (H.doc.contratoSocial && H.doc.contratoSocial.socios) || [];
+      return (typeof window.montarPromptIR === 'function') ? window.montarPromptIR(ctx) : '';
+    }
+    if (tipo === 'parecer'){
+      if (typeof window.montarPromptParecer !== 'function') return '';
+      var R = window.montarPromptParecer(montarD());
+      H.resumoParecer = R.resumo;
+      return R.texto;
+    }
     return (typeof window.montarPromptApolices === 'function') ? window.montarPromptApolices(ctx) : '';
   }
   window.hubCopiarPromptDoc = function(tipo){
     var t = promptDoc(tipo); if (!t) return;
     var ok = copiar(t);
-    st(DOC[tipo].status, ok ? '✓ copiado (' + Math.round(t.length/1000) + ' mil caracteres) — cole numa conversa nova e anexe os documentos'
+    st(DOC[tipo].status, ok ? '✓ copiado (' + Math.round(t.length/1000) + ' mil caracteres) — cole numa conversa nova' + (tipo === 'parecer' ? ' (sem anexos)' : ' e anexe os documentos')
                             : 'Não consegui copiar — use "Ver o prompt".', ok ? '#15803d' : '#b45309');
     if (!ok) window.hubVerPromptDoc(tipo);
   };
@@ -26014,6 +26342,44 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + '<div style="margin-top:10px">' + bt('💾 Gravar as apólices', "window.hubGravarDoc('apolices')", true) + bt('cancelar', "window.hubCancelarDoc('apolices')", false) + '</div></div>';
     return h;
   }
+  function confIR(R){
+    var I = window.conferirIR(R.obj, (H.doc.contratoSocial && H.doc.contratoSocial.socios) || []);
+    PEND.ir = I;
+    var h = '<div style="border:1px solid #c7d2fe; background:#eef2ff; border-radius:10px; padding:12px 14px; margin-top:10px">'
+      + '<div style="font-weight:800; color:#3730a3; margin-bottom:6px">Conferência do IR — ' + I.socios.length + ' sócio(s)</div>'
+      + '<div style="overflow-x:auto"><table style="width:100%; border-collapse:collapse; font-size:12.5px; background:#fff">'
+      + '<thead><tr style="background:#f8fafc; color:#475569; font-size:11px; text-transform:uppercase">'
+      + '<th style="padding:6px 8px; text-align:left">Sócio</th><th style="padding:6px 8px">Ano</th><th style="padding:6px 8px; text-align:right">Renda tributável</th>'
+      + '<th style="padding:6px 8px; text-align:right">PGBL</th><th style="padding:6px 8px; text-align:right">Aplicações</th><th style="padding:6px 8px; text-align:right">Imóveis</th></tr></thead><tbody>'
+      + I.socios.map(function(x){ var apl = (x.fundosInvestimento||0) + (x.aplicacoesRendaFixa||0) + (x.acoes||0) + (x.previdenciaVGBL||0);
+          return '<tr><td style="padding:5px 8px">' + esc(x.nome || x.cpf) + '</td><td style="padding:5px 8px; text-align:center">' + esc(x.anoCalendario || '?') + '</td>'
+            + '<td style="padding:5px 8px; text-align:right">' + R$(x.rendimentosTributaveis) + '</td><td style="padding:5px 8px; text-align:right">' + R$(x.previdenciaPGBL) + '</td>'
+            + '<td style="padding:5px 8px; text-align:right">' + R$(apl) + '</td><td style="padding:5px 8px; text-align:right">' + R$(x.imoveis) + '</td></tr>'; }).join('')
+      + '</tbody></table></div>';
+    h += caixaAviso(R.avisos.concat(I.avisos), '#92400e', '#fffbeb', 'Atenção');
+    h += caixaAviso(I.duvidas, '#334155', '#f1f5f9', 'Dúvidas da IA');
+    h += '<div style="margin-top:10px">' + bt('💾 Gravar o IR dos sócios', "window.hubGravarDoc('ir')", true) + bt('cancelar', "window.hubCancelarDoc('ir')", false) + '</div></div>';
+    return h;
+  }
+  function confParecer(R){
+    var resumo = H.resumoParecer || (window.montarResumoSistema ? window.montarResumoSistema(montarD()).texto : '');
+    var C = window.conferirParecer(R.obj, resumo);
+    PEND.parecer = { parecer: C.parecer, resumoDe: R.obj.resumoDe || '', fora: C.fora };
+    var Pp = C.parecer;
+    var h = '<div style="border:1px solid #c7d2fe; background:#eef2ff; border-radius:10px; padding:12px 14px; margin-top:10px">'
+      + '<div style="font-weight:800; color:#3730a3; margin-bottom:6px">Conferência do parecer</div>';
+    if (Pp.resumoExecutivo) h += '<div style="background:#fff; border-radius:8px; padding:8px 12px; font-size:12.5px; line-height:1.6; color:#334155">' + esc(Pp.resumoExecutivo) + '</div>';
+    h += '<div style="font-size:12px; color:#475569; margin-top:6px">'
+      + [ (Pp.alertas||[]).length + ' alerta(s)', (Pp.pontosDeAtencao||[]).length + ' ponto(s) de atenção', (Pp.roteiro||[]).length + ' passo(s) de roteiro',
+          Pp.cartaCliente ? 'carta para o cliente' : 'sem carta', (Pp.perguntas||[]).length + ' pergunta(s)' ].join(' · ') + '</div>';
+    h += C.fora.length
+      ? caixaAviso(C.fora, '#991b1b', '#fef2f2', C.fora.length + ' número(s) do texto que NÃO estão no resumo do sistema — corrija ou peça para a IA refazer:')
+      : '<div style="background:#f0fdf4; color:#166534; border-radius:9px; padding:8px 12px; margin:8px 0; font-size:12.5px">✓ Todos os números do texto estão no resumo do sistema.</div>';
+    h += caixaAviso(R.avisos.concat(C.avisos), '#92400e', '#fffbeb', 'Atenção');
+    h += '<div style="margin-top:10px">' + bt(C.fora.length ? '💾 Gravar mesmo assim' : '💾 Gravar o parecer', "window.hubGravarDoc('parecer')", !C.fora.length)
+      + bt('cancelar', "window.hubCancelarDoc('parecer')", false) + '</div></div>';
+    return h;
+  }
   window.hubSubirDoc = function(tipo, inp){
     var f = inp && inp.files && inp.files[0]; if (!f) return;
     inp.value = '';
@@ -26028,7 +26394,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
             + R.erros.join(' ') + ' Nada foi gravado.</div>';
           return res(false);
         }
-        if (box) box.innerHTML = tipo === 'contrato' ? confContrato(R) : confApolices(R);
+        if (box) box.innerHTML = tipo === 'contrato' ? confContrato(R) : tipo === 'apolices' ? confApolices(R) : tipo === 'ir' ? confIR(R) : confParecer(R);
         if (box) box.scrollIntoView({ behavior:'smooth', block:'nearest' });
         res(true);
       };
@@ -26044,6 +26410,11 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       up.contratoSocial = window.contratoParaGravar(P);
       up.contratoSocialEm = hojeS;
       if (H.doc.contratoSocial) up.contratoSocialAnterior = H.doc.contratoSocial;
+    } else if (tipo === 'ir'){
+      up.sociosIR = P.socios; up.sociosIREm = hojeS;
+    } else if (tipo === 'parecer'){
+      up.parecerFinal = { parecer: P.parecer, resumoDe: P.resumoDe, lidoEm: hojeS, numerosForaDoResumo: P.fora.length };
+      up.parecerFinalEm = hojeS;
     } else {
       var novas = window.apolicesParaGravar(P);
       var subst = el('hubApSubstituir') && el('hubApSubstituir').checked;
@@ -26057,9 +26428,10 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     return db.collection('empresas').doc(H.id).update(up).then(function(){
       Object.assign(H.doc, up); delete PEND[tipo];
       try { var ci = (typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id);
-            if (ci){ if (up.contratoSocial) ci.contratoSocial = up.contratoSocial; if (up.apolices) ci.apolicesEmpresa = up.apolices; } } catch(e){}
+            if (ci){ if (up.contratoSocial) ci.contratoSocial = up.contratoSocial; if (up.apolices) ci.apolicesEmpresa = up.apolices;
+                     if (up.sociosIR) ci.sociosIR = up.sociosIR; if (up.parecerFinal) ci.parecerFinal = up.parecerFinal; } } catch(e){}
       render();
-      st(DOC[tipo].status, '✓ Gravado. A análise já usa ' + (tipo === 'contrato' ? 'este contrato.' : 'estas apólices.'), '#15803d');
+      st(DOC[tipo].status, '✓ Gravado. A análise já usa ' + ({ contrato:'este contrato.', apolices:'estas apólices.', ir:'o IR dos sócios.', parecer:'este parecer.' })[tipo], '#15803d');
       return true;
     }).catch(function(e){ st(DOC[tipo].status, 'Não gravei: ' + esc(e && e.message || e), '#b91c1c'); return false; });
   };
@@ -35053,6 +35425,11 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       origemSalario = salBase.origem;
       func = Math.round(folha / (salarioMedio * P.salariosAno));
       origemFunc = 'estimado pela folha de ' + R$(folha) + ' ÷ salário médio do setor';
+    } else if (func > 0){
+      /* v80: o quadro é conhecido (documento ou cadastro) e só a folha falta:
+         o salário vem do setor, mas o número de pessoas NÃO é reestimado.
+         Antes, a receita sobrescrevia o quadro real. */
+      salarioMedio = salBase.valor; origemSalario = salBase.origem + ' (folha não informada)';
     } else if (receita > 0){
       salarioMedio = salBase.valor; origemSalario = salBase.origem;
       func = Math.round(receita / 450000);
