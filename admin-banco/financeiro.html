@@ -2083,7 +2083,7 @@
           <div id="jiConferencia"></div>
           <div id="jiStatus" style="font-size:12px; color:#0c4a6e; margin-top:10px"></div>
           <div id="jiTravas" style="display:none; margin-top:10px; background:#fff; border:1px solid #bae6fd; border-radius:8px; padding:10px; font-size:12px"></div>
-          <div id="jiNotas" style="display:none; margin-top:8px; font-size:11.5px; color:#334155; max-height:160px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px"></div>
+          <div id="jiNotas" style="display:none; margin-top:8px; font-size:11.5px; color:#334155; max-height:300px; overflow:auto; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px"></div>
           <!-- v72: era um segundo id="jiTravas", markup morto desde sempre porque
                $() devolve o primeiro. Agora é o painel das travas duras. -->
           <div id="jiTravasDuras" style="display:none; margin-top:12px"></div>
@@ -3210,7 +3210,7 @@
             <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em">📅 Exercícios mapeados — clique para ver o ano</div>
             <button class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" onclick="abrirDiagnostico()" title="Ver exatamente o que está gravado no banco, bloco por bloco">🔍 O que o banco tem</button>
             <button class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" onclick="copiarBriefing()"
-                    title="Copia o que o sistema já sabe desta empresa, para colar na conversa da IA junto com o balanço do ano novo">📋 Briefing para a IA</button>
+                    title="Copia o prompt do ano novo: o esquema do arquivo e os números que já estão gravados, para a IA extrair só o ano que falta">📋 Prompt do ano novo</button>
             <!-- v71: a apresentação continua alcançável depois que os números chegam -->
             <button class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" id="btnApreAnalise"
                     onclick="abrirApresentacaoDaAnalise()"
@@ -3900,26 +3900,30 @@
          e diz por quê, na mesma tela.
          ================================================================ */
       let EXERCICIOS = [];
+      /* v81: arquivo mais resumido que o gravado não apaga o que já existe */
+      let MANTER_AUSENTES = true;
+      window.alternarManterAusentes = (v) => { MANTER_AUSENTES = !!v; renderConferencia(); };
       function renderConferencia(){
         const box = $('jiConferencia'); if(!box) return;
         if (typeof window.montarExercicioFin !== 'function' || !PACOTE){ box.innerHTML = ''; return; }
         const setor = (PACOTE.empresa && PACOTE.empresa.setorSistema) || null;
         EXERCICIOS = periodosDoPacote().map(p => {
           const _a = Number((p.meta||{}).ano || p.ano);
-          const r = window.montarExercicioFin(p, { setor,
+          const r = window.montarExercicioFin(p, { setor, manterAusentes: MANTER_AUSENTES,
             existente: (ANOS_BANCO && typeof ANOS_BANCO[_a] === 'object') ? ANOS_BANCO[_a] : null });
           r.periodo = p;
           r.jaExiste = !!(ANOS_BANCO && ANOS_BANCO[r.ano]);
           return r;
         });
-        box.innerHTML = window.painelConferenciaImport(EXERCICIOS);
+        box.innerHTML = window.painelConferenciaImport(EXERCICIOS,
+          { manterAusentes: MANTER_AUSENTES, temOpcaoManter: EXERCICIOS.some(e => e.jaExiste && e.completo) });
       }
       window.gravarPacoteConferido = () => importarTodos();
       /* v78: a tela 🔬 Analisar sobe o arquivo direto, sem passar pelo botão */
       window.carregarJSONFinanceiro = (file) => carregarArquivo(file);
       /* v77: abrir outra empresa (ou lançar do zero) zera o importador inteiro */
       window.resetarImportadorJSON = function(){
-        PACOTE = null; PACOTE_EMPRESA = null; PACOTE_BLOQUEIO = null; IMPORTADOS = {}; EXERCICIOS = []; ANOS_BANCO = null;
+        PACOTE = null; PACOTE_EMPRESA = null; PACOTE_BLOQUEIO = null; IMPORTADOS = {}; EXERCICIOS = []; ANOS_BANCO = null; MANTER_AUSENTES = true;
         ['jiStatus','jiConferencia','jiTravas','jiNotas','jiTravasDuras','jiCobertura','jiPeriodos','jiConvive','jiEmpresa','jiSub']
           .forEach(id => { const el = $(id); if(el) el.innerHTML = ''; });
         ['jiTravas','jiNotas','jiTravasDuras'].forEach(id => { const el = $(id); if(el) el.style.display = 'none'; });
@@ -4017,7 +4021,13 @@
         }
         // o parecer (da empresa) vai no período mais recente do pacote
         const ultimo = periodosDoPacote().slice(-1)[0];
-        if(PACOTE.parecer && ultimo && ultimo.meta && ultimo.meta.ano === m.ano) extras.parecer = PACOTE.parecer;
+        /* v81: só o parecer de LEITURA do Consultor 360 é guardado. Arquivo de
+           outra IA com "conclusão", "alertas" em texto solto e "oportunidades"
+           é análise feita fora do sistema — não entra; o texto vem da etapa 8. */
+        const _parecerLeitura = PACOTE.parecer && typeof PACOTE.parecer === 'object'
+          && /consultor360-import/i.test(String(PACOTE.formato||''))
+          && !(Array.isArray(PACOTE.parecer.alertas) && PACOTE.parecer.alertas.some(a => typeof a === 'string'));
+        if(_parecerLeitura && ultimo && ultimo.meta && ultimo.meta.ano === m.ano) extras.parecer = PACOTE.parecer;
         Object.keys(p).forEach(k=>{ if(!k.startsWith('fin')) return; const c=p[k]; if(c && typeof c==='object' && 'c' in c){ conf[k]=c.c; if(c.f) fontes[k]=c.f + (c.o? ' | '+c.o : ''); } });
         return {
           periodoTipo: m.tipo || 'anual', periodoMeses: Number(m.meses||12), dataBase: m.dataBase || null,
@@ -4338,6 +4348,12 @@
             } else {
               j = JSON.parse(r.result);
             }
+            /* v81: o pacote venha como vier — períodos em objeto, unidade declarada */
+            let _notasPacote = [];
+            if (typeof window.normalizarPacoteFin === 'function'){
+              const _NP = window.normalizarPacoteFin(j);
+              j = _NP.pacote; _notasPacote = _NP.notas || [];
+            }
             /* v78: cada etapa tem o seu arquivo. A apresentação e o contrato
                social não entram pelo importador de números. */
             {
@@ -4355,10 +4371,26 @@
               }
             }
             if(!j || !Array.isArray(j.periodos)) throw new Error('Arquivo sem a lista "periodos".');
+            /* v81: o que a IA anotou fora dos números — mostrado, não gravado */
+            {
+              const _lst = (x) => Array.isArray(x) ? x.map(v => typeof v === 'string' ? v : (v && (v.titulo ? v.titulo + (v.evidencia ? ': ' + v.evidencia : '') : (v.oque || v.texto || JSON.stringify(v))))).filter(Boolean) : [];
+              const _div = _lst(j.divergenciasDocumentais).concat(_lst(j.divergencias));
+              const _aus = _lst(j.documentosAusentes);
+              const _ach = _lst(j.achadosNovos);
+              const _analise = (j.parecer && !/consultor360-import/i.test(String(j.formato||''))) || Array.isArray(j.oportunidades);
+              const partes = [];
+              if (_notasPacote.length) partes.push('<b>Como o arquivo foi lido:</b><br>' + _notasPacote.map(x => '• ' + escapeHtml(x)).join('<br>'));
+              if (_div.length) partes.push('<b>Divergências entre documentos que a IA apontou — confira antes de gravar:</b><br>' + _div.map(x => '• ' + escapeHtml(x)).join('<br>'));
+              if (_aus.length) partes.push('<b>Documentos que faltaram:</b><br>' + _aus.map(x => '• ' + escapeHtml(x)).join('<br>'));
+              if (_ach.length) partes.push('<b>Achados da IA (não gravados):</b><br>' + _ach.map(x => '• ' + escapeHtml(x)).join('<br>'));
+              if (_analise) partes.push('<b>O arquivo trouxe análise e oportunidades escritas pela IA.</b> Não foram gravadas: os indicadores, os seguros e os cenários são calculados pelo sistema com os números abaixo, e o texto do parecer sai da etapa 8 de 🔬 Analisar, conferido número a número.');
+              const _bx = $('jiNotas');
+              if (_bx){ _bx.innerHTML = partes.join('<br><br>'); _bx.style.display = partes.length ? 'block' : 'none'; }
+            }
             if(_consertos.length){
               const _bx = $('jiNotas');
               if(_bx){ _bx.style.display='block';
-                _bx.innerHTML = '<b>O arquivo tinha defeitos de formato que não mudam número nenhum '
+                _bx.innerHTML = (_bx.innerHTML ? _bx.innerHTML + '<br><br>' : '') + '<b>O arquivo tinha defeitos de formato que não mudam número nenhum '
                   + '— corrigi para conseguir ler:</b><br>'
                   + _consertos.map(c=>'• '+escapeHtml(c)).join('<br>'); }
             }
@@ -25109,7 +25141,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
    =================================================================== */
 (function(){
   'use strict';
-  var TEXTO = "# Prompt \u2014 Leitor de balan\u00e7o e DRE \u00b7 Corporate One financeiro v1\n\nVoc\u00ea \u00e9 o **leitor dos demonstrativos** de uma empresa. Recebe o balan\u00e7o patrimonial e a DRE (\u00e0s vezes notas explicativas, DFC ou balancete) e devolve **um arquivo JSON** com cada n\u00famero no campo certo do sistema.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o analisa, n\u00e3o d\u00e1 opini\u00e3o, n\u00e3o calcula indicador, n\u00e3o fala de seguro, cr\u00e9dito nem s\u00f3cio. Margens, liquidez, endividamento, seguros e o resto o sistema calcula sozinho, a partir do que voc\u00ea entregar. Por isso o que importa aqui \u00e9 uma coisa: **cada n\u00famero do documento no campo certo, com o valor exato e a fonte.**\n\nO **contexto desta empresa** (nome, CNPJ, quais anos extrair e os que o sistema j\u00e1 tem gravados) est\u00e1 **no fim deste texto**. Leia antes de abrir os documentos.\n\n---\n\n## 1 \u00b7 Antes de ler os n\u00fameros\n\nPara cada documento anexado, descubra:\n\n- **Quais exerc\u00edcios ele traz.** Um balan\u00e7o de 2025 quase sempre tem a coluna comparativa de 2024. Cada coluna \u00e9 um per\u00edodo.\n- **A escala.** \"Em milhares de reais\" ou \"R$ mil\" \u2192 multiplique tudo por 1.000. \"Em milh\u00f5es\" \u2192 por 1.000.000. Diga em `meta.escala` o que o documento dizia.\n- **Quantos meses.** Exerc\u00edcio fechado = 12. Balancete de setembro = 9 e `meta.fechado: false`.\n- **A data-base** (normalmente 31/12).\n\n**Quais anos extrair** est\u00e1 dito no contexto. Ano que o sistema j\u00e1 tem: **n\u00e3o extraia de novo** \u2014 s\u00f3 compare a coluna comparativa com o que est\u00e1 gravado e liste qualquer diferen\u00e7a em `duvidas`.\n\n---\n\n## 2 \u00b7 O plano de contas padr\u00e3o\n\nO sistema segue a estrutura da **Lei 6.404/76** (balan\u00e7o: art. 178; DRE: art. 187) e do **Plano de Contas Referencial da Receita Federal** (o que toda empresa do lucro real usa na ECF). Toda contabilidade brasileira, por mais que mude os nomes, cabe nesta estrutura.\n\nPara cada linha do documento: ache o **grupo** (ativo circulante, passivo n\u00e3o circulante, DRE\u2026), depois a **linha padr\u00e3o** dentro do grupo. A coluna \"Como pode aparecer\" s\u00e3o exemplos, n\u00e3o lista fechada \u2014 o que vale \u00e9 o **significado** da conta.\n\n### 2.1 Ativo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finACCaixa | Caixa e equivalentes de caixa | Caixa \u00b7 Bancos conta movimento \u00b7 Dispon\u00edvel \u00b7 Numer\u00e1rio em tr\u00e2nsito |\n| finACAplicacoes | Aplica\u00e7\u00f5es financeiras de curto prazo | Aplica\u00e7\u00f5es de liquidez imediata \u00b7 CDB \u00b7 Fundos \u00b7 T\u00edtulos e valores mobili\u00e1rios |\n| finCR | Clientes / contas a receber | Duplicatas a receber \u00b7 Clientes nacionais e exterior \u00b7 Cart\u00f5es a receber |\n| finACPDD | (\u2212) Perdas estimadas com cr\u00e9ditos (PDD/PECLD) | Provis\u00e3o para devedores duvidosos \u2014 **lance positivo**, o sistema subtrai |\n| finEstoques | Estoques | Mercadorias \u00b7 Mat\u00e9ria-prima \u00b7 Produtos em elabora\u00e7\u00e3o \u00b7 Produtos acabados \u00b7 Almoxarifado \u00b7 Importa\u00e7\u00f5es em andamento |\n| finACImpostos | Tributos a recuperar | ICMS, PIS, COFINS, IPI a recuperar \u00b7 IRPJ/CSLL antecipados \u00b7 Saldo negativo |\n| finACAdiantFornec | Adiantamentos a fornecedores | Adiantamento a fornecedores \u00b7 Importa\u00e7\u00f5es a liquidar |\n| finACDespAntecip | Despesas antecipadas | Seguros a apropriar \u00b7 Despesas do exerc\u00edcio seguinte |\n| finACOutros | Outros cr\u00e9ditos de curto prazo | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finAtivoCirc | **Total do ativo circulante** | |\n\n### 2.2 Ativo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finANCRealizavel | Realiz\u00e1vel a longo prazo | Cr\u00e9ditos com s\u00f3cios e ligadas \u00b7 Dep\u00f3sitos judiciais \u00b7 Tributos diferidos \u00b7 Clientes LP |\n| finDepJudiciais | Dep\u00f3sitos judiciais (se aberto) | Dep\u00f3sitos recursais \u00b7 Bloqueios judiciais \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finPartesRelacionadas | Cr\u00e9ditos com partes relacionadas (se aberto) | M\u00fatuo com s\u00f3cios \u00b7 Conta corrente de controladas \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finANCInvest | Investimentos | Participa\u00e7\u00f5es societ\u00e1rias \u00b7 Propriedades para investimento \u00b7 Cotas de cooperativa |\n| finImobilizado | **Total do imobilizado** | Imobilizado \u00b7 Bens e direitos de uso |\n| finDepreciacao | (\u2212) Deprecia\u00e7\u00e3o acumulada (se vier separada) | Deprecia\u00e7\u00f5es e amortiza\u00e7\u00f5es acumuladas \u2014 **some todas, lance positivo** |\n| finANCIntangivel | Intang\u00edvel | Marcas \u00b7 Software (quando no intang\u00edvel) \u00b7 \u00c1gio \u00b7 Direito de uso |\n| finAtivoNaoCirc | **Total do ativo n\u00e3o circulante** | |\n| finAtivoTotal | **Total do ativo** | |\n\n**O imobilizado aberto \u2014 sempre que o balan\u00e7o ou a nota abrir as linhas:**\n\n| Campo | Linha |\n|---|---|\n| finValorImoveis | Terrenos \u00b7 Edifica\u00e7\u00f5es \u00b7 Pr\u00e9dios \u00b7 Constru\u00e7\u00f5es |\n| finValorInstalacoes | Instala\u00e7\u00f5es \u00b7 Benfeitorias (inclusive em im\u00f3veis de terceiros) |\n| finValorMaquinas | M\u00e1quinas e equipamentos |\n| finValorInformatica | Equipamentos de inform\u00e1tica \u00b7 Computadores e perif\u00e9ricos \u00b7 Hardware |\n| finValorFerramentas | Ferramentas |\n| finValorVeiculos | Ve\u00edculos |\n| finValorMoveis | M\u00f3veis e utens\u00edlios |\n| finValorSoftware | Software \u00b7 Licen\u00e7as de uso (quando dentro do imobilizado) |\n| finObrasAndamento | Imobiliza\u00e7\u00f5es em andamento \u00b7 Obras em andamento \u00b7 Adiantamento para imobilizado |\n\nLance cada linha **como est\u00e1 no documento** (bruta se o documento mostra bruta e a deprecia\u00e7\u00e3o \u00e0 parte; l\u00edquida se mostra l\u00edquida \u2014 e ent\u00e3o n\u00e3o invente deprecia\u00e7\u00e3o). A soma das linhas tem que dar o total do imobilizado.\n\n### 2.3 Passivo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finCP | Fornecedores | Fornecedores nacionais e estrangeiros \u00b7 Duplicatas a pagar |\n| finPCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **curto prazo** | Capital de giro \u00b7 Conta garantida \u00b7 Desconto de duplicatas \u00b7 Antecipa\u00e7\u00e3o de receb\u00edveis \u00b7 Leasing (parcela curta) |\n| finPCSalarios | Obriga\u00e7\u00f5es trabalhistas e sociais | Sal\u00e1rios \u00b7 Pr\u00f3-labore a pagar \u00b7 INSS \u00b7 FGTS \u00b7 Provis\u00e3o de f\u00e9rias e 13\u00ba |\n| finPCImpostos | Obriga\u00e7\u00f5es tribut\u00e1rias | ICMS, ISS, PIS, COFINS, IRRF a recolher \u00b7 IRPJ/CSLL a pagar \u00b7 Simples |\n| finPCParcelamentos | Parcelamentos tribut\u00e1rios \u2014 curto prazo | REFIS \u00b7 PERT \u00b7 Parcelamento INSS/ICMS/FGTS \u00b7 Transa\u00e7\u00e3o |\n| finPCAdiantClientes | Adiantamentos de clientes | Faturamento antecipado \u00b7 Sinal de vendas |\n| finPCDividendos | Dividendos e lucros a pagar | JCP a pagar \u00b7 Lucros a distribuir |\n| finPCProvisoes | Provis\u00f5es de curto prazo | Conting\u00eancias (curta) \u00b7 Garantias |\n| finPCOutros | Outras obriga\u00e7\u00f5es | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finPassivoCirc | **Total do passivo circulante** | |\n\n### 2.4 Passivo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPNCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **longo prazo** | BNDES \u00b7 FINAME \u00b7 BRDE \u00b7 FINEP \u00b7 Badesul \u00b7 Leasing (parcela longa) |\n| finPNCDebentures | Deb\u00eantures e t\u00edtulos | Notas promiss\u00f3rias \u00b7 CCB de longo prazo |\n| finPNCProvisoes | Provis\u00f5es de longo prazo | Conting\u00eancias trabalhistas, c\u00edveis, tribut\u00e1rias |\n| finPNCOutros | Outras obriga\u00e7\u00f5es de longo prazo | Parcelamentos LP \u00b7 M\u00fatuo de s\u00f3cios \u00b7 AFAC \u2014 **com `outrosDetalhe`** |\n| finPassivoNaoCirc | **Total do passivo n\u00e3o circulante** | |\n| finPassivoTotal | **Total do passivo (sem o PL)**, quando o documento traz | |\n\n### 2.5 Patrim\u00f4nio l\u00edquido\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPLCapital | Capital social realizado | Capital subscrito \u00b7 (\u2212) Capital a integralizar (reduz) |\n| finPLReservasCapital | Reservas de capital | \u00c1gio na emiss\u00e3o \u00b7 Subven\u00e7\u00f5es (no bloco de capital) |\n| finPLReservasIncentivos | Reservas de incentivos fiscais | Subven\u00e7\u00e3o para investimento \u00b7 Fundopem \u00b7 LC 160 |\n| finPLReservasLucro | Reservas de lucros | Legal \u00b7 Estatut\u00e1ria \u00b7 Reten\u00e7\u00e3o \u00b7 Expans\u00e3o |\n| finPLLucrosAcum | Lucros ou preju\u00edzos acumulados | Preju\u00edzo acumulado entra **negativo** |\n| finPLAjustes | Ajustes de avalia\u00e7\u00e3o patrimonial e outros | Outros resultados abrangentes \u00b7 A\u00e7\u00f5es em tesouraria (negativo) |\n| finPL | **Total do patrim\u00f4nio l\u00edquido** | |\n\n### 2.6 DRE\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finReceitaBruta | Receita bruta | Receita operacional bruta \u00b7 Faturamento bruto |\n| finRecMercadorias | Venda de mercadorias/produtos (se aberto) | Vendas de produtos \u00b7 Revenda |\n| finRecServicos | Presta\u00e7\u00e3o de servi\u00e7os (se aberto) | Receita de servi\u00e7os \u00b7 Obras |\n| finRecOutras | Outras receitas operacionais brutas (se aberto) | Loca\u00e7\u00e3o \u00b7 Exporta\u00e7\u00e3o (quando separada) |\n| finDeducoes | (\u2212) **Total das dedu\u00e7\u00f5es** | Dedu\u00e7\u00f5es da receita bruta \u00b7 Impostos sobre vendas e devolu\u00e7\u00f5es |\n| finDevolucoes | Devolu\u00e7\u00f5es e abatimentos (se aberto) | Vendas canceladas \u00b7 Descontos incondicionais |\n| finImpICMS \u00b7 finImpISS \u00b7 finImpPIS \u00b7 finImpCOFINS \u00b7 finImpOutros | Tributos sobre a venda (se abertos) | IPI e outros \u2192 finImpOutros |\n| finReceitaLiq | **Receita l\u00edquida** | Receita operacional l\u00edquida |\n| finCMV | (\u2212) Custo das vendas | CMV \u00b7 CPV \u00b7 CSP \u00b7 Custo dos servi\u00e7os \u00b7 Custos da atividade |\n| finLucroBruto | **Lucro bruto** | Resultado bruto |\n| finDespVendas | Despesas com vendas | Comerciais \u00b7 Comiss\u00f5es \u00b7 Fretes sobre vendas \u00b7 Marketing |\n| finDespAdm | Despesas gerais e administrativas | Administrativas \u00b7 Gastos com pessoal (quando \u00e9 a \u00fanica linha) |\n| finDespTributarias | Despesas tribut\u00e1rias | Impostos e taxas \u00b7 IPTU \u00b7 IPVA \u00b7 IOF |\n| finDepAmort | Deprecia\u00e7\u00e3o e amortiza\u00e7\u00e3o **do per\u00edodo** | Na DRE, na nota ou na DFC \u2014 some custo e despesa |\n| finOutrasReceitas | Outras receitas operacionais | Ganho na venda de imobilizado \u00b7 Recupera\u00e7\u00e3o de despesas \u00b7 Revers\u00f5es |\n| finOutrasDesp | Outras despesas operacionais | Perdas \u00b7 Baixas \u00b7 Doa\u00e7\u00f5es |\n| finEBIT | **Resultado operacional antes do financeiro**, quando o documento traz | Lucro operacional |\n| finReceitaFin | Receitas financeiras | Rendimentos de aplica\u00e7\u00e3o \u00b7 Juros ativos \u00b7 Descontos obtidos \u00b7 Varia\u00e7\u00e3o cambial ativa |\n| finDespesaFin | Despesas financeiras | Juros \u00b7 Encargos banc\u00e1rios \u00b7 IOF \u00b7 Descontos concedidos \u00b7 Varia\u00e7\u00e3o cambial passiva |\n| finResultadoFin | Resultado financeiro (se s\u00f3 vier o l\u00edquido) | Negativo quando as despesas s\u00e3o maiores |\n| finLAIR | **Lucro antes do IR e CSLL** | Resultado antes dos tributos sobre o lucro |\n| finIRCS | (\u2212) IRPJ e CSLL | Correntes + diferidos \u2014 **some os dois**; negativo s\u00f3 se for cr\u00e9dito |\n| finLucroLiq | **Lucro (ou preju\u00edzo) l\u00edquido do exerc\u00edcio** | Resultado l\u00edquido \u2014 preju\u00edzo entra **negativo** |\n\n**Quando a DRE ou a nota abrir a folha** (despesa por natureza), lance tamb\u00e9m: finFolhaAnual (sal\u00e1rios, f\u00e9rias, 13\u00ba), finEncargosFolha (INSS, FGTS, RAT, terceiros), finBeneficiosAnual (sa\u00fade, odontol\u00f3gico, vida, VR/VA, VT), finProLabore (pr\u00f3-labore e honor\u00e1rios da diretoria). Se o documento n\u00e3o abre, **n\u00e3o estime** \u2014 deixe de fora.\n\n**Se o documento informar o n\u00famero de funcion\u00e1rios**, lance finFuncionarios.\n\n---\n\n## 3 \u00b7 Quando voc\u00ea n\u00e3o souber onde a linha entra\n\n**Nenhuma linha do documento \u00e9 descartada.** O destino \u00e9, nesta ordem:\n\n1. A linha padr\u00e3o da tabela, pelo significado.\n2. O campo \"Outros\" do grupo a que ela pertence (`finACOutros`, `finPCOutros`, `finPNCOutros`, `finRecOutras`, `finImpOutros`, `finOutrasDesp`, `finOutrasReceitas`, `finPLAjustes`), **listando em `outrosDetalhe`** o que foi para l\u00e1:\n\n```json\n\"outrosDetalhe\": {\n  \"finACOutros\": [ {\"conta\": \"Estoque de terceiros\", \"valor\": 239781.32, \"fonte\": \"BP 2025 \u00b7 p.1\"} ]\n}\n```\n\n3. Se voc\u00ea n\u00e3o sabe nem o grupo, ponha em `naoAlocado` com o nome exato da conta, o valor e onde ela aparece. O sistema mostra ao corretor, que decide.\n\nLinha que **s\u00f3 existe como t\u00edtulo** (ATIVO CIRCULANTE, DISPON\u00cdVEL\u2026) e repete o valor das contas de baixo: lance **uma vez s\u00f3**, no n\u00edvel mais detalhado que voc\u00ea consegue classificar. Somar o t\u00edtulo com a subconta dobra o valor.\n\n---\n\n## 4 \u00b7 Regras de cada n\u00famero\n\n- Formato de cada campo: `{\"v\": 1234567.89, \"c\": \"v\", \"f\": \"documento \u00b7 p\u00e1gina \u00b7 nome da linha\"}`.\n- `\"c\": \"v\"` = lido direto. `\"c\": \"!\"` = voc\u00ea somou, subtraiu ou interpretou \u2014 a\u00ed `\"o\"` \u00e9 obrigat\u00f3rio e diz a conta (`\"o\": \"11.429.206,19 + 4.192.308,44\"`).\n- Valores **em reais**, ponto como decimal, sem separador de milhar, com os centavos do documento.\n- **Custos, despesas e dedu\u00e7\u00f5es entram positivos** \u2014 o sistema subtrai. S\u00f3 s\u00e3o negativos: preju\u00edzo, preju\u00edzo acumulado, resultado financeiro negativo e IR quando \u00e9 cr\u00e9dito.\n- **Linha que o documento n\u00e3o tem fica fora do arquivo.** Nunca mande `0` nem `null` para dizer \"n\u00e3o achei\". Zero s\u00f3 quando o documento mostra zero (`{\"v\": 0, \"c\": \"v\", \"f\": \"...\"}`).\n- **Os totais s\u00e3o os do documento**, mesmo que a soma das contas d\u00ea diferente. O sistema confere.\n- Empr\u00e9stimo do circulante e do n\u00e3o circulante s\u00e3o **duas linhas diferentes**. Nunca copie o mesmo valor nos dois.\n- O que a DRE n\u00e3o traz mas \u00e9 a diferen\u00e7a entre duas linhas que ela traz (ex.: CMV = receita l\u00edquida \u2212 lucro bruto): pode lan\u00e7ar com `\"c\": \"!\"` e a conta em `\"o\"`.\n\n---\n\n## 5 \u00b7 A confer\u00eancia \u2014 fa\u00e7a antes de entregar\n\nPara cada per\u00edodo, confira e escreva o resultado em `conferencia`:\n\n| Confere | Tem que dar |\n|---|---|\n| caixa + aplica\u00e7\u00f5es + clientes \u2212 PDD + estoques + tributos + adiantamentos + despesas antecipadas + outros | total do ativo circulante |\n| realiz\u00e1vel LP + investimentos + imobilizado (\u2212 deprecia\u00e7\u00e3o, se separada) + intang\u00edvel | total do ativo n\u00e3o circulante |\n| circulante + n\u00e3o circulante | ativo total |\n| as contas do passivo circulante | total do passivo circulante |\n| as contas do passivo n\u00e3o circulante | total do passivo n\u00e3o circulante |\n| as contas do PL | total do PL |\n| passivo circulante + n\u00e3o circulante + PL | **ativo total** |\n| receita bruta \u2212 dedu\u00e7\u00f5es | receita l\u00edquida |\n| receita l\u00edquida \u2212 custo | lucro bruto |\n| lucro antes do IR \u2212 IRPJ/CSLL | lucro l\u00edquido |\n| linhas do imobilizado | total do imobilizado |\n\nSe uma soma n\u00e3o fecha, **falta uma conta**: volte ao documento e ache. Se mesmo assim n\u00e3o fechar, ponha a diferen\u00e7a no \"Outros\" do grupo com `\"c\": \"!\"` e explique. Grupo que ficou s\u00f3 com o total, sem as contas, \u00e9 erro de leitura \u2014 abra as contas.\n\n---\n\n## 6 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_financeiro.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo dez linhas** de texto: o que voc\u00ea leu, o que n\u00e3o achou, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"financeiro\",\n  \"formato\": \"corporate-one-financeiro\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"periodos\": [\n    {\n      \"meta\": { \"ano\": 2025, \"meses\": 12, \"dataBase\": \"2025-12-31\", \"fechado\": true,\n                \"documento\": \"Balan\u00e7o 2025.pdf; DRE 2025.pdf\", \"escala\": \"reais\", \"auditado\": false },\n      \"finReceitaBruta\": {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"finAtivoTotal\":   {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"outrosDetalhe\": {},\n      \"naoAlocado\": [ {\"conta\": \"\", \"valor\": 0, \"fonte\": \"\"} ],\n      \"conferencia\": { \"ativoCirculante\": \"fecha\", \"passivoMaisPL\": \"fecha \u00b7 diferen\u00e7a 0,00\" }\n    }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` v\u00e3o **exatamente** como acima \u2014 \u00e9 por eles que o sistema sabe que este arquivo \u00e9 de n\u00fameros e n\u00e3o de contrato ou apresenta\u00e7\u00e3o.\n- `empresa.cnpj` **copiado do documento** (cabe\u00e7alho do balan\u00e7o ou da DRE). O sistema compara com o CNPJ da empresa aberta e recusa arquivo de outra empresa.\n- Um objeto em `periodos` para **cada ano a extrair**, do mais antigo para o mais recente.\n- `duvidas`: tudo o que o corretor precisa conferir \u2014 linha ileg\u00edvel, total que n\u00e3o fechou, valor da coluna comparativa diferente do que o sistema tem gravado.\n";
+  var TEXTO = "# Prompt \u2014 Leitor de balan\u00e7o e DRE \u00b7 Corporate One financeiro v1\n\nVoc\u00ea \u00e9 o **leitor dos demonstrativos** de uma empresa. Recebe o balan\u00e7o patrimonial e a DRE (\u00e0s vezes notas explicativas, DFC ou balancete) e devolve **um arquivo JSON** com cada n\u00famero no campo certo do sistema.\n\n**Voc\u00ea s\u00f3 transcreve.** N\u00e3o analisa, n\u00e3o d\u00e1 opini\u00e3o, n\u00e3o calcula indicador, n\u00e3o fala de seguro, cr\u00e9dito nem s\u00f3cio. Margens, liquidez, endividamento, seguros e o resto o sistema calcula sozinho, a partir do que voc\u00ea entregar. Por isso o que importa aqui \u00e9 uma coisa: **cada n\u00famero do documento no campo certo, com o valor exato e a fonte.**\n\nO **contexto desta empresa** (nome, CNPJ, quais anos extrair e os que o sistema j\u00e1 tem gravados) est\u00e1 **no fim deste texto**. Leia antes de abrir os documentos.\n\n---\n\n## 1 \u00b7 Antes de ler os n\u00fameros\n\nPara cada documento anexado, descubra:\n\n- **Quais exerc\u00edcios ele traz.** Um balan\u00e7o de 2025 quase sempre tem a coluna comparativa de 2024. Cada coluna \u00e9 um per\u00edodo.\n- **A escala.** \"Em milhares de reais\" ou \"R$ mil\" \u2192 multiplique tudo por 1.000. \"Em milh\u00f5es\" \u2192 por 1.000.000. Diga em `meta.escala` o que o documento dizia. Se preferir n\u00e3o converter, **n\u00e3o converta nada** e escreva no topo do arquivo `\"unidadeMonetaria\": \"milhares de reais\"` \u2014 o sistema converte. Nunca misture: ou tudo em reais, ou tudo na unidade declarada.\n- **Quantos meses.** Exerc\u00edcio fechado = 12. Balancete de setembro = 9 e `meta.fechado: false`.\n- **A data-base** (normalmente 31/12).\n\n**Quais anos extrair** est\u00e1 dito no contexto. Ano que o sistema j\u00e1 tem: **n\u00e3o extraia de novo** \u2014 s\u00f3 compare a coluna comparativa com o que est\u00e1 gravado e liste qualquer diferen\u00e7a em `duvidas`.\n\n---\n\n## 2 \u00b7 O plano de contas padr\u00e3o\n\nO sistema segue a estrutura da **Lei 6.404/76** (balan\u00e7o: art. 178; DRE: art. 187) e do **Plano de Contas Referencial da Receita Federal** (o que toda empresa do lucro real usa na ECF). Toda contabilidade brasileira, por mais que mude os nomes, cabe nesta estrutura.\n\nPara cada linha do documento: ache o **grupo** (ativo circulante, passivo n\u00e3o circulante, DRE\u2026), depois a **linha padr\u00e3o** dentro do grupo. A coluna \"Como pode aparecer\" s\u00e3o exemplos, n\u00e3o lista fechada \u2014 o que vale \u00e9 o **significado** da conta.\n\n### 2.1 Ativo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finACCaixa | Caixa e equivalentes de caixa | Caixa \u00b7 Bancos conta movimento \u00b7 Dispon\u00edvel \u00b7 Numer\u00e1rio em tr\u00e2nsito |\n| finACAplicacoes | Aplica\u00e7\u00f5es financeiras de curto prazo | Aplica\u00e7\u00f5es de liquidez imediata \u00b7 CDB \u00b7 Fundos \u00b7 T\u00edtulos e valores mobili\u00e1rios |\n| finCR | Clientes / contas a receber | Duplicatas a receber \u00b7 Clientes nacionais e exterior \u00b7 Cart\u00f5es a receber |\n| finACPDD | (\u2212) Perdas estimadas com cr\u00e9ditos (PDD/PECLD) | Provis\u00e3o para devedores duvidosos \u2014 **lance positivo**, o sistema subtrai |\n| finEstoques | Estoques | Mercadorias \u00b7 Mat\u00e9ria-prima \u00b7 Produtos em elabora\u00e7\u00e3o \u00b7 Produtos acabados \u00b7 Almoxarifado \u00b7 Importa\u00e7\u00f5es em andamento |\n| finACImpostos | Tributos a recuperar | ICMS, PIS, COFINS, IPI a recuperar \u00b7 IRPJ/CSLL antecipados \u00b7 Saldo negativo |\n| finACAdiantFornec | Adiantamentos a fornecedores | Adiantamento a fornecedores \u00b7 Importa\u00e7\u00f5es a liquidar |\n| finACDespAntecip | Despesas antecipadas | Seguros a apropriar \u00b7 Despesas do exerc\u00edcio seguinte |\n| finACOutros | Outros cr\u00e9ditos de curto prazo | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finAtivoCirc | **Total do ativo circulante** | |\n\n### 2.2 Ativo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finANCRealizavel | Realiz\u00e1vel a longo prazo | Cr\u00e9ditos com s\u00f3cios e ligadas \u00b7 Dep\u00f3sitos judiciais \u00b7 Tributos diferidos \u00b7 Clientes LP |\n| finDepJudiciais | Dep\u00f3sitos judiciais (se aberto) | Dep\u00f3sitos recursais \u00b7 Bloqueios judiciais \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finPartesRelacionadas | Cr\u00e9ditos com partes relacionadas (se aberto) | M\u00fatuo com s\u00f3cios \u00b7 Conta corrente de controladas \u2014 **tamb\u00e9m somado em finANCRealizavel** |\n| finANCInvest | Investimentos | Participa\u00e7\u00f5es societ\u00e1rias \u00b7 Propriedades para investimento \u00b7 Cotas de cooperativa |\n| finImobilizado | **Total do imobilizado** | Imobilizado \u00b7 Bens e direitos de uso |\n| finDepreciacao | (\u2212) Deprecia\u00e7\u00e3o acumulada (se vier separada) | Deprecia\u00e7\u00f5es e amortiza\u00e7\u00f5es acumuladas \u2014 **some todas, lance positivo** |\n| finANCIntangivel | Intang\u00edvel | Marcas \u00b7 Software (quando no intang\u00edvel) \u00b7 \u00c1gio \u00b7 Direito de uso |\n| finAtivoNaoCirc | **Total do ativo n\u00e3o circulante** | |\n| finAtivoTotal | **Total do ativo** | |\n\n**O imobilizado aberto \u2014 sempre que o balan\u00e7o ou a nota abrir as linhas:**\n\n| Campo | Linha |\n|---|---|\n| finValorImoveis | Terrenos \u00b7 Edifica\u00e7\u00f5es \u00b7 Pr\u00e9dios \u00b7 Constru\u00e7\u00f5es |\n| finValorInstalacoes | Instala\u00e7\u00f5es \u00b7 Benfeitorias (inclusive em im\u00f3veis de terceiros) |\n| finValorMaquinas | M\u00e1quinas e equipamentos |\n| finValorInformatica | Equipamentos de inform\u00e1tica \u00b7 Computadores e perif\u00e9ricos \u00b7 Hardware |\n| finValorFerramentas | Ferramentas |\n| finValorVeiculos | Ve\u00edculos |\n| finValorMoveis | M\u00f3veis e utens\u00edlios |\n| finValorSoftware | Software \u00b7 Licen\u00e7as de uso (quando dentro do imobilizado) |\n| finObrasAndamento | Imobiliza\u00e7\u00f5es em andamento \u00b7 Obras em andamento \u00b7 Adiantamento para imobilizado |\n\nLance cada linha **como est\u00e1 no documento** (bruta se o documento mostra bruta e a deprecia\u00e7\u00e3o \u00e0 parte; l\u00edquida se mostra l\u00edquida \u2014 e ent\u00e3o n\u00e3o invente deprecia\u00e7\u00e3o). A soma das linhas tem que dar o total do imobilizado.\n\n### 2.3 Passivo circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finCP | Fornecedores | Fornecedores nacionais e estrangeiros \u00b7 Duplicatas a pagar |\n| finPCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **curto prazo** | Capital de giro \u00b7 Conta garantida \u00b7 Desconto de duplicatas \u00b7 Antecipa\u00e7\u00e3o de receb\u00edveis \u00b7 Leasing (parcela curta) |\n| finPCSalarios | Obriga\u00e7\u00f5es trabalhistas e sociais | Sal\u00e1rios \u00b7 Pr\u00f3-labore a pagar \u00b7 INSS \u00b7 FGTS \u00b7 Provis\u00e3o de f\u00e9rias e 13\u00ba |\n| finPCImpostos | Obriga\u00e7\u00f5es tribut\u00e1rias | ICMS, ISS, PIS, COFINS, IRRF a recolher \u00b7 IRPJ/CSLL a pagar \u00b7 Simples |\n| finPCParcelamentos | Parcelamentos tribut\u00e1rios \u2014 curto prazo | REFIS \u00b7 PERT \u00b7 Parcelamento INSS/ICMS/FGTS \u00b7 Transa\u00e7\u00e3o |\n| finPCAdiantClientes | Adiantamentos de clientes | Faturamento antecipado \u00b7 Sinal de vendas |\n| finPCDividendos | Dividendos e lucros a pagar | JCP a pagar \u00b7 Lucros a distribuir |\n| finPCProvisoes | Provis\u00f5es de curto prazo | Conting\u00eancias (curta) \u00b7 Garantias |\n| finPCOutros | Outras obriga\u00e7\u00f5es | Tudo o que sobrar do circulante \u2014 **com `outrosDetalhe`** |\n| finPassivoCirc | **Total do passivo circulante** | |\n\n### 2.4 Passivo n\u00e3o circulante\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPNCEmprestimos | Empr\u00e9stimos e financiamentos \u2014 **longo prazo** | BNDES \u00b7 FINAME \u00b7 BRDE \u00b7 FINEP \u00b7 Badesul \u00b7 Leasing (parcela longa) |\n| finPNCDebentures | Deb\u00eantures e t\u00edtulos | Notas promiss\u00f3rias \u00b7 CCB de longo prazo |\n| finPNCProvisoes | Provis\u00f5es de longo prazo | Conting\u00eancias trabalhistas, c\u00edveis, tribut\u00e1rias |\n| finPNCOutros | Outras obriga\u00e7\u00f5es de longo prazo | Parcelamentos LP \u00b7 M\u00fatuo de s\u00f3cios \u00b7 AFAC \u2014 **com `outrosDetalhe`** |\n| finPassivoNaoCirc | **Total do passivo n\u00e3o circulante** | |\n| finPassivoTotal | **Total do passivo (sem o PL)**, quando o documento traz | |\n\n### 2.5 Patrim\u00f4nio l\u00edquido\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finPLCapital | Capital social realizado | Capital subscrito \u00b7 (\u2212) Capital a integralizar (reduz) |\n| finPLReservasCapital | Reservas de capital | \u00c1gio na emiss\u00e3o \u00b7 Subven\u00e7\u00f5es (no bloco de capital) |\n| finPLReservasIncentivos | Reservas de incentivos fiscais | Subven\u00e7\u00e3o para investimento \u00b7 Fundopem \u00b7 LC 160 |\n| finPLReservasLucro | Reservas de lucros | Legal \u00b7 Estatut\u00e1ria \u00b7 Reten\u00e7\u00e3o \u00b7 Expans\u00e3o |\n| finPLLucrosAcum | Lucros ou preju\u00edzos acumulados | Preju\u00edzo acumulado entra **negativo** |\n| finPLAjustes | Ajustes de avalia\u00e7\u00e3o patrimonial e outros | Outros resultados abrangentes \u00b7 A\u00e7\u00f5es em tesouraria (negativo) |\n| finPL | **Total do patrim\u00f4nio l\u00edquido** | |\n\n### 2.6 DRE\n\n| Campo | Linha padr\u00e3o | Como pode aparecer |\n|---|---|---|\n| finReceitaBruta | Receita bruta | Receita operacional bruta \u00b7 Faturamento bruto |\n| finRecMercadorias | Venda de mercadorias/produtos (se aberto) | Vendas de produtos \u00b7 Revenda |\n| finRecServicos | Presta\u00e7\u00e3o de servi\u00e7os (se aberto) | Receita de servi\u00e7os \u00b7 Obras |\n| finRecOutras | Outras receitas operacionais brutas (se aberto) | Loca\u00e7\u00e3o \u00b7 Exporta\u00e7\u00e3o (quando separada) |\n| finDeducoes | (\u2212) **Total das dedu\u00e7\u00f5es** | Dedu\u00e7\u00f5es da receita bruta \u00b7 Impostos sobre vendas e devolu\u00e7\u00f5es |\n| finDevolucoes | Devolu\u00e7\u00f5es e abatimentos (se aberto) | Vendas canceladas \u00b7 Descontos incondicionais |\n| finImpICMS \u00b7 finImpISS \u00b7 finImpPIS \u00b7 finImpCOFINS \u00b7 finImpOutros | Tributos sobre a venda (se abertos) | IPI e outros \u2192 finImpOutros |\n| finReceitaLiq | **Receita l\u00edquida** | Receita operacional l\u00edquida |\n| finCMV | (\u2212) Custo das vendas | CMV \u00b7 CPV \u00b7 CSP \u00b7 Custo dos servi\u00e7os \u00b7 Custos da atividade |\n| finLucroBruto | **Lucro bruto** | Resultado bruto |\n| finDespVendas | Despesas com vendas | Comerciais \u00b7 Comiss\u00f5es \u00b7 Fretes sobre vendas \u00b7 Marketing |\n| finDespAdm | Despesas gerais e administrativas | Administrativas \u00b7 Gastos com pessoal (quando \u00e9 a \u00fanica linha) |\n| finDespTributarias | Despesas tribut\u00e1rias | Impostos e taxas \u00b7 IPTU \u00b7 IPVA \u00b7 IOF |\n| finDepAmort | Deprecia\u00e7\u00e3o e amortiza\u00e7\u00e3o **do per\u00edodo** | Na DRE, na nota ou na DFC \u2014 some custo e despesa |\n| finOutrasReceitas | Outras receitas operacionais | Ganho na venda de imobilizado \u00b7 Recupera\u00e7\u00e3o de despesas \u00b7 Revers\u00f5es |\n| finOutrasDesp | Outras despesas operacionais | Perdas \u00b7 Baixas \u00b7 Doa\u00e7\u00f5es |\n| finEBIT | **Resultado operacional antes do financeiro**, quando o documento traz | Lucro operacional |\n| finReceitaFin | Receitas financeiras | Rendimentos de aplica\u00e7\u00e3o \u00b7 Juros ativos \u00b7 Descontos obtidos \u00b7 Varia\u00e7\u00e3o cambial ativa |\n| finDespesaFin | Despesas financeiras | Juros \u00b7 Encargos banc\u00e1rios \u00b7 IOF \u00b7 Descontos concedidos \u00b7 Varia\u00e7\u00e3o cambial passiva |\n| finResultadoFin | Resultado financeiro (se s\u00f3 vier o l\u00edquido) | Negativo quando as despesas s\u00e3o maiores |\n| finLAIR | **Lucro antes do IR e CSLL** | Resultado antes dos tributos sobre o lucro |\n| finIRCS | (\u2212) IRPJ e CSLL | Correntes + diferidos \u2014 **some os dois**; negativo s\u00f3 se for cr\u00e9dito |\n| finLucroLiq | **Lucro (ou preju\u00edzo) l\u00edquido do exerc\u00edcio** | Resultado l\u00edquido \u2014 preju\u00edzo entra **negativo** |\n\n**Quando a DRE ou a nota abrir a folha** (despesa por natureza), lance tamb\u00e9m: finFolhaAnual (sal\u00e1rios, f\u00e9rias, 13\u00ba), finEncargosFolha (INSS, FGTS, RAT, terceiros), finBeneficiosAnual (sa\u00fade, odontol\u00f3gico, vida, VR/VA, VT), finProLabore (pr\u00f3-labore e honor\u00e1rios da diretoria). Se o documento n\u00e3o abre, **n\u00e3o estime** \u2014 deixe de fora.\n\n**Se o documento informar o n\u00famero de funcion\u00e1rios**, lance finFuncionarios.\n\n---\n\n## 3 \u00b7 Quando voc\u00ea n\u00e3o souber onde a linha entra\n\n**Nenhuma linha do documento \u00e9 descartada.** O destino \u00e9, nesta ordem:\n\n1. A linha padr\u00e3o da tabela, pelo significado.\n2. O campo \"Outros\" do grupo a que ela pertence (`finACOutros`, `finPCOutros`, `finPNCOutros`, `finRecOutras`, `finImpOutros`, `finOutrasDesp`, `finOutrasReceitas`, `finPLAjustes`), **listando em `outrosDetalhe`** o que foi para l\u00e1:\n\n```json\n\"outrosDetalhe\": {\n  \"finACOutros\": [ {\"conta\": \"Estoque de terceiros\", \"valor\": 239781.32, \"fonte\": \"BP 2025 \u00b7 p.1\"} ]\n}\n```\n\n3. Se voc\u00ea n\u00e3o sabe nem o grupo, ponha em `naoAlocado` com o nome exato da conta, o valor e onde ela aparece. O sistema mostra ao corretor, que decide.\n\nLinha que **s\u00f3 existe como t\u00edtulo** (ATIVO CIRCULANTE, DISPON\u00cdVEL\u2026) e repete o valor das contas de baixo: lance **uma vez s\u00f3**, no n\u00edvel mais detalhado que voc\u00ea consegue classificar. Somar o t\u00edtulo com a subconta dobra o valor.\n\n---\n\n## 4 \u00b7 Regras de cada n\u00famero\n\n- Formato de cada campo: `{\"v\": 1234567.89, \"c\": \"v\", \"f\": \"documento \u00b7 p\u00e1gina \u00b7 nome da linha\"}`.\n- `\"c\": \"v\"` = lido direto. `\"c\": \"!\"` = voc\u00ea somou, subtraiu ou interpretou \u2014 a\u00ed `\"o\"` \u00e9 obrigat\u00f3rio e diz a conta (`\"o\": \"11.429.206,19 + 4.192.308,44\"`).\n- Valores **em reais**, ponto como decimal, sem separador de milhar, com os centavos do documento.\n- **Custos, despesas e dedu\u00e7\u00f5es entram positivos** \u2014 o sistema subtrai. S\u00f3 s\u00e3o negativos: preju\u00edzo, preju\u00edzo acumulado, resultado financeiro negativo e IR quando \u00e9 cr\u00e9dito.\n- **Linha que o documento n\u00e3o tem fica fora do arquivo.** Nunca mande `0` nem `null` para dizer \"n\u00e3o achei\". Zero s\u00f3 quando o documento mostra zero (`{\"v\": 0, \"c\": \"v\", \"f\": \"...\"}`).\n- **Os totais s\u00e3o os do documento**, mesmo que a soma das contas d\u00ea diferente. O sistema confere.\n- Empr\u00e9stimo do circulante e do n\u00e3o circulante s\u00e3o **duas linhas diferentes**. Nunca copie o mesmo valor nos dois.\n- O que a DRE n\u00e3o traz mas \u00e9 a diferen\u00e7a entre duas linhas que ela traz (ex.: CMV = receita l\u00edquida \u2212 lucro bruto): pode lan\u00e7ar com `\"c\": \"!\"` e a conta em `\"o\"`.\n\n---\n\n## 5 \u00b7 A confer\u00eancia \u2014 fa\u00e7a antes de entregar\n\nPara cada per\u00edodo, confira e escreva o resultado em `conferencia`:\n\n| Confere | Tem que dar |\n|---|---|\n| caixa + aplica\u00e7\u00f5es + clientes \u2212 PDD + estoques + tributos + adiantamentos + despesas antecipadas + outros | total do ativo circulante |\n| realiz\u00e1vel LP + investimentos + imobilizado (\u2212 deprecia\u00e7\u00e3o, se separada) + intang\u00edvel | total do ativo n\u00e3o circulante |\n| circulante + n\u00e3o circulante | ativo total |\n| as contas do passivo circulante | total do passivo circulante |\n| as contas do passivo n\u00e3o circulante | total do passivo n\u00e3o circulante |\n| as contas do PL | total do PL |\n| passivo circulante + n\u00e3o circulante + PL | **ativo total** |\n| receita bruta \u2212 dedu\u00e7\u00f5es | receita l\u00edquida |\n| receita l\u00edquida \u2212 custo | lucro bruto |\n| lucro antes do IR \u2212 IRPJ/CSLL | lucro l\u00edquido |\n| linhas do imobilizado | total do imobilizado |\n\nSe uma soma n\u00e3o fecha, **falta uma conta**: volte ao documento e ache. Se mesmo assim n\u00e3o fechar, ponha a diferen\u00e7a no \"Outros\" do grupo com `\"c\": \"!\"` e explique. Grupo que ficou s\u00f3 com o total, sem as contas, \u00e9 erro de leitura \u2014 abra as contas.\n\n---\n\n## 6 \u00b7 O que voc\u00ea entrega\n\n**Primeiro o arquivo** `<EMPRESA>_financeiro.json`, num bloco de c\u00f3digo s\u00f3. Depois, **no m\u00e1ximo dez linhas** de texto: o que voc\u00ea leu, o que n\u00e3o achou, o que ficou em d\u00favida.\n\n```json\n{\n  \"tipo\": \"financeiro\",\n  \"formato\": \"corporate-one-financeiro\",\n  \"versao\": 1,\n  \"empresa\": { \"razaoSocial\": \"\", \"cnpj\": \"\" },\n  \"periodos\": [\n    {\n      \"meta\": { \"ano\": 2025, \"meses\": 12, \"dataBase\": \"2025-12-31\", \"fechado\": true,\n                \"documento\": \"Balan\u00e7o 2025.pdf; DRE 2025.pdf\", \"escala\": \"reais\", \"auditado\": false },\n      \"finReceitaBruta\": {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"finAtivoTotal\":   {\"v\": 0, \"c\": \"v\", \"f\": \"\"},\n      \"outrosDetalhe\": {},\n      \"naoAlocado\": [ {\"conta\": \"\", \"valor\": 0, \"fonte\": \"\"} ],\n      \"conferencia\": { \"ativoCirculante\": \"fecha\", \"passivoMaisPL\": \"fecha \u00b7 diferen\u00e7a 0,00\" }\n    }\n  ],\n  \"duvidas\": [ \"\" ]\n}\n```\n\n- `tipo`, `formato` e `versao` v\u00e3o **exatamente** como acima \u2014 \u00e9 por eles que o sistema sabe que este arquivo \u00e9 de n\u00fameros e n\u00e3o de contrato ou apresenta\u00e7\u00e3o.\n- `empresa.cnpj` **copiado do documento** (cabe\u00e7alho do balan\u00e7o ou da DRE). O sistema compara com o CNPJ da empresa aberta e recusa arquivo de outra empresa.\n- Um objeto em `periodos` para **cada ano a extrair**, do mais antigo para o mais recente.\n- `duvidas`: tudo o que o corretor precisa conferir \u2014 linha ileg\u00edvel, total que n\u00e3o fechou, valor da coluna comparativa diferente do que o sistema tem gravado.\n";
 
   function R$(v){ return (v==null||!isFinite(v)) ? '—'
     : Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
@@ -27862,11 +27894,17 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   /* ---------------- o botão ---------------- */
   function copiarBriefing(){
     var D = window.CURRENT_ANALYSIS_DATA;
-    var t = montarBriefing(D);
+    /* v81: o botão passou a copiar o prompt do ANO NOVO, que se basta sozinho
+       (esquema do arquivo + o que já está gravado). O briefing antigo dependia
+       do Consultor 360 estar nas instruções do Projeto. */
+    var t = (typeof window.montarPromptFinanceiro === 'function' && D)
+      ? window.montarPromptFinanceiro({ nome: D.empresaNome, cnpj: (D.empresaDoc && D.empresaDoc.cnpj) || '',
+          razaoSocial: (D.empresaDoc && D.empresaDoc.dadosReceita && D.empresaDoc.dadosReceita.razaoSocial) || '', anos: D.rows || [] })
+      : montarBriefing(D);
     var st = document.getElementById('briefStatus');
     function ok(){
       if (st){ st.textContent = '✅ Copiado (' + Math.round(t.length/1000) + ' mil caracteres). '
-        + 'Cole na conversa da IA junto com o balanço novo e escreva "novo ano".';
+        + 'Cole numa conversa NOVA da IA e anexe o balanço e a DRE do ano novo.';
         st.style.color = 'var(--success)'; }
     }
     function falhou(){
@@ -38355,11 +38393,106 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   /* ---------------------------------------------------------------
      MONTAR UM EXERCÍCIO
      --------------------------------------------------------------- */
+  /* ---------------------------------------------------------------
+     v81: O PACOTE VENHA COMO VIER
+
+     A regra 1 vale para o arquivo inteiro, não só para o nome do campo.
+     Uma IA sem o nosso esquema devolveu os exercícios como objeto
+     ({"2023": {...}, "2024": {...}}), os números dentro de "valores" e a
+     unidade declarada no topo ("milhares de reais"). Os números estavam
+     certos — o sistema é que recusava. Agora:
+       - períodos em objeto, em "exercicios" ou em "anos" viram a lista;
+       - o ano sai da chave, de "exercicioEncerradoEm" ou de "dataBase";
+       - unidade DECLARADA no arquivo (milhares, milhões) é aplicada.
+         Ler a unidade que o arquivo escreve não é inventar: é ler. O que
+         continua proibido é adivinhar a escala sem declaração nenhuma.
+     --------------------------------------------------------------- */
+  var NAO_MONETARIOS = ['finQtdSocios','finFuncionarios','finFuncionariosInicio','finQtdProcessos','finMarketShare',
+    'finCrescSetor','finMargemSetor','finRankingSetor','finInadimplencia','finTaxaMedia','finScoreExterno',
+    'finSucPrazo','finSucParcelas'];
+  function fatorDeTexto(t){
+    t = String(t == null ? '' : t).toLowerCase();
+    if (!t) return 0;
+    if (/milhares|\bmil\b|thousand|r\$\s*mil|em\s*mil/.test(t)) return 1000;
+    if (/milh[õo]es|million|r\$\s*mi\b/.test(t)) return 1000000;
+    if (/^\s*(reais|r\$|brl|unidades?)\s*$/.test(t)) return 1;
+    return 0;
+  }
+  function fatorDeclarado(o){
+    if (!o || typeof o !== 'object') return 0;
+    if (o.emMilhares === true || o.valoresEmMilhares === true) return 1000;
+    var ks = ['unidadeMonetaria','unidade','valoresEm','unidadeValores','unidadeDosValores','escalaValores','moedaUnidade'];
+    for (var i = 0; i < ks.length; i++){ var f = fatorDeTexto(o[ks[i]]); if (f) return f; }
+    return 0;
+  }
+  function anoDe(){
+    for (var i = 0; i < arguments.length; i++){
+      var m = String(arguments[i] == null ? '' : arguments[i]).match(/(19|20)\d{2}/);
+      if (m) return Number(m[0]);
+    }
+    return null;
+  }
+  function normalizarPacote(j){
+    var notas = [];
+    if (!j || typeof j !== 'object') return { pacote: j, notas: notas };
+    var P = j.periodos != null ? j.periodos : (j.exercicios || j.anos || j.demonstracoes || j.periodo || null);
+    var lista = null;
+    if (Array.isArray(P)) lista = P.slice();
+    else if (P && typeof P === 'object'){
+      var chaves = Object.keys(P);
+      if (chaves.some(function(k){ return /(19|20)\d{2}/.test(k); })){
+        lista = chaves.map(function(k){
+          var v = P[k]; if (!v || typeof v !== 'object') return null;
+          var c = Object.assign({}, v); c.meta = Object.assign({}, v.meta || {});
+          if (!c.meta.ano) c.meta.ano = anoDe(k);
+          return c;
+        }).filter(Boolean);
+        notas.push('Os exercícios vieram agrupados por ano (' + chaves.join(', ') + ') em vez de uma lista — reorganizei, sem mudar número nenhum.');
+      } else {
+        lista = [Object.assign({}, P)];   /* um período só, como objeto */
+      }
+    }
+    if (!lista) return { pacote: j, notas: notas };
+    var fTopo = fatorDeclarado(j);
+    var semAno = 0;
+    lista = lista.map(function(c){
+      c = Object.assign({}, c); c.meta = Object.assign({}, c.meta || {});
+      if (!c.meta.ano) c.meta.ano = anoDe(c.ano, c.exercicio, c.anoFiscal, c.exercicioEncerradoEm, c.dataBase, c.meta.dataBase, c.data);
+      if (!c.meta.ano) semAno++;
+      if (!c.meta.dataBase && (c.exercicioEncerradoEm || c.dataBase)) c.meta.dataBase = c.exercicioEncerradoEm || c.dataBase;
+      if (c.meses && !c.meta.meses) c.meta.meses = c.meses;
+      var f = fatorDeclarado(c) || fatorDeclarado(c.meta) || fTopo;
+      if (f > 1 && !c.meta.fatorEscala){ c.meta.fatorEscala = f; c.meta.fatorEscalaOrigem = 'declarado no arquivo'; }
+      return c;
+    });
+    if (fTopo > 1) notas.push('O arquivo declara os valores em ' + (fTopo === 1000 ? 'milhares' : 'milhões') + ' de reais — '
+      + 'cada valor em reais foi multiplicado por ' + fTopo.toLocaleString('pt-BR') + ' (percentuais e índices não). Confira na tabela.');
+    if (semAno) notas.push(semAno + ' período(s) sem ano identificável — não entram.');
+    var out = Object.assign({}, j, { periodos: lista });
+    return { pacote: out, notas: notas };
+  }
+
   function montarExercicio(periodo, ctx){
     ctx = ctx || {};
     var meta = (periodo && periodo.meta) || {};
     var ano = Number(meta.ano || periodo.ano);
     var AD = window.adaptarPeriodoFin(periodo, {});
+    /* v81: a escala. Converte quando o arquivo DECLARA a unidade, ou quando
+       meta.escala diz milhares/milhões E os números confirmam (pequenos demais
+       para a empresa). Sem declaração, só avisa — e a trava abaixo não grava. */
+    var fator = Number(meta.fatorEscala) || 0;
+    if (!(fator > 1) && AD.escala && AD.escala.suspeita){
+      var fm = fatorDeTexto(meta.escala);
+      if (fm > 1){ fator = fm; meta.fatorEscalaOrigem = 'meta.escala "' + meta.escala + '" e os valores pequenos demais para a empresa'; }
+    }
+    if (fator > 1){
+      Object.keys(AD.campos).forEach(function(id){
+        if (NAO_MONETARIOS.indexOf(id) >= 0) return;
+        if (typeof AD.campos[id] === 'number' && isFinite(AD.campos[id])) AD.campos[id] = AD.campos[id] * fator;
+      });
+      AD.escalaConvertida = { fator: fator, origem: meta.fatorEscalaOrigem || 'declarado no arquivo' };
+      AD.escala = window.conferirEscalaFin ? window.conferirEscalaFin(AD.campos, {}) : null;
+    }
     var d = { ano: ano };
     var origem = {};          /* de onde veio cada chave: 'doc' ou 'derivado' */
 
@@ -38392,7 +38525,13 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var existente = ctx.existente || null;
     var trazDRE = !!(origem.receitaLiquida || origem.receitaBruta);
     var trazBal = !!(origem.ativoTotal || origem.ativoCirculante || origem.patrimonioLiquido);
-    var parcial = !!existente && !(trazDRE && trazBal);
+    var completo = trazDRE && trazBal;
+    /* v81: arquivo completo, porém MAIS RESUMIDO que o gravado (outra IA, só as
+       linhas principais). Substituir apagaria despesas financeiras, IR, receita
+       bruta... que estão certos no banco. Com manterAusentes (padrão), o que o
+       arquivo não traz fica como está — e a tela lista o que ficou. */
+    var parcial = !!existente && (!completo || !!ctx.manterAusentes);
+    var mantidos = [], apagaria = [];
     if (parcial){
       var ausAnt = existente.camposAusentes || [];
       BRUTOS.forEach(function(k){
@@ -38402,6 +38541,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         if (ausAnt.indexOf(k) >= 0) return;             /* era ausente, continua */
         if (k === 'ebitda' && existente.ebitdaPiso) return;  /* o piso se recalcula */
         d[k] = v; origem[k] = 'banco';
+        if (completo) mantidos.push(k);
       });
       /* dívida que só existia como número simples */
       if (!origem.emprestimosCP && !origem.emprestimosLP && !origem.debentures
@@ -38409,6 +38549,15 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           && ausAnt.indexOf('dividaBruta') < 0){
         d.dividaBrutaDeclarada = existente.dividaBruta; origem.dividaBrutaDeclarada = 'banco';
       }
+    }
+
+    if (existente && completo && !ctx.manterAusentes){
+      var ausEx = existente.camposAusentes || [];
+      BRUTOS.forEach(function(k){
+        if (k in d) return;
+        var v = existente[k];
+        if (typeof v === 'number' && isFinite(v) && v !== 0 && ausEx.indexOf(k) < 0) apagaria.push(k);
+      });
     }
 
     /* o que veio do arquivo, antes de qualquer conta — é contra isto que
@@ -38477,9 +38626,19 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     /* as travas */
     var T = (typeof window.travasDuras === 'function')
       ? window.travasDuras(Object.assign({}, d, { camposAusentes: ausentes })) : null;
+    /* v81: número em milhares gravado como reais faz uma indústria de R$ 700
+       milhões virar uma de R$ 700 mil — e nenhuma razão acusa, porque todas
+       as contas encolhem juntas. Escala suspeita e não declarada não grava. */
+    if (T && AD.escala && AD.escala.suspeita){
+      T.impossiveis.push({ nivel:'impossivel', ano: ano, titulo:'Os valores parecem estar em ' + (AD.escala.fatorProvavel === 1000 ? 'milhares' : 'milhões'),
+        detalhe: AD.escala.texto, acao: 'Peça o arquivo de novo com os valores em reais, ou com a unidade declarada ("unidadeMonetaria": "milhares de reais").',
+        campos: ['receitaLiquida','ativoTotal'] });
+      T.podeGravar = false; T.podeAnalisar = false; T.podePontuar = false;
+    }
 
     return { ano: ano, dados: d, doDocumento: doDocumento, adaptacao: AD,
-             travas: T, ausentes: ausentes, meta: meta, parcial: parcial, origem: origem };
+             travas: T, ausentes: ausentes, meta: meta, parcial: parcial && !completo, origem: origem,
+             completo: completo, mantidos: mantidos, apagaria: apagaria };
   }
 
   /* ---------------------------------------------------------------
@@ -38516,6 +38675,26 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   function esc(t){ return String(t==null?'':t)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+  var NOMES = { receitaBruta:'receita bruta', deducoes:'deduções', devolucoes:'devoluções', impostoICMS:'ICMS', impostoISS:'ISS',
+    impostoPIS:'PIS', impostoCOFINS:'COFINS', impostoOutrosVendas:'outros impostos', receitaMercadorias:'venda de mercadorias',
+    receitaServicos:'serviços', receitaOutrasVendas:'outras receitas brutas', cmv:'CMV', despesasVendas:'despesas de vendas',
+    despesasAdm:'despesas administrativas', depreciacaoAmortizacao:'depreciação', outrasDespesas:'outras despesas',
+    despesasTributarias:'despesas tributárias', outrasReceitas:'outras receitas', receitasFinanceiras:'receitas financeiras',
+    despesasFinanceiras:'despesas financeiras', resultadoFinanceiro:'resultado financeiro', lucroAntesIR:'lucro antes do IR',
+    ircs:'IR e CSLL', aplicacoesFinanceirasCP:'aplicações', contasReceber:'contas a receber', pdd:'PDD', impostosRecuperar:'impostos a recuperar',
+    adiantamentoFornecedores:'adiantamento a fornecedores', despesasAntecipadas:'despesas antecipadas', outrosAC:'outros do circulante',
+    realizavelLP:'realizável a longo prazo', investimentos:'investimentos', depreciacao:'depreciação acumulada', intangivel:'intangível',
+    contasPagar:'fornecedores', emprestimosCP:'empréstimos de curto prazo', salariosPagar:'salários a pagar', impostosPagar:'impostos a pagar',
+    parcelamentosCP:'parcelamentos', adiantamentoClientes:'adiantamento de clientes', dividendosPagar:'dividendos a pagar',
+    provisoesCP:'provisões', outrosPC:'outros do passivo circulante', emprestimosLP:'empréstimos de longo prazo', debentures:'debêntures',
+    provisoesLP:'provisões de longo prazo', outrosPNC:'outros do não circulante', capitalSocial:'capital social',
+    reservasCapital:'reservas de capital', reservasIncentivos:'reservas de incentivos', reservasLucro:'reservas de lucro',
+    lucrosAcumulados:'lucros acumulados', ajustesAvaliacao:'ajustes de avaliação', valorImoveis:'imóveis', valorMaquinas:'máquinas',
+    valorVeiculos:'veículos', valorMoveis:'móveis', valorInstalacoes:'instalações', valorInformatica:'informática',
+    valorFerramentas:'ferramentas', valorSoftware:'software', obrasAndamento:'obras em andamento', estoques:'estoques', caixa:'caixa',
+    imobilizado:'imobilizado', lucroBruto:'lucro bruto', ebit:'EBIT', receitaLiquida:'receita líquida', lucroLiquido:'lucro líquido' };
+  function nomeCampo(k){ return NOMES[k] || String(k).replace(/([A-Z])/g,' $1').toLowerCase(); }
+
   function painelConferencia(exs, opts){
     opts = opts || {};
     if (!exs || !exs.length) return '';
@@ -38538,6 +38717,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           return '<th style="text-align:right; padding:7px 9px; color:' + (ok ? '#0f172a' : '#b91c1c')
             + '; font-weight:800">' + esc(e.ano) + (ok ? '' : ' ⛔')
             + (e.parcial ? '<div style="font-size:10px; font-weight:600; color:#2563eb">completa</div>'
+               : (e.jaExiste && e.mantidos && e.mantidos.length) ? '<div style="font-size:10px; font-weight:600; color:#64748b">substitui · mantém ' + e.mantidos.length + '</div>'
                : e.jaExiste ? '<div style="font-size:10px; font-weight:600; color:#64748b">substitui</div>'
                             : '<div style="font-size:10px; font-weight:600; color:#15803d">novo</div>')
             + '</th>'; }).join('')
@@ -38586,6 +38766,27 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       });
     }
 
+    /* v81: arquivo mais resumido que o gravado — o que fica e o que sairia */
+    var comMant = exs.filter(function(e){ return e.mantidos && e.mantidos.length; });
+    var comApag = exs.filter(function(e){ return e.apagaria && e.apagaria.length; });
+    if (comMant.length || comApag.length || opts.temOpcaoManter){
+      h += '<div style="margin-top:11px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:9px; padding:10px 13px; font-size:12px; color:#334155; line-height:1.75">'
+        + '<label style="display:flex; gap:7px; align-items:flex-start; font-weight:700; cursor:pointer">'
+        + '<input type="checkbox" id="jiManterAusentes" ' + (opts.manterAusentes !== false ? 'checked' : '') + ' onchange="window.alternarManterAusentes && window.alternarManterAusentes(this.checked)">'
+        + '<span>Manter o que já está gravado e este arquivo não traz</span></label>'
+        + (comMant.length ? '<div style="margin-top:4px">Ficam como estão: ' + comMant.map(function(e){ return '<b>' + e.ano + '</b> (' + e.mantidos.length + ' campos: ' + esc(e.mantidos.slice(0,8).map(nomeCampo).join(', ')) + (e.mantidos.length > 8 ? '…' : '') + ')'; }).join('; ') + '.</div>' : '')
+        + (comApag.length ? '<div style="margin-top:4px; color:#b91c1c">Sem marcar, gravar <b>apaga</b>: ' + comApag.map(function(e){ return '<b>' + e.ano + '</b> (' + esc(e.apagaria.slice(0,8).map(nomeCampo).join(', ')) + (e.apagaria.length > 8 ? '…' : '') + ')'; }).join('; ') + '.</div>' : '')
+        + '<div style="margin-top:4px; color:#64748b">Desmarque só quando o gravado estiver errado e este arquivo for a versão certa e completa.</div></div>';
+    }
+    /* v81: a conversão de escala fica à vista, ano a ano */
+    var conv = exs.filter(function(e){ return e.adaptacao && e.adaptacao.escalaConvertida; });
+    if (conv.length)
+      h += '<div style="margin-top:11px; background:#eff6ff; border:1px solid #bfdbfe; '
+        + 'border-radius:9px; padding:10px 13px; font-size:12px; color:#1e3a8a; line-height:1.75">'
+        + '<b>Valores convertidos para reais</b> em ' + conv.map(function(e){ return e.ano; }).join(', ') + ': '
+        + 'multiplicados por ' + conv[0].adaptacao.escalaConvertida.fator.toLocaleString('pt-BR')
+        + ' (' + esc(conv[0].adaptacao.escalaConvertida.origem) + '). Os números da tabela já estão em reais — '
+        + 'confira um deles contra o balanço antes de gravar.</div>';
     var piso = exs.filter(function(e){ return e.dados.ebitdaPiso; }).map(function(e){ return e.ano; });
     if (piso.length)
       h += '<div style="margin-top:11px; background:#fefce8; border:1px solid #fef08a; '
@@ -38612,6 +38813,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window.paraAtualizarExercicio = paraAtualizar;
   window.painelConferenciaImport = painelConferencia;
   window.NUCLEO_EXERCICIO = NUCLEO;
+  window.normalizarPacoteFin = normalizarPacote;
   window.CHAVE_EXERCICIO = CHAVE;
 })();
 
@@ -39519,15 +39721,15 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         + '<div style="font-size:12.5px; color:#1e3a8a; line-height:1.8; margin-bottom:11px">'
         +   'A apresentação está gravada e já vale sozinha: dá para visitar, cotar patrimonial e '
         +   'vida, e o gerente tem o que apresentar. Quando os balanços chegarem, '
-        +   '<b>não refaça nada disto</b> — abra uma conversa com o prompt do Consultor 360, '
-        +   'cole o briefing abaixo, anexe os documentos e escreva "analise". A IA começa já '
-        +   'sabendo o que a empresa faz, e sai conferindo cada oportunidade daqui contra os números.'
+        +   '<b>não refaça nada disto</b>: copie o <b>prompt do balanço</b> abaixo — ele já traz '
+        +   'o esquema do arquivo e o CNPJ da empresa —, abra uma conversa <b>nova</b> da IA, cole, '
+        +   'anexe os balanços e as DREs e envie. O arquivo que voltar entra pela etapa 3 de 🔬 Analisar.'
         + '</div>'
         + '<div style="display:flex; gap:9px; flex-wrap:wrap; align-items:center">'
         +   '<button class="btn btn-primary" style="padding:8px 14px; font-size:12.5px" '
-        +     'onclick="apreCopiarBriefingFinanceiro()">📋 Copiar o briefing da análise financeira</button>'
+        +     'onclick="apreCopiarBriefingFinanceiro()">📋 Copiar o prompt do balanço</button>'
         +   '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
-        +     'onclick="apreAbrirPromptFinanceiro()">📖 Ver o prompt do Consultor 360</button>'
+        +     'onclick="apreAbrirEtapas()">🔬 Abrir as etapas da empresa</button>'
         +   '<button class="btn btn-outline" style="padding:8px 14px; font-size:12.5px" '
         +     'onclick="apreIrParaNumeros()">➕ Lançar os dados financeiros</button>'
         +   '<span id="apreBriefStatus" style="font-size:12px; color:#15803d; align-self:center">'
@@ -40040,22 +40242,26 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     return deu;
   }
 
+  /* v81: este botão copiava um "briefing" que dependia do prompt do Consultor
+     360 estar nas instruções do Projeto. Sem ele, a IA recebia o contexto e não
+     o esquema do arquivo — e devolvia um JSON no formato que inventou. Agora
+     copia o prompt do balanço inteiro, que se basta sozinho. */
   window.apreCopiarBriefingFinanceiro = function(){
-    if (!EST.apre || typeof window.montarBriefing !== 'function') return;
-    /* a empresa pode já ter exercícios gravados; nesse caso o briefing
-       completo (com os números) é o certo, e ele já carrega a
-       apresentação desde a v71 */
+    if (typeof window.montarPromptFinanceiro !== 'function') return;
     var D = window.CURRENT_ANALYSIS_DATA;
-    var mesmaEmpresa = D && D.empresaId === EST.id && D.rows && D.rows.length;
-    var alvo = mesmaEmpresa
-      ? D
-      : { empresaNome: EST.nome,
-          empresaDoc: { nome: EST.nome, cnpj: EST.cnpj, apresentacao: EST.apre },
-          rows: [] };
-    var t = window.montarBriefing(alvo);
+    var mesma = D && D.empresaId === EST.id && D.rows && D.rows.length;
+    var rec = EST.receita || (EST.apre && EST.apre.empresa && EST.apre.empresa.receita) || {};
+    var t = window.montarPromptFinanceiro({ nome: EST.nome, razaoSocial: rec.razaoSocial || '',
+      cnpj: EST.cnpj || rec.cnpj || '', anos: mesma ? D.rows : [] });
     copiarTexto(t, 'apreBriefStatus',
       '✓ copiado (' + Math.max(1, Math.round(t.length/1000)) + ' mil caracteres) — '
-      + 'cole na conversa da IA junto com os balanços');
+      + 'cole numa conversa NOVA da IA e anexe os balanços e as DREs');
+  };
+  window.apreAbrirEtapas = function(){
+    var id = EST.id, nome = EST.nome;
+    if (!id) return;
+    el('modalApresentacao').style.display = 'none';
+    if (typeof window.abrirHubEmpresa === 'function') window.abrirHubEmpresa(id, nome);
   };
 
   window.apreAbrirPromptFinanceiro = function(){
@@ -40158,7 +40364,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     /* ---------- DRE: custo e resultado ---------- */
     finCMV: ['cmv','custo','custodosprodutosvendidos','custodasmercadoriasvendidas','custodosservicos',
       'custodasvendas','custodaatividade','custosdaatividade','cpv','csp','custooperacional',
-      'custodosbensservicosvendidos','cogs','custoprodutosservicosvendidos'],
+      'custodosbensservicosvendidos','cogs','custoprodutosservicosvendidos',
+      'custoprodutosvendidos','custodosprodutosvendidoseservicos','customercadoriasvendidas','custodosprodutosvendidos'],
     finLucroBruto: ['lucrobruto','resultadobruto','resultadooperacionalbruto','margembrutavalor',
       'grossprofit','lucrobrutooperacional'],
     finDespVendas: ['despvendas','despesascomvendas','despesasdevendas','despesascomerciais',
@@ -40259,7 +40466,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
     /* ---------- Derivados e cadastro ---------- */
     finDividaBruta: ['dividabruta','endividamentobruto','dividatotal','dividafinanceirabruta',
-      'totaldadivida','grossdebt','dividaonerosa'],
+      'totaldadivida','grossdebt','dividaonerosa','dividafinanceira','endividamentofinanceiro'],
     finRegimeTributario: ['regimetributario','regime','regimedetributacao','tributacao'],
     finSetor: ['setor','setorsistema','segmento','ramo'],
     finFuncionarios: ['funcionarios','numerodefuncionarios','qtdfuncionarios','colaboradores',
@@ -40360,6 +40567,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   var TEXTO = ['finRegimeTributario','finSetor','finSucCriterio','finSucMetodo','finSucFonte',
     'finSucInvalidez','finBeneficiosDetalhe'];
 
+  var CALCULADO_PELA_IA = /pct$|percentual$|proxy|^margem(?!brutavalor$)|^liquidez|sobre(ebitda|pl|receita|ativo|patrimonio)|^indice|^roe$|^roa$|^roic$|capitalgiroliquido|fluxolivre|^dividaliquida|^giro|^prazomedio|^ciclo|^coberturadejuros|^coberturajuros|^alavancagem/;
+  window.CALCULADO_PELA_IA_FIN = CALCULADO_PELA_IA;
+
   /* chaves que não são campo financeiro e não devem ser varridas */
   var IGNORAR = ['meta','travas','bancos','ajustesliquidez','sociosir','outrosdetalhe','contexto',
     'parecer','seguros','informacoes','apolices','garantias','empresa','periodos','formato','versao',
@@ -40455,6 +40665,11 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     if (profundidade > 4 || !obj || typeof obj !== 'object') return saida;
     Object.keys(obj).forEach(function(k){
       if (IGNORAR.indexOf(normalizar(k)) >= 0) return;
+      /* v81: o que a IA CALCULOU (margem, índice, proxy, dívida líquida) não é
+         linha do documento. O sistema calcula sozinho — e calcular de novo em
+         cima do número dela é exatamente o erro que a regra 2 proíbe. */
+      var _nk = normalizar(k);
+      if (CALCULADO_PELA_IA.test(_nk) && !Object.prototype.hasOwnProperty.call(INDICE, _nk)) return;
       var c = obj[k];
       if (Array.isArray(c)) return;
       var ehValor = (c == null) || typeof c !== 'object'
@@ -40534,6 +40749,10 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     if (!tem('finReceitaLiq') && tem('finReceitaBruta') && (tem('finDeducoes') || tem('finDevolucoes')))
       por('finReceitaLiq', C.finReceitaBruta - (C.finDeducoes||0) - (C.finDevolucoes||0),
           'receita bruta menos deduções e devoluções');
+
+    /* v81: IR e CSLL = lucro antes do IR − lucro líquido (a última linha da DRE) */
+    if (!tem('finIRCS') && tem('finLAIR') && tem('finLucroLiq'))
+      por('finIRCS', C.finLAIR - C.finLucroLiq, 'lucro antes do IR menos lucro líquido');
 
     /* lucro bruto = receita líquida − CMV */
     if (!tem('finLucroBruto') && tem('finReceitaLiq') && tem('finCMV'))
