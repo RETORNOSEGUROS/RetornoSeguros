@@ -2885,6 +2885,74 @@ CO.importar = (function () {
   return { ler, paraGravar, conferirEmpresa, ehCompleto, FORA_DA_SUBSTITUICAO };
 })();
 
+/* ===========================================================================
+   DESPACHO POR TIPO DE DOCUMENTO
+   O arquivo colado pode ser financeiro, contrato, apólices, IR ou parecer.
+   O carimbo (`tipo`/`formato`) diz qual. Cada um tem sua conferência; só o
+   financeiro passa pelo motor de exercícios.
+   =========================================================================== */
+CO.importarDoc = (function () {
+  'use strict';
+  const B = CO.base;
+
+  /* Descobre o tipo pelo carimbo, ou pela forma do conteúdo. */
+  function tipoDe(dados) {
+    const t = B.chave(dados.tipo || dados.formato || '');
+    if (/financeiro|balanco|dre/.test(t) || dados.periodos || dados.exercicios) return 'financeiro';
+    if (/irsocios|ir_socios|irpf/.test(t) || dados.socios && dados.socios[0] && (dados.socios[0].bens || dados.socios[0].identificacao || dados.socios[0].transcricaoPaginas)) return 'ir';
+    if (/contrato/.test(t) || dados.sucessao || (dados.administradores && !dados.apolices)) return 'contrato';
+    if (/apolice|seguro/.test(t) || dados.apolices) return 'apolices';
+    if (/parecer/.test(t) || dados.resumoExecutivo || dados.cartaCliente) return 'parecer';
+    if (/apresenta/.test(t)) return 'apresentacao';
+    return 'desconhecido';
+  }
+
+  /* Lê e confere um documento NÃO financeiro. O financeiro continua indo por
+     CO.importar.ler. Devolve a conferência e o que gravar. */
+  function ler(texto, opcoes) {
+    const o = opcoes || {};
+    const leitura = CO.lerJSON.ler(texto);
+    if (!leitura.ok) return { ok: false, erros: leitura.erros, onde: leitura.onde };
+    const dados = leitura.dados;
+    const tipo = o.tipo && o.tipo !== 'auto' ? o.tipo : tipoDe(dados);
+
+    if (tipo === 'financeiro') {
+      const r = CO.importar.ler(texto, o);
+      return { ...r, tipoDocumento: 'financeiro' };
+    }
+    if (tipo === 'contrato') {
+      const C = CO.documentos.conferirContrato(dados, o.cnpjEmpresa);
+      return { ok: true, tipoDocumento: 'contrato', consertos: leitura.consertos, conferido: C, paraGravar: () => CO.documentos.contratoParaGravar(C), campo: 'contratoSocial', podeGravar: C.podeGravar };
+    }
+    if (tipo === 'apolices') {
+      const A = CO.documentos.conferirApolices(dados, o.cnpjEmpresa);
+      return { ok: true, tipoDocumento: 'apolices', consertos: leitura.consertos, conferido: A, paraGravar: () => CO.documentos.apolicesParaGravar(A), campo: 'apolices', podeGravar: A.podeGravar };
+    }
+    if (tipo === 'ir') {
+      const bloqueio = conferirCNPJdoc(dados, o.cnpjEmpresa);
+      const jaGravado = o.sociosIRGravado || [];
+      const entrada = jaGravado.length ? { socios: dados.socios, sociosIR: jaGravado } : dados;
+      const I = CO.irLer.conferirIR(entrada, o.sociosContrato || []);
+      return { ok: true, tipoDocumento: 'ir', consertos: leitura.consertos, conferido: I, bloqueio,
+               paraGravar: () => I.socios, campo: 'sociosIR', podeGravar: !bloqueio && I.socios.length > 0 };
+    }
+    if (tipo === 'parecer') {
+      return { ok: true, tipoDocumento: 'parecer', consertos: leitura.consertos, conferido: dados,
+               paraGravar: () => dados, campo: 'parecerFinal', podeGravar: true };
+    }
+    return { ok: false, erros: ['Não reconheci o tipo deste documento. Esperava um arquivo de balanço, contrato, apólices, IR ou parecer.'] };
+  }
+
+  function conferirCNPJdoc(o, cnpjEsperado) {
+    if (!cnpjEsperado || !o.empresa) return null;
+    const doArquivo = o.empresa.cnpj || o.empresa.CNPJ;
+    if (!doArquivo || B.mesmaEmpresa(doArquivo, cnpjEsperado)) return null;
+    return { oQue: 'Este documento é de outra empresa', porque: `o arquivo traz ${B.formataCNPJ(doArquivo)}, a ficha aberta é ${B.formataCNPJ(cnpjEsperado)}` };
+  }
+
+  return { ler, tipoDe };
+})();
+
 
 /* ===== 33-prompts.js ===== */
 /* ===========================================================================
@@ -2993,6 +3061,789 @@ window.CO_PROMPTS = {
 };
 
 
+/* ===== 35-documentos.js ===== */
+/* ===========================================================================
+   CAMADA 3 — DOCUMENTOS (contrato social e apólices)
+   Lê o arquivo que a IA devolveu de cada documento, confere, e prepara o que
+   vai para o cadastro da empresa. Nada é gravado aqui: a camada devolve o que
+   a tela de conferência mostra antes de o corretor decidir.
+
+   O IR dos sócios é grande e tem recuperação de texto própria — vive em
+   36-ir-texto e 37-ir-ler. Aqui ficam contrato e apólices.
+
+   Uma regra atravessa tudo: o que entra é o CONFERIDO, não o bruto. Data que
+   não é data vira ausente e é avisada; participação em fração vira percentual;
+   sócio sem nascimento é marcado (o prêmio do seguro usaria uma premissa).
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.documentos = (function () {
+  'use strict';
+  const B = CO.base;
+
+  const CRITERIOS = ['contrato', 'lei', 'balanco', 'livre'];
+  const METODOS = ['patrimonial', 'economico', 'fluxo', 'misto', 'contabil'];
+
+  /* ---------------- contrato social ---------------- */
+
+  function conferirContrato(o, cnpjEsperado) {
+    o = o || {};
+    const avisos = [];
+
+    const bloqueio = conferirCNPJ(o, cnpjEsperado);
+
+    let socios = (Array.isArray(o.socios) ? o.socios : []).filter(s => s && s.nome).map(s => {
+      const x = { ...s };
+      x.participacao = B.num(s.participacao);
+      const dn = B.data(s.dataNascimento);
+      if (s.dataNascimento && !dn) avisos.push(`Data de nascimento de ${s.nome} não está no formato de data ("${s.dataNascimento}") — ficou de fora.`);
+      if (dn) x.dataNascimento = dn; else delete x.dataNascimento;
+      x.administrador = s.administrador === true || /^(sim|true|s)$/i.test(String(s.administrador || ''));
+      if (s.cpf) x.cpf = s.cpf;
+      return x;
+    });
+
+    /* participação em fração (0,48) vira percentual (48) */
+    let soma = socios.reduce((t, s) => t + (s.participacao || 0), 0);
+    if (socios.length && soma > 0 && soma <= 1.02 && socios.every(s => s.participacao == null || s.participacao <= 1)) {
+      socios.forEach(s => { if (s.participacao != null) s.participacao = Math.round(s.participacao * 10000) / 100; });
+      soma = socios.reduce((t, s) => t + (s.participacao || 0), 0);
+    }
+
+    const administradores = (Array.isArray(o.administradores) ? o.administradores : []).filter(a => a && a.nome);
+    const semQuadroAcionario = !socios.length && administradores.length > 0;
+
+    const semPart = socios.filter(s => s.participacao == null).length;
+    if (!socios.length && !administradores.length) avisos.push('Nenhum sócio nem administrador no arquivo.');
+    else if (semQuadroAcionario) avisos.push(`S/A sem o livro de ações: o arquivo trouxe ${administradores.length} administrador(es), não acionistas. A conta de pessoa-chave usa os administradores. Peça o livro de registro de ações ou a ata da AGO para a composição exata.`);
+    else if (semPart) avisos.push(`${semPart} sócio(s) sem participação: a conta de pessoa-chave usaria divisão igual.`);
+    else if (Math.abs(soma - 100) > 1) avisos.push(`As participações somam ${B.pctCru(soma)}, não 100%. Confira a cláusula do capital.`);
+
+    const semNasc = socios.filter(s => !s.cnpj && !s.dataNascimento).map(s => s.nome);
+    if (semNasc.length) avisos.push(`Sem data de nascimento: ${B.lista(semNasc)} — o prêmio do seguro de vida usa 50 anos como premissa.`);
+
+    const su = o.sucessao || {};
+    const suc = {
+      criterio: CRITERIOS.includes(B.simples(su.criterio)) ? B.simples(su.criterio) : (su.criterio ? 'contrato' : ''),
+      metodo: METODOS.includes(B.simples(su.metodo)) ? B.simples(su.metodo) : '',
+      prazoMeses: B.inteiro(su.prazoMeses, 0, 240), parcelas: B.inteiro(su.parcelas, 0, 500),
+      invalidez: su.invalidez || su.sucInvalidez || '',
+      herdeirosPodemEntrar: su.herdeirosPodemEntrar || '',
+      texto: su.texto || su.sucFonte || '', fonte: su.fonte || su.sucFonte || ''
+    };
+    if (!suc.criterio) avisos.push('A cláusula de sucessão não foi classificada: a conta usa a lei (balanço de determinação, 90 dias).');
+    else if (suc.criterio === 'contrato' && !suc.metodo) avisos.push('O contrato prevê critério próprio, mas o método de apuração de haveres não veio — confira o texto da cláusula.');
+
+    return {
+      tipo: 'contrato', bloqueio,
+      socios, soma, administradores, semQuadroAcionario,
+      sucessao: suc, avisos,
+      empresa: o.empresa || {},
+      documentos: Array.isArray(o.documentos) ? o.documentos : [],
+      clausulas: (Array.isArray(o.clausulas) ? o.clausulas : []).filter(c => c && (c.texto || c.clausula)),
+      mudancas: (Array.isArray(o.mudancas) ? o.mudancas : []).filter(m => m && (m.oque || m.alteracao)),
+      duvidas: (Array.isArray(o.duvidas) ? o.duvidas : []).filter(d => d && String(d).trim()),
+      podeGravar: !bloqueio
+    };
+  }
+
+  function contratoParaGravar(C) {
+    return {
+      empresa: C.empresa, documentos: C.documentos, socios: C.socios, administradores: C.administradores,
+      semQuadroAcionario: C.semQuadroAcionario, sucessao: C.sucessao, clausulas: C.clausulas,
+      mudancas: C.mudancas, duvidas: C.duvidas, lidoEm: B.hoje(), versao: 1
+    };
+  }
+
+  /* ---------------- apólices ---------------- */
+
+  function ramoChave(ap) {
+    const r = B.simples(ap && ap.ramo);
+    if (/d\s*&\s*o|d&o|diretores e administradores/.test(r)) return 'do';
+    if (/lucro.*cessant/.test(r)) return 'lucrosCessantes';
+    if (/equipament|quebra de maquina/.test(r)) return 'equipamentos';
+    if (/engenharia|obra/.test(r)) return 'engenharia';
+    if (/empresarial|patrimonial|multirrisco|compreensiv|riscos nomeados|riscos operacionais|incendio/.test(r)) return 'patrimonial';
+    if (/auto|frota|rcf/.test(r)) return 'frota';
+    if (/transporte|rctr|rcf-dc/.test(r)) return 'transporte';
+    if (/responsabilidade|^rc\b|rc geral/.test(r)) return 'rc';
+    if (/vida/.test(r)) return 'vida';
+    if (/odonto|dental/.test(r)) return 'dental';
+    if (/saude/.test(r)) return 'saude';
+    if (/garantia/.test(r)) return 'garantia';
+    if (/cyber|ciber/.test(r)) return 'cyber';
+    if (/ambient/.test(r)) return 'ambiental';
+    return 'outro';
+  }
+
+  function conferirApolices(o, cnpjEsperado) {
+    o = o || {};
+    const avisos = [];
+    const bloqueio = conferirCNPJ(o, cnpjEsperado);
+
+    const lista = (Array.isArray(o.apolices) ? o.apolices : (Array.isArray(o.seguros) ? o.seguros : []))
+      .filter(a => a && (a.ramo || a.numero || a.seguradora))
+      .map(a => {
+        const x = { ...a };
+        x.vigenciaInicio = B.data(a.vigenciaInicio);
+        x.vigenciaFim = B.data(a.vigenciaFim);
+        if (!x.vigenciaFim && a.vigencia) {
+          const ds = String(a.vigencia).match(/(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})/g) || [];
+          if (ds.length >= 2) { x.vigenciaInicio = B.data(ds[0]); x.vigenciaFim = B.data(ds[ds.length - 1]); }
+        }
+        x.coberturas = (Array.isArray(a.coberturas) ? a.coberturas : []).map(c => ({ ...c, lmi: B.num(c && c.lmi) }));
+        x.lmiTotal = B.num(a.lmiTotal != null ? a.lmiTotal : a.lmi);
+        if (x.lmiTotal == null && x.coberturas.length) {
+          const bas = x.coberturas.filter(c => /b[aá]sic|inc[eê]nd|compreensiv/i.test(String(c.cobertura || '')));
+          if (bas.length) x.lmiTotal = Math.max(...bas.map(c => c.lmi || 0));
+        }
+        x.premioTotal = B.num(a.premioTotal != null ? a.premioTotal : a.premio);
+        x._ramo = ramoChave(a);
+        if (!x.vigenciaFim) avisos.push(`${a.ramo || 'Apólice'} ${a.numero || ''}: sem data de fim de vigência.`.trim());
+        return x;
+      });
+    if (!lista.length) avisos.push('Nenhuma apólice no arquivo.');
+    return {
+      tipo: 'apolices', bloqueio, apolices: lista, avisos,
+      duvidas: (Array.isArray(o.duvidas) ? o.duvidas : []).filter(d => d && String(d).trim()),
+      podeGravar: !bloqueio
+    };
+  }
+
+  const apolicesParaGravar = A => ({ apolices: A.apolices.map(a => { const x = { ...a }; delete x._ramo; return x; }), lidoEm: B.hoje() });
+
+  /* ---------------- comum ---------------- */
+
+  function conferirCNPJ(o, cnpjEsperado) {
+    if (!cnpjEsperado || !o.empresa) return null;
+    const doArquivo = o.empresa.cnpj || o.empresa.CNPJ;
+    if (!doArquivo || B.mesmaEmpresa(doArquivo, cnpjEsperado)) return null;
+    return {
+      oQue: 'Este documento é de outra empresa',
+      porque: `o arquivo traz o CNPJ ${B.formataCNPJ(doArquivo)}, e a ficha aberta é ${B.formataCNPJ(cnpjEsperado)}`,
+      oQuePedir: 'abra a empresa certa ou confira o arquivo'
+    };
+  }
+
+  return { conferirContrato, contratoParaGravar, conferirApolices, apolicesParaGravar, ramoChave, CRITERIOS, METODOS };
+})();
+
+
+/* ===== 36-ir-texto.js ===== */
+/* ===========================================================================
+   CAMADA 3 — IR: RECUPERAR AS FICHAS DO TEXTO DA DECLARAÇÃO
+   A IA que leu o IR da PECCIN entregou os bens estruturados, mas as outras
+   fichas (dependentes, rendimentos por fonte, pagamentos, dívidas, doações,
+   resumo) vieram só como texto de página em `transcricaoPaginas`. O texto
+   está inteiro e fiel ao PDF — a IA leu, só não encaixou. Este módulo
+   encaixa: lê o texto ficha por ficha, no formato que o programa da Receita
+   imprime, e preenche o que a IA deixou vazio. Nunca sobrescreve o que a IA
+   entregou.
+
+   Regra de ouro: só entra número completo, com os dois centavos. O texto
+   transcrito às vezes vem cortado na coluna da direita ("477.331,") — esse
+   valor fica de fora, nunca entra errado.
+
+   As regex são o conhecimento do formato da Receita: validadas no v86 contra
+   a declaração real dos três sócios da PECCIN (43, 38 e 28 páginas).
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.irTexto = (function(){
+  var NUM = '(-?\\d{1,3}(?:\\.\\d{3})*,\\d{2}|-?\\d+,\\d{2})';
+  var CPF = '\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}', CNPJ = '\\d{2}\\.\\d{3}\\.\\d{3}/\\d{4}-\\d{2}';
+  function n(s){ if (s == null) return null; var v = Number(String(s).replace(/\./g,'').replace(',','.')); return isFinite(v) ? v : null; }
+  function textoDe(s){
+    if (!s) return '';
+    if (Array.isArray(s.transcricaoPaginas)) return s.transcricaoPaginas.map(function(p){ return typeof p === 'string' ? p : String((p && (p.texto || p.text || p.conteudo)) || ''); }).join('\n');
+    if (typeof s.transcricaoPaginas === 'string') return s.transcricaoPaginas;
+    if (typeof s.textoBruto === 'string') return s.textoBruto;
+    if (typeof s.transcricao === 'string') return s.transcricao;
+    return '';
+  }
+  function limpar(txt){
+    return String(txt).replace(/\r/g,'').split('\n').filter(function(l){
+      if (/^NOME:\s/.test(l)) return false;
+      if (/^CPF:\s+[\d.]+-\d{2}\s+IMPOSTO SOBRE A RENDA/.test(l)) return false;
+      if (/^DECLARAÇÃO DE AJUSTE ANUAL\s+EXERCÍCIO/.test(l)) return false;
+      if (/^\s*Página \d+ de \d+\s*$/.test(l)) return false;
+      if (/^\s*\(Valores em Reais\)\s*$/.test(l)) return false;
+      return true;
+    });
+  }
+  var TITULOS = [
+    [/^DEPENDENTES\b/, 'dependentes'],
+    [/^ALIMENTANDOS\b/, 'alimentandos'],
+    [/^RENDIMENTOS TRIBUTÁVEIS RECEBIDOS DE PESSOA JURÍDICA PELO TITULAR\s*(\(|$)/, 'pjTitular'],
+    [/^RENDIMENTOS TRIBUTÁVEIS RECEBIDOS DE PESSOA JURÍDICA PELOS DEPENDENTES\s*$/, 'pjDependentes'],
+    [/^RENDIMENTOS TRIBUTÁVEIS RECEBIDOS DE PESSOA JURÍDICA PELO/, 'pjSuspenso'],
+    [/^RENDIMENTOS TRIBUTÁVEIS RECEBIDOS DE PESSOA FÍSICA/, 'pf'],
+    [/^RENDIMENTOS RECEBIDOS ACUMULADAMENTE/, 'rra'],
+    [/^RENDIMENTOS ISENTOS E NÃO TRIBUTÁVEIS/, 'isentos'],
+    [/^RENDIMENTOS SUJEITOS À TRIBUTAÇÃO EXCLUSIVA/, 'exclusivos'],
+    [/^IMPOSTO PAGO\s*\/\s*RETIDO/, 'impostoPago'],
+    [/^PAGAMENTOS EFETUADOS/, 'pagamentos'],
+    [/^DOAÇÕES EFETUADAS/, 'doacoes'],
+    [/^DECLARAÇÃO DE BENS E DIREITOS/, 'bens'],
+    [/^DÍVIDAS E ÔNUS REAIS/, 'dividas'],
+    [/^DOAÇÕES A PARTIDOS/, 'partidos'],
+    [/^RESUMO\s{2,}TRIBUTAÇÃO|^RESUMO\s*$/, 'resumo'],
+    [/^EVOLUÇÃO PATRIMONIAL/, 'evolucao'],
+    [/^OUTRAS INFORMAÇÕES/, 'outras'],
+    [/^RENDA VARIÁVEL/, 'rendaVariavel'],
+    [/^IDENTIFICAÇÃO DO CONTRIBUINTE/, 'identificacao'],
+    [/^INFORMAÇÕES BANCÁRIAS|^DEMONSTRATIVO|^ESPÓLIO|^DOAÇÕES|^ATIVIDADE RURAL|^DADOS DO IMÓVEL|^GANHOS DE CAPITAL|^BENS E DIREITOS DO ESPÓLIO/, 'outro']
+  ];
+  function secoes(linhas){
+    var S = {}, atual = 'cabecalho';
+    linhas.forEach(function(l){
+      var t = null;
+      for (var i = 0; i < TITULOS.length; i++){ if (TITULOS[i][0].test(l)){ t = TITULOS[i][1]; break; } }
+      if (t){ atual = t; if (!S[t]) S[t] = []; return; }
+      if (!S[atual]) S[atual] = [];
+      S[atual].push(l);
+    });
+    return S;
+  }
+  var reRow = new RegExp('^(\\S.*?)\\s{2,}' + NUM + '((?:\\s+-?[\\d.]+,\\d{0,2})*)\\s*$');
+  function temSemInfo(L){ return L.some(function(l){ return /^\s*Sem Informações\s*$/.test(l); }) && !L.some(function(l){ return reRow.test(l); }); }
+
+  /* — Rendimentos de PJ: uma fonte, cinco colunas, CNPJ na linha de baixo — */
+  function lerPJ(L, beneficiario){
+    var fontes = [], total = null, cur = null;
+    L.forEach(function(l){
+      if (/^NOME DA FONTE PAGADORA|^\s*DE PES\. JURÍDICA|^\s*Sem Informações/.test(l)) return;
+      var m = l.match(reRow);
+      if (m && /^TOTAL\b/.test(m[1])){ total = n(m[2]); cur = null; return; }
+      if (m){
+        var nums = [n(m[2])].concat(String(m[3]||'').trim().split(/\s+/).filter(Boolean).map(function(x){ return /,\d{2}$/.test(x) ? n(x) : null; }));
+        cur = { fonte: m[1].trim(), cnpj: '', rendimentos: nums[0], previdenciaOficial: nums[1], impostoRetido: nums[2], decimoTerceiro: nums[3], irrfDecimoTerceiro: nums[4], beneficiario: beneficiario || 'titular' };
+        Object.keys(cur).forEach(function(k){ if (cur[k] == null) delete cur[k]; });
+        fontes.push(cur); return;
+      }
+      var c = l.match(new RegExp('^\\s*CNPJ\\/CPF:\\s*(' + CNPJ + '|' + CPF + ')'));
+      if (c){ if (cur) cur.cnpj = c[1]; return; }
+      if (cur && !cur.cnpj && /^[A-ZÁ-Ú0-9][A-ZÁ-Ú0-9 .,&\/\-]*$/.test(l.trim()) && l.trim()) cur.fonte += ' ' + l.trim();
+    });
+    return { fontes: fontes, total: total };
+  }
+  /* — Isentos / exclusivos: linhas numeradas, fontes por CNPJ embaixo — */
+  var reLinha = new RegExp('^(\\d{2})\\.\\s+(.+?)(?:\\s{2,}' + NUM + ')?\\s*$');
+  var reFonte = new RegExp('^\\s*(Titular|Dependente[^\\d]*?)\\s+(' + CPF + ')\\s+(' + CNPJ + '|' + CPF + ')\\s+(.+?)\\s{2,}' + NUM + '\\s*$');
+  function lerLinhas(L){
+    var linhas = [], total = null, cur = null;
+    L.forEach(function(l){
+      if (/^\s*Beneficiário\s+CPF\s+CNPJ/.test(l)) return;
+      var t = l.match(new RegExp('^TOTAL\\s{2,}' + NUM + '\\s*$'));
+      if (t){ total = n(t[1]); return; }
+      var m = l.match(reLinha);
+      if (m && !/^\d{2}\.\d/.test(l)){
+        cur = { linha: m[1], descricao: m[2].trim() };
+        if (m[3] != null) cur.valor = n(m[3]);
+        linhas.push(cur); return;
+      }
+      var f = l.match(reFonte);
+      if (f && cur){
+        if (!cur.fontes) cur.fontes = [];
+        var ben = /^Titular/i.test(f[1]) ? 'titular' : f[1].replace(/^Dependente:?\s*/i,'').trim() || 'dependente';
+        var partes = f[4].trim().split(/\s{2,}/), fo = { beneficiario: ben, cpf: f[2], cnpj: f[3], nome: partes[0], valor: n(f[5]) };
+        if (partes.length > 1) fo.descricao = partes.slice(1).join(' ');
+        cur.fontes.push(fo);
+      }
+    });
+    return { linhas: linhas, total: total };
+  }
+  /* — Imposto pago / retido — */
+  function lerImposto(L){
+    var o = {}, map = { '01':'impostoComplementar', '02':'impostoPagoExterior', '03':'impostoRetidoLei11033', '04':'impostoRetidoFonteTitular', '05':'impostoRetidoFonteDependentes', '06':'carneLeao', '07':'carneLeaoDependentes' };
+    L.forEach(function(l){ var m = l.match(new RegExp('^(\\d{2})\\.\\s+.+?\\s{2,}' + NUM + '\\s*$')); if (m && map[m[1]]) o[map[m[1]]] = n(m[2]); });
+    return o;
+  }
+  /* — Pagamentos e doações: código · nome · CPF/CNPJ · valor · parcela não dedutível — */
+  var TIPO_PAG = { '01':'instrução', '10':'profissional de saúde (PF)', '11':'dentista', '12':'psicólogo', '13':'fisioterapeuta', '14':'terapeuta ocupacional', '15':'fonoaudiólogo',
+    '16':'hospital/clínica no exterior', '21':'clínica, hospital ou laboratório', '26':'plano de saúde', '30':'pensão judicial', '31':'pensão por escritura', '36':'previdência complementar',
+    '37':'FAPI', '38':'previdência fechada', '40':'advogados', '60':'honorários', '80':'doação em espécie', '81':'doação em bens', '99':'outros' };
+  var rePag = new RegExp('^\\s*(\\d{2})\\s+(.+?)\\s{2,}(' + CPF + '|' + CNPJ + ')\\s+' + NUM + '(?:\\s+(-?[\\d.]+,\\d{0,2}))?\\s*$');
+  function lerPagamentos(L){
+    var itens = [], ben = 'titular', cur = null;
+    L.forEach(function(l){
+      if (/^CÓD\.|^\s*BENEFICIÁRIO\s*$|^\s*DEDUTÍVEL|^\s*Sem Informações/.test(l)) return;
+      if (/^\s*Titular\s*$/.test(l)){ ben = 'titular'; cur = null; return; }
+      var d = l.match(/^\s*Dependente:\s*(.+?)\s*$/); if (d){ ben = d[1]; cur = null; return; }
+      var m = l.match(rePag);
+      if (m){
+        cur = { codigo: m[1], tipo: TIPO_PAG[m[1]] || '', nome: m[2].trim(), cpfCnpj: m[3], valorPago: n(m[4]), beneficiario: ben };
+        if (m[5] && /,\d{2}$/.test(m[5])) cur.parcelaNaoDedutivel = n(m[5]);
+        itens.push(cur); return;
+      }
+      var ds = l.match(/^\s*Descrição:\s*(.*)$/); if (ds){ if (cur && ds[1].trim()) cur.descricao = ds[1].trim(); return; }
+      if (cur && cur.descricao == null && /^\s+[A-ZÁ-Ú0-9]/.test(l) && !/\d,\d{2}/.test(l) && l.trim()) cur.nome += ' ' + l.trim();
+      else if (cur && cur.descricao != null && /^\s{6,}[A-ZÁ-Ú(]/.test(l)) cur.descricao += ' ' + l.trim();
+    });
+    return itens;
+  }
+  var rePartido = new RegExp('^(\\S.*?)\\s{2,}(' + CNPJ + ')\\s{2,}' + NUM + '\\s*$');
+  function lerPartidos(L){
+    var itens = [];
+    L.forEach(function(l){ var m = l.match(rePartido); if (m) itens.push({ nome: m[1].trim(), cnpj: m[2], valor: n(m[3]) }); });
+    return itens;
+  }
+  /* — Dependentes — */
+  var reDep = new RegExp('^\\s*(\\d{2})\\s+(.+?)\\s{2,}(\\d{2}/\\d{2}/\\d{4})(?:\\s+(' + CPF + '))?\\s*$');
+  function lerDependentes(L){
+    var itens = [], cur = null;
+    L.forEach(function(l){
+      var m = l.match(reDep);
+      if (m){ cur = { codigo: m[1], nome: m[2].trim(), dataNascimento: m[3].split('/').reverse().join('-') }; if (m[4]) cur.cpf = m[4]; itens.push(cur); return; }
+      var mo = l.match(/mora com o titular[^?]*\?\s*(Sim|Não)/i); if (mo && cur) cur.moraComTitular = /sim/i.test(mo[1]);
+    });
+    return itens;
+  }
+  /* — Dívidas e ônus reais — */
+  var reDiv = new RegExp('^\\s*(\\d{2})\\s+(.+?)\\s{2,}' + NUM + '\\s+' + NUM + '(?:\\s+' + NUM + ')?\\s*$');
+  function lerDividas(L){
+    var itens = [], total = null, cur = null;
+    L.forEach(function(l){
+      var t = l.match(new RegExp('^\\s*TOTAL\\s{2,}' + NUM + '\\s+' + NUM)); if (t){ total = n(t[2]); cur = null; return; }
+      var m = l.match(reDiv);
+      if (m){ cur = { codigo: m[1], discriminacao: m[2].trim(), valorAnterior: n(m[3]), valorAtual: n(m[4]) }; if (m[5]) cur.valorPagoNoAno = n(m[5]); itens.push(cur); return; }
+      if (cur && /^\s{6,}\S/.test(l) && !/^\s*CÓDIGO|^\s*31\/12|^\s*EM 20/.test(l) && !/^\s*(DOAÇÕES|TOTAL)/.test(l)) cur.discriminacao += ' ' + l.trim();
+    });
+    itens.forEach(function(d){ var c = d.discriminacao.match(new RegExp('(' + CNPJ + '|' + CPF + ')')); if (c) d.cnpjCpf = c[1]; });
+    return { itens: itens, total: total };
+  }
+  /* — Resumo e evolução: rótulo + valor completo na mesma linha — */
+  function valorApos(L, rotulo, qual){
+    var re = new RegExp(rotulo + '\\s+' + NUM + '(?!\\d)'), achados = [];
+    L.forEach(function(l){ var m = l.match(re); if (m) achados.push(n(m[1])); });
+    if (!achados.length) return null;
+    return qual === 'ultimo' ? achados[achados.length - 1] : achados[0];
+  }
+  function lerResumo(L){
+    var r = {}, d = {};
+    var ded = { previdenciaOficial: 'Contribuições às previdências oficial e complementar fechada[^\\n]*?', previdenciaComplementar: 'Contribuição à prev\\. complementar[^\\n]*?',
+      dependentes: '^\\s*Dependentes', instrucao: 'Despesas com instrução', despesasMedicas: 'Despesas médicas', pensaoAlimenticia: 'Pensão alimentícia judicial', livroCaixa: 'Livro caixa' };
+    Object.keys(ded).forEach(function(k){ var v = valorApos(L, ded[k]); if (v != null) d[k] = v; });
+    var iTot = -1; L.forEach(function(l, i){ if (/^DEDUÇÕES/.test(l)) iTot = i; });
+    if (iTot >= 0){ for (var i = iTot + 1; i < L.length; i++){ var m = L[i].match(new RegExp('^\\s*TOTAL\\s{2,}' + NUM + '\\s*$')); if (m){ d.total = n(m[1]); break; } if (/^IMPOSTO DEVIDO/.test(L[i])) break; } }
+    if (Object.keys(d).length) r.deducoes = d;
+    var campos = { rendimentosTributaveisTotal: '^\\s*TOTAL', baseCalculo: 'Base de cálculo do imposto', impostoDevido: '^\\s*Imposto devido', deducaoIncentivo: 'Dedução de incentivo',
+      impostoDevidoFinal: 'Total do imposto devido', aliquotaEfetiva: 'Al[ií]quota efetiva \\(%\\)', impostoARestituir: 'IMPOSTO A RESTITUIR', impostoAPagar: 'SALDO DE IMPOSTO A PAGAR', impostoPagoTotal: 'Total do imposto pago' };
+    Object.keys(campos).forEach(function(k){ var v = valorApos(L, campos[k]); if (v != null) r[k] = v; });
+    if (L.some(function(l){ return /DESCONTO SIMPLIFICADO/.test(l); })) r.modelo = 'desconto simplificado';
+    else if (L.some(function(l){ return /DEDUÇÕES LEGAIS/.test(l); })) r.modelo = 'deduções legais';
+    return r;
+  }
+  function lerEvolucao(L){
+    var e = {};
+    var bens = [], div = [];
+    L.forEach(function(l){ var m = l.match(new RegExp('^Bens e direitos em 31/12/(\\d{4})\\s+' + NUM)); if (m) bens.push([+m[1], n(m[2])]);
+      var k = l.match(new RegExp('^Dívidas e ônus reais em 31/12/(\\d{4})\\s+' + NUM)); if (k) div.push([+k[1], n(k[2])]); });
+    bens.sort(function(a,b){ return a[0]-b[0]; }); div.sort(function(a,b){ return a[0]-b[0]; });
+    if (bens.length){ e.bensAnterior = bens[0][1]; e.bensAtual = bens[bens.length-1][1]; }
+    if (div.length){ e.dividasAnterior = div[0][1]; e.dividasAtual = div[div.length-1][1]; }
+    var campos = { rendimentosIsentosTotal: '^Rendimentos isentos e não tributáveis', rendimentosExclusivosTotal: '^Rendimentos sujeitos à tributação exclusiva/definitiva',
+      impostoGanhoCapital: '^Imposto pago sobre Ganhos de Capital', impostoRendaVariavel: '^Imposto pago sobre Renda Variável', doacoesPartidos: '^Doações a Partidos Políticos' };
+    Object.keys(campos).forEach(function(k){ var v = valorApos(L, campos[k]); if (v != null) e[k] = v; });
+    return e;
+  }
+  /* — Renda variável: por mês, a soma das linhas "Mercado ..." (comuns + day-trade) — */
+  var MESES = { JAN:1, FEV:2, MAR:3, ABR:4, MAI:5, JUN:6, JUL:7, AGO:8, SET:9, OUT:10, NOV:11, DEZ:12 };
+  function lerRendaVariavel(L){
+    var porMes = {}, mes = null, ordem = [];
+    L.forEach(function(l){
+      var m = l.match(/GANHOS LÍQUIDOS OU PERDAS\s*-\s*([A-Z]{3})/); if (m && MESES[m[1]]){ mes = m[1]; if (porMes[mes] == null){ porMes[mes] = 0; ordem.push(mes); } return; }
+      if (!mes) return;
+      var r = l.match(new RegExp('^\\s*Mercado .+?\\s{2,}' + NUM + '(?:\\s+' + NUM + ')?\\s*$'));
+      if (r){ porMes[mes] += (n(r[1]) || 0) + (r[2] ? (n(r[2]) || 0) : 0); }
+    });
+    var lista = ordem.filter(function(k){ return Math.abs(porMes[k]) >= 0.005; }).map(function(k){ return { mes: k, valor: Math.round(porMes[k]*100)/100 }; });
+    if (!ordem.length) return null;
+    return { ganhosLiquidosMes: lista, totalAno: Math.round(lista.reduce(function(t,x){ return t + x.valor; }, 0)*100)/100 };
+  }
+  /* — Identificação: só o que a IA não trouxe — */
+  function lerIdentificacao(L, id){
+    var o = {};
+    function campo(rot){ var re = new RegExp(rot + ':[ \\t]*(.*?)(?:\\s{2,}[A-ZÁ-Úa-zá-ú][^:]{1,40}:|$)');
+      for (var i = 0; i < L.length; i++){ var m = L[i].match(re); if (m){ var v = m[1].trim(); return /^[A-ZÁ-Úa-zá-ú\/() ]{1,40}:/.test(v) ? '' : v; } } return ''; }
+    if (!id.dataNascimento){ var d = campo('Data de Nascimento'); if (/^\d{2}\/\d{2}\/\d{4}$/.test(d)) o.dataNascimento = d.split('/').reverse().join('-'); }
+    if (!id.endereco || !id.endereco.logradouro){
+      var e = { logradouro: campo('Endereço'), numero: campo('Número'), complemento: campo('Complemento'), bairro: campo('Bairro\\/Distrito'), municipio: campo('Município'), uf: campo('UF'), cep: campo('CEP') };
+      if (e.logradouro) o.endereco = e;
+    }
+    if (!id.conjuge){ var c = ''; L.forEach(function(l){ var m = l.match(/Possui cônjuge ou companheiro\(a\)\?\s*(Sim|Não)/i); if (m) c = m[1]; });
+      if (c){ o.conjuge = { possui: /sim/i.test(c) }; var cc = campo('CPF do cônjuge ou companheiro\\(a\\)'); if (cc) o.conjuge.cpf = cc; } }
+    if (!id.ocupacao){ var oc = campo('Ocupação Principal'); if (oc) o.ocupacao = oc; }
+    if (!id.naturezaOcupacao){ var na = campo('Natureza da Ocupação'); if (na) o.naturezaOcupacao = na; }
+    if (!id.telefone){ var t = campo('DDD\\/Telefone'); if (t) o.telefone = t; }
+    if (id.doencaGrave == null){ L.forEach(function(l){ var m = l.match(/doença grave[^?]*\?\s*(Sim|Não)/i); if (m) o.doencaGrave = /sim/i.test(m[1]); }); }
+    return o;
+  }
+
+  function vazio(v){
+    if (v == null) return true;
+    if (Array.isArray(v)) return !v.length;
+    if (typeof v === 'object'){
+      if (Array.isArray(v.itens)) return !v.itens.length;
+      if (Array.isArray(v.linhas)) return !v.linhas.length;
+      if (Array.isArray(v.fontes)) return !v.fontes.length;
+      return !Object.keys(v).length;
+    }
+    return v === '';
+  }
+
+  /* A entrada: um sócio como a IA entregou. A saída: o mesmo sócio com as
+     fichas que faltavam preenchidas a partir do texto, a lista do que foi
+     recuperado em `recuperadoDoTexto`, e sem o texto bruto (que não cabe
+     no cadastro e já cumpriu o papel). */
+  function recuperarFichasDoTexto(s){
+    var txt = textoDe(s);
+    if (!s || !txt || txt.length < 200) return s;
+    var L = limpar(txt), S = secoes(L), out = {}, rec = [];
+    Object.keys(s).forEach(function(k){ if (k !== 'transcricaoPaginas' && k !== 'textoBruto' && k !== 'transcricao') out[k] = s[k]; });
+    /* Ficha lida e vazia ("Sem Informações") entra vazia — é diferente de
+       ficha que a IA não entregou (ausente). */
+    function poe(bloco, valor, vazioLido){
+      if (!vazio(out[bloco])) return;
+      if (vazio(valor)){ if (vazioLido !== undefined && out[bloco] == null){ out[bloco] = vazioLido; rec.push(bloco + ' (vazia)'); } return; }
+      out[bloco] = valor; rec.push(bloco);
+    }
+
+    if (S.dependentes) poe('dependentes', temSemInfo(S.dependentes) ? [] : lerDependentes(S.dependentes), []);
+    if (S.pjTitular || S.pjDependentes){
+      var pj = lerPJ(S.pjTitular || [], 'titular');
+      if (S.pjDependentes && !temSemInfo(S.pjDependentes)){ var pd = lerPJ(S.pjDependentes, 'dependente'); pj.fontes = pj.fontes.concat(pd.fontes); }
+      if (pj.total == null) delete pj.total;
+      poe('rendimentosTrabalho', pj, { fontes: [] });
+    }
+    if (S.isentos){ var is = lerLinhas(S.isentos); if (is.total == null) delete is.total; poe('rendimentosIsentos', is, { linhas: [] }); }
+    if (S.exclusivos){ var ex = lerLinhas(S.exclusivos); if (ex.total == null) delete ex.total; poe('rendimentosExclusivos', ex, { linhas: [] }); }
+    if (S.impostoPago) poe('impostoPago', lerImposto(S.impostoPago));
+    if (S.pagamentos) poe('pagamentos', lerPagamentos(S.pagamentos), []);
+    if (S.doacoes || S.partidos){
+      var doa = { efetuadas: S.doacoes ? lerPagamentos(S.doacoes).map(function(p){ return { codigo: p.codigo, tipo: p.tipo, nome: p.nome, cpfCnpj: p.cpfCnpj, valor: p.valorPago, beneficiario: p.beneficiario }; }) : [],
+                  partidosPoliticos: S.partidos ? lerPartidos(S.partidos) : [] };
+      poe('doacoes', (doa.efetuadas.length || doa.partidosPoliticos.length) ? doa : null, { efetuadas: [], partidosPoliticos: [] });
+    }
+    if (S.dividas){ var dv = lerDividas(S.dividas); if (dv.total == null) delete dv.total; poe('dividas', dv, { itens: [] }); }
+    if (S.rendaVariavel){ var rv = lerRendaVariavel(S.rendaVariavel); if (rv && rv.ganhosLiquidosMes.length) poe('rendaVariavel', rv); }
+    if (S.resumo){
+      var rs = lerResumo(S.resumo);
+      if (vazio(out.resumo)) poe('resumo', rs);
+      else { var r2 = {}; Object.keys(out.resumo).forEach(function(k){ r2[k] = out.resumo[k]; }); var mexeu = false;
+        Object.keys(rs).forEach(function(k){ if (vazio(r2[k])){ r2[k] = rs[k]; mexeu = true; } });
+        if (mexeu){ out.resumo = r2; rec.push('resumo (complemento)'); } }
+    }
+    if (S.evolucao || S.outras){
+      var ev = lerEvolucao((S.evolucao || []).concat(S.outras || []));
+      if (vazio(out.evolucaoPatrimonial)) poe('evolucaoPatrimonial', ev);
+      else { var e2 = {}; Object.keys(out.evolucaoPatrimonial).forEach(function(k){ e2[k] = out.evolucaoPatrimonial[k]; }); var m2 = false;
+        Object.keys(ev).forEach(function(k){ if (vazio(e2[k])){ e2[k] = ev[k]; m2 = true; } }); if (m2){ out.evolucaoPatrimonial = e2; } }
+    }
+    var id = out.identificacao || {};
+    var idx = lerIdentificacao((S.identificacao || []).concat(S.cabecalho || []), id);
+    if (Object.keys(idx).length){ var id2 = {}; Object.keys(id).forEach(function(k){ id2[k] = id[k]; }); Object.keys(idx).forEach(function(k){ id2[k] = idx[k]; }); out.identificacao = id2; rec.push('identificação (complemento)'); }
+    /* seguros e previdência: o que as fichas mostram, pelo código */
+    if (vazio(out.segurosEPrevidencia)){
+      var seg = [];
+      (out.pagamentos || []).forEach(function(p){ if (/^(36|37|38)$/.test(String(p.codigo))) seg.push({ tipo: 'PGBL/fundo de pensão', instituicao: p.nome, cnpj: p.cpfCnpj, valor: p.valorPago, ondeApareceu: 'pagamentos ' + p.codigo });
+        if (String(p.codigo) === '26') seg.push({ tipo: 'plano de saúde', instituicao: p.nome, cnpj: p.cpfCnpj, valor: p.valorPago, ondeApareceu: 'pagamentos 26', beneficiario: p.beneficiario }); });
+      ((out.bens || {}).itens || []).forEach(function(b){ if (String(b.grupo).padStart(2,'0') === '99' && String(b.codigo).padStart(2,'0') === '06') seg.push({ tipo: 'VGBL', instituicao: '', valor: Number(b.valorAtual) || 0, ondeApareceu: 'bens 99/06', discriminacao: String(b.discriminacao || '').slice(0, 120) }); });
+      if (seg.length){ out.segurosEPrevidencia = seg; rec.push('segurosEPrevidencia'); } else if (out.segurosEPrevidencia == null && (out.pagamentos || out.bens)) out.segurosEPrevidencia = [];
+    }
+    if (rec.length) out.recuperadoDoTexto = rec;
+    out.textoBrutoCaracteres = txt.length;
+    return out;
+  }
+  return { recuperarFichasDoTexto: recuperarFichasDoTexto,
+    secoes: secoes, limpar: limpar, lerPJ: lerPJ, lerLinhas: lerLinhas,
+    lerPagamentos: lerPagamentos, lerDividas: lerDividas, lerResumo: lerResumo,
+    lerDependentes: lerDependentes, lerRendaVariavel: lerRendaVariavel };
+})();
+
+
+/* ===== 37-ir-ler.js ===== */
+/* ===========================================================================
+   CAMADA 3 — IR: LER, NORMALIZAR E JUNTAR
+   O que a IA transcreveu da declaração de cada sócio vira um objeto pronto
+   para a análise. Três trabalhos:
+
+   1. normalizarBem — o bem como o PDF imprime (endereço, CNPJ, área e banco
+      dentro da discriminação; o número da coluna BEM caindo em "grupo") vira
+      um bem estruturado. É leitura do documento, nunca invenção.
+   2. chaparIR — a declaração inteira (completa) vira também o objeto somado
+      que o mapa de seguros lê, sem perder a completa (fica em `completa`).
+   3. conferirIR — junta as partes: mesma pessoa e mesmo ano é UMA declaração,
+      e as fichas se somam (bens de um arquivo, renda de outro). Ano mais novo
+      substitui o antigo.
+
+   Validado no v85/v86 contra o IR real dos três sócios da PECCIN.
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.irLer = (function(){
+  'use strict';
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function num(v){ if (v==null||v==='') return null; var x=Number(v); return isFinite(x)?x:null; }
+  function soDig(s){ return String(s||'').replace(/\D/g,''); }
+  function sem(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+var TIPO_IMOVEL = { '11':'apartamento', '12':'casa', '13':'terreno', '14':'imóvel rural', '15':'sala ou loja', '16':'construção', '17':'benfeitorias', '18':'galpão/prédio', '19':'outros', '99':'outros (box, vaga)' };
+  
+function classe(b){
+    var g = String(b.grupo||'').padStart(2,'0'), c = String(b.codigo||'').padStart(2,'0');
+    if (g === '01') return 'imovel';
+    if (g === '02') return 'veiculo';
+    if (g === '03') return 'participacao';
+    if (g === '04' || g === '07' || g === '08') return 'aplicacao';
+    if (g === '05') return 'credito';
+    if (g === '06') return (c === '10') ? 'dinheiro' : 'conta';
+    if (g === '99' && c === '06') return 'vgbl';
+    if (g === '99') return 'outro';
+    return 'outro';
+  }
+  
+function tipoVeiculo(b){
+    var c = String(b.codigo||'').padStart(2,'0'), d = sem(b.discriminacao);
+    if (b.tipoVeiculo) return sem(b.tipoVeiculo);
+    if (c === '02' || /aeronave|aviao|helicoptero/.test(d)) return 'aeronave';
+    if (c === '03' || /embarcacao|lancha|barco|jet/.test(d)) return 'embarcação';
+    if (/motocicleta|moto\b/.test(d)) return 'motocicleta';
+    return 'veículo';
+  }
+var GRUPOS = { '01':1,'02':1,'03':1,'04':1,'05':1,'06':1,'07':1,'08':1,'09':1,'99':1 };
+  function pega(txt, re){ var m = String(txt||'').match(re); return m ? String(m[1]).trim() : ''; }
+  /* um campo "Rótulo: valor" do rodapé do bem: o valor vai até o próximo rótulo
+     na mesma linha (dois espaços + Palavra:) ou o fim da linha; vazio é vazio */
+  function campo(txt, rotulo){
+    var re = new RegExp(rotulo + '[ \\t]*:[ \\t]*([^\\n]*)', 'i');
+    var m = String(txt||'').match(re); if (!m) return '';
+    var v = m[1].split(/\s{2,}[A-ZÁ-Úa-zá-ú.º°\/ ]{1,30}:/)[0].trim();
+    if (/^[A-ZÁ-Úa-zá-ú.º°\/ ]{1,30}:/.test(v)) return '';
+    return v;
+  }
+  function numBR(t){ if (t == null || t === '') return null; var x = Number(String(t).replace(/\./g,'').replace(',','.').replace(/[^\d.\-]/g,'')); return isFinite(x) ? x : null; }
+  function normalizarBem(b0){
+    if (!b0 || typeof b0 !== 'object') return b0;
+    var b = {}; Object.keys(b0).forEach(function(k){ b[k] = b0[k]; });
+    var g = String(b.grupo == null ? '' : b.grupo).padStart(2,'0'), c = String(b.codigo == null ? '' : b.codigo).padStart(2,'0');
+    var d = String(b.discriminacao || '');
+    /* colunas deslocadas: BEM · GRUPO · CÓDIGO · DISCRIMINAÇÃO */
+    if (!GRUPOS[g] && GRUPOS[c]){
+      var m = d.match(/^\s*(\d{2})\s+/);
+      if (m){ b.numeroBem = b.numeroBem || g; b.grupo = c; b.codigo = m[1]; d = d.replace(/^\s*\d{2}\s+/, ''); g = c; c = m[1]; }
+    }
+    /* corta o que não é deste bem (a IA colou a ficha seguinte) */
+    d = d.split(/\n\s*(D[ÍI]VIDAS E [ÔO]NUS|DECLARA[ÇC][ÃA]O DE BENS|RENDIMENTOS |PAGAMENTOS EFETUADOS|DOA[ÇC][ÕO]ES )/)[0];
+    /* o país e os campos extras do rodapé do bem */
+    var pais = pega(d, /\n\s*(\d{3}\s*-\s*[A-ZÀ-Ú][A-ZÀ-Ú ,()]+)\s*\n/);
+    if (pais && !b.pais) b.pais = pais.replace(/^\d{3}\s*-\s*/, '').trim().replace(/^BRASIL$/, 'Brasil');
+    var pert = pega(d, /pertencente ao:\s*([^\n]+?)\s{2,}CPF/i) || pega(d, /pertencente ao:\s*([^\n]+)/i);
+    if (pert && !b.pertenceA) b.pertenceA = /titular/i.test(pert) ? 'titular' : pert;
+    /* o CNPJ do bem é o do rodapé (depois da linha do país). Um "CNPJ:" no texto
+       do contribuinte pode ser o de outra empresa (a investida da holding). */
+    var mPais = d.match(/\n\s*\d{3}\s*-\s*[A-ZÀ-Ú][A-ZÀ-Ú ,()]+\s*(\n|$)/);
+    var rodape = mPais ? d.slice(mPais.index) : '';
+    var cnpj = pega(rodape, /CNPJ(?: do Fundo)?:\s*([\d.\/-]{14,18})/i);
+    if (!cnpj && !mPais){ var todos = d.match(/CNPJ(?: do Fundo)?:\s*[\d.\/-]{14,18}/ig) || []; if (todos.length) cnpj = todos[todos.length-1].replace(/^CNPJ(?: do Fundo)?:\s*/i,''); }
+    if (cnpj){ if (g === '07' && !b.cnpjFundo) b.cnpjFundo = cnpj; if (!b.cnpj) b.cnpj = cnpj; if (g === '05' && !b.cnpjCpfDevedor) b.cnpjCpfDevedor = cnpj; }
+    if (/Negociados em Bolsa:\s*Sim/i.test(d)) b.negociadasEmBolsa = true;
+    if (g === '01'){
+      var e = b.endereco || {};
+      var log = campo(d, 'Logradouro'), nro = campo(d, 'N[ºo°]'), comp = campo(d, 'Comp\\.'), bai = campo(d, 'Bairro');
+      var mun = campo(d, '(?:Munic[íi]pio|Cidade)'); var uf = pega(d, /\bUF:\s*([A-Z]{2})\b/); var cep = pega(d, /CEP:\s*(\d{5}-?\d{3})/);
+      b.endereco = { logradouro: e.logradouro || log, numero: e.numero || nro, complemento: e.complemento || comp, bairro: e.bairro || bai, municipio: e.municipio || mun, uf: e.uf || uf, cep: e.cep || cep };
+      if (b.areaM2 == null){ var ar = pega(d, /[ÁA]rea Total:\s*([\d.,]+)/i); var av = numBR(ar); if (av != null && av > 0) b.areaM2 = av; }
+      if (!b.matricula){ var mt = campo(d, 'Matr[íi]cula').split(/\s{2,}/)[0]; if (mt) b.matricula = mt; }
+      if (!b.dataAquisicao){ var dq = pega(d, /Data de Aquisi[çc][ãa]o:\s*(\d{2}\/\d{2}\/\d{4})/i); if (dq) b.dataAquisicao = dq.replace(/(\d{2})\/(\d{2})\/(\d{4})/, '$3-$2-$1'); }
+      if (!b.situacao){ var dd = d.toUpperCase(); b.situacao = /VENDID|ALIENAD|TRANSFERID.*EM 20\d\d/.test(dd) && Number(b.valorAtual) === 0 ? 'vendido no ano' : /FINANCIAD/.test(dd) ? 'financiado' : /EM CONSTRU/.test(dd) ? 'em construção' : /QUITAD/.test(dd) ? 'quitado' : /ALUGAD|LOCAD/.test(dd) ? 'alugado a terceiros' : ''; }
+      if (!b.fracao){ var fr = d.match(/^\s*(\d+\/\d+|\d{1,2}(?:,\d+)?%)\s+D[OA]\b/i); if (fr) b.fracao = fr[1]; }
+    }
+    if (g === '02'){
+      if (!b.ano){ var an = pega(d, /\bANO[:\s]+(\d{4})/i); if (an) b.ano = Number(an); }
+      if (!b.placaOuPrefixo){ var pl = pega(d, /\b(?:PLACA|PREFIXO)[:\s]+([A-Z]{3}-?\d[A-Z0-9]\d{2}|[A-Z]{2}-[A-Z]{3})/i); if (pl) b.placaOuPrefixo = pl; }
+      if (!b.marcaModelo){ var mm = pega(d, /^\s*((?:AERONAVE|MOTOCICLETA|EMBARCA[ÇC][ÃA]O|VE[IÍ]CULO|VEICULO|CAMINHONETE|CAMIONETA|AUTOM[ÓO]VEL|LANCHA)?\s*(?:MARCA\s+)?[^,\n]{3,70})/i); if (mm) b.marcaModelo = mm.replace(/\s+/g,' ').trim(); }
+    }
+    if (g === '03' && b.percentual == null){ var pp = d.match(/(\d{1,3}(?:,\d+)?)\s*%/); if (pp) b.percentual = numBR(pp[1]); }
+    if (g === '03' && !b.empresa){ var em = d.match(/(?:DA|NA|DE)\s+EMPRESA\s+([^,\n]{3,80})/i); if (em) b.empresa = em[1].trim(); }
+    if (g === '06' && !b.banco){ var bk = pega(d, /Banco:\s*(\d+)/); if (bk) b.banco = bk; }
+    /* a discriminação limpa: até o país ou o primeiro campo de rodapé */
+    /* no PDF, a linha do país ("105 - BRASIL") fecha o texto do contribuinte: o
+       que vem depois é rodapé. Só quando não há linha de país, corta no primeiro
+       rótulo de rodapé (um "CNPJ:" no meio do texto do contribuinte não corta). */
+    var mp = d.match(/\n\s*\d{3}\s*-\s*[A-ZÀ-Ú][A-ZÀ-Ú ,()]+\s*(\n|$)/);
+    var limpa = mp ? d.slice(0, mp.index)
+                   : d.split(/\n\s*(?:Inscri[çc][ãa]o Municipal|Logradouro:|Bem ou direito pertencente|CNPJ(?: do Fundo)?:\s*[\d.\/-]{14,18}\s*(?:\n|$)|Registro de Aeronave|RENAVAM|Banco:|Negociados em Bolsa)/)[0];
+    b.discriminacao = limpa.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    b.grupo = g; b.codigo = c;
+    return b;
+  }
+  
+function ligarRendimentos(s){
+    var mapa = {};
+    function add(l){ ((l && l.fontes) || []).forEach(function(f){ var k = soDig(f.cnpj); if (!k) return; mapa[k] = (mapa[k] || 0) + n(f.valor); }); }
+    ((s.rendimentosIsentos||{}).linhas || []).forEach(function(l){ if (/^(09|12|99)$/.test(String(l.linha||'').padStart(2,'0'))) add(l); });
+    ((s.rendimentosExclusivos||{}).linhas || []).forEach(function(l){ if (/^(06|10)$/.test(String(l.linha||'').padStart(2,'0'))) add(l); });
+    ((s.bens||{}).itens || []).forEach(function(b){
+      if (b.rendimentoNoAno != null) return;
+      var k = soDig(b.cnpjFundo || b.cnpj);
+      if (k && mapa[k] != null) b.rendimentoNoAno = mapa[k];
+    });
+  }
+  
+function ehV2(s){ return !!(s && (s.identificacao || s.bens || s.rendimentosTrabalho)); }
+  
+function deV1(s){
+    /* o formato antigo (um objeto com campos somados) vira uma v2 mínima */
+    return {
+      identificacao: { nome: s.nome, cpf: s.cpf, anoCalendario: num(s.anoCalendario), exercicio: num(s.anoCalendario) ? num(s.anoCalendario)+1 : null, conjuge: {} },
+      dependentes: Array.from({ length: n(s.dependentes) }, function(_, i){ return { nome: 'dependente ' + (i+1) }; }),
+      rendimentosTrabalho: { fontes: n(s.rendimentosTributaveis) ? [{ fonte:'(somado)', cnpj:'', rendimentos:n(s.rendimentosTributaveis) }] : [], total: n(s.rendimentosTributaveis) },
+      rendimentosIsentos: { linhas: [].concat(n(s.lucrosDistribuidosRecebidos) ? [{ linha:'09', descricao:'Lucros e dividendos recebidos', valor:n(s.lucrosDistribuidosRecebidos), fontes:[] }] : []), total: n(s.rendimentosIsentos) },
+      rendimentosExclusivos: { linhas: [], total: 0 },
+      impostoPago: {}, resumo: {},
+      pagamentos: [].concat(n(s.planoSaudeDeduzido) ? [{ codigo:'26', tipo:'plano de saúde', valorPago:n(s.planoSaudeDeduzido), beneficiario:'titular' }] : [],
+                            n(s.previdenciaPGBL) ? [{ codigo:'36', tipo:'previdência complementar', valorPago:n(s.previdenciaPGBL), beneficiario:'titular' }] : []),
+      bens: { itens: [].concat(
+        n(s.imoveis) ? [{ grupo:'01', codigo:'19', discriminacao:'Imóveis (somados)', valorAtual:n(s.imoveis), valorAnterior:null }] : [],
+        n(s.veiculos) ? [{ grupo:'02', codigo:'01', discriminacao:'Veículos (somados)', valorAtual:n(s.veiculos), valorAnterior:null }] : [],
+        n(s.participacoesEmpresas) ? [{ grupo:'03', codigo:'02', discriminacao:'Participações (somadas)', valorAtual:n(s.participacoesEmpresas), valorAnterior:null }] : [],
+        n(s.fundosInvestimento) ? [{ grupo:'07', codigo:'01', discriminacao:'Fundos (somados)', valorAtual:n(s.fundosInvestimento), valorAnterior:null }] : [],
+        n(s.aplicacoesRendaFixa) ? [{ grupo:'04', codigo:'02', discriminacao:'Renda fixa (somada)', valorAtual:n(s.aplicacoesRendaFixa), valorAnterior:null }] : [],
+        n(s.acoes) ? [{ grupo:'03', codigo:'01', discriminacao:'Ações (somadas)', valorAtual:n(s.acoes), valorAnterior:null }] : [],
+        n(s.contaCorrente) ? [{ grupo:'06', codigo:'01', discriminacao:'Conta corrente (somada)', valorAtual:n(s.contaCorrente), valorAnterior:null }] : [],
+        n(s.previdenciaVGBL) ? [{ grupo:'99', codigo:'06', discriminacao:'VGBL', valorAtual:n(s.previdenciaVGBL), valorAnterior:null }] : []), totais: {} },
+      dividas: { itens: n(s.dividasOnus) ? [{ discriminacao:'Dívidas e ônus (somados)', valorAtual:n(s.dividasOnus) }] : [], total: n(s.dividasOnus) },
+      segurosEPrevidencia: [], evolucaoPatrimonial: {}, fonte: s.fonte || '', _v1: true
+    };
+  }
+
+  
+var CAMPOS_IR = ['rendimentosTributaveis','rendimentosIsentos','lucrosDistribuidosRecebidos','previdenciaPGBL','previdenciaVGBL',
+    'fundosInvestimento','acoes','aplicacoesRendaFixa','contaCorrente','imoveis','veiculos','participacoesEmpresas',
+    'dividasOnus','dependentes','planoSaudeDeduzido'];
+  
+function chaparIR(s){
+    if (!s || !(s.identificacao || s.bens || s.rendimentosTrabalho || s.transcricaoPaginas)) return s;
+    /* v86: se a IA entregou o texto das páginas em vez das fichas, o sistema
+       recupera as fichas do texto (sem sobrescrever o que veio estruturado) e
+       descarta o texto bruto — ele não cabe no cadastro. */
+    if (typeof CO.irTexto) s = CO.irTexto.recuperarFichasDoTexto(s);
+    var id = s.identificacao || {};
+    /* v86: a IA real devolve o bem como veio no PDF (coluna BEM no lugar do
+       grupo, endereço e CNPJ dentro da discriminação). Normaliza antes de somar
+       e é a versão normalizada que fica gravada. */
+    var itensN = ((s.bens||{}).itens || []).map(function(b){ return normalizarBem(b); });
+    if (s.bens && Array.isArray(s.bens.itens) && true){
+      var s2 = {}; Object.keys(s).forEach(function(k){ s2[k] = s[k]; });
+      s2.bens = { itens: itensN, totais: s.bens.totais };
+      if (s2.bens.totais == null) delete s2.bens.totais;
+      s = s2;
+    }
+    function lin(bloco, n_){ return ((s[bloco]||{}).linhas || []).filter(function(l){ return String(l.linha||'').padStart(2,'0') === n_; })[0] || null; }
+    function somaBens(filtro){ return itensN.filter(filtro).reduce(function(t,b){ return t + (Number(b.valorAtual)||0); }, 0); }
+    var g = function(b){ return String(b.grupo||'').padStart(2,'0'); }, c = function(b){ return String(b.codigo||'').padStart(2,'0'); };
+    var pag = s.pagamentos || [];
+    var y = {
+      nome: id.nome, cpf: id.cpf, anoCalendario: num(id.anoCalendario), dataNascimento: id.dataNascimento,
+      rendimentosTributaveis: num((s.rendimentosTrabalho||{}).total) != null ? num(s.rendimentosTrabalho.total) : ((s.rendimentosTrabalho||{}).fontes||[]).reduce(function(t,f){ return t + (Number(f.rendimentos)||0); }, 0),
+      rendimentosIsentos: num((s.rendimentosIsentos||{}).total) || 0,
+      lucrosDistribuidosRecebidos: num((lin('rendimentosIsentos','09')||{}).valor) || 0,
+      jurosCapitalProprio: num((lin('rendimentosExclusivos','10')||{}).valor) || 0,
+      previdenciaPGBL: pag.filter(function(p){ return /^(36|37)$/.test(String(p.codigo||'')); }).reduce(function(t,p){ return t + (Number(p.valorPago)||0); }, 0),
+      previdenciaVGBL: somaBens(function(b){ return g(b) === '99' && c(b) === '06'; }),
+      fundosInvestimento: somaBens(function(b){ return g(b) === '07'; }),
+      acoes: somaBens(function(b){ return g(b) === '03' && c(b) === '01'; }),
+      aplicacoesRendaFixa: somaBens(function(b){ return g(b) === '04'; }),
+      contaCorrente: somaBens(function(b){ return g(b) === '06'; }),
+      imoveis: somaBens(function(b){ return g(b) === '01'; }),
+      veiculos: somaBens(function(b){ return g(b) === '02'; }),
+      participacoesEmpresas: somaBens(function(b){ return g(b) === '03' && c(b) !== '01'; }),
+      dividasOnus: num((s.dividas||{}).total) != null ? num(s.dividas.total) : num((s.evolucaoPatrimonial||{}).dividasAtual) || 0,
+      dependentes: (s.dependentes || []).length,
+      planoSaudeDeduzido: pag.filter(function(p){ return String(p.codigo) === '26'; }).reduce(function(t,p){ return t + (Number(p.valorPago)||0); }, 0),
+      /* o total impresso vale mais que a soma dos itens (ficha de bens → evolução patrimonial → soma) */
+      bensTotal: num((s.bens && s.bens.totais || {}).bensAtual) != null ? num(s.bens.totais.bensAtual)
+               : num((s.evolucaoPatrimonial || {}).bensAtual) != null ? num(s.evolucaoPatrimonial.bensAtual)
+               : (itensN.length ? somaBens(function(){ return true; }) : null),
+      fonte: s.fonte || '', versaoLeitura: 2, completa: s
+    };
+    return y;
+  }
+  
+function vazio(v){
+    if (v == null) return true;
+    if (Array.isArray(v)) return !v.length;
+    if (typeof v === 'object'){
+      if (Array.isArray(v.itens)) return !v.itens.length && vazio(v.totais);
+      if (Array.isArray(v.linhas)) return !v.linhas.length && num(v.total) == null;
+      if (Array.isArray(v.fontes)) return !v.fontes.length && num(v.total) == null;
+      return !Object.keys(v).some(function(k){ return !vazio(v[k]); });
+    }
+    return v === '';
+  }
+  
+function fundirCompleta(a, b){
+    var f = {};
+    Object.keys(a || {}).forEach(function(k){ f[k] = a[k]; });
+    Object.keys(b || {}).forEach(function(k){
+      if (vazio(f[k])) { f[k] = b[k]; return; }
+      if (vazio(b[k])) return;
+      if (k === 'identificacao' || k === 'resumo' || k === 'evolucaoPatrimonial'){
+        var m = {}; Object.keys(f[k]).forEach(function(q){ m[q] = f[k][q]; });
+        Object.keys(b[k]).forEach(function(q){ if (vazio(m[q])) m[q] = b[k][q]; });
+        f[k] = m;
+      } else if (k === 'bens' && Array.isArray(f[k].itens) && Array.isArray(b[k].itens)){
+        var vistos = {}; f[k].itens.forEach(function(x){ vistos[String(x.numeroBem || '') + '|' + String(x.valorAtual) + '|' + String(x.discriminacao||'').slice(0,40)] = 1; });
+        var itens = f[k].itens.slice();
+        b[k].itens.forEach(function(x){ var ch = String(x.numeroBem || '') + '|' + String(x.valorAtual) + '|' + String(x.discriminacao||'').slice(0,40); if (!vistos[ch]) itens.push(x); });
+        f[k] = { itens: itens, totais: vazio(f[k].totais) ? b[k].totais : f[k].totais };
+      }
+    });
+    return f;
+  }
+  
+function conferirIR(o, sociosContrato){
+    var avisos = [];
+    var brutoV2 = Array.isArray(o && o.socios) ? o.socios.map(chaparIR) : [];
+    var bruto = brutoV2.concat(Array.isArray(o && o.sociosIR) ? o.sociosIR : []).filter(function(x){ return x && (x.nome || x.cpf); });
+    var porPessoa = {};
+    bruto.forEach(function(x){
+      var y = {}; Object.keys(x).forEach(function(k){ y[k] = x[k]; });
+      CAMPOS_IR.forEach(function(k){ if (k in y){ var v = num(y[k]); if (v == null) delete y[k]; else y[k] = v; } });
+      y.anoCalendario = num(y.anoCalendario);
+      var k = soDig(y.cpf) || sem(y.nome);
+      var ja = porPessoa[k];
+      if (ja && ja.completa && y.completa && (ja.anoCalendario || 0) === (y.anoCalendario || 0)){
+        var fund = chaparIR(fundirCompleta(ja.completa, y.completa));
+        CAMPOS_IR.forEach(function(q){ if (q in fund){ var v2 = num(fund[q]); if (v2 == null) delete fund[q]; else fund[q] = v2; } });
+        fund.anoCalendario = num(fund.anoCalendario);
+        porPessoa[k] = fund;
+        avisos.push((y.nome || y.cpf) + ': duas leituras do mesmo ano (' + (y.anoCalendario || '?') + ') foram juntadas numa só.');
+        return;
+      }
+      if (ja && (ja.anoCalendario || 0) >= (y.anoCalendario || 0)){
+        avisos.push('Duas declarações de ' + (y.nome || y.cpf) + ': ficou a mais recente (' + ja.anoCalendario + ').'); return; }
+      if (ja) avisos.push('Duas declarações de ' + (y.nome || y.cpf) + ': ficou a mais recente (' + y.anoCalendario + ').');
+      porPessoa[k] = y;
+    });
+    var lista = Object.keys(porPessoa).map(function(k){ return porPessoa[k]; });
+    var sc = Array.isArray(sociosContrato) ? sociosContrato : [];
+    if (sc.length) lista.forEach(function(y){
+      var acha = sc.some(function(s){ return (soDig(s.cpf) && soDig(s.cpf) === soDig(y.cpf)) || (sem(s.nome) && sem(s.nome) === sem(y.nome)); });
+      if (!acha) avisos.push((y.nome || y.cpf) + ' não está entre os sócios do contrato social.');
+    });
+    lista.forEach(function(y){ if (!y.anoCalendario) avisos.push('Sem ano-calendário: ' + (y.nome || y.cpf) + '.'); });
+    if (!lista.length) avisos.push('Nenhuma declaração no arquivo.');
+    return { socios: lista, avisos: avisos,
+             duvidas: Array.isArray(o && o.duvidas) ? o.duvidas.filter(function(d){ return d && String(d).trim(); }) : [] };
+  }
+
+  return { normalizarBem: normalizarBem, chaparIR: chaparIR, conferirIR: conferirIR,
+    ligarRendimentos: ligarRendimentos, deV1: deV1, ehV2: ehV2, classe: classe,
+    tipoVeiculo: tipoVeiculo, TIPO_IMOVEL: TIPO_IMOVEL, CAMPOS_IR: CAMPOS_IR };
+})();
+
+
 /* ===== 40-premissas.js ===== */
 /* ===========================================================================
    CAMADA 4 — PREMISSAS
@@ -3046,7 +3897,32 @@ CO.P = {
   fiancaSobreReceita: 0.01,
   economiaPGBLRelevante: 20000,
   patrimonioPessoalRelevante: 5000000,
-  energiaGarantia: 0.25             // 3 meses de consumo
+  energiaGarantia: 0.25,            // 3 meses de consumo
+
+  /* --- capacidade de pagamento (mesa de crédito) --- */
+  dscrConfortavel: 1.30,            // o que a maioria dos bancos pede em covenant
+  dscrLimite: 1.00,                 // abaixo disso só paga tomando mais dívida
+  dscrAlvo: 1.20,                   // usado para a capacidade de dívida nova
+  tetoTaxaImplicita: 0.60,          // acima disso a "despesa financeira" não é juro de empréstimo
+  cdi: 0.1075,                      // CDI de referência — troque pelo do dia
+  spreadDividaNova: 0.05,           // spread sobre o CDI para dívida nova
+  prazoDividaNova: 5,               // anos
+  qlBom: 1.00, qlAtencao: 0.80,     // qualidade do lucro (FCO ÷ lucro)
+  pctDespVendasVariavel: 0.50,      // metade da despesa de vendas acompanha o faturamento
+  msConfortavel: 0.20, msApertada: 0.10,  // margem de segurança sobre o ponto de equilíbrio
+  gaoAlto: 4.0,                     // alavancagem operacional alta
+  folegoCurto: 1, folegoBom: 3,     // meses de caixa
+
+  /* --- pessoa-chave e sucessão (empresa) --- */
+  prazoLeiDias: 90,                 // art. 1.031 §2º CC: haveres à vista em 90 dias
+  mesesTransicao: 6,                // caixa de atravessar a transição
+  avalSemAbertura: 0.40,            // aval presumido quando a dívida não abre: 40% da bruta
+  multiploSetor: { farmaceutica:7, industria:5, comercio:4, servicos:6, tecnologia:8, agro:5, construcao:4, transporte:4, saude:7, alimentos:5 },
+
+  /* --- "se acontecesse" --- */
+  franquiaEmpPct: 0.15, franquiaEmpMin: 200000, franquiaEqPct: 0.10,
+  sinistroPequeno: 180000, mesesParada: 6, aliquotaImpacto: 0.34,
+  expectativaVida: 75, idadeBaseVitima: 40
 };
 
 /* O que cada premissa significa, para a tela mostrar ao lado do número. */
@@ -3822,6 +4698,678 @@ CO.resumo = (function () {
 })();
 
 
+/* ===== 45-socios.js ===== */
+/* ===========================================================================
+   CAMADA 4 — ANÁLISE DO SÓCIO (a partir do IR)
+   Recebe a declaração que CO.irLer preparou e faz as contas da conversa com
+   o sócio: quem é (idade, cônjuge, dependentes), de onde vem a renda (por
+   CNPJ, e quanto é da empresa avaliada, inclusive via holding), o imposto e
+   o espaço de PGBL, o patrimônio bem a bem, a saúde do bolso, a sucessão
+   (inventário, liquidez, doações em vida) e os produtos com o número que os
+   sustenta.
+
+   Nenhum número vem de fora da declaração ou da empresa. O que é premissa
+   (ITCMD, custas, meses de renda) está em CO.Psocio e a tela diz. Dado
+   pessoal: só para a conversa com o próprio sócio.
+
+   A ligação sócio↔empresa (holding que segura as ações, participação com o
+   CNPJ da empresa avaliada) foi afinada no v85/v86 com a PECCIN.
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.socios = (function(){
+  'use strict';
+  var L = CO.irLer;
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function num(v){ if (v==null||v==='') return null; var x=Number(v); return isFinite(x)?x:null; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '\u2014'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '\u2014' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+  function soDig(s){ return String(s||'').replace(/\D/g,''); }
+  function sem(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+  function idadeEm(nasc, ref){
+    var m = String(nasc||'').match(/(\d{4})-(\d{2})-(\d{2})/); if (!m) return null;
+    var hoje = ref ? new Date(ref) : new Date();
+    var a = hoje.getFullYear() - Number(m[1]);
+    if (hoje.getMonth()+1 < Number(m[2]) || (hoje.getMonth()+1 === Number(m[2]) && hoje.getDate() < Number(m[3]))) a--;
+    return a;
+  }
+
+  var P = {
+    mesesRendaVida: 120, itcmdPct: 0.04, custasInventarioPct: 0.06, mesesDespesaFamilia: 24,
+    aliquotaIRMarginal: 0.275, tetoPGBL: 0.12, valorMercadoImovelFator: 1.0, anosValidadeIR: 1
+  };
+
+  function analisarSocio(s0, ctx){
+    ctx = ctx || {};
+    var s = L.ehV2(s0) ? s0 : L.deV1(s0 || {});
+    if (s.bens && Array.isArray(s.bens.itens)){ s = Object.assign({}, s, { bens: Object.assign({}, s.bens, { itens: s.bens.itens.map(L.normalizarBem) }) }); L.ligarRendimentos(s); }
+    var id = s.identificacao || {};
+    var cnpjEmp = soDig(ctx.empresaCnpj);
+    var raizEmp = cnpjEmp.slice(0,8);
+    var daEmpresa = function(c){ var d = soDig(c); return !!(raizEmp && d && d.slice(0,8) === raizEmp); };
+    var hoje = ctx.hoje || new Date().toISOString().slice(0,10);
+    var anoCal = num(id.anoCalendario);
+    var avisos = [];
+
+    /* ---------- quem é ---------- */
+    var idade = idadeEm(id.dataNascimento, hoje);
+    var deps = (s.dependentes || []).map(function(d){
+      return { nome: d.nome, cpf: d.cpf, codigo: d.codigo, nascimento: d.dataNascimento, idade: idadeEm(d.dataNascimento, hoje), moraCom: d.moraComTitular,
+               relacao: /^1/.test(String(d.codigo||'')) ? 'cônjuge' : /^2|^3/.test(String(d.codigo||'')) ? 'filho(a)' : /^4|^5/.test(String(d.codigo||'')) ? 'pai/mãe/avô' : (d.codigo ? 'código ' + d.codigo : '') };
+    });
+    var menores = deps.filter(function(d){ return d.idade != null && d.idade < 24; });
+    var conjuge = (id.conjuge && (id.conjuge.possui || id.conjuge.cpf)) ? { cpf: id.conjuge.cpf || '' } : null;
+
+    /* ---------- renda ---------- */
+    var RT = s.rendimentosTrabalho || {}; var fontesT = RT.fontes || [];
+    var trabalho = fontesT.map(function(f){ return { fonte: f.fonte, cnpj: f.cnpj, valor: n(f.rendimentos), irrf: n(f.impostoRetido), prev: n(f.previdenciaOficial), decimo: n(f.decimoTerceiro), daEmpresa: daEmpresa(f.cnpj),
+      tipo: /inss|frgps|previdencia social|regime geral/i.test(String(f.fonte||'')) ? 'aposentadoria/INSS' : 'salário ou pró-labore' }; });
+    var trabalhoTotal = num(RT.total) != null ? num(RT.total) : trabalho.reduce(function(t,x){ return t + x.valor; }, 0);
+    function linha(bloco, num_){ return ((s[bloco]||{}).linhas || []).filter(function(l){ return String(l.linha||'').padStart(2,'0') === num_; })[0] || null; }
+    var lucrosL = linha('rendimentosIsentos','09');
+    var lucros = lucrosL ? (lucrosL.fontes || []).map(function(f){ return { fonte: f.nome, cnpj: f.cnpj, valor: n(f.valor), daEmpresa: daEmpresa(f.cnpj) }; }) : [];
+    var lucrosTotal = lucrosL ? (num(lucrosL.valor) != null ? num(lucrosL.valor) : lucros.reduce(function(t,x){ return t+x.valor; },0)) : 0;
+    var jcpL = linha('rendimentosExclusivos','10');
+    var jcp = jcpL ? (jcpL.fontes || []).map(function(f){ return { fonte: f.nome, cnpj: f.cnpj, valor: n(f.valor), daEmpresa: daEmpresa(f.cnpj) }; }) : [];
+    var jcpTotal = jcpL ? (num(jcpL.valor) != null ? num(jcpL.valor) : jcp.reduce(function(t,x){ return t+x.valor; },0)) : 0;
+    var aplicL = linha('rendimentosExclusivos','06'), poupL = linha('rendimentosIsentos','12'), outrosL = linha('rendimentosIsentos','99');
+    var rendAplic = n(aplicL && aplicL.valor) + n(poupL && poupL.valor) + n(outrosL && outrosL.valor);
+    var rendaVar = n((s.rendaVariavel||{}).totalAno);
+    var ganhoCap = n((linha('rendimentosExclusivos','02')||{}).valor);
+    var rendaTotal = trabalhoTotal + lucrosTotal + jcpTotal + rendAplic + rendaVar;
+    var rendaMes = rendaTotal / 12;
+    var rendaDaEmpresa = trabalho.filter(function(x){ return x.daEmpresa; }).reduce(function(t,x){ return t+x.valor; },0)
+                       + lucros.filter(function(x){ return x.daEmpresa; }).reduce(function(t,x){ return t+x.valor; },0)
+                       + jcp.filter(function(x){ return x.daEmpresa; }).reduce(function(t,x){ return t+x.valor; },0);
+    /* holdings: lucro que vem de uma participação que, pela discriminação, segura ações da empresa avaliada */
+    var holdingsDaEmpresa = (s.bens && s.bens.itens || []).filter(function(b){ return L.classe(b) === 'participacao' && !daEmpresa(b.cnpj)
+      && (sem(b.discriminacao).indexOf(sem(ctx.empresaNome||'§§')) >= 0 || (cnpjEmp && soDig(b.discriminacao).indexOf(cnpjEmp) >= 0)); })
+      .map(function(b){ return { empresa: b.empresa || b.discriminacao.slice(0,60), cnpj: b.cnpj }; });
+    var rendaViaHolding = lucros.concat(jcp).filter(function(x){ return !x.daEmpresa && holdingsDaEmpresa.some(function(h){ return soDig(h.cnpj) && soDig(h.cnpj) === soDig(x.cnpj); }); })
+      .reduce(function(t,x){ return t+x.valor; },0);
+
+    /* ---------- imposto ---------- */
+    var RS = s.resumo || {}, IP = s.impostoPago || {};
+    var irrf = n(IP.impostoRetidoFonteTitular) || trabalho.reduce(function(t,x){ return t+x.irrf; },0);
+    var ded = RS.deducoes || {};
+    var prevCompl = n(ded.previdenciaComplementar) || (s.pagamentos||[]).filter(function(p){ return String(p.codigo) === '36'; }).reduce(function(t,p){ return t+n(p.valorPago); },0);
+    var tetoPGBL = trabalhoTotal * P.tetoPGBL;
+    var espacoPGBL = Math.max(0, tetoPGBL - prevCompl);
+    var aliqMarg = (num(RS.aliquotaEfetiva) != null && RS.aliquotaEfetiva > 0) ? P.aliquotaIRMarginal : P.aliquotaIRMarginal;
+    var economiaPGBL = espacoPGBL * aliqMarg;
+    var imposto = { irrf: irrf, devido: num(RS.impostoDevidoFinal) != null ? num(RS.impostoDevidoFinal) : num(RS.impostoDevido), base: num(RS.baseCalculo),
+      aliquotaEfetiva: num(RS.aliquotaEfetiva) != null ? num(RS.aliquotaEfetiva)/100 : null,
+      aRestituir: num(RS.impostoARestituir), aPagar: num(RS.impostoAPagar),
+      deducoes: { prevOficial: n(ded.previdenciaOficial), prevComplementar: prevCompl, dependentes: n(ded.dependentes), instrucao: n(ded.instrucao), medicas: n(ded.despesasMedicas), total: n(ded.total) },
+      tetoPGBL: tetoPGBL, espacoPGBL: espacoPGBL, economiaPGBL: economiaPGBL, modeloSimplificado: /simplificad/i.test(String(RS.modelo||'')) };
+    if (imposto.modeloSimplificado) avisos.push('Declara pelo desconto simplificado: o PGBL só deduz no modelo completo.');
+
+    /* ---------- patrimônio ---------- */
+    var itens = (s.bens && s.bens.itens) || [];
+    var imoveis = [], veiculos = [], participacoes = [], aplicacoes = [], creditos = [], contas = [], dinheiro = 0, vgbl = [], outros = [];
+    itens.forEach(function(b){
+      var va = num(b.valorAtual), vb = num(b.valorAnterior);
+      var base = { discriminacao: b.discriminacao || '', valorAtual: va, valorAnterior: vb, pertenceA: b.pertenceA || 'titular', pais: b.pais || 'Brasil', codigo: b.codigo, grupo: b.grupo };
+      var k = L.classe(b);
+      if (k === 'imovel'){
+        var e = b.endereco || {};
+        imoveis.push(Object.assign(base, { tipo: b.tipoImovel || L.TIPO_IMOVEL[String(b.codigo||'').padStart(2,'0')] || 'imóvel',
+          endereco: [e.logradouro, e.numero, e.complemento].filter(Boolean).join(', ') + (e.bairro ? ' — ' + e.bairro : ''),
+          cidade: [e.municipio, e.uf].filter(Boolean).join('/'), cep: e.cep || '', areaM2: num(b.areaM2), matricula: b.matricula || '', dataAquisicao: b.dataAquisicao || '',
+          situacao: b.situacao || (va === 0 && vb > 0 ? 'saiu no ano' : ''), fracao: b.fracao || '',
+          vendido: /vendid/i.test(String(b.situacao||'')) || (va === 0 && vb > 0 && /vendid/i.test(String(b.discriminacao||''))),
+          financiado: /financ/i.test(String(b.situacao||'') + ' ' + String(b.discriminacao||'')),
+          alugado: /alugad|locad/i.test(String(b.situacao||'')) }));
+      } else if (k === 'veiculo'){
+        veiculos.push(Object.assign(base, { tipo: L.tipoVeiculo(b), marcaModelo: b.marcaModelo || '', ano: b.ano || '', placa: b.placaOuPrefixo || '' }));
+      } else if (k === 'participacao'){
+        participacoes.push(Object.assign(base, { empresa: b.empresa || '', cnpj: b.cnpj || '', percentual: num(b.percentual), rendimento: num(b.rendimentoNoAno),
+          daEmpresa: daEmpresa(b.cnpj), seguraAEmpresa: holdingsDaEmpresa.some(function(h){ return soDig(h.cnpj) && soDig(h.cnpj) === soDig(b.cnpj); }),
+          bolsa: b.negociadasEmBolsa === true }));
+      } else if (k === 'aplicacao'){
+        var g = String(b.grupo||'').padStart(2,'0');
+        aplicacoes.push(Object.assign(base, { instituicao: b.instituicao || b.fundo || '', cnpj: b.cnpj || b.cnpjFundo || '', rendimento: num(b.rendimentoNoAno),
+          tipo: g === '07' ? (String(b.codigo) === '02' ? 'FII' : 'fundo') : g === '08' ? 'criptoativo' : (b.tipoAplicacao || (String(b.codigo) === '01' ? 'poupança' : 'renda fixa')),
+          rentabilidade: (num(b.rendimentoNoAno) != null && vb > 0) ? num(b.rendimentoNoAno) / vb : null }));
+      } else if (k === 'credito'){ creditos.push(Object.assign(base, { devedor: b.devedor || '', cnpj: b.cnpjCpfDevedor || '' })); }
+      else if (k === 'conta'){ contas.push(Object.assign(base, { banco: b.banco || b.instituicao || '' })); }
+      else if (k === 'dinheiro'){ dinheiro += n(va); }
+      else if (k === 'vgbl'){ vgbl.push(Object.assign(base, { instituicao: b.instituicao || '' })); }
+      else outros.push(base);
+    });
+    /* v86: bem declarado com o CNPJ da empresa avaliada, mas cuja discriminação fala
+       de outra empresa (a holding que segura as ações): o documento manda, mas vira
+       pergunta — não afirmação. */
+    var raizNome = sem(ctx.empresaNome || '').split(/[^a-z0-9]+/).filter(function(w){ return w.length >= 4; })[0] || '';
+    participacoes.forEach(function(p){
+      if (p.daEmpresa && p.empresa && raizNome && sem(p.empresa).indexOf(raizNome) < 0){
+        p.cnpjDivergente = true;
+        avisos.push('"' + p.empresa.slice(0,50) + '" está declarada com o CNPJ de ' + (ctx.empresaNome || 'esta empresa') + ' (' + R$(p.valorAtual) + '). Pela discriminação parece ser a holding que segura as ações — conferir com o sócio qual é a participação direta.');
+      }
+    });
+    var soma = function(arr){ return arr.reduce(function(t,x){ return t + n(x.valorAtual); }, 0); };
+    var somaAnt = function(arr){ return arr.reduce(function(t,x){ return t + n(x.valorAnterior); }, 0); };
+    var tot = { imoveis: soma(imoveis), veiculos: soma(veiculos), participacoes: soma(participacoes), aplicacoes: soma(aplicacoes), creditos: soma(creditos),
+                contas: soma(contas) + dinheiro, vgbl: soma(vgbl), outros: soma(outros) };
+    var bensTotal = num((s.bens && s.bens.totais || {}).bensAtual); if (bensTotal == null) bensTotal = num((s.evolucaoPatrimonial||{}).bensAtual);
+    var somaItens = Object.keys(tot).reduce(function(t,k){ return t + tot[k]; }, 0);
+    if (bensTotal == null) bensTotal = somaItens;
+    else if (Math.abs(bensTotal - somaItens) > Math.max(1000, bensTotal * 0.01)) avisos.push('Os bens transcritos somam ' + R$(somaItens) + '; o total da declaração é ' + R$(bensTotal) + ' — a transcrição não trouxe todos os itens (os totais da declaração valem).');
+    var bensAnterior = num((s.bens && s.bens.totais || {}).bensAnterior); if (bensAnterior == null) bensAnterior = num((s.evolucaoPatrimonial||{}).bensAnterior);
+    var dividasTotal = num((s.dividas||{}).total); if (dividasTotal == null) dividasTotal = num((s.evolucaoPatrimonial||{}).dividasAtual) || 0;
+    var dividas = ((s.dividas||{}).itens || []).map(function(d){ return { discriminacao: d.discriminacao, credor: d.credor || '', valorAtual: n(d.valorAtual), valorAnterior: num(d.valorAnterior), pagoNoAno: num(d.valorPagoNoAno) }; });
+    var liquidez = tot.aplicacoes + tot.contas + tot.vgbl;
+    var patrimonioLiquido = bensTotal - dividasTotal;
+    var variacao = (bensAnterior != null) ? bensTotal - bensAnterior : null;
+    var partNaEmpresa = participacoes.filter(function(p){ return p.daEmpresa; });
+    var valorDeclaradoNaEmpresa = partNaEmpresa.reduce(function(t,p){ return t + n(p.valorAtual); }, 0);
+    var participacaoContrato = num(ctx.participacaoContrato);
+    var valorPLNaEmpresa = (participacaoContrato != null && n(ctx.pl) > 0) ? n(ctx.pl) * participacaoContrato / 100 : null;
+
+    /* ---------- saúde e família ---------- */
+    var pag = s.pagamentos || [];
+    var saude = pag.filter(function(p){ return /^(10|11|12|13|14|15|16|17|18|19|21|26)$/.test(String(p.codigo||'')) || /sa[uú]de|m[eé]dic|dent|cl[ií]nic|hospital|psic|fisio/i.test(String(p.tipo||'')); });
+    var plano = saude.filter(function(p){ return String(p.codigo) === '26' || /plano/i.test(String(p.tipo||'')); });
+    var saudeTotal = saude.reduce(function(t,p){ return t + n(p.valorPago); }, 0);
+    var planoTotal = plano.reduce(function(t,p){ return t + n(p.valorPago); }, 0);
+    var saudeFora = saudeTotal - planoTotal;
+    var saudeDependentes = saude.filter(function(p){ return p.beneficiario && !/^titular$/i.test(String(p.beneficiario)); }).reduce(function(t,p){ return t + n(p.valorPago); }, 0);
+    var instrucao = pag.filter(function(p){ return String(p.codigo) === '01' || /instru|escola|col[eé]gio|educa/i.test(String(p.tipo||'')); }).reduce(function(t,p){ return t + n(p.valorPago); }, 0);
+    var previdenciaPag = pag.filter(function(p){ return /^(36|37)$/.test(String(p.codigo||'')) || /previd/i.test(String(p.tipo||'')); });
+
+    /* ---------- seguros declarados ---------- */
+    var segs = (s.segurosEPrevidencia || []).slice();
+    vgbl.forEach(function(v){ if (!segs.some(function(x){ return /vgbl/i.test(x.tipo) && soDig(x.cnpj) === soDig(v.cnpj); })) segs.push({ tipo:'VGBL', instituicao: v.instituicao, valor: v.valorAtual, ondeApareceu:'bens 99/06' }); });
+    previdenciaPag.forEach(function(p){ if (!segs.some(function(x){ return soDig(x.cnpj) && soDig(x.cnpj) === soDig(p.cpfCnpj); })) segs.push({ tipo:'previdência complementar', instituicao: p.nome, cnpj: p.cpfCnpj, valor: n(p.valorPago), ondeApareceu:'pagamentos 36' }); });
+    var temVida = segs.some(function(x){ return /vida/i.test(String(x.tipo||'')); });
+
+    /* ---------- sucessão: o que o inventário custa ---------- */
+    var itcmd = patrimonioLiquido > 0 ? patrimonioLiquido * P.itcmdPct : 0;
+    var custas = patrimonioLiquido > 0 ? patrimonioLiquido * P.custasInventarioPct : 0;
+    /* a renda que SOME com o sócio é a do trabalho (salário, pró-labore, INSS).
+       Lucros e JCP são da participação: continuam para os herdeiros se a empresa
+       continuar — e por isso são argumento de pessoa-chave, não de vida pessoal. */
+    var trabalhoMes = trabalhoTotal / 12, lucrosMes = (lucrosTotal + jcpTotal) / 12;
+    var reservaFamilia = trabalhoMes * P.mesesDespesaFamilia;
+    var capitalVida = { renda: trabalhoMes * P.mesesRendaVida, inventario: itcmd + custas, dividas: dividasTotal, reserva: reservaFamilia,
+                        lucrosMes: lucrosMes, trabalhoMes: trabalhoMes };
+    capitalVida.total = capitalVida.renda + capitalVida.inventario + capitalVida.dividas;
+    var liquidezCobreInventario = liquidez >= (itcmd + custas + reservaFamilia);
+    /* v86: doações em vida (código 80/81) são transferência patrimonial — sinal de
+       que a sucessão já está sendo pensada, e de para quem. Só o que a ficha diz. */
+    var doaItens = ((s.doacoes||{}).efetuadas || []).filter(function(d){ return /^(80|81)$/.test(String(d.codigo||'')) || /doa/i.test(String(d.tipo||'')); })
+      .map(function(d){ return { nome: d.nome || '', cpfCnpj: d.cpfCnpj || '', valor: n(d.valor != null ? d.valor : d.valorPago), tipo: String(d.codigo) === '81' ? 'em bens' : 'em espécie' }; });
+    var doacoes = { itens: doaItens, total: doaItens.reduce(function(t,x){ return t + x.valor; }, 0),
+                    partidos: ((s.doacoes||{}).partidosPoliticos || []).reduce(function(t,x){ return t + n(x.valor); }, 0) };
+
+    /* ---------- validade ---------- */
+    var anoAtual = Number(hoje.slice(0,4));
+    var validade = { anoCalendario: anoCal, exercicio: num(id.exercicio) || (anoCal ? anoCal + 1 : null),
+      posicaoEm: anoCal ? anoCal + '-12-31' : null,
+      atualizarEm: anoCal ? 'declaração do exercício ' + (anoCal + 2) + ' (ano-calendário ' + (anoCal + 1) + '), entregue até maio de ' + (anoCal + 2) : null,
+      desatualizada: anoCal != null && (anoAtual - anoCal) > P.anosValidadeIR + 1,
+      aviso: anoCal != null && (anoAtual - anoCal) > P.anosValidadeIR + 1 ? 'A declaração é do ano-calendário ' + anoCal + ' — há uma mais nova. Pedir a atual antes de usar os números.' : null };
+
+    /* ---------- os produtos, com o número ---------- */
+    var produtos = [];
+    produtos.push({ produto:'Vida individual', prioridade: (deps.length || conjuge) ? 'alta' : 'media',
+      numero: capitalVida.total, rotulo:'capital de referência',
+      porque: 'Renda do trabalho de ' + R$(trabalhoMes) + ' por mês (salário, pró-labore e INSS: ' + R$(trabalhoTotal) + ' no ano)' + (lucrosMes ? ', mais ' + R$(lucrosMes) + ' por mês em lucros e JCP, que dependem de a empresa continuar' : '') + '. ' + (P.mesesRendaVida/12) + ' anos da renda do trabalho são ' + R$(capitalVida.renda)
+        + '; o inventário custa cerca de ' + R$(capitalVida.inventario) + ' (ITCMD ' + pc(P.itcmdPct,0) + ' + custas ' + pc(P.custasInventarioPct,0) + ' sobre ' + R$(patrimonioLiquido) + ')'
+        + (dividasTotal ? '; dívidas de ' + R$(dividasTotal) + ' passam aos herdeiros' : '') + '.'
+        + (deps.length ? ' ' + deps.length + ' dependente(s)' + (menores.length ? ', ' + menores.length + ' com menos de 24 anos' : '') + '.' : '')
+        + (temVida ? ' A declaração mostra seguro de vida — confira o capital.' : ' A declaração não mostra seguro de vida.'),
+      acao: 'Capital fora do inventário (art. 794 do CC): chega em semanas, enquanto ' + R$(bensTotal) + ' em bens ficam travados.' });
+    if (!liquidezCobreInventario)
+      produtos.push({ produto:'Liquidez do inventário', prioridade:'alta', numero: itcmd + custas + reservaFamilia, rotulo:'o que a família precisa em dinheiro',
+        porque: 'Aplicações e contas somam ' + R$(liquidez) + ' — menos que o ITCMD, as custas e ' + P.mesesDespesaFamilia + ' meses da renda do trabalho (' + R$(itcmd + custas + reservaFamilia) + '). O resto do patrimônio (' + R$(tot.imoveis + tot.participacoes) + ' em imóveis e participações) não vira dinheiro rápido.',
+        acao: 'Seguro de vida ou VGBL com beneficiário nomeado cobre exatamente essa conta.' });
+    if (espacoPGBL > 0 && !imposto.modeloSimplificado)
+      produtos.push({ produto:'Previdência (PGBL)', prioridade: economiaPGBL > 10000 ? 'alta' : 'media', numero: espacoPGBL, rotulo:'aporte dedutível que sobra',
+        porque: 'Renda tributável de ' + R$(trabalhoTotal) + ': o PGBL deduz até ' + pc(P.tetoPGBL,0) + ' (' + R$(tetoPGBL) + '); já aporta ' + R$(prevCompl) + '. Sobram ' + R$(espacoPGBL) + ', que devolvem ' + R$(economiaPGBL) + ' de IR por ano.',
+        acao: 'Aporte até dezembro; o IR volta na restituição.' });
+    if (lucrosTotal + jcpTotal > 0)
+      produtos.push({ produto:'VGBL (sucessão e tributação)', prioridade:'media', numero: lucrosTotal + jcpTotal, rotulo:'lucros e JCP recebidos no ano',
+        porque: 'Recebeu ' + R$(lucrosTotal) + ' em lucros' + (jcpTotal ? ' e ' + R$(jcpTotal) + ' em JCP' : '') + ' — renda que não cabe no PGBL. O VGBL não entra em inventário, tem beneficiário nomeado e tributa só o rendimento.',
+        acao: 'Parte dos lucros do ano em VGBL com os herdeiros como beneficiários.' });
+    imoveis.filter(function(i){ return !i.vendido && n(i.valorAtual) > 0; }).forEach(function(i){
+      produtos.push({ produto: /rural/.test(i.tipo) ? 'Seguro rural / patrimonial' : /terreno/.test(i.tipo) ? 'Terreno (RC do proprietário)' : 'Residencial', prioridade: /apartamento|casa/.test(i.tipo) ? 'media' : 'baixa',
+        numero: n(i.valorAtual), rotulo: 'valor declarado' + (i.fracao ? ' (' + i.fracao + ')' : ''),
+        porque: i.tipo + (i.cidade ? ' em ' + i.cidade : '') + (i.areaM2 ? ', ' + i.areaM2.toLocaleString('pt-BR') + ' m²' : '') + (i.endereco ? ' — ' + i.endereco : '') + '. Valor de aquisição: o de reposição costuma ser maior.' + (i.financiado ? ' Financiado: o banco exige seguro com ele como beneficiário.' : '') + (i.alugado ? ' Alugado a terceiros: RC do locador.' : ''),
+        acao: 'Conferir apólice residencial com RC familiar e, se alugado, a do locatário.' });
+    });
+    veiculos.filter(function(v){ return n(v.valorAtual) > 0; }).forEach(function(v){
+      produtos.push({ produto: v.tipo === 'aeronave' ? 'Aeronáutico (casco + RETA)' : v.tipo === 'embarcação' ? 'Náutico' : 'Automóvel', prioridade: v.tipo === 'aeronave' ? 'alta' : 'media',
+        numero: n(v.valorAtual), rotulo:'valor declarado',
+        porque: (v.marcaModelo || v.discriminacao.slice(0,60)) + (v.ano ? ', ' + v.ano : '') + (v.placa ? ', ' + v.placa : '') + '.' + (v.tipo === 'aeronave' ? ' O RETA é obrigatório; o casco e o RC a terceiros, não.' : ''),
+        acao: 'Pedir a apólice vigente.' });
+    });
+    if (participacoes.length)
+      produtos.push({ produto:'D&O / bloqueio de bens', prioridade: patrimonioLiquido > 5000000 ? 'alta' : 'media', numero: patrimonioLiquido, rotulo:'patrimônio pessoal exposto',
+        porque: 'Participa de ' + participacoes.length + ' empresa(s)' + (partNaEmpresa.length ? ', inclusive ' + (ctx.empresaNome || 'a empresa avaliada') : holdingsDaEmpresa.length ? ', inclusive via holding (' + holdingsDaEmpresa.map(function(h){ return h.empresa; }).join(', ') + ')' : '') + '. Numa execução trabalhista, fiscal ou ambiental, é este patrimônio (' + R$(patrimonioLiquido) + ') que a desconsideração da personalidade jurídica alcança.',
+        acao: 'D&O com custos de defesa e bloqueio de bens; conferir se a empresa já tem.' });
+    if (saudeFora > 0 || planoTotal > 0)
+      produtos.push({ produto:'Saúde (empresarial ou familiar)', prioridade: saudeFora > 20000 ? 'alta' : 'media', numero: saudeTotal, rotulo:'gasto com saúde no ano',
+        porque: (planoTotal ? 'Plano de saúde ' + R$(planoTotal) + ' pago da pessoa física' : 'Sem plano de saúde na declaração') + (saudeFora ? '; mais ' + R$(saudeFora) + ' em médicos, dentistas e clínicas do bolso' : '') + (saudeDependentes ? ' (' + R$(saudeDependentes) + ' com dependentes)' : '') + '.',
+        acao: 'Plano pela empresa: dedutível na PJ, sem encargos, e sai do pró-labore.' });
+    if (menores.length)
+      produtos.push({ produto:'Educação / renda do dependente', prioridade:'media', numero: instrucao, rotulo:'gasto com instrução no ano',
+        porque: menores.length + ' dependente(s) com menos de 24 anos' + (instrucao ? ' e ' + R$(instrucao) + ' por ano em escola' : '') + '. Sem o sócio, essa despesa continua por ' + Math.max.apply(null, menores.map(function(d){ return Math.max(0, 24 - (d.idade||0)); })) + ' anos.',
+        acao: 'Capital de vida com cláusula de renda mensal para o dependente, ou plano educacional.' });
+    if (trabalhoMes > 0)
+      produtos.push({ produto:'Renda por invalidez (DIT / IPA)', prioridade:'media', numero: trabalhoMes, rotulo:'renda mensal do trabalho a repor',
+        porque: 'Renda do trabalho de ' + R$(trabalhoMes) + ' por mês' + (lucrosMes ? ' (os lucros, ' + R$(lucrosMes) + ' por mês, seguem enquanto a empresa seguir)' : '') + (rendaDaEmpresa + rendaViaHolding > 0 ? '; ' + pc((rendaDaEmpresa + rendaViaHolding) / rendaTotal, 0) + ' da renda total está ligada a ' + (ctx.empresaNome || 'a empresa avaliada') : '') + '. A invalidez para o pró-labore.',
+        acao: 'Diária por incapacidade e invalidez permanente com capital de ' + R$(capitalVida.renda) + '.' });
+    if (aplicacoes.length)
+      produtos.push({ produto:'Investimentos (radar)', prioridade:'baixa', numero: tot.aplicacoes, rotulo:'em aplicações e fundos',
+        porque: aplicacoes.length + ' aplicação(ões), ' + R$(tot.aplicacoes) + (rendAplic ? '; rendimentos declarados de ' + R$(rendAplic) + ' no ano' : '') + '.',
+        acao: 'Comparar com a grade de fundos e previdência.' });
+
+    return {
+      v1: !!s._v1, nome: id.nome || s0.nome || '(sócio)', cpf: id.cpf || s0.cpf || '', nascimento: id.dataNascimento || '', idade: idade,
+      endereco: id.endereco || null, ocupacao: id.ocupacao || '', conjuge: conjuge, dependentes: deps, menores: menores.length,
+      renda: { trabalho: trabalho, trabalhoTotal: trabalhoTotal, lucros: lucros, lucrosTotal: lucrosTotal, jcp: jcp, jcpTotal: jcpTotal,
+               aplicacoes: rendAplic, rendaVariavel: rendaVar, ganhoCapital: ganhoCap, total: rendaTotal, mes: rendaMes,
+               daEmpresa: rendaDaEmpresa, viaHolding: rendaViaHolding, holdings: holdingsDaEmpresa,
+               pctDaEmpresa: rendaTotal ? (rendaDaEmpresa + rendaViaHolding) / rendaTotal : null },
+      imposto: imposto,
+      patrimonio: { imoveis: imoveis, veiculos: veiculos, participacoes: participacoes, aplicacoes: aplicacoes, creditos: creditos, contas: contas, dinheiro: dinheiro, vgbl: vgbl, outros: outros,
+                    totais: tot, bensTotal: bensTotal, bensAnterior: bensAnterior, dividas: dividas, dividasTotal: dividasTotal, liquido: patrimonioLiquido, variacao: variacao, liquidez: liquidez,
+                    naEmpresa: { declarado: valorDeclaradoNaEmpresa, pelaParticipacaoContrato: valorPLNaEmpresa, participacaoContrato: participacaoContrato, itens: partNaEmpresa } },
+      saude: { total: saudeTotal, plano: planoTotal, foraDoPlano: saudeFora, dependentes: saudeDependentes, itens: saude, instrucao: instrucao },
+      seguros: segs, temVida: temVida,
+      sucessao: { itcmd: itcmd, custas: custas, reservaFamilia: reservaFamilia, liquidez: liquidez, cobre: liquidezCobreInventario, capitalVida: capitalVida, doacoes: doacoes },
+      produtos: produtos, validade: validade, avisos: avisos, fonte: s.fonte || '', premissas: P
+    };
+  }
+
+  
+  function analisarSocios(lista, D){
+    D = D || {};
+    var a = (D.rows || [])[0] || {};
+    var emp = D.empresaDoc || {};
+    var contrato = emp.contratoSocial || null;
+    var socs = (contrato && contrato.socios) || [];
+    var out = (lista || []).map(function(s){
+      if (s && s.completa) s = s.completa;
+      var cpf = soDig((s.identificacao && s.identificacao.cpf) || s.cpf);
+      var noContrato = socs.filter(function(x){ return soDig(x.cpf) && soDig(x.cpf) === cpf; })[0];
+      return analisarSocio(s, { empresaCnpj: emp.cnpj, empresaNome: D.empresaNome || emp.nome, pl: a.patrimonioLiquido || a.pl, ano: a.ano,
+                                participacaoContrato: noContrato ? noContrato.participacao : null, hoje: D.hoje });
+    });
+    var tot = { renda: 0, patrimonio: 0, capitalVida: 0, pgbl: 0 };
+    out.forEach(function(o){ tot.renda += o.renda.total; tot.patrimonio += n(o.patrimonio.liquido); tot.capitalVida += o.sucessao.capitalVida.total; tot.pgbl += o.imposto.economiaPGBL; });
+    return { socios: out, totais: tot, premissas: P };
+  }
+
+  
+  window.CO.Psocio = P;
+  return { analisarSocio: analisarSocio, analisarSocios: analisarSocios, P: P };
+})();
+
+
+/* ===== 46-capacidade.js ===== */
+/* ===========================================================================
+   CAMADA 4 — CAPACIDADE DE PAGAMENTO
+   A conta da mesa de crédito, na ordem dela: quanto a operação gerou de
+   caixa, o lucro virou dinheiro, esse caixa paga o que vence, quanto a
+   receita pode cair antes de doer.
+
+   Ressalva que vai na tela: o fluxo aqui é DERIVADO do balanço e da DRE
+   (método indireto simplificado), não é a DFC auditada. Quando a empresa
+   tiver DFC, ela manda.
+
+   Duas recusas que parecem bug e não são (foram o buraco encontrado na
+   PECCIN): dívida sem abertura por prazo NÃO vira DSCR; despesa financeira
+   acima de 60% da dívida NÃO é juro de empréstimo. Calcular mesmo assim
+   daria um número bom e falso.
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.capacidade = (function () {
+  'use strict';
+  const B = CO.base, P = CO.P;
+
+  function analisar(d) {
+    if (!d || !d.atual) return null;
+    const n = c => d.n(c);
+    const temAnterior = !!d.anterior;
+    const avisos = [], premissas = [];
+
+    /* ---------- caixa gerado (FCO) ---------- */
+    let base = d.EBITDA, baseEbit = false;
+    if (!(base > 0) && d.EBIT > 0) { base = d.EBIT; baseEbit = true; avisos.push('Usei o EBIT no lugar do EBITDA: a diferença entre os dois é a depreciação, que a DRE não abriu.'); }
+
+    const ncgHoje = B.menos(B.soma(n('contasReceber'), n('estoques')), n('contasPagar'));
+    const ncgAntes = temAnterior ? B.menos(B.soma(d.ant('contasReceber'), d.ant('estoques')), d.ant('contasPagar')) : null;
+    const deltaNCG = (ncgHoje !== null && ncgAntes !== null) ? ncgHoje - ncgAntes : null;
+
+    let ir = n('ircs') !== null ? Math.abs(n('ircs')) : null;
+    if (ir === null && d.LAIR > 0) { ir = d.LAIR * P.aliquotaLucroReal; avisos.push('IR estimado em 34% do LAIR (a DRE não trouxe o imposto).'); }
+
+    let fco = null, parcial = false;
+    if (base > 0) {
+      if (deltaNCG !== null) fco = base - deltaNCG - (ir || 0);
+      else { fco = base - (ir || 0); parcial = true; avisos.push('Sem o ano anterior não dá para medir a variação da necessidade de giro — isto NÃO é caixa gerado, é resultado menos imposto. Com dois exercícios fechados a conta fica real.'); }
+    }
+
+    /* para onde o caixa foi */
+    const componentes = temAnterior ? {
+      recebiveis: B.menos(n('contasReceber'), d.ant('contasReceber')),
+      estoques: B.menos(n('estoques'), d.ant('estoques')),
+      fornecedores: B.menos(n('contasPagar'), d.ant('contasPagar'))
+    } : null;
+
+    /* ---------- qualidade do lucro ---------- */
+    const ql = (fco !== null && !parcial && d.LL > 0) ? fco / d.LL : null;
+
+    /* ---------- serviço da dívida e DSCR ---------- */
+    const bancos = CO.exercicio.valor(d.atual, 'bancos');
+    const temAbertura = (n('emprestimosCP') !== null || n('emprestimosLP') !== null) || (Array.isArray(bancos) && bancos.some(b => B.num(b.saldoCP) !== null || B.num(b.saldoLP) !== null));
+    let dscr = null, servico = null, recusaDSCR = null;
+
+    const df = n('despesasFinanceiras'), db = d.DB;
+    let juros = n('jurosEmprestimos');
+    if (juros === null && df !== null) {
+      if (db > 0 && df / db > P.tetoTaxaImplicita) {
+        juros = 0;
+        avisos.push(`A despesa financeira (${B.dinheiro(df)}) é ${B.pct(df / db)} da dívida (${B.dinheiro(db)}) — acima de 60% não é juro de empréstimo, é desconto de duplicata, tarifa ou juro de imposto parcelado. Entrou como zero no serviço da dívida.`);
+      } else { juros = df; if (df > 0) avisos.push('Juros = despesa financeira total (a DRE não separou): pode superestimar, porque carrega câmbio e hedge.'); }
+    }
+
+    if (!(db > 0)) {
+      recusaDSCR = { oQue: 'A empresa não tem dívida bancária no balanço', porque: 'isso, sozinho, já é argumento em qualquer mesa de crédito', bom: true };
+    } else if (!temAbertura) {
+      recusaDSCR = { oQue: 'A dívida não está aberta por prazo', porque: 'calcular a cobertura só com os juros daria um número bom e falso. Peça a nota de empréstimos com a separação curto/longo prazo — foi exatamente o que faltava na PECCIN', bom: false };
+    } else if (fco !== null) {
+      servico = B.soma(n('emprestimosCP'), juros);
+      if (servico > 0) dscr = fco / servico;
+    }
+
+    /* ---------- quanto ainda suporta tomar ---------- */
+    let capacidadeNova = null;
+    if (dscr !== null && fco > 0) {
+      const servicoMax = fco / P.dscrAlvo;
+      const folga = servicoMax - (servico || 0);
+      if (folga > 0) {
+        const i = P.cdi + P.spreadDividaNova, nn = P.prazoDividaNova;
+        capacidadeNova = folga * (1 - Math.pow(1 + i, -nn)) / i;
+        premissas.push(`CDI de ${B.pct(P.cdi)} mais ${B.pct(P.spreadDividaNova)} de spread, em ${nn} anos, mantendo o DSCR em ${B.vezesX(P.dscrAlvo)}. Troque a taxa e o número muda.`);
+      } else {
+        capacidadeNova = 0;
+        avisos.push(`A empresa já está no limite do DSCR de ${B.vezesX(P.dscrAlvo)} — dívida nova só com caixa novo ou alongando o que já existe.`);
+      }
+    }
+
+    /* ---------- ponto de equilíbrio e margem de segurança ---------- */
+    let pe = null;
+    const rl = d.R, lb = n('lucroBruto'), dv = n('despesasVendas');
+    if (rl > 0 && lb !== null && base > 0) {
+      const custoVariavel = (rl - lb) + (dv !== null ? dv * P.pctDespVendasVariavel : 0);
+      const mc = rl - custoVariavel, mcPct = mc / rl;
+      const fixosCaixa = mc - d.EBITDA; // sem D&A
+      if (mcPct > 0 && fixosCaixa > 0) {
+        const peCaixa = fixosCaixa / mcPct;
+        const margemSeguranca = (rl - peCaixa) / rl;
+        const gao = d.EBIT > 0 ? mc / d.EBIT : null;
+        const caixa = n('caixa'), folego = (caixa !== null && fixosCaixa > 0) ? caixa / (fixosCaixa / 12) : null;
+        pe = { mcPct, peCaixa, margemSeguranca, gao, folego,
+          faixaMS: margemSeguranca >= P.msConfortavel ? 'confortável' : margemSeguranca >= P.msApertada ? 'apertada' : margemSeguranca > 0 ? 'no limite' : 'abaixo do ponto de equilíbrio',
+          faixaFolego: folego === null ? null : folego >= P.folegoBom ? 'bom' : folego >= P.folegoCurto ? 'apertado' : 'curto' };
+        if (dv === null) avisos.push('A DRE não abre despesas de vendas: tudo entre lucro bruto e EBITDA entrou como custo fixo — o ponto de equilíbrio sai um pouco alto, de propósito (conservador).');
+      }
+    }
+
+    /* ---------- ciclo e o valor de cada dia ---------- */
+    let ciclo = null;
+    const cmv = n('cmv') !== null ? n('cmv') : (rl > 0 ? rl * 0.70 : null);
+    if (cmv > 0) {
+      const pme = n('estoques') !== null ? n('estoques') * 365 / cmv : null;
+      const pmr = rl > 0 ? n('contasReceber') * 365 / rl : null;
+      const pmp = n('contasPagar') * 365 / cmv;
+      const total = B.menos(B.soma(pme, pmr), pmp);
+      ciclo = { pme, pmr, pmp, total,
+        liberaEstoque10: cmv / 365 * 10, liberaReceber10: rl / 365 * 10, liberaFornecedor10: cmv / 365 * 10,
+        longo: total > 90, negativo: total < 0 };
+      if (n('cmv') === null) avisos.push('CMV estimado em 70% da receita (a DRE não o abre) para o ciclo.');
+    }
+
+    return {
+      fco, parcial, base, baseEbit, deltaNCG, ir, componentes,
+      ql, qlFaixa: ql === null ? null : ql >= P.qlBom ? 'bom' : ql >= P.qlAtencao ? 'atenção' : 'fraco',
+      dscr, servico, recusaDSCR,
+      dscrFaixa: dscr === null ? null : dscr >= P.dscrConfortavel ? 'confortável' : dscr >= P.dscrLimite ? 'no limite' : 'abaixo do limite',
+      capacidadeNova, pe, ciclo, avisos, premissas,
+      ressalva: 'Fluxo de caixa derivado do balanço e da DRE (método indireto), não é a DFC auditada. Só exercícios fechados entram.'
+    };
+  }
+
+  return { analisar };
+})();
+
+
+/* ===== 47-pessoachave.js ===== */
+/* ===========================================================================
+   CAMADA 4 — PESSOA-CHAVE E SUCESSÃO (da empresa)
+   O número que organiza tudo não é o valuation: é o PRAZO. A quota do sócio
+   que falta é paga em dinheiro, em 90 dias (art. 1.031 §2º CC), não no
+   inventário de dois anos que o mercado cita.
+
+   O caso da PECCIN: S/A sem o livro de ações. A leitura trouxe os
+   administradores e nenhum acionista (o QSA da Receita só traz
+   administradores). O sistema monta a lista de pessoas-chave a partir dos
+   administradores, marca semQuadroAcionario, e a participação de cada um fica
+   "não informada" — a tela diz. Quem comanda é pessoa-chave do mesmo jeito;
+   o que não se sabe é quanto cada um tem.
+
+   O capital nunca é um número só: vem em camadas (haveres, aval, mútuo,
+   caixa de transição) e em tranches (essencial, intermediário, cheio),
+   porque um número de dezenas de milhões não é conversa.
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.pessoaChave = (function () {
+  'use strict';
+  const B = CO.base, P = CO.P;
+
+  function multiplo(setor) {
+    const k = B.chave(setor || 'industria');
+    for (const [nome, m] of Object.entries(P.multiploSetor)) if (B.chave(nome) === k) return m;
+    return 5;
+  }
+
+  function analisar(d) {
+    if (!d || !d.atual) return null;
+    const c = d.empresa || {}, contrato = (d.documentos || {}).contratoSocial || {};
+    const pl = d.PL, db = d.DB;
+
+    /* quem são as pessoas-chave */
+    const socios = contrato.socios || c.socios || [];
+    const administradores = contrato.administradores || [];
+    const semQuadroAcionario = contrato.semQuadroAcionario || (!socios.length && administradores.length > 0);
+    const pessoas = socios.length ? socios.map(s => ({ nome: s.nome, participacao: B.num(s.participacao), tipo: 'sócio' }))
+      : administradores.map(a => ({ nome: a.nome, participacao: null, tipo: 'administrador' }));
+    const S = Math.max(1, pessoas.length || d.S);
+
+    /* tipo societário e critério de sucessão */
+    const nome = B.simples(c.nome);
+    const ehSA = /\bs\/?a\b|sociedade anonima/.test(nome) || semQuadroAcionario;
+    const suc = contrato.sucessao || {};
+    let criterio = suc.criterio || (ehSA ? 'sa_sem' : 'omisso');
+
+    /* preço de saída e a participação de referência */
+    const mult = multiplo(c.setor);
+    const precoSaida = Math.max(pl || 0, (d.EBITDA > 0 ? d.EBITDA * mult : 0));
+    const lacuna = precoSaida - (pl || 0);
+    const partRef = pessoas.length && pessoas[0].participacao != null
+      ? Math.max(...pessoas.map(p => p.participacao || 0)) / 100
+      : 1 / S;
+    const partConhecida = pessoas.length && pessoas.some(p => p.participacao != null);
+
+    /* as camadas */
+    const aval = B.num(d.n('avaisPrestados')) || (db > 0 ? db * P.avalSemAbertura : 0);
+    const mutuo = B.num(d.n('partesRelacionadas')) || 0;
+    const fixasAno = B.num(d.n('despesasFixas')) || (B.num(d.n('despesasAdm')) || 0);
+    const caixaTransicao = fixasAno > 0 ? fixasAno / 12 * P.mesesTransicao : 0;
+
+    const haveresContabil = (pl || 0) * partRef;
+    const haveresSaida = precoSaida * partRef;
+
+    /* as tranches */
+    const essencial = aval * partRef + caixaTransicao;
+    const intermediario = essencial + haveresContabil;
+    const cheio = essencial + haveresSaida;
+
+    /* o risco e a força, pelo critério */
+    const RISCOS = {
+      sa_sem: { risco: 'Sem acordo de acionistas não há gatilho de compra — o capital serve para a empresa ou os remanescentes comprarem, o que depende de um acordo feito ANTES, não depois.', forca: 'forte' },
+      sa_acordo: { risco: 'O acordo define se há obrigação de compra, por qual valor e prazo. Ler a cláusula é o próximo passo, e o capital do seguro tem que bater com ela.', forca: 'média' },
+      omisso: { risco: 'É o pior cenário para o caixa: contrato omisso, vale a lei — balanço especial (art. 1.031), preço de saída com intangíveis (art. 606), à vista em 90 dias.', forca: 'forte' },
+      contrato: { risco: suc.metodo === 'nominal' || suc.metodo === 'contabil' ? 'A cláusula prevê valor nominal ou patrimonial contábil, mas o REsp 1.335.619/SP diz que o critério só prevalece havendo consenso: discordando o herdeiro, volta ao balanço de determinação (valor cheio).' : 'O contrato prevê critério próprio, com prazo e parcelas se declarados.', forca: 'forte' }
+    };
+    const avaliacao = RISCOS[criterio] || RISCOS.omisso;
+
+    return {
+      pessoas, S, semQuadroAcionario, ehSA, criterio, forca: avaliacao.forca, risco: avaliacao.risco,
+      precoSaida, lacuna, partRef, partConhecida, multiplo: mult,
+      camadas: { haveresContabil, haveresSaida, aval: aval * partRef, mutuo, caixaTransicao },
+      tranches: { essencial, intermediario, cheio },
+      prazo: suc.prazoMeses ? suc.prazoMeses + ' meses (contrato)' : '90 dias (lei, art. 1.031 §2º CC)',
+      capitalPorSocio: precoSaida * partRef + aval * partRef,
+      premissas: [`Múltiplo de EBITDA do setor ${c.setor || 'indústria'}: ${mult}× (proxy do valor a preço de saída, não laudo)`,
+        partConhecida ? null : 'Participação não informada: a conta usa divisão igual entre as pessoas-chave'].filter(Boolean)
+    };
+  }
+
+  return { analisar, multiplo };
+})();
+
+
+/* ===== 48-impacto.js ===== */
+/* ===========================================================================
+   CAMADA 4 — "SE ACONTECESSE"
+   O mapa de seguros diz "há exposição"; o empresário ouve e concorda. O que
+   o faz agir é ver o PRÓPRIO BALANÇO sofrer o evento.
+
+   As cinco regras da conta (todas ditas na tela):
+   1. Caixa primeiro; o que faltar sai das aplicações; o resto vira dívida
+      nova. Caixa ausente não é caixa zero: sem ele o cenário não roda.
+   2. A perda entra antes do imposto; o lucro cai pela alíquota efetiva do ano.
+      Se vira prejuízo, não há imposto a devolver no ano.
+   3. Bem perdido: na DRE a baixa contábil; no caixa a reposição.
+   4. Haveres não são despesa: saem do caixa e do PL, não da DRE.
+   5. Dental sem quadro de funcionários não vira número da empresa.
+
+   Regra dura (v80): "se acontecesse" e o mapa de seguros têm que dar o MESMO
+   LMI. As duas usam a mesma composição do valor em risco (veículos fora,
+   software fora, obras fora, demais bens dentro) e a mesma base de lucros
+   cessantes (LAIR + despesas fixas).
+   =========================================================================== */
+window.CO = window.CO || {};
+
+CO.impacto = (function () {
+  'use strict';
+  const B = CO.base, P = CO.P;
+
+  function cenarios(d, pessoaChave) {
+    if (!d || !d.atual) return [];
+    const lista = [];
+    const R$ = B.dinheiro;
+
+    const caixa = d.n('caixa'), aplic = d.n('aplicacoesFinanceirasCP');
+    const semCaixa = caixa === null;
+
+    /* alíquota efetiva do ano, descartada se implausível */
+    const lair = d.LAIR, ircs = d.n('ircs');
+    let aliq = (lair > 0 && ircs !== null) ? ircs / lair : null;
+    if (aliq === null || aliq > 0.45) aliq = P.aliquotaImpacto;
+
+    /* ---------- 1 · incêndio nas máquinas ---------- */
+    const maq = d.n('valorMaquinas');
+    if (maq > 0) {
+      const franquiaEmp = Math.max(P.sinistroPequeno * P.franquiaEmpPct, P.franquiaEmpMin);
+      lista.push({
+        titulo: 'Um incêndio nas máquinas', numero: maq, rotulo: 'perda total possível',
+        conta: `Num sinistro pequeno de ${R$(P.sinistroPequeno)}, a franquia mínima do empresarial (${R$(franquiaEmp)}) engole tudo: a apólice não paga nada. Numa perda total das máquinas (${R$(maq)}), a franquia é ${B.pct(P.franquiaEmpPct)} do prejuízo.`,
+        argumento: 'No seguro de equipamentos a franquia é menor no mesmo sinistro — e ele cobre a quebra interna, que o empresarial não cobre.'
+      });
+    }
+
+    /* ---------- 2 · o LMI que o empresarial deveria ter ---------- */
+    if (d.valorEmRisco > 0) {
+      const contratado = d.Premio > 0 ? null : null; // o LMI contratado vem da apólice lida (etapa 5)
+      lista.push({
+        titulo: 'O LMI que o empresarial deveria ter', numero: d.valorEmRisco, rotulo: 'valor em risco (piso contábil)',
+        conta: `Imóveis, instalações, máquinas, ferramentas, informática, móveis${d.demaisBens > 0 ? ', demais bens' : ''} e estoques somam ${R$(d.valorEmRisco)} pelo balanço. Veículos (frota), software e obras em andamento ficam de fora.`,
+        argumento: 'Esse é o valor contábil — o piso. Repor máquina e reconstruir prédio custa mais, e o estoque de pico costuma ser maior que o do fechamento. Hoje o LMI contratado cobre isso?'
+      });
+    }
+
+    /* ---------- 3 · a empresa parada 6 meses ---------- */
+    const fixas = d.n('despesasFixas') || (d.n('despesasAdm') || 0);
+    if (fixas > 0 && lair !== null) {
+      const baseAno = lair + fixas;
+      const lmi6 = baseAno * P.mesesParada / 12;
+      lista.push({
+        titulo: `A empresa parada ${P.mesesParada} meses (lucros cessantes)`, numero: lmi6, rotulo: `LMI sugerido (${P.mesesParada} meses)`,
+        conta: `Lucro antes do IR (${R$(lair)}) mais as despesas fixas (${R$(fixas)}) dão ${R$(baseAno)} por ano — o "lucro bruto" que a apólice indeniza. Para ${P.mesesParada} meses, ${R$(lmi6)}.`,
+        argumento: `Nesses ${P.mesesParada} meses as fixas continuam saindo sem receita para pagá-las. A patrimonial reconstrói o prédio; quem paga a folha e o banco durante a obra é o lucros cessantes.`
+      });
+    }
+
+    /* ---------- 4 · a morte de um sócio ---------- */
+    if (pessoaChave && pessoaChave.partRef > 0) {
+      const pk = pessoaChave;
+      let valor, baseNome;
+      if (pk.criterio === 'contrato' && (pk.sucMetodo === 'contabil')) { valor = (d.PL || 0) * pk.partRef; baseNome = 'valor patrimonial contábil'; }
+      else { valor = pk.precoSaida * pk.partRef; baseNome = 'preço de saída (valuation estimado)'; }
+      const disponivel = B.soma(caixa, aplic) || 0;
+      const falta = valor - disponivel;
+      lista.push({
+        titulo: 'A morte de um sócio', numero: valor, rotulo: `haveres (${baseNome})`,
+        conta: `Pelo critério ${pk.criterio}, a empresa pagaria ${R$(valor)} aos herdeiros em ${pk.prazo}. Isso sai do caixa e do patrimônio líquido, não da DRE — o lucro só sente os juros da dívida tomada.`,
+        argumento: falta > 0
+          ? `Caixa e aplicações somam ${R$(disponivel)}: faltariam ${R$(falta)}. Com o seguro tendo a empresa como beneficiária, o capital chega em semanas, fora do inventário (art. 794 CC), e paga os herdeiros sem tocar no caixa.`
+          : `Caixa e aplicações cobririam, mas esvaziariam a reserva da operação. O seguro paga fora do inventário e preserva o giro.`,
+        pior: pk.semQuadroAcionario ? 'S/A sem acordo de acionistas: os herdeiros entram no capital com voto e dividendo. O capital do seguro só resolve se houver acordo de compra feito antes.' : null
+      });
+    }
+
+    /* ---------- 5 · acidente fatal no trabalho ---------- */
+    if (d.salarioMedio > 0) {
+      const pensao = d.salarioMedio * (2 / 3) * 13 * (P.expectativaVida - P.idadeBaseVitima);
+      const danoMoral = P.danoMoralRCEmpregador;
+      const total = pensao + danoMoral;
+      lista.push({
+        titulo: 'Um acidente fatal no trabalho', numero: total, rotulo: 'indenização por vítima',
+        conta: `Pensão de ${R$(pensao)} (salário médio × 2/3 × 13 × ${P.expectativaVida - P.idadeBaseVitima} anos, art. 948 CC) mais ${R$(danoMoral)} de dano moral. Sai do caixa e da DRE.`,
+        argumento: 'O INSS não paga isso; a empresa paga. A indenização à família é RC Empregador (o D&O exclui lesão corporal); a defesa do administrador é D&O.',
+        ressalva: d.salarioEstimado ? 'salário médio estimado — a folha anual não foi informada' : null
+      });
+    }
+
+    return lista;
+  }
+
+  function analisar(d, pessoaChave) {
+    const lista = cenarios(d, pessoaChave);
+    return {
+      cenarios: lista,
+      temCaixa: d && d.n('caixa') !== null,
+      regras: [
+        'Caixa primeiro; o que faltar sai das aplicações; o resto vira dívida nova à taxa da empresa.',
+        'A perda entra antes do imposto; se vira prejuízo, não há imposto a devolver no ano.',
+        'Haveres saem do caixa e do patrimônio líquido, não da DRE.'
+      ],
+      ressalva: 'Cada cenário é hipótese extrema, de propósito: serve para dimensionar cobertura, não para prever.'
+    };
+  }
+
+  return { analisar, cenarios };
+})();
+
+
 /* ===== 50-dados.js ===== */
 /* ===========================================================================
    CAMADA 5 — DADOS
@@ -4108,6 +5656,10 @@ CO.estado = (function () {
       dossie: null,         // recalculado quando os exercícios mudam
       analise: null,
       mapa: null,
+      sociosAnalise: null,
+      capacidade: null,
+      pessoaChave: null,
+      impacto: null,
       ui: { etapa: 'cadastro', secao: null, carregando: false, erro: null, pendente: null }
     };
   }
@@ -4120,11 +5672,30 @@ CO.estado = (function () {
   /* Recalcula tudo que deriva dos exercícios. Chamado sempre que eles mudam
      — e só aqui, para que análise e tela nunca fiquem fora de sincronia. */
   function recalcular() {
+    E.sociosAnalise = analisarSocios();
     if (!E.exercicios.length) { E.dossie = null; E.analise = null; E.mapa = null; return E; }
     E.dossie = CO.dossie.montar(E.exercicios, E.empresa || {}, E.documentos);
     E.analise = CO.diagnostico.analisar(E.dossie);
     E.mapa = CO.produtos.avaliar(E.dossie);
+    E.capacidade = CO.capacidade ? CO.capacidade.analisar(E.dossie) : null;
+    E.pessoaChave = CO.pessoaChave ? CO.pessoaChave.analisar(E.dossie) : null;
+    E.impacto = CO.impacto ? CO.impacto.analisar(E.dossie, E.pessoaChave) : null;
     return E;
+  }
+
+  /* Os sócios podem ser analisados mesmo sem exercício (o IR é da pessoa
+     física). A análise liga cada sócio à empresa avaliada quando há balanço. */
+  function analisarSocios() {
+    const ir = (E.documentos && E.documentos.sociosIR) || [];
+    if (!ir.length || !CO.socios) return null;
+    const exs = E.dossie ? E.dossie.exercicios : (E.exercicios || []).map(r => (r && r.doc) ? r : CO.exercicio.doBanco(r));
+    const atual = exs[exs.length - 1];
+    const D = {
+      rows: [{ ano: atual ? atual.ano : null, patrimonioLiquido: atual ? CO.exercicio.n(atual, 'patrimonioLiquido') : null }],
+      empresaDoc: { cnpj: (E.empresa || {}).cnpj, nome: (E.empresa || {}).nome, contratoSocial: (E.documentos || {}).contratoSocial },
+      empresaNome: (E.empresa || {}).nome, hoje: CO.base.hoje()
+    };
+    return CO.socios.analisarSocios(ir, D);
   }
 
   const irPara = (etapa, secao) => { E.ui.etapa = etapa; E.ui.secao = secao || null; return E; };
@@ -4413,6 +5984,69 @@ CO.telas = (function () {
     }
 
     if (a.ressalvas.length) h += U.achados(a.ressalvas, 'atencao', 'Ressalvas');
+
+    /* capacidade de pagamento */
+    const cap = e.capacidade;
+    if (cap) {
+      let hc = U.grade(
+        U.painel('Caixa gerado (FCO)', B.dinheiro(cap.fco), cap.parcial ? 'parcial: sem o ano anterior, é resultado − imposto, não caixa gerado' : (cap.baseEbit ? 'sobre o EBIT' : null), { destaque: !cap.parcial }) +
+        U.painel('Qualidade do lucro', cap.ql != null ? B.vezesX(cap.ql) : '—', cap.qlFaixa, { motivo: cap.ql == null ? 'precisa de dois exercícios' : null }) +
+        U.painel('Cobertura da dívida (DSCR)', cap.dscr != null ? B.vezesX(cap.dscr) : '—', cap.dscrFaixa, { motivo: cap.recusaDSCR ? cap.recusaDSCR.oQue : null }) +
+        U.painel('Quanto ainda suporta tomar', cap.capacidadeNova != null ? B.dinheiro(cap.capacidadeNova) : '—')
+      );
+      if (cap.recusaDSCR) hc += U.aviso(cap.recusaDSCR.bom ? 'bom' : 'atencao', null, [`<b>${U.esc(cap.recusaDSCR.oQue)}</b> — ${U.esc(cap.recusaDSCR.porque)}`]);
+      if (cap.pe) hc += U.grade(
+        U.painel('Margem de segurança', B.pct(cap.pe.margemSeguranca), cap.pe.faixaMS) +
+        U.painel('Ponto de equilíbrio (caixa)', B.dinheiro(cap.pe.peCaixa)) +
+        U.painel('Fôlego de caixa', cap.pe.folego != null ? Math.round(cap.pe.folego * 10) / 10 + ' meses' : '—', cap.pe.faixaFolego) +
+        (cap.ciclo ? U.painel('Ciclo financeiro', B.dias(cap.ciclo.total), cap.ciclo.negativo ? 'o fornecedor financia o giro' : cap.ciclo.longo ? 'crescer consome caixa' : null) : '')
+      );
+      if (cap.avisos.length) hc += U.aviso('neutro', null, cap.avisos);
+      if (cap.premissas.length) hc += U.aviso('neutro', 'Premissas (edite e o número muda)', cap.premissas);
+      h += U.cartao('Capacidade de pagamento', cap.ressalva, hc);
+    }
+
+    /* pessoa-chave e sucessão */
+    const pk = e.pessoaChave;
+    if (pk) {
+      let hp = '';
+      if (pk.semQuadroAcionario) hp += U.aviso('atencao', 'S/A sem o livro de ações', [`A leitura trouxe ${pk.pessoas.length} administrador(es) e nenhum acionista. Quem comanda é pessoa-chave do mesmo jeito; o que não se sabe é quanto cada um tem.`]);
+      hp += U.grade(
+        U.painel('Haveres ao espólio (contábil)', B.dinheiro(pk.camadas.haveresContabil), 'o mínimo que o herdeiro pede') +
+        U.painel('Haveres a preço de saída', B.dinheiro(pk.camadas.haveresSaida), `múltiplo ${pk.multiplo}× de EBITDA`) +
+        U.painel('Prazo de pagamento', pk.prazo, 'em dinheiro', { destaque: true }) +
+        U.painel('Capital por sócio de referência', B.dinheiro(pk.capitalPorSocio))
+      );
+      hp += U.aviso(pk.forca === 'forte' ? 'atencao' : 'neutro', 'A regra de sucessão que vale aqui', [pk.risco]);
+      hp += `<div class="secao-titulo">O capital em tranches (um número só não é conversa)</div>`;
+      hp += U.tabela([{ t: 'Tranche' }, { t: 'O que resolve' }, { t: 'Valor', n: true }],
+        [['Essencial', 'a dívida avalizada que vence e o caixa de atravessar a transição — impede a empresa de quebrar', B.dinheiro(pk.tranches.essencial)],
+         ['Intermediário', 'acrescenta os haveres pelo valor contábil', B.dinheiro(pk.tranches.intermediario)],
+         ['Cheio', 'acrescenta os haveres a preço de saída, com os intangíveis do art. 606 CPC', B.dinheiro(pk.tranches.cheio)]]);
+      if (pk.premissas.length) hp += U.aviso('neutro', 'Premissas', pk.premissas);
+      h += U.cartao('Pessoa-chave e sucessão', 'o que organiza não é o valuation, é o prazo: 90 dias, em dinheiro', hp);
+    }
+
+    /* se acontecesse */
+    const im = e.impacto;
+    if (im && im.cenarios.length) {
+      h += U.cartao('Se acontecesse', 'o balanço sofrendo o evento — ' + im.ressalva,
+        im.cenarios.map(c => `<div class="produto media">
+          <div class="produto-topo"><div class="produto-titulo">${U.esc(c.titulo)}</div>
+            <div><div class="produto-numero">${B.dinheiro(c.numero)}</div><div class="produto-rotulo">${U.esc(c.rotulo || '')}</div></div></div>
+          <div class="produto-porque">${U.esc(c.conta)}</div>
+          <div class="produto-acao">${U.esc(c.argumento)}</div>
+          ${c.pior ? `<div class="produto-porque" style="color:var(--erro)">${U.esc(c.pior)}</div>` : ''}
+          ${c.ressalva ? `<div class="produto-porque" style="color:var(--alerta)">⚠ ${U.esc(c.ressalva)}</div>` : ''}
+        </div>`).join('') +
+        U.aviso('neutro', 'As regras da conta (todas na tela)', im.regras));
+    }
+
+    /* a análise dos sócios (IR) entra aqui como o grupo Pessoas */
+    if (e.sociosAnalise && e.sociosAnalise.socios.length) {
+      h += '<div class="secao-titulo" style="margin-top:22px;font-size:14px">Sócios — o que o IR mostra</div>';
+      h += socios(e);
+    }
     return h;
   }
 
@@ -4454,6 +6088,18 @@ CO.telas = (function () {
       h += U.cartao(g.ramo, null, g.itens.map(U.produto).join(''));
     }
 
+    /* os produtos que vêm do IR dos sócios entram como ramo próprio */
+    if (e.sociosAnalise && e.sociosAnalise.socios.length) {
+      const prodSocios = [];
+      for (const o of e.sociosAnalise.socios) for (const p of o.produtos.slice(0, 4))
+        prodSocios.push({ ...p, titulo: p.produto + ' — ' + (o.nome || '').split(' ').slice(0, 2).join(' ') });
+      if (prodSocios.length) {
+        prodSocios.sort((a, b) => ({ alta: 3, media: 2, baixa: 1 }[b.prioridade] - { alta: 3, media: 2, baixa: 1 }[a.prioridade]) || (b.numero - a.numero));
+        h += U.cartao('Pessoa física dos sócios (do IR)', 'dados pessoais — só para a conversa com cada sócio',
+          prodSocios.slice(0, 10).map(U.produto).join(''));
+      }
+    }
+
     if (m.naoAgora.length) {
       h += U.cartao('O que não recomendar agora', 'oferecer o que não cabe queima a conversa',
         U.tabela([{ t: 'Produto' }, { t: 'Por quê' }], m.naoAgora.map(x => [U.esc(x.produto), U.esc(x.porque)])));
@@ -4465,7 +6111,103 @@ CO.telas = (function () {
     return h;
   }
 
-  return { cadastro, documentos, numeros, analises, parecer, proposta };
+
+  /* ---------------- SÓCIOS (seção, dentro de Análises) ---------------- */
+  function cartaoSocio(o) {
+    const d = CO.base;
+    const linha = [o.idade ? o.idade + ' anos' : null, o.cpf ? 'CPF ' + d.cpfDiscreto(o.cpf) : null, o.ocupacao].filter(Boolean).join(' · ');
+    let h = `<div class="cartao"><h2>${U.esc(o.nome)}</h2><div class="sub">${U.esc(linha)}</div>`;
+
+    if (o.validade && o.validade.anoCalendario) h += `<div style="font-size:12px;color:var(--tinta-fraca);margin-bottom:8px">Declaração do ano-calendário ${o.validade.anoCalendario}. ${U.esc(o.validade.atualizarEm || '')}</div>`;
+    if (o.avisos && o.avisos.length) h += U.aviso('atencao', null, o.avisos);
+
+    /* família */
+    h += U.grade(
+      U.painel('Cônjuge', o.conjuge ? 'sim' : '—', o.conjuge && o.conjuge.cpf ? 'CPF ' + d.cpfDiscreto(o.conjuge.cpf) : null) +
+      U.painel('Dependentes', String(o.dependentes.length) + (o.menores ? ` (${o.menores} < 24 anos)` : '')) +
+      U.painel('Gasto com saúde no ano', d.dinheiro(o.saude.total), o.saude.foraDoPlano ? 'fora do plano ' + d.dinheiro(o.saude.foraDoPlano) : null) +
+      U.painel('Instrução', d.dinheiro(o.saude.instrucao))
+    );
+
+    /* renda */
+    h += `<div class="secao-titulo">De onde vem a renda</div>`;
+    if (o.renda.pctDaEmpresa != null) h += `<div style="font-size:12.5px;color:var(--tinta-media);margin-bottom:6px"><b>${d.pct(o.renda.pctDaEmpresa)}</b> da renda está ligada a esta empresa${o.renda.holdings.length ? ` (via ${U.esc(o.renda.holdings.map(x=>x.empresa).join(', '))})` : ''}.</div>`;
+    h += U.grade(
+      U.painel('Renda total no ano', d.dinheiro(o.renda.total), d.dinheiro(o.renda.mes) + ' por mês') +
+      U.painel('Trabalho (salário, pró-labore, INSS)', d.dinheiro(o.renda.trabalhoTotal)) +
+      U.painel('Lucros e dividendos', d.dinheiro(o.renda.lucrosTotal)) +
+      U.painel('Juros sobre capital próprio', d.dinheiro(o.renda.jcpTotal)) +
+      U.painel('Rendimentos de aplicações', d.dinheiro(o.renda.aplicacoes))
+    );
+
+    /* imposto */
+    h += `<div class="secao-titulo">O imposto</div>`;
+    h += U.grade(
+      U.painel('IR retido na fonte', d.dinheiro(o.imposto.irrf)) +
+      U.painel('Imposto devido', d.dinheiro(o.imposto.devido), o.imposto.aliquotaEfetiva != null ? 'alíquota efetiva ' + d.pct(o.imposto.aliquotaEfetiva) : null) +
+      U.painel('Espaço de PGBL', d.dinheiro(o.imposto.espacoPGBL), '12% da renda tributável − o que já aporta', { destaque: o.imposto.espacoPGBL > 0 }) +
+      U.painel('IR que o PGBL devolve', d.dinheiro(o.imposto.economiaPGBL), 'por ano, à alíquota de 27,5%')
+    );
+
+    /* patrimônio */
+    const pt = o.patrimonio;
+    h += `<div class="secao-titulo">O patrimônio, bem a bem</div>`;
+    h += U.grade(
+      U.painel('Bens e direitos', d.dinheiro(pt.bensTotal), pt.variacao != null ? (pt.variacao >= 0 ? '+' : '') + d.dinheiro(pt.variacao) + ' no ano' : null, { destaque: true }) +
+      U.painel('Dívidas e ônus', d.dinheiro(pt.dividasTotal)) +
+      U.painel('Patrimônio líquido', d.dinheiro(pt.liquido)) +
+      U.painel('Dinheiro disponível', d.dinheiro(pt.liquidez), pt.liquido ? 'aplicações, contas e VGBL' : null)
+    );
+    if (pt.imoveis.length) h += U.tabela([{ t: 'Imóvel' }, { t: 'Onde' }, { t: 'Área', n: true }, { t: 'Valor', n: true }],
+      pt.imoveis.map(i => {
+        const va = d.num(i.valorAtual), vb = d.num(i.valorAnterior);
+        let valor;
+        if (va > 0) valor = d.dinheiro(va);
+        else if (vb > 0) valor = `<span style="color:var(--tinta-fraca)">saiu no ano (era ${d.dinheiro(vb)})</span>`;
+        else valor = '—';
+        return [U.esc(i.tipo) + (i.fracao ? ' (' + i.fracao + ')' : ''), U.esc(i.cidade || i.endereco || '—'), i.areaM2 ? i.areaM2.toLocaleString('pt-BR') + ' m²' : '—', valor];
+      }));
+    if (pt.participacoes.length) h += `<div style="font-size:11.5px;color:var(--tinta-fraca);margin-top:6px">${pt.participacoes.length} participação(ões) em empresas${pt.naEmpresa.declarado ? `, ${d.dinheiro(pt.naEmpresa.declarado)} declarados nesta empresa` : ''}. ${pt.aplicacoes.length} aplicação(ões).</div>`;
+
+    /* sucessão */
+    const s = o.sucessao;
+    h += `<div class="secao-titulo">Se o sócio faltasse</div>`;
+    h += U.grade(
+      U.painel('ITCMD + custas do inventário', d.dinheiro(s.itcmd + s.custas), '4% + 6% sobre o patrimônio', { premissa: true }) +
+      U.painel('Dinheiro disponível', d.dinheiro(s.liquidez), s.cobre ? 'cobre o inventário' : 'NÃO cobre', { }) +
+      U.painel('Capital de vida de referência', d.dinheiro(s.capitalVida.total), '10 anos da renda do trabalho + inventário + dívidas', { destaque: true })
+    );
+    if (s.doacoes && s.doacoes.itens.length) h += U.aviso('neutro', null, [`<b>Doações em vida no ano: ${d.dinheiro(s.doacoes.total)}</b> — ${U.esc(s.doacoes.itens.map(x => x.nome + ' (' + d.dinheiro(x.valor) + ')').join(', '))}. A sucessão já está em andamento: vale perguntar como foi pensada.`]);
+
+    /* produtos */
+    h += `<div class="secao-titulo">O que ofertar — com o número da declaração</div>`;
+    h += o.produtos.map(p => `<div class="produto ${p.prioridade}">
+      <div class="produto-topo"><div class="produto-titulo">${U.esc(p.produto)} ${U.selo(p.prioridade, p.prioridade)}</div>
+        <div><div class="produto-numero">${d.dinheiro(p.numero)}</div><div class="produto-rotulo">${U.esc(p.rotulo||'')}</div></div></div>
+      <div class="produto-porque">${U.esc(p.porque)}</div>${p.acao ? `<div class="produto-acao">→ ${U.esc(p.acao)}</div>` : ''}</div>`).join('');
+
+    h += '</div>';
+    return h;
+  }
+
+  function socios(e) {
+    const A = e.sociosAnalise;
+    if (!A || !A.socios.length) {
+      return U.cartao('Sócios', 'o IR dos sócios ainda não foi lido',
+        U.aviso('neutro', null, ['Copie o prompt "IR dos sócios" na etapa Documentos, mande para a IA com as declarações, e cole o arquivo de volta. São dados pessoais — use só na conversa com o próprio sócio.']) +
+        U.acoes(U.botao('ir para Documentos', "CO.app.irPara('documentos')", { principal: true })));
+    }
+    let h = U.cartao('Sócios', `${A.socios.length} analisado(s) · dados pessoais, só para a conversa com cada um`,
+      U.grade(
+        U.painel('Renda somada no ano', CO.base.dinheiro(A.totais.renda)) +
+        U.painel('Patrimônio líquido somado', CO.base.dinheiro(A.totais.patrimonio)) +
+        U.painel('Economia de IR com PGBL', CO.base.dinheiro(A.totais.pgbl), 'se cada um aportar o que falta')
+      ));
+    h += A.socios.map(cartaoSocio).join('');
+    return h;
+  }
+
+  return { cadastro, documentos, numeros, analises, parecer, proposta, socios };
 })();
 
 
@@ -4592,10 +6334,21 @@ CO.app = (function () {
     const gravados = {};
     for (const r of e.exercicios) if (r.ano) gravados[r.ano] = r;
 
-    const r = CO.importar.ler(txt, { cnpjEmpresa: (e.empresa || {}).cnpj, gravados });
+    /* descobre o tipo do documento pelo carimbo e roteia */
+    const r = CO.importarDoc.ler(txt, {
+      cnpjEmpresa: (e.empresa || {}).cnpj, gravados,
+      sociosIRGravado: (e.documentos || {}).sociosIR || [],
+      sociosContrato: ((e.documentos || {}).contratoSocial || {}).socios || []
+    });
     e.ui.pendente = r;
 
     if (!r.ok) { caixa.innerHTML = U.aviso('erro', 'Não consegui ler o arquivo', r.erros); return; }
+
+    /* documento não financeiro: conferência própria */
+    if (r.tipoDocumento && r.tipoDocumento !== 'financeiro') {
+      caixa.innerHTML = conferenciaDocumento(r);
+      return;
+    }
 
     let h = '';
     if (r.consertos.length) h += U.aviso('neutro', 'Consertei o arquivo para conseguir ler (nenhum número mudou)', r.consertos);
@@ -4634,6 +6387,64 @@ CO.app = (function () {
     caixa.innerHTML = h;
   }
 
+  /* ---------- conferência dos documentos não financeiros ---------- */
+
+  function conferenciaDocumento(r) {
+    const c = r.conferido;
+    let h = '';
+    if (r.consertos && r.consertos.length) h += U.aviso('neutro', 'Consertei o arquivo para conseguir ler (nenhum número mudou)', r.consertos);
+    if (r.bloqueio) { return h + U.achados([r.bloqueio], 'erro', 'Documento recusado'); }
+
+    const NOMES = { contrato: 'Contrato social', apolices: 'Apólices', ir: 'IR dos sócios', parecer: 'Parecer' };
+    h += `<div class="aviso bom"><h4>Reconheci: ${NOMES[r.tipoDocumento] || r.tipoDocumento}</h4></div>`;
+
+    if (r.tipoDocumento === 'contrato') {
+      if (c.semQuadroAcionario) h += U.aviso('atencao', 'S/A sem o livro de ações', [`O arquivo trouxe ${c.administradores.length} administrador(es), não acionistas. A conta de pessoa-chave usa os administradores.`]);
+      if (c.socios.length) h += U.cartao('Sócios', `${c.socios.length} · participações somam ${B.pctCru(c.soma)}`,
+        U.tabela([{ t: 'Nome' }, { t: 'CPF' }, { t: 'Nascimento' }, { t: 'Participação', n: true }],
+          c.socios.map(s => [U.esc(s.nome), s.cpf ? B.cpfDiscreto(s.cpf) : '—', s.dataNascimento ? B.dataBR(s.dataNascimento) : '—', s.participacao != null ? B.pctCru(s.participacao) : '—'])));
+      if (c.administradores.length) h += U.cartao('Administradores', null,
+        U.tabela([{ t: 'Nome' }, { t: 'Cargo' }], c.administradores.map(a => [U.esc(a.nome), U.esc(a.cargo || a.qualificacao || '—')])));
+      h += U.cartao('Sucessão', null, U.tabela([{ t: 'Item' }, { t: 'Lido' }],
+        [['Critério de haveres', U.esc(c.sucessao.criterio || '— (usa a lei)')], ['Método', U.esc(c.sucessao.metodo || '—')],
+         ['Prazo', c.sucessao.prazoMeses ? c.sucessao.prazoMeses + ' meses' : '—'], ['Parcelas', c.sucessao.parcelas || '—'],
+         ['Invalidez', U.esc(c.sucessao.invalidez || '—')]]));
+      h += U.achados((c.avisos || []).map(a => ({ oQue: a })), 'atencao', 'Atenção');
+      h += U.achados((c.duvidas || []).map(d => ({ oQue: d })), 'neutro', 'Dúvidas da IA');
+    }
+
+    if (r.tipoDocumento === 'apolices') {
+      h += U.cartao('Apólices', `${c.apolices.length} no arquivo`,
+        c.apolices.length ? U.tabela([{ t: 'Ramo' }, { t: 'Seguradora' }, { t: 'Vigência até' }, { t: 'LMI', n: true }, { t: 'Prêmio', n: true }],
+          c.apolices.map(a => [U.esc(a.ramo || '—'), U.esc(a.seguradora || '—'), a.vigenciaFim ? B.dataBR(a.vigenciaFim) : '—', B.dinheiro(a.lmiTotal), B.dinheiro(a.premioTotal)])) : '');
+      h += U.achados((c.avisos || []).map(a => ({ oQue: a })), 'atencao', 'Atenção');
+    }
+
+    if (r.tipoDocumento === 'ir') {
+      h += U.cartao('Declarações conferidas', `${c.socios.length} sócio(s)`,
+        U.tabela([{ t: 'Sócio' }, { t: 'Ano', n: true }, { t: 'Renda tributável', n: true }, { t: 'Lucros', n: true }, { t: 'Bens', n: true }, { t: 'Leitura' }],
+          c.socios.map(s => {
+            const comp = s.completa;
+            const bens = comp ? (comp.bens || {}).itens || [] : [];
+            const leitura = comp ? `completa · ${bens.length} bens` : 'só totais';
+            return [U.esc(s.nome || s.cpf) + (s.dependentes ? `<br><span style="color:var(--tinta-fraca);font-size:11px">${s.dependentes} dependente(s)</span>` : ''),
+              String(s.anoCalendario || '?'), B.dinheiro(s.rendimentosTributaveis), B.dinheiro(s.lucrosDistribuidosRecebidos), B.dinheiro(s.bensTotal), leitura];
+          })));
+      h += U.achados((c.avisos || []).map(a => ({ oQue: a })), 'atencao', 'Atenção');
+      h += U.achados((c.duvidas || []).map(d => ({ oQue: d })), 'neutro', 'Dúvidas da IA');
+      h += U.aviso('neutro', null, ['Dados pessoais: usados só na conversa com o próprio sócio.']);
+    }
+
+    if (r.tipoDocumento === 'parecer') {
+      h += U.cartao('Parecer', null, c.resumoExecutivo ? `<div style="font-size:13px">${U.esc(c.resumoExecutivo)}</div>` : U.esc(JSON.stringify(c).slice(0, 200)));
+    }
+
+    h += U.acoes(
+      U.botao(r.podeGravar ? 'gravar este documento' : 'não dá para gravar', 'CO.app.gravarPendente()', { principal: true, desativado: !r.podeGravar }) +
+      U.botao('cancelar', 'CO.app.cancelarPendente()', {}));
+    return h;
+  }
+
   function cancelarPendente() {
     S().ui.pendente = null;
     const c = el('conferencia'); if (c) c.innerHTML = '';
@@ -4645,6 +6456,22 @@ CO.app = (function () {
     if (!r || !r.ok) return;
     const caixa = el('conferencia');
     caixa.innerHTML = '<div class="carregando">gravando…</div>';
+
+    /* documento não financeiro: grava no cadastro da empresa */
+    if (r.tipoDocumento && r.tipoDocumento !== 'financeiro') {
+      try {
+        await CO.dados.gravarDocumento(e.empresaId, r.campo, r.paraGravar());
+        const dados = await CO.dados.carregarEmpresa(e.empresaId);
+        e.empresa = dados.cadastro; e.documentos = dados.documentos; e.exercicios = dados.exercicios;
+        CO.estado.recalcular();
+        e.ui.pendente = null;
+        desenhar();
+      } catch (err) {
+        caixa.innerHTML = U.aviso('erro', 'Não consegui gravar', [String(err && err.message || err)]);
+      }
+      return;
+    }
+
     try {
       const gravados = {};
       for (const x of e.exercicios) if (x.ano) gravados[x.ano] = x;
