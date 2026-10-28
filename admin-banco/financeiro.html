@@ -5045,9 +5045,10 @@ async function carregarMaisRecenteViaEmpresas(){
         cnpj: empData.cnpj || empData.cnpjConsultor360 || "",
         /* v78: o número de funcionários que a base já tem (o nome do campo
            varia). É ele que tira o dental e o RC Empregador da estimativa. */
-        funcionarios: (function(){ for (const k of Object.keys(empData)){
-          if (/funcion|colaborador|empregad|headcount/i.test(k)){ const x = Number(empData[k]); if (isFinite(x) && x > 0) return x; } }
-          return null; })()
+        funcionarios: funcionariosDoCadastro(empData),
+        /* v84: o cadastro cru (só texto e número) vai para o export, para rastrear campo estranho */
+        cadastroCru: (function(){ const o = {}; Object.keys(empData).forEach(k => { const v = empData[k];
+          if (v == null || typeof v === 'object' || typeof v === 'function') return; o[k] = v; }); return o; })()
       });
       
       proms.push(
@@ -5306,9 +5307,10 @@ async function carregarPorAnoViaEmpresas(ano){
         cnpj: empData.cnpj || empData.cnpjConsultor360 || "",
         /* v78: o número de funcionários que a base já tem (o nome do campo
            varia). É ele que tira o dental e o RC Empregador da estimativa. */
-        funcionarios: (function(){ for (const k of Object.keys(empData)){
-          if (/funcion|colaborador|empregad|headcount/i.test(k)){ const x = Number(empData[k]); if (isFinite(x) && x > 0) return x; } }
-          return null; })()
+        funcionarios: funcionariosDoCadastro(empData),
+        /* v84: o cadastro cru (só texto e número) vai para o export, para rastrear campo estranho */
+        cadastroCru: (function(){ const o = {}; Object.keys(empData).forEach(k => { const v = empData[k];
+          if (v == null || typeof v === 'object' || typeof v === 'function') return; o[k] = v; }); return o; })()
       });
       
       proms.push(
@@ -6107,6 +6109,28 @@ function criarIndicadoresVazios(){
 }
 
 // ================== SISTEMA DE SCORING ==================
+/* v84: o número de funcionários que vem do cadastro. Na PECCIN, um campo do
+   cadastro cujo nome continha "funcion" guardava 63.922.562.988,862 — e virou
+   headcount, plano odontológico de 16 trilhões e folha de 64 bilhões de pessoas.
+   Só entra o que É contagem: chave de contagem, inteiro, entre 1 e 300 mil. */
+function funcionariosDoCadastro(doc){
+  if (!doc || typeof doc !== 'object') return null;
+  const chaves = Object.keys(doc).filter(k =>
+    /(funcion|colaborador|empregad|headcount)/i.test(k)
+    && !/(fatur|receita|custo|folha|salar|media|médio|por|valor|gasto|despesa|inicio|ini$)/i.test(k));
+  const prefer = chaves.sort((a,b) => (/^(qtd|num|numero|n|quantidade)?_?(de)?_?(funcion|colaborador|empregad|headcount)/i.test(b) ? 1 : 0)
+                                     - (/^(qtd|num|numero|n|quantidade)?_?(de)?_?(funcion|colaborador|empregad|headcount)/i.test(a) ? 1 : 0));
+  for (const k of prefer){
+    const raw = doc[k];
+    const x = Number(typeof raw === 'string' ? raw.replace(/\./g,'').replace(',','.') : raw);
+    if (!isFinite(x) || x < 1 || x > 300000) continue;
+    if (Math.abs(x - Math.round(x)) > 0.01) continue;
+    return Math.round(x);
+  }
+  return null;
+}
+window.funcionariosDoCadastro = funcionariosDoCadastro;
+
 /* v82: um exercício sem receita, lucro, ativo e PL não é um exercício — é um
    registro vazio. Não pode ser o "mais recente", não pontua e não analisa. */
 function exercicioVazio(d){
@@ -7308,7 +7332,7 @@ function renderParecer360(data){
   const nivelCor = { critico:'#dc2626', atencao:'#d97706', oportunidade:'#2563eb' };
   const nivelIc  = { critico:'🔴', atencao:'🟡', oportunidade:'🔵' };
   const lista = (arr, fn) => (Array.isArray(arr) && arr.length) ? '<ul style="margin:6px 0 0 18px; line-height:1.55">' + arr.map(fn).join('') + '</ul>' : '<div style="color:var(--text-muted)">—</div>';
-  const sec = (titulo, html) => `<div class="card" style="margin-bottom:16px"><h4 style="margin-bottom:8px">${titulo}</h4>${html}</div>`;
+  const sec = (titulo, html, id) => `<div class="card" style="margin-bottom:16px"${id ? ' id="'+id+'"' : ''}><h4 style="margin-bottom:8px">${titulo}</h4>${html}</div>`;
 
   let h = `<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px">
       <div><div style="font-size:16px; font-weight:800">📑 Parecer 360 — ${esc(data.empresaNome||'')}</div>
@@ -7316,7 +7340,7 @@ function renderParecer360(data){
       <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="copiarParecerTexto()">📋 Copiar texto</button></div>`;
   h += tabInd;
   if(P.resumoExecutivo) h += sec('🧭 Resumo executivo', `<div style="line-height:1.6">${esc(P.resumoExecutivo)}</div>`
-    + (P.fonteParecer ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:6px">${esc(P.fonteParecer)}</div>` : ''));
+    + (P.fonteParecer ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:6px">${esc(P.fonteParecer)}</div>` : ''), 'secResumo');
   /* v80: o parecer final (etapa 8) — pontos, roteiro e a carta */
   if(Array.isArray(P.pontosFortes) && P.pontosFortes.length)
     h += sec('💪 Pontos fortes', lista(P.pontosFortes, s=>`<li>${esc(s)}</li>`));
@@ -7376,7 +7400,7 @@ function renderParecer360(data){
                + `Quem assina pela empresa. N\u00e3o necessariamente s\u00e3o acionistas \u2014 e para seguro de vida de s\u00f3cio e trava societ\u00e1ria, quem importa \u00e9 o acionista.</div></td></tr>`;
         return out;
       })()}
-    </tbody></table></div>`);
+    </tbody></table></div>`, 'secFicha');
   }
   /* v28: o cadastro na Receita — CNAE principal e secundários, situação, porte e QSA.
      O CNAE secundário é o buraco de cobertura mais comum que existe: a apólice sai
@@ -7485,10 +7509,11 @@ function renderParecer360(data){
 
   if(P.contrato){
     const c = P.contrato;
-    h += sec('📜 Contrato social — o que pesa na análise', `
+    h += sec('📜 Contrato social — o que a leitura trouxe', `
+      ${(Array.isArray(c.duvidas) && c.duvidas.length)? '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 12px; margin-bottom:10px"><div style="font-weight:600; color:#92400e">O que a leitura não conseguiu confirmar</div>'+lista(c.duvidas, s=>`<li>${esc(s)}</li>`)+'</div>':''}
       ${c.clausulas? '<div style="font-weight:600; margin-bottom:4px">Cláusulas relevantes</div>'+lista(c.clausulas, k=>`<li><b>${esc(k.clausula||'')}</b>: ${esc(k.texto||'')}${k.implicacao? ' <span style="color:#b45309">→ '+esc(k.implicacao)+'</span>':''}</li>`):''}
       ${(Array.isArray(c.mudancas) && c.mudancas.length)? '<div style="font-weight:600; margin:10px 0 4px">O que as alterações mudaram</div>'+lista(c.mudancas, m=>`<li>${esc(m.data||'')} ${esc(m.alteracao||'')}: ${esc(m.oque||'')}${m.antes||m.depois? ' <span style="color:#64748b">(antes: '+esc(m.antes||'—')+' · depois: '+esc(m.depois||'—')+')</span>':''}</li>`):''}
-      ${c.sugestoes? '<div style="font-weight:600; margin:10px 0 4px">Sugestões de ajuste (levar ao advogado)</div>'+lista(c.sugestoes, s=>`<li>${esc(s)}</li>`):''}`);
+      ${c.sugestoes? '<div style="font-weight:600; margin:10px 0 4px">Sugestões de ajuste (levar ao advogado)</div>'+lista(c.sugestoes, s=>`<li>${esc(s)}</li>`):''}`, 'secContrato');
   }
   if(P.inconsistencias) h += sec('🔎 Auditoria de consistência dos documentos', `<div class="table-container"><table><thead><tr><th>Onde</th><th>O que</th><th>Gravidade</th></tr></thead><tbody>
       ${(P.inconsistencias||[]).map(i=>`<tr><td>${esc(i.onde||'')}</td><td>${esc(i.oque||'')}</td><td>${esc(i.gravidade||'')}</td></tr>`).join('')}</tbody></table></div>`);
@@ -7521,7 +7546,7 @@ function renderParecer360(data){
         + `<div style="font-size:12px; color:var(--text-muted); margin:2px 0 6px">vigência ${esc(ap.vigencia||'—')} · segurado ${esc(ap.segurado||'—')} · beneficiário ${esc(ap.beneficiario||'—')}</div>`
         + (ach.length ? lista(ach, a=>`<li><b>${esc(String(a.tipo||'').replace(/_/g,' '))}</b>: ${esc(a.oque||'')}${a.acao? ' — <i>'+esc(a.acao)+'</i>':''}</li>`)
                       : '<div style="color:var(--text-muted); font-size:12px">Nenhum achado.</div>')
-        + `</div>`; }).join(''));
+        + `</div>`; }).join(''), 'secApolices');
   }
 
   if(P.analise){
@@ -21554,9 +21579,9 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
   }
 
   /* um acordeao neutro, para as secoes que nao sao produto */
-  function acordeaoNeutro(titulo, sub, corpo){
+  function acordeaoNeutro(titulo, sub, corpo, id){
     if (!corpo) return '';
-    return '<details class="seg-acc seg-acc-neutro"><summary class="seg-acc-sum">'
+    return '<details class="seg-acc seg-acc-neutro"' + (id ? ' id="' + id + '"' : '') + '><summary class="seg-acc-sum">'
       + '<div class="seg-acc-esq"><div class="seg-titulo">' + esc(titulo) + '</div>'
       + '<div class="seg-ramo-s">' + esc(sub) + '</div></div>'
       + '<span class="seg-chev" aria-hidden="true">▾</span></summary>'
@@ -21840,7 +21865,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
       htmlBancos);
     html += acordeaoNeutro('Os sócios, pessoa física (do IR)',
       (C.sociosIR && C.sociosIR.fichas.length) ? C.sociosIR.fichas.length + ' ficha(s) com patrimônio, aplicações e espaço de PGBL' : '',
-      htmlSocios);
+      htmlSocios, 'segSociosPF');
 
     if (s.naoAgora && s.naoAgora.length){
       html += acordeaoNeutro('Não recomendar agora',
@@ -23802,6 +23827,14 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var lista = (ficha && Array.isArray(ficha.socios)) ? ficha.socios : [];
     var admins = (ficha && Array.isArray(ficha.administradores)) ? ficha.administradores : [];
 
+    /* v84: S/A sem o livro de ações — a leitura traz administradores e nenhum
+       acionista. Quem comanda a empresa é pessoa-chave do mesmo jeito; o que
+       não se sabe é a participação (fica "não informada", e a tela diz). */
+    var semQuadro = false;
+    if (!lista.length && admins.length){
+      lista = admins.map(function(x){ return { nome: x.nome, cpf: x.cpf, cargo: x.cargo, administrador: true, participacao: null, dataNascimento: x.dataNascimento }; });
+      semQuadro = true;
+    }
     var qtd = lista.length || n(a.qtdSocios) || 0;
     var participacaoConhecida = lista.length > 0 && lista.every(function(s){
       return s.participacao != null && Number(s.participacao) > 0; });
@@ -23895,7 +23928,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     var camadas = [];
     if (precoSaida && partRef) camadas.push({
-      id:'haveres', nome:'Haveres ao espólio', valor: precoSaida * partRef,
+      id:'haveres', nome: (crit === 'sa_sem' || crit === 'sa_acordo') ? 'Compra das ações dos herdeiros (só se houver acordo de acionistas)' : 'Haveres ao espólio', valor: precoSaida * partRef,
       faixaMin: pl * partRef, faixaMax: precoSaida * partRef,
       porque:'A participação do sócio, liquidada. Entre ' + R$(pl*partRef) + ' pelo valor contábil e '
            + R$(precoSaida*partRef) + ' a preço de saída com intangíveis.',
@@ -24141,6 +24174,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     return {
       semDados: !(pl || ebitda) || !qtd,
+      semQuadroAcionario: semQuadro,
       socios: porSocio, qtdSocios: qtd, participacaoConhecida: participacaoConhecida,
       tipoSociedade: tipo,
       sucessao: { criterio: crit, metodo: a.sucMetodo || '', prazoMeses: prazoMeses, parcelas: parcelas,
@@ -24210,7 +24244,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     /* ---- 1. quem são ---- */
     h += secao('Quem são os sócios, e quanto vale cada um',
-      o.participacaoConhecida ? 'Participação lida do contrato social.'
+      o.semQuadroAcionario ? '<b>Sociedade anônima sem o quadro acionário comprovado</b> — os nomes abaixo são os administradores do estatuto e do QSA, '
+          + 'não os acionistas. A participação fica em divisão igual até vir o livro de registro de ações ou a lista de presença da última AGO.'
+        : o.participacaoConhecida ? 'Participação lida do contrato social.'
         : '<b>Participação não informada</b> — a conta abaixo usa divisão igual, que quase nunca é a verdade. '
           + 'Pedir o contrato social muda estes números.');
     h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 16px 12px">';
@@ -25869,7 +25905,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       var cl = (C.clausulas || []).map(function(c){ return { clausula: (c.clausula || '') + (c.tema ? ' (' + c.tema.replace(/_/g,' ') + ')' : ''), texto: c.texto || '', implicacao: '' }; });
       if (C.sucessao && C.sucessao.texto)
         cl.unshift({ clausula: (C.sucessao.fonte || 'Sucessão') + ' (sucessão)', texto: C.sucessao.texto, implicacao: '' });
-      P.contrato = Object.assign({}, P.contrato || {}, { clausulas: cl, mudancas: C.mudancas || [], fonte: 'etapa do contrato social' });
+      P.contrato = Object.assign({}, P.contrato || {}, { clausulas: cl, mudancas: C.mudancas || [], duvidas: C.duvidas || [],
+                                                       documentos: C.documentos || [], fonte: 'etapa do contrato social' });
       /* a cláusula de sucessão vai para o exercício mais recente, que é de onde os módulos leem */
       var S = C.sucessao || {};
       [ultimo, alvo].forEach(function(r){
@@ -25991,8 +26028,11 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     return out;
   }
   function funcionariosDaBase(d){
+    /* v84: só contagem de verdade (ver funcionariosDoCadastro) */
+    if (typeof window.funcionariosDoCadastro === 'function') return window.funcionariosDoCadastro(d);
     var k = Object.keys(d||{}).filter(function(x){ return /funcion|colaborador|empregad|headcount/i.test(x); })[0];
-    return k ? num(d[k]) : null;
+    var x = k ? num(d[k]) : null;
+    return (x != null && x >= 1 && x <= 300000) ? Math.round(x) : null;
   }
 
   /* ---------------- carregar ---------------- */
@@ -26633,6 +26673,18 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     };
   }
 
+  /* v84: ir direto à seção onde o documento aparece */
+  function irPara(aba, idSecao, abrirDetails){
+    var btn = document.querySelector('.tab-btn[data-tab="' + aba + '"]');
+    if (btn) btn.click();
+    setTimeout(function(){
+      var el = idSecao && document.getElementById(idSecao);
+      if (el && abrirDetails && el.tagName === 'DETAILS') el.open = true;
+      if (el) el.scrollIntoView({ behavior:'smooth', block:'start' });
+    }, 250);
+  }
+  window.irParaSecaoAnalise = irPara;
+
   function painelDocumentosAnalise(D){
     var alvo = document.getElementById('docsAnalise');
     if (!alvo) return;
@@ -26641,12 +26693,19 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var X = docsDaEmpresa(D);
     var anos = D.rows.map(function(r){ return r.ano; }).sort();
     var itens = [
-      { ok: true, nome: 'Números', detalhe: anos.length + ' exercício(s): ' + anos.join(', '), onde: 'Dashboard, Diagnóstico, DRE e Balanço, Capacidade de Pagamento' },
-      { ok: !!X.apresentacao, nome: 'Apresentação', detalhe: X.apresentacao ? 'gravada' : 'não feita', onde: 'botão 📇 Apresentação, acima' },
-      { ok: !!X.contrato, nome: 'Contrato social', detalhe: X.contrato ? ((X.contrato.socios||[]).length + ' sócio(s) · lido em ' + (X.contrato.lidoEm||'')) : 'não lido', onde: 'Parecer 360 (ficha e cláusulas) · Seguros (pessoa-chave e "se acontecesse")' },
-      { ok: !!(X.apolices && X.apolices.length), nome: 'Apólices', detalhe: X.apolices && X.apolices.length ? X.apolices.length + ' apólice(s)' : 'não lidas', onde: 'Parecer 360 (achados) · Seguros (LMI contratado no "se acontecesse")' },
-      { ok: !!(X.ir && X.ir.length), nome: 'IR dos sócios', detalhe: X.ir && X.ir.length ? X.ir.length + ' declaração(ões)' : 'não lido', onde: 'Seguros → "Os sócios, pessoa física (do IR)"' },
-      { ok: !!(X.parecer && X.parecer.parecer), nome: 'Parecer final', detalhe: X.parecer && X.parecer.parecer ? 'escrito em ' + (X.parecer.lidoEm||'') : 'não feito', onde: 'Parecer 360 (resumo, pontos, roteiro e carta)' }
+      { ok: true, nome: 'Números', detalhe: anos.length + ' exercício(s): ' + anos.join(', '), onde: 'Dashboard, Diagnóstico, DRE e Balanço, Capacidade de Pagamento',
+        ver: "window.irParaSecaoAnalise('diagnostico')" },
+      { ok: !!X.apresentacao, nome: 'Apresentação', detalhe: X.apresentacao ? 'gravada' : 'não feita', onde: 'botão 📇 Apresentação, acima',
+        ver: "window.abrirApresentacaoDaAnalise && window.abrirApresentacaoDaAnalise()" },
+      { ok: !!X.contrato, nome: 'Contrato social', detalhe: X.contrato ? (((X.contrato.socios||[]).length ? (X.contrato.socios||[]).length + ' sócio(s)' : (X.contrato.administradores||[]).length + ' administrador(es), sem quadro acionário') + ' · ' + (X.contrato.clausulas||[]).length + ' cláusula(s) · lido em ' + (X.contrato.lidoEm||'')) : 'não lido',
+        onde: 'Parecer 360 → "Ficha da empresa" e "Contrato social" (cláusulas, mudanças, o que não foi confirmado) · Seguros → pessoa-chave',
+        ver: "window.irParaSecaoAnalise('parecer','secContrato')" },
+      { ok: !!(X.apolices && X.apolices.length), nome: 'Apólices', detalhe: X.apolices && X.apolices.length ? X.apolices.length + ' apólice(s)' : 'não lidas', onde: 'Parecer 360 → "As apólices que a empresa já tem" · Seguros (LMI contratado no "se acontecesse")',
+        ver: "window.irParaSecaoAnalise('parecer','secApolices')" },
+      { ok: !!(X.ir && X.ir.length), nome: 'IR dos sócios', detalhe: X.ir && X.ir.length ? X.ir.length + ' declaração(ões): ' + X.ir.map(function(s){ return (s.nome||'').split(' ')[0]; }).join(', ') : 'não lido', onde: 'Seguros → "Os sócios, pessoa física (do IR)" — patrimônio, aplicações, dependentes e o que vira seguro',
+        ver: "window.irParaSecaoAnalise('seguros','segSociosPF',true)" },
+      { ok: !!(X.parecer && X.parecer.parecer), nome: 'Parecer final', detalhe: X.parecer && X.parecer.parecer ? 'escrito em ' + (X.parecer.lidoEm||'') : 'não feito', onde: 'Parecer 360 → resumo, pontos fortes e de atenção, roteiro e carta',
+        ver: "window.irParaSecaoAnalise('parecer','secResumo')" }
     ];
     var h = '<details style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px">'
       + '<summary style="cursor:pointer; font-size:12px; font-weight:700; color:#334155">📂 O que esta análise está usando — '
@@ -26656,7 +26715,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
           return '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px">'
             + '<div style="font-size:12.5px; font-weight:700; color:' + (i.ok ? '#166534' : '#92400e') + '">' + (i.ok ? '✓ ' : '· ') + esc(i.nome) + '</div>'
             + '<div style="font-size:11.5px; color:#475569">' + esc(i.detalhe) + '</div>'
-            + '<div style="font-size:11px; color:#64748b; margin-top:3px">Aparece em: ' + esc(i.onde) + '</div></div>';
+            + '<div style="font-size:11px; color:#64748b; margin-top:3px">Aparece em: ' + esc(i.onde) + '</div>'
+            + (i.ok && i.ver ? '<button type="button" class="btn btn-outline" style="padding:3px 9px; font-size:11px; margin-top:6px" onclick="' + i.ver + '">ver →</button>' : '')
+            + '</div>';
         }).join('')
       + '</div>'
       + '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">'
@@ -26705,6 +26766,10 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       geradoEm: new Date().toISOString(),
       empresa: { id: D.empresaId, nome: D.empresaNome, cnpj: (D.empresaDoc && D.empresaDoc.cnpj) || '', setor: D.setor,
                  funcionarios: (D.empresaDoc && D.empresaDoc.funcionarios) || null },
+      /* v84: o cadastro cru (só texto e número), para achar de onde veio um campo estranho */
+      cadastroEmpresa: (D.empresaDoc && D.empresaDoc.cadastroCru) || (function(){ var o = {}, e = (D.empresaDoc || {});
+        Object.keys(e).forEach(function(k){ var v = e[k]; if (v == null || typeof v === 'object' || typeof v === 'function') return; o[k] = v; });
+        return o; })(),
       contemDadosPessoais: !!(X.ir && X.ir.length),
       oQueOSistemaLeu: {
         exercicios: D.rows.map(function(r){ var c = {}; Object.keys(r).forEach(function(k){ if (k !== 'parecer') c[k] = r[k]; }); return c; }),
@@ -35700,7 +35765,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var folhaLimpa = folha;
 
     /* ---------- 1. quantas vidas ---------- */
-    var func = n(a.funcionarios) || n(emp.funcionarios) || n(emp.qtdFuncionarios) || n(emp.numeroFuncionarios);
+    var funcCad = n(emp.funcionarios) || n(emp.qtdFuncionarios) || n(emp.numeroFuncionarios);
+    if (!(funcCad >= 1 && funcCad <= 300000 && Math.abs(funcCad - Math.round(funcCad)) < 0.01)) funcCad = 0;   /* v84: contagem, não valor */
+    var func = n(a.funcionarios) || funcCad;
     var origemFunc = func ? (n(a.funcionarios) ? 'informado no exercício' : 'cadastro da empresa (raio-x)') : null;
     var salBase = salarioDoSetor(setor);
     var salarioMedio = null, origemSalario = null;
