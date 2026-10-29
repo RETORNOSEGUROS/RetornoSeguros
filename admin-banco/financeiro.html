@@ -4873,7 +4873,10 @@ function wireUi(){
         );
       } else if(tabId === "dividas" && CURRENT_ANALYSIS_DATA){
         renderDividasBancarias(CURRENT_ANALYSIS_DATA);
-        /* v64: o racional — o que cada número revela e o que dá para fazer */
+      } else if(tabId === "racional" && CURRENT_ANALYSIS_DATA){
+        /* v64: o racional (aba "O ano que vem") — o que cada número revela e o que dá para fazer.
+           Corrigido: antes a renderização estava presa ao branch de "dividas", então a aba
+           "O ano que vem" abria sempre vazia. */
         try{
           var _rc = document.getElementById('racionalContent');
           if (_rc && typeof window.renderRacional === 'function')
@@ -23853,6 +23856,24 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       lista = admins.map(function(x){ return { nome: x.nome, cpf: x.cpf, cargo: x.cargo, administrador: true, participacao: null, dataNascimento: x.dataNascimento }; });
       semQuadro = true;
     }
+    /* quando nem o contrato social nem o estatuto foram lidos, os nomes vêm do
+       QSA do cartão CNPJ (o que a Receita registra). Participação fica em
+       branco — o cartão não traz — para o corretor preencher. */
+    if (!lista.length){
+      var qsaRec = ((D.empresaDoc && D.empresaDoc.dadosReceita && D.empresaDoc.dadosReceita.qsa)
+                 || (a.dadosReceita && a.dadosReceita.qsa) || []);
+      if (qsaRec.length){
+        lista = qsaRec.map(function(x){ return { nome: x.nome, cpf: x.cpf || '', cargo: x.qualificacao || x.qual || x.cargo || '', administrador: true, participacao: null, origem: 'QSA da Receita' }; });
+        semQuadro = true;
+      }
+    }
+    /* participação editada à mão pelo corretor (gravada no cadastro) entra por cima */
+    var partManual = (D.empresaDoc && D.empresaDoc.participacaoSocios) || {};
+    lista = lista.map(function(s){
+      var k = String(s.cpf || s.nome || '').replace(/\D/g,'') || String(s.nome||'');
+      if (partManual[k] != null && (s.participacao == null)) { var c = {}; Object.keys(s).forEach(function(q){ c[q]=s[q]; }); c.participacao = Number(partManual[k]); c.participacaoManual = true; return c; }
+      return s;
+    });
     var qtd = lista.length || n(a.qtdSocios) || 0;
     var participacaoConhecida = lista.length > 0 && lista.every(function(s){
       return s.participacao != null && Number(s.participacao) > 0; });
@@ -27743,15 +27764,83 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     return h;
   }
 
+  /* v102: a aba Sócios mostra os nomes mesmo sem IR — vindos do contrato social,
+     do estatuto ou do QSA do cartão CNPJ. A participação que o documento não
+     trouxe fica em branco, editável, e grava no cadastro da empresa. Suba o IR
+     na etapa 6 para a análise completa (renda, imposto, patrimônio, seguros). */
+  function chaveSocio(s){ return (String(s.cpf||'').replace(/\\D/g,'')) || String(s.nome||''); }
+  function renderSociosSemIR(D, alvo){
+    var pk = (typeof window.analisarPessoaChave === 'function')
+      ? window.analisarPessoaChave((D.rows||[])[0]||{}, D.rows||[], D) : null;
+    var socios = (pk && pk.socios) || [];
+    if (!socios.length){
+      alvo.innerHTML = '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:18px 20px; font-size:13px; color:#334155; line-height:1.7">'
+        + '<b>Nenhum sócio identificado ainda.</b> Os nomes aparecem aqui quando a IA lê o contrato social, o estatuto ou o cartão CNPJ (QSA). '
+        + 'Para a análise completa de cada sócio — renda, imposto, patrimônio e os seguros a ofertar — suba o IR na etapa 6.</div>';
+      return;
+    }
+    /* a participação só é "de verdade" quando veio do documento; a divisão
+       igual que a pessoa-chave calcula não vale como preenchimento — o campo
+       fica em branco para o corretor pôr o número certo. */
+    var partVeioDoDoc = !!pk.participacaoConhecida;
+    var fonte = socios[0].origem || (pk.semQuadroAcionario ? 'administradores do estatuto ou do QSA do cartão CNPJ' : 'contrato social');
+    var h = '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px">'
+      + '<div><div style="font-size:17px; font-weight:800; color:#0f172a">Os sócios da empresa</div>'
+      + '<div style="font-size:12.5px; color:#64748b">' + socios.length + ' identificado(s) · nomes vindos de: ' + esc(fonte) + '</div></div>'
+      + '<div style="font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px">IR ainda não lido — a participação em branco é você quem preenche.</div></div>';
+    h += '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:13px 17px; margin-bottom:14px; font-size:12.5px; color:#78350f; line-height:1.7">'
+      + 'Preencha a participação de cada um (o documento não trouxe) e clique em <b>Gravar participações</b>. '
+      + 'As vezes a empresa só tem diretores ou holdings no quadro — tudo bem, deixe em branco quem não tem percentual. '
+      + 'Para a análise completa (renda, imposto, patrimônio, seguros a ofertar), suba o IR na etapa 6.</div>';
+    socios.forEach(function(s){
+      var k = chaveSocio(s);
+      var cab = esc(s.nome || '(sem nome)')
+        + (s.cargo ? ' <span style="font-size:11.5px; font-weight:600; color:#64748b">· ' + esc(s.cargo) + '</span>' : '')
+        + (s.administrador ? ' <span style="font-size:10.5px; font-weight:700; color:#0f766e">administra</span>' : '');
+      h += '<details class="socio-cartao" style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; margin-bottom:12px">'
+        + '<summary style="cursor:pointer; outline:none; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center">'
+        + '<div style="font-size:15.5px; font-weight:800; color:#0f172a"><span class="soc-chevron" style="color:#0f766e; margin-right:6px">\u25B8</span>' + cab + '</div>'
+        + '<div style="font-size:12px; color:#64748b">' + (s.cpf ? 'CPF ' + esc(s.cpf) : 'CPF não informado') + '</div>'
+        + '</summary>'
+        + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:12px">'
+        + '<div><label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.3px">Participação (%)</label>'
+        + '<input id="socPart_' + esc(k) + '" type="number" step="0.01" min="0" max="100" value="' + ((partVeioDoDoc && s.participacao != null) ? (Number(s.participacao) <= 1 ? Math.round(s.participacao*10000)/100 : Number(s.participacao)) : (s.participacaoManual ? s.participacao : '')) + '" placeholder="não informado" style="width:100%; margin-top:4px; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px"></div>'
+        + '<div><label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.3px">Cargo / função</label>'
+        + '<div style="margin-top:4px; padding:8px 10px; background:#f8fafc; border-radius:8px; font-size:13px; color:#334155">' + esc(s.cargo || '—') + '</div></div>'
+        + '</div>'
+        + '<div style="font-size:11.5px; color:#92400e; margin-top:9px">Idade, família, renda por fonte, imposto, patrimônio bem a bem e os seguros a ofertar aparecem aqui quando o IR deste sócio for lido na etapa 6.</div>'
+        + '</details>';
+    });
+    h += '<div style="margin-top:6px; display:flex; gap:10px; align-items:center">'
+      + '<button class="btn btn-primary" onclick="salvarParticipacaoSocios()">Gravar participações</button>'
+      + '<span id="socPartStatus" style="font-size:12.5px; color:#64748b"></span></div>';
+    alvo.innerHTML = h;
+  }
+  async function salvarParticipacaoSocios(){
+    var D = window.CURRENT_ANALYSIS_DATA; if (!D || !D.empresaId) return;
+    var st = document.getElementById('socPartStatus'); if (st) st.textContent = 'gravando...';
+    var pk = (typeof window.analisarPessoaChave === 'function') ? window.analisarPessoaChave((D.rows||[])[0]||{}, D.rows||[], D) : null;
+    var mapa = {};
+    (((pk && pk.socios) || [])).forEach(function(s){
+      var k = chaveSocio(s); var el = document.getElementById('socPart_' + k);
+      if (el && el.value !== '' && !isNaN(Number(el.value))) mapa[k] = Number(el.value);
+    });
+    try {
+      await db.collection('empresas').doc(D.empresaId).set({ participacaoSocios: mapa, participacaoSociosEm: new Date().toISOString().slice(0,10) }, { merge: true });
+      if (D.empresaDoc) D.empresaDoc.participacaoSocios = mapa;
+      if (st) st.textContent = 'gravado ✓';
+    } catch(e){ if (st) st.textContent = 'não consegui gravar: ' + (e && e.message || e); }
+  }
+  window.renderSociosSemIR = renderSociosSemIR;
+  window.salvarParticipacaoSocios = salvarParticipacaoSocios;
+
   function renderSocios(D){
     var alvo = document.getElementById('sociosContent'); if (!alvo) return;
     D = D || window.CURRENT_ANALYSIS_DATA;
     if (!D || !D.rows || !D.rows.length){ alvo.innerHTML = '<div class="seg-vazio">Nenhum exercício carregado.</div>'; return; }
     var lista = ((D.empresaDoc && D.empresaDoc.sociosIR) || D.rows[0].sociosIR || []).map(function(x){ return (x && x.completa) ? x.completa : x; });
     if (!lista.length){
-      alvo.innerHTML = '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:18px 20px; font-size:13px; color:#334155; line-height:1.7">'
-        + '<b>Nenhuma declaração de IR lida.</b> Em <b>🔬 Analisar → etapa 6</b>, copie o prompt do IR, anexe a declaração completa de cada sócio (o PDF do programa da Receita) numa conversa nova da IA e suba o arquivo que voltar. '
-        + 'Aqui aparecem idade, família, renda por fonte (e quanto vem desta empresa), imposto e espaço de PGBL, cada imóvel com endereço e área, veículos, participações, aplicações com o rendimento do ano, dívidas, e os seguros a ofertar com o número de cada um.</div>';
+      renderSociosSemIR(D, alvo);
       return;
     }
     var R = window.analisarSocios(lista, D);
