@@ -23872,7 +23872,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       var qsaRec = ((D.empresaDoc && D.empresaDoc.dadosReceita && D.empresaDoc.dadosReceita.qsa)
                  || (a.dadosReceita && a.dadosReceita.qsa) || []);
       if (qsaRec.length){
-        lista = qsaRec.map(function(x){ return { nome: x.nome, cpf: x.cpf || '', cargo: x.qualificacao || x.qual || x.cargo || '', administrador: true, participacao: null, origem: 'QSA da Receita' }; });
+        lista = qsaRec.map(function(x){ var _d = String(x.doc||'').replace(/\D/g,''); return { nome: x.nome, cpf: (_d.length===11 ? x.doc : (x.cpf||'')), doc: _d, ehPJ: _d.length===14, cargo: x.qualificacao || x.qual || x.cargo || '', administrador: true, participacao: null, origem: 'QSA da Receita' }; });
         semQuadro = true;
       }
     }
@@ -27777,7 +27777,103 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
      do estatuto ou do QSA do cartão CNPJ. A participação que o documento não
      trouxe fica em branco, editável, e grava no cadastro da empresa. Suba o IR
      na etapa 6 para a análise completa (renda, imposto, patrimônio, seguros). */
-  function chaveSocio(s){ return (String(s.cpf||'').replace(/\\D/g,'')) || String(s.nome||''); }
+  function chaveSocio(s){ return (String(s.cpf||'').replace(/\D/g,'')) || String(s.nome||''); }
+
+  /* ============ v104: cadeia societária — destrinchar holdings ============
+     Quando um sócio é PJ (holding), o QSA do cartão traz o CNPJ dela. Um clique
+     consulta a mesma base pública e traz quem está atrás — recursivo até chegar
+     nas pessoas físicas, teto de 3 níveis e trava anti-loop. O percentual DENTRO
+     da holding não é público (vive no contrato social dela): vira pergunta, nunca
+     número cravado. Base pública tem defasagem; o que não vier fica em branco. */
+  function _soDig(v){ return String(v==null?'':v).replace(/\D/g,''); }
+  function _fmtCNPJ(d){ d=_soDig(d); return d.length===14 ? d.slice(0,2)+'.'+d.slice(2,5)+'.'+d.slice(5,8)+'/'+d.slice(8,12)+'-'+d.slice(12) : d; }
+  function sociosPJ(D){
+    var qsa = (D && D.empresaDoc && D.empresaDoc.dadosReceita && D.empresaDoc.dadosReceita.qsa)
+           || (D && D.rows && D.rows[0] && D.rows[0].dadosReceita && D.rows[0].dadosReceita.qsa) || [];
+    return qsa.map(function(s){ var d=_soDig(s.doc); return { nome:s.nome, doc:d, qualificacao:s.qualificacao, ehPJ:d.length===14 }; })
+              .filter(function(s){ return s.ehPJ; });
+  }
+  function cadeiaDe(D){ return (D && D.empresaDoc && D.empresaDoc.cadeiaSocietaria) || {}; }
+  function renderNoCadeia(D, doc14, nivel, visitados){
+    doc14 = _soDig(doc14);
+    if (!doc14 || visitados[doc14]) {
+      if (doc14 && visitados[doc14]) return '<div style="margin-left:'+(nivel*14)+'px; font-size:11px; color:#94a3b8; padding-left:12px">↑ ' + esc(_fmtCNPJ(doc14)) + ' já aparece acima na cadeia (participação cruzada).</div>';
+      return '';
+    }
+    visitados[doc14] = true;
+    var ind = 'margin-left:' + (nivel*14) + 'px; border-left:2px solid #e2e8f0; padding-left:12px';
+    var entry = cadeiaDe(D)[doc14];
+    if (!entry){
+      return '<div style="' + ind + '; margin-top:8px">'
+        + '<button class="btn" style="font-size:12px; padding:5px 11px; background:#ecfeff; border:1px solid #a5f3fc; color:#0e7490; border-radius:8px; cursor:pointer" '
+        + 'onclick="destrincharHolding(\'' + doc14 + '\', this)">🔎 trazer sócios desta holding</button>'
+        + '<span style="font-size:11px; color:#94a3b8; margin-left:8px">CNPJ ' + esc(_fmtCNPJ(doc14)) + '</span></div>';
+    }
+    var h = '<div style="' + ind + '; margin-top:8px">'
+      + '<div style="font-size:12.5px; color:#334155"><b>' + esc(entry.razaoSocial || _fmtCNPJ(doc14)) + '</b> '
+      + '<span style="font-size:11px; color:#94a3b8">· ' + esc(_fmtCNPJ(doc14)) + ' · consultado em ' + esc(entry.consultadoEm||'?') + (entry.fonte ? ' · ' + esc(entry.fonte) : '') + '</span></div>';
+    var qsa = entry.qsa || [];
+    if (!qsa.length) h += '<div style="font-size:12px; color:#92400e; margin-top:4px">A base pública não trouxe sócios desta holding — pode estar em Junta de outro estado. Confirme no contrato social dela.</div>';
+    qsa.forEach(function(p){
+      var pd = _soDig(p.doc);
+      h += '<div style="font-size:12.5px; color:#0f172a; margin-top:5px">• ' + esc(p.nome)
+        + (p.qualificacao ? ' <span style="font-size:11px; color:#64748b">(' + esc(p.qualificacao) + ')</span>' : '')
+        + (p.ehPJ ? ' <span style="font-size:10.5px; font-weight:700; color:#b45309">holding</span>'
+                  : ' <span style="font-size:10.5px; font-weight:700; color:#0f766e">pessoa física</span>')
+        + '</div>';
+      if (p.ehPJ){
+        if (nivel >= 3) h += '<div style="font-size:11px; color:#94a3b8; margin-left:' + ((nivel+1)*14) + 'px; padding-left:12px">nível máximo (3) — consulte o CNPJ ' + esc(_fmtCNPJ(pd)) + ' à parte se precisar descer mais.</div>';
+        else h += renderNoCadeia(D, pd, nivel+1, visitados);
+      }
+    });
+    h += '</div>';
+    return h;
+  }
+  function renderCadeiaPanel(D){
+    var pjs = sociosPJ(D);
+    if (!pjs.length) return '';
+    var visitados = {};
+    var h = '<details class="socio-cartao" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; margin-bottom:16px" open>'
+      + '<summary style="cursor:pointer; outline:none; font-size:15.5px; font-weight:800; color:#0f172a">'
+      + '<span class="soc-chevron" style="color:#0f766e; margin-right:6px">▸</span>Cadeia societária — quem está atrás das holdings'
+      + ' <span style="font-size:11.5px; font-weight:600; color:#64748b">(' + pjs.length + ' holding(s) no quadro)</span></summary>'
+      + '<div style="font-size:12.5px; color:#475569; line-height:1.7; margin-top:8px">'
+      + 'Os sócios abaixo são pessoas jurídicas. Clique em cada um para trazer, da base pública da Receita, quem está atrás — até chegar nas pessoas físicas. '
+      + 'O <b>percentual</b> dentro da holding não é público (vive no contrato social dela): entra como pergunta para a conversa de sucessão, nunca como número cravado.</div>';
+    pjs.forEach(function(s){
+      h += '<div style="margin-top:12px"><div style="font-size:13.5px; font-weight:700; color:#0f172a">' + esc(s.nome)
+        + (s.qualificacao ? ' <span style="font-size:11px; font-weight:600; color:#64748b">· ' + esc(s.qualificacao) + '</span>' : '') + '</div>';
+      h += renderNoCadeia(D, s.doc, 1, visitados);
+      h += '</div>';
+    });
+    h += '<div style="font-size:11px; color:#94a3b8; margin-top:12px">Base pública tem defasagem; o que não vier fica em branco — para a sucessão e para o seguro, estas pessoas físicas são os beneficiários finais a confirmar com o sócio.</div>';
+    h += '</details>';
+    return h;
+  }
+  async function destrincharHolding(cnpj, btn){
+    var D = window.CURRENT_ANALYSIS_DATA; if (!D) return;
+    cnpj = _soDig(cnpj);
+    if (btn){ btn.disabled = true; btn.textContent = 'consultando ' + _fmtCNPJ(cnpj) + '…'; }
+    try {
+      if (typeof window.buscarCNPJ !== 'function') throw new Error('consulta de CNPJ indisponível neste navegador');
+      var R = await window.buscarCNPJ(cnpj);
+      if (!R || !R.ok){
+        if (btn){ btn.disabled=false; btn.textContent='🔎 tentar de novo'; btn.insertAdjacentHTML('afterend', '<span style="font-size:11px; color:#b91c1c; margin-left:8px">'+esc((R&&R.motivo)||'as fontes públicas não responderam')+'</span>'); }
+        return;
+      }
+      var rec = R.receita || {};
+      var qsa = (rec.qsa || []).map(function(s){ var d=_soDig(s.doc); return { nome:s.nome, doc:d, ehPJ:d.length===14, qualificacao:s.qualificacao }; });
+      D.empresaDoc = D.empresaDoc || {};
+      D.empresaDoc.cadeiaSocietaria = D.empresaDoc.cadeiaSocietaria || {};
+      D.empresaDoc.cadeiaSocietaria[cnpj] = { razaoSocial: rec.razaoSocial || '', consultadoEm: rec.consultadoEm || new Date().toISOString().slice(0,10), fonte: R.fonte || '', qsa: qsa };
+      if (D.empresaId && typeof db !== 'undefined')
+        await db.collection('empresas').doc(D.empresaId).set({ cadeiaSocietaria: D.empresaDoc.cadeiaSocietaria }, { merge: true });
+      if (typeof window.renderSocios === 'function') window.renderSocios(D);
+    } catch(e){ if (btn){ btn.disabled=false; btn.textContent='🔎 tentar de novo'; btn.insertAdjacentHTML('afterend', '<span style="font-size:11px; color:#b91c1c; margin-left:8px">'+esc(String(e&&e.message||e))+'</span>'); } }
+  }
+  window.destrincharHolding = destrincharHolding;
+  window.renderCadeiaPanel = renderCadeiaPanel;
+
   function renderSociosSemIR(D, alvo){
     var pk = (typeof window.analisarPessoaChave === 'function')
       ? window.analisarPessoaChave((D.rows||[])[0]||{}, D.rows||[], D) : null;
@@ -27793,7 +27889,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
        fica em branco para o corretor pôr o número certo. */
     var partVeioDoDoc = !!pk.participacaoConhecida;
     var fonte = socios[0].origem || (pk.semQuadroAcionario ? 'administradores do estatuto ou do QSA do cartão CNPJ' : 'contrato social');
-    var h = '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px">'
+    var h = renderCadeiaPanel(D)
+      + '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px">'
       + '<div><div style="font-size:17px; font-weight:800; color:#0f172a">Os sócios da empresa</div>'
       + '<div style="font-size:12.5px; color:#64748b">' + socios.length + ' identificado(s) · nomes vindos de: ' + esc(fonte) + '</div></div>'
       + '<div style="font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px">IR ainda não lido — a participação em branco é você quem preenche.</div></div>';
@@ -27858,7 +27955,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + '<div style="font-size:12.5px; color:#64748b">' + R.socios.length + ' declaração(ões) · renda somada ' + R$(R.totais.renda) + ' · patrimônio líquido somado ' + R$(R.totais.patrimonio) + ' · IR que o PGBL devolveria ' + R$(R.totais.pgbl) + ' por ano</div></div>'
       + '<div style="font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px">Dado pessoal do sócio: só com a autorização dele, e para a conversa com ele.</div></div>';
     R.socios.forEach(function(o){ h += cartaoSocio(o, D); });
-    alvo.innerHTML = h;
+    alvo.innerHTML = renderCadeiaPanel(D) + h;
   }
 
   function instalar(){
@@ -40428,8 +40525,11 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     }).filter(function(c){ return c.codigo || c.descricao; });
 
     var qsa = (j.qsa || j.socios || []).map(function(s){
+      var _doc = soDigitos(s.cnpj_cpf_do_socio || s.cnpj_cpf_socio || s.cpf_cnpj_socio || s.documento_socio || s.cnpj_socio || s.cpf_socio);
       return { nome: txt(s.nome_socio || s.nome),
                qualificacao: txt(s.qualificacao_socio || s.qualificacao || s.codigo_qualificacao_socio),
+               doc: _doc,
+               ehPJ: _doc.length === 14,
                faixaEtaria: txt(s.faixa_etaria || s.codigo_faixa_etaria),
                entradaEm: txt(s.data_entrada_sociedade),
                representante: txt(s.nome_representante_legal || s.representante_legal) };
