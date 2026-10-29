@@ -37369,7 +37369,114 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     frases.push('Para o funcionário com três dependentes, o plano substitui cerca de ' + R$(gastoParticularAno) +
       ' de gasto por ano — ' + (diasDeTrabalho ? Math.round(diasDeTrabalho) + ' dias de trabalho dele.' : 'sem contar o que um canal custa de uma vez.'));
 
+    /* ============ v105: diagnóstico do quadro e sinais trabalhistas ============ */
+    var folhaTotalDiag = folha + encargos + beneficios + proLabore;
+
+    /* #1 — salário médio REAL (folha ÷ funcionários informados) × média do setor.
+       A conta já roda; o que faltava era MOSTRAR a comparação e virar argumento. */
+    var salarioEhReal = !!(origemFunc && /informado|cadastro/.test(origemFunc) && salarioMedio && !avisoSalario);
+    var salarioSetorRef = salBase.valor;
+    var desvioSetor = (salarioEhReal && salarioMedio && salarioSetorRef) ? (salarioMedio/salarioSetorRef - 1) : null;
+    var diagSalario = null;
+    if (desvioSetor != null){
+      if (desvioSetor >= 0.15)
+        diagSalario = { faixa:'acima', desvio:desvioSetor,
+          leitura: 'A média real desta empresa (' + R$c(salarioMedio) + ', folha ÷ ' + func + ' funcionários) está <b>' + pc(desvioSetor,0) +
+            ' acima</b> da média do setor (' + R$c(salarioSetorRef) + '). Mão de obra qualificada e cara de repor — o plano protege um ativo caro, ' +
+            'e boa parte do quadro passa do teto de isenção de IR, então a dedução no IRPF do próprio funcionário volta a valer.' };
+      else if (desvioSetor <= -0.15)
+        diagSalario = { faixa:'abaixo', desvio:desvioSetor,
+          leitura: 'A média real desta empresa (' + R$c(salarioMedio) + ', folha ÷ ' + func + ' funcionários) está <b>' + pc(Math.abs(desvioSetor),0) +
+            ' abaixo</b> da média do setor (' + R$c(salarioSetorRef) + '). Setor de maior giro e maioria isenta de IR — ' +
+            'aqui o argumento não é imposto, é "o plano devolve em dinheiro o que você gastaria do bolso" e o custo de repor quem sai.' };
+      else
+        diagSalario = { faixa:'faixa', desvio:desvioSetor,
+          leitura: 'A média real (' + R$c(salarioMedio) + ', folha ÷ ' + func + ' funcionários) está na faixa do setor (' + R$c(salarioSetorRef) + '). ' +
+            'Os números batem — vale usar os dois argumentos: retenção e o custo por dia do plano.' };
+    }
+
+    /* #3 — benefícios ÷ folha: o espaço que falta */
+    var beneficiosPctFolha = folha ? beneficios/folha : null;
+    var diagBeneficios = null;
+    if (beneficios > 0 && beneficiosPctFolha != null)
+      diagBeneficios = beneficiosPctFolha < 0.05
+        ? { nivel:'folga', leitura:'Os benefícios somam ' + pc(beneficiosPctFolha,1) + ' da folha — pouco para o porte. Há folga e uma lacuna competitiva; o dental é o passo de menor custo para fechá-la.' }
+        : { nivel:'ok', leitura:'Os benefícios já somam ' + pc(beneficiosPctFolha,1) + ' da folha — a empresa valoriza benefício. A decisão aqui é de escopo, não de princípio.' };
+
+    /* #2 e #6 — cabe aqui: o custo contra o que já se gasta com gente, e a tradução tangível */
+    var cabeAqui = {
+      pctFolhaTotalLiquido: folhaTotalDiag ? custoLiquido/folhaTotalDiag : null,
+      pctFolhaTotalBruto:   folhaTotalDiag ? custoAno/folhaTotalDiag : null,
+      pctBeneficios:        beneficios ? custoAno/beneficios : null,
+      diasDeFolha:          folhaTotalDiag ? custoAno / (folhaTotalDiag/365) : null
+    };
+
+    /* #4 — trajetória da folha e do quadro na série */
+    var trajetoria = null;
+    try {
+      var serieT = (rows||[]).slice().filter(function(r){ return n(r.folhaAnual); })
+        .sort(function(x,y){ return Number(x.ano)-Number(y.ano); });
+      if (serieT.length >= 2){
+        var prT = serieT[0], ulT = serieT[serieT.length-1];
+        var folhaPr = n(prT.folhaAnual), folhaUl = n(ulT.folhaAnual);
+        var funcPr = n(prT.funcionarios), funcUl = n(ulT.funcionarios);
+        var varFolhaT = folhaPr ? (folhaUl/folhaPr - 1) : null;
+        var varFuncT = (funcPr && funcUl) ? (funcUl/funcPr - 1) : null;
+        var leitT = '';
+        if (varFolhaT != null && varFuncT != null){
+          if (varFuncT > 0.05 && varFolhaT > 0.05) leitT = 'A folha cresceu ' + pc(varFolhaT,0) + ' e o quadro ' + pc(varFuncT,0) + ' de ' + prT.ano + ' a ' + ulT.ano + ' — empresa contratando. O plano escala com o quadro e o custo de reposição pesa mais a cada contratação.';
+          else if (varFolhaT > 0.08 && Math.abs(varFuncT) <= 0.05) leitT = 'A folha cresceu ' + pc(varFolhaT,0) + ' com o quadro quase parado (' + pc(varFuncT,0) + ') de ' + prT.ano + ' a ' + ulT.ano + ' — salários subindo, disputa por talento. O benefício entra como retenção.';
+          else if (varFuncT < -0.05) leitT = 'O quadro encolheu ' + pc(Math.abs(varFuncT),0) + ' de ' + prT.ano + ' a ' + ulT.ano + '. Vale entender se foi corte ou giro — e quem ficou é quem o plano precisa segurar.';
+          else leitT = 'Folha e quadro estáveis de ' + prT.ano + ' a ' + ulT.ano + '.';
+        } else if (varFolhaT != null){
+          leitT = 'A folha ' + (varFolhaT>=0?'cresceu ':'caiu ') + pc(Math.abs(varFolhaT),0) + ' de ' + prT.ano + ' a ' + ulT.ano + '. Sem o número de funcionários por ano não dá para separar contratação de reajuste — informe o quadro de cada exercício.';
+        }
+        if (leitT) trajetoria = { varFolha:varFolhaT, varFunc:varFuncT, de:prT.ano, ate:ulT.ano, leitura:leitT };
+      }
+    } catch(eT){}
+
+    /* #5 — sinais trabalhistas ano a ano: o que descolou da folha é indício, não acusação */
+    var sinaisTrabalhistas = [];
+    try {
+      var serieS = (rows||[]).slice().sort(function(x,y){ return Number(x.ano)-Number(y.ano); });
+      var SINAIS = [
+        { k:'provisaoFerias13',       nome:'Provisão de férias e 13º',        hip:'férias não gozadas acumulando — equipe enxuta ou sob pressão, gente que não para para descansar' },
+        { k:'obrigacoesTrabalhistas', nome:'Obrigações trabalhistas a pagar', hip:'salários e encargos represados no passivo' },
+        { k:'processosTrabalhistas',  nome:'Contingências trabalhistas',       hip:'passivo judicial trabalhista crescendo — clima e relação de trabalho sob tensão' },
+        { k:'rescisoes',              nome:'Rescisões pagas no ano',           hip:'mais gente saindo — giro subindo' }
+      ];
+      SINAIS.forEach(function(Sg){
+        var melhor = null;
+        for (var i=1;i<serieS.length;i++){
+          var a0 = serieS[i-1], a1 = serieS[i];
+          var v0 = n(a0[Sg.k]), v1 = n(a1[Sg.k]);
+          if (!(v0 > 0 && v1 > 0)) continue;
+          var varSinal = v1/v0 - 1;
+          var f0 = n(a0.folhaAnual), f1 = n(a1.folhaAnual);
+          var varFolhaP = (f0>0 && f1>0) ? (f1/f0 - 1) : null;
+          var descolou = (varFolhaP != null) ? (varSinal - varFolhaP >= 0.15 && varSinal >= 0.20) : (varSinal >= 0.30);
+          if (descolou && (!melhor || varSinal > melhor.varSinal))
+            melhor = { nome:Sg.nome, hip:Sg.hip, de:{ano:a0.ano, valor:v0}, para:{ano:a1.ano, valor:v1}, varSinal:varSinal, varFolha:varFolhaP };
+        }
+        if (melhor) sinaisTrabalhistas.push(melhor);
+      });
+      var ultR = serieS[serieS.length-1] || {};
+      var fi = n(ultR.funcionariosInicio), ff = n(ultR.funcionarios);
+      if (fi > 0 && ff > 0){
+        var deltaQuadro = ff - fi, adm = n(ultR.admissoes), resc = n(ultR.rescisoes);
+        if (Math.abs(deltaQuadro) <= Math.max(2, fi*0.03) && (adm>0 || resc>0))
+          sinaisTrabalhistas.push({ churn:true, nome:'Quadro estável por fora, girando por dentro',
+            leitura:'Começou o ano com ' + fi + ' e terminou com ' + ff + ' funcionários — quase o mesmo número, mas ' + (resc?'com rescisões lançadas':'com admissões no ano') + '. O quadro não cresceu; ele trocou de gente. Giro escondido é o caso clássico do dental como retenção.' });
+      }
+    } catch(eS){}
+
     return {
+      /* diagnóstico do quadro (v105) */
+      diagnostico: { salario: diagSalario, salarioReal: salarioEhReal ? salarioMedio : null,
+                     salarioSetorRef: salarioSetorRef, desvioSetor: desvioSetor,
+                     beneficios: diagBeneficios, beneficiosPctFolha: beneficiosPctFolha,
+                     cabeAqui: cabeAqui, trajetoria: trajetoria },
+      sinaisTrabalhistas: sinaisTrabalhistas,
       /* quem é */
       func: func, dirigentes: dirigentes, titulares: titulares, origemDirigentes: origemDirigentes,
       proLabore: proLabore, proLaboreMedio: proLaboreMedio,
@@ -37682,6 +37789,28 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       h += '<div style="background:#fffbeb; border:1px solid #fde68a; border-left:4px solid #d97706; border-radius:0 10px 10px 0; padding:11px 14px; margin-top:10px; font-size:12.5px; color:#92400e; line-height:1.7">'
         + '<b>Confira o número de funcionários.</b> ' + esc(d.avisoSalario) + '</div>';
 
+    /* v105: diagnóstico do quadro — por que cabe aqui, pelo balanço */
+    var DG = d.diagnostico || {};
+    h += '<div style="background:#fff; border:1px solid #99f6e4; border-radius:12px; padding:14px 16px; margin-top:12px">'
+      + '<div style="font-size:13px; font-weight:800; color:#0f766e; margin-bottom:9px">Por que este plano cabe aqui — pelo balanço</div>';
+    if (DG.salario)
+      h += '<div style="font-size:12.5px; color:#334155; line-height:1.75; margin-bottom:9px"><b>Salário médio real × setor:</b> ' + DG.salario.leitura + '</div>';
+    else if (DG.salarioReal == null)
+      h += '<div style="font-size:12px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:9px 12px; line-height:1.65; margin-bottom:9px">'
+        + '<b>A média salarial aqui é a do setor, não a real desta empresa.</b> O número de funcionários não foi informado, '
+        + 'então a conta não divide a folha pelo quadro de verdade. Informe os funcionários na edição (ou deixe a leitura das notas explicativas trazer) '
+        + 'para a média sair da própria empresa e virar argumento.</div>';
+    var CA = DG.cabeAqui || {};
+    var cabeLins = [];
+    if (CA.pctFolhaTotalLiquido != null) cabeLins.push('custo real de <b>' + pc(CA.pctFolhaTotalLiquido,2) + '</b> do que a empresa já gasta com gente');
+    if (CA.pctBeneficios != null)        cabeLins.push('<b>' + pc(CA.pctBeneficios,0) + '</b> a mais no que já paga de benefício');
+    if (CA.diasDeFolha != null)          cabeLins.push('o equivalente a <b>' + (CA.diasDeFolha < 1 ? 'menos de 1 dia' : Math.round(CA.diasDeFolha) + ' dias') + '</b> de folha no ano inteiro');
+    if (cabeLins.length)
+      h += '<div style="font-size:12.5px; color:#334155; line-height:1.75; margin-bottom:' + (DG.beneficios ? '9px' : '0') + '"><b>O tamanho da decisão:</b> ' + cabeLins.join(' · ') + '.</div>';
+    if (DG.beneficios)
+      h += '<div style="font-size:12.5px; color:#334155; line-height:1.75"><b>Benefícios ÷ folha:</b> ' + DG.beneficios.leitura + '</div>';
+    h += '</div>';
+
     /* 1. quanto custa */
     h += secao('1. Quanto custa, e quanto custa depois do imposto');
     h += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px">'
@@ -37818,6 +37947,34 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + (T.desligamentosQuePagam != null && T.desligamentosQuePagam <= 1
           ? 'basta <b>uma</b> pessoa que fique.' : 'bastam ' + Math.ceil(T.desligamentosQuePagam||1) + ' pessoas que fiquem.')
       + '</div></div>';
+
+    /* v105: sinais trabalhistas ano a ano + trajetória da folha */
+    var ST = d.sinaisTrabalhistas || [];
+    var TR = (d.diagnostico && d.diagnostico.trajetoria) || null;
+    if (ST.length || TR){
+      h += secao('Sinais trabalhistas no balanço, ano a ano',
+        'O que cresceu de um ano para o outro mais rápido que a folha costuma ser indício de que algo aconteceu com a equipe — é hipótese para perguntar, não acusação.');
+      if (TR)
+        h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 15px; margin-bottom:9px; font-size:12.5px; color:#475569; line-height:1.75"><b style="color:#0f172a">Trajetória da folha:</b> ' + esc(TR.leitura) + '</div>';
+      ST.forEach(function(s){
+        if (s.churn){
+          h += '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid #0f766e; border-radius:0 10px 10px 0; padding:12px 15px; margin-bottom:9px">'
+            + '<div style="font-size:13px; font-weight:700; color:#0f766e; margin-bottom:3px">' + esc(s.nome) + '</div>'
+            + '<div style="font-size:12.5px; color:#475569; line-height:1.7">' + esc(s.leitura) + '</div></div>';
+          return;
+        }
+        h += '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid #b45309; border-radius:0 10px 10px 0; padding:12px 15px; margin-bottom:9px">'
+          + '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline">'
+          +   '<div style="font-size:13px; font-weight:700; color:#0f172a">' + esc(s.nome) + '</div>'
+          +   '<div style="font-size:12px; color:#b45309; font-weight:700">+' + pc(s.varSinal,0) + ' de ' + s.de.ano + ' a ' + s.para.ano + (s.varFolha!=null ? ' · folha ' + (s.varFolha>=0?'+':'') + pc(s.varFolha,0) : '') + '</div>'
+          + '</div>'
+          + '<div style="font-size:12px; color:#64748b; margin-top:2px">' + R$(s.de.valor) + ' → ' + R$(s.para.valor) + '</div>'
+          + '<div style="font-size:12.5px; color:#475569; line-height:1.7; margin-top:5px">Possível indício: ' + esc(s.hip)
+          + '. Vale perguntar ao RH e ao contador o que mudou nesse período — confirmado, é o argumento mais forte do dental.</div></div>';
+      });
+      if (!ST.length)
+        h += '<div style="font-size:12px; color:#64748b; line-height:1.6">Nenhum salto relevante nos sinais trabalhistas (provisão de férias/13º, obrigações trabalhistas, contingências, rescisões) frente à folha. Se esses campos não foram preenchidos, peça ao contador — é onde o giro aparece.</div>';
+    }
 
     /* 5. o historico e a projecao */
     var H = null, PJ = null;
