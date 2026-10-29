@@ -30231,6 +30231,24 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
           return '<div style="font-size:12.5px; line-height:1.75; opacity:.95">· ' + esc(f) + '</div>'; }).join('')
       + '</div></div>';
 
+    /* v105c: número de funcionários — visível e editável aqui, no raio-x,
+       porque é o número que alimenta produtividade, dental, pessoa-chave e sucessão. */
+    var rxEmp = (D && D.empresaDoc) || {};
+    var rxFMan = Number(rxEmp.funcionariosManual)||0, rxFEx = Number(a.funcionarios)||0, rxFCad = Number(rxEmp.funcionarios)||0;
+    var rxAtual = rxFMan || rxFEx || rxFCad || 0;
+    var rxOrigem = rxFMan ? 'informado por você' : (rxFEx ? 'informado no exercício' : (rxFCad ? 'cadastro da empresa' : 'não informado — hoje é estimado pela folha nas contas de seguro'));
+    h += '<div style="background:#fff; border:1px solid #c7d2fe; border-radius:12px; padding:14px 16px; margin:4px 0 16px">'
+      + '<div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-end">'
+      + '<div style="flex:1; min-width:220px"><div style="font-size:13px; font-weight:800; color:#4338ca">👷 Número de funcionários</div>'
+      +   '<div style="font-size:11.5px; color:#64748b; margin-top:3px; line-height:1.6">'
+      +   (rxAtual ? '<b>' + rxAtual + '</b> colaborador(es) · ' : '') + esc(rxOrigem) + '. '
+      +   'É o número que alimenta a produtividade por funcionário, o plano dental, a pessoa-chave e a sucessão — informe aqui e vale para todas.</div></div>'
+      + '<div style="display:flex; gap:8px; align-items:center">'
+      +   '<input id="rxFunc" type="number" min="0" step="1" value="' + (rxFMan||'') + '" placeholder="' + (rxAtual||'—') + '" style="width:110px; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px">'
+      +   '<button class="btn btn-primary" onclick="salvarFuncionariosRaioX()">Gravar</button>'
+      +   '<span id="rxFuncStatus" style="font-size:12px; color:#64748b"></span>'
+      + '</div></div></div>';
+
     /* ---- placar ---- */
     h += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:6px">'
       + [['Variações que pesam', O.resumo.variacoesAltas, O.resumo.variacoesAltas ? '#b91c1c' : '#15803d'],
@@ -30354,6 +30372,26 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   }
 
   window.renderRaioX = renderRaioX;
+
+  /* v105c: grava o número de funcionários direto do raio-x e re-renderiza a aba */
+  async function salvarFuncionariosRaioX(){
+    var D = window.CURRENT_ANALYSIS_DATA;
+    var st = document.getElementById('rxFuncStatus');
+    if (!D || !D.empresaId){ if (st) st.textContent = 'abra uma empresa salva para gravar.'; return; }
+    var e = document.getElementById('rxFunc');
+    var v = e ? parseInt(String(e.value).replace(/\D/g,''), 10) : NaN;
+    if (st) st.textContent = 'gravando…';
+    try {
+      if (typeof db === 'undefined') throw new Error('banco indisponível');
+      var patch = { funcionariosManual: (isFinite(v) && v >= 1) ? v : null };
+      await db.collection('empresas').doc(D.empresaId).set(patch, { merge:true });
+      D.empresaDoc = D.empresaDoc || {}; D.empresaDoc.funcionariosManual = patch.funcionariosManual;
+      var _rx = document.getElementById('raioxContent');
+      if (_rx && typeof window.renderRaioX === 'function')
+        _rx.innerHTML = window.renderRaioX((D.rows||[])[0] || {}, D.rows||[], D);
+    } catch(err){ if (st) st.textContent = 'não consegui gravar: ' + (err && err.message || err); }
+  }
+  window.salvarFuncionariosRaioX = salvarFuncionariosRaioX;
 })();
 
 /* ===================================================================
