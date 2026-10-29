@@ -7972,8 +7972,15 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const crescimentoSustentavel = latest.roe * (1 - payout) * 100;
   
   // ===== 6. PRODUTIVIDADE POR FUNCIONÁRIO =====
-  // Estimativa: Receita / 150K por funcionário (média Brasil)
-  const funcionariosEstimado = Math.round(latest.receita / 150000) || 1;
+  // v105: usa o número REAL de funcionários quando informado (exercício ou cadastro).
+  // Sem ele, cai na estimativa receita ÷ R$150 mil — que é circular (o resultado
+  // vira sempre ~150 mil), por isso o rótulo diz de onde veio.
+  const _empDocRX = (typeof window !== 'undefined' && window.CURRENT_ANALYSIS_DATA && window.CURRENT_ANALYSIS_DATA.empresaDoc) || {};
+  const _funcReal = (Number(_empDocRX.funcionariosManual) > 0 ? Math.round(Number(_empDocRX.funcionariosManual))
+                    : (Number(latest.funcionarios) > 0 ? Math.round(Number(latest.funcionarios))
+                    : (Number(_empDocRX.funcionarios) > 0 ? Math.round(Number(_empDocRX.funcionarios)) : 0)));
+  const funcionariosEstimado = _funcReal || Math.round(latest.receita / 150000) || 1;
+  const funcProdOrigem = _funcReal ? 'informado' : 'estimado (receita ÷ R$150 mil — circular)';
   const receitaPorFunc = latest.receita / funcionariosEstimado;
   const ebitdaPorFunc = latest.ebitda / funcionariosEstimado;
   const setorReceitaFunc = 200000; // Média de mercado
@@ -8176,7 +8183,7 @@ function gerarAnaliseAvancadaHtml(latest, rows){
           </div>
           
           <div style="margin-top:12px; font-size:10px; color:#9ca3af">
-            *Estimativa baseada em ~${funcionariosEstimado} funcionários (R$ 150K receita/func)
+            ${_funcReal ? `Com ${funcionariosEstimado} funcionários (${funcProdOrigem})` : `*Número ${funcProdOrigem} em ~${funcionariosEstimado} funcionários. Informe o quadro real na edição para este número deixar de ser circular.`}
           </div>
         </div>
       </div>
@@ -37071,6 +37078,11 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     a = a || {}; D = D || {};
     var emp = D.empresaDoc || {};
 
+    /* v105: valores que o corretor pode informar/editar na própria análise e gravar.
+       Ticket da cotação real entra aqui; salário e benefício entram mais abaixo,
+       depois que o headcount é conhecido. */
+    var TK = n(emp.ticketDentalManual) || P.ticketVida;
+
     var folha     = n(a.folhaAnual);
     var encargos  = n(a.encargosFolha);
     var beneficios= n(a.beneficiosAnual);
@@ -37088,10 +37100,14 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var folhaLimpa = folha;
 
     /* ---------- 1. quantas vidas ---------- */
+    /* v105: o número editado pelo corretor na análise (funcionariosManual) vence
+       tudo — é a correção explícita de quem está olhando o caso. */
+    var funcManual = n(emp.funcionariosManual);
+    if (!(funcManual >= 1 && funcManual <= 300000 && Math.abs(funcManual - Math.round(funcManual)) < 0.01)) funcManual = 0;
     var funcCad = n(emp.funcionarios) || n(emp.qtdFuncionarios) || n(emp.numeroFuncionarios);
     if (!(funcCad >= 1 && funcCad <= 300000 && Math.abs(funcCad - Math.round(funcCad)) < 0.01)) funcCad = 0;   /* v84: contagem, não valor */
-    var func = n(a.funcionarios) || funcCad;
-    var origemFunc = func ? (n(a.funcionarios) ? 'informado no exercício' : 'cadastro da empresa (raio-x)') : null;
+    var func = funcManual || n(a.funcionarios) || funcCad;
+    var origemFunc = func ? (funcManual ? 'informado por você na análise' : (n(a.funcionarios) ? 'informado no exercício' : 'cadastro da empresa (raio-x)')) : null;
     var salBase = salarioDoSetor(setor);
     var salarioMedio = null, origemSalario = null;
 
@@ -37127,6 +37143,18 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
         'O calculo seguiu com a media do setor; conferir o cadastro.';
       salarioMedio = salBase.valor;
       origemSalario = salBase.origem + ' (o calculo pela folha deu abaixo do minimo)';
+    }
+
+    /* v105: overrides informados pelo corretor na análise (gravados no cadastro). */
+    var salarioInformado = false, beneficioInformado = false;
+    if (n(emp.salarioMedioManual) > 0){
+      salarioMedio = n(emp.salarioMedioManual);
+      origemSalario = 'informado por você na análise';
+      avisoSalario = null; salarioInformado = true;
+    }
+    if (n(emp.beneficioMesColaboradorManual) > 0 && func > 0){
+      beneficios = n(emp.beneficioMesColaboradorManual) * func * 12;
+      beneficioInformado = true;
     }
 
     /* ---------- 1-B. os dirigentes (v51) ----------
@@ -37175,9 +37203,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     var beneficioPorFunc = (beneficios && func) ? beneficios/func/12 : null;
 
     /* ---------- 3. a conta do plano ---------- */
-    var custoMes  = vidas * P.ticketVida;   /* vidas = funcionarios + dirigentes */
+    var custoMes  = vidas * TK;   /* vidas = funcionarios + dirigentes; TK = ticket informado ou padrão */
     var custoAno  = custoMes * P.mesesAno;
-    var custoAnoComDep = vidasComDep * P.ticketVida * P.mesesAno;
+    var custoAnoComDep = vidasComDep * TK * P.mesesAno;
 
     var inf = (typeof window.inferirRegime === 'function') ? window.inferirRegime(a) : null;
     var lucroReal = inf ? inf.lucroReal : String(a.regimeTributario||'').toLowerCase() === 'real';
@@ -37374,7 +37402,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
 
     /* #1 — salário médio REAL (folha ÷ funcionários informados) × média do setor.
        A conta já roda; o que faltava era MOSTRAR a comparação e virar argumento. */
-    var salarioEhReal = !!(origemFunc && /informado|cadastro/.test(origemFunc) && salarioMedio && !avisoSalario);
+    var salarioEhReal = !!(((origemFunc && /informado|cadastro/.test(origemFunc)) || salarioInformado) && salarioMedio && !avisoSalario);
     var salarioSetorRef = salBase.valor;
     var desvioSetor = (salarioEhReal && salarioMedio && salarioSetorRef) ? (salarioMedio/salarioSetorRef - 1) : null;
     var diagSalario = null;
@@ -37477,6 +37505,12 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
                      beneficios: diagBeneficios, beneficiosPctFolha: beneficiosPctFolha,
                      cabeAqui: cabeAqui, trajetoria: trajetoria },
       sinaisTrabalhistas: sinaisTrabalhistas,
+      editaveis: { funcionarios: (funcManual || n(a.funcionarios) || n(emp.funcionarios) || func),
+                   funcInformado: !!(funcManual || n(a.funcionarios) || n(emp.funcionarios)),
+                   funcManual: funcManual || null,
+                   salarioMedioManual: n(emp.salarioMedioManual) || null, salarioInformado: salarioInformado,
+                   beneficioMesColaboradorManual: n(emp.beneficioMesColaboradorManual) || null, beneficioInformado: beneficioInformado,
+                   ticketManual: n(emp.ticketDentalManual) || null, ticketUsado: TK, ticketPadrao: P.ticketVida },
       /* quem é */
       func: func, dirigentes: dirigentes, titulares: titulares, origemDirigentes: origemDirigentes,
       proLabore: proLabore, proLaboreMedio: proLaboreMedio,
@@ -37485,7 +37519,7 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       origemFunc: origemFunc, salarioMedio: salarioMedio, origemSalario: origemSalario,
       avisoSalario: avisoSalario,
       /* a conta */
-      ticket: P.ticketVida, custoMes: custoMes, custoAno: custoAno, custoAnoComDep: custoAnoComDep,
+      ticket: TK, ticketPadrao: P.ticketVida, custoMes: custoMes, custoAno: custoAno, custoAnoComDep: custoAnoComDep,
       lucroReal: lucroReal, regime: inf ? inf.vale : null,
       devolveImposto: devolveImposto, custoLiquido: custoLiquido,
       custoLiquidoVidaMes: custoLiquidoVidaMes,
@@ -37766,6 +37800,27 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       + 'Toda a conta abaixo sai do balanço desta empresa — folha, benefícios e regime tributário. '
       + 'Os números de vidas e salário vêm de onde está escrito ao lado de cada um.</div>';
 
+    /* v105: painel editável — informe/edite e grave os números da conta */
+    function cNum(id,label,val,hint,step){
+      return '<div><label style="font-size:11px; font-weight:700; color:#475569; display:block; margin-bottom:3px">' + esc(label) + '</label>'
+        + '<input id="' + id + '" type="number" step="' + (step||'0.01') + '" min="0" value="' + (val===''||val==null?'':val) + '" style="width:100%; padding:7px 9px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; box-sizing:border-box">'
+        + (hint ? '<div style="font-size:10.5px; color:#94a3b8; margin-top:3px">' + esc(hint) + '</div>' : '') + '</div>';
+    }
+    var ED = d.editaveis || {};
+    h += '<div style="background:#fff; border:1px dashed #5eead4; border-radius:12px; padding:14px 16px; margin-bottom:14px">'
+      + '<div style="font-size:13px; font-weight:800; color:#0f766e; margin-bottom:3px">Os números desta conta — informe, edite e grave</div>'
+      + '<div style="font-size:11.5px; color:#64748b; margin-bottom:11px; line-height:1.6">O que você preencher aqui <b>vence a estimativa</b> e fica salvo na empresa. Deixe em branco para o sistema estimar pela folha e pelo setor.</div>'
+      + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px">'
+      +   cNum('dentFunc','Nº de funcionários', ED.funcManual!=null?ED.funcManual:'', (ED.funcInformado?('hoje: '+d.func):('estimado em '+d.func+' — informe o real')), '1')
+      +   cNum('dentSalario','Salário médio mensal (R$)', ED.salarioMedioManual!=null?ED.salarioMedioManual:'', (ED.salarioInformado?'informado por você':('calculado '+R$c(d.salarioMedio))), '0.01')
+      +   cNum('dentBeneficio','Benefício atual por colaborador/mês (R$)', ED.beneficioMesColaboradorManual!=null?ED.beneficioMesColaboradorManual:'', (ED.beneficioInformado?'informado por você':(d.beneficioPorFunc?('a DRE dá '+R$c(d.beneficioPorFunc)):'opcional')), '0.01')
+      +   cNum('dentTicket','Ticket do plano por vida/mês (R$)', ED.ticketManual!=null?ED.ticketManual:'', (ED.ticketManual?'sua cotação':('padrão '+R$c(d.ticketPadrao))), '0.01')
+      + '</div>'
+      + '<div style="margin-top:11px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">'
+      +   '<button class="btn btn-primary" onclick="salvarNumerosDental()">Gravar e recalcular</button>'
+      +   '<span id="dentNumStatus" style="font-size:12.5px; color:#64748b"></span></div>'
+      + '</div>';
+
     /* quem é */
     h += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; margin-bottom:6px">'
       + tile('Vidas no plano', String(d.titulares),
@@ -37976,6 +38031,49 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
         h += '<div style="font-size:12px; color:#64748b; line-height:1.6">Nenhum salto relevante nos sinais trabalhistas (provisão de férias/13º, obrigações trabalhistas, contingências, rescisões) frente à folha. Se esses campos não foram preenchidos, peça ao contador — é onde o giro aparece.</div>';
     }
 
+    /* v105: impacto para o financeiro — itens de sensibilidade, não promessa */
+    function _num(v){ var x = Number(v); return isFinite(x) ? x : 0; }
+    var IBfolha = _num(d.folhaLimpa);
+    var IBrepo = _num(d.turnover && d.turnover.custoReposicao);
+    var IBebitda = _num(a.ebitda);
+    var IBlucro = _num(a.lucroLiq) || _num(a.lucroLiquido);
+    var IBcustoLiq = _num(d.custoLiquido);
+    var demDef = 2, absDef = 10, prodDef = 0.5;
+    var custoAbsTotal = IBfolha * 0.025;
+    var vDem0 = demDef * IBrepo, vAbs0 = custoAbsTotal * absDef/100, vProd0 = IBebitda * prodDef/100;
+    var vTotal0 = vDem0 + vAbs0 + vProd0;
+    h += secao('O que o plano pode valer para o financeiro — em itens',
+      'Cada linha é uma suposição que <b>você ajusta</b>, não uma promessa. O ponto não é cravar o número: é mostrar que o plano custa menos do que quase qualquer um destes isolado. Mude os campos e os valores recalculam na hora.');
+    h += '<div id="dentImpacto" data-folha="' + IBfolha + '" data-reposicao="' + IBrepo + '" data-ebitda="' + IBebitda + '" data-custoliq="' + IBcustoLiq + '" data-lucro="' + IBlucro + '"'
+      + ' style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:14px 16px">';
+    function impLinha(titulo, controle, hint, valId, valIni){
+      return '<div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid #f1f5f9">'
+        + '<div><div style="font-size:12.5px; color:#0f172a; font-weight:600">' + titulo + '</div>'
+        +   (hint ? '<div style="font-size:11px; color:#94a3b8; margin-top:2px">' + hint + '</div>' : '')
+        +   '<div style="margin-top:6px">' + controle + '</div></div>'
+        + '<div style="text-align:right; font-size:16px; font-weight:800; color:#0f766e; white-space:nowrap" id="' + valId + '">' + valIni + '</div></div>';
+    }
+    function inp(id, val){ return '<input id="' + id + '" type="number" step="0.1" min="0" value="' + val + '" oninput="recalcImpactoDental()" style="width:74px; padding:5px 8px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px"> '; }
+    h += '<div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.3px; font-weight:700; padding-bottom:4px">Mova as premissas · veja o valor anual</div>';
+    h += impLinha('Demissões evitadas no ano',
+      inp('dentImpDemissoes', demDef) + '<span style="font-size:12px; color:#64748b">× ' + R$(IBrepo) + ' de reposição cada</span>',
+      'Repor uma pessoa custa ' + d.turnover.meses + ' meses de custo cheio. Você não promete; conta quantas precisariam ficar.',
+      'impDemValor', R$(vDem0));
+    h += impLinha('Absenteísmo recuperado',
+      inp('dentImpAbsent', absDef) + '<span style="font-size:12px; color:#64748b">% de ' + R$(custoAbsTotal) + ' que o absenteísmo custa/ano</span>',
+      'Taxa de absenteísmo no Brasil ~2,5% da jornada — sobre a folha de ' + R$(IBfolha) + ' dá <span id="impAbsTotal">' + R$(custoAbsTotal) + '</span>/ano. Dor dentária é causa comum de falta; o plano recupera um pedaço.',
+      'impAbsValor', R$(vAbs0));
+    h += impLinha('Ganho de produtividade',
+      inp('dentImpProd', prodDef) + '<span style="font-size:12px; color:#64748b">% sobre o EBITDA de ' + R$(IBebitda) + '</span>',
+      'Funcionário cuidado e presente rende mais. ' + (IBlucro>0 ? 'Como referência, 1% do lucro líquido é ' + R$(IBlucro*0.01) + '.' : 'Ajuste pela realidade da empresa.'),
+      'impProdValor', R$(vProd0));
+    h += '<div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:11px 0 2px; border-top:2px solid #e2e8f0; margin-top:4px">'
+      + '<div style="font-size:13px; font-weight:800; color:#0f172a">Potencial somado no ano <span style="font-size:11.5px; font-weight:600; color:#64748b">(contra um custo real de ' + R$(IBcustoLiq) + ')</span></div>'
+      + '<div style="text-align:right"><div style="font-size:18px; font-weight:800; color:#0f766e" id="impTotal">' + R$(vTotal0) + '</div>'
+      +   '<div style="font-size:11.5px; color:#64748b"><span id="impVezes">' + (IBcustoLiq>0 ? (vTotal0/IBcustoLiq).toFixed(1).replace('.',',') + '×' : '—') + '</span> o custo do plano</div></div></div>';
+    h += '<div style="font-size:11px; color:#94a3b8; margin-top:9px; line-height:1.6">Nenhum destes é garantido — são alavancas para o financeiro medir a decisão. A mensagem honesta é a mesma do turnover: você não precisa prometer percentual nenhum, basta mostrar quanto cada ponto vale e que o plano custa menos que isso.</div>';
+    h += '</div>';
+
     /* 5. o historico e a projecao */
     var H = null, PJ = null;
     try{
@@ -38107,6 +38205,50 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
   }
 
   window.renderDental = renderDental;
+
+  /* v105: grava os números editados na empresa e recalcula o bloco dental na hora */
+  async function salvarNumerosDental(){
+    var D = window.CURRENT_ANALYSIS_DATA;
+    var st = document.getElementById('dentNumStatus');
+    if (!D || !D.empresaId){ if (st) st.textContent = 'abra uma empresa salva para gravar.'; return; }
+    if (st) st.textContent = 'gravando…';
+    function lerNum(id){ var e = document.getElementById(id); if (!e) return null; var v = String(e.value).trim(); if (v==='') return null; v = v.replace(/\./g,'').replace(',','.').replace(/[^\d.]/g,''); var x = Number(v); return isFinite(x) ? x : null; }
+    var fu = lerNum('dentFunc'), sa = lerNum('dentSalario'), be = lerNum('dentBeneficio'), tk = lerNum('dentTicket');
+    var patch = {
+      funcionariosManual: (fu!=null && fu>=1) ? Math.round(fu) : null,
+      salarioMedioManual: (sa!=null && sa>0) ? sa : null,
+      beneficioMesColaboradorManual: (be!=null && be>0) ? be : null,
+      ticketDentalManual: (tk!=null && tk>0) ? tk : null
+    };
+    try {
+      if (typeof db === 'undefined') throw new Error('banco indisponível');
+      await db.collection('empresas').doc(D.empresaId).set(patch, { merge:true });
+      D.empresaDoc = D.empresaDoc || {};
+      Object.keys(patch).forEach(function(k){ D.empresaDoc[k] = patch[k]; });
+      var a0 = (D.rows||[])[0] || {};
+      var novo = renderDental(a0, D.rows||[], D);
+      var atual = document.querySelector('.dental-bloco');
+      if (atual && novo){ var tmp = document.createElement('div'); tmp.innerHTML = novo; var el = tmp.querySelector('.dental-bloco'); if (el){ atual.replaceWith(el); } }
+      var st2 = document.getElementById('dentNumStatus'); if (st2) st2.textContent = 'gravado ✓ recalculado';
+    } catch(e){ if (st) st.textContent = 'não consegui gravar: ' + (e && e.message || e); }
+  }
+  window.salvarNumerosDental = salvarNumerosDental;
+
+  /* v105: recalcula as alavancas do "impacto para o financeiro" sem gravar nada */
+  function recalcImpactoDental(){
+    var w = document.getElementById('dentImpacto'); if (!w) return;
+    var folha = +w.dataset.folha||0, repo = +w.dataset.reposicao||0, ebitda = +w.dataset.ebitda||0, custoLiq = +w.dataset.custoliq||0;
+    function gv(id){ var e = document.getElementById(id); var v = e ? parseFloat(String(e.value).replace(',','.')) : NaN; return isFinite(v) ? v : 0; }
+    function money(v){ return (v==null||!isFinite(v)) ? '-' : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+    function sset(id,t){ var e = document.getElementById(id); if (e) e.textContent = t; }
+    var dem = gv('dentImpDemissoes'), absPct = gv('dentImpAbsent')/100, prodPct = gv('dentImpProd')/100;
+    var custoAbs = folha * 0.025;
+    var vDem = dem*repo, vAbs = custoAbs*absPct, vProd = ebitda*prodPct, total = vDem+vAbs+vProd;
+    sset('impDemValor', money(vDem)); sset('impAbsValor', money(vAbs)); sset('impProdValor', money(vProd));
+    sset('impAbsTotal', money(custoAbs)); sset('impTotal', money(total));
+    sset('impVezes', custoLiq>0 ? (total/custoLiq).toFixed(1).replace('.',',')+'×' : '—');
+  }
+  window.recalcImpactoDental = recalcImpactoDental;
 })();
 
 /* ===================================================================
