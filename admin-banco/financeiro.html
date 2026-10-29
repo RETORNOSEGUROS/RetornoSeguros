@@ -3251,6 +3251,10 @@
             <span class="tab-icon">🧭</span>
             <span>O ano que vem</span>
           </button>
+          <button class="tab-btn" data-tab="olhares">
+            <span class="tab-icon">🎭</span>
+            <span>E se eu fosse?</span>
+          </button>
           <button class="tab-btn" data-tab="seguros">
             <span class="tab-icon">🛡️</span>
             <span>Seguros</span>
@@ -3465,6 +3469,9 @@
         </div>
         <div class="tab-content" id="tab-seguros">
           <div id="segurosContent"></div>
+        </div>
+        <div class="tab-content" id="tab-olhares">
+          <div id="olharesContent"></div>
         </div>
         <div class="tab-content" id="tab-socios">
           <div id="sociosContent"></div>
@@ -4873,6 +4880,8 @@ function wireUi(){
         );
       } else if(tabId === "dividas" && CURRENT_ANALYSIS_DATA){
         renderDividasBancarias(CURRENT_ANALYSIS_DATA);
+      } else if(tabId === "olhares" && CURRENT_ANALYSIS_DATA){
+        try{ if (typeof window.renderOlhares === 'function') window.renderOlhares(CURRENT_ANALYSIS_DATA); }catch(eOl){ console.warn('[olhares]', eOl); }
       } else if(tabId === "racional" && CURRENT_ANALYSIS_DATA){
         /* v64: o racional (aba "O ano que vem") — o que cada número revela e o que dá para fazer.
            Corrigido: antes a renderização estava presa ao branch de "dividas", então a aba
@@ -21915,7 +21924,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
 
   /* ---------- agrupamento das abas ---------- */
   var GRUPOS = [
-    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','parecer','contexto','informacoes','glossario'] },
+    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','olhares','parecer','contexto','informacoes','glossario'] },
     { rotulo:'Seguros',    abas:['seguros','socios'] },
     { rotulo:'Crédito',    abas:['capacidade','dividas','defesa','recuperacao'] },
     { rotulo:'Ação',       abas:['planejamento','plano','roteiro'] }
@@ -42817,5 +42826,293 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 })();
 
   </script>
+<script>
+/* ===================================================================
+   v103 — "E SE EU FOSSE?" — seis olhares sobre a mesma empresa
+   Cada papel (auditor, CFO, RH, banco, corretor, consultor) faz as
+   perguntas e aponta o que faria olhando os MESMOS números. Nada é
+   inventado: tudo vem de calcularIndicadores por ano, dos campos do
+   balanço e da análise de pessoa-chave/dental já existentes.
+   Junto, a leitura da série inteira — anos bons e ruins, distorções e
+   tendência — que fica mais rica a cada exercício acrescentado.
+   =================================================================== */
+(function(){
+  'use strict';
+  function n(v){ var x=Number(v); return (v==null||v===''||isNaN(x)||!isFinite(x))?null:x; }
+  function R$(v){ return (v==null||!isFinite(v)) ? '—'
+    : Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function pc(v,c){ return (v==null||!isFinite(v)) ? '—' : (v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+  function vx(v){ return (v==null||!isFinite(v)) ? '—' : v.toFixed(2).replace('.',',')+'x'; }
+  function dias(v){ return (v==null||!isFinite(v)) ? '—' : Math.round(v)+' dias'; }
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function ind(r){ try { return Object.assign({ano:r.ano}, window.calcularIndicadores ? window.calcularIndicadores(r) : {}); } catch(e){ return {ano:r.ano}; } }
+
+  /* ---------- a série: anos bons/ruins, distorções, tendência ---------- */
+  function analisarSerie(IND){
+    if (IND.length < 1) return null;
+    var METR = [
+      { k:'receita',   nome:'Receita',          fmt:R$, bom:'alto' },
+      { k:'ebitda',    nome:'EBITDA',           fmt:R$, bom:'alto' },
+      { k:'margem',    nome:'Margem EBITDA',    fmt:pc, bom:'alto' },
+      { k:'lucroLiq',  nome:'Lucro líquido',    fmt:R$, bom:'alto' },
+      { k:'margemLiq', nome:'Margem líquida',   fmt:pc, bom:'alto' },
+      { k:'roe',       nome:'ROE',              fmt:pc, bom:'alto' },
+      { k:'alav',      nome:'Dívida líq./EBITDA', fmt:vx, bom:'baixo' },
+      { k:'liqCorrente', nome:'Liquidez corrente', fmt:vx, bom:'alto' },
+      { k:'ciclo',     nome:'Ciclo financeiro', fmt:dias, bom:'baixo' },
+      { k:'pl',        nome:'Patrimônio líquido', fmt:R$, bom:'alto' }
+    ];
+    var linhas = METR.map(function(m){
+      var vals = IND.map(function(x){ return { ano:x.ano, v:n(x[m.k]) }; }).filter(function(x){ return x.v != null; });
+      if (!vals.length) return null;
+      var nums = vals.map(function(x){ return x.v; });
+      var media = nums.reduce(function(t,x){ return t+x; },0)/nums.length;
+      var dp = Math.sqrt(nums.reduce(function(t,x){ return t+(x-media)*(x-media); },0)/nums.length);
+      var cv = (media !== 0) ? Math.abs(dp/media) : null;
+      var melhor = vals.slice().sort(function(a,b){ return m.bom==='alto' ? b.v-a.v : a.v-b.v; })[0];
+      var pior   = vals.slice().sort(function(a,b){ return m.bom==='alto' ? a.v-b.v : b.v-a.v; })[0];
+      var prim = vals[0], ult = vals[vals.length-1];
+      var tend = (vals.length >= 2 && prim.v !== 0) ? (ult.v-prim.v)/Math.abs(prim.v) : null;
+      /* distorções: salto ano-a-ano acima de 40% (ou 50% p/ dívida) */
+      var dist = [];
+      for (var i=1;i<vals.length;i++){
+        if (vals[i-1].v === 0) continue;
+        var dvar = (vals[i].v-vals[i-1].v)/Math.abs(vals[i-1].v);
+        var mudancaReal = Math.abs(vals[i].v - vals[i-1].v) >= Math.abs(media) * 0.15;
+        if (Math.abs(dvar) >= 0.40 && mudancaReal) dist.push({ de:vals[i-1].ano, para:vals[i].ano, var:dvar });
+      }
+      return { metrica:m.nome, fmt:m.fmt, bom:m.bom, vals:vals, media:media, cv:cv,
+               melhor:melhor, pior:pior, tendencia:tend, distorcoes:dist };
+    }).filter(Boolean);
+
+    /* anos bons/ruins pela margem EBITDA (o sinal mais limpo de saúde) */
+    var margs = IND.map(function(x){ return { ano:x.ano, v:n(x.margem) }; }).filter(function(x){ return x.v != null; });
+    var medMarg = margs.length ? margs.map(function(x){return x.v;}).sort(function(a,b){return a-b;})[Math.floor(margs.length/2)] : null;
+    var anos = margs.map(function(x){ return { ano:x.ano, margem:x.v, classe: (medMarg!=null && x.v >= medMarg) ? 'bom' : 'ruim' }; });
+
+    return { linhas:linhas, anos:anos, n:IND.length };
+  }
+
+  /* ---------- os seis olhares ---------- */
+  function papeis(IND, rows, D){
+    var A = IND[IND.length-1] || {}, raw = rows[rows.length-1] || {};
+    var S = analisarSerie(IND);
+    var out = [];
+    function add(lista, tipo, texto){ if (texto) lista.push({ tipo:tipo, texto:texto }); }
+    function tendDe(nome){ var l = S && S.linhas.filter(function(x){ return x.metrica===nome; })[0]; return l ? l.tendencia : null; }
+
+    /* === AUDITOR === */
+    (function(){
+      var it = [];
+      var anosPiso = [];
+      IND.forEach(function(x){
+        var r = rows[IND.indexOf(x)] || {};
+        var at = n(r.ativoTotal), pt = n(r.passivoTotal) != null ? n(r.passivoTotal) : (n(r.passivoCirculante)+n(r.passivoNaoCirculante)), pl = n(r.patrimonioLiquido)!=null?n(r.patrimonioLiquido):n(r.pl);
+        if (at && pt != null && pl != null && Math.abs((pt+pl)-at) > at*0.01)
+          add(it,'alerta','O balanço de '+x.ano+' não fecha: ativo '+R$(at)+' contra passivo+PL '+R$(pt+pl)+'. Pedir a conciliação antes de usar qualquer índice daquele ano.');
+        var lair = n(r.lucroAntesIR), ircs = n(r.ircs), ll = n(r.lucroLiquido)!=null?n(r.lucroLiquido):n(r.lucroLiq);
+        if (lair!=null && ircs!=null && ll!=null && Math.abs((lair-ircs)-ll) > Math.max(Math.abs(lair)*0.01,1))
+          add(it,'alerta','A DRE de '+x.ano+' não fecha no lucro líquido: LAIR − IR dá '+R$(lair-ircs)+', mas o lucro lançado é '+R$(ll)+'. Conferir o sinal do imposto.');
+        if (r.ebitdaPiso) anosPiso.push(x.ano);
+      });
+      if (anosPiso.length) add(it,'pergunta','A depreciação não foi aberta em '+(anosPiso.length>=3?'todos os '+anosPiso.length+' anos':anosPiso.join(anosPiso.length===2?' e ':', '))+' (o EBITDA está no piso, igual ao EBIT). A nota de D&A existe? Sem ela o EBITDA real é maior e a alavancagem, menor.');
+      var df = n(A.despFin), db = n(A.dividaBruta);
+      if (df > 0 && A.receita > 0 && df > A.receita*0.005 && !(db>0))
+        add(it,'alerta','Despesa financeira de '+R$(df)+' sem dívida que a explique no balanço. Pode ser desconto de duplicata, tarifa ou câmbio — pedir a abertura, não tratar como juro de empréstimo.');
+      /* salto de margem bruta entre anos */
+      for (var i=1;i<IND.length;i++){ var m0=n(IND[i-1].margemBruta), m1=n(IND[i].margemBruta);
+        if (m0!=null && m1!=null && Math.abs(m1-m0) > 0.10)
+          add(it,'pergunta','A margem bruta foi de '+pc(m0)+' ('+IND[i-1].ano+') para '+pc(m1)+' ('+IND[i].ano+'). Mudança real de preço/custo, ou reclassificação entre CMV e despesas?'); }
+      if (n(raw.partesRelacionadas) > 0)
+        add(it,'pergunta','Há '+R$(n(raw.partesRelacionadas))+' em mútuo com sócios ou empresas ligadas. Quais as condições, o prazo e a recuperabilidade? É o item que a auditoria mais questiona.');
+      if (!raw.auditado) add(it,'pergunta','Os balanços não constam como auditados externamente. Quem assina? Para crédito e seguro-garantia, auditoria muda a confiança do número.');
+      out.push({ id:'auditor', nome:'Se eu fosse o auditor', icone:'🔍', cor:'#475569', foco:'integridade do número e divergências', itens: it });
+    })();
+
+    /* === CFO === */
+    (function(){
+      var it = [];
+      if (n(A.alav) != null && n(A.alav) > 2.5)
+        add(it,'sugestao','A dívida líquida está em '+vx(A.alav)+' o EBITDA — acima do confortável de bancos (2,5x). Alongar o perfil (trocar curto por longo) e crescer o EBITDA derrubam o índice e a taxa.');
+      if (n(A.ciclo) != null && n(A.ciclo) > 60){
+        var cmv = n(A.cmv) || (n(A.receita)?n(A.receita)*0.7:null);
+        var libera = cmv ? cmv/365*10 : null;
+        add(it,'sugestao','O ciclo financeiro é de '+dias(A.ciclo)+'. Cada 10 dias a menos de estoque liberam '+(libera?R$(libera):'caixa')+' — é a alavanca de giro mais rápida.');
+      }
+      if (n(A.liqCorrente) != null && n(A.liqCorrente) < 1.2)
+        add(it,'alerta','Liquidez corrente em '+vx(A.liqCorrente)+': o circulante mal cobre o passivo de curto prazo. Antes de investir, reforçar capital de giro.');
+      var tMarg = tendDe('Margem EBITDA');
+      if (tMarg != null && tMarg < -0.05)
+        add(it,'pergunta','A margem EBITDA caiu '+pc(Math.abs(tMarg))+' no período. A pressão veio de preço, de custo (CMV) ou de despesa fixa? A resposta muda o remédio.');
+      var df = n(A.despFin), eb = n(A.ebitda);
+      if (df > 0 && eb > 0 && df > eb*0.30)
+        add(it,'sugestao','O resultado financeiro consome '+pc(df/eb)+' do EBITDA. Renegociar ou portar a dívida mais cara é ganho direto de lucro — a empresa já prova no balanço que consegue taxa menor em parte dela.');
+      if (n(raw.ativoNaoOperacional) > 0 || n(raw.bensForaOperacao) > 0){
+        var fora = (n(raw.ativoNaoOperacional)||0)+(n(raw.bensForaOperacao)||0);
+        add(it,'sugestao',R$(fora)+' estão parados fora da operação (imóvel de investimento, participação, terreno). É caixa potencial que não rende para o negócio.');
+      }
+      add(it,'pergunta','Qual a meta de margem e de alavancagem para o ano que vem? Sem meta, não há como saber se o resultado foi bom ou só não foi ruim.');
+      out.push({ id:'cfo', nome:'Se eu fosse o CFO', icone:'📊', cor:'#1d4ed8', foco:'melhorar os índices', itens: it });
+    })();
+
+    /* === RH === */
+    (function(){
+      var it = [];
+      var func = n(A.funcionarios) || n(raw.funcionarios) || n(raw.qtdFuncionarios);
+      var folha = n(raw.folhaAnual), rec = n(A.receita);
+      if (func && rec) add(it,'pergunta','A empresa fatura '+R$(rec/func)+' por funcionário ('+func+' pessoas). Como isso se compara ao ano passado e ao setor? Produtividade por cabeça é o número que o RH defende na mesa.');
+      if (folha && rec) add(it,'sugestao','A folha é '+pc(folha/rec)+' da receita. Acompanhar essa relação ano a ano mostra se a estrutura de pessoal cresce junto, à frente ou atrás do faturamento.');
+      var resc = n(raw.rescisoes), adm = n(raw.admissoes);
+      if (resc && folha && resc/folha > 0.08)
+        add(it,'alerta','As rescisões do ano somam '+R$(resc)+' — '+pc(resc/folha)+' da folha. Rotatividade alta: um plano de retenção (dental, vida em grupo) costuma custar uma fração disso e segura a gente treinada.');
+      var ferias = n(raw.provisaoFerias13) || n(raw.provisaoFerias);
+      if (ferias && folha && ferias/folha > 0.18)
+        add(it,'alerta','A provisão de férias e 13º é '+pc(ferias/folha)+' da folha (acima de 18%). Equipe no limite de descanso acumulado — vira passivo e risco trabalhista de uma vez.');
+      if (!n(raw.beneficioSaude) && func) add(it,'pergunta','Não há plano de saúde lançado para '+func+' funcionários. É escolha, ou só não está no balanço? Benefício no lucro real ainda deduz imposto.');
+      if (n(raw.processosTrabalhistas) > 0)
+        add(it,'pergunta',R$(n(raw.processosTrabalhistas))+' em processos trabalhistas'+(func?' para '+func+' funcionários':'')+'. Quanto é passivo provável e quanto é pedido do autor? E a causa raiz se repete?');
+      add(it,'pergunta','Qual é o turnover real (desligados ÷ quadro médio)? É o número que liga custo de rescisão, clima e produtividade — e quase nunca está no balanço.');
+      out.push({ id:'rh', nome:'Se eu fosse o RH', icone:'👥', cor:'#0e7490', foco:'gestão de pessoas e rotatividade', itens: it });
+    })();
+
+    /* === BANCO === */
+    (function(){
+      var it = [];
+      if (n(A.alav) != null)
+        add(it, n(A.alav) > 3 ? 'alerta' : 'pergunta', 'Dívida líquida/EBITDA em '+vx(A.alav)+(n(A.alav)>3?' — acima do covenant usual de 3x. A rolagem fica cara e condicionada.':' — dentro do que a maioria dos bancos aceita em covenant (até 3x).'));
+      var cob = n(A.cobertura) || n(A.coberturaJuros);
+      if (cob != null) add(it,'pergunta','O EBITDA cobre '+vx(cob)+' as despesas financeiras. Abaixo de 2x o banco começa a pedir garantia real ou aval reforçado.');
+      if (n(A.liqCorrente) != null) add(it,'pergunta','Liquidez corrente '+vx(A.liqCorrente)+'. O que no circulante é de verdade conversível em 12 meses? Estoque parado e duplicata vencida não contam.');
+      var db = n(A.dividaBruta), eb = n(A.ebitda);
+      if (eb > 0 && (db==null || db===0))
+        add(it,'sugestao','Sem dívida bancária relevante e com EBITDA de '+R$(eb)+' — a empresa tem folga para tomar crédito barato se precisar investir. Isso é poder de negociação.');
+      add(it,'pergunta','Quanto a empresa suporta de dívida nova sem furar o DSCR de 1,20? E as garantias que já estão dadas cobrem qual saldo? (a nota de empréstimos abre operação por operação).');
+      add(it,'pergunta','A concentração em um único credor passa de 60%? Dependência de um banco tira poder na hora de renovar o limite.');
+      out.push({ id:'banco', nome:'Se eu fosse o banco', icone:'🏦', cor:'#047857', foco:'risco de crédito e covenants', itens: it });
+    })();
+
+    /* === CORRETOR DE SEGUROS === */
+    (function(){
+      var it = [];
+      var pk = null; try { if (window.analisarPessoaChave) pk = window.analisarPessoaChave(raw, rows, D); } catch(e){}
+      if (pk && !pk.semDados && pk.cobertura && pk.cobertura.capitalTotal)
+        add(it,'sugestao','A sucessão societária exige, pela lei, pagar os haveres aos herdeiros em 90 dias e em dinheiro: cerca de '+R$(pk.cobertura.capitalTotal)+'. Capital de morte com a empresa como beneficiária paga isso fora do inventário (art. 794), sem tocar no caixa.');
+      var vr = (n(raw.valorImoveis)||0)+(n(raw.valorMaquinas)||0)+(n(raw.valorInstalacoes)||0)+(n(raw.valorInformatica)||0)+(n(raw.valorFerramentas)||0)+(n(raw.valorMoveis)||0)+(n(raw.estoques)||0);
+      if (vr > 0) add(it,'sugestao','O valor em risco patrimonial (imobilizado + estoque) é de pelo menos '+R$(vr)+'. O LMI do empresarial cobre isso? Pagar prêmio muito abaixo de 0,22% disso costuma significar rateio no sinistro.');
+      var lair = n(raw.lucroAntesIR), fixas = n(raw.despesasFixas) || (n(raw.despesasAdm)||0);
+      if (lair != null && fixas > 0) add(it,'sugestao','Lucros cessantes: LAIR mais despesas fixas dão '+R$(lair+fixas)+' por ano. Parado 6 meses, a folha e o banco continuam — o patrimonial reconstrói o prédio, mas não paga isso.');
+      if (n(raw.processosTrabalhistas) > 0 || n(raw.processosTributarios) > 0)
+        add(it,'sugestao','Com contingências relevantes, o administrador responde com o patrimônio pessoal na desconsideração da PJ. D&O com bloqueio de bens deixa de ser luxo e vira condição de aceitar o cargo.');
+      add(it,'pergunta','Qual é hoje a maior exposição descoberta? É nela que a conversa começa — não na apólice mais barata.');
+      out.push({ id:'corretor', nome:'Se eu fosse o corretor de seguros', icone:'🛡️', cor:'#b45309', foco:'o risco que está descoberto', itens: it });
+    })();
+
+    /* === CONSULTOR === */
+    (function(){
+      var it = [];
+      var roic = n(A.roic), roe = n(A.roe);
+      if (roic != null) add(it, roic < 0.10 ? 'alerta' : 'sugestao', 'O ROIC é '+pc(roic)+'. Acima do custo de capital (CDI + prêmio de risco, hoje perto de 18%) a empresa cria valor; abaixo, destrói — cresce faturando e empobrecendo.');
+      var tRec = tendDe('Receita'), tMarg = tendDe('Margem EBITDA');
+      if (tRec != null && tMarg != null){
+        if (tRec > 0.05 && tMarg < 0)
+          add(it,'alerta','A receita cresceu '+pc(tRec)+' no período, mas a margem EBITDA caiu. É crescimento comprado a preço: volume subindo e rentabilidade descendo. Para onde isso leva?');
+        else if (tRec > 0.05 && tMarg >= 0)
+          add(it,'sugestao','Receita '+pc(tRec)+' para cima com margem mantida ou melhor — crescimento saudável. A pergunta vira: dá para financiar o próximo salto sem estourar o giro?');
+      }
+      if (S && S.anos.length >= 3){
+        var bons = S.anos.filter(function(x){return x.classe==='bom';}).map(function(x){return x.ano;});
+        var ruins = S.anos.filter(function(x){return x.classe==='ruim';}).map(function(x){return x.ano;});
+        add(it,'pergunta','Olhando a série, os anos fortes ('+(bons.join(', ')||'—')+') e fracos ('+(ruins.join(', ')||'—')+'): o que explica a diferença — mercado, um cliente, câmbio, uma decisão? É o que separa sorte de gestão.');
+      }
+      add(it,'pergunta','Qual é a dependência que mais assusta: um cliente, um fornecedor, um produto, uma pessoa? O consultor começa por onde a empresa quebraria se aquilo sumisse.');
+      out.push({ id:'consultor', nome:'Se eu fosse o consultor', icone:'🧠', cor:'#6d28d9', foco:'estratégia e criação de valor', itens: it });
+    })();
+
+    return out;
+  }
+
+  function analisarOlhares(rows, D){
+    rows = (rows||[]).slice().sort(function(a,b){ return Number(a.ano)-Number(b.ano); });
+    if (!rows.length) return { vazio:true };
+    var IND = rows.map(ind);
+    return { vazio:false, serie: analisarSerie(IND), papeis: papeis(IND, rows, D), anos: IND.map(function(x){return x.ano;}) };
+  }
+
+  /* ---------- a tela ---------- */
+  var CORTIPO = { alerta:{c:'#b91c1c',f:'#fef2f2',b:'#fecaca',i:'⚠'}, pergunta:{c:'#1e40af',f:'#eff6ff',b:'#bfdbfe',i:'?'}, sugestao:{c:'#166534',f:'#f0fdf4',b:'#bbf7d0',i:'→'} };
+  function renderOlhares(D){
+    var alvo = document.getElementById('olharesContent'); if (!alvo) return;
+    D = D || window.CURRENT_ANALYSIS_DATA;
+    if (!D || !D.rows || !D.rows.length){ alvo.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b">Carregue pelo menos um exercício.</div>'; return; }
+    var O = analisarOlhares(D.rows, D);
+    if (O.vazio){ alvo.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b">Sem exercícios para analisar.</div>'; return; }
+
+    var h = '<div style="background:linear-gradient(135deg,#0f172a,#312e81);border-radius:13px;padding:20px 22px;color:#fff;margin-bottom:18px">'
+      + '<div style="font-size:19px;font-weight:800">E se eu fosse…</div>'
+      + '<div style="font-size:12.5px;opacity:.9;line-height:1.7;margin-top:5px">A mesma empresa, seis olhares. Cada papel faz as perguntas e aponta o que faria — tudo a partir dos números que já estão aqui ('+O.anos.join(', ')+'). Clique em cada um para abrir.</div></div>';
+
+    /* a série primeiro, se houver 2+ anos */
+    if (O.serie && O.anos.length >= 2){
+      h += '<details open class="socio-cartao" style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;margin-bottom:14px">'
+        + '<summary style="cursor:pointer;outline:none;font-size:15px;font-weight:800;color:#0f172a"><span class="soc-chevron" style="color:#6d28d9;margin-right:6px">▾</span>A série: anos bons, anos ruins e as distorções ('+O.serie.n+' exercícios)</summary>'
+        + '<div style="margin-top:12px">';
+      /* anos bons/ruins */
+      if (O.serie.anos.length){
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+          + O.serie.anos.map(function(x){ var bom=x.classe==='bom';
+            return '<div style="border:1px solid '+(bom?'#bbf7d0':'#fecaca')+';background:'+(bom?'#f0fdf4':'#fef2f2')+';border-radius:9px;padding:7px 12px;font-size:12.5px">'
+              + '<b>'+x.ano+'</b> · margem EBITDA '+pc(x.margem)+' <span style="font-weight:700;color:'+(bom?'#166534':'#b91c1c')+'">'+(bom?'ano forte':'ano fraco')+'</span></div>'; }).join('')
+          + '</div>';
+      }
+      /* tabela da série */
+      h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+        + '<thead><tr style="color:#64748b;text-align:left"><th style="padding:6px 8px;font-size:11px;text-transform:uppercase">Indicador</th>'
+        + O.anos.map(function(a){ return '<th style="padding:6px 8px;text-align:right;font-size:11px">'+a+'</th>'; }).join('')
+        + '<th style="padding:6px 8px;font-size:11px">Melhor</th><th style="padding:6px 8px;font-size:11px">Pior</th><th style="padding:6px 8px;font-size:11px">No período</th></tr></thead><tbody>';
+      O.serie.linhas.forEach(function(l){
+        var porAno = {}; l.vals.forEach(function(v){ porAno[v.ano]=v.v; });
+        h += '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 8px;font-weight:600">'+esc(l.metrica)
+          + (l.distorcoes.length ? ' <span title="salto forte entre anos" style="color:#b45309">⚡</span>' : '') + '</td>'
+          + O.anos.map(function(a){ return '<td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">'+(porAno[a]!=null?l.fmt(porAno[a]):'—')+'</td>'; }).join('')
+          + '<td style="padding:6px 8px;color:#166534">'+l.melhor.ano+'</td><td style="padding:6px 8px;color:#b91c1c">'+l.pior.ano+'</td>'
+          + '<td style="padding:6px 8px">'+(l.tendencia==null?'—':(l.tendencia>0?'<span style="color:#166534">▲ ':'<span style="color:#b91c1c">▼ ')+pc(Math.abs(l.tendencia))+'</span>')+'</td></tr>';
+      });
+      h += '</tbody></table></div>';
+      /* distorções em texto */
+      var dists = [];
+      O.serie.linhas.forEach(function(l){ l.distorcoes.forEach(function(d){
+        dists.push(esc(l.metrica)+' saltou '+(d.var>0?'+':'')+pc(d.var)+' de '+d.de+' para '+d.para); }); });
+      if (dists.length) h += '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:11px 13px;margin-top:12px;font-size:12.5px;color:#9a3412;line-height:1.7"><b>⚡ Distorções a explicar:</b><br>'+dists.map(function(d){return '· '+d;}).join('<br>')+'</div>';
+      h += '<div style="font-size:11.5px;color:#64748b;margin-top:10px;line-height:1.6">Quanto mais anos você acumular, mais nítida fica a diferença entre o que foi tendência e o que foi um ano fora da curva. Hoje são '+O.serie.n+'.</div>';
+      h += '</div></details>';
+    }
+
+    /* os seis papéis */
+    O.papeis.forEach(function(p){
+      var cont = {alerta:0,pergunta:0,sugestao:0}; p.itens.forEach(function(x){ cont[x.tipo]++; });
+      var resumo = [cont.alerta?cont.alerta+' alerta'+(cont.alerta>1?'s':''):null, cont.pergunta?cont.pergunta+' pergunta'+(cont.pergunta>1?'s':''):null, cont.sugestao?cont.sugestao+' sugest'+(cont.sugestao>1?'ões':'ão'):null].filter(Boolean).join(' · ');
+      h += '<details class="socio-cartao" style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;margin-bottom:12px">'
+        + '<summary style="cursor:pointer;outline:none;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">'
+        + '<div style="font-size:15.5px;font-weight:800;color:'+p.cor+'"><span class="soc-chevron" style="margin-right:6px">▸</span>'+p.icone+' '+esc(p.nome)
+        + '<span style="font-size:11.5px;font-weight:600;color:#64748b;margin-left:6px">— '+esc(p.foco)+'</span></div>'
+        + '<div style="font-size:11.5px;color:#64748b">'+esc(resumo||'nada a apontar')+'</div></summary>'
+        + '<div style="margin-top:12px;display:grid;gap:7px">';
+      if (!p.itens.length) h += '<div style="font-size:12.5px;color:#64748b">Com os dados de hoje, este olhar não tem nada relevante a apontar. Mais exercícios ou os documentos (folha, contrato, apólices) destravam as perguntas.</div>';
+      p.itens.forEach(function(x){ var C = CORTIPO[x.tipo];
+        h += '<div style="background:'+C.f+';border:1px solid '+C.b+';border-radius:9px;padding:9px 12px;font-size:12.5px;line-height:1.7;color:#334155">'
+          + '<span style="font-weight:800;color:'+C.c+';margin-right:5px">'+C.i+'</span>'+esc(x.texto)+'</div>';
+      });
+      h += '</div></details>';
+    });
+
+    h += '<div style="font-size:11.5px;color:#64748b;margin-top:6px;line-height:1.6">As perguntas nascem dos seus números — não são genéricas. O que não acende é porque o dado não veio: suba a folha, o contrato ou as apólices e novos olhares se abrem.</div>';
+    alvo.innerHTML = h;
+  }
+
+  window.analisarOlhares = analisarOlhares;
+  window.renderOlhares = renderOlhares;
+})();
+</script>
+
 </body>
 </html>
