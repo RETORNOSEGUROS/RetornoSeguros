@@ -37778,40 +37778,75 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       return projetar(vals);
     }
 
-    var receita = proj('receita') || proj('receitaLiquida');
-    var folha   = proj('folhaAnual');
-    var lucro   = proj('lucroLiq') || proj('lucroLiquido');
-    var benef   = proj('beneficiosAnual');
-    var encarg  = proj('encargosFolha');
-
-    /* vidas projetadas: pela folha projetada, ou pela média de headcount */
-    var vidasHoje = vidasDoAno(serie[serie.length-1], P, salarioDoSetor, setor);
-    var funcProj = vidasHoje.func;
-    if (folha && folha.valor > 0){
-      var base = salarioDoSetor(setor).valor;
-      funcProj = Math.max(1, Math.round(folha.valor / (base * P.salariosAno)));
+    /* v106: projeção por CRESCIMENTO MÉDIO (não por reta de mínimos quadrados,
+       que dispara). Receita e folha crescem pela média das variações ano a ano,
+       com trava para não explodir. O lucro é amarrado à receita pela margem
+       líquida média — assim, se a receita sobe e a empresa historicamente dá
+       lucro, o lucro projetado não cai no negativo. */
+    function serieCampo(campo){ return serie.map(function(r){ return n(r[campo]); }); }
+    function taxaMediaYoY(vals){
+      var taxas = [];
+      for (var i = 1; i < vals.length; i++){ if (vals[i-1] > 0) taxas.push(vals[i]/vals[i-1] - 1); }
+      if (!taxas.length) return null;
+      return Math.max(-0.30, Math.min(0.50, media(taxas)));   /* trava: ±30%/+50% */
     }
-    var titularesProj = funcProj + vidasHoje.dirigentes;
+    function crescer(campo){
+      var brutos = serieCampo(campo);
+      if (!brutos.some(function(v){ return v; })) return null;
+      var ult = brutos[brutos.length-1];
+      var t = taxaMediaYoY(brutos);
+      if (t == null || !ult) return { valor: ult, taxa: 0, metodo: 'repete o último exercício' };
+      return { valor: ult*(1+t), taxa: t,
+               metodo: 'crescimento médio de ' + (t>=0?'+':'') + (t*100).toFixed(1).replace('.',',') + '% ao ano' };
+    }
+
+    var receita = crescer('receita') || crescer('receitaLiquida');
+    var folha   = crescer('folhaAnual');
+    var benef   = crescer('beneficiosAnual');
+    var encarg  = crescer('encargosFolha');
+
+    var margens = [];
+    serie.forEach(function(r){
+      var rc = n(r.receita) || n(r.receitaLiquida), lu = n(r.lucroLiq) || n(r.lucroLiquido);
+      if (rc > 0) margens.push(lu/rc);
+    });
+    var margemMedia = margens.length ? media(margens) : null;
+    var lucro = (receita && margemMedia != null)
+      ? { valor: receita.valor * margemMedia,
+          metodo: 'receita × margem líquida média de ' + (margemMedia*100).toFixed(1).replace('.',',') + '%',
+          margem: margemMedia }
+      : null;
+
+    /* vidas: usa o quadro informado (manual vence), nunca re-estima para zero */
+    var empDoc = (D && D.empresaDoc) || {};
+    var ultimo = serie[serie.length-1];
+    var dirig = vidasDoAno(ultimo, P, salarioDoSetor, setor).dirigentes;
+    var funcBase = n(empDoc.funcionariosManual) || n(ultimo.funcionarios) || n(empDoc.funcionarios);
+    if (!funcBase){
+      var fh = (folha && folha.valor) || n(ultimo.folhaAnual) || n(empDoc.folhaAnualManual);
+      if (fh > 0){ var baseSal = salarioDoSetor(setor).valor; funcBase = Math.max(1, Math.round(fh/(baseSal*P.salariosAno))); }
+    }
+    var funcProj = funcBase || 0;
+    var semQuadro = !funcProj;
+    var titularesProj = funcProj ? funcProj + dirig : 0;
 
     var custo = titularesProj * P.ticketVida * P.mesesAno;
-    var inf = (typeof window.inferirRegime === 'function') ? window.inferirRegime(serie[serie.length-1]) : null;
+    var inf = (typeof window.inferirRegime === 'function') ? window.inferirRegime(ultimo) : null;
     var lucroReal = inf ? inf.lucroReal : false;
     var teraLucro = lucro ? lucro.valor > 0 : null;
     var devolve = (lucroReal && teraLucro) ? custo * P.aliquotaIRPJCSLL : 0;
     var liquido = custo - devolve;
-
     var folhaTotalProj = (folha?folha.valor:0) + (encarg?encarg.valor:0) + (benef?benef.valor:0);
 
     return {
       ano: proximoAno,
-      receita: receita, folha: folha, lucro: lucro, beneficios: benef,
-      funcionarios: funcProj, dirigentes: vidasHoje.dirigentes, titulares: titularesProj,
-      variacaoHeadcount: funcProj - vidasHoje.func,
+      receita: receita, folha: folha, lucro: lucro, beneficios: benef, margemMedia: margemMedia,
+      funcionarios: funcProj, dirigentes: dirig, titulares: titularesProj, semQuadro: semQuadro,
+      variacaoHeadcount: 0,
       custo: custo, devolve: devolve, liquido: liquido, lucroReal: lucroReal, teraLucro: teraLucro,
-      pesoFolha: folhaTotalProj ? custo/folhaTotalProj : null,
-      pesoReceita: (receita && receita.valor) ? custo/receita.valor : null,
+      pesoFolha: folhaTotalProj ? liquido/folhaTotalProj : null,
+      pesoReceita: (receita && receita.valor) ? liquido/receita.valor : null,
       pesoLucro: (lucro && lucro.valor > 0) ? liquido/lucro.valor : null,
-      lucroDepois: lucro ? lucro.valor - liquido : null,
       base: serie.length + (serie.length===1?' exercício':' exercícios')
     };
   }
@@ -38204,37 +38239,39 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       h += '</div>';
     }
 
-    if (PJ){
+    if (PJ && PJ.semQuadro){
       h += secao('6. O ano que vem, com o plano dentro',
-        'Receita, folha e lucro projetados pela ' + esc((PJ.receita && PJ.receita.metodo) || 'série') + ' — '
-        + 'e o plano colocado nesse cenário em vez de discutido solto.');
+        'Para projetar as vidas e o custo do próximo ano, o sistema precisa do número de funcionários.');
+      h += '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:13px 16px; font-size:12.5px; color:#92400e; line-height:1.7">'
+        + 'Esta empresa não trouxe o quadro de funcionários nem a folha nos exercícios, então a projeção das vidas ficaria em zero. '
+        + 'Informe o número de funcionários no Raio-X (card "Quadro e folha desta empresa") e esta seção se monta sozinha.</div>';
+    } else if (PJ){
+      h += secao('6. O ano que vem, com o plano dentro',
+        'Receita e folha projetadas pelo <b>crescimento médio</b> da série; o lucro vem amarrado à receita pela <b>margem média</b> — '
+        + 'não é uma reta solta que dispara ou cai no negativo. O plano entra nesse cenário em vez de discutido no ar.');
       h += '<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px 16px">'
         + '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:11px; margin-bottom:12px">'
         + (PJ.receita ? tile('Receita projetada ' + PJ.ano, R$(PJ.receita.valor), esc(PJ.receita.metodo)) : '')
-        + (PJ.folha ? tile('Folha projetada', R$(PJ.folha.valor),
-            (PJ.variacaoHeadcount > 0 ? '+' : '') + PJ.variacaoHeadcount + ' no quadro') : '')
+        + (PJ.folha ? tile('Folha projetada', R$(PJ.folha.valor), esc(PJ.folha.metodo)) : '')
         + tile('Vidas no plano', String(PJ.titulares),
             PJ.funcionarios + ' funcionários + ' + PJ.dirigentes + ' dirigente(s)')
         + (PJ.lucro ? tile('Lucro projetado', R$(PJ.lucro.valor),
-            PJ.teraLucro ? 'há base para a devolução de 34%' : 'sem lucro, sem devolução',
+            esc(PJ.lucro.metodo),
             PJ.teraLucro ? '#059669' : '#b45309') : '')
         + '</div>'
         + '<table style="width:100%; border-collapse:collapse; font-size:12.5px">'
-        + '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Plano em ' + PJ.ano + '</td>'
+        + '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Plano em ' + PJ.ano + ' (' + PJ.titulares + ' vidas)</td>'
         +   '<td style="padding:6px 0; text-align:right; color:#0f172a; font-weight:700">' + R$(PJ.custo) + '</td></tr>'
-        + (PJ.devolve ? '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Devolução de IRPJ e CSLL</td>'
+        + (PJ.devolve ? '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Devolução de IRPJ e CSLL (34%)</td>'
         +   '<td style="padding:6px 0; text-align:right; color:#059669; font-weight:700">− ' + R$(PJ.devolve) + '</td></tr>' : '')
         + '<tr style="border-top:1px solid #e2e8f0"><td style="padding:7px 0; color:#0f172a; font-weight:800">Custo real no ano</td>'
         +   '<td style="padding:7px 0; text-align:right; color:#0f766e; font-weight:800">' + R$(PJ.liquido) + '</td></tr>'
-        + (PJ.lucroDepois != null ? '<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 0; color:#334155">Lucro projetado depois do plano</td>'
-        +   '<td style="padding:6px 0; text-align:right; color:#0f172a; font-weight:700">' + R$(PJ.lucroDepois) + '</td></tr>' : '')
         + '</table>'
         + '<div style="font-size:12.5px; color:#475569; margin-top:11px; line-height:1.75">'
-        + 'No cenário projetado o plano consome '
-        + (PJ.pesoLucro != null ? '<b>' + pc(PJ.pesoLucro,1) + '</b> do lucro' : 'uma fração do resultado')
-        + (PJ.pesoReceita != null ? ' e <b>' + pc(PJ.pesoReceita,3) + '</b> da receita' : '')
-        + '. Projeção serve para dimensionar a decisão, não para prometer resultado — '
-        + 'ela repete o que a empresa vem fazendo, e a empresa pode mudar.'
+        + 'Mesmo no ano que vem, o custo real do plano é '
+        + (PJ.pesoReceita != null ? '<b>' + pc(PJ.pesoReceita,3) + '</b> da receita projetada' : 'uma fração da receita')
+        + (PJ.pesoLucro != null ? ' e <b>' + pc(PJ.pesoLucro,1) + '</b> do lucro projetado' : '')
+        + ' — cabe no orçamento. Projeção serve para dimensionar a decisão, não para prometer resultado: ela repete o que a empresa vem fazendo, e a empresa pode mudar.'
         + '</div></div>';
     }
 
