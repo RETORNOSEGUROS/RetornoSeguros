@@ -43692,6 +43692,28 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var letra = p>=85?'AA':p>=70?'A':p>=55?'B':p>=40?'C':'D';
     return { score:p, letra:letra };
   }
+  function letraDe(p){ return p>=85?'AA':p>=70?'A':p>=55?'B':p>=40?'C':'D'; }
+
+  /* risco ano a ano + média (através do ciclo). Um ano ruim por choque não
+     recorrente não é tendência: o comitê normaliza, e a tela mostra os dois. */
+  function riscoSerie(rows){
+    var anos = (rows||[]).slice().filter(function(r){ return r && r.ano != null; })
+      .sort(function(x,y){ return Number(x.ano)-Number(y.ano); });
+    var pontos = anos.map(function(r){
+      var c = (typeof window.calcularIndicadores === 'function') ? window.calcularIndicadores(r) : r;
+      var t = riscoTier(c || r);
+      return { ano:Number(r.ano), score:t.score, letra:t.letra };
+    }).filter(function(x){ return isFinite(x.score); });
+    if(!pontos.length) return null;
+    var ultimo = pontos[pontos.length-1];
+    var media = pontos.reduce(function(s,x){ return s+x.score; },0)/pontos.length;
+    /* média sem o último, para ver "como era antes do tropeço" */
+    var antes = pontos.length>1 ? pontos.slice(0,-1) : pontos;
+    var mediaAntes = antes.reduce(function(s,x){ return s+x.score; },0)/antes.length;
+    var quedaAtipica = pontos.length>=2 && mediaAntes>=60 && (mediaAntes - ultimo.score) >= 20;
+    return { pontos:pontos, ultimo:ultimo, media:media, letraMedia:letraDe(media),
+             mediaAntes:mediaAntes, letraAntes:letraDe(mediaAntes), quedaAtipica:quedaAtipica };
+  }
 
   /* parcela anual (Price) de um empréstimo V, prazo N anos, taxa anual i */
   function parcelaAnual(V,N,i){ if(i<=1e-9) return V/N; var f=Math.pow(1+i,N); return V*i*f/(f-1); }
@@ -43754,7 +43776,14 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       texto:'O ciclo de '+Math.round(ciclo)+' dias prende cerca de '+R$(receita/360*(ciclo-45))+' em giro. Encurtar prazo de estoque/recebimento solta caixa sem tomar dívida.' });
 
     /* ---- piso/risco primeiro: serve de preço de referência para a capacidade ---- */
-    var risco = riscoTier(calc);
+    var riscoUltimo = riscoTier(calc);
+    var serieRisco = riscoSerie(rows);
+    /* qual risco precifica: por padrão o último ano; se o corretor marcar que o
+       último foi atípico (evento não recorrente), usa a média através do ciclo. */
+    var usarMedia = !!(D && D.empresaDoc && D.empresaDoc.riscoUltimoAtipico) && serieRisco && serieRisco.pontos.length>=2;
+    var risco = (usarMedia && serieRisco)
+      ? { score: serieRisco.media, letra: serieRisco.letraMedia, base:'media' }
+      : { score: riscoUltimo.score, letra: riscoUltimo.letra, base:'ultimo' };
     var faixaBase = SPREADS[risco.letra] || SPREADS.C;
     /* porte: empresa grande paga spread menor no mesmo risco (acesso a mercado de
        capitais e relacionamento). Fator aplicado às duas pontas da faixa. */
@@ -43789,7 +43818,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       necessidade:{ alongamento:alongamento, capitalGiro:cgGap, capitalGiroFinanciavel:cgFinanciavel, acimaTeto:cgAcimaTeto, operacional:operacional, espacoDivida:espacoDivida },
       valorRef:valorRef, teto:teto, taxaRefCap:taxaRefCap,
       risco:risco, taxaJustaMin:taxaJustaMin, taxaJustaMax:taxaJustaMax, taxaHoje:taxaHoje, overpay:overpay,
-      fatorPorte:fatorPorte, porteNome:porteNome, mkt:mkt, receita:receita
+      fatorPorte:fatorPorte, porteNome:porteNome, mkt:mkt, receita:receita,
+      riscoUltimo:riscoUltimo, serieRisco:serieRisco, usarMedia:usarMedia
     };
   }
 
@@ -43853,6 +43883,32 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Taxa justa a.a. (crédito limpo)</div><div style="font-size:19px; font-weight:800; color:#0f766e; line-height:1.3; margin-top:3px">'+pc(r.taxaJustaMin)+' a '+pc(r.taxaJustaMax)+'</div><div style="font-size:11px; color:#64748b">CDI + '+pc(r.taxaJustaMin-r.cdi,1)+' a '+pc(r.taxaJustaMax-r.cdi,1)+' · porte '+esc(r.porteNome)+(r.fatorPorte<1?' (−'+Math.round((1-r.fatorPorte)*100)+'% pelo porte)':'')+'</div></div>';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Paga hoje</div><div style="font-size:19px; font-weight:800; color:#0f172a; line-height:1.3; margin-top:3px">'+(r.taxaHoje>0?pc(r.taxaHoje):'não informada')+'</div><div style="font-size:11px; color:#64748b">'+(r.taxaHoje>0?'taxa média das operações':'preencha a taxa média no cadastro')+'</div></div>';
     h+='</div>';
+
+    /* v107d: risco através do ciclo — um ano atípico não é tendência */
+    var SR=r.serieRisco;
+    if(SR && SR.pontos.length>=2){
+      var chips=SR.pontos.map(function(pt){
+        return '<span style="display:inline-block; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:8px; padding:4px 9px; font-size:12px; margin:0 6px 6px 0"><b>'+pt.ano+'</b>: <span style="color:'+(cores[pt.letra]||'#334155')+'; font-weight:700">'+pt.letra+'</span> <span style="color:#94a3b8">'+Math.round(pt.score)+'</span></span>';
+      }).join('');
+      h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:13px 15px; margin:8px 0 6px">'
+        + '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:7px">'
+        +   '<div style="font-size:12.5px; font-weight:700; color:#0f172a">Risco ano a ano · média dos ' + SR.pontos.length + ' anos: <span style="color:'+(cores[SR.letraMedia]||'#334155')+'">'+SR.letraMedia+'</span> ('+Math.round(SR.media)+')</div>'
+        +   '<div style="font-size:11.5px; color:#64748b">precificando por: <b>'+(r.usarMedia?'média do ciclo':'último ano')+'</b></div>'
+        + '</div>'
+        + '<div>'+chips+'</div>';
+      if(SR.quedaAtipica){
+        h+='<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:9px; padding:10px 13px; margin-top:4px; font-size:12.5px; color:#92400e; line-height:1.7">'
+          + '<b>O último ano caiu de ' + SR.letraAntes + ' (' + Math.round(SR.mediaAntes) + ') para ' + SR.ultimo.letra + ' (' + Math.round(SR.ultimo.score) + ') — é um degrau, não uma ladeira.</b> '
+          + 'Empresa que foi sólida por anos e tropeçou num exercício por um evento identificável (custo que disparou e não foi repassado, por exemplo) não é a mesma coisa que empresa em declínio. '
+          + 'O comitê de crédito faz exatamente isso: <b>normaliza o não recorrente</b>. Marque abaixo se o último ano foi atípico — o preço passa a sair da média do ciclo, e você leva a causa documentada ao gerente.</div>';
+      }
+      h+='<div style="margin-top:9px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">'
+        + '<button class="btn" style="font-size:12px; padding:6px 12px; border:1px solid #cbd5e1; border-radius:8px; background:'+(r.usarMedia?'#ecfdf5':'#fff')+'; cursor:pointer" onclick="marcarUltimoAtipico('+(r.usarMedia?'false':'true')+')">'
+        +   (r.usarMedia?'✓ último ano marcado como atípico — usando a média':'Marcar último ano como atípico (usar a média)')+'</button>'
+        + '<span id="riscoBaseStatus" style="font-size:12px; color:#64748b"></span></div>'
+        + '<div style="font-size:11px; color:#94a3b8; margin-top:6px; line-height:1.6">Use com honestidade: só marque quando a queda tem causa clara e não recorrente. Deterioração estrutural (margem caindo há anos, alavancagem subindo) não é atípica — aí o último ano é o certo.</div>';
+      h+='</div>';
+    }
     /* âncoras de mercado publicadas pelo BC (painel) */
     if(r.mkt && (r.mkt.livre||r.mkt.direcionado)){
       h+='<div style="font-size:11.5px; color:#475569; margin:8px 0 2px; line-height:1.65; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:9px 12px">'
@@ -43877,6 +43933,20 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     return h;
   }
 
+  async function marcarUltimoAtipico(flag){
+    var D = window.CURRENT_ANALYSIS_DATA;
+    var st = document.getElementById('riscoBaseStatus');
+    if(!D || !D.empresaId){ if(st) st.textContent=' abra uma empresa salva para marcar.'; return; }
+    if(st) st.textContent=' gravando…';
+    try{
+      if(typeof db==='undefined') throw new Error('banco indisponível');
+      await db.collection('empresas').doc(D.empresaId).set({ riscoUltimoAtipico: !!flag }, {merge:true});
+      D.empresaDoc = D.empresaDoc || {}; D.empresaDoc.riscoUltimoAtipico = !!flag;
+      if(typeof window.renderPlanoRecuperacao==='function' && document.getElementById('recuperacaoContent')) window.renderPlanoRecuperacao(D);
+      if(typeof window.renderDefesaCredito==='function' && document.getElementById('defesaCreditoContent')) window.renderDefesaCredito(D);
+    }catch(e){ if(st) st.textContent=' não consegui gravar: '+(e&&e.message||e); }
+  }
+  window.marcarUltimoAtipico = marcarUltimoAtipico;
   window.analisarCreditoPreco = analisarCreditoPreco;
   window.renderCreditoPreco = renderCreditoPreco;
 })();
