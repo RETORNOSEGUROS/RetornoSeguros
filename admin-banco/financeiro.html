@@ -43677,7 +43677,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   var ALIQ_IR    = 0.34;      /* lucro real */
   var DSCR_ALVO  = 1.3;       /* folga de cobertura do serviço da dívida */
   var TETO_ALAV  = 3.0;       /* teto prudente DL/EBITDA */
-  var SPREADS = { AA:[0.015,0.03], A:[0.03,0.05], B:[0.05,0.075], C:[0.075,0.11], D:[0.11,0.16] };
+  /* spreads sobre CDI por risco, calibrados para médias/grandes (lucro real),
+     não para pequeno/factoring. Ajustados por porte mais abaixo. */
+  var SPREADS = { AA:[0.012,0.025], A:[0.02,0.04], B:[0.035,0.06], C:[0.055,0.09], D:[0.08,0.13] };
 
   function riscoTier(calc){
     var alav=n(calc.alav), cob=n(calc.juros)||n(calc.cobertura),
@@ -43753,7 +43755,16 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
     /* ---- piso/risco primeiro: serve de preço de referência para a capacidade ---- */
     var risco = riscoTier(calc);
-    var faixa = SPREADS[risco.letra] || SPREADS.C;
+    var faixaBase = SPREADS[risco.letra] || SPREADS.C;
+    /* porte: empresa grande paga spread menor no mesmo risco (acesso a mercado de
+       capitais e relacionamento). Fator aplicado às duas pontas da faixa. */
+    var fatorPorte = receita>=1e9 ? 0.65 : receita>=5e8 ? 0.78 : receita>=2e8 ? 0.90 : 1.0;
+    var faixa = [faixaBase[0]*fatorPorte, faixaBase[1]*fatorPorte];
+    var porteNome = receita>=1e9 ? 'grande (R$ 1 bi+)' : receita>=5e8 ? 'grande' : receita>=2e8 ? 'média-grande' : 'média/pequena';
+    /* âncoras publicadas pelo BC (painel de indicadores), se houver */
+    var mkt=null;
+    try{ var _R=window._credREF; if(_R && (isFinite(_R.pjLivre)||isFinite(_R.pjDirecionado)))
+      mkt={ livre:(isFinite(_R.pjLivre)?Number(_R.pjLivre):null), direcionado:(isFinite(_R.pjDirecionado)?Number(_R.pjDirecionado):null) }; }catch(e){}
 
     /* ---- teto: quanto consegue tomar a preço justo + taxa máxima, por prazo ---- */
     var valorRef = cgFinanciavel>0 ? cgFinanciavel : espacoDivida;   /* o valor que se quer tomar */
@@ -43777,7 +43788,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       CFADS:CFADS, caixaNova:caixaNova, capexManut:capexManut, impostos:impostos, despFin:despFin,
       necessidade:{ alongamento:alongamento, capitalGiro:cgGap, capitalGiroFinanciavel:cgFinanciavel, acimaTeto:cgAcimaTeto, operacional:operacional, espacoDivida:espacoDivida },
       valorRef:valorRef, teto:teto, taxaRefCap:taxaRefCap,
-      risco:risco, taxaJustaMin:taxaJustaMin, taxaJustaMax:taxaJustaMax, taxaHoje:taxaHoje, overpay:overpay
+      risco:risco, taxaJustaMin:taxaJustaMin, taxaJustaMax:taxaJustaMax, taxaHoje:taxaHoje, overpay:overpay,
+      fatorPorte:fatorPorte, porteNome:porteNome, mkt:mkt, receita:receita
     };
   }
 
@@ -43838,15 +43850,30 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:4px 0 8px">3. Piso — o preço justo pelo risco desta empresa</div>';
     h+='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:6px">';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Risco (simulado)</div><div style="font-size:26px; font-weight:800; color:'+(cores[r.risco.letra]||'#334155')+'; line-height:1.2">'+r.risco.letra+'</div><div style="font-size:11px; color:#64748b">'+Math.round(r.risco.score)+'/100</div></div>';
-    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Taxa justa a.a.</div><div style="font-size:19px; font-weight:800; color:#0f766e; line-height:1.3; margin-top:3px">'+pc(r.taxaJustaMin)+' a '+pc(r.taxaJustaMax)+'</div><div style="font-size:11px; color:#64748b">CDI + '+pc(r.taxaJustaMax-r.cdi,1)+' no teto do risco</div></div>';
+    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Taxa justa a.a. (crédito limpo)</div><div style="font-size:19px; font-weight:800; color:#0f766e; line-height:1.3; margin-top:3px">'+pc(r.taxaJustaMin)+' a '+pc(r.taxaJustaMax)+'</div><div style="font-size:11px; color:#64748b">CDI + '+pc(r.taxaJustaMin-r.cdi,1)+' a '+pc(r.taxaJustaMax-r.cdi,1)+' · porte '+esc(r.porteNome)+(r.fatorPorte<1?' (−'+Math.round((1-r.fatorPorte)*100)+'% pelo porte)':'')+'</div></div>';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Paga hoje</div><div style="font-size:19px; font-weight:800; color:#0f172a; line-height:1.3; margin-top:3px">'+(r.taxaHoje>0?pc(r.taxaHoje):'não informada')+'</div><div style="font-size:11px; color:#64748b">'+(r.taxaHoje>0?'taxa média das operações':'preencha a taxa média no cadastro')+'</div></div>';
     h+='</div>';
+    /* âncoras de mercado publicadas pelo BC (painel) */
+    if(r.mkt && (r.mkt.livre||r.mkt.direcionado)){
+      h+='<div style="font-size:11.5px; color:#475569; margin:8px 0 2px; line-height:1.65; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:9px 12px">'
+        + '<b>Âncoras do Banco Central (PJ):</b> '
+        + (r.mkt.direcionado?'direcionado (BNDES, rural) ~<b>'+pc(r.mkt.direcionado)+'</b>':'')
+        + (r.mkt.direcionado&&r.mkt.livre?' · ':'')
+        + (r.mkt.livre?'livre ~<b>'+pc(r.mkt.livre)+'</b>':'')
+        + '. O direcionado é o piso real do mercado; a média do livre inclui pequeno e cheque especial, então empresa desse porte paga <b>bem abaixo</b> dela.</div>';
+    }
     if(r.overpay){
       var corOv = r.overpay.acima ? '#b91c1c' : (r.overpay.abaixo ? '#15803d' : '#a16207');
       h+=card('Preço × risco', r.overpay.texto + (r.overpay.acima?' Em '+R$(r.valorRef)+', cada 1% de taxa é cerca de '+R$(r.valorRef*0.01)+'/ano.':''), corOv);
     }
+    /* caveat para risco fraco: a taxa limpa alta não é o que se pratica — garantia real derruba */
+    if(r.risco.letra==='C'||r.risco.letra==='D'){
+      h+=card('⚠️ Risco '+r.risco.letra+' — a taxa limpa é teórica', 'Quase ninguém toma crédito <b>sem garantia</b> a esse spread; para esse risco o caminho real é <b>garantia real</b> (recebíveis, imóvel, penhor), que derruba a taxa 3 a 6 pontos, ou <b>reestruturação/alongamento</b>. '
+        + (r.receita>=2e8?'Empresa deste porte com risco '+r.risco.letra+' também costuma indicar EBITDA, dívida ou margem faltando na leitura — confira os números antes de levar ao cliente.':'')
+        + ' Use a faixa como referência de quanto o risco custa, não como preço de balcão.', '#c2410c');
+    }
     h+='<div style="font-size:11.5px; color:#94a3b8; margin:4px 0 6px; line-height:1.6">Risco simulado pelos indicadores da empresa (liquidez, alavancagem, margem, cobertura) — não é o rating do banco. '
-      + 'A faixa justa é referência de mercado por nível de risco; empresa boa paga menos. Entre o <b>piso</b> (justo) e o <b>teto</b> (suportável) está a sua margem de negociação.</div>';
+      + 'A faixa é para crédito limpo, por nível de risco e já ajustada pelo porte; garantia real reduz. Entre o <b>piso</b> (justo) e o <b>teto</b> (suportável) está a sua margem de negociação.</div>';
     return h;
   }
 
