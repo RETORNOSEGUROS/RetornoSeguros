@@ -17964,26 +17964,12 @@ function renderPlanoRecuperacao(data) {
   
   var _precoHtml = '';
   try { if (typeof window.renderCreditoPreco === 'function') _precoHtml = window.renderCreditoPreco(calc, rows, data); } catch(e){ console.warn('[creditoPreco]', e); }
-  container.innerHTML = _precoHtml + `
-    <div style="margin-bottom:20px">
-      <div style="display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap">
-        <button class="btn ${analiseRecuperacao.subAba === 'global' ? 'btn-primary' : 'btn-outline'}" onclick="trocarSubAbaRecuperacao('global')" style="flex:1; min-width:200px">
-          🌐 Crédito Global (Recuperação Total)
-        </button>
-        <button class="btn ${analiseRecuperacao.subAba === 'viavel' ? 'btn-primary' : 'btn-outline'}" onclick="trocarSubAbaRecuperacao('viavel')" style="flex:1; min-width:200px">
-          🏦 Crédito Viável (1 Banco)
-        </button>
-      </div>
-      
-      <div id="subAbaRecuperacaoGlobal" style="${analiseRecuperacao.subAba === 'global' ? '' : 'display:none'}">
-        ${renderCreditoGlobal(calc, analiseRecuperacao)}
-      </div>
-      
-      <div id="subAbaRecuperacaoViavel" style="${analiseRecuperacao.subAba === 'viavel' ? 'display:none' : ''}">
-        ${renderCreditoViavel(calc, analiseRecuperacao)}
-      </div>
-    </div>
-  `;
+  /* v108: as sub-abas antigas (Crédito Global/Viável) tinham a necessidade
+     inflada, a taxa em % ao mês e a capacidade dos 40% — tudo reconciliado no
+     bloco novo (necessidade honesta + teto + preço justo + visão de consultor +
+     simulação). A aba passa a mostrar só o bloco novo. */
+  container.innerHTML = _precoHtml ||
+    '<div style="text-align:center; padding:40px; color:#64748b">Sem dados suficientes para a análise de crédito.</div>';
 }
 
 function trocarSubAbaRecuperacao(aba) {
@@ -43828,6 +43814,62 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       + '<div style="font-size:13px; font-weight:800; color:'+(cor||'#0f766e')+'; margin-bottom:6px">'+titulo+'</div>'
       + '<div style="font-size:12.5px; color:#334155; line-height:1.7">'+corpo+'</div></div>';
   }
+  function pvAnuidade(i,N){ if(i<=1e-9) return N; var f=Math.pow(1+i,N); return (f-1)/(i*f); }
+
+  /* v108: visão de consultor — o que o crédito pode FAZER por esta empresa,
+     por nível de saúde, sempre dimensionado para não comprometer a capacidade
+     (servido pelo caixa livre atual, com folga). */
+  function consultorCredito(r, calc){
+    var receita=r.receita, roic=n(calc.roic), roe=n(calc.roe), ncg=n(calc.ncg),
+        alav=n(calc.alav), dividaBruta=n(calc.dividaBruta)||n(calc.dl);
+    var letra=r.risco.letra, cdi=r.cdi, justoMin=r.taxaJustaMin, justoMax=r.taxaJustaMax;
+    var direc=(r.mkt&&r.mkt.direcionado)||(cdi+0.01);
+    var espaco=r.necessidade.espacoDivida, caixaNova=r.caixaNova;
+    var servivel5 = caixaNova>0 ? caixaNova*pvAnuidade(justoMax,5) : 0;
+    var folga = Math.max(0, Math.min(espaco||0, servivel5>0?servivel5:(espaco||0)));
+    var boa=(letra==='AA'||letra==='A'), media=(letra==='B'), fraca=(letra==='C'||letra==='D');
+    var criaValor = roic>0 && roic>justoMin;
+    var sug=[];
+    if((boa||media) && folga>0 && ncg>0 && receita>0){
+      var valGiro=Math.min(folga, ncg*0.5), deltaReceita=valGiro*(receita/ncg);
+      sug.push({tipo:'crescer', cor:'#0f766e', titulo:'Capital de giro para crescer sem apertar o caixa', valor:valGiro, taxa:justoMin,
+        finalidade:'A receita cresce e o giro junto (estoque + prazo a clientes). Em vez de segurar vendas por falta de caixa, financia o giro a preço justo.',
+        impacto:'Sustenta cerca de <b>+'+R$(deltaReceita)+' de receita</b> (+'+pc(deltaReceita/receita,0)+') sem comprometer o caixa — a margem nova cobre o custo do giro.'});
+    }
+    if((boa||media) && folga>0 && criaValor){
+      var valCapex=Math.min(folga, receita*0.10);
+      sug.push({tipo:'investir', cor:'#2563eb', titulo:'Investir a taxa barata (BNDES/Finame) — o retorno supera o custo', valor:valCapex, taxa:direc,
+        finalidade:'Máquina, capacidade ou eficiência financiada no crédito direcionado, que é mais barato que o retorno do seu negócio.',
+        impacto:'Seu ROIC é <b>'+pc(roic,1)+'</b> e o direcionado custa ~'+pc(direc,1)+'. Cada real investido rende acima do que a dívida cobra: cerca de <b>'+R$(valCapex*Math.max(0,roic-direc))+'/ano</b> de resultado acima do custo.'});
+    }
+    if(boa && criaValor && alav<2 && folga>0){
+      sug.push({tipo:'roe', cor:'#7c3aed', titulo:'Dívida barata que levanta o ROE (estrutura de capital)', valor:folga, taxa:justoMin,
+        finalidade:'Empresa muito desalavancada que só usa capital próprio deixa ROE na mesa quando o ROIC supera o custo da dívida.',
+        impacto:'ROIC <b>'+pc(roic,1)+'</b> acima do custo justo '+pc(justoMin,1)+': levar a dívida até o teto prudente (~'+R$(folga)+') adiciona ao ROE de '+pc(roe,1)+'. Alavancagem que cria valor, não risco — enquanto o ROIC se mantiver.'});
+    }
+    if(media && folga>0 && ncg>0){
+      sug.push({tipo:'desconto', cor:'#0f766e', titulo:'Giro barato para comprar à vista e ganhar desconto', valor:Math.min(folga, ncg*0.4), taxa:justoMin,
+        finalidade:'Pagar fornecedor à vista com desconto, financiando o giro a um custo menor que o desconto obtido.',
+        impacto:'Se o fornecedor dá 2–3% à vista, o retorno anualizado do desconto costuma superar o custo do giro — arbitragem a favor da empresa.'});
+    }
+    if(fraca){
+      sug.push({tipo:'alongar', cor:'#c2410c', titulo:'Aqui, crédito é fôlego — não expansão', valor:r.necessidade.alongamento, taxa:justoMax,
+        finalidade:'Alongar o que já existe (trocar curto por longo); dinheiro novo só com garantia real.',
+        impacto:'Não tome dívida para crescer agora — pioraria a cobertura. Alongue '+R$(r.necessidade.alongamento)+' para aliviar o fluxo e arrume a operação; crédito de expansão volta quando os indicadores melhorarem.'});
+    }
+    if(r.overpay && r.overpay.acima && r.taxaHoje>0 && dividaBruta>0){
+      sug.push({tipo:'trocar', cor:'#b45309', titulo:'Trocar/renegociar a dívida cara que já existe', valor:dividaBruta, taxa:justoMax,
+        finalidade:'Você paga '+pc(r.taxaHoje)+', acima do justo para o seu risco — alongar ou trocar por linha mais barata.',
+        impacto:'Baixar para ~'+pc(r.taxaJustaMax)+' economiza cerca de <b>'+R$(dividaBruta*(r.taxaHoje-r.taxaJustaMax))+'/ano</b> — dinheiro que volta ao caixa sem tomar um centavo a mais.'});
+    }
+    var novas=sug.filter(function(s){ return s.tipo!=='trocar' && s.tipo!=='alongar'; });
+    /* a simulação de parcela usa a sugestão mais "pé no chão" que caiba no caixa
+       (giro > investir > desconto > ROE), não a mais agressiva. */
+    var ordem={crescer:1,investir:2,desconto:3,roe:4};
+    var principal = novas.slice().sort(function(a,b){ return (ordem[a.tipo]||9)-(ordem[b.tipo]||9); })[0] || sug[0] || null;
+    return { folga:folga, saude:letra, boa:boa, media:media, fraca:fraca, criaValor:criaValor, direc:direc,
+      sugestoes:sug, valorRecomendado:(principal?principal.valor:0), taxaRecomendada:(principal?principal.taxa:justoMin), principalTipo:(principal?principal.tipo:null) };
+  }
 
   function renderCreditoPreco(calc, rows, D){
     var r;
@@ -43930,6 +43972,51 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     }
     h+='<div style="font-size:11.5px; color:#94a3b8; margin:4px 0 6px; line-height:1.6">Risco simulado pelos indicadores da empresa (liquidez, alavancagem, margem, cobertura) — não é o rating do banco. '
       + 'A faixa é para crédito limpo, por nível de risco e já ajustada pelo porte; garantia real reduz. Entre o <b>piso</b> (justo) e o <b>teto</b> (suportável) está a sua margem de negociação.</div>';
+
+    /* ---- 4. visão de consultor: o que o crédito pode fazer ---- */
+    var CZ = consultorCredito(r, calc);
+    h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 8px">4. Visão de consultor — o que o crédito pode fazer por esta empresa</div>';
+    var introCons = CZ.boa
+        ? 'Esta empresa provavelmente nem está pensando em crédito — e é aí que mora a oportunidade. Com folga saudável de <b>'+R$(CZ.folga)+'</b> a preço justo, o crédito deixa de ser remendo e vira alavanca de crescimento e de retorno.'
+        : CZ.media
+        ? 'Empresa em situação intermediária: crédito bem dosado melhora indicadores e abre espaço para crescer com segurança. Folga saudável de <b>'+R$(CZ.folga)+'</b>.'
+        : 'Empresa sob pressão: aqui o crédito é para ganhar fôlego e arrumar a casa, não para expandir. O valor fica contido no que a capacidade aguenta.';
+    h+='<div style="font-size:12.5px; color:#475569; line-height:1.7; margin-bottom:10px">'+introCons+' Cada sugestão abaixo é <b>dimensionada para não comprometer a capacidade</b> — a parcela cabe no caixa livre atual, mantidos os números de hoje.</div>';
+    if(CZ.sugestoes.length){
+      CZ.sugestoes.forEach(function(s){
+        h+='<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid '+s.cor+'; border-radius:0 11px 11px 0; padding:13px 16px; margin-bottom:10px">'
+          + '<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline">'
+          +   '<div style="font-size:13px; font-weight:800; color:'+s.cor+'">'+esc(s.titulo)+'</div>'
+          +   '<div style="font-size:13px; font-weight:800; color:#0f172a; white-space:nowrap">'+R$(s.valor)+' <span style="font-size:11px; font-weight:600; color:#64748b">a ~'+pc(s.taxa)+' a.a.</span></div>'
+          + '</div>'
+          + '<div style="font-size:12.5px; color:#334155; line-height:1.65; margin-top:5px"><b>Para quê:</b> '+s.finalidade+'</div>'
+          + '<div style="font-size:12.5px; color:#334155; line-height:1.65; margin-top:3px"><b>O que muda:</b> '+s.impacto+'</div></div>';
+      });
+    } else {
+      h+=card('Sem recomendação de crédito agora', 'Pelos números atuais não há uso de crédito que melhore a empresa sem comprometer a capacidade. Guarde a folga para uma oportunidade concreta (um pedido grande, uma compra à vista com desconto, um investimento com retorno claro).', '#64748b');
+    }
+
+    /* ---- 5. simulação da parcela do valor recomendado (base anual, parcela mensal) ---- */
+    if(CZ.valorRecomendado>0){
+      var Vr=CZ.valorRecomendado, txAA=CZ.taxaRecomendada;
+      var im=Math.pow(1+txAA,1/12)-1;
+      var mensalLivre=r.caixaNova/12;
+      h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 8px">5. Simulação da parcela — '+R$(Vr)+' a '+pc(txAA)+' a.a.</div>';
+      h+='<div style="font-size:12px; color:#64748b; margin-bottom:8px; line-height:1.6">A parcela mensal da principal sugestão, por prazo. O caixa livre dá <b>'+R$(mensalLivre)+'/mês</b> para dívida nova — a parcela abaixo cabe nisso.</div>';
+      h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 15px; margin-bottom:6px"><table style="width:100%; border-collapse:collapse; font-size:12.5px">'
+        + '<tr style="color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:.3px"><td style="padding:5px 0">Prazo</td><td style="padding:5px 8px; text-align:right">Parcela/mês</td><td style="padding:5px 8px; text-align:right">Juros no total</td><td style="padding:5px 0 5px 8px; text-align:right">Cabe no caixa?</td></tr>';
+      [24,36,48,60].forEach(function(Nm){
+        var parc=(im<=1e-9)?Vr/Nm:Vr*im*Math.pow(1+im,Nm)/(Math.pow(1+im,Nm)-1);
+        var juros=parc*Nm-Vr; var cabe=parc<=mensalLivre;
+        h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:7px 0; color:#0f172a; font-weight:700">'+(Nm/12)+' anos</td>'
+          + '<td style="padding:7px 8px; text-align:right; font-weight:700; color:#0f766e">'+R$(parc)+'</td>'
+          + '<td style="padding:7px 8px; text-align:right; color:#b45309">'+R$(juros)+'</td>'
+          + '<td style="padding:7px 0 7px 8px; text-align:right; font-weight:700; color:'+(cabe?'#15803d':'#b91c1c')+'">'+(cabe?'✓ sim':'aperta')+'</td></tr>';
+      });
+      h+='</table></div>';
+      h+='<div style="font-size:11.5px; color:#94a3b8; margin:2px 0 6px; line-height:1.6">Taxa em % ao ano (CDI + spread justo). "Aperta" = a parcela passa do caixa livre atual: alongue o prazo ou reduza o valor para não comprometer a capacidade.</div>';
+    }
+
     return h;
   }
 
