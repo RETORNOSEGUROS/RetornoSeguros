@@ -7916,14 +7916,14 @@ function renderHealthDashboard(rows){
 
 // Função separada para gerar HTML do Benchmarking
 function gerarBenchmarkHtml(latest){
-  // Referências setoriais (médias de mercado)
-  const setorRef = {
-    margem: 0.12,      // 12% média
-    alav: 2.0,         // 2.0x média
-    liq: 1.3,          // 1.3 média
-    roe: 0.15          // 15% média
-  };
-  
+  // Referências DO SETOR da empresa (classificado pelo CNAE), não mais um valor fixo
+  const _si = (typeof window.setorInfo === 'function') ? window.setorInfo() : null;
+  const P = (_si && _si.params) ? _si.params : { margem:0.12, alav:2.0, liq:1.3, roe:0.15, nome:'mercado' };
+  const setorRef = { margem: P.margem, alav: P.alav, liq: P.liq, roe: P.roe };
+  const _setorNome = _si ? _si.nome : 'mercado';
+  const _setorFonte = _si ? _si.fonte : '';
+  const _diverge = _si && _si.divergeDoCadastro;
+
   const comparativos = [
     { nome: 'Margem EBITDA', valor: latest.margem, setor: setorRef.margem, formato: 'pct', melhorMaior: true },
     { nome: 'DL/EBITDA', valor: latest.alav, setor: setorRef.alav, formato: 'x', melhorMaior: false },
@@ -7948,7 +7948,7 @@ function gerarBenchmarkHtml(latest){
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
           <span style="font-weight:600; font-size:13px">${c.nome}</span>
           <span style="font-size:12px; color:${isMelhor ? '#10b981' : '#ef4444'}; font-weight:600">
-            ${isMelhor ? '✓ Acima' : '⚠ Abaixo'} do setor
+            ${isMelhor ? '✓ Melhor que o setor' : '⚠ Pior que o setor'}
           </span>
         </div>
         <div style="position:relative; height:24px; background:#e2e8f0; border-radius:12px; overflow:hidden">
@@ -7965,23 +7965,24 @@ function gerarBenchmarkHtml(latest){
     `;
   });
   
-  // Gerar insight
+  // Gerar insight — agora contra a referência DO SETOR
   const insights = [];
-  if(latest.margem > 0.12) insights.push('margem operacional acima da média');
-  else insights.push('margem operacional pode melhorar');
-  if(latest.alav < 2.0) insights.push('alavancagem conservadora');
-  else if(latest.alav > 2.5) insights.push('alavancagem requer atenção');
-  if(latest.liq > 1.3) insights.push('liquidez confortável');
-  else if(latest.liq < 1.0) insights.push('liquidez abaixo do ideal');
+  if(latest.margem > P.margem) insights.push('margem EBITDA acima do setor');
+  else insights.push('margem EBITDA abaixo do setor');
+  if(latest.alav < P.alav) insights.push('alavancagem conservadora para o setor');
+  else if(latest.alav > P.alav * 1.25) insights.push('alavancagem acima do setor');
+  if(latest.liq > P.liq) insights.push('liquidez confortável');
+  else if(latest.liq < P.liq * 0.8) insights.push('liquidez abaixo do setor');
   const insightTexto = 'Empresa apresenta ' + insights.slice(0,2).join(' e ') + '.';
   
   return `
     <div style="margin-top:24px; background:linear-gradient(135deg, #f8fafc, #e0e7ff); border:1px solid #c7d2fe; border-radius:12px; padding:20px">
-      <h4 style="font-size:16px; font-weight:700; color:#3730a3; margin-bottom:16px; display:flex; align-items:center; gap:8px">
-        📊 Posicionamento vs Mercado
+      <h4 style="font-size:16px; font-weight:700; color:#3730a3; margin-bottom:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        📊 Posicionamento vs setor: ${_setorNome}
         <span style="font-size:11px; font-weight:400; background:#e0e7ff; padding:2px 8px; border-radius:4px">Benchmarking</span>
       </h4>
-      
+      <div style="font-size:11px; color:#4338ca; margin-bottom:14px">Setor ${_setorFonte ? '('+_setorFonte+')' : ''} — referências próprias do setor, não mais um valor único para todas as empresas.${_diverge ? ' <span style="color:#b45309">⚠ o cadastro dizia "'+_diverge+'", mas o CNAE indica '+_setorNome+'.</span>' : ''}</div>
+
       <div style="display:grid; gap:16px">
         ${barrasHtml}
       </div>
@@ -7998,10 +7999,14 @@ function gerarBenchmarkHtml(latest){
 // ================== ANÁLISES AVANÇADAS - O QUE NINGUÉM MOSTRA ==================
 function gerarAnaliseAvancadaHtml(latest, rows){
   const previo = rows[1] || null;
-  
+  // parâmetros DO SETOR (classificado pelo CNAE) — substituem os valores fixos
+  const _siAv = (typeof window.setorInfo === 'function') ? window.setorInfo() : null;
+  const _PA = (_siAv && _siAv.params) ? _siAv.params : { multiplo:5, receitaPorFunc:200000, wacc:0.12, nome:'mercado' };
+  const _setorNomeAv = _siAv ? _siAv.nome : 'mercado';
+
   // ===== 1. VALUATION DA EMPRESA =====
-  // Múltiplo de EBITDA típico por setor (usando 5x como média)
-  const multiploEbitda = 5;
+  // Múltiplo de EBITDA do SETOR (classificado pelo CNAE), não mais 5x para todos
+  const multiploEbitda = _PA.multiplo || 5;
   const valorEmpresa = latest.ebitda > 0 ? latest.ebitda * multiploEbitda : 0;
   const valorEmpresaAnterior = previo && previo.ebitda > 0 ? previo.ebitda * multiploEbitda : 0;
   const variacaoValor = valorEmpresaAnterior > 0 ? valorEmpresa - valorEmpresaAnterior : null;
@@ -8071,7 +8076,7 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const funcProdOrigem = _funcReal ? 'informado' : 'estimado (receita ÷ R$150 mil — circular)';
   const receitaPorFunc = latest.receita / funcionariosEstimado;
   const ebitdaPorFunc = latest.ebitda / funcionariosEstimado;
-  const setorReceitaFunc = 200000; // Média de mercado
+  const setorReceitaFunc = _PA.receitaPorFunc || 200000; // Média DO SETOR (CNAE)
   const produtividadeVsSetor = ((receitaPorFunc / setorReceitaFunc) - 1) * 100;
   
   // ===== 7. CUSTO REAL DA DÍVIDA =====
@@ -8082,7 +8087,7 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   // ===== 8. CRIAÇÃO/DESTRUIÇÃO DE VALOR (EVA Simplificado) =====
   // EVA = NOPAT - (Capital Investido * WACC)
   // Simplificado: EVA = EBITDA - Impostos - (Ativo * 12%)
-  const wacc = 0.12; // 12% custo de capital
+  const wacc = _PA.wacc || 0.12; // custo de capital DO SETOR (CNAE)
   const capitalInvestido = ativo;
   const nopat = latest.ebitda * 0.75; // EBITDA - 25% impostos
   const eva = nopat - (capitalInvestido * wacc);
@@ -8130,14 +8135,14 @@ function gerarAnaliseAvancadaHtml(latest, rows){
           <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">💰</div>
           <div style="font-size:12px; font-weight:600; color:#92400e; margin-bottom:8px">💰 VALUATION DA EMPRESA</div>
           <div style="font-size:32px; font-weight:800; color:#78350f">${toBRL(valorEmpresa)}</div>
-          <div style="font-size:11px; color:#92400e; margin-top:4px">Baseado em ${multiploEbitda}x EBITDA (múltiplo de mercado)</div>
+          <div style="font-size:11px; color:#92400e; margin-top:4px">Baseado em ${multiploEbitda}x EBITDA — múltiplo do setor ${_setorNomeAv} (valor da empresa; o do sócio é isto menos a dívida)</div>
           ${variacaoValor !== null ? `
             <div style="margin-top:16px; padding:12px; background:${variacaoValor >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; border-radius:8px">
               <div style="font-size:13px; font-weight:700; color:${variacaoValor >= 0 ? '#065f46' : '#991b1b'}">
                 ${variacaoValor >= 0 ? '📈 Valorização' : '📉 Desvalorização'}: ${toBRL(Math.abs(variacaoValor))}
               </div>
               <div style="font-size:11px; color:${variacaoValor >= 0 ? '#065f46' : '#991b1b'}">
-                ${variacaoValor >= 0 ? 'Parabéns! Seu patrimônio cresceu.' : 'Você PERDEU esse valor em patrimônio no último ano.'}
+                ${variacaoValor >= 0 ? 'O valor por múltiplo subiu — o EBITDA cresceu no ano.' : 'É a variação do valor por múltiplo (o EBITDA caiu no ano) — <b>não</b> é patrimônio perdido. O patrimônio contábil está no balanço.'}
               </div>
             </div>
           ` : ''}
@@ -44387,6 +44392,84 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window.renderCreditoPreco = renderCreditoPreco;
 })();
 
+</script>
+
+<script>
+/* ===================================================================
+   EIXO A — SETOR PELO CNAE + BENCHMARK POR SETOR
+   Antes: o setor era um dropdown manual (default "indústria") e o
+   benchmark era um único valor fixo para TODAS as empresas
+   (margem 12%, DL/EBITDA 2x, liq 1,3, ROE 15%). Agora o setor sai do
+   CNAE principal e cada setor tem suas próprias referências — que
+   também alimentam o valuation (múltiplo), a produtividade e o EVA.
+   Valores de referência (edináveis) para média/grande do lucro real.
+   =================================================================== */
+(function(){
+  'use strict';
+  /* params por setor: margem EBITDA, DL/EBITDA alvo, liquidez corrente, ROE,
+     receita por funcionário, ciclo (dias), múltiplo de EBITDA, custo de capital */
+  var PARAMS_SETOR = {
+    industria:   { nome:'Indústria',            margem:0.12, alav:2.5, liq:1.3, roe:0.14, receitaPorFunc:350000, ciclo:75,  multiplo:6,  wacc:0.13 },
+    comercio:    { nome:'Comércio (atacado)',   margem:0.06, alav:2.0, liq:1.2, roe:0.15, receitaPorFunc:700000, ciclo:50,  multiplo:5,  wacc:0.14 },
+    servicos:    { nome:'Serviços',             margem:0.16, alav:1.5, liq:1.4, roe:0.18, receitaPorFunc:250000, ciclo:50,  multiplo:6,  wacc:0.15 },
+    agronegocio: { nome:'Agronegócio',          margem:0.15, alav:3.0, liq:1.4, roe:0.13, receitaPorFunc:400000, ciclo:120, multiplo:6,  wacc:0.13 },
+    tecnologia:  { nome:'Tecnologia',           margem:0.22, alav:1.0, liq:2.0, roe:0.20, receitaPorFunc:400000, ciclo:50,  multiplo:10, wacc:0.16 },
+    construcao:  { nome:'Construção / Engenharia', margem:0.10, alav:2.0, liq:1.3, roe:0.13, receitaPorFunc:300000, ciclo:110, multiplo:5, wacc:0.15 },
+    saude:       { nome:'Saúde',                margem:0.18, alav:2.0, liq:1.4, roe:0.15, receitaPorFunc:250000, ciclo:60,  multiplo:8,  wacc:0.13 },
+    transporte:  { nome:'Transporte / Logística', margem:0.15, alav:3.0, liq:1.1, roe:0.13, receitaPorFunc:250000, ciclo:40, multiplo:5, wacc:0.14 },
+    educacao:    { nome:'Educação',             margem:0.20, alav:2.0, liq:1.2, roe:0.16, receitaPorFunc:150000, ciclo:30,  multiplo:7,  wacc:0.14 },
+    varejo:      { nome:'Varejo',               margem:0.08, alav:2.0, liq:1.2, roe:0.15, receitaPorFunc:300000, ciclo:50,  multiplo:6,  wacc:0.14 }
+  };
+  window.PARAMS_SETOR = PARAMS_SETOR;
+
+  /* CNAE (2 primeiros dígitos da divisão) → chave do setor.
+     Especial: 71 (serviços de engenharia/arquitetura) → construção, porque as
+     empresas desse CNAE no nosso público são construtoras/engenharia na prática. */
+  function cnaeParaSetor(cnae){
+    if(!cnae) return null;
+    var d = String(cnae).replace(/\D/g,'').slice(0,2);
+    var n = parseInt(d,10); if(!n) return null;
+    if(n>=1 && n<=3) return 'agronegocio';
+    if(n>=5 && n<=9) return 'industria';          /* extrativa */
+    if(n>=10 && n<=33) return 'industria';        /* transformação */
+    if(n>=35 && n<=39) return 'industria';        /* utilities (energia/água/resíduo) */
+    if(n>=41 && n<=43) return 'construcao';
+    if(n===71) return 'construcao';               /* engenharia/arquitetura */
+    if(n>=45 && n<=46) return 'comercio';
+    if(n===47) return 'varejo';
+    if(n>=49 && n<=53) return 'transporte';
+    if(n>=58 && n<=63) return 'tecnologia';
+    if(n===85) return 'educacao';
+    if(n>=86 && n<=88) return 'saude';
+    if(n>=55 && n<=56) return 'servicos';
+    if(n>=64 && n<=82) return 'servicos';         /* financeiro, imobiliário, profissionais, administrativos */
+    if(n>=90 && n<=99) return 'servicos';
+    return null;
+  }
+  window.cnaeParaSetor = cnaeParaSetor;
+
+  /* resolve o setor da empresa: override manual explícito > CNAE principal > setor
+     salvo na linha > padrão. Devolve a chave, o nome, os params e a FONTE. */
+  function setorInfo(D){
+    D = D || window.CURRENT_ANALYSIS_DATA || {};
+    var doc = D.empresaDoc || {};
+    var rows = D.rows || [];
+    var r0 = rows[0] || {};
+    var rec = doc.dadosReceita || r0.dadosReceita || {};
+    var cnae = rec.cnaePrincipal && rec.cnaePrincipal.codigo;
+    var setorCnae = cnaeParaSetor(cnae);
+    var manual = doc.setorManual;              /* só quando o corretor sobrescreve de propósito */
+    var chave, fonte;
+    if(manual && PARAMS_SETOR[manual]){ chave=manual; fonte='definido pelo corretor'; }
+    else if(setorCnae){ chave=setorCnae; fonte='CNAE '+(rec.cnaePrincipal.codigo||'')+(rec.cnaePrincipal.descricao?' — '+rec.cnaePrincipal.descricao:''); }
+    else if(r0.setor && PARAMS_SETOR[r0.setor]){ chave=r0.setor; fonte='setor do cadastro'; }
+    else { chave='industria'; fonte='padrão (sem CNAE)'; }
+    return { setor:chave, nome:(PARAMS_SETOR[chave]||{}).nome||chave, fonte:fonte, params:PARAMS_SETOR[chave]||PARAMS_SETOR.industria,
+             cnae:(cnae||null), cnaeDescricao:(rec.cnaePrincipal&&rec.cnaePrincipal.descricao)||null,
+             setorCnae:setorCnae, divergeDoCadastro:(setorCnae && r0.setor && setorCnae!==r0.setor ? r0.setor : null) };
+  }
+  window.setorInfo = setorInfo;
+})();
 </script>
 </body>
 </html>
