@@ -8001,8 +8001,10 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const previo = rows[1] || null;
   // parâmetros DO SETOR (classificado pelo CNAE) — substituem os valores fixos
   const _siAv = (typeof window.setorInfo === 'function') ? window.setorInfo() : null;
-  const _PA = (_siAv && _siAv.params) ? _siAv.params : { multiplo:5, receitaPorFunc:200000, wacc:0.12, nome:'mercado' };
+  const _PA = (_siAv && _siAv.params) ? _siAv.params : { multiplo:5, receitaPorFunc:200000, wacc:0.12, ciclo:60, nome:'mercado' };
   const _setorNomeAv = _siAv ? _siAv.nome : 'mercado';
+  // calc completo do ano (ciclo, dívida, JCP, juros limpos) — latest é a linha salva
+  const _calcAv = (typeof calcularIndicadores === 'function') ? calcularIndicadores(latest) : latest;
 
   // ===== 1. VALUATION DA EMPRESA =====
   // Múltiplo de EBITDA do SETOR (classificado pelo CNAE), não mais 5x para todos
@@ -8011,14 +8013,21 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const valorEmpresaAnterior = previo && previo.ebitda > 0 ? previo.ebitda * multiploEbitda : 0;
   const variacaoValor = valorEmpresaAnterior > 0 ? valorEmpresa - valorEmpresaAnterior : null;
   
-  // ===== 2. CUSTO DO DINHEIRO PARADO =====
-  // Taxa de oportunidade: 1.5% ao mês (CDI + spread)
-  const taxaMensal = 0.015;
+  // ===== 2. CUSTO DO DINHEIRO PARADO (EXCESSO vs ciclo saudável do setor) =====
+  // Recebível e estoque são giro NECESSÁRIO; o que "está parado" é o EXCESSO acima
+  // de um ciclo saudável do setor. Crédito não resolve isso — é operacional.
+  const taxaMensal = 0.015;                      // custo de oportunidade ~1,5%/mês
   const dinheiroEmEstoque = latest.estoques || 0;
   const dinheiroEmRecebiveis = latest.contasReceber || 0;
-  const dinheiroParado = dinheiroEmEstoque + dinheiroEmRecebiveis;
-  const custoMensalDinheiroParado = dinheiroParado * taxaMensal;
+  const dinheiroParado = dinheiroEmEstoque + dinheiroEmRecebiveis;   // giro total
+  const _cicloEmpresa = Number(_calcAv && _calcAv.ciclo) || 0;
+  const _cicloSetor = Number(_PA.ciclo) || 60;
+  const _receitaDia = (Number(latest.receita)||0) / 360;
+  const _excessoDias = Math.max(0, _cicloEmpresa - _cicloSetor);
+  const capitalExcesso = _excessoDias * _receitaDia;                 // o que está parado ALÉM do setor
+  const custoMensalDinheiroParado = capitalExcesso * taxaMensal;
   const custoAnualDinheiroParado = custoMensalDinheiroParado * 12;
+  const _temExcesso = _cicloEmpresa > 0 && _excessoDias > 2;
   
   // ===== 3. ALTMAN Z-SCORE (Probabilidade de Falência) =====
   // Z = 1.2*X1 + 1.4*X2 + 3.3*X3 + 0.6*X4 + 1.0*X5
@@ -8059,10 +8068,15 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const margemSeguranca = latest.receita > 0 ? ((latest.receita - pontoEquilibrio) / latest.receita * 100) : 0;
   
   // ===== 5. CAPACIDADE DE CRESCIMENTO SUSTENTÁVEL =====
-  // g = ROE * (1 - payout)
-  // Assumindo payout de 30%
-  const payout = 0.30;
-  const crescimentoSustentavel = latest.roe * (1 - payout) * 100;
+  // g = ROE × retenção. Retenção REAL = lucro retido ÷ lucro (via variação do PL),
+  // quando faz sentido; senão assume 70% (payout 30%).
+  let _retencao = 0.70, _retFonte = 'retenção assumida de 70%';
+  if(previo){
+    const _dPL = (Number(latest.pl)||0) - (Number(previo.pl)||0);
+    const _lucro = Number(latest.lucroLiq) || Number(latest.lucroLiquido) || 0;
+    if(_lucro > 0){ const _r = _dPL / _lucro; if(_r >= 0 && _r <= 1.1){ _retencao = Math.min(1, _r); _retFonte = 'retenção real (lucro retido ÷ lucro = '+Math.round(_retencao*100)+'%)'; } }
+  }
+  const crescimentoSustentavel = (Number(latest.roe)||0) * _retencao * 100;
   
   // ===== 6. PRODUTIVIDADE POR FUNCIONÁRIO =====
   // v105: usa o número REAL de funcionários quando informado (exercício ou cadastro).
@@ -8079,8 +8093,14 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   const setorReceitaFunc = _PA.receitaPorFunc || 200000; // Média DO SETOR (CNAE)
   const produtividadeVsSetor = ((receitaPorFunc / setorReceitaFunc) - 1) * 100;
   
-  // ===== 7. CUSTO REAL DA DÍVIDA =====
-  const despesaFinanceira = latest.despesaFin || (latest.dividaLiq * 0.15); // Estimar 15% a.a. se não tiver
+  // ===== 7. CUSTO REAL DA DÍVIDA (taxa efetiva, limpa de câmbio/JCP) =====
+  const despesaFinanceira = latest.despesaFin || latest.despesasFinanceiras || 0;
+  const _dividaBrutaAv = Number(_calcAv && _calcAv.dividaBruta) || (Number(latest.emprestimosCP)||0) + (Number(latest.emprestimosLP)||0) || Number(latest.dividaBruta) || 0;
+  // juros "limpos": juros de empréstimo informados, senão despesa financeira sem o JCP
+  const _jurosLimpos = Number(_calcAv && _calcAv.jurosEmprestimos) > 0 ? Number(_calcAv.jurosEmprestimos)
+                      : Math.max(0, despesaFinanceira - (Number(_calcAv && _calcAv.jcp)||0));
+  const taxaEfetiva = _dividaBrutaAv > 0 ? (_jurosLimpos / _dividaBrutaAv * 100) : 0;   // % a.a.
+  const _taxaTemCambioJCP = _jurosLimpos < despesaFinanceira * 0.98;                      // havia câmbio/JCP dentro
   const custoSobreReceita = latest.receita > 0 ? (despesaFinanceira / latest.receita * 100) : 0;
   const custoSobreEbitda = latest.ebitda > 0 ? (despesaFinanceira / latest.ebitda * 100) : 0;
   
@@ -8088,8 +8108,11 @@ function gerarAnaliseAvancadaHtml(latest, rows){
   // EVA = NOPAT - (Capital Investido * WACC)
   // Simplificado: EVA = EBITDA - Impostos - (Ativo * 12%)
   const wacc = _PA.wacc || 0.12; // custo de capital DO SETOR (CNAE)
-  const capitalInvestido = ativo;
-  const nopat = latest.ebitda * 0.75; // EBITDA - 25% impostos
+  // NOPAT = EBIT × (1 − imposto), não EBITDA (a depreciação é custo real).
+  const _ebitAv = Number(_calcAv && _calcAv.ebit) || (Number(latest.ebit)||0) || (Number(latest.ebitda)||0) * 0.8;
+  const nopat = _ebitAv * 0.75; // EBIT − 25% impostos
+  // Capital investido = PL + dívida (não o ativo total, que inclui passivo gratuito).
+  const capitalInvestido = (Number(latest.pl)||0) + _dividaBrutaAv;
   const eva = nopat - (capitalInvestido * wacc);
   
   // ===== 9. PROJEÇÃO 3 ANOS =====
@@ -8148,22 +8171,22 @@ function gerarAnaliseAvancadaHtml(latest, rows){
           ` : ''}
         </div>
         
-        <!-- CUSTO DO DINHEIRO PARADO -->
-        <div style="background:linear-gradient(135deg, #fee2e2, #fecaca); border-radius:12px; padding:20px; position:relative; overflow:hidden">
-          <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">🔥</div>
-          <div style="font-size:12px; font-weight:600; color:#991b1b; margin-bottom:8px">🔥 CUSTO DO DINHEIRO PARADO</div>
-          <div style="font-size:32px; font-weight:800; color:#7f1d1d">${toBRL(custoMensalDinheiroParado)}<span style="font-size:16px">/mês</span></div>
-          <div style="font-size:11px; color:#991b1b; margin-top:4px">
-            Estoque: ${toBRL(dinheiroEmEstoque)} + Recebíveis: ${toBRL(dinheiroEmRecebiveis)}
-          </div>
-          <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.5); border-radius:8px">
-            <div style="font-size:13px; font-weight:700; color:#7f1d1d">
-              💸 ${toBRL(custoAnualDinheiroParado)}/ano queimando
+        <!-- CUSTO DO DINHEIRO PARADO (excesso vs ciclo do setor) -->
+        <div style="background:linear-gradient(135deg, ${_temExcesso ? '#fee2e2, #fecaca' : '#ecfdf5, #d1fae5'}); border-radius:12px; padding:20px; position:relative; overflow:hidden">
+          <div style="position:absolute; right:-20px; top:-20px; font-size:80px; opacity:0.1">${_temExcesso ? '🔥' : '✅'}</div>
+          <div style="font-size:12px; font-weight:600; color:${_temExcesso ? '#991b1b' : '#065f46'}; margin-bottom:8px">${_temExcesso ? '🔥 DINHEIRO PARADO (excesso)' : '✅ GIRO SOB CONTROLE'}</div>
+          ${_temExcesso ? `
+            <div style="font-size:32px; font-weight:800; color:#7f1d1d">${toBRL(custoMensalDinheiroParado)}<span style="font-size:16px">/mês</span></div>
+            <div style="font-size:11px; color:#991b1b; margin-top:4px">
+              Ciclo de ${Math.round(_cicloEmpresa)} dias vs ${Math.round(_cicloSetor)} do setor → ${Math.round(_excessoDias)} dias a mais prendem <b>${toBRL(capitalExcesso)}</b>
             </div>
-            <div style="font-size:11px; color:#991b1b">
-              Isso pagaria ${Math.round(custoAnualDinheiroParado / 36000)} funcionários com salário de R$ 3.000
+            <div style="margin-top:14px; padding:12px; background:rgba(255,255,255,0.55); border-radius:8px; font-size:11.5px; color:#7f1d1d; line-height:1.6">
+              <b>Como resolver (não é crédito):</b> encurtar o ciclo — receber mais rápido, girar estoque, ou antecipar recebíveis se o custo for menor que ${(taxaMensal*12*100).toFixed(0)}%/ano. Voltar ao ciclo do setor solta <b>${toBRL(capitalExcesso)}</b> de caixa <b>sem tomar dívida</b>. Pegar empréstimo só adiciona custo, não destrava.
             </div>
-          </div>
+          ` : `
+            <div style="font-size:22px; font-weight:800; color:#047857">Ciclo de ${Math.round(_cicloEmpresa)} dias</div>
+            <div style="font-size:11px; color:#065f46; margin-top:4px">No nível do setor (${Math.round(_cicloSetor)} dias) ou abaixo — o giro (estoque ${toBRL(dinheiroEmEstoque)} + recebíveis ${toBRL(dinheiroEmRecebiveis)}) é o necessário, não há excesso parado.</div>
+          `}
         </div>
       </div>
       
@@ -8233,7 +8256,8 @@ function gerarAnaliseAvancadaHtml(latest, rows){
         <div style="background:linear-gradient(135deg, #ecfdf5, #d1fae5); border-radius:12px; padding:20px">
           <div style="font-size:12px; font-weight:600; color:#065f46; margin-bottom:8px">🚀 CRESCIMENTO SUSTENTÁVEL</div>
           <div style="font-size:32px; font-weight:800; color:#047857">${crescimentoSustentavel.toFixed(1)}%<span style="font-size:16px">/ano</span></div>
-          <div style="font-size:11px; color:#065f46; margin-top:4px">Quanto pode crescer SEM precisar de banco</div>
+          <div style="font-size:11px; color:#065f46; margin-top:4px">Quanto a receita pode crescer usando só o lucro retido — sem tomar empréstimo nem aporte. Crescer mais que isso exige dinheiro novo.</div>
+          <div style="font-size:10px; color:#047857; margin-top:3px">${_retFonte}</div>
           
           <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.6); border-radius:8px">
             <div style="font-size:12px; color:#065f46">
@@ -8266,18 +8290,19 @@ function gerarAnaliseAvancadaHtml(latest, rows){
             </div>
           </div>
           
+          ${_funcReal ? `
           <div style="padding:12px; background:${produtividadeVsSetor >= 0 ? '#ecfdf5' : '#fef2f2'}; border-radius:8px">
             <div style="font-size:13px; font-weight:700; color:${produtividadeVsSetor >= 0 ? '#065f46' : '#991b1b'}">
-              ${produtividadeVsSetor >= 0 ? '📈' : '📉'} ${Math.abs(produtividadeVsSetor).toFixed(0)}% ${produtividadeVsSetor >= 0 ? 'ACIMA' : 'ABAIXO'} do setor
+              ${produtividadeVsSetor >= 0 ? '📈' : '📉'} ${Math.abs(produtividadeVsSetor).toFixed(0)}% ${produtividadeVsSetor >= 0 ? 'ACIMA' : 'ABAIXO'} do setor ${_setorNomeAv}
             </div>
             <div style="font-size:11px; color:${produtividadeVsSetor >= 0 ? '#065f46' : '#991b1b'}">
-              Média do setor: ${toBRL(setorReceitaFunc)}/funcionário
+              Média do setor: ${toBRL(setorReceitaFunc)}/funcionário · ${funcionariosEstimado} funcionários
             </div>
-          </div>
-          
-          <div style="margin-top:12px; font-size:10px; color:#9ca3af">
-            ${_funcReal ? `Com ${funcionariosEstimado} funcionários (${funcProdOrigem})` : `*Número ${funcProdOrigem} em ~${funcionariosEstimado} funcionários. Informe o quadro real na edição para este número deixar de ser circular.`}
-          </div>
+          </div>` : `
+          <div style="padding:12px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px">
+            <div style="font-size:12px; font-weight:700; color:#92400e">Sem comparar com o setor</div>
+            <div style="font-size:11px; color:#92400e; margin-top:2px">O número de funcionários não foi informado, então o "receita/func." é circular e não dá para comparar. Informe o quadro real na edição para liberar a comparação com o setor.</div>
+          </div>`}
         </div>
       </div>
       
@@ -8292,29 +8317,28 @@ function gerarAnaliseAvancadaHtml(latest, rows){
             <div style="position:relative; width:100px; height:100px">
               <svg viewBox="0 0 36 36" style="transform:rotate(-90deg)">
                 <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#e2e8f0" stroke-width="3"/>
-                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${custoSobreReceita > 10 ? '#ef4444' : custoSobreReceita > 5 ? '#f59e0b' : '#10b981'}" stroke-width="3" stroke-dasharray="${Math.min(100, custoSobreReceita * 2)}, 100"/>
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${taxaEfetiva > 25 ? '#ef4444' : taxaEfetiva > 18 ? '#f59e0b' : '#10b981'}" stroke-width="3" stroke-dasharray="${Math.min(100, taxaEfetiva * 2)}, 100"/>
               </svg>
               <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center">
-                <div style="font-size:20px; font-weight:800; color:${custoSobreReceita > 10 ? '#ef4444' : '#1e293b'}">${custoSobreReceita.toFixed(1)}%</div>
-                <div style="font-size:9px; color:#6b7280">da receita</div>
+                <div style="font-size:20px; font-weight:800; color:${taxaEfetiva > 25 ? '#ef4444' : '#1e293b'}">${_dividaBrutaAv > 0 ? taxaEfetiva.toFixed(1)+'%' : '—'}</div>
+                <div style="font-size:9px; color:#6b7280">taxa real a.a.</div>
               </div>
             </div>
             <div>
-              <div style="font-size:24px; font-weight:700; color:#1e293b">${toBRL(despesaFinanceira)}</div>
-              <div style="font-size:11px; color:#6b7280">Despesa financeira anual</div>
-              <div style="font-size:12px; color:${custoSobreEbitda > 30 ? '#ef4444' : '#6b7280'}; margin-top:8px">
-                ${custoSobreEbitda.toFixed(0)}% do EBITDA vai para juros
+              <div style="font-size:24px; font-weight:700; color:#1e293b">${toBRL(_jurosLimpos)}</div>
+              <div style="font-size:11px; color:#6b7280">Juros de empréstimo (limpos) sobre ${toBRL(_dividaBrutaAv)} de dívida</div>
+              <div style="font-size:12px; color:#6b7280; margin-top:8px">
+                Despesa financeira total: ${toBRL(despesaFinanceira)} (${custoSobreEbitda.toFixed(0)}% do EBITDA)
               </div>
             </div>
           </div>
-          
-          <div style="padding:10px; background:${custoSobreReceita > 8 ? '#fef2f2' : '#f8fafc'}; border-radius:6px; font-size:11px">
-            ${custoSobreReceita > 10 ? 
-              '<span style="color:#991b1b">🚨 <strong>Crítico:</strong> Mais de 10% da receita vai para juros. Renegociar urgente!</span>' :
-              custoSobreReceita > 5 ?
-              '<span style="color:#92400e">⚠️ <strong>Atenção:</strong> Custo financeiro elevado. Considere renegociar taxas.</span>' :
-              '<span style="color:#065f46">✅ <strong>Saudável:</strong> Custo financeiro sob controle.</span>'
-            }
+
+          <div style="padding:10px; background:${taxaEfetiva > 22 ? '#fef2f2' : '#f8fafc'}; border-radius:6px; font-size:11px; line-height:1.6">
+            ${_dividaBrutaAv <= 0 ? '<span style="color:#065f46">✅ <strong>Sem dívida relevante.</strong></span>' :
+              taxaEfetiva > 25 ? '<span style="color:#991b1b">🚨 <strong>Taxa alta para o risco</strong> — há argumento para renegociar (ver Inteligência de Crédito).</span>' :
+              taxaEfetiva > 18 ? '<span style="color:#92400e">⚠️ <strong>Taxa na média do mercado.</strong> Vale comparar com o preço justo pelo risco.</span>' :
+              '<span style="color:#065f46">✅ <strong>Taxa boa</strong> para o risco — segure o banco atual.</span>'}
+            ${_taxaTemCambioJCP ? '<br><span style="color:#2563eb">A despesa financeira total tinha câmbio/JCP dentro — a taxa real acima é só o juro de banco.</span>' : ''}
           </div>
         </div>
         
@@ -8331,15 +8355,15 @@ function gerarAnaliseAvancadaHtml(latest, rows){
           
           <div style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.6); border-radius:8px; font-size:11px">
             <div style="color:${eva >= 0 ? '#065f46' : '#991b1b'}">
-              ${eva >= 0 ? 
-                '✅ A empresa está gerando retorno acima do custo de capital. Os sócios estão ganhando dinheiro de verdade.' :
-                '⚠️ O retorno está abaixo do custo de capital (12%). Os sócios perderiam menos deixando o dinheiro aplicado.'
+              ${eva >= 0 ?
+                `✅ A empresa gera retorno acima do custo de capital do setor (${(wacc*100).toFixed(0)}%). Os sócios estão ganhando de verdade.` :
+                `⚠️ O retorno operacional está abaixo do custo de capital do setor ${_setorNomeAv} (${(wacc*100).toFixed(0)}%) neste ano. Num ano atípico isso reverte — olhe a série, não só o último ano.`
               }
             </div>
           </div>
-          
+
           <div style="margin-top:12px; font-size:10px; color:${eva >= 0 ? '#065f46' : '#991b1b'}">
-            EVA = NOPAT (${toBRL(nopat)}) - Capital × WACC (${toBRL(capitalInvestido * wacc)})
+            EVA = NOPAT (EBIT − imposto = ${toBRL(nopat)}) − capital investido × WACC (${toBRL(capitalInvestido * wacc)})
           </div>
         </div>
       </div>
