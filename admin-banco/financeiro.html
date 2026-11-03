@@ -5977,8 +5977,43 @@ function calcularIndicadores(d){
   const zScore = (1.2 * (capitalGiroAtivo || 0)) + 
                  (1.4 * (lucrosRetidos || 0)) + 
                  (3.3 * (ebitAtivo || 0)) + 
-                 (0.6 * (plPassivo || 0)) + 
+                 (0.6 * (plPassivo || 0)) +
                  (1.0 * (receitaAtivo || 0));
+
+  /* === CALIBRAÇÃO — A ATIVIDADE DA EMPRESA (operacional puro × reportado) ===
+     O lucro reportado às vezes é carregado por itens FORA da operação:
+     subvenção/incentivo fiscal e ganhos eventuais (linha "outras receitas"),
+     atualização/recuperação de tributos (dentro do resultado financeiro) e o
+     JCP lançado como "despesa financeira" que depois é revertido. Para analisar
+     a ATIVIDADE em si, isolamos o resultado operacional PURO (só a operação) do
+     reportado e marcamos a distorção. Incentivo é bom de ver — mas pode acabar,
+     então ele fica marcado, nunca embutido na operação. */
+  const outrasReceitasV = getNum(d.outrasReceitas);
+  const outrasDespesasV = getNum(d.outrasDespesas);
+  const naoOperacional = outrasReceitasV - outrasDespesasV;          // líquido fora da operação
+  const jcp = getNum(d.jurosSobreCapitalProprio) || getNum(d.jcp);   // revertido; não é custo real
+  const despFinSemJCP = Math.max(0, despFin - jcp);
+  /* EBIT operacional PURO: lucro bruto − despesas operacionais, SEM "outras receitas".
+     Caminho de cima preferido; se faltar, o de baixo; por último, limpa o reportado. */
+  const ebitOperacional = (_ebitA != null) ? _ebitA
+                        : (_ebitB != null) ? _ebitB
+                        : (ebit ? (ebit - naoOperacional) : 0);
+  const ebitOperDisponivel = (_ebitA != null || _ebitB != null || !!ebit);
+  const ebitdaOperacional = ebitOperDisponivel ? (ebitOperacional + (_daPeriodo > 0 ? _daPeriodo : 0)) : 0;
+  const margemOperacionalPura = safeDiv(ebitOperacional, receita);
+  const margemEbitdaOperacional = safeDiv(ebitdaOperacional, receita);
+  /* quanto do resultado veio de FORA da operação (não-operacional + financeiro positivo) */
+  const foraDaOperacao = Math.max(0, naoOperacional) + Math.max(0, resultadoFin);
+  const parcelaNaoOp = (lucroLiq > 0) ? safeDiv(foraDaOperacao, lucroLiq) : null;
+  const lucroNormalizado = lucroLiq - Math.max(0, naoOperacional);   // aproximação (pré-ajuste fiscal)
+  const distorcaoNaoOp = (naoOperacional > 0 && lucroLiq > 0 && (naoOperacional / lucroLiq) >= 0.30);
+  const coberturaJurosSemJCP = (despFinSemJCP > 0) ? safeDiv(ebitda * fa, despFinSemJCP) : null;
+  const atividade = {
+    ebitOperacional, ebitdaOperacional, margemOperacionalPura, margemEbitdaOperacional,
+    naoOperacional, foraDaOperacao, parcelaNaoOp, lucroNormalizado, distorcaoNaoOp,
+    jcp, despFinSemJCP, coberturaJurosSemJCP, ebitOperDisponivel,
+    ebitReportado: ebit, lucroLiq, receita
+  };
 
   return {
     // v37
@@ -5996,7 +6031,12 @@ function calcularIndicadores(d){
     
     // Margens
     margem, margemBruta, margemLiq, margemOperacional,
-    
+    // Calibração — atividade da empresa (operacional puro × reportado)
+    atividade,
+    ebitOperacional, ebitdaOperacional, margemOperacionalPura, margemEbitdaOperacional,
+    naoOperacional, parcelaNaoOp, lucroNormalizado, distorcaoNaoOp,
+    jcp, despFinSemJCP, coberturaJurosSemJCP,
+
     // Endividamento
     alav, dlSobrePL, endividamento, composicaoEnd,
     endividamentoGeral, composicaoEndCP, ctcp,
@@ -6084,7 +6124,11 @@ function criarIndicadoresVazios(){
     
     // Margens
     margem:null, margemBruta:null, margemLiq:null, margemOperacional:null,
-    
+    // Calibração — atividade da empresa
+    atividade:null, ebitOperacional:0, ebitdaOperacional:0, margemOperacionalPura:null, margemEbitdaOperacional:null,
+    naoOperacional:0, parcelaNaoOp:null, lucroNormalizado:0, distorcaoNaoOp:false,
+    jcp:0, despFinSemJCP:0, coberturaJurosSemJCP:null,
+
     // Endividamento
     alav:null, dlSobrePL:null, endividamento:null, composicaoEnd:null,
     endividamentoGeral:null, composicaoEndCP:null, ctcp:null,
@@ -28046,8 +28090,8 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
         }).join('')
       + '</div>'
       + '<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">'
-      + '<button type="button" class="btn btn-outline" style="padding:5px 12px; font-size:11.5px" onclick="window.exportarAnaliseJSON()">⬇ Exportar tudo (JSON)</button>'
-      + '<span style="font-size:11px; color:#64748b">O arquivo traz o que o sistema leu e cada conta que fez — serve para conferir a análise fora do sistema.</span>'
+      + '<button type="button" class="btn btn-outline" style="padding:6px 14px; font-size:12px; font-weight:700; border-color:#0f766e; color:#0f766e" onclick="window.exportarAnaliseJSON()">⬇ Baixar o dossiê completo (JSON p/ a IA)</button>'
+      + '<span style="font-size:11px; color:#64748b">Um único arquivo com TUDO: números de todos os anos, documentos lidos (contrato, apólices, IR, parecer), cadastro, e as análises que o sistema calculou (risco, crédito, dívidas, atividade) — já com um pedido pronto para colar numa IA e pedir a análise.</span>'
       + '<span id="exportStatus" style="font-size:11.5px"></span></div>'
       + '</details>';
     alvo.innerHTML = h; alvo.style.display = 'block';
@@ -28071,6 +28115,9 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
       scores: function(){ return window.analisarScores(a, rows, D); },
       raiox: function(){ return window.analisarRaioX ? window.analisarRaioX(a, rows, D) : null; },
       racional: function(){ return window.analisarRacional ? window.analisarRacional(a, rows, D) : null; },
+      creditoPreco: function(){ return window.analisarCreditoPreco ? window.analisarCreditoPreco(calcularIndicadores(a), rows, D) : null; },
+      dividas: function(){ return window.analisarDividas ? window.analisarDividas(calcularIndicadores(a), rows, D) : null; },
+      atividade: function(){ var c=calcularIndicadores(a); return c ? c.atividade : null; },
       apolicesConfronto: function(){ var X = docsDaEmpresa(D); return X.apolices ? window.analisarApolices(X.apolices, a) : null; },
       socios: function(){ var X = docsDaEmpresa(D); return X.ir ? window.analisarSocios(X.ir.map(function(x){ return x.completa || x; }), D) : null; }
     };
@@ -28088,8 +28135,13 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     if (!D || !D.rows || !D.rows.length){ if (st) st.textContent = 'Abra a análise de uma empresa primeiro.'; return null; }
     var X = docsDaEmpresa(D);
     var pacote = {
-      tipo: 'analise-exportada', formato: 'corporate-one-analise-export', versao: 1,
+      tipo: 'analise-exportada', formato: 'corporate-one-analise-export', versao: 2,
       geradoEm: new Date().toISOString(),
+      instrucaoParaIA: [
+        'Você recebeu o PACOTE COMPLETO de uma empresa gerado pelo sistema Corporate One: os números de todos os exercícios (oQueOSistemaLeu.exercicios), os documentos qualitativos (contrato social, apólices de seguro, IR dos sócios, parecer de leitura, pesquisa de internet), o cadastro da empresa, e as análises que o próprio sistema calculou (oQueOSistemaCalculou: risco através do ciclo, preço/teto/piso de crédito, cronograma de dívidas, atividade operacional pura, cenários, seguros).',
+        'Produza uma análise de consultor, em português, cobrindo: (1) A ATIVIDADE EM SI — o resultado só da operação (EBIT/EBITDA operacional puro, oQueOSistemaCalculou.atividade), separado do que é incentivo fiscal, recuperação de tributo ou ganho eventual; diga quanto do lucro é operação e quanto vem de fora, e se o não-operacional é recorrente ou pode acabar. (2) DÍVIDAS E CAIXA (oQueOSistemaCalculou.dividas) — tomou mais crédito ou só quitou ano a ano? quanto do caixa mensal está comprometido? o curto prazo cabe no ano? (3) CRÉDITO (oQueOSistemaCalculou.creditoPreco) — necessidade real, teto suportável, preço justo pelo risco, e o que o crédito poderia FAZER pela empresa. (4) RISCOS e NÚMEROS acima/abaixo do saudável. (5) PREVISÃO do próximo exercício com a estratégia que leva a ela. (6) SEGUROS (gancho do corretor).',
+        'Regras: documento vence derivação (se um número veio de nota explicativa, ele manda); ausente não é zero (campo vazio é "não informado", não R$ 0); não-operacional fica MARCADO, nunca embutido na operação; JCP (juros sobre capital próprio) é distribuição ao sócio, não dívida nem juro de banco; distorção vira hipótese/pergunta, não acusação. Se faltar um dado-chave (folha, prazo da dívida de longo prazo, composição de custo), diga o que pedir ao cliente.'
+      ],
       empresa: { id: D.empresaId, nome: D.empresaNome, cnpj: (D.empresaDoc && D.empresaDoc.cnpj) || '', setor: D.setor,
                  funcionarios: (D.empresaDoc && D.empresaDoc.funcionarios) || null },
       /* v84: o cadastro cru (só texto e número), para achar de onde veio um campo estranho */
@@ -43730,10 +43782,15 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var cdiFonte = cdiManual>0 ? 'informado nesta empresa' : (sis.fonte || 'padrão do sistema — confirme a Selic/CDI de hoje');
 
     var ebitda=n(calc.ebitda), ebit=n(calc.ebit)||ebitda*0.8, receita=n(calc.receita)||n(calc.receitaLiquida),
-        dl=n(calc.dl), dividaBruta=n(calc.dividaBruta)||Math.max(0,dl), despFin=n(calc.despFin),
+        dl=n(calc.dl), dividaBruta=n(calc.dividaBruta)||Math.max(0,dl),
         empCP=n(calc.emprestimosCP), empLP=n(calc.emprestimosLP),
         ncg=n(calc.ncg), ccl=n(calc.ccl), caixa=n(calc.caixa)||n(calc.disponiveis),
         deprec=n(calc.depreciacao);
+    /* JCP (juros sobre capital próprio) é distribuição ao sócio lançada como despesa
+       financeira e revertida — não é juro de banco. Tiramos da conta de capacidade,
+       senão o caixa livre para dívida nova sai subestimado (ou zerado). */
+    var jcp=n(calc.jcp);
+    var despFin=Math.max(0, (n(calc.despFinSemJCP)||n(calc.despFin)) - (n(calc.despFinSemJCP)?0:jcp));
     var serie=(rows||[]);
     var ultimo=serie[serie.length-1]||{};
     var taxaHoje=n(ultimo.taxaMedia)||n(calc.taxaMedia)||0;
@@ -43871,6 +43928,127 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       sugestoes:sug, valorRecomendado:(principal?principal.valor:0), taxaRecomendada:(principal?principal.taxa:justoMin), principalTipo:(principal?principal.tipo:null) };
   }
 
+  /* ===== MÓDULO DE DÍVIDAS — o que já existe e o que sai do caixa, mês a mês =====
+     Responde: tomou mais crédito ou só quitou (ano a ano)? o curto prazo vence em
+     12 meses (circulante, por definição); o longo prazo não diz o prazo exato, mas
+     dá para simular por cenário (24/36/48m) quanto compromete o caixa por mês e a
+     saída ano a ano (1..4). JCP e dividendos NÃO entram como dívida bancária. */
+  function _simulaSaida(empCP, empLP, tx, mesesLP){
+    var im = Math.pow(1+tx,1/12)-1;
+    function parc(P,Nm){ return P<=0?0:(im<=1e-9? P/Nm : P*im*Math.pow(1+im,Nm)/(Math.pow(1+im,Nm)-1)); }
+    var pCP=parc(empCP,12), pLP=parc(empLP,mesesLP);
+    var anos=[0,0,0,0], jurosTot=0, pago=0;
+    for(var m=1;m<=48;m++){ var y=Math.ceil(m/12);
+      if(m<=12){ anos[y-1]+=pCP; pago+=pCP; } if(m<=mesesLP){ anos[y-1]+=pLP; pago+=pLP; } }
+    jurosTot = pago - (empCP+empLP);
+    return { pCP:pCP, pLP:pLP, parcelaMensalAno1:pCP+pLP, anos:anos, jurosTot:Math.max(0,jurosTot), mesesLP:mesesLP };
+  }
+  function analisarDividas(calc, rows, D){
+    calc=calc||{}; rows=rows||[];
+    /* robusto à ordem: o ano mais recente é o de maior "ano", não uma posição fixa */
+    var ord = rows.slice().sort(function(a,b){ return n(a.ano)-n(b.ano); });
+    var ultimo = ord[ord.length-1] || {};
+    var empCP=n(calc.emprestimosCP)||n(ultimo.emprestimosCP);
+    var empLP=n(calc.emprestimosLP)||n(ultimo.emprestimosLP);
+    var dividaFin = empCP+empLP;
+    var parcelCP=n(ultimo.parcelamentosCP), parcelLP=n(ultimo.parcelamentosLP);
+    var jcp=n(calc.jcp)||n(ultimo.jurosSobreCapitalProprio)||n(ultimo.jcp);
+    var dividendos=n(ultimo.dividendosPagar);
+    /* caixa operacional livre (CFADS) — medido sobre a geração de caixa real (EBITDA
+       reportado). capex de manutenção = 3% da receita (reserva), não a depreciação
+       acumulada do balanço, que é estoque e zeraria o caixa indevidamente. */
+    var ebitda=n(calc.ebitda), receita=n(calc.receita)||n(calc.receitaLiquida);
+    var ebit=n(calc.ebit)||ebitda*0.8;
+    var capexManut = receita*0.03;
+    var impostos = Math.max(0,ebit)*ALIQ_IR;
+    var CFADS = Math.max(0, ebitda - capexManut - impostos);
+    var caixaOperMensal = CFADS/12;
+    /* taxa: a média informada, senão CDI + 4% como referência */
+    var sis=cdiDoSistema();
+    var cdi=(D&&D.empresaDoc&&n(D.empresaDoc.cdiManual)>0)?n(D.empresaDoc.cdiManual):sis.cdi;
+    var taxaHoje=n(ultimo.taxaMedia)||n(calc.taxaMedia)||0; if(taxaHoje>=1) taxaHoje/=100;
+    var tx = taxaHoje>0?taxaHoje:(cdi+0.04);
+    /* dívida ano a ano (tomou mais ou quitou?) — em ordem crescente de ano */
+    var serie=ord.map(function(r){
+      var c=r; try{ if(typeof calcularIndicadores==='function') c=calcularIndicadores(r); }catch(e){}
+      var dv=(n(c.emprestimosCP)+n(c.emprestimosLP))||n(c.dividaBruta)||0;
+      return { ano:r.ano, divida:dv, cp:n(c.emprestimosCP), lp:n(c.emprestimosLP) };
+    });
+    var varYoY=null;
+    if(serie.length>=2){ var a=serie[serie.length-2], b=serie[serie.length-1];
+      varYoY={ de:a.divida, para:b.divida, delta:b.divida-a.divida, pct:(a.divida>0?(b.divida-a.divida)/a.divida:null), ano0:a.ano, ano1:b.ano }; }
+    /* cronograma por cenário de prazo da LP */
+    var cenarios=[24,36,48].map(function(mLP){
+      var s=_simulaSaida(empCP, empLP, tx, mLP);
+      s.compromMensal = caixaOperMensal>0 ? s.parcelaMensalAno1/caixaOperMensal : null;
+      return s;
+    });
+    return { dividaFin:dividaFin, empCP:empCP, empLP:empLP, parcelCP:parcelCP, parcelLP:parcelLP,
+      jcp:jcp, dividendos:dividendos, CFADS:CFADS, caixaOperMensal:caixaOperMensal,
+      taxaUsada:tx, taxaInformada:taxaHoje>0, cdi:cdi, varYoY:varYoY, serie:serie, cenarios:cenarios };
+  }
+  window.analisarDividas = analisarDividas;
+
+  function renderDividas(calc, rows, D){
+    var d; try{ d=analisarDividas(calc, rows, D); }catch(e){ return ''; }
+    if(d.dividaFin<=0 && (!d.varYoY || d.varYoY.para<=0)){
+      return card('6. As dívidas — praticamente não há', 'A empresa não carrega dívida bancária relevante hoje. Isso é força (independência de banco), mas também pode ser capacidade ociosa: há espaço para crédito barato se houver um bom uso (ver seções 2 e 4).', '#15803d');
+    }
+    var h='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 8px">6. As dívidas de hoje — o que sai do caixa, mês a mês</div>';
+    /* tomou mais ou quitou */
+    if(d.varYoY){
+      var v=d.varYoY, subiu=v.delta>0, quase=Math.abs(v.delta)<Math.max(1, v.de*0.02);
+      var cor= quase?'#64748b':(subiu?'#b45309':'#15803d');
+      var txt= quase
+        ? 'Entre '+v.ano0+' e '+v.ano1+' a dívida bancária ficou praticamente estável ('+R$(v.de)+' → '+R$(v.para)+'). A empresa <b>rolou o que tinha</b>, sem tomar mais nem quitar de forma relevante.'
+        : subiu
+          ? 'Entre '+v.ano0+' e '+v.ano1+' a dívida bancária <b>subiu</b> '+R$(v.delta)+' ('+(v.pct!=null?pc(v.pct,0):'—')+'): '+R$(v.de)+' → '+R$(v.para)+'. A empresa <b>tomou mais crédito</b> no período — vale conferir em quê foi aplicado (giro, investimento, troca de linha).'
+          : 'Entre '+v.ano0+' e '+v.ano1+' a dívida bancária <b>caiu</b> '+R$(-v.delta)+' ('+(v.pct!=null?pc(v.pct,0):'—')+'): '+R$(v.de)+' → '+R$(v.para)+'. A empresa <b>amortizou / quitou</b> no período — está desalavancando (autofinanciada).';
+      h+=card((subiu?'📈':'📉')+' Crédito tomado — ano a ano', txt, cor);
+    }
+    /* composição CP × LP + o que NÃO é dívida */
+    h+='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin-bottom:8px">';
+    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Vence em até 12 meses (curto)</div><div style="font-size:21px; font-weight:800; color:#c2410c; margin-top:3px">'+R$(d.empCP)+'</div><div style="font-size:11px; color:#64748b">é o que a empresa paga neste ano, por definição do circulante'+(d.parcelCP>0?' · + '+R$(d.parcelCP)+' de parcelamento tributário':'')+'</div></div>';
+    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Longo prazo (após 12 meses)</div><div style="font-size:21px; font-weight:800; color:#0f766e; margin-top:3px">'+R$(d.empLP)+'</div><div style="font-size:11px; color:#64748b">prazo exato não vem no balanço — simulado abaixo por cenário'+(d.parcelLP>0?' · + '+R$(d.parcelLP)+' de parcelamento LP':'')+'</div></div>';
+    h+='</div>';
+    if(d.jcp>0 || d.dividendos>0){
+      h+='<div style="font-size:11.5px; color:#475569; margin:2px 0 12px; line-height:1.65; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:9px 12px">'
+        + '<b>Não é dívida bancária (fora da conta):</b> '
+        + (d.jcp>0?R$(d.jcp)+' de juros sobre capital próprio (JCP) ':'')
+        + (d.jcp>0&&d.dividendos>0?'· ':'')
+        + (d.dividendos>0?R$(d.dividendos)+' de dividendos a pagar ':'')
+        + '— são distribuição aos sócios, não crédito. O sistema tira isso da análise de dívida e da cobertura de juros (senão inventaria um custo que não existe).</div>';
+    }
+    /* cronograma / comprometimento mensal por cenário */
+    h+='<div style="font-size:12px; color:#64748b; margin-bottom:8px; line-height:1.6">Caixa operacional livre: <b>'+R$(d.CFADS)+'/ano</b> (≈ '+R$(d.caixaOperMensal)+'/mês). '
+      + 'A parcela usa a taxa '+(d.taxaInformada?'média informada ('+pc(d.taxaUsada)+')':'de referência CDI+4% ('+pc(d.taxaUsada)+') — informe a taxa média real no cadastro para afinar')+'. '
+      + 'Como o prazo da LP não vem no balanço, mostramos 3 cenários.</div>';
+    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 15px; margin-bottom:6px"><table style="width:100%; border-collapse:collapse; font-size:12.5px">'
+      + '<tr style="color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:.3px"><td style="padding:5px 0">Prazo da LP</td><td style="padding:5px 8px; text-align:right">Parcela/mês (ano 1)</td><td style="padding:5px 8px; text-align:right">% do caixa mensal</td><td style="padding:5px 0 5px 8px; text-align:right">Juros no total</td></tr>';
+    d.cenarios.forEach(function(c){
+      var ap = c.compromMensal!=null && c.compromMensal>0.5;
+      var cor = c.compromMensal==null?'#64748b':(c.compromMensal<=0.35?'#15803d':c.compromMensal<=0.6?'#a16207':'#b91c1c');
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:7px 0; color:#0f172a; font-weight:700">'+(c.mesesLP/12)+' anos</td>'
+        + '<td style="padding:7px 8px; text-align:right; font-weight:700; color:#0f766e">'+R$(c.parcelaMensalAno1)+'</td>'
+        + '<td style="padding:7px 8px; text-align:right; font-weight:700; color:'+cor+'">'+(c.compromMensal==null?'—':pc(c.compromMensal,0))+'</td>'
+        + '<td style="padding:7px 0 7px 8px; text-align:right; color:#b45309">'+R$(c.jurosTot)+'</td></tr>';
+    });
+    h+='</table></div>';
+    /* saída de caixa ano a ano (cenário do meio, 36m) */
+    var meio=d.cenarios[1]||d.cenarios[0];
+    if(meio){
+      h+='<div style="font-size:12px; color:#64748b; margin:8px 0 6px; line-height:1.6">Saída de caixa com a dívida atual, ano a ano (cenário '+(meio.mesesLP/12)+' anos para a LP):</div>';
+      h+='<div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:6px">';
+      meio.anos.forEach(function(a,i){
+        h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 8px; text-align:center"><div style="font-size:10.5px; color:#64748b; font-weight:700">Ano '+(i+1)+'</div><div style="font-size:15px; font-weight:800; color:'+(a>0?'#0f172a':'#cbd5e1')+'; margin-top:3px">'+(a>0?R$(a):'—')+'</div></div>';
+      });
+      h+='</div>';
+      h+='<div style="font-size:11.5px; color:#94a3b8; margin:2px 0 6px; line-height:1.6">O ano 1 concentra o curto prazo (que vence em 12 meses) + a parcela da LP; os anos seguintes só a LP, até ela acabar. % do caixa acima de 60% é alerta: a dívida come o fôlego da operação.</div>';
+    }
+    return h;
+  }
+  window.renderDividas = renderDividas;
+
   function renderCreditoPreco(calc, rows, D){
     var r;
     try{ r=analisarCreditoPreco(calc, rows, D); }catch(e){ return '<div style="font-size:12px;color:#b91c1c">Não consegui montar a análise de preço: '+esc(e.message)+'</div>'; }
@@ -43880,6 +44058,24 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       + '<div style="font-size:12px; opacity:.9; line-height:1.7; margin-top:5px">A necessidade separada do que é dívida nova, do que é só alongar e do que o banco não resolve. '
       + 'Depois, o teto que a empresa aguenta pagar e o preço justo pelo risco dela. '
       + 'CDI de referência: <b>'+pc(r.cdi)+'</b> <span style="opacity:.8">('+esc(r.cdiFonte||'')+')</span>.</div></div>';
+
+    /* 0. A atividade da empresa — operação pura × resultado reportado */
+    var AT = calc.atividade || null;
+    if(AT && AT.ebitOperDisponivel){
+      h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:4px 0 8px">0. A atividade da empresa — a operação por dentro do lucro</div>';
+      h+='<div style="font-size:12px; color:#64748b; margin-bottom:8px; line-height:1.6">O lucro reportado às vezes é carregado por incentivo fiscal, recuperação de tributo ou ganho eventual — bom de ver, mas pode acabar um dia. Aqui está o resultado só da <b>operação</b> (vender o produto), separado do que vem de fora dela. É daqui que sai a capacidade real de pagar dívida.</div>';
+      h+='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; margin-bottom:6px">';
+      h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">EBIT da operação (puro)</div><div style="font-size:20px; font-weight:800; color:#0f766e; margin-top:3px">'+R$(AT.ebitOperacional)+'</div><div style="font-size:11px; color:#64748b">margem '+pc(AT.margemOperacionalPura)+' · sem incentivo/não-operacional</div></div>';
+      h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">EBITDA da operação</div><div style="font-size:20px; font-weight:800; color:#0f766e; margin-top:3px">'+R$(AT.ebitdaOperacional)+'</div><div style="font-size:11px; color:#64748b">margem '+pc(AT.margemEbitdaOperacional)+'</div></div>';
+      h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Lucro reportado</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+R$(AT.lucroLiq)+'</div><div style="font-size:11px; color:#64748b">'+(AT.parcelaNaoOp!=null?pc(AT.parcelaNaoOp,0)+' veio de fora da operação':'—')+'</div></div>';
+      h+='</div>';
+      if(AT.distorcaoNaoOp){
+        h+=card('⚠️ Cuidado: o lucro não é da operação', 'Cerca de <b>'+R$(AT.naoOperacional)+'</b> do resultado vem de <b>fora da operação</b> (incentivo/subvenção, recuperação de tributo, ganho eventual). Sem isso, o lucro cairia para perto de <b>'+R$(AT.lucroNormalizado)+'</b>. Isso pode ser estrutural (um incentivo que se repete) ou pontual (uma ação judicial que acaba) — <b>confirme na nota explicativa</b> antes de precificar crédito pela margem reportada. A capacidade de pagar dívida vem da operação, não do incentivo.', '#c2410c');
+      }
+      if(AT.jcp>0){
+        h+='<div style="font-size:11.5px; color:#475569; margin:2px 0 14px; line-height:1.65; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:9px 12px"><b>JCP neutralizado:</b> '+R$(AT.jcp)+' de juros sobre capital próprio estavam lançados como despesa financeira — é distribuição ao sócio, não juro de banco. A cobertura de juros "limpa" é '+(AT.coberturaJurosSemJCP!=null?'<b>'+(AT.coberturaJurosSemJCP).toFixed(1).replace('.',',')+'×</b>':'—')+' (sem o JCP distorcendo).</div>';
+      } else { h+='<div style="margin-bottom:10px"></div>'; }
+    }
 
     /* 1. necessidade em três baldes */
     h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:4px 0 8px">1. A necessidade, sem contar duas vezes</div>';
@@ -44016,6 +44212,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       h+='</table></div>';
       h+='<div style="font-size:11.5px; color:#94a3b8; margin:2px 0 6px; line-height:1.6">Taxa em % ao ano (CDI + spread justo). "Aperta" = a parcela passa do caixa livre atual: alongue o prazo ou reduza o valor para não comprometer a capacidade.</div>';
     }
+
+    /* ---- 6. as dívidas de hoje — cronograma mês a mês ---- */
+    try{ h += renderDividas(calc, rows, D) || ''; }catch(e){ console.warn('[dividas]', e); }
 
     return h;
   }
