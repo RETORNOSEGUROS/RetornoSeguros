@@ -2063,6 +2063,29 @@
       </div>
       
       <div class="modal-body">
+        <!-- Guia do ano novo: copiar prompt → colar na IA → importar JSON, tudo nesta tela -->
+        <div id="guiaAnoNovo" style="margin:0 0 18px; border:1px solid #5eead4; background:linear-gradient(135deg,#ecfdf5,#f0fdfa); border-radius:12px; padding:14px 16px">
+          <div style="font-size:14px; font-weight:800; color:#0f766e; margin-bottom:3px">➕ Adicionar um ano em 3 passos — sem sair desta tela</div>
+          <div style="font-size:11.5px; color:#475569; margin-bottom:10px">O sistema não lê o balanço sozinho: a IA lê e devolve um JSON, o sistema calcula tudo. Siga os passos.</div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px">
+            <div style="background:#fff; border:1px solid #d1fae5; border-radius:9px; padding:11px 13px">
+              <div style="font-size:11px; font-weight:800; color:#0f766e; letter-spacing:.3px">PASSO 1 · COPIAR</div>
+              <div style="font-size:12px; color:#334155; margin:4px 0 8px; line-height:1.5">Copie o prompt deste ano — ele já leva os anos que você tem gravados.</div>
+              <button type="button" class="btn" id="btnCopiarPromptAno" style="background:#0f766e;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">📋 Copiar prompt</button>
+              <span id="guiaStatus" style="font-size:11px; display:block; margin-top:6px; line-height:1.4"></span>
+            </div>
+            <div style="background:#fff; border:1px solid #d1fae5; border-radius:9px; padding:11px 13px">
+              <div style="font-size:11px; font-weight:800; color:#0f766e; letter-spacing:.3px">PASSO 2 · NA SUA IA</div>
+              <div style="font-size:12px; color:#334155; margin-top:4px; line-height:1.5">Numa conversa do Claude/ChatGPT, <b>cole o prompt</b> e <b>anexe o balanço e a DRE do ano novo</b>. Ela devolve um arquivo <b>JSON</b>.</div>
+            </div>
+            <div style="background:#fff; border:1px solid #d1fae5; border-radius:9px; padding:11px 13px">
+              <div style="font-size:11px; font-weight:800; color:#0f766e; letter-spacing:.3px">PASSO 3 · SUBIR AQUI</div>
+              <div style="font-size:12px; color:#334155; margin:4px 0 8px; line-height:1.5">Suba o JSON — preenche e atualiza tudo, sem digitar.</div>
+              <button type="button" class="btn" id="btnImportarJsonGuia" style="background:#0284c7;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">📥 Importar JSON</button>
+            </div>
+          </div>
+          <div style="font-size:11px; color:#64748b; margin-top:9px">Prefere lançar à mão? Use as abas abaixo (Básico, DRE, Ativo, Passivo).</div>
+        </div>
         <!-- Abas do formulário -->
         <div style="display:flex; gap:4px; margin-bottom:20px; border-bottom:2px solid var(--border); padding-bottom:8px; flex-wrap:wrap">
           <button class="form-tab-btn active" data-formtab="basico" style="padding:8px 16px; border:none; background:var(--accent); color:#fff; border-radius:6px 6px 0 0; cursor:pointer; font-weight:600; font-size:12px">📋 Básico</button>
@@ -4523,6 +4546,25 @@
           btn.addEventListener('click', ()=> inp.click());
           inp.addEventListener('change', ()=>{ if(inp.files && inp.files[0]) carregarArquivo(inp.files[0]); inp.value=''; });
         }
+        // Guia do ano novo (faixa de 3 passos no topo do modal)
+        const btnGuiaImp = $('btnImportarJsonGuia');
+        if(btnGuiaImp && inp) btnGuiaImp.addEventListener('click', ()=> inp.click());
+        const btnCopiarAno = $('btnCopiarPromptAno');
+        if(btnCopiarAno) btnCopiarAno.addEventListener('click', ()=>{
+          const D = window.CURRENT_ANALYSIS_DATA;
+          const st = $('guiaStatus');
+          let t = '';
+          try {
+            if (typeof window.montarPromptFinanceiro === 'function' && D)
+              t = window.montarPromptFinanceiro({ nome: D.empresaNome, cnpj: (D.empresaDoc && D.empresaDoc.cnpj) || '',
+                razaoSocial: (D.empresaDoc && D.empresaDoc.dadosReceita && D.empresaDoc.dadosReceita.razaoSocial) || '', anos: D.rows || [] });
+            else if (typeof window.montarBriefing === 'function') t = window.montarBriefing(D);
+          } catch(e){}
+          if(!t){ if(st){ st.textContent='Abra a empresa pela análise antes de gerar o prompt.'; st.style.color='#b45309'; } return; }
+          const ok = ()=>{ if(st){ st.textContent='✅ Copiado ('+Math.round(t.length/1000)+' mil car.). Cole na sua IA e anexe o balanço e a DRE do ano.'; st.style.color='#15803d'; } };
+          const falhou = ()=>{ if(st){ st.textContent='Não consegui copiar — o texto está no console (F12).'; st.style.color='#b45309'; } console.log(t); };
+          (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(ok).catch(falhou);
+        });
         const f = $('jiFechar'); if(f) f.addEventListener('click', ()=>{ $('jsonImportPanel').style.display='none'; });
         const t = $('jiTodos'); if(t) t.addEventListener('click', importarTodos);
         // arrastar e soltar o JSON sobre o modal
@@ -44059,7 +44101,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
   function renderDistorcoes(rows){
     var x; try{ x=analisarDistorcoes(rows); }catch(e){ return ''; }
-    if(!x.custoShock && !x.cambio && !x.plGap) return '';
+    if(!x.custoShock && !x.cambio) return '';   /* o PL vira banner formal no topo do crédito */
     var h='<div style="font-size:12.5px; font-weight:800; color:#0f172a; margin:10px 0 6px">Distorções a desfazer antes de julgar a empresa</div>';
     if(x.custoShock){
       var cs=x.custoShock;
@@ -44076,14 +44118,19 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           'A despesa financeira de <b>'+R$(c.despFin)+'</b> sobre a dívida de <b>'+R$(c.divida)+'</b> dá um juro implícito de <b>'+pc(c.impl,0)+'</b> ao ano — muito acima do mercado. Quase certo que tem dentro <b>variação cambial/monetária</b> (insumo/dívida em dólar) <b>ou juros sobre capital próprio (JCP)</b> lançados como despesa financeira — nenhum dos dois é juro de banco. A cobertura "cheia" ('+(c.coberturaCheia!=null?c.coberturaCheia.toFixed(2).replace('.',','):'—')+'×) está punindo a empresa por isso. <b>Peça a abertura da despesa financeira</b> (juros de empréstimo, variação cambial, JCP) — com os juros puros, a cobertura real costuma ser bem melhor.', '#2563eb');
       }
     }
-    if(x.plGap){
-      var g=x.plGap;
-      h+=card('🏛️ O patrimônio caiu muito além do lucro — pergunte a causa',
-        'Entre '+g.anoDe+' e '+g.anoPara+' o patrimônio líquido foi de <b>'+R$(g.de)+'</b> para <b>'+R$(g.para)+'</b> ('+(g.delta<0?'−':'+')+R$(Math.abs(g.delta))+'), mas o lucro do ano foi de só '+R$(g.lucro)+'. Sobram <b>'+R$(g.inexplicado)+'</b> que saíram do PL sem passar pelo resultado. Pode ser distribuição de lucros/JCP, redução de capital, ajuste de exercícios anteriores ou distribuição via holding. <b>Não condene nem absolva sem a causa</b> — pergunte ao cliente (e cheque a DMPL). Numa empresa boa pode ser só distribuição; numa apertada, é bandeira vermelha.', '#b45309');
-    }
     return h;
   }
   window.renderDistorcoes=renderDistorcoes;
+
+  /* banner formal de reconciliação do PL — some do meio e vai ao TOPO do crédito */
+  function bannerReconciliacaoPL(rows){
+    var x; try{ x=analisarDistorcoes(rows); }catch(e){ return ''; }
+    var g=x && x.plGap; if(!g) return '';
+    return '<div style="background:#fff7ed; border:1px solid #fdba74; border-left:5px solid #ea580c; border-radius:0 11px 11px 0; padding:13px 16px; margin-bottom:14px">'
+      + '<div style="font-size:13px; font-weight:800; color:#c2410c; margin-bottom:4px">🏛️ Trava: o patrimônio caiu muito além do lucro — pergunte a causa</div>'
+      + '<div style="font-size:12.5px; color:#334155; line-height:1.7">Entre '+g.anoDe+' e '+g.anoPara+' o patrimônio líquido foi de <b>'+R$(g.de)+'</b> para <b>'+R$(g.para)+'</b> ('+(g.delta<0?'−':'+')+R$(Math.abs(g.delta))+'), mas o lucro do ano foi de só '+R$(g.lucro)+'. Sobram <b>'+R$(g.inexplicado)+'</b> que saíram do PL <b>sem passar pelo resultado</b>. Pode ser distribuição de lucros/JCP, redução de capital, ajuste de exercícios anteriores ou distribuição via holding. <b>Não condene nem absolva sem a causa</b> — pergunte ao cliente e cheque a DMPL. Em empresa boa pode ser só distribuição; em empresa apertada, é bandeira vermelha (e sinal de extração de capital).</div></div>';
+  }
+  window.bannerReconciliacaoPL=bannerReconciliacaoPL;
 
   function renderDividas(calc, rows, D){
     var d; try{ d=analisarDividas(calc, rows, D); }catch(e){ return ''; }
@@ -44152,7 +44199,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var r;
     try{ r=analisarCreditoPreco(calc, rows, D); }catch(e){ return '<div style="font-size:12px;color:#b91c1c">Não consegui montar a análise de preço: '+esc(e.message)+'</div>'; }
     var N=r.necessidade;
-    var h='<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f); border-radius:13px; padding:18px 20px; color:#fff; margin-bottom:16px">'
+    var h='';
+    try{ h += bannerReconciliacaoPL(rows) || ''; }catch(e){}
+    h+='<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f); border-radius:13px; padding:18px 20px; color:#fff; margin-bottom:16px">'
       + '<div style="font-size:18px; font-weight:800">Quanto, e a que preço — a conversa de crédito em números</div>'
       + '<div style="font-size:12px; opacity:.9; line-height:1.7; margin-top:5px">A necessidade separada do que é dívida nova, do que é só alongar e do que o banco não resolve. '
       + 'Depois, o teto que a empresa aguenta pagar e o preço justo pelo risco dela. '
