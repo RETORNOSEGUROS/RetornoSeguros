@@ -44668,6 +44668,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window._DIVIDA_ATIVA = window._DIVIDA_ATIVA || null;   // {idx, lista, meta}
   window._DA_CARTEIRA = window._DA_CARTEIRA || null;     // resultado do cruzamento
   window._DA_FILTRO = '';
+  window._DA_SO_NAO_CLIENTE = false;
 
   function carregarSheetJS(cb){
     if(window.XLSX) return cb();
@@ -44751,17 +44752,17 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var st=document.getElementById('_daCartStatus'); if(st){ st.textContent='Lendo a carteira e cruzando…'; st.style.color='#64748b'; }
     if(typeof db==='undefined'){ if(st){ st.textContent='Banco indisponível nesta tela.'; st.style.color='#b45309'; } return; }
     db.collection('empresas').get().then(function(snap){
-      var clientes=[], achados=[];
+      var clientes=[], achados=[], raizes={};
       snap.forEach(function(doc){ var d=doc.data()||{};
         var cnpj=d.cnpj||(d.dadosReceita&&d.dadosReceita.cnpj)||'';
         var nome=d.nome||d.razaoSocial||(d.dadosReceita&&d.dadosReceita.razaoSocial)||doc.id;
         if(!cnpj) return;
         var analisada=!!(d.fichaConsultor360||d.cnpjConsultor360||d.ultimoExercicio||d.qtdSocios||d.dados);
-        clientes.push({nome:nome, cnpj:cnpj});
+        clientes.push({nome:nome, cnpj:cnpj}); raizes[raizDe(cnpj)]=1;
         var m=DA.idx[raizDe(cnpj)]; if(m) achados.push({nome:nome, cnpj:cnpj, m:m, analisada:analisada});
       });
       achados.sort(function(a,b){ return b.m.jud-a.m.jud; });
-      window._DA_CARTEIRA={ total:clientes.length, achados:achados, feitoEm:new Date() };
+      window._DA_CARTEIRA={ total:clientes.length, achados:achados, raizes:raizes, feitoEm:new Date() };
       renderSeguroGarantia();
     }).catch(function(e){ if(st){ st.textContent='Não consegui ler a carteira: '+esc(e&&e.message||e); st.style.color='#b91c1c'; } });
   }
@@ -44769,6 +44770,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
   function filtrarProspeccao(v){ window._DA_FILTRO=v||''; renderProspeccao(); }
   window.filtrarProspeccaoDA=filtrarProspeccao;
+  function toggleSoNaoCliente(v){ window._DA_SO_NAO_CLIENTE=!!v; renderProspeccao(); }
+  window.toggleSoNaoClienteDA=toggleSoNaoCliente;
 
   function card(t,c,cor){ return '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid '+(cor||'#0f766e')+'; border-radius:0 11px 11px 0; padding:14px 16px; margin-bottom:12px"><div style="font-size:13px; font-weight:800; color:'+(cor||'#0f766e')+'; margin-bottom:6px">'+t+'</div><div style="font-size:12.5px; color:#334155; line-height:1.7">'+c+'</div></div>'; }
 
@@ -44776,15 +44779,30 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var box=document.getElementById('_daProspBox'); if(!box) return;
     var DA=window._DIVIDA_ATIVA; if(!DA){ box.innerHTML=''; return; }
     var filtro=norm(window._DA_FILTRO);
-    var lista=DA.lista.filter(function(x){ return x.jud>0 && (!filtro || norm(x.mun).indexOf(filtro)>=0); });
+    var cart=window._DA_CARTEIRA; var raizes=(cart&&cart.raizes)||null;
+    var soNaoCli=!!window._DA_SO_NAO_CLIENTE;
+    function ehCliente(x){ return raizes && raizes[x.raiz]; }
+    var lista=DA.lista.filter(function(x){
+      if(!(x.jud>0)) return false;
+      if(filtro && norm(x.mun).indexOf(filtro)<0) return false;
+      if(soNaoCli && ehCliente(x)) return false;
+      return true;
+    });
     lista.sort(function(a,b){ return b.jud-a.jud; });
     var topo=lista.slice(0,40);
     var somaFiltro=lista.reduce(function(s,x){return s+x.jud;},0);
-    var h='<div style="font-size:12px; color:#64748b; margin:2px 0 8px">'+lista.length.toLocaleString('pt-BR')+' empresas com execução'+(filtro?' em "'+esc(window._DA_FILTRO)+'"':'')+' · R$ '+Math.round(somaFiltro).toLocaleString('pt-BR')+' em valor judicial. Mostrando as 40 maiores.</div>';
+    var h='';
+    if(!raizes){
+      h+='<div style="font-size:11.5px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:7px 11px; margin-bottom:8px">Para separar quem <b>já é seu cliente</b> de quem <b>não é (prospect novo)</b>, clique em <b>"Cruzar com meus clientes"</b> acima primeiro.</div>';
+    } else {
+      h+='<label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#0f172a; margin-bottom:8px; cursor:pointer"><input type="checkbox" '+(soNaoCli?'checked':'')+' onchange="window.toggleSoNaoClienteDA(this.checked)"> <b>Só quem NÃO é meu cliente</b> (prospects não mapeados)</label>';
+    }
+    h+='<div style="font-size:12px; color:#64748b; margin:2px 0 8px">'+lista.length.toLocaleString('pt-BR')+' empresas com execução'+(filtro?' em "'+esc(window._DA_FILTRO)+'"':'')+(soNaoCli?' que ainda não são seus clientes':'')+' · R$ '+Math.round(somaFiltro).toLocaleString('pt-BR')+' em valor judicial. Mostrando as 40 maiores.</div>';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:4px 10px; max-height:420px; overflow:auto"><table style="width:100%; border-collapse:collapse; font-size:12px">'
-      +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase; position:sticky; top:0; background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">Município</td><td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
+      +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase; position:sticky; top:0; background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">Município</td>'+(raizes?'<td style="padding:6px 4px">Situação</td>':'')+'<td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
     topo.forEach(function(x){
-      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a">'+esc(String(x.dev).slice(0,42))+'</td><td style="padding:6px 4px; color:#64748b">'+esc(x.mun)+'</td><td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(x.jud)+'</td></tr>';
+      var sit = raizes ? (ehCliente(x)?'<td style="padding:6px 4px"><span style="color:#15803d; font-size:11px">cliente</span></td>':'<td style="padding:6px 4px"><span style="color:#b45309; font-size:11px; font-weight:700">prospect</span></td>') : '';
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a">'+esc(String(x.dev).slice(0,42))+'</td><td style="padding:6px 4px; color:#64748b">'+esc(x.mun)+'</td>'+sit+'<td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(x.jud)+'</td></tr>';
     });
     h+='</table></div><div style="font-size:11px; color:#94a3b8; margin-top:6px">Cada uma precisa garantir o juízo para se defender/suspender a execução — o valor judicial é a importância segurada do seguro garantia.</div>';
     box.innerHTML=h;
