@@ -3342,10 +3342,16 @@
             <span class="tab-icon">🏭</span>
             <span>Mercado RS</span>
           </button>
+          <button class="tab-btn" data-tab="garantia">
+            <span class="tab-icon">⚖️</span>
+            <span>Seguro Garantia</span>
+          </button>
         </div>
 
         <!-- ABA Mercado RS: nowcast de faturamento pelo setor no município (NF-e Sefaz-RS) -->
         <div class="tab-content" id="tab-mercado"><div id="mercadoContent"></div></div>
+        <!-- ABA Seguro Garantia: cruza dívida ativa RS com a carteira (oportunidade de seguro garantia) -->
+        <div class="tab-content" id="tab-garantia"><div id="garantiaContent"></div></div>
 
         <!-- ABA 1: Dashboard (conteúdo original) -->
         <div class="tab-content active" id="tab-dashboard">
@@ -4937,6 +4943,8 @@ function wireUi(){
           if(_mc && typeof window.renderMercadoRS === 'function')
             _mc.innerHTML = window.renderMercadoRS(CURRENT_ANALYSIS_DATA);
         }catch(eMc){ console.warn('[mercado]', eMc); }
+      } else if(tabId === "garantia"){
+        try{ if(typeof window.renderSeguroGarantia === 'function') window.renderSeguroGarantia(); }catch(eSg){ console.warn('[garantia]', eSg); }
       } else if(tabId === "olhares" && CURRENT_ANALYSIS_DATA){
         try{ if (typeof window.renderOlhares === 'function') window.renderOlhares(CURRENT_ANALYSIS_DATA); }catch(eOl){ console.warn('[olhares]', eOl); }
       } else if(tabId === "racional" && CURRENT_ANALYSIS_DATA){
@@ -44629,6 +44637,204 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     return h;
   }
   window.renderMercadoRS = renderMercadoRS;
+})();
+</script>
+
+
+<script>
+/* ===================================================================
+   SEGURO GARANTIA — cruza a Dívida Ativa do RS com a carteira
+   O corretor sobe a planilha de devedores (transparencia.rs.gov.br).
+   O sistema casa o CNPJ (raiz, 8 díg) com: (a) a empresa aberta, e
+   (b) toda a carteira (Firestore 'empresas'). Empresa com valor
+   JUDICIAL em execução precisa garantir o juízo → seguro garantia
+   judicial, com a importância segurada já dimensionada.
+   =================================================================== */
+(function(){
+  'use strict';
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function R$(v){ return (v==null||!isFinite(v))?'—':Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function raizDe(cnpj){ return String(cnpj==null?'':cnpj).replace(/\D/g,'').slice(0,8); }
+  function norm(s){ try{ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().trim(); }catch(e){ return String(s||'').toUpperCase().trim(); } }
+
+  window._DIVIDA_ATIVA = window._DIVIDA_ATIVA || null;   // {idx, lista, meta}
+  window._DA_CARTEIRA = window._DA_CARTEIRA || null;     // resultado do cruzamento
+  window._DA_FILTRO = '';
+
+  function carregarSheetJS(cb){
+    if(window.XLSX) return cb();
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload=function(){ cb(); }; s.onerror=function(){ cb(new Error('não consegui carregar o leitor de planilha (precisa de internet)')); };
+    document.head.appendChild(s);
+  }
+
+  /* lê a planilha e devolve array de registros */
+  function lerPlanilha(file, done){
+    carregarSheetJS(function(err){
+      if(err) return done(err);
+      var fr=new FileReader();
+      fr.onload=function(e){
+        try{
+          var wb=XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+          var ws=wb.Sheets[wb.SheetNames[0]];
+          var m=XLSX.utils.sheet_to_json(ws, {header:1, raw:true});
+          if(!m.length) return done(new Error('planilha vazia'));
+          var head=m[0].map(function(x){ return norm(x); });
+          function acha(txt){ return head.findIndex(function(h){ return h.indexOf(norm(txt))>=0; }); }
+          var iR=acha('CNPJ'), iD=acha('DEVEDOR'), iM=acha('MUNIC'), iA=acha('ADMINISTRATIV'), iJ=acha('JUDICIAL'), iT=acha('TOTAL'), iP=acha('TIPO PESSOA');
+          if(iR<0||iJ<0) return done(new Error('não achei as colunas de CNPJ e Valor Judicial — confira se é a planilha da dívida ativa'));
+          var arr=[];
+          for(var k=1;k<m.length;k++){ var r=m[k]; if(!r||r[iR]==null) continue;
+            var raiz=String(r[iR]).replace(/\D/g,''); if(!raiz) continue; raiz=('00000000'+raiz).slice(-8);
+            arr.push({ raiz:raiz, dev:(iD>=0?r[iD]:'')||'', mun:(iM>=0?r[iM]:'')||'',
+              adm:n(iA>=0?r[iA]:0), jud:n(iJ>=0?r[iJ]:0), tot:n(iT>=0?r[iT]:0),
+              pf:(iP>=0 && norm(r[iP]).indexOf('URID')<0) });
+          }
+          done(null, arr);
+        }catch(ex){ done(ex); }
+      };
+      fr.onerror=function(){ done(new Error('não consegui abrir o arquivo')); };
+      fr.readAsArrayBuffer(file);
+    });
+  }
+
+  function indexar(arr){
+    var DA = window._DIVIDA_ATIVA || {idx:{}, lista:[], meta:{n:0, comJud:0, totalJud:0, totalGeral:0, arquivos:0}};
+    arr.forEach(function(x){
+      var ja=DA.idx[x.raiz];
+      if(!ja || x.tot>ja.tot){ DA.idx[x.raiz]=x; }
+    });
+    // reconstrói lista e meta a partir do idx (dedupe por raiz)
+    DA.lista=Object.keys(DA.idx).map(function(k){ return DA.idx[k]; });
+    DA.meta={ n:DA.lista.length,
+      comJud:DA.lista.filter(function(x){return x.jud>0;}).length,
+      totalJud:DA.lista.reduce(function(s,x){return s+x.jud;},0),
+      totalGeral:DA.lista.reduce(function(s,x){return s+x.tot;},0),
+      arquivos:(DA.meta?DA.meta.arquivos:0)+1 };
+    window._DIVIDA_ATIVA=DA;
+  }
+
+  function matchEmpresa(cnpj){ var DA=window._DIVIDA_ATIVA; if(!DA||!cnpj) return null; return DA.idx[raizDe(cnpj)]||null; }
+  window.matchDividaAtiva = matchEmpresa;
+
+  /* upload */
+  function subirDividaAtiva(){
+    var inp=document.getElementById('_daInput');
+    if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.accept='.xlsx,.xls'; inp.id='_daInput'; inp.style.display='none';
+      inp.addEventListener('change', function(){ if(inp.files&&inp.files[0]) processarArquivo(inp.files[0]); inp.value=''; });
+      document.body.appendChild(inp); }
+    inp.click();
+  }
+  window.subirDividaAtiva=subirDividaAtiva;
+  function processarArquivo(file){
+    var st=document.getElementById('_daStatus'); if(st){ st.textContent='Lendo '+esc(file.name)+'…'; st.style.color='#64748b'; }
+    lerPlanilha(file, function(err, arr){
+      if(err){ if(st){ st.textContent='Erro: '+esc(err.message); st.style.color='#b91c1c'; } return; }
+      indexar(arr);
+      window._DA_CARTEIRA=null; // invalida cruzamento anterior
+      renderSeguroGarantia();
+    });
+  }
+
+  /* cruza com a carteira (Firestore 'empresas') */
+  function cruzarCarteira(){
+    var DA=window._DIVIDA_ATIVA; if(!DA){ return; }
+    var st=document.getElementById('_daCartStatus'); if(st){ st.textContent='Lendo a carteira e cruzando…'; st.style.color='#64748b'; }
+    if(typeof db==='undefined'){ if(st){ st.textContent='Banco indisponível nesta tela.'; st.style.color='#b45309'; } return; }
+    db.collection('empresas').get().then(function(snap){
+      var clientes=[], achados=[];
+      snap.forEach(function(doc){ var d=doc.data()||{};
+        var cnpj=d.cnpj||(d.dadosReceita&&d.dadosReceita.cnpj)||'';
+        var nome=d.nome||d.razaoSocial||(d.dadosReceita&&d.dadosReceita.razaoSocial)||doc.id;
+        if(!cnpj) return; clientes.push({nome:nome, cnpj:cnpj});
+        var m=DA.idx[raizDe(cnpj)]; if(m) achados.push({nome:nome, cnpj:cnpj, m:m});
+      });
+      achados.sort(function(a,b){ return b.m.jud-a.m.jud; });
+      window._DA_CARTEIRA={ total:clientes.length, achados:achados, feitoEm:new Date() };
+      renderSeguroGarantia();
+    }).catch(function(e){ if(st){ st.textContent='Não consegui ler a carteira: '+esc(e&&e.message||e); st.style.color='#b91c1c'; } });
+  }
+  window.cruzarCarteiraDividaAtiva=cruzarCarteira;
+
+  function filtrarProspeccao(v){ window._DA_FILTRO=v||''; renderProspeccao(); }
+  window.filtrarProspeccaoDA=filtrarProspeccao;
+
+  function card(t,c,cor){ return '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid '+(cor||'#0f766e')+'; border-radius:0 11px 11px 0; padding:14px 16px; margin-bottom:12px"><div style="font-size:13px; font-weight:800; color:'+(cor||'#0f766e')+'; margin-bottom:6px">'+t+'</div><div style="font-size:12.5px; color:#334155; line-height:1.7">'+c+'</div></div>'; }
+
+  function renderProspeccao(){
+    var box=document.getElementById('_daProspBox'); if(!box) return;
+    var DA=window._DIVIDA_ATIVA; if(!DA){ box.innerHTML=''; return; }
+    var filtro=norm(window._DA_FILTRO);
+    var lista=DA.lista.filter(function(x){ return x.jud>0 && (!filtro || norm(x.mun).indexOf(filtro)>=0); });
+    lista.sort(function(a,b){ return b.jud-a.jud; });
+    var topo=lista.slice(0,40);
+    var somaFiltro=lista.reduce(function(s,x){return s+x.jud;},0);
+    var h='<div style="font-size:12px; color:#64748b; margin:2px 0 8px">'+lista.length.toLocaleString('pt-BR')+' empresas com execução'+(filtro?' em "'+esc(window._DA_FILTRO)+'"':'')+' · R$ '+Math.round(somaFiltro).toLocaleString('pt-BR')+' em valor judicial. Mostrando as 40 maiores.</div>';
+    h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:4px 10px; max-height:420px; overflow:auto"><table style="width:100%; border-collapse:collapse; font-size:12px">'
+      +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase; position:sticky; top:0; background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">Município</td><td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
+    topo.forEach(function(x){
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a">'+esc(String(x.dev).slice(0,42))+'</td><td style="padding:6px 4px; color:#64748b">'+esc(x.mun)+'</td><td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(x.jud)+'</td></tr>';
+    });
+    h+='</table></div><div style="font-size:11px; color:#94a3b8; margin-top:6px">Cada uma precisa garantir o juízo para se defender/suspender a execução — o valor judicial é a importância segurada do seguro garantia.</div>';
+    box.innerHTML=h;
+  }
+
+  function renderSeguroGarantia(){
+    var cont=document.getElementById('garantiaContent'); if(!cont) return;
+    var DA=window._DIVIDA_ATIVA;
+    var head='<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f); border-radius:13px; padding:18px 20px; color:#fff; margin-bottom:16px">'
+      +'<div style="font-size:18px; font-weight:800">Seguro Garantia — dívida ativa do RS cruzada com a carteira</div>'
+      +'<div style="font-size:12px; opacity:.9; line-height:1.7; margin-top:5px">Empresa com <b>valor judicial</b> em dívida ativa está em execução fiscal e precisa <b>garantir o juízo</b> para se defender e destravar a certidão — é o <b>seguro garantia judicial</b>, e o valor judicial já é a importância segurada. Suba a planilha de devedores (transparência RS) e o sistema cruza com os seus clientes e lista as oportunidades.</div></div>';
+    var barra='<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px">'
+      +'<button class="btn" style="background:#0f766e;color:#fff;border:none;border-radius:9px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer" onclick="window.subirDividaAtiva()">📥 Subir planilha da dívida ativa</button>'
+      +'<span id="_daStatus" style="font-size:12px; color:#64748b"></span></div>';
+    if(!DA){
+      cont.innerHTML=head+barra+card('Como conseguir a planilha', 'No site <b>transparencia.rs.gov.br → Receitas do Estado → Dívida Ativa → Lista de Devedores → Dados</b>, baixe o Excel (pode vir em partes — suba quantas tiver, o sistema junta). Depois é só cruzar com a sua carteira.', '#64748b');
+      return;
+    }
+    var mt=DA.meta;
+    var resumo='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px">'
+      +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Devedores na lista</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+mt.n.toLocaleString('pt-BR')+'</div><div style="font-size:11px; color:#64748b">'+mt.arquivos+' arquivo(s) carregado(s)</div></div>'
+      +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Com execução judicial</div><div style="font-size:20px; font-weight:800; color:#0f766e; margin-top:3px">'+mt.comJud.toLocaleString('pt-BR')+'</div><div style="font-size:11px; color:#64748b">prospects de seguro garantia</div></div>'
+      +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Valor judicial total</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+R$(mt.totalJud)+'</div><div style="font-size:11px; color:#64748b">importância segurada potencial</div></div>'
+      +'</div>';
+    /* empresa aberta */
+    var abertaHtml='';
+    try{
+      var D=window.CURRENT_ANALYSIS_DATA;
+      var cnpj=D&&D.empresaDoc&&(D.empresaDoc.cnpj||(D.empresaDoc.dadosReceita&&D.empresaDoc.dadosReceita.cnpj));
+      if(cnpj){
+        var m=matchEmpresa(cnpj);
+        abertaHtml = m
+          ? card('⚠️ A empresa aberta ('+esc(D.empresaNome||'')+') CONSTA na dívida ativa', 'Valor judicial <b>'+R$(m.jud)+'</b>'+(m.adm>0?' (+ '+R$(m.adm)+' administrativo)':'')+' em '+esc(m.mun)+'. Oportunidade imediata de <b>seguro garantia judicial</b> de ~'+R$(m.jud)+' — e provável aperto de certidão que o gerente/crédito vão querer resolver.', '#b45309')
+          : card('✓ A empresa aberta ('+esc(D.empresaNome||'')+') não consta na lista carregada', 'Pelo CNPJ raiz '+esc(raizDe(cnpj))+', ela não está na parte da dívida ativa que você subiu. (A lista pode estar incompleta — o site pagina.)', '#15803d');
+      }
+    }catch(e){}
+    /* cruzamento carteira */
+    var cart=window._DA_CARTEIRA;
+    var cartHtml='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 8px">Cruzamento com a sua carteira</div>'
+      +'<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px"><button class="btn" style="background:#0284c7;color:#fff;border:none;border-radius:9px;padding:9px 15px;font-size:12.5px;font-weight:700;cursor:pointer" onclick="window.cruzarCarteiraDividaAtiva()">🔗 Cruzar com meus clientes</button><span id="_daCartStatus" style="font-size:12px; color:#64748b"></span></div>';
+    if(cart){
+      if(cart.achados.length){
+        cartHtml+='<div style="font-size:12.5px; color:#334155; margin-bottom:6px"><b>'+cart.achados.length+'</b> de '+cart.total+' clientes estão na dívida ativa — prospects diretos:</div>';
+        cartHtml+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:4px 10px"><table style="width:100%; border-collapse:collapse; font-size:12.5px">'
+          +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase"><td style="padding:6px 4px">Cliente</td><td style="padding:6px 4px">Município</td><td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
+        cart.achados.forEach(function(a){ cartHtml+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a; font-weight:700">'+esc(a.nome)+'</td><td style="padding:6px 4px; color:#64748b">'+esc(a.m.mun)+'</td><td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(a.m.jud)+'</td></tr>'; });
+        cartHtml+='</table></div>';
+      } else {
+        cartHtml+=card('Nenhum cliente seu na lista carregada', 'Dos '+cart.total+' clientes da carteira, nenhum apareceu nesta parte da dívida ativa. Bom para eles — e a lista de prospecção abaixo tem quem ainda não é cliente.', '#15803d');
+      }
+    }
+    /* prospecção geral */
+    var prosp='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 8px">Prospecção — maiores oportunidades no RS</div>'
+      +'<div style="margin-bottom:8px"><input id="_daFiltro" type="text" placeholder="filtrar por município (ex.: Marau)" value="'+esc(window._DA_FILTRO||'')+'" oninput="window.filtrarProspeccaoDA(this.value)" style="width:100%; max-width:320px; padding:8px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px"></div>'
+      +'<div id="_daProspBox"></div>';
+    cont.innerHTML=head+barra+resumo+abertaHtml+cartHtml+prosp;
+    renderProspeccao();
+  }
+  window.renderSeguroGarantia=renderSeguroGarantia;
 })();
 </script>
 
