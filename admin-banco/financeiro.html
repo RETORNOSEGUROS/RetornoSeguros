@@ -44674,6 +44674,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window._DA_CARTEIRA = window._DA_CARTEIRA || null;     // resultado do cruzamento
   window._DA_FILTRO = '';
   window._DA_SO_NAO_CLIENTE = false;
+  window._DA_ESTAGIO = 'todos';   /* todos | judicial | administrativo */
 
   function carregarSheetJS(cb){
     if(window.XLSX) return cb();
@@ -44724,6 +44725,9 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     DA.meta={ n:DA.lista.length,
       comJud:DA.lista.filter(function(x){return x.jud>0;}).length,
       totalJud:DA.lista.reduce(function(s,x){return s+x.jud;},0),
+      comAdm:DA.lista.filter(function(x){return x.adm>0;}).length,
+      totalAdm:DA.lista.reduce(function(s,x){return s+x.adm;},0),
+      soAdm:DA.lista.filter(function(x){return x.adm>0 && x.jud<=0;}).length,
       totalGeral:DA.lista.reduce(function(s,x){return s+x.tot;},0),
       arquivos:(DA.meta?DA.meta.arquivos:0)+1 };
     window._DIVIDA_ATIVA=DA;
@@ -44766,7 +44770,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         clientes.push({nome:nome, cnpj:cnpj}); raizes[raizDe(cnpj)]=1;
         var m=DA.idx[raizDe(cnpj)]; if(m) achados.push({nome:nome, cnpj:cnpj, m:m, analisada:analisada});
       });
-      achados.sort(function(a,b){ return b.m.jud-a.m.jud; });
+      achados.sort(function(a,b){ return Math.max(b.m.jud,b.m.adm)-Math.max(a.m.jud,a.m.adm); });
       window._DA_CARTEIRA={ total:clientes.length, achados:achados, raizes:raizes, feitoEm:new Date() };
       renderSeguroGarantia();
     }).catch(function(e){ if(st){ st.textContent='Não consegui ler a carteira: '+esc(e&&e.message||e); st.style.color='#b91c1c'; } });
@@ -44777,6 +44781,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window.filtrarProspeccaoDA=filtrarProspeccao;
   function toggleSoNaoCliente(v){ window._DA_SO_NAO_CLIENTE=!!v; renderProspeccao(); }
   window.toggleSoNaoClienteDA=toggleSoNaoCliente;
+  function setEstagioDA(e){ window._DA_ESTAGIO=e||'todos'; renderProspeccao(); }
+  window.setEstagioDA=setEstagioDA;
 
   function card(t,c,cor){ return '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid '+(cor||'#0f766e')+'; border-radius:0 11px 11px 0; padding:14px 16px; margin-bottom:12px"><div style="font-size:13px; font-weight:800; color:'+(cor||'#0f766e')+'; margin-bottom:6px">'+t+'</div><div style="font-size:12.5px; color:#334155; line-height:1.7">'+c+'</div></div>'; }
 
@@ -44786,30 +44792,43 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var filtro=norm(window._DA_FILTRO);
     var cart=window._DA_CARTEIRA; var raizes=(cart&&cart.raizes)||null;
     var soNaoCli=!!window._DA_SO_NAO_CLIENTE;
+    var estagio=window._DA_ESTAGIO||'todos';
     function ehCliente(x){ return raizes && raizes[x.raiz]; }
+    function passaEstagio(x){
+      if(estagio==='judicial') return x.jud>0;
+      if(estagio==='administrativo') return x.adm>0 && x.jud<=0;   /* só administrativo = alerta antecipado */
+      return x.jud>0 || x.adm>0;
+    }
     var lista=DA.lista.filter(function(x){
-      if(!(x.jud>0)) return false;
+      if(!passaEstagio(x)) return false;
       if(filtro && norm(x.mun).indexOf(filtro)<0) return false;
       if(soNaoCli && ehCliente(x)) return false;
       return true;
     });
-    lista.sort(function(a,b){ return b.jud-a.jud; });
+    /* ordena pela relevância do estágio em foco */
+    lista.sort(function(a,b){ var va=(estagio==='administrativo'?a.adm:Math.max(a.jud,a.adm)), vb=(estagio==='administrativo'?b.adm:Math.max(b.jud,b.adm)); return vb-va; });
     var topo=lista.slice(0,40);
-    var somaFiltro=lista.reduce(function(s,x){return s+x.jud;},0);
+    var somaJud=lista.reduce(function(s,x){return s+x.jud;},0);
+    var somaAdm=lista.reduce(function(s,x){return s+x.adm;},0);
     var h='';
+    /* filtro de estágio */
+    function bEst(id,rot,cor){ var on=estagio===id; return '<button onclick="window.setEstagioDA(\''+id+'\')" style="border:1px solid '+(on?cor:'#cbd5e1')+'; background:'+(on?cor:'#fff')+'; color:'+(on?'#fff':'#334155')+'; border-radius:8px; padding:5px 11px; font-size:12px; font-weight:700; cursor:pointer; margin-right:6px">'+rot+'</button>'; }
+    h+='<div style="margin-bottom:8px">'+bEst('todos','Todos','#0f172a')+bEst('judicial','⚖️ Em execução (judicial)','#0f766e')+bEst('administrativo','⚠️ Só administrativo (alerta antecipado)','#b45309')+'</div>';
     if(!raizes){
-      h+='<div style="font-size:11.5px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:7px 11px; margin-bottom:8px">Para separar quem <b>já é seu cliente</b> de quem <b>não é (prospect novo)</b>, clique em <b>"Cruzar com meus clientes"</b> acima primeiro.</div>';
+      h+='<div style="font-size:11.5px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:7px 11px; margin-bottom:8px">Para separar quem <b>já é seu cliente</b> de quem <b>não é</b>, clique em <b>"Cruzar com meus clientes"</b> acima primeiro.</div>';
     } else {
       h+='<label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#0f172a; margin-bottom:8px; cursor:pointer"><input type="checkbox" '+(soNaoCli?'checked':'')+' onchange="window.toggleSoNaoClienteDA(this.checked)"> <b>Só quem NÃO é meu cliente</b> (prospects não mapeados)</label>';
     }
-    h+='<div style="font-size:12px; color:#64748b; margin:2px 0 8px">'+lista.length.toLocaleString('pt-BR')+' empresas com execução'+(filtro?' em "'+esc(window._DA_FILTRO)+'"':'')+(soNaoCli?' que ainda não são seus clientes':'')+' · R$ '+Math.round(somaFiltro).toLocaleString('pt-BR')+' em valor judicial. Mostrando as 40 maiores.</div>';
+    h+='<div style="font-size:12px; color:#64748b; margin:2px 0 8px">'+lista.length.toLocaleString('pt-BR')+' empresas'+(filtro?' em "'+esc(window._DA_FILTRO)+'"':'')+(soNaoCli?' que ainda não são seus clientes':'')+' · judicial R$ '+Math.round(somaJud).toLocaleString('pt-BR')+' · administrativo R$ '+Math.round(somaAdm).toLocaleString('pt-BR')+'. Mostrando as 40 maiores.</div>';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:4px 10px; max-height:420px; overflow:auto"><table style="width:100%; border-collapse:collapse; font-size:12px">'
-      +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase; position:sticky; top:0; background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">Município</td>'+(raizes?'<td style="padding:6px 4px">Situação</td>':'')+'<td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
+      +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase; position:sticky; top:0; background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">Município</td>'+(raizes?'<td style="padding:6px 4px">Situação</td>':'')+'<td style="padding:6px 4px; text-align:right">Administrativo</td><td style="padding:6px 4px; text-align:right">Judicial</td></tr>';
     topo.forEach(function(x){
       var sit = raizes ? (ehCliente(x)?'<td style="padding:6px 4px"><span style="color:#15803d; font-size:11px">cliente</span></td>':'<td style="padding:6px 4px"><span style="color:#b45309; font-size:11px; font-weight:700">prospect</span></td>') : '';
-      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a">'+esc(String(x.dev).slice(0,42))+'</td><td style="padding:6px 4px; color:#64748b">'+esc(x.mun)+'</td>'+sit+'<td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(x.jud)+'</td></tr>';
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a">'+esc(String(x.dev).slice(0,40))+'</td><td style="padding:6px 4px; color:#64748b">'+esc(x.mun)+'</td>'+sit
+        +'<td style="padding:6px 4px; text-align:right; color:'+(x.adm>0?'#b45309':'#cbd5e1')+'; font-weight:'+(x.adm>0?'700':'400')+'">'+(x.adm>0?R$(x.adm):'—')+'</td>'
+        +'<td style="padding:6px 4px; text-align:right; color:'+(x.jud>0?'#0f766e':'#cbd5e1')+'; font-weight:'+(x.jud>0?'700':'400')+'">'+(x.jud>0?R$(x.jud):'—')+'</td></tr>';
     });
-    h+='</table></div><div style="font-size:11px; color:#94a3b8; margin-top:6px">Cada uma precisa garantir o juízo para se defender/suspender a execução — o valor judicial é a importância segurada do seguro garantia.</div>';
+    h+='</table></div><div style="font-size:11px; color:#94a3b8; margin-top:6px"><b>Judicial</b>: já em execução — precisa garantir o juízo (seguro garantia judicial), o valor é a importância segurada. <b>Administrativo</b>: fase anterior (inscrita, ainda não ajuizada) — alerta antecipado: a empresa já deve e pode precisar de garantia/certidão antes de virar execução.</div>';
     box.innerHTML=h;
   }
 
@@ -44831,6 +44850,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Devedores na lista</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+mt.n.toLocaleString('pt-BR')+'</div><div style="font-size:11px; color:#64748b">'+mt.arquivos+' arquivo(s) carregado(s)</div></div>'
       +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Com execução judicial</div><div style="font-size:20px; font-weight:800; color:#0f766e; margin-top:3px">'+mt.comJud.toLocaleString('pt-BR')+'</div><div style="font-size:11px; color:#64748b">prospects de seguro garantia</div></div>'
       +'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">Valor judicial total</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+R$(mt.totalJud)+'</div><div style="font-size:11px; color:#64748b">importância segurada potencial</div></div>'
+      +'<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#92400e; font-weight:700; text-transform:uppercase">Só cobrança administrativa</div><div style="font-size:20px; font-weight:800; color:#b45309; margin-top:3px">'+(mt.soAdm!=null?mt.soAdm.toLocaleString('pt-BR'):'—')+'</div><div style="font-size:11px; color:#92400e">alerta antecipado — ainda não viraram execução ('+R$(mt.totalAdm)+')</div></div>'
       +'</div>';
     /* empresa aberta */
     var abertaHtml='';
@@ -44839,9 +44859,13 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       var cnpj=D&&D.empresaDoc&&(D.empresaDoc.cnpj||(D.empresaDoc.dadosReceita&&D.empresaDoc.dadosReceita.cnpj));
       if(cnpj){
         var m=matchEmpresa(cnpj);
-        abertaHtml = m
-          ? card('⚠️ A empresa aberta ('+esc(D.empresaNome||'')+') CONSTA na dívida ativa', 'Valor judicial <b>'+R$(m.jud)+'</b>'+(m.adm>0?' (+ '+R$(m.adm)+' administrativo)':'')+' em '+esc(m.mun)+'. Oportunidade imediata de <b>seguro garantia judicial</b> de ~'+R$(m.jud)+' — e provável aperto de certidão que o gerente/crédito vão querer resolver.', '#b45309')
-          : card('✓ A empresa aberta ('+esc(D.empresaNome||'')+') não consta na lista carregada', 'Pelo CNPJ raiz '+esc(raizDe(cnpj))+', ela não está na parte da dívida ativa que você subiu. (A lista pode estar incompleta — o site pagina.)', '#15803d');
+        if(m && m.jud>0){
+          abertaHtml = card('⚠️ A empresa aberta ('+esc(D.empresaNome||'')+') CONSTA na dívida ativa', 'Valor judicial <b>'+R$(m.jud)+'</b>'+(m.adm>0?' (+ '+R$(m.adm)+' administrativo)':'')+' em '+esc(m.mun)+'. Oportunidade imediata de <b>seguro garantia judicial</b> de ~'+R$(m.jud)+' — e provável aperto de certidão que o gerente/crédito vão querer resolver.', '#b45309');
+        } else if(m && m.adm>0){
+          abertaHtml = card('⚠️ A empresa aberta ('+esc(D.empresaNome||'')+') tem cobrança administrativa', 'Valor administrativo <b>'+R$(m.adm)+'</b> em '+esc(m.mun)+' — fase anterior à execução (inscrita, ainda não ajuizada). É o <b>alerta antecipado</b>: a empresa já deve ao estado e pode precisar de garantia/certidão antes de virar execução fiscal. Vale acompanhar antes do concorrente.', '#b45309');
+        } else {
+          abertaHtml = card('✓ A empresa aberta ('+esc(D.empresaNome||'')+') não consta na lista carregada', 'Pelo CNPJ raiz '+esc(raizDe(cnpj))+', ela não está na parte da dívida ativa que você subiu. (A lista pode estar incompleta — o site pagina.)', '#15803d');
+        }
       }
     }catch(e){}
     /* cruzamento carteira */
@@ -44854,8 +44878,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         var semAnalise=cart.achados.filter(function(a){return !a.analisada;}).length;
         if(semAnalise) cartHtml+='<div style="font-size:12px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:7px 11px; margin-bottom:8px">⚡ <b>'+semAnalise+'</b> desses clientes ainda <b>não têm análise</b> no sistema — prospects de seguro garantia que você nem olhou ainda.</div>';
         cartHtml+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:4px 10px"><table style="width:100%; border-collapse:collapse; font-size:12.5px">'
-          +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase"><td style="padding:6px 4px">Cliente</td><td style="padding:6px 4px">Situação</td><td style="padding:6px 4px">Município</td><td style="padding:6px 4px; text-align:right">Valor judicial</td></tr>';
-        cart.achados.forEach(function(a){ cartHtml+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a; font-weight:700">'+esc(a.nome)+'</td><td style="padding:6px 4px">'+(a.analisada?'<span style="color:#15803d; font-size:11px">✓ analisada</span>':'<span style="color:#b45309; font-size:11px; font-weight:700">• sem análise</span>')+'</td><td style="padding:6px 4px; color:#64748b">'+esc(a.m.mun)+'</td><td style="padding:6px 4px; text-align:right; font-weight:700; color:#0f766e">'+R$(a.m.jud)+'</td></tr>'; });
+          +'<tr style="color:#64748b; font-size:10.5px; text-transform:uppercase"><td style="padding:6px 4px">Cliente</td><td style="padding:6px 4px">Situação</td><td style="padding:6px 4px">Município</td><td style="padding:6px 4px; text-align:right">Administrativo</td><td style="padding:6px 4px; text-align:right">Judicial</td></tr>';
+        cart.achados.forEach(function(a){ cartHtml+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px; color:#0f172a; font-weight:700">'+esc(a.nome)+'</td><td style="padding:6px 4px">'+(a.analisada?'<span style="color:#15803d; font-size:11px">✓ analisada</span>':'<span style="color:#b45309; font-size:11px; font-weight:700">• sem análise</span>')+'</td><td style="padding:6px 4px; color:#64748b">'+esc(a.m.mun)+'</td><td style="padding:6px 4px; text-align:right; color:'+(a.m.adm>0?'#b45309':'#cbd5e1')+'; font-weight:'+(a.m.adm>0?'700':'400')+'">'+(a.m.adm>0?R$(a.m.adm):'—')+'</td><td style="padding:6px 4px; text-align:right; font-weight:'+(a.m.jud>0?'700':'400')+'; color:'+(a.m.jud>0?'#0f766e':'#cbd5e1')+'">'+(a.m.jud>0?R$(a.m.jud):'—')+'</td></tr>'; });
         cartHtml+='</table></div>';
       } else {
         cartHtml+=card('Nenhum cliente seu na lista carregada', 'Dos '+cart.total+' clientes da carteira, nenhum apareceu nesta parte da dívida ativa. Bom para eles — e a lista de prospecção abaixo tem quem ainda não é cliente.', '#15803d');
