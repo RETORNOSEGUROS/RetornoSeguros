@@ -26648,7 +26648,15 @@ window.cadastrarDoBalanco = cadastrarDoBalanco;
     st('hubStatus1', 'Gravando…');
     return db.collection('empresas').doc(H.id).update(up).then(function(){
       Object.assign(H.doc, up);
-      try { var ci = (typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id); if (ci && c) ci.cnpj = c; } catch(e){}
+      try { var ci = (typeof EMPRESAS_CACHE !== 'undefined') && EMPRESAS_CACHE.get(H.id);
+            if (ci){ if (c) ci.cnpj = c; if (H.receita){ ci.dadosReceita = H.receita; } } } catch(e){}
+      /* v120: se a ANÁLISE desta empresa já está aberta, o retrato da Receita é lido uma
+         única vez na abertura e fica em cache. Sem atualizar aqui, o Mercado RS (e qualquer
+         aba que lê empresaDoc.dadosReceita) continua vendo o cadastro VELHO — era o caso do
+         "Faltam o município ou o CNAE" mesmo depois de gravar. Atualiza em memória agora. */
+      try { var CA = window.CURRENT_ANALYSIS_DATA;
+            if (H.receita && CA && CA.empresaId === H.id){ CA.empresaDoc = CA.empresaDoc || {}; CA.empresaDoc.dadosReceita = H.receita;
+              try{ var _mc=document.getElementById('mercadoContent'); if(_mc && document.querySelector('.tab-btn[data-tab=\"mercado\"].active') && typeof window.renderMercadoRS==='function') _mc.innerHTML=window.renderMercadoRS(CA); }catch(e2){} } } catch(e){}
       render(); st('hubStatus1', '✓ Gravado.', '#15803d');
     }).catch(function(e){ st('hubStatus1', 'Não gravei: ' + esc(e && e.message || e), '#b91c1c'); });
   };
@@ -44602,6 +44610,19 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 
   function card(t,c,cor){ return '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid '+(cor||'#0f766e')+'; border-radius:0 11px 11px 0; padding:14px 16px; margin-bottom:12px"><div style="font-size:13px; font-weight:800; color:'+(cor||'#0f766e')+'; margin-bottom:6px">'+t+'</div><div style="font-size:12.5px; color:#334155; line-height:1.7">'+c+'</div></div>'; }
 
+  /* qual documento fiscal mede o faturamento de cada divisão CNAE.
+     NF-e (modelo 55) = bens entre empresas: agro, indústria, utilities, atacado, veículos.
+     NFC-e = varejo ao consumidor; CT-e/BP-e = transporte; NFS-e = serviço (nota municipal, fora da base estadual). */
+  function instrumentoDivisao(div){
+    var d=parseInt(div,10)||0;
+    if(d>=1 && d<=3) return {ok:true, inst:'NF-e'};
+    if(d>=5 && d<=39) return {ok:true, inst:'NF-e'};
+    if(d===45 || d===46) return {ok:true, inst:'NF-e'};
+    if(d===47 || d===55 || d===56) return {ok:false, inst:'NFC-e', nome:'varejo ao consumidor', base:'dfe'};
+    if(d>=49 && d<=53) return {ok:false, inst:'CT-e/BP-e', nome:'transporte (frete e passageiros)', base:'dfe'};
+    return {ok:false, inst:'NFS-e', nome:'serviço (nota municipal)', base:'municipal'};  /* 41-43 construção/instalação, 58+ serviços */
+  }
+
   function renderMercadoRS(D){
     var x; try{ x=nowcastSetorRS(D); }catch(e){ return '<div style="color:#b91c1c; font-size:12px">Não consegui montar o mercado: '+esc(e.message)+'</div>'; }
     var head='<div style="background:linear-gradient(135deg,#0f172a,#1e3a5f); border-radius:13px; padding:18px 20px; color:#fff; margin-bottom:16px">'
@@ -44612,6 +44633,14 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     if(x.erro==='sem_setor_municipio') return head+card('Sem emissão relevante nesse setor/cidade', 'Não achei emissão expressiva da divisão CNAE '+esc(x.div)+' em '+esc(x.municipio)+' (ou o valor é pequeno demais). Pode ser que a empresa emita por outra filial/CNAE, ou que o setor seja pulverizado em municípios maiores.', '#64748b');
 
     var h=head;
+    /* sinaliza quando a NF-e NÃO é o instrumento certo do setor (varejo/transporte/serviço) */
+    var instr=instrumentoDivisao(x.div);
+    if(!instr.ok){
+      var extra = instr.base==='dfe'
+        ? 'A NF-e abaixo mostra só o que sai por nota entre empresas — <b>subestima</b> o faturamento real desse setor. Dá para incluir a emissão de <b>'+esc(instr.inst)+'</b> (base DF-e da Sefaz) e medir certo.'
+        : 'Esse setor emite <b>NFS-e</b> (nota de serviço municipal), que <b>não entra</b> nos dados abertos estaduais. O que aparecer de NF-e aqui é material/revenda do setor na cidade, <b>não</b> o faturamento dela.';
+      h+=card('⚠️ '+esc(x.cnaeDesc||('Divisão '+x.div))+' fatura por '+esc(instr.inst)+', não por NF-e', 'Pelo CNAE principal, esse setor fatura por <b>'+esc(instr.inst)+'</b> ('+esc(instr.nome)+'). '+extra, '#b45309');
+    }
     /* 3 cartões-topo */
     h+='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-bottom:8px">';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Setor na cidade ('+esc(x.anoAtual)+'*)</div><div style="font-size:20px; font-weight:800; color:#0f766e; margin-top:3px">'+R$(x.serie.atual)+'</div><div style="font-size:11px; color:#64748b">'+esc(x.divnome)+' · '+esc(x.municipio)+' · jan–'+esc(MES[x.ultimoMes]||x.ultimoMes)+'</div></div>';
