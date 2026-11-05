@@ -44647,14 +44647,33 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var porAno={}; rows.forEach(function(x){ if(x && x.ano) porAno[x.ano]=x; });
     function recLiq(x){ return x? (n(x.receitaLiquida)||n(x.receita)) : 0; }
     function recBruta(x){ return x? (n(x.receitaBruta)|| (n(x.receitaLiquida)||n(x.receita))) : 0; }
+    /* atividade-fim bruta: o que casa com a emissão do setor (produtos/vendas), SEM serviços —
+       serviço emite NFS-e, outra base. Usa o detalhamento do balanço quando existe. */
+    function servicosDe(x){ return x? n(x.receitaServicos) : 0; }
+    function atividadeFimBruta(x){
+      if(!x) return 0;
+      var merc = n(x.receitaMercadorias)+n(x.exportacaoAno)+n(x.receitaOutrasVendas);
+      if(merc>0) return merc;
+      var bruta=n(x.receitaBruta), serv=servicosDe(x);
+      if(bruta>0 && serv>0) return Math.max(0, bruta-serv);
+      return recBruta(x);
+    }
+    function temSplitAtiv(x){ return !!(x && ((n(x.receitaMercadorias)+n(x.exportacaoAno)+n(x.receitaOutrasVendas))>0 || (n(x.receitaBruta)>0 && servicosDe(x)>0))); }
     var ult = rows[0]||{};                      /* ano mais recente da empresa */
     var anoUlt = n(ult.ano);
     var empUlt = recLiq(ult);
-    /* peso da empresa no setor do município (usa bruto, que é o que a NF-e mede) */
+    var atividadeFimUlt = atividadeFimBruta(ult);
+    var servUlt = servicosDe(ult);
+    var temAtividadeFim = temSplitAtiv(ult);
+    /* peso: atividade-fim bruta (o que a emissão do setor mede) ÷ emissão do setor */
     var setorNoAnoDaEmpresa = (anoUlt===2025? v2025 : anoUlt===2024? v2024 : anoUlt===2023? v2023 : v2025);
-    var peso = setorNoAnoDaEmpresa>0 ? recBruta(ult)/setorNoAnoDaEmpresa : null;
-    /* projeção do ano corrente: cresce o último ano fechado pela variação YTD do setor */
-    var projReceita = (gYTD!=null && empUlt>0) ? empUlt*(1+gYTD) : null;
+    var pesoBase = temAtividadeFim ? atividadeFimUlt : recBruta(ult);
+    var peso = setorNoAnoDaEmpresa>0 ? pesoBase/setorNoAnoDaEmpresa : null;
+    /* projeção: cresce a ATIVIDADE-FIM pela variação do setor; serviços mantidos; converte p/ líquido pela relação histórica */
+    var brutaUlt = n(ult.receitaBruta) || (atividadeFimUlt+servUlt) || empUlt;
+    var ratioLiq = brutaUlt>0 ? empUlt/brutaUlt : 1;
+    var projReceita = (gYTD!=null && atividadeFimUlt>0) ? (atividadeFimUlt*(1+gYTD)+servUlt)*ratioLiq : null;
+    if(projReceita==null && gYTD!=null && empUlt>0) projReceita = empUlt*(1+gYTD);  /* sem split: cresce o líquido */
     /* mantém a média das margens da empresa p/ EBITDA e lucro */
     function media(f){ var a=rows.map(f).filter(function(v){return isFinite(v)&&v!==0;}); return a.length? a.reduce(function(s,v){return s+v;},0)/a.length : null; }
     var mgBruta = media(function(x){ return recLiq(x)>0? n(x.lucroBruto)/recLiq(x) : NaN; });
@@ -44676,6 +44695,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       ytdAtual:ytdAtual, ytdAnt:ytdAnt,
       g2324:g2324, g2425:g2425, gYTD:gYTD,
       empUlt:empUlt, anoUlt:anoUlt, recBrutaUlt:recBruta(ult), peso:peso,
+      atividadeFimUlt:atividadeFimUlt, servUlt:servUlt, temAtividadeFim:temAtividadeFim, pesoBase:pesoBase,
       setorNoAnoDaEmpresa:setorNoAnoDaEmpresa, proj:proj
     };
   }
@@ -44720,7 +44740,10 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     if(x.servico){ pesoTxt='—'; pesoNota='setor medido por NFS-e (fora desta base) — o número ao lado é NF-e de material/revenda, então não dá para calcular o peso da empresa aqui.'; }
     else if(x.peso==null){ pesoTxt='—'; pesoNota='informe o faturamento da empresa para calcular.'; }
     else { pesoTxt=(x.peso>3?'>300%':pc(x.peso,0)); if(x.peso>1.5) pesoCor='#b45309';
-      pesoNota='faturamento bruto da empresa ÷ emissão de '+esc(x.modeloUsado||'NF-e')+' do setor em '+esc(x.anoUlt)+(x.peso>1.2?' — <b>acima de ~100%</b> quase sempre é a empresa emitindo por <b>mais de uma praça/filial</b>, remessas entre estabelecimentos, ou um setor/cidade que não é exatamente o dela. Confira antes de dizer que "ela é X% da cidade".':'. Quando fica perto de 100%, a empresa praticamente é o setor na cidade — os números do setor valem como os dela.'); }
+      var baseTxt = x.temAtividadeFim
+        ? '<b>atividade-fim</b> (produtos, '+R$(x.pesoBase)+', sem os '+R$(x.servUlt)+' de serviços)'
+        : 'faturamento bruto da empresa';
+      pesoNota=baseTxt+' ÷ emissão de '+esc(x.modeloUsado||'NF-e')+' do setor em '+esc(x.anoUlt)+(x.peso>1.2?' — <b>acima de ~100%</b> quase sempre é a empresa emitindo por <b>mais de uma praça/filial</b>, remessas entre estabelecimentos, ou um setor/cidade que não é exatamente o dela. Confira antes de dizer que "ela é X% da cidade".':'. Quando fica perto de 100%, a empresa praticamente é o setor na cidade — os números do setor valem como os dela.'); }
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Peso da empresa</div><div style="font-size:20px; font-weight:800; color:'+pesoCor+'; margin-top:3px">'+pesoTxt+'</div><div style="font-size:11px; color:#64748b">'+pesoNota+'</div></div>';
     h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:.35px">Setor em '+esc(x.anoAtual)+' (YTD)</div><div style="font-size:20px; font-weight:800; color:'+((x.gYTD||0)>=0?'#15803d':'#b91c1c')+'; margin-top:3px">'+(x.gYTD!=null?(x.gYTD>=0?'+':'')+pc(x.gYTD,1):'—')+'</div><div style="font-size:11px; color:#64748b">jan–'+esc(MES[x.ultimoMes]||x.ultimoMes)+' vs mesmo período de '+esc(x.anoAnterior)+'</div></div>';
     h+='</div>';
@@ -44754,7 +44777,10 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     } else if(x.proj){
       var p=x.proj;
       h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:14px 0 8px">Projeção de '+esc(x.anoAtual)+' — pelo crescimento do setor, mantidas as margens médias da empresa</div>';
-      h+='<div style="font-size:12px; color:#64748b; margin-bottom:8px; line-height:1.6">Parte do último faturamento da empresa ('+esc(x.anoUlt)+': <b>'+R$(x.empUlt)+'</b> líquido) e aplica o <b>'+(x.gYTD!=null?(x.gYTD>=0?'+':'')+pc(x.gYTD,1):'—')+'</b> que o setor dela está fazendo em '+esc(x.anoAtual)+'. Para EBITDA e lucro, mantém a <b>média histórica de margem</b> da empresa (margem bruta '+pc(p.mgBruta)+', EBITDA '+pc(p.mgEbitda)+', líquida '+pc(p.mgLiq)+') até os números reais chegarem.</div>';
+      var baseProj = x.temAtividadeFim
+        ? 'Cresce a <b>atividade-fim</b> da empresa ('+esc(x.anoUlt)+': <b>'+R$(x.atividadeFimUlt)+'</b> de produtos) pelo <b>'+(x.gYTD!=null?(x.gYTD>=0?'+':'')+pc(x.gYTD,1):'—')+'</b> do setor, mantém os serviços ('+R$(x.servUlt)+') e converte para líquido pela relação histórica da empresa.'
+        : 'Parte do último faturamento da empresa ('+esc(x.anoUlt)+': <b>'+R$(x.empUlt)+'</b> líquido) e aplica o <b>'+(x.gYTD!=null?(x.gYTD>=0?'+':'')+pc(x.gYTD,1):'—')+'</b> que o setor dela está fazendo em '+esc(x.anoAtual)+'.';
+      h+='<div style="font-size:12px; color:#64748b; margin-bottom:8px; line-height:1.6">'+baseProj+' Para EBITDA e lucro, mantém a <b>média histórica de margem</b> da empresa (margem bruta '+pc(p.mgBruta)+', EBITDA '+pc(p.mgEbitda)+', líquida '+pc(p.mgLiq)+') até os números reais chegarem.</div>';
       h+='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:6px">';
       h+='<div style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#047857; font-weight:700; text-transform:uppercase">Receita projetada '+esc(x.anoAtual)+'</div><div style="font-size:20px; font-weight:800; color:#047857; margin-top:3px">'+R$(p.receita)+'</div></div>';
       h+='<div style="background:#fff; border:1px solid #e2e8f0; border-radius:11px; padding:12px 14px"><div style="font-size:10.5px; color:#64748b; font-weight:700; text-transform:uppercase">EBITDA projetado</div><div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:3px">'+(p.ebitda!=null?R$(p.ebitda):'—')+'</div></div>';
@@ -44762,6 +44788,27 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       h+='</div>';
       h+='<div style="font-size:11.5px; color:#94a3b8; margin:2px 0 6px; line-height:1.6">É uma estimativa de mercado (nowcast), não o número contábil — atualiza sozinha quando você subir o CSV novo da Sefaz. Vale como fato para a conversa com o gerente ("o setor dela na cidade está '+(x.gYTD!=null?(x.gYTD>=0?'+':'')+pc(x.gYTD,0):'—')+' no ano"), não como balanço.</div>';
     }
+    /* atividades secundárias (CNAEs acessórios) — menu com link pro mapa de cada uma */
+    try{
+      var _recS = (D && D.empresaDoc && D.empresaDoc.dadosReceita) || (D && D.rows && D.rows[0] && D.rows[0].dadosReceita) || {};
+      var _sec = Array.isArray(_recS.cnaesSecundarios) ? _recS.cnaesSecundarios : [];
+      if(_sec.length){
+        var _munS = String(x.municipio||'').replace(/['"\\]/g,'');
+        h+='<div style="font-size:14px; font-weight:800; color:#0f172a; margin:16px 0 6px">Atividades secundárias (CNAEs acessórios) — '+_sec.length+'</div>';
+        h+='<div style="font-size:11.5px; color:#64748b; margin-bottom:8px">Além da atividade principal, a empresa tem estas registradas na Receita. Cada uma emite em outra divisão — clique no mapa para ver o mercado dela na região.</div>';
+        h+='<div style="display:grid; gap:6px; max-height:260px; overflow:auto">';
+        _sec.slice(0,40).forEach(function(c){
+          var dv = String(parseInt(String(c.codigo||'').replace(/\D/g,'').slice(0,2),10)||0);
+          var temMapa = dv && window.RS_NFE_SETOR && window.RS_NFE_SETOR.dados && Object.keys(window.RS_NFE_SETOR.dados).some(function(k){return k.split('|')[1]===dv;});
+          h+='<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; background:#fff; border:1px solid #e2e8f0; border-radius:9px; padding:8px 11px">'
+            +'<div style="font-size:12px; color:#334155"><b>'+esc(c.codigo||'')+'</b> — '+esc(c.descricao||'')+'</div>'
+            +(temMapa?'<button onclick="window.abrirExploradorMercado({div:\''+dv+'\', busca:\''+_munS+'\'})" style="flex:none; border:1px solid #1d4ed8; background:#eff6ff; color:#1d4ed8; border-radius:7px; padding:4px 9px; font-size:11px; font-weight:700; cursor:pointer">🗺️ mapa</button>':'<span style="flex:none; font-size:10.5px; color:#94a3b8">sem emissão</span>')
+            +'</div>';
+        });
+        h+='</div>';
+      }
+    }catch(eSec){}
+
     /* ressalvas */
     h+=card('Como ler esse número', 'A emissão do setor na cidade pode ter <b>mais de um player</b> — aí ela mede o setor, não só a empresa. Quando a empresa domina a cidade (caso de muitas indústrias em cidades médias), a aproximação é boa. NF-e ≈ faturamento <b>bruto</b> (com impostos e remessas), por isso costuma ficar acima da receita líquida. '
       + 'A comparação é pela <b>atividade principal</b> (CNAE) da empresa — se ela também fatura outra atividade (ex.: serviços além de produtos), esse pedaço entra em outra divisão e o peso aqui fica um pouco <b>superestimado</b>; o ideal é comparar só o faturamento da atividade-fim. '
