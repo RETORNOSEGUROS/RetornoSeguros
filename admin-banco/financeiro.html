@@ -1880,6 +1880,11 @@
             style="border-color:#1d4ed8; color:#1d4ed8; background:linear-gradient(135deg,#eff6ff,#dbeafe)">
             🗺️ <span class="btn-txt">Explorar mercado</span>
           </button>
+          <button class="btn btn-outline" id="btnProspeccao" onclick="window.abrirProspeccao && window.abrirProspeccao()"
+            title="Lista de empresas do RS por cidade e CNAE (base da Receita Federal). Suba o arquivo uma vez e prospecte."
+            style="border-color:#7c3aed; color:#7c3aed; background:linear-gradient(135deg,#f5f3ff,#ede9fe)">
+            📋 <span class="btn-txt">Empresas (prospecção)</span>
+          </button>
           <button class="btn btn-outline" id="btnAtualizarMercado" onclick="window.subirBaseMercado && window.subirBaseMercado()"
             title="Sobe o arquivo compacto de mercado (emissão de NF-e/NFC-e/CT-e por setor e cidade, Sefaz-RS) para atualizar a base. O sistema já vem com uma base embutida; suba a nova a cada mês."
             style="border-color:#64748b; color:#475569; background:#fff">
@@ -44904,7 +44909,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var h='<div style="font-size:12px; color:#64748b; margin-bottom:6px">'+linhas.length+' cidades · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empresas · emissão de <b>'+esc(instr.inst)+'</b> · total RS 2026 (YTD) R$ '+Math.round(totGeral).toLocaleString('pt-BR')+(instr.base==='municipal'?' · <span style="color:#b45309">setor de serviço (NFS-e): aqui é material/revenda</span>':'')+(crescimento?' · <span style="color:#94a3b8">só cidades com base ≥ R$ '+Math.round(piso/1e6)+'mi (crescimento de base pequena engana)</span>':'')+(_EXP.ordenar==='media'?' · <span style="color:#1d4ed8">faturamento médio por empresa = prospecção: muito faturamento com poucas empresas = empresas grandes</span>':'')+'</div>';
     h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">';
     h+='<tr style="color:#64748b;font-size:10.5px;text-transform:uppercase;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Cidade</td><td style="padding:6px 4px;text-align:right">Setor 2026 (YTD)</td><td style="padding:6px 4px;text-align:right">Empresas</td><td style="padding:6px 4px;text-align:right">Médio/empresa</td><td style="padding:6px 4px;text-align:right">YTD</td></tr>';
-    linhas.slice(0,60).forEach(function(x){ h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.mun)+'</td><td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td><td style="padding:6px 4px;text-align:right;color:#334155">'+(x.emp?x.emp.toLocaleString('pt-BR'):'—')+'</td><td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:700">'+(x.media>0?R$(x.media):'—')+'</td><td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
+    linhas.slice(0,60).forEach(function(x){ var _ms=String(x.mun).replace(/['"\\]/g,''); h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.mun)+'</td><td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td><td style="padding:6px 4px;text-align:right">'+(x.emp?'<span style="color:#7c3aed;font-weight:700;cursor:pointer;text-decoration:underline" title="ver a lista dessas empresas" onclick="window.abrirProspeccao({mun:\''+_ms+'\',div:\''+div+'\'})">'+x.emp.toLocaleString('pt-BR')+'</span>':'—')+'</td><td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:700">'+(x.media>0?R$(x.media):'—')+'</td><td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
     h+='</table></div>';
     return h;
   }
@@ -45325,6 +45330,139 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       return '<div style="font-size:12px; color:'+cor+'; margin-top:5px; line-height:1.6">'+txt+'</div>';
     }catch(e){ return ''; }
   };
+})();
+</script>
+
+<script>
+/* ===================================================================
+   PROSPECÇÃO — lista de empresas do RS por cidade e CNAE
+   Base da Receita Federal (estabelecimentos ativos). É grande (~1,7M),
+   então NÃO vai embutida: o corretor sobe o arquivo JSON uma vez e ele
+   fica salvo no navegador (IndexedDB). A busca abre um combo por vez.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function norm(s){ try{ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().trim(); }catch(e){ return String(s||'').toUpperCase().trim(); } }
+  function fmtCNPJ(c){ c=String(c||'').replace(/\D/g,''); if(c.length!==14) return c; return c.slice(0,2)+'.'+c.slice(2,5)+'.'+c.slice(5,8)+'/'+c.slice(8,12)+'-'+c.slice(12); }
+  var _CNAE_NOME = null;  /* reaproveita o dicionário de classe se existir */
+  function cnaeNome(cnae){ try{ var cn=(window.RS_CNAE_ESTADO&&window.RS_CNAE_ESTADO.classeNome)||{}; return cn[String(cnae).slice(0,5)]||''; }catch(e){ return ''; } }
+
+  /* ---- IndexedDB ---- */
+  var DB='corp1_prospeccao', ST='kv', _p=null;
+  function abrir(){ if(_p) return _p; _p=new Promise(function(res){ try{ if(!window.indexedDB) return res(null);
+    var rq=indexedDB.open(DB,1); rq.onupgradeneeded=function(){ var db=rq.result; if(!db.objectStoreNames.contains(ST)) db.createObjectStore(ST); };
+    rq.onsuccess=function(){res(rq.result);}; rq.onerror=function(){res(null);}; }catch(e){ res(null);} }); return _p; }
+  function dbGet(k){ return abrir().then(function(db){ if(!db) return null; return new Promise(function(res){ try{ var t=db.transaction(ST,'readonly'); var g=t.objectStore(ST).get(k); g.onsuccess=function(){res(g.result||null);}; g.onerror=function(){res(null);}; }catch(e){res(null);} }); }); }
+  function dbPutMany(obj, metaKey, metaVal){ return abrir().then(function(db){ if(!db) return false; return new Promise(function(res){ try{
+    var t=db.transaction(ST,'readwrite'); var st=t.objectStore(ST); st.clear();
+    Object.keys(obj).forEach(function(k){ st.put(obj[k], k); }); st.put(metaVal, metaKey);
+    t.oncomplete=function(){res(true);}; t.onerror=function(){res(false);}; }catch(e){res(false);} }); }); }
+
+  /* ---- upload da base ---- */
+  function subirBaseEmpresas(){
+    var inp=document.getElementById('_prospInput');
+    if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json'; inp.id='_prospInput'; inp.style.display='none';
+      inp.addEventListener('change', function(){ if(inp.files&&inp.files[0]) _lerBase(inp.files[0]); inp.value=''; });
+      document.body.appendChild(inp); }
+    inp.click();
+  }
+  window.subirBaseEmpresas=subirBaseEmpresas;
+  function _st(msg,cor){ var s=document.getElementById('_prospStatus'); if(s){ s.textContent=msg; s.style.color=cor||'#64748b'; } var s2=document.getElementById('_prospStatus2'); if(s2){ s2.textContent=msg; s2.style.color=cor||'#64748b'; } }
+  function _lerBase(file){
+    _st('Lendo '+file.name+' ('+Math.round(file.size/1048576)+' MB)… pode levar um minuto.', '#64748b');
+    var fr=new FileReader();
+    fr.onload=function(e){
+      try{ var pk=JSON.parse(e.target.result);
+        if(!pk || !pk.idx){ _st('Arquivo não parece a base de empresas (faltou idx).', '#b91c1c'); return; }
+        var muns={}; Object.keys(pk.idx).forEach(function(k){ muns[k.split('|')[0]]=1; });
+        var meta={ n:(pk.meta&&pk.meta.n)||0, ref:(pk.meta&&pk.meta.ref)||'', municipios:Object.keys(muns).sort(), temRazao:!!(pk.meta&&pk.meta.temRazao), updatedEm:new Date().toISOString().slice(0,10) };
+        _st('Gravando no navegador…', '#64748b');
+        dbPutMany(pk.idx, '__meta__', meta).then(function(ok){
+          if(ok){ _PROSP_META=meta; _st('✓ Base de empresas salva: '+meta.n.toLocaleString('pt-BR')+' empresas ativas. Pronto para prospectar.', '#15803d'); _preencherControles(); }
+          else _st('Não consegui gravar a base.', '#b91c1c');
+        });
+      }catch(ex){ _st('Não consegui ler: '+(ex&&ex.message||ex), '#b91c1c'); }
+    };
+    fr.onerror=function(){ _st('Não consegui abrir o arquivo.', '#b91c1c'); };
+    fr.readAsText(file);
+  }
+
+  var _PROSP_META=null;
+  var _PR={ mun:'', div:'', soApos:'', busca:'' };
+
+  function _preencherControles(){
+    var selM=document.getElementById('_prMun'); if(selM && _PROSP_META){
+      selM.innerHTML='<option value="">— cidade —</option>'+_PROSP_META.municipios.map(function(m){ return '<option value="'+esc(m)+'"'+(m===_PR.mun?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
+    }
+    _renderLista();
+  }
+  function _divNome(d){ try{ return (window.RS_NFE_SETOR&&window.RS_NFE_SETOR.meta&&window.RS_NFE_SETOR.meta.divnome&&window.RS_NFE_SETOR.meta.divnome[d])||''; }catch(e){ return ''; } }
+
+  function _renderLista(){
+    var box=document.getElementById('_prListBox'); if(!box) return;
+    if(!_PROSP_META){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Suba a base de empresas primeiro (botão acima).</div>'; return; }
+    if(!_PR.mun || !_PR.div){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha uma cidade e um setor (divisão CNAE) para ver as empresas.</div>'; return; }
+    box.innerHTML='<div style="font-size:12.5px;color:#64748b">Carregando…</div>';
+    dbGet(norm(_PR.mun)+'|'+_PR.div).then(function(lst){
+      lst=lst||[];
+      var bq=norm(_PR.busca);
+      var filt=lst.filter(function(r){
+        if(_PR.soApos && r[2] && r[2]<_PR.soApos) return false;
+        if(bq){ var nome=norm(r[3]||''); var cn=String(r[1]||''); if(nome.indexOf(bq)<0 && cn.indexOf(_PR.busca.replace(/\D/g,''))<0) return false; }
+        return true;
+      });
+      /* ordena: mais novas primeiro? por padrão por CNAE depois nome */
+      filt.sort(function(a,b){ return (b[2]||'').localeCompare(a[2]||''); });
+      var h='<div style="font-size:12px;color:#334155;margin-bottom:6px"><b>'+filt.length.toLocaleString('pt-BR')+'</b> empresas ativas em <b>'+esc(_PR.mun)+'</b> · '+esc(_PR.div+' '+_divNome(_PR.div))+(_PROSP_META.temRazao?'':' · <span style="color:#94a3b8">nome fantasia (razão social só com o arquivo Empresas)</span>')+'</div>';
+      h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+      h+='<tr style="color:#64748b;font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Empresa</td><td style="padding:6px 4px">CNAE</td><td style="padding:6px 4px">Desde</td><td style="padding:6px 4px">CNPJ</td></tr>';
+      filt.slice(0,300).forEach(function(r){
+        var nome=r[4]||r[3]||''; /* r[4]=razao (se vier), r[3]=fantasia */
+        var cap=r[5]?(' · <span style="color:#1d4ed8">cap. '+(Number(r[5]).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}))+'</span>'):'';
+        h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+(nome?esc(nome):'<span style="color:#94a3b8">— sem nome fantasia —</span>')+cap+'</td>'
+          +'<td style="padding:6px 4px;color:#64748b">'+esc(r[1])+'<div style="font-size:9.5px;color:#94a3b8">'+esc(cnaeNome(r[1]).slice(0,28))+'</div></td>'
+          +'<td style="padding:6px 4px;color:#64748b">'+esc(r[2]||'—')+'</td>'
+          +'<td style="padding:6px 4px"><span style="font-family:monospace;font-size:11px;color:#334155;cursor:pointer" title="clique para copiar" onclick="window._prCopia(\''+esc(r[0])+'\')">'+esc(fmtCNPJ(r[0]))+'</span></td></tr>';
+      });
+      if(filt.length>300) h+='<tr><td colspan="4" style="padding:8px 4px;color:#94a3b8;font-size:11px">Mostrando 300 de '+filt.length.toLocaleString('pt-BR')+'. Use os filtros para afunilar.</td></tr>';
+      h+='</table></div>';
+      box.innerHTML=h;
+    });
+  }
+  window._prCopia=function(cnpj){ try{ navigator.clipboard.writeText(fmtCNPJ(cnpj)); _st('CNPJ '+fmtCNPJ(cnpj)+' copiado — cole no "Buscar na Receita" para puxar razão social, capital e contato.', '#15803d'); }catch(e){} };
+  window._prMunSel=function(v){ _PR.mun=v; _renderLista(); };
+  window._prDivSel=function(v){ _PR.div=v; _renderLista(); };
+  window._prApos=function(v){ _PR.soApos=v?String(v):''; _renderLista(); };
+  window._prBusca=function(v){ _PR.busca=v; _renderLista(); };
+
+  function abrirProspeccao(opts){
+    opts=opts||{};
+    if(opts.mun!=null) _PR.mun=opts.mun;
+    if(opts.div!=null) _PR.div=String(opts.div);
+    var ov=document.getElementById('_prOverlay');
+    if(!ov){ ov=document.createElement('div'); ov.id='_prOverlay';
+      ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px';
+      var divs=''; try{ var dn=(window.RS_NFE_SETOR&&window.RS_NFE_SETOR.meta&&window.RS_NFE_SETOR.meta.divnome)||{}; divs=Object.keys(dn).sort(function(a,b){return (parseInt(a,10)||0)-(parseInt(b,10)||0);}).map(function(d){ return '<option value="'+d+'">'+esc(d+' — '+dn[d])+'</option>'; }).join(''); }catch(e){}
+      ov.innerHTML='<div style="background:#f8fafc;max-width:940px;width:100%;border-radius:16px;padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div style="font-size:18px;font-weight:800;color:#0f172a">📋 Empresas do RS — prospecção por cidade e CNAE</div><button onclick="document.getElementById(\'_prOverlay\').style.display=\'none\'" style="border:none;background:#e2e8f0;border-radius:8px;width:30px;height:30px;font-size:16px;cursor:pointer">×</button></div>'
+        +'<div style="font-size:12px;color:#64748b;margin-bottom:10px">Base de estabelecimentos ativos da Receita Federal. Ache empresas por praça e atividade — cruze com o radar de mercado (quem fatura muito com poucos players).</div>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+        +'<button onclick="window.subirBaseEmpresas()" style="background:#1d4ed8;color:#fff;border:none;border-radius:9px;padding:9px 14px;font-size:12.5px;font-weight:700;cursor:pointer">📥 Subir base de empresas</button>'
+        +'<span id="_prospStatus2" style="font-size:11.5px;color:#64748b"></span></div>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+        +'<select id="_prMun" onchange="window._prMunSel(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:240px"><option value="">— cidade —</option></select>'
+        +'<select id="_prDiv" onchange="window._prDivSel(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:360px"><option value="">— setor (divisão CNAE) —</option>'+divs+'</select>'
+        +'<input id="_prBuscaInp" type="text" placeholder="nome ou CNPJ" oninput="window._prBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:180px">'
+        +'<select id="_prApos" onchange="window._prApos(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"><option value="">qualquer idade</option><option value="2024">aberta de 2024 p/ cá</option><option value="2020">de 2020 p/ cá</option><option value="2010">de 2010 p/ cá</option></select>'
+        +'</div>'
+        +'<div id="_prListBox"></div></div>';
+      document.body.appendChild(ov);
+    } else { ov.style.display='flex'; }
+    /* restaura meta e preenche */
+    dbGet('__meta__').then(function(m){ _PROSP_META=m; var dd=document.getElementById('_prDiv'); if(dd) dd.value=_PR.div||''; _preencherControles(); });
+  }
+  window.abrirProspeccao=abrirProspeccao;
 })();
 </script>
 
