@@ -44866,7 +44866,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window.renderMercadoRS = renderMercadoRS;
 
   /* ============ EXPLORADOR DE MERCADO (tela inicial, sem abrir empresa) ============ */
-  var _EXP = { modo:'setor', div:null, mun:'', busca:'', ordenar:'tamanho' };
+  var _EXP = { modo:'setor', div:null, mun:'', busca:'', sCol:'v26', sDir:-1, piso:false };
   function _serieCombo(combo, div){
     if(!combo) return null;
     var instr = instrumentoDivisao(div);
@@ -44884,49 +44884,80 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   function _pg(v){ return v==null?'—':(v>=0?'+':'')+pc(v,1); }
   function _btnStyle(on){ return 'border:1px solid '+(on?'#1d4ed8':'#cbd5e1')+'; background:'+(on?'#1d4ed8':'#fff')+'; color:'+(on?'#fff':'#334155')+'; border-radius:8px; padding:6px 12px; font-size:12.5px; font-weight:700; cursor:pointer'; }
 
+  /* total do estado por divisão (soma das cidades) — cacheado */
+  var _stTotCache={};
+  function _totEstadoDiv(div){ if(_stTotCache[div]) return _stTotCache[div]; var t={v24:0,v25:0,v26:0};
+    Object.keys(DADOS).forEach(function(k){ var p=k.split('|'); if(p[1]!==div) return; var sc=_serieCombo(DADOS[k],div); if(!sc) return; var r=sc.r; t.v24+=n(r[1]); t.v25+=n(r[2]); t.v26+=n(r[3]); });
+    _stTotCache[div]=t; return t; }
+  window.totalEstadoDiv=_totEstadoDiv;
+  /* resumo dos setores de uma cidade (compartilhado com a Prospecção) */
+  function _resumoSetoresCidade(mun){ if(!mun) return []; var _PL=(window.RS_PLAYERS&&window.RS_PLAYERS.div)||null; var _nm=norm(mun); var out=[];
+    Object.keys(DADOS).forEach(function(k){ var p=k.split('|'); if(norm(p[0])!==_nm) return; var div=p[1]; var sc=_serieCombo(DADOS[k],div); if(!sc) return; var r=sc.r;
+      var emp=(_PL&&_PL[_nm+'|'+div])||0; var tot=_totEstadoDiv(div);
+      out.push({ div:div, nome:(META.divnome&&META.divnome[div])||div, v24:n(r[1]), v25:n(r[2]), v26:n(r[3]), g2425:_g(n(r[1]),n(r[2])), gYTD:_g(n(r[4]),n(r[5])), modelo:sc.modelo, emp:emp, media:(emp>0?n(r[3])/emp:0), pctRS:(tot.v26>0?n(r[3])/tot.v26:null) }); });
+    return out; }
+  window.resumoSetoresCidade=_resumoSetoresCidade;
+  /* cabeçalho clicável (flechinha de ordenar) */
+  function _eth(label,col,align){ var on=_EXP.sCol===col; var arr=on?(_EXP.sDir>0?' ▲':' ▼'):' ⇅'; return '<td style="padding:6px 4px;cursor:pointer;user-select:none;text-align:'+(align||'left')+';color:'+(on?'#1d4ed8':'#64748b')+'" onclick="window._expSort(\''+col+'\')">'+esc(label)+'<span style="font-size:9px;color:#94a3b8">'+arr+'</span></td>'; }
+
   function _tabelaCidades(div){
     if(!div) return '<div style="color:#64748b; font-size:12.5px">Escolha um setor acima.</div>';
     var instr=instrumentoDivisao(div);
     var _PL=(window.RS_PLAYERS&&window.RS_PLAYERS.div)||null;
+    var tot=_totEstadoDiv(div);
     var linhas=[];
     Object.keys(DADOS).forEach(function(k){ var p=k.split('|'); if(p[1]!==div) return;
       var sc=_serieCombo(DADOS[k], div); if(!sc) return; var r=sc.r;
       var emp=(_PL&&_PL[norm(p[0])+'|'+div])||0;
-      linhas.push({ mun:p[0], v26:n(r[3]), ytdAnt:n(r[4]), g2425:_g(n(r[1]),n(r[2])), gYTD:_g(n(r[4]),n(r[5])), emp:emp, media:(emp>0?n(r[3])/emp:0) }); });
+      linhas.push({ mun:p[0], v24:n(r[1]), v25:n(r[2]), v26:n(r[3]), ytdAnt:n(r[4]), ytdAtual:n(r[5]), g2425:_g(n(r[1]),n(r[2])), gYTD:_g(n(r[4]),n(r[5])), emp:emp, media:(emp>0?n(r[3])/emp:0), pctRS:(tot.v26>0?n(r[3])/tot.v26:null) }); });
     var bq=norm(_EXP.busca); if(bq) linhas=linhas.filter(function(x){ return norm(x.mun).indexOf(bq)>=0; });
-    var crescimento=(_EXP.ordenar==='cresce'||_EXP.ordenar==='cai');
     var totGeral=linhas.reduce(function(s,x){return s+x.v26;},0);
     var piso=Math.max(2e6, totGeral*0.01);
-    var lista=linhas;
-    if(crescimento){ lista=linhas.filter(function(x){ return x.ytdAnt>=piso && x.gYTD!=null; }); }
-    if(_EXP.ordenar==='media'){ lista=linhas.filter(function(x){ return x.emp>0 && x.v26>=piso; }); }
-    lista.sort(function(a,b){
-      if(_EXP.ordenar==='cresce') return (b.gYTD==null?-9:b.gYTD)-(a.gYTD==null?-9:a.gYTD);
-      if(_EXP.ordenar==='cai') return (a.gYTD==null?9:a.gYTD)-(b.gYTD==null?9:b.gYTD);
-      if(_EXP.ordenar==='media') return b.media-a.media;
-      return b.v26-a.v26; });
+    var col=_EXP.sCol||'v26', dir=_EXP.sDir||-1;
+    var lista=linhas.slice();
+    if(_EXP.piso && col==='gYTD') lista=lista.filter(function(x){ return x.ytdAnt>=piso && x.gYTD!=null; });
+    else if(_EXP.piso && col==='media') lista=lista.filter(function(x){ return x.emp>0 && x.v26>=piso; });
+    lista.sort(function(a,b){ var va,vb;
+      if(col==='mun'){ va=norm(a.mun); vb=norm(b.mun); } else { va=(a[col]==null?-Infinity:a[col]); vb=(b[col]==null?-Infinity:b[col]); }
+      if(va<vb) return -1*dir; if(va>vb) return 1*dir; return 0; });
     linhas=lista;
     var totEmp=linhas.reduce(function(s,x){return s+x.emp;},0);
-    var h='<div style="font-size:12px; color:#64748b; margin-bottom:6px">'+linhas.length+' cidades · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empresas · emissão de <b>'+esc(instr.inst)+'</b> · total RS 2026 (YTD) R$ '+Math.round(totGeral).toLocaleString('pt-BR')+(instr.base==='municipal'?' · <span style="color:#b45309">setor de serviço (NFS-e): aqui é material/revenda</span>':'')+(crescimento?' · <span style="color:#94a3b8">só cidades com base ≥ R$ '+Math.round(piso/1e6)+'mi (crescimento de base pequena engana)</span>':'')+(_EXP.ordenar==='media'?' · <span style="color:#1d4ed8">faturamento médio por empresa = prospecção: muito faturamento com poucas empresas = empresas grandes</span>':'')+'</div>';
-    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">';
-    h+='<tr style="color:#64748b;font-size:10.5px;text-transform:uppercase;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Cidade</td><td style="padding:6px 4px;text-align:right">Setor 2026 (YTD)</td><td style="padding:6px 4px;text-align:right">Empresas</td><td style="padding:6px 4px;text-align:right">Médio/empresa</td><td style="padding:6px 4px;text-align:right">YTD</td></tr>';
-    linhas.slice(0,60).forEach(function(x){ var _ms=String(x.mun).replace(/['"\\]/g,''); h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.mun)+'</td><td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td><td style="padding:6px 4px;text-align:right">'+(x.emp?'<span style="color:#7c3aed;font-weight:700;cursor:pointer;text-decoration:underline" title="ver a lista dessas empresas" onclick="window.abrirProspeccao({mun:\''+_ms+'\',div:\''+div+'\'})">'+x.emp.toLocaleString('pt-BR')+'</span>':'—')+'</td><td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:700">'+(x.media>0?R$(x.media):'—')+'</td><td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
+    var pisoNota = _EXP.piso ? ' · <span style="color:#94a3b8">só cidades com base ≥ R$ '+Math.round(piso/1e6)+'mi (crescimento de base pequena engana)</span>' : '';
+    var h='<div style="font-size:12px; color:#64748b; margin-bottom:6px">'+linhas.length+' cidades · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empresas · emissão de <b>'+esc(instr.inst)+'</b> · RS no setor (2026 YTD) <b>'+R$(tot.v26)+'</b>'+(instr.base==='municipal'?' · <span style="color:#b45309">setor de serviço (NFS-e): aqui é material/revenda</span>':'')+pisoNota+'</div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_eth('Cidade','mun')+_eth('2024','v24','right')+_eth('2025','v25','right')+_eth('2026*','v26','right')+_eth('% RS','pctRS','right')+_eth('Empresas','emp','right')+_eth('Médio','media','right')+_eth('YTD','gYTD','right')+'</tr>';
+    linhas.slice(0,300).forEach(function(x){ var _ms=String(x.mun).replace(/['"\\]/g,'');
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.mun)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v24)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v25)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#0369a1;font-weight:700">'+(x.pctRS!=null?pc(x.pctRS,1):'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right">'+(x.emp?'<span style="color:#7c3aed;font-weight:700;cursor:pointer;text-decoration:underline" title="ver a lista dessas empresas" onclick="window.abrirProspeccao({mun:\''+_ms+'\',div:\''+div+'\'})">'+x.emp.toLocaleString('pt-BR')+'</span>':'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:700">'+(x.media>0?R$(x.media):'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
+    if(linhas.length>300) h+='<tr><td colspan="8" style="padding:8px 4px;color:#94a3b8;font-size:11px">Mostrando 300 de '+linhas.length.toLocaleString('pt-BR')+' cidades — filtre pelo nome ou ordene.</td></tr>';
     h+='</table></div>';
     return h;
   }
   function _tabelaSetores(mun){
     if(!mun) return '<div style="color:#64748b; font-size:12.5px">Escolha uma cidade acima.</div>';
-    var _PL=(window.RS_PLAYERS&&window.RS_PLAYERS.div)||null; var _nmMun=norm(mun);
-    var linhas=[];
-    Object.keys(DADOS).forEach(function(k){ var p=k.split('|'); if(p[0]!==mun) return;
-      var div=p[1]; var sc=_serieCombo(DADOS[k], div); if(!sc) return; var r=sc.r;
-      var emp=(_PL&&_PL[_nmMun+'|'+div])||0;
-      linhas.push({ div:div, nome:(META.divnome&&META.divnome[div])||div, v26:n(r[3]), g2425:_g(n(r[1]),n(r[2])), gYTD:_g(n(r[4]),n(r[5])), modelo:sc.modelo, emp:emp, media:(emp>0?n(r[3])/emp:0) }); });
-    linhas.sort(function(a,b){ return b.v26-a.v26; });
-    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">'+esc(mun)+' — '+linhas.length+' setores com emissão</div>';
-    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">';
-    h+='<tr style="color:#64748b;font-size:10.5px;text-transform:uppercase;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Setor</td><td style="padding:6px 4px;text-align:right">2026 (YTD)</td><td style="padding:6px 4px;text-align:right">Empresas</td><td style="padding:6px 4px;text-align:right">Médio/empresa</td><td style="padding:6px 4px;text-align:right">YTD</td></tr>';
-    linhas.slice(0,80).forEach(function(x){ h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.div+' '+x.nome)+' <span style="color:#94a3b8;font-size:10px">'+esc(x.modelo||'')+'</span></td><td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td><td style="padding:6px 4px;text-align:right;color:#334155">'+(x.emp?x.emp.toLocaleString('pt-BR'):'—')+'</td><td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:700">'+(x.media>0?R$(x.media):'—')+'</td><td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
+    var linhas=_resumoSetoresCidade(mun);
+    var col=_EXP.sCol||'v26', dir=_EXP.sDir||-1;
+    linhas.sort(function(a,b){ var va,vb;
+      if(col==='mun'||col==='div'){ va=a.div; vb=b.div; } else if(col==='nome'){ va=norm(a.nome); vb=norm(b.nome); } else { va=(a[col]==null?-Infinity:a[col]); vb=(b[col]==null?-Infinity:b[col]); }
+      if(va<vb) return -1*dir; if(va>vb) return 1*dir; return 0; });
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">'+esc(mun)+' — '+linhas.length+' setores com emissão · <span style="color:#7c3aed">clique no setor para ver as empresas</span></div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_eth('Setor','nome')+_eth('2024','v24','right')+_eth('2025','v25','right')+_eth('2026*','v26','right')+_eth('% RS','pctRS','right')+_eth('Empresas','emp','right')+_eth('YTD','gYTD','right')+'</tr>';
+    linhas.slice(0,120).forEach(function(x){ var _ms=String(mun).replace(/['"\\]/g,'');
+      h+='<tr style="border-top:1px solid #f1f5f9;cursor:pointer" title="ver as empresas desse setor em '+esc(mun)+'" onclick="window.abrirProspeccao({mun:\''+_ms+'\',div:\''+x.div+'\'})">'
+        +'<td style="padding:6px 4px;color:#0f172a">'+esc(x.div+' '+x.nome)+' <span style="color:#94a3b8;font-size:10px">'+esc(x.modelo||'')+'</span></td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v24)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v25)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#0369a1;font-weight:700">'+(x.pctRS!=null?pc(x.pctRS,1):'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:700">'+(x.emp?x.emp.toLocaleString('pt-BR'):'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+_corG(x.gYTD)+'">'+_pg(x.gYTD)+'</td></tr>'; });
     h+='</table></div>';
     return h;
   }
@@ -44940,10 +44971,11 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
       h+='<select onchange="window._expDiv(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:430px">'+optDiv+'</select>';
       h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
-      h+='<button onclick="window._expOrd(\'tamanho\')" style="'+_btnStyle(_EXP.ordenar==='tamanho')+'">maiores</button>';
-      h+='<button onclick="window._expOrd(\'cresce\')" style="'+_btnStyle(_EXP.ordenar==='cresce')+'">crescendo</button>';
-      h+='<button onclick="window._expOrd(\'cai\')" style="'+_btnStyle(_EXP.ordenar==='cai')+'">caindo</button>';
-      h+='<button onclick="window._expOrd(\'media\')" style="'+_btnStyle(_EXP.ordenar==='media')+'" title="Faturamento do setor ÷ nº de empresas. Alto = empresas grandes, poucos players — prospecção.">💰 grandes/empresa</button></div>';
+      var _am=(_EXP.sCol==='v26'&&_EXP.sDir<0&&!_EXP.piso), _ac=(_EXP.sCol==='gYTD'&&_EXP.sDir<0&&_EXP.piso), _aq=(_EXP.sCol==='gYTD'&&_EXP.sDir>0&&_EXP.piso), _ag=(_EXP.sCol==='media'&&_EXP.piso);
+      h+='<button onclick="window._expOrd(\'tamanho\')" style="'+_btnStyle(_am)+'">maiores</button>';
+      h+='<button onclick="window._expOrd(\'cresce\')" style="'+_btnStyle(_ac)+'">crescendo</button>';
+      h+='<button onclick="window._expOrd(\'cai\')" style="'+_btnStyle(_aq)+'">caindo</button>';
+      h+='<button onclick="window._expOrd(\'media\')" style="'+_btnStyle(_ag)+'" title="Faturamento do setor ÷ nº de empresas. Alto = empresas grandes, poucos players — prospecção.">💰 grandes/empresa</button></div>';
       h+=_tabelaCidades(_EXP.div);
     } else {
       var optM=_muns().map(function(m){ return '<option value="'+esc(m)+'"'+(m===_EXP.mun?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
@@ -44957,14 +44989,20 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window._expDiv=function(d){ _EXP.div=d; _expRender(); };
   window._expMun=function(m){ _EXP.mun=m; _expRender(); };
   window._expBusca=function(v){ _EXP.busca=v; _expRender(); };
-  window._expOrd=function(o){ _EXP.ordenar=o; _expRender(); };
+  window._expOrd=function(o){ _EXP.piso=(o!=='tamanho');
+    if(o==='tamanho'){ _EXP.sCol='v26'; _EXP.sDir=-1; }
+    else if(o==='cresce'){ _EXP.sCol='gYTD'; _EXP.sDir=-1; }
+    else if(o==='cai'){ _EXP.sCol='gYTD'; _EXP.sDir=1; }
+    else if(o==='media'){ _EXP.sCol='media'; _EXP.sDir=-1; }
+    _expRender(); };
+  window._expSort=function(col){ if(_EXP.sCol===col) _EXP.sDir=-_EXP.sDir; else { _EXP.sCol=col; _EXP.sDir=(col==='mun'||col==='nome')?1:-1; } _EXP.piso=false; _expRender(); };
   function abrirExploradorMercado(opts){
     if(opts && typeof opts==='object'){
       if(opts.modo) _EXP.modo=opts.modo;
       if(opts.div){ _EXP.modo='setor'; _EXP.div=String(opts.div); }
       if(opts.mun!=null){ _EXP.mun=opts.mun; }
       if(opts.busca!=null){ _EXP.busca=opts.busca; }
-      if(opts.ordenar) _EXP.ordenar=opts.ordenar;
+      if(opts.ordenar) window._expOrd(opts.ordenar);
     }
     if(!_EXP.div){ var ds=_divs(); _EXP.div = ds.indexOf('10')>=0?'10':(ds[0]||null); }
     var ov=document.getElementById('_expOverlay');
@@ -45364,7 +45402,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     t.oncomplete=function(){res(true);}; t.onerror=function(){res(false);}; }catch(e){res(false);} }); }); }
 
   var _META=null;
-  var _PR={ regiao:'', mun:'', div:'', cnae:'', idade:'', busca:'', capMin:0, unir:false, sCol:'desde', sDir:-1 };
+  var _PR={ regiao:'', mun:'', div:'', cnae:'', idade:'', busca:'', capMin:0, porte:'', unir:false, verTodas:false, sCol:'desde', sDir:-1 };
   function ehMatriz(cnpj){ return String(cnpj).slice(8,12)==='0001'; }
 
   function _st(msg,cor){ ['_prospStatus2'].forEach(function(id){ var s=document.getElementById(id); if(s){ s.innerHTML=msg; s.style.color=cor||'#64748b'; } }); }
@@ -45445,7 +45483,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   }
 
   var _lastResult; /* undefined = ainda não buscou */
-  function _temFiltro(){ return !!(_PR.div||_PR.mun||_PR.regiao||_PR.capMin||_PR.idade||norm(_PR.busca)||_PR.cnae.replace(/\D/g,'')); }
+  function _temFiltro(){ return !!(_PR.div||_PR.mun||_PR.regiao||_PR.capMin||_PR.porte||_PR.idade||norm(_PR.busca)||_PR.cnae.replace(/\D/g,'')); }
   /* busca livre: qualquer filtro sozinho. Varre a base (cursor) aplicando os filtros que estiverem setados. */
   function _buscar(){
     if(!_temFiltro()) return Promise.resolve(null);
@@ -45468,6 +45506,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
             if(_PR.idade && ano && ano<_PR.idade) continue;
             if(cf && String(cnae).indexOf(cf)!==0) continue;
             if(_PR.capMin && (cap||0)<_PR.capMin) continue;
+            if(_PR.porte && String(a[6]||'')!==_PR.porte) continue;
             if(bq){ var nR=norm(a[4]||''), nF=norm(a[3]||''); if(nR.indexOf(bq)<0 && nF.indexOf(bq)<0 && (!bqn||String(a[0]).indexOf(bqn)<0)) continue; }
             out.push({cnpj:a[0],cnae:cnae,ano:ano,fant:a[3]||'',razao:a[4]||'',cap:cap,porte:a[6]||'',mun:mun});
             if(out.length>=CAP) break;
@@ -45478,14 +45517,40 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       req.onerror=function(){ res(out); };
     }); });
   }
+  /* modo cidade: escolheu só a cidade (sem setor/nome/CNAE) → mostra os setores (faturamento) para expandir */
+  function _cidadeModo(){ return !!(_PR.mun && !_PR.div && !norm(_PR.busca) && !_PR.cnae.replace(/\D/g,'') && !_PR.verTodas); }
   function _prRun(){
     var box=document.getElementById('_prListBox'); if(!box) return;
     if(!_META){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Suba a base de empresas primeiro (botão acima).</div>'; return; }
-    if(!_temFiltro()){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha pelo menos um filtro (nome, cidade, região, setor, CNAE, capital ou idade) e clique <b>Buscar</b>.</div>'; return; }
+    if(!_temFiltro()){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha pelo menos um filtro (nome, cidade, região, setor, CNAE, capital, porte ou idade) e clique <b>Buscar</b>.</div>'; return; }
+    if(_cidadeModo()){ _lastResult=undefined; _renderLista(); return; }
     box.innerHTML='<div style="font-size:12.5px;color:#64748b">Buscando…</div>';
     _buscar().then(function(l){ _lastResult=l||[]; _renderLista(); });
   }
   window._prRun=_prRun;
+
+  /* lista suprimida por setor da cidade — faturamento (Sefaz) + nº de empresas (RF); clica e abre as empresas */
+  function _cidadeResumoHTML(mun){
+    var rows=(typeof window.resumoSetoresCidade==='function')?window.resumoSetoresCidade(mun):[];
+    var verTodas='<span style="color:#7c3aed;cursor:pointer;text-decoration:underline" onclick="window._prVerTodas()">ver todas as empresas da cidade numa lista só →</span>';
+    if(!rows||!rows.length){ return '<div style="font-size:12.5px;color:#64748b;padding:6px 2px">Sem emissão fiscal registrada para <b>'+esc(mun)+'</b> na base de mercado (ou é cidade pequena). '+verTodas+'</div>'; }
+    rows.sort(function(a,b){ return b.v26-a.v26; });
+    var h='<div style="font-size:12.5px;color:#334155;margin-bottom:5px">📊 <b>'+esc(mun)+'</b> — setores com emissão fiscal (Sefaz-RS). Clique num setor para abrir <b>as empresas</b> dele. '+verTodas+'</div>';
+    h+='<div style="font-size:11px;color:#94a3b8;margin-bottom:8px">O faturamento da cidade é por <b>setor (divisão CNAE)</b> — a Sefaz não abre por CNAE fino na cidade; o nº de empresas vai até o CNAE exato. Serviços (NFS-e) não entram nesta base. <b>% RS</b> = quanto a cidade representa do estado no setor.</div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;color:#64748b;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Setor</td><td style="padding:6px 4px;text-align:right">2024</td><td style="padding:6px 4px;text-align:right">2025</td><td style="padding:6px 4px;text-align:right">2026*</td><td style="padding:6px 4px;text-align:right">% RS</td><td style="padding:6px 4px;text-align:right">Empresas</td><td style="padding:6px 4px;text-align:right">YTD</td></tr>';
+    rows.slice(0,120).forEach(function(x){ var g=x.gYTD; var cor=(g==null)?'#cbd5e1':(g>=0?'#15803d':'#b91c1c');
+      h+='<tr style="border-top:1px solid #f1f5f9;cursor:pointer" title="ver as empresas desse setor em '+esc(mun)+'" onclick="window._prSetor(\''+x.div+'\')">'
+        +'<td style="padding:6px 4px;color:#0f172a">'+esc(x.div+' '+x.nome)+' <span style="color:#94a3b8;font-size:10px">'+esc(x.modelo||'')+'</span></td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v24)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#64748b">'+R$(x.v25)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700">'+R$(x.v26)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#0369a1;font-weight:700">'+(x.pctRS!=null?(x.pctRS*100).toFixed(1).replace('.',',')+'%':'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:700">'+(x.emp?x.emp.toLocaleString('pt-BR'):'—')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+cor+'">'+(g==null?'—':(g>=0?'+':'')+(g*100).toFixed(1).replace('.',',')+'%')+'</td></tr>'; });
+    h+='</table></div>';
+    return h;
+  }
 
   function _ordenar(lst){
     var c=_PR.sCol, d=_PR.sDir;
@@ -45507,7 +45572,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   function _renderLista(){
     var box=document.getElementById('_prListBox'); if(!box) return;
     if(!_META){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Suba a base de empresas primeiro (botão acima).</div>'; return; }
-    if(_lastResult===undefined){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha um filtro (nome, cidade, região, setor, CNAE, capital ou idade) e clique <b>Buscar</b>.</div>'; return; }
+    if(_cidadeModo()){ box.innerHTML=_cidadeResumoHTML(_PR.mun); return; }
+    if(_lastResult===undefined){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha um filtro (nome, cidade, região, setor, CNAE, capital, porte ou idade) e clique <b>Buscar</b>.</div>'; return; }
     (function(){
       var filt=(_lastResult||[]).slice();
       var _atingiuCap=filt.length>=800;
@@ -45520,7 +45586,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       var _nCid=Object.keys(filt.reduce(function(a,r){a[r.mun]=1;return a;},{})).length;
       var ondeLbl = _PR.mun?esc(_PR.mun):(_PR.regiao?('região <b>'+esc(_PR.regiao)+'</b> ('+_nCid+' cidades)'):('RS'+(_nCid?' · '+_nCid+' cidades':'')));
       var setorLbl = _PR.div?(' · '+esc(_PR.div+' '+divNome(_PR.div))):'';
-      var h='<div style="font-size:12px;color:#334155;margin-bottom:6px"><b>'+filt.length.toLocaleString('pt-BR')+'</b> '+(unido?'empresas (filiais unidas)':'estabelecimentos')+' · '+ondeLbl+setorLbl+(temRazao?(cap?' · capital somado '+R$(cap):''):' · <span style="color:#b45309">suba o arquivo Empresas p/ razão social e capital</span>')+'</div>';
+      var voltar=(_PR.mun && _PR.div)?'<div style="margin-bottom:6px"><span onclick="window._prVoltarCidade()" style="cursor:pointer;color:#7c3aed;font-size:12px;font-weight:700">← setores de '+esc(_PR.mun)+'</span></div>':'';
+      var h=voltar+'<div style="font-size:12px;color:#334155;margin-bottom:6px"><b>'+filt.length.toLocaleString('pt-BR')+'</b> '+(unido?'empresas (filiais unidas)':'estabelecimentos')+' · '+ondeLbl+setorLbl+(temRazao?(cap?' · capital somado '+R$(cap):''):' · <span style="color:#b45309">suba o arquivo Empresas p/ razão social e capital</span>')+'</div>';
       h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
       h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff;color:#64748b">'+_th('Empresa','empresa')+(multi?_th('Cidade','cidade'):'')+_th('CNAE','cnae')+(temRazao?_th('Capital','capital'):'')+_th('Porte','porte')+'<td style="padding:6px 4px">'+(unido?'Estab.':'Tipo')+'</td>'+_th('Desde','desde')+_th('CNPJ','cnpj')+'</tr>';
       filt.slice(0,400).forEach(function(r){
@@ -45541,17 +45608,22 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     })();
   }
   window._prCopia=function(cnpj){ try{ navigator.clipboard.writeText(fmtCNPJ(cnpj)); _st('CNPJ '+fmtCNPJ(cnpj)+' copiado — cole no "Buscar na Receita".', '#15803d'); }catch(e){} };
-  window._prReg=function(v){ _PR.regiao=v; _PR.mun=''; _preencher(); _prRun(); };
-  window._prMunSel=function(v){ _PR.mun=v; _prRun(); };
-  window._prDivSel=function(v){ _PR.div=v; _prRun(); };
+  window._prReg=function(v){ _PR.regiao=v; _PR.mun=''; _PR.div=''; _PR.verTodas=false; _preencher(); _prRun(); };
+  window._prMunSel=function(v){ _PR.mun=v; _PR.div=''; _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=''; _prRun(); };
+  window._prDivSel=function(v){ _PR.div=v; _PR.verTodas=false; _prRun(); };
   window._prIdade=function(v){ _PR.idade=v?String(v):''; _prRun(); };
   window._prCap=function(v){ _PR.capMin=Number(v)||0; _prRun(); };
+  window._prPorte=function(v){ _PR.porte=v?String(v):''; _prRun(); };
   window._prCnae=function(v){ _PR.cnae=v; };            /* aplica no Buscar/Enter */
   window._prBusca=function(v){ _PR.busca=v; };          /* aplica no Buscar/Enter */
   window._prUnir=function(v){ _PR.unir=!!v; _renderLista(); };
   window._prSort=function(col){ if(_PR.sCol===col) _PR.sDir=-_PR.sDir; else { _PR.sCol=col; _PR.sDir=(col==='capital'||col==='desde')?-1:1; } _renderLista(); };
-  window._prLimpar=function(){ _PR.regiao='';_PR.mun='';_PR.div='';_PR.cnae='';_PR.idade='';_PR.busca='';_PR.capMin=0;_PR.unir=false; _lastResult=undefined;
-    ['_prReg','_prMun','_prDiv','_prIdade','_prCap'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  /* visão por cidade: clicar num setor abre as empresas dele; ver todas; voltar aos setores */
+  window._prSetor=function(div){ _PR.div=String(div); _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=_PR.div; _prRun(); };
+  window._prVerTodas=function(){ _PR.verTodas=true; _prRun(); };
+  window._prVoltarCidade=function(){ _PR.div=''; _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=''; _lastResult=undefined; _renderLista(); };
+  window._prLimpar=function(){ _PR.regiao='';_PR.mun='';_PR.div='';_PR.cnae='';_PR.idade='';_PR.busca='';_PR.capMin=0;_PR.porte='';_PR.unir=false;_PR.verTodas=false; _lastResult=undefined;
+    ['_prReg','_prMun','_prDiv','_prIdade','_prCap','_prPorte'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
     ['_prCnaeInp','_prBuscaInp'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
     var u=document.getElementById('_prUnir'); if(u) u.checked=false;
     _preencher(); };
@@ -45581,6 +45653,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         +'<button onclick="window._prLimpar()" style="background:#fff;color:#64748b;border:1px solid #cbd5e1;border-radius:8px;padding:7px 11px;font-size:12.5px;cursor:pointer" title="limpar filtros">limpar</button>'
         +'<select id="_prIdade" onchange="window._prIdade(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer idade</option><option value="2024">aberta de 2024+</option><option value="2020">2020+</option><option value="2010">2010+</option></select>'
         +'<select id="_prCap" onchange="window._prCap(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer capital</option><option value="100000">capital ≥ R$ 100 mil</option><option value="500000">≥ R$ 500 mil</option><option value="1000000">≥ R$ 1 mi</option><option value="5000000">≥ R$ 5 mi</option><option value="10000000">≥ R$ 10 mi</option><option value="50000000">≥ R$ 50 mi</option></select>'
+        +'<select id="_prPorte" onchange="window._prPorte(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer porte</option><option value="01">Microempresa (ME)</option><option value="03">Pequeno porte (EPP)</option><option value="05">Demais (médio/grande)</option></select>'
         +'<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#334155;cursor:pointer"><input type="checkbox" id="_prUnir" onchange="window._prUnir(this.checked)"> unir filiais (1 linha por empresa)</label>'
         +'</div>'
         +'<div id="_prListBox"></div></div>';
