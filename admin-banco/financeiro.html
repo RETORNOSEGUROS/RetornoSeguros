@@ -45456,7 +45456,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     t.oncomplete=function(){res(true);}; t.onerror=function(){res(false);}; }catch(e){res(false);} }); }); }
 
   var _META=null;
-  var _PR={ regiao:'', mun:'', div:'', cnae:'', idade:'', busca:'', capMin:0, porte:'', natureza:'', unir:false, verTodas:false, sCol:'desde', sDir:-1 };
+  var _PR={ regiao:'', mun:'', div:'', cnae:'', idade:'', busca:'', capMin:0, porte:'', natureza:'', tipo:'', unir:false, verTodas:false, sCol:'desde', sDir:-1 };
   function ehMatriz(cnpj){ return String(cnpj).slice(8,12)==='0001'; }
 
   function _st(msg,cor){ ['_prospStatus2'].forEach(function(id){ var s=document.getElementById(id); if(s){ s.innerHTML=msg; s.style.color=cor||'#64748b'; } }); }
@@ -45537,7 +45537,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   }
 
   var _lastResult; /* undefined = ainda não buscou */
-  function _temFiltro(){ return !!(_PR.div||_PR.mun||_PR.regiao||_PR.capMin||_PR.porte||_PR.natureza||_PR.idade||norm(_PR.busca)||_PR.cnae.replace(/\D/g,'')); }
+  function _temFiltro(){ return !!(_PR.div||_PR.mun||_PR.regiao||_PR.capMin||_PR.porte||_PR.natureza||_PR.tipo||_PR.idade||norm(_PR.busca)||_PR.cnae.replace(/\D/g,'')); }
   /* busca livre: qualquer filtro sozinho. Varre a base (cursor) aplicando os filtros que estiverem setados. */
   function _buscar(){
     if(!_temFiltro()) return Promise.resolve(null);
@@ -45562,6 +45562,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
             if(_PR.capMin && (cap||0)<_PR.capMin) continue;
             if(_PR.porte && String(a[6]||'')!==_PR.porte) continue;
             if(_PR.natureza && _natClasse(a[7])!==_PR.natureza) continue;
+            if(_PR.tipo){ var _mz=ehMatriz(a[0]); if(_PR.tipo==='matriz'&&!_mz) continue; if(_PR.tipo==='filial'&&_mz) continue; }
             if(bq){ var nR=norm(a[4]||''), nF=norm(a[3]||''); if(nR.indexOf(bq)<0 && nF.indexOf(bq)<0 && (!bqn||String(a[0]).indexOf(bqn)<0)) continue; }
             out.push({cnpj:a[0],cnae:cnae,ano:ano,fant:a[3]||'',razao:a[4]||'',cap:cap,porte:a[6]||'',nat:_natClasse(a[7]),mun:mun});
             if(out.length>=CAP) break;
@@ -45659,7 +45660,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           +'<td style="padding:6px 4px;color:#64748b;font-size:11px">'+esc(porteNome(r.porte))+(r.nat?' <span style="color:#7c3aed" title="natureza jurídica">· '+esc(_natLabel(r.nat))+'</span>':'')+'</td>'
           +(unido?'<td style="padding:6px 4px;color:#334155">'+r.estab+(r.nCid>1?' <span style="color:#94a3b8">('+r.nCid+' cid.)</span>':'')+'</td>':'<td style="padding:6px 4px;font-size:11px;color:'+(ehMatriz(r.cnpj)?'#15803d':'#94a3b8')+'">'+(ehMatriz(r.cnpj)?'Matriz':'Filial')+'</td>')
           +'<td style="padding:6px 4px;color:#64748b">'+esc(r.ano||'—')+'</td>'
-          +'<td style="padding:6px 4px;white-space:nowrap"><span style="font-family:monospace;font-size:11px;color:#334155;cursor:pointer" title="clique para copiar" onclick="window._prCopia(\''+esc(r.cnpj)+'\')">'+esc(fmtCNPJ(r.cnpj))+'</span> <button onclick="window._prReceita(\''+esc(r.cnpj)+'\')" style="border:1px solid #bae6fd;background:#f0f9ff;border-radius:6px;padding:2px 7px;font-size:10px;cursor:pointer;color:#0369a1;font-weight:700" title="consultar endereço, sócios e CNAEs na Receita (ao vivo)">🔎 Receita</button></td></tr>'
+          +'<td style="padding:6px 4px;white-space:nowrap"><span style="font-family:monospace;font-size:11px;color:#334155;cursor:pointer" title="clique para copiar" onclick="window._prCopia(\''+esc(r.cnpj)+'\')">'+esc(fmtCNPJ(r.cnpj))+'</span> <button onclick="window._prReceita(\''+esc(r.cnpj)+'\')" style="border:1px solid #bae6fd;background:#f0f9ff;border-radius:6px;padding:2px 7px;font-size:10px;cursor:pointer;color:#0369a1;font-weight:700" title="mercado do CNAE (estado e cidade) + consulta na Receita (endereço, sócios)">🔎 Analisar</button></td></tr>'
           +'<tr id="_prdet_'+esc(r.cnpj)+'" style="display:none"><td colspan="8" style="padding:0 4px 8px"></td></tr>';
       });
       if(filt.length>400) h+='<tr><td colspan="8" style="padding:8px 4px;color:#94a3b8;font-size:11px">Mostrando 400 de '+filt.length.toLocaleString('pt-BR')+'. Afunile com os filtros.</td></tr>';
@@ -45695,16 +45696,53 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     h+='</div>';
     return h;
   }
+  /* análise de mercado do CNAE (estado + cidade) — reaproveita RS_CNAE_ESTADO, RS_PLAYERS e setorResumo */
+  function _prMercadoHTML(cnae, mun){
+    var dig=String(cnae||'').replace(/\D/g,''); if(dig.length<5) return '';
+    var classe=dig.slice(0,5), grupo=dig.slice(0,3), div=String(parseInt(dig.slice(0,2),10)||0);
+    function pctTxt(v){ return (v==null||!isFinite(v))?'—':((v>=0?'+':'')+(v*100).toFixed(1).replace('.',',')+'%'); }
+    var CE=window.RS_CNAE_ESTADO||{};
+    var emi=(CE.emissao&&CE.emissao[classe])||null;
+    var clNome=(CE.classeNome&&CE.classeNome[classe])||cnaeNome(dig)||'';
+    var empRS=(CE.empCnae&&dig.length>=7&&CE.empCnae[dig.slice(0,7)])||(CE.empClasse&&CE.empClasse[classe])||null;
+    var gEst=null, e2025=null, docLbl='';
+    if(emi){ e2025=emi[0]; var ytd25=emi[2], ytd26=emi[3]; gEst=(ytd25>0?ytd26/ytd25-1:null); docLbl=({n:'NF-e',c:'NFC-e',t:'CT-e'})[emi[5]]||'NF-e'; }
+    var sr=(typeof window.setorResumo==='function'&&mun)?window.setorResumo(cnae,mun):null;
+    var PL=window.RS_PLAYERS||{}; var nm=norm(mun||'');
+    var plDiv=(PL.div&&div&&PL.div[nm+'|'+_pdv(div)])||0;
+    var plCnae=(PL.cnae&&dig.length>=7&&PL.cnae[nm+'|'+dig.slice(0,7)])||0;
+    var divN=divNome(div)||'';
+    var h='<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:10px 12px;font-size:11.5px;color:#334155;line-height:1.7;margin-bottom:8px">';
+    h+='<div style="font-weight:700;color:#0369a1">📊 Mercado do CNAE '+esc(dig)+(clNome?' — '+esc(clNome):'')+'</div>';
+    h+='<div style="color:#94a3b8;font-size:10px;margin-bottom:4px">divisão '+esc(div)+' · grupo '+esc(grupo)+' · classe '+esc(classe)+'</div>';
+    if(emi){ h+='<div><b>No RS</b> (classe '+esc(classe)+'): <b>'+R$(e2025)+'</b> em 2025 ('+esc(docLbl)+') · cresc. 2026 YTD <b style="color:'+((gEst||0)>=0?'#15803d':'#b91c1c')+'">'+pctTxt(gEst)+'</b>'+(empRS!=null?' · <b>'+empRS.toLocaleString('pt-BR')+'</b> empresas no RS':'')+'</div>'; }
+    else if(empRS!=null){ h+='<div><b>No RS</b>: '+empRS.toLocaleString('pt-BR')+' empresas nesse CNAE.</div>'; }
+    if(mun){ var cidTxt='';
+      if(sr && !sr.semDado && sr.atual){ cidTxt='setor (div '+esc(div)+(divN?' '+esc(divN):'')+') emite <b>'+R$(sr.atual)+'</b> aqui (2026 YTD '+pctTxt(sr.gYTD)+')'; }
+      else if(sr && sr.servico){ cidTxt='setor de serviço (NFS-e) — fora da base estadual'; }
+      var plTxt=(plDiv?('<b>'+plDiv.toLocaleString('pt-BR')+'</b> empresas no setor'+(plCnae?', <b>'+plCnae.toLocaleString('pt-BR')+'</b> no CNAE exato':'')):'');
+      if(cidTxt||plTxt) h+='<div><b>Em '+esc(mun)+'</b>: '+[cidTxt,plTxt].filter(Boolean).join(' · ')+'.</div>';
+    }
+    var _ms=String(mun||'').replace(/['"\\]/g,'');
+    if(div && window.abrirExploradorMercado) h+='<div style="margin-top:4px"><button onclick="window.abrirExploradorMercado({div:\''+div+'\',busca:\''+_ms+'\'})" style="border:1px solid #1d4ed8;background:#eff6ff;color:#1d4ed8;border-radius:7px;padding:3px 9px;font-size:10.5px;font-weight:700;cursor:pointer">🗺️ ver esse setor no mapa do RS</button></div>';
+    h+='</div>';
+    return h;
+  }
   window._prReceita=function(cnpj){
     var det=document.getElementById('_prdet_'+cnpj); if(!det) return;
     var cell=det.getElementsByTagName('td')[0]; if(!cell) return;
     if(det.style.display!=='none'){ det.style.display='none'; return; }
-    det.style.display=''; cell.innerHTML='<div style="font-size:11.5px;color:#64748b;padding:4px 2px">Consultando a Receita…</div>';
-    if(typeof window.buscarCNPJ!=='function'){ cell.innerHTML='<div style="font-size:11.5px;color:#b91c1c;padding:4px 2px">Consulta à Receita indisponível neste navegador.</div>'; return; }
-    window.buscarCNPJ(cnpj).then(function(r){
-      if(!r||!r.ok||!r.receita){ cell.innerHTML='<div style="font-size:11.5px;color:#b45309;padding:4px 2px">Não consegui consultar agora'+((r&&r.motivo)?' ('+esc(r.motivo)+')':'')+'. Tente de novo em instantes.</div>'; return; }
-      cell.innerHTML=_fichaReceitaHTML(r.receita, r.fonte);
-    }).catch(function(e){ cell.innerHTML='<div style="font-size:11.5px;color:#b91c1c;padding:4px 2px">Erro na consulta: '+esc(e&&e.message||e)+'</div>'; });
+    det.style.display='';
+    var rec=null; try{ (_lastResult||[]).some(function(x){ if(String(x.cnpj)===String(cnpj)){ rec=x; return true; } return false; }); }catch(eL){}
+    var cnae=rec?rec.cnae:'', mun=rec?rec.mun:'';
+    var mkt=''; try{ mkt=_prMercadoHTML(cnae, mun); }catch(eM){}
+    cell.innerHTML = mkt + '<div id="_prrec_'+cnpj+'" style="font-size:11.5px;color:#64748b;padding:2px 2px">Consultando a Receita (endereço, sócios)…</div>';
+    var recBox=document.getElementById('_prrec_'+cnpj);
+    if(typeof window.buscarCNPJ!=='function'){ if(recBox) recBox.innerHTML='<span style="color:#b91c1c">Consulta à Receita indisponível neste navegador.</span>'; return; }
+    window.buscarCNPJ(cnpj).then(function(r){ if(!recBox) return;
+      if(!r||!r.ok||!r.receita){ recBox.innerHTML='<span style="color:#b45309">Não consegui consultar a Receita agora'+((r&&r.motivo)?' ('+esc(r.motivo)+')':'')+'.</span>'; return; }
+      recBox.innerHTML=_fichaReceitaHTML(r.receita, r.fonte);
+    }).catch(function(e){ if(recBox) recBox.innerHTML='<span style="color:#b91c1c">Erro na consulta: '+esc(e&&e.message||e)+'</span>'; });
   };
   window._prReg=function(v){ _PR.regiao=v; _PR.mun=''; _PR.div=''; _PR.verTodas=false; _preencher(); _prRun(); };
   window._prMunSel=function(v){ _PR.mun=v; _PR.div=''; _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=''; _prRun(); };
@@ -45713,6 +45751,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window._prCap=function(v){ _PR.capMin=Number(v)||0; _prRun(); };
   window._prPorte=function(v){ _PR.porte=v?String(v):''; _prRun(); };
   window._prNat=function(v){ _PR.natureza=v?String(v):''; _prRun(); };
+  window._prTipo=function(v){ _PR.tipo=v?String(v):''; _prRun(); };
   window._prCnae=function(v){ _PR.cnae=v; };            /* aplica no Buscar/Enter */
   window._prBusca=function(v){ _PR.busca=v; };          /* aplica no Buscar/Enter */
   window._prUnir=function(v){ _PR.unir=!!v; _renderLista(); };
@@ -45721,8 +45760,8 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window._prSetor=function(div){ _PR.div=String(div); _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=_PR.div; _prRun(); };
   window._prVerTodas=function(){ _PR.verTodas=true; _prRun(); };
   window._prVoltarCidade=function(){ _PR.div=''; _PR.verTodas=false; var dd=document.getElementById('_prDiv'); if(dd) dd.value=''; _lastResult=undefined; _renderLista(); };
-  window._prLimpar=function(){ _PR.regiao='';_PR.mun='';_PR.div='';_PR.cnae='';_PR.idade='';_PR.busca='';_PR.capMin=0;_PR.porte='';_PR.natureza='';_PR.unir=false;_PR.verTodas=false; _lastResult=undefined;
-    ['_prReg','_prMun','_prDiv','_prIdade','_prCap','_prPorte','_prNat'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  window._prLimpar=function(){ _PR.regiao='';_PR.mun='';_PR.div='';_PR.cnae='';_PR.idade='';_PR.busca='';_PR.capMin=0;_PR.porte='';_PR.natureza='';_PR.tipo='';_PR.unir=false;_PR.verTodas=false; _lastResult=undefined;
+    ['_prReg','_prMun','_prDiv','_prIdade','_prCap','_prPorte','_prNat','_prTipo'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
     ['_prCnaeInp','_prBuscaInp'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
     var u=document.getElementById('_prUnir'); if(u) u.checked=false;
     _preencher(); };
@@ -45755,6 +45794,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         +'<select id="_prPorte" onchange="window._prPorte(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer porte</option><option value="01">Microempresa (ME)</option><option value="03">Pequeno porte (EPP)</option><option value="05">Demais (médio/grande)</option></select>'
         +'<select id="_prNat" onchange="window._prNat(this.value)" title="natureza jurídica" style="display:none;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer natureza</option><option value="SA">S.A. (sociedade anônima)</option><option value="LTDA">LTDA</option><option value="COOP">Cooperativa</option><option value="ASSOC">Associação</option><option value="FUND">Fundação</option><option value="EI">Empresário individual</option><option value="OUTRAS">Outras</option></select>'
         +'<span id="_prNatHint" style="display:none;font-size:10.5px;color:#b45309" title="rode o script de Empresas atualizado e me reenvie">natureza: rode o Empresas novo</span>'
+        +'<select id="_prTipo" onchange="window._prTipo(this.value)" title="matriz ou filial" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">matriz e filial</option><option value="matriz">só matriz</option><option value="filial">só filial</option></select>'
         +'<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#334155;cursor:pointer"><input type="checkbox" id="_prUnir" onchange="window._prUnir(this.checked)"> unir filiais (1 linha por empresa)</label>'
         +'</div>'
         +'<div id="_prListBox"></div></div>';
