@@ -1885,6 +1885,11 @@
             style="border-color:#7c3aed; color:#7c3aed; background:linear-gradient(135deg,#f5f3ff,#ede9fe)">
             📋 <span class="btn-txt">Empresas (prospecção)</span>
           </button>
+          <button class="btn btn-outline" id="btnRadarMercado" onclick="window.abrirRadarMercado && window.abrirRadarMercado()"
+            title="Para onde o RS vende e de onde compra: dependência de fora (gaps/oportunidades) e destino das vendas por setor. Suba os CSVs mensais da Sefaz (Saídas por Setor + Composição de Mercado)."
+            style="border-color:#0f766e; color:#0f766e; background:linear-gradient(135deg,#f0fdfa,#ccfbf1)">
+            📡 <span class="btn-txt">Radar do mercado</span>
+          </button>
           <button class="btn btn-outline" id="btnAtualizarMercado" onclick="window.subirBaseMercado && window.subirBaseMercado()"
             title="Sobe o arquivo compacto de mercado (emissão de NF-e/NFC-e/CT-e por setor e cidade, Sefaz-RS) para atualizar a base. O sistema já vem com uma base embutida; suba a nova a cada mês."
             style="border-color:#64748b; color:#475569; background:#fff">
@@ -45772,5 +45777,218 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
 })();
 </script>
 
+<script>
+/* ===================================================================
+   RADAR DO MERCADO — para onde o RS vende e de onde compra
+   Sobe os CSVs mensais da Sefaz (Saídas por Setor + Composição de
+   Mercado), acumula no navegador (IndexedDB) e mostra, por setor:
+   o destino das vendas (RS / outros estados / exportação) e a
+   dependência de fora (gaps = oportunidades). Estadual, por setor/
+   produto (NCM)/UF — não por município nem CNAE do comprador.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(t){ return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function norm(s){ try{ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().trim(); }catch(e){ return String(s||'').toUpperCase().trim(); } }
+  function n(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; }
+  function numBR(s){ s=String(s==null?'':s).trim(); if(!s) return 0; s=s.replace(/\./g,'').replace(',','.'); var x=parseFloat(s); return (isNaN(x)||!isFinite(x))?0:x; }
+  function R$(v){ return (v==null||!isFinite(v))?'—':Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}); }
+  function rc(v){ if(v==null||!isFinite(v)) return '—'; var a=Math.abs(v); if(a>=1e9) return 'R$ '+(v/1e9).toFixed(1).replace('.',',')+' bi'; if(a>=1e6) return 'R$ '+(v/1e6).toFixed(0).toLocaleString('pt-BR')+' mi'; if(a>=1e3) return 'R$ '+Math.round(v/1e3)+' mil'; return 'R$ '+Math.round(v); }
+  function pc(v,c){ return (v==null||!isFinite(v))?'—':(v*100).toFixed(c==null?1:c).replace('.',',')+'%'; }
+  var MESNOME={ '01':'jan','02':'fev','03':'mar','04':'abr','05':'mai','06':'jun','07':'jul','08':'ago','09':'set','10':'out','11':'nov','12':'dez' };
+  function mesLbl(m){ m=String(m); return (MESNOME[m.slice(4,6)]||m.slice(4,6))+'/'+m.slice(0,4); }
+
+  /* ---- CSV: parser de linha que respeita aspas (ncm_descr tem vírgulas) ---- */
+  function parseLinha(line){
+    var out=[], cur='', q=false;
+    for(var i=0;i<line.length;i++){ var ch=line[i];
+      if(q){ if(ch==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=ch; }
+      else { if(ch==='"') q=true; else if(ch===','){ out.push(cur); cur=''; } else cur+=ch; }
+    }
+    out.push(cur); return out;
+  }
+
+  /* ---- IndexedDB ---- */
+  var DB='corp1_radar', ST='kv', _p=null;
+  function abrir(){ if(_p) return _p; _p=new Promise(function(res){ try{ if(!window.indexedDB) return res(null);
+    var rq=indexedDB.open(DB,1); rq.onupgradeneeded=function(){ var db=rq.result; if(!db.objectStoreNames.contains(ST)) db.createObjectStore(ST); };
+    rq.onsuccess=function(){res(rq.result);}; rq.onerror=function(){res(null);}; }catch(e){ res(null);} }); return _p; }
+  function dbPut(k,v){ return abrir().then(function(db){ if(!db) return false; return new Promise(function(res){ try{ var t=db.transaction(ST,'readwrite'); t.objectStore(ST).put(v,k); t.oncomplete=function(){res(true);}; t.onerror=function(){res(false);}; }catch(e){res(false);} }); }); }
+  function dbGet(k){ return abrir().then(function(db){ if(!db) return null; return new Promise(function(res){ try{ var t=db.transaction(ST,'readonly'); var g=t.objectStore(ST).get(k); g.onsuccess=function(){res(g.result||null);}; g.onerror=function(){res(null);}; }catch(e){res(null);} }); }); }
+  function dbDel(k){ return abrir().then(function(db){ if(!db) return; return new Promise(function(res){ try{ var t=db.transaction(ST,'readwrite'); t.objectStore(ST).delete(k); t.oncomplete=function(){res();}; t.onerror=function(){res();}; }catch(e){res();} }); }); }
+  function dbKeys(){ return abrir().then(function(db){ if(!db) return []; return new Promise(function(res){ try{ var t=db.transaction(ST,'readonly'); var rq=t.objectStore(ST).getAllKeys(); rq.onsuccess=function(){res(rq.result||[]);}; rq.onerror=function(){res([]);}; }catch(e){res([]);} }); }); }
+
+  function _st(msg,cor){ var s=document.getElementById('_radarStatus'); if(s){ s.innerHTML=msg; s.style.color=cor||'#64748b'; } }
+
+  /* ---- leitura dos arquivos ---- */
+  function subirRadar(){
+    var inp=document.getElementById('_radarInput');
+    if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.multiple=true; inp.accept='.csv'; inp.id='_radarInput'; inp.style.display='none';
+      inp.addEventListener('change', function(){ if(inp.files&&inp.files.length) processarArquivos(Array.prototype.slice.call(inp.files)); inp.value=''; });
+      document.body.appendChild(inp); }
+    inp.click();
+  }
+  window.subirRadarMercado=subirRadar;
+
+  function lerLatin1(file){ return new Promise(function(res,rej){ var fr=new FileReader(); fr.onload=function(e){ try{ res(new TextDecoder('iso-8859-1').decode(e.target.result)); }catch(ex){ rej(ex); } }; fr.onerror=function(){ rej(new Error('não consegui ler '+file.name)); }; fr.readAsArrayBuffer(file); }); }
+
+  function processarArquivos(files){
+    _st('Lendo '+files.length+' arquivo(s)…','#64748b');
+    var meses={}; /* mes -> {vendas, consumo} acumulando dos arquivos desta leva */
+    var chain=Promise.resolve();
+    files.forEach(function(f){ chain=chain.then(function(){ return lerLatin1(f).then(function(txt){ ingerir(f.name, txt, meses); }); }); });
+    chain.then(function(){
+      var keys=Object.keys(meses);
+      if(!keys.length){ _st('Não reconheci esses arquivos. Suba o <b>Saidas_Setor</b> e/ou <b>Composicao_de_Mercado</b> da Sefaz.','#b91c1c'); return; }
+      /* grava cada mês (mescla com o que já houver do mesmo mês) */
+      var save=Promise.resolve();
+      keys.forEach(function(mes){ save=save.then(function(){ return dbGet('m_'+mes).then(function(prev){ var rec=mesclar(prev, meses[mes], mes); return dbPut('m_'+mes, rec); }); }); });
+      return save.then(function(){ return dbGet('meses').then(function(ml){ ml=ml||[]; keys.forEach(function(m){ if(ml.indexOf(m)<0) ml.push(m); }); ml.sort(); return dbPut('meses', ml); }); })
+        .then(function(){ _st('✓ Carregado: '+keys.map(mesLbl).join(', ')+'. Fica guardado — suba mais meses quando quiser.','#15803d'); render(); });
+    }).catch(function(ex){ _st('Falha: '+esc(ex&&ex.message||ex),'#b91c1c'); });
+  }
+
+  function ingerir(nome, txt, meses){
+    var linhas=txt.split(/\r?\n/); if(linhas.length<2) return;
+    var head=parseLinha(linhas[0]).map(function(x){ return x.trim().toLowerCase().replace(/^"|"$/g,''); });
+    var col={}; head.forEach(function(h,i){ col[h]=i; });
+    var ehSaidas=(col['emit_setor']!=null && col['dest_uf']!=null);
+    var ehComp=(col['emit_uf']!=null && col['cod_ncm']!=null && col['emit_setor']==null);
+    if(!ehSaidas && !ehComp) return;
+    for(var i=1;i<linhas.length;i++){ var L=linhas[i]; if(!L) continue; var c=parseLinha(L);
+      var mes=String((c[col['anomes']]||'').replace(/\D/g,'')).slice(0,6); if(mes.length<6) continue;
+      var m=meses[mes]||(meses[mes]={vendas:{}, consumo:{tipo:{}, uf:{}, ncm:{}}});
+      if(ehSaidas){
+        var setor=(c[col['emit_setor']]||'').trim()||'(sem setor)'; var tipo=(c[col['tipo_operacao']]||'').trim();
+        var v=numBR(c[col['vlr_nominal']]); if(!v) continue;
+        var s=m.vendas[setor]||(m.vendas[setor]={INT:0,OUF:0,EXT:0}); if(s[tipo]!=null) s[tipo]+=v;
+      } else {
+        var tipoC=(c[col['tipo_operacao']]||'').trim(); var vc=numBR(c[col['vlr_nominal']]); if(!vc) continue;
+        var ufo=(c[col['emit_uf']]||'').trim();
+        if(m.consumo.tipo[tipoC]==null) m.consumo.tipo[tipoC]=0; m.consumo.tipo[tipoC]+=vc;
+        if(tipoC==='OUF' && ufo){ m.consumo.uf[ufo]=(m.consumo.uf[ufo]||0)+vc; }
+        var ncm=(c[col['cod_ncm']]||'').trim(); var desc=(c[col['ncm_descr']]||'').trim();
+        if(ncm){ var o=m.consumo.ncm[ncm]||(m.consumo.ncm[ncm]={d:desc,INT:0,OUF:0,EXT:0}); if(o[tipoC]!=null) o[tipoC]+=vc; if(!o.d&&desc) o.d=desc; }
+      }
+    }
+  }
+
+  function mesclar(prev, novo, mes){
+    var rec=prev||{mes:mes, vendas:{}, consumo:{tipo:{}, uf:{}, ncm:{}}};
+    /* subscreve pelo novo (reupload do mês = substitui as fontes que vieram) */
+    if(novo.vendas && Object.keys(novo.vendas).length) rec.vendas=novo.vendas;
+    if(novo.consumo && (Object.keys(novo.consumo.tipo).length||Object.keys(novo.consumo.ncm).length)){
+      /* guarda só os top 500 NCMs por (OUF+EXT) p/ não pesar */
+      var ncm=novo.consumo.ncm, arr=Object.keys(ncm).map(function(k){ var o=ncm[k]; return [k,o,(o.OUF||0)+(o.EXT||0)]; });
+      arr.sort(function(a,b){ return b[2]-a[2]; }); var top={}; arr.slice(0,500).forEach(function(x){ top[x[0]]=x[1]; });
+      rec.consumo={ tipo:novo.consumo.tipo, uf:novo.consumo.uf, ncm:top };
+    }
+    return rec;
+  }
+
+  /* ---- agrega todos os meses guardados ---- */
+  function carregarTudo(){
+    return dbGet('meses').then(function(ml){ ml=ml||[]; if(!ml.length) return {meses:[]};
+      return Promise.all(ml.map(function(m){ return dbGet('m_'+m); })).then(function(recs){
+        var vendas={}, cTipo={INT:0,OUF:0,EXT:0}, cUF={}, cNCM={}, mesesV=[];
+        recs.forEach(function(r){ if(!r) return; mesesV.push(r.mes);
+          Object.keys(r.vendas||{}).forEach(function(s){ var a=r.vendas[s]; var d=vendas[s]||(vendas[s]={INT:0,OUF:0,EXT:0}); d.INT+=n(a.INT); d.OUF+=n(a.OUF); d.EXT+=n(a.EXT); });
+          var ct=(r.consumo&&r.consumo.tipo)||{}; ['INT','OUF','EXT'].forEach(function(t){ cTipo[t]+=n(ct[t]); });
+          var cu=(r.consumo&&r.consumo.uf)||{}; Object.keys(cu).forEach(function(u){ cUF[u]=(cUF[u]||0)+n(cu[u]); });
+          var cn=(r.consumo&&r.consumo.ncm)||{}; Object.keys(cn).forEach(function(k){ var o=cn[k]; var d=cNCM[k]||(cNCM[k]={d:o.d,INT:0,OUF:0,EXT:0}); d.INT+=n(o.INT); d.OUF+=n(o.OUF); d.EXT+=n(o.EXT); if(!d.d&&o.d) d.d=o.d; });
+        });
+        return { meses:mesesV.sort(), vendas:vendas, cTipo:cTipo, cUF:cUF, cNCM:cNCM };
+      });
+    });
+  }
+
+  /* ---- UI ---- */
+  var _VIEW='dep', _sortV='fora', _sortN='fora';
+  function barra(int,ouf,ext){ var t=int+ouf+ext; if(t<=0) return ''; function w(x){ return (x/t*100).toFixed(1); }
+    return '<div style="display:flex;height:9px;border-radius:5px;overflow:hidden;min-width:90px;background:#f1f5f9">'
+      +'<div style="width:'+w(int)+'%;background:#1e3a5f" title="dentro do RS"></div>'
+      +'<div style="width:'+w(ouf)+'%;background:#0d9488" title="outros estados"></div>'
+      +'<div style="width:'+w(ext)+'%;background:#d4a017" title="exterior"></div></div>'; }
+
+  function viewDependencia(D){
+    var t=D.cTipo, tot=t.INT+t.OUF+t.EXT;
+    if(tot<=0) return '<div style="font-size:12.5px;color:#64748b">Suba o <b>Composicao_de_Mercado</b> da Sefaz para ver a dependência.</div>';
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:8px">De onde vem o que o RS consome, no acumulado dos meses carregados. <b>OUF</b> = outros estados · <b>EXT</b> = importação. Quanto mais o RS compra de fora num produto, maior o <b>gap/oportunidade</b> (produzir aqui ou fornecer).</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">';
+    h+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:11px;padding:12px 14px"><div style="font-size:10.5px;color:#1e3a5f;font-weight:700;text-transform:uppercase">Produção local (RS)</div><div style="font-size:19px;font-weight:800;color:#1e3a5f">'+pc(t.INT/tot,1)+'</div><div style="font-size:11px;color:#64748b">'+rc(t.INT)+'</div></div>';
+    h+='<div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:11px;padding:12px 14px"><div style="font-size:10.5px;color:#0f766e;font-weight:700;text-transform:uppercase">De outros estados</div><div style="font-size:19px;font-weight:800;color:#0f766e">'+pc(t.OUF/tot,1)+'</div><div style="font-size:11px;color:#64748b">'+rc(t.OUF)+'</div></div>';
+    h+='<div style="background:#fefce8;border:1px solid #fde68a;border-radius:11px;padding:12px 14px"><div style="font-size:10.5px;color:#854d0e;font-weight:700;text-transform:uppercase">Importação</div><div style="font-size:19px;font-weight:800;color:#854d0e">'+pc(t.EXT/tot,1)+'</div><div style="font-size:11px;color:#64748b">'+rc(t.EXT)+'</div></div>';
+    h+='</div>';
+    /* top UFs de origem */
+    var ufs=Object.keys(D.cUF).map(function(u){ return [u,D.cUF[u]]; }).sort(function(a,b){ return b[1]-a[1]; }).slice(0,8);
+    if(ufs.length){ var tuf=ufs.reduce(function(s,x){return s+x[1];},0);
+      h+='<div style="font-size:12.5px;font-weight:700;color:#0f172a;margin:4px 0 6px">Principais estados que fornecem para o RS</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">';
+      ufs.forEach(function(x){ h+='<span style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:5px 10px;font-size:12px"><b>'+esc(x[0])+'</b> '+rc(x[1])+' <span style="color:#94a3b8">('+pc(x[1]/t.OUF,0)+')</span></span>'; }); h+='</div>'; }
+    /* produtos mais dependentes de fora (gap) */
+    var ncm=Object.keys(D.cNCM).map(function(k){ var o=D.cNCM[k]; var tt=o.INT+o.OUF+o.EXT; return {ncm:k,d:o.d,int:o.INT,fora:o.OUF+o.EXT,tot:tt,partRS:(tt>0?o.INT/tt:null)}; });
+    ncm=ncm.filter(function(x){ return x.fora>0; });
+    ncm.sort(function(a,b){ return _sortN==='partRS' ? (a.partRS==null?9:a.partRS)-(b.partRS==null?9:b.partRS) : b.fora-a.fora; });
+    h+='<div style="font-size:12.5px;font-weight:700;color:#0f172a;margin:4px 0 6px">Produtos que o RS mais compra de fora — gaps/oportunidades</div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:380px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;color:#64748b;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Produto (NCM)</td><td style="padding:6px 4px;text-align:right;cursor:pointer" onclick="window._radarSortN(\'fora\')">Comprado de fora ⇅</td><td style="padding:6px 4px;text-align:right;cursor:pointer" onclick="window._radarSortN(\'partRS\')">Feito no RS ⇅</td></tr>';
+    ncm.slice(0,200).forEach(function(x){ var crit=(x.partRS!=null&&x.partRS<0.05); var alta=(x.partRS!=null&&x.partRS<0.15);
+      h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc((x.d||x.ncm).slice(0,60))+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:#0f766e">'+rc(x.fora)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+(crit?'#b91c1c':(alta?'#b45309':'#15803d'))+'">'+(x.partRS!=null?pc(x.partRS,0):'—')+(crit?' <span style="font-size:9px">crítica</span>':'')+'</td></tr>'; });
+    h+='</table></div>';
+    h+='<div style="font-size:10.5px;color:#94a3b8;margin-top:6px">"Feito no RS" baixo = o RS depende de fora nesse produto. Parte dos produtos vem sigilosa (segredo fiscal) e não aparece. Dado estadual, por produto (NCM) — não por cidade.</div>';
+    return h;
+  }
+
+  function viewVendas(D){
+    var setores=Object.keys(D.vendas); if(!setores.length) return '<div style="font-size:12.5px;color:#64748b">Suba o <b>Saidas_Setor</b> da Sefaz para ver o destino das vendas.</div>';
+    var rows=setores.map(function(s){ var a=D.vendas[s]; var tot=a.INT+a.OUF+a.EXT; return {setor:s,int:a.INT,ouf:a.OUF,ext:a.EXT,tot:tot,fora:(tot>0?(a.OUF+a.EXT)/tot:0)}; });
+    rows.sort(function(a,b){ return _sortV==='fora'? b.fora-a.fora : b.tot-a.tot; });
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:8px">Para onde cada setor do RS vende, no acumulado. <b style="color:#1e3a5f">■</b> dentro do RS · <b style="color:#0d9488">■</b> outros estados · <b style="color:#d4a017">■</b> exportação.</div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;color:#64748b;position:sticky;top:0;background:#fff"><td style="padding:6px 4px">Setor</td><td style="padding:6px 4px;text-align:right;cursor:pointer" onclick="window._radarSortV(\'tot\')">Vendas ⇅</td><td style="padding:6px 4px">Destino</td><td style="padding:6px 4px;text-align:right;cursor:pointer" onclick="window._radarSortV(\'fora\')">% p/ fora ⇅</td></tr>';
+    rows.slice(0,120).forEach(function(x){ h+='<tr style="border-top:1px solid #f1f5f9"><td style="padding:6px 4px;color:#0f172a">'+esc(x.setor)+'</td>'
+      +'<td style="padding:6px 4px;text-align:right;font-weight:700">'+rc(x.tot)+'</td>'
+      +'<td style="padding:6px 4px;width:130px">'+barra(x.int,x.ouf,x.ext)+'</td>'
+      +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+(x.fora>0.5?'#0f766e':'#64748b')+'">'+pc(x.fora,0)+'</td></tr>'; });
+    h+='</table></div>';
+    return h;
+  }
+
+  function render(){
+    var box=document.getElementById('_radarBox'); if(!box) return;
+    carregarTudo().then(function(D){
+      var mi=document.getElementById('_radarMeses');
+      if(mi) mi.innerHTML = D.meses.length? ('Meses carregados: <b>'+D.meses.length+'</b> ('+D.meses.slice(0,3).map(mesLbl).join(', ')+(D.meses.length>3?' …':'')+') · <span style="color:#7c3aed;cursor:pointer;text-decoration:underline" onclick="window._radarLimpar()">limpar tudo</span>') : 'Nenhum mês carregado ainda.';
+      if(!D.meses.length){ box.innerHTML='<div style="font-size:12.5px;color:#64748b;padding:8px 2px">Suba os CSVs da Sefaz (<b>Saidas_Setor</b> e <b>Composicao_de_Mercado</b>) de um ou vários meses. O sistema soma e guarda — depois é só subir o mês novo.</div>'; return; }
+      var btn=function(id,lbl){ return '<button onclick="window._radarView(\''+id+'\')" style="border:1px solid '+(_VIEW===id?'#1d4ed8':'#cbd5e1')+';background:'+(_VIEW===id?'#1d4ed8':'#fff')+';color:'+(_VIEW===id?'#fff':'#334155')+';border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer">'+lbl+'</button>'; };
+      var h='<div style="display:flex;gap:8px;margin-bottom:12px">'+btn('dep','De onde o RS compra (dependência)')+btn('vendas','Para onde o RS vende')+'</div>';
+      h+=(_VIEW==='dep'?viewDependencia(D):viewVendas(D));
+      box.innerHTML=h;
+    });
+  }
+  window._radarView=function(v){ _VIEW=v; render(); };
+  window._radarSortV=function(s){ _sortV=s; render(); };
+  window._radarSortN=function(s){ _sortN=s; render(); };
+  window._radarLimpar=function(){ if(!confirm('Apagar todos os meses do Radar do Mercado?')) return; dbKeys().then(function(ks){ var dels=ks.filter(function(k){ return k==='meses'||String(k).indexOf('m_')===0; }).map(dbDel); return Promise.all(dels); }).then(function(){ _st('Radar zerado.','#64748b'); render(); }); };
+
+  function abrirRadarMercado(){
+    var ov=document.getElementById('_radarOverlay');
+    if(!ov){ ov=document.createElement('div'); ov.id='_radarOverlay';
+      ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px';
+      ov.innerHTML='<div style="background:#f8fafc;max-width:940px;width:100%;border-radius:16px;padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div style="font-size:18px;font-weight:800;color:#0f172a">📡 Radar do Mercado — RS vende e compra</div><button onclick="document.getElementById(\'_radarOverlay\').style.display=\'none\'" style="border:none;background:#e2e8f0;border-radius:8px;width:30px;height:30px;font-size:16px;cursor:pointer">×</button></div>'
+        +'<div style="font-size:12px;color:#64748b;margin-bottom:8px">Dados abertos da Sefaz-RS (NF-e/DFe). Mostra a dependência de fora (gaps/oportunidades) e o destino das vendas, por setor. Estadual — por setor/produto/UF, não por cidade.</div>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><button onclick="window.subirRadarMercado()" style="background:#0f766e;color:#fff;border:none;border-radius:9px;padding:8px 13px;font-size:12.5px;font-weight:700;cursor:pointer">📥 Subir CSVs do mês</button><span id="_radarStatus" style="font-size:11.5px;color:#64748b"></span></div>'
+        +'<div id="_radarMeses" style="font-size:11px;color:#64748b;margin-bottom:10px"></div>'
+        +'<div id="_radarBox"></div></div>';
+      document.body.appendChild(ov);
+    } else { ov.style.display='flex'; }
+    render();
+  }
+  window.abrirRadarMercado=abrirRadarMercado;
+})();
+
+</script>
 </body>
 </html>
