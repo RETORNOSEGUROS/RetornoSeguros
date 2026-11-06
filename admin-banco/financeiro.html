@@ -44887,7 +44887,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   window.renderMercadoRS = renderMercadoRS;
 
   /* ============ EXPLORADOR DE MERCADO (tela inicial, sem abrir empresa) ============ */
-  var _EXP = { modo:'setor', div:null, mun:'', busca:'', sCol:'v26', sDir:-1, piso:false };
+  var _EXP = { modo:'setor', div:null, mun:'', busca:'', sCol:'v26', sDir:-1, piso:false, maxPl:10, minFat:10000000, oCol:'media', oDir:-1 };
   function _serieCombo(combo, div){
     if(!combo) return null;
     var instr = instrumentoDivisao(div);
@@ -45003,11 +45003,42 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     h+='</table></div>';
     return h;
   }
+  function _oth(label,col,align){ var on=_EXP.oCol===col; var arr=on?(_EXP.oDir>0?' ▲':' ▼'):' ⇅'; return '<td style="padding:6px 4px;cursor:pointer;user-select:none;text-align:'+(align||'left')+';color:'+(on?'#1d4ed8':'#64748b')+'" onclick="window._expOSort(\''+col+'\')">'+esc(label)+'<span style="font-size:9px;color:#94a3b8">'+arr+'</span></td>'; }
+  /* oportunidades: cidade+setor com faturamento alto e POUCAS empresas (mercado concentrado) */
+  function _tabelaOportunidades(){
+    var _PL=(window.RS_PLAYERS&&window.RS_PLAYERS.div)||null;
+    if(!_PL) return '<div style="color:#64748b;font-size:12.5px">Base de players indisponível.</div>';
+    var maxPl=_EXP.maxPl||10, minFat=_EXP.minFat||0, bq=norm(_EXP.busca);
+    var linhas=[];
+    Object.keys(DADOS).forEach(function(k){ var p=k.split('|'); var mun=p[0], div=p[1]; if(div==='0') return;
+      var sc=_serieCombo(DADOS[k], div); if(!sc || sc.base==='municipal') return; var r=sc.r;
+      var v26=n(r[3]); if(v26<minFat) return;
+      var emp=(_PL[norm(mun)+'|'+_pd(div)])||0; if(!emp || emp>maxPl) return;
+      if(bq && norm(mun).indexOf(bq)<0) return;
+      linhas.push({ mun:mun, div:div, nome:(META.divnome&&META.divnome[div])||div, v26:v26, emp:emp, media:v26/emp, gYTD:_g(n(r[4]),n(r[5])), modelo:sc.modelo }); });
+    var col=_EXP.oCol||'media', dir=_EXP.oDir||-1;
+    linhas.sort(function(a,b){ var va,vb; if(col==='mun'){va=norm(a.mun);vb=norm(b.mun);} else if(col==='nome'){va=a.div;vb=b.div;} else {va=(a[col]==null?-Infinity:a[col]);vb=(b[col]==null?-Infinity:b[col]);} if(va<vb)return -1*dir; if(va>vb)return 1*dir; return 0; });
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:8px"><b>'+linhas.length.toLocaleString('pt-BR')+'</b> combinações cidade+setor com <b>faturamento alto e poucas empresas</b> — mercados concentrados, onde dá para identificar e abordar os grandes. Clique numa linha para ver as empresas.</div>';
+    h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_oth('Cidade','mun')+_oth('Setor','nome')+_oth('Faturam. 2026*','v26','right')+_oth('Empresas','emp','right')+_oth('Médio/empresa','media','right')+_oth('YTD','gYTD','right')+'</tr>';
+    linhas.slice(0,250).forEach(function(x){ var _ms=String(x.mun).replace(/['"\\]/g,'');
+      h+='<tr style="border-top:1px solid #f1f5f9;cursor:pointer" title="ver as empresas desse setor em '+esc(x.mun)+'" onclick="window.abrirProspeccao({mun:\''+_ms+'\',div:\''+x.div+'\'})">'
+        +'<td style="padding:6px 4px;color:#0f172a;white-space:nowrap">'+esc(x.mun)+'</td>'
+        +'<td style="padding:6px 4px;color:#334155;max-width:270px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.div+' '+x.nome)+'"><b>'+esc(x.div)+'</b> '+esc((x.nome||'').slice(0,34))+((x.nome||'').length>34?'…':'')+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;white-space:nowrap">'+_rc(x.v26)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:800">'+x.emp+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;color:#1d4ed8;font-weight:800">'+_rc(x.media)+'</td>'
+        +'<td style="padding:6px 4px;text-align:right;font-weight:700;color:'+(x.v26?_corG(x.gYTD):'#cbd5e1')+'">'+(x.v26?_pg(x.gYTD):'—')+'</td></tr>'; });
+    if(linhas.length>250) h+='<tr><td colspan="6" style="padding:8px 4px;color:#94a3b8;font-size:11px">Mostrando 250 de '+linhas.length.toLocaleString('pt-BR')+' — afunile (mín. faturamento ou máx. empresas).</td></tr>';
+    h+='</table></div>';
+    return h;
+  }
   function exploradorHTML(){
     var h='';
     h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px">';
     h+='<button onclick="window._expModo(\'setor\')" style="'+_btnStyle(_EXP.modo==='setor')+'">Por setor → cidades</button>';
-    h+='<button onclick="window._expModo(\'cidade\')" style="'+_btnStyle(_EXP.modo==='cidade')+'">Por cidade → setores</button></div>';
+    h+='<button onclick="window._expModo(\'cidade\')" style="'+_btnStyle(_EXP.modo==='cidade')+'">Por cidade → setores</button>';
+    h+='<button onclick="window._expModo(\'oport\')" style="'+_btnStyle(_EXP.modo==='oport')+'" title="cidades e setores que faturam muito com poucas empresas — empresas grandes, fáceis de prospectar">💰 Oportunidades (poucos players)</button></div>';
     if(_EXP.modo==='setor'){
       var optDiv=_divs().map(function(d){ return '<option value="'+d+'"'+(d===_EXP.div?' selected':'')+'>'+esc(d+' — '+((META.divnome&&META.divnome[d])||''))+'</option>'; }).join('');
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
@@ -45019,13 +45050,24 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       h+='<button onclick="window._expOrd(\'cai\')" style="'+_btnStyle(_aq)+'">caindo</button>';
       h+='<button onclick="window._expOrd(\'media\')" style="'+_btnStyle(_ag)+'" title="Faturamento do setor ÷ nº de empresas. Alto = empresas grandes, poucos players — prospecção.">💰 grandes/empresa</button></div>';
       h+=_tabelaCidades(_EXP.div);
-    } else {
+    } else if(_EXP.modo==='cidade'){
       var optM=_muns().map(function(m){ return '<option value="'+esc(m)+'"'+(m===_EXP.mun?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
       h+='<div style="margin-bottom:10px"><select onchange="window._expMun(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:360px"><option value="">— escolha a cidade —</option>'+optM+'</select></div>';
       h+=_tabelaSetores(_EXP.mun);
+    } else {
+      var optPl=[['3','até 3 empresas'],['6','até 6'],['10','até 10'],['20','até 20'],['50','até 50']].map(function(o){ return '<option value="'+o[0]+'"'+(String(_EXP.maxPl)===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('');
+      var optFat=[['5000000','fatura ≥ R$ 5 mi'],['10000000','≥ R$ 10 mi'],['30000000','≥ R$ 30 mi'],['50000000','≥ R$ 50 mi'],['100000000','≥ R$ 100 mi']].map(function(o){ return '<option value="'+o[0]+'"'+(String(_EXP.minFat)===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('');
+      h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
+      h+='<select onchange="window._expMaxPl(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px" title="máximo de empresas no setor/cidade">'+optPl+'</select>';
+      h+='<select onchange="window._expMinFat(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px" title="faturamento mínimo do setor na cidade">'+optFat+'</select>';
+      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"></div>';
+      h+=_tabelaOportunidades();
     }
     return h;
   }
+  window._expMaxPl=function(v){ _EXP.maxPl=parseInt(v,10)||10; _expRender(); };
+  window._expMinFat=function(v){ _EXP.minFat=parseInt(v,10)||0; _expRender(); };
+  window._expOSort=function(col){ if(_EXP.oCol===col) _EXP.oDir=-_EXP.oDir; else { _EXP.oCol=col; _EXP.oDir=(col==='mun'||col==='nome')?1:-1; } _expRender(); };
   function _expRender(){ var box=document.getElementById('_expBox'); if(box) box.innerHTML=exploradorHTML(); }
   window._expModo=function(m){ _EXP.modo=m; _expRender(); };
   window._expDiv=function(d){ _EXP.div=d; _expRender(); };
