@@ -45444,16 +45444,48 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     _renderLista();
   }
 
-  function _coletar(){
-    /* devolve Promise com a lista de empresas conforme filtros de local + divisão */
-    if(!_PR.div) return Promise.resolve(null);
-    var alvos=[];
-    if(_PR.mun){ alvos=[norm(_PR.mun)]; }
-    else if(_PR.regiao){ alvos=_munsDaRegiao(_PR.regiao); }
-    else { return Promise.resolve(null); }
-    return Promise.all(alvos.map(function(m){ return dbGet(m+'|'+_PR.div).then(function(l){ return {mun:m, lst:l||[]}; }); }))
-      .then(function(res){ var out=[]; res.forEach(function(x){ x.lst.forEach(function(r){ out.push({cnpj:r[0],cnae:r[1],ano:r[2]||'',fant:r[3]||'',razao:r[4]||'',cap:(r[5]!=null?Number(r[5]):null),porte:r[6]||'',mun:x.mun}); }); }); return out; });
+  var _lastResult; /* undefined = ainda não buscou */
+  function _temFiltro(){ return !!(_PR.div||_PR.mun||_PR.regiao||_PR.capMin||_PR.idade||norm(_PR.busca)||_PR.cnae.replace(/\D/g,'')); }
+  /* busca livre: qualquer filtro sozinho. Varre a base (cursor) aplicando os filtros que estiverem setados. */
+  function _buscar(){
+    if(!_temFiltro()) return Promise.resolve(null);
+    return abrir().then(function(db){ if(!db) return []; return new Promise(function(res){
+      var tx=db.transaction(ST,'readonly'); var req=tx.objectStore(ST).openCursor();
+      var CAP=800, out=[];
+      var bq=norm(_PR.busca), bqn=_PR.busca.replace(/\D/g,''), cf=_PR.cnae.replace(/\D/g,'');
+      var wDiv=_PR.div, wMun=_PR.mun?norm(_PR.mun):'', wReg=null;
+      if(_PR.regiao && !_PR.mun){ wReg={}; _munsDaRegiao(_PR.regiao).forEach(function(m){ wReg[m]=1; }); }
+      req.onsuccess=function(e){ var cur=e.target.result;
+        if(!cur || out.length>=CAP){ res(out); return; }
+        var key=cur.key; if(key==='__meta__'){ cur.continue(); return; }
+        var parts=String(key).split('|'), mun=parts[0], div=parts[1], ok=true;
+        if(wDiv && div!==wDiv) ok=false;
+        else if(wMun && mun!==wMun) ok=false;
+        else if(wReg && !wReg[mun]) ok=false;
+        if(ok){ var arr=cur.value||[];
+          for(var i=0;i<arr.length;i++){ var a=arr[i];
+            var ano=a[2]||'', cnae=a[1], cap=(a[5]!=null?Number(a[5]):null);
+            if(_PR.idade && ano && ano<_PR.idade) continue;
+            if(cf && String(cnae).indexOf(cf)!==0) continue;
+            if(_PR.capMin && (cap||0)<_PR.capMin) continue;
+            if(bq){ var nR=norm(a[4]||''), nF=norm(a[3]||''); if(nR.indexOf(bq)<0 && nF.indexOf(bq)<0 && (!bqn||String(a[0]).indexOf(bqn)<0)) continue; }
+            out.push({cnpj:a[0],cnae:cnae,ano:ano,fant:a[3]||'',razao:a[4]||'',cap:cap,porte:a[6]||'',mun:mun});
+            if(out.length>=CAP) break;
+          }
+        }
+        cur.continue();
+      };
+      req.onerror=function(){ res(out); };
+    }); });
   }
+  function _prRun(){
+    var box=document.getElementById('_prListBox'); if(!box) return;
+    if(!_META){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Suba a base de empresas primeiro (botão acima).</div>'; return; }
+    if(!_temFiltro()){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha pelo menos um filtro (nome, cidade, região, setor, CNAE, capital ou idade) e clique <b>Buscar</b>.</div>'; return; }
+    box.innerHTML='<div style="font-size:12.5px;color:#64748b">Buscando…</div>';
+    _buscar().then(function(l){ _lastResult=l||[]; _renderLista(); });
+  }
+  window._prRun=_prRun;
 
   function _ordenar(lst){
     var c=_PR.sCol, d=_PR.sDir;
@@ -45475,26 +45507,20 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   function _renderLista(){
     var box=document.getElementById('_prListBox'); if(!box) return;
     if(!_META){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Suba a base de empresas primeiro (botão acima).</div>'; return; }
-    if(!_PR.div || (!_PR.mun && !_PR.regiao)){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha um <b>setor</b> e uma <b>cidade</b> (ou uma <b>região</b>) para ver as empresas.</div>'; return; }
-    box.innerHTML='<div style="font-size:12.5px;color:#64748b">Carregando…</div>';
-    _coletar().then(function(lst){
-      if(!lst){ box.innerHTML=''; return; }
-      var bq=norm(_PR.busca), bqn=_PR.busca.replace(/\D/g,''), cf=_PR.cnae.replace(/\D/g,'');
-      var filt=lst.filter(function(r){
-        if(_PR.idade && r.ano && r.ano<_PR.idade) return false;
-        if(cf && String(r.cnae).indexOf(cf)!==0) return false;
-        if(_PR.capMin && (r.cap||0)<_PR.capMin) return false;
-        if(bq){ var nome=norm(r.razao||r.fant); if(nome.indexOf(bq)<0 && (!bqn||String(r.cnpj).indexOf(bqn)<0)) return false; }
-        return true;
-      });
+    if(_lastResult===undefined){ box.innerHTML='<div style="font-size:12.5px;color:#64748b">Escolha um filtro (nome, cidade, região, setor, CNAE, capital ou idade) e clique <b>Buscar</b>.</div>'; return; }
+    (function(){
+      var filt=(_lastResult||[]).slice();
+      var _atingiuCap=filt.length>=800;
       var unido=_PR.unir;
       if(unido){ var g={}; filt.forEach(function(r){ var k=String(r.cnpj).slice(0,8); var o=g[k]; if(!o){ o=g[k]={razao:r.razao,fant:r.fant,cap:r.cap,porte:r.porte,cnae:r.cnae,ano:r.ano,cnpj:r.cnpj,mun:r.mun,estab:0,muns:{}}; } o.estab++; o.muns[r.mun]=1; if(ehMatriz(r.cnpj)){ o.cnpj=r.cnpj;o.mun=r.mun;o.cnae=r.cnae;o.ano=r.ano; } }); filt=Object.keys(g).map(function(k){ var o=g[k]; o.nCid=Object.keys(o.muns).length; return o; }); }
       _ordenar(filt);
       var temRazao=_META.temRazao, multi=(!_PR.mun);
       var cap=filt.filter(function(r){return r.cap;}).reduce(function(s,r){return s+r.cap;},0);
+      if(filt.length===0){ box.innerHTML='<div style="font-size:12.5px;color:#64748b;padding:8px 2px">Nenhuma empresa encontrada com esses filtros. Tente <b>parte do nome</b> (ex.: só "PLASTIMARAU"), ou troque o filtro.</div>'; return; }
       var _nCid=Object.keys(filt.reduce(function(a,r){a[r.mun]=1;return a;},{})).length;
-      var ondeLbl = _PR.mun?esc(_PR.mun):('região <b>'+esc(_PR.regiao)+'</b> ('+_nCid+' cidades)');
-      var h='<div style="font-size:12px;color:#334155;margin-bottom:6px"><b>'+filt.length.toLocaleString('pt-BR')+'</b> '+(unido?'empresas (filiais unidas)':'estabelecimentos')+' · '+ondeLbl+' · '+esc(_PR.div+' '+divNome(_PR.div))+(temRazao?(cap?' · capital somado '+R$(cap):''):' · <span style="color:#b45309">suba o arquivo Empresas p/ razão social e capital</span>')+'</div>';
+      var ondeLbl = _PR.mun?esc(_PR.mun):(_PR.regiao?('região <b>'+esc(_PR.regiao)+'</b> ('+_nCid+' cidades)'):('RS'+(_nCid?' · '+_nCid+' cidades':'')));
+      var setorLbl = _PR.div?(' · '+esc(_PR.div+' '+divNome(_PR.div))):'';
+      var h='<div style="font-size:12px;color:#334155;margin-bottom:6px"><b>'+filt.length.toLocaleString('pt-BR')+'</b> '+(unido?'empresas (filiais unidas)':'estabelecimentos')+' · '+ondeLbl+setorLbl+(temRazao?(cap?' · capital somado '+R$(cap):''):' · <span style="color:#b45309">suba o arquivo Empresas p/ razão social e capital</span>')+'</div>';
       h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:430px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
       h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff;color:#64748b">'+_th('Empresa','empresa')+(multi?_th('Cidade','cidade'):'')+_th('CNAE','cnae')+(temRazao?_th('Capital','capital'):'')+_th('Porte','porte')+'<td style="padding:6px 4px">'+(unido?'Estab.':'Tipo')+'</td>'+_th('Desde','desde')+_th('CNPJ','cnpj')+'</tr>';
       filt.slice(0,400).forEach(function(r){
@@ -45509,20 +45535,26 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
           +'<td style="padding:6px 4px"><span style="font-family:monospace;font-size:11px;color:#334155;cursor:pointer" title="clique para copiar" onclick="window._prCopia(\''+esc(r.cnpj)+'\')">'+esc(fmtCNPJ(r.cnpj))+'</span></td></tr>';
       });
       if(filt.length>400) h+='<tr><td colspan="8" style="padding:8px 4px;color:#94a3b8;font-size:11px">Mostrando 400 de '+filt.length.toLocaleString('pt-BR')+'. Afunile com os filtros.</td></tr>';
+      else if(_atingiuCap) h+='<tr><td colspan="8" style="padding:8px 4px;color:#94a3b8;font-size:11px">A busca para no limite de 800 — afunile (cidade/setor/capital) para ver o resto.</td></tr>';
       h+='</table></div>';
       box.innerHTML=h;
-    });
+    })();
   }
   window._prCopia=function(cnpj){ try{ navigator.clipboard.writeText(fmtCNPJ(cnpj)); _st('CNPJ '+fmtCNPJ(cnpj)+' copiado — cole no "Buscar na Receita".', '#15803d'); }catch(e){} };
-  window._prReg=function(v){ _PR.regiao=v; _PR.mun=''; _preencher(); };
-  window._prMunSel=function(v){ _PR.mun=v; _renderLista(); };
-  window._prDivSel=function(v){ _PR.div=v; _renderLista(); };
-  window._prCnae=function(v){ _PR.cnae=v; _renderLista(); };
-  window._prIdade=function(v){ _PR.idade=v?String(v):''; _renderLista(); };
-  window._prCap=function(v){ _PR.capMin=Number(v)||0; _renderLista(); };
+  window._prReg=function(v){ _PR.regiao=v; _PR.mun=''; _preencher(); _prRun(); };
+  window._prMunSel=function(v){ _PR.mun=v; _prRun(); };
+  window._prDivSel=function(v){ _PR.div=v; _prRun(); };
+  window._prIdade=function(v){ _PR.idade=v?String(v):''; _prRun(); };
+  window._prCap=function(v){ _PR.capMin=Number(v)||0; _prRun(); };
+  window._prCnae=function(v){ _PR.cnae=v; };            /* aplica no Buscar/Enter */
+  window._prBusca=function(v){ _PR.busca=v; };          /* aplica no Buscar/Enter */
   window._prUnir=function(v){ _PR.unir=!!v; _renderLista(); };
-  window._prBusca=function(v){ _PR.busca=v; _renderLista(); };
   window._prSort=function(col){ if(_PR.sCol===col) _PR.sDir=-_PR.sDir; else { _PR.sCol=col; _PR.sDir=(col==='capital'||col==='desde')?-1:1; } _renderLista(); };
+  window._prLimpar=function(){ _PR.regiao='';_PR.mun='';_PR.div='';_PR.cnae='';_PR.idade='';_PR.busca='';_PR.capMin=0;_PR.unir=false; _lastResult=undefined;
+    ['_prReg','_prMun','_prDiv','_prIdade','_prCap'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+    ['_prCnaeInp','_prBuscaInp'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+    var u=document.getElementById('_prUnir'); if(u) u.checked=false;
+    _preencher(); };
 
   function abrirProspeccao(opts){
     opts=opts||{};
@@ -45543,8 +45575,10 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
         +'<select id="_prReg" onchange="window._prReg(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">— região (todas) —</option>'+regs+'</select>'
         +'<select id="_prMun" onchange="window._prMunSel(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;max-width:200px"><option value="">— cidade —</option></select>'
         +'<select id="_prDiv" onchange="window._prDivSel(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;max-width:300px"><option value="">— setor (divisão) —</option>'+divs+'</select>'
-        +'<input id="_prCnaeInp" type="text" placeholder="CNAE exato (ex: 2222600)" oninput="window._prCnae(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;width:150px">'
-        +'<input id="_prBuscaInp" type="text" placeholder="nome ou CNPJ" oninput="window._prBusca(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;width:140px">'
+        +'<input id="_prCnaeInp" type="text" placeholder="CNAE exato (ex: 2222600)" oninput="window._prCnae(this.value)" onkeydown="if(event.key===\'Enter\')window._prRun()" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;width:150px">'
+        +'<input id="_prBuscaInp" type="text" placeholder="nome ou CNPJ" oninput="window._prBusca(this.value)" onkeydown="if(event.key===\'Enter\')window._prRun()" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px;width:160px">'
+        +'<button onclick="window._prRun()" style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer">🔎 Buscar</button>'
+        +'<button onclick="window._prLimpar()" style="background:#fff;color:#64748b;border:1px solid #cbd5e1;border-radius:8px;padding:7px 11px;font-size:12.5px;cursor:pointer" title="limpar filtros">limpar</button>'
         +'<select id="_prIdade" onchange="window._prIdade(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer idade</option><option value="2024">aberta de 2024+</option><option value="2020">2020+</option><option value="2010">2010+</option></select>'
         +'<select id="_prCap" onchange="window._prCap(this.value)" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:12.5px"><option value="">qualquer capital</option><option value="100000">capital ≥ R$ 100 mil</option><option value="500000">≥ R$ 500 mil</option><option value="1000000">≥ R$ 1 mi</option><option value="5000000">≥ R$ 5 mi</option><option value="10000000">≥ R$ 10 mi</option><option value="50000000">≥ R$ 50 mi</option></select>'
         +'<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#334155;cursor:pointer"><input type="checkbox" id="_prUnir" onchange="window._prUnir(this.checked)"> unir filiais (1 linha por empresa)</label>'
@@ -45556,7 +45590,10 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       if(m){ _st('✓ Base carregada: <b>'+m.n.toLocaleString('pt-BR')+'</b> empresas'+(m.updatedEm?' (subida em '+esc(m.updatedEm)+')':'')+'. Não precisa subir de novo.', '#15803d'); }
       else { _st('Nenhuma base ainda — clique em "Subir base".', '#b45309'); }
       var dd=document.getElementById('_prDiv'); if(dd) dd.value=_PR.div||'';
+      var dm=document.getElementById('_prMun'); var dr=document.getElementById('_prReg');
       _preencher();
+      if(dm) dm.value=_PR.mun||''; if(dr) dr.value=_PR.regiao||'';
+      if(m && (opts.mun||opts.div)) _prRun();  /* veio do radar: já busca */
     });
   }
   window.abrirProspeccao=abrirProspeccao;
