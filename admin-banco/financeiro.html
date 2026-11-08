@@ -45070,7 +45070,7 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var col=_EXP.eCol||'emp', dir=_EXP.eDir||-1;
     linhas.sort(function(a,b){ var va,vb; if(col==='mun'){va=norm(a.mun);vb=norm(b.mun);} else {va=(a[col]==null?-Infinity:a[col]);vb=(b[col]==null?-Infinity:b[col]);} if(va<vb)return -1*dir; if(va>vb)return 1*dir; return 0; });
     var totEmp=linhas.reduce(function(s,x){return s+x.emp;},0);
-    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">'+linhas.length+' cidades · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empregos formais no setor · no RS <b>'+empRS.toLocaleString('pt-BR')+'</b> (CAGED, estoque). <b>Rotat.</b> = (admissões+desligamentos do mês) ÷ estoque · <b>Sal.méd</b> = salário médio de quem foi admitido · <b>Produtiv.</b> = faturamento anualizado ÷ empregos.</div>';
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">'+linhas.length+' cidades · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empregos formais no setor · no RS <b>'+empRS.toLocaleString('pt-BR')+'</b> (CAGED, estoque de referência dez/2025). <b>Rotat.</b> = (admissões+desligamentos do mês) ÷ estoque · <b>Sal.méd</b> = salário médio de quem foi admitido · <b>Produtiv.</b> = faturamento anualizado ÷ empregos.</div>';
     h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
     var _smes=_salMes()?_salMes().slice(0,3):'mês';
     h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_eth2('Cidade','mun')+_eth2('Empregos','emp','right')+_eth2('Saldo '+_smes,'sal','right')+_eth2('Adm','adm','right')+_eth2('Desl','des','right')+_eth2('Rotat.','rot','right')+_eth2('Sal.méd','salM','right')+_eth2('Empresas','players','right')+_eth2('Produtiv.','prod','right')+'</tr>';
@@ -45093,20 +45093,25 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
   /* emprego por CNAE exato × cidade (CAGED) */
   function _tabelaEmpregoCnae(cnaeRaw){
     var dig=String(cnaeRaw||'').replace(/\D/g,'').slice(0,7);
-    if(dig.length<7) return '<div style="color:#64748b;font-size:12.5px;padding:6px 2px">Digite o <b>CNAE exato com 7 dígitos</b> (ex.: 2222600) para ver os empregos desse CNAE por cidade.</div>';
+    if(dig.length<5) return '<div style="color:#64748b;font-size:12.5px;padding:6px 2px">Digite a <b>classe (5 dígitos, ex.: 28330)</b> ou o <b>CNAE exato (7 dígitos, ex.: 2833000)</b> para ver os empregos por cidade.</div>';
+    if(dig.length===6) dig=dig.slice(0,5);
     var C=window.RS_CAGED; if(!C||!C.cnae) return '<div style="color:#64748b;font-size:12.5px">Base de empregos indisponível.</div>';
     var PLc=(window.RS_PLAYERS&&window.RS_PLAYERS.cnae)||null, _rs=_regSet(), bq=norm(_EXP.busca);
-    var empRS=_empCnaeRS(dig), clNome=(window.RS_CNAE_ESTADO&&window.RS_CNAE_ESTADO.classeNome&&window.RS_CNAE_ESTADO.classeNome[dig.slice(0,5)])||'';
-    var linhas=[];
-    Object.keys(C.cnae).forEach(function(k){ var idx=k.lastIndexOf('|'); if(idx<0) return; var mun=k.slice(0,idx), cn=k.slice(idx+1); if(cn!==dig) return;
+    var ehClasse=(dig.length===5), clNome=(window.RS_CNAE_ESTADO&&window.RS_CNAE_ESTADO.classeNome&&window.RS_CNAE_ESTADO.classeNome[dig.slice(0,5)])||'';
+    var empRS=0; if(ehClasse){ var _cr=C.cnaeRS||{}; Object.keys(_cr).forEach(function(c){ if(c.indexOf(dig)===0) empRS+=_cr[c]; }); } else empRS=_empCnaeRS(dig);
+    var SALc=(window.RS_CAGED_SAL&&window.RS_CAGED_SAL.cnae)||{};
+    var agg={}; /* por cidade: soma dos CNAEs do prefixo (classe) ou o CNAE exato */
+    Object.keys(C.cnae).forEach(function(k){ var idx=k.lastIndexOf('|'); if(idx<0) return; var mun=k.slice(0,idx), cn=k.slice(idx+1); if(cn.indexOf(dig)!==0) return;
       if(_rs && !_rs[mun]) return; if(bq && mun.indexOf(bq)<0) return;
-      var emp=C.cnae[k], pl=(PLc&&PLc[mun+'|'+dig])||0; var sc=(window.RS_CAGED_SAL&&window.RS_CAGED_SAL.cnae&&window.RS_CAGED_SAL.cnae[mun+'|'+dig]);
-      var saldo=sc?sc[0]:null, admDes=sc?sc[1]:null, salM=sc?sc[2]:null;
-      var rot=(emp>0 && sc)?(admDes/emp):null;
-      linhas.push({ mun:mun, emp:emp, players:pl, epe:(pl>0?emp/pl:0), sal:saldo, rot:rot, salM:salM }); });
+      var a=agg[mun]||(agg[mun]={emp:0,pl:0,sal:null,mov:0,salW:0,salN:0});
+      a.emp+=C.cnae[k]; a.pl+=(PLc&&PLc[k])||0;
+      var sc=SALc[k]; if(sc){ a.sal=(a.sal||0)+sc[0]; a.mov+=sc[1]; if(sc[2]>0&&sc[1]>0){ a.salW+=sc[2]*sc[1]; a.salN+=sc[1]; } } });
+    var linhas=[];
+    Object.keys(agg).forEach(function(mun){ var a=agg[mun]; var salM=a.salN?Math.round(a.salW/a.salN):null; var rot=(a.emp>0&&a.sal!=null)?(a.mov/a.emp):null;
+      linhas.push({ mun:mun, emp:a.emp, players:a.pl, epe:(a.pl>0?a.emp/a.pl:0), sal:a.sal, rot:rot, salM:salM }); });
     var col=(_EXP.eCol==='v26'||_EXP.eCol==='prod')?'emp':(_EXP.eCol||'emp'), dir=_EXP.eDir||-1;
     linhas.sort(function(a,b){ var va,vb; if(col==='mun'){va=a.mun;vb=b.mun;} else {va=(a[col]==null?-Infinity:a[col]);vb=(b[col]==null?-Infinity:b[col]);} if(va<vb)return -1*dir; if(va>vb)return 1*dir; return 0; });
-    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">CNAE <b>'+esc(dig)+'</b>'+(clNome?' — '+esc(clNome):'')+' · <b>'+linhas.length+'</b> cidades · no RS <b>'+empRS.toLocaleString('pt-BR')+'</b> empregos formais. <b>Rotat.</b> = movimentações do mês ÷ estoque. Onde a empresa é a <b>única</b> no CNAE, os empregos são praticamente dela.</div>';
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px">'+(ehClasse?'Classe':'CNAE')+' <b>'+esc(dig)+'</b>'+(clNome?' — '+esc(clNome):'')+(ehClasse?' <span style="color:#94a3b8">(soma de todos os CNAEs da classe)</span>':'')+' · <b>'+linhas.length+'</b> cidades · no RS <b>'+empRS.toLocaleString('pt-BR')+'</b> empregos formais <span style="color:#94a3b8">(estoque de referência, posição dez/2025)</span>. <b>Rotat.</b> = movimentações do mês ÷ estoque. Onde a empresa é a <b>única</b> no CNAE, os empregos são praticamente dela.</div>';
     h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:440px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
     var _smes2=_salMes()?_salMes().slice(0,3):'mês';
     h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_eth2('Cidade','mun')+_eth2('Empregos','emp','right')+_eth2('Saldo '+_smes2,'sal','right')+_eth2('Rotat.','rot','right')+_eth2('Sal.méd','salM','right')+_eth2('Empresas','players','right')+'<td style="padding:6px 4px">Leitura</td></tr>';
@@ -45133,20 +45138,22 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     var PLc=(window.RS_PLAYERS&&window.RS_PLAYERS.cnae)||null;
     var CN=(window.RS_CNAE_ESTADO&&window.RS_CNAE_ESTADO.classeNome)||{};
     var SAL=(window.RS_CAGED_SAL&&window.RS_CAGED_SAL.cnae)||{};
-    var bq=_EXP.busca?String(_EXP.busca).replace(/\D/g,''):'';
+    var bq=_EXP.busca?String(_EXP.busca).replace(/\D/g,''):'', bqT=norm(_EXP.busca||'').replace(/[^A-Z ]/g,'').trim();
+    var bqW=bqT?bqT.split(/\s+/).filter(function(w){return w.length>=3;}):[];
     var linhas=[], totEmp=0;
     Object.keys(C.cnae).forEach(function(k){ if(k.indexOf(pref)!==0) return; var cn=k.slice(pref.length); if(cn.length!==7) return;
-      if(bq && cn.indexOf(bq)<0) return;
+      if(bq && cn.indexOf(bq)!==0) return;
+      var div=String(parseInt(cn.slice(0,2),10)||0), clNome=CN[cn.slice(0,5)]||'';
+      if(bqW.length){ var nn=norm(clNome); if(!bqW.every(function(w){ return nn.indexOf(w)>=0; })) return; }
       var emp=C.cnae[k]; if(!emp) return; totEmp+=emp;
       var sc=SAL[k], saldo=sc?sc[0]:null, admDes=sc?sc[1]:null, salM=sc?sc[2]:null;
       var pl=(PLc&&PLc[k])||0, rot=(emp>0&&sc)?(admDes/emp):null;
-      var div=String(parseInt(cn.slice(0,2),10)||0), clNome=CN[cn.slice(0,5)]||'';
       linhas.push({ cnae:cn, div:div, nome:clNome, emp:emp, players:pl, sal:saldo, rot:rot, salM:salM, epe:(pl>0?emp/pl:0) }); });
     if(!linhas.length) return '<div style="color:#64748b;font-size:12.5px;padding:6px 2px">Sem empregos formais (CAGED) registrados para <b>'+esc(mun)+'</b>'+(bq?' no filtro de CNAE':'')+'.</div>';
     var col=(_EXP.eCol==='v26'||_EXP.eCol==='prod')?'emp':(_EXP.eCol||'emp'), dir=_EXP.eDir||-1;
     linhas.sort(function(a,b){ var va,vb; if(col==='mun'){va=a.cnae;vb=b.cnae;} else {va=(a[col]==null?-Infinity:a[col]);vb=(b[col]==null?-Infinity:b[col]);} if(va<vb)return -1*dir; if(va>vb)return 1*dir; return 0; });
     var _ms=String(mun).replace(/['"\\]/g,'');
-    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px"><b>'+esc(mun)+'</b> · <b>'+linhas.length.toLocaleString('pt-BR')+'</b> CNAEs com emprego formal · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empregos no total (CAGED, estoque). Ordene pela coluna que quiser e clique numa linha para ver as empresas.</div>';
+    var h='<div style="font-size:12px;color:#64748b;margin-bottom:6px"><b>'+esc(mun)+'</b> · <b>'+linhas.length.toLocaleString('pt-BR')+'</b> CNAEs com emprego formal · <b>'+totEmp.toLocaleString('pt-BR')+'</b> empregos no total (CAGED, estoque de referência dez/2025). Ordene pela coluna que quiser e clique numa linha para ver as empresas.</div>';
     h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:4px 10px;max-height:460px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
     var _smes=_salMes()?_salMes().slice(0,3):'mês';
     h+='<tr style="font-size:10px;text-transform:uppercase;position:sticky;top:0;background:#fff">'+_eth2('CNAE','mun')+'<td style="padding:6px 4px">Atividade</td>'+_eth2('Empregos','emp','right')+_eth2('Saldo '+_smes,'sal','right')+_eth2('Rotat.','rot','right')+_eth2('Sal.méd','salM','right')+_eth2('Empresas','players','right')+'</tr>';
@@ -45165,6 +45172,22 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
     h+='</table></div>';
     return h;
   }
+  /* busca de atividade pelo nome: divisões (setores) e, se pedido, classes CNAE (5 díg.) */
+  function _sugestoesAtividade(q, comClasses){
+    var ws=norm(q).split(/[^A-Z0-9]+/).filter(function(w){ return w.length>=3; }); if(!ws.length) return '';
+    function bate(nome){ var nn=norm(nome); return ws.every(function(w){ return nn.indexOf(w)>=0; }); }
+    var out=[], DN=META.divnome||{}, CN=(window.RS_CNAE_ESTADO&&window.RS_CNAE_ESTADO.classeNome)||{};
+    Object.keys(DN).forEach(function(d){ if(bate(DN[d])) out.push({t:'div',c:d,n:DN[d]}); });
+    if(comClasses) Object.keys(CN).forEach(function(c){ if(bate(CN[c])) out.push({t:'cl',c:c,n:CN[c]}); });
+    if(!out.length) return '<div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px">Nenhum setor'+(comClasses?' ou classe CNAE':'')+' com "'+esc(q)+'".</div>';
+    var h='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;max-height:120px;overflow:auto">';
+    out.slice(0,24).forEach(function(s){ var isD=(s.t==='div');
+      h+='<span onclick="'+(isD?('window._expDivPick(\''+s.c+'\')'):('window._expECnae(\''+s.c+'\')'))+'" style="cursor:pointer;border:1px solid '+(isD?'#1d4ed8':'#0f766e')+';background:'+(isD?'#eff6ff':'#f0fdfa')+';color:'+(isD?'#1d4ed8':'#0f766e')+';border-radius:999px;padding:3px 10px;font-size:11px" title="'+(isD?'setor (divisão)':'classe CNAE — clique para ver por cidade')+'"><b>'+esc(isD?('setor '+s.c):s.c)+'</b> '+esc(s.n.slice(0,48))+(s.n.length>48?'…':'')+'</span>'; });
+    if(out.length>24) h+='<span style="font-size:11px;color:#94a3b8;padding:3px 4px">+'+(out.length-24)+' — refine a busca</span>';
+    return h+'</div>';
+  }
+  window._expDivPick=function(d){ _EXP.div=String(d); _EXP.ecnae=''; _EXP.qset=''; _expRender(); };
+  window._expQset=function(v){ _EXP.qset=v; _expRenderLento(); };
   function exploradorHTML(){
     var h='';
     h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px">';
@@ -45179,12 +45202,14 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       var optDiv=_divs().map(function(d){ return '<option value="'+d+'"'+(d===_EXP.div?' selected':'')+'>'+esc(d+' — '+((META.divnome&&META.divnome[d])||''))+'</option>'; }).join('');
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
       h+='<select onchange="window._expDiv(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:430px">'+optDiv+'</select>';
-      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
+      h+='<input type="text" placeholder="buscar setor pelo nome" value="'+esc(_EXP.qset||'')+'" data-k="qset" oninput="window._expQset(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:190px" title="ex.: máquinas, plástico, transporte">';
+      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" data-k="busca" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
       var _am=(_EXP.sCol==='v26'&&_EXP.sDir<0&&!_EXP.piso), _ac=(_EXP.sCol==='gYTD'&&_EXP.sDir<0&&_EXP.piso), _aq=(_EXP.sCol==='gYTD'&&_EXP.sDir>0&&_EXP.piso), _ag=(_EXP.sCol==='media'&&_EXP.piso);
       h+='<button onclick="window._expOrd(\'tamanho\')" style="'+_btnStyle(_am)+'">maiores</button>';
       h+='<button onclick="window._expOrd(\'cresce\')" style="'+_btnStyle(_ac)+'">crescendo</button>';
       h+='<button onclick="window._expOrd(\'cai\')" style="'+_btnStyle(_aq)+'">caindo</button>';
       h+='<button onclick="window._expOrd(\'media\')" style="'+_btnStyle(_ag)+'" title="Faturamento do setor ÷ nº de empresas. Alto = empresas grandes, poucos players — prospecção.">💰 grandes/empresa</button></div>';
+      if(_EXP.qset && norm(_EXP.qset).replace(/[^A-Z]/g,'').length>=3) h+=_sugestoesAtividade(_EXP.qset, false);
       h+=_tabelaCidades(_EXP.div);
     } else if(_EXP.modo==='cidade'){
       var optM=_muns().map(function(m){ return '<option value="'+esc(m)+'"'+(m===_EXP.mun?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
@@ -45196,37 +45221,48 @@ window.PROMPT_APRESENTACAO = PROMPT_APRESENTACAO;
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
       h+='<select onchange="window._expMaxPl(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px" title="máximo de empresas no setor/cidade">'+optPl+'</select>';
       h+='<select onchange="window._expMinFat(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px" title="faturamento mínimo do setor na cidade">'+optFat+'</select>';
-      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"></div>';
+      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" data-k="busca" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"></div>';
       h+=_tabelaOportunidades();
     } else if(_EXP.modo==='empcidade'){
       var optMc=_muns().map(function(m){ return '<option value="'+esc(m)+'"'+(m===_EXP.mun?' selected':'')+'>'+esc(m)+'</option>'; }).join('');
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
       h+='<select onchange="window._expMun(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:320px"><option value="">— escolha a cidade —</option>'+optMc+'</select>';
-      h+='<input type="text" placeholder="filtrar CNAE (dígitos)" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:180px"></div>';
+      h+='<input type="text" placeholder="filtrar CNAE ou atividade (ex: 2833 ou máquinas)" value="'+esc(_EXP.busca)+'" data-k="busca" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:280px"></div>';
       h+=_tabelaEmpregoCidade(_EXP.mun);
     } else {
       var optDivE=_divs().map(function(d){ return '<option value="'+d+'"'+(d===_EXP.div?' selected':'')+'>'+esc(d+' — '+((META.divnome&&META.divnome[d])||''))+'</option>'; }).join('');
       h+='<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">';
-      h+='<select onchange="window._expDiv(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:360px"'+(_EXP.ecnae?' disabled':'')+'>'+optDivE+'</select>';
-      h+='<input type="text" placeholder="CNAE exato (ex: 2222600)" value="'+esc(_EXP.ecnae)+'" oninput="window._expECnae(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:170px" title="preencha para ver por CNAE exato × cidade">';
-      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
+      var _ecd=String(_EXP.ecnae||'').replace(/\D/g,''), _ecTxt=String(_EXP.ecnae||'').replace(/[\d\s.\-\/]/g,''), _usaCnae=(_ecd.length>=5 && !_ecTxt);
+      h+='<select onchange="window._expDiv(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;max-width:360px"'+(_usaCnae?' disabled':'')+'>'+optDivE+'</select>';
+      h+='<input type="text" placeholder="CNAE (28330 ou 2833000) ou nome da atividade" value="'+esc(_EXP.ecnae)+'" data-k="ecnae" oninput="window._expECnae(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:290px" title="digite a classe (5 dígitos), o CNAE exato (7) ou palavras do nome da atividade (ex.: máquinas agrícolas)">';
+      h+='<input type="text" placeholder="filtrar cidade" value="'+esc(_EXP.busca)+'" data-k="busca" oninput="window._expBusca(this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
       if(_EXP.ecnae) h+='<button onclick="window._expECnae(\'\')" style="border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:7px 11px;font-size:12px;cursor:pointer">← por setor</button>';
       h+='</div>';
-      h+=(_EXP.ecnae && _EXP.ecnae.replace(/\D/g,'').length>=7) ? _tabelaEmpregoCnae(_EXP.ecnae) : _tabelaEmprego(_EXP.div);
+      if(_ecTxt) h+=_sugestoesAtividade(_EXP.ecnae, true);
+      else if(_ecd.length>0 && _ecd.length<5) h+='<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 10px;margin-bottom:8px">Digite ao menos <b>5 dígitos</b> (classe, ex.: 28330) ou <b>7</b> (CNAE exato). Com menos, a tabela abaixo continua mostrando o <b>setor</b> escolhido.</div>';
+      h+=_usaCnae ? _tabelaEmpregoCnae(_ecd) : _tabelaEmprego(_EXP.div);
     }
     return h;
   }
-  window._expECnae=function(v){ _EXP.ecnae=v; _expRender(); };
+  window._expECnae=function(v){ _EXP.ecnae=v; _expRenderLento(); };
   window._expMaxPl=function(v){ _EXP.maxPl=parseInt(v,10)||10; _expRender(); };
   window._expMinFat=function(v){ _EXP.minFat=parseInt(v,10)||0; _expRender(); };
   window._expOSort=function(col){ if(_EXP.oCol===col) _EXP.oDir=-_EXP.oDir; else { _EXP.oCol=col; _EXP.oDir=(col==='mun'||col==='nome')?1:-1; } _expRender(); };
   window._expESort=function(col){ if(_EXP.eCol===col) _EXP.eDir=-_EXP.eDir; else { _EXP.eCol=col; _EXP.eDir=(col==='mun')?1:-1; } _expRender(); };
-  function _expRender(){ var box=document.getElementById('_expBox'); if(box) box.innerHTML=exploradorHTML(); }
+  function _expRender(){ var box=document.getElementById('_expBox'); if(!box) return;
+    /* preserva o foco/cursor do campo que está sendo digitado (o render refaz o HTML inteiro) */
+    var ae=document.activeElement, k=null, pos=null;
+    try{ if(ae && box.contains(ae) && ae.getAttribute && ae.getAttribute('data-k')){ k=ae.getAttribute('data-k'); pos=ae.selectionStart; } }catch(e0){}
+    box.innerHTML=exploradorHTML();
+    if(k){ try{ var el=box.querySelector('[data-k="'+k+'"]'); if(el){ el.focus(); if(pos!=null && el.setSelectionRange){ var L=el.value.length, q=Math.min(pos,L); el.setSelectionRange(q,q); } } }catch(e1){} }
+  }
+  var _expTimer=null;
+  function _expRenderLento(){ clearTimeout(_expTimer); _expTimer=setTimeout(_expRender, 230); }
   window._expModo=function(m){ _EXP.modo=m; _expRender(); };
   window._expReg=function(v){ _EXP.regiao=v; if(_EXP.mun){ var rs=_regSet(); if(rs && !rs[norm(_EXP.mun)]) _EXP.mun=''; } _expRender(); };
   window._expDiv=function(d){ _EXP.div=d; _expRender(); };
   window._expMun=function(m){ _EXP.mun=m; _expRender(); };
-  window._expBusca=function(v){ _EXP.busca=v; _expRender(); };
+  window._expBusca=function(v){ _EXP.busca=v; _expRenderLento(); };
   window._expOrd=function(o){ _EXP.piso=(o!=='tamanho');
     if(o==='tamanho'){ _EXP.sCol='v26'; _EXP.sDir=-1; }
     else if(o==='cresce'){ _EXP.sCol='gYTD'; _EXP.sDir=-1; }
