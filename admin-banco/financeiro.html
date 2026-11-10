@@ -14797,8 +14797,11 @@ window._oportCalc = function(){
   var pp=function(v){ return (v||0).toFixed(3).replace('.',',')+' p.p.'; };
   var divida=g('op_div'), taxaMes=g('op_taxa'), cdiMes=g('op_cdi'), vidas=g('op_vidas'),
       ticket=g('op_ticket'), comis=g('op_comis'), spreadMkt=g('op_mkt'), prazoM=g('op_prazo')||24,
-      snovo=g('op_snovo'), limite=g('op_limite');
+      snovo=g('op_snovo'), limite=g('op_limite'), divtot=g('op_divtot'),
+      lp=g('op_lp'), lpTaxa=g('op_lptaxa'), lpPrazo=g('op_lpprazo')||48,
+      lpNova=g('op_lpnova'), custoSaidaPct=g('op_custosaida');
   var anos=prazoM/12;
+  var price=function(pv,i,n){ if(pv<=0||n<=0) return 0; if(i<=1e-9) return pv/n; var f=Math.pow(1+i,n); return pv*i*f/(f-1); };
   var planoBruto=vidas*ticket*12, planoLiq=planoBruto*0.66;
   if(divida<=0){
     return '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;font-size:13px;color:#1e3a8a">'
@@ -14829,6 +14832,13 @@ window._oportCalc = function(){
   var custoLiqFinal=(planoBruto-economiaCorte)*0.66;   // >0 = custo; <0 = sobra. O 34% incide igual nos dois lados (anula)
   h+='<div style="display:flex;justify-content:space-between;padding:8px 0 4px;border-top:2px solid #e2e8f0;font-size:14px"><span><b>Custo líquido final p/ a empresa</b><br><span style="font-size:11px;color:#64748b;font-weight:400">o 34% já embutido nos dois lados — não soma em cima</span></span><b style="color:'+(custoLiqFinal<=0?'#15803d':'#0f172a')+';font-size:16px">'+(custoLiqFinal<=0?'sobra '+fmt(-custoLiqFinal):fmt(custoLiqFinal))+'</b></div>';
   h+='<div style="font-size:11.5px;color:#475569;margin:4px 0 2px;line-height:1.6">Plano líquido (−34%): <b>'+fmt(planoLiq)+'</b> · menos economia de juros líquida (−34%): <b>'+fmt(economiaCorte*0.66)+'</b> = <b>'+fmt(custoLiqFinal>0?custoLiqFinal:0)+'</b>'+(custoLiqFinal<=0?' (sobra '+fmt(-custoLiqFinal)+')':'')+'. <span style="color:#64748b">O juro <b>novo</b> continua dedutível; o que entra na conta é só a <b>diferença</b> que a empresa deixou de pagar — essa parcela era dedutível e some, por isso vale 0,66 e não 1,0. Por isso <b>não</b> se soma os 34% do prêmio por cima: o imposto já está dos dois lados.</span></div>';
+  // --- custo por colaborador + contexto de dívida parcial trazida ---
+  var custoColabMes = vidas>0 ? custoLiqFinal/vidas/12 : 0;
+  var pctTrazido = divtot>0 ? (divida/divtot*100) : 0;
+  h+='<div style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:10px 13px;margin-top:9px;font-size:12.5px;line-height:1.55">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700">👤 Custo líquido por colaborador</span><b style="font-size:17px;color:'+(custoColabMes<=0?'#86efac':'#fff')+'">'+(custoColabMes<=0?'sobra '+fmt(-custoColabMes):fmt(custoColabMes))+'/mês</b></div>';
+  h+='<div style="font-size:11px;color:#94a3b8;margin-top:2px">'+vidas+' colaboradores · '+(custoLiqFinal<=0?'a operação <b style="color:#86efac">paga</b> o plano e ainda sobra '+fmt(-custoLiqFinal)+'/ano':'custo líquido '+fmt(custoLiqFinal)+'/ano')+(divtot>0?' · trazendo <b>'+fmt(divida)+'</b> dos <b>'+fmt(divtot)+'</b> de dívida total ('+pctTrazido.toFixed(0)+'%)':'')+'</div>';
+  h+='</div>';
   h+='<div style="background:'+(cobre?'#f0fdf4':'#fffbeb')+';border:1px solid '+(cobre?'#bbf7d0':'#fde68a')+';border-radius:8px;padding:9px 11px;margin-top:9px;font-size:12.5px;color:'+(cobre?'#166534':'#92400e')+'">';
   h+= cobre
       ? '✅ A economia de juros <b>paga o plano inteiro</b> e ainda sobra '+fmt(sobra)+'. O plano sai <b>de graça</b> e o crédito fica mais barato.'
@@ -14882,6 +14892,69 @@ window._oportCalc = function(){
   }
   h+='</div>';
   h+='<div style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:11px 13px;margin-top:9px;font-size:13px;line-height:1.5">🗣️ “Sua empresa paga '+fmt(juroAno)+' de juros a um spread de '+pc(spreadMes)+'/mês. Trago um banco que corta o spread, inclui o plano de saúde da equipe'+(cobre?' <b>de graça</b>':'')+' e você ainda paga menos juro — o banco se paga na comissão do seguro.”</div>';
+  // ===== LONGO PRAZO — reduz a parcela? (refinanciamento) =====
+  if(lp>0 && lpTaxa>0){
+    var nossaLP = lpNova>0 ? lpNova : (cdiMes+snovo);   // nossa linha de LP (BNDES/FINAME), editável
+    var parcAtual=price(lp, lpTaxa/100, lpPrazo);
+    var parcNova=price(lp, nossaLP/100, lpPrazo);
+    var ecoParc=parcAtual-parcNova;                     // R$/mês
+    var ecoTotal=ecoParc*lpPrazo;
+    var custoSaida=lp*(custoSaidaPct/100);              // multa + IOF sobre a dívida trocada
+    var ecoLiq=ecoTotal-custoSaida;                     // economia líquida de custos de saída
+    var payback=ecoParc>0 ? custoSaida/ecoParc : 0;     // meses pra o custo de saída se pagar
+    var vale = nossaLP < lpTaxa - 0.02;                 // nossa linha tem que ser mais barata
+    h+='<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-top:10px;font-size:12.5px;line-height:1.55">';
+    h+='<div style="font-weight:800;color:#0f172a;margin-bottom:5px">📅 Longo prazo ('+fmt(lp)+') — trocar por BNDES/FINAME reduz a parcela?</div>';
+    if(vale){
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Parcela hoje (~'+pc(lpTaxa)+'/mês, '+lpPrazo+'m, Price)</span><b>'+fmt(parcAtual)+'/mês</b></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Parcela na nossa linha BNDES/FINAME ('+pc(nossaLP)+'/mês)</span><b style="color:#15803d">'+fmt(parcNova)+'/mês</b></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid #e2e8f0;margin-top:3px"><span><b>Economia na parcela</b></span><b style="color:#15803d;font-size:14px">'+fmt(ecoParc)+'/mês · '+fmt(ecoTotal)+' no total</b></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0"><span>(−) Custo de saída (multa + IOF '+pc(custoSaidaPct)+' s/ '+fmt(lp)+')</span><b style="color:#b45309">'+fmt(custoSaida)+'</b></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid #e2e8f0;margin-top:2px"><span><b>Economia líquida</b> (já paga a multa/IOF)</span><b style="color:'+(ecoLiq>0?'#15803d':'#b91c1c')+';font-size:14px">'+fmt(ecoLiq)+'</b></div>';
+      h+='<div style="font-size:11.5px;color:#475569;margin-top:3px">A economia da parcela paga a multa+IOF em <b>'+(payback>0?payback.toFixed(1)+' meses':'—')+'</b>. '+(ecoLiq>0?'Depois disso é só ganho.':'<b style="color:#b91c1c">O custo de saída come toda a economia do prazo — não compensa trocar agora.</b>')+'</div>';
+    } else {
+      h+='<div style="font-size:11.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:7px 9px">⚠️ A nossa linha ('+pc(nossaLP)+'/mês) <b>não é mais barata</b> que a atual ('+pc(lpTaxa)+'/mês). Trocar aumentaria a parcela. Se a atual já é BNDES/FINAME subsidiado, deixe quieto e foque o <b>curto prazo</b> (giro), que é o caro.</div>';
+    }
+    h+='<div style="font-size:11px;color:#475569;background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:7px 9px;margin-top:7px;line-height:1.6">💡 Você tem <b>BNDES/FINAME</b>: dá pra trocar o longo prazo caro do cliente pela sua linha subsidiada e derrubar a parcela. Mas lembre: trocar é <b>refinanciar</b> — a nova dívida <b>quita a antiga</b>, não vira caixa novo (só o excedente é dinheiro novo). A <b>multa + IOF</b> já está descontada acima — por isso é bom trabalhar com uma <b>margem a mais</b> que cubra esse custo de saída.</div>';
+    h+='</div>';
+  }
+  // ===== EXPLICAÇÃO PARA LEIGO — o desenho da operação + cenários =====
+  var dividaZeroMkt = corteMercado>0 ? planoBruto/((corteMercado/100)*12) : 0;   // dívida p/ plano grátis ao spread de mercado
+  // qual cenário esta empresa é
+  var cen;
+  if(subsid) cen='D';                                   // paga abaixo do mercado (subsidiado)
+  else if(corteMercado<=0) cen='C';                     // paga no mercado, sem excesso
+  else if(divida>=dividaZeroMkt) cen='A';               // paga caro + dívida suficiente
+  else cen='B';                                         // paga caro, falta dívida
+  var box=function(on,cor,emoji,tit,txt){ return '<div style="flex:1;min-width:150px;background:'+(on?cor:'#f8fafc')+';border:'+(on?'2px solid '+cor:'1px solid #e2e8f0')+';border-radius:9px;padding:9px 11px;opacity:'+(on?'1':'0.72')+'"><div style="font-weight:800;font-size:12.5px;color:'+(on?'#fff':'#334155')+'">'+emoji+' '+tit+(on?' ← a sua empresa':'')+'</div><div style="font-size:11.5px;color:'+(on?'#f1f5f9':'#64748b')+';margin-top:3px;line-height:1.5">'+txt+'</div></div>'; };
+  h+='<div style="background:#fffef7;border:1px solid #fde68a;border-radius:12px;padding:16px 18px;margin-top:14px">';
+  h+='<div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:3px">🧒 Explicando como se fosse pra uma criança</div>';
+  h+='<div style="font-size:12px;color:#92400e;margin-bottom:12px">O desenho da operação, com os números reais da empresa.</div>';
+  // --- o desenho (fluxo) ---
+  var seta='<div style="text-align:center;color:#cbd5e1;font-size:18px;line-height:1;margin:2px 0">↓</div>';
+  h+='<div style="max-width:520px;margin:0 auto 10px">';
+  h+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:9px;padding:9px 12px;font-size:12.5px"><b>1. A empresa tem dívida de '+fmt(divida)+'</b> e paga '+fmt(juroAno)+' de juros por ano (spread de '+pc(spreadMes)+'/mês).</div>';
+  h+=seta;
+  h+='<div style="background:#ecfeff;border:1px solid #a5f3fc;border-radius:9px;padding:9px 12px;font-size:12.5px"><b>2. Eu levo essa dívida pro meu banco cobrando menos juro</b>'+(corteMercado>0?' (corto '+pp(corteMercado)+'/mês do spread que ela paga a mais). Isso sobra <b>'+fmt(economiaCorte)+'/ano</b> no bolso dela.':'. Mas ela já paga barato — quase não há juro pra cortar.')+'</div>';
+  h+=seta;
+  h+='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;padding:9px 12px;font-size:12.5px"><b>3. Com esse dinheiro que sobrou, pago o plano de saúde</b> de '+fmt(planoBruto)+'/ano da equipe.</div>';
+  h+=seta;
+  h+='<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:9px;padding:9px 12px;font-size:12.5px"><b>4. O governo ainda ajuda:</b> como o plano desconta imposto, ele "paga" '+fmt(escudo)+' (34%). A empresa só sente '+fmt(planoLiq)+' de verdade.</div>';
+  h+=seta;
+  h+='<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:9px 12px;font-size:12.5px"><b>5. O banco topa</b> porque ganha a comissão do seguro ('+fmt(comisTotal)+' em '+prazoM+' meses) + o juro que continua cobrando. <b>E eu ganho</b> a corretagem do plano.</div>';
+  h+=seta;
+  h+='<div style="background:'+(cen==='A'?'#15803d':(cen==='B'?'#b45309':'#334155'))+';color:#fff;border-radius:9px;padding:10px 12px;font-size:13px;font-weight:700;text-align:center">'+(cen==='A'?'✅ RESULTADO: o plano sai DE GRAÇA e ainda sobra '+fmt(economiaCorte-planoBruto)+'/ano.':(cen==='B'?'⚠️ Quase lá: falta trazer mais '+fmt(dividaZeroMkt-divida)+' de dívida pra ficar de graça.':(cen==='C'?'➡️ Aqui não dá plano grátis pelo juro — mas o escudo de 34% faz o plano custar só '+fmt(planoLiq)+'.':'➡️ A empresa já paga abaixo do mercado — o jogo aqui é só o escudo de 34% ('+fmt(planoLiq)+' líquido).')))+'</div>';
+  h+='</div>';
+  // --- os 4 cenários ---
+  h+='<div style="font-size:12.5px;font-weight:700;color:#334155;margin:8px 0 6px">A operação é viável assim — veja em qual a empresa cai:</div>';
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  h+=box(cen==='A','#15803d','🟢','Paga caro + dívida grande','Paga spread acima do mercado E tem dívida suficiente'+(corteMercado>0?' ('+fmt(dividaZeroMkt)+'+)':'')+'. A economia de juros paga o plano todo. <b>Plano de graça.</b> É a empresa perfeita.');
+  h+=box(cen==='B','#b45309','🟡','Paga caro + dívida pequena','Paga caro, mas a dívida é pouca pra economia cobrir o plano. <b>Solução:</b> trazer mais dívida que ela tem em outros bancos, ou aceitar o custo líquido reduzido.');
+  h+=box(cen==='C','#475569','🔵','Paga no mercado','Já paga uma taxa justa — não há gordura de spread pra cortar. Não dá plano grátis pelo juro, mas o <b>escudo de 34%</b> ainda derruba o custo do plano.');
+  h+=box(cen==='D','#64748b','⚪','Paga abaixo do mercado','Tem crédito subsidiado (BNDES/FINAME) — paga menos que o CDI. Sem spread pra cortar. Foca no <b>escudo de 34%</b> + preservar o caixa.');
+  h+='</div>';
+  h+='<div style="font-size:11.5px;color:#64748b;margin-top:9px;line-height:1.6">📏 <b>Regra de bolso:</b> a operação fecha de graça quando a empresa <b>paga spread acima do mercado</b> e traz pelo menos <b>'+(corteMercado>0?fmt(dividaZeroMkt):'(sem excesso de spread, não se aplica)')+'</b> de dívida. Sem excesso de spread, o ganho é o escudo fiscal de 34% — que sozinho já faz o plano custar '+fmt(planoLiq)+' em vez de '+fmt(planoBruto)+'.</div>';
+  h+='</div>';
   h+='</div>';
   return h;
 };
@@ -14889,8 +14962,11 @@ window._recalcOport = function(){ var el=document.getElementById('oportResult');
 window._renderOportunidadeSpread = function(consol, latest){
   consol=consol||{}; latest=latest||{};
   var _n=function(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?0:x; };
+  var fmt=function(v){ return 'R$ '+Math.round(v||0).toLocaleString('pt-BR'); };
   var divida=_n(consol.totalDividaBruta), fonte='operações cadastradas';
   if(divida<=0){ divida=_n(latest.emprestimosCP)+_n(latest.emprestimosLP); fonte='balanço (curto + longo prazo)'; }
+  var dividaCP=_n(latest.emprestimosCP), dividaLP=_n(latest.emprestimosLP);   // split do balanço
+  var dividaTotEmp = _n(consol.totalDividaBruta)>0 ? _n(consol.totalDividaBruta) : (dividaCP+dividaLP); // dívida total da empresa (contexto)
   var taxa=_n(consol.custoMedioPonderado), taxaNota='';   // %/mês ponderado
   if(taxa<=0 && divida>0){
     var despFin=_n(latest.despesasFinanceiras);
@@ -14915,21 +14991,39 @@ window._renderOportunidadeSpread = function(consol, latest){
   h+='<div style="font-size:12.5px;color:#64748b;margin-bottom:8px">Estima o spread que a empresa paga, sinaliza se está caro, e calcula quanto o banco precisaria cortar para o plano de saúde sair de graça — contando a comissão do banco na seguradora.</div>';
   if(divida>0){ h+='<div style="font-size:11.5px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:6px 10px;margin-bottom:10px">Dívida de '+fonte+'.'+(taxaNota?' Taxa '+taxaNota+' — <b>confirme a taxa real</b> (extrato do banco ou cadastrando as operações); a despesa financeira pode ter desconto de duplicata/câmbio.':'')+'</div>'; }
   else { h+='<div style="font-size:11.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:6px 10px;margin-bottom:10px">Sem dívida no balanço nem operação cadastrada. Informe a dívida manualmente ou veja o modo "sem dívida" (escudo de 34%).</div>'; }
+  if(dividaCP+dividaLP>0){
+    var pctCP=(dividaCP/(dividaCP+dividaLP)*100);
+    h+='<div style="font-size:11.5px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:7px 10px;margin-bottom:10px;line-height:1.6">'
+      +'📊 <b>Curto prazo (circulante):</b> '+fmt(dividaCP)+' ('+pctCP.toFixed(0)+'%) — vence em até 12 meses; é giro/rotativo, normalmente o spread <b>mais caro</b>. '
+      +'<b>Longo prazo:</b> '+fmt(dividaLP)+' — investimento, às vezes BNDES/FINAME <b>subsidiado</b> (mais barato). '
+      +'<span style="color:#64748b">O balanço <b>não</b> separa a taxa de cada uma — só cadastrando as operações ou pelo extrato. A de curto do balanço do ano passado é, em tese, quitada ou rolada neste ano.</span></div>';
+  }
   h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
-  h+=inp('op_div','Dívida a trazer p/ operação (R$)',Math.round(divida),'1000000');
+  h+=inp('op_divtot','Dívida TOTAL da empresa (R$)',Math.round(dividaTotEmp),'1000000');
+  h+=inp('op_div','Dívida a trazer p/ NOSSO banco (R$)',Math.round(divida),'1000000');
   h+=inp('op_taxa','Taxa atual (%/mês)',(taxa||0).toFixed(2),'0.01');
-  h+=inp('op_cdi','CDI (%/mês)',cdiMes.toFixed(2),'0.01');
   h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_cdi','CDI (%/mês)',cdiMes.toFixed(2),'0.01');
   h+=inp('op_mkt','Spread de mercado (%/mês)','0.50','0.05');
   h+=inp('op_vidas','Nº colaboradores',vidas,'1');
-  h+=inp('op_ticket','Ticket saúde (R$/mês)','350','10');
   h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_ticket','Ticket saúde (R$/mês)','350','10');
   h+=inp('op_comis','Comissão do banco (%)','20','1');
   h+=inp('op_prazo','Prazo do plano (meses)','24','1');
-  h+=inp('op_snovo','Spread do NOSSO banco (%/mês)','0.50','0.05');
   h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_snovo','Spread do NOSSO banco (%/mês)','0.50','0.05');
   h+=inp('op_limite','Limite de crédito no banco (R$, opcional)','0','1000000');
-  h+='<div style="flex:1;min-width:120px"></div><div style="flex:1;min-width:120px"></div>';
+  h+='<div style="flex:1;min-width:120px"></div>';
+  h+='</div>';
+  h+='<div style="font-size:11px;color:#64748b;font-weight:700;margin:6px 0 2px">📅 Longo prazo — trocar por BNDES/FINAME e reduzir a parcela (opcional)</div>';
+  h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_lp','Saldo de longo prazo (R$)',Math.round(dividaLP),'1000000');
+  h+=inp('op_lptaxa','Taxa atual do LP (%/mês)',(taxa||0).toFixed(2),'0.01');
+  h+=inp('op_lpprazo','Prazo restante (meses)','48','1');
+  h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_lpnova','NOSSA linha BNDES/FINAME (%/mês)','0.95','0.05');
+  h+=inp('op_custosaida','Custo de saída: multa + IOF (%)','1.0','0.1');
+  h+='<div style="flex:1;min-width:120px"></div>';
   h+='</div>';
   h+='<div id="oportResult" style="margin-top:12px"></div>';
   h+='<div style="font-size:11px;color:#94a3b8;margin-top:10px">Premissa: dívida rotativa (giro) — juro sobre o saldo cheio. '+cdiFonteNota+'. O <b>corte é calculado sozinho</b>: spread atual (taxa − CDI) menos o spread de mercado. Confirme a taxa real, que a despesa financeira é juro de dívida (não desconto de duplicata/câmbio) e que o imposto é corrente.</div>';
