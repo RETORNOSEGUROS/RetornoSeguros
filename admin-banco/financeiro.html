@@ -14782,10 +14782,79 @@ async function renderDividasBancarias(data) {
     }
   }
   
+  html += (window._renderOportunidadeSpread ? window._renderOportunidadeSpread(consolidado, latest) : '');
   html += gerarModalCadastroHtml();
   container.innerHTML = html;
   configurarEventListenersDividas(empresaId, data);
+  if (window._recalcOport) { try { window._recalcOport(); } catch(e){} }
 }
+
+/* ===== Painel Dívida & Oportunidade: spread caro → plano de saúde de graça ===== */
+window._oportCalc = function(){
+  var g=function(id){ var el=document.getElementById(id); return el?(parseFloat(el.value)||0):0; };
+  var fmt=function(v){ return 'R$ '+Math.round(v||0).toLocaleString('pt-BR'); };
+  var pc=function(v){ return (v||0).toFixed(2).replace('.',',')+'%'; };
+  var pp=function(v){ return (v||0).toFixed(3).replace('.',',')+' p.p.'; };
+  var divida=g('op_div'), taxaMes=g('op_taxa'), cdiMes=g('op_cdi'), vidas=g('op_vidas'),
+      ticket=g('op_ticket'), corte=g('op_corte'), comis=g('op_comis');
+  var planoBruto=vidas*ticket*12, planoLiq=planoBruto*0.66;
+  if(divida<=0){
+    return '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;font-size:13px;color:#1e3a8a">'
+      +'Sem dívida bancária cadastrada. Aqui o jogo não é spread — é o <b>escudo fiscal de 34%</b> (o plano de '+fmt(planoBruto)+' custa '+fmt(planoLiq)+' líquido) + <b>preservar o caixa</b>. Use a calculadora de seguros no modo "empresa sem dívida".</div>';
+  }
+  var taxaAnoF=Math.pow(1+taxaMes/100,12)-1, cdiAnoF=Math.pow(1+cdiMes/100,12)-1;
+  var spreadMes=taxaMes-cdiMes, spreadAno=(taxaAnoF-cdiAnoF)*100;
+  var juroAno=divida*taxaAnoF;
+  var economiaCorte=divida*(corte/100)*12;             // rotativo: corte p.p./mês sobre saldo cheio
+  var corteNec = planoBruto/(divida*12)*100;           // p.p./mês pro plano sair de graça
+  var comissao=planoBruto*(comis/100);
+  var corteComissao = comissao/(divida*12)*100;        // quanto os 20% bancam
+  var cobre=economiaCorte>=planoBruto, sobra=economiaCorte-planoBruto;
+  var caro = spreadMes>0.6;                             // ~7,4% a.a. de spread = gordo
+  var h='';
+  h+='<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+  h+='<div style="flex:1;min-width:150px;background:'+(caro?'#fef2f2':'#f8fafc')+';border:1px solid '+(caro?'#fecaca':'#e2e8f0')+';border-radius:9px;padding:10px 12px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#64748b">Spread atual estimado</div><div style="font-size:19px;font-weight:800;color:'+(caro?'#b91c1c':'#0f172a')+'">'+pc(spreadMes)+'/mês <span style="font-size:12px;color:#64748b">('+pc(spreadAno)+' a.a.)</span></div>'+(caro?'<div style="font-size:11px;color:#b91c1c;font-weight:700">🚩 paga caro — alvo de portabilidade</div>':'<div style="font-size:11px;color:#64748b">dentro do razoável</div>')+'</div>';
+  h+='<div style="flex:1;min-width:150px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:10px 12px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#64748b">Juros no ano</div><div style="font-size:19px;font-weight:800">'+fmt(juroAno)+'</div><div style="font-size:11px;color:#64748b">sobre '+fmt(divida)+' a '+pc(taxaMes)+'/mês</div></div>';
+  h+='</div>';
+  h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px">';
+  h+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f9;font-size:13px"><span>Plano de saúde ('+vidas+' vidas × '+fmt(ticket)+')</span><b>'+fmt(planoBruto)+'/ano</b></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f9;font-size:13px"><span>Economia com o corte de '+pp(corte)+'/mês</span><b style="color:#15803d">'+fmt(economiaCorte)+'</b></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:13px"><span>= Resultado (economia − plano)</span><b style="color:'+(cobre?'#15803d':'#b45309')+'">'+(sobra>=0?'+':'')+fmt(sobra)+'</b></div>';
+  h+='<div style="background:'+(cobre?'#f0fdf4':'#fffbeb')+';border:1px solid '+(cobre?'#bbf7d0':'#fde68a')+';border-radius:8px;padding:9px 11px;margin-top:9px;font-size:12.5px;color:'+(cobre?'#166534':'#92400e')+'">';
+  h+= cobre
+      ? 'Com o corte que você consegue, a economia de juros <b>paga o plano inteiro</b> e ainda sobra '+fmt(sobra)+'. O plano sai <b>de graça</b> e o crédito fica mais barato.'
+      : 'Pra o plano sair de graça só pelo spread, o banco precisa cortar <b>'+pp(corteNec)+'/mês</b> (você tem '+pp(corte)+'). Isso só fecha se a empresa paga spread gordo o bastante — por isso o alvo são as que pagam <b>caro</b>.';
+  h+='</div>';
+  h+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:9px 11px;margin-top:8px;font-size:12px;color:#1e3a8a">💰 <b>Os 20% da seguradora:</b> o banco ganha '+fmt(comissao)+' de comissão no plano, o que banca <b>'+pp(corteComissao)+'/mês</b> do corte. O resto do corte sai do <b>spread que a empresa paga a mais que o mercado</b> — é esse excesso que torna o plano grátis, não a comissão sozinha.</div>';
+  h+='<div style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:11px 13px;margin-top:9px;font-size:13px;line-height:1.5">🗣️ “Sua empresa paga '+fmt(juroAno)+' de juros a um spread de '+pc(spreadMes)+'/mês. Trago um banco que corta o spread, inclui o plano de saúde da equipe'+(cobre?' <b>de graça</b>':'')+' e você ainda paga menos juro — o banco se paga na comissão do seguro.”</div>';
+  h+='</div>';
+  return h;
+};
+window._recalcOport = function(){ var el=document.getElementById('oportResult'); if(el) el.innerHTML=window._oportCalc(); };
+window._renderOportunidadeSpread = function(consol, latest){
+  consol=consol||{}; latest=latest||{};
+  var divida=consol.totalDividaBruta||0;
+  var taxa=consol.custoMedioPonderado||0;                 // %/mês ponderado
+  var vidas=latest.funcionarios||latest.colaboradores||latest.empregados||0;
+  var inp=function(id,label,val,step){ return '<div style="flex:1;min-width:120px"><label style="display:block;font-size:11px;color:#64748b;font-weight:600;margin:0 0 3px">'+label+'</label><input id="'+id+'" type="number" value="'+val+'" step="'+(step||'1')+'" oninput="window._recalcOport&&window._recalcOport()" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"></div>'; };
+  var h='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin-top:20px">';
+  h+='<div style="font-size:16px;font-weight:800;margin-bottom:3px">💡 Dívida & Oportunidade — spread vs plano de saúde</div>';
+  h+='<div style="font-size:12.5px;color:#64748b;margin-bottom:12px">Estima o spread que a empresa paga, sinaliza se está caro, e calcula quanto o banco precisaria cortar para o plano de saúde sair de graça — contando a comissão do banco na seguradora.</div>';
+  h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_div','Dívida bancária (R$)',Math.round(divida),'100000');
+  h+=inp('op_taxa','Taxa atual (%/mês)',(taxa||0).toFixed(2),'0.01');
+  h+=inp('op_cdi','CDI (%/mês)','1.00','0.01');
+  h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+  h+=inp('op_vidas','Nº colaboradores',vidas,'1');
+  h+=inp('op_ticket','Ticket saúde (R$/mês)','350','10');
+  h+=inp('op_corte','Corte de spread (p.p./mês)','0.50','0.05');
+  h+=inp('op_comis','Comissão do banco (%)','20','1');
+  h+='</div>';
+  h+='<div id="oportResult" style="margin-top:12px"></div>';
+  h+='<div style="font-size:11px;color:#94a3b8;margin-top:10px">Premissa: dívida rotativa (giro) — juro sobre o saldo cheio. Taxa e dívida vêm das operações cadastradas; ajuste o CDI e o corte conforme a negociação. Confirme que a despesa financeira é juro de dívida (não desconto de duplicata/câmbio) e que o imposto é corrente.</div>';
+  h+='</div>';
+  return h;
+};
 
 function gerarCronogramaHtml(operacoes) {
   const hoje = new Date();
