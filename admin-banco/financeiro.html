@@ -14810,9 +14810,14 @@ window._oportCalc = function(){
   var comissao=planoBruto*(comis/100)*(prazoM/12);     // comissão do banco no prazo (2 anos)
   var cobre=economiaCorte>=planoBruto, sobra=economiaCorte-planoBruto;
   var caro = spreadMes>0.6;
+  var subsid = spreadMes<=0.05;   // taxa no nível do CDI ou abaixo -> crédito subsidiado / despFin subestimada
   var h='';
   h+='<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
-  h+='<div style="flex:1;min-width:150px;background:'+(caro?'#fef2f2':'#f8fafc')+';border:1px solid '+(caro?'#fecaca':'#e2e8f0')+';border-radius:9px;padding:10px 12px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#64748b">Spread atual estimado</div><div style="font-size:19px;font-weight:800;color:'+(caro?'#b91c1c':'#0f172a')+'">'+pc(spreadMes)+'/mês <span style="font-size:12px;color:#64748b">('+pc(spreadAno)+' a.a.)</span></div>'+(caro?'<div style="font-size:11px;color:#b91c1c;font-weight:700">🚩 paga caro — alvo de portabilidade</div>':'<div style="font-size:11px;color:#64748b">dentro do razoável</div>')+'</div>';
+  var cardBg=caro?'#fef2f2':(subsid?'#fffbeb':'#f8fafc'), cardBd=caro?'#fecaca':(subsid?'#fde68a':'#e2e8f0'), cardFg=caro?'#b91c1c':(subsid?'#92400e':'#0f172a');
+  var statusMsg=caro?'<div style="font-size:11px;color:#b91c1c;font-weight:700">🚩 paga caro — alvo de portabilidade</div>'
+    :(subsid?'<div style="font-size:11px;color:#92400e;font-weight:700">↓ já paga no nível/abaixo do CDI — crédito provavelmente subsidiado (BNDES/FINAME) ou despesa financeira subestimada. Sem spread em excesso pra cortar — aqui o jogo é o escudo de 34%.</div>'
+    :'<div style="font-size:11px;color:#64748b">dentro do razoável</div>');
+  h+='<div style="flex:1;min-width:150px;background:'+cardBg+';border:1px solid '+cardBd+';border-radius:9px;padding:10px 12px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#64748b">Spread atual estimado</div><div style="font-size:19px;font-weight:800;color:'+cardFg+'">'+pc(spreadMes)+'/mês <span style="font-size:12px;color:#64748b">('+pc(spreadAno)+' a.a.)</span></div>'+statusMsg+'</div>';
   h+='<div style="flex:1;min-width:150px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:10px 12px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:#64748b">Juros no ano</div><div style="font-size:19px;font-weight:800">'+fmt(juroAno)+'</div><div style="font-size:11px;color:#64748b">sobre '+fmt(divida)+' a '+pc(taxaMes)+'/mês</div></div>';
   h+='</div>';
   h+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px">';
@@ -14830,6 +14835,27 @@ window._oportCalc = function(){
           : 'A taxa atual já está no nível de mercado — sem excesso de spread pra capturar. Aqui o jogo é o escudo de 34% + financiar barato.');
   h+='</div>';
   h+='<div style="font-size:12px;color:#3730a3;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px 12px;margin-top:9px;line-height:1.7">🤝 <b>Os três ganham:</b><br>🏭 a <b>empresa</b> paga menos juro e ganha o plano barato/grátis + 34% de escudo;<br>🏦 o <b>banco</b> mantém a margem de mercado <b>e</b> leva a comissão do seguro de <b>'+fmt(comissao)+'</b> nos '+prazoM+' meses (2 anos);<br>🧑‍💼 <b>você</b> fecha o plano e leva a comissão de corretagem.<br>A conta fecha no <b>excesso de spread</b> que a empresa já pagava — por isso o alvo são as que pagam caro.</div>';
+  // ===== Simulador: limites da operação =====
+  var comisPorAno=planoBruto*(comis/100);                              // comissão/ano do banco na seguradora
+  var corteBanco = divida>0 ? (comisPorAno/(divida*12))*100 : 0;       // p.p./mês que a comissão banca sozinha
+  var corteMercado = Math.max(0, spreadMes-spreadMkt);                 // p.p./mês de excesso sobre o mercado (portabilidade)
+  var corteTotal = corteMercado + corteBanco;                         // máximo que a empresa pode enxergar
+  var dividaMinSoJuros = corteMercado>0 ? planoBruto/((corteMercado/100)*12) : 0;             // juros cobrem 100% do plano (Q3: "redução de juros apenas")
+  var dividaMinComComissao = corteMercado>0 ? (planoBruto*(1-comis/100))/((corteMercado/100)*12) : 0; // comissão cobre comis%, juros cobrem o resto (Q2)
+  h+='<div style="background:#f8fafc;border:1px dashed #94a3b8;border-radius:10px;padding:12px 14px;margin-top:10px;font-size:12.5px;line-height:1.6">';
+  h+='<div style="font-weight:800;color:#0f172a;margin-bottom:6px">🎯 Limites da operação (simulador)</div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eef2f7"><span>Corte que a <b>comissão do seguro banca sozinha</b> <span style="color:#94a3b8">(comissão '+fmt(comisPorAno)+'/ano ÷ dívida ÷ 12 — banco não perde nada)</span></span><b>'+pp(corteBanco)+'/mês</b></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eef2f7"><span><b>Excesso de spread sobre o mercado</b> <span style="color:#94a3b8">(spread '+pc(spreadMes)+' − mercado '+pc(spreadMkt)+' — a portabilidade captura)</span></span><b style="color:'+(corteMercado>0?'#b45309':'#64748b')+'">'+pp(corteMercado)+'/mês</b></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eef2f7"><span><b>Corte total viável p/ a empresa</b> <span style="color:#94a3b8">(portabilidade + comissão)</span></span><b style="color:#15803d">'+pp(corteTotal)+'/mês</b></div>';
+  if(corteMercado>0){
+    h+='<div style="display:flex;justify-content:space-between;padding:6px 0 2px;border-top:1px dashed #cbd5e1;margin-top:4px"><span><b>Dívida mínima — só com redução de juros</b> <span style="color:#94a3b8">(a economia de juros cobre 100% do plano — banco embolsa a comissão)</span></span><b style="color:#0f172a;font-size:14px">'+fmt(dividaMinSoJuros)+'</b></div>';
+    h+='<div style="display:flex;justify-content:space-between;padding:4px 0 2px"><span><b>Dívida mínima — juros + comissão do banco</b> <span style="color:#94a3b8">(banco repassa a comissão como corte extra: cobre '+comis+'%, juros cobrem os outros '+(100-comis)+'%)</span></span><b style="color:#15803d;font-size:14px">'+fmt(dividaMinComComissao)+'</b></div>';
+    var alvoMin=dividaMinComComissao;
+    h+='<div style="font-size:11.5px;color:'+(divida>=alvoMin?'#166534':'#92400e')+';margin-top:3px">'+(divida>=alvoMin?'✅ A dívida atual ('+fmt(divida)+') já passa do mínimo — o plano fecha de graça.':'A dívida atual ('+fmt(divida)+') ainda não chega lá: faltam '+fmt(alvoMin-divida)+' a trazer de outras operações do cliente no mercado (ou '+fmt(dividaMinSoJuros-divida)+' se o banco embolsar a comissão).')+'</div>';
+  } else {
+    h+='<div style="font-size:11.5px;color:#92400e;margin-top:4px;background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:7px 9px">⚠️ A empresa <b>não paga spread acima do mercado</b> — só a redução de juros não torna o plano de graça. A comissão do seguro banca no máximo '+pp(corteBanco)+'/mês (≈ '+comis+'% do plano). Aqui o argumento é o <b>escudo de 34%</b> + preservar caixa, não o spread.</div>';
+  }
+  h+='</div>';
   h+='<div style="background:#0f172a;color:#e2e8f0;border-radius:9px;padding:11px 13px;margin-top:9px;font-size:13px;line-height:1.5">🗣️ “Sua empresa paga '+fmt(juroAno)+' de juros a um spread de '+pc(spreadMes)+'/mês. Trago um banco que corta o spread, inclui o plano de saúde da equipe'+(cobre?' <b>de graça</b>':'')+' e você ainda paga menos juro — o banco se paga na comissão do seguro.”</div>';
   h+='</div>';
   return h;
@@ -14850,6 +14876,14 @@ window._renderOportunidadeSpread = function(consol, latest){
     }
   }
   var vidas=_n(latest.funcionarios)||_n(latest.colaboradores)||_n(latest.empregados)||_n(latest.numFuncionarios)||0;
+  // CDI do sistema (guardado ANUAL no painel de indicadores) -> %/mês pro campo
+  var cdiAnual=0;
+  try{
+    if(window._credREF && isFinite(window._credREF.cdi) && window._credREF.cdi>0) cdiAnual=Number(window._credREF.cdi);
+    else if(window._indicadoresAtuais && isFinite(window._indicadoresAtuais.cdi) && window._indicadoresAtuais.cdi>0) cdiAnual=Number(window._indicadoresAtuais.cdi);
+  }catch(e){}
+  var cdiMes = cdiAnual>0 ? (Math.pow(1+cdiAnual,1/12)-1)*100 : 1.07;   // fallback ~13,65%/ano
+  var cdiFonteNota = cdiAnual>0 ? 'CDI '+(cdiAnual*100).toFixed(2).replace('.',',')+'%/ano do painel de indicadores' : 'CDI padrão (~13,65%/ano) — confirme a Selic/CDI de hoje no painel';
   var inp=function(id,label,val,step){ return '<div style="flex:1;min-width:120px"><label style="display:block;font-size:11px;color:#64748b;font-weight:600;margin:0 0 3px">'+label+'</label><input id="'+id+'" type="number" value="'+val+'" step="'+(step||'1')+'" oninput="window._recalcOport&&window._recalcOport()" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px"></div>'; };
   var h='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin-top:20px">';
   h+='<div style="font-size:16px;font-weight:800;margin-bottom:3px">💡 Dívida & Oportunidade — spread vs plano de saúde</div>';
@@ -14859,7 +14893,7 @@ window._renderOportunidadeSpread = function(consol, latest){
   h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
   h+=inp('op_div','Dívida a trazer p/ operação (R$)',Math.round(divida),'1000000');
   h+=inp('op_taxa','Taxa atual (%/mês)',(taxa||0).toFixed(2),'0.01');
-  h+=inp('op_cdi','CDI (%/mês)','1.00','0.01');
+  h+=inp('op_cdi','CDI (%/mês)',cdiMes.toFixed(2),'0.01');
   h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
   h+=inp('op_mkt','Spread de mercado (%/mês)','0.50','0.05');
   h+=inp('op_vidas','Nº colaboradores',vidas,'1');
@@ -14869,7 +14903,7 @@ window._renderOportunidadeSpread = function(consol, latest){
   h+=inp('op_prazo','Prazo do plano (meses)','24','1');
   h+='</div>';
   h+='<div id="oportResult" style="margin-top:12px"></div>';
-  h+='<div style="font-size:11px;color:#94a3b8;margin-top:10px">Premissa: dívida rotativa (giro) — juro sobre o saldo cheio. O <b>corte é calculado sozinho</b>: spread atual (taxa − CDI) menos o spread de mercado. Confirme a taxa real, que a despesa financeira é juro de dívida (não desconto de duplicata/câmbio) e que o imposto é corrente.</div>';
+  h+='<div style="font-size:11px;color:#94a3b8;margin-top:10px">Premissa: dívida rotativa (giro) — juro sobre o saldo cheio. '+cdiFonteNota+'. O <b>corte é calculado sozinho</b>: spread atual (taxa − CDI) menos o spread de mercado. Confirme a taxa real, que a despesa financeira é juro de dívida (não desconto de duplicata/câmbio) e que o imposto é corrente.</div>';
   h+='</div>';
   return h;
 };
