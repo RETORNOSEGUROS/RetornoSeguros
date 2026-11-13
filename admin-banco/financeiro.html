@@ -15205,7 +15205,30 @@ window.renderNossaAnalise = function(latest, rows, data){
   // impostos sobre vendas: prefere as linhas individuais; se zeradas, usa "deduções" (total) — evita dupla contagem
   var impVenda=function(row){ row=row||{}; var ind=n(row.impostoICMS)+n(row.impostoISS)+n(row.impostoPIS)+n(row.impostoCOFINS)+n(row.impostoOutrosVendas); return ind>0?ind:n(row.deducoes); };
   // folha/pessoal: folhaAnual+encargos, senão proxy
-  var pessoal = function(row){ var p=g(row,'folha')+g(row,'encargos'); if(p>0) return p; return 0; };
+  // ---- cruzamento com o mercado (CAGED): salário médio do CNAE p/ estimar folha e nº de funcionários ----
+  var _ed=(data.empresaDoc)||(typeof window!=='undefined'&&window.CURRENT_ANALYSIS_DATA&&window.CURRENT_ANALYSIS_DATA.empresaDoc)||{};
+  var _R=_ed.dadosReceita||{};
+  var munEmp=(_R.endereco&&_R.endereco.municipio)||_ed.cidade||_ed.municipio||data.cidade||'';
+  var cnaeEmp=(_R.cnaePrincipal&&_R.cnaePrincipal.codigo)||_ed.cnaePrincipal||_ed.cnae||'';
+  var salCNAE=0, salFonte='';
+  try{
+    var _div2=String(cnaeEmp).replace(/\D/g,'').slice(0,2);
+    if(munEmp && typeof window!=='undefined'){
+      var _sv=null;
+      if(window.anoCnae && cnaeEmp) _sv=window.anoCnae(munEmp, cnaeEmp);           // [saldo,adm,des,salMed] média do ano
+      if((!_sv||!_sv[3]) && window.saldoSetor && _div2) _sv=window.saldoSetor(munEmp, _div2);
+      if(_sv && _sv[3]){ salCNAE=_sv[3]; salFonte='salário médio do CNAE em '+munEmp+' (CAGED/mercado)'; }
+    }
+  }catch(e){}
+  // nº de funcionários: da linha, senão o mapeado (funcionariosManual), senão o do cadastro
+  var funcEmp=0; try{ funcEmp=n(_ed.funcionariosManual)||n(_ed.funcionarios)||0; }catch(e){}
+  // nº de sócios: da linha, senão cadastro, senão o quadro societário da Receita (sócio PJ também conta)
+  var sociosEmp=0; try{ sociosEmp=n(_ed.qtdSocios)||n(A3.qtdSocios)||(Array.isArray(_R.socios)?_R.socios.length:0)||(Array.isArray(_R.quadroSocietario)?_R.quadroSocietario.length:0)||(Array.isArray(_R.qsa)?_R.qsa.length:0)||0; }catch(e){}
+  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; return 0; };
+  // folha/pessoal: informada; senão estimada = nº funcionários × salário médio do CNAE × 13 (13 salários) × 1,33 (encargos)
+  var pessoalEstim=false;
+  var pessoal = function(row){ var p=g(row,'folha')+g(row,'encargos'); if(p>0) return p;
+    var f=funcOf(row); if(f>0 && salCNAE>0){ pessoalEstim=true; return f*salCNAE*13*1.33; } return 0; };
   // EBITDA: campo, senão EBIT + depreciação
   var ebitda = function(row){ var e=g(row,'ebitda'); if(e>0) return e; return g(row,'ebit')+g(row,'deprec'); };
   var dividaTotal = function(row){ return g(row,'empCP')+g(row,'empLP')+g(row,'debent')+g(row,'parcelCP'); };
@@ -15299,7 +15322,11 @@ window.renderNossaAnalise = function(latest, rows, data){
     'Mult.EBITDA':{a:'Valor de mercado pelo método de múltiplo de EBITDA.',c:'Valor = EBITDA × múltiplo do setor − Dívida líquida.',f:'Referência de preço de mercado — base p/ negociar venda ou entrada de sócio.'},
     'VQLR':{a:'Valuation tradicional ajustado por tesouro oculto e passivos ocultos.',c:'Valor justo = Tradicional + Tesouro no giro − Passivos ocultos − Ativo fantasma.',f:'Antes de vender, limpar ativo fantasma e converter giro em caixa p/ elevar o múltiplo 25–50%.'},
     'VSFC':{a:'PL ajustado + fundo de comércio (lucro acima do CDI).',c:'Piso = (Ativo − Ativo fantasma − Passivo) + (Lucro − PL×CDI) × 3.',f:'É o piso mínimo justo de venda — não aceitar menos que o valor dos ativos reais.'},
-    'VSCE':{a:'Valor p/ um comprador estratégico (sinergia).',c:'EBITDA sinergia = EBITDA + 70% da Desp.Adm. Valor = × múltiplo − Dívida líquida.',f:'Num M&A, pedir uma fatia do lucro que a empresa gera dentro da estrutura do comprador (30–60% a mais).'}
+    'VSCE':{a:'Valor p/ um comprador estratégico (sinergia).',c:'EBITDA sinergia = EBITDA + 70% da Desp.Adm. Valor = × múltiplo − Dívida líquida.',f:'Num M&A, pedir uma fatia do lucro que a empresa gera dentro da estrutura do comprador (30–60% a mais).'},
+    'DCOM':{a:'Crescimento do Contas a Receber vs a PDD e a Receita em 3 anos.',c:'Excesso podre = max(0, Receber3 − Receber1×(Receita3/Receita1)). Índice = ÷ PDD3.',f:'Separar a carteira podre e abrir campanha de recuperação antes de prescrever; no Lucro Real, dar baixa oficial p/ abater 34% de IR.'},
+    'DMVQ':{a:'Margem, alíquota de IR e custo do dinheiro vs a carteira inadimplente.',c:'Custo do dinheiro 2a = 1 − 1/(1+CDI+6%)². Teto = min(60%, custo + benefício fiscal×50%).',f:'Feirão de quitação: autorizar a cobrança a dar até o teto calculado p/ quitação à vista via PIX em 15 dias — vira lixo contábil em caixa.'},
+    'IELI':{a:'Valor perdido com inadimplência ÷ a margem líquida.',c:'Venda nova p/ cobrir = Perda ÷ Margem líquida.',f:'Mudar a comissão: 50% no faturamento, 50% só após o cliente pagar. Criar trava de crédito.'},
+    'CORCL':{a:'Prazo de recebimento vs o padrão do setor × o custo financeiro.',c:'Custo anual do atraso = Excesso podre × (CDI + 6%).',f:'Automatizar régua preventiva (antes do vencimento), aplicar juros/multa de mora e avaliar seguro de crédito / FIDC.'}
   };
 
   // ===== FRENTE 1 — Sobrevivência e Tempo =====
@@ -15671,20 +15698,20 @@ window.renderNossaAnalise = function(latest, rows, data){
   // ===== FRENTE 13 — Turnover =====
   var F13='13. Turnover e Retenção';
   // turnover aprox = rescisões / funcionários
-  var turnover = g(A3,'func')>0? Math.min(1, g(A3,'rescisoes')/g(A3,'func')) : 0;
+  var turnover = funcOf(A3)>0? Math.min(1, g(A3,'rescisoes')/funcOf(A3)) : 0;
   // 43 ICOTV
   (function(){
-    if(g(A3,'func')<=0){ add(F13,'ICOTV','Custo Oculto do Turnover','—','na','Nº de funcionários não informado.'); return; }
-    var lbCab= g(A3,'lucroBruto')/g(A3,'func');
-    var perda=(g(A3,'func')*turnover)*(lbCab*0.25);
+    if(funcOf(A3)<=0){ add(F13,'ICOTV','Custo Oculto do Turnover','—','na','Nº de funcionários não informado.'); return; }
+    var lbCab= g(A3,'lucroBruto')/funcOf(A3);
+    var perda=(funcOf(A3)*turnover)*(lbCab*0.25);
     add(F13,'ICOTV','Custo Oculto do Turnover Voluntário', fmt(perda)+'/ano', perda>0?'atencao':'ok',
       'Com turnover ~'+pc(turnover)+' e lucro bruto por cabeça '+fmt(lbCab)+', a curva de reposição faz perder ~'+fmt(perda)+'/ano. Investir em retenção (benefícios/plano) sai mais barato que repor.');
   })();
   // 44 TFTS
   (function(){
-    if(g(A3,'func')<=0 || pessoal(A3)<=0){ add(F13,'TFTS','Fuga de Talentos por Sobrecarga','—','na','Precisa funcionários + folha.'); return; }
-    var prod3=g(A3,'lucroBruto')/g(A3,'func'), prod1=g(A1,'func')>0?g(A1,'lucroBruto')/g(A1,'func'):prod3;
-    var custo3=pessoal(A3)/g(A3,'func'), custo1=g(A1,'func')>0?pessoal(A1)/g(A1,'func'):custo3;
+    if(funcOf(A3)<=0 || pessoal(A3)<=0){ add(F13,'TFTS','Fuga de Talentos por Sobrecarga','—','na','Precisa funcionários + folha.'); return; }
+    var prod3=g(A3,'lucroBruto')/funcOf(A3), prod1=funcOf(A1)>0?g(A1,'lucroBruto')/funcOf(A1):prod3;
+    var custo3=pessoal(A3)/funcOf(A3), custo1=funcOf(A1)>0?pessoal(A1)/funcOf(A1):custo3;
     var subiuProd= prod1>0?(prod3-prod1)/prod1:0; var subiuCusto= custo1>0?(custo3-custo1)/custo1:0;
     var alerta=(subiuProd>inflacao3+0.15 && subiuCusto<=inflacao3);
     add(F13,'TFTS','Fuga de Talentos por Sobrecarga', 'prod/cabeça '+(subiuProd>=0?'+':'')+pc(subiuProd)+' · custo '+(subiuCusto>=0?'+':'')+pc(subiuCusto), alerta?'alerta':'ok',
@@ -15756,14 +15783,14 @@ window.renderNossaAnalise = function(latest, rows, data){
   })();
   // 52 PHAS
   (function(){
-    if(g(A3,'func')<=0){ add(F17,'PHAS','Produtividade Humana Ajustada','—','na','Nº de funcionários não informado.'); return; }
-    var rf3=g(A3,'receita')/g(A3,'func'), rf1=g(A1,'func')>0?g(A1,'receita')/g(A1,'func'):rf3;
+    if(funcOf(A3)<=0){ add(F17,'PHAS','Produtividade Humana Ajustada','—','na','Nº de funcionários não informado.'); return; }
+    var rf3=g(A3,'receita')/funcOf(A3), rf1=funcOf(A1)>0?g(A1,'receita')/funcOf(A1):rf3;
     add(F17,'PHAS','Produtividade Humana Ajustada ao Setor', fmt(rf3)+'/func', 'info',
       'Receita por funcionário '+fmt(rf1)+'→'+fmt(rf3)+'. Base p/ projetar quantos funcionários a meta do próximo ano exige sem perder margem.');
   })();
   // 53 IPS
   (function(){
-    var ns=g(A3,'socios'); if(ns<=0){ add(F17,'IPS','Peso Societário','—','na','Nº de sócios não informado.'); return; }
+    var ns=g(A3,'socios')||sociosEmp; if(ns<=0){ add(F17,'IPS','Peso Societário','—','na','Nº de sócios não informado (cadastre em "nº de sócios" — sócio PJ também conta).'); return; }
     var lpsm=(g(A3,'ll')/12)/ns;
     add(F17,'IPS','Peso Societário', fmt(lpsm)+'/sócio/mês', lpsm<15000?'atencao':'ok',
       g(A3,'socios')+' sócios dividem '+fmt(g(A3,'ll'))+'/ano = '+fmt(lpsm)+'/sócio/mês. '+(lpsm<15000?'Lucro pequeno p/ tantos sócios — risco de conflito e sangria por retiradas.':'Lucro comporta o quadro societário.'));
@@ -15775,9 +15802,9 @@ window.renderNossaAnalise = function(latest, rows, data){
   (function(){
     var amort=g(A3,'parcelCP'); // só amortização agendada (giro rotativo rola, não é saída real)
     var folga=ebitda(A3)-abs(g(A3,'ircs'))-abs(g(A3,'despFin'))-amort;
-    var orc=Math.max(0,folga*0.15); var teto= g(A3,'func')>0? (orc/12)/g(A3,'func'):0;
-    add(FS,'OSBC','Orçamento Seguro p/ Benefícios', fmt(orc)+'/ano'+(g(A3,'func')>0?' ('+fmt(teto)+'/colab/mês)':''), 'ok',
-      'Folga de caixa '+fmt(folga)+' → orçamento máximo p/ plano de saúde/benefícios = <b>'+fmt(orc)+'/ano</b>'+(g(A3,'func')>0?' (~'+fmt(teto)+' por colaborador/mês)':'')+' sem ferir a liquidez.');
+    var orc=Math.max(0,folga*0.15); var teto= funcOf(A3)>0? (orc/12)/funcOf(A3):0;
+    add(FS,'OSBC','Orçamento Seguro p/ Benefícios', fmt(orc)+'/ano'+(funcOf(A3)>0?' ('+fmt(teto)+'/colab/mês)':''), 'ok',
+      'Folga de caixa '+fmt(folga)+' → orçamento máximo p/ plano de saúde/benefícios = <b>'+fmt(orc)+'/ano</b>'+(funcOf(A3)>0?' (~'+fmt(teto)+' por colaborador/mês)':'')+' sem ferir a liquidez.');
   })();
   // 56 CMSP
   (function(){
@@ -15795,8 +15822,8 @@ window.renderNossaAnalise = function(latest, rows, data){
   })();
   // 58 EPML
   (function(){
-    if(pessoal(A3)<=0||g(A3,'func')<=0){ add(FS,'EPML','Exposição a Passivo de Morte/Invalidez','—','na','Precisa folha + funcionários.'); return; }
-    var sm=(pessoal(A3)/12)/g(A3,'func'); var risco=250000+(sm*13*30);
+    if(pessoal(A3)<=0||funcOf(A3)<=0){ add(FS,'EPML','Exposição a Passivo de Morte/Invalidez','—','na','Precisa folha + funcionários.'); return; }
+    var sm=(pessoal(A3)/12)/funcOf(A3); var risco=250000+(sm*13*30);
     var imp= g(A3,'caixa')>0? risco/g(A3,'caixa'):9;
     add(FS,'EPML','Exposição a Passivo de Morte/Invalidez', fmt(risco)+'/acidente', imp>0.5?'alerta':'atencao',
       'Um acidente fatal com culpa ≈ '+fmt(risco)+' (dano moral + pensão) = '+pc(imp)+' do caixa. '+(imp>0.5?'Sem Seguro de Vida em Grupo + RC Empregador, um caso consome o caixa. O seguro custa centavos/dia por funcionário.':'Risco relevante — vale o seguro de vida em grupo.'));
@@ -15839,6 +15866,41 @@ window.renderNossaAnalise = function(latest, rows, data){
     var v=(ebS*multiplo)-dividaLiq(A3);
     add(FV,'VSCE','Valuation p/ Comprador Estratégico', fmt(v), 'info',
       'Nas mãos de um comprador maior (−70% da despesa adm): EBITDA sobe p/ '+fmt(ebS)+' → valuation estratégico <b>'+fmt(v)+'</b>. É o que pedir num M&A — 30% a 60% acima do stand-alone.');
+  })();
+
+  // ===== FRENTE 18 — Inteligência de Inadimplência e Recuperação de Crédito (74-77) =====
+  var F18='18. Inadimplência e Recuperação de Crédito';
+  var regime=String(A3.regimeTributario||_ed.regimeTributario||data.regimeTributario||'').toLowerCase();
+  var ehReal=regime.indexOf('real')>=0;
+  var excessoPodre=0;
+  (function(){ // 74 DCOM
+    var cr3=g(A3,'cr'), cr1=g(A1,'cr'), rec3=g(A3,'receita'), rec1=g(A1,'receita'), pdd3=abs(g(A3,'pdd'));
+    if(cr3<=0 || rec1<=0){ add(F18,'DCOM','Calote Oculto / Maquiagem de Recebíveis','—','na','Falta: Contas a Receber e Receita dos 3 anos (preencher o balanço).'); return; }
+    excessoPodre=Math.max(0, cr3 - (cr1*(rec3/rec1)));
+    var pddAcomp=pdd3>=abs(g(A1,'pdd'))*1.2;
+    add(F18,'DCOM','Calote Oculto / Maquiagem de Recebíveis', fmt(excessoPodre)+' de recebível podre', (excessoPodre>0&&!pddAcomp)?'critico':(excessoPodre>0?'alerta':'ok'),
+      excessoPodre>0?('Contas a Receber cresceu mais que a receita e a PDD ('+fmt(pdd3)+') não acompanhou — ~'+fmt(excessoPodre)+' de recebível "zumbi" no balanço inflando a liquidez aparente.'):'Contas a Receber acompanha a receita — sem recebível podre acumulado.');
+  })();
+  (function(){ // 75 DMVQ
+    var carteira=abs(g(A3,'pdd'))+excessoPodre;
+    var custoDin=1-(1/Math.pow(1+cdiAnual+0.06,2));
+    var teto=Math.min(0.60, custoDin + (ehReal?0.34:0)*0.50);
+    add(F18,'DMVQ','Desconto Máximo Viável p/ Quitação', 'até '+pc(teto)+' de desconto', 'info',
+      'Carteira inadimplente estimada ~'+fmt(carteira)+'. A cobrança pode dar até <b>'+pc(teto)+'</b> de desconto à vista e a empresa ainda ganha vs esperar/pegar empréstimo'+(ehReal?' (Lucro Real: a perda abate 34% de IR)':' (Presumido/Simples: sem abatimento fiscal da perda)')+'.');
+  })();
+  (function(){ // 76 IELI
+    var ml=g(A3,'receita')>0?g(A3,'ll')/g(A3,'receita'):0;
+    var perda=excessoPodre>0?excessoPodre:abs(g(A3,'pdd'));
+    if(perda<=0){ add(F18,'IELI','Erosão de Lucro por Inadimplência','sem perda detectada','ok','Sem inadimplência relevante detectada no balanço.'); return; }
+    if(ml<=0){ add(F18,'IELI','Erosão de Lucro por Inadimplência','margem ≤ 0','atencao','Margem líquida não positiva — qualquer calote pesa muito; cada '+fmt(perda)+' perdido exige recuperação imediata.'); return; }
+    var vn=perda/ml;
+    add(F18,'IELI','Erosão de Lucro por Inadimplência', fmt(vn)+' de venda p/ cobrir', 'alerta',
+      'Com margem líquida de '+pc(ml)+', cada '+fmt(perda)+' de calote exige <b>'+fmt(vn)+'</b> de venda nova só p/ empatar. Justifica trava de crédito e comissão só na liquidação.');
+  })();
+  (function(){ // 77 CORCL
+    var custoAtraso=excessoPodre*(cdiAnual+0.06);
+    add(F18,'CORCL','Custo da Régua de Cobrança Lenta', fmt(custoAtraso)+'/ano', custoAtraso>0?'atencao':'ok',
+      custoAtraso>0?('O recebível em atraso/podre ('+fmt(excessoPodre)+') custa ~<b>'+fmt(custoAtraso)+'/ano</b> de juro p/ o caixa financiar o atraso do cliente. Régua preventiva + juros de mora + antecipação devolvem isso ao lucro.'):'Prazo de recebimento sob controle — sem custo de atraso relevante.');
   })();
 
   // ===== CENÁRIOS 66–73 — Testes de estresse (What-If) =====
@@ -15897,11 +15959,11 @@ window.renderNossaAnalise = function(latest, rows, data){
   })();
   // 71 dissídio
   (function(){
-    var reaj=0.08; var extra=pessoal(A3)*reaj; var meta= (g(A3,'func')>0 && mcPct>0)? (extra/mcPct)/g(A3,'func') : 0;
+    var reaj=0.08; var extra=pessoal(A3)*reaj; var meta= (funcOf(A3)>0 && mcPct>0)? (extra/mcPct)/funcOf(A3) : 0;
     stress.push({s:'71', nome:'Dissídio / Aumento de Folha (+8%)', status:extra>g(A3,'ebit')*0.2?'alerta':'atencao',
       base:pessoal(A3)>0?('Folha+encargos de '+fmt(pessoal(A3))+'.'):'Folha não informada — estimativa limitada.',
       linhas:[['Custo extra da folha','<b>+'+fmt(extra)+'/ano</b> no EBITDA'],
-              ['Pra neutralizar sem demitir', g(A3,'func')>0?('cada funcionário precisa gerar <b>+'+fmt(meta)+'</b> de venda/ano'):'informe nº de funcionários']]});
+              ['Pra neutralizar sem demitir', funcOf(A3)>0?('cada funcionário precisa gerar <b>+'+fmt(meta)+'</b> de venda/ano'):'informe nº de funcionários']]});
   })();
   // 72 tempestade perfeita
   var classe72='';
@@ -15957,6 +16019,11 @@ window.renderNossaAnalise = function(latest, rows, data){
   if(has('TSIE','SCPD','IDRCC')) addU(curto,'👥 Corte planejado pelo payback (SCPD): nunca demitir se a rescisão consumir >50% do caixa; fatiar em 3–4 meses, começando só pelo administrativo.');
   if(has('TFTS','ICOTV')) addU(curto,'🎁 Trocar aumento por benefícios inteligentes (CESB): plano de saúde + PAT + PLR por metas — abate IRPJ/CSLL, reduz turnover e protege o lucro do dissídio.');
   if(has('CMSP','EPML')) addU(agora,'🛡️ Blindagem: contratar Seguro Empresarial + Lucros Cessantes (valor de reposição + 6–12 meses de fixo) e Seguro de Vida em Grupo + RC Empregador (custo baixo que evita condenação de R$1 mi zerar o caixa).');
+  if(has('DCOM','IELI','CORCL')){
+    addU(agora,'📞 Feirão de quitação (DMVQ): autorizar a cobrança a dar até o desconto-teto calculado p/ quitar à vista via PIX os títulos vencidos >90 dias em 15 dias — vira lixo contábil em caixa.');
+    addU(curto,'🔒 Régua preventiva + bloqueio (CORCL): avisar 3 dias antes do vencimento e bloquear pedido novo com 5 dias de atraso. Comissão do vendedor 50% só após o cliente pagar (IELI).');
+    if(ehReal) addU(medio,'🧾 Limpeza contábil (DCOM): no Lucro Real, dar baixa oficial dos créditos incobráveis p/ abater 34% de IRPJ/CSLL no trimestre seguinte.');
+  }
   // sempre: destravar valuation
   addU(medio,'💎 Destravar valuation: limpar ativos fantasmas, formalizar processos p/ reduzir a dependência do dono e converter giro em caixa — eleva o múltiplo justo em 25–50%.');
   if(!agora.length) addU(agora,'✅ Sem ações de choque urgentes. Foco em eficiência (preço, giro, despesas) e em aproveitar a folga p/ benefícios/alavancagem produtiva.');
@@ -15980,7 +16047,7 @@ window.renderNossaAnalise = function(latest, rows, data){
   if(crit.length||alrt.length){ H+='<div style="font-size:12px;color:#fecaca;margin-top:10px">Prioridades: '+crit.concat(alrt).slice(0,6).map(function(a){return '<b>'+a.sigla+'</b>';}).join(' · ')+'</div>'; }
   H+='</div>';
 
-  var ordem=[F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12,F13,F14,F15,F16,F17,FS,FV];
+  var ordem=[F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12,F13,F14,F15,F16,F17,F18,FS,FV];
   ordem.forEach(function(fr){
     var itens=resultados[fr]; if(!itens||!itens.length) return;
     H+='<div style="margin-bottom:16px">';
@@ -15995,9 +16062,13 @@ window.renderNossaAnalise = function(latest, rows, data){
       var m=META[it.sigla]||{};
       var sec=function(lbl,txt,cor,bg){ return '<div style="font-size:11.5px;line-height:1.5;margin-top:5px'+(bg?';background:'+bg+';border-radius:7px;padding:6px 9px':'')+'"><b style="color:'+(cor||'#334155')+'">'+lbl+'</b> <span style="color:#475569">'+txt+'</span></div>'; };
       if(m.a) H+=sec('O que analisa:', m.a, '#64748b');
-      H+=sec('🔎 Revela aqui:', it.diz, '#0f172a');
+      if(it.status==='na'){
+        H+=sec('⚠️ Falta para analisar:', it.diz, '#92400e', '#fffbeb');
+      } else {
+        H+=sec('🔎 Revela aqui:', it.diz, '#0f172a');
+      }
       if(m.c) H+=sec('Como calcula:', m.c, '#64748b');
-      if(m.f) H+=sec('✅ O que fazer:', m.f, '#166534', '#f0fdf4');
+      if(m.f && it.status!=='na') H+=sec('✅ O que fazer:', m.f, '#166534', '#f0fdf4');
       H+='</div>';
     });
     H+='</div>';
@@ -16026,6 +16097,8 @@ window.renderNossaAnalise = function(latest, rows, data){
     H+='</div>';
   });
   H+='</div>';
+  if(pessoalEstim && salCNAE>0) H+='<div style="font-size:11.5px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 11px;margin-top:10px;line-height:1.55">🔗 <b>Cruzamento com o mercado:</b> a folha não estava informada, então foi <b>estimada</b> por nº de colaboradores × '+salFonte+' (R$ '+Math.round(salCNAE).toLocaleString('pt-BR')+') × 13 × 1,33 de encargos. É aproximação — informe a folha real p/ cravar os indicadores de equipe.</div>';
+  else if(salCNAE>0) H+='<div style="font-size:11px;color:#64748b;margin-top:8px">🔗 Mercado: '+salFonte+' = R$ '+Math.round(salCNAE).toLocaleString('pt-BR')+' (referência p/ a folha).</div>';
   H+='<div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6">Parâmetros: CDI '+pc(cdiAnual)+'/ano (painel de indicadores), inflação 3 anos ~'+pc(inflacao3)+' e múltiplo de EBITDA '+multiplo+'x são referências ajustáveis. Indicadores marcados "sem dado" precisam de campos ainda não preenchidos (nº de sócios, funcionários, folha, crescimento do setor). Tudo é estimativa sobre o balanço — confirme no detalhe antes de decisões.</div>';
   return H;
 };
