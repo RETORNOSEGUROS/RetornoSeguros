@@ -3328,6 +3328,10 @@
             <span class="tab-icon">🔬</span>
             <span>Nossa Análise</span>
           </button>
+          <button class="tab-btn" data-tab="perfil">
+            <span class="tab-icon">🏢</span>
+            <span>Perfil &amp; Notícias</span>
+          </button>
           <button class="tab-btn" data-tab="plano">
             <span class="tab-icon">📋</span>
             <span>Plano de Ação</span>
@@ -3479,6 +3483,15 @@
           <div id="nossaAnaliseContent">
             <div style="text-align:center; padding:40px; color:var(--text-muted)">
               Carregando Nossa Análise...
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA: Perfil & Notícias -->
+        <div class="tab-content" id="tab-perfil">
+          <div id="perfilEmpresaContent">
+            <div style="text-align:center; padding:40px; color:var(--text-muted)">
+              Carregando Perfil & Notícias...
             </div>
           </div>
         </div>
@@ -4983,6 +4996,13 @@ function wireUi(){
             _na.innerHTML = window.renderNossaAnalise(
               (CURRENT_ANALYSIS_DATA.rows||[])[0] || {}, CURRENT_ANALYSIS_DATA.rows || [], CURRENT_ANALYSIS_DATA);
         }catch(eNa){ console.warn('[nossaanalise]', eNa); var _na2=document.getElementById('nossaAnaliseContent'); if(_na2) _na2.innerHTML='<div style="padding:30px;color:#b91c1c">Erro ao montar Nossa Análise: '+(eNa&&eNa.message||eNa)+'</div>'; }
+      } else if(tabId === "perfil" && CURRENT_ANALYSIS_DATA){
+        try{
+          var _pf = document.getElementById('perfilEmpresaContent');
+          if(_pf && typeof window.renderPerfilEmpresa === 'function')
+            _pf.innerHTML = window.renderPerfilEmpresa(
+              (CURRENT_ANALYSIS_DATA.rows||[])[0] || {}, CURRENT_ANALYSIS_DATA.rows || [], CURRENT_ANALYSIS_DATA);
+        }catch(ePf){ console.warn('[perfil]', ePf); var _pf2=document.getElementById('perfilEmpresaContent'); if(_pf2) _pf2.innerHTML='<div style="padding:30px;color:#b91c1c">Erro ao montar Perfil: '+(ePf&&ePf.message||ePf)+'</div>'; }
       } else if(tabId === "mercado" && CURRENT_ANALYSIS_DATA){
         try{
           var _mc = document.getElementById('mercadoContent');
@@ -15169,6 +15189,16 @@ window._renderOportunidadeSpread = function(consol, latest){
    window.renderNossaAnalise(latest, rows, data) -> HTML string
    rows[0] = ano mais recente (Ano 3), rows[1] = Ano 2, rows[2] = Ano 1
    =================================================================== */
+window._naFiltro = function(st){
+  var root=document.getElementById('nossaAnaliseContent'); if(!root) return;
+  var i,c,g,vis;
+  var btns=root.querySelectorAll('[data-nafilt]');
+  for(i=0;i<btns.length;i++){ var on=btns[i].getAttribute('data-nafilt')===st; btns[i].style.opacity=on?'1':'0.5'; btns[i].style.outline=on?'2px solid #0f172a':'none'; }
+  var cards=root.querySelectorAll('[data-st]');
+  for(i=0;i<cards.length;i++){ c=cards[i]; c.style.display=(st==='all'||c.getAttribute('data-st')===st)?'':'none'; }
+  var grupos=root.querySelectorAll('[data-frente]');
+  for(i=0;i<grupos.length;i++){ g=grupos[i]; vis=false; var cc=g.querySelectorAll('[data-st]'); for(var k=0;k<cc.length;k++){ if(cc[k].style.display!=='none'){ vis=true; break; } } g.style.display=vis?'':'none'; }
+};
 window.renderNossaAnalise = function(latest, rows, data){
   rows = rows || []; data = data || {};
   var A3 = rows[0]||{}, A2 = rows[1]||{}, A1 = rows[2]||rows[1]||rows[0]||{};
@@ -15224,7 +15254,7 @@ window.renderNossaAnalise = function(latest, rows, data){
   var funcEmp=0; try{ funcEmp=n(_ed.funcionariosManual)||n(_ed.funcionarios)||0; }catch(e){}
   // nº de sócios: da linha, senão cadastro, senão o quadro societário da Receita (sócio PJ também conta)
   var sociosEmp=0; try{ sociosEmp=n(_ed.qtdSocios)||n(A3.qtdSocios)||(Array.isArray(_R.socios)?_R.socios.length:0)||(Array.isArray(_R.quadroSocietario)?_R.quadroSocietario.length:0)||(Array.isArray(_R.qsa)?_R.qsa.length:0)||0; }catch(e){}
-  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; return 0; };
+  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; try{ var _pe=((data||{}).empresaDoc||{}).perfilEnriquecido||{}; var _pf=Number(_pe.funcionarios_estimado); if(_pf>0) return _pf; }catch(_e){} return 0; };
   // folha/pessoal: informada; senão estimada = nº funcionários × salário médio do CNAE × 13 (13 salários) × 1,33 (encargos)
   var pessoalEstim=false;
   var pessoal = function(row){ var p=g(row,'folha')+g(row,'encargos'); if(p>0) return p;
@@ -15605,11 +15635,16 @@ window.renderNossaAnalise = function(latest, rows, data){
   })();
   // 32 CESB
   (function(){
-    if(pessoal(A3)<=0 || IPRF1<=0){ add(F9,'CESB','Espaço Seguro p/ Benefícios e PLR','—','na','Precisa de folha informada.'); return; }
+    if(pessoal(A3)<=0 || IPRF1<=0){ add(F9,'CESB','Espaço Seguro p/ Benefícios e PLR','—','na','Precisa da folha (ou nº de colaboradores + CNAE/cidade p/ estimar pelo mercado) e de 2+ anos.'); return; }
     var iprfMed=(IPRF1+IPRF2)/2; var ganho=Math.max(0, g(A3,'lucroBruto')-(pessoal(A3)*iprfMed));
     var teto=Math.min(ganho*0.40, g(A3,'ebit')*0.15);
-    add(F9,'CESB','Espaço Seguro p/ Benefícios e PLR', fmt(Math.max(0,teto))+'/ano', 'ok',
-      'Ganho de produtividade da equipe = '+fmt(ganho)+'. Teto seguro p/ PLR/plano de saúde/benefícios = <b>'+fmt(Math.max(0,teto))+'/ano</b> (40% do ganho, travado a 15% do EBIT) — sem arriscar o caixa.');
+    if(ganho<=0){
+      add(F9,'CESB','Espaço Seguro p/ Benefícios e PLR', 'R$ 0 por produtividade', 'info',
+        'A produtividade da equipe NÃO cresceu vs a média dos 2 anos anteriores (lucro bruto por R$ de folha estável/menor), então por ESTA régua não há folga <b>extra</b> vinda de ganho de produtividade. Isso não quer dizer que não cabe benefício: veja o <b>OSBC</b> (orçamento pela folga de caixa) logo acima — essa é a régua de quanto cabe no total.'+(pessoalEstim?' <b>Obs.:</b> a folha está estimada pelo CNAE (igual nos 3 anos), o que neutraliza o ganho de produtividade — informe a folha real p/ este indicador fazer sentido.':''));
+    } else {
+      add(F9,'CESB','Espaço Seguro p/ Benefícios e PLR', fmt(teto)+'/ano', 'ok',
+        'Ganho de produtividade da equipe = '+fmt(ganho)+'. Teto seguro p/ PLR/plano de saúde/benefícios = <b>'+fmt(teto)+'/ano</b> (40% do ganho, travado a 15% do EBIT) — sem arriscar o caixa. (Veja também o OSBC, o orçamento total pela folga de caixa.)');
+    }
   })();
   // 33 TSIE
   (function(){
@@ -16048,13 +16083,21 @@ window.renderNossaAnalise = function(latest, rows, data){
   H+='</div>';
 
   var ordem=[F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12,F13,F14,F15,F16,F17,F18,FS,FV];
+  // ---- botões de filtro por status ----
+  var cnt={critico:0,alerta:0,atencao:0,ok:0,info:0,na:0};
+  ordem.forEach(function(fr){ (resultados[fr]||[]).forEach(function(it){ if(cnt[it.status]!=null) cnt[it.status]++; }); });
+  stress.forEach(function(st){ if(cnt[st.status]!=null) cnt[st.status]++; });
+  var filtros=[['all','Todos',''],['critico','🔴 Críticos',cnt.critico],['alerta','🟠 Alertas',cnt.alerta],['atencao','🟡 Atenção',cnt.atencao],['ok','🟢 Saudáveis',cnt.ok],['info','ℹ️ Informativos',cnt.info],['na','⚠️ Sem dado',cnt.na]];
+  H+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 16px;align-items:center"><span style="font-size:11px;color:#64748b;font-weight:600;margin-right:2px">Filtrar:</span>';
+  filtros.forEach(function(f){ H+='<button data-nafilt="'+f[0]+'" onclick="window._naFiltro(\''+f[0]+'\')" style="cursor:pointer;border:1px solid #cbd5e1;background:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;color:#334155'+(f[0]==='all'?';outline:2px solid #0f172a':'')+'">'+f[1]+(f[2]!==''?' ('+f[2]+')':'')+'</button>'; });
+  H+='</div>';
   ordem.forEach(function(fr){
     var itens=resultados[fr]; if(!itens||!itens.length) return;
-    H+='<div style="margin-bottom:16px">';
+    H+='<div data-frente="1" style="margin-bottom:16px">';
     H+='<div style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 8px;padding-bottom:5px;border-bottom:2px solid #e2e8f0">'+fr+'</div>';
     itens.forEach(function(it){
       var bar= it.status==='critico'?'#b91c1c':(it.status==='alerta'?'#ea580c':(it.status==='atencao'?'#ca8a04':(it.status==='ok'?'#16a34a':'#cbd5e1')));
-      H+='<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid '+bar+';border-radius:9px;padding:11px 14px;margin-bottom:7px">';
+      H+='<div data-st="'+it.status+'" style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid '+bar+';border-radius:9px;padding:11px 14px;margin-bottom:7px">';
       H+='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">';
       H+='<div style="font-weight:700;font-size:13.5px;color:#0f172a"><span style="color:#2563eb">'+it.sigla+'</span> · '+it.nome+'</div>';
       H+='<div style="display:flex;gap:8px;align-items:center"><b style="font-size:13px;color:'+bar+'">'+it.valor+'</b>'+chip(it.status)+'</div>';
@@ -16074,10 +16117,10 @@ window.renderNossaAnalise = function(latest, rows, data){
     H+='</div>';
   });
   // ---- Testes de estresse ----
-  H+='<div style="margin:22px 0 10px"><div style="font-size:17px;font-weight:800;color:#0f172a">🧪 Testes de Estresse (What-If)</div><div style="font-size:12.5px;color:#475569;margin-top:2px">O que acontece com a empresa em 8 cenários de choque — e o ponto exato onde ela vira.</div></div>';
+  H+='<div data-frente="1"><div style="margin:22px 0 10px"><div style="font-size:17px;font-weight:800;color:#0f172a">🧪 Testes de Estresse (What-If)</div><div style="font-size:12.5px;color:#475569;margin-top:2px">O que acontece com a empresa em 8 cenários de choque — e o ponto exato onde ela vira.</div></div>';
   stress.forEach(function(st){
     var bar= st.status==='critico'?'#b91c1c':(st.status==='alerta'?'#ea580c':(st.status==='ok'?'#16a34a':'#ca8a04'));
-    H+='<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid '+bar+';border-radius:9px;padding:12px 14px;margin-bottom:8px">';
+    H+='<div data-st="'+st.status+'" style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid '+bar+';border-radius:9px;padding:12px 14px;margin-bottom:8px">';
     H+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-weight:800;font-size:13.5px;color:#0f172a"><span style="color:#7c3aed">#'+st.s+'</span> · '+st.nome+'</div>'+chip(st.status)+'</div>';
     H+='<div style="font-size:11.5px;color:#64748b;margin:4px 0 7px;line-height:1.5">'+st.base+'</div>';
     st.linhas.forEach(function(l){ H+='<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid #f1f5f9;font-size:12px"><span style="color:#334155;font-weight:600;min-width:120px">'+l[0]+'</span><span style="color:#475569;text-align:right">'+l[1]+'</span></div>'; });
@@ -16085,6 +16128,7 @@ window.renderNossaAnalise = function(latest, rows, data){
     if(fStress[st.s]) H+='<div style="font-size:11.5px;line-height:1.5;margin-top:6px;background:#f0fdf4;border-radius:7px;padding:6px 9px"><b style="color:#166534">✅ O que fazer:</b> <span style="color:#475569">'+fStress[st.s]+'</span></div>';
     H+='</div>';
   });
+  H+='</div>';
   // ---- Plano de ação 3 horizontes ----
   H+='<div style="margin:22px 0 10px"><div style="font-size:17px;font-weight:800;color:#0f172a">🎯 Plano de Ação — 3 horizontes</div><div style="font-size:12.5px;color:#475569;margin-top:2px">O que fazer, em qual ordem, montado automaticamente a partir dos alertas acima.</div></div>';
   var hz=[['⚡ AGORA (0–30 dias) — choque e caixa','#fef2f2','#991b1b',agora],['🔧 CURTO PRAZO (30–90 dias) — reestruturação','#fff7ed','#9a3412',curto],['📈 MÉDIO PRAZO (90–360 dias) — escala e valor','#eff6ff','#1e40af',medio]];
@@ -16102,6 +16146,202 @@ window.renderNossaAnalise = function(latest, rows, data){
   H+='<div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6">Parâmetros: CDI '+pc(cdiAnual)+'/ano (painel de indicadores), inflação 3 anos ~'+pc(inflacao3)+' e múltiplo de EBITDA '+multiplo+'x são referências ajustáveis. Indicadores marcados "sem dado" precisam de campos ainda não preenchidos (nº de sócios, funcionários, folha, crescimento do setor). Tudo é estimativa sobre o balanço — confirme no detalhe antes de decisões.</div>';
   return H;
 };
+
+/* ===== ABA PERFIL & NOTÍCIAS ===== */
+/* ===================================================================
+   PERFIL & NOTÍCIAS — enriquecimento da empresa via prompt → JSON → grava
+   window.renderPerfilEmpresa(latest, rows, data) + helpers globais
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function R$(v){ var x=Number(v); return (isNaN(x)||!isFinite(x))?'—':'R$ '+Math.round(x).toLocaleString('pt-BR'); }
+  function _dados(){ try{ return window.CURRENT_ANALYSIS_DATA||{}; }catch(e){ return {}; } }
+  function _ed(){ var d=_dados(); return d.empresaDoc||{}; }
+  function _rec(){ return _ed().dadosReceita||{}; }
+  function _perfil(){ return _ed().perfilEnriquecido||{}; }
+  function _noticias(){ var n=_ed().noticias; return Array.isArray(n)?n:[]; }
+  function _socios(R){ var s=R.socios||R.quadroSocietario||R.qsa||[]; return Array.isArray(s)?s:[]; }
+  function _raiz(cnpj){ return String(cnpj||'').replace(/\D/g,'').slice(0,8); }
+
+  // ---------- PROMPTS ----------
+  function promptEnriquecimento(){
+    var R=_rec(), ed=_ed(), d=_dados();
+    var cnpj=R.cnpj||ed.cnpj||'', razao=R.razaoSocial||d.empresa||ed.nome||'';
+    var cnae=R.cnaePrincipal?((R.cnaePrincipal.codigo||'')+' — '+(R.cnaePrincipal.descricao||'')):'';
+    var cid=(R.endereco&&R.endereco.municipio)||ed.cidade||'', uf=(R.endereco&&R.endereco.uf)||'';
+    var soc=_socios(R).map(function(s){ return '    - '+(s.nome||s.razaoSocial||'')+(s.ehPJ?' (PJ)':'')+(s.qualificacao?' · '+s.qualificacao:''); }).join('\n');
+    var secund=(Array.isArray(R.cnaesSecundarios)?R.cnaesSecundarios:[]).map(function(c){ return (c.codigo||'')+' '+(c.descricao||''); }).slice(0,8).join('; ');
+    return (
+'Você é um pesquisador de inteligência empresarial com acesso à internet. Pesquise sobre a empresa abaixo e devolva APENAS um JSON válido (nada de texto antes ou depois), no formato especificado no fim.\n\n'+
+'EMPRESA (dados oficiais da Receita Federal):\n'+
+'- Razão social: '+razao+'\n'+
+'- CNPJ: '+cnpj+'  (raiz: '+_raiz(cnpj)+')\n'+
+'- CNAE principal: '+cnae+'\n'+
+(secund?'- CNAEs secundários: '+secund+'\n':'')+
+'- Cidade/UF: '+cid+'/'+uf+'\n'+
+'- Abertura: '+(R.aberturaEm||R.abertura||'')+'  · Capital social: '+R$(R.capitalSocial)+'  · Porte: '+(R.porte||'')+'\n'+
+'- Sócios na Receita:\n'+(soc||'    (não informados)')+'\n\n'+
+'TAREFA — pesquise na internet e preencha o máximo que conseguir:\n'+
+'1. Site oficial, LinkedIn e Instagram da empresa.\n'+
+'2. FILIAIS: procure outros estabelecimentos na mesma raiz de CNPJ ('+_raiz(cnpj)+') e as cidades/UF de cada.\n'+
+'3. HISTÓRIA: um resumo curto (3 a 5 linhas) da empresa, a partir do site e de fontes públicas.\n'+
+'4. PRODUTOS que a empresa VENDE e/ou PRODUZ.\n'+
+'5. NCMs prováveis das mercadorias que ela VENDE (código + descrição).\n'+
+'6. NCMs prováveis das mercadorias que ela COMPRA para produzir (se indústria) ou para revenda.\n'+
+'7. Para cada SÓCIO, em quais OUTRAS empresas ele é sócio (se encontrar).\n'+
+'8. Número aproximado de FUNCIONÁRIOS (se encontrar na internet).\n'+
+'9. CIDADES em que atua (com filiais ou com vendas).\n\n'+
+'FORMATO DE SAÍDA (devolva exatamente este JSON, preenchido):\n'+
+'{\n'+
+'  "site": "", "linkedin": "", "instagram": "",\n'+
+'  "historia": "",\n'+
+'  "produtos_vende": [], "produtos_produz": [],\n'+
+'  "ncm_vende": [ {"ncm":"", "descricao":""} ],\n'+
+'  "ncm_compra": [ {"ncm":"", "descricao":""} ],\n'+
+'  "filiais": [ {"cnpj":"", "cidade":"", "uf":""} ],\n'+
+'  "socios_outras_empresas": [ {"socio":"", "empresas":[]} ],\n'+
+'  "funcionarios_estimado": 0,\n'+
+'  "cidades_atuacao": []\n'+
+'}\n\n'+
+'REGRAS: devolva só o JSON. Campo não encontrado fica vazio ("" ou [] ou 0). NÃO invente dados; se não tiver fonte, deixe vazio.'
+    );
+  }
+  function promptNoticias(){
+    var R=_rec(), d=_dados();
+    var cnpj=R.cnpj||'', razao=R.razaoSocial||d.empresa||'';
+    var cid=(R.endereco&&R.endereco.municipio)||'', uf=(R.endereco&&R.endereco.uf)||'';
+    var jatem=_noticias().slice(0,10).map(function(n){ return '  - '+(n.data||'')+' · '+(n.titulo||''); }).join('\n');
+    return (
+'Você é um pesquisador com acesso à internet. Busque as NOTÍCIAS e POSTAGENS mais recentes sobre a empresa abaixo e devolva APENAS um JSON válido.\n\n'+
+'EMPRESA: '+razao+' · CNPJ '+cnpj+' · '+cid+'/'+uf+'\n\n'+
+(jatem?('Já tenho estas (NÃO repita, traga outras/mais novas):\n'+jatem+'\n\n'):'')+
+'TAREFA: traga até 10 notícias/postagens recentes (notícia de jornal, nota de associação, post em rede social, licitação, expansão, prêmio, processo relevante etc.), da mais nova para a mais antiga.\n\n'+
+'FORMATO (devolva só este JSON):\n'+
+'{ "noticias": [ {"data":"AAAA-MM-DD", "titulo":"", "fonte":"", "link":"", "resumo":""} ] }\n\n'+
+'REGRAS: só o JSON. Use datas reais (AAAA-MM-DD). Se não achar nada, devolva {"noticias":[]}. Não invente.'
+    );
+  }
+  window.promptPerfilEnriquecimento = promptEnriquecimento;
+  window.promptPerfilNoticias = promptNoticias;
+
+  // ---------- GRAVAR ----------
+  function _toast(msg, cor){ var el=document.getElementById('perfilStatus'); if(el){ el.textContent=msg; el.style.color=cor||'#15803d'; } }
+  function _salvarFirestore(patch, cb){
+    try{
+      var id=_dados().empresaId;
+      if(typeof db!=='undefined' && id){
+        db.collection('empresas').doc(id).set(patch,{merge:true}).then(function(){ cb&&cb(true); }).catch(function(e){ cb&&cb(false,e); });
+      } else { cb&&cb(false,new Error('sem banco/empresa')); }
+    }catch(e){ cb&&cb(false,e); }
+  }
+  window._perfilGravar = function(){
+    var ta=document.getElementById('perfilJson'); if(!ta){ return; }
+    var txt=(ta.value||'').trim(); if(!txt){ _toast('Cole o JSON primeiro.', '#b91c1c'); return; }
+    var obj; try{ obj=JSON.parse(txt); }catch(e){ _toast('JSON inválido: '+e.message, '#b91c1c'); return; }
+    var ed=_ed(); ed.perfilEnriquecido=obj; // memória
+    _toast('Gravando…', '#64748b');
+    _salvarFirestore({perfilEnriquecido:obj, perfilAtualizadoEm:new Date().toISOString().slice(0,10)}, function(ok,e){
+      _toast(ok?'✅ Perfil gravado.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
+      window._renderPerfilRefresh&&window._renderPerfilRefresh();
+    });
+  };
+  window._noticiasGravar = function(){
+    var ta=document.getElementById('noticiasJson'); if(!ta) return;
+    var txt=(ta.value||'').trim(); if(!txt){ _toast('Cole o JSON de notícias.', '#b91c1c'); return; }
+    var obj; try{ obj=JSON.parse(txt); }catch(e){ _toast('JSON inválido: '+e.message, '#b91c1c'); return; }
+    var novas=Array.isArray(obj)?obj:(Array.isArray(obj.noticias)?obj.noticias:[]);
+    var atual=_noticias().slice();
+    var vistos={}; atual.forEach(function(n){ vistos[(n.link||n.titulo||'').toLowerCase()]=1; });
+    novas.forEach(function(n){ var k=(n.link||n.titulo||'').toLowerCase(); if(k && !vistos[k]){ atual.push(n); vistos[k]=1; } });
+    atual.sort(function(a,b){ return String(b.data||'').localeCompare(String(a.data||'')); });
+    var ed=_ed(); ed.noticias=atual;
+    _toast('Gravando notícias…', '#64748b');
+    _salvarFirestore({noticias:atual, noticiasAtualizadoEm:new Date().toISOString().slice(0,10)}, function(ok,e){
+      _toast(ok?'✅ '+atual.length+' notícias gravadas.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
+      window._renderPerfilRefresh&&window._renderPerfilRefresh();
+    });
+  };
+  window._perfilCopiar = function(tipo){
+    var txt = tipo==='noticias'?promptNoticias():promptEnriquecimento();
+    try{ navigator.clipboard.writeText(txt).then(function(){ _toast('📋 Prompt copiado — cole numa IA com acesso à internet.', '#15803d'); }); }
+    catch(e){ var ta=document.getElementById('perfilPromptArea'); if(ta){ ta.value=txt; ta.select(); } _toast('Selecione e copie o prompt na caixa.', '#b45309'); }
+  };
+  window._renderPerfilRefresh = function(){ var el=document.getElementById('perfilEmpresaContent'); if(el) el.innerHTML=window.renderPerfilEmpresa((_dados().rows||[])[0]||{}, _dados().rows||[], _dados()); };
+
+  // ---------- RENDER ----------
+  window.renderPerfilEmpresa = function(latest, rows, data){
+    data=data||_dados();
+    var R=_rec(), P=_perfil(), N=_noticias();
+    var razao=R.razaoSocial||data.empresa||'empresa';
+    var temReceita = !!(R.cnpj||R.razaoSocial);
+    var H='';
+    H+='<div style="background:linear-gradient(135deg,#0f172a,#334155);color:#fff;border-radius:12px;padding:18px 22px;margin-bottom:16px">';
+    H+='<div style="font-size:21px;font-weight:800">🏢 Perfil & Notícias — '+esc(razao)+'</div>';
+    H+='<div style="font-size:12.5px;color:#cbd5e1;margin-top:3px">Gera um prompt com os dados da Receita → você cola numa IA com internet → ela devolve um JSON → você cola aqui e o sistema grava. Tudo fica salvo e alimenta as análises.</div>';
+    H+='</div>';
+    if(!temReceita){
+      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e">⚠️ Primeiro busque o CNPJ na Receita (etapa Cadastro) — o prompt usa esses dados. Depois volte aqui.</div>';
+      return H;
+    }
+    H+='<div id="perfilStatus" style="font-size:12.5px;font-weight:600;min-height:18px;margin-bottom:8px"></div>';
+
+    // ETAPA A — prompt enriquecimento
+    H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">1️⃣ Gerar prompt de enriquecimento</div>';
+    H+='<div style="font-size:12px;color:#64748b;margin-bottom:9px">Pega os dados da Receita e monta o pedido: site/redes, filiais, história, produtos, NCMs (vende e compra), sócios em outras empresas, nº de funcionários e cidades de atuação.</div>';
+    H+='<button onclick="window._perfilCopiar()" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700">📋 Copiar prompt de enriquecimento</button>';
+    H+='<textarea id="perfilPromptArea" readonly style="width:100%;height:90px;margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:11px;color:#475569;background:#f8fafc">'+esc(promptEnriquecimento())+'</textarea>';
+    H+='</div>';
+
+    // ETAPA B — colar JSON
+    H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">2️⃣ Colar o JSON que a IA devolveu</div>';
+    H+='<textarea id="perfilJson" placeholder=\'{ "site":"...", "historia":"...", "produtos_vende":[...], ... }\' style="width:100%;height:120px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
+    H+='<button onclick="window._perfilGravar()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;margin-top:8px">💾 Gravar perfil</button>';
+    H+='</div>';
+
+    // ETAPA C — perfil gravado
+    if(Object.keys(P).length){
+      var linha=function(lbl,val){ if(val==null||val===''||(Array.isArray(val)&&!val.length)) return ''; var v=Array.isArray(val)?val.map(function(x){ return typeof x==='object'?esc(JSON.stringify(x)):esc(x); }).join(' · '):esc(val); return '<div style="display:flex;gap:10px;padding:5px 0;border-top:1px solid #f1f5f9;font-size:12.5px"><span style="min-width:150px;color:#64748b;font-weight:600">'+lbl+'</span><span style="color:#334155">'+v+'</span></div>'; };
+      H+='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+      H+='<div style="font-weight:800;font-size:15px;color:#166534;margin-bottom:6px">✅ Perfil gravado'+(_ed().perfilAtualizadoEm?' <span style="font-size:11px;font-weight:400;color:#15803d">(atualizado em '+esc(_ed().perfilAtualizadoEm)+')</span>':'')+'</div>';
+      H+=linha('Site', P.site)+linha('LinkedIn', P.linkedin)+linha('Instagram', P.instagram);
+      if(P.historia) H+='<div style="padding:7px 0;border-top:1px solid #dcfce7;font-size:12.5px;color:#334155"><b style="color:#166534">História:</b> '+esc(P.historia)+'</div>';
+      H+=linha('Produtos que vende', P.produtos_vende)+linha('Produtos que produz', P.produtos_produz);
+      if(Array.isArray(P.ncm_vende)&&P.ncm_vende.length) H+=linha('NCM que vende', P.ncm_vende.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
+      if(Array.isArray(P.ncm_compra)&&P.ncm_compra.length) H+=linha('NCM que compra', P.ncm_compra.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
+      if(Array.isArray(P.filiais)&&P.filiais.length) H+=linha('Filiais', P.filiais.map(function(f){ return (f.cidade||'')+(f.uf?'/'+f.uf:'')+(f.cnpj?' ('+f.cnpj+')':''); }));
+      if(Array.isArray(P.socios_outras_empresas)&&P.socios_outras_empresas.length) H+=linha('Sócios em outras empresas', P.socios_outras_empresas.map(function(s){ return (s.socio||'')+': '+((s.empresas||[]).join(', ')); }));
+      H+=linha('Funcionários (estimado)', P.funcionarios_estimado?P.funcionarios_estimado:'')+linha('Cidades de atuação', P.cidades_atuacao);
+      H+='</div>';
+    }
+
+    // ETAPA D — notícias
+    H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">📰 Últimas notícias</div>';
+    H+='<div style="font-size:12px;color:#64748b;margin-bottom:9px">Gere o prompt, cole numa IA com internet, e cole o JSON de volta. Novas notícias são somadas às existentes (sem repetir).</div>';
+    H+='<button onclick="window._perfilCopiar(\'noticias\')" style="cursor:pointer;background:#7c3aed;color:#fff;border:none;border-radius:9px;padding:8px 15px;font-size:13px;font-weight:700">📋 Copiar prompt de notícias</button>';
+    H+='<textarea id="noticiasJson" placeholder=\'{ "noticias":[ {"data":"2026-11-01","titulo":"...","fonte":"...","link":"...","resumo":"..."} ] }\' style="width:100%;height:90px;margin-top:9px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
+    H+='<button onclick="window._noticiasGravar()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:8px 15px;font-size:13px;font-weight:700;margin-top:8px">💾 Gravar/atualizar notícias</button>';
+    if(N.length){
+      H+='<div style="margin-top:12px">';
+      N.slice(0,20).forEach(function(n){
+        H+='<div style="border-top:1px solid #f1f5f9;padding:8px 0">';
+        H+='<div style="font-size:13px;font-weight:700;color:#0f172a">'+(n.link?'<a href="'+esc(n.link)+'" target="_blank" style="color:#2563eb;text-decoration:none">'+esc(n.titulo||'(sem título)')+'</a>':esc(n.titulo||'(sem título)'))+'</div>';
+        H+='<div style="font-size:11px;color:#94a3b8">'+esc(n.data||'')+(n.fonte?' · '+esc(n.fonte):'')+'</div>';
+        if(n.resumo) H+='<div style="font-size:12px;color:#475569;margin-top:2px">'+esc(n.resumo)+'</div>';
+        H+='</div>';
+      });
+      H+='</div>';
+    } else {
+      H+='<div style="font-size:12px;color:#94a3b8;margin-top:10px">Nenhuma notícia gravada ainda.</div>';
+    }
+    H+='</div>';
+    return H;
+  };
+})();
+
 
 function gerarCronogramaHtml(operacoes) {
   const hoje = new Date();
@@ -23407,7 +23647,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
 
   /* ---------- agrupamento das abas ---------- */
   var GRUPOS = [
-    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','olhares','mercado','parecer','contexto','informacoes','glossario'] },
+    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','olhares','mercado','perfil','parecer','contexto','informacoes','glossario'] },
     { rotulo:'Seguros',    abas:['seguros','socios','garantia'] },
     { rotulo:'Crédito',    abas:['capacidade','dividas','nossaanalise','defesa','recuperacao'] },
     { rotulo:'Ação',       abas:['planejamento','plano','roteiro'] }
