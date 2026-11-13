@@ -16214,13 +16214,20 @@ window.renderNossaAnalise = function(latest, rows, data){
   function fmt(n){ return _int(n).toLocaleString('pt-BR'); }
   function _arr(x){ return Array.isArray(x)?x:[]; }
 
-  /* folha: DRE (folhaAnual+encargos); senão o 'Salários e encargos a pagar' do balanço */
+  /* folha: 1º a folha ANUAL da DRE (despesa com pessoal, já com 13º e férias);
+     só se faltar, o 'Salários e encargos a pagar' do balanço — que é PASSIVO
+     (provisão de fim de ano), ~1/4 da folha anual, calibrado por empresa conhecida */
+  /* fator calibrado por empresas conhecidas (passivo ÷ (salCNAE × fator) = nº func.):
+     Erechim 1.516 func / passivo 14.659.000 / salCNAE 2.487 -> 3,89
+     Marau   238 func   / passivo  2.000.084 / salCNAE 1.861 -> 4,52
+     média ~4,2 (deixa os dois dentro de ~8%). Ajustar com mais âncoras. */
+  var PASSIVO_FATOR = 4.2;
   function folhaDe(row){ row=row||{};
-    var dre=_n(row.folhaAnual)+_n(row.encargosFolha);
-    if(dre>0) return {val:dre, fonte:'folha anual da DRE', provisao:false};
+    var fol=_n(row.folhaAnual), enc=_n(row.encargosFolha);
+    if(fol>0) return {val:fol+enc, base:'dre', temEnc:enc>0, fonte:'folha anual da DRE', provisao:false};
     var bal=_n(row.salariosPagar);
-    if(bal>0) return {val:bal, fonte:'“Salários e encargos a pagar” do balanço', provisao:true};
-    return {val:0, fonte:'', provisao:false};
+    if(bal>0) return {val:bal, base:'passivo', temEnc:false, fonte:'“Salários e encargos a pagar” (passivo)', provisao:true};
+    return {val:0, base:'', temEnc:false, fonte:'', provisao:false};
   }
 
   /* faixa LinkedIn/web — parseia número ou intervalo "501-1.000" */
@@ -16270,18 +16277,31 @@ window.renderNossaAnalise = function(latest, rows, data){
     data=data||_dados();
     var ed=_ed(), rows=(data.rows||[]), r0=rows[0]||{};
     var ci=cagedInfo(), web=faixaWeb(), fo=folhaDe(r0), nCid=cidadesUnidades();
-    var estFolha=(fo.val>0 && ci.sal>0)?Math.round(fo.val/(ci.sal*13*1.33)):0;
+    var estFolha=0, estFormula='';
+    if(fo.val>0 && ci.sal>0){
+      if(fo.base==='dre'){ var den=ci.sal*13.33*(fo.temEnc?1.33:1); estFolha=Math.round(fo.val/den); estFormula='R$ '+fmt(fo.val)+' ÷ (R$ '+fmt(ci.sal)+' × 13,33'+(fo.temEnc?' × 1,33 encargos':'')+')'; }
+      else { estFolha=Math.round(fo.val/(ci.sal*PASSIVO_FATOR)); estFormula='R$ '+fmt(fo.val)+' (passivo) ÷ (R$ '+fmt(ci.sal)+' × '+String(PASSIVO_FATOR).replace('.',',')+' — fator calibrado)'; }
+    }
 
     var manual=_int(ed.funcionariosManual), bal=_int(r0.funcionarios||ed.funcionarios), aprox=_int(ed.funcionariosAproximado);
     var divFolhaWeb=(estFolha&&web)?diverge(estFolha,web.mid):0;
+
+    // estoque do CNAE como candidato: FORTE quando é a única da cidade; provável dominante quando bate com folha/LinkedIn
+    var estoqueVal=ci.estoqueAtual||ci.estoque, estoqueCand=null;
+    if(estoqueVal>0 && nCid<=1){
+      if(ci.players===1) estoqueCand={val:estoqueVal, forte:true};
+      else if(ci.players>1 && ((estFolha>0 && diverge(estoqueVal,estFolha)<0.4) || (web && diverge(estoqueVal,web.mid)<0.4))) estoqueCand={val:estoqueVal, forte:false};
+    }
 
     var usado=0, origem='', selo='';
     if(manual>0){ usado=manual; origem='Informado / Raio-X do cliente'; selo='#166534'; }
     else if(bal>0){ usado=bal; origem='Do balanço / cadastro'; selo='#166534'; }
     else if(aprox>0){ usado=aprox; origem='Estimado (gravado)'; selo='#b45309'; }
+    else if(estoqueCand && estoqueCand.forte){ usado=estoqueCand.val; origem='Estoque do CNAE — é a única na cidade'; selo='#166534'; }
     else if(estFolha>0 && web && divFolhaWeb>0.4){ usado=web.mid; origem='Faixa do LinkedIn (meio) — a folha diverge, confira'; selo='#b45309'; }
     else if(estFolha>0){ usado=estFolha; origem='Estimado pela folha agora'; selo='#b45309'; }
     else if(web){ usado=web.mid; origem='Faixa do LinkedIn (meio)'; selo='#b45309'; }
+    else if(estoqueCand){ usado=estoqueCand.val; origem='Estoque do CNAE (provável dominante)'; selo='#b45309'; }
 
     var H='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
     H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">👷 Funcionários — número aproximado</div>';
@@ -16299,11 +16319,11 @@ window.renderNossaAnalise = function(latest, rows, data){
     H+='<div style="margin:6px 0 10px">';
     H+=lin('Informado (Raio-X)', manual>0?fmt(manual):'—', manual>0?'número que você mapeou':'use o campo abaixo ou o Raio-X do cliente');
     H+=lin('Balanço / cadastro', bal>0?fmt(bal):'—', bal>0?'veio nos números':'não informado');
-    if(estFolha>0) H+=lin('Estimativa pela folha', fmt(estFolha), fo.fonte+' R$ '+fmt(fo.val)+' ÷ (R$ '+fmt(ci.sal)+' × 13 × 1,33)', '#2563eb');
+    if(estFolha>0) H+=lin('Estimativa pela folha', fmt(estFolha), fo.fonte+': '+estFormula, '#2563eb');
     else if(fo.val<=0) H+=lin('Estimativa pela folha', '—', 'sem folha (DRE) nem salários a pagar (balanço)', '#94a3b8');
     else if(ci.sal<=0) H+=lin('Estimativa pela folha', '—', 'sem salário médio CAGED p/ '+(ci.mun||'a cidade')+'/CNAE', '#94a3b8');
     H+=lin('Faixa LinkedIn / web', web?web.text:'—', web?'declarada na internet':'rode a Apresentação p/ trazer', web?'#0a66c2':'#94a3b8');
-    if(ci.estoque>0) H+=lin('Estoque do CNAE na cidade', fmt(ci.estoqueAtual||ci.estoque)+(ci.players>1?(' / '+ci.players+' players'):''), ci.players>1?('média '+fmt(ci.mediaEmp)+'/empresa — em '+esc(ci.mun)):(ci.players===1?'é a única nesse CNAE em '+esc(ci.mun):'empregos formais em '+esc(ci.mun)), '#0f766e');
+    if(ci.estoque>0) H+=lin('Estoque do CNAE na cidade', fmt(estoqueVal)+(ci.players>1?(' / '+ci.players+' players'):''), (ci.players===1?('✓ é a única nesse CNAE em '+esc(ci.mun)+' → praticamente todos dela'):(estoqueCand?('✓ bate com as outras fontes — provável dominante em '+esc(ci.mun)):(ci.players>1?('média '+fmt(ci.mediaEmp)+'/empresa — em '+esc(ci.mun)+' (soma dos players)'):('empregos formais em '+esc(ci.mun))))), '#0f766e');
     H+='</div>';
 
     // leitura cruzada
@@ -16311,13 +16331,16 @@ window.renderNossaAnalise = function(latest, rows, data){
     if(estFolha>0 && web){ msgs.push(divFolhaWeb>0.4?('a estimativa pela folha ('+fmt(estFolha)+') diverge bastante do LinkedIn ('+web.text+')'):('a folha ('+fmt(estFolha)+') está perto do LinkedIn ('+web.text+')')); }
     if(fo.provisao) msgs.push('a base de folha veio do PASSIVO (“salários a pagar”), que costuma ser a provisão de fim de ano, não a folha anual — por isso tende a subestimar');
     if(nCid>1) msgs.push('a empresa tem unidades em '+nCid+' cidades; o estoque do CAGED é só de '+esc(ci.mun||'a sede')+', enquanto o LinkedIn conta todas');
-    else if(ci.estoque>0 && estFolha>0){ var teto=ci.estoqueAtual||ci.estoque; if(ci.players<=1) msgs.push('é praticamente a única do CNAE na cidade — o estoque ('+fmt(teto)+') é quase todo dela'); else if(estFolha>teto) msgs.push('⚠️ a estimativa passou do estoque total da cidade ('+fmt(teto)+')'); }
+    else if(estoqueCand && estoqueCand.forte) msgs.push('é a única do CNAE em '+esc(ci.mun)+' — o estoque do CAGED ('+fmt(estoqueCand.val)+') é o melhor número aqui');
+    else if(estoqueCand) msgs.push('o estoque do CAGED ('+fmt(estoqueCand.val)+') bate com as outras fontes — a empresa deve ser a dominante do CNAE em '+esc(ci.mun));
+    else if(ci.estoque>0 && estFolha>0){ var teto=ci.estoqueAtual||ci.estoque; if(estFolha>teto) msgs.push('⚠️ a estimativa passou do estoque total da cidade ('+fmt(teto)+')'); }
     if(msgs.length) H+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;font-size:12px;color:#1e40af;margin-bottom:10px">🔗 Cruzamento: '+esc(msgs.join('; '))+'. Na dúvida, informe o número exato.</div>';
 
     // ações
     H+='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
     if(estFolha>0 && aprox!==estFolha && manual<=0) H+='<button onclick="window._funcUsarEstimativa('+estFolha+')" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">✓ Usar a folha ('+fmt(estFolha)+')</button>';
     if(web && aprox!==web.mid && manual<=0) H+='<button onclick="window._funcUsarEstimativa('+web.mid+')" style="cursor:pointer;background:#0a66c2;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">in Usar LinkedIn ('+fmt(web.mid)+')</button>';
+    if(estoqueCand && aprox!==estoqueCand.val && manual<=0) H+='<button onclick="window._funcUsarEstimativa('+estoqueCand.val+')" style="cursor:pointer;background:#0f766e;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">🏭 Usar estoque ('+fmt(estoqueCand.val)+')</button>';
     H+='<input id="funcManualInput" type="number" min="0" placeholder="informar nº exato" style="width:150px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
     H+='<button onclick="window._funcGravarManual()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">💾 Gravar nº informado</button>';
     H+='<span id="funcEstStatus" style="font-size:12px;font-weight:600"></span></div>';
