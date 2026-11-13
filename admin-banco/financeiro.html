@@ -15274,7 +15274,7 @@ window.renderNossaAnalise = function(latest, rows, data){
   var funcEmp=0; try{ funcEmp=n(_ed.funcionariosManual)||n(_ed.funcionarios)||0; }catch(e){}
   // nº de sócios: da linha, senão cadastro, senão o quadro societário da Receita (sócio PJ também conta)
   var sociosEmp=0; try{ sociosEmp=n(_ed.qtdSocios)||n(A3.qtdSocios)||(Array.isArray(_R.socios)?_R.socios.length:0)||(Array.isArray(_R.quadroSocietario)?_R.quadroSocietario.length:0)||(Array.isArray(_R.qsa)?_R.qsa.length:0)||0; }catch(e){}
-  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; try{ var _pe=((data||{}).empresaDoc||{}).perfilEnriquecido||{}; var _pf=Number(_pe.funcionarios_estimado); if(_pf>0) return _pf; }catch(_e){} return 0; };
+  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; try{ var _edd=((data||{}).empresaDoc||{}); var _pe=_edd.perfilEnriquecido||{}; var _pf=Number(_pe.funcionarios_estimado); if(_pf>0) return _pf; var _tt=Number(((_edd.apresentacao||{}).pessoas||{}).tamanhoTimeLinkedIn); if(_tt>0) return _tt; }catch(_e){} return 0; };
   // folha/pessoal: informada; senão estimada = nº funcionários × salário médio do CNAE × 13 (13 salários) × 1,33 (encargos)
   var pessoalEstim=false;
   var pessoal = function(row){ var p=g(row,'folha')+g(row,'encargos'); if(p>0) return p;
@@ -16167,9 +16167,9 @@ window.renderNossaAnalise = function(latest, rows, data){
   return H;
 };
 
-/* ===== ABA PERFIL (cadastro) + RAMO & CICLO ===== */
+/* ===== ABA PERFIL (lê Apresentação) + RAMO & CICLO ===== */
 /* ===================================================================
-   PERFIL (cadastro rico) + RAMO & CICLO (setor) — prompt → JSON → grava
+   PERFIL (lê a Apresentação dos etapas + complemento NCM) + RAMO & CICLO
    =================================================================== */
 (function(){
   'use strict';
@@ -16181,9 +16181,12 @@ window.renderNossaAnalise = function(latest, rows, data){
   function _rec(){ return _ed().dadosReceita||{}; }
   function _perfil(){ return _ed().perfilEnriquecido||{}; }
   function _setor(){ return _ed().perfilSetor||{}; }
+  function _apre(){ return _ed().apresentacao||null; }
+  function _links(){ return _ed().linksApresentacao||{}; }
   function _socios(R){ var s=R.socios||R.quadroSocietario||R.qsa||[]; return Array.isArray(s)?s:[]; }
   function _raiz(cnpj){ return String(cnpj||'').replace(/\D/g,'').slice(0,8); }
   function _num(v){ var x=Number(String(v==null?'':v).toString().replace(/[^\d.-]/g,'')); return isNaN(x)?0:x; }
+  function _arr(x){ return Array.isArray(x)?x:[]; }
 
   function _toast(id,msg,cor){ var el=document.getElementById(id); if(el){ el.textContent=msg; el.style.color=cor||'#15803d'; } }
   function _salvarFirestore(patch, cb){
@@ -16195,63 +16198,86 @@ window.renderNossaAnalise = function(latest, rows, data){
     }catch(e){ cb&&cb(false,e); }
   }
 
-  /* ============ PERFIL (cadastro rico) ============ */
-  function promptPerfil(){
-    var R=_rec(), d=_dados();
+  /* ---- normaliza a apresentação num objeto fácil de exibir ---- */
+  function apreView(){
+    var A=_apre()||{}, L=_links()||{}, E=A.empresa||{}, F=A.oQueFaz||{}, O=A.ondeAtua||{}, P=A.pessoas||{}, M=A.mercado||{}, Hh=A.historia||{};
+    var redes=[]; if(L.instagram)redes.push(['Instagram',L.instagram]); if(L.facebook)redes.push(['Facebook',L.facebook]);
+    _arr(E.redes).forEach(function(r){ if(r) redes.push(['Rede', (typeof r==='object'?(r.url||r.rede||JSON.stringify(r)):r)]); });
+    if(L.outrasRedes) redes.push(['Outras', L.outrasRedes]);
+    return {
+      tem: !!_apre(),
+      em: _ed().apresentacaoEm||'',
+      site: L.site||E.site||'',
+      linkedin: L.linkedin||E.linkedin||'',
+      redes: redes,
+      resumo: F.resumo||'',
+      produtos: _arr(F.produtos).map(function(p){ return (p.linha||'')+(p.itens&&p.itens.length?' ('+p.itens.join(', ')+')':''); }).filter(Boolean),
+      servicos: _arr(F.servicos).map(function(s){ return s.servico||''; }).filter(Boolean),
+      marcas: _arr(F.marcasRepresentadas).map(function(m){ return (m.marca||'')+(m.exclusiva?' (exclusiva)':''); }).filter(Boolean),
+      segmentos: _arr(F.segmentosAtendidos),
+      certificacoes: _arr(F.certificacoes).map(function(c){ return (c.nome||'')+(c.orgao?' · '+c.orgao:''); }).filter(Boolean),
+      sede: O.sede||'',
+      exporta: O.exporta,
+      abrangencia: O.abrangencia||'',
+      unidades: _arr(O.unidades).map(function(u){ return (u.tipo?u.tipo+' ':'')+(u.municipio||'')+(u.uf?'/'+u.uf:''); }).filter(Boolean),
+      pracas: _arr(O.pracasParaExplorar).map(function(p){ return (p.praca||'')+(p.porque?' — '+p.porque:''); }).filter(Boolean),
+      socios: _arr(P.socios).map(function(s){ return { nome:s.nome||'', papel:s.papel||'', outras:_arr(s.outrasEmpresas) }; }),
+      executivos: _arr(P.executivos).map(function(e){ return (e.nome||'')+(e.cargo?' · '+e.cargo:''); }).filter(Boolean),
+      time: P.tamanhoTimeLinkedIn||null,
+      historia: Hh.texto||'',
+      marcos: _arr(Hh.marcos).map(function(m){ return (m.ano?m.ano+': ':'')+(m.oque||''); }).filter(Boolean),
+      comoGanha: M.comoGanhaDinheiro||'',
+      sazonalidade: M.sazonalidade||'',
+      concorrentes: _arr(M.concorrentes).map(function(c){ return (c.nome||'')+(c.praca?' ('+c.praca+')':''); }).filter(Boolean),
+      movimentos: _arr(A.movimentos).map(function(m){ return { titulo:m.titulo||'', data:m.data||'', resumo:m.resumo||'' }; }),
+      oportunidades: _arr(A.oportunidades).map(function(o){ return { frente:o.frente||o.produto||'', pergunta:o.pergunta||'', prioridade:o.prioridade||'', tipo:o.tipo||'' }; })
+    };
+  }
+
+  /* ---- prompt focado no que a Apresentação NÃO traz: NCMs (+ filiais por raiz) ---- */
+  function promptNcm(){
+    var R=_rec(), d=_dados(), AV=apreView();
     var cnpj=R.cnpj||_ed().cnpj||'', razao=R.razaoSocial||d.empresa||_ed().nome||'';
     var cnae=R.cnaePrincipal?((R.cnaePrincipal.codigo||'')+' — '+(R.cnaePrincipal.descricao||'')):'';
-    var cid=(R.endereco&&R.endereco.municipio)||_ed().cidade||'', uf=(R.endereco&&R.endereco.uf)||'';
-    var soc=_socios(R).map(function(s){ return '    - '+(s.nome||s.razaoSocial||'')+(s.ehPJ?' (PJ)':'')+(s.qualificacao?' · '+s.qualificacao:''); }).join('\n');
-    var secund=(Array.isArray(R.cnaesSecundarios)?R.cnaesSecundarios:[]).map(function(c){ return (c.codigo||'')+' '+(c.descricao||''); }).slice(0,8).join('; ');
+    var prod=(AV.produtos.concat(AV.servicos)).slice(0,15).join('; ') || '(ver produtos no site da empresa)';
     return (
-'Você é um pesquisador de inteligência empresarial com acesso à internet. Pesquise sobre a empresa abaixo e devolva APENAS um JSON válido (nada de texto antes ou depois).\n\n'+
-'EMPRESA (dados oficiais da Receita Federal):\n'+
-'- Razão social: '+razao+'\n'+
-'- CNPJ: '+cnpj+'  (raiz: '+_raiz(cnpj)+')\n'+
+'Você é um especialista em classificação fiscal (NCM) e cadeias de suprimento. Devolva APENAS um JSON válido.\n\n'+
+'EMPRESA: '+razao+'  · CNPJ '+cnpj+'  (raiz '+_raiz(cnpj)+')\n'+
 '- CNAE principal: '+cnae+'\n'+
-(secund?'- CNAEs secundários: '+secund+'\n':'')+
-'- Cidade/UF: '+cid+'/'+uf+'\n'+
-'- Abertura: '+(R.aberturaEm||R.abertura||'')+'  · Capital social: '+R$(R.capitalSocial)+'  · Porte: '+(R.porte||'')+'\n'+
-'- Sócios na Receita:\n'+(soc||'    (não informados)')+'\n\n'+
-'TAREFA — pesquise na internet e preencha o máximo que conseguir:\n'+
-'1. Site oficial, LinkedIn e Instagram da empresa.\n'+
-'2. FILIAIS: outros estabelecimentos na mesma raiz de CNPJ ('+_raiz(cnpj)+') e as cidades/UF.\n'+
-'3. HISTÓRIA: resumo curto (3 a 5 linhas), a partir do site e fontes públicas.\n'+
-'4. PRODUTOS que a empresa VENDE e/ou PRODUZ.\n'+
-'5. NCMs prováveis das mercadorias que ela VENDE (código + descrição).\n'+
-'6. NCMs prováveis das mercadorias que ela COMPRA para produzir ou revender.\n'+
-'7. Para cada SÓCIO, em quais OUTRAS empresas ele é sócio (se encontrar).\n'+
-'8. Número aproximado de FUNCIONÁRIOS (se encontrar na internet).\n'+
-'9. CIDADES em que atua (com filiais ou com vendas).\n\n'+
-'FORMATO DE SAÍDA (devolva exatamente este JSON, preenchido):\n'+
+'- O que vende/produz (já levantado): '+prod+'\n'+
+(AV.site?'- Site: '+AV.site+'\n':'')+
+'\nTAREFA — complete o que falta no cadastro:\n'+
+'1. NCMs prováveis das mercadorias que a empresa VENDE (código + descrição).\n'+
+'2. NCMs prováveis dos insumos/mercadorias que ela COMPRA para produzir ou revender.\n'+
+'3. FILIAIS na mesma raiz de CNPJ ('+_raiz(cnpj)+'): CNPJ completo + cidade/UF, se encontrar.\n'+
+'4. Sócios e em quais OUTRAS empresas participam (se encontrar algo novo).\n'+
+'5. Número aproximado de funcionários (se encontrar).\n\n'+
+'FORMATO (devolva exatamente este JSON):\n'+
 '{\n'+
-'  "site": "", "linkedin": "", "instagram": "",\n'+
-'  "historia": "",\n'+
-'  "produtos_vende": [], "produtos_produz": [],\n'+
 '  "ncm_vende": [ {"ncm":"", "descricao":""} ],\n'+
 '  "ncm_compra": [ {"ncm":"", "descricao":""} ],\n'+
 '  "filiais": [ {"cnpj":"", "cidade":"", "uf":""} ],\n'+
 '  "socios_outras_empresas": [ {"socio":"", "empresas":[]} ],\n'+
-'  "funcionarios_estimado": 0,\n'+
-'  "cidades_atuacao": []\n'+
+'  "funcionarios_estimado": 0\n'+
 '}\n\n'+
-'REGRAS: devolva só o JSON. Campo não encontrado fica vazio ("" ou [] ou 0). NÃO invente dados.'
+'REGRAS: só o JSON. Campo não encontrado fica vazio. NÃO invente NCM — se não tiver certeza da classificação, use o capítulo/posição mais provável e diga na descrição que é estimativa.'
     );
   }
-  window.promptPerfilEnriquecimento = promptPerfil;
+  window.promptPerfilNcm = promptNcm;
   window._perfilCopiar = function(){
-    var txt=promptPerfil();
-    try{ navigator.clipboard.writeText(txt).then(function(){ _toast('perfilStatus','📋 Prompt copiado — cole numa IA com acesso à internet.', '#15803d'); }); }
+    var txt=promptNcm();
+    try{ navigator.clipboard.writeText(txt).then(function(){ _toast('perfilStatus','📋 Prompt copiado — cole numa IA com internet.', '#15803d'); }); }
     catch(e){ var ta=document.getElementById('perfilPromptArea'); if(ta){ ta.value=txt; ta.select(); } _toast('perfilStatus','Selecione e copie o prompt na caixa.', '#b45309'); }
   };
   window._perfilGravar = function(){
     var ta=document.getElementById('perfilJson'); if(!ta) return;
     var txt=(ta.value||'').trim(); if(!txt){ _toast('perfilStatus','Cole o JSON primeiro.', '#b91c1c'); return; }
     var obj; try{ obj=JSON.parse(txt); }catch(e){ _toast('perfilStatus','JSON inválido: '+e.message, '#b91c1c'); return; }
-    _ed().perfilEnriquecido=obj;
+    var atual=_perfil(); var merged=Object.assign({}, atual, obj); // complementa sem apagar
+    _ed().perfilEnriquecido=merged;
     _toast('perfilStatus','Gravando…', '#64748b');
-    _salvarFirestore({perfilEnriquecido:obj, perfilAtualizadoEm:new Date().toISOString().slice(0,10)}, function(ok,e){
-      _toast('perfilStatus', ok?'✅ Perfil gravado. Já alimenta a Informações e a Nossa Análise.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
+    _salvarFirestore({perfilEnriquecido:merged, perfilAtualizadoEm:new Date().toISOString().slice(0,10)}, function(ok,e){
+      _toast('perfilStatus', ok?'✅ Complemento gravado. Já alimenta a Nossa Análise.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
       window._renderPerfilRefresh&&window._renderPerfilRefresh();
     });
   };
@@ -16259,42 +16285,70 @@ window.renderNossaAnalise = function(latest, rows, data){
 
   window.renderPerfilEmpresa = function(latest, rows, data){
     data=data||_dados();
-    var R=_rec(), P=_perfil();
+    var R=_rec(), P=_perfil(), AV=apreView();
     var razao=R.razaoSocial||data.empresa||'empresa';
     var temReceita=!!(R.cnpj||R.razaoSocial);
     var H='';
     H+='<div style="background:linear-gradient(135deg,#0f172a,#334155);color:#fff;border-radius:12px;padding:18px 22px;margin-bottom:16px">';
     H+='<div style="font-size:21px;font-weight:800">🏢 Perfil da empresa — '+esc(razao)+'</div>';
-    H+='<div style="font-size:12.5px;color:#cbd5e1;margin-top:3px">Gera um prompt com os dados da Receita → você cola numa IA com internet → ela devolve um JSON → você cola aqui. Fica gravado e alimenta a aba Informações e a Nossa Análise. (Notícias ficam na aba Informações.)</div>';
+    H+='<div style="font-size:12.5px;color:#cbd5e1;margin-top:3px">Reúne aqui tudo o que já foi levantado nos etapas (Apresentação + Receita) e deixa você completar só o que falta (NCMs). Notícias ficam na aba Informações.</div>';
     H+='</div>';
     if(!temReceita){
-      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e">⚠️ Primeiro busque o CNPJ na Receita (etapa Cadastro) — o prompt usa esses dados.</div>';
+      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e">⚠️ Primeiro busque o CNPJ na Receita (etapa Cadastro).</div>';
       return H;
     }
     H+='<div id="perfilStatus" style="font-size:12.5px;font-weight:600;min-height:18px;margin-bottom:8px"></div>';
+
+    var linha=function(lbl,val){ if(val==null||val===''||(Array.isArray(val)&&!val.length)) return ''; var v=Array.isArray(val)?val.map(function(x){ return typeof x==='object'?esc(JSON.stringify(x)):esc(x); }).join(' · '):esc(val); return '<div style="display:flex;gap:10px;padding:5px 0;border-top:1px solid #f1f5f9;font-size:12.5px"><span style="min-width:165px;color:#64748b;font-weight:600">'+lbl+'</span><span style="color:#334155">'+v+'</span></div>'; };
+
+    /* ===== o que a Apresentação já trouxe ===== */
+    if(AV.tem){
+      H+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+      H+='<div style="font-weight:800;font-size:15px;color:#1e40af;margin-bottom:6px">📇 O que a Apresentação já levantou'+(AV.em?' <span style="font-size:11px;font-weight:400;color:#2563eb">('+esc(AV.em)+')</span>':'')+'</div>';
+      var redestr=[]; if(AV.site)redestr.push('<a href="'+esc(AV.site)+'" target="_blank" style="color:#2563eb">site</a>'); if(AV.linkedin)redestr.push('<a href="'+esc(AV.linkedin)+'" target="_blank" style="color:#2563eb">LinkedIn</a>');
+      AV.redes.forEach(function(r){ redestr.push(esc(r[0])+': '+esc(r[1])); });
+      if(redestr.length) H+='<div style="padding:5px 0;font-size:12.5px"><span style="min-width:165px;color:#64748b;font-weight:600;display:inline-block">Site e redes</span><span style="color:#334155">'+redestr.join(' · ')+'</span></div>';
+      if(AV.resumo) H+='<div style="padding:7px 0;border-top:1px solid #dbeafe;font-size:12.5px;color:#334155"><b style="color:#1e40af">O que faz:</b> '+esc(AV.resumo)+'</div>';
+      H+=linha('Produtos', AV.produtos)+linha('Serviços', AV.servicos)+linha('Marcas representadas', AV.marcas)+linha('Segmentos atendidos', AV.segmentos)+linha('Certificações', AV.certificacoes);
+      H+=linha('Sede', AV.sede)+linha('Unidades/filiais', AV.unidades)+linha('Praças a explorar', AV.pracas);
+      if(AV.exporta!=null) H+=linha('Exporta?', AV.exporta?'Sim':'Não');
+      if(AV.socios.length){ H+=linha('Sócios', AV.socios.map(function(s){ return s.nome+(s.papel?' ('+s.papel+')':'')+(s.outras&&s.outras.length?' — também em: '+s.outras.join(', '):''); })); }
+      H+=linha('Executivos', AV.executivos);
+      if(AV.time) H+=linha('Time (LinkedIn)', '≈ '+AV.time+' pessoas');
+      if(AV.historia) H+='<div style="padding:7px 0;border-top:1px solid #dbeafe;font-size:12.5px;color:#334155"><b style="color:#1e40af">História:</b> '+esc(AV.historia)+'</div>';
+      H+=linha('Marcos', AV.marcos)+linha('Como ganha dinheiro', AV.comoGanha)+linha('Sazonalidade', AV.sazonalidade)+linha('Concorrentes', AV.concorrentes);
+      if(AV.oportunidades.length){
+        H+='<div style="padding:8px 0;border-top:1px solid #dbeafe"><div style="font-size:12.5px;font-weight:700;color:#1e40af;margin-bottom:4px">🎯 '+AV.oportunidades.length+' oportunidade(s) mapeada(s)</div>';
+        AV.oportunidades.slice(0,10).forEach(function(o){ H+='<div style="font-size:12px;color:#475569;padding:2px 0">• <b>'+esc(o.frente||'oportunidade')+'</b>'+(o.prioridade?' <span style="font-size:10px;color:#92400e">['+esc(o.prioridade)+']</span>':'')+(o.pergunta?' — "'+esc(o.pergunta)+'"':'')+'</div>'; });
+        H+='</div>';
+      }
+      H+='</div>';
+    } else {
+      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e;margin-bottom:14px">📇 Esta empresa ainda não tem <b>Apresentação</b> feita. Ela é o levantamento mais rico (produtos, unidades, sócios, oportunidades) — rode a etapa <b>Apresentação</b> e volte aqui. O complemento de NCMs abaixo funciona mesmo assim.</div>';
+    }
+
+    /* ===== complemento NCM ===== */
     H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
-    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">1️⃣ Gerar prompt de enriquecimento</div>';
-    H+='<div style="font-size:12px;color:#64748b;margin-bottom:9px">Site/redes, filiais, história, produtos, NCMs (vende e compra), sócios em outras empresas, nº de funcionários e cidades de atuação.</div>';
-    H+='<button onclick="window._perfilCopiar()" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700">📋 Copiar prompt de enriquecimento</button>';
-    H+='<textarea id="perfilPromptArea" readonly style="width:100%;height:84px;margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:11px;color:#475569;background:#f8fafc">'+esc(promptPerfil())+'</textarea>';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">➕ Completar com NCMs e filiais</div>';
+    H+='<div style="font-size:12px;color:#64748b;margin-bottom:9px">A Apresentação não traz código fiscal. Este prompt pede só o que falta: NCMs do que a empresa vende e do que compra, filiais por raiz de CNPJ e sócios em outras empresas.</div>';
+    H+='<button onclick="window._perfilCopiar()" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700">📋 Copiar prompt (NCMs/filiais)</button>';
+    H+='<textarea id="perfilPromptArea" readonly style="width:100%;height:80px;margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:11px;color:#475569;background:#f8fafc">'+esc(promptNcm())+'</textarea>';
+    H+='<textarea id="perfilJson" placeholder=\'{ "ncm_vende":[...], "ncm_compra":[...], ... }\' style="width:100%;height:90px;margin-top:9px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
+    H+='<button onclick="window._perfilGravar()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;margin-top:8px">💾 Gravar complemento</button>';
     H+='</div>';
-    H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
-    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">2️⃣ Colar o JSON que a IA devolveu</div>';
-    H+='<textarea id="perfilJson" placeholder=\'{ "site":"...", "historia":"...", "produtos_vende":[...], ... }\' style="width:100%;height:110px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
-    H+='<button onclick="window._perfilGravar()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;margin-top:8px">💾 Gravar perfil</button>';
-    H+='</div>';
+
+    /* ===== complemento já gravado ===== */
     if(Object.keys(P).length){
-      var linha=function(lbl,val){ if(val==null||val===''||(Array.isArray(val)&&!val.length)) return ''; var v=Array.isArray(val)?val.map(function(x){ return typeof x==='object'?esc(JSON.stringify(x)):esc(x); }).join(' · '):esc(val); return '<div style="display:flex;gap:10px;padding:5px 0;border-top:1px solid #f1f5f9;font-size:12.5px"><span style="min-width:160px;color:#64748b;font-weight:600">'+lbl+'</span><span style="color:#334155">'+v+'</span></div>'; };
       H+='<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
-      H+='<div style="font-weight:800;font-size:15px;color:#166534;margin-bottom:6px">✅ Perfil gravado'+(_ed().perfilAtualizadoEm?' <span style="font-size:11px;font-weight:400;color:#15803d">(atualizado em '+esc(_ed().perfilAtualizadoEm)+')</span>':'')+'</div>';
-      H+=linha('Site', P.site)+linha('LinkedIn', P.linkedin)+linha('Instagram', P.instagram);
-      if(P.historia) H+='<div style="padding:7px 0;border-top:1px solid #dcfce7;font-size:12.5px;color:#334155"><b style="color:#166534">História:</b> '+esc(P.historia)+'</div>';
-      H+=linha('Produtos que vende', P.produtos_vende)+linha('Produtos que produz', P.produtos_produz);
-      if(Array.isArray(P.ncm_vende)&&P.ncm_vende.length) H+=linha('NCM que vende', P.ncm_vende.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
-      if(Array.isArray(P.ncm_compra)&&P.ncm_compra.length) H+=linha('NCM que compra', P.ncm_compra.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
-      if(Array.isArray(P.filiais)&&P.filiais.length) H+=linha('Filiais', P.filiais.map(function(f){ return (f.cidade||'')+(f.uf?'/'+f.uf:'')+(f.cnpj?' ('+f.cnpj+')':''); }));
-      if(Array.isArray(P.socios_outras_empresas)&&P.socios_outras_empresas.length) H+=linha('Sócios em outras empresas', P.socios_outras_empresas.map(function(s){ return (s.socio||'')+': '+((s.empresas||[]).join(', ')); }));
-      H+=linha('Funcionários (estimado)', P.funcionarios_estimado?P.funcionarios_estimado:'')+linha('Cidades de atuação', P.cidades_atuacao);
+      H+='<div style="font-weight:800;font-size:15px;color:#166534;margin-bottom:6px">✅ Complemento gravado'+(_ed().perfilAtualizadoEm?' <span style="font-size:11px;font-weight:400;color:#15803d">('+esc(_ed().perfilAtualizadoEm)+')</span>':'')+'</div>';
+      if(_arr(P.ncm_vende).length) H+=linha('NCM que vende', P.ncm_vende.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
+      if(_arr(P.ncm_compra).length) H+=linha('NCM que compra', P.ncm_compra.map(function(x){ return (x.ncm||'')+(x.descricao?' '+x.descricao:''); }));
+      if(_arr(P.filiais).length) H+=linha('Filiais (c/ CNPJ)', P.filiais.map(function(f){ return (f.cidade||'')+(f.uf?'/'+f.uf:'')+(f.cnpj?' ('+f.cnpj+')':''); }));
+      if(_arr(P.socios_outras_empresas).length) H+=linha('Sócios em outras empresas', P.socios_outras_empresas.map(function(s){ return (s.socio||'')+': '+((s.empresas||[]).join(', ')); }));
+      if(P.funcionarios_estimado) H+=linha('Funcionários (estimado)', P.funcionarios_estimado);
+      // compat com perfis antigos que tinham site/produtos
+      if(P.site) H+=linha('Site (manual)', P.site);
+      if(_arr(P.produtos_vende).length) H+=linha('Produtos (manual)', P.produtos_vende);
       H+='</div>';
     }
     return H;
@@ -16311,19 +16365,20 @@ window.renderNossaAnalise = function(latest, rows, data){
     }catch(e){ return {}; }
   }
   function promptSetor(){
-    var R=_rec(), P=_perfil(), d=_dados();
+    var R=_rec(), AV=apreView(), d=_dados();
     var razao=R.razaoSocial||d.empresa||'';
     var cnae=R.cnaePrincipal?((R.cnaePrincipal.codigo||'')+' — '+(R.cnaePrincipal.descricao||'')):'';
-    var secund=(Array.isArray(R.cnaesSecundarios)?R.cnaesSecundarios:[]).map(function(c){ return (c.codigo||'')+' '+(c.descricao||''); }).slice(0,8).join('; ');
-    var prod=(P.produtos_vende||[]).concat(P.produtos_produz||[]).slice(0,12).join(', ');
+    var secund=_arr(R.cnaesSecundarios).map(function(c){ return (c.codigo||'')+' '+(c.descricao||''); }).slice(0,8).join('; ');
+    var prod=AV.produtos.concat(AV.servicos).slice(0,12).join(', ');
     return (
 'Você é um analista setorial. Caracterize o SETOR e o MODELO DE NEGÓCIO da empresa abaixo e devolva APENAS um JSON válido.\n\n'+
 'EMPRESA: '+razao+'\n'+
 '- CNAE principal: '+cnae+'\n'+
 (secund?'- CNAEs secundários: '+secund+'\n':'')+
-(prod?'- Produtos conhecidos: '+prod+'\n':'')+
-'\nTAREFA: explique de forma objetiva o que empresas DESTE ramo fazem e como ganham dinheiro, e dê as referências TÍPICAS do setor (não da empresa específica — a média do setor no Brasil). O objetivo é contextualizar a análise: numa cerealista margem de 7% pode ser normal; num software, não.\n\n'+
-'Explique em especial o CICLO: como compra, se estoca (e por quanto tempo), como vende, prazo de recebimento, se exporta, se é sazonal, se ganha no volume ou na margem.\n\n'+
+(prod?'- Produtos/serviços conhecidos: '+prod+'\n':'')+
+(AV.comoGanha?'- Como ganha dinheiro (já levantado): '+AV.comoGanha+'\n':'')+
+(AV.sazonalidade?'- Sazonalidade (já levantada): '+AV.sazonalidade+'\n':'')+
+'\nTAREFA: explique o que empresas DESTE ramo fazem e como ganham dinheiro, e dê as referências TÍPICAS do setor no Brasil (a média do setor, não da empresa). Objetivo: contextualizar — numa cerealista margem de 7% pode ser normal; num software, não. Explique o CICLO: como compra, se estoca (e por quanto tempo), como vende, prazo de recebimento, se exporta, se é sazonal, se ganha no volume ou na margem.\n\n'+
 'FORMATO (devolva exatamente este JSON):\n'+
 '{\n'+
 '  "ramo": "", "o_que_faz": "", "setor": "",\n'+
@@ -16363,7 +16418,7 @@ window.renderNossaAnalise = function(latest, rows, data){
 
   window.renderSetorCiclo = function(latest, rows, data){
     data=data||_dados();
-    var R=_rec(), S=_setor();
+    var R=_rec(), S=_setor(), AV=apreView();
     var razao=R.razaoSocial||data.empresa||'empresa';
     var cnae=R.cnaePrincipal?((R.cnaePrincipal.codigo||'')+' — '+(R.cnaePrincipal.descricao||'')):'(sem CNAE — busque na Receita)';
     var temReceita=!!(R.cnpj||R.razaoSocial);
@@ -16374,19 +16429,22 @@ window.renderNossaAnalise = function(latest, rows, data){
     H+='<div style="font-size:12px;color:#a7f3d0;margin-top:6px">CNAE principal: '+esc(cnae)+'</div>';
     H+='</div>';
     if(!temReceita){
-      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e">⚠️ Primeiro busque o CNPJ na Receita (etapa Cadastro) — o prompt usa o CNAE.</div>';
+      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e">⚠️ Primeiro busque o CNPJ na Receita (etapa Cadastro).</div>';
       return H;
     }
     H+='<div id="setorStatus" style="font-size:12.5px;font-weight:600;min-height:18px;margin-bottom:8px"></div>';
+    if(AV.comoGanha||AV.sazonalidade){
+      H+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:12.5px;color:#334155">📇 Da Apresentação: '+(AV.comoGanha?'<b>como ganha:</b> '+esc(AV.comoGanha):'')+(AV.comoGanha&&AV.sazonalidade?' · ':'')+(AV.sazonalidade?'<b>sazonalidade:</b> '+esc(AV.sazonalidade):'')+'. O prompt abaixo já leva isso.</div>';
+    }
     H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
     H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">1️⃣ Gerar prompt do setor</div>';
     H+='<div style="font-size:12px;color:#64748b;margin-bottom:9px">Pede à IA pra caracterizar o ramo, o ciclo (compra→estoque→venda→recebimento), sazonalidade, mercado externo e as margens/giros TÍPICOS do setor.</div>';
     H+='<button onclick="window._setorCopiar()" style="cursor:pointer;background:#0f766e;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700">📋 Copiar prompt do setor</button>';
-    H+='<textarea id="setorPromptArea" readonly style="width:100%;height:84px;margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:11px;color:#475569;background:#f8fafc">'+esc(promptSetor())+'</textarea>';
+    H+='<textarea id="setorPromptArea" readonly style="width:100%;height:80px;margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:9px;font-size:11px;color:#475569;background:#f8fafc">'+esc(promptSetor())+'</textarea>';
     H+='</div>';
     H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
     H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">2️⃣ Colar o JSON que a IA devolveu</div>';
-    H+='<textarea id="setorJson" placeholder=\'{ "ramo":"...", "ciclo_operacional":"...", "margem_liquida_tipica_pct":{"min":0,"max":0}, ... }\' style="width:100%;height:110px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
+    H+='<textarea id="setorJson" placeholder=\'{ "ramo":"...", "ciclo_operacional":"...", "margem_liquida_tipica_pct":{"min":0,"max":0}, ... }\' style="width:100%;height:100px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-size:12px;font-family:monospace"></textarea>';
     H+='<button onclick="window._setorGravar()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;margin-top:8px">💾 Gravar Ramo & Ciclo</button>';
     H+='</div>';
     if(Object.keys(S).length){
@@ -16396,17 +16454,14 @@ window.renderNossaAnalise = function(latest, rows, data){
       H+=card('Ramo', S.ramo)+card('O que faz', S.o_que_faz)+card('Setor', S.setor);
       H+=card('Modelo de negócio', S.modelo_negocio)+card('Como ganha dinheiro', S.como_ganha);
       H+=card('🔄 Ciclo operacional', S.ciclo_operacional)+card('Sazonalidade', S.sazonalidade)+card('Mercado externo', S.mercado_externo)+card('Endividamento típico do setor', S.endividamento_tipico);
-      if(Array.isArray(S.riscos_setor)&&S.riscos_setor.length) H+=card('Riscos do setor', S.riscos_setor.join(' · '));
-      if(Array.isArray(S.o_que_olhar_na_analise)&&S.o_que_olhar_na_analise.length) H+=card('👀 O que olhar na análise deste setor', S.o_que_olhar_na_analise.join(' · '));
+      if(_arr(S.riscos_setor).length) H+=card('Riscos do setor', S.riscos_setor.join(' · '));
+      if(_arr(S.o_que_olhar_na_analise).length) H+=card('👀 O que olhar na análise deste setor', S.o_que_olhar_na_analise.join(' · '));
       H+='</div>';
-
-      // comparativo margem empresa vs típica do setor
       var me=margemEmpresa(data);
       var mt=S.margem_liquida_tipica_pct||{}, mtb=S.margem_bruta_tipica_pct||{};
       var temTip=(_num(mt.min)||_num(mt.max));
       if(temTip && me.margemLiq!=null){
-        var min=_num(mt.min), max=_num(mt.max), val=me.margemLiq;
-        var veredito, cor, bg, bd;
+        var min=_num(mt.min), max=_num(mt.max), val=me.margemLiq, veredito, cor, bg, bd;
         if(val>=min && val<=max){ veredito='Dentro da faixa típica do setor — a rentabilidade está NORMAL para o ramo, não é sinal de problema.'; cor='#166534'; bg='#f0fdf4'; bd='#bbf7d0'; }
         else if(val<min){ veredito='Abaixo da faixa típica do setor ('+pct(min)+'–'+pct(max)+'). Aí sim vale investigar — mas compare com o setor, não com uma régua genérica.'; cor='#b45309'; bg='#fffbeb'; bd='#fde68a'; }
         else { veredito='Acima da faixa típica do setor — rentabilidade superior à média do ramo. Ponto forte.'; cor='#166534'; bg='#f0fdf4'; bd='#bbf7d0'; }
@@ -25065,10 +25120,13 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
 
     /* pré-preenche a partir do que os etapas captaram (Receita + aba Perfil) */
     try{
-      var _P=(D.empresaDoc&&D.empresaDoc.perfilEnriquecido)||{};
-      var _R=(D.empresaDoc&&D.empresaDoc.dadosReceita)||{};
-      if(!L.site && _P.site) L.site=_P.site;
-      if(!L.linkedin && _P.linkedin) L.linkedin=_P.linkedin;
+      var _ed2=(D.empresaDoc||{});
+      var _LA=_ed2.linksApresentacao||{};
+      var _P=_ed2.perfilEnriquecido||{};
+      var _R=_ed2.dadosReceita||{};
+      var _A=_ed2.apresentacao||{};
+      if(!L.site){ L.site=_LA.site||_P.site||((_A.empresa||{}).site)||L.site; }
+      if(!L.linkedin){ L.linkedin=_LA.linkedin||_P.linkedin||((_A.empresa||{}).linkedin)||L.linkedin; }
       var _cap=[];
       if(_R.cnaePrincipal) _cap.push(['Atividade',((_R.cnaePrincipal.codigo||'')+' '+(_R.cnaePrincipal.descricao||'')).trim()]);
       if(_R.aberturaEm||_R.abertura) _cap.push(['Aberta em',(_R.aberturaEm||_R.abertura)]);
@@ -25076,9 +25134,15 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
       if(_R.endereco&&_R.endereco.municipio) _cap.push(['Cidade',_R.endereco.municipio+'/'+(_R.endereco.uf||'')]);
       var _socs=(_R.socios||_R.quadroSocietario||_R.qsa||[]);
       if(_socs.length) _cap.push([_socs.length+' sócio(s)', _socs.slice(0,4).map(function(s){return (s.nome||s.razaoSocial||'')+(s.ehPJ?' (PJ)':'');}).join(', ')]);
-      if(Array.isArray(_P.produtos_vende)&&_P.produtos_vende.length) _cap.push(['Produtos',_P.produtos_vende.slice(0,6).join(', ')]);
-      if(_P.funcionarios_estimado) _cap.push(['Funcionários (estim.)',_P.funcionarios_estimado]);
-      if(Array.isArray(_P.cidades_atuacao)&&_P.cidades_atuacao.length) _cap.push(['Atua em',_P.cidades_atuacao.slice(0,6).join(', ')]);
+      if(_LA.instagram) _cap.push(['Instagram',_LA.instagram]);
+      if(_LA.facebook) _cap.push(['Facebook',_LA.facebook]);
+      var _AF=(_A.oQueFaz||{}), _AO=(_A.ondeAtua||{}), _AP=(_A.pessoas||{});
+      if(Array.isArray(_AF.produtos)&&_AF.produtos.length) _cap.push(['Produtos',_AF.produtos.map(function(p){return p.linha||'';}).filter(Boolean).slice(0,6).join(', ')]);
+      else if(Array.isArray(_P.produtos_vende)&&_P.produtos_vende.length) _cap.push(['Produtos',_P.produtos_vende.slice(0,6).join(', ')]);
+      if(Array.isArray(_AO.unidades)&&_AO.unidades.length) _cap.push(['Unidades',_AO.unidades.map(function(u){return (u.municipio||'')+(u.uf?'/'+u.uf:'');}).filter(Boolean).slice(0,6).join(', ')]);
+      else if(Array.isArray(_P.cidades_atuacao)&&_P.cidades_atuacao.length) _cap.push(['Atua em',_P.cidades_atuacao.slice(0,6).join(', ')]);
+      var _func=_P.funcionarios_estimado||_AP.tamanhoTimeLinkedIn;
+      if(_func) _cap.push(['Funcionários (estim.)',_func]);
       if(_cap.length){
         var _ch='<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:12px 14px;margin:4px 0 12px">'
               + '<div style="font-size:12px;font-weight:800;color:#3730a3;margin-bottom:6px">📋 O que já captamos nos etapas</div>';
