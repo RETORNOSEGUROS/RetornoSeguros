@@ -3356,10 +3356,6 @@
             <span class="tab-icon">📑</span>
             <span>Parecer 360</span>
           </button>
-          <button class="tab-btn" data-tab="contexto">
-            <span class="tab-icon">📄</span>
-            <span>Contexto</span>
-          </button>
           <button class="tab-btn" data-tab="informacoes">
             <span class="tab-icon">📰</span>
             <span>Informações</span>
@@ -15274,7 +15270,7 @@ window.renderNossaAnalise = function(latest, rows, data){
   var funcEmp=0; try{ funcEmp=n(_ed.funcionariosManual)||n(_ed.funcionarios)||0; }catch(e){}
   // nº de sócios: da linha, senão cadastro, senão o quadro societário da Receita (sócio PJ também conta)
   var sociosEmp=0; try{ sociosEmp=n(_ed.qtdSocios)||n(A3.qtdSocios)||(Array.isArray(_R.socios)?_R.socios.length:0)||(Array.isArray(_R.quadroSocietario)?_R.quadroSocietario.length:0)||(Array.isArray(_R.qsa)?_R.qsa.length:0)||0; }catch(e){}
-  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; try{ var _edd=((data||{}).empresaDoc||{}); var _pe=_edd.perfilEnriquecido||{}; var _pf=Number(_pe.funcionarios_estimado); if(_pf>0) return _pf; var _tt=Number(((_edd.apresentacao||{}).pessoas||{}).tamanhoTimeLinkedIn); if(_tt>0) return _tt; }catch(_e){} return 0; };
+  var funcOf=function(row){ var f=g(row,'func'); if(f>0) return f; if(funcEmp>0) return funcEmp; try{ var _edd=((data||{}).empresaDoc||{}); var _ap=Number(_edd.funcionariosAproximado); if(_ap>0) return _ap; var _pe=_edd.perfilEnriquecido||{}; var _pf=Number(_pe.funcionarios_estimado); if(_pf>0) return _pf; var _tt=Number(((_edd.apresentacao||{}).pessoas||{}).tamanhoTimeLinkedIn); if(_tt>0) return _tt; }catch(_e){} return 0; };
   // folha/pessoal: informada; senão estimada = nº funcionários × salário médio do CNAE × 13 (13 salários) × 1,33 (encargos)
   var pessoalEstim=false;
   var pessoal = function(row){ var p=g(row,'folha')+g(row,'encargos'); if(p>0) return p;
@@ -16327,6 +16323,8 @@ window.renderNossaAnalise = function(latest, rows, data){
       H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e;margin-bottom:14px">📇 Esta empresa ainda não tem <b>Apresentação</b> feita. Ela é o levantamento mais rico (produtos, unidades, sócios, oportunidades) — rode a etapa <b>Apresentação</b> e volte aqui. O complemento de NCMs abaixo funciona mesmo assim.</div>';
     }
 
+    H+=(window.renderFuncionariosEstim?window.renderFuncionariosEstim(data):'');
+
     /* ===== complemento NCM ===== */
     H+='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
     H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">➕ Completar com NCMs e filiais</div>';
@@ -16478,6 +16476,147 @@ window.renderNossaAnalise = function(latest, rows, data){
       }
     }
     return H;
+  };
+})();
+
+
+/* ===== ESTIMADOR DE FUNCIONÁRIOS ===== */
+/* ===================================================================
+   ESTIMADOR DE FUNCIONÁRIOS — hierarquia + cruzamento CAGED/LinkedIn
+   window.renderFuncionariosEstim(data) -> HTML (usado dentro do Perfil)
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _n(v){ var x=Number(String(v==null?'':v).toString().replace(/[^\d.-]/g,'')); return isNaN(x)?0:x; }
+  function _int(v){ return Math.round(_n(v)); }
+  function _norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+  function _dados(){ try{ return window.CURRENT_ANALYSIS_DATA||{}; }catch(e){ return {}; } }
+  function _ed(){ var d=_dados(); return d.empresaDoc||{}; }
+  function _rec(){ return _ed().dadosReceita||{}; }
+  function fmt(n){ return _int(n).toLocaleString('pt-BR'); }
+
+  function folhaDe(row){ row=row||{}; var f=_n(row.folhaAnual)+_n(row.encargosFolha); if(f>0) return f; return 0; }
+
+  /* dados de mercado (CAGED + players) para a cidade+CNAE da empresa */
+  function cagedInfo(){
+    var R=_rec();
+    var mun=(R.endereco&&R.endereco.municipio)||_ed().cidade||_ed().municipio||'';
+    var cnae=(R.cnaePrincipal&&R.cnaePrincipal.codigo)||_ed().cnae||'';
+    var dig=String(cnae).replace(/\D/g,'');
+    var out={mun:mun, cnae:dig, sal:0, salFonte:'', estoque:0, estoqueAtual:0, players:0, mediaEmp:0};
+    try{
+      if(mun && dig.length>=7 && typeof window!=='undefined'){
+        var an=(typeof window.anoCnae==='function')?window.anoCnae(mun,dig):null;
+        if(an && an[3]){ out.sal=an[3]; out.salFonte='salário médio do CNAE em '+mun+' (CAGED, média do ano)'; }
+        var est=(typeof window.empregosCnae==='function')?window.empregosCnae(mun,dig):0; out.estoque=est||0;
+        if(an && est) out.estoqueAtual=est+(_n(an[0]));
+        var PL=window.RS_PLAYERS||{}; var k=_norm(mun)+'|'+dig.slice(0,7);
+        out.players=(PL.cnae && PL.cnae[k])||0;
+        if(out.estoque>0 && out.players>0) out.mediaEmp=Math.round(out.estoque/out.players);
+      }
+      if(!out.sal){
+        var div=String(parseInt(dig.slice(0,2),10)||0);
+        var sd=(typeof window.saldoSetor==='function')?window.saldoSetor(mun,div):null;
+        if(sd && sd[3]){ out.sal=sd[3]; out.salFonte='salário médio do SETOR (div '+div+') em '+mun+' (CAGED)'; }
+      }
+    }catch(e){}
+    return out;
+  }
+
+  /* faixa LinkedIn / internet (aproximada) */
+  function faixaWeb(){
+    var A=_ed().apresentacao||{}; var P=_ed().perfilEnriquecido||{};
+    var t=((A.pessoas||{}).tamanhoTimeLinkedIn)||P.funcionarios_estimado||null;
+    return t?_int(t):0;
+  }
+
+  window.renderFuncionariosEstim = function(data){
+    data=data||_dados();
+    var ed=_ed(), R=_rec();
+    var rows=(data.rows||[]); var r0=rows[0]||{};
+    var ci=cagedInfo(), web=faixaWeb();
+    var folha=folhaDe(r0);
+    // estimativa pela folha (mesmo modelo do sistema: custo = func × sal × 13 × 1,33)
+    var estFolha = (folha>0 && ci.sal>0) ? Math.round(folha/(ci.sal*13*1.33)) : 0;
+
+    // hierarquia do número EM USO
+    var manual=_int(ed.funcionariosManual), bal=_int(r0.funcionarios||ed.funcionarios), aprox=_int(ed.funcionariosAproximado);
+    var usado=0, origem='', selo='';
+    if(manual>0){ usado=manual; origem='Informado / Raio-X do cliente'; selo='#166534'; }
+    else if(bal>0){ usado=bal; origem='Do balanço / cadastro'; selo='#166534'; }
+    else if(aprox>0){ usado=aprox; origem='Estimado (gravado)'; selo='#b45309'; }
+    else if(estFolha>0){ usado=estFolha; origem='Estimado pela folha agora'; selo='#b45309'; }
+
+    var H='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">👷 Funcionários — número aproximado</div>';
+    H+='<div style="font-size:12px;color:#64748b;margin-bottom:10px">Em ordem de confiança: informado (Raio-X) → balanço → estimativa pela folha ÷ salário médio do CNAE na cidade (CAGED), conferida com a faixa do LinkedIn e o estoque de empregos da cidade.</div>';
+
+    // número em uso
+    if(usado>0){
+      H+='<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">';
+      H+='<div style="font-size:34px;font-weight:800;color:'+selo+'">'+fmt(usado)+'</div>';
+      H+='<div style="font-size:12.5px;color:#64748b">funcionários · <b style="color:'+selo+'">'+esc(origem)+'</b></div>';
+      H+='</div>';
+    } else {
+      H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12.5px;color:#92400e;margin-bottom:10px">Ainda sem número. Informe abaixo, ou preencha a folha no balanço para o sistema estimar pelo CAGED.</div>';
+    }
+
+    // quadro das fontes
+    var lin=function(lbl,val,obs,cor){ return '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-top:1px solid #f1f5f9;font-size:12.5px"><span style="min-width:200px;color:#64748b;font-weight:600">'+lbl+'</span><span style="font-weight:700;color:'+(cor||'#334155')+';min-width:70px">'+val+'</span><span style="color:#94a3b8;font-size:11.5px">'+(obs||'')+'</span></div>'; };
+    H+='<div style="margin:6px 0 10px">';
+    H+=lin('Informado (Raio-X)', manual>0?fmt(manual):'—', manual>0?'número que você mapeou':'use o campo abaixo ou o Raio-X do cliente');
+    H+=lin('Balanço / cadastro', bal>0?fmt(bal):'—', bal>0?'veio nos números':'não informado');
+    if(ci.sal>0 && folha>0) H+=lin('Estimativa pela folha', fmt(estFolha), 'folha '+('R$ '+fmt(folha))+' ÷ ('+('R$ '+fmt(ci.sal))+' × 13 × 1,33)', '#2563eb');
+    else if(folha<=0) H+=lin('Estimativa pela folha', '—', 'falta a folha anual no balanço', '#94a3b8');
+    else if(ci.sal<=0) H+=lin('Estimativa pela folha', '—', 'sem salário médio CAGED p/ '+(ci.mun||'a cidade')+'/CNAE '+(ci.cnae||''), '#94a3b8');
+    H+=lin('Faixa LinkedIn / web', web>0?('≈ '+fmt(web)):'—', web>0?'referência da internet':'rode a Apresentação p/ trazer');
+    if(ci.estoque>0) H+=lin('Estoque do CNAE na cidade', fmt(ci.estoqueAtual||ci.estoque)+(ci.players>1?(' / '+ci.players+' players'):''), ci.players>1?('média '+fmt(ci.mediaEmp)+'/empresa — soma de todos os players em '+esc(ci.mun)):(ci.players===1?'é a única nesse CNAE na cidade → praticamente todos dela':'estoque de empregos formais em '+esc(ci.mun)), '#0f766e');
+    H+='</div>';
+
+    // leitura cruzada
+    if(estFolha>0){
+      var msgs=[];
+      if(web>0){ var dif=Math.abs(estFolha-web)/Math.max(web,1); msgs.push(dif<0.35?('bate com a faixa do LinkedIn (≈'+fmt(web)+')'):('difere da faixa do LinkedIn (≈'+fmt(web)+') — vale conferir qual está mais certo')); }
+      if(ci.estoque>0){ var teto=ci.estoqueAtual||ci.estoque; if(ci.players<=1){ msgs.push('a empresa é praticamente a única do CNAE na cidade, então o estoque ('+fmt(teto)+') é quase todo dela'); } else if(estFolha>teto){ msgs.push('⚠️ a estimativa ('+fmt(estFolha)+') passou do estoque total da cidade ('+fmt(teto)+') — revise a folha'); } else { msgs.push('dentro do estoque da cidade ('+fmt(teto)+' em '+ci.players+' players)'); } }
+      if(msgs.length) H+='<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;font-size:12px;color:#1e40af;margin-bottom:10px">🔗 Cruzamento: '+esc(msgs.join('; '))+'.</div>';
+    }
+
+    // ações
+    H+='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+    if(estFolha>0 && aprox!==estFolha && manual<=0) H+='<button onclick="window._funcUsarEstimativa('+estFolha+')" style="cursor:pointer;background:#2563eb;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">✓ Usar a estimativa ('+fmt(estFolha)+')</button>';
+    H+='<input id="funcManualInput" type="number" min="0" placeholder="informar nº exato" style="width:150px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">';
+    H+='<button onclick="window._funcGravarManual()" style="cursor:pointer;background:#15803d;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:700">💾 Gravar nº informado</button>';
+    H+='<span id="funcEstStatus" style="font-size:12px;font-weight:600"></span>';
+    H+='</div>';
+    H+='<div style="font-size:11px;color:#94a3b8;margin-top:8px">O número que ficar aqui alimenta a Nossa Análise (indicadores de equipe). O salário do CNAE é o de admissão do CAGED — a folha real sempre manda mais.</div>';
+    H+='</div>';
+    return H;
+  };
+
+  function _salvarFunc(patch, cb){
+    try{ var id=_dados().empresaId;
+      if(typeof db!=='undefined' && id){ db.collection('empresas').doc(id).set(patch,{merge:true}).then(function(){cb&&cb(true);}).catch(function(e){cb&&cb(false,e);}); }
+      else cb&&cb(false,new Error('sem banco'));
+    }catch(e){ cb&&cb(false,e); }
+  }
+  function _st(msg,cor){ var el=document.getElementById('funcEstStatus'); if(el){ el.textContent=msg; el.style.color=cor||'#15803d'; } }
+  window._funcUsarEstimativa=function(n){
+    n=Math.round(Number(n)||0); if(n<=0) return;
+    _ed().funcionariosAproximado=n; _st('Gravando…','#64748b');
+    _salvarFunc({funcionariosAproximado:n, funcionariosAproximadoEm:new Date().toISOString().slice(0,10), funcionariosAproximadoOrigem:'estimativa-folha-caged'}, function(ok,e){
+      _st(ok?'✅ Gravado como aproximado.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
+      window._renderPerfilRefresh&&window._renderPerfilRefresh();
+    });
+  };
+  window._funcGravarManual=function(){
+    var el=document.getElementById('funcManualInput'); if(!el) return;
+    var n=Math.round(Number(el.value)||0); if(n<=0){ _st('Informe um número maior que zero.','#b91c1c'); return; }
+    _ed().funcionariosManual=n; _st('Gravando…','#64748b');
+    _salvarFunc({funcionariosManual:n, funcionariosManualEm:new Date().toISOString().slice(0,10)}, function(ok,e){
+      _st(ok?'✅ Número informado gravado.':'Salvo na tela; banco: '+((e&&e.message)||'indisponível'), ok?'#15803d':'#b45309');
+      window._renderPerfilRefresh&&window._renderPerfilRefresh();
+    });
   };
 })();
 
@@ -23786,7 +23925,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
 
   /* ---------- agrupamento das abas ---------- */
   var GRUPOS = [
-    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','olhares','mercado','perfil','setor','parecer','contexto','informacoes','glossario'] },
+    { rotulo:'A empresa',  abas:['dashboard','diagnostico','raiox','trajetoria','comparativo','racional','olhares','mercado','perfil','setor','parecer','informacoes','glossario'] },
     { rotulo:'Seguros',    abas:['seguros','socios','garantia'] },
     { rotulo:'Crédito',    abas:['capacidade','dividas','nossaanalise','defesa','recuperacao'] },
     { rotulo:'Ação',       abas:['planejamento','plano','roteiro'] }
@@ -25020,7 +25159,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     try{
       var emp = await bd.collection('empresas').doc(empresaId).get();
       var ed = (emp && emp.data && emp.data()) || {};
-      links = { site: ed.site||'', linkedin: ed.linkedin||'', observacao: ed.observacaoWeb||'' };
+      links = { site: ed.site||'', linkedin: ed.linkedin||'', instagram: ed.instagram||'', observacao: ed.observacaoWeb||'' };
     }catch(e){ console.warn('[info] empresa', e); }
     try{
       var snap = await bd.collection('empresas').doc(empresaId)
@@ -25036,10 +25175,11 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     var dados = {
       site: (document.getElementById('infoSite')||{}).value || '',
       linkedin: (document.getElementById('infoLinkedin')||{}).value || '',
+      instagram: (document.getElementById('infoInstagram')||{}).value || '',
       observacaoWeb: (document.getElementById('infoObs')||{}).value || ''
     };
     await bd.collection('empresas').doc(empresaId).set(dados, {merge:true});
-    CACHE.links = { site:dados.site, linkedin:dados.linkedin, observacao:dados.observacaoWeb };
+    CACHE.links = { site:dados.site, linkedin:dados.linkedin, instagram:dados.instagram, observacao:dados.observacaoWeb };
     var st = document.getElementById('infoStatus');
     if (st){ st.textContent = '✅ Links gravados.'; st.style.color = 'var(--success)'; }
     return dados;
@@ -25089,6 +25229,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
     var t = 'O que o sistema já tem sobre esta empresa (não repita, só acrescente o que for novo):\n';
     if (L.site) t += 'Site: ' + L.site + '\n';
     if (L.linkedin) t += 'LinkedIn: ' + L.linkedin + '\n';
+    if (L.instagram) t += 'Instagram: ' + L.instagram + '\n';
     if (L.observacao) t += 'Observação do corretor: ' + L.observacao + '\n';
     if (!I.length) t += '\nNenhuma informação levantada ainda.\n';
     else {
@@ -25098,7 +25239,8 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
              (x.titulo||'') + (x.fonte ? ' (' + x.fonte + ')' : '') + '\n';
       });
     }
-    t += '\nTraga apenas fatos novos, cada um com data, fonte e link. ' +
+    t += '\nOlhe em especial o LinkedIn e o Instagram da empresa: posts recentes, vagas abertas, ' +
+         'lançamentos, obras, prêmios e mudanças de comando. Traga apenas fatos novos, cada um com data, fonte e link. ' +
          'Nada daqui entra nos números financeiros.\n';
     return t;
   }
@@ -25127,6 +25269,7 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
       var _A=_ed2.apresentacao||{};
       if(!L.site){ L.site=_LA.site||_P.site||((_A.empresa||{}).site)||L.site; }
       if(!L.linkedin){ L.linkedin=_LA.linkedin||_P.linkedin||((_A.empresa||{}).linkedin)||L.linkedin; }
+      if(!L.instagram){ L.instagram=_LA.instagram||_P.instagram||L.instagram; }
       var _cap=[];
       if(_R.cnaePrincipal) _cap.push(['Atividade',((_R.cnaePrincipal.codigo||'')+' '+(_R.cnaePrincipal.descricao||'')).trim()]);
       if(_R.aberturaEm||_R.abertura) _cap.push(['Aberta em',(_R.aberturaEm||_R.abertura)]);
@@ -25152,11 +25295,20 @@ window.abrirModalPrompt = abrirModalPrompt; window.copiarPrompt = copiarPrompt; 
       }
     }catch(_ePf){}
 
+    var _urlN=function(u,t){ u=String(u||'').trim(); if(!u) return ''; if(/^https?:\/\//i.test(u)) return u; if(u.charAt(0)==='@') return 'https://instagram.com/'+u.slice(1); if(t==='ig'&&!/\./.test(u)) return 'https://instagram.com/'+u.replace('@',''); return 'https://'+u; };
+    var _chips=[];
+    if(L.site) _chips.push('<a href="'+esc(_urlN(L.site))+'" target="_blank" rel="noopener" style="text-decoration:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:999px;padding:6px 13px;font-size:12.5px;font-weight:700">🌐 Abrir site</a>');
+    if(L.linkedin) _chips.push('<a href="'+esc(_urlN(L.linkedin))+'" target="_blank" rel="noopener" style="text-decoration:none;background:#eff6ff;border:1px solid #bfdbfe;color:#0a66c2;border-radius:999px;padding:6px 13px;font-size:12.5px;font-weight:700">in Abrir LinkedIn</a>');
+    if(L.instagram) _chips.push('<a href="'+esc(_urlN(L.instagram,'ig'))+'" target="_blank" rel="noopener" style="text-decoration:none;background:#fdf2f8;border:1px solid #fbcfe8;color:#be185d;border-radius:999px;padding:6px 13px;font-size:12.5px;font-weight:700">📷 Abrir Instagram</a>');
+    if(_chips.length) h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'+_chips.join('')+'<span style="font-size:11.5px;color:#94a3b8">— edite nos campos abaixo e grave se mudar</span></div>';
+
     h += '<div class="inf-links">'
        +   '<div class="inf-campo"><label>Site da empresa</label>'
        +     '<input id="infoSite" type="url" placeholder="https://..." value="'+esc(L.site||'')+'"></div>'
        +   '<div class="inf-campo"><label>LinkedIn</label>'
        +     '<input id="infoLinkedin" type="url" placeholder="https://linkedin.com/company/..." value="'+esc(L.linkedin||'')+'"></div>'
+       +   '<div class="inf-campo"><label>Instagram</label>'
+       +     '<input id="infoInstagram" type="text" placeholder="@perfil ou instagram.com/..." value="'+esc(L.instagram||'')+'"></div>'
        +   '<div class="inf-campo inf-campo-larga"><label>Observação sua sobre a empresa</label>'
        +     '<input id="infoObs" type="text" placeholder="o que você sabe e não está em lugar nenhum" value="'+esc(L.observacao||'')+'"></div>'
        + '</div>'
