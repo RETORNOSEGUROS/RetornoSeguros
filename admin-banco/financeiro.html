@@ -48712,77 +48712,171 @@ window.RS_SOCIOS_RANK=[["FERNANDO ANTONIO KULNIG CINELLI","***383657**",1128,3,[
 <script>
 /* ===================================================================
    DECORADOR das empresas não analisadas — ADITIVO: observa os cards já
-   renderizados e cola colunas (cidade, CNAE, crescimento do setor, sócios,
-   funcionários). NÃO altera push/cache/Analisar. Lê o cadastro sob demanda.
+   renderizados e, para cada empresa, mostra na própria linha CNPJ,
+   cidade, CNAE, crescimento do setor, sócios e funcionários. Quem tem
+   CNPJ mas ainda não tem dados da Receita é buscado AUTOMATICAMENTE
+   (em série, ritmo gentil, com teto por sessão) e GRAVADO no cadastro
+   para não repetir. Botões de Analisar ficam no fim da linha.
+   NÃO altera push/cache/Analisar.
    =================================================================== */
 (function(){
   'use strict';
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  function norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+  function norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
   function fmt(n){ return Number(n||0).toLocaleString('pt-BR'); }
   function Rm(v){ var x=Number(v)||0; if(Math.abs(x)>=1e6) return 'R$ '+(x/1e6).toLocaleString('pt-BR',{maximumFractionDigits:1})+' mi'; if(Math.abs(x)>=1e3) return 'R$ '+Math.round(x/1e3)+' mil'; return 'R$ '+Math.round(x); }
+  function fmtCNPJ(c){ var d=String(c||'').replace(/\D/g,''); if(d.length!==14) return String(c||''); return d.slice(0,2)+'.'+d.slice(2,5)+'.'+d.slice(5,8)+'/'+d.slice(8,12)+'-'+d.slice(12); }
 
-  var INFO={};        // id -> dadosReceita (cache de leitura)
-  var PEND={};        // id -> true enquanto lê
-  var QUEUE=[], RUN=0, MAX=4;
+  var INFO={};        // id -> {R, cnpj, cidade, estado}  (cache de leitura do cadastro)
+  var AST={};         // id -> 'buscando' | 'falhou'      (estado da busca na Receita)
+  var CARD={};        // id -> elemento do card (para o botão manual achar)
+  var QUEUE=[], RUN=0, MAX=4;          // fila de leitura do cadastro
+  var APIQ=[], APIRUN=0, APIMAX=1;     // fila de busca na Receita (SÉRIE, 1 por vez)
+  var APIFEITAS=0, APITETO=50;         // teto de buscas automáticas por sessão
 
   function lerDoc(id){
     return new Promise(function(res){
       if(INFO[id]!==undefined) return res(INFO[id]);
       try{ if(typeof db==='undefined'){ INFO[id]=null; return res(null); }
-        db.collection('empresas').doc(id).get().then(function(s){ var d=(s&&s.exists)?(s.data()||{}):{}; INFO[id]=d.dadosReceita||{cnpj:d.cnpj||''}; res(INFO[id]); }).catch(function(){ INFO[id]=null; res(null); });
+        db.collection('empresas').doc(id).get().then(function(s){
+          var d=(s&&s.exists)?(s.data()||{}):{};
+          INFO[id]={ R:(d.dadosReceita||null),
+                     cnpj:(d.cnpj||d.cnpjConsultor360||(d.dadosReceita&&d.dadosReceita.cnpj)||''),
+                     cidade:(d.cidade||''), estado:(d.estado||d.uf||'') };
+          res(INFO[id]);
+        }).catch(function(){ INFO[id]=null; res(null); });
       }catch(e){ INFO[id]=null; res(null); }
     });
   }
   function enfileira(id, card){
+    CARD[id]=card;
     if(card.getAttribute('data-nmdec')) return; card.setAttribute('data-nmdec','1');
     QUEUE.push([id,card]); bombeia();
   }
   function bombeia(){
     while(RUN<MAX && QUEUE.length){ var it=QUEUE.shift(); RUN++; (function(id,card){
-      lerDoc(id).then(function(R){ RUN--; decora(card,id,R); bombeia(); }).catch(function(){ RUN--; bombeia(); });
+      lerDoc(id).then(function(D){ RUN--; decora(card,id,D); bombeia(); }).catch(function(){ RUN--; bombeia(); });
     })(it[0],it[1]); }
   }
 
-  function enrich(R){
-    R=R||{};
-    var o={cnae:'',cnaeDesc:'',mun:'',uf:'',sit:'',ativa:true,dig:'',root:String(R.cnpj||'').replace(/\D/g,'').slice(0,8)};
+  /* -------- busca na Receita (automática, em série) -------- */
+  function enfileiraAPI(id, card, cnpj){
+    if(card.getAttribute('data-nmapi')) return;
+    card.setAttribute('data-nmapi','1');
+    AST[id]='buscando';
+    APIQ.push([id,card,cnpj]); bombeiaAPI();
+  }
+  function rodarAPI(id, card, cnpj){
+    return new Promise(function(res){
+      if(typeof window.buscarCNPJ!=='function'){ AST[id]='falhou'; return res(); }
+      try{
+        window.buscarCNPJ(cnpj).then(function(r){
+          if(r&&r.ok&&r.receita){
+            var prev=INFO[id]||{};
+            INFO[id]={ R:r.receita, cnpj:(r.receita.cnpj||cnpj), cidade:prev.cidade||'', estado:prev.estado||'' };
+            delete AST[id];
+            try{ decora(card,id,INFO[id]); }catch(e){}
+            /* grava no cadastro para não repetir — nunca sobrescreve dado existente */
+            try{ if(typeof db!=='undefined' && db.collection){ db.collection('empresas').doc(id).update({ dadosReceita:r.receita, dadosReceitaEm:(new Date().toISOString().slice(0,10)), dadosReceitaAuto:true }).catch(function(){}); } }catch(e){}
+          } else {
+            AST[id]='falhou'; try{ decora(card,id,INFO[id]||{cnpj:cnpj}); }catch(e){}
+          }
+          res();
+        }).catch(function(){ AST[id]='falhou'; try{ decora(card,id,INFO[id]||{cnpj:cnpj}); }catch(e){} res(); });
+      }catch(e){ AST[id]='falhou'; res(); }
+    });
+  }
+  function bombeiaAPI(){
+    while(APIRUN<APIMAX && APIQ.length){
+      if(APIFEITAS>=APITETO){ // passou do teto: devolve os restantes como "buscar manual"
+        var resto=APIQ.splice(0); resto.forEach(function(it){ AST[it[0]]='falhou'; try{ decora(it[1],it[0],INFO[it[0]]||{cnpj:it[2]}); }catch(e){} });
+        return;
+      }
+      var it=APIQ.shift(); APIRUN++; APIFEITAS++;
+      (function(id,card,cnpj){
+        rodarAPI(id,card,cnpj).then(function(){ APIRUN--; setTimeout(bombeiaAPI, 800); });
+      })(it[0],it[1],it[2]);
+    }
+  }
+  /* botão manual (chip "buscar") */
+  window.__nmBuscar=function(id){
+    var card=CARD[id]; if(!card) return;
+    var D=INFO[id]||{}; var cnpj=(D.R&&D.R.cnpj)||D.cnpj||'';
+    if(String(cnpj).replace(/\D/g,'').length!==14) return;
+    card.removeAttribute('data-nmapi'); delete AST[id];
+    APIFEITAS=0; // reset do teto quando é clique manual
+    enfileiraAPI(id, card, cnpj);
+    try{ decora(card,id,D); }catch(e){}
+  };
+
+  function enrich(D){
+    D=D||{}; var R=D.R||{};
+    var o={cnae:'',cnaeDesc:'',mun:'',uf:'',sit:'',ativa:true,dig:'',cnpj:'',root:'',temReceita:false};
+    o.cnpj = (R && R.cnpj) || D.cnpj || '';
+    o.root = String(o.cnpj).replace(/\D/g,'').slice(0,8);
+    o.temReceita = !!(R && R.cnaePrincipal);
     if(R.cnaePrincipal){ o.cnae=R.cnaePrincipal.codigo||''; o.cnaeDesc=R.cnaePrincipal.descricao||''; o.dig=String(o.cnae).replace(/\D/g,''); }
     if(R.endereco){ o.mun=R.endereco.municipio||''; o.uf=R.endereco.uf||''; }
+    if(!o.mun && D.cidade) o.mun=D.cidade;
+    if(!o.uf && D.estado) o.uf=D.estado;
     o.sit=(R.situacao&&R.situacao.status)||''; o.ativa=!o.sit||/ATIVA/i.test(o.sit);
-    // sócios
+    // sócios (base nacional da Receita, pela raiz do CNPJ)
     if(window.sociosBaseCarregada&&window.sociosBaseCarregada()&&o.root&&window.sociosDaEmpresa){ var l=window.sociosDaEmpresa(o.root); if(l){ o.nSoc=l.length; if(l.length){ o.socTop=l.slice().sort(function(a,b){return (b.empresasBR||0)-(a.empresasBR||0);})[0]; } } }
-    // setor (faturamento + crescimento)
+    // setor (faturamento + crescimento) — precisa de CNAE + município
     if(o.mun&&o.dig&&typeof window.setorResumo==='function'){ try{ var sr=window.setorResumo(o.dig,o.mun); if(sr&&!sr.semDado&&sr.atual){ o.setorFat=sr.atual; o.setorG=sr.gYTD; } }catch(e){} }
-    // emprego CAGED
+    // emprego CAGED — precisa de CNAE + município
     if(o.mun&&o.dig.length>=7){ try{ var est=window.empregosCnae?window.empregosCnae(o.mun,o.dig):0; var an=window.anoCnae?window.anoCnae(o.mun,o.dig):null; o.estoque=est?(est+((an&&an[0])||0)):0;
       var PL=window.RS_PLAYERS||{}; o.players=(PL.cnae&&PL.cnae[norm(o.mun)+'|'+o.dig.slice(0,7)])||0; }catch(e){} }
     return o;
   }
 
   function chip(txt,cor){ return '<span style="font-size:11px;color:'+(cor||'#475569')+';background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:2px 7px;white-space:nowrap">'+txt+'</span>'; }
+  function chipBtn(txt,id){ return '<span onclick="window.__nmBuscar(\''+String(id).replace(/'/g,"\\'")+'\')" style="cursor:pointer;font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:2px 7px;white-space:nowrap">'+txt+'</span>'; }
 
-  function decora(card,id,R){
-    if(!card||card.querySelector('[data-nmchips]')) return;
-    var o=enrich(R||{});
+  function decora(card,id,D){
+    if(!card) return;
+    var old=card.querySelector('[data-nmchips]'); if(old) old.remove(); // sempre regera
+    var o=enrich(D||{});
+    var dig=String(o.cnpj||'').replace(/\D/g,'');
     var chips=[];
+    if(o.cnpj) chips.push(chip('🆔 '+esc(fmtCNPJ(o.cnpj)),'#334155'));
     if(o.mun) chips.push(chip('📍 '+esc(o.mun)+(o.uf?'/'+esc(o.uf):'')));
     if(o.sit&&!o.ativa) chips.push(chip('⚠️ '+esc(o.sit),'#b91c1c'));
     if(o.cnaeDesc) chips.push(chip('🏷️ '+esc(o.cnaeDesc.length>34?o.cnaeDesc.slice(0,34)+'…':o.cnaeDesc)));
     if(o.setorG!=null){ var g=(o.setorG*100); chips.push(chip('📈 setor '+(g>=0?'+':'')+g.toFixed(0)+'%/ano'+(o.setorFat?' · '+Rm(o.setorFat):''), g>=0?'#15803d':'#b91c1c')); }
     if(o.nSoc!=null) chips.push(chip('🧑 '+o.nSoc+' sócio'+(o.nSoc===1?'':'s')+(o.socTop&&o.socTop.empresasBR>1?(' ('+esc((o.socTop.nome||'').split(' ').slice(0,2).join(' '))+': '+fmt(o.socTop.empresasBR)+')'):''),'#4338ca'));
     if(o.estoque){ var txt=o.players===1?('~'+fmt(o.estoque)+' func (única)'):(o.players>1?('~'+fmt(Math.round(o.estoque/o.players))+' func/empresa'):(fmt(o.estoque)+' no CNAE')); chips.push(chip('👷 '+txt,'#0f766e')); }
-    if(!chips.length){ if(!R||(!R.cnpj&&!o.cnae)) chips.push(chip('sem cadastro da Receita ainda','#94a3b8')); else return; }
+    // estado da Receita quando ainda não há dados
+    if(!o.temReceita){
+      if(dig.length===14){
+        if(AST[id]==='buscando') chips.push(chip('⏳ buscando na Receita…','#64748b'));
+        else if(AST[id]==='falhou') chips.push(chipBtn('🔎 buscar na Receita', id));
+        else { chips.push(chip('⏳ buscando na Receita…','#64748b')); enfileiraAPI(id,card,o.cnpj); }
+      } else {
+        chips.push(chip('sem CNPJ no cadastro','#94a3b8'));
+      }
+    }
+    if(!chips.length) return;
     var div=document.createElement('div'); div.setAttribute('data-nmchips','1');
-    div.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-top:2px';
+    div.style.cssText='display:flex;gap:6px;flex-wrap:wrap';
     div.innerHTML=chips.join('');
-    // insere logo após o nome do card
     var nomeEl=card.querySelector('.sd-card-nome');
     if(nomeEl&&nomeEl.parentNode) nomeEl.parentNode.insertBefore(div, nomeEl.nextSibling);
-    else card.insertBefore(div, card.firstChild.nextSibling||null);
+    else card.insertBefore(div, (card.firstChild?card.firstChild.nextSibling:null));
+  }
+
+  function injStyle(){
+    if(document.getElementById('nmdecCSS')) return;
+    var st=document.createElement('style'); st.id='nmdecCSS';
+    st.textContent='#listaEmpresasSemDados .sd-card,#listaEmpresasComApre .sd-card{flex-direction:row;align-items:center;flex-wrap:wrap;gap:10px}'
+      +'#listaEmpresasSemDados .sd-card-nome,#listaEmpresasComApre .sd-card-nome{flex:0 0 auto;max-width:280px}'
+      +'#listaEmpresasSemDados [data-nmchips],#listaEmpresasComApre [data-nmchips]{flex:1 1 280px;margin-top:0!important}'
+      +'#listaEmpresasSemDados .sd-card-acoes,#listaEmpresasComApre .sd-card-acoes{margin-left:auto;flex:0 0 auto}';
+    (document.head||document.documentElement).appendChild(st);
   }
 
   function varrer(){
+    injStyle();
     var cards=document.querySelectorAll('#listaEmpresasSemDados .sd-card, #listaEmpresasComApre .sd-card');
     [].forEach.call(cards, function(card){
       var btn=card.querySelector('button[onclick*="abrirHubEmpresa"]')||card.querySelector('button[onclick*="abrirApresentacao"]');
@@ -48795,7 +48889,7 @@ window.RS_SOCIOS_RANK=[["FERNANDO ANTONIO KULNIG CINELLI","***383657**",1128,3,[
   function ligar(){
     if(_obsOn) return;
     var body=document.getElementById('semDadosBody'); if(!body) return;
-    _obsOn=true;
+    _obsOn=true; injStyle();
     var mo=new MutationObserver(function(){ clearTimeout(window._nmdecT); window._nmdecT=setTimeout(varrer, 250); });
     mo.observe(body, {childList:true, subtree:true});
     varrer();
