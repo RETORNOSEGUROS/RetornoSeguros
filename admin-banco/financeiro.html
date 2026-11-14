@@ -5331,6 +5331,9 @@ function mostrarEmpresasSemDados(empresas){
 
   container.style.display = "block";
 
+  window._nmLastEmp = empresas;
+  if(window._nmModo==='lista' && typeof window._nmRenderLista==='function'){ window._nmRenderLista(empresas); return; }
+
   const comApre = empresas.filter(e => e.temApresentacao);
   const semNada = empresas.filter(e => !e.temApresentacao);
 
@@ -16044,6 +16047,7 @@ window.renderNossaAnalise = function(latest, rows, data){
       H+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;font-size:13px;color:#92400e;margin-bottom:14px">📇 Esta empresa ainda não tem <b>Apresentação</b> feita. Ela é o levantamento mais rico (produtos, unidades, sócios, oportunidades) — rode a etapa <b>Apresentação</b> e volte aqui. O complemento de NCMs abaixo funciona mesmo assim.</div>';
     }
 
+    H+=(window.renderPerfilSocios?window.renderPerfilSocios(data):'');
     H+=(window.renderFuncionariosEstim?window.renderFuncionariosEstim(data):'');
 
     /* ===== complemento NCM ===== */
@@ -48656,6 +48660,189 @@ window.RS_SOCIOS_RANK=[["FERNANDO ANTONIO KULNIG CINELLI","***383657**",1128,3,[
     _render();
     if(!BASE && !_loading) _carregarSalva().then(function(x){ if(x) _render(); });
   };
+})();
+
+/* ===== SÓCIOS NO PERFIL: contrato social + cruzamento com a base da Receita ===== */
+(function(){
+  'use strict';
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+  function fmt(n){ return Number(n||0).toLocaleString('pt-BR'); }
+  window.renderPerfilSocios=function(data){
+    data=data||window.CURRENT_ANALYSIS_DATA||{};
+    var ed=data.empresaDoc||{}, R=ed.dadosReceita||{};
+    var root=String(R.cnpj||ed.cnpj||'').replace(/\D/g,'').slice(0,8);
+    // 1) sócios do contrato social (nome, cpf, cargo, participação, nascimento)
+    var pk=null; try{ pk=window.analisarPessoaChave?window.analisarPessoaChave((data.rows||[])[0]||{}, data.rows||[], data):null; }catch(e){}
+    var socios=(pk&&pk.socios)||[];
+    var fonte='contrato social / QSA';
+    if(!socios.length){ socios=((R.socios||R.quadroSocietario||R.qsa||[])).map(function(s){ return {nome:s.nome||s.razaoSocial||'', cpf:s.doc||s.cpf||'', cargo:s.qualificacao||'', administrador:/admin/i.test(s.qualificacao||''), participacao:null, ehPJ:s.ehPJ, nascimento:s.nascimento||s.dataNascimento}; }); fonte='Receita (QSA)'; }
+    if(!socios.length) return '';
+    var part=(ed.participacaoSocios)||{};
+    // 2) base da Receita (contagem de empresas por sócio)
+    var rf=null; try{ rf=window.sociosDaEmpresa?window.sociosDaEmpresa(root):null; }catch(e){}
+    var baseOn=!!(window.sociosBaseCarregada&&window.sociosBaseCarregada());
+    function matchRF(nome){ if(!rf||!rf.length) return null; var n=norm(nome); var best=null; for(var i=0;i<rf.length;i++){ var rn=norm(rf[i].nome); if(rn===n) return rf[i]; if(!best&&(rn.indexOf(n)>=0||n.indexOf(rn)>=0)) best=rf[i]; } return best; }
+
+    var H='<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">';
+    H+='<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:4px">👤 Sócios'+(socios.length?(' ('+socios.length+')'):'')+'</div>';
+    H+='<div style="font-size:12px;color:#64748b;margin-bottom:10px">Do '+esc(fonte)+'.'+(baseOn?' Cruzado com a base da Receita (em quantas empresas cada um está).':' <span style="color:#b45309">Carregue a base no menu 👥 Sócios para ver em quantas empresas cada um está.</span>')+'</div>';
+    socios.forEach(function(s,i){
+      var m=matchRF(s.nome);
+      var pc=(part[s.cpf]!=null?part[s.cpf]:(s.participacao!=null?(Number(s.participacao)<=1?Math.round(s.participacao*10000)/100:Number(s.participacao)):null));
+      H+='<div style="border-top:'+(i?'1px solid #f1f5f9':'none')+';padding:9px 0">';
+      H+='<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline">';
+      H+='<div style="font-size:13.5px;font-weight:700;color:#0f172a">'+esc(s.nome||'(sem nome)')+(s.ehPJ?' <span style="font-size:10px;color:#7c3aed">PJ</span>':'')+(s.administrador?' <span style="font-size:10px;color:#0f766e">administra</span>':'')+'</div>';
+      H+='<div style="font-size:12px;color:#64748b">'+(s.cpf?('CPF '+esc(s.cpf)):'')+(pc!=null?(' · <b>'+esc(String(pc))+'%</b>'):'')+(s.nascimento?(' · nasc. '+esc(s.nascimento)):'')+'</div>';
+      H+='</div>';
+      if(s.cargo) H+='<div style="font-size:11.5px;color:#94a3b8">'+esc(s.cargo)+'</div>';
+      if(m){
+        var outras=(m.outrasRS||[]);
+        H+='<div style="font-size:12.5px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:6px 10px;margin-top:5px">';
+        H+='🔗 é sócio em <b>'+fmt(m.empresasBR)+'</b> empresa(s) no Brasil'+(m.foraRS>0?(' ('+fmt(outras.length)+' no RS · '+fmt(m.foraRS)+' em outros estados)'):(' (todas no RS)'))+'.';
+        if(outras.length){ H+=' <span style="color:#334155">RS: '+outras.slice(0,5).map(function(x){return esc(x[1]||x[0]);}).join(' · ')+(outras.length>5?(' … +'+(outras.length-5)):'')+'</span>'; }
+        H+='</div>';
+      } else if(baseOn){ H+='<div style="font-size:11.5px;color:#94a3b8;margin-top:4px">não encontrei este sócio na base da Receita (nome diferente ou empresa fora do RS).</div>'; }
+      H+='</div>';
+    });
+    if(baseOn){ var fora=socios.map(matchRF).filter(Boolean).reduce(function(a,b){return a+(b.foraRS||0);},0); if(fora>0) H+='<div style="font-size:11px;color:#94a3b8;margin-top:8px">As empresas em outros estados só aparecem contadas — a base de nomes que temos é só do RS. Dá pra trazer os outros estados se subirmos os dados nacionais.</div>'; }
+    H+='</div>';
+    return H;
+  };
+})();
+</script>
+<script>
+/* ===================================================================
+   EMPRESAS NÃO MAPEADAS — modo LISTA + enriquecimento (sócios, CNAE,
+   faturamento do setor, funcionários CAGED). Toggle Cards/Lista.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
+  function fmt(n){ return Number(n||0).toLocaleString('pt-BR'); }
+  function Rm(v){ var x=Number(v)||0; if(Math.abs(x)>=1e6) return 'R$ '+(x/1e6).toLocaleString('pt-BR',{maximumFractionDigits:1})+' mi'; if(Math.abs(x)>=1e3) return 'R$ '+Math.round(x/1e3)+' mil'; return 'R$ '+Math.round(x); }
+  function cache(id){ try{ return (typeof EMPRESAS_CACHE!=='undefined'&&EMPRESAS_CACHE.get)?EMPRESAS_CACHE.get(id):null; }catch(e){ return null; } }
+  function cnpjDe(id){ var c=cache(id); return c&&c.cnpj?String(c.cnpj).replace(/\D/g,''):''; }
+  function rootDe(id){ return cnpjDe(id).slice(0,8); }
+
+  window._nmModo='card';
+  window._nmDoc={};   // id -> dadosReceita (cacheado)
+  window._nmAberto={};
+
+  window._nmToggle=function(){
+    window._nmModo=(window._nmModo==='lista'?'card':'lista');
+    var b=document.getElementById('_nmToggleBtn'); if(b) b.textContent=(window._nmModo==='lista'?'🔲 Ver em cards':'📋 Ver em lista');
+    if(typeof mostrarEmpresasSemDados==='function') mostrarEmpresasSemDados(window._nmLastEmp||[]);
+  };
+
+  function socioResumo(id){
+    var root=rootDe(id);
+    if(!root || !(window.sociosBaseCarregada&&window.sociosBaseCarregada())) return '';
+    var lst=window.sociosDaEmpresa?window.sociosDaEmpresa(root):null;
+    if(!lst) return '';
+    if(!lst.length) return '<span style="color:#94a3b8">sem sócios na base</span>';
+    var top=lst.slice().sort(function(a,b){return (b.empresasBR||0)-(a.empresasBR||0);})[0];
+    return '<b>'+lst.length+'</b> sócio(s)'+(top&&top.empresasBR>1?(' · '+esc((top.nome||'').split(' ').slice(0,2).join(' '))+' em '+fmt(top.empresasBR)+' empresas'):'');
+  }
+
+  // linha da lista
+  function linha(emp){
+    var id=String(emp.id), nm=esc(emp.nome||''), idJs=id.replace(/'/g,"\\'"), nmJs=String(emp.nome||'').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    var apre=emp.temApresentacao?'<span style="font-size:10px;font-weight:700;color:#0f766e;background:#ccfbf1;border-radius:5px;padding:1px 6px">📇 apresentação</span>':'';
+    var soc=socioResumo(id);
+    var h='<div style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;background:#fff">';
+    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:200px;cursor:pointer" onclick="window._nmExpandir(\''+idJs+'\')"><div style="font-weight:700;color:#0f172a;font-size:13.5px">▸ '+nm+' '+apre+'</div>'+(soc?'<div style="font-size:11.5px;color:#64748b;margin-top:2px">'+soc+'</div>':'')+'</div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    h+='<button onclick="abrirHubEmpresa(\''+idJs+'\',\''+nmJs+'\')" style="background:#4f46e5;color:#fff;border:none;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer">🔬 Analisar</button>';
+    h+='<button onclick="abrirApresentacao(\''+idJs+'\',\''+nmJs+'\')" style="background:#fff;color:#0f766e;border:1px solid #99f6e4;border-radius:7px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer">'+(emp.temApresentacao?'📇 Ver':'📇 Apresentar')+'</button>';
+    h+='</div></div>';
+    h+='<div id="_nmdet_'+esc(id)+'" style="display:'+(window._nmAberto[id]?'block':'none')+';padding:0 14px 12px"></div>';
+    h+='</div>';
+    return h;
+  }
+
+  window._nmRenderLista=function(empresas){
+    window._nmLastEmp=empresas||[];
+    var comApre=(empresas||[]).filter(function(e){return e.temApresentacao;});
+    var semNada=(empresas||[]).filter(function(e){return !e.temApresentacao;});
+    var la=document.getElementById('listaEmpresasComApre'), ln=document.getElementById('listaEmpresasSemDados');
+    if(la) la.innerHTML=comApre.map(linha).join('');
+    if(ln) ln.innerHTML=semNada.map(linha).join('');
+    var gA=document.getElementById('sdGrupoApre'); if(gA) gA.style.display=comApre.length?'block':'none';
+    var tN=document.getElementById('sdNadaTitulo'), sN=document.getElementById('sdNadaSub');
+    if(tN) tN.style.display=(comApre.length&&semNada.length)?'flex':'none';
+    if(sN) sN.style.display=(comApre.length&&semNada.length)?'block':'none';
+    var cA=document.getElementById('sdApreCount'); if(cA) cA.textContent=comApre.length;
+    var cN=document.getElementById('sdNadaCount'); if(cN) cN.textContent=semNada.length;
+    // reabre os que estavam abertos
+    Object.keys(window._nmAberto).forEach(function(id){ if(window._nmAberto[id]) _preencherDet(id); });
+  };
+
+  function _getDados(id){
+    if(window._nmDoc[id]) return Promise.resolve(window._nmDoc[id]);
+    try{ if(typeof db==='undefined') return Promise.resolve(null);
+      return db.collection('empresas').doc(id).get().then(function(s){ var d=(s&&s.exists)?(s.data()||{}):{}; var dr=d.dadosReceita||{cnpj:d.cnpj}; window._nmDoc[id]=dr; return dr; }).catch(function(){ return null; });
+    }catch(e){ return Promise.resolve(null); }
+  }
+
+  function _detHtml(id, R){
+    R=R||{};
+    var cnae=R.cnaePrincipal?((R.cnaePrincipal.codigo||'')+' — '+(R.cnaePrincipal.descricao||'')):'';
+    var mun=(R.endereco&&R.endereco.municipio)||'', uf=(R.endereco&&R.endereco.uf)||'';
+    var dig=String((R.cnaePrincipal&&R.cnaePrincipal.codigo)||'').replace(/\D/g,'');
+    var root=rootDe(id);
+    var h='<div style="background:#f8fafc;border-radius:8px;padding:11px 13px;font-size:12.5px;color:#334155;line-height:1.6">';
+    if(!R.cnpj && !cnae){ h+='<span style="color:#94a3b8">Sem dados da Receita cadastrados ainda — faça o cadastro/apresentação.</span></div>'; return h; }
+    if(cnae) h+='<div><b>Atividade:</b> '+esc(cnae)+'</div>';
+    if(mun) h+='<div><b>Cidade:</b> '+esc(mun)+'/'+esc(uf)+'</div>';
+    // sócios
+    var lst=(window.sociosBaseCarregada&&window.sociosBaseCarregada()&&window.sociosDaEmpresa)?window.sociosDaEmpresa(root):null;
+    if(lst&&lst.length){ h+='<div style="margin-top:4px"><b>Sócios ('+lst.length+'):</b> '+lst.slice(0,8).map(function(s){ return esc((s.nome||'').split(' ').slice(0,3).join(' '))+(s.empresasBR>1?(' <span style="color:#4338ca">('+fmt(s.empresasBR)+' empresas)</span>'):''); }).join(' · ')+'</div>'; }
+    else if(window.sociosBaseCarregada&&window.sociosBaseCarregada()){ h+='<div style="color:#94a3b8;margin-top:3px">Sócios: não achei na base (empresa fora do RS ou sem sócios).</div>'; }
+    else { h+='<div style="color:#b45309;margin-top:3px">Carregue a base de Sócios (menu 👥) p/ ver os sócios aqui.</div>'; }
+    // faturamento do setor na cidade
+    if(mun && dig && typeof window.setorResumo==='function'){
+      try{ var sr=window.setorResumo(dig, mun); if(sr && !sr.semDado && sr.atual){ h+='<div style="margin-top:4px"><b>Setor na cidade:</b> emite '+Rm(sr.atual)+(sr.gYTD!=null?(' ('+(sr.gYTD>=0?'+':'')+(sr.gYTD*100).toFixed(0)+'% no ano)'):'')+'</div>'; } }catch(e){}
+    }
+    // funcionários estimados pelo CAGED
+    if(mun && dig.length>=7){
+      try{ var est=window.empregosCnae?window.empregosCnae(mun,dig):0; var an=window.anoCnae?window.anoCnae(mun,dig):null; var estAtual=est?(est+((an&&an[0])||0)):0;
+        var PL=window.RS_PLAYERS||{}, pl=(PL.cnae&&PL.cnae[norm(mun)+'|'+dig.slice(0,7)])||0;
+        if(estAtual){ h+='<div style="margin-top:4px"><b>Emprego no CNAE ('+esc(mun)+'):</b> '+fmt(estAtual)+' no estoque'+(pl>1?(' em '+pl+' empresas (~'+fmt(Math.round(estAtual/pl))+'/empresa)'):(pl===1?' — é a única, ~todos dela':''))+'</div>'; }
+      }catch(e){}
+    }
+    h+='<div style="margin-top:7px;font-size:11px;color:#94a3b8">Ao clicar em 🔬 Analisar, esses dados já entram no cadastro da empresa.</div>';
+    h+='</div>';
+    return h;
+  }
+
+  function _preencherDet(id){
+    var el=document.getElementById('_nmdet_'+id); if(!el) return;
+    el.style.display='block';
+    if(window._nmDoc[id]){ el.innerHTML=_detHtml(id, window._nmDoc[id]); return; }
+    el.innerHTML='<div style="padding:8px;color:#94a3b8;font-size:12px">carregando…</div>';
+    _getDados(id).then(function(R){ if(window._nmAberto[id]) el.innerHTML=_detHtml(id, R||{}); });
+  }
+
+  window._nmExpandir=function(id){
+    window._nmAberto[id]=!window._nmAberto[id];
+    var el=document.getElementById('_nmdet_'+id); if(!el) return;
+    if(!window._nmAberto[id]){ el.style.display='none'; return; }
+    _preencherDet(id);
+  };
+
+  // injeta o botão de toggle ao abrir o painel (uma vez)
+  function _ensureBtn(){
+    if(document.getElementById('_nmToggleBtn')) return;
+    var head=document.querySelector('.sd-search'); if(!head) return;
+    var bar=document.createElement('div'); bar.style.cssText='display:flex;justify-content:flex-end;margin:6px 0 2px';
+    bar.innerHTML='<button id="_nmToggleBtn" onclick="window._nmToggle()" style="background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer">📋 Ver em lista</button>';
+    head.parentNode.insertBefore(bar, head.nextSibling);
+  }
+  var _iv=setInterval(function(){ if(document.querySelector('.sd-search')){ _ensureBtn(); clearInterval(_iv); } }, 800);
+  document.addEventListener('DOMContentLoaded', _ensureBtn);
 })();
 </script>
 </body>
