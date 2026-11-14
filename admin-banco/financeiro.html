@@ -48709,5 +48709,100 @@ window.RS_SOCIOS_RANK=[["FERNANDO ANTONIO KULNIG CINELLI","***383657**",1128,3,[
 })();
 </script>
 
+<script>
+/* ===================================================================
+   DECORADOR das empresas não analisadas — ADITIVO: observa os cards já
+   renderizados e cola colunas (cidade, CNAE, crescimento do setor, sócios,
+   funcionários). NÃO altera push/cache/Analisar. Lê o cadastro sob demanda.
+   =================================================================== */
+(function(){
+  'use strict';
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function norm(s){ return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim(); }
+  function fmt(n){ return Number(n||0).toLocaleString('pt-BR'); }
+  function Rm(v){ var x=Number(v)||0; if(Math.abs(x)>=1e6) return 'R$ '+(x/1e6).toLocaleString('pt-BR',{maximumFractionDigits:1})+' mi'; if(Math.abs(x)>=1e3) return 'R$ '+Math.round(x/1e3)+' mil'; return 'R$ '+Math.round(x); }
+
+  var INFO={};        // id -> dadosReceita (cache de leitura)
+  var PEND={};        // id -> true enquanto lê
+  var QUEUE=[], RUN=0, MAX=4;
+
+  function lerDoc(id){
+    return new Promise(function(res){
+      if(INFO[id]!==undefined) return res(INFO[id]);
+      try{ if(typeof db==='undefined'){ INFO[id]=null; return res(null); }
+        db.collection('empresas').doc(id).get().then(function(s){ var d=(s&&s.exists)?(s.data()||{}):{}; INFO[id]=d.dadosReceita||{cnpj:d.cnpj||''}; res(INFO[id]); }).catch(function(){ INFO[id]=null; res(null); });
+      }catch(e){ INFO[id]=null; res(null); }
+    });
+  }
+  function enfileira(id, card){
+    if(card.getAttribute('data-nmdec')) return; card.setAttribute('data-nmdec','1');
+    QUEUE.push([id,card]); bombeia();
+  }
+  function bombeia(){
+    while(RUN<MAX && QUEUE.length){ var it=QUEUE.shift(); RUN++; (function(id,card){
+      lerDoc(id).then(function(R){ RUN--; decora(card,id,R); bombeia(); }).catch(function(){ RUN--; bombeia(); });
+    })(it[0],it[1]); }
+  }
+
+  function enrich(R){
+    R=R||{};
+    var o={cnae:'',cnaeDesc:'',mun:'',uf:'',sit:'',ativa:true,dig:'',root:String(R.cnpj||'').replace(/\D/g,'').slice(0,8)};
+    if(R.cnaePrincipal){ o.cnae=R.cnaePrincipal.codigo||''; o.cnaeDesc=R.cnaePrincipal.descricao||''; o.dig=String(o.cnae).replace(/\D/g,''); }
+    if(R.endereco){ o.mun=R.endereco.municipio||''; o.uf=R.endereco.uf||''; }
+    o.sit=(R.situacao&&R.situacao.status)||''; o.ativa=!o.sit||/ATIVA/i.test(o.sit);
+    // sócios
+    if(window.sociosBaseCarregada&&window.sociosBaseCarregada()&&o.root&&window.sociosDaEmpresa){ var l=window.sociosDaEmpresa(o.root); if(l){ o.nSoc=l.length; if(l.length){ o.socTop=l.slice().sort(function(a,b){return (b.empresasBR||0)-(a.empresasBR||0);})[0]; } } }
+    // setor (faturamento + crescimento)
+    if(o.mun&&o.dig&&typeof window.setorResumo==='function'){ try{ var sr=window.setorResumo(o.dig,o.mun); if(sr&&!sr.semDado&&sr.atual){ o.setorFat=sr.atual; o.setorG=sr.gYTD; } }catch(e){} }
+    // emprego CAGED
+    if(o.mun&&o.dig.length>=7){ try{ var est=window.empregosCnae?window.empregosCnae(o.mun,o.dig):0; var an=window.anoCnae?window.anoCnae(o.mun,o.dig):null; o.estoque=est?(est+((an&&an[0])||0)):0;
+      var PL=window.RS_PLAYERS||{}; o.players=(PL.cnae&&PL.cnae[norm(o.mun)+'|'+o.dig.slice(0,7)])||0; }catch(e){} }
+    return o;
+  }
+
+  function chip(txt,cor){ return '<span style="font-size:11px;color:'+(cor||'#475569')+';background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:2px 7px;white-space:nowrap">'+txt+'</span>'; }
+
+  function decora(card,id,R){
+    if(!card||card.querySelector('[data-nmchips]')) return;
+    var o=enrich(R||{});
+    var chips=[];
+    if(o.mun) chips.push(chip('📍 '+esc(o.mun)+(o.uf?'/'+esc(o.uf):'')));
+    if(o.sit&&!o.ativa) chips.push(chip('⚠️ '+esc(o.sit),'#b91c1c'));
+    if(o.cnaeDesc) chips.push(chip('🏷️ '+esc(o.cnaeDesc.length>34?o.cnaeDesc.slice(0,34)+'…':o.cnaeDesc)));
+    if(o.setorG!=null){ var g=(o.setorG*100); chips.push(chip('📈 setor '+(g>=0?'+':'')+g.toFixed(0)+'%/ano'+(o.setorFat?' · '+Rm(o.setorFat):''), g>=0?'#15803d':'#b91c1c')); }
+    if(o.nSoc!=null) chips.push(chip('🧑 '+o.nSoc+' sócio'+(o.nSoc===1?'':'s')+(o.socTop&&o.socTop.empresasBR>1?(' ('+esc((o.socTop.nome||'').split(' ').slice(0,2).join(' '))+': '+fmt(o.socTop.empresasBR)+')'):''),'#4338ca'));
+    if(o.estoque){ var txt=o.players===1?('~'+fmt(o.estoque)+' func (única)'):(o.players>1?('~'+fmt(Math.round(o.estoque/o.players))+' func/empresa'):(fmt(o.estoque)+' no CNAE')); chips.push(chip('👷 '+txt,'#0f766e')); }
+    if(!chips.length){ if(!R||(!R.cnpj&&!o.cnae)) chips.push(chip('sem cadastro da Receita ainda','#94a3b8')); else return; }
+    var div=document.createElement('div'); div.setAttribute('data-nmchips','1');
+    div.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-top:2px';
+    div.innerHTML=chips.join('');
+    // insere logo após o nome do card
+    var nomeEl=card.querySelector('.sd-card-nome');
+    if(nomeEl&&nomeEl.parentNode) nomeEl.parentNode.insertBefore(div, nomeEl.nextSibling);
+    else card.insertBefore(div, card.firstChild.nextSibling||null);
+  }
+
+  function varrer(){
+    var cards=document.querySelectorAll('#listaEmpresasSemDados .sd-card, #listaEmpresasComApre .sd-card');
+    [].forEach.call(cards, function(card){
+      var btn=card.querySelector('button[onclick*="abrirHubEmpresa"]')||card.querySelector('button[onclick*="abrirApresentacao"]');
+      if(!btn) return; var m=(btn.getAttribute('onclick')||'').match(/\(\s*'([^']+)'/); if(!m) return;
+      enfileira(m[1], card);
+    });
+  }
+
+  var _obsOn=false;
+  function ligar(){
+    if(_obsOn) return;
+    var body=document.getElementById('semDadosBody'); if(!body) return;
+    _obsOn=true;
+    var mo=new MutationObserver(function(){ clearTimeout(window._nmdecT); window._nmdecT=setTimeout(varrer, 250); });
+    mo.observe(body, {childList:true, subtree:true});
+    varrer();
+  }
+  var _iv=setInterval(function(){ if(document.getElementById('semDadosBody')){ ligar(); varrer(); if(_obsOn) clearInterval(_iv); } }, 1000);
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(ligar, 1500); });
+})();
+</script>
 </body>
 </html>
