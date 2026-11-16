@@ -16000,6 +16000,109 @@ window.renderNossaAnalise = function(latest, rows, data){
   };
   window._renderPerfilRefresh = function(){ var el=document.getElementById('perfilEmpresaContent'); if(el) el.innerHTML=window.renderPerfilEmpresa((_dados().rows||[])[0]||{}, _dados().rows||[], _dados()); };
 
+  /* ===== Oportunidades de mercado: cruza NCMs da empresa com o Radar (RS compra/vende) + player local ===== */
+  function _oportMercado(P, R){
+    try{
+      var C=window.RS_COMPRAS, S=window.RS_SAIDAS;
+      function arr(x){ return Array.isArray(x)?x:[]; }
+      function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+      function dig(x){ return String(x||'').replace(/\D/g,''); }
+      function pcn(v){ v=Number(v)||0; return (Math.round(v*10)/10).toString().replace('.',',')+'%'; }
+      function pgi(v){ v=(Number(v)||0)*100; return (v>=0?'+':'')+(Math.round(v*10)/10).toString().replace('.',',')+'%'; }
+      var compra=arr(P&&P.ncm_compra), vende=arr(P&&P.ncm_vende);
+      if((!C||!C.cats)&&(!S||!S.setores)) return '';
+      if(!compra.length && !vende.length) return '';
+      var city=(R&&R.endereco&&R.endereco.municipio)||'';
+
+      /* NCM (capítulo, 2 díg) -> divisão CNAE que normalmente PRODUZ esse item (aproximado) */
+      var NCM2DIV={'01':'01','02':'10','03':'03','04':'10','05':'10','06':'01','07':'01','08':'01','09':'01','10':'01','11':'10','12':'01','13':'20','14':'01','15':'10','16':'10','17':'10','18':'10','19':'10','20':'10','21':'10','22':'11','23':'10','24':'12','25':'23','26':'07','27':'19','28':'20','29':'20','30':'21','31':'20','32':'20','33':'20','34':'20','35':'20','36':'20','38':'20','39':'22','40':'22','41':'15','42':'15','43':'15','44':'16','45':'16','46':'16','47':'17','48':'17','49':'18','50':'13','51':'13','52':'13','53':'13','54':'13','55':'13','56':'13','57':'13','58':'13','59':'13','60':'13','61':'14','62':'14','63':'13','64':'15','65':'14','66':'32','67':'32','68':'23','69':'23','70':'23','71':'32','72':'24','73':'25','74':'24','75':'24','76':'24','78':'24','79':'24','80':'24','81':'24','82':'25','83':'25','84':'28','85':'27','86':'30','87':'29','88':'30','89':'30','90':'26','91':'26','92':'26','93':'25','94':'31','95':'32','96':'32'};
+      function localIns(ncm){
+        if(!city || typeof window.setorResumo!=='function') return '';
+        var div=NCM2DIV[String(ncm).slice(0,2)]; if(!div) return '';
+        var sr; try{ sr=window.setorResumo(div, city); }catch(e){ return ''; }
+        if(!sr) return '';
+        var dn=sr.divnome||'';
+        if(sr.semDado || !sr.atual){
+          return '<div style="font-size:11.5px;color:#0369a1;margin-top:3px">📍 Em <b>'+esc(city)+'</b> não há produção local desse tipo de insumo (setor CNAE '+esc(div)+(dn?' '+esc(dn):'')+') — <b>espaço pra fornecedor local</b> (perto costuma ser mais barato).</div>';
+        }
+        var g=sr.gYTD;
+        if(g!=null && g<-0.02){
+          return '<div style="font-size:11.5px;color:#0369a1;margin-top:3px">📍 Em <b>'+esc(city)+'</b> o setor que produz isso (CNAE '+esc(div)+(dn?' '+esc(dn):'')+') vem <b>caindo</b> ('+pgi(g)+' no ano) — chance de <b>consolidar/comprar</b> um fornecedor local.</div>';
+        }
+        return '<div style="font-size:11.5px;color:#0369a1;margin-top:3px">📍 Em <b>'+esc(city)+'</b> há fornecedor local desse insumo (CNAE '+esc(div)+(dn?' '+esc(dn):'')+'), setor '+(g!=null&&g>0.02?'crescendo ('+pgi(g)+')':'estável')+' — vale <b>cotar aqui</b> antes de trazer de fora.</div>';
+      }
+
+      function achaCompra(ncm){
+        if(!C||!C.cats) return null;
+        var d8=dig(ncm).slice(0,8), d4=d8.slice(0,4), exato=null, aprox=null;
+        C.cats.forEach(function(cat){ arr(cat.ncms).forEach(function(n){ var cd=dig(n[0]);
+          if(cd===d8 && !exato) exato={cat:cat, pct:n[1], exato:true};
+          else if(cd.slice(0,4)===d4 && !aprox) aprox={cat:cat, pct:n[1], exato:false};
+        }); });
+        return exato||aprox;
+      }
+      function achaVenda(ncm){
+        if(!S||!S.setores) return null;
+        var d8=dig(ncm).slice(0,8), d4=d8.slice(0,4), exato=null, aprox=null;
+        Object.keys(S.setores).forEach(function(k){ var st=S.setores[k]; arr(st.ncms).forEach(function(n){ var cd=dig(n[0]);
+          if(cd===d8 && !exato) exato={setor:k, st:st, desc:n[1], pct:n[2], exato:true};
+          else if(cd.slice(0,4)===d4 && !aprox) aprox={setor:k, st:st, desc:n[1], pct:n[2], exato:false};
+        }); });
+        return exato||aprox;
+      }
+      function ufsTxt(ufs,n){ return arr(ufs).slice(0,n||5).map(function(u){ return esc(u[0])+' '+pcn(u[1]); }).join(' · '); }
+
+      var H='', nI=0, nV=0, semMatch=[];
+
+      /* --- INSUMOS (compra) --- */
+      var blocoI='';
+      compra.slice(0,8).forEach(function(it){
+        var ncm=dig(it.ncm||it[0]||''); if(ncm.length<4){ return; }
+        var m=achaCompra(ncm);
+        var nome=esc(it.descricao||it.desc||('NCM '+ncm));
+        if(!m){ semMatch.push(nome+' (compra)'); return; }
+        nI++;
+        var imp=Number(m.cat.imp)||0, ufs=arr(m.cat.ufs), topUF=ufs[0]||['',0];
+        var op;
+        if(imp>=15) op='Importação alta ('+pcn(imp)+') — oportunidade de <b>substituição de importação</b>: produzir ou fornecer aqui.';
+        else if((Number(topUF[1])||0)>=35) op='Fornecimento concentrado em <b>'+esc(topUF[0])+'</b> ('+pcn(topUF[1])+') — é onde há oferta e preço; cotar ali pode baratear o insumo.';
+        else op='Origem pulverizada ('+ufsTxt(ufs,3)+') — há margem pra negociar origem e frete.';
+        blocoI+='<div style="border-left:3px solid #fcd34d;padding:7px 11px;margin:7px 0;background:#fffbeb;border-radius:0 8px 8px 0">'
+          +'<div style="font-size:12.5px;color:#0f172a"><b>'+nome+'</b> <span style="color:#94a3b8;font-size:10.5px">NCM '+esc(ncm)+(m.exato?'':' · aprox. por posição')+' · '+esc(m.cat.cat)+'</span></div>'
+          +'<div style="font-size:12px;color:#475569;margin-top:2px">O RS traz de: '+ufsTxt(ufs,5)+(imp?' · <b>importação '+pcn(imp)+'</b>':'')+'</div>'
+          +'<div style="font-size:12px;color:#b45309;margin-top:3px">→ '+op+'</div>'
+          +localIns(ncm)+'</div>';
+      });
+      if(nI) H+='<div style="font-weight:700;font-size:13px;color:#b45309;margin:4px 0 2px">🔻 Insumos que ela compra — onde o RS busca (e onde pode estar mais barato)</div>'+blocoI;
+
+      /* --- PRODUTOS (venda) --- */
+      var blocoV='';
+      vende.slice(0,8).forEach(function(it){
+        var ncm=dig(it.ncm||it[0]||''); if(ncm.length<4){ return; }
+        var m=achaVenda(ncm);
+        var nome=esc(it.descricao||it.desc||('NCM '+ncm));
+        if(!m){ semMatch.push(nome+' (venda)'); return; }
+        nV++;
+        var st=m.st, intp=Number(st.int)||0, ouf=Number(st.ouf)||0, ext=Number(st.ext)||0, dest=arr(st.dest);
+        var op='Mercados fortes pra expandir: <b>'+ufsTxt(dest,5)+'</b>.'+(ext>=5?' Há exportação ('+pcn(ext)+') — mercado externo existe.':'');
+        blocoV+='<div style="border-left:3px solid #86efac;padding:7px 11px;margin:7px 0;background:#f0fdf4;border-radius:0 8px 8px 0">'
+          +'<div style="font-size:12.5px;color:#0f172a"><b>'+nome+'</b> <span style="color:#94a3b8;font-size:10.5px">NCM '+esc(ncm)+(m.exato?'':' · aprox. por posição')+' · setor '+esc(m.setor)+'</span></div>'
+          +'<div style="font-size:12px;color:#475569;margin-top:2px">Destino do setor no RS: '+pcn(intp)+' fica no RS · '+pcn(ouf)+' outros estados · '+pcn(ext)+' exporta · '+ufsTxt(dest,5)+'</div>'
+          +'<div style="font-size:12px;color:#15803d;margin-top:3px">→ '+op+'</div></div>';
+      });
+      if(nV) H+='<div style="font-weight:700;font-size:13px;color:#15803d;margin:10px 0 2px">🔺 O que ela vende — pra onde o RS manda (mercados a explorar)</div>'+blocoV;
+
+      if(!nI && !nV) return '';
+
+      var sem = semMatch.length? '<div style="font-size:11px;color:#94a3b8;margin-top:8px">Sem detalhe no Radar (NCM não está entre os mais representativos do estado): '+semMatch.slice(0,8).map(esc).join(' · ')+'.</div>' : '';
+      var nota = city? '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px">📍 = leitura local em '+esc(city)+' (setor que produz o insumo estimado pelo NCM).</div>' : '';
+      var mes = (C&&C.mes)||(S&&S.mes)||'';
+      return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:16px 18px;margin-bottom:14px">'
+        +'<div style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:2px">🧭 Oportunidades de mercado <span style="font-size:11px;font-weight:400;color:#64748b">(Radar Sefaz-RS'+(mes?' · '+esc(mes.slice(4)+'/'+mes.slice(0,4)):'')+')</span></div>'
+        +'<div style="font-size:12px;color:#64748b;margin-bottom:10px">De onde o RS compra os insumos dela e pra onde o RS manda o que ela produz, pelo NCM. É inteligência de mercado do estado (fluxo do RS, não da empresa) — leve como conversa de oportunidade e confirme com o cliente.</div>'
+        +H+sem+nota+'</div>';
+    }catch(e){ return ''; }
+  }
   window.renderPerfilEmpresa = function(latest, rows, data){
     data=data||_dados();
     var R=_rec(), P=_perfil(), AV=apreView();
@@ -16071,6 +16174,7 @@ window.renderNossaAnalise = function(latest, rows, data){
       if(_arr(P.produtos_vende).length) H+=linha('Produtos (manual)', P.produtos_vende);
       H+='</div>';
     }
+    H+=_oportMercado(P, R);
     return H;
   };
 
